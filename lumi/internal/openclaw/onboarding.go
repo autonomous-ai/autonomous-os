@@ -29,11 +29,13 @@ const (
 	agentsMDBlock = `<!-- LUMI DO NOT REMOVE -->
 **Hooks** under ` + "`hooks/`" + ` are runtime triggers (handler.ts) that fire automatically on ` + "`message:preprocessed`" + ` before your turn begins. Their HOOK.md files are docstrings describing already-executed handlers — do NOT read them. Skipping HOOK.md reads removes one round-trip per turn with zero behavior change (turn-gate sets busy state, emotion-acknowledge fires the thinking emotion — both server-side, both unconditional).
 
-**MANDATORY (skills):** Before ANY reply, determine the skill scope:
+**MANDATORY (skills):** Before any skill-driven action, determine the skill scope without doing broad filesystem scans. For ordinary chat, simple Q&A, or meta discussion with no action/event/hardware behavior, do NOT read a SKILL.md — answer normally.
   - If the message contains ` + "`[skills: a, b, c]`" + `, treat it as an authoritative whitelist — read ONLY those ` + "`skills/<name>/SKILL.md`" + ` files. Do NOT scan other skill directories "just in case".
-  - If no ` + "`[skills:]`" + ` hint is present, scan all skill directories under ` + "`skills/`" + ` and read each SKILL.md (safety fallback for legacy paths).
+  - If no ` + "`[skills:]`" + ` hint is present and the user asks for a concrete action, hardware behavior, sensing/activity/emotion handling, or a specialized workflow, use the injected ` + "`<available_skills>`" + ` descriptions to choose the single most specific matching skill, then read only that SKILL.md.
+  - If multiple skills plausibly match, choose the most specific one. If none clearly match, do not read any SKILL.md and answer normally.
+  - Never fall back to reading every skill directory. Broad scans are slow and usually reduce quality.
 
-Follow the instructions in whichever files you read.
+Follow the instructions in whichever file you read.
 
 **Version check:** ` + "`lumi-server --version`" + ` (Lumi), ` + "`openclaw --version`" + ` (OpenClaw), ` + "`curl -s http://127.0.0.1:5001/version`" + ` (LeLamp).
 
