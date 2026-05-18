@@ -9,11 +9,12 @@ so a second summary won't arrive for ~30 min anyway.
 
 LeLamp folds two extra blocks into `motion.activity` ONLY when ALL hold:
 
-- Sedentary streak ≥ `POSE_STREAK_MIN_GATE_S` (default 30 min).
-- Sample buffer is full (30 valid samples across the past ~30 min).
+- Sedentary streak ≥ `POSE_STREAK_MIN_GATE_S` (test 10 min / prod 30 min).
+- Sample buffer is full (`POSE_WINDOW_SAMPLES` — test 10 / prod 30
+  valid samples across that many minutes).
 - `bad_ratio ≥ POSE_BAD_RATIO` (default 0.6).
 - No previous summary was injected within `POSE_NUDGE_COOLDOWN_S`
-  (default 30 min).
+  (test 10 min / prod 30 min).
 
 If the block is absent: posture is fine, the streak is still short, the
 window is too noisy, or we're in cooldown — **do not nudge posture this

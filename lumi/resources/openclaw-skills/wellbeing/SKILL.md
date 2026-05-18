@@ -22,12 +22,12 @@ description: Proactive coaching across hydration, breaks, meals AND posture. Use
 
 **User attribution:** every `user` field MUST come from the `[context: current_user=X]` tag the backend injects into the triggering event. Strangers collapse to `"unknown"`. If no context tag is present, default to `"unknown"`.
 
-**Thresholds (TEST VALUES — swap to production before ship):**
+**Thresholds (production values):**
 
 ```
-HYDRATION_THRESHOLD_MIN = 5     # production: 45
-BREAK_THRESHOLD_MIN     = 7     # production: 30
-TOILET_DRINK_THRESHOLD  = 2     # count-based, same in test and prod — fires once per N drinks since last nudge
+HYDRATION_THRESHOLD_MIN = 45
+BREAK_THRESHOLD_MIN     = 30
+TOILET_DRINK_THRESHOLD  = 2     # count-based — fires once per N drinks since last nudge
 ```
 
 **LeLamp writes activities; you only write nudges.** Rows for `drink` / `break` / sedentary labels are posted by LeLamp directly when `motion.activity` fires — before the event reaches you. Do NOT re-log them. You still POST `nudge_hydration` / `nudge_break` because only you know when you actually spoke.
