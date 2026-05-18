@@ -69,6 +69,7 @@ Change messaging channel after setup is complete.
 - Device broadcasts WiFi hotspot
 - Web UI serves setup page
 - `SwitchToAPMode()` in `internal/network/service.go`
+- **LED indicator:** once HTTP server is listening, if `SetUpCompleted == false` lumi spawns a background goroutine (`waitAndPaintSetupReady` in `server/server.go`) that polls LeLamp `GET /health` once per second up to 30s. As soon as `health.led == true`, it fires `POST /led/solid` with `{"color":[255,255,255]}` to paint the strip solid white. The poll exists because lumi-server typically binds :5000 before LeLamp's FastAPI is up on :5001 (Python loads `rpi_ws281x`, SPI, audio, camera) — a fire-and-forget paint would silently drop on `connection refused`. White stays on until setup completes (agent flash + ambient repaint it). The booting blue-breathing still shows during init.
 
 ## Post-Setup
 

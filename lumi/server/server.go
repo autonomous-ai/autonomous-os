@@ -350,12 +350,13 @@ func (s *Server) Serve(closeFn func()) error {
 	s.statusLED.Clear(statusled.StateBooting)
 
 	// When the device is still in AP/provisioning mode, paint the strip solid
-	// white as a visual "ready for WiFi setup" signal. Done after Clear(Booting)
-	// so the blue breathing shows during init, then settles to white once the
-	// HTTP/web UI is reachable. Skipped post-setup — agent flash + ambient take
-	// over from here.
+	// white as a visual "ready for WiFi setup" signal. lumi typically reaches
+	// this point before LeLamp's FastAPI is up on :5001 (Python boot is
+	// slower — loads rpi_ws281x, SPI, audio, camera), so we poll /health in
+	// the background and fire SetSolid only once LED hardware reports ready.
+	// Skipped post-setup — agent flash + ambient take over from here.
 	if !s.config.SetUpCompleted {
-		lelamp.SetSolid(255, 255, 255)
+		safego.Go("setup-needed-paint", s.waitAndPaintSetupReady)
 	}
 
 	go func() {
@@ -467,6 +468,35 @@ func (s *Server) handleMQTTEndpointChange(endpoint string) {
 
 	slog.Info("mqtt endpoint changed, restarting mqtt client", "component", "config", "old", prev, "new", endpoint)
 	s.restartMQTT()
+}
+
+// waitAndPaintSetupReady polls LeLamp /health up to 30s; when LED hardware
+// reports ready it paints the strip solid white as the "device awaiting WiFi
+// setup" cue. Exits early if setup completes mid-wait so we don't repaint
+// over the post-setup user/agent LED state. Best-effort — silent when LeLamp
+// never reports LED ready within budget (logs a warning).
+//
+// Why this is a poll loop and not a single SetSolid call: lumi-server binds
+// :5000 faster than LeLamp's FastAPI binds :5001 on cold boot, so a fire-
+// and-forget paint at L<see Serve> would silently drop on connection refused
+// and leave the strip dark — exactly when the user needs the "ready for AP"
+// signal most.
+func (s *Server) waitAndPaintSetupReady() {
+	deadline := time.Now().Add(30 * time.Second)
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for time.Now().Before(deadline) {
+		if s.config.SetUpCompleted {
+			return
+		}
+		if h, err := lelamp.GetHealth(); err == nil && h.LED {
+			lelamp.SetSolid(255, 255, 255)
+			slog.Info("setup-needed white painted", "component", "server")
+			return
+		}
+		<-ticker.C
+	}
+	slog.Warn("setup-needed paint skipped: lelamp LED not ready within 30s", "component", "server")
 }
 
 // handleSetUpCompleteChange starts or stops the network monitor and status reporter based on SetUpCompleted.
