@@ -18,22 +18,20 @@ Configuration (env vars or .env):
     LB_INTERNAL_PREFIX — prefix prepended to all paths (default: /_internal)
 """
 
+import argparse
 import asyncio
 import logging
+import os
 
 import httpx
 import uvicorn
-import websockets.client
-import websockets.exceptions
+import websockets
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 
 from config import settings
 from lbserver.utils import RoundRobin
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-)
+LOG_FORMAT = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
 logger = logging.getLogger("lbserver")
 
 
@@ -50,7 +48,6 @@ if not BACKENDS:
     logger.warning("No backends configured — set LB__BACKENDS=http://127.0.0.1:8888")
 
 
-# Separate round-robin selectors for HTTP and WS
 http_rr = RoundRobin(BACKENDS)
 ws_rr = RoundRobin(BACKENDS)
 
@@ -81,7 +78,7 @@ async def proxy_http(request: Request, path: str) -> Response:
 
     body: bytes = await request.body()
 
-    logger.info("[HTTP] %s /%s → %s%s/%s", request.method, path, backend, INTERNAL_PREFIX, path)
+    logger.info("[HTTP] %s /%s → %s", request.method, path, url)
 
     try:
         resp = await _client.request(
@@ -121,10 +118,10 @@ async def proxy_ws(client_ws: WebSocket, path: str) -> None:
             extra_headers[key] = val
 
     await client_ws.accept()
-    logger.info("[WS] /%s → %s%s/%s", path, backend, INTERNAL_PREFIX, path)
+    logger.info("[WS] /%s → %s", path, ws_url)
 
     try:
-        async with websockets.client.connect(ws_url, additional_headers=extra_headers) as backend_ws:
+        async with websockets.connect(ws_url, additional_headers=extra_headers) as backend_ws:
 
             async def client_to_backend() -> None:
                 try:
@@ -158,17 +155,46 @@ async def proxy_ws(client_ws: WebSocket, path: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def parse_args() -> "argparse.Namespace":
-    import argparse
-
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="DL Backend Load Balancer")
     parser.add_argument("--host", default=settings.lb.host)
     parser.add_argument("--port", type=int, default=settings.lb.port)
+    parser.add_argument("--log-dir", default=None, help="Directory for rotating log files")
+    parser.add_argument("--pid-file", default=None, help="Write PID to this file")
     return parser.parse_args()
+
+
+def _setup_logging(log_dir: str | None) -> None:
+    if log_dir:
+        from logging.handlers import RotatingFileHandler
+        from pathlib import Path
+
+        Path(log_dir).mkdir(parents=True, exist_ok=True)
+        # Clean up old .bak files, then rename current logs to .bak
+        for bak in Path(log_dir).glob("lbserver.log*.bak"):
+            bak.unlink()
+        log_path = Path(log_dir) / "lbserver.log"
+        if log_path.exists():
+            log_path.rename(log_path.with_suffix(".log.bak"))
+        for old in Path(log_dir).glob("lbserver.log.*"):
+            old.rename(Path(str(old) + ".bak"))
+        handler = RotatingFileHandler(
+            str(log_path), maxBytes=1_048_576, backupCount=3
+        )
+        handler.setFormatter(logging.Formatter(LOG_FORMAT))
+        logging.basicConfig(level=logging.INFO, handlers=[handler])
+    else:
+        logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 
 
 def main() -> None:
     args = parse_args()
+    _setup_logging(args.log_dir)
+
+    if args.pid_file:
+        from pathlib import Path
+
+        Path(args.pid_file).write_text(str(os.getpid()))
 
     if BACKENDS:
         logger.info("Backends: %s", ", ".join(BACKENDS))

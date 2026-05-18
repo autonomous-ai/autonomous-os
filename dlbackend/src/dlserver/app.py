@@ -10,6 +10,7 @@ Usage:
 
 import argparse
 import logging
+import os
 import secrets
 from contextlib import asynccontextmanager
 
@@ -38,10 +39,7 @@ from dlserver.utils.state import (
 )
 from factory import build_action_perception, build_emotion_perception, build_pose_perception
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-)
+LOG_FORMAT = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
 logger = logging.getLogger(__name__)
 
 # --- Auth ---
@@ -150,10 +148,42 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="DL Backend Server")
     parser.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8001, help="Bind port (default: 8001)")
+    parser.add_argument("--log-dir", default=None, help="Directory for rotating log files")
+    parser.add_argument("--pid-file", default=None, help="Write PID to this file")
     return parser.parse_args()
+
+
+def _setup_logging(log_dir: str | None) -> None:
+    if log_dir:
+        from logging.handlers import RotatingFileHandler
+        from pathlib import Path
+
+        Path(log_dir).mkdir(parents=True, exist_ok=True)
+        # Clean up old .bak files, then rename current logs to .bak
+        for bak in Path(log_dir).glob("dlserver.log*.bak"):
+            bak.unlink()
+        log_path = Path(log_dir) / "dlserver.log"
+        if log_path.exists():
+            log_path.rename(log_path.with_suffix(".log.bak"))
+        for old in Path(log_dir).glob("dlserver.log.*"):
+            old.rename(Path(str(old) + ".bak"))
+        handler = RotatingFileHandler(
+            str(log_path), maxBytes=1_048_576, backupCount=3
+        )
+        handler.setFormatter(logging.Formatter(LOG_FORMAT))
+        logging.basicConfig(level=logging.INFO, handlers=[handler])
+    else:
+        logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 
 
 def main() -> None:
     args = parse_args()
-    logger.info("Starting DL backend on %s:%d", args.host, args.port)
+    _setup_logging(args.log_dir)
+
+    if args.pid_file:
+        from pathlib import Path
+
+        Path(args.pid_file).write_text(str(os.getpid()))
+
+    logger.info("Starting DL backend on %s:%d (pid=%d)", args.host, args.port, os.getpid())
     uvicorn.run(app, host=args.host, port=args.port)
