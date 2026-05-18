@@ -300,6 +300,9 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
         # Posture summary only rides along when this exceeds the gate.
         self._pose_perception: PosePerception | None = None
         self._sedentary_streak_start_ts: float = 0.0
+        # Cooldown so the same "still bad" window doesn't keep injecting on
+        # every dedup-expired motion.activity flush.
+        self._last_posture_inject_ts: float = 0.0
 
     def set_pose_perception(self, pose: PosePerception | None) -> None:
         """Wire in the pose sampler so motion can fold posture summaries
@@ -487,11 +490,15 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
         # Fold posture summary in when the sedentary streak exceeds the
         # gate AND the pose buffer says the window is genuinely bad. Single
         # transient frames (cup-reach, wrap-edge noise) are already filtered
-        # by pose's aggregation logic.
+        # by pose's aggregation logic. After an injection, suppress further
+        # ones for POSE_NUDGE_COOLDOWN_S so the user isn't nagged on every
+        # dedup-expired flush while the window stays bad.
         if (
             has_sedentary
             and self._sedentary_streak_start_ts > 0
             and self._pose_perception is not None
+            and (cur_ts - self._last_posture_inject_ts)
+            >= config.POSE_NUDGE_COOLDOWN_S
         ):
             streak_s: float = cur_ts - self._sedentary_streak_start_ts
             streak_min: int = int(streak_s / 60)
@@ -508,6 +515,7 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
                         f"[posture_summary: "
                         f"{json.dumps(summary_with_streak, separators=(',', ':'))}]"
                     )
+                    self._last_posture_inject_ts = cur_ts
                     logger.info(
                         "[motion] folding posture summary "
                         "(streak=%dm bad_ratio=%.2f dominant=%s)",

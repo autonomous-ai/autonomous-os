@@ -168,6 +168,11 @@ POSE_BAD_RATIO = float(os.environ.get("LELAMP_POSE_BAD_RATIO", "0.6"))
 POSE_NOISY_ANGLE_THRESHOLD = float(os.environ.get("LELAMP_POSE_NOISY_ANGLE_THRESHOLD", "170.0"))
 # Min "using computer" streak before posture summary is allowed to ride along.
 POSE_STREAK_MIN_GATE_S = float(os.environ.get("LELAMP_POSE_STREAK_MIN_GATE_S", "1800.0"))
+# After a posture summary has been folded into a motion.activity event, suppress
+# subsequent injections for this long. Otherwise every motion.activity flush
+# (every 5+ min while the window stays "bad") would re-inject the summary and
+# nag the user repeatedly.
+POSE_NUDGE_COOLDOWN_S = float(os.environ.get("LELAMP_POSE_NUDGE_COOLDOWN_S", "1800.0"))
 
 # --- Sensing: Snapshot storage ---
 SNAPSHOT_TMP_DIR = os.environ.get(
