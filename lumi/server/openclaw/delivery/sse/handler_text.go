@@ -148,6 +148,33 @@ func isChannelOriginatedRun(runIDs ...string) bool {
 	return false
 }
 
+// canStreamSentenceTTS returns true when the run is eligible for mid-turn
+// sentence-boundary TTS streaming. Excludes channel-originated runs (their
+// reply is fanned out to Telegram at lifecycle:end, not the speaker), web
+// chat (display-only), and runs already flagged for TTS suppression (music
+// playing, or the agent already spoke via the built-in tts tool intercept).
+// Guard / broadcast / DM gating is handled by trySentenceFlush — it defers
+// any buffer containing `[HW:` markers so those one-shot end-of-turn
+// behaviors stay intact.
+func (h *OpenClawHandler) canStreamSentenceTTS(runID, flowRunID string) bool {
+	if isChannelOriginatedRun(runID, flowRunID) {
+		return false
+	}
+	if h.agentGateway.IsWebChatRun(flowRunID) {
+		return false
+	}
+	h.channelRunsMu.Lock()
+	if h.channelRuns[runID] || h.channelRuns[flowRunID] {
+		h.channelRunsMu.Unlock()
+		return false
+	}
+	h.channelRunsMu.Unlock()
+	h.ttsSuppressMu.Lock()
+	_, suppressed := h.ttsSuppressReasons[runID]
+	h.ttsSuppressMu.Unlock()
+	return !suppressed
+}
+
 // extractMessageContentText collects text from a session.message `content`
 // field. OpenClaw emits content as either a plain string or an array of typed
 // blocks ({"type":"text","text":"..."} / {"type":"toolCall",...}). Only

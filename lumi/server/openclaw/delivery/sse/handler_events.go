@@ -636,6 +636,31 @@ func (h *OpenClawHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) e
 			// Accumulate deltas per runId and send to TTS when lifecycle "end" arrives.
 			h.accumulateAssistantDelta(payload.RunID, delta)
 
+			// Sentence-boundary streaming: as deltas accumulate, dispatch each
+			// completed sentence to TTS immediately so the lamp starts speaking
+			// before the agent has finished writing. Eligibility check excludes
+			// channel/web/suppressed runs (those still go through end-flush);
+			// trySentenceFlush itself defers when HW markers, <say> wrappers,
+			// or sentinels are in the buffer. Python's /voice/speak serializes
+			// playback via wait_for_tts so concurrent POSTs preserve order.
+			if h.canStreamSentenceTTS(payload.RunID, flowRunID) {
+				if sentence := h.trySentenceFlush(payload.RunID); sentence != "" {
+					cleaned := sanitizeAgentText(sentence)
+					if cleaned != "" {
+						slog.Info("streaming sentence to TTS",
+							"component", "agent",
+							"run_id", flowRunID,
+							"sentence", cleaned[:min(len(cleaned), 100)])
+						flow.Log("tts_stream_send", map[string]any{"run_id": flowRunID, "text": cleaned}, flowRunID)
+						go func(s string) {
+							if err := h.agentGateway.SendToLeLampTTS(s); err != nil {
+								slog.Error("streaming TTS delivery failed", "component", "agent", "error", err)
+							}
+						}(cleaned)
+					}
+				}
+			}
+
 		}
 
 		// When agent lifecycle ends, flush accumulated assistant text to TTS.
@@ -657,7 +682,15 @@ func (h *OpenClawHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) e
 			if suppressReason == "" && h.agentGateway.ConsumeWebChatRun(flowRunID) {
 				suppressReason = "web_chat"
 			}
-			if text, hwCalls := h.flushAssistantText(payload.RunID); text != "" || len(hwCalls) > 0 {
+			text, hwCalls := h.flushAssistantText(payload.RunID)
+			// Sentence-streaming may have already dispatched part of the reply
+			// mid-turn. Pull what was streamed so broadcast/DM fan-out can
+			// reconstruct the full spoken text from streamed + remainder. Also
+			// keeps the if-condition below from skipping cleanup when every
+			// sentence was streamed (text=="" and no HW markers).
+			streamedText := h.consumeStreamedSentences(payload.RunID)
+			streamed := streamedText != ""
+			if text != "" || len(hwCalls) > 0 || streamed {
 				// Fire HW calls with full tracking (flow.Log + lastEmotion + monitorBus).
 				h.fireHWCalls(hwCalls, flowRunID)
 
@@ -714,8 +747,15 @@ func (h *OpenClawHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) e
 
 				// Guard mode: broadcast even on NO_REPLY / empty / suppressed paths.
 				// The agent may choose not to speak, but we still want to alert the owner via Telegram.
+				// When sentence-streaming fired earlier, prepend the streamed
+				// portion so Telegram users see the complete spoken reply, not
+				// just whatever was still in the buffer at lifecycle:end.
 				if snap, ok := h.agentGateway.ConsumeGuardRun(flowRunID); ok {
-					guardText := text
+					raw := text
+					if streamed {
+						raw = strings.TrimSpace(streamedText + " " + text)
+					}
+					guardText := sanitizeAgentText(extractSayTag(raw))
 					if guardText == "" || isAgentNoReply(guardText) {
 						guardText = "Motion or presence detected while guard mode is active."
 					}
@@ -733,9 +773,29 @@ func (h *OpenClawHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) e
 				// Non-tagged replies pass through unchanged.
 				text = extractSayTag(text)
 				text = sanitizeAgentText(text)
+				// fullSpokenText combines what was already streamed (sentences
+				// dispatched mid-turn) with the sanitized remainder for
+				// downstream broadcast/DM fan-out. The TTS POST at end below
+				// keeps using `text` alone because the streamed sentences
+				// already reached LeLamp.
+				fullSpokenText := text
+				if streamed {
+					fullSpokenText = strings.TrimSpace(streamedText + " " + text)
+				}
 				if isAgentNoReply(text) {
-					// NO_REPLY: agent explicitly decided to do nothing
-					slog.Info("agent replied NO_REPLY, skipping TTS", "component", "agent", "run_id", flowRunID)
+					// NO_REPLY in the remainder. Without streaming, agent
+					// chose silence — skip TTS. With streaming, sentences
+					// already played and cannot be unspoken; log a warning so
+					// we can spot any skill that intersperses NO_REPLY with
+					// real speech (safeToStreamFlush should normally prevent
+					// streaming when NO_REPLY is in the buffer).
+					if streamed {
+						slog.Warn("NO_REPLY in remainder after sentence-streamed prefix already spoken",
+							"component", "agent", "run_id", flowRunID,
+							"streamed", streamedText[:min(len(streamedText), 80)])
+					} else {
+						slog.Info("agent replied NO_REPLY, skipping TTS", "component", "agent", "run_id", flowRunID)
+					}
 					flow.Log("no_reply", map[string]any{"run_id": flowRunID}, flowRunID)
 					h.monitorBus.Push(domain.MonitorEvent{
 						Type:    "chat_response",
@@ -745,8 +805,19 @@ func (h *OpenClawHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) e
 						Detail:  map[string]string{"role": "assistant", "message": "[no reply]"},
 					})
 				} else if text == "" {
-					// HW-only reply (only markers, no spoken text)
-					flow.Log("hw_only_reply", map[string]any{"run_id": flowRunID}, flowRunID)
+					if streamed {
+						// All sentences were streamed mid-turn; nothing left
+						// to TTS at end. Log the spoken total so monitor
+						// flows show a sensible "turn complete" event
+						// instead of a misleading hw_only_reply.
+						slog.Info("assistant turn complete via sentence streaming",
+							"component", "agent", "run_id", flowRunID,
+							"streamed_len", len(streamedText))
+						flow.Log("tts_stream_complete", map[string]any{"run_id": flowRunID, "text": streamedText}, flowRunID)
+					} else {
+						// HW-only reply (only markers, no spoken text)
+						flow.Log("hw_only_reply", map[string]any{"run_id": flowRunID}, flowRunID)
+					}
 				} else if suppressReason != "" {
 					slog.Info("assistant turn done, TTS suppressed", "component", "agent", "reason", suppressReason, "text", text[:min(len(text), 100)])
 					flow.Log("tts_suppressed", map[string]any{"run_id": flowRunID, "reason": suppressReason, "text": text}, flowRunID)
@@ -812,14 +883,17 @@ func (h *OpenClawHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) e
 					// it fires even on NO_REPLY / empty / suppressed paths.
 					// DM run: send agent response to a specific Telegram user.
 					// Takes priority over broadcast — if /dm is present, /broadcast is skipped.
-					if dmTelegramID != "" && len(text) > 10 {
+					// Use fullSpokenText (streamed + remainder) so the channel
+					// receives the same reply the speaker did, not just the
+					// trailing fragment that survived sentence-streaming.
+					if dmTelegramID != "" && len(fullSpokenText) > 10 {
 						go func(t, tid string) {
 							slog.Info("dm run response to user", "component", "agent", "run_id", flowRunID, "telegram_id", tid, "text", t[:min(len(t), 80)])
 							if err := h.agentGateway.SendToUser(tid, t, ""); err != nil {
 								slog.Error("dm run failed", "component", "agent", "err", err)
 							}
-						}(text, dmTelegramID)
-					} else if isBroadcastRun && len(text) > 10 {
+						}(fullSpokenText, dmTelegramID)
+					} else if isBroadcastRun && len(fullSpokenText) > 10 {
 						// Broadcast run (e.g. music.mood): send agent response to all channels
 						// so user can confirm via Telegram instead of only voice.
 						go func(t string) {
@@ -827,7 +901,7 @@ func (h *OpenClawHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) e
 							if err := h.agentGateway.Broadcast(t, ""); err != nil {
 								slog.Error("broadcast run failed", "component", "agent", "err", err)
 							}
-						}(text)
+						}(fullSpokenText)
 					}
 				}
 			}
