@@ -1,6 +1,6 @@
 ---
 name: wellbeing
-description: Proactive hydration and break reminders. Use when an [activity] event fires (message starts with `[activity] Activity detected: <labels>.` — labels include drink, break, or sedentary raw labels like "using computer"), when the user asks if they should drink water or take a break, or when checking whether it's time to nudge a specific user. Thresholds are computed from the per-user log, never guessed.
+description: Proactive coaching across hydration, breaks, meals AND posture. Use when an [activity] event fires (message starts with `[activity] Activity detected: <labels>.` — labels include drink, break, or sedentary raw labels like "using computer"; sedentary events may also carry a [posture_summary: {...}] block when the user has been at the computer long enough for posture to drift), or when the user asks if they should drink water / take a break / fix their posture. Thresholds are computed from per-user logs, never guessed.
 ---
 
 # Wellbeing
@@ -11,12 +11,14 @@ description: Proactive hydration and break reminders. Use when an [activity] eve
 
 | Purpose | URL |
 |---|---|
-| Read history | `http://127.0.0.1:5000/api/openclaw/wellbeing-history` |
-| Log nudge | `http://127.0.0.1:5000/api/wellbeing/log` |
+| Read wellbeing history | `http://127.0.0.1:5000/api/openclaw/wellbeing-history` |
+| Log wellbeing nudge | `http://127.0.0.1:5000/api/wellbeing/log` |
+| Log posture nudge | `http://127.0.0.1:5000/api/posture/log` |
 
-- Port **5000** = Lumi (data APIs: wellbeing / mood / music / openclaw history).
-- Port **5001** = LeLamp HARDWARE (audio, camera, face, presence, speaker). Has **NO** `/api/wellbeing/*` route — calling 5001 returns 404 silently and your nudge is lost.
-- Do not pattern-match from other skills: `5001/audio/play`, `5001/face/enroll`, `5001/camera/snapshot` are unrelated to wellbeing.
+- Port **5000** = Lumi (data APIs: wellbeing / posture / mood / music / openclaw history).
+- Port **5001** = LeLamp HARDWARE (audio, camera, face, presence, speaker). Has **NO** `/api/wellbeing/*` or `/api/posture/*` routes — calling 5001 returns 404 silently and your nudge is lost.
+- Posture nudges live on a **separate JSONL** (`/root/local/users/<user>/posture/`) for clean timeline separation; the wellbeing log keeps hydration/break/meal/sleep/morning rows.
+- Do not pattern-match from other skills: `5001/audio/play`, `5001/face/enroll`, `5001/camera/snapshot` are unrelated.
 
 **User attribution:** every `user` field MUST come from the `[context: current_user=X]` tag the backend injects into the triggering event. Strangers collapse to `"unknown"`. If no context tag is present, default to `"unknown"`.
 
@@ -34,16 +36,19 @@ TOILET_DRINK_THRESHOLD  = 2     # count-based, same in test and prod — fires o
 
 ## Rules (Never / Only)
 
-1. **Only** call `http://127.0.0.1:5000/api/openclaw/wellbeing-history` to read history. **Never** read `/root/local/users/*/wellbeing/*.jsonl` with `cat`, `ls`, `head`, `tail`, `grep`, or any filesystem tool.
-2. **Only** POST to `http://127.0.0.1:5000/api/wellbeing/log`. **Never** substitute `5001`, `8080`, or any other port. **Never** omit `http://` or hardcode `localhost`.
-3. **Only** write these action values: `nudge_hydration`, `nudge_break`, `nudge_toilet`, `morning_greeting`, `sleep_winddown`, `meal_reminder`. Never invent new actions. (Activity rows — `drink`, `break`, raw sedentary labels, raw eat labels like `eating burger` / `dining` / `tasting food` — are written by LeLamp, never by you.)
+1. **Only** call `http://127.0.0.1:5000/api/openclaw/wellbeing-history` to read history. **Never** read `/root/local/users/*/wellbeing/*.jsonl` or `/root/local/users/*/posture/*.jsonl` with `cat`, `ls`, `head`, `tail`, `grep`, or any filesystem tool. Posture history is digested into `last_posture_nudge_age_min` upstream — no agent-side read is needed.
+2. **Only** POST to `http://127.0.0.1:5000/api/wellbeing/log` (hydration / break / toilet / morning / sleep / meal) or `http://127.0.0.1:5000/api/posture/log` (nudge_posture / praise_posture). **Never** substitute `5001`, `8080`, or any other port. **Never** omit `http://` or hardcode `localhost`.
+3. **Only** write these action values: `nudge_hydration`, `nudge_break`, `nudge_toilet`, `morning_greeting`, `sleep_winddown`, `meal_reminder` (wellbeing log), `nudge_posture`, `praise_posture` (posture log). Never invent new actions. (Activity rows — `drink`, `break`, raw sedentary labels, raw eat labels like `eating burger` / `dining` / `tasting food` — are written by LeLamp, never by you. There are no agent-written `posture_alert` rows; LeLamp's per-frame samples live in a separate debug JSONL on the lamp and never reach the posture history API.)
 4. On a non-2xx response from a POST → you used the wrong port or path. Fix the URL and retry **once**. Do not give up silently — the nudge row must land, or the skill will spam reminders forever.
 5. **Never** infer `user` from memory, `KNOWLEDGE.md`, chat history, or `senderLabel`. Only the `[context: current_user=X]` tag counts.
 6. **Trust the log, not memory.** If the history response contains no `nudge_hydration` entry, no nudge has happened — ignore any self-memory claim otherwise.
 
 ## Read pre-fetched context (do not re-fetch)
 
-The backend injects a `[wellbeing_context: {...JSON...}]` block into this turn's message. **Do NOT fire any tool calls to re-fetch this data.** Saves the entire read tool turn.
+The backend injects a `[wellbeing_context: {...JSON...}]` block into every
+motion.activity turn. Sedentary turns may also carry `[posture_summary: {...}]`
++ `[computer_streak_min: N]` blocks (see `reference/posture.md`). **Do NOT
+fire any tool calls to re-fetch this data.** Saves the entire read tool turn.
 
 Schema (every field is pre-computed in Lumi Go — agent only applies thresholds and picks phrasing):
 
@@ -64,7 +69,8 @@ Schema (every field is pre-computed in Lumi Go — agent only applies thresholds
   "patterns": {                    // wellbeing patterns from patterns.json (mtime < 6h, strength >= moderate); omitted if none
     "drink": {"typical_hour": 9, "typical_minute": 15, "strength": "moderate"}
   },
-  "bootstrap_needed": false        // true → patterns missing/stale AND days >= 3; only invoke habit Flow A when also nudging
+  "bootstrap_needed": false,       // true → patterns missing/stale AND days >= 3; only invoke habit Flow A when also nudging
+  "last_posture_nudge_age_min": 12 // minutes since the most recent nudge_posture today; -1 if none. Used by posture-nudge / praise routes — see reference/posture.md
 }
 ```
 
@@ -73,6 +79,15 @@ Notes:
 - `count_today` is for **reaction phrasing only** ("N-th drink today", streak callouts). It does NOT decide whether to speak — that's the trigger labels in the activity message.
 - `patterns` only surfaces moderate/strong matches. Weak patterns are filtered out by the backend.
 - `bootstrap_needed=true` does NOT mean run Flow A unconditionally — only if THIS turn fires a nudge.
+
+### Posture summary (only on long sedentary streaks)
+
+When the user has been sitting + bad-postured long enough, the activity
+message carries `[posture_summary: {...}]` + `[computer_streak_min: N]`
+blocks. See `reference/posture.md` for the schema, when LeLamp attaches
+it, and the decision logic. The wellbeing context's
+`last_posture_nudge_age_min` corroborates whether a nudge already fired
+recently (defends against double-nudge if lelamp restarted).
 
 ### Fallback (only if context block is missing)
 
@@ -105,16 +120,18 @@ Read the `[activity] Activity detected: <labels>.` message + the `[wellbeing_con
 | 2 | `first_activity_today == true` AND `current_hour ∈ [5, 11)` AND `morning_greeting_done_today == false` | **morning-greeting** | See `reference/morning-greeting.md`. Logs `morning_greeting` action to gate next firings today. |
 | 3 | `current_hour >= 21` AND labels are sedentary (no `drink`/`break`) AND `sleep_winddown_done_today == false` | **sleep-winddown** | See `reference/sleep-winddown.md`. Logs `sleep_winddown` action. Replaces break nudge in late evening. |
 | 4 | `meal_window` is non-empty AND `meal_signal_in_window == false` | **meal-reminder** | See `reference/meal-reminder.md`. Logs `meal_reminder` action with trigger `lunch` / `dinner`. Gate covers BOTH a prior reminder Lumi already fired AND a real eat label LeLamp logged — so we don't ask "have you eaten?" after a real meal. |
-| 5 | `hydration_delta_min >= HYDRATION_THRESHOLD_MIN` | **hydration-nudge** | Speak a hydration nudge per the **Phrasing** section + post `nudge_hydration` HW marker. |
-| 6 | `break_delta_min >= BREAK_THRESHOLD_MIN` | **break-nudge** | Speak a break nudge + post `nudge_break` HW marker. |
-| 7 | `drinks_since_toilet_nudge >= TOILET_DRINK_THRESHOLD` | **toilet-nudge** | Speak a toilet nudge per the **Phrasing** section + post `nudge_toilet` HW marker. The POST resets the counter to 0 → next nudge only after another full N drinks. |
-| 8 | anything else (sedentary under threshold, or any delta == `-1` → no reset today yet) | **silent** | `NO_REPLY`. |
+| 5 | `[posture_summary]` block present in the message | **posture-nudge** | Speak a posture nudge per the **Posture phrasing** section + post `nudge_posture` to the **posture log** (NOT wellbeing log). Anchor the line on `dominant_region` and `streak_min`. Outranks plain break/hydration nudges so we don't double-up on "stand up". |
+| 6 | `hydration_delta_min >= HYDRATION_THRESHOLD_MIN` | **hydration-nudge** | Speak a hydration nudge per the **Phrasing** section + post `nudge_hydration` HW marker. |
+| 7 | `break_delta_min >= BREAK_THRESHOLD_MIN` | **break-nudge** | Speak a break nudge + post `nudge_break` HW marker. |
+| 8 | `drinks_since_toilet_nudge >= TOILET_DRINK_THRESHOLD` | **toilet-nudge** | Speak a toilet nudge per the **Phrasing** section + post `nudge_toilet` HW marker. The POST resets the counter to 0 → next nudge only after another full N drinks. |
+| 9 | anything else (sedentary under threshold, or any delta == `-1` → no reset today yet) | **silent** | `NO_REPLY`. |
 
 **Rules:**
 
 - **One route per turn.** Pick the first matching row, then stop.
-- **Reference files own the phrasing** for routes #2–#4 (morning-greeting / sleep-winddown / meal-reminder). The corresponding HW marker logs `action=<route name>` so the next event in the same window/day sees `*_done_today` / `*_done_this_window` true and skips re-firing.
-- The `nudge_*` row you POST in routes #5/#6 acts as the next reset point, so once you nudge, the delta drops to 0 and the next reminder of that kind only fires after another full threshold window. No separate cooldown logic.
+- **Reference files own the phrasing** for routes #2–#5 (morning-greeting / sleep-winddown / meal-reminder / posture-nudge). The corresponding HW marker logs `action=<route name>` so the next event in the same window/day sees `*_done_today` / `*_done_this_window` true and skips re-firing.
+- The `nudge_*` row you POST in routes #6 (hydration) / #7 (break) acts as the next reset point for `hydration_delta_min` / `break_delta_min`, so once you nudge the delta drops to 0 and the next reminder of that kind only fires after another full threshold window. Route #8 (toilet) similarly resets `drinks_since_toilet_nudge` to 0 on POST.
+- Route #5 (posture) does NOT follow that pattern — re-firing is gated by lelamp's `POSE_NUDGE_COOLDOWN_S` (~30 min, enforced upstream by suppressing the `[posture_summary]` block). Your POST does not by itself reset a timer; if the block is absent, you cannot nudge.
 - Never narrate the routing decision in the spoken reply.
 
 ## Reaction (when the user just did the thing)
@@ -169,6 +186,8 @@ If the context's `patterns` map has an entry for the action you are about to nud
 
 If you decided NOT to nudge (`NO_REPLY`) → never invoke Flow A. Habit bootstrap piggybacks on real nudge events, not idle motion ticks.
 
+Posture nudges (route #5) do NOT trigger habit Flow A — the `patterns` field in `[wellbeing_context]` is keyed on `drink` / `break` reset actions only, and `bootstrap_needed` is computed from the wellbeing log alone.
+
 Example: *hydration nudge fires at 9:15am, patterns.json says drink @ hour=9 typical_minute=10 → "you usually have water around now — grab a glass?"*
 
 ## Phrasing (when nudging)
@@ -191,6 +210,14 @@ Use **at most one** health line per nudge. If the same user got the same health 
 - If you genuinely can't think of a fresh angle, prefer **shorter and casual** ("Water." / "Up on your feet for a sec.") over recycling a template.
 
 Ground each phrasing in the current raw label from the `Activity detected:` line so the nudge feels observed, not generic.
+
+### Posture tone (see `reference/posture.md`)
+
+Anchor on streak length (rounded — *"nearly an hour"*, never the exact
+number), `dominant_region`, one concrete fix, optional health-context
+clause. Side prefix only for arm/wrist when L/R sub-scores differ ≥ 2.
+Full tone table + health-framing guardrails + praise route + HW marker
+shape live in `reference/posture.md`.
 
 ### Hydration tone (paraphrase — never copy)
 
@@ -248,7 +275,13 @@ Same shape for break (`action="nudge_break"`) and toilet (`action="nudge_toilet"
 - Fires the POST asynchronously in the background; you do NOT wait for the result and there is NO tool turn here.
 - Acts as the next reset point for that timer (timeline + delta + drinks-since-toilet computation).
 
-Skip the marker entirely when you took the **Reaction** path or stayed silent (`NO_REPLY`). The marker is for `nudge_hydration` / `nudge_break` / `nudge_toilet` only — drink/break rows are already logged by LeLamp upstream. The `notes` field is the same sentence you're about to speak — it's what the timeline will display.
+**Posture variant — different endpoint.** Posture nudges target
+`/posture/log` (NOT wellbeing log) with `action=nudge_posture` and
+`nudge_level: 4`. Praise uses the same path with
+`action=praise_posture`. Full marker shape + curl fallback in
+`reference/posture.md`.
+
+Skip the marker entirely when you took the **Reaction** path or stayed silent (`NO_REPLY`). The wellbeing marker is for `nudge_hydration` / `nudge_break` / `nudge_toilet` only — drink/break rows are already logged by LeLamp upstream. The posture marker is for `nudge_posture` / `praise_posture` only. The `notes` field is the same sentence you're about to speak — it's what the timeline will display.
 
 **Do NOT use `curl` exec for this log.** That would consume a tool turn (~5-7s LLM-think on the result) for a side-effect that has nothing to wait for. The HW marker path is single-trip.
 
@@ -262,6 +295,8 @@ curl -s -X POST http://127.0.0.1:5000/api/wellbeing/log \
   -d '{"action":"nudge_hydration","notes":"<your nudge text>","user":"<current_user>"}'
 ```
 
+Posture fallback uses a different path — see `reference/posture.md`.
+
 ## On `presence.enter` / `presence.leave` / `presence.away`
 
 Backend writes the `enter` / `leave` rows. You do nothing for these events — stay silent (`NO_REPLY`) unless there's something genuinely worth saying.
@@ -274,10 +309,12 @@ Backend writes the `enter` / `leave` rows. You do nothing for these events — s
 | Raw eat labels — `eating burger`, `eating cake`, `eating carrots`, `eating chips`, `eating doughnuts`, `eating hotdog`, `eating ice cream`, `eating spaghetti`, `eating watermelon`, `dining`, `tasting food` | LeLamp (on `motion.activity`) | User ate. Raw labels kept (same hybrid as sedentary) so reaction phrasing can ground in the specific food. **Counts as meal signal** for the meal-reminder gate, **not** as a reset for break/hydration timers. |
 | `using computer`, `writing`, `texting`, `reading book`, `reading newspaper`, `drawing`, `playing controller` | LeLamp (on `motion.activity`) | Sedentary — logged for timeline + phrasing. **Not a reset point.** |
 | `enter`, `leave` | Backend (on `presence.*` events) | Session boundary; deduped against last presence row, so stranger-ID churn collapses. **Reset point.** |
-| `nudge_hydration`, `nudge_break` | **You**, after speaking a nudge | Timeline + reset for next window. |
-| `nudge_toilet` | **You**, after a toilet nudge | Resets `drinks_since_toilet_nudge` counter to 0. Sparse by design: only re-fires after another N drinks. |
-| `morning_greeting` | **You**, on the morning-greeting route | Once-per-day gate; suppresses re-firing today. |
-| `sleep_winddown` | **You**, on the sleep-winddown route | Once-per-day gate; suppresses re-firing tonight. |
-| `meal_reminder` | **You**, on the meal-reminder route | Once-per-window gate (lunch / dinner separately). |
+| `nudge_hydration`, `nudge_break` | **You**, after speaking a nudge | Wellbeing log. Timeline + reset for next window. |
+| `nudge_toilet` | **You**, after a toilet nudge | Wellbeing log. Resets `drinks_since_toilet_nudge` counter to 0. Sparse by design: only re-fires after another N drinks. |
+| `morning_greeting` | **You**, on the morning-greeting route | Wellbeing log. Once-per-day gate; suppresses re-firing today. |
+| `sleep_winddown` | **You**, on the sleep-winddown route | Wellbeing log. Once-per-day gate; suppresses re-firing tonight. |
+| `meal_reminder` | **You**, on the meal-reminder route | Wellbeing log. Once-per-window gate (lunch / dinner separately). |
+| `nudge_posture` | **You**, on the posture-nudge route | **Posture log** (separate JSONL). Carries `nudge_level=4`. LeLamp's cooldown already gates re-firing for ~30 min — your POST does not by itself reset it. |
+| `praise_posture` | **You**, when the user clearly fixed posture after a recent nudge | **Posture log**. Rare — only when context shows improvement following an agent nudge in the last ~30 min. |
 
 Emotional labels (`laughing`, `crying`, `yawning`, `singing`) are filtered upstream and never reach this skill via `motion.activity` — they'll arrive on a separate `motion.emotional` event in a future version.
