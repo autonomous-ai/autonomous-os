@@ -92,11 +92,11 @@ No defensive detection; "rarely a problem" notes in `mood/SKILL.md:118` and `mus
 |---|---|---|---|---|
 | `wellbeing` | hydration | 5 min | 45 min | `SKILL.md:24` |
 | `wellbeing` | break | 7 min | 30 min | `SKILL.md:24` |
-| `posture` | voice budget | 3/hr | 3/hr | `SKILL.md:78` + `posture.go:89` |
+| `posture` | upstream cooldown | 5 min | 5 min | lelamp `config.py:157` (`POSE_ERGO_COOLDOWN_S`) |
 | `user-emotion-detection` | suggest cooldown | 7 min | 30 min | `SKILL.md:53,108` |
 | `music-suggestion` | suggest cooldown | 7 min | 30 min | `SKILL.md:53` |
 
-Only `posture` has the value in Go. The others rely on the LLM reading SKILL.md. Compaction-summary distortion (`docs/debug/...`, see `project_openclaw_compaction_summary_risk` in memory) is a real risk — a re-summarized SKILL can change the threshold without code review.
+All thresholds now live either in SKILL.md prose or in lelamp's config — none in Lumi Go anymore (the posture voice budget was removed, see `57fb6d87`). The SKILL-prose ones rely on the LLM reading them; compaction-summary distortion (`docs/debug/...`, see `project_openclaw_compaction_summary_risk` in memory) is a real risk — a re-summarized SKILL can change the threshold without code review.
 
 ### `mapped_mood` vocabulary mismatch
 
