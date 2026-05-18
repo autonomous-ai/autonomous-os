@@ -167,6 +167,13 @@ class CameraInfoResponse(BaseModel):
     height: Optional[int]
     disabled: bool = False
     manual_override: bool = False
+    zoom: float = 1.0
+
+
+class CameraZoomRequest(BaseModel):
+    zoom: float = Field(..., ge=1.0, le=5.0, description="Digital zoom factor, 1.0 = no zoom")
+
+    model_config = {"json_schema_extra": {"examples": [{"zoom": 2.0}]}}
 
 
 class EmotionRequest(BaseModel):

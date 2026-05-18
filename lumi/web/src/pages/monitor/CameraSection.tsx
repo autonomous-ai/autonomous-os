@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePolling } from "../../hooks/usePolling";
 import { S } from "./styles";
 import { HW } from "./types";
@@ -21,6 +21,8 @@ export function CameraSection({
   const [cameraDisabled, setCameraDisabled] = useState(false);
   const [manualOverride, setManualOverride] = useState(false);
   const [toggling, setToggling] = useState(false);
+  const [zoom, setZoom] = useState(1.0);
+  const zoomTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [track, setTrack] = useState<TrackStatus>({ tracking: false, target: null, bbox: null, confidence: null });
   const [trackTarget, setTrackTarget] = useState("object");
   const [trackBbox, setTrackBbox] = useState("");
@@ -43,12 +45,27 @@ export function CameraSection({
     const r = await fetch(`${HW}/camera`, { signal }).then((x) => x.json());
     setCameraDisabled(!!r.disabled);
     setManualOverride(!!r.manual_override);
+    // Skip server zoom while user is sliding (timer pending) to avoid jitter.
+    if (!zoomTimer.current && typeof r.zoom === "number") setZoom(r.zoom);
   }, 3000);
 
   usePolling(async (signal) => {
     const r = await fetch(`${HW}/servo/track`, { signal }).then((x) => x.json());
     setTrack({ tracking: !!r.tracking, target: r.target, bbox: r.bbox, confidence: r.confidence ?? null });
   }, 3000);
+
+  const applyZoom = (z: number) => {
+    setZoom(z);
+    if (zoomTimer.current) clearTimeout(zoomTimer.current);
+    zoomTimer.current = setTimeout(() => {
+      zoomTimer.current = null;
+      fetch(`${HW}/camera/zoom`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ zoom: z }),
+      }).catch(() => {});
+    }, 200);
+  };
 
   const toggleCamera = async () => {
     setToggling(true);
@@ -132,6 +149,42 @@ export function CameraSection({
                 {toggling ? "…" : cameraDisabled ? "Enable" : "Disable"}
               </button>
             </div>
+          </div>
+
+          {/* Digital zoom — applies to capture loop, so sensing/tracker see it too.
+              Use to focus on a small subject (e.g. laptop screen on a video call).
+              Side effect: zoom > 1 narrows FOV for face recog / motion / pose. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <span style={{ fontSize: 11, color: "var(--lm-text-dim)", minWidth: 36 }}>Zoom</span>
+            <input
+              type="range"
+              min={1}
+              max={5}
+              step={0.1}
+              value={zoom}
+              onChange={(e) => applyZoom(Number(e.target.value))}
+              disabled={cameraDisabled}
+              style={{ flex: 1, accentColor: "var(--lm-amber)" }}
+              title={zoom > 1 ? "Zoom narrows FOV — sensing will only see center" : ""}
+            />
+            <span style={{
+              fontSize: 11, color: zoom > 1 ? "var(--lm-amber)" : "var(--lm-text-muted)",
+              minWidth: 32, fontFamily: "monospace", fontWeight: 600,
+            }}>
+              {zoom.toFixed(1)}×
+            </span>
+            <button
+              onClick={() => applyZoom(1.0)}
+              disabled={cameraDisabled || zoom === 1.0}
+              style={{
+                fontSize: 10, padding: "2px 8px", borderRadius: 4,
+                background: "var(--lm-surface)", border: "1px solid var(--lm-border)",
+                color: "var(--lm-text-dim)",
+                cursor: (cameraDisabled || zoom === 1.0) ? "not-allowed" : "pointer",
+                opacity: (cameraDisabled || zoom === 1.0) ? 0.4 : 1,
+              }}
+              title="Reset to 1.0x (full FOV)"
+            >Reset</button>
           </div>
 
           {/* Stream frame with Snapshot mini-card overlaid at bottom-right (picture-in-picture). */}

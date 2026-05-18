@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 import lelamp.app_state as state
-from lelamp.models import CameraInfoResponse, StatusResponse
+from lelamp.models import CameraInfoResponse, CameraZoomRequest, StatusResponse
 from lelamp.config import CAMERA_WIDTH, CAMERA_HEIGHT
 
 router = APIRouter(tags=["Camera"])
@@ -30,6 +30,30 @@ def get_camera_info():
         "height": CAMERA_HEIGHT if available else None,
         "disabled": state._camera_disabled,
         "manual_override": state._camera_manual_override,
+        "zoom": getattr(state.camera_capture, "zoom", 1.0) if available else 1.0,
+    }
+
+
+@router.post("/camera/zoom", response_model=CameraInfoResponse)
+def set_camera_zoom(req: CameraZoomRequest):
+    """Set digital zoom factor (1.0 = no zoom, applies to all frame consumers).
+
+    Side effect: zoom > 1 narrows the FOV seen by sensing (face recog, motion,
+    pose, emotion) and tracking. Use for focusing on a small subject (e.g.
+    laptop screen in a video call); set back to 1.0 to restore wide view.
+    """
+    if not state.camera_capture:
+        raise HTTPException(503, "Camera not available")
+    state.camera_capture.zoom = req.zoom
+    state.logger.info("Camera zoom set to %.2f", req.zoom)
+    available = cv2 is not None
+    return {
+        "available": available,
+        "width": CAMERA_WIDTH if available else None,
+        "height": CAMERA_HEIGHT if available else None,
+        "disabled": state._camera_disabled,
+        "manual_override": state._camera_manual_override,
+        "zoom": state.camera_capture.zoom,
     }
 
 

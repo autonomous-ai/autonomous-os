@@ -53,6 +53,12 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
         self._active_consumers: int = 0
         self._consumers_lock: threading.Lock = threading.Lock()
 
+        # Digital zoom factor (1.0 = no zoom). Applied in capture loop so all
+        # downstream consumers (sensing, tracker, snapshot, stream) see the
+        # same zoomed frame. Side effect: zoom > 1 narrows the effective FOV
+        # for sensing/tracking. Settable via /camera/zoom route.
+        self.zoom: float = 1.0
+
         self._logger: logging.Logger = logging.getLogger(self.__class__.__name__)
 
     @property
@@ -232,6 +238,18 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
                         center = (w // 2, h // 2)
                         M = cv2.getRotationMatrix2D(center, self._rotate, 1.0)
                         frame = cv2.warpAffine(frame, M, (w, h))
+
+                z = self.zoom
+                if z > 1.0:
+                    fh, fw = frame.shape[:2]
+                    cw, ch = int(fw / z), int(fh / z)
+                    x0 = (fw - cw) // 2
+                    y0 = (fh - ch) // 2
+                    frame = cv2.resize(
+                        frame[y0:y0 + ch, x0:x0 + cw],
+                        (fw, fh),
+                        interpolation=cv2.INTER_LINEAR,
+                    )
 
                 frame = cast(npt.NDArray[np.uint8], frame)
                 response = VideoCaptureDeviceResponse(frame=frame)
