@@ -163,8 +163,12 @@ class AudioDevicesResponse(BaseModel):
 
 class CameraInfoResponse(BaseModel):
     available: bool
+    # Actual capture mode the device negotiated (None until the capture loop
+    # has opened the device once). Falls back to configured CAMERA_WIDTH/
+    # CAMERA_HEIGHT when device has not reported yet.
     width: Optional[int]
     height: Optional[int]
+    fps: Optional[float] = None
     disabled: bool = False
     manual_override: bool = False
     zoom: float = 1.0

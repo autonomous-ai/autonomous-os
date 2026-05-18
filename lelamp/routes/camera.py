@@ -20,18 +20,30 @@ except ImportError:
     pass
 
 
-@router.get("/camera", response_model=CameraInfoResponse)
-def get_camera_info():
-    """Get camera availability and resolution."""
+def _camera_info_payload() -> dict:
+    """Build the CameraInfoResponse dict from current device + state."""
     available = state.camera_capture is not None and cv2 is not None
+    cap = state.camera_capture
+    actual_w = getattr(cap, "actual_width", None) if available else None
+    actual_h = getattr(cap, "actual_height", None) if available else None
+    actual_fps = getattr(cap, "actual_fps", None) if available else None
     return {
         "available": available,
-        "width": CAMERA_WIDTH if available else None,
-        "height": CAMERA_HEIGHT if available else None,
+        # Prefer the device-negotiated mode; fall back to configured values
+        # until the capture loop has reported (e.g. camera disabled at boot).
+        "width": actual_w if actual_w else (CAMERA_WIDTH if available else None),
+        "height": actual_h if actual_h else (CAMERA_HEIGHT if available else None),
+        "fps": actual_fps,
         "disabled": state._camera_disabled,
         "manual_override": state._camera_manual_override,
-        "zoom": getattr(state.camera_capture, "zoom", 1.0) if available else 1.0,
+        "zoom": getattr(cap, "zoom", 1.0) if available else 1.0,
     }
+
+
+@router.get("/camera", response_model=CameraInfoResponse)
+def get_camera_info():
+    """Get camera availability, negotiated resolution, FPS, zoom."""
+    return _camera_info_payload()
 
 
 @router.post("/camera/zoom", response_model=CameraInfoResponse)
@@ -46,15 +58,7 @@ def set_camera_zoom(req: CameraZoomRequest):
         raise HTTPException(503, "Camera not available")
     state.camera_capture.zoom = req.zoom
     state.logger.info("Camera zoom set to %.2f", req.zoom)
-    available = cv2 is not None
-    return {
-        "available": available,
-        "width": CAMERA_WIDTH if available else None,
-        "height": CAMERA_HEIGHT if available else None,
-        "disabled": state._camera_disabled,
-        "manual_override": state._camera_manual_override,
-        "zoom": state.camera_capture.zoom,
-    }
+    return _camera_info_payload()
 
 
 @router.post("/camera/disable", response_model=StatusResponse)

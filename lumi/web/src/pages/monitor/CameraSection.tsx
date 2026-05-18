@@ -22,6 +22,9 @@ export function CameraSection({
   const [manualOverride, setManualOverride] = useState(false);
   const [toggling, setToggling] = useState(false);
   const [zoom, setZoom] = useState(1.0);
+  const [mode, setMode] = useState<{ w: number | null; h: number | null; fps: number | null }>({
+    w: null, h: null, fps: null,
+  });
   const zoomTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [track, setTrack] = useState<TrackStatus>({ tracking: false, target: null, bbox: null, confidence: null });
   const [trackTarget, setTrackTarget] = useState("object");
@@ -45,6 +48,11 @@ export function CameraSection({
     const r = await fetch(`${HW}/camera`, { signal }).then((x) => x.json());
     setCameraDisabled(!!r.disabled);
     setManualOverride(!!r.manual_override);
+    setMode({
+      w: typeof r.width === "number" ? r.width : null,
+      h: typeof r.height === "number" ? r.height : null,
+      fps: typeof r.fps === "number" ? r.fps : null,
+    });
     // Skip server zoom while user is sliding (timer pending) to avoid jitter.
     if (!zoomTimer.current && typeof r.zoom === "number") setZoom(r.zoom);
   }, 3000);
@@ -134,6 +142,18 @@ export function CameraSection({
               </span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {mode.w && mode.h && (
+                <span
+                  title="Actual capture mode negotiated with the camera"
+                  style={{
+                    fontSize: 10, padding: "2px 7px", borderRadius: 4,
+                    background: "var(--lm-surface)", border: "1px solid var(--lm-border)",
+                    color: "var(--lm-text-dim)", fontFamily: "monospace", fontWeight: 600,
+                  }}
+                >
+                  {mode.w}×{mode.h}{mode.fps ? ` @ ${mode.fps.toFixed(0)}fps` : ""}
+                </span>
+              )}
               <span style={{ fontSize: 11, color: "var(--lm-text-muted)" }}>{statusText}</span>
               <button
                 onClick={toggleCamera}

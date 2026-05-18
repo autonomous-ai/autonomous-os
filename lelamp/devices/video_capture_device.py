@@ -59,6 +59,13 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
         # for sensing/tracking. Settable via /camera/zoom route.
         self.zoom: float = 1.0
 
+        # Negotiated capture mode — populated after the device accepts the
+        # CAP_PROP_FRAME_WIDTH/HEIGHT/FPS request. None until the capture loop
+        # has opened the device once.
+        self.actual_width: int | None = None
+        self.actual_height: int | None = None
+        self.actual_fps: float | None = None
+
         self._logger: logging.Logger = logging.getLogger(self.__class__.__name__)
 
     @property
@@ -157,9 +164,25 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
         # with the default YUYV format on Pi 5 but work fine with MJPEG.
         video_capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
 
+        # Request the configured resolution from the device. Without this the
+        # cam delivers its default mode (often 640x480) regardless of
+        # max_width/max_height. The device snaps to its nearest supported mode
+        # — we read back the actual values below.
+        if self._max_width:
+            video_capture.set(cv2.CAP_PROP_FRAME_WIDTH, self._max_width)
+        if self._max_height:
+            video_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self._max_height)
+
         w = int(video_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(video_capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
         device_fps = video_capture.get(cv2.CAP_PROP_FPS)
+        self.actual_width = w
+        self.actual_height = h
+        self.actual_fps = device_fps if device_fps and device_fps > 0 else None
+        self._logger.info(
+            "Camera negotiated mode: %dx%d @ %.1f fps (requested %sx%s)",
+            w, h, device_fps, self._max_width, self._max_height,
+        )
 
         new_w = min(w, self._max_width) if self._max_width else w
         new_h = min(h, self._max_height) if self._max_height else h
