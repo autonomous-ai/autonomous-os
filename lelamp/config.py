@@ -165,8 +165,7 @@ POSE_ERGO_HIGH_RISK_THRESHOLD = int(os.environ.get("LELAMP_POSE_ERGO_HIGH_RISK_T
 POSE_SAMPLE_INTERVAL_S = float(os.environ.get("LELAMP_POSE_SAMPLE_INTERVAL_S", "60.0"))
 # TEST VALUES — swap WINDOW=30, STREAK=1800, COOLDOWN=1800 (all 30 min) for production.
 POSE_WINDOW_SAMPLES = int(os.environ.get("LELAMP_POSE_WINDOW_SAMPLES", "10"))
-POSE_BAD_RATIO = float(os.environ.get("LELAMP_POSE_BAD_RATIO", "0.6"))
-POSE_NOISY_ANGLE_THRESHOLD = float(os.environ.get("LELAMP_POSE_NOISY_ANGLE_THRESHOLD", "170.0"))
+POSE_BAD_RATIO = float(os.environ.get("LELAMP_POSE_BAD_RATIO", "0.3"))
 # Min "using computer" streak before posture summary is allowed to ride along.
 POSE_STREAK_MIN_GATE_S = float(os.environ.get("LELAMP_POSE_STREAK_MIN_GATE_S", "600.0"))
 # After a posture summary has been folded into a motion.activity event, suppress

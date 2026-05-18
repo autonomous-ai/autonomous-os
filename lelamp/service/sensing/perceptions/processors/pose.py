@@ -125,13 +125,15 @@ class PoseResult:
 
 @dataclass
 class _PoseSample:
-    """One posture snapshot recorded into the rolling buffer."""
+    """One posture snapshot recorded into the rolling buffer.
+
+    All RULA values (score / risk_level / per-side body_scores + angles) are
+    passed through verbatim from dlbackend (Khanh's RULA scorer). We do not
+    derive or override anything on this side."""
 
     ts: float
     score: int
     risk_level: int
-    region_max: dict[str, int] = field(default_factory=dict)
-    noisy: bool = False
     raw_left: dict[str, Any] = field(default_factory=dict)
     raw_right: dict[str, Any] = field(default_factory=dict)
 
@@ -252,12 +254,6 @@ class RemotePoseEstimator:
 
 
 _REGIONS: tuple[str, ...] = ("neck", "trunk", "upper_arm", "lower_arm", "wrist")
-_ANGLE_KEYS: tuple[str, ...] = (
-    "upper_arm_angle",
-    "lower_arm_angle",
-    "neck_angle",
-    "trunk_angle",
-)
 
 
 class PosePerception(Perception[cv2.typing.MatLike]):
@@ -300,51 +296,42 @@ class PosePerception(Perception[cv2.typing.MatLike]):
         )
         os.makedirs(self._samples_dir, exist_ok=True)
 
-    @staticmethod
-    def _frame_noisy(
-        body_left: dict[str, Any], body_right: dict[str, Any]
-    ) -> bool:
-        threshold: float = config.POSE_NOISY_ANGLE_THRESHOLD
-        for body in (body_left, body_right):
-            for key in _ANGLE_KEYS:
-                angle: Any = body.get(key)
-                if angle is None:
-                    continue
-                try:
-                    if abs(float(angle)) >= threshold:
-                        return True
-                except (TypeError, ValueError):
-                    continue
-        return False
-
-    @staticmethod
-    def _region_max(
-        body_left: dict[str, Any], body_right: dict[str, Any]
-    ) -> dict[str, int]:
-        out: dict[str, int] = {}
-        for region in _REGIONS:
-            try:
-                left_val: int = int(body_left.get(region, 0))
-            except (TypeError, ValueError):
-                left_val = 0
-            try:
-                right_val: int = int(body_right.get(region, 0))
-            except (TypeError, ValueError):
-                right_val = 0
-            out[region] = max(left_val, right_val)
-        return out
-
     def _samples_file_path(self, ts: float) -> str:
         day: str = time.strftime("%Y-%m-%d", time.localtime(ts))
         return os.path.join(self._samples_dir, f"samples_{day}.jsonl")
 
+    def _latest_snapshot_path(self) -> str:
+        return os.path.join(self._samples_dir, "latest.jpg")
+
+    def _save_latest_snapshot(
+        self, frame: cv2.typing.MatLike, result: PoseResult
+    ) -> None:
+        """Persist an annotated snapshot of the latest sample so the monitor
+        can render the live pose alongside the numeric table. Uses Khanh's
+        `_draw_pose_2d` to overlay the skeleton + RULA label; the file is
+        rewritten in place each sample (no rolling history)."""
+        try:
+            annotated: cv2.typing.MatLike = _draw_pose_2d(
+                frame, result.pose_2d, result.ergo
+            )
+            cv2.imwrite(
+                self._latest_snapshot_path(),
+                annotated,
+                [int(cv2.IMWRITE_JPEG_QUALITY), 80],
+            )
+        except Exception as e:
+            logger.debug("[pose.sample] snapshot save failed: %s", e)
+
     def _append_sample_file(self, sample: _PoseSample) -> None:
+        # Pass through dlbackend's raw left / right dicts verbatim
+        # (body_scores + angles + skipped_joints from Khanh's RULA scorer).
+        # We do not derive any new value; aggregation reads these as-is.
         payload: dict[str, Any] = {
             "ts": round(sample.ts, 2),
             "score": sample.score,
             "risk_level": sample.risk_level,
-            "region_max": sample.region_max,
-            "noisy": sample.noisy,
+            "left": sample.raw_left,
+            "right": sample.raw_right,
         }
         try:
             path: str = self._samples_file_path(sample.ts)
@@ -392,27 +379,23 @@ class PosePerception(Perception[cv2.typing.MatLike]):
 
         left: dict[str, Any] = ergo.get("left", {}) or {}
         right: dict[str, Any] = ergo.get("right", {}) or {}
-        body_left: dict[str, Any] = left.get("body_scores", {}) or {}
-        body_right: dict[str, Any] = right.get("body_scores", {}) or {}
 
         sample = _PoseSample(
             ts=now,
             score=int(ergo.get("score", 0) or 0),
             risk_level=int(ergo.get("risk_level", 0) or 0),
-            region_max=self._region_max(body_left, body_right),
-            noisy=self._frame_noisy(body_left, body_right),
             raw_left=dict(left),
             raw_right=dict(right),
         )
         self._samples.append(sample)
         self._last_sample_ts = now
         self._append_sample_file(sample)
+        self._save_latest_snapshot(data, result)
         logger.debug(
-            "[pose.sample] ts=%.0f score=%d risk=%d noisy=%s buffer=%d/%d",
+            "[pose.sample] ts=%.0f score=%d risk=%d buffer=%d/%d",
             now,
             sample.score,
             sample.risk_level,
-            sample.noisy,
             len(self._samples),
             config.POSE_WINDOW_SAMPLES,
         )
@@ -420,25 +403,36 @@ class PosePerception(Perception[cv2.typing.MatLike]):
     def get_posture_summary(self) -> dict[str, Any] | None:
         """Aggregate the rolling buffer into a summary dict.
 
-        Returns None when the buffer hasn't filled yet or when more than half
-        of the samples are flagged noisy (low-confidence window).
+        All per-frame values are from dlbackend (Khanh's RULA scorer);
+        this method only counts. Returns None until the buffer is full.
         """
         window: int = config.POSE_WINDOW_SAMPLES
         if len(self._samples) < window:
             return None
 
-        valid: list[_PoseSample] = [s for s in self._samples if not s.noisy]
-        if len(valid) < window // 2:
-            return None
+        bad: list[_PoseSample] = [
+            s for s in self._samples if s.risk_level >= 3
+        ]
+        bad_ratio: float = len(bad) / len(self._samples)
 
-        bad: list[_PoseSample] = [s for s in valid if s.risk_level >= 3]
-        bad_ratio: float = len(bad) / len(valid)
-
+        # Region frequency = how often each region appeared at sub-score >= 3
+        # on EITHER side among bad samples. Uses Khanh's per-side numbers
+        # directly (no max-derivation on this side).
         region_freq: dict[str, int] = {region: 0 for region in _REGIONS}
         for s in bad:
-            for region, sub in s.region_max.items():
-                if sub >= 3:
-                    region_freq[region] = region_freq.get(region, 0) + 1
+            body_l: dict[str, Any] = (s.raw_left or {}).get("body_scores", {}) or {}
+            body_r: dict[str, Any] = (s.raw_right or {}).get("body_scores", {}) or {}
+            for region in _REGIONS:
+                try:
+                    l = int(body_l.get(region, 0))
+                except (TypeError, ValueError):
+                    l = 0
+                try:
+                    r = int(body_r.get(region, 0))
+                except (TypeError, ValueError):
+                    r = 0
+                if l >= 3 or r >= 3:
+                    region_freq[region] += 1
 
         dominant_region: str = ""
         dominant_count: int = 0
@@ -452,7 +446,7 @@ class PosePerception(Perception[cv2.typing.MatLike]):
         )
         return {
             "bad_ratio": round(bad_ratio, 2),
-            "valid_samples": len(valid),
+            "samples": len(self._samples),
             "bad_samples": len(bad),
             "window_min": window_min,
             "region_frequency": region_freq,
@@ -526,8 +520,8 @@ class PosePerception(Perception[cv2.typing.MatLike]):
                     "ts": round(s.ts, 2),
                     "score": s.score,
                     "risk_level": s.risk_level,
-                    "region_max": s.region_max,
-                    "noisy": s.noisy,
+                    "left": s.raw_left,
+                    "right": s.raw_right,
                 }
                 for s in self._samples
             ],

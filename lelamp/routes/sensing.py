@@ -76,6 +76,21 @@ def get_sensing_state():
     return state.sensing_service.to_dict()
 
 
+@router.get("/sensing/pose-snapshot", tags=["Sensing"])
+def get_pose_snapshot():
+    """Return the latest annotated pose frame as JPEG. Refreshed once per
+    pose sample (~1/min). Cache-buster via ?t=<ts> on the client."""
+    import lelamp.config as _cfg
+    path = Path(_cfg.SNAPSHOT_TMP_DIR) / "sensing_pose" / "latest.jpg"
+    if not path.exists():
+        raise HTTPException(404, "No pose snapshot yet")
+    try:
+        data = path.read_bytes()
+    except OSError as e:
+        raise HTTPException(500, f"read failed: {e}") from e
+    return Response(content=data, media_type="image/jpeg")
+
+
 # --- Presence ---
 
 @router.get("/presence", response_model=PresenceResponse, tags=["Presence"])

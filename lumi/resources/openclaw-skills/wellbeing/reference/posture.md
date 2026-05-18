@@ -12,13 +12,14 @@ LeLamp folds two extra blocks into `motion.activity` ONLY when ALL hold:
 - Sedentary streak ≥ `POSE_STREAK_MIN_GATE_S` (test 10 min / prod 30 min).
 - Sample buffer is full (`POSE_WINDOW_SAMPLES` — test 10 / prod 30
   valid samples across that many minutes).
-- `bad_ratio ≥ POSE_BAD_RATIO` (default 0.6).
+- `bad_ratio ≥ POSE_BAD_RATIO` (test 0.3 / prod 0.5).
 - No previous summary was injected within `POSE_NUDGE_COOLDOWN_S`
   (test 10 min / prod 30 min).
 
-If the block is absent: posture is fine, the streak is still short, the
-window is too noisy, or we're in cooldown — **do not nudge posture this
-turn**, regardless of how the user feels in the moment. The wellbeing
+If the block is absent: posture is fine, the streak is still short,
+the buffer isn't full yet, or we're in cooldown — **do not nudge
+posture this turn**, regardless of how the user feels in the moment.
+The wellbeing
 context's `last_posture_nudge_age_min` field gives the corroborating
 agent-side view (-1 if no nudge today).
 
@@ -27,9 +28,9 @@ agent-side view (-1 if no nudge today).
 ```
 [computer_streak_min: 47]
 [posture_summary: {
-  "bad_ratio": 0.73,            // fraction of valid samples ≥ medium risk
-  "valid_samples": 26,          // samples in window that passed noise filter
-  "bad_samples": 19,            // of those, how many were medium+
+  "bad_ratio": 0.73,            // fraction of samples ≥ medium risk
+  "samples": 30,                // samples in the rolling window
+  "bad_samples": 22,            // of those, how many were medium+
   "window_min": 30,             // rolling window length in minutes
   "region_frequency": {         // count of bad samples where each region was ≥ score 3
     "neck": 19, "upper_arm": 17, "trunk": 4, "lower_arm": 2, "wrist": 0
