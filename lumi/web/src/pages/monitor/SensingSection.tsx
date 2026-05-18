@@ -336,90 +336,61 @@ export function SensingSection() {
         </div>
       </div>
 
-      {/* Pose / Posture — rolling 30-min sample buffer + aggregated summary.
-          See lelamp pose.py + motion.py: posture summary rides on the next
+      {/* Pose / Posture — rolling sample buffer rendered as a raw table.
+          Each row is one minute's reading (newest first). See lelamp
+          pose.py + motion.py: posture summary rides on the next
           motion.activity event only when the bad_ratio threshold is crossed. */}
       {pose ? (() => {
         const status = posePillStatus(pose);
-        const samples = pose.samples ?? [];
         const win = pose.window_samples ?? 30;
+        const samples = [...(pose.samples ?? [])].reverse(); // newest first
         const summary = pose.summary;
-        const placeholders = Math.max(0, win - samples.length);
         return (
           <div style={S.card}>
             <CardHeader
               label="Pose / Posture"
               pill={<Pill text={status.text} color={status.color} />}
             />
-            <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) 2fr", gap: 14 }}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <StatPill label="Connected"      value={pose.connected ? "Yes" : "No"} color={pose.connected ? "var(--lm-green)" : "var(--lm-red)"} />
-                <StatPill label="Buffer"         value={`${pose.samples_in_buffer ?? 0} / ${win}`} />
-                <StatPill label="Until gate"     value={pose.samples_until_gate ?? win} color={(pose.samples_until_gate ?? 1) === 0 ? "var(--lm-green)" : undefined} />
-                <StatPill label="Sample every"   value={`${Math.round(pose.sample_interval_s ?? 60)}s`} />
-                <StatPill label="Last sample"    value={fmtAgo(pose.seconds_since_sample)} />
-                <StatPill label="Last score"     value={`${pose.ergo_score ?? "—"} (${riskName(pose.ergo_risk_level)})`} />
-                {summary ? (
-                  <>
-                    <StatPill label="Bad ratio"      value={`${Math.round(summary.bad_ratio * 100)}% (${summary.bad_samples}/${summary.valid_samples})`} color={summary.bad_ratio >= (pose.bad_ratio_threshold ?? 0.6) ? "var(--lm-red)" : "var(--lm-green)"} />
-                    <StatPill label="Dominant"       value={summary.dominant_region ? `${summary.dominant_region} (${summary.dominant_count})` : "—"} />
-                    <StatPill label="Window"         value={`${summary.window_min} min`} />
-                  </>
-                ) : (
-                  <StatPill label="Summary" value="Not ready yet" />
-                )}
-              </div>
-              <div>
-                <div style={{ fontSize: 10, color: "var(--lm-text-muted)", marginBottom: 6, letterSpacing: "0.05em", textTransform: "uppercase" }}>
-                  Samples (oldest → newest)
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: `repeat(${win}, 1fr)`, gap: 3 }}>
-                  {samples.map((s, idx) => (
-                    <div
-                      key={`${s.ts}-${idx}`}
-                      title={`score=${s.score} risk=${riskName(s.risk_level)}${s.noisy ? " [noisy]" : ""}`}
-                      style={{
-                        height: 18,
-                        borderRadius: 3,
-                        background: poseDotColor(s),
-                        opacity: s.noisy ? 0.4 : 1,
-                        border: s.noisy ? "1px dashed var(--lm-text-muted)" : "none",
-                      }}
-                    />
-                  ))}
-                  {Array.from({ length: placeholders }).map((_, idx) => (
-                    <div
-                      key={`pad-${idx}`}
-                      style={{
-                        height: 18,
-                        borderRadius: 3,
-                        background: "transparent",
-                        border: "1px dashed var(--lm-text-muted)",
-                        opacity: 0.4,
-                      }}
-                    />
-                  ))}
-                </div>
-                {summary && summary.region_frequency ? (
-                  <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 6 }}>
-                    {Object.entries(summary.region_frequency)
-                      .sort(([, a], [, b]) => b - a)
-                      .map(([region, count]) => (
-                        <span key={region} style={{
-                          fontSize: 10,
-                          padding: "2px 7px",
-                          borderRadius: 4,
-                          background: count > 0 ? "var(--lm-red)26" : "var(--lm-text-muted)15",
-                          color: count > 0 ? "var(--lm-red)" : "var(--lm-text-muted)",
-                          border: `1px solid ${count > 0 ? "var(--lm-red)55" : "var(--lm-text-muted)33"}`,
-                        }}>
-                          {region}: {count}
-                        </span>
-                      ))}
-                  </div>
-                ) : null}
-              </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+              <StatPill label="Buffer"      value={`${pose.samples_in_buffer ?? 0} / ${win}`} />
+              <StatPill label="Until gate"  value={pose.samples_until_gate ?? win} color={(pose.samples_until_gate ?? 1) === 0 ? "var(--lm-green)" : undefined} />
+              <StatPill label="Last"        value={fmtAgo(pose.seconds_since_sample)} />
+              <StatPill label="Last score"  value={`${pose.ergo_score ?? "—"} (${riskName(pose.ergo_risk_level)})`} />
+              {summary ? (
+                <>
+                  <StatPill label="Bad" value={`${Math.round(summary.bad_ratio * 100)}% (${summary.bad_samples}/${summary.valid_samples})`} color={summary.bad_ratio >= (pose.bad_ratio_threshold ?? 0.6) ? "var(--lm-red)" : "var(--lm-green)"} />
+                  <StatPill label="Dominant" value={summary.dominant_region || "—"} />
+                </>
+              ) : null}
             </div>
+            <div style={{ fontSize: 10, color: "var(--lm-text-muted)", marginBottom: 4, letterSpacing: "0.05em", textTransform: "uppercase" }}>
+              Samples (newest first)
+            </div>
+            {samples.length === 0 ? (
+              <span style={{ color: "var(--lm-text-muted)", fontSize: 11 }}>No samples yet</span>
+            ) : (
+              <div style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 11, lineHeight: 1.6 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "100px 50px 60px 1fr 60px", gap: 8, color: "var(--lm-text-muted)", paddingBottom: 4, borderBottom: "1px solid var(--lm-text-muted)33" }}>
+                  <div>time</div><div>score</div><div>risk</div><div>regions (neck/trunk/u-arm/l-arm/wrist)</div><div>noisy</div>
+                </div>
+                {samples.map((s, idx) => {
+                  const d = new Date(s.ts * 1000);
+                  const hh = String(d.getHours()).padStart(2, "0");
+                  const mm = String(d.getMinutes()).padStart(2, "0");
+                  const ss = String(d.getSeconds()).padStart(2, "0");
+                  const r = s.region_max ?? {};
+                  return (
+                    <div key={`${s.ts}-${idx}`} style={{ display: "grid", gridTemplateColumns: "100px 50px 60px 1fr 60px", gap: 8, opacity: s.noisy ? 0.5 : 1 }}>
+                      <div>{`${hh}:${mm}:${ss}`}</div>
+                      <div>{s.score}</div>
+                      <div style={{ color: poseDotColor(s) }}>{riskName(s.risk_level)}</div>
+                      <div>{`${r.neck ?? "-"}/${r.trunk ?? "-"}/${r.upper_arm ?? "-"}/${r.lower_arm ?? "-"}/${r.wrist ?? "-"}`}</div>
+                      <div style={{ color: s.noisy ? "var(--lm-amber)" : "var(--lm-text-muted)" }}>{s.noisy ? "yes" : ""}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         );
       })() : null}
