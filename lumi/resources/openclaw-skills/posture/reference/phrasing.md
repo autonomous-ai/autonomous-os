@@ -79,11 +79,12 @@ the *body* of the line.
 
 ### Multi-region (>1 label fires)
 
-Pick top region by sub-score (decoder rule). If tied and both are equally
-fresh in conversation, blend in **one** sentence — don't list them as bullets:
+Pick top region by sub-score (decoder rule). **When trunk is in the mix at score
+4+, trunk LEADS the sentence — arm / neck / wrist become modifiers, not the
+subject.** Blend into one sentence, not bullets:
 
 - `neck_flexed` + `wrist_deviated`: *"Neck and wrist are both strained right now. Sit up tall and re-square the mouse — those two often go together."*
-- `trunk_flexed` + `upper_arm_raised`: *"Hunched forward with the arm up — reaching for something far? Pull it in and sit back."*
+- `trunk_flexed` + `upper_arm_raised`: *"Hunched forward with the arm up — reaching for something far? Pull it in and sit back."* (Trunk leads. ❌ Anti-pattern: *"Arm's up and you're hunched…"* — that buries the back as an afterthought.)
 
 ### Side prefix (when `asymmetric == true`)
 
@@ -219,6 +220,9 @@ gentle nudge, not a diagnosis"* — is the contract. Stay within it.
 ## Anti-patterns — never
 
 - **Inventing body parts.** Without offender data, do NOT say *"neck flexed"* unless `asymmetric == false` AND the score implies a whole-body issue — and even then prefer general phrasing.
+- **Burying trunk as secondary.** When trunk sub-score ≥ 4 (deep bend), the line LEADS with the back / spine. Never let trunk become a tail clause after limbs — lumbar damage outlasts every other region.
+  - ❌ *"Left arm and your back are off…"* — back buried as afterthought.
+  - ✅ *"Back's folded forward, left arm's up too…"* — trunk leads, arm modifies.
 - **Quoting raw numbers** — *"score 6"*, *"RULA 5/6"*, *"left 4 right 6"* — round, paraphrase, or omit. The user does not care about the number.
 - **Cop voice** — *"I'm observing…"*, *"System detected…"*. Coach voice is friendly, not clinical.
 - **Naming the framework** — never say "RULA", "ergo score", "pose estimation". User doesn't care.

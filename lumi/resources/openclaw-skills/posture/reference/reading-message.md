@@ -104,9 +104,14 @@ RULA Step 10. Forward bend angle.
 When multiple regions trigger:
 
 1. **Highest sub-score wins.** If `neck=4, wrist=3, trunk=3` → name **neck**.
-2. **Ties: prefer the region not mentioned in your last 2 nudges this session.**
-3. **Ties with no recency clue: prefer neck > wrist > trunk > arm.** Neck/wrist drive RULA risk most.
-4. **Never name more than 2 regions in one sentence.** Pick the top 1-2.
+2. **Trunk at sub-score 4+ leads.** Deep trunk flexion (>60°) is the single biggest
+   driver of chronic lumbar damage and pushes RULA Group B by itself. Whenever
+   trunk hits 4+, it leads the sentence — even when tied with arm or neck.
+3. **Ties otherwise: prefer the region not mentioned in your last 2 nudges this session.**
+4. **Ties with no recency clue: prefer trunk > neck > arm > wrist.**
+   Trunk and neck drive RULA Group B; trunk injuries are the slowest to heal.
+   Wrist ranks last because no angle is exposed — lowest signal reliability.
+5. **Never name more than 2 regions in one sentence.** Pick the top 1-2.
 
 ## Left vs right asymmetry
 
