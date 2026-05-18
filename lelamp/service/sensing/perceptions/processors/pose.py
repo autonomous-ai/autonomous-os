@@ -1,17 +1,21 @@
-"""Pose estimation + ergonomic assessment perception via dlbackend WS.
+"""Pose estimation + ergonomic sampling via dlbackend WS.
 
 Follows the same pattern as MotionPerception (RemoteMotionChecker):
 - Maintains a WS connection to dlbackend /api/dl/pose-estimation/ws
 - Sends camera frames, receives pose_2d + optional pose_3d + optional ergo
-- When ergo risk is above threshold, sends pose.ergo_risk events to Lumi
-- Dedup by risk level with cooldown window
+- Silently samples each frame into a rolling RAM buffer + daily JSONL file.
+- Does NOT emit a pose.ergo_risk event directly. MotionPerception queries
+  get_posture_summary() and folds the aggregate into motion.activity when
+  the user is "using computer" for long enough.
 """
 
 import base64
 import json
 import logging
+import os
 import time
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 from typing import Any, override
 
 import cv2
@@ -117,6 +121,19 @@ class PoseResult:
     pose_2d: dict[str, Any] | None = None
     pose_3d: dict[str, Any] | None = None
     ergo: dict[str, Any] | None = None
+
+
+@dataclass
+class _PoseSample:
+    """One posture snapshot recorded into the rolling buffer."""
+
+    ts: float
+    score: int
+    risk_level: int
+    region_max: dict[str, int] = field(default_factory=dict)
+    noisy: bool = False
+    raw_left: dict[str, Any] = field(default_factory=dict)
+    raw_right: dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -234,13 +251,28 @@ class RemotePoseEstimator:
 # ---------------------------------------------------------------------------
 
 
-class PosePerception(Perception[cv2.typing.MatLike]):
-    """Pose estimation + ergonomic assessment via dlbackend WS.
+_REGIONS: tuple[str, ...] = ("neck", "trunk", "upper_arm", "lower_arm", "wrist")
+_ANGLE_KEYS: tuple[str, ...] = (
+    "upper_arm_angle",
+    "lower_arm_angle",
+    "neck_angle",
+    "trunk_angle",
+)
 
-    On each frame tick:
-    1. Sends frame to dlbackend pose-estimation WS
-    2. If ergo result present and risk >= threshold, sends pose.ergo_risk event
-    3. Dedup by risk level with cooldown to avoid spamming the agent
+
+class PosePerception(Perception[cv2.typing.MatLike]):
+    """Pose estimation + silent ergonomic sampling.
+
+    Each tick:
+    1. Send the frame to dlbackend pose-estimation WS.
+    2. While the user is present, append one sample per
+       POSE_SAMPLE_INTERVAL_S to a rolling RAM deque AND a daily JSONL file.
+    3. NEVER emit an event directly — MotionPerception calls
+       get_posture_summary() and decides whether to fold it into the next
+       motion.activity payload.
+
+    Single-frame noise (wrap-edge ±180°, transient reaches for a cup) is
+    filtered at aggregation time, not at the sample tap.
     """
 
     def __init__(
@@ -258,10 +290,68 @@ class PosePerception(Perception[cv2.typing.MatLike]):
             api_key=api_key,
         )
         self._last_result: PoseResult | None = None
-        self._last_ergo_event_ts: float = 0.0
-        self._last_risk_level: int | None = None
-        self._cooldown_s: float = config.POSE_ERGO_COOLDOWN_S
         self._risk_threshold: int = config.POSE_ERGO_HIGH_RISK_THRESHOLD
+        self._samples: deque[_PoseSample] = deque(
+            maxlen=config.POSE_WINDOW_SAMPLES
+        )
+        self._last_sample_ts: float = 0.0
+        self._samples_dir: str = os.path.join(
+            config.SNAPSHOT_TMP_DIR, "sensing_pose"
+        )
+        os.makedirs(self._samples_dir, exist_ok=True)
+
+    @staticmethod
+    def _frame_noisy(
+        body_left: dict[str, Any], body_right: dict[str, Any]
+    ) -> bool:
+        threshold: float = config.POSE_NOISY_ANGLE_THRESHOLD
+        for body in (body_left, body_right):
+            for key in _ANGLE_KEYS:
+                angle: Any = body.get(key)
+                if angle is None:
+                    continue
+                try:
+                    if abs(float(angle)) >= threshold:
+                        return True
+                except (TypeError, ValueError):
+                    continue
+        return False
+
+    @staticmethod
+    def _region_max(
+        body_left: dict[str, Any], body_right: dict[str, Any]
+    ) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for region in _REGIONS:
+            try:
+                left_val: int = int(body_left.get(region, 0))
+            except (TypeError, ValueError):
+                left_val = 0
+            try:
+                right_val: int = int(body_right.get(region, 0))
+            except (TypeError, ValueError):
+                right_val = 0
+            out[region] = max(left_val, right_val)
+        return out
+
+    def _samples_file_path(self, ts: float) -> str:
+        day: str = time.strftime("%Y-%m-%d", time.localtime(ts))
+        return os.path.join(self._samples_dir, f"samples_{day}.jsonl")
+
+    def _append_sample_file(self, sample: _PoseSample) -> None:
+        payload: dict[str, Any] = {
+            "ts": round(sample.ts, 2),
+            "score": sample.score,
+            "risk_level": sample.risk_level,
+            "region_max": sample.region_max,
+            "noisy": sample.noisy,
+        }
+        try:
+            path: str = self._samples_file_path(sample.ts)
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(payload, separators=(",", ":")) + "\n")
+        except OSError as e:
+            logger.debug("[pose.sample] file append failed: %s", e)
 
     @override
     def _check_impl(self, data: cv2.typing.MatLike) -> None:
@@ -274,79 +364,122 @@ class PosePerception(Perception[cv2.typing.MatLike]):
 
         self._last_result = result
 
-        # Send ergo event if risk is high enough
         ergo: dict[str, Any] | None = result.ergo
         if ergo is None:
             return
 
-        score: int = ergo.get("score", 0)
-        risk_level: int = ergo.get("risk_level", 0)
+        now: float = time.time()
 
-        if score < self._risk_threshold:
-            return
-
-        # Skip if no one is present
+        # Presence gate: if the user isn't here, clear the buffer (session
+        # ended) and skip sampling.
         if (
             self._presence_service is not None
             and self._presence_service.state != PresenceState.PRESENT
         ):
+            if self._samples:
+                logger.debug(
+                    "[pose.sample] presence lost — buffer reset (had %d)",
+                    len(self._samples),
+                )
+                self._samples.clear()
+                self._last_sample_ts = 0.0
             return
 
-        # Dedup: cooldown per risk level change
-        now: float = time.time()
-        if (
-            self._last_risk_level == risk_level
-            and (now - self._last_ergo_event_ts) < self._cooldown_s
-        ):
+        # Throttle to one sample per POSE_SAMPLE_INTERVAL_S regardless of
+        # the underlying tick rate.
+        if now - self._last_sample_ts < config.POSE_SAMPLE_INTERVAL_S:
             return
 
-        self._last_ergo_event_ts = now
-        self._last_risk_level = risk_level
+        left: dict[str, Any] = ergo.get("left", {}) or {}
+        right: dict[str, Any] = ergo.get("right", {}) or {}
+        body_left: dict[str, Any] = left.get("body_scores", {}) or {}
+        body_right: dict[str, Any] = right.get("body_scores", {}) or {}
 
-        risk_names: dict[int, str] = {1: "negligible", 2: "low", 3: "medium", 4: "high"}
-        risk_name: str = risk_names.get(risk_level, "unknown")
-
-        # Build detailed message with all body-part scores for the agent
-        left: dict[str, Any] = ergo.get("left", {})
-        right: dict[str, Any] = ergo.get("right", {})
-        left_body: dict[str, int] = left.get("body_scores", {})
-        right_body: dict[str, int] = right.get("body_scores", {})
-        left_skipped: list[str] = left.get("skipped_joints", [])
-        right_skipped: list[str] = right.get("skipped_joints", [])
-
-        def _side_detail(
-            side_name: str,
-            side_data: dict[str, Any],
-            body: dict[str, int],
-            skipped: list[str],
-        ) -> str:
-            parts: list[str] = [
-                f"{side_name} (score={side_data.get('score', '?')}, ",
-                f"risk={risk_names.get(side_data.get('risk_level', 0), '?')}): ",
-                f"upper_arm={body.get('upper_arm', '?')} ({body.get('upper_arm_angle', '?')}°), ",
-                f"lower_arm={body.get('lower_arm', '?')} ({body.get('lower_arm_angle', '?')}°), ",
-                f"wrist={body.get('wrist', '?')}, ",
-                f"neck={body.get('neck', '?')} ({body.get('neck_angle', '?')}°), ",
-                f"trunk={body.get('trunk', '?')} ({body.get('trunk_angle', '?')}°)",
-            ]
-            if skipped:
-                parts.append(f" [skipped: {', '.join(skipped)}]")
-            return "".join(parts)
-
-        left_detail: str = _side_detail("Left", left, left_body, left_skipped)
-        right_detail: str = _side_detail("Right", right, right_body, right_skipped)
-
-        message: str = (
-            f"Ergonomic risk detected: RULA score {score} ({risk_name} risk). "
-            f"{left_detail}. {right_detail}. "
-            f"(camera-based posture assessment; treat as a gentle nudge, not a diagnosis.)"
+        sample = _PoseSample(
+            ts=now,
+            score=int(ergo.get("score", 0) or 0),
+            risk_level=int(ergo.get("risk_level", 0) or 0),
+            region_max=self._region_max(body_left, body_right),
+            noisy=self._frame_noisy(body_left, body_right),
+            raw_left=dict(left),
+            raw_right=dict(right),
+        )
+        self._samples.append(sample)
+        self._last_sample_ts = now
+        self._append_sample_file(sample)
+        logger.debug(
+            "[pose.sample] ts=%.0f score=%d risk=%d noisy=%s buffer=%d/%d",
+            now,
+            sample.score,
+            sample.risk_level,
+            sample.noisy,
+            len(self._samples),
+            config.POSE_WINDOW_SAMPLES,
         )
 
-        # Draw annotated snapshot with 2D skeleton + ergo score
-        snapshot: cv2.typing.MatLike = _draw_pose_2d(data, result.pose_2d, ergo)
+    def get_posture_summary(self) -> dict[str, Any] | None:
+        """Aggregate the rolling buffer into a summary dict.
 
-        logger.info("[pose.ergo] %s", message)
-        self._send_event("pose.ergo_risk", message, "pose", [snapshot], None)
+        Returns None when the buffer hasn't filled yet or when more than half
+        of the samples are flagged noisy (low-confidence window).
+        """
+        window: int = config.POSE_WINDOW_SAMPLES
+        if len(self._samples) < window:
+            return None
+
+        valid: list[_PoseSample] = [s for s in self._samples if not s.noisy]
+        if len(valid) < window // 2:
+            return None
+
+        bad: list[_PoseSample] = [s for s in valid if s.risk_level >= 3]
+        bad_ratio: float = len(bad) / len(valid)
+
+        region_freq: dict[str, int] = {region: 0 for region in _REGIONS}
+        for s in bad:
+            for region, sub in s.region_max.items():
+                if sub >= 3:
+                    region_freq[region] = region_freq.get(region, 0) + 1
+
+        dominant_region: str = ""
+        dominant_count: int = 0
+        if bad:
+            dominant_region = max(region_freq, key=lambda r: region_freq[r])
+            dominant_count = region_freq[dominant_region]
+
+        latest: _PoseSample = self._samples[-1]
+        window_min: int = int(
+            window * config.POSE_SAMPLE_INTERVAL_S / 60
+        )
+        return {
+            "bad_ratio": round(bad_ratio, 2),
+            "valid_samples": len(valid),
+            "bad_samples": len(bad),
+            "window_min": window_min,
+            "region_frequency": region_freq,
+            "dominant_region": dominant_region,
+            "dominant_count": dominant_count,
+            "latest_score": latest.score,
+            "latest_risk_level": latest.risk_level,
+            "latest_left": latest.raw_left,
+            "latest_right": latest.raw_right,
+        }
+
+    def is_window_bad(self) -> bool:
+        """True when the gate criteria are met (window full AND bad ratio over threshold)."""
+        summary: dict[str, Any] | None = self.get_posture_summary()
+        if summary is None:
+            return False
+        return summary["bad_ratio"] >= config.POSE_BAD_RATIO
+
+    def draw_latest_overlay(
+        self, frame: cv2.typing.MatLike
+    ) -> cv2.typing.MatLike:
+        """Annotate a frame with the most recent pose result (for snapshots)."""
+        if self._last_result is None or self._last_result.pose_2d is None:
+            return frame
+        return _draw_pose_2d(
+            frame, self._last_result.pose_2d, self._last_result.ergo
+        )
 
     @override
     def cleanup(self) -> None:
@@ -365,9 +498,12 @@ class PosePerception(Perception[cv2.typing.MatLike]):
                 ergo_score = self._last_result.ergo.get("score")
                 ergo_risk = self._last_result.ergo.get("risk_level")
 
-        seconds_since_ergo: float | None = None
-        if self._last_ergo_event_ts > 0:
-            seconds_since_ergo = time.time() - self._last_ergo_event_ts
+        samples_until_gate: int = max(
+            0, config.POSE_WINDOW_SAMPLES - len(self._samples)
+        )
+        seconds_since_sample: float | None = None
+        if self._last_sample_ts > 0:
+            seconds_since_sample = time.time() - self._last_sample_ts
 
         return {
             "type": "pose",
@@ -376,7 +512,23 @@ class PosePerception(Perception[cv2.typing.MatLike]):
             "has_pose_3d": has_pose_3d,
             "ergo_score": ergo_score,
             "ergo_risk_level": ergo_risk,
-            "seconds_since_ergo_event": int(seconds_since_ergo)
-            if seconds_since_ergo is not None
+            "seconds_since_sample": int(seconds_since_sample)
+            if seconds_since_sample is not None
             else None,
+            "samples_in_buffer": len(self._samples),
+            "samples_until_gate": samples_until_gate,
+            "window_samples": config.POSE_WINDOW_SAMPLES,
+            "sample_interval_s": config.POSE_SAMPLE_INTERVAL_S,
+            "bad_ratio_threshold": config.POSE_BAD_RATIO,
+            "summary": self.get_posture_summary(),
+            "samples": [
+                {
+                    "ts": round(s.ts, 2),
+                    "score": s.score,
+                    "risk_level": s.risk_level,
+                    "region_max": s.region_max,
+                    "noisy": s.noisy,
+                }
+                for s in self._samples
+            ],
         }

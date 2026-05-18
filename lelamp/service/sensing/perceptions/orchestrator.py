@@ -146,6 +146,12 @@ class PerceptionOrchestrator:
                 self._perception_state.frame.register(
                     self._processors.pose_processor.check
                 )
+                # Wire pose into motion so motion.activity can fold the
+                # posture summary when the sedentary streak is long enough.
+                if self._processors.motion_processor is not None:
+                    self._processors.motion_processor.set_pose_perception(
+                        self._processors.pose_processor
+                    )
 
             if self._config.enable_light:
                 self._processors.light_processor = LightLevelPerception(

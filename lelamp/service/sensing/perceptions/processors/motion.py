@@ -21,6 +21,7 @@ from lelamp.service.sensing.perceptions.utils import PerceptionStateObservers
 from lelamp.service.sensing.presence_service import PresenceState, PresenseService
 
 from .base import Perception
+from .pose import PosePerception
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -294,6 +295,18 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
 
         self._state_lock: threading.RLock = threading.RLock()
 
+        # Sedentary streak — tracks how long the user has been in a
+        # continuous "sedentary" activity (using computer / writing / …).
+        # Posture summary only rides along when this exceeds the gate.
+        self._pose_perception: PosePerception | None = None
+        self._sedentary_streak_start_ts: float = 0.0
+
+    def set_pose_perception(self, pose: PosePerception | None) -> None:
+        """Wire in the pose sampler so motion can fold posture summaries
+        into outbound activity events. Called by the orchestrator after both
+        perceptions are constructed."""
+        self._pose_perception = pose
+
     @staticmethod
     def _load_whitelist() -> list[str] | None:
         whitelist_path = RESOURCES_DIR / "white_list.txt"
@@ -450,7 +463,58 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
             )
             return
 
+        # Track sedentary streak: time the user has been in continuous
+        # static activity. Starts on the first sedentary flush, stays warm
+        # while subsequent flushes still contain a sedentary label, resets
+        # the moment the activity transitions to something non-sedentary.
+        has_sedentary: bool = any(
+            ACTIVITY_GROUP.get(label) == "sedentary" for label in labels
+        )
+        if has_sedentary:
+            if self._sedentary_streak_start_ts <= 0:
+                self._sedentary_streak_start_ts = cur_ts
+        else:
+            if self._sedentary_streak_start_ts > 0:
+                logger.debug(
+                    "[motion] sedentary streak ended after %.1f min (labels=%s)",
+                    (cur_ts - self._sedentary_streak_start_ts) / 60.0,
+                    sorted(labels),
+                )
+            self._sedentary_streak_start_ts = 0.0
+
         message = f"Activity detected: {', '.join(sorted(labels))}."
+
+        # Fold posture summary in when the sedentary streak exceeds the
+        # gate AND the pose buffer says the window is genuinely bad. Single
+        # transient frames (cup-reach, wrap-edge noise) are already filtered
+        # by pose's aggregation logic.
+        if (
+            has_sedentary
+            and self._sedentary_streak_start_ts > 0
+            and self._pose_perception is not None
+        ):
+            streak_s: float = cur_ts - self._sedentary_streak_start_ts
+            streak_min: int = int(streak_s / 60)
+            if streak_s >= config.POSE_STREAK_MIN_GATE_S:
+                summary: dict[str, Any] | None = (
+                    self._pose_perception.get_posture_summary()
+                )
+                if summary is not None and summary["bad_ratio"] >= config.POSE_BAD_RATIO:
+                    summary_with_streak: dict[str, Any] = dict(summary)
+                    summary_with_streak["streak_min"] = streak_min
+                    message = (
+                        f"{message}\n"
+                        f"[computer_streak_min: {streak_min}]\n"
+                        f"[posture_summary: "
+                        f"{json.dumps(summary_with_streak, separators=(',', ':'))}]"
+                    )
+                    logger.info(
+                        "[motion] folding posture summary "
+                        "(streak=%dm bad_ratio=%.2f dominant=%s)",
+                        streak_min,
+                        summary["bad_ratio"],
+                        summary["dominant_region"],
+                    )
 
         # Dedup: drop if the outbound state (user + outbound labels) hasn't
         # changed since the last send AND we're still within the dedup window.
@@ -543,6 +607,7 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
         )
         self._last_sent_key = None
         self._last_sent_ts = 0.0
+        self._sedentary_streak_start_ts = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         seconds_since = (

@@ -159,8 +159,15 @@ POSE_MOTION_ANGLE_THRESHOLD = float(
 POSE_ENABLED = os.environ.get("LELAMP_POSE_ENABLED", "true").lower() == "true"
 DL_POSE_ENDPOINT = os.environ.get("DL_POSE_ENDPOINT", "/ws/lelamp/api/dl/pose-estimation/ws")
 DL_POSE_BACKEND_URL = DL_BACKEND_URL.rstrip("/") + "/" + DL_POSE_ENDPOINT.strip("/") if DL_BACKEND_URL else ""
-POSE_ERGO_COOLDOWN_S = float(os.environ.get("LELAMP_POSE_ERGO_COOLDOWN_S", "300.0"))
 POSE_ERGO_HIGH_RISK_THRESHOLD = int(os.environ.get("LELAMP_POSE_ERGO_HIGH_RISK_THRESHOLD", "5"))
+# Posture is now sampled silently into a rolling buffer; MotionPerception
+# decides when to fold the summary into a motion.activity event.
+POSE_SAMPLE_INTERVAL_S = float(os.environ.get("LELAMP_POSE_SAMPLE_INTERVAL_S", "60.0"))
+POSE_WINDOW_SAMPLES = int(os.environ.get("LELAMP_POSE_WINDOW_SAMPLES", "30"))
+POSE_BAD_RATIO = float(os.environ.get("LELAMP_POSE_BAD_RATIO", "0.6"))
+POSE_NOISY_ANGLE_THRESHOLD = float(os.environ.get("LELAMP_POSE_NOISY_ANGLE_THRESHOLD", "170.0"))
+# Min "using computer" streak before posture summary is allowed to ride along.
+POSE_STREAK_MIN_GATE_S = float(os.environ.get("LELAMP_POSE_STREAK_MIN_GATE_S", "1800.0"))
 
 # --- Sensing: Snapshot storage ---
 SNAPSHOT_TMP_DIR = os.environ.get(
