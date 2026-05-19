@@ -181,6 +181,7 @@ function posePillStatus(pose: Perception): { text: string; color: string } {
 
 export function SensingSection() {
   const [data, setData] = useState<SensingData | null>(null);
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
 
   usePolling(async (signal) => {
     const r = await fetch(`${HW}/sensing`, { signal }).then((x) => x.json());
@@ -414,21 +415,15 @@ export function SensingSection() {
                     const snapUrl = `${HW}/sensing/pose-snapshot/${Math.floor(s.ts)}`;
                     return (
                       <div key={`${s.ts}-${idx}`} style={{ display: "grid", gridTemplateColumns: cols, gap: 6, whiteSpace: "nowrap", alignItems: "center", paddingTop: 2, paddingBottom: 2 }}>
-                        <a
-                          href={snapUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title="Open full-size snapshot in new tab"
-                          style={{ display: "inline-block", lineHeight: 0 }}
-                        >
-                          <img
-                            src={snapUrl}
-                            alt={`pose ${hh}:${mm}:${ss}`}
-                            loading="lazy"
-                            style={{ width: 100, height: "auto", borderRadius: 3, border: "1px solid var(--lm-text-muted)33", background: "var(--lm-text-muted)15", display: "block" }}
-                            onError={(e) => { (e.currentTarget.style.visibility = "hidden"); }}
-                          />
-                        </a>
+                        <img
+                          src={snapUrl}
+                          alt={`pose ${hh}:${mm}:${ss}`}
+                          loading="lazy"
+                          onClick={() => setLightboxUrl(snapUrl)}
+                          title="Click to enlarge"
+                          style={{ width: 100, height: "auto", borderRadius: 3, border: "1px solid var(--lm-text-muted)33", background: "var(--lm-text-muted)15", display: "block", cursor: "pointer" }}
+                          onError={(e) => { (e.currentTarget.style.visibility = "hidden"); }}
+                        />
                         <div>{`${hh}:${mm}:${ss}`}</div>
                         <div>{s.score}</div>
                         <div style={{ color: poseDotColor(s) }}>{riskName(s.risk_level)}</div>
@@ -448,6 +443,35 @@ export function SensingSection() {
           </div>
         );
       })() : null}
+      {lightboxUrl && (
+        <div
+          onClick={() => setLightboxUrl(null)}
+          onMouseDown={(e) => e.stopPropagation()}
+          style={{
+            position: "fixed", inset: 0, zIndex: 9999,
+            background: "rgba(0,0,0,0.8)", backdropFilter: "blur(4px)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            cursor: "pointer",
+          }}
+        >
+          <button
+            onClick={() => setLightboxUrl(null)}
+            style={{
+              position: "absolute", top: 16, right: 16,
+              background: "rgba(255,255,255,0.15)", border: "none",
+              color: "#fff", fontSize: 20, width: 36, height: 36,
+              borderRadius: "50%", cursor: "pointer",
+            }}
+          >
+            ✕
+          </button>
+          <img
+            src={lightboxUrl}
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: "85vw", height: "85vh", objectFit: "contain", borderRadius: 8, cursor: "default" }}
+          />
+        </div>
+      )}
     </div>
   );
 }
