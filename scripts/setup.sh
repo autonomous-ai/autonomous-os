@@ -419,6 +419,11 @@ def valid_rate_and_frame_length(rate, frame_length):
 WEBRTCVAD_EOF
   fi
 
+  # Write default .env (production mode). Idempotent — only adds the line if absent.
+  touch "$LELAMP_DIR/.env"
+  grep -q "^LELAMP_MODE=" "$LELAMP_DIR/.env" \
+    || echo "LELAMP_MODE=production" >> "$LELAMP_DIR/.env"
+
   cat >/etc/systemd/system/lumi-lelamp.service <<EOF
 [Unit]
 Description=Lumi LeLamp Hardware Runtime
@@ -428,6 +433,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=$LELAMP_DIR
+EnvironmentFile=$LELAMP_DIR/.env
 Environment="PYTHONPATH=/opt"
 # Anonymous PulseAudio socket — see /etc/pulse/default.pa. Lets root reach the
 # desktop user's PulseAudio so the Bluetooth headset routing works.

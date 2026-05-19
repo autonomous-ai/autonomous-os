@@ -660,7 +660,13 @@ from ipaddress import ip_address, ip_network
 
 from fastapi.responses import JSONResponse
 
-_LOCAL_NETS = (ip_network("127.0.0.0/8"), ip_network("::1/128"))
+_LOCAL_NETS = (
+    ip_network("127.0.0.0/8"),
+    ip_network("::1/128"),
+    ip_network("10.0.0.0/8"),
+    ip_network("172.16.0.0/12"),
+    ip_network("192.168.0.0/16"),
+)
 
 
 def _is_local(value: str | None) -> bool:
@@ -678,25 +684,43 @@ def _is_local(value: str | None) -> bool:
     return any(addr in net for net in _LOCAL_NETS)
 
 
+def _is_same_origin(origin_or_referer: str | None, host: str) -> bool:
+    if not origin_or_referer:
+        return False
+    # Strip scheme and path — just compare hostname:port
+    value = origin_or_referer.split(",")[0].strip()
+    for prefix in ("https://", "http://"):
+        if value.startswith(prefix):
+            value = value[len(prefix):]
+    value = value.split("/")[0]  # drop path
+    return value == host
+
+
 @app.middleware("http")
 async def local_only_middleware(request, call_next):
     if MODE == "production":
         client = request.client.host if request.client else None
         xff = request.headers.get("x-forwarded-for")
         real_ip = request.headers.get("x-real-ip")
-        if (
-            not _is_local(client)
-            or (xff and not _is_local(xff))
-            or (real_ip and not _is_local(real_ip))
-        ):
-            logger.warning(
-                "Blocked non-local request: client=%s xff=%s real_ip=%s path=%s",
-                client,
-                xff,
-                real_ip,
-                request.url.path,
-            )
-            return JSONResponse(status_code=403, content={"detail": "LeLamp API is local-only"})
+
+        # Localhost callers (Go server, OpenClaw on-device) always pass.
+        if _is_local(client) and not (xff and not _is_local(xff)) and not (real_ip and not _is_local(real_ip)):
+            return await call_next(request)
+
+        # Browser requests from the same device origin pass (web UI, Swagger API calls).
+        # /docs and /openapi.json are only reachable via iframe from the web UI —
+        # direct URL navigation has no Referer and is blocked here intentionally.
+        host = request.headers.get("host", "")
+        origin = request.headers.get("origin")
+        referer = request.headers.get("referer")
+        if _is_same_origin(origin, host) or _is_same_origin(referer, host):
+            return await call_next(request)
+
+        logger.warning(
+            "Blocked external request: client=%s xff=%s origin=%s referer=%s path=%s",
+            client, xff, origin, referer, request.url.path,
+        )
+        return JSONResponse(status_code=403, content={"detail": "LeLamp API: same-origin or local only"})
     return await call_next(request)
 
 
