@@ -457,8 +457,8 @@ export function FlowDiagram({
             ? sumParts.join("  ·  ")
             : (totalMs > 0 ? `total ${fmtDur(totalMs)}` : "");
           const rowColor = (kind: string) => {
-            if (kind === "thinking" || kind === "thinking_first_token" || kind === "thinking_last_token") return "var(--lm-purple)";
-            if (kind === "assistant" || kind === "agent_first_token" || kind === "agent_last_token") return "var(--lm-blue)";
+            if (kind === "thinking" || kind === "thinking_first_token") return "var(--lm-purple)";
+            if (kind === "assistant" || kind === "agent_first_token") return "var(--lm-blue)";
             if (kind === "tool" || kind === "tool_result") return "#f59e0b";
             if (kind === "lifecycle_start" || kind === "lifecycle_end") return "var(--lm-green)";
             if (kind === "error") return "#ef4444";
@@ -519,8 +519,10 @@ export function FlowDiagram({
           };
           const guideEntries: { stream: string; desc: string; common: boolean }[] = [
             { stream: "lifecycle:start", desc: "Turn begins. OpenClaw acked chat.send and is about to call the LLM.", common: true },
-            { stream: "thinking",        desc: "LLM reasoning delta. Codex thinking=low / Claude extended thinking. Many per turn.", common: true },
-            { stream: "assistant",       desc: "LLM reply text delta. The string that becomes the assistant message / TTS.", common: true },
+            { stream: "thinking",            desc: "LLM reasoning delta. Codex thinking=low / Claude extended thinking. Many per turn.", common: true },
+            { stream: "thinking:first_token",desc: "Marker — first delta of the thinking stream. Persisted to JSONL so reloaded turns show when reasoning began. Only fires when extended thinking is enabled.", common: false },
+            { stream: "assistant",           desc: "LLM reply text delta. The string that becomes the assistant message / TTS.", common: true },
+            { stream: "agent:first_token",   desc: "Marker — first text delta of the assistant reply (not first tool call). Persisted to JSONL so reloaded turns show when text streaming began. Tool-only turns (NO_REPLY) won't fire this.", common: true },
             { stream: "tool · start",    desc: "Tool function call started. Carries the tool name + args.", common: true },
             { stream: "tool · result",   desc: "Tool returned. Lumi attaches duration to the tool row.", common: true },
             { stream: "lifecycle:end",   desc: "Turn complete. Includes optional usage tokens. Lumi flushes TTS here.", common: true },
@@ -621,8 +623,7 @@ export function FlowDiagram({
                     const c = rowColor(r.kind);
                     const isStream = r.kind === "thinking" || r.kind === "assistant";
                     const isOneShot = r.kind === "lifecycle_start" || r.kind === "lifecycle_end"
-                      || r.kind === "agent_first_token" || r.kind === "agent_last_token"
-                      || r.kind === "thinking_first_token" || r.kind === "thinking_last_token"
+                      || r.kind === "agent_first_token" || r.kind === "thinking_first_token"
                       || r.kind === "compaction" || r.kind === "error";
                     // Gap to NEXT row — rendered below this row when > 200ms
                     // so the user sees idle time (e.g., "+ 6.3s" between
