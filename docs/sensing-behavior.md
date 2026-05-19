@@ -145,7 +145,7 @@ Two endpoints:
 | `GET /sensing/pose-snapshot` | The newest `.jpg` in the snapshots dir (back-compat for the live preview tile in the monitor) |
 | `GET /sensing/pose-snapshot/{ts}` | The annotated JPEG for that specific sample (`ts` = `int(sample.ts)` from the JSONL). 404 once rotation prunes the file |
 
-The monitor's Pose / Posture card uses the second endpoint for both the big preview (pinned to the newest sample's ts) and the clickable timestamp on each table row — clicking opens the exact frame in a new tab.
+The monitor's Pose / Posture card renders one thumbnail per sample row in the table (lazy-loaded). Clicking a thumbnail opens that sample's annotated frame in a new tab at native resolution. Older rows whose JPEGs have been pruned by rotation simply hide their thumbnail; the numeric cells still render.
 
 ### Angle sign workaround (temporary)
 

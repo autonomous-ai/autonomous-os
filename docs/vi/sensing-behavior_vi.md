@@ -145,7 +145,7 @@ Hai endpoint:
 | `GET /sensing/pose-snapshot` | JPEG mới nhất trong dir snapshots (back-compat cho ô preview live trên monitor) |
 | `GET /sensing/pose-snapshot/{ts}` | JPEG annotated của sample đó (`ts` = `int(sample.ts)` từ JSONL). 404 khi rotation đã dọn file |
 
-Pose / Posture card trên monitor dùng endpoint thứ hai cho cả preview lớn (pin theo ts mới nhất) và timestamp clickable trên từng row trong bảng — click sẽ mở frame chính xác đó trong tab mới.
+Pose / Posture card trên monitor render thumbnail cho từng row sample trong bảng (lazy-loaded). Click thumbnail mở frame annotated của sample đó ở tab mới (kích thước gốc). Row cũ đã bị rotation dọn JPEG → thumbnail tự ẩn, các ô số liệu vẫn hiển thị.
 
 ### Workaround sign góc (tạm thời)
 
