@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getApiToken, withApiToken } from "@/lib/api";
 import { S } from "./styles";
 import { API } from "./types";
 
@@ -63,7 +64,9 @@ function LogPanel({ source, label, color, initialFilter, initialLevel, onFilterC
   const fetchLines = useCallback(async () => {
     setLoading(true);
     try {
-      const resp = await fetch(`${API}/logs/tail?source=${source}&lines=${lastN}`);
+      const token = getApiToken();
+      const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
+      const resp = await fetch(`${API}/logs/tail?source=${source}&lines=${lastN}`, { headers });
       if (!resp.ok) {
         setError(`HTTP ${resp.status} ${resp.statusText}`);
         setLines([]);
@@ -97,7 +100,8 @@ function LogPanel({ source, label, color, initialFilter, initialLevel, onFilterC
     };
     const open = () => {
       if (es !== null) return;
-      es = new EventSource(`${API}/logs/stream?source=${source}`);
+      // EventSource can't set custom headers — auth via ?token= query.
+      es = new EventSource(withApiToken(`${API}/logs/stream?source=${source}`));
       sseRef.current = es;
       es.addEventListener("log", onLog);
       es.addEventListener("error", () => { /* EventSource auto-reconnects */ });
