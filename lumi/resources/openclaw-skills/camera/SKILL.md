@@ -13,16 +13,18 @@ Accesses the lamp's built-in camera at `http://127.0.0.1:5001` to take snapshots
 Just call the snapshot endpoint — the server handles servo freeze, frame wait, and auto-enable if camera was disabled.
 
 ```bash
-curl -s "http://127.0.0.1:5001/camera/snapshot?save=true"
+curl -s "http://127.0.0.1:5001/camera/snapshot?save=true&width=768&quality=75"
 ```
 
 Returns JSON: `{"path": "/root/.openclaw/media/lumi-snapshots/snap_1712567890123.jpg"}`.
 **Never hardcode a filename** — always read `path` from the response.
 
+`width=768&quality=75` shrinks the JPEG (~50–80 KB instead of ~300–500 KB at full 1920×1080) so vision LLM uploads + tokenizes faster. 768 px wide is still enough to read text on a laptop screen and recognize people/objects. Do NOT remove these unless you specifically need a larger image.
+
 No need to aim servo or sleep before snapshot — the server freezes servos automatically for a stable frame.
 
 ## Workflow
-1. Call `GET /camera/snapshot?save=true` — **always call directly, never check /camera first**. The endpoint auto-enables camera if disabled.
+1. Call `GET /camera/snapshot?save=true&width=768&quality=75` — **always call directly, never check /camera first**. The endpoint auto-enables camera if disabled.
 2. Analyze the image and describe what you see.
 3. Respond helpfully and specifically to the user's question.
 
@@ -31,13 +33,13 @@ You also receive camera snapshots **automatically** as part of sensing events (`
 ## Examples
 
 **Input:** "What do you see right now?"
-**Output:** `GET /camera/snapshot?save=true` → analyze image. Say: "I can see your desk with a laptop and a coffee mug. Looks like a productive setup!"
+**Output:** `GET /camera/snapshot?save=true&width=768&quality=75` → analyze image. Say: "I can see your desk with a laptop and a coffee mug. Looks like a productive setup!"
 
 **Input:** "Is anyone in the room?"
-**Output:** `GET /camera/snapshot?save=true` → analyze image. Say: "I can see one person sitting at the desk."
+**Output:** `GET /camera/snapshot?save=true&width=768&quality=75` → analyze image. Say: "I can see one person sitting at the desk."
 
 **Input:** "Take a photo" or "Send me a photo"
-**Output:** `GET /camera/snapshot?save=true` → read `path` from JSON → describe what you see.
+**Output:** `GET /camera/snapshot?save=true&width=768&quality=75` → read `path` from JSON → describe what you see.
 
 **Input:** (sensing event with image already attached)
 **Output:** Do NOT call the camera API. Just look at the attached image and react.
@@ -49,7 +51,7 @@ You also receive camera snapshots **automatically** as part of sensing events (`
 ### Take a snapshot
 
 ```bash
-curl -s "http://127.0.0.1:5001/camera/snapshot?save=true"
+curl -s "http://127.0.0.1:5001/camera/snapshot?save=true&width=768&quality=75"
 ```
 
 Returns JSON with the saved file path:
@@ -116,7 +118,7 @@ Any phrase meaning "stop looking" or "camera off" MUST trigger `[HW:/camera/disa
 - If a sensing event already included an image, do not call the camera API again.
 
 ## Rules
-- **Just call `/camera/snapshot?save=true`** — server handles servo freeze and camera enable automatically.
+- **Just call `/camera/snapshot?save=true&width=768&quality=75`** — server handles servo freeze and camera enable automatically.
 - **Always use `?save=true`** and read the `path` from the JSON response — never invent filenames.
 - **Image delivery is handled automatically by the system** — do not manually send images via tools.
 - **Never use the camera proactively without the user's request** — respect privacy.
