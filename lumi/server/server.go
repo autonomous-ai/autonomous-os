@@ -319,6 +319,12 @@ func (s *Server) Serve(closeFn func()) error {
 		logger.SetGELFHost(s.config.DeviceID)
 	}
 
+	// Register the shared bearer token for outbound LeLamp HTTP calls.
+	// LeLamp's local_only_middleware accepts Authorization: Bearer <llm_api_key>
+	// as one of its allow paths; sending it lets calls succeed even if loopback
+	// bypass is tightened later. Empty key drops the header (local LLM mode).
+	lelamp.SetAPIKey(s.config.LLMAPIKey)
+
 	// Signal booting state so the LED shows a slow blue pulse while initializing.
 	s.statusLED.Set(statusled.StateBooting)
 
@@ -504,6 +510,9 @@ func (s *Server) runConfigChangeListener(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ch:
+			// Refresh the LeLamp bearer token whenever config changes — covers
+			// llm_api_key rotation via PUT /api/device/config without restart.
+			lelamp.SetAPIKey(s.config.LLMAPIKey)
 			s.handleSetUpCompleteChange(s.config.SetUpCompleted)
 			s.handleDeviceIDChange(s.config.DeviceID)
 			s.handleMQTTEndpointChange(s.config.MQTTEndpoint)

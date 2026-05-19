@@ -9,12 +9,69 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 const BaseURL = "http://127.0.0.1:5001"
 
 var httpClient = &http.Client{Timeout: 5 * time.Second}
+
+// apiKey is the shared LeLamp auth token (matches config.json::llm_api_key).
+// LeLamp's local_only_middleware accepts Authorization: Bearer <apiKey> as one
+// of the allowed paths. Loopback callers still pass without a token, so an
+// unset key keeps existing behavior — the header is only attached when set.
+// atomic.Value lets the server's config-change listener swap the key at runtime
+// without a mutex on the hot request path.
+var apiKey atomic.Value // string
+
+// SetAPIKey registers the bearer token attached to every outbound request.
+// Pass the empty string to drop the Authorization header (e.g. local LLM
+// mode where llm_api_key is unset).
+func SetAPIKey(key string) {
+	apiKey.Store(key)
+}
+
+func getAPIKey() string {
+	if v := apiKey.Load(); v != nil {
+		return v.(string)
+	}
+	return ""
+}
+
+// newRequest builds an http.Request to BaseURL+path with JSON content type
+// (when a body is present) and the bearer Authorization header (when set).
+func newRequest(method, path string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequest(method, BaseURL+path, body)
+	if err != nil {
+		return nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if k := getAPIKey(); k != "" {
+		req.Header.Set("Authorization", "Bearer "+k)
+	}
+	return req, nil
+}
+
+// doGet / doPost are thin wrappers so every call site picks up the
+// Authorization header automatically. Replace direct httpClient.Get/Post.
+func doGet(path string) (*http.Response, error) {
+	req, err := newRequest("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	return httpClient.Do(req)
+}
+
+func doPost(path string, body io.Reader) (*http.Response, error) {
+	req, err := newRequest("POST", path, body)
+	if err != nil {
+		return nil, err
+	}
+	return httpClient.Do(req)
+}
 
 // ─── LED ────────────────────────────────────────────────────────────────────
 
@@ -55,7 +112,7 @@ func RestoreLED() {
 
 // GetColor returns the current LED color as [R, G, B].
 func GetColor() ([3]int, error) {
-	resp, err := httpClient.Get(BaseURL + "/led/color")
+	resp, err := doGet("/led/color")
 	if err != nil {
 		return [3]int{}, err
 	}
@@ -209,11 +266,11 @@ func StopVoicePipeline() error {
 // LeLamp is unreachable or returns non-2xx — callers should fall back to
 // a static list in that case.
 func ListVoices(provider, lang string) ([]string, error) {
-	url := BaseURL + "/voice/voices?provider=" + provider
+	path := "/voice/voices?provider=" + provider
 	if lang != "" {
-		url += "&lang=" + lang
+		path += "&lang=" + lang
 	}
-	resp, err := httpClient.Get(url)
+	resp, err := doGet(path)
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +313,7 @@ type Health struct {
 // GetVersion returns LeLamp's runtime version string (from FastAPI app.version
 // at /version). Empty + error if LeLamp is unreachable.
 func GetVersion() (string, error) {
-	resp, err := httpClient.Get(BaseURL + "/version")
+	resp, err := doGet("/version")
 	if err != nil {
 		return "", err
 	}
@@ -275,7 +332,7 @@ func GetVersion() (string, error) {
 
 // GetHealth returns the current health snapshot from LeLamp.
 func GetHealth() (*Health, error) {
-	resp, err := httpClient.Get(BaseURL + "/health")
+	resp, err := doGet("/health")
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +362,7 @@ type ServoStatus struct {
 
 // GetServoStatus returns per-servo online state.
 func GetServoStatus() (*ServoStatus, error) {
-	resp, err := httpClient.Get(BaseURL + "/servo/status")
+	resp, err := doGet("/servo/status")
 	if err != nil {
 		return nil, err
 	}
@@ -336,7 +393,7 @@ func SetEmotion(name string, intensity float64) error {
 
 // GetEmotion returns the current emotion reported by LeLamp's /emotion/status.
 func GetEmotion() (string, error) {
-	resp, err := httpClient.Get(BaseURL + "/emotion/status")
+	resp, err := doGet("/emotion/status")
 	if err != nil {
 		return "", err
 	}
@@ -373,7 +430,7 @@ func post(path string, body []byte) error {
 	if body != nil {
 		reader = bytes.NewReader(body)
 	}
-	resp, err := httpClient.Post(BaseURL+path, "application/json", reader)
+	resp, err := doPost(path, reader)
 	if err != nil {
 		return fmt.Errorf("POST %s: %w", path, err)
 	}
@@ -394,7 +451,11 @@ func postWithTimeout(path string, body []byte, timeout time.Duration) error {
 	if body != nil {
 		reader = bytes.NewReader(body)
 	}
-	resp, err := client.Post(BaseURL+path, "application/json", reader)
+	req, err := newRequest("POST", path, reader)
+	if err != nil {
+		return fmt.Errorf("POST %s: %w", path, err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("POST %s: %w", path, err)
 	}
@@ -408,7 +469,7 @@ func postWithTimeout(path string, body []byte, timeout time.Duration) error {
 // postSilent is a fire-and-forget variant for LED calls — hardware may be
 // unavailable (e.g. during boot) and callers don't care about the outcome.
 func postSilent(path, body string) {
-	resp, err := httpClient.Post(BaseURL+path, "application/json", strings.NewReader(body))
+	resp, err := doPost(path, strings.NewReader(body))
 	if err != nil {
 		return
 	}
