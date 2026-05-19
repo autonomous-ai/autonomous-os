@@ -364,39 +364,17 @@ export function SensingSection() {
               label="Pose / Posture"
               pill={<Pill text={status.text} color={status.color} />}
             />
-            <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 320px) 1fr", gap: 14, marginBottom: 10, alignItems: "start" }}>
-              <div>
-                {/* Latest annotated pose snapshot. lelamp now keeps one JPEG
-                    per sample under snapshots/<int(ts)>.jpg (rotated at 24h /
-                    50MB), so the URL pins to the newest sample's ts. Table
-                    rows below are clickable to view that specific frame. */}
-                {(() => {
-                  const newestTs = pose.samples?.[pose.samples.length - 1]?.ts;
-                  const src = newestTs
-                    ? `${HW}/sensing/pose-snapshot/${Math.floor(newestTs)}`
-                    : `${HW}/sensing/pose-snapshot`;
-                  return (
-                    <img
-                      src={src}
-                      alt="latest pose"
-                      style={{ width: "100%", borderRadius: 4, background: "var(--lm-text-muted)15", border: "1px solid var(--lm-text-muted)33" }}
-                      onError={(e) => { (e.currentTarget.style.display = "none"); }}
-                    />
-                  );
-                })()}
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignContent: "flex-start" }}>
-                <StatPill label="Buffer"      value={`${pose.samples_in_buffer ?? 0} / ${win}`} />
-                <StatPill label="Until gate"  value={pose.samples_until_gate ?? win} color={(pose.samples_until_gate ?? 1) === 0 ? "var(--lm-green)" : undefined} />
-                <StatPill label="Last"        value={fmtAgo(pose.seconds_since_sample)} />
-                <StatPill label="Last score"  value={`${pose.ergo_score ?? "—"} (${riskName(pose.ergo_risk_level)})`} />
-                {summary ? (
-                  <>
-                    <StatPill label="Bad" value={`${Math.round(summary.bad_ratio * 100)}% (${summary.bad_samples}/${summary.samples})`} color={summary.bad_ratio >= (pose.bad_ratio_threshold ?? 0.6) ? "var(--lm-red)" : "var(--lm-green)"} />
-                    <StatPill label="Dominant" value={summary.dominant_region || "—"} />
-                  </>
-                ) : null}
-              </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+              <StatPill label="Buffer"      value={`${pose.samples_in_buffer ?? 0} / ${win}`} />
+              <StatPill label="Until gate"  value={pose.samples_until_gate ?? win} color={(pose.samples_until_gate ?? 1) === 0 ? "var(--lm-green)" : undefined} />
+              <StatPill label="Last"        value={fmtAgo(pose.seconds_since_sample)} />
+              <StatPill label="Last score"  value={`${pose.ergo_score ?? "—"} (${riskName(pose.ergo_risk_level)})`} />
+              {summary ? (
+                <>
+                  <StatPill label="Bad" value={`${Math.round(summary.bad_ratio * 100)}% (${summary.bad_samples}/${summary.samples})`} color={summary.bad_ratio >= (pose.bad_ratio_threshold ?? 0.6) ? "var(--lm-red)" : "var(--lm-green)"} />
+                  <StatPill label="Dominant" value={summary.dominant_region || "—"} />
+                </>
+              ) : null}
             </div>
             <div style={{ fontSize: 10, color: "var(--lm-text-muted)", marginBottom: 4, letterSpacing: "0.05em", textTransform: "uppercase" }}>
               Samples (newest first) — sub-score@angle° raw from dlbackend; L = left, R = right
@@ -404,8 +382,8 @@ export function SensingSection() {
             {samples.length === 0 ? (
               <span style={{ color: "var(--lm-text-muted)", fontSize: 11 }}>No samples yet</span>
             ) : (() => {
-              // 10 columns: time, score, risk, neck, trunk, L u-arm, R u-arm, L l-arm, R l-arm, wrists
-              const cols = "92px 42px 56px 90px 90px 90px 90px 90px 90px 64px";
+              // 11 columns: img, time, score, risk, neck, trunk, L u-arm, R u-arm, L l-arm, R l-arm, wrists
+              const cols = "104px 92px 42px 56px 90px 90px 90px 90px 90px 90px 64px";
               const fmtCell = (sub: number | undefined, angle: number | undefined): string => {
                 if (sub == null) return "-";
                 if (angle == null) return `${sub}`;
@@ -414,6 +392,7 @@ export function SensingSection() {
               return (
                 <div style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 11, lineHeight: 1.6, overflowX: "auto" }}>
                   <div style={{ display: "grid", gridTemplateColumns: cols, gap: 6, color: "var(--lm-text-muted)", paddingBottom: 4, borderBottom: "1px solid var(--lm-text-muted)33", whiteSpace: "nowrap" }}>
+                    <div>img</div>
                     <div>time</div><div>score</div><div>risk</div>
                     <div>neck</div><div>trunk</div>
                     <div>L u-arm</div><div>R u-arm</div>
@@ -427,24 +406,30 @@ export function SensingSection() {
                     const ss = String(d.getSeconds()).padStart(2, "0");
                     const L = s.left?.body_scores ?? {};
                     const R = s.right?.body_scores ?? {};
-                    // Time cell links to that sample's annotated JPEG. lelamp
-                    // keeps the file under snapshots/<int(ts)>.jpg until
-                    // rotation prunes it (24h / 50MB caps), so older rows
-                    // gracefully 404 once they age out.
+                    // Thumbnail per row links to that sample's annotated JPEG.
+                    // lelamp keeps the file under snapshots/<int(ts)>.jpg
+                    // until rotation prunes it (24h / 50MB caps), so older
+                    // rows gracefully 404 once they age out (onError hides).
+                    // loading="lazy" defers fetches that are offscreen.
                     const snapUrl = `${HW}/sensing/pose-snapshot/${Math.floor(s.ts)}`;
                     return (
-                      <div key={`${s.ts}-${idx}`} style={{ display: "grid", gridTemplateColumns: cols, gap: 6, whiteSpace: "nowrap" }}>
-                        <div>
-                          <a
-                            href={snapUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            title="View snapshot for this sample"
-                            style={{ color: "var(--lm-blue, #4aa3ff)", textDecoration: "none" }}
-                          >
-                            {`${hh}:${mm}:${ss}`}
-                          </a>
-                        </div>
+                      <div key={`${s.ts}-${idx}`} style={{ display: "grid", gridTemplateColumns: cols, gap: 6, whiteSpace: "nowrap", alignItems: "center", paddingTop: 2, paddingBottom: 2 }}>
+                        <a
+                          href={snapUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Open full-size snapshot in new tab"
+                          style={{ display: "inline-block", lineHeight: 0 }}
+                        >
+                          <img
+                            src={snapUrl}
+                            alt={`pose ${hh}:${mm}:${ss}`}
+                            loading="lazy"
+                            style={{ width: 100, height: "auto", borderRadius: 3, border: "1px solid var(--lm-text-muted)33", background: "var(--lm-text-muted)15", display: "block" }}
+                            onError={(e) => { (e.currentTarget.style.visibility = "hidden"); }}
+                          />
+                        </a>
+                        <div>{`${hh}:${mm}:${ss}`}</div>
                         <div>{s.score}</div>
                         <div style={{ color: poseDotColor(s) }}>{riskName(s.risk_level)}</div>
                         <div>{fmtCell(L.neck, L.neck_angle)}</div>
