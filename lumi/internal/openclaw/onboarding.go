@@ -529,15 +529,19 @@ func (s *Service) ensureLoggingConfig() (bool, error) {
 	return true, nil
 }
 
-// ensureControlUIConfig adds gateway.controlUi keys to openclaw.json so the
-// Control UI is reachable from any origin via the nginx proxy. Sets:
-//   - allowedOrigins=["*"]    — allow nginx-proxied origin
-//   - allowInsecureAuth=true  — allow non-HTTPS access on Tailscale/LAN IPs
-//     (OpenClaw 5.2 added a device-identity guard that otherwise rejects
-//     handshakes from non-loopback, non-HTTPS browsers).
+// ensureControlUIConfig pins gateway.controlUi to local-only defaults so the
+// Control UI handshake only accepts loopback origins on plain HTTP. Combined
+// with nginx `/gw/` allow 127.0.0.1; deny all; (F6), the gateway is reachable
+// only from on-device callers (SSH port-forward, on-device browser).
 //
-// Idempotent: backfills missing keys on existing configs without
-// overwriting values the operator has set.
+// Defaults:
+//   - allowedOrigins = ["http://127.0.0.1", "http://localhost"]
+//   - allowInsecureAuth = false
+//
+// Migration: devices originally provisioned with the loose defaults
+// (allowedOrigins=["*"], allowInsecureAuth=true — used before F6 closed LAN
+// access at nginx) are upgraded automatically here. Operators who set custom
+// origins are left untouched.
 func (s *Service) ensureControlUIConfig() (bool, error) {
 	configPath := filepath.Join(s.config.OpenclawConfigDir, "openclaw.json")
 	configBytes, err := os.ReadFile(configPath)
@@ -560,14 +564,36 @@ func (s *Service) ensureControlUIConfig() (bool, error) {
 		gw["controlUi"] = cu
 	}
 
+	strictOrigins := []string{"http://127.0.0.1", "http://localhost"}
 	changed := false
-	if _, ok := cu["allowedOrigins"]; !ok {
-		cu["allowedOrigins"] = []string{"*"}
+
+	switch v := cu["allowedOrigins"].(type) {
+	case nil:
+		cu["allowedOrigins"] = strictOrigins
 		changed = true
+	case []interface{}:
+		// Migrate the historical loose default (exactly ["*"]) to strict.
+		// Custom operator lists (any other shape) are preserved.
+		if len(v) == 1 {
+			if s0, ok := v[0].(string); ok && s0 == "*" {
+				cu["allowedOrigins"] = strictOrigins
+				changed = true
+			}
+		}
 	}
-	if _, ok := cu["allowInsecureAuth"]; !ok {
-		cu["allowInsecureAuth"] = true
+
+	switch v := cu["allowInsecureAuth"].(type) {
+	case nil:
+		cu["allowInsecureAuth"] = false
 		changed = true
+	case bool:
+		// Loopback HTTP works without this flag — nginx /gw/ already restricts
+		// to loopback peers (F6), so non-loopback HTTP can never reach the
+		// handshake. Safe to flip true → false unconditionally.
+		if v {
+			cu["allowInsecureAuth"] = false
+			changed = true
+		}
 	}
 
 	if !changed {
@@ -581,7 +607,7 @@ func (s *Service) ensureControlUIConfig() (bool, error) {
 	if err := os.WriteFile(configPath, outBytes, 0600); err != nil {
 		return false, fmt.Errorf("write openclaw.json: %w", err)
 	}
-	slog.Info("backfilled controlUi config in openclaw.json", "component", "onboarding")
+	slog.Info("tightened controlUi config in openclaw.json", "component", "onboarding")
 	return true, nil
 }
 

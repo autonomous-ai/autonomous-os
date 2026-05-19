@@ -584,8 +584,8 @@ stage_openclaw() {
       "token": "$GATEWAY_TOKEN"
     },
     "controlUi": {
-      "allowedOrigins": ["*"],
-      "allowInsecureAuth": true
+      "allowedOrigins": ["http://127.0.0.1", "http://localhost"],
+      "allowInsecureAuth": false
     }
   }
 }
