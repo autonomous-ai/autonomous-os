@@ -27,6 +27,30 @@ var chitchatInputs = map[Phrase]map[string][]string{
 		LangZhCN: {"谢谢", "谢谢你"},
 		LangZhTW: {"謝謝", "謝謝你"},
 	},
+	PhraseChitchatApology: {
+		LangVI:   {"xin lỗi", "tớ xin lỗi", "mình xin lỗi", "lỗi của mình"},
+		LangEN:   {"sorry", "i'm sorry", "im sorry", "my bad", "apologies"},
+		LangZhCN: {"对不起", "抱歉"},
+		LangZhTW: {"對不起", "抱歉"},
+	},
+	PhraseChitchatCompliment: {
+		LangVI:   {"giỏi quá", "giỏi ghê", "xinh quá", "xinh ghê", "dễ thương quá", "đáng yêu quá", "tuyệt vời"},
+		LangEN:   {"good job", "good lamp", "good girl", "good boy", "well done", "nice job", "great job", "you're cute", "you're awesome"},
+		LangZhCN: {"真棒", "棒棒哒", "好可爱"},
+		LangZhTW: {"真棒", "好可愛"},
+	},
+	PhraseChitchatNevermind: {
+		LangVI:   {"thôi", "thôi quên đi", "thôi bỏ đi", "bỏ đi", "không sao"},
+		LangEN:   {"never mind", "nevermind", "forget it", "drop it", "no matter"},
+		LangZhCN: {"算了"},
+		LangZhTW: {"算了"},
+	},
+	PhraseChitchatPresenceCheck: {
+		LangVI:   {"còn đó không", "còn đó hông", "vẫn còn đó chứ", "có nghe không"},
+		LangEN:   {"are you there", "are you still there", "you still there", "you there"},
+		LangZhCN: {"在吗", "你在吗", "还在吗"},
+		LangZhTW: {"在嗎", "你在嗎", "還在嗎"},
+	},
 }
 
 // InputPhrases returns the per-language exact-match input keywords for the
@@ -40,9 +64,15 @@ func InputPhrases(p Phrase) map[string][]string {
 // edits (Phrase const + phrases entry + chitchatInputs entry + this list).
 func ChitchatPhrases() []Phrase {
 	return []Phrase{
+		// Specific phrases first — generic greeting/farewell would
+		// substring-eat the more specific ones if listed earlier.
+		PhraseChitchatPresenceCheck,
+		PhraseChitchatApology,
+		PhraseChitchatCompliment,
 		PhraseChitchatGreeting,
 		PhraseChitchatFarewell,
 		PhraseChitchatThanks,
+		PhraseChitchatNevermind,
 	}
 }
 

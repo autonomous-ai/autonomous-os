@@ -23,9 +23,13 @@ const (
 	// Chitchat replies — consumed via PickIn(phrase, inputLang) from the
 	// local intent matcher. The reply lang follows the matched input phrase
 	// (so "hi" → English reply) rather than the configured Lang().
-	PhraseChitchatGreeting Phrase = "chitchat.greeting"
-	PhraseChitchatFarewell Phrase = "chitchat.farewell"
-	PhraseChitchatThanks   Phrase = "chitchat.thanks"
+	PhraseChitchatGreeting      Phrase = "chitchat.greeting"
+	PhraseChitchatFarewell      Phrase = "chitchat.farewell"
+	PhraseChitchatThanks        Phrase = "chitchat.thanks"
+	PhraseChitchatApology       Phrase = "chitchat.apology"
+	PhraseChitchatCompliment    Phrase = "chitchat.compliment"
+	PhraseChitchatNevermind     Phrase = "chitchat.nevermind"
+	PhraseChitchatPresenceCheck Phrase = "chitchat.presence_check"
 )
 
 // fallbackLang is used when the active STT language has no entry for
@@ -194,6 +198,30 @@ var phrases = map[Phrase]map[string][]string{
 		LangVI:   {"[chuckle] Khỏi cần!", "[whisper] Không có gì.", "[laughs softly] Có gì đâu."},
 		LangZhCN: {"[chuckle] 不用谢!", "[whisper] 没事."},
 		LangZhTW: {"[chuckle] 不用謝!", "[whisper] 沒事."},
+	},
+	PhraseChitchatApology: {
+		LangEN:   {"[chuckle] No worries!", "[whisper] It's all good.", "[laughs softly] Don't sweat it."},
+		LangVI:   {"[chuckle] Không sao mà!", "[whisper] Yên tâm đi.", "[laughs softly] Có gì đâu."},
+		LangZhCN: {"[chuckle] 没关系!", "[whisper] 别担心."},
+		LangZhTW: {"[chuckle] 沒關係!", "[whisper] 別擔心."},
+	},
+	PhraseChitchatCompliment: {
+		LangEN:   {"[chuckle] Aw, thanks!", "[laughs softly] You're sweet.", "[whisper] Hehe, thanks."},
+		LangVI:   {"[chuckle] Cảm ơn nha!", "[laughs softly] Bạn dễ thương quá.", "[whisper] Hihi, cảm ơn."},
+		LangZhCN: {"[chuckle] 谢谢夸奖!", "[laughs softly] 你真好."},
+		LangZhTW: {"[chuckle] 謝謝誇獎!", "[laughs softly] 你真好."},
+	},
+	PhraseChitchatNevermind: {
+		LangEN:   {"[whisper] Got it.", "Ok.", "[chuckle] No problem."},
+		LangVI:   {"[whisper] Ừ ok.", "Dạ.", "[chuckle] Không sao."},
+		LangZhCN: {"[whisper] 好的.", "嗯, 知道了."},
+		LangZhTW: {"[whisper] 好的.", "嗯, 知道了."},
+	},
+	PhraseChitchatPresenceCheck: {
+		LangEN:   {"[chuckle] Still here!", "[whisper] Right here.", "I'm here."},
+		LangVI:   {"[chuckle] Vẫn đây nè!", "[whisper] Mình đây.", "Có Lumi đây."},
+		LangZhCN: {"[chuckle] 我还在!", "[whisper] 在呢."},
+		LangZhTW: {"[chuckle] 我還在!", "[whisper] 在呢."},
 	},
 }
 
