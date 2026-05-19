@@ -5,7 +5,7 @@ import type { DisplayEvent } from "../types";
 import type { FlowStage } from "./types";
 import { usePolling } from "../../../hooks/usePolling";
 import { FLOW_NODES, SOURCE_ICON } from "./types";
-import { deriveActiveStage, groupIntoTurns, turnIO, extractTurnTiming, turnBilledTokens, turnDurationMs, extractSensingType, hasSensingPrefix } from "./helpers";
+import { deriveActiveStage, groupIntoTurns, turnIO, turnBilledTokens, turnDurationMs, extractSensingType, hasSensingPrefix } from "./helpers";
 import { FlowDiagram } from "./FlowDiagram";
 import { TurnBadge } from "./TurnBadge";
 import { CanvasModal } from "./CanvasModal";
@@ -451,49 +451,6 @@ export function FlowSection({
           </span>
         )}
       </div>
-      {selectedTurn?.endTime && (() => {
-        const timing = extractTurnTiming(selectedTurn.events, selectedTurn.startTime, selectedTurn.endTime);
-        if (!timing || timing.segments.length === 0) return null;
-        const fmtTotal = timing.total >= 60_000 ? `${(timing.total / 60_000).toFixed(1)}m`
-          : timing.total >= 1000 ? `${(timing.total / 1000).toFixed(1)}s` : `${timing.total}ms`;
-        return (
-          <div style={{ marginBottom: 8, fontSize: 10, fontFamily: "monospace" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ color: "var(--lm-text-muted)", whiteSpace: "nowrap" }}>⏱ {fmtTotal}</span>
-              <div style={{ flex: 1, display: "flex", height: 14, borderRadius: 4, overflow: "hidden", background: "var(--lm-surface)" }}>
-                {timing.segments.map((seg, i) => {
-                  const pct = Math.max((seg.ms / timing.total) * 100, 2);
-                  return (
-                    <div key={i} title={seg.label} style={{
-                      width: `${pct}%`, background: seg.color, opacity: 0.7,
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 8, color: "#fff", fontWeight: 600, whiteSpace: "nowrap",
-                      overflow: "hidden", textOverflow: "ellipsis", padding: "0 2px",
-                    }}>
-                      {pct > 12 ? seg.label : ""}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 5 }}>
-              {timing.segments.map((seg, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, lineHeight: 1.3 }}>
-                  <span style={{ width: 6, height: 6, borderRadius: 2, background: seg.color, opacity: 0.7, display: "inline-block", flexShrink: 0 }} />
-                  <span style={{ color: "var(--lm-text)", fontSize: 9, fontWeight: 600, whiteSpace: "nowrap" }}>{seg.label}</span>
-                  {seg.from && seg.to && (
-                    <span style={{ fontSize: 9, color: "var(--lm-green)" }}>
-                      <code style={{ background: "var(--lm-surface)", padding: "1px 4px", borderRadius: 3, fontSize: 8 }}>{seg.from}</code>
-                      {" → "}
-                      <code style={{ background: "var(--lm-surface)", padding: "1px 4px", borderRadius: 3, fontSize: 8 }}>{seg.to}</code>
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-      })()}
       <FlowDiagram activeStage={activeStage} visitedStages={visitedStages} turnEvents={turnEvents} compact />
     </>
   );

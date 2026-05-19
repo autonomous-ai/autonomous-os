@@ -48,8 +48,7 @@ export interface PipelineRow {
   /** Underlying OpenClaw stream type — drives row color/label. */
   kind: "thinking" | "assistant" | "tool" | "tool_result"
     | "lifecycle_start" | "lifecycle_end"
-    | "agent_first_token" | "agent_last_token"
-    | "thinking_first_token" | "thinking_last_token"
+    | "agent_first_token" | "thinking_first_token"
     | "compaction" | "error" | "other";
   label: string;        // e.g. "thinking", "tool · bash", "lifecycle:start"
   detail?: string;      // optional secondary text (tool args summary, error msg)
@@ -188,32 +187,22 @@ export function aggregateEvents(events: DisplayEvent[]): PipelineRow[] {
       continue;
     }
 
-    // Persisted stream summary markers (JSONL projection of monitorBus
-    // deltas). Raw thinking/assistant_delta events only live in monitorBus
-    // (RAM), so for past turns reloaded from JSONL the pipeline rect would
-    // otherwise show no streaming evidence. Rendered as TWO discrete
-    // one-shot marker rows per stream — matching the lifecycle:start /
-    // lifecycle:end convention so every pipeline row stays a single event,
-    // not an aggregated span. last_token carries chunks/chars summary.
-    if (fnode === "agent_first_token" || fnode === "thinking_first_token"
-        || fnode === "agent_last_token" || fnode === "thinking_last_token") {
+    // Persisted first-token marker (JSONL projection of monitorBus deltas).
+    // Raw assistant_delta / thinking events only live in monitorBus (RAM),
+    // so for past turns reloaded from JSONL the pipeline rect would
+    // otherwise show no signal that the LLM started streaming text. Render
+    // as a one-shot marker row matching the lifecycle:start convention.
+    // last_token markers are also emitted by the backend but intentionally
+    // ignored here — lifecycle:end already covers the stream's right edge,
+    // so a second marker would just be noise.
+    if (fnode === "agent_first_token" || fnode === "thinking_first_token") {
       const t = ts(ev);
-      const d = ev.detail as Record<string, any> | undefined;
-      const data = (d?.data ?? d) as Record<string, any> | undefined;
-      const isLast = fnode.endsWith("_last_token");
-      let detail: string | undefined;
-      if (isLast) {
-        const chunks = Number(data?.chunks ?? 0);
-        const chars = Number(data?.chars ?? 0);
-        if (chunks > 0) detail = `${chunks} chunks · ${chars}c`;
-      }
       const label = fnode.startsWith("thinking_")
         ? "thinking:" + fnode.slice("thinking_".length)
         : "agent:" + fnode.slice("agent_".length);
       rows.push({
         kind: fnode as PipelineRow["kind"],
         label,
-        detail,
         startMs: t, endMs: t, durationMs: 0, chunks: 1, chars: 0,
       });
       continue;
@@ -1254,171 +1243,11 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
   return info;
 }
 
-// Timing breakdown for a turn — displayed as a summary bar above the pipeline
-export interface TurnTiming {
-  total: number;       // start → end (ms)
-  segments: { label: string; ms: number; color: string; from?: string; to?: string }[];
-}
-
-export function extractTurnTiming(events: DisplayEvent[], startTime?: string, endTime?: string): TurnTiming | null {
-  if (!startTime || !endTime) return null;
-  const totalMs = new Date(endTime).getTime() - new Date(startTime).getTime();
-  if (!Number.isFinite(totalMs) || totalMs <= 0) return null;
-
-  const fmtDur = (ms: number) => ms >= 60_000 ? `${(ms / 60_000).toFixed(1)}m`
-    : ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
-
-  let sensingTs = 0, chatSendTs = 0, chatInputTs = 0;
-  let lifecycleStartTs = 0, lifecycleEndTs = 0, ttsTs = 0;
-  let llmFirstTokenTs = 0;
-  let firstToolCallTs = 0, lastToolResultTs = 0;
-  let toolTotalMs = 0, toolStartTs = 0;
-  // Track inter-tool LLM thinking: time between a batch of tool results and the next tool start.
-  let lastBatchResultTs = 0, interToolMs = 0;
-
-  for (const ev of events) {
-    const ts = new Date(ev.time).getTime();
-    if (ev.type === "sensing_input" || (ev.type === "flow_enter" && ev.detail?.node === "sensing_input")
-        || (ev.type === "flow_event" && ev.detail?.node === "sensing_input")) {
-      if (!sensingTs) sensingTs = ts;
-    }
-    if (ev.type === "chat_input" || (ev.type === "flow_event" && ev.detail?.node === "chat_input")) {
-      if (!chatInputTs) chatInputTs = ts;
-    }
-    if (ev.type === "chat_send" || (ev.type === "flow_event" && ev.detail?.node === "chat_send")) {
-      if (!chatSendTs) chatSendTs = ts;
-    }
-    if (ev.type === "flow_event" && ev.detail?.node === "lifecycle_start") {
-      if (!lifecycleStartTs) lifecycleStartTs = ts;
-    }
-    if (ev.type === "flow_event" && ev.detail?.node === "lifecycle_end") {
-      lifecycleEndTs = ts;
-    }
-    // First thinking or assistant delta = LLM started streaming. Sourced
-    // from either live monitorBus deltas (type === "thinking" |
-    // "assistant_delta") or the persisted JSONL marker flow events
-    // (agent_first_token / thinking_first_token), whichever arrives first.
-    const isFirstTokenMarker = ev.type === "flow_event"
-      && (ev.detail?.node === "agent_first_token" || ev.detail?.node === "thinking_first_token");
-    if ((ev.type === "thinking" || ev.type === "assistant_delta" || isFirstTokenMarker) && !llmFirstTokenTs) {
-      llmFirstTokenTs = ts;
-    }
-    if (ev.type === "tts" || (ev.type === "flow_event" && (ev.detail?.node === "tts_send" || ev.detail?.node === "tts_suppressed"))) {
-      if (!ttsTs) ttsTs = ts;
-    }
-    const isToolCall = ev.type === "tool_call" || (ev.type === "flow_event" && ev.detail?.node === "tool_call");
-    if (isToolCall) {
-      const d = ev.detail as Record<string, any> | undefined;
-      const phase = d?.data?.phase ?? d?.phase ?? "";
-      if (phase === "start") {
-        if (!firstToolCallTs) firstToolCallTs = ts;
-        // If a previous batch finished, the gap is LLM thinking between rounds.
-        if (lastBatchResultTs && ts > lastBatchResultTs) {
-          interToolMs += ts - lastBatchResultTs;
-          lastBatchResultTs = 0;
-        }
-        toolStartTs = ts;
-      }
-      if (phase === "result") {
-        lastToolResultTs = ts;
-        lastBatchResultTs = ts;
-        if (toolStartTs) { toolTotalMs += ts - toolStartTs; toolStartTs = 0; }
-      }
-    }
-  }
-
-  const segments: TurnTiming["segments"] = [];
-  // Sensing / input processing — typically <5ms, only show if notable (>50ms)
-  if (sensingTs && chatSendTs) {
-    const ms = chatSendTs - sensingTs;
-    if (ms > 50) segments.push({ label: `lelamp detect ${fmtDur(ms)}`, ms, color: "var(--lm-amber)", from: "sensing_input (lumi)", to: "chat_send (lumi)" });
-  }
-
-  // Queue → OpenClaw start
-  const callTs = chatSendTs || chatInputTs;
-  if (callTs && lifecycleStartTs) {
-    const ms = lifecycleStartTs - callTs;
-    if (ms > 0) segments.push({ label: `openclaw init ${fmtDur(ms)}`, ms, color: "var(--lm-blue)", from: "chat_send (lumi)", to: "lifecycle_start (openclaw)" });
-  }
-
-  // LLM warmup: lifecycle_start → first thinking/assistant delta. The model
-  // is reasoning silently before any token streams. Source: direct stream
-  // observation (no marker event).
-  if (lifecycleStartTs && llmFirstTokenTs && llmFirstTokenTs > lifecycleStartTs) {
-    const ms = llmFirstTokenTs - lifecycleStartTs;
-    segments.push({ label: `llm warmup ${fmtDur(ms)}`, ms, color: "var(--lm-blue)", from: "lifecycle_start (openclaw)", to: "first delta (openclaw)" });
-  }
-
-  // LLM streaming (post-warmup): first delta → first tool_call (or
-  // lifecycle_end when no tool fired).
-  if (llmFirstTokenTs && firstToolCallTs && firstToolCallTs > llmFirstTokenTs) {
-    const ms = firstToolCallTs - llmFirstTokenTs;
-    segments.push({ label: `llm streaming ${fmtDur(ms)}`, ms, color: "var(--lm-purple)", from: "first delta (openclaw)", to: "first tool_call (openclaw)" });
-  } else if (lifecycleStartTs && firstToolCallTs && !llmFirstTokenTs) {
-    // Tool fired but no thinking/assistant delta seen first — silent reasoning
-    // straight into a tool call. Attribute the gap as thinking.
-    const ms = firstToolCallTs - lifecycleStartTs;
-    segments.push({ label: `llm thinking ${fmtDur(ms)}`, ms, color: "var(--lm-purple)", from: "lifecycle_start (openclaw)", to: "first tool_call (openclaw)" });
-  } else if (llmFirstTokenTs && lifecycleEndTs && !firstToolCallTs && lifecycleEndTs > llmFirstTokenTs) {
-    const ms = lifecycleEndTs - llmFirstTokenTs;
-    segments.push({ label: `llm streaming ${fmtDur(ms)}`, ms, color: "var(--lm-purple)", from: "first delta (openclaw)", to: "lifecycle_end (openclaw)" });
-  } else if (lifecycleStartTs && lifecycleEndTs && !firstToolCallTs && !llmFirstTokenTs) {
-    const ms = lifecycleEndTs - lifecycleStartTs;
-    segments.push({ label: `llm processing ${fmtDur(ms)}`, ms, color: "var(--lm-purple)", from: "lifecycle_start (openclaw)", to: "lifecycle_end (openclaw)" });
-  }
-
-  // Tool exec
-  if (toolTotalMs > 0) {
-    segments.push({ label: `tool exec ${fmtDur(toolTotalMs)}`, ms: toolTotalMs, color: "#f59e0b", from: "tool_call start (openclaw)", to: "tool_call result (lumi)" });
-  }
-
-  // Inter-tool LLM thinking (between tool call batches)
-  if (interToolMs > 0) {
-    segments.push({ label: `llm thinking ${fmtDur(interToolMs)}`, ms: interToolMs, color: "var(--lm-purple)", from: "tool_call result (batch N)", to: "tool_call start (batch N+1)" });
-  }
-
-  // Response gen (last tool result → lifecycle_end)
-  if (lastToolResultTs && lifecycleEndTs) {
-    const ms = lifecycleEndTs - lastToolResultTs;
-    if (ms > 0) segments.push({ label: `llm response ${fmtDur(ms)}`, ms, color: "var(--lm-green)", from: "last tool_call result (lumi)", to: "lifecycle_end (openclaw)" });
-  }
-
-  // TTS latency
-  if (lifecycleEndTs && ttsTs) {
-    const ms = ttsTs - lifecycleEndTs;
-    if (ms > 0 && ms < 30_000) segments.push({ label: `tts send ${fmtDur(ms)}`, ms, color: "#ec4899", from: "lifecycle_end (openclaw)", to: "tts_send (lumi)" });
-  }
-
-  return { total: totalMs, segments };
-}
-
 // Extract total duration (ms) from a turn's start/end times.
 export function turnDurationMs(turn: Turn): number {
   if (!turn.startTime || !turn.endTime) return 0;
   const ms = new Date(turn.endTime).getTime() - new Date(turn.startTime).getTime();
   return ms > 0 ? ms : 0;
-}
-
-// Time-to-first-token: turn start → first thinking/assistant_delta event.
-// Matches what the chat page bubble stamp records on the client (first delta
-// arrival ≈ moment the user sees a reply begin), so the two views are
-// comparable without subtracting tail streaming + lifecycle close.
-// Sourced from either live monitorBus deltas or the persisted JSONL marker
-// flow events (agent_first_token / thinking_first_token), whichever lands
-// first in the turn's event list.
-export function turnFirstTokenMs(turn: Turn): number {
-  if (!turn.startTime) return 0;
-  const start = new Date(turn.startTime).getTime();
-  for (const ev of turn.events) {
-    const isLiveDelta = ev.type === "thinking" || ev.type === "assistant_delta";
-    const isMarker = ev.type === "flow_event"
-      && (ev.detail?.node === "agent_first_token" || ev.detail?.node === "thinking_first_token");
-    if (isLiveDelta || isMarker) {
-      const ms = new Date(ev.time).getTime() - start;
-      return ms > 0 ? ms : 0;
-    }
-  }
-  return 0;
 }
 
 // Extract billed tokens from a turn's token_usage event.
