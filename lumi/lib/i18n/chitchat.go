@@ -109,15 +109,22 @@ func ChitchatCommandWords() []string {
 
 // chitchatWakeWords are name tokens the user prepends before chitchat — the
 // wake word itself plus common STT mis-transcriptions ("Lumi" → "Làmi" /
-// "Lami" / "Lumy"). Stripped from the head of normalized chitchat input so
-// "Lumi xin chào" / "Làmi xin chào" match the same "xin chào" rule.
+// "Lami" / "Lumy") and attention-call compounds ("Lumi ơi"). Stripped from
+// the head of normalized chitchat input so "Lumi xin chào" matches "xin
+// chào" and bare "Lumi ơi" → "" → greeting reply path.
+//
+// Order matters: longest forms first so "lumi ơi xin chào" strips the full
+// "lumi ơi" rather than just "lumi".
 var chitchatWakeWords = []string{
+	// Compound attention-call forms — must come before bare names.
+	"lumi ơi", "loomi ơi", "lumy ơi", "luumi ơi", "lami ơi", "làmi ơi", "noah ơi",
+	// Bare-name forms.
 	"lumi", "loomi", "lumy", "luumi", "lami", "làmi", "noah",
 }
 
 // ChitchatWakeWords returns the wake-word list for chitchat input
-// normalization. Caller strips a leading match (followed by space or comma)
-// before phrase comparison.
+// normalization, longest forms first so caller can strip the maximal
+// leading match (followed by space, comma, punctuation, or end-of-string).
 func ChitchatWakeWords() []string {
 	return chitchatWakeWords
 }

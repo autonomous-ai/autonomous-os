@@ -83,10 +83,18 @@ type chitchatRule struct {
 	emotion string      // emotion fired alongside reply
 }
 
+// Order matters — Contains is greedy so specific phrases (presence_check,
+// apology, compliment) must run before broad ones (greeting/farewell).
+// Nevermind goes last because its trigger words (e.g. "thôi") are short and
+// would shadow other intents that include the same token in their pool.
 var chitchatRules = []chitchatRule{
+	{reply: i18n.PhraseChitchatPresenceCheck, intent: "presence_check", emotion: "happy"},
+	{reply: i18n.PhraseChitchatApology, intent: "apology", emotion: "happy"},
+	{reply: i18n.PhraseChitchatCompliment, intent: "compliment", emotion: "happy"},
 	{reply: i18n.PhraseChitchatGreeting, intent: "greeting", emotion: "happy"},
 	{reply: i18n.PhraseChitchatFarewell, intent: "farewell", emotion: "happy"},
 	{reply: i18n.PhraseChitchatThanks, intent: "thanks", emotion: "happy"},
+	{reply: i18n.PhraseChitchatNevermind, intent: "nevermind", emotion: "idle"},
 }
 
 // matchChitchat returns a Result when text starts with a chitchat phrase in
@@ -100,6 +108,14 @@ func matchChitchat(text string) *Result {
 	}
 	t := strings.ToLower(strings.TrimSpace(text))
 	t = strings.TrimRight(t, ".!?,。！？，")
+
+	// Strip leading wake word so "Lumi xin chào" → "xin chào", "Lami cảm
+	// ơn" → "cảm ơn". Bare wake-word / "lumi ơi" → "" → user is just
+	// calling Lumi by name; short-circuit with a greeting reply.
+	t = stripWakeWord(t)
+	if t == "" {
+		return bareAttentionResult()
+	}
 
 	// Length gate: greeting/farewell/thanks are short. "Chào Lumi hôm nay
 	// bạn thế nào" → 6 words → fall through to LLM so context isn't lost.
@@ -216,6 +232,47 @@ func stripChitchatPrefixes(s string) string {
 		}
 	}
 	return s
+}
+
+// stripWakeWord removes a leading wake-word token ("lumi", "làmi", "lumi
+// ơi", …) from already-lowercased chitchat input. Boundary check ensures
+// "luminous" / "lumière" aren't accidentally stripped — must be followed by
+// whitespace, comma, punctuation, or end-of-string. The wake-word list is
+// kept longest-first by i18n.ChitchatWakeWords so "lumi ơi xin chào" strips
+// the compound form rather than just "lumi", which would leave a dangling
+// "ơi" that matches no rule.
+func stripWakeWord(s string) string {
+	for _, w := range i18n.ChitchatWakeWords() {
+		if !strings.HasPrefix(s, w) {
+			continue
+		}
+		rest := s[len(w):]
+		if rest == "" {
+			return ""
+		}
+		c := rest[0]
+		if c == ' ' || c == ',' || c == '.' || c == '!' || c == '?' {
+			return strings.TrimSpace(strings.TrimLeft(rest, " ,.!?"))
+		}
+	}
+	return s
+}
+
+// bareAttentionResult fires when the user said only the wake word ("Lumi",
+// "Lumi ơi", "Lami"). Replies with a greeting in the configured language —
+// skipping LLM RT keeps the lamp responsive when the user is just calling.
+func bareAttentionResult() *Result {
+	reply := i18n.Pick(i18n.PhraseChitchatGreeting)
+	if reply == "" {
+		return nil
+	}
+	post("/emotion", `{"emotion":"happy","intensity":0.7}`)
+	return &Result{
+		TTSText: reply,
+		Emotion: "happy",
+		Rule:    "chitchat_attention",
+		Actions: []string{"POST /emotion happy"},
+	}
 }
 
 // pickRandom returns a pseudo-random pick using the current time. Avoids
