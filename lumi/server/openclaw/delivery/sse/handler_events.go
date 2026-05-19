@@ -611,6 +611,11 @@ func (h *OpenClawHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) e
 					Summary: delta,
 					RunID:   flowRunID,
 				})
+				if h.recordThinkingDelta(flowRunID, delta) {
+					flow.Log("thinking_first_token", map[string]any{
+						"run_id": flowRunID,
+					}, flowRunID)
+				}
 			}
 
 		case "assistant":
@@ -630,6 +635,11 @@ func (h *OpenClawHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) e
 					Summary: delta,
 					RunID:   flowRunID,
 				})
+				if h.recordAssistantDelta(flowRunID, delta) {
+					flow.Log("agent_first_token", map[string]any{
+						"run_id": flowRunID,
+					}, flowRunID)
+				}
 			}
 
 			// When the agent turn ends, the final assistant text should be spoken.
@@ -641,6 +651,30 @@ func (h *OpenClawHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) e
 		// When agent lifecycle ends, flush accumulated assistant text to TTS.
 		// Suppress TTS if the agent played music or already spoke via tool intercept.
 		if payload.Stream == "lifecycle" && payload.Data.Phase == "end" {
+			// Persist streaming summary to JSONL. Raw deltas only live in
+			// monitorBus (RAM) — Flow Monitor reads JSONL on reload, so
+			// without these summary events the pipeline rect shows no
+			// thinking/assistant rows for past turns. Mirror agent_thinking
+			// which is similarly populated from chat.history at turn end.
+			if s := h.drainStreamStats(flowRunID); s != nil {
+				if s.thinkingChunks > 0 {
+					flow.Log("thinking_last_token", map[string]any{
+						"run_id": flowRunID,
+						"text":   s.thinkingText.String(),
+						"chunks": s.thinkingChunks,
+						"chars":  s.thinkingChars,
+					}, flowRunID)
+				}
+				if s.assistantChunks > 0 {
+					flow.Log("agent_last_token", map[string]any{
+						"run_id": flowRunID,
+						"text":   s.assistantText.String(),
+						"chunks": s.assistantChunks,
+						"chars":  s.assistantChars,
+					}, flowRunID)
+				}
+			}
+
 			// Hard-cancel any lingering filler before the real TTS flush
 			// — covers edge case where the turn ended without any
 			// assistant delta (NO_REPLY, HW-only reply, error).

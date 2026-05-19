@@ -18,7 +18,25 @@ Flow Monitor là lớp quan sát end-to-end cho agent turn: ghi JSONL (`local/fl
 
 **Field `type` trong `chat_send`:** event `chat_send` có field `type` = `"user"` (user thật / sensing-driven) hoặc `"system"` (skill watcher, wake greeting). Phân biệt chỉ ở flow event — WS RPC `chat.send` gửi sang OpenClaw giống hệt nhau. Auto-compact **không** sinh `chat_send`; nó gọi RPC `sessions.compact` trực tiếp qua `CompactSession`.
 
-**Đo TTFT / warmup:** Khoảng `lifecycle_start → first thinking/assistant delta` = LLM warmup thực (model reasoning silently trước khi token đầu chảy ra). Lumi tính trực tiếp từ event stream (`type === "thinking"` hoặc `type === "assistant_delta"`) — KHÔNG cần marker event riêng. (Trước đây có `llm_first_token` flow event tự chế, đã bỏ vì redundant với pipeline aggregator.)
+**Đo TTFT / warmup:** Khoảng `lifecycle_start → first thinking/assistant delta` = LLM warmup thực (model reasoning silently trước khi token đầu chảy ra). Lumi tính từ marker JSONL `agent_first_token` / `thinking_first_token` (xem dưới) hoặc fallback sang live delta event trong RAM nếu có.
+
+**Stream summary events (re-added 2026-05-19):** Raw `assistant_delta` / `thinking` deltas chỉ ở RAM (monitorBus), KHÔNG ghi JSONL — để tránh ~50–500 dòng/turn. Hậu quả: load lại Flow Monitor cho turn cũ → pipeline rect mất hẳn row streaming. Fix: backend emit 4 flow event nhẹ thay thế:
+
+| Node | Khi nào fire | `data.*` |
+|---|---|---|
+| `agent_first_token` | Delta `assistant` đầu tiên | `{run_id}` (ts = TTFT moment) |
+| `agent_last_token` | `lifecycle.end` drain accumulator | `{run_id, text, chunks, chars}` |
+| `thinking_first_token` | Delta `thinking` đầu tiên (chỉ extended thinking) | `{run_id}` |
+| `thinking_last_token` | `lifecycle.end` | `{run_id, text, chunks, chars}` |
+
+Tối đa 4 dòng JSONL bonus / turn (thực tế 0–2). Stream name từ OpenClaw vẫn là `"assistant"` ở code level — chỉ JSONL node dùng prefix `agent_` cho khớp các node hiện có (`agent_thinking`, `agent_call`, `agent_response`). State live trong `OpenClawHandler.streamStats`, độc lập với `assistantBuf` (phục vụ TTS flush). Drain ở `lifecycle.end`. Trước đây có `llm_first_token` event đã bị bỏ vì "redundant với pipeline aggregator" — lý do đó sai, aggregator không observe được khi raw deltas không bao giờ tới JSONL.
+
+**Badge `⏱` vs `⚡` trên Turn card:**
+- **⏱ total** = `turn.startTime → turn.endTime` (input event → `lifecycle_end` / `tts_send` / `chat_final`) — toàn bộ window server-side. Đây là **server-observed turn duration**.
+- **⚡ TTFT** = `turn.startTime → first thinking/assistant_delta` — khớp với timestamp Lumi bubble trên chat page (lúc user **thấy** reply bắt đầu). Đây là **perceived latency**.
+- Khoảng cách ⚡ ↔ ⏱ = tail-streaming các token còn lại + lifecycle close. Reply ngắn → 2 con gần bằng nhau; reply dài → gap rõ rệt.
+- Ngưỡng màu: ⏱ green ≤5s / amber ≤15s / red >15s. ⚡ green ≤3s / amber ≤8s / red >8s.
+- ⚡ ẩn khi không có LLM stream (local intent match, dropped, queued).
 
 **Khoảng `chat_send → lifecycle_start`** = OpenClaw init (network + load session/context + boot agent), KHÔNG phải LLM. Đo từ `chat_send` (Lumi) tới `lifecycle_start` (OpenClaw event đầu tiên).
 

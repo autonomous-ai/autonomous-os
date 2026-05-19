@@ -184,6 +184,45 @@ export function aggregateEvents(events: DisplayEvent[]): PipelineRow[] {
       continue;
     }
 
+    // Persisted stream summaries (JSONL projection of monitorBus deltas).
+    // Raw thinking/assistant_delta events only live in monitorBus (RAM), so
+    // for past turns reloaded from JSONL the pipeline rect would otherwise
+    // show no streaming rows. first_token opens a row; last_token closes it
+    // with chunks/chars from the backend accumulator. If live deltas later
+    // arrive (frontend subscribes to monitorBus), the trailing row will
+    // already exist and last_token just updates its stats.
+    if (fnode === "agent_first_token" || fnode === "thinking_first_token") {
+      const t = ts(ev);
+      const k: PipelineRow["kind"] = fnode === "thinking_first_token" ? "thinking" : "assistant";
+      const last = rows[rows.length - 1];
+      if (!last || last.kind !== k || last.durationMs > 0) {
+        rows.push({
+          kind: k, label: k,
+          startMs: t, endMs: t, durationMs: 0, chunks: 0, chars: 0,
+        });
+      }
+      continue;
+    }
+    if (fnode === "agent_last_token" || fnode === "thinking_last_token") {
+      const t = ts(ev);
+      const k: PipelineRow["kind"] = fnode === "thinking_last_token" ? "thinking" : "assistant";
+      const d = ev.detail as Record<string, any> | undefined;
+      const data = (d?.data ?? d) as Record<string, any> | undefined;
+      const chunks = Number(data?.chunks ?? 0);
+      const chars = Number(data?.chars ?? 0);
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const r = rows[i];
+        if (r.kind === k) {
+          r.endMs = t;
+          r.durationMs = r.endMs - r.startMs;
+          if (chunks > r.chunks) r.chunks = chunks;
+          if (chars > r.chars) r.chars = chars;
+          break;
+        }
+      }
+      continue;
+    }
+
     // Operational streams (rare, but worth surfacing in the pipeline).
     if (fnode === "compaction" || ev.type === "compaction") {
       rows.push({ kind: "compaction", label: "compaction", startMs: ts(ev), endMs: ts(ev), durationMs: 0, chunks: 1, chars: 0 });
@@ -1119,8 +1158,13 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
     // First thinking or assistant delta = LLM started streaming (warmup edge).
     // Replaces the legacy `llm_first_token` flow event marker with a direct
     // observation of the actual first stream delta.
-    if ((ev.type === "thinking" || ev.type === "assistant_delta") && !nLlmFirstTokenTs) {
-      nLlmFirstTokenTs = ts;
+    {
+      const isLiveDelta = ev.type === "thinking" || ev.type === "assistant_delta";
+      const isMarker = ev.type === "flow_event"
+        && (ev.detail?.node === "agent_first_token" || ev.detail?.node === "thinking_first_token");
+      if ((isLiveDelta || isMarker) && !nLlmFirstTokenTs) {
+        nLlmFirstTokenTs = ts;
+      }
     }
     if (ev.type === "tts" || (ev.type === "flow_event" && (ev.detail?.node === "tts_send" || ev.detail?.node === "tts_suppressed"))) {
       if (!nTtsTs) nTtsTs = ts;
@@ -1254,9 +1298,13 @@ export function extractTurnTiming(events: DisplayEvent[], startTime?: string, en
     if (ev.type === "flow_event" && ev.detail?.node === "lifecycle_end") {
       lifecycleEndTs = ts;
     }
-    // First thinking or assistant delta = LLM started streaming. Replaces
-    // the legacy llm_first_token marker with direct stream observation.
-    if ((ev.type === "thinking" || ev.type === "assistant_delta") && !llmFirstTokenTs) {
+    // First thinking or assistant delta = LLM started streaming. Sourced
+    // from either live monitorBus deltas (type === "thinking" |
+    // "assistant_delta") or the persisted JSONL marker flow events
+    // (agent_first_token / thinking_first_token), whichever arrives first.
+    const isFirstTokenMarker = ev.type === "flow_event"
+      && (ev.detail?.node === "agent_first_token" || ev.detail?.node === "thinking_first_token");
+    if ((ev.type === "thinking" || ev.type === "assistant_delta" || isFirstTokenMarker) && !llmFirstTokenTs) {
       llmFirstTokenTs = ts;
     }
     if (ev.type === "tts" || (ev.type === "flow_event" && (ev.detail?.node === "tts_send" || ev.detail?.node === "tts_suppressed"))) {
@@ -1353,6 +1401,28 @@ export function turnDurationMs(turn: Turn): number {
   if (!turn.startTime || !turn.endTime) return 0;
   const ms = new Date(turn.endTime).getTime() - new Date(turn.startTime).getTime();
   return ms > 0 ? ms : 0;
+}
+
+// Time-to-first-token: turn start → first thinking/assistant_delta event.
+// Matches what the chat page bubble stamp records on the client (first delta
+// arrival ≈ moment the user sees a reply begin), so the two views are
+// comparable without subtracting tail streaming + lifecycle close.
+// Sourced from either live monitorBus deltas or the persisted JSONL marker
+// flow events (agent_first_token / thinking_first_token), whichever lands
+// first in the turn's event list.
+export function turnFirstTokenMs(turn: Turn): number {
+  if (!turn.startTime) return 0;
+  const start = new Date(turn.startTime).getTime();
+  for (const ev of turn.events) {
+    const isLiveDelta = ev.type === "thinking" || ev.type === "assistant_delta";
+    const isMarker = ev.type === "flow_event"
+      && (ev.detail?.node === "agent_first_token" || ev.detail?.node === "thinking_first_token");
+    if (isLiveDelta || isMarker) {
+      const ms = new Date(ev.time).getTime() - start;
+      return ms > 0 ? ms : 0;
+    }
+  }
+  return 0;
 }
 
 // Extract billed tokens from a turn's token_usage event.

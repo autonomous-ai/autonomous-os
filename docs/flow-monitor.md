@@ -256,10 +256,31 @@ Node info extracted from turn events:
 
 OpenClaw agent may respond with `NO_REPLY` (or truncated forms `NO`, `NO_RE`, `NO_...`) when it decides not to respond — typically for passive sensing events like sound/motion. These are suppressed by `isAgentNoReply()` in `handler.go`: no TTS playback, no output display. Matches: exact `"NO"`, or any string starting with `"NO_"` or `"NO_RE"` (case-insensitive after trim). Source: `lifecycle_end` payload if available, otherwise fetched from `chat.history` RPC on `lifecycle_end` (async goroutine, best-effort). OpenClaw `lifecycle_end` currently does not include usage data, so `chat.history` is the primary source.
 
+## Stream summary events (`agent_*_token` / `thinking_*_token`)
+
+Raw `assistant_delta` and `thinking` deltas are pushed to monitorBus (RAM) but **never written to JSONL** — the persist layer would otherwise grow by ~50–500 lines per turn. Since the Flow Monitor reads JSONL on reload, the pipeline rect for past turns would show no streaming rows.
+
+To bridge that gap, the OpenClaw stream handler emits four lightweight summary flow events per run:
+
+| Node | When | Payload (`data.*`) | Purpose |
+|---|---|---|---|
+| `agent_first_token` | First non-empty `assistant` delta in the run | `{run_id}` | TTFT marker — `ts` field = perceived reply latency moment |
+| `agent_last_token` | `lifecycle.end` (drain accumulator) | `{run_id, text, chunks, chars}` | Closes the assistant streaming row in the pipeline rect |
+| `thinking_first_token` | First non-empty `thinking` delta (extended-thinking only) | `{run_id}` | Same as above, for the thinking stream |
+| `thinking_last_token` | `lifecycle.end` | `{run_id, text, chunks, chars}` | Same as above, for the thinking stream |
+
+Maximum 4 extra JSONL lines per turn (often 0–2). Stream from OpenClaw is still called `"assistant"` in code (`handler_events.go: case "assistant"`); only the JSONL node names use the `agent_` prefix for consistency with existing `agent_thinking` / `agent_call` / `agent_response` nodes.
+
+State lives in `OpenClawHandler.streamStats` (per-run counters + accumulated text), independent of `assistantBuf` (which serves TTS flush). Drained on `lifecycle.end`. See `recordAssistantDelta` / `recordThinkingDelta` / `drainStreamStats` in `handler_state.go`.
+
+Frontend (`aggregateEvents` in `helpers.ts`) builds pipeline rows from `*_first_token` (opens a row) + `*_last_token` (closes it with `chunks`/`chars`). `extractTurnTiming` and `turnFirstTokenMs` both fall back to these markers when live deltas aren't in `turn.events`.
+
+The legacy `llm_first_token` flow event that was previously removed for being "redundant with the pipeline aggregator" is effectively re-introduced here — split into the two streams (`agent_*` and `thinking_*`), because the aggregator can't observe streaming moments when raw deltas never reach JSONL.
+
 ## Turn Item Display
 
 ```
-[icon] TYPE  PATH  ● time
+[icon] TYPE  PATH  STATUS  👤 user  ⏱ total  ⚡ ttft
 id: run-id
 IN   <input text>
 OUT  🔊 <output text>
@@ -269,6 +290,10 @@ N events
 - **IN**: extracted from `sensing_input` summary or `chat_input` detail.message
 - **OUT**: from `intent_match` (local) or `tts_send` (agent). Intent match is authoritative and won't be overwritten by stale tts_send from different runs.
 - **Path badge**: LOCAL (green) / AGENT (blue) — only set from events belonging to the same run
+- **⏱ total**: `turn.startTime → turn.endTime` (full server-observed window: input event → lifecycle_end / tts_send / chat_final). Green ≤5s, amber ≤15s, red >15s.
+- **⚡ TTFT** (time-to-first-token): `turn.startTime → first thinking/assistant_delta`. Matches the chat page Lumi-bubble stamp — the moment the user *sees* a reply begin. Gap between ⚡ and ⏱ = tail streaming + lifecycle close. Green ≤3s, amber ≤8s, red >8s. Hidden when no LLM stream (e.g., local intent match).
+
+The two badges are meant to be read together: ⚡ is *perceived* latency (what the user feels), ⏱ is *server* latency (what ops sees). Big gap = lots of tail streaming; small gap = short reply or fast lifecycle close.
 
 ## Known Edge Cases
 

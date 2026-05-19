@@ -94,6 +94,15 @@ type OpenClawHandler struct {
 	agentLifecycleAt     map[string]int64
 	activeRunIDBySession map[string]string
 
+	// streamStats tracks per-run streaming counters and accumulated text for
+	// JSONL emission of agent_first_token / agent_last_token (assistant
+	// stream) and thinking_first_token / thinking_last_token (extended
+	// thinking stream). Live deltas already flow through monitorBus but the
+	// JSONL persist layer drops them — these summary events are the
+	// persisted projection that Flow Monitor renders from on reload.
+	streamStatsMu sync.Mutex
+	streamStats   map[string]*runStreamStats
+
 	// compacting prevents duplicate /compact sends while one is in progress.
 	compacting atomic.Bool
 
@@ -101,6 +110,21 @@ type OpenClawHandler struct {
 	// in flight. Cooldown is shorter than compacting because new-session
 	// completes server-side instantly.
 	newSessioning atomic.Bool
+}
+
+// runStreamStats is the per-run streaming bookkeeping that backs the
+// agent_*_token / thinking_*_token JSONL events. Independent of assistantBuf
+// (which serves TTS flush) so the two paths can't interfere.
+type runStreamStats struct {
+	assistantFirstSeen bool
+	assistantChunks    int
+	assistantChars     int
+	assistantText      strings.Builder
+
+	thinkingFirstSeen bool
+	thinkingChunks    int
+	thinkingChars     int
+	thinkingText      strings.Builder
 }
 
 // channelTurnState tracks the in-flight assistant response for a channel
@@ -139,6 +163,7 @@ func ProvideOpenClawHandler(gw domain.AgentGateway, bus *monitor.Bus, sled *stat
 		monitorBus:           bus,
 		statusLED:            sled,
 		assistantBuf:         make(map[string]*strings.Builder),
+		streamStats:          make(map[string]*runStreamStats),
 		ttsSuppressReasons:   make(map[string]string),
 		runIDMap:             make(map[string]string),
 		channelRuns:          make(map[string]bool),

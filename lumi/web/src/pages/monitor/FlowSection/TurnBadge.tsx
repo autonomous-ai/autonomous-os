@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Turn } from "./types";
 import { SOURCE_ICON, TURN_INPUT_FALLBACK } from "./types";
-import { turnIO, turnTokenStats, turnCurrentUser } from "./helpers";
+import { turnIO, turnTokenStats, turnCurrentUser, turnFirstTokenMs } from "./helpers";
 
 export function TurnBadge({ turn, pairTint, onViewPipeline }: { turn: Turn; pairTint?: string; onViewPipeline?: () => void }) {
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
@@ -98,10 +98,26 @@ export function TurnBadge({ turn, pairTint, onViewPipeline }: { turn: Turn; pair
             : ms >= 1000 ? `${(ms / 1000).toFixed(1)}s`
             : `${ms}ms`;
           const durColor = ms > 15_000 ? "var(--lm-red)" : ms > 5_000 ? "var(--lm-amber)" : "var(--lm-green)";
-          return <span style={{
-            fontSize: 8, padding: "1px 5px", borderRadius: 3,
-            background: `${durColor}18`, color: durColor, fontWeight: 700,
-          }}>⏱ {label}</span>;
+          return <span
+            title="Total turn duration: turn start (input event) → turn end (lifecycle_end / tts_send / chat_final). Server-side clock. This is the full server-observed turn window."
+            style={{
+              fontSize: 8, padding: "1px 5px", borderRadius: 3,
+              background: `${durColor}18`, color: durColor, fontWeight: 700,
+            }}>⏱ {label}</span>;
+        })()}
+        {(() => {
+          const ms = turnFirstTokenMs(turn);
+          if (ms <= 0) return null;
+          const label = ms >= 60_000 ? `${(ms / 60_000).toFixed(1)}m`
+            : ms >= 1000 ? `${(ms / 1000).toFixed(1)}s`
+            : `${ms}ms`;
+          const ttftColor = ms > 8_000 ? "var(--lm-red)" : ms > 3_000 ? "var(--lm-amber)" : "var(--lm-green)";
+          return <span
+            title="Time-to-first-token (TTFT): turn start → first thinking/assistant_delta. Matches the chat page Lumi bubble stamp — what the user perceives as 'reply latency'. The gap between this and ⏱ is tail-streaming + lifecycle close."
+            style={{
+              fontSize: 8, padding: "1px 5px", borderRadius: 3,
+              background: `${ttftColor}18`, color: ttftColor, fontWeight: 700,
+            }}>⚡ {label}</span>;
         })()}
         {typeof turn.queuedForMs === "number" && turn.queuedForMs > 0 && (() => {
           const ms = turn.queuedForMs;

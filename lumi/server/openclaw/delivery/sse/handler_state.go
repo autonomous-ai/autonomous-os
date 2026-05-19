@@ -37,6 +37,62 @@ func (h *OpenClawHandler) flushAssistantText(runID string) (string, []hwCall) {
 	return text, calls
 }
 
+// recordAssistantDelta increments streaming counters for runID and reports
+// whether this delta is the first one seen for the run. Caller emits
+// agent_first_token when isFirst==true.
+func (h *OpenClawHandler) recordAssistantDelta(runID, delta string) (isFirst bool) {
+	if delta == "" {
+		return false
+	}
+	h.streamStatsMu.Lock()
+	defer h.streamStatsMu.Unlock()
+	s, ok := h.streamStats[runID]
+	if !ok {
+		s = &runStreamStats{}
+		h.streamStats[runID] = s
+	}
+	isFirst = !s.assistantFirstSeen
+	s.assistantFirstSeen = true
+	s.assistantChunks++
+	s.assistantChars += len(delta)
+	s.assistantText.WriteString(delta)
+	return isFirst
+}
+
+// recordThinkingDelta is the thinking counterpart. Thinking text is
+// accumulated here because there is no separate per-run thinking buffer.
+func (h *OpenClawHandler) recordThinkingDelta(runID, delta string) (isFirst bool) {
+	if delta == "" {
+		return false
+	}
+	h.streamStatsMu.Lock()
+	defer h.streamStatsMu.Unlock()
+	s, ok := h.streamStats[runID]
+	if !ok {
+		s = &runStreamStats{}
+		h.streamStats[runID] = s
+	}
+	isFirst = !s.thinkingFirstSeen
+	s.thinkingFirstSeen = true
+	s.thinkingChunks++
+	s.thinkingChars += len(delta)
+	s.thinkingText.WriteString(delta)
+	return isFirst
+}
+
+// drainStreamStats returns the stats snapshot for runID and clears it.
+// Returns nil when no streaming was recorded for the run.
+func (h *OpenClawHandler) drainStreamStats(runID string) *runStreamStats {
+	h.streamStatsMu.Lock()
+	defer h.streamStatsMu.Unlock()
+	s, ok := h.streamStats[runID]
+	if !ok {
+		return nil
+	}
+	delete(h.streamStats, runID)
+	return s
+}
+
 // suppressTTS flags a runID to skip TTS on lifecycle end with the given reason.
 func (h *OpenClawHandler) suppressTTS(runID, reason string) {
 	h.ttsSuppressMu.Lock()
