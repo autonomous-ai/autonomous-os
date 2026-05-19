@@ -81,7 +81,18 @@ func Build(eventType, message, currentUser, guardTag string) string {
 		// just records the moment for memory continuity.
 		msg += "\n[NO_REPLY unless worth saying — phrase already spoken locally.]"
 	case "motion.activity":
-		msg += "\n[context: current_user=" + currentUser + "]"
+		// Insert current_user right after the activity prefix line so the
+		// agent sees attribution before consuming the activity payload
+		// (snapshot path, computer_streak_min, posture_summary). The
+		// remaining context blocks still trail at the end where they
+		// don't clutter the priority section.
+		parts := strings.SplitN(msg, "\n", 2)
+		head := parts[0]
+		tail := ""
+		if len(parts) > 1 {
+			tail = "\n" + parts[1]
+		}
+		msg = head + "\n[context: current_user=" + currentUser + "]" + tail
 		msg += skillcontext.BuildUserContext(currentUser)
 		// Pre-fetch wellbeing/SKILL.md reads (history + patterns + days) so
 		// the skill doesn't burn a tool turn on plan-reads.

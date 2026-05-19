@@ -706,7 +706,10 @@ func (h *SensingHandler) PostPostureLog(c *gin.Context) {
 
 // --- Guard helpers ---
 
-var reSnapshotPath = regexp.MustCompile(`\[snapshot:\s*([^\]]+)\]`)
+// Trailing \n? so stripping [snapshot:...] from a multi-line message doesn't
+// leave a blank line behind. Capture group ([^\]]+) is unchanged so
+// extractSnapshotPath still pulls the file path via FindStringSubmatch.
+var reSnapshotPath = regexp.MustCompile(`\[snapshot:\s*([^\]]+)\]\n?`)
 
 // extractSnapshotPath extracts the snapshot file path from a sensing message.
 func extractSnapshotPath(message string) string {
