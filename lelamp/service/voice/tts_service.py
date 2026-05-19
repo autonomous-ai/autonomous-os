@@ -51,18 +51,20 @@ TTS_CHANNELS = 1
 
 class _PendingSpeech:
     """One queued speak_queue() request waiting to play after the current TTS
-    ends. Pre-synthesized in a background thread so playback resumes seamlessly
-    (no ElevenLabs/OpenAI TTFB gap) when the current speech finishes."""
+    ends. Pre-synthesized in a background thread via a producer queue so the
+    drain can play each frame the moment it arrives (no buffer-everything-
+    first delay) and pre-synth time is hidden behind the previous speech's
+    playback. Mirrors the tail_producer/tail_q pattern in _speak_sync."""
 
-    __slots__ = ("text", "interruptible", "pcm_frames", "synth_done", "failed")
+    __slots__ = ("text", "interruptible", "frame_queue", "failed")
 
     def __init__(self, text: str, interruptible: bool):
         self.text = text
         self.interruptible = interruptible
-        # Pre-synthesized PCM frames produced by _pre_synth_pending. Each entry
-        # is a numpy.ndarray ready to be written to the ALSA stream.
-        self.pcm_frames: list = []
-        self.synth_done = threading.Event()
+        # Producer (pre-synth thread) appends numpy frames as they arrive
+        # from the backend; consumer (_drain_pending_queue) writes them to
+        # the ALSA stream. None sentinel = producer is done.
+        self.frame_queue: "queue.Queue" = queue.Queue(maxsize=128)
         self.failed = False
 
 
@@ -400,13 +402,15 @@ class TTSService:
         return True
 
     def _pre_synth_pending(self, item: "_PendingSpeech") -> None:
-        """Synthesize PCM for a queued item in a background thread so the
-        frames are ready when the current speech finishes. Runs while the
-        current speech is still using the ALSA stream — only the backend HTTP
-        fetch happens here, no audio device contention.
+        """Synthesize PCM for a queued item in a background thread. Streams
+        frames into item.frame_queue as they arrive from the backend so the
+        drain consumer can start playing on the first frame (~1.5s TTFB)
+        without waiting for the entire batch to synthesize. A long batch
+        (3-4 chunks, 300+ chars) takes 10-15s end-to-end; buffer-then-play
+        would underrun the drain's timeout.
 
-        Honors _stop_event so stop() during pre-synth aborts cleanly without
-        leaving a partial item that would still try to play.
+        Honors _stop_event so stop() during pre-synth aborts cleanly. Always
+        writes the None sentinel at the end so the drain stops looking.
         """
         try:
             dst_rate = self._device_rate or TTS_SAMPLE_RATE
@@ -417,21 +421,31 @@ class TTSService:
                 for frame in self._iter_tts_samples(chunk_text, dst_rate, ttfb_tag="pre-synth"):
                     if self._stop_event.is_set():
                         return
-                    item.pcm_frames.append(frame)
+                    item.frame_queue.put(frame)
         except Exception:
             logger.exception("Pre-synth failed for queued item")
             item.failed = True
         finally:
-            item.synth_done.set()
+            # Sentinel — drain stops reading. Never block here even if the
+            # consumer hasn't drained: queue is bounded but the producer is
+            # done, so the put is allowed.
+            try:
+                item.frame_queue.put(None, timeout=1.0)
+            except queue.Full:
+                pass
 
     def _drain_pending_queue(self, stream) -> int:
-        """Write pre-synth'd frames from each pending queue item to the open
-        ALSA stream. Called from _speak_sync after the main playback's tail
-        chunks have drained but before the stream lock is released — so the
-        queued frames stream into the same continuous output and the user
-        hears no inter-speech gap.
+        """Stream pre-synth'd frames from each pending queue item to the open
+        ALSA stream as they arrive. Called from _speak_sync after the main
+        playback's tail chunks drain but before the stream lock is released
+        — so the queued frames continue on the same audio output and the
+        user hears no inter-speech gap.
 
-        Returns total samples written (for logging parity with _speak_sync).
+        First-frame wait is bounded (handles the case where pre-synth is
+        slow or hung); intra-stream wait is longer to ride out backend
+        slowdowns mid-batch without abandoning the speech.
+
+        Returns total samples written.
         """
         total = 0
         while not self._stop_event.is_set():
@@ -439,25 +453,29 @@ class TTSService:
                 if not self._pending_queue:
                     break
                 item = self._pending_queue.pop(0)
-            # Pre-synth should already be in flight or done; cap the wait
-            # so a stuck synth doesn't block the lock forever.
-            if not item.synth_done.wait(timeout=10.0):
-                logger.warning("Pre-synth timeout, skipping queued speech: %s", item.text[:60])
+            try:
+                first = item.frame_queue.get(timeout=15.0)
+            except queue.Empty:
+                logger.warning("Pre-synth no first frame within 15s, abandoning: %s", item.text[:60])
                 continue
-            if item.failed or not item.pcm_frames:
-                logger.warning("Pre-synth produced no frames, skipping: %s", item.text[:60])
+            if first is None:
+                if item.failed:
+                    logger.warning("Pre-synth failed for queued speech: %s", item.text[:60])
+                else:
+                    logger.warning("Pre-synth produced no frames, skipping: %s", item.text[:60])
                 continue
-            # Keep last_spoken_text current so VoiceService's echo-cancel
-            # transcript filter matches what was actually played.
             self._last_spoken_text = item.text
-            logger.info(
-                "Playing pre-synth'd queued speech: %d frames, text=%s",
-                len(item.pcm_frames),
-                item.text[:80],
-            )
-            for frame in item.pcm_frames:
-                if self._stop_event.is_set():
-                    return total
+            logger.info("Playing pre-synth'd queued speech (streaming): %s", item.text[:80])
+            stream.write(first)
+            total += len(first)
+            while not self._stop_event.is_set():
+                try:
+                    frame = item.frame_queue.get(timeout=30.0)
+                except queue.Empty:
+                    logger.warning("Pre-synth stalled (no frame within 30s), ending speech early: %s", item.text[:60])
+                    break
+                if frame is None:
+                    break
                 stream.write(frame)
                 total += len(frame)
         return total
