@@ -3,7 +3,7 @@
 import os
 import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 import lelamp.app_state as state
@@ -90,8 +90,19 @@ def enable_camera():
 
 
 @router.get("/camera/snapshot")
-def camera_snapshot(save: bool = False):
-    """Capture a single JPEG frame from the camera (freezes servos for stability)."""
+def camera_snapshot(
+    save: bool = False,
+    width: int | None = Query(default=None, ge=1, le=4096, description="Resize output width (preserves aspect ratio). Capped at source width — never upscales."),
+    height: int | None = Query(default=None, ge=1, le=4096, description="Resize output height (preserves aspect ratio). Capped at source height — never upscales."),
+    quality: int = Query(default=85, ge=1, le=100, description="JPEG quality 1-100."),
+):
+    """Capture a single JPEG frame from the camera (freezes servos for stability).
+
+    Optional resize: pass width and/or height to downscale the output. Aspect
+    ratio is preserved; if both given, the frame is fit inside the requested
+    box. Upscaling above source is not allowed (just blurs without detail) —
+    requests above source are clamped.
+    """
     if not state.camera_capture or cv2 is None:
         raise HTTPException(503, "Camera not available")
 
@@ -123,7 +134,24 @@ def camera_snapshot(save: bool = False):
         state.camera_capture.release_consumer()
         if was_disabled:
             state.camera_capture.stop()
-    _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+
+    if width is not None or height is not None:
+        src_h, src_w = frame.shape[:2]
+        # Compute target scale honoring aspect ratio, clamped so we never
+        # upscale (digital upscale adds no detail, only blur).
+        scale_w = (width / src_w) if width else 1.0
+        scale_h = (height / src_h) if height else 1.0
+        if width and height:
+            scale = min(scale_w, scale_h)
+        else:
+            scale = scale_w if width else scale_h
+        scale = min(scale, 1.0)
+        if scale < 1.0:
+            new_w = max(1, int(src_w * scale))
+            new_h = max(1, int(src_h * scale))
+            frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
 
     if not save:
         return Response(content=buf.tobytes(), media_type="image/jpeg")
