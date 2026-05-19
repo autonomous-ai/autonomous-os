@@ -9,6 +9,7 @@ import json
 import logging
 import logging.handlers
 import os
+import secrets
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -28,6 +29,7 @@ from lelamp.config import (
     CAMERA_HEIGHT,
     CAMERA_INDEX,
     CAMERA_WIDTH,
+    DL_API_KEY,
     HTTP_HOST,
     HTTP_PORT,
     LAMP_ID,
@@ -696,6 +698,25 @@ def _is_same_origin(origin_or_referer: str | None, host: str) -> bool:
     return value == host
 
 
+def _has_valid_bearer_token(request) -> bool:
+    """Return True if the request carries Authorization: Bearer <DL_API_KEY>.
+
+    DL_API_KEY mirrors config.json::llm_api_key (single shared secret used
+    both as the LLM provider key and the device-internal auth token). Empty
+    key disables this path — falls through to other auth in the middleware.
+    Constant-time compare guards against timing side-channels.
+    """
+    if not DL_API_KEY:
+        return False
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        return False
+    provided = auth[len("Bearer "):].strip()
+    if not provided:
+        return False
+    return secrets.compare_digest(provided, DL_API_KEY)
+
+
 @app.middleware("http")
 async def local_only_middleware(request, call_next):
     if MODE == "production":
@@ -705,6 +726,12 @@ async def local_only_middleware(request, call_next):
 
         # Localhost callers (Go server, OpenClaw on-device) always pass.
         if _is_local(client) and not (xff and not _is_local(xff)) and not (real_ip and not _is_local(real_ip)):
+            return await call_next(request)
+
+        # Bearer token matching llm_api_key (config.json). Lets authenticated
+        # server-to-server callers and (future) post-login web sessions pass
+        # without depending on spoof-friendly Origin/Referer headers.
+        if _has_valid_bearer_token(request):
             return await call_next(request)
 
         # Browser requests from the same device origin pass (web UI, Swagger API calls).
@@ -720,7 +747,10 @@ async def local_only_middleware(request, call_next):
             "Blocked external request: client=%s xff=%s origin=%s referer=%s path=%s",
             client, xff, origin, referer, request.url.path,
         )
-        return JSONResponse(status_code=403, content={"detail": "LeLamp API: same-origin or local only"})
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "LeLamp API: requires loopback, valid bearer token, or same-origin"},
+        )
     return await call_next(request)
 
 
