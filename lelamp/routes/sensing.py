@@ -76,14 +76,53 @@ def get_sensing_state():
     return state.sensing_service.to_dict()
 
 
+def _pose_snapshots_dir() -> Path:
+    import lelamp.config as _cfg
+    return Path(_cfg.SNAPSHOT_TMP_DIR) / "sensing_pose" / "snapshots"
+
+
 @router.get("/sensing/pose-snapshot", tags=["Sensing"])
 def get_pose_snapshot():
-    """Return the latest annotated pose frame as JPEG. Refreshed once per
-    pose sample (~1/min). Cache-buster via ?t=<ts> on the client."""
-    import lelamp.config as _cfg
-    path = Path(_cfg.SNAPSHOT_TMP_DIR) / "sensing_pose" / "latest.jpg"
-    if not path.exists():
+    """Return the most recent annotated pose frame as JPEG.
+
+    Each sample writes its own snapshots/<int(ts)>.jpg; we serve whichever
+    is newest. Prefer /sensing/pose-snapshot/{ts} when you have a specific
+    sample timestamp (e.g. clicking a row in the monitor table)."""
+    snap_dir = _pose_snapshots_dir()
+    if not snap_dir.is_dir():
         raise HTTPException(404, "No pose snapshot yet")
+    newest: Path | None = None
+    newest_mtime: float = -1.0
+    try:
+        for entry in snap_dir.iterdir():
+            if not entry.is_file() or entry.suffix != ".jpg":
+                continue
+            mtime = entry.stat().st_mtime
+            if mtime > newest_mtime:
+                newest_mtime = mtime
+                newest = entry
+    except OSError as e:
+        raise HTTPException(500, f"scan failed: {e}") from e
+    if newest is None:
+        raise HTTPException(404, "No pose snapshot yet")
+    try:
+        data = newest.read_bytes()
+    except OSError as e:
+        raise HTTPException(500, f"read failed: {e}") from e
+    return Response(content=data, media_type="image/jpeg")
+
+
+@router.get("/sensing/pose-snapshot/{ts}", tags=["Sensing"])
+def get_pose_snapshot_at(ts: int):
+    """Return the annotated pose frame for a specific sample timestamp.
+
+    `ts` is int(unix-seconds) — matches int(sample.ts) from the JSONL /
+    monitor table. 404 when the file has been pruned by rotation
+    (default 24h retention or 50MB cap)."""
+    path = _pose_snapshots_dir() / f"{int(ts)}.jpg"
+    # Guard against path traversal even though FastAPI typed the param as int.
+    if not path.is_file() or path.parent.resolve() != _pose_snapshots_dir().resolve():
+        raise HTTPException(404, "Snapshot not found (expired or never written)")
     try:
         data = path.read_bytes()
     except OSError as e:

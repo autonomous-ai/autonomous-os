@@ -294,33 +294,86 @@ class PosePerception(Perception[cv2.typing.MatLike]):
         self._samples_dir: str = os.path.join(
             config.SNAPSHOT_TMP_DIR, "sensing_pose"
         )
-        os.makedirs(self._samples_dir, exist_ok=True)
+        self._snapshots_dir: str = os.path.join(
+            self._samples_dir, "snapshots"
+        )
+        os.makedirs(self._snapshots_dir, exist_ok=True)
 
     def _samples_file_path(self, ts: float) -> str:
         day: str = time.strftime("%Y-%m-%d", time.localtime(ts))
         return os.path.join(self._samples_dir, f"samples_{day}.jsonl")
 
-    def _latest_snapshot_path(self) -> str:
-        return os.path.join(self._samples_dir, "latest.jpg")
+    def _event_snapshot_path(self, ts: float) -> str:
+        return os.path.join(self._snapshots_dir, f"{int(ts)}.jpg")
 
-    def _save_latest_snapshot(
-        self, frame: cv2.typing.MatLike, result: PoseResult
+    def _save_event_snapshot(
+        self, frame: cv2.typing.MatLike, result: PoseResult, ts: float
     ) -> None:
-        """Persist an annotated snapshot of the latest sample so the monitor
-        can render the live pose alongside the numeric table. Uses Khanh's
-        `_draw_pose_2d` to overlay the skeleton + RULA label; the file is
-        rewritten in place each sample (no rolling history)."""
+        """Persist an annotated snapshot for this sample so the monitor can
+        click any table row to see the actual frame. File is named by
+        int(ts) — matches the int-floor of the JSONL `ts` field, so the FE
+        can build the URL from sample.ts directly. Rotation runs right
+        after each write to keep the dir under the configured caps."""
         try:
             annotated: cv2.typing.MatLike = _draw_pose_2d(
                 frame, result.pose_2d, result.ergo
             )
             cv2.imwrite(
-                self._latest_snapshot_path(),
+                self._event_snapshot_path(ts),
                 annotated,
                 [int(cv2.IMWRITE_JPEG_QUALITY), 80],
             )
         except Exception as e:
             logger.debug("[pose.sample] snapshot save failed: %s", e)
+            return
+        self._rotate_snapshots()
+
+    def _rotate_snapshots(self) -> None:
+        """Prune snapshots/ to fit both the time-retention and byte caps.
+        Cheap because called once per sample (1/min) and the dir is small."""
+        try:
+            entries: list[tuple[float, int, str]] = []
+            with os.scandir(self._snapshots_dir) as it:
+                for de in it:
+                    if not de.is_file() or not de.name.endswith(".jpg"):
+                        continue
+                    try:
+                        st = de.stat()
+                    except OSError:
+                        continue
+                    entries.append((st.st_mtime, st.st_size, de.path))
+        except OSError as e:
+            logger.debug("[pose.sample] rotate scan failed: %s", e)
+            return
+
+        if not entries:
+            return
+
+        entries.sort(key=lambda e: e[0])  # oldest first
+        now: float = time.time()
+        retention: float = config.POSE_SNAPSHOT_RETENTION_S
+        max_bytes: int = config.POSE_SNAPSHOT_MAX_BYTES
+
+        kept: list[tuple[float, int, str]] = []
+        for mtime, size, path in entries:
+            if now - mtime > retention:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                continue
+            kept.append((mtime, size, path))
+
+        total: int = sum(s for _, s, _ in kept)
+        i: int = 0
+        while total > max_bytes and i < len(kept):
+            _, size, path = kept[i]
+            try:
+                os.remove(path)
+                total -= size
+            except OSError:
+                pass
+            i += 1
 
     def _append_sample_file(self, sample: _PoseSample) -> None:
         # Pass through dlbackend's raw left / right dicts verbatim
@@ -390,7 +443,7 @@ class PosePerception(Perception[cv2.typing.MatLike]):
         self._samples.append(sample)
         self._last_sample_ts = now
         self._append_sample_file(sample)
-        self._save_latest_snapshot(data, result)
+        self._save_event_snapshot(data, result, now)
         logger.debug(
             "[pose.sample] ts=%.0f score=%d risk=%d buffer=%d/%d",
             now,
@@ -405,19 +458,41 @@ class PosePerception(Perception[cv2.typing.MatLike]):
 
         All per-frame values are from dlbackend (Khanh's RULA scorer);
         this method only counts. Returns None until the buffer is full.
+
+        "Bad" sample = any single region (L or R) at sub-score
+        >= POSE_REGION_HIGH_SUBSCORE, OR whole-body risk_level >= 3.
+        The sub-score arm catches forward-head-thrust cases where the
+        RULA total stays "low" because trunk+arms are fine but neck
+        alone is clearly off.
         """
         window: int = config.POSE_WINDOW_SAMPLES
         if len(self._samples) < window:
             return None
 
+        sub_thr: int = config.POSE_REGION_HIGH_SUBSCORE
+
+        def _hi_subscore(s: _PoseSample) -> bool:
+            body_l: dict[str, Any] = (s.raw_left or {}).get("body_scores", {}) or {}
+            body_r: dict[str, Any] = (s.raw_right or {}).get("body_scores", {}) or {}
+            for region in _REGIONS:
+                for body in (body_l, body_r):
+                    try:
+                        if int(body.get(region, 0) or 0) >= sub_thr:
+                            return True
+                    except (TypeError, ValueError):
+                        continue
+            return False
+
         bad: list[_PoseSample] = [
-            s for s in self._samples if s.risk_level >= 3
+            s for s in self._samples
+            if s.risk_level >= 3 or _hi_subscore(s)
         ]
         bad_ratio: float = len(bad) / len(self._samples)
 
-        # Region frequency = how often each region appeared at sub-score >= 3
-        # on EITHER side among bad samples. Uses Khanh's per-side numbers
-        # directly (no max-derivation on this side).
+        # Region frequency = how often each region appeared at sub-score
+        # >= POSE_REGION_HIGH_SUBSCORE on EITHER side among bad samples.
+        # Uses Khanh's per-side numbers directly (no max-derivation on
+        # this side).
         region_freq: dict[str, int] = {region: 0 for region in _REGIONS}
         for s in bad:
             body_l: dict[str, Any] = (s.raw_left or {}).get("body_scores", {}) or {}
@@ -431,7 +506,7 @@ class PosePerception(Perception[cv2.typing.MatLike]):
                     r = int(body_r.get(region, 0))
                 except (TypeError, ValueError):
                     r = 0
-                if l >= 3 or r >= 3:
+                if l >= sub_thr or r >= sub_thr:
                     region_freq[region] += 1
 
         dominant_region: str = ""

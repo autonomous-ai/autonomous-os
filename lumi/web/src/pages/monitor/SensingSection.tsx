@@ -366,15 +366,24 @@ export function SensingSection() {
             />
             <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 320px) 1fr", gap: 14, marginBottom: 10, alignItems: "start" }}>
               <div>
-                {/* Latest annotated pose snapshot (lelamp /sensing/pose-snapshot).
-                    Cache-buster via the last-sample timestamp so the browser
-                    fetches a fresh frame each time pose appends a sample. */}
-                <img
-                  src={`${HW}/sensing/pose-snapshot?t=${pose.samples?.[pose.samples.length - 1]?.ts ?? 0}`}
-                  alt="latest pose"
-                  style={{ width: "100%", borderRadius: 4, background: "var(--lm-text-muted)15", border: "1px solid var(--lm-text-muted)33" }}
-                  onError={(e) => { (e.currentTarget.style.display = "none"); }}
-                />
+                {/* Latest annotated pose snapshot. lelamp now keeps one JPEG
+                    per sample under snapshots/<int(ts)>.jpg (rotated at 24h /
+                    50MB), so the URL pins to the newest sample's ts. Table
+                    rows below are clickable to view that specific frame. */}
+                {(() => {
+                  const newestTs = pose.samples?.[pose.samples.length - 1]?.ts;
+                  const src = newestTs
+                    ? `${HW}/sensing/pose-snapshot/${Math.floor(newestTs)}`
+                    : `${HW}/sensing/pose-snapshot`;
+                  return (
+                    <img
+                      src={src}
+                      alt="latest pose"
+                      style={{ width: "100%", borderRadius: 4, background: "var(--lm-text-muted)15", border: "1px solid var(--lm-text-muted)33" }}
+                      onError={(e) => { (e.currentTarget.style.display = "none"); }}
+                    />
+                  );
+                })()}
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignContent: "flex-start" }}>
                 <StatPill label="Buffer"      value={`${pose.samples_in_buffer ?? 0} / ${win}`} />
@@ -418,10 +427,24 @@ export function SensingSection() {
                     const ss = String(d.getSeconds()).padStart(2, "0");
                     const L = s.left?.body_scores ?? {};
                     const R = s.right?.body_scores ?? {};
-                    // neck and trunk are bilateral; show left's view (right would be identical).
+                    // Time cell links to that sample's annotated JPEG. lelamp
+                    // keeps the file under snapshots/<int(ts)>.jpg until
+                    // rotation prunes it (24h / 50MB caps), so older rows
+                    // gracefully 404 once they age out.
+                    const snapUrl = `${HW}/sensing/pose-snapshot/${Math.floor(s.ts)}`;
                     return (
                       <div key={`${s.ts}-${idx}`} style={{ display: "grid", gridTemplateColumns: cols, gap: 6, whiteSpace: "nowrap" }}>
-                        <div>{`${hh}:${mm}:${ss}`}</div>
+                        <div>
+                          <a
+                            href={snapUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="View snapshot for this sample"
+                            style={{ color: "var(--lm-blue, #4aa3ff)", textDecoration: "none" }}
+                          >
+                            {`${hh}:${mm}:${ss}`}
+                          </a>
+                        </div>
                         <div>{s.score}</div>
                         <div style={{ color: poseDotColor(s) }}>{riskName(s.risk_level)}</div>
                         <div>{fmtCell(L.neck, L.neck_angle)}</div>

@@ -119,6 +119,36 @@ Chỉ chuyển động lớn được forward — LeLamp lọc và không gửi 
 
 ---
 
+## Tư thế (RULA — sampling thầm lặng, gắn vào `motion.activity`)
+
+LeLamp stream từng frame camera lên dlbackend `/api/dl/pose-estimation/ws` và nhận RULA breakdown từng frame (whole-body score + `risk_level` + `body_scores` + `*_angle` cho `neck / trunk / upper_arm / lower_arm / wrist`, mỗi bên trái/phải). `PosePerception` throttle thành **một sample mỗi `POSE_SAMPLE_INTERVAL_S` (default 60s)** vào deque cuộn + JSONL theo ngày tại `/tmp/lumi-sensing-snapshots/sensing_pose/samples_YYYY-MM-DD.jsonl`. **Không emit event trực tiếp** — `MotionPerception` gọi `get_posture_summary()` và gắn aggregate vào `motion.activity` kế tiếp khi gate đỏ.
+
+### Gate (lúc nào summary được inject)
+
+Sample được tính là **bad** khi **một trong hai**:
+
+- whole-body `risk_level >= 3` (medium/high), **hoặc**
+- bất kỳ region đơn nào (bên L **hoặc** R) có sub-score `>= POSE_REGION_HIGH_SUBSCORE` (default `4`)
+
+Vế thứ hai bắt được case "tech neck" (rướn cổ về màn hình) khi RULA tổng vẫn "low" vì lưng+tay OK nhưng riêng cổ rõ ràng tệ.
+
+Fire khi `bad_ratio >= POSE_BAD_RATIO` (default **0.6**) trên buffer `POSE_WINDOW_SAMPLES` (default 10 = 10 phút; production target 30 = 30 phút). Thêm 2 gate phía motion: sedentary streak ≥ `POSE_STREAK_MIN_GATE_S` và cooldown ≥ `POSE_NUDGE_COOLDOWN_S` kể từ lần inject trước.
+
+### Snapshot annotated cho từng event
+
+Mỗi sample ghi 1 JPEG có overlay skeleton + nhãn RULA vào `/tmp/lumi-sensing-snapshots/sensing_pose/snapshots/<int(ts)>.jpg`. Rotation chạy sau mỗi lần ghi — file cũ hơn `POSE_SNAPSHOT_RETENTION_S` (default 24h) bị xóa, nếu tổng dir vẫn vượt `POSE_SNAPSHOT_MAX_BYTES` (default 50 MB) thì xóa từ cũ → mới đến khi dưới ngưỡng.
+
+Hai endpoint:
+
+| Endpoint | Trả về |
+|---|---|
+| `GET /sensing/pose-snapshot` | JPEG mới nhất trong dir snapshots (back-compat cho ô preview live trên monitor) |
+| `GET /sensing/pose-snapshot/{ts}` | JPEG annotated của sample đó (`ts` = `int(sample.ts)` từ JSONL). 404 khi rotation đã dọn file |
+
+Pose / Posture card trên monitor dùng endpoint thứ hai cho cả preview lớn (pin theo ts mới nhất) và timestamp clickable trên từng row trong bảng — click sẽ mở frame chính xác đó trong tab mới.
+
+---
+
 ## Ánh sáng (`light.level`)
 
 Thay đổi ánh sáng môi trường được forward khi vượt `LIGHT_CHANGE_THRESHOLD`. Không cần nói — agent điều chỉnh LED hoặc biểu đạt cảm xúc theo ngữ cảnh (ví dụ `/emotion sleepy` khi đèn tắt).
