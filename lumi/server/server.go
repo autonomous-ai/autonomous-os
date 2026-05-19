@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -297,6 +299,35 @@ func localOnlyMiddleware() gin.HandlerFunc {
 	}
 }
 
+// hardwareProxy is a wildcard reverse proxy from /api/hardware/* to LeLamp on
+// loopback (127.0.0.1:5001). It exists so the web UI never touches /hw/*
+// directly — adminAuthMiddleware gates the bearer here, and the upstream
+// LeLamp call is loopback so its local_only_middleware lets it through.
+//
+// MJPEG streams (/api/hardware/camera/stream) work because
+// httputil.ReverseProxy disables response buffering for chunked / multipart
+// content out of the box. Long-running endpoints reuse the default 300s
+// proxy timeout configured at the http.Server level.
+var hardwareProxy = func() http.Handler {
+	target, _ := url.Parse("http://127.0.0.1:5001")
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	origDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		// Gin's wildcard match leaves /api/hardware/<path> in req.URL.Path.
+		// Strip the prefix so LeLamp sees its original path.
+		req.URL.Path = strings.TrimPrefix(req.URL.Path, "/api/hardware")
+		if req.URL.Path == "" {
+			req.URL.Path = "/"
+		}
+		origDirector(req)
+		// Stop leaking the original LAN client IP downstream: LeLamp's
+		// same-origin/local check trusts loopback, so we present as one.
+		req.Header.Del("X-Forwarded-For")
+		req.Header.Del("X-Real-IP")
+	}
+	return proxy
+}()
+
 // adminAuthMiddleware requires Authorization: Bearer <llm_api_key> on requests
 // to admin endpoints (config write, channel change, logs, OTA). Reads the
 // expected token from cfg.LLMAPIKey at request time so config-change rotation
@@ -314,7 +345,13 @@ func adminAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		// Prefer Authorization header; fall back to ?token= query param so
+		// callers that can't set headers (native EventSource, <img src>,
+		// <a href> download links) still authenticate.
 		got := strings.TrimSpace(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
+		if got == "" {
+			got = strings.TrimSpace(c.Query("token"))
+		}
 		if got == "" || subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
 			c.JSON(http.StatusUnauthorized, serializers.ResponseError("unauthorized"))
 			c.Abort()
@@ -478,6 +515,12 @@ func (s *Server) Serve(closeFn func()) error {
 	logs := api.Group("logs")
 	logs.GET("tail", adminAuthMiddleware(s.config), s.logTail)
 	logs.GET("stream", adminAuthMiddleware(s.config), s.logStream)
+
+	// Wildcard reverse proxy: web UI calls /api/hardware/<anything> with a
+	// bearer token; Go gates the request then forwards to LeLamp on loopback.
+	// Replaces direct browser /hw/* access (audit web F5) so nginx /hw/
+	// allow 127.0.0.1; deny all; can stay locked down (audit local F2).
+	api.Any("/hardware/*path", adminAuthMiddleware(s.config), gin.WrapH(hardwareProxy))
 
 	slog.Info("server started", "component", "server")
 
