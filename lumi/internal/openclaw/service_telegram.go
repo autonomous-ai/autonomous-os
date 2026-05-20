@@ -111,6 +111,32 @@ func (s *Service) SendToUser(telegramID string, msg string, imagePath string) er
 	return nil
 }
 
+// SendToUserWithMedia is the multi-image variant of SendToUser.
+// Reduces to SendToUser when imagePaths has 0 or 1 entries so callers
+// can pass through whatever ConsumePoseBucketRun returned without
+// branching.
+func (s *Service) SendToUserWithMedia(telegramID string, msg string, imagePaths []string) error {
+	if telegramID == "" {
+		return nil
+	}
+	switch len(imagePaths) {
+	case 0:
+		return s.SendToUser(telegramID, msg, "")
+	case 1:
+		return s.SendToUser(telegramID, msg, imagePaths[0])
+	}
+	for _, ch := range s.channels {
+		if !ch.IsConfigured() {
+			continue
+		}
+		if sender, ok := ch.(*TelegramSender); ok {
+			return sender.SendToUserWithMedia(telegramID, msg, imagePaths)
+		}
+	}
+	slog.Warn("sendToUserWithMedia: no telegram channel configured", "component", "openclaw")
+	return nil
+}
+
 // readOpenClawTelegramToken reads the Telegram bot token from OpenClaw's config file.
 func (s *Service) readOpenClawTelegramToken() string {
 	// Try configured dir first, then common locations.

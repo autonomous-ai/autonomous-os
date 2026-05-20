@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -12,6 +13,32 @@ import (
 	"go-lamp.autonomous.ai/lib/flow"
 	sensinghttp "go-lamp.autonomous.ai/server/sensing/delivery/http"
 )
+
+// poseBucketRoot is the on-disk base where lelamp writes pose buckets.
+// Matches lelamp/config.py:SNAPSHOT_TMP_DIR + "/sensing_pose/buckets/".
+// lelamp and lumi share the same Pi so this is the same FS location for
+// both processes.
+const poseBucketRoot = "/tmp/lumi-sensing-snapshots/sensing_pose/buckets"
+
+// buildPoseBucketImagePaths joins a bucket id with each worst-snapshot
+// filename to produce absolute paths Telegram can read. Filenames that
+// would escape the bucket dir (path separators, "..") are dropped.
+func buildPoseBucketImagePaths(bucketID string, filenames []string) []string {
+	if bucketID == "" || len(filenames) == 0 {
+		return nil
+	}
+	if strings.ContainsAny(bucketID, "/\\") || strings.Contains(bucketID, "..") {
+		return nil
+	}
+	paths := make([]string, 0, len(filenames))
+	for _, f := range filenames {
+		if strings.ContainsAny(f, "/\\") || strings.Contains(f, "..") {
+			continue
+		}
+		paths = append(paths, filepath.Join(poseBucketRoot, bucketID, f))
+	}
+	return paths
+}
 
 // HandleEvent processes incoming WebSocket events from the OpenClaw gateway.
 func (h *OpenClawHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) error {
@@ -922,12 +949,30 @@ func (h *OpenClawHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) e
 					// DM run: send agent response to a specific Telegram user.
 					// Takes priority over broadcast — if /dm is present, /broadcast is skipped.
 					if dmTelegramID != "" && len(text) > 10 {
-						go func(t, tid string) {
-							slog.Info("dm run response to user", "component", "agent", "run_id", flowRunID, "telegram_id", tid, "text", t[:min(len(t), 80)])
+						// Auto-attach the worst pose frames when this turn was
+						// triggered by a motion.activity that surfaced a posture
+						// nudge. Mirrors the guard-snapshot path: agent doesn't
+						// know any file paths — Lumi resolved them at ingest.
+						poseBucket, poseFiles, hasPoseBucket := h.agentGateway.ConsumePoseBucketRun(flowRunID)
+						var poseImagePaths []string
+						if hasPoseBucket {
+							poseImagePaths = buildPoseBucketImagePaths(poseBucket, poseFiles)
+							slog.Info("dm attaching pose bucket images",
+								"component", "agent", "run_id", flowRunID,
+								"bucket", poseBucket, "count", len(poseImagePaths))
+						}
+						go func(t, tid string, paths []string) {
+							slog.Info("dm run response to user", "component", "agent", "run_id", flowRunID, "telegram_id", tid, "text", t[:min(len(t), 80)], "images", len(paths))
+							if len(paths) > 0 {
+								if err := h.agentGateway.SendToUserWithMedia(tid, t, paths); err != nil {
+									slog.Error("dm run with media failed", "component", "agent", "err", err)
+								}
+								return
+							}
 							if err := h.agentGateway.SendToUser(tid, t, ""); err != nil {
 								slog.Error("dm run failed", "component", "agent", "err", err)
 							}
-						}(text, dmTelegramID)
+						}(text, dmTelegramID, poseImagePaths)
 					} else if isBroadcastRun && len(text) > 10 {
 						// Broadcast run (e.g. music.mood): send agent response to all channels
 						// so user can confirm via Telegram instead of only voice.

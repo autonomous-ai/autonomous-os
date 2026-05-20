@@ -2,6 +2,7 @@ package openclaw
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +14,10 @@ import (
 
 	"go-lamp.autonomous.ai/lib/flow"
 )
+
+// telegramMaxMediaGroup is the upper bound imposed by Telegram's
+// sendMediaGroup endpoint. Bot API rejects requests with more attachments.
+const telegramMaxMediaGroup = 10
 
 // TelegramSender delivers messages via Telegram Bot API.
 type TelegramSender struct {
@@ -97,6 +102,104 @@ func (t *TelegramSender) SendToUser(telegramID string, msg string, imagePath str
 	flow.Log("telegram_dm", map[string]any{
 		"method":      "bot_api",
 		"telegram_id": telegramID,
+		"message":     msg,
+	})
+	return nil
+}
+
+// SendToUserWithMedia delivers a multi-image DM via Telegram's
+// sendMediaGroup. The caption rides on the first photo (Telegram only
+// honors caption on the first InputMediaPhoto). Missing or unreadable
+// files are skipped silently; if all paths fail to read the call falls
+// back to a text-only sendMessage so the user still gets the nudge.
+func (t *TelegramSender) SendToUserWithMedia(telegramID string, msg string, imagePaths []string) error {
+	if telegramID == "" {
+		return nil
+	}
+	botToken := t.svc.GetTelegramBotToken()
+	if botToken == "" {
+		return fmt.Errorf("telegram bot token not configured")
+	}
+
+	if len(imagePaths) > telegramMaxMediaGroup {
+		imagePaths = imagePaths[:telegramMaxMediaGroup]
+	}
+
+	type photo struct {
+		name string
+		data []byte
+	}
+	photos := make([]photo, 0, len(imagePaths))
+	for i, p := range imagePaths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			slog.Warn("telegram: media group skip", "component", "openclaw", "path", p, "err", err)
+			continue
+		}
+		photos = append(photos, photo{name: fmt.Sprintf("photo%d", i), data: data})
+	}
+	switch len(photos) {
+	case 0:
+		slog.Warn("telegram: no readable media, falling back to text", "component", "openclaw", "telegram_id", telegramID)
+		client := &http.Client{Timeout: 10 * time.Second}
+		sendTelegramMessage(client, botToken, telegramID, msg)
+		return nil
+	case 1:
+		client := &http.Client{Timeout: 10 * time.Second}
+		sendTelegramPhoto(client, botToken, telegramID, msg, photos[0].data)
+		return nil
+	}
+
+	slog.Info("telegram media group", "component", "openclaw", "telegram_id", telegramID, "count", len(photos))
+
+	media := make([]map[string]string, 0, len(photos))
+	for i, p := range photos {
+		entry := map[string]string{
+			"type":  "photo",
+			"media": "attach://" + p.name,
+		}
+		if i == 0 {
+			entry["caption"] = msg
+		}
+		media = append(media, entry)
+	}
+	mediaJSON, err := json.Marshal(media)
+	if err != nil {
+		return fmt.Errorf("marshal media: %w", err)
+	}
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	w.WriteField("chat_id", telegramID)
+	w.WriteField("media", string(mediaJSON))
+	for _, p := range photos {
+		part, ferr := w.CreateFormFile(p.name, p.name+".jpg")
+		if ferr != nil {
+			return fmt.Errorf("create part: %w", ferr)
+		}
+		part.Write(p.data)
+	}
+	w.Close()
+
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMediaGroup", botToken)
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Post(apiURL, w.FormDataContentType(), &buf)
+	if err != nil {
+		slog.Error("telegram sendMediaGroup failed", "component", "openclaw", "chatID", telegramID, "err", err)
+		return err
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		slog.Error("telegram sendMediaGroup error", "component", "openclaw", "chatID", telegramID, "status", resp.StatusCode, "body", string(body))
+		return fmt.Errorf("sendMediaGroup status %d", resp.StatusCode)
+	}
+	slog.Info("telegram sendMediaGroup sent", "component", "openclaw", "chatID", telegramID, "photos", len(photos))
+
+	flow.Log("telegram_dm", map[string]any{
+		"method":      "bot_api_media_group",
+		"telegram_id": telegramID,
+		"photos":      len(photos),
 		"message":     msg,
 	})
 	return nil

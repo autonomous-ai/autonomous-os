@@ -197,6 +197,12 @@ type AgentGateway interface {
 	// If the user ID is empty, the message is silently dropped.
 	SendToUser(telegramID string, msg string, imagePath string) error
 
+	// SendToUserWithMedia sends a DM with multiple images via Telegram's
+	// sendMediaGroup (caption rides on the first photo). When imagePaths
+	// is empty or a single entry, behavior reduces to SendToUser. Telegram
+	// caps sendMediaGroup at 10 photos; callers should self-limit.
+	SendToUserWithMedia(telegramID string, msg string, imagePaths []string) error
+
 	// SendToLeLampTTS posts response text to LeLamp for TTS playback.
 	SendToLeLampTTS(text string) error
 
