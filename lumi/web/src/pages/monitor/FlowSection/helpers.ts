@@ -1304,7 +1304,11 @@ export function turnIO(turn: Turn): {
         // Pose bucket markers (motion.activity only) — emitted by lelamp
         // when a posture nudge folds into the turn. Lumi strips them from
         // the LLM-facing text but they survive in the sensing_input JSONL.
-        const bm = dataMsg.match(/\[pose_bucket:\s*([^\]\s]+)\]/);
+        // Pattern aligned with Go-side rePoseBucketMarker — accept any char
+        // except ']' so future debug ids that include underscores or hyphens
+        // continue to parse. In practice bucket_id is always a numeric
+        // timestamp.
+        const bm = dataMsg.match(/\[pose_bucket:\s*([^\]]+)\]/);
         if (bm) {
           const wm = dataMsg.match(/\[pose_worst:\s*([^\]]+)\]/);
           const files = wm

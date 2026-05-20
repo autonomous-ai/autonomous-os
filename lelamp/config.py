@@ -163,16 +163,16 @@ POSE_ERGO_HIGH_RISK_THRESHOLD = int(os.environ.get("LELAMP_POSE_ERGO_HIGH_RISK_T
 # Posture is now sampled silently into a rolling buffer; MotionPerception
 # decides when to fold the summary into a motion.activity event.
 #
-# DEBUG VALUES (set 2026-05-19) — sampling 1 / 30s and window 20 min, so a
-# full evaluation cycle takes ~20 min during live testing. Swap to 60 s /
-# 3600 s for production (one env var each, no code change).
+# DEBUG VALUES — sampling 1 / 30s and window 10 min, so a full evaluation
+# cycle finishes in ~10 min during live testing (bucket feature shake-down).
+# Swap to 60 s / 3600 s for production (one env var each, no code change).
 POSE_SAMPLE_INTERVAL_S = float(os.environ.get("LELAMP_POSE_SAMPLE_INTERVAL_S", "30.0"))
 # Tumbling time window. At the end of every WINDOW_DURATION_S, MotionPerception
 # evaluates whatever samples have accumulated, decides whether to inject a
 # posture nudge, and ALWAYS resets the buffer + window start (regardless of
-# fire / no-fire). DEBUG = 1200 s (20 min); production target 3600 s (60 min)
+# fire / no-fire). DEBUG = 600 s (10 min); production target 3600 s (60 min)
 # — one variable, no test/prod branches in code.
-POSE_WINDOW_DURATION_S = float(os.environ.get("LELAMP_POSE_WINDOW_DURATION_S", "1200.0"))
+POSE_WINDOW_DURATION_S = float(os.environ.get("LELAMP_POSE_WINDOW_DURATION_S", "600.0"))
 # Noise floor — if the window completed but had fewer than this many real
 # samples (dlbackend missed most frames, presence flicker, etc.), skip the
 # inject. Statistical confidence is too low to nag the user.
