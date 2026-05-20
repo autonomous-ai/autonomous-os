@@ -130,7 +130,7 @@ When `CRYPTO__ENABLED=true` on the LB and `CRYPTO__REQUIRE_ENCRYPTION=true`:
 ```bash
 # Public key endpoint must return PEM
 curl -s -H "X-API-Key: <your-DL_API_KEY>" \
-  https://<POD_ID>-7999.proxy.runpod.net/api/dl/public-key \
+  https://<POD_ID>-8888.proxy.runpod.net/api/crypto/public-key \
   | head -1
 ```
 
@@ -143,7 +143,7 @@ curl -s -o /dev/null -w "%{http_code}" \
   -H "X-API-Key: <your-DL_API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{"image_b64":"test","threshold":0.5}' \
-  https://<POD_ID>-7999.proxy.runpod.net/api/dl/emotion-recognize
+  https://<POD_ID>-8888.proxy.runpod.net/api/dl/emotion-recognize
 ```
 
 **Expected:** `400` (encryption required)

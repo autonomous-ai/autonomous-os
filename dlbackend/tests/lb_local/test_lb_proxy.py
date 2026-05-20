@@ -131,7 +131,7 @@ class TestHTTPProxyErrors:
 
 class TestPublicKeyEndpoint:
     def test_returns_pem_when_crypto_enabled(self, lb_client_with_crypto, crypto):
-        resp = lb_client_with_crypto.get("/api/dl/public-key")
+        resp = lb_client_with_crypto.get("/api/crypto/public-key")
         assert resp.status_code == 200
         assert resp.text.startswith("-----BEGIN PUBLIC KEY-----")
         assert resp.text.strip().endswith("-----END PUBLIC KEY-----")
@@ -141,7 +141,7 @@ class TestPublicKeyEndpoint:
         from lbserver.utils.state import set_crypto
         set_crypto(None)
 
-        resp = lb_client.get("/api/dl/public-key")
+        resp = lb_client.get("/api/crypto/public-key")
         assert resp.status_code == 404
 
 

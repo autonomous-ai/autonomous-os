@@ -5,7 +5,7 @@ through nginx, which routes /_internal/lelamp/ → :8001 (DL server)
 and /_internal/ → :8000 (old DL server), stripping the prefix.
 
 When crypto is enabled, the LB handles encryption/decryption:
-- GET /api/dl/public-key returns the RSA public key
+- GET /api/crypto/public-key returns the RSA public key
 - HTTP: CipherHTTPRequest decrypted before forwarding, response encrypted
 - WS: WSKeyExchangeRequest first, then WSCipherMessage both directions
 """
@@ -57,8 +57,25 @@ ws_rr = RoundRobin(BACKENDS)
 # ---------------------------------------------------------------------------
 
 
-app = FastAPI(title="DL Backend Load Balancer")
-app.include_router(crypto_router)
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    # Initialize crypto if enabled
+    if settings.crypto.enabled:
+        crypto = RSAAESCrypto(
+            key_dir=settings.crypto.key_dir,
+            key_size=settings.crypto.key_size,
+        )
+        set_crypto(crypto)
+        logger.info("Encryption enabled (key_dir=%s)", settings.crypto.key_dir)
+    yield
+    set_crypto(None)
+
+
+app = FastAPI(title="DL Backend Load Balancer", lifespan=_lifespan)
+app.include_router(crypto_router, prefix="/api/crypto")
 _client = httpx.AsyncClient(timeout=120.0)
 
 
@@ -74,7 +91,7 @@ async def proxy_http(request: Request, path: str) -> Response:
 
     headers: dict[str, str] = {
         k: v for k, v in request.headers.items()
-        if k.lower() not in ("host", "transfer-encoding")
+        if k.lower() not in ("host", "transfer-encoding", "content-length")
     }
 
     body: bytes = await request.body()
@@ -257,15 +274,6 @@ def main() -> None:
         from pathlib import Path
 
         Path(args.pid_file).write_text(str(os.getpid()))
-
-    # Initialize crypto if enabled
-    if settings.crypto.enabled:
-        crypto = RSAAESCrypto(
-            key_dir=settings.crypto.key_dir,
-            key_size=settings.crypto.key_size,
-        )
-        set_crypto(crypto)
-        logger.info("Encryption enabled (key_dir=%s)", settings.crypto.key_dir)
 
     if BACKENDS:
         logger.info("Backends: %s", ", ".join(BACKENDS))

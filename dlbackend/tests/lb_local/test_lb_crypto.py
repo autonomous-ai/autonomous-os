@@ -104,7 +104,7 @@ def lb_client(monkeypatch, crypto):
 
 class TestPublicKeyEndpoint:
     def test_returns_valid_pem(self, lb_client, crypto):
-        resp = lb_client.get("/api/dl/public-key")
+        resp = lb_client.get("/api/crypto/public-key")
         assert resp.status_code == 200
         pem = resp.text
         assert pem.startswith("-----BEGIN PUBLIC KEY-----")
@@ -117,7 +117,7 @@ class TestPublicKeyEndpoint:
         set_crypto(None)
         from lbserver.app import app
         client = TestClient(app)
-        resp = client.get("/api/dl/public-key")
+        resp = client.get("/api/crypto/public-key")
         assert resp.status_code == 404
 
 
@@ -283,3 +283,220 @@ class TestWSEncryption:
             ws.send_json({"type": "heartbeat", "task": "pose"})
             resp = ws.receive_json()
             assert resp == {"type": "heartbeat", "task": "pose"}
+
+
+# ---------------------------------------------------------------------------
+# Client-side encryption (simulates lelamp calling the API)
+# ---------------------------------------------------------------------------
+
+GCM_NONCE_SIZE = 12
+
+
+class _ClientCryptoSession:
+    """Standalone client-side crypto — no server imports, only cryptography lib."""
+
+    def __init__(self, public_key_pem: str) -> None:
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import padding
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+        public_key = serialization.load_pem_public_key(public_key_pem.encode())
+        self._session_key = os.urandom(32)
+        self._aesgcm = AESGCM(self._session_key)
+        oaep = padding.OAEP(
+            mgf=padding.MGF1(hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None,
+        )
+        self._encrypted_key = public_key.encrypt(self._session_key, oaep)
+        self.encrypted_key_b64 = base64.b64encode(self._encrypted_key).decode()
+
+    def encrypt(self, plaintext: bytes) -> dict:
+        nonce = os.urandom(GCM_NONCE_SIZE)
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        cipher_data = self._aesgcm.encrypt(nonce, plaintext, None)
+        return {
+            "nonce": base64.b64encode(nonce).decode(),
+            "cipher_data": base64.b64encode(cipher_data).decode(),
+        }
+
+    def decrypt_fields(self, nonce_b64: str, cipher_data_b64: str) -> bytes:
+        nonce = base64.b64decode(nonce_b64)
+        cipher_data = base64.b64decode(cipher_data_b64)
+        return self._aesgcm.decrypt(nonce, cipher_data, None)
+
+    def wrap_http_request(self, plain_body: bytes) -> bytes:
+        enc = self.encrypt(plain_body)
+        return json.dumps({"encrypted_key": self.encrypted_key_b64, **enc}).encode()
+
+    def unwrap_http_response(self, resp_body: bytes) -> bytes:
+        data = json.loads(resp_body)
+        return self.decrypt_fields(data["nonce"], data["cipher_data"])
+
+    def wrap_ws_message(self, plain: str) -> str:
+        enc = self.encrypt(plain.encode())
+        return json.dumps({"type": "encrypted", **enc})
+
+    def unwrap_ws_message(self, raw: str) -> str:
+        msg = json.loads(raw)
+        return self.decrypt_fields(msg["nonce"], msg["cipher_data"]).decode()
+
+
+@pytest.fixture()
+def lb_client_require_encryption(monkeypatch, crypto):
+    """LB TestClient with crypto enabled and require_encryption=true."""
+    from lbserver.utils import RoundRobin
+    from lbserver.utils.state import set_crypto
+
+    monkeypatch.setattr("lbserver.app.BACKENDS", ["http://backend:8001"])
+    monkeypatch.setattr("lbserver.app.INTERNAL_PREFIX", "")
+    monkeypatch.setattr("lbserver.app.http_rr", RoundRobin(["http://backend:8001"]))
+    monkeypatch.setattr(
+        "lbserver.app._client",
+        httpx.AsyncClient(transport=httpx.MockTransport(_mock_response)),
+    )
+    monkeypatch.setattr("config.settings.crypto.require_encryption", True)
+    set_crypto(crypto)
+
+    from lbserver.app import app
+    client = TestClient(app)
+    yield client
+
+    set_crypto(None)
+
+
+@pytest.fixture()
+def lb_ws_client_require_encryption(monkeypatch, crypto):
+    """LB WS TestClient with crypto enabled and require_encryption=true."""
+    from lbserver.utils import RoundRobin
+    from lbserver.utils.state import set_crypto
+
+    backends = [f"http://127.0.0.1:{WS_ECHO_PORT}"]
+    monkeypatch.setattr("lbserver.app.BACKENDS", backends)
+    monkeypatch.setattr("lbserver.app.INTERNAL_PREFIX", "")
+    monkeypatch.setattr("lbserver.app.http_rr", RoundRobin(backends))
+    monkeypatch.setattr("lbserver.app.ws_rr", RoundRobin(backends))
+    monkeypatch.setattr(
+        "lbserver.app._client",
+        httpx.AsyncClient(transport=httpx.MockTransport(_mock_response)),
+    )
+    monkeypatch.setattr("config.settings.crypto.require_encryption", True)
+    set_crypto(crypto)
+
+    from lbserver.app import app
+    client = TestClient(app)
+    yield client
+
+    set_crypto(None)
+
+
+class TestRequireEncryption:
+    """When require_encryption=true, plaintext requests must be rejected."""
+
+    def test_plain_http_rejected(self, lb_client_require_encryption):
+        resp = lb_client_require_encryption.post(
+            "/api/dl/test",
+            json={"image_b64": "plain_data"},
+        )
+        assert resp.status_code == 400
+        assert "Encryption required" in resp.json()["detail"]
+
+    def test_encrypted_http_still_works(self, lb_client_require_encryption):
+        resp = lb_client_require_encryption.get("/api/crypto/public-key")
+        session = _ClientCryptoSession(resp.text)
+
+        plain = json.dumps({"test": "data"}).encode()
+        resp = lb_client_require_encryption.post(
+            "/api/dl/test", content=session.wrap_http_request(plain)
+        )
+        assert resp.status_code == 200
+        decrypted = json.loads(session.unwrap_http_response(resp.content))
+        assert json.loads(decrypted["body"]) == {"test": "data"}
+
+    def test_ws_without_key_exchange_closed(self, lb_ws_client_require_encryption):
+        from starlette.testclient import WebSocketDenialResponse
+
+        with pytest.raises(Exception):
+            with lb_ws_client_require_encryption.websocket_connect("/api/dl/test/ws") as ws:
+                ws.send_json({"type": "frame", "task": "pose", "frame_b64": "abc"})
+                ws.receive_text()
+
+    def test_ws_with_key_exchange_works(self, lb_ws_client_require_encryption):
+        resp = lb_ws_client_require_encryption.get("/api/crypto/public-key")
+        session = _ClientCryptoSession(resp.text)
+
+        with lb_ws_client_require_encryption.websocket_connect("/api/dl/test/ws") as ws:
+            ws.send_json({"type": "key_exchange", "encrypted_key": session.encrypted_key_b64})
+            assert ws.receive_json()["status"] == "key_exchange_ok"
+
+            plain = json.dumps({"type": "frame", "task": "pose", "frame_b64": "abc"})
+            ws.send_text(session.wrap_ws_message(plain))
+            decrypted = json.loads(session.unwrap_ws_message(ws.receive_text()))
+            assert decrypted["frame_b64"] == "abc"
+
+
+class TestClientHTTP:
+    """Simulate a client: fetch public key, encrypt request, decrypt response."""
+
+    def test_fetch_key_and_round_trip(self, lb_client):
+        # 1. Fetch public key
+        resp = lb_client.get("/api/crypto/public-key")
+        assert resp.status_code == 200
+        session = _ClientCryptoSession(resp.text)
+
+        # 2. Send encrypted request
+        plain = json.dumps({"image_b64": "abc123", "threshold": 0.5}).encode()
+        resp = lb_client.post("/api/dl/emotion-recognize", content=session.wrap_http_request(plain))
+        assert resp.status_code == 200
+
+        # 3. Decrypt response
+        decrypted = json.loads(session.unwrap_http_response(resp.content))
+        assert json.loads(decrypted["body"]) == {"image_b64": "abc123", "threshold": 0.5}
+
+    def test_multiple_requests_same_session(self, lb_client):
+        resp = lb_client.get("/api/crypto/public-key")
+        session = _ClientCryptoSession(resp.text)
+
+        for i in range(3):
+            plain = json.dumps({"request_id": i}).encode()
+            resp = lb_client.post("/api/dl/test", content=session.wrap_http_request(plain))
+            assert resp.status_code == 200
+            decrypted = json.loads(session.unwrap_http_response(resp.content))
+            assert json.loads(decrypted["body"]) == {"request_id": i}
+
+
+class TestClientWS:
+    """Simulate a client: fetch key, WS key exchange, encrypted frames."""
+
+    def test_full_ws_flow(self, lb_ws_client):
+        resp = lb_ws_client.get("/api/crypto/public-key")
+        session = _ClientCryptoSession(resp.text)
+
+        with lb_ws_client.websocket_connect("/api/dl/test/ws") as ws:
+            # Key exchange
+            ws.send_json({"type": "key_exchange", "encrypted_key": session.encrypted_key_b64})
+            assert ws.receive_json()["status"] == "key_exchange_ok"
+
+            # Send encrypted frame
+            plain = json.dumps({"type": "frame", "task": "pose", "frame_b64": "img_data"})
+            ws.send_text(session.wrap_ws_message(plain))
+
+            # Decrypt response
+            decrypted = session.unwrap_ws_message(ws.receive_text())
+            data = json.loads(decrypted)
+            assert data["type"] == "frame"
+            assert data["frame_b64"] == "img_data"
+
+    def test_multiple_frames(self, lb_ws_client):
+        resp = lb_ws_client.get("/api/crypto/public-key")
+        session = _ClientCryptoSession(resp.text)
+
+        with lb_ws_client.websocket_connect("/api/dl/test/ws") as ws:
+            ws.send_json({"type": "key_exchange", "encrypted_key": session.encrypted_key_b64})
+            assert ws.receive_json()["status"] == "key_exchange_ok"
+
+            for i in range(5):
+                plain = json.dumps({"type": "frame", "task": "action", "frame_b64": f"f{i}"})
+                ws.send_text(session.wrap_ws_message(plain))
+                decrypted = json.loads(session.unwrap_ws_message(ws.receive_text()))
+                assert decrypted["frame_b64"] == f"f{i}"

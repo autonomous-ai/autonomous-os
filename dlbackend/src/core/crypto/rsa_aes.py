@@ -1,7 +1,7 @@
 """RSA + AES-256-GCM hybrid encryption.
 
 Server generates and persists an RSA key pair. Clients fetch the public key
-via /api/dl/public-key, generate a random AES-256 session key, and encrypt
+via /api/crypto/public-key, generate a random AES-256 session key, and encrypt
 it with RSA-OAEP. All subsequent messages use AES-256-GCM with the shared
 session key (fresh IV per message).
 """
