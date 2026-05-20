@@ -13,8 +13,8 @@ This folder is owned by the hardware team. Upload here:
 - Wiring diagrams and pinouts
 - Enclosure and assembly photos
 
-Keep large binaries (>10 MB) out of git — link them from an external store and
-reference the link in a markdown file here.
+Large binary CAD files are **not committed**. They are uploaded to **Mega.nz**
+and the public share link is tracked in [`cad/README.md`](cad/README.md).
 
 ---
 
