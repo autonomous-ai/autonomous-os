@@ -281,6 +281,15 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		snap := extractSnapshotPath(req.Message)
 		h.agentGateway.MarkGuardRun(runID, snap)
 	}
+	// motion.activity events that fold in a posture nudge ship two extra
+	// markers ([pose_bucket: ...] / [pose_worst: ...]). Stash them keyed
+	// by runID so the SSE /dm path can attach the worst frames to the
+	// Telegram message after the agent decides to nudge.
+	if req.Type == "motion.activity" {
+		if bid, worst := extractPoseBucketMarkers(req.Message); bid != "" {
+			h.agentGateway.MarkPoseBucketRun(runID, bid, worst)
+		}
+	}
 	// Web monitor chat: suppress TTS — response displayed in web UI only.
 	// TEMP: disabled to test TTS remotely from web chat.
 	// if isWebChat {
@@ -313,6 +322,10 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// the Monitor UI can still render thumbnails — the agent just doesn't waste
 	// tokens on the path.
 	msg = reSnapshotPath.ReplaceAllString(msg, "")
+	// Same treatment for the pose bucket markers — file paths are infra,
+	// not LLM context. The Monitor UI reads them from the JSONL payload.
+	msg = rePoseBucketMarker.ReplaceAllString(msg, "")
+	msg = rePoseWorstMarker.ReplaceAllString(msg, "")
 	msg = strings.ReplaceAll(msg, "\n\n\n", "\n\n")
 	msg = strings.TrimSpace(msg)
 
@@ -711,6 +724,13 @@ func (h *SensingHandler) PostPostureLog(c *gin.Context) {
 // extractSnapshotPath still pulls the file path via FindStringSubmatch.
 var reSnapshotPath = regexp.MustCompile(`\[snapshot:\s*([^\]]+)\]\n?`)
 
+// Pose bucket markers — emitted by lelamp motion.py when a posture nudge
+// rides along on motion.activity. They reference a lelamp-side bucket
+// dir + the pre-selected worst-snapshot filenames, NOT a base64 image
+// payload, so they're cheap to keep in the JSONL.
+var rePoseBucketMarker = regexp.MustCompile(`\[pose_bucket:\s*([^\]]+)\]\n?`)
+var rePoseWorstMarker = regexp.MustCompile(`\[pose_worst:\s*([^\]]+)\]\n?`)
+
 // extractSnapshotPath extracts the snapshot file path from a sensing message.
 func extractSnapshotPath(message string) string {
 	m := reSnapshotPath.FindStringSubmatch(message)
@@ -718,6 +738,31 @@ func extractSnapshotPath(message string) string {
 		return ""
 	}
 	return strings.TrimSpace(m[1])
+}
+
+// extractPoseBucketMarkers pulls (bucket_id, [worst filenames]) from a
+// motion.activity message. Returns empty bucket_id when the markers are
+// absent (most motion.activity turns — no posture nudge folded in).
+func extractPoseBucketMarkers(message string) (string, []string) {
+	bm := rePoseBucketMarker.FindStringSubmatch(message)
+	if bm == nil {
+		return "", nil
+	}
+	bucketID := strings.TrimSpace(bm[1])
+	if bucketID == "" {
+		return "", nil
+	}
+	wm := rePoseWorstMarker.FindStringSubmatch(message)
+	var worst []string
+	if wm != nil {
+		for _, part := range strings.Split(wm[1], ",") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				worst = append(worst, part)
+			}
+		}
+	}
+	return bucketID, worst
 }
 
 // --- Music Suggestion History API ---
