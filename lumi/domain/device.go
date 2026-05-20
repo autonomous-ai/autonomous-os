@@ -184,12 +184,17 @@ const (
 	CommandInfo       = "info"
 	CommandAddChannel = "add_channel"
 	CommandOTA        = "ota"
+	CommandData       = "data"
 )
 
+// KindTTSSet is the kind field for cmd:"data" tts.set downlinks from BFF.
+const KindTTSSet = "tts.set"
+
 // Message is the standard envelope for MQTT messages from the server (fa_channel).
-// Server sends: {"cmd": "info"}, {"cmd": "add_channel", "channel": "discord", "config": {...}}
+// Server sends: {"cmd": "info"}, {"cmd": "add_channel", ...}, {"cmd": "data", "kind": "tts.set", ...}
 type MQTTMessage struct {
 	Cmd     string          `json:"cmd"`
+	Kind    string          `json:"kind"`
 	RawData json.RawMessage `json:"-"`
 	raw     []byte
 }
@@ -197,13 +202,15 @@ type MQTTMessage struct {
 // UnmarshalJSON custom unmarshals to keep the full raw payload accessible to handlers.
 func (m *MQTTMessage) UnmarshalJSON(data []byte) error {
 	type alias struct {
-		Cmd string `json:"cmd"`
+		Cmd  string `json:"cmd"`
+		Kind string `json:"kind"`
 	}
 	var a alias
 	if err := json.Unmarshal(data, &a); err != nil {
 		return err
 	}
 	m.Cmd = a.Cmd
+	m.Kind = a.Kind
 	m.raw = make([]byte, len(data))
 	copy(m.raw, data)
 	return nil
@@ -265,24 +272,53 @@ type MQTTRemoveChannelResponse struct {
 // DeviceMessage is the base response published to fd_channel.
 // All messages MUST include these required fields per spec.
 type MQTTInfoResponse struct {
-	Device  string `json:"device"`
-	Type    string `json:"type"`
-	Version string `json:"version"`
-	ID      string `json:"id"`
-	Mac     string `json:"mac"`
-	Time    string `json:"time"`
+	Device      string `json:"device"`
+	Type        string `json:"type"`
+	Version     string `json:"version"`
+	ID          string `json:"id"`
+	Mac         string `json:"mac"`
+	Time        string `json:"time"`
+	TTSProvider string `json:"tts_provider,omitempty"`
+	TTSVoice    string `json:"tts_voice,omitempty"`
+	STTLanguage string `json:"stt_language,omitempty"`
 }
 
 // NewDeviceMessage creates a base message with required fields populated from config.
 func NewMQTTInfoResponse(cfg *config.Config, msgType string, mac string) MQTTInfoResponse {
 	return MQTTInfoResponse{
-		Device:  "ai_lumi",
-		Type:    msgType,
-		Version: config.LumiVersion,
-		ID:      cfg.DeviceID,
-		Mac:     mac,
-		Time:    time.Now().UTC().Format(time.RFC3339Nano),
+		Device:      "ai_lumi",
+		Type:        msgType,
+		Version:     config.LumiVersion,
+		ID:          cfg.DeviceID,
+		Mac:         mac,
+		Time:        time.Now().UTC().Format(time.RFC3339Nano),
+		TTSProvider: cfg.TTSProvider,
+		TTSVoice:    cfg.TTSVoice,
+		STTLanguage: cfg.STTLanguage,
 	}
+}
+
+// MQTTTTSSetData is the nested data payload for cmd:"data", kind:"tts.set" downlinks.
+// BFF sends: {"cmd":"data","kind":"tts.set","data":{"provider":"elevenlabs","voice":"Linh","language":"vi"}}
+type MQTTTTSSetData struct {
+	Provider string `json:"provider"`
+	Voice    string `json:"voice"`
+	Language string `json:"language"`
+}
+
+// MQTTTTSSetCommand wraps the full tts.set downlink envelope for unmarshalling.
+type MQTTTTSSetCommand struct {
+	Data MQTTTTSSetData `json:"data"`
+}
+
+// MQTTTTSSetAck is published to fd_channel after applying (or failing) a tts.set downlink.
+// status: "starting" | "success" | "failure"
+type MQTTTTSSetAck struct {
+	MQTTInfoResponse
+	Kind   string          `json:"kind"`
+	Status string          `json:"status"`
+	Error  string          `json:"error,omitempty"`
+	Data   *MQTTTTSSetData `json:"data,omitempty"`
 }
 
 // ConfigPublicResponse is returned by GET /api/device/config. Raw secrets

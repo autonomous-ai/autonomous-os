@@ -168,6 +168,7 @@ func (s *Server) startMQTT() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	client := s.mqttFactory.GetClient("lumi-server-" + s.config.DeviceID)
+	slog.Info("subscribing to FA channel", "component", "mqtt", "topic", s.config.FAChannel)
 	client.Subscribe(s.config.FAChannel, 1, func(topic string, payload []byte) {
 		slog.Debug("message received", "component", "mqtt", "topic", topic, "payload", string(payload))
 		s.deviceMQTTHandler.HandleMessage(topic, payload)

@@ -461,6 +461,37 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 	return nil
 }
 
+// UpdateVoiceConfig updates only TTS provider/voice and STT language — safe to call from MQTT
+// handlers since it does not touch API keys, MQTT credentials, or WiFi config.
+func (s *Service) UpdateVoiceConfig(provider, voice, language string) error {
+	prevLang := s.config.STTLanguage
+	if provider != "" {
+		s.config.TTSProvider = provider
+	}
+	if voice != "" {
+		s.config.TTSVoice = voice
+	}
+	if language != "" {
+		s.config.STTLanguage = language
+		s.config.STTModel = sttModelForLanguage(language)
+	}
+	if err := s.config.Save(); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+	slog.Info("voice config updated", "component", "device", "provider", s.config.TTSProvider, "voice", s.config.TTSVoice, "language", s.config.STTLanguage)
+	if language != "" && prevLang != s.config.STTLanguage && s.agentGateway != nil {
+		if key := s.agentGateway.GetSessionKey(); key != "" {
+			go func() {
+				if err := s.agentGateway.NewSession(key); err != nil {
+					slog.Warn("NewSession on language change failed", "component", "device", "error", err)
+				}
+			}()
+		}
+	}
+	s.RePushVoiceConfig()
+	return nil
+}
+
 // RePushVoiceConfig restarts lumi-lelamp so it picks up new TTS config from config.json.
 func (s *Service) RePushVoiceConfig() {
 	go func() {

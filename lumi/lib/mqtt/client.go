@@ -94,11 +94,14 @@ func (c *MQTT) Connect(ctx context.Context) error {
 			c.mu.Lock()
 			subs := c.copySubscriptions()
 			c.mu.Unlock()
+			slog.Info("mqtt connected", "component", "mqtt", "broker", c.opts.Endpoint, "subs", len(subs))
 			for _, s := range subs {
 				if _, err := cm.Subscribe(context.Background(), &paho.Subscribe{
 					Subscriptions: []paho.SubscribeOptions{{Topic: s.topic, QoS: s.qos}},
 				}); err != nil {
 					slog.Error("subscribe failed", "component", "mqtt", "topic", s.topic, "error", err)
+				} else {
+					slog.Info("subscribed ok", "component", "mqtt", "topic", s.topic)
 				}
 			}
 		},

@@ -13,7 +13,6 @@ import (
 	"go-lamp.autonomous.ai/server/config"
 )
 
-
 // DeviceMQTTHandler handles incoming MQTT messages and dispatches to command handlers.
 type DeviceMQTTHandler struct {
 	config         *config.Config
@@ -51,6 +50,16 @@ func (h *DeviceMQTTHandler) publish(data interface{}) error {
 	return nil
 }
 
+func (h *DeviceMQTTHandler) handleData(cmd domain.MQTTMessage) error {
+	switch cmd.Kind {
+	case domain.KindTTSSet:
+		return h.handleTTSSet(cmd)
+	default:
+		slog.Warn("unknown data kind", "component", "mqtt", "kind", cmd.Kind)
+		return nil
+	}
+}
+
 // HandleMessage processes an incoming MQTT message (called from MQTT subscription callback or GWS HTTP).
 func (h *DeviceMQTTHandler) HandleMessage(topic string, payload []byte) error {
 	slog.Debug("HandleMessage", "component", "mqtt", "topic", topic, "payload", string(payload))
@@ -66,6 +75,8 @@ func (h *DeviceMQTTHandler) HandleMessage(topic string, payload []byte) error {
 		return h.handleInfo(cmd)
 	case domain.CommandAddChannel:
 		return h.handleAddChannel(cmd)
+	case domain.CommandData:
+		return h.handleData(cmd)
 	default:
 		slog.Warn("unknown command", "component", "mqtt", "cmd", cmd.Cmd)
 		return nil
