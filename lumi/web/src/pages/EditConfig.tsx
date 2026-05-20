@@ -26,17 +26,16 @@ const ICON_SIZE = 15;
 const ALL_SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; debugOnly?: boolean }[] = [
   { id: "device",   label: "Device",   icon: <Lamp size={ICON_SIZE} /> },
   { id: "wifi",     label: "Wi-Fi",    icon: <Wifi size={ICON_SIZE} /> },
-  { id: "llm",      label: "AI Brain", icon: <Brain size={ICON_SIZE} /> },
-  // Language above Lumi's Voice — picking the language determines which
-  // voices sound natural, so the operator should set it first.
-  // Language + Lumi's Voice are gated behind ?debug=true: typical operators
-  // shouldn't see STT/TTS provider knobs.
+  // AI Brain, Language, Lumi's Voice, Channels, MQTT are gated behind
+  // ?debug=true. Typical operators only need Device + Wi-Fi + voice/face
+  // enrollment; deeper provider knobs stay hidden by default.
+  { id: "llm",      label: "AI Brain", icon: <Brain size={ICON_SIZE} />, debugOnly: true },
   { id: "stt",      label: "Language", icon: <Globe size={ICON_SIZE} />, debugOnly: true },
   { id: "tts",      label: "Lumi's Voice", icon: <Volume2 size={ICON_SIZE} />, debugOnly: true },
   { id: "voice",    label: "My Voice", icon: <MicVocal size={ICON_SIZE} /> },
   { id: "face",     label: "Face",     icon: <UserCircle size={ICON_SIZE} /> },
-  { id: "channel",  label: "Channels", icon: <MessageSquare size={ICON_SIZE} /> },
-  { id: "mqtt",     label: "MQTT",     icon: <Link size={ICON_SIZE} /> },
+  { id: "channel",  label: "Channels", icon: <MessageSquare size={ICON_SIZE} />, debugOnly: true },
+  { id: "mqtt",     label: "MQTT",     icon: <Link size={ICON_SIZE} />, debugOnly: true },
 ];
 
 const isDebugMode = () => new URLSearchParams(window.location.search).get("debug") === "true";
