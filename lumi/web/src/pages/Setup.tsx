@@ -378,8 +378,17 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
     setHasNetworkPassword,
   });
 
+  // Bearer to ride along on cross-origin redirects (AP → lumi-xxxx.local).
+  // The lumi_session cookie is per-origin so it does not survive the host
+  // switch; we attach this as `#token=<llm_api_key>` on the redirect URL
+  // and App.useTokenFromHash() seeds it back into the Bearer header on the
+  // new origin. URL fragment never reaches the server / referrer / proxy log.
+  const bearerForRedirect = urlParams.llmApiKey || llmApiKey;
+  const tokenHash = bearerForRedirect ? `#token=${encodeURIComponent(bearerForRedirect)}` : "";
+
   useSetupStatusPolling({
     setupWorking, setupPhase, setupLanIP, lumiMdnsHost,
+    bearerToken: bearerForRedirect,
     setSetupPhase, setSetupLanIP, setSetupErrorMsg,
   });
 
@@ -682,7 +691,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                       }}>
                         Stuck here? Reconnect to your home Wi-Fi, then open{" "}
                         <a
-                          href={`http://${lumiMdnsHost}.local${window.location.pathname}${safeSearch()}`}
+                          href={`http://${lumiMdnsHost}.local${window.location.pathname}${safeSearch()}${tokenHash}`}
                           style={{
                             color: C.amber, textDecoration: "none",
                             fontFamily: "ui-monospace, monospace",
@@ -730,7 +739,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                           // no-ops the same-URL click and they stay stuck on
                           // the "Lumi is online!" screen even though the lamp
                           // is reachable in continue mode now.
-                          href={`http://${lumiMdnsHost}.local${window.location.pathname}${safeSearch()}`}
+                          href={`http://${lumiMdnsHost}.local${window.location.pathname}${safeSearch()}${tokenHash}`}
                           onClick={(e) => {
                             if (window.location.hostname === `${lumiMdnsHost}.local`) {
                               e.preventDefault();

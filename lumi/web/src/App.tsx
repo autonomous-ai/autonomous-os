@@ -6,7 +6,7 @@ import Login from "@/pages/Login";
 import Monitor from "@/pages/monitor";
 import EditConfig from "@/pages/EditConfig";
 import GwConfig from "@/pages/GwConfig";
-import { checkInternet, getDeviceConfig, getSetupStatus, safeSearch, scrubLocationSecrets } from "@/lib/api";
+import { checkInternet, getDeviceConfig, getSetupStatus, safeSearch, scrubLocationSecrets, setApiToken } from "@/lib/api";
 
 // Detect Tailscale access by either:
 //  - CGNAT IPv4 in 100.64.0.0/10 (100.64.0.0 – 100.127.255.255), or
@@ -134,7 +134,35 @@ function useScrubSecrets() {
   }, []);
 }
 
+// Pick up an auth token from `#token=<bearer>` on the URL fragment and seed
+// it into the Bearer header used by /api/* calls. Used by the post-setup
+// AP→.local redirect to keep the user authed across origins: HTTP cookies
+// are per-origin so the lumi_session set on 192.168.100.1 doesn't carry to
+// lumi-xxxx.local. Putting the bearer in the fragment (not the query) keeps
+// it out of HTTP logs / referrer headers; we replaceState immediately so the
+// hash also disappears from browser history before the user can navigate.
+function useTokenFromHash() {
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const match = window.location.hash.match(/^#token=([^&]+)/);
+    if (!match) return;
+    const token = decodeURIComponent(match[1]);
+    if (!token) return;
+    setApiToken(token);
+    window.history.replaceState(
+      null,
+      "",
+      `${window.location.pathname}${window.location.search}`,
+    );
+  }, []);
+}
+
 function App() {
+  // Order matters: pick up the fragment-borne bearer BEFORE scrubbing the
+  // URL so a `?llm_api_key=…#token=…` link survives long enough to capture
+  // both pieces. scrubLocationSecrets only touches the search string, so
+  // running it after useTokenFromHash() is safe either way.
+  useTokenFromHash();
   useScrubSecrets();
   return (
     <BrowserRouter>
