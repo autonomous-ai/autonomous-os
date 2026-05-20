@@ -804,16 +804,29 @@ func riskLevelLabel(level int) string {
 
 // extractPostureAlertExtras parses the [posture_summary: ...] JSON
 // payload on a motion.activity message and translates the fields the
-// habit skill needs onto a posture.AlertExtras. Returns ok=false when
-// the marker is absent or the JSON doesn't carry the latest_score /
-// latest_risk_level pair — habit can tolerate sparse history but
-// shouldn't have to handle rows missing both score and risk.
+// habit skill needs onto a posture.AlertExtras.
+//
+// Source-of-truth fields are the `worst_*` keys (lelamp pre-computes
+// them as the max across the same 3 samples it surfaces for the DM
+// gallery), so habit numbers stay aligned with the photos the user
+// just saw. Falls back to `latest_*` when an older lelamp build is
+// still in the field, so a half-rolled deploy doesn't drop alert
+// rows entirely.
+//
+// Returns ok=false when neither set of fields carries score/risk —
+// habit can tolerate sparse history but shouldn't see rows missing
+// both pieces of ergonomic data.
 func extractPostureAlertExtras(message string) (posture.AlertExtras, bool) {
 	body := extractPostureSummaryJSON(message)
 	if body == "" {
 		return posture.AlertExtras{}, false
 	}
 	var s struct {
+		WorstScore      int `json:"worst_score"`
+		WorstRiskLevel  int `json:"worst_risk_level"`
+		WorstLeftScore  int `json:"worst_left_score"`
+		WorstRightScore int `json:"worst_right_score"`
+
 		LatestScore     int `json:"latest_score"`
 		LatestRiskLevel int `json:"latest_risk_level"`
 		LatestLeft      struct {
@@ -826,14 +839,28 @@ func extractPostureAlertExtras(message string) (posture.AlertExtras, bool) {
 	if err := json.Unmarshal([]byte(body), &s); err != nil {
 		return posture.AlertExtras{}, false
 	}
-	if s.LatestScore == 0 && s.LatestRiskLevel == 0 {
+
+	score := s.WorstScore
+	risk := s.WorstRiskLevel
+	left := s.WorstLeftScore
+	right := s.WorstRightScore
+	if score == 0 && risk == 0 {
+		// Older lelamp builds (or any path where the worst aggregate
+		// wasn't computed) — fall back to the last-sample values so
+		// the alert row still lands.
+		score = s.LatestScore
+		risk = s.LatestRiskLevel
+		left = s.LatestLeft.Score
+		right = s.LatestRight.Score
+	}
+	if score == 0 && risk == 0 {
 		return posture.AlertExtras{}, false
 	}
 	return posture.AlertExtras{
-		Score:      s.LatestScore,
-		Risk:       riskLevelLabel(s.LatestRiskLevel),
-		LeftScore:  s.LatestLeft.Score,
-		RightScore: s.LatestRight.Score,
+		Score:      score,
+		Risk:       riskLevelLabel(risk),
+		LeftScore:  left,
+		RightScore: right,
 	}, true
 }
 
