@@ -37,8 +37,8 @@ export function CompactionModal({ onClose, at, turnLabel }: { onClose: () => voi
         setLoading(true);
         setError(null);
         const url = at
-          ? `${API}/openclaw/compaction-latest?at=${encodeURIComponent(at)}`
-          : `${API}/openclaw/compaction-latest`;
+          ? `${API}/agent/compaction-latest?at=${encodeURIComponent(at)}`
+          : `${API}/agent/compaction-latest`;
         const r = await fetch(url, { signal: ac.signal });
         const j: ApiEnvelope = await r.json();
         if (!r.ok || j?.status !== 1 || !j.data) {

@@ -117,7 +117,7 @@ export function FlowSection({
     const ok = window.confirm("Clear flow log file on server (today)? This cannot be undone.");
     if (!ok) return;
     try {
-      const r = await fetch(`${API}/openclaw/flow-logs`, { method: "DELETE" });
+      const r = await fetch(`${API}/agent/flow-logs`, { method: "DELETE" });
       const j = await r.json();
       if (!r.ok || j?.status !== 1) throw new Error(j?.message || "request failed");
 
@@ -164,7 +164,7 @@ export function FlowSection({
 
   const downloadServerJsonlTail = useCallback(async (): Promise<boolean> => {
     try {
-      const r = await fetch(`${API}/openclaw/flow-logs?last=${FLOW_EVENTS_MAX}`);
+      const r = await fetch(`${API}/agent/flow-logs?last=${FLOW_EVENTS_MAX}`);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const blob = await r.blob();
       const day = new Date().toISOString().slice(0, 10);
@@ -535,7 +535,7 @@ export function FlowSection({
               style={flowGhostBtn}
             >↓ Bundle</button>
             <a
-              href={`${API}/openclaw/flow-logs`}
+              href={`${API}/agent/flow-logs`}
               download
               title="Full day JSONL on server (all lines today — wider than the panel window)"
               style={{ ...flowGhostBtn, textDecoration: "none", display: "inline-flex", alignItems: "center" }}

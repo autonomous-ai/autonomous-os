@@ -242,7 +242,7 @@ export default function Monitor() {
   // keeps the monitor page from saturating Chrome's 6-per-origin HTTP/1.1
   // connection pool and freezing.
   usePolling(async (signal) => {
-    const ocR = await fetch(`${API}/openclaw/status`, { signal }).then((r) => r.json());
+    const ocR = await fetch(`${API}/agent/status`, { signal }).then((r) => r.json());
     if (ocR.status === 1) setOc(ocR.data);
     setLastUpdate(new Date().toLocaleTimeString());
   }, 10_000);
@@ -300,7 +300,7 @@ export default function Monitor() {
   // slot (one per stream against Chrome's 6-per-origin cap).
   const needsFlow = section === "flow" || section === "chat";
   useEventSource(
-    needsFlow ? `${API}/openclaw/flow-stream` : null,
+    needsFlow ? `${API}/agent/flow-stream` : null,
     {
       onMessage: (msg) => {
         try {

@@ -90,7 +90,7 @@ export function AnalyticsSection() {
   const fetchAnalytics = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch(`${API}/openclaw/analytics?from=${dateRange.from}&to=${dateRange.to}`);
+      const r = await fetch(`${API}/agent/analytics?from=${dateRange.from}&to=${dateRange.to}`);
       const j = await r.json();
       if (j.status === 1) setAnalytics(j.data);
     } catch { /* ignore */ }

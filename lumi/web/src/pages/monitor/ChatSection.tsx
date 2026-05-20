@@ -880,7 +880,7 @@ export function ChatSection({ events, isActive }: Props) {
 
     const open = () => {
       if (es !== null) return;
-      es = new EventSource(`${API}/openclaw/events`, { withCredentials: true });
+      es = new EventSource(`${API}/agent/events`, { withCredentials: true });
       es.onmessage = onMessage;
     };
     const close = () => {
