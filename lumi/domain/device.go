@@ -405,6 +405,11 @@ type UpdateConfigRequest struct {
 
 	TTSProvider string `json:"tts_provider"`
 	TTSVoice    string `json:"tts_voice"`
+
+	// AdminPassword rotates the bcrypt hash when non-empty. Existing sessions
+	// keep working (they ride config.SessionSecret, not the hash); to nuke
+	// every outstanding session the operator must rotate SessionSecret too.
+	AdminPassword string `json:"admin_password"`
 }
 
 // TTS provider constants.

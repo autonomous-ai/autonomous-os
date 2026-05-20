@@ -47,6 +47,13 @@ func (h *DeviceHandler) Setup(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
 		return
 	}
+	// Re-setup via `#force`: operator may omit secrets they already have on
+	// file (the web form hides them when `has_*` reports configured). Merge
+	// missing fields from the current config before validation so required
+	// tags + ValidateChannel still pass when only the changed fields ship.
+	if h.config.SetUpCompleted {
+		mergeMissingFromConfig(&req, h.config)
+	}
 	if err := validator.New().Struct(req); err != nil {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
 		return
@@ -198,4 +205,100 @@ func (h *DeviceHandler) ChangeChannel(c *gin.Context) {
 	}()
 
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(true))
+}
+
+// mergeMissingFromConfig fills empty SetupRequest fields with the values
+// already saved in config.json. Re-setup callers (web `#force`, scripts)
+// can omit any secret/identifier they don't intend to change — the
+// previously-saved value rides through into validation + the Setup pipeline
+// unchanged. AdminPassword is left alone on purpose (operator either sets a
+// new one or skips that field entirely).
+func mergeMissingFromConfig(req *domain.SetupRequest, cfg *config.Config) {
+	if req.SSID == "" {
+		req.SSID = cfg.NetworkSSID
+	}
+	if req.Password == "" {
+		req.Password = cfg.NetworkPassword
+	}
+	if req.LLMAPIKey == "" {
+		req.LLMAPIKey = cfg.LLMAPIKey
+	}
+	if req.LLMBaseURL == "" {
+		req.LLMBaseURL = cfg.LLMBaseURL
+	}
+	if req.LLMModel == "" {
+		req.LLMModel = cfg.LLMModel
+	}
+	if req.DeviceID == "" {
+		req.DeviceID = cfg.DeviceID
+	}
+	if req.Channel == "" {
+		req.Channel = cfg.Channel
+	}
+	if req.TelegramBotToken == "" {
+		req.TelegramBotToken = cfg.TelegramBotToken
+	}
+	if req.TelegramUserID == "" {
+		req.TelegramUserID = cfg.TelegramUserID
+	}
+	if req.SlackBotToken == "" {
+		req.SlackBotToken = cfg.SlackBotToken
+	}
+	if req.SlackAppToken == "" {
+		req.SlackAppToken = cfg.SlackAppToken
+	}
+	if req.SlackUserID == "" {
+		req.SlackUserID = cfg.SlackUserID
+	}
+	if req.DiscordBotToken == "" {
+		req.DiscordBotToken = cfg.DiscordBotToken
+	}
+	if req.DiscordGuildID == "" {
+		req.DiscordGuildID = cfg.DiscordGuildID
+	}
+	if req.DiscordUserID == "" {
+		req.DiscordUserID = cfg.DiscordUserID
+	}
+	if req.DeepgramAPIKey == "" {
+		req.DeepgramAPIKey = cfg.DeepgramAPIKey
+	}
+	if req.STTAPIKey == "" {
+		req.STTAPIKey = cfg.STTAPIKey
+	}
+	if req.TTSAPIKey == "" {
+		req.TTSAPIKey = cfg.TTSAPIKey
+	}
+	if req.STTBaseURL == "" {
+		req.STTBaseURL = cfg.STTBaseURL
+	}
+	if req.TTSBaseURL == "" {
+		req.TTSBaseURL = cfg.TTSBaseURL
+	}
+	if req.STTLanguage == "" {
+		req.STTLanguage = cfg.STTLanguage
+	}
+	if req.TTSProvider == "" {
+		req.TTSProvider = cfg.TTSProvider
+	}
+	if req.TTSVoice == "" {
+		req.TTSVoice = cfg.TTSVoice
+	}
+	if req.MQTTEndpoint == "" {
+		req.MQTTEndpoint = cfg.MQTTEndpoint
+	}
+	if req.MQTTUsername == "" {
+		req.MQTTUsername = cfg.MQTTUsername
+	}
+	if req.MQTTPassword == "" {
+		req.MQTTPassword = cfg.MQTTPassword
+	}
+	if req.MQTTPort == 0 {
+		req.MQTTPort = cfg.MQTTPort
+	}
+	if req.FAChannel == "" {
+		req.FAChannel = cfg.FAChannel
+	}
+	if req.FDChannel == "" {
+		req.FDChannel = cfg.FDChannel
+	}
 }

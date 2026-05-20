@@ -1,4 +1,4 @@
-import { C, PasswordField, SectionCard, SkeletonBlock } from "./shared";
+import { C, ConfiguredHint, PasswordField, SectionCard, SkeletonBlock } from "./shared";
 import type { NetworkItem } from "@/types";
 
 // 802.11 caps SSID at 32 bytes (not 32 chars). Each Chinese UTF-8 char is
@@ -9,6 +9,7 @@ const ssidByteLength = (s: string) => new TextEncoder().encode(s).length;
 
 export function WifiSection({
   active, ssid, setSsid, password, setPassword, loadingList, uniqueNetworks,
+  passwordConfigured = false,
 }: {
   active: boolean;
   ssid: string;
@@ -17,6 +18,10 @@ export function WifiSection({
   setPassword: (v: string) => void;
   loadingList: boolean;
   uniqueNetworks: NetworkItem[];
+  /** True when ConfigPublicResponse.has_network_password=true: hide the
+   *  password input + show "configured" indicator. Operator can rotate via
+   *  /edit or by clicking "update" → toggles back into the input. */
+  passwordConfigured?: boolean;
 }) {
   const bytes = ssidByteLength(ssid);
   const overLimit = bytes > SSID_MAX_BYTES;
@@ -72,7 +77,11 @@ export function WifiSection({
           </div>
         )}
       </div>
-      <PasswordField label="Password" id="password" value={password} onChange={setPassword} placeholder="Wi-Fi password" />
+      {passwordConfigured ? (
+        <ConfiguredHint label="Password" />
+      ) : (
+        <PasswordField label="Password" id="password" value={password} onChange={setPassword} placeholder="Wi-Fi password" />
+      )}
     </SectionCard>
   );
 }

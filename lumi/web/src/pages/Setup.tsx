@@ -129,6 +129,11 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
   // submit without one. Starts true to avoid flashing the fields during the
   // probe; useConfigPrefill flips it to false when the server reports missing.
   const [hasAdminPassword, setHasAdminPassword] = useState(true);
+  // Mirrors cfg.has_network_password — when true, WifiSection swaps the
+  // password input for a "configured" hint so the operator doesn't have to
+  // retype a saved Wi-Fi password during re-setup via `#force`. Submit ships
+  // an empty password; server merges from cfg.NetworkPassword pre-validation.
+  const [hasNetworkPassword, setHasNetworkPassword] = useState(false);
   // mDNS hostname for the lamp on home Wi-Fi: `lumi-<suffix>.local`. Matches
   // what stage_ap sets via `hostnamectl set-hostname lumi-${SUFFIX_LC}` — both
   // sides derive the suffix from the device's hardware ID (Pi device-tree
@@ -335,6 +340,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
     setFaChannel, setFdChannel,
     setSttLanguage,
     setHasAdminPassword,
+    setHasNetworkPassword,
   });
 
   useSetupStatusPolling({
@@ -724,6 +730,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                     active={activeSection === "wifi"}
                     ssid={ssid} setSsid={setSsid}
                     password={password} setPassword={setPassword}
+                    passwordConfigured={hasNetworkPassword && !password}
                     loadingList={loadingList}
                     uniqueNetworks={uniqueNetworks}
                   />

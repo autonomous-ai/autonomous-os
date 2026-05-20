@@ -82,6 +82,10 @@ export default function EditConfig() {
   // form state
   const [ssid, setSsid] = useState("");
   const [password, setPassword] = useState("");
+  // Rotate-admin-password field. Empty = no change; non-empty = bcrypt +
+  // replace server-side. Existing session cookie keeps working since it's
+  // signed by SessionSecret, not by the password hash.
+  const [adminPassword, setAdminPassword] = useState("");
   const [deviceId, setDeviceId] = useState("");
   const [mac, setMac] = useState("");
   const [llmApiKey, setLlmApiKey] = useState("");
@@ -280,6 +284,7 @@ export default function EditConfig() {
         fa_channel: faChannel, fd_channel: fdChannel,
       };
       if (password) body.password = password;
+      if (adminPassword) body.admin_password = adminPassword;
       if (llmApiKey) body.llm_api_key = llmApiKey;
       if (ttsApiKey) body.tts_api_key = ttsApiKey;
       if (mqttPassword) body.mqtt_password = mqttPassword;
@@ -314,7 +319,7 @@ export default function EditConfig() {
     setSaving(false);
   }, [
     channel, teleToken, teleUserId, slackBotToken, slackAppToken, slackUserId,
-    discordBotToken, discordGuildId, discordUserId, ssid, password, llmUrl,
+    discordBotToken, discordGuildId, discordUserId, ssid, password, adminPassword, llmUrl,
     llmApiKey, llmModel, llmDisableThinking, deepgramApiKey, sttApiKey, sttBaseUrl,
     sttProvider, sttLanguage, sttLoaded,
     ttsApiKey, ttsBaseUrl, ttsProvider, ttsVoice, deviceId,
@@ -470,6 +475,8 @@ export default function EditConfig() {
                   active={activeSection === "device"}
                   deviceId={deviceId} setDeviceId={setDeviceId}
                   mac={mac}
+                  rotateAdminPassword={adminPassword}
+                  setRotateAdminPassword={setAdminPassword}
                 />
 
                 <WifiSection

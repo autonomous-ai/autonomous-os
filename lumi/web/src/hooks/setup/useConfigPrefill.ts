@@ -47,6 +47,9 @@ export function useConfigPrefill(args: {
   // fields only when the device hasn't been set up with one (fresh device or
   // existing device migrating from pre-Login-UI builds).
   setHasAdminPassword: Dispatch<SetStateAction<boolean>>;
+  // Mirrors cfg.has_network_password so WifiSection can hide the password
+  // input when a WiFi password is already on file (re-setup via `#force`).
+  setHasNetworkPassword: Dispatch<SetStateAction<boolean>>;
 }) {
   const {
     urlParams, channelParam,
@@ -62,6 +65,7 @@ export function useConfigPrefill(args: {
     setFaChannel, setFdChannel,
     setSttLanguage,
     setHasAdminPassword,
+    setHasNetworkPassword,
   } = args;
 
   useEffect(() => {
@@ -118,12 +122,14 @@ export function useConfigPrefill(args: {
       // guess only matters for a never-configured device. URL param trumps both.
       if (cfg.stt_language && !urlParams.sttLanguage) setSttLanguage(cfg.stt_language);
       setHasAdminPassword(!!cfg.has_admin_password);
+      setHasNetworkPassword(!!cfg.has_network_password);
     }).catch(() => {
       // 401 = ConfigPublicResponse gated and we don't have a session yet.
       // Treat that as "device may be missing admin password" so the field
       // shows up — operator can set it and the Setup submit issues the
       // cookie. Safer than hiding the field on a real migration target.
       setHasAdminPassword(false);
+      setHasNetworkPassword(false);
     });
     // Intentional empty deps — mount-only, like the original effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -421,6 +421,17 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 	if data.FDChannel != "" {
 		s.config.FDChannel = data.FDChannel
 	}
+	// Admin password rotation. Empty = keep existing hash; non-empty = bcrypt
+	// + replace. Existing sessions stay valid (signed by SessionSecret), so
+	// rotating the password alone won't lock the active operator out — they
+	// just need to use the new password the next time the cookie expires.
+	if data.AdminPassword != "" {
+		hash, hashErr := bcrypt.GenerateFromPassword([]byte(data.AdminPassword), bcrypt.DefaultCost)
+		if hashErr != nil {
+			return fmt.Errorf("hash admin password: %w", hashErr)
+		}
+		s.config.AdminPasswordHash = string(hash)
+	}
 	if err := s.config.Save(); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}

@@ -229,6 +229,30 @@ export function LockedPasswordField({
   );
 }
 
+// ConfiguredHint renders a "✓ configured" row for a secret field that the
+// server already has on file. Used when ConfigPublicResponse reports
+// `has_*=true` — instead of showing an empty + locked password input (the
+// raw value isn't returned anymore), we hide the input entirely and tell the
+// operator to rotate via /edit. Keeps the Setup form short on re-setup.
+export function ConfiguredHint({ label, editPath = "/edit" }: { label: string; editPath?: string }) {
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <label style={{ display: "block", fontSize: 11, color: C.textDim, marginBottom: 5 }}>{label}</label>
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        gap: 10, padding: "8px 11px",
+        background: C.bg, border: `1px solid ${C.border}`,
+        borderRadius: 7, fontSize: 12.5, color: C.textDim,
+      }}>
+        <span><span style={{ color: C.green }}>✓</span>&nbsp;configured</span>
+        <a href={editPath} style={{ color: C.amber, textDecoration: "none", fontSize: 11.5 }}>
+          update →
+        </a>
+      </div>
+    </div>
+  );
+}
+
 export function SectionCard({ id, title, active, children }: { id: SectionId; title: string; active: boolean; children: React.ReactNode }) {
   if (!active) return null;
   return (

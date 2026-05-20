@@ -1,4 +1,4 @@
-import { C, LockedField, LockedPasswordField, SectionCard } from "./shared";
+import { C, ConfiguredHint, LockedField, LockedPasswordField, SectionCard } from "./shared";
 import type { ChannelType } from "@/types";
 import type { ChannelLoadedState } from "@/hooks/setup/types";
 
@@ -44,20 +44,36 @@ export function ChannelSection({
       </div>
       {channel === "telegram" && (
         <>
-          <LockedPasswordField required lockedInitially={channelLoaded.teleToken} label="Bot Token *" id="tele_token" value={teleToken} onChange={setTeleToken} placeholder="123456:ABC-DEF..." />
+          {channelLoaded.teleToken ? (
+            <ConfiguredHint label="Bot Token" />
+          ) : (
+            <LockedPasswordField required lockedInitially={false} label="Bot Token *" id="tele_token" value={teleToken} onChange={setTeleToken} placeholder="123456:ABC-DEF..." />
+          )}
           <LockedField required lockedInitially={channelLoaded.teleUserId} label="User ID *" id="tele_user_id" value={teleUserId} onChange={setTeleUserId} placeholder="123456789" />
         </>
       )}
       {channel === "slack" && (
         <>
-          <LockedPasswordField required lockedInitially={channelLoaded.slackBotToken} label="Bot Token *" id="slack_bot_token" value={slackBotToken} onChange={setSlackBotToken} placeholder="xoxb-..." />
-          <LockedPasswordField required lockedInitially={channelLoaded.slackAppToken} label="App Token *" id="slack_app_token" value={slackAppToken} onChange={setSlackAppToken} placeholder="xapp-..." />
+          {channelLoaded.slackBotToken ? (
+            <ConfiguredHint label="Bot Token" />
+          ) : (
+            <LockedPasswordField required lockedInitially={false} label="Bot Token *" id="slack_bot_token" value={slackBotToken} onChange={setSlackBotToken} placeholder="xoxb-..." />
+          )}
+          {channelLoaded.slackAppToken ? (
+            <ConfiguredHint label="App Token" />
+          ) : (
+            <LockedPasswordField required lockedInitially={false} label="App Token *" id="slack_app_token" value={slackAppToken} onChange={setSlackAppToken} placeholder="xapp-..." />
+          )}
           <LockedField required lockedInitially={channelLoaded.slackUserId} label="User ID *" id="slack_user_id" value={slackUserId} onChange={setSlackUserId} placeholder="U0123456789" />
         </>
       )}
       {channel === "discord" && (
         <>
-          <LockedPasswordField required lockedInitially={channelLoaded.discordBotToken} label="Bot Token *" id="discord_bot_token" value={discordBotToken} onChange={setDiscordBotToken} placeholder="Bot token" />
+          {channelLoaded.discordBotToken ? (
+            <ConfiguredHint label="Bot Token" />
+          ) : (
+            <LockedPasswordField required lockedInitially={false} label="Bot Token *" id="discord_bot_token" value={discordBotToken} onChange={setDiscordBotToken} placeholder="Bot token" />
+          )}
           <LockedField required lockedInitially={channelLoaded.discordGuildId} label="Guild ID *" id="discord_guild_id" value={discordGuildId} onChange={setDiscordGuildId} placeholder="123456789" />
           <LockedField required lockedInitially={channelLoaded.discordUserId} label="User ID *" id="discord_user_id" value={discordUserId} onChange={setDiscordUserId} placeholder="123456789" />
         </>
