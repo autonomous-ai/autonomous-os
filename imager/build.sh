@@ -961,6 +961,15 @@ server {
   # Monitor chat sends base64 attachments inside JSON; default 1 MB nginx
   # limit 413s anything past ~700 KB raw. Match scripts/setup.sh.
   client_max_body_size 20M;
+
+  # Security headers — mirror scripts/setup.sh. Defends the device admin UI
+  # from clickjacking + MIME-sniffing and shrinks future XSS blast radius.
+  add_header X-Frame-Options "DENY" always;
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header Referrer-Policy "no-referrer" always;
+  add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
+  add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss:; frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'" always;
+
   location / { try_files \$uri /index.html; }
   # Interactive shell WebSocket (xterm.js PTY) — must come before generic /api/.
   location = /api/system/shell {

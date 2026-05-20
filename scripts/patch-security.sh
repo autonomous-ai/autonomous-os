@@ -146,6 +146,45 @@ if patched_any:
         f.write(content)
 PYEOF
 
+# 3c. nginx security headers (CSP, X-Frame-Options, …): inject after
+# `client_max_body_size` if missing. Defends the monitor UI from clickjacking
+# + MIME-sniffing and shrinks future XSS blast radius.
+python3 - "$NGINX_CONF" <<'PYEOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    content = f.read()
+
+if "Content-Security-Policy" in content:
+    print("[patch] nginx security headers: already present, skipping")
+    sys.exit(0)
+
+# Anchor: the client_max_body_size line is present on every device since
+# the attachments PR; using it as the anchor keeps the headers grouped
+# with other server-level settings.
+import re
+anchor = re.search(r"client_max_body_size\s+\S+;\s*\n", content)
+if not anchor:
+    print("[patch] nginx security headers: client_max_body_size anchor not found, may need manual add")
+    sys.exit(0)
+
+block = (
+    "\n"
+    "  # Security headers (clickjacking, MIME sniff, XSS containment).\n"
+    "  add_header X-Frame-Options \"DENY\" always;\n"
+    "  add_header X-Content-Type-Options \"nosniff\" always;\n"
+    "  add_header Referrer-Policy \"no-referrer\" always;\n"
+    "  add_header Permissions-Policy \"camera=(), microphone=(), geolocation=(), payment=()\" always;\n"
+    "  add_header Content-Security-Policy \"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss:; frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'\" always;\n"
+)
+
+end = anchor.end()
+content = content[:end] + block + content[end:]
+with open(path, "w") as f:
+    f.write(content)
+print("[patch] nginx security headers: added")
+PYEOF
+
 # 4. Set LELAMP_MODE=production in .env (activates same-origin middleware)
 LELAMP_ENV="/opt/lelamp/.env"
 touch "$LELAMP_ENV"
