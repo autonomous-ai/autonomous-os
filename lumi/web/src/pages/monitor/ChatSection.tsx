@@ -325,6 +325,21 @@ const ACTIVE_KEY = "lumi_chat_active";
 const MAX_MESSAGES = 200;
 const MAX_CONVOS = 50;
 
+// Conversation history TTL — auto-purge anything older than this on next load.
+// Chat content can include voice transcripts, names, schedules, mood notes —
+// not the kind of data to keep indefinitely in localStorage where any
+// same-origin script or browser extension can read it. 7 days is enough to
+// resume a recent conversation without piling up months of history.
+const HISTORY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Storage envelope so the TTL check has a timestamp to look at. Legacy
+// devices have a bare Conversation[] under CONVOS_KEY; loadConvos() handles
+// both shapes and re-saves into the envelope on next save.
+interface ConvosEnvelope {
+  savedAt: number;
+  convos: Conversation[];
+}
+
 interface ChatMessage {
   id: string;
   role: "user" | "lumi";
@@ -370,8 +385,25 @@ function loadConvos(): Conversation[] {
       }
       return [];
     }
-    const convos = JSON.parse(raw) as Conversation[];
-    return convos.map((c) => ({ ...c, messages: cleanPending(c.messages) }));
+    const parsed = JSON.parse(raw) as Conversation[] | ConvosEnvelope;
+
+    // Legacy shape: bare Conversation[]. Treat as still-fresh (the user is
+    // upgrading right now); the next saveConvos() wraps it into the envelope.
+    if (Array.isArray(parsed)) {
+      return parsed.map((c) => ({ ...c, messages: cleanPending(c.messages) }));
+    }
+
+    // Envelope shape: enforce TTL. Stale → drop and start clean.
+    if (parsed && typeof parsed.savedAt === "number" && Array.isArray(parsed.convos)) {
+      if (Date.now() - parsed.savedAt > HISTORY_TTL_MS) {
+        localStorage.removeItem(CONVOS_KEY);
+        localStorage.removeItem(ACTIVE_KEY);
+        return [];
+      }
+      return parsed.convos.map((c) => ({ ...c, messages: cleanPending(c.messages) }));
+    }
+
+    return [];
   } catch {
     return [];
   }
@@ -406,7 +438,19 @@ function saveConvos(convos: Conversation[]) {
       messages: c.messages.slice(-MAX_MESSAGES).map(({ imageUrl: _, ...m }) => m),
       // fileName/fileSize are kept — they're small strings/numbers
     }));
-    localStorage.setItem(CONVOS_KEY, JSON.stringify(trimmed));
+    const envelope: ConvosEnvelope = { savedAt: Date.now(), convos: trimmed };
+    localStorage.setItem(CONVOS_KEY, JSON.stringify(envelope));
+  } catch {}
+}
+
+// clearLocalChatHistory wipes the conversation cache from localStorage —
+// exposed via the Clear button in the chat header so the user can drop
+// stored history immediately without waiting for the TTL to fire.
+function clearLocalChatHistory() {
+  try {
+    localStorage.removeItem(CONVOS_KEY);
+    localStorage.removeItem(ACTIVE_KEY);
+    localStorage.removeItem("lumi_chat_history"); // legacy key
   } catch {}
 }
 
@@ -1544,6 +1588,19 @@ export function ChatSection({ events, isActive }: Props) {
                 title="Export as text"
                 aria-label="Export conversation"
               ><Download size={12} /> Export</button>
+            )}
+            {convos.length > 0 && (
+              <button
+                onClick={() => {
+                  if (!window.confirm("Clear all local chat history? This wipes the browser cache only — server-side flow logs are untouched.")) return;
+                  clearLocalChatHistory();
+                  setConvos([]);
+                  setActiveId(null);
+                }}
+                style={headerPillBtnStyle}
+                title={`Clear local chat history (auto-purges after ${Math.round(HISTORY_TTL_MS / (24 * 60 * 60 * 1000))}d)`}
+                aria-label="Clear local chat history"
+              ><Trash2 size={12} /> Clear</button>
             )}
             {!sidebarOpen && (
               <button
