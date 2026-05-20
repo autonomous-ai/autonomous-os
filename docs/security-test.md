@@ -123,6 +123,34 @@ curl -s -o /dev/null -w "%{http_code}" \
 
 ---
 
+## F8b — DL Backend encryption (when enabled)
+
+When `CRYPTO__ENABLED=true` on the LB and `CRYPTO__REQUIRE_ENCRYPTION=true`:
+
+```bash
+# Public key endpoint must return PEM
+curl -s -H "X-API-Key: <your-DL_API_KEY>" \
+  https://<POD_ID>-7999.proxy.runpod.net/api/dl/public-key \
+  | head -1
+```
+
+**Expected:** `-----BEGIN PUBLIC KEY-----`
+**FAIL if:** returns 404 or empty (crypto not enabled on LB)
+
+```bash
+# Plaintext request must be rejected when require_encryption=true
+curl -s -o /dev/null -w "%{http_code}" \
+  -H "X-API-Key: <your-DL_API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"image_b64":"test","threshold":0.5}' \
+  https://<POD_ID>-7999.proxy.runpod.net/api/dl/emotion-recognize
+```
+
+**Expected:** `400` (encryption required)
+**FAIL if:** returns `200` (plaintext accepted when require_encryption=true)
+
+---
+
 ## Findings not patched in this PR — rationale
 
 These were reviewed and explicitly deferred. They are not oversights.

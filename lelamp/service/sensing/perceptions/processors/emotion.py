@@ -1,4 +1,5 @@
 import base64
+import json
 import logging
 import os
 import threading
@@ -13,6 +14,7 @@ import requests
 from typing_extensions import override
 
 import lelamp.config as config
+from lelamp.service.sensing.crypto import CryptoSession, resolve_public_key
 from lelamp.service.sensing.perceptions.models import (
     Face,
     FaceDetectionData,
@@ -72,6 +74,21 @@ class RemoteEmotionRecognizer:
         self._api_key: str = api_key
         self._threshold: float = threshold
         self._timeout: float = timeout
+        self._crypto: CryptoSession | None = None
+
+        if config.DL_ENCRYPTION_ENABLED:
+            self._setup_crypto()
+
+    def _setup_crypto(self) -> None:
+        """Initialize crypto session for HTTP encryption."""
+        public_key = resolve_public_key(config.DL_BACKEND_URL, config.DL_API_KEY)
+        if public_key is None:
+            if config.DL_ENCRYPTION_REQUIRED:
+                raise RuntimeError("Encryption required but no public key available")
+            logger.warning("[emotion] encryption enabled but no public key — plaintext fallback")
+            return
+        self._crypto = CryptoSession(public_key)
+        logger.info("[emotion] encryption session initialized")
 
     def _img2b64(self, frame: cv2.typing.MatLike) -> str:
         _, buf = cv2.imencode(".jpg", frame)
@@ -87,15 +104,25 @@ class RemoteEmotionRecognizer:
             return None
 
         try:
-            resp = requests.post(
-                self._url,
-                json={
-                    "image_b64": self._img2b64(face_crop),
-                    "threshold": self._threshold,
-                },
-                headers={"X-API-Key": self._api_key},
-                timeout=self._timeout,
-            )
+            plain_body = json.dumps({
+                "image_b64": self._img2b64(face_crop),
+                "threshold": self._threshold,
+            }).encode()
+
+            if self._crypto is not None:
+                resp = requests.post(
+                    self._url,
+                    data=self._crypto.wrap_http_request(plain_body),
+                    headers={"X-API-Key": self._api_key, "Content-Type": "application/json"},
+                    timeout=self._timeout,
+                )
+            else:
+                resp = requests.post(
+                    self._url,
+                    data=plain_body,
+                    headers={"X-API-Key": self._api_key, "Content-Type": "application/json"},
+                    timeout=self._timeout,
+                )
 
             if resp.status_code != 200:
                 logger.warning(
@@ -103,7 +130,11 @@ class RemoteEmotionRecognizer:
                 )
                 return None
 
-            detections = resp.json().get("detections", [])
+            if self._crypto is not None:
+                resp_body = self._crypto.unwrap_http_response(resp.content)
+                detections = json.loads(resp_body).get("detections", [])
+            else:
+                detections = resp.json().get("detections", [])
             if not detections:
                 return None
 

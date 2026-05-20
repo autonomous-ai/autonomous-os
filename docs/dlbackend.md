@@ -12,27 +12,23 @@ LeLamp Pi streams camera frames to DL backend for action and emotion analysis, f
 ## Architecture
 
 ```
-Pi (LeLamp) / Clients               DL Backend (RunPod or local, nginx :8888 → uvicorn :8001)
-┌──────────────────────┐            ┌──────────────────────────────────────────────┐
-│ Camera 640x480       │ WebSocket  │ /api/dl/action-analysis/ws                   │
-│ frame_b64 every tick │──────────→ │ Action model (X3D/UniformerV2/VideoMAE) ONNX │
-│                      │ ←───────── │ detected_classes                             │
-├──────────────────────┤            ├──────────────────────────────────────────────┤
-│ Face crop (base64)   │   HTTP     │ /api/dl/emotion-recognize                    │
-│ from InsightFace     │──────────→ │ Emotion model (POSTER V2 / EmoNet) ONNX     │
-│                      │ ←───────── │ emotion + confidence (+ valence/arousal)     │
-├──────────────────────┤            ├──────────────────────────────────────────────┤
-│ Face crop (base64)   │ WebSocket  │ /api/dl/emotion-analysis/ws                  │
-│ streaming            │──────────→ │ Same emotion model, per-session state        │
-│                      │ ←───────── │ detections                                   │
-├──────────────────────┤            ├──────────────────────────────────────────────┤
-│ End-of-utterance WAV │   HTTP     │ /api/dl/ser/recognize                        │
-│ (same as speaker)    │──────────→ │ SER model (emotion2vec_plus_large) ONNX      │
-│                      │ ←───────── │ label + confidence (9-class)                 │
-├──────────────────────┤            ├──────────────────────────────────────────────┤
-│ App / tools          │   HTTP     │ /api/dl/audio-recognizer/*                   │
-│ wav URL/chunks/PCM16 │──────────→ │ register/recognize/list/remove               │
-└──────────────────────┘            └──────────────────────────────────────────────┘
+Pi (LeLamp) / Clients             Load Balancer (:7999)      DL Backend (nginx :8888 → uvicorn :8001)
+┌──────────────────────┐         ┌─────────────────┐        ┌──────────────────────────────────────┐
+│ Camera 640x480       │ WS/HTTP │ RSA+AES-GCM     │  HTTP  │ /api/dl/action-analysis/ws            │
+│ frame_b64 every tick │────────→│ decrypt/encrypt  │───────→│ Action model (X3D/UniformerV2) ONNX  │
+│                      │←────────│ round-robin proxy│←───────│ detected_classes                      │
+├──────────────────────┤         └─────────────────┘        ├──────────────────────────────────────┤
+│ Face crop (base64)   │  (optional encryption at LB)       │ /api/dl/emotion-recognize             │
+│ from InsightFace     │────────────────────────────────────→│ Emotion model (POSTER V2/EmoNet) ONNX│
+│                      │←────────────────────────────────────│ emotion + confidence                  │
+├──────────────────────┤                                    ├──────────────────────────────────────┤
+│ End-of-utterance WAV │   HTTP                             │ /api/dl/ser/recognize                 │
+│ (same as speaker)    │────────────────────────────────────→│ SER model (emotion2vec) ONNX         │
+│                      │←────────────────────────────────────│ label + confidence (9-class)          │
+├──────────────────────┤                                    ├──────────────────────────────────────┤
+│ App / tools          │   HTTP                             │ /api/dl/audio-recognizer/*            │
+│ wav URL/chunks/PCM16 │────────────────────────────────────→│ register/recognize/list/remove        │
+└──────────────────────┘                                    └──────────────────────────────────────┘
 ```
 
 ## Models
@@ -287,6 +283,8 @@ LELAMP_MOTION_ENABLED=true
 | `SPEECH_EMOTION_DEDUP_WINDOW_S` | 300.0 | `(user, bucket)` TTL (5 min) |
 | `SPEECH_EMOTION_MIN_AUDIO_S` | 0.8 | Min utterance length |
 | `DL_SER_ENDPOINT` | `/lelamp/api/dl/ser/recognize` | Path suffix on `DL_BACKEND_URL` |
+| `DL_ENCRYPTION_ENABLED` | `false` | Enable client-side encryption for DL backend |
+| `DL_ENCRYPTION_REQUIRED` | `false` | Fail if encryption setup fails (no plaintext fallback) |
 
 ## Key Files
 
@@ -319,6 +317,11 @@ LELAMP_MOTION_ENABLED=true
 | `src/core/audio_recognition/audio_recognizer.py` | Speaker embedding (WeSpeaker ResNet34 / ECAPA / CAM++) |
 | `src/core/audio_recognition/speaker_db.py` | JSON-backed speaker storage |
 | `src/core/models.py` | Pydantic schemas: ActionResponse, EmotionDetection, EmotionResponse, PersonDetection |
+| `src/core/crypto/rsa_aes.py` | RSA+AES-256-GCM hybrid encryption (`RSAAESCrypto`, `AESGCMSession`) |
+| `src/core/models/crypto.py` | Raw payload dataclasses for crypto (`AESGCMCipherPayload`, `RSAAESCipherPayload`, etc.) |
+| `src/lbserver/app.py` | Load balancer — round-robin HTTP/WS proxy with encryption |
+| `src/lbserver/models.py` | Pydantic wire-format models (`CipherHTTPRequest`, `WSCipherMessage`, etc.) |
+| `src/lbserver/utils/crypto.py` | HTTP decrypt/encrypt helpers for the LB proxy |
 | `nginx.conf` | Reverse proxy :8888 → :8001, `/lelamp/` prefix strip, WS upgrade |
 | `Dockerfile` | CUDA 12.4 PyTorch + nginx + uvicorn |
 | `start.sh` | RunPod startup: nginx + uvicorn |
@@ -328,7 +331,8 @@ LELAMP_MOTION_ENABLED=true
 | File | Purpose |
 |---|---|
 | `service/sensing/perceptions/processors/motion.py` | `RemoteMotionChecker` — WS client, frame encoding, action buffering |
-| `service/sensing/perceptions/processors/emotion.py` | `RemoteEmotionChecker` — HTTP client, face crop → emotion classify |
+| `service/sensing/perceptions/processors/emotion.py` | `RemoteEmotionRecognizer` — HTTP client, face crop → emotion classify |
+| `service/sensing/crypto.py` | Client-side `CryptoSession`, wire-format models, public key resolution |
 | `service/voice/speech_emotion/service.py` | `SpeechEmotionService` — queue + worker + flush + dedup + Lumi POST |
 | `service/voice/speech_emotion/emotion2vec.py` | `Emotion2VecRecognizer` — HTTP client to `/api/dl/ser/recognize` |
 | `service/voice/speech_emotion/base.py` | `BaseSpeechEmotionRecognizer` ABC + `SpeechEmotionResult` |
@@ -362,6 +366,113 @@ https://<POD>-8888.proxy.runpod.net/lelamp/api/dl/health
 - HTTP routes under `/api/dl/*` use header `X-API-Key` when `DL_API_KEY` is set.
 - WebSocket endpoints validate `X-API-Key` from WS headers on connect.
 - If `DL_API_KEY` is empty, auth is effectively disabled (dev mode).
+
+## Encryption (RSA + AES-256-GCM)
+
+Optional hybrid encryption handled at the **load balancer** layer. DL server (dlserver) stays plaintext — the LB decrypts inbound requests and encrypts outbound responses transparently.
+
+### Architecture
+
+```
+LeLamp (client)                          Load Balancer (:7999)                    DL Server (:8001)
+┌──────────────┐   encrypted traffic    ┌──────────────────────┐   plaintext     ┌──────────────┐
+│ CryptoSession │ ────────────────────→ │ RSAAESCrypto         │ ─────────────→  │ FastAPI       │
+│ (AES-256-GCM) │ ←──────────────────── │ decrypt → forward    │ ←─────────────  │ (no crypto)   │
+└──────────────┘                        │ encrypt ← response   │                 └──────────────┘
+                                        └──────────────────────┘
+```
+
+### Crypto Primitives
+
+| Component | Algorithm | Details |
+|---|---|---|
+| Key exchange | RSA-OAEP (SHA-256) | Client encrypts a random 32-byte AES session key with the LB's RSA public key |
+| Data encryption | AES-256-GCM | 12-byte nonce, authenticated (tag embedded in cipher_data) |
+| Key pair | RSA 2048-bit (configurable) | Generated at startup; persisted to disk if `CRYPTO__KEY_DIR` is set |
+
+### Public Key Endpoint
+
+```
+GET /api/dl/public-key
+→ PEM-encoded RSA public key (text/plain)
+→ 404 if crypto is disabled
+```
+
+LeLamp fetches this at startup to encrypt session keys. Alternatively, the PEM can be provided via `DL_PUBLIC_KEY_PEM` env var (skips the fetch).
+
+### HTTP Encryption
+
+When crypto is enabled and the request body matches the `CipherHTTPRequest` schema, the LB decrypts before forwarding and encrypts the response.
+
+**Client → LB (encrypted request):**
+```json
+{
+  "encrypted_key": "<base64 RSA-OAEP(AES session key)>",
+  "nonce": "<base64 12-byte GCM nonce>",
+  "cipher_data": "<base64 AES-GCM(plaintext + tag)>"
+}
+```
+
+**LB → Client (encrypted response):**
+```json
+{
+  "nonce": "<base64 12-byte GCM nonce>",
+  "cipher_data": "<base64 AES-GCM(plaintext + tag)>"
+}
+```
+
+Plain (non-encrypted) requests pass through unchanged when `CRYPTO__REQUIRE_ENCRYPTION=false`.
+
+### WebSocket Encryption
+
+After connecting, the client performs a key exchange before sending frames:
+
+**1. Key exchange (client → LB):**
+```json
+{"type": "key_exchange", "encrypted_key": "<base64 RSA-OAEP(AES session key)>"}
+```
+
+**2. Key exchange response (LB → client):**
+```json
+{"status": "key_exchange_ok"}
+```
+
+**3. All subsequent messages use `WSCipherMessage`:**
+```json
+{"type": "encrypted", "nonce": "<base64>", "cipher_data": "<base64>"}
+```
+
+If key exchange is skipped and `CRYPTO__REQUIRE_ENCRYPTION=false`, messages pass through as plaintext. If `CRYPTO__REQUIRE_ENCRYPTION=true`, the LB closes the connection with code 1008.
+
+### Configuration
+
+#### Load Balancer (dlbackend/.env)
+
+| Variable | Default | Description |
+|---|---|---|
+| `CRYPTO__ENABLED` | `true` | Enable encryption at the LB |
+| `CRYPTO__KEY_DIR` | `None` | Directory to persist RSA keys (omit for in-memory) |
+| `CRYPTO__KEY_SIZE` | `2048` | RSA key size in bits |
+| `CRYPTO__REQUIRE_ENCRYPTION` | `false` | Reject plaintext requests/connections |
+
+#### LeLamp Client (lelamp/.env)
+
+| Variable | Default | Description |
+|---|---|---|
+| `LELAMP_DL_ENCRYPTION` | `false` | Enable client-side encryption |
+| `LELAMP_DL_ENCRYPTION_REQUIRED` | `false` | Fail if encryption setup fails (no plaintext fallback) |
+| `DL_PUBLIC_KEY_PEM` | _(empty)_ | RSA public key PEM string (skips fetch from LB if set) |
+
+### Key Files
+
+| File | Purpose |
+|---|---|
+| `dlbackend/src/core/crypto/rsa_aes.py` | `RSAAESCrypto` (server-side RSA+AES), `AESGCMSession` |
+| `dlbackend/src/core/models/crypto.py` | Raw payload dataclasses (`AESGCMCipherPayload`, `AESGCMPlainPayload`, `RSAAESCipherPayload`, `RSAAESPlainPayload`) |
+| `dlbackend/src/lbserver/models.py` | Pydantic wire-format models (`CipherHTTPRequest`, `CipherHTTPResponse`, `WSKeyExchangeRequest`, `WSCipherMessage`) |
+| `dlbackend/src/lbserver/utils/crypto.py` | HTTP decrypt/encrypt helpers (`try_decrypt_http_body`, `encrypt_http_response`) |
+| `dlbackend/src/lbserver/app.py` | LB integration (HTTP proxy + WS proxy with crypto) |
+| `lelamp/service/sensing/crypto.py` | Client-side `CryptoSession`, wire-format models, public key resolution |
 
 ## Deployment
 

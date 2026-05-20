@@ -25,6 +25,7 @@ from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import ClientConnection, connect
 
 import lelamp.config as config
+from lelamp.service.sensing.crypto import CryptoSession, WSKeyExchangeRequest, resolve_public_key
 from lelamp.service.sensing.perceptions.typing import SendEventCallable
 from lelamp.service.sensing.perceptions.utils import PerceptionStateObservers
 from lelamp.service.sensing.presence_service import PresenceState, PresenseService
@@ -154,6 +155,7 @@ class RemotePoseEstimator:
         self._base_url: str = base_url
         self._api_key: str = api_key
         self._ws_session: ClientConnection | None = None
+        self._crypto: CryptoSession | None = None
         self._last_heartbeat_ts: float = 0.0
         self._heartbeat_interval: float = config.DL_HEARTBEAT_INTERVAL_S
 
@@ -169,9 +171,39 @@ class RemotePoseEstimator:
             self._ws_session = connect(
                 ws_url, additional_headers={"X-API-Key": self._api_key}
             )
+            self._crypto = None
+            if config.DL_ENCRYPTION_ENABLED:
+                self._setup_crypto()
         except Exception:
             logger.exception("[%s] failed to connect", self.__class__.__name__)
             self._ws_session = None
+
+    def _setup_crypto(self) -> None:
+        """Perform WS key exchange after connection.
+
+        Raises RuntimeError if DL_ENCRYPTION_REQUIRED and setup fails.
+        """
+        if self._ws_session is None:
+            raise RuntimeError("Cannot setup crypto without a WS connection")
+
+        public_key = resolve_public_key(config.DL_BACKEND_URL, config.DL_API_KEY)
+        if public_key is None:
+            if config.DL_ENCRYPTION_REQUIRED:
+                raise RuntimeError("Encryption required but no public key available")
+            logger.warning("[%s] encryption enabled but no public key — plaintext fallback", self.__class__.__name__)
+            return
+
+        session = CryptoSession(public_key)
+        key_req = WSKeyExchangeRequest(encrypted_key=session.encrypted_key_b64)
+        self._ws_session.send(key_req.model_dump_json())
+        resp = json.loads(self._ws_session.recv())
+        if resp.get("status") == "key_exchange_ok":
+            self._crypto = session
+            logger.info("[%s] encryption session established", self.__class__.__name__)
+        else:
+            if config.DL_ENCRYPTION_REQUIRED:
+                raise RuntimeError(f"Key exchange failed: {resp}")
+            logger.warning("[%s] key exchange failed: %s — plaintext fallback", self.__class__.__name__, resp)
 
     def _img2b64(self, frame: cv2.typing.MatLike) -> str:
         _, buf = cv2.imencode(".jpg", frame)
@@ -209,16 +241,23 @@ class RemotePoseEstimator:
             return None
 
         try:
-            self._ws_session.send(
-                json.dumps(
-                    {
-                        "type": "frame",
-                        "task": "pose",
-                        "frame_b64": self._img2b64(frame),
-                    }
-                )
+            msg = json.dumps(
+                {
+                    "type": "frame",
+                    "task": "pose",
+                    "frame_b64": self._img2b64(frame),
+                }
             )
-            resp: dict = json.loads(self._ws_session.recv())
+            if self._crypto is not None:
+                msg = self._crypto.wrap_ws_message(msg)
+
+            self._ws_session.send(msg)
+            raw: str = self._ws_session.recv()
+
+            if self._crypto is not None:
+                raw = self._crypto.unwrap_ws_message(raw)
+
+            resp: dict = json.loads(raw)
 
             if "error" in resp:
                 logger.warning("[pose] backend error: %s", resp["error"])

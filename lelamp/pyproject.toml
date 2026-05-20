@@ -33,6 +33,7 @@ dependencies = [
     "insightface>=0.7.3; sys_platform != 'darwin' or platform_machine != 'x86_64'",
     "onnxruntime>=1.23.2",
     "insightface>=0.7.3",
+    "cryptography>=44.0.0",
 ]
 
 [build-system]

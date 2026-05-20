@@ -24,6 +24,8 @@ This repo is developed in both **Cursor** and **Claude Code**. The following rul
    | Habit tracking, pattern building, habit-aware nudge phrasing | `docs/habit-tracking.md` | `docs/vi/habit-tracking_vi.md` |
    | Vision tracking, object follow, servo track | `docs/vision-tracking.md` | `docs/vi/vision-tracking_vi.md` |
    | Physical controls (GPIO button, TTP223 touchpad, gestures, pet response) | `docs/physical-controls.md` | `docs/vi/physical-controls_vi.md` |
+   | DL backend, load balancer, encryption, models | `docs/dlbackend.md` | `docs/vi/dlbackend_vi.md` |
+   | Security test checklist | `docs/security-test.md` | _(no vi version)_ |
 
 2. **Comments in English** — Project standard.
 3. **Code is the single source of truth** — Docs reflect code, not the other way around.

@@ -16,6 +16,7 @@ from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import ClientConnection, connect
 
 import lelamp.config as config
+from lelamp.service.sensing.crypto import CryptoSession, WSKeyExchangeRequest, resolve_public_key
 from lelamp.service.sensing.perceptions.typing import SendEventCallable
 from lelamp.service.sensing.perceptions.utils import PerceptionStateObservers
 from lelamp.service.sensing.presence_service import PresenceState, PresenseService
@@ -117,6 +118,7 @@ class RemoteMotionChecker:
         self._person_detection_enabled: bool = person_detection_enabled
         self._person_min_area_ratio: float = person_min_area_ratio
         self._ws_session: ClientConnection | None = None
+        self._crypto: CryptoSession | None = None
 
         self._prepare_session()
 
@@ -135,23 +137,57 @@ class RemoteMotionChecker:
             self._ws_session = connect(
                 ws_url, additional_headers={"X-API-Key": self._api_key}
             )
-            self._ws_session.send(
-                json.dumps(
-                    {
-                        "type": "config",
-                        "task": "action",
-                        "whitelist": self._whitelist,
-                        "threshold": self._threshold,
-                        "person_detection_enabled": self._person_detection_enabled,
-                        "person_min_area_ratio": self._person_min_area_ratio,
-                    }
-                )
+            self._crypto = None
+            if config.DL_ENCRYPTION_ENABLED:
+                self._setup_crypto()
+
+            config_msg = json.dumps(
+                {
+                    "type": "config",
+                    "task": "action",
+                    "whitelist": self._whitelist,
+                    "threshold": self._threshold,
+                    "person_detection_enabled": self._person_detection_enabled,
+                    "person_min_area_ratio": self._person_min_area_ratio,
+                }
             )
-            # Consume the config_updated response so it doesn't pollute frame responses
-            _ = self._ws_session.recv()
+            if self._crypto is not None:
+                config_msg = self._crypto.wrap_ws_message(config_msg)
+            self._ws_session.send(config_msg)
+            # Consume the config_updated response
+            raw = self._ws_session.recv()
+            if self._crypto is not None:
+                raw = self._crypto.unwrap_ws_message(raw)
         except Exception:
             logger.exception("Failed to connect to remote motion recognition backend")
             self._ws_session = None
+
+    def _setup_crypto(self) -> None:
+        """Perform WS key exchange after connection.
+
+        Raises RuntimeError if DL_ENCRYPTION_REQUIRED and setup fails.
+        """
+        if self._ws_session is None:
+            raise RuntimeError("Cannot setup crypto without a WS connection")
+
+        public_key = resolve_public_key(config.DL_BACKEND_URL, config.DL_API_KEY)
+        if public_key is None:
+            if config.DL_ENCRYPTION_REQUIRED:
+                raise RuntimeError("Encryption required but no public key available")
+            logger.warning("[%s] encryption enabled but no public key — plaintext fallback", self.__class__.__name__)
+            return
+
+        session = CryptoSession(public_key)
+        key_req = WSKeyExchangeRequest(encrypted_key=session.encrypted_key_b64)
+        self._ws_session.send(key_req.model_dump_json())
+        resp = json.loads(self._ws_session.recv())
+        if resp.get("status") == "key_exchange_ok":
+            self._crypto = session
+            logger.info("[%s] encryption session established", self.__class__.__name__)
+        else:
+            if config.DL_ENCRYPTION_REQUIRED:
+                raise RuntimeError(f"Key exchange failed: {resp}")
+            logger.warning("[%s] key exchange failed: %s — plaintext fallback", self.__class__.__name__, resp)
 
     def _img2b64(self, frame: cv2.typing.MatLike):
         _, buf = cv2.imencode(".jpg", frame)
@@ -198,16 +234,23 @@ class RemoteMotionChecker:
 
         if self._ws_session is not None:
             try:
-                self._ws_session.send(
-                    json.dumps(
-                        {
-                            "type": "frame",
-                            "task": "action",
-                            "frame_b64": self._img2b64(frame),
-                        }
-                    )
+                msg = json.dumps(
+                    {
+                        "type": "frame",
+                        "task": "action",
+                        "frame_b64": self._img2b64(frame),
+                    }
                 )
-                resp = json.loads(self._ws_session.recv())
+                if self._crypto is not None:
+                    msg = self._crypto.wrap_ws_message(msg)
+
+                self._ws_session.send(msg)
+                raw = self._ws_session.recv()
+
+                if self._crypto is not None:
+                    raw = self._crypto.unwrap_ws_message(raw)
+
+                resp = json.loads(raw)
                 detected_classes = sorted(
                     resp.get("detected_classes", []),
                     key=lambda x: x["conf"],
