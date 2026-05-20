@@ -8,7 +8,7 @@ from lbserver.utils.state import get_crypto
 router = APIRouter()
 
 
-@router.get("/api/dl/public-key", response_class=PlainTextResponse)
+@router.get("/public-key", response_class=PlainTextResponse)
 async def get_public_key() -> str:
     """Return the server's RSA public key in PEM format."""
     crypto = get_crypto()

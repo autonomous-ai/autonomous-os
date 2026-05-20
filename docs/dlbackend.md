@@ -393,7 +393,7 @@ LeLamp (client)                          Load Balancer (:7999)                  
 ### Public Key Endpoint
 
 ```
-GET /api/dl/public-key
+GET /api/crypto/public-key
 → PEM-encoded RSA public key (text/plain)
 → 404 if crypto is disabled
 ```

@@ -46,7 +46,7 @@ AUTH_HEADERS = {"X-API-Key": DL_API_KEY}
 
 class TestHealthEndpoint:
     def test_health_reports_pose_model(self):
-        resp = httpx.get(_http_url("/api/dl/health"), headers=AUTH_HEADERS)
+        resp = httpx.get(_http_url("/lelamp/api/dl/health"), headers=AUTH_HEADERS)
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "ok"
@@ -56,7 +56,7 @@ class TestHealthEndpoint:
 class TestPoseEstimationHTTP:
     def test_single_image_returns_pose_2d(self):
         resp = httpx.post(
-            _http_url("/api/dl/pose-estimate"),
+            _http_url("/lelamp/api/dl/pose-estimate"),
             json={"image_b64": _make_frame_b64()},
             headers=AUTH_HEADERS,
         )
@@ -71,7 +71,7 @@ class TestPoseEstimationHTTP:
 
     def test_pose_2d_joints_have_xy(self):
         resp = httpx.post(
-            _http_url("/api/dl/pose-estimate"),
+            _http_url("/lelamp/api/dl/pose-estimate"),
             json={"image_b64": _make_frame_b64()},
             headers=AUTH_HEADERS,
         )
@@ -87,7 +87,7 @@ class TestPoseEstimationWebSocket:
     async def ws(self):
         """Connect to the remote pose WebSocket with auth headers."""
         async with websockets.connect(
-            _ws_url("/api/dl/pose-estimation/ws"),
+            _ws_url("/lelamp/api/dl/pose-estimation/ws"),
             additional_headers=AUTH_HEADERS,
         ) as conn:
             yield conn
@@ -163,7 +163,7 @@ class TestPoseEstimationWebSocket:
     async def test_ws_without_api_key_rejected(self):
         with pytest.raises(Exception):
             async with websockets.connect(
-                _ws_url("/api/dl/pose-estimation/ws"),
+                _ws_url("/lelamp/api/dl/pose-estimation/ws"),
             ) as conn:
                 await conn.send(json.dumps({"type": "heartbeat", "task": "pose"}))
                 _ = await conn.recv()
@@ -177,7 +177,7 @@ class TestErgoAssessmentHTTP:
 
     def test_http_returns_ergo_when_configured(self):
         resp = httpx.post(
-            _http_url("/api/dl/pose-estimate"),
+            _http_url("/lelamp/api/dl/pose-estimate"),
             json={"image_b64": _make_frame_b64()},
             headers=AUTH_HEADERS,
         )
@@ -188,7 +188,7 @@ class TestErgoAssessmentHTTP:
 
     def test_ergo_has_both_sides_when_present(self):
         resp = httpx.post(
-            _http_url("/api/dl/pose-estimate"),
+            _http_url("/lelamp/api/dl/pose-estimate"),
             json={"image_b64": _make_frame_b64()},
             headers=AUTH_HEADERS,
         )
@@ -202,7 +202,7 @@ class TestErgoAssessmentHTTP:
 
     def test_ergo_sides_have_body_scores(self):
         resp = httpx.post(
-            _http_url("/api/dl/pose-estimate"),
+            _http_url("/lelamp/api/dl/pose-estimate"),
             json={"image_b64": _make_frame_b64()},
             headers=AUTH_HEADERS,
         )
@@ -227,7 +227,7 @@ class TestErgoAssessmentHTTP:
 
     def test_ergo_score_in_valid_range(self):
         resp = httpx.post(
-            _http_url("/api/dl/pose-estimate"),
+            _http_url("/lelamp/api/dl/pose-estimate"),
             json={"image_b64": _make_frame_b64()},
             headers=AUTH_HEADERS,
         )
@@ -239,7 +239,7 @@ class TestErgoAssessmentHTTP:
 
     def test_ergo_overall_is_max_of_sides(self):
         resp = httpx.post(
-            _http_url("/api/dl/pose-estimate"),
+            _http_url("/lelamp/api/dl/pose-estimate"),
             json={"image_b64": _make_frame_b64()},
             headers=AUTH_HEADERS,
         )
@@ -257,7 +257,7 @@ class TestErgoAssessmentWebSocket:
     @pytest_asyncio.fixture()
     async def ws(self):
         async with websockets.connect(
-            _ws_url("/api/dl/pose-estimation/ws"),
+            _ws_url("/lelamp/api/dl/pose-estimation/ws"),
             additional_headers=AUTH_HEADERS,
         ) as conn:
             yield conn
