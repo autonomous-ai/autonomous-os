@@ -474,7 +474,12 @@ export default function Monitor() {
           {section === "api-docs" && (
             <iframe
               title="API Docs"
-              src="/hw/docs"
+              // Routed through `/api/hardware/*` (admin-auth gated reverse
+              // proxy to LeLamp) instead of `/hw/docs` directly: nginx /hw/
+              // is `allow 127.0.0.1; deny all;` per audit local F2, so the
+              // direct path is broken from any remote browser. The proxy
+              // accepts the session cookie via fetch credentials.
+              src="/api/hardware/docs"
               style={iframeStyle}
             />
           )}

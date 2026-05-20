@@ -156,7 +156,25 @@ with open(path) as f:
     content = f.read()
 
 if "Content-Security-Policy" in content:
-    print("[patch] nginx security headers: already present, skipping")
+    # Headers already present from an earlier patch run. Upgrade DENY →
+    # SAMEORIGIN and frame-ancestors 'none' → 'self' so the Monitor page
+    # can embed in-house iframes (Swagger docs, gateway config). External
+    # sites still can't frame the device.
+    new_content = content
+    new_content = new_content.replace(
+        'add_header X-Frame-Options "DENY"',
+        'add_header X-Frame-Options "SAMEORIGIN"',
+    )
+    new_content = new_content.replace(
+        "frame-ancestors 'none'",
+        "frame-ancestors 'self'",
+    )
+    if new_content != content:
+        with open(path, "w") as f:
+            f.write(new_content)
+        print("[patch] nginx security headers: upgraded DENY → SAMEORIGIN")
+    else:
+        print("[patch] nginx security headers: already up-to-date, skipping")
     sys.exit(0)
 
 # Anchor: the client_max_body_size line is present on every device since
@@ -171,11 +189,13 @@ if not anchor:
 block = (
     "\n"
     "  # Security headers (clickjacking, MIME sniff, XSS containment).\n"
-    "  add_header X-Frame-Options \"DENY\" always;\n"
+    "  # SAMEORIGIN/'self' lets Monitor embed in-house iframes (Swagger,\n"
+    "  # gateway config); external sites still can't frame the device.\n"
+    "  add_header X-Frame-Options \"SAMEORIGIN\" always;\n"
     "  add_header X-Content-Type-Options \"nosniff\" always;\n"
     "  add_header Referrer-Policy \"no-referrer\" always;\n"
     "  add_header Permissions-Policy \"camera=(), microphone=(), geolocation=(), payment=()\" always;\n"
-    "  add_header Content-Security-Policy \"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss:; frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'\" always;\n"
+    "  add_header Content-Security-Policy \"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss:; frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'\" always;\n"
 )
 
 end = anchor.end()

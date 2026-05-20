@@ -690,11 +690,15 @@ server {
   # 'unsafe-inline' on style-src is intentional: the React app uses
   # style={{ ... }} props heavily. script-src stays strict 'self' to keep
   # XSS contained; any future inline <script> needs a nonce or rewrite.
-  add_header X-Frame-Options "DENY" always;
+  # SAMEORIGIN (not DENY) so the Monitor page can embed in-house iframes
+  # (Swagger API docs at /api/hardware/docs, gateway config at /gw-config).
+  # External sites still can't frame the device — CSP frame-ancestors 'self'
+  # mirrors this, and modern browsers prefer the CSP value over XFO.
+  add_header X-Frame-Options "SAMEORIGIN" always;
   add_header X-Content-Type-Options "nosniff" always;
   add_header Referrer-Policy "no-referrer" always;
   add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
-  add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss:; frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'" always;
+  add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss:; frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'" always;
 
   location / {
     try_files \$uri /index.html;
