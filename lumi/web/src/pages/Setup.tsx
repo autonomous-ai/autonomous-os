@@ -70,18 +70,22 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
   // (display:none) — same pattern as STT/MQTT below.
   const debug = searchParams.get("debug") === "true";
 
-  // Fixed order. STT (Deepgram) / MQTT are intentionally hidden — their
-  // state is still wired up and submitted with empty or URL-prefilled
-  // defaults, so re-adding a SectionCard + a SECTIONS entry brings them
-  // back without other plumbing.
+  // Default operator path: Lumi parent pushes config via URL params, so
+  // AI Brain / Channels never need to be touched manually — sidebar entries
+  // for them stay hidden unless ?debug=true. Manual fresh setup without
+  // pushed params also requires ?debug=true to reach those sections.
+  // STT (Deepgram) / MQTT are intentionally hidden — their state is still
+  // wired up and submitted with empty or URL-prefilled defaults, so
+  // re-adding a SectionCard + a SECTIONS entry brings them back without
+  // other plumbing.
   const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode }[] = [
     { id: "device", label: "Device", icon: <Lamp size={15} /> },
     { id: "wifi",   label: "Wi-Fi",  icon: <Wifi size={15} /> },
-    { id: "llm",    label: "AI Brain", icon: <Brain size={15} /> },
-    { id: "channel", label: "Channels", icon: <MessageSquare size={15} /> },
     ...(debug ? [
-      { id: "language" as SectionId, label: "Language", icon: <Globe size={15} /> },
-      { id: "tts" as SectionId,      label: "Lumi's Voice", icon: <Volume2 size={15} /> },
+      { id: "llm" as SectionId,     label: "AI Brain",   icon: <Brain size={15} /> },
+      { id: "channel" as SectionId, label: "Channels",   icon: <MessageSquare size={15} /> },
+      { id: "language" as SectionId, label: "Language",  icon: <Globe size={15} /> },
+      { id: "tts" as SectionId,     label: "Lumi's Voice", icon: <Volume2 size={15} /> },
     ] : []),
     // Voice / Face appear in continue mode only — they need the lamp's
     // hardware + backend, both unavailable while we're still on the AP.
@@ -173,6 +177,8 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
   // don't have to touch this field; users can still override before submitting.
   // URL value is validated against the dropdown allow-list — server stores
   // anything we send (no validation upstream), so we gate at the FE boundary.
+  // Final fallback is "en" (rather than empty) so the saved config always has
+  // a sensible default the agent can lean on.
   const [sttLanguage, setSttLanguage] = useState<string>(() => {
     const VALID = ["en", "vi", "zh-CN", "zh-TW"];
     if (urlParams.sttLanguage) {
@@ -184,7 +190,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
     if (loc.startsWith("zh-tw") || loc.startsWith("zh-hant") || loc.startsWith("zh-hk")) return "zh-TW";
     if (loc.startsWith("zh")) return "zh-CN";
     if (loc.startsWith("en")) return "en";
-    return "";
+    return "en";
   });
   const [ttsProvider, setTtsProvider] = useState(urlParams.ttsProvider || "openai");
   const [ttsVoice, setTtsVoice] = useState(urlParams.ttsVoice || "alloy");

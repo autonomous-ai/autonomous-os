@@ -97,8 +97,10 @@ export default function EditConfig() {
   // STT provider: derived from saved config (deepgram if key present, else autonomous).
   // Default for fresh devices is "autonomous" — uses LLM endpoint as fallback.
   const [sttProvider, setSttProvider] = useState<SttProvider>("autonomous");
-  // STT language drives model selection on the server (operators don't pick model directly).
-  const [sttLanguage, setSttLanguage] = useState("");
+  // STT language drives model selection on the server (operators don't pick
+  // model directly). Defaults to "en" so a never-configured device lands on
+  // English instead of "auto/unset" (which surfaces as a blank dropdown).
+  const [sttLanguage, setSttLanguage] = useState("en");
   const [ttsApiKey, setTtsApiKey] = useState("");
   const [ttsBaseUrl, setTtsBaseUrl] = useState("");
   const [ttsProvider, setTtsProvider] = useState("openai");
@@ -166,7 +168,7 @@ export default function EditConfig() {
         setLlmDisableThinking(cfg.llm_disable_thinking ?? false);
         setSttBaseUrl(cfg.stt_base_url ?? "");
         setSttProvider(cfg.has_deepgram_api_key ? "deepgram" : "autonomous");
-        setSttLanguage(cfg.stt_language ?? "");
+        setSttLanguage(cfg.stt_language || "en");
         setTtsBaseUrl(cfg.tts_base_url ?? "");
         setTtsProvider(cfg.tts_provider || "openai");
         setTtsVoice(cfg.tts_voice || "alloy");
