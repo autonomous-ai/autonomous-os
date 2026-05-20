@@ -1,10 +1,16 @@
 // Package posture provides a per-user ergonomic-risk history logger.
 //
-// Stores agent-written `nudge_posture` / `praise_posture` rows fired by the
-// wellbeing skill when motion.activity carries a `[posture_summary]` block.
-// `posture_alert` is a legacy action kept for back-compat with old timeline
-// data; the new pipeline does not write alerts (lelamp samples are kept in
-// a separate debug JSONL on the lamp).
+// Three row types share one daily JSONL per user:
+//
+//   - `posture_alert` — auto-written by the sensing handler whenever a
+//     motion.activity carries a [posture_summary:] block (i.e. a pose
+//     tumbling window crossed POSE_BAD_RATIO). Captures latest_score,
+//     latest_risk_level (mapped to high/medium/low/negligible), and the
+//     per-side whole-body scores. This is the raw signal the habit skill
+//     reads to compute posture_patterns (peak_hour, side_bias, typical_risk).
+//   - `nudge_posture` / `praise_posture` — agent reactions fired through
+//     /api/posture/log when the wellbeing skill decides to coach or
+//     acknowledge a fix. Notes carry the spoken line.
 //
 // Mirrors lib/mood structure (newer pattern than lib/wellbeing). Daily
 // JSONL files with 60-day retention.
@@ -56,7 +62,7 @@ type Event struct {
 // Action constants. Never invent new actions — the skill spec and timeline
 // readers rely on this fixed vocabulary.
 const (
-	ActionAlert  = "posture_alert"  // lelamp event captured by Lumi
+	ActionAlert  = "posture_alert"  // sensing handler auto-write on bad-window motion.activity
 	ActionNudge  = "nudge_posture"  // agent spoke / fired servo / chime
 	ActionPraise = "praise_posture" // agent acknowledged a fix
 )

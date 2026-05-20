@@ -490,11 +490,14 @@ class PosePerception(Perception[cv2.typing.MatLike]):
         self._bucket_snapshots = []
         self._prune_old_buckets()
 
-    def _select_worst_snapshots(self, summary: dict[str, Any] | None) -> list[str]:
-        """Pick up to POSE_WORST_SNAPSHOTS_PER_BUCKET filenames that cover
-        the cases a user would want to see: highest ergo score, the
+    def _select_worst_sample_keys(self, summary: dict[str, Any] | None) -> list[int]:
+        """Pick up to POSE_WORST_SNAPSHOTS_PER_BUCKET sample ts keys that
+        cover the cases a user would want to see: highest ergo score, the
         dominant-region representative, and the latest bad sample. Returns
-        filenames (relative to bucket dir), not full paths."""
+        the ts keys (int(sample.ts)) in chronological order — the
+        filename / aggregate helpers fan out from this single source so
+        the DM preview, the monitor popup, and the habit alert row all
+        anchor on the SAME three samples."""
         cap: int = max(1, config.POSE_WORST_SNAPSHOTS_PER_BUCKET)
         if not self._bucket_snapshots:
             return []
@@ -564,13 +567,51 @@ class PosePerception(Perception[cv2.typing.MatLike]):
             if k not in selected:
                 selected.append(k)
 
-        # Map back to filenames in chronological order so the FE / Telegram
-        # preview reads left-to-right oldest → newest.
-        selected_sorted: list[int] = sorted(set(selected))[:cap]
+        # Chronological order so the DM / monitor preview reads
+        # oldest → newest left-to-right.
+        return sorted(set(selected))[:cap]
+
+    def _select_worst_snapshots(self, summary: dict[str, Any] | None) -> list[str]:
+        """Filenames of the worst frames — what the DM gallery + the
+        monitor preview attach to. Mirrors `_select_worst_sample_keys`
+        order."""
+        keys: list[int] = self._select_worst_sample_keys(summary)
+        if not keys or not self._bucket_snapshots:
+            return []
         ts_to_file: dict[int, str] = {
             int(e["ts"]): e["filename"] for e in self._bucket_snapshots
         }
-        return [ts_to_file[k] for k in selected_sorted if k in ts_to_file]
+        return [ts_to_file[k] for k in keys if k in ts_to_file]
+
+    def _worst_sample_aggregate(self, summary: dict[str, Any] | None) -> dict[str, Any]:
+        """Max-of-worst stats across the same samples picked for the DM
+        attach — keeps the habit `posture_alert` numbers consistent with
+        the photos the user actually saw ("the score in the row equals
+        the worst frame the bot just sent me"). Returns an empty dict
+        when the selection landed on samples not present in the deque
+        (very rare; window cleared mid-build)."""
+        keys: list[int] = self._select_worst_sample_keys(summary)
+        if not keys:
+            return {}
+        by_ts: dict[int, _PoseSample] = {int(s.ts): s for s in self._samples}
+        picks: list[_PoseSample] = [by_ts[k] for k in keys if k in by_ts]
+        if not picks:
+            return {}
+
+        def _side_score(side: dict[str, Any] | None) -> int:
+            if not side:
+                return 0
+            try:
+                return int(side.get("score", 0) or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        return {
+            "worst_score": max(s.score for s in picks),
+            "worst_risk_level": max(s.risk_level for s in picks),
+            "worst_left_score": max(_side_score(s.raw_left) for s in picks),
+            "worst_right_score": max(_side_score(s.raw_right) for s in picks),
+        }
 
     def _prune_old_buckets(self) -> None:
         """Drop kept buckets older than POSE_BUCKET_KEEP_S and trim the
@@ -859,7 +900,10 @@ class PosePerception(Perception[cv2.typing.MatLike]):
         }
         # Pre-compute the worst selection so motion.py can lift it onto
         # the event payload before reset_window() finalizes the bucket.
+        # Filenames + the max-of-worst aggregate share the same 3 source
+        # samples — habit numbers stay aligned with the DM photos.
         summary["worst_snapshots"] = self._select_worst_snapshots(summary)
+        summary.update(self._worst_sample_aggregate(summary))
         return summary
 
     def get_posture_summary(self) -> dict[str, Any] | None:
