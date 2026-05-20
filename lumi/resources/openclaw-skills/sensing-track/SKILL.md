@@ -130,6 +130,43 @@ find /var/lib/lelamp/snapshots -type f -name '*.jpg' -printf '%T@ %p\n' | sort -
 ls -lt /var/lib/lelamp/snapshots/sensing_motion_activity/ | head -20
 ```
 
+### Pose buckets (posture history)
+
+Posture snapshots are NOT in `/var/lib/lelamp/snapshots/` — they live in tmp under a per-window bucket layout at `/tmp/lumi-sensing-snapshots/sensing_pose/buckets/<bucket_id>/`. A bucket only exists when a tumbling window closed with bad posture (`bad_ratio >= POSE_BAD_RATIO`). Kept buckets survive ~2 days (`POSE_BUCKET_KEEP_S`); windows that didn't fire a nudge are deleted immediately, so the buckets you can see are by definition "bad posture" sessions.
+
+Each kept bucket contains:
+
+- `<sample_ts>_<score>.jpg` — annotated frame per sample (skeleton overlay + RULA score)
+- `bucket.json` — manifest:
+  - `bucket_id`, `window_start_ts`, `window_end_ts`, `kept: true`
+  - `summary` — same shape as the `[posture_summary:]` block on `motion.activity` (`bad_ratio`, `dominant_region`, `samples`, …)
+  - `samples[]` — `{ts, score, risk_level, filename, left, right}` (per-side RULA body_scores + angles)
+  - `worst_snapshots[]` — pre-selected worst filenames (the ones Lumi auto-attaches to `/dm` on posture nudges)
+
+```bash
+# List recent buckets (newest first)
+ls -lt /tmp/lumi-sensing-snapshots/sensing_pose/buckets/ | head -10
+
+# Read a specific bucket's manifest
+jq . /tmp/lumi-sensing-snapshots/sensing_pose/buckets/1779259742/bucket.json
+
+# Buckets that closed in the last 2 hours
+find /tmp/lumi-sensing-snapshots/sensing_pose/buckets -maxdepth 1 -type d -mmin -120 -name '[0-9]*' | sort
+
+# Worst-frame paths from the latest kept bucket
+LATEST=$(ls -t /tmp/lumi-sensing-snapshots/sensing_pose/buckets/ | head -1)
+jq -r '.worst_snapshots[]' "/tmp/lumi-sensing-snapshots/sensing_pose/buckets/${LATEST}/bucket.json" \
+  | sed "s|^|/tmp/lumi-sensing-snapshots/sensing_pose/buckets/${LATEST}/|"
+
+# Today's bad-posture sessions — bucket id == window_start unix-seconds
+TODAY_START=$(date -d "today 00:00" +%s)
+for b in /tmp/lumi-sensing-snapshots/sensing_pose/buckets/*/bucket.json; do
+  jq --arg start "$TODAY_START" 'select((.window_start_ts | floor) >= ($start | tonumber)) | {bucket_id, dominant: .summary.dominant_region, bad_ratio: .summary.bad_ratio, started: .window_start_ts}' "$b"
+done
+```
+
+Note: `motion.activity` event messages contain `[pose_bucket: <id>]` and `[pose_worst: <fn1>,<fn2>,...]` markers — parse these out of `data.message` when you need to map a sensing_input record to its bucket. Markers are present whenever a posture nudge folded in.
+
 ---
 
 ## Fallback: system log
@@ -179,6 +216,7 @@ Storage: `/root/local/users/{name}/mood/YYYY-MM-DD.jsonl` (30-day retention).
 - **Span multiple days** — for questions covering more than today, `cat` multiple JSONL files together.
 - **Parse the message field** for who/what details — `friend (gray)`, `friend (chloe)`, `stranger (stranger_1)`, `Large movement detected`, etc.
 - **Reference snapshots** — when the user asks "what did you see?", extract the `[snapshot: ...]` path from the message. Path format is `/var/lib/lelamp/snapshots/sensing_<prefix>/<ms>.jpg` (category subdir per event kind). Snapshots have 72h TTL — check the file exists before referencing (`test -f <path>`).
+- **Posture history** — for questions about the user's posture ("how was I sitting this morning?", "show me my worst posture today"), scan `/tmp/lumi-sensing-snapshots/sensing_pose/buckets/`. Only sessions that crossed the bad-ratio threshold survive here, so the bucket list itself answers "when did my posture get bad today?". Read each bucket's `bucket.json` for `summary.dominant_region` and `summary.bad_ratio`, then reference `worst_snapshots[]` for representative frames.
 
 ---
 
@@ -199,3 +237,9 @@ Storage: `/root/local/users/{name}/mood/YYYY-MM-DD.jsonl` (30-day retention).
 **Input:** "What happened while I was away?"
 **Action:** Ask the user when they left, or find the last `presence.leave` and query all events after that timestamp.
 **Response:** "After around 3 PM — I saw motion at 4:30 PM and again at 5:15 PM. No one was identified though. I have snapshots from those moments if you want to see."
+
+---
+
+**Input:** "How was my posture today?"
+**Action:** List today's pose buckets and aggregate `summary.dominant_region` + `summary.bad_ratio` from each `bucket.json`.
+**Response:** "You had 3 bad-posture sessions today: a neck-flexion one at 10:14 AM (77% bad), another neck stretch at 1:39 PM (100% bad), and one trunk lean at 3:20 PM (62% bad). The worst frames are in the bucket dirs if you want me to pull one up."
