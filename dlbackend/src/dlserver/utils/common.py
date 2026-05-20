@@ -4,13 +4,14 @@ import base64
 import secrets
 
 import cv2
+import cv2.typing as cv2t
 import numpy as np
 from fastapi import HTTPException, WebSocket
 
 from config import settings
 
 
-def decode_image(image_b64: str) -> np.ndarray:
+def decode_image(image_b64: str) -> cv2t.MatLike:
     """Decode a base64-encoded JPEG/PNG image to a BGR numpy array."""
     try:
         img_bytes = base64.b64decode(image_b64)

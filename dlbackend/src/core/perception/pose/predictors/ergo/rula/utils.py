@@ -29,7 +29,11 @@ def signed_flexion_angle(
 def align_to_vertical(
     keypoints: npt.NDArray[np.float32],
 ) -> npt.NDArray[np.float32]:
-    """Rotate 3D keypoints so that spine-to-thorax aligns with +Z (up)."""
+    """Rotate 3D keypoints so that spine-to-thorax aligns with -Y (up).
+
+    Convention: x=right, y=down, z=depth.
+    Upward in image space is -Y, so trunk (spine→thorax) should point to [0, -1, 0].
+    """
     spine_idx: int = _H36M.joint("SPINE")
     thorax_idx: int = _H36M.joint("THORAX")
     spine: npt.NDArray[np.float32] = keypoints[spine_idx]
@@ -39,7 +43,7 @@ def align_to_vertical(
     return rotate_to(
         keypoints,
         src_vec=trunk_vec,
-        dst_vec=np.array([0.0, 0.0, 1.0], dtype=np.float32),
+        dst_vec=np.array([0.0, -1.0, 0.0], dtype=np.float32),
         center=spine,
     )
 

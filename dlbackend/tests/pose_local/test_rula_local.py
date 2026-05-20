@@ -37,19 +37,19 @@ def _hunched_skeleton_2d() -> np.ndarray:
 
 
 def _upright_skeleton_3d() -> np.ndarray:
-    """Neutral upright posture in 3D (17, 3). Z=up."""
+    """Neutral upright posture in 3D (17, 3). x=right, y=down, z=depth."""
     kps = np.zeros((17, 3), dtype=np.float32)
-    kps[0]  = [0, 0, 0]       # pelvis
-    kps[7]  = [0, 0, 50]      # spine
-    kps[8]  = [0, 0, 100]     # thorax
-    kps[9]  = [0, 0, 120]     # neck
-    kps[10] = [0, 0, 140]     # head
-    kps[11] = [30, 0, 100]    # L shoulder
-    kps[12] = [30, 0, 60]     # L elbow (arms down)
-    kps[13] = [30, 0, 55]     # L wrist
-    kps[14] = [-30, 0, 100]   # R shoulder
-    kps[15] = [-30, 0, 60]    # R elbow (arms down)
-    kps[16] = [-30, 0, 55]    # R wrist
+    kps[0]  = [0, 400, 0]      # pelvis (lowest)
+    kps[7]  = [0, 300, 0]      # spine
+    kps[8]  = [0, 200, 0]      # thorax
+    kps[9]  = [0, 150, 0]      # neck
+    kps[10] = [0, 100, 0]      # head (highest, smallest y)
+    kps[11] = [30, 210, 0]     # L shoulder
+    kps[12] = [30, 290, 0]     # L elbow (arms down)
+    kps[13] = [30, 300, 0]     # L wrist
+    kps[14] = [-30, 210, 0]    # R shoulder
+    kps[15] = [-30, 290, 0]    # R elbow (arms down)
+    kps[16] = [-30, 300, 0]    # R wrist
     return kps
 
 
@@ -62,10 +62,10 @@ class TestEnsure3D:
         kps_2d = np.random.rand(17, 2).astype(np.float32)
         kps_3d = ensure_3d(kps_2d)
         assert kps_3d.shape == (17, 3)
-        # x-axis should be all zeros
-        assert np.allclose(kps_3d[:, 0], 0.0)
-        # original values preserved in columns 1-2
-        assert np.allclose(kps_3d[:, 1:], kps_2d)
+        # z-axis (depth) should be all zeros
+        assert np.allclose(kps_3d[:, 2], 0.0)
+        # original values preserved in columns 0-1 (x, y)
+        assert np.allclose(kps_3d[:, :2], kps_2d)
 
     def test_3d_unchanged(self):
         kps_3d = np.random.rand(17, 3).astype(np.float32)
@@ -85,10 +85,10 @@ class TestAlignToVertical:
         kps = _upright_skeleton_3d()
         aligned = align_to_vertical(kps)
         trunk = aligned[H36MJoint.THORAX] - aligned[H36MJoint.SPINE]
-        # After alignment, trunk should point in +Z direction
+        # After alignment, trunk should point in -Y direction (up in image coords)
         assert abs(trunk[0]) < 1.0
-        assert abs(trunk[1]) < 1.0
-        assert trunk[2] > 0
+        assert trunk[1] < 0
+        assert abs(trunk[2]) < 1.0
 
     def test_tilted_skeleton_aligned(self):
         kps = _upright_skeleton_3d()
@@ -103,10 +103,10 @@ class TestAlignToVertical:
         aligned = align_to_vertical(kps)
         trunk = aligned[H36MJoint.THORAX] - aligned[H36MJoint.SPINE]
         trunk_norm = trunk / (np.linalg.norm(trunk) + 1e-8)
-        # Should be close to [0, 0, 1]
+        # Should be close to [0, -1, 0]
         assert abs(trunk_norm[0]) < 0.05
-        assert abs(trunk_norm[1]) < 0.05
-        assert trunk_norm[2] > 0.95
+        assert trunk_norm[1] < -0.95
+        assert abs(trunk_norm[2]) < 0.05
 
 
 class TestRULAAssessor:

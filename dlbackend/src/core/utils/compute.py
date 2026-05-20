@@ -29,16 +29,16 @@ def angle_between_3d(
 
 
 def ensure_3d(keypoints: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
-    """Pad 2D (N, 2) to 3D (N, 3) by inserting x=0 as the first axis.
+    """Pad 2D (N, 2) to 3D (N, 3) by appending z=0.
 
-    Convention: (x, y, z) where x=lateral, y=depth, z=vertical.
-    2D input (col, row) is mapped to (0, col, row).
+    Convention: (x, y, z) where x=right, y=down, z=depth.
+    2D input (col, row) is mapped to (col, row, 0).
     Returns a copy if already 3D.
     """
     if keypoints.shape[1] >= 3:
         return keypoints.copy()
     zeros: npt.NDArray[np.float32] = np.zeros((keypoints.shape[0], 1), dtype=np.float32)
-    return np.concatenate([zeros, keypoints], axis=1).astype(np.float32)
+    return np.concatenate([keypoints, zeros], axis=1).astype(np.float32)
 
 
 def rotate_to(

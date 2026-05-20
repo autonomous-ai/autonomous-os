@@ -134,8 +134,8 @@ class RULAAssessor(ErgoAssessor):
             neck_angle = 0.0
             neck_score = 1
 
-        # --- Trunk angle (3D angle of trunk from true vertical [0,0,1]) ---
-        true_vertical: npt.NDArray[np.float32] = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+        # --- Trunk angle (3D angle of trunk from true vertical [0,-1,0]) ---
+        true_vertical: npt.NDArray[np.float32] = np.array([0.0, -1.0, 0.0], dtype=np.float32)
         trunk_angle: float = signed_flexion_angle(trunk_up, true_vertical)
         trunk_score: int = score_trunk(trunk_angle)
 

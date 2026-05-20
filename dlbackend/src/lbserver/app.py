@@ -1,21 +1,13 @@
-"""DL Backend Load Balancer — round-robin reverse proxy.
+"""DL Backend Load Balancer — round-robin reverse proxy with encryption.
 
 All incoming requests are prefixed with /_internal and forwarded back
 through nginx, which routes /_internal/lelamp/ → :8001 (DL server)
 and /_internal/ → :8000 (old DL server), stripping the prefix.
 
-HTTP and WebSocket have independent round-robin cycles.
-
-Usage:
-    python -m lbserver
-    python -m lbserver --port 7999
-
-Configuration (env vars or .env):
-    LB_BACKENDS   — comma-separated list of nginx endpoints (required)
-                    e.g. http://127.0.0.1:8888
-    LB_PORT       — listen port (default: 7999)
-    LB_HOST       — listen host (default: 0.0.0.0)
-    LB_INTERNAL_PREFIX — prefix prepended to all paths (default: /_internal)
+When crypto is enabled, the LB handles encryption/decryption:
+- GET /api/dl/public-key returns the RSA public key
+- HTTP: CipherHTTPRequest decrypted before forwarding, response encrypted
+- WS: WSKeyExchangeRequest first, then WSCipherMessage both directions
 """
 
 import argparse
@@ -26,10 +18,18 @@ import os
 import httpx
 import uvicorn
 import websockets
+from cryptography.exceptions import InvalidTag
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from pydantic import ValidationError
 
 from config import settings
+from core.crypto.rsa_aes import AESGCMSession, RSAAESCrypto
+from core.models.crypto import AESGCMPlainPayload
+from lbserver.models import WSCipherMessage, WSKeyExchangeRequest
+from lbserver.routes.crypto import router as crypto_router
 from lbserver.utils import RoundRobin
+from lbserver.utils.crypto import encrypt_http_response, try_decrypt_http_body
+from lbserver.utils.state import get_crypto, set_crypto
 
 LOG_FORMAT = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
 logger = logging.getLogger("lbserver")
@@ -58,6 +58,7 @@ ws_rr = RoundRobin(BACKENDS)
 
 
 app = FastAPI(title="DL Backend Load Balancer")
+app.include_router(crypto_router)
 _client = httpx.AsyncClient(timeout=120.0)
 
 
@@ -77,8 +78,13 @@ async def proxy_http(request: Request, path: str) -> Response:
     }
 
     body: bytes = await request.body()
+    encrypted_key: bytes | None = None
 
-    logger.info("[HTTP] %s /%s → %s", request.method, path, url)
+    # Decrypt if encrypted
+    if request.method in ("POST", "PUT", "PATCH") and body:
+        body, encrypted_key = try_decrypt_http_body(body)
+
+    logger.info("[HTTP] %s /%s → %s (encrypted=%s)", request.method, path, url, encrypted_key is not None)
 
     try:
         resp = await _client.request(
@@ -92,10 +98,19 @@ async def proxy_http(request: Request, path: str) -> Response:
         logger.error("[HTTP] Backend unreachable: %s", backend)
         raise HTTPException(status_code=502, detail=f"Backend unreachable: {backend}")
 
+    content = resp.content
+    resp_headers = dict(resp.headers)
+
+    # Encrypt response if request was encrypted
+    if encrypted_key is not None:
+        content = encrypt_http_response(content, encrypted_key)
+        resp_headers["content-type"] = "application/json"
+        resp_headers.pop("content-length", None)
+
     return Response(
-        content=resp.content,
+        content=content,
         status_code=resp.status_code,
-        headers=dict(resp.headers),
+        headers=resp_headers,
     )
 
 
@@ -120,13 +135,58 @@ async def proxy_ws(client_ws: WebSocket, path: str) -> None:
     await client_ws.accept()
     logger.info("[WS] /%s → %s", path, ws_url)
 
+    crypto = get_crypto()
+    session: AESGCMSession | None = None
+
+    # Handle key exchange before connecting to backend
+    first_msg: str | None = None
+    if crypto is not None:
+        try:
+            first_msg = await asyncio.wait_for(client_ws.receive_text(), timeout=5.0)
+            try:
+                key_req = WSKeyExchangeRequest.model_validate_json(first_msg)
+                session = crypto.create_session(key_req.to_raw_key())
+                await client_ws.send_json({"status": "key_exchange_ok"})
+                logger.info("[WS] Session established for /%s", path)
+                first_msg = None  # consumed
+            except ValidationError:
+                if settings.crypto.require_encryption:
+                    await client_ws.close(code=1008, reason="Key exchange required")
+                    return
+        except asyncio.TimeoutError:
+            if settings.crypto.require_encryption:
+                await client_ws.close(code=1008, reason="Key exchange required")
+                return
+            first_msg = None
+        except (ValueError, InvalidTag) as e:
+            logger.error("[WS] Key exchange failed: %s", e)
+            await client_ws.close(code=1011, reason=f"Key exchange failed: {e}")
+            return
+
     try:
         async with websockets.connect(ws_url, additional_headers=extra_headers) as backend_ws:
+
+            # Forward the first message if it wasn't a key exchange
+            if first_msg is not None:
+                await backend_ws.send(first_msg)
 
             async def client_to_backend() -> None:
                 try:
                     while True:
                         data: str = await client_ws.receive_text()
+
+                        if session is not None:
+                            try:
+                                enc_msg = WSCipherMessage.model_validate_json(data)
+                                result = session.decrypt(enc_msg.to_raw_payload())
+                                data = result.plain_data.decode()
+                            except ValidationError:
+                                logger.warning("[WS] Rejecting unencrypted message")
+                                continue
+                            except (InvalidTag, ValueError) as e:
+                                logger.error("[WS] Decrypt failed: %s", e)
+                                continue
+
                         await backend_ws.send(data)
                 except WebSocketDisconnect:
                     await backend_ws.close()
@@ -135,6 +195,9 @@ async def proxy_ws(client_ws: WebSocket, path: str) -> None:
                 try:
                     async for msg in backend_ws:
                         if isinstance(msg, str):
+                            if session is not None:
+                                encrypted = session.encrypt(AESGCMPlainPayload(plain_data=msg.encode()))
+                                msg = WSCipherMessage.from_raw_payload(encrypted).model_dump_json()
                             await client_ws.send_text(msg)
                         else:
                             await client_ws.send_bytes(msg)
@@ -170,7 +233,6 @@ def _setup_logging(log_dir: str | None) -> None:
         from pathlib import Path
 
         Path(log_dir).mkdir(parents=True, exist_ok=True)
-        # Clean up old .bak files, then rename current logs to .bak
         for bak in Path(log_dir).glob("lbserver.log*.bak"):
             bak.unlink()
         log_path = Path(log_dir) / "lbserver.log"
@@ -195,6 +257,15 @@ def main() -> None:
         from pathlib import Path
 
         Path(args.pid_file).write_text(str(os.getpid()))
+
+    # Initialize crypto if enabled
+    if settings.crypto.enabled:
+        crypto = RSAAESCrypto(
+            key_dir=settings.crypto.key_dir,
+            key_size=settings.crypto.key_size,
+        )
+        set_crypto(crypto)
+        logger.info("Encryption enabled (key_dir=%s)", settings.crypto.key_dir)
 
     if BACKENDS:
         logger.info("Backends: %s", ", ".join(BACKENDS))

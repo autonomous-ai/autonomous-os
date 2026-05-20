@@ -76,6 +76,13 @@ class SpeechEmotionRecognizerSetting(BaseModel):
     providers: str = ""
 
 
+class CryptoSetting(BaseModel):
+    enabled: bool = True
+    key_dir: Path = Path.home() / ".dlbackend" / "keys"
+    key_size: int = 2048
+    require_encryption: bool = False  # reject plain payloads if True
+
+
 class LBSetting(BaseModel):
     backends: str = ""  # comma-separated backend URLs, e.g. "http://127.0.0.1:8888"
     host: str = "0.0.0.0"
@@ -111,6 +118,7 @@ class Settings(BaseSettings):
     pose: PoseSetting = PoseSetting()
     person_detector: PersonDetectorSetting = PersonDetectorSetting()
 
+    crypto: CryptoSetting = CryptoSetting()
     lb: LBSetting = LBSetting()
 
 
