@@ -46,7 +46,7 @@ import (
 	_deviceMQTTDeliver "go-lamp.autonomous.ai/server/device/delivery/mqtt"
 	_healthHttpDeliver "go-lamp.autonomous.ai/server/health/delivery/http"
 	_networkHttpDeliver "go-lamp.autonomous.ai/server/network/delivery/http"
-	_openclawSseDeliver "go-lamp.autonomous.ai/server/openclaw/delivery/sse"
+	_openclawSseDeliver "go-lamp.autonomous.ai/đang giaserver/openclaw/delivery/sse"
 	_sensingHttpDeliver "go-lamp.autonomous.ai/server/sensing/delivery/http"
 	"go-lamp.autonomous.ai/server/serializers"
 	"go-lamp.autonomous.ai/server/session"
@@ -555,22 +555,29 @@ func (s *Server) Serve(closeFn func()) error {
 	monitor.POST("event", sameOriginOrLAN(), s.sensingHandler.PostMonitorEvent)
 
 	oc := api.Group("openclaw")
-	oc.POST("tts/stop", s.openclawHandler.StopTTS)
-	oc.POST("busy", s.openclawHandler.SetBusy)
-	oc.GET("status", s.openclawHandler.Status)
-	oc.GET("events", s.openclawHandler.Events)
-	oc.GET("recent", s.openclawHandler.Recent)
-	oc.GET("flow-events", s.openclawHandler.FlowEvents)
-	oc.GET("mood-history", s.openclawHandler.MoodHistory)
-	oc.GET("wellbeing-history", s.openclawHandler.WellbeingHistory)
-	oc.GET("posture-history", s.openclawHandler.PostureHistory)
-	oc.GET("music-suggestion-history", s.openclawHandler.MusicSuggestionHistory)
-	oc.GET("flow-stream", s.openclawHandler.FlowStream)
-	oc.GET("flow-logs", s.openclawHandler.FlowLogs)
-	oc.DELETE("flow-logs", s.openclawHandler.ClearFlowLogs)
-	oc.GET("analytics", s.openclawHandler.Analytics)
+	// Everything under /api/openclaw/ is admin-gated: status carries device
+	// state, events / flow-stream / recent / flow-events / flow-logs /
+	// analytics / compaction-latest contain conversation history + sensing
+	// data, and mood/wellbeing/posture/music-suggestion histories are
+	// per-user behavioural records. config-json keeps its stricter
+	// `localOnlyMiddleware` (loopback callers only) — admin auth alone is
+	// not enough since the raw openclaw.json holds gateway tokens.
+	oc.POST("tts/stop", adminAuthMiddleware(s.config), s.openclawHandler.StopTTS)
+	oc.POST("busy", adminAuthMiddleware(s.config), s.openclawHandler.SetBusy)
+	oc.GET("status", adminAuthMiddleware(s.config), s.openclawHandler.Status)
+	oc.GET("events", adminAuthMiddleware(s.config), s.openclawHandler.Events)
+	oc.GET("recent", adminAuthMiddleware(s.config), s.openclawHandler.Recent)
+	oc.GET("flow-events", adminAuthMiddleware(s.config), s.openclawHandler.FlowEvents)
+	oc.GET("mood-history", adminAuthMiddleware(s.config), s.openclawHandler.MoodHistory)
+	oc.GET("wellbeing-history", adminAuthMiddleware(s.config), s.openclawHandler.WellbeingHistory)
+	oc.GET("posture-history", adminAuthMiddleware(s.config), s.openclawHandler.PostureHistory)
+	oc.GET("music-suggestion-history", adminAuthMiddleware(s.config), s.openclawHandler.MusicSuggestionHistory)
+	oc.GET("flow-stream", adminAuthMiddleware(s.config), s.openclawHandler.FlowStream)
+	oc.GET("flow-logs", adminAuthMiddleware(s.config), s.openclawHandler.FlowLogs)
+	oc.DELETE("flow-logs", adminAuthMiddleware(s.config), s.openclawHandler.ClearFlowLogs)
+	oc.GET("analytics", adminAuthMiddleware(s.config), s.openclawHandler.Analytics)
 	oc.GET("config-json", localOnlyMiddleware(), s.openclawHandler.ConfigJSON)
-	oc.GET("compaction-latest", s.openclawHandler.CompactionLatest)
+	oc.GET("compaction-latest", adminAuthMiddleware(s.config), s.openclawHandler.CompactionLatest)
 
 	logs := api.Group("logs")
 	logs.GET("tail", adminAuthMiddleware(s.config), s.logTail)
