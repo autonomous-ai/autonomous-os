@@ -12,7 +12,7 @@ from typing import Optional
 
 from lelamp.presets import (
     FX_BLINK, FX_BREATHING, FX_CANDLE, FX_NOTIFICATION_FLASH,
-    FX_PULSE, FX_RAINBOW, FX_SPEAKING_WAVE,
+    FX_PULSE, FX_RAINBOW, FX_SPEAKING_WAVE, FX_SPEAKING_WAVE_RAINBOW,
     RGB_CMD_PAINT, RGB_CMD_SOLID,
 )
 
@@ -80,6 +80,8 @@ def run_effect(
             blink(color, speed, deadline, stop_event, svc)
         elif effect == FX_SPEAKING_WAVE:
             speaking_wave(color, speed, deadline, stop_event, svc)
+        elif effect == FX_SPEAKING_WAVE_RAINBOW:
+            speaking_wave_rainbow(speed, deadline, stop_event, svc)
     except Exception as e:
         import logging
         logging.getLogger("lelamp.led.effects").warning("LED effect '%s' error: %s", effect, e)
@@ -274,4 +276,50 @@ def speaking_wave(
                     pixels[idx] = seg_color
 
         svc.dispatch(RGB_CMD_PAINT, pixels)
+        time.sleep(step_delay)
+
+
+def speaking_wave_rainbow(
+    speed: float,
+    deadline: Optional[float],
+    stop_event: threading.Event,
+    svc,
+):
+    """Same VU-meter motion as speaking_wave, but each segment paints a
+    different hue (rainbow palette) that slowly drifts over time. Used when
+    the user hasn't set an LED color but music is playing.
+    """
+    step_delay = 0.04 / speed
+    led_count = getattr(svc, "led_count", 64)
+    num_segments = 8
+    seg_size = led_count // num_segments
+
+    current = [0.5] * num_segments
+    target = [random.uniform(0.2, 1.0) for _ in range(num_segments)]
+    frames_until_new_target = 0
+    hue_offset = 0.0
+
+    while not is_done(deadline, stop_event):
+        if frames_until_new_target <= 0:
+            for s in range(num_segments):
+                target[s] = random.uniform(0.0, 1.0)
+            frames_until_new_target = random.randint(4, 8)
+        frames_until_new_target -= 1
+
+        for s in range(num_segments):
+            current[s] += (target[s] - current[s]) * 0.3
+
+        pixels = [(0, 0, 0)] * led_count
+        for s in range(num_segments):
+            brightness = current[s]
+            hue = (hue_offset + s / num_segments) % 1.0
+            r, g, b = hsv_to_rgb(hue, 1.0, brightness)
+            seg_color = (r, g, b)
+            for p in range(seg_size):
+                idx = s * seg_size + p
+                if idx < led_count:
+                    pixels[idx] = seg_color
+
+        svc.dispatch(RGB_CMD_PAINT, pixels)
+        hue_offset = (hue_offset + 0.005) % 1.0
         time.sleep(step_delay)

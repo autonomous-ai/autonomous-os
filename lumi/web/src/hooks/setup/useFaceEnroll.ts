@@ -21,7 +21,7 @@ export function useFaceEnroll() {
 
   const loadFaceOwners = useCallback(async () => {
     try {
-      const r = await fetch("/hw/face/owners").then((x) => x.json());
+      const r = await fetch("/api/hardware/face/owners").then((x) => x.json());
       if (Array.isArray(r?.persons)) setFaceOwners(r.persons);
     } catch { /* hardware unreachable in initial mode; silent */ }
   }, []);
@@ -29,7 +29,7 @@ export function useFaceEnroll() {
   const removeFaceOwner = useCallback(async (label: string) => {
     if (!confirm(`Remove enrolled face "${label}"?`)) return;
     try {
-      await fetch("/hw/face/remove", {
+      await fetch("/api/hardware/face/remove", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ label }),
@@ -49,7 +49,7 @@ export function useFaceEnroll() {
       try {
         const buf = await file.arrayBuffer();
         const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
-        const resp = await fetch("/hw/face/enroll", {
+        const resp = await fetch("/api/hardware/face/enroll", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ label, image_base64: b64 }),

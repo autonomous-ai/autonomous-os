@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import { getSetupStatus, safeSearch } from "@/lib/api";
+import { getSetupStatus } from "@/lib/api";
+import { getInitialSearch } from "./useSetupUrlParams";
 
 export type SetupPhase = "connecting" | "connected" | "failed";
 
@@ -17,7 +18,6 @@ export function useSetupStatusPolling({
   setupPhase,
   setupLanIP,
   lumiMdnsHost,
-  bearerToken,
   setSetupPhase,
   setSetupLanIP,
   setSetupErrorMsg,
@@ -26,15 +26,15 @@ export function useSetupStatusPolling({
   setupPhase: SetupPhase;
   setupLanIP: string;
   lumiMdnsHost: string;
-  // Bearer (llm_api_key) appended as `#token=…` on cross-origin redirects so
-  // the new host (lumi-xxxx.local) can re-auth — the lumi_session cookie set
-  // on the AP origin doesn't survive the domain switch.
-  bearerToken: string;
   setSetupPhase: Dispatch<SetStateAction<SetupPhase>>;
   setSetupLanIP: Dispatch<SetStateAction<string>>;
   setSetupErrorMsg: Dispatch<SetStateAction<string>>;
 }) {
-  const tokenHash = bearerToken ? `#token=${encodeURIComponent(bearerToken)}` : "";
+  // Cross-origin redirect URL must carry every original param (incl.
+  // llm_api_key) so the new host can rehydrate state + re-auth. Read via
+  // the module-load snapshot — window.location.search at redirect time has
+  // already been scrubbed by App.useScrubSecrets().
+  const carrySearch = getInitialSearch();
   // Phase poll: runs against the AP IP, so it works while the user is still
   // on the AP SSID. Once the AP shuts down the polls will fail and we keep
   // the last value.
@@ -98,7 +98,7 @@ export function useSetupStatusPolling({
     let cancelled = false;
     const targetHost = `${lumiMdnsHost}.local`;
     const base = `http://${targetHost}`;
-    const newURL = `${base}${window.location.pathname}${safeSearch()}${tokenHash}`;
+    const newURL = `${base}${window.location.pathname}${carrySearch}`;
     const navigate = () => {
       if (window.location.hostname === targetHost) {
         window.location.reload();
@@ -117,7 +117,7 @@ export function useSetupStatusPolling({
     probe();
     const id = setInterval(probe, 3000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [setupPhase, lumiMdnsHost, tokenHash]);
+  }, [setupPhase, lumiMdnsHost, carrySearch]);
 
   // Pre-submit canonical URL upgrade: when user lands on the AP IP
   // (192.168.100.1) we silently bounce to `http://lumi-XXXX.local/…` once we
@@ -135,13 +135,20 @@ export function useSetupStatusPolling({
   // 800ms and back off so the redirect lands sub-second when mDNS is healthy
   // without spamming the network forever on Android-blocked cases.
   useEffect(() => {
-    if (!lumiMdnsHost) return;
     if (typeof window === "undefined") return;
-    if (window.location.hostname !== "192.168.100.1") return;
+    if (!lumiMdnsHost) {
+      console.info("[setup] pre-submit canonical-URL upgrade: skip — no lumiMdnsHost yet");
+      return;
+    }
+    if (window.location.hostname !== "192.168.100.1") {
+      console.info("[setup] pre-submit canonical-URL upgrade: skip — not on AP IP", window.location.hostname);
+      return;
+    }
+    console.info(`[setup] pre-submit canonical-URL upgrade: probing http://${lumiMdnsHost}.local/api/health`);
     let cancelled = false;
     let attempt = 0;
     const base = `http://${lumiMdnsHost}.local`;
-    const target = `${base}${window.location.pathname}${safeSearch()}${tokenHash}`;
+    const target = `${base}${window.location.pathname}${carrySearch}`;
     let timer: number | undefined;
     const probe = async () => {
       attempt += 1;
@@ -151,8 +158,8 @@ export function useSetupStatusPolling({
         console.info(`[setup] mDNS reachable after ${attempt} probe(s) — redirecting to ${target}`);
         window.location.replace(target);
         return;
-      } catch {
-        /* mDNS not resolvable from this client (Android Chrome, blocked LAN) */
+      } catch (err) {
+        console.info(`[setup] probe attempt ${attempt} failed`, err);
       }
       if (cancelled) return;
       // Back-off: 800ms × 4 then 2s × ∞ — fast initial retries when mDNS is
@@ -163,5 +170,5 @@ export function useSetupStatusPolling({
     };
     probe();
     return () => { cancelled = true; if (timer) window.clearTimeout(timer); };
-  }, [lumiMdnsHost, tokenHash]);
+  }, [lumiMdnsHost, carrySearch]);
 }

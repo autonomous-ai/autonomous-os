@@ -35,9 +35,19 @@ export interface SetupUrlParams {
 // window.location.search — reading via useSearchParams() at that point
 // returns empty strings. The module-level snapshot captures the operator-
 // provided values up front so the form state still ships them on submit.
-const INITIAL_PARAMS: URLSearchParams = new URLSearchParams(
-  typeof window !== "undefined" ? window.location.search : "",
-);
+const INITIAL_SEARCH: string =
+  typeof window !== "undefined" ? window.location.search : "";
+const INITIAL_PARAMS: URLSearchParams = new URLSearchParams(INITIAL_SEARCH);
+
+// The raw original query string ("?…") — used to build cross-origin redirect
+// URLs that must carry every param through the AP→.local handoff (so the new
+// origin can re-auth via the bearer in `llm_api_key` and prefill state from
+// the lumi-pushed values). Reading window.location.search at redirect time
+// returns the post-scrub value with secrets stripped — useless for the
+// re-auth step.
+export function getInitialSearch(): string {
+  return INITIAL_SEARCH;
+}
 
 // searchParams is no longer read inside the hook (kept in the signature so
 // the call site doesn't need to change), but the dep array intentionally

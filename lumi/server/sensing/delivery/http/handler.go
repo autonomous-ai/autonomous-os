@@ -285,9 +285,23 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// markers ([pose_bucket: ...] / [pose_worst: ...]). Stash them keyed
 	// by runID so the SSE /dm path can attach the worst frames to the
 	// Telegram message after the agent decides to nudge.
+	//
+	// Same trigger also writes a `posture_alert` row to the user's
+	// posture JSONL — the habit skill's Flow A reads those rows to
+	// derive peak_hour / side_bias / typical_risk. Without this bridge
+	// the habit-skill posture extension stays starved (agent only logs
+	// nudge/praise; the raw alert signal had no Lumi-side writer).
 	if req.Type == "motion.activity" {
 		if bid, worst := extractPoseBucketMarkers(req.Message); bid != "" {
 			h.agentGateway.MarkPoseBucketRun(runID, bid, worst)
+			if alertUser := req.CurrentUser; alertUser != "" || mood.CurrentUser() != "" {
+				if alertUser == "" {
+					alertUser = mood.CurrentUser()
+				}
+				if extras, ok := extractPostureAlertExtras(req.Message); ok {
+					posture.LogAlert(alertUser, extras)
+				}
+			}
 		}
 	}
 	// Web monitor chat: suppress TTS — response displayed in web UI only.
@@ -738,6 +752,116 @@ func extractSnapshotPath(message string) string {
 		return ""
 	}
 	return strings.TrimSpace(m[1])
+}
+
+// extractPostureSummaryJSON locates the [posture_summary: …] marker
+// and returns just the JSON object body (without the marker brackets).
+// posture_summary nests two levels deep (`latest_left.body_scores`)
+// and also contains array literals (`skipped_joints:[]`), both of
+// which a flat regex would mishandle — walk braces manually instead.
+func extractPostureSummaryJSON(message string) string {
+	const tag = "[posture_summary:"
+	i := strings.Index(message, tag)
+	if i < 0 {
+		return ""
+	}
+	start := strings.IndexByte(message[i:], '{')
+	if start < 0 {
+		return ""
+	}
+	start += i
+	depth := 0
+	for j := start; j < len(message); j++ {
+		switch message[j] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return message[start : j+1]
+			}
+		}
+	}
+	return ""
+}
+
+// riskLevelLabel maps the dlbackend RULA risk_level enum to the string
+// vocabulary the habit skill expects on posture_alert rows.
+func riskLevelLabel(level int) string {
+	switch level {
+	case 4:
+		return "high"
+	case 3:
+		return "medium"
+	case 2:
+		return "low"
+	case 1:
+		return "negligible"
+	default:
+		return ""
+	}
+}
+
+// extractPostureAlertExtras parses the [posture_summary: ...] JSON
+// payload on a motion.activity message and translates the fields the
+// habit skill needs onto a posture.AlertExtras.
+//
+// Source-of-truth fields are the `worst_*` keys (lelamp pre-computes
+// them as the max across the same 3 samples it surfaces for the DM
+// gallery), so habit numbers stay aligned with the photos the user
+// just saw. Falls back to `latest_*` when an older lelamp build is
+// still in the field, so a half-rolled deploy doesn't drop alert
+// rows entirely.
+//
+// Returns ok=false when neither set of fields carries score/risk —
+// habit can tolerate sparse history but shouldn't see rows missing
+// both pieces of ergonomic data.
+func extractPostureAlertExtras(message string) (posture.AlertExtras, bool) {
+	body := extractPostureSummaryJSON(message)
+	if body == "" {
+		return posture.AlertExtras{}, false
+	}
+	var s struct {
+		WorstScore      int `json:"worst_score"`
+		WorstRiskLevel  int `json:"worst_risk_level"`
+		WorstLeftScore  int `json:"worst_left_score"`
+		WorstRightScore int `json:"worst_right_score"`
+
+		LatestScore     int `json:"latest_score"`
+		LatestRiskLevel int `json:"latest_risk_level"`
+		LatestLeft      struct {
+			Score int `json:"score"`
+		} `json:"latest_left"`
+		LatestRight struct {
+			Score int `json:"score"`
+		} `json:"latest_right"`
+	}
+	if err := json.Unmarshal([]byte(body), &s); err != nil {
+		return posture.AlertExtras{}, false
+	}
+
+	score := s.WorstScore
+	risk := s.WorstRiskLevel
+	left := s.WorstLeftScore
+	right := s.WorstRightScore
+	if score == 0 && risk == 0 {
+		// Older lelamp builds (or any path where the worst aggregate
+		// wasn't computed) — fall back to the last-sample values so
+		// the alert row still lands.
+		score = s.LatestScore
+		risk = s.LatestRiskLevel
+		left = s.LatestLeft.Score
+		right = s.LatestRight.Score
+	}
+	if score == 0 && risk == 0 {
+		return posture.AlertExtras{}, false
+	}
+	return posture.AlertExtras{
+		Score:      score,
+		Risk:       riskLevelLabel(risk),
+		LeftScore:  left,
+		RightScore: right,
+	}, true
 }
 
 // extractPoseBucketMarkers pulls (bucket_id, [worst filenames]) from a

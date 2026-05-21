@@ -134,35 +134,33 @@ function useScrubSecrets() {
   }, []);
 }
 
-// Pick up an auth token from `#token=<bearer>` on the URL fragment and seed
-// it into the Bearer header used by /api/* calls. Used by the post-setup
-// AP→.local redirect to keep the user authed across origins: HTTP cookies
-// are per-origin so the lumi_session set on 192.168.100.1 doesn't carry to
-// lumi-xxxx.local. Putting the bearer in the fragment (not the query) keeps
-// it out of HTTP logs / referrer headers; we replaceState immediately so the
-// hash also disappears from browser history before the user can navigate.
-function useTokenFromHash() {
+// Pick up the bearer (llm_api_key) from the URL query and seed it into the
+// Bearer header used by /api/* calls. Also exchanges it for a session cookie
+// on the current origin so refresh / new tab keeps the user authed without
+// needing the URL params again. Used by the post-setup AP→.local redirect:
+// HTTP cookies are per-origin so the lumi_session set on 192.168.100.1
+// doesn't carry to lumi-xxxx.local; useScrubSecrets() runs AFTER this
+// to wipe the secret out of the address bar / browser history.
+function useBearerFromQuery() {
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const match = window.location.hash.match(/^#token=([^&]+)/);
-    if (!match) return;
-    const token = decodeURIComponent(match[1]);
+    const token = new URLSearchParams(window.location.search).get("llm_api_key");
     if (!token) return;
     setApiToken(token);
-    window.history.replaceState(
-      null,
-      "",
-      `${window.location.pathname}${window.location.search}`,
-    );
+    // Issue session cookie on this origin. adminAuthMiddleware already
+    // validates the Bearer the patched fetch attaches; the cookie's purpose
+    // is to outlive the in-memory token for refresh / new-tab continuity.
+    fetch("/api/login/exchange", { method: "POST" }).catch(() => {
+      /* not fatal — Bearer still rides every /api/* call in this tab */
+    });
   }, []);
 }
 
 function App() {
-  // Order matters: pick up the fragment-borne bearer BEFORE scrubbing the
-  // URL so a `?llm_api_key=…#token=…` link survives long enough to capture
-  // both pieces. scrubLocationSecrets only touches the search string, so
-  // running it after useTokenFromHash() is safe either way.
-  useTokenFromHash();
+  // Order matters: pick up the URL bearer BEFORE useScrubSecrets() strips
+  // `llm_api_key` from window.location. Both run as useEffects after the
+  // first commit so declaration order = execution order.
+  useBearerFromQuery();
   useScrubSecrets();
   return (
     <BrowserRouter>

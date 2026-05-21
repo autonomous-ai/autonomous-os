@@ -247,8 +247,11 @@ class MusicService:
         thread.start()
         return True
 
-    def play_file(self, path: str, title: Optional[str] = None, person: str = "") -> bool:
-        """Play a local audio file directly via ffmpeg. Returns True if started."""
+    def play_file(self, path: str, title: Optional[str] = None, on_started=None, person: str = "") -> bool:
+        """Play a local audio file directly via ffmpeg. Returns True if started.
+
+        on_started: optional callable fired once ffmpeg begins streaming.
+        """
         if self._playing:
             self.stop()
             time.sleep(0.3)
@@ -257,6 +260,7 @@ class MusicService:
             logger.info("Music busy, skipping file: %s", path)
             return False
 
+        self._on_started = on_started
         self._stop_event.clear()
         thread = threading.Thread(
             target=self._play_file_sync,
@@ -323,6 +327,13 @@ class MusicService:
                 stderr=subprocess.PIPE,
             )
             self._ffmpeg_proc.stdout.close()
+
+            if self._on_started:
+                try:
+                    self._on_started()
+                except Exception as e:
+                    logger.warning("on_started callback failed: %s", e)
+                self._on_started = None
 
             while not self._stop_event.is_set():
                 ret = self._ffmpeg_proc.poll()

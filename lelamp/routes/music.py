@@ -158,6 +158,11 @@ def _on_music_complete():
     if state.animation_service:
         state.animation_service.dispatch(SERVO_CMD_MUSIC_STOP, None)
 
+    # Stop music wave (if active) before restoring underlying LED state.
+    # Idempotent: no-op if _music_playing already False (e.g. double-fire
+    # from explicit /audio/stop + thread finally).
+    state._on_music_play_end()
+
     user_state = state._user_led_state
     state.logger.info("Music stop: restoring state type=%s", user_state.get("type") if user_state else None)
     if user_state is not None and user_state.get("type") != "off":
@@ -226,11 +231,10 @@ def audio_play(req: MusicPlayRequest):
     def _on_audio_started():
         if state.animation_service:
             state.animation_service.dispatch(SERVO_CMD_MUSIC_START, style)
+        state._on_music_play_start()
 
     if req.query.startswith("/") and os.path.isfile(req.query):
-        started = state.music_service.play_file(req.query, person=person)
-        if started and state.animation_service:
-            state.animation_service.dispatch(SERVO_CMD_MUSIC_START, style)
+        started = state.music_service.play_file(req.query, on_started=_on_audio_started, person=person)
     else:
         started = state.music_service.play(req.query, on_started=_on_audio_started, person=person)
     if not started:

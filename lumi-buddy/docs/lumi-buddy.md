@@ -1,0 +1,412 @@
+# Lumi Buddy — Remote Computer Use for Lumi Lamp
+
+> **Status:** Design — MVP scoping in progress
+> **Last updated:** 2026-05-21
+> **Owner:** Leo
+> **Related:** [Lumi Buddy MVP plan](./lumi-buddy-mvp.md)
+
+This document captures the full design discussion behind the **Lumi Buddy** feature: a native companion app on the user's computer that lets the Lumi lamp control the desktop (open apps, navigate browser, type, etc.) — TeamViewer-style but driven by voice/AI through the lamp.
+
+The MVP-only implementation plan lives in [`lumi-buddy-mvp.md`](./lumi-buddy-mvp.md). This doc is the long-form reference for *why* the architecture is what it is.
+
+---
+
+## 1. Goals & non-goals
+
+### Goals
+- Lumi lamp can drive a user's computer via voice commands ("open Chrome", "go to Gmail", "join Google Meet", "type X", "close Slack")
+- Works across any macOS app (not just browser)
+- LAN-only, pairing-based — no relay server, no cloud middleman
+- Mac-first MVP; Windows/Linux deferred to v1.2+
+
+### Non-goals (MVP)
+- Vision-based control (Claude Computer Use API screenshot → click loop)
+- Real-time screen streaming back to lamp
+- Windows / Linux support
+- Multi-buddy per lamp (family / multiple devices)
+- Code-signed / notarized binary — right-click → Open is acceptable for self-hosted MVP
+- AppleScript executor beyond bundled simple cases
+- Arbitrary shell command execution (too dangerous, defer behind explicit flag)
+
+---
+
+## 2. Use cases (MVP)
+
+| Voice command (example) | Action chain |
+|-------------------------|--------------|
+| "Mở Chrome và vào Gmail" | `open_app(Google Chrome)` → `open_url(https://gmail.com)` |
+| "Tự động join Google Meet" | `open_url(https://meet.google.com/<last-or-configured-link>)` |
+| "Mở Spotify" | `open_app(Spotify)` |
+| "Gõ 'hello world' vào ô đang focus" | `type_text("hello world")` |
+| "Đóng Slack" | `close_app(Slack)` |
+| "Bật chế độ Do Not Disturb" | `applescript(...)` (whitelisted) |
+| "Hiện noti 'meeting in 5 min'" | `notification(title, body)` |
+
+Out-of-scope MVP examples (defer to vision phase):
+- "Đọc email mới nhất rồi tóm tắt cho tôi" (requires screen reading)
+- "Tìm trên Google nội dung … rồi click vào kết quả đầu" (requires click-by-vision)
+- "Highlight đoạn này rồi copy" (requires selection state awareness)
+
+---
+
+## 3. Architecture
+
+```
+┌─────────────────────────┐         ┌────────────────────────────┐
+│  User                   │         │  Mac (user's computer)     │
+│    │ voice              │         │  ┌──────────────────────┐  │
+│    ▼                    │         │  │ lumi-buddy.app       │  │
+│  ┌─────────────────┐    │         │  │ (Swift, menu bar)    │  │
+│  │ Lumi Lamp (Pi)  │    │         │  │                      │  │
+│  │                 │    │         │  │  ┌────────────────┐  │  │
+│  │  lelamp (Py)    │    │         │  │  │ Pairing & WS   │  │  │
+│  │    └─ STT/TTS   │    │ ◀──WS───┼──┼──┤ client         │  │  │
+│  │                 │    │         │  │  └────────────────┘  │  │
+│  │  lumi (Go)      │    │         │  │  ┌────────────────┐  │  │
+│  │    ├─ OpenClaw  │    │         │  │  │ Executors      │  │  │
+│  │    │   └─ skill │    │         │  │  │  NSWorkspace   │  │  │
+│  │    │   "compu-  │    │         │  │  │  CGEvent       │  │  │
+│  │    │    ter-use"│    │         │  │  │  AppleScript   │  │  │
+│  │    └─ buddy svc │    │         │  │  └────────────────┘  │  │
+│  └─────────────────┘    │         │  └──────────────────────┘  │
+│         ▲               │         │            │               │
+│         │ mDNS          │         │            ▼               │
+│         │ lumi-xxxx     │         │   macOS apps (Chrome,      │
+│         │ .local        │         │   Finder, Spotify, …)      │
+└─────────────────────────┘         └────────────────────────────┘
+```
+
+### Happy-path flow
+
+1. User speaks: "Mở Chrome trên máy tính và vào Gmail"
+2. Mic on lelamp → STT
+3. Transcript → OpenClaw → matches skill `computer-use`
+4. Skill parses to commands and calls Lumi Go:
+   `POST /api/buddy/command {action:"open_app", params:{app:"Google Chrome"}}`
+   `POST /api/buddy/command {action:"open_url", params:{url:"https://gmail.com"}}`
+5. Lumi Go's buddy dispatcher looks up the paired buddy in the WS registry, forwards command over the open WS
+6. lumi-buddy decodes JSON, dispatches to executor (NSWorkspace, CGEvent, etc.), executes
+7. Buddy returns `{ok:true}` over the same WS
+8. Skill receives result, returns TTS-friendly confirmation
+9. lelamp speaks: "Đã mở Gmail trên máy của bạn rồi"
+
+### Connection direction: buddy → lamp
+
+**Buddy is the WS client. Lamp is the WS server.** Reasons:
+
+- Buddy does not need to open any port. The Mac firewall stays untouched. Lower attack surface.
+- Lamp already has a stable mDNS hostname (`lumi-xxxx.local`) per `project_mdns_hostname.md`. Buddy resolves and connects.
+- Single persistent WS → command latency = 1 round-trip (no TCP/TLS cold-start per command).
+- Reconnect logic lives in buddy (simpler — buddy can detect lamp reboots and re-connect after).
+
+**Alternative considered:** lamp connects to buddy. Rejected because:
+- Requires opening port on Mac (firewall prompt every time)
+- Buddy must be mDNS-discoverable from lamp (extra advertise)
+- Lamp's HTTP layer is already the integration surface; this keeps things consistent
+
+---
+
+## 4. Components
+
+### 4.1 `lumi-buddy` (Swift macOS app)
+
+- `NSStatusItem` in menu bar (no Dock icon; `setActivationPolicy(.accessory)`)
+- Menu: pairing state, connection state, last command, "Pause", "Revoke pairing", "Quit"
+- mDNS browser via `Network.framework` (`NWBrowser`)
+- Pairing flow (6-digit code, Keychain token)
+- Persistent `URLSessionWebSocketTask` to lamp
+- Command executors:
+  - **NSWorkspace** for app launch, URL open
+  - **CGEvent** for keystrokes & key combos
+  - **AppleScript / OSAScript** for "close app" and limited whitelisted scripts
+  - **UNUserNotificationCenter** for desktop notifications
+- Permission helpers (Accessibility prompt, Automation per-app prompts)
+- Local audit log (file in `~/Library/Application Support/LumiBuddy/audit.log`) — also pushed to lamp opportunistically
+- OSLog (unified logging) for diagnostics
+
+### 4.2 `lumi` Go server — new package `internal/buddy/`
+
+| File | Responsibility |
+|------|----------------|
+| `types.go` | Command / response schemas, pairing types |
+| `store.go` | Persistent storage of paired buddies (token, fingerprint, name) — likely in `config/buddies.json` |
+| `pairing.go` | Code generation, validation, token issuance |
+| `registry.go` | In-memory registry of currently-connected buddies (WS handles) |
+| `ws.go` | WS upgrade handler, auth, per-buddy message loop |
+| `dispatcher.go` | `Dispatch(buddyID, cmd) → response` — request/reply over WS with timeout |
+| `service.go` | High-level service tying the above together |
+| `wire.go` | Google Wire provider set |
+
+New HTTP routes (in `server/buddy/delivery/http/`):
+
+| Route | Auth | Purpose |
+|-------|------|---------|
+| `POST /api/buddy/pair/start` | admin | Issue 6-digit code, valid 60s |
+| `POST /api/buddy/pair/confirm` | code | Confirm code → return long-lived token |
+| `GET  /api/buddy/list` | admin | List paired buddies + status |
+| `DELETE /api/buddy/:id` | admin | Revoke pairing |
+| `GET  /api/buddy/ws` | bearer token | WS upgrade for buddy |
+| `POST /api/buddy/command` | internal/admin | Dispatch single command (used by OpenClaw skill) |
+| `GET  /api/buddy/status` | admin | Connection status summary |
+| `GET  /api/buddy/audit` | admin | Paginated audit log |
+
+### 4.3 `lelamp` (Python) — **no changes for MVP**
+
+Hardware-only per `feedback_lelamp_external.md`. STT → OpenClaw, OpenClaw → TTS already work. The buddy flow only touches OpenClaw's skill layer, which lives in OpenClaw's skill directory, not in lelamp Python source.
+
+### 4.4 OpenClaw skill: `computer-use`
+
+- Lives in OpenClaw skills directory (path TBD per OpenClaw conventions)
+- `SKILL.md` describes triggers and tool surface
+- Trigger patterns include Vietnamese ("mở ... trên máy tính", "vào trang ... trên máy", "đóng app ...") and English ("open ... on my computer", "go to ... on my mac")
+- Skill script (or LLM tool-call) constructs the command and `curl`s `http://localhost:5000/api/buddy/command` with internal auth header
+- Returns TTS-friendly result string ("đã mở Chrome rồi", "không tìm thấy máy tính đã pair", etc.)
+
+### 4.5 Web UI (`lumi/web/`)
+
+New page `Paired Computers`:
+- List paired buddies (name, OS, last seen, status)
+- "Add new" button → calls `/api/buddy/pair/start` → displays 6-digit code → polls `/api/buddy/list` to detect successful pair
+- "Revoke" button per row
+
+---
+
+## 5. Command schema v1
+
+### Request (lamp → buddy)
+
+```json
+{
+  "id": "uuid-v4",
+  "action": "open_app",
+  "params": { "app": "Google Chrome" },
+  "timeout_ms": 5000,
+  "issued_at": "2026-05-21T10:00:00Z",
+  "issued_by": "computer-use:openclaw"
+}
+```
+
+### Response (buddy → lamp)
+
+```json
+{
+  "id": "uuid-v4",
+  "ok": true,
+  "result": { "pid": 1234 },
+  "error": null,
+  "duration_ms": 412
+}
+```
+
+### MVP actions
+
+| Action | Params | Executor |
+|--------|--------|----------|
+| `open_app` | `{app: string}` | `NSWorkspace.shared.launchApplication` |
+| `close_app` | `{app: string, force?: bool}` | AppleScript `tell application "X" to quit` |
+| `open_url` | `{url: string, browser?: "default"\|"chrome"\|"safari"}` | `NSWorkspace.shared.open(URL)` |
+| `type_text` | `{text: string, delay_ms?: int}` | `CGEventKeyboardSetUnicodeString` |
+| `key_combo` | `{keys: ["cmd","n"]}` | `CGEventCreateKeyboardEvent` with modifier flags |
+| `notification` | `{title: string, body?: string}` | `UNUserNotificationCenter` |
+| `ping` | `{}` | health-check, returns `{ok:true}` |
+
+Reserved for later (defined but not implemented MVP):
+- `applescript` (whitelisted only)
+- `screenshot` (vision phase)
+- `click_at` (vision phase)
+- `read_clipboard` / `write_clipboard`
+- `focus_window` / `bring_to_front`
+
+---
+
+## 6. Discovery & pairing
+
+### Discovery (each buddy startup)
+
+- Buddy browses `_lumi._tcp.local` via `NWBrowser`
+- For each found service, resolve hostname → store in candidate list
+- MVP: assume single lamp on LAN → auto-pick the first
+- Fallback: manual hostname entry (`lumi-xxxx.local`) in menu
+
+### Pairing (one-time)
+
+1. User opens buddy menu → "Pair with Lumi" → buddy hits lamp `POST /api/buddy/pair/start` (anonymous; rate-limited)
+2. Lamp generates 6-digit code, displays in web UI on `/devices` (or wherever); also returns the code in the start response so buddy can guide user
+3. Lamp keeps code in memory for 60s
+4. User reads the code from lamp web UI / display
+5. User types code into buddy
+6. Buddy calls `POST /api/buddy/pair/confirm {code, name, fingerprint, os_version}`
+7. Lamp validates code, generates long-lived bearer token, persists `{token, fingerprint, name, created_at}` in `buddies.json`
+8. Buddy stores token in macOS Keychain (service `network.autonomous.ai.lumi-buddy`)
+9. Buddy opens WS with `Authorization: Bearer <token>`
+
+### Reconnect
+
+- Buddy keeps WS open with periodic ping (every 15s)
+- On disconnect: exponential backoff (1s, 2s, 4s, … capped at 30s)
+- On lamp reboot: lamp sees old token in `buddies.json` and accepts WS immediately (token persistent)
+- On revoke: lamp removes from `buddies.json` and rejects with HTTP 401 → buddy detects, drops session, prompts re-pair
+
+---
+
+## 7. Security model
+
+| Layer | Mechanism |
+|-------|-----------|
+| Pairing | Requires explicit user action on Mac (typing the code). Cannot be initiated silently. |
+| Token storage | macOS Keychain (encrypted at rest) on buddy side; `buddies.json` on lamp (file mode 0600) |
+| Transport | WS over HTTP on LAN (MVP). **TLS deferred** — documented risk, mitigated by LAN-only and pairing requirement. v1.1: self-signed cert + pinning. |
+| Session indicator | Red dot in menu bar when buddy is connected and active. Always-visible. |
+| Audit log | Every command logged (timestamp, action, params hash, source). Local file + push to lamp `/api/buddy/audit`. |
+| Kill switch | "Pause" in menu = drop WS but keep token. "Revoke pairing" = drop token + tell lamp to remove. |
+| Permission gating | Commands fail clean with descriptive error if macOS permission denied (no silent failures). |
+| Blast radius | **Documented explicitly to user**: Lumi gets the same access level as the user account on the Mac. Trust ask is the central UX concern. |
+| Rate limiting | Lamp side: max N commands/sec/buddy. Prevents runaway loops. |
+
+### Threats considered
+
+1. **Malicious LAN attacker** → cannot pair without code from web UI. Cannot replay token without breaching Keychain.
+2. **Compromised lamp** → can run arbitrary commands on Mac (= blast radius). Mitigation: user can revoke at any time from menu bar without needing lamp access.
+3. **Compromised buddy** (malware on Mac that hijacks the WS) → could send fake responses to lamp. Mitigation: command IDs + signed responses (v1.1+).
+4. **Eavesdropping on LAN** → MVP doesn't encrypt WS. Acceptable for home LAN, must fix before any non-trusted-network deployment.
+
+---
+
+## 8. macOS permissions
+
+| Permission | Why | When triggered | If denied |
+|------------|-----|----------------|-----------|
+| Accessibility | `CGEvent` input injection (type_text, key_combo) | First `type_text` / `key_combo` command | Command returns error; menu bar shows "⚠ Accessibility needed" |
+| Automation (per-app) | AppleScript control of specific app (close_app) | First close_app on each target app | Command returns error |
+| Notifications | Showing buddy status & noti commands | First app launch (request permission immediately) | `notification` action fails; status indicator still works |
+
+**No Screen Recording permission** in MVP (no screenshots).
+
+---
+
+## 9. Future roadmap
+
+| Version | Feature | Notes |
+|---------|---------|-------|
+| v1.1 | Vision fallback via Claude Computer Use | For commands without intent match |
+| v1.1 | TLS for WS | Self-signed + cert pinning |
+| v1.2 | Windows port | Tauri/Rust most likely |
+| v1.3 | Linux port (X11 first) | Wayland deferred |
+| v1.4 | Multi-buddy per lamp | Family scenario |
+| v1.5 | Screen Recording + on-demand screenshot | Lamp can request frame |
+| v2.0 | Code signing + notarization + Sparkle | Real distribution |
+| v2.0 | App-specific helpers | First-party integrations: Chrome extension, Slack bot, etc. |
+
+---
+
+## 10. Risks & open questions
+
+1. **Trust** — central UX concern. Need clear session indicators, audit log access, easy kill switch.
+2. **macOS API churn** — Accessibility / AppleScript APIs shift between major macOS versions. Need to pin minimum OS and test against new versions on release.
+3. **Latency** — voice → STT → OpenClaw → intent → WS → buddy → action ≈ 2–4s end-to-end. Will feel slow vs Siri. Mitigation: TTS feedback ("ok, đang mở Chrome…") to cover latency.
+4. **Distribution without notarization** — first-launch requires right-click → Open. Acceptable for MVP. Plan signing at v2.0.
+5. **Command ambiguity** — "mở app" without target needs a clarifying TTS turn. Skill design must handle this.
+6. **Mac sleep / login lock** — buddy can't drive Mac if screen is locked. Define behavior: queue + retry? error out? For MVP: error out with clear message.
+7. **Multiple Macs on same LAN** — multiple buddies, single lamp. MVP allows only one paired buddy. Document this.
+8. **Lamp on different network** — buddy can't connect. Defer until VPN/relay phase.
+
+---
+
+## 11. Tech stack decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Buddy language | **Swift (native)** | Best Mac API surface (CGEvent, AppleScript, NSWorkspace all native); smallest binary; no plugin layer |
+| Project format | **Swift Package Manager** initially | No Xcode dependency; faster iteration. Migrate to Xcode `.xcodeproj` when `.app` bundle + signing is needed |
+| Min macOS | **macOS 13 (Ventura)** | `NWBrowser` modern API, `Network.framework` mature; older versions need backports |
+| Network protocol | **WebSocket (raw, no TLS in MVP)** | Persistent, bi-directional, well-supported by URLSessionWebSocketTask. TLS in v1.1 |
+| Discovery | **mDNS via `Network.framework` `NWBrowser`** | Native, no third-party deps |
+| Command codec | **JSON** | Matches lamp's existing serializer style; easy debug |
+| Token storage | **macOS Keychain** | Encrypted, OS-managed |
+| Pref storage | **UserDefaults / plist** | Standard macOS for non-secrets |
+| Logging | **OSLog (unified)** | Native, viewable in Console.app |
+| Test framework | **XCTest** | Standard |
+| Go side | **Existing patterns** (Gin, Wire, internal/) | Follow `internal/openclaw/`, `server/<domain>/delivery/http/` |
+| Lumi-buddy folder location | **Repo root** alongside `lumi/`, `lelamp/` | Self-contained, can be built independently |
+
+---
+
+## 12. Discussion log (2026-05-21)
+
+### Initial brief from Leo
+
+> Mình muốn làm 1 chức năng remote computer use. Tưởng tượng Lumi lamp sẽ remote vào MacBook của mình, điều khiển máy tính, app, browser Chrome … giống cách supporter qua TeamViewer điều khiển máy của mình.
+>
+> Máy MacBook cần chạy 1 software lumi-buddy trên top status bar, sau đó quét xem có Lumi lamp đang chạy LAN IP gì đó, thì accept cho Lumi lamp được connect và computer use máy MacBook.
+>
+> VD mình nói "mở Chrome trên máy tính và vào Gmail lấy mail ra", hay "tự động join Google Meet" … cần code thêm 1 folder riêng `lumi-buddy` (chưa rõ dùng ngôn ngữ gì swift hay flutter …). Sau đó install vào Mac/Windows/Linux. Software này paring với Lumi lamp và cho phép Lumi lamp điều khiển.
+
+### Approach options considered
+
+**1. Use existing protocol (VNC, RustDesk, TeamViewer)**
+- Pro: zero implementation
+- Con: those are human-controller-focused, not AI/tool-API-friendly. Lumi would still need to "see screen + click/type" through them, which is essentially building a TeamViewer client inside Lumi.
+- **Rejected.**
+
+**2. macOS built-in Screen Sharing / VNC**
+- Pro: zero install on Mac
+- Con: same as above — designed for human controller. Adding Lumi vision-action loop on top is awkward.
+- **Rejected for MVP.**
+
+**3. Custom Mac Companion (chosen)**
+- Pro: native API access, smallest latency, intent-level commands without vision-loop overhead, can integrate deeply with macOS (Spotlight, Shortcuts, etc.)
+- Con: must build & maintain. Per-platform code (eventually).
+- **Chosen.**
+
+### Decision: intent-based vs vision-loop
+
+**Intent A (chosen):** parse voice intent → map to structured command (`open_app`, `type_text`) → buddy executes locally without screenshots.
+- Latency: <500ms per command
+- Cost: 0 extra LLM calls (just OpenClaw's existing intent parsing)
+- Robustness: brittle to unusual requests
+- Coverage: 80% of stated use cases (open Chrome, go to Gmail, join Meet, type, close app)
+
+**Vision B (deferred to v1.1):** screenshot → Claude Computer Use API → click(x,y) → repeat.
+- Latency: 3–10s per turn
+- Cost: every screenshot is a large message (expensive)
+- Robustness: bend doesn't break — Claude can see and adapt
+- Coverage: anything visible on screen
+
+**Hybrid C (deferred to v1.1):** A by default, B fallback for unrecognized commands.
+
+### Decision: where does the LLM run?
+
+**Option a (chosen):** OpenClaw (on lamp) does intent parsing. Buddy is dumb executor receiving structured commands.
+
+**Option b (deferred):** Buddy hosts its own LLM for complex tasks ("read latest email and summarize"). Defer until Vision B needed.
+
+### Decision: language
+
+Mac-only MVP → **Swift native**. Tauri/Rust deferred until Windows/Linux phase. Flutter ruled out (weak native API bridges for input/screen). Electron ruled out (RAM overhead unacceptable for a menu-bar resident).
+
+### Decision: connection direction
+
+**Buddy → lamp** (chosen) — see §3 for rationale. Buddy is WS client, lamp is WS server.
+
+### Decision: distribution (MVP)
+
+**No code signing** — user does right-click → Open on first launch. Apple Developer account ($99/year) deferred until v2.0.
+
+### Decision on `lelamp` and `lumi` Go
+
+- `lelamp` (Python) — **no changes**. Hardware-only.
+- `lumi` (Go) — **new package** `internal/buddy/`, new HTTP routes, new WS gateway.
+- `OpenClaw` — new skill `computer-use`.
+- `lumi/web` — new "Paired Computers" page.
+- `CLAUDE.md` — new doc row.
+
+---
+
+## 13. References
+
+- `project_mdns_hostname.md` — lamp publishes `lumi-<last4hex>.local`
+- `feedback_lelamp_external.md` — hardware code lives in Python, not Go
+- `project_security_login_ui_batch.md` — recent security audit closed; cookie HMAC + bcrypt admin patterns to reuse for buddy auth
+- [Anthropic Computer Use docs](https://docs.anthropic.com/en/docs/build-with-claude/computer-use) — for vision phase v1.1
+- [Apple ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit) — for screenshot capability v1.5
+- [Apple Accessibility API](https://developer.apple.com/documentation/applicationservices/axuielement_h) — for window/button targeting

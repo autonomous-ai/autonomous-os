@@ -1,9 +1,9 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
-import { getNetworks, safeSearch, setupDevice } from "@/lib/api";
+import { getNetworks, setupDevice } from "@/lib/api";
 import { useTheme } from "@/lib/useTheme";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
-import { useSetupUrlParams } from "@/hooks/setup/useSetupUrlParams";
+import { useSetupUrlParams, getInitialSearch } from "@/hooks/setup/useSetupUrlParams";
 import { useTTSCatalog } from "@/hooks/setup/useTTSCatalog";
 import { useConfigPrefill } from "@/hooks/setup/useConfigPrefill";
 import { useSetupStatusPolling } from "@/hooks/setup/useSetupStatusPolling";
@@ -144,7 +144,11 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
   const [setupPhase, setSetupPhase] = useState<"connecting" | "connected" | "failed">("connecting");
   const [setupLanIP, setSetupLanIP] = useState<string>("");
   const [setupErrorMsg, setSetupErrorMsg] = useState<string>("");
-  const [activeSection, setActiveSection] = useState<SectionId>(lumiPushedConfig ? "wifi" : "device");
+  // Always start on Device. The admin-password input lives there (fresh
+  // devices need it; lumi-push doesn't carry that field via URL), so the
+  // user must see it before submitting. For already-provisioned devices
+  // useConfigPrefill detects cfg.device_id and skips device → wifi.
+  const [activeSection, setActiveSection] = useState<SectionId>("device");
   const contentRef = useRef<HTMLDivElement>(null);
 
   const [deviceId, setDeviceId] = useState(urlParams.deviceId || "");
@@ -253,7 +257,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
   const [faChannel, setFaChannel] = useState("");
   const [fdChannel, setFdChannel] = useState("");
 
-  // Face enroll — same flow as EditConfig.Face. Uses /hw/face endpoints
+  // Face enroll — same flow as EditConfig.Face. Uses /api/hardware/face endpoints
   // directly; only relevant in continue mode (lamp online).
   const {
     faceName, setFaceName,
@@ -378,17 +382,8 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
     setHasNetworkPassword,
   });
 
-  // Bearer to ride along on cross-origin redirects (AP → lumi-xxxx.local).
-  // The lumi_session cookie is per-origin so it does not survive the host
-  // switch; we attach this as `#token=<llm_api_key>` on the redirect URL
-  // and App.useTokenFromHash() seeds it back into the Bearer header on the
-  // new origin. URL fragment never reaches the server / referrer / proxy log.
-  const bearerForRedirect = urlParams.llmApiKey || llmApiKey;
-  const tokenHash = bearerForRedirect ? `#token=${encodeURIComponent(bearerForRedirect)}` : "";
-
   useSetupStatusPolling({
     setupWorking, setupPhase, setupLanIP, lumiMdnsHost,
-    bearerToken: bearerForRedirect,
     setSetupPhase, setSetupLanIP, setSetupErrorMsg,
   });
 
@@ -691,7 +686,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                       }}>
                         Stuck here? Reconnect to your home Wi-Fi, then open{" "}
                         <a
-                          href={`http://${lumiMdnsHost}.local${window.location.pathname}${safeSearch()}${tokenHash}`}
+                          href={`http://${lumiMdnsHost}.local${window.location.pathname}${getInitialSearch()}`}
                           style={{
                             color: C.amber, textDecoration: "none",
                             fontFamily: "ui-monospace, monospace",
@@ -739,7 +734,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                           // no-ops the same-URL click and they stay stuck on
                           // the "Lumi is online!" screen even though the lamp
                           // is reachable in continue mode now.
-                          href={`http://${lumiMdnsHost}.local${window.location.pathname}${safeSearch()}${tokenHash}`}
+                          href={`http://${lumiMdnsHost}.local${window.location.pathname}${getInitialSearch()}`}
                           onClick={(e) => {
                             if (window.location.hostname === `${lumiMdnsHost}.local`) {
                               e.preventDefault();
@@ -913,27 +908,47 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                       </button>
                     )}
                     {isLastStep ? (
-                      <button
-                        // Distinct keys prevent React from mutating a single
-                        // <button> element from type="button" (Next) to
-                        // type="submit" (Setup) in place. Without separate
-                        // keys the in-flight click on Next can land on the
-                        // mutated Submit button and trigger an unwanted form
-                        // submission.
-                        key="submit"
-                        type="submit"
-                        disabled={loading || loadingList}
-                        style={{
-                          padding: "9px 22px", borderRadius: 7, fontSize: 12.5, fontWeight: 600,
-                          background: loading || loadingList ? C.surface : C.amber,
-                          color: loading || loadingList ? C.textMuted : "#0C0B09",
-                          border: "none",
-                          cursor: loading || loadingList ? "not-allowed" : "pointer",
-                          opacity: loading || loadingList ? 0.6 : 1,
-                        }}
-                      >
-                        {loading ? "Setting up…" : "Setup"}
-                      </button>
+                      isContinue ? (
+                        // Continue mode = device already provisioned + on
+                        // home Wi-Fi. Voice / Face are optional enrollments,
+                        // so the last step shouldn't re-trigger setup — send
+                        // the user to /monitor instead. Re-submit only
+                        // happens in initial mode (last step = wifi or tts).
+                        <button
+                          key="done"
+                          type="button"
+                          onClick={() => navigate("/monitor")}
+                          style={{
+                            padding: "9px 22px", borderRadius: 7, fontSize: 12.5, fontWeight: 600,
+                            background: C.amber, color: "#0C0B09",
+                            border: "none", cursor: "pointer",
+                          }}
+                        >
+                          Go to monitor →
+                        </button>
+                      ) : (
+                        <button
+                          // Distinct keys prevent React from mutating a single
+                          // <button> element from type="button" (Next) to
+                          // type="submit" (Setup) in place. Without separate
+                          // keys the in-flight click on Next can land on the
+                          // mutated Submit button and trigger an unwanted form
+                          // submission.
+                          key="submit"
+                          type="submit"
+                          disabled={loading || loadingList}
+                          style={{
+                            padding: "9px 22px", borderRadius: 7, fontSize: 12.5, fontWeight: 600,
+                            background: loading || loadingList ? C.surface : C.amber,
+                            color: loading || loadingList ? C.textMuted : "#0C0B09",
+                            border: "none",
+                            cursor: loading || loadingList ? "not-allowed" : "pointer",
+                            opacity: loading || loadingList ? 0.6 : 1,
+                          }}
+                        >
+                          {loading ? "Setting up…" : "Setup"}
+                        </button>
+                      )
                     ) : (
                       <button
                         key="next"

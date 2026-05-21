@@ -115,6 +115,15 @@ if (typeof window !== "undefined" && !(window as unknown as { __lumiFetchPatched
     const isApiCall = url.startsWith("/api/") || url.includes("/api/");
     if (!isApiCall) return origFetch(input, init);
 
+    // `mode: "no-cors"` fetches (the mDNS probe in useSetupStatusPolling is
+    // the only intentional caller) must stay as the operator wrote them —
+    // both the Authorization header (not in the CORS safelist) and the
+    // forced `credentials: "include"` flip Chrome into preflight / private-
+    // network restriction behaviour that throws before the request leaves
+    // the page. Pass-through preserves the original "send raw ping, don't
+    // care about response body" semantics.
+    if (init?.mode === "no-cors") return origFetch(input, init);
+
     const headers = new Headers(init?.headers);
     if (apiToken && !headers.has("Authorization")) {
       headers.set("Authorization", `Bearer ${apiToken}`);

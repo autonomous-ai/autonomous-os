@@ -67,7 +67,7 @@ export function VoiceSection({
           setVoiceCountdown(remaining);
         }
       }, 1000);
-      fetch("/hw/speaker/record-enroll", {
+      fetch("/api/hardware/speaker/record-enroll", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: voiceLabel.trim().toLowerCase(), duration_sec: VOICE_DURATION_SEC }),
