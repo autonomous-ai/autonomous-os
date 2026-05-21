@@ -42,7 +42,7 @@ class YuNetFaceDetector(FaceDetector):
         self._running: bool = False
 
     @override
-    def start(self) -> None:
+    def _start_impl(self) -> None:
         if self._running:
             self._logger.info("Already running")
             return
@@ -59,12 +59,12 @@ class YuNetFaceDetector(FaceDetector):
         self._logger.info("Ready")
 
     @override
-    def stop(self) -> None:
+    def _stop_impl(self) -> None:
         self._detector = None
         self._running = False
 
     @override
-    def is_ready(self) -> bool:
+    def _is_ready_impl(self) -> bool:
         return self._running and self._detector is not None
 
     @override
@@ -73,15 +73,12 @@ class YuNetFaceDetector(FaceDetector):
         return input
 
     @override
-    def predict(self, input: list[cv2t.MatLike], *, preprocess: bool = True) -> list[RawFaceDetection]:
+    def _predict_impl(self, input: list[cv2t.MatLike], *, preprocess: bool = True, **kwargs: Any) -> list[RawFaceDetection]:
         """Detect faces in a batch of BGR frames.
 
         Returns one RawFaceDetection per frame with bbox_xyxy and confidence
         as batched numpy arrays. Empty arrays when no faces detected.
         """
-        if self._detector is None:
-            raise RuntimeError("Detector not started")
-
         _EMPTY: RawFaceDetection = RawFaceDetection(
             bbox_xyxy=np.zeros((0, 4), dtype=np.float32),
             confidence=np.zeros(0, dtype=np.float32),

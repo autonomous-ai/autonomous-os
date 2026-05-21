@@ -1,9 +1,32 @@
-"""Factory functions for action recognizer models."""
+"""Factory functions and factory classes for action recognizer models."""
 
 from pathlib import Path
 
 from core.enums import HumanActionRecognizerEnum
 from core.perception.action.predictors.base import HumanActionRecognizer
+from core.perception.base import PredictorFactory
+
+
+class ActionRecognizerFactory(PredictorFactory[HumanActionRecognizer]):
+    """Factory that creates HumanActionRecognizer instances from config."""
+
+    def __init__(
+        self,
+        model_name: HumanActionRecognizerEnum,
+        model_path: Path | None = None,
+        max_frames: int | None = None,
+        frame_size: tuple[int, int] | None = None,
+    ) -> None:
+        self._model_name = model_name
+        self._model_path = model_path
+        self._max_frames = max_frames
+        self._frame_size = frame_size
+
+    def create(self) -> HumanActionRecognizer:
+        return create_recognizer(
+            self._model_name, self._model_path,
+            max_frames=self._max_frames, frame_size=self._frame_size,
+        )
 
 
 def create_recognizer(

@@ -6,7 +6,7 @@ batch preprocessing, and batch inference.
 """
 
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import cv2
 import cv2.typing as cv2t
@@ -59,7 +59,7 @@ class PoseEstimator2D(PredictorBase[cv2t.MatLike, RawPose2DDetection]):
         return self._input_size
 
     @override
-    def start(self) -> None:
+    def _start_impl(self) -> None:
         if self._running:
             self._logger.info("Already running")
             return
@@ -69,12 +69,12 @@ class PoseEstimator2D(PredictorBase[cv2t.MatLike, RawPose2DDetection]):
         self._logger.info("Ready")
 
     @override
-    def stop(self) -> None:
+    def _stop_impl(self) -> None:
         self._session = None
         self._running = False
 
     @override
-    def is_ready(self) -> bool:
+    def _is_ready_impl(self) -> bool:
         return self._running and self._session is not None
 
     @override
@@ -90,11 +90,12 @@ class PoseEstimator2D(PredictorBase[cv2t.MatLike, RawPose2DDetection]):
         return results
 
     @override
-    def predict(
+    def _predict_impl(
         self,
         input: list[cv2t.MatLike],
         *,
         preprocess: bool = True,
+        **kwargs: Any,
     ) -> list[RawPose2DDetection]:
         """Run 2D pose estimation on a batch of frames.
 
@@ -102,9 +103,6 @@ class PoseEstimator2D(PredictorBase[cv2t.MatLike, RawPose2DDetection]):
         original frame dimensions for coordinate scaling).
         Returns one RawPose2DDetection per frame.
         """
-        if self._session is None:
-            raise RuntimeError("Estimator not started")
-
         # Store original sizes (W, H) before preprocessing
         original_sizes: npt.NDArray[np.float32] = np.array(
             [(f.shape[1], f.shape[0]) for f in input], dtype=np.float32

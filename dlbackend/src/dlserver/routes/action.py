@@ -43,7 +43,7 @@ async def action_analysis_ws(websocket: WebSocket):
         return
 
     try:
-        action_recognizer = action_model.create_session()
+        action_recognizer = await action_model.create_session()
         while True:
             raw = await websocket.receive_text()
             try:

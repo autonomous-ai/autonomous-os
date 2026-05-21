@@ -1,3 +1,4 @@
+import asyncio
 """Tests for action recognition with person detector enabled.
 
 Uses a small YOLO model (yolo11n.pt) for person detection and
@@ -18,13 +19,14 @@ from fastapi.testclient import TestClient
 from core.models.action import ActionPerceptionSessionConfig
 from core.perception.action import ActionPerception
 from core.perception.person.predictors import PersonDetector, YOLOPersonDetector
+from core.perception.person.utils import PersonDetectorFactory
 from dlserver.utils.state import set_action_model
 
 TEST_API_KEY = "test-secret-key"
 os.environ["DL_API_KEY"] = TEST_API_KEY
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
-PERSON_DRINKING_IMG = FIXTURES_DIR / "person_drinking.jpg"
+PERSON_DRINKING_IMG = FIXTURES_DIR / "images" / "person_drinking.jpg"
 X3D_MODEL_PATH = Path.cwd() / "local" / "x3d_m_16x5x1_int8.onnx"
 
 pytestmark = pytest.mark.skipif(
@@ -64,35 +66,39 @@ def person_detector():
 
 
 @pytest.fixture(scope="session")
-def model_with_detector(person_detector):
+def model_with_detector():
     from core.enums import HumanActionRecognizerEnum
-    from core.perception.action.utils import create_recognizer
+    from core.enums.person import PersonDetectorEnum
+    from core.perception.action.utils import ActionRecognizerFactory
 
-    recognizer = create_recognizer(
+    action_factory = ActionRecognizerFactory(
         model_name=HumanActionRecognizerEnum.X3D, model_path=X3D_MODEL_PATH
     )
+    person_factory = PersonDetectorFactory(
+        model_name=PersonDetectorEnum.YOLO, model_path="yolo11n.pt"
+    )
     m = ActionPerception(
-        action_recognizer=recognizer,
-        person_detector=person_detector,
+        action_recognizer_factory=action_factory,
+        person_detector_factory=person_factory,
         default_config=ActionPerceptionSessionConfig(frame_interval=0),
     )
-    m.start()
+    asyncio.run(m.start())
     return m
 
 
 @pytest.fixture(scope="session")
 def model_without_detector():
     from core.enums import HumanActionRecognizerEnum
-    from core.perception.action.utils import create_recognizer
+    from core.perception.action.utils import ActionRecognizerFactory
 
-    recognizer = create_recognizer(
+    factory = ActionRecognizerFactory(
         model_name=HumanActionRecognizerEnum.X3D, model_path=X3D_MODEL_PATH
     )
     m = ActionPerception(
-        action_recognizer=recognizer,
+        action_recognizer_factory=factory,
         default_config=ActionPerceptionSessionConfig(frame_interval=0),
     )
-    m.start()
+    asyncio.run(m.start())
     return m
 
 
@@ -162,7 +168,7 @@ class TestActionWithPersonDetector:
         """Person drinking image should produce action detections."""
         frame_b64 = _img_to_b64(PERSON_DRINKING_IMG)
         with client_with_detector.websocket_connect(
-            "/api/dl/action-analysis/ws", headers=AUTH_HEADERS
+            "/lelamp/api/dl/action-analysis/ws", headers=AUTH_HEADERS
         ) as ws:
             # Send enough frames to fill the buffer
             resp = None
@@ -180,7 +186,7 @@ class TestActionWithPersonDetector:
         """Black frame (no person) should return empty detected_classes."""
         frame_b64 = _make_empty_frame_b64()
         with client_with_detector.websocket_connect(
-            "/api/dl/action-analysis/ws", headers=AUTH_HEADERS
+            "/lelamp/api/dl/action-analysis/ws", headers=AUTH_HEADERS
         ) as ws:
             ws.send_text(json.dumps({"type": "frame", "task": "action", "frame_b64": frame_b64}))
             resp = ws.receive_json()
@@ -191,7 +197,7 @@ class TestActionWithPersonDetector:
         """After multiple frames of person drinking, 'drinking' should appear."""
         frame_b64 = _img_to_b64(PERSON_DRINKING_IMG)
         with client_with_detector.websocket_connect(
-            "/api/dl/action-analysis/ws", headers=AUTH_HEADERS
+            "/lelamp/api/dl/action-analysis/ws", headers=AUTH_HEADERS
         ) as ws:
             # Set whitelist to drinking-related actions
             ws.send_text(
@@ -228,7 +234,7 @@ class TestActionWithPersonDetector:
         frame_b64 = _img_to_b64(PERSON_DRINKING_IMG)
 
         for client in [client_with_detector, client_without_detector]:
-            with client.websocket_connect("/api/dl/action-analysis/ws", headers=AUTH_HEADERS) as ws:
+            with client.websocket_connect("/lelamp/api/dl/action-analysis/ws", headers=AUTH_HEADERS) as ws:
                 for _ in range(8):
                     ws.send_text(
                         json.dumps({"type": "frame", "task": "action", "frame_b64": frame_b64})

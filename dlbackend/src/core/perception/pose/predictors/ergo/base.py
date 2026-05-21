@@ -32,17 +32,17 @@ class ErgoAssessor(PredictorBase[ErgoInput, ErgoAssessment | None], ABC):
         self._running: bool = True
 
     @override
-    def start(self) -> None:
+    def _start_impl(self) -> None:
         self._running = True
         self._logger.info("Ready")
 
     @override
-    def stop(self) -> None:
+    def _stop_impl(self) -> None:
         self._running = False
         self._logger.info("Stopped")
 
     @override
-    def is_ready(self) -> bool:
+    def _is_ready_impl(self) -> bool:
         return self._running
 
     @override

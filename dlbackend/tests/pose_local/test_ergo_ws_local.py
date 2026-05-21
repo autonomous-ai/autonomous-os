@@ -1,3 +1,4 @@
+import asyncio
 """Tests for ergonomic assessment through the pose estimation endpoint."""
 
 import base64
@@ -12,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from core.models.pose import PosePerceptionSessionConfig
 from core.perception.pose.perception import PosePerception
-from core.perception.pose.utils import create_ergo_assessor, create_estimator_2d
+from core.perception.pose.utils import ErgoAssessorFactory, PoseEstimator2DFactory
 from dlserver.utils.state import get_pose_model, set_pose_model
 
 TEST_API_KEY = "test-secret-key"
@@ -37,22 +38,22 @@ def model():
     """Load RTMPose 2D + RULA ergo assessor."""
     from core.enums.pose import ErgoAssessorEnum, PoseEstimator2DEnum
 
-    estimator_2d = create_estimator_2d(
+    estimator_2d_factory = PoseEstimator2DFactory(
         model_name=PoseEstimator2DEnum.RTMPOSE, model_path=RTMPOSE_MODEL_PATH
     )
-    ergo_assessor = create_ergo_assessor(
+    ergo_assessor_factory = ErgoAssessorFactory(
         model_name=ErgoAssessorEnum.RULA,
         confidence_threshold=0.0,  # low threshold so random frames produce results
     )
     pose_model = PosePerception(
-        estimator_2d=estimator_2d,
-        ergo_assessor=ergo_assessor,
+        estimator_2d_factory=estimator_2d_factory,
+        ergo_assessor_factory=ergo_assessor_factory,
         default_config=PosePerceptionSessionConfig(
             confidence_threshold_2d=0.0,
             min_valid_keypoints=0,
         ),
     )
-    pose_model.start()
+    asyncio.run(pose_model.start())
     return pose_model
 
 
@@ -72,7 +73,7 @@ AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
 class TestErgoViaWebSocket:
     def test_frame_returns_ergo(self, client):
         """With ergo assessor configured, response should include ergo field."""
-        with client.websocket_connect("/api/dl/pose-estimation/ws", headers=AUTH_HEADERS) as ws:
+        with client.websocket_connect("/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS) as ws:
             ws.send_text(
                 json.dumps({"type": "frame", "task": "pose", "frame_b64": _make_frame_b64()})
             )
@@ -81,7 +82,7 @@ class TestErgoViaWebSocket:
             assert "ergo" in resp
 
     def test_ergo_has_expected_fields(self, client):
-        with client.websocket_connect("/api/dl/pose-estimation/ws", headers=AUTH_HEADERS) as ws:
+        with client.websocket_connect("/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS) as ws:
             ws.send_text(
                 json.dumps({"type": "frame", "task": "pose", "frame_b64": _make_frame_b64()})
             )
@@ -93,7 +94,7 @@ class TestErgoViaWebSocket:
             assert "right" in ergo
 
     def test_ergo_side_has_body_scores(self, client):
-        with client.websocket_connect("/api/dl/pose-estimation/ws", headers=AUTH_HEADERS) as ws:
+        with client.websocket_connect("/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS) as ws:
             ws.send_text(
                 json.dumps({"type": "frame", "task": "pose", "frame_b64": _make_frame_b64()})
             )
@@ -109,7 +110,7 @@ class TestErgoViaWebSocket:
                 assert "trunk" in side["body_scores"]
 
     def test_ergo_score_range(self, client):
-        with client.websocket_connect("/api/dl/pose-estimation/ws", headers=AUTH_HEADERS) as ws:
+        with client.websocket_connect("/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS) as ws:
             ws.send_text(
                 json.dumps({"type": "frame", "task": "pose", "frame_b64": _make_frame_b64()})
             )
@@ -119,7 +120,7 @@ class TestErgoViaWebSocket:
             assert 1 <= resp["ergo"]["right"]["score"] <= 7
 
     def test_ergo_overall_is_max_of_sides(self, client):
-        with client.websocket_connect("/api/dl/pose-estimation/ws", headers=AUTH_HEADERS) as ws:
+        with client.websocket_connect("/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS) as ws:
             ws.send_text(
                 json.dumps({"type": "frame", "task": "pose", "frame_b64": _make_frame_b64()})
             )
@@ -129,7 +130,7 @@ class TestErgoViaWebSocket:
             )
 
     def test_multiple_frames_all_have_ergo(self, client):
-        with client.websocket_connect("/api/dl/pose-estimation/ws", headers=AUTH_HEADERS) as ws:
+        with client.websocket_connect("/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS) as ws:
             for _ in range(3):
                 ws.send_text(
                     json.dumps({"type": "frame", "task": "pose", "frame_b64": _make_frame_b64()})
@@ -141,7 +142,7 @@ class TestErgoViaWebSocket:
 class TestErgoViaHTTP:
     def test_http_returns_ergo(self, client):
         resp = client.post(
-            "/api/dl/pose-estimate",
+            "/lelamp/api/dl/pose-estimate",
             json={"image_b64": _make_frame_b64()},
             headers=AUTH_HEADERS,
         )
@@ -152,7 +153,7 @@ class TestErgoViaHTTP:
 
     def test_http_ergo_has_both_sides(self, client):
         resp = client.post(
-            "/api/dl/pose-estimate",
+            "/lelamp/api/dl/pose-estimate",
             json={"image_b64": _make_frame_b64()},
             headers=AUTH_HEADERS,
         )
@@ -166,11 +167,11 @@ class TestNoErgoWithoutAssessor:
         """When no ergo assessor is configured, ergo should not appear."""
         from core.enums.pose import PoseEstimator2DEnum
 
-        estimator_2d = create_estimator_2d(
+        factory = PoseEstimator2DFactory(
             model_name=PoseEstimator2DEnum.RTMPOSE, model_path=RTMPOSE_MODEL_PATH
         )
-        pose_model_no_ergo = PosePerception(estimator_2d=estimator_2d)
-        pose_model_no_ergo.start()
+        pose_model_no_ergo = PosePerception(estimator_2d_factory=factory)
+        asyncio.run(pose_model_no_ergo.start())
 
         import config
         import server
@@ -181,7 +182,7 @@ class TestNoErgoWithoutAssessor:
         test_client = TestClient(server.app)
 
         with test_client.websocket_connect(
-            "/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
+            "/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
         ) as ws:
             ws.send_text(
                 json.dumps({"type": "frame", "task": "pose", "frame_b64": _make_frame_b64()})
@@ -191,4 +192,4 @@ class TestNoErgoWithoutAssessor:
             assert "ergo" not in resp
 
         set_pose_model(saved)
-        pose_model_no_ergo.stop()
+        asyncio.run(pose_model_no_ergo.stop())

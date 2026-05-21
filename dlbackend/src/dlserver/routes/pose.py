@@ -46,7 +46,7 @@ async def pose_estimation_ws(websocket: WebSocket):
         return
 
     try:
-        session = pose_model.create_session()
+        session = await pose_model.create_session()
         while True:
             raw: str = await websocket.receive_text()
             try:
@@ -98,7 +98,7 @@ async def pose_estimate(req: PoseEstimateRequest):
         raise HTTPException(status_code=503, detail="Pose model not loaded")
 
     frame = decode_image(req.image_b64)
-    session = pose_model.create_session()
+    session = await pose_model.create_session()
     result = await session.update(frame)
     if result is None:
         raise HTTPException(status_code=500, detail="Pose estimation failed")

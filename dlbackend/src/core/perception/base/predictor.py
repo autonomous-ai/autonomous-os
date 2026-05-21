@@ -1,9 +1,23 @@
 import logging
+import threading
 from abc import ABC, abstractmethod
 from typing import Any, Generic, TypeVar
 
 INPUT_T = TypeVar("INPUT_T")
 OUTPUT_T = TypeVar("OUTPUT_T")
+PREDICTOR_T = TypeVar("PREDICTOR_T")
+
+
+class PredictorFactory(Generic[PREDICTOR_T], ABC):
+    """Base class for predictor factories.
+
+    Subclasses store config (model path, thresholds, etc.) in __init__
+    and create fresh predictor instances via create().
+    """
+
+    @abstractmethod
+    def create(self) -> PREDICTOR_T:
+        """Create and return a new (unstarted) predictor instance."""
 
 
 class PredictorBase(Generic[INPUT_T, OUTPUT_T], ABC):
@@ -12,17 +26,18 @@ class PredictorBase(Generic[INPUT_T, OUTPUT_T], ABC):
             f"{self.__class__.__module__}.{self.__class__.__name__}"
         )
         self._logger.setLevel(logging.DEBUG)
+        self._lock: threading.RLock = threading.RLock()
 
     @abstractmethod
-    def start(self) -> None:
+    def _start_impl(self) -> None:
         pass
 
     @abstractmethod
-    def stop(self) -> None:
+    def _stop_impl(self) -> None:
         pass
 
     @abstractmethod
-    def is_ready(self) -> bool:
+    def _is_ready_impl(self) -> bool:
         pass
 
     @abstractmethod
@@ -30,12 +45,38 @@ class PredictorBase(Generic[INPUT_T, OUTPUT_T], ABC):
         """Preprocess a batch of inputs for inference."""
 
     @abstractmethod
-    def predict(self, input: list[INPUT_T], *, preprocess: bool = True) -> list[OUTPUT_T]:
-        """Make prediction on a batch of input.
+    def _predict_impl(
+        self, input: list[INPUT_T], *, preprocess: bool = True, **kwargs: Any
+    ) -> list[OUTPUT_T]:
+        """Internal prediction logic. Subclasses implement this instead of predict."""
+
+    def start(self) -> None:
+        with self._lock:
+            self._start_impl()
+
+    def stop(self) -> None:
+        with self._lock:
+            self._stop_impl()
+
+    def is_ready(self) -> bool:
+        with self._lock:
+            return self._is_ready_impl()
+
+    def predict(
+        self, input: list[INPUT_T], *, preprocess: bool = True, **kwargs: Any
+    ) -> list[OUTPUT_T]:
+        """Make prediction on a batch of input. Thread-safe via lock.
 
         Args:
             input: Batch of inputs.
             preprocess: If True (default), run preprocess on each input
                 before inference. Set to False when input is already
                 preprocessed (e.g. from a buffer).
+
+        Raises:
+            RuntimeError: If the predictor is not ready.
         """
+        with self._lock:
+            if not self._is_ready_impl():
+                raise RuntimeError(f"{self.__class__.__name__} is not ready")
+            return self._predict_impl(input, preprocess=preprocess, **kwargs)

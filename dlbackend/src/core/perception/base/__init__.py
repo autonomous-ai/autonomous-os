@@ -1,5 +1,5 @@
 from .perception import PerceptionBase
-from .predictor import PredictorBase
+from .predictor import PredictorBase, PredictorFactory
 from .session import PerceptionSessionBase
 
-__all__ = ["PerceptionBase", "PredictorBase", "PerceptionSessionBase"]
+__all__ = ["PerceptionBase", "PredictorBase", "PredictorFactory", "PerceptionSessionBase"]

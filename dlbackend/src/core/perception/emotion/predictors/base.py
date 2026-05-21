@@ -12,7 +12,7 @@ Concrete subclasses (EmoNet, PosterV2) override class-level defaults
 """
 
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import cv2
 import cv2.typing as cv2t
@@ -73,7 +73,7 @@ class EmotionRecognizer(PredictorBase[cv2t.MatLike, RawEmotionDetection]):
         return self._input_size
 
     @override
-    def start(self) -> None:
+    def _start_impl(self) -> None:
         if self._running:
             self._logger.info("Already running")
             return
@@ -85,13 +85,13 @@ class EmotionRecognizer(PredictorBase[cv2t.MatLike, RawEmotionDetection]):
         self._logger.info("Ready — %d emotion classes", len(self._class_names))
 
     @override
-    def stop(self) -> None:
+    def _stop_impl(self) -> None:
         self._session = None
         self._running = False
         self._logger.info("Stopped")
 
     @override
-    def is_ready(self) -> bool:
+    def _is_ready_impl(self) -> bool:
         return self._running and self._session is not None
 
     @override
@@ -109,11 +109,12 @@ class EmotionRecognizer(PredictorBase[cv2t.MatLike, RawEmotionDetection]):
         return results
 
     @override
-    def predict(
+    def _predict_impl(
         self,
         input: list[cv2t.MatLike],
         *,
         preprocess: bool = True,
+        **kwargs: Any,
     ) -> list[RawEmotionDetection]:
         """Classify emotion for a batch of face crops.
 
@@ -125,9 +126,6 @@ class EmotionRecognizer(PredictorBase[cv2t.MatLike, RawEmotionDetection]):
             preprocess: If True, run preprocess on each crop. Set to False
                 when input is already preprocessed.
         """
-        if self._session is None:
-            raise RuntimeError("Recognizer not started")
-
         preprocessed: list[npt.NDArray[np.float32]] = (
             self.preprocess(input) if preprocess else input
         )

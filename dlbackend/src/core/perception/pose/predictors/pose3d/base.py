@@ -9,7 +9,7 @@ representing one temporal sequence. The output is RawPose3DDetection.
 """
 
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -70,7 +70,7 @@ class PoseEstimator3DLifting(PredictorBase[Pose3DInput, RawPose3DDetection | Non
         return self._input_size
 
     @override
-    def start(self) -> None:
+    def _start_impl(self) -> None:
         if self._running:
             self._logger.info("Already running")
             return
@@ -80,12 +80,12 @@ class PoseEstimator3DLifting(PredictorBase[Pose3DInput, RawPose3DDetection | Non
         self._logger.info("Ready")
 
     @override
-    def stop(self) -> None:
+    def _stop_impl(self) -> None:
         self._session = None
         self._running = False
 
     @override
-    def is_ready(self) -> bool:
+    def _is_ready_impl(self) -> bool:
         return self._running and self._session is not None
 
     @override
@@ -124,20 +124,18 @@ class PoseEstimator3DLifting(PredictorBase[Pose3DInput, RawPose3DDetection | Non
         return results
 
     @override
-    def predict(
+    def _predict_impl(
         self,
         input: list[Pose3DInput],
         *,
         preprocess: bool = True,
+        **kwargs: Any,
     ) -> list[RawPose3DDetection | None]:
         """Lift 2D keypoint sequences to 3D.
 
         Each input is (keypoints (T, K, 2), scores (T, K)).
         Returns None for sequences with fewer than n_frames // 2 frames.
         """
-        if self._session is None:
-            raise RuntimeError("Lifter not started")
-
         results: list[RawPose3DDetection | None] = []
         preprocessed: list[npt.NDArray[np.float32]] = []
 

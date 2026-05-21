@@ -4,6 +4,8 @@ Detects person bounding boxes in a frame and exposes ``detect_largest_crop``
 to extract the crop of the largest person for downstream action recognition.
 """
 
+from typing import Any
+
 import cv2.typing as cv2t
 import numpy as np
 from typing_extensions import override
@@ -54,7 +56,7 @@ class YOLOPersonDetector(PersonDetector):
         self._running: bool = False
 
     @override
-    def start(self) -> None:
+    def _start_impl(self) -> None:
         """Load the YOLO model weights (blocking)."""
         if self._running:
             self._logger.info("Already running")
@@ -63,12 +65,12 @@ class YOLOPersonDetector(PersonDetector):
         self._running = True
 
     @override
-    def stop(self) -> None:
+    def _stop_impl(self) -> None:
         self._model = None
         self._running = False
 
     @override
-    def is_ready(self) -> bool:
+    def _is_ready_impl(self) -> bool:
         return self._running and self._model is not None
 
     def _scale_and_clamp_bbox(self, bbox: list[int], h: int, w: int, scale: float = 1.0):
@@ -84,11 +86,8 @@ class YOLOPersonDetector(PersonDetector):
         return [x1, y1, x2, y2]
 
     @override
-    def predict(self, input: list[cv2t.MatLike], *, preprocess: bool = True) -> list[RawPersonDetection]:
+    def _predict_impl(self, input: list[cv2t.MatLike], *, preprocess: bool = True, **kwargs: Any) -> list[RawPersonDetection]:
         """Run person detection on each frame and return all person detections."""
-        if not self.is_ready() or self._model is None:
-            raise RuntimeError("Predictor is not ready")
-
         _EMPTY: RawPersonDetection = RawPersonDetection(
             bbox_xyxy=np.zeros((0, 4), dtype=np.float32),
             confidence=np.zeros(0, dtype=np.float32),

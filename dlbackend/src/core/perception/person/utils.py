@@ -1,5 +1,28 @@
 from core.enums.person import PersonDetectorEnum
+from core.perception.base import PredictorFactory
 from core.perception.person.predictors.base import PersonDetector
+
+
+class PersonDetectorFactory(PredictorFactory[PersonDetector]):
+    """Factory that creates PersonDetector instances from config."""
+
+    def __init__(
+        self,
+        model_name: PersonDetectorEnum,
+        model_path: str | None = None,
+        threshold: float | None = None,
+        bbox_expand_scale: float | None = None,
+    ) -> None:
+        self._model_name = model_name
+        self._model_path = model_path
+        self._threshold = threshold
+        self._bbox_expand_scale = bbox_expand_scale
+
+    def create(self) -> PersonDetector:
+        return create_person_detector(
+            self._model_name, self._model_path,
+            threshold=self._threshold, bbox_expand_scale=self._bbox_expand_scale,
+        )
 
 
 def create_person_detector(

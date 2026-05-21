@@ -5,6 +5,8 @@ Each WebSocket connection creates an EmotionPerceptionSession via create_session
 Single-shot methods (predict_face, predict_image) are provided for HTTP endpoints.
 """
 
+import asyncio
+
 import cv2.typing as cv2t
 import numpy as np
 import numpy.typing as npt
@@ -16,11 +18,13 @@ from core.models.emotion import (
     EmotionPerceptionSessionConfig,
     RawEmotionDetection,
 )
+from core.models.face import FaceCrop
 from core.perception.base import PerceptionBase
 from core.perception.emotion.predictors.base import EmotionRecognizer
 from core.perception.emotion.session import EmotionPerceptionSession
-from core.models.face import FaceCrop
+from core.perception.emotion.utils import EmotionRecognizerFactory
 from core.perception.face.predictors.base import FaceDetector
+from core.perception.face.utils import FaceDetectorFactory
 
 
 class EmotionPerception(PerceptionBase[EmotionPerceptionSession]):
@@ -28,32 +32,45 @@ class EmotionPerception(PerceptionBase[EmotionPerceptionSession]):
 
     def __init__(
         self,
-        emotion_recognizer: EmotionRecognizer,
-        face_detector: FaceDetector,
+        emotion_recognizer_factory: EmotionRecognizerFactory,
+        face_detector_factory: FaceDetectorFactory,
         default_config: EmotionPerceptionSessionConfig | None = None,
     ) -> None:
         super().__init__()
 
-        self._emotion_recognizer: EmotionRecognizer = emotion_recognizer
-        self._face_detector: FaceDetector = face_detector
+        self._emotion_recognizer_factory: EmotionRecognizerFactory = emotion_recognizer_factory
+        self._face_detector_factory: FaceDetectorFactory = face_detector_factory
         self._default_config: EmotionPerceptionSessionConfig | None = default_config
+
+        self._emotion_recognizer: EmotionRecognizer | None = None
+        self._face_detector: FaceDetector | None = None
         self._running: bool = False
 
     @override
-    def start(self) -> None:
+    async def start(self) -> None:
         if self._running:
             self._logger.info("Already running")
             return
 
-        self._emotion_recognizer.start()
-        self._face_detector.start()
+        self._emotion_recognizer = self._emotion_recognizer_factory.create()
+        await asyncio.to_thread(self._emotion_recognizer.start)
+
+        self._face_detector = self._face_detector_factory.create()
+        await asyncio.to_thread(self._face_detector.start)
+
         self._running = True
         self._logger.info("Ready")
 
     @override
-    def stop(self) -> None:
-        self._emotion_recognizer.stop()
-        self._face_detector.stop()
+    async def stop(self) -> None:
+        if self._emotion_recognizer is not None:
+            await asyncio.to_thread(self._emotion_recognizer.stop)
+            self._emotion_recognizer = None
+
+        if self._face_detector is not None:
+            await asyncio.to_thread(self._face_detector.stop)
+            self._face_detector = None
+
         self._running = False
         self._logger.info("Stopped")
 
@@ -61,12 +78,17 @@ class EmotionPerception(PerceptionBase[EmotionPerceptionSession]):
     def is_ready(self) -> bool:
         return (
             self._running
+            and self._emotion_recognizer is not None
             and self._emotion_recognizer.is_ready()
+            and self._face_detector is not None
             and self._face_detector.is_ready()
         )
 
     @override
-    def create_session(self) -> EmotionPerceptionSession:
+    async def create_session(self) -> EmotionPerceptionSession:
+        if self._emotion_recognizer is None or self._face_detector is None:
+            raise RuntimeError("EmotionPerception not started")
+
         config: EmotionPerceptionSessionConfig = (
             self._default_config or EmotionPerceptionSession.DEFAULT_CONFIG
         )
@@ -78,13 +100,14 @@ class EmotionPerception(PerceptionBase[EmotionPerceptionSession]):
 
     # --- Single-shot prediction (for HTTP endpoints) ---
 
-    def predict_face(self, face_crop: cv2t.MatLike) -> Emotion | None:
-        """Classify emotion from a single pre-cropped face image.
+    async def predict_face(self, face_crop: cv2t.MatLike) -> Emotion | None:
+        """Classify emotion from a single pre-cropped face image."""
+        if self._emotion_recognizer is None:
+            raise RuntimeError("EmotionPerception not started")
 
-        No face detection — the input is assumed to be a face crop.
-        Returns an Emotion or None if the model produces no result.
-        """
-        raw_results: list[RawEmotionDetection] = self._emotion_recognizer.predict([face_crop])
+        raw_results: list[RawEmotionDetection] = await asyncio.to_thread(
+            self._emotion_recognizer.predict, [face_crop]
+        )
         if not raw_results:
             return None
 
@@ -101,18 +124,22 @@ class EmotionPerception(PerceptionBase[EmotionPerceptionSession]):
             arousal=raw.arousal,
         )
 
-    def predict_image(self, frame: npt.NDArray[np.uint8]) -> EmotionDetection:
-        """Detect faces in a full frame and classify emotion for each.
+    async def predict_image(self, frame: npt.NDArray[np.uint8]) -> EmotionDetection:
+        """Detect faces in a full frame and classify emotion for each."""
+        if self._face_detector is None or self._emotion_recognizer is None:
+            raise RuntimeError("EmotionPerception not started")
 
-        Runs face detection, then classifies each crop.
-        Returns EmotionDetection with all detected emotions (unfiltered).
-        """
-        face_crops: list[FaceCrop] = self._face_detector.extract_crops([frame])[0]
+        all_crops: list[list[FaceCrop]] = await asyncio.to_thread(
+            self._face_detector.extract_crops, [frame]
+        )
+        face_crops: list[FaceCrop] = all_crops[0]
         if not face_crops:
             return EmotionDetection(emotions=[])
 
         crops: list[cv2t.MatLike] = [fc.crop for fc in face_crops]
-        raw_results: list[RawEmotionDetection] = self._emotion_recognizer.predict(crops)
+        raw_results: list[RawEmotionDetection] = await asyncio.to_thread(
+            self._emotion_recognizer.predict, crops
+        )
 
         emotions: list[Emotion] = []
         for fc, raw in zip(face_crops, raw_results):

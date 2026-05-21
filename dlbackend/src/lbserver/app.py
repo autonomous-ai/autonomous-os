@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
 
 import httpx
 import uvicorn
@@ -55,9 +56,6 @@ ws_rr = RoundRobin(BACKENDS)
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-
-
-from contextlib import asynccontextmanager
 
 
 @asynccontextmanager

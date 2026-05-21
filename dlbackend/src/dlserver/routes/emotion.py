@@ -47,7 +47,7 @@ async def emotion_analysis_ws(websocket: WebSocket):
         return
 
     try:
-        session = emotion_model.create_session()
+        session = await emotion_model.create_session()
         await session.start()
         while True:
             raw: str = await websocket.receive_text()
@@ -96,7 +96,7 @@ async def emotion_recognize(req: EmotionRecognizeRequest):
         raise HTTPException(status_code=503, detail="Emotion model not loaded")
 
     face_crop = decode_image(req.image_b64)
-    emotion = emotion_model.predict_face(face_crop)
+    emotion = await emotion_model.predict_face(face_crop)
 
     if emotion is None or emotion.confidence < req.threshold:
         return EmotionRecognizeResponse(detections=[])

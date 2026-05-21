@@ -1,7 +1,23 @@
 from pathlib import Path
 
 from core.enums import EmotionRecognizerEnum
+from core.perception.base import PredictorFactory
 from core.perception.emotion.predictors.base import EmotionRecognizer
+
+
+class EmotionRecognizerFactory(PredictorFactory[EmotionRecognizer]):
+    """Factory that creates EmotionRecognizer instances from config."""
+
+    def __init__(
+        self,
+        model_name: EmotionRecognizerEnum,
+        model_path: Path | None = None,
+    ) -> None:
+        self._model_name = model_name
+        self._model_path = model_path
+
+    def create(self) -> EmotionRecognizer:
+        return create_emotion_recognizer(self._model_name, self._model_path)
 
 
 def create_emotion_recognizer(

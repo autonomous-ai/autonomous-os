@@ -156,9 +156,9 @@ info:
 test:
 	python -m pytest tests/ -v
 
-test-api: test-action-api test-emotion-api test-pose-api
+test-api: test-action-api test-emotion-api test-pose-api test-object-api
 
-test-local: test-action-local test-emotion-local test-pose-local
+test-local: test-action-local test-emotion-local test-pose-local test-object-local
 
 test-action: test-action-api test-action-local
 
@@ -183,6 +183,14 @@ test-pose-api:
 
 test-pose-local:
 	python -m pytest tests/pose_local/ -v
+
+test-object: test-object-api test-object-local
+
+test-object-api:
+	python -m pytest tests/object_api/ -v
+
+test-object-local:
+	python -m pytest tests/object_local/ -v
 
 lint:
 	ruff check src/ tests/

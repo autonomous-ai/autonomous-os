@@ -1,0 +1,399 @@
+person
+chair
+table
+sofa
+bed
+desk
+lamp
+television
+laptop
+keyboard
+mouse
+monitor
+phone
+remote control
+clock
+fan
+air conditioner
+door
+window
+curtain
+carpet
+rug
+pillow
+cushion
+blanket
+bookshelf
+cabinet
+drawer
+wardrobe
+closet
+mirror
+picture frame
+painting
+plant
+vase
+flower pot
+trash can
+basket
+storage box
+shelf
+stool
+bench
+armchair
+recliner
+coffee table
+dining table
+nightstand
+dresser
+refrigerator
+microwave
+oven
+stove
+dishwasher
+washing machine
+dryer
+sink
+faucet
+kettle
+toaster
+blender
+coffee maker
+rice cooker
+pan
+pot
+cutting board
+knife
+plate
+bowl
+cup
+glass
+bottle
+spoon
+fork
+dish rack
+towel
+toilet
+bathtub
+shower
+soap dispenser
+light switch
+power outlet
+chandelier
+ceiling light
+speaker
+router
+printer
+whiteboard
+ironing board
+mop
+broom
+vacuum cleaner
+heater
+humidifier
+smoke detector
+fire extinguisher
+book
+notebook
+pen
+paper
+tissue box
+candle
+car
+truck
+bus
+motorcycle
+bicycle
+scooter
+skateboard
+stroller
+wheelchair
+dog
+cat
+bird
+horse
+cow
+sheep
+squirrel
+rabbit
+deer
+duck
+tree
+bush
+flower
+grass
+rock
+log
+leaf
+branch
+pine tree
+palm tree
+traffic light
+stop sign
+street sign
+speed limit sign
+parking meter
+fire hydrant
+mailbox
+dumpster
+recycling bin
+street lamp
+power line
+telephone pole
+antenna
+satellite dish
+picnic table
+playground
+swing
+slide
+fountain
+statue
+sculpture
+flag
+flagpole
+fence
+gate
+wall
+bridge
+tunnel
+sidewalk
+crosswalk
+road
+curb
+pothole
+manhole cover
+drain
+puddle
+cone
+barrier
+bollard
+ramp
+stairs
+escalator
+elevator
+awning
+canopy
+umbrella
+tent
+gazebo
+shed
+garage
+driveway
+parking lot
+shopping cart
+vending machine
+atm
+newspaper stand
+phone booth
+camera
+security camera
+solar panel
+wind turbine
+construction crane
+excavator
+bulldozer
+ladder
+scaffold
+container
+pallet
+barrel
+backpack
+eagle
+hawk
+owl
+parrot
+penguin
+flamingo
+swan
+goose
+crow
+sparrow
+pigeon
+seagull
+pelican
+heron
+stork
+butterfly
+dragonfly
+bee
+wasp
+beetle
+ant
+spider
+snail
+worm
+caterpillar
+frog
+toad
+lizard
+snake
+turtle
+crocodile
+alligator
+fish
+shark
+whale
+dolphin
+seal
+jellyfish
+crab
+lobster
+shrimp
+octopus
+starfish
+coral
+bear
+wolf
+fox
+lion
+tiger
+elephant
+giraffe
+zebra
+monkey
+gorilla
+panda
+koala
+kangaroo
+camel
+pig
+goat
+donkey
+oak tree
+maple tree
+willow tree
+cactus
+fern
+moss
+mushroom
+vine
+seaweed
+lily pad
+sunflower
+rose
+tulip
+daisy
+dandelion
+pinecone
+acorn
+berry
+fruit
+mountain
+hill
+cliff
+canyon
+valley
+cave
+boulder
+pebble
+sand
+mud
+river
+stream
+waterfall
+lake
+pond
+ocean
+wave
+ice
+snow
+cloud
+animal
+vehicle
+furniture
+appliance
+tool
+weapon
+food
+drink
+vegetable
+meat
+bread
+cake
+pizza
+sandwich
+salad
+rice
+noodle
+soup
+clothing
+shirt
+pants
+dress
+skirt
+jacket
+coat
+hat
+cap
+helmet
+glasses
+sunglasses
+glove
+scarf
+shoe
+boot
+sandal
+slipper
+bag
+suitcase
+wallet
+purse
+watch
+ring
+necklace
+earring
+toy
+doll
+teddy bear
+ball
+kite
+balloon
+robot
+drone
+instrument
+guitar
+piano
+drum
+violin
+flute
+microphone
+headphones
+earbuds
+charger
+cable
+battery
+usb drive
+hard drive
+tablet
+smartphone
+calculator
+flashlight
+lighter
+match
+key
+lock
+chain
+rope
+wire
+tape
+scissors
+hammer
+screwdriver
+wrench
+pliers
+nail
+screw
+bolt
+brush
+comb
+toothbrush
+razor
+sponge
+bucket
+hose
+shovel
+rake
+wheelbarrow
+sign
+label
+sticker

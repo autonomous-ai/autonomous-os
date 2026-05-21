@@ -26,18 +26,27 @@ from dlserver.routes.audio_recognizer import router as audio_recognizer_router
 from dlserver.routes.emotion import http_router as emotion_http_router
 from dlserver.routes.emotion import ws_router as emotion_ws_router
 from dlserver.routes.health import router as health_router
+from dlserver.routes.object import http_router as object_http_router
+from dlserver.routes.object import ws_router as object_ws_router
 from dlserver.routes.pose import http_router as pose_http_router
 from dlserver.routes.pose import ws_router as pose_ws_router
 from dlserver.routes.speech_emotion_recognizer import router as ser_router
 from dlserver.utils.state import (
     get_action_model,
     get_emotion_model,
+    get_object_models,
     get_pose_model,
     set_action_model,
     set_emotion_model,
+    set_object_models,
     set_pose_model,
 )
-from factory import build_action_perception, build_emotion_perception, build_pose_perception
+from factory import (
+    build_action_perception,
+    build_emotion_perception,
+    build_object_perceptions,
+    build_pose_perception,
+)
 
 LOG_FORMAT = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
 logger = logging.getLogger(__name__)
@@ -67,7 +76,7 @@ async def lifespan(app: FastAPI):
         logger.info("Loading action model...")
         try:
             action_model = build_action_perception()
-            action_model.start()
+            await action_model.start()
             set_action_model(action_model)
             logger.info("Action model ready")
         except Exception as e:
@@ -78,7 +87,7 @@ async def lifespan(app: FastAPI):
         logger.info("Loading emotion model...")
         try:
             emotion_model = build_emotion_perception()
-            emotion_model.start()
+            await emotion_model.start()
             set_emotion_model(emotion_model)
             logger.info("Emotion model ready")
         except Exception as e:
@@ -104,24 +113,37 @@ async def lifespan(app: FastAPI):
         logger.info("Loading pose estimator...")
         try:
             pose_model = build_pose_perception()
-            pose_model.start()
+            await pose_model.start()
             set_pose_model(pose_model)
             logger.info("Pose estimator ready")
         except Exception as e:
             logger.warning("Failed to load pose estimator: %s", e)
+
+    # -- Object detectors --
+    logger.info("Loading object detectors...")
+    try:
+        object_models = build_object_perceptions()
+        for name, model in object_models.items():
+            await model.start()
+            logger.info("Object detector '%s' ready", name)
+        set_object_models(object_models)
+    except Exception as e:
+        logger.warning("Failed to load object detectors: %s", e)
 
     yield
 
     logger.info("Shutting down DL backend...")
     action_model = get_action_model()
     if action_model is not None:
-        action_model.stop()
+        await action_model.stop()
     emotion_model = get_emotion_model()
     if emotion_model is not None:
-        emotion_model.stop()
+        await emotion_model.stop()
     pose_model = get_pose_model()
     if pose_model is not None:
-        pose_model.stop()
+        await pose_model.stop()
+    for name, model in get_object_models().items():
+        await model.stop()
     logger.info("DL backend shutdown complete")
 
 
@@ -129,16 +151,21 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="DL Backend", lifespan=lifespan)
 
-app.include_router(action_ws_router, prefix="/api/dl")
-app.include_router(emotion_ws_router, prefix="/api/dl")
-app.include_router(emotion_http_router, prefix="/api/dl", dependencies=[Depends(verify_api_key)])
-app.include_router(health_router, prefix="/api/dl", dependencies=[Depends(verify_api_key)])
+# Existing perceptions — /lelamp/api/dl/ prefix
+app.include_router(action_ws_router, prefix="/lelamp/api/dl")
+app.include_router(emotion_ws_router, prefix="/lelamp/api/dl")
+app.include_router(emotion_http_router, prefix="/lelamp/api/dl", dependencies=[Depends(verify_api_key)])
+app.include_router(health_router, prefix="/lelamp/api/dl", dependencies=[Depends(verify_api_key)])
 app.include_router(
-    audio_recognizer_router, prefix="/api/dl", dependencies=[Depends(verify_api_key)]
+    audio_recognizer_router, prefix="/lelamp/api/dl", dependencies=[Depends(verify_api_key)]
 )
-app.include_router(ser_router, prefix="/api/dl", dependencies=[Depends(verify_api_key)])
-app.include_router(pose_ws_router, prefix="/api/dl")
-app.include_router(pose_http_router, prefix="/api/dl", dependencies=[Depends(verify_api_key)])
+app.include_router(ser_router, prefix="/lelamp/api/dl", dependencies=[Depends(verify_api_key)])
+app.include_router(pose_ws_router, prefix="/lelamp/api/dl")
+app.include_router(pose_http_router, prefix="/lelamp/api/dl", dependencies=[Depends(verify_api_key)])
+
+# Object detection — /api/dl/ prefix (backward-compatible with go2)
+app.include_router(object_ws_router, prefix="/api/dl")
+app.include_router(object_http_router, prefix="/api/dl", dependencies=[Depends(verify_api_key)])
 
 
 # --- CLI ---

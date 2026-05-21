@@ -5,7 +5,7 @@ Session management, person detection, and config live in ActionAnalysis.
 """
 
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import cv2
 import cv2.typing as cv2t
@@ -83,7 +83,18 @@ class HumanActionRecognizer(PredictorBase[Video, RawHumanActionDetection]):
         return self._frame_size
 
     @override
-    def start(self) -> None:
+    def predict(
+        self,
+        input: list[Video],
+        *,
+        preprocess: bool = True,
+        class_mask: npt.NDArray[np.bool_] | None = None,
+        **kwargs: Any,
+    ) -> list[RawHumanActionDetection]:
+        return super().predict(input, preprocess=preprocess, class_mask=class_mask)
+
+    @override
+    def _start_impl(self) -> None:
         if self._running:
             self._logger.info("Already running")
             return
@@ -103,26 +114,25 @@ class HumanActionRecognizer(PredictorBase[Video, RawHumanActionDetection]):
         )
 
     @override
-    def stop(self) -> None:
+    def _stop_impl(self) -> None:
         self._session = None
         self._running = False
         self._logger.info("Predictor stopped")
 
     @override
-    def is_ready(self) -> bool:
+    def _is_ready_impl(self) -> bool:
         return self._running and self._session is not None
 
     @override
-    def predict(
+    def _predict_impl(
         self,
         input: list[Video],
         *,
         preprocess: bool = True,
         class_mask: npt.NDArray[np.bool_] | None = None,
+        **kwargs: Any,
     ) -> list[RawHumanActionDetection]:
         """Run inference on buffered frames, return raw prediction (numpy arrays)."""
-        if not self.is_ready() or self._session is None:
-            raise RuntimeError("Predictor is not ready")
 
         if preprocess:
             input = self.preprocess(input)

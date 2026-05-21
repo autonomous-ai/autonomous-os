@@ -15,11 +15,11 @@ class PerceptionBase(Generic[SESSION_T], ABC):
         self._sessions_dict: dict[str, SESSION_T] = {}
 
     @abstractmethod
-    def start(self) -> None:
+    async def start(self) -> None:
         pass
 
     @abstractmethod
-    def stop(self) -> None:
+    async def stop(self) -> None:
         pass
 
     @abstractmethod
@@ -27,5 +27,5 @@ class PerceptionBase(Generic[SESSION_T], ABC):
         pass
 
     @abstractmethod
-    def create_session(self) -> SESSION_T:
+    async def create_session(self) -> SESSION_T:
         pass

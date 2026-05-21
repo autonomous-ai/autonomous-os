@@ -7,6 +7,8 @@ investigation of work-related upper limb disorders."
 # Refactor and logic checking needed.
 # This serves mainly as the PoC now.
 
+from typing import Any
+
 import numpy as np
 import numpy.typing as npt
 from typing_extensions import override
@@ -215,11 +217,12 @@ class RULAAssessor(ErgoAssessor):
         )
 
     @override
-    def predict(
+    def _predict_impl(
         self,
         input: list[ErgoInput],
         *,
         preprocess: bool = True,
+        **kwargs: Any,
     ) -> list[ErgoAssessment | None]:
         """Run RULA assessment on a batch of (keypoints, scores) pairs."""
         results: list[ErgoAssessment | None] = [
