@@ -152,6 +152,9 @@ func ProvideServer(
 // restartMQTT stops the current MQTT client and starts a new one (e.g. when backend pushes new MQTT config).
 func (s *Server) restartMQTT() {
 	s.stopMQTT()
+	if s.mqttFactory != nil {
+		s.mqttFactory.UpdateConfig(config.ProvideMQTTConfig(s.config))
+	}
 	s.startMQTT()
 }
 
@@ -845,6 +848,8 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 			} else {
 				slog.Warn("agent gateway ready timeout", "component", "server")
 			}
+			// Restart lumi-lelamp so it picks up the fresh config written during setup.
+			exec.Command("systemctl", "restart", "lumi-lelamp").Run()
 			// Start voice pipeline on LeLamp (if Deepgram key configured)
 			// Retry because lumi-lelamp may not be running yet at setup time.
 			if s.config.DeepgramAPIKey != "" {

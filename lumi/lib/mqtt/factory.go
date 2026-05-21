@@ -11,6 +11,12 @@ func ProvideFactory(cfg Config) (*Factory, error) {
 	return &Factory{config: cfg}, nil
 }
 
+// UpdateConfig refreshes the factory's connection config. Call before restartMQTT
+// to pick up new credentials written during setup.
+func (f *Factory) UpdateConfig(cfg Config) {
+	f.config = cfg
+}
+
 // CreateClient returns a new MQTT client using the factory's config. Each client gets a unique client ID.
 // Call Connect(ctx) then Publish(ctx, topic, qos, payload) (and Close() when done).
 func (f *Factory) GetClient(clientID string) *MQTT {
