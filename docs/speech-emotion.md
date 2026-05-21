@@ -161,7 +161,7 @@ Layered, matched 1-to-1 with the facial emotion processor:
 |---|-------|----------------|
 | 1 | `submit()` | `wav_bytes` empty / `duration_s < SPEECH_EMOTION_MIN_AUDIO_S` |
 | 2 | `submit()` | `user` is empty (no subject to attribute emotion to — mirrors face `current_user==""`) |
-| 3 | worker | `confidence < SPEECH_EMOTION_CONFIDENCE_THRESHOLD` |
+| 3 | worker | `confidence < CONFIDENCE_THRESHOLD_BY_LABEL[label]` (per-label gate, see Configuration) |
 | 4 | flush  | label is `neutral` / `other` / `<unk>` |
 | 5 | flush  | `(user, bucket)` was sent less than `SPEECH_EMOTION_DEDUP_WINDOW_S` seconds ago |
 
@@ -176,7 +176,6 @@ All knobs live in `lelamp/config.py` as `SPEECH_EMOTION_*`, overridable via env 
 | Constant | Env var | Default | Purpose |
 |----------|---------|---------|---------|
 | `SPEECH_EMOTION_ENABLED` | `LELAMP_SPEECH_EMOTION_ENABLED` | `true` | Master kill switch |
-| `SPEECH_EMOTION_CONFIDENCE_THRESHOLD` | `LELAMP_SPEECH_EMOTION_CONFIDENCE_THRESHOLD` | `0.5` | Min model confidence to buffer |
 | `SPEECH_EMOTION_FLUSH_S` | `LELAMP_SPEECH_EMOTION_FLUSH_S` | `10.0` | Buffer drain cadence |
 | `SPEECH_EMOTION_DEDUP_WINDOW_S` | `LELAMP_SPEECH_EMOTION_DEDUP_WINDOW_S` | `300.0` | TTL for `(user, bucket)` |
 | `SPEECH_EMOTION_MIN_AUDIO_S` | `LELAMP_SPEECH_EMOTION_MIN_AUDIO_S` | `3.0` | Min utterance length |
@@ -185,7 +184,22 @@ All knobs live in `lelamp/config.py` as `SPEECH_EMOTION_*`, overridable via env 
 | `SPEECH_EMOTION_API_URL` | — | derived | `DL_BACKEND_URL` + `DL_SER_ENDPOINT` |
 | `SPEECH_EMOTION_API_KEY` | — | mirrors `DL_API_KEY` | Sent as `X-API-Key` |
 
-Label vocabulary and bucket map are declared in `lelamp/service/voice/speech_emotion/constants.py` (not env-overridable — touching these requires a model swap on dlbackend).
+Label vocabulary, bucket map, and **per-label confidence thresholds** are declared in `lelamp/service/voice/speech_emotion/constants.py` (not env-overridable — touching these requires a code change). The threshold dict:
+
+```python
+# constants.py
+CONFIDENCE_THRESHOLD_BY_LABEL: dict[str, float] = {
+    "happy":     0.5,
+    "surprised": 0.6,
+    "sad":       0.6,
+    "angry":     0.6,
+    "fearful":   0.7,
+    "disgusted": 0.7,
+}
+DEFAULT_CONFIDENCE_THRESHOLD: float = 0.5  # fallback for unlisted labels
+```
+
+Negative emotions get higher gates to avoid false-positive alarms; happy is loosest because positive misfires are cheap. Lookup goes through `utils.threshold_for(label)` which falls back to `DEFAULT_CONFIDENCE_THRESHOLD` for any unmapped label.
 
 ---
 

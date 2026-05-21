@@ -57,7 +57,7 @@ VoiceService._stream_session(...) finally   ← cuối MỌI phiên mic
 
 - **Khởi tạo:** `VoiceService` tạo instance khi `SPEECH_EMOTION_ENABLED` và dlbackend URL sẵn sàng.
 - **`submit(user, wav_bytes, duration_s)`** — trả về ngay (non-blocking). Bỏ qua nếu: service tắt, `user`/`wav` rỗng, `duration_s < SPEECH_EMOTION_MIN_AUDIO_S` (mặc định **3.0s**), queue đầy.
-- **Worker:** gọi API; bỏ mẫu có `confidence < SPEECH_EMOTION_CONFIDENCE_THRESHOLD`.
+- **Worker:** gọi API; bỏ mẫu có `confidence < CONFIDENCE_THRESHOLD_BY_LABEL[label]` (per-label, khai báo trong `constants.py` — xem mục Cấu Hình).
 - **Flush:** mỗi `SPEECH_EMOTION_FLUSH_S` giây, gom buffer theo `user`, lấy **mode** label, map bucket, bỏ **neutral**, dedup `(user, bucket)` trong `SPEECH_EMOTION_DEDUP_WINDOW_S`, POST Lumi.
 
 ### `_Job` vs `_Inference`
@@ -130,12 +130,27 @@ OpenClaw / sensing pipeline xử lý như sự kiện sensing khác (xem [sensin
 | Hằng số | Mặc định | Ý nghĩa |
 |---------|----------|---------|
 | `SPEECH_EMOTION_ENABLED` | `True` | Bật module |
-| `SPEECH_EMOTION_CONFIDENCE_THRESHOLD` | `0.5` | Ngưỡng tối thiểu sau API |
 | `SPEECH_EMOTION_FLUSH_S` | `10.0` | Chu kỳ flush buffer / user |
 | `SPEECH_EMOTION_DEDUP_WINDOW_S` | `300.0` | TTL dedup `(user, bucket)` |
 | `SPEECH_EMOTION_MIN_AUDIO_S` | `3.0` | Độ dài tối thiểu utterance |
 | `SPEECH_EMOTION_API_TIMEOUT_S` | `15` | Timeout HTTP dlbackend |
 | `DL_SER_ENDPOINT` | `/lelamp/api/dl/ser/recognize` | Path SER |
+
+**Ngưỡng confidence theo từng label** không lấy từ env nữa — khai báo cố định trong `lelamp/service/voice/speech_emotion/constants.py`:
+
+```python
+CONFIDENCE_THRESHOLD_BY_LABEL: dict[str, float] = {
+    "happy":     0.5,
+    "surprised": 0.6,
+    "sad":       0.6,
+    "angry":     0.6,
+    "fearful":   0.7,
+    "disgusted": 0.7,
+}
+DEFAULT_CONFIDENCE_THRESHOLD: float = 0.5  # fallback cho label không nằm trong dict
+```
+
+Negative emotion siết chặt hơn để tránh false positive gây alarm. Worker lookup qua `utils.threshold_for(label)`; muốn tune → sửa trực tiếp `constants.py`, không có env override.
 
 Chi tiết tuning / log: [sensing-tuning_vi.md](sensing-tuning_vi.md).
 

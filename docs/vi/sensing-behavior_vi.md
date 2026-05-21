@@ -635,7 +635,7 @@ Labels (từ emotion2vec_plus_large): `angry`, `disgusted`, `fearful`, `happy`, 
 
 1. Audio quá ngắn (`duration_s < SPEECH_EMOTION_MIN_AUDIO_S`) drop ở `submit()`.
 2. Unknown speaker (`match=false` hoặc `name=="unknown"`) drop — không có subject để gán cảm xúc.
-3. Confidence thấp (`< SPEECH_EMOTION_CONFIDENCE_THRESHOLD`) bị worker drop.
+3. Confidence thấp (`< CONFIDENCE_THRESHOLD_BY_LABEL[label]`, fallback `DEFAULT_CONFIDENCE_THRESHOLD` — đều ở `speech_emotion/constants.py`) bị worker drop.
 4. Neutral labels drop ở flush.
 5. TTL dedup `(user, bucket)` trong `SPEECH_EMOTION_DEDUP_WINDOW_S` (mặc định 5 phút). Mỗi bucket có timer riêng — gửi event positive KHÔNG reset window của negative.
 

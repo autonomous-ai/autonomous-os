@@ -198,13 +198,29 @@ Per-face motion opens a separate WS session per detected face and runs action re
 
 ```python
 SPEECH_EMOTION_ENABLED = True
-SPEECH_EMOTION_CONFIDENCE_THRESHOLD = 0.5   # Min model confidence to buffer
 SPEECH_EMOTION_FLUSH_S = 10.0               # Per-user buffer drain cadence
 SPEECH_EMOTION_DEDUP_WINDOW_S = 300.0       # (user, bucket) TTL — 5 min
 SPEECH_EMOTION_MIN_AUDIO_S = 3.0            # Skip utterances shorter than this (lelamp.config default)
 SPEECH_EMOTION_API_TIMEOUT_S = 15           # dlbackend HTTP timeout
 DL_SER_ENDPOINT = "/lelamp/api/dl/ser/recognize"
 ```
+
+Per-label confidence thresholds are **not** in `config.py` — they live in `lelamp/service/voice/speech_emotion/constants.py` as `CONFIDENCE_THRESHOLD_BY_LABEL` (and `DEFAULT_CONFIDENCE_THRESHOLD` for unmapped labels). Negative emotions are gated higher than positive ones to suppress false-positive alarms:
+
+```python
+# constants.py
+CONFIDENCE_THRESHOLD_BY_LABEL = {
+    "happy":     0.5,
+    "surprised": 0.6,
+    "sad":       0.6,
+    "angry":     0.6,
+    "fearful":   0.7,
+    "disgusted": 0.7,
+}
+DEFAULT_CONFIDENCE_THRESHOLD = 0.5
+```
+
+Tune by editing the dict directly — no env override.
 
 **How to read the log:**
 
@@ -224,11 +240,11 @@ The `flushing` line shows the raw label list — that's the mode-over-samples th
 | Symptom | Fix |
 |---------|-----|
 | Same-bucket events fire too often | Increase `SPEECH_EMOTION_DEDUP_WINDOW_S` (300 → 600) |
-| Single-utterance noisy reads slip through | Increase `SPEECH_EMOTION_CONFIDENCE_THRESHOLD` (0.5 → 0.65) |
+| Single-utterance noisy reads slip through | Raise the offending label's entry in `CONFIDENCE_THRESHOLD_BY_LABEL` (`constants.py`) — e.g. nudge `"sad": 0.6 → 0.7`. Bump `DEFAULT_CONFIDENCE_THRESHOLD` only if the noise is across the board |
 | Short "yeah" / "ok" utterances flagged | Increase `SPEECH_EMOTION_MIN_AUDIO_S` (3.0 → 4.0) |
 | Mood lag — Lumi too slow to react after a real shift | Decrease `SPEECH_EMOTION_FLUSH_S` (10 → 5) |
 | Worker queue full warnings in log | Investigate dlbackend latency; raising queue size is not enough — backlog means something downstream is wedged |
-| Too many `speech_emotion.detected` for strangers | Expected: unknown speakers use `user="unknown"`; tighten `SPEECH_EMOTION_CONFIDENCE_THRESHOLD` or dedup window — do not disable SER solely because Lumi transcript says `Unknown Speaker:` |
+| Too many `speech_emotion.detected` for strangers | Expected: unknown speakers use `user="unknown"`; tighten the per-label entry in `CONFIDENCE_THRESHOLD_BY_LABEL` (`constants.py`) or dedup window — do not disable SER solely because Lumi transcript says `Unknown Speaker:` |
 
 ---
 
