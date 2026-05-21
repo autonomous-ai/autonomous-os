@@ -30,12 +30,17 @@ func (s *Service) RunReadLoop(conn *websocket.Conn, buddyID string) {
 			return
 		}
 		var env struct {
-			ID string `json:"id"`
+			ID       string `json:"id"`
+			OK       *bool  `json:"ok"`
+			Error    string `json:"error"`
+			Duration int    `json:"duration_ms"`
 		}
 		if err := json.Unmarshal(data, &env); err != nil || env.ID == "" {
 			slog.Warn("malformed response from buddy", "component", "buddy")
 			continue
 		}
+		ok := env.OK != nil && *env.OK
+		slog.Info("buddy WS ← response", "component", "buddy", "id", env.ID, "ok", ok, "error", env.Error, "duration_ms", env.Duration, "bytes", len(data))
 		if !s.registry.DeliverResponse(env.ID, data) {
 			slog.Warn("orphan response (no pending caller)", "component", "buddy", "id", env.ID)
 		}

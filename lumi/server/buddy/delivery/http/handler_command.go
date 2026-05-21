@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -42,6 +43,7 @@ func (h *BuddyHandler) Command(c *gin.Context) {
 	if cmd.ID == "" {
 		cmd.ID = buddy.NewCommandID()
 	}
+	slog.Info("buddy /command request", "component", "buddy", "id", cmd.ID, "action", cmd.Action, "param_keys", mapKeys(cmd.Params), "connected", h.service.Connected())
 
 	timeout := 30 * time.Second
 	if req.TimeoutMs > 0 {
@@ -52,9 +54,11 @@ func (h *BuddyHandler) Command(c *gin.Context) {
 
 	raw, err := h.service.Dispatch(ctx, cmd)
 	if err != nil {
+		slog.Warn("buddy /command dispatch error", "component", "buddy", "id", cmd.ID, "action", cmd.Action, "error", err)
 		c.JSON(http.StatusBadGateway, serializers.ResponseError(err.Error()))
 		return
 	}
+	slog.Info("buddy /command response", "component", "buddy", "id", cmd.ID, "action", cmd.Action, "bytes", len(raw))
 	// Buddy's response is already shaped {id, ok, result, error, duration_ms}.
 	// Pass it through inside the lumi envelope so callers get a consistent
 	// {status: 1, data: <buddy-response>, message: null}.
@@ -95,18 +99,33 @@ func (h *BuddyHandler) Exec(c *gin.Context) {
 		IssuedAt:  time.Now().UTC().Format(time.RFC3339),
 		IssuedBy:  "skill:hw-marker",
 	}
+	slog.Info("buddy /exec request", "component", "buddy", "id", cmd.ID, "action", action, "param_keys", mapKeys(params), "connected", h.service.Connected())
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
 
 	raw, err := h.service.Dispatch(ctx, cmd)
 	if err != nil {
+		slog.Warn("buddy /exec dispatch error", "component", "buddy", "id", cmd.ID, "action", action, "error", err)
 		c.JSON(http.StatusBadGateway, serializers.ResponseError(err.Error()))
 		return
 	}
+	slog.Info("buddy /exec response", "component", "buddy", "id", cmd.ID, "action", action, "bytes", len(raw))
 	var inner map[string]any
 	if err := json.Unmarshal(raw, &inner); err != nil {
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(json.RawMessage(raw)))
 		return
 	}
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(inner))
+}
+
+// mapKeys returns the sorted keys of a params map for log fields. Values are
+// intentionally omitted — a `type_text` body can be sensitive (passwords) and a
+// screenshot response carries multi-KB base64. The action + key list is enough
+// to confirm "which command, with which fields" without spamming logs.
+func mapKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }

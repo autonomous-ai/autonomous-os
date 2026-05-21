@@ -69,6 +69,19 @@ func extractHWCalls(text string) ([]hwCall, string) {
 	for _, m := range matches {
 		calls = append(calls, hwCall{path: m[1], body: m[2]})
 	}
+	// Log only when buddy markers are present — keeps signal-to-noise high
+	// while answering the "did OpenClaw fire a /buddy/* marker?" question.
+	hasBuddy := false
+	paths := make([]string, 0, len(calls))
+	for _, c := range calls {
+		paths = append(paths, c.path)
+		if strings.HasPrefix(c.path, "/buddy/") {
+			hasBuddy = true
+		}
+	}
+	if hasBuddy {
+		slog.Info("HW markers extracted", "component", "openclaw", "count", len(calls), "paths", paths)
+	}
 	return calls, strings.TrimSpace(hwMarkerRe.ReplaceAllString(text, ""))
 }
 
@@ -101,6 +114,10 @@ func (h *AgentHandler) fireHWCalls(calls []hwCall, flowRunID string) {
 				strings.HasPrefix(c.path, "/buddy/") {
 				postURL = "http://127.0.0.1:5000/api" + c.path
 			}
+			isBuddy := strings.HasPrefix(c.path, "/buddy/")
+			if isBuddy {
+				slog.Info("HW marker → buddy POST", "component", "openclaw", "url", postURL, "body", c.body)
+			}
 			resp, err := http.Post(postURL, "application/json", strings.NewReader(c.body))
 			if err != nil {
 				slog.Warn("HW marker call failed", "component", "openclaw", "path", c.path, "error", err)
@@ -125,8 +142,14 @@ func (h *AgentHandler) fireHWCalls(calls []hwCall, flowRunID string) {
 					}
 				}
 			} else {
-				resp.Body.Close()
-				slog.Info("HW marker fired", "component", "openclaw", "path", c.path)
+				if isBuddy {
+					okBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+					resp.Body.Close()
+					slog.Info("HW marker → buddy OK", "component", "openclaw", "path", c.path, "response", string(okBody))
+				} else {
+					resp.Body.Close()
+					slog.Info("HW marker fired", "component", "openclaw", "path", c.path)
+				}
 			}
 			switch {
 			case strings.Contains(c.path, "/emotion"):
