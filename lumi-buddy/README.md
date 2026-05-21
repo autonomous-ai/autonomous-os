@@ -36,6 +36,7 @@ make install    # copy bundled .app to /Applications
 make audit      # tail the audit log
 make kill       # stop any running LumiBuddy
 make clean      # remove all build artifacts
+make mock       # run mock-lamp (Go) — test buddy without real lumi side
 ```
 
 Behind the scenes `make run` calls `swift run` inside `macos/`. Use it if you don't want to remember the SPM commands.
@@ -49,6 +50,20 @@ No code signing yet. First time launching the bundled `.app` Gatekeeper will blo
 3. Subsequent launches work normally (`make open` or double-click)
 
 Apple Developer signing + notarization comes in v2.0.
+
+## Testing end-to-end with mock-lamp
+
+Until the real lumi Go side lands, you can drive the buddy from a tiny Go mock server. See [`mock-lamp/README.md`](mock-lamp/README.md). Two terminals:
+
+```bash
+# Terminal 1
+make run        # buddy menu bar app
+
+# Terminal 2
+make mock       # prints pairing code, drops you into a REPL
+```
+
+Then in buddy's menu → **Pair with Lumi…** → host `localhost:8765` + the 6-digit code. The mock's REPL sends commands (`ping`, `open_app Calculator`, `type_text hello`, etc.) over the WebSocket.
 
 ---
 

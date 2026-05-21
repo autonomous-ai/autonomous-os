@@ -13,7 +13,9 @@ RELEASE_BIN := $(BUILD_DIR)/release/$(APP_NAME)
 APP_BUNDLE := $(DIST_DIR)/$(APP_NAME).app
 AUDIT_LOG  := $(HOME)/Library/Application Support/LumiBuddy/audit.log
 
-.PHONY: help run build release app install open clean audit kill all check
+MOCK_DIR := mock-lamp
+
+.PHONY: help run build release app install open clean audit kill all check mock mock-build
 
 .DEFAULT_GOAL := help
 
@@ -74,3 +76,9 @@ clean: ## Remove all build artifacts
 	rm -rf $(BUILD_DIR) $(MACOS_DIR)/.swiftpm $(DIST_DIR)
 
 all: app ## Alias for `make app`
+
+mock: ## Run the mock lamp server (Go) — test buddy without real lumi side
+	cd $(MOCK_DIR) && go run .
+
+mock-build: ## Compile-only check for mock-lamp
+	cd $(MOCK_DIR) && go vet ./... && go build ./...
