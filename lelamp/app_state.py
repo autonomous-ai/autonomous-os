@@ -15,6 +15,7 @@ from typing import Optional
 from lelamp.presets import (
     EMO_IDLE,
     EMOTION_PRESETS,
+    FX_RAINBOW,
     FX_SPEAKING_WAVE,
     LST_EFFECT,
     LST_OFF,
@@ -70,6 +71,10 @@ _sleepy_release_timer: Optional[threading.Timer] = None
 # --- TTS speaking LED state ---
 
 _tts_speaking: bool = False
+
+# --- Music playback LED state ---
+
+_music_playing: bool = False
 
 # --- Mic / Speaker mute state ---
 
@@ -197,6 +202,10 @@ def _restore_user_led():
         logger.info("LED restore: skipped -- TTS speaking_wave active")
         return
 
+    if _music_playing:
+        logger.info("LED restore: skipped -- music wave active")
+        return
+
     if not rgb_service:
         return
 
@@ -315,6 +324,75 @@ def _on_tts_speak_end():
 
     _tts_speaking = False
     logger.info("TTS speaking LED end: stopping effect and restoring")
+
+    _stop_current_effect()
+
+    if rgb_service:
+        rgb_service.dispatch(RGB_CMD_SOLID, (0, 0, 0))
+
+    _restore_user_led()
+
+
+def _on_music_play_start():
+    """Called when MusicService starts streaming (ffmpeg has begun output)."""
+    global _music_playing, _effect_thread, _effect_name, _effect_base_color
+    global _restore_timer
+    if not rgb_service:
+        return
+    if _tts_speaking:
+        # TTS wave owns the strip; don't overwrite it.
+        logger.info("Music wave skipped -- TTS speaking_wave active")
+        return
+    if _music_playing:
+        return
+
+    state = _user_led_state
+    led_off = state is None or state.get("type") == LST_OFF
+    if led_off:
+        effect = FX_RAINBOW
+        color = (0, 0, 0)  # ignored by rainbow
+        name = "led-music-rainbow"
+    else:
+        effect = FX_SPEAKING_WAVE
+        color = _get_current_led_color()
+        name = "led-music-speaking_wave"
+    logger.info("Music play LED start: effect=%s color=%s", effect, color)
+
+    _music_playing = True
+
+    if _restore_timer is not None and _restore_timer.is_alive():
+        _restore_timer.cancel()
+        _restore_timer = None
+
+    _stop_current_effect()
+    rgb_service.dispatch(RGB_CMD_SOLID, (0, 0, 0))
+
+    _effect_stop.clear()
+    _effect_name = effect
+    _effect_base_color = color
+    _effect_thread = threading.Thread(
+        target=_run_effect,
+        args=(effect, color, 2.5, None, _effect_stop, rgb_service),
+        daemon=True,
+        name=name,
+    )
+    _effect_thread.start()
+
+
+def _on_music_play_end():
+    """Called when MusicService finishes streaming (natural end, stop, or TTS preempt)."""
+    global _music_playing
+    if not _music_playing:
+        return
+
+    if _tts_speaking:
+        # TTS wave already took over; clear flag but don't disturb the strip.
+        logger.info("Music wave end deferred -- TTS speaking_wave owns strip")
+        _music_playing = False
+        return
+
+    _music_playing = False
+    logger.info("Music play LED end: stopping effect and restoring")
 
     _stop_current_effect()
 
