@@ -1,5 +1,13 @@
 import Foundation
 
+extension Notification.Name {
+    // Posted on the main queue whenever any AppState field changes. Observers
+    // (e.g. the Activity window) can refresh themselves instead of polling.
+    // MenuBarController still uses the direct onChange closure to keep the
+    // pairing/connection UI snappy.
+    static let lumiBuddyAppStateChanged = Notification.Name("lumiBuddyAppStateChanged")
+}
+
 enum PairingStatus: Equatable {
     case notPaired
     case paired(buddyID: String, lampHost: String)
@@ -24,8 +32,10 @@ final class AppState {
     static let shared = AppState()
 
     // Cap on the in-memory ring buffer. The full audit trail lives on disk
-    // (see AuditLog.swift) — this list is just what the menu bar can show.
-    static let recentCommandsCap = 20
+    // (see AuditLog.swift) — this list is what the menu bar and the Activity
+    // window render. 100 entries is enough for a useful "tail -n 100" view
+    // without holding meaningful memory.
+    static let recentCommandsCap = 100
 
     private(set) var pairing: PairingStatus = .notPaired { didSet { notify() } }
     private(set) var connection: ConnectionStatus = .disconnected { didSet { notify() } }
@@ -58,6 +68,7 @@ final class AppState {
         // didSet runs on whichever thread the setter ran. setPairing etc. always hop to main first,
         // so onChange always fires on main.
         onChange?()
+        NotificationCenter.default.post(name: .lumiBuddyAppStateChanged, object: nil)
     }
 
     private func onMain(_ block: @escaping () -> Void) {

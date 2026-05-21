@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var connection: LumiConnection?
     private var auditLog: AuditLog?
     private var pairingWindow: PairingWindowController?
+    private var activityWindow: ActivityWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let store = PairingStore()
@@ -32,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onPair: { [weak self] host in self?.showPairing(host: host) },
             onUnpair: { [weak self] in self?.unpair() },
             onTogglePause: { paused in AppState.shared.setPaused(paused) },
+            onShowActivity: { [weak self] in self?.showActivity() },
             onAbout: { [weak self] in self?.showAbout() },
             onQuit: { NSApp.terminate(nil) }
         )
@@ -81,6 +83,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let c = LumiConnection(host: record.lampHost, token: record.token, dispatcher: dispatcher)
         c.connect()
         connection = c
+    }
+
+    private func showActivity() {
+        if activityWindow == nil {
+            activityWindow = ActivityWindowController()
+        }
+        activityWindow?.show()
     }
 
     private func showAbout() {
