@@ -4,6 +4,39 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
+struct ListDisplaysExecutor: Executor {
+    let action = "list_displays"
+
+    func execute(params: [String: Any]) async throws -> [String: Any] {
+        var count: UInt32 = 0
+        CGGetActiveDisplayList(0, nil, &count)
+        var ids = Array<CGDirectDisplayID>(repeating: 0, count: Int(count))
+        CGGetActiveDisplayList(count, &ids, &count)
+
+        let main = CGMainDisplayID()
+        var list: [[String: Any]] = []
+        for id in ids {
+            let bounds = CGDisplayBounds(id)
+            let mode = CGDisplayCopyDisplayMode(id)
+            let pixelW = mode?.pixelWidth ?? Int(bounds.width)
+            let pointW = mode?.width ?? Int(bounds.width)
+            let scale = pointW > 0 ? Double(pixelW) / Double(pointW) : 1.0
+            list.append([
+                "id": Int(id),
+                "is_main": id == main,
+                "x": Int(bounds.origin.x),
+                "y": Int(bounds.origin.y),
+                "width": Int(bounds.width),
+                "height": Int(bounds.height),
+                "pixel_width": pixelW,
+                "pixel_height": mode?.pixelHeight ?? Int(bounds.height),
+                "scale": scale,
+            ])
+        }
+        return ["displays": list, "count": list.count]
+    }
+}
+
 struct ScreenshotExecutor: Executor {
     let action = "screenshot"
 
