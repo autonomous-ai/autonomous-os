@@ -1,6 +1,6 @@
 # Speech Emotion Recognition (SER)
 
-Recognize the **user's** emotion from their voice (not the lamp's). At the end of each STT session, `VoiceService._finalize_voice_turn` builds a mono 16 kHz WAV from the session `audio_buffer` and enqueues it on `SpeechEmotionService`, which buffers per-user, dedups by polarity bucket, and fires `speech_emotion.detected` sensing events to Lumi. Speaker identification runs in parallel for Lumi transcript decoration only; SER attribution uses the enrolled speaker name when matched, otherwise the shared `unknown` bucket key.
+Recognize the **user's** emotion from their voice (not the lamp's). At the end of every mic session (VAD trigger → ~2.5 s silence stop), `VoiceService._submit_speech_emotion_from_session` builds a mono 16 kHz WAV from the session `audio_buffer` and enqueues it on `SpeechEmotionService`, which buffers per-user, dedups by polarity bucket, and fires `speech_emotion.detected` sensing events to Lumi. **SER runs independently of STT** — laughter, sighs, "uh-huh"s, and other non-verbal cues that leave the transcript empty still classify. Speaker recognition is invoked inline to populate the `user` field (falls back to `unknown` when speaker ID is unavailable, the buffer is too short for an embedding, or there's no match); it never gates whether SER runs.
 
 This is the voice-side twin of facial emotion detection (`emotion.detected`). The architecture, polarity bucketing, and dedup window are intentionally symmetric so both modalities land in the same downstream skills (`user-emotion-detection/SKILL.md`, mood logging, music suggestion).
 
@@ -13,11 +13,20 @@ This is the voice-side twin of facial emotion detection (`emotion.detected`). Th
 ## Architecture
 
 ```
-voice_service._finalize_voice_turn(transcript, audio_buffer)     ← post-STT main path (_send_best)
-    ├─ _identify_and_decorate → (lumi_message, user_name | None)
-    │     speaker_recognizer.recognize(...) — Lumi prefix only (no SER)
-    ├─ se_user = user_name or "unknown"                          ← fallback when identify skipped/failed
-    └─ _session_wav_for_ser(buffer) → _submit_speech_emotion_after_speaker(se_user)
+voice_service._stream_session(...) finally:                      ← every mic session end
+    ├─ trim trailing silence on audio_buffer
+    │
+    ├─ wake-word split on `combined` → final_text + event_type
+    │
+    ├─ _identify_and_decorate(final_text, audio_buffer)           ← single speaker recognize per session
+    │       → (final_msg, user_name | None)
+    │  user = user_name or "unknown"
+    │
+    ├─ if combined: _send_to_lumi(final_msg, event_type)         ← Lumi message path
+    │
+    └─ _submit_speech_emotion_from_session(audio_buffer, user)   ← ALWAYS — SER pipeline
+            └─ _session_wav_for_ser(buffer) → (wav, duration_s)
+            └─ SpeechEmotionService.submit(user, wav, duration_s)
             ▼
 SpeechEmotionService.submit(user, wav_bytes, duration_s)   ← non-blocking
     │  queue.put_nowait
@@ -182,17 +191,40 @@ Label vocabulary and bucket map are declared in `lelamp/service/voice/speech_emo
 
 ## Integration Point
 
-Called from `VoiceService._finalize_voice_turn` (invoked by `_send_best` at end of each STT session):
+Called from `VoiceService._stream_session`'s `finally` block. Speaker recognize runs **once** per session and its result feeds both the Lumi-message decoration and the SER `user` field:
 
 ```python
-final_msg, se_user = self._identify_and_decorate(transcript, audio_buffer)
-if se_user is None:
-    se_user = UNKNOWN_USER_LABEL  # "unknown"
-session_audio = self._session_wav_for_ser(audio_buffer)
-if session_audio is not None:
-    wav_bytes, duration_s = session_audio
-    self._submit_speech_emotion_after_speaker(wav_bytes, duration_s, se_user)
+# In _stream_session finally, after trim:
+
+# 1. Wake-word split (only when transcript exists)
+event_type = "voice"
+final_text = combined
+if combined:
+    # ... strip wake word; set event_type = "voice_command" if matched
+
+# 2. Single speaker recognize per session
+final_msg, se_user = self._identify_and_decorate(final_text, audio_buffer)
+user = se_user if se_user else UNKNOWN_USER_LABEL
+
+# 3. Decorate → Lumi (only when STT had text)
+if combined:
+    self._send_to_lumi(final_msg, event_type=event_type)
+
+# 4. Submit SER — independent pipeline, reuses speaker result from step 2
+self._submit_speech_emotion_from_session(audio_buffer, user=user)
 ```
+
+`_submit_speech_emotion_from_session` is now a thin submitter (no embedded speaker call):
+
+```python
+session_audio = self._session_wav_for_ser(audio_buffer)
+if session_audio is None:
+    return                                          # buffer empty or < SPEAKER_MIN_AUDIO_S
+wav_bytes, duration_s = session_audio
+self._speech_emotion.submit(user=user, wav_bytes=wav_bytes, duration_s=duration_s)
+```
+
+The previous `_send_best` closure has been inlined into the finally block. SER is still decoupled from STT (fires even when `combined` is empty), and now shares one `/embed` call with the Lumi-decoration path.
 
 ### SER user attribution
 
@@ -200,19 +232,29 @@ if session_audio is not None:
 |--------------------|-----------------------------|
 | `match=True` with enrolled name | Speaker label (e.g. `alice`) |
 | `match=False` / below threshold (API OK, no `error`) | `unknown` — set directly by `_identify_and_decorate` |
-| Recognize skipped or failed (`user_name` is `None`) | `unknown` — `_finalize_voice_turn` fallback |
+| Recognize skipped or failed (`user_name` is `None`) | `unknown` — `_submit_speech_emotion_from_session` fallback |
 
 So **no match** and **embedding API error** both dedup under the `unknown` key when the session buffer is long enough. SER is never invoked from inside `_identify_and_decorate`.
 
 ### When SER is not submitted
 
 - `SPEECH_EMOTION_ENABLED=false` or `SpeechEmotionService` not `available`
-- `audio_buffer` empty or shorter than `SPEAKER_MIN_AUDIO_S` / `SPEECH_EMOTION_MIN_AUDIO_S` (both gates use the same session length check path)
+- `audio_buffer` empty or shorter than `SPEAKER_MIN_AUDIO_S` (gates `_session_wav_for_ser`)
+- `duration_s < SPEECH_EMOTION_MIN_AUDIO_S` (gates `submit()` itself — default 3.0 s)
 - `submit()` drops (queue full, empty `user` after normalize, etc.)
 
-`wav_bytes` is built from the STT session `audio_buffer` via `_session_wav_for_ser` (separate from the WAV encoded inside `_identify_and_decorate` for speaker `/embed`).
+`wav_bytes` is built from the STT session `audio_buffer` via `_session_wav_for_ser` (separate from the WAV encoded inside `_identify_and_decorate` for speaker `/embed`, even though they currently happen to share the same buffer contents).
 
 Lazy init in `VoiceService.__init__` mirrors the speaker recognizer pattern: instance is created once, threads start only when the engine reports `available`.
+
+### Cost note: speaker recognize is shared across paths
+
+Speaker recognize fires **once** per mic session. The single `(final_msg, user_name)` result is reused by:
+
+1. The Lumi POST (`_send_to_lumi(final_msg, event_type)`) — when STT had a transcript.
+2. The SER submit (`_submit_speech_emotion_from_session(..., user=...)`) — always.
+
+This is the reason the finally block ordering is: wake-word split → `_identify_and_decorate` once → Lumi POST → SER submit. `_submit_speech_emotion_from_session` accepts `user` as an argument now; it no longer issues its own `/embed` request.
 
 ---
 
@@ -253,7 +295,7 @@ Nothing here blocks the STT path or speaker recognition — SER failures are sil
 | Pipeline | Modality | Trigger | Event type | Same skill consumes? |
 |----------|----------|---------|------------|----------------------|
 | Facial emotion (`emotion.py` perception) | Camera frame → face crop | Every face seen | `emotion.detected` | yes — `user-emotion-detection/SKILL.md` |
-| **Speech emotion (this doc)** | Mic → end-of-utterance WAV | Every STT turn with sufficient buffered audio | `speech_emotion.detected` | yes — same `user-emotion-detection/SKILL.md` (router accepts both prefixes) |
+| **Speech emotion (this doc)** | Mic → end-of-session WAV | Every mic session with sufficient buffered audio — **independent of STT transcript** | `speech_emotion.detected` | yes — same `user-emotion-detection/SKILL.md` (router accepts both prefixes) |
 | Mood synthesis (Mood skill) | — | Any emotion signal | mood `signal` / `decision` rows | — |
 | Sound (`sound.py` perception) | Mic RMS | Loud noise | `sound` | dog-bark escalation, separate skill |
 

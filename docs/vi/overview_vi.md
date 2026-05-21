@@ -78,7 +78,8 @@ Mic (always on) → Local VAD (RMS energy, free)
         → "hey lumi, tắt đèn" → voice_command → local intent → thực thi
         → "anh ơi đi ăn không" → voice (ambient) → OpenClaw
     → Silence 3s → Disconnect Deepgram
-    → _finalize_voice_turn: speaker decorate + speech emotion (WAV → dlbackend SER → Lumi event)
+    → _submit_speech_emotion_from_session: WAV → dlbackend SER → Lumi event (luôn chạy, độc lập transcript)
+    → _identify_and_decorate (1 lần) → if transcript: _send_to_lumi voice/voice_command
 ```
 
 Chi tiết SER: [speech-emotion_vi.md](speech-emotion_vi.md).

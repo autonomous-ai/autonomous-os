@@ -1,6 +1,6 @@
 # Nhận Diện Cảm Xúc Giọng Nói (SER)
 
-LeLamp phân tích cảm xúc từ giọng nói sau mỗi lượt nói (STT session). Kết quả được gom theo người dùng, lọc trùng, rồi gửi sự kiện `speech_emotion.detected` tới Lumi để OpenClaw phản ứng.
+LeLamp phân tích cảm xúc từ giọng nói **sau mỗi phiên mic** (VAD trigger → im lặng ~2.5 s đóng phiên), độc lập với việc STT có trả transcript hay không. Nhờ vậy, tiếng cười, thở dài, "ờ ờ" và các tín hiệu phi-lời nói (vốn để lại transcript rỗng) vẫn được phân loại. Kết quả được gom theo người dùng, lọc trùng theo bucket cảm xúc, rồi gửi sự kiện `speech_emotion.detected` tới Lumi để OpenClaw phản ứng. Speaker recognition vẫn được gọi nội bộ để xác định trường `user` (rơi về `unknown` khi không nhận diện được); nó **không còn là cổng chặn** trước SER.
 
 **Tài liệu liên quan:** [Tuning sensing (SER)](../sensing-tuning.md#speech-emotion-recognition-ser) · [dlbackend](../dlbackend.md) · [Sensing behavior](sensing-behavior_vi.md)
 
@@ -9,28 +9,38 @@ LeLamp phân tích cảm xúc từ giọng nói sau mỗi lượt nói (STT sess
 ## Kiến Trúc
 
 ```
-VoiceService._finalize_voice_turn (sau STT)
+VoiceService._stream_session(...) finally   ← cuối MỌI phiên mic
     │
-    ├─ _identify_and_decorate(transcript, audio_buffer)
-    │       → (lumi_message, user_name | None)   # chỉ decorate transcript + speaker ID
+    ├─ Trim đuôi im lặng trên audio_buffer
     │
-    ├─ se_user = user_name hoặc "unknown" nếu None
+    ├─ Wake-word split trên `combined` → final_text + event_type
+    │       (chỉ chạy khi STT có transcript)
     │
-    ├─ _session_wav_for_ser(audio_buffer) → (wav_bytes, duration_s) | None
+    ├─ _identify_and_decorate(final_text, audio_buffer)   ← 1 LẦN duy nhất / phiên
+    │       → (final_msg, user_name | None)
+    │  user = user_name hoặc "unknown"
     │
-    └─ _submit_speech_emotion_after_speaker(wav, duration, se_user)
+    ├─ if combined:
+    │       _send_to_lumi(final_msg, event_type)   ← POST Lumi voice / voice_command
+    │
+    └─ _submit_speech_emotion_from_session(audio_buffer, user)   ← LUÔN
             │
-            ▼
-    SpeechEmotionService.submit(user, wav_bytes, duration_s)
+            ├─ _session_wav_for_ser(audio_buffer) → (wav_bytes, duration_s) | None
             │
-            ├─ Worker thread: POST dlbackend /api/dl/ser/recognize
-            │       → label + confidence → buffer _Inference theo user
-            │
-            └─ Flush thread (mỗi SPEECH_EMOTION_FLUSH_S):
-                    mode label → bucket → dedup → POST Lumi speech_emotion.detected
+            └─ SpeechEmotionService.submit(user, wav_bytes, duration_s)
+                    │
+                    ├─ Worker: POST dlbackend /api/dl/ser/recognize
+                    │       → label + confidence → buffer _Inference theo user
+                    │
+                    └─ Flush mỗi SPEECH_EMOTION_FLUSH_S:
+                            mode label → bucket → dedup → POST Lumi speech_emotion.detected
 ```
 
-**Tách bạch speaker vs SER:** `_identify_and_decorate` không gọi SER. Luồng chính `_finalize_voice_turn` quyết định `user` cho SER và gọi submit.
+**Tách bạch SER khỏi STT, dùng chung speaker recognize:**
+- `_identify_and_decorate` chạy **đúng 1 lần** mỗi phiên — kết quả phục vụ cả Lumi message lẫn SER user.
+- Lumi POST chỉ chạy khi STT có transcript; SER submit chạy mọi phiên (kể cả tiếng cười, sighs).
+- `_submit_speech_emotion_from_session` giờ nhận `user` qua tham số, **không tự gọi speaker** nữa.
+- Closure `_send_best` cũ đã được inline trực tiếp vào finally block.
 
 ---
 
@@ -63,18 +73,18 @@ VoiceService._finalize_voice_turn (sau STT)
 
 | Hàm | Vai trò |
 |-----|---------|
-| `_identify_and_decorate` | Speaker `/embed` + prefix transcript (`Alice: ...` / `Unknown Speaker: ...`). Trả `user_name` = tên khi match; `UNKNOWN_USER_LABEL` (`"unknown"`) khi API OK nhưng không match; `None` khi skip/lỗi/tắt speaker. **Không gọi SER.** |
+| `_identify_and_decorate` | Speaker `/embed` + prefix transcript (`Alice: ...` / `Unknown Speaker: ...`). Trả `(final_msg, user_name)`: `user_name` = tên khi match; `UNKNOWN_USER_LABEL` (`"unknown"`) khi API OK nhưng không match; `None` khi skip/lỗi/tắt speaker. **Không gọi SER.** |
 | `_session_wav_for_ser` | Mono 16 kHz WAV + `duration_s` từ `audio_buffer` (cần `>= SPEAKER_MIN_AUDIO_S`, mặc định 0.8s). |
-| `_submit_speech_emotion_after_speaker` | `SpeechEmotionService.submit(...)`. |
-| `_finalize_voice_turn` | Gọi identify → `se_user = user_name or "unknown"` → WAV → submit → trả `final_msg` cho Lumi. |
+| `_submit_speech_emotion_from_session` | Orchestrator mới: build WAV → gọi `_identify_and_decorate("", buffer)` lấy `user_name` → fallback `"unknown"` → `SpeechEmotionService.submit(...)`. Được gọi **bất điều kiện** trong `_stream_session` finally. |
+| `_stream_session` finally | Inline toàn bộ: wake-word split → 1 lần `_identify_and_decorate(final_text, buffer)` → POST Lumi `voice` / `voice_command` (nếu có transcript) → `_submit_speech_emotion_from_session(buffer, user)`. Closure `_send_best` cũ đã được gỡ. |
 
 ### Gán `user` cho SER
 
-| Tình huống speaker | `user_name` từ identify | `se_user` gửi SER |
-|--------------------|-------------------------|-------------------|
+| Tình huống speaker | `user_name` từ identify | `user` gửi SER |
+|--------------------|-------------------------|----------------|
 | Match tên | `"alice"` | `"alice"` |
 | Không match (API OK) | `"unknown"` | `"unknown"` |
-| Lỗi / exception / speaker tắt | `None` | `"unknown"` (fallback trong `_finalize_voice_turn`) |
+| Lỗi / exception / speaker tắt / buffer ngắn | `None` | `"unknown"` (fallback trong `_submit_speech_emotion_from_session`) |
 
 Transcript Lumi vẫn có thể là `Unknown Speaker:` trong khi SER dùng key dedup chung `unknown` cho mọi người lạ.
 
@@ -92,9 +102,11 @@ Transcript Lumi vẫn có thể là `Unknown Speaker:` trong khi SER dùng key d
 | Label neutral sau flush | Không POST Lumi |
 | Dedup `(user, bucket)` | Trong cửa sổ `SPEECH_EMOTION_DEDUP_WINDOW_S` |
 
-**VAD:** chỉ mở session STT phía trước; không có VAD thứ hai trước SER.
+**VAD:** chỉ mở phiên mic phía trước (`_vad_loop`); không có VAD thứ hai trước SER. Cuối phiên (im lặng 2.5s) đóng mic → SER tự kích hoạt từ finally block, **không cần STT có transcript**.
 
-**Speaker fail vs unknown:** Trước đây lỗi speaker chặn hẳn SER; hiện fallback `"unknown"` trong `_finalize_voice_turn` vẫn enqueue SER nếu audio đủ dài.
+**Speaker fail vs unknown:** Lỗi speaker chỉ ảnh hưởng `user` field; SER vẫn enqueue với `"unknown"` nếu audio đủ dài (`>= SPEAKER_MIN_AUDIO_S` cho build WAV và `>= SPEECH_EMOTION_MIN_AUDIO_S` cho `submit()`).
+
+**Transcript rỗng (laughter, cough, sigh):** Trước đây bị chặn ở cổng `if combined`; hiện tại vẫn vào SER. Nếu mô hình `emotion2vec` map laughter sang `happy`/`surprised` và confidence ≥ ngưỡng, event sẽ được gửi đi.
 
 ---
 
@@ -134,7 +146,7 @@ Chi tiết tuning / log: [sensing-tuning_vi.md](sensing-tuning_vi.md).
 | Hệ thống | Quan hệ |
 |----------|---------|
 | Speaker recognition | Cùng WAV session; decorate transcript tách với SER |
-| STT (Deepgram) | SER chạy sau khi session kết thúc (`_send_best` → `_finalize_voice_turn`) |
+| STT (Deepgram) | SER chạy sau khi phiên mic kết thúc, **độc lập với transcript** — gọi từ `_stream_session` finally sau khi Lumi POST (nếu có) |
 | dlbackend | ONNX emotion2vec; xem [dlbackend.md](../dlbackend.md) |
 | Face / motion emotion | Khác pipeline (camera); không dùng chung buffer SER |
 | Lumi dedup / cooldown | `speech_emotion.detected` có cooldown riêng trên Lumi (nếu cấu hình) |

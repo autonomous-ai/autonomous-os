@@ -25,6 +25,7 @@ import requests
 
 from lelamp.service.voice.backchannel import Backchannel
 from lelamp.service.voice.stt_provider import STTProvider
+from lelamp import config as _lelamp_config
 
 logger = logging.getLogger("lelamp.voice")
 
@@ -69,8 +70,6 @@ MAX_SESSION_DURATION_S = float(os.environ.get("LELAMP_MAX_SESSION_DURATION_S", "
 STT_KEEPALIVE = os.environ.get("LELAMP_STT_KEEPALIVE", "false").lower() == "true"
 
 # Speaker recognition — prefix every transcript with "<Name>: " identified from
-# the session's buffered audio. All knobs centralized in lelamp.config.
-from lelamp import config as _lelamp_config
 SPEAKER_RECOGNITION_ENABLED = _lelamp_config.SPEAKER_RECOGNITION_ENABLED
 SPEAKER_MIN_AUDIO_S = _lelamp_config.SPEAKER_MIN_AUDIO_S
 
@@ -555,13 +554,12 @@ class VoiceService:
             logger.warning("Session WAV for SER failed: %s", e)
             return None
 
-    def _submit_speech_emotion_after_speaker(
+    def _submit_speech_emotion_from_session(
         self,
-        wav_bytes: bytes,
-        duration_s: float,
+        audio_buffer: list[bytes],
         user: str,
     ) -> None:
-        """Enqueue session WAV for SER (called from the main post-STT flow, not speaker decorate)."""
+        """Submit SER on the full mic-session buffer."""
         if self._speech_emotion is None or not self._speech_emotion.available:
             logger.info(
                 "Speech emotion submit skipped: service_init=%s available=%s",
@@ -569,8 +567,13 @@ class VoiceService:
                 bool(self._speech_emotion and self._speech_emotion.available),
             )
             return
+        session_audio = self._session_wav_for_ser(audio_buffer)
+        if session_audio is None:
+            return
+        wav_bytes, duration_s = session_audio
+
         logger.info(
-            "Speech emotion submit: user=%r duration=%.2fs wav=%d bytes",
+            "Speech emotion submit (session-end): user=%r duration=%.2fs wav=%d bytes",
             user, duration_s, len(wav_bytes),
         )
         try:
@@ -579,6 +582,34 @@ class VoiceService:
             )
         except Exception as e:
             logger.warning("Speech emotion submit failed: %s", e)
+
+    def _resolve_wake_word_split(self, combined: str) -> tuple[str, str]:
+        """Detect wake word in `combined` and split it off.
+
+        Returns ``(final_text, event_type)``:
+        * ``final_text`` — the text that will be sent to Lumi (wake word stripped
+          when a command, otherwise the original transcript).
+        * ``event_type`` — ``"voice_command"`` when a wake word matched at the
+          start, otherwise ``"voice"``. Used as the sensing-event ``type`` field.
+
+        Empty ``combined`` short-circuits to ``("", "voice")``; the caller still
+        gets a usable shape but typically skips the Lumi POST.
+        """
+        if not combined:
+            return "", "voice"
+
+        normalized = re.sub(r"[^\w\s]", "", combined.lower())
+        with self._wake_words_lock:
+            wake_words = list(self._wake_words)
+        if not any(w in normalized for w in wake_words):
+            return combined, "voice"
+
+        cmd = normalized
+        for w in wake_words:
+            if cmd.startswith(w):
+                cmd = cmd[len(w):].strip()
+                break
+        return (cmd or combined), "voice_command"
 
     def _identify_and_decorate(
         self, transcript: str, audio_buffer: list[bytes],
@@ -600,9 +631,7 @@ class VoiceService:
             return transcript, None
         try:
             from lelamp.service.voice.speech_emotion.constants import UNKNOWN_USER_LABEL
-            from lelamp.service.voice.speaker_recognizer.speaker_recognizer import (
-                pcm16_bytes_to_wav,
-            )
+            from lelamp.service.voice.speaker_recognizer.speaker_recognizer import pcm16_bytes_to_wav
         except Exception as e:
             logger.warning("Skip speaker ID: helper import failed: %s", e)
             return transcript, None
@@ -654,18 +683,6 @@ class VoiceService:
         return self._format_unknown_speaker_message(
             transcript, audio_path, duration_s, vp_hash,
         ), UNKNOWN_USER_LABEL
-
-    def _finalize_voice_turn(self, transcript: str, audio_buffer: list[bytes]) -> str:
-        """Speaker decorate → optional SER submit → return message for Lumi."""
-        final_msg, se_user = self._identify_and_decorate(transcript, audio_buffer)
-        if se_user is None:
-            from lelamp.service.voice.speech_emotion.constants import UNKNOWN_USER_LABEL
-            se_user = UNKNOWN_USER_LABEL
-        session_audio = self._session_wav_for_ser(audio_buffer)
-        if session_audio is not None:
-            wav_bytes, duration_s = session_audio
-            self._submit_speech_emotion_after_speaker(wav_bytes, duration_s, se_user)
-        return final_msg
 
     def _wait_for_tts(self):
         """Block until TTS finishes speaking, then wait for reverb to decay (adaptive RMS gate)."""
@@ -775,10 +792,6 @@ class VoiceService:
         Breaks out when TTS starts speaking so _loop can close mic and reopen after."""
         speech_start = None
         speech_pre_buffer = []  # frames buffered during holdoff period
-        # Rolling pre-trigger history. Every read appends here regardless of
-        # VAD state — when speech is finally detected, the last N frames of
-        # pre-trigger audio (the syllable that fell under RMS_THRESHOLD)
-        # get prepended to speech_pre_buffer so STT sees the full utterance.
         lookback = deque(maxlen=PRE_ROLL_FRAMES)
 
         # Keepalive: pre-connect STT WS so it's ready before speech is detected.
@@ -806,9 +819,7 @@ class VoiceService:
             if self._tts_is_speaking() or self._music_is_playing():
                 return
 
-            # Always append to rolling lookback — regardless of VAD state.
-            # This is what makes pre-roll work: the moment VAD triggers we
-            # already have N frames of pre-trigger audio in hand.
+            # Append to lookback for pre-roll.
             lookback.append(data)
 
             rms = self._rms(data)
@@ -828,9 +839,7 @@ class VoiceService:
                             speech_start = None
                             speech_pre_buffer = []
                             continue
-                    # Prepend pre-trigger history from lookback. The last
-                    # len(speech_pre_buffer) frames of lookback already == the
-                    # holdoff buffer, so slice them off to avoid duplicates.
+                    # Prepend pre-trigger history from lookback.
                     buffered = len(speech_pre_buffer)
                     history = list(lookback)[:-buffered] if buffered > 0 else list(lookback)
                     all_frames = history + speech_pre_buffer
@@ -846,7 +855,6 @@ class VoiceService:
                     speech_start = None
                     speech_pre_buffer = []
                     # Clear lookback so the next session doesn't replay tail
-                    # audio from this turn (silence + post-speech artifacts).
                     lookback.clear()
                     self._silero_reset_state()
                     logger.info("VAD resumed — mic active, waiting for next speech")
@@ -871,7 +879,7 @@ class VoiceService:
         Buffer lifecycle (one per call):
             START  — ``audio_buffer = []`` created as a local variable
             FILL   — every frame that goes to STT is also appended here
-            USE    — at session end ``_send_best`` reads it for speaker ID
+            USE    — at session end the finally block reads it for speaker ID + SER
             END    — function returns → local ``audio_buffer`` goes out of
                      scope → garbage-collected. NO state leaks to the next
                      ``_stream_session`` call.
@@ -895,34 +903,6 @@ class VoiceService:
             "Session START — pre_from_vad=%d frames, device_rate=%dHz",
             pre_frames_from_vad, device_rate,
         )
-
-        def _send_best(best: str):
-            # Run speaker recognition BEFORE wake word logic so the sent
-            # message preserves the prefix regardless of which branch fires.
-            lower = best.lower()
-            # Normalize: strip punctuation for wake word matching (Deepgram may add "hey, lumi.")
-            normalized = re.sub(r"[^\w\s]", "", lower)
-            # Check for wake word
-            with self._wake_words_lock:
-                wake_words = list(self._wake_words)
-            is_command = any(w in normalized for w in wake_words)
-            if is_command:
-                cmd = normalized
-                for w in wake_words:
-                    if cmd.startswith(w):
-                        # Strip wake word from normalized, then use that as the command.
-                        # Cannot slice `best` by len(w) because best has punctuation that
-                        # normalized doesn't (e.g. "Hey, Lumi!" vs "hey lumi").
-                        cmd = cmd[len(w):].strip()
-                        break
-                command_text = cmd or best
-                final_msg = self._finalize_voice_turn(command_text, audio_buffer)
-                logger.info("Final message → Lumi (voice_command): %r", final_msg)
-                self._send_to_lumi(final_msg, event_type="voice_command")
-            else:
-                final_msg = self._finalize_voice_turn(best, audio_buffer)
-                logger.info("Final message → Lumi (voice): %r", final_msg)
-                self._send_to_lumi(final_msg, event_type="voice")
 
         def on_transcript(text: str, is_final: bool):
             if not is_final:
@@ -1060,13 +1040,8 @@ class VoiceService:
                 final_segments.append(longest_partial[0])
             combined = " ".join(final_segments).strip()
 
-            # Trim trailing silence from the speaker-recognition buffer.
-            # The session stays open for SILENCE_TIMEOUT_S (~2.5s) after the
-            # user stops, so without this ~30-50% of a short utterance is
-            # silence — the voiceprint ends up heavily diluted and cluster
-            # similarity suffers. Keep a 200ms tail so consonant decay and
-            # word endings aren't cut mid-phoneme. STT buffer is untouched
-            # (it doesn't use audio_buffer anyway).
+            # Remove trailing silence from audio_buffer for speaker recognition.
+            # Leaves a 200ms tail for word endings; STT buffer unaffected.
             if last_speech_idx >= 0:
                 tail_frames = int(200 / FRAME_DURATION_MS) + 1
                 trim_end = min(last_speech_idx + tail_frames + 1, len(audio_buffer))
@@ -1087,10 +1062,24 @@ class VoiceService:
                 "Session END — buffer frames=%d bytes=%d duration=%.2fs transcript=%r",
                 buf_frames, buf_bytes, buf_duration, combined or "(empty)",
             )
-
+                      
+            # Prepare message and user for speaker recognition and SER. 
+            from lelamp.service.voice.speech_emotion.constants import UNKNOWN_USER_LABEL
+            final_text, event_type = self._resolve_wake_word_split(combined)
+            user = UNKNOWN_USER_LABEL
+            
+            # 1. Speaker recognize and decorate the final text to send to Lumi.
             if combined:
-                _send_best(combined)
-            # Clear listening LED — covers cases where no voice_command was sent (silence, TTS interrupt)
+                final_msg, se_user = self._identify_and_decorate(final_text, audio_buffer)
+                user = se_user if se_user else UNKNOWN_USER_LABEL
+                logger.info("Final message → Lumi (%s): %r", event_type, final_msg)
+                self._send_to_lumi(final_msg, event_type=event_type)
+
+            # 2. Submit SER
+            self._submit_speech_emotion_from_session(audio_buffer, user=user)
+            
+            
+            # Clear listening LED
             try:
                 requests.post("http://127.0.0.1:5000/api/sensing/event",
                               json={"type": "voice_listening_end", "message": "done"},
