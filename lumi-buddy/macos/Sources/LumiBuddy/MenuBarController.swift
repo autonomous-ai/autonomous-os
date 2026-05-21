@@ -34,7 +34,8 @@ final class MenuBarController: NSObject {
         let state = AppState.shared
 
         if let button = statusItem.button {
-            button.title = iconTitle(for: state)
+            button.image = iconSymbol(for: state)
+            button.title = ""
             button.toolTip = headerText(for: state)
         }
 
@@ -65,17 +66,26 @@ final class MenuBarController: NSObject {
 
     // MARK: - header text + icon
 
-    private func iconTitle(for state: AppState) -> String {
+    private func iconSymbol(for state: AppState) -> NSImage? {
+        let name: String
         switch state.pairing {
-        case .notPaired: return "💡"
+        case .notPaired:
+            name = "lightbulb"
         case .paired:
             switch state.connection {
-            case .connected: return state.paused ? "💡⏸" : "💡✅"
-            case .connecting: return "💡⏳"
-            case .error: return "💡⚠️"
-            case .disconnected: return "💡⚪️"
+            case .connected:
+                name = state.paused ? "pause.fill" : "lightbulb.fill"
+            case .connecting:
+                name = "lightbulb"
+            case .error:
+                name = "exclamationmark.triangle.fill"
+            case .disconnected:
+                name = "lightbulb.slash"
             }
         }
+        let img = NSImage(systemSymbolName: name, accessibilityDescription: headerText(for: state))
+        img?.isTemplate = true
+        return img
     }
 
     private func headerText(for state: AppState) -> String {
