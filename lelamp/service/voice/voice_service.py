@@ -1040,6 +1040,9 @@ class VoiceService:
                 final_segments.append(longest_partial[0])
             combined = " ".join(final_segments).strip()
 
+            # Snapshot the FULL (untrimmed) buffer for SER before trimming.
+            ser_audio_buffer = list(audio_buffer)
+
             # Remove trailing silence from audio_buffer for speaker recognition.
             # Leaves a 200ms tail for word endings; STT buffer unaffected.
             if last_speech_idx >= 0:
@@ -1049,8 +1052,10 @@ class VoiceService:
                 if dropped > 0:
                     del audio_buffer[trim_end:]
                     logger.info(
-                        "Session TRIM — dropped %d trailing-silence frames (~%.2fs)",
+                        "Session TRIM — dropped %d trailing-silence frames (~%.2fs) "
+                        "[speaker-recog buffer only; SER keeps full %d frames]",
                         dropped, dropped * FRAME_DURATION_MS / 1000,
+                        len(ser_audio_buffer),
                     )
 
             # Final snapshot of the buffer for traceability before it goes
@@ -1075,8 +1080,8 @@ class VoiceService:
                 logger.info("Final message → Lumi (%s): %r", event_type, final_msg)
                 self._send_to_lumi(final_msg, event_type=event_type)
 
-            # 2. Submit SER
-            self._submit_speech_emotion_from_session(audio_buffer, user=user)
+            # 2. Submit SER — uses the UNTRIMMED snapshot so laughter / sighs
+            self._submit_speech_emotion_from_session(ser_audio_buffer, user=user)
             
             
             # Clear listening LED
