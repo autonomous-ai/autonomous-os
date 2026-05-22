@@ -3,7 +3,7 @@
 
 APP_NAME   := LumiBuddy
 BUNDLE_ID  := network.autonomous.ai.lumi-buddy
-VERSION    := 0.0.8
+VERSION    := $(shell cat VERSION_LUMI_BUDDY | tr -d '[:space:]')
 
 MACOS_DIR  := macos
 DIST_DIR   := dist

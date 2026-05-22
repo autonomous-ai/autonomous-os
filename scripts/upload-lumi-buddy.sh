@@ -4,7 +4,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUDDY_DIR="${ROOT_DIR}/lumi-buddy"
-MAKEFILE="${BUDDY_DIR}/Makefile"
+VERSION_FILE="${BUDDY_DIR}/VERSION_LUMI_BUDDY"
 DIST_DIR="${BUDDY_DIR}/dist"
 
 # Bucket and path: lumi/ota/lumi-buddy/[semver].dmg
@@ -14,27 +14,19 @@ GCS_BUCKET="${GCS_BUCKET:-s3-autonomous-upgrade-3}"
 # Override via env: BUDDY_DMG_TARGET=dmg-signed scripts/upload-lumi-buddy.sh
 DMG_TARGET="${BUDDY_DMG_TARGET:-dmg}"
 
-if [[ ! -f "$MAKEFILE" ]]; then
-  echo "Error: $MAKEFILE not found"
-  exit 1
+# Auto-increment semver (patch) before build
+if [[ -f "$VERSION_FILE" ]]; then
+  current_version=$(tr -d '[:space:]' < "$VERSION_FILE")
+  IFS='.' read -r major minor patch <<< "$current_version"
+  patch=$((patch + 1))
+  new_version="${major}.${minor}.${patch}"
+  echo "$new_version" > "$VERSION_FILE"
+  echo "========== Version bumped: ${current_version} -> ${new_version} =========="
+else
+  echo "1.0.0" > "$VERSION_FILE"
+  new_version="1.0.0"
+  echo "========== Version initialized: ${new_version} =========="
 fi
-
-# Read current VERSION from lumi-buddy/Makefile (line: `VERSION    := X.Y.Z`)
-current_version=$(grep -E '^VERSION[[:space:]]*:=' "$MAKEFILE" | head -n1 | sed -E 's/^VERSION[[:space:]]*:=[[:space:]]*([0-9.]+).*/\1/')
-
-if [[ -z "$current_version" ]]; then
-  echo "Error: could not parse VERSION from $MAKEFILE"
-  exit 1
-fi
-
-# Auto-increment patch and rewrite Makefile in place
-IFS='.' read -r major minor patch <<< "$current_version"
-patch=$((patch + 1))
-new_version="${major}.${minor}.${patch}"
-
-# BSD sed (macOS) compatible in-place edit
-sed -i '' -E "s/^VERSION([[:space:]]*):=([[:space:]]*)[0-9.]+/VERSION\1:=\2${new_version}/" "$MAKEFILE"
-echo "========== Version bumped: ${current_version} -> ${new_version} =========="
 
 DMG_NAME="LumiBuddy-${new_version}.dmg"
 DMG_PATH="${DIST_DIR}/${DMG_NAME}"
