@@ -1,6 +1,7 @@
 package openclaw
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -313,7 +314,14 @@ func (s *Service) SetupAgent(data domain.SetupRequest) error {
 }
 
 // AddChannel adds a messaging channel to openclaw.json (multi-channel) and restarts the gateway.
-func (s *Service) AddChannel(data domain.AddChannelRequest) error {
+//
+// For non-whatsapp channels this is a pure on-disk overlay + gateway restart.
+// For whatsapp the canonical block is bootstrapped via the openclaw CLI
+// (`channels add --channel whatsapp`) so defaults from upstream (accounts.default,
+// mediaMaxMb) ride through unchanged; the plugin is also enabled/installed.
+// ctx flows through to all subprocess calls so the MQTT 10-minute cap bounds
+// the whole flow.
+func (s *Service) AddChannel(ctx context.Context, data domain.AddChannelRequest) error {
 	channel := data.EffectiveChannel()
 
 	configPath := filepath.Join(s.config.OpenclawConfigDir, "openclaw.json")
@@ -331,8 +339,8 @@ func (s *Service) AddChannel(data domain.AddChannelRequest) error {
 	entriesMap := ensureMap(pluginsMap, "entries")
 
 	switch channel {
-	case "slack":
-		slackMap := ensureMap(channelsMap, "slack")
+	case domain.ChannelSlack:
+		slackMap := ensureMap(channelsMap, domain.ChannelSlack)
 		slackMap["enabled"] = true
 		slackMap["mode"] = "socket"
 		slackMap["botToken"] = data.SlackBotToken
@@ -344,11 +352,11 @@ func (s *Service) AddChannel(data domain.AddChannelRequest) error {
 			slackMap["dmPolicy"] = "open"
 			slackMap["allowFrom"] = mergeStringList(slackMap["allowFrom"], "*")
 		}
-		channelsMap["slack"] = slackMap
-		slackEntryMap := ensureMap(entriesMap, "slack")
+		channelsMap[domain.ChannelSlack] = slackMap
+		slackEntryMap := ensureMap(entriesMap, domain.ChannelSlack)
 		slackEntryMap["enabled"] = true
-	case "discord":
-		discordMap := ensureMap(channelsMap, "discord")
+	case domain.ChannelDiscord:
+		discordMap := ensureMap(channelsMap, domain.ChannelDiscord)
 		discordMap["enabled"] = true
 		discordMap["dmPolicy"] = "allowlist"
 		discordMap["token"] = data.DiscordBotToken
@@ -364,11 +372,46 @@ func (s *Service) AddChannel(data domain.AddChannelRequest) error {
 				},
 			}
 		}
-		channelsMap["discord"] = discordMap
-		discordEntryMap := ensureMap(entriesMap, "discord")
+		channelsMap[domain.ChannelDiscord] = discordMap
+		discordEntryMap := ensureMap(entriesMap, domain.ChannelDiscord)
 		discordEntryMap["enabled"] = true
+	case domain.ChannelWhatsapp:
+		// Bootstrap the canonical channels.whatsapp block via the CLI; it sets
+		// defaults (accounts.default, mediaMaxMb, etc.) we'd otherwise have to
+		// mirror by hand.
+		if err := runOpenclawCLI(ctx, "channels", "add", "--channel", domain.ChannelWhatsapp); err != nil {
+			return fmt.Errorf("openclaw channels add whatsapp: %w", err)
+		}
+		// channels add mutated openclaw.json on disk — reload before overlay.
+		raw, err := os.ReadFile(configPath)
+		if err != nil {
+			return fmt.Errorf("re-read openclaw config after channels add: %w", err)
+		}
+		if err := json.Unmarshal(raw, &configData); err != nil {
+			return fmt.Errorf("re-parse openclaw config after channels add: %w", err)
+		}
+		channelsMap = ensureMap(configData, "channels")
+		pluginsMap = ensureMap(configData, "plugins")
+		entriesMap = ensureMap(pluginsMap, "entries")
+
+		whatsappMap := ensureMap(channelsMap, domain.ChannelWhatsapp)
+		applyWhatsappChannelConfig(whatsappMap, data.WhatsappUserID)
+		channelsMap[domain.ChannelWhatsapp] = whatsappMap
+		// Try enable first (works on bundled releases). If that fails, install
+		// + enable (externalized plugin model).
+		if err := runOpenclawCLI(ctx, "plugins", "enable", domain.ChannelWhatsapp); err != nil {
+			slog.Warn("plugins enable whatsapp failed, attempting install", "component", "openclaw", "error", err)
+			if installErr := runOpenclawCLI(ctx, "plugins", "install", whatsappPluginPackage); installErr != nil {
+				return fmt.Errorf("plugins install %s: %w", whatsappPluginPackage, installErr)
+			}
+			if err := runOpenclawCLI(ctx, "plugins", "enable", domain.ChannelWhatsapp); err != nil {
+				return fmt.Errorf("plugins enable whatsapp after install: %w", err)
+			}
+		}
+		whatsappEntryMap := ensureMap(entriesMap, domain.ChannelWhatsapp)
+		whatsappEntryMap["enabled"] = true
 	default:
-		telegramMap := ensureMap(channelsMap, "telegram")
+		telegramMap := ensureMap(channelsMap, domain.ChannelTelegram)
 		telegramMap["enabled"] = true
 		telegramMap["botToken"] = data.TelegramBotToken
 		if data.TelegramUserID != "" {
@@ -378,8 +421,8 @@ func (s *Service) AddChannel(data domain.AddChannelRequest) error {
 			telegramMap["dmPolicy"] = "open"
 			telegramMap["allowFrom"] = mergeStringList(telegramMap["allowFrom"], "*")
 		}
-		channelsMap["telegram"] = telegramMap
-		telegramEntryMap := ensureMap(entriesMap, "telegram")
+		channelsMap[domain.ChannelTelegram] = telegramMap
+		telegramEntryMap := ensureMap(entriesMap, domain.ChannelTelegram)
 		telegramEntryMap["enabled"] = true
 	}
 	configData["channels"] = channelsMap

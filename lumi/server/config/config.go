@@ -35,6 +35,12 @@ type Config struct {
 	DiscordGuildID  string `json:"discord_guild_id" yaml:"discordGuildID"`
 	DiscordUserID   string `json:"discord_user_id" yaml:"discordUserID"`
 
+	// WhatsappUserID is the E.164 phone number permitted to DM the device's
+	// WhatsApp account. The Baileys session itself lives on disk at
+	// <openclaw_config_dir>/credentials/whatsapp/<account>/creds.json — we never
+	// persist its tokens here. Empty when no WhatsApp channel is configured.
+	WhatsappUserID string `json:"whatsapp_user_id" yaml:"whatsappUserID"`
+
 	LLMAPIKey  string `json:"llm_api_key" yaml:"llmAPIKey" validate:"required"`
 	LLMModel   string `json:"llm_model" yaml:"llmModel" validate:"required"`
 	LLMBaseURL string `json:"llm_base_url" yaml:"llmBaseURL" validate:"required"`

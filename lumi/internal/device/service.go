@@ -193,21 +193,31 @@ func (s *Service) Setup(data domain.SetupRequest) error {
 }
 
 // AddChannel adds a messaging channel to the agent without re-running full setup.
-func (s *Service) AddChannel(data domain.AddChannelRequest) error {
-	if err := s.agentGateway.AddChannel(data); err != nil {
-		return fmt.Errorf("add channel in agent: %w", err)
+//
+// For non-whatsapp channels the call is synchronous and the returned channel is
+// nil — callers should publish a single success/failure response after this
+// returns. For whatsapp the call returns a streaming event channel
+// (pairing_starting → pairing_qr* → success | timeout | failure); the channel
+// is closed when the flow terminates. Callers MUST drain. `success` is emitted
+// both for first-time pairing and for resumed sessions (creds already on
+// disk).
+func (s *Service) AddChannel(ctx context.Context, data domain.AddChannelRequest) (<-chan domain.PairingEvent, error) {
+	if err := s.agentGateway.AddChannel(ctx, data); err != nil {
+		return nil, fmt.Errorf("add channel in agent: %w", err)
 	}
 
 	channel := data.EffectiveChannel()
 	s.config.Channel = channel
 	switch channel {
-	case "slack":
+	case domain.ChannelSlack:
 		s.config.SlackBotToken = data.SlackBotToken
 		s.config.SlackAppToken = data.SlackAppToken
 		s.config.SlackUserID = data.SlackUserID
-	case "discord":
+	case domain.ChannelDiscord:
 		s.config.DiscordBotToken = data.DiscordBotToken
 		s.config.DiscordUserID = data.DiscordUserID
+	case domain.ChannelWhatsapp:
+		s.config.WhatsappUserID = data.WhatsappUserID
 	default:
 		s.config.TelegramBotToken = data.TelegramBotToken
 		s.config.TelegramUserID = data.TelegramUserID
@@ -216,7 +226,28 @@ func (s *Service) AddChannel(data domain.AddChannelRequest) error {
 		slog.Error("save config failed", "component", "device", "error", err)
 	}
 	slog.Info("added channel", "component", "device", "channel", channel)
-	return nil
+
+	if channel != domain.ChannelWhatsapp {
+		return nil, nil
+	}
+	// Existing Baileys creds on disk → no QR needed; emit a single success
+	// event so the caller's drain loop sees the same terminal status it would
+	// for a first-time pair.
+	if s.agentGateway.HasWhatsappSession("default") {
+		slog.Info("existing whatsapp session detected, skipping pairing", "component", "device")
+		ch := make(chan domain.PairingEvent, 1)
+		ch <- domain.PairingEvent{Status: domain.PairingStatusSuccess}
+		close(ch)
+		return ch, nil
+	}
+	return s.agentGateway.PairWhatsapp(ctx), nil
+}
+
+// PairWhatsapp re-runs the WhatsApp Linked Devices pairing flow without
+// re-bootstrapping the channel config. Used by the whatsapp_pair MQTT command
+// for re-pair after session loss.
+func (s *Service) PairWhatsapp(ctx context.Context) <-chan domain.PairingEvent {
+	return s.agentGateway.PairWhatsapp(ctx)
 }
 
 // StartStatusReporter periodically pings the autonomous backend.
@@ -287,6 +318,7 @@ func (s *Service) GetPublicConfig() domain.ConfigPublicResponse {
 		SlackUserID:        s.config.SlackUserID,
 		DiscordGuildID:     s.config.DiscordGuildID,
 		DiscordUserID:      s.config.DiscordUserID,
+		WhatsappUserID:     s.config.WhatsappUserID,
 		LLMModel:           s.config.LLMModel,
 		LLMBaseURL:         s.config.LLMBaseURL,
 		LLMDisableThinking: disableThinking,
@@ -392,7 +424,7 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 		s.config.Channel = data.Channel
 	}
 	switch s.config.Channel {
-	case "slack":
+	case domain.ChannelSlack:
 		if data.SlackBotToken != "" {
 			s.config.SlackBotToken = data.SlackBotToken
 		}
@@ -402,7 +434,7 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 		if data.SlackUserID != "" {
 			s.config.SlackUserID = data.SlackUserID
 		}
-	case "discord":
+	case domain.ChannelDiscord:
 		if data.DiscordBotToken != "" {
 			s.config.DiscordBotToken = data.DiscordBotToken
 		}
@@ -411,6 +443,10 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 		}
 		if data.DiscordUserID != "" {
 			s.config.DiscordUserID = data.DiscordUserID
+		}
+	case domain.ChannelWhatsapp:
+		if data.WhatsappUserID != "" {
+			s.config.WhatsappUserID = data.WhatsappUserID
 		}
 	default:
 		if data.TelegramBotToken != "" {

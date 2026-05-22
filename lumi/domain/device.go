@@ -8,12 +8,25 @@ import (
 	"go-lamp.autonomous.ai/server/config"
 )
 
+// Channel type identifiers. WhatsApp is intentionally NOT a valid Setup
+// channel — it can only be added post-setup via the MQTT add_channel command
+// because pairing is interactive (QR streaming) and the captive-portal setup
+// path can't carry a live event stream.
+const (
+	ChannelTelegram = "telegram"
+	ChannelSlack    = "slack"
+	ChannelDiscord  = "discord"
+	ChannelWhatsapp = "whatsapp"
+)
+
 type SetupRequest struct {
 	// setup network
 	SSID     string `json:"ssid" validate:"required"`
 	Password string `json:"password" validate:"required"`
 
-	// channel type: "telegram" (default), "slack" or "discord"
+	// channel type: "telegram" (default), "slack" or "discord".
+	// WhatsApp is intentionally not accepted here — it must be added
+	// post-setup via the MQTT add_channel command (streaming QR pairing).
 	Channel string `json:"channel"`
 
 	// telegram channel (required when channel is telegram or empty)
@@ -71,14 +84,16 @@ type SetupRequest struct {
 }
 
 // EffectiveChannel returns the resolved channel type, defaulting to "telegram".
+// ChannelWhatsapp is intentionally NOT handled here — setup falls back to
+// telegram if whatsapp is somehow requested via this path.
 func (r *SetupRequest) EffectiveChannel() string {
-	if r.Channel == "slack" {
-		return "slack"
+	if r.Channel == ChannelSlack {
+		return ChannelSlack
 	}
-	if r.Channel == "discord" {
-		return "discord"
+	if r.Channel == ChannelDiscord {
+		return ChannelDiscord
 	}
-	return "telegram"
+	return ChannelTelegram
 }
 
 // ValidateChannel checks that the required fields for the selected channel are present.
@@ -114,7 +129,7 @@ func (r *SetupRequest) ValidateChannel() error {
 
 // AddChannelRequest is used to add a messaging channel after initial setup.
 type AddChannelRequest struct {
-	// channel type: "telegram", "slack" or "discord"
+	// channel type: "telegram", "slack", "discord" or "whatsapp"
 	Channel string `json:"channel" validate:"required"`
 
 	// telegram
@@ -130,30 +145,36 @@ type AddChannelRequest struct {
 	DiscordBotToken string `json:"discord_bot_token"`
 	DiscordGuildID  string `json:"discord_guild_id"`
 	DiscordUserID   string `json:"discord_user_id"`
+
+	// whatsapp — bot login is handled interactively by the Baileys CLI; only
+	// the operator's E.164 phone number (the permitted DM caller) ships here.
+	WhatsappUserID string `json:"whatsapp_user_id"`
 }
 
 // EffectiveChannel returns the resolved channel type, defaulting to "telegram".
 func (r *AddChannelRequest) EffectiveChannel() string {
-	if r.Channel == "slack" {
-		return "slack"
+	switch r.Channel {
+	case ChannelSlack:
+		return ChannelSlack
+	case ChannelDiscord:
+		return ChannelDiscord
+	case ChannelWhatsapp:
+		return ChannelWhatsapp
 	}
-	if r.Channel == "discord" {
-		return "discord"
-	}
-	return "telegram"
+	return ChannelTelegram
 }
 
 // ValidateChannel checks that the required fields for the selected channel are present.
 func (r *AddChannelRequest) ValidateChannel() error {
 	switch r.EffectiveChannel() {
-	case "slack":
+	case ChannelSlack:
 		if r.SlackBotToken == "" {
 			return fmt.Errorf("slack_bot_token is required for slack channel")
 		}
 		if r.SlackAppToken == "" {
 			return fmt.Errorf("slack_app_token is required for slack channel")
 		}
-	case "discord":
+	case ChannelDiscord:
 		if r.DiscordBotToken == "" {
 			return fmt.Errorf("discord_bot_token is required for discord channel")
 		}
@@ -162,6 +183,10 @@ func (r *AddChannelRequest) ValidateChannel() error {
 		}
 		if r.DiscordUserID == "" {
 			return fmt.Errorf("discord_user_id is required for discord channel")
+		}
+	case ChannelWhatsapp:
+		if r.WhatsappUserID == "" {
+			return fmt.Errorf("whatsapp_user_id is required for whatsapp channel")
 		}
 	default:
 		if r.TelegramBotToken == "" {
@@ -181,10 +206,11 @@ type SetupResponse struct {
 // Command types received from server via MQTT FAChannel.
 // Matches spec: docs/mqtt_specs_autonomous.md
 const (
-	CommandInfo       = "info"
-	CommandAddChannel = "add_channel"
-	CommandOTA        = "ota"
-	CommandData       = "data"
+	CommandInfo          = "info"
+	CommandAddChannel    = "add_channel"
+	CommandOTA           = "ota"
+	CommandData          = "data"
+	CommandWhatsappPair  = "whatsapp_pair"
 )
 
 // KindTTSSet is the kind field for cmd:"data" tts.set downlinks from BFF.
@@ -238,14 +264,16 @@ func (r *MQTTAddChannelCommand) ToRequest() AddChannelRequest {
 	req.Channel = r.Channel
 	cfg := r.Config
 	switch r.Channel {
-	case "discord":
+	case ChannelDiscord:
 		req.DiscordBotToken, _ = cfg["bot_token"].(string)
 		req.DiscordGuildID, _ = cfg["guild_id"].(string)
 		req.DiscordUserID, _ = cfg["user_id"].(string)
-	case "slack":
+	case ChannelSlack:
 		req.SlackBotToken, _ = cfg["bot_token"].(string)
 		req.SlackAppToken, _ = cfg["app_token"].(string)
 		req.SlackUserID, _ = cfg["channel_id"].(string)
+	case ChannelWhatsapp:
+		req.WhatsappUserID, _ = cfg["user_id"].(string)
 	default:
 		req.TelegramBotToken, _ = cfg["bot_token"].(string)
 		req.TelegramUserID, _ = cfg["chat_id"].(string)
@@ -254,11 +282,38 @@ func (r *MQTTAddChannelCommand) ToRequest() AddChannelRequest {
 }
 
 // MQTTAddChannelResponse extends MQTTInfoResponse with channel-specific fields for fd_channel.
+//
+// For non-whatsapp channels we publish exactly one message with Status=success|failure.
+// For whatsapp the pairing flow is streamed: one message each for
+// pairing_starting → pairing_qr (1+) → success | timeout | failure.
+// PairingQR* fields are populated only on Status="pairing_qr"; the QR text is
+// a multi-line Unicode-block rendering — see PairingQRFormat.
 type MQTTAddChannelResponse struct {
 	MQTTInfoResponse
-	Channel string `json:"channel"`
-	Status  string `json:"status"`
-	Error   string `json:"error,omitempty"`
+	Channel          string `json:"channel"`
+	Status           string `json:"status"`
+	Error            string `json:"error,omitempty"`
+	PairingQRText    string `json:"pairing_qr_text,omitempty"`
+	PairingQRFormat  string `json:"pairing_qr_format,omitempty"`
+	PairingQRSeq     int    `json:"pairing_qr_seq,omitempty"`
+	PairingExpiresAt string `json:"pairing_expires_at,omitempty"`
+}
+
+// MQTTWhatsappPairCommand is the fa_channel payload for cmd:"whatsapp_pair".
+// No fields today; reserved for future per-account selection.
+type MQTTWhatsappPairCommand struct{}
+
+// MQTTWhatsappPairResponse mirrors MQTTAddChannelResponse but for re-pair flows
+// that don't re-bootstrap the channel. Same streaming shape:
+// pairing_starting → pairing_qr (1+) → success | timeout | failure.
+type MQTTWhatsappPairResponse struct {
+	MQTTInfoResponse
+	Status           string `json:"status"`
+	Error            string `json:"error,omitempty"`
+	PairingQRText    string `json:"pairing_qr_text,omitempty"`
+	PairingQRFormat  string `json:"pairing_qr_format,omitempty"`
+	PairingQRSeq     int    `json:"pairing_qr_seq,omitempty"`
+	PairingExpiresAt string `json:"pairing_expires_at,omitempty"`
 }
 
 type MQTTRemoveChannelRequest struct {
@@ -335,6 +390,7 @@ type ConfigPublicResponse struct {
 	SlackUserID        string `json:"slack_user_id"`
 	DiscordGuildID     string `json:"discord_guild_id"`
 	DiscordUserID      string `json:"discord_user_id"`
+	WhatsappUserID     string `json:"whatsapp_user_id"`
 	LLMModel           string `json:"llm_model"`
 	LLMBaseURL         string `json:"llm_base_url"`
 	LLMDisableThinking bool   `json:"llm_disable_thinking"`
@@ -385,6 +441,8 @@ type UpdateConfigRequest struct {
 	DiscordBotToken string `json:"discord_bot_token"`
 	DiscordGuildID  string `json:"discord_guild_id"`
 	DiscordUserID   string `json:"discord_user_id"`
+
+	WhatsappUserID string `json:"whatsapp_user_id"`
 
 	LLMBaseURL         string `json:"llm_base_url"`
 	LLMAPIKey          string `json:"llm_api_key"`

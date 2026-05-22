@@ -75,6 +75,8 @@ func (h *DeviceMQTTHandler) HandleMessage(topic string, payload []byte) error {
 		return h.handleInfo(cmd)
 	case domain.CommandAddChannel:
 		return h.handleAddChannel(cmd)
+	case domain.CommandWhatsappPair:
+		return h.handleWhatsappPair(cmd)
 	case domain.CommandData:
 		return h.handleData(cmd)
 	default:

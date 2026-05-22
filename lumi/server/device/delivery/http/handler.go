@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"time"
@@ -202,9 +203,18 @@ func (h *DeviceHandler) ChangeChannel(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
 		return
 	}
+	// WhatsApp pairing streams a QR back to the caller; HTTP's fire-and-forget
+	// shape can't deliver that. Force the canonical MQTT add_channel path.
+	if req.EffectiveChannel() == domain.ChannelWhatsapp {
+		c.JSON(http.StatusBadRequest, serializers.ResponseError("whatsapp pairing not supported via HTTP; use MQTT add_channel"))
+		return
+	}
 
 	go func() {
-		if err := h.service.AddChannel(req); err != nil {
+		// Background context — HTTP request is fire-and-forget; subprocess
+		// invocations inside AddChannel take ~seconds, not minutes, for
+		// telegram/slack/discord.
+		if _, err := h.service.AddChannel(context.Background(), req); err != nil {
 			slog.Error("add channel failed", "component", "device", "error", err)
 			return
 		}

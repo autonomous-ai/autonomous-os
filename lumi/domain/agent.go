@@ -96,8 +96,24 @@ type AgentGateway interface {
 	// SetupAgent configures and starts the agent runtime from setup data.
 	SetupAgent(data SetupRequest) error
 
-	// AddChannel adds a messaging channel to the agent runtime.
-	AddChannel(data AddChannelRequest) error
+	// AddChannel adds a messaging channel to the agent runtime. ctx caps the
+	// underlying CLI subprocess + restart so callers (MQTT 10-min budget) can
+	// bound the whole flow. WhatsApp pairing is a separate streaming call —
+	// PairWhatsapp; this method only writes the channel config + enables the
+	// plugin.
+	AddChannel(ctx context.Context, data AddChannelRequest) error
+
+	// HasWhatsappSession reports whether a Baileys session already exists on
+	// disk for the given account ("default" when empty). When true, AddChannel
+	// callers can emit a single PairingStatusSuccess event and skip the
+	// interactive QR pairing flow.
+	HasWhatsappSession(account string) bool
+
+	// PairWhatsapp runs `openclaw channels login --channel whatsapp` and emits
+	// PairingEvents on the returned channel. Callers MUST drain. Only one
+	// pairing flow may be active per device; concurrent calls produce a
+	// one-event channel containing PairingStatusFailure.
+	PairWhatsapp(ctx context.Context) <-chan PairingEvent
 
 	// ResetAgent factory-resets the agent runtime configuration.
 	ResetAgent() error
