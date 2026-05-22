@@ -52,7 +52,9 @@ When Lumi is not yet configured (`SetUpCompleted = false`), the device runs in A
 
 ### POST /api/device/channel
 
-Change messaging channel after setup is complete.
+Change messaging channel after setup is complete. Accepts `telegram`, `slack`, `discord`.
+
+**WhatsApp is rejected here** (`400 whatsapp pairing not supported via HTTP; use MQTT add_channel`) — WhatsApp pairing streams a rotating QR back to the caller, which HTTP's fire-and-forget shape can't carry. The canonical path is the MQTT `add_channel` command (see `docs/mqtt.md`) which publishes one fd_channel message per pairing event. Re-pairing without re-bootstrapping uses the MQTT `whatsapp_pair` command.
 
 ## Network Setup
 
