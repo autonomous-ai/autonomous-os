@@ -20,7 +20,7 @@ var upgrader = websocket.Upgrader{
 	// URLSessionWebSocketTask requests this extension and on some builds will
 	// keep treating frames as compressed even if the server ignores the request
 	// — agreeing here keeps both sides in sync.
-	EnableCompression: true,
+	EnableCompression: false,
 }
 
 // WS upgrades to WebSocket after validating the Bearer token against the

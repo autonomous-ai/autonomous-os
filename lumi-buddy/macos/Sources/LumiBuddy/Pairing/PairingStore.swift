@@ -1,5 +1,4 @@
 import Foundation
-import Security
 
 struct PairingRecord: Codable, Equatable {
     let buddyID: String
@@ -9,61 +8,60 @@ struct PairingRecord: Codable, Equatable {
 }
 
 enum PairingStoreError: LocalizedError {
-    case keychain(OSStatus)
+    case io(String)
     case invalidData
 
     var errorDescription: String? {
         switch self {
-        case .keychain(let status): return "Keychain error: \(status)"
+        case .io(let msg): return "Pairing store I/O: \(msg)"
         case .invalidData: return "Stored pairing record was unreadable"
         }
     }
 }
 
+// File-backed (~/Library/Application Support/LumiBuddy/pairing.json, mode 0600).
+// Earlier Keychain-backed implementation triggered an unapprovable password
+// prompt on macOS Ventura for ad-hoc-signed builds; switch to file storage
+// until we ship a Developer ID signed build.
 final class PairingStore {
-    private let service = "network.autonomous.ai.lumi-buddy"
-    private let account = "default-buddy"
+    private let fileURL: URL
+
+    init() {
+        let fm = FileManager.default
+        let baseDir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("LumiBuddy", isDirectory: true)
+        try? fm.createDirectory(at: baseDir, withIntermediateDirectories: true)
+        self.fileURL = baseDir.appendingPathComponent("pairing.json")
+    }
 
     func save(_ record: PairingRecord) throws {
-        let data = try JSONEncoder().encode(record)
-        let baseQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        SecItemDelete(baseQuery as CFDictionary)
-
-        var add = baseQuery
-        add[kSecValueData as String] = data
-        let status = SecItemAdd(add as CFDictionary, nil)
-        guard status == errSecSuccess else { throw PairingStoreError.keychain(status) }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data: Data
+        do { data = try encoder.encode(record) } catch { throw PairingStoreError.io(error.localizedDescription) }
+        do {
+            try data.write(to: fileURL, options: [.atomic])
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+        } catch {
+            throw PairingStoreError.io(error.localizedDescription)
+        }
     }
 
     func load() throws -> PairingRecord? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess else { throw PairingStoreError.keychain(status) }
-        guard let data = result as? Data else { throw PairingStoreError.invalidData }
-        return try JSONDecoder().decode(PairingRecord.self, from: data)
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: fileURL.path) else { return nil }
+        let data: Data
+        do { data = try Data(contentsOf: fileURL) } catch { throw PairingStoreError.io(error.localizedDescription) }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        do { return try decoder.decode(PairingRecord.self, from: data) }
+        catch { throw PairingStoreError.invalidData }
     }
 
     func clear() throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        let status = SecItemDelete(query as CFDictionary)
-        if status != errSecSuccess && status != errSecItemNotFound {
-            throw PairingStoreError.keychain(status)
-        }
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: fileURL.path) else { return }
+        do { try fm.removeItem(at: fileURL) }
+        catch { throw PairingStoreError.io(error.localizedDescription) }
     }
 }

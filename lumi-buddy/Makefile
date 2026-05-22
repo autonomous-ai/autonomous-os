@@ -3,7 +3,7 @@
 
 APP_NAME   := LumiBuddy
 BUNDLE_ID  := network.autonomous.ai.lumi-buddy
-VERSION    := 0.0.4
+VERSION    := 0.0.7
 
 MACOS_DIR  := macos
 DIST_DIR   := dist

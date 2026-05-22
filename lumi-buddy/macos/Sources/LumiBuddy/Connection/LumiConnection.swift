@@ -1,15 +1,15 @@
 import Foundation
+import Starscream
 
-final class LumiConnection {
+final class LumiConnection: WebSocketDelegate {
     private let host: String
     private let token: String
     private let dispatcher: CommandDispatcher
     private let reconnect = Reconnect()
 
-    private var session: URLSession?
-    private var task: URLSessionWebSocketTask?
-    private var loopTask: Task<Void, Never>?
+    private var socket: WebSocket?
     private var keepAliveTask: Task<Void, Never>?
+    private var reconnectTask: Task<Void, Never>?
     private var stopped = false
 
     init(host: String, token: String, dispatcher: CommandDispatcher) {
@@ -19,110 +19,116 @@ final class LumiConnection {
     }
 
     func connect() {
-        guard loopTask == nil else { return }
+        guard socket == nil else { return }
         stopped = false
-        loopTask = Task { [weak self] in
-            await self?.runLoop()
-        }
+        openSocket()
     }
 
     func disconnect() {
         stopped = true
         keepAliveTask?.cancel()
         keepAliveTask = nil
-        task?.cancel(with: .goingAway, reason: nil)
-        task = nil
-        session?.invalidateAndCancel()
-        session = nil
-        loopTask?.cancel()
-        loopTask = nil
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        socket?.disconnect()
+        socket = nil
         AppState.shared.setConnection(.disconnected)
     }
 
-    private func runLoop() async {
-        while !stopped {
-            AppState.shared.setConnection(.connecting)
-            do {
-                try await runOnce()
-            } catch is CancellationError {
-                break
-            } catch {
-                AppState.shared.setConnection(.error(error.localizedDescription))
-            }
-            if stopped { break }
-            let delay = await reconnect.nextDelay()
+    private func openSocket() {
+        guard let url = URL(string: "ws://\(host)/api/buddy/ws") else {
+            AppState.shared.setConnection(.error("invalid host: \(host)"))
+            return
+        }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 30
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let ws = WebSocket(request: req)
+        ws.delegate = self
+        socket = ws
+        AppState.shared.setConnection(.connecting)
+        ws.connect()
+    }
+
+    private func scheduleReconnect() {
+        guard !stopped else { return }
+        reconnectTask?.cancel()
+        reconnectTask = Task { [weak self] in
+            guard let self else { return }
+            let delay = await self.reconnect.nextDelay()
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            if Task.isCancelled || self.stopped { return }
+            self.openSocket()
         }
     }
 
-    private func runOnce() async throws {
-        guard let url = URL(string: "ws://\(host)/api/buddy/ws") else {
-            throw PairingError.network("invalid host: \(host)")
+    // MARK: WebSocketDelegate
+
+    func didReceive(event: WebSocketEvent, client: WebSocketClient) {
+        switch event {
+        case .connected:
+            AppState.shared.setConnection(.connected)
+            Task { [weak self] in await self?.reconnect.reset() }
+            startKeepAlive()
+        case .disconnected(let reason, let code):
+            NSLog("LumiConnection disconnected: code=\(code) reason=\(reason)")
+            stopKeepAlive()
+            socket = nil
+            if !stopped { AppState.shared.setConnection(.disconnected) }
+            scheduleReconnect()
+        case .text(let s):
+            if let data = s.data(using: .utf8) { Task { await self.handle(data: data) } }
+        case .binary(let data):
+            Task { await self.handle(data: data) }
+        case .ping, .pong:
+            break
+        case .viabilityChanged, .reconnectSuggested:
+            break
+        case .cancelled:
+            stopKeepAlive()
+            socket = nil
+            if !stopped {
+                AppState.shared.setConnection(.disconnected)
+                scheduleReconnect()
+            }
+        case .error(let err):
+            let msg = err?.localizedDescription ?? "unknown"
+            NSLog("LumiConnection error: \(msg)")
+            stopKeepAlive()
+            socket = nil
+            if !stopped {
+                AppState.shared.setConnection(.error(msg))
+                scheduleReconnect()
+            }
+        case .peerClosed:
+            stopKeepAlive()
+            socket = nil
+            if !stopped {
+                AppState.shared.setConnection(.disconnected)
+                scheduleReconnect()
+            }
         }
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    }
 
-        // `.ephemeral` gives this WS its own CFNetwork connection pool, separate
-        // from `URLSession.shared` (used by PairingManager for HTTP POST). On
-        // macOS Ventura, sharing the pool causes a kept-alive HTTP socket from
-        // pair/confirm to be reused for the WS upgrade — the server then reads
-        // a stale "GET ..." request as a WS frame and trips "RSV1 set, bad
-        // opcode 7, bad MASK".
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 30
-        config.httpShouldUsePipelining = false
-        config.urlCache = nil
-        config.httpCookieStorage = nil
-        // Bypass system proxy. The lamp is on the local LAN; system-wide
-        // proxies (corporate VPN, antivirus web filter, PAC file) can intercept
-        // the WS upgrade and replay garbled HTTP, producing "RSV1 set, bad
-        // opcode 7, bad MASK" on the server.
-        config.connectionProxyDictionary = [:]
-        let session = URLSession(configuration: config)
-        self.session = session
-
-        let task = session.webSocketTask(with: req)
-        self.task = task
-        task.resume()
-
-        // Keep-alive ping every 15s. Server should respond pong; if it stops, receive() throws.
+    private func startKeepAlive() {
+        keepAliveTask?.cancel()
         keepAliveTask = Task { [weak self] in
             while let self, !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 15_000_000_000)
                 if Task.isCancelled { break }
-                self.task?.sendPing(pongReceiveHandler: { _ in })
-            }
-        }
-
-        await reconnect.reset()
-        AppState.shared.setConnection(.connected)
-
-        defer {
-            keepAliveTask?.cancel()
-            keepAliveTask = nil
-        }
-
-        while !Task.isCancelled {
-            let message = try await task.receive()
-            switch message {
-            case .data(let data):
-                await handle(data: data)
-            case .string(let s):
-                if let data = s.data(using: .utf8) { await handle(data: data) }
-            @unknown default:
-                break
+                self.socket?.write(ping: Data())
             }
         }
     }
 
+    private func stopKeepAlive() {
+        keepAliveTask?.cancel()
+        keepAliveTask = nil
+    }
+
     private func handle(data: Data) async {
         let response = await dispatcher.dispatch(data)
-        guard let task else { return }
         guard let str = String(data: response, encoding: .utf8) else { return }
-        do {
-            try await task.send(.string(str))
-        } catch {
-            NSLog("LumiConnection send error: \(error.localizedDescription)")
-        }
+        socket?.write(string: str)
     }
 }
