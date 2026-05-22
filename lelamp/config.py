@@ -100,7 +100,7 @@ def _lumi_cfg_get(key: str, default: str = "") -> str:
     except Exception:
         return default
 
-DL_BACKEND_URL = _lumi_cfg_get("dlbackend_base_url") or os.environ.get("DL_BACKEND_URL", "")
+DL_BACKEND_URL = _lumi_cfg_get("llm_base_url") or os.environ.get("DL_BACKEND_URL", "")
 DL_API_KEY = _lumi_cfg_get("llm_api_key") or os.environ.get("DL_API_KEY", "")
 DL_HEARTBEAT_INTERVAL_S = float(os.environ.get("LELAMP_DL_HEARTBEAT_INTERVAL_S", "60.0"))
 
