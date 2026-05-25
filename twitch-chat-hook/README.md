@@ -2,6 +2,8 @@
 
 Drop-in Go reference for hooking Twitch live-stream chat messages into a backend via EventSub webhooks. Stdlib only — no third-party deps.
 
+> **New devs should read [`HANDOFF.md`](./HANDOFF.md) first** — full end-to-end setup, current blocker, token refresh, production checklist.
+
 ## What it gives you
 
 - `twitch/` — types, HMAC signature verification, minimal Helix client (token, subscribe, list, delete, user lookup).
