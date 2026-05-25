@@ -34,6 +34,8 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+
+	"twitch-chat-hook/twitch"
 )
 
 const twitchIRCHost = "irc.chat.twitch.tv:6697"
@@ -96,7 +98,7 @@ func run(ctx context.Context, channels []string, nick string) error {
 		if line == "" {
 			continue
 		}
-		handleLine(conn, line)
+		handleLine(ctx, conn, line)
 	}
 	if err := scanner.Err(); err != nil {
 		if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
@@ -107,7 +109,7 @@ func run(ctx context.Context, channels []string, nick string) error {
 	return ctx.Err()
 }
 
-func handleLine(w io.Writer, line string) {
+func handleLine(ctx context.Context, w io.Writer, line string) {
 	// PING from server — must PONG within ~5 min or the connection is dropped.
 	if strings.HasPrefix(line, "PING ") {
 		payload := strings.TrimPrefix(line, "PING ")
@@ -117,6 +119,7 @@ func handleLine(w io.Writer, line string) {
 
 	if msg, ok := parsePrivmsg(line); ok {
 		log.Printf("[twitch-chat] #%s <%s> %s", msg.channel, msg.nick, msg.text)
+		twitch.ForwardChatMessage(ctx, msg.nick, msg.text)
 		return
 	}
 

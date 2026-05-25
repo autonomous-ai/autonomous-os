@@ -147,11 +147,13 @@ func (h *handler) dispatch(ctx context.Context, env twitch.Envelope) error {
 	}
 }
 
-// handleChatMessage is where downstream BE logic plugs in.
-// Replace the log line with: publish to queue / call service / persist DB.
+// handleChatMessage logs the chat line and forwards it to Lumi's sensing
+// endpoint, mirroring LeLamp's voice_service.py — same URL, same body
+// shape, with a "[source: twitch]" prefix so SOUL.md can route it.
 func handleChatMessage(ctx context.Context, ev twitch.ChatMessageEvent) error {
 	log.Printf("[twitch-chat] #%s <%s> %s",
 		ev.BroadcasterUserLogin, ev.ChatterUserLogin, ev.Message.Text)
+	twitch.ForwardChatMessage(ctx, ev.ChatterUserLogin, ev.Message.Text)
 	return nil
 }
 
