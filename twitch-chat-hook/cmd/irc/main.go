@@ -38,6 +38,9 @@ import (
 
 const twitchIRCHost = "irc.chat.twitch.tv:6697"
 
+// Version is injected at build time via -ldflags "-X main.Version=...".
+var Version = "dev"
+
 func main() {
 	channels := flag.String("channel", "", "Twitch channel login(s), comma-separated, no leading #")
 	flag.Parse()
@@ -46,6 +49,8 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
+
+	log.Printf("[twitch-irc] version=%s", Version)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
