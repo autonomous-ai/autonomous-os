@@ -7,12 +7,14 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 LUMI_DIR       := lumi
 LELAMP_DIR     := lelamp
 BUDDY_DIR      := claude-desktop-buddy
+TWITCH_DIR     := twitch-chat-hook
 WEB_DIR        := $(LUMI_DIR)/web
 
 # Go build
 MODULE         := go-lamp.autonomous.ai
 LDFLAGS_LAMP   := -X $(MODULE)/server/config.LumiVersion=$(VERSION)
 LDFLAGS_BOOT   := -X $(MODULE)/bootstrap/config.BootstrapVersion=$(VERSION)
+LDFLAGS_IRC    := -X main.Version=$(VERSION)
 
 # LeLamp
 LELAMP_PORT    := 5001
@@ -87,10 +89,19 @@ buddy-build:
 	cd $(BUDDY_DIR) && GOOS=linux GOARCH=arm64 go build -ldflags "-s -w" -o buddy-plugin .
 
 # ============================================================================
+# Twitch chat hook (Go) — build IRC fallback reader
+# ============================================================================
+
+.PHONY: twitch-build-irc
+
+twitch-build-irc:
+	cd $(TWITCH_DIR) && GOOS=linux GOARCH=arm64 go build -ldflags "-s -w $(LDFLAGS_IRC)" -o twitch-irc ./cmd/irc
+
+# ============================================================================
 # Upload (OTA to GCS) — unified format: make upload-<component>
 # ============================================================================
 
-.PHONY: upload-lumi upload-bootstrap upload-lelamp upload-claude-desktop-buddy upload-lumi-buddy upload-web upload-skills upload-hooks upload-setup upload-setup-ap upload-openclaw upload-all
+.PHONY: upload-lumi upload-bootstrap upload-lelamp upload-claude-desktop-buddy upload-lumi-buddy upload-web upload-skills upload-hooks upload-setup upload-setup-ap upload-openclaw upload-twitch-irc upload-all
 
 upload-lumi:
 	bash scripts/upload-lumi.sh
@@ -122,6 +133,9 @@ upload-setup:
 upload-setup-ap:
 	bash scripts/upload-setup-ap.sh
 
+upload-twitch-irc:
+	bash scripts/upload-twitch-irc.sh
+
 # Allow positional version: `make upload-openclaw 2026.5.2`. The eval
 # stub below creates a no-op rule for the version arg so make doesn't
 # try to build it as a target ("no rule to make target '2026.5.2'").
@@ -151,5 +165,6 @@ upload-all: upload-lumi upload-bootstrap upload-lelamp upload-claude-desktop-bud
 clean:
 	rm -f $(LUMI_DIR)/lumi-server $(LUMI_DIR)/bootstrap-server
 	rm -f $(BUDDY_DIR)/buddy-plugin
+	rm -f $(TWITCH_DIR)/twitch-irc
 	rm -rf $(LELAMP_DIR)/.venv $(LELAMP_DIR)/__pycache__
 	rm -rf $(WEB_DIR)/dist $(WEB_DIR)/node_modules
