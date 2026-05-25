@@ -17,10 +17,11 @@ actor AuditLog {
         self.url = Self.fileURL
     }
 
-    func append(action: String, ok: Bool, error: String?) {
+    func append(action: String, summary: String, ok: Bool, error: String?) {
         let record: [String: Any] = [
             "ts": ISO8601DateFormatter().string(from: Date()),
             "action": action,
+            "summary": summary,
             "ok": ok,
             "error": error ?? NSNull(),
         ]

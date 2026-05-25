@@ -45,17 +45,19 @@ final class CommandDispatcher {
             return (try? resp.encode()) ?? Data()
         }
 
+        let summary = CommandSummary.describe(action: cmd.action, params: cmd.params)
+
         let paused = await readPaused()
         if paused {
             let resp = CommandResponse(id: cmd.id, ok: false, result: nil, error: "buddy paused by user", durationMs: 0)
-            await auditLog.append(action: cmd.action, ok: false, error: resp.error)
+            await auditLog.append(action: cmd.action, summary: summary, ok: false, error: resp.error)
             return (try? resp.encode()) ?? Data()
         }
 
         guard let executor = executors[cmd.action] else {
             let resp = CommandResponse(id: cmd.id, ok: false, result: nil, error: "unknown action: \(cmd.action)", durationMs: 0)
-            await auditLog.append(action: cmd.action, ok: false, error: resp.error)
-            await recordOnMain(id: cmd.id, action: cmd.action, ok: false, error: resp.error)
+            await auditLog.append(action: cmd.action, summary: summary, ok: false, error: resp.error)
+            await recordOnMain(id: cmd.id, action: cmd.action, summary: summary, ok: false, error: resp.error)
             return (try? resp.encode()) ?? Data()
         }
 
@@ -63,15 +65,15 @@ final class CommandDispatcher {
             let result = try await runWithTimeout(executor: executor, params: cmd.params, timeoutMs: cmd.timeoutMs)
             let duration = Int(Date().timeIntervalSince(start) * 1000)
             let resp = CommandResponse(id: cmd.id, ok: true, result: result, error: nil, durationMs: duration)
-            await auditLog.append(action: cmd.action, ok: true, error: nil)
-            await recordOnMain(id: cmd.id, action: cmd.action, ok: true)
+            await auditLog.append(action: cmd.action, summary: summary, ok: true, error: nil)
+            await recordOnMain(id: cmd.id, action: cmd.action, summary: summary, ok: true)
             return (try? resp.encode()) ?? Data()
         } catch {
             let duration = Int(Date().timeIntervalSince(start) * 1000)
             let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             let resp = CommandResponse(id: cmd.id, ok: false, result: nil, error: msg, durationMs: duration)
-            await auditLog.append(action: cmd.action, ok: false, error: msg)
-            await recordOnMain(id: cmd.id, action: cmd.action, ok: false, error: msg)
+            await auditLog.append(action: cmd.action, summary: summary, ok: false, error: msg)
+            await recordOnMain(id: cmd.id, action: cmd.action, summary: summary, ok: false, error: msg)
             return (try? resp.encode()) ?? Data()
         }
     }
@@ -98,7 +100,7 @@ final class CommandDispatcher {
     }
 
     @MainActor
-    private func recordOnMain(id: String, action: String, ok: Bool, error: String? = nil) {
-        AppState.shared.recordCommand(CommandRecord(id: id, action: action, ok: ok, error: error, timestamp: Date()))
+    private func recordOnMain(id: String, action: String, summary: String, ok: Bool, error: String? = nil) {
+        AppState.shared.recordCommand(CommandRecord(id: id, action: action, summary: summary, ok: ok, error: error, timestamp: Date()))
     }
 }

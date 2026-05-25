@@ -23,6 +23,7 @@ enum ConnectionStatus: Equatable {
 struct CommandRecord {
     let id: String
     let action: String
+    let summary: String
     let ok: Bool
     let error: String?
     let timestamp: Date

@@ -107,7 +107,7 @@ final class ActivityWindowController: NSWindowController {
         let lines: [String] = commands.map { record in
             let symbol = record.ok ? "✓" : "✗"
             let time = timeFormatter.string(from: record.timestamp)
-            var line = "\(symbol)  \(time)  \(record.action)"
+            var line = "\(symbol)  \(time)  \(record.summary)"
             if let err = record.error, !err.isEmpty {
                 line += "    — \(err)"
             }
