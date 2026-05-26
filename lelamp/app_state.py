@@ -14,6 +14,7 @@ from typing import Optional
 
 from lelamp.presets import (
     EMO_IDLE,
+    EMO_THINKING,
     EMOTION_PRESETS,
     FX_SPEAKING_WAVE,
     FX_SPEAKING_WAVE_RAINBOW,
@@ -24,6 +25,12 @@ from lelamp.presets import (
     RGB_CMD_SOLID,
     SCENE_PRESETS,
 )
+
+# Background emotions don't override user's saved LED state. They still
+# fire servo + display, just skip LED to keep user ambient color visible.
+# Foreground emotions (listening, happy, excited, shock, etc.) always
+# fire LED — they're visible responses the user expects to see.
+_BACKGROUND_EMOTIONS = {EMO_IDLE, EMO_THINKING}
 from lelamp.service.rgb.effects import run_effect as _run_effect
 
 logger = logging.getLogger("lelamp.server")
@@ -302,7 +309,10 @@ def _on_tts_speak_start():
         _restore_timer = None
 
     _stop_current_effect()
-    rgb_service.dispatch(RGB_CMD_SOLID, (0, 0, 0))
+    # DISABLED 2026-05-26: black-flash before speaking_wave caused visible "LED off"
+    # blip (50-200ms) every TTS start. NeoPixel is stateless — new dispatch overwrites
+    # directly. Re-enable if residual pixels from old effect's last frame become visible.
+    # rgb_service.dispatch(RGB_CMD_SOLID, (0, 0, 0))
 
     _effect_stop.clear()
     _effect_name = FX_SPEAKING_WAVE
@@ -327,8 +337,10 @@ def _on_tts_speak_end():
 
     _stop_current_effect()
 
-    if rgb_service:
-        rgb_service.dispatch(RGB_CMD_SOLID, (0, 0, 0))
+    # DISABLED 2026-05-26: black-flash before restore caused visible "LED off" blip
+    # at TTS end. See _on_tts_speak_start note.
+    # if rgb_service:
+    #     rgb_service.dispatch(RGB_CMD_SOLID, (0, 0, 0))
 
     _restore_user_led()
 
@@ -365,7 +377,9 @@ def _on_music_play_start():
         _restore_timer = None
 
     _stop_current_effect()
-    rgb_service.dispatch(RGB_CMD_SOLID, (0, 0, 0))
+    # DISABLED 2026-05-26: black-flash before music wave caused visible "LED off" blip
+    # at music start. See _on_tts_speak_start note.
+    # rgb_service.dispatch(RGB_CMD_SOLID, (0, 0, 0))
 
     _effect_stop.clear()
     _effect_name = effect
@@ -396,8 +410,10 @@ def _on_music_play_end():
 
     _stop_current_effect()
 
-    if rgb_service:
-        rgb_service.dispatch(RGB_CMD_SOLID, (0, 0, 0))
+    # DISABLED 2026-05-26: black-flash before restore caused visible "LED off" blip
+    # at music end. See _on_tts_speak_start note.
+    # if rgb_service:
+    #     rgb_service.dispatch(RGB_CMD_SOLID, (0, 0, 0))
 
     _restore_user_led()
 
@@ -416,7 +432,14 @@ def _apply_emotion_led_display(emotion: str, intensity: float = 1.0) -> Optional
                 logger.warning("Emotion display failed: %s", e)
         return None
     led_color = None
-    if emotion == EMO_IDLE and _user_led_state is not None:
+    # ADDED 2026-05-26: generalize the idle skip to all background emotions.
+    # emotion-acknowledge hook fires `thinking` on every preprocessed message;
+    # without this guard, thinking's purple pulse overrides user's ambient
+    # color every turn. Original idle-only check kept its behavior unchanged
+    # (idle is in _BACKGROUND_EMOTIONS). Re-narrow this set if a background
+    # emotion needs LED feedback again.
+    if emotion in _BACKGROUND_EMOTIONS and _user_led_state is not None:
+        logger.info("Emotion LED skipped (%s) -- respecting user saved state", emotion)
         if display_service:
             try:
                 display_service.set_expression(emotion)

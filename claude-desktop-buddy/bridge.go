@@ -34,7 +34,11 @@ func (b *Bridge) OnStateChange(old, next BuddyState, hb *Heartbeat) {
 
 	switch next {
 	case StateSleep:
-		b.ledOff()
+		// CHANGED 2026-05-26: was b.ledOff() — that killed the user's ambient LED
+		// when Claude disconnected (user's blue → off forever until Buddy reconnects).
+		// Sleep = Buddy stops being the indicator → hand strip back to user, matching
+		// StateIdle behavior below.
+		b.ledRestore()
 		b.displayEyes("sleepy")
 
 	case StateIdle:
