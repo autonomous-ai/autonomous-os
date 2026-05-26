@@ -6,8 +6,19 @@ const handler = async (event: any): Promise<void> => {
   const ctx = event.context;
   const text: string = ctx?.bodyForAgent ?? ctx?.body ?? "";
 
-  // Skip sensing events — they have their own defined emotion reactions
-  if (text.startsWith("[sensing:") || !text.trim()) return;
+  // Skip passive sensing — these events should not flip the lamp into
+  // "thinking" because the agent often decides NO_REPLY, which would leave
+  // the lamp stuck on "thinking" until the next event. Skill-driven emotion
+  // calls handle these paths when a real reaction is warranted.
+  if (!text.trim()) return;
+  if (
+    text.startsWith("[sensing:") ||
+    text.startsWith("[activity]") ||
+    text.startsWith("[emotion]") ||
+    text.startsWith("[speech_emotion]")
+  ) {
+    return;
+  }
 
   const req = http.request({
     hostname: "127.0.0.1",
