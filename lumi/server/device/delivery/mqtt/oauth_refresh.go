@@ -198,6 +198,9 @@ func (h *DeviceMQTTHandler) requestTokenRefresh(ctx context.Context, provider, r
 	if base == "" {
 		return out, errors.New("LLMBaseURL not configured")
 	}
+	// LLMBaseURL carries a trailing /v1 for OpenAI-compat LLM calls; autonomous
+	// endpoints (/ping, /oauth/refresh) sit one level above. Mirror beclient.Ping.
+	base = strings.TrimSuffix(base, "/v1")
 
 	payload, err := json.Marshal(map[string]string{"provider": provider, "refresh_token": refreshToken})
 	if err != nil {
