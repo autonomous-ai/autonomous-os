@@ -140,6 +140,23 @@ export default function EditConfig() {
   const [ttsLoaded, setTtsLoaded] = useState({ apiKey: false, baseUrl: false });
   const [sttLoaded, setSttLoaded] = useState({ deepgram: false, apiKey: false, baseUrl: false });
 
+  // Baseline snapshot of non-secret fields captured after load (and after every
+  // successful save). Used to gate Save button on dirty-only. Secrets are
+  // handled separately: their input state is empty when nothing was typed, so
+  // any non-empty secret state implies a pending change.
+  type InitialSnapshot = {
+    ssid: string; deviceId: string;
+    llmUrl: string; llmModel: string; llmDisableThinking: boolean;
+    sttBaseUrl: string; sttProvider: SttProvider; sttLanguage: string;
+    ttsBaseUrl: string; ttsProvider: string; ttsVoice: string;
+    channel: ChannelType;
+    teleUserId: string; slackUserId: string;
+    discordGuildId: string; discordUserId: string;
+    mqttEndpoint: string; mqttPort: string; mqttUsername: string;
+    faChannel: string; fdChannel: string;
+  };
+  const initialRef = useRef<InitialSnapshot | null>(null);
+
   // Face owners — top-level state because both Voice and Face sections read
   // it. Section-local state (faceName, voiceLabel, etc.) lives in the section
   // components themselves.
@@ -218,6 +235,35 @@ export default function EditConfig() {
           apiKey: cfg.has_stt_api_key,
           baseUrl: !!cfg.stt_base_url,
         });
+        // Mirror the post-load behavior of the LLM→TTS/STT base-URL auto-fill
+        // effects so the baseline matches the rendered state. Without this,
+        // a config with llm_base_url but no tts/stt_base_url would show the
+        // form as dirty immediately on load.
+        const llmUrlInit = cfg.llm_base_url ?? "";
+        const sttProviderInit: SttProvider = cfg.has_deepgram_api_key ? "deepgram" : "autonomous";
+        initialRef.current = {
+          ssid: cfg.network_ssid ?? "",
+          deviceId: cfg.device_id ?? "",
+          llmUrl: llmUrlInit,
+          llmModel: cfg.llm_model ?? "",
+          llmDisableThinking: cfg.llm_disable_thinking ?? false,
+          sttBaseUrl: (cfg.stt_base_url ?? "") || (sttProviderInit === "autonomous" ? llmUrlInit : ""),
+          sttProvider: sttProviderInit,
+          sttLanguage: cfg.stt_language || "en",
+          ttsBaseUrl: (cfg.tts_base_url ?? "") || llmUrlInit,
+          ttsProvider: cfg.tts_provider || "openai",
+          ttsVoice: cfg.tts_voice || "alloy",
+          channel: (cfg.channel as ChannelType) || "telegram",
+          teleUserId: cfg.telegram_user_id ?? "",
+          slackUserId: cfg.slack_user_id ?? "",
+          discordGuildId: cfg.discord_guild_id ?? "",
+          discordUserId: cfg.discord_user_id ?? "",
+          mqttEndpoint: cfg.mqtt_endpoint ?? "",
+          mqttPort: cfg.mqtt_port ? String(cfg.mqtt_port) : "",
+          mqttUsername: cfg.mqtt_username ?? "",
+          faChannel: cfg.fa_channel ?? "",
+          fdChannel: cfg.fd_channel ?? "",
+        };
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoadingCfg(false));
@@ -260,6 +306,37 @@ export default function EditConfig() {
     setActiveSection(id);
     window.location.hash = id;
   };
+
+  // Dirty = any non-secret field diverges from the loaded/last-saved baseline,
+  // OR any secret field has user-typed content. Save button uses this to stay
+  // disabled until something actually changed.
+  const baseline = initialRef.current;
+  const dirty = !loadingCfg && baseline != null && (
+    ssid !== baseline.ssid ||
+    deviceId !== baseline.deviceId ||
+    llmUrl !== baseline.llmUrl ||
+    llmModel !== baseline.llmModel ||
+    llmDisableThinking !== baseline.llmDisableThinking ||
+    sttBaseUrl !== baseline.sttBaseUrl ||
+    sttProvider !== baseline.sttProvider ||
+    sttLanguage !== baseline.sttLanguage ||
+    ttsBaseUrl !== baseline.ttsBaseUrl ||
+    ttsProvider !== baseline.ttsProvider ||
+    ttsVoice !== baseline.ttsVoice ||
+    channel !== baseline.channel ||
+    teleUserId !== baseline.teleUserId ||
+    slackUserId !== baseline.slackUserId ||
+    discordGuildId !== baseline.discordGuildId ||
+    discordUserId !== baseline.discordUserId ||
+    mqttEndpoint !== baseline.mqttEndpoint ||
+    mqttPort !== baseline.mqttPort ||
+    mqttUsername !== baseline.mqttUsername ||
+    faChannel !== baseline.faChannel ||
+    fdChannel !== baseline.fdChannel ||
+    !!password || !!adminPassword || !!llmApiKey || !!ttsApiKey ||
+    !!sttApiKey || !!deepgramApiKey || !!mqttPassword ||
+    !!teleToken || !!slackBotToken || !!slackAppToken || !!discordBotToken
+  );
 
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
@@ -314,6 +391,27 @@ export default function EditConfig() {
       }
       await updateDeviceConfig(body);
       toast.success("Config saved — restart Lumi for changes to take effect.");
+      // Reset baseline so Save button goes back to disabled until next edit.
+      // Non-secret fields adopt their current values as the new baseline.
+      initialRef.current = {
+        ssid, deviceId,
+        llmUrl, llmModel, llmDisableThinking,
+        sttBaseUrl, sttProvider, sttLanguage,
+        ttsBaseUrl, ttsProvider, ttsVoice,
+        channel,
+        teleUserId, slackUserId,
+        discordGuildId, discordUserId,
+        mqttEndpoint, mqttPort, mqttUsername,
+        faChannel, fdChannel,
+      };
+      // Clear typed secrets so their non-empty state no longer marks the form
+      // dirty. Their persisted values live server-side; has_* flags surface
+      // "configured" in the UI.
+      setPassword(""); setAdminPassword("");
+      setLlmApiKey(""); setTtsApiKey(""); setSttApiKey("");
+      setDeepgramApiKey(""); setMqttPassword("");
+      setTeleToken(""); setSlackBotToken(""); setSlackAppToken("");
+      setDiscordBotToken("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed.");
     }
@@ -430,15 +528,15 @@ export default function EditConfig() {
             <button
               form="edit-form"
               type="submit"
-              disabled={saving || loadingCfg}
+              disabled={saving || loadingCfg || !dirty}
               style={{
                 padding: "6px 18px", borderRadius: 7, fontSize: 12, fontWeight: 600,
-                cursor: saving || loadingCfg ? "not-allowed" : "pointer",
+                cursor: saving || loadingCfg || !dirty ? "not-allowed" : "pointer",
                 border: "none",
-                background: saving || loadingCfg ? C.surface : C.amber,
-                color: saving || loadingCfg ? C.textMuted : "#0C0B09",
+                background: saving || loadingCfg || !dirty ? C.surface : C.amber,
+                color: saving || loadingCfg || !dirty ? C.textMuted : "#0C0B09",
                 transition: "all 0.15s",
-                opacity: saving || loadingCfg ? 0.6 : 1,
+                opacity: saving || loadingCfg || !dirty ? 0.6 : 1,
               }}
             >
               {saving ? "Saving…" : "Save Changes"}
