@@ -70,3 +70,22 @@ endif
 	sync
 	diskutil eject /dev/disk$(DISK) 2>/dev/null || true
 	@echo "==> Flash complete"
+
+# ── upload — push built image to GCS, version-stamped ──────────────────────
+# Versioned filename: golden-<target>-<UTC-timestamp>-<git-sha>.img.xz
+# Bucket + path mirror the OTA artifact layout (s3-autonomous-upgrade-3/lumi/).
+GCS_BUCKET := s3-autonomous-upgrade-3
+GCS_PATH   := lumi/imager/output
+VERSION    := $(shell date -u +%Y%m%d-%H%M%S)-$(shell git -C .. rev-parse --short HEAD 2>/dev/null || echo nogit)
+TARGET_PREFIX_rpi := golden-rpi
+TARGET_PREFIX_opi := golden-opi
+TARGET_PREFIX := $(TARGET_PREFIX_$(TARGET))
+VERSIONED_IMG := $(TARGET_PREFIX)-$(VERSION)$(if $(filter %.xz,$(IMG_FILE)),.img.xz,.img)
+
+upload:
+	@[ -f output/$(IMG_FILE) ] || { echo "ERROR: output/$(IMG_FILE) not found. Run 'make build' first."; exit 1; }
+	@command -v gcloud >/dev/null 2>&1 || { echo "ERROR: gcloud not installed. brew install --cask gcloud-cli"; exit 1; }
+	@echo "==> Uploading output/$(IMG_FILE) → gs://$(GCS_BUCKET)/$(GCS_PATH)/$(VERSIONED_IMG)"
+	gcloud storage cp output/$(IMG_FILE) gs://$(GCS_BUCKET)/$(GCS_PATH)/$(VERSIONED_IMG)
+	@echo "==> Public URL:"
+	@echo "    https://storage.googleapis.com/$(GCS_BUCKET)/$(GCS_PATH)/$(VERSIONED_IMG)"
