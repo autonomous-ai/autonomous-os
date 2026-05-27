@@ -83,26 +83,32 @@ class ActionPerceptionSession(
         cur_ts: float = time.time()
         if cur_ts - self._last_update_ts >= self._config.frame_interval:
             if self._person_detector is not None and self._config.person_detection_enabled:
-                crop = self._person_detector.extract_largest_crop(
-                    [input], self._config.person_min_area_ratio
-                )[0]
+                crops = await asyncio.to_thread(
+                    self._person_detector.extract_largest_crop,
+                    [input], self._config.person_min_area_ratio,
+                )
+                crop = crops[0]
 
                 if crop is None:
                     return HumanActionDetection(actions=[])
 
                 input = crop
 
-            preprocessed_input = self._action_recognizer.preprocess_single_frame(input)
+            preprocessed_input = await asyncio.to_thread(
+                self._action_recognizer.preprocess_single_frame, input,
+            )
 
             self._frame_buffer.append(preprocessed_input)
             while len(self._frame_buffer) > self._action_recognizer.max_frames:
                 _ = self._frame_buffer.popleft()
 
-            raw_prediction: RawHumanActionDetection = self._action_recognizer.predict(
+            raw_predictions = await asyncio.to_thread(
+                self._action_recognizer.predict,
                 [Video(frames=list(self._frame_buffer))],
                 preprocess=False,
                 class_mask=self._class_mask,
-            )[0]
+            )
+            raw_prediction: RawHumanActionDetection = raw_predictions[0]
 
             action_ids = np.where(raw_prediction.prob_np > self._config.threshold)[0]
 

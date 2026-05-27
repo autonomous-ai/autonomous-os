@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 import os
 import time
 from dataclasses import dataclass, field
@@ -29,7 +30,7 @@ import numpy as np
 import pytest
 from dotenv import load_dotenv
 
-_ = load_dotenv()
+_ = load_dotenv(override=True)
 
 DL_BACKEND_URL = os.getenv("DL_BACKEND_URL", "").rstrip("/")
 DL_API_KEY = os.getenv("DL_API_KEY", "")
@@ -104,14 +105,17 @@ class RequestResult:
 # ---------------------------------------------------------------------------
 
 
+@functools.cache
 def _pose_payload() -> dict[str, Any]:
     return {"image_b64": _make_frame_b64()}
 
 
+@functools.cache
 def _fer_payload() -> dict[str, Any]:
     return {"image_b64": _make_frame_b64(), "return_scores": True}
 
 
+@functools.cache
 def _audio_embed_payload() -> dict[str, Any]:
     wav = next((AUDIO_FIXTURES / "speaker_a").glob("*.wav"), None)
     if wav is None:
@@ -119,6 +123,7 @@ def _audio_embed_payload() -> dict[str, Any]:
     return {"audios_b64": [_wav_to_b64(wav)]}
 
 
+@functools.cache
 def _ser_payload() -> dict[str, Any]:
     wav = AUDIO_FIXTURES / "happy.wav"
     if not wav.exists():
@@ -126,6 +131,7 @@ def _ser_payload() -> dict[str, Any]:
     return {"audio_b64": _wav_to_b64(wav), "return_scores": False}
 
 
+@functools.cache
 def _object_detect_payload() -> dict[str, Any]:
     if IMAGE_FIXTURES.exists() and (IMAGE_FIXTURES / "person_drinking.jpg").exists():
         return {"image_b64": _load_image_b64(), "classes": ["person", "chair"]}

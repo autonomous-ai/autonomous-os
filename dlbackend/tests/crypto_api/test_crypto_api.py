@@ -22,7 +22,7 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from dotenv import load_dotenv
 
-_ = load_dotenv()
+_ = load_dotenv(override=True)
 
 DL_BACKEND_URL = os.getenv("DL_BACKEND_URL", "").rstrip("/")
 DL_API_KEY = os.getenv("DL_API_KEY", "")

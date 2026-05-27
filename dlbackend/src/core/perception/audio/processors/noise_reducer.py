@@ -15,7 +15,7 @@ class NoiseReducer(AudioProcessorBase):
         super().__init__()
         self._stationary: bool = stationary
 
-    def process(self, input: Audio) -> Audio:
+    def _process_impl(self, input: Audio) -> Audio:
         if input.waveform.shape[0] == 0:
             return input
 

@@ -1,5 +1,6 @@
 """Per-connection object detection session."""
 
+import asyncio
 import time
 from typing import Any
 
@@ -63,8 +64,8 @@ class ObjectPerceptionSession(
         if cur_ts - self._last_update_ts < self._config.frame_interval:
             return self._last_prediction
 
-        raw_results: list[RawObjectDetection] = self._object_detector.predict(
-            [input], classes=self._config.classes
+        raw_results: list[RawObjectDetection] = await asyncio.to_thread(
+            self._object_detector.predict, [input], classes=self._config.classes,
         )
         raw: RawObjectDetection = raw_results[0]
 

@@ -15,7 +15,7 @@ class RMSNormalizer(AudioProcessorBase):
         self._target_rms: float = target_rms
         self._max_gain: float = max_gain
 
-    def process(self, input: Audio) -> Audio:
+    def _process_impl(self, input: Audio) -> Audio:
         if input.waveform.shape[0] == 0:
             return input
 

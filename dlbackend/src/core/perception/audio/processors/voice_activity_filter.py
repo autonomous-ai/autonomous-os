@@ -125,7 +125,7 @@ class VoiceActivityFilter(AudioProcessorBase):
         return stripped.astype(np.float32, copy=False), min(1.0, max(0.0, ratio))
 
     @override
-    def process(self, input: Audio) -> Audio:
+    def _process_impl(self, input: Audio) -> Audio:
         if input.waveform.shape[0] == 0:
             return input
 

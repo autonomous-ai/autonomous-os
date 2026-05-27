@@ -1,5 +1,6 @@
 """Per-connection pose estimation session."""
 
+import asyncio
 import time
 from typing import Any
 
@@ -83,7 +84,7 @@ class PosePerceptionSession(
             return self._last_prediction
 
         # 2D estimation (batch of 1)
-        raw_2d = self._estimator_2d.predict([input])[0]
+        raw_2d = (await asyncio.to_thread(self._estimator_2d.predict, [input]))[0]
         kps: npt.NDArray[np.float32] = raw_2d.keypoints[0]  # (K, 2)
         confs: npt.NDArray[np.float32] = raw_2d.scores[0]  # (K,)
         src_graph: GraphEnum = self._estimator_2d.GRAPH_TYPE
@@ -123,7 +124,9 @@ class PosePerceptionSession(
             kps_stack: npt.NDArray[np.float32] = np.stack(self._kps_buffer, axis=0)
             scores_stack: npt.NDArray[np.float32] = np.stack(self._scores_buffer, axis=0)
 
-            raw_3d = self._lifter_3d.predict([(kps_stack, scores_stack)])[0]
+            raw_3d = (await asyncio.to_thread(
+                self._lifter_3d.predict, [(kps_stack, scores_stack)],
+            ))[0]
             if raw_3d is not None:
                 joints_last: npt.NDArray[np.float32] = raw_3d.joints_3d[-1]  # (K, 3)
                 result.pose_3d = Pose3D(
@@ -166,7 +169,9 @@ class PosePerceptionSession(
                 )
 
             ergo_input: ErgoInput = (ergo_kps[0], ergo_scores[0])
-            ergo_result = self._ergo_assessor.predict([ergo_input])[0]
+            ergo_result = (await asyncio.to_thread(
+                self._ergo_assessor.predict, [ergo_input],
+            ))[0]
             if ergo_result is not None:
                 result.ergo = ergo_result
 

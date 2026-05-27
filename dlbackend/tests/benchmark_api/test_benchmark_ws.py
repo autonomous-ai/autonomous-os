@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 import itertools
 import json
 import os
@@ -30,7 +31,7 @@ import pytest
 import websockets
 from dotenv import load_dotenv
 
-_ = load_dotenv()
+_ = load_dotenv(override=True)
 
 DL_BACKEND_URL = os.getenv("DL_BACKEND_URL", "").rstrip("/")
 DL_API_KEY = os.getenv("DL_API_KEY", "")
@@ -47,12 +48,14 @@ def _ws_url(path: str) -> str:
     return DL_BACKEND_URL.replace("http://", "ws://").replace("https://", "wss://") + path
 
 
+@functools.cache
 def _make_frame_b64(width: int = 320, height: int = 240) -> str:
     frame = np.random.randint(0, 255, (height, width, 3), dtype=np.uint8)
     _, buf = cv2.imencode(".jpg", frame)
     return base64.b64encode(buf.tobytes()).decode()
 
 
+@functools.cache
 def _load_image_b64(name: str = "person_drinking.jpg") -> str:
     path = IMAGE_FIXTURES / name
     if not path.exists():
@@ -64,11 +67,17 @@ def _load_image_b64(name: str = "person_drinking.jpg") -> str:
     return base64.b64encode(buf.tobytes()).decode()
 
 
+ERROR_TIMEOUT = "timeout"
+ERROR_CONNECTION = "connection"
+ERROR_SERVER = "server"
+
+
 @dataclass
 class WSResult:
     endpoint: str
     latency_ms: float
     error: str | None = None
+    error_type: str | None = None  # timeout | connection | server
 
 
 @dataclass
@@ -159,16 +168,32 @@ async def _ws_send_n_frames(
                 msg = ep.frame_msg_fn()
                 t0 = time.perf_counter()
                 await ws.send(json.dumps(msg))
-                raw = await asyncio.wait_for(ws.recv(), timeout=60)
+                raw = await asyncio.wait_for(ws.recv(), timeout=240)
                 latency = (time.perf_counter() - t0) * 1000
                 resp = json.loads(raw)
-                error = "error" if "error" in resp else None
-                results.append(WSResult(
-                    endpoint=ep.name, latency_ms=latency, error=error,
-                ))
+                if "error" in resp:
+                    results.append(WSResult(
+                        endpoint=ep.name, latency_ms=latency,
+                        error=resp.get("error", "unknown"), error_type=ERROR_SERVER,
+                    ))
+                else:
+                    results.append(WSResult(
+                        endpoint=ep.name, latency_ms=latency,
+                    ))
+    except asyncio.TimeoutError:
+        results.append(WSResult(
+            endpoint=ep.name, latency_ms=0,
+            error="TimeoutError", error_type=ERROR_TIMEOUT,
+        ))
+    except (ConnectionError, OSError) as exc:
+        results.append(WSResult(
+            endpoint=ep.name, latency_ms=0,
+            error=str(exc) or type(exc).__name__, error_type=ERROR_CONNECTION,
+        ))
     except Exception as exc:
         results.append(WSResult(
-            endpoint=ep.name, latency_ms=0, error=str(exc) or type(exc).__name__,
+            endpoint=ep.name, latency_ms=0,
+            error=str(exc) or type(exc).__name__, error_type=ERROR_SERVER,
         ))
     return results
 

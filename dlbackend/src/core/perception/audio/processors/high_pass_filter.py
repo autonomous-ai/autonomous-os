@@ -16,7 +16,7 @@ class HighPassFilter(AudioProcessorBase):
         self._cutoff_hz: float = cutoff_hz
         self._order: int = order
 
-    def process(self, input: Audio) -> Audio:
+    def _process_impl(self, input: Audio) -> Audio:
         if input.waveform.shape[0] == 0:
             return input
 

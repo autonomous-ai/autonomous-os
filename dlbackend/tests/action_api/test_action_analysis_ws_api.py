@@ -16,7 +16,7 @@ import pytest_asyncio
 import websockets
 from dotenv import load_dotenv
 
-_ = load_dotenv()
+_ = load_dotenv(override=True)
 
 DL_BACKEND_URL = os.getenv("DL_BACKEND_URL", "")
 DL_API_KEY = os.getenv("DL_API_KEY", "")

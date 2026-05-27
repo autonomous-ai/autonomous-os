@@ -22,7 +22,7 @@ POSTERV2_EMOTIONS: list[str] = (RESOURCES_DIR / "posterv2_classes.txt").read_tex
 EMOTIONS_8: list[str] = (RESOURCES_DIR / "emonet_8_classes.txt").read_text().strip().split("\n")
 EMOTIONS_5: list[str] = (RESOURCES_DIR / "emonet_5_classes.txt").read_text().strip().split("\n")
 
-_ = load_dotenv()
+_ = load_dotenv(override=True)
 
 DL_BACKEND_URL = os.getenv("DL_BACKEND_URL", "")
 DL_API_KEY = os.getenv("DL_API_KEY", "")

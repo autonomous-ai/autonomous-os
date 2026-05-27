@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 from dotenv import load_dotenv
 
-_ = load_dotenv()
+_ = load_dotenv(override=True)
 
 DL_BACKEND_URL = os.getenv("DL_BACKEND_URL", "").rstrip("/")
 DL_API_KEY = os.getenv("DL_API_KEY", "")

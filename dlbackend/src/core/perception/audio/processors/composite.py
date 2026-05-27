@@ -38,7 +38,7 @@ class CompositeAudioProcessor(AudioProcessorBase):
         return self._running and all(p.is_ready() for p in self._processors)
 
     @override
-    def process(self, input: Audio) -> Audio:
+    def _process_impl(self, input: Audio) -> Audio:
         result: Audio = input
         for processor in self._processors:
             result = processor.process(result)
