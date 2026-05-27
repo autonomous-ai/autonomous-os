@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Toaster } from "@/components/ui/sonner";
+import { SourceFooter } from "@/components/SourceFooter";
 import Setup from "@/pages/Setup";
 import Login from "@/pages/Login";
 import Monitor from "@/pages/monitor";
@@ -174,6 +175,7 @@ function App() {
         <Route path="/dashboard" element={<Navigate to="/monitor" replace />} />
       </Routes>
       <Toaster richColors position="top-center" />
+      <SourceFooter />
     </BrowserRouter>
   );
 }
