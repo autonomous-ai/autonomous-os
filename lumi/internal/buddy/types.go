@@ -1,4 +1,4 @@
-// Package buddy implements the lamp-side coordinator for the Lumi Buddy macOS
+// Package buddy implements the lamp-side coordinator for the Lamp Buddy macOS
 // companion app. It owns:
 //   - pairing flow (6-digit code → long-lived token)
 //   - persistent pairing record (config/buddies.json)
