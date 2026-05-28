@@ -99,7 +99,7 @@ Layout runtime trên Pi:
   /opt/claude-desktop-buddy/chars/         — character pack nhận về
   /root/config/buddy.json                  — config runtime (tạo 1 lần)
   /etc/systemd/system/claude-desktop-buddy.service   — service unit
-  /var/log/lumi-buddy.log                  — log rotate (2MB × 10)
+  /var/log/claude-desktop-buddy.log                  — log rotate (2MB × 10)
 ```
 
 ---
@@ -661,7 +661,7 @@ After=bluetooth.target lamp.service
 Wants=bluetooth.target
 
 [Service]
-ExecStart=/opt/claude-desktop-buddy/buddy-plugin -config /root/config/buddy.json -log /var/log/lumi-buddy.log
+ExecStart=/opt/claude-desktop-buddy/buddy-plugin -config /root/config/buddy.json -log /var/log/claude-desktop-buddy.log
 Restart=always
 RestartSec=5
 User=root
@@ -679,7 +679,7 @@ WantedBy=multi-user.target
 | `/opt/claude-desktop-buddy/chars/<name>/` | Character pack nhận về từ folder push |
 | `/root/config/buddy.json` | Runtime config (giữ qua OTA) |
 | `/var/lib/lumi-buddy/stats.json` | Counter approve/deny lifetime (giữ qua OTA + reset config) |
-| `/var/log/lumi-buddy.log` | Log rotate (2 MB × 10 backup) |
+| `/var/log/claude-desktop-buddy.log` | Log rotate (2 MB × 10 backup) |
 
 ### Lệnh update
 

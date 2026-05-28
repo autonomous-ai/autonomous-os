@@ -100,7 +100,7 @@ Pi runtime layout:
   /opt/claude-desktop-buddy/chars/         — received character packs
   /root/config/buddy.json                  — runtime config (created once)
   /etc/systemd/system/claude-desktop-buddy.service   — service unit
-  /var/log/lumi-buddy.log                  — rotated log (2MB × 10)
+  /var/log/claude-desktop-buddy.log                  — rotated log (2MB × 10)
 ```
 
 ---
@@ -674,7 +674,7 @@ After=bluetooth.target lamp.service
 Wants=bluetooth.target
 
 [Service]
-ExecStart=/opt/claude-desktop-buddy/buddy-plugin -config /root/config/buddy.json -log /var/log/lumi-buddy.log
+ExecStart=/opt/claude-desktop-buddy/buddy-plugin -config /root/config/buddy.json -log /var/log/claude-desktop-buddy.log
 Restart=always
 RestartSec=5
 User=root
@@ -692,7 +692,7 @@ WantedBy=multi-user.target
 | `/opt/claude-desktop-buddy/chars/<name>/` | Character packs from folder pushes |
 | `/root/config/buddy.json` | Runtime config (preserved across OTA) |
 | `/var/lib/lumi-buddy/stats.json` | Lifetime approval / denial counters (preserved across OTA + config reset) |
-| `/var/log/lumi-buddy.log` | Rotated log (2 MB × 10 backups) |
+| `/var/log/claude-desktop-buddy.log` | Rotated log (2 MB × 10 backups) |
 
 ### Update commands
 

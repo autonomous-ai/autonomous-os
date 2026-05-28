@@ -49,7 +49,7 @@ type Config struct {
 
 func main() {
 	configPath := flag.String("config", "/root/config/buddy.json", "path to config file")
-	logPath := flag.String("log", "/var/log/lumi-buddy.log", "path to log file")
+	logPath := flag.String("log", "/var/log/claude-desktop-buddy.log", "path to log file")
 	flag.Parse()
 
 	// Rotating log file: 2 MB per file, keep 10 backups (same as lamp)
