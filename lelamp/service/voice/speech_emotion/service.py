@@ -413,7 +413,7 @@ class SpeechEmotionService:
         """
         if not self._lamp_url:
             logger.warning(
-                "[speech_emotion] send_to_lamp skipped — empty lumi_url"
+                "[speech_emotion] send_to_lamp skipped — empty lamp_url"
             )
             return
         payload = {
