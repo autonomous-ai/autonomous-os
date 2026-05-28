@@ -27,7 +27,7 @@ var FactoryResetWipePaths = []string{
 	"/root/.openclaw",                               // OpenClaw state (sessions, identity, browser profile, memory)
 	"/root/local/users",                             // face + voice enrollments (owner)
 	"/root/local/strangers",                         // face + voice enrollments (stranger)
-	"/var/lib/lumi",                                 // snapshots, motion / emotion data
+	"/var/lib/lelamp/snapshots",                     // persistent camera snapshots (sensing_face / motion / emotion, 72h TTL). Matches lelamp/config.py LELAMP_SNAPSHOT_PERSIST_DIR default.
 	"/etc/wpa_supplicant/wpa_supplicant-wlan0.conf", // home WiFi credentials → forces AP mode on next boot
 }
 
