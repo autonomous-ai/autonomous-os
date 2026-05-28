@@ -20,7 +20,7 @@ final class ActivityWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "Lumi Buddy — Activity"
+        window.title = "Lamp Buddy — Activity"
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 420, height: 240)
         super.init(window: window)
@@ -115,7 +115,7 @@ final class ActivityWindowController: NSWindowController {
         }
         let text: String
         if lines.isEmpty {
-            text = "No commands yet. Once your Lumi lamp dispatches a command, it will appear here.\n"
+            text = "No commands yet. Once your Lamp dispatches a command, it will appear here.\n"
         } else {
             text = lines.joined(separator: "\n") + "\n"
         }

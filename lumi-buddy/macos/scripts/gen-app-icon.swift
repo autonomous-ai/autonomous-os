@@ -1,6 +1,6 @@
 #!/usr/bin/env swift
 //
-// gen-app-icon.swift — placeholder app icon generator for Lumi Buddy.
+// gen-app-icon.swift — placeholder app icon generator for Lamp Buddy.
 //
 // Renders a 1024×1024 PNG with an SF Symbol lightbulb on a warm rounded
 // background, suitable as the master PNG for `iconutil -c icns`. Output path
@@ -35,7 +35,7 @@ gradient.draw(in: bgRect, angle: -90)
 // 2) Lightbulb SF Symbol — render in white centred.
 let config = NSImage.SymbolConfiguration(pointSize: 640, weight: .medium, scale: .large)
 guard let symbolBase = NSImage(systemSymbolName: "lightbulb.fill",
-                               accessibilityDescription: "Lumi Buddy")?
+                               accessibilityDescription: "Lamp Buddy")?
     .withSymbolConfiguration(config) else {
     fputs("Could not load SF Symbol 'lightbulb.fill' — macOS 11+ required.\n", stderr)
     exit(1)

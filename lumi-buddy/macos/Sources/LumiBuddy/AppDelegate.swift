@@ -21,7 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.pairingManager = pairingManager
 
         // Bonjour discovery — best-effort. If lamp doesn't advertise `_lumi._tcp`,
-        // user pairs by typing `lumi-xxxx.local` manually.
+        // user pairs by typing `lamp-xxxx.local` manually.
         let discovery = LampDiscovery()
         discovery.onLampsChanged = { lamps in
             AppState.shared.setDiscoveredLamps(lamps)
@@ -107,9 +107,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showAbout() {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
-        alert.messageText = "Lumi Buddy"
+        alert.messageText = "Lamp Buddy"
         alert.informativeText = """
-            Native macOS companion that lets your Lumi lamp control this Mac \
+            Native macOS companion that lets your Lamp control this Mac \
             via voice commands processed by OpenClaw.
 
             MVP build: pairing, persistent WebSocket, command execution. \

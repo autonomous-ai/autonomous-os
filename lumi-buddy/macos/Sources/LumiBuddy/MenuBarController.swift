@@ -58,11 +58,11 @@ final class MenuBarController: NSObject {
 
         menu.addItem(.separator())
 
-        let about = NSMenuItem(title: "About Lumi Buddy", action: #selector(aboutAction), keyEquivalent: "")
+        let about = NSMenuItem(title: "About Lamp Buddy", action: #selector(aboutAction), keyEquivalent: "")
         about.target = self
         menu.addItem(about)
 
-        let quit = NSMenuItem(title: "Quit Lumi Buddy", action: #selector(quitAction), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "Quit Lamp Buddy", action: #selector(quitAction), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
     }
@@ -112,7 +112,7 @@ final class MenuBarController: NSObject {
     private func headerText(for state: AppState) -> String {
         switch state.pairing {
         case .notPaired:
-            return "Lumi Buddy — Not paired"
+            return "Lamp Buddy — Not paired"
         case .paired(_, let host):
             switch state.connection {
             case .connected:
@@ -145,7 +145,7 @@ final class MenuBarController: NSObject {
                 menu.addItem(item)
             }
         }
-        let manual = NSMenuItem(title: "Pair with Lumi…", action: #selector(pairManual), keyEquivalent: "p")
+        let manual = NSMenuItem(title: "Pair with Lamp…", action: #selector(pairManual), keyEquivalent: "p")
         manual.target = self
         menu.addItem(manual)
     }
@@ -195,7 +195,7 @@ final class MenuBarController: NSObject {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "Revoke pairing?"
-        alert.informativeText = "Your Lumi lamp will no longer be able to control this Mac until you pair again."
+        alert.informativeText = "Your Lamp will no longer be able to control this Mac until you pair again."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Revoke")
         alert.addButton(withTitle: "Cancel")

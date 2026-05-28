@@ -18,12 +18,12 @@ final class PairingWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "Pair with Lumi"
+        window.title = "Pair with Lamp"
         window.isReleasedWhenClosed = false
         super.init(window: window)
 
         hostField.stringValue = initialHost ?? ""
-        hostField.placeholderString = "lumi-xxxx.local"
+        hostField.placeholderString = "lamp-xxxx.local"
         codeField.placeholderString = "6-digit code from your lamp's web UI"
 
         pairButton.target = self
