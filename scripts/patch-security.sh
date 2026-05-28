@@ -172,9 +172,9 @@ if anchor not in content:
     sys.exit(0)
 
 block = (
-    "  # Top-level openapi.json proxied to Lumi backend so the in-iframe Swagger\n"
+    "  # Top-level openapi.json proxied to Lamp backend so the in-iframe Swagger\n"
     "  # UI (loaded via /api/hardware/docs) can fetch its spec at the absolute\n"
-    "  # path FastAPI hardcodes. Lumi adminAuthMiddleware gates the cookie/Bearer.\n"
+    "  # path FastAPI hardcodes. Lamp adminAuthMiddleware gates the cookie/Bearer.\n"
     "  location = /openapi.json {\n"
     "    proxy_pass http://backend;\n"
     "    proxy_set_header Host $host;\n"
@@ -242,7 +242,7 @@ if "Content-Security-Policy" in content:
     #   - frame-ancestors 'none' → 'self' (CSP mirror of SAMEORIGIN)
     #   - Strict CSP: revert any prior CDN whitelist + `'unsafe-inline'`
     #     script-src that an earlier patch added. LeLamp now self-hosts the
-    #     Swagger UI bundle (Lumi proxies it via /api/hardware/static/*) so
+    #     Swagger UI bundle (Lamp proxies it via /api/hardware/static/*) so
     #     no CDN allow-list is required.
     new_content = content
     new_content = new_content.replace(
