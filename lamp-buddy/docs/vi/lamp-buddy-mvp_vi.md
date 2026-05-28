@@ -210,7 +210,7 @@ Mỗi phase ship & review độc lập được.
 - Verify `docs/lamp-buddy.md` match implementation thực (update nếu drift)
 - Verify `docs/vi/lamp-buddy_vi.md` match
 - Thêm `lamp-buddy/README.md` instruction build
-- Update `CLAUDE.md` root: row doc table cho lumi-buddy
+- Update `CLAUDE.md` root: row doc table cho lamp-buddy
 - Update `Makefile` top-level: target `build-buddy`
 - Thêm file `VERSION_BUDDY` ở root → `0.0.1`
 - Bump `VERSION_LUMI`, `VERSION_WEB` nếu cần
@@ -218,7 +218,7 @@ Mỗi phase ship & review độc lập được.
 **Acceptance:**
 - Dev mới clone về có thể `cd lamp-buddy/macos && swift run` và follow README để pair với lamp
 - CLAUDE.md doc table có row mới
-- `make build-buddy` cho ra `lamp-buddy/.build/release/LumiBuddy`
+- `make build-buddy` cho ra `lamp-buddy/.build/release/LampBuddy`
 
 ---
 
@@ -319,7 +319,7 @@ lumi/web/src/
 
 ## Test end-to-end
 
-1. Mac boot, user start `lumi-buddy.app` (hoặc `swift run` cho dev)
+1. Mac boot, user start `lamp-buddy.app` (hoặc `swift run` cho dev)
 2. Lamp đang chạy trên LAN
 3. Menu buddy hiện `lamp-xxxx.local` đã tìm thấy
 4. User click "Pair with Lamp" → web UI lamp hiện code 6-digit
