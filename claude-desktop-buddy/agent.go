@@ -17,7 +17,7 @@ const agentPath = "/org/lumi/buddy/agent"
 // Claude Desktop Hardware Buddy spec. The reference firmware on the
 // M5StickC Plus shows a 6-digit passkey on its display; we have no
 // display, so we log it to the journal and to the standard log output —
-// the operator reads it from `journalctl -u lumi-buddy` and types it
+// the operator reads it from `journalctl -u claude-desktop-buddy` and types it
 // into Claude Desktop's pairing prompt.
 type Agent struct{}
 
