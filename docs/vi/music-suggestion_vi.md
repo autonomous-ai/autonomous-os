@@ -217,16 +217,16 @@ Lamp chỉ có 1 speaker chia sẻ giữa TTS và music:
 
 ```bash
 # Suggestion history hôm nay
-curl -s "http://<LUMI_IP>:5000/api/openclaw/music-suggestion-history?user=gray&date=$(date +%Y-%m-%d)&last=50"
+curl -s "http://<LAMP_IP>:5000/api/openclaw/music-suggestion-history?user=gray&date=$(date +%Y-%m-%d)&last=50"
 
 # Mood history
-curl -s "http://<LUMI_IP>:5000/api/openclaw/mood-history?user=gray&date=$(date +%Y-%m-%d)&last=50"
+curl -s "http://<LAMP_IP>:5000/api/openclaw/mood-history?user=gray&date=$(date +%Y-%m-%d)&last=50"
 
 # Audio status
-curl -s "http://<LUMI_IP>:5001/audio/status"
+curl -s "http://<LAMP_IP>:5001/audio/status"
 
 # Audio history
-curl -s "http://<LUMI_IP>:5001/audio/history?person=gray&last=10"
+curl -s "http://<LAMP_IP>:5001/audio/history?person=gray&last=10"
 ```
 
 ### Web UI

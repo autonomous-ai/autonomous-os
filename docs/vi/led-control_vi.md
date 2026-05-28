@@ -117,9 +117,9 @@ LED phản hồi trạng thái hệ thống (tất cả `breathing` speed 3.0 tr
 | OTA thành công (bootstrap) | Flash xanh lá | `(0, 255, 80)` |
 | OTA thất bại (bootstrap) | Đỏ pulse | `(255, 30, 30)` |
 
-Quản lý bởi `internal/statusled/Service` (lumi) và `lib/lelamp` trực tiếp (bootstrap).
+Quản lý bởi `internal/statusled/Service` (lamp) và `lib/lelamp` trực tiếp (bootstrap).
 
-### Setup-needed solid (lumi)
+### Setup-needed solid (lamp)
 
 Khi lamp start và `config.SetUpCompleted == false` (device đang ở AP/provisioning mode), `server/server.go` spawn goroutine background poll `GET /health` của LeLamp mỗi giây tối đa 30s, khi `health.led == true` thì fire `lelamp.SetSolid(255, 255, 255)` — paint strip trắng solid báo "device ready, vào hotspot đi". Phải poll (không phải call 1 lần) vì cold boot lamp-server bind :5000 trước LeLamp :5001. Không dùng status LED state. Blue-breathing booting vẫn show trong lúc init. Xem [setup-flow_vi.md](setup-flow_vi.md#ap-mode).
 
