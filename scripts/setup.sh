@@ -279,7 +279,7 @@ EOF
   # Do NOT start lamp here — it switches to AP mode when unconfigured, killing internet.
   # Services will start after reboot at the end of setup.
   # /usr/local/bin/software-update is written later by stage_ap (covers
-  # all six components: lamp, openclaw, bootstrap, web, lelamp, lumi-buddy).
+  # all six components: lamp, openclaw, bootstrap, web, lelamp, claude-desktop-buddy).
 }
 
 # ----------------------------------------------------------
@@ -471,7 +471,7 @@ stage_buddy() {
 
   rm -rf /tmp/buddy-extract
 
-  cat >/etc/systemd/system/lumi-buddy.service <<EOF
+  cat >/etc/systemd/system/claude-desktop-buddy.service <<EOF
 [Unit]
 Description=Lamp Claude Desktop Buddy (BLE)
 After=bluetooth.target lamp.service
@@ -486,14 +486,14 @@ Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=lumi-buddy
+SyslogIdentifier=claude-desktop-buddy
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
   systemctl daemon-reload
-  systemctl enable lumi-buddy
+  systemctl enable claude-desktop-buddy
   # Don't start yet — starts on reboot
 }
 
@@ -1202,12 +1202,13 @@ OTA_METADATA_URL="${OTA_METADATA_URL:-https://storage.googleapis.com/s3-autonomo
 [ "$(id -u)" -ne 0 ] && { echo "Run as root."; exit 1; }
 [ $# -ne 1 ] && { echo "Usage: software-update <lamp|openclaw|web>"; exit 1; }
 APP="$1"
-# Back-compat: `software-update lumi` / `lumi-buddy` still work during the brand rename window.
+# Back-compat: legacy `lumi`, `lumi-buddy`, `lamp-buddy` aliases still resolve to canonical names.
 [ "$APP" = "lumi" ] && APP="lamp"
-[ "$APP" = "lumi-buddy" ] && APP="lamp-buddy"
+[ "$APP" = "lumi-buddy" ] && APP="claude-desktop-buddy"
+[ "$APP" = "lamp-buddy" ] && APP="claude-desktop-buddy"
 case "$APP" in
-  lamp|openclaw|bootstrap|web|lelamp|lamp-buddy) ;;
-  *) echo "Unknown app: $APP. Use lamp, openclaw, bootstrap, web, lelamp, or lamp-buddy."; exit 1 ;;
+  lamp|openclaw|bootstrap|web|lelamp|claude-desktop-buddy) ;;
+  *) echo "Unknown app: $APP. Use lamp, openclaw, bootstrap, web, lelamp, or claude-desktop-buddy."; exit 1 ;;
 esac
 
 METADATA_TMP=$(mktemp)
@@ -1215,11 +1216,7 @@ ZIP_TMP=""
 DIR_TMP=""
 trap 'rm -f "$METADATA_TMP" "$ZIP_TMP"; rm -rf "$DIR_TMP"' EXIT
 curl -fsSL -H "Cache-Control: no-cache" -H "Pragma: no-cache" -o "$METADATA_TMP" "$OTA_METADATA_URL" || { echo "Failed to fetch metadata from $OTA_METADATA_URL"; exit 1; }
-# Map command name to metadata key. Default 1:1.
-# `lamp-buddy` (BLE plugin) maps to claude-desktop-buddy. Legacy `lumi` /
-# `lumi-buddy` args are normalized above so no extra mapping needed here.
 META_KEY="$APP"
-[ "$APP" = "lamp-buddy" ] && META_KEY="claude-desktop-buddy"
 VERSION=$(jq -r --arg a "$META_KEY" '.[$a].version // empty' "$METADATA_TMP")
 URL=$(jq -r --arg a "$META_KEY" '.[$a].url // empty' "$METADATA_TMP")
 [ -z "$VERSION" ] && { echo "Metadata has no version for $APP"; exit 1; }
@@ -1280,7 +1277,7 @@ elif [ "$APP" = "lelamp" ]; then
   cd /
   systemctl restart lamp-lelamp
   echo "lelamp updated to $VERSION"
-elif [ "$APP" = "lamp-buddy" ]; then
+elif [ "$APP" = "claude-desktop-buddy" ]; then
   [ -z "$URL" ] && { echo "Metadata has no url for claude-desktop-buddy"; exit 1; }
   ZIP_TMP=$(mktemp)
   DIR_TMP=$(mktemp -d)
@@ -1291,8 +1288,8 @@ elif [ "$APP" = "lamp-buddy" ]; then
   [ -f "$DIR_TMP/buddy-plugin" ] && cp -f "$DIR_TMP/buddy-plugin" "$BUDDY_DIR/buddy-plugin" && chmod +x "$BUDDY_DIR/buddy-plugin"
   [ ! -f "/root/config/buddy.json" ] && [ -f "$DIR_TMP/config/buddy.json" ] && mkdir -p /root/config && cp -f "$DIR_TMP/config/buddy.json" /root/config/buddy.json
   echo "$VERSION" > "$BUDDY_DIR/VERSION_BUDDY"
-  systemctl restart lumi-buddy
-  echo "lamp-buddy updated to $VERSION"
+  systemctl restart claude-desktop-buddy
+  echo "claude-desktop-buddy updated to $VERSION"
 fi
 SOFTWAREUPDATE
   chmod +x /usr/local/bin/software-update
@@ -1320,6 +1317,11 @@ rm -f /etc/systemd/system/lumi-lelamp.service
 systemctl stop lumi-wifi-power-save.service 2>/dev/null || true
 systemctl disable lumi-wifi-power-save.service 2>/dev/null || true
 rm -f /etc/systemd/system/lumi-wifi-power-save.service
+# lumi-buddy.service was renamed to claude-desktop-buddy.service 2026-05-28
+# (the unit always ran the claude-desktop-buddy BLE plugin; rename matches the binary).
+systemctl stop lumi-buddy.service 2>/dev/null || true
+systemctl disable lumi-buddy.service 2>/dev/null || true
+rm -f /etc/systemd/system/lumi-buddy.service
 systemctl daemon-reload 2>/dev/null || true
 
 run_stage stage_locale
@@ -1344,8 +1346,8 @@ echo "======================================"
 echo "Setup complete!"
 echo "AP SSID: Lamp-XXXX (actual: ${AP_SSID:-unknown — stage_ap may have failed})"
 echo "Setup page: http://192.168.100.1 (AP) — or http://${LAMP_HOSTNAME:-lamp-xxxx}.local once on home Wi-Fi"
-echo "Backends: systemctl status bootstrap lamp lamp-lelamp lumi-buddy"
-echo "Updates:  software-update <bootstrap|lamp|openclaw|lelamp|lamp-buddy|web>"
+echo "Backends: systemctl status bootstrap lamp lamp-lelamp claude-desktop-buddy"
+echo "Updates:  software-update <bootstrap|lamp|openclaw|lelamp|claude-desktop-buddy|web>"
 if [ -n "$FAILED_STAGES" ]; then
   echo ""
   echo "WARNING: the following stages FAILED:$FAILED_STAGES"

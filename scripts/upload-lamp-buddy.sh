@@ -68,7 +68,7 @@ try:
     data = json.loads(raw) if raw.strip() else {}
 except json.JSONDecodeError:
     data = {}
-data.pop('lumi-buddy', None)
+data.pop('claude-desktop-buddy', None)
 data['lamp-buddy'] = {'version': sys.argv[1], 'url': sys.argv[2]}
 print(json.dumps(data, indent=2))
 " "$new_version" "$BUDDY_URL")
