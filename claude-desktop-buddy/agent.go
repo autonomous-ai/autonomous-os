@@ -11,7 +11,7 @@ import (
 // agentPath is the D-Bus object path BlueZ will call back into when it
 // needs pairing input/output. The path is arbitrary but must be stable
 // for the lifetime of the process.
-const agentPath = "/org/lumi/buddy/agent"
+const agentPath = "/org/lamp/buddy/agent"
 
 // Agent implements org.bluez.Agent1 with DisplayOnly capability per the
 // Claude Desktop Hardware Buddy spec. The reference firmware on the
