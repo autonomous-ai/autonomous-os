@@ -189,7 +189,7 @@ stage_enable_spi() {
   echo "[stage] SPI enablement will take effect after reboot"
 }
 
-OTA_METADATA_URL="${OTA_METADATA_URL:-https://storage.googleapis.com/s3-autonomous-upgrade-3/lumi/ota/metadata.json}"
+OTA_METADATA_URL="${OTA_METADATA_URL:-https://storage.googleapis.com/s3-autonomous-upgrade-3/lamp/ota/metadata.json}"
 
 stage_ota_metadata() {
   echo "[stage] Fetch OTA metadata"
@@ -630,7 +630,7 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
   # Download skills from GCS into workspace/skills
-  SKILLS_GCS_PREFIX="https://storage.googleapis.com/s3-autonomous-upgrade-3/lumi/skills"
+  SKILLS_GCS_PREFIX="https://storage.googleapis.com/s3-autonomous-upgrade-3/lamp/skills"
   SKILLS_LIST="audio camera display emotion led-control scene scheduling sensing servo-control"
   mkdir -p "$OPENCLAW_HOME/workspace/skills"
   for skill_name in $SKILLS_LIST; do
@@ -1228,7 +1228,7 @@ CONNECTWIFI
   cat >/usr/local/bin/software-update <<'SOFTWAREUPDATE'
 #!/bin/bash
 set -e
-OTA_METADATA_URL="${OTA_METADATA_URL:-https://storage.googleapis.com/s3-autonomous-upgrade-3/lumi/ota/metadata.json}"
+OTA_METADATA_URL="${OTA_METADATA_URL:-https://storage.googleapis.com/s3-autonomous-upgrade-3/lamp/ota/metadata.json}"
 [ "$(id -u)" -ne 0 ] && { echo "Run as root."; exit 1; }
 [ $# -ne 1 ] && { echo "Usage: software-update <lamp|openclaw|web>"; exit 1; }
 APP="$1"
@@ -1244,11 +1244,11 @@ ZIP_TMP=""
 DIR_TMP=""
 trap 'rm -f "$METADATA_TMP" "$ZIP_TMP"; rm -rf "$DIR_TMP"' EXIT
 curl -fsSL -H "Cache-Control: no-cache" -H "Pragma: no-cache" -o "$METADATA_TMP" "$OTA_METADATA_URL" || { echo "Failed to fetch metadata from $OTA_METADATA_URL"; exit 1; }
-# Map command name to metadata key. Brand rename window: app is `lamp`
-# locally, but the OTA metadata field stays `.lumi.*` for cross-system
-# contract compat. `lumi-buddy` (BLE plugin) maps to claude-desktop-buddy.
+# Map command name to metadata key. Default 1:1. Legacy `lumi` arg from
+# pre-rename invocations still maps to the new `lamp` field.
+# `lumi-buddy` (BLE plugin) maps to claude-desktop-buddy.
 META_KEY="$APP"
-[ "$APP" = "lamp" ] && META_KEY="lumi"
+[ "$APP" = "lumi" ] && META_KEY="lamp"
 [ "$APP" = "lumi-buddy" ] && META_KEY="claude-desktop-buddy"
 VERSION=$(jq -r --arg a "$META_KEY" '.[$a].version // empty' "$METADATA_TMP")
 URL=$(jq -r --arg a "$META_KEY" '.[$a].url // empty' "$METADATA_TMP")

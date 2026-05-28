@@ -18,7 +18,7 @@ AI Lamp chạy **5 thành phần phần mềm** trên Raspberry Pi 4. Tất cả
                     ┌──────────────────────────────┐
                     │   OTA Metadata (GCS JSON)     │
                     │                                │
-                    │  lumi:    {version, url}     │
+                    │  lamp:    {version, url}     │
                     │  bootstrap: {version, url}     │
                     │  web:       {version, url}     │
                     │  openclaw:  {version}          │
@@ -47,28 +47,28 @@ AI Lamp chạy **5 thành phần phần mềm** trên Raspberry Pi 4. Tất cả
 
 File JSON duy nhất trên GCS. Tất cả thành phần tham chiếu file này.
 
-**URL**: `https://storage.googleapis.com/{BUCKET}/lumi/ota/metadata.json`
+**URL**: `https://storage.googleapis.com/{BUCKET}/lamp/ota/metadata.json`
 
 ```json
 {
-  "lumi": {
+  "lamp": {
     "version": "1.2.3",
-    "url": "https://storage.googleapis.com/{BUCKET}/lumi/ota/lumi/1.2.3/lumi-1.2.3.zip"
+    "url": "https://storage.googleapis.com/{BUCKET}/lamp/ota/lamp/1.2.3/lamp-1.2.3.zip"
   },
   "bootstrap": {
     "version": "1.0.5",
-    "url": "https://storage.googleapis.com/{BUCKET}/lumi/ota/bootstrap/1.0.5/bootstrap-1.0.5.zip"
+    "url": "https://storage.googleapis.com/{BUCKET}/lamp/ota/bootstrap/1.0.5/bootstrap-1.0.5.zip"
   },
   "web": {
     "version": "0.9.0",
-    "url": "https://storage.googleapis.com/{BUCKET}/lumi/ota/web/0.9.0/setup-0.9.0.zip"
+    "url": "https://storage.googleapis.com/{BUCKET}/lamp/ota/web/0.9.0/setup-0.9.0.zip"
   },
   "openclaw": {
     "version": "2026.3.8"
   },
   "lelamp": {
     "version": "1.0.0",
-    "url": "https://storage.googleapis.com/{BUCKET}/lumi/ota/lelamp/1.0.0/lelamp-1.0.0.zip"
+    "url": "https://storage.googleapis.com/{BUCKET}/lamp/ota/lelamp/1.0.0/lelamp-1.0.0.zip"
   }
 }
 ```
@@ -77,7 +77,7 @@ File JSON duy nhất trên GCS. Tất cả thành phần tham chiếu file này.
 
 ```go
 const (
-    OTAKeyLumi      = "lumi"
+    OTAKeyLamp      = "lamp"
     OTAKeyBootstrap = "bootstrap"
     OTAKeyWeb       = "web"
     OTAKeyOpenClaw  = "openclaw"
@@ -100,7 +100,7 @@ Script chạy **1 lần duy nhất** trên Pi mới. Thực thi tuần tự theo
 
 **Cài nhanh từ CDN:**
 ```bash
-curl -fsSL https://cdn.autonomous.ai/lumi/install.sh | sudo bash
+curl -fsSL https://cdn.autonomous.ai/lamp/install.sh | sudo bash
 ```
 
 ### Tổng quan stages
@@ -200,7 +200,7 @@ boot
 ```json
 {
   "httpPort": 8080,
-  "metadata_url": "https://storage.googleapis.com/{BUCKET}/lumi/ota/metadata.json",
+  "metadata_url": "https://storage.googleapis.com/{BUCKET}/lamp/ota/metadata.json",
   "poll_interval": "5m",
   "state_file": "/root/bootstrap/state.json"
 }
@@ -215,7 +215,7 @@ Lưu version đã cài của mỗi thành phần:
 ```json
 {
   "components": {
-    "lumi": "1.2.3",
+    "lamp": "1.2.3",
     "bootstrap": "1.0.5",
     "web": "0.9.0",
     "openclaw": "2026.3.8",
@@ -234,7 +234,7 @@ checkLoop():
 
 checkOnce():
   1. Tải OTA metadata JSON
-  2. Với mỗi key [lumi, bootstrap, web, lelamp]:
+  2. Với mỗi key [lamp, bootstrap, web, lelamp]:
      → reconcile(key, metadata[key])
   GHI CHÚ: OpenClaw OTA tạm thời bị tắt (reconcileOpenClawFromNpm đã comment out)
   3. Lưu state
@@ -263,7 +263,7 @@ Bootstrap dùng `lib/lelamp` để báo trạng thái update qua LED. Xem chi ti
 
 | Thành phần | Cách phát hiện |
 |---|---|
-| `lumi` | Chạy `lamp-server --version`, parse output |
+| `lamp` | Chạy `lamp-server --version`, parse output |
 | `bootstrap` | Hằng số compile-time `config.BootstrapVersion` (ldflags) |
 | `web` | Đọc file `/usr/share/nginx/html/setup/VERSION` |
 | `openclaw` | Chạy `openclaw --version`, trích xuất semver bằng regex |
@@ -273,7 +273,7 @@ Bootstrap dùng `lib/lelamp` để báo trạng thái update qua LED. Xem chi ti
 
 | Thành phần | Các bước |
 |---|---|
-| `lumi` | Chạy `software-update lumi` (block tối đa 10 phút) |
+| `lamp` | Chạy `software-update lamp` (block tối đa 10 phút) |
 | `bootstrap` | Spawn detached `software-update bootstrap` (tự cập nhật, sống sót sau restart) |
 | `web` | Chạy `software-update web` |
 | `openclaw` | ~~Chạy `npm install -g openclaw@{version}` → `systemctl restart openclaw`~~ (tạm thời tắt) |
@@ -439,8 +439,8 @@ set -euo pipefail
 
 VERSION_FILE="VERSION_LELAMP"
 BUCKET="s3-autonomous-upgrade-3"
-OTA_PATH="lumi/ota/lelamp"
-METADATA_PATH="lumi/ota/metadata.json"
+OTA_PATH="lamp/ota/lelamp"
+METADATA_PATH="lamp/ota/metadata.json"
 
 # Tự tăng patch version
 CURRENT=$(cat "$VERSION_FILE" 2>/dev/null || echo "0.0.0")
@@ -490,14 +490,14 @@ Sau khi các upload component xong (`make upload-lamp upload-lelamp upload-web .
 
 ```bash
 make tag-release v0.0.8
-# → curl https://cdn.autonomous.ai/lumi/ota/metadata.json
+# → curl https://cdn.autonomous.ai/lamp/ota/metadata.json
 # → git tag -a v0.0.8 -F - (annotation = JSON metadata đẹp)
 # → git push origin v0.0.8
 ```
 
-Người mua chạy `lamp-server --version` trên thiết bị — giá trị lấy từ `git describe --tags --always --dirty` lúc build (`Makefile:VERSION`), nên resolve về tag gần nhất. Họ mở repo public (`github.com/autonomous-ai/ai-lamp-lumi`), tìm tag đúng, đọc annotation để xem chính xác version `lumi`/`lelamp`/`web`/`bootstrap` đã bake vào release đó, rồi checkout commit tương ứng để có source.
+Người mua chạy `lamp-server --version` trên thiết bị — giá trị lấy từ `git describe --tags --always --dirty` lúc build (`Makefile:VERSION`), nên resolve về tag gần nhất. Họ mở repo public (`github.com/autonomous-ai/ai-lamp-lumi`), tìm tag đúng, đọc annotation để xem chính xác version `lamp`/`lelamp`/`web`/`bootstrap` đã bake vào release đó, rồi checkout commit tương ứng để có source.
 
-Guards trong script: từ chối nếu tag đã tồn tại local hoặc trên remote, từ chối nếu fetch metadata fail hoặc JSON invalid (`set -euo pipefail` + `jq .`). Override qua env: `OTA_METADATA_URL` (mặc định: `https://cdn.autonomous.ai/lumi/ota/metadata.json`), `TAG_REMOTE` (mặc định: `origin`).
+Guards trong script: từ chối nếu tag đã tồn tại local hoặc trên remote, từ chối nếu fetch metadata fail hoặc JSON invalid (`set -euo pipefail` + `jq .`). Override qua env: `OTA_METADATA_URL` (mặc định: `https://cdn.autonomous.ai/lamp/ota/metadata.json`), `TAG_REMOTE` (mặc định: `origin`).
 
 ---
 
@@ -528,8 +528,8 @@ Version của LeLamp là file text `VERSION` trong thư mục gốc package. Boo
 
 | Khía cạnh | Lobster (gốc) | AI Lamp (project này) |
 |---|---|---|
-| Số thành phần | 4 (lumi, bootstrap, web, openclaw) | **5** (+ lelamp) |
-| OTA keys | lumi, bootstrap, web, openclaw | + **lelamp** |
+| Số thành phần | 4 (lamp, bootstrap, web, openclaw) | **5** (+ lelamp) |
+| OTA keys | lamp, bootstrap, web, openclaw | + **lelamp** |
 | Setup stages | 7 (stage -1 đến 4) | **8** (+ stage 2b: LeLamp) |
 | Systemd services | 4 | **5** (+ lumi-lelamp.service) |
 | Python runtime | Không có | **LeLamp** tại /opt/lelamp/ với venv |

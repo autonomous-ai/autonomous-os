@@ -6,7 +6,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SKILLS_DIR="${ROOT_DIR}/lamp/resources/openclaw-skills"
 
 GCS_BUCKET="${GCS_BUCKET:-s3-autonomous-upgrade-3}"
-GCS_PREFIX="${GCS_PREFIX:-lumi/skills}"
+GCS_PREFIX="${GCS_PREFIX:-lamp/skills}"
 
 if [[ ! -d "$SKILLS_DIR" ]]; then
   echo "Error: skills directory not found at $SKILLS_DIR"
@@ -128,7 +128,7 @@ echo "Done: uploaded ${count} skill zip(s), skipped ${skipped} unchanged. gs://$
 
 # Update OTA metadata with per-skill { version }. Pi watcher reads this
 # and refetches any skill whose version changed.
-METADATA_GCS="gs://${GCS_BUCKET}/lumi/ota/metadata.json"
+METADATA_GCS="gs://${GCS_BUCKET}/lamp/ota/metadata.json"
 METADATA_TMP=$(mktemp)
 trap 'rm -rf "$WORK_DIR" "$ENTRIES_FILE" "$METADATA_TMP"' EXIT
 if gsutil cp "$METADATA_GCS" "$METADATA_TMP" 2>/dev/null; then

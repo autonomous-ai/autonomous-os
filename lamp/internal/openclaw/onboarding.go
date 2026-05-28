@@ -21,8 +21,8 @@ var soulFS embed.FS
 var knowledgeFS embed.FS
 
 const (
-	skillsBaseURL = "https://storage.googleapis.com/s3-autonomous-upgrade-3/lumi/skills"
-	hooksBaseURL  = "https://storage.googleapis.com/s3-autonomous-upgrade-3/lumi/hooks"
+	skillsBaseURL = "https://storage.googleapis.com/s3-autonomous-upgrade-3/lamp/skills"
+	hooksBaseURL  = "https://storage.googleapis.com/s3-autonomous-upgrade-3/lamp/hooks"
 
 	lampMandatoryMarker = "<!-- LAMP DO NOT REMOVE -->"
 	// legacyLumiMarker is the previous marker. Kept so devices that ran

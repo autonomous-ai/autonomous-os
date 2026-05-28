@@ -62,7 +62,7 @@ Phase 3  OTA bake from metadata.json:
            (with webrtcvad pkg_resources shim for Py 3.12+ where the symbol was removed)
          - Web UI to /usr/share/nginx/html/setup
          - Claude Desktop Buddy BLE plugin (optional, if `claude-desktop-buddy.url` in metadata)
-         - Writes /tmp/ota-versions.env (web/lumi/bootstrap/lelamp/buddy versions baked in)
+         - Writes /tmp/ota-versions.env (web/lamp/bootstrap/lelamp/buddy versions baked in)
 Phase 4  lumi-resize-once.service installed
          - oneshot, first-boot only, self-destructing
          - growpart + resize2fs to fill the actual SD card (image is 14 GB, SD likely larger)
@@ -105,13 +105,13 @@ All env vars; override at the `make` call.
 | `OUT_IMG_SIZE` | `14G` | Partition size after expansion. ext4 fills this; xz compresses unused space away. SD card must be ≥ this (lumi-resize-once will expand further on first boot if SD is larger). |
 | `OPI_FILE_ID` | `1CYfOaY6f5DozJBNvPJ0Gx1jBIFlGe8fn` | Google Drive file ID for `Orangepi4pro_1.0.6_debian_bookworm_server_*.7z`. Bump when the dev team uploads a new vendor release. |
 | `OPENCLAW_VERSION` | `2026.5.7` | npm package version pin. Bump as OpenClaw releases. |
-| `OTA_METADATA_URL` | `https://storage.googleapis.com/s3-autonomous-upgrade-3/lumi/ota/metadata.json` | Backend binaries source. Used by Phase 3 to download `lamp-server`, `bootstrap-server`, `lelamp`, `web`, optional `claude-desktop-buddy`. |
+| `OTA_METADATA_URL` | `https://storage.googleapis.com/s3-autonomous-upgrade-3/lamp/ota/metadata.json` | Backend binaries source. Used by Phase 3 to download `lamp-server`, `bootstrap-server`, `lelamp`, `web`, optional `claude-desktop-buddy`. |
 | `AP_BAND` | `2.4` | `2.4` or `5` — hostapd hw_mode. 5 GHz needs chip + regulatory support. |
 | `AP_CHANNEL` | `6` (2.4 GHz) / `36` (5 GHz) | hostapd channel |
 | `COUNTRY_CODE` | `US` | Regulatory domain for wpa_supplicant + hostapd |
 | `GCS_BUCKET` | `s3-autonomous-upgrade-3` | (Makefile) target bucket for `make upload` / `make upload-source` |
-| `GCS_PATH` | `lumi/imager/output` | (Makefile) path inside the bucket for built images + per-release notes |
-| `GCS_LEDGER` | `lumi/imager/RELEASES.md` | (Makefile) path for cumulative append-only release ledger |
+| `GCS_PATH` | `lamp/imager/output` | (Makefile) path inside the bucket for built images + per-release notes |
+| `GCS_LEDGER` | `lamp/imager/RELEASES.md` | (Makefile) path for cumulative append-only release ledger |
 
 Example — rebuild against a new vendor release uploaded to a different file ID:
 
@@ -168,7 +168,7 @@ Per-release note format (sample):
 
 OTA versions baked at build time:
 - web:        1.2.3
-- lumi:       0.0.620
+- lamp:       0.0.620
 - bootstrap:  0.0.10
 - lelamp:     1.0.5
 - claude-desktop-buddy: 1.0.2
@@ -191,7 +191,7 @@ can pull from GCS instead of Drive (TODO: wire `OPI_SOURCE_URL` env into
 build-orangepi.sh to prefer the GCS mirror).
 
 ```bash
-make upload-source                 # → gs://$GCS_BUCKET/lumi/imager/source/Orangepi4pro_*.7z
+make upload-source                 # → gs://$GCS_BUCKET/lamp/imager/source/Orangepi4pro_*.7z
 ```
 
 ## File layout
@@ -317,7 +317,7 @@ because it authenticates to your Google account.
 5. Re-run `make build` — script sees the cached file and skips Phase 0 download
 
 **Permanent fix:** mirror to GCS once via `make upload-source`, then update
-`build-orangepi.sh` to pull from `gs://s3-autonomous-upgrade-3/lumi/imager/source/`
+`build-orangepi.sh` to pull from `gs://s3-autonomous-upgrade-3/lamp/imager/source/`
 instead of GDrive (TODO — wire `OPI_SOURCE_URL`).
 
 ### `make upload` warning about parallel composite uploads

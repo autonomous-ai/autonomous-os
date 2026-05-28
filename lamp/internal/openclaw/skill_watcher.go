@@ -17,7 +17,7 @@ import (
 )
 
 const skillWatchInterval = 5 * time.Minute
-const defaultOTAMetadataURL = "https://storage.googleapis.com/s3-autonomous-upgrade-3/lumi/ota/metadata.json"
+const defaultOTAMetadataURL = "https://storage.googleapis.com/s3-autonomous-upgrade-3/lamp/ota/metadata.json"
 
 // StartSkillWatcher polls OTA metadata for per-skill version changes.
 // When any skill version changes, downloads that skill zip from CDN,

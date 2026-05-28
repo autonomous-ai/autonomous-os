@@ -28,7 +28,7 @@ else
   echo "========== Version initialized: ${new_version} =========="
 fi
 
-GCS_PATH="${GCS_PATH:-lumi/ota/web/${new_version}.zip}"
+GCS_PATH="${GCS_PATH:-lamp/ota/web/${new_version}.zip}"
 
 echo "========== npm run build =========="
 (cd "$PROJECT_ROOT/lamp/web" && npm run build)
@@ -47,8 +47,8 @@ rm -f "$ZIP_PATH"
 echo "========== Upload ${ZIP_NAME} to Google Cloud Storage (no-cache) =========="
 gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" cp "$ZIP_PATH" "gs://${GCS_BUCKET}/${GCS_PATH}"
 
-# Update metadata.json (lumi/ota/metadata.json) - web key
-METADATA_PATH="lumi/ota/metadata.json"
+# Update metadata.json (lamp/ota/metadata.json) - web key
+METADATA_PATH="lamp/ota/metadata.json"
 METADATA_TMP=$(mktemp)
 WEB_URL="${WEB_URL:-https://storage.googleapis.com/${GCS_BUCKET}/${GCS_PATH}}"
 

@@ -7,7 +7,7 @@ BUDDY_DIR="${ROOT_DIR}/lamp-buddy"
 VERSION_FILE="${BUDDY_DIR}/VERSION_LAMP_BUDDY"
 DIST_DIR="${BUDDY_DIR}/dist"
 
-# Bucket and path: lumi/ota/lamp-buddy/[semver].dmg
+# Bucket and path: lamp/ota/lamp-buddy/[semver].dmg
 GCS_BUCKET="${GCS_BUCKET:-s3-autonomous-upgrade-3}"
 
 # Build target — `dmg` (unsigned, default) or `dmg-signed` (Developer ID + notarized).
@@ -30,7 +30,7 @@ fi
 
 DMG_NAME="LampBuddy-${new_version}.dmg"
 DMG_PATH="${DIST_DIR}/${DMG_NAME}"
-GCS_PATH="${GCS_PATH:-lumi/ota/lamp-buddy/${new_version}.dmg}"
+GCS_PATH="${GCS_PATH:-lamp/ota/lamp-buddy/${new_version}.dmg}"
 
 echo "========== Building DMG via 'make ${DMG_TARGET}' (VERSION=${new_version}) =========="
 (cd "$BUDDY_DIR" && make "$DMG_TARGET")
@@ -45,8 +45,8 @@ gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" \
        -h "Content-Type:application/x-apple-diskimage" \
        cp "$DMG_PATH" "gs://${GCS_BUCKET}/${GCS_PATH}"
 
-# Update metadata.json (lumi/ota/metadata.json) - lamp-buddy key
-METADATA_PATH="lumi/ota/metadata.json"
+# Update metadata.json (lamp/ota/metadata.json) - lamp-buddy key
+METADATA_PATH="lamp/ota/metadata.json"
 METADATA_TMP=$(mktemp)
 BUDDY_URL="${BUDDY_URL:-https://storage.googleapis.com/${GCS_BUCKET}/${GCS_PATH}}"
 

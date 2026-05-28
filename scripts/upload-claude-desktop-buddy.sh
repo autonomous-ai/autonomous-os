@@ -6,7 +6,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUDDY_DIR="${ROOT_DIR}/claude-desktop-buddy"
 VERSION_FILE="${BUDDY_DIR}/VERSION_BUDDY"
 
-# Bucket and path: lumi/ota/claude-desktop-buddy/[semver].zip
+# Bucket and path: lamp/ota/claude-desktop-buddy/[semver].zip
 GCS_BUCKET="${GCS_BUCKET:-s3-autonomous-upgrade-3}"
 
 # Build for linux/arm64
@@ -29,7 +29,7 @@ fi
 
 ZIP_NAME="claude-desktop-buddy-${new_version}.zip"
 ZIP_PATH="${ROOT_DIR}/${ZIP_NAME}"
-GCS_PATH="${GCS_PATH:-lumi/ota/claude-desktop-buddy/${new_version}.zip}"
+GCS_PATH="${GCS_PATH:-lamp/ota/claude-desktop-buddy/${new_version}.zip}"
 
 echo "========== Zipping to ${ZIP_NAME} =========="
 rm -f "$ZIP_PATH"
@@ -44,7 +44,7 @@ echo "========== Upload ${ZIP_NAME} to Google Cloud Storage (no-cache) =========
 gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" cp "$ZIP_PATH" "gs://${GCS_BUCKET}/${GCS_PATH}"
 
 # Update metadata.json - claude-desktop-buddy key
-METADATA_PATH="lumi/ota/metadata.json"
+METADATA_PATH="lamp/ota/metadata.json"
 METADATA_TMP=$(mktemp)
 BUDDY_URL="${BUDDY_URL:-https://storage.googleapis.com/${GCS_BUCKET}/${GCS_PATH}}"
 

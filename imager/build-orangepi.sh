@@ -27,7 +27,7 @@ PI_TIMEZONE="America/New_York"
 USERNAME="system"
 PASSWORD="12345"
 OUT_IMG_SIZE="${OUT_IMG_SIZE:-14G}"
-OTA_METADATA_URL="${OTA_METADATA_URL:-https://storage.googleapis.com/s3-autonomous-upgrade-3/lumi/ota/metadata.json}"
+OTA_METADATA_URL="${OTA_METADATA_URL:-https://storage.googleapis.com/s3-autonomous-upgrade-3/lamp/ota/metadata.json}"
 AP_BAND="${AP_BAND:-2.4}"
 AP_CHANNEL="${AP_CHANNEL:-}"
 COUNTRY_CODE="${COUNTRY_CODE:-US}"
@@ -582,12 +582,14 @@ chmod +x /usr/local/bin/connect-wifi
 cat > /usr/local/bin/software-update <<'EOFSCRIPT'
 #!/bin/bash
 set -e
-OTA_METADATA_URL="\${OTA_METADATA_URL:-https://storage.googleapis.com/s3-autonomous-upgrade-3/lumi/ota/metadata.json}"
+OTA_METADATA_URL="\${OTA_METADATA_URL:-https://storage.googleapis.com/s3-autonomous-upgrade-3/lamp/ota/metadata.json}"
 [ "\$(id -u)" -ne 0 ] && { echo "Run as root."; exit 1; }
-[ \$# -ne 1 ] && { echo "Usage: software-update <lumi|openclaw|bootstrap|web|lelamp|lumi-buddy>"; exit 1; }
+[ \$# -ne 1 ] && { echo "Usage: software-update <lamp|openclaw|bootstrap|web|lelamp|lumi-buddy>"; exit 1; }
 APP="\$1"
+# Back-compat: \`software-update lumi\` still works during the brand rename window.
+[ "\$APP" = "lumi" ] && APP="lamp"
 case "\$APP" in
-  lumi|openclaw|bootstrap|web|lelamp|lumi-buddy) ;;
+  lamp|openclaw|bootstrap|web|lelamp|lumi-buddy) ;;
   *) echo "Unknown app: \$APP"; exit 1 ;;
 esac
 META=\$(mktemp); ZIP=\$(mktemp); DIR=\$(mktemp -d)
@@ -601,7 +603,7 @@ URL=\$(jq -r --arg a "\$KEY" '.[\$a].url // empty' "\$META")
 curl -fsSL -o "\$ZIP" "\$URL"
 unzip -o -q "\$ZIP" -d "\$DIR"
 case "\$APP" in
-  lumi)      cp -f "\$(find \$DIR -type f -executable | head -1 || find \$DIR -type f | head -1)" /usr/local/bin/lamp-server      && chmod +x /usr/local/bin/lamp-server      && systemctl restart lamp ;;
+  lamp)      cp -f "\$(find \$DIR -type f -executable | head -1 || find \$DIR -type f | head -1)" /usr/local/bin/lamp-server      && chmod +x /usr/local/bin/lamp-server      && systemctl restart lamp ;;
   bootstrap) cp -f "\$(find \$DIR -type f -executable | head -1 || find \$DIR -type f | head -1)" /usr/local/bin/bootstrap-server && chmod +x /usr/local/bin/bootstrap-server && systemctl restart bootstrap ;;
   web)       rm -rf /usr/share/nginx/html/setup/* && cp -a "\$DIR"/* /usr/share/nginx/html/setup/ ;;
   *)         echo "manual update for \$APP not implemented in this stub" ;;
@@ -869,24 +871,24 @@ echo "[overlay] fetch OTA metadata"
 META=\$(mktemp)
 retry "curl -fsSL -H 'Cache-Control: no-cache' -o '\$META' '${OTA_METADATA_URL}'" 5
 WEB_URL=\$(jq -r '.web.url // empty'               "\$META")
-LUMI_URL=\$(jq -r '.lumi.url // empty'             "\$META")
+LAMP_URL=\$(jq -r '.lamp.url // empty'             "\$META")
 BOOTSTRAP_URL=\$(jq -r '.bootstrap.url // empty'   "\$META")
 LELAMP_URL=\$(jq -r '.lelamp.url // empty'         "\$META")
 BUDDY_URL=\$(jq -r '."claude-desktop-buddy".url // empty' "\$META")
 WEB_VER=\$(jq -r '.web.version // empty'           "\$META")
-LUMI_VER=\$(jq -r '.lumi.version // empty'         "\$META")
+LAMP_VER=\$(jq -r '.lamp.version // empty'         "\$META")
 BOOTSTRAP_VER=\$(jq -r '.bootstrap.version // empty' "\$META")
 LELAMP_VER=\$(jq -r '.lelamp.version // empty'     "\$META")
 BUDDY_VER=\$(jq -r '."claude-desktop-buddy".version // empty' "\$META")
 rm -f "\$META"
-[ -z "\$WEB_URL" ] || [ -z "\$LUMI_URL" ] || [ -z "\$BOOTSTRAP_URL" ] && {
-  echo "ERROR: OTA metadata missing web.url / lumi.url / bootstrap.url"; exit 1
+[ -z "\$WEB_URL" ] || [ -z "\$LAMP_URL" ] || [ -z "\$BOOTSTRAP_URL" ] && {
+  echo "ERROR: OTA metadata missing web.url / lamp.url / bootstrap.url"; exit 1
 }
-echo "[overlay] web=\$WEB_VER lumi=\$LUMI_VER bootstrap=\$BOOTSTRAP_VER lelamp=\$LELAMP_VER buddy=\$BUDDY_VER"
+echo "[overlay] web=\$WEB_VER lamp=\$LAMP_VER bootstrap=\$BOOTSTRAP_VER lelamp=\$LELAMP_VER buddy=\$BUDDY_VER"
 
 echo "[overlay] backend binaries"
 install_binary_from_zip "\$BOOTSTRAP_URL" /usr/local/bin/bootstrap-server "bootstrap"
-install_binary_from_zip "\$LUMI_URL"      /usr/local/bin/lamp-server      "lumi"
+install_binary_from_zip "\$LAMP_URL"      /usr/local/bin/lamp-server      "lamp"
 
 echo "[overlay] LeLamp"
 LELAMP_DIR="/opt/lelamp"
@@ -992,7 +994,7 @@ echo "[overlay] Phase 3 complete"
 # 'source' on the host pulls them into variables.
 cat > /tmp/ota-versions.env <<MANIFEST
 WEB_VER=\${WEB_VER}
-LUMI_VER=\${LUMI_VER}
+LAMP_VER=\${LAMP_VER}
 BOOTSTRAP_VER=\${BOOTSTRAP_VER}
 LELAMP_VER=\${LELAMP_VER}
 BUDDY_VER=\${BUDDY_VER}
@@ -1000,12 +1002,12 @@ MANIFEST
 OVERLAY_STAGES
 
 # Capture OTA versions for the build manifest before they get wiped by Phase 5.
-BAKED_WEB_VER=""; BAKED_LUMI_VER=""; BAKED_BOOTSTRAP_VER=""; BAKED_LELAMP_VER=""; BAKED_BUDDY_VER=""
+BAKED_WEB_VER=""; BAKED_LAMP_VER=""; BAKED_BOOTSTRAP_VER=""; BAKED_LELAMP_VER=""; BAKED_BUDDY_VER=""
 if [ -f "${MNT}/tmp/ota-versions.env" ]; then
   # shellcheck disable=SC1090
   . "${MNT}/tmp/ota-versions.env" || true
   BAKED_WEB_VER="${WEB_VER:-}"
-  BAKED_LUMI_VER="${LUMI_VER:-}"
+  BAKED_LAMP_VER="${LAMP_VER:-}"
   BAKED_BOOTSTRAP_VER="${BOOTSTRAP_VER:-}"
   BAKED_LELAMP_VER="${LELAMP_VER:-}"
   BAKED_BUDDY_VER="${BUDDY_VER:-}"
@@ -1024,7 +1026,7 @@ cat > /output/manifest-opi.json <<MANIFEST_JSON
   "ota_metadata_url": "${OTA_METADATA_URL}",
   "ota_versions": {
     "web": "${BAKED_WEB_VER}",
-    "lumi": "${BAKED_LUMI_VER}",
+    "lamp": "${BAKED_LAMP_VER}",
     "bootstrap": "${BAKED_BOOTSTRAP_VER}",
     "lelamp": "${BAKED_LELAMP_VER}",
     "claude-desktop-buddy": "${BAKED_BUDDY_VER}"

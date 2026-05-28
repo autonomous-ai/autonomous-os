@@ -9,7 +9,7 @@
 set -euo pipefail
 
 VERSION="${1:-}"
-OTA_METADATA_URL="${OTA_METADATA_URL:-https://cdn.autonomous.ai/lumi/ota/metadata.json}"
+OTA_METADATA_URL="${OTA_METADATA_URL:-https://cdn.autonomous.ai/lamp/ota/metadata.json}"
 REMOTE="${TAG_REMOTE:-origin}"
 
 if [[ -z "$VERSION" ]]; then

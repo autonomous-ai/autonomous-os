@@ -106,7 +106,7 @@
 #   sudo device-ap-mode           — switch to hotspot mode
 #   sudo device-sta-mode          — switch to station (client) mode
 #   sudo connect-wifi SSID PASS   — connect to WiFi (switches to STA mode)
-#   sudo software-update <bootstrap|lumi|lelamp|openclaw|web>  — OTA update a component
+#   sudo software-update <bootstrap|lamp|lelamp|openclaw|web>  — OTA update a component
 # =============================================================================
 set -euo pipefail
 
@@ -117,7 +117,7 @@ PI_TIMEZONE="America/New_York"
 USERNAME="system"           # Linux user created on the image
 PASSWORD="12345"            # Password for the user
 OUT_IMG_SIZE="8G"           # Output image size (expands to full SD on first boot)
-OTA_METADATA_URL="https://storage.googleapis.com/s3-autonomous-upgrade-3/lumi/ota/metadata.json"
+OTA_METADATA_URL="https://storage.googleapis.com/s3-autonomous-upgrade-3/lamp/ota/metadata.json"
 AP_BAND="${AP_BAND:-2.4}"   # 2.4 or 5 (5 GHz needs supported regulatory domain + chip)
 AP_CHANNEL="${AP_CHANNEL:-}" # default: 6 for 2.4 GHz, 36 for 5 GHz
 COUNTRY_CODE="US"           # Regulatory country code for hostapd
@@ -873,20 +873,20 @@ WantedBy=multi-user.target
 EOF
 systemctl enable bootstrap lamp lumi-lelamp
 
-# software-update: OTA updater for bootstrap, lumi, lelamp, openclaw, and web UI.
-# Usage: software-update <bootstrap|lumi|lelamp|openclaw|web>
+# software-update: OTA updater for bootstrap, lamp, lelamp, openclaw, and web UI.
+# Usage: software-update <bootstrap|lamp|lelamp|openclaw|web>
 # Downloads the binary/zip from OTA metadata URL and hot-swaps it.
 cat > /usr/local/bin/software-update <<'SWUPDATE'
 #!/bin/bash
 set -euo pipefail
-OTA_METADATA_URL="${OTA_METADATA_URL:-https://storage.googleapis.com/s3-autonomous-upgrade-3/lumi/ota/metadata.json}"
+OTA_METADATA_URL="${OTA_METADATA_URL:-https://storage.googleapis.com/s3-autonomous-upgrade-3/lamp/ota/metadata.json}"
 retry() {
   local cmd="\$1" max="\${2:-5}" delay="\${3:-2}" n=0
   until [ "\$n" -ge "\$max" ]; do eval "\$cmd" && return 0; n=\$((n+1)); sleep "\$delay"; done
   echo "ERROR: failed \$max attempts"; return 1
 }
 [ "\$(id -u)" -ne 0 ] && { echo "Run as root."; exit 1; }
-[ \$# -lt 1 ] && { echo "Usage: software-update <bootstrap|lumi|lelamp|openclaw|web>"; exit 1; }
+[ \$# -lt 1 ] && { echo "Usage: software-update <bootstrap|lamp|lelamp|openclaw|web>"; exit 1; }
 
 # Wait for NTP time sync (RPi has no battery-backed RTC; clock may be wrong on boot)
 for i in \$(seq 1 10); do
@@ -895,7 +895,9 @@ for i in \$(seq 1 10); do
   sleep 2
 done
 KIND="\$1"
-case "\$KIND" in bootstrap|lumi|lelamp|openclaw|web) ;; *) echo "Unknown: \$KIND (bootstrap, lumi, lelamp, openclaw, web)"; exit 1 ;; esac
+# Back-compat: \`software-update lumi\` still works during the brand rename window.
+[ "\$KIND" = "lumi" ] && KIND="lamp"
+case "\$KIND" in bootstrap|lamp|lelamp|openclaw|web) ;; *) echo "Unknown: \$KIND (bootstrap, lamp, lelamp, openclaw, web)"; exit 1 ;; esac
 META="\$(mktemp)"
 retry "curl -fsSL -H 'Cache-Control: no-cache' -o '\$META' '\$OTA_METADATA_URL'" 5
 URL=\$(jq -r --arg k "\$KIND" '.[\$k].url // empty' "\$META")
@@ -909,7 +911,7 @@ if [ "\$KIND" = "web" ]; then
   unzip -o -q /tmp/web.zip -d /usr/share/nginx/html/setup
   rm -f /tmp/web.zip
   systemctl reload nginx 2>/dev/null || systemctl restart nginx 2>/dev/null || true
-elif [ "\$KIND" = "lumi" ]; then
+elif [ "\$KIND" = "lamp" ]; then
   Z="\$(mktemp)"; D="\$(mktemp -d)"
   curl -fsSL -o "\$Z" "\$URL"; unzip -o -q "\$Z" -d "\$D"; rm -f "\$Z"
   b=\$(find "\$D" -type f -executable 2>/dev/null | head -1)
@@ -1814,25 +1816,25 @@ echo "[overlay] Fetch OTA metadata"
 META="\$(mktemp)"
 retry "curl -fsSL -H 'Cache-Control: no-cache' -o '\$META' '\$OTA_METADATA_URL'" 5
 WEB_URL=\$(jq -r '.web.url // empty'         "\$META")
-LUMI_URL=\$(jq -r '.lumi.url // empty'       "\$META")
+LAMP_URL=\$(jq -r '.lamp.url // empty'       "\$META")
 BOOTSTRAP_URL=\$(jq -r '.bootstrap.url // empty' "\$META")
 LELAMP_URL=\$(jq -r '.lelamp.url // empty'   "\$META")
 BUDDY_URL=\$(jq -r '."claude-desktop-buddy".url // empty' "\$META")
 WEB_VER=\$(jq -r '.web.version // empty'     "\$META")
-LUMI_VER=\$(jq -r '.lumi.version // empty'   "\$META")
+LAMP_VER=\$(jq -r '.lamp.version // empty'   "\$META")
 BOOTSTRAP_VER=\$(jq -r '.bootstrap.version // empty' "\$META")
 LELAMP_VER=\$(jq -r '.lelamp.version // empty' "\$META")
 BUDDY_VER=\$(jq -r '."claude-desktop-buddy".version // empty' "\$META")
 rm -f "\$META"
-[ -z "\$WEB_URL" ] || [ -z "\$LUMI_URL" ] || [ -z "\$BOOTSTRAP_URL" ] && {
-  echo "ERROR: OTA metadata missing web.url, lumi.url or bootstrap.url"; exit 1
+[ -z "\$WEB_URL" ] || [ -z "\$LAMP_URL" ] || [ -z "\$BOOTSTRAP_URL" ] && {
+  echo "ERROR: OTA metadata missing web.url, lamp.url or bootstrap.url"; exit 1
 }
-echo "[overlay] web=\$WEB_VER lumi=\$LUMI_VER bootstrap=\$BOOTSTRAP_VER lelamp=\$LELAMP_VER buddy=\$BUDDY_VER"
+echo "[overlay] web=\$WEB_VER lamp=\$LAMP_VER bootstrap=\$BOOTSTRAP_VER lelamp=\$LELAMP_VER buddy=\$BUDDY_VER"
 
 # ── stage: backend binaries ──────────────────────────────────────────────────
 echo "[overlay] Install backend binaries"
 install_binary_from_zip "\$BOOTSTRAP_URL" /usr/local/bin/bootstrap-server "bootstrap"
-install_binary_from_zip "\$LUMI_URL"      /usr/local/bin/lamp-server      "lumi"
+install_binary_from_zip "\$LAMP_URL"      /usr/local/bin/lamp-server      "lamp"
 
 # ── stage: LeLamp (Python hardware runtime) ──────────────────────────────────
 echo "[overlay] Install LeLamp"
@@ -2126,4 +2128,4 @@ echo "      sudo fr-rollback              — restore @factory and reboot"
 echo "      sudo device-ap-mode           — switch to hotspot"
 echo "      sudo device-sta-mode          — switch to WiFi client"
 echo "      sudo connect-wifi SSID PASS   — connect to WiFi"
-echo "      sudo software-update <bootstrap|lumi|lelamp|openclaw|web>  — OTA update"
+echo "      sudo software-update <bootstrap|lamp|lelamp|openclaw|web>  — OTA update"

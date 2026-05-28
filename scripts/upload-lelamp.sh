@@ -6,7 +6,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 LELAMP_DIR="${ROOT_DIR}/lelamp"
 VERSION_FILE="${ROOT_DIR}/lelamp/${VERSION_FILE:-VERSION_LELAMP}"
 
-# Bucket and path: lumi/ota/lelamp/[semver].zip
+# Bucket and path: lamp/ota/lelamp/[semver].zip
 GCS_BUCKET="${GCS_BUCKET:-s3-autonomous-upgrade-3}"
 
 # Auto-increment semver (patch) before upload
@@ -25,7 +25,7 @@ fi
 
 ZIP_NAME="lelamp-${new_version}.zip"
 ZIP_PATH="${ROOT_DIR}/${ZIP_NAME}"
-GCS_PATH="${GCS_PATH:-lumi/ota/lelamp/${new_version}.zip}"
+GCS_PATH="${GCS_PATH:-lamp/ota/lelamp/${new_version}.zip}"
 
 if [[ ! -d "$LELAMP_DIR" ]]; then
   echo "Error: lelamp directory not found at $LELAMP_DIR"
@@ -41,8 +41,8 @@ rm -f "$ZIP_PATH"
 echo "========== Upload ${ZIP_NAME} to Google Cloud Storage (no-cache) =========="
 gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" cp "$ZIP_PATH" "gs://${GCS_BUCKET}/${GCS_PATH}"
 
-# Update metadata.json (lumi/ota/metadata.json) - lelamp key
-METADATA_PATH="lumi/ota/metadata.json"
+# Update metadata.json (lamp/ota/metadata.json) - lelamp key
+METADATA_PATH="lamp/ota/metadata.json"
 METADATA_TMP=$(mktemp)
 LELAMP_URL="${LELAMP_URL:-https://storage.googleapis.com/${GCS_BUCKET}/${GCS_PATH}}"
 

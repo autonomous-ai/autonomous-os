@@ -18,7 +18,7 @@ The AI Lamp device runs **5 software components** on a Raspberry Pi 4. All compo
                     ┌──────────────────────────────┐
                     │   OTA Metadata (GCS JSON)     │
                     │                                │
-                    │  lumi:      {version, url}     │
+                    │  lamp:      {version, url}     │
                     │  bootstrap: {version, url}     │
                     │  web:       {version, url}     │
                     │  openclaw:  {version}          │
@@ -47,28 +47,28 @@ The AI Lamp device runs **5 software components** on a Raspberry Pi 4. All compo
 
 Single JSON file hosted on GCS. All components reference this file.
 
-**URL**: `https://storage.googleapis.com/{BUCKET}/lumi/ota/metadata.json`
+**URL**: `https://storage.googleapis.com/{BUCKET}/lamp/ota/metadata.json`
 
 ```json
 {
-  "lumi": {
+  "lamp": {
     "version": "1.2.3",
-    "url": "https://storage.googleapis.com/{BUCKET}/lumi/ota/lumi/1.2.3/lumi-1.2.3.zip"
+    "url": "https://storage.googleapis.com/{BUCKET}/lamp/ota/lamp/1.2.3/lamp-1.2.3.zip"
   },
   "bootstrap": {
     "version": "1.0.5",
-    "url": "https://storage.googleapis.com/{BUCKET}/lumi/ota/bootstrap/1.0.5/bootstrap-1.0.5.zip"
+    "url": "https://storage.googleapis.com/{BUCKET}/lamp/ota/bootstrap/1.0.5/bootstrap-1.0.5.zip"
   },
   "web": {
     "version": "0.9.0",
-    "url": "https://storage.googleapis.com/{BUCKET}/lumi/ota/web/0.9.0/setup-0.9.0.zip"
+    "url": "https://storage.googleapis.com/{BUCKET}/lamp/ota/web/0.9.0/setup-0.9.0.zip"
   },
   "openclaw": {
     "version": "2026.3.8"
   },
   "lelamp": {
     "version": "1.0.0",
-    "url": "https://storage.googleapis.com/{BUCKET}/lumi/ota/lelamp/1.0.0/lelamp-1.0.0.zip"
+    "url": "https://storage.googleapis.com/{BUCKET}/lamp/ota/lelamp/1.0.0/lelamp-1.0.0.zip"
   }
 }
 ```
@@ -77,7 +77,7 @@ Single JSON file hosted on GCS. All components reference this file.
 
 ```go
 const (
-    OTAKeyLumi      = "lumi"
+    OTAKeyLamp      = "lamp"
     OTAKeyBootstrap = "bootstrap"
     OTAKeyWeb       = "web"
     OTAKeyOpenClaw  = "openclaw"
@@ -100,7 +100,7 @@ One-time provisioning script run on a fresh Raspberry Pi. Executes stages sequen
 
 **Quick install from CDN:**
 ```bash
-curl -fsSL https://cdn.autonomous.ai/lumi/install.sh | sudo bash
+curl -fsSL https://cdn.autonomous.ai/lamp/install.sh | sudo bash
 ```
 
 ### Stage Overview
@@ -202,7 +202,7 @@ boot
 ```json
 {
   "httpPort": 8080,
-  "metadata_url": "https://storage.googleapis.com/{BUCKET}/lumi/ota/metadata.json",
+  "metadata_url": "https://storage.googleapis.com/{BUCKET}/lamp/ota/metadata.json",
   "poll_interval": "5m",
   "state_file": "/root/bootstrap/state.json"
 }
@@ -217,7 +217,7 @@ Tracks last known installed version per component:
 ```json
 {
   "components": {
-    "lumi": "1.2.3",
+    "lamp": "1.2.3",
     "bootstrap": "1.0.5",
     "web": "0.9.0",
     "openclaw": "2026.3.8",
@@ -236,7 +236,7 @@ checkLoop():
 
 checkOnce():
   1. Fetch OTA metadata JSON
-  2. For each key [lumi, bootstrap, web, lelamp]:
+  2. For each key [lamp, bootstrap, web, lelamp]:
      → reconcile(key, metadata[key])
   NOTE: OpenClaw OTA is temporarily disabled (reconcileOpenClawFromNpm commented out)
   3. Save state
@@ -265,7 +265,7 @@ Bootstrap uses `lib/lelamp` to show update status on LEDs. See [status-led.md](s
 
 | Component | How to Detect Current Version |
 |---|---|
-| `lumi` | Run `lamp-server --version`, parse output |
+| `lamp` | Run `lamp-server --version`, parse output |
 | `bootstrap` | Compiled-in constant `config.BootstrapVersion` (ldflags) |
 | `web` | Read file `/usr/share/nginx/html/setup/VERSION` |
 | `openclaw` | Run `openclaw --version`, extract semver with regex |
@@ -275,7 +275,7 @@ Bootstrap uses `lib/lelamp` to show update status on LEDs. See [status-led.md](s
 
 | Component | Update Steps |
 |---|---|
-| `lumi` | Run `software-update lumi` (blocks up to 10 min) |
+| `lamp` | Run `software-update lamp` (blocks up to 10 min) |
 | `bootstrap` | Spawn detached `software-update bootstrap` (self-update, survives restart) |
 | `web` | Run `software-update web` |
 | `openclaw` | ~~Run `npm install -g openclaw@{version}` → `systemctl restart openclaw`~~ (temporarily disabled) |
@@ -441,8 +441,8 @@ set -euo pipefail
 
 VERSION_FILE="VERSION_LELAMP"
 BUCKET="s3-autonomous-upgrade-3"
-OTA_PATH="lumi/ota/lelamp"
-METADATA_PATH="lumi/ota/metadata.json"
+OTA_PATH="lamp/ota/lelamp"
+METADATA_PATH="lamp/ota/metadata.json"
 
 # Auto-increment patch version
 CURRENT=$(cat "$VERSION_FILE" 2>/dev/null || echo "0.0.0")
@@ -492,14 +492,14 @@ After component uploads succeed (`make upload-lamp upload-lelamp upload-web ...`
 
 ```bash
 make tag-release v0.0.8
-# → curl https://cdn.autonomous.ai/lumi/ota/metadata.json
+# → curl https://cdn.autonomous.ai/lamp/ota/metadata.json
 # → git tag -a v0.0.8 -F - (annotation = pretty-printed metadata JSON)
 # → git push origin v0.0.8
 ```
 
-Buyers run `lamp-server --version` on the device — value comes from `git describe --tags --always --dirty` at build time (`Makefile:VERSION`), so it resolves to the closest tag. They then open the public repo (`github.com/autonomous-ai/ai-lamp-lumi`), find the matching tag, read the annotation for the exact `lumi`/`lelamp`/`web`/`bootstrap` versions baked at release time, and checkout that commit for corresponding source.
+Buyers run `lamp-server --version` on the device — value comes from `git describe --tags --always --dirty` at build time (`Makefile:VERSION`), so it resolves to the closest tag. They then open the public repo (`github.com/autonomous-ai/ai-lamp-lumi`), find the matching tag, read the annotation for the exact `lamp`/`lelamp`/`web`/`bootstrap` versions baked at release time, and checkout that commit for corresponding source.
 
-Guards in the script: refuses if tag already exists locally or on remote, refuses if metadata fetch fails or JSON is invalid (`set -euo pipefail` + `jq .`). Overrides via env vars: `OTA_METADATA_URL` (default: `https://cdn.autonomous.ai/lumi/ota/metadata.json`), `TAG_REMOTE` (default: `origin`).
+Guards in the script: refuses if tag already exists locally or on remote, refuses if metadata fetch fails or JSON is invalid (`set -euo pipefail` + `jq .`). Overrides via env vars: `OTA_METADATA_URL` (default: `https://cdn.autonomous.ai/lamp/ota/metadata.json`), `TAG_REMOTE` (default: `origin`).
 
 ---
 
@@ -530,8 +530,8 @@ LeLamp version is a plain text `VERSION` file in the package root. Read by boots
 
 | Aspect | Lobster (original) | AI Lamp (this project) |
 |---|---|---|
-| Components | 4 (lumi, bootstrap, web, openclaw) | **5** (+ lelamp) |
-| OTA keys | lumi, bootstrap, web, openclaw | + **lelamp** |
+| Components | 4 (lamp, bootstrap, web, openclaw) | **5** (+ lelamp) |
+| OTA keys | lamp, bootstrap, web, openclaw | + **lelamp** |
 | Setup stages | 7 (stages -1 to 4) | **8** (+ stage 2b: LeLamp) |
 | Systemd services | 4 | **5** (+ lumi-lelamp.service) |
 | Python runtime | None | **LeLamp** at /opt/lelamp/ with venv |

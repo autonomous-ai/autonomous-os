@@ -7,7 +7,7 @@ type OTAComponent struct {
 }
 
 const (
-	OTAKeyLumi      = "lumi"
+	OTAKeyLamp      = "lamp"
 	OTAKeyBootstrap = "bootstrap"
 	OTAKeyOpenClaw  = "openclaw"
 	OTAKeyWeb       = "web"
@@ -20,7 +20,7 @@ const (
 // Example:
 //
 //	{
-//	  "lumi":    {"version":"1.2.3","url":"https://..."},
+//	  "lamp":    {"version":"1.2.3","url":"https://..."},
 //	  "bootstrap": {"version":"2.3.4","url":"https://..."},
 //	  "web":      {"version":"0.9.0","url":"https://..."}
 //	}

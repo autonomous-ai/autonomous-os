@@ -22,7 +22,7 @@ fi
 VERSION="$1"
 
 GCS_BUCKET="${GCS_BUCKET:-s3-autonomous-upgrade-3}"
-METADATA_GCS="gs://${GCS_BUCKET}/lumi/ota/metadata.json"
+METADATA_GCS="gs://${GCS_BUCKET}/lamp/ota/metadata.json"
 
 METADATA_TMP=$(mktemp)
 trap 'rm -f "$METADATA_TMP"' EXIT

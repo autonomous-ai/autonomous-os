@@ -6,7 +6,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 TWITCH_IRC_BIN="${ROOT_DIR}/twitch-chat-hook/twitch-irc"
 VERSION_FILE="${ROOT_DIR}/twitch-chat-hook/${VERSION_FILE:-VERSION_TWITCH_IRC}"
 
-# Bucket and path: lumi/ota/twitch-irc/[semver].zip
+# Bucket and path: lamp/ota/twitch-irc/[semver].zip
 GCS_BUCKET="${GCS_BUCKET:-s3-autonomous-upgrade-3}"
 
 # Auto-increment semver (patch) before build
@@ -25,7 +25,7 @@ fi
 
 ZIP_NAME="twitch-irc-${new_version}.zip"
 ZIP_PATH="${ROOT_DIR}/${ZIP_NAME}"
-GCS_PATH="${GCS_PATH:-lumi/ota/twitch-irc/${new_version}.zip}"
+GCS_PATH="${GCS_PATH:-lamp/ota/twitch-irc/${new_version}.zip}"
 
 echo "========== Build twitch-irc binary (VERSION=${new_version}) =========="
 (cd "$ROOT_DIR" && make twitch-build-irc VERSION="$new_version")
@@ -42,8 +42,8 @@ rm -f "$ZIP_PATH"
 echo "========== Upload ${ZIP_NAME} to Google Cloud Storage (no-cache) =========="
 gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" cp "$ZIP_PATH" "gs://${GCS_BUCKET}/${GCS_PATH}"
 
-# Update metadata.json (lumi/ota/metadata.json) - backend key
-METADATA_PATH="lumi/ota/metadata.json"
+# Update metadata.json (lamp/ota/metadata.json) - backend key
+METADATA_PATH="lamp/ota/metadata.json"
 METADATA_TMP=$(mktemp)
 BACKEND_URL="${BACKEND_URL:-https://storage.googleapis.com/${GCS_BUCKET}/${GCS_PATH}}"
 

@@ -29,7 +29,7 @@ type Config struct {
 func Default() Config {
 	return Config{
 		HttpPort:     8080,
-		MetadataURL:  "https://cdn.autonomous.ai/lumi/ota/metadata.json",
+		MetadataURL:  "https://cdn.autonomous.ai/lamp/ota/metadata.json",
 		PollInterval: "5m",
 		StateFile:    "/root/bootstrap/state.json",
 	}

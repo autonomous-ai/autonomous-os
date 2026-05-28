@@ -1334,7 +1334,7 @@ const softwareUpdateMinInterval = 30 * time.Second
 // POST /api/system/software-update/:target  (target: lumi | web | lelamp)
 func (s *Server) softwareUpdate(c *gin.Context) {
 	target := c.Param("target")
-	allowed := map[string]bool{"lumi": true, "web": true, "lelamp": true}
+	allowed := map[string]bool{"lamp": true, "web": true, "lelamp": true}
 	if !allowed[target] {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError("unknown target: "+target))
 		return

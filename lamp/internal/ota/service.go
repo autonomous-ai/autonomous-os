@@ -157,18 +157,18 @@ func (s *Service) poll() {
 		return
 	}
 
-	lumiMeta := meta[domain.OTAKeyLumi]
+	lampMeta := meta[domain.OTAKeyLamp]
 	openclawMeta := meta[domain.OTAKeyOpenClaw]
 	webMeta := meta[domain.OTAKeyWeb]
 
 	s.mu.Lock()
 	s.metadata = &meta
 	current := config.LumiVersion
-	available := lumiMeta.Version
+	available := lampMeta.Version
 	s.status = Status{
 		CurrentVersion:   current,
 		AvailableVersion: available,
-		UpdateURL:        lumiMeta.URL,
+		UpdateURL:        lampMeta.URL,
 		UpdateAvailable:  available != "" && available != current,
 		OpenClaw:         openclawMeta,
 		Web:              webMeta,
