@@ -103,7 +103,7 @@ DEFAULT_USER = os.environ.get("LELAMP_DEFAULT_USER", "unknown")
 
 # --- OpenClaw workspace ---
 
-_DEFAULT_AGENT_NAME = "lumi"
+_DEFAULT_AGENT_NAME = "lamp"
 _OPENCLAW_WORKSPACE = os.environ.get("OPENCLAW_WORKSPACE", "/root/.openclaw/workspace")
 
 
@@ -528,7 +528,7 @@ def _auto_camera_on(reason: str) -> bool:
 
 
 def _read_agent_name(lumi_cfg: dict) -> str:
-    """Read agent name from IDENTITY.md. Falls back to default 'lumi'."""
+    """Read agent name from IDENTITY.md. Falls back to default 'lamp'."""
     identity_path = os.path.join(_OPENCLAW_WORKSPACE, "IDENTITY.md")
     try:
         with open(identity_path) as f:
