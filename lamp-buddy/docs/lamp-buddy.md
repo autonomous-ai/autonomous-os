@@ -62,7 +62,7 @@ Out-of-scope MVP examples (defer to vision phase):
 │  │  lelamp (Py)    │    │         │  │  │ Pairing & WS   │  │  │
 │  │    └─ STT/TTS   │    │ ◀──WS───┼──┼──┤ client         │  │  │
 │  │                 │    │         │  │  └────────────────┘  │  │
-│  │  lumi (Go)      │    │         │  │  ┌────────────────┐  │  │
+│  │  lamp (Go)      │    │         │  │  ┌────────────────┐  │  │
 │  │    ├─ OpenClaw  │    │         │  │  │ Executors      │  │  │
 │  │    │   └─ skill │    │         │  │  │  NSWorkspace   │  │  │
 │  │    │   "compu-  │    │         │  │  │  CGEvent       │  │  │
@@ -124,7 +124,7 @@ Out-of-scope MVP examples (defer to vision phase):
 - Local audit log (file in `~/Library/Application Support/LampBuddy/audit.log`) — also pushed to lamp opportunistically
 - OSLog (unified logging) for diagnostics
 
-### 4.2 `lumi` Go server — new package `internal/buddy/`
+### 4.2 `lamp` Go server — new package `internal/buddy/`
 
 | File | Responsibility |
 |------|----------------|
@@ -162,7 +162,7 @@ Hardware-only per `feedback_lelamp_external.md`. STT → OpenClaw, OpenClaw → 
 - Skill script (or LLM tool-call) constructs the command and `curl`s `http://localhost:5000/api/buddy/command` with internal auth header
 - Returns TTS-friendly result string ("đã mở Chrome rồi", "không tìm thấy máy tính đã pair", etc.)
 
-### 4.5 Web UI (`lumi/web/`)
+### 4.5 Web UI (`lamp/web/`)
 
 New page `Paired Computers`:
 - List paired buddies (name, OS, last seen, status)
@@ -223,7 +223,7 @@ Reserved for later (defined but not implemented MVP):
 
 ### Discovery (each buddy startup)
 
-- Buddy browses `_lumi._tcp.local` via `NWBrowser`
+- Buddy browses `_lamp._tcp.local` via `NWBrowser`
 - For each found service, resolve hostname → store in candidate list
 - MVP: assume single lamp on LAN → auto-pick the first
 - Fallback: manual hostname entry (`lamp-xxxx.local`) in menu
@@ -327,7 +327,7 @@ Reserved for later (defined but not implemented MVP):
 | Logging | **OSLog (unified)** | Native, viewable in Console.app |
 | Test framework | **XCTest** | Standard |
 | Go side | **Existing patterns** (Gin, Wire, internal/) | Follow `internal/openclaw/`, `server/<domain>/delivery/http/` |
-| Lumi-buddy folder location | **Repo root** alongside `lumi/`, `lelamp/` | Self-contained, can be built independently |
+| Lamp-buddy folder location | **Repo root** alongside `lamp/`, `lelamp/` | Self-contained, can be built independently |
 
 ---
 
@@ -345,12 +345,12 @@ Reserved for later (defined but not implemented MVP):
 
 **1. Use existing protocol (VNC, RustDesk, TeamViewer)**
 - Pro: zero implementation
-- Con: those are human-controller-focused, not AI/tool-API-friendly. Lumi would still need to "see screen + click/type" through them, which is essentially building a TeamViewer client inside Lumi.
+- Con: those are human-controller-focused, not AI/tool-API-friendly. Lamp would still need to "see screen + click/type" through them, which is essentially building a TeamViewer client inside Lamp.
 - **Rejected.**
 
 **2. macOS built-in Screen Sharing / VNC**
 - Pro: zero install on Mac
-- Con: same as above — designed for human controller. Adding Lumi vision-action loop on top is awkward.
+- Con: same as above — designed for human controller. Adding Lamp vision-action loop on top is awkward.
 - **Rejected for MVP.**
 
 **3. Custom Mac Companion (chosen)**
@@ -392,12 +392,12 @@ Mac-only MVP → **Swift native**. Tauri/Rust deferred until Windows/Linux phase
 
 **No code signing** — user does right-click → Open on first launch. Apple Developer account ($99/year) deferred until v2.0.
 
-### Decision on `lelamp` and `lumi` Go
+### Decision on `lelamp` and `lamp` Go
 
 - `lelamp` (Python) — **no changes**. Hardware-only.
-- `lumi` (Go) — **new package** `internal/buddy/`, new HTTP routes, new WS gateway.
+- `lamp` (Go) — **new package** `internal/buddy/`, new HTTP routes, new WS gateway.
 - `OpenClaw` — new skill `computer-use`.
-- `lumi/web` — new "Paired Computers" page.
+- `lamp/web` — new "Paired Computers" page.
 - `CLAUDE.md` — new doc row.
 
 ---

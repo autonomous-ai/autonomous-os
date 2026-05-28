@@ -62,7 +62,7 @@ Use case MVP KHÔNG hỗ trợ (chờ phase vision):
 │  │  lelamp (Py)    │    │         │  │  │ Pairing & WS   │  │  │
 │  │    └─ STT/TTS   │    │ ◀──WS───┼──┼──┤ client         │  │  │
 │  │                 │    │         │  │  └────────────────┘  │  │
-│  │  lumi (Go)      │    │         │  │  ┌────────────────┐  │  │
+│  │  lamp (Go)      │    │         │  │  ┌────────────────┐  │  │
 │  │    ├─ OpenClaw  │    │         │  │  │ Executors      │  │  │
 │  │    │   └─ skill │    │         │  │  │  NSWorkspace   │  │  │
 │  │    │   "compu-  │    │         │  │  │  CGEvent       │  │  │
@@ -124,7 +124,7 @@ Use case MVP KHÔNG hỗ trợ (chờ phase vision):
 - Audit log local (`~/Library/Application Support/LampBuddy/audit.log`) — đồng thời push lên lamp khi có thể
 - OSLog (unified logging) cho debug
 
-### 4.2 `lumi` Go server — package mới `internal/buddy/`
+### 4.2 `lamp` Go server — package mới `internal/buddy/`
 
 | File | Trách nhiệm |
 |------|-------------|
@@ -162,7 +162,7 @@ Hardware-only theo `feedback_lelamp_external.md`. STT → OpenClaw, OpenClaw →
 - Skill script (hoặc tool-call LLM) build command rồi `curl` `http://localhost:5000/api/buddy/command` với internal auth header
 - Trả về kết quả TTS-friendly ("đã mở Chrome rồi", "không tìm thấy máy tính đã pair", …)
 
-### 4.5 Web UI (`lumi/web/`)
+### 4.5 Web UI (`lamp/web/`)
 
 Page mới `Paired Computers`:
 - Liệt kê buddy đã pair (tên, OS, last seen, status)
@@ -223,7 +223,7 @@ Page mới `Paired Computers`:
 
 ### Discovery (mỗi lần buddy khởi động)
 
-- Buddy duyệt `_lumi._tcp.local` qua `NWBrowser`
+- Buddy duyệt `_lamp._tcp.local` qua `NWBrowser`
 - Mỗi service tìm thấy: resolve hostname → lưu vào danh sách
 - MVP: giả định chỉ có 1 lamp trên LAN → auto chọn cái đầu
 - Fallback: nhập hostname thủ công (`lamp-xxxx.local`) trong menu
@@ -327,7 +327,7 @@ Page mới `Paired Computers`:
 | Logging | **OSLog (unified)** | Native, xem được trong Console.app |
 | Test framework | **XCTest** | Chuẩn |
 | Go side | **Pattern hiện có** (Gin, Wire, internal/) | Theo `internal/openclaw/`, `server/<domain>/delivery/http/` |
-| Vị trí folder lamp-buddy | **Root repo** cạnh `lumi/`, `lelamp/` | Self-contained, build độc lập |
+| Vị trí folder lamp-buddy | **Root repo** cạnh `lamp/`, `lelamp/` | Self-contained, build độc lập |
 
 ---
 
@@ -345,12 +345,12 @@ Page mới `Paired Computers`:
 
 **1. Dùng protocol có sẵn (VNC, RustDesk, TeamViewer)**
 - Pro: không phải code
-- Con: các app này hướng đến controller là người, không phải AI/tool-API. Lumi vẫn phải "nhìn màn hình + click/type" qua chúng → tương đương build TeamViewer client trong Lumi.
+- Con: các app này hướng đến controller là người, không phải AI/tool-API. Lamp vẫn phải "nhìn màn hình + click/type" qua chúng → tương đương build TeamViewer client trong Lamp.
 - **Bỏ.**
 
 **2. Screen Sharing / VNC built-in của macOS**
 - Pro: không cần cài thêm gì trên Mac
-- Con: giống trên — thiết kế cho controller là người. Gắn vision-action loop của Lumi lên trên rất gượng.
+- Con: giống trên — thiết kế cho controller là người. Gắn vision-action loop của Lamp lên trên rất gượng.
 - **Bỏ cho MVP.**
 
 **3. Mac Companion riêng (chọn)**
@@ -392,12 +392,12 @@ Mac-only MVP → **Swift native**. Tauri/Rust để phase Windows/Linux. Flutter
 
 **Không sign** — user right-click → Open ở lần chạy đầu. Apple Developer account ($99/năm) để v2.0.
 
-### Quyết định với `lelamp` và `lumi` Go
+### Quyết định với `lelamp` và `lamp` Go
 
 - `lelamp` (Python) — **không sửa**. Chỉ hardware.
-- `lumi` (Go) — **package mới** `internal/buddy/`, route HTTP mới, WS gateway mới.
+- `lamp` (Go) — **package mới** `internal/buddy/`, route HTTP mới, WS gateway mới.
 - `OpenClaw` — skill mới `computer-use`.
-- `lumi/web` — page mới "Paired Computers".
+- `lamp/web` — page mới "Paired Computers".
 - `CLAUDE.md` — thêm row docs.
 
 ---
