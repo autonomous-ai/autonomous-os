@@ -1,11 +1,11 @@
-# Lumi Buddy — Remote Computer Use for Lumi Lamp
+# Lamp Buddy — Remote Computer Use for Lamp
 
 > **Status:** Design — MVP scoping in progress
 > **Last updated:** 2026-05-21
 > **Owner:** Leo
-> **Related:** [Lumi Buddy MVP plan](./lumi-buddy-mvp.md)
+> **Related:** [Lamp Buddy MVP plan](./lumi-buddy-mvp.md)
 
-This document captures the full design discussion behind the **Lumi Buddy** feature: a native companion app on the user's computer that lets the Lumi lamp control the desktop (open apps, navigate browser, type, etc.) — TeamViewer-style but driven by voice/AI through the lamp.
+This document captures the full design discussion behind the **Lamp Buddy** feature: a native companion app on the user's computer that lets the Lamp control the desktop (open apps, navigate browser, type, etc.) — TeamViewer-style but driven by voice/AI through the lamp.
 
 The MVP-only implementation plan lives in [`lumi-buddy-mvp.md`](./lumi-buddy-mvp.md). This doc is the long-form reference for *why* the architecture is what it is.
 
@@ -14,7 +14,7 @@ The MVP-only implementation plan lives in [`lumi-buddy-mvp.md`](./lumi-buddy-mvp
 ## 1. Goals & non-goals
 
 ### Goals
-- Lumi lamp can drive a user's computer via voice commands ("open Chrome", "go to Gmail", "join Google Meet", "type X", "close Slack")
+- Lamp can drive a user's computer via voice commands ("open Chrome", "go to Gmail", "join Google Meet", "type X", "close Slack")
 - Works across any macOS app (not just browser)
 - LAN-only, pairing-based — no relay server, no cloud middleman
 - Mac-first MVP; Windows/Linux deferred to v1.2+
@@ -57,7 +57,7 @@ Out-of-scope MVP examples (defer to vision phase):
 │    │ voice              │         │  ┌──────────────────────┐  │
 │    ▼                    │         │  │ lumi-buddy.app       │  │
 │  ┌─────────────────┐    │         │  │ (Swift, menu bar)    │  │
-│  │ Lumi Lamp (Pi)  │    │         │  │                      │  │
+│  │ Lamp (Pi)       │    │         │  │                      │  │
 │  │                 │    │         │  │  ┌────────────────┐  │  │
 │  │  lelamp (Py)    │    │         │  │  │ Pairing & WS   │  │  │
 │  │    └─ STT/TTS   │    │ ◀──WS───┼──┼──┤ client         │  │  │
@@ -71,7 +71,7 @@ Out-of-scope MVP examples (defer to vision phase):
 │  └─────────────────┘    │         │  └──────────────────────┘  │
 │         ▲               │         │            │               │
 │         │ mDNS          │         │            ▼               │
-│         │ lumi-xxxx     │         │   macOS apps (Chrome,      │
+│         │ lamp-xxxx     │         │   macOS apps (Chrome,      │
 │         │ .local        │         │   Finder, Spotify, …)      │
 └─────────────────────────┘         └────────────────────────────┘
 ```
@@ -81,10 +81,10 @@ Out-of-scope MVP examples (defer to vision phase):
 1. User speaks: "Mở Chrome trên máy tính và vào Gmail"
 2. Mic on lelamp → STT
 3. Transcript → OpenClaw → matches skill `computer-use`
-4. Skill parses to commands and calls Lumi Go:
+4. Skill parses to commands and calls Lamp Go:
    `POST /api/buddy/command {action:"open_app", params:{app:"Google Chrome"}}`
    `POST /api/buddy/command {action:"open_url", params:{url:"https://gmail.com"}}`
-5. Lumi Go's buddy dispatcher looks up the paired buddy in the WS registry, forwards command over the open WS
+5. Lamp Go's buddy dispatcher looks up the paired buddy in the WS registry, forwards command over the open WS
 6. lumi-buddy decodes JSON, dispatches to executor (NSWorkspace, CGEvent, etc.), executes
 7. Buddy returns `{ok:true}` over the same WS
 8. Skill receives result, returns TTS-friendly confirmation
@@ -95,7 +95,7 @@ Out-of-scope MVP examples (defer to vision phase):
 **Buddy is the WS client. Lamp is the WS server.** Reasons:
 
 - Buddy does not need to open any port. The Mac firewall stays untouched. Lower attack surface.
-- Lamp already has a stable mDNS hostname (`lumi-xxxx.local`) per `project_mdns_hostname.md`. Buddy resolves and connects.
+- Lamp already has a stable mDNS hostname (`lamp-xxxx.local`) per `project_mdns_hostname.md`. Buddy resolves and connects.
 - Single persistent WS → command latency = 1 round-trip (no TCP/TLS cold-start per command).
 - Reconnect logic lives in buddy (simpler — buddy can detect lamp reboots and re-connect after).
 
@@ -121,7 +121,7 @@ Out-of-scope MVP examples (defer to vision phase):
   - **AppleScript / OSAScript** for "close app" and limited whitelisted scripts
   - **UNUserNotificationCenter** for desktop notifications
 - Permission helpers (Accessibility prompt, Automation per-app prompts)
-- Local audit log (file in `~/Library/Application Support/LumiBuddy/audit.log`) — also pushed to lamp opportunistically
+- Local audit log (file in `~/Library/Application Support/LampBuddy/audit.log`) — also pushed to lamp opportunistically
 - OSLog (unified logging) for diagnostics
 
 ### 4.2 `lumi` Go server — new package `internal/buddy/`
@@ -226,18 +226,18 @@ Reserved for later (defined but not implemented MVP):
 - Buddy browses `_lumi._tcp.local` via `NWBrowser`
 - For each found service, resolve hostname → store in candidate list
 - MVP: assume single lamp on LAN → auto-pick the first
-- Fallback: manual hostname entry (`lumi-xxxx.local`) in menu
+- Fallback: manual hostname entry (`lamp-xxxx.local`) in menu
 
 ### Pairing (one-time)
 
-1. User opens buddy menu → "Pair with Lumi" → buddy hits lamp `POST /api/buddy/pair/start` (anonymous; rate-limited)
+1. User opens buddy menu → "Pair with Lamp" → buddy hits lamp `POST /api/buddy/pair/start` (anonymous; rate-limited)
 2. Lamp generates 6-digit code, displays in web UI on `/devices` (or wherever); also returns the code in the start response so buddy can guide user
 3. Lamp keeps code in memory for 60s
 4. User reads the code from lamp web UI / display
 5. User types code into buddy
 6. Buddy calls `POST /api/buddy/pair/confirm {code, name, fingerprint, os_version}`
 7. Lamp validates code, generates long-lived bearer token, persists `{token, fingerprint, name, created_at}` in `buddies.json`
-8. Buddy stores token in macOS Keychain (service `network.autonomous.ai.lumi-buddy`)
+8. Buddy stores token in macOS Keychain (service `network.autonomous.ai.lamp-buddy`)
 9. Buddy opens WS with `Authorization: Bearer <token>`
 
 ### Reconnect
@@ -260,7 +260,7 @@ Reserved for later (defined but not implemented MVP):
 | Audit log | Every command logged (timestamp, action, params hash, source). Local file + push to lamp `/api/buddy/audit`. |
 | Kill switch | "Pause" in menu = drop WS but keep token. "Revoke pairing" = drop token + tell lamp to remove. |
 | Permission gating | Commands fail clean with descriptive error if macOS permission denied (no silent failures). |
-| Blast radius | **Documented explicitly to user**: Lumi gets the same access level as the user account on the Mac. Trust ask is the central UX concern. |
+| Blast radius | **Documented explicitly to user**: Lamp gets the same access level as the user account on the Mac. Trust ask is the central UX concern. |
 | Rate limiting | Lamp side: max N commands/sec/buddy. Prevents runaway loops. |
 
 ### Threats considered
@@ -404,7 +404,7 @@ Mac-only MVP → **Swift native**. Tauri/Rust deferred until Windows/Linux phase
 
 ## 13. References
 
-- `project_mdns_hostname.md` — lamp publishes `lumi-<last4hex>.local`
+- `project_mdns_hostname.md` — lamp publishes `lamp-<last4hex>.local`
 - `feedback_lelamp_external.md` — hardware code lives in Python, not Go
 - `project_security_login_ui_batch.md` — recent security audit closed; cookie HMAC + bcrypt admin patterns to reuse for buddy auth
 - [Anthropic Computer Use docs](https://docs.anthropic.com/en/docs/build-with-claude/computer-use) — for vision phase v1.1

@@ -1,11 +1,11 @@
-# Lumi Buddy — release signing & notarization
+# Lamp Buddy — release signing & notarization
 
 This is the handover doc for whoever owns the Apple Developer enrolment. Once the one-time setup is done, every release boils down to:
 
 ```bash
 cd lumi-buddy
 export DEV_ID_APP="Developer ID Application: <Your Org> (<TEAMID>)"
-export NOTARY_PROFILE=lumi-notary
+export NOTARY_PROFILE=lamp-notary
 make dmg-signed
 ```
 
@@ -62,23 +62,23 @@ Look for `Developer ID Application: <Your Org> (<TEAMID>)` in the output. The fu
 
 Notarization runs against an Apple-issued **app-specific password**, not your iCloud password. Create one once:
 
-1. `https://account.apple.com/account/manage` → Sign-In and Security → **App-Specific Passwords** → Generate (label it `lumi-buddy-notary` or similar).
+1. `https://account.apple.com/account/manage` → Sign-In and Security → **App-Specific Passwords** → Generate (label it `lamp-buddy-notary` or similar).
 2. Copy the password (format `xxxx-xxxx-xxxx-xxxx`).
 3. Store the credential trio (Apple ID, Team ID, app-specific password) in the macOS Keychain so `notarytool` can pull it without prompts:
 
 ```bash
-xcrun notarytool store-credentials lumi-notary \
+xcrun notarytool store-credentials lamp-notary \
   --apple-id "your-apple-id@example.com" \
   --team-id "ABCDE12345" \
   --password "xxxx-xxxx-xxxx-xxxx"
 ```
 
-`lumi-notary` is the profile alias — pass it as `NOTARY_PROFILE` to `make`. You can pick any name; just stay consistent.
+`lamp-notary` is the profile alias — pass it as `NOTARY_PROFILE` to `make`. You can pick any name; just stay consistent.
 
 Smoke test:
 
 ```bash
-xcrun notarytool history --keychain-profile lumi-notary
+xcrun notarytool history --keychain-profile lamp-notary
 ```
 
 Empty history is fine — it means auth works.
@@ -90,7 +90,7 @@ cd lumi-buddy
 
 # Persist these in your shell rc once, or export per session.
 export DEV_ID_APP="Developer ID Application: Autonomous Inc (ABCDE12345)"
-export NOTARY_PROFILE=lumi-notary
+export NOTARY_PROFILE=lamp-notary
 
 # Optional: bump VERSION in the Makefile if this is a new release.
 
@@ -143,7 +143,7 @@ All four should pass before you upload anywhere.
 **Notarization status `Invalid` with log mentioning `disallowed-entitlement`.** You're using an entitlement Apple doesn't allow for Developer ID distribution. Buddy currently doesn't set entitlements, so this should not happen. If it does, fetch the full log:
 
 ```bash
-xcrun notarytool log <submission-id> --keychain-profile lumi-notary
+xcrun notarytool log <submission-id> --keychain-profile lamp-notary
 ```
 
 …and check which entitlement was rejected.

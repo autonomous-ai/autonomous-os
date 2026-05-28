@@ -1,8 +1,8 @@
 # mock-lamp
 
-Tiny Go server that mocks the Lumi lamp's buddy contract. Use it to test the macOS `lumi-buddy` app end-to-end **without** running the real lumi Go server.
+Tiny Go server that mocks the Lamp's buddy contract. Use it to test the macOS `lumi-buddy` app end-to-end **without** running the real Lamp Go server.
 
-It doubles as a **reference implementation** for the eventual lumi-side work: the file structure, types, and dispatch loop here mirror what `lumi/internal/buddy/` and `lumi/server/buddy/delivery/http/` will end up looking like.
+It doubles as a **reference implementation** for the eventual Lamp-side work: the file structure, types, and dispatch loop here mirror what `lumi/internal/buddy/` and `lumi/server/buddy/delivery/http/` will end up looking like.
 
 ## Run
 
@@ -18,7 +18,7 @@ The server listens on `127.0.0.1:8765` and prints a 6-digit code:
 
 ```
 [mock-lamp] listening on http://127.0.0.1:8765
-[hint] In Lumi Buddy: menu → 'Pair with Lumi…' → host: localhost:8765 + code below
+[hint] In Lamp Buddy: menu → 'Pair with Lamp…' → host: localhost:8765 + code below
 
 ┌─────────────────────────────────────────────┐
 │  Pairing code:  123456                      │
@@ -34,7 +34,7 @@ In another terminal:
 make run
 ```
 
-Click the 💡 in the menu bar → **Pair with Lumi…** → type:
+Click the 💡 in the menu bar → **Pair with Lamp…** → type:
 - Host: `localhost:8765`
 - Code: the 6-digit number from mock terminal
 
@@ -57,7 +57,7 @@ In the mock terminal, type a command and press enter:
 > open_app Calculator
   ✓ map[bundle_id:com.apple.calculator pid:12345]  (320ms)
 
-> type_text hello from lumi
+> type_text hello from lamp
   ✓ map[typed_chars:15]  (245ms)
   (needs Accessibility permission — grant on first try, then re-run)
 
@@ -79,7 +79,7 @@ In the mock terminal, type a command and press enter:
 | `status` | show pairing/ws state | — |
 | `help` / `quit` | | — |
 
-## File layout (= reference for production lumi side)
+## File layout (= reference for production Lamp side)
 
 ```
 mock-lamp/
@@ -91,7 +91,7 @@ mock-lamp/
 └── repl.go      # interactive command sender
 ```
 
-When the real lumi-side work happens, expect roughly:
+When the real Lamp-side work happens, expect roughly:
 
 - `lumi/server/buddy/delivery/http/handler_pair.go` ← `pairing.go`
 - `lumi/server/buddy/delivery/http/handler_ws.go` ← `ws.go` (HandleWS only)

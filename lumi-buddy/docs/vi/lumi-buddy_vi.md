@@ -1,11 +1,11 @@
-# Lumi Buddy — Remote Computer Use cho Lumi Lamp
+# Lamp Buddy — Remote Computer Use cho Lamp
 
 > **Trạng thái:** Đang thiết kế — đang scope MVP
 > **Cập nhật:** 2026-05-21
 > **Owner:** Leo
-> **Liên quan:** [Kế hoạch MVP Lumi Buddy](./lumi-buddy-mvp_vi.md)
+> **Liên quan:** [Kế hoạch MVP Lamp Buddy](./lumi-buddy-mvp_vi.md)
 
-Tài liệu này lưu lại toàn bộ thảo luận thiết kế tính năng **Lumi Buddy**: một app native chạy thường trú trên máy tính người dùng, cho phép Lumi lamp điều khiển desktop (mở app, vào web, gõ text, …) — kiểu TeamViewer nhưng được điều khiển bằng giọng nói/AI thông qua đèn.
+Tài liệu này lưu lại toàn bộ thảo luận thiết kế tính năng **Lamp Buddy**: một app native chạy thường trú trên máy tính người dùng, cho phép Lamp điều khiển desktop (mở app, vào web, gõ text, …) — kiểu TeamViewer nhưng được điều khiển bằng giọng nói/AI thông qua đèn.
 
 Kế hoạch implement MVP nằm ở [`lumi-buddy-mvp_vi.md`](./lumi-buddy-mvp_vi.md). Doc này là tham chiếu dài về *lý do tại sao* kiến trúc lại như vậy.
 
@@ -14,7 +14,7 @@ Kế hoạch implement MVP nằm ở [`lumi-buddy-mvp_vi.md`](./lumi-buddy-mvp_v
 ## 1. Mục tiêu & không phải mục tiêu
 
 ### Mục tiêu
-- Lumi lamp điều khiển được máy tính qua voice ("mở Chrome", "vào Gmail", "join Google Meet", "gõ X", "đóng Slack")
+- Lamp điều khiển được máy tính qua voice ("mở Chrome", "vào Gmail", "join Google Meet", "gõ X", "đóng Slack")
 - Hoạt động với mọi app macOS (không chỉ browser)
 - LAN-only, dựa trên pairing — không qua relay server, không qua cloud
 - Mac-first cho MVP; Windows/Linux để v1.2+
@@ -57,7 +57,7 @@ Use case MVP KHÔNG hỗ trợ (chờ phase vision):
 │    │ voice              │         │  ┌──────────────────────┐  │
 │    ▼                    │         │  │ lumi-buddy.app       │  │
 │  ┌─────────────────┐    │         │  │ (Swift, menu bar)    │  │
-│  │ Lumi Lamp (Pi)  │    │         │  │                      │  │
+│  │ Lamp (Pi)       │    │         │  │                      │  │
 │  │                 │    │         │  │  ┌────────────────┐  │  │
 │  │  lelamp (Py)    │    │         │  │  │ Pairing & WS   │  │  │
 │  │    └─ STT/TTS   │    │ ◀──WS───┼──┼──┤ client         │  │  │
@@ -71,7 +71,7 @@ Use case MVP KHÔNG hỗ trợ (chờ phase vision):
 │  └─────────────────┘    │         │  └──────────────────────┘  │
 │         ▲               │         │            │               │
 │         │ mDNS          │         │            ▼               │
-│         │ lumi-xxxx     │         │   App macOS (Chrome,       │
+│         │ lamp-xxxx     │         │   App macOS (Chrome,       │
 │         │ .local        │         │   Finder, Spotify, …)      │
 └─────────────────────────┘         └────────────────────────────┘
 ```
@@ -81,10 +81,10 @@ Use case MVP KHÔNG hỗ trợ (chờ phase vision):
 1. User nói: "Mở Chrome trên máy tính và vào Gmail"
 2. Mic ở lelamp → STT
 3. Transcript → OpenClaw → match skill `computer-use`
-4. Skill parse thành command, gọi Lumi Go:
+4. Skill parse thành command, gọi Lamp Go:
    `POST /api/buddy/command {action:"open_app", params:{app:"Google Chrome"}}`
    `POST /api/buddy/command {action:"open_url", params:{url:"https://gmail.com"}}`
-5. Buddy dispatcher của Lumi Go tra cứu buddy đã pair trong registry WS, gửi command qua WS đang mở
+5. Buddy dispatcher của Lamp Go tra cứu buddy đã pair trong registry WS, gửi command qua WS đang mở
 6. lumi-buddy decode JSON, dispatch cho executor (NSWorkspace, CGEvent, …), thực thi
 7. Buddy trả về `{ok:true}` qua cùng WS
 8. Skill nhận kết quả, trả về câu confirm TTS-friendly
@@ -95,7 +95,7 @@ Use case MVP KHÔNG hỗ trợ (chờ phase vision):
 **Buddy là WS client. Lamp là WS server.** Lý do:
 
 - Buddy không cần mở port nào. Firewall Mac không bị động chạm. Attack surface thấp.
-- Lamp đã có hostname mDNS ổn định (`lumi-xxxx.local`) theo `project_mdns_hostname.md`. Buddy resolve và connect.
+- Lamp đã có hostname mDNS ổn định (`lamp-xxxx.local`) theo `project_mdns_hostname.md`. Buddy resolve và connect.
 - WS persistent duy nhất → latency command = 1 round-trip (không có cold-start TCP/TLS mỗi command).
 - Logic reconnect nằm ở buddy (đơn giản — buddy phát hiện lamp reboot và auto reconnect).
 
@@ -121,7 +121,7 @@ Use case MVP KHÔNG hỗ trợ (chờ phase vision):
   - **AppleScript / OSAScript** cho "close app" và vài script trắng-list
   - **UNUserNotificationCenter** cho notification desktop
 - Helper permission (prompt Accessibility, Automation per-app)
-- Audit log local (`~/Library/Application Support/LumiBuddy/audit.log`) — đồng thời push lên lamp khi có thể
+- Audit log local (`~/Library/Application Support/LampBuddy/audit.log`) — đồng thời push lên lamp khi có thể
 - OSLog (unified logging) cho debug
 
 ### 4.2 `lumi` Go server — package mới `internal/buddy/`
@@ -226,18 +226,18 @@ Page mới `Paired Computers`:
 - Buddy duyệt `_lumi._tcp.local` qua `NWBrowser`
 - Mỗi service tìm thấy: resolve hostname → lưu vào danh sách
 - MVP: giả định chỉ có 1 lamp trên LAN → auto chọn cái đầu
-- Fallback: nhập hostname thủ công (`lumi-xxxx.local`) trong menu
+- Fallback: nhập hostname thủ công (`lamp-xxxx.local`) trong menu
 
 ### Pairing (1 lần)
 
-1. User mở menu buddy → "Pair with Lumi" → buddy gọi lamp `POST /api/buddy/pair/start` (anonymous; rate-limited)
+1. User mở menu buddy → "Pair with Lamp" → buddy gọi lamp `POST /api/buddy/pair/start` (anonymous; rate-limited)
 2. Lamp sinh code 6-digit, hiện trong web UI `/devices` (hoặc nơi nào đó); cũng trả code trong response để buddy có thể hướng dẫn
 3. Lamp giữ code trong RAM 60s
 4. User đọc code từ web UI lamp / display
 5. User nhập code vào buddy
 6. Buddy gọi `POST /api/buddy/pair/confirm {code, name, fingerprint, os_version}`
 7. Lamp validate code, sinh bearer token long-lived, lưu `{token, fingerprint, name, created_at}` vào `buddies.json`
-8. Buddy lưu token vào macOS Keychain (service `network.autonomous.ai.lumi-buddy`)
+8. Buddy lưu token vào macOS Keychain (service `network.autonomous.ai.lamp-buddy`)
 9. Buddy mở WS với `Authorization: Bearer <token>`
 
 ### Reconnect
@@ -260,7 +260,7 @@ Page mới `Paired Computers`:
 | Audit log | Mọi command đều log (timestamp, action, hash params, source). File local + push lên lamp `/api/buddy/audit`. |
 | Kill switch | "Pause" trên menu = drop WS giữ token. "Revoke pairing" = drop token + bảo lamp xóa. |
 | Permission gating | Command fail clean với error rõ ràng nếu permission macOS bị deny (không silent fail). |
-| Blast radius | **Document rõ với user**: Lumi có quyền tương đương account user trên Mac. Trust ask là vấn đề UX trung tâm. |
+| Blast radius | **Document rõ với user**: Lamp có quyền tương đương account user trên Mac. Trust ask là vấn đề UX trung tâm. |
 | Rate limit | Lamp side: max N command/sec/buddy. Tránh runaway loop. |
 
 ### Threat đã cân nhắc
@@ -404,7 +404,7 @@ Mac-only MVP → **Swift native**. Tauri/Rust để phase Windows/Linux. Flutter
 
 ## 13. Tham chiếu
 
-- `project_mdns_hostname.md` — lamp publish `lumi-<last4hex>.local`
+- `project_mdns_hostname.md` — lamp publish `lamp-<last4hex>.local`
 - `feedback_lelamp_external.md` — hardware code ở Python, không phải Go
 - `project_security_login_ui_batch.md` — security audit mới đóng; pattern cookie HMAC + bcrypt admin có thể reuse cho auth buddy
 - [Tài liệu Anthropic Computer Use](https://docs.anthropic.com/en/docs/build-with-claude/computer-use) — cho phase vision v1.1

@@ -1,6 +1,6 @@
-# Lumi Buddy
+# Lamp Buddy
 
-Native companion apps that let a Lumi lamp control your computer via voice (open apps, navigate browser, type, etc.) — TeamViewer-style remote control, but driven by AI through the lamp.
+Native companion apps that let a Lamp control your computer via voice (open apps, navigate browser, type, etc.) — TeamViewer-style remote control, but driven by AI through the lamp.
 
 **Status:** Phase 1A — Mac-only scaffold. Menu bar shell that runs but does no networking yet.
 
@@ -36,7 +36,7 @@ make install    # copy bundled .app to /Applications
 make audit      # tail the audit log
 make kill       # stop any running LumiBuddy
 make clean      # remove all build artifacts
-make mock       # run mock-lamp (Go) — test buddy without real lumi side
+make mock       # run mock-lamp (Go) — test buddy without real Lamp side
 ```
 
 Behind the scenes `make run` calls `swift run` inside `macos/`. Use it if you don't want to remember the SPM commands.
@@ -53,7 +53,7 @@ Apple Developer signing + notarization comes in v2.0.
 
 ## Testing end-to-end with mock-lamp
 
-Until the real lumi Go side lands, you can drive the buddy from a tiny Go mock server. See [`mock-lamp/README.md`](mock-lamp/README.md). Two terminals:
+Until the real Lamp Go side lands, you can drive the buddy from a tiny Go mock server. See [`mock-lamp/README.md`](mock-lamp/README.md). Two terminals:
 
 ```bash
 # Terminal 1
@@ -63,7 +63,7 @@ make run        # buddy menu bar app
 make mock       # prints pairing code, drops you into a REPL
 ```
 
-Then in buddy's menu → **Pair with Lumi…** → host `localhost:8765` + the 6-digit code. The mock's REPL sends commands (`ping`, `open_app Calculator`, `type_text hello`, etc.) over the WebSocket.
+Then in buddy's menu → **Pair with Lamp…** → host `localhost:8765` + the 6-digit code. The mock's REPL sends commands (`ping`, `open_app Calculator`, `type_text hello`, etc.) over the WebSocket.
 
 ---
 
@@ -96,7 +96,7 @@ lumi-buddy/
 ## What works (Phase 1A)
 
 - Status bar icon (💡)
-- Menu with "Pair with Lumi…", "About", "Quit"
+- Menu with "Pair with Lamp…", "About", "Quit"
 - Accessory activation policy (no Dock icon)
 
 ## What does NOT work yet

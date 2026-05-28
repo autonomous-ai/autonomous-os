@@ -1,11 +1,11 @@
-# Lumi Buddy MVP — Kế hoạch implement
+# Lamp Buddy MVP — Kế hoạch implement
 
 > **Trạng thái:** Sẵn sàng execute
 > **Cập nhật:** 2026-05-21
 > **Design doc:** [lumi-buddy_vi.md](./lumi-buddy_vi.md)
 > **Mục tiêu hoàn thành:** ~2 tuần (1 dev)
 
-Đây là plan action cho **MVP của Lumi Buddy** — app companion macOS cho phép Lumi lamp điều khiển máy tính qua voice. Lý do thiết kế đầy đủ ở [lumi-buddy_vi.md](./lumi-buddy_vi.md). Doc này liệt kê *build cái gì, thứ tự nào, accept ra sao*.
+Đây là plan action cho **MVP của Lamp Buddy** — app companion macOS cho phép Lamp điều khiển máy tính qua voice. Lý do thiết kế đầy đủ ở [lumi-buddy_vi.md](./lumi-buddy_vi.md). Doc này liệt kê *build cái gì, thứ tự nào, accept ra sao*.
 
 ---
 
@@ -19,7 +19,7 @@
 - Pairing 6-digit (web UI lamp hiện code)
 - WS connection persistent (`buddy → lamp`)
 - Command executor: `open_app`, `close_app`, `open_url`, `type_text`, `key_combo`, `notification`, `ping`
-- Lumi Go: package `internal/buddy/` + 7 HTTP route + WS gateway
+- Lamp Go: package `internal/buddy/` + 7 HTTP route + WS gateway
 - OpenClaw skill `computer-use` (intent → command cơ bản)
 - Web UI: page "Paired Computers" ở `lumi/web/`
 - Audit log (backend file only — chưa có UI ở MVP)
@@ -55,7 +55,7 @@ Mỗi phase ship & review độc lập được.
 - `lumi-buddy/macos/Sources/LumiBuddy/MenuBarController.swift`
 - `lumi-buddy/.gitignore`
 
-**Acceptance:** `cd lumi-buddy/macos && swift run` hiện icon trên status bar. Menu có "About Lumi Buddy", "Quit". Không crash. Activation policy là `.accessory` (không có Dock icon).
+**Acceptance:** `cd lumi-buddy/macos && swift run` hiện icon trên status bar. Menu có "About Lamp Buddy", "Quit". Không crash. Activation policy là `.accessory` (không có Dock icon).
 
 ### Phase 1B — Discovery lamp (mDNS)
 
@@ -66,9 +66,9 @@ Mỗi phase ship & review độc lập được.
 - `lumi-buddy/macos/Sources/LumiBuddy/Discovery/LampInfo.swift`
 - Update `MenuBarController.swift` để hiện lamp tìm thấy
 
-**Acceptance:** Khi lamp đang chạy trên LAN (advertise `_lumi._tcp.local`), menu buddy hiện ví dụ `lumi-a1b2.local — 192.168.1.50` như item bấm được. Cũng có: option nhập hostname thủ công.
+**Acceptance:** Khi lamp đang chạy trên LAN (advertise `_lumi._tcp.local`), menu buddy hiện ví dụ `lamp-a1b2.local — 192.168.1.50` như item bấm được. Cũng có: option nhập hostname thủ công.
 
-> Note: confirm tên service mDNS hiện có của lamp. Hiện publish `lumi-<last4hex>.local`; có thể cần advertise thêm service `_lumi._tcp.local` cho browsable. Có thể cần sửa nhỏ bên lelamp/lumi (xem §lamp-side dưới).
+> Note: confirm tên service mDNS hiện có của lamp. Hiện publish `lamp-<last4hex>.local`; có thể cần advertise thêm service `_lumi._tcp.local` cho browsable. Có thể cần sửa nhỏ bên lelamp/lumi (xem §lamp-side dưới).
 
 ### Phase 1C — Luồng pairing
 
@@ -79,7 +79,7 @@ Mỗi phase ship & review độc lập được.
 - `lumi-buddy/macos/Sources/LumiBuddy/Pairing/PairingStore.swift` (Keychain)
 - `lumi-buddy/macos/Sources/LumiBuddy/Pairing/PairingWindow.swift` (UI nhập code)
 
-**File Lumi Go:**
+**File Lamp Go:**
 - `lumi/internal/buddy/types.go`
 - `lumi/internal/buddy/store.go`
 - `lumi/internal/buddy/pairing.go`
@@ -91,7 +91,7 @@ Mỗi phase ship & review độc lập được.
 - Sửa: `lumi/server/wire.go` (provider)
 - Chạy: `make generate`
 
-**File Lumi web:**
+**File Lamp web:**
 - `lumi/web/src/pages/PairedComputers.tsx` (sơ — chỉ hiện code)
 - Update `lumi/web/src/App.tsx` (route)
 - Update `lumi/web/src/lib/api.ts` (endpoint pair)
@@ -103,11 +103,11 @@ Mỗi phase ship & review độc lập được.
 - `DELETE /api/buddy/:id`
 
 **Acceptance:**
-1. User mở menu buddy → "Pair with Lumi" → web UI lamp hiện code 6-digit
+1. User mở menu buddy → "Pair with Lamp" → web UI lamp hiện code 6-digit
 2. User đọc code, gõ vào cửa sổ nhập code của buddy
 3. Buddy lưu token vào Keychain
 4. Lamp persist buddy vào `buddies.json`
-5. Menu buddy hiện "Paired with lumi-xxxx"
+5. Menu buddy hiện "Paired with lamp-xxxx"
 6. `GET /api/buddy/list` trả về buddy đã pair
 
 ### Phase 1D — WebSocket connection
@@ -118,7 +118,7 @@ Mỗi phase ship & review độc lập được.
 - `lumi-buddy/macos/Sources/LumiBuddy/Connection/LumiConnection.swift`
 - `lumi-buddy/macos/Sources/LumiBuddy/Connection/Reconnect.swift`
 
-**File Lumi Go:**
+**File Lamp Go:**
 - `lumi/internal/buddy/registry.go`
 - `lumi/internal/buddy/ws.go`
 - `lumi/server/buddy/delivery/http/handler_ws.go`
@@ -154,9 +154,9 @@ Mỗi phase ship & review độc lập được.
 - WS nhận command JSON → dispatcher decode → executor chạy → trả response JSON
 - Đủ các action MVP (`open_app`, `close_app`, `open_url`, `type_text`, `key_combo`, `notification`, `ping`)
 - Permission deny trả error sạch (không crash)
-- File audit log ghi vào `~/Library/Application Support/LumiBuddy/audit.log`
+- File audit log ghi vào `~/Library/Application Support/LampBuddy/audit.log`
 
-### Phase 1F — Dispatch command (bên lumi Go)
+### Phase 1F — Dispatch command (bên Lamp Go)
 
 **Status:** ✓ Done — sync `/api/buddy/command` (localOnly) + marker-friendly `/api/buddy/exec/:action`. Cross-compile `GOOS=linux GOARCH=arm64 go build ./...` sạch. Có debug log instrumentation suốt chain (handler_hw → exec/command handler → dispatcher → ws read loop) để truy từng stage khi turn fail.
 
@@ -190,7 +190,7 @@ Mỗi phase ship & review độc lập được.
 
 ### Phase 1H — Hoàn thiện web UI
 
-**Status:** ✓ Done — `BuddyCard` trong Monitor Overview hiện pair/status/revoke. Buddy app cũng có thêm Activity submenu trên menu bar + cửa sổ "Activity" riêng (terminal-tail style) để user audit recent commands không phải mở file audit log. Path audit log: `~/Library/Application Support/LumiBuddy/audit.log`.
+**Status:** ✓ Done — `BuddyCard` trong Monitor Overview hiện pair/status/revoke. Buddy app cũng có thêm Activity submenu trên menu bar + cửa sổ "Activity" riêng (terminal-tail style) để user audit recent commands không phải mở file audit log. Path audit log: `~/Library/Application Support/LampBuddy/audit.log`.
 
 **Files:**
 - Update `lumi/web/src/pages/PairedComputers.tsx`
@@ -224,7 +224,7 @@ Mỗi phase ship & review độc lập được.
 
 ## Lamp-side cần verify trước Phase 1B
 
-1. **mDNS browsability** — confirm lamp publish `_lumi._tcp.local` cho `NWBrowser`. Nếu chỉ có host record `lumi-xxxx.local`, cần thêm service publishing (chắc trong `lumi` startup hoặc avahi config).
+1. **mDNS browsability** — confirm lamp publish `_lumi._tcp.local` cho `NWBrowser`. Nếu chỉ có host record `lamp-xxxx.local`, cần thêm service publishing (chắc trong `lumi` startup hoặc avahi config).
 2. **Convention header admin auth** — confirm endpoint buddy mới dùng `Authorization: Bearer <token>` (cookie hay bearer); reuse pattern `project_security_login_ui_batch.md`.
 3. **Vị trí OpenClaw skill** — tìm xem skill đang sống ở đâu, naming convention, lamp đăng ký skill thế nào. (Có thể trong filesystem lamp `~/.openclaw/skills/<name>/SKILL.md`.)
 
@@ -320,11 +320,11 @@ lumi/web/src/
 ## Test end-to-end
 
 1. Mac boot, user start `lumi-buddy.app` (hoặc `swift run` cho dev)
-2. Lumi lamp đang chạy trên LAN
-3. Menu buddy hiện `lumi-xxxx.local` đã tìm thấy
-4. User click "Pair with Lumi" → web UI lamp hiện code 6-digit
+2. Lamp đang chạy trên LAN
+3. Menu buddy hiện `lamp-xxxx.local` đã tìm thấy
+4. User click "Pair with Lamp" → web UI lamp hiện code 6-digit
 5. User gõ code vào buddy → "Paired ✓"
-6. Menu buddy hiện "Connected to lumi-xxxx" với chấm xanh
+6. Menu buddy hiện "Connected to lamp-xxxx" với chấm xanh
 7. User nói với lamp: "Mở Chrome trên máy tính của tôi"
 8. Lamp dispatch command qua WS
 9. Chrome launch trên Mac

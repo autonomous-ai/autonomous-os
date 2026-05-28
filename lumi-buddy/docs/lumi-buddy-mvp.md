@@ -1,11 +1,11 @@
-# Lumi Buddy MVP — Implementation Plan
+# Lamp Buddy MVP — Implementation Plan
 
 > **Status:** Ready to execute
 > **Last updated:** 2026-05-21
 > **Design doc:** [lumi-buddy.md](./lumi-buddy.md)
 > **Target completion:** ~2 weeks (single dev)
 
-This is the actionable plan for **MVP of Lumi Buddy** — the macOS companion app that lets Lumi lamp control the user's computer via voice. Full design rationale in [lumi-buddy.md](./lumi-buddy.md). This doc lists *what to build, in what order, with acceptance criteria*.
+This is the actionable plan for **MVP of Lamp Buddy** — the macOS companion app that lets Lamp control the user's computer via voice. Full design rationale in [lumi-buddy.md](./lumi-buddy.md). This doc lists *what to build, in what order, with acceptance criteria*.
 
 ---
 
@@ -19,7 +19,7 @@ This is the actionable plan for **MVP of Lumi Buddy** — the macOS companion ap
 - 6-digit pairing flow (lamp web UI shows code)
 - Persistent WS connection (`buddy → lamp`)
 - Command executors: `open_app`, `close_app`, `open_url`, `type_text`, `key_combo`, `notification`, `ping`
-- Lumi Go: `internal/buddy/` package + 7 HTTP routes + WS gateway
+- Lamp Go: `internal/buddy/` package + 7 HTTP routes + WS gateway
 - OpenClaw skill `computer-use` (basic intent → command mapping)
 - Web UI: "Paired Computers" page in `lumi/web/`
 - Audit log (backend file only — no UI in MVP)
@@ -55,7 +55,7 @@ Each phase is independently shippable and reviewable.
 - `lumi-buddy/macos/Sources/LumiBuddy/MenuBarController.swift`
 - `lumi-buddy/.gitignore`
 
-**Acceptance:** `cd lumi-buddy/macos && swift run` shows a status bar icon. Menu has "About Lumi Buddy", "Quit". No crash. Process activation policy is `.accessory` (no Dock icon).
+**Acceptance:** `cd lumi-buddy/macos && swift run` shows a status bar icon. Menu has "About Lamp Buddy", "Quit". No crash. Process activation policy is `.accessory` (no Dock icon).
 
 ### Phase 1B — Lamp discovery (mDNS)
 
@@ -66,9 +66,9 @@ Each phase is independently shippable and reviewable.
 - `lumi-buddy/macos/Sources/LumiBuddy/Discovery/LampInfo.swift`
 - Update `MenuBarController.swift` to show discovered lamps
 
-**Acceptance:** When a lamp is running on LAN (advertises `_lumi._tcp.local`), buddy menu shows e.g. `lumi-a1b2.local — 192.168.1.50` as a clickable item. Also: manual hostname entry option.
+**Acceptance:** When a lamp is running on LAN (advertises `_lumi._tcp.local`), buddy menu shows e.g. `lamp-a1b2.local — 192.168.1.50` as a clickable item. Also: manual hostname entry option.
 
-> Note: confirm lamp's existing mDNS service name. Currently it publishes `lumi-<last4hex>.local`; may need to also advertise a `_lumi._tcp.local` service for browsability. May require a small lelamp/lumi tweak (see lamp-side §1 below).
+> Note: confirm lamp's existing mDNS service name. Currently it publishes `lamp-<last4hex>.local`; may need to also advertise a `_lumi._tcp.local` service for browsability. May require a small lelamp/lumi tweak (see lamp-side §1 below).
 
 ### Phase 1C — Pairing flow
 
@@ -79,7 +79,7 @@ Each phase is independently shippable and reviewable.
 - `lumi-buddy/macos/Sources/LumiBuddy/Pairing/PairingStore.swift` (Keychain)
 - `lumi-buddy/macos/Sources/LumiBuddy/Pairing/PairingWindow.swift` (code entry UI)
 
-**Lumi Go files:**
+**Lamp Go files:**
 - `lumi/internal/buddy/types.go`
 - `lumi/internal/buddy/store.go`
 - `lumi/internal/buddy/pairing.go`
@@ -91,7 +91,7 @@ Each phase is independently shippable and reviewable.
 - Modify: `lumi/server/wire.go` (provider)
 - Run: `make generate`
 
-**Lumi web files:**
+**Lamp web files:**
 - `lumi/web/src/pages/PairedComputers.tsx` (initial — just code display)
 - Update `lumi/web/src/App.tsx` (route)
 - Update `lumi/web/src/lib/api.ts` (pair endpoints)
@@ -103,11 +103,11 @@ Each phase is independently shippable and reviewable.
 - `DELETE /api/buddy/:id`
 
 **Acceptance:**
-1. User opens buddy menu → "Pair with Lumi" → web UI of lamp displays 6-digit code
+1. User opens buddy menu → "Pair with Lamp" → web UI of lamp displays 6-digit code
 2. User reads code, types into buddy code entry window
 3. Buddy stores token in Keychain
 4. Lamp persists buddy in `buddies.json`
-5. Buddy menu now shows "Paired with lumi-xxxx"
+5. Buddy menu now shows "Paired with lamp-xxxx"
 6. `GET /api/buddy/list` returns paired buddy
 
 ### Phase 1D — WebSocket connection
@@ -118,7 +118,7 @@ Each phase is independently shippable and reviewable.
 - `lumi-buddy/macos/Sources/LumiBuddy/Connection/LumiConnection.swift`
 - `lumi-buddy/macos/Sources/LumiBuddy/Connection/Reconnect.swift`
 
-**Lumi Go files:**
+**Lamp Go files:**
 - `lumi/internal/buddy/registry.go`
 - `lumi/internal/buddy/ws.go`
 - `lumi/server/buddy/delivery/http/handler_ws.go`
@@ -154,9 +154,9 @@ Each phase is independently shippable and reviewable.
 - WS receives command JSON → dispatcher decodes → executor runs → response JSON returned
 - All MVP actions implemented (`open_app`, `close_app`, `open_url`, `type_text`, `key_combo`, `notification`, `ping`)
 - Permission denial returns clean error (not crash)
-- Audit log file written to `~/Library/Application Support/LumiBuddy/audit.log`
+- Audit log file written to `~/Library/Application Support/LampBuddy/audit.log`
 
-### Phase 1F — Command dispatch (lumi Go side)
+### Phase 1F — Command dispatch (Lamp Go side)
 
 **Status:** ✓ Done — sync `/api/buddy/command` (localOnly) + marker-friendly `/api/buddy/exec/:action`. Cross-compile `GOOS=linux GOARCH=arm64 go build ./...` clean. Debug log instrumentation across the chain (handler_hw → exec/command handler → dispatcher → ws read loop) so a failed turn is traceable to the exact stage.
 
@@ -190,7 +190,7 @@ Each phase is independently shippable and reviewable.
 
 ### Phase 1H — Web UI polish
 
-**Status:** ✓ Done — `BuddyCard` in the Monitor Overview shows pair/status/revoke. The buddy app side also got a native menu-bar Activity submenu plus a separate "Activity" window (terminal-tail style) so the user can audit recent commands without opening the audit log file. Audit log path: `~/Library/Application Support/LumiBuddy/audit.log`.
+**Status:** ✓ Done — `BuddyCard` in the Monitor Overview shows pair/status/revoke. The buddy app side also got a native menu-bar Activity submenu plus a separate "Activity" window (terminal-tail style) so the user can audit recent commands without opening the audit log file. Audit log path: `~/Library/Application Support/LampBuddy/audit.log`.
 
 **Files:**
 - Update `lumi/web/src/pages/PairedComputers.tsx`
@@ -224,7 +224,7 @@ Each phase is independently shippable and reviewable.
 
 ## Lamp-side prerequisites (verify before Phase 1B)
 
-1. **mDNS browsability** — confirm lamp publishes `_lumi._tcp.local` for `NWBrowser`. If only `lumi-xxxx.local` host record exists, add service publishing (likely in `lumi` startup or avahi config).
+1. **mDNS browsability** — confirm lamp publishes `_lumi._tcp.local` for `NWBrowser`. If only `lamp-xxxx.local` host record exists, add service publishing (likely in `lumi` startup or avahi config).
 2. **Admin auth header convention** — confirm whether new buddy endpoints should use `Authorization: Bearer <token>` (cookie or bearer); reuse `project_security_login_ui_batch.md` patterns.
 3. **OpenClaw skill location** — find where existing skills live, naming convention, how lamp registers them. (Possibly in lamp's filesystem `~/.openclaw/skills/<name>/SKILL.md`.)
 
@@ -320,11 +320,11 @@ lumi/web/src/
 ## End-to-end acceptance test
 
 1. Mac boots, user starts `lumi-buddy.app` (or `swift run` for dev)
-2. Lumi lamp is running on LAN
-3. Buddy menu shows `lumi-xxxx.local` discovered
-4. User clicks "Pair with Lumi" → web UI on lamp displays 6-digit code
+2. Lamp is running on LAN
+3. Buddy menu shows `lamp-xxxx.local` discovered
+4. User clicks "Pair with Lamp" → web UI on lamp displays 6-digit code
 5. User types code into buddy → "Paired ✓"
-6. Buddy menu shows "Connected to lumi-xxxx" with green dot
+6. Buddy menu shows "Connected to lamp-xxxx" with green dot
 7. User says to lamp: "Mở Chrome trên máy tính của tôi"
 8. Lamp dispatches command via WS
 9. Chrome launches on Mac
