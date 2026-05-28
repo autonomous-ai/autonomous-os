@@ -6,11 +6,11 @@ const handler = async (event: any): Promise<void> => {
   const ctx = event.context;
   const text: string = ctx?.bodyForAgent ?? ctx?.body ?? "";
 
-  // Skip sensing events — Lumi sets busy proactively in sendChat for those
+  // Skip sensing events — Lamp sets busy proactively in sendChat for those
   if (text.startsWith("[sensing:") || !text.trim()) return;
 
   // Skip OpenClaw heartbeat / memory-flush turns. These runs do NOT emit
-  // lifecycle.end SSE, so if we set busy=true here Lumi wedges for the full
+  // lifecycle.end SSE, so if we set busy=true here Lamp wedges for the full
   // 5-min busyTTL (see docs/debug/busy-stuck.md).
   //
   // Detected by body content: OpenClaw heartbeat prompts always end with
@@ -19,7 +19,7 @@ const handler = async (event: any): Promise<void> => {
   // HEARTBEAT_OK.`). Earlier attempts at field-based detection
   // (channelId/messageChannel/target/isHeartbeat) failed because the
   // message:preprocessed event.context does not expose any of those at the
-  // hook layer. Lumi side already uses the same string match — see
+  // hook layer. Lamp side already uses the same string match — see
   // `handler_events.go:689 isHeartbeatRun`.
   if (text.includes("HEARTBEAT_OK")) return;
 

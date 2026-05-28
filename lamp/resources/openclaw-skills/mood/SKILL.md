@@ -1,6 +1,6 @@
 ---
 name: mood
-description: Tracks the USER's mood only — signals + synthesized decision from camera/voice/telegram. Do NOT use for emotion commands directed at Lumi ("show sad", "be happy", bare "sad now"); those go through emotion/SKILL.md and are never logged here. Music/wellbeing skills consume the latest decision.
+description: Tracks the USER's mood only — signals + synthesized decision from camera/voice/telegram. Do NOT use for emotion commands directed at Lamp ("show sad", "be happy", bare "sad now"); those go through emotion/SKILL.md and are never logged here. Music/wellbeing skills consume the latest decision.
 ---
 
 # Mood

@@ -10,7 +10,7 @@ Controls the lamp's 5-axis servo motors for aiming light direction and playing p
 
 ## Workflow
 1. Determine if the user wants to **aim** the light or **play an animation**.
-2. Prefix reply with the appropriate `[HW:...]` marker — Lumi fires it before TTS.
+2. Prefix reply with the appropriate `[HW:...]` marker — Lamp fires it before TTS.
 3. Confirm the action to the user.
 
 **Important**: For conversation reactions, use the **Emotion** skill instead — it combines servo + LED + eyes automatically.

@@ -60,7 +60,7 @@ Habits require **at least 3 days of data** to form. With fewer days, skip proact
 
 ### D — Conversation intent logging (triggered from SOUL)
 
-SOUL instructs Lumi to call this flow when user expresses intent for a daily activity NOW.
+SOUL instructs Lamp to call this flow when user expresses intent for a daily activity NOW.
 
 **Intent → action mapping:**
 

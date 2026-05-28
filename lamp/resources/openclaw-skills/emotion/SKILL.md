@@ -11,7 +11,7 @@ Express emotion through the lamp's servo motors, LED colors, and display eyes si
 ## Workflow
 1. Determine which emotion best matches your conversational tone
 2. Choose an intensity level (0.0 subtle to 1.0 full expression)
-3. Prefix your reply with `[HW:/emotion:{"emotion":"name","intensity":0.9}]` — Lumi fires it async before TTS
+3. Prefix your reply with `[HW:/emotion:{"emotion":"name","intensity":0.9}]` — Lamp fires it async before TTS
 4. Write your reply immediately after the marker
 
 ## How to Express Emotion

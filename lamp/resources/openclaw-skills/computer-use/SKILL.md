@@ -1,15 +1,15 @@
 ---
 name: computer-use
-description: Control the user's Mac via the paired Lamp Buddy companion app — open/close apps, navigate URLs in Chrome, type text into focused fields, fire keyboard shortcuts, show desktop notifications, write to clipboard, click named UI buttons via macOS Accessibility. Also covers vision-driven tasks (screenshot, find/click unlabelled UI, read text off the screen, drag) — those load `reference/vision.md` for the synchronous see-think-act loop. Use when the user explicitly asks Lumi to do something on their COMPUTER (e.g. "open Chrome", "go to Gmail", "join Meet", "close Slack", "type … into my Mac", "copy … to clipboard", "click the blue button on my screen", "what's on my Mac right now?"). Do NOT use for hardware control of the lamp itself (LED, scene, emotion, music, servo) — those are separate skills. Do NOT use if no Mac is paired (the lamp web UI shows pairing status under the Buddy card).
+description: Control the user's Mac via the paired Lamp Buddy companion app — open/close apps, navigate URLs in Chrome, type text into focused fields, fire keyboard shortcuts, show desktop notifications, write to clipboard, click named UI buttons via macOS Accessibility. Also covers vision-driven tasks (screenshot, find/click unlabelled UI, read text off the screen, drag) — those load `reference/vision.md` for the synchronous see-think-act loop. Use when the user explicitly asks Lamp to do something on their COMPUTER (e.g. "open Chrome", "go to Gmail", "join Meet", "close Slack", "type … into my Mac", "copy … to clipboard", "click the blue button on my screen", "what's on my Mac right now?"). Do NOT use for hardware control of the lamp itself (LED, scene, emotion, music, servo) — those are separate skills. Do NOT use if no Mac is paired (the lamp web UI shows pairing status under the Buddy card).
 ---
 
 # Computer Use (Mac via Lamp Buddy)
 
 ## Quick Start
 
-Lamp Buddy is a small macOS app the user installs on their Mac. Once paired with the lamp via the Buddy card on the Monitor web UI, it lets Lumi launch apps, open URLs, type text, fire keyboard shortcuts, and click UI elements **on the user's actual Mac**.
+Lamp Buddy is a small macOS app the user installs on their Mac. Once paired with the lamp via the Buddy card on the Monitor web UI, it lets Lamp launch apps, open URLs, type text, fire keyboard shortcuts, and click UI elements **on the user's actual Mac**.
 
-This skill emits inline markers that Lumi fires asynchronously while TTS speaks the confirmation:
+This skill emits inline markers that Lamp fires asynchronously while TTS speaks the confirmation:
 
 ```
 [HW:/buddy/exec/<action>:<params-json>]
@@ -22,7 +22,7 @@ The marker hits `/api/buddy/exec/<action>` on the lamp, which dispatches over th
 1. Determine the user's intent and pick one or more actions from the table below.
 2. Build the marker(s) — flat params JSON only (no nested objects).
 3. Place markers at the **start of the reply**, then add a short confirmation that TTS will speak.
-4. If no Mac is paired, say so and tell the user to set it up via the Lumi web UI Buddy card.
+4. If no Mac is paired, say so and tell the user to set it up via the Lamp web UI Buddy card.
 
 ### When to load `reference/vision.md` instead
 
@@ -179,7 +179,7 @@ Markers fire in order. Useful patterns:
 
 ## Rules
 
-- **Markers must appear at the START of the reply**, before the TTS sentence. Lumi parses and strips them before reading.
+- **Markers must appear at the START of the reply**, before the TTS sentence. Lamp parses and strips them before reading.
 - **No nested JSON** in marker params (the marker regex doesn't support nested `{}`). All actions above take flat params.
 - **One action per marker.** Don't try to batch multiple ops into a single marker body.
 - **Don't use this skill for lamp hardware** (LED, scene, emotion, audio playback on the lamp speaker, servo, display) — those are separate skills.

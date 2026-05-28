@@ -12,7 +12,7 @@ Controls the lamp's 1.28" round LCD display (GC9A01, 240x240). Two modes: animat
 1. Determine the mode needed:
    - **Eyes**: `[HW:/display/eyes:{"expression":"happy","pupil_x":0.0,"pupil_y":0.0}]`
    - **Info**: `[HW:/display/info:{"text":"14:30","subtitle":"Good afternoon"}]` then `[HW:/display/eyes-mode:{}]`
-2. Place markers at start of reply — Lumi fires them before TTS. Skip silently if display unavailable.
+2. Place markers at start of reply — Lamp fires them before TTS. Skip silently if display unavailable.
 
 **Important**: The Emotion skill auto-syncs eyes during conversation. Do not call both Emotion and Display for the same reaction.
 

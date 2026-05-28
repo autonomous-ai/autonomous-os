@@ -1,6 +1,6 @@
 ---
 name: user-emotion-detection
-description: Maps a detected user emotion — from facial expression (emotion.detected) OR speech (speech_emotion.detected) — into a mood signal logged via the Mood skill, then picks one response route (music / checkin / action). This is about the USER's emotion (input), NOT Lumi's own expression — that's emotion/SKILL.md.
+description: Maps a detected user emotion — from facial expression (emotion.detected) OR speech (speech_emotion.detected) — into a mood signal logged via the Mood skill, then picks one response route (music / checkin / action). This is about the USER's emotion (input), NOT Lamp's own expression — that's emotion/SKILL.md.
 ---
 
 # User Emotion Detection

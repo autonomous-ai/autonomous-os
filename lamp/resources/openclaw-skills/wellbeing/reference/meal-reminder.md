@@ -4,7 +4,7 @@ Fires only when the routing table in `SKILL.md` picks `meal-reminder` (row #4: `
 
 ## Intent
 
-User is active during a meal window (lunch 11:30–13:30 or dinner 18:30–20:30) and **no meal signal yet this window** — neither a prior reminder Lumi already fired nor a real eat label LeLamp logged (`eating burger`, `dining`, `tasting food`, …). Ask once per window — light, not nagging. If the user actually ate during the window (any eat label hit), this route is silently skipped.
+User is active during a meal window (lunch 11:30–13:30 or dinner 18:30–20:30) and **no meal signal yet this window** — neither a prior reminder Lamp already fired nor a real eat label LeLamp logged (`eating burger`, `dining`, `tasting food`, …). Ask once per window — light, not nagging. If the user actually ate during the window (any eat label hit), this route is silently skipped.
 
 ## Phrasing rules
 

@@ -13,7 +13,7 @@ Control the lamp's 64-pixel WS2812 RGB LED strip directly. Use this skill only w
    - Specific color -> `[HW:/led/effect/stop:{}][HW:/led/solid:{"color":[R,G,B]}]`
    - Effect -> `[HW:/led/effect:{"effect":"name","color":[R,G,B],"speed":1.0}]`
    - Turn off -> `[HW:/led/off:{}]`
-2. Place markers at start of reply — Lumi fires them in order before TTS
+2. Place markers at start of reply — Lamp fires them in order before TTS
 3. Confirm the action to the user
 
 ## Examples
@@ -47,7 +47,7 @@ Output: Do NOT use this skill. Use **Emotion** skill instead.
 
 ## How to Control LEDs
 
-**No exec/curl needed.** Use inline markers at start of reply — Lumi fires them in order:
+**No exec/curl needed.** Use inline markers at start of reply — Lamp fires them in order:
 
 ### Solid color (stop effect first)
 ```

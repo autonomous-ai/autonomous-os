@@ -1,6 +1,6 @@
 ---
 name: emotion-acknowledge
-description: "Triggers a 'thinking' emotion on Lumi immediately when a message is received, before the LLM starts processing"
+description: "Triggers a 'thinking' emotion on Lamp immediately when a message is received, before the LLM starts processing"
 homepage: https://github.com/autonomous-ecm/ai-lamp-openclaw
 metadata:
   { "openclaw": {

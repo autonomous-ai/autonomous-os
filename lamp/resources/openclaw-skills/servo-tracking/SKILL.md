@@ -11,7 +11,7 @@ Tracks and follows any object by name. YOLOWorld detects the object in the camer
 ## Workflow
 1. User names an object to track.
 2. **If the user also hints at a direction** ("look at desk and follow cup", "point at the table and watch the phone"), fire `/servo/aim` FIRST so the camera is pointing at the right region before YOLO detection runs. Then fire `/servo/track`. The aim should complete in ~2s before the track call takes over.
-3. Prefix reply with `[HW:/servo/track:{"target":["<label1>","<label2>"]}]` — Lumi detects and follows.
+3. Prefix reply with `[HW:/servo/track:{"target":["<label1>","<label2>"]}]` — Lamp detects and follows.
    - `target` accepts a list of candidate labels. Pass 2-4 synonyms/variants to maximise the chance YOLOWorld finds the object on the first try.
    - A single string also works (`{"target":"cup"}`) for backward compatibility, but the list form is preferred when the object could reasonably have multiple names.
 4. To stop, prefix with `[HW:/servo/track/stop:{}] (POST)`.

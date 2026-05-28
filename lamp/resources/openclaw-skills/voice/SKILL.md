@@ -40,7 +40,7 @@ Use `Bash` with `curl` to call the HTTP API at `http://127.0.0.1:5001`.
 ```bash
 curl -s -X POST http://127.0.0.1:5001/voice/speak \
   -H "Content-Type: application/json" \
-  -d '{"text": "Hello! I am Lumi."}'
+  -d '{"text": "Hello! I am Lamp."}'
 ```
 Text max 2000 characters. Returns immediately; audio plays in background.
 
@@ -76,11 +76,11 @@ Response:
 
 ## Ambient Audio Guard (read FIRST)
 
-If the user's message contains the literal token `[ambient]` (typically alongside a `[user]` priority marker, e.g. `[user] [ambient] ...`), it is overheard passive audio — NOT directed at Lumi. Do NOT trigger mute markers from a single bare word like "call", "meeting", "private", or a clipped fragment.
+If the user's message contains the literal token `[ambient]` (typically alongside a `[user]` priority marker, e.g. `[user] [ambient] ...`), it is overheard passive audio — NOT directed at Lamp. Do NOT trigger mute markers from a single bare word like "call", "meeting", "private", or a clipped fragment.
 
 Mute markers `[HW:/voice/mute:{}]` and `[HW:/speaker/mute:{}]` may fire on ambient audio ONLY when the transcript contains a clear, complete intent:
 - "I'm on a call" / "I have a meeting" / "I need privacy" / "stop listening"
-- Or directly addresses Lumi by name with a mute request
+- Or directly addresses Lamp by name with a mute request
 
 When ambient is ambiguous, reply naturally or stay quiet — DO NOT mute. Voice commands (no `[ambient]` token in the message) follow the normal trigger tables below.
 
@@ -94,11 +94,11 @@ Users can mute the mic for privacy (meetings, calls). Use HW markers — no curl
 [HW:/voice/mute:{}]
 ```
 
-Stops all listening — STT, wake word, sound detection. Lumi becomes fully deaf. Unmute via physical button, web toggle, or Telegram command.
+Stops all listening — STT, wake word, sound detection. Lamp becomes fully deaf. Unmute via physical button, web toggle, or Telegram command.
 
 ### Trigger phrases (MANDATORY — must call HW marker, not just reply with text)
 
-Any phrase about **privacy, meetings, calls, not wanting to be heard, or asking Lumi to stop listening** MUST trigger `[HW:/voice/mute:{}]`. Do NOT just acknowledge — you MUST include the HW marker.
+Any phrase about **privacy, meetings, calls, not wanting to be heard, or asking Lamp to stop listening** MUST trigger `[HW:/voice/mute:{}]`. Do NOT just acknowledge — you MUST include the HW marker.
 
 | User says | Action |
 |-----------|--------|
@@ -110,7 +110,7 @@ Any phrase about **privacy, meetings, calls, not wanting to be heard, or asking 
 
 ### Examples
 
-**Input:** "Lumi, I have a meeting now"
+**Input:** "Lamp, I have a meeting now"
 **Output:** `[HW:/voice/mute:{}]` OK, I'll stop listening. Press the button when you need me.
 
 **Input:** "Stop listening"
@@ -128,7 +128,7 @@ Any phrase about **privacy, meetings, calls, not wanting to be heard, or asking 
 [HW:/voice/unmute:{}]
 ```
 
-Use when a **Telegram or web chat** user asks to unmute remotely. Voice unmute is not possible (Lumi is deaf when muted). Physical button also unmutes.
+Use when a **Telegram or web chat** user asks to unmute remotely. Voice unmute is not possible (Lamp is deaf when muted). Physical button also unmutes.
 
 | User says (via Telegram/web) | Action |
 |-----------|--------|
@@ -136,7 +136,7 @@ Use when a **Telegram or web chat** user asks to unmute remotely. Voice unmute i
 
 ## Speaker Mute/Unmute (Silent Mode)
 
-Suppress all audio output — TTS, music, backchannel. Lumi stays silent but still listens.
+Suppress all audio output — TTS, music, backchannel. Lamp stays silent but still listens.
 
 > Ambient guard above also applies here — bare fragments like "quiet" or "silence" in `[ambient]` audio do NOT trigger speaker mute.
 
@@ -163,7 +163,7 @@ Mic still works when speaker is muted — user can unmute via voice command.
 
 ### Examples
 
-**Input:** "Lumi, be quiet"
+**Input:** "Lamp, be quiet"
 **Output:** `[HW:/speaker/mute:{}]` Going silent. Just say "you can talk" when you want me back.
 
 **Input:** "You can talk now"
@@ -177,8 +177,8 @@ When user mentions a meeting or call and wants **full silence** (not just speake
 **Output:** `[HW:/voice/mute:{}][HW:/speaker/mute:{}]` Meeting mode — fully silent. Press the button when you're done.
 
 ## Rules
-- **Mic mute is the last thing Lumi hears via voice** — after mic mute, only physical button, web toggle, or Telegram can unmute
-- Voice unmute for mic is impossible (Lumi is deaf) — tell user to press the button
+- **Mic mute is the last thing Lamp hears via voice** — after mic mute, only physical button, web toggle, or Telegram can unmute
+- Voice unmute for mic is impossible (Lamp is deaf) — tell user to press the button
 - **Speaker mute**: user can still voice-unmute (mic still on)
-- TTS still works when only mic is muted — Lumi can speak but not hear
+- TTS still works when only mic is muted — Lamp can speak but not hear
 - Always confirm mute with how to unmute

@@ -15,7 +15,7 @@ description: Proactive coaching across hydration, breaks, meals AND posture. Use
 | Log wellbeing nudge | `http://127.0.0.1:5000/api/wellbeing/log` |
 | Log posture nudge | `http://127.0.0.1:5000/api/posture/log` |
 
-- Port **5000** = Lumi (data APIs: wellbeing / posture / mood / music / openclaw history).
+- Port **5000** = Lamp (data APIs: wellbeing / posture / mood / music / openclaw history).
 - Port **5001** = LeLamp HARDWARE (audio, camera, face, presence, speaker). Has **NO** `/api/wellbeing/*` or `/api/posture/*` routes — calling 5001 returns 404 silently and your nudge is lost.
 - Posture nudges live on a **separate JSONL** (`/root/local/users/<user>/posture/`) for clean timeline separation; the wellbeing log keeps hydration/break/meal/sleep/morning rows.
 - Do not pattern-match from other skills: `5001/audio/play`, `5001/face/enroll`, `5001/camera/snapshot` are unrelated.
@@ -50,7 +50,7 @@ motion.activity turn. Sedentary turns may also carry `[posture_summary: {...}]`
 + `[computer_streak_min: N]` blocks (see `reference/posture.md`). **Do NOT
 fire any tool calls to re-fetch this data.** Saves the entire read tool turn.
 
-Schema (every field is pre-computed in Lumi Go — agent only applies thresholds and picks phrasing):
+Schema (every field is pre-computed in Lamp Go — agent only applies thresholds and picks phrasing):
 
 ```json
 {
@@ -62,7 +62,7 @@ Schema (every field is pre-computed in Lumi Go — agent only applies thresholds
   "current_hour": 14,              // exact hour 0-23 — used by activity router for hour-based routes
   "first_activity_today": false,   // true when no prior REAL user activity events today (presence enter/leave and agent-written nudges/reminders are NOT counted)
   "meal_window": "",               // "lunch" (11:30-13:30) | "dinner" (18:30-20:30) | "" — set by current_hour
-  "meal_signal_in_window": false,  // true when a meal signal (meal_reminder Lumi already fired OR a raw eat label like "eating burger" / "dining" LeLamp logged) already exists in the current window today
+  "meal_signal_in_window": false,  // true when a meal signal (meal_reminder Lamp already fired OR a raw eat label like "eating burger" / "dining" LeLamp logged) already exists in the current window today
   "morning_greeting_done_today": false,     // true when a morning_greeting action exists today
   "sleep_winddown_done_today": false,       // true when a sleep_winddown action exists today
   "drinks_since_toilet_nudge": 2,           // count of `drink` rows logged after the most recent `nudge_toilet` today (or all today's drinks if none yet); counter resets the moment you POST `nudge_toilet`
@@ -119,7 +119,7 @@ Read the `[activity] Activity detected: <labels>.` message + the `[wellbeing_con
 | 1 | labels list contains `drink` or `break` OR any raw eat label (`eating burger`, `dining`, `tasting food`, … — i.e. any `eating *` / `dining` / `tasting food`) | **reaction** | 1–3 sentence acknowledgment per the **Reaction** section. **No HW marker** (LeLamp already logged the row upstream). |
 | 2 | `first_activity_today == true` AND `current_hour ∈ [5, 11)` AND `morning_greeting_done_today == false` | **morning-greeting** | See `reference/morning-greeting.md`. Logs `morning_greeting` action to gate next firings today. |
 | 3 | `current_hour >= 21` AND labels are sedentary (no `drink`/`break`) AND `sleep_winddown_done_today == false` | **sleep-winddown** | See `reference/sleep-winddown.md`. Logs `sleep_winddown` action. Replaces break nudge in late evening. |
-| 4 | `meal_window` is non-empty AND `meal_signal_in_window == false` | **meal-reminder** | See `reference/meal-reminder.md`. Logs `meal_reminder` action with trigger `lunch` / `dinner`. Gate covers BOTH a prior reminder Lumi already fired AND a real eat label LeLamp logged — so we don't ask "have you eaten?" after a real meal. |
+| 4 | `meal_window` is non-empty AND `meal_signal_in_window == false` | **meal-reminder** | See `reference/meal-reminder.md`. Logs `meal_reminder` action with trigger `lunch` / `dinner`. Gate covers BOTH a prior reminder Lamp already fired AND a real eat label LeLamp logged — so we don't ask "have you eaten?" after a real meal. |
 | 5 | `[posture_summary]` block present in the message | **posture-nudge** | Speak a posture nudge per the **Posture phrasing** section + post `nudge_posture` to the **posture log** (NOT wellbeing log). Anchor the line on `dominant_region` and `streak_min`. Outranks plain break/hydration nudges so we don't double-up on "stand up". |
 | 6 | `hydration_delta_min >= HYDRATION_THRESHOLD_MIN` | **hydration-nudge** | Speak a hydration nudge per the **Phrasing** section + post `nudge_hydration` HW marker. |
 | 7 | `break_delta_min >= BREAK_THRESHOLD_MIN` | **break-nudge** | Speak a break nudge + post `nudge_break` HW marker. |
@@ -136,7 +136,7 @@ Read the `[activity] Activity detected: <labels>.` message + the `[wellbeing_con
 
 ## Reaction (when the user just did the thing)
 
-When the activity labels include `drink`, `break`, or any raw eat label (`eating burger`, `dining`, `tasting food`, …), **always speak** — silence on a positive action makes Lumi feel dead. This is the path the user explicitly asked for: short, surprised, casual acknowledgments instead of stoic NO_REPLY.
+When the activity labels include `drink`, `break`, or any raw eat label (`eating burger`, `dining`, `tasting food`, …), **always speak** — silence on a positive action makes Lamp feel dead. This is the path the user explicitly asked for: short, surprised, casual acknowledgments instead of stoic NO_REPLY.
 
 **Inputs to weave in (use what fits, ignore what doesn't):**
 - `count_today.drink` / `count_today.break` — N-th of the day, streak, milestone.

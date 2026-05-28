@@ -204,7 +204,7 @@ curl -s -X POST http://127.0.0.1:5001/speaker/reset
 - **Telegram audio must be 16 kHz mono WAV** before calling the API — convert with `ffmpeg -ar 16000 -ac 1 -y "${SRC%.*}.wav"` (same folder as the source). Skip conversion if the source is already `.wav`. Non-WAV media files (`.ogg`, `.m4a`, `.mp3`, `.opus`) are rejected by the embedding backend.
 - **Telegram remember-voice naming rule** — use the spoken name in transcript first; if absent, use Telegram name.
 - **Don't spam "who are you?"** — ask at most once per cluster, and when you do ask, always include the "speak 25–30 words" guidance in the same message instead of firing multiple short prompts. If still no usable answer, move on and reply naturally.
-- **Never go silent on Unknown Speaker fragments** — even when the speaker hasn't given a name and you've already asked once, ALWAYS emit at least a short acknowledgment ("Mm", "Nghe rồi", "Got it"). NO_REPLY here is forbidden — silence makes the owner think Lumi stopped listening. The "don't spam" rule above bans re-asking, not replying.
+- **Never go silent on Unknown Speaker fragments** — even when the speaker hasn't given a name and you've already asked once, ALWAYS emit at least a short acknowledgment ("Mm", "Nghe rồi", "Got it"). NO_REPLY here is forbidden — silence makes the owner think Lamp stopped listening. The "don't spam" rule above bans re-asking, not replying.
 - **Confirm every enroll** AFTER the API returns ok — "Nice to meet you, Alex! I'll remember your voice."
 - **Don't narrate technical details** — no "base64", "ffmpeg", "POST /speaker/enroll".
 - **Never write files directly** — always use the HTTP API. Do NOT write to `/root/local/users/` by hand.

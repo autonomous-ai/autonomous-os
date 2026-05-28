@@ -10,7 +10,7 @@ Activate predefined lighting presets that set optimal color temperature and brig
 
 ## Workflow
 1. Determine which scene matches the user's request or activity
-2. Prefix reply with `[HW:/scene:{"scene":"name"}]` — Lumi fires it before TTS
+2. Prefix reply with `[HW:/scene:{"scene":"name"}]` — Lamp fires it before TTS
 3. Confirm the scene activation to the user
 4. Optionally chain emotion: `[HW:/scene:{"scene":"night"}][HW:/emotion:{"emotion":"sleepy","intensity":0.7}]`
 

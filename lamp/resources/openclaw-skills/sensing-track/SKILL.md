@@ -141,7 +141,7 @@ Each kept bucket contains:
   - `bucket_id`, `window_start_ts`, `window_end_ts`, `kept: true`
   - `summary` — same shape as the `[posture_summary:]` block on `motion.activity` (`bad_ratio`, `dominant_region`, `samples`, …)
   - `samples[]` — `{ts, score, risk_level, filename, left, right}` (per-side RULA body_scores + angles)
-  - `worst_snapshots[]` — pre-selected worst filenames (the ones Lumi auto-attaches to `/dm` on posture nudges)
+  - `worst_snapshots[]` — pre-selected worst filenames (the ones Lamp auto-attaches to `/dm` on posture nudges)
 
 ```bash
 # List recent buckets (newest first)
