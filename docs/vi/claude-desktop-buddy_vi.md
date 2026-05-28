@@ -88,7 +88,7 @@ claude-desktop-buddy/
 
 ### Process model
 
-`buddy-plugin` là **systemd service độc lập** (`lumi-buddy.service`),
+`buddy-plugin` là **systemd service độc lập** (`claude-desktop-buddy.service`),
 tách khỏi binary Lamp chính. Restart độc lập; không link vào process
 Lamp. Gọi Lamp và LeLamp qua HTTP local.
 
@@ -98,7 +98,7 @@ Layout runtime trên Pi:
   /opt/claude-desktop-buddy/VERSION_BUDDY  — version stamp
   /opt/claude-desktop-buddy/chars/         — character pack nhận về
   /root/config/buddy.json                  — config runtime (tạo 1 lần)
-  /etc/systemd/system/lumi-buddy.service   — service unit
+  /etc/systemd/system/claude-desktop-buddy.service   — service unit
   /var/log/lumi-buddy.log                  — log rotate (2MB × 10)
 ```
 
@@ -550,8 +550,8 @@ Khi user setup device qua `POST /api/device/setup`, Lamp save
 Lamp server nghe bus đó, khi `device_id` transition thì chạy:
 
 ```
-systemctl cat lumi-buddy.service   # skip im lặng nếu chưa cài
-systemctl restart lumi-buddy
+systemctl cat claude-desktop-buddy.service   # skip im lặng nếu chưa cài
+systemctl restart claude-desktop-buddy
 ```
 
 Buddy có dịp re-resolve `Claude-{deviceid}` về id mới được assign mà
@@ -574,7 +574,7 @@ Cách này giữ buddy không biết schema config của Lamp.
 ## 11. Config
 
 `/root/config/buddy.json` (tạo 1 lần bởi `setup-claude-desktop-buddy.sh`
-hoặc `software-update lumi-buddy`, tooling không bao giờ overwrite sau):
+hoặc `software-update claude-desktop-buddy`, tooling không bao giờ overwrite sau):
 
 ```json
 {
@@ -643,7 +643,7 @@ Orange Pi 4 Pro ship với chip BT AIC8820 (Aicsemi, manufacturer ID
 - **Reset hazard**: restart `bluetoothd` / chip nhiều lần có thể đẩy
   controller vào state `UP RUNNING PSCAN` (chỉ classic) và từ chối LE
   advertising 1 lúc. Recovery: `sudo systemctl restart bluetooth &&
-  sudo hciconfig hci0 reset && sudo systemctl restart lumi-buddy`.
+  sudo hciconfig hci0 reset && sudo systemctl restart claude-desktop-buddy`.
 
 Raspberry Pi (Broadcom / RP1) không có quirks này và dùng MAC factory,
 nhưng phần còn lại của integration giống hệt.
@@ -652,7 +652,7 @@ nhưng phần còn lại của integration giống hệt.
 
 ## 14. Triển khai
 
-### systemd unit (`/etc/systemd/system/lumi-buddy.service`)
+### systemd unit (`/etc/systemd/system/claude-desktop-buddy.service`)
 
 ```ini
 [Unit]
@@ -685,7 +685,7 @@ WantedBy=multi-user.target
 
 - Cài lần đầu: `setup-claude-desktop-buddy.sh` (download từ OTA
   metadata, tạo service, không động config nếu đã tồn tại).
-- Update sau: `software-update lumi-buddy` (chỉ binary + version stamp
+- Update sau: `software-update claude-desktop-buddy` (chỉ binary + version stamp
   + restart service; config không bao giờ bị overwrite).
 
 ---

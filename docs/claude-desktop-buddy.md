@@ -89,7 +89,7 @@ claude-desktop-buddy/
 
 ### Process model
 
-`buddy-plugin` is a **standalone systemd service** (`lumi-buddy.service`)
+`buddy-plugin` is a **standalone systemd service** (`claude-desktop-buddy.service`)
 separate from the main Lamp binary. Restarts independently; never linked
 into the Lamp process. Talks to Lamp and LeLamp purely over local HTTP.
 
@@ -99,7 +99,7 @@ Pi runtime layout:
   /opt/claude-desktop-buddy/VERSION_BUDDY  — version stamp
   /opt/claude-desktop-buddy/chars/         — received character packs
   /root/config/buddy.json                  — runtime config (created once)
-  /etc/systemd/system/lumi-buddy.service   — service unit
+  /etc/systemd/system/claude-desktop-buddy.service   — service unit
   /var/log/lumi-buddy.log                  — rotated log (2MB × 10)
 ```
 
@@ -561,8 +561,8 @@ config bus. The Lamp server listens on that bus and, when the
 `device_id` value transitions, runs:
 
 ```
-systemctl cat lumi-buddy.service   # skip silently if not installed
-systemctl restart lumi-buddy
+systemctl cat claude-desktop-buddy.service   # skip silently if not installed
+systemctl restart claude-desktop-buddy
 ```
 
 That gives buddy a chance to re-resolve `Claude-{deviceid}` to the
@@ -585,7 +585,7 @@ This keeps buddy oblivious to Lamp's config schema.
 ## 11. Config
 
 `/root/config/buddy.json` (created once by `setup-claude-desktop-buddy.sh`
-or `software-update lumi-buddy`, never overwritten by tooling
+or `software-update claude-desktop-buddy`, never overwritten by tooling
 afterwards):
 
 ```json
@@ -656,7 +656,7 @@ ID 2875), UART-attached. Quirks we hit:
   controller into a state where it `UP RUNNING PSCAN` (classic only) and
   refuses LE advertising for a bit. Recovery: `sudo systemctl restart
   bluetooth && sudo hciconfig hci0 reset && sudo systemctl restart
-  lumi-buddy`.
+  claude-desktop-buddy`.
 
 Raspberry Pi (Broadcom / RP1) does not have these quirks and uses its
 factory MAC, but the rest of the integration is identical.
@@ -665,7 +665,7 @@ factory MAC, but the rest of the integration is identical.
 
 ## 14. Deployment
 
-### systemd unit (`/etc/systemd/system/lumi-buddy.service`)
+### systemd unit (`/etc/systemd/system/claude-desktop-buddy.service`)
 
 ```ini
 [Unit]
@@ -698,7 +698,7 @@ WantedBy=multi-user.target
 
 - First install: `setup-claude-desktop-buddy.sh` (downloads from OTA
   metadata, creates service, leaves config alone if it already exists).
-- Subsequent updates: `software-update lumi-buddy` (binary + version
+- Subsequent updates: `software-update claude-desktop-buddy` (binary + version
   stamp + service restart only; config is never overwritten).
 
 ---
