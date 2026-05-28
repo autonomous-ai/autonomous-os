@@ -75,7 +75,7 @@ export function DeviceSection({
     adminPassword !== adminPasswordConfirm;
   return (
     <SectionCard id="device" title="Device" active={active}>
-      <Field label="Device ID" id="device_id" value={deviceId} onChange={setDeviceId} placeholder="lumi-001" readOnly />
+      <Field label="Device ID" id="device_id" value={deviceId} onChange={setDeviceId} placeholder="lamp-001" readOnly />
       {mac && <MaskedReadField label="MAC" id="mac" value={mac} />}
       {showAdminPasswordFields && (
         <>

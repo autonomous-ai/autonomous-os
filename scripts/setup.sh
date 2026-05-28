@@ -856,7 +856,7 @@ stage_ap() {
     done
   fi
   SUFFIX=${SERIAL: -4}
-  AP_SSID="Lumi-${SUFFIX}"
+  AP_SSID="Lamp-${SUFFIX}"
   echo "[stage] AP SSID = $AP_SSID (serial=$SERIAL)"
 
   # mDNS hostname: per-device .local name so the web UI can redirect after
@@ -865,30 +865,30 @@ stage_ap() {
   # matters — avahi publishes the system hostname verbatim, and `.local` is
   # case-insensitive but URLs in the wild aren't always normalized.
   SUFFIX_LC=$(echo "$SUFFIX" | tr '[:upper:]' '[:lower:]')
-  LUMI_HOSTNAME="lumi-${SUFFIX_LC}"
-  hostnamectl set-hostname "$LUMI_HOSTNAME" 2>/dev/null || hostname "$LUMI_HOSTNAME"
+  LAMP_HOSTNAME="lamp-${SUFFIX_LC}"
+  hostnamectl set-hostname "$LAMP_HOSTNAME" 2>/dev/null || hostname "$LAMP_HOSTNAME"
   # Replace 127.0.1.1 line if present, otherwise append. /etc/hosts is required
   # for sudo/getent to resolve the hostname locally.
   if grep -q '^127\.0\.1\.1' /etc/hosts; then
-    sed -i "s/^127\.0\.1\.1.*/127.0.1.1 $LUMI_HOSTNAME/" /etc/hosts
+    sed -i "s/^127\.0\.1\.1.*/127.0.1.1 $LAMP_HOSTNAME/" /etc/hosts
   else
-    echo "127.0.1.1 $LUMI_HOSTNAME" >> /etc/hosts
+    echo "127.0.1.1 $LAMP_HOSTNAME" >> /etc/hosts
   fi
   systemctl enable avahi-daemon 2>/dev/null || true
   systemctl restart avahi-daemon 2>/dev/null || true
-  echo "[stage] mDNS hostname = $LUMI_HOSTNAME.local"
+  echo "[stage] mDNS hostname = $LAMP_HOSTNAME.local"
   # Sanity check: confirm avahi actually publishes this name locally. A
   # warning here usually means the daemon failed to start (missing dbus,
   # masked service) or another device on the bench already claimed the
-  # name (avahi would have renamed ours to ${LUMI_HOSTNAME}-2). Two lamps
+  # name (avahi would have renamed ours to ${LAMP_HOSTNAME}-2). Two lamps
   # with identical last-4 serial chars on the same LAN is rare (1/65536)
   # but possible — if it happens, the FE's redirect will hit the wrong
   # device, and we'd need to bump the suffix length here and in
   # lamp/internal/device/hardware.go.
   sleep 1
   if command -v avahi-resolve-host-name >/dev/null 2>&1; then
-    if ! avahi-resolve-host-name -4 "${LUMI_HOSTNAME}.local" >/dev/null 2>&1; then
-      echo "[stage] WARNING: ${LUMI_HOSTNAME}.local not resolvable via mDNS yet (avahi may need a moment, or another device claimed the name)"
+    if ! avahi-resolve-host-name -4 "${LAMP_HOSTNAME}.local" >/dev/null 2>&1; then
+      echo "[stage] WARNING: ${LAMP_HOSTNAME}.local not resolvable via mDNS yet (avahi may need a moment, or another device claimed the name)"
     fi
   fi
 
@@ -1173,7 +1173,7 @@ else
   echo "  journalctl -u wpa_supplicant@wlan0 -n 50 --no-pager"
 fi
 
-# Re-announce mDNS on the new network so http://lumi-XXXX.local/ resolves
+# Re-announce mDNS on the new network so http://lamp-XXXX.local/ resolves
 # from the user's computer once they reconnect to home Wi-Fi. Without this,
 # avahi sometimes keeps stale records from the AP network and stays silent
 # on the new subnet until the next service restart or reboot.
@@ -1363,8 +1363,8 @@ systemctl mask wpa_supplicant.service 2>/dev/null || true
 echo ""
 echo "======================================"
 echo "Setup complete!"
-echo "AP SSID: Lumi-XXXX (actual: ${AP_SSID:-unknown — stage_ap may have failed})"
-echo "Setup page: http://192.168.100.1 (AP) — or http://${LUMI_HOSTNAME:-lumi-xxxx}.local once on home Wi-Fi"
+echo "AP SSID: Lamp-XXXX (actual: ${AP_SSID:-unknown — stage_ap may have failed})"
+echo "Setup page: http://192.168.100.1 (AP) — or http://${LAMP_HOSTNAME:-lamp-xxxx}.local once on home Wi-Fi"
 echo "Backends: systemctl status bootstrap lamp lumi-lelamp lumi-buddy"
 echo "Updates:  software-update <bootstrap|lamp|openclaw|lelamp|lumi-buddy|web>"
 if [ -n "$FAILED_STAGES" ]; then

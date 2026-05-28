@@ -86,14 +86,14 @@ efficiently).
    removes itself. Re-flash will reinstall it.
 3. Operator runs `sudo device-ap-mode` (or the bootstrap-server triggers it
    when no STA association after a timeout).
-4. SSID becomes `Lumi-XXXX` where `XXXX` = last 4 hex chars of the ethernet
+4. SSID becomes `Lamp-XXXX` where `XXXX` = last 4 hex chars of the ethernet
    MAC. The board has no device-tree serial; `device-ap-mode`'s fallback
    chain (`/proc/device-tree/serial-number` → `/proc/cpuinfo Serial` →
    `eth0`/`end0` MAC) lands on MAC for OPi.
-5. mDNS hostname `lumi-<xxxx>.local` published by `avahi-daemon`.
+5. mDNS hostname `lamp-<xxxx>.local` published by `avahi-daemon`.
 6. Connect phone/laptop to AP → http://192.168.100.1/ → setup wizard collects
    API keys + home WiFi → `device-sta-mode` switches → device reachable via
-   `lumi-xxxx.local` on the home LAN.
+   `lamp-xxxx.local` on the home LAN.
 
 ## Configuration knobs
 
@@ -211,7 +211,7 @@ imager/
 
 ## Sanity checks after first flash
 
-SSH in (`ssh system@lumi-xxxx.local`, password `12345` until rotated by the
+SSH in (`ssh system@lamp-xxxx.local`, password `12345` until rotated by the
 setup wizard) and verify:
 
 ```bash
@@ -390,7 +390,7 @@ proper). If everything's zero past offset 0x200, the bootloader was clobbered.
 
 **Earlier (Pi 5 only)** — ported from `scripts/setup.sh`: openresolv +
 `name_servers="1.1.1.1 8.8.8.8"` fallback (Pi-only — OPi vendor image doesn't
-use openresolv), avahi `lumi-<suffix>.local` mDNS, PulseAudio udev ignore for
+use openresolv), avahi `lamp-<suffix>.local` mDNS, PulseAudio udev ignore for
 `sndi2s4` + `wm8960soundcard`, webrtcvad Py3.12+ patch, MAC-based SSID
 fallback for non-Pi boards in `device-ap-mode`, Pi Imager `wpa.conf` cleanup,
 `AP_BAND=5` knob, `stage_buddy` (Claude Desktop Buddy BLE plugin) gated on

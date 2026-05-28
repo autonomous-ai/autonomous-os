@@ -15,7 +15,7 @@ dlbackend/local
 
 # Runtime config (contains device-specific values and secrets)
 config/config.json
-lumi/config/config.json
+lamp/config/config.json
 
 # Voice biometric data — never commit (PII)
 **/mock_data/audio/speaker_db*.json
@@ -33,14 +33,14 @@ lumi/config/config.json
 *.coverprofile
 *.pprof
 
-# Lumi (Go)
-lumi/lumi-server
-lumi/lumi-server.~
-lumi/bootstrap-server
-lumi/bootstrap-server.~
-lumi/vendor/
-lumi/web/node_modules/
-lumi/web/dist/
+# Lamp (Go)
+lamp/lamp-server
+lamp/lamp-server.~
+lamp/bootstrap-server
+lamp/bootstrap-server.~
+lamp/vendor/
+lamp/web/node_modules/
+lamp/web/dist/
 *.zip
 
 # LeLamp (Python)

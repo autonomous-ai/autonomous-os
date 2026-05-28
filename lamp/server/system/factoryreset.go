@@ -113,7 +113,7 @@ func runFactoryReset(opts FactoryResetOptions) (started bool, errStatus int, err
 // FactoryReset performs a soft factory reset: wipe Lumi state (config / API
 // keys / enrollments / WiFi creds) + reboot. Kernel / OS / system packages /
 // binaries / lelamp .venv are NOT touched — this is a state reset, not a
-// reflash. After reboot the device boots into AP "Lumi-XXXX" with a fresh
+// reflash. After reboot the device boots into AP "Lamp-XXXX" with a fresh
 // setup wizard.
 //
 // POST /api/system/factory-reset   (body ignored)

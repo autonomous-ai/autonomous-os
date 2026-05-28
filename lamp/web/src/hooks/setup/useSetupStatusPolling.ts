@@ -11,13 +11,13 @@ export type SetupPhase = "connecting" | "connected" | "failed";
 //       reachable (user rejoined home Wi-Fi) navigate there.
 //   (3) mDNS probe — primary auto-redirect path. The LAN-IP channel almost
 //       always fails in practice (AP shuts down before its lan_ip propagates
-//       to the FE poll), so we also probe `lumi-XXXX.local` directly. When
+//       to the FE poll), so we also probe `lamp-XXXX.local` directly. When
 //       the user's computer rejoins home Wi-Fi, mDNS resolves and we redirect.
 export function useSetupStatusPolling({
   setupWorking,
   setupPhase,
   setupLanIP,
-  lumiMdnsHost,
+  lampMdnsHost,
   setSetupPhase,
   setSetupLanIP,
   setSetupErrorMsg,
@@ -25,7 +25,7 @@ export function useSetupStatusPolling({
   setupWorking: boolean;
   setupPhase: SetupPhase;
   setupLanIP: string;
-  lumiMdnsHost: string;
+  lampMdnsHost: string;
   setSetupPhase: Dispatch<SetStateAction<SetupPhase>>;
   setSetupLanIP: Dispatch<SetStateAction<string>>;
   setSetupErrorMsg: Dispatch<SetStateAction<string>>;
@@ -94,9 +94,9 @@ export function useSetupStatusPolling({
   // same-host case so SetupGate re-runs, hits the now-reachable
   // `checkInternet`, and re-mounts Setup in continue mode (full menu).
   useEffect(() => {
-    if (setupPhase !== "connected" || !lumiMdnsHost) return;
+    if (setupPhase !== "connected" || !lampMdnsHost) return;
     let cancelled = false;
-    const targetHost = `${lumiMdnsHost}.local`;
+    const targetHost = `${lampMdnsHost}.local`;
     const base = `http://${targetHost}`;
     const newURL = `${base}${window.location.pathname}${carrySearch}`;
     const navigate = () => {
@@ -117,10 +117,10 @@ export function useSetupStatusPolling({
     probe();
     const id = setInterval(probe, 3000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [setupPhase, lumiMdnsHost, carrySearch]);
+  }, [setupPhase, lampMdnsHost, carrySearch]);
 
   // Pre-submit canonical URL upgrade: when user lands on the AP IP
-  // (192.168.100.1) we silently bounce to `http://lumi-XXXX.local/…` once we
+  // (192.168.100.1) we silently bounce to `http://lamp-XXXX.local/…` once we
   // know the hostname AND the .local name is reachable from the current
   // network. On the AP itself avahi runs on the lamp so the same multicast
   // reaches both peers — resolution is almost instant on Windows/macOS/iOS.
@@ -136,18 +136,18 @@ export function useSetupStatusPolling({
   // without spamming the network forever on Android-blocked cases.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (!lumiMdnsHost) {
-      console.info("[setup] pre-submit canonical-URL upgrade: skip — no lumiMdnsHost yet");
+    if (!lampMdnsHost) {
+      console.info("[setup] pre-submit canonical-URL upgrade: skip — no lampMdnsHost yet");
       return;
     }
     if (window.location.hostname !== "192.168.100.1") {
       console.info("[setup] pre-submit canonical-URL upgrade: skip — not on AP IP", window.location.hostname);
       return;
     }
-    console.info(`[setup] pre-submit canonical-URL upgrade: probing http://${lumiMdnsHost}.local/api/health`);
+    console.info(`[setup] pre-submit canonical-URL upgrade: probing http://${lampMdnsHost}.local/api/health`);
     let cancelled = false;
     let attempt = 0;
-    const base = `http://${lumiMdnsHost}.local`;
+    const base = `http://${lampMdnsHost}.local`;
     const target = `${base}${window.location.pathname}${carrySearch}`;
     let timer: number | undefined;
     const probe = async () => {
@@ -170,5 +170,5 @@ export function useSetupStatusPolling({
     };
     probe();
     return () => { cancelled = true; if (timer) window.clearTimeout(timer); };
-  }, [lumiMdnsHost, carrySearch]);
+  }, [lampMdnsHost, carrySearch]);
 }

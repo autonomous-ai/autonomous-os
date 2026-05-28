@@ -457,17 +457,17 @@ if [ -z "\$SERIAL" ]; then
   done
 fi
 SUFFIX=\${SERIAL: -4}
-AP_SSID="Lumi-\${SUFFIX}"
+AP_SSID="Lamp-\${SUFFIX}"
 [ -f /etc/hostapd/hostapd.conf ] && sed -i "s/^ssid=.*/ssid=\${AP_SSID}/" /etc/hostapd/hostapd.conf
 
-# mDNS hostname lumi-<suffix>.local so the setup wizard's AP→.local handoff works.
+# mDNS hostname lamp-<suffix>.local so the setup wizard's AP→.local handoff works.
 SUFFIX_LC=\$(echo "\$SUFFIX" | tr '[:upper:]' '[:lower:]')
-LUMI_HOSTNAME="lumi-\${SUFFIX_LC}"
-hostnamectl set-hostname "\$LUMI_HOSTNAME" 2>/dev/null || hostname "\$LUMI_HOSTNAME" || true
+LAMP_HOSTNAME="lamp-\${SUFFIX_LC}"
+hostnamectl set-hostname "\$LAMP_HOSTNAME" 2>/dev/null || hostname "\$LAMP_HOSTNAME" || true
 if grep -q '^127\.0\.1\.1' /etc/hosts; then
-  sed -i "s/^127\.0\.1\.1.*/127.0.1.1 \$LUMI_HOSTNAME/" /etc/hosts
+  sed -i "s/^127\.0\.1\.1.*/127.0.1.1 \$LAMP_HOSTNAME/" /etc/hosts
 else
-  echo "127.0.1.1 \$LUMI_HOSTNAME" >> /etc/hosts
+  echo "127.0.1.1 \$LAMP_HOSTNAME" >> /etc/hosts
 fi
 systemctl enable avahi-daemon 2>/dev/null || true
 systemctl restart avahi-daemon 2>/dev/null || true
@@ -628,7 +628,7 @@ if [ "\${AP_BAND}" = "5" ]; then
   cat > /etc/hostapd/hostapd.conf <<EOF
 interface=wlan0
 driver=nl80211
-ssid=Lumi-XXXX
+ssid=Lamp-XXXX
 hw_mode=a
 channel=\$CHANNEL
 country_code=\${COUNTRY_CODE}
@@ -643,7 +643,7 @@ else
   cat > /etc/hostapd/hostapd.conf <<EOF
 interface=wlan0
 driver=nl80211
-ssid=Lumi-XXXX
+ssid=Lamp-XXXX
 hw_mode=g
 channel=\$CHANNEL
 country_code=\${COUNTRY_CODE}

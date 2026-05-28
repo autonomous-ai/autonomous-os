@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// GetDeviceMac returns the hardware ID in Lumi-XXXX format (last 4 chars of Pi serial).
+// GetDeviceMac returns the hardware ID in Lamp-XXXX format (last 4 chars of Pi serial).
 // Same logic as setup.sh. Empty string if not on Pi or serial unavailable.
 func GetDeviceMac() string {
 	serial := readSerial()
@@ -17,7 +17,7 @@ func GetDeviceMac() string {
 	if len(serial) > 4 {
 		suffix = serial[len(serial)-4:]
 	}
-	return "Lumi-" + suffix
+	return "Lamp-" + suffix
 }
 
 func readSerial() string {

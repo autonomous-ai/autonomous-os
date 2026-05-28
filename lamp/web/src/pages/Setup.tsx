@@ -171,21 +171,21 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
   // retype a saved Wi-Fi password during re-setup via `#force`. Submit ships
   // an empty password; server merges from cfg.NetworkPassword pre-validation.
   const [hasNetworkPassword, setHasNetworkPassword] = useState(false);
-  // mDNS hostname for the lamp on home Wi-Fi: `lumi-<suffix>.local`. Matches
-  // what stage_ap sets via `hostnamectl set-hostname lumi-${SUFFIX_LC}` — both
+  // mDNS hostname for the lamp on home Wi-Fi: `lamp-<suffix>.local`. Matches
+  // what stage_ap sets via `hostnamectl set-hostname lamp-${SUFFIX_LC}` — both
   // sides derive the suffix from the device's hardware ID (Pi device-tree
   // serial / cpuinfo Serial / eth0 MAC, in that order) via the same logic in
   // lumi/internal/device/hardware.go.
   //
-  // The backend returns `cfg.mac` already formatted as "Lumi-XXXX" (see
-  // GetDeviceMac() — it prefixes "Lumi-" before the 4-char hex suffix), so
+  // The backend returns `cfg.mac` already formatted as "Lamp-XXXX" (see
+  // GetDeviceMac() — it prefixes "Lamp-" before the 4-char hex suffix), so
   // taking the last 4 chars and validating as hex gives us the canonical
   // suffix without depending on the prefix string. Empty when the config
   // hasn't returned yet, or when the device couldn't determine a serial.
-  const lumiMdnsHost = useMemo(() => {
+  const lampMdnsHost = useMemo(() => {
     const tail = (mac || "").trim().toLowerCase().slice(-4);
     if (!/^[0-9a-f]{4}$/.test(tail)) return "";
-    return `lumi-${tail}`;
+    return `lamp-${tail}`;
   }, [mac]);
   const [llmApiKey, setLlmApiKey] = useState(urlParams.llmApiKey || "");
   const [llmUrl, setLlmUrl] = useState(urlParams.llmUrl || "");
@@ -383,7 +383,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
   });
 
   useSetupStatusPolling({
-    setupWorking, setupPhase, setupLanIP, lumiMdnsHost,
+    setupWorking, setupPhase, setupLanIP, lampMdnsHost,
     setSetupPhase, setSetupLanIP, setSetupErrorMsg,
   });
 
@@ -669,7 +669,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                     <div style={{ fontSize: 15, fontWeight: 600, color: C.amber, marginBottom: 8 }}>
                       Lumi is joining your Wi-Fi…
                     </div>
-                    <div style={{ fontSize: 12, color: C.textDim, marginBottom: lumiMdnsHost ? 18 : 0 }}>
+                    <div style={{ fontSize: 12, color: C.textDim, marginBottom: lampMdnsHost ? 18 : 0 }}>
                       This usually takes 10-30 seconds. Stay on this network.
                     </div>
                     {/* Fallback manual link: the auto-redirect can fail when
@@ -678,7 +678,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                         to "connected". Offering the same .local link here
                         means a stuck operator can always click their way
                         out by reconnecting to home Wi-Fi first. */}
-                    {lumiMdnsHost && (
+                    {lampMdnsHost && (
                       <div style={{
                         marginTop: 6, paddingTop: 14,
                         borderTop: `1px solid ${C.border}`,
@@ -686,13 +686,13 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                       }}>
                         Stuck here? Reconnect to your home Wi-Fi, then open{" "}
                         <a
-                          href={`http://${lumiMdnsHost}.local${window.location.pathname}${getInitialSearch()}`}
+                          href={`http://${lampMdnsHost}.local${window.location.pathname}${getInitialSearch()}`}
                           style={{
                             color: C.amber, textDecoration: "none",
                             fontFamily: "ui-monospace, monospace",
                           }}
                         >
-                          http://{lumiMdnsHost}.local/
+                          http://{lampMdnsHost}.local/
                         </a>
                         .
                       </div>
@@ -708,16 +708,16 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                     </div>
 
                     {/* mDNS path (primary): the lamp publishes
-                        `lumi-<last4mac>.local` via avahi-daemon, so we don't
+                        `lamp-<last4mac>.local` via avahi-daemon, so we don't
                         need to know its new LAN IP to redirect — the browser
                         resolves it once the user is on home Wi-Fi.
                         Supported out-of-box: Windows 10 1803+, Windows 11,
                         macOS, iOS, most desktop Linux. Falls back to a
                         router-admin hint when the host is unreachable. */}
-                    {lumiMdnsHost ? (
+                    {lampMdnsHost ? (
                       <>
                         <div style={{ fontSize: 13, color: C.text, marginBottom: 4, fontFamily: "ui-monospace, monospace" }}>
-                          http://{lumiMdnsHost}.local/
+                          http://{lampMdnsHost}.local/
                         </div>
                         <div style={{ fontSize: 11, color: C.textDim, marginBottom: 18, lineHeight: 1.5 }}>
                           Reconnect your computer to your home Wi-Fi, then click
@@ -734,9 +734,9 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                           // no-ops the same-URL click and they stay stuck on
                           // the "Lumi is online!" screen even though the lamp
                           // is reachable in continue mode now.
-                          href={`http://${lumiMdnsHost}.local${window.location.pathname}${getInitialSearch()}`}
+                          href={`http://${lampMdnsHost}.local${window.location.pathname}${getInitialSearch()}`}
                           onClick={(e) => {
-                            if (window.location.hostname === `${lumiMdnsHost}.local`) {
+                            if (window.location.hostname === `${lampMdnsHost}.local`) {
                               e.preventDefault();
                               window.location.reload();
                             }
@@ -757,13 +757,13 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                             <> Try <span style={{ fontFamily: "ui-monospace, monospace" }}>http://{setupLanIP}/</span> or </>
                           )}
                           {" "}find Lumi's IP in your router's admin page (look
-                          for "{lumiMdnsHost}").
+                          for "{lampMdnsHost}").
                         </div>
                       </>
                     ) : (
                       <div style={{ fontSize: 12, color: C.textDim }}>
                         Lamp connected. Open your router's admin page to find
-                        the device's IP address (look for "lumi-").
+                        the device's IP address (look for "lamp-").
                       </div>
                     )}
                   </>
