@@ -118,7 +118,7 @@ PYEOF
 
 # 3a'. nginx /api/buddy/ws: add WebSocket upgrade block if missing.
 # Same shape as /api/system/shell — generic /api/ proxy doesn't forward Upgrade
-# headers, so the Lumi Buddy macOS companion's persistent WS handshake fails
+# headers, so the Lamp Buddy macOS companion's persistent WS handshake fails
 # without a dedicated location block. Must come BEFORE the generic /api/ block.
 python3 - "$NGINX_CONF" <<'PYEOF'
 import sys
@@ -131,7 +131,7 @@ if "location = /api/buddy/ws" in content:
     sys.exit(0)
 
 old = "  location /api/ {"
-new = """  # Lumi Buddy (macOS companion) persistent WebSocket — must come before generic /api/.
+new = """  # Lamp Buddy (macOS companion) persistent WebSocket — must come before generic /api/.
   location = /api/buddy/ws {
     proxy_pass http://backend;
     proxy_http_version 1.1;

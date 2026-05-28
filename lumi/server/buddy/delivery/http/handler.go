@@ -1,4 +1,4 @@
-// Package http exposes the lumi-buddy HTTP + WebSocket endpoints.
+// Package http exposes the lamp-buddy HTTP + WebSocket endpoints.
 //
 // Route layout (registered under /api/buddy in server.go):
 //

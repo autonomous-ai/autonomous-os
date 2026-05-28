@@ -25,7 +25,7 @@ This repo is developed in both **Cursor** and **Claude Code**. The following rul
    | Vision tracking, object follow, servo track | `docs/vision-tracking.md` | `docs/vi/vision-tracking_vi.md` |
    | Physical controls (GPIO button, TTP223 touchpad, gestures, pet response) | `docs/physical-controls.md` | `docs/vi/physical-controls_vi.md` |
    | DL backend, load balancer, encryption, models | `docs/dlbackend.md` | `docs/vi/dlbackend_vi.md` |
-   | Lumi Buddy (Mac companion app for remote computer use) | `lumi-buddy/docs/lamp-buddy.md`, `lumi-buddy/docs/lamp-buddy-mvp.md`, `lumi-buddy/docs/release-signing.md` | `lumi-buddy/docs/vi/lamp-buddy_vi.md`, `lumi-buddy/docs/vi/lamp-buddy-mvp_vi.md`, `lumi-buddy/docs/vi/release-signing_vi.md` |
+   | Lamp Buddy (Mac companion app for remote computer use) | `lamp-buddy/docs/lamp-buddy.md`, `lamp-buddy/docs/lamp-buddy-mvp.md`, `lamp-buddy/docs/release-signing.md` | `lamp-buddy/docs/vi/lamp-buddy_vi.md`, `lamp-buddy/docs/vi/lamp-buddy-mvp_vi.md`, `lamp-buddy/docs/vi/release-signing_vi.md` |
    | Security test checklist | `docs/security-test.md` | _(no vi version)_ |
 
 2. **Comments in English** — Project standard.
