@@ -48,7 +48,7 @@ type SensingEventRequest struct {
 	// right now (from FaceRecognizer.current_user()). Empty when nobody is
 	// visible. This is the source of truth — do NOT re-derive by parsing
 	// Message. Text parsing gave wrong answers when a stranger-only enter
-	// event fired while a friend was still present (Lumi would downgrade
+	// event fired while a friend was still present (Lamp would downgrade
 	// mood to "unknown" even though the friend was within forget window).
 	CurrentUser string `json:"current_user,omitempty"`
 }
@@ -98,7 +98,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		return
 	}
 	if req.Type == "voice_listening_end" {
-		// Extend window 5s to cover STT → Lumi → LLM → TTS pipeline.
+		// Extend window 5s to cover STT → Lamp → LLM → TTS pipeline.
 		h.voiceActiveUntil.Store(time.Now().Add(5 * time.Second).UnixMilli())
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(nil))
 		return
@@ -213,7 +213,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	if isPassive && h.agentGateway.IsBusy() {
 		// motion.activity and emotion.detected get queued (not dropped) because
 		// LeLamp deduplicates both with a 5-min window at the source — if one
-		// reaches Lumi it's genuinely new. Dropping it here would make LeLamp's
+		// reaches Lamp it's genuinely new. Dropping it here would make LeLamp's
 		// dedup think "sent" while the agent never saw the event, blocking the
 		// next real transition for 5 min.
 		if shouldQueueEvent(req.Type, req.Message, inVoiceWindow) {

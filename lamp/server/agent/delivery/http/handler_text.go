@@ -86,7 +86,7 @@ func extractSayTag(text string) string {
 
 // isLumiOutboundChatRunID is true when runID matches Lumi's chat.send idempotency key
 // (lumi-chat-* current; lumi-sensing-* legacy). Used so traceless lifecycle_start is not
-// mis-tagged as Telegram-only when the turn was initiated from Lumi.
+// mis-tagged as Telegram-only when the turn was initiated from Lamp.
 func isLumiOutboundChatRunID(runID string) bool {
 	if runID == "" {
 		return false
@@ -94,11 +94,11 @@ func isLumiOutboundChatRunID(runID string) bool {
 	return strings.HasPrefix(runID, "lumi-chat-") || strings.HasPrefix(runID, "lumi-sensing-")
 }
 
-// labelForLumiInternal returns the UI label that best describes a Lumi-
-// internal message (sensing/voice/wellbeing/system events Lumi posts via
+// labelForLumiInternal returns the UI label that best describes a Lamp-
+// internal message (sensing/voice/wellbeing/system events Lamp posts via
 // chat.send). Used by the Flow Monitor channel-turn handler to avoid
 // mis-labelling steer-merged self-fire turns as `[telegram]` when they
-// are actually sensing or voice events Lumi originated.
+// are actually sensing or voice events Lamp originated.
 //
 // Returns "" when the text doesn't match any known internal prefix —
 // caller should fall back to the configured-channel label in that case.
@@ -127,7 +127,7 @@ func labelForLumiInternal(text string) string {
 }
 
 // isChannelOriginatedRun returns true only when any of the given runIDs was
-// synthesised by Lumi from a real external channel user message — currently
+// synthesised by Lamp from a real external channel user message — currently
 // "tg-<msgID>" created in the session.message handler when OpenClaw forwards
 // a Telegram user turn (see handler_events.go ~line 1157).
 //
@@ -201,12 +201,12 @@ func extractMessageContentText(raw json.RawMessage) string {
 	return strings.Join(parts, "")
 }
 
-// lumiInternalPrefixes are message-text prefixes Lumi puts on chat.sends it
+// lumiInternalPrefixes are message-text prefixes Lamp puts on chat.sends it
 // issues itself (sensing events, ambient voice, activity, emotion cues,
 // wellbeing nudges, wake greetings). Used as a robust guard alongside
 // IsRecentOutboundChat — that exact-match buffer can miss when the 30s
 // window expires or 32-entry cap overflows under load. Any text starting
-// with one of these prefixes is definitely Lumi-internal, never a real
+// with one of these prefixes is definitely Lamp-internal, never a real
 // Telegram user message, and must NOT mark the run as a channel turn.
 var lumiInternalPrefixes = []string{
 	"[sensing:",
@@ -224,7 +224,7 @@ var lumiInternalPrefixes = []string{
 }
 
 // isLumiInternalMessage returns true when the message text was issued by
-// Lumi via chat.send (matches a known prefix). The check is independent of
+// Lamp via chat.send (matches a known prefix). The check is independent of
 // the recent-outbound TTL buffer so it stays correct under burst load.
 func isLumiInternalMessage(text string) bool {
 	if text == "" {

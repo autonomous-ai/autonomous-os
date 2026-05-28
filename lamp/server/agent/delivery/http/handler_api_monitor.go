@@ -73,7 +73,7 @@ func (h *AgentHandler) StopTTS(c *gin.Context) {
 
 // SetBusy marks the agent as busy from an external signal (e.g. turn-gate hook firing at
 // message:preprocessed before lifecycle_start SSE arrives). Closes the timing gap for
-// channel-initiated turns (Telegram, Slack, Discord) that bypass Lumi server entirely.
+// channel-initiated turns (Telegram, Slack, Discord) that bypass Lamp server entirely.
 func (h *AgentHandler) SetBusy(c *gin.Context) {
 	h.agentGateway.SetBusy(true)
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(nil))
@@ -90,8 +90,8 @@ func (h *AgentHandler) Status(c *gin.Context) {
 	}
 
 	// uptime: seconds since the WS connection last became ready (resets when
-	// Lumi reconnects). agentUptime: actual OpenClaw process uptime sourced from
-	// the gateway's hello-ok payload — survives Lumi restarts. The UI shows
+	// Lamp reconnects). agentUptime: actual OpenClaw process uptime sourced from
+	// the gateway's hello-ok payload — survives Lamp restarts. The UI shows
 	// agentUptime; uptime stays for debugging WS reconnect cadence.
 	var uptime int64
 	if connectedAt := h.agentGateway.ConnectedAt(); connectedAt > 0 {
