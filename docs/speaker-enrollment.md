@@ -142,7 +142,7 @@ Every unknown voice is locally clustered so the server can say "this is the same
     metadata.json                    # num_samples, dim, timestamps
     sample_{origin}_{ts}_{uuid}.wav  # Individual enrollment samples (16kHz mono)
 
-/tmp/lumi-unknown-voice/
+/tmp/lamp-unknown-voice/
   incoming_{ts}_{uuid}.wav           # Known-speaker audio (flat)
   voice_{N}/
     incoming_{ts}_{uuid}.wav         # Unknown audio — grouped by voiceprint cluster
@@ -213,13 +213,13 @@ User says: "turn on the lights please" (5 words, 3s audio)
 ```
 User turn 1: "nice to meet you today. Okay." (5 words)
 → LeLamp: recognize → unknown, voiceprint_hash=voice_5
-→ WAV moved to /tmp/lumi-unknown-voice/voice_5/incoming_A.wav
+→ WAV moved to /tmp/lamp-unknown-voice/voice_5/incoming_A.wav
 → Message: "Unknown Speaker: [voice:voice_5] nice to meet you today. Okay. (audio saved at ..._A.wav. Note: audio is too short for single enrollment. If prior turns tagged the same voice_5, combine their saved paths with this one...)"
 → Agent: asks "Could you tell me your name?"
 
 User turn 2: "I'm Alex." (2 words)
 → LeLamp: voiceprint_hash=voice_5 (same cluster, sim=0.75)
-→ WAV moved to /tmp/lumi-unknown-voice/voice_5/incoming_B.wav
+→ WAV moved to /tmp/lamp-unknown-voice/voice_5/incoming_B.wav
 → Message: "Unknown Speaker: [voice:voice_5] I'm Alex. (audio saved at ..._B.wav...)"
 → Agent: scans prior turns for same [voice:voice_5] tag → finds path A
 → Agent: POST /speaker/enroll with wav_paths=[path_A, path_B], name="Alex"
@@ -230,7 +230,7 @@ User turn 2: "I'm Alex." (2 words)
 ```
 User says: "Hi my name is Leo and I just got home from work..." (30 words, 8s audio)
 → LeLamp: recognize → unknown, _should_request_enroll(30 words, 8s) = true
-→ Message: "Unknown Speaker: Hi my name is Leo... (audio save at /tmp/lumi-unknown-voice/incoming_xxx.wav, auto enroll...)"
+→ Message: "Unknown Speaker: Hi my name is Leo... (audio save at /tmp/lamp-unknown-voice/incoming_xxx.wav, auto enroll...)"
 → Lamp: AppendEnrollNudge → cooldown OK → append "[REQUIRED: Follow speaker-recognizer/SKILL.md...]"
 → Agent: detects "my name is Leo" → POST /speaker/enroll → "Nice to meet you, Leo!"
 ```

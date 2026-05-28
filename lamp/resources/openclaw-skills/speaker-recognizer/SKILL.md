@@ -123,14 +123,14 @@ Then count words in the spoken transcript only (exclude `Unknown Speaker:`, the 
 ```bash
 curl -s -X POST http://127.0.0.1:5001/speaker/enroll \
   -H "Content-Type: application/json" \
-  -d '{"name": "darren", "wav_paths": ["/tmp/lumi-unknown-voice/incoming_171_abc.wav"]}'
+  -d '{"name": "darren", "wav_paths": ["/tmp/lamp-unknown-voice/incoming_171_abc.wav"]}'
 ```
 
 ### Enroll (mic, two paths — Turn A + Turn B)
 ```bash
 curl -s -X POST http://127.0.0.1:5001/speaker/enroll \
   -H "Content-Type: application/json" \
-  -d '{"name": "darren", "wav_paths": ["/tmp/lumi-unknown-voice/incoming_A.wav", "/tmp/lumi-unknown-voice/incoming_B.wav"]}'
+  -d '{"name": "darren", "wav_paths": ["/tmp/lamp-unknown-voice/incoming_A.wav", "/tmp/lamp-unknown-voice/incoming_B.wav"]}'
 ```
 
 ### Enroll (Telegram voice — convert in-place if needed)

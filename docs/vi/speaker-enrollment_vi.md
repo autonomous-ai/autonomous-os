@@ -143,7 +143,7 @@ Mọi giọng lạ được gom cụm local để server biết "đây là cùng
     metadata.json                    # num_samples, dim, timestamps
     sample_{origin}_{ts}_{uuid}.wav  # Các mẫu đăng ký (16kHz mono)
 
-/tmp/lumi-unknown-voice/
+/tmp/lamp-unknown-voice/
   incoming_{ts}_{uuid}.wav           # Audio known-speaker (phẳng)
   voice_{N}/
     incoming_{ts}_{uuid}.wav         # Audio unknown — gom theo cụm voiceprint
@@ -214,13 +214,13 @@ User nói: "bật đèn lên đi" (4 từ, 3s audio)
 ```
 Turn 1: "nice to meet you today. Okay." (5 từ)
 → LeLamp: recognize → unknown, voiceprint_hash=voice_5
-→ WAV chuyển vào /tmp/lumi-unknown-voice/voice_5/incoming_A.wav
+→ WAV chuyển vào /tmp/lamp-unknown-voice/voice_5/incoming_A.wav
 → Message: "Unknown Speaker: [voice:voice_5] nice to meet you today. Okay. (audio saved at ..._A.wav. Note: audio is too short for single enrollment. If prior turns tagged the same voice_5, combine their saved paths...)"
 → Agent: hỏi "Cho mình biết tên bạn với?"
 
 Turn 2: "I'm Alex." (2 từ)
 → LeLamp: voiceprint_hash=voice_5 (cùng cluster, sim=0.75)
-→ WAV chuyển vào /tmp/lumi-unknown-voice/voice_5/incoming_B.wav
+→ WAV chuyển vào /tmp/lamp-unknown-voice/voice_5/incoming_B.wav
 → Message: "Unknown Speaker: [voice:voice_5] I'm Alex. (audio saved at ..._B.wav...)"
 → Agent: quét các turn trước cùng tag [voice:voice_5] → tìm thấy path A
 → Agent: POST /speaker/enroll với wav_paths=[path_A, path_B], name="Alex"
@@ -231,7 +231,7 @@ Turn 2: "I'm Alex." (2 từ)
 ```
 User nói: "Xin chào mình là Leo, mình vừa đi làm về..." (30 từ, 8s audio)
 → LeLamp: nhận diện → unknown, _should_request_enroll(30 từ, 8s) = true
-→ Message: "Unknown Speaker: Xin chào mình là Leo... (audio save at /tmp/lumi-unknown-voice/incoming_xxx.wav, auto enroll...)"
+→ Message: "Unknown Speaker: Xin chào mình là Leo... (audio save at /tmp/lamp-unknown-voice/incoming_xxx.wav, auto enroll...)"
 → Lamp: AppendEnrollNudge → cooldown OK → chèn "[REQUIRED: Follow speaker-recognizer/SKILL.md...]"
 → Agent: phát hiện "mình là Leo" → POST /speaker/enroll → "Rất vui được biết bạn, Leo!"
 ```
