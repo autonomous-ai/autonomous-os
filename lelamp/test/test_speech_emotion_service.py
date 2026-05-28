@@ -206,7 +206,7 @@ def main() -> int:
     if not args.lumi_url:
         server = _start_mock_lumi()
         args.lumi_url = f"http://{MOCK_LUMI_HOST}:{MOCK_LUMI_PORT}/api/sensing/event"
-    _cfg.LUMI_SENSING_URL = args.lumi_url
+    _cfg.LAMP_SENSING_URL = args.lumi_url
 
     # Import AFTER config patch so module-level defaults see the right values.
     from lelamp.service.voice.speech_emotion import SpeechEmotionService

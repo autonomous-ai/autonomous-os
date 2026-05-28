@@ -29,7 +29,7 @@ from lelamp import config as _lelamp_config
 
 logger = logging.getLogger("lelamp.voice")
 
-LUMI_SENSING_URL = "http://127.0.0.1:5000/api/sensing/event"
+LAMP_SENSING_URL = "http://127.0.0.1:5000/api/sensing/event"
 
 STT_RATE = 16000   # Rate expected by all STT providers
 CHANNELS = 1
@@ -1152,12 +1152,12 @@ class VoiceService:
         import json as _json
         payload = {"type": event_type, "message": message}
         logger.info("curl -s -X POST %s -H 'Content-Type: application/json' -d '%s'",
-                    LUMI_SENSING_URL, _json.dumps(payload))
+                    LAMP_SENSING_URL, _json.dumps(payload))
         max_retries = 3
         for attempt in range(1, max_retries + 1):
             try:
                 resp = requests.post(
-                    LUMI_SENSING_URL,
+                    LAMP_SENSING_URL,
                     json=payload,
                     timeout=5,
                 )

@@ -654,7 +654,7 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
         for label in sorted(labels):
             try:
                 resp = requests.post(
-                    config.LUMI_WELLBEING_LOG_URL,
+                    config.LAMP_WELLBEING_LOG_URL,
                     json={"action": label, "notes": "", "user": log_user},
                     timeout=2,
                 )

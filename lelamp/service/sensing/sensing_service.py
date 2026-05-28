@@ -333,7 +333,7 @@ class SensingService:
 
         try:
             resp = requests.post(
-                config.LUMI_SENSING_URL,
+                config.LAMP_SENSING_URL,
                 json=payload,
                 timeout=5,
             )

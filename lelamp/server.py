@@ -42,7 +42,7 @@ from lelamp.config import (
     TTS_SPEED,
     TTS_VOICE,
     TTS_INSTRUCTIONS,
-    LUMI_CONFIG_PATH,
+    LAMP_CONFIG_PATH,
 )
 from lelamp.models import HealthResponse, StatusResponse
 from lelamp.presets import SCENE_PRESETS, SERVO_CMD_PLAY
@@ -95,11 +95,11 @@ _root.addHandler(_file)
 # GELF handler: send INFO+ logs to centralized Graylog
 try:
     from lelamp.service.gelf_handler import GELFHandler
-    from lelamp.config import _lumi_cfg_get
+    from lelamp.config import _lamp_cfg_get
 
     _gelf = GELFHandler()
     _gelf.setFormatter(logging.Formatter("%(message)s"))
-    _device_id = _lumi_cfg_get("device_id")
+    _device_id = _lamp_cfg_get("device_id")
     if _device_id:
         _gelf.set_host(_device_id)
     _root.addHandler(_gelf)
@@ -314,7 +314,7 @@ async def lifespan(app: FastAPI):
             logger.info(f"Audio input device: {state.audio_input_device}")
 
     # Auto-start voice pipeline from Lamp config
-    lumi_config_path = LUMI_CONFIG_PATH
+    lumi_config_path = LAMP_CONFIG_PATH
     try:
         with open(lumi_config_path) as f:
             lumi_cfg = json.load(f)

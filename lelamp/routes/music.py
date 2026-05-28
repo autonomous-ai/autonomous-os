@@ -93,8 +93,8 @@ _last_backchannel_idx: int = -1
 def _active_stt_language() -> str:
     """Read stt_language from Lamp's config.json. Empty/missing → ""."""
     try:
-        from lelamp.config import _lumi_cfg_get
-        return (_lumi_cfg_get("stt_language") or "").strip()
+        from lelamp.config import _lamp_cfg_get
+        return (_lamp_cfg_get("stt_language") or "").strip()
     except Exception:
         return ""
 

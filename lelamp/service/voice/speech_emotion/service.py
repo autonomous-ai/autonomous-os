@@ -84,7 +84,7 @@ _MIN_AUDIO_S: float = float(
 )
 _API_URL: str = getattr(config, "SPEECH_EMOTION_API_URL", "") or ""
 _API_KEY: str = getattr(config, "SPEECH_EMOTION_API_KEY", "") or ""
-_LUMI_URL: str = config.LUMI_SENSING_URL
+_LAMP_URL: str = config.LAMP_SENSING_URL
 
 
 @dataclass(slots=True)
@@ -132,7 +132,7 @@ class SpeechEmotionService:
         flush_s: float = _FLUSH_S,
         dedup_window_s: float = _DEDUP_WINDOW_S,
         min_audio_s: float = _MIN_AUDIO_S,
-        lumi_url: str = _LUMI_URL,
+        lumi_url: str = _LAMP_URL,
         queue_maxsize: int = DEFAULT_QUEUE_MAXSIZE,
     ):
         self._recognizer: BaseSpeechEmotionRecognizer = (
