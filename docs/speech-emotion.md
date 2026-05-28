@@ -214,7 +214,7 @@ Called from `VoiceService._stream_session`'s `finally` block. Speaker recognize 
 event_type = "voice"
 final_text = combined
 if combined:
-    # ... strip wake word; set event_type = "voice_command" if matched
+# ... strip wake word; set event_type = "voice_command" if matched
 
 # 2. Single speaker recognize per session
 final_msg, se_user = self._identify_and_decorate(final_text, audio_buffer)
@@ -222,7 +222,7 @@ user = se_user if se_user else UNKNOWN_USER_LABEL
 
 # 3. Decorate → Lamp (only when STT had text)
 if combined:
-    self._send_to_lumi(final_msg, event_type=event_type)
+    self._send_to_lamp(final_msg, event_type=event_type) 
 
 # 4. Submit SER — independent pipeline, reuses speaker result from step 2
 self._submit_speech_emotion_from_session(audio_buffer, user=user)

@@ -159,7 +159,7 @@ class SpeechEmotionService:
             logger.info(
                 "[speech_emotion] SERVICE STARTED — flush=%.1fs dedup=%.1fs "
                 "min_audio=%.1fs per-label thresholds=%s default=%.2f "
-                "lumi_url=%s recognizer=%s",
+                "lamp_url=%s recognizer=%s",
                 flush_s, dedup_window_s, min_audio_s,
                 CONFIDENCE_THRESHOLD_BY_LABEL, DEFAULT_CONFIDENCE_THRESHOLD,
                 self._lamp_url, type(self._recognizer).__name__,
@@ -401,11 +401,11 @@ class SpeechEmotionService:
             "[speech_emotion] EMIT — user=%r message=%r",
             user, message,
         )
-        self._send_to_lumi(message=message, user=user)
+        self._send_to_lamp(message=message, user=user)
 
     # --- transport --------------------------------------------------------
 
-    def _send_to_lumi(self, *, message: str, user: str) -> None:
+    def _send_to_lamp(self, *, message: str, user: str) -> None:
         """POST sensing event to Lamp with 3x retry on connection error / 503.
 
         Same shape as voice_service._send_to_lumi but carries `current_user`
