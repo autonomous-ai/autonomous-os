@@ -1,6 +1,6 @@
 # CAD
 
-Mechanical source files for the Lumi lamp.
+Mechanical source files for Lamp.
 
 Large CAD binaries (`*.stp`, `*.step`, `*.stl`, `*.f3d`, `*.f3z`) are tracked
 via **Git LFS**. See the repo-root `.gitattributes` for the filter rules.
