@@ -30,7 +30,7 @@ logger.setLevel(logging.DEBUG)
 RESOURCES_DIR = Path(__file__).parent / "resources"
 
 # Map raw Kinetics action labels to high-level activity groups.
-# Lumi receives the raw labels — the agent infers the group. The mapping here
+# Lamp receives the raw labels — the agent infers the group. The mapping here
 # is kept only to filter out emotional actions (handled by a separate channel).
 ACTIVITY_GROUP: dict[str, str] = {
     # drink — reset hydration timer
@@ -329,7 +329,7 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
         # the new activity; same logic now applies to `eating burger →
         # eating cake` (eat stays raw, distinct keys), trading a bit of
         # extra noise for richer reaction phrasing. Same key within
-        # MOTION_DEDUP_WINDOW_S = drop (saves Lumi tokens). User change flips
+        # MOTION_DEDUP_WINDOW_S = drop (saves Lamp tokens). User change flips
         # the key immediately; different strangers collapse to "unknown" so
         # they don't break dedup on their own.
         self._last_sent_key: tuple[str, frozenset[str]] | None = None
@@ -561,7 +561,7 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
                     summary_with_streak: dict[str, Any] = dict(summary)
                     summary_with_streak["streak_min"] = streak_min
                     # Bucket pointers are surfaced as separate markers (not
-                    # inside posture_summary) so the Lumi handler can lift
+                    # inside posture_summary) so the Lamp handler can lift
                     # them off the message before stripping for the LLM —
                     # the agent never sees the file paths. Mirrors the
                     # existing [snapshot: …] marker pattern.
@@ -606,7 +606,7 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
         # changed since the last send AND we're still within the dedup window.
         # A user change or a label-set change flips the key — those always
         # pass through. After 5 min the same key passes through anyway so
-        # Lumi agent wakes up and reruns the threshold check.
+        # Lamp agent wakes up and reruns the threshold check.
         current_user = self._perception_state.current_user.data or ""
 
         key = (current_user, frozenset(labels))
@@ -629,7 +629,7 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
         self._last_sent_key = key
         self._last_sent_ts = cur_ts
 
-        # Log each outbound label to Lumi wellbeing BEFORE firing the event.
+        # Log each outbound label to Lamp wellbeing BEFORE firing the event.
         # Log-first means when the agent reads history on motion.activity,
         # the new rows are already there — no read-before-write race if the
         # skill queries concurrently. Log-and-forget on failure: we keep the
@@ -644,11 +644,11 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
         self._send_event("motion.activity", message, "motion_activity",[snapshots_buffer[-1]], None)
 
     def _post_wellbeing_labels(self, user: str, labels: set[str]) -> None:
-        """POST each activity label to Lumi wellbeing log.
+        """POST each activity label to Lamp wellbeing log.
 
         Replaces the agent's per-label POST that used to live in the
         wellbeing SKILL (Step 1). Fires synchronously but with a short
-        timeout so a stuck Lumi never blocks motion detection.
+        timeout so a stuck Lamp never blocks motion detection.
         """
         log_user = user or "unknown"
         for label in sorted(labels):

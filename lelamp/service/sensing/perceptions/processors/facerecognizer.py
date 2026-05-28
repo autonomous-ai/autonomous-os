@@ -701,7 +701,7 @@ class FacePerception(Perception[cv2.typing.MatLike]):
                 ):
                     if face_data.kind == PersonKind.FRIEND:
                         new_owners.add(person_id)
-                        # Per-friend enter row: Lumi's wellbeing_context uses
+                        # Per-friend enter row: Lamp's wellbeing_context uses
                         # "enter" as one of the reset anchors for hydration/break
                         # deltas; without it, deltas stay -1 all day and
                         # nudge_hydration never fires for a user who hasn't been
@@ -886,9 +886,9 @@ class FacePerception(Perception[cv2.typing.MatLike]):
         )
 
     def _post_wellbeing(self, user: str, action: str) -> None:
-        """POST an enter/leave row to Lumi's wellbeing log.
+        """POST an enter/leave row to Lamp's wellbeing log.
 
-        Fire-and-forget with a short timeout — a stuck Lumi must never
+        Fire-and-forget with a short timeout — a stuck Lamp must never
         block face detection. Phase 2 dedup in wellbeing.go absorbs any
         residual duplicates from races or restarts.
         """
@@ -982,7 +982,7 @@ class FacePerception(Perception[cv2.typing.MatLike]):
         """Return the name of the person currently "in front" of the lamp:
         - Friend with the MOST RECENT session start (enter-after-last-leave)
           among friends still within the forget window.
-          Lowercased to match the Lumi per-user folder convention.
+          Lowercased to match the Lamp per-user folder convention.
         - "unknown" if no friend is visible but any stranger was seen within
           the stranger forget window (all strangers collapse to one bucket).
         - Empty string if nobody has been seen recently.

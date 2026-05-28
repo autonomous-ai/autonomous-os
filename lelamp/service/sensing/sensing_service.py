@@ -1,7 +1,7 @@
 """
-Sensing Service — background loop that detects motion/sound/faces/light and pushes events to Lumi Server.
+Sensing Service — background loop that detects motion/sound/faces/light and pushes events to Lamp Server.
 
-Lumi Server (Go, port 5000) then forwards these events to OpenClaw via WebSocket chat.send,
+Lamp Server (Go, port 5000) then forwards these events to OpenClaw via WebSocket chat.send,
 so the AI agent can react proactively (Pillar 4: "It acts on its own").
 
 Detectors:
@@ -316,7 +316,7 @@ class SensingService:
         logger.info("[sensing] %s: %s", event_type, message)
 
         payload: dict[str, object] = {"type": event_type, "message": message}
-        # Include LeLamp's effective current_user so Lumi handler doesn't
+        # Include LeLamp's effective current_user so Lamp handler doesn't
         # have to re-derive it from the message text. Text parsing breaks
         # when a stranger-only enter event fires while a friend is still
         # present (extractUserName sees no friend in the message and
@@ -339,9 +339,9 @@ class SensingService:
             )
             if resp.status_code != 200:
                 logger.warning(
-                    "[sensing] Lumi returned %d: %s", resp.status_code, resp.text
+                    "[sensing] Lamp returned %d: %s", resp.status_code, resp.text
                 )
             else:
                 self._last_event_time[event_type] = cur_ts
         except requests.RequestException as e:
-            logger.warning("[sensing] Failed to send event to Lumi: %s", e)
+            logger.warning("[sensing] Failed to send event to Lamp: %s", e)
