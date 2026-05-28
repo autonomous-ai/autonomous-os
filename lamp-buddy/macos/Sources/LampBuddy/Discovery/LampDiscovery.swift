@@ -11,7 +11,7 @@ final class LampDiscovery {
         stop()
         let parameters = NWParameters()
         parameters.includePeerToPeer = false
-        let browser = NWBrowser(for: .bonjour(type: "_lumi._tcp", domain: nil), using: parameters)
+        let browser = NWBrowser(for: .bonjour(type: "_lamp._tcp", domain: nil), using: parameters)
         browser.browseResultsChangedHandler = { [weak self] results, _ in
             self?.handle(results: results)
         }

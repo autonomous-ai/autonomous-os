@@ -11,7 +11,7 @@ import (
 )
 
 // PairingRecord is what the lamp persists for each paired buddy.
-// In production lumi this would live in `config/buddies.json`; the mock keeps it in memory.
+// In production lamp this would live in `config/buddies.json`; the mock keeps it in memory.
 type PairingRecord struct {
 	Token       string `json:"token"`
 	BuddyID     string `json:"buddy_id"`
@@ -23,7 +23,7 @@ type PairingRecord struct {
 // State holds all server-side state: the pending pairing code, the (single) paired buddy,
 // the current WebSocket, and the table of in-flight requests waiting for their response.
 //
-// Mirrors what lumi's `internal/buddy/service.go` + `registry.go` + `pairing.go` will look like.
+// Mirrors what lamp's `internal/buddy/service.go` + `registry.go` + `pairing.go` will look like.
 type State struct {
 	mu      sync.Mutex
 	code    string

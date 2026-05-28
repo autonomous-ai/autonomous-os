@@ -2,7 +2,7 @@
 
 Tiny Go server that mocks the Lamp's buddy contract. Use it to test the macOS `lamp-buddy` app end-to-end **without** running the real Lamp Go server.
 
-It doubles as a **reference implementation** for the eventual Lamp-side work: the file structure, types, and dispatch loop here mirror what `lumi/internal/buddy/` and `lumi/server/buddy/delivery/http/` will end up looking like.
+It doubles as a **reference implementation** for the eventual Lamp-side work: the file structure, types, and dispatch loop here mirror what `lamp/internal/buddy/` and `lamp/server/buddy/delivery/http/` will end up looking like.
 
 ## Run
 
@@ -93,12 +93,12 @@ mock-lamp/
 
 When the real Lamp-side work happens, expect roughly:
 
-- `lumi/server/buddy/delivery/http/handler_pair.go` ← `pairing.go`
-- `lumi/server/buddy/delivery/http/handler_ws.go` ← `ws.go` (HandleWS only)
-- `lumi/internal/buddy/dispatcher.go` ← `ws.go` (Dispatch + pending)
-- `lumi/internal/buddy/types.go` ← `command.go` (Command struct)
-- `lumi/internal/buddy/store.go` ← `state.go` (PairingRecord persistence — `buddies.json` instead of in-memory)
-- `lumi/internal/buddy/pairing.go` ← `state.go` (code generation + token issuance, with admin auth on /start)
+- `lamp/server/buddy/delivery/http/handler_pair.go` ← `pairing.go`
+- `lamp/server/buddy/delivery/http/handler_ws.go` ← `ws.go` (HandleWS only)
+- `lamp/internal/buddy/dispatcher.go` ← `ws.go` (Dispatch + pending)
+- `lamp/internal/buddy/types.go` ← `command.go` (Command struct)
+- `lamp/internal/buddy/store.go` ← `state.go` (PairingRecord persistence — `buddies.json` instead of in-memory)
+- `lamp/internal/buddy/pairing.go` ← `state.go` (code generation + token issuance, with admin auth on /start)
 
 ## What the mock does NOT do (vs production)
 
@@ -108,4 +108,4 @@ When the real Lamp-side work happens, expect roughly:
 - **No TLS** — `ws://` only, LAN dev tool
 - **No rate limiting** — production should cap commands/sec/buddy
 
-Throw it away (or keep as a fixture for `go test`) once `lumi/internal/buddy/` lands.
+Throw it away (or keep as a fixture for `go test`) once `lamp/internal/buddy/` lands.

@@ -20,7 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.dispatcher = dispatcher
         self.pairingManager = pairingManager
 
-        // Bonjour discovery — best-effort. If lamp doesn't advertise `_lumi._tcp`,
+        // Bonjour discovery — best-effort. If lamp doesn't advertise `_lamp._tcp`,
         // user pairs by typing `lamp-xxxx.local` manually.
         let discovery = LampDiscovery()
         discovery.onLampsChanged = { lamps in

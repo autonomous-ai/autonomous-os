@@ -9,7 +9,7 @@ import (
 )
 
 // Command matches the JSON shape the buddy expects on its WebSocket.
-// Identical to what lumi will use in `lumi/internal/buddy/types.go`.
+// Identical to what lamp will use in `lamp/internal/buddy/types.go`.
 type Command struct {
 	ID        string         `json:"id"`
 	Action    string         `json:"action"`
@@ -55,7 +55,7 @@ func parseREPL(line string) (Command, bool) {
 	case "open_url":
 		return newCommand("open_url", map[string]any{"url": fallback(rest, "https://example.com")}), true
 	case "type_text":
-		return newCommand("type_text", map[string]any{"text": fallback(rest, "hello from lumi")}), true
+		return newCommand("type_text", map[string]any{"text": fallback(rest, "hello from lamp")}), true
 	case "key_combo":
 		if rest == "" {
 			return Command{}, false
@@ -63,7 +63,7 @@ func parseREPL(line string) (Command, bool) {
 		return newCommand("key_combo", map[string]any{"keys": strings.Fields(rest)}), true
 	case "notification":
 		return newCommand("notification", map[string]any{
-			"title": fallback(rest, "Lumi"),
+			"title": fallback(rest, "Lamp"),
 			"body":  "Test from mock-lamp",
 		}), true
 

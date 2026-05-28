@@ -9,5 +9,5 @@ xcuserdata/
 dist/
 
 # mock-lamp build output
-mock-lamp/lumi-buddy-mock-lamp
+mock-lamp/lamp-buddy-mock-lamp
 mock-lamp/mock-lamp

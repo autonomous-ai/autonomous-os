@@ -65,7 +65,7 @@ final class PairingManager {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw PairingError.malformedResponse
         }
-        // Accept both raw {token, buddy_id} and lumi envelope {status, data: {...}, message}
+        // Accept both raw {token, buddy_id} and lamp envelope {status, data: {...}, message}
         let payload: [String: Any] = (json["data"] as? [String: Any]) ?? json
         guard let token = payload["token"] as? String,
               let buddyID = payload["buddy_id"] as? String else {

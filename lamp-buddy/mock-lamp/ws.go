@@ -12,7 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Mirrors what lumi's `internal/buddy/ws.go` and `internal/buddy/dispatcher.go` will look like.
+// Mirrors what lamp's `internal/buddy/ws.go` and `internal/buddy/dispatcher.go` will look like.
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
@@ -79,7 +79,7 @@ func (s *State) HandleWS(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleCommand accepts a command over HTTP and forwards it to the connected buddy.
-// Mirrors what lumi production will expose at /api/buddy/command (with admin auth added).
+// Mirrors what lamp production will expose at /api/buddy/command (with admin auth added).
 // Used by the mock REPL AND by external "brain" callers (curl, OpenClaw skill, etc.).
 func (s *State) HandleCommand(w http.ResponseWriter, r *http.Request) {
 	var req struct {

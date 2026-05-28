@@ -8,7 +8,7 @@ import (
 )
 
 // Mirrors the production handlers that will live in
-// `lumi/server/buddy/delivery/http/handler_pair.go`.
+// `lamp/server/buddy/delivery/http/handler_pair.go`.
 
 type pairStartResponse struct {
 	Code      string `json:"code"`

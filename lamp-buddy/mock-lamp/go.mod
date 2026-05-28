@@ -1,4 +1,4 @@
-module lumi-buddy-mock-lamp
+module lamp-buddy-mock-lamp
 
 go 1.22
 
