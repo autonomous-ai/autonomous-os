@@ -9,7 +9,7 @@ What it exercises:
 
 To avoid needing a running Lamp instance on the dev machine, the script
 spins up a tiny mock HTTP listener on `127.0.0.1:5000` that captures
-every `/api/sensing/event` POST and prints it. Override with --lumi-url
+every `/api/sensing/event` POST and prints it. Override with --lamp-url
 to talk to a real Lamp instead.
 
 Usage (from repo root):
@@ -29,7 +29,7 @@ Usage (from repo root):
 
     # Point at a real Lamp
     python -m lelamp.test.test_speech_emotion_service \\
-        --lumi-url http://192.168.1.42:5000/api/sensing/event
+        --lamp-url http://192.168.1.42:5000/api/sensing/event
 
 Run the engine-only script first
 (`python -m lelamp.test.test_speech_emotion_engine`) to confirm
@@ -60,8 +60,8 @@ logger = logging.getLogger("test.speech_emotion_service")
 
 SAMPLE_RATE = 16000
 CHANNELS = 1
-MOCK_LUMI_HOST = "127.0.0.1"
-MOCK_LUMI_PORT = 5000
+MOCK_LAMP_HOST = "127.0.0.1"
+MOCK_LAMP_PORT = 5000
 # Hit FastAPI directly. Production prefix `/lelamp/api/dl/ser/recognize`
 # only works when nginx fronts dlbackend (RunPod) and strips `/lelamp/`.
 # Local dev hits uvicorn straight on its port, no prefix.
@@ -79,7 +79,7 @@ class _CapturedPost:
         return f"<POST {self.path} payload={self.payload}>"
 
 
-class _MockLumiHandler(http.server.BaseHTTPRequestHandler):
+class _MockLampHandler(http.server.BaseHTTPRequestHandler):
     captured: list[_CapturedPost] = []
 
     def do_POST(self) -> None:  # noqa: N802 (http.server contract)
@@ -89,8 +89,8 @@ class _MockLumiHandler(http.server.BaseHTTPRequestHandler):
             payload = json.loads(body)
         except json.JSONDecodeError:
             payload = {"_raw": body}
-        _MockLumiHandler.captured.append(_CapturedPost(self.path, payload))
-        logger.info("[mock-lumi] received %s payload=%s", self.path, payload)
+        _MockLampHandler.captured.append(_CapturedPost(self.path, payload))
+        logger.info("[mock-lamp] received %s payload=%s", self.path, payload)
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -100,15 +100,15 @@ class _MockLumiHandler(http.server.BaseHTTPRequestHandler):
         return
 
 
-def _start_mock_lumi() -> http.server.HTTPServer:
+def _start_mock_lamp() -> http.server.HTTPServer:
     server = http.server.HTTPServer(
-        (MOCK_LUMI_HOST, MOCK_LUMI_PORT), _MockLumiHandler,
+        (MOCK_LAMP_HOST, MOCK_LAMP_PORT), _MockLampHandler,
     )
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
     logger.info(
-        "Mock Lamp listening on http://%s:%d  (override with --lumi-url)",
-        MOCK_LUMI_HOST, MOCK_LUMI_PORT,
+        "Mock Lamp listening on http://%s:%d  (override with --lamp-url)",
+        MOCK_LAMP_HOST, MOCK_LAMP_PORT,
     )
     return server
 
@@ -159,9 +159,9 @@ def main() -> int:
              "direct — no nginx prefix).",
     )
     parser.add_argument(
-        "--lumi-url", default="",
+        "--lamp-url", default="",
         help="Override Lamp sensing URL. Default: spin up a local mock on "
-             f"http://{MOCK_LUMI_HOST}:{MOCK_LUMI_PORT}/api/sensing/event",
+             f"http://{MOCK_LAMP_HOST}:{MOCK_LAMP_PORT}/api/sensing/event",
     )
     parser.add_argument("--user", default="alice",
                         help="Identifier to attribute each clip to. Use "
@@ -201,12 +201,12 @@ def main() -> int:
     _cfg.SPEECH_EMOTION_API_KEY = args.api_key
     logger.info("Resolved SER URL: %s", _cfg.SPEECH_EMOTION_API_URL)
 
-    # Mock Lamp unless --lumi-url given.
+    # Mock Lamp unless --lamp-url given.
     server = None
-    if not args.lumi_url:
-        server = _start_mock_lumi()
-        args.lumi_url = f"http://{MOCK_LUMI_HOST}:{MOCK_LUMI_PORT}/api/sensing/event"
-    _cfg.LAMP_SENSING_URL = args.lumi_url
+    if not args.lamp_url:
+        server = _start_mock_lamp()
+        args.lamp_url = f"http://{MOCK_LAMP_HOST}:{MOCK_LAMP_PORT}/api/sensing/event"
+    _cfg.LAMP_SENSING_URL = args.lamp_url
 
     # Import AFTER config patch so module-level defaults see the right values.
     from lelamp.service.voice.speech_emotion import SpeechEmotionService
@@ -244,8 +244,8 @@ def main() -> int:
     print()
     print("=" * 60)
     print(f"Submitted clips     : {args.reps}")
-    print(f"Lamp POSTs captured : {len(_MockLumiHandler.captured)}")
-    for cap in _MockLumiHandler.captured:
+    print(f"Lamp POSTs captured : {len(_MockLampHandler.captured)}")
+    for cap in _MockLampHandler.captured:
         print(f"  - {cap.path}  type={cap.payload.get('type')}  "
               f"user={cap.payload.get('current_user')}")
         print(f"    message={cap.payload.get('message')!r}")
