@@ -335,11 +335,11 @@ Page mới `Paired Computers`:
 
 ### Brief ban đầu của Leo
 
-> Mình muốn làm 1 chức năng remote computer use. Tưởng tượng Lumi lamp sẽ remote vào MacBook của mình, điều khiển máy tính, app, browser Chrome … giống cách supporter qua TeamViewer điều khiển máy của mình.
+> Mình muốn làm 1 chức năng remote computer use. Tưởng tượng Lamp sẽ remote vào MacBook của mình, điều khiển máy tính, app, browser Chrome … giống cách supporter qua TeamViewer điều khiển máy của mình.
 >
-> Máy MacBook cần chạy 1 software lumi-buddy trên top status bar, sau đó quét xem có Lumi lamp đang chạy LAN IP gì đó, thì accept cho Lumi lamp được connect và computer use máy MacBook.
+> Máy MacBook cần chạy 1 software lamp-buddy trên top status bar, sau đó quét xem có Lamp đang chạy LAN IP gì đó, thì accept cho Lamp được connect và computer use máy MacBook.
 >
-> VD mình nói "mở Chrome trên máy tính và vào Gmail lấy mail ra", hay "tự động join Google Meet" … cần code thêm 1 folder riêng `lumi-buddy` (chưa rõ dùng ngôn ngữ gì swift hay flutter …). Sau đó install vào Mac/Windows/Linux. Software này paring với Lumi lamp và cho phép Lumi lamp điều khiển.
+> VD mình nói "mở Chrome trên máy tính và vào Gmail lấy mail ra", hay "tự động join Google Meet" … cần code thêm 1 folder riêng `lamp-buddy` (chưa rõ dùng ngôn ngữ gì swift hay flutter …). Sau đó install vào Mac/Windows/Linux. Software này paring với Lamp và cho phép Lamp điều khiển.
 
 ### Các phương án đã cân nhắc
 

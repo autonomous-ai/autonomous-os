@@ -1,7 +1,7 @@
 # Security Audit: Lamp Go Server
 
 Date: 2026-05-16  
-Repo: `ai-lamp-lumi`  
+Repo: `lamp`  
 Scope: Lamp Go server only (`lamp/server`, `lamp/internal`, `lamp/domain`, nginx `/api/` wiring).  
 Instruction: report issues and exact remediation guidance only; do **not** patch runtime code in this document.
 

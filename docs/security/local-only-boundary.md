@@ -1,7 +1,7 @@
 # Security Audit: Local-only API Boundary for Lamp / LeLamp / OpenClaw
 
 Date: 2026-05-16  
-Repo: `ai-lamp-lumi`  
+Repo: `lamp`  
 Scope requested: identify issues and remediation plan only; do **not** patch runtime code in this report.
 
 ## Executive summary

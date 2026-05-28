@@ -1,7 +1,7 @@
 # Security Audit: Lamp Web Frontend
 
 Date: 2026-05-16  
-Repo: `ai-lamp-lumi`  
+Repo: `lamp`  
 Scope: Lamp frontend only (`lamp/web/src`, `lamp/web/package.json`, browser-facing behavior).  
 Instruction: report issues and remediation guidance only; do **not** patch runtime code in this document.
 

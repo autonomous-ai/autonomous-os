@@ -495,7 +495,7 @@ make tag-release v0.0.8
 # → git push origin v0.0.8
 ```
 
-Người mua chạy `lamp-server --version` trên thiết bị — giá trị lấy từ `git describe --tags --always --dirty` lúc build (`Makefile:VERSION`), nên resolve về tag gần nhất. Họ mở repo public (`github.com/autonomous-ai/ai-lamp-lumi`), tìm tag đúng, đọc annotation để xem chính xác version `lamp`/`lelamp`/`web`/`bootstrap` đã bake vào release đó, rồi checkout commit tương ứng để có source.
+Người mua chạy `lamp-server --version` trên thiết bị — giá trị lấy từ `git describe --tags --always --dirty` lúc build (`Makefile:VERSION`), nên resolve về tag gần nhất. Họ mở repo public (`github.com/autonomous-ai/lamp`), tìm tag đúng, đọc annotation để xem chính xác version `lamp`/`lelamp`/`web`/`bootstrap` đã bake vào release đó, rồi checkout commit tương ứng để có source.
 
 Guards trong script: từ chối nếu tag đã tồn tại local hoặc trên remote, từ chối nếu fetch metadata fail hoặc JSON invalid (`set -euo pipefail` + `jq .`). Override qua env: `OTA_METADATA_URL` (mặc định: `https://cdn.autonomous.ai/lamp/ota/metadata.json`), `TAG_REMOTE` (mặc định: `origin`).
 

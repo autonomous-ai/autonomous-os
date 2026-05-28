@@ -497,7 +497,7 @@ make tag-release v0.0.8
 # → git push origin v0.0.8
 ```
 
-Buyers run `lamp-server --version` on the device — value comes from `git describe --tags --always --dirty` at build time (`Makefile:VERSION`), so it resolves to the closest tag. They then open the public repo (`github.com/autonomous-ai/ai-lamp-lumi`), find the matching tag, read the annotation for the exact `lamp`/`lelamp`/`web`/`bootstrap` versions baked at release time, and checkout that commit for corresponding source.
+Buyers run `lamp-server --version` on the device — value comes from `git describe --tags --always --dirty` at build time (`Makefile:VERSION`), so it resolves to the closest tag. They then open the public repo (`github.com/autonomous-ai/lamp`), find the matching tag, read the annotation for the exact `lamp`/`lelamp`/`web`/`bootstrap` versions baked at release time, and checkout that commit for corresponding source.
 
 Guards in the script: refuses if tag already exists locally or on remote, refuses if metadata fetch fails or JSON is invalid (`set -euo pipefail` + `jq .`). Overrides via env vars: `OTA_METADATA_URL` (default: `https://cdn.autonomous.ai/lamp/ota/metadata.json`), `TAG_REMOTE` (default: `origin`).
 
