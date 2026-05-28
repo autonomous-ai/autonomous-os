@@ -2,6 +2,8 @@
 
 Running list of parts that go into one lamp. Models / links filled in as we lock things down.
 
+Parts tagged **optional** or **decorative** in the notes column are **not required** for a functional build — the lamp works fine without them.
+
 | Part | Model | Notes |
 |---|---|---|
 | Mic 1 (voice) | USB dual mic HK JZMIC v1.0 | to be updated |
@@ -18,11 +20,11 @@ Running list of parts that go into one lamp. Models / links filled in as we lock
 | 3D printed body | | STL / STEP files: see `cad/` |
 | Ball bearing | | STL / STEP files: see `cad/` |
 | Aluminium CNC parts | | holds the STS3215 servos; STL / STEP files: see `cad/` |
-| Wooden CNC parts | | STL / STEP files: see `cad/` |
-| Limited edition tag | | optional, decorative — units 1–100, CNC aluminium or laser engraving on leather |
+| Wooden CNC parts | | **decorative** — STL / STEP files: see `cad/` |
+| Limited edition tag | | **decorative** — units 1–100, CNC aluminium or laser engraving on leather |
 | Power adaptor | 12V 5A LiteOn | |
 | DC-DC step-down (12V → 5V for OrangePi) | MP2482 | needs replacement — produces audible audio hiss |
 | Fan 5V | Nidec | |
 | Touch button x4 | TTP223 | mounted on the lamp head |
-| Steel plate (dead weight) | 5 mm thick steel disc, ~3 kg | optional — ballast for base stability |
-| Silicon pad | | optional — stuck to the bottom of the lamp base to reduce slipping |
+| Steel plate (dead weight) | 5 mm thick steel disc, ~3 kg | **optional** — ballast for base stability |
+| Silicon pad | | **optional** — stuck to the bottom of the lamp base to reduce slipping |
