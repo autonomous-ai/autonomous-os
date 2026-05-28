@@ -11,8 +11,8 @@ const webVersion = fs.existsSync(versionFile)
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, __dirname, "LUMI_");
-  const proxy = env.LUMI_PROXY || process.env.LUMI_PROXY;
+  const env = loadEnv(mode, __dirname, "LAMP_");
+  const proxy = env.LAMP_PROXY || process.env.LAMP_PROXY;
   return {
     define: {
       __WEB_VERSION__: JSON.stringify(webVersion),
