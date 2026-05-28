@@ -289,7 +289,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 						case senderLabel != "":
 							prefix = "[" + chName + ":" + senderLabel + "]"
 						default:
-							if lbl := labelForLumiInternal(userMsg); lbl != "" {
+							if lbl := labelForLampInternal(userMsg); lbl != "" {
 								prefix = lbl
 							} else {
 								prefix = "[chat]"
@@ -1367,7 +1367,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 				// 30s/32-entry buffer overflow) + IsRecentOutboundChat (catches
 				// custom message texts not in the prefix list).
 				msgText := extractMessageContentText(sm.Message.Content)
-				if msgText != "" && (isLumiInternalMessage(msgText) || h.agentGateway.IsRecentOutboundChat(msgText)) {
+				if msgText != "" && (isLampInternalMessage(msgText) || h.agentGateway.IsRecentOutboundChat(msgText)) {
 					// fall through to skip log — not a real interleave
 				} else {
 					chatID := extractTelegramChatID(msgText)
@@ -1407,7 +1407,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 		// still get correctly classified as Lamp-internal (not Telegram).
 		if sm.Message.Role == "user" {
 			text := extractMessageContentText(sm.Message.Content)
-			if text != "" && (isLumiInternalMessage(text) || h.agentGateway.IsRecentOutboundChat(text)) {
+			if text != "" && (isLampInternalMessage(text) || h.agentGateway.IsRecentOutboundChat(text)) {
 				slog.Info("session.message skipped — Lamp-outbound echo",
 					"component", "agent", "sessionKey", sm.SessionKey,
 					"preview", text[:min(len(text), 80)])
