@@ -31,6 +31,7 @@ Build order for one lamp. Skeleton — fill in photos and torque values as we bu
    - 12 V → MP2482 buck → 5 V to SBC and LED ring
    - All grounds to star point at buck output (see [`power.md`](power.md))
 9. **Plug USB devices**: camera, mic, servo control board.
+   - **Mic 2 (sensing) rework**: the OrangePi 4 Pro's onboard MEMS mic must be desoldered from its pads and re-mounted in the lamp base, wired back to the same pads with an extended (twisted) cord. Do this before mounting the SBC if possible — the pads are easier to reach with the board out.
 10. **Smoke test before closing the body**:
     - Power on with current meter inline if possible.
     - Confirm SBC boots (LEDs on board).

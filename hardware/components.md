@@ -2,23 +2,25 @@
 
 Running list of parts that go into one lamp. Models / links filled in as we lock things down.
 
-| Part | Model | Link / Notes |
+| Part | Model | Notes |
 |---|---|---|
-| Mic 1 (voice) | USB | |
-| Mic 2 (sensing) | onboard OrangePi | |
-| Camera | USB | https://www.alibaba.com/product-detail/Newlink-1080P-30fps-IMX307-Starvis-Day_1600739999329.html |
+| Mic 1 (voice) | USB dual mic HK JZMIC v1.0 | to be updated |
+| Camera | USB ZV A016 V4 | FOV 78° |
 | Speaker 3W x2 | | |
-| Speaker amplifier | PAM8610 v2 | TBD |
-| USB audio board (DAC) | TBD | feeds line-in of PAM8610; onboard codec → PAM path was hissing / static |
-| Pi5 | 4GB RAM | |
-| Servo x5 | STS3215 ST-3215-C018 | drives via Waveshare Bus Servo Adapter (USB) |
-| Waveshare Bus Servo Adapter | USB-to-TTL servo bus | shows up as `/dev/ttyACM0`; powers servo bus from external 5 V |
-| RGB LED ring | | |
-| Button | | |
-| Wire, screw, header, USB-C female | | |
-| 3D printed body | | |
-| Power adaptor | 12V 5A | |
-| DC-DC step-down (12V → 5V for OrangePi) | MP2482 | |
+| Speaker amplifier | PAM8610 v2 | |
+| OrangePi 4 Pro | 4GB or 6GB RAM | |
+| Servo x5 | STS3215 ST-3215-C018 | |
+| Servo control board (USB) | Waveshare Bus Servo Adapter | https://www.waveshare.com/product/modules/motors-servos/drivers/bus-servo-adapter-a.htm |
+| RGB LED ring | WS2812B 32-LED ring | |
+| User button | Tactile button switch 6 mm | https://www.adafruit.com/product/367 or equivalent. Merged with reset (hold 15 s to reset) |
+| RJ45 extender | | extends the OrangePi 4 Pro Ethernet port |
+| Wire, screw, header, USB-C female | | to be updated |
+| 3D printed body | | STL / STEP files: see `cad/` |
+| Ball bearing | | STL / STEP files: see `cad/` |
+| Aluminium CNC parts | | holds the STS3215 servos; STL / STEP files: see `cad/` |
+| Wooden CNC parts | | STL / STEP files: see `cad/` |
+| Limited edition tag | | optional, decorative — units 1–100, CNC aluminium or laser engraving on leather |
+| Power adaptor | 12V 5A LiteOn | |
+| DC-DC step-down (12V → 5V for OrangePi) | MP2482 | needs replacement — produces audible audio hiss |
 | Fan 5V | Nidec | |
-| Touch sensor x4 | TTP223 | swipe gesture pads (left↔right); see `wiring.md` |
-| Resistor pair (Option B only) | 47 Ω + 91 Ω | divider for 5 V → 3.3 V at the head if reusing the existing 5 V rail; not needed if running a 3.3 V wire from the OPi |
+| Touch button x4 | TTP223 | mounted on the lamp head |

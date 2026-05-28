@@ -101,6 +101,8 @@ Two mics: a USB mic for voice capture, an onboard mic for ambient sensing.
 | Voice (Mic 1) | USB mic (`lamp_usb_mic` card) | `plug:lamp_micro2` | `/opt/lelamp/.env` (`LELAMP_AUDIO_INPUT_ALSA`) |
 | Sensing (Mic 2) | onboard codec capture | `plug:lamp_micro1` | `/opt/lelamp/.env` (`LELAMP_AUDIO_SENSING_DEVICE`) |
 
+> Mic 2 is the onboard MEMS mic that ships on the OrangePi 4 Pro PCB. It must be **desoldered from the OPi board and re-mounted in the lamp base with an extended cord** to the original pads. Keep the cord short enough to avoid noise pickup — twist the signal and ground together.
+
 > ALSA aliases live in `/etc/asound.conf` on each device; not the same string across all units.
 
 > On Raspberry Pi the wm8960 capture gain has a watchdog that clamps it to 160 — see `project_lumi_pcm_watchdog.md`.
