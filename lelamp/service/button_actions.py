@@ -35,22 +35,22 @@ DOUBLE_CLICK_WINDOW = 0.4  # seconds to wait for second click
 LONG_PRESS_DURATION = 5.0  # seconds held → shutdown on release
 FACTORY_RESET_DURATION = 10.0  # seconds held → factory-reset on release (supersedes shutdown)
 
-# Lumi Go sensing endpoint. Head-pat notify is fire-and-forget — Lumi
+# Lamp Go sensing endpoint. Head-pat notify is fire-and-forget — Lamp
 # Go appends a NO_REPLY hint so the agent records the event in
 # conversation history without speaking back.
 LUMI_SENSING_URL = "http://127.0.0.1:5000/api/sensing/event"
 
 
 def _notify_head_pat(spoken: str):
-    """Tell Lumi Go that the lamp was just stroked. Called from the
+    """Tell Lamp Go that the lamp was just stroked. Called from the
     head-pat TTS thread *after* speak_cached actually played a phrase,
     so the rate is bounded by phrase playback (~1-3s) — no extra
     debounce needed. TTS-busy strokes are dropped silently and never
     notify, which is the right behaviour: the agent only learns about
     petting moments the user actually heard a response to.
 
-    `spoken` is the exact phrase Lumi just said (incl. eleven_v3 audio
-    tags like [laughs] / [whispers]) so the agent can read Lumi's tone
+    `spoken` is the exact phrase Lamp just said (incl. eleven_v3 audio
+    tags like [laughs] / [whispers]) so the agent can read Lamp's tone
     and weave it into memory — "I laughed and said tickles" lands
     differently than "I sighed and asked them to stop"."""
     try:
@@ -58,7 +58,7 @@ def _notify_head_pat(spoken: str):
             LUMI_SENSING_URL,
             json={
                 "type": "touch.head_pat",
-                "message": f'Lumi was petted and responded: "{spoken}"',
+                "message": f'Lamp was petted and responded: "{spoken}"',
             },
             timeout=0.5,
         )
@@ -75,7 +75,7 @@ def _current_lang() -> str:
 
 
 def _phrase(key: str) -> str:
-    """Return the localized phrase for `key` based on Lumi's stt_language.
+    """Return the localized phrase for `key` based on Lamp's stt_language.
     Falls back to DEFAULT_LANG when the config can't be read or the
     language is empty/unknown."""
     pool = PHRASES_BY_LANG.get(key, {})
@@ -119,7 +119,7 @@ def _tts_available() -> bool:
 
 
 def _wake_if_sleepy(source: str):
-    """If Lumi is currently sleeping, fire a stretching wake emotion so a
+    """If Lamp is currently sleeping, fire a stretching wake emotion so a
     click pulls her out of sleep before the listening cue lands. Calls
     the /emotion handler in-process — it clears `_sleeping`, cancels the
     sleepy auto-release timer, plays the wake animation, and auto-deactivates
@@ -229,10 +229,10 @@ def _factory_reset_phrase() -> str:
     """Inline i18n until PHRASE_FACTORY_RESET lands in i18n.py."""
     lang = _current_lang()
     if lang.startswith("vi"):
-        return "Đang khôi phục cài đặt gốc. Lumi sẽ khởi động lại."
+        return "Đang khôi phục cài đặt gốc. Lamp sẽ khởi động lại."
     if lang.startswith("zh"):
-        return "正在恢复出厂设置，Lumi 将重新启动。"
-    return "Factory reset starting. Lumi will reboot."
+        return "正在恢复出厂设置，Lamp 将重新启动。"
+    return "Factory reset starting. Lamp will reboot."
 
 
 def factory_reset_action(source: str = "button"):

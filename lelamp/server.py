@@ -2,7 +2,7 @@
 LeLamp Hardware Runtime -- FastAPI server on port 5001.
 
 Only starts the drivers we need. LiveKit/OpenAI code stays untouched but never imported.
-Lumi Server (Go, port 5000) bridges requests here.
+Lamp Server (Go, port 5000) bridges requests here.
 """
 
 import json
@@ -313,7 +313,7 @@ async def lifespan(app: FastAPI):
         if state.audio_input_device is not None:
             logger.info(f"Audio input device: {state.audio_input_device}")
 
-    # Auto-start voice pipeline from Lumi config
+    # Auto-start voice pipeline from Lamp config
     lumi_config_path = LUMI_CONFIG_PATH
     try:
         with open(lumi_config_path) as f:
@@ -382,10 +382,10 @@ async def lifespan(app: FastAPI):
                 logger.info("VoiceService auto-started (%s, wake_words=%s)", stt_provider.name, wake_words)
     except FileNotFoundError:
         logger.info(
-            f"Lumi config not found at {lumi_config_path}, voice will wait for /voice/start"
+            f"Lamp config not found at {lumi_config_path}, voice will wait for /voice/start"
         )
     except Exception as e:
-        logger.warning(f"Auto-start voice from lumi config failed: {e}")
+        logger.warning(f"Auto-start voice from lamp config failed: {e}")
 
     # Start music service
     if MusicService:
@@ -554,28 +554,28 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="LeLamp Hardware Runtime",
     description=(
-        "Hardware driver API for Lumi AI Lamp. "
+        "Hardware driver API for Lamp. "
         "Controls servo motors (5-axis Feetech), RGB LEDs (64x WS2812), "
         "camera, audio (mic/speaker), display, and AI voice pipeline. "
-        "Lumi Server (Go, port 5000) bridges requests here."
+        "Lamp Server (Go, port 5000) bridges requests here."
     ),
     version=(Path(__file__).parent / "VERSION_LELAMP").read_text().strip()
     if (Path(__file__).parent / "VERSION_LELAMP").exists()
     else "dev",
     lifespan=lifespan,
     # Built-in /docs disabled; a custom handler below serves the Swagger HTML
-    # without inline <script> so Lumi nginx can keep CSP `script-src 'self'`
+    # without inline <script> so Lamp nginx can keep CSP `script-src 'self'`
     # (no `'unsafe-inline'`). /redoc stays on the default since it's not the
     # endpoint the in-iframe browser flow uses.
     docs_url=None,
     redoc_url="/redoc",
     # `servers` tells Swagger UI which base URL to prepend on "Try it out".
     # In the browser context the iframe lives at /api/hardware/docs and admin
-    # auth gates /api/hardware/* via Lumi's reverse proxy; in the loopback /
+    # auth gates /api/hardware/* via Lamp's reverse proxy; in the loopback /
     # SSH-tunnel context calls go directly to LeLamp. Operator can switch
     # between them via the Swagger UI dropdown.
     servers=[
-        {"url": "/api/hardware", "description": "Via Lumi admin proxy (browser)"},
+        {"url": "/api/hardware", "description": "Via Lamp admin proxy (browser)"},
         {"url": "/", "description": "Direct (loopback / SSH tunnel)"},
     ],
     openapi_tags=[
@@ -655,7 +655,7 @@ except Exception as _speaker_import_err:  # noqa: BLE001
     )
 
 
-# Self-hosted Swagger UI assets. Lumi nginx CSP keeps `script-src 'self'` so
+# Self-hosted Swagger UI assets. Lamp nginx CSP keeps `script-src 'self'` so
 # the bundled JS/CSS load from this same origin (no cdn.jsdelivr.net). The
 # /docs handler below serves the HTML; its <script> tags reference these
 # files via relative paths.
@@ -671,10 +671,10 @@ def custom_swagger_ui() -> HTMLResponse:
     """Serve Swagger UI with no inline <script>.
 
     Built-in `app.docs_url` injects an inline `<script>const ui = SwaggerUIBundle(...)</script>`
-    block which forces Lumi nginx CSP to allow `'unsafe-inline'` for scripts.
+    block which forces Lamp nginx CSP to allow `'unsafe-inline'` for scripts.
     Externalising the init into `/static/swagger-init.js` lets the CSP stay
     strict (`script-src 'self'`). Relative URLs (`./openapi.json`,
-    `./static/...`) make the page work both via the Lumi proxy iframe and
+    `./static/...`) make the page work both via the Lamp proxy iframe and
     direct loopback access.
     """
     html = (

@@ -5,8 +5,8 @@ Pipeline:
   1. Mic always on, local RMS energy check (free, zero cost)
   2. Speech detected → create STT session, stream audio
   3. Silence for SILENCE_TIMEOUT → close session (stop billing)
-  4. Transcripts → POST to Lumi Server /api/sensing/event
-  5. Lumi Go → local intent match or OpenClaw → AI responds → POST /voice/speak
+  4. Transcripts → POST to Lamp Server /api/sensing/event
+  5. Lamp Go → local intent match or OpenClaw → AI responds → POST /voice/speak
 
 STT provider is pluggable (default: Deepgram).
 """
@@ -75,8 +75,8 @@ SPEAKER_MIN_AUDIO_S = _lelamp_config.SPEAKER_MIN_AUDIO_S
 
 SPEECH_EMOTION_ENABLED = _lelamp_config.SPEECH_EMOTION_ENABLED
 
-# Wake word patterns (lowercase match) — default for agent named "Lumi"
-DEFAULT_WAKE_WORDS = ["hello lumi", "hey lumi", "hey lu mi", "này lumi", "ê lumi", "lumi ơi"]
+# Wake word patterns (lowercase match) — default for agent named "Lamp"
+DEFAULT_WAKE_WORDS = ["hello lamp", "hey lamp", "này lamp", "ê lamp", "lamp ơi"]
 
 
 
@@ -496,7 +496,7 @@ class VoiceService:
         duration_s: float = 0.0,
         voiceprint_hash: Optional[str] = None,
     ) -> str:
-        """Format Lumi message for an unrecognized speaker (enroll hints, cooldown)."""
+        """Format Lamp message for an unrecognized speaker (enroll hints, cooldown)."""
         now = time.time()
         in_cooldown = False
         if voiceprint_hash:
@@ -587,13 +587,13 @@ class VoiceService:
         """Detect wake word in `combined` and split it off.
 
         Returns ``(final_text, event_type)``:
-        * ``final_text`` — the text that will be sent to Lumi (wake word stripped
+        * ``final_text`` — the text that will be sent to Lamp (wake word stripped
           when a command, otherwise the original transcript).
         * ``event_type`` — ``"voice_command"`` when a wake word matched at the
           start, otherwise ``"voice"``. Used as the sensing-event ``type`` field.
 
         Empty ``combined`` short-circuits to ``("", "voice")``; the caller still
-        gets a usable shape but typically skips the Lumi POST.
+        gets a usable shape but typically skips the Lamp POST.
         """
         if not combined:
             return "", "voice"
@@ -614,7 +614,7 @@ class VoiceService:
     def _identify_and_decorate(
         self, transcript: str, audio_buffer: list[bytes],
     ) -> tuple[str, Optional[str]]:
-        """Run speaker recognition; return (Lumi message, SER user name or None).
+        """Run speaker recognition; return (Lamp message, SER user name or None).
 
         ``user_name`` is set only when speaker recognize completes without
         ``error`` — known label or ``unknown`` for no match. ``None`` skips SER.
@@ -987,7 +987,7 @@ class VoiceService:
             # the user stops, so without this the voiceprint ends up 30-50%
             # silence and the embedding degrades.
             last_speech_idx: int = len(audio_buffer) - 1
-            # Signal Lumi to show listening LED as soon as mic session opens (before transcript arrives)
+            # Signal Lamp to show listening LED as soon as mic session opens (before transcript arrives)
             try:
                 requests.post("http://127.0.0.1:5000/api/sensing/event",
                               json={"type": "voice_listening", "message": "listening"},

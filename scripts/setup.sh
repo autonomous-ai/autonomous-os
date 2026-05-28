@@ -155,7 +155,7 @@ EOF
 }
 
 # ----------------------------------------------------------
-# Stage 0b: OTA metadata (web, lumi, bootstrap URLs from GCS)
+# Stage 0b: OTA metadata (web, lamp, bootstrap URLs from GCS)
 # ----------------------------------------------------------
 # ----------------------------------------------------------
 # Stage 0c: Enable SPI in firmware config
@@ -180,7 +180,7 @@ stage_enable_spi() {
   else
     {
       echo ""
-      echo "# Enabled by lumi setup.sh to turn on SPI"
+      echo "# Enabled by lamp setup.sh to turn on SPI"
       echo "dtparam=spi=on"
     } >>"$cfg"
     echo "[stage] Added dtparam=spi=on to $cfg"
@@ -195,11 +195,11 @@ stage_ota_metadata() {
   echo "[stage] Fetch OTA metadata"
   METADATA_TMP="/tmp/ota-metadata.$$.json"
   retry "curl -fsSL -H \"Cache-Control: no-cache\" -H \"Pragma: no-cache\" -o \"$METADATA_TMP\" \"$OTA_METADATA_URL\"" 5
-  export WEB_VERSION WEB_URL LUMI_VERSION LUMI_URL BOOTSTRAP_VERSION BOOTSTRAP_URL
+  export WEB_VERSION WEB_URL LAMP_VERSION LAMP_URL BOOTSTRAP_VERSION BOOTSTRAP_URL
   WEB_VERSION=$(jq -r '.web.version // empty' "$METADATA_TMP")
   WEB_URL=$(jq -r '.web.url // empty' "$METADATA_TMP")
-  LUMI_VERSION=$(jq -r '.lumi.version // empty' "$METADATA_TMP")
-  LUMI_URL=$(jq -r '.lumi.url // empty' "$METADATA_TMP")
+  LAMP_VERSION=$(jq -r '.lamp.version // empty' "$METADATA_TMP")
+  LAMP_URL=$(jq -r '.lamp.url // empty' "$METADATA_TMP")
   BOOTSTRAP_VERSION=$(jq -r '.bootstrap.version // empty' "$METADATA_TMP")
   BOOTSTRAP_URL=$(jq -r '.bootstrap.url // empty' "$METADATA_TMP")
   LELAMP_VERSION=$(jq -r '.lelamp.version // empty' "$METADATA_TMP")
@@ -207,11 +207,11 @@ stage_ota_metadata() {
   BUDDY_VERSION=$(jq -r '."claude-desktop-buddy".version // empty' "$METADATA_TMP")
   BUDDY_URL=$(jq -r '."claude-desktop-buddy".url // empty' "$METADATA_TMP")
   rm -f "$METADATA_TMP"
-  if [ -z "$WEB_URL" ] || [ -z "$LUMI_URL" ] || [ -z "$BOOTSTRAP_URL" ]; then
-    echo "ERROR: OTA metadata missing web.url, lumi.url or bootstrap.url. Check $OTA_METADATA_URL"
+  if [ -z "$WEB_URL" ] || [ -z "$LAMP_URL" ] || [ -z "$BOOTSTRAP_URL" ]; then
+    echo "ERROR: OTA metadata missing web.url, lamp.url or bootstrap.url. Check $OTA_METADATA_URL"
     exit 1
   fi
-  echo "[stage] OTA versions: web=$WEB_VERSION lumi=$LUMI_VERSION bootstrap=$BOOTSTRAP_VERSION lelamp=$LELAMP_VERSION buddy=$BUDDY_VERSION"
+  echo "[stage] OTA versions: web=$WEB_VERSION lamp=$LAMP_VERSION bootstrap=$BOOTSTRAP_VERSION lelamp=$LELAMP_VERSION buddy=$BUDDY_VERSION"
 }
 
 # Download zip from URL, unzip, copy single binary to dest path (handles lamp-server, bootstrap-server in zip)
@@ -257,7 +257,7 @@ stage_backend() {
   fi
 
   install_binary_from_zip "$BOOTSTRAP_URL" /usr/local/bin/bootstrap-server "bootstrap"
-  install_binary_from_zip "$LUMI_URL" /usr/local/bin/lamp-server "lamp"
+  install_binary_from_zip "$LAMP_URL" /usr/local/bin/lamp-server "lamp"
 
   cat >/etc/systemd/system/bootstrap.service <<EOF
 [Unit]
@@ -332,7 +332,7 @@ stage_lelamp() {
     echo "[stage] Configuring PulseAudio echo cancellation (WebRTC AEC)"
     cat >> "$PULSE_CONF" <<'PULSE_EOF'
 
-### Echo cancellation (WebRTC AEC) for Lumi smart lamp
+### Echo cancellation (WebRTC AEC) for Lamp smart lamp
 load-module module-echo-cancel source_name=aec_source sink_name=aec_sink aec_method=webrtc aec_args="analog_gain_control=0 digital_gain_control=0" channels=1
 set-default-source aec_source
 set-default-sink aec_sink
@@ -426,7 +426,7 @@ WEBRTCVAD_EOF
 
   cat >/etc/systemd/system/lumi-lelamp.service <<EOF
 [Unit]
-Description=Lumi LeLamp Hardware Runtime
+Description=Lamp LeLamp Hardware Runtime
 After=network.target
 
 [Service]
@@ -495,7 +495,7 @@ stage_buddy() {
 
   cat >/etc/systemd/system/lumi-buddy.service <<EOF
 [Unit]
-Description=Lumi Claude Desktop Buddy (BLE)
+Description=Lamp Claude Desktop Buddy (BLE)
 After=bluetooth.target lamp.service
 Wants=bluetooth.target
 
