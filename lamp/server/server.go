@@ -92,7 +92,7 @@ type Server struct {
 	monitorMu sync.Mutex
 	// lastSetupCompleted is the last SetUpCompleted value we acted on. Used to avoid redundant handleSetUpCompleteChanged when config notifies but value unchanged.
 	lastSetupCompleted *bool
-	// lastDeviceID is the last DeviceID value we acted on. When this changes (typically empty → assigned at first /device/setup), we restart lumi-buddy so its BLE name picks up the new device_id.
+	// lastDeviceID is the last DeviceID value we acted on. When this changes (typically empty → assigned at first /device/setup), we restart claude-desktop-buddy so its BLE name picks up the new device_id.
 	lastDeviceID *string
 	// lastMQTTEndpoint is the last MQTTEndpoint value we acted on. When this changes (typically empty → assigned via status-reporter ping response), we restart the MQTT client so it picks up the new broker config without requiring a full lumi restart.
 	lastMQTTEndpoint *string
@@ -759,7 +759,7 @@ func (s *Server) runConfigChangeListener(ctx context.Context) {
 	}
 }
 
-// handleDeviceIDChange restarts lumi-buddy when device_id changes. Buddy's
+// handleDeviceIDChange restarts claude-desktop-buddy when device_id changes. Buddy's
 // BLE name is now derived from the hardware MAC suffix (Claude-lumi-{MAC}) so the
 // restart isn't needed for name resolution, but a device_id transition is
 // still a useful signal that the device has been re-provisioned — restarting
@@ -768,7 +768,7 @@ func (s *Server) runConfigChangeListener(ctx context.Context) {
 // On the first call (startup bootstrap) we just record the current value
 // without restarting — only later transitions trigger a restart.
 //
-// Best-effort: if lumi-buddy isn't installed (systemctl returns non-zero) we
+// Best-effort: if claude-desktop-buddy isn't installed (systemctl returns non-zero) we
 // log and move on.
 func (s *Server) handleDeviceIDChange(deviceID string) {
 	if s.lastDeviceID == nil {
@@ -781,24 +781,24 @@ func (s *Server) handleDeviceIDChange(deviceID string) {
 	prev := *s.lastDeviceID
 	s.lastDeviceID = &deviceID
 
-	slog.Info("device_id changed, restarting lumi-buddy", "component", "config", "old", prev, "new", deviceID)
-	safego.Go("lumi-buddy-restart", func() {
+	slog.Info("device_id changed, restarting claude-desktop-buddy", "component", "config", "old", prev, "new", deviceID)
+	safego.Go("claude-desktop-buddy-restart", func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		// Skip silently if lumi-buddy isn't installed on this Pi. `systemctl cat`
+		// Skip silently if claude-desktop-buddy isn't installed on this Pi. `systemctl cat`
 		// exits non-zero when the unit doesn't exist; that's expected on lamps
 		// without the buddy plugin and we don't want to spam logs there.
-		if err := exec.CommandContext(ctx, "systemctl", "cat", "lumi-buddy.service").Run(); err != nil {
+		if err := exec.CommandContext(ctx, "systemctl", "cat", "claude-desktop-buddy.service").Run(); err != nil {
 			return
 		}
 
-		out, err := exec.CommandContext(ctx, "systemctl", "restart", "lumi-buddy").CombinedOutput()
+		out, err := exec.CommandContext(ctx, "systemctl", "restart", "claude-desktop-buddy").CombinedOutput()
 		if err != nil {
-			slog.Warn("lumi-buddy restart failed", "component", "config", "error", err, "output", strings.TrimSpace(string(out)))
+			slog.Warn("claude-desktop-buddy restart failed", "component", "config", "error", err, "output", strings.TrimSpace(string(out)))
 			return
 		}
-		slog.Info("lumi-buddy restarted", "component", "config")
+		slog.Info("claude-desktop-buddy restarted", "component", "config")
 	})
 }
 
