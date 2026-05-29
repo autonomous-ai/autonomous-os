@@ -18,7 +18,10 @@ from websockets.sync.client import ClientConnection, connect
 import lelamp.config as config
 from lelamp.service.sensing.crypto import CryptoSession, WSKeyExchangeRequest, resolve_public_key
 from lelamp.service.sensing.perceptions.typing import SendEventCallable
-from lelamp.service.sensing.perceptions.utils import PerceptionStateObservers
+from lelamp.service.sensing.perceptions.utils import (
+    PerceptionStateObservers,
+    record_dl_stall,
+)
 from lelamp.service.sensing.presence_service import PresenceState, PresenseService
 
 from .base import Perception
@@ -135,7 +138,9 @@ class RemoteMotionChecker:
             ws_url = self._base_url.replace("http", "ws").replace("https", "wss")
             logger.info("[%s] connecting to %s", self.__class__.__name__, ws_url)
             self._ws_session = connect(
-                ws_url, additional_headers={"X-API-Key": self._api_key}
+                ws_url,
+                additional_headers={"X-API-Key": self._api_key},
+                open_timeout=config.DL_WS_RECV_TIMEOUT_S,
             )
             self._crypto = None
             if config.DL_ENCRYPTION_ENABLED:
@@ -155,7 +160,7 @@ class RemoteMotionChecker:
                 config_msg = self._crypto.wrap_ws_message(config_msg)
             self._ws_session.send(config_msg)
             # Consume the config_updated response
-            raw = self._ws_session.recv()
+            raw = self._ws_session.recv(timeout=config.DL_WS_RECV_TIMEOUT_S)
             if self._crypto is not None:
                 raw = self._crypto.unwrap_ws_message(raw)
         except Exception:
@@ -180,7 +185,7 @@ class RemoteMotionChecker:
         session = CryptoSession(public_key)
         key_req = WSKeyExchangeRequest(encrypted_key=session.encrypted_key_b64)
         self._ws_session.send(key_req.model_dump_json())
-        resp = json.loads(self._ws_session.recv())
+        resp = json.loads(self._ws_session.recv(timeout=config.DL_WS_RECV_TIMEOUT_S))
         if resp.get("status") == "key_exchange_ok":
             self._crypto = session
             logger.info("[%s] encryption session established", self.__class__.__name__)
@@ -205,12 +210,14 @@ class RemoteMotionChecker:
             return
         try:
             self._ws_session.send(json.dumps({"type": "heartbeat", "task": "action"}))
-            resp = json.loads(self._ws_session.recv())
+            resp = json.loads(
+                self._ws_session.recv(timeout=config.DL_WS_RECV_TIMEOUT_S)
+            )
             if resp.get("status") == "ok":
                 logger.debug("[motion] heartbeat ok")
             else:
                 logger.warning("[motion] heartbeat unexpected response: %s", resp)
-        except ConnectionClosed:
+        except (ConnectionClosed, TimeoutError):
             logger.warning("[motion] heartbeat failed — connection lost")
             self._ws_session = None
 
@@ -245,7 +252,7 @@ class RemoteMotionChecker:
                     msg = self._crypto.wrap_ws_message(msg)
 
                 self._ws_session.send(msg)
-                raw = self._ws_session.recv()
+                raw = self._ws_session.recv(timeout=config.DL_WS_RECV_TIMEOUT_S)
 
                 if self._crypto is not None:
                     raw = self._crypto.unwrap_ws_message(raw)
@@ -260,6 +267,19 @@ class RemoteMotionChecker:
                     MotionDetection(class_name=dc["class_name"], conf=dc["conf"])
                     for dc in detected_classes
                 ]
+            except TimeoutError:
+                # Backend accepted the frame but never replied within the
+                # budget. Drop the session so the worker is freed immediately
+                # instead of blocking forever and starving other perceptions.
+                logger.warning(
+                    "[%s] recv timeout (%.1fs) — dropping session, retry next tick",
+                    self.__class__.__name__,
+                    config.DL_WS_RECV_TIMEOUT_S,
+                )
+                record_dl_stall(
+                    "motion", f"frame recv timeout {config.DL_WS_RECV_TIMEOUT_S:.0f}s"
+                )
+                self._ws_session = None
             except ConnectionClosed:
                 logger.warning(
                     "[%s] connection lost, will retry on next tick",

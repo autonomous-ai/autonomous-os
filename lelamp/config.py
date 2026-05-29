@@ -103,6 +103,15 @@ def _lamp_cfg_get(key: str, default: str = "") -> str:
 DL_BACKEND_URL = _lamp_cfg_get("llm_base_url") or os.environ.get("DL_BACKEND_URL", "")
 DL_API_KEY = _lamp_cfg_get("llm_api_key") or os.environ.get("DL_API_KEY", "")
 DL_HEARTBEAT_INTERVAL_S = float(os.environ.get("LELAMP_DL_HEARTBEAT_INTERVAL_S", "60.0"))
+# Max time to wait for a dlbackend WS response (pose/motion frame, heartbeat,
+# key exchange). Without this, a non-responding backend blocks the recv() call
+# forever, holding a shared perception-pool worker and starving every other
+# camera perception (face/light). On timeout the session is dropped + retried.
+DL_WS_RECV_TIMEOUT_S = float(os.environ.get("LELAMP_DL_WS_RECV_TIMEOUT_S", "15.0"))
+# Append-only file that records every dlbackend WS stall (recv timeout) so the
+# issue can be tracked over time without scraping the journal. One line per
+# stall: <iso_ts>\t<task>\t<detail>.
+DL_STALL_LOG_FILE = os.environ.get("LELAMP_DL_STALL_LOG", "/root/local/dl_ws_stall.log")
 
 # --- DL backend encryption (RSA + AES-256-GCM) ---
 DL_ENCRYPTION_ENABLED: bool = os.environ.get("LELAMP_DL_ENCRYPTION", "true").lower() in ("1", "true", "yes")

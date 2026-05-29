@@ -1,17 +1,37 @@
 from __future__ import annotations
 
+import logging
 import re
 import threading
 from copy import copy
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable, TypeVar
 
 if TYPE_CHECKING:
     import cv2
 
+import lelamp.config as config
 from lelamp.service.sensing.perceptions.models import FaceDetectionData
 
 T = TypeVar("T")
+
+_logger = logging.getLogger(__name__)
+_dl_stall_lock = threading.Lock()
+
+
+def record_dl_stall(task: str, detail: str) -> None:
+    """Append one line to the dlbackend stall log so recurring WS recv timeouts
+    can be audited over time. Best-effort: never raises into the caller."""
+    line = f"{datetime.now(timezone.utc).isoformat()}\t{task}\t{detail}\n"
+    try:
+        with _dl_stall_lock:
+            with open(config.DL_STALL_LOG_FILE, "a", encoding="utf-8") as fh:
+                fh.write(line)
+    except OSError as e:
+        _logger.warning(
+            "could not write DL stall log (%s): %s", config.DL_STALL_LOG_FILE, e
+        )
 
 
 class DataObserver[T]:
