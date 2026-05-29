@@ -70,9 +70,9 @@ try:
     data = json.loads(raw) if raw.strip() else {}
 except json.JSONDecodeError:
     data = {}
-data['web'] = {'version': sys.argv[1], 'url': sys.argv[2]}
+data['web'] = {'version': sys.argv[1], 'url': sys.argv[2], 'updated_at': sys.argv[3]}
 print(json.dumps(data, indent=2))
-" "$new_version" "$WEB_URL")
+" "$new_version" "$WEB_URL" "$(date '+%Y-%m-%d %H:%M:%S %z')")
 
 echo "$updated_metadata" > "$METADATA_TMP"
 echo "========== Upload metadata (web: v${new_version}) =========="

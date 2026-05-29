@@ -33,14 +33,15 @@ if ! gsutil cp "$METADATA_GCS" "$METADATA_TMP" 2>/dev/null; then
   echo "{}" > "$METADATA_TMP"
 fi
 
-python3 - "$METADATA_TMP" "$VERSION" <<'PY'
+python3 - "$METADATA_TMP" "$VERSION" "$(date '+%Y-%m-%d %H:%M:%S %z')" <<'PY'
 import json
 import sys
 
-path, version = sys.argv[1], sys.argv[2]
+path, version, updated_at = sys.argv[1], sys.argv[2], sys.argv[3]
 d = json.load(open(path))
 oc = d.get("openclaw") if isinstance(d.get("openclaw"), dict) else {}
 oc["version"] = version
+oc["updated_at"] = updated_at
 d["openclaw"] = oc
 json.dump(d, open(path, "w"), indent=4)
 PY

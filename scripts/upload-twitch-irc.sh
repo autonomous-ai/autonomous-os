@@ -65,9 +65,9 @@ try:
     data = json.loads(raw) if raw.strip() else {}
 except json.JSONDecodeError:
     data = {}
-data['twitch-irc'] = {'version': sys.argv[1], 'url': sys.argv[2]}
+data['twitch-irc'] = {'version': sys.argv[1], 'url': sys.argv[2], 'updated_at': sys.argv[3]}
 print(json.dumps(data, indent=2))
-" "$new_version" "$BACKEND_URL")
+" "$new_version" "$BACKEND_URL" "$(date '+%Y-%m-%d %H:%M:%S %z')")
 
 echo "$updated_metadata" > "$METADATA_TMP"
 echo "========== Upload metadata (backend: v${new_version}) =========="

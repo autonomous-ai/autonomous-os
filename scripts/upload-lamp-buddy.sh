@@ -69,9 +69,9 @@ try:
 except json.JSONDecodeError:
     data = {}
 data.pop('claude-desktop-buddy', None)
-data['lamp-buddy'] = {'version': sys.argv[1], 'url': sys.argv[2]}
+data['lamp-buddy'] = {'version': sys.argv[1], 'url': sys.argv[2], 'updated_at': sys.argv[3]}
 print(json.dumps(data, indent=2))
-" "$new_version" "$BUDDY_URL")
+" "$new_version" "$BUDDY_URL" "$(date '+%Y-%m-%d %H:%M:%S %z')")
 
 echo "$updated_metadata" > "$METADATA_TMP"
 echo "========== Upload metadata (lamp-buddy: v${new_version}) =========="

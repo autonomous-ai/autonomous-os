@@ -67,9 +67,9 @@ try:
     data = json.loads(raw) if raw.strip() else {}
 except json.JSONDecodeError:
     data = {}
-data['claude-desktop-buddy'] = {'version': sys.argv[1], 'url': sys.argv[2]}
+data['claude-desktop-buddy'] = {'version': sys.argv[1], 'url': sys.argv[2], 'updated_at': sys.argv[3]}
 print(json.dumps(data, indent=2))
-" "$new_version" "$BUDDY_URL")
+" "$new_version" "$BUDDY_URL" "$(date '+%Y-%m-%d %H:%M:%S %z')")
 
 echo "$updated_metadata" > "$METADATA_TMP"
 echo "========== Upload metadata (claude-desktop-buddy: v${new_version}) =========="

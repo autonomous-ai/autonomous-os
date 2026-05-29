@@ -64,9 +64,9 @@ try:
     data = json.loads(raw) if raw.strip() else {}
 except json.JSONDecodeError:
     data = {}
-data['lelamp'] = {'version': sys.argv[1], 'url': sys.argv[2]}
+data['lelamp'] = {'version': sys.argv[1], 'url': sys.argv[2], 'updated_at': sys.argv[3]}
 print(json.dumps(data, indent=2))
-" "$new_version" "$LELAMP_URL")
+" "$new_version" "$LELAMP_URL" "$(date '+%Y-%m-%d %H:%M:%S %z')")
 
 echo "$updated_metadata" > "$METADATA_TMP"
 echo "========== Upload metadata (lelamp: v${new_version}) =========="

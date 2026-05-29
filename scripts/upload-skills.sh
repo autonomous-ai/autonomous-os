@@ -132,11 +132,11 @@ METADATA_GCS="gs://${GCS_BUCKET}/lamp/ota/metadata.json"
 METADATA_TMP=$(mktemp)
 trap 'rm -rf "$WORK_DIR" "$ENTRIES_FILE" "$METADATA_TMP"' EXIT
 if gsutil cp "$METADATA_GCS" "$METADATA_TMP" 2>/dev/null; then
-  python3 - "$METADATA_TMP" "$ENTRIES_FILE" <<'PY'
+  python3 - "$METADATA_TMP" "$ENTRIES_FILE" "$(date '+%Y-%m-%d %H:%M:%S %z')" <<'PY'
 import json
 import sys
 
-metadata_path, entries_path = sys.argv[1], sys.argv[2]
+metadata_path, entries_path, updated_at = sys.argv[1], sys.argv[2], sys.argv[3]
 d = json.load(open(metadata_path))
 skills = {}
 for line in open(entries_path):
@@ -144,7 +144,7 @@ for line in open(entries_path):
     if not line or "|" not in line:
         continue
     name, version = line.split("|", 1)
-    skills[name] = {"version": version}
+    skills[name] = {"version": version, "updated_at": updated_at}
 d["skills"] = skills
 json.dump(d, open(metadata_path, "w"), indent=4)
 PY
