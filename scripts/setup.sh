@@ -1070,6 +1070,12 @@ if ! systemctl is-active --quiet hostapd; then
   exit 1
 fi
 
+# Restore captive-portal DNS wildcard — device-sta-mode strips this line so
+# DNS resolves correctly in STA mode; re-add it here so setup page redirects
+# work when switching back to AP mode.
+grep -q '^address=/#/' /etc/dnsmasq.d/99-lamp.conf 2>/dev/null || \
+  echo 'address=/#/192.168.100.1' >> /etc/dnsmasq.d/99-lamp.conf
+
 # Restart DHCP server
 systemctl restart dnsmasq
 
