@@ -369,6 +369,7 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
     def _check_impl(self, data: cv2.typing.MatLike) -> None:
         frame = data
         if frame is None:
+            logger.debug("[motion] frame is None, skipping")
             return
 
         try:
@@ -376,6 +377,11 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
         except Exception:
             logger.exception("[motion] inference error")
             return
+
+        if detections:
+            logger.debug("[motion] detections: %s", [d.class_name for d in detections])
+        else:
+            logger.debug("[motion] no detections")
 
         with self._state_lock:
             if detections:

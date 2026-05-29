@@ -36,6 +36,7 @@ class LightLevelPerception(Perception[cv2.typing.MatLike]):
         frame = data
 
         if frame is None:
+            logger.debug("[light] frame is None, skipping")
             return
 
         now = time.time()

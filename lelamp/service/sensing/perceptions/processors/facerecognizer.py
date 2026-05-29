@@ -646,6 +646,7 @@ class FacePerception(Perception[cv2.typing.MatLike]):
     def _check_impl(self, data: cv2.typing.MatLike) -> None:
         frame = data
         if frame is None:
+            logger.debug("[face] frame is None, skipping")
             return
 
         cur_ts = time.time()
@@ -654,11 +655,13 @@ class FacePerception(Perception[cv2.typing.MatLike]):
 
         with self._state_lock:
             if not faces:
+                logger.debug("[face] no faces detected")
                 self._face_present = False
                 self._faces_n = 0
                 self._check_leaves(cur_ts)
                 return
             else:
+                logger.debug("[face] detected %d face(s): %s", len(faces), [f.person_id for f in faces])
                 self._faces_n = len(faces)
                 self._face_present = len(faces) > 0
 

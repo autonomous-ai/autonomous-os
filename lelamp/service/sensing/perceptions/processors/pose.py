@@ -702,11 +702,14 @@ class PosePerception(Perception[cv2.typing.MatLike]):
     @override
     def _check_impl(self, data: cv2.typing.MatLike) -> None:
         if data is None:
+            logger.debug("[pose] frame is None, skipping")
             return
 
         result: PoseResult | None = self._estimator.update(data)
         if result is None:
+            logger.debug("[pose] no result from estimator")
             return
+        logger.debug("[pose] result: ergo=%s", result.ergo.get("score") if result.ergo else None)
 
         self._last_result = result
 

@@ -267,8 +267,11 @@ class EmotionPerception(Perception[FaceDetectionData]):
     def _check_impl(self, data: FaceDetectionData) -> None:
         """Only used for periodic flush — actual detection is callback-driven."""
         if data.frame is not None:
+            logger.debug("[emotion] processing %d face(s)", len(data.faces))
             for f in data.faces:
                 self._process_face(data.frame, f)
+        else:
+            logger.debug("[emotion] frame is None, skipping detection")
 
         self._flush_buffer()
 

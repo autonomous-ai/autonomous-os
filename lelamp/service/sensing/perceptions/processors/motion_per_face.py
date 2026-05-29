@@ -216,7 +216,9 @@ class MotionPerFacePerception(Perception[FaceDetectionData]):
     @override
     def _check_impl(self, data: FaceDetectionData) -> None:
         if data.frame is None or not data.faces:
+            logger.debug("[motion_per_face] skipping: frame=%s faces=%d", "None" if data.frame is None else "ok", len(data.faces) if data.faces else 0)
             return
+        logger.debug("[motion_per_face] processing %d face(s)", len(data.faces))
 
         frame = data.frame
         frame_h, frame_w = frame.shape[:2]
