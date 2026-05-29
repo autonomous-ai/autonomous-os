@@ -1070,6 +1070,12 @@ if ! systemctl is-active --quiet hostapd; then
   exit 1
 fi
 
+# Restore captive-portal DNS wildcard — device-sta-mode strips this line so
+# DNS resolves correctly in STA mode; re-add it here so setup page redirects
+# work when switching back to AP mode.
+grep -q '^address=/#/' /etc/dnsmasq.d/99-lamp.conf 2>/dev/null || \
+  echo 'address=/#/192.168.100.1' >> /etc/dnsmasq.d/99-lamp.conf
+
 # Restart DHCP server
 systemctl restart dnsmasq
 
@@ -1120,6 +1126,10 @@ ip addr flush dev wlan0
 # Remove AP static IP config from dhcpcd if exists
 sed -i '/static ip_address=192.168.100.1\/24/d' /etc/dhcpcd.conf
 sed -i '/nohook wpa_supplicant/d' /etc/dhcpcd.conf
+
+# Remove AP captive-portal DNS wildcard — redirects ALL queries to 192.168.100.1
+# which breaks LLM/internet connectivity when switching to STA mode.
+sed -i '/^address=\/#\//d' /etc/dnsmasq.d/99-lamp.conf 2>/dev/null || true
 
 # Enable STA services
 systemctl unmask wpa_supplicant@wlan0 2>/dev/null || true
