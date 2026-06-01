@@ -212,7 +212,8 @@ apt-get install -y \\
   cloud-guest-utils \\
   wireless-tools net-tools \\
   systemd-sysv \\
-  xvfb chromium git \\
+  xvfb xauth chromium chromium-sandbox git \\
+  openresolv \\
   fake-hwclock \\
   libportaudio2 portaudio19-dev pulseaudio pulseaudio-utils ffmpeg \\
   alsa-utils libasound2-dev \\
