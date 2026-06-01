@@ -7,8 +7,8 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 LAMP_DIR       := lamp
 LELAMP_DIR     := lelamp
 BUDDY_DIR      := claude-desktop-buddy
-TWITCH_DIR     := twitch-chat-hook
-AUTONOMOUS_DIR := autonomous-chat-hook
+TWITCH_DIR     := chat-hooks/twitch-chat-hook
+AUTONOMOUS_DIR := chat-hooks/autonomous-chat-hook
 WEB_DIR        := $(LAMP_DIR)/web
 
 # Go build
@@ -16,7 +16,7 @@ MODULE         := go-lamp.autonomous.ai
 LDFLAGS_LAMP   := -X $(MODULE)/server/config.LampVersion=$(VERSION)
 LDFLAGS_BOOT   := -X $(MODULE)/bootstrap/config.BootstrapVersion=$(VERSION)
 LDFLAGS_IRC    := -X main.Version=$(VERSION)
-LDFLAGS_AUTONOMOUS_MQTT := -X main.Version=$(VERSION)
+LDFLAGS_AUTONOMOUS_CHAT := -X main.Version=$(VERSION)
 
 # LeLamp
 LELAMP_PORT    := 5001
@@ -103,16 +103,16 @@ twitch-build-irc:
 # Autonomous chat hook (Go) — MQTT subscriber bridging BE web chat → lamp
 # ============================================================================
 
-.PHONY: autonomous-build-mqtt
+.PHONY: autonomous-build-chat
 
-autonomous-build-mqtt:
-	cd $(AUTONOMOUS_DIR) && GOOS=linux GOARCH=arm64 go build -ldflags "-s -w $(LDFLAGS_AUTONOMOUS_MQTT)" -o autonomous-mqtt ./cmd/mqtt
+autonomous-build-chat:
+	cd $(AUTONOMOUS_DIR) && GOOS=linux GOARCH=arm64 go build -ldflags "-s -w $(LDFLAGS_AUTONOMOUS_CHAT)" -o autonomous-chat ./cmd/mqtt
 
 # ============================================================================
 # Upload (OTA to GCS) — unified format: make upload-<component>
 # ============================================================================
 
-.PHONY: upload-lamp upload-bootstrap upload-lelamp upload-claude-desktop-buddy upload-lamp-buddy upload-web upload-skills upload-hooks upload-setup upload-setup-ap upload-openclaw upload-twitch-irc upload-autonomous-mqtt upload-all
+.PHONY: upload-lamp upload-bootstrap upload-lelamp upload-claude-desktop-buddy upload-lamp-buddy upload-web upload-skills upload-hooks upload-setup upload-setup-ap upload-openclaw upload-twitch-irc upload-autonomous-chat upload-all
 
 upload-lamp:
 	bash scripts/upload-lamp.sh
@@ -147,8 +147,8 @@ upload-setup-ap:
 upload-twitch-irc:
 	bash scripts/upload-twitch-irc.sh
 
-upload-autonomous-mqtt:
-	bash scripts/upload-autonomous-mqtt.sh
+upload-autonomous-chat:
+	bash scripts/upload-autonomous-chat.sh
 
 # Allow positional version: `make upload-openclaw 2026.5.2`. The eval
 # stub below creates a no-op rule for the version arg so make doesn't

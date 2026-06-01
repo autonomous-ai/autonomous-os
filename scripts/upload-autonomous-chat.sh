@@ -3,10 +3,10 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-TWITCH_IRC_BIN="${ROOT_DIR}/chat-hooks/twitch-chat-hook/twitch-irc"
-VERSION_FILE="${ROOT_DIR}/chat-hooks/twitch-chat-hook/${VERSION_FILE:-VERSION_TWITCH_IRC}"
+AUTONOMOUS_CHAT_BIN="${ROOT_DIR}/chat-hooks/autonomous-chat-hook/autonomous-chat"
+VERSION_FILE="${ROOT_DIR}/chat-hooks/autonomous-chat-hook/${VERSION_FILE:-VERSION_AUTONOMOUS_CHAT}"
 
-# Bucket and path: lamp/ota/twitch-irc/[semver].zip
+# Bucket and path: lamp/ota/autonomous-chat/[semver].zip
 GCS_BUCKET="${GCS_BUCKET:-s3-autonomous-upgrade-3}"
 
 # Auto-increment semver (patch) before build
@@ -23,21 +23,21 @@ else
   echo "========== Version initialized: ${new_version} =========="
 fi
 
-ZIP_NAME="twitch-irc-${new_version}.zip"
+ZIP_NAME="autonomous-chat-${new_version}.zip"
 ZIP_PATH="${ROOT_DIR}/${ZIP_NAME}"
-GCS_PATH="${GCS_PATH:-lamp/ota/twitch-irc/${new_version}.zip}"
+GCS_PATH="${GCS_PATH:-lamp/ota/autonomous-chat/${new_version}.zip}"
 
-echo "========== Build twitch-irc binary (VERSION=${new_version}) =========="
-(cd "$ROOT_DIR" && make twitch-build-irc VERSION="$new_version")
+echo "========== Build autonomous-chat binary (VERSION=${new_version}) =========="
+(cd "$ROOT_DIR" && make autonomous-build-chat VERSION="$new_version")
 
-if [[ ! -f "$TWITCH_IRC_BIN" ]]; then
-  echo "Error: twitch-irc binary not found at $TWITCH_IRC_BIN after make twitch-build-irc"
+if [[ ! -f "$AUTONOMOUS_CHAT_BIN" ]]; then
+  echo "Error: autonomous-chat binary not found at $AUTONOMOUS_CHAT_BIN after make autonomous-build-chat"
   exit 1
 fi
 
-echo "========== Zipping twitch-irc binary to ${ZIP_NAME} =========="
+echo "========== Zipping autonomous-chat binary to ${ZIP_NAME} =========="
 rm -f "$ZIP_PATH"
-(cd "$ROOT_DIR" && zip "$ZIP_PATH" "$TWITCH_IRC_BIN")
+(cd "$ROOT_DIR" && zip "$ZIP_PATH" "$AUTONOMOUS_CHAT_BIN")
 
 echo "========== Upload ${ZIP_NAME} to Google Cloud Storage (no-cache) =========="
 gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" cp "$ZIP_PATH" "gs://${GCS_BUCKET}/${GCS_PATH}"
@@ -65,7 +65,7 @@ try:
     data = json.loads(raw) if raw.strip() else {}
 except json.JSONDecodeError:
     data = {}
-data['twitch-irc'] = {'version': sys.argv[1], 'url': sys.argv[2], 'updated_at': sys.argv[3]}
+data['autonomous-chat'] = {'version': sys.argv[1], 'url': sys.argv[2], 'updated_at': sys.argv[3]}
 print(json.dumps(data, indent=2))
 " "$new_version" "$BACKEND_URL" "$(date '+%Y-%m-%d %H:%M:%S %z')")
 
@@ -74,5 +74,5 @@ echo "========== Upload metadata (backend: v${new_version}) =========="
 gsutil -h "Content-Type:application/json" -h "Cache-Control:no-cache, no-store, must-revalidate" cp "$METADATA_TMP" "gs://${GCS_BUCKET}/${METADATA_PATH}"
 rm -f "$METADATA_TMP"
 
-rm -f "$ZIP_PATH" "$TWITCH_IRC_BIN"
+rm -f "$ZIP_PATH" "$AUTONOMOUS_CHAT_BIN"
 echo "Done: gs://${GCS_BUCKET}/${GCS_PATH} (v${new_version})"

@@ -54,7 +54,7 @@ autonomous-chat-hook/
 ├── cmd/mqtt/main.go        # subscriber main
 ├── autonomous/forward.go   # HTTP POST to lamp sensing endpoint
 ├── .env.example
-└── VERSION_AUTONOMOUS_MQTT
+└── VERSION_AUTONOMOUS_CHAT
 ```
 
 ## Deploy (Pi)
@@ -62,14 +62,14 @@ autonomous-chat-hook/
 Build + upload from repo root (mirrors `make upload-twitch-irc`):
 
 ```bash
-make upload-autonomous-mqtt        # bumps VERSION_AUTONOMOUS_MQTT, cross-compiles, zips, uploads to GCS, updates metadata.json
+make upload-autonomous-chat        # bumps VERSION_AUTONOMOUS_CHAT, cross-compiles, zips, uploads to GCS, updates metadata.json key `autonomous-chat`
 ```
 
 On the Pi, mirror lelamp's `EnvironmentFile=/opt/<component>/.env` convention:
 
 ```
 /opt/autonomous-chat-hook/
-├── autonomous-mqtt   # binary pulled from OTA zip
+├── autonomous-chat   # binary pulled from OTA zip
 └── .env              # copy of .env.example, filled with broker creds
 ```
 
@@ -83,7 +83,7 @@ Wants=network-online.target
 
 [Service]
 EnvironmentFile=/opt/autonomous-chat-hook/.env
-ExecStart=/opt/autonomous-chat-hook/autonomous-mqtt
+ExecStart=/opt/autonomous-chat-hook/autonomous-chat
 Restart=always
 RestartSec=5
 User=root
