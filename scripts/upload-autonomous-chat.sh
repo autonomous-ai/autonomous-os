@@ -74,5 +74,5 @@ echo "========== Upload metadata (backend: v${new_version}) =========="
 gsutil -h "Content-Type:application/json" -h "Cache-Control:no-cache, no-store, must-revalidate" cp "$METADATA_TMP" "gs://${GCS_BUCKET}/${METADATA_PATH}"
 rm -f "$METADATA_TMP"
 
-rm -f "$ZIP_PATH" "$AUTONOMOUS_MQTT_BIN"
+rm -f "$ZIP_PATH" "$AUTONOMOUS_CHAT_BIN"
 echo "Done: gs://${GCS_BUCKET}/${GCS_PATH} (v${new_version})"
