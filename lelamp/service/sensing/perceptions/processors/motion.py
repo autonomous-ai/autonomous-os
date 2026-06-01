@@ -28,7 +28,6 @@ from .base import Perception
 from .pose import PosePerception
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 RESOURCES_DIR = Path(__file__).parent / "resources"
 

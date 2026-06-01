@@ -26,7 +26,6 @@ from lelamp.service.sensing.presence_service import PresenceState, PresenseServi
 from .base import Perception
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 EMOTIONS = [
     "Neutral",

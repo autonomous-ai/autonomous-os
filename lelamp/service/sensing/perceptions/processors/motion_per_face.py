@@ -30,7 +30,6 @@ from lelamp.service.sensing.perceptions.utils import PerceptionStateObservers
 from lelamp.service.sensing.presence_service import PresenceState, PresenseService
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 
 class _FaceSession:
@@ -76,7 +75,9 @@ class _FaceSession:
         """
         # Prune expired
         cutoff = now - self.dedup_window_s
-        self._sent_actions = {k: ts for k, ts in self._sent_actions.items() if ts >= cutoff}
+        self._sent_actions = {
+            k: ts for k, ts in self._sent_actions.items() if ts >= cutoff
+        }
 
         return {label for label in labels if label not in self._sent_actions}
 
@@ -157,7 +158,8 @@ class MotionPerFacePerception(Perception[FaceDetectionData]):
         """Remove sessions that haven't been updated within the TTL."""
         now = time.time()
         stale = [
-            fid for fid, s in self._sessions.items()
+            fid
+            for fid, s in self._sessions.items()
             if now - s.last_seen > self._session_ttl_s
         ]
         for fid in stale:
@@ -170,7 +172,9 @@ class MotionPerFacePerception(Perception[FaceDetectionData]):
 
     @staticmethod
     def _expand_face_bbox(
-        bbox: list[int], frame_h: int, frame_w: int,
+        bbox: list[int],
+        frame_h: int,
+        frame_w: int,
     ) -> tuple[int, int, int, int]:
         """Expand face bbox: 1x the face height upward, 2x on left/right/down.
 
@@ -216,7 +220,11 @@ class MotionPerFacePerception(Perception[FaceDetectionData]):
     @override
     def _check_impl(self, data: FaceDetectionData) -> None:
         if data.frame is None or not data.faces:
-            logger.debug("[motion_per_face] skipping: frame=%s faces=%d", "None" if data.frame is None else "ok", len(data.faces) if data.faces else 0)
+            logger.debug(
+                "[motion_per_face] skipping: frame=%s faces=%d",
+                "None" if data.frame is None else "ok",
+                len(data.faces) if data.faces else 0,
+            )
             return
         logger.debug("[motion_per_face] processing %d face(s)", len(data.faces))
 
@@ -232,7 +240,9 @@ class MotionPerFacePerception(Perception[FaceDetectionData]):
 
                 # Expand bbox and crop
                 ex1, ey1, ex2, ey2 = self._expand_face_bbox(
-                    face.bbox, frame_h, frame_w,
+                    face.bbox,
+                    frame_h,
+                    frame_w,
                 )
                 if ex2 <= ex1 or ey2 <= ey1:
                     continue
@@ -244,7 +254,9 @@ class MotionPerFacePerception(Perception[FaceDetectionData]):
                 try:
                     session.update(crop)
                 except Exception:
-                    logger.exception("[motion_per_face] inference error for '%s'", face_id)
+                    logger.exception(
+                        "[motion_per_face] inference error for '%s'", face_id
+                    )
                     continue
 
             self._flush_all()
@@ -263,7 +275,9 @@ class MotionPerFacePerception(Perception[FaceDetectionData]):
             if not session.sufficient_frames:
                 logger.debug(
                     "[motion_per_face] '%s' not ready yet (%d/%d frames)",
-                    session.face_id, session.frames_received, session._min_frames,
+                    session.face_id,
+                    session.frames_received,
+                    session._min_frames,
                 )
                 continue
 
@@ -314,8 +328,12 @@ class MotionPerFacePerception(Perception[FaceDetectionData]):
             session.mark_sent(new_labels, cur_ts)
             labels = new_labels
 
-            message = f"Activity detected ({session.face_id}): {', '.join(sorted(labels))}."
-            logger.info("[motion_per_face] flushing for '%s': %s", session.face_id, message)
+            message = (
+                f"Activity detected ({session.face_id}): {', '.join(sorted(labels))}."
+            )
+            logger.info(
+                "[motion_per_face] flushing for '%s': %s", session.face_id, message
+            )
 
             snapshot = snapshots[-1] if snapshots else None
             self._send_event(

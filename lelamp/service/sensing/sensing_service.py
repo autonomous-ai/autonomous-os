@@ -38,7 +38,6 @@ from lelamp.service.sensing.presence_service import PresenseService
 from lelamp.service.voice.tts_service import TTSService
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 try:
     import cv2

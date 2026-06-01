@@ -37,7 +37,6 @@ from lelamp.service.sensing.presence_service import PresenceState, PresenseServi
 from .base import Perception
 
 logger: logging.Logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 # ---------------------------------------------------------------------------
 # COCO 17-joint skeleton for visualization

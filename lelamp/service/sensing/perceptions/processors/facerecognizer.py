@@ -29,7 +29,6 @@ from lelamp.service.sensing.presence_service import PresenseService
 from .base import Perception
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 _NO_MATCH = -2.0  # sentinel score used when an embedding bank is empty
 
