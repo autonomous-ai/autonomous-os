@@ -305,3 +305,7 @@ SPEECH_EMOTION_API_URL: str = (
     if DL_BACKEND_URL else ""
 )
 SPEECH_EMOTION_API_KEY: str = DL_API_KEY
+SPEECH_EMOTION_AUDIO_DIR: str = os.environ.get(
+    "LELAMP_SPEECH_EMOTION_AUDIO_DIR",
+    os.path.join(tempfile.gettempdir(), "lamp-speech-emotion"),
+)

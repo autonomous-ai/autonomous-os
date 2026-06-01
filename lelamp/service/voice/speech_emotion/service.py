@@ -37,7 +37,9 @@ Anti-spam guards (matched to face emotion):
 from __future__ import annotations
 
 import logging
+import os
 import queue
+import re
 import threading
 import time
 from collections import Counter
@@ -85,6 +87,8 @@ _MIN_AUDIO_S: float = float(
 _API_URL: str = getattr(config, "SPEECH_EMOTION_API_URL", "") or ""
 _API_KEY: str = getattr(config, "SPEECH_EMOTION_API_KEY", "") or ""
 _LAMP_URL: str = config.LAMP_SENSING_URL
+_AUDIO_DIR: str = getattr(config, "SPEECH_EMOTION_AUDIO_DIR", "") or ""
+_SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9_-]+")
 
 
 @dataclass(slots=True)
@@ -101,6 +105,7 @@ class _Inference:
     confidence: float
     duration_s: float
     ts: float
+    audio_path: str = ""
 
 
 def _build_default_recognizer() -> BaseSpeechEmotionRecognizer:
@@ -133,6 +138,7 @@ class SpeechEmotionService:
         dedup_window_s: float = _DEDUP_WINDOW_S,
         min_audio_s: float = _MIN_AUDIO_S,
         lamp_url: str = _LAMP_URL,
+        audio_dir: str = _AUDIO_DIR,
         queue_maxsize: int = DEFAULT_QUEUE_MAXSIZE,
     ):
         self._recognizer: BaseSpeechEmotionRecognizer = (
@@ -142,6 +148,7 @@ class SpeechEmotionService:
         self._dedup_window_s: float = dedup_window_s
         self._min_audio_s: float = min_audio_s
         self._lamp_url: str = lamp_url
+        self._audio_dir: str = audio_dir
 
         # mutable state — guarded by _lock
         self._lock: threading.RLock = threading.RLock()
@@ -155,14 +162,25 @@ class SpeechEmotionService:
         self._flush_thread: Optional[threading.Thread] = None
 
         if self.available:
+            if self._audio_dir:
+                try:
+                    os.makedirs(self._audio_dir, exist_ok=True)
+                except OSError as e:
+                    logger.warning(
+                        "[speech_emotion] audio_dir mkdir failed (%s): %s — "
+                        "POST will carry empty audio field",
+                        self._audio_dir, e,
+                    )
+                    self._audio_dir = ""
             self._start_workers()
             logger.info(
                 "[speech_emotion] SERVICE STARTED — flush=%.1fs dedup=%.1fs "
                 "min_audio=%.1fs per-label thresholds=%s default=%.2f "
-                "lamp_url=%s recognizer=%s",
+                "lamp_url=%s audio_dir=%s recognizer=%s",
                 flush_s, dedup_window_s, min_audio_s,
                 CONFIDENCE_THRESHOLD_BY_LABEL, DEFAULT_CONFIDENCE_THRESHOLD,
-                self._lamp_url, type(self._recognizer).__name__,
+                self._lamp_url, self._audio_dir or "<disabled>",
+                type(self._recognizer).__name__,
             )
         else:
             logger.warning(
@@ -298,20 +316,49 @@ class SpeechEmotionService:
             )
             return
 
+        inf_ts = time.time()
+        audio_path = self._persist_wav(job.wav_bytes, job.user, label, inf_ts)
         inf = _Inference(
             user=job.user,
             label=label,
             confidence=result.confidence,
             duration_s=job.duration_s,
-            ts=time.time(),
+            ts=inf_ts,
+            audio_path=audio_path,
         )
         with self._lock:
             self._buffer.setdefault(job.user, []).append(inf)
             buf_len = len(self._buffer[job.user])
         logger.info(
-            "[speech_emotion] BUFFERED — user=%r label=%s conf=%.3f buf_len=%d",
-            job.user, inf.label, inf.confidence, buf_len,
+            "[speech_emotion] BUFFERED — user=%r label=%s conf=%.3f buf_len=%d audio=%s",
+            job.user, inf.label, inf.confidence, buf_len, audio_path or "<none>",
         )
+
+    def _persist_wav(
+        self,
+        wav_bytes: bytes,
+        user: str,
+        label: SpeechEmotionLabel,
+        ts: float,
+    ) -> str:
+        """Write the WAV buffer to disk and return the path. Empty string on
+        skip/failure (audio_dir disabled or I/O error) — caller must tolerate.
+        """
+        if not self._audio_dir:
+            return ""
+        safe_user = _SAFE_NAME_RE.sub("_", user) or "unknown"
+        safe_label = _SAFE_NAME_RE.sub("_", label.value) or "unknown"
+        filename = f"{int(ts * 1000)}_{safe_user}_{safe_label}.wav"
+        path = os.path.join(self._audio_dir, filename)
+        try:
+            with open(path, "wb") as f:
+                f.write(wav_bytes)
+        except OSError as e:
+            logger.warning(
+                "[speech_emotion] persist wav failed (%s): %s", path, e,
+            )
+            return ""
+        return path
 
     # --- flush thread -----------------------------------------------------
 
@@ -374,14 +421,16 @@ class SpeechEmotionService:
 
         counts = Counter(inf.label for inf in non_neutral)
         dominant_label, _ = counts.most_common(1)[0]
-        dom_confidences = [
-            inf.confidence for inf in non_neutral if inf.label == dominant_label
-        ]
-        avg_confidence = sum(dom_confidences) / len(dom_confidences)
+        dom_inferences = [inf for inf in non_neutral if inf.label == dominant_label]
+        avg_confidence = sum(inf.confidence for inf in dom_inferences) / len(
+            dom_inferences
+        )
         bucket = bucket_for(dominant_label)
+        latest_audio_path = max(dom_inferences, key=lambda i: i.ts).audio_path
         logger.info(
-            "[speech_emotion] mode for user=%r: label=%s avg_conf=%.3f bucket=%s",
+            "[speech_emotion] mode for user=%r: label=%s avg_conf=%.3f bucket=%s audio=%s",
             user, dominant_label, avg_confidence, bucket,
+            latest_audio_path or "<none>",
         )
 
         key = (user, bucket)
@@ -398,18 +447,25 @@ class SpeechEmotionService:
 
         message = format_message(dominant_label, avg_confidence, bucket)
         logger.info(
-            "[speech_emotion] EMIT — user=%r message=%r",
-            user, message,
+            "[speech_emotion] EMIT — user=%r message=%r audio=%s",
+            user, message, latest_audio_path or "<none>",
         )
-        self._send_to_lamp(message=message, user=user)
+        self._send_to_lamp(
+            message=message, user=user, audio_path=latest_audio_path,
+        )
 
     # --- transport --------------------------------------------------------
 
-    def _send_to_lamp(self, *, message: str, user: str) -> None:
+    def _send_to_lamp(
+        self, *, message: str, user: str, audio_path: str = "",
+    ) -> None:
         """POST sensing event to Lamp with 3x retry on connection error / 503.
 
         Same shape as voice_service.send_to_lamp but carries `current_user`
         explicitly so the Lamp sensing handler doesn't have to look it up.
+        ``audio_path`` is the on-disk path of the latest WAV that produced
+        the dominant label this flush; empty when persistence is disabled
+        or the write failed.
         """
         if not self._lamp_url:
             logger.warning(
@@ -420,10 +476,11 @@ class SpeechEmotionService:
             "type": SENSING_EVENT_TYPE,
             "message": message,
             "current_user": user,
+            "audio": audio_path,
         }
         logger.info(
-            "[speech_emotion] POST -> %s payload.user=%r payload.type=%s",
-            self._lamp_url, user, SENSING_EVENT_TYPE,
+            "[speech_emotion] POST -> %s payload.user=%r payload.type=%s audio=%s",
+            self._lamp_url, user, SENSING_EVENT_TYPE, audio_path or "<none>",
         )
         max_retries = 3
         for attempt in range(1, max_retries + 1):
