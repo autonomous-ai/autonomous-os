@@ -55,6 +55,7 @@ import numpy as np
 import requests
 
 from lelamp import config
+from lelamp.service.sensing.crypto import CryptoSession, resolve_public_key
 
 logger = logging.getLogger("lelamp.voice.speaker")
 
@@ -326,6 +327,15 @@ class SpeakerRecognizer:
         )
         self._mu = threading.Lock()
 
+        self._crypto: CryptoSession | None = None
+        if config.DL_ENCRYPTION_ENABLED:
+            public_key = resolve_public_key(config.DL_PUBLIC_KEY_URL, config.DL_API_KEY, config.DL_PUBLIC_KEY_FILE)
+            if public_key is not None:
+                self._crypto = CryptoSession(public_key)
+                logger.info("Speaker recognizer: encryption enabled")
+            elif config.DL_ENCRYPTION_REQUIRED:
+                raise RuntimeError("Encryption required but no public key available")
+
         self._users_dir.mkdir(parents=True, exist_ok=True)
         _UNKNOWN_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -438,12 +448,20 @@ class SpeakerRecognizer:
             body["return_chunks"] = True
 
         try:
-            resp = requests.post(
-                self._api_url,
-                json=body,
-                headers=headers,
-                timeout=_API_TIMEOUT_S,
-            )
+            if self._crypto is not None:
+                resp = requests.post(
+                    self._api_url,
+                    data=self._crypto.wrap_http_request(json.dumps(body).encode()),
+                    headers=headers,
+                    timeout=_API_TIMEOUT_S,
+                )
+            else:
+                resp = requests.post(
+                    self._api_url,
+                    json=body,
+                    headers=headers,
+                    timeout=_API_TIMEOUT_S,
+                )
         except requests.RequestException as e:
             logger.warning("Embedding server unreachable at %s: %s", self._api_url, e)
             raise EmbeddingAPIUnavailableError(
@@ -467,7 +485,10 @@ class SpeakerRecognizer:
             )
 
         try:
-            payload = resp.json()
+            if self._crypto is not None:
+                payload = json.loads(self._crypto.unwrap_http_response(resp.content))
+            else:
+                payload = resp.json()
         except ValueError as e:
             raise EmbeddingAPIUnavailableError(
                 f"embedding API returned non-JSON: {e}"

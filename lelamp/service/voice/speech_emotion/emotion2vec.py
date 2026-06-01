@@ -8,11 +8,14 @@ can simply skip the sample.
 from __future__ import annotations
 
 import base64
+import json
 import logging
 from typing import Optional
 
 import requests
 
+import lelamp.config as config
+from lelamp.service.sensing.crypto import CryptoSession, resolve_public_key
 from lelamp.service.voice.speech_emotion.base import (
     BaseSpeechEmotionRecognizer,
     SpeechEmotionResult,
@@ -41,6 +44,15 @@ class Emotion2VecRecognizer(BaseSpeechEmotionRecognizer):
         self._api_key: str = api_key or ""
         self._timeout: float = timeout_s
 
+        self._crypto: CryptoSession | None = None
+        if config.DL_ENCRYPTION_ENABLED:
+            public_key = resolve_public_key(config.DL_PUBLIC_KEY_URL, config.DL_API_KEY, config.DL_PUBLIC_KEY_FILE)
+            if public_key is not None:
+                self._crypto = CryptoSession(public_key)
+                logger.info("[speech_emotion.engine] encryption enabled")
+            elif config.DL_ENCRYPTION_REQUIRED:
+                raise RuntimeError("Encryption required but no public key available")
+
     @property
     def available(self) -> bool:
         return bool(self._url)
@@ -59,10 +71,19 @@ class Emotion2VecRecognizer(BaseSpeechEmotionRecognizer):
         )
         try:
             payload = {"audio_b64": b64, "return_scores": False}
-            headers = {"X-API-Key": self._api_key} if self._api_key else {}
-            resp = requests.post(
-                self._url, json=payload, headers=headers, timeout=self._timeout,
-            )
+            headers: dict[str, str] = {"Content-Type": "application/json"}
+            if self._api_key:
+                headers["X-API-Key"] = self._api_key
+            if self._crypto is not None:
+                resp = requests.post(
+                    self._url,
+                    data=self._crypto.wrap_http_request(json.dumps(payload).encode()),
+                    headers=headers, timeout=self._timeout,
+                )
+            else:
+                resp = requests.post(
+                    self._url, json=payload, headers=headers, timeout=self._timeout,
+                )
         except requests.RequestException as e:
             logger.warning("[speech_emotion.engine] request failed: %s", e)
             return None
@@ -75,7 +96,10 @@ class Emotion2VecRecognizer(BaseSpeechEmotionRecognizer):
             return None
 
         try:
-            data = resp.json()
+            if self._crypto is not None:
+                data = json.loads(self._crypto.unwrap_http_response(resp.content))
+            else:
+                data = resp.json()
         except ValueError:
             logger.warning(
                 "[speech_emotion.engine] non-JSON response: %s", resp.text[:200],

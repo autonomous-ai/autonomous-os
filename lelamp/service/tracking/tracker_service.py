@@ -11,6 +11,7 @@ Workflow:
 """
 
 import base64
+import json
 import logging
 import math
 import os
@@ -25,9 +26,13 @@ import numpy as np
 import numpy.typing as npt
 import requests
 
+import lelamp.config as config
 from lelamp.config import (
     TRACKING_DETECT_LOCAL_ENABLED as _DETECT_LOCAL_ENABLED,
     TRACKING_FACE_DETECTOR_ENABLED as _FACE_DETECTOR_ENABLED,
+)
+from lelamp.service.sensing.crypto import CryptoSession, resolve_public_key
+from lelamp.config import (
     YUNET_CONFIDENCE_THRESHOLD as _YUNET_CONF,
 )
 
@@ -374,6 +379,15 @@ class TrackerService:
         self._yaw_pid = PID(PID_YAW_KP, PID_YAW_KI, PID_YAW_KD)
         self._pitch_pid = PID(PID_PITCH_KP, PID_PITCH_KI, PID_PITCH_KD)
 
+        self._crypto: CryptoSession | None = None
+        if config.DL_ENCRYPTION_ENABLED:
+            public_key = resolve_public_key(config.DL_PUBLIC_KEY_URL, config.DL_API_KEY, config.DL_PUBLIC_KEY_FILE)
+            if public_key is not None:
+                self._crypto = CryptoSession(public_key)
+                logger.info("Tracker: encryption enabled for remote YOLOWorld")
+            elif config.DL_ENCRYPTION_REQUIRED:
+                logger.error("Tracker: encryption required but no public key available")
+
     @property
     def is_tracking(self) -> bool:
         return self._state.running.is_set()
@@ -456,17 +470,34 @@ class TrackerService:
             _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
             img_b64 = base64.b64encode(buf.tobytes()).decode()
 
-            resp = requests.post(
-                url,
-                json={"image_b64": img_b64, "classes": [target]},
-                headers={"x-api-key": DL_API_KEY} if DL_API_KEY else {},
-                timeout=_YOLO_TIMEOUT,
-            )
+            payload = {"image_b64": img_b64, "classes": [target]}
+            headers: dict[str, str] = {"Content-Type": "application/json"}
+            if DL_API_KEY:
+                headers["X-API-Key"] = DL_API_KEY
+            if self._crypto is not None:
+
+                resp = requests.post(
+                    url,
+                    data=self._crypto.wrap_http_request(json.dumps(payload).encode()),
+                    headers=headers,
+                    timeout=_YOLO_TIMEOUT,
+                )
+            else:
+                resp = requests.post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    timeout=_YOLO_TIMEOUT,
+                )
             if resp.status_code != 200:
                 logger.warning("YOLOWorld HTTP %d: %s", resp.status_code, resp.text[:200])
                 return None
 
-            detections = resp.json()
+            if self._crypto is not None:
+
+                detections = json.loads(self._crypto.unwrap_http_response(resp.content))
+            else:
+                detections = resp.json()
             if not detections:
                 logger.info("YOLOWorld: '%s' not found in frame", target)
                 return None
