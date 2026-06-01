@@ -224,10 +224,14 @@ class RemotePoseEstimator:
         if self._ws_session is None:
             return
         try:
-            self._ws_session.send(json.dumps({"type": "heartbeat", "task": "pose"}))
-            resp: dict = json.loads(
-                self._ws_session.recv(timeout=config.DL_WS_RECV_TIMEOUT_S)
-            )
+            msg = json.dumps({"type": "heartbeat", "task": "pose"})
+            if self._crypto is not None:
+                msg = self._crypto.wrap_ws_message(msg)
+            self._ws_session.send(msg)
+            raw = self._ws_session.recv()
+            if self._crypto is not None:
+                raw = self._crypto.unwrap_ws_message(raw)
+            resp: dict = json.loads(raw)
             if resp.get("status") == "ok":
                 logger.debug("[pose] heartbeat ok")
             else:

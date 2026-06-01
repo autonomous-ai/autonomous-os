@@ -209,10 +209,14 @@ class RemoteMotionChecker:
         if self._ws_session is None:
             return
         try:
-            self._ws_session.send(json.dumps({"type": "heartbeat", "task": "action"}))
-            resp = json.loads(
-                self._ws_session.recv(timeout=config.DL_WS_RECV_TIMEOUT_S)
-            )
+            msg = json.dumps({"type": "heartbeat", "task": "action"})
+            if self._crypto is not None:
+                msg = self._crypto.wrap_ws_message(msg)
+            self._ws_session.send(msg)
+            raw = self._ws_session.recv()
+            if self._crypto is not None:
+                raw = self._crypto.unwrap_ws_message(raw)
+            resp = json.loads(raw)
             if resp.get("status") == "ok":
                 logger.debug("[motion] heartbeat ok")
             else:
