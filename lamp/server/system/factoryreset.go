@@ -24,7 +24,25 @@ import (
 // recursive remove. Missing paths are silently ignored.
 var FactoryResetWipePaths = []string{
 	"/root/config",                                  // lamp-server config.json (API keys, channel tokens, MQTT creds)
-	"/root/.openclaw",                               // OpenClaw state (sessions, identity, browser profile, memory)
+	"/root/.openclaw/agents",                        // conversation sessions + history
+	"/root/.openclaw/workspace",                     // agent memory (HEARTBEAT.md, SOUL.md, USER.md, memory/)
+	"/root/.openclaw/identity",                      // device identity key → new device ID on next setup
+	"/root/.openclaw/lumi-device-key.json",          // device keypair
+	"/root/.openclaw/devices",                       // paired devices list
+	"/root/.openclaw/credentials",                   // channel auth tokens (telegram, discord, slack sessions)
+	"/root/.openclaw/tasks",                         // background task runs
+	"/root/.openclaw/logs",                          // runtime logs
+	"/root/.openclaw/telegram",                      // telegram update offset
+	"/root/.openclaw/discord",                       // discord command deploy cache
+	"/root/.openclaw/plugin-state",                  // plugin runtime state
+	"/root/.openclaw/memory",                        // memory sqlite db
+	"/root/.openclaw/delivery-queue",                // failed message delivery queue
+	"/root/.openclaw/subagents",                     // subagent run history
+	"/root/.openclaw/cron",                          // cron jobs + state
+	"/root/.openclaw/media",                         // outbound media files
+	"/root/.openclaw/flows",                         // flow registry
+	// NOTE: openclaw.json, npm/ (plugins), plugin-skills/, canvas/, plugins/ are
+	// intentionally kept so openclaw starts normally after reset without re-onboard.
 	"/root/local/users",                             // face + voice enrollments (owner)
 	"/root/local/strangers",                         // face + voice enrollments (stranger)
 	"/var/lib/lelamp/snapshots",                     // persistent camera snapshots (sensing_face / motion / emotion, 72h TTL). Matches lelamp/config.py LELAMP_SNAPSHOT_PERSIST_DIR default.
