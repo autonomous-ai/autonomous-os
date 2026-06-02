@@ -1584,33 +1584,41 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 				State:   "final",
 				Detail:  map[string]string{"role": "assistant", "message": cleanText},
 			})
-			if telegramID != "" {
-				// FIXME: band-aid for OpenClaw 5.4 queue-mode regression. The
-				// telegram plugin closes its message-processing window in
-				// ~1–2s and reports "turn ended without visible final
-				// response" before the agent (which can take 20s+) finishes.
-				// The eventual reply lands in chat history but never gets
-				// fanned out to the originating Telegram chat. Until OpenClaw
-				// fixes that path, Lamp DMs via Bot API itself. REMOVE this
-				// goroutine + flow.Log when upstream fix lands — otherwise
-				// users will receive duplicate replies (one from OpenClaw,
-				// one from Lamp). The interleave fix above is a separate
-				// case and should stay even after upstream fixes this one.
-				go func(t, tid string) {
-					slog.Info("channel turn → Telegram DM", "component", "agent", "run_id", runID, "telegram_id", tid)
-					if err := h.agentGateway.SendToUser(tid, t, ""); err != nil {
-						slog.Error("channel turn DM failed", "component", "agent", "run_id", runID, "err", err)
-					}
-				}(cleanText, telegramID)
-				flow.Log("telegram_dm_send", map[string]any{
-					"run_id":      runID,
-					"telegram_id": telegramID,
-					"source":      "channel_turn",
-				}, runID)
-			} else {
-				slog.Warn("channel turn has no telegram_id — reply not delivered",
-					"component", "agent", "run_id", runID, "sender_label", "elided")
-			}
+			// 2026-06-02: Disabled band-aid Telegram DM send below. Users were
+			// reporting 2 reply messages per DM turn — OpenClaw upstream now
+			// fans out the reply itself, so this code path was the duplicate.
+			// REVERT this comment-out (uncomment the block) only if users start
+			// reporting "turn ended without visible final response" again, i.e.
+			// OpenClaw stops delivering the eventual reply to the originating
+			// Telegram chat. The interleave fix elsewhere is a separate case
+			// and stays regardless.
+			// if telegramID != "" {
+			// 	// FIXME: band-aid for OpenClaw 5.4 queue-mode regression. The
+			// 	// telegram plugin closes its message-processing window in
+			// 	// ~1–2s and reports "turn ended without visible final
+			// 	// response" before the agent (which can take 20s+) finishes.
+			// 	// The eventual reply lands in chat history but never gets
+			// 	// fanned out to the originating Telegram chat. Until OpenClaw
+			// 	// fixes that path, Lamp DMs via Bot API itself. REMOVE this
+			// 	// goroutine + flow.Log when upstream fix lands — otherwise
+			// 	// users will receive duplicate replies (one from OpenClaw,
+			// 	// one from Lamp). The interleave fix above is a separate
+			// 	// case and should stay even after upstream fixes this one.
+			// 	go func(t, tid string) {
+			// 		slog.Info("channel turn → Telegram DM", "component", "agent", "run_id", runID, "telegram_id", tid)
+			// 		if err := h.agentGateway.SendToUser(tid, t, ""); err != nil {
+			// 			slog.Error("channel turn DM failed", "component", "agent", "run_id", runID, "err", err)
+			// 		}
+			// 	}(cleanText, telegramID)
+			// 	flow.Log("telegram_dm_send", map[string]any{
+			// 		"run_id":      runID,
+			// 		"telegram_id": telegramID,
+			// 		"source":      "channel_turn",
+			// 	}, runID)
+			// } else {
+			// 	slog.Warn("channel turn has no telegram_id — reply not delivered",
+			// 		"component", "agent", "run_id", runID, "sender_label", "elided")
+			// }
 		}
 		// Drop the channelRuns marker — turn is finished.
 		h.channelRunsMu.Lock()
