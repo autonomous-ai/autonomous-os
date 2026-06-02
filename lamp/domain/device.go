@@ -265,6 +265,17 @@ const (
 	KindSystemInfo    = "system.info"    // aggregate: versions + network + host
 	KindSystemVersion = "system.version" // lamp + bootstrap + lelamp + openclaw versions
 	KindSystemNetwork = "system.network" // wlan0 IP, MAC, SSID, gateway
+
+	// KindSkillsInstall installs a role's skill bundle. Data: {"role":"<role>"}.
+	KindSkillsInstall = "skills.install"
+)
+
+// Connector (MCP) data-kind prefixes. The connector code is the suffix, e.g.
+// "connector.set.notion" / "connector.remove.github". dispatchData prefix-matches
+// these before the exact-kind switch.
+const (
+	DataKindConnectorSetPrefix    = "connector.set."
+	DataKindConnectorRemovePrefix = "connector.remove."
 )
 
 // Message is the standard envelope for MQTT messages from the server (fa_channel).
@@ -413,10 +424,28 @@ func NewMQTTInfoResponse(cfg *config.Config, msgType string, mac string) MQTTInf
 
 // MQTTDataCommand is the fa_channel payload for cmd:"data" — a generic envelope.
 // Sub-handlers branch on Kind and unmarshal Data into a kind-specific struct.
+//
+// Type selects the delivery path:
+//   - "" (default)  → Data is inline; dispatch immediately.
+//   - "privacy"     → Data is omitted on the broker and lives on the backend;
+//     the device acks "received" then fetches it over TLS from
+//     /devices/get-message before dispatching (see privacy_fetch.go).
 type MQTTDataCommand struct {
 	Kind string          `json:"kind"`
+	Type string          `json:"type,omitempty"`
 	Data json.RawMessage `json:"data"`
 }
+
+// MQTT data delivery types and statuses for the privacy envelope flow.
+const (
+	// MQTTDataTypePrivacy marks an envelope whose Data block must be fetched
+	// from the backend instead of read inline — keeps secrets off the broker.
+	MQTTDataTypePrivacy = "privacy"
+	// MQTTStatusReceived is the ack the device publishes the moment it accepts
+	// a privacy envelope, before the async backend fetch begins. Tells the
+	// backend "got it, stop retrying" without being the terminal status.
+	MQTTStatusReceived = "received"
+)
 
 // MQTTDataResponse is the fd_channel reply for cmd:"data".
 // Echoes Kind so the server can correlate with its outbound request.
@@ -503,6 +532,68 @@ type OAuthTokenEntry struct {
 type AccessTokensFile struct {
 	Version   int                        `json:"version"`
 	Providers map[string]OAuthTokenEntry `json:"providers"`
+}
+
+// MQTTConnectorSetData is the Data payload for kind:"connector.set.<code>".
+// The backend drives the OAuth/app flow and pushes the resulting credentials
+// here; the device writes the token file + the mcp.servers.<code> entry into
+// openclaw.json. ExpiresIn (seconds-from-now) is normalized to an absolute
+// ExpiresAt on store.
+type MQTTConnectorSetData struct {
+	Connector    string   `json:"connector"`
+	AuthType     string   `json:"auth_type"`
+	AccessToken  string   `json:"access_token,omitempty"`
+	RefreshToken string   `json:"refresh_token,omitempty"`
+	TokenType    string   `json:"token_type,omitempty"`
+	ExpiresIn    int      `json:"expires_in,omitempty"` // seconds from now
+	ExpiresAt    int64    `json:"expires_at,omitempty"` // unix seconds (wins over expires_in)
+	// APIKey carries the credential for static-API-key connectors (e.g. Ahrefs)
+	// whose auth_type is not OAuth — the key lands here, not in access_token.
+	APIKey    string   `json:"api_key,omitempty"`
+	Scopes    []string `json:"scopes,omitempty"`
+	UserEmail string   `json:"user_email,omitempty"`
+	ClientID  string   `json:"client_id,omitempty"`
+	// Credentials holds connector-specific extras the backend wants persisted
+	// verbatim (preserved across token refreshes).
+	Credentials map[string]string `json:"credentials,omitempty"`
+	// Refresh gates the connector refresh loop: only entries with refresh:true
+	// AND a refresh_token are auto-rotated. Backend is the source of truth.
+	Refresh bool `json:"refresh,omitempty"`
+}
+
+// MQTTConnectorRemoveData is the Data payload for kind:"connector.remove.<code>".
+type MQTTConnectorRemoveData struct {
+	Connector string `json:"connector"`
+}
+
+// ConnectorEntry is the on-disk representation of a single connector's
+// credentials inside workspace/configs/connectors.json.
+type ConnectorEntry struct {
+	AuthType     string            `json:"auth_type,omitempty"`
+	AccessToken  string            `json:"access_token"`
+	RefreshToken string            `json:"refresh_token,omitempty"`
+	TokenType    string            `json:"token_type,omitempty"`
+	ExpiresAt    int64             `json:"expires_at,omitempty"`
+	APIKey       string            `json:"api_key,omitempty"`
+	Scopes       []string          `json:"scopes,omitempty"`
+	UserEmail    string            `json:"user_email,omitempty"`
+	ClientID     string            `json:"client_id,omitempty"`
+	Credentials  map[string]string `json:"credentials,omitempty"`
+	Refresh      bool              `json:"refresh,omitempty"`
+	ObtainedAt   int64             `json:"obtained_at"`
+}
+
+// ConnectorsFile is the on-disk schema for workspace/configs/connectors.json.
+type ConnectorsFile struct {
+	Version    int                       `json:"version"`
+	Connectors map[string]ConnectorEntry `json:"connectors"`
+}
+
+// MQTTSkillsInstallData is the Data payload for kind:"skills.install".
+// Role is a free-form slug owned by the backend catalog; the device fetches
+// <role>/skills.zip on demand.
+type MQTTSkillsInstallData struct {
+	Role string `json:"role"`
 }
 
 // MQTTTTSSetData is the nested data payload for cmd:"data", kind:"tts.set" downlinks.

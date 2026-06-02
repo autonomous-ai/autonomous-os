@@ -14,13 +14,12 @@ import (
 // API key + base URL are read server-side from config so the BFF never
 // has to ship credentials over MQTT. Provider/voice/language overrides
 // are optional — empty fields make LeLamp fall back to current config.
-func (h *DeviceMQTTHandler) handleTTSPreview(cmd domain.MQTTMessage) error {
-	var envelope domain.MQTTTTSPreviewCommand
-	if err := json.Unmarshal(cmd.Raw(), &envelope); err != nil {
+func (h *DeviceMQTTHandler) handleTTSPreview(env domain.MQTTDataCommand) error {
+	var req domain.MQTTTTSPreviewData
+	if err := json.Unmarshal(env.Data, &req); err != nil {
 		slog.Error("tts.preview: invalid payload", "component", "mqtt", "error", err)
 		return h.publishDataResult(domain.KindTTSPreview, "failure", "invalid JSON payload", nil)
 	}
-	req := envelope.Data
 
 	if strings.TrimSpace(req.Text) == "" {
 		slog.Warn("tts.preview: missing text", "component", "mqtt")

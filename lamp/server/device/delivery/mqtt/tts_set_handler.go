@@ -22,14 +22,13 @@ func (h *DeviceMQTTHandler) publishTTSSetAck(status, errMsg string, data *domain
 	}
 }
 
-func (h *DeviceMQTTHandler) handleTTSSet(cmd domain.MQTTMessage) error {
-	var envelope domain.MQTTTTSSetCommand
-	if err := json.Unmarshal(cmd.Raw(), &envelope); err != nil {
+func (h *DeviceMQTTHandler) handleTTSSet(env domain.MQTTDataCommand) error {
+	var req domain.MQTTTTSSetData
+	if err := json.Unmarshal(env.Data, &req); err != nil {
 		slog.Error("tts.set: invalid payload", "component", "mqtt", "error", err)
 		h.publishTTSSetAck("failure", "invalid JSON payload", nil)
 		return err
 	}
-	req := envelope.Data
 
 	slog.Info("tts.set: received", "component", "mqtt", "provider", req.Provider, "voice", req.Voice, "language", req.Language)
 

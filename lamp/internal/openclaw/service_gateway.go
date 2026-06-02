@@ -1,6 +1,7 @@
 package openclaw
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -9,7 +10,15 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
+
+// gatewayRestartTimeout bounds a single `systemctl restart openclaw` (or the
+// `openclaw gateway restart` fallback). systemd's restart is synchronous —
+// without a bound, a gateway that fails to re-bind its socket would block the
+// caller (which holds the connector writer mutex) indefinitely. Generous enough
+// for a healthy Pi restart (~30-60s) plus margin.
+const gatewayRestartTimeout = 90 * time.Second
 
 func generateGatewayToken() (string, error) {
 	buf := make([]byte, 24)
@@ -63,16 +72,19 @@ func (s *Service) onboardOpenclaw() error {
 }
 
 func restartOpenclawGateway() error {
+	ctx, cancel := context.WithTimeout(context.Background(), gatewayRestartTimeout)
+	defer cancel()
+
 	if os.Geteuid() == 0 {
 		if _, err := exec.LookPath("systemctl"); err == nil {
-			out, err := exec.Command("systemctl", "restart", "openclaw").CombinedOutput()
+			out, err := exec.CommandContext(ctx, "systemctl", "restart", "openclaw").CombinedOutput()
 			if err == nil {
 				return nil
 			}
 			slog.Warn("systemctl restart failed, fallback", "component", "openclaw", "output", strings.TrimSpace(string(out)))
 		}
 	}
-	out, err := exec.Command("openclaw", "gateway", "restart").CombinedOutput()
+	out, err := exec.CommandContext(ctx, "openclaw", "gateway", "restart").CombinedOutput()
 	if err == nil {
 		return nil
 	}

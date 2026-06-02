@@ -23,12 +23,7 @@ const (
 // accessTokensMu serializes reads/writes of access_tokens.json across MQTT callbacks.
 var accessTokensMu sync.Mutex
 
-func (h *DeviceMQTTHandler) handleOAuthSet(cmd domain.MQTTMessage) error {
-	var env domain.MQTTDataCommand
-	if err := json.Unmarshal(cmd.Raw(), &env); err != nil {
-		return h.publishDataResult("", "failure", "invalid envelope: "+err.Error(), nil)
-	}
-
+func (h *DeviceMQTTHandler) handleOAuthSet(env domain.MQTTDataCommand) error {
 	var req domain.MQTTOAuthSetData
 	if err := json.Unmarshal(env.Data, &req); err != nil {
 		return h.publishDataResult(env.Kind, "failure", "invalid oauth.set data: "+err.Error(), nil)
@@ -60,12 +55,7 @@ func (h *DeviceMQTTHandler) handleOAuthSet(cmd domain.MQTTMessage) error {
 	})
 }
 
-func (h *DeviceMQTTHandler) handleOAuthRemove(cmd domain.MQTTMessage) error {
-	var env domain.MQTTDataCommand
-	if err := json.Unmarshal(cmd.Raw(), &env); err != nil {
-		return h.publishDataResult("", "failure", "invalid envelope: "+err.Error(), nil)
-	}
-
+func (h *DeviceMQTTHandler) handleOAuthRemove(env domain.MQTTDataCommand) error {
 	var req domain.MQTTOAuthRemoveData
 	if err := json.Unmarshal(env.Data, &req); err != nil {
 		return h.publishDataResult(env.Kind, "failure", "invalid oauth.remove data: "+err.Error(), nil)

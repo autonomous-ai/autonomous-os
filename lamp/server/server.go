@@ -882,6 +882,11 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 		// runs on the backend. Loop refreshes them before they lapse.
 		safego.Go("oauth-refresh", func() { s.deviceMQTTHandler.StartOAuthRefreshLoop(s.monitorCtx) })
 
+		// Keep MCP connector tokens (Notion/Figma/Asana/Linear/GitHub) fresh.
+		// Same model as oauth-refresh: only entries the backend flagged
+		// refresh:true (with a refresh_token) are rotated before they lapse.
+		safego.Go("connector-refresh", func() { s.deviceMQTTHandler.StartConnectorRefreshLoop(s.monitorCtx) })
+
 		s.restartMQTT()
 
 		safego.Go("startup-sequence", func() {

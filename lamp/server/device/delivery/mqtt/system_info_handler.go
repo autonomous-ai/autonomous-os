@@ -30,7 +30,7 @@ const (
 // handleSystemInfo returns the full aggregate snapshot — versions + network +
 // host — in a single MQTT response. Synchronous (no `starting` intermediate);
 // all probes run inline and individual failures fall back to zero-value fields.
-func (h *DeviceMQTTHandler) handleSystemInfo(cmd domain.MQTTMessage) error {
+func (h *DeviceMQTTHandler) handleSystemInfo(env domain.MQTTDataCommand) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -43,30 +43,30 @@ func (h *DeviceMQTTHandler) handleSystemInfo(cmd domain.MQTTMessage) error {
 		"lamp", data.Versions.Lamp, "bootstrap", data.Versions.Bootstrap,
 		"lelamp", data.Versions.Lelamp, "openclaw", data.Versions.OpenClaw,
 		"ip", data.Network.PrivateIP, "ssid", data.Network.SSID)
-	return h.publishDataResult(cmd.Kind, "success", "", data)
+	return h.publishDataResult(env.Kind, "success", "", data)
 }
 
 // handleSystemVersion returns only the versions block. Cheaper than system.info
 // — skips network/host probing.
-func (h *DeviceMQTTHandler) handleSystemVersion(cmd domain.MQTTMessage) error {
+func (h *DeviceMQTTHandler) handleSystemVersion(env domain.MQTTDataCommand) error {
 	ctx, cancel := context.WithTimeout(context.Background(), sysProbeTimeout*3)
 	defer cancel()
 
 	v := probeVersions(ctx)
 	slog.Info("system.version", "component", "mqtt",
 		"lamp", v.Lamp, "bootstrap", v.Bootstrap, "lelamp", v.Lelamp, "openclaw", v.OpenClaw)
-	return h.publishDataResult(cmd.Kind, "success", "", v)
+	return h.publishDataResult(env.Kind, "success", "", v)
 }
 
 // handleSystemNetwork returns only the network block.
-func (h *DeviceMQTTHandler) handleSystemNetwork(cmd domain.MQTTMessage) error {
+func (h *DeviceMQTTHandler) handleSystemNetwork(env domain.MQTTDataCommand) error {
 	ctx, cancel := context.WithTimeout(context.Background(), sysProbeTimeout*2)
 	defer cancel()
 
 	n := probeNetwork(ctx)
 	slog.Info("system.network", "component", "mqtt",
 		"ip", n.PrivateIP, "mac", n.MAC, "ssid", n.SSID, "gw", n.Gateway)
-	return h.publishDataResult(cmd.Kind, "success", "", n)
+	return h.publishDataResult(env.Kind, "success", "", n)
 }
 
 // probeVersions collects lamp + bootstrap + lelamp + openclaw versions.

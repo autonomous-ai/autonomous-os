@@ -135,6 +135,15 @@ type AgentGateway interface {
 	// GetConfigJSON returns the raw openclaw.json bytes.
 	GetConfigJSON() (json.RawMessage, error)
 
+	// WriteMCPEntry upserts mcp.servers.<name> in openclaw.json (the server
+	// config map, e.g. {type, url, headers}) and restarts the gateway. Used by
+	// the connector.set MQTT flow to wire remote-MCP connectors.
+	WriteMCPEntry(name string, entry map[string]any) error
+
+	// RemoveMCPEntry deletes mcp.servers.<name>. Returns removed=false (no
+	// write/restart) when the entry was already absent.
+	RemoveMCPEntry(name string) (bool, error)
+
 	// StartWS connects to the agent runtime and runs the event read loop.
 	StartWS(ctx context.Context, handler AgentEventHandler)
 

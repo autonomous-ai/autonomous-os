@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path/filepath"
+	"strings"
 
 	"go-lamp.autonomous.ai/domain"
 	"go-lamp.autonomous.ai/internal/device"
 	"go-lamp.autonomous.ai/internal/network"
+	"go-lamp.autonomous.ai/internal/openclaw"
 	"go-lamp.autonomous.ai/lib/mqtt"
 	"go-lamp.autonomous.ai/server/config"
 )
@@ -19,15 +22,59 @@ type DeviceMQTTHandler struct {
 	mqttFactory    *mqtt.Factory
 	deviceService  *device.Service
 	networkService *network.Service
+	agentGateway   domain.AgentGateway
+	// connectorWriters routes connector.set/remove (and the refresh loop) to a
+	// per-connector writer; built once here, never mutated at runtime.
+	connectorWriters connectorWriterRegistry
+}
+
+// mcpConnectorSpec lists the remote-MCP connectors that get a dedicated writer.
+// apiKey:true selects the static-API-key header builder (Ahrefs); the rest use
+// the default OAuth Bearer access-token builder. The MCP URL is pulled from the
+// openclaw catalog so there is a single source of truth.
+var mcpConnectorSpecs = []struct {
+	name   string
+	apiKey bool
+}{
+	{name: "notion"},
+	{name: "figma"},
+	{name: "asana"},
+	{name: "linear"},
+	{name: "github"},
+	{name: "ahrefs", apiKey: true},
+}
+
+// buildConnectorWriters constructs the writer registry: a generic
+// connectors.json writer under "default" plus one mcpConnectorWriter per
+// known remote-MCP connector.
+func buildConnectorWriters(cfg *config.Config, gw domain.AgentGateway) connectorWriterRegistry {
+	configsDir := filepath.Join(cfg.OpenclawConfigDir, "workspace", "configs")
+	reg := connectorWriterRegistry{
+		"default": newDefaultConnectorWriter(configsDir),
+	}
+	for _, sp := range mcpConnectorSpecs {
+		url, ok := openclaw.MCPConnectorURL(sp.name)
+		if !ok {
+			continue
+		}
+		mcfg := mcpConnectorConfig{name: sp.name, mcpURL: url}
+		if sp.apiKey {
+			mcfg.header = bearerAPIKey
+		}
+		reg[sp.name] = newMCPConnectorWriter(mcfg, configsDir, gw)
+	}
+	return reg
 }
 
 // ProvideDeviceMQTTHandler creates DeviceMQTTHandler with all command handlers.
-func ProvideDeviceMQTTHandler(cfg *config.Config, mqttFactory *mqtt.Factory, ds *device.Service, ns *network.Service) DeviceMQTTHandler {
+func ProvideDeviceMQTTHandler(cfg *config.Config, mqttFactory *mqtt.Factory, ds *device.Service, ns *network.Service, gw domain.AgentGateway) DeviceMQTTHandler {
 	return DeviceMQTTHandler{
-		config:         cfg,
-		mqttFactory:    mqttFactory,
-		deviceService:  ds,
-		networkService: ns,
+		config:           cfg,
+		mqttFactory:      mqttFactory,
+		deviceService:    ds,
+		networkService:   ns,
+		agentGateway:     gw,
+		connectorWriters: buildConnectorWriters(cfg, gw),
 	}
 }
 
@@ -50,25 +97,60 @@ func (h *DeviceMQTTHandler) publish(data interface{}) error {
 	return nil
 }
 
+// handleData routes a generic cmd:"data" envelope by its delivery Type:
+//
+//   - default (Type == "")  → Data is inline; dispatch immediately.
+//   - Type == "privacy"     → Data lives on the backend; ack "received" then
+//     async-fetch it over TLS before re-entering dispatchData with Data
+//     populated (see privacy_fetch.go).
+//
+// Per-kind handlers don't care which path the data took — they read env.Data
+// after the routing layer has populated it.
 func (h *DeviceMQTTHandler) handleData(cmd domain.MQTTMessage) error {
-	switch cmd.Kind {
+	var env domain.MQTTDataCommand
+	if err := json.Unmarshal(cmd.Raw(), &env); err != nil {
+		slog.Error("data: invalid envelope", "component", "mqtt", "error", err)
+		return h.publishDataResult("", "failure", "invalid envelope: "+err.Error(), nil)
+	}
+
+	if env.Type == domain.MQTTDataTypePrivacy {
+		return h.handlePrivacyEnvelope(env)
+	}
+	return h.dispatchData(env)
+}
+
+// dispatchData is the per-kind switch, shared by the inline and privacy paths.
+// New sub-handlers go in this switch — adding one does NOT require touching the
+// privacy fetch flow, which only cares about env.Kind/env.Type.
+func (h *DeviceMQTTHandler) dispatchData(env domain.MQTTDataCommand) error {
+	// Connector kinds carry the connector code as suffix (e.g.
+	// "connector.set.notion"), so prefix-match before the exact-kind switch.
+	if strings.HasPrefix(env.Kind, domain.DataKindConnectorSetPrefix) {
+		return h.handleConnectorSet(env)
+	}
+	if strings.HasPrefix(env.Kind, domain.DataKindConnectorRemovePrefix) {
+		return h.handleConnectorRemove(env)
+	}
+	switch env.Kind {
 	case domain.KindTTSSet:
-		return h.handleTTSSet(cmd)
+		return h.handleTTSSet(env)
 	case domain.KindTTSPreview:
-		return h.handleTTSPreview(cmd)
+		return h.handleTTSPreview(env)
 	case domain.KindOAuthSet:
-		return h.handleOAuthSet(cmd)
+		return h.handleOAuthSet(env)
 	case domain.KindOAuthRemove:
-		return h.handleOAuthRemove(cmd)
+		return h.handleOAuthRemove(env)
 	case domain.KindSystemInfo:
-		return h.handleSystemInfo(cmd)
+		return h.handleSystemInfo(env)
 	case domain.KindSystemVersion:
-		return h.handleSystemVersion(cmd)
+		return h.handleSystemVersion(env)
 	case domain.KindSystemNetwork:
-		return h.handleSystemNetwork(cmd)
+		return h.handleSystemNetwork(env)
+	case domain.KindSkillsInstall:
+		return h.handleSkillsInstall(env)
 	default:
-		slog.Warn("unknown data kind", "component", "mqtt", "kind", cmd.Kind)
-		return h.publishDataResult(cmd.Kind, "failure", "unknown kind: "+cmd.Kind, nil)
+		slog.Warn("unknown data kind", "component", "mqtt", "kind", env.Kind)
+		return h.publishDataResult(env.Kind, "failure", "unknown kind: "+env.Kind, nil)
 	}
 }
 
