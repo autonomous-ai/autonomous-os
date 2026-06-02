@@ -99,13 +99,13 @@ PREFILTER_PAD_MS: int = 100            # padding kept around the trim cut
 # Stage 1 — RMS
 PREFILTER_TRIM_RMS: float = 3500.0     # head/tail trim threshold (strict)
 PREFILTER_VOICED_RMS: float = 2500.0   # per-frame voiced threshold (lenient)
-PREFILTER_MIN_TRIMMED_S: float = 1.0   # drop if trimmed shorter than this
-PREFILTER_MIN_VOICED_S: float = 2.0    # min total voiced duration
+PREFILTER_MIN_TRIMMED_S: float = 2.0   # drop if trimmed shorter than this
+PREFILTER_MIN_VOICED_S: float = 1.0    # min total voiced duration
 PREFILTER_MIN_VOICED_RATIO: float = 0.3  # min voiced/trimmed ratio
 
 # Stage 2 — Silero VAD
 PREFILTER_SILERO_THRESHOLD: float = 0.5  # per-chunk speech-prob threshold
-PREFILTER_VAD_MIN_VOICED_S: float = 2.0  # min Silero voiced duration
+PREFILTER_VAD_MIN_VOICED_S: float = 1.0  # min Silero voiced duration
 PREFILTER_VAD_FALLBACK_MIN_VOICED_S: float = 3.0  # stricter RMS bar when Silero unavailable
 PREFILTER_SILERO_CHUNK_SAMPLES: int = 512  # Silero v5 requires 512 @ 16kHz
 PREFILTER_SILERO_CONTEXT_SAMPLES: int = 64  # Silero v5 context prepend
