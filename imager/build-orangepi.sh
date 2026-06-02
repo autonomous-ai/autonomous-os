@@ -259,6 +259,10 @@ XDG_DATA_HOME=/root/.openclaw/.local/share \\
 timeout 60 openclaw onboard --non-interactive --accept-risk --skip-health || \\
   echo "WARN: openclaw onboard timed out (will retry on device first boot)"
 
+# Install external plugins baked into the golden image.
+openclaw plugins install @openclaw/discord@${OPENCLAW_VERSION} --force 2>&1 || echo "WARN: discord plugin install failed (non-fatal)"
+openclaw plugins install @openclaw/slack@${OPENCLAW_VERSION} --force 2>&1 || echo "WARN: slack plugin install failed (non-fatal)"
+
 # ── uv (Python pkg mgr for LeLamp) ───────────────────────────────────────────
 echo "[stage] uv"
 if ! command -v uv &>/dev/null; then

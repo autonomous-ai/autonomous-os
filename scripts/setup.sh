@@ -637,6 +637,7 @@ EOF
   echo "[stage] Installing openclaw external plugins"
   export PATH="$(npm prefix -g)/bin:$PATH"
   openclaw plugins install @openclaw/discord@${OPENCLAW_VERSION} --force 2>&1 || echo "[stage] WARN: discord plugin install failed (non-fatal)"
+  openclaw plugins install @openclaw/slack@${OPENCLAW_VERSION} --force 2>&1 || echo "[stage] WARN: slack plugin install failed (non-fatal)"
 }
 
 # ----------------------------------------------------------
@@ -1255,6 +1256,7 @@ elif [ "$APP" = "openclaw" ]; then
   VER="${VERSION:-latest}"
   npm install -g "openclaw@${VER}" || { echo "npm install openclaw failed"; exit 1; }
   openclaw plugins install @openclaw/discord@${VER} --force 2>&1 || echo "[software-update] WARN: discord plugin install failed (non-fatal)"
+  openclaw plugins install @openclaw/slack@${VER} --force 2>&1 || echo "[software-update] WARN: slack plugin install failed (non-fatal)"
   systemctl restart openclaw
   echo "openclaw updated to $VER"
 elif [ "$APP" = "web" ]; then

@@ -1364,6 +1364,10 @@ timeout 60 openclaw onboard --non-interactive --accept-risk --skip-health || {
   echo "Gateway will complete onboarding on first boot with network access."
 }
 
+# Install external plugins baked into the golden image.
+openclaw plugins install @openclaw/discord@${OPENCLAW_VERSION} --force 2>&1 || echo "WARN: discord plugin install failed (non-fatal)"
+openclaw plugins install @openclaw/slack@${OPENCLAW_VERSION} --force 2>&1 || echo "WARN: slack plugin install failed (non-fatal)"
+
 # Resolve chromium path for headless browser support
 CHROME_PATH=\$(command -v chromium 2>/dev/null || command -v chromium-browser 2>/dev/null || echo /usr/bin/chromium)
 OPENCLAW_BIN=\$(command -v openclaw)
