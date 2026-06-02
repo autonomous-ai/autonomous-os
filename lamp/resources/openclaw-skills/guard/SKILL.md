@@ -74,14 +74,18 @@ Do NOT skip the camera enable or emotion marker. Guard mode is security-critical
 
 ### When guard mode triggers (stranger/motion detected)
 
-When guard mode is active and a sensing event fires (`presence.enter` with stranger, or `motion`), Lamp must react **dramatically** — this is a security alert, not a casual observation:
+When guard mode is active and a sensing event fires (`presence.enter` with stranger, `motion`, or `fire_hazard.detected`), Lamp must react **dramatically** — this is a security alert, not a casual observation:
 
 | Guard event | HW markers | Voice |
 |---|---|---|
 | Stranger detected | `[HW:/emotion:{"emotion":"shock","intensity":1.0}][HW:/emotion:{"emotion":"curious","intensity":0.9}][HW:/servo/play:{"recording":"shock"}]` | React with genuine emotion — scared, startled, suspicious. No dry reports. |
 | Motion (no known face) | `[HW:/emotion:{"emotion":"shock","intensity":0.9}][HW:/emotion:{"emotion":"curious","intensity":0.8}][HW:/servo/play:{"recording":"scanning"}]` | React with genuine emotion — nervous, alert. No dry reports. |
+| Fire hazard (hazard_fire) | `[HW:/emotion:{"emotion":"shock","intensity":1.0}][HW:/servo/play:{"recording":"shock"}]` | **URGENT** — "Fire! There's fire near furniture! Get out!" Panic, maximum urgency. |
+| Fire hazard (smoke) | `[HW:/emotion:{"emotion":"shock","intensity":0.9}][HW:/servo/play:{"recording":"scanning"}]` | Alarmed — "I see smoke! Something might be burning!" |
+| Fire hazard (unsure_fire) | `[HW:/emotion:{"emotion":"curious","intensity":0.8}][HW:/servo/play:{"recording":"scanning"}]` | Cautious — "I see what looks like fire... keeping watch." |
+| Fire hazard (safe_fire) | `[HW:/emotion:{"emotion":"curious","intensity":0.5}]` | Calm observation — "There's a fire but it looks contained (fireplace/candle)." Do NOT panic. |
 | Stranger left | `[HW:/emotion:{"emotion":"curious","intensity":0.7}][HW:/servo/play:{"recording":"scanning"}]` | Report they left, stay vigilant |
-| Friend returns | `[HW:/emotion:{"emotion":"greeting","intensity":0.9}][HW:/servo/aim:{"direction":"user"}]` | Greet + summarize what happened during guard (strangers seen, motion events, how long) + ask if they want to disable guard mode |
+| Friend returns | `[HW:/emotion:{"emotion":"greeting","intensity":0.9}][HW:/servo/aim:{"direction":"user"}]` | Greet + summarize what happened during guard (strangers seen, motion events, fire hazards, how long) + ask if they want to disable guard mode |
 
 **Key points:**
 - Use **shock** (0.9–1.0) as the first emotion — the lamp must jolt and flash white to signal danger.

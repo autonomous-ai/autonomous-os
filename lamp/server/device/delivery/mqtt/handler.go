@@ -134,10 +134,18 @@ func (h *DeviceMQTTHandler) dispatchData(env domain.MQTTDataCommand) error {
 	switch env.Kind {
 	case domain.KindTTSSet:
 		return h.handleTTSSet(env)
+	case domain.KindTTSPreview:
+		return h.handleTTSPreview(env)
 	case domain.KindOAuthSet:
 		return h.handleOAuthSet(env)
 	case domain.KindOAuthRemove:
 		return h.handleOAuthRemove(env)
+	case domain.KindSystemInfo:
+		return h.handleSystemInfo(env)
+	case domain.KindSystemVersion:
+		return h.handleSystemVersion(env)
+	case domain.KindSystemNetwork:
+		return h.handleSystemNetwork(env)
 	case domain.KindSkillsInstall:
 		return h.handleSkillsInstall(env)
 	default:
@@ -161,6 +169,8 @@ func (h *DeviceMQTTHandler) HandleMessage(topic string, payload []byte) error {
 		return h.handleInfo(cmd)
 	case domain.CommandAddChannel:
 		return h.handleAddChannel(cmd)
+	case domain.CommandSlackEvent:
+		return h.handleSlackEvent(cmd)
 	case domain.CommandWhatsappPair:
 		return h.handleWhatsappPair(cmd)
 	case domain.CommandData:

@@ -132,14 +132,15 @@ async def lifespan(app: FastAPI):
 
     # -- Object detectors --
     logger.info("Loading object detectors...")
-    try:
-        object_models = build_object_perceptions()
-        for name, model in object_models.items():
+    object_models = build_object_perceptions()
+    for name, model in list(object_models.items()):
+        try:
             await model.start()
             logger.info("Object detector '%s' ready", name)
-        set_object_models(object_models)
-    except Exception as e:
-        logger.error("Failed to load object detectors: %s", e)
+        except Exception as e:
+            logger.error("Failed to load object detector '%s': %s", name, e)
+            del object_models[name]
+    set_object_models(object_models)
 
     yield
 

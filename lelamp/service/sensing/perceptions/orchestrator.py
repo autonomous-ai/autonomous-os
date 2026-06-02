@@ -18,6 +18,7 @@ from lelamp.service.sensing.perceptions.processors import (
     PosePerception,
     SoundPerception,
 )
+from lelamp.service.sensing.perceptions.processors.fire_hazard import FireHazardPerception
 from lelamp.service.sensing.perceptions.typing import SendEventCallable
 from lelamp.service.sensing.perceptions.utils import PerceptionStateObservers
 from lelamp.service.sensing.presence_service import PresenseService
@@ -49,6 +50,7 @@ class PerceptionProcessors:
     pose_processor: PosePerception | None = None
     light_processor: LightLevelPerception | None = None
     sound_recognizer: SoundPerception | None = None
+    fire_hazard_processor: FireHazardPerception | None = None
 
 
 class PerceptionOrchestrator:
@@ -160,6 +162,16 @@ class PerceptionOrchestrator:
                 )
                 self._perception_state.frame.register(
                     self._processors.light_processor.check
+                )
+
+            if self._config.enable_fire_hazard:
+                self._processors.fire_hazard_processor = FireHazardPerception(
+                    perception_state=self._perception_state,
+                    send_event=self._send_event,
+                    presense_service=self._presense_service,
+                )
+                self._perception_state.frame.register(
+                    self._processors.fire_hazard_processor.check
                 )
 
         if sd is not None and np is not None and self._sound_device_id is not None:

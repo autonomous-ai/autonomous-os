@@ -51,3 +51,4 @@ class PerceptionConfig:
     enable_pose: bool = False
     enable_light: bool = False
     enable_sound: bool = False
+    enable_fire_hazard: bool = False

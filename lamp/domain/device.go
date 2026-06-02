@@ -53,13 +53,13 @@ type SetupRequest struct {
 	// STTAPIKey / TTSAPIKey override LLMAPIKey when those accounts are
 	// separate. Empty = device falls back to LLMAPIKey. STTBaseURL /
 	// TTSBaseURL likewise override LLMBaseURL.
-	STTAPIKey      string `json:"stt_api_key"`
-	TTSAPIKey      string `json:"tts_api_key"`
-	STTBaseURL     string `json:"stt_base_url"`
-	TTSBaseURL     string `json:"tts_base_url"`
-	STTLanguage    string `json:"stt_language"`
-	TTSProvider    string `json:"tts_provider"`
-	TTSVoice       string `json:"tts_voice"`
+	STTAPIKey   string `json:"stt_api_key"`
+	TTSAPIKey   string `json:"tts_api_key"`
+	STTBaseURL  string `json:"stt_base_url"`
+	TTSBaseURL  string `json:"tts_base_url"`
+	STTLanguage string `json:"stt_language"`
+	TTSProvider string `json:"tts_provider"`
+	TTSVoice    string `json:"tts_voice"`
 
 	// optional
 	DeviceID string `json:"device_id" validate:"required"`
@@ -140,6 +140,15 @@ type AddChannelRequest struct {
 	SlackBotToken string `json:"slack_bot_token"`
 	SlackAppToken string `json:"slack_app_token"`
 	SlackUserID   string `json:"slack_user_id"`
+	// SlackMode selects the Slack transport: "socket" (default, OpenClaw opens
+	// outbound WSS to Slack — needs SlackAppToken) or "http" (OpenClaw listens
+	// for POSTs forwarded from a public proxy — needs SlackSigningSecret).
+	// HTTP mode is the message-loss-tolerant path: a public proxy
+	// (bff-campaign-service) receives Slack events, fans out via MQTT to the
+	// device's slack_event handler, which POSTs to localhost OpenClaw.
+	SlackMode          string `json:"slack_mode,omitempty"`
+	SlackSigningSecret string `json:"slack_signing_secret,omitempty"`
+	SlackWebhookPath   string `json:"slack_webhook_path,omitempty"` // optional, defaults to /slack/events when SlackMode=http
 
 	// discord
 	DiscordBotToken string `json:"discord_bot_token"`
@@ -149,6 +158,15 @@ type AddChannelRequest struct {
 	// whatsapp — bot login is handled interactively by the Baileys CLI; only
 	// the operator's E.164 phone number (the permitted DM caller) ships here.
 	WhatsappUserID string `json:"whatsapp_user_id"`
+}
+
+// EffectiveSlackMode resolves SlackMode, defaulting to "socket" so unset
+// payloads keep current behaviour (existing installs unaffected).
+func (r *AddChannelRequest) EffectiveSlackMode() string {
+	if r.SlackMode == "http" {
+		return "http"
+	}
+	return "socket"
 }
 
 // EffectiveChannel returns the resolved channel type, defaulting to "telegram".
@@ -171,8 +189,16 @@ func (r *AddChannelRequest) ValidateChannel() error {
 		if r.SlackBotToken == "" {
 			return fmt.Errorf("slack_bot_token is required for slack channel")
 		}
-		if r.SlackAppToken == "" {
-			return fmt.Errorf("slack_app_token is required for slack channel")
+		switch r.EffectiveSlackMode() {
+		case "http":
+			if r.SlackSigningSecret == "" {
+				return fmt.Errorf("slack_signing_secret is required for slack channel in http mode")
+			}
+			// SlackAppToken not used in HTTP mode (Socket Mode only).
+		default: // "socket"
+			if r.SlackAppToken == "" {
+				return fmt.Errorf("slack_app_token is required for slack channel in socket mode")
+			}
 		}
 	case ChannelDiscord:
 		if r.DiscordBotToken == "" {
@@ -206,27 +232,46 @@ type SetupResponse struct {
 // Command types received from server via MQTT FAChannel.
 // Matches spec: docs/mqtt_specs_autonomous.md
 const (
-	CommandInfo          = "info"
-	CommandAddChannel    = "add_channel"
-	CommandOTA           = "ota"
-	CommandData          = "data"
-	CommandWhatsappPair  = "whatsapp_pair"
-)
+	CommandInfo         = "info"
+	CommandAddChannel   = "add_channel"
+	CommandOTA          = "ota"
+	CommandData         = "data"
+	CommandWhatsappPair = "whatsapp_pair"
 
-// KindTTSSet is the kind field for cmd:"data" tts.set downlinks from BFF.
-const KindTTSSet = "tts.set"
+	// CommandSlackEvent is sent by the public Slack-events proxy (bff-campaign-service)
+	// when Slack delivers an Events API POST for a workspace this device owns. Payload
+	// is a verbatim forward of Slack's HTTP request body + signature headers; this
+	// device POSTs them to the local OpenClaw gateway's /slack/events endpoint, which
+	// re-verifies the Slack signature (we don't strip / re-sign in the proxy because
+	// OpenClaw owns the signing-secret check by design).
+	//
+	// Wire format: {"cmd":"slack_event","event_id":"Ev123","body":"<raw JSON>",
+	//               "headers":{"X-Slack-Signature":"v0=...","X-Slack-Request-Timestamp":"...",
+	//                          "Content-Type":"application/json"}}
+	//
+	// Devices configured for socket-mode Slack will silently 404 on the local POST
+	// (gateway has no /slack/events route in that mode) — proxy SHOULD route only to
+	// devices the backend has flipped to slack_mode="http".
+	CommandSlackEvent = "slack_event"
+)
 
 // Data kinds carried inside CommandData envelope.
 const (
+	KindTTSSet      = "tts.set"      // persist TTS voice/provider/language config
+	KindTTSPreview  = "tts.preview"  // one-shot TTS preview, no config write
 	KindOAuthSet    = "oauth.set"    // store/replace OAuth token for a provider
 	KindOAuthRemove = "oauth.remove" // delete OAuth token for a provider
+
+	KindSystemInfo    = "system.info"    // aggregate: versions + network + host
+	KindSystemVersion = "system.version" // lamp + bootstrap + lelamp + openclaw versions
+	KindSystemNetwork = "system.network" // wlan0 IP, MAC, SSID, gateway
 
 	// KindSkillsInstall installs a role's skill bundle. Data: {"role":"<role>"}.
 	KindSkillsInstall = "skills.install"
 )
 
 // Connector (MCP) data-kind prefixes. The connector code is the suffix, e.g.
-// "connector.set.notion" / "connector.remove.github". handleData prefix-matches
+// "connector.set.notion" / "connector.remove.github". dispatchData prefix-matches
 // these before the exact-kind switch.
 const (
 	DataKindConnectorSetPrefix    = "connector.set."
@@ -289,6 +334,10 @@ func (r *MQTTAddChannelCommand) ToRequest() AddChannelRequest {
 		req.SlackBotToken, _ = cfg["bot_token"].(string)
 		req.SlackAppToken, _ = cfg["app_token"].(string)
 		req.SlackUserID, _ = cfg["channel_id"].(string)
+		// HTTP-mode proxy fields (optional; omitted payloads keep Socket Mode behaviour).
+		req.SlackMode, _ = cfg["mode"].(string)
+		req.SlackSigningSecret, _ = cfg["signing_secret"].(string)
+		req.SlackWebhookPath, _ = cfg["webhook_path"].(string)
 	case ChannelWhatsapp:
 		req.WhatsappUserID, _ = cfg["user_id"].(string)
 	default:
@@ -406,6 +455,44 @@ type MQTTDataResponse struct {
 	Status string      `json:"status"`
 	Error  string      `json:"error,omitempty"`
 	Data   interface{} `json:"data,omitempty"`
+}
+
+// MQTTSystemInfoData is the response payload for kind:"system.info" — an
+// aggregate snapshot of versions + network + host. Fields are zero-valued when
+// the probe fails (e.g. openclaw not yet installed → OpenClaw="", OpenClawDetected=false).
+type MQTTSystemInfoData struct {
+	Versions MQTTVersionsData `json:"versions"`
+	Network  MQTTNetworkData  `json:"network"`
+	Host     MQTTHostData     `json:"host"`
+}
+
+// MQTTVersionsData carries the component version strings on the device.
+// Empty string means probing failed; OpenClawDetected lets the caller
+// distinguish "not installed" from "installed but unparseable".
+type MQTTVersionsData struct {
+	Lamp             string `json:"lamp"`
+	Bootstrap        string `json:"bootstrap"`
+	Lelamp           string `json:"lelamp"`
+	OpenClaw         string `json:"openclaw"`
+	OpenClawDetected bool   `json:"openclaw_detected"`
+}
+
+// MQTTNetworkData carries wlan0 link facts. SSID/Gateway empty when the device
+// is in AP mode or otherwise not joined to upstream Wi-Fi.
+type MQTTNetworkData struct {
+	PrivateIP string `json:"private_ip"`
+	Interface string `json:"interface"`
+	MAC       string `json:"mac"`
+	SSID      string `json:"ssid"`
+	Gateway   string `json:"gateway"`
+}
+
+// MQTTHostData carries host-process facts useful for ops dashboards.
+type MQTTHostData struct {
+	Hostname      string `json:"hostname"`
+	DeviceID      string `json:"device_id"`
+	DeviceName    string `json:"device_name"` // friendly "Lamp-XXXX"
+	UptimeSeconds int64  `json:"uptime_seconds"`
 }
 
 // MQTTOAuthSetData is the Data payload for kind:"oauth.set".
@@ -530,6 +617,21 @@ type MQTTTTSSetAck struct {
 	Status string          `json:"status"`
 	Error  string          `json:"error,omitempty"`
 	Data   *MQTTTTSSetData `json:"data,omitempty"`
+}
+
+// MQTTTTSPreviewData is the nested data payload for cmd:"data", kind:"tts.preview".
+// Text is required; Provider/Voice/Language are optional overrides — empty
+// fields make LeLamp fall back to the device's current TTS config.
+type MQTTTTSPreviewData struct {
+	Text     string `json:"text"`
+	Provider string `json:"provider,omitempty"`
+	Voice    string `json:"voice,omitempty"`
+	Language string `json:"language,omitempty"`
+}
+
+// MQTTTTSPreviewCommand wraps the full tts.preview downlink envelope for unmarshalling.
+type MQTTTTSPreviewCommand struct {
+	Data MQTTTTSPreviewData `json:"data"`
 }
 
 // ConfigPublicResponse is returned by GET /api/device/config. Raw secrets

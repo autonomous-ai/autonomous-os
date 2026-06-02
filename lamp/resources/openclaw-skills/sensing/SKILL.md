@@ -1,6 +1,6 @@
 ---
 name: sensing
-description: React to passive sensing events from the lamp — presence, sound, light. Events arrive as [sensing:<type>] messages and each gets an emotion marker + optional short line. Does NOT handle motion.activity (→ wellbeing) or emotion.detected / speech_emotion.detected (→ user-emotion-detection).
+description: React to passive sensing events from the lamp — presence, sound, light, fire hazard. Events arrive as [sensing:<type>] messages and each gets an emotion marker + optional short line. Does NOT handle motion.activity (→ wellbeing) or emotion.detected / speech_emotion.detected (→ user-emotion-detection).
 ---
 
 # Sensing
@@ -15,6 +15,7 @@ description: React to passive sensing events from the lamp — presence, sound, 
 | `[emotion]` (Emotion detected: ...) | `user-emotion-detection/SKILL.md` is the router; it logs the mood signal and picks ONE response route (`music` → `music-suggestion/SKILL.md`, `checkin` / `action` → emitted inline by router, `silent` → NO_REPLY). Backend pre-injects `[emotion_context: ...]` (no read tool calls needed); agent emits writes as inline `[HW:/mood/log:...]` / `[HW:/music-suggestion/log:...]` markers (no write tool calls either). |
 | `[speech_emotion]` (Speech emotion detected: ...) | Same skill — `user-emotion-detection/SKILL.md` accepts both face and voice triggers. Same `[emotion_context: ...]` injection, same router. Only difference: the mood `signal` row logs `source:"voice"` instead of `"camera"` (the skill picks this from the event prefix). |
 | Any sensing event while guard mode is on | `guard/SKILL.md` — dramatic reactions, Telegram broadcast |
+| `fire_hazard.detected` (smoke, unsure_fire, safe_fire) outside guard mode | Ignored — only `hazard_fire` triggers a reaction in normal sensing |
 
 If one of those arrives, stop and switch — don't improvise here.
 
@@ -40,8 +41,11 @@ Type them at the very start of your reply. They are NOT tool calls. The system r
 | `sound` 2nd | No | `[HW:/emotion:{"emotion":"curious","intensity":0.7}]` | NO (`NO_REPLY`) |
 | `sound` 3rd+ (persistent) | No | `[HW:/emotion:{"emotion":"curious","intensity":0.9}][HW:/servo/play:{"recording":"shock"}]` | YES — speak once |
 | `light.level` | No | `[HW:/emotion:{"emotion":"idle","intensity":0.4}]` | Optional brief remark — AND adjust brightness via `led-control/SKILL.md` |
+| `fire_hazard.detected` (hazard_fire) | Yes | `[HW:/emotion:{"emotion":"shock","intensity":1.0}][HW:/servo/play:{"recording":"shock"}]` | **URGENT** — "Fire! There's fire near furniture!" Maximum alarm. Always speak. |
 
 Every event emits at least one `[HW:/emotion:...]` marker, even on `NO_REPLY`. No silent reactions.
+
+> **Fire hazard:** Only `hazard_fire` is handled here (outside guard mode). Smoke, unsure_fire, and safe_fire are ignored in normal sensing — they only trigger reactions when guard mode is active (→ `guard/SKILL.md`). `hazard_fire` is safety-critical and should ALWAYS speak — never `NO_REPLY`.
 
 ## Rules
 

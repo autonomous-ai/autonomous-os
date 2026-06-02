@@ -108,6 +108,7 @@ class SensingService:
                 enable_pose=config.POSE_ENABLED,
                 enable_light=True,
                 enable_sound=True,
+                enable_fire_hazard=config.FIRE_HAZARD_ENABLED,
             ),
         )
 

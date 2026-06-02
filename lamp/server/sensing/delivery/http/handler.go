@@ -257,7 +257,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	}
 
 	// Guard mode: mark the run so SSE handler broadcasts the response via Telegram Bot API.
-	guardActive := isPassive && h.config.GuardModeEnabled() && (req.Type == "presence.enter" || req.Type == "motion")
+	guardActive := isPassive && h.config.GuardModeEnabled() && (req.Type == "presence.enter" || req.Type == "motion" || req.Type == "fire_hazard.detected")
 	if guardActive {
 		slog.Info("guard mode active", "component", "sensing", "type", req.Type)
 	}

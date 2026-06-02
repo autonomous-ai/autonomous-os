@@ -267,11 +267,16 @@ func (s *Service) StartStatusReporter(ctx context.Context) {
 			if !s.agentGateway.IsReady() {
 				continue
 			}
+			// Lazy resolve of slack team_id: once per process. ResolveSlackTeamIDFromConfig
+			// is a no-op when team_id is already cached OR when slack isn't configured,
+			// so it's safe to call on every tick — the auth.test call only fires once.
+			s.beClient.ResolveSlackTeamIDFromConfig(s.config.OpenclawConfigDir)
 			resp := s.beClient.PingSafe(s.config.LLMAPIKey, beclient.PingPayload{
 				Status:         "working",
 				SetupCompleted: s.config.SetUpCompleted,
 				Mac:            GetDeviceMac(),
 				Version:        config.LampVersion,
+				SlackTeamID:    s.beClient.SlackTeamID(),
 			})
 			dump, _ := json.Marshal(resp)
 			slog.Debug("received response from backend", "component", "status-reporter", "response", string(dump))

@@ -20,7 +20,7 @@ dependencies = [
 [project.optional-dependencies]
 dl = [
     "ultralytics>=8.3.0",
-    "transformers>=4.40.0",
+    "transformers>=4.40.0,<5",
     "torch>=2.0.0",
     "torchvision>=0.15.0",
     "pillow>=10.0.0",
