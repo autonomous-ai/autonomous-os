@@ -54,6 +54,8 @@ func (h *DeviceMQTTHandler) handleData(cmd domain.MQTTMessage) error {
 	switch cmd.Kind {
 	case domain.KindTTSSet:
 		return h.handleTTSSet(cmd)
+	case domain.KindTTSPreview:
+		return h.handleTTSPreview(cmd)
 	case domain.KindOAuthSet:
 		return h.handleOAuthSet(cmd)
 	case domain.KindOAuthRemove:

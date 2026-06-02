@@ -213,11 +213,10 @@ const (
 	CommandWhatsappPair  = "whatsapp_pair"
 )
 
-// KindTTSSet is the kind field for cmd:"data" tts.set downlinks from BFF.
-const KindTTSSet = "tts.set"
-
 // Data kinds carried inside CommandData envelope.
 const (
+	KindTTSSet      = "tts.set"      // persist TTS voice/provider/language config
+	KindTTSPreview  = "tts.preview"  // one-shot TTS preview, no config write
 	KindOAuthSet    = "oauth.set"    // store/replace OAuth token for a provider
 	KindOAuthRemove = "oauth.remove" // delete OAuth token for a provider
 )
@@ -439,6 +438,21 @@ type MQTTTTSSetAck struct {
 	Status string          `json:"status"`
 	Error  string          `json:"error,omitempty"`
 	Data   *MQTTTTSSetData `json:"data,omitempty"`
+}
+
+// MQTTTTSPreviewData is the nested data payload for cmd:"data", kind:"tts.preview".
+// Text is required; Provider/Voice/Language are optional overrides — empty
+// fields make LeLamp fall back to the device's current TTS config.
+type MQTTTTSPreviewData struct {
+	Text     string `json:"text"`
+	Provider string `json:"provider,omitempty"`
+	Voice    string `json:"voice,omitempty"`
+	Language string `json:"language,omitempty"`
+}
+
+// MQTTTTSPreviewCommand wraps the full tts.preview downlink envelope for unmarshalling.
+type MQTTTTSPreviewCommand struct {
+	Data MQTTTTSPreviewData `json:"data"`
 }
 
 // ConfigPublicResponse is returned by GET /api/device/config. Raw secrets
