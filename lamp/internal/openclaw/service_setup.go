@@ -355,15 +355,34 @@ func (s *Service) AddChannel(ctx context.Context, data domain.AddChannelRequest)
 	case domain.ChannelSlack:
 		slackMap := ensureMap(channelsMap, domain.ChannelSlack)
 		slackMap["enabled"] = true
-		slackMap["mode"] = "socket"
 		slackMap["botToken"] = data.SlackBotToken
-		slackMap["appToken"] = data.SlackAppToken
 		if data.SlackUserID != "" {
 			slackMap["dmPolicy"] = "allowlist"
 			slackMap["allowFrom"] = mergeStringList(slackMap["allowFrom"], data.SlackUserID)
 		} else {
 			slackMap["dmPolicy"] = "open"
 			slackMap["allowFrom"] = mergeStringList(slackMap["allowFrom"], "*")
+		}
+		// Mode-specific block. Default (empty / "socket") preserves pre-existing
+		// behaviour so installs without slack_mode set stay byte-identical.
+		// HTTP mode is the message-loss-tolerant path: a public proxy forwards
+		// Slack events over MQTT to this device's slack_event handler, which
+		// POSTs them to the local gateway's webhookPath — so the gateway needs
+		// the signing secret (to re-verify) and no Slack WebSocket / appToken.
+		if data.EffectiveSlackMode() == "http" {
+			slackMap["mode"] = "http"
+			slackMap["signingSecret"] = data.SlackSigningSecret
+			webhookPath := data.SlackWebhookPath
+			if webhookPath == "" {
+				webhookPath = "/slack/events"
+			}
+			slackMap["webhookPath"] = webhookPath
+			delete(slackMap, "appToken")
+		} else {
+			slackMap["mode"] = "socket"
+			slackMap["appToken"] = data.SlackAppToken
+			delete(slackMap, "signingSecret")
+			delete(slackMap, "webhookPath")
 		}
 		channelsMap[domain.ChannelSlack] = slackMap
 		slackEntryMap := ensureMap(entriesMap, domain.ChannelSlack)

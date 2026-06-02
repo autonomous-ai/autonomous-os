@@ -35,7 +35,7 @@ Lamp sử dụng MQTT để giao tiếp với backend server (báo cáo trạng 
 
 ```json
 {
-  "cmd": "info|add_channel|whatsapp_pair|ota|data",
+  "cmd": "info|add_channel|slack_event|whatsapp_pair|ota|data",
   ...payload fields
 }
 ```
@@ -65,12 +65,18 @@ Lamp sử dụng MQTT để giao tiếp với backend server (báo cáo trạng 
   "channel": "telegram|slack|discord|whatsapp",
   "config": {
     // telegram: bot_token + chat_id
-    // slack:    bot_token + app_token + channel_id
+    // slack:    bot_token + app_token + channel_id        (socket mode, mặc định)
+    // slack:    bot_token + mode:"http" + signing_secret  (+ webhook_path tùy chọn, mặc định /slack/events)
     // discord:  bot_token + guild_id  + user_id
     // whatsapp: user_id (số điện thoại E.164 — chỉ field này; bot tự login qua Baileys)
   }
 }
 ```
+
+**Các mode transport của Slack.** `mode` chọn cách OpenClaw nhận Slack events:
+
+- **`socket`** (mặc định khi không có `mode`) — OpenClaw mở WebSocket outbound tới Slack; cần `app_token`. Các install hiện tại không bị ảnh hưởng.
+- **`http`** — OpenClaw lắng nghe Slack Events API POST tại `webhook_path` (mặc định `/slack/events`) và re-verify chữ ký Slack bằng `signing_secret`; không dùng `app_token`. Một proxy public (bff-campaign-service) nhận HTTP event từ Slack rồi fan-out tới đúng thiết bị qua MQTT dưới dạng `slack_event` (xem bên dưới). HTTP mode là đường chịu được mất message vì Slack retry ~3 lần trong 5 phút khi delivery fail.
 
 **Phản hồi (một message — telegram/slack/discord):**
 ```json
@@ -102,6 +108,49 @@ Re-run QR-scan flow mà không re-bootstrap channel config. Dùng khi Baileys se
 
 **Phản hồi (streaming):** cùng shape với whatsapp `add_channel` stream phía trên, nhưng `type:"whatsapp_pair"`. Timeout 120s (vs. 10 phút cho `add_channel`) — đường này không cài plugin hoặc restart gateway.
 
+### `slack_event` — Forward một Slack Events API delivery (HTTP mode)
+
+Được gửi bởi Slack-events proxy public (bff-campaign-service) khi Slack delivery một
+Events API POST cho workspace mà thiết bị này sở hữu. Payload là bản forward nguyên văn
+body + signature headers của HTTP request từ Slack; thiết bị POST chúng tới `webhook_path`
+của OpenClaw gateway local (mặc định `http://127.0.0.1:18789/slack/events`), nơi re-verify
+chữ ký Slack bằng `signing_secret` đã chia sẻ. Chỉ liên quan khi slack channel của thiết bị
+được cấu hình `mode:"http"` (xem `add_channel`).
+
+**Nhận:**
+```json
+{
+  "cmd": "slack_event",
+  "event_id": "Ev123",
+  "body": "<raw Slack JSON body>",
+  "headers": {
+    "X-Slack-Signature": "v0=...",
+    "X-Slack-Request-Timestamp": "...",
+    "Content-Type": "application/json"
+  }
+}
+```
+
+Thiết bị dedup theo `event_id` bằng LRU in-memory 5 phút (khớp retry window của Slack) và
+forward headers nguyên văn để signature check của OpenClaw validate được.
+
+**Phản hồi (publish fd_channel):**
+```json
+{
+  "channel": "slack",
+  "type": "slack_event",
+  "event_id": "Ev123",
+  "status": "success|failure|skipped_duplicate",
+  "error": "...",
+  "http_status": 200,
+  "info": { /* cùng metadata device/version như các ack khác */ }
+}
+```
+
+Để proxy route event inbound về đúng thiết bị, mỗi `/ping` kèm `slack_team_id` — workspace
+ID mà thiết bị tự resolve on-device qua Slack `auth.test` với `botToken` đã lưu (cache lại,
+gửi đi sau khi resolve được).
+
 ### `ota` — Trigger OTA update
 
 Xử lý bởi bootstrap worker, không qua MQTT handler trực tiếp.
@@ -117,6 +166,7 @@ Xử lý bởi bootstrap worker, không qua MQTT handler trực tiếp.
 | `lamp/server/device/delivery/mqtt/handler.go` | Command dispatcher |
 | `lamp/server/device/delivery/mqtt/info_handler.go` | Handle `info` command |
 | `lamp/server/device/delivery/mqtt/add_channel_hander.go` | Handle `add_channel` command (stream pairing events cho WhatsApp) |
+| `lamp/server/device/delivery/mqtt/slack_event_handler.go` | Handle `slack_event` command (forward Slack HTTP-mode events tới gateway local) |
 | `lamp/server/device/delivery/mqtt/whatsapp_pair_handler.go` | Handle `whatsapp_pair` re-pair command |
 | `lamp/internal/openclaw/pairing.go` | WhatsApp Baileys QR pairing subprocess driver |
 | `lamp/domain/device.go` | MQTTMessage, command constants |

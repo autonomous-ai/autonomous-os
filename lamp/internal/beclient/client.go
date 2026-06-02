@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go-lamp.autonomous.ai/server/config"
@@ -24,16 +28,120 @@ const (
 type Client struct {
 	config     *config.Config
 	httpClient *http.Client
+	// cachedSlackTeamID holds the Slack workspace ID resolved on-device via
+	// slack.auth.test against the bot_token in openclaw.json. Written by the
+	// status reporter, read by the ping loop. Empty when slack isn't configured.
+	cachedSlackTeamID atomic.Value // string
 }
 
 // New creates a new BE client. Base URL is read from cfg.LLMBaseURL on each request.
 func New(cfg *config.Config) *Client {
-	return &Client{
+	c := &Client{
 		config: cfg,
 		httpClient: &http.Client{
 			Timeout: DefaultTimeout,
 		},
 	}
+	c.cachedSlackTeamID.Store("")
+	return c
+}
+
+// SetSlackTeamID records the Slack workspace ID resolved for the device's
+// bot_token. Idempotent — calling with the same value is a no-op.
+func (c *Client) SetSlackTeamID(v string) {
+	c.cachedSlackTeamID.Store(v)
+}
+
+// SlackTeamID returns the cached Slack workspace ID. Empty string when not
+// yet resolved or no slack channel is configured.
+func (c *Client) SlackTeamID() string {
+	v, _ := c.cachedSlackTeamID.Load().(string)
+	return v
+}
+
+// ResolveSlackTeamIDFromConfig is a one-shot resolver: if the cache is empty
+// AND the device has a slack bot_token in openclaw.json, it POSTs to
+// slack.com/api/auth.test, parses the team_id, and caches it. Idempotent and
+// safe to call on every status tick — once the cache is populated, returns
+// immediately. Failures are silent (logged) so a transient Slack outage
+// doesn't poison the cache; the next tick retries.
+func (c *Client) ResolveSlackTeamIDFromConfig(configDir string) {
+	if c.SlackTeamID() != "" {
+		return
+	}
+	botToken := readSlackBotTokenFromConfig(configDir)
+	if botToken == "" {
+		return // slack not configured on this device — nothing to resolve
+	}
+	teamID, err := slackAuthTest(c.httpClient, botToken)
+	if err != nil {
+		slog.Debug("slack auth.test failed (will retry next tick)", "component", "beclient", "error", err)
+		return
+	}
+	if teamID == "" {
+		return
+	}
+	c.SetSlackTeamID(teamID)
+	slog.Info("resolved slack team_id for ping payload", "component", "beclient", "team_id", teamID)
+}
+
+// readSlackBotTokenFromConfig reads channels.slack.botToken from the device's
+// openclaw.json. Returns empty string if the file is unreadable, slack isn't
+// configured, or botToken is empty — never errors (silent miss is fine).
+func readSlackBotTokenFromConfig(configDir string) string {
+	if configDir == "" {
+		return ""
+	}
+	raw, err := os.ReadFile(filepath.Join(configDir, "openclaw.json"))
+	if err != nil {
+		return ""
+	}
+	var doc struct {
+		Channels struct {
+			Slack struct {
+				BotToken string `json:"botToken"`
+			} `json:"slack"`
+		} `json:"channels"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return ""
+	}
+	return doc.Channels.Slack.BotToken
+}
+
+// slackAuthTest POSTs to https://slack.com/api/auth.test with the bot token
+// and returns team_id from the response. Reuses the same httpClient that
+// ping uses so timeouts are bounded and metrics are unified.
+func slackAuthTest(httpClient *http.Client, botToken string) (string, error) {
+	req, err := http.NewRequest(http.MethodPost, "https://slack.com/api/auth.test", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+botToken)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("auth.test http %d", resp.StatusCode)
+	}
+	var out struct {
+		OK     bool   `json:"ok"`
+		Error  string `json:"error,omitempty"`
+		TeamID string `json:"team_id"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return "", err
+	}
+	if !out.OK {
+		return "", fmt.Errorf("auth.test not ok: %s", out.Error)
+	}
+	return out.TeamID, nil
 }
 
 // Ping notifies the backend. Uses LLM API key as Bearer token. Returns the backend response if available.
@@ -63,6 +171,13 @@ type PingPayload struct {
 	SetupCompleted bool   `json:"setup_completed,omitempty"`
 	Mac            string `json:"mac,omitempty"`     // Hardware ID (Lamp-XXXX from Pi serial)
 	Version        string `json:"version,omitempty"` // App version for OTA comparison
+	// SlackTeamID is the Slack workspace this device's bot is installed in,
+	// resolved on-device via slack.auth.test against the stored bot_token
+	// (cached on Client). Sent on every ping so the backend's
+	// slack:team:<id> → device index self-heals — the proxy uses it to route
+	// inbound Slack events back to this device's MQTT topic. Empty when the
+	// slack channel isn't configured on this device.
+	SlackTeamID string `json:"slack_team_id,omitempty"`
 }
 
 // MQTTConfig holds MQTT broker configuration from the backend.

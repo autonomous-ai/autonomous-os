@@ -53,13 +53,13 @@ type SetupRequest struct {
 	// STTAPIKey / TTSAPIKey override LLMAPIKey when those accounts are
 	// separate. Empty = device falls back to LLMAPIKey. STTBaseURL /
 	// TTSBaseURL likewise override LLMBaseURL.
-	STTAPIKey      string `json:"stt_api_key"`
-	TTSAPIKey      string `json:"tts_api_key"`
-	STTBaseURL     string `json:"stt_base_url"`
-	TTSBaseURL     string `json:"tts_base_url"`
-	STTLanguage    string `json:"stt_language"`
-	TTSProvider    string `json:"tts_provider"`
-	TTSVoice       string `json:"tts_voice"`
+	STTAPIKey   string `json:"stt_api_key"`
+	TTSAPIKey   string `json:"tts_api_key"`
+	STTBaseURL  string `json:"stt_base_url"`
+	TTSBaseURL  string `json:"tts_base_url"`
+	STTLanguage string `json:"stt_language"`
+	TTSProvider string `json:"tts_provider"`
+	TTSVoice    string `json:"tts_voice"`
 
 	// optional
 	DeviceID string `json:"device_id" validate:"required"`
@@ -140,6 +140,15 @@ type AddChannelRequest struct {
 	SlackBotToken string `json:"slack_bot_token"`
 	SlackAppToken string `json:"slack_app_token"`
 	SlackUserID   string `json:"slack_user_id"`
+	// SlackMode selects the Slack transport: "socket" (default, OpenClaw opens
+	// outbound WSS to Slack — needs SlackAppToken) or "http" (OpenClaw listens
+	// for POSTs forwarded from a public proxy — needs SlackSigningSecret).
+	// HTTP mode is the message-loss-tolerant path: a public proxy
+	// (bff-campaign-service) receives Slack events, fans out via MQTT to the
+	// device's slack_event handler, which POSTs to localhost OpenClaw.
+	SlackMode          string `json:"slack_mode,omitempty"`
+	SlackSigningSecret string `json:"slack_signing_secret,omitempty"`
+	SlackWebhookPath   string `json:"slack_webhook_path,omitempty"` // optional, defaults to /slack/events when SlackMode=http
 
 	// discord
 	DiscordBotToken string `json:"discord_bot_token"`
@@ -149,6 +158,15 @@ type AddChannelRequest struct {
 	// whatsapp — bot login is handled interactively by the Baileys CLI; only
 	// the operator's E.164 phone number (the permitted DM caller) ships here.
 	WhatsappUserID string `json:"whatsapp_user_id"`
+}
+
+// EffectiveSlackMode resolves SlackMode, defaulting to "socket" so unset
+// payloads keep current behaviour (existing installs unaffected).
+func (r *AddChannelRequest) EffectiveSlackMode() string {
+	if r.SlackMode == "http" {
+		return "http"
+	}
+	return "socket"
 }
 
 // EffectiveChannel returns the resolved channel type, defaulting to "telegram".
@@ -171,8 +189,16 @@ func (r *AddChannelRequest) ValidateChannel() error {
 		if r.SlackBotToken == "" {
 			return fmt.Errorf("slack_bot_token is required for slack channel")
 		}
-		if r.SlackAppToken == "" {
-			return fmt.Errorf("slack_app_token is required for slack channel")
+		switch r.EffectiveSlackMode() {
+		case "http":
+			if r.SlackSigningSecret == "" {
+				return fmt.Errorf("slack_signing_secret is required for slack channel in http mode")
+			}
+			// SlackAppToken not used in HTTP mode (Socket Mode only).
+		default: // "socket"
+			if r.SlackAppToken == "" {
+				return fmt.Errorf("slack_app_token is required for slack channel in socket mode")
+			}
 		}
 	case ChannelDiscord:
 		if r.DiscordBotToken == "" {
@@ -206,11 +232,27 @@ type SetupResponse struct {
 // Command types received from server via MQTT FAChannel.
 // Matches spec: docs/mqtt_specs_autonomous.md
 const (
-	CommandInfo          = "info"
-	CommandAddChannel    = "add_channel"
-	CommandOTA           = "ota"
-	CommandData          = "data"
-	CommandWhatsappPair  = "whatsapp_pair"
+	CommandInfo         = "info"
+	CommandAddChannel   = "add_channel"
+	CommandOTA          = "ota"
+	CommandData         = "data"
+	CommandWhatsappPair = "whatsapp_pair"
+
+	// CommandSlackEvent is sent by the public Slack-events proxy (bff-campaign-service)
+	// when Slack delivers an Events API POST for a workspace this device owns. Payload
+	// is a verbatim forward of Slack's HTTP request body + signature headers; this
+	// device POSTs them to the local OpenClaw gateway's /slack/events endpoint, which
+	// re-verifies the Slack signature (we don't strip / re-sign in the proxy because
+	// OpenClaw owns the signing-secret check by design).
+	//
+	// Wire format: {"cmd":"slack_event","event_id":"Ev123","body":"<raw JSON>",
+	//               "headers":{"X-Slack-Signature":"v0=...","X-Slack-Request-Timestamp":"...",
+	//                          "Content-Type":"application/json"}}
+	//
+	// Devices configured for socket-mode Slack will silently 404 on the local POST
+	// (gateway has no /slack/events route in that mode) — proxy SHOULD route only to
+	// devices the backend has flipped to slack_mode="http".
+	CommandSlackEvent = "slack_event"
 )
 
 // KindTTSSet is the kind field for cmd:"data" tts.set downlinks from BFF.
@@ -278,6 +320,10 @@ func (r *MQTTAddChannelCommand) ToRequest() AddChannelRequest {
 		req.SlackBotToken, _ = cfg["bot_token"].(string)
 		req.SlackAppToken, _ = cfg["app_token"].(string)
 		req.SlackUserID, _ = cfg["channel_id"].(string)
+		// HTTP-mode proxy fields (optional; omitted payloads keep Socket Mode behaviour).
+		req.SlackMode, _ = cfg["mode"].(string)
+		req.SlackSigningSecret, _ = cfg["signing_secret"].(string)
+		req.SlackWebhookPath, _ = cfg["webhook_path"].(string)
 	case ChannelWhatsapp:
 		req.WhatsappUserID, _ = cfg["user_id"].(string)
 	default:
