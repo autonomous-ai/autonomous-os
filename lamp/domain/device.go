@@ -259,6 +259,7 @@ const (
 const (
 	KindTTSSet      = "tts.set"      // persist TTS voice/provider/language config
 	KindTTSPreview  = "tts.preview"  // one-shot TTS preview, no config write
+	KindLampRename  = "lamp.rename"  // rewrite IDENTITY.md Name (WatchIdentity picks up wake-words)
 	KindOAuthSet    = "oauth.set"    // store/replace OAuth token for a provider
 	KindOAuthRemove = "oauth.remove" // delete OAuth token for a provider
 
@@ -632,6 +633,14 @@ type MQTTTTSPreviewData struct {
 // MQTTTTSPreviewCommand wraps the full tts.preview downlink envelope for unmarshalling.
 type MQTTTTSPreviewCommand struct {
 	Data MQTTTTSPreviewData `json:"data"`
+}
+
+// MQTTLampRenameData is the nested data payload for cmd:"data", kind:"lamp.rename".
+// Name is the new agent name written into workspace/IDENTITY.md's **Name:** line.
+// WatchIdentity picks up the change within 5s and pushes new wake words to LeLamp;
+// OpenClaw re-reads IDENTITY.md on its own — no gateway restart needed.
+type MQTTLampRenameData struct {
+	Name string `json:"name"`
 }
 
 // ConfigPublicResponse is returned by GET /api/device/config. Raw secrets
