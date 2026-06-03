@@ -17,6 +17,7 @@ from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlencode
 
 from lelamp.service.voice.stt_provider import STTProvider, STTSession
+from lelamp.service.voice.tts_openai import _ensure_openai_v1
 
 logger = logging.getLogger("lelamp.voice.stt")
 logger.setLevel(logging.INFO)
@@ -262,7 +263,7 @@ class AutonomousSTT(STTProvider):
         self._language = language or DEFAULT_LANGUAGE
         self._keywords = keywords or []
 
-        ws_base = base_url.replace("https://", "wss://").replace("http://", "ws://").rstrip("/")
+        ws_base = _ensure_openai_v1(base_url).replace("https://", "wss://").replace("http://", "ws://").rstrip("/")
         if _is_flux(model):
             params = _build_flux_query_params(
                 model=model,
