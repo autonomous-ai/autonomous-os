@@ -190,7 +190,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	isVoiceCommand := req.Type == "voice_command"
 	isWebChat := req.Type == "web_chat"
 	isPassive := !isVoiceCommand
-	if isPassive && !isVoice && !isWebChat && req.Type != "presence.enter" && h.isSleeping != nil && h.isSleeping() {
+	if isPassive && !isVoice && !isWebChat && req.Type != "presence.enter" && req.Type != "fire_hazard.detected" && h.isSleeping != nil && h.isSleeping() {
 		slog.Info("sensing event dropped — sleeping", "component", "sensing", "type", req.Type)
 		h.monitorBus.Push(domain.MonitorEvent{
 			Type:    "sensing_drop",
@@ -1008,6 +1008,7 @@ func shouldQueueEvent(eventType, message string, inVoiceWindow bool) bool {
 	switch eventType {
 	case "presence.enter", "presence.leave", "voice",
 		"motion.activity", "emotion.detected", "speech_emotion.detected",
+		"fire_hazard.detected",
 		"web_chat":
 		return true
 	case "sound":
