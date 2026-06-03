@@ -35,7 +35,11 @@ var openclawStatePaths = []string{
 	"/root/.openclaw/media",                   // outbound media files
 	"/root/.openclaw/flows",                   // flow registry
 	"/root/.openclaw/openclaw.json.last-good", // stale config backup
+	"/root/.openclaw/openclaw.json.bak",       // backup config — contains gateway token
+	"/root/.openclaw/openclaw.json.bak.1",     // older backup — same risk
 	"/root/.openclaw/update-check.json",       // OTA update-check timestamp
+	"/root/.openclaw/.openclaw",               // nested stale workspace from initial install
+	"/root/.openclaw/.cache",                  // runtime cache (preventive)
 	// Kept by openclaw reset --scope config+creds+sessions:
 	//   npm/, plugin-skills/, canvas/, plugins/, identity/, lumi-device-key.json
 	// openclaw.json is intentionally wiped and NOT restored — SetupAgent detects
@@ -79,7 +83,7 @@ type FactoryResetOptions struct{}
 // Returns (started, errStatus, errMessage). errStatus mirrors HTTP semantics
 // so HTTP callers can use it directly; non-HTTP callers (MQTT/GPIO) just
 // check started=false and log errMessage.
-func runFactoryReset(opts FactoryResetOptions) (started bool, errStatus int, errMessage string) {
+func runFactoryReset(_ FactoryResetOptions) (started bool, errStatus int, errMessage string) {
 	factoryResetMu.Lock()
 	if factoryResetInFlight {
 		factoryResetMu.Unlock()
