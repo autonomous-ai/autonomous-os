@@ -44,6 +44,14 @@ var mcpConnectorSpecs = []struct {
 	{name: "ahrefs", apiKey: true},
 }
 
+// googleOAuthConnectors lists the connectors that clone the Google OAuth
+// credential model instead of the remote-MCP model. They are real connectors
+// (connector.set.<code>/connector.remove.<code>) and refresh through the same
+// connector refresh loop, but they write NO mcp.servers.<code> entry into
+// openclaw.json — there is no hosted per-service Google MCP URL to point at.
+// Each gets its own <code>_access_tokens.json via oauthConnectorWriter.
+var googleOAuthConnectors = []string{"gmail", "google_calendar", "google_drive"}
+
 // buildConnectorWriters constructs the writer registry: a generic
 // connectors.json writer under "default" plus one mcpConnectorWriter per
 // known remote-MCP connector.
@@ -62,6 +70,10 @@ func buildConnectorWriters(cfg *config.Config, gw domain.AgentGateway) connector
 			mcfg.header = bearerAPIKey
 		}
 		reg[sp.name] = newMCPConnectorWriter(mcfg, configsDir, gw)
+	}
+	// Google OAuth connectors: per-connector token file, no openclaw.json entry.
+	for _, name := range googleOAuthConnectors {
+		reg[name] = newOAuthConnectorWriter(name, configsDir)
 	}
 	return reg
 }

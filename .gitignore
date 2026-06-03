@@ -8,6 +8,10 @@
 .vscode/
 .cursor/
 .claude/
+
+# Local brainstorming/spec docs (superpowers) — not part of the repo
+docs/superpowers/
+
 *.log
 dlbackend/local
 *.pt

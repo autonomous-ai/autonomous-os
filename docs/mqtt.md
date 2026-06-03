@@ -167,6 +167,8 @@ optional `error`, and an optional `data` payload.
 | `tts.preview` | One-shot TTS preview (no config write) | `text` (required), optional `provider`/`voice`/`language` |
 | `oauth.set` | Store/replace an OAuth token for a provider | `provider`, `access_token`, optional `refresh_token`/`token_type`/`expires_at`/`scopes`/`user_email`/`client_id` |
 | `oauth.remove` | Delete the stored OAuth token for a provider | `provider` |
+| `connector.set.<code>` | Store/replace credentials for a connector (async; acks `starting`) | `connector`, `auth_type`, optional `access_token`/`refresh_token`/`api_key`/`expires_in`/`expires_at`/`scopes`/`credentials`/`refresh` |
+| `connector.remove.<code>` | Delete a connector's credentials (async; acks `starting`) | `connector` |
 | `system.info` | Aggregate snapshot: versions + network + host | _(none)_ |
 | `system.version` | Component versions only (cheaper than `system.info`) | _(none)_ |
 | `system.network` | wlan0 network facts only | _(none)_ |
@@ -212,6 +214,31 @@ local LeLamp `/version` endpoint, `openclaw` from the agent monitor's cached pro
 
 An unrecognized `kind` replies with `status:"failure"` and `error:"unknown kind: <kind>"`.
 
+#### Connectors
+
+`connector.set.<code>` / `connector.remove.<code>` route by prefix (the connector
+code is the suffix) to a per-connector **writer** selected from a registry; an
+unregistered code falls back to a generic `connectors.json` writer. There are two
+writer kinds, differing only in side-effects:
+
+| Writer | Connectors | Storage | `openclaw.json` MCP entry | Auth header |
+|--------|-----------|---------|---------------------------|-------------|
+| MCP (`mcpConnectorWriter`) | `notion`, `figma`, `asana`, `linear`, `github`, `ahrefs` | `<code>_access_tokens.json` | Yes — writes `mcp.servers.<code>` (HTTP + `Authorization`) and restarts the gateway | `Bearer <access_token>` (or `Bearer <api_key>` for `ahrefs`) |
+| Google OAuth (`oauthConnectorWriter`) | `gmail`, `google_calendar`, `google_drive` | `<code>_access_tokens.json` | **No** — credential is stored + refreshed only | n/a (no MCP wiring) |
+
+The **Google OAuth connectors** clone the Google OAuth credential model rather than
+the remote-MCP model: there is no hosted per-service Google MCP URL to point at, so
+they write no `mcp.servers` entry. They are still first-class connectors — set/removed
+via `connector.set.gmail` etc., each persisted to its own
+`gmail_access_tokens.json` / `google_calendar_access_tokens.json` /
+`google_drive_access_tokens.json` under `workspace/configs/`, and refreshed by the
+shared connector refresh loop.
+
+**Refresh:** both writer kinds expose refreshable entries to the connector refresh
+loop, which proactively rotates any entry carrying BOTH a `refresh_token` AND
+`refresh:true` (the backend owns refresh eligibility via the `refresh` flag) once it
+is within 10 minutes of expiry, via the backend `/connector/refresh-token` endpoint.
+
 ### `ota` — Trigger OTA update
 
 Handled by bootstrap worker, not through MQTT handler directly.
@@ -229,6 +256,11 @@ Handled by bootstrap worker, not through MQTT handler directly.
 | `lamp/server/device/delivery/mqtt/add_channel_hander.go` | Handle `add_channel` command (streams pairing events for WhatsApp) |
 | `lamp/server/device/delivery/mqtt/slack_event_handler.go` | Handle `slack_event` command (forwards Slack HTTP-mode events to local gateway) |
 | `lamp/server/device/delivery/mqtt/data_handler.go` | Handle `data` command kinds `oauth.set`/`oauth.remove` (+ access-token store) |
+| `lamp/server/device/delivery/mqtt/connector_handler.go` | Handle `connector.set.<code>`/`connector.remove.<code>` (async, writer dispatch) |
+| `lamp/server/device/delivery/mqtt/connector_writer.go` | `ConnectorWriter` interface, writer registry, generic `connectors.json` writer, shared file helpers |
+| `lamp/server/device/delivery/mqtt/mcp_connector_writer.go` | Remote-MCP connector writer (`notion`/`figma`/…): token file + `openclaw.json` MCP entry |
+| `lamp/server/device/delivery/mqtt/oauth_connector_writer.go` | Google OAuth connector writer (`gmail`/`google_calendar`/`google_drive`): token file only, no MCP entry |
+| `lamp/server/device/delivery/mqtt/connector_refresh.go` | Connector token refresh loop (`/connector/refresh-token`) |
 | `lamp/server/device/delivery/mqtt/system_info_handler.go` | Handle `data` kinds `system.info`/`system.version`/`system.network` |
 | `lamp/server/device/delivery/mqtt/whatsapp_pair_handler.go` | Handle `whatsapp_pair` re-pair command |
 | `lamp/internal/openclaw/pairing.go` | WhatsApp Baileys QR pairing subprocess driver |

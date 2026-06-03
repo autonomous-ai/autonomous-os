@@ -166,6 +166,8 @@ metadata device/version chuẩn cộng với `kind`, `status` (`success|failure`
 | `tts.preview` | Preview TTS một lần (không ghi config) | `text` (bắt buộc), tùy chọn `provider`/`voice`/`language` |
 | `oauth.set` | Lưu/thay token OAuth cho một provider | `provider`, `access_token`, tùy chọn `refresh_token`/`token_type`/`expires_at`/`scopes`/`user_email`/`client_id` |
 | `oauth.remove` | Xóa token OAuth đã lưu của provider | `provider` |
+| `connector.set.<code>` | Lưu/thay credentials cho một connector (bất đồng bộ; ack `starting`) | `connector`, `auth_type`, tùy chọn `access_token`/`refresh_token`/`api_key`/`expires_in`/`expires_at`/`scopes`/`credentials`/`refresh` |
+| `connector.remove.<code>` | Xóa credentials của một connector (bất đồng bộ; ack `starting`) | `connector` |
 | `system.info` | Snapshot tổng hợp: versions + network + host | _(không)_ |
 | `system.version` | Chỉ versions các thành phần (rẻ hơn `system.info`) | _(không)_ |
 | `system.network` | Chỉ thông tin mạng wlan0 | _(không)_ |
@@ -211,6 +213,31 @@ local, `openclaw` từ probe cache của agent monitor (`openclaw_detected` phâ
 
 `kind` không hợp lệ sẽ phản hồi `status:"failure"` kèm `error:"unknown kind: <kind>"`.
 
+#### Connectors
+
+`connector.set.<code>` / `connector.remove.<code>` được route theo prefix (connector
+code là phần hậu tố) tới một **writer** riêng cho từng connector, chọn từ registry;
+code chưa đăng ký sẽ fallback về writer `connectors.json` chung. Có hai loại writer,
+chỉ khác nhau ở side-effect:
+
+| Writer | Connectors | Lưu trữ | Entry MCP trong `openclaw.json` | Auth header |
+|--------|-----------|---------|---------------------------------|-------------|
+| MCP (`mcpConnectorWriter`) | `notion`, `figma`, `asana`, `linear`, `github`, `ahrefs` | `<code>_access_tokens.json` | Có — ghi `mcp.servers.<code>` (HTTP + `Authorization`) và restart gateway | `Bearer <access_token>` (hoặc `Bearer <api_key>` cho `ahrefs`) |
+| Google OAuth (`oauthConnectorWriter`) | `gmail`, `google_calendar`, `google_drive` | `<code>_access_tokens.json` | **Không** — chỉ lưu + refresh credential | n/a (không wiring MCP) |
+
+Các **Google OAuth connector** clone mô hình credential của Google OAuth thay vì mô
+hình remote-MCP: không có URL Google MCP hosted cho từng service để trỏ tới, nên chúng
+không ghi entry `mcp.servers`. Chúng vẫn là connector hạng nhất — set/remove qua
+`connector.set.gmail` v.v., mỗi cái lưu vào file riêng
+`gmail_access_tokens.json` / `google_calendar_access_tokens.json` /
+`google_drive_access_tokens.json` trong `workspace/configs/`, và được refresh bởi
+connector refresh loop chung.
+
+**Refresh:** cả hai loại writer đều expose các entry cần refresh cho connector refresh
+loop; loop chủ động xoay vòng entry nào có CẢ `refresh_token` LẪN `refresh:true`
+(backend sở hữu quyền quyết định refresh qua cờ `refresh`) khi còn dưới 10 phút là hết
+hạn, qua endpoint backend `/connector/refresh-token`.
+
 ### `ota` — Trigger OTA update
 
 Xử lý bởi bootstrap worker, không qua MQTT handler trực tiếp.
@@ -228,6 +255,11 @@ Xử lý bởi bootstrap worker, không qua MQTT handler trực tiếp.
 | `lamp/server/device/delivery/mqtt/add_channel_hander.go` | Handle `add_channel` command (stream pairing events cho WhatsApp) |
 | `lamp/server/device/delivery/mqtt/slack_event_handler.go` | Handle `slack_event` command (forward Slack HTTP-mode events tới gateway local) |
 | `lamp/server/device/delivery/mqtt/data_handler.go` | Handle `data` command kinds `oauth.set`/`oauth.remove` (+ access-token store) |
+| `lamp/server/device/delivery/mqtt/connector_handler.go` | Handle `connector.set.<code>`/`connector.remove.<code>` (bất đồng bộ, dispatch writer) |
+| `lamp/server/device/delivery/mqtt/connector_writer.go` | Interface `ConnectorWriter`, registry writer, writer `connectors.json` chung, file helpers dùng chung |
+| `lamp/server/device/delivery/mqtt/mcp_connector_writer.go` | Writer connector remote-MCP (`notion`/`figma`/…): token file + entry MCP trong `openclaw.json` |
+| `lamp/server/device/delivery/mqtt/oauth_connector_writer.go` | Writer Google OAuth connector (`gmail`/`google_calendar`/`google_drive`): chỉ token file, không entry MCP |
+| `lamp/server/device/delivery/mqtt/connector_refresh.go` | Loop refresh token connector (`/connector/refresh-token`) |
 | `lamp/server/device/delivery/mqtt/system_info_handler.go` | Handle `data` kinds `system.info`/`system.version`/`system.network` |
 | `lamp/server/device/delivery/mqtt/whatsapp_pair_handler.go` | Handle `whatsapp_pair` re-pair command |
 | `lamp/internal/openclaw/pairing.go` | WhatsApp Baileys QR pairing subprocess driver |
