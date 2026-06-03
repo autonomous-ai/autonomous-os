@@ -28,6 +28,10 @@ from lelamp.service.voice.stt_provider import STTProvider
 from lelamp.service.voice._internal.audio_dsp import resample_to_stt, rms
 from lelamp.service.voice._internal.audio_recorder import ArecordStream
 from lelamp.service.voice._internal.config import (
+    BARGE_IN_BLOCK_MS,
+    BARGE_IN_ENABLED,
+    BARGE_IN_RMS_THRESHOLD,
+    BARGE_IN_TRIGGER_FRAMES,
     CHANNELS,
     DEFAULT_WAKE_WORDS,
     ECHO_GATE_MAX_WAIT_S,
@@ -253,13 +257,27 @@ class VoiceService:
     # TTS wait + reverb gate (Layer 1 + Layer 2 echo handling)
     # ------------------------------------------------------------------
     def _wait_for_tts(self):
-        """Block until TTS finishes speaking, then wait for reverb to decay (adaptive RMS gate)."""
+        """Block until TTS finishes speaking, then wait for reverb to decay (adaptive RMS gate).
+
+        When BARGE_IN_ENABLED, the passive wait is replaced by an active mic monitor
+        that interrupts TTS on user voice. After barge-in the reverb gate is skipped
+        because the user is mid-utterance — waiting for silence would clip them.
+        """
         if not self._tts_is_speaking():
             return
-        logger.info("TTS is speaking, pausing mic until done...")
-        while self._running and self._tts_is_speaking():
-            time.sleep(0.2)
+
+        barged_in = False
+        if BARGE_IN_ENABLED:
+            barged_in = self._monitor_barge_in()
+        else:
+            logger.info("TTS is speaking, pausing mic until done...")
+            while self._running and self._tts_is_speaking():
+                time.sleep(0.2)
+
         if not self._running:
+            return
+        if barged_in:
+            logger.info("Barge-in fired: skipping reverb gate, opening mic immediately")
             return
 
         # Adaptive RMS gate: wait for reverb/echo to decay instead of fixed sleep
@@ -294,6 +312,66 @@ class VoiceService:
         except Exception as e:
             logger.warning("RMS gate failed, falling back to fixed delay: %s", e)
             time.sleep(1.0)
+
+    def _monitor_barge_in(self) -> bool:
+        """Active mic monitor that runs while TTS is speaking. Opens its own short-lived
+        capture stream (main loop has released the mic by entering _wait_for_tts), reads
+        20-64ms frames, and stops TTS if RMS exceeds BARGE_IN_RMS_THRESHOLD for
+        BARGE_IN_TRIGGER_FRAMES consecutive frames.
+
+        Returns True if barge-in fired (TTS stopped by us), False if TTS ended naturally.
+
+        Falls back to passive sleep loop on mic open failure so a flaky USB mic doesn't
+        block TTS playback completion.
+        """
+        logger.info(
+            "TTS speaking — barge-in monitor active (threshold=%d, trigger=%d × %dms blocks)",
+            BARGE_IN_RMS_THRESHOLD, BARGE_IN_TRIGGER_FRAMES, BARGE_IN_BLOCK_MS,
+        )
+        np = self._np
+        device_rate = self._device_rate or STT_RATE
+        frame_size = int(device_rate * BARGE_IN_BLOCK_MS / 1000)
+        consecutive = 0
+        max_seen = 0.0  # diagnostic: peak RMS observed during this monitor session
+        try:
+            if self._alsa_device is not None:
+                mic_ctx = ArecordStream(
+                    alsa_device=self._alsa_device, rate=device_rate,
+                    channels=CHANNELS, blocksize=frame_size, np=np,
+                )
+            else:
+                mic_ctx = self._sd.InputStream(
+                    samplerate=device_rate, channels=CHANNELS, dtype="int16",
+                    blocksize=frame_size, device=self._input_device,
+                )
+            with mic_ctx as mic:
+                while self._running and self._tts_is_speaking():
+                    data, overflowed = mic.read(frame_size)
+                    if overflowed:
+                        consecutive = 0
+                        continue
+                    measured = float(np.sqrt(np.mean(data.astype(np.float32) ** 2)))
+                    if measured > max_seen:
+                        max_seen = measured
+                    if measured > BARGE_IN_RMS_THRESHOLD:
+                        consecutive += 1
+                        if consecutive >= BARGE_IN_TRIGGER_FRAMES:
+                            logger.info(
+                                "BARGE-IN: RMS=%.0f > %d for %d frames → stop TTS",
+                                measured, BARGE_IN_RMS_THRESHOLD, consecutive,
+                            )
+                            if self._tts is not None:
+                                self._tts.stop()
+                            return True
+                    else:
+                        consecutive = 0
+        except Exception as e:
+            logger.warning("Barge-in monitor failed (%s) — falling back to passive wait", e)
+            while self._running and self._tts_is_speaking():
+                time.sleep(0.2)
+        finally:
+            logger.info("Barge-in monitor session end: max_rms_seen=%.0f", max_seen)
+        return False
 
     # ------------------------------------------------------------------
     # Main loop

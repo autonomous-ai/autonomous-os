@@ -33,6 +33,23 @@ Cả hai handler đều detect board qua `/proc/device-tree/model`:
 
 Destructive gesture (reboot, shutdown) cố tình chỉ có trên nút GPIO. Hành động phá huỷ cần cử chỉ chủ ý, và nút cơ học cho bằng chứng intent rõ ràng.
 
+## Cắt Lamp giữa câu (barge-in)
+
+Cử chỉ 1 chạm là **cơ chế barge-in chính** của Lamp: chạm đỉnh Lamp (touchpad) hoặc nhấn nút GPIO một lần khi Lamp đang nói → cắt câu TTS đang phát giữa chừng, dừng nhạc, unmute mic để Lamp lắng nghe câu kế. Sau khi cắt, một câu cue "Mình nghe đây" (theo ngôn ngữ) được phát.
+
+Chuỗi end-to-end:
+1. `gpio_button.py` / `ttp223.py` detect single click → gọi `single_click_action(source)` trong `button_actions.py`
+2. `single_click_action` → `stop_tts()` (routes/voice.py) + `audio_stop()` (routes/music.py) + thread deferred `_announce_listening()`
+3. `stop_tts()` → `tts_service.stop()` set `_stop_event`; mọi blocking loop trong TTS stream (synth, render, playback) check event và abort sạch, không để loa kẹt
+
+### Voice barge-in (tuỳ chọn, mặc định tắt)
+
+Cắt bằng giọng nói — nói trong lúc Lamp đang nói để Lamp dừng và lắng nghe — được gate bởi `LELAMP_BARGE_IN_ENABLED=true` trong `lelamp/.env`. Khi bật, `voice_service._monitor_barge_in()` mở mic capture song song trong lúc TTS phát, tính RMS trên block 256ms, gọi `tts_service.stop()` khi N block liên tiếp vượt `LELAMP_BARGE_IN_RMS_THRESHOLD`. Cùng chuỗi downstream với tap-to-interrupt.
+
+Tại sao tắt mặc định: software-only AEC không khả thi trên hardware này (Speex AEC tích hợp xuống còn ~13-30% reduction dưới TTS multi-chunk streaming). Chỉ với physical separation mic-loa, bleed RMS (1-7500 đo được) và user voice RMS (6-14k đo được) chồng nhau ở zone 7-9k → 1 threshold RMS không discriminate sạch được. Threshold 9000 + 1 frame trigger thiên về 0 false-trigger, đổi lại phải nói lớn để cắt; threshold 6000-7000 thiên ngược lại. Tune theo deployment là không tránh khỏi cho tới khi device có hardware AEC (ví dụ ReSpeaker XVF3800).
+
+Khi bật, tail log để xem `Barge-in monitor session end: max_rms_seen=N` (peak mỗi session) và sự kiện `BARGE-IN: RMS=N`, sau đó set `LELAMP_BARGE_IN_RMS_THRESHOLD` ở giữa bleed-max và voice-min quan sát được. Tap-to-interrupt vẫn active bất kể.
+
 ## Detect nút GPIO (`lelamp/service/gpio_button.py`)
 
 Driver đếm edge nút bấm chuẩn:

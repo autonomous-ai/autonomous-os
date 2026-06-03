@@ -71,6 +71,24 @@ STT_KEEPALIVE = os.environ.get("LELAMP_STT_KEEPALIVE", "false").lower() == "true
 
 
 # ---------------------------------------------------------------------------
+# Voice barge-in — interrupt in-flight TTS when user speaks during playback.
+# Requires hardware where mic doesn't pick up speaker bleed above the
+# threshold (physical separation or hardware AEC). Default off; enable only
+# after measuring bleed RMS at the deployed mic position.
+#
+# BLOCK_MS sizes the per-read chunk of the monitor's mic capture. Larger
+# blocks = fewer Python wakeups + fewer numpy passes, which is critical on
+# Pi-class boards where the TTS sounddevice pump is already CPU-bound.
+# 256ms gives roughly 4x less per-frame overhead vs the 64ms VAD frame size
+# at the cost of trigger latency (1 block = 256ms minimum response time).
+# ---------------------------------------------------------------------------
+BARGE_IN_ENABLED = os.environ.get("LELAMP_BARGE_IN_ENABLED", "false").lower() == "true"
+BARGE_IN_RMS_THRESHOLD = int(os.environ.get("LELAMP_BARGE_IN_RMS_THRESHOLD", "9000"))
+BARGE_IN_TRIGGER_FRAMES = int(os.environ.get("LELAMP_BARGE_IN_TRIGGER_FRAMES", "1"))
+BARGE_IN_BLOCK_MS = int(os.environ.get("LELAMP_BARGE_IN_BLOCK_MS", "256"))
+
+
+# ---------------------------------------------------------------------------
 # Speaker recognition — prefix every transcript with "<Name>: "
 # ---------------------------------------------------------------------------
 SPEAKER_RECOGNITION_ENABLED = _lelamp_config.SPEAKER_RECOGNITION_ENABLED
