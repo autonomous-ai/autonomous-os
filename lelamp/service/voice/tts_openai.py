@@ -9,6 +9,18 @@ from lelamp.service.voice.tts_backend import TTSBackend, STREAM_CHUNK_SIZE
 logger = logging.getLogger("lelamp.voice.tts_backend")
 
 
+def _ensure_openai_v1(base_url: str) -> str:
+    """Append /v1 to autonomous API base URLs that are missing it.
+
+    Covers three cases: (1) missing /v1 → append it, (2) already has /v1 →
+    leave untouched, (3) non-autonomous URL → leave untouched.
+    """
+    base_url = base_url.rstrip("/")
+    if "campaign-api.autonomous.ai" in base_url and base_url.endswith("/ai"):
+        base_url += "/v1"
+    return base_url
+
+
 class OpenAITTSBackend(TTSBackend):
     """OpenAI-compatible TTS backend (default)."""
 
@@ -16,7 +28,7 @@ class OpenAITTSBackend(TTSBackend):
         self._client = None
         try:
             from openai import OpenAI
-            self._client = OpenAI(api_key=api_key, base_url=base_url)
+            self._client = OpenAI(api_key=api_key, base_url=_ensure_openai_v1(base_url))
             logger.info("OpenAI TTS backend ready (base_url=%s)", base_url)
         except ImportError as e:
             logger.warning("openai SDK not available: %s", e)
