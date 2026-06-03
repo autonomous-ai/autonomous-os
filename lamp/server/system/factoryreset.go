@@ -19,33 +19,39 @@ import (
 // the device to "fresh out of box" state. Binaries, systemd units, lelamp .venv,
 // kernel, and OS packages are NOT touched (those belong to software-update).
 //
-// Edit this slice when new persistent state is introduced anywhere in the
-// codebase. Wildcards are NOT expanded — use a directory path and trust the
-// recursive remove. Missing paths are silently ignored.
+// Kept intentionally (openclaw starts normally after reboot without re-onboard):
+//   - /root/.openclaw/openclaw.json      — process config
+//   - /root/.openclaw/npm/               — installed plugins
+//   - /root/.openclaw/plugin-skills/     — skill definitions
+//   - /root/.openclaw/canvas/            — UI registry
+//   - /root/.openclaw/plugins/           — plugin registry
+//   - /root/.openclaw/identity/          — device identity keypair
+//   - /root/.openclaw/lumi-device-key.json
+//
+// Edit this slice when new persistent state is introduced. Missing paths are
+// silently ignored.
 var FactoryResetWipePaths = []string{
-	"/root/config",                                  // lamp-server config.json (API keys, channel tokens, MQTT creds)
-	"/root/.openclaw/agents",                        // conversation sessions + history
-	"/root/.openclaw/workspace",                     // agent memory (HEARTBEAT.md, SOUL.md, USER.md, memory/)
-	"/root/.openclaw/identity",                      // device identity key → new device ID on next setup
-	"/root/.openclaw/lumi-device-key.json",          // device keypair
-	"/root/.openclaw/devices",                       // paired devices list
-	"/root/.openclaw/credentials",                   // channel auth tokens (telegram, discord, slack sessions)
-	"/root/.openclaw/tasks",                         // background task runs
-	"/root/.openclaw/logs",                          // runtime logs
-	"/root/.openclaw/telegram",                      // telegram update offset
-	"/root/.openclaw/discord",                       // discord command deploy cache
-	"/root/.openclaw/plugin-state",                  // plugin runtime state
-	"/root/.openclaw/memory",                        // memory sqlite db
-	"/root/.openclaw/delivery-queue",                // failed message delivery queue
-	"/root/.openclaw/subagents",                     // subagent run history
-	"/root/.openclaw/cron",                          // cron jobs + state
-	"/root/.openclaw/media",                         // outbound media files
-	"/root/.openclaw/flows",                         // flow registry
-	// NOTE: openclaw.json, npm/ (plugins), plugin-skills/, canvas/, plugins/ are
-	// intentionally kept so openclaw starts normally after reset without re-onboard.
-	"/root/local/users",                             // face + voice enrollments (owner)
-	"/root/local/strangers",                         // face + voice enrollments (stranger)
-	"/var/lib/lelamp/snapshots",                     // persistent camera snapshots (sensing_face / motion / emotion, 72h TTL). Matches lelamp/config.py LELAMP_SNAPSHOT_PERSIST_DIR default.
+	"/root/config",                            // lamp-server config.json (API keys, channel tokens, MQTT creds)
+	"/root/.openclaw/agents",                  // conversation sessions + history
+	"/root/.openclaw/workspace",               // agent memory (HEARTBEAT.md, SOUL.md, USER.md, memory/)
+	"/root/.openclaw/devices",                 // paired devices list
+	"/root/.openclaw/credentials",             // channel auth tokens (telegram, discord, slack sessions)
+	"/root/.openclaw/tasks",                   // background task runs
+	"/root/.openclaw/logs",                    // runtime logs
+	"/root/.openclaw/telegram",                // telegram update offset
+	"/root/.openclaw/discord",                 // discord command deploy cache
+	"/root/.openclaw/plugin-state",            // plugin runtime state
+	"/root/.openclaw/memory",                  // memory sqlite db
+	"/root/.openclaw/delivery-queue",          // failed message delivery queue
+	"/root/.openclaw/subagents",               // subagent run history
+	"/root/.openclaw/cron",                    // cron jobs + state
+	"/root/.openclaw/media",                   // outbound media files
+	"/root/.openclaw/flows",                   // flow registry
+	"/root/.openclaw/openclaw.json.last-good", // stale config backup written on clean shutdown
+	"/root/.openclaw/update-check.json",       // OTA update-check timestamp
+	"/root/local/users",                       // face + voice enrollments (owner)
+	"/root/local/strangers",                   // face + voice enrollments (stranger)
+	"/var/lib/lelamp/snapshots",               // persistent camera snapshots
 	"/etc/wpa_supplicant/wpa_supplicant-wlan0.conf", // home WiFi credentials → forces AP mode on next boot
 }
 
@@ -92,34 +98,36 @@ func runFactoryReset(opts FactoryResetOptions) (started bool, errStatus int, err
 	factoryResetLastFire = time.Now()
 	factoryResetMu.Unlock()
 
-	log.Printf("[factory-reset] starting (wipe %d paths, then reboot)", len(FactoryResetWipePaths))
+	log.Printf("[factory-reset] accepted — stopping openclaw, wiping %d paths, then reboot", len(FactoryResetWipePaths))
 
 	go func() {
-		// Reset the in-flight flag on any non-reboot exit so a failed run
-		// doesn't block subsequent attempts forever. On successful reboot
-		// the process dies before this runs — harmless.
 		defer func() {
 			factoryResetMu.Lock()
 			factoryResetInFlight = false
 			factoryResetMu.Unlock()
 		}()
 
-		// Wipe state. systemd will kill any service holding these files when
-		// reboot fires below; no need to stop services first.
+		// Step 1: stop openclaw cleanly before wiping so it can't recreate
+		// state dirs during the window between wipe and reboot.
+		log.Printf("[factory-reset] step 1/3 — stopping openclaw service")
+		if out, err := exec.Command("systemctl", "stop", "openclaw").CombinedOutput(); err != nil {
+			log.Printf("[factory-reset] stop openclaw: %v — %s (non-fatal, continuing)", err, string(out))
+		} else {
+			log.Printf("[factory-reset] openclaw stopped")
+		}
+
+		// Step 2: wipe all state paths.
+		log.Printf("[factory-reset] step 2/3 — wiping %d paths", len(FactoryResetWipePaths))
 		for _, p := range FactoryResetWipePaths {
 			if err := os.RemoveAll(p); err != nil {
-				log.Printf("[factory-reset] wipe %s failed: %v", p, err)
-				// Best-effort — don't abort. Reboot will still proceed and
-				// the next boot sees whichever state was successfully wiped.
+				log.Printf("[factory-reset] wipe %s: %v (non-fatal)", p, err)
 				continue
 			}
 			log.Printf("[factory-reset] wiped %s", p)
 		}
 
-		// Detached `sleep 2 && systemctl reboot` so the HTTP response makes
-		// it out the door and journal flushes before init kills us.
-		// Fire-and-forget — we don't Wait() because reboot kills us mid-Wait.
-		log.Printf("[factory-reset] rebooting in 2s")
+		// Step 3: reboot. Detached so the HTTP response escapes before init kills us.
+		log.Printf("[factory-reset] step 3/3 — rebooting in 2s")
 		if err := exec.Command("sh", "-c", "(sleep 2 && systemctl reboot) &").Start(); err != nil {
 			log.Printf("[factory-reset] schedule reboot failed: %v", err)
 		}
