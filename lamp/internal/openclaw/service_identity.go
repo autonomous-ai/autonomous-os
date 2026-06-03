@@ -171,6 +171,12 @@ func rewriteIdentityName(content, name string) string {
 			continue
 		}
 		lines[i] = line[:idx] + "**Name:** " + name
+		// Drop a following italic-parens placeholder hint like
+		// `  _(pick something you like)_` left over from the OpenClaw onboarding
+		// template — once the user picks a name, the hint is stale.
+		if i+1 < len(lines) && isItalicPlaceholder(lines[i+1]) {
+			lines = append(lines[:i+1], lines[i+2:]...)
+		}
 		return strings.Join(lines, "\n")
 	}
 	// No existing name line — append one. Add a trailing newline only when the
@@ -180,6 +186,18 @@ func rewriteIdentityName(content, name string) string {
 		prefix += "\n"
 	}
 	return prefix + "- **Name:** " + name + "\n"
+}
+
+// isItalicPlaceholder returns true when line is a markdown italic note wrapped
+// in `_(...)_` or `*(...)*` (with optional leading whitespace). Used to detect
+// and remove OpenClaw's onboarding-template hint lines after rename.
+func isItalicPlaceholder(line string) bool {
+	t := strings.TrimSpace(line)
+	if len(t) < 4 {
+		return false
+	}
+	return (strings.HasPrefix(t, "_(") && strings.HasSuffix(t, ")_")) ||
+		(strings.HasPrefix(t, "*(") && strings.HasSuffix(t, ")*"))
 }
 
 // parseIdentityName extracts the agent name from IDENTITY.md content.
