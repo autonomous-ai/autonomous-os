@@ -22,6 +22,11 @@ const (
 	roleSkillsZipPrefix  = "skills/"
 	roleSkillsMaxRetries = 3
 	roleSkillsRetryDelay = 2 * time.Second
+
+	// mcpSkillsBaseURL is the GCS prefix holding one <name>.zip per MCP connector
+	// skill. Unlike role zips, these contain a top-level `<name>/` tree (no
+	// `skills/` prefix), extracted verbatim into workspace/skills.
+	mcpSkillsBaseURL = "https://storage.googleapis.com/s3-autonomous-upgrade-3/plugins-skills/skills_for_MCP"
 )
 
 // ErrInvalidRole is returned when the role slug has an unsafe shape (empty or
@@ -75,6 +80,56 @@ func InstallRoleSkills(configDir, role string) (int, error) {
 	}
 	slog.Info("[role-skills] installed role", "component", "openclaw", "role", role, "files", count, "dir", skillsDir)
 	return count, nil
+}
+
+// EnsureMCPSkill makes sure the MCP connector skill <name> is present under
+// {configDir}/workspace/skills/<name>. Idempotent: if <name>/SKILL.md already
+// exists it is a no-op, so the connector refresh loop (which re-runs the
+// writer's Write on every token rotation) doesn't re-download the zip each
+// time. Otherwise it downloads skills_for_MCP/<name>.zip from GCS and extracts
+// it verbatim (the zip already carries a top-level <name>/ dir). The gateway is
+// NOT restarted — skills.load.watch picks new files up per session.
+func EnsureMCPSkill(configDir, name string) error {
+	if !roleNamePattern.MatchString(name) {
+		return fmt.Errorf("%w: %q", ErrInvalidRole, name)
+	}
+
+	skillsDir := filepath.Join(configDir, "workspace", "skills")
+	if _, err := os.Stat(filepath.Join(skillsDir, name, "SKILL.md")); err == nil {
+		return nil // already installed
+	}
+
+	url := fmt.Sprintf("%s/%s.zip", mcpSkillsBaseURL, name)
+
+	var tmpZip string
+	var lastErr error
+	for attempt := 1; attempt <= roleSkillsMaxRetries; attempt++ {
+		p, err := downloadToTempFile(url, "mcp-skill-*.zip")
+		if err != nil {
+			lastErr = err
+			slog.Warn("[mcp-skill] zip download failed", "component", "openclaw", "name", name, "attempt", attempt, "error", err)
+			if attempt < roleSkillsMaxRetries {
+				time.Sleep(roleSkillsRetryDelay)
+			}
+			continue
+		}
+		tmpZip = p
+		lastErr = nil
+		break
+	}
+	if lastErr != nil {
+		return fmt.Errorf("download %s mcp skill after %d retries: %w", name, roleSkillsMaxRetries, lastErr)
+	}
+	defer os.Remove(tmpZip)
+
+	// Extract verbatim (srcPrefix "") so "<name>/SKILL.md" lands at
+	// workspace/skills/<name>/SKILL.md.
+	count, err := extractDirFromZip(tmpZip, "", skillsDir)
+	if err != nil {
+		return fmt.Errorf("extract %s mcp skill: %w", name, err)
+	}
+	slog.Info("[mcp-skill] installed", "component", "openclaw", "name", name, "files", count, "dir", skillsDir)
+	return nil
 }
 
 // extractDirFromZip extracts every entry under srcPrefix in the zip at zipPath

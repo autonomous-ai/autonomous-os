@@ -75,6 +75,36 @@ func buildConnectorWriters(cfg *config.Config, gw domain.AgentGateway) connector
 	for _, name := range googleOAuthConnectors {
 		reg[name] = newOAuthConnectorWriter(name, configsDir)
 	}
+
+	// figma-api: REST variant. Instead of the hosted Figma MCP (allowlist-gated),
+	// wire a local stdio MCP server that wraps the Figma REST API. The wrapper
+	// script is dropped on disk; the access token rides in the entry's env.
+	wrapperPath := openclaw.FigmaMCPServerPath(cfg.OpenclawConfigDir)
+	ocDir := cfg.OpenclawConfigDir
+	reg["figma-api"] = newMCPConnectorWriter(mcpConnectorConfig{
+		name: "figma-api",
+		entry: func(c ConnectorCreds) map[string]any {
+			return map[string]any{
+				"command": "node",
+				"args":    []any{wrapperPath},
+				"env":     map[string]any{"FIGMA_ACCESS_TOKEN": c.AccessToken},
+			}
+		},
+		ensureAssets: func() error {
+			// Wrapper script is required — fail the connector.set if it can't drop.
+			if _, err := openclaw.EnsureFigmaMCPServer(ocDir); err != nil {
+				return err
+			}
+			// Skill (SKILL.md from GCS) is best-effort: the figma_* tools still
+			// work via the MCP tool list without it. Idempotent — only downloads
+			// when missing, so token refreshes don't re-fetch.
+			if err := openclaw.EnsureMCPSkill(ocDir, "figma-api"); err != nil {
+				slog.Warn("figma-api: skill install failed (continuing)", "component", "mqtt", "error", err)
+			}
+			return nil
+		},
+	}, configsDir, gw)
+
 	return reg
 }
 
