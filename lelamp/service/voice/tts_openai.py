@@ -28,7 +28,8 @@ class OpenAITTSBackend(TTSBackend):
         self._client = None
         try:
             from openai import OpenAI
-            self._client = OpenAI(api_key=api_key, base_url=_ensure_openai_v1(base_url))
+            base_url = _ensure_openai_v1(base_url)
+            self._client = OpenAI(api_key=api_key, base_url=base_url)
             logger.info("OpenAI TTS backend ready (base_url=%s)", base_url)
         except ImportError as e:
             logger.warning("openai SDK not available: %s", e)

@@ -583,7 +583,7 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 	// When thinking also changed, RefreshModelsConfig handles primary update +
 	// reasoning patch in a single write + restart — skip UpdatePrimaryModel to
 	// avoid a redundant gateway restart.
-	if modelChanged && !thinkingChanged && s.agentGateway != nil {
+	if modelChanged && !thinkingChanged && !baseURLChanged && s.agentGateway != nil {
 		if err := s.agentGateway.UpdatePrimaryModel(newModel); err != nil {
 			slog.Warn("update openclaw primary model failed", "component", "device", "error", err)
 		}
