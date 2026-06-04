@@ -1,151 +1,115 @@
-# Autonomous Lamp
+# Autonomous
 
-https://github.com/user-attachments/assets/2e6eea7d-312e-47dd-94cf-0914dedeccc4
+**Autonomous is the open-source OS for physical AI agents.** It runs on edge devices
+with cameras, microphones, speakers, displays, motors, lights, and sensors, and gives
+an AI agent a body: it sees, hears, speaks, moves, senses, remembers, runs skills, and
+updates itself — locally first.
 
-Autonomous Lamp is an AI-powered desk lamp built on a Raspberry Pi or OrangePi. It listens, sees, moves, and talks. The brain is a pluggable agentic gateway (OpenClaw, Hermes, or any other LLM + skills + memory runtime); the hands are LeLamp (servo, LED, mic, speaker, camera, display); Lamp Server (Go) glues them together with networking, sensing, OTA, and a web UI.
+**Autonomous Lamp** is the first reference device. **Intern** is the second. Anyone can
+build a third.
 
-Target hardware: Raspberry Pi 4/5 or OrangePi (any Linux ARM64 SBC with comparable I/O).
+> The brain is a pluggable agentic gateway (OpenClaw, Hermes, or any LLM + skills +
+> memory runtime). Autonomous is everything else — the body, the hands, and the bounds.
 
-## Gallery
+## Reference devices
 
-|   |   |
-|---|---|
-| ![Lamp on desk](hardware/images/img.jpg) | ![Lamp close-up](hardware/images/img_1.jpg) |
-| ![Lamp side view](hardware/images/img_2.jpg) | ![Lamp detail](hardware/images/img_3.jpg) |
+| Device | What it is | Declares |
+|--------|-----------|----------|
+| **Autonomous Lamp** | 5-DOF expressive desk robot | the maximal set — audio, vision, motion, light, display, sensing |
+| **Autonomous Intern** | always-on desk agent | audio, vision, sensing — **no** motion or display |
+| **Sphere** + more | in the pipeline | — |
 
-## Architecture
+Lamp and Intern run the **same OS image**. The only difference is which capabilities
+each device's `DEVICE.md` declares. That is the whole thesis: a new device is a
+`DEVICE.md`, not a fork.
 
-Three layers, each independently replaceable:
+## The stack
 
 ```
-Agentic Gateway (LLM / skills / memory)        ← OpenClaw, Hermes, or any agentic runtime
-        │  WebSocket
-        ▼
-Lamp Server (Go, :5000)                        ← system, network, MQTT, OTA, sensing routing, local intent
-        │  HTTP
-        ▼
-LeLamp Runtime (Python, :5001)                 ← hardware drivers (servo, LED, audio, camera, display)
-        │
-        ▼
-Hardware (plug-and-play; missing parts are skipped)
+Behaviors / Agents      companion · guard · mood — built as skills, configured by SOUL.md
+        ▲
+Agentic Gateway         OpenClaw · Hermes — the swappable brain (reads SOUL.md + SKILL.md)
+        ▲
+Framework (managers)    intent · network · OTA · sensing · skills — the stable public API   [os/core]
+        ▲
+HAL (capability iface)  audio · vision · motion · light · display · presence              [os/hal — FROZEN contract]
+        ▲
+Drivers (by subsystem)  feetech · ws2812 · gc9a01 · camera · audio                         [os/hal/drivers]
+Platform (by board)     raspberry_pi_5 · orangepi_sun60 · …                                [os/hal/platform]
+        ▲
+Safety + Power          deterministic floor — e-stop below the brain, always on            [SAFETY.md]
 ```
 
-Design principles:
+Vertical layering is borrowed from Android (HAL above drivers); the horizontal
+generic-vs-board split is borrowed from Linux (`drivers/` by subsystem, `arch/` by
+board). The frozen `contract/` is the Autonomous equivalent of the Linux syscall ABI:
+stable for devices and skills, churning underneath.
 
-- **Hardware is a plugin.** If a device is missing, that subsystem is skipped — the rest still runs.
-- **The brain is swappable.** Lamp treats the agentic gateway as an abstract dependency — OpenClaw today, Hermes or another runtime tomorrow. The interface is a WebSocket plus a SKILL.md contract.
-- **System layer runs without the gateway.** Network, OTA, reset, LED feedback, local intents all work offline.
-- **LeLamp has no AI.** Drivers only. All reasoning lives in the agentic gateway.
-- **SKILL.md native.** The gateway reads skill files and calls `curl` against LeLamp/Lamp directly — no MCP layer.
-- **Code is the source of truth.** Docs reflect code, never the other way around.
+## The Autonomous Physical Agent Standard
 
-## Repository Layout
+Every device is self-describing to both humans and agents, in four files:
 
-| Path | Language | Description |
-|------|----------|-------------|
-| `lamp/` | Go 1.24 | HTTP API, MQTT, OTA bootstrap, agentic-gateway WS client, sensing event routing, local intent, ambient behaviors |
-| `lamp/web/` | TypeScript / React 19 / Vite / Tailwind 4 | On-device web UI (setup, monitor, configuration) |
-| `lelamp/` | Python 3.12 / FastAPI | Hardware drivers — servo, LED, audio (TTS/STT/VAD), camera, vision, GC9A01 display |
-| `lamp-buddy/` | Swift / macOS | Mac companion app for remote computer use (open apps, type, click via voice) |
-| `dlbackend/` | — | Supporting backend service |
-| `claude-desktop-buddy/` | Go | Companion BLE pairing app for Claude Desktop |
-| `hardware/` | — | Schematics, BOM, mechanical and electrical notes |
-| `imager/` | — | Tooling to build flashable SBC images (Pi / OrangePi) |
-| `docs/` | Markdown | Architecture, flows, use cases (bilingual: `docs/` EN + `docs/vi/` VI) |
-| `scripts/` | Bash | Deploy, OTA upload, and test scripts |
+| File | Role | Consumer |
+|------|------|----------|
+| `DEVICE.md` | the **body** — what hardware is present | the OS, at boot |
+| `SKILL.md` | the **hands** — what it can do | the gateway/LLM |
+| `SOUL.md` | the **self** — who it is | the gateway/LLM |
+| `SAFETY.md` | the **bounds** — what it must never do | the OS (deterministic) |
 
-## Quick Start
+The contract that governs them lives under [`contract/`](contract/). See
+[`contract/DEVICE-SPEC.md`](contract/DEVICE-SPEC.md) and
+[`contract/capabilities.md`](contract/capabilities.md).
 
-### Build the Go backend (cross-compiled to linux/arm64 — Pi or OrangePi)
+## Repository layout
+
+> **In transition.** This repo was forked from `autonomous-lamp` and is being
+> restructured into the platform layout below. Today the runtime still lives in `lamp/`
+> (Go) and `lelamp/` (Python); those move to `os/core` and `os/hal` in the restructure
+> (see the migration plan). Build commands below still reference the current paths.
+
+```
+contract/         FROZEN — DEVICE-SPEC, capability vocabulary (the ABI 3rd parties build on)
+os/               the OS
+  core/           Go framework: managers, gateway bridge, OTA, network, sensing routing   (← lamp/)
+  hal/
+    runtime/      capability host — mounts what DEVICE.md declares                          (← lelamp/server)
+    drivers/      by subsystem: motion, audio, vision, light, display, sensing             (← lelamp/service/*)
+    platform/     by board: raspberry_pi_5, orangepi_sun60, …                              (← consolidated)
+  web/  imager/
+devices/          per-device contracts: lamp/, intern/, examples/minimal/
+skills/           the SKILL.md app layer                                                    (← resources/openclaw-skills)
+souls/            character packs (default open; premium ships separately)
+docs/             architecture, flows, board bring-up (EN + VI)
+companions/       lamp-buddy (macOS), desktop-buddy
+```
+
+## Quick start (current paths, pre-restructure)
 
 ```bash
-make lamp-build            # builds lamp/lamp-server (linux/arm64)
-make lamp-build-bootstrap  # builds lamp/bootstrap-server (OTA worker)
-make lamp-generate         # regenerate Wire DI after provider changes
-make lamp-lint             # golangci-lint
+# Go framework (cross-compiled to linux/arm64 — Pi or OrangePi)
+make lamp-build            # builds the system server
 make lamp-test             # go test ./...
-```
 
-Version is injected at build time via `ldflags` (`VERSION` from `git describe`).
-
-### Run the web UI in dev mode
-
-```bash
-make web-install
-make web-dev               # Vite dev server
-make web-build             # production bundle to lamp/web/dist
-```
-
-### LeLamp (runs on the Pi or OrangePi)
-
-```bash
-cd lelamp && uv sync       # install Python deps
+# Hardware runtime (runs on the Pi or OrangePi)
+cd lelamp && uv sync
 make lelamp-dev            # uvicorn reload on :5001
-make lelamp-run            # production-style run
 make lelamp-test           # pytest
+
+# Web UI
+make web-install && make web-dev
 ```
 
-### Claude Desktop Buddy
+## API convention
 
-```bash
-make buddy-build           # builds claude-desktop-buddy/buddy-plugin (linux/arm64)
-```
+All HTTP endpoints return `{"status": 1, "data": <payload>, "message": null}` on
+success and `{"status": 0, "data": null, "message": "error"}` on failure.
 
-### OTA upload (artifact → GCS)
+## Governance & license
 
-```bash
-make upload-lamp           # push lamp-server
-make upload-bootstrap      # push bootstrap-server
-make upload-lelamp         # push Python runtime
-make upload-web            # push web/dist
-make upload-skills         # push resources/openclaw-skills/ (skill files for the agentic gateway)
-make upload-all            # everything except the gateway itself
-make upload-openclaw 2026.5.27  # explicit gateway version bump (not in upload-all)
-```
+Autonomous (the OS) is **Apache 2.0** and fully open. Premium souls, the memory
+continuity service, Grid inference, and the skill store ship separately — the AOSP/GMS
+split. The project is BDFL-governed. See [`GOVERNANCE.md`](GOVERNANCE.md),
+[`CONTRIBUTING.md`](CONTRIBUTING.md), and [`MAINTAINERS`](MAINTAINERS).
 
-## API Response Convention
-
-All Lamp HTTP endpoints return:
-
-```jsonc
-// success
-{"status": 1, "data": <payload>, "message": null}
-// failure
-{"status": 0, "data": null, "message": "error"}
-```
-
-## Voice Pipeline (brief)
-
-```
-Mic (always on) → Local VAD (RMS, free)
-    → Speech → Autonomous STT
-        → "hey lamp, …"  → voice_command → local intent → execute (~50ms)
-        → other speech   → voice         → agentic gateway
-    → 3s silence → close STT stream
-```
-
-## Sensing Pipeline (brief)
-
-LeLamp ticks every 2s and runs pluggable detectors on one frame: motion (frame diff), face recognition (InsightFace), ambient light, sound RMS. Events with images (motion, face enter) are JPEG-encoded; face-enter frames are annotated with bounding boxes (green = friend, red = stranger). Events are POSTed to Lamp Server, which either matches a local intent or forwards to the agentic gateway with vision. Cooldowns protect LLM cost: motion/sound 60s, presence 10s, light 30s.
-
-## Documentation
-
-- `docs/overview.md` — architecture deep dive
-- `docs/lamp-server.md` — Lamp Server HTTP API and startup
-- `docs/led-control.md` — LED states, effects, animations
-- `docs/setup-flow.md` — first-boot provisioning
-- `docs/flow-monitor.md` — turn pipeline, JSONL logs, SSE
-- `docs/mqtt.md` — MQTT dispatch
-- `docs/bootstrap-ota.md` — OTA worker
-- `docs/sensing-behavior.md`, `docs/sensing-tuning.md` — sensing
-- `docs/habit-tracking.md` — pattern-based predictive nudging
-- `docs/vision-tracking.md` — object follow, servo tracking
-- `docs/web-ui.md` — web UI
-- `docs/DEV-MULTI-IDE.md` — Cursor + Claude Code conventions
-- `CLAUDE.md` — coding standards and AI assistant rules
-
-Every English doc has a Vietnamese mirror under `docs/vi/`.
-
-## Module
-
-Go module: `go-lamp.autonomous.ai` — Go 1.24 — target Linux ARM64.
+Build an **Autonomous-compatible** device: write a `DEVICE.md`, implement any missing
+drivers against the HAL contract, ship a `SOUL.md`. You never fork the OS.

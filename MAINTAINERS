@@ -1,0 +1,18 @@
+# Autonomous — Maintainers
+
+Governance model: BDFL, in the Linux tradition. Final decisions rest with the lead
+maintainer, not a committee. See GOVERNANCE.md.
+
+Lead maintainer:
+  @deehw   (GitHub)   — contact: TBD
+
+Subsystems (owner; path):
+  OS core / managers        @deehw    os/core/
+  HAL runtime + drivers     @deehw    os/hal/
+  Board platform support    @deehw    os/hal/platform/
+  Device contracts (frozen) @deehw    contract/, devices/
+  Skills                    @deehw    skills/
+  Web UI                    @deehw    os/web/
+
+To propose a change, open a PR against the relevant subsystem and tag its owner.
+Changes under contract/ are ABI changes and require lead-maintainer sign-off.
