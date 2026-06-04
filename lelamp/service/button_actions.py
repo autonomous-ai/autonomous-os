@@ -166,6 +166,7 @@ def single_click_action(source: str = "button"):
 def triple_click_action(source: str = "button"):
     """Announce + reboot OS."""
     logger.info("%s triple click -- rebooting OS", source)
+    logger.info("%s LED: amber pulse (reboot armed)", source)
     if _tts_available():
         state.tts_service.speak_cached(_phrase(PHRASE_REBOOT))
         # speak_cached is async; reboot kicks the OS before audio plays
@@ -201,6 +202,7 @@ def head_pat_action(source: str = "touch"):
 def long_press_action(source: str = "button"):
     """Announce, park servos, then shutdown OS."""
     logger.info("%s long press -- shutting down OS", source)
+    logger.info("%s LED: red solid (shutdown armed)", source)
 
     # Step 1: TTS announce.
     if _tts_available():
@@ -245,6 +247,7 @@ def factory_reset_action(source: str = "button"):
     /api/system/factory-reset endpoint allows loopback origin without Bearer
     (see lamp server.go adminOrLoopbackAuth)."""
     logger.info("%s factory-reset hold (10s+) -- triggering soft reset", source)
+    logger.info("%s LED: red solid (factory-reset armed)", source)
 
     # Step 1: TTS announce so the user knows the gesture registered. Brief —
     # the reboot lands ~5s after lamp-server accepts the POST, we want the
