@@ -32,6 +32,7 @@ import logging
 import threading
 import time
 
+from lelamp.platform.board import board_profile
 from lelamp.service.button_actions import (
     head_pat_action,
     single_click_action,
@@ -39,9 +40,8 @@ from lelamp.service.button_actions import (
 
 logger = logging.getLogger(__name__)
 
-# OrangePi sun60iw2 (4 Pro / A733): TTP223 pads on gpiochip0 lines 96-99.
-OPI_SUN60_TTP223_CHIP = 0
-OPI_SUN60_TTP223_LINES = [96, 97, 98, 99]
+# TTP223 pad wiring (chip / lines) lives in the board platform layer —
+# os/hal/lelamp/platform/board.py (BoardProfile.touch).
 
 # Session gap: edges within this window of the previous edge belong to
 # the same session. 200ms comfortably exceeds the observed burst length
@@ -73,42 +73,14 @@ PET_SESSION_THRESHOLD = 2
 PET_COOLDOWN_S = 1.5
 
 
-def _device_tree_model() -> str:
-    """Lower-cased /proc/device-tree/model contents, or '' if missing."""
-    try:
-        with open("/proc/device-tree/model", "r") as f:
-            return f.read().rstrip("\x00").strip().lower()
-    except OSError:
-        return ""
-
-
-def _is_orangepi_sun60() -> bool:
-    return "sun60iw2" in _device_tree_model()
-
-
-def _is_raspberry_pi_4() -> bool:
-    return "raspberry pi 4" in _device_tree_model()
-
-
-def _is_raspberry_pi_5() -> bool:
-    return "raspberry pi 5" in _device_tree_model()
-
-
 def _board_label() -> str:
-    if _is_orangepi_sun60():
-        return "orangepi-sun60"
-    if _is_raspberry_pi_5():
-        return "pi5"
-    if _is_raspberry_pi_4():
-        return "pi4"
-    return _device_tree_model() or "unknown"
+    return board_profile().id
 
 
 def _resolve_board_config():
-    """Return (chip, lines) or None if TTP223 isn't wired here."""
-    if _is_orangepi_sun60():
-        return (OPI_SUN60_TTP223_CHIP, OPI_SUN60_TTP223_LINES)
-    return None
+    """Return (chip, lines) or None if TTP223 isn't wired on this board."""
+    touch = board_profile().touch
+    return (touch.chip, touch.lines) if touch else None
 
 
 class TTP223Handler:

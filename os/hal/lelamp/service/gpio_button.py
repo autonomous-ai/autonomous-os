@@ -25,6 +25,7 @@ import time
 
 import lelamp.app_state as state
 from lelamp.presets import RGB_CMD_SOLID
+from lelamp.platform.board import board_profile
 from lelamp.service.base import Priority
 from lelamp.service.button_actions import (
     DOUBLE_CLICK_WINDOW,
@@ -48,41 +49,17 @@ LED_OFF = (0, 0, 0)
 # Pulse: 0.5 s on + 0.5 s off = 1 Hz full cycle.
 LED_PULSE_HALF_PERIOD_S = 0.5
 
-# Default wiring for Raspberry Pi 4/5 (BCM 17 on gpiochip0).
-PI_BUTTON_CHIP = 0
-PI_BUTTON_PIN = 17
-# wm8960 button on Pi 4/5: 100 ms wasn't enough (deterministic 2 callback
-# edges per physical click). Bump to 200 ms — still leaves 200 ms inside
-# DOUBLE_CLICK_WINDOW which is more than the typical human inter-click gap.
-PI_DEBOUNCE_NS = 200_000_000
-
-# OrangePi sun60iw2 (4 Pro / A733): button on header pin 11 = PL9 → gpiochip1 line 9.
-OPI_SUN60_BUTTON_CHIP = 1
-OPI_SUN60_BUTTON_PIN = 9
-# Same 200 ms as Pi — 250 ms made the triple-click gap window too tight
-# ([250, 400] ms) on OrangePi field-test, dropping click 2/3 when users
-# clicked at natural pace. If bounce comes back at 200 ms, prefer bumping
-# DOUBLE_CLICK_WINDOW over the debounce (single click is the hot path).
-OPI_SUN60_DEBOUNCE_NS = 200_000_000
-
-# lgpio.callback tick is nanoseconds. Both per-board values stay well under
-# DOUBLE_CLICK_WINDOW so triple click is still detectable.
-
-
-def _is_orangepi_sun60() -> bool:
-    """Detect Allwinner sun60iw2 (OrangePi 4 Pro / A733) via device-tree model."""
-    try:
-        with open("/proc/device-tree/model", "r") as f:
-            return "sun60iw2" in f.read().lower()
-    except OSError:
-        return False
+# Per-board button wiring (chip / line / debounce_ns) lives in the board
+# platform layer — os/hal/lelamp/platform/board.py — the single source of truth
+# shared across drivers. lgpio.callback tick is nanoseconds; both per-board
+# debounce values stay well under DOUBLE_CLICK_WINDOW so triple click is
+# still detectable.
 
 
 def _resolve_board_config() -> tuple[int, int, int]:
     """Return (chip, line, debounce_ns) for the wake button on this board."""
-    if _is_orangepi_sun60():
-        return OPI_SUN60_BUTTON_CHIP, OPI_SUN60_BUTTON_PIN, OPI_SUN60_DEBOUNCE_NS
-    return PI_BUTTON_CHIP, PI_BUTTON_PIN, PI_DEBOUNCE_NS
+    b = board_profile().button
+    return b.chip, b.line, b.debounce_ns
 
 
 class GPIOButtonHandler:

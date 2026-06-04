@@ -3,26 +3,9 @@ import time
 from typing import Any, List, Union
 from ..base import ServiceBase
 from lelamp.presets import RGB_CMD_PAINT, RGB_CMD_SOLID
+from lelamp.platform.board import board_profile
 
 logger = logging.getLogger("lelamp.rgb")
-
-
-def _is_pi5() -> bool:
-    """Detect Raspberry Pi 5 via device-tree model string."""
-    try:
-        with open("/proc/device-tree/model", "r") as f:
-            return "pi 5" in f.read().lower()
-    except OSError:
-        return False
-
-
-def _is_orangepi_sun60() -> bool:
-    """Detect Allwinner sun60iw2 (OrangePi 4 Pro / A733) via device-tree model."""
-    try:
-        with open("/proc/device-tree/model", "r") as f:
-            return "sun60iw2" in f.read().lower()
-    except OSError:
-        return False
 
 
 def _color_tuple(color_code):
@@ -175,24 +158,23 @@ class RGBService(ServiceBase):
         self.led_count = led_count
         self._driver = None
 
-        pi5 = _is_pi5()
-        opi_sun60 = _is_orangepi_sun60()
+        led = board_profile().led
         try:
-            if pi5:
-                self._driver = _StripSPI(led_count, led_brightness / 255.0)
-                self.logger.info("RGB using SPI driver (Pi 5, SPI0.0)")
-            elif opi_sun60:
+            if led.transport == "spi":
                 self._driver = _StripSPI(
                     led_count, led_brightness / 255.0,
-                    spi_bus=3, spi_device=0,
+                    spi_bus=led.spi_bus, spi_device=led.spi_device,
                 )
-                self.logger.info("RGB using SPI driver (OrangePi sun60iw2, SPI3.0)")
+                self.logger.info(
+                    "RGB using SPI driver (%s, SPI%d.%d)",
+                    board_profile().id, led.spi_bus, led.spi_device,
+                )
             else:
                 self._driver = _StripPWM(
                     led_count, led_pin, led_freq_hz, led_dma,
                     led_invert, led_brightness, led_channel,
                 )
-                self.logger.info("RGB using PWM driver (Pi 4)")
+                self.logger.info("RGB using PWM driver (%s)", board_profile().id)
         except Exception as e:
             self.logger.error(f"RGB driver init failed: {e}")
 
