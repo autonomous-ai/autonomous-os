@@ -812,6 +812,14 @@ for unit in lamp bootstrap lamp-lelamp openclaw avahi-daemon bluetooth ssh; do
   systemctl enable "\$unit" 2>/dev/null || true
 done
 
+# ── SPI3 overlay for WS2812 RGB LED ring (OrangePi 4 Pro A733) ───────────────
+echo "[stage] enable SPI3 overlay for LED ring"
+if grep -q "^overlays=" /boot/orangepiEnv.txt 2>/dev/null; then
+  sed -i "s/^overlays=.*/& spi3-cs0-cs1-spidev/" /boot/orangepiEnv.txt
+else
+  echo "overlays=spi3-cs0-cs1-spidev" >> /boot/orangepiEnv.txt
+fi
+
 echo "[stage] chroot Phase 2 complete"
 CHROOT_STAGES
 
