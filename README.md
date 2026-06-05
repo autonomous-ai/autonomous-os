@@ -32,6 +32,11 @@ disturbing the rest. Two ideas are borrowed deliberately: the **vertical layerin
 generic-vs-board split** inside the lower layers is Linux's (`drivers/` organized by
 subsystem, `arch/` by board). Reading top to bottom:
 
+![Autonomous architecture](docs/architecture/autonomous-stack.svg)
+
+<details>
+<summary>Same diagram as ASCII (for terminals / plain text)</summary>
+
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │  BEHAVIORS / AGENTS                          ≈ Android "System Apps"   │
@@ -72,6 +77,10 @@ subsystem, `arch/` by board). Reading top to bottom:
 ║  brain)     e-stop · motion limits · thermal · fail-safe states        ║
 ╚══════════════════════════════════════════════════════════════════════╝
 ```
+
+</details>
+
+📖 **Full architecture docs:** [overview](docs/architecture/overview.md) · [HAL](docs/architecture/hal.md) · [kernel](docs/architecture/kernel.md) — including [what "kernel" means here](docs/architecture/kernel.md) (it's Linux, not the gateway).
 
 ### Behaviors / Agents
 *Android analog: System Apps.* What the device actually does — a calm desk
