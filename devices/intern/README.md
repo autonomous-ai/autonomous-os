@@ -5,6 +5,8 @@ your laptop sleeps — the second reference device for [Autonomous](../../README
 
 🔗 **Product page:** https://www.autonomous.ai/ai-gadgets/intern
 
+![Autonomous Intern](images/intern.webp)
+
 ## What it is
 
 A compact computer that runs AI models locally and works for you over the chat apps you
@@ -22,6 +24,8 @@ laptop. Email triage, GitHub monitoring, scheduling, web scraping, booking, bill
 | Power | USB-C (5V / 5A) |
 | Models | ships with Sonnet 4.6 + Opus 4.6; any OpenAI-compatible model |
 | Warranty | 1 year · 30-day returns |
+
+![Intern specs](images/intern-specs.webp)
 
 ## Capabilities
 

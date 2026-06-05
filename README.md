@@ -13,10 +13,10 @@ build a third.
 
 ## Reference devices
 
-| Device | What it is | Declares |
-|--------|-----------|----------|
-| [**Autonomous Lamp**](devices/lamp) | 5-DOF expressive desk robot | the maximal set — audio, vision, motion, light, display, sensing |
-| [**Autonomous Intern**](devices/intern) | always-on desk agent | audio, vision, sensing — **no** motion or display |
+| | Device | What it is | Declares |
+|---|--------|-----------|----------|
+| <img src="devices/lamp/images/lamp.webp" width="210"> | [**Autonomous Lamp**](devices/lamp) | 5-DOF expressive desk robot | the maximal set — audio, vision, motion, light, display, sensing |
+| <img src="devices/intern/images/intern.webp" width="210"> | [**Autonomous Intern**](devices/intern) | always-on desk agent | audio, vision, sensing — **no** motion or display |
 
 Lamp and Intern run the **same OS image**. The only difference is which capabilities each
 device's `DEVICE.md` declares. That is the whole thesis: a new device is a `DEVICE.md`,
@@ -105,9 +105,9 @@ os/
     web/          on-device setup + monitor UI (React)
   hal/lelamp/     Python hardware runtime — drivers + the capability host
     platform/     board profiles + declaration-driven capability mounting
-devices/          per-device contracts: lamp/ (DEVICE · SOUL · SAFETY), intern/, examples/
+devices/          per-device: lamp/ (DEVICE · SOUL · SAFETY · README · hardware/), intern/, examples/
 companions/       lamp-buddy (macOS) · desktop-buddy
-docs/  imager/  scripts/  hardware/
+docs/  imager/  scripts/
 ```
 
 ## Quick start

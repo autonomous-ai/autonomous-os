@@ -5,11 +5,15 @@ to live on a desk — the first reference device for [Autonomous](../../README.m
 
 🔗 **Product page:** https://www.autonomous.ai/lamp
 
+![Autonomous Lamp](images/lamp.webp)
+
 ## What it is
 
 An always-on AI desk robot. Unlike a chat window you open on demand, Lamp is *present*: it
 sees your workspace, tracks faces and motion, remembers your work, and speaks up when
 something is relevant. The articulated arm physically turns to look at you.
+
+![Lamp tracking a person](images/lamp-tracking.webp)
 
 ## Hardware
 
@@ -44,3 +48,4 @@ Coming 2026 — [join the waitlist](https://www.autonomous.ai/lamp).
 - [`SOUL.md`](SOUL.md) — the default character (`lamp-companion`)
 - [`SAFETY.md`](SAFETY.md) — the deterministic bounds (e-stop, motion limits)
 - [Architecture](../../docs/architecture/overview.md)
+- [`hardware/`](hardware/) — assembly, wiring, power, BOM, CAD
