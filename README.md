@@ -30,23 +30,6 @@ depends only on the one below, so any layer can be replaced without touching the
 
 ![Autonomous architecture](docs/architecture/autonomous-stack.svg)
 
-<details>
-<summary>Same diagram as ASCII (for terminals)</summary>
-
-```
-  Skills              guard · mood · scene · habit
-  Agentic Runtime     OpenClaw · Hermes — runs skills, embodies SOUL.md
-  System Services     intent · network · OTA · sensing · skill manager   [os/core]
-  HAL · Capabilities  audio · vision · motion · light · display          [frozen]
-  Drivers             feetech · ws2812 · gc9a01 · camera · STT/TTS/VAD
-  Board Support       Raspberry Pi 4/5 · OrangePi
-  Linux Kernel        GPIO · SPI · I2C · ALSA · V4L2 · USB
-  ──────────────────────────────────────────────────────────────────────
-  Safety (the floor)  e-stop · motion limits · thermal · fail-safe
-```
-
-</details>
-
 **Skills** — what the device does: `guard`, `mood`, `scene`, `habit`. Each is a `SKILL.md`
 the runtime invokes. A skill is an *ability*; it is not the device's *character* — that's
 its `SOUL.md`. First-party skills use the same public contract a third party gets.
