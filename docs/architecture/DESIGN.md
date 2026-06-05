@@ -101,18 +101,19 @@ A `MAINTAINERS` file maps each subsystem and device class to an owner; third par
 upstream to that owner, not to one core team. A BDFL breaks ties and owns the frozen
 `contract/`. *(Linux.)* Docs live in-tree beside the code they describe.
 
-## Migration
+## Migration — done
 
-The architecture is ~85% in place. The remaining work is surfacing the lower layers and adding
-the conformance machinery, staged so nothing breaks:
+The restructure landed in CI-gated stages:
 
-1. **Conformance + base** (additive, safe): `contract/COMPATIBILITY.md`, `cts/`, `devices/_base`.
-2. **Surface the Go layer** (CI-validated): `os/core` → `os/services` (the runtime bridge
-   stays `os/services/internal/openclaw`).
-3. **Rename the HAL package** (`lelamp` → neutral) and split it into `os/hal/{drivers,board,runtime}`
-   — the one change that touches deployed identifiers (`/opt/lelamp`, systemd units, `LELAMP_*`
-   env, GCS `lamp/ota/lelamp`). Done as a **back-compat field migration**: add the new names,
-   alias the old, cut devices over an OTA cycle, then drop the old.
-4. **Adapt Lamp + Intern** onto the final structure; both stay one image, two manifests.
+1. ✅ **Conformance + base**: `contract/COMPATIBILITY.md`, `cts/`, `devices/_base`.
+2. ✅ **Go layer**: `os/core` → `os/services` (runtime bridge stays `os/services/internal/openclaw`).
+3. ✅ **HAL package**: `lelamp` → `hal`, surfaced as `os/hal/drivers` (by subsystem) +
+   `os/hal/board` (by board). Deploy identifiers renamed consistently (`/opt/hal`,
+   `lamp/ota/hal`, `python -m hal.server`). On-device `LELAMP_*` env vars remain as **legacy
+   aliases** until a field OTA cycle migrates them.
+4. ✅ **Lamp + Intern**: unchanged — they are `DEVICE.md` overlays over the shared core, so the
+   restructure didn't touch them; `cts` confirms both stay compliant (one image, two manifests).
 
-Stages 1–2 are safe and CI-gated. Stage 3 is coordinated with anyone shipping from this tree.
+Remaining (non-blocking): the inherited legacy lamp docs under `docs/*.md` still say "lelamp";
+they describe the old system and get a separate docs pass. The on-device deploy path
+(`setup.sh`/`imager`) was renamed but must be validated on real hardware before shipping.
