@@ -1,85 +1,49 @@
 # Architecture
 
-Autonomous is an open-source OS for **physical AI agents** — devices with cameras,
-microphones, speakers, displays, motors, lights, and sensors. It is structured as a
-**layered stack** modeled on Android: each layer exposes a defined interface to the
-layer above and depends only on the layer below, so any layer can be replaced without
-disturbing the others.
-
-Two ideas are borrowed deliberately:
-
-- **Vertical layering** (a Hardware Abstraction Layer above drivers) — from **Android**.
-- **Horizontal generic-vs-board split** inside the lower layers (`drivers/` by
-  subsystem, board specifics isolated) — from **Linux**.
+Autonomous is a layered stack. Each layer exposes an interface to the layer above and
+depends only on the one below, so any layer can be replaced without touching the others.
+(The layering follows Android; the driver/board split follows Linux.)
 
 ![Autonomous architecture](autonomous-stack.svg)
 
-## Terms
+## Layers
 
-| Term | Definition |
-|------|------------|
-| **Behavior / Agent** | A user-facing capability (companion, guard, mood). Implemented as a `SKILL.md` and shaped by a `SOUL.md`. The "app." |
-| **Agentic Gateway** | The reasoning engine (OpenClaw, Hermes, any LLM + skills + memory). The "brain." Reached over a WebSocket; swappable. |
-| **Framework / Manager** | A stable on-device system service (intent, network, OTA, sensing, skills). The public API third parties build on. |
-| **HAL** | The frozen, versioned **capability** interface (`audio.speak`, `motion.move`). What skills address — never hardware models. |
-| **Capability** | A named, device-agnostic ability declared in `DEVICE.md` and `contract/capabilities.md`. |
-| **Driver** | Code that talks to one piece of hardware (feetech servo, ws2812 LED). Internal and unstable by design. |
-| **Platform / Board** | Per-board wiring (Pi 4/5, OrangePi). One profile per board. |
-| **Kernel** | The **Linux kernel** (Raspberry Pi OS / OrangePi). Autonomous runs *on* it; it is not the gateway. See [kernel.md](kernel.md). |
+**Skills** — what the device does: `guard`, `mood`, `scene`, `habit`. Each is a `SKILL.md`
+the runtime invokes. A skill is an *ability*; it is not the device's *character* — that's
+its `SOUL.md`. First-party skills use the same public contract a third party gets.
+*(`os/core/resources/openclaw-skills`)*
 
-## The layers
+**Agentic Runtime** — OpenClaw, Hermes, or any LLM + skills + memory runtime. It runs the
+skills, embodies the device's `SOUL.md`, and decides what to act on. Swappable — and where
+Autonomous's differentiated value (the default brain, memory, character) lives.
+*(`os/core/internal/openclaw`)*
 
-### Behaviors / Agents
-*≈ Android System Apps.* What the device does — companion, guard, mood, scene. Each is
-a `SKILL.md` the gateway can invoke; character comes from `SOUL.md`. First-party
-behaviors are built on the **same public contract a third party gets** — no private back
-door. If the first-party companion needs an API the contract doesn't expose, the
-platform isn't real. *(Today under `os/core/resources/openclaw-skills`.)*
+**System Services** — the always-on device daemon, in Go: `intent` (fast local commands),
+`network`, `OTA`, `sensing` routing, the `skill` manager, health and logging. Runs with or
+without the runtime. *(`os/core`)*
 
-### Agentic Gateway — the brain
-*No Android analog.* The reasoning engine — **OpenClaw**, **Hermes**, or any LLM + skills
-+ memory runtime. Autonomous treats it as an abstract dependency over a WebSocket: it
-reads the device's `SOUL.md` (who it is) and `SKILL.md` files (what it can do) and
-decides what to do. Swappable by design — and where Autonomous's differentiated value
-sits (the good default brain, memory, and character). *(`os/core/internal/openclaw`.)*
+**HAL — Capabilities** — the frozen, versioned interface between software and hardware:
+`audio.speak`, `motion.move`, `vision.snapshot`. Skills call capabilities, never hardware
+models, so one skill runs on any body that declares the capability. A device's `DEVICE.md`
+declares which it has; the runtime mounts only those. *(`contract/` — see [hal.md](hal.md))*
 
-### Framework — the Managers
-*≈ Android Java API Framework.* The stable system services, in Go: **intent** (fast local
-commands with no round-trip to the brain), **network**/provisioning, **OTA**, **sensing**
-event routing, the **skill** manager (install + capability matching — the `PackageManager`
-analog), plus health and logging. This is the layer that makes Autonomous a *platform*
-rather than an app. *(`os/core`.)*
+**Drivers** — each talks to one piece of hardware: the feetech servo, ws2812 LED, gc9a01
+display, camera, the audio STT/TTS/VAD pipeline. *(`os/hal/lelamp/service`)*
 
-### HAL — the capability interface
-*≈ Android HAL.* The **frozen contract** between system and hardware: capabilities like
-`audio.speak`, `motion.move`, `vision.snapshot` — named, versioned, stable. Skills and
-agents address **capabilities, never hardware models**, so one skill runs on any body
-that declares the capability. The Autonomous equivalent of the Linux syscall ABI.
-Full detail in [hal.md](hal.md). *(`contract/`.)*
+**Board Support** — per-board wiring (GPIO lines, PWM-vs-SPI LED, touch) for Raspberry Pi
+4/5 and OrangePi. One profile per board; swapping silicon is a port, not a rewrite.
+*(`os/hal/lelamp/platform/board.py`)*
 
-### Drivers
-*≈ Linux kernel `drivers/`, by subsystem.* Code that talks to silicon — the **feetech**
-servo bus, **ws2812** LED, **gc9a01** display, **camera**, audio **STT/TTS/VAD**.
-Internal and unstable on purpose: when the HAL changes, every in-tree driver is fixed in
-the same commit (the Linux model). *(`os/hal/lelamp/service/*`.)*
+**Linux Kernel** — the vendor kernel (Raspberry Pi OS / OrangePi) we run on. We don't ship
+a kernel; drivers use its userspace interfaces (GPIO, SPI, ALSA, V4L2). *(see [kernel.md](kernel.md))*
 
-### Platform
-*≈ Linux `arch/`, by board.* Per-board wiring — GPIO lines, PWM-vs-SPI LED transport,
-touch lines — for **Pi 4/5** and **OrangePi**. One source of truth (`board_profile()`);
-a new board is one entry, and a silicon swap is a *port*, not a rewrite.
-*(`os/hal/lelamp/platform/board.py`.)*
+**Safety** — the floor. The e-stop, motion limits, thermal cutoff, and fail-safe behavior
+are enforced by deterministic policy, never by the runtime. `SOUL.md` is at the top (mutable
+character); `SAFETY.md` is at the bottom (immutable bounds) — character can't override the
+floor. *(`devices/<id>/SAFETY.md`)*
 
-### Safety + Power — the floor
-*≈ Android Power Management (the cross-cutting bottom bar).* For a **physical** agent the
-foundational concern is **safety**, so the e-stop, motion limits, thermal cutoffs, and
-fail-safe behavior live *below the brain*, enforced by deterministic OS policy — never by
-prompting the LLM. Note the geometry: `SOUL.md` is at the very top (mutable character),
-`SAFETY.md` at the very bottom (immutable bounds). The thing wearing the personality can
-never override the floor. *(`devices/<id>/SAFETY.md`.)*
+## See also
 
-## What's next
-
-- [hal.md](hal.md) — the Hardware Abstraction Layer in detail
-- [kernel.md](kernel.md) — what "kernel" means here (Linux, not the gateway)
-- [`../../contract/DEVICE-SPEC.md`](../../contract/DEVICE-SPEC.md) — the device contract
-- [`../../contract/capabilities.md`](../../contract/capabilities.md) — the capability vocabulary
+[hal.md](hal.md) · [kernel.md](kernel.md) ·
+[`DEVICE-SPEC.md`](../../contract/DEVICE-SPEC.md) ·
+[`capabilities.md`](../../contract/capabilities.md)

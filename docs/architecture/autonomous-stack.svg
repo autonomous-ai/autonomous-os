@@ -1,78 +1,71 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="920" height="980" viewBox="0 0 920 980" font-family="Segoe UI, Roboto, Helvetica, Arial, sans-serif">
   <rect x="0" y="0" width="920" height="980" fill="#fafafa"/>
-  <text x="460" y="34" text-anchor="middle" font-size="22" font-weight="700" fill="#212121">Autonomous — Architecture</text>
-  <text x="460" y="54" text-anchor="middle" font-size="12.5" fill="#616161">An open-source OS for physical AI agents. Each layer talks to the one below through a defined interface.</text>
+  <text x="460" y="36" text-anchor="middle" font-size="22" font-weight="700" fill="#212121">Autonomous</text>
+  <text x="460" y="56" text-anchor="middle" font-size="12.5" fill="#616161">An open-source OS for physical AI agents. Each layer exposes an interface to the one above and depends only on the one below.</text>
 
-  <!-- ============ B1  Behaviors / Agents ============ -->
+  <!-- Skills -->
   <g>
-    <rect x="20" y="72" width="880" height="112" rx="10" fill="#00897B"/>
-    <text x="40" y="100" font-size="19" font-weight="700" fill="#ffffff">Behaviors / Agents</text>
-    <text x="40" y="120" font-size="12.5" fill="#d6f1ec">Built as skills; character set by SOUL.md</text>
-    <text x="890" y="100" text-anchor="end" font-size="12" font-style="italic" fill="#b2dfdb">≈ Android System Apps</text>
+    <rect x="20" y="74" width="880" height="110" rx="10" fill="#00897B"/>
+    <text x="40" y="102" font-size="19" font-weight="700" fill="#ffffff">Skills</text>
+    <text x="40" y="122" font-size="12.5" fill="#d6f1ec">What the device does — each is a SKILL.md the runtime invokes</text>
     <g fill="#ffffff" opacity="0.92"><rect x="47" y="134" width="150" height="34" rx="6"/><rect x="211" y="134" width="150" height="34" rx="6"/><rect x="375" y="134" width="150" height="34" rx="6"/><rect x="539" y="134" width="150" height="34" rx="6"/><rect x="703" y="134" width="150" height="34" rx="6"/></g>
-    <g fill="#00695C" font-size="13" text-anchor="middle" font-weight="600"><text x="122" y="156">companion</text><text x="286" y="156">guard</text><text x="450" y="156">mood</text><text x="614" y="156">scene</text><text x="778" y="156">wellness</text></g>
+    <g fill="#00695C" font-size="13" text-anchor="middle" font-weight="600"><text x="122" y="156">guard</text><text x="286" y="156">mood</text><text x="450" y="156">scene</text><text x="614" y="156">habit</text><text x="778" y="156">wellbeing</text></g>
   </g>
 
-  <!-- ============ B2  Agentic Gateway ============ -->
+  <!-- Agentic Runtime -->
   <g>
-    <rect x="20" y="196" width="880" height="112" rx="10" fill="#3949AB"/>
-    <text x="40" y="224" font-size="19" font-weight="700" fill="#ffffff">Agentic Gateway — the brain</text>
-    <text x="40" y="244" font-size="12.5" fill="#cdd3f0">Swappable. Reads SOUL.md + SKILL.md over WebSocket</text>
-    <text x="890" y="224" text-anchor="end" font-size="12" font-style="italic" fill="#c5cae9">no Android analog</text>
-    <g fill="#ffffff" opacity="0.92"><rect x="50" y="258" width="250" height="34" rx="6"/><rect x="320" y="258" width="250" height="34" rx="6"/><rect x="590" y="258" width="263" height="34" rx="6"/></g>
-    <g fill="#283593" font-size="13" text-anchor="middle" font-weight="600"><text x="175" y="280">OpenClaw</text><text x="445" y="280">Hermes</text><text x="721" y="280">…any LLM + skills + memory</text></g>
+    <rect x="20" y="196" width="880" height="110" rx="10" fill="#3949AB"/>
+    <text x="40" y="224" font-size="19" font-weight="700" fill="#ffffff">Agentic Runtime</text>
+    <text x="40" y="244" font-size="12.5" fill="#cdd3f0">Runs skills · embodies the device's SOUL.md · swappable</text>
+    <g fill="#ffffff" opacity="0.92"><rect x="50" y="256" width="250" height="34" rx="6"/><rect x="320" y="256" width="250" height="34" rx="6"/><rect x="590" y="256" width="263" height="34" rx="6"/></g>
+    <g fill="#283593" font-size="13" text-anchor="middle" font-weight="600"><text x="175" y="278">OpenClaw</text><text x="445" y="278">Hermes</text><text x="721" y="278">…any LLM + memory runtime</text></g>
   </g>
 
-  <!-- ============ B3  Framework / Managers ============ -->
+  <!-- System Services -->
   <g>
-    <rect x="20" y="320" width="880" height="112" rx="10" fill="#43A047"/>
-    <text x="40" y="348" font-size="19" font-weight="700" fill="#ffffff">Framework — Managers</text>
-    <text x="40" y="368" font-size="12.5" fill="#d7efd8">os/core (Go) — the stable public API</text>
-    <text x="890" y="348" text-anchor="end" font-size="12" font-style="italic" fill="#c8e6c9">≈ Android Java API Framework</text>
-    <g fill="#ffffff" opacity="0.92"><rect x="45" y="382" width="125" height="34" rx="6"/><rect x="182" y="382" width="125" height="34" rx="6"/><rect x="319" y="382" width="125" height="34" rx="6"/><rect x="456" y="382" width="125" height="34" rx="6"/><rect x="593" y="382" width="125" height="34" rx="6"/><rect x="730" y="382" width="125" height="34" rx="6"/></g>
-    <g fill="#2E7D32" font-size="12.5" text-anchor="middle" font-weight="600"><text x="107" y="404">intent</text><text x="244" y="404">network</text><text x="381" y="404">OTA</text><text x="518" y="404">sensing</text><text x="655" y="404">skill mgr</text><text x="792" y="404">health/log</text></g>
+    <rect x="20" y="318" width="880" height="110" rx="10" fill="#43A047"/>
+    <text x="40" y="346" font-size="19" font-weight="700" fill="#ffffff">System Services</text>
+    <text x="40" y="366" font-size="12.5" fill="#d7efd8">os/core (Go) — always-on device daemon; runs with or without the runtime</text>
+    <g fill="#ffffff" opacity="0.92"><rect x="45" y="378" width="125" height="34" rx="6"/><rect x="182" y="378" width="125" height="34" rx="6"/><rect x="319" y="378" width="125" height="34" rx="6"/><rect x="456" y="378" width="125" height="34" rx="6"/><rect x="593" y="378" width="125" height="34" rx="6"/><rect x="730" y="378" width="125" height="34" rx="6"/></g>
+    <g fill="#2E7D32" font-size="12.5" text-anchor="middle" font-weight="600"><text x="107" y="400">intent</text><text x="244" y="400">network</text><text x="381" y="400">OTA</text><text x="518" y="400">sensing</text><text x="655" y="400">skill mgr</text><text x="792" y="400">health</text></g>
   </g>
 
-  <!-- ============ B4  HAL ============ -->
+  <!-- HAL -->
   <g>
-    <rect x="20" y="444" width="880" height="112" rx="10" fill="#00ACC1"/>
-    <text x="40" y="472" font-size="19" font-weight="700" fill="#ffffff">HAL — capability interface</text>
-    <text x="40" y="492" font-size="12.5" fill="#cdeef3">contract/ — FROZEN, versioned. Skills address capabilities, never models</text>
-    <text x="890" y="472" text-anchor="end" font-size="12" font-style="italic" fill="#b2ebf2">≈ Android HAL</text>
-    <g fill="#ffffff" opacity="0.92"><rect x="45" y="506" width="125" height="34" rx="6"/><rect x="182" y="506" width="125" height="34" rx="6"/><rect x="319" y="506" width="125" height="34" rx="6"/><rect x="456" y="506" width="125" height="34" rx="6"/><rect x="593" y="506" width="125" height="34" rx="6"/><rect x="730" y="506" width="125" height="34" rx="6"/></g>
-    <g fill="#00838F" font-size="12.5" text-anchor="middle" font-weight="600"><text x="107" y="528">audio</text><text x="244" y="528">vision</text><text x="381" y="528">motion</text><text x="518" y="528">light</text><text x="655" y="528">display</text><text x="792" y="528">presence</text></g>
+    <rect x="20" y="440" width="880" height="110" rx="10" fill="#00ACC1"/>
+    <text x="40" y="468" font-size="19" font-weight="700" fill="#ffffff">HAL — Capabilities</text>
+    <text x="40" y="488" font-size="12.5" fill="#cdeef3">contract/ — frozen, versioned. Skills call capabilities, never hardware</text>
+    <g fill="#ffffff" opacity="0.92"><rect x="45" y="500" width="125" height="34" rx="6"/><rect x="182" y="500" width="125" height="34" rx="6"/><rect x="319" y="500" width="125" height="34" rx="6"/><rect x="456" y="500" width="125" height="34" rx="6"/><rect x="593" y="500" width="125" height="34" rx="6"/><rect x="730" y="500" width="125" height="34" rx="6"/></g>
+    <g fill="#00838F" font-size="12.5" text-anchor="middle" font-weight="600"><text x="107" y="522">audio</text><text x="244" y="522">vision</text><text x="381" y="522">motion</text><text x="518" y="522">light</text><text x="655" y="522">display</text><text x="792" y="522">presence</text></g>
   </g>
 
-  <!-- ============ B5  Drivers + Platform ============ -->
+  <!-- Drivers + Board Support -->
   <g>
-    <rect x="20" y="568" width="880" height="166" rx="10" fill="#FB8C00"/>
-    <text x="40" y="596" font-size="19" font-weight="700" fill="#ffffff">Drivers</text>
-    <text x="40" y="616" font-size="12.5" fill="#ffe7c4">os/hal/lelamp — by subsystem (internal, unstable, in-tree)</text>
-    <text x="890" y="596" text-anchor="end" font-size="12" font-style="italic" fill="#ffe0b2">≈ Linux kernel drivers/</text>
-    <g fill="#ffffff" opacity="0.92"><rect x="47" y="626" width="150" height="32" rx="6"/><rect x="211" y="626" width="150" height="32" rx="6"/><rect x="375" y="626" width="150" height="32" rx="6"/><rect x="539" y="626" width="150" height="32" rx="6"/><rect x="703" y="626" width="150" height="32" rx="6"/></g>
-    <g fill="#E65100" font-size="12.5" text-anchor="middle" font-weight="600"><text x="122" y="647">feetech</text><text x="286" y="647">ws2812</text><text x="450" y="647">gc9a01</text><text x="614" y="647">camera</text><text x="778" y="647">STT/TTS/VAD</text></g>
-    <text x="40" y="682" font-size="14" font-weight="700" fill="#ffffff">Platform</text>
-    <text x="142" y="682" font-size="12" fill="#ffe7c4">by board — platform/board.py</text>
-    <text x="890" y="682" text-anchor="end" font-size="12" font-style="italic" fill="#ffe0b2">≈ Linux arch/</text>
-    <g fill="#ffffff" opacity="0.92"><rect x="50" y="690" width="250" height="32" rx="6"/><rect x="320" y="690" width="250" height="32" rx="6"/><rect x="590" y="690" width="263" height="32" rx="6"/></g>
-    <g fill="#E65100" font-size="12.5" text-anchor="middle" font-weight="600"><text x="175" y="711">raspberry_pi_5</text><text x="445" y="711">raspberry_pi_4</text><text x="721" y="711">orangepi_sun60 …</text></g>
+    <rect x="20" y="562" width="880" height="164" rx="10" fill="#FB8C00"/>
+    <text x="40" y="590" font-size="19" font-weight="700" fill="#ffffff">Drivers</text>
+    <text x="40" y="610" font-size="12.5" fill="#ffe7c4">os/hal/lelamp — each talks to one piece of hardware</text>
+    <g fill="#ffffff" opacity="0.92"><rect x="47" y="620" width="150" height="32" rx="6"/><rect x="211" y="620" width="150" height="32" rx="6"/><rect x="375" y="620" width="150" height="32" rx="6"/><rect x="539" y="620" width="150" height="32" rx="6"/><rect x="703" y="620" width="150" height="32" rx="6"/></g>
+    <g fill="#E65100" font-size="12.5" text-anchor="middle" font-weight="600"><text x="122" y="641">feetech</text><text x="286" y="641">ws2812</text><text x="450" y="641">gc9a01</text><text x="614" y="641">camera</text><text x="778" y="641">STT/TTS/VAD</text></g>
+    <text x="40" y="676" font-size="15" font-weight="700" fill="#ffffff">Board Support</text>
+    <text x="183" y="676" font-size="12" fill="#ffe7c4">platform/board.py — per-board wiring; a new board is one profile</text>
+    <g fill="#ffffff" opacity="0.92"><rect x="50" y="686" width="250" height="32" rx="6"/><rect x="320" y="686" width="250" height="32" rx="6"/><rect x="590" y="686" width="263" height="32" rx="6"/></g>
+    <g fill="#E65100" font-size="12.5" text-anchor="middle" font-weight="600"><text x="175" y="707">Raspberry Pi 5</text><text x="445" y="707">Raspberry Pi 4</text><text x="721" y="707">OrangePi</text></g>
   </g>
 
-  <!-- ============ B6  Linux Kernel ============ -->
+  <!-- Linux Kernel -->
   <g>
-    <rect x="20" y="746" width="880" height="112" rx="10" fill="#E64A19"/>
-    <text x="40" y="774" font-size="19" font-weight="700" fill="#ffffff">Linux Kernel</text>
-    <text x="40" y="794" font-size="12.5" fill="#ffd9cc">Raspberry Pi OS / OrangePi — the actual kernel. We run on the vendor kernel; we don't ship one.</text>
-    <text x="890" y="774" text-anchor="end" font-size="12" font-style="italic" fill="#ffccbc">same as Android</text>
-    <g fill="#ffffff" opacity="0.92"><rect x="45" y="808" width="125" height="34" rx="6"/><rect x="182" y="808" width="125" height="34" rx="6"/><rect x="319" y="808" width="125" height="34" rx="6"/><rect x="456" y="808" width="125" height="34" rx="6"/><rect x="593" y="808" width="125" height="34" rx="6"/><rect x="730" y="808" width="125" height="34" rx="6"/></g>
-    <g fill="#BF360C" font-size="12.5" text-anchor="middle" font-weight="600"><text x="107" y="830">GPIO chardev</text><text x="244" y="830">SPI</text><text x="381" y="830">I2C</text><text x="518" y="830">ALSA</text><text x="655" y="830">V4L2</text><text x="792" y="830">USB</text></g>
+    <rect x="20" y="738" width="880" height="110" rx="10" fill="#E64A19"/>
+    <text x="40" y="766" font-size="19" font-weight="700" fill="#ffffff">Linux Kernel</text>
+    <text x="40" y="786" font-size="12.5" fill="#ffd9cc">Raspberry Pi OS / OrangePi — we run on the vendor kernel; we don't ship one</text>
+    <g fill="#ffffff" opacity="0.92"><rect x="45" y="798" width="125" height="34" rx="6"/><rect x="182" y="798" width="125" height="34" rx="6"/><rect x="319" y="798" width="125" height="34" rx="6"/><rect x="456" y="798" width="125" height="34" rx="6"/><rect x="593" y="798" width="125" height="34" rx="6"/><rect x="730" y="798" width="125" height="34" rx="6"/></g>
+    <g fill="#BF360C" font-size="12.5" text-anchor="middle" font-weight="600"><text x="107" y="820">GPIO</text><text x="244" y="820">SPI</text><text x="381" y="820">I2C</text><text x="518" y="820">ALSA</text><text x="655" y="820">V4L2</text><text x="792" y="820">USB</text></g>
   </g>
 
-  <!-- ============ B7  Safety + Power floor ============ -->
+  <!-- Safety floor -->
   <g>
-    <rect x="20" y="870" width="880" height="90" rx="10" fill="#C62828"/>
-    <text x="460" y="902" text-anchor="middle" font-size="18" font-weight="700" fill="#ffffff">Safety + Power — the floor</text>
-    <text x="460" y="924" text-anchor="middle" font-size="12.5" fill="#ffcdd2">SAFETY.md — deterministic, always on, below the brain</text>
-    <text x="460" y="944" text-anchor="middle" font-size="12.5" fill="#ffffff" font-weight="600">e-stop · motion limits · thermal cutoff · fail-safe states</text>
+    <rect x="20" y="860" width="880" height="90" rx="10" fill="#C62828"/>
+    <text x="460" y="892" text-anchor="middle" font-size="18" font-weight="700" fill="#ffffff">Safety — the floor</text>
+    <text x="460" y="914" text-anchor="middle" font-size="12.5" fill="#ffcdd2">SAFETY.md — deterministic, always on, below the runtime</text>
+    <text x="460" y="934" text-anchor="middle" font-size="12.5" fill="#ffffff" font-weight="600">e-stop · motion limits · thermal cutoff · fail-safe states</text>
   </g>
 </svg>
