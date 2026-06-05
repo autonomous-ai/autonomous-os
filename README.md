@@ -62,36 +62,31 @@ The contract that governs them lives under [`contract/`](contract/). See
 
 ## Repository layout
 
-> **In transition.** This repo was forked from `autonomous-lamp` and is being
-> restructured into the platform layout below. Today the runtime still lives in `lamp/`
-> (Go) and `lelamp/` (Python); those move to `os/core` and `os/hal` in the restructure
-> (see the migration plan). Build commands below still reference the current paths.
-
 ```
 contract/         FROZEN — DEVICE-SPEC, capability vocabulary (the ABI 3rd parties build on)
-os/               the OS
-  core/           Go framework: managers, gateway bridge, OTA, network, sensing routing   (← lamp/)
-  hal/
-    runtime/      capability host — mounts what DEVICE.md declares                          (← lelamp/server)
-    drivers/      by subsystem: motion, audio, vision, light, display, sensing             (← lelamp/service/*)
-    platform/     by board: raspberry_pi_5, orangepi_sun60, …                              (← consolidated)
-  web/  imager/
-devices/          per-device contracts: lamp/, intern/, examples/minimal/
-skills/           the SKILL.md app layer                                                    (← resources/openclaw-skills)
-souls/            character packs (default open; premium ships separately)
-docs/             architecture, flows, board bring-up (EN + VI)
-companions/       lamp-buddy (macOS), desktop-buddy
+os/
+  core/           Go framework: managers, gateway bridge, OTA, network, sensing routing
+    web/          on-device setup + monitor UI (React)
+  hal/lelamp/     Python hardware runtime — drivers + the capability host
+    platform/     board profiles (Linux arch seam) + capability mounting (Android seam)
+devices/          per-device contracts: lamp/ (DEVICE · SOUL · SAFETY), intern/, examples/
+companions/       lamp-buddy (macOS) · desktop-buddy
+docs/  imager/  scripts/  hardware/
 ```
 
-## Quick start (current paths, pre-restructure)
+Reference devices live in `devices/`; the OS runtime in `os/`. Splitting the HAL
+into `runtime/ drivers/ platform/` and lifting `skills/` + `souls/` to the top level
+are planned follow-ups.
+
+## Quick start
 
 ```bash
 # Go framework (cross-compiled to linux/arm64 — Pi or OrangePi)
-make lamp-build            # builds the system server
+make lamp-build            # builds the system server (os/core)
 make lamp-test             # go test ./...
 
 # Hardware runtime (runs on the Pi or OrangePi)
-cd lelamp && uv sync
+cd os/hal/lelamp && uv sync
 make lelamp-dev            # uvicorn reload on :5001
 make lelamp-test           # pytest
 
