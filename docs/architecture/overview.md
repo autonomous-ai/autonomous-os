@@ -8,39 +8,33 @@ depends only on the one below, so any layer can be replaced without touching the
 
 ## Layers
 
-**Skills** — what the device does: `guard`, `mood`, `scene`, `habit`. Each is a `SKILL.md`
-the runtime invokes. A skill is an *ability*; it is not the device's *character* — that's
-its `SOUL.md`. First-party skills use the same public contract a third party gets.
-*(`skills/`)*
+**Skills** — what the device does: `guard`, `mood`, `scene`, `habit`, `wellbeing`. Each is a
+`SKILL.md` the runtime invokes. A skill is an *ability*; the device's *character* is its
+`SOUL.md`. First-party skills use the same public contract a third party gets. *(`skills/`)*
 
-**Agentic Runtime** — OpenClaw, Hermes, or any LLM + skills + memory runtime. It runs the
-skills, embodies the device's `SOUL.md`, and decides what to act on. Swappable — and where
-Autonomous's differentiated value (the default brain, memory, character) lives.
-*(`os/services/internal/openclaw`)*
+**Tools** — how the runtime reaches beyond the device: **MCP** servers and the **CLI**. Skills
+are the device's own abilities (through the HAL); tools are external capabilities the runtime
+calls.
 
-**System Services** — the always-on device daemon, in Go: `intent` (fast local commands),
-`network`, `OTA`, `sensing` routing, the `skill` manager, health and logging. Runs with or
-without the runtime. *(`os/services`)*
+**System Managers** — the always-on Go daemon: `intent` (fast local commands), `network`,
+`OTA`, `sensing` routing, `health`, and `safety`. Deterministic — they run with or without the
+runtime, and safety-critical actions (e-stop, motion limits) are enforced here, never by the
+LLM. *(`os/services`)*
 
-**HAL — Capabilities** — the frozen, versioned interface between software and hardware:
-`audio.speak`, `motion.move`, `vision.snapshot`. Skills call capabilities, never hardware
-models, so one skill runs on any body that declares the capability. A device's `DEVICE.md`
-declares which it has; the runtime mounts only those. *(`contract/` — see [hal.md](hal.md))*
+**Agentic Runtime** — **OpenClaw**, **Hermes**, or a custom runtime. Runs the skills, embodies
+the device's `SOUL.md`, and decides what to act on. Swappable — and where Autonomous's
+differentiated value (the default brain, memory, character) lives. *(`os/services/internal/openclaw`)*
 
-**Drivers** — each talks to one piece of hardware: the feetech servo, ws2812 LED, gc9a01
-display, camera, the audio STT/TTS/VAD pipeline. *(`os/hal/drivers`)*
+**HAL — Capabilities** — the frozen, versioned interface: `audio`, `vision`, `motion`, `light`,
+`display`, `presence`. Skills call capabilities (`motion.move`), never hardware models, so one
+skill runs on any body that declares the capability — Lamp's servo arm and the Unitree Go2-W's
+wheels both serve `motion`. A device's `DEVICE.md` declares which it has; the runtime mounts only those.
+*(`contract/` + `os/hal` — see [hal.md](hal.md))*
 
-**Board Support** — per-board wiring (GPIO lines, PWM-vs-SPI LED, touch) for Raspberry Pi
-4/5 and OrangePi. One profile per board; swapping silicon is a port, not a rewrite.
-*(`os/hal/board/board.py`)*
-
-**Linux Kernel** — the vendor kernel (Raspberry Pi OS / OrangePi) we run on. We don't ship
-a kernel; drivers use its userspace interfaces (GPIO, SPI, ALSA, V4L2). *(see [kernel.md](kernel.md))*
-
-**Safety** — the floor. The e-stop, motion limits, thermal cutoff, and fail-safe behavior
-are enforced by deterministic policy, never by the runtime. `SOUL.md` is at the top (mutable
-character); `SAFETY.md` is at the bottom (immutable bounds) — character can't override the
-floor. *(`devices/<id>/SAFETY.md`)*
+**Linux Kernel** — the vendor kernel (Raspberry Pi OS / OrangePi, or a robot's onboard compute)
+we run on; we don't ship one. Our **Drivers** (`os/hal/drivers`, with per-board wiring in
+`os/hal/board`) are userspace programs talking to it through GPIO/SPI/ALSA/V4L2; **Power
+Management** is the foundation. *(see [kernel.md](kernel.md))*
 
 ## See also
 

@@ -17,10 +17,13 @@ build a third.
 |---|--------|-----------|----------|
 | <img src="devices/lamp/images/lamp.webp" width="210"> | [**Autonomous Lamp**](devices/lamp) | 5-DOF expressive desk robot | the maximal set — audio, vision, motion, light, display, sensing |
 | <img src="devices/intern/images/intern.webp" width="210"> | [**Autonomous Intern**](devices/intern) | always-on desk agent | audio, vision, sensing — **no** motion or display |
+| <img src="devices/unitree-go2w/images/go2-w.png" width="210"> | [**Unitree Go2-W**](devices/unitree-go2w) | a *different manufacturer's* mobile robot, running Autonomous | audio, vision (+ depth), motion (locomotion), sensing |
 
-Lamp and Intern run the **same OS image**. The only difference is which capabilities each
-device's `DEVICE.md` declares. That is the whole thesis: a new device is a `DEVICE.md`,
-not a fork.
+Lamp and Intern are **Autonomous's own** devices; the **Unitree Go2-W is a different
+manufacturer's** robot running the identical OS — the Android playbook (Android on Samsung,
+Pixel, …). All three run the **same OS image**; only their `DEVICE.md` differs. The Go2-W makes
+it vivid: its `motion` is **locomotion** driven by the Unitree SDK, yet a "come here" skill
+calling `motion.move` runs on it and on Lamp alike — skills address capabilities, not hardware.
 
 ## Architecture
 
@@ -32,53 +35,42 @@ depends only on the one below, so any layer can be replaced without touching the
 
 ### Skills
 
-What the device does: `guard`, `mood`, `scene`, `habit`. Each is a `SKILL.md`
-the runtime invokes. A skill is an *ability*; it is not the device's *character* — that's
-its `SOUL.md`. First-party skills use the same public contract a third party gets.
-*(`skills/`)*
+What the device does: `guard`, `mood`, `scene`, `habit`, `wellbeing`. Each is a `SKILL.md`
+the runtime invokes. A skill is an *ability*; the device's *character* is its `SOUL.md`.
+First-party skills use the same public contract a third party gets. *(`skills/`)*
+
+### Tools
+
+How the runtime reaches beyond the device — **MCP** servers and the **CLI**. Skills are the
+device's own abilities (through the HAL); tools are external capabilities the runtime calls.
+
+### System Managers
+
+The always-on Go daemon: `intent` (fast local commands), `network`, `OTA`, `sensing` routing,
+`health`, and `safety`. Deterministic — they run with or without the runtime, and
+**safety-critical actions (e-stop, motion limits) are enforced here, never by the LLM**.
+*(`os/services`)*
 
 ### Agentic Runtime
 
-OpenClaw, Hermes, or any LLM + skills + memory runtime. It runs the
-skills, embodies the device's `SOUL.md`, and decides what to act on. Swappable — and where
-Autonomous's differentiated value (the default brain, memory, character) lives.
-*(`os/services/internal/openclaw`)*
+**OpenClaw**, **Hermes**, or a custom runtime. Runs the skills, embodies the device's
+`SOUL.md`, and decides what to act on. Swappable — and where Autonomous's differentiated
+value (the default brain, memory, character) lives. *(`os/services/internal/openclaw`)*
 
-### System Services
+### Hardware Abstraction Layer (HAL)
 
-The always-on device daemon, in Go: `intent` (fast local commands),
-`network`, `OTA`, `sensing` routing, the `skill` manager, health and logging. Runs with or
-without the runtime. *(`os/services`)*
-
-### HAL — Capabilities
-
-The frozen, versioned interface between software and hardware:
-`audio.speak`, `motion.move`, `vision.snapshot`. Skills call capabilities, never hardware
-models, so one skill runs on any body that declares the capability. A device's `DEVICE.md`
-declares which it has; the runtime mounts only those. *(`contract/` — see [HAL](docs/architecture/hal.md))*
-
-### Drivers
-
-Each talks to one piece of hardware: the feetech servo, ws2812 LED, gc9a01
-display, camera, the audio STT/TTS/VAD pipeline. *(`os/hal/drivers`)*
-
-### Board Support
-
-Per-board wiring (GPIO lines, PWM-vs-SPI LED, touch) for Raspberry Pi
-4/5 and OrangePi. One profile per board; swapping silicon is a port, not a rewrite.
-*(`os/hal/board/board.py`)*
+The frozen, versioned interface: `audio`, `vision`, `motion`, `light`, `display`, `presence`.
+Skills call capabilities (`motion.move`), never hardware models — so one skill runs on any
+body that declares the capability. A device's `DEVICE.md` declares which it has; the runtime
+mounts only those. *(`contract/` + `os/hal` — see [HAL](docs/architecture/hal.md))*
 
 ### Linux Kernel
 
-The vendor kernel (Raspberry Pi OS / OrangePi) we run on. We don't ship
-a kernel; drivers use its userspace interfaces (GPIO, SPI, ALSA, V4L2). *(see [kernel](docs/architecture/kernel.md))*
-
-### Safety
-
-The floor. The e-stop, motion limits, thermal cutoff, and fail-safe behavior
-are enforced by deterministic policy, never by the runtime. `SOUL.md` is at the top (mutable
-character); `SAFETY.md` is at the bottom (immutable bounds) — character can't override the
-floor. *(`devices/<id>/SAFETY.md`)*
+The vendor kernel (Raspberry Pi OS / OrangePi, or the robot's onboard compute) we run on — we
+don't ship one. Our **Drivers** (`feetech`, `ws2812`, `gc9a01`, `camera`, `STT/TTS/VAD` in
+`os/hal/drivers`, with per-board wiring in `os/hal/board`) are userspace programs talking to
+it through GPIO/SPI/ALSA/V4L2; **Power Management** is the foundation.
+*(see [kernel](docs/architecture/kernel.md))*
 
 📖 Full docs: [overview](docs/architecture/overview.md) · [HAL](docs/architecture/hal.md) · [kernel](docs/architecture/kernel.md)
 
