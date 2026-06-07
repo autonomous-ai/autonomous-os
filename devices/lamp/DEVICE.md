@@ -47,4 +47,4 @@ speaker. Compute is a Raspberry Pi 4/5 or OrangePi (sun60). The body is wired pe
 
 `soul_ref` and `memory` point at the character and continuity layers **by name** — they
 are not embedded here. `DEVICE.md` is open and describes the body; the soul that
-inhabits it ships separately (see GOVERNANCE.md § Open vs. closed).
+inhabits it ships separately.

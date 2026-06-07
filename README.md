@@ -17,7 +17,7 @@ build a third.
 |---|--------|-----------|----------|
 | <img src="devices/lamp/images/lamp.webp" width="210"> | [**Autonomous Lamp**](devices/lamp) | 5-DOF expressive desk robot | the maximal set — audio, vision, motion, light, display, sensing |
 | <img src="devices/intern/images/intern.webp" width="210"> | [**Autonomous Intern**](devices/intern) | always-on desk agent | audio, vision, sensing — **no** motion or display |
-| <img src="devices/unitree-go2w/images/go2-w.png" width="210"> | [**Unitree Go2-W**](devices/unitree-go2w) | a *different manufacturer's* mobile robot, running Autonomous | audio, vision (+ depth), motion (locomotion), sensing |
+| <img src="devices/unitree-go2w/images/go2-w.webp" width="210"> | [**Unitree Go2-W**](devices/unitree-go2w) | a *different manufacturer's* mobile robot, running Autonomous | audio, vision (+ depth), motion (locomotion), sensing |
 
 Lamp and Intern are **Autonomous's own** devices; the **Unitree Go2-W is a different
 manufacturer's** robot running the identical OS — the Android playbook (Android on Samsung,
@@ -138,12 +138,8 @@ make web-install && make web-dev
 All HTTP endpoints return `{"status": 1, "data": <payload>, "message": null}` on success
 and `{"status": 0, "data": null, "message": "error"}` on failure.
 
-## Governance & license
+## License & contributing
 
-Autonomous (the OS) is **Apache 2.0** and fully open. Premium souls, the memory continuity
-service, Grid inference, and the skill store ship separately — open core, commercial
-services on top. The project is BDFL-governed. See [`GOVERNANCE.md`](GOVERNANCE.md),
-[`CONTRIBUTING.md`](CONTRIBUTING.md), and [`MAINTAINERS`](MAINTAINERS).
-
-Build an **Autonomous-compatible** device: write a `DEVICE.md`, implement any missing
-drivers against the HAL contract, ship a `SOUL.md`. You never fork the OS.
+**Apache 2.0** — fully open. Build a device by writing a `DEVICE.md`, a driver, and a
+`SOUL.md`; you never fork the OS. PRs welcome — vibe-coded ones too 🤖. See
+[CONTRIBUTING.md](CONTRIBUTING.md).

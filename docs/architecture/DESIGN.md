@@ -50,7 +50,7 @@ cts/                   conformance test suite — "is this an Autonomous device?
 tools/                 imager, scripts (build + SBC images)
 companions/            off-device apps (lamp-buddy, desktop-buddy)
 backend/               off-device cloud inference (dlbackend)
-docs/  MAINTAINERS  GOVERNANCE.md  ...
+docs/  LICENSE  CONTRIBUTING.md
 ```
 
 The `Drivers` and `Board` layers are surfaced as `os/hal/drivers/<subsystem>` and
@@ -92,14 +92,12 @@ very different robots.
 
 The OS is Apache-2.0 and fully open. The differentiated layer ships separately: premium
 character packs (`soul_ref`), memory continuity, Grid inference, the skill store. Anyone can
-build a device; the best experience comes from Autonomous. *(Android's AOSP/GMS split.)* See
-[GOVERNANCE.md](../../GOVERNANCE.md).
+build a device; the best experience comes from Autonomous. *(Android's AOSP/GMS split.)*
 
-## Governance — federated maintainers
+## Governance — light
 
-A `MAINTAINERS` file maps each subsystem and device class to an owner; third parties submit
-upstream to that owner, not to one core team. A BDFL breaks ties and owns the frozen
-`contract/`. *(Linux.)* Docs live in-tree beside the code they describe.
+Open contribution; a lead maintainer owns the frozen `contract/` and breaks ties. No
+committees, no heavy process. Docs live in-tree beside the code they describe.
 
 ## Migration — done
 
