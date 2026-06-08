@@ -10,28 +10,36 @@ This repo is developed across multiple AI-assisted environments. The following
 rules apply to all code changes:
 
 1. **Update docs on code change** - When changing behavior, architecture, or
-   APIs, update both the English (`docs/`) and Vietnamese (`docs/vi/`) docs.
-   Keep numbers, flows, endpoints, and states accurate with the code.
+   APIs, update both the English and Vietnamese docs. Keep numbers, flows,
+   endpoints, and states accurate with the code. Platform docs are in `docs/`;
+   lamp-specific docs are in `devices/lamp/docs/`.
+
+   **Platform docs** (`docs/` + `docs/vi/`):
 
    | Code area | English doc | Vietnamese doc |
    |-----------|-------------|----------------|
    | lamp-server, API, startup | `docs/lamp-server.md` | `docs/vi/lamp-server_vi.md` |
-   | LED, effects, states, animations | `docs/led-control.md` | `docs/vi/led-control_vi.md` |
    | Setup flow, provisioning | `docs/setup-flow.md` | `docs/vi/setup-flow_vi.md` |
    | Web UI, configuration pages | `docs/web-ui.md` | `docs/vi/web-ui_vi.md` |
    | Flow Monitor (turn pipeline, JSONL, SSE) | `docs/flow-monitor.md` | `docs/vi/flow-monitor_vi.md` |
    | Overall structure | `docs/overview.md` | `docs/vi/overview_vi.md` |
    | MQTT, dispatch, publish | `docs/mqtt.md` | `docs/vi/mqtt_vi.md` |
    | OTA, bootstrap | `docs/bootstrap-ota.md` | `docs/vi/bootstrap-ota.md` |
-   | Sensing behavior, sound escalation, reactions | `docs/sensing-behavior.md` | `docs/vi/sensing-behavior_vi.md` |
-   | Sensing threshold tuning (LeLamp config) | `docs/sensing-tuning.md` | `docs/vi/sensing-tuning_vi.md` (SER section) |
    | Speech emotion recognition (SER) | `docs/speech-emotion.md` | `docs/vi/speech-emotion_vi.md` |
-   | Habit tracking, pattern building, habit-aware nudge phrasing | `docs/habit-tracking.md` | `docs/vi/habit-tracking_vi.md` |
-   | Vision tracking, object follow, servo track | `docs/vision-tracking.md` | `docs/vi/vision-tracking_vi.md` |
-   | Physical controls (GPIO button, TTP223 touchpad, gestures, pet response) | `docs/physical-controls.md` | `docs/vi/physical-controls_vi.md` |
    | DL backend, load balancer, encryption, models | `docs/dlbackend.md` | `docs/vi/dlbackend_vi.md` |
-   | Lamp Buddy (Mac companion app for remote computer use) | `lamp-buddy/docs/lamp-buddy.md`, `lamp-buddy/docs/lamp-buddy-mvp.md`, `lamp-buddy/docs/release-signing.md` | `lamp-buddy/docs/vi/lamp-buddy_vi.md`, `lamp-buddy/docs/vi/lamp-buddy-mvp_vi.md`, `lamp-buddy/docs/vi/release-signing_vi.md` |
-   | Security test checklist | `docs/security-test.md` | _(no vi version)_ |
+
+   **Lamp-specific docs** (`devices/lamp/docs/` + `devices/lamp/docs/vi/`):
+
+   | Code area | English doc | Vietnamese doc |
+   |-----------|-------------|----------------|
+   | LED, effects, states, animations | `devices/lamp/docs/led-control.md` | `devices/lamp/docs/vi/led-control_vi.md` |
+   | Sensing behavior, sound escalation, reactions | `devices/lamp/docs/sensing-behavior.md` | `devices/lamp/docs/vi/sensing-behavior_vi.md` |
+   | Sensing threshold tuning | `devices/lamp/docs/sensing-tuning.md` | `devices/lamp/docs/vi/sensing-tuning_vi.md` |
+   | Habit tracking, pattern building, habit-aware nudge phrasing | `devices/lamp/docs/habit-tracking.md` | `devices/lamp/docs/vi/habit-tracking_vi.md` |
+   | Vision tracking, object follow, servo track | `devices/lamp/docs/vision-tracking.md` | `devices/lamp/docs/vi/vision-tracking_vi.md` |
+   | Physical controls (GPIO button, TTP223 touchpad, gestures, pet response) | `devices/lamp/docs/physical-controls.md` | `devices/lamp/docs/vi/physical-controls_vi.md` |
+   | Lamp Buddy (Mac companion app) | `lamp-buddy/docs/lamp-buddy.md`, `lamp-buddy/docs/lamp-buddy-mvp.md`, `lamp-buddy/docs/release-signing.md` | `lamp-buddy/docs/vi/lamp-buddy_vi.md`, `lamp-buddy/docs/vi/lamp-buddy-mvp_vi.md`, `lamp-buddy/docs/vi/release-signing_vi.md` |
+   | Security test checklist | `devices/lamp/docs/security-test.md` | _(no vi version)_ |
 
 2. **Comments in English** - Project standard.
 3. **Code is the single source of truth** - Docs reflect code, not the other
@@ -50,10 +58,10 @@ See `docs/DEV-MULTI-IDE.md` for full conventions.
 
 ## Project Overview
 
-AI Lamp OpenClaw is a Go backend and provisioning API for smart lamp devices
-running the OpenClaw AI gateway. It provides device onboarding (WiFi, LLM
-provider, messaging channel setup), LED control, OTA updates, and OpenClaw
-WebSocket integration.
+Autonomous is an open-source OS for physical AI agents. The Go backend
+(`os/services`) provides device onboarding (WiFi, LLM provider, messaging
+channel setup), OTA updates, and agent gateway integration. The brain is a
+swappable agentic runtime (OpenClaw, Hermes, or any LLM + skills + memory).
 
 **Module:** `go-lamp.autonomous.ai` | **Go 1.24** | **Target:** Linux ARM64
 
@@ -86,7 +94,7 @@ Version is injected at build time via ldflags.
 ### Two Executables
 
 - `cmd/lamp/main.go` - Main HTTP API server (Gin). Handles device setup,
-  network management, LED control, health checks, and OpenClaw gateway
+  network management, LED control, health checks, and agent gateway
   integration.
 - `cmd/bootstrap/main.go` - OTA bootstrap worker. Periodically checks for and
   applies updates.
