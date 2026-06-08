@@ -108,7 +108,7 @@ docs/             documentation, incl. docs/architecture/
 scripts/  imager/ build, OTA, and SBC image tooling
 
 # Off-device & integrations
-companions/       desktop companion apps (lamp-buddy, desktop-buddy)
+companions/       desktop companion apps (lamp-buddy, claude-desktop-buddy)
 chat-hooks/       on-device chat bridges (Twitch, web chat)
 dlbackend/        off-device cloud inference service
 ```

@@ -6,7 +6,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 # Directories
 LAMP_DIR       := os/services
 LELAMP_DIR     := os/hal
-BUDDY_DIR      := companions/desktop-buddy
+BUDDY_DIR      := companions/claude-desktop-buddy
 TWITCH_DIR     := chat-hooks/twitch-chat-hook
 AUTONOMOUS_DIR := chat-hooks/autonomous-chat-hook
 WEB_DIR        := $(LAMP_DIR)/web
