@@ -92,7 +92,7 @@ make web-build
 ```
 
 Go version is injected at build time via ldflags. HAL/web versions live in
-`os/services/VERSION_OS_SERVER` and `os/hal/VERSION_LELAMP` and are auto-bumped by the
+`os/services/VERSION_OS_SERVER` and `os/hal/VERSION_HAL` and are auto-bumped by the
 `make upload-*` release targets — do not hand-edit for releases.
 
 ## Architecture
@@ -123,7 +123,7 @@ Uses Google Wire for compile-time DI. After changing provider signatures, run
 - `domain/` - Shared data structures.
 - `server/serializers/` - Standard JSON response wrapper.
 - `server/config/` - Config management.
-- `lib/` - Shared libraries (mqtt, core/system, i18n, logger, lelamp HAL
+- `lib/` - Shared libraries (mqtt, core/system, i18n, logger, hal HAL
   client, safego, ...).
 - `web/` - React 19 + TypeScript + Vite + Tailwind CSS 4 SPA.
 
