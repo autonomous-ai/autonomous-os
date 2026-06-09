@@ -42,7 +42,7 @@
 #         - stage_enable_spi: dtparam=spi=on in config.txt
 #         - stage_backend_units: systemd services (bootstrap, lamp, lamp-hal) + software-update
 #         - stage_pulseaudio: PulseAudio echo cancellation (WebRTC AEC for mic/speaker)
-#         - stage_hal_uv: install uv (Python package manager for LeLamp)
+#         - stage_hal_uv: install uv (Python package manager for HAL)
 #         - stage_nginx: write nginx config with backend/hal/openclaw upstreams
 #         - stage_ap: hostapd, dnsmasq, dhcpcd, device-ap/sta-mode scripts
 #         - stage_nodejs_openclaw: Node.js 22 + OpenClaw gateway
@@ -54,7 +54,7 @@
 #   Copy base.img → golden.img, mount, chroot:
 #         - stage_ota_metadata: fetch build versions from GCS
 #         - stage_backend: download bootstrap-server + os-server binaries
-#         - stage_hal: download LeLamp Python app + uv sync
+#         - stage_hal: download HAL Python app + uv sync
 #         - stage_web: download web UI zip
 #   Take initial @factory snapshot (baked into image at build time)
 #   QC checks (verify binaries, configs, services, subvolumes)
@@ -847,7 +847,7 @@ EOF
 
 cat > /etc/systemd/system/lamp-hal.service <<'EOF'
 [Unit]
-Description=Lamp LeLamp Hardware Runtime
+Description=Lamp HAL Hardware Runtime
 After=network.target
 
 [Service]
@@ -943,14 +943,14 @@ elif [ "\$KIND" = "bootstrap" ]; then
   cp -f "\$b" /usr/local/bin/bootstrap-server; chmod +x /usr/local/bin/bootstrap-server; rm -rf "\$D"
   systemctl restart bootstrap 2>/dev/null || true
 elif [ "\$KIND" = "hal" ]; then
-  LELAMP_DIR="/opt/hal"
+  HAL_DIR="/opt/hal"
   curl -fsSL -o /tmp/hal.zip "\$URL"
-  unzip -o -q /tmp/hal.zip -d "\$LELAMP_DIR"
+  unzip -o -q /tmp/hal.zip -d "\$HAL_DIR"
   rm -f /tmp/hal.zip
   UV_BIN=\$(command -v uv || echo "/root/.local/bin/uv")
   find /root/.cache/uv -name "lerobot.egg-info" -type d 2>/dev/null | xargs rm -rf
-  rm -rf "\$LELAMP_DIR/.venv"
-  cd "\$LELAMP_DIR" && "\$UV_BIN" sync --python 3.12 --extra hardware || { echo "uv sync failed"; exit 1; }
+  rm -rf "\$HAL_DIR/.venv"
+  cd "\$HAL_DIR" && "\$UV_BIN" sync --python 3.12 --extra hardware || { echo "uv sync failed"; exit 1; }
   cd /
   systemctl restart lamp-hal 2>/dev/null || true
 elif [ "\$KIND" = "openclaw" ]; then
@@ -993,7 +993,7 @@ server {
   add_header X-Content-Type-Options "nosniff" always;
   add_header Referrer-Policy "no-referrer" always;
   add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
-  # Strict CSP. LeLamp self-hosts Swagger UI assets under /static/ (served
+  # Strict CSP. HAL self-hosts Swagger UI assets under /static/ (served
   # via the Lamp /api/hardware/* proxy), so no CDN whitelist or
   # `'unsafe-inline'` script-src is needed. Mirrors scripts/provision/setup.sh.
   add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' ws: wss:; frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'" always;
@@ -1341,9 +1341,9 @@ else
   echo 'name_servers="1.1.1.1 8.8.8.8"' > /etc/resolvconf.conf
 fi
 
-# ── stage: PulseAudio echo cancellation (for LeLamp mic/speaker) ─────────────
+# ── stage: PulseAudio echo cancellation (for HAL mic/speaker) ─────────────
 # PulseAudio WebRTC AEC prevents speaker audio from feeding back into the mic.
-# This is critical for LeLamp's voice interaction on the smart lamp hardware.
+# This is critical for HAL's voice interaction on the smart lamp hardware.
 echo "[stage] PulseAudio echo cancellation"
 PULSE_CONF="/etc/pulse/default.pa"
 if [ -f "\$PULSE_CONF" ] && ! grep -q "module-echo-cancel" "\$PULSE_CONF"; then
@@ -1369,11 +1369,11 @@ SUBSYSTEM=="sound", ATTR{id}=="sndi2s4", ENV{PULSE_IGNORE}="1"
 SUBSYSTEM=="sound", ATTR{id}=="wm8960soundcard", ENV{PULSE_IGNORE}="1"
 UDEV_EOF
 
-# ── stage: LeLamp (Python hardware runtime) ─────────────────────────────────
-# LeLamp manages hardware drivers (LED, servo, camera, audio) via a Python
+# ── stage: HAL (Python hardware runtime) ─────────────────────────────────
+# HAL manages hardware drivers (LED, servo, camera, audio) via a Python
 # FastAPI server on port 5001. Uses uv for Python env management.
 # Binary download happens in Phase 2 (overlay) — only uv install is in base.
-echo "[stage] Install uv (Python package manager for LeLamp)"
+echo "[stage] Install uv (Python package manager for HAL)"
 mkdir -p /opt/hal
 if ! command -v uv &>/dev/null; then
   curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -1855,72 +1855,72 @@ echo "[overlay] Install backend binaries"
 install_binary_from_zip "\$BOOTSTRAP_URL" /usr/local/bin/bootstrap-server "bootstrap"
 install_binary_from_zip "\$OS_SERVER_URL"      /usr/local/bin/os-server      "os-server"
 
-# ── stage: LeLamp (Python hardware runtime) ──────────────────────────────────
-echo "[overlay] Install LeLamp"
-LELAMP_DIR="/opt/hal"
-mkdir -p "\$LELAMP_DIR"
+# ── stage: HAL (Python hardware runtime) ──────────────────────────────────
+echo "[overlay] Install HAL"
+HAL_DIR="/opt/hal"
+mkdir -p "\$HAL_DIR"
 if [ -n "\$LELAMP_URL" ]; then
-  echo "[overlay] LeLamp: downloading from \$LELAMP_URL"
+  echo "[overlay] HAL: downloading from \$LELAMP_URL"
   retry "curl -fsSL -H 'Cache-Control: no-cache' -o /tmp/hal.zip '\$LELAMP_URL'" 5
-  echo "[overlay] LeLamp: extracting zip to \$LELAMP_DIR"
-  unzip -o -q /tmp/hal.zip -d "\$LELAMP_DIR"
+  echo "[overlay] HAL: extracting zip to \$HAL_DIR"
+  unzip -o -q /tmp/hal.zip -d "\$HAL_DIR"
   rm -f /tmp/hal.zip
-  echo "[overlay] LeLamp: zip contents:"
-  find "\$LELAMP_DIR" -maxdepth 2 -type f | head -30
+  echo "[overlay] HAL: zip contents:"
+  find "\$HAL_DIR" -maxdepth 2 -type f | head -30
 
   # Ensure uv is available (may be missing if base image was cached before uv stage)
   export PATH="/root/.local/bin:\$PATH"
   if ! command -v uv &>/dev/null; then
-    echo "[overlay] LeLamp: uv not found, installing..."
+    echo "[overlay] HAL: uv not found, installing..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
-    echo "[overlay] LeLamp: uv installed at \$(command -v uv || echo /root/.local/bin/uv)"
+    echo "[overlay] HAL: uv installed at \$(command -v uv || echo /root/.local/bin/uv)"
   else
-    echo "[overlay] LeLamp: uv found at \$(command -v uv)"
+    echo "[overlay] HAL: uv found at \$(command -v uv)"
   fi
 
-  # If zip extracted into a subdirectory, move contents up to LELAMP_DIR
-  if [ ! -f "\$LELAMP_DIR/pyproject.toml" ]; then
-    echo "[overlay] LeLamp: pyproject.toml not at root, searching subdirectories..."
-    SUBDIR=\$(find "\$LELAMP_DIR" -maxdepth 2 -name pyproject.toml 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
-    if [ -n "\$SUBDIR" ] && [ "\$SUBDIR" != "\$LELAMP_DIR" ]; then
-      echo "[overlay] LeLamp: moving from \$SUBDIR to \$LELAMP_DIR"
+  # If zip extracted into a subdirectory, move contents up to HAL_DIR
+  if [ ! -f "\$HAL_DIR/pyproject.toml" ]; then
+    echo "[overlay] HAL: pyproject.toml not at root, searching subdirectories..."
+    SUBDIR=\$(find "\$HAL_DIR" -maxdepth 2 -name pyproject.toml 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
+    if [ -n "\$SUBDIR" ] && [ "\$SUBDIR" != "\$HAL_DIR" ]; then
+      echo "[overlay] HAL: moving from \$SUBDIR to \$HAL_DIR"
       shopt -s dotglob 2>/dev/null || true
-      mv "\$SUBDIR"/* "\$LELAMP_DIR"/ 2>/dev/null || cp -a "\$SUBDIR"/. "\$LELAMP_DIR"/
+      mv "\$SUBDIR"/* "\$HAL_DIR"/ 2>/dev/null || cp -a "\$SUBDIR"/. "\$HAL_DIR"/
       shopt -u dotglob 2>/dev/null || true
     else
-      echo "[overlay] LeLamp: no pyproject.toml found anywhere under \$LELAMP_DIR"
+      echo "[overlay] HAL: no pyproject.toml found anywhere under \$HAL_DIR"
     fi
   fi
 
-  echo "[overlay] LeLamp: checking pyproject.toml..."
-  if [ ! -f "\$LELAMP_DIR/pyproject.toml" ]; then
-    echo "ERROR: pyproject.toml not found in \$LELAMP_DIR after extraction"
+  echo "[overlay] HAL: checking pyproject.toml..."
+  if [ ! -f "\$HAL_DIR/pyproject.toml" ]; then
+    echo "ERROR: pyproject.toml not found in \$HAL_DIR after extraction"
     echo "Directory listing:"
-    ls -laR "\$LELAMP_DIR"/ | head -50
+    ls -laR "\$HAL_DIR"/ | head -50
     exit 1
   fi
-  echo "[overlay] LeLamp: pyproject.toml found OK"
+  echo "[overlay] HAL: pyproject.toml found OK"
 
   # Clean stale lerobot distutils egg-info that blocks uv uninstall
   find /root/.cache/uv -name 'lerobot.egg-info' -type d 2>/dev/null | xargs -r rm -rf || true
-  rm -rf "\$LELAMP_DIR/.venv"
-  cd "\$LELAMP_DIR"
-  echo "[overlay] LeLamp: running uv sync --python 3.12 --extra hardware"
+  rm -rf "\$HAL_DIR/.venv"
+  cd "\$HAL_DIR"
+  echo "[overlay] HAL: running uv sync --python 3.12 --extra hardware"
   uv sync --python 3.12 --extra hardware 2>&1 || {
     echo "ERROR: uv sync failed (exit code \$?)"
-    echo "[overlay] LeLamp: uv version: \$(uv --version 2>&1 || echo unknown)"
-    echo "[overlay] LeLamp: python check: \$(python3 --version 2>&1 || echo not found)"
-    echo "[overlay] LeLamp: pyproject.toml head:"
-    head -30 "\$LELAMP_DIR/pyproject.toml" 2>/dev/null || true
+    echo "[overlay] HAL: uv version: \$(uv --version 2>&1 || echo unknown)"
+    echo "[overlay] HAL: python check: \$(python3 --version 2>&1 || echo not found)"
+    echo "[overlay] HAL: pyproject.toml head:"
+    head -30 "\$HAL_DIR/pyproject.toml" 2>/dev/null || true
     exit 1
   }
-  echo "[overlay] LeLamp: uv sync complete"
+  echo "[overlay] HAL: uv sync complete"
 
   # Patch webrtcvad: replace pkg_resources import (removed in Python 3.12+).
   # Without this hal crashes on first import of webrtcvad on a fresh Py3.12 venv.
-  WEBRTCVAD_PY=\$(find "\$LELAMP_DIR/.venv" -name "webrtcvad.py" -path "*/site-packages/*" 2>/dev/null | head -1)
+  WEBRTCVAD_PY=\$(find "\$HAL_DIR/.venv" -name "webrtcvad.py" -path "*/site-packages/*" 2>/dev/null | head -1)
   if [ -n "\$WEBRTCVAD_PY" ] && grep -q "import pkg_resources" "\$WEBRTCVAD_PY" 2>/dev/null; then
-    echo "[overlay] LeLamp: patching webrtcvad for Python 3.12+ (pkg_resources removal)"
+    echo "[overlay] HAL: patching webrtcvad for Python 3.12+ (pkg_resources removal)"
     cat > "\$WEBRTCVAD_PY" <<'WEBRTCVAD_EOF'
 try:
     import pkg_resources
@@ -1950,7 +1950,7 @@ WEBRTCVAD_EOF
   fi
   cd /
 else
-  echo "[overlay] WARN: No hal URL in OTA metadata, skipping LeLamp download"
+  echo "[overlay] WARN: No hal URL in OTA metadata, skipping HAL download"
 fi
 
 # ── stage: web UI ────────────────────────────────────────────────────────────

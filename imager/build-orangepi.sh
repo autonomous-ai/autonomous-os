@@ -281,7 +281,7 @@ timeout 60 openclaw onboard --non-interactive --accept-risk --skip-health || \\
 openclaw plugins install @openclaw/discord@${OPENCLAW_VERSION} --force 2>&1 || echo "WARN: discord plugin install failed (non-fatal)"
 openclaw plugins install @openclaw/slack@${OPENCLAW_VERSION} --force 2>&1 || echo "WARN: slack plugin install failed (non-fatal)"
 
-# ── uv (Python pkg mgr for LeLamp) ───────────────────────────────────────────
+# ── uv (Python pkg mgr for HAL) ───────────────────────────────────────────
 echo "[stage] uv"
 if ! command -v uv &>/dev/null; then
   curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -345,7 +345,7 @@ BSJSON
 
 cat > /etc/systemd/system/lamp-hal.service <<'UNIT'
 [Unit]
-Description=Lamp LeLamp Hardware Runtime
+Description=Lamp HAL Hardware Runtime
 After=network.target
 
 [Service]
@@ -686,11 +686,11 @@ elif [ "\$APP" = "hal" ]; then
   [ -z "\$URL" ] && { echo "Metadata has no url for hal"; exit 1; }
   ZIP_TMP=\$(mktemp)
   curl -fsSL -H "Cache-Control: no-cache" -o "\$ZIP_TMP" "\$URL" || { echo "Failed to download hal"; exit 1; }
-  LELAMP_DIR="/opt/hal"
-  unzip -o -q "\$ZIP_TMP" -d "\$LELAMP_DIR"
+  HAL_DIR="/opt/hal"
+  unzip -o -q "\$ZIP_TMP" -d "\$HAL_DIR"
   UV_BIN=\$(command -v uv || echo "/root/.local/bin/uv")
   find /root/.cache/uv -name "lerobot.egg-info" -type d 2>/dev/null | xargs rm -rf
-  cd "\$LELAMP_DIR" && "\$UV_BIN" sync --python 3.12 --extra hardware || { echo "uv sync failed"; exit 1; }
+  cd "\$HAL_DIR" && "\$UV_BIN" sync --python 3.12 --extra hardware || { echo "uv sync failed"; exit 1; }
   cd /
   systemctl restart lamp-hal
   echo "hal updated to \$VERSION"
@@ -903,7 +903,7 @@ UDEV_EOF
 # ── ALSA aliases for OPi 4 Pro ES8389 codec (sndi2s4) ────────────────────────
 echo "[stage] ALSA aliases"
 cat > /etc/asound.conf <<'ALSA_EOF'
-# Persistent ALSA aliases for LeLamp on Orange Pi 4 Pro (A733).
+# Persistent ALSA aliases for HAL on Orange Pi 4 Pro (A733).
 # Onboard codec is ES8389 (card sndi2s4); USB mic = lamp_micro2 (Jieli, renamed via udev).
 
 pcm.lamp_speaker {
@@ -1007,24 +1007,24 @@ echo "[overlay] backend binaries"
 install_binary_from_zip "\$BOOTSTRAP_URL" /usr/local/bin/bootstrap-server "bootstrap"
 install_binary_from_zip "\$OS_SERVER_URL"      /usr/local/bin/os-server      "os-server"
 
-echo "[overlay] LeLamp"
-LELAMP_DIR="/opt/hal"
+echo "[overlay] HAL"
+HAL_DIR="/opt/hal"
 if [ -n "\$LELAMP_URL" ]; then
   retry "curl -fsSL -H 'Cache-Control: no-cache' -o /tmp/hal.zip '\$LELAMP_URL'" 5
-  unzip -o -q /tmp/hal.zip -d "\$LELAMP_DIR"
+  unzip -o -q /tmp/hal.zip -d "\$HAL_DIR"
   rm -f /tmp/hal.zip
   # If zip nested into subdir, hoist up.
-  if [ ! -f "\$LELAMP_DIR/pyproject.toml" ]; then
-    SUBDIR=\$(find "\$LELAMP_DIR" -maxdepth 2 -name pyproject.toml 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
-    [ -n "\$SUBDIR" ] && [ "\$SUBDIR" != "\$LELAMP_DIR" ] && \\
-      { shopt -s dotglob 2>/dev/null || true; mv "\$SUBDIR"/* "\$LELAMP_DIR"/; shopt -u dotglob 2>/dev/null || true; }
+  if [ ! -f "\$HAL_DIR/pyproject.toml" ]; then
+    SUBDIR=\$(find "\$HAL_DIR" -maxdepth 2 -name pyproject.toml 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
+    [ -n "\$SUBDIR" ] && [ "\$SUBDIR" != "\$HAL_DIR" ] && \\
+      { shopt -s dotglob 2>/dev/null || true; mv "\$SUBDIR"/* "\$HAL_DIR"/; shopt -u dotglob 2>/dev/null || true; }
   fi
   find /root/.cache/uv -name 'lerobot.egg-info' -type d 2>/dev/null | xargs -r rm -rf || true
-  rm -rf "\$LELAMP_DIR/.venv"
-  cd "\$LELAMP_DIR"
+  rm -rf "\$HAL_DIR/.venv"
+  cd "\$HAL_DIR"
   uv sync --python 3.12 --extra hardware
   # webrtcvad pkg_resources patch (Py3.12+ killed pkg_resources).
-  WEBRTCVAD_PY=\$(find "\$LELAMP_DIR/.venv" -name "webrtcvad.py" -path "*/site-packages/*" 2>/dev/null | head -1)
+  WEBRTCVAD_PY=\$(find "\$HAL_DIR/.venv" -name "webrtcvad.py" -path "*/site-packages/*" 2>/dev/null | head -1)
   if [ -n "\$WEBRTCVAD_PY" ] && grep -q "import pkg_resources" "\$WEBRTCVAD_PY"; then
     cat > "\$WEBRTCVAD_PY" <<'WEBRTCVAD_EOF'
 try:
