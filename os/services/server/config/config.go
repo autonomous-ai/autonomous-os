@@ -87,9 +87,8 @@ type Config struct {
 
 	// OTAMetadataURL is not persisted in config.json — it is sourced at load from
 	// /root/config/bootstrap.json (single source of truth, see ProvideConfig).
-	// In-memory only; consumers (OTA poller, skill watcher, onboarding) read it here.
-	OTAMetadataURL  string `json:"-" yaml:"-"`
-	OTAPollInterval string `json:"ota_poll_interval" yaml:"otaPollInterval"`
+	// In-memory only; consumers (skill watcher, onboarding) read it here.
+	OTAMetadataURL string `json:"-" yaml:"-"`
 
 	DeepgramAPIKey string `json:"deepgram_api_key" yaml:"deepgramAPIKey"`
 	// STTAPIKey is the API key for the AutonomousSTT (LLM-as-STT) backend
@@ -192,8 +191,7 @@ func Default() Config {
 		LLMModel:   "claude-opus-4-6",
 		LLMBaseURL: "",
 
-		OTAMetadataURL:  "",
-		OTAPollInterval: "1h",
+		OTAMetadataURL: "",
 
 		OpenclawConfigDir: "/root/.openclaw",
 
