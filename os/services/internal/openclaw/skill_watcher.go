@@ -17,7 +17,6 @@ import (
 )
 
 const skillWatchInterval = 5 * time.Minute
-const defaultOTAMetadataURL = "https://storage.googleapis.com/s3-autonomous-upgrade-3/lamp/ota/metadata.json"
 
 // StartSkillWatcher polls OTA metadata for per-skill version changes.
 // When any skill version changes, downloads that skill zip from CDN,
@@ -182,7 +181,11 @@ func (s *Service) notifySkillChanges(changedSkills []string) {
 func (s *Service) fetchSkillVersions() (map[string]string, error) {
 	url := s.config.OTAMetadataURL
 	if url == "" {
-		url = defaultOTAMetadataURL
+		// No OTA metadata URL configured (device not provisioned): nothing to
+		// watch — skip rather than fall back to a hardcoded URL.
+		slog.Info("skill watcher: no ota_metadata_url configured, skipping check",
+			"component", "skill-watcher")
+		return nil, nil
 	}
 	resp, err := http.Get(url)
 	if err != nil {

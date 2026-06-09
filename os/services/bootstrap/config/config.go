@@ -7,7 +7,10 @@ import (
 	"path/filepath"
 )
 
-const configPath = "config/bootstrap.json"
+// configPath is the bootstrap worker's own config file. It lives next to
+// lamp-server's config.json under /root/config so all device config sits in one
+// place — but the bootstrap worker keeps a file separate from config.json.
+const configPath = "/root/config/bootstrap.json"
 
 // BootstrapVersion is injected at build time via ldflags.
 // Example:
@@ -16,7 +19,7 @@ const configPath = "config/bootstrap.json"
 var BootstrapVersion = "dev"
 
 // Config holds bootstrap OTA worker configuration.
-// All fields are stored in config/bootstrap.json (no CLI args).
+// All fields are stored in /root/config/bootstrap.json (no CLI args).
 type Config struct {
 	HttpPort int `json:"httpPort" yaml:"httpPort" validate:"required"`
 
@@ -25,43 +28,36 @@ type Config struct {
 	StateFile    string `json:"state_file" yaml:"stateFile"`
 }
 
-// Default returns default bootstrap config.
+// Default returns the bootstrap config with operational defaults. MetadataURL is
+// intentionally empty — it is a per-deployment value seeded into bootstrap.json
+// at provisioning, never compiled into the binary.
 func Default() Config {
 	return Config{
 		HttpPort:     8080,
-		MetadataURL:  "https://cdn.autonomous.ai/lamp/ota/metadata.json",
+		MetadataURL:  "",
 		PollInterval: "5m",
 		StateFile:    "/root/bootstrap/state.json",
 	}
 }
 
-// Load reads config from configPath. Returns error if file is missing or invalid.
-func Load() (*Config, error) {
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("config file not found: %s", configPath)
-	}
+// LoadOrDefault overlays bootstrap.json onto Default(): fields present in the
+// file win, absent fields keep their operational default. A missing or corrupt
+// file yields pure defaults — MetadataURL stays empty so the caller waits for
+// provisioning to populate it.
+func LoadOrDefault() *Config {
+	cfg := Default()
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("read config %s: %w", configPath, err)
+		return &cfg
 	}
-	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parse config %s: %w", configPath, err)
-	}
-	return &cfg, nil
-}
-
-// LoadOrDefault loads config from file, or returns Default() if file is missing.
-func LoadOrDefault() *Config {
-	cfg, err := Load()
-	if err != nil {
 		d := Default()
 		return &d
 	}
-	return cfg
+	return &cfg
 }
 
-// Save writes the config to the config file.
+// Save writes the config to /root/config/bootstrap.json.
 func (c *Config) Save() error {
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {

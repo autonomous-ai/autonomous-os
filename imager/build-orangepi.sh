@@ -27,7 +27,10 @@ PI_TIMEZONE="America/New_York"
 USERNAME="system"
 PASSWORD="12345"
 OUT_IMG_SIZE="${OUT_IMG_SIZE:-14G}"
-OTA_METADATA_URL="${OTA_METADATA_URL:-https://storage.googleapis.com/s3-autonomous-upgrade-3/lamp/ota/metadata.json}"
+# OTA metadata URL — per-deployment value, passed in by the Makefile (-e). No
+# hardcoded default: fail fast if the caller did not provide one. Baked into the
+# image's /root/config/bootstrap.json.
+OTA_METADATA_URL="${OTA_METADATA_URL:?OTA_METADATA_URL is required — build via 'make build OTA_METADATA_URL=...'}"
 AP_BAND="${AP_BAND:-2.4}"
 AP_CHANNEL="${AP_CHANNEL:-}"
 COUNTRY_CODE="${COUNTRY_CODE:-US}"
@@ -326,6 +329,20 @@ SyslogIdentifier=bootstrap
 WantedBy=multi-user.target
 UNIT
 
+# Seed the bootstrap worker config so the OTA metadata URL comes from
+# /root/config/bootstrap.json at runtime (single source of truth). The bootstrap
+# binary has no compiled-in default and waits until this file provides
+# metadata_url — baked here from the build-time OTA_METADATA_URL.
+mkdir -p /root/config
+cat > /root/config/bootstrap.json <<BSJSON
+{
+  "httpPort": 8080,
+  "metadata_url": "${OTA_METADATA_URL}",
+  "poll_interval": "5m",
+  "state_file": "/root/bootstrap/state.json"
+}
+BSJSON
+
 cat > /etc/systemd/system/lamp-hal.service <<'UNIT'
 [Unit]
 Description=Lamp LeLamp Hardware Runtime
@@ -590,7 +607,18 @@ chmod +x /usr/local/bin/connect-wifi
 cat > /usr/local/bin/software-update <<'EOFSCRIPT'
 #!/bin/bash
 set -e
-OTA_METADATA_URL="\${OTA_METADATA_URL:-https://storage.googleapis.com/s3-autonomous-upgrade-3/lamp/ota/metadata.json}"
+# Metadata URL comes from the bootstrap worker config (single source of truth,
+# baked at image build). An explicit OTA_METADATA_URL env var still overrides it
+# for manual/debug runs. No compiled-in default — abort if neither is set.
+BOOTSTRAP_JSON="/root/config/bootstrap.json"
+if [ -z "\${OTA_METADATA_URL:-}" ]; then
+  OTA_METADATA_URL="\$(jq -r '.metadata_url // empty' "\$BOOTSTRAP_JSON" 2>/dev/null || true)"
+fi
+if [ -z "\$OTA_METADATA_URL" ]; then
+  echo "[software-update] ERROR: no metadata_url in \$BOOTSTRAP_JSON and OTA_METADATA_URL unset"
+  exit 1
+fi
+echo "[software-update] OTA metadata: \$OTA_METADATA_URL"
 [ "\$(id -u)" -ne 0 ] && { echo "Run as root."; exit 1; }
 [ \$# -ne 1 ] && { echo "Usage: software-update <lamp|openclaw|bootstrap|web|hal|claude-desktop-buddy>"; exit 1; }
 APP="\$1"

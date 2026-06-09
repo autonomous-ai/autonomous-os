@@ -167,7 +167,9 @@ stage_enable_spi() {
   echo "[stage] SPI enablement will take effect after reboot"
 }
 
-OTA_METADATA_URL="${OTA_METADATA_URL:-https://storage.googleapis.com/s3-autonomous-upgrade-3/lamp/ota/metadata.json}"
+# OTA metadata URL must be provided by the caller (install.sh sets it). No
+# fallback — fail fast here, before installing anything, if it is missing.
+OTA_METADATA_URL="${OTA_METADATA_URL:?OTA_METADATA_URL is required — run via install.sh or export it before running setup.sh}"
 
 stage_ota_metadata() {
   echo "[stage] Fetch OTA metadata"
@@ -190,6 +192,29 @@ stage_ota_metadata() {
     exit 1
   fi
   echo "[stage] OTA versions: web=$WEB_VERSION lamp=$LAMP_VERSION bootstrap=$BOOTSTRAP_VERSION hal=$LELAMP_VERSION buddy=$BUDDY_VERSION"
+
+  # Seed metadata_url into the bootstrap worker's config so the OTA metadata URL
+  # comes from /root/config/bootstrap.json (a per-deployment value) instead of a
+  # compiled-in default. Merge-if-empty so re-running setup never clobbers a
+  # custom URL an operator already set.
+  mkdir -p /root/config
+  local bs_json="/root/config/bootstrap.json"
+  if [ -f "$bs_json" ]; then
+    local bs_tmp; bs_tmp=$(mktemp)
+    if jq --arg url "$OTA_METADATA_URL" \
+        'if (.metadata_url // "") == "" then .metadata_url = $url else . end' \
+        "$bs_json" >"$bs_tmp" 2>/dev/null; then
+      mv "$bs_tmp" "$bs_json"
+    else
+      rm -f "$bs_tmp"
+      echo "[stage] WARN: could not seed metadata_url (invalid $bs_json), leaving as-is"
+    fi
+  else
+    jq -n --arg url "$OTA_METADATA_URL" \
+      '{httpPort: 8080, metadata_url: $url, poll_interval: "5m", state_file: "/root/bootstrap/state.json"}' \
+      >"$bs_json"
+  fi
+  echo "[stage] Seeded metadata_url=$OTA_METADATA_URL into $bs_json"
 }
 
 # Download zip from URL, unzip, copy single binary to dest path (handles lamp-server, bootstrap-server in zip)
@@ -1207,7 +1232,18 @@ CONNECTWIFI
   cat >/usr/local/bin/software-update <<'SOFTWAREUPDATE'
 #!/bin/bash
 set -e
-OTA_METADATA_URL="${OTA_METADATA_URL:-https://storage.googleapis.com/s3-autonomous-upgrade-3/lamp/ota/metadata.json}"
+# Metadata URL comes from the bootstrap worker config (single source of truth,
+# seeded by setup.sh). An explicit OTA_METADATA_URL env var still overrides it for
+# manual/debug runs. No compiled-in default — if neither is set, abort.
+BOOTSTRAP_JSON="/root/config/bootstrap.json"
+if [ -z "${OTA_METADATA_URL:-}" ]; then
+  OTA_METADATA_URL="$(jq -r '.metadata_url // empty' "$BOOTSTRAP_JSON" 2>/dev/null || true)"
+fi
+if [ -z "$OTA_METADATA_URL" ]; then
+  echo "[software-update] ERROR: no metadata_url in $BOOTSTRAP_JSON and OTA_METADATA_URL unset"
+  exit 1
+fi
+echo "[software-update] OTA metadata: $OTA_METADATA_URL"
 [ "$(id -u)" -ne 0 ] && { echo "Run as root."; exit 1; }
 [ $# -ne 1 ] && { echo "Usage: software-update <lamp|openclaw|web>"; exit 1; }
 APP="$1"

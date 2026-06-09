@@ -17,6 +17,13 @@ BUILD_SCRIPT_rpi := build.sh
 BUILD_SCRIPT_opi := build-orangepi.sh
 BUILD_SCRIPT := $(BUILD_SCRIPT_$(TARGET))
 
+# OTA metadata URL must be passed in at build time (no hardcoded default in the
+# build scripts). Provide it via env or command line, e.g.:
+#   make build OTA_METADATA_URL=https://storage.googleapis.com/<bucket>/<path>/metadata.json
+# It is forwarded into the build container and baked into the image's
+# /root/config/bootstrap.json. Empty → build fails in preflight.
+OTA_METADATA_URL ?=
+
 ifndef BUILD_SCRIPT
 $(error Unknown TARGET=$(TARGET). Supported: rpi, opi)
 endif
@@ -35,6 +42,8 @@ IMG_FILE := $(IMG_FILE_$(TARGET))
 # images (UV cache / lerobot clone stay intact).
 build-preflight:
 	@echo "==> Preflight checks"
+	@[ -n "$(OTA_METADATA_URL)" ] || { echo "ERROR: OTA_METADATA_URL is required — e.g. make build OTA_METADATA_URL=https://.../metadata.json"; exit 1; }
+	@echo "    OTA metadata URL: $(OTA_METADATA_URL)"
 	@command -v docker >/dev/null 2>&1 || { echo "ERROR: Docker not installed"; exit 1; }
 	@docker info >/dev/null 2>&1 || { echo "ERROR: Docker daemon not running (start Docker Desktop)"; exit 1; }
 	@DOCKER_MEM_GB=$$(docker info --format '{{.MemTotal}}' | awk '{printf "%.1f", $$1/1024/1024/1024}'); \
@@ -64,6 +73,7 @@ build: build-preflight
 	-v ./input:/input \
 	-e BUILD_SCRIPT=$(BUILD_SCRIPT) \
 	-e RPI_MODEL=$(RPI_MODEL) \
+	-e OTA_METADATA_URL=$(OTA_METADATA_URL) \
 	pi-builder /work/$(BUILD_SCRIPT)
 
 sd-card-list:

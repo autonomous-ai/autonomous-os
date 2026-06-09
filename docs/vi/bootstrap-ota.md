@@ -195,7 +195,10 @@ boot
 
 ## 4. Bootstrap OTA Worker
 
-### Config (`config/bootstrap.json`)
+### Config (`/root/config/bootstrap.json`)
+
+Bootstrap worker giữ file config riêng, tách khỏi `config.json` của lamp-server,
+nhưng nằm cùng thư mục `/root/config/`.
 
 ```json
 {
@@ -206,7 +209,17 @@ boot
 }
 ```
 
-Nếu file không tồn tại → dùng giá trị mặc định.
+`metadata_url` **không có default hardcode** — đây là giá trị tùy theo deployment,
+được `setup.sh` (`stage_ota_metadata`) seed vào file này lúc provisioning. File
+được load dạng overlay lên các default vận hành (`httpPort` 8080, `poll_interval`
+5m, `state_file`), nên file một phần (chỉ có `metadata_url`) vẫn chạy được, và
+file thiếu thì dùng default với URL rỗng.
+
+**Đợi-rồi-retry khi chưa provisioning**: nếu `metadata_url` rỗng (device chưa
+setup), `Serve()` không khởi động poll loop lẫn healthcheck server. Nó log
+`waiting for metadata_url in bootstrap config` và reload
+`/root/config/bootstrap.json` mỗi 30s tới khi có URL rồi mới chạy tiếp. Không có
+gì silent.
 
 ### State (`/root/bootstrap/state.json`)
 
@@ -283,7 +296,12 @@ Bootstrap dùng `lib/hal` để báo trạng thái update qua LED. Xem chi tiế
 
 ## 5. Script Cập Nhật (`/usr/local/bin/software-update`)
 
-Bash script được cài bởi setup.sh. Bootstrap worker gọi script này để thực hiện cập nhật.
+Bash script được cài bởi setup.sh (và được imager bake sẵn vào image). Bootstrap
+worker gọi script này để thực hiện cập nhật.
+
+Script đọc URL metadata OTA từ `metadata_url` trong `/root/config/bootstrap.json`
+(biến môi trường `OTA_METADATA_URL` nếu set sẽ override, dùng cho chạy thủ công/debug),
+và exit lỗi nếu cả hai đều rỗng — không có URL hardcode.
 
 ### Xử lý HAL (MỚI)
 

@@ -10,7 +10,19 @@
 #   4. Enables and starts the service
 set -euo pipefail
 
-OTA_METADATA_URL="${OTA_METADATA_URL:-https://storage.googleapis.com/s3-autonomous-upgrade-3/lamp/ota/metadata.json}"
+# Metadata URL comes from the bootstrap worker config (single source of truth,
+# seeded by setup.sh). An explicit OTA_METADATA_URL env var still overrides it for
+# manual/debug runs. No compiled-in default — setup.sh is a prerequisite, so
+# /root/config/bootstrap.json already exists; if neither is set, abort.
+BOOTSTRAP_JSON="/root/config/bootstrap.json"
+if [ -z "${OTA_METADATA_URL:-}" ]; then
+  OTA_METADATA_URL="$(jq -r '.metadata_url // empty' "$BOOTSTRAP_JSON" 2>/dev/null || true)"
+fi
+if [ -z "$OTA_METADATA_URL" ]; then
+  echo "[buddy] ERROR: no metadata_url in $BOOTSTRAP_JSON and OTA_METADATA_URL unset (run setup.sh first)"
+  exit 1
+fi
+echo "[buddy] OTA metadata: $OTA_METADATA_URL"
 BUDDY_DIR="/opt/claude-desktop-buddy"
 
 ensure_root() {

@@ -197,7 +197,10 @@ boot
 
 ## 4. Bootstrap OTA Worker
 
-### Config (`config/bootstrap.json`)
+### Config (`/root/config/bootstrap.json`)
+
+The bootstrap worker keeps its own config file, separate from lamp-server's
+`config.json`, but it lives in the same `/root/config/` directory.
 
 ```json
 {
@@ -208,7 +211,17 @@ boot
 }
 ```
 
-Falls back to defaults if file missing.
+`metadata_url` has **no compiled-in default** — it is a per-deployment value
+seeded into this file by `setup.sh` (`stage_ota_metadata`) at provisioning. The
+file is loaded as an overlay on operational defaults (`httpPort` 8080,
+`poll_interval` 5m, `state_file`), so a partial file (just `metadata_url`) works
+and a missing file yields defaults with an empty URL.
+
+**Wait-then-retry when unprovisioned**: if `metadata_url` is empty (device not
+set up yet), `Serve()` does not start the poll loop or healthcheck server. It logs
+`waiting for metadata_url in bootstrap config` and reloads
+`/root/config/bootstrap.json` every 30s until a URL appears, then proceeds.
+Nothing is silent.
 
 ### State (`/root/bootstrap/state.json`)
 
@@ -285,7 +298,12 @@ Bootstrap uses `lib/hal` to show update status on LEDs. See [status-led.md](stat
 
 ## 5. Software Update Script (`/usr/local/bin/software-update`)
 
-Bash script installed by setup.sh. Called by bootstrap worker to apply updates.
+Bash script installed by setup.sh (and baked into the image by the imager).
+Called by bootstrap worker to apply updates.
+
+It reads the OTA metadata URL from `metadata_url` in `/root/config/bootstrap.json`
+(an explicit `OTA_METADATA_URL` env var overrides it for manual/debug runs), and
+aborts with an error if neither is set — no compiled-in URL.
 
 ### HAL Case (NEW)
 

@@ -118,7 +118,10 @@ PI_TIMEZONE="America/New_York"
 USERNAME="system"           # Linux user created on the image
 PASSWORD="12345"            # Password for the user
 OUT_IMG_SIZE="8G"           # Output image size (expands to full SD on first boot)
-OTA_METADATA_URL="https://storage.googleapis.com/s3-autonomous-upgrade-3/lamp/ota/metadata.json"
+# OTA metadata URL — per-deployment value, passed in by the Makefile (-e). No
+# hardcoded default: fail fast if the caller did not provide one. Baked into the
+# image's /root/config/bootstrap.json below.
+OTA_METADATA_URL="${OTA_METADATA_URL:?OTA_METADATA_URL is required — build via 'make build OTA_METADATA_URL=...'}"
 AP_BAND="${AP_BAND:-2.4}"   # 2.4 or 5 (5 GHz needs supported regulatory domain + chip)
 AP_CHANNEL="${AP_CHANNEL:-}" # default: 6 for 2.4 GHz, 36 for 5 GHz
 COUNTRY_CODE="US"           # Regulatory country code for hostapd
@@ -864,13 +867,38 @@ WantedBy=multi-user.target
 EOF
 systemctl enable bootstrap lamp lamp-hal
 
+# Seed the bootstrap worker config so the OTA metadata URL comes from
+# /root/config/bootstrap.json at runtime (single source of truth). The bootstrap
+# binary has no compiled-in default and waits until this file provides
+# metadata_url — baked here from the build-time OTA_METADATA_URL.
+mkdir -p /root/config
+cat > /root/config/bootstrap.json <<BSJSON
+{
+  "httpPort": 8080,
+  "metadata_url": "${OTA_METADATA_URL}",
+  "poll_interval": "5m",
+  "state_file": "/root/bootstrap/state.json"
+}
+BSJSON
+
 # software-update: OTA updater for bootstrap, lamp, hal, openclaw, and web UI.
 # Usage: software-update <bootstrap|lamp|hal|openclaw|web>
 # Downloads the binary/zip from OTA metadata URL and hot-swaps it.
 cat > /usr/local/bin/software-update <<'SWUPDATE'
 #!/bin/bash
 set -euo pipefail
-OTA_METADATA_URL="${OTA_METADATA_URL:-https://storage.googleapis.com/s3-autonomous-upgrade-3/lamp/ota/metadata.json}"
+# Metadata URL comes from the bootstrap worker config (single source of truth,
+# baked at image build). An explicit OTA_METADATA_URL env var still overrides it
+# for manual/debug runs. No compiled-in default — abort if neither is set.
+BOOTSTRAP_JSON="/root/config/bootstrap.json"
+if [ -z "\${OTA_METADATA_URL:-}" ]; then
+  OTA_METADATA_URL="\$(jq -r '.metadata_url // empty' "\$BOOTSTRAP_JSON" 2>/dev/null || true)"
+fi
+if [ -z "\$OTA_METADATA_URL" ]; then
+  echo "[software-update] ERROR: no metadata_url in \$BOOTSTRAP_JSON and OTA_METADATA_URL unset"
+  exit 1
+fi
+echo "[software-update] OTA metadata: \$OTA_METADATA_URL"
 retry() {
   local cmd="\$1" max="\${2:-5}" delay="\${3:-2}" n=0
   until [ "\$n" -ge "\$max" ]; do eval "\$cmd" && return 0; n=\$((n+1)); sleep "\$delay"; done

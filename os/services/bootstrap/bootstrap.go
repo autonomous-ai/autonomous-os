@@ -33,12 +33,14 @@ type Bootstrap struct {
 	state  *state.State
 }
 
-// ProvideServer creates a Bootstrap from config.
+// configRetryInterval is how often Serve reloads bootstrap.json while waiting for
+// it to provide a metadata URL (i.e. the device is not yet provisioned).
+const configRetryInterval = 30 * time.Second
+
+// ProvideServer creates a Bootstrap from config. The metadata URL may be empty
+// here (device not yet provisioned); Serve waits for it before polling.
 func ProvideServer() (*Bootstrap, error) {
 	cfg := config.LoadOrDefault()
-	if strings.TrimSpace(cfg.MetadataURL) == "" {
-		return nil, fmt.Errorf("metadata URL is required")
-	}
 	st, err := state.Load(cfg.StateFile)
 	if err != nil {
 		return nil, fmt.Errorf("load state: %w", err)
@@ -50,11 +52,35 @@ func ProvideServer() (*Bootstrap, error) {
 	}, nil
 }
 
+// waitForConfig blocks until bootstrap.json yields a non-empty metadata URL,
+// reloading /root/config/bootstrap.json on configRetryInterval. It runs before
+// any other goroutine starts, so reassigning b.cfg here is race-free. Returns
+// false if ctx is cancelled (shutdown) before a URL appears.
+func (b *Bootstrap) waitForConfig(ctx context.Context) bool {
+	for strings.TrimSpace(b.cfg.MetadataURL) == "" {
+		slog.Warn("waiting for metadata_url in bootstrap config (device not provisioned yet)",
+			"component", "bootstrap", "path", "/root/config/bootstrap.json")
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(configRetryInterval):
+		}
+		b.cfg = config.LoadOrDefault()
+	}
+	return true
+}
+
 // Serve runs the gin HTTP server as the main loop, with OTA checks in a background goroutine.
 // Handles SIGINT/SIGTERM for graceful shutdown.
 func (b *Bootstrap) Serve() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+
+	// The device may not be provisioned yet: wait until bootstrap.json provides a
+	// metadata URL before starting the poll loop and healthcheck server.
+	if !b.waitForConfig(ctx) {
+		return nil
+	}
 
 	pollInterval, err := time.ParseDuration(b.cfg.PollInterval)
 	if err != nil {

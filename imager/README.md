@@ -124,7 +124,7 @@ All env vars; override at the `make` call.
 | `OUT_IMG_SIZE` | `14G` | OPi only: partition size after expansion. |
 | `OPI_FILE_ID` | `1CYfOaY6f5DozJBNvPJ0Gx1jBIFlGe8fn` | Google Drive file ID for `Orangepi4pro_1.0.6_debian_bookworm_server_*.7z`. Bump when the dev team uploads a new vendor release. |
 | `OPENCLAW_VERSION` | `2026.5.27` | npm package version pin. Bump as OpenClaw releases. |
-| `OTA_METADATA_URL` | `https://storage.googleapis.com/s3-autonomous-upgrade-3/lamp/ota/metadata.json` | Backend binaries source. |
+| `OTA_METADATA_URL` | **(required, no default)** | OTA metadata source. Must be passed at build time (`make build OTA_METADATA_URL=...`); build fails in preflight if unset. Baked into the image's `/root/config/bootstrap.json`. |
 | `AP_BAND` | `2.4` | `2.4` or `5` — hostapd hw_mode. |
 | `AP_CHANNEL` | `6` (2.4 GHz) / `36` (5 GHz) | hostapd channel |
 | `COUNTRY_CODE` | `US` | Regulatory domain for wpa_supplicant + hostapd |

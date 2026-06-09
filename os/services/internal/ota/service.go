@@ -66,6 +66,8 @@ recheck:
 		otaURL := s.cfg.OTAMetadataURL
 		s.mu.RUnlock()
 		if otaURL == "" {
+			slog.Info("ota poller idle: no ota_metadata_url configured, waiting for config change",
+				"component", "ota")
 			select {
 			case <-ctx.Done():
 				return
@@ -76,6 +78,8 @@ recheck:
 
 		ok, err := s.network.CheckInternet()
 		if err != nil || !ok {
+			slog.Info("ota poller: no internet, will retry",
+				"component", "ota", "retryIn", noInternetRecheckInterval.String())
 			select {
 			case <-ctx.Done():
 				return
