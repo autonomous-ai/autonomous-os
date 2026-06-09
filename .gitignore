@@ -57,7 +57,7 @@ __pycache__
 *.egg-info
 
 imager/output/*.img
-scripts/.skill-hashes
+scripts/release/.skill-hashes
 
 
 dlbackend/src/core/ser/models/emotion2vec_plus_large/emotion2vec.onnx
