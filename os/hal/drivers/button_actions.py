@@ -246,7 +246,7 @@ def _factory_reset_phrase() -> str:
 def factory_reset_action(source: str = "button"):
     """Announce + POST /api/system/factory-reset on lamp-server. Lamp-server
     wipes per-device state (config, API keys, enrollments, WiFi) and reboots
-    into AP setup mode. Lelamp does NOT touch state itself — single source of
+    into AP setup mode. HAL does NOT touch state itself — single source of
     truth for what gets wiped lives in lamp-server's factoryResetWipePaths.
 
     Authoritative because of physical presence: 10s deliberate hold + the
@@ -256,7 +256,7 @@ def factory_reset_action(source: str = "button"):
     logger.info("%s LED: red solid (factory-reset armed)", source)
 
     # Suppress the lifespan-shutdown re-announce — same reason as
-    # long_press_action: lamp-server's reboot ~5s later will SIGTERM lelamp
+    # long_press_action: os-server's reboot ~5s later will SIGTERM hal
     # and the lifespan handler would otherwise speak PHRASE_SHUTDOWN on top
     # of the factory-reset clip still playing.
     state._shutdown_announced = True
