@@ -8,7 +8,6 @@ This project is developed with **Cursor** and **Claude Code** (multi-IDE). Chang
    - `architecture-decision.md` — Architecture, layers, inherited/new components
    - `bootstrap-ota.md` — OTA system, setup stages, upload scripts
    - `product-vision.md` — Product vision, use cases, hardware specs
-   - `open-decisions.md` — Unresolved/resolved architecture decisions
    - Vietnamese translations in `docs/vi/` with same filenames
    - Keep numbers, flows, endpoints, and states accurate
 
