@@ -6,10 +6,33 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"go.autonomous.ai/os/lib/mqtt"
 )
+
+// bootstrapConfigPath is the OTA worker's config file. The device-wide OTA
+// metadata URL is seeded there at provisioning (single source of truth);
+// lamp-server's OTA-derived features (skill watcher, onboarding skills/hooks,
+// OTA poller) read it from the same file rather than duplicating it here.
+const bootstrapConfigPath = "/root/config/bootstrap.json"
+
+// otaMetadataURLFromBootstrap returns metadata_url from bootstrap.json, or ""
+// when the file is missing or invalid (e.g. device not yet provisioned).
+func otaMetadataURLFromBootstrap() string {
+	data, err := os.ReadFile(bootstrapConfigPath)
+	if err != nil {
+		return ""
+	}
+	var bc struct {
+		MetadataURL string `json:"metadata_url"`
+	}
+	if err := json.Unmarshal(data, &bc); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(bc.MetadataURL)
+}
 
 const configPath = "config/config.json"
 
@@ -62,7 +85,10 @@ type Config struct {
 	STTBaseURL string `json:"stt_base_url" yaml:"sttBaseURL"`
 	TTSBaseURL string `json:"tts_base_url" yaml:"ttsBaseURL"`
 
-	OTAMetadataURL  string `json:"ota_metadata_url" yaml:"otaMetadataURL"`
+	// OTAMetadataURL is not persisted in config.json — it is sourced at load from
+	// /root/config/bootstrap.json (single source of truth, see ProvideConfig).
+	// In-memory only; consumers (OTA poller, skill watcher, onboarding) read it here.
+	OTAMetadataURL  string `json:"-" yaml:"-"`
 	OTAPollInterval string `json:"ota_poll_interval" yaml:"otaPollInterval"`
 
 	DeepgramAPIKey string `json:"deepgram_api_key" yaml:"deepgramAPIKey"`
@@ -192,6 +218,7 @@ func ProvideConfig() *Config {
 			slog.Error("save config failed", "component", "config", "error", err)
 		}
 		c.notify = make(chan bool, 1)
+		c.OTAMetadataURL = otaMetadataURLFromBootstrap()
 		return &c
 	}
 
@@ -217,6 +244,10 @@ func ProvideConfig() *Config {
 			}
 		}
 	}
+
+	// OTA metadata URL lives in bootstrap.json (single source of truth); config.json
+	// does not persist it (field is json:"-"). Empty when not yet provisioned.
+	cfg.OTAMetadataURL = otaMetadataURLFromBootstrap()
 
 	return &cfg
 }
