@@ -42,7 +42,7 @@ Recommended direction:
 
 ### Nginx exposes Lamp Go server under `/api/`
 
-In `scripts/setup.sh`, nginx forwards external `/api/` to Lamp Go server:
+In `scripts/provision/setup.sh`, nginx forwards external `/api/` to Lamp Go server:
 
 ```nginx
 location /api/ {
@@ -1593,7 +1593,7 @@ Expected: `401`/`403` without auth; redacted with auth.
 
 ### Nginx integration
 
-- `scripts/setup.sh`
+- `scripts/provision/setup.sh`
   - If shell remains, add `allow/deny` to `location = /api/system/shell`.
   - Consider restricting `/api/` by route at nginx only as defense-in-depth; app auth should be primary.
 

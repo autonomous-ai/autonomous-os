@@ -983,10 +983,10 @@ server {
   root /usr/share/nginx/html/setup;
   index index.html;
   # Monitor chat sends base64 attachments inside JSON; default 1 MB nginx
-  # limit 413s anything past ~700 KB raw. Match scripts/setup.sh.
+  # limit 413s anything past ~700 KB raw. Match scripts/provision/setup.sh.
   client_max_body_size 20M;
 
-  # Security headers — mirror scripts/setup.sh. Defends the device admin UI
+  # Security headers — mirror scripts/provision/setup.sh. Defends the device admin UI
   # from clickjacking + MIME-sniffing and shrinks future XSS blast radius.
   # SAMEORIGIN/'self' (not DENY/'none') so Monitor can embed in-house iframes.
   add_header X-Frame-Options "SAMEORIGIN" always;
@@ -995,7 +995,7 @@ server {
   add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
   # Strict CSP. LeLamp self-hosts Swagger UI assets under /static/ (served
   # via the Lamp /api/hardware/* proxy), so no CDN whitelist or
-  # `'unsafe-inline'` script-src is needed. Mirrors scripts/setup.sh.
+  # `'unsafe-inline'` script-src is needed. Mirrors scripts/provision/setup.sh.
   add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' ws: wss:; frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'" always;
 
   location / { try_files \$uri /index.html; }

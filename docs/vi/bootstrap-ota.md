@@ -49,7 +49,7 @@ File JSON duy nhất trên GCS. Tất cả thành phần tham chiếu file này.
 
 > Trong các URL bên dưới, `{BUCKET}` và `{PREFIX}` là bucket + namespace path:
 > `GCS_BUCKET` (mặc định `s3-autonomous-upgrade-3`) và `BUCKET_PREFIX` (mặc định
-> `os`), đều set trong `scripts/ota-config.sh`. Upload scripts đọc từ đó; consumer
+> `os`), đều set trong `scripts/release/ota-config.sh`. Upload scripts đọc từ đó; consumer
 > trên device derive cùng path từ `ota_metadata_url` đã provisioning.
 
 **URL**: `https://storage.googleapis.com/{BUCKET}/{PREFIX}/ota/metadata.json`
@@ -99,7 +99,7 @@ type OTAComponent struct {
 
 ---
 
-## 3. Setup Ban Đầu (`scripts/setup.sh`)
+## 3. Setup Ban Đầu (`scripts/provision/setup.sh`)
 
 Script chạy **1 lần duy nhất** trên Pi mới. Thực thi tuần tự theo stages.
 
@@ -452,7 +452,7 @@ Bên ngoài    → http://<device-ip>/hw/docs    → nginx → 403 Forbidden
 
 ## 7. Scripts Upload / Publish
 
-### `scripts/upload-hal.sh` (MỚI)
+### `scripts/release/upload-hal.sh` (MỚI)
 
 ```bash
 #!/usr/bin/env bash
@@ -497,17 +497,17 @@ echo "HAL $NEW_VERSION published."
 
 | Script | Thành phần | Pattern |
 |---|---|---|
-| `scripts/upload-lamp.sh` | Lamp Server binary | Build → zip → GCS → update metadata |
-| `scripts/upload-bootstrap.sh` | Bootstrap Server binary | Build → zip → GCS → update metadata |
-| `scripts/upload-web.sh` | Web SPA bundle | Build → zip → GCS → update metadata |
-| `scripts/upload-hal.sh` | HAL Python runtime (MỚI) | Package → zip → GCS → update metadata |
-| `scripts/upload-setup.sh` | Script setup | Upload lên GCS |
-| `scripts/upload-setup-ap.sh` | Script setup AP | Upload lên GCS |
-| `scripts/upload-skills.sh` | OpenClaw skill files | Upload lên GCS |
-| `scripts/install.sh` | CDN install shortcut | `curl ... \| sudo bash` trên Pi |
-| `scripts/tag-release.sh` | Git release tag kèm OTA metadata snapshot | Fetch metadata.json → annotated tag → `git push origin <tag>` |
+| `scripts/release/upload-lamp.sh` | Lamp Server binary | Build → zip → GCS → update metadata |
+| `scripts/release/upload-bootstrap.sh` | Bootstrap Server binary | Build → zip → GCS → update metadata |
+| `scripts/release/upload-web.sh` | Web SPA bundle | Build → zip → GCS → update metadata |
+| `scripts/release/upload-hal.sh` | HAL Python runtime (MỚI) | Package → zip → GCS → update metadata |
+| `scripts/release/upload-setup.sh` | Script setup | Upload lên GCS |
+| `scripts/release/upload-setup-ap.sh` | Script setup AP | Upload lên GCS |
+| `scripts/release/upload-skills.sh` | OpenClaw skill files | Upload lên GCS |
+| `scripts/provision/install.sh` | CDN install shortcut | `curl ... \| sudo bash` trên Pi |
+| `scripts/release/tag-release.sh` | Git release tag kèm OTA metadata snapshot | Fetch metadata.json → annotated tag → `git push origin <tag>` |
 
-### `scripts/tag-release.sh` — Truy nguồn theo GPL v3 §6
+### `scripts/release/tag-release.sh` — Truy nguồn theo GPL v3 §6
 
 Sau khi các upload component xong (`make upload-lamp upload-hal upload-web ...`), script này neo OTA metadata snapshot vào một git tag duy nhất:
 

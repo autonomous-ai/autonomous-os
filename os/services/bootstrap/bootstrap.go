@@ -190,7 +190,7 @@ func (b *Bootstrap) checkOnce(ctx context.Context) error {
 	}
 
 	changed := false
-	// Driven by metadata.openclaw.version — bumped via scripts/upload-openclaw.sh.
+	// Driven by metadata.openclaw.version — bumped via scripts/release/upload-openclaw.sh.
 	// detectVersion / applyUpdate already handle OTAKeyOpenClaw (npm install +
 	// systemctl restart openclaw); the old reconcileOpenClawFromNpm() pulled
 	// "latest" from `npm view` instead and is no longer needed.

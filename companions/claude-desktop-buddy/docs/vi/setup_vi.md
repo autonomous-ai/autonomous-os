@@ -23,15 +23,15 @@ chỉ thị `replace` trong `go.mod` — không cần thiết lập gì thêm.
 
 Có hai con đường, cả hai đều đã được khai báo sẵn trong `scripts/`:
 
-- **Lần đầu / tạo image đầy đủ** — `scripts/setup.sh` cài Buddy như một phần của quá trình
+- **Lần đầu / tạo image đầy đủ** — `scripts/provision/setup.sh` cài Buddy như một phần của quá trình
   cấp phát (provisioning) thiết bị.
-- **Độc lập / cập nhật** — `scripts/setup-claude-desktop-buddy.sh` (chạy trên Pi
+- **Độc lập / cập nhật** — `scripts/provision/setup-claude-desktop-buddy.sh` (chạy trên Pi
   với quyền root) tải binary từ metadata OTA và cài (lại) service.
 
 Hoặc đẩy thủ công trong quá trình phát triển từ thư mục gốc của repo:
 
 ```bash
-make upload-claude-desktop-buddy     # scripts/upload-claude-desktop-buddy.sh
+make upload-claude-desktop-buddy     # scripts/release/upload-claude-desktop-buddy.sh
 ```
 
 ### Bố cục trên thiết bị

@@ -344,7 +344,7 @@ def get_led_color():
 
 Render tại `bottom: 6px, right: 8px` với chữ monospace 10px và opacity `0.7` — ai cần là thấy nhưng không đè form action buttons (Back / Next / Setup / Save) hoặc scroll. Link target: `https://github.com/autonomous-ai/lamp`.
 
-Lý do tồn tại: HAL Python (`os/hal/`) ship dưới GPL v3, bake sẵn vào image board. GPL §6 yêu cầu người nhận binary phải biết source code tương ứng ở đâu. Footer thỏa mãn lựa chọn "written offer" bằng cách expose URL repo public ngay trên thiết bị. Xem thêm `scripts/tag-release.sh` + `Makefile:tag-release` cho phần map version → commit.
+Lý do tồn tại: HAL Python (`os/hal/`) ship dưới GPL v3, bake sẵn vào image board. GPL §6 yêu cầu người nhận binary phải biết source code tương ứng ở đâu. Footer thỏa mãn lựa chọn "written offer" bằng cách expose URL repo public ngay trên thiết bị. Xem thêm `scripts/release/tag-release.sh` + `Makefile:tag-release` cho phần map version → commit.
 
 ---
 

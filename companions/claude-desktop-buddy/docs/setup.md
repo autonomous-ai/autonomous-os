@@ -23,15 +23,15 @@ Raspberry Pi / OrangePi target. The build uses the vendored BLE fork via the
 
 Two paths, both already wired in `scripts/`:
 
-- **First-time / full image** — `scripts/setup.sh` installs Buddy as part of device
+- **First-time / full image** — `scripts/provision/setup.sh` installs Buddy as part of device
   provisioning.
-- **Standalone / update** — `scripts/setup-claude-desktop-buddy.sh` (run on the Pi
+- **Standalone / update** — `scripts/provision/setup-claude-desktop-buddy.sh` (run on the Pi
   as root) fetches the binary from OTA metadata and (re)installs the service.
 
 Or push manually during development from the repo root:
 
 ```bash
-make upload-claude-desktop-buddy     # scripts/upload-claude-desktop-buddy.sh
+make upload-claude-desktop-buddy     # scripts/release/upload-claude-desktop-buddy.sh
 ```
 
 ### On-device layout

@@ -115,40 +115,40 @@ autonomous-build-chat:
 .PHONY: upload-lamp upload-bootstrap upload-hal upload-claude-desktop-buddy upload-lamp-buddy upload-web upload-skills upload-hooks upload-setup upload-setup-ap upload-openclaw upload-twitch-irc upload-autonomous-chat upload-all
 
 upload-lamp:
-	bash scripts/upload-lamp.sh
+	bash scripts/release/upload-lamp.sh
 
 upload-bootstrap:
-	bash scripts/upload-bootstrap.sh
+	bash scripts/release/upload-bootstrap.sh
 
 upload-hal:
-	bash scripts/upload-hal.sh
+	bash scripts/release/upload-hal.sh
 
 upload-claude-desktop-buddy:
-	bash scripts/upload-claude-desktop-buddy.sh
+	bash scripts/release/upload-claude-desktop-buddy.sh
 
 upload-lamp-buddy:
-	bash scripts/upload-lamp-buddy.sh
+	bash scripts/release/upload-lamp-buddy.sh
 
 upload-web:
-	bash scripts/upload-web.sh
+	bash scripts/release/upload-web.sh
 
 upload-skills:
-	bash scripts/upload-skills.sh
+	bash scripts/release/upload-skills.sh
 
 upload-hooks:
-	bash scripts/upload-hooks.sh
+	bash scripts/release/upload-hooks.sh
 
 upload-setup:
-	bash scripts/upload-setup.sh
+	bash scripts/release/upload-setup.sh
 
 upload-setup-ap:
-	bash scripts/upload-setup-ap.sh
+	bash scripts/release/upload-setup-ap.sh
 
 upload-twitch-irc:
-	bash scripts/upload-twitch-irc.sh
+	bash scripts/release/upload-twitch-irc.sh
 
 upload-autonomous-chat:
-	bash scripts/upload-autonomous-chat.sh
+	bash scripts/release/upload-autonomous-chat.sh
 
 # Allow positional version: `make upload-openclaw 2026.5.2`. The eval
 # stub below creates a no-op rule for the version arg so make doesn't
@@ -164,7 +164,7 @@ endif
 
 upload-openclaw:
 	@if [ -z "$(OPENCLAW_VERSION_ARG)" ]; then echo "Usage: make upload-openclaw <version>" >&2; exit 1; fi
-	bash scripts/upload-openclaw.sh "$(OPENCLAW_VERSION_ARG)"
+	bash scripts/release/upload-openclaw.sh "$(OPENCLAW_VERSION_ARG)"
 
 # upload-openclaw is intentionally NOT in upload-all — bumping the OpenClaw
 # version is an explicit decision, not a side effect of pushing other artifacts.
@@ -189,7 +189,7 @@ endif
 .PHONY: tag-release
 
 tag-release:
-	bash scripts/tag-release.sh "$(TAG_VERSION_ARG)"
+	bash scripts/release/tag-release.sh "$(TAG_VERSION_ARG)"
 
 # ============================================================================
 # Clean

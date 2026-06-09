@@ -345,7 +345,7 @@ def get_led_color():
 
 Renders at `bottom: 6px, right: 8px` with monospace 10px text and opacity `0.7` — visible to anyone who looks for it without blocking form action buttons (Back / Next / Setup / Save) or scroll. Link target: `https://github.com/autonomous-ai/lamp`.
 
-Reason it exists: HAL Python (`os/hal/`) ships GPL v3, baked into the board image. GPL §6 requires recipients of the binary to be informed where corresponding source lives. The footer satisfies the "written offer" alternative by exposing the public repo URL on the device itself. See also `scripts/tag-release.sh` + `Makefile:tag-release` for the version → commit traceability piece.
+Reason it exists: HAL Python (`os/hal/`) ships GPL v3, baked into the board image. GPL §6 requires recipients of the binary to be informed where corresponding source lives. The footer satisfies the "written offer" alternative by exposing the public repo URL on the device itself. See also `scripts/release/tag-release.sh` + `Makefile:tag-release` for the version → commit traceability piece.
 
 ---
 

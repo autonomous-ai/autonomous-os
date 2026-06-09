@@ -38,7 +38,7 @@ Current references found:
   cd $(LELAMP_DIR) && PYTHONPATH=.. .venv/bin/uvicorn lelamp.server:app --host 0.0.0.0 --port $(LELAMP_PORT) --reload
   ```
 
-- `scripts/setup.sh:430`
+- `scripts/provision/setup.sh:430`
   ```sh
   ExecStart=$LELAMP_DIR/.venv/bin/uvicorn lelamp.server:app --host 0.0.0.0 --port 5001
   ```
@@ -79,7 +79,7 @@ This violates the desired boundary: only local Go server and OpenClaw should cal
 
 Change every production/dev LeLamp start command from `0.0.0.0` to `127.0.0.1`.
 
-#### File: `scripts/setup.sh`
+#### File: `scripts/provision/setup.sh`
 
 Replace:
 
@@ -198,7 +198,7 @@ Expected: `200 OK`.
 
 ### Evidence
 
-Current `scripts/setup.sh` nginx config:
+Current `scripts/provision/setup.sh` nginx config:
 
 ```nginx
 location /hw/ {
@@ -232,7 +232,7 @@ Nginx is local to the device, so LeLamp sees the proxy connection as local unles
 
 Block `/hw/` at nginx for non-loopback clients.
 
-#### File: `scripts/setup.sh`
+#### File: `scripts/provision/setup.sh`
 
 Change `location /hw/` to:
 
@@ -719,7 +719,7 @@ Expected: works only if still needed locally.
 
 ### Evidence
 
-`/gw/` nginx config in `scripts/setup.sh`:
+`/gw/` nginx config in `scripts/provision/setup.sh`:
 
 ```nginx
 location = /gw {
@@ -741,7 +741,7 @@ location /gw/ {
 
 `imager/build.sh` also has `/gw/` proxy.
 
-OpenClaw config created in `scripts/setup.sh` includes:
+OpenClaw config created in `scripts/provision/setup.sh` includes:
 
 ```json
 "gateway": {
@@ -767,7 +767,7 @@ The comment says forwarded headers are intentionally not set because OpenClaw tr
 
 ### Required remediation
 
-#### File: `scripts/setup.sh`
+#### File: `scripts/provision/setup.sh`
 
 Add nginx local-only deny rules to both `/gw` and `/gw/`:
 
@@ -801,7 +801,7 @@ location /gw/ {
 
 Apply same local-only deny block to `/gw/`.
 
-#### File: `scripts/patch-nginx-gw.sh`
+#### File: `scripts/maintenance/patch-nginx-gw.sh`
 
 If this script can add `/gw/` later, update it too so it does not reintroduce an exposed gateway. The generated block should include:
 
@@ -1127,12 +1127,12 @@ Document baseline status codes.
 ### Phase 1 — Close hardware control plane immediately
 
 1. Change LeLamp bind host to `127.0.0.1` in:
-   - `scripts/setup.sh`
+   - `scripts/provision/setup.sh`
    - `imager/build.sh`
    - `Makefile`
    - `lelamp/server.py` via `HTTP_HOST`
 2. Block nginx `/hw/` externally in:
-   - `scripts/setup.sh`
+   - `scripts/provision/setup.sh`
    - `imager/build.sh`
 3. Add LeLamp app-level local-only middleware.
 
@@ -1247,7 +1247,7 @@ Files to edit:
 - `Makefile`
   - Change `lelamp-dev` uvicorn host to `127.0.0.1`.
 
-- `scripts/setup.sh`
+- `scripts/provision/setup.sh`
   - Change LeLamp systemd host to `127.0.0.1`.
   - Add nginx `allow/deny` to `/hw/`.
   - Add nginx `allow/deny` to `/gw` and `/gw/`.
@@ -1257,7 +1257,7 @@ Files to edit:
   - Change LeLamp systemd host to `127.0.0.1`.
   - Add nginx `allow/deny` to `/hw/` and `/gw/`.
 
-- `scripts/patch-nginx-gw.sh`
+- `scripts/maintenance/patch-nginx-gw.sh`
   - Ensure any generated `/gw/` block includes local-only deny rules.
 
 - `lamp/server/server.go`

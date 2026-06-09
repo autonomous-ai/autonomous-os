@@ -2,7 +2,7 @@
 
 Produces SD card images that boot OrangePi 4 Pro (or Raspberry Pi 4B / 5) directly
 into the Lamp AP/hotspot setup wizard. Flash, insert, power on — no
-`scripts/setup.sh` needed on the target.
+`scripts/provision/setup.sh` needed on the target.
 
 ```bash
 make build                              # → output/golden-opi.img.xz (OrangePi, default)

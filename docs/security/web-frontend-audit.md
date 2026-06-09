@@ -909,7 +909,7 @@ The web app is a privileged device control panel. If it can be framed by another
 
 Set security headers in nginx for the web app.
 
-#### File: `scripts/setup.sh` nginx config
+#### File: `scripts/provision/setup.sh` nginx config
 
 Add to `server { ... }`:
 
@@ -1328,7 +1328,7 @@ Actions:
 
 Files:
 
-- `scripts/setup.sh`
+- `scripts/provision/setup.sh`
 - `imager/build.sh`
 - possibly `lamp/web/index.html`
 
@@ -1519,7 +1519,7 @@ Actions:
 
 ### Deployment headers
 
-- `scripts/setup.sh`
+- `scripts/provision/setup.sh`
   - Add CSP/security headers to nginx.
 
 - `imager/build.sh`

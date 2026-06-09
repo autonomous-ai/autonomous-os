@@ -49,7 +49,7 @@ Single JSON file hosted on GCS. All components reference this file.
 
 > In the URLs below, `{BUCKET}` and `{PREFIX}` are the bucket + path namespace:
 > `GCS_BUCKET` (default `s3-autonomous-upgrade-3`) and `BUCKET_PREFIX` (default
-> `os`), both set in `scripts/ota-config.sh`. Upload scripts read them from there;
+> `os`), both set in `scripts/release/ota-config.sh`. Upload scripts read them from there;
 > on-device consumers derive the same paths from the provisioned `ota_metadata_url`.
 
 **URL**: `https://storage.googleapis.com/{BUCKET}/{PREFIX}/ota/metadata.json`
@@ -99,7 +99,7 @@ type OTAComponent struct {
 
 ---
 
-## 3. Initial Setup (`scripts/setup.sh`)
+## 3. Initial Setup (`scripts/provision/setup.sh`)
 
 One-time provisioning script run on a fresh Raspberry Pi. Executes stages sequentially.
 
@@ -454,7 +454,7 @@ External     → http://<device-ip>/hw/docs    → nginx → 403 Forbidden
 
 ## 7. Upload / Publish Scripts
 
-### `scripts/upload-hal.sh` (NEW)
+### `scripts/release/upload-hal.sh` (NEW)
 
 ```bash
 #!/usr/bin/env bash
@@ -499,17 +499,17 @@ echo "HAL $NEW_VERSION published."
 
 | Script | Component | Pattern |
 |---|---|---|
-| `scripts/upload-lamp.sh` | Lamp Server binary | Build → zip → GCS → update metadata |
-| `scripts/upload-bootstrap.sh` | Bootstrap Server binary | Build → zip → GCS → update metadata |
-| `scripts/upload-web.sh` | Web SPA bundle | Build → zip → GCS → update metadata |
-| `scripts/upload-hal.sh` | HAL Python runtime (NEW) | Package → zip → GCS → update metadata |
-| `scripts/upload-setup.sh` | Setup script | Upload to GCS |
-| `scripts/upload-setup-ap.sh` | AP setup script | Upload to GCS |
-| `scripts/upload-skills.sh` | OpenClaw skill files | Upload to GCS |
-| `scripts/install.sh` | CDN install shortcut | `curl ... \| sudo bash` on Pi |
-| `scripts/tag-release.sh` | Git release tag with OTA metadata snapshot | Fetch metadata.json → annotated tag → `git push origin <tag>` |
+| `scripts/release/upload-lamp.sh` | Lamp Server binary | Build → zip → GCS → update metadata |
+| `scripts/release/upload-bootstrap.sh` | Bootstrap Server binary | Build → zip → GCS → update metadata |
+| `scripts/release/upload-web.sh` | Web SPA bundle | Build → zip → GCS → update metadata |
+| `scripts/release/upload-hal.sh` | HAL Python runtime (NEW) | Package → zip → GCS → update metadata |
+| `scripts/release/upload-setup.sh` | Setup script | Upload to GCS |
+| `scripts/release/upload-setup-ap.sh` | AP setup script | Upload to GCS |
+| `scripts/release/upload-skills.sh` | OpenClaw skill files | Upload to GCS |
+| `scripts/provision/install.sh` | CDN install shortcut | `curl ... \| sudo bash` on Pi |
+| `scripts/release/tag-release.sh` | Git release tag with OTA metadata snapshot | Fetch metadata.json → annotated tag → `git push origin <tag>` |
 
-### `scripts/tag-release.sh` — GPL v3 §6 traceability
+### `scripts/release/tag-release.sh` — GPL v3 §6 traceability
 
 After component uploads succeed (`make upload-lamp upload-hal upload-web ...`), this script anchors the resulting OTA metadata snapshot to a single git tag:
 
