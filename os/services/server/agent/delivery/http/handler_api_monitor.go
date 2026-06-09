@@ -47,7 +47,7 @@ func populateOpenClawVersion() {
 	defer cancel()
 	out, err := system.Run(ctx, "openclaw", "--version")
 	if err != nil {
-		slog.Warn("read openclaw version failed", "component", "openclaw", "error", err)
+		slog.Warn("read openclaw version failed (expected if not on openclaw backend)", "component", "openclaw-probe", "error", err)
 		return
 	}
 	line := strings.TrimSpace(strings.TrimRight(string(out), "\r\n"))
@@ -64,7 +64,7 @@ func populateOpenClawVersion() {
 // StopTTS interrupts active TTS playback on LeLamp.
 func (h *AgentHandler) StopTTS(c *gin.Context) {
 	if err := h.agentGateway.StopTTS(); err != nil {
-		slog.Warn("StopTTS failed", "component", "openclaw", "error", err)
+		slog.Warn("StopTTS failed", "component", "agent", "backend", h.agentGateway.Name(), "error", err)
 		c.JSON(http.StatusBadGateway, serializers.ResponseError(err.Error()))
 		return
 	}

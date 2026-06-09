@@ -81,7 +81,7 @@ func extractHWCalls(text string) ([]hwCall, string) {
 		}
 	}
 	if hasBuddy {
-		slog.Info("HW markers extracted", "component", "openclaw", "count", len(calls), "paths", paths)
+		slog.Info("HW markers extracted", "component", "agent-hw", "count", len(calls), "paths", paths)
 	}
 	return calls, strings.TrimSpace(hwMarkerRe.ReplaceAllString(text, ""))
 }

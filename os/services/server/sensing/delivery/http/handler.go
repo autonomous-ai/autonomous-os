@@ -181,7 +181,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 
 	// Sleep guard: while the agent is in "sleepy" state, drop all passive sensing
 	// (light.level, motion, sound) so they don't wake the agent and override the
-	// sleepy emotion. Only presence.enter and voice_command can wake the lamp.
+	// sleepy emotion. Only presence.enter, fire_hazard.detected, and voice_command can wake the lamp.
 	// web_chat is user-initiated text from the monitor UI — bypasses sleep-drop
 	// (forwarded to agent, TTS suppressed) but does NOT trigger physical wake.
 	// web_chat counts as passive for busy-gate so it queues on agent busy
@@ -191,7 +191,8 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	isWebChat := req.Type == "web_chat"
 	isPassive := !isVoiceCommand
 	if isPassive && !isVoice && !isWebChat && req.Type != "presence.enter" && req.Type != "fire_hazard.detected" && h.isSleeping != nil && h.isSleeping() {
-		slog.Info("sensing event dropped — sleeping", "component", "sensing", "type", req.Type)
+		slog.Info("INBOUND from LeLamp → SLEEP-DROPPED (lamp sleeping)",
+			"component", "sensing", "backend", h.agentGateway.Name(), "type", req.Type)
 		h.monitorBus.Push(domain.MonitorEvent{
 			Type:    "sensing_drop",
 			Summary: "[" + req.Type + "] " + req.Message,
@@ -238,6 +239,15 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 				// TEMP: TTS suppression disabled to test speaker remotely from web chat.
 				// h.agentGateway.MarkWebChatRun(queuedRunID)
 			}
+			slog.Info("INBOUND from LeLamp → QUEUED (agent busy, will replay on idle)",
+				"component", "sensing",
+				"backend", h.agentGateway.Name(),
+				"type", req.Type,
+				"runId", queuedRunID,
+				"hasImage", req.Image != "",
+				"inVoiceWindow", inVoiceWindow,
+				"msgLen", len(req.Message),
+				"message", req.Message)
 			h.agentGateway.QueuePendingEvent(req.Type, req.Message, req.Image, queuedRunID)
 			resp := map[string]string{"handler": "queued"}
 			if queuedRunID != "" {
@@ -246,7 +256,8 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			c.JSON(http.StatusOK, serializers.ResponseSuccess(resp))
 			return
 		}
-		slog.Info("sensing event dropped — agent busy", "component", "sensing", "type", req.Type)
+		slog.Info("INBOUND from LeLamp → DROPPED (agent busy, non-queueable type)",
+			"component", "sensing", "backend", h.agentGateway.Name(), "type", req.Type)
 		h.monitorBus.Push(domain.MonitorEvent{
 			Type:    "sensing_drop",
 			Summary: "[" + req.Type + "] " + req.Message,
@@ -393,7 +404,30 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// swallowed by bound-channel routing and the SSE stream times out.
 	isSlashCommand := isWebChat && strings.HasPrefix(msg, "/")
 	// motion.activity: snapshot saved for UI but NOT sent to agent (save tokens — action name is enough)
-	if req.Image != "" && req.Type != "motion.activity" {
+	hasImage := req.Image != "" && req.Type != "motion.activity"
+
+	// Unified entry-point log — every inbound message reaching the agent goes
+	// through one of the INBOUND lines so `grep INBOUND` shows a complete
+	// trail across all sources (LeLamp, channels, system).
+	sourceLabel := "LeLamp"
+	if isWebChat {
+		sourceLabel = "WebMonitor"
+	}
+	slog.Info("INBOUND from "+sourceLabel+" → agent",
+		"component", "sensing",
+		"backend", h.agentGateway.Name(),
+		"type", req.Type,
+		"runId", runID,
+		"reqId", reqID,
+		"hasImage", hasImage,
+		"imageBytes", len(req.Image),
+		"isSlash", isSlashCommand,
+		"isWebChat", isWebChat,
+		"isVoice", isVoice,
+		"msgLen", len(msg),
+		"message", msg)
+
+	if hasImage {
 		if isSlashCommand {
 			_, err = h.agentGateway.SendSlashCommandWithImageAndRun(msg, req.Image, reqID, runID)
 		} else {

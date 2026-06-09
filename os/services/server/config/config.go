@@ -104,7 +104,7 @@ type Config struct {
 	TTSVoice        string `json:"tts_voice" yaml:"ttsVoice"`
 	TTSInstructions string `json:"tts_instructions" yaml:"ttsInstructions"`
 
-	// AgentRuntime selects which agentic backend to use: "openclaw" (default), "picoclaw", "claudecode", etc.
+	// AgentRuntime selects which agentic backend to use: "openclaw" (default), "hermes", "picoclaw", "claudecode", etc.
 	AgentRuntime string `json:"agent_runtime" yaml:"agentRuntime"`
 
 	OpenclawConfigDir string `json:"openclaw_config_dir" yaml:"openclawConfigDir"`

@@ -1,0 +1,271 @@
+// Package hermes implements domain.AgentGateway against the Hermes HTTP+SSE
+// API server (OpenAI Responses API style). See hermes.md at the repo root for
+// the full design — protocol mapping, session strategy, and the runtime
+// boundaries with OpenClaw.
+//
+// Hermes is assumed to be running locally on the Pi at Hermes.BaseURL with
+// all skills already provisioned. Lumi only acts as a per-request client and
+// translates SSE events into the same domain.WSEvent shape that the OpenClaw
+// handler at server/agent/delivery/http/handler_events.go consumes — so the
+// downstream pipeline (LeLamp TTS, [HW:/...] markers, monitor SSE, sensing
+// drain, Telegram fan-out) stays untouched.
+package hermes
+
+import (
+	"net/http"
+	"regexp"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"go.autonomous.ai/os/domain"
+	"go.autonomous.ai/os/internal/monitor"
+	"go.autonomous.ai/os/internal/statusled"
+	"go.autonomous.ai/os/server/config"
+)
+
+// Compile-time check: *Service implements domain.AgentGateway.
+var _ domain.AgentGateway = (*Service)(nil)
+
+// reSnapshotPath / rePoseBucketMarker / rePoseWorstMarker mirror the openclaw
+// regexes so the drain pipeline strips the same markers before send. Kept as
+// package vars (compile once) since drainPendingEvents fires per pending turn.
+var (
+	reSnapshotPath     = regexp.MustCompile(`\[snapshot:\s*[^\]]+\]`)
+	rePoseBucketMarker = regexp.MustCompile(`\[pose_bucket:\s*([^\]]+)\]\n?`)
+	rePoseWorstMarker  = regexp.MustCompile(`\[pose_worst:\s*([^\]]+)\]\n?`)
+)
+
+// extractPoseBucketMarkers pulls (bucket_id, filenames) from a sensing message.
+func extractPoseBucketMarkers(message string) (string, []string) {
+	bm := rePoseBucketMarker.FindStringSubmatch(message)
+	if bm == nil {
+		return "", nil
+	}
+	bucketID := strings.TrimSpace(bm[1])
+	if bucketID == "" {
+		return "", nil
+	}
+	wm := rePoseWorstMarker.FindStringSubmatch(message)
+	var worst []string
+	if wm != nil {
+		for _, part := range strings.Split(wm[1], ",") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				worst = append(worst, part)
+			}
+		}
+	}
+	return bucketID, worst
+}
+
+// Service is the Hermes backend implementation of domain.AgentGateway.
+//
+// Unlike openclaw.Service which holds a persistent WebSocket, Hermes is
+// per-request: each SendChatMessage opens a POST /v1/responses with stream:true
+// and reads SSE until response.completed. Lifecycle/busy state, run tracking,
+// channel senders, and TTS plumbing are otherwise identical to openclaw.
+type Service struct {
+	config     *config.Config
+	monitorBus *monitor.Bus
+	statusLED  *statusled.Service
+	httpClient *http.Client
+
+	// Connection-state shadow. Hermes has no persistent socket, so these are
+	// driven by the /health poller goroutine (see health.go).
+	ready          atomic.Bool
+	connectedAt    atomic.Int64 // unix seconds when ready last flipped true
+	agentStartedAt atomic.Int64 // derived from /health/detailed.uptime_s if available
+	hasConnected   atomic.Bool  // skip "reconnect" TTS on first successful poll
+
+	// Turn lifecycle, mirrors openclaw.Service. activeTurn flips true on
+	// SendChat (write) and false on response.completed (read).
+	activeTurn atomic.Bool
+	busySince  atomic.Int64
+
+	// Session/conversation state. sessionUUID is the X-Hermes-Session-Id header
+	// captured from any response; conversation is the named channel everything
+	// flows into (default "lumi-main").
+	sessionUUID    atomic.Value // string
+	lastResponseID atomic.Value // string — last response.id observed
+	reqCounter     atomic.Int64
+
+	// Handler registered via StartWS — kept here so the per-request SSE
+	// consumer can dispatch translated domain.WSEvent frames into the same
+	// pipeline as openclaw.
+	handlerMu sync.Mutex
+	handler   domain.AgentEventHandler
+
+	// Pending sensing events buffered while busy.
+	pendingEventsMu sync.Mutex
+	pendingEvents   []pendingEvent
+
+	// Run trackers (guard / broadcast / web_chat / pose bucket). All in-memory.
+	guardRunsMu sync.Mutex
+	guardRuns   map[string]string
+
+	broadcastRunsMu sync.Mutex
+	broadcastRuns   map[string]bool
+
+	webChatRunsMu sync.Mutex
+	webChatRuns   map[string]bool
+
+	poseBucketRunsMu sync.Mutex
+	poseBucketRuns   map[string]poseBucketInfo
+
+	// Channel senders (Telegram).
+	channels []domain.ChannelSender
+
+	// Pending chat traces (mapping idempotencyKey ↔ message text for
+	// MatchPendingByMessage). Hermes-side this is less critical since we own
+	// the response.id immediately, but the SSE handler still calls these on
+	// some paths so we keep parity.
+	pendingChatMu  sync.Mutex
+	pendingChatBuf []pendingTrace
+
+	// Recent outbound texts (echo-suppression for session.message handler).
+	recentOutboundMu    sync.Mutex
+	recentOutboundTexts []recentOutbound
+
+	// telegramRunOrigin maps a runID → telegram chatID for runs originated
+	// from a Lumi-side Telegram receive loop. The SSE handler consults this
+	// on response.completed to route the reply back to the chat instead of
+	// (or alongside) TTS.
+	telegramRunOriginMu sync.Mutex
+	telegramRunOrigin   map[string]string
+}
+
+type recentOutbound struct {
+	text string
+	ts   int64
+}
+
+const recentOutboundWindowMs int64 = 30_000
+const recentOutboundMaxEntries = 32
+
+type pendingTrace struct {
+	runID   string
+	message string
+	sentAt  time.Time
+}
+
+type poseBucketInfo struct {
+	bucketID  string
+	filenames []string
+	markedAt  time.Time
+}
+
+// ProvideService constructs the Hermes service. Wired via internal/agent/factory.go
+// when config.AgentRuntime == "hermes".
+func ProvideService(cfg *config.Config, bus *monitor.Bus, sled *statusled.Service) *Service {
+	s := &Service{
+		config:            cfg,
+		monitorBus:        bus,
+		statusLED:         sled,
+		httpClient:        &http.Client{Timeout: 0}, // per-request stream — no global timeout, use ctx
+		guardRuns:         make(map[string]string),
+		broadcastRuns:     make(map[string]bool),
+		webChatRuns:       make(map[string]bool),
+		poseBucketRuns:    make(map[string]poseBucketInfo),
+		telegramRunOrigin: make(map[string]string),
+	}
+	s.channels = []domain.ChannelSender{
+		&TelegramSender{svc: s},
+	}
+	return s
+}
+
+// Name returns the display name surfaced via /api/openclaw/status.
+func (s *Service) Name() string { return "Hermes" }
+
+// IsReady reports whether the Hermes server has been reachable on a recent
+// /health poll. Driven by the health poller goroutine, not by per-request SSE
+// (a single failed POST does not flip readiness).
+func (s *Service) IsReady() bool { return s.ready.Load() }
+
+// ConnectedAt returns the unix-seconds timestamp when readiness last became
+// true. Mirrors openclaw.Service.ConnectedAt for the monitor UI.
+func (s *Service) ConnectedAt() int64 { return s.connectedAt.Load() }
+
+// AgentUptime returns Hermes process uptime in seconds when /health/detailed
+// has reported it. Returns 0 when the value has not yet been observed or the
+// server is currently unreachable.
+func (s *Service) AgentUptime() int64 {
+	if !s.ready.Load() {
+		return 0
+	}
+	startedAt := s.agentStartedAt.Load()
+	if startedAt <= 0 {
+		return 0
+	}
+	uptime := time.Now().Unix() - startedAt
+	if uptime < 0 {
+		return 0
+	}
+	return uptime
+}
+
+// markOutboundChat / IsRecentOutboundChat mirror openclaw.Service. Used by the
+// session.message handler to skip echoes of Lumi-injected user messages
+// (wake greeting, sensing events) that the server rebroadcasts.
+func (s *Service) markOutboundChat(text string) {
+	if text == "" {
+		return
+	}
+	now := time.Now().UnixMilli()
+	s.recentOutboundMu.Lock()
+	defer s.recentOutboundMu.Unlock()
+	cutoff := now - recentOutboundWindowMs
+	pruned := s.recentOutboundTexts[:0]
+	for _, r := range s.recentOutboundTexts {
+		if r.ts >= cutoff {
+			pruned = append(pruned, r)
+		}
+	}
+	pruned = append(pruned, recentOutbound{text: text, ts: now})
+	if len(pruned) > recentOutboundMaxEntries {
+		pruned = pruned[len(pruned)-recentOutboundMaxEntries:]
+	}
+	s.recentOutboundTexts = pruned
+}
+
+// IsRecentOutboundChat reports whether Lumi sent this text recently.
+func (s *Service) IsRecentOutboundChat(text string) bool {
+	if text == "" {
+		return false
+	}
+	now := time.Now().UnixMilli()
+	cutoff := now - recentOutboundWindowMs
+	s.recentOutboundMu.Lock()
+	defer s.recentOutboundMu.Unlock()
+	for _, r := range s.recentOutboundTexts {
+		if r.ts >= cutoff && r.text == text {
+			return true
+		}
+	}
+	return false
+}
+
+// markTelegramOrigin records that a runID originated from a Telegram inbound
+// message so response.completed can route the reply back via DM.
+func (s *Service) markTelegramOrigin(runID, chatID string) {
+	if runID == "" || chatID == "" {
+		return
+	}
+	s.telegramRunOriginMu.Lock()
+	s.telegramRunOrigin[runID] = chatID
+	s.telegramRunOriginMu.Unlock()
+}
+
+// consumeTelegramOrigin returns the chatID associated with runID and clears
+// the entry. One-shot.
+func (s *Service) consumeTelegramOrigin(runID string) (string, bool) {
+	s.telegramRunOriginMu.Lock()
+	chatID, ok := s.telegramRunOrigin[runID]
+	if ok {
+		delete(s.telegramRunOrigin, runID)
+	}
+	s.telegramRunOriginMu.Unlock()
+	return chatID, ok
+}

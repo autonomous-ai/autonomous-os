@@ -60,7 +60,7 @@ func (h *AgentHandler) maybeAutoCompact(sessionKey string, totalTokens int, flow
 			h.compacting.Store(false)
 		})
 		if err := lelamp.SpeakInterruptible(i18n.One(i18n.PhraseCompactNotice)); err != nil {
-			slog.Warn("compaction notice TTS failed", "component", "openclaw", "error", err)
+			slog.Warn("compaction notice TTS failed", "component", "agent", "backend", h.agentGateway.Name(), "error", err)
 		}
 		if sessionKey == "" {
 			slog.Error("auto-compact failed: no session key", "component", "agent")
