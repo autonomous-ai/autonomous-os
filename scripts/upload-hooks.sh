@@ -3,7 +3,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-HOOKS_DIR="${ROOT_DIR}/os/services/resources/openclaw-hooks"
+HOOKS_DIR="${ROOT_DIR}/hooks"
 
 GCS_BUCKET="${GCS_BUCKET:-s3-autonomous-upgrade-3}"
 GCS_PREFIX="${GCS_PREFIX:-lamp/hooks}"
