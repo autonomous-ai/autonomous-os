@@ -17,7 +17,7 @@ import (
 	"go.autonomous.ai/os/domain"
 	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/internal/network"
-	"go.autonomous.ai/os/lib/lelamp"
+	"go.autonomous.ai/os/lib/hal"
 	agenthttp "go.autonomous.ai/os/server/agent/delivery/http"
 	"go.autonomous.ai/os/server/config"
 	"go.autonomous.ai/os/server/serializers"
@@ -48,24 +48,24 @@ func (h *HealthHandler) Readiness(c *gin.Context) {
 // SystemInfo returns CPU load, RAM usage, temperature, and uptime.
 func (h *HealthHandler) SystemInfo(c *gin.Context) {
 	info := map[string]any{
-		"cpuLoad":    readCPUPercent(),
-		"cpuCount":   runtime.NumCPU(),
-		"cpuPerCore": readCPUPerCore(),
-		"memTotal":   0,
-		"memUsed":    0,
-		"memPercent": 0.0,
-		"swapTotal":   0,
-		"swapUsed":    0,
-		"swapPercent": 0.0,
-		"cpuTemp":    readCPUTemp(),
-		"uptime":         readUptime(),
-		"serviceUptime":  int64(time.Since(serverStartTime).Seconds()),
-		"lelampUptime":   readLeLampUptime(),
-		"lelampVersion":  readLeLampVersion(),
-		"goRoutines": runtime.NumGoroutine(),
-		"version":    config.LampVersion,
-		"deviceId":   h.config.DeviceID,
-		"agent":      h.agentInfo(),
+		"cpuLoad":       readCPUPercent(),
+		"cpuCount":      runtime.NumCPU(),
+		"cpuPerCore":    readCPUPerCore(),
+		"memTotal":      0,
+		"memUsed":       0,
+		"memPercent":    0.0,
+		"swapTotal":     0,
+		"swapUsed":      0,
+		"swapPercent":   0.0,
+		"cpuTemp":       readCPUTemp(),
+		"uptime":        readUptime(),
+		"serviceUptime": int64(time.Since(serverStartTime).Seconds()),
+		"halUptime":     readHALUptime(),
+		"halVersion":    readHALVersion(),
+		"goRoutines":    runtime.NumGoroutine(),
+		"version":       config.LampVersion,
+		"deviceId":      h.config.DeviceID,
+		"agent":         h.agentInfo(),
 	}
 
 	// Parse /proc/meminfo for RAM + swap (KB).
@@ -97,7 +97,7 @@ func (h *HealthHandler) SystemInfo(c *gin.Context) {
 // living on /api/system/info; payload is intentionally non-sensitive (no
 // session token value, no PII).
 func (h *HealthHandler) agentInfo() map[string]any {
-	emotion, _ := lelamp.GetEmotion()
+	emotion, _ := hal.GetEmotion()
 	var uptime int64
 	if connectedAt := h.agentGateway.ConnectedAt(); connectedAt > 0 {
 		uptime = time.Now().Unix() - connectedAt
@@ -341,36 +341,36 @@ func readCPUTemp() float64 {
 	return float64(milliC) / 1000.0
 }
 
-// lelampVersionCache holds the most recent /version reading. LeLamp version
+// halVersionCache holds the most recent /version reading. HAL version
 // only changes on OTA (rare), so a 60s TTL is plenty fresh while sparing the
 // loopback HTTP call from a 5s monitor poll. On error we keep serving the
-// previously cached value so a transient LeLamp restart doesn't blank out
+// previously cached value so a transient HAL restart doesn't blank out
 // the version row in the UI.
-var lelampVersionCache = struct {
+var halVersionCache = struct {
 	mu        sync.Mutex
 	value     string
 	fetchedAt time.Time
 }{}
 
-// readLeLampVersion returns LeLamp's runtime version via GET :5001/version,
-// memoized for 60s. Empty string when LeLamp has never responded successfully.
-func readLeLampVersion() string {
-	lelampVersionCache.mu.Lock()
-	defer lelampVersionCache.mu.Unlock()
-	if time.Since(lelampVersionCache.fetchedAt) < 60*time.Second && lelampVersionCache.value != "" {
-		return lelampVersionCache.value
+// readHALVersion returns HAL's runtime version via GET :5001/version,
+// memoized for 60s. Empty string when HAL has never responded successfully.
+func readHALVersion() string {
+	halVersionCache.mu.Lock()
+	defer halVersionCache.mu.Unlock()
+	if time.Since(halVersionCache.fetchedAt) < 60*time.Second && halVersionCache.value != "" {
+		return halVersionCache.value
 	}
-	v, err := lelamp.GetVersion()
+	v, err := hal.GetVersion()
 	if err != nil {
-		return lelampVersionCache.value
+		return halVersionCache.value
 	}
-	lelampVersionCache.value = v
-	lelampVersionCache.fetchedAt = time.Now()
+	halVersionCache.value = v
+	halVersionCache.fetchedAt = time.Now()
 	return v
 }
 
-// readLeLampUptime returns uptime in seconds of the lamp-hal systemd service.
-func readLeLampUptime() int64 {
+// readHALUptime returns uptime in seconds of the lamp-hal systemd service.
+func readHALUptime() int64 {
 	out, err := exec.Command("systemctl", "show", "lamp-hal",
 		"--property=ActiveEnterTimestamp", "--value").Output()
 	if err != nil {
@@ -432,4 +432,3 @@ func parseMeminfo(content string) (memTotal, memAvail, swapTotal, swapFree int64
 	}
 	return
 }
-

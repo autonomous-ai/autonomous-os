@@ -37,7 +37,7 @@ var _ domain.AgentGateway = (*Service)(nil)
 // reSnapshotPath matches [snapshot: /path/to/file.jpg] markers in sensing messages.
 var reSnapshotPath = regexp.MustCompile(`\[snapshot:\s*[^\]]+\]`)
 
-// Pose bucket markers — emitted by lelamp motion.py on motion.activity
+// Pose bucket markers — emitted by hal motion.py on motion.activity
 // when a posture nudge folds in. Drain path strips them before forwarding
 // to the LLM and extracts the (bucket_id, worst_filenames) pair so the SSE
 // /dm path can attach the worst frames to the Telegram DM. Mirrors the
@@ -120,7 +120,7 @@ type Service struct {
 	webChatRunsMu sync.Mutex
 	webChatRuns   map[string]bool
 
-	// poseBucketRuns associates a motion.activity runID with the lelamp
+	// poseBucketRuns associates a motion.activity runID with the hal
 	// pose bucket whose window just fired. Populated by the sensing
 	// handler when it parses [pose_bucket:...] / [pose_worst:...] markers,
 	// consumed by the SSE /dm path so the worst frames can ride along on
@@ -170,7 +170,7 @@ type pendingTrace struct {
 	sentAt  time.Time
 }
 
-// poseBucketInfo carries the lelamp bucket identifier and the pre-selected
+// poseBucketInfo carries the hal bucket identifier and the pre-selected
 // worst-snapshot filenames for a single motion.activity turn. Filenames
 // stay raw (no path prefix) so the consumer can rebuild paths against
 // whichever snapshot tmp dir applies.

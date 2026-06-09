@@ -8,7 +8,7 @@ import (
 
 	"go.autonomous.ai/os/domain"
 	"go.autonomous.ai/os/lib/flow"
-	"go.autonomous.ai/os/lib/lelamp"
+	"go.autonomous.ai/os/lib/hal"
 )
 
 // stripForTTS regexes — package-level, compiled once.
@@ -22,13 +22,13 @@ var (
 	reWhitespace = regexp.MustCompile(`\s+`)
 )
 
-// StartLeLampVoice starts the LeLamp voice pipeline. Backend-agnostic — only
-// talks to the LeLamp daemon on the Pi.
-func (s *Service) StartLeLampVoice(deepgramKey, llmKey, sttKey, ttsKey, llmBaseURL, sttBaseURL, ttsBaseURL, ttsVoice, ttsInstructions, ttsProvider string) error {
+// StartHALVoice starts the HAL voice pipeline. Backend-agnostic — only
+// talks to the HAL daemon on the Pi.
+func (s *Service) StartHALVoice(deepgramKey, llmKey, sttKey, ttsKey, llmBaseURL, sttBaseURL, ttsBaseURL, ttsVoice, ttsInstructions, ttsProvider string) error {
 	if deepgramKey == "" {
 		return nil
 	}
-	if err := lelamp.StartVoice(lelamp.VoiceStartConfig{
+	if err := hal.StartVoice(hal.VoiceStartConfig{
 		DeepgramKey:     deepgramKey,
 		LLMKey:          llmKey,
 		STTKey:          sttKey,
@@ -42,7 +42,7 @@ func (s *Service) StartLeLampVoice(deepgramKey, llmKey, sttKey, ttsKey, llmBaseU
 	}); err != nil {
 		return err
 	}
-	slog.Info("LeLamp voice pipeline started", "component", "hermes")
+	slog.Info("HAL voice pipeline started", "component", "hermes")
 	flow.Log("voice_pipeline_start", nil)
 	return nil
 }
@@ -67,7 +67,7 @@ func truncRunes(s string, n int) string {
 }
 
 func (s *Service) SetVolume(pct int) error {
-	if err := lelamp.SetVolume(pct); err != nil {
+	if err := hal.SetVolume(pct); err != nil {
 		return err
 	}
 	slog.Info("speaker volume set", "component", "hermes", "pct", pct)
@@ -75,22 +75,22 @@ func (s *Service) SetVolume(pct int) error {
 }
 
 func (s *Service) StopTTS() error {
-	if err := lelamp.StopTTS(); err != nil {
+	if err := hal.StopTTS(); err != nil {
 		return err
 	}
-	if err := lelamp.StopAudio(); err != nil {
+	if err := hal.StopAudio(); err != nil {
 		slog.Warn("stop audio failed", "component", "hermes", "error", err)
 	}
 	slog.Info("speaker stopped (TTS + music)", "component", "hermes")
 	return nil
 }
 
-func (s *Service) SendToLeLampTTS(text string) error {
+func (s *Service) SendToHALTTS(text string) error {
 	text = stripForTTS(text)
 	if text == "" {
 		return nil
 	}
-	if err := lelamp.Speak(text); err != nil {
+	if err := hal.Speak(text); err != nil {
 		return fmt.Errorf("speak: %w", err)
 	}
 	slog.Info("TTS sent", "component", "hermes", "text", truncRunes(text, 80))
@@ -98,12 +98,12 @@ func (s *Service) SendToLeLampTTS(text string) error {
 	return nil
 }
 
-func (s *Service) SendToLeLampTTSQueue(text string) error {
+func (s *Service) SendToHALTTSQueue(text string) error {
 	text = stripForTTS(text)
 	if text == "" {
 		return nil
 	}
-	if err := lelamp.SpeakQueue(text); err != nil {
+	if err := hal.SpeakQueue(text); err != nil {
 		return fmt.Errorf("speak-queue: %w", err)
 	}
 	slog.Info("TTS queued", "component", "hermes", "text", truncRunes(text, 80))

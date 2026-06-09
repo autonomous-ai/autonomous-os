@@ -13,7 +13,7 @@ import (
 	"go.autonomous.ai/os/domain"
 	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/lib/core/system"
-	"go.autonomous.ai/os/lib/lelamp"
+	"go.autonomous.ai/os/lib/hal"
 	agenthttp "go.autonomous.ai/os/server/agent/delivery/http"
 	"go.autonomous.ai/os/server/config"
 )
@@ -41,7 +41,7 @@ func (h *DeviceMQTTHandler) handleSystemInfo(env domain.MQTTDataCommand) error {
 	}
 	slog.Info("system.info", "component", "mqtt",
 		"lamp", data.Versions.Lamp, "bootstrap", data.Versions.Bootstrap,
-		"lelamp", data.Versions.Lelamp, "openclaw", data.Versions.OpenClaw,
+		"hal", data.Versions.Lelamp, "openclaw", data.Versions.OpenClaw,
 		"ip", data.Network.PrivateIP, "ssid", data.Network.SSID)
 	return h.publishDataResult(env.Kind, "success", "", data)
 }
@@ -54,7 +54,7 @@ func (h *DeviceMQTTHandler) handleSystemVersion(env domain.MQTTDataCommand) erro
 
 	v := probeVersions(ctx)
 	slog.Info("system.version", "component", "mqtt",
-		"lamp", v.Lamp, "bootstrap", v.Bootstrap, "lelamp", v.Lelamp, "openclaw", v.OpenClaw)
+		"lamp", v.Lamp, "bootstrap", v.Bootstrap, "hal", v.Lelamp, "openclaw", v.OpenClaw)
 	return h.publishDataResult(env.Kind, "success", "", v)
 }
 
@@ -69,10 +69,10 @@ func (h *DeviceMQTTHandler) handleSystemNetwork(env domain.MQTTDataCommand) erro
 	return h.publishDataResult(env.Kind, "success", "", n)
 }
 
-// probeVersions collects lamp + bootstrap + lelamp + openclaw versions.
+// probeVersions collects lamp + bootstrap + hal + openclaw versions.
 //   - lamp: read straight from the ldflags-injected build var (no exec needed).
 //   - bootstrap: exec `bootstrap-server --version`; "" on any error.
-//   - lelamp: queried over HTTP from the local LeLamp service /version endpoint.
+//   - hal: queried over HTTP from the local HAL service /version endpoint.
 //   - openclaw: read from the cached version probed by the agent monitor.
 //     OpenClawDetected distinguishes "not installed" from "installed but
 //     unparseable".
@@ -87,10 +87,11 @@ func probeVersions(ctx context.Context) domain.MQTTVersionsData {
 		out.Bootstrap = strings.TrimSpace(string(v))
 	}
 
-	if v, err := lelamp.GetVersion(); err != nil {
-		slog.Warn("system.info: lelamp version failed", "component", "mqtt", "error", err)
+	if v, err := hal.GetVersion(); err != nil {
+		slog.Warn("system.info: hal version failed", "component", "mqtt", "error", err)
 	} else {
 		out.Lelamp = strings.TrimSpace(v)
+		out.Hal = strings.TrimSpace(v)
 	}
 
 	if v := agenthttp.GetOpenClawVersion(); v != "" {

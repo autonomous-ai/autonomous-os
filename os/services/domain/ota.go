@@ -11,11 +11,10 @@ const (
 	OTAKeyBootstrap = "bootstrap"
 	OTAKeyOpenClaw  = "openclaw"
 	OTAKeyWeb       = "web"
-	// OTAKeyLeLamp's value is "hal" — the OTA metadata key, on-device deploy
-	// dir (/opt/hal), and `software-update` arg after the lelamp→hal rename.
-	// The Go constant keeps its LeLamp name to avoid churn across call sites.
-	OTAKeyLeLamp    = "hal"
-	OTAKeyBuddy     = "claude-desktop-buddy"
+	// OTAKeyHal's value is "hal" — the OTA metadata key, on-device deploy
+	// dir (/opt/hal), and `software-update` arg.
+	OTAKeyHal   = "hal"
+	OTAKeyBuddy = "claude-desktop-buddy"
 )
 
 // OTAMetadata is the JSON shape returned by the OTA metadata URL.

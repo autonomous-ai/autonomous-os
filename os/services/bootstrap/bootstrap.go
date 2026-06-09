@@ -20,7 +20,7 @@ import (
 	"go.autonomous.ai/os/bootstrap/state"
 	"go.autonomous.ai/os/domain"
 	"go.autonomous.ai/os/lib/core/system"
-	"go.autonomous.ai/os/lib/lelamp"
+	"go.autonomous.ai/os/lib/hal"
 )
 
 // semverRe captures the first semver-like token (e.g. 2026.3.8 or v1.2.3-beta).
@@ -108,7 +108,7 @@ func (b *Bootstrap) Serve() error {
 	})
 	r.POST("/force-check/:target", func(c *gin.Context) {
 		target := c.Param("target")
-		allowed := map[string]bool{domain.OTAKeyOSServer: true, domain.OTAKeyWeb: true, domain.OTAKeyLeLamp: true}
+		allowed := map[string]bool{domain.OTAKeyOSServer: true, domain.OTAKeyWeb: true, domain.OTAKeyHal: true}
 		if !allowed[target] {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown target: " + target})
 			return
@@ -194,7 +194,7 @@ func (b *Bootstrap) checkOnce(ctx context.Context) error {
 	// detectVersion / applyUpdate already handle OTAKeyOpenClaw (npm install +
 	// systemctl restart openclaw); the old reconcileOpenClawFromNpm() pulled
 	// "latest" from `npm view` instead and is no longer needed.
-	for _, key := range []string{domain.OTAKeyOSServer, domain.OTAKeyBootstrap, domain.OTAKeyWeb, domain.OTAKeyLeLamp, domain.OTAKeyBuddy, domain.OTAKeyOpenClaw} {
+	for _, key := range []string{domain.OTAKeyOSServer, domain.OTAKeyBootstrap, domain.OTAKeyWeb, domain.OTAKeyHal, domain.OTAKeyBuddy, domain.OTAKeyOpenClaw} {
 		component, ok := meta[key]
 		if !ok {
 			continue
@@ -240,15 +240,15 @@ func (b *Bootstrap) reconcile(ctx context.Context, key string, target domain.OTA
 	slog.Info("update available", "component", "bootstrap", "key", key, "current", current, "target", targetVersion)
 
 	// Status LED: orange breathing while updating
-	lelamp.SetEffect("breathing", 255, 140, 0, 0.4)
+	hal.SetEffect("breathing", 255, 140, 0, 0.4)
 
 	if err := b.applyUpdate(ctx, key, target); err != nil {
-		lelamp.SetEffect("pulse", 255, 30, 30, 1.5) // red pulse on error
+		hal.SetEffect("pulse", 255, 30, 30, 1.5) // red pulse on error
 		return false, err
 	}
 
 	// Brief green flash to confirm success, then stop
-	lelamp.SetEffect("notification_flash", 0, 255, 80, 1.0)
+	hal.SetEffect("notification_flash", 0, 255, 80, 1.0)
 	slog.Info("updated", "component", "bootstrap", "key", key, "version", targetVersion)
 	b.state.Components[key] = targetVersion
 	return true, nil
@@ -296,8 +296,8 @@ func (b *Bootstrap) detectVersion(ctx context.Context, key string) string {
 			return ""
 		}
 		return strings.TrimSpace(string(data))
-	case domain.OTAKeyLeLamp:
-		path := filepath.Join("/opt/hal", "VERSION_LELAMP")
+	case domain.OTAKeyHal:
+		path := filepath.Join("/opt/hal", "VERSION_HAL")
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return ""
@@ -324,7 +324,7 @@ func (b *Bootstrap) detectVersion(ctx context.Context, key string) string {
 // applyUpdate runs the appropriate update command for the given component.
 func (b *Bootstrap) applyUpdate(ctx context.Context, key string, component domain.OTAComponent) error {
 	switch key {
-	case domain.OTAKeyOSServer, domain.OTAKeyWeb, domain.OTAKeyLeLamp, domain.OTAKeyBuddy, domain.OTAKeyOpenClaw:
+	case domain.OTAKeyOSServer, domain.OTAKeyWeb, domain.OTAKeyHal, domain.OTAKeyBuddy, domain.OTAKeyOpenClaw:
 		// All non-bootstrap components delegate to the on-device
 		// `software-update <key>` script (installed by setup.sh) so the
 		// install logic lives in one place — the script self-fetches

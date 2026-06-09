@@ -6,14 +6,14 @@ import (
 	"strings"
 
 	"go.autonomous.ai/os/domain"
-	"go.autonomous.ai/os/lib/lelamp"
+	"go.autonomous.ai/os/lib/hal"
 )
 
 // handleTTSPreview plays a one-shot TTS preview on the lamp without
 // persisting any config change. Mirrors the HTTP /api/voice/preview flow:
 // API key + base URL are read server-side from config so the BFF never
 // has to ship credentials over MQTT. Provider/voice/language overrides
-// are optional — empty fields make LeLamp fall back to current config.
+// are optional — empty fields make HAL fall back to current config.
 func (h *DeviceMQTTHandler) handleTTSPreview(env domain.MQTTDataCommand) error {
 	var req domain.MQTTTTSPreviewData
 	if err := json.Unmarshal(env.Data, &req); err != nil {
@@ -36,7 +36,7 @@ func (h *DeviceMQTTHandler) handleTTSPreview(env domain.MQTTDataCommand) error {
 	go func() {
 		apiKey := h.config.GetTTSAPIKey()
 		baseURL := h.config.GetTTSBaseURL()
-		if err := lelamp.SpeakPreview(req.Text, req.Voice, req.Provider, apiKey, baseURL); err != nil {
+		if err := hal.SpeakPreview(req.Text, req.Voice, req.Provider, apiKey, baseURL); err != nil {
 			slog.Error("tts.preview: SpeakPreview failed", "component", "mqtt", "error", err)
 			if pubErr := h.publishDataResult(domain.KindTTSPreview, "failure", err.Error(), nil); pubErr != nil {
 				slog.Warn("tts.preview: publish failure ack failed", "component", "mqtt", "error", pubErr)

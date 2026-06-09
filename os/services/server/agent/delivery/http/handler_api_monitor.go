@@ -14,7 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"go.autonomous.ai/os/lib/core/system"
-	"go.autonomous.ai/os/lib/lelamp"
+	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/server/serializers"
 )
 
@@ -61,7 +61,7 @@ func populateOpenClawVersion() {
 	openClawVersion.Store(&v)
 }
 
-// StopTTS interrupts active TTS playback on LeLamp.
+// StopTTS interrupts active TTS playback on HAL.
 func (h *AgentHandler) StopTTS(c *gin.Context) {
 	if err := h.agentGateway.StopTTS(); err != nil {
 		slog.Warn("StopTTS failed", "component", "agent", "backend", h.agentGateway.Name(), "error", err)
@@ -81,8 +81,8 @@ func (h *AgentHandler) SetBusy(c *gin.Context) {
 
 // Status returns the current agent connection status.
 func (h *AgentHandler) Status(c *gin.Context) {
-	// Get real emotion from LeLamp (source of truth) instead of parsed text
-	emotion := h.fetchLeLampEmotion()
+	// Get real emotion from HAL (source of truth) instead of parsed text
+	emotion := h.fetchHALEmotion()
 
 	version := ""
 	if v := openClawVersion.Load(); v != nil {
@@ -112,10 +112,10 @@ func (h *AgentHandler) Status(c *gin.Context) {
 	}))
 }
 
-// fetchLeLampEmotion calls LeLamp /emotion/status to get the current emotion.
-// Falls back to lastEmotion if LeLamp is unreachable.
-func (h *AgentHandler) fetchLeLampEmotion() string {
-	emotion, err := lelamp.GetEmotion()
+// fetchHALEmotion calls HAL /emotion/status to get the current emotion.
+// Falls back to lastEmotion if HAL is unreachable.
+func (h *AgentHandler) fetchHALEmotion() string {
+	emotion, err := hal.GetEmotion()
 	if err != nil {
 		h.lastEmotionMu.Lock()
 		defer h.lastEmotionMu.Unlock()

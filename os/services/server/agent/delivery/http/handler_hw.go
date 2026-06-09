@@ -12,8 +12,8 @@ import (
 
 	"go.autonomous.ai/os/domain"
 	"go.autonomous.ai/os/lib/flow"
+	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/lib/i18n"
-	"go.autonomous.ai/os/lib/lelamp"
 )
 
 // trackFailMessage is the apology template spoken when /servo/track fails.
@@ -117,16 +117,16 @@ func extractLeadingHWCalls(text string) []hwCall {
 // fireHWCalls so both async (default 5s timeout) and sync (100ms stream-time)
 // paths share identical side-effects. Returns true on HTTP success (2xx/3xx).
 func (h *AgentHandler) fireHWCall(c hwCall, flowRunID string, client *http.Client) bool {
-	// /broadcast, /speak, /dm are internal control markers — not LeLamp endpoints.
+	// /broadcast, /speak, /dm are internal control markers — not HAL endpoints.
 	if c.path == "/broadcast" || c.path == "/speak" || c.path == "/dm" {
 		return true
 	}
-	// Lamp-bound HW markers (log writes that live on Lamp, not LeLamp):
+	// Lamp-bound HW markers (log writes that live on Lamp, not HAL):
 	//   /wellbeing/log         → POST :5000/api/wellbeing/log
 	//   /mood/log              → POST :5000/api/mood/log (signal + decision share endpoint, kind in body)
 	//   /music-suggestion/log  → POST :5000/api/music-suggestion/log
 	//   /posture/log           → POST :5000/api/posture/log (nudge/praise/recap rows)
-	postURL := lelamp.BaseURL + c.path
+	postURL := hal.BaseURL + c.path
 	if strings.HasPrefix(c.path, "/wellbeing/") ||
 		strings.HasPrefix(c.path, "/mood/") ||
 		strings.HasPrefix(c.path, "/music-suggestion/") ||
@@ -157,7 +157,7 @@ func (h *AgentHandler) fireHWCall(c hwCall, flowRunID string, client *http.Clien
 		// /update have different semantics.
 		if c.path == "/servo/track" {
 			target := parseTrackTarget(c.body)
-			if err := lelamp.Speak(trackFailMessage(target)); err != nil {
+			if err := hal.Speak(trackFailMessage(target)); err != nil {
 				slog.Warn("track fallback TTS failed", "component", "openclaw", "error", err)
 			}
 		}
@@ -212,7 +212,7 @@ func (h *AgentHandler) fireHWCall(c hwCall, flowRunID string, client *http.Clien
 	return hwOK
 }
 
-// fireHWCalls fires hardware calls to LeLamp sequentially in a goroutine,
+// fireHWCalls fires hardware calls to HAL sequentially in a goroutine,
 // with full flow tracking, lastEmotion update, and monitorBus events.
 // Sequential order matters (e.g. emotion sequences must fire in order).
 func (h *AgentHandler) fireHWCalls(calls []hwCall, flowRunID string) {
@@ -228,7 +228,7 @@ func (h *AgentHandler) fireHWCalls(calls []hwCall, flowRunID string) {
 }
 
 // ADDED 2026-05-26: fireHWCallsSync fires markers SYNCHRONOUSLY with a tight
-// per-call timeout. Used at stream-time when subsequent TTS depends on LeLamp
+// per-call timeout. Used at stream-time when subsequent TTS depends on HAL
 // state mutations (e.g. /scene/off must unmute speaker before /voice/speak).
 // On per-call failure/timeout, kicks an async fallback for that one call so
 // it still fires eventually — caller proceeds to TTS regardless, so worst

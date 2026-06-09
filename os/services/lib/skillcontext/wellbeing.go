@@ -53,7 +53,7 @@ var nonActivityActions = map[string]bool{
 	"meal_reminder":    true,
 }
 
-// eatLabels are the raw Kinetics labels LeLamp emits for the `eat` bucket
+// eatLabels are the raw Kinetics labels HAL emits for the `eat` bucket
 // (kept raw in motion.activity, not collapsed to a single "eat" string —
 // same pattern as sedentary). They count as meal signals for the meal-
 // reminder gate and as user activity for first_activity_today.
@@ -101,7 +101,7 @@ type wellbeingContext struct {
 	DrinksSinceToiletNudge      int                      `json:"drinks_since_toilet_nudge"`      // count of `drink` rows logged after the most recent `nudge_toilet` today (or all today's drinks if none); resets via nudge_toilet POST
 	Patterns                    map[string]patternDigest `json:"patterns,omitempty"`  // wellbeing_patterns from patterns.json, keyed by action ("drink"/"break")
 	BootstrapNeeded             bool                     `json:"bootstrap_needed"`    // patterns missing/stale AND days >= 3 → invoke habit Flow A only when nudging
-	LastPostureNudgeAgeMin      int                      `json:"last_posture_nudge_age_min"` // minutes since last nudge_posture today; -1 if none. Lets the skill defend against double-nudging if lelamp lost its cooldown state (restart), and supports the praise route (recent nudge + improving summary -> praise instead of re-nudge).
+	LastPostureNudgeAgeMin      int                      `json:"last_posture_nudge_age_min"` // minutes since last nudge_posture today; -1 if none. Lets the skill defend against double-nudging if hal lost its cooldown state (restart), and supports the praise route (recent nudge + improving summary -> praise instead of re-nudge).
 }
 
 type patternDigest struct {
@@ -173,7 +173,7 @@ func BuildWellbeingContext(user string) string {
 
 // lastPostureNudgeAgeMin returns minutes since the most recent
 // `nudge_posture` row today, or -1 if none. Lets the wellbeing skill
-// defend against double-nudging when lelamp lost its cooldown state
+// defend against double-nudging when hal lost its cooldown state
 // (process restart) and enables the praise route (recent nudge + the
 // summary trending better -> praise instead of re-nudge).
 func lastPostureNudgeAgeMin(events []posture.Event, now time.Time) int {
@@ -279,7 +279,7 @@ func mealWindowFor(now time.Time) string {
 
 // hasMealSignalInWindow returns true when a meal signal already happened
 // today inside the same named window. A meal signal is EITHER a
-// meal_reminder Lamp already fired OR a raw eat label LeLamp logged when
+// meal_reminder Lamp already fired OR a raw eat label HAL logged when
 // the user actually ate (eating burger / dining / …). Used to suppress
 // the meal-reminder route so Lamp doesn't ask "ăn chưa?" after a real meal.
 func hasMealSignalInWindow(events []wellbeing.Event, window string, now time.Time) bool {
@@ -334,7 +334,7 @@ func countDrinksSinceToiletNudge(events []wellbeing.Event) int {
 // has been logged today. Presence boundaries (enter/leave) and agent-written
 // nudge/reminder rows don't count — they're not motion.activity events.
 //
-// IMPORTANT: LeLamp logs activity rows to wellbeing JSONL BEFORE firing the
+// IMPORTANT: HAL logs activity rows to wellbeing JSONL BEFORE firing the
 // motion.activity event (deliberate, prevents read-before-write race when
 // the agent queries history). So by the time BuildWellbeingContext runs,
 // the JSONL already contains the row for the event being routed. We

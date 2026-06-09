@@ -34,7 +34,7 @@ const (
 
 Follow the instructions in whichever file you read.
 
-**Version check:** ` + "`os-server --version`" + ` (Lamp), ` + "`openclaw --version`" + ` (OpenClaw), ` + "`curl -s http://127.0.0.1:5001/version`" + ` (LeLamp).
+**Version check:** ` + "`os-server --version`" + ` (Lamp), ` + "`openclaw --version`" + ` (OpenClaw), ` + "`curl -s http://127.0.0.1:5001/version`" + ` (HAL).
 
 **Session Startup — also read:** ` + "`KNOWLEDGE.md`" + ` (accumulated learnings) in addition to the steps listed below.
 

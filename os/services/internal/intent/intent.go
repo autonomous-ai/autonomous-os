@@ -1,5 +1,5 @@
 // Package intent provides local intent matching for common voice commands.
-// Matched commands execute directly against LeLamp APIs, bypassing OpenClaw
+// Matched commands execute directly against HAL APIs, bypassing OpenClaw
 // for instant response (~50ms vs ~3-5s through the agent pipeline).
 package intent
 
@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/lib/i18n"
-	"go.autonomous.ai/os/lib/lelamp"
 )
 
-// Result holds what to do after a match: the LeLamp action + a TTS reply.
+// Result holds what to do after a match: the HAL action + a TTS reply.
 type Result struct {
 	// TTSText is spoken back to the user via /voice/speak.
 	TTSText string
@@ -54,7 +54,7 @@ func Match(text string) *Result {
 }
 
 // CacheableReplies is the set of intent reply phrases that should be
-// pre-rendered into the lelamp WAV cache at boot. Listed here (and not
+// pre-rendered into the hal WAV cache at boot. Listed here (and not
 // derived from the rules table) because rule.exec is dynamic — some
 // replies depend on runtime input (color name, current time) and aren't
 // suitable for caching.
@@ -615,7 +615,7 @@ func emotionExec(emotion, reply string) func(string) *Result {
 }
 
 func post(path, body string) {
-	if err := lelamp.PostRaw(path, body); err != nil {
-		slog.Warn("[intent] lelamp call failed", "path", path, "error", err)
+	if err := hal.PostRaw(path, body); err != nil {
+		slog.Warn("[intent] hal call failed", "path", path, "error", err)
 	}
 }

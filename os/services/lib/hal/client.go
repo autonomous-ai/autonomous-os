@@ -1,6 +1,6 @@
-// Package lelamp provides a lightweight HTTP client for the LeLamp hardware API.
+// Package hal provides a lightweight HTTP client for the HAL hardware API.
 // Both os-server and bootstrap-server use this to control the lamp on port 5001.
-package lelamp
+package hal
 
 import (
 	"bytes"
@@ -17,8 +17,8 @@ const BaseURL = "http://127.0.0.1:5001"
 
 var httpClient = &http.Client{Timeout: 5 * time.Second}
 
-// apiKey is the shared LeLamp auth token (matches config.json::llm_api_key).
-// LeLamp's local_only_middleware accepts Authorization: Bearer <apiKey> as one
+// apiKey is the shared HAL auth token (matches config.json::llm_api_key).
+// HAL's local_only_middleware accepts Authorization: Bearer <apiKey> as one
 // of the allowed paths. Loopback callers still pass without a token, so an
 // unset key keeps existing behavior — the header is only attached when set.
 // atomic.Value lets the server's config-change listener swap the key at runtime
@@ -80,7 +80,7 @@ func doPost(path string, body io.Reader) (*http.Response, error) {
 // All callers from Lamp (statusled health signals, ambient breathing, bootstrap
 // OTA progress) are system-level overlays — they must not clobber the user's
 // saved LED state, which emotion restore reads back from. The transient flag
-// tells LeLamp to dispatch the effect without writing _user_led_state.
+// tells HAL to dispatch the effect without writing _user_led_state.
 func SetEffect(effect string, r, g, b int, speed float64) {
 	postSilent("/led/effect/stop", "{}")
 	body := fmt.Sprintf(`{"effect":"%s","color":[%d,%d,%d],"speed":%.2f,"transient":true}`, effect, r, g, b, speed)
@@ -94,7 +94,7 @@ func StopEffect() {
 
 // SetSolid paints the strip a single color and saves it as the user LED state
 // (no transient flag) so subsequent RestoreLED calls repaint to this color.
-// Fire-and-forget: LeLamp may not be up yet at the moment this is called
+// Fire-and-forget: HAL may not be up yet at the moment this is called
 // (e.g. lamp boots faster than the Python server during AP-mode startup);
 // callers don't care about the outcome.
 func SetSolid(r, g, b int) {
@@ -166,7 +166,7 @@ func SpeakCached(text string) error {
 }
 
 // SpeakCachedInterruptible plays text via the WAV cache (instant on hit).
-// On miss, lelamp renders + saves WAV then plays. Use for fixed phrases
+// On miss, hal renders + saves WAV then plays. Use for fixed phrases
 // like dead-air fillers where a real reply may need to cut it short.
 func SpeakCachedInterruptible(text string) error {
 	body, _ := json.Marshal(map[string]any{
@@ -181,7 +181,7 @@ func SpeakCachedInterruptible(text string) error {
 // Lamp's /api/voice/preview handler uses this to fan out the operator's
 // "test voice" click without exposing the TTS API key in the browser body —
 // Lamp reads the key server-side from config and passes it here. Each arg
-// can be empty: LeLamp falls back to its own config-loaded defaults when a
+// can be empty: HAL falls back to its own config-loaded defaults when a
 // field is missing, so partial overrides (e.g. just voice) work.
 func SpeakPreview(text, voice, provider, apiKey, baseURL string) error {
 	payload := map[string]any{"text": text}
@@ -204,7 +204,7 @@ func SpeakPreview(text, voice, provider, apiKey, baseURL string) error {
 	return postWithTimeout("/voice/speak", body, 30*time.Second)
 }
 
-// PrerenderCached asks lelamp to render+save WAV for text without playing.
+// PrerenderCached asks hal to render+save WAV for text without playing.
 // Used at startup to warm the cache for known fillers/intent confirms so
 // the first runtime call is a hit. Idempotent: no-op when WAV already exists.
 func PrerenderCached(text string) error {
@@ -233,7 +233,7 @@ func SetVolume(pct int) error {
 //
 // LLMKey authenticates LLM-based features. STTKey authenticates
 // AutonomousSTT (used when DeepgramKey is empty); TTSKey authenticates
-// the TTS provider. Empty STTKey/TTSKey means LeLamp falls back to
+// the TTS provider. Empty STTKey/TTSKey means HAL falls back to
 // LLMKey — keep them empty when one credential covers everything.
 type VoiceStartConfig struct {
 	DeepgramKey     string
@@ -290,7 +290,7 @@ func StopVoicePipeline() error {
 // ListVoices returns available TTS voices for the given provider, filtered
 // to lang's curated bucket when lang is non-empty (BCP-47, e.g. "vi",
 // "zh-CN"). Empty lang returns the full flat list. Returns an error if
-// LeLamp is unreachable or returns non-2xx — callers should fall back to
+// HAL is unreachable or returns non-2xx — callers should fall back to
 // a static list in that case.
 func ListVoices(provider, lang string) ([]string, error) {
 	path := "/voice/voices?provider=" + provider
@@ -326,7 +326,7 @@ func SetVoiceConfig(wakeWords []string) {
 
 // ─── Health / Servo ─────────────────────────────────────────────────────────
 
-// Health mirrors the /health response from LeLamp.
+// Health mirrors the /health response from HAL.
 type Health struct {
 	Servo   bool `json:"servo"`
 	LED     bool `json:"led"`
@@ -337,8 +337,8 @@ type Health struct {
 	TTS     bool `json:"tts"`
 }
 
-// GetVersion returns LeLamp's runtime version string (from FastAPI app.version
-// at /version). Empty + error if LeLamp is unreachable.
+// GetVersion returns HAL's runtime version string (from FastAPI app.version
+// at /version). Empty + error if HAL is unreachable.
 func GetVersion() (string, error) {
 	resp, err := doGet("/version")
 	if err != nil {
@@ -357,7 +357,7 @@ func GetVersion() (string, error) {
 	return r.Version, nil
 }
 
-// GetHealth returns the current health snapshot from LeLamp.
+// GetHealth returns the current health snapshot from HAL.
 func GetHealth() (*Health, error) {
 	resp, err := doGet("/health")
 	if err != nil {
@@ -412,13 +412,13 @@ func PlayServo(recording string) error {
 
 // ─── Emotion ────────────────────────────────────────────────────────────────
 
-// SetEmotion triggers an emotion animation on LeLamp.
+// SetEmotion triggers an emotion animation on HAL.
 func SetEmotion(name string, intensity float64) error {
 	body, _ := json.Marshal(map[string]any{"emotion": name, "intensity": intensity})
 	return post("/emotion", body)
 }
 
-// GetEmotion returns the current emotion reported by LeLamp's /emotion/status.
+// GetEmotion returns the current emotion reported by HAL's /emotion/status.
 func GetEmotion() (string, error) {
 	resp, err := doGet("/emotion/status")
 	if err != nil {

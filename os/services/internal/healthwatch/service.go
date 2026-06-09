@@ -1,16 +1,16 @@
-// Package healthwatch monitors LeLamp component health and auto-recovers
+// Package healthwatch monitors HAL component health and auto-recovers
 // from ALSA microphone failures that can cause SIGABRT crashes.
 //
 // Root cause context: When the ALSA mic stream (PaAlsaStreamComponent_Initialize)
 // fails continuously, starting a heavy servo animation like happy_wiggle can
-// trigger a double fault → SIGABRT in the LeLamp Python process.
+// trigger a double fault → SIGABRT in the HAL Python process.
 // This watcher detects sensing degradation early and restarts the voice
 // pipeline before that happens.
 //
-// Guard against false positives during LeLamp restart:
+// Guard against false positives during HAL restart:
 // Recovery is only triggered when voice was previously confirmed healthy
 // (voice: true) and then sensing goes false. This prevents premature
-// restarts during normal LeLamp startup or systemd-triggered restarts.
+// restarts during normal HAL startup or systemd-triggered restarts.
 package healthwatch
 
 import (
@@ -22,8 +22,8 @@ import (
 	"go.autonomous.ai/os/domain"
 	"go.autonomous.ai/os/internal/monitor"
 	"go.autonomous.ai/os/internal/statusled"
+	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/lib/i18n"
-	"go.autonomous.ai/os/lib/lelamp"
 	"go.autonomous.ai/os/server/config"
 )
 
@@ -33,7 +33,7 @@ const (
 	restartCooldown = 30 * time.Second
 )
 
-// Service polls LeLamp /health and auto-restarts the voice pipeline
+// Service polls HAL /health and auto-restarts the voice pipeline
 // when ALSA/sensing failures are detected.
 type Service struct {
 	bus       *monitor.Bus
@@ -59,12 +59,12 @@ func (s *Service) Start(ctx context.Context) {
 
 	consecutiveFails := 0
 	var lastRestart time.Time
-	// voiceWasRunning is true once we confirm voice:true from LeLamp.
+	// voiceWasRunning is true once we confirm voice:true from HAL.
 	// Recovery is only triggered after voice was running — this prevents
-	// false positives when LeLamp just restarted (systemd or cold boot)
+	// false positives when HAL just restarted (systemd or cold boot)
 	// and voice hasn't been started yet by Lamp.
 	voiceWasRunning := false
-	// wasUnreachable tracks LeLamp downtime so we can announce recovery via TTS.
+	// wasUnreachable tracks HAL downtime so we can announce recovery via TTS.
 	wasUnreachable := false
 
 	for {
@@ -72,15 +72,15 @@ func (s *Service) Start(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			h, err := lelamp.GetHealth()
+			h, err := hal.GetHealth()
 			if err != nil {
-				// LeLamp is down (crash / systemd restart in progress).
-				// Don't touch consecutiveFails — LeLamp being unreachable
+				// HAL is down (crash / systemd restart in progress).
+				// Don't touch consecutiveFails — HAL being unreachable
 				// is not an ALSA error. When it comes back, voiceWasRunning
 				// stays true so we can still detect ALSA re-failure after
 				// restart if it happens again.
-				slog.Debug("LeLamp unreachable", "component", "healthwatch", "error", err)
-				s.statusLED.Set(statusled.StateLeLampDown)
+				slog.Debug("HAL unreachable", "component", "healthwatch", "error", err)
+				s.statusLED.Set(statusled.StateHALDown)
 				wasUnreachable = true
 				continue
 			}
@@ -91,21 +91,21 @@ func (s *Service) Start(ctx context.Context) {
 				voiceWasRunning = true
 			}
 
-			// LeLamp recovered from downtime — flash purple then clear.
+			// HAL recovered from downtime — flash purple then clear.
 			if wasUnreachable {
-				s.statusLED.Set(statusled.StateLeLampDown) // now LeLamp is up, purple actually shows
+				s.statusLED.Set(statusled.StateHALDown) // now HAL is up, purple actually shows
 				go func() {
 					time.Sleep(3 * time.Second)
-					s.statusLED.Clear(statusled.StateLeLampDown)
+					s.statusLED.Clear(statusled.StateHALDown)
 				}()
 			} else {
-				s.statusLED.Clear(statusled.StateLeLampDown)
+				s.statusLED.Clear(statusled.StateHALDown)
 			}
 
 			// Hardware component check — servo/led/audio/voice.
 			// Camera and sensing excluded (may be off by scene preset).
 			servoOK := h.Servo
-			if ss, err := lelamp.GetServoStatus(); err == nil {
+			if ss, err := hal.GetServoStatus(); err == nil {
 				for name, info := range ss.Servos {
 					if !info.Online {
 						servoOK = false
@@ -124,7 +124,7 @@ func (s *Service) Start(ctx context.Context) {
 			// Announce via TTS once voice+TTS are ready.
 			if wasUnreachable && h.Voice && h.TTS {
 				wasUnreachable = false
-				slog.Info("LeLamp recovered from downtime, announcing via TTS", "component", "healthwatch")
+				slog.Info("HAL recovered from downtime, announcing via TTS", "component", "healthwatch")
 				go s.speakRecovery()
 			} else if wasUnreachable && (h.Voice || h.TTS) {
 				// Still waiting for both voice and TTS to be ready
@@ -146,11 +146,11 @@ func (s *Service) Start(ctx context.Context) {
 			}
 
 			// sensing: false — but only act if voice was running before.
-			// If voice was never running (e.g. LeLamp just restarted and
+			// If voice was never running (e.g. HAL just restarted and
 			// Lamp hasn't called /voice/start yet), sensing=false is expected
 			// and we should not interfere.
 			if !voiceWasRunning {
-				slog.Debug("sensing false but voice never ran — skipping (LeLamp startup?)", "component", "healthwatch")
+				slog.Debug("sensing false but voice never ran — skipping (HAL startup?)", "component", "healthwatch")
 				continue
 			}
 
@@ -193,35 +193,35 @@ func (s *Service) Start(ctx context.Context) {
 	}
 }
 
-// speakRecovery announces over TTS that the lamp is back after a LeLamp
+// speakRecovery announces over TTS that the lamp is back after a HAL
 // downtime. Phrase pool lives in lib/i18n (PhraseRecovery).
 func (s *Service) speakRecovery() {
 	phrase := i18n.Pick(i18n.PhraseRecovery)
-	if err := lelamp.Speak(phrase); err != nil {
+	if err := hal.Speak(phrase); err != nil {
 		slog.Warn("recovery TTS failed", "component", "healthwatch", "error", err)
 		return
 	}
 	slog.Info("recovery TTS sent", "component", "healthwatch")
 }
 
-// restartVoice stops the LeLamp voice pipeline and restarts it.
+// restartVoice stops the HAL voice pipeline and restarts it.
 // This clears the stuck ALSA stream state before it can cause a SIGABRT.
 //
-// LeLamp picks its STT provider at start time:
+// HAL picks its STT provider at start time:
 //   - Deepgram if deepgram_api_key is set
 //   - AutonomousSTT (llm_api_key + llm_base_url) as fallback
 //
-// We always send all three keys so LeLamp can choose.
+// We always send all three keys so HAL can choose.
 func (s *Service) restartVoice() {
-	slog.Info("restarting LeLamp voice pipeline to recover ALSA", "component", "healthwatch")
+	slog.Info("restarting HAL voice pipeline to recover ALSA", "component", "healthwatch")
 
 	// Stop first — ignore errors (pipeline may already be stopped).
-	_ = lelamp.StopVoicePipeline()
+	_ = hal.StopVoicePipeline()
 
 	time.Sleep(2 * time.Second)
 
-	// Always attempt restart — LeLamp falls back to AutonomousSTT if no Deepgram key.
-	if err := lelamp.StartVoice(lelamp.VoiceStartConfig{
+	// Always attempt restart — HAL falls back to AutonomousSTT if no Deepgram key.
+	if err := hal.StartVoice(hal.VoiceStartConfig{
 		DeepgramKey: s.cfg.DeepgramAPIKey,
 		LLMKey:      s.cfg.LLMAPIKey,
 		LLMBaseURL:  s.cfg.LLMBaseURL,
@@ -235,7 +235,7 @@ func (s *Service) restartVoice() {
 		return
 	}
 
-	slog.Info("LeLamp voice pipeline restarted", "component", "healthwatch")
+	slog.Info("HAL voice pipeline restarted", "component", "healthwatch")
 	s.bus.Push(domain.MonitorEvent{
 		Type:    "hw_alsa_restarted",
 		Summary: "voice pipeline restarted to clear ALSA failure",

@@ -7,7 +7,7 @@
 // all skills already provisioned. Lumi only acts as a per-request client and
 // translates SSE events into the same domain.WSEvent shape that the OpenClaw
 // handler at server/agent/delivery/http/handler_events.go consumes — so the
-// downstream pipeline (LeLamp TTS, [HW:/...] markers, monitor SSE, sensing
+// downstream pipeline (HAL TTS, [HW:/...] markers, monitor SSE, sensing
 // drain, Telegram fan-out) stays untouched.
 package hermes
 

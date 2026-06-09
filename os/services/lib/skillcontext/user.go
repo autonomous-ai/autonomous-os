@@ -8,13 +8,13 @@ import (
 	"net/http"
 	"time"
 
-	"go.autonomous.ai/os/lib/lelamp"
+	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/lib/usercanon"
 )
 
 const userInfoTimeout = 600 * time.Millisecond
 
-// userInfo mirrors lelamp's GET /user/info?name=... payload.
+// userInfo mirrors hal's GET /user/info?name=... payload.
 // Schema (verified on Pi): {name, is_friend, telegram_id, telegram_username}.
 type userInfo struct {
 	Name             string `json:"name"`
@@ -33,7 +33,7 @@ func BuildUserContext(user string) string {
 		return ""
 	}
 	client := &http.Client{Timeout: userInfoTimeout}
-	resp, err := client.Get(lelamp.BaseURL + "/user/info?name=" + user)
+	resp, err := client.Get(hal.BaseURL + "/user/info?name=" + user)
 	if err != nil {
 		slog.Warn("user context: fetch failed", "component", "skillcontext", "user", user, "error", err)
 		return ""

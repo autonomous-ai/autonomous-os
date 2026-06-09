@@ -42,7 +42,7 @@ func (h *DeviceMQTTHandler) handleTTSSet(env domain.MQTTDataCommand) error {
 			return
 		}
 		// UpdateVoiceConfig saves config + kicks systemctl restart lamp-hal async.
-		// ACK success immediately — BFF doesn't need to wait for lelamp to come back.
+		// ACK success immediately — BFF doesn't need to wait for hal to come back.
 		slog.Info("tts.set: applied", "component", "mqtt", "provider", req.Provider, "voice", req.Voice, "language", req.Language)
 		h.publishTTSSetAck("success", "", &req)
 	}()

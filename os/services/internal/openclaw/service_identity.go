@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"go.autonomous.ai/os/lib/lelamp"
+	"go.autonomous.ai/os/lib/hal"
 )
 
 // --- Device identity (Ed25519) for gateway auth ---
@@ -89,7 +89,7 @@ func (di *deviceIdentity) signConnectPayload(token, nonce string, signedAt int64
 }
 
 // WatchIdentity polls IDENTITY.md in the OpenClaw workspace and pushes updated wake words
-// to LeLamp whenever the agent's name changes (e.g. user says "call yourself Noah").
+// to HAL whenever the agent's name changes (e.g. user says "call yourself Noah").
 func (s *Service) WatchIdentity(ctx context.Context) {
 	identityPath := filepath.Join(s.config.OpenclawConfigDir, "workspace", "IDENTITY.md")
 	var lastName string
@@ -108,7 +108,7 @@ func (s *Service) WatchIdentity(ctx context.Context) {
 		lastName = name
 		words := buildWakeWords(name)
 		slog.Info("agent renamed, updating wake words", "component", "openclaw", "name", name, "words", words)
-		lelamp.SetVoiceConfig(words)
+		hal.SetVoiceConfig(words)
 	}
 }
 

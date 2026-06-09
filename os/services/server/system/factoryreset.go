@@ -53,7 +53,7 @@ var lumiWipePaths = []string{
 	"/root/config",                                  // os-server config.json (API keys, channel tokens, MQTT creds)
 	"/root/local/users",                             // face + voice enrollments (owner)
 	"/root/local/strangers",                         // face + voice enrollments (stranger)
-	"/var/lib/lelamp/snapshots",                     // persistent camera snapshots (sensing_face / motion / emotion, 72h TTL)
+	"/var/lib/hal/snapshots",                     // persistent camera snapshots (sensing_face / motion / emotion, 72h TTL)
 	"/etc/wpa_supplicant/wpa_supplicant-wlan0.conf", // home WiFi credentials → forces AP mode on next boot
 }
 
@@ -172,7 +172,7 @@ func runFactoryReset(_ FactoryResetOptions) (started bool, errStatus int, errMes
 
 // FactoryReset performs a soft factory reset: wipe Lamp state (config / API
 // keys / enrollments / WiFi creds) + reboot. Kernel / OS / system packages /
-// binaries / lelamp .venv are NOT touched — this is a state reset, not a
+// binaries / hal .venv are NOT touched — this is a state reset, not a
 // reflash. After reboot the device boots into AP "Lamp-XXXX" with a fresh
 // setup wizard.
 //

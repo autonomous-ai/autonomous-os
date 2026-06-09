@@ -14,9 +14,9 @@ import (
 	sensinghttp "go.autonomous.ai/os/server/sensing/delivery/http"
 )
 
-// poseBucketRoot is the on-disk base where lelamp writes pose buckets.
-// Matches lelamp/config.py:SNAPSHOT_TMP_DIR + "/sensing_pose/buckets/".
-// lelamp and lamp share the same Pi so this is the same FS location for
+// poseBucketRoot is the on-disk base where hal writes pose buckets.
+// Matches hal/config.py:SNAPSHOT_TMP_DIR + "/sensing_pose/buckets/".
+// hal and lamp share the same Pi so this is the same FS location for
 // both processes.
 const poseBucketRoot = "/tmp/lamp-sensing-snapshots/sensing_pose/buckets"
 
@@ -572,17 +572,17 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 					h.monitorBus.Push(domain.MonitorEvent{Type: "hw_servo", Summary: toolArgs, RunID: flowRunID})
 					flow.Log("hw_servo", map[string]any{"args": toolArgs, "run_id": flowRunID}, flowRunID)
 				}
-				// Intercept OpenClaw built-in tts tool: extract text and route to LeLamp speaker.
+				// Intercept OpenClaw built-in tts tool: extract text and route to HAL speaker.
 				// The built-in tts generates audio server-side but never reaches the physical speaker.
 				if toolName == "tts" {
 					if ttsText := extractTTSText(toolArgs); ttsText != "" {
 						isChannelRun := isChannelOriginatedRun(payload.RunID, flowRunID)
 						isWebChat := h.agentGateway.IsWebChatRun(flowRunID)
-						slog.Info("intercepted built-in tts tool, routing to LeLamp", "component", "agent", "run_id", flowRunID, "text", ttsText[:min(len(ttsText), 80)], "channel_run", isChannelRun, "web_chat", isWebChat)
+						slog.Info("intercepted built-in tts tool, routing to HAL", "component", "agent", "run_id", flowRunID, "text", ttsText[:min(len(ttsText), 80)], "channel_run", isChannelRun, "web_chat", isWebChat)
 						flow.Log("tts_send", map[string]any{"run_id": flowRunID, "text": ttsText, "source": "tts_tool_intercept"}, flowRunID)
 						if !isChannelRun && !isWebChat {
 							go func(t string) {
-								if err := h.agentGateway.SendToLeLampTTS(t); err != nil {
+								if err := h.agentGateway.SendToHALTTS(t); err != nil {
 									slog.Error("TTS intercept delivery failed", "component", "agent", "error", err)
 								}
 							}(ttsText)
@@ -685,7 +685,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 					cleaned := sanitizeAgentText(sentence)
 					if cleaned != "" {
 						// ADDED 2026-05-26: fire leading HW markers SYNC before TTS POST so
-						// state mutations (e.g. /scene/off → speaker unmute) apply in LeLamp
+						// state mutations (e.g. /scene/off → speaker unmute) apply in HAL
 						// before /voice/speak-queue arrives. Without this, TTS races ahead
 						// and gets rejected while speaker is still muted by a prior scene.
 						// extractLeadingHWCalls only picks markers BEFORE first non-marker
@@ -711,7 +711,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 							"sentence", cleaned[:min(len(cleaned), 100)])
 						flow.Log("tts_stream_send", map[string]any{"run_id": flowRunID, "text": cleaned}, flowRunID)
 						go func(s string) {
-							if err := h.agentGateway.SendToLeLampTTSQueue(s); err != nil {
+							if err := h.agentGateway.SendToHALTTSQueue(s); err != nil {
 								slog.Error("streaming TTS delivery failed", "component", "agent", "error", err)
 							}
 						}(cleaned)
@@ -974,7 +974,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 							"cron_fire", isCronFire, "heartbeat", isHeartbeatRun)
 						flow.Log("tts_send", map[string]any{"run_id": flowRunID, "text": remainderText, "streamed_len": streamedLen}, flowRunID)
 						go func(t string) {
-							if err := h.agentGateway.SendToLeLampTTSQueue(t); err != nil {
+							if err := h.agentGateway.SendToHALTTSQueue(t); err != nil {
 								slog.Error("TTS delivery failed", "component", "agent", "error", err)
 							}
 						}(remainderText)
@@ -1083,11 +1083,11 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 				if ttsText := extractTTSText(toolArgs); ttsText != "" {
 					isChannelRun := isChannelOriginatedRun(payload.RunID, flowRunID)
 					isWebChat := h.agentGateway.IsWebChatRun(flowRunID)
-					slog.Info("intercepted built-in tts tool (session.tool), routing to LeLamp", "component", "agent", "run_id", flowRunID, "text", ttsText[:min(len(ttsText), 80)], "channel_run", isChannelRun, "web_chat", isWebChat)
+					slog.Info("intercepted built-in tts tool (session.tool), routing to HAL", "component", "agent", "run_id", flowRunID, "text", ttsText[:min(len(ttsText), 80)], "channel_run", isChannelRun, "web_chat", isWebChat)
 					flow.Log("tts_send", map[string]any{"run_id": flowRunID, "text": ttsText, "source": "tts_tool_intercept"}, flowRunID)
 					if !isChannelRun && !isWebChat {
 						go func(t string) {
-							if err := h.agentGateway.SendToLeLampTTS(t); err != nil {
+							if err := h.agentGateway.SendToHALTTS(t); err != nil {
 								slog.Error("TTS intercept delivery failed", "component", "agent", "error", err)
 							}
 						}(ttsText)
@@ -1549,7 +1549,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 			"run_id": runID,
 			"source": "session.message",
 		}, runID)
-		// Clear the agent busy flag — lelamp's turn-gate hook called
+		// Clear the agent busy flag — hal's turn-gate hook called
 		// /api/openclaw/busy when this channel turn was preprocessed, but
 		// the agent-path lifecycle.end that normally clears it never fires
 		// for channel turns (OpenClaw 5.x gate). Without this, sensing

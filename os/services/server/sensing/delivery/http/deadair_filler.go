@@ -9,10 +9,10 @@ import (
 
 	"go.autonomous.ai/os/internal/intent"
 	"go.autonomous.ai/os/lib/i18n"
-	"go.autonomous.ai/os/lib/lelamp"
+	"go.autonomous.ai/os/lib/hal"
 )
 
-// Dead air filler — short TTS cues spoken by LeLamp while OpenClaw is busy,
+// Dead air filler — short TTS cues spoken by HAL while OpenClaw is busy,
 // scheduled and cancelled by FillerManager from agent lifecycle/tool events.
 //
 // Two pools chosen by turn position:
@@ -193,9 +193,9 @@ func pickFrom(pool []string, lastSpoken string) string {
 	return pick
 }
 
-// PrewarmFillers asks lelamp to render+save WAV for every filler phrase
+// PrewarmFillers asks hal to render+save WAV for every filler phrase
 // in the active STT language (read from i18n.Lang()) so the first runtime
-// fire is a cache hit (no ElevenLabs roundtrip). Polls lelamp /health
+// fire is a cache hit (no ElevenLabs roundtrip). Polls hal /health
 // until it answers (os-server.service starts before lamp-hal.service is
 // ready -- without this guard every prerender races and all phrases
 // fail with connection refused). Then prerenders serially. Logs failures
@@ -217,14 +217,14 @@ func PrewarmFillers() {
 	deadline := time.Now().Add(readyMaxWait)
 	ready := false
 	for time.Now().Before(deadline) {
-		if _, err := lelamp.GetHealth(); err == nil {
+		if _, err := hal.GetHealth(); err == nil {
 			ready = true
 			break
 		}
 		time.Sleep(readyInterval)
 	}
 	if !ready {
-		slog.Warn("filler prewarm aborted: lelamp /health not reachable", "component", "sensing")
+		slog.Warn("filler prewarm aborted: hal /health not reachable", "component", "sensing")
 		return
 	}
 
@@ -263,7 +263,7 @@ func PrewarmFillers() {
 	for _, phrase := range all {
 		var lastErr error
 		for attempt := 1; attempt <= perPhraseRetry; attempt++ {
-			if err := lelamp.PrerenderCached(phrase); err != nil {
+			if err := hal.PrerenderCached(phrase); err != nil {
 				lastErr = err
 				time.Sleep(time.Duration(attempt) * time.Second)
 				continue
@@ -285,7 +285,7 @@ func PrewarmFillers() {
 // fire-and-forget, without going through FillerManager. Called by the
 // sensing handler right after a voice/voice_command turn is forwarded.
 //
-// Pool is picked from i18n.Lang() (see poolsForLang). Uses the lelamp WAV
+// Pool is picked from i18n.Lang() (see poolsForLang). Uses the hal WAV
 // cache (SpeakCachedInterruptible) so the filler nhả tiếng ~50ms after this
 // call instead of 1.5s — fillers were previously fired ~5-10s ahead of the
 // real reply just to mask ElevenLabs latency; with cached audio that
@@ -303,7 +303,7 @@ func PlayOpeningFillerNow() {
 		return
 	}
 	slog.Info("opening filler firing (immediate, cached)", "component", "sensing", "lang", lang, "filler", filler)
-	if err := lelamp.SpeakCachedInterruptible(filler); err != nil {
+	if err := hal.SpeakCachedInterruptible(filler); err != nil {
 		slog.Warn("opening filler failed", "component", "sensing", "error", err)
 	}
 }
@@ -325,7 +325,7 @@ func PlayOpeningFillerNow() {
 //      potential dead-air pocket.
 //   5. SSE handler calls Cancel(runID) on the first assistant delta and
 //      again on lifecycle.end — hard cancel: stops any pending timer,
-//      interrupts a filler mid-speech via lelamp.StopTTS(), and clears
+//      interrupts a filler mid-speech via hal.StopTTS(), and clears
 //      run state so further events are no-ops.
 //
 // All exported methods are safe for concurrent use and idempotent.
@@ -367,7 +367,7 @@ func (fm *FillerManager) MarkVoiceRun(runID string) {
 // the Continuation pool here.
 //
 // The arm-on-turn-start path was previously disabled because ElevenLabs
-// TTFB > 2s could exceed lelamp speak() lock-timeout=2s; with the WAV
+// TTFB > 2s could exceed hal speak() lock-timeout=2s; with the WAV
 // cache (2026-05-05), cached fillers play in ~50ms so the race is gone.
 func (fm *FillerManager) OnTurnStart(runID string) {
 	if runID == "" || fillersDisabled() {
@@ -477,7 +477,7 @@ func (fm *FillerManager) Cancel(runID string) {
 
 	if wasPlaying {
 		go func() {
-			if err := lelamp.StopTTS(); err != nil {
+			if err := hal.StopTTS(); err != nil {
 				slog.Warn("filler stop TTS failed", "component", "sensing", "run_id", runID, "error", err)
 			}
 		}()
@@ -519,7 +519,7 @@ func (fm *FillerManager) softCancelLocked(run *fillerRun) {
 	run.lastActivityAt = time.Now()
 	if wasPlaying {
 		go func() {
-			if err := lelamp.StopTTS(); err != nil {
+			if err := hal.StopTTS(); err != nil {
 				slog.Warn("filler stop TTS failed (soft cancel)", "component", "sensing", "error", err)
 			}
 		}()
@@ -558,7 +558,7 @@ func (fm *FillerManager) fire(runID string) {
 	// pool=continuation vs pool=opening at fire time.
 	pool := classifyFillerPool(filler, toolName, fired, i18n.Lang())
 	slog.Info("dead air filler firing", "component", "sensing", "run_id", runID, "filler", filler, "tool", toolName, "fired", fired, "pool", pool)
-	if err := lelamp.SpeakCachedInterruptible(filler); err != nil {
+	if err := hal.SpeakCachedInterruptible(filler); err != nil {
 		slog.Warn("dead air filler failed", "component", "sensing", "run_id", runID, "error", err)
 	}
 

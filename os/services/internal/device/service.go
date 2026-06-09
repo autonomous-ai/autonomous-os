@@ -389,8 +389,8 @@ func (s *Service) VerifyAdminPassword(password string) error {
 
 // UpdateConfig saves updated config fields. All fields are optional; empty strings are skipped.
 // Side effects per field cluster: wifi → connect-wifi (wpa_supplicant reload),
-// llm_model/thinking → openclaw, stt_language → openclaw NewSession + lelamp,
-// voice-pipeline fields → lelamp. Other fields persist only; restart Lamp for full effect.
+// llm_model/thinking → openclaw, stt_language → openclaw NewSession + hal,
+// voice-pipeline fields → hal. Other fields persist only; restart Lamp for full effect.
 func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 	// bcrypt is CPU-intensive; compute before acquiring the config lock.
 	var adminHash string
@@ -617,7 +617,7 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 		}
 	}
 	// Restart lamp-hal only when a field it reads at boot actually changed.
-	// stt_language is covered by langChanged (lelamp reads it via stt_language /
+	// stt_language is covered by langChanged (hal reads it via stt_language /
 	// derived stt_model). Wifi/channel/MQTT/admin saves skip the restart.
 	if voiceChanged || langChanged {
 		s.RePushVoiceConfig()
@@ -670,7 +670,7 @@ func (s *Service) RePushVoiceConfig() {
 }
 
 // sttModelForLanguage maps a BCP-47 language code to the Deepgram SKU exposed
-// by the Autonomous STT proxy. Empty input → empty model so lelamp falls back
+// by the Autonomous STT proxy. Empty input → empty model so hal falls back
 // to its built-in default (flux-general-en). Vietnamese rides on Nova-3 (added
 // Jan 2026); Chinese still requires Nova-2 because Nova-3 hasn't shipped zh.
 func sttModelForLanguage(lang string) string {

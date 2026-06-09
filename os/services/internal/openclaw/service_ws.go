@@ -263,7 +263,7 @@ func (s *Service) runWSConn(ctx context.Context, handler domain.AgentEventHandle
 	if s.wsHasConnected.Swap(true) {
 		go func() {
 			phrase := i18n.Pick(i18n.PhraseReconnect)
-			if err := s.SendToLeLampTTS(phrase); err != nil {
+			if err := s.SendToHALTTS(phrase); err != nil {
 				slog.Warn("reconnect TTS failed", "component", "openclaw", "error", err)
 			}
 		}()

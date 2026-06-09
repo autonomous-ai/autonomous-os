@@ -2,7 +2,7 @@
 // sender strings, face-recognition ids) to the canonical user directory
 // under /root/local/users.
 //
-// Resolve mirrors the Python lelamp.service.voice.music_service.canonicalize_person
+// Resolve mirrors the Python hal.service.voice.music_service.canonicalize_person
 // behaviour so Go-written and Python-written paths converge on the same
 // folder for a given person.
 package usercanon

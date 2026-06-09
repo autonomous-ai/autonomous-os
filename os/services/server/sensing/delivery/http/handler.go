@@ -23,8 +23,8 @@ import (
 	"go.autonomous.ai/os/internal/monitor"
 	"go.autonomous.ai/os/internal/statusled"
 	"go.autonomous.ai/os/lib/flow"
+	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/lib/i18n"
-	"go.autonomous.ai/os/lib/lelamp"
 	"go.autonomous.ai/os/lib/mood"
 	"go.autonomous.ai/os/lib/musicsuggestion"
 	"go.autonomous.ai/os/lib/posture"
@@ -35,7 +35,7 @@ import (
 	"go.autonomous.ai/os/server/serializers"
 )
 
-// SensingEventRequest is the payload from LeLamp sensing detectors.
+// SensingEventRequest is the payload from HAL sensing detectors.
 type SensingEventRequest struct {
 	// Type is the event category: motion, sound, presence.enter, presence.leave, light.level, etc.
 	Type string `json:"type" validate:"required"`
@@ -44,7 +44,7 @@ type SensingEventRequest struct {
 	// Image is an optional base64-encoded JPEG snapshot from the camera.
 	// Attached automatically for significant events (large motion, face detected) so AI can see.
 	Image string `json:"image,omitempty"`
-	// CurrentUser is LeLamp's view of who is effectively in front of the lamp
+	// CurrentUser is HAL's view of who is effectively in front of the lamp
 	// right now (from FaceRecognizer.current_user()). Empty when nobody is
 	// visible. This is the source of truth — do NOT re-derive by parsing
 	// Message. Text parsing gave wrong answers when a stranger-only enter
@@ -60,7 +60,7 @@ type SensingEventRequest struct {
 	Audio string `json:"audio,omitempty"`
 }
 
-// SensingHandler handles incoming sensing events from LeLamp and forwards them to the agent.
+// SensingHandler handles incoming sensing events from HAL and forwards them to the agent.
 type SensingHandler struct {
 	agentGateway     domain.AgentGateway
 	monitorBus       *monitor.Bus
@@ -91,7 +91,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 
 	slog.Info("sensing event received", "component", "sensing", "type", req.Type, "message", req.Message)
 
-	// Voice command from physical device — log for tracing (LED feedback is handled by LeLamp).
+	// Voice command from physical device — log for tracing (LED feedback is handled by HAL).
 	if req.Type == "voice_command" {
 		slog.Info("voice_command received", "component", "sensing", "message", req.Message)
 	}
@@ -126,10 +126,10 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		Detail:  monitorDetail,
 	})
 
-	// Sync mood.CurrentUser with LeLamp's view on every event that carries
-	// it. LeLamp's FaceRecognizer.current_user() is the source of truth.
+	// Sync mood.CurrentUser with HAL's view on every event that carries
+	// it. HAL's FaceRecognizer.current_user() is the source of truth.
 	//
-	// Wellbeing enter/leave rows are written by LeLamp directly (per
+	// Wellbeing enter/leave rows are written by HAL directly (per
 	// friend on their own timeline, stranger collapsed to "unknown"
 	// timeline) — the handler no longer writes them here. See
 	// facerecognizer._post_wellbeing.
@@ -152,7 +152,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 					// Cached path: fixed phrases like "Volume up!" hit the
 					// WAV cache (~50ms) instead of going through ElevenLabs
 					// (~1.5s). Dynamic texts (time, color) miss + render once.
-					if err := lelamp.SpeakCached(result.TTSText); err != nil {
+					if err := hal.SpeakCached(result.TTSText); err != nil {
 						slog.Warn("intent TTS failed", "component", "sensing", "error", err)
 					}
 				}()
@@ -191,7 +191,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	isWebChat := req.Type == "web_chat"
 	isPassive := !isVoiceCommand
 	if isPassive && !isVoice && !isWebChat && req.Type != "presence.enter" && req.Type != "fire_hazard.detected" && h.isSleeping != nil && h.isSleeping() {
-		slog.Info("INBOUND from LeLamp → SLEEP-DROPPED (lamp sleeping)",
+		slog.Info("INBOUND from HAL → SLEEP-DROPPED (lamp sleeping)",
 			"component", "sensing", "backend", h.agentGateway.Name(), "type", req.Type)
 		h.monitorBus.Push(domain.MonitorEvent{
 			Type:    "sensing_drop",
@@ -203,13 +203,13 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	}
 
 	// Voice wake: when a voice command arrives while sleeping, fire greeting emotion
-	// to LeLamp so it wakes up (LED + servo) before the agent processes the turn.
-	// Without this, the agent's emotion:thinking would be blocked by LeLamp's wake guard.
+	// to HAL so it wakes up (LED + servo) before the agent processes the turn.
+	// Without this, the agent's emotion:thinking would be blocked by HAL's wake guard.
 	// web_chat skips wake — typing in the monitor isn't a request for physical interaction.
 	if isVoiceCommand && h.isSleeping != nil && h.isSleeping() {
-		slog.Info("voice wake — firing greeting to wake LeLamp", "component", "sensing")
+		slog.Info("voice wake — firing greeting to wake HAL", "component", "sensing")
 		go func() {
-			if err := lelamp.SetEmotion("greeting", 0.8); err != nil {
+			if err := hal.SetEmotion("greeting", 0.8); err != nil {
 				slog.Warn("voice wake greeting failed", "component", "sensing", "error", err)
 				return
 			}
@@ -225,21 +225,21 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	inVoiceWindow := time.Now().UnixMilli() < h.voiceActiveUntil.Load()
 	if isPassive && h.agentGateway.IsBusy() {
 		// motion.activity and emotion.detected get queued (not dropped) because
-		// LeLamp deduplicates both with a 5-min window at the source — if one
-		// reaches Lamp it's genuinely new. Dropping it here would make LeLamp's
+		// HAL deduplicates both with a 5-min window at the source — if one
+		// reaches Lamp it's genuinely new. Dropping it here would make HAL's
 		// dedup think "sent" while the agent never saw the event, blocking the
 		// next real transition for 5 min.
 		if shouldQueueEvent(req.Type, req.Message, inVoiceWindow) {
 			// Pre-allocate runID for web_chat so the web client can correlate
 			// SSE events when this turn replays. Other queued types don't need
-			// a runID (LeLamp doesn't track them).
+			// a runID (HAL doesn't track them).
 			var queuedRunID string
 			if isWebChat {
 				_, queuedRunID = h.agentGateway.NextChatRunID()
 				// TEMP: TTS suppression disabled to test speaker remotely from web chat.
 				// h.agentGateway.MarkWebChatRun(queuedRunID)
 			}
-			slog.Info("INBOUND from LeLamp → QUEUED (agent busy, will replay on idle)",
+			slog.Info("INBOUND from HAL → QUEUED (agent busy, will replay on idle)",
 				"component", "sensing",
 				"backend", h.agentGateway.Name(),
 				"type", req.Type,
@@ -256,7 +256,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			c.JSON(http.StatusOK, serializers.ResponseSuccess(resp))
 			return
 		}
-		slog.Info("INBOUND from LeLamp → DROPPED (agent busy, non-queueable type)",
+		slog.Info("INBOUND from HAL → DROPPED (agent busy, non-queueable type)",
 			"component", "sensing", "backend", h.agentGateway.Name(), "type", req.Type)
 		h.monitorBus.Push(domain.MonitorEvent{
 			Type:    "sensing_drop",
@@ -284,7 +284,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			if last := h.lastNotReadyTTS.Load(); now-last > 60_000 {
 				if h.lastNotReadyTTS.CompareAndSwap(last, now) {
 					go func() {
-						if err := lelamp.Speak(i18n.One(i18n.PhraseBrainRestart)); err != nil {
+						if err := hal.Speak(i18n.One(i18n.PhraseBrainRestart)); err != nil {
 							slog.Warn("not-ready TTS failed", "component", "sensing", "error", err)
 						}
 					}()
@@ -385,9 +385,9 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	//
 	// Opening filler is fired-and-forget IMMEDIATELY here (not via
 	// FillerManager timer). This is the pre-2026-05-04 behaviour: filler
-	// arrives at lelamp ~5-10s before the LLM real reply, so it has time
+	// arrives at hal ~5-10s before the LLM real reply, so it has time
 	// to synthesize and play out before the real reply arrives — avoiding
-	// the lelamp-side speak() lock-timeout=2s race that the timer-based
+	// the hal-side speak() lock-timeout=2s race that the timer-based
 	// fire-at-lifecycle.start+FillerDelay path triggers.
 	// TEMP: include isWebChat so remote TTS test gets the same opening filler
 	// + dead-air filler experience as voice. Revert with the MarkWebChatRun
@@ -408,8 +408,8 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 
 	// Unified entry-point log — every inbound message reaching the agent goes
 	// through one of the INBOUND lines so `grep INBOUND` shows a complete
-	// trail across all sources (LeLamp, channels, system).
-	sourceLabel := "LeLamp"
+	// trail across all sources (HAL, channels, system).
+	sourceLabel := "HAL"
 	if isWebChat {
 		sourceLabel = "WebMonitor"
 	}
@@ -454,7 +454,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	flow.End("sensing_input", turnStart, map[string]any{"path": "agent", "run_id": runID}, runID)
 	flow.Log("agent_call", map[string]any{"type": req.Type, "run_id": runID}, runID)
 
-	slog.Info("flow correlation", "op", "lelamp_agent_out", "section", "lelamp_to_openclaw",
+	slog.Info("flow correlation", "op", "hal_agent_out", "section", "hal_to_openclaw",
 		"device_run_id", runID, "sensing_type", req.Type,
 		"note", "OpenClaw lifecycle UUID maps to device_run_id on lifecycle_start in SSE handler")
 	slog.Info("event forwarded", "component", "sensing", "type", req.Type, "hasImage", req.Image != "", "runId", runID)
@@ -471,7 +471,7 @@ type MonitorEventRequest struct {
 	RunID   string         `json:"runId,omitempty"`
 }
 
-// PostMonitorEvent allows internal services (e.g. LeLamp) to push events to the monitor bus.
+// PostMonitorEvent allows internal services (e.g. HAL) to push events to the monitor bus.
 func (h *SensingHandler) PostMonitorEvent(c *gin.Context) {
 	var req MonitorEventRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -571,9 +571,9 @@ func (h *SensingHandler) PostGuardAlert(c *gin.Context) {
 }
 
 // GetSnapshot serves a sensing snapshot image.
-// LeLamp writes snapshots as <dir>/<category>/<name>, where <category> is
+// HAL writes snapshots as <dir>/<category>/<name>, where <category> is
 // sensing_<prefix> (e.g. sensing_motion_activity) and <name> is <ms>.jpg.
-// Checks persistent dir first (/var/lib/lelamp/snapshots/), falls back to tmp.
+// Checks persistent dir first (/var/lib/hal/snapshots/), falls back to tmp.
 func (h *SensingHandler) GetSnapshot(c *gin.Context) {
 	category := c.Param("category")
 	name := c.Param("name")
@@ -588,7 +588,7 @@ func (h *SensingHandler) GetSnapshot(c *gin.Context) {
 		c.Status(http.StatusNotFound)
 		return
 	}
-	persistPath := filepath.Join("/var/lib/lelamp/snapshots", category, name)
+	persistPath := filepath.Join("/var/lib/hal/snapshots", category, name)
 	if _, err := os.Stat(persistPath); err == nil {
 		c.File(persistPath)
 		return
@@ -608,11 +608,11 @@ func (h *SensingHandler) GetSnapshot(c *gin.Context) {
 }
 
 // speechEmotionAudioDirs are the on-Pi locations where the speech_emotion
-// service writes its debug WAV clips (mirrors LELAMP_SPEECH_EMOTION_AUDIO_DIR
+// service writes its debug WAV clips (mirrors HAL_SPEECH_EMOTION_AUDIO_DIR
 // default + a persistent fallback). GetAudio serves files by basename from
 // these dirs only.
 var speechEmotionAudioDirs = []string{
-	"/var/lib/lelamp/speech-emotion",
+	"/var/lib/hal/speech-emotion",
 	"/tmp/lamp-speech-emotion",
 }
 
@@ -827,8 +827,8 @@ func (h *SensingHandler) PostPostureLog(c *gin.Context) {
 // extractSnapshotPath still pulls the file path via FindStringSubmatch.
 var reSnapshotPath = regexp.MustCompile(`\[snapshot:\s*([^\]]+)\]\n?`)
 
-// Pose bucket markers — emitted by lelamp motion.py when a posture nudge
-// rides along on motion.activity. They reference a lelamp-side bucket
+// Pose bucket markers — emitted by hal motion.py when a posture nudge
+// rides along on motion.activity. They reference a hal-side bucket
 // dir + the pre-selected worst-snapshot filenames, NOT a base64 image
 // payload, so they're cheap to keep in the JSONL.
 var rePoseBucketMarker = regexp.MustCompile(`\[pose_bucket:\s*([^\]]+)\]\n?`)
@@ -895,10 +895,10 @@ func riskLevelLabel(level int) string {
 // payload on a motion.activity message and translates the fields the
 // habit skill needs onto a posture.AlertExtras.
 //
-// Source-of-truth fields are the `worst_*` keys (lelamp pre-computes
+// Source-of-truth fields are the `worst_*` keys (hal pre-computes
 // them as the max across the same 3 samples it surfaces for the DM
 // gallery), so habit numbers stay aligned with the photos the user
-// just saw. Falls back to `latest_*` when an older lelamp build is
+// just saw. Falls back to `latest_*` when an older hal build is
 // still in the field, so a half-rolled deploy doesn't drop alert
 // rows entirely.
 //
@@ -934,7 +934,7 @@ func extractPostureAlertExtras(message string) (posture.AlertExtras, bool) {
 	left := s.WorstLeftScore
 	right := s.WorstRightScore
 	if score == 0 && risk == 0 {
-		// Older lelamp builds (or any path where the worst aggregate
+		// Older hal builds (or any path where the worst aggregate
 		// wasn't computed) — fall back to the last-sample values so
 		// the alert row still lands.
 		score = s.LatestScore

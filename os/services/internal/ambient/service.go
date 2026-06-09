@@ -1,7 +1,7 @@
 // Package ambient provides idle "living creature" behaviors for Lamp.
 // When no interaction is happening, it drives breathing LED, color drift,
 // micro-movements, eye expression changes, and occasional self-talk via TTS.
-// All hardware control goes through LeLamp HTTP API (port 5001).
+// All hardware control goes through HAL HTTP API (port 5001).
 package ambient
 
 import (
@@ -15,8 +15,8 @@ import (
 	"go.autonomous.ai/os/domain"
 	"go.autonomous.ai/os/internal/monitor"
 	"go.autonomous.ai/os/lib/flow"
+	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/lib/i18n"
-	"go.autonomous.ai/os/lib/lelamp"
 )
 
 // resumeDelay is how long after the last interaction before ambient resumes.
@@ -155,11 +155,11 @@ func (s *Service) watchInteractions(ctx context.Context, eventCh <-chan domain.M
 
 // --- Behavior Loops ---
 
-// breathingLoop delegates the breathing LED effect to LeLamp's built-in
+// breathingLoop delegates the breathing LED effect to HAL's built-in
 // /led/effect endpoint instead of overriding /led/solid at 5 FPS.
 // This way the agent's emotion/scene colors are never trampled by ambient.
 func (s *Service) breathingLoop(ctx context.Context) {
-	// Track whether we already started the LeLamp breathing effect
+	// Track whether we already started the HAL breathing effect
 	running := false
 
 	ticker := time.NewTicker(2 * time.Second)
@@ -169,13 +169,13 @@ func (s *Service) breathingLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			if running {
-				lelamp.StopEffect()
+				hal.StopEffect()
 			}
 			return
 		case <-ticker.C:
 			if s.isPaused() {
 				if running {
-					lelamp.StopEffect()
+					hal.StopEffect()
 					running = false
 				}
 				continue
@@ -186,19 +186,19 @@ func (s *Service) breathingLoop(ctx context.Context) {
 			s.mu.Unlock()
 			if locked {
 				if running {
-					lelamp.StopEffect()
+					hal.StopEffect()
 					running = false
 				}
 				continue
 			}
 			if !running {
-				// Read the current LED color from LeLamp and start breathing with it.
-				// Fall back to soft blue-white if LeLamp returns black (just started, no color set).
+				// Read the current LED color from HAL and start breathing with it.
+				// Fall back to soft blue-white if HAL returns black (just started, no color set).
 				color := [3]int{180, 220, 255} // fallback
-				if c, err := lelamp.GetColor(); err == nil && (c[0]+c[1]+c[2]) > 0 {
+				if c, err := hal.GetColor(); err == nil && (c[0]+c[1]+c[2]) > 0 {
 					color = c
 				}
-				lelamp.SetEffect("breathing", color[0], color[1], color[2], 0.3)
+				hal.SetEffect("breathing", color[0], color[1], color[2], 0.3)
 				running = true
 			}
 		}
@@ -220,7 +220,7 @@ func (s *Service) microMovementLoop(ctx context.Context) {
 		}
 
 		recording := safeRecordings[rand.Intn(len(safeRecordings))]
-		if err := lelamp.PlayServo(recording); err != nil {
+		if err := hal.PlayServo(recording); err != nil {
 			slog.Debug("micro-movement servo failed", "component", "ambient", "error", err)
 		}
 		slog.Debug("micro-movement", "component", "ambient", "recording", recording)
@@ -241,7 +241,7 @@ func (s *Service) mumbleLoop(ctx context.Context) {
 		}
 
 		mumble := i18n.Pick(i18n.PhraseMumble)
-		if err := lelamp.Speak(mumble); err != nil {
+		if err := hal.Speak(mumble); err != nil {
 			slog.Debug("mumble TTS failed", "component", "ambient", "error", err)
 		}
 		slog.Debug("mumble", "component", "ambient", "text", mumble)

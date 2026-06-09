@@ -264,7 +264,7 @@ const (
 	KindOAuthRemove = "oauth.remove" // delete OAuth token for a provider
 
 	KindSystemInfo    = "system.info"    // aggregate: versions + network + host
-	KindSystemVersion = "system.version" // lamp + bootstrap + lelamp + openclaw versions
+	KindSystemVersion = "system.version" // lamp + bootstrap + hal + openclaw versions
 	KindSystemNetwork = "system.network" // wlan0 IP, MAC, SSID, gateway
 
 	// KindSkillsInstall installs a role's skill bundle. Data: {"role":"<role>"}.
@@ -404,6 +404,7 @@ type MQTTInfoResponse struct {
 	TTSVoice        string `json:"tts_voice,omitempty"`
 	STTLanguage     string `json:"stt_language,omitempty"`
 	LelampVersion   string `json:"lelamp_version,omitempty"`
+	HalVersion      string `json:"hal_version,omitempty"`
 	OpenClawVersion string `json:"openclaw_version,omitempty"`
 	LocalIP         string `json:"local_ip,omitempty"`
 }
@@ -474,6 +475,7 @@ type MQTTVersionsData struct {
 	Lamp             string `json:"lamp"`
 	Bootstrap        string `json:"bootstrap"`
 	Lelamp           string `json:"lelamp"`
+	Hal              string `json:"hal"`
 	OpenClaw         string `json:"openclaw"`
 	OpenClawDetected bool   `json:"openclaw_detected"`
 }
@@ -541,13 +543,13 @@ type AccessTokensFile struct {
 // openclaw.json. ExpiresIn (seconds-from-now) is normalized to an absolute
 // ExpiresAt on store.
 type MQTTConnectorSetData struct {
-	Connector    string   `json:"connector"`
-	AuthType     string   `json:"auth_type"`
-	AccessToken  string   `json:"access_token,omitempty"`
-	RefreshToken string   `json:"refresh_token,omitempty"`
-	TokenType    string   `json:"token_type,omitempty"`
-	ExpiresIn    int      `json:"expires_in,omitempty"` // seconds from now
-	ExpiresAt    int64    `json:"expires_at,omitempty"` // unix seconds (wins over expires_in)
+	Connector    string `json:"connector"`
+	AuthType     string `json:"auth_type"`
+	AccessToken  string `json:"access_token,omitempty"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	TokenType    string `json:"token_type,omitempty"`
+	ExpiresIn    int    `json:"expires_in,omitempty"` // seconds from now
+	ExpiresAt    int64  `json:"expires_at,omitempty"` // unix seconds (wins over expires_in)
 	// APIKey carries the credential for static-API-key connectors (e.g. Ahrefs)
 	// whose auth_type is not OAuth — the key lands here, not in access_token.
 	APIKey    string   `json:"api_key,omitempty"`
@@ -622,7 +624,7 @@ type MQTTTTSSetAck struct {
 
 // MQTTTTSPreviewData is the nested data payload for cmd:"data", kind:"tts.preview".
 // Text is required; Provider/Voice/Language are optional overrides — empty
-// fields make LeLamp fall back to the device's current TTS config.
+// fields make HAL fall back to the device's current TTS config.
 type MQTTTTSPreviewData struct {
 	Text     string `json:"text"`
 	Provider string `json:"provider,omitempty"`
@@ -637,7 +639,7 @@ type MQTTTTSPreviewCommand struct {
 
 // MQTTLampRenameData is the nested data payload for cmd:"data", kind:"lamp.rename".
 // Name is the new agent name written into workspace/IDENTITY.md's **Name:** line.
-// WatchIdentity picks up the change within 5s and pushes new wake words to LeLamp;
+// WatchIdentity picks up the change within 5s and pushes new wake words to HAL;
 // OpenClaw re-reads IDENTITY.md on its own — no gateway restart needed.
 type MQTTLampRenameData struct {
 	Name string `json:"name"`

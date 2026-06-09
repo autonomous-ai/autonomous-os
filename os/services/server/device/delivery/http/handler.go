@@ -11,7 +11,7 @@ import (
 	"go.autonomous.ai/os/domain"
 	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/internal/network"
-	"go.autonomous.ai/os/lib/lelamp"
+	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/server/config"
 	"go.autonomous.ai/os/server/serializers"
 	"go.autonomous.ai/os/server/session"
@@ -154,7 +154,7 @@ func (h *DeviceHandler) UpdateConfig(c *gin.Context) {
 }
 
 // GetVoices returns the list of available TTS voices for the requested provider.
-// Tries LeLamp /voice/voices?provider=&lang= first (source of truth), falls
+// Tries HAL /voice/voices?provider=&lang= first (source of truth), falls
 // back to a static list. `lang` (BCP-47 stt_language code) lets the web UI
 // filter voices to those that sound natural in the active language; empty
 // lang returns the full flat list.
@@ -162,7 +162,7 @@ func (h *DeviceHandler) GetVoices(c *gin.Context) {
 	provider := c.DefaultQuery("provider", domain.TTSProviderOpenAI)
 	lang := c.Query("lang")
 
-	if voices, err := lelamp.ListVoices(provider, lang); err == nil && len(voices) > 0 {
+	if voices, err := hal.ListVoices(provider, lang); err == nil && len(voices) > 0 {
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(voices))
 		return
 	}

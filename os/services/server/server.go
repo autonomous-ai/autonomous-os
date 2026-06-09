@@ -35,7 +35,7 @@ import (
 	"go.autonomous.ai/os/internal/network"
 	"go.autonomous.ai/os/internal/statusled"
 	"go.autonomous.ai/os/lib/i18n"
-	"go.autonomous.ai/os/lib/lelamp"
+	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/lib/logger"
 	"go.autonomous.ai/os/lib/mqtt"
 	"go.autonomous.ai/os/lib/safego"
@@ -205,7 +205,7 @@ func (s *Server) stopMQTT() {
 // requests without an Origin header are rejected when coming from outside LAN.
 func sameOriginOrLAN() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if strings.ToLower(strings.TrimSpace(os.Getenv("LELAMP_MODE"))) == "developer" {
+		if strings.ToLower(strings.TrimSpace(os.Getenv("HAL_MODE"))) == "developer" {
 			c.Next()
 			return
 		}
@@ -347,18 +347,18 @@ func localOnlyMiddleware() gin.HandlerFunc {
 	}
 }
 
-// hardwareProxy is a wildcard reverse proxy from /api/hardware/* to LeLamp on
+// hardwareProxy is a wildcard reverse proxy from /api/hardware/* to HAL on
 // loopback (127.0.0.1:5001). It exists so the web UI never touches /hw/*
 // directly — adminAuthMiddleware gates the bearer here, and the upstream
-// LeLamp call is loopback so its local_only_middleware lets it through.
+// HAL call is loopback so its local_only_middleware lets it through.
 //
 // MJPEG streams (/api/hardware/camera/stream) work because
 // httputil.ReverseProxy disables response buffering for chunked / multipart
 // content out of the box. Long-running endpoints reuse the default 300s
 // proxy timeout configured at the http.Server level.
 // openapiProxy serves the in-iframe Swagger UI's `/openapi.json` fetch by
-// forwarding straight to LeLamp on loopback. Path stays as-is — FastAPI
-// generates the spec at /openapi.json on LeLamp, no rewrite needed.
+// forwarding straight to HAL on loopback. Path stays as-is — FastAPI
+// generates the spec at /openapi.json on HAL, no rewrite needed.
 var openapiProxy = func() http.Handler {
 	target, _ := url.Parse("http://127.0.0.1:5001")
 	proxy := httputil.NewSingleHostReverseProxy(target)
@@ -377,13 +377,13 @@ var hardwareProxy = func() http.Handler {
 	origDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		// Gin's wildcard match leaves /api/hardware/<path> in req.URL.Path.
-		// Strip the prefix so LeLamp sees its original path.
+		// Strip the prefix so HAL sees its original path.
 		req.URL.Path = strings.TrimPrefix(req.URL.Path, "/api/hardware")
 		if req.URL.Path == "" {
 			req.URL.Path = "/"
 		}
 		origDirector(req)
-		// Stop leaking the original LAN client IP downstream: LeLamp's
+		// Stop leaking the original LAN client IP downstream: HAL's
 		// same-origin/local check trusts loopback, so we present as one.
 		req.Header.Del("X-Forwarded-For")
 		req.Header.Del("X-Real-IP")
@@ -481,11 +481,11 @@ func (s *Server) Serve(closeFn func()) error {
 		logger.SetGELFHost(s.config.DeviceID)
 	}
 
-	// Register the shared bearer token for outbound LeLamp HTTP calls.
-	// LeLamp's local_only_middleware accepts Authorization: Bearer <llm_api_key>
+	// Register the shared bearer token for outbound HAL HTTP calls.
+	// HAL's local_only_middleware accepts Authorization: Bearer <llm_api_key>
 	// as one of its allow paths; sending it lets calls succeed even if loopback
 	// bypass is tightened later. Empty key drops the header (local LLM mode).
-	lelamp.SetAPIKey(s.config.LLMAPIKey)
+	hal.SetAPIKey(s.config.LLMAPIKey)
 
 	// Signal booting state so the LED shows a slow blue pulse while initializing.
 	s.statusLED.Set(statusled.StateBooting)
@@ -573,12 +573,12 @@ func (s *Server) Serve(closeFn func()) error {
 	sensing.GET("audio/:name", s.sensingHandler.GetAudio)
 
 	// Voice file delete (filesystem orchestration on Pi). Voice enroll
-	// itself lives on lelamp at /hw/speaker/record-enroll because hardware
+	// itself lives on hal at /hw/speaker/record-enroll because hardware
 	// capture is Python's domain.
 	voice := api.Group("voice")
 	voice.POST("file/remove", s.sensingHandler.RemoveVoiceFile)
 	// TTS preview: web ships `{text, voice, provider}` only; server reads
-	// the TTS API key + base URL from cfg and forwards to LeLamp. Replaces
+	// the TTS API key + base URL from cfg and forwards to HAL. Replaces
 	// the previous web-side `testTTSVoice` that POSTed tts_api_key through
 	// the hardware proxy (audit web F13).
 	voice.POST("preview", adminAuthMiddleware(s.config), s.voicePreview)
@@ -656,16 +656,16 @@ func (s *Server) Serve(closeFn func()) error {
 	logs.GET("stream", adminAuthMiddleware(s.config), s.logStream)
 
 	// Wildcard reverse proxy: web UI calls /api/hardware/<anything> with a
-	// bearer token; Go gates the request then forwards to LeLamp on loopback.
+	// bearer token; Go gates the request then forwards to HAL on loopback.
 	// Replaces direct browser /hw/* access (audit web F5) so nginx /hw/
 	// allow 127.0.0.1; deny all; can stay locked down (audit local F2).
 	api.Any("/hardware/*path", adminAuthMiddleware(s.config), gin.WrapH(hardwareProxy))
 
-	// Top-level /openapi.json so the in-iframe LeLamp Swagger UI (loaded at
+	// Top-level /openapi.json so the in-iframe HAL Swagger UI (loaded at
 	// /api/hardware/docs) can fetch its spec — FastAPI hardcodes the spec
 	// URL as the absolute path `/openapi.json` in the rendered HTML, so we
 	// expose it at the root. Admin-auth gated; cookie auto-attaches in the
-	// iframe context. Loopback-only on LeLamp side already enforced by the
+	// iframe context. Loopback-only on HAL side already enforced by the
 	// proxy's same upstream as `/api/hardware/*`.
 	r.GET("/openapi.json", adminAuthMiddleware(s.config), gin.WrapH(openapiProxy))
 
@@ -685,7 +685,7 @@ func (s *Server) Serve(closeFn func()) error {
 
 	// When the device is still in AP/provisioning mode, paint the strip solid
 	// white as a visual "ready for WiFi setup" signal. lamp typically reaches
-	// this point before LeLamp's FastAPI is up on :5001 (Python boot is
+	// this point before HAL's FastAPI is up on :5001 (Python boot is
 	// slower — loads rpi_ws281x, SPI, audio, camera), so we poll /health in
 	// the background and fire SetSolid only once LED hardware reports ready.
 	// Skipped post-setup — agent flash + ambient take over from here.
@@ -732,9 +732,9 @@ func (s *Server) runConfigChangeListener(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ch:
-			// Refresh the LeLamp bearer token whenever config changes — covers
+			// Refresh the HAL bearer token whenever config changes — covers
 			// llm_api_key rotation via PUT /api/device/config without restart.
-			lelamp.SetAPIKey(s.config.LLMAPIKey)
+			hal.SetAPIKey(s.config.LLMAPIKey)
 			s.handleSetUpCompleteChange(s.config.SetUpCompleted)
 			s.handleDeviceIDChange(s.config.DeviceID)
 			s.handleMQTTEndpointChange(s.config.MQTTEndpoint)
@@ -807,14 +807,14 @@ func (s *Server) handleMQTTEndpointChange(endpoint string) {
 	s.restartMQTT()
 }
 
-// waitAndPaintSetupReady polls LeLamp /health up to 30s; when LED hardware
+// waitAndPaintSetupReady polls HAL /health up to 30s; when LED hardware
 // reports ready it paints the strip solid white as the "device awaiting WiFi
 // setup" cue. Exits early if setup completes mid-wait so we don't repaint
-// over the post-setup user/agent LED state. Best-effort — silent when LeLamp
+// over the post-setup user/agent LED state. Best-effort — silent when HAL
 // never reports LED ready within budget (logs a warning).
 //
 // Why this is a poll loop and not a single SetSolid call: os-server binds
-// :5000 faster than LeLamp's FastAPI binds :5001 on cold boot, so a fire-
+// :5000 faster than HAL's FastAPI binds :5001 on cold boot, so a fire-
 // and-forget paint at L<see Serve> would silently drop on connection refused
 // and leave the strip dark — exactly when the user needs the "ready for AP"
 // signal most.
@@ -826,14 +826,14 @@ func (s *Server) waitAndPaintSetupReady() {
 		if s.config.SetUpCompleted {
 			return
 		}
-		if h, err := lelamp.GetHealth(); err == nil && h.LED {
-			lelamp.SetSolid(255, 255, 255)
+		if h, err := hal.GetHealth(); err == nil && h.LED {
+			hal.SetSolid(255, 255, 255)
 			slog.Info("setup-needed white painted", "component", "server")
 			return
 		}
 		<-ticker.C
 	}
-	slog.Warn("setup-needed paint skipped: lelamp LED not ready within 30s", "component", "server")
+	slog.Warn("setup-needed paint skipped: hal LED not ready within 30s", "component", "server")
 }
 
 // handleSetUpCompleteChange starts or stops the network monitor and status reporter based on SetUpCompleted.
@@ -892,15 +892,15 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 			}
 			// Restart lamp-hal so it picks up the fresh config written during setup.
 			exec.Command("systemctl", "restart", "lamp-hal").Run()
-			// Start voice pipeline on LeLamp (if Deepgram key configured)
+			// Start voice pipeline on HAL (if Deepgram key configured)
 			// Retry because lamp-hal may not be running yet at setup time.
 			if s.config.DeepgramAPIKey != "" {
 				for attempt := 1; attempt <= 10; attempt++ {
-					err := s.agentGateway.StartLeLampVoice(s.config.DeepgramAPIKey, s.config.LLMAPIKey, s.config.GetSTTAPIKey(), s.config.GetTTSAPIKey(), s.config.LLMBaseURL, s.config.GetSTTBaseURL(), s.config.GetTTSBaseURL(), s.config.TTSVoice, s.config.TTSInstructions, s.config.TTSProvider)
+					err := s.agentGateway.StartHALVoice(s.config.DeepgramAPIKey, s.config.LLMAPIKey, s.config.GetSTTAPIKey(), s.config.GetTTSAPIKey(), s.config.LLMBaseURL, s.config.GetSTTBaseURL(), s.config.GetTTSBaseURL(), s.config.TTSVoice, s.config.TTSInstructions, s.config.TTSProvider)
 					if err == nil {
 						break
 					}
-					slog.Warn("start LeLamp voice failed", "component", "server", "attempt", attempt, "maxAttempts", 10, "error", err)
+					slog.Warn("start HAL voice failed", "component", "server", "attempt", attempt, "maxAttempts", 10, "error", err)
 					time.Sleep(5 * time.Second)
 				}
 			}
@@ -928,7 +928,7 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 			safego.Go("prewarm-fillers", func() { _sensingHttpDeliver.PrewarmFillers() })
 			// Start ambient life behaviors (breathing LED, micro-movements, mumbles)
 			safego.Go("ambient", func() { s.ambientService.Start(s.monitorCtx) })
-			// Watch LeLamp component health; auto-restart voice on ALSA failure
+			// Watch HAL component health; auto-restart voice on ALSA failure
 			safego.Go("healthwatch", func() { s.healthWatch.Start(s.monitorCtx) })
 		})
 	} else {
@@ -991,7 +991,7 @@ func (s *Server) loginExchangeHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(true))
 }
 
-// voicePreview plays a TTS preview through LeLamp using server-side
+// voicePreview plays a TTS preview through HAL using server-side
 // credentials. Body: {text, voice, provider}. The TTS API key + base URL
 // come from cfg (with the same LLM-fallback the runtime voice pipeline
 // uses) — they never leave the device. Audit web F13: previous flow
@@ -1008,7 +1008,7 @@ func (s *Server) voicePreview(c *gin.Context) {
 	}
 	apiKey := s.config.GetTTSAPIKey()
 	baseURL := s.config.GetTTSBaseURL()
-	if err := lelamp.SpeakPreview(body.Text, body.Voice, body.Provider, apiKey, baseURL); err != nil {
+	if err := hal.SpeakPreview(body.Text, body.Voice, body.Provider, apiKey, baseURL); err != nil {
 		slog.Warn("voice preview failed", "component", "voice", "error", err)
 		c.JSON(http.StatusBadGateway, serializers.ResponseError("preview failed: "+err.Error()))
 		return
@@ -1019,7 +1019,7 @@ func (s *Server) voicePreview(c *gin.Context) {
 // allowedLogs maps source names to their log file paths (supports glob patterns).
 // Entries prefixed with "journal:" use journalctl instead of file reading.
 var allowedLogs = map[string]string{
-	"lelamp":           "/var/log/hal/server.log",
+	"hal":           "/var/log/hal/server.log",
 	"lamp":             "/var/log/lamp.log",
 	"openclaw":         "/var/log/openclaw/lamp.log",
 	"openclaw-service": "journal:openclaw.service",
@@ -1055,7 +1055,7 @@ func resolveLogPaths(pattern string) ([]string, error) {
 }
 
 // logTail returns the last N lines of a whitelisted log file (or merged glob).
-// GET /api/logs/tail?source=lelamp|lamp|openclaw|openclaw-service&lines=200
+// GET /api/logs/tail?source=hal|lamp|openclaw|openclaw-service&lines=200
 func (s *Server) logTail(c *gin.Context) {
 	source := c.DefaultQuery("source", "lamp")
 	pattern, ok := allowedLogs[source]
@@ -1123,7 +1123,7 @@ func (s *Server) logTail(c *gin.Context) {
 }
 
 // logStream streams new log lines via SSE from one or more log files.
-// GET /api/logs/stream?source=lelamp|lamp|openclaw|openclaw-service
+// GET /api/logs/stream?source=hal|lamp|openclaw|openclaw-service
 func (s *Server) logStream(c *gin.Context) {
 	source := c.DefaultQuery("source", "lamp")
 	pattern, ok := allowedLogs[source]

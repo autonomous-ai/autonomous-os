@@ -3,16 +3,17 @@ package mqtthandler
 import (
 	"log/slog"
 
-	agenthttp "go.autonomous.ai/os/server/agent/delivery/http"
 	"go.autonomous.ai/os/domain"
 	"go.autonomous.ai/os/internal/device"
-	"go.autonomous.ai/os/lib/lelamp"
+	"go.autonomous.ai/os/lib/hal"
+	agenthttp "go.autonomous.ai/os/server/agent/delivery/http"
 )
 
 func (h *DeviceMQTTHandler) handleInfo(_ domain.MQTTMessage) error {
 	msg := domain.NewMQTTInfoResponse(h.config, "info", device.GetDeviceMac())
-	if v, err := lelamp.GetVersion(); err == nil {
+	if v, err := hal.GetVersion(); err == nil {
 		msg.LelampVersion = v
+		msg.HalVersion = v
 	}
 	msg.OpenClawVersion = agenthttp.GetOpenClawVersion()
 	if ip, err := h.networkService.GetCurrentIP(); err == nil {
@@ -21,7 +22,7 @@ func (h *DeviceMQTTHandler) handleInfo(_ domain.MQTTMessage) error {
 	slog.Info("mqtt_handler_info",
 		"id", msg.ID,
 		"version", msg.Version,
-		"lelamp_version", msg.LelampVersion,
+		"hal_version", msg.LelampVersion,
 		"openclaw_version", msg.OpenClawVersion,
 		"local_ip", msg.LocalIP,
 		"tts_provider", msg.TTSProvider,

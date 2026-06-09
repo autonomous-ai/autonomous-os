@@ -12,7 +12,7 @@ import (
 
 // handleLampRename rewrites the agent name in workspace/IDENTITY.md. WatchIdentity
 // will pick up the change on its next poll cycle and push fresh wake words to
-// LeLamp; OpenClaw re-reads IDENTITY.md on its own so no gateway restart is needed.
+// HAL; OpenClaw re-reads IDENTITY.md on its own so no gateway restart is needed.
 // After the file write succeeds, an async system chat message tells the agent its
 // new name so it greets the owner with the new identity in the next turn.
 func (h *DeviceMQTTHandler) handleLampRename(env domain.MQTTDataCommand) error {

@@ -167,7 +167,7 @@ type AgentGateway interface {
 	// associated with a motion.activity turn that surfaced a posture nudge.
 	// The SSE handler consumes this on /dm so the worst frames can be
 	// attached to the Telegram message without the agent having to know
-	// any file paths. bucketID is lelamp's window_start integer; filenames
+	// any file paths. bucketID is hal's window_start integer; filenames
 	// are relative to <SNAPSHOT_TMP_DIR>/sensing_pose/buckets/<bucketID>/.
 	MarkPoseBucketRun(runID string, bucketID string, worstFilenames []string)
 
@@ -228,32 +228,32 @@ type AgentGateway interface {
 	// caps sendMediaGroup at 10 photos; callers should self-limit.
 	SendToUserWithMedia(telegramID string, msg string, imagePaths []string) error
 
-	// SendToLeLampTTS posts response text to LeLamp for TTS playback.
-	SendToLeLampTTS(text string) error
+	// SendToHALTTS posts response text to HAL for TTS playback.
+	SendToHALTTS(text string) error
 
-	// SendToLeLampTTSQueue posts text to /voice/speak-queue: plays
+	// SendToHALTTSQueue posts text to /voice/speak-queue: plays
 	// immediately when idle, otherwise queues + pre-synthesizes so the audio
 	// chains seamlessly onto the current speech (used for sentence-streamed
 	// agent replies).
-	SendToLeLampTTSQueue(text string) error
+	SendToHALTTSQueue(text string) error
 
-	// StopTTS interrupts active TTS playback and music on LeLamp.
+	// StopTTS interrupts active TTS playback and music on HAL.
 	StopTTS() error
 
-	// SetVolume sets speaker volume on LeLamp (0-100).
+	// SetVolume sets speaker volume on HAL (0-100).
 	SetVolume(pct int) error
 
-	// StartLeLampVoice starts the voice pipeline on LeLamp. sttKey / ttsKey
+	// StartHALVoice starts the voice pipeline on HAL. sttKey / ttsKey
 	// and sttBaseURL / ttsBaseURL are the AutonomousSTT and TTS endpoints;
 	// pass empty for any to fall back to llmKey / llmBaseURL.
-	StartLeLampVoice(deepgramKey, llmKey, sttKey, ttsKey, llmBaseURL, sttBaseURL, ttsBaseURL, ttsVoice, ttsInstructions, ttsProvider string) error
+	StartHALVoice(deepgramKey, llmKey, sttKey, ttsKey, llmBaseURL, sttBaseURL, ttsBaseURL, ttsVoice, ttsInstructions, ttsProvider string) error
 
-	// WatchIdentity polls IDENTITY.md and pushes updated wake words to LeLamp on rename.
+	// WatchIdentity polls IDENTITY.md and pushes updated wake words to HAL on rename.
 	WatchIdentity(ctx context.Context)
 
 	// UpdateIdentityName rewrites the **Name:** line in workspace/IDENTITY.md.
 	// WatchIdentity picks up the change within its next poll cycle and pushes the
-	// new wake words to LeLamp.
+	// new wake words to HAL.
 	UpdateIdentityName(name string) error
 
 	// StartSkillWatcher polls OTA metadata for skill version changes and notifies the agent.

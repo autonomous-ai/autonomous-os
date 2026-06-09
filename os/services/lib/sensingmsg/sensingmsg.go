@@ -26,7 +26,7 @@ import (
 //
 // pose.ergo_risk used to be its own event type; it is now folded into
 // motion.activity via [posture_summary] / [computer_streak_min] blocks added
-// by LeLamp's MotionPerception. The wellbeing skill reads those blocks.
+// by HAL's MotionPerception. The wellbeing skill reads those blocks.
 func Build(eventType, message, currentUser, guardTag string) string {
 	switch eventType {
 	case "voice_command":
@@ -77,7 +77,7 @@ func Build(eventType, message, currentUser, guardTag string) string {
 	case "presence.leave", "presence.away":
 		msg += "\n[No crons to cancel. NO_REPLY unless worth saying.]"
 	case "touch.head_pat":
-		// LeLamp already played a random pet-response phrase locally; agent
+		// HAL already played a random pet-response phrase locally; agent
 		// just records the moment for memory continuity.
 		msg += "\n[NO_REPLY unless worth saying — phrase already spoken locally.]"
 	case "motion.activity":

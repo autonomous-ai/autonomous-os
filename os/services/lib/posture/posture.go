@@ -48,7 +48,7 @@ type Event struct {
 
 	// Alert-row fields (Action == ActionAlert).
 	Score      int    `json:"score,omitempty"`
-	Risk       string `json:"risk,omitempty"`        // medium | high (lelamp filters lower)
+	Risk       string `json:"risk,omitempty"`        // medium | high (hal filters lower)
 	LeftScore  int    `json:"left_score,omitempty"`
 	RightScore int    `json:"right_score,omitempty"`
 
@@ -96,7 +96,7 @@ func Init() {
 	go cleanOldLogs()
 }
 
-// AlertExtras carries the lelamp event payload Lamp persists when an event
+// AlertExtras carries the hal event payload Lamp persists when an event
 // arrives. The skill is the caller — typically right when the event reaches
 // it (before any nudge decision), so the timeline anchors each episode.
 type AlertExtras struct {
@@ -106,7 +106,7 @@ type AlertExtras struct {
 	RightScore int
 }
 
-// LogAlert appends a `posture_alert` row capturing the lelamp event facts.
+// LogAlert appends a `posture_alert` row capturing the hal event facts.
 func LogAlert(user string, e AlertExtras) {
 	user = usercanon.Resolve(user)
 	now := time.Now()

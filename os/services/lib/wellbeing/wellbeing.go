@@ -110,23 +110,23 @@ func NormalizeUser(name string) string {
 
 // presenceActions are backend-written session markers. Multiple stranger
 // faces cycling in and out all collapse to user="unknown", so we must
-// dedup that specific case (lelamp only dedups motion.activity — presence
+// dedup that specific case (hal only dedups motion.activity — presence
 // events bypass it). Without the dedup, stranger_74 → stranger_75 produces
 // two "enter" entries in the unknown timeline and resets the wellbeing
 // delta twice even though, from Lamp's perspective, the "user" (unknown)
 // never changed.
 //
-// Friends do NOT need this guard: lelamp's per-friend session tracking
+// Friends do NOT need this guard: hal's per-friend session tracking
 // (_owners_last_seen + FACE_OWNER_FORGET_S) at facerecognizer.py already
 // fires enter only on a genuinely new session, so Lamp should trust each
 // friend's enter/leave and just record it. Deduping friends here causes
-// the opposite failure: if lelamp restarts between a friend's last
+// the opposite failure: if hal restarts between a friend's last
 // detection and the forget-timeout, leave is never fired, the file gets
 // stuck in "enter" state, and the NEXT legitimate enter is silently
 // dropped — the friend vanishes from their own timeline on return.
 //
 // Physical activity actions (drink/break/sedentary) and agent-written
-// nudge actions are not deduped here — lelamp already dedups them at the
+// nudge actions are not deduped here — hal already dedups them at the
 // source for motion.activity, and nudge entries are explicitly meant to
 // act as reset points one-per-event.
 var presenceActions = map[string]bool{
@@ -138,7 +138,7 @@ var presenceActions = map[string]bool{
 // markers on the unknown timeline, it collapses against the last PRESENCE
 // action (ignoring activity rows between them) so stranger flicker does
 // not inflate the unknown session count. Friend presence rows skip the
-// dedup — lelamp is the authoritative source of friend enter/leave.
+// dedup — hal is the authoritative source of friend enter/leave.
 func LogForUser(user, action, notes string) {
 	user = NormalizeUser(user)
 	now := time.Now()

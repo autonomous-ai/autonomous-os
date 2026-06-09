@@ -110,7 +110,7 @@ func (s *Service) transitionReady(now bool) {
 		if s.hasConnected.Swap(true) {
 			go func() {
 				phrase := i18n.Pick(i18n.PhraseReconnect)
-				if err := s.SendToLeLampTTS(phrase); err != nil {
+				if err := s.SendToHALTTS(phrase); err != nil {
 					slog.Warn("reconnect TTS failed", "component", "hermes", "error", err)
 				}
 			}()

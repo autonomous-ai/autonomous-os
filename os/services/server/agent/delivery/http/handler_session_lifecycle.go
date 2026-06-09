@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"go.autonomous.ai/os/lib/flow"
+	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/lib/i18n"
-	"go.autonomous.ai/os/lib/lelamp"
 )
 
 // autoSessionThreshold is the conversation token count above which we
@@ -59,7 +59,7 @@ func (h *AgentHandler) maybeAutoCompact(sessionKey string, totalTokens int, flow
 		defer time.AfterFunc(autoCompactCooldown, func() {
 			h.compacting.Store(false)
 		})
-		if err := lelamp.SpeakInterruptible(i18n.One(i18n.PhraseCompactNotice)); err != nil {
+		if err := hal.SpeakInterruptible(i18n.One(i18n.PhraseCompactNotice)); err != nil {
 			slog.Warn("compaction notice TTS failed", "component", "agent", "backend", h.agentGateway.Name(), "error", err)
 		}
 		if sessionKey == "" {

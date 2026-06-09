@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"go.autonomous.ai/os/lib/lelamp"
+	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/lib/mood"
 	"go.autonomous.ai/os/lib/musicsuggestion"
 	"go.autonomous.ai/os/lib/usercanon"
@@ -204,13 +204,13 @@ func lastSuggestionAgeMin(events []musicsuggestion.Event, now time.Time) int {
 	return int(now.Sub(time.Unix(int64(last.TS), 0)).Minutes())
 }
 
-// fetchAudioPlaying calls lelamp /audio/status with a tight timeout.
+// fetchAudioPlaying calls hal /audio/status with a tight timeout.
 // Schema (verified on Pi): {available, playing, title, speaker_muted}.
-// Returns false on any error so a missing/down lelamp cannot block the
+// Returns false on any error so a missing/down hal cannot block the
 // agent turn.
 func fetchAudioPlaying() bool {
 	client := &http.Client{Timeout: audioStatusTimeout}
-	resp, err := client.Get(lelamp.BaseURL + "/audio/status")
+	resp, err := client.Get(hal.BaseURL + "/audio/status")
 	if err != nil {
 		return false
 	}
@@ -231,11 +231,11 @@ func fetchAudioPlaying() bool {
 	return payload.Playing
 }
 
-// fetchAudioRecent calls lelamp /audio/history?last=1 — without a person
-// filter. Verified on Pi (.38) that lelamp does not currently attribute
+// fetchAudioRecent calls hal /audio/history?last=1 — without a person
+// filter. Verified on Pi (.38) that hal does not currently attribute
 // plays to a user (entry.person is always ""), so filtering by person
 // drops everything and audio_recent comes back nil for every user.
-// Until lelamp starts tagging plays, just take the latest global play —
+// Until hal starts tagging plays, just take the latest global play —
 // music-suggestion uses this to nudge genre tone, which is approximate
 // enough that "the lamp's most recent play" is good signal.
 //
@@ -246,7 +246,7 @@ func fetchAudioPlaying() bool {
 //	],"count":<n>}
 func fetchAudioRecent(_ string) *audioRecentDigest {
 	client := &http.Client{Timeout: audioHistoryTimeout}
-	url := lelamp.BaseURL + "/audio/history?last=1"
+	url := hal.BaseURL + "/audio/history?last=1"
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil

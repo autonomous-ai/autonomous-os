@@ -42,7 +42,7 @@ func (s *Service) ConsumeGuardRun(runID string) (string, bool) {
 
 // poseBucketRunTTL bounds how long an unconsumed pose-bucket marker
 // stays around. The bucket itself survives much longer (POSE_BUCKET_KEEP_S
-// on lelamp, default 2 days), so this only protects against runIDs that
+// on hal, default 2 days), so this only protects against runIDs that
 // never reach the SSE /dm path (agent decides not to nudge → marker is
 // orphaned). Generous because a single agent turn can run ~minutes when
 // the LLM thinks; nothing else hinges on this map staying tight.
