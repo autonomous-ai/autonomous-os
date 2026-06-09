@@ -3,14 +3,14 @@ set -e
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ota-config.sh"
 
-BUDDY_DIR="${ROOT_DIR}/companions/lamp-buddy"
-VERSION_FILE="${BUDDY_DIR}/VERSION_LAMP_BUDDY"
+BUDDY_DIR="${ROOT_DIR}/companions/autonomous-buddy"
+VERSION_FILE="${BUDDY_DIR}/VERSION_AUTONOMOUS_BUDDY"
 DIST_DIR="${BUDDY_DIR}/dist"
 
-# Bucket and path: ${BUCKET_PREFIX}/ota/lamp-buddy/[semver].dmg
+# Bucket and path: ${BUCKET_PREFIX}/ota/autonomous-buddy/[semver].dmg
 
 # Build target — `dmg` (unsigned, default) or `dmg-signed` (Developer ID + notarized).
-# Override via env: BUDDY_DMG_TARGET=dmg-signed scripts/release/upload-lamp-buddy.sh
+# Override via env: BUDDY_DMG_TARGET=dmg-signed scripts/release/upload-autonomous-buddy.sh
 DMG_TARGET="${BUDDY_DMG_TARGET:-dmg}"
 
 # Auto-increment semver (patch) before build
@@ -27,9 +27,9 @@ else
   echo "========== Version initialized: ${new_version} =========="
 fi
 
-DMG_NAME="LampBuddy-${new_version}.dmg"
+DMG_NAME="AutonomousBuddy-${new_version}.dmg"
 DMG_PATH="${DIST_DIR}/${DMG_NAME}"
-GCS_PATH="${GCS_PATH:-${BUCKET_PREFIX}/ota/lamp-buddy/${new_version}.dmg}"
+GCS_PATH="${GCS_PATH:-${BUCKET_PREFIX}/ota/autonomous-buddy/${new_version}.dmg}"
 
 echo "========== Building DMG via 'make ${DMG_TARGET}' (VERSION=${new_version}) =========="
 (cd "$BUDDY_DIR" && make "$DMG_TARGET")
@@ -44,7 +44,7 @@ gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" \
        -h "Content-Type:application/x-apple-diskimage" \
        cp "$DMG_PATH" "gs://${GCS_BUCKET}/${GCS_PATH}"
 
-# Update metadata.json (${BUCKET_PREFIX}/ota/metadata.json) - lamp-buddy key
+# Update metadata.json (${BUCKET_PREFIX}/ota/metadata.json) - autonomous-buddy key
 METADATA_PATH="${BUCKET_PREFIX}/ota/metadata.json"
 METADATA_TMP=$(mktemp)
 BUDDY_URL="${BUDDY_URL:-https://storage.googleapis.com/${GCS_BUCKET}/${GCS_PATH}}"
@@ -68,12 +68,12 @@ try:
 except json.JSONDecodeError:
     data = {}
 data.pop('claude-desktop-buddy', None)
-data['lamp-buddy'] = {'version': sys.argv[1], 'url': sys.argv[2], 'updated_at': sys.argv[3]}
+data['autonomous-buddy'] = {'version': sys.argv[1], 'url': sys.argv[2], 'updated_at': sys.argv[3]}
 print(json.dumps(data, indent=2))
 " "$new_version" "$BUDDY_URL" "$(date '+%Y-%m-%d %H:%M:%S %z')")
 
 echo "$updated_metadata" > "$METADATA_TMP"
-echo "========== Upload metadata (lamp-buddy: v${new_version}) =========="
+echo "========== Upload metadata (autonomous-buddy: v${new_version}) =========="
 gsutil -h "Content-Type:application/json" -h "Cache-Control:no-cache, no-store, must-revalidate" cp "$METADATA_TMP" "gs://${GCS_BUCKET}/${METADATA_PATH}"
 rm -f "$METADATA_TMP"
 
