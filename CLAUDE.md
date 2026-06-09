@@ -32,7 +32,7 @@ This repo is developed in both **Cursor** and **Claude Code**. The following rul
    | Habit tracking, pattern building, habit-aware nudge phrasing | `devices/lamp/docs/habit-tracking.md` | `devices/lamp/docs/vi/habit-tracking_vi.md` |
    | Vision tracking, object follow, servo track | `devices/lamp/docs/vision-tracking.md` | `devices/lamp/docs/vi/vision-tracking_vi.md` |
    | Physical controls (GPIO button, TTP223 touchpad, gestures, pet response) | `devices/lamp/docs/physical-controls.md` | `devices/lamp/docs/vi/physical-controls_vi.md` |
-   | Lamp Buddy (Mac companion app) | `lamp-buddy/docs/lamp-buddy.md`, `lamp-buddy/docs/lamp-buddy-mvp.md`, `lamp-buddy/docs/release-signing.md` | `lamp-buddy/docs/vi/lamp-buddy_vi.md`, `lamp-buddy/docs/vi/lamp-buddy-mvp_vi.md`, `lamp-buddy/docs/vi/release-signing_vi.md` |
+   | Autonomous Buddy (Mac companion app) | `autonomous-buddy/docs/autonomous-buddy.md`, `autonomous-buddy/docs/autonomous-buddy-mvp.md`, `autonomous-buddy/docs/release-signing.md` | `autonomous-buddy/docs/vi/autonomous-buddy_vi.md`, `autonomous-buddy/docs/vi/autonomous-buddy-mvp_vi.md`, `autonomous-buddy/docs/vi/release-signing_vi.md` |
    | Security test checklist | `devices/lamp/docs/security-test.md` | _(no vi version)_ |
 
 2. **Comments in English** — Project standard.
