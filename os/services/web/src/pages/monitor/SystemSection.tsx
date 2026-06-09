@@ -235,7 +235,7 @@ export function SystemSection({
             <StatPill label="OS Uptime"       value={formatUptime(sys.uptime)}                                                  bullet="var(--lm-text-dim)" />
             <StatPill label="Lamp Uptime"     value={sys.serviceUptime ? formatUptime(sys.serviceUptime) : "—"} color="var(--lm-amber)" bullet="var(--lm-amber)" />
             <StatPill label="Go Routines"     value={sys.goRoutines}                                            color="var(--lm-amber)" bullet="var(--lm-amber)" />
-            <StatPill label="Hardware Uptime" value={sys.lelampUptime ? formatUptime(sys.lelampUptime) : "—"}   color="var(--lm-blue)"  bullet="var(--lm-blue)" />
+            <StatPill label="Hardware Uptime" value={sys.halUptime ? formatUptime(sys.halUptime) : "—"}   color="var(--lm-blue)"  bullet="var(--lm-blue)" />
             <DeviceIdPill deviceId={sys.deviceId} />
           </div>
         </div>

@@ -3,9 +3,9 @@ import { getApiToken, withApiToken } from "@/lib/api";
 import { S } from "./styles";
 import { API } from "./types";
 
-type LogSource = "lelamp" | "lamp" | "openclaw" | "openclaw-service" | "buddy";
+type LogSource = "hal" | "lamp" | "openclaw" | "openclaw-service" | "buddy";
 const LOG_SOURCES: { id: LogSource; label: string; color: string }[] = [
-  { id: "lelamp",           label: "LeLamp",     color: "var(--lm-green)" },
+  { id: "hal",              label: "HAL",        color: "var(--lm-green)" },
   { id: "lamp",             label: "Lamp",       color: "var(--lm-amber)" },
   { id: "openclaw",         label: "Agent",      color: "var(--lm-blue)" },
   { id: "openclaw-service", label: "Agent Service", color: "var(--lm-purple)" },

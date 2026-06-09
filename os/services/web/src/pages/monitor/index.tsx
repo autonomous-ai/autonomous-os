@@ -218,7 +218,7 @@ export default function Monitor() {
     setEvents([]);
   }, []);
 
-  // LeLamp version comes from /api/system/info (sys.lelampVersion), populated
+  // HAL version comes from /api/system/info (sys.halVersion), populated
   // by lamp via a cached loopback call to :5001/version. Avoids a direct
   // browser fetch to /hw/version which nginx gates to loopback only.
 
@@ -438,7 +438,7 @@ export default function Monitor() {
               ledColor={ledColor}
               sceneInfo={sceneInfo}
               webVersion={__WEB_VERSION__}
-              lelampVersion={sys?.lelampVersion ?? null}
+              halVersion={sys?.halVersion ?? null}
               onSceneActivate={(scene) => {
                 const url = scene === "off" ? `${HW}/scene/off` : `${HW}/scene`;
                 const opts: RequestInit = { method: "POST", headers: { "Content-Type": "application/json" } };

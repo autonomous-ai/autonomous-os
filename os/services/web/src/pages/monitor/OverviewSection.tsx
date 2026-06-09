@@ -51,7 +51,7 @@ export function OverviewSection({
   ledColor,
   sceneInfo,
   webVersion,
-  lelampVersion,
+  halVersion,
   onSceneActivate,
 }: {
   sys: SystemInfo | null;
@@ -68,7 +68,7 @@ export function OverviewSection({
   ledColor: LEDColor | null;
   sceneInfo: SceneInfo | null;
   webVersion: string;
-  lelampVersion: string | null;
+  halVersion: string | null;
   onSceneActivate: (scene: string) => void;
 }) {
   const { emotions: ALL_EMOTIONS, colors: EMOTION_COLOR } = useEmotionPresets();
@@ -527,7 +527,7 @@ export function OverviewSection({
             <VersionRow name="Host"   color="var(--lm-text)"   version={null}                    uptime={sys?.uptime ?? null}                                   updateTarget={null} />
             <VersionRow name="Web"    color="var(--lm-teal)"   version={webVersion}              uptime={null}                                                  updateTarget={isDebug ? "web" : null} />
             <VersionRow name="OS"     color="var(--lm-amber)"  version={sys?.version ?? null}    uptime={sys?.serviceUptime ?? null}                            updateTarget={isDebug ? "os-server" : null} />
-            <VersionRow name="LeLamp" color="var(--lm-blue)"   version={lelampVersion}           uptime={sys?.lelampUptime ?? null}                             updateTarget={isDebug ? "hal" : null} />
+            <VersionRow name="HAL"    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={isDebug ? "hal" : null} />
             <VersionRow name="Agent"  color="var(--lm-purple)" version={oc?.version ?? null}     uptime={oc?.connected ? (oc?.agentUptime ?? null) : null}      updateTarget={null} />
           </div>
         </div>
