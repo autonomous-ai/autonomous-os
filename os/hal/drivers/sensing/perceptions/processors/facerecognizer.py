@@ -383,7 +383,7 @@ class FacePerception(Perception[cv2.typing.MatLike]):
         # # continuously present. See docs/plan-presence-logging.md.
         # self._owners_session_start: dict[str, float] = {}
         # self._strangers_session_start: dict[str, float] = {}
-        # # True between the first stranger-enter row LeLamp has posted to the
+        # # True between the first stranger-enter row HAL has posted to the
         # # wellbeing log and the corresponding "all strangers gone" leave.
         # # Keeps the "unknown" timeline as a single session even as different
         # # stranger IDs cycle in and out — without this flag, stranger_37 →

@@ -500,7 +500,7 @@ def face_cooldowns():
 
 @router.get("/face/current-user", tags=["Face"])
 def face_current_user():
-    """Return who LeLamp considers "in front of the lamp" right now.
+    """Return who HAL considers "in front of the lamp" right now.
 
     Friend with the newest session_start still within the forget window,
     else "unknown" when only strangers are present, else empty string.

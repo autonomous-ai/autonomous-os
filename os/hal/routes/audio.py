@@ -30,7 +30,7 @@ except ImportError:
 
 
 def _audio_output_card() -> Optional[int]:
-    """Derive ALSA card index from LELAMP_AUDIO_OUTPUT_ALSA."""
+    """Derive ALSA card index from HAL_AUDIO_OUTPUT_ALSA."""
     if AUDIO_OUTPUT_ALSA:
         m = re.search(r":(\d+)", AUDIO_OUTPUT_ALSA)
         if m:

@@ -80,7 +80,7 @@ _ENROLL_CONSISTENCY_THRESHOLD = config.SPEAKER_ENROLL_CONSISTENCY_THRESHOLD
 # needing voiceprint_hash support from the embedding backend. Mirrors the
 # face stranger tracker in facerecognizer.py.
 _VOICE_STRANGERS_DIR = Path(
-    os.environ.get("LELAMP_VOICE_STRANGERS_DIR", "/root/local/voice_strangers")
+    os.environ.get("HAL_VOICE_STRANGERS_DIR", "/root/local/voice_strangers")
 )
 # All thresholds in this file use SCALED cosine in [0, 1] (`(raw + 1) / 2`).
 # That includes MATCH / CONSISTENCY plus the stranger thresholds below — call
@@ -95,11 +95,11 @@ _VOICE_STRANGERS_DIR = Path(
 # EER band on purpose — false grouping at loose thresholds is bounded by the
 # Step 5 consistency filter in enroll() and the MATCH gate in recognize().
 _VOICE_STRANGER_MATCH_THRESHOLD = float(
-    os.environ.get("LELAMP_VOICE_STRANGER_MATCH_THRESHOLD", "0.675")
+    os.environ.get("HAL_VOICE_STRANGER_MATCH_THRESHOLD", "0.675")
 )
 # Cap cluster count so disk doesn't grow unbounded. Oldest evicted first.
 _MAX_VOICE_STRANGERS = int(
-    os.environ.get("LELAMP_MAX_VOICE_STRANGERS", "50")
+    os.environ.get("HAL_MAX_VOICE_STRANGERS", "50")
 )
 _VOICE_STRANGER_PREFIX = "voice_"
 _VOICE_STRANGER_DIR_RE = re.compile(r"^voice_\d+$")
@@ -114,7 +114,7 @@ _TARGET_SR = 16000
 # recognize() and reduced ability to detect a speaker switch mid-turn.
 # Audio shorter than this collapses to a single chunk (voting degenerates to
 # plain 1-vs-1 cosine match).
-_CHUNK_SECONDS = float(os.environ.get("LELAMP_SPEAKER_CHUNK_SECONDS", "3.0"))
+_CHUNK_SECONDS = float(os.environ.get("HAL_SPEAKER_CHUNK_SECONDS", "3.0"))
 
 
 class SpeakerRecognizerError(Exception):
@@ -772,7 +772,7 @@ class SpeakerRecognizer:
             # different-distance gets absorbed; the Step 5 consistency
             # filter below catches false merges from loose matches.
             merge_threshold = float(
-                os.environ.get("LELAMP_CLUSTER_MERGE_THRESHOLD", "0.625")
+                os.environ.get("HAL_CLUSTER_MERGE_THRESHOLD", "0.625")
             )
 
             # (a) Path-based claim — collect cluster names from sources.

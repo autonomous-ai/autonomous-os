@@ -315,12 +315,12 @@ class SensingService:
         logger.info("[sensing] %s: %s", event_type, message)
 
         payload: dict[str, object] = {"type": event_type, "message": message}
-        # Include LeLamp's effective current_user so Lamp handler doesn't
+        # Include HAL's effective current_user so Lamp handler doesn't
         # have to re-derive it from the message text. Text parsing breaks
         # when a stranger-only enter event fires while a friend is still
         # present (extractUserName sees no friend in the message and
         # downgrades mood.CurrentUser() to "unknown", even though the
-        # friend is still within forget window). LeLamp's current_user()
+        # friend is still within forget window). HAL's current_user()
         # is the source of truth — ship it.
         try:
             cu = self._perception_orchestrator.current_user or ""

@@ -29,9 +29,9 @@ PHRASE_SERVICE_RESTART = "service_restart"
 # which action fired — this is a safety announcement, not a persona
 # moment. Empty/unknown stt_language → DEFAULT_LANG.
 #
-# PHRASE_SERVICE_RESTART fires when only the lelamp process is going
+# PHRASE_SERVICE_RESTART fires when only the HAL process is going
 # down (OTA replace, deploy, manual `systemctl restart`) — OS itself
-# stays up and lelamp will be back in 10-30s. Tone deliberately
+# stays up and HAL will be back in 10-30s. Tone deliberately
 # different from PHRASE_SHUTDOWN/REBOOT so the user can tell at a
 # glance whether the board is going dark for minutes or just blinking
 # during a service reload.
@@ -264,7 +264,7 @@ HEAD_PAT_PHRASES_BY_LANG = {
 # mid-sentence. Mixed-language pools are fine (e.g. Vietnamese keeps "Hmm"
 # alongside "Ờ" / "Ừm") because those universal interjections sound
 # natural in any tongue. Stored as comma-separated strings because the
-# LELAMP_BACKCHANNEL_FILLERS env override is also CSV — keeps both inputs
+# HAL_BACKCHANNEL_FILLERS env override is also CSV — keeps both inputs
 # in the same shape.
 DEFAULT_FILLERS_BY_LANG = {
     LANG_EN:    "Uhm,Ok,Hmm,Yeah,Uh huh,Right,Sure,Mm,Ah,Oh",

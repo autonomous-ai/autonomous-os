@@ -1,8 +1,8 @@
 """
-LeLamp Hardware Runtime -- FastAPI server on port 5001.
+HAL Hardware Runtime -- FastAPI server on port 5001.
 
 Only starts the drivers we need. LiveKit/OpenAI code stays untouched but never imported.
-Lamp Server (Go, port 5000) bridges requests here.
+OS Server (Go, port 5000) bridges requests here.
 """
 
 import json
@@ -49,7 +49,7 @@ from hal.models import HealthResponse, StatusResponse
 from hal.presets import SCENE_PRESETS, SERVO_CMD_PLAY
 
 # --- Logging: colored stdout + rotating file ---
-LOG_DIR = Path(os.environ.get("LELAMP_LOG_DIR", "/var/log/hal"))
+LOG_DIR = Path(os.environ.get("HAL_LOG_DIR", "/var/log/hal"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 _LEVEL_COLORS = {
@@ -75,7 +75,7 @@ class _ColorFormatter(logging.Formatter):
 
 
 _root = logging.getLogger()
-_log_level = os.environ.get("LELAMP_LOG_LEVEL", "INFO").upper()
+_log_level = os.environ.get("HAL_LOG_LEVEL", "INFO").upper()
 _root.setLevel(getattr(logging, _log_level, logging.INFO))
 
 # Console handler (colored)
@@ -264,12 +264,12 @@ async def lifespan(app: FastAPI):
         _t_in.join()
 
         state.audio_output_device, state.audio_input_device = _audio_results
-        _out_env = os.environ.get("LELAMP_AUDIO_OUTPUT_DEVICE")
+        _out_env = os.environ.get("HAL_AUDIO_OUTPUT_DEVICE")
         if _out_env is not None:
             state.audio_output_device = int(_out_env)
             logger.info("Audio output device override from env: %d", state.audio_output_device)
-        elif os.environ.get("LELAMP_AUDIO_OUTPUT_ALSA"):
-            _alsa_out = os.environ["LELAMP_AUDIO_OUTPUT_ALSA"]
+        elif os.environ.get("HAL_AUDIO_OUTPUT_ALSA"):
+            _alsa_out = os.environ["HAL_AUDIO_OUTPUT_ALSA"]
             _alsa_card = _alsa_out.split(":")[1].split(",")[0] if ":" in _alsa_out else ""
             if _alsa_card:
                 # ALSA short card id (e.g. "wm8960soundcard") and PortAudio device
@@ -426,7 +426,7 @@ async def lifespan(app: FastAPI):
         t.join(timeout=10)
 
     # Start sensing loop
-    sensing_enabled = os.environ.get("LELAMP_SENSING_ENABLED", "true").lower() in (
+    sensing_enabled = os.environ.get("HAL_SENSING_ENABLED", "true").lower() in (
         "true",
         "1",
         "yes",
@@ -460,7 +460,7 @@ async def lifespan(app: FastAPI):
             state.sensing_service = SensingService(
                 camera_capture=state.camera_capture,
                 input_device=AUDIO_SENSING_DEVICE if AUDIO_SENSING_DEVICE is not None else state.audio_input_device,
-                poll_interval=float(os.environ.get("LELAMP_SENSING_INTERVAL", "2.0")),
+                poll_interval=float(os.environ.get("HAL_SENSING_INTERVAL", "2.0")),
                 rgb_service=state.rgb_service,
                 tts_service=state.tts_service,
                 animation_service=state.animation_service,
@@ -558,15 +558,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="LeLamp Hardware Runtime",
+    title="HAL Hardware Runtime",
     description=(
         "Hardware driver API for Lamp. "
         "Controls servo motors (5-axis Feetech), RGB LEDs (64x WS2812), "
         "camera, audio (mic/speaker), display, and AI voice pipeline. "
-        "Lamp Server (Go, port 5000) bridges requests here."
+        "OS Server (Go, port 5000) bridges requests here."
     ),
-    version=(Path(__file__).parent / "VERSION_LELAMP").read_text().strip()
-    if (Path(__file__).parent / "VERSION_LELAMP").exists()
+    version=(Path(__file__).parent / "VERSION_HAL").read_text().strip()
+    if (Path(__file__).parent / "VERSION_HAL").exists()
     else "dev",
     lifespan=lifespan,
     # Built-in /docs disabled; a custom handler below serves the Swagger HTML
@@ -578,7 +578,7 @@ app = FastAPI(
     # `servers` tells Swagger UI which base URL to prepend on "Try it out".
     # In the browser context the iframe lives at /api/hardware/docs and admin
     # auth gates /api/hardware/* via Lamp's reverse proxy; in the loopback /
-    # SSH-tunnel context calls go directly to LeLamp. Operator can switch
+    # SSH-tunnel context calls go directly to HAL. Operator can switch
     # between them via the Swagger UI dropdown.
     servers=[
         {"url": "/api/hardware", "description": "Via Lamp admin proxy (browser)"},
@@ -649,7 +649,7 @@ _ROUTERS_BY_NAME = {
 
 
 def _resolve_device_id() -> str:
-    dev = os.environ.get("LELAMP_DEVICE_ID")
+    dev = os.environ.get("HAL_DEVICE_ID")
     if dev:
         return dev
     try:
@@ -663,7 +663,7 @@ def _declared_routes_or_none():
     """Route names this device declares, or None to mount all (safe fallback)."""
     try:
         from hal.board.device import load_device
-        devices_dir = os.environ.get("LELAMP_DEVICES_DIR") or os.path.normpath(
+        devices_dir = os.environ.get("HAL_DEVICES_DIR") or os.path.normpath(
             os.path.join(os.path.dirname(__file__), "..", "..", "..", "devices")
         )
         return set(load_device(_resolve_device_id(), devices_dir).declared_routes())
@@ -847,7 +847,7 @@ async def local_only_middleware(request, call_next):
         )
         return JSONResponse(
             status_code=403,
-            content={"detail": "LeLamp API: requires loopback, valid bearer token, or same-origin"},
+            content={"detail": "HAL API: requires loopback, valid bearer token, or same-origin"},
         )
     return await call_next(request)
 
@@ -872,7 +872,7 @@ async def request_logging_middleware(request, call_next):
 
 @app.get("/version", tags=["System"])
 def version():
-    """Return LeLamp runtime version."""
+    """Return HAL runtime version."""
     return {"version": app.version}
 
 

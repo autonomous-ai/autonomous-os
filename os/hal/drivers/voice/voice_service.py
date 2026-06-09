@@ -100,14 +100,14 @@ class VoiceService:
             logger.warning("sounddevice not available")
 
         # WebRTC VAD — fast C-based pre-filter (~0.1ms vs Silero ~20ms).
-        # Enable via LELAMP_WEBRTCVAD_ENABLED=true in .env.
+        # Enable via HAL_WEBRTCVAD_ENABLED=true in .env.
         self._webrtc_vad = WebRTCVADFilter(WEBRTCVAD_AGGRESSIVENESS, self._np) if WEBRTCVAD_ENABLED else None
         if not WEBRTCVAD_ENABLED:
-            logger.info("WebRTC VAD disabled (LELAMP_WEBRTCVAD_ENABLED=false)")
+            logger.info("WebRTC VAD disabled (HAL_WEBRTCVAD_ENABLED=false)")
 
         self._silero_vad = SileroVADFilter(SILERO_MODEL_PATH, self._np) if SILERO_VAD_ENABLED else None
         if not SILERO_VAD_ENABLED:
-            logger.info("Silero VAD disabled via LELAMP_SILERO_ENABLED=false")
+            logger.info("Silero VAD disabled via HAL_SILERO_ENABLED=false")
 
         # Speaker decoration (wake-word + speaker recognizer + SER)
         self._decorator = SpeakerDecorator(
@@ -380,12 +380,12 @@ class VoiceService:
         """Main loop: local VAD → STT on speech → disconnect on silence."""
         time.sleep(0.5)  # Brief pause for audio subsystem to settle
 
-        # Use arecord only when explicitly configured via LELAMP_AUDIO_INPUT_ALSA.
+        # Use arecord only when explicitly configured via HAL_AUDIO_INPUT_ALSA.
         # Auto-detection is disabled because arecord uses exclusive ALSA access,
         # which conflicts with SoundPerception's sd.rec() calls on the same device
         # (both try to open plughw:X,0 — one silently reads zeros and STT never fires).
         # Auto-detection is safe only on Pi5 where SoundPerception is not using the mic.
-        # Set LELAMP_AUDIO_INPUT_ALSA=plughw:X,0 in .env to opt in explicitly.
+        # Set HAL_AUDIO_INPUT_ALSA=plughw:X,0 in .env to opt in explicitly.
         if self._alsa_device is not None:
             device_rate = STT_RATE  # plughw does SRC; record directly at STT rate
             logger.info("Using arecord backend (%s) at %dHz", self._alsa_device, device_rate)

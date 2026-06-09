@@ -1,5 +1,5 @@
 """
-LeLamp Pydantic request/response models.
+HAL Pydantic request/response models.
 
 All FastAPI endpoint models live here — import from server.py via `from hal.models import *`.
 """

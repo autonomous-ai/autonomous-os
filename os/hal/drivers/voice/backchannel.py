@@ -9,17 +9,17 @@ Usage:
     bc.on_partial("hello I want to")   # call on every STT partial
     bc.reset()                          # call when STT session ends
 
-Feature is disabled when LELAMP_BACKCHANNEL_FILLERS env var is empty.
+Feature is disabled when HAL_BACKCHANNEL_FILLERS env var is empty.
 
 Does NOT use tts_service.speak() — that would set the speaking flag and
 kill the active STT session. Instead calls TTS API directly and plays
 audio without touching the speaking flag.
 
 Config (env vars):
-    LELAMP_BACKCHANNEL_FILLERS     comma-separated filler words (empty = disabled)
-    LELAMP_BACKCHANNEL_STALL_S     partial unchanged for N seconds → play cue (0 = every partial)
-    LELAMP_BACKCHANNEL_INTERVAL_S  min seconds between cues
-    LELAMP_BACKCHANNEL_VOLUME      volume multiplier 0.0–1.0
+    HAL_BACKCHANNEL_FILLERS     comma-separated filler words (empty = disabled)
+    HAL_BACKCHANNEL_STALL_S     partial unchanged for N seconds → play cue (0 = every partial)
+    HAL_BACKCHANNEL_INTERVAL_S  min seconds between cues
+    HAL_BACKCHANNEL_VOLUME      volume multiplier 0.0–1.0
 """
 
 import logging
@@ -39,7 +39,7 @@ logger = logging.getLogger("hal.voice.backchannel")
 def _default_fillers_for_active_lang() -> str:
     """Pick the default filler list based on Lamp's stt_language. Falls
     back to DEFAULT_LANG when the config can't be read or the language is
-    empty/unknown. Caller can still override with LELAMP_BACKCHANNEL_FILLERS."""
+    empty/unknown. Caller can still override with HAL_BACKCHANNEL_FILLERS."""
     try:
         from hal.config import _lamp_cfg_get
         lang = (_lamp_cfg_get("stt_language") or "").strip()
@@ -49,7 +49,7 @@ def _default_fillers_for_active_lang() -> str:
 
 
 # Comma-separated filler words to play as listening cues. Empty string = feature disabled.
-_fillers_env = os.environ.get("LELAMP_BACKCHANNEL_FILLERS", _default_fillers_for_active_lang())
+_fillers_env = os.environ.get("HAL_BACKCHANNEL_FILLERS", _default_fillers_for_active_lang())
 FILLERS = [w.strip() for w in _fillers_env.split(",") if w.strip()]
 # How long (seconds) the partial transcript must stay unchanged before playing a cue.
 # 0 = play on every new partial (still throttled by MIN_INTERVAL_S).
@@ -57,13 +57,13 @@ FILLERS = [w.strip() for w in _fillers_env.split(",") if w.strip()]
 # (user lost their train of thought) rather than on every natural
 # breath-pause mid-sentence — those short pauses are what the speaker
 # recognizer needs clean, and backchannel audio bleeds into the mic.
-STALL_TIMEOUT_S = float(os.environ.get("LELAMP_BACKCHANNEL_STALL_S", "8.0"))
+STALL_TIMEOUT_S = float(os.environ.get("HAL_BACKCHANNEL_STALL_S", "8.0"))
 # Minimum seconds between two consecutive cues (prevents spamming).
-MIN_INTERVAL_S = float(os.environ.get("LELAMP_BACKCHANNEL_INTERVAL_S", "5.0"))
+MIN_INTERVAL_S = float(os.environ.get("HAL_BACKCHANNEL_INTERVAL_S", "5.0"))
 # Volume multiplier for cue audio relative to normal TTS (0.0 = silent, 1.0 = full).
 # Kept at 0.5 so backchannel bleed doesn't saturate the mic and corrupt the
 # speaker-ID embedding of whoever is still talking.
-VOLUME = float(os.environ.get("LELAMP_BACKCHANNEL_VOLUME", "0.5"))
+VOLUME = float(os.environ.get("HAL_BACKCHANNEL_VOLUME", "0.5"))
 
 
 class Backchannel:

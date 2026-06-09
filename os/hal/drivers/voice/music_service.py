@@ -21,7 +21,7 @@ logger = logging.getLogger("hal.voice.music")
 logger.setLevel(logging.DEBUG)
 
 # Per-user audio history — JSONL logs under /root/local/users/{person}/audio_history/
-_USERS_DIR = Path(os.environ.get("LELAMP_USERS_DIR", "/root/local/users"))
+_USERS_DIR = Path(os.environ.get("HAL_USERS_DIR", "/root/local/users"))
 _HISTORY_MAX_DAYS = 30
 
 

@@ -1,5 +1,5 @@
 """
-LeLamp presets — emotion, scene, and LED effect constants.
+HAL presets — emotion, scene, and LED effect constants.
 
 All pure data, no runtime dependencies. Import from server.py.
 """

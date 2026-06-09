@@ -25,7 +25,7 @@ from hal.drivers.voice.tts_backend import TTSBackend, TTS_SAMPLE_RATE, create_ba
 # WAV cache for fixed-text TTS (fillers, intent confirms). Key includes
 # provider/voice/model/speed/text so config changes self-invalidate.
 _TTS_CACHE_DIR = Path(
-    os.environ.get("LELAMP_TTS_CACHE_DIR", "/var/lib/hal/tts_cache")
+    os.environ.get("HAL_TTS_CACHE_DIR", "/var/lib/hal/tts_cache")
 )
 # Per-key render lock map -- prevents two concurrent prerenders for same text
 # from racing on the same WAV file.

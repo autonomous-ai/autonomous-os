@@ -1,5 +1,5 @@
 """
-Shared mutable state for the LeLamp server.
+Shared mutable state for the HAL server.
 
 All service references, flags, and cross-route helpers live here so route
 modules can import them without circular dependencies (routes never import
@@ -98,14 +98,14 @@ _shutdown_announced = False
 # --- Snapshot state ---
 
 _SNAPSHOT_DIR = os.environ.get(
-    "LELAMP_SNAPSHOT_DIR", "/root/.openclaw/media/lamp-snapshots"
+    "HAL_SNAPSHOT_DIR", "/root/.openclaw/media/lamp-snapshots"
 )
 _SNAPSHOT_MAX = 20
 _snapshot_paths: list = []
 
 # --- Default user ---
 
-DEFAULT_USER = os.environ.get("LELAMP_DEFAULT_USER", "unknown")
+DEFAULT_USER = os.environ.get("HAL_DEFAULT_USER", "unknown")
 
 # --- OpenClaw workspace ---
 

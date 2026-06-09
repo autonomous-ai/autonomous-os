@@ -17,7 +17,7 @@ from typing import Optional
 
 logger = logging.getLogger("hal.bluetooth")
 
-_STATE_DIR = Path(os.environ.get("LELAMP_BT_STATE_DIR", "/var/lib/hal"))
+_STATE_DIR = Path(os.environ.get("HAL_BT_STATE_DIR", "/var/lib/hal"))
 _STATE_FILE = _STATE_DIR / "bluetooth.json"
 
 SCAN_TIMEOUT_S = 30

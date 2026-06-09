@@ -21,7 +21,7 @@ Usage (from repo root):
     python -m hal.test.test_speech_emotion_service
 
     # Faster flush so the run finishes quickly
-    LELAMP_SPEECH_EMOTION_FLUSH_S=3 LELAMP_SPEECH_EMOTION_MIN_AUDIO_S=2 \\
+    HAL_SPEECH_EMOTION_FLUSH_S=3 HAL_SPEECH_EMOTION_MIN_AUDIO_S=2 \\
         python -m hal.test.test_speech_emotion_service --reps 3 --duration 3
 
     # Submit as 'unknown' to verify the unknown-collapse path
@@ -256,7 +256,7 @@ def main() -> int:
     print("    lines — most likely 'duration < min' (raise --duration) or")
     print("    'all neutral' (try a clearly emotional reading).")
     print("  - dedup drops? Run the service with")
-    print("    LELAMP_SPEECH_EMOTION_DEDUP_WINDOW_S=5 to retest quickly.")
+    print("    HAL_SPEECH_EMOTION_DEDUP_WINDOW_S=5 to retest quickly.")
 
     svc.stop()
     if server is not None:

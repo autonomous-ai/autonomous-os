@@ -179,9 +179,9 @@ def camera_stream():
     if not state.camera_capture or cv2 is None or state._camera_disabled:
         raise HTTPException(503, "Camera disabled" if state._camera_disabled else "Camera not available")
 
-    stream_fps = float(os.environ.get("LELAMP_CAMERA_STREAM_FPS", "10"))
-    stream_width = int(os.environ.get("LELAMP_CAMERA_STREAM_WIDTH", "320"))
-    stream_quality = int(os.environ.get("LELAMP_CAMERA_STREAM_JPEG_QUALITY", "65"))
+    stream_fps = float(os.environ.get("HAL_CAMERA_STREAM_FPS", "10"))
+    stream_width = int(os.environ.get("HAL_CAMERA_STREAM_WIDTH", "320"))
+    stream_quality = int(os.environ.get("HAL_CAMERA_STREAM_JPEG_QUALITY", "65"))
     min_interval_s = 1.0 / stream_fps if stream_fps > 0 else 0.0
 
     def generate():

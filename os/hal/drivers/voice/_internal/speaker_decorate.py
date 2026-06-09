@@ -49,7 +49,7 @@ class SpeakerDecorator:
     def _init_speaker():
         if not SPEAKER_RECOGNITION_ENABLED:
             logger.info(
-                "Speaker recognizer disabled by LELAMP_SPEAKER_RECOGNITION_ENABLED=false. "
+                "Speaker recognizer disabled by HAL_SPEAKER_RECOGNITION_ENABLED=false. "
                 "This is the default value.",
             )
             return None
@@ -71,7 +71,7 @@ class SpeakerDecorator:
     @staticmethod
     def _init_speech_emotion():
         if not SPEECH_EMOTION_ENABLED:
-            logger.info("Speech emotion recognition disabled by LELAMP_SPEECH_EMOTION_ENABLED=false")
+            logger.info("Speech emotion recognition disabled by HAL_SPEECH_EMOTION_ENABLED=false")
             return None
         try:
             from hal.drivers.voice.speech_emotion import SpeechEmotionService
@@ -188,7 +188,7 @@ class SpeakerDecorator:
         if self._speaker is None:
             logger.info(
                 "Skip speaker ID: recognizer not initialized "
-                "(LELAMP_SPEAKER_RECOGNITION_ENABLED or init failure)",
+                "(HAL_SPEAKER_RECOGNITION_ENABLED or init failure)",
             )
             return transcript, None
         if not audio_buffer:

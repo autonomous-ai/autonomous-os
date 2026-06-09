@@ -11,7 +11,7 @@ Transitions:
   no motion for config.IDLE_TIMEOUT_S → IDLE (dim)
   no motion for config.AWAY_TIMEOUT_S → AWAY (off)
 
-Calls LeLamp LED endpoints directly (same process, via rgb_service reference).
+Calls HAL LED endpoints directly (same process, via rgb_service reference).
 """
 
 import logging
