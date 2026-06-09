@@ -217,27 +217,44 @@ An unrecognized `kind` replies with `status:"failure"` and `error:"unknown kind:
 #### Connectors
 
 `connector.set.<code>` / `connector.remove.<code>` route by prefix (the connector
-code is the suffix) to a per-connector **writer** selected from a registry; an
-unregistered code falls back to a generic `connectors.json` writer. There are two
-writer kinds, differing only in side-effects:
+code is the suffix). A single **data-driven** writer (`connectorWriter`) handles
+every connector; a small map of **special writers** claims the handful of codes that
+can't be expressed as a plain HTTP MCP entry (today only `figma-api`, a local stdio
+MCP server). The generic writer decides per-message — from the payload — whether the
+connector is an MCP server and how to authenticate; there is **no per-connector
+registry to update for a new connector**.
 
-| Writer | Connectors | Storage | `openclaw.json` MCP entry | Auth header |
-|--------|-----------|---------|---------------------------|-------------|
-| MCP (`mcpConnectorWriter`) | `notion`, `figma`, `asana`, `linear`, `github`, `ahrefs` | `<code>_access_tokens.json` | Yes — writes `mcp.servers.<code>` (HTTP + `Authorization`) and restarts the gateway | `Bearer <access_token>` (or `Bearer <api_key>` for `ahrefs`) |
-| Google OAuth (`oauthConnectorWriter`) | `gmail`, `google_calendar`, `google_drive` | `<code>_access_tokens.json` | **No** — credential is stored + refreshed only | n/a (no MCP wiring) |
+**Storage:** every connector persists to its own `<code>_access_tokens.json` under
+`workspace/configs/` (atomic tmp+rename, mode 0600). The connector code is validated
+against `^[a-z0-9_-]{1,64}$` before it is used as a filename or `mcp.servers.<code>`
+key, so an untrusted code cannot escape the configs dir via path traversal.
 
-The **Google OAuth connectors** clone the Google OAuth credential model rather than
-the remote-MCP model: there is no hosted per-service Google MCP URL to point at, so
-they write no `mcp.servers` entry. They are still first-class connectors — set/removed
-via `connector.set.gmail` etc., each persisted to its own
-`gmail_access_tokens.json` / `google_calendar_access_tokens.json` /
-`google_drive_access_tokens.json` under `workspace/configs/`, and refreshed by the
-shared connector refresh loop.
+**Routing (per `connector.set` payload):** the backend sets routing keys in the
+payload's `credentials` map:
 
-**Refresh:** both writer kinds expose refreshable entries to the connector refresh
-loop, which proactively rotates any entry carrying BOTH a `refresh_token` AND
-`refresh:true` (the backend owns refresh eligibility via the `refresh` flag) once it
-is within 10 minutes of expiry, via the backend `/connector/refresh-token` endpoint.
+| `credentials` key | Effect |
+|-------------------|--------|
+| `mcp_url` | Present → MCP connector: writes `mcp.servers.<code>` (`{type:"http", url, headers.Authorization}`) into `openclaw.json` and restarts the gateway. Absent → credential-only connector (e.g. `gmail`/`google_*`): token stored, **no** `openclaw.json` entry. |
+| `mcp_auth_header` | `bearer_access_token` (default) → `Authorization: Bearer <access_token>`; `bearer_api_key` → `Bearer <api_key>` (static-key connectors, e.g. `ahrefs`). |
+
+**Fallback table:** for connectors that shipped before the wire carried these keys
+(`notion`, `asana`, `linear`, `github`, `ahrefs`), a compiled-in table
+supplies the `mcp_url` + header style from the openclaw catalog
+(`internal/openclaw/mcp.go`). The payload **always wins** — `mcp_url` in the payload
+overrides the fallback — so the table is only a migration safety net until the
+backend pushes the routing keys.
+
+**Special writers:** `figma-api` uses the hosted Figma MCP allowlist workaround — a
+local stdio MCP server (`{command:"node", args:[wrapper], env:{FIGMA_ACCESS_TOKEN}}`)
+whose Node wrapper is dropped on disk before the entry is written. Special-writer
+codes are excluded (`reserved`) from the generic writer's refresh scan so it never
+re-writes them in the wrong (HTTP) shape.
+
+**Refresh:** the refresh loop scans the generic writer (globbing
+`*_access_tokens.json`) plus each special writer, and proactively rotates any entry
+carrying BOTH a `refresh_token` AND `refresh:true` (the backend owns refresh
+eligibility via the `refresh` flag) once it is within 10 minutes of expiry, via the
+backend `/connector/refresh-token` endpoint.
 
 ### `ota` — Trigger OTA update
 
@@ -256,10 +273,10 @@ Handled by bootstrap worker, not through MQTT handler directly.
 | `os/services/server/device/delivery/mqtt/add_channel_hander.go` | Handle `add_channel` command (streams pairing events for WhatsApp) |
 | `os/services/server/device/delivery/mqtt/slack_event_handler.go` | Handle `slack_event` command (forwards Slack HTTP-mode events to local gateway) |
 | `os/services/server/device/delivery/mqtt/data_handler.go` | Handle `data` command kinds `oauth.set`/`oauth.remove` (+ access-token store) |
-| `os/services/server/device/delivery/mqtt/connector_handler.go` | Handle `connector.set.<code>`/`connector.remove.<code>` (async, writer dispatch) |
-| `os/services/server/device/delivery/mqtt/connector_writer.go` | `ConnectorWriter` interface, writer registry, generic `connectors.json` writer, shared file helpers |
-| `os/services/server/device/delivery/mqtt/mcp_connector_writer.go` | Remote-MCP connector writer (`notion`/`figma`/…): token file + `openclaw.json` MCP entry |
-| `os/services/server/device/delivery/mqtt/oauth_connector_writer.go` | Google OAuth connector writer (`gmail`/`google_calendar`/`google_drive`): token file only, no MCP entry |
+| `os/services/server/device/delivery/mqtt/connector_handler.go` | Handle `connector.set.<code>`/`connector.remove.<code>` (async, writer dispatch via `connectorWriterFor`) |
+| `os/services/server/device/delivery/mqtt/connector_writer.go` | `ConnectorWriter` interface + shared `<code>_access_tokens.json` file helpers |
+| `os/services/server/device/delivery/mqtt/connector_writer_generic.go` | Data-driven `connectorWriter`: payload-driven MCP routing, fallback table, path-traversal guard, per-connector token files |
+| `os/services/server/device/delivery/mqtt/mcp_connector_writer.go` | Special stdio MCP writer (`figma-api`): token file + local-wrapper `openclaw.json` MCP entry |
 | `os/services/server/device/delivery/mqtt/connector_refresh.go` | Connector token refresh loop (`/connector/refresh-token`) |
 | `os/services/server/device/delivery/mqtt/system_info_handler.go` | Handle `data` kinds `system.info`/`system.version`/`system.network` |
 | `os/services/server/device/delivery/mqtt/whatsapp_pair_handler.go` | Handle `whatsapp_pair` re-pair command |

@@ -1,0 +1,302 @@
+package mqtthandler
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+
+	"go.autonomous.ai/os/internal/openclaw"
+)
+
+// fakeMCPGateway records WriteMCPEntry/RemoveMCPEntry calls so routing decisions
+// can be asserted without touching openclaw.json or restarting the gateway.
+// It satisfies the mcpEntryWriter interface the connectorWriter depends on.
+type fakeMCPGateway struct {
+	written  map[string]map[string]any
+	removed  []string
+	writeErr error
+}
+
+func (f *fakeMCPGateway) WriteMCPEntry(name string, entry map[string]any) error {
+	if f.writeErr != nil {
+		return f.writeErr
+	}
+	if f.written == nil {
+		f.written = map[string]map[string]any{}
+	}
+	f.written[name] = entry
+	return nil
+}
+
+func (f *fakeMCPGateway) RemoveMCPEntry(name string) (bool, error) {
+	f.removed = append(f.removed, name)
+	return true, nil
+}
+
+// authHeaderOf digs the Authorization value out of a recorded mcp entry.
+func authHeaderOf(t *testing.T, entry map[string]any) string {
+	t.Helper()
+	headers, ok := entry["headers"].(map[string]any)
+	if !ok {
+		t.Fatalf("entry has no headers map: %+v", entry)
+	}
+	auth, _ := headers["Authorization"].(string)
+	return auth
+}
+
+// mustURL fetches a catalog URL for the fallback-routing assertions.
+func mustURL(t *testing.T, code string) string {
+	t.Helper()
+	url, ok := openclaw.MCPConnectorURL(code)
+	if !ok {
+		t.Fatalf("openclaw.MCPConnectorURL(%q) not found", code)
+	}
+	return url
+}
+
+func TestConnectorWriter_PathConvention(t *testing.T) {
+	dir := t.TempDir()
+	w := newConnectorWriter(dir, &fakeMCPGateway{}, nil)
+	got, err := w.pathFor("intercom")
+	if err != nil {
+		t.Fatalf("pathFor: %v", err)
+	}
+	if want := filepath.Join(dir, "intercom_access_tokens.json"); got != want {
+		t.Fatalf("pathFor = %q, want %q", got, want)
+	}
+}
+
+// Untrusted connector codes must not escape configsDir via path traversal.
+func TestConnectorWriter_RejectsUnsafeCode(t *testing.T) {
+	dir := t.TempDir()
+	fake := &fakeMCPGateway{}
+	w := newConnectorWriter(dir, fake, nil)
+	ctx := context.Background()
+
+	for _, bad := range []string{"../evil", "a/b", "../../root/.ssh/authorized_keys", "UPPER", "with space", ""} {
+		if _, err := w.pathFor(bad); err == nil {
+			t.Fatalf("pathFor(%q) accepted, want rejected", bad)
+		}
+		if err := w.Write(ctx, ConnectorCreds{Connector: bad, AuthType: "oauth", AccessToken: "at"}); err == nil {
+			t.Fatalf("Write(%q) accepted, want rejected", bad)
+		}
+		if _, err := w.Remove(ctx, bad); err == nil {
+			t.Fatalf("Remove(%q) accepted, want rejected", bad)
+		}
+	}
+	// Nothing was written or mirrored to openclaw.json.
+	if len(fake.written) != 0 {
+		t.Fatalf("unsafe codes leaked mcp entries: %v", fake.written)
+	}
+}
+
+// Payload-supplied mcp_url + mcp_auth_header drive routing with no fallback row.
+func TestConnectorWriter_DataDrivenMCPRouting(t *testing.T) {
+	dir := t.TempDir()
+	fake := &fakeMCPGateway{}
+	w := newConnectorWriter(dir, fake, nil)
+
+	creds := ConnectorCreds{
+		Connector: "intercom",
+		AuthType:  "api_key",
+		APIKey:    "ic-key",
+		Credentials: map[string]string{
+			credentialMCPURL:        "https://mcp.intercom.com/mcp",
+			credentialMCPAuthHeader: authHeaderBearerAPIKey,
+		},
+	}
+	if err := w.Write(context.Background(), creds); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	// Token file persisted under the per-connector path.
+	if _, ok, err := w.loadEntry("intercom"); err != nil || !ok {
+		t.Fatalf("loadEntry intercom: ok=%v err=%v", ok, err)
+	}
+	entry, ok := fake.written["intercom"]
+	if !ok {
+		t.Fatalf("mcp entry not written for intercom; written=%v", fake.written)
+	}
+	if entry["url"] != "https://mcp.intercom.com/mcp" {
+		t.Fatalf("url = %v, want intercom mcp url", entry["url"])
+	}
+	if got := authHeaderOf(t, entry); got != "Bearer ic-key" {
+		t.Fatalf("Authorization = %q, want %q", got, "Bearer ic-key")
+	}
+}
+
+// Payload mcp_url overrides the compiled-in fallback for a known code.
+func TestConnectorWriter_PayloadOverridesFallback(t *testing.T) {
+	dir := t.TempDir()
+	fake := &fakeMCPGateway{}
+	w := newConnectorWriter(dir, fake, nil)
+
+	creds := ConnectorCreds{
+		Connector:   "notion",
+		AuthType:    "oauth",
+		AccessToken: "at",
+		Credentials: map[string]string{credentialMCPURL: "https://custom.example/mcp"},
+	}
+	if err := w.Write(context.Background(), creds); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if got := fake.written["notion"]["url"]; got != "https://custom.example/mcp" {
+		t.Fatalf("url = %v, want payload override", got)
+	}
+}
+
+// Known MCP connectors keep working via the fallback table when the payload
+// carries no mcp_url yet (migration safety net).
+func TestConnectorWriter_FallbackRouting(t *testing.T) {
+	cases := []struct {
+		connector string
+		creds     ConnectorCreds
+		wantURL   string
+		wantAuth  string
+	}{
+		{
+			connector: "notion",
+			creds:     ConnectorCreds{Connector: "notion", AuthType: "oauth", AccessToken: "at"},
+			wantURL:   mustURL(t, "notion"),
+			wantAuth:  "Bearer at",
+		},
+		{
+			connector: "ahrefs",
+			creds:     ConnectorCreds{Connector: "ahrefs", AuthType: "api_key", APIKey: "ak"},
+			wantURL:   mustURL(t, "ahrefs"),
+			wantAuth:  "Bearer ak",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.connector, func(t *testing.T) {
+			fake := &fakeMCPGateway{}
+			w := newConnectorWriter(t.TempDir(), fake, nil)
+			if err := w.Write(context.Background(), tc.creds); err != nil {
+				t.Fatalf("Write: %v", err)
+			}
+			entry, ok := fake.written[tc.connector]
+			if !ok {
+				t.Fatalf("no mcp entry for %s", tc.connector)
+			}
+			if entry["url"] != tc.wantURL {
+				t.Fatalf("url = %v, want %v", entry["url"], tc.wantURL)
+			}
+			if got := authHeaderOf(t, entry); got != tc.wantAuth {
+				t.Fatalf("Authorization = %q, want %q", got, tc.wantAuth)
+			}
+		})
+	}
+}
+
+// Credential-only connectors (no mcp_url, not in fallback) get a token file and
+// NO openclaw entry.
+func TestConnectorWriter_CredentialOnlyNoMCPEntry(t *testing.T) {
+	dir := t.TempDir()
+	fake := &fakeMCPGateway{}
+	w := newConnectorWriter(dir, fake, nil)
+
+	creds := ConnectorCreds{Connector: "gmail", AuthType: "oauth", AccessToken: "at", RefreshToken: "rt"}
+	if err := w.Write(context.Background(), creds); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if _, ok, _ := w.loadEntry("gmail"); !ok {
+		t.Fatalf("gmail token file not written")
+	}
+	if len(fake.written) != 0 {
+		t.Fatalf("expected no mcp entry for gmail, got %v", fake.written)
+	}
+}
+
+// RefreshableEntries scans every per-connector file and gates on
+// refresh_token + refresh:true.
+func TestConnectorWriter_RefreshableEntriesAcrossFiles(t *testing.T) {
+	dir := t.TempDir()
+	w := newConnectorWriter(dir, &fakeMCPGateway{}, nil)
+
+	// Eligible: refresh_token + refresh:true (in its own notion file).
+	mustWrite(t, w, ConnectorCreds{Connector: "notion", AuthType: "oauth", AccessToken: "at", RefreshToken: "rt-n", Refresh: true, ExpiresAt: 111})
+	// Ineligible: refresh:false (separate gmail file).
+	mustWrite(t, w, ConnectorCreds{Connector: "gmail", AuthType: "oauth", AccessToken: "at", RefreshToken: "rt-g", Refresh: false})
+	// Ineligible: no refresh_token (separate figma file).
+	mustWrite(t, w, ConnectorCreds{Connector: "figma", AuthType: "oauth", AccessToken: "at", Refresh: true})
+
+	got := w.RefreshableEntries()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 eligible entry, got %d: %+v", len(got), got)
+	}
+	if got[0].Connector != "notion" || got[0].RefreshToken != "rt-n" || got[0].ExpiresAt != 111 {
+		t.Fatalf("unexpected target: %+v", got[0])
+	}
+}
+
+// Codes owned by a special writer must be excluded from the generic writer's
+// refresh glob, even though their token file matches *_access_tokens.json —
+// otherwise the generic writer would re-Write figma-api as an http entry,
+// clobbering its stdio entry.
+func TestConnectorWriter_RefreshableEntriesSkipsReserved(t *testing.T) {
+	dir := t.TempDir()
+	w := newConnectorWriter(dir, &fakeMCPGateway{}, map[string]bool{"figma-api": true})
+
+	// figma-api token file is eligible on its face (refresh_token + refresh:true)
+	// but is owned by a special writer → must be skipped here.
+	mustWrite(t, w, ConnectorCreds{Connector: "figma-api", AuthType: "oauth", AccessToken: "at", RefreshToken: "rt-f", Refresh: true, ExpiresAt: 222})
+	// A normal connector in the same dir is still surfaced.
+	mustWrite(t, w, ConnectorCreds{Connector: "notion", AuthType: "oauth", AccessToken: "at", RefreshToken: "rt-n", Refresh: true, ExpiresAt: 111})
+
+	got := w.RefreshableEntries()
+	if len(got) != 1 || got[0].Connector != "notion" {
+		t.Fatalf("expected only notion, got %+v", got)
+	}
+}
+
+func TestConnectorWriter_Remove(t *testing.T) {
+	dir := t.TempDir()
+	fake := &fakeMCPGateway{}
+	w := newConnectorWriter(dir, fake, nil)
+	ctx := context.Background()
+
+	// Absent → no-op (removed=false), but RemoveMCPEntry is still attempted
+	// (idempotent on the openclaw side).
+	removed, err := w.Remove(ctx, "notion")
+	if err != nil || removed {
+		t.Fatalf("Remove(absent) = removed=%v err=%v, want false,nil", removed, err)
+	}
+
+	mustWrite(t, w, ConnectorCreds{Connector: "notion", AuthType: "oauth", AccessToken: "at"})
+	removed, err = w.Remove(ctx, "notion")
+	if err != nil || !removed {
+		t.Fatalf("Remove(present) = removed=%v err=%v, want true,nil", removed, err)
+	}
+	if _, ok, _ := w.loadEntry("notion"); ok {
+		t.Fatalf("entry still present after Remove")
+	}
+	if len(fake.removed) == 0 || fake.removed[len(fake.removed)-1] != "notion" {
+		t.Fatalf("RemoveMCPEntry not called for notion: %v", fake.removed)
+	}
+}
+
+func TestBuildAuthHeader(t *testing.T) {
+	creds := ConnectorCreds{AccessToken: "at", APIKey: "ak"}
+	if got := buildAuthHeader(authHeaderBearerAPIKey, creds); got != "Bearer ak" {
+		t.Fatalf("api_key header = %q", got)
+	}
+	if got := buildAuthHeader(authHeaderBearerAccessToken, creds); got != "Bearer at" {
+		t.Fatalf("access_token header = %q", got)
+	}
+	if got := buildAuthHeader("", creds); got != "Bearer at" {
+		t.Fatalf("default header = %q, want Bearer at", got)
+	}
+}
+
+func TestConnectorWriter_ImplementsInterfaces(t *testing.T) {
+	w := newConnectorWriter(t.TempDir(), &fakeMCPGateway{}, nil)
+	var _ ConnectorWriter = w
+	var _ entryLoader = w
+}
+
+func mustWrite(t *testing.T, w *connectorWriter, creds ConnectorCreds) {
+	t.Helper()
+	if err := w.Write(context.Background(), creds); err != nil {
+		t.Fatalf("Write(%s): %v", creds.Connector, err)
+	}
+}

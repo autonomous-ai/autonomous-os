@@ -39,9 +39,9 @@ type mcpConnectorConfig struct {
 	// Used only by the default (http) entry builder.
 	mcpURL string
 	// header builds the Authorization header value from creds. Defaults to
-	// "Bearer " + AccessToken (bearerAccessToken) when nil. Static-API-key
-	// connectors (e.g. Ahrefs) supply bearerAPIKey instead. Used only by the
-	// default (http) entry builder.
+	// "Bearer " + AccessToken (bearerAccessToken) when nil. Used only by the
+	// default (http) entry builder; the lone caller (figma-api) supplies a custom
+	// entry instead, so this path is currently dormant.
 	header func(c ConnectorCreds) string
 	// tokenFile overrides the token filename. Empty → "<name>_access_tokens.json".
 	tokenFile string
@@ -56,15 +56,10 @@ type mcpConnectorConfig struct {
 }
 
 // bearerAccessToken is the default Authorization builder: "Bearer <access_token>".
-// Used by OAuth connectors (Notion, Linear, Asana, Figma, GitHub) whose token
-// lands in the access_token field.
+// Used by OAuth connectors whose token lands in the access_token field. (The
+// generic connectorWriter handles static-API-key connectors like Ahrefs via its
+// own bearer_api_key header style — see connector_writer_generic.go.)
 func bearerAccessToken(c ConnectorCreds) string { return "Bearer " + c.AccessToken }
-
-// bearerAPIKey builds "Bearer <api_key>" for connectors authenticated with a
-// static API key rather than an OAuth access token (e.g. Ahrefs — the user
-// pastes a self-generated MCP key, no OAuth, no refresh). The key arrives in
-// the api_key field of connector.set, not access_token.
-func bearerAPIKey(c ConnectorCreds) string { return "Bearer " + c.APIKey }
 
 // newMCPConnectorWriter builds a writer from cfg. configsDir is typically
 // `<OpenclawConfigDir>/workspace/configs`.

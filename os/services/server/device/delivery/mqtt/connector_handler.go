@@ -75,7 +75,7 @@ func (h *DeviceMQTTHandler) runConnectorSet(env domain.MQTTDataCommand) {
 		ObtainedAt:  now.Unix(),
 	}
 
-	writer := h.connectorWriters.get(req.Connector)
+	writer := h.connectorWriterFor(req.Connector)
 	if writer == nil {
 		_ = h.publishDataResult(env.Kind, "failure", fmt.Sprintf("no writer for connector %q", req.Connector), nil)
 		return
@@ -124,7 +124,7 @@ func (h *DeviceMQTTHandler) runConnectorRemove(env domain.MQTTDataCommand) {
 		return
 	}
 
-	writer := h.connectorWriters.get(req.Connector)
+	writer := h.connectorWriterFor(req.Connector)
 	if writer == nil {
 		_ = h.publishDataResult(env.Kind, "failure", fmt.Sprintf("no writer for connector %q", req.Connector), nil)
 		return

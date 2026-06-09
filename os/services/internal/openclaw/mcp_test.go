@@ -3,7 +3,7 @@ package openclaw
 import "testing"
 
 func TestMCPConnectorURL(t *testing.T) {
-	for _, name := range []string{"notion", "figma", "asana", "linear", "github", "ahrefs"} {
+	for _, name := range []string{"notion", "asana", "linear", "github", "ahrefs"} {
 		url, ok := MCPConnectorURL(name)
 		if !ok {
 			t.Errorf("connector %q: expected known", name)
@@ -16,7 +16,7 @@ func TestMCPConnectorURL(t *testing.T) {
 		}
 	}
 
-	for _, name := range []string{"dropbox", "", "default"} {
+	for _, name := range []string{"dropbox", "figma", "", "default"} {
 		if _, ok := MCPConnectorURL(name); ok {
 			t.Errorf("connector %q: expected unknown", name)
 		}

@@ -8,14 +8,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"go.autonomous.ai/os/domain"
 )
 
 const (
-	connectorsFile      = "connectors.json"
 	connectorsSchemaVer = 1
 	connectorsFileMode  = 0o600
 	connectorsDirMode   = 0o700
@@ -52,9 +50,11 @@ type ConnectorRefreshTarget struct {
 }
 
 // ConnectorWriter owns persistence (and any side-effects like writing an MCP
-// entry into openclaw.json) for one connector code, or the default fallback.
-// Implementations must be safe for concurrent calls — typically guarded by
-// a per-writer mutex around the file IO.
+// entry into openclaw.json) for connector credentials. The primary
+// implementation is the data-driven connectorWriter (connector_writer_generic.go),
+// which handles every connector except those claimed by a special writer (e.g.
+// the figma-api stdio mcpConnectorWriter). Implementations must be safe for
+// concurrent calls — typically guarded by a per-writer mutex around the file IO.
 type ConnectorWriter interface {
 	// Write persists the credentials. Replaces any existing entry for the
 	// same connector. Idempotent on identical input.
@@ -71,89 +71,11 @@ type ConnectorWriter interface {
 	RefreshableEntries() []ConnectorRefreshTarget
 }
 
-// connectorWriterRegistry maps connector code → writer. Looked up at handle
-// time; falls back to the "default" key when the code has no specific writer.
-// Built once in ProvideDeviceMQTTHandler; never mutated at runtime.
-type connectorWriterRegistry map[string]ConnectorWriter
-
-func (r connectorWriterRegistry) get(connector string) ConnectorWriter {
-	if w, ok := r[connector]; ok {
-		return w
-	}
-	return r["default"]
-}
-
 // ──────────────────────────────────────────────────────────────────────────
-// defaultConnectorWriter — generic writer for connectors that don't need
-// special side-effects. Persists to <OpenclawConfigDir>/workspace/configs/connectors.json
-// in the ConnectorsFile schema. Mirrors the access_tokens.json write
-// discipline (atomic tmp+rename, mode 0600) without sharing its file or lock.
-// ──────────────────────────────────────────────────────────────────────────
-
-type defaultConnectorWriter struct {
-	mu   sync.Mutex
-	path string
-}
-
-func newDefaultConnectorWriter(configsDir string) *defaultConnectorWriter {
-	return &defaultConnectorWriter{
-		path: filepath.Join(configsDir, connectorsFile),
-	}
-}
-
-func (w *defaultConnectorWriter) Write(ctx context.Context, creds ConnectorCreds) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	file, err := loadConnectorsFile(w.path)
-	if err != nil {
-		return err
-	}
-	file.Connectors[creds.Connector] = connectorEntryFromCreds(creds)
-	return writeConnectorsFile(w.path, file)
-}
-
-func (w *defaultConnectorWriter) Remove(ctx context.Context, connector string) (bool, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	file, err := loadConnectorsFile(w.path)
-	if err != nil {
-		return false, err
-	}
-	if _, ok := file.Connectors[connector]; !ok {
-		return false, nil
-	}
-	delete(file.Connectors, connector)
-	return true, writeConnectorsFile(w.path, file)
-}
-
-func (w *defaultConnectorWriter) RefreshableEntries() []ConnectorRefreshTarget {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	file, err := loadConnectorsFile(w.path)
-	if err != nil {
-		return nil
-	}
-	out := make([]ConnectorRefreshTarget, 0, len(file.Connectors))
-	for code, entry := range file.Connectors {
-		// Gate on the connector.set "refresh" flag: only rotate tokens BE
-		// flagged refreshable, and only when a refresh_token is present.
-		// refresh:false / absent → skip.
-		if !entry.Refresh || entry.RefreshToken == "" {
-			continue
-		}
-		out = append(out, ConnectorRefreshTarget{
-			Connector:    code,
-			RefreshToken: entry.RefreshToken,
-			ExpiresAt:    entry.ExpiresAt,
-		})
-	}
-	return out
-}
-
-// ──────────────────────────────────────────────────────────────────────────
-// Shared file helpers — package-internal so the generic mcpConnectorWriter
-// (which targets <connector>_access_tokens.json) reuses the same schema +
-// atomic-write discipline.
+// Shared file helpers — package-internal so every writer (the data-driven
+// connectorWriter and the figma-api mcpConnectorWriter, both targeting
+// <connector>_access_tokens.json) reuses the same schema + atomic-write
+// discipline.
 // ──────────────────────────────────────────────────────────────────────────
 
 // loadConnectorsFile reads a ConnectorsFile from disk. Missing or empty file

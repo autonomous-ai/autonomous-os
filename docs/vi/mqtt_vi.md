@@ -216,27 +216,42 @@ local, `openclaw` từ probe cache của agent monitor (`openclaw_detected` phâ
 #### Connectors
 
 `connector.set.<code>` / `connector.remove.<code>` được route theo prefix (connector
-code là phần hậu tố) tới một **writer** riêng cho từng connector, chọn từ registry;
-code chưa đăng ký sẽ fallback về writer `connectors.json` chung. Có hai loại writer,
-chỉ khác nhau ở side-effect:
+code là phần hậu tố). Một writer **data-driven** duy nhất (`connectorWriter`) xử lý
+mọi connector; một map nhỏ các **writer đặc biệt** chiếm giữ vài code không thể biểu
+diễn bằng entry HTTP MCP thường (hiện chỉ có `figma-api`, một MCP server stdio cục bộ).
+Writer chung quyết định theo từng message — dựa trên payload — connector có phải MCP
+server không và xác thực ra sao; **không cần cập nhật registry per-connector cho một
+connector mới**.
 
-| Writer | Connectors | Lưu trữ | Entry MCP trong `openclaw.json` | Auth header |
-|--------|-----------|---------|---------------------------------|-------------|
-| MCP (`mcpConnectorWriter`) | `notion`, `figma`, `asana`, `linear`, `github`, `ahrefs` | `<code>_access_tokens.json` | Có — ghi `mcp.servers.<code>` (HTTP + `Authorization`) và restart gateway | `Bearer <access_token>` (hoặc `Bearer <api_key>` cho `ahrefs`) |
-| Google OAuth (`oauthConnectorWriter`) | `gmail`, `google_calendar`, `google_drive` | `<code>_access_tokens.json` | **Không** — chỉ lưu + refresh credential | n/a (không wiring MCP) |
+**Lưu trữ:** mỗi connector lưu vào file riêng `<code>_access_tokens.json` trong
+`workspace/configs/` (ghi atomic tmp+rename, mode 0600). Connector code được kiểm tra
+theo `^[a-z0-9_-]{1,64}$` trước khi dùng làm tên file hay khóa `mcp.servers.<code>`,
+nên code không tin cậy không thể thoát khỏi thư mục configs qua path traversal.
 
-Các **Google OAuth connector** clone mô hình credential của Google OAuth thay vì mô
-hình remote-MCP: không có URL Google MCP hosted cho từng service để trỏ tới, nên chúng
-không ghi entry `mcp.servers`. Chúng vẫn là connector hạng nhất — set/remove qua
-`connector.set.gmail` v.v., mỗi cái lưu vào file riêng
-`gmail_access_tokens.json` / `google_calendar_access_tokens.json` /
-`google_drive_access_tokens.json` trong `workspace/configs/`, và được refresh bởi
-connector refresh loop chung.
+**Routing (theo payload `connector.set`):** backend đặt các khóa routing trong map
+`credentials` của payload:
 
-**Refresh:** cả hai loại writer đều expose các entry cần refresh cho connector refresh
-loop; loop chủ động xoay vòng entry nào có CẢ `refresh_token` LẪN `refresh:true`
-(backend sở hữu quyền quyết định refresh qua cờ `refresh`) khi còn dưới 10 phút là hết
-hạn, qua endpoint backend `/connector/refresh-token`.
+| Khóa `credentials` | Tác dụng |
+|--------------------|----------|
+| `mcp_url` | Có → connector MCP: ghi `mcp.servers.<code>` (`{type:"http", url, headers.Authorization}`) vào `openclaw.json` và restart gateway. Không có → connector chỉ-credential (vd `gmail`/`google_*`): lưu token, **không** ghi entry `openclaw.json`. |
+| `mcp_auth_header` | `bearer_access_token` (mặc định) → `Authorization: Bearer <access_token>`; `bearer_api_key` → `Bearer <api_key>` (connector dùng khóa tĩnh, vd `ahrefs`). |
+
+**Bảng fallback:** với các connector ra đời trước khi wire mang các khóa này
+(`notion`, `asana`, `linear`, `github`, `ahrefs`), một bảng compile-in cung
+cấp `mcp_url` + kiểu header từ catalog openclaw (`internal/openclaw/mcp.go`). Payload
+**luôn thắng** — `mcp_url` trong payload override bảng fallback — nên bảng chỉ là lưới
+an toàn cho di trú đến khi backend gửi các khóa routing.
+
+**Writer đặc biệt:** `figma-api` dùng workaround cho allowlist của Figma MCP hosted —
+một MCP server stdio cục bộ (`{command:"node", args:[wrapper], env:{FIGMA_ACCESS_TOKEN}}`)
+với script Node wrapper được ghi ra đĩa trước khi ghi entry. Code của writer đặc biệt
+bị loại (`reserved`) khỏi vòng quét refresh của writer chung để nó không ghi đè chúng
+ở dạng sai (HTTP).
+
+**Refresh:** loop refresh quét writer chung (glob `*_access_tokens.json`) cùng từng
+writer đặc biệt, và chủ động xoay vòng entry nào có CẢ `refresh_token` LẪN
+`refresh:true` (backend sở hữu quyền quyết định refresh qua cờ `refresh`) khi còn dưới
+10 phút là hết hạn, qua endpoint backend `/connector/refresh-token`.
 
 ### `ota` — Trigger OTA update
 
@@ -255,10 +270,10 @@ Xử lý bởi bootstrap worker, không qua MQTT handler trực tiếp.
 | `os/services/server/device/delivery/mqtt/add_channel_hander.go` | Handle `add_channel` command (stream pairing events cho WhatsApp) |
 | `os/services/server/device/delivery/mqtt/slack_event_handler.go` | Handle `slack_event` command (forward Slack HTTP-mode events tới gateway local) |
 | `os/services/server/device/delivery/mqtt/data_handler.go` | Handle `data` command kinds `oauth.set`/`oauth.remove` (+ access-token store) |
-| `os/services/server/device/delivery/mqtt/connector_handler.go` | Handle `connector.set.<code>`/`connector.remove.<code>` (bất đồng bộ, dispatch writer) |
-| `os/services/server/device/delivery/mqtt/connector_writer.go` | Interface `ConnectorWriter`, registry writer, writer `connectors.json` chung, file helpers dùng chung |
-| `os/services/server/device/delivery/mqtt/mcp_connector_writer.go` | Writer connector remote-MCP (`notion`/`figma`/…): token file + entry MCP trong `openclaw.json` |
-| `os/services/server/device/delivery/mqtt/oauth_connector_writer.go` | Writer Google OAuth connector (`gmail`/`google_calendar`/`google_drive`): chỉ token file, không entry MCP |
+| `os/services/server/device/delivery/mqtt/connector_handler.go` | Handle `connector.set.<code>`/`connector.remove.<code>` (bất đồng bộ, dispatch writer qua `connectorWriterFor`) |
+| `os/services/server/device/delivery/mqtt/connector_writer.go` | Interface `ConnectorWriter` + file helpers `<code>_access_tokens.json` dùng chung |
+| `os/services/server/device/delivery/mqtt/connector_writer_generic.go` | `connectorWriter` data-driven: routing MCP theo payload, bảng fallback, chặn path-traversal, token file per-connector |
+| `os/services/server/device/delivery/mqtt/mcp_connector_writer.go` | Writer MCP stdio đặc biệt (`figma-api`): token file + entry MCP wrapper cục bộ trong `openclaw.json` |
 | `os/services/server/device/delivery/mqtt/connector_refresh.go` | Loop refresh token connector (`/connector/refresh-token`) |
 | `os/services/server/device/delivery/mqtt/system_info_handler.go` | Handle `data` kinds `system.info`/`system.version`/`system.network` |
 | `os/services/server/device/delivery/mqtt/whatsapp_pair_handler.go` | Handle `whatsapp_pair` re-pair command |

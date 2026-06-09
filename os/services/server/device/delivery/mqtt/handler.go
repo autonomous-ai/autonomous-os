@@ -23,100 +23,122 @@ type DeviceMQTTHandler struct {
 	deviceService  *device.Service
 	networkService *network.Service
 	agentGateway   domain.AgentGateway
-	// connectorWriters routes connector.set/remove (and the refresh loop) to a
-	// per-connector writer; built once here, never mutated at runtime.
-	connectorWriters connectorWriterRegistry
+	// connectorWriter is the data-driven writer for the connector.set.<code> /
+	// connector.remove.<code> flow and the refresh loop. Routing (is it an MCP
+	// connector? which auth header?) is decided per-message from the payload's
+	// credentials map, with a compiled-in fallback for codes that shipped before
+	// the contract moved to the wire. Handles every connector EXCEPT those in
+	// specialConnectorWriters. Built once at startup; never mutated at runtime.
+	connectorWriter *connectorWriter
+	// specialConnectorWriters holds bespoke writers for connectors that can't be
+	// expressed as a simple http mcp_url entry — e.g. figma-api, a local stdio
+	// MCP server that drops a Node wrapper on disk. A code with no special writer
+	// and no mcp_url falls through to connectorWriter. Built once at startup.
+	specialConnectorWriters map[string]ConnectorWriter
 }
 
-// mcpConnectorSpec lists the remote-MCP connectors that get a dedicated writer.
-// apiKey:true selects the static-API-key header builder (Ahrefs); the rest use
-// the default OAuth Bearer access-token builder. The MCP URL is pulled from the
-// openclaw catalog so there is a single source of truth.
+// mcpConnectorSpec lists the remote-MCP connectors that the generic writer
+// recognises via its compiled-in fallback table. apiKey:true selects the
+// static-API-key header builder (Ahrefs); the rest use the default OAuth Bearer
+// access-token builder. The MCP URL is pulled from the openclaw catalog so there
+// is a single source of truth. The fallback only fills the gap until the backend
+// pushes mcp_url/mcp_auth_header in the connector.set payload — payload always
+// wins, and a brand-new connector needs no entry here at all.
 var mcpConnectorSpecs = []struct {
 	name   string
 	apiKey bool
 }{
 	{name: "notion"},
-	{name: "figma"},
 	{name: "asana"},
 	{name: "linear"},
 	{name: "github"},
 	{name: "ahrefs", apiKey: true},
 }
 
-// googleOAuthConnectors lists the connectors that clone the Google OAuth
-// credential model instead of the remote-MCP model. They are real connectors
-// (connector.set.<code>/connector.remove.<code>) and refresh through the same
-// connector refresh loop, but they write NO mcp.servers.<code> entry into
-// openclaw.json — there is no hosted per-service Google MCP URL to point at.
-// Each gets its own <code>_access_tokens.json via oauthConnectorWriter.
-var googleOAuthConnectors = []string{"gmail", "google_calendar", "google_drive"}
+// specialConnectorCodes is the set of connector codes handled by a bespoke
+// writer (newSpecialConnectorWriters) instead of the generic data-driven one.
+// The generic writer's refresh loop skips these so it never re-Writes them in
+// the wrong (http) shape — see connectorWriter.reserved.
+var specialConnectorCodes = map[string]bool{
+	"figma-api": true,
+}
 
-// buildConnectorWriters constructs the writer registry: a generic
-// connectors.json writer under "default" plus one mcpConnectorWriter per
-// known remote-MCP connector.
-func buildConnectorWriters(cfg *config.Config, gw domain.AgentGateway) connectorWriterRegistry {
+// newSpecialConnectorWriters builds the bespoke writers for connectors that
+// can't be expressed as a simple http mcp_url entry. Today that is only
+// figma-api: a local stdio MCP server that drops a Node wrapper on disk and
+// passes the Figma OAuth token via the entry's env (the hosted Figma MCP is
+// allowlist-gated, so this REST wrapper is the only Figma wiring).
+func newSpecialConnectorWriters(cfg *config.Config, gw domain.AgentGateway) map[string]ConnectorWriter {
 	configsDir := filepath.Join(cfg.OpenclawConfigDir, "workspace", "configs")
-	reg := connectorWriterRegistry{
-		"default": newDefaultConnectorWriter(configsDir),
-	}
-	for _, sp := range mcpConnectorSpecs {
-		url, ok := openclaw.MCPConnectorURL(sp.name)
-		if !ok {
-			continue
-		}
-		mcfg := mcpConnectorConfig{name: sp.name, mcpURL: url}
-		if sp.apiKey {
-			mcfg.header = bearerAPIKey
-		}
-		reg[sp.name] = newMCPConnectorWriter(mcfg, configsDir, gw)
-	}
-	// Google OAuth connectors: per-connector token file, no openclaw.json entry.
-	for _, name := range googleOAuthConnectors {
-		reg[name] = newOAuthConnectorWriter(name, configsDir)
-	}
-
-	// figma-api: REST variant. Instead of the hosted Figma MCP (allowlist-gated),
-	// wire a local stdio MCP server that wraps the Figma REST API. The wrapper
-	// script is dropped on disk; the access token rides in the entry's env.
 	wrapperPath := openclaw.FigmaMCPServerPath(cfg.OpenclawConfigDir)
 	ocDir := cfg.OpenclawConfigDir
-	reg["figma-api"] = newMCPConnectorWriter(mcpConnectorConfig{
-		name: "figma-api",
-		entry: func(c ConnectorCreds) map[string]any {
-			return map[string]any{
-				"command": "node",
-				"args":    []any{wrapperPath},
-				"env":     map[string]any{"FIGMA_ACCESS_TOKEN": c.AccessToken},
-			}
-		},
-		ensureAssets: func() error {
-			// Wrapper script is required — fail the connector.set if it can't drop.
-			if _, err := openclaw.EnsureFigmaMCPServer(ocDir); err != nil {
-				return err
-			}
-			// Skill (SKILL.md from GCS) is best-effort: the figma_* tools still
-			// work via the MCP tool list without it. Idempotent — only downloads
-			// when missing, so token refreshes don't re-fetch.
-			if err := openclaw.EnsureMCPSkill(ocDir, "figma-api"); err != nil {
-				slog.Warn("figma-api: skill install failed (continuing)", "component", "mqtt", "error", err)
-			}
-			return nil
-		},
-	}, configsDir, gw)
+	return map[string]ConnectorWriter{
+		"figma-api": newMCPConnectorWriter(mcpConnectorConfig{
+			name: "figma-api",
+			entry: func(c ConnectorCreds) map[string]any {
+				return map[string]any{
+					"command": "node",
+					"args":    []any{wrapperPath},
+					"env":     map[string]any{"FIGMA_ACCESS_TOKEN": c.AccessToken},
+				}
+			},
+			ensureAssets: func() error {
+				// Wrapper script is required — fail the connector.set if it can't drop.
+				if _, err := openclaw.EnsureFigmaMCPServer(ocDir); err != nil {
+					return err
+				}
+				// Skill (SKILL.md from GCS) is best-effort: the figma_* tools still
+				// work via the MCP tool list without it. Idempotent — only downloads
+				// when missing, so token refreshes don't re-fetch.
+				if err := openclaw.EnsureMCPSkill(ocDir, "figma-api"); err != nil {
+					slog.Warn("figma-api: skill install failed (continuing)", "component", "mqtt", "error", err)
+				}
+				return nil
+			},
+		}, configsDir, gw),
+	}
+}
 
-	return reg
+// connectorWriterFor routes a connector code to its writer: a special writer
+// when one is registered (figma-api), otherwise the generic data-driven writer.
+func (h *DeviceMQTTHandler) connectorWriterFor(code string) ConnectorWriter {
+	if w, ok := h.specialConnectorWriters[code]; ok {
+		return w
+	}
+	if h.connectorWriter == nil {
+		return nil
+	}
+	return h.connectorWriter
+}
+
+// refreshableConnectorWriters returns every writer the refresh loop must scan:
+// the generic writer plus each special writer. The generic writer already skips
+// codes owned by a special writer (its `reserved` set), so connectors are never
+// double-refreshed.
+func (h *DeviceMQTTHandler) refreshableConnectorWriters() []ConnectorWriter {
+	out := make([]ConnectorWriter, 0, 1+len(h.specialConnectorWriters))
+	if h.connectorWriter != nil {
+		out = append(out, h.connectorWriter)
+	}
+	for _, w := range h.specialConnectorWriters {
+		out = append(out, w)
+	}
+	return out
 }
 
 // ProvideDeviceMQTTHandler creates DeviceMQTTHandler with all command handlers.
 func ProvideDeviceMQTTHandler(cfg *config.Config, mqttFactory *mqtt.Factory, ds *device.Service, ns *network.Service, gw domain.AgentGateway) DeviceMQTTHandler {
+	configsDir := filepath.Join(cfg.OpenclawConfigDir, "workspace", "configs")
 	return DeviceMQTTHandler{
-		config:           cfg,
-		mqttFactory:      mqttFactory,
-		deviceService:    ds,
-		networkService:   ns,
-		agentGateway:     gw,
-		connectorWriters: buildConnectorWriters(cfg, gw),
+		config:         cfg,
+		mqttFactory:    mqttFactory,
+		deviceService:  ds,
+		networkService: ns,
+		agentGateway:   gw,
+		// `reserved` excludes codes owned by a special writer so the generic
+		// refresh loop never clobbers their (non-http) openclaw entry.
+		connectorWriter:         newConnectorWriter(configsDir, gw, specialConnectorCodes),
+		specialConnectorWriters: newSpecialConnectorWriters(cfg, gw),
 	}
 }
 

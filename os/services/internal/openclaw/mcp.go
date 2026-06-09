@@ -17,7 +17,6 @@ import (
 // refresh (the per-connector header builder lives in mcp_connector_writer.go).
 var mcpConnectorURLs = map[string]string{
 	"notion": "https://mcp.notion.com/mcp",
-	"figma":  "https://mcp.figma.com/mcp",
 	"asana":  "https://mcp.asana.com/v2/mcp",
 	"linear": "https://mcp.linear.app/mcp",
 	"github": "https://api.githubcopilot.com/mcp/",

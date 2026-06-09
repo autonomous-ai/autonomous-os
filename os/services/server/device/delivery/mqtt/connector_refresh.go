@@ -76,11 +76,8 @@ func (h *DeviceMQTTHandler) safeConnectorRefreshTick(ctx context.Context) {
 // window. Each writer's failures are logged and skipped — a single connector
 // must not block the others.
 func (h *DeviceMQTTHandler) refreshExpiringConnectors(ctx context.Context) {
-	if h.connectorWriters == nil {
-		return
-	}
 	now := time.Now()
-	for _, w := range h.uniqueWriters() {
+	for _, w := range h.refreshableConnectorWriters() {
 		for _, target := range w.RefreshableEntries() {
 			if !connectorNeedsRefresh(target, now, connectorRefreshSkew) {
 				continue
@@ -107,22 +104,6 @@ func (h *DeviceMQTTHandler) refreshExpiringConnectors(ctx context.Context) {
 			slog.Info("connector-refresh: token refreshed", "component", "mqtt", "connector", target.Connector, "expires_at", creds.ExpiresAt)
 		}
 	}
-}
-
-// uniqueWriters returns each writer once even if registered under multiple
-// keys. The default writer occupies one slot under the "default" key;
-// per-connector writers each get their own slot.
-func (h *DeviceMQTTHandler) uniqueWriters() []ConnectorWriter {
-	seen := make(map[ConnectorWriter]struct{}, len(h.connectorWriters))
-	out := make([]ConnectorWriter, 0, len(h.connectorWriters))
-	for _, w := range h.connectorWriters {
-		if _, ok := seen[w]; ok {
-			continue
-		}
-		seen[w] = struct{}{}
-		out = append(out, w)
-	}
-	return out
 }
 
 // connectorNeedsRefresh reports whether the entry should be proactively
