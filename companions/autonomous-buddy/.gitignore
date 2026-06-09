@@ -8,6 +8,6 @@ DerivedData/
 xcuserdata/
 dist/
 
-# mock-lamp build output
-mock-lamp/lamp-buddy-mock-lamp
-mock-lamp/mock-lamp
+# mock-device build output
+mock-device/autonomous-buddy-mock-device
+mock-device/mock-device

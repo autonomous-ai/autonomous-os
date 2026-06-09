@@ -19,7 +19,7 @@ dlbackend/local
 
 # Runtime config (contains device-specific values and secrets)
 config/config.json
-lamp/config/config.json
+os/services/config/config.json
 
 # Voice biometric data — never commit (PII)
 **/mock_data/audio/speaker_db*.json
@@ -38,18 +38,18 @@ lamp/config/config.json
 *.pprof
 
 # Lamp (Go)
-lamp/lamp-server
-lamp/lamp-server.~
-lamp/bootstrap-server
-lamp/bootstrap-server.~
-lamp/vendor/
-lamp/web/node_modules/
-lamp/web/dist/
+os/services/os-server
+os/services/os-server.~
+os/services/bootstrap-server
+os/services/bootstrap-server.~
+os/services/vendor/
+os/services/web/node_modules/
+os/services/web/dist/
 *.zip
 
 # Claude Desktop Buddy (Go) — binary outputs
-claude-desktop-buddy/buddy-plugin
-claude-desktop-buddy/claude-desktop-buddy
+companions/claude-desktop-buddy/buddy-plugin
+companions/claude-desktop-buddy/claude-desktop-buddy
 
 # LeLamp (Python)
 .venv
