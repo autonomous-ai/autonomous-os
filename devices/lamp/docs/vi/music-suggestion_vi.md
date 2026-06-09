@@ -120,9 +120,9 @@ Agent:
   1. POST /api/music-suggestion/status → status="accepted"
   2. [HW:/audio/play:{"query":"...","person":"gray"}]
     ↓
-Go handler intercept HW markers → POST /audio/play → LeLamp
+Go handler intercept HW markers → POST /audio/play → HAL
     ↓
-LeLamp: yt-dlp search → ffmpeg → ALSA speaker
+HAL: yt-dlp search → ffmpeg → ALSA speaker
 ```
 
 ### User reject → Log rejection
@@ -155,7 +155,7 @@ Agent: POST /api/music-suggestion/status → status="rejected"
 | `lamp/resources/openclaw-skills/mood/SKILL.md` | Mood logging → follow Music skill suggestion |
 | `lamp/resources/openclaw-skills/sensing/SKILL.md` | Activity groups, sedentary → follow Music skill suggestion |
 
-### LeLamp (Python)
+### HAL (Python)
 
 | File | Vai trò |
 |------|---------|
@@ -206,7 +206,7 @@ Lamp chỉ có 1 speaker chia sẻ giữa TTS và music:
 |-----------|---------|
 | AI suggest bằng text | TTS nói suggestion → user nghe |
 | User confirm → play | suppressTTS → TTS không đè lên nhạc |
-| Music đang play + TTS | LeLamp trả 409 — music giữ priority |
+| Music đang play + TTS | HAL trả 409 — music giữ priority |
 | User nói "stop" | `[HW:/audio/stop:{}]` → dừng music |
 
 ---

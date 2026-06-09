@@ -17,11 +17,11 @@ All states use the `breathing` effect at speed 3.0 unless noted. RGB values come
 |---|---|---|---|---|---|
 | `StateConnectivity` | Orange | `(255, 80, 0)` | **No Internet** — Wi-Fi connected but no internet | Network monitor: 5 consecutive ping failures (~25s) | Yes — when ping succeeds |
 | `StateError` | Red | `(255, 0, 0)` | **Error** — System error (reserved) | Critical failure | Yes — when error resolves |
-| `StateOTA` | Green | `(0, 255, 0)` | **Updating** — OTA firmware update in progress (reserved enum; bootstrap drives OTA LED directly via `lib/lelamp` — see "Bootstrap (OTA)" below) | Bootstrap reconcile detects update | Reboots after update completes |
+| `StateOTA` | Green | `(0, 255, 0)` | **Updating** — OTA firmware update in progress (reserved enum; bootstrap drives OTA LED directly via `lib/hal` — see "Bootstrap (OTA)" below) | Bootstrap reconcile detects update | Reboots after update completes |
 | `StateBooting` | Blue | `(0, 80, 255)` | **Booting** — Lamp is starting up | `server.go` on startup | Yes — when OpenClaw agent connects and is ready |
-| `StateLeLampDown` | Purple | `(180, 0, 255)` | **LeLamp Down** — Hardware server unreachable. While LeLamp is down the LED is **dark** because the LED driver itself is down; the purple breathing only shows for ~3s on recovery | `healthwatch` poll fails to reach LeLamp `/health` | Auto-clears 3s after recovery |
+| `StateLeLampDown` | Purple | `(180, 0, 255)` | **HAL Down** — Hardware server unreachable. While HAL is down the LED is **dark** because the LED driver itself is down; the purple breathing only shows for ~3s on recovery | `healthwatch` poll fails to reach HAL `/health` | Auto-clears 3s after recovery |
 | `StateAgentDown` | Cyan | `(0, 200, 200)` | **Agent Down** — AI brain disconnected | OpenClaw WebSocket drops (`internal/openclaw/service_ws.go`) | Yes — when WebSocket reconnects |
-| `StateHardware` | Yellow | `(255, 255, 0)` | **Hardware Failure** — servo/LED/audio/voice component reports unhealthy via LeLamp `/health` | `healthwatch` poll (every 5s); camera and sensing excluded | Yes — when all monitored components report healthy |
+| `StateHardware` | Yellow | `(255, 255, 0)` | **Hardware Failure** — servo/LED/audio/voice component reports unhealthy via HAL `/health` | `healthwatch` poll (every 5s); camera and sensing excluded | Yes — when all monitored components report healthy |
 
 ### Ready flash
 
@@ -29,7 +29,7 @@ After boot completes (Booting cleared and no other state active), `statusled.Fla
 
 ### OTA sub-states (driven by bootstrap)
 
-The bootstrap binary calls `lib/lelamp` directly (it does not go through `statusled.Service`):
+The bootstrap binary calls `lib/hal` directly (it does not go through `statusled.Service`):
 
 | Phase | LED behavior | Source |
 |---|---|---|
@@ -44,7 +44,7 @@ Note that bootstrap's OTA orange/red use slightly different RGB and effect param
 When multiple `statusled.Service` states are active simultaneously, the highest-priority state is shown:
 
 ```
-Connectivity (highest) > Error > OTA > Booting > LeLamp Down > Agent Down > Hardware (lowest)
+Connectivity (highest) > Error > OTA > Booting > HAL Down > Agent Down > Hardware (lowest)
 ```
 
 Priority numbers (from `priority` map in `service.go`):
@@ -82,15 +82,15 @@ Bootstrap's OTA LED writes bypass this priority queue — they run while bootstr
 - Voice commands and AI features are unavailable; local LED scenes and servo still work
 - TTS announces "Brain reconnected!" on recovery
 
-### LeLamp Down (Purple — or dark/black)
-- When LeLamp crashes the LED goes **dark** because the LED driver itself is down
+### HAL Down (Purple — or dark/black)
+- When HAL crashes the LED goes **dark** because the LED driver itself is down
 - `healthwatch` polls every 5 seconds and tracks the outage
 - On recovery, purple breathing flashes for ~3s as the state clears, then normal LED resumes
 - TTS announces "Hardware recovered!" on recovery
-- LED control, servo, camera, mic, and speaker are all unavailable while LeLamp is down
+- LED control, servo, camera, mic, and speaker are all unavailable while HAL is down
 
 ### Hardware Failure (Yellow)
-- Activated when servo, LED driver, audio, or voice pipeline reports unhealthy via LeLamp `/health`
+- Activated when servo, LED driver, audio, or voice pipeline reports unhealthy via HAL `/health`
 - Per-servo online check via `lelamp.GetServoStatus()` — any offline servo trips it
 - Camera and sensing are excluded (may be intentionally off by scene preset)
 - Health watcher polls every 5 seconds
@@ -119,11 +119,11 @@ internal/openclaw/service_ws → Set/Clear StateAgentDown
 internal/healthwatch/service → Set/Clear StateLeLampDown + StateHardware
 ```
 
-The service calls LeLamp's `/led/effect` endpoint via `lib/lelamp` (shared HTTP client).
+The service calls HAL's `/led/effect` endpoint via `lib/hal` (shared HTTP client).
 
 ### Bootstrap (bootstrap-server)
 
-Bootstrap is a separate binary. It calls `lib/lelamp` **directly** in the `reconcile` function (not through `statusled.Service`):
+Bootstrap is a separate binary. It calls `lib/hal` **directly** in the `reconcile` function (not through `statusled.Service`):
 
 ```
 reconcile detects update → lelamp.SetEffect("breathing", 255, 140, 0, 0.4)   // orange
@@ -136,11 +136,11 @@ failure → lelamp.SetEffect("pulse", 255, 30, 30, 1.5)                        /
 
 The ambient service (`internal/ambient`) pauses on interaction events (`chat_send`, `chat_response`, etc.). When `statusled.Service` clears the last active state, it calls `lelamp.RestoreLED()`, which hands the strip back to whatever color/effect the user (or agent) last set via `/led/solid`, `/led/effect`, or `/scene`. If no user state exists, the strip clears to off and ambient resumes its breathing LED after 60s of silence.
 
-All `statusled.Service` writes use `transient=true` so they do not clobber the user's saved LED state — emotion's restore-after-animation reads back the user's color, not the status color. (Bootstrap's direct `lib/lelamp` calls are also transient.)
+All `statusled.Service` writes use `transient=true` so they do not clobber the user's saved LED state — emotion's restore-after-animation reads back the user's color, not the status color. (Bootstrap's direct `lib/hal` calls are also transient.)
 
-## Shared LeLamp Client
+## Shared HAL Client
 
-`lib/lelamp/client.go` provides a thin HTTP wrapper used by all Go code that controls LEDs:
+`lib/hal/client.go` provides a thin HTTP wrapper used by all Go code that controls LEDs:
 
 | Function | Endpoint | Purpose |
 |---|---|---|
@@ -169,8 +169,8 @@ A status state **overrides** all of the above when active. Once it clears, norma
 | Blue breathing | Lamp is booting |
 | Brief white flash | Lamp is ready to listen |
 | Cyan breathing | AI brain is disconnected (Lamp can still control lights/servo locally) |
-| Purple breathing (after dark) | LeLamp recovered from a crash |
-| Dark / no LED | LeLamp crashed (LED driver is down) |
+| Purple breathing (after dark) | HAL recovered from a crash |
+| Dark / no LED | HAL crashed (LED driver is down) |
 | Orange breathing | No internet (Lamp is offline) |
 | Yellow breathing | A hardware component is unhealthy |
 | Green breathing | OTA firmware update in progress |

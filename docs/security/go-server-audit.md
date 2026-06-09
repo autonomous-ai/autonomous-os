@@ -141,7 +141,7 @@ Introduce explicit API zones:
 1. **Public setup endpoints**: minimal endpoints needed before setup, only while device is in provisioning mode/AP mode.
 2. **Authenticated UI endpoints**: normal monitor/config endpoints after setup, requiring a device admin session/token.
 3. **Local-only admin endpoints**: shell, exec, raw config, internal control, never remotely accessible.
-4. **Internal-only ingestion endpoints**: sensing/monitor events from LeLamp/OpenClaw; must validate loopback or a shared internal token.
+4. **Internal-only ingestion endpoints**: sensing/monitor events from HAL/OpenClaw; must validate loopback or a shared internal token.
 
 ### Suggested implementation pattern
 
@@ -1101,7 +1101,7 @@ If externally reachable, attackers can:
 
 Classify each endpoint:
 
-1. **Internal ingestion from LeLamp/OpenClaw**: require local-only or internal shared token.
+1. **Internal ingestion from HAL/OpenClaw**: require local-only or internal shared token.
 2. **UI read endpoints**: require admin auth.
 3. **User-facing logging endpoints**: require admin auth and validate payload shape.
 
@@ -1384,7 +1384,7 @@ func adminAuthMiddleware(tokenProvider func() string) gin.HandlerFunc {
 
 ### Internal token middleware
 
-For LeLamp/OpenClaw -> Lamp internal ingestion, either use local-only or a shared header:
+For HAL/OpenClaw -> Lamp internal ingestion, either use local-only or a shared header:
 
 ```go
 func internalTokenMiddleware(expected string) gin.HandlerFunc {
@@ -1615,7 +1615,7 @@ Expected: `401`/`403` without auth; redacted with auth.
    - Recommendation: no. Use write-only secret fields and masked status.
 5. Should OpenClaw raw config be editable from web UI?
    - Recommendation: only local dev, or use redacted structured config editor with auth.
-6. Which endpoints are called by LeLamp/OpenClaw locally and can be marked internal-only?
+6. Which endpoints are called by HAL/OpenClaw locally and can be marked internal-only?
    - Need final route inventory with frontend and internal callers.
 
 ---

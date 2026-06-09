@@ -1,4 +1,4 @@
-# Security Audit: Local-only API Boundary for Lamp / LeLamp / OpenClaw
+# Security Audit: Local-only API Boundary for Lamp / HAL / OpenClaw
 
 Date: 2026-05-16  
 Repo: `lamp`  
@@ -8,22 +8,22 @@ Scope requested: identify issues and remediation plan only; do **not** patch run
 
 The current project exposes several high-risk local-control surfaces too broadly:
 
-1. **LeLamp Python hardware API** is started on `0.0.0.0:5001` in multiple places. This means any device on the same LAN/AP can call endpoints that control camera, mic, speaker, LED, servo, voice, bluetooth, system actions, etc.
-2. **Nginx proxies `/hw/` to LeLamp** without access control. Even if LeLamp is later changed to bind only `127.0.0.1`, nginx can still expose it externally unless `/hw/` is blocked.
+1. **HAL Python hardware API** is started on `0.0.0.0:5001` in multiple places. This means any device on the same LAN/AP can call endpoints that control camera, mic, speaker, LED, servo, voice, bluetooth, system actions, etc.
+2. **Nginx proxies `/hw/` to HAL** without access control. Even if HAL is later changed to bind only `127.0.0.1`, nginx can still expose it externally unless `/hw/` is blocked.
 3. **Lamp Go API has wildcard CORS (`*`)** and exposes powerful endpoints including `system exec`, web shell, and OpenClaw config JSON through `/api/`.
 4. **OpenClaw gateway `/gw/` is proxied by nginx** with no nginx-level LAN block. Depending on gateway auth/config and browser context, this can expose agent control surfaces.
 5. **DL backend defaults to `0.0.0.0` and treats missing `DL_API_KEY` as auth disabled.** This is acceptable only for local dev, dangerous if reachable from LAN/Internet.
 
 Recommended target posture:
 
-- **LeLamp (`:5001`)**: callable only from same machine by Lamp Go server and OpenClaw.
+- **HAL (`:5001`)**: callable only from same machine by Lamp Go server and OpenClaw.
 - **DL backend (`:8001`)**: bind loopback by default; require `DL_API_KEY` for any non-loopback exposure.
 - **Lamp Go server (`:5000` behind nginx `/api/`)**: keep externally reachable only for intended setup/UI APIs; block or authenticate dangerous admin endpoints.
 - **Nginx**: deny external access to `/hw/` and `/gw/` unless an explicit authenticated remote-admin mode is designed.
 
 ---
 
-## Finding 1 — LeLamp Python hardware API binds to all network interfaces
+## Finding 1 — HAL Python hardware API binds to all network interfaces
 
 ### Severity
 
@@ -35,12 +35,12 @@ Current references found:
 
 - `Makefile:52`
   ```make
-  cd $(LELAMP_DIR) && PYTHONPATH=.. .venv/bin/uvicorn hal.server:app --host 0.0.0.0 --port $(LELAMP_PORT) --reload
+  cd $(HAL_DIR) && PYTHONPATH=.. .venv/bin/uvicorn hal.server:app --host 0.0.0.0 --port $(HAL_PORT) --reload
   ```
 
 - `scripts/provision/setup.sh:430`
   ```sh
-  ExecStart=$LELAMP_DIR/.venv/bin/uvicorn hal.server:app --host 0.0.0.0 --port 5001
+  ExecStart=$HAL_DIR/.venv/bin/uvicorn hal.server:app --host 0.0.0.0 --port 5001
   ```
 
 - `imager/build.sh:859`
@@ -55,7 +55,7 @@ Current references found:
 
 ### Why it is risky
 
-LeLamp controls physical hardware and sensitive sensors:
+HAL controls physical hardware and sensitive sensors:
 
 - Camera snapshot and stream
 - Microphone recording / voice pipeline
@@ -65,7 +65,7 @@ LeLamp controls physical hardware and sensitive sensors:
 - Bluetooth controls
 - System routes such as reboot/shutdown depending on router implementation
 
-If LeLamp listens on `0.0.0.0`, any host that can reach the device IP can call the API directly:
+If HAL listens on `0.0.0.0`, any host that can reach the device IP can call the API directly:
 
 ```sh
 curl http://<device-ip>:5001/health
@@ -73,24 +73,24 @@ curl http://<device-ip>:5001/camera/snapshot?save=true
 curl -X POST http://<device-ip>:5001/voice/speak -H 'Content-Type: application/json' -d '{...}'
 ```
 
-This violates the desired boundary: only local Go server and OpenClaw should call LeLamp.
+This violates the desired boundary: only local Go server and OpenClaw should call HAL.
 
 ### Required remediation
 
-Change every production/dev LeLamp start command from `0.0.0.0` to `127.0.0.1`.
+Change every production/dev HAL start command from `0.0.0.0` to `127.0.0.1`.
 
 #### File: `scripts/provision/setup.sh`
 
 Replace:
 
 ```sh
-ExecStart=$LELAMP_DIR/.venv/bin/uvicorn hal.server:app --host 0.0.0.0 --port 5001
+ExecStart=$HAL_DIR/.venv/bin/uvicorn hal.server:app --host 0.0.0.0 --port 5001
 ```
 
 With:
 
 ```sh
-ExecStart=$LELAMP_DIR/.venv/bin/uvicorn hal.server:app --host 127.0.0.1 --port 5001
+ExecStart=$HAL_DIR/.venv/bin/uvicorn hal.server:app --host 127.0.0.1 --port 5001
 ```
 
 #### File: `imager/build.sh`
@@ -112,13 +112,13 @@ ExecStart=/opt/hal/.venv/bin/uvicorn hal.server:app --host 127.0.0.1 --port 5001
 Replace:
 
 ```make
-cd $(LELAMP_DIR) && PYTHONPATH=.. .venv/bin/uvicorn hal.server:app --host 0.0.0.0 --port $(LELAMP_PORT) --reload
+cd $(HAL_DIR) && PYTHONPATH=.. .venv/bin/uvicorn hal.server:app --host 0.0.0.0 --port $(HAL_PORT) --reload
 ```
 
 With:
 
 ```make
-cd $(LELAMP_DIR) && PYTHONPATH=.. .venv/bin/uvicorn hal.server:app --host 127.0.0.1 --port $(LELAMP_PORT) --reload
+cd $(HAL_DIR) && PYTHONPATH=.. .venv/bin/uvicorn hal.server:app --host 127.0.0.1 --port $(HAL_PORT) --reload
 ```
 
 #### File: `lelamp/server.py`
@@ -127,8 +127,8 @@ Prefer introducing config instead of hardcoding:
 
 ```py
 # lelamp/config.py
-HTTP_HOST = os.environ.get("LELAMP_HTTP_HOST", "127.0.0.1")
-HTTP_PORT = int(os.environ.get("LELAMP_HTTP_PORT", "5001"))
+HTTP_HOST = os.environ.get("HAL_HTTP_HOST", "127.0.0.1")
+HTTP_PORT = int(os.environ.get("HAL_HTTP_PORT", "5001"))
 ```
 
 Then in `lelamp/server.py` import `HTTP_HOST` and replace:
@@ -148,8 +148,8 @@ uvicorn.run(app, host=HTTP_HOST, port=HTTP_PORT)
 Add:
 
 ```env
-LELAMP_HTTP_HOST=127.0.0.1
-LELAMP_HTTP_PORT=5001
+HAL_HTTP_HOST=127.0.0.1
+HAL_HTTP_PORT=5001
 ```
 
 ### Acceptance checks
@@ -190,11 +190,11 @@ Expected: `200 OK`.
 
 ---
 
-## Finding 2 — Nginx exposes `/hw/` proxy to LeLamp externally
+## Finding 2 — Nginx exposes `/hw/` proxy to HAL externally
 
 ### Severity
 
-**Critical** because this bypasses LeLamp loopback binding if nginx is reachable.
+**Critical** because this bypasses HAL loopback binding if nginx is reachable.
 
 ### Evidence
 
@@ -216,7 +216,7 @@ Current `imager/build.sh` has equivalent `/hw/` proxy.
 
 ### Why it is risky
 
-Even if LeLamp listens only on `127.0.0.1:5001`, nginx listens on port 80 and forwards external `/hw/*` requests to local LeLamp.
+Even if HAL listens only on `127.0.0.1:5001`, nginx listens on port 80 and forwards external `/hw/*` requests to local HAL.
 
 This means a LAN user can call:
 
@@ -226,7 +226,7 @@ curl http://<device-ip>/hw/camera/snapshot?save=true
 curl http://<device-ip>/hw/docs
 ```
 
-Nginx is local to the device, so LeLamp sees the proxy connection as local unless forwarded headers are checked. Therefore binding LeLamp to loopback alone is not sufficient.
+Nginx is local to the device, so HAL sees the proxy connection as local unless forwarded headers are checked. Therefore binding HAL to loopback alone is not sufficient.
 
 ### Required remediation
 
@@ -265,7 +265,7 @@ If the web UI needs specific hardware status externally, do **not** expose raw `
 2. Add narrow, authenticated, sanitized endpoints in Lamp Go server, e.g.:
    - `/api/hardware/status`
    - `/api/hardware/snapshot` only if user is authenticated and explicitly allowed
-3. Lamp Go calls LeLamp locally and returns a controlled response.
+3. Lamp Go calls HAL locally and returns a controlled response.
 
 ### Acceptance checks
 
@@ -295,7 +295,7 @@ HTTP/1.1 200 OK
 
 ---
 
-## Finding 3 — LeLamp has no defense-in-depth local-only middleware
+## Finding 3 — HAL has no defense-in-depth local-only middleware
 
 ### Severity
 
@@ -328,7 +328,7 @@ Add a local-only middleware in `lelamp/server.py` and default-enable it via conf
 Add:
 
 ```py
-LOCAL_ONLY_API = os.environ.get("LELAMP_LOCAL_ONLY_API", "true").strip().lower() in (
+LOCAL_ONLY_API = os.environ.get("HAL_LOCAL_ONLY_API", "true").strip().lower() in (
     "1",
     "true",
     "yes",
@@ -401,7 +401,7 @@ async def local_only_api_middleware(request, call_next):
             or (forwarded_real_ip and not _is_local_address(forwarded_real_ip))
         ):
             logger.warning(
-                "Blocked non-local LeLamp API request: client=%s xff=%s real_ip=%s path=%s",
+                "Blocked non-local HAL API request: client=%s xff=%s real_ip=%s path=%s",
                 client_host,
                 forwarded_for,
                 forwarded_real_ip,
@@ -409,7 +409,7 @@ async def local_only_api_middleware(request, call_next):
             )
             return JSONResponse(
                 status_code=403,
-                content={"detail": "LeLamp API is local-only"},
+                content={"detail": "HAL API is local-only"},
             )
 
     return await call_next(request)
@@ -420,7 +420,7 @@ async def local_only_api_middleware(request, call_next):
 Add:
 
 ```env
-LELAMP_LOCAL_ONLY_API=true
+HAL_LOCAL_ONLY_API=true
 ```
 
 ### Acceptance checks
@@ -684,7 +684,7 @@ If remote admin is required:
 - Audit log every use.
 - Consider disabling `sh -c` and allowing only a small command allowlist.
 
-For this product, Strategy A or B is safer. If the requirement is “only Go and OpenClaw local can call LeLamp”, then Strategy B is enough for local internals but not enough for general remote UI admin.
+For this product, Strategy A or B is safer. If the requirement is “only Go and OpenClaw local can call HAL”, then Strategy B is enough for local internals but not enough for general remote UI admin.
 
 ### Acceptance checks
 
@@ -1064,7 +1064,7 @@ But do this only with proper token/session auth.
 
 Docs contain language equivalent to:
 
-- LeLamp exposes API on `127.0.0.1:5001`
+- HAL exposes API on `127.0.0.1:5001`
 - Nginx exposes it externally at `/hw/*` for Swagger/debug
 
 Examples found around:
@@ -1083,7 +1083,7 @@ Even if code is fixed, docs telling engineers that external `/hw/docs` is expect
 Update docs to say:
 
 ```md
-LeLamp Python runtime exposes HTTP API on `127.0.0.1:5001` only. OS Server (Go) and OpenClaw on the same device may call this API. LAN/Internet clients must not reach hardware endpoints directly. Nginx denies external `/hw/*` access.
+HAL Python runtime exposes HTTP API on `127.0.0.1:5001` only. OS Server (Go) and OpenClaw on the same device may call this API. LAN/Internet clients must not reach hardware endpoints directly. Nginx denies external `/hw/*` access.
 ```
 
 Replace diagrams like:
@@ -1126,7 +1126,7 @@ Document baseline status codes.
 
 ### Phase 1 — Close hardware control plane immediately
 
-1. Change LeLamp bind host to `127.0.0.1` in:
+1. Change HAL bind host to `127.0.0.1` in:
    - `scripts/provision/setup.sh`
    - `imager/build.sh`
    - `Makefile`
@@ -1134,7 +1134,7 @@ Document baseline status codes.
 2. Block nginx `/hw/` externally in:
    - `scripts/provision/setup.sh`
    - `imager/build.sh`
-3. Add LeLamp app-level local-only middleware.
+3. Add HAL app-level local-only middleware.
 
 ### Phase 2 — Close agent/admin control plane
 
@@ -1190,12 +1190,12 @@ check_ok_local() {
   echo "OK: $name local works ($code)"
 }
 
-check_ok_local "LeLamp health direct local" "http://127.0.0.1:5001/health"
+check_ok_local "HAL health direct local" "http://127.0.0.1:5001/health"
 check_ok_local "Lamp health local" "http://127.0.0.1:5000/api/health/live"
 
 if [ "$DEVICE_HOST" != "127.0.0.1" ] && [ "$DEVICE_HOST" != "localhost" ]; then
-  check_forbidden "LeLamp direct external" "http://$DEVICE_HOST:5001/health"
-  check_forbidden "LeLamp nginx /hw external" "http://$DEVICE_HOST/hw/health"
+  check_forbidden "HAL direct external" "http://$DEVICE_HOST:5001/health"
+  check_forbidden "HAL nginx /hw external" "http://$DEVICE_HOST/hw/health"
   check_forbidden "OpenClaw /gw external" "http://$DEVICE_HOST/gw/"
   check_forbidden "OpenClaw config-json external" "http://$DEVICE_HOST/api/openclaw/config-json"
 fi
@@ -1215,7 +1215,7 @@ After remediation, this should be true:
 
 | Surface | Local device | LAN / AP clients | Notes |
 |---|---:|---:|---|
-| `127.0.0.1:5001` LeLamp | Allowed | Not reachable | Hardware API local-only |
+| `127.0.0.1:5001` HAL | Allowed | Not reachable | Hardware API local-only |
 | `/hw/*` via nginx | Allowed only if needed | Denied 403 | Prefer no external raw hardware API |
 | `127.0.0.1:18789` OpenClaw gateway | Allowed | Not reachable | Gateway local-only |
 | `/gw/*` via nginx | Allowed only if needed | Denied 403 | Avoid exposing agent control |
@@ -1241,20 +1241,20 @@ Files to edit:
   - Change `uvicorn.run(... host=HTTP_HOST ...)`.
 
 - `lelamp/.env.example`
-  - Add `LELAMP_HTTP_HOST=127.0.0.1`.
-  - Add `LELAMP_LOCAL_ONLY_API=true`.
+  - Add `HAL_HTTP_HOST=127.0.0.1`.
+  - Add `HAL_LOCAL_ONLY_API=true`.
 
 - `Makefile`
   - Change `lelamp-dev` uvicorn host to `127.0.0.1`.
 
 - `scripts/provision/setup.sh`
-  - Change LeLamp systemd host to `127.0.0.1`.
+  - Change HAL systemd host to `127.0.0.1`.
   - Add nginx `allow/deny` to `/hw/`.
   - Add nginx `allow/deny` to `/gw` and `/gw/`.
   - Optionally tighten generated OpenClaw `controlUi` config.
 
 - `imager/build.sh`
-  - Change LeLamp systemd host to `127.0.0.1`.
+  - Change HAL systemd host to `127.0.0.1`.
   - Add nginx `allow/deny` to `/hw/` and `/gw/`.
 
 - `scripts/maintenance/patch-nginx-gw.sh`

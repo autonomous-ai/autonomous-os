@@ -3,7 +3,7 @@
 ## Phần Cứng
 
 - **64 WS2812 RGB LEDs** — grid 8x5
-- Driver: `rpi_ws281x` (Python, LeLamp owns)
+- Driver: `rpi_ws281x` (Python, HAL owns)
 - FastAPI endpoints trên `:5001`
 
 ## Endpoints
@@ -110,18 +110,18 @@ LED phản hồi trạng thái hệ thống (tất cả `breathing` speed 3.0 tr
 |-----------|-----|-----|
 | Mất internet (Connectivity) | Cam | `(255, 80, 0)` |
 | Đang khởi động (Booting) | Xanh dương | `(0, 80, 255)` |
-| LeLamp Down | Tím | `(180, 0, 255)` |
+| HAL Down | Tím | `(180, 0, 255)` |
 | Agent Down | Cyan | `(0, 200, 200)` |
 | Hardware Failure | Vàng | `(255, 255, 0)` |
 | OTA đang chạy (bootstrap) | Cam | `(255, 140, 0)` |
 | OTA thành công (bootstrap) | Flash xanh lá | `(0, 255, 80)` |
 | OTA thất bại (bootstrap) | Đỏ pulse | `(255, 30, 30)` |
 
-Quản lý bởi `internal/statusled/Service` (lamp) và `lib/lelamp` trực tiếp (bootstrap).
+Quản lý bởi `internal/statusled/Service` (lamp) và `lib/hal` trực tiếp (bootstrap).
 
 ### Setup-needed solid (lamp)
 
-Khi lamp start và `config.SetUpCompleted == false` (device đang ở AP/provisioning mode), `server/server.go` spawn goroutine background poll `GET /health` của LeLamp mỗi giây tối đa 30s, khi `health.led == true` thì fire `lelamp.SetSolid(255, 255, 255)` — paint strip trắng solid báo "device ready, vào hotspot đi". Phải poll (không phải call 1 lần) vì cold boot os-server bind :5000 trước LeLamp :5001. Không dùng status LED state. Blue-breathing booting vẫn show trong lúc init. Xem [setup-flow_vi.md](setup-flow_vi.md#ap-mode).
+Khi lamp start và `config.SetUpCompleted == false` (device đang ở AP/provisioning mode), `server/server.go` spawn goroutine background poll `GET /health` của HAL mỗi giây tối đa 30s, khi `health.led == true` thì fire `lelamp.SetSolid(255, 255, 255)` — paint strip trắng solid báo "device ready, vào hotspot đi". Phải poll (không phải call 1 lần) vì cold boot os-server bind :5000 trước HAL :5001. Không dùng status LED state. Blue-breathing booting vẫn show trong lúc init. Xem [setup-flow_vi.md](setup-flow_vi.md#ap-mode).
 
 ## Ambient Idle Behaviors
 

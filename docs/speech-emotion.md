@@ -150,7 +150,7 @@ To make noisy SER reads debuggable, the service persists the WAV clip behind eac
 
 In `_process_job`, every inference that clears the per-label confidence gate is written to disk by `_persist_wav()` before it lands in the buffer:
 
-- **Directory:** `SPEECH_EMOTION_AUDIO_DIR` (config in `os/hal/config.py`, env `LELAMP_SPEECH_EMOTION_AUDIO_DIR`), default `<tempdir>/lamp-speech-emotion` (i.e. `/tmp/lamp-speech-emotion`). Created with `os.makedirs(exist_ok=True)` at init; if creation fails the directory is disabled and every POST carries an empty `audio` field (graceful degradation — SER keeps working).
+- **Directory:** `SPEECH_EMOTION_AUDIO_DIR` (config in `os/hal/config.py`, env `HAL_SPEECH_EMOTION_AUDIO_DIR`), default `<tempdir>/lamp-speech-emotion` (i.e. `/tmp/lamp-speech-emotion`). Created with `os.makedirs(exist_ok=True)` at init; if creation fails the directory is disabled and every POST carries an empty `audio` field (graceful degradation — SER keeps working).
 - **Filename:** `<ms>_<user>_<label>.wav`, where `<ms>` is the inference timestamp in milliseconds and `<user>`/`<label>` are sanitized to `[a-zA-Z0-9_-]` (anything else collapsed to `_`).
 - **Flush selection:** when a user's flush emits the dominant non-neutral label, it attaches the **latest** clip among the dominant-label inferences — `max(dom_inferences, key=lambda i: i.ts).audio_path` — as the `audio` field in the POST.
 
@@ -207,11 +207,11 @@ All knobs live in `os/hal/config.py` as `SPEECH_EMOTION_*`, overridable via env 
 
 | Constant | Env var | Default | Purpose |
 |----------|---------|---------|---------|
-| `SPEECH_EMOTION_ENABLED` | `LELAMP_SPEECH_EMOTION_ENABLED` | `true` | Master kill switch |
-| `SPEECH_EMOTION_FLUSH_S` | `LELAMP_SPEECH_EMOTION_FLUSH_S` | `10.0` | Buffer drain cadence |
-| `SPEECH_EMOTION_DEDUP_WINDOW_S` | `LELAMP_SPEECH_EMOTION_DEDUP_WINDOW_S` | `300.0` | TTL for `(user, bucket)` |
-| `SPEECH_EMOTION_MIN_AUDIO_S` | `LELAMP_SPEECH_EMOTION_MIN_AUDIO_S` | `3.0` | Min utterance length |
-| `SPEECH_EMOTION_API_TIMEOUT_S` | `LELAMP_SPEECH_EMOTION_API_TIMEOUT_S` | `15` | dlbackend HTTP timeout |
+| `SPEECH_EMOTION_ENABLED` | `HAL_SPEECH_EMOTION_ENABLED` | `true` | Master kill switch |
+| `SPEECH_EMOTION_FLUSH_S` | `HAL_SPEECH_EMOTION_FLUSH_S` | `10.0` | Buffer drain cadence |
+| `SPEECH_EMOTION_DEDUP_WINDOW_S` | `HAL_SPEECH_EMOTION_DEDUP_WINDOW_S` | `300.0` | TTL for `(user, bucket)` |
+| `SPEECH_EMOTION_MIN_AUDIO_S` | `HAL_SPEECH_EMOTION_MIN_AUDIO_S` | `3.0` | Min utterance length |
+| `SPEECH_EMOTION_API_TIMEOUT_S` | `HAL_SPEECH_EMOTION_API_TIMEOUT_S` | `15` | dlbackend HTTP timeout |
 | `DL_SER_ENDPOINT` | `DL_SER_ENDPOINT` | `/lelamp/api/dl/ser/recognize` | Path suffix on `DL_BACKEND_URL` |
 | `SPEECH_EMOTION_API_URL` | — | derived | `DL_BACKEND_URL` + `DL_SER_ENDPOINT` |
 | `SPEECH_EMOTION_API_KEY` | — | mirrors `DL_API_KEY` | Sent as `X-API-Key` |

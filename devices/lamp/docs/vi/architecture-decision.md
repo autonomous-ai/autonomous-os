@@ -9,9 +9,9 @@
 Dự án AI Lamp trải qua nhiều giai đoạn tìm hướng kiến trúc trước khi đi đến quyết định cuối cùng:
 
 1. **Ban đầu**: Dự định xây dựng project Go độc lập, sử dụng MCP protocol để giao tiếp với phần cứng.
-2. **Phát hiện 1**: LeLamp runtime (Python) **đã chạy** trên Raspberry Pi 4 với đầy đủ hardware drivers — motor, LED, audio. Không cần viết lại driver trong Go.
+2. **Phát hiện 1**: HAL runtime (Python) **đã chạy** trên Raspberry Pi 4 với đầy đủ hardware drivers — motor, LED, audio. Không cần viết lại driver trong Go.
 3. **Phát hiện 2**: OpenClaw sử dụng **SKILL.md** (skill system native), **KHÔNG PHẢI MCP**. Skills là file Markdown mô tả API, LLM tự đọc và gọi.
-4. **Quyết định cuối**: Kiến trúc Hybrid — OpenClaw skills gọi Lamp HTTP API, Lamp bridge đến LeLamp Python services.
+4. **Quyết định cuối**: Kiến trúc Hybrid — OpenClaw skills gọi Lamp HTTP API, Lamp bridge đến HAL Python services.
 
 ### Phần Cứng (Raspberry Pi 4)
 
@@ -28,12 +28,12 @@ Dự án AI Lamp trải qua nhiều giai đoạn tìm hướng kiến trúc trư
 
 ## 2. Quyết Định Kiến Trúc Cuối Cùng
 
-**Kiến trúc Hybrid 3 tầng**: OpenClaw (AI) → Lamp Server (Go) → LeLamp Runtime (Python) → Phần cứng.
+**Kiến trúc Hybrid 3 tầng**: OpenClaw (AI) → Lamp Server (Go) → HAL Runtime (Python) → Phần cứng.
 
 Nguyên tắc cốt lõi:
 - **Tầng hệ thống** (Go Lamp) hoạt động **KHÔNG cần OpenClaw** — thiết bị luôn phản hồi được.
 - **Điều khiển hướng người dùng** thông qua OpenClaw skills gọi HTTP API.
-- **LeLamp runtime** chỉ làm hardware drivers — không chứa logic AI.
+- **HAL runtime** chỉ làm hardware drivers — không chứa logic AI.
 - **Không dùng MCP** — dùng SKILL.md native của OpenClaw.
 - **Hardware là plugin** — cắm vào thì play, không cắm thì bỏ qua.
 
@@ -66,7 +66,7 @@ Cùng codebase hỗ trợ nhiều cấu hình:
 
 ### OpenClaw — Bộ Não AI
 
-Thay thế hoàn toàn LiveKit + OpenAI của LeLamp gốc.
+Thay thế hoàn toàn LiveKit + OpenAI của HAL gốc.
 
 - Personality & nhân cách cho đèn
 - LLM multi-provider (Claude, GPT, Gemini, ...)
@@ -74,9 +74,9 @@ Thay thế hoàn toàn LiveKit + OpenAI của LeLamp gốc.
 - Channels (giọng nói, text, ...)
 - Memory (nhớ ngữ cảnh, sở thích người dùng)
 
-### LeLamp Runtime (Python) — CHỈ Hardware Drivers
+### HAL Runtime (Python) — CHỈ Hardware Drivers
 
-Giữ nguyên từ dự án LeLamp hiện tại, nhưng bỏ phần AI/LiveKit:
+Giữ nguyên từ dự án HAL hiện tại, nhưng bỏ phần AI/LiveKit:
 
 - **MotorsService** — điều khiển 5 servo Feetech
 - **RGBService** — điều khiển 64 WS2812 LED (rpi_ws281x)
@@ -89,7 +89,7 @@ Tất cả hardware expose qua FastAPI trên `127.0.0.1:5001` (systemd: `lamp-ha
 ### Lamp Server (Go) — Hệ Thống + HTTP API Bridge
 
 - Tầng hệ thống: reset button, mạng, OTA, MQTT
-- HTTP API bridge: nhận request từ OpenClaw skills, chuyển tiếp đến LeLamp Python services
+- HTTP API bridge: nhận request từ OpenClaw skills, chuyển tiếp đến HAL Python services
 
 ---
 
@@ -136,7 +136,7 @@ internal/network/         — WiFi AP/STA
 internal/openclaw/        — Cấu hình OpenClaw & WebSocket
 internal/beclient/        — Backend client, báo cáo trạng thái
 internal/device/          — Setup, xử lý lệnh MQTT, báo cáo trạng thái
-internal/ambient/         — Hành vi idle "sinh vật sống" (breathing LED, color drift, servo micro-movements, TTS mumbles). Gọi LeLamp HTTP API. Tự pause/resume.
+internal/ambient/         — Hành vi idle "sinh vật sống" (breathing LED, color drift, servo micro-movements, TTS mumbles). Gọi HAL HTTP API. Tự pause/resume.
 lib/mqtt/                 — MQTT client, tự kết nối lại
 bootstrap/                — OTA, kiểm tra version
 domain/                   — Struct dùng chung (device, network, OTA, OpenClaw)
@@ -153,7 +153,7 @@ Toàn bộ **điều khiển phần cứng hướng người dùng** thông qua 
 1. File **SKILL.md** trong `workspace/skills/` mô tả API cho LLM
 2. OpenClaw tự phát hiện skills (`skills.load.watch: true`)
 3. **LLM đọc SKILL.md** → hiểu API → tự gọi `curl` đến Lamp HTTP API tại `127.0.0.1:5000`
-4. Lamp HTTP API bridge đến LeLamp Python services → điều khiển phần cứng
+4. Lamp HTTP API bridge đến HAL Python services → điều khiển phần cứng
 
 Đây **KHÔNG phải MCP**.
 
@@ -277,7 +277,7 @@ Ring buffer 200 events trong `openclaw.Service`, broadcast qua SSE đến browse
 
 | Type | Mô tả |
 |---|---|
-| `sensing_input` | LeLamp phát hiện motion/sound |
+| `sensing_input` | HAL phát hiện motion/sound |
 | `chat_send` | Tin nhắn gửi đến OpenClaw |
 | `lifecycle` | Agent start/end/error |
 | `thinking` | Chain-of-thought reasoning |
@@ -295,11 +295,11 @@ Ring buffer 200 events trong `openclaw.Service`, broadcast qua SSE đến browse
 
 Dashboard gồm 4 phần:
 1. **Status grid** (4 cards): OpenClaw, System (CPU/RAM/temp/uptime), Network (SSID/IP/signal), Hardware badges
-2. **Presence bar**: Present/idle/away từ LeLamp `/hw/presence`
+2. **Presence bar**: Present/idle/away từ HAL `/hw/presence`
 3. **Workflow timeline**: SSE event stream real-time, color-coded
 4. **Camera**: Collapsible MJPEG stream + snapshot
 
-### LeLamp Status Endpoints (qua nginx `/hw/*`)
+### HAL Status Endpoints (qua nginx `/hw/*`)
 
 | Endpoint | Method | Mô tả |
 |---|---|---|
@@ -346,7 +346,7 @@ Dashboard gồm 4 phần:
 │  │  • Cập nhật OTA      │    │  /api/audio/*  → Audio             │ │
 │  │  • MQTT backend      │    │  /api/emotion  → Emotion (kết hợp) │ │
 │  │  • Giám sát internet │    │                                    │ │
-│  │                      │    │  Bridge đến LeLamp Python ──────┐  │ │
+│  │                      │    │  Bridge đến HAL Python ──────┐  │ │
 │  │                      │    │                                 │  │ │
 │  │  Hoạt động KHÔNG     │    │                                 │  │ │
 │  │  cần OpenClaw        │    │                                 │  │ │
@@ -358,7 +358,7 @@ Dashboard gồm 4 phần:
                             │ HTTP/gRPC/subprocess (bridge)
                             ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                  LeLamp Runtime (Python, Raspberry Pi 4)            │
+│                  HAL Runtime (Python, Raspberry Pi 4)            │
 │                                                                     │
 │  • MotorsService  — 5 servo Feetech (xoay, nghiêng, biểu cảm)     │
 │  • RGBService     — 64 WS2812 LED grid 8x5 (rpi_ws281x)           │
@@ -437,10 +437,10 @@ curl HTTP API (127.0.0.1:5000)
     │
     ▼
 Lamp Server (Go)
-    │ bridge đến LeLamp
+    │ bridge đến HAL
     │
     ▼
-LeLamp Python Services
+HAL Python Services
     │ MotorsService / RGBService / Audio
     │
     ▼
@@ -469,12 +469,12 @@ Không cần logic parse lệnh — **LLM tự hiểu từ mô tả trong SKILL.
 
 ## 9. Trạng Thái Triển Khai
 
-Tất cả hardware endpoints chạy trực tiếp trên LeLamp FastAPI (:5001). OpenClaw skills gọi qua `127.0.0.1:5001`.
+Tất cả hardware endpoints chạy trực tiếp trên HAL FastAPI (:5001). OpenClaw skills gọi qua `127.0.0.1:5001`.
 
 | Thành phần | Trạng thái |
 |---|---|
 | 10 SKILL.md files | ✅ `lamp/resources/openclaw-skills/` |
-| LeLamp 38 endpoints | ✅ `lelamp/server.py` |
+| HAL 38 endpoints | ✅ `lelamp/server.py` |
 | Sensing event routing | ✅ `lamp/server/sensing/` |
 | Local intent matching | ✅ `lamp/internal/intent/` |
 | Voice pipeline (VAD + Deepgram) | ✅ `lelamp/service/voice/` |
@@ -496,8 +496,8 @@ Tất cả hardware endpoints chạy trực tiếp trên LeLamp FastAPI (:5001).
 
 ## 10. Câu Hỏi Mở
 
-- [x] **Bridge Go ↔ Python**: HTTP proxy. LeLamp chạy FastAPI trên `127.0.0.1:5001`, Lamp Server proxy request từ port 5000. Đơn giản, dễ debug, không tight coupling.
-- [x] **Xử lý camera**: On-device OpenCV trong LeLamp Python. Frame diff cho motion detection trong sensing loop.
-- [x] **Đầu vào audio**: LeLamp owns mic. Local VAD (RMS energy) + on-demand Deepgram STT. Wake word "Hey Lamp" detected trong transcript.
-- [x] **LED driver**: LeLamp Python rpi_ws281x driver sở hữu toàn bộ LED control. Go SPI driver đã xóa khỏi Lamp — đèn này dùng LED driver của LeLamp.
+- [x] **Bridge Go ↔ Python**: HTTP proxy. HAL chạy FastAPI trên `127.0.0.1:5001`, Lamp Server proxy request từ port 5000. Đơn giản, dễ debug, không tight coupling.
+- [x] **Xử lý camera**: On-device OpenCV trong HAL Python. Frame diff cho motion detection trong sensing loop.
+- [x] **Đầu vào audio**: HAL owns mic. Local VAD (RMS energy) + on-demand Deepgram STT. Wake word "Hey Lamp" detected trong transcript.
+- [x] **LED driver**: HAL Python rpi_ws281x driver sở hữu toàn bộ LED control. Go SPI driver đã xóa khỏi Lamp — đèn này dùng LED driver của HAL.
 - [x] **Generative body language**: Emotion presets với randomized parameters. 8 presets (curious, happy, sad, thinking, idle, excited, shy, shock). Mỗi lần gọi tạo biểu cảm unique nhờ randomization.

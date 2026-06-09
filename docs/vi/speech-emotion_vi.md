@@ -136,7 +136,7 @@ OpenClaw / sensing pipeline xử lý như sự kiện sensing khác (xem [sensin
 
 Trong `_process_job`, mọi inference vượt qua ngưỡng confidence theo label đều được ghi ra đĩa bởi `_persist_wav()` trước khi vào buffer:
 
-- **Thư mục:** `SPEECH_EMOTION_AUDIO_DIR` (cấu hình trong `os/hal/config.py`, env `LELAMP_SPEECH_EMOTION_AUDIO_DIR`), mặc định `<tempdir>/lamp-speech-emotion` (tức `/tmp/lamp-speech-emotion`). Tạo bằng `os.makedirs(exist_ok=True)` lúc khởi tạo; nếu tạo thất bại thì thư mục bị tắt và mọi POST mang trường `audio` rỗng (graceful degradation — SER vẫn chạy bình thường).
+- **Thư mục:** `SPEECH_EMOTION_AUDIO_DIR` (cấu hình trong `os/hal/config.py`, env `HAL_SPEECH_EMOTION_AUDIO_DIR`), mặc định `<tempdir>/lamp-speech-emotion` (tức `/tmp/lamp-speech-emotion`). Tạo bằng `os.makedirs(exist_ok=True)` lúc khởi tạo; nếu tạo thất bại thì thư mục bị tắt và mọi POST mang trường `audio` rỗng (graceful degradation — SER vẫn chạy bình thường).
 - **Tên file:** `<ms>_<user>_<label>.wav`, trong đó `<ms>` là timestamp inference tính bằng mili-giây, còn `<user>`/`<label>` được sanitize về `[a-zA-Z0-9_-]` (ký tự khác gộp thành `_`).
 - **Chọn lúc flush:** khi flush của một user phát ra label dominant non-neutral, nó đính kèm clip **mới nhất** trong nhóm inference cùng label dominant — `max(dom_inferences, key=lambda i: i.ts).audio_path` — làm trường `audio` trong POST.
 

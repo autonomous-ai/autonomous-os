@@ -449,7 +449,7 @@ Body: {"x": 3, "y": 2, "r": 255, "g": 0, "b": 0}
 2. OpenClaw LLM đọc SKILL.md → biết có endpoint `/led/color`
 3. LLM quyết định parameters: `{"r": 255, "g": 165, "b": 0, "brightness": 70}`
 4. Gọi `curl -X POST http://127.0.0.1:5000/led/color -d '...'`
-5. Lamp server nhận request → gọi LeLamp runtime → LED thay đổi
+5. Lamp server nhận request → gọi HAL runtime → LED thay đổi
 
 ---
 
@@ -642,16 +642,16 @@ Body: {"x": 3, "y": 2, "r": 255, "g": 0, "b": 0}
 - User tập trung và bình tĩnh → Lamp giữ nguyên environment, suppress mọi interruption
 
 **Triển khai**:
-- Emotion classifier chạy qua **dlbackend WebSocket** (remote inference server), không phải on-device ONNX. LeLamp gửi camera frames, nhận emotion predictions.
+- Emotion classifier chạy qua **dlbackend WebSocket** (remote inference server), không phải on-device ONNX. HAL gửi camera frames, nhận emotion predictions.
 - `lelamp/service/sensing/perceptions/emotion.py` — `RemoteEmotionChecker` kết nối dlbackend, fire event `emotion.detected` với cảm xúc phát hiện được (Angry, Disgust, Fear, Happy, Sad, Surprise, Neutral).
 - Lamp `user-emotion-detection/SKILL.md` map cảm xúc khuôn mặt → mood signal qua `POST /api/mood/log`.
 - Lamp `mood/SKILL.md` fusion signals (camera emotion, conversation, voice tone) thành mood decisions.
 - Mood decisions trigger downstream: `music-suggestion` (nhạc chủ động), `wellbeing` (nhắc uống nước/nghỉ), `emotion` (biểu cảm đèn).
-- Configurable confidence threshold qua `EMOTION_CONFIDENCE_THRESHOLD` trong LeLamp config.
+- Configurable confidence threshold qua `EMOTION_CONFIDENCE_THRESHOLD` trong HAL config.
 
 **Câu hỏi đã giải quyết**:
 - [x] Model nào? → Remote dlbackend (không ONNX on-device). Offload inference, không ảnh hưởng Pi 4 RAM/CPU.
-- [x] Ngưỡng accuracy → Configurable `EMOTION_CONFIDENCE_THRESHOLD` (default trong LeLamp config).
+- [x] Ngưỡng accuracy → Configurable `EMOTION_CONFIDENCE_THRESHOLD` (default trong HAL config).
 - [x] Privacy → Frames chỉ gửi tới self-hosted dlbackend, không qua cloud bên thứ ba.
 - [x] Kết hợp voice-tone → Cả hai feed vào Mood skill fusion logic; camera emotion = signal, mood decision = output đã fusion.
 
@@ -714,7 +714,7 @@ Body: {"x": 3, "y": 2, "r": 255, "g": 0, "b": 0}
 **Trạng thái: Chưa triển khai** — cần models mới chưa có trong codebase.
 
 **Sub-feature A — Theo Dõi Thời Gian Nhìn Màn Hình / Eye-Care**:
-- Cần gaze estimation model — chưa implement trong LeLamp sensing pipeline.
+- Cần gaze estimation model — chưa implement trong HAL sensing pipeline.
 - Pi 4 feasibility chưa rõ, cần benchmark.
 
 **Sub-feature B — Contextual Gesture Support**:
@@ -748,7 +748,7 @@ Body: {"x": 3, "y": 2, "r": 255, "g": 0, "b": 0}
 | UC-M3 | Gợi ý nhạc chủ động | **DONE** | `music-suggestion` skill, mood + sedentary triggers |
 | UC-M4a | Thời gian nhìn màn hình / Eye-care | **CHƯA LÀM** | Cần gaze estimation model |
 | UC-M4b | Cử chỉ sức khỏe | **CHƯA LÀM** | Cần gesture model (MediaPipe) |
-| Bonus | Nhận diện giọng nói | **DONE** | LeLamp voice embeddings + Lamp enrollment skill |
+| Bonus | Nhận diện giọng nói | **DONE** | HAL voice embeddings + Lamp enrollment skill |
 
 *Marketing UC-M series đề xuất bởi đội marketing 06-04-2026. Trạng thái cập nhật 21-04-2026.*
 
@@ -867,7 +867,7 @@ Body: {"x": 3, "y": 2, "r": 255, "g": 0, "b": 0}
 | S-01 | OpenClaw chạy đâu? | Trên Pi, local gateway mode, port 18789 |
 | S-02 | LLM default? | Claude Haiku 4.5 (cloud, Anthropic API). Hỗ trợ multi-provider. |
 | S-03 | Wake word engine? | Không dùng engine riêng. "Hey Lamp" detected trong Deepgram STT transcript. Dynamic qua IDENTITY.md. |
-| S-04 | Giao thức Lamp ↔ LeLamp? | HTTP proxy. LeLamp FastAPI `127.0.0.1:5001`, Lamp proxy từ port `5000`. |
+| S-04 | Giao thức Lamp ↔ HAL? | HTTP proxy. HAL FastAPI `127.0.0.1:5001`, Lamp proxy từ port `5000`. |
 
 ### Sản phẩm
 

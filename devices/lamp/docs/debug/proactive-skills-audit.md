@@ -22,7 +22,7 @@ guardActive := isPassive && h.config.GuardModeEnabled() &&
     (req.Type == "presence.enter" || req.Type == "motion")
 ```
 
-LeLamp emits `motion.activity` (`lelamp/.../motion.py:488`), never bare `"motion"`. The `"type": "motion"` at `motion.py:555` is a health snapshot in `to_dict()`, not an event payload.
+HAL emits `motion.activity` (`lelamp/.../motion.py:488`), never bare `"motion"`. The `"type": "motion"` at `motion.py:555` is a health snapshot in `to_dict()`, not an event payload.
 
 **Effect**: The guard reaction table row "Motion (no known face) → shock 0.9" in `guard/SKILL.md:82` is unreachable. Strangers who appear behind the camera with no face detection generate zero alerts.
 
@@ -68,7 +68,7 @@ PatternsNow: nil,
 
 ### 6. Stale comment in wellbeing handler
 
-`lamp/server/sensing/delivery/http/handler.go:606` still reads "Bucket names (agent writes from motion.activity hybrid output)" — contradicts the current rule that LeLamp posts drink/break directly (`lelamp/.../motion.py:490-513`). A skill rewrite based on this comment would reintroduce duplicate rows.
+`lamp/server/sensing/delivery/http/handler.go:606` still reads "Bucket names (agent writes from motion.activity hybrid output)" — contradicts the current rule that HAL posts drink/break directly (`lelamp/.../motion.py:490-513`). A skill rewrite based on this comment would reintroduce duplicate rows.
 
 ---
 
@@ -153,7 +153,7 @@ SKILL is stricter; doc is permissive. Resolve one direction.
 
 ### Wellbeing reaction route has no cooldown
 
-`wellbeing/SKILL.md` Route #1 (reaction) speaks on every drink/eat event. If LeLamp dedup misfires, agent chatters back-to-back. "Variety self-check" in the SKILL is prompt-only.
+`wellbeing/SKILL.md` Route #1 (reaction) speaks on every drink/eat event. If HAL dedup misfires, agent chatters back-to-back. "Variety self-check" in the SKILL is prompt-only.
 
 ### Habit Flow A freshness guard + Flow E "honest gap"
 

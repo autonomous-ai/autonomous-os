@@ -202,7 +202,7 @@ Lưu ý: không có re-detect YOLO định kỳ tự động — caller tự quy
 ```
 1. User: "Lamp, nhìn theo cái ly"
 2. Agent gọi POST /servo/track {"target": "cup"}
-3. LeLamp nội bộ:
+3. HAL nội bộ:
    a. Snapshot 1 frame và giữ lại
    b. Gửi frame đó cho YOLOWorld API → lấy bbox (~1-2s)
    c. TrackerVit init dùng *cùng* frame + bbox (tọa độ match)

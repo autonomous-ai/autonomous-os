@@ -63,4 +63,4 @@ Dòng `flushing` hiển thị danh sách label thô — đó là mode trên các
 
 ### Áp dụng thay đổi
 
-Sau khi sửa `lelamp/config.py` hoặc `voice_service.py` trên Pi: restart service LeLamp (xem [os-server_vi.md](os-server_vi.md)).
+Sau khi sửa `lelamp/config.py` hoặc `voice_service.py` trên Pi: restart service HAL (xem [os-server_vi.md](os-server_vi.md)).

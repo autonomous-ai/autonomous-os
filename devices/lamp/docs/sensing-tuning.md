@@ -8,7 +8,7 @@ All constants live in `lelamp/config.py` and `lelamp/service/voice/voice_service
 SSH into the Pi, then:
 
 ```bash
-# LeLamp log (motion, sound, light events all here)
+# HAL log (motion, sound, light events all here)
 tail -f /var/log/lelamp/server.log
 
 # Lamp log (confirms event received + forwarded to OpenClaw)
@@ -94,12 +94,12 @@ Watch the `level` value during normal ambient conditions vs. when you clap/speak
 **File:** `lelamp/service/voice/voice_service.py` (all env-tunable)
 
 ```python
-LELAMP_VAD_THRESHOLD = 3500        # RMS to trigger speech detection (default 3500)
-LELAMP_SILENCE_TIMEOUT = 2.5       # stop STT session after this much silence (s)
-LELAMP_SPEECH_HOLDOFF = 0.2        # min speech duration before opening STT — rejects short clicks (s)
-LELAMP_PRE_ROLL_FRAMES = 8         # rolling lookback frames kept BEFORE VAD trigger (8 × 64ms = 512ms)
-LELAMP_WEBRTCVAD_ENABLED = false   # secondary gate, recommended true for low-threshold setups
-LELAMP_SILERO_ENABLED = false      # tertiary gate (ONNX); webrtcvad usually enough
+HAL_VAD_THRESHOLD = 3500        # RMS to trigger speech detection (default 3500)
+HAL_SILENCE_TIMEOUT = 2.5       # stop STT session after this much silence (s)
+HAL_SPEECH_HOLDOFF = 0.2        # min speech duration before opening STT — rejects short clicks (s)
+HAL_PRE_ROLL_FRAMES = 8         # rolling lookback frames kept BEFORE VAD trigger (8 × 64ms = 512ms)
+HAL_WEBRTCVAD_ENABLED = false   # secondary gate, recommended true for low-threshold setups
+HAL_SILERO_ENABLED = false      # tertiary gate (ONNX); webrtcvad usually enough
 ```
 
 **How pre-roll works:** Every mic frame goes into a rolling `deque(maxlen=PRE_ROLL_FRAMES)` regardless of VAD state. When VAD finally triggers, the pre-trigger history (frames that fell under `RMS_THRESHOLD` — e.g. quiet stop consonants like "b", "k", "t", "p") gets prepended to the audio stream sent to STT. This eliminates the need for the user to say "Uhm..." as a warmup before their actual phrase.
@@ -108,10 +108,10 @@ LELAMP_SILERO_ENABLED = false      # tertiary gate (ONNX); webrtcvad usually eno
 
 | Symptom | Fix |
 |---------|-----|
-| First syllable clipped (STT hears "ật đèn" instead of "bật đèn") | Increase `LELAMP_PRE_ROLL_FRAMES` (8 → 12) or decrease `LELAMP_VAD_THRESHOLD` (3500 → 1500) |
-| Wake word not picked up reliably | Decrease `LELAMP_VAD_THRESHOLD` (3500 → 1500) + enable `LELAMP_WEBRTCVAD_ENABLED=true` as safety net |
-| Lamp starts listening from ambient noise | Increase `LELAMP_VAD_THRESHOLD` and/or enable `LELAMP_WEBRTCVAD_ENABLED=true` |
-| Lamp cuts off before you finish speaking | Increase `LELAMP_SILENCE_TIMEOUT` |
+| First syllable clipped (STT hears "ật đèn" instead of "bật đèn") | Increase `HAL_PRE_ROLL_FRAMES` (8 → 12) or decrease `HAL_VAD_THRESHOLD` (3500 → 1500) |
+| Wake word not picked up reliably | Decrease `HAL_VAD_THRESHOLD` (3500 → 1500) + enable `HAL_WEBRTCVAD_ENABLED=true` as safety net |
+| Lamp starts listening from ambient noise | Increase `HAL_VAD_THRESHOLD` and/or enable `HAL_WEBRTCVAD_ENABLED=true` |
+| Lamp cuts off before you finish speaking | Increase `HAL_SILENCE_TIMEOUT` |
 | Stale audio from previous turn bleeds into next session | Already mitigated: `lookback.clear()` fires after each session closes |
 | Lamp repeats its own TTS back to OpenClaw (echo loop) | Decrease `ECHO_SIMILARITY_THRESHOLD` (0.55 → 0.45) |
 

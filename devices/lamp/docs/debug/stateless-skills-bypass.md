@@ -6,7 +6,7 @@
 
 ## Hiện trạng
 
-- `motion.activity` (wellbeing) và `emotion.detected` (music-suggestion) fire từ LeLamp → Lamp `/sensing` POST → `SendChatMessageWithRun` (`lamp/internal/openclaw/service_chat.go:88`) → OpenClaw `chat.send` RPC.
+- `motion.activity` (wellbeing) và `emotion.detected` (music-suggestion) fire từ HAL → Lamp `/sensing` POST → `SendChatMessageWithRun` (`lamp/internal/openclaw/service_chat.go:88`) → OpenClaw `chat.send` RPC.
 - `chat.send` luôn route vào `sessionKey` hiện tại của Lamp (`service_chat.go:125-128`) → dùng chung session với voice.
 - Wellbeing và music-suggestion **không phải cron**; là event-driven, fire trong cùng session voice.
 

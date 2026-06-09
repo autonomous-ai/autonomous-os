@@ -2,7 +2,7 @@
 
 ## Goal
 
-Review and fix Lamp/LeLamp camera emotion spam in `autonomous-ecm/ai-lamp-openclaw`.
+Review and fix Lamp/HAL camera emotion spam in `autonomous-ecm/ai-lamp-openclaw`.
 
 This is **not** about making emotion detection 100% correct. Face/camera emotion is noisy by nature. The product goal is:
 
@@ -154,7 +154,7 @@ Discuss/inspect whether current code/backend can support:
 
 This may require dlbackend/@tnk2908 work. Do not block downstream guard on this.
 
-### Layer 2 — downstream spam guard in LeLamp
+### Layer 2 — downstream spam guard in HAL
 
 This should be implemented now.
 
@@ -273,7 +273,7 @@ Preferred:
 - Add tests around `EmotionPerception._flush_buffer()` if feasible.
 - At minimum run syntax check/tests relevant to lelamp.
 - Logging should clearly explain drops.
-- Avoid overengineering config knobs unless needed. `LELAMP_EMOTION_DEDUP_WINDOW_S` is okay if simple; complex modes can wait.
+- Avoid overengineering config knobs unless needed. `HAL_EMOTION_DEDUP_WINDOW_S` is okay if simple; complex modes can wait.
 
 ---
 

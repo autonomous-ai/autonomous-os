@@ -44,11 +44,11 @@ End-to-end chain:
 
 ### Voice barge-in (optional, off by default)
 
-Voice-driven interrupt — speak during TTS to make Lamp stop and listen — is gated behind `LELAMP_BARGE_IN_ENABLED=true` in `lelamp/.env`. When enabled, `voice_service._monitor_barge_in()` opens a parallel mic capture during TTS playback, computes RMS over 256ms blocks, and calls `tts_service.stop()` when N consecutive blocks exceed `LELAMP_BARGE_IN_RMS_THRESHOLD`. Same downstream chain as tap-to-interrupt.
+Voice-driven interrupt — speak during TTS to make Lamp stop and listen — is gated behind `HAL_BARGE_IN_ENABLED=true` in `lelamp/.env`. When enabled, `voice_service._monitor_barge_in()` opens a parallel mic capture during TTS playback, computes RMS over 256ms blocks, and calls `tts_service.stop()` when N consecutive blocks exceed `HAL_BARGE_IN_RMS_THRESHOLD`. Same downstream chain as tap-to-interrupt.
 
 Why off by default: software-only AEC is not viable on this hardware (Speex AEC integration degrades to ~13-30% reduction under multi-chunk TTS streaming). With only physical mic-speaker separation, bleed RMS (1-7500 observed) and user voice RMS (6-14k observed) overlap in the 7-9k zone, so a single RMS threshold cannot discriminate cleanly. Threshold 9000 + 1-frame trigger biases toward zero false-trigger at the cost of needing loud, deliberate utterance to trigger; threshold 6000-7000 biases the other way. Tuning per deployment is unavoidable until the device gains hardware AEC (e.g. ReSpeaker XVF3800).
 
-When enabled, tail the log for `Barge-in monitor session end: max_rms_seen=N` (peak per session) and `BARGE-IN: RMS=N` events to characterize the deployed mic, then set `LELAMP_BARGE_IN_RMS_THRESHOLD` midway between observed bleed-max and voice-min. Tap-to-interrupt remains active regardless.
+When enabled, tail the log for `Barge-in monitor session end: max_rms_seen=N` (peak per session) and `BARGE-IN: RMS=N` events to characterize the deployed mic, then set `HAL_BARGE_IN_RMS_THRESHOLD` midway between observed bleed-max and voice-min. Tap-to-interrupt remains active regardless.
 
 ## GPIO button detection (`lelamp/service/gpio_button.py`)
 

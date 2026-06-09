@@ -16,9 +16,9 @@ Run these from any machine on the team that has Tailscale access.
 
 ---
 
-## F1 — LeLamp direct port blocked (not exposed to LAN)
+## F1 — HAL direct port blocked (not exposed to LAN)
 
-LeLamp binds to `127.0.0.1:5001`, never reachable directly from outside.
+HAL binds to `127.0.0.1:5001`, never reachable directly from outside.
 
 ```bash
 curl -v --connect-timeout 5 http://100.119.50.21:5001/hw/health
@@ -31,7 +31,7 @@ curl -v --connect-timeout 5 http://100.119.50.21:5001/hw/health
 
 ## F2 — nginx `/hw/` accessible in developer mode
 
-`LELAMP_MODE=developer` → middleware disabled, nginx does NOT block `/hw/`.
+`HAL_MODE=developer` → middleware disabled, nginx does NOT block `/hw/`.
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}" http://100.119.50.21/hw/health
@@ -42,7 +42,7 @@ curl -s -o /dev/null -w "%{http_code}" http://100.119.50.21/hw/health
 
 ---
 
-## F3 — LeLamp local-only middleware (production mode simulation)
+## F3 — HAL local-only middleware (production mode simulation)
 
 In production mode, any non-localhost caller gets 403 from Python middleware.  
 To test without changing the Pi, hit `/hw/` and check response header — in developer mode it passes through.
@@ -52,7 +52,7 @@ curl -s http://100.119.50.21/hw/health | python3 -c "import sys,json; d=json.loa
 ```
 
 **Expected:** `status: 1` (request passes through in developer mode)  
-**Note:** Switch `LELAMP_MODE=production` in Pi `.env` + restart to test the block path
+**Note:** Switch `HAL_MODE=production` in Pi `.env` + restart to test the block path
 
 ---
 
@@ -202,7 +202,7 @@ Copy-paste to run all Pi tests at once:
 ```bash
 PI=100.119.50.21
 
-echo "=== F1: LeLamp direct port ==="
+echo "=== F1: HAL direct port ==="
 curl -v --connect-timeout 5 http://$PI:5001/hw/health 2>&1 | grep -E "connect|HTTP" | head -3
 
 echo ""

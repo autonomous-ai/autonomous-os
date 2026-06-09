@@ -10,7 +10,7 @@ Instruction: report issues and remediation guidance only; do **not** patch runti
 The Lamp web app is a privileged device-control UI, not a normal public website. It can:
 
 - Read and write device config, including API keys, bot tokens, WiFi password, MQTT password.
-- Call raw LeLamp hardware endpoints under `/hw/*` for camera, mic/speaker, servo, face, bluetooth, display, voice, LED.
+- Call raw HAL hardware endpoints under `/hw/*` for camera, mic/speaker, servo, face, bluetooth, display, voice, LED.
 - Open an interactive shell through `/api/system/shell`.
 - Fetch raw OpenClaw config and gateway token from `/api/openclaw/config-json`.
 - Generate `/gw/chat#token=...` links containing the gateway token.
@@ -47,7 +47,7 @@ const API_BASE =
 Most calls go to:
 
 - `/api/*` for Lamp Go server
-- `/hw/*` for LeLamp hardware server via nginx
+- `/hw/*` for HAL hardware server via nginx
 - `/gw/*` for OpenClaw gateway via nginx
 
 ### No frontend auth wrapper
@@ -609,20 +609,20 @@ Many files call `/hw/*` directly:
 
 ### Why it is risky
 
-The frontend normalizes external browser access to raw hardware APIs. That conflicts with the desired security boundary: only same-machine Go/OpenClaw should call LeLamp.
+The frontend normalizes external browser access to raw hardware APIs. That conflicts with the desired security boundary: only same-machine Go/OpenClaw should call HAL.
 
 If backend/nginx hardening denies external `/hw/*`, the current UI will break. If `/hw/*` remains open for UI compatibility, hardware stays exposed.
 
 ### Required remediation
 
-Do not have the browser call raw LeLamp endpoints.
+Do not have the browser call raw HAL endpoints.
 
 Create Go server endpoints that:
 
 - Require admin auth.
 - Validate input.
 - Apply rate limits.
-- Call LeLamp locally (`http://127.0.0.1:5001`) server-side.
+- Call HAL locally (`http://127.0.0.1:5001`) server-side.
 - Return sanitized responses.
 
 Example replacements:
@@ -1189,7 +1189,7 @@ Backend should:
 - Require admin auth.
 - Use stored credentials server-side or a short-lived submitted key only for preview.
 - Avoid logging request body.
-- Call LeLamp locally.
+- Call HAL locally.
 
 Frontend should not call `/hw/voice/speak` directly.
 

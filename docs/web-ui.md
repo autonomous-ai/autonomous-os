@@ -187,7 +187,7 @@ Cards included:
 Below the nav items and OpenClaw status, the sidebar shows versions for all three repos:
 - **Web** (teal): injected at build time from `package.json` via Vite `define` (`__WEB_VERSION__`)
 - **Lamp** (amber): from `GET /api/system/info` → `version` field (Go ldflags)
-- **HAL** (blue): from `GET /api/system/info` → `lelampVersion` field. Lamp calls HAL `:5001/version` on the loopback once per minute (cached) and re-exposes it through the lamp API, so the browser doesn't need direct access to `/hw/*` (nginx gates `/hw/` to loopback only).
+- **HAL** (blue): from `GET /api/system/info` → `halVersion` field. Lamp calls HAL `:5001/version` on the loopback once per minute (cached) and re-exposes it through the lamp API, so the browser doesn't need direct access to `/hw/*` (nginx gates `/hw/` to loopback only).
 - **Force Update** button: triggers `POST /api/system/force-update` → bootstrap OTA check. Shows "Checking…" while busy, then "Triggered"/"Failed" feedback for 3 seconds.
 
 ### 5.2 System Section

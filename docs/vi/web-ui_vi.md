@@ -186,7 +186,7 @@ Gồm các card:
 Dưới nav items và trạng thái OpenClaw, sidebar hiển thị version của cả 3 repo:
 - **Web** (teal): inject lúc build từ `package.json` qua Vite `define` (`__WEB_VERSION__`)
 - **Lamp** (amber): từ `GET /api/system/info` → field `version` (Go ldflags)
-- **HAL** (blue): từ `GET /api/system/info` → field `lelampVersion`. Lamp tự gọi `:5001/version` của HAL qua loopback mỗi phút 1 lần (cache) rồi re-expose qua API của lamp, browser không cần truy cập trực tiếp `/hw/*` (nginx chặn `/hw/` chỉ cho loopback).
+- **HAL** (blue): từ `GET /api/system/info` → field `halVersion`. Lamp tự gọi `:5001/version` của HAL qua loopback mỗi phút 1 lần (cache) rồi re-expose qua API của lamp, browser không cần truy cập trực tiếp `/hw/*` (nginx chặn `/hw/` chỉ cho loopback).
 - **Force Update** button: gọi `POST /api/system/force-update` → bootstrap kiểm tra OTA. Hiện "Checking…" khi đang xử lý, sau đó "Triggered"/"Failed" trong 3 giây.
 
 ### 5.2 System Section

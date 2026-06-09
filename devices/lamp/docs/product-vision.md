@@ -699,16 +699,16 @@ The Lamp server is forked from openclaw-lobster. Approximately 70-80% of Layer 1
 - User looks focused and calm → Lamp holds current environment, suppresses all interruptions
 
 **Implementation**:
-- Emotion classifier runs via **dlbackend WebSocket** (remote inference server), not on-device ONNX. LeLamp sends camera frames, receives emotion predictions.
+- Emotion classifier runs via **dlbackend WebSocket** (remote inference server), not on-device ONNX. HAL sends camera frames, receives emotion predictions.
 - `lelamp/service/sensing/perceptions/emotion.py` — `RemoteEmotionChecker` connects to dlbackend, fires `emotion.detected` sensing event with detected emotion (Angry, Disgust, Fear, Happy, Sad, Surprise, Neutral).
 - Lamp `user-emotion-detection/SKILL.md` maps detected facial emotion → mood signal via `POST /api/mood/log`.
 - Lamp `mood/SKILL.md` fuses signals (camera emotion, conversation context, voice tone) into mood decisions.
 - Mood decisions trigger downstream actions: `music-suggestion` (proactive music), `wellbeing` (break/hydration nudges), `emotion` (lamp expression).
-- Configurable confidence threshold via `EMOTION_CONFIDENCE_THRESHOLD` in LeLamp config.
+- Configurable confidence threshold via `EMOTION_CONFIDENCE_THRESHOLD` in HAL config.
 
 **Resolved questions**:
 - [x] Which emotion model? → Remote dlbackend (not on-device ONNX). Offloads inference, no Pi 4 RAM/CPU impact.
-- [x] Accuracy threshold → Configurable `EMOTION_CONFIDENCE_THRESHOLD` (default in LeLamp config).
+- [x] Accuracy threshold → Configurable `EMOTION_CONFIDENCE_THRESHOLD` (default in HAL config).
 - [x] Privacy → Frames sent to self-hosted dlbackend only, not third-party cloud.
 - [x] Voice-tone interaction → Both feed into Mood skill fusion logic; camera emotion = signal, mood decision = fused output.
 
@@ -771,7 +771,7 @@ The Lamp server is forked from openclaw-lobster. Approximately 70-80% of Layer 1
 **Status: Not implemented** — requires new models not yet in the codebase.
 
 **Sub-feature A — Screen-Time / Eye-Care Tracking**:
-- Needs gaze estimation model — not implemented in LeLamp sensing pipeline.
+- Needs gaze estimation model — not implemented in HAL sensing pipeline.
 - Pi 4 feasibility unknown, benchmark needed.
 
 **Sub-feature B — Contextual Gesture Support**:
@@ -854,14 +854,14 @@ The Lamp server is forked from openclaw-lobster. Approximately 70-80% of Layer 1
 
 ### Architecture — All Resolved ✅
 
-- [x] **Camera processing**: LeLamp Python runs on-device OpenCV for face detection/recognition (InsightFace). Heavy inference (emotion, action recognition) offloaded to self-hosted dlbackend via WebSocket. Camera snapshots forwarded to OpenClaw LLM for vision understanding.
-- [x] **Audio input ownership**: LeLamp owns mic. Local VAD (Silero) gates Deepgram STT connection (cost saving). Wake word "Hey Lamp" detected in transcript → `voice_command` event. No wake word → `voice` (ambient sensing).
-- [x] **LeLamp driver integration**: HTTP proxy. LeLamp FastAPI on `127.0.0.1:5001`, Lamp Go server proxies from port `5000`. Simple, debuggable, no shared state.
+- [x] **Camera processing**: HAL Python runs on-device OpenCV for face detection/recognition (InsightFace). Heavy inference (emotion, action recognition) offloaded to self-hosted dlbackend via WebSocket. Camera snapshots forwarded to OpenClaw LLM for vision understanding.
+- [x] **Audio input ownership**: HAL owns mic. Local VAD (Silero) gates Deepgram STT connection (cost saving). Wake word "Hey Lamp" detected in transcript → `voice_command` event. No wake word → `voice` (ambient sensing).
+- [x] **HAL driver integration**: HTTP proxy. HAL FastAPI on `127.0.0.1:5001`, Lamp Go server proxies from port `5000`. Simple, debuggable, no shared state.
 
 ### Hardware — Mostly Resolved
 
-- [x] **Servo model**: Feetech STS3215 servo motors. Controlled via LeLamp serial bus.
-- [x] **LED layout**: WS2812 RGB LED ring. Controlled via LeLamp `rpi_ws281x` Python driver.
+- [x] **Servo model**: Feetech STS3215 servo motors. Controlled via HAL serial bus.
+- [x] **LED layout**: WS2812 RGB LED ring. Controlled via HAL `rpi_ws281x` Python driver.
 - [ ] **Power supply**: Single PSU for Pi + servos + LEDs, or separate rails?
 - [x] **Thermal management**: Pi 5 migration in progress (Pi 4 sufficient but tight). Active cooling with fan.
 

@@ -17,11 +17,11 @@ Tất cả các state dùng effect `breathing` speed 3.0 trừ khi ghi rõ. Giá
 |---|---|---|---|---|---|
 | `StateConnectivity` | Cam | `(255, 80, 0)` | **Mất internet** — Wi-Fi kết nối nhưng không có internet | Network monitor: 5 lần ping thất bại liên tiếp (~25s) | Có — khi ping thành công |
 | `StateError` | Đỏ | `(255, 0, 0)` | **Lỗi** — Lỗi hệ thống (reserved) | Lỗi nghiêm trọng | Có — khi lỗi được khắc phục |
-| `StateOTA` | Xanh lá | `(0, 255, 0)` | **Đang update** — OTA firmware đang chạy (enum dự trữ; bootstrap drive LED OTA trực tiếp qua `lib/lelamp` — xem "Bootstrap (OTA)" bên dưới) | Bootstrap reconcile phát hiện update | Khởi động lại sau khi update xong |
+| `StateOTA` | Xanh lá | `(0, 255, 0)` | **Đang update** — OTA firmware đang chạy (enum dự trữ; bootstrap drive LED OTA trực tiếp qua `lib/hal` — xem "Bootstrap (OTA)" bên dưới) | Bootstrap reconcile phát hiện update | Khởi động lại sau khi update xong |
 | `StateBooting` | Xanh dương | `(0, 80, 255)` | **Đang khởi động** — Lamp đang bật | `server.go` lúc startup | Có — khi OpenClaw agent connect và sẵn sàng |
-| `StateLeLampDown` | Tím | `(180, 0, 255)` | **LeLamp Down** — Server phần cứng không phản hồi. Khi LeLamp đang down LED **tắt hẳn** vì driver LED cũng chết theo; tím breathing chỉ flash ~3s khi phục hồi | `healthwatch` poll LeLamp `/health` thất bại | Tự tắt 3s sau khi phục hồi |
+| `StateLeLampDown` | Tím | `(180, 0, 255)` | **HAL Down** — Server phần cứng không phản hồi. Khi HAL đang down LED **tắt hẳn** vì driver LED cũng chết theo; tím breathing chỉ flash ~3s khi phục hồi | `healthwatch` poll HAL `/health` thất bại | Tự tắt 3s sau khi phục hồi |
 | `StateAgentDown` | Cyan | `(0, 200, 200)` | **Agent Down** — AI brain mất kết nối | OpenClaw WebSocket ngắt (`internal/openclaw/service_ws.go`) | Có — khi WebSocket reconnect |
-| `StateHardware` | Vàng | `(255, 255, 0)` | **Hardware Failure** — servo/LED/audio/voice không healthy qua LeLamp `/health` | `healthwatch` poll (mỗi 5s); camera và sensing không tính | Có — khi tất cả linh kiện báo OK |
+| `StateHardware` | Vàng | `(255, 255, 0)` | **Hardware Failure** — servo/LED/audio/voice không healthy qua HAL `/health` | `healthwatch` poll (mỗi 5s); camera và sensing không tính | Có — khi tất cả linh kiện báo OK |
 
 ### Ready flash
 
@@ -29,7 +29,7 @@ Sau khi boot xong (Booting clear và không state nào khác active), `statusled
 
 ### OTA chi tiết (do bootstrap drive)
 
-Bootstrap binary gọi `lib/lelamp` trực tiếp (không qua `statusled.Service`):
+Bootstrap binary gọi `lib/hal` trực tiếp (không qua `statusled.Service`):
 
 | Giai đoạn | LED | Source |
 |---|---|---|
@@ -44,7 +44,7 @@ Lưu ý: cam/đỏ OTA của bootstrap dùng RGB và effect parameters hơi khá
 Khi nhiều state `statusled.Service` cùng active, state cao nhất được hiển thị:
 
 ```
-Connectivity (cao nhất) > Error > OTA > Booting > LeLamp Down > Agent Down > Hardware (thấp nhất)
+Connectivity (cao nhất) > Error > OTA > Booting > HAL Down > Agent Down > Hardware (thấp nhất)
 ```
 
 Số ưu tiên (từ map `priority` trong `service.go`):
@@ -82,15 +82,15 @@ LED OTA của bootstrap không qua priority queue — nó chạy khi bootstrap s
 - Voice command và AI features không khả dụng; LED scene và servo vẫn hoạt động
 - TTS thông báo "Brain reconnected!" khi phục hồi
 
-### LeLamp Down (Tím — hoặc tối/đen)
-- Khi LeLamp crash, LED **tắt hẳn** vì driver LED cũng chết theo
+### HAL Down (Tím — hoặc tối/đen)
+- Khi HAL crash, LED **tắt hẳn** vì driver LED cũng chết theo
 - `healthwatch` poll mỗi 5 giây và theo dõi thời gian down
 - Khi phục hồi: tím breathing flash ~3s khi state clear, sau đó LED trở lại bình thường
 - TTS thông báo "Hardware recovered!" khi phục hồi
-- LED, servo, camera, mic, speaker đều không khả dụng khi LeLamp down
+- LED, servo, camera, mic, speaker đều không khả dụng khi HAL down
 
 ### Hardware Failure (Vàng)
-- Activated khi servo, LED driver, audio, hoặc voice pipeline báo unhealthy qua LeLamp `/health`
+- Activated khi servo, LED driver, audio, hoặc voice pipeline báo unhealthy qua HAL `/health`
 - Per-servo online check qua `lelamp.GetServoStatus()` — bất kỳ servo nào offline cũng trip
 - Camera và sensing không tính (có thể tắt theo scene preset)
 - Health watcher poll mỗi 5 giây
@@ -119,11 +119,11 @@ internal/openclaw/service_ws → Set/Clear StateAgentDown
 internal/healthwatch/service → Set/Clear StateLeLampDown + StateHardware
 ```
 
-Service gọi LeLamp `/led/effect` qua `lib/lelamp` (shared HTTP client).
+Service gọi HAL `/led/effect` qua `lib/hal` (shared HTTP client).
 
 ### Bootstrap (bootstrap-server)
 
-Bootstrap là binary riêng. Gọi `lib/lelamp` **trực tiếp** trong hàm `reconcile` (không qua `statusled.Service`):
+Bootstrap là binary riêng. Gọi `lib/hal` **trực tiếp** trong hàm `reconcile` (không qua `statusled.Service`):
 
 ```
 reconcile phát hiện update → lelamp.SetEffect("breathing", 255, 140, 0, 0.4)   // cam
@@ -136,11 +136,11 @@ thất bại   → lelamp.SetEffect("pulse", 255, 30, 30, 1.5)                  
 
 Ambient service (`internal/ambient`) tự pause khi có interaction event (`chat_send`, `chat_response`, v.v.). Khi `statusled.Service` clear state cuối cùng, nó gọi `lelamp.RestoreLED()` — strip trở về màu/effect mà user (hoặc agent) đã set qua `/led/solid`, `/led/effect`, hoặc `/scene`. Nếu chưa từng có user state, strip clear về off và ambient sẽ resume breathing sau 60s im lặng.
 
-Mọi `statusled.Service` write đều dùng `transient=true` để không ghi đè user LED state — restore-after-animation của emotion sẽ đọc lại đúng màu user, không phải màu status. (Bootstrap gọi `lib/lelamp` trực tiếp cũng transient.)
+Mọi `statusled.Service` write đều dùng `transient=true` để không ghi đè user LED state — restore-after-animation của emotion sẽ đọc lại đúng màu user, không phải màu status. (Bootstrap gọi `lib/hal` trực tiếp cũng transient.)
 
-## Shared LeLamp Client
+## Shared HAL Client
 
-`lib/lelamp/client.go` — HTTP wrapper dùng chung cho tất cả Go code điều khiển LED:
+`lib/hal/client.go` — HTTP wrapper dùng chung cho tất cả Go code điều khiển LED:
 
 | Function | Endpoint | Mô tả |
 |---|---|---|
@@ -169,8 +169,8 @@ Status state **ghi đè** tất cả các LED trên khi active. Khi state tắt,
 | Xanh dương breathing | Lamp đang khởi động |
 | Flash trắng ngắn | Lamp sẵn sàng nghe |
 | Cyan breathing | AI brain mất kết nối (Lamp vẫn điều khiển đèn/servo local được) |
-| Tím breathing (sau khi tối) | LeLamp vừa phục hồi sau crash |
-| Tối / không LED | LeLamp crash (driver LED chết) |
+| Tím breathing (sau khi tối) | HAL vừa phục hồi sau crash |
+| Tối / không LED | HAL crash (driver LED chết) |
 | Cam breathing | Mất internet (Lamp offline) |
 | Vàng breathing | Có linh kiện hardware không healthy |
 | Xanh lá breathing | OTA firmware update đang chạy |

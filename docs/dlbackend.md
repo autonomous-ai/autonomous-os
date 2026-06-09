@@ -266,7 +266,7 @@ AUDIO_RECOGNIZER_ENGINE=resnet34
 ```env
 DL_BACKEND_URL=wss://<POD_ID>-8888.proxy.runpod.net/lelamp/api/dl/action-analysis/ws
 DL_API_KEY=<shared secret>
-LELAMP_MOTION_ENABLED=true
+HAL_MOTION_ENABLED=true
 ```
 
 ### Thresholds (os/hal/config.py)
@@ -459,8 +459,8 @@ If key exchange is skipped and `CRYPTO__REQUIRE_ENCRYPTION=false`, messages pass
 
 | Variable | Default | Description |
 |---|---|---|
-| `LELAMP_DL_ENCRYPTION` | `false` | Enable client-side encryption |
-| `LELAMP_DL_ENCRYPTION_REQUIRED` | `false` | Fail if encryption setup fails (no plaintext fallback) |
+| `HAL_DL_ENCRYPTION` | `false` | Enable client-side encryption |
+| `HAL_DL_ENCRYPTION_REQUIRED` | `false` | Fail if encryption setup fails (no plaintext fallback) |
 | `DL_PUBLIC_KEY_FILE` | _(empty)_ | Path to RSA public key PEM file (skips fetch from LB if set) |
 | `DL_PUBLIC_KEY_ENDPOINT` | `/crypto/public-key` | Path appended to `DL_BACKEND_URL` to fetch the public key |
 

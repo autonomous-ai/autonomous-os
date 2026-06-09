@@ -80,7 +80,7 @@ Manual override respected — if user explicitly muted via voice command, auto t
 
 ## Implementation Plan
 
-### LeLamp (Python)
+### HAL (Python)
 
 1. ✅ **`server.py`**: Endpoints done:
    - `POST /voice/mute` — stop VoiceService, set `_mic_muted = True`

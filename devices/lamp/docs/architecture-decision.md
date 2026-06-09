@@ -9,17 +9,17 @@ This project controls an AI-powered desk lamp built on a Raspberry Pi 4 with art
 The architecture went through several pivots before reaching the final design:
 
 1. **Standalone Go + MCP** — Initially planned as a new Go project using MCP protocol for hardware control. Abandoned when we discovered OpenClaw uses its own native skill system (SKILL.md), not MCP.
-2. **LeLamp runtime already exists** — Discovered a Python runtime is ALREADY running on the Pi4 with working hardware drivers for servos (MotorsService), LEDs (RGBService), and audio (amixer). It was previously controlled via LiveKit @function_tool decorators.
-3. **Final decision** — Hybrid architecture. OpenClaw replaces LiveKit + OpenAI entirely. OpenClaw skills call the Lamp HTTP API, which bridges to the existing LeLamp Python services for hardware access.
+2. **HAL runtime already exists** — Discovered a Python runtime is ALREADY running on the Pi4 with working hardware drivers for servos (MotorsService), LEDs (RGBService), and audio (amixer). It was previously controlled via LiveKit @function_tool decorators.
+3. **Final decision** — Hybrid architecture. OpenClaw replaces LiveKit + OpenAI entirely. OpenClaw skills call the Lamp HTTP API, which bridges to the existing HAL Python services for hardware access.
 
 ## 2. Final Architecture Decision
 
-**Hybrid two-layer architecture + LeLamp Python bridge + Hardware Plugin system.**
+**Hybrid two-layer architecture + HAL Python bridge + Hardware Plugin system.**
 
 - **Layer 1 (System)**: Lamp Server handles system-critical functions that work without OpenClaw.
-- **Layer 2 (Skills)**: OpenClaw's LLM reads SKILL.md files and calls Lamp HTTP endpoints, which bridge to LeLamp's Python hardware drivers.
+- **Layer 2 (Skills)**: OpenClaw's LLM reads SKILL.md files and calls Lamp HTTP endpoints, which bridge to HAL's Python hardware drivers.
 
-The LeLamp Python runtime is kept as the hardware driver layer. We do NOT rewrite drivers in Go — we bridge to them.
+The HAL Python runtime is kept as the hardware driver layer. We do NOT rewrite drivers in Go — we bridge to them.
 
 ### Hardware as Plugins (Plug & Play)
 
@@ -48,7 +48,7 @@ This means the same codebase supports different product configurations:
 
 ### OpenClaw — AI Brain
 
-Replaces LeLamp's previous LiveKit + OpenAI stack completely. Provides:
+Replaces HAL's previous LiveKit + OpenAI stack completely. Provides:
 
 - Personality and conversation management
 - LLM inference (multi-provider: Anthropic, OpenAI, local)
@@ -56,7 +56,7 @@ Replaces LeLamp's previous LiveKit + OpenAI stack completely. Provides:
 - Channels (voice, text, app)
 - Memory and context
 
-### LeLamp Runtime — Hardware Drivers (Python)
+### HAL Runtime — Hardware Drivers (Python)
 
 Already running on the Pi4. Provides event-driven services with priority dispatch via ServiceBase:
 
@@ -73,7 +73,7 @@ All hardware exposed via FastAPI on `127.0.0.1:5001` (systemd service: `lamp-hal
 Provides:
 
 - All system-critical services (boot, network, OTA, reset, MQTT)
-- HTTP API on port 5000 that bridges requests to LeLamp Python services
+- HTTP API on port 5000 that bridges requests to HAL Python services
 
 ## 4. Layer 1: System (Lamp Server, Always Running)
 
@@ -117,7 +117,7 @@ Lamp Server modules (in `lamp/` subdirectory):
 - `internal/openclaw/` — OpenClaw config generation and WebSocket
 - `internal/beclient/` — Backend status reporter
 - `internal/device/` — Setup, MQTT command handling, status reporting
-- `internal/ambient/` — Idle "living creature" behaviors (breathing LED, color drift, micro-movements, TTS mumbles). Runs when no interaction is happening; auto-pauses on real input, resumes after 10s silence. Calls LeLamp HTTP API.
+- `internal/ambient/` — Idle "living creature" behaviors (breathing LED, color drift, micro-movements, TTS mumbles). Runs when no interaction is happening; auto-pauses on real input, resumes after 10s silence. Calls HAL HTTP API.
 - `lib/mqtt/` — MQTT client with auto-reconnect
 - `bootstrap/` — OTA version check and install
 - `domain/` — Shared structs (device, network, OTA, OpenClaw)
@@ -134,7 +134,7 @@ How it works:
 2. OpenClaw auto-discovers them (`skills.load.watch: true`)
 3. The LLM reads the SKILL.md description and understands available APIs
 4. The LLM calls the Lamp HTTP API via `curl` at `127.0.0.1:5000`
-5. The Lamp server bridges the request to the appropriate LeLamp Python service
+5. The Lamp server bridges the request to the appropriate HAL Python service
 6. The Python service drives the hardware
 
 ### Skills
@@ -152,9 +152,9 @@ How it works:
 | `sensing` | `workspace/skills/sensing/SKILL.md` | Motion/sound events, presence |
 | `scheduling` | `workspace/skills/scheduling/SKILL.md` | Cron scheduler |
 
-### HTTP API Endpoints (LeLamp FastAPI, :5001)
+### HTTP API Endpoints (HAL FastAPI, :5001)
 
-All hardware endpoints run on LeLamp. OpenClaw skills call `127.0.0.1:5001` directly.
+All hardware endpoints run on HAL. OpenClaw skills call `127.0.0.1:5001` directly.
 
 | Endpoint | Method | Description |
 |---|---|---|
@@ -221,7 +221,7 @@ The Go server maintains a **ring buffer (200 events)** in `openclaw.Service` tha
 
 | Type | Source | Description |
 |---|---|---|
-| `sensing_input` | `POST /api/sensing/event` | LeLamp detected motion/sound |
+| `sensing_input` | `POST /api/sensing/event` | HAL detected motion/sound |
 | `chat_send` | `SendChatMessage()` | Message forwarded to OpenClaw |
 | `lifecycle` | OpenClaw WS `agent.lifecycle` | Agent start/end/error |
 | `thinking` | OpenClaw WS `agent.thinking` | Chain-of-thought reasoning (requires `caps: ["thinking-events"]`) |
@@ -239,11 +239,11 @@ The Go server maintains a **ring buffer (200 events)** in `openclaw.Service` tha
 
 Dashboard layout with 4 sections:
 1. **Status grid** (4 cards): OpenClaw connection, System info (CPU/RAM/temp/uptime), Network (SSID/IP/signal/internet), Hardware badges (servo/LED/cam/audio/sensing)
-2. **Presence bar**: Present/idle/away state from LeLamp `/hw/presence`
+2. **Presence bar**: Present/idle/away state from HAL `/hw/presence`
 3. **Workflow timeline**: Real-time SSE event stream with color-coded event types
-4. **Camera**: Collapsible MJPEG stream + snapshot from LeLamp `/hw/camera/stream`
+4. **Camera**: Collapsible MJPEG stream + snapshot from HAL `/hw/camera/stream`
 
-### LeLamp Status Endpoints (proxied via nginx `/hw/*`, local-only)
+### HAL Status Endpoints (proxied via nginx `/hw/*`, local-only)
 
 | Endpoint | Method | Description |
 |---|---|---|
@@ -286,20 +286,20 @@ Dashboard layout with 4 sections:
 │  │  Layer 1: System          │  │  Layer 2: HTTP API Bridge       │ │
 │  │  (always running)         │  │  (port 5000)                    │ │
 │  │                           │  │                                 │ │
-│  │  • Reset button (GPIO 26) │  │  /api/led     → LeLamp RGB     │ │
-│  │  • Network mgmt (AP/STA)  │  │  /api/servo   → LeLamp Motors  │ │
+│  │  • Reset button (GPIO 26) │  │  /api/led     → HAL RGB     │ │
+│  │  • Network mgmt (AP/STA)  │  │  /api/servo   → HAL Motors  │ │
 │  │  • OTA updates            │  │  /api/camera  → Camera module   │ │
 │  │  • MQTT backend           │  │  /api/audio   → Audio / amixer  │ │
 │  │  • Internet monitor       │  │  /api/emotion → Motors+RGB+Audio│ │
 │  │                           │  │  Bridges HTTP requests to       │ │
-│  │  Works WITHOUT OpenClaw   │  │  LeLamp Python services         │ │
+│  │  Works WITHOUT OpenClaw   │  │  HAL Python services         │ │
 │  └───────────────────────────┘  └────────────────┬────────────────┘ │
 │                                                   │                  │
 └───────────────────────────────────────────────────┼──────────────────┘
                                                     │ Bridge (HTTP / gRPC / subprocess)
                                                     ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                   LeLamp Runtime (Python, on Pi4)                    │
+│                   HAL Runtime (Python, on Pi4)                    │
 │                                                                     │
 │  • MotorsService  — 5x Feetech servos (5-axis articulation)        │
 │  • RGBService     — 64x WS2812 LEDs (8x5 grid, rpi_ws281x)        │
@@ -356,7 +356,7 @@ User speaks
         → LLM reads relevant SKILL.md files
           → LLM calls curl to Lamp HTTP API (127.0.0.1:5000)
             → Lamp Server receives HTTP request
-              → Lamp bridges to LeLamp Python service
+              → Lamp bridges to HAL Python service
                 → Python service drives hardware
                   → Servos move / LEDs change / Speaker outputs audio
 ```
@@ -365,17 +365,17 @@ User speaks
 
 | Component | Path | Description |
 |---|---|---|
-| Servo HTTP handlers | `server/servo/delivery/` | Gin routes for `/api/servo`, bridges to LeLamp MotorsService |
+| Servo HTTP handlers | `server/servo/delivery/` | Gin routes for `/api/servo`, bridges to HAL MotorsService |
 | Camera HTTP handlers | `server/camera/delivery/` | Gin routes for `/api/camera/*`, bridges to camera module |
 | Audio HTTP handlers | `server/audio/delivery/` | Gin routes for `/api/audio/*`, bridges to audio / amixer |
 | Emotion HTTP handler | `server/emotion/delivery/` | Gin route for `/api/emotion`, coordinates servo + LED + audio |
 | OpenClaw skills | `resources/openclaw-skills/` | SKILL.md files for servo-control, camera, audio, emotion |
-| Python bridge layer | TBD | Communication layer between Go Lamp server and LeLamp Python services (HTTP, gRPC, or subprocess) |
+| Python bridge layer | TBD | Communication layer between Go Lamp server and HAL Python services (HTTP, gRPC, or subprocess) |
 
 ## 10. Open Questions
 
-- [x] **Go-to-Python bridge**: HTTP proxy. LeLamp runs FastAPI on `127.0.0.1:5001`, Lamp Server proxies requests from port 5000. Simple, debuggable, no tight coupling.
+- [x] **Go-to-Python bridge**: HTTP proxy. HAL runs FastAPI on `127.0.0.1:5001`, Lamp Server proxies requests from port 5000. Simple, debuggable, no tight coupling.
 - [ ] **Camera processing**: Run vision on-device with OpenCV, or offload to OpenClaw's vision capabilities?
 - [ ] **Audio input**: Does OpenClaw handle the microphone directly, or does the Lamp server capture audio and forward it?
-- [x] **LED driver**: LeLamp Python rpi_ws281x driver owns all LED control. Go SPI driver removed from Lamp — this lamp's hardware uses LeLamp's LED driver exclusively.
+- [x] **LED driver**: HAL Python rpi_ws281x driver owns all LED control. Go SPI driver removed from Lamp — this lamp's hardware uses HAL's LED driver exclusively.
 - [ ] **Generative body language**: How does the LLM generate servo positions for emotions? Predefined emotion presets with randomized parameters, or fully generative coordinates from the LLM?

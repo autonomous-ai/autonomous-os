@@ -109,7 +109,7 @@ Manual override does NOT get auto-overridden by scene/emotion/presence triggers.
 
 ## Implementation Plan
 
-### LeLamp (Python)
+### HAL (Python)
 
 1. **`server.py`**: ✅ Done — Already has `/camera/disable`, `/camera/enable`, `_camera_disabled` flag.
 
@@ -141,9 +141,9 @@ Manual override does NOT get auto-overridden by scene/emotion/presence triggers.
 
 11. **Scene / Emotion SKILL.md**: ❌ Skipped — camera toggle is automatic in server.py via preset `"camera"` field. Agent doesn't need to know.
 
-### Lamp Go (intent.go, lib/lelamp)
+### Lamp Go (intent.go, lib/hal)
 
-12. **intent.go + lib/lelamp/client.go**: ❌ Skipped — local intents call `/scene` endpoint which already handles camera via preset. No Go-side camera helpers needed.
+12. **intent.go + lib/hal/client.go**: ❌ Skipped — local intents call `/scene` endpoint which already handles camera via preset. No Go-side camera helpers needed.
 
 ### Web Monitor
 

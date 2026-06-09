@@ -10,7 +10,7 @@ Track which features have been manually tested on the Raspberry Pi 4.
 
 | # | Component | How to test | Status | Notes |
 |---|---|---|---|--|
-| INF-01 | LeLamp startup | SSH vào Pi, chạy `sudo systemctl status lelamp` hoặc `python server.py` trực tiếp. Expect: không có exception, log "Application startup complete" | ✅ | |
+| INF-01 | HAL startup | SSH vào Pi, chạy `sudo systemctl status lelamp` hoặc `python server.py` trực tiếp. Expect: không có exception, log "Application startup complete" | ✅ | |
 | INF-02 | Lamp startup | `sudo systemctl status os-server` hoặc chạy binary trực tiếp. Expect: log "connected to OpenClaw WebSocket" | ✅ | |
 | INF-03 | LED driver | `curl -X POST http://pi:5001/led/solid -d '{"r":255,"g":100,"b":0,"brightness":80}'` → LED sáng màu cam | ✅ | |
 | INF-04 | Servo driver | `curl -X POST http://pi:5001/servo/move -d '{"positions":{"tilt":90}}'` → servo tilt di chuyển | ✅ | |
@@ -54,9 +54,9 @@ Track which features have been manually tested on the Raspberry Pi 4.
 | EX-03 | Guard mode motion broadcast | Bật guard mode → tạo chuyển động lớn trước camera → kiểm tra Telegram nhận cảnh báo motion | ✅ | Same broadcast path as EX-02 |
 | EX-04 | Guard manual alert | `curl -X POST http://pi:5000/api/guard/alert -d '{"message":"Test alert"}'` → tất cả chat session nhận message | ✅ | `PostGuardAlert` → `Broadcast()` |
 | EX-05 | Guard mode via voice | Nói: **"bật chế độ canh gác"** hoặc **"enable guard mode"** → guard mode bật. Nói: **"tắt canh gác"** → guard mode tắt | ✅ | OpenClaw `guard` skill with enable/disable API + camera auto-enable |
-| EX-06 | Stranger stats tracking | Để stranger xuất hiện trước camera nhiều lần → `curl http://pi:5001/face/stranger-stats` → thấy count tăng, first_seen/last_seen đúng | ✅ | LeLamp `facerecognizer.py` tracks visit counts per stranger ID |
+| EX-06 | Stranger stats tracking | Để stranger xuất hiện trước camera nhiều lần → `curl http://pi:5001/face/stranger-stats` → thấy count tăng, first_seen/last_seen đúng | ✅ | HAL `facerecognizer.py` tracks visit counts per stranger ID |
 | EX-07 | Stranger enrollment suggestion | Để stranger xuất hiện 3+ lần → agent gợi ý đăng ký khuôn mặt | ⚠️ | Sensing skill has context but no explicit visit-count trigger yet |
-| EX-08 | Stranger stats persistence | Restart LeLamp → `curl http://pi:5001/face/stranger-stats` → stats vẫn còn (lưu trong LeLamp data dir) | ✅ | Persisted to `.stranger_stats.json` |
+| EX-08 | Stranger stats persistence | Restart HAL → `curl http://pi:5001/face/stranger-stats` → stats vẫn còn (lưu trong HAL data dir) | ✅ | Persisted to `.stranger_stats.json` |
 
 ---
 
@@ -64,7 +64,7 @@ Track which features have been manually tested on the Raspberry Pi 4.
 
 | # | Use Case | How to test | Status | Notes |
 |---|---|---|---|---|
-| EX-09 | Speaker recognition | Nói gì đó → xem transcript có prefix `Name:` (recognized) hoặc `Unknown:` (chưa enroll) | ✅ | LeLamp `speaker_recognizer.py` + Lamp `speaker-recognizer` skill |
+| EX-09 | Speaker recognition | Nói gì đó → xem transcript có prefix `Name:` (recognized) hoặc `Unknown:` (chưa enroll) | ✅ | HAL `speaker_recognizer.py` + Lamp `speaker-recognizer` skill |
 | EX-10 | Voice self-enrollment | Nói **"I'm Leo"** hoặc **"tôi là Leo"** khi chưa enroll → agent tự enroll voice profile từ audio path | ✅ | Skill triggers on `Unknown Speaker:... (audio save at <path>)` + self-intro |
 | EX-11 | Telegram voice enrollment | Gửi voice note trên Telegram kèm giới thiệu tên → agent enroll voice + link Telegram identity | ✅ | Skill handles `[mediaPaths: ...]` + intro detection |
 
@@ -74,7 +74,7 @@ Track which features have been manually tested on the Raspberry Pi 4.
 
 | # | Use Case | How to test | Status | Notes |
 |---|---|---|---|---|
-| EX-12 | Facial emotion detection | Ngồi trước camera, thể hiện cảm xúc → xem log có `emotion.detected` event | ✅ | LeLamp `emotion.py` via dlbackend WS, 7 emotions (Angry/Disgust/Fear/Happy/Sad/Surprise/Neutral) |
+| EX-12 | Facial emotion detection | Ngồi trước camera, thể hiện cảm xúc → xem log có `emotion.detected` event | ✅ | HAL `emotion.py` via dlbackend WS, 7 emotions (Angry/Disgust/Fear/Happy/Sad/Surprise/Neutral) |
 | EX-13 | Mood logging from emotion | `emotion.detected` → agent tự POST `/api/mood/log` → `curl http://pi:5000/api/openclaw/mood-history` có entry | ✅ | `user-emotion-detection` skill → `mood` skill pipeline |
 | EX-14 | Proactive wellness nudge | Ngồi làm việc lâu (sedentary activity detected) → Lamp nhắc uống nước / đứng dậy | ✅ | `wellbeing` skill, event-driven from `motion.activity` sedentary labels |
 | EX-15 | Proactive music suggestion | Mood decision logged (stressed/tired/etc.) → Lamp gợi ý nhạc phù hợp | ✅ | `music-suggestion` skill, triggers on mood decisions + sedentary activity |

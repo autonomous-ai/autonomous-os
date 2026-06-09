@@ -1,16 +1,16 @@
 # Motion Activity Whitelist
 
-Only these Kinect action classes are forwarded to OpenClaw as `motion.activity` events. All others are filtered at LeLamp level to save tokens.
+Only these Kinect action classes are forwarded to OpenClaw as `motion.activity` events. All others are filtered at HAL level to save tokens.
 
-Chỉ những action classes dưới đây được forward lên OpenClaw dạng `motion.activity`. Còn lại bị filter ở LeLamp để tiết kiệm token.
+Chỉ những action classes dưới đây được forward lên OpenClaw dạng `motion.activity`. Còn lại bị filter ở HAL để tiết kiệm token.
 
-LeLamp does the categorisation before sending. On the `Activity detected:` line:
+HAL does the categorisation before sending. On the `Activity detected:` line:
 - Drink actions (listed below) collapse to the bucket name `drink`.
 - Break actions (listed below) collapse to the bucket name `break`.
 - Sedentary actions are emitted as raw Kinetics labels (no collapsing) so the agent can ground nudge phrasing + music genre in the specific activity.
 - Emotional actions are filtered out entirely — they do not appear on `motion.activity`. A dedicated `motion.emotional` event will carry them later.
 
-LeLamp đã categorize trước khi gửi. Trên dòng `Activity detected:`:
+HAL đã categorize trước khi gửi. Trên dòng `Activity detected:`:
 - Action drink (liệt kê dưới) gộp thành bucket name `drink`.
 - Action break (liệt kê dưới) gộp thành bucket name `break`.
 - Action sedentary giữ raw Kinetics label (không gộp) để agent có context cụ thể cho nudge + music genre.

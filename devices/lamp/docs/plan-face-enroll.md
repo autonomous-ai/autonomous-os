@@ -12,9 +12,9 @@ Inspired by doggi-sdk's approach: save original JPEG photos per person, re-train
 User sends photo + @mention via Telegram
   → OpenClaw AI receives image (mediaPaths) + extracts name from @mention
   → AI: curl POST http://127.0.0.1:5001/face/enroll  {image_base64, label}
-  → LeLamp saves JPEG to data/enrolled_photos/{label}/
-  → LeLamp trains FaceRecognizer with the image
-  → On startup: LeLamp scans enrolled_photos/ dir → re-trains all
+  → HAL saves JPEG to data/enrolled_photos/{label}/
+  → HAL trains FaceRecognizer with the image
+  → On startup: HAL scans enrolled_photos/ dir → re-trains all
 ```
 
 ## Changes
@@ -24,7 +24,7 @@ User sends photo + @mention via Telegram
 - On init after creating FaceRecognizer, call `self._face_recognizer.load_from_disk()` to re-train from saved photos
 
 ### 2. `lelamp/service/sensing/perceptions/facerecognizer.py`
-- Add constant `ENROLLED_PHOTOS_DIR = Path(os.environ.get("LELAMP_DATA_DIR", "/root/lelamp/data")) / "enrolled_photos"`
+- Add constant `ENROLLED_PHOTOS_DIR = Path(os.environ.get("HAL_DATA_DIR", "/root/lelamp/data")) / "enrolled_photos"`
 - Add `save_photo(image_bytes: bytes, label: str) -> str`:
   - Create dir `{ENROLLED_PHOTOS_DIR}/{label}/`
   - Save JPEG with timestamp filename
@@ -53,7 +53,7 @@ User sends photo + @mention via Telegram
   - Trigger: user sends photo + "add friend" / @mention / "remember this face"
   - Extract name from @mention or ask user
   - base64 encode photo from mediaPaths
-  - curl POST /face/enroll to LeLamp
+  - curl POST /face/enroll to HAL
   - Confirm to user with enrolled_count
   - Also handle: "who do you recognize?" → GET /face/status
   - Also handle: "forget face" / "reset faces" → POST /face/remove or /face/reset
@@ -80,9 +80,9 @@ User sends photo + @mention via Telegram
 ```
 
 ## Verification
-1. Start LeLamp with sensing enabled
+1. Start HAL with sensing enabled
 2. `curl POST /face/enroll` with a base64 selfie + label → check 200 + photo saved to disk
 3. `curl GET /face/status` → verify enrolled_count = 1
-4. Restart LeLamp → `GET /face/status` → still shows enrolled person (re-trained from disk)
+4. Restart HAL → `GET /face/status` → still shows enrolled person (re-trained from disk)
 5. Via Telegram: send photo + tag → AI calls enroll → confirm face recognized next time camera sees that person
 6. `curl POST /face/reset` → enrolled_photos/ emptied, enrolled_count = 0

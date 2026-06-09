@@ -41,7 +41,7 @@ Pi services:
 
 ## 3. When `motion.activity` actually fires
 
-LeLamp dedups the outbound stream so Lamp only sees events that matter. Understanding the rule is essential before reading any log or running any test.
+HAL dedups the outbound stream so Lamp only sees events that matter. Understanding the rule is essential before reading any log or running any test.
 
 ### Dedup key
 
@@ -98,7 +98,7 @@ $SSH "curl -s -X POST http://127.0.0.1:5000/api/sensing/event \
 # → {"status":1,"data":{"runId":"lamp-chat-<seq>-<ms>"},"message":null}
 ```
 
-Emotional cues (`laughing`, `crying`, `yawning`, `singing`) are filtered at LeLamp and never reach Lamp — there is no way to inject them via `motion.activity` anymore. A future `motion.emotional` event will carry them.
+Emotional cues (`laughing`, `crying`, `yawning`, `singing`) are filtered at HAL and never reach Lamp — there is no way to inject them via `motion.activity` anymore. A future `motion.emotional` event will carry them.
 
 Common test payloads (raw Kinetics labels — agent maps each to `drink`/`break`/`sedentary` bucket):
 

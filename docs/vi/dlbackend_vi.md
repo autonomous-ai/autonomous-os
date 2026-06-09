@@ -201,7 +201,7 @@ AUDIO_RECOGNIZER_ENGINE=resnet34
 ```env
 DL_BACKEND_URL=wss://<POD_ID>-8888.proxy.runpod.net/lelamp/api/dl/action-analysis/ws
 DL_API_KEY=<shared secret>
-LELAMP_MOTION_ENABLED=true
+HAL_MOTION_ENABLED=true
 ```
 
 ### Ngưỡng (os/hal/config.py)
@@ -313,8 +313,8 @@ Nếu bỏ qua trao đổi khóa và `CRYPTO__REQUIRE_ENCRYPTION=false`, message
 
 | Biến | Mặc định | Mô tả |
 |---|---|---|
-| `LELAMP_DL_ENCRYPTION` | `false` | Bật mã hóa phía client |
-| `LELAMP_DL_ENCRYPTION_REQUIRED` | `false` | Thất bại nếu thiết lập mã hóa lỗi (không fallback plaintext) |
+| `HAL_DL_ENCRYPTION` | `false` | Bật mã hóa phía client |
+| `HAL_DL_ENCRYPTION_REQUIRED` | `false` | Thất bại nếu thiết lập mã hóa lỗi (không fallback plaintext) |
 | `DL_PUBLIC_KEY_FILE` | _(rỗng)_ | Đường dẫn file PEM chứa RSA public key (nếu đặt, bỏ qua fetch từ LB) |
 | `DL_PUBLIC_KEY_ENDPOINT` | `/crypto/public-key` | Path nối vào `DL_BACKEND_URL` để fetch public key |
 

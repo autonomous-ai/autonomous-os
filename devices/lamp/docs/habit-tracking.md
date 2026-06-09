@@ -25,7 +25,7 @@ SOUL (conversation)     ──┘       per user                        (preferr
 Two independent inputs feed into the same wellbeing JSONL logs:
 
 ### 1. Sensing data (via Wellbeing skill)
-Camera detects physical actions → LeLamp logs to wellbeing JSONL automatically.
+Camera detects physical actions → HAL logs to wellbeing JSONL automatically.
 
 | Action | Source |
 |--------|--------|

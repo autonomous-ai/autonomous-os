@@ -4,13 +4,13 @@
 
 ## Tổng quan
 
-Lamp nhận diện người nói qua **WeSpeaker ResNet34** (vector nhúng 256 chiều, ONNX Runtime). Khi không nhận ra người nói, LeLamp lưu audio và tuỳ điều kiện sẽ yêu cầu AI agent đăng ký giọng nói. Đăng ký chỉ áp dụng **tự phục vụ** — mỗi người tự đăng ký giọng nói của mình.
+Lamp nhận diện người nói qua **WeSpeaker ResNet34** (vector nhúng 256 chiều, ONNX Runtime). Khi không nhận ra người nói, HAL lưu audio và tuỳ điều kiện sẽ yêu cầu AI agent đăng ký giọng nói. Đăng ký chỉ áp dụng **tự phục vụ** — mỗi người tự đăng ký giọng nói của mình.
 
 ## Kiến trúc
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  LeLamp (Python, port 5001)                                         │
+│  HAL (Python, port 5001)                                         │
 │                                                                     │
 │  VoiceService._stream_session()                                     │
 │    ├─ STT chuyển giọng nói → văn bản                                │
@@ -68,10 +68,10 @@ Bốn lớp ngăn agent hỏi "bạn là ai?" liên tục:
 
 | Lớp | Vị trí | Điều kiện | Mục đích |
 |-----|--------|-----------|----------|
-| **Thời lượng audio** | LeLamp `voice_service.py` | `duration_s < SPEAKER_MIN_AUDIO_S` (0.8s) | Bỏ qua nhận diện hoàn toàn cho audio quá ngắn |
-| **Yêu cầu đăng ký** | LeLamp `_should_request_enroll()` | `≥ 15 từ VÀ ≥ 2s audio` | Không kèm instruction đăng ký đầy đủ cho câu ngắn (biến thể ngắn kèm gợi ý combine vẫn được gửi) |
+| **Thời lượng audio** | HAL `voice_service.py` | `duration_s < SPEAKER_MIN_AUDIO_S` (0.8s) | Bỏ qua nhận diện hoàn toàn cho audio quá ngắn |
+| **Yêu cầu đăng ký** | HAL `_should_request_enroll()` | `≥ 15 từ VÀ ≥ 2s audio` | Không kèm instruction đăng ký đầy đủ cho câu ngắn (biến thể ngắn kèm gợi ý combine vẫn được gửi) |
 | **Cooldown nhắc nhở phía Lamp** | Lamp `domain/voice.go` | `5 phút kể từ lần nhắc trước` | Không chèn SKILL.md instruction quá 1 lần mỗi 5 phút |
-| **Cooldown theo voiceprint** | LeLamp `voice_service.py` | `30 phút mỗi voiceprint_hash` (`LELAMP_ENROLL_NUDGE_COOLDOWN_S`) | Không lặp lại "hỏi tên user" cho cùng một cluster giọng lạ; gửi message `Unknown Speaker:` trần |
+| **Cooldown theo voiceprint** | HAL `voice_service.py` | `30 phút mỗi voiceprint_hash` (`HAL_ENROLL_NUDGE_COOLDOWN_S`) | Không lặp lại "hỏi tên user" cho cùng một cluster giọng lạ; gửi message `Unknown Speaker:` trần |
 
 ## Model & Embedding
 
@@ -106,9 +106,9 @@ Mọi giọng lạ được gom cụm local để server biết "đây là cùng
 
 1. Sau khi embedding audio, recognizer tổng hợp embedding theo chunk thành 1 vector chuẩn hoá L2.
 2. So với các centroid cụm stranger đã lưu (cosine similarity).
-3. Match ≥ `LELAMP_VOICE_STRANGER_MATCH_THRESHOLD` (mặc định `0.65`, thấp hơn 0.7 của known-speaker để cùng giọng gom chung thay vì phân mảnh) → dùng lại label `voice_N`.
+3. Match ≥ `HAL_VOICE_STRANGER_MATCH_THRESHOLD` (mặc định `0.65`, thấp hơn 0.7 của known-speaker để cùng giọng gom chung thay vì phân mảnh) → dùng lại label `voice_N`.
 4. Không match → tạo label mới `voice_{counter}`, thêm centroid vào state trên đĩa.
-5. Giới hạn `LELAMP_MAX_VOICE_STRANGERS` (mặc định `50`) — evict oldest khi vượt.
+5. Giới hạn `HAL_MAX_VOICE_STRANGERS` (mặc định `50`) — evict oldest khi vượt.
 6. Hash được:
    - trả trong response recognize dưới field `voiceprint_hash: "voice_N"` (null cho known speaker)
    - gắn vào message nudge dạng tag `[voice:voice_N]` để skill đối chiếu qua các turn
@@ -123,15 +123,15 @@ Mọi giọng lạ được gom cụm local để server biết "đây là cùng
 | Ngưỡng khớp | 0.7 | `SPEAKER_MATCH_THRESHOLD` | Confidence tối thiểu để khớp |
 | Ngưỡng consistency khi đăng ký | 0.7 | `SPEAKER_ENROLL_CONSISTENCY_THRESHOLD` | Cosine similarity tối thiểu giữa các mẫu |
 | Timeout API | 15s | `SPEAKER_EMBEDDING_API_TIMEOUT_S` | Timeout HTTP cho embedding API |
-| Audio tối thiểu cho nhận diện | 0.8s | `LELAMP_SPEAKER_MIN_AUDIO_S` | Bỏ qua nhận diện dưới ngưỡng này |
+| Audio tối thiểu cho nhận diện | 0.8s | `HAL_SPEAKER_MIN_AUDIO_S` | Bỏ qua nhận diện dưới ngưỡng này |
 | Số từ tối thiểu cho nudge đăng ký | 15 | Hardcoded trong `_should_request_enroll()` | Cổng số từ transcript |
 | Thời lượng tối thiểu cho nudge đăng ký | 2.0s | Hardcoded trong `_should_request_enroll()` | Cổng thời lượng audio |
 | Cooldown nhắc nhở phía Lamp | 5 phút | Hardcoded trong `domain/voice.go` | Không inject SKILL instruction toàn cục quá 1 lần/5 phút |
-| Cooldown nhắc nhở theo voiceprint | 30 phút | `LELAMP_ENROLL_NUDGE_COOLDOWN_S` | Không hỏi lại tên cho cùng cluster voiceprint |
-| Ngưỡng match voice stranger | 0.65 | `LELAMP_VOICE_STRANGER_MATCH_THRESHOLD` | Cosine similarity để gom giọng lạ vào `voice_N` đã có |
-| Số voice stranger tối đa | 50 | `LELAMP_MAX_VOICE_STRANGERS` | Giới hạn cluster; evict oldest khi vượt |
-| Thư mục voice strangers | `/root/local/voice_strangers` | `LELAMP_VOICE_STRANGERS_DIR` | Persist embedding cluster (tồn tại qua reboot) |
-| Bật/tắt nhận diện giọng nói | false | `LELAMP_SPEAKER_RECOGNITION_ENABLED` | Công tắc tổng |
+| Cooldown nhắc nhở theo voiceprint | 30 phút | `HAL_ENROLL_NUDGE_COOLDOWN_S` | Không hỏi lại tên cho cùng cluster voiceprint |
+| Ngưỡng match voice stranger | 0.65 | `HAL_VOICE_STRANGER_MATCH_THRESHOLD` | Cosine similarity để gom giọng lạ vào `voice_N` đã có |
+| Số voice stranger tối đa | 50 | `HAL_MAX_VOICE_STRANGERS` | Giới hạn cluster; evict oldest khi vượt |
+| Thư mục voice strangers | `/root/local/voice_strangers` | `HAL_VOICE_STRANGERS_DIR` | Persist embedding cluster (tồn tại qua reboot) |
+| Bật/tắt nhận diện giọng nói | false | `HAL_SPEAKER_RECOGNITION_ENABLED` | Công tắc tổng |
 
 ## Lưu trữ
 
@@ -154,7 +154,7 @@ Mọi giọng lạ được gom cụm local để server biết "đây là cùng
   counter.npy                        # Counter tăng cho label mới
 ```
 
-## API Endpoints (LeLamp, port 5001)
+## API Endpoints (HAL, port 5001)
 
 | Method | Path | Mô tả |
 |--------|------|-------|
@@ -197,14 +197,14 @@ Mọi giọng lạ được gom cụm local để server biết "đây là cùng
 ### Câu ngắn (bị chặn)
 ```
 User nói: "hey" (2 từ, 0.9s audio)
-→ LeLamp: bỏ qua nhận diện (< SPEAKER_MIN_AUDIO_S)
+→ HAL: bỏ qua nhận diện (< SPEAKER_MIN_AUDIO_S)
 → Message: "hey" (không prefix, không instruction đăng ký)
 ```
 
 ### Câu trung bình (nhận diện nhưng không nudge đăng ký)
 ```
 User nói: "bật đèn lên đi" (4 từ, 3s audio)
-→ LeLamp: nhận diện → unknown, _should_request_enroll(4 từ, 3s) = false
+→ HAL: nhận diện → unknown, _should_request_enroll(4 từ, 3s) = false
 → Message: "Unknown Speaker: bật đèn lên đi"
 → Lamp: không có "audio save at" → AppendEnrollNudge giữ nguyên
 → Agent: phản hồi bình thường, không hỏi user là ai
@@ -213,13 +213,13 @@ User nói: "bật đèn lên đi" (4 từ, 3s audio)
 ### Gộp nhiều turn ngắn (cùng cluster giọng)
 ```
 Turn 1: "nice to meet you today. Okay." (5 từ)
-→ LeLamp: recognize → unknown, voiceprint_hash=voice_5
+→ HAL: recognize → unknown, voiceprint_hash=voice_5
 → WAV chuyển vào /tmp/lamp-unknown-voice/voice_5/incoming_A.wav
 → Message: "Unknown Speaker: [voice:voice_5] nice to meet you today. Okay. (audio saved at ..._A.wav. Note: audio is too short for single enrollment. If prior turns tagged the same voice_5, combine their saved paths...)"
 → Agent: hỏi "Cho mình biết tên bạn với?"
 
 Turn 2: "I'm Alex." (2 từ)
-→ LeLamp: voiceprint_hash=voice_5 (cùng cluster, sim=0.75)
+→ HAL: voiceprint_hash=voice_5 (cùng cluster, sim=0.75)
 → WAV chuyển vào /tmp/lamp-unknown-voice/voice_5/incoming_B.wav
 → Message: "Unknown Speaker: [voice:voice_5] I'm Alex. (audio saved at ..._B.wav...)"
 → Agent: quét các turn trước cùng tag [voice:voice_5] → tìm thấy path A
@@ -230,7 +230,7 @@ Turn 2: "I'm Alex." (2 từ)
 ### Câu dài (luồng đăng ký đầy đủ)
 ```
 User nói: "Xin chào mình là Leo, mình vừa đi làm về..." (30 từ, 8s audio)
-→ LeLamp: nhận diện → unknown, _should_request_enroll(30 từ, 8s) = true
+→ HAL: nhận diện → unknown, _should_request_enroll(30 từ, 8s) = true
 → Message: "Unknown Speaker: Xin chào mình là Leo... (audio save at /tmp/lamp-unknown-voice/incoming_xxx.wav, auto enroll...)"
 → Lamp: AppendEnrollNudge → cooldown OK → chèn "[REQUIRED: Follow speaker-recognizer/SKILL.md...]"
 → Agent: phát hiện "mình là Leo" → POST /speaker/enroll → "Rất vui được biết bạn, Leo!"
@@ -239,7 +239,7 @@ User nói: "Xin chào mình là Leo, mình vừa đi làm về..." (30 từ, 8s 
 ### Cooldown (bị chặn)
 ```
 Cùng unknown speaker, 2 phút sau:
-→ LeLamp: _should_request_enroll = true (đủ dài)
+→ HAL: _should_request_enroll = true (đủ dài)
 → Message có "audio save at"
 → Lamp: AppendEnrollNudge → cooldown CHƯA hết (< 5 phút) → bỏ qua instruction
 → Agent: thấy "Unknown Speaker: ..." không có SKILL instruction → phản hồi bình thường

@@ -2,7 +2,7 @@
 
 > Lamp chủ động nhắc uống nước và nghỉ ngơi — AI tự schedule, tự quan sát qua camera, tự học thói quen từng người.
 
-> **⚠️ 2026-04-17 — Storage đã đổi.** File này còn đúng về cơ chế cron + flow agent. Nhưng chi tiết về `wellbeing.md` summary và `wellbeing/YYYY-MM-DD.md` daily log đã **deprecated** — giờ dùng JSONL schema `{ts, seq, hour, action, notes}` mirror mood. Xem `docs/vi/sensing-behavior_vi.md` và `docs/vi/os-server_vi.md` cho đúng endpoint. Endpoint `POST /user/wellbeing/log`, `/summary`, `/today` trên LeLamp đã bị gỡ — thay bằng `POST http://127.0.0.1:5000/api/wellbeing/log` + `GET /api/openclaw/wellbeing-history` trên Lamp.
+> **⚠️ 2026-04-17 — Storage đã đổi.** File này còn đúng về cơ chế cron + flow agent. Nhưng chi tiết về `wellbeing.md` summary và `wellbeing/YYYY-MM-DD.md` daily log đã **deprecated** — giờ dùng JSONL schema `{ts, seq, hour, action, notes}` mirror mood. Xem `docs/vi/sensing-behavior_vi.md` và `docs/vi/os-server_vi.md` cho đúng endpoint. Endpoint `POST /user/wellbeing/log`, `/summary`, `/today` trên HAL đã bị gỡ — thay bằng `POST http://127.0.0.1:5000/api/wellbeing/log` + `GET /api/openclaw/wellbeing-history` trên Lamp.
 
 ---
 
@@ -105,7 +105,7 @@ Go handler xử lý (giống music suggestion):
      VD: "[HW:/emotion:{caring,0.5}][HW:/broadcast:{}] Uống nước đi nhé!"
     ↓
   2. fireHWCalls():
-     → POST /emotion {caring, 0.5} → LeLamp (LED biểu cảm)
+     → POST /emotion {caring, 0.5} → HAL (LED biểu cảm)
      → /broadcast detected → đánh dấu broadcast
     ↓
   3. Kiểm tra kết quả:
@@ -119,7 +119,7 @@ Go handler xử lý (giống music suggestion):
 ```
 User vươn vai hoặc uống nước → camera detect movement
     ↓
-LeLamp gửi [sensing:motion.activity] kèm snapshot
+HAL gửi [sensing:motion.activity] kèm snapshot
     ↓
 Agent nhìn ảnh → phân tích user đang làm gì:
 
@@ -210,8 +210,8 @@ Observations: Bỏ qua hydration đầu tiên, phản hồi tốt từ lần 2.
 
 | Event | Khi nào | Ý nghĩa |
 |-------|---------|---------|
-| `wellbeing.hydration` | Sensing event từ LeLamp (legacy, hiếm) | Timer cũ fire |
-| `wellbeing.break` | Sensing event từ LeLamp (legacy, hiếm) | Timer cũ fire |
+| `wellbeing.hydration` | Sensing event từ HAL (legacy, hiếm) | Timer cũ fire |
+| `wellbeing.break` | Sensing event từ HAL (legacy, hiếm) | Timer cũ fire |
 | `mood.assessed` | Sau mỗi agent turn | AI đã evaluate — có `emotion`, `response`, `no_reply` |
 
 **Lưu ý:** Với flow hiện tại (AI-driven cron), wellbeing cron turns không đi qua sensing handler → không tạo `wellbeing.hydration` / `wellbeing.break` event trong mood history. Mood assessment vẫn được log nếu có `mood.TrackRun`.
@@ -234,7 +234,7 @@ Observations: Bỏ qua hydration đầu tiên, phản hồi tốt từ lần 2.
 | `lamp/resources/openclaw-skills/sensing/SKILL.md` | Toàn bộ wellbeing logic: bootstrap crons, science reference, principles, presence.enter/leave workflow, motion activity reset |
 | `lamp/internal/openclaw/resources/SOUL.md` | Định nghĩa user folder structure (wellbeing.md, wellbeing/YYYY-MM-DD.md) |
 
-### LeLamp (Python)
+### HAL (Python)
 
 | File | Vai trò |
 |------|---------|
@@ -271,7 +271,7 @@ Sau vài session, AI sẽ override bằng dữ liệu thực từ wellbeing note
 ### Điều kiện tiên quyết
 
 - Lamp Go server đang chạy (port 5000)
-- LeLamp đang chạy (port 5001) với camera hoạt động
+- HAL đang chạy (port 5001) với camera hoạt động
 - OpenClaw agent connected
 - Camera thấy được user (cho presence detection + snapshot)
 
@@ -458,7 +458,7 @@ journalctl -u os-server | grep -i "wellbeing\|caring\|broadcast\|cron"
 
 | Log message | Ý nghĩa |
 |------------|---------|
-| `HW marker fired /emotion` | Emotion caring đã gửi đến LeLamp |
+| `HW marker fired /emotion` | Emotion caring đã gửi đến HAL |
 | `broadcast run response to channels` | Nhắc nhở đã gửi lên Telegram |
 | `agent replied NO_REPLY` | AI quyết định không nhắc lần này |
 

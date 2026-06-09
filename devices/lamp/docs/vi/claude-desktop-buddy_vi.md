@@ -1,7 +1,7 @@
 # Claude Desktop Buddy — Spec tích hợp
 
 > Biến đèn Lamp thành Hardware Buddy của Claude Desktop. Chạy như plugin
-> Go độc lập trên Pi, bridge trạng thái BLE của Claude vào hệ LeLamp
+> Go độc lập trên Pi, bridge trạng thái BLE của Claude vào hệ HAL
 > (LED/display/audio) và Lamp (OpenClaw/sensing) sẵn có.
 
 **Nguồn**: [anthropics/claude-desktop-buddy](https://github.com/anthropics/claude-desktop-buddy) (firmware ESP32 reference + protocol REFERENCE.md)
@@ -31,8 +31,8 @@ tay, stream chat turns ra display/TTS, và feed context presence ngược lại.
 | UC-3 | **Thống kê hoạt động qua HTTP** | [x] xong | Buddy track token count, sessions chạy, approval stats; expose qua `GET /status` cho consumer local. (Chưa có display trên lamp.) |
 | UC-4 | **Fan-out chat turn** | [x] xong | Mọi `evt:"turn"` (user/assistant/tool blocks) được forward lên Lamp monitor bus dạng `buddy_event` — sẵn cho TTS, transcript memory, dashboard. |
 | UC-5 | **Nhận character pack** | [x] xong | Desktop drag GIF folder vào panel → stream qua BLE → lưu vào `/opt/claude-desktop-buddy/chars/<name>/`. |
-| UC-9 | **TTS narration trạng thái** | [x] xong | Thông báo ngắn khi state đổi ("Claude đã kết nối" / "Claude bắt đầu" / "Claude xong rồi" / "Claude đã ngắt kết nối") và cho mỗi block `tool_use` / `thinking` ("Claude đang sửa file", "Claude đang tìm web", …). Multi-lang (`vi` / `en` / `zh`) trong `i18n.go`, throttle 1 lần/category/turn. Gọi LeLamp `/voice/speak` với `cached: true` để phrase set bounded hit TTS cache on-disk; `Narrator.Warmup` chạy mọi phrase với `prerender: true` 8s sau khởi động nên lần đầu cũng phát từ cache. Transition busy→idle gọi thêm `/emotion {happy,0.7}` để LeLamp phối hợp LED + servo "thở ra" giữa các turn. Tool lạ fallback sang câu generic không kèm tên — tên tool Claude Code (CamelCase, `mcp__*`) đọc qua TTS không thành tiếng. |
-| UC-8 | **Đọc reply Claude qua TTS** | [ ] tiếp theo | Lamp subscribe `buddy_event`, filter `role=assistant` + text block, strip markdown, đẩy text qua LeLamp TTS để user nghe thay vì nhìn màn Mac. Respect presence (skip khi user vắng), busy state của voice pipeline, ưu tiên agent emotion. |
+| UC-9 | **TTS narration trạng thái** | [x] xong | Thông báo ngắn khi state đổi ("Claude đã kết nối" / "Claude bắt đầu" / "Claude xong rồi" / "Claude đã ngắt kết nối") và cho mỗi block `tool_use` / `thinking` ("Claude đang sửa file", "Claude đang tìm web", …). Multi-lang (`vi` / `en` / `zh`) trong `i18n.go`, throttle 1 lần/category/turn. Gọi HAL `/voice/speak` với `cached: true` để phrase set bounded hit TTS cache on-disk; `Narrator.Warmup` chạy mọi phrase với `prerender: true` 8s sau khởi động nên lần đầu cũng phát từ cache. Transition busy→idle gọi thêm `/emotion {happy,0.7}` để HAL phối hợp LED + servo "thở ra" giữa các turn. Tool lạ fallback sang câu generic không kèm tên — tên tool Claude Code (CamelCase, `mcp__*`) đọc qua TTS không thành tiếng. |
+| UC-8 | **Đọc reply Claude qua TTS** | [ ] tiếp theo | Lamp subscribe `buddy_event`, filter `role=assistant` + text block, strip markdown, đẩy text qua HAL TTS để user nghe thay vì nhìn màn Mac. Respect presence (skip khi user vắng), busy state của voice pipeline, ưu tiên agent emotion. |
 | UC-6 | **Presence feedback** | [ ] tương lai | Presence Lamp (camera/PIR) → Desktop. Cần mở rộng protocol. |
 | UC-7 | **OpenClaw biết transcript** | [ ] tương lai | OpenClaw đọc history chat khi user hỏi qua voice. |
 
@@ -58,7 +58,7 @@ tay, stream chat turns ra display/TTS, và feed context presence ngược lại.
 │                  │                                │     │ HTTP     │ HTTP        │
 │                  │                                │     ▼          ▼             │
 │                  │                                │  ┌─────────┐ ┌──────────┐    │
-│                  │                                │  │  Lamp   │ │ LeLamp   │    │
+│                  │                                │  │  Lamp   │ │ HAL   │    │
 │                  │                                │  │ :5000   │ │ :5001    │    │
 │                  │                                │  │ OpenClaw│ │ LED ring │    │
 │                  │                                │  │ sensing │ │ + TTS    │    │
@@ -76,7 +76,7 @@ claude-desktop-buddy/
 ├── agent.go             BlueZ DisplayOnly pairing agent (đã register nhưng chưa dùng — §5)
 ├── protocol.go          Wire types: Heartbeat, TimeSync, Event, Command, Ack, PermissionDecision
 ├── state.go             6-state machine (sleep/idle/busy/attention/heart/celebrate)
-├── bridge.go            HTTP outbound tới LeLamp (:5001) + Lamp (:5000)
+├── bridge.go            HTTP outbound tới HAL (:5001) + Lamp (:5000)
 ├── httpserver.go        HTTP API :5002 — /status /health /approve /deny
 ├── transfer.go          Nhận folder character-pack push (lưu vào chars/)
 ├── skill/SKILL.md       Skill OpenClaw cho voice approval flow
@@ -90,7 +90,7 @@ claude-desktop-buddy/
 
 `buddy-plugin` là **systemd service độc lập** (`claude-desktop-buddy.service`),
 tách khỏi binary Lamp chính. Restart độc lập; không link vào process
-Lamp. Gọi Lamp và LeLamp qua HTTP local.
+Lamp. Gọi Lamp và HAL qua HTTP local.
 
 ```
 Layout runtime trên Pi:
@@ -412,12 +412,12 @@ Overlay transient (`heart`, `celebrate`) khóa state 3 s; ticker expiry
 
 ---
 
-## 7. State → bridge LeLamp + Lamp
+## 7. State → bridge HAL + Lamp
 
 `Bridge.OnStateChange` được wire làm callback transition của state
 machine. Mỗi transition fire:
 
-| State | LeLamp LED call | Lamp monitor event |
+| State | HAL LED call | Lamp monitor event |
 |---|---|---|
 | `sleep` | `POST /led/off` | `buddy_state` |
 | `idle` | (không gọi — ambient quản LED) | `buddy_state` |
@@ -427,7 +427,7 @@ machine. Mỗi transition fire:
 | `celebrate` | `/led/effect {rainbow,*,2.0,3000ms}` | `buddy_state` |
 
 > Lamp lamp hiện không có LCD/eye display; code `bridge.go` vẫn cố gọi
-> `/display/info`, `/display/eyes`, `/display/eyes-mode` qua LeLamp,
+> `/display/info`, `/display/eyes`, `/display/eyes-mode` qua HAL,
 > nhưng đây là no-op trên hardware không màn. Hoặc xóa các nhánh này
 > khi không-display là permanent, hoặc bổ sung display peripheral.
 
@@ -474,7 +474,7 @@ Agent emotion vẫn thắng buddy; voice intent của user thắng cả 2.
 ```
 1. Heartbeat đến với prompt != null
 2. state → attention; bridge fire:
-     LeLamp: blink cam + display "Approve <tool>?"
+     HAL: blink cam + display "Approve <tool>?"
      Lamp:   POST /api/sensing/event { type:"buddy_approval", message:"Claude Desktop needs approval: …" }
 3. OpenClaw route sensing event tới skill `claude-desktop-buddy`
 4. Skill (SKILL.md tại claude-desktop-buddy/skill/):
@@ -595,7 +595,7 @@ hoặc `software-update claude-desktop-buddy`, tooling không bao giờ overwrit
 }
 ```
 
-`led_mapping` được parse và forward thẳng tới LeLamp; template mirror
+`led_mapping` được parse và forward thẳng tới HAL; template mirror
 đúng những gì `bridge.OnStateChange` đang làm trong code. `idle` là
 `none` để ambient service giữ quyền điều khiển LED khi lamp không
 actively phản ánh state Claude.
@@ -714,7 +714,7 @@ WantedBy=multi-user.target
 - [x] OpenClaw giảm proactive behavior khi Desktop busy
 - [x] Chat turn (user / assistant / tool blocks) stream vào Lamp monitor bus
 - [x] Folder push character pack lưu vào `chars/<name>/`
-- [x] UC-9 TTS narration trạng thái (vi/en/zh) qua cache LeLamp + emotion khi done
+- [x] UC-9 TTS narration trạng thái (vi/en/zh) qua cache HAL + emotion khi done
 - [x] Counter approve/deny giữ được qua restart (`/var/lib/claude-desktop-buddy/stats.json`)
 - [ ] UC-8 đọc reply assistant qua TTS — kế tiếp
 - [ ] GATT link bonded encrypted (`sec: true`) — defer

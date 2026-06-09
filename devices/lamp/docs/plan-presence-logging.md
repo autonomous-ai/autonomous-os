@@ -1,4 +1,4 @@
-# Plan: LeLamp owns wellbeing log
+# Plan: HAL owns wellbeing log
 
 Status: **Partially implemented** (2026-04-22). Bugs A+B fixed, Bug C still pending.
 
@@ -12,11 +12,11 @@ Status: **Partially implemented** (2026-04-22). Bugs A+B fixed, Bug C still pend
 
 ## Principle
 
-**LeLamp owns the log. Skill owns the nudge decision.** Sensing emits clean events that encode "effective user". Skill just reads + decides + speaks.
+**HAL owns the log. Skill owns the nudge decision.** Sensing emits clean events that encode "effective user". Skill just reads + decides + speaks.
 
 ## Changes
 
-### LeLamp — `facerecognizer.py`
+### HAL — `facerecognizer.py`
 
 1. Add `_owners_session_start`, `_strangers_session_start` — set on first-seen-after-gap, clear on leave.
 2. `current_user()`: among friends with live session_start, pick max session_start. No friend → `"unknown"` if any stranger live. Else `""`.
@@ -28,7 +28,7 @@ Status: **Partially implemented** (2026-04-22). Bugs A+B fixed, Bug C still pend
    - `X → X`: no event
 5. Replaces current per-face raw `presence.enter` spam.
 
-### LeLamp — `motion.py`
+### HAL — `motion.py`
 
 - After 5-min dedup passes, POST each activity label to `http://127.0.0.1:5000/api/wellbeing/log` with `current_user`.
 - POST **before** firing `motion.activity` so skill's history read is consistent.
@@ -36,14 +36,14 @@ Status: **Partially implemented** (2026-04-22). Bugs A+B fixed, Bug C still pend
 
 ### Lamp handler — `server/sensing/delivery/http/handler.go`
 
-- Drop enter/leave log writes at `handler.go:124-137`. LeLamp events are clean; handler just forwards.
+- Drop enter/leave log writes at `handler.go:124-137`. HAL events are clean; handler just forwards.
 - Keep `mood.SetCurrentUser` / `ClearCurrentUser` for `[context: current_user=X]` tag.
 
 ### Wellbeing SKILL.md
 
-- Remove Step 1 (log activity) — LeLamp writes now.
+- Remove Step 1 (log activity) — HAL writes now.
 - Keep Step 2–5 (read, deltas, decide, log `nudge_*`). Agent only writes `nudge_*`.
-- Update action table: `drink` / `break` / sedentary labels written by LeLamp, not agent.
+- Update action table: `drink` / `break` / sedentary labels written by HAL, not agent.
 
 ### Music-suggestion SKILL.md
 
@@ -61,8 +61,8 @@ No logic changes. Benefits indirectly from stable `current_user`.
 
 1. Event shape: reuse `presence.enter/leave` vs new `presence.effective_change`. Lean **reuse** — minimal downstream churn.
 2. Existing logs have duplicates from today — no cleanup migration; skills tolerate noise in tail.
-3. Direct LeLamp POST failure (Lamp down): log-and-forget, same semantics as current agent behaviour.
-4. **POST-before-fire for `motion.activity`?** Recommend **yes** — LeLamp POSTs `/api/wellbeing/log` first, then fires `motion.activity` to the agent. Guarantees history read by the skill already sees the new row, avoids agent-side race if the skill queries in parallel.
+3. Direct HAL POST failure (Lamp down): log-and-forget, same semantics as current agent behaviour.
+4. **POST-before-fire for `motion.activity`?** Recommend **yes** — HAL POSTs `/api/wellbeing/log` first, then fires `motion.activity` to the agent. Guarantees history read by the skill already sees the new row, avoids agent-side race if the skill queries in parallel.
 5. **Trim the `motion.activity` payload now that agent doesn't log?** The raw label is still useful to the agent for grounding nudge phrasing (see the SKILL.md table mapping labels → nudge examples). Keep the current format; revisit only if we see token pressure. No action needed for this PR.
 
 ## Next steps (when implementing)

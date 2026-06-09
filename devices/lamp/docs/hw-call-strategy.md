@@ -86,10 +86,10 @@ OpenClaw hỗ trợ param `parallel_tool_calls` nhưng:
 ### Nhược điểm
 
 1. 2 inference rounds thay vì 1 (nhưng round 2 rất nhẹ)
-2. Cần tạo `/hw/batch` endpoint trên LeLamp (Python side)
+2. Cần tạo `/hw/batch` endpoint trên HAL (Python side)
 
 ### Implementation cần làm
 
-1. **LeLamp Python**: Tạo `POST /hw/batch` endpoint, nhận JSON, dispatch song song tới các service
+1. **HAL Python**: Tạo `POST /hw/batch` endpoint, nhận JSON, dispatch song song tới các service
 2. **SKILL.md**: Viết 1 skill mới `hw-batch` thay thế emotion/servo/led/scene skills
 3. **Lamp Go handler**: Có thể giữ nguyên (exec tool path đã hoạt động), hoặc thêm detect `/hw/batch` trong tool args để log chi tiết hơn

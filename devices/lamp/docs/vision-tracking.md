@@ -214,7 +214,7 @@ Note: there is no automatic periodic YOLO re-detect — the caller decides when 
 ```
 1. User: "Lamp, follow the cup"
 2. Agent calls POST /servo/track {"target": "cup"}
-3. LeLamp internally:
+3. HAL internally:
    a. Snapshots a frame and holds on to it
    b. Sends that frame to YOLOWorld API → gets bbox (~1-2s)
    c. TrackerVit init uses the *same* frame + bbox (coordinates match)

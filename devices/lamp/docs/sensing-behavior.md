@@ -7,7 +7,7 @@ Lamp is a living being. It doesn't "process sensor data" — it *experiences* th
 ## Architecture Overview
 
 ```
-LeLamp (Python)          Lamp server (Go)             OpenClaw agent
+HAL (Python)          Lamp server (Go)             OpenClaw agent
 ─────────────────        ─────────────────────        ──────────────
 Microphone/Camera   →    SensingHandler               LLM
 Detects event            - drops if agent busy        - calls /emotion
@@ -16,7 +16,7 @@ Sends POST                                            - speaks or NO_REPLY
 /sensing/event
 ```
 
-LeLamp owns per-type tracker logic (sound escalation, motion filtering). Go is the gatekeeper — it drops stale events if the agent is busy, then forwards. The agent decides *how* to react, constrained by `SOUL.md`.
+HAL owns per-type tracker logic (sound escalation, motion filtering). Go is the gatekeeper — it drops stale events if the agent is busy, then forwards. The agent decides *how* to react, constrained by `SOUL.md`.
 
 ---
 
@@ -24,7 +24,7 @@ LeLamp owns per-type tracker logic (sound escalation, motion filtering). Go is t
 
 ### How it works
 
-LeLamp fires a sound event on every audio sample that crosses `SOUND_RMS_THRESHOLD` — potentially several times per second. The Python-side **sound tracker** (`lelamp/service/sensing/perceptions/sound.py`) applies dedup and escalation before forwarding to Go. Go receives only passed events and forwards them to the agent unchanged.
+HAL fires a sound event on every audio sample that crosses `SOUND_RMS_THRESHOLD` — potentially several times per second. The Python-side **sound tracker** (`lelamp/service/sensing/perceptions/sound.py`) applies dedup and escalation before forwarding to Go. Go receives only passed events and forwards them to the agent unchanged.
 
 ### Escalation behavior
 
@@ -79,7 +79,7 @@ Always triggers a full reaction — no exceptions. The agent **must** do all thr
 2. For friend: `/servo/aim {"direction": "user"}` then `/servo/track {"target": ["person"]}` — aim orients the camera toward the user's region first (~2s), then the vision tracker locks onto the person and follows them around the room. Stranger: `/servo/play {"recording": "scanning"}` (no auto-follow — caution)
 3. Speak: warm greeting for friend (by name), cautious acknowledgment for stranger
 
-The system handles cooldowns on the LeLamp side. If the event reached the agent, enough time has passed — react fully.
+The system handles cooldowns on the HAL side. If the event reached the agent, enough time has passed — react fully.
 
 #### Return after long absence (friend only)
 
@@ -99,7 +99,7 @@ Agent calls `/emotion idle` (0.4), fires `/servo/track/stop` to release any acti
 
 ### Away (`presence.away`)
 
-Sent automatically by LeLamp's `PresenceService` when **no motion is detected for 15 minutes** (after already dimming at 5 min). By this point the lights are already off — the agent's job is to **announce going to sleep** via TTS and Telegram.
+Sent automatically by HAL's `PresenceService` when **no motion is detected for 15 minutes** (after already dimming at 5 min). By this point the lights are already off — the agent's job is to **announce going to sleep** via TTS and Telegram.
 
 Agent calls `/emotion sleepy` (0.8), fires `/servo/track/stop` so any stale follow from earlier in the session is released, and speaks a cozy sleepy farewell (e.g. "No one's around… I'm going to sleep now. Goodnight!"). This is the last action before Lamp goes fully idle.
 
@@ -107,13 +107,13 @@ The full presence auto-control timeline:
 1. **5 min no motion** → light dims to 20% (automatic, no agent involvement)
 2. **15 min no motion** → light off + `presence.away` event sent → agent announces sleep
 
-LeLamp manages the light control; the agent only handles the verbal announcement. If the user returns (motion detected), light restores automatically and a `presence.enter` event fires.
+HAL manages the light control; the agent only handles the verbal announcement. If the user returns (motion detected), light restores automatically and a `presence.enter` event fires.
 
 ---
 
 ## Motion
 
-Only large motion is forwarded — small motion is filtered out by LeLamp and never reaches the agent.
+Only large motion is forwarded — small motion is filtered out by HAL and never reaches the agent.
 
 **Large motion**: `/emotion curious` (0.7) + `/servo/play {"recording": "scanning"}` + speak a curious reaction (e.g. "What was that?", "Whoa, moving so much!"). May include a camera snapshot so the agent can see the context.
 
@@ -121,7 +121,7 @@ Only large motion is forwarded — small motion is filtered out by LeLamp and ne
 
 ## Posture (RULA — silently sampled, folded into `motion.activity`)
 
-LeLamp streams every camera frame to dlbackend `/api/dl/pose-estimation/ws` and receives a per-frame RULA breakdown (whole-body score + `risk_level` + per-side `body_scores` and `*_angle` for `neck / trunk / upper_arm / lower_arm / wrist`). `PosePerception` throttles to **one sample per `POSE_SAMPLE_INTERVAL_S` (default 60s)** into a tumbling window + daily JSONL under `/tmp/lamp-sensing-snapshots/sensing_pose/samples_YYYY-MM-DD.jsonl`. **No event is emitted directly** — `MotionPerception` checks `is_window_complete()` once per tick and folds the aggregate into the next `motion.activity` when the gate trips.
+HAL streams every camera frame to dlbackend `/api/dl/pose-estimation/ws` and receives a per-frame RULA breakdown (whole-body score + `risk_level` + per-side `body_scores` and `*_angle` for `neck / trunk / upper_arm / lower_arm / wrist`). `PosePerception` throttles to **one sample per `POSE_SAMPLE_INTERVAL_S` (default 60s)** into a tumbling window + daily JSONL under `/tmp/lamp-sensing-snapshots/sensing_pose/samples_YYYY-MM-DD.jsonl`. **No event is emitted directly** — `MotionPerception` checks `is_window_complete()` once per tick and folds the aggregate into the next `motion.activity` when the gate trips.
 
 ### Tumbling window (when does the summary inject)
 
@@ -196,7 +196,7 @@ When the agent decides to nudge via `/dm`, Lamp's SSE handler calls `ConsumePose
 
 ### Angle sign workaround (temporary)
 
-dlbackend's `signed_flexion_angle` currently returns the opposite sign of its docstring ("Positive = forward flexion") — a user clearly hunched forward registers a **negative** neck angle, not positive. LeLamp negates `upper_arm_angle`, `neck_angle`, `trunk_angle` on receive (`POSE_FLIP_DLBACKEND_ANGLE_SIGN=True`, default on) so the monitor table and JSONL match reality. `lower_arm_angle` is unsigned and skipped. RULA scores already use `abs(angle)` so risk/score are unaffected by either sign convention. **Revert** by setting the flag to `False` (or removing `_flip_signed_angles`) once dlbackend ships the upstream fix.
+dlbackend's `signed_flexion_angle` currently returns the opposite sign of its docstring ("Positive = forward flexion") — a user clearly hunched forward registers a **negative** neck angle, not positive. HAL negates `upper_arm_angle`, `neck_angle`, `trunk_angle` on receive (`POSE_FLIP_DLBACKEND_ANGLE_SIGN=True`, default on) so the monitor table and JSONL match reality. `lower_arm_angle` is unsigned and skipped. RULA scores already use `abs(angle)` so risk/score are unaffected by either sign convention. **Revert** by setting the flag to `False` (or removing `_flip_signed_angles`) once dlbackend ships the upstream fix.
 
 ---
 
@@ -261,16 +261,16 @@ Use case: Lamp acts as a home security assistant. When the owner leaves and enab
 
 ## Stranger Visit Tracking
 
-LeLamp (port 5001) tracks how many times each stranger has been seen:
+HAL (port 5001) tracks how many times each stranger has been seen:
 
 - On every `presence.enter` event containing a stranger ID (e.g. `stranger_5`), the visit count is incremented.
 - Stats include `count`, `first_seen`, and `last_seen` timestamps per stranger.
-- Persisted in LeLamp's data directory (survives restarts).
+- Persisted in HAL's data directory (survives restarts).
 - Query stats via `GET http://127.0.0.1:5001/face/stranger-stats`.
 
 ### Familiar-stranger enroll prompt
 
-When a stranger's visit count first reaches the threshold (`_FAMILIAR_VISIT_THRESHOLD = 2`, see `lelamp/service/sensing/perceptions/processors/facerecognizer.py`), LeLamp:
+When a stranger's visit count first reaches the threshold (`_FAMILIAR_VISIT_THRESHOLD = 2`, see `lelamp/service/sensing/perceptions/processors/facerecognizer.py`), HAL:
 
 1. Saves the current raw frame to `<STRANGERS_DIR>/snapshots/<stranger_id>_<ts_ms>.jpg`.
 2. Appends a hint to the outgoing `presence.enter` message:
@@ -298,9 +298,9 @@ Wellbeing is **event-driven**. There are NO wellbeing cron jobs. On every `motio
 
 | Action | Written by | Purpose |
 |---|---|---|
-| `drink`, `break` | **LeLamp** (`motion.py` POSTs `/api/wellbeing/log` right before firing `motion.activity`) | Reset point for the corresponding nudge timer |
-| `using computer`, `writing`, `texting`, `reading book`, `reading newspaper`, `drawing`, `playing controller` | **LeLamp** (`motion.py`, same path) | Timeline + nudge phrasing. **Not** a reset point. |
-| `enter`, `leave` | **LeLamp** (`FaceRecognizer._post_wellbeing`, called from `_check_impl` on fresh detection and `_check_leaves` on forget expiry) | Session boundary — per-friend rows go to each friend's own timeline; strangers collapse to a single `"unknown"` timeline gated by the `_any_stranger_logged` flag (one enter on first stranger, one leave when the last one is forgotten). |
+| `drink`, `break` | **HAL** (`motion.py` POSTs `/api/wellbeing/log` right before firing `motion.activity`) | Reset point for the corresponding nudge timer |
+| `using computer`, `writing`, `texting`, `reading book`, `reading newspaper`, `drawing`, `playing controller` | **HAL** (`motion.py`, same path) | Timeline + nudge phrasing. **Not** a reset point. |
+| `enter`, `leave` | **HAL** (`FaceRecognizer._post_wellbeing`, called from `_check_impl` on fresh detection and `_check_leaves` on forget expiry) | Session boundary — per-friend rows go to each friend's own timeline; strangers collapse to a single `"unknown"` timeline gated by the `_any_stranger_logged` flag (one enter on first stranger, one leave when the last one is forgotten). |
 | `nudge_hydration`, `nudge_break` | Agent (after speaking a reminder) | Records when Lamp actually reminded — purely for timeline visibility. Only the agent knows when it actually spoke, so only the agent writes these. |
 
 **Dedup lives in two places.**
@@ -311,13 +311,13 @@ Wellbeing is **event-driven**. There are NO wellbeing cron jobs. On every `motio
 - Different strangers (e.g. `stranger_46` → `stranger_54`) collapse to `"unknown"` via `FaceRecognizer.current_user()`, so swapping strangers alone doesn't break dedup.
 - After 5 min on the same state, the next event passes through even if nothing changed — this keeps the Lamp agent "woken up" periodically so the wellbeing threshold check still runs.
 
-*Presence dedup (at-log safety net).* `lamp/lib/wellbeing/wellbeing.go::LogForUser` scans the user's JSONL bottom-up for the most recent **presence** row (enter/leave, ignoring activity rows in between). `enter` while the last presence is already `enter` is dropped; `leave` with no matching open session is dropped. Since LeLamp already emits one enter per real session (per-friend + collapsed-unknown), this runs as a safety net for restarts or out-of-order edge cases rather than load-bearing dedup.
+*Presence dedup (at-log safety net).* `lamp/lib/wellbeing/wellbeing.go::LogForUser` scans the user's JSONL bottom-up for the most recent **presence** row (enter/leave, ignoring activity rows in between). `enter` while the last presence is already `enter` is dropped; `leave` with no matching open session is dropped. Since HAL already emits one enter per real session (per-friend + collapsed-unknown), this runs as a safety net for restarts or out-of-order edge cases rather than load-bearing dedup.
 
 **Retention:** 30 days on the Lamp side. A goroutine started by `wellbeing.Init()` sweeps files older than the cutoff daily.
 
 ### On `motion.activity` — what the agent does
 
-By the time the agent sees the event, LeLamp has already logged the activity rows for it (see "Written by" in the table above). The agent's job is just: read the history, decide whether to nudge, and log the nudge if it fired.
+By the time the agent sees the event, HAL has already logged the activity rows for it (see "Written by" in the table above). The agent's job is just: read the history, decide whether to nudge, and log the nudge if it fired.
 
 1. **Read recent history** via `GET /api/openclaw/wellbeing-history?user={current_user}&last=50`.
 2. **Compute deltas** from the log, using the most recent reset point for each:
@@ -329,7 +329,7 @@ By the time the agent sees the event, LeLamp has already logged the activity row
 
    Three reset points: the actual activity (`drink` / `break`), a fresh arrival (`enter`), or the last nudge of that kind (`nudge_*`). The nudge reset is the key: after Lamp reminds, the delta drops back to 0 so the next reminder only fires after another full threshold window — no separate cooldown variable needed.
 3. **Decide path** (one response max per turn, reaction outranks nudge — the user just acted, nudging on top would feel tone-deaf):
-   - **Reaction** — labels list contains `drink` or `break` → speak a 1–3 sentence acknowledgment (surprised / playful, not advice). Uses `count_today` ("lần thứ N hôm nay"), `time_of_day`, and the gap delta to flavor the line. **No log entry** — the underlying `drink` / `break` row was already written by LeLamp upstream.
+   - **Reaction** — labels list contains `drink` or `break` → speak a 1–3 sentence acknowledgment (surprised / playful, not advice). Uses `count_today` ("lần thứ N hôm nay"), `time_of_day`, and the gap delta to flavor the line. **No log entry** — the underlying `drink` / `break` row was already written by HAL upstream.
    - **Hydration nudge** — else if hydration delta ≥ hydration threshold → hydration nudge.
    - **Break nudge** — else if break delta ≥ break threshold → break nudge.
    - Else (sedentary under threshold, or no reset today yet) → `NO_REPLY`.
@@ -366,7 +366,7 @@ The sensing handler injects a `[context: current_user=X]` tag into every `motion
 
 Sorting by `session_start` (the timestamp of the re-enter after the last leave) rather than `last_seen` makes the answer deterministic when two friends are continuously present (Chloe 18:00, An 18:30 → An wins because her session started later), instead of depending on dict iteration order.
 
-**Source of truth lives in LeLamp.** `sensing_service._send_event` attaches `face_recognizer.current_user()` to every outbound payload as the `current_user` field. Lamp's sensing handler reads `req.CurrentUser` directly instead of parsing it back out of the message text — this closed a class of bugs where a stranger-only `presence.enter` fired while a friend was still present would downgrade Lamp's `mood.CurrentUser()` to `"unknown"`.
+**Source of truth lives in HAL.** `sensing_service._send_event` attaches `face_recognizer.current_user()` to every outbound payload as the `current_user` field. Lamp's sensing handler reads `req.CurrentUser` directly instead of parsing it back out of the message text — this closed a class of bugs where a stranger-only `presence.enter` fired while a friend was still present would downgrade Lamp's `mood.CurrentUser()` to `"unknown"`.
 
 External callers (web UI, skills) can query the same value via `GET http://127.0.0.1:5001/face/current-user` → `{"current_user": "<name>"}`. This is a dedicated endpoint; do NOT parse it out of `/face/cooldowns` (that endpoint is the friend/stranger cooldown debug view only).
 
@@ -374,9 +374,9 @@ The Wellbeing, Mood, and Music skills are all required to use this exact value f
 
 Alongside `[context: current_user=X]`, the handler also injects `[user_info: {"name","is_friend","telegram_id","telegram_username"}]` (built by `lamp/lib/skillcontext/BuildUserContext`, fetched from lelamp `/user/info`). Skills must read `telegram_id` from this block — never `curl /user/info`. Block is omitted on hard fetch failure or when `current_user` is `unknown`; SKILL.md fallback path stays.
 
-### Presence markers written by LeLamp
+### Presence markers written by HAL
 
-LeLamp's `FaceRecognizer._post_wellbeing` writes `enter` / `leave` rows directly to Lamp's `POST /api/wellbeing/log` — the agent is not involved, and Lamp's sensing handler no longer writes them either.
+HAL's `FaceRecognizer._post_wellbeing` writes `enter` / `leave` rows directly to Lamp's `POST /api/wellbeing/log` — the agent is not involved, and Lamp's sensing handler no longer writes them either.
 
 - **Per-friend:** each friend gets their own timeline. Fresh friend detection (after gap > `FACE_OWNER_FORGET_S`) → `{"action": "enter", "user": "<name>"}`. Friend forgotten in `_check_leaves` → `{"action": "leave", "user": "<name>"}`. Chloe entering while Leo is still present produces `chloe: enter` only — does not touch Leo's timeline.
 - **Strangers (collapsed to `"unknown"`):** gated by a `_any_stranger_logged` flag. First stranger of a session → `unknown: enter`. Flag stays true while any stranger is still within the forget window, so stranger_37 → stranger_38 → stranger_52 churn does not produce extra rows. When `_check_leaves` drops the last stranger → `unknown: leave`.
@@ -509,7 +509,7 @@ When the user is already present (PRESENT state), foreground motion triggers a `
 
 `MotionPerception` buffers snapshots and action names, flushing them periodically (`MOTION_FLUSH_S`). On flush it checks `PresenceService.state`:
 - **PRESENT** → sends a single `motion.activity` event. Message format:
-  - `Activity detected: <labels>.` — LeLamp already categorises: physical actions collapse to the bucket name (`drink`, `break`), sedentary activities keep the raw Kinetics label (`using computer`, `writing`, `texting`, `reading book`, `reading newspaper`, `drawing`, `playing controller`). The agent logs each label verbatim — no mapping required at the agent level.
+  - `Activity detected: <labels>.` — HAL already categorises: physical actions collapse to the bucket name (`drink`, `break`), sedentary activities keep the raw Kinetics label (`using computer`, `writing`, `texting`, `reading book`, `reading newspaper`, `drawing`, `playing controller`). The agent logs each label verbatim — no mapping required at the agent level.
   - Emotional X3D actions (`laughing`, `crying`, `yawning`, `singing`) are **intentionally dropped** here. A dedicated `motion.emotional` event type will be added later; until then emotional detections are silently ignored. `motion.activity` stays purely physical.
   - No images attached — saves tokens. Friend recognition is **not** required.
 - **Otherwise** → event is **skipped** (logged, not sent). Lamp only expects `motion.activity` — plain `motion` from X3D/pose has no handler and wastes agent tokens.
@@ -523,9 +523,9 @@ Activity detected: writing, reading book.
 
 ### Wellbeing nudge flow (event-driven)
 
-The agent reads the `Activity detected:` line, splits on comma, and POSTs each label verbatim as the `action` field — LeLamp already categorised, so there is no bucket mapping in the agent.
+The agent reads the `Activity detected:` line, splits on comma, and POSTs each label verbatim as the `action` field — HAL already categorised, so there is no bucket mapping in the agent.
 
-1. **Log** each label via `POST /api/wellbeing/log` with `{action, notes:"", user}` — one entry per label. Backend-side no-op; LeLamp already deduped on the outbound label set.
+1. **Log** each label via `POST /api/wellbeing/log` with `{action, notes:"", user}` — one entry per label. Backend-side no-op; HAL already deduped on the outbound label set.
 2. **Read history** via `GET /api/openclaw/wellbeing-history?user={name}&last=50`.
 3. **Compute deltas** against the latest reset point for each kind (see Wellbeing SKILL Step 3).
 4. **Decide nudge** per Wellbeing SKILL Step 4 — at most one hydration or break nudge per turn.
@@ -539,7 +539,7 @@ The agent reads the `Activity detected:` line, splits on comma, and POSTs each l
 
 ### Per-Face Motion Activity (MotionPerFacePerception)
 
-An optional alternative to `MotionPerception` that runs action recognition **per detected face** rather than on the full frame. Enabled via `LELAMP_MOTION_PER_FACE_ENABLED=true` (default `false`).
+An optional alternative to `MotionPerception` that runs action recognition **per detected face** rather than on the full frame. Enabled via `HAL_MOTION_PER_FACE_ENABLED=true` (default `false`).
 
 #### How it works
 
@@ -575,10 +575,10 @@ A new face session must receive at least `MOTION_PER_FACE_MIN_FRAMES` frames (de
 
 | Config | Env var | Default | Purpose |
 |---|---|---|---|
-| `MOTION_PER_FACE_ENABLED` | `LELAMP_MOTION_PER_FACE_ENABLED` | `false` | Enable per-face action recognition |
-| `MOTION_PER_FACE_DEDUP_WINDOW_S` | `LELAMP_MOTION_PER_FACE_DEDUP_WINDOW_S` | `300` (5 min) | Per-action dedup window per face |
-| `MOTION_PER_FACE_SESSION_TTL_S` | `LELAMP_MOTION_PER_FACE_SESSION_TTL_S` | `30` | Evict WS session after this long without seeing the face |
-| `MOTION_PER_FACE_MIN_FRAMES` | `LELAMP_MOTION_PER_FACE_MIN_FRAMES` | `4` | Min frames before first event fires |
+| `MOTION_PER_FACE_ENABLED` | `HAL_MOTION_PER_FACE_ENABLED` | `false` | Enable per-face action recognition |
+| `MOTION_PER_FACE_DEDUP_WINDOW_S` | `HAL_MOTION_PER_FACE_DEDUP_WINDOW_S` | `300` (5 min) | Per-action dedup window per face |
+| `MOTION_PER_FACE_SESSION_TTL_S` | `HAL_MOTION_PER_FACE_SESSION_TTL_S` | `30` | Evict WS session after this long without seeing the face |
+| `MOTION_PER_FACE_MIN_FRAMES` | `HAL_MOTION_PER_FACE_MIN_FRAMES` | `4` | Min frames before first event fires |
 
 #### Message format
 
@@ -609,7 +609,7 @@ Lamp detects the **user's** emotional state via three channels:
 
 ### `emotion.detected` event
 
-Fired by LeLamp when the dlbackend emotion classifier detects a facial expression above the confidence threshold. Message format:
+Fired by HAL when the dlbackend emotion classifier detects a facial expression above the confidence threshold. Message format:
 
 ```
 Emotion detected: <Label>. (weak camera cue; confidence=<0.00-1.00>; bucket=<positive|negative|other>; treat as uncertain, <bucket-tuned hedge>.)
@@ -651,7 +651,7 @@ See `user-emotion-detection/SKILL.md` for the agent's full response rules.
 
 ### `speech_emotion.detected` event
 
-Fired by LeLamp at the end of every speaker-identified STT session, after the same WAV bytes used for speaker `/embed` are forwarded to `dlbackend /api/dl/ser/recognize` (emotion2vec_plus_large). Buffering, per-user aggregation, polarity-bucket dedup, and the Lamp POST are all handled inside `lelamp/service/voice/speech_emotion/SpeechEmotionService` — `voice_service.py` only calls `submit(user, wav, duration)`. Message format mirrors the facial pipeline:
+Fired by HAL at the end of every speaker-identified STT session, after the same WAV bytes used for speaker `/embed` are forwarded to `dlbackend /api/dl/ser/recognize` (emotion2vec_plus_large). Buffering, per-user aggregation, polarity-bucket dedup, and the Lamp POST are all handled inside `lelamp/service/voice/speech_emotion/SpeechEmotionService` — `voice_service.py` only calls `submit(user, wav, duration)`. Message format mirrors the facial pipeline:
 
 ```
 Speech emotion detected: <Label>. (weak voice cue; confidence=<0.00-1.00>; bucket=<positive|negative|other>; treat as uncertain, <bucket-tuned hedge>.)
