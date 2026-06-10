@@ -15,6 +15,7 @@ from hal.board.device import (
     parse_device,
     plan_mounts,
     validate_safety_refs,
+    validate_schema,
 )
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -55,6 +56,34 @@ class TestParsing(unittest.TestCase):
         self.assertTrue(routes["audio"])      # required cap
         self.assertFalse(routes["servo"])     # optional cap
         self.assertTrue(routes["system"])
+
+
+class TestSchemaValidation(unittest.TestCase):
+    def test_parse_device_sets_schema(self):
+        self.assertEqual(parse_device("sample", SAMPLE).schema, "autonomous.device.v1")
+
+    def test_valid_schema_returns_tag(self):
+        self.assertEqual(
+            validate_schema("schema: autonomous.device.v1\n"), "autonomous.device.v1"
+        )
+
+    def test_missing_schema_fails_loud(self):
+        with self.assertRaises(ValueError):
+            validate_schema("id: x\ncapabilities:\n")
+
+    def test_malformed_schema_fails_loud(self):
+        with self.assertRaises(ValueError):
+            validate_schema("schema: autonomous.device.1\n")  # no 'v'
+        with self.assertRaises(ValueError):
+            validate_schema("schema: some.other.v1\n")        # wrong namespace
+
+    def test_unknown_major_fails_loud(self):
+        with self.assertRaises(ValueError):
+            validate_schema("schema: autonomous.device.v2\n")
+
+    def test_real_devices_declare_v1(self):
+        self.assertEqual(load_device("lamp", DEVICES_DIR).schema, "autonomous.device.v1")
+        self.assertEqual(load_device("intern", DEVICES_DIR).schema, "autonomous.device.v1")
 
 
 class TestRealDeviceFiles(unittest.TestCase):

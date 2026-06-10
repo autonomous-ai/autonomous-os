@@ -12,6 +12,9 @@ One file per device at `devices/<id>/DEVICE.md`. **Adding a device is writing a
 
 At boot the runtime reads the front matter and:
 
+0. **Validates `schema`** — a missing, malformed, or unknown-major tag (e.g.
+   `autonomous.device.v2` on a runtime that only understands `v1`) aborts boot.
+   The runtime refuses to mount a body against an ABI it cannot read.
 1. Brings up **only** the capability subsystems the device declares.
 2. **Skips** undeclared capabilities silently — that is a different device, by design.
 3. **Fails loudly** if a *declared* capability's driver is missing or won't initialize —

@@ -24,6 +24,16 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger("hal.device")
 
+# The DEVICE.md `schema:` is an ABI tag (DEVICE-SPEC.md §Versioning): within a
+# major version fields are only added, so a v1 file must keep booting on every
+# later v1 runtime. The runtime declares which majors it understands; a file
+# whose major is unknown can't be parsed safely, so boot fails loud.
+SCHEMA_NAMESPACE = "autonomous.device"
+SUPPORTED_SCHEMA_MAJORS = frozenset({1})
+
+_RE_SCHEMA = re.compile(r"^schema:\s*(\S+)\s*$", re.MULTILINE)
+_RE_SCHEMA_VERSION = re.compile(r"^" + re.escape(SCHEMA_NAMESPACE) + r"\.v(\d+)$")
+
 
 @dataclass(frozen=True)
 class Capability:
@@ -54,6 +64,34 @@ def _parse_required(body: str) -> bool:
 def _parse_safety(body: str) -> Optional[str]:
     m = re.search(r"safety:\s*([^\s,}]+)", body)
     return m.group(1) if m else None
+
+
+def validate_schema(front_matter: str) -> str:
+    """Parse and validate the `schema:` ABI tag. Returns the raw schema string.
+
+    Raises ValueError if it is missing, malformed, or declares a major version
+    this runtime does not support — all of which are deploy faults that must
+    fail boot rather than mount a body against an ABI we can't read.
+    """
+    m = _RE_SCHEMA.search(front_matter)
+    if not m:
+        raise ValueError(
+            f"DEVICE.md is missing the required 'schema:' field "
+            f"(expected '{SCHEMA_NAMESPACE}.v<major>')"
+        )
+    schema = m.group(1)
+    v = _RE_SCHEMA_VERSION.match(schema)
+    if not v:
+        raise ValueError(
+            f"DEVICE.md schema '{schema}' is not a valid '{SCHEMA_NAMESPACE}.v<major>' tag"
+        )
+    major = int(v.group(1))
+    if major not in SUPPORTED_SCHEMA_MAJORS:
+        raise ValueError(
+            f"DEVICE.md schema '{schema}' has major v{major}; this runtime supports "
+            f"majors {sorted(SUPPORTED_SCHEMA_MAJORS)}"
+        )
+    return schema
 
 
 def parse_capabilities(front_matter: str) -> Dict[str, Capability]:
@@ -96,6 +134,7 @@ def parse_capabilities(front_matter: str) -> Dict[str, Capability]:
 @dataclass(frozen=True)
 class DeviceProfile:
     device_type: str
+    schema: str
     capabilities: Dict[str, Capability]
 
     def declared_routes(self) -> Dict[str, bool]:
@@ -109,7 +148,13 @@ class DeviceProfile:
 
 
 def parse_device(device_type: str, text: str) -> DeviceProfile:
-    return DeviceProfile(device_type=device_type, capabilities=parse_capabilities(extract_front_matter(text)))
+    front_matter = extract_front_matter(text)
+    schema = validate_schema(front_matter)  # fail loud on missing/unknown ABI
+    return DeviceProfile(
+        device_type=device_type,
+        schema=schema,
+        capabilities=parse_capabilities(front_matter),
+    )
 
 
 def validate_safety_refs(profile: DeviceProfile, safety_md_text: str) -> List[str]:
