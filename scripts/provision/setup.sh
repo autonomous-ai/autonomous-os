@@ -1,5 +1,5 @@
 #!/bin/bash
-# Production setup for Raspberry Pi 5: single-interface AP/STA switch, nginx setup web + API proxy, lamp backend.
+# Production setup for Raspberry Pi 5: single-interface AP/STA switch, nginx setup web + API proxy, os-server backend.
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
@@ -252,10 +252,10 @@ install_binary_from_zip() {
 }
 
 # ----------------------------------------------------------
-# Stage 1: Backend (bootstrap + lamp from OTA metadata)
+# Stage 1: Backend (bootstrap + os-server from OTA metadata)
 # ----------------------------------------------------------
 stage_backend() {
-  echo "[stage] Install backend (bootstrap + lamp)"
+  echo "[stage] Install backend (bootstrap + os-server)"
 
   # Migrate old openclaw config dir from /root/openclaw → /root/.openclaw
   if [ -d "/root/openclaw" ] && [ ! -d "/root/.openclaw" ]; then
@@ -291,7 +291,7 @@ EOF
 
   cat >/etc/systemd/system/os-server.service <<EOF
 [Unit]
-Description=Lamp Backend
+Description=Autonomous OS Server
 After=network-online.target
 
 [Service]
@@ -312,23 +312,23 @@ EOF
 
   systemctl daemon-reload
   systemctl enable bootstrap os-server
-  # Do NOT start lamp here — it switches to AP mode when unconfigured, killing internet.
+  # Do NOT start os-server here — it switches to AP mode when unconfigured, killing internet.
   # Services will start after reboot at the end of setup.
   # /usr/local/bin/software-update is written later by stage_ap (covers
-  # all six components: lamp, openclaw, bootstrap, web, hal, claude-desktop-buddy).
+  # all six components: os-server, openclaw, bootstrap, web, hal, claude-desktop-buddy).
 }
 
 # ----------------------------------------------------------
-# Stage 1a: LeLamp (Python hardware runtime)
+# Stage 1a: HAL (Python hardware runtime)
 # ----------------------------------------------------------
 stage_hal() {
-  echo "[stage] Install LeLamp (Python hardware drivers)"
+  echo "[stage] Install HAL (Python hardware drivers)"
 
   HAL_DIR="/opt/hal"
   mkdir -p "$HAL_DIR"
 
   if [ -n "$HAL_URL" ]; then
-    echo "[stage] Downloading LeLamp from OTA..."
+    echo "[stage] Downloading HAL from OTA..."
     retry "curl -fsSL -H \"Cache-Control: no-cache\" -H \"Pragma: no-cache\" -o /tmp/hal.zip \"$HAL_URL\"" 5
     unzip -o -q /tmp/hal.zip -d "$HAL_DIR"
     rm -f /tmp/hal.zip
@@ -444,7 +444,7 @@ WEBRTCVAD_EOF
 
   cat >/etc/systemd/system/hal.service <<EOF
 [Unit]
-Description=Lamp LeLamp Hardware Runtime
+Description=HAL Hardware Runtime
 After=network.target
 
 [Service]
@@ -513,7 +513,7 @@ stage_buddy() {
 
   cat >/etc/systemd/system/claude-desktop-buddy.service <<EOF
 [Unit]
-Description=Lamp Claude Desktop Buddy (BLE)
+Description=Claude Desktop Buddy (BLE)
 After=bluetooth.target os-server.service
 Wants=bluetooth.target
 
@@ -1406,7 +1406,7 @@ stage_devices() {
   fi
 }
 
-# Stop lamp if running from a previous setup — it switches to AP mode when unconfigured, killing internet.
+# Stop os-server if running from a previous setup — it switches to AP mode when unconfigured, killing internet.
 systemctl stop os-server.service 2>/dev/null || true
 systemctl disable os-server.service 2>/dev/null || true
 

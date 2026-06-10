@@ -40,7 +40,7 @@
 #         - Generate locale
 #         - stage_rpi5_wifi_stability: disable IPv6 (legacy RPi 5 workaround)
 #         - stage_enable_spi: dtparam=spi=on in config.txt
-#         - stage_backend_units: systemd services (bootstrap, lamp, hal) + software-update
+#         - stage_backend_units: systemd services (bootstrap, os-server, hal) + software-update
 #         - stage_pulseaudio: PulseAudio echo cancellation (WebRTC AEC for mic/speaker)
 #         - stage_hal_uv: install uv (Python package manager for HAL)
 #         - stage_nginx: write nginx config with backend/hal/openclaw upstreams
@@ -65,7 +65,7 @@
 #   3. btrfs-resize-once.service: resizes partition + Btrfs to full SD (runs once, self-destructs)
 #      @factory is the build-time white board — never overwritten
 #   4. User runs 'sudo device-ap-mode' to start AP hotspot "<device_type>-xxxx" at 192.168.100.1
-#   5. nginx serves setup web UI, bootstrap/lamp/hal backends running
+#   5. nginx serves setup web UI, bootstrap/os-server/hal backends running
 #
 # BTRFS SUBVOLUME LAYOUT
 #   @               — initial live root
@@ -834,7 +834,7 @@ EOF
 
 cat > /etc/systemd/system/os-server.service <<EOF
 [Unit]
-Description=Lamp Backend
+Description=Autonomous OS Server
 After=network.target
 
 [Service]
@@ -855,7 +855,7 @@ EOF
 
 cat > /etc/systemd/system/hal.service <<'EOF'
 [Unit]
-Description=Lamp HAL Hardware Runtime
+Description=HAL Hardware Runtime
 After=network.target
 
 [Service]
@@ -2019,7 +2019,7 @@ if [ -n "\$BUDDY_URL" ]; then
   rm -rf /tmp/buddy-extract
   cat > /etc/systemd/system/claude-desktop-buddy.service <<UNIT
 [Unit]
-Description=Lamp Claude Desktop Buddy (BLE)
+Description=Claude Desktop Buddy (BLE)
 After=bluetooth.target os-server.service
 Wants=bluetooth.target
 
@@ -2125,7 +2125,7 @@ for CFG in /etc/fstab /etc/hostapd/hostapd.conf /etc/nginx/conf.d/lamp.conf \
 done
 
 # Check systemd services are enabled
-for SVC in bootstrap lamp hal nginx openclaw btrfs-resize-once firstrun-wifi; do
+for SVC in bootstrap os-server hal nginx openclaw btrfs-resize-once firstrun-wifi; do
   if [ -L "${MNT}/etc/systemd/system/multi-user.target.wants/${SVC}.service" ] || \
      [ -L "${MNT}/etc/systemd/system/sysinit.target.wants/${SVC}.service" ]; then
     echo "  [OK] ${SVC}.service enabled"
@@ -2185,4 +2185,4 @@ echo "      sudo fr-rollback              — restore @factory and reboot"
 echo "      sudo device-ap-mode           — switch to hotspot"
 echo "      sudo device-sta-mode          — switch to WiFi client"
 echo "      sudo connect-wifi SSID PASS   — connect to WiFi"
-echo "      sudo software-update <bootstrap|lamp|hal|openclaw|web>  — OTA update"
+echo "      sudo software-update <bootstrap|os-server|hal|openclaw|web>  — OTA update"

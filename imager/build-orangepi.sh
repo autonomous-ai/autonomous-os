@@ -210,7 +210,7 @@ retry() {
   return 1
 }
 
-# ── apt: install Lamp runtime deps (matches setup.sh + production OPi list) ──
+# ── apt: install OS runtime deps (matches setup.sh + production OPi list) ──
 echo "[stage] apt update + install"
 apt-get update -qq
 apt-get install -y \\
@@ -304,7 +304,7 @@ echo "[stage] systemd units"
 # unquoted is safe.
 cat > /etc/systemd/system/os-server.service <<UNIT
 [Unit]
-Description=Lamp Backend
+Description=Autonomous OS Server
 After=network-online.target
 
 [Service]
@@ -357,7 +357,7 @@ BSJSON
 
 cat > /etc/systemd/system/hal.service <<'UNIT'
 [Unit]
-Description=Lamp HAL Hardware Runtime
+Description=HAL Hardware Runtime
 After=network.target
 
 [Service]
@@ -380,33 +380,33 @@ UNIT
 # Default hal env — production-safe defaults. Secrets (GELF, API keys) are
 # filled by the device operator via setup wizard; not baked into the image.
 cat > /opt/hal/.env <<'ENV'
-LELAMP_MODE=production
-LELAMP_LOG_LEVEL=INFO
-LELAMP_AUDIO_INPUT_ALSA=plug:lamp_micro2
-LELAMP_AUDIO_SENSING_DEVICE=plug:lamp_micro1
-LELAMP_AUDIO_OUTPUT_ALSA=plug:lamp_speaker
-LELAMP_VAD_THRESHOLD=1500
-LELAMP_STT_KEEPALIVE=true
-LELAMP_SPEECH_HOLDOFF=0.05
-LELAMP_SOUND_RMS_THRESHOLD=3000
-LELAMP_TTS_SPEED=1.1
-LELAMP_SILERO_ENABLED=false
-LELAMP_WEBRTCVAD_ENABLED=true
-LELAMP_MOTION_ENABLED=true
-LELAMP_EMOTION_ENABLED=true
-LELAMP_POSE_MOTION_ENABLED=false
-LELAMP_MOTION_CONFIDENCE_THRESHOLD=0.4
-LELAMP_EMOTION_CONFIDENCE_THRESHOLD=0.8
-LELAMP_BACKCHANNEL_INTERVAL_S=5
-LELAMP_CAMERA_WIDTH=2560
-LELAMP_CAMERA_HEIGHT=1440
-LELAMP_CAMERA_STREAM_WIDTH=2560
-LELAMP_CAMERA_STREAM_HEIGHT=1440
-LELAMP_CAMERA_INDEX=0
+HAL_MODE=production
+HAL_LOG_LEVEL=INFO
+HAL_AUDIO_INPUT_ALSA=plug:lamp_micro2
+HAL_AUDIO_SENSING_DEVICE=plug:lamp_micro1
+HAL_AUDIO_OUTPUT_ALSA=plug:lamp_speaker
+HAL_VAD_THRESHOLD=1500
+HAL_STT_KEEPALIVE=true
+HAL_SPEECH_HOLDOFF=0.05
+HAL_SOUND_RMS_THRESHOLD=3000
+HAL_TTS_SPEED=1.1
+HAL_SILERO_ENABLED=false
+HAL_WEBRTCVAD_ENABLED=true
+HAL_MOTION_ENABLED=true
+HAL_EMOTION_ENABLED=true
+HAL_POSE_MOTION_ENABLED=false
+HAL_MOTION_CONFIDENCE_THRESHOLD=0.4
+HAL_EMOTION_CONFIDENCE_THRESHOLD=0.8
+HAL_BACKCHANNEL_INTERVAL_S=5
+HAL_CAMERA_WIDTH=2560
+HAL_CAMERA_HEIGHT=1440
+HAL_CAMERA_STREAM_WIDTH=2560
+HAL_CAMERA_STREAM_HEIGHT=1440
+HAL_CAMERA_INDEX=0
 SPEAKER_MATCH_THRESHOLD=0.75
 SPEAKER_ENROLL_CONSISTENCY_THRESHOLD=0.75
-LELAMP_DL_ENCRYPTION=true
-LELAMP_DL_ENCRYPTION_REQUIRED=false
+HAL_DL_ENCRYPTION=true
+HAL_DL_ENCRYPTION_REQUIRED=false
 OMP_NUM_THREADS=1
 OPENBLAS_NUM_THREADS=1
 ENV
@@ -899,7 +899,7 @@ server {
 }
 NGINX
 mkdir -p /usr/share/nginx/html/setup
-echo '<h1>Lamp setup — flash the device and reboot.</h1>' > /usr/share/nginx/html/setup/index.html
+echo '<h1>Device setup — flash the device and reboot.</h1>' > /usr/share/nginx/html/setup/index.html
 
 # ── PulseAudio: WebRTC echo cancel + udev ignore for I2S codecs ──────────────
 echo "[stage] PulseAudio"
@@ -953,9 +953,9 @@ ALSA_EOF
 echo "[stage] mask conflicting vendor services"
 systemctl mask orangepi-firstrun-config.service 2>/dev/null || true
 
-# ── enable Lamp services (symlink, since chroot has no running systemd) ──────
-echo "[stage] enable Lamp services"
-for unit in lamp bootstrap hal openclaw avahi-daemon bluetooth ssh; do
+# ── enable services (symlink, since chroot has no running systemd) ──────
+echo "[stage] enable services"
+for unit in os-server bootstrap hal openclaw avahi-daemon bluetooth ssh; do
   systemctl enable "\$unit" 2>/dev/null || true
 done
 
@@ -973,7 +973,7 @@ CHROOT_STAGES
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 3 — OTA bake: backend binaries + hal + web UI + buddy
 # ─────────────────────────────────────────────────────────────────────────────
-log "Phase 3 — OTA bake (Lamp binaries from metadata.json)"
+log "Phase 3 — OTA bake (OS binaries from metadata.json)"
 
 chroot "${MNT}" /bin/bash <<OVERLAY_STAGES
 set -euo pipefail
@@ -1120,7 +1120,7 @@ if [ -n "\$BUDDY_URL" ]; then
   rm -rf /tmp/buddy-extract
   cat > /etc/systemd/system/claude-desktop-buddy.service <<'UNIT'
 [Unit]
-Description=Lamp Claude Desktop Buddy (BLE)
+Description=Claude Desktop Buddy (BLE)
 After=bluetooth.target os-server.service
 Wants=bluetooth.target
 
@@ -1150,7 +1150,7 @@ echo "[overlay] Phase 3 complete"
 # 'source' on the host pulls them into variables.
 cat > /tmp/ota-versions.env <<MANIFEST
 WEB_VER=\${WEB_VER}
-LAMP_VER=\${LAMP_VER}
+OS_SERVER_VER=\${OS_SERVER_VER}
 BOOTSTRAP_VER=\${BOOTSTRAP_VER}
 LELAMP_VER=\${LELAMP_VER}
 BUDDY_VER=\${BUDDY_VER}
@@ -1158,12 +1158,12 @@ MANIFEST
 OVERLAY_STAGES
 
 # Capture OTA versions for the build manifest before they get wiped by Phase 5.
-BAKED_WEB_VER=""; BAKED_LAMP_VER=""; BAKED_BOOTSTRAP_VER=""; BAKED_LELAMP_VER=""; BAKED_BUDDY_VER=""
+BAKED_WEB_VER=""; BAKED_OS_SERVER_VER=""; BAKED_BOOTSTRAP_VER=""; BAKED_LELAMP_VER=""; BAKED_BUDDY_VER=""
 if [ -f "${MNT}/tmp/ota-versions.env" ]; then
   # shellcheck disable=SC1090
   . "${MNT}/tmp/ota-versions.env" || true
   BAKED_WEB_VER="${WEB_VER:-}"
-  BAKED_LAMP_VER="${LAMP_VER:-}"
+  BAKED_OS_SERVER_VER="${OS_SERVER_VER:-}"
   BAKED_BOOTSTRAP_VER="${BOOTSTRAP_VER:-}"
   BAKED_LELAMP_VER="${LELAMP_VER:-}"
   BAKED_BUDDY_VER="${BUDDY_VER:-}"
@@ -1182,7 +1182,7 @@ cat > /output/manifest-opi.json <<MANIFEST_JSON
   "ota_metadata_url": "${OTA_METADATA_URL}",
   "ota_versions": {
     "web": "${BAKED_WEB_VER}",
-    "lamp": "${BAKED_LAMP_VER}",
+    "os-server": "${BAKED_OS_SERVER_VER}",
     "bootstrap": "${BAKED_BOOTSTRAP_VER}",
     "hal": "${BAKED_LELAMP_VER}",
     "claude-desktop-buddy": "${BAKED_BUDDY_VER}"
