@@ -28,7 +28,11 @@ func soulFor(t *testing.T, deviceType string) ([]byte, bool) {
 	// config.json device_type ("" here) → "lamp".
 	t.Setenv("DEVICE_TYPE", deviceType)
 	s := &Service{config: &config.Config{}}
-	return s.deviceSoulCore()
+	content, has, err := s.deviceSoulCore()
+	if err != nil {
+		t.Fatalf("deviceSoulCore(%q): %v", deviceType, err)
+	}
+	return content, has
 }
 
 // Lamp ships its own persona → we override the gateway default with it.
@@ -42,11 +46,11 @@ func TestDeviceSoulCore_LampHasOwnSoul(t *testing.T) {
 	}
 }
 
-// Intern is a body with no persona → no SOUL.md → we must NOT override; the
+// Intern is a body with no persona → no soul_ref → we must NOT override; the
 // agentic runtime (OpenClaw) keeps its own default soul.
 func TestDeviceSoulCore_InternHasNoSoul(t *testing.T) {
 	if _, has := soulFor(t, "intern"); has {
-		t.Error("intern declares no SOUL.md — deviceSoulCore must return hasSoul=false")
+		t.Error("intern declares no soul_ref — deviceSoulCore must return hasSoul=false")
 	}
 }
 

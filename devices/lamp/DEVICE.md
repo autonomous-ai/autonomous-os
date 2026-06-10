@@ -43,8 +43,10 @@ speaker. Compute is a Raspberry Pi 4/5 or OrangePi (sun60). The body is wired pe
 - Movement can surprise people. Move gently, legibly, and stop on command.
 - Light and motion are communication channels, not decoration.
 
-## Closed-layer references
+## Soul and memory references
 
-`soul_ref` and `memory` point at the character and continuity layers **by name** — they
-are not embedded here. `DEVICE.md` is open and describes the body; the soul that
-inhabits it ships separately.
+`soul_ref` points at the character that inhabits this body. It resolves to a soul
+artifact — a path read relative to this device folder (here, `SOUL.md`), or an
+`http(s)://` URL the runtime downloads. A body with no `soul_ref` (e.g. Intern) keeps
+the gateway's default soul. `memory` names the continuity layer by backend. `DEVICE.md`
+describes the body; the soul is referenced here, not embedded in the front matter.

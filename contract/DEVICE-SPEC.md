@@ -36,7 +36,7 @@ tell "no servo by design" from "servo lib missing" from "servo broken."
 | `boards` | yes | Supported boards; resolved by `os/hal/board`. |
 | `gateway` | yes | Default agentic gateway + protocol. |
 | `capabilities` | yes | Map of capability group → declaration (below). |
-| `soul_ref` | no | Pointer to the character pack (closed layer — referenced, never embedded). |
+| `soul_ref` | no | Soul artifact for this body: a path read relative to the device folder (e.g. `SOUL.md`), or an `http(s)://` URL the runtime downloads. Absent → the gateway's default soul. |
 | `safety_ref` | no | Path to this device's `SAFETY.md`. |
 | `memory` | no | Memory backend declaration. |
 
