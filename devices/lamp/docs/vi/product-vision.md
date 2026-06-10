@@ -734,7 +734,7 @@ Body: {"x": 3, "y": 2, "r": 255, "g": 0, "b": 0}
 **Mô tả**: Lamp nhận diện ai đang nói bằng voice embedding. Mic transcripts có prefix tên (`Leo:`) hoặc `Unknown:`. User có thể tự enroll giọng bằng cách giới thiệu bản thân.
 
 **Triển khai**:
-- `os/hal/speaker_recognizer.py` + `os/hal/drivers/voice/speaker_recognizer/speaker_recognizer.py` — voice embedding model, profile storage, real-time matching.
+- `os/hal/drivers/voice/speaker_recognizer/speaker_recognizer.py` — voice embedding model, profile storage, real-time matching.
 - `lamp/resources/openclaw-skills/speaker-recognizer/SKILL.md` — self-enrollment skill (mic intro, Telegram voice note, two-turn enrollment).
 - Voice profiles lưu per-user cùng face data tại `/root/local/users/{name}/`.
 - Telegram identity linked khi voice enrollment để DM targeting.

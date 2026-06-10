@@ -145,7 +145,7 @@ Trong `_process_job`, mọi inference vượt qua ngưỡng confidence theo labe
 Lamp backend chỉ expose clip cho Flow Monitor UI qua route mới `GET /api/sensing/audio/:name` (`SensingHandler.GetAudio`). Nó phục vụ WAV theo **basename** (đường dẫn đầy đủ không bao giờ rời khỏi thiết bị) từ một trong:
 
 ```
-/var/lib/lelamp/speech-emotion
+/var/lib/hal/speech-emotion
 /tmp/lamp-speech-emotion
 ```
 

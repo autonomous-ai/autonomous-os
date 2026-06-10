@@ -33,7 +33,7 @@ Pi services:
 | `/root/local/users/<user>/music-suggestions/YYYY-MM-DD.jsonl` | Per-user music suggestion history | daily |
 | `/root/.openclaw/cron/jobs.json` | Current crons | replaced atomically |
 | `/root/.openclaw/cron/jobs.json.bak` | Previous state of jobs.json | |
-| `/var/lib/lelamp/snapshots/sensing_<prefix>/<ms>.jpg` | Camera snapshots per event, bucketed by event prefix (`sensing_presence/`, `sensing_motion_activity/`, `sensing_emotion/`, …) | TTL 72h + 50 MB cap |
+| `/var/lib/hal/snapshots/sensing_<prefix>/<ms>.jpg` | Camera snapshots per event, bucketed by event prefix (`sensing_presence/`, `sensing_motion_activity/`, `sensing_emotion/`, …) | TTL 72h + 50 MB cap |
 
 `<user>` is `alex`, `gray`, or `unknown` (all strangers collapse to `unknown`).
 

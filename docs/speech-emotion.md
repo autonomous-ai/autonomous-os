@@ -159,7 +159,7 @@ In `_process_job`, every inference that clears the per-label confidence gate is 
 The Lamp backend exposes the clip to the Flow Monitor UI **only** via a new route `GET /api/sensing/audio/:name` (`SensingHandler.GetAudio`). It serves the WAV by **basename** (the full path never leaves the device) from one of:
 
 ```
-/var/lib/lelamp/speech-emotion
+/var/lib/hal/speech-emotion
 /tmp/lamp-speech-emotion
 ```
 

@@ -791,7 +791,7 @@ The Lamp server is forked from openclaw-lobster. Approximately 70-80% of Layer 1
 **Description**: Lamp recognizes who is speaking by voice. Mic transcripts are prefixed with the speaker's name (`Leo:`) or `Unknown:`. Users can self-enroll their voice by introducing themselves.
 
 **Implementation**:
-- `os/hal/speaker_recognizer.py` + `os/hal/drivers/voice/speaker_recognizer/speaker_recognizer.py` — voice embedding model, profile storage, real-time matching.
+- `os/hal/drivers/voice/speaker_recognizer/speaker_recognizer.py` — voice embedding model, profile storage, real-time matching.
 - `lamp/resources/openclaw-skills/speaker-recognizer/SKILL.md` — self-enrollment skill (mic intro, Telegram voice note, two-turn enrollment).
 - Voice profiles stored per-user alongside face data in `/root/local/users/{name}/`.
 - Telegram identity linked during voice enrollment for DM targeting.
