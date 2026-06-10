@@ -41,7 +41,7 @@ from hal.drivers.button_actions import (
 logger = logging.getLogger(__name__)
 
 # TTP223 pad wiring (chip / lines) lives in the board platform layer —
-# os/hal/hal/platform/board.py (BoardProfile.touch).
+# os/hal/board/board.py (BoardProfile.touch).
 
 # Session gap: edges within this window of the previous edge belong to
 # the same session. 200ms comfortably exceeds the observed burst length

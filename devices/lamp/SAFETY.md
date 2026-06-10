@@ -17,7 +17,7 @@ That is the template for everything here.
   behind the gateway, the network, or any in-flight skill. A spoken "stop" maps to a
   local intent that halts servos in the runtime, then informs the agent.
 - Motion is **conservative by default** — bounded speed and acceleration, set in
-  `os/hal/platform/<board>`, not chosen by the agent.
+  `os/hal/board/board.py`, not chosen by the agent.
 - The agent **does not drive raw servo loops.** It requests poses and tracking targets;
   the runtime clamps to mechanical limits.
 - No motion during a declared privacy-sensitive moment, during setup failure, or when

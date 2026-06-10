@@ -51,7 +51,7 @@ LED_OFF = (0, 0, 0)
 LED_BLINK_HALF_PERIOD_S = 0.5
 
 # Per-board button wiring (chip / line / debounce_ns) lives in the board
-# platform layer — os/hal/hal/platform/board.py — the single source of truth
+# platform layer — os/hal/board/board.py — the single source of truth
 # shared across drivers. lgpio.callback tick is nanoseconds; both per-board
 # debounce values stay well under DOUBLE_CLICK_WINDOW so triple click is
 # still detectable.

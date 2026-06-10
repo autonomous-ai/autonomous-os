@@ -17,12 +17,14 @@ class TestDetectBoardId(unittest.TestCase):
     def test_orangepi_sun60(self):
         self.assertEqual(detect_board_id("opi sun60iw2 board"), "orangepi_sun60")
 
-    def test_pi4_falls_through_to_default(self):
-        self.assertEqual(detect_board_id("raspberry pi 4 model b"), DEFAULT_BOARD_ID)
+    def test_pi4(self):
+        # Pi 4 is matched explicitly now (it used to rely on the default).
+        self.assertEqual(detect_board_id("raspberry pi 4 model b"), "raspberry_pi_4")
 
-    def test_unknown_model_uses_conservative_default(self):
+    def test_unknown_model_uses_default(self):
+        # Unrecognized/empty model -> DEFAULT_BOARD_ID (OrangePi 4 Pro / sun60).
         self.assertEqual(detect_board_id(""), DEFAULT_BOARD_ID)
-        self.assertEqual(detect_board_id("some-other-sbc"), "raspberry_pi_4")
+        self.assertEqual(detect_board_id("some-other-sbc"), DEFAULT_BOARD_ID)
 
     def test_missing_device_tree_reads_empty(self):
         # nonexistent path -> '' -> default board (mirrors driver OSError handling)

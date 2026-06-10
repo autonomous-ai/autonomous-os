@@ -34,7 +34,7 @@ a capability works on Lamp, it works.
 A weighted base, a 5-servo articulated arm (Feetech bus servos over `/dev/ttyACM0`), a
 warm LED ring head (WS2812), a round GC9A01 display, a camera, a microphone, and a
 speaker. Compute is a Raspberry Pi 4/5 or OrangePi (sun60). The body is wired per
-`os/hal/platform/<board>`; the agent never addresses hardware directly.
+`os/hal/board/board.py`; the agent never addresses hardware directly.
 
 ## What the agent should assume
 

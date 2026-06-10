@@ -30,7 +30,7 @@ tell "no servo by design" from "servo lib missing" from "servo broken."
 | `id` | yes | Stable device id, e.g. `autonomous-lamp`. |
 | `name` | yes | Display name. |
 | `type` | yes | Free-form class (`desk_robot`, `desk_agent`). |
-| `boards` | yes | Supported boards; resolved by `os/hal/platform`. |
+| `boards` | yes | Supported boards; resolved by `os/hal/board`. |
 | `gateway` | yes | Default agentic gateway + protocol. |
 | `capabilities` | yes | Map of capability group → declaration (below). |
 | `soul_ref` | no | Pointer to the character pack (closed layer — referenced, never embedded). |

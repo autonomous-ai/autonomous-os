@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
+
 # Load .env BEFORE any hal imports so config.py reads correct env vars
 load_dotenv(Path(__file__).parent / ".env", override=False)
 
@@ -53,10 +54,10 @@ LOG_DIR = Path(os.environ.get("HAL_LOG_DIR", "/var/log/hal"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 _LEVEL_COLORS = {
-    logging.DEBUG: "\033[37m",     # gray
-    logging.INFO: "\033[32m",      # green
-    logging.WARNING: "\033[33m",   # yellow
-    logging.ERROR: "\033[31m",     # red
+    logging.DEBUG: "\033[37m",  # gray
+    logging.INFO: "\033[32m",  # green
+    logging.WARNING: "\033[33m",  # yellow
+    logging.ERROR: "\033[31m",  # red
     logging.CRITICAL: "\033[1;31m",  # bold red
 }
 _RESET = "\033[0m"
@@ -91,7 +92,6 @@ _file = logging.handlers.RotatingFileHandler(
 )
 _file.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
 _root.addHandler(_file)
-
 
 # GELF handler: send INFO+ logs to centralized Graylog
 try:
@@ -277,6 +277,7 @@ async def lifespan(app: FastAPI):
                 # underscores. Normalize both sides so matching is robust.
                 def _norm(s: str) -> str:
                     return "".join(c for c in s.lower() if c.isalnum())
+
                 _needle = _norm(_alsa_card)
                 # PortAudio caches its device list at sd import time. At OS cold
                 # boot, sndi2s4 (ES8389 codec) often isn't registered yet, so the
@@ -547,8 +548,8 @@ async def lifespan(app: FastAPI):
     if state.animation_service:
         state.animation_service._running.clear()
         if (
-            state.animation_service._event_thread
-            and state.animation_service._event_thread.is_alive()
+                state.animation_service._event_thread
+                and state.animation_service._event_thread.is_alive()
         ):
             state.animation_service._event_thread.join(timeout=3.0)
     if state.rgb_service:
@@ -633,18 +634,32 @@ app = FastAPI(
 )
 
 # --- Include route modules (declaration-driven via DEVICE.md) ---
-# Mount only the routes this device's DEVICE.md declares. A device is "Lamp minus
-# motion+display" by declaring fewer capabilities — not by forking. Falls back to
-# mounting everything when no DEVICE.md is found, so existing deployments are
-# unaffected. See contract/DEVICE-SPEC.md and hal/platform/device.py.
+# Mount routes by crossing what this device's DEVICE.md *declares* with which
+# drivers are actually *available* (importable), via hal.board.device.plan_mounts.
+# A device is "Lamp minus motion+display" by declaring fewer capabilities — not by
+# forking. Per contract/DEVICE-SPEC.md the boot rule is:
+#   declared + available            -> mount
+#   declared + required + missing    -> FAIL LOUD in production (a hardware fault)
+#   declared + optional  + missing    -> skip (graceful degradation)
+#   undeclared                       -> skip (a different device, by design)
+# Falls back to mounting everything when no DEVICE.md is found, so existing
+# deployments are unaffected. See contract/DEVICE-SPEC.md and hal/board/device.py.
 
 from hal.routes import servo, led, camera, audio, emotion, scene, sensing, display, voice, music, system, bluetooth
 
 _ROUTERS_BY_NAME = {
-    "servo": servo.router, "led": led.router, "camera": camera.router,
-    "audio": audio.router, "emotion": emotion.router, "scene": scene.router,
-    "sensing": sensing.router, "display": display.router, "voice": voice.router,
-    "music": music.router, "system": system.router, "bluetooth": bluetooth.router,
+    "servo": servo.router,
+    "led": led.router,
+    "camera": camera.router,
+    "audio": audio.router,
+    "emotion": emotion.router,
+    "scene": scene.router,
+    "sensing": sensing.router,
+    "display": display.router,
+    "voice": voice.router,
+    "music": music.router,
+    "system": system.router,
+    "bluetooth": bluetooth.router,
 }
 
 
@@ -659,30 +674,72 @@ def _resolve_device_id() -> str:
         return "lamp"
 
 
-def _declared_routes_or_none():
-    """Route names this device declares, or None to mount all (safe fallback)."""
+def _device_profile_or_none():
+    """This device's DeviceProfile, or None to mount all routes (safe fallback)."""
     try:
         from hal.board.device import load_device
         devices_dir = os.environ.get("HAL_DEVICES_DIR") or os.path.normpath(
             os.path.join(os.path.dirname(__file__), "..", "..", "..", "devices")
         )
-        return set(load_device(_resolve_device_id(), devices_dir).declared_routes())
+        return load_device(_resolve_device_id(), devices_dir)
     except Exception as e:
         logger.warning("DEVICE.md not loaded (%s) — mounting all routes (legacy behavior)", e)
         return None
 
 
-_declared = _declared_routes_or_none()
-for _name, _router in _ROUTERS_BY_NAME.items():
-    if _declared is None or _name in _declared:
+# Mount-time driver availability: "is this route's driver code importable on this
+# machine". The lazy driver-class imports near the top of this file already set
+# each global to None on ImportError. Hardware-connection faults (cable unplugged)
+# surface later in lifespan() as warnings — they can't abort the mount because
+# lifespan runs after app construction. Routes with no import-time driver
+# dependency are always mountable; their handlers degrade if the service is absent.
+_route_available = {
+    "servo": AnimationService is not None,
+    "led": RGBService is not None,
+    "camera": cv2 is not None and LocalVideoCaptureDevice is not None and VideoCaptureDeviceInfo is not None,
+    "audio": sd is not None,
+    "voice": VoiceService is not None,
+    "sensing": SensingService is not None,
+    "display": DisplayService is not None,
+    "music": MusicService is not None,
+    "emotion": True, "scene": True, "system": True, "bluetooth": True,
+}
+
+_profile = _device_profile_or_none()
+if _profile is None:
+    # Legacy fallback: no DEVICE.md → mount everything.
+    for _router in _ROUTERS_BY_NAME.values():
         app.include_router(_router)
-    else:
-        logger.info("Route '%s' undeclared by device '%s' — skipped", _name, _resolve_device_id())
-if _declared is not None:
+else:
+    from hal.board.device import plan_mounts
+
+    # Restrict the planner to routes HAL has routers for here ("speaker" is
+    # declared under the audio capability but mounted separately below).
+    _declared = {r: req for r, req in _profile.declared_routes().items() if r in _ROUTERS_BY_NAME}
+    _available = {r: _route_available.get(r, False) for r in _ROUTERS_BY_NAME}
+    _plan = plan_mounts(_declared, _available)
     logger.info(
-        "Declaration-driven mount: device=%s mounted=%s",
-        _resolve_device_id(), sorted(_declared & set(_ROUTERS_BY_NAME)),
+        "Declaration-driven mount plan: device=%s mounted=%s skipped=%s failed_required=%s",
+        _resolve_device_id(), _plan.mounted, _plan.skipped, _plan.failed_required,
     )
+    if MODE == "production":
+        # Spec rule #3: a required capability whose driver can't import is a real
+        # fault — abort loudly rather than boot a half-working device.
+        if not _plan.ok:
+            raise RuntimeError(
+                f"Device '{_resolve_device_id()}' requires routes whose drivers are "
+                f"unavailable: {_plan.failed_required}. Fix the driver/hardware, or mark "
+                f"the capability optional in devices/{_resolve_device_id()}/DEVICE.md."
+            )
+        for _name in _plan.mounted:
+            app.include_router(_ROUTERS_BY_NAME[_name])
+    else:
+        # Dev / off-hardware: keep the full *declared* API surface for testing even
+        # when drivers can't import (the plan above is logged for visibility).
+        # Declaration subsetting (Intern vs Lamp) still applies; only the
+        # availability + fail-loud enforcement defers to production.
+        for _name in _declared:
+            app.include_router(_ROUTERS_BY_NAME[_name])
 
 # Speaker recognition routes (lazy import — import failure tolerated so the
 # rest of the server still boots if speaker deps are missing).
@@ -694,7 +751,6 @@ except Exception as _speaker_import_err:  # noqa: BLE001
     logger.warning(
         "Speaker recognition router disabled: %s", _speaker_import_err
     )
-
 
 # Self-hosted Swagger UI assets. Lamp nginx CSP keeps `script-src 'self'` so
 # the bundled JS/CSS load from this same origin (no cdn.jsdelivr.net). The
@@ -754,7 +810,6 @@ class ProxyPrefixMiddleware:
 
 app.add_middleware(ProxyPrefixMiddleware)
 
-
 from ipaddress import ip_address, ip_network
 
 from fastapi.responses import JSONResponse
@@ -773,7 +828,7 @@ def _is_local(value: str | None) -> bool:
         return False
     host = value.split(",")[0].strip()
     if host.startswith("[") and "]" in host:
-        host = host[1 : host.index("]")]
+        host = host[1: host.index("]")]
     elif ":" in host and host.count(":") == 1:
         host = host.rsplit(":", 1)[0]
     try:
