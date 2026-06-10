@@ -238,8 +238,8 @@ Observations: Bỏ qua hydration đầu tiên, phản hồi tốt từ lần 2.
 
 | File | Vai trò |
 |------|---------|
-| `lelamp/service/sensing/perceptions/wellbeing.py` | **Stub/no-op** — class placeholder, tất cả logic đã chuyển sang AI cron |
-| `lelamp/service/sensing/sensing_service.py` | Instantiate WellbeingPerception (no-op) trong sensing pipeline |
+| `os/hal/drivers/sensing/perceptions/wellbeing.py` | **Stub/no-op** — class placeholder, tất cả logic đã chuyển sang AI cron |
+| `os/hal/drivers/sensing/sensing_service.py` | Instantiate WellbeingPerception (no-op) trong sensing pipeline |
 
 ### Frontend (React)
 
@@ -495,7 +495,7 @@ curl -s "http://127.0.0.1:5000/api/openclaw/mood-history?date=$(date +%Y-%m-%d)&
 | Per-user | Không | Có — mỗi người folder riêng |
 | Học thói quen | Không | Có — wellbeing.md + daily logs |
 | Reset timer | Không | Có — motion.activity reset khi user tự uống/vươn vai |
-| Code | `lelamp/service/sensing/perceptions/wellbeing.py` (active) | Stub no-op, logic trong SKILL.md |
+| Code | `os/hal/drivers/sensing/perceptions/wellbeing.py` (active) | Stub no-op, logic trong SKILL.md |
 
 ---
 

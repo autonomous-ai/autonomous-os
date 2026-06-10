@@ -643,7 +643,7 @@ Body: {"x": 3, "y": 2, "r": 255, "g": 0, "b": 0}
 
 **Triển khai**:
 - Emotion classifier chạy qua **dlbackend WebSocket** (remote inference server), không phải on-device ONNX. HAL gửi camera frames, nhận emotion predictions.
-- `lelamp/service/sensing/perceptions/emotion.py` — `RemoteEmotionChecker` kết nối dlbackend, fire event `emotion.detected` với cảm xúc phát hiện được (Angry, Disgust, Fear, Happy, Sad, Surprise, Neutral).
+- `os/hal/drivers/sensing/perceptions/emotion.py` — `RemoteEmotionChecker` kết nối dlbackend, fire event `emotion.detected` với cảm xúc phát hiện được (Angry, Disgust, Fear, Happy, Sad, Surprise, Neutral).
 - Lamp `user-emotion-detection/SKILL.md` map cảm xúc khuôn mặt → mood signal qua `POST /api/mood/log`.
 - Lamp `mood/SKILL.md` fusion signals (camera emotion, conversation, voice tone) thành mood decisions.
 - Mood decisions trigger downstream: `music-suggestion` (nhạc chủ động), `wellbeing` (nhắc uống nước/nghỉ), `emotion` (biểu cảm đèn).
@@ -734,7 +734,7 @@ Body: {"x": 3, "y": 2, "r": 255, "g": 0, "b": 0}
 **Mô tả**: Lamp nhận diện ai đang nói bằng voice embedding. Mic transcripts có prefix tên (`Leo:`) hoặc `Unknown:`. User có thể tự enroll giọng bằng cách giới thiệu bản thân.
 
 **Triển khai**:
-- `lelamp/speaker_recognizer.py` + `lelamp/service/voice/speaker_recognizer/speaker_recognizer.py` — voice embedding model, profile storage, real-time matching.
+- `os/hal/speaker_recognizer.py` + `os/hal/drivers/voice/speaker_recognizer/speaker_recognizer.py` — voice embedding model, profile storage, real-time matching.
 - `lamp/resources/openclaw-skills/speaker-recognizer/SKILL.md` — self-enrollment skill (mic intro, Telegram voice note, two-turn enrollment).
 - Voice profiles lưu per-user cùng face data tại `/root/local/users/{name}/`.
 - Telegram identity linked khi voice enrollment để DM targeting.

@@ -700,7 +700,7 @@ The Lamp server is forked from openclaw-lobster. Approximately 70-80% of Layer 1
 
 **Implementation**:
 - Emotion classifier runs via **dlbackend WebSocket** (remote inference server), not on-device ONNX. HAL sends camera frames, receives emotion predictions.
-- `lelamp/service/sensing/perceptions/emotion.py` — `RemoteEmotionChecker` connects to dlbackend, fires `emotion.detected` sensing event with detected emotion (Angry, Disgust, Fear, Happy, Sad, Surprise, Neutral).
+- `os/hal/drivers/sensing/perceptions/emotion.py` — `RemoteEmotionChecker` connects to dlbackend, fires `emotion.detected` sensing event with detected emotion (Angry, Disgust, Fear, Happy, Sad, Surprise, Neutral).
 - Lamp `user-emotion-detection/SKILL.md` maps detected facial emotion → mood signal via `POST /api/mood/log`.
 - Lamp `mood/SKILL.md` fuses signals (camera emotion, conversation context, voice tone) into mood decisions.
 - Mood decisions trigger downstream actions: `music-suggestion` (proactive music), `wellbeing` (break/hydration nudges), `emotion` (lamp expression).
@@ -791,7 +791,7 @@ The Lamp server is forked from openclaw-lobster. Approximately 70-80% of Layer 1
 **Description**: Lamp recognizes who is speaking by voice. Mic transcripts are prefixed with the speaker's name (`Leo:`) or `Unknown:`. Users can self-enroll their voice by introducing themselves.
 
 **Implementation**:
-- `lelamp/speaker_recognizer.py` + `lelamp/service/voice/speaker_recognizer/speaker_recognizer.py` — voice embedding model, profile storage, real-time matching.
+- `os/hal/speaker_recognizer.py` + `os/hal/drivers/voice/speaker_recognizer/speaker_recognizer.py` — voice embedding model, profile storage, real-time matching.
 - `lamp/resources/openclaw-skills/speaker-recognizer/SKILL.md` — self-enrollment skill (mic intro, Telegram voice note, two-turn enrollment).
 - Voice profiles stored per-user alongside face data in `/root/local/users/{name}/`.
 - Telegram identity linked during voice enrollment for DM targeting.

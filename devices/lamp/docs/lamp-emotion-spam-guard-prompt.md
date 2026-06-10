@@ -28,11 +28,11 @@ What remains open:
 
 ## Files to inspect first
 
-- `lelamp/service/sensing/perceptions/processors/emotion.py`
-- `lelamp/service/sensing/perceptions/processors/motion.py`
-- `lelamp/service/sensing/perceptions/processors/facerecognizer.py`
-- `lelamp/service/sensing/sensing_service.py`
-- `lelamp/config.py`
+- `os/hal/drivers/sensing/perceptions/processors/emotion.py`
+- `os/hal/drivers/sensing/perceptions/processors/motion.py`
+- `os/hal/drivers/sensing/perceptions/processors/facerecognizer.py`
+- `os/hal/drivers/sensing/sensing_service.py`
+- `os/hal/config.py`
 
 Relevant recent commits:
 

@@ -15,7 +15,7 @@ Observed 2026-04-22 trên Pi (test device). Log lelamp lặp hàng phút:
 Khi `_sleeping` bật, `sensing_service._send_event` suppress tất cả event ngoại trừ `presence.enter`:
 
 - `/opt/hal/drivers/sensing/sensing_service.py:316-319`
-- Repo: `lelamp/service/sensing/sensing_service.py` (cùng logic)
+- Repo: `os/hal/drivers/sensing/sensing_service.py` (cùng logic)
 
 Đồng thời `/opt/hal/routes/emotion.py:40-44`:
 
@@ -33,7 +33,7 @@ User nói "No. I wake up." cũng không giúp: event `voice` gửi tới sensing
 
 `motion.py` update `_last_sent_ts` **trước** khi event thực sự đi qua sensing. Nếu sensing suppress (sleep), perception vẫn coi là đã gửi → tiếp tục log `dedup drop` mỗi 10 s, nhìn như đây là nguyên nhân chính.
 
-Tham chiếu: `lelamp/service/sensing/perceptions/motion.py:414-425` (sau khi flush message → check dedup window 300 s → set `_last_sent_ts` → gọi `send_event`).
+Tham chiếu: `os/hal/drivers/sensing/perceptions/motion.py:414-425` (sau khi flush message → check dedup window 300 s → set `_last_sent_ts` → gọi `send_event`).
 
 ## Evidence — verified 2026-04-22
 

@@ -58,7 +58,7 @@ Bám theo vật thể real-time sau khi phát hiện.
 
 ## Tracker: TrackerVit
 
-**Model:** `lelamp/service/tracking/vittrack.onnx` (714KB, nằm trong repo)
+**Model:** `os/hal/drivers/tracking/models/vittrack.onnx` (714KB, nằm trong repo)
 
 | Tính năng | Giá trị |
 |-----------|---------|
@@ -239,7 +239,7 @@ Camera section hiển thị:
 ## Phụ thuộc
 
 - `opencv-python>=4.8.0` (đã có trong `pyproject.toml`)
-- `vittrack.onnx` — nằm trong repo tại `lelamp/service/tracking/vittrack.onnx`
+- `vittrack.onnx` — nằm trong repo tại `os/hal/drivers/tracking/models/vittrack.onnx`
 - `requests` (đã có trong project)
 - **YOLOWorld API** — RunPod DL backend tại `DL_BACKEND_URL/detect/yoloworld`
 

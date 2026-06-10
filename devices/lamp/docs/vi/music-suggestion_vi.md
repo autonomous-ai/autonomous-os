@@ -159,8 +159,8 @@ Agent: POST /api/music-suggestion/status → status="rejected"
 
 | File | Vai trò |
 |------|---------|
-| `lelamp/models.py` | FacePersonDetail: includes music_suggestion_days |
-| `lelamp/server.py` | /face/owners endpoint: reads music_suggestion_days from JSONL files |
+| `os/hal/models.py` | FacePersonDetail: includes music_suggestion_days |
+| `os/hal/server.py` | /face/owners endpoint: reads music_suggestion_days from JSONL files |
 
 ### Frontend (React)
 

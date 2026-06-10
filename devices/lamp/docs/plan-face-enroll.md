@@ -19,11 +19,11 @@ User sends photo + @mention via Telegram
 
 ## Changes
 
-### 1. `lelamp/service/sensing/sensing_service.py`
+### 1. `os/hal/drivers/sensing/sensing_service.py`
 - Keep named `self._face_recognizer` reference (currently anonymous in `_perceptions` list)
 - On init after creating FaceRecognizer, call `self._face_recognizer.load_from_disk()` to re-train from saved photos
 
-### 2. `lelamp/service/sensing/perceptions/facerecognizer.py`
+### 2. `os/hal/drivers/sensing/perceptions/facerecognizer.py`
 - Add constant `ENROLLED_PHOTOS_DIR = Path(os.environ.get("HAL_DATA_DIR", "/root/lelamp/data")) / "enrolled_photos"`
 - Add `save_photo(image_bytes: bytes, label: str) -> str`:
   - Create dir `{ENROLLED_PHOTOS_DIR}/{label}/`
@@ -40,7 +40,7 @@ User sends photo + @mention via Telegram
 - Add `enrolled_count() -> int` and `enrolled_names() -> list[str]`
 - Modify `reset_enrolled()`: also delete all photos from disk
 
-### 3. `lelamp/server.py`
+### 3. `os/hal/server.py`
 - Add Pydantic models: `FaceEnrollRequest(image_base64, label)`, `FaceEnrollResponse`, `FaceStatusResponse`
 - `POST /face/enroll` — decode base64 → save photo → train → return status
 - `POST /face/reset` — clear all enrolled photos + embeddings
@@ -62,9 +62,9 @@ User sends photo + @mention via Telegram
 - Add `"face-enroll"` to the skills download list (~line 38-50)
 
 ## File list
-- `lelamp/service/sensing/perceptions/facerecognizer.py` — persistence + photo storage
-- `lelamp/service/sensing/sensing_service.py` — named reference + load on init
-- `lelamp/server.py` — HTTP endpoints
+- `os/hal/drivers/sensing/perceptions/facerecognizer.py` — persistence + photo storage
+- `os/hal/drivers/sensing/sensing_service.py` — named reference + load on init
+- `os/hal/server.py` — HTTP endpoints
 - `lamp/resources/openclaw-skills/face-enroll/SKILL.md` — new skill (new file)
 - `lamp/internal/openclaw/onboarding.go` — register skill
 

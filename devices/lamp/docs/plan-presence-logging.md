@@ -67,8 +67,8 @@ No logic changes. Benefits indirectly from stable `current_user`.
 
 ## Next steps (when implementing)
 
-1. Read `lelamp/service/sensing/perceptions/motion.py` — locate the 5-min dedup boundary and the `motion.activity` fire point.
-2. Read `lelamp/service/sensing/perceptions/facerecognizer.py` in detail — map out the full state machine for session_start + effective_user transitions.
+1. Read `os/hal/drivers/sensing/perceptions/motion.py` — locate the 5-min dedup boundary and the `motion.activity` fire point.
+2. Read `os/hal/drivers/sensing/perceptions/facerecognizer.py` in detail — map out the full state machine for session_start + effective_user transitions.
 3. Draft patches and list diffs before applying. Confirm with user before editing.
 
 ## Related

@@ -180,17 +180,17 @@ Mọi giọng lạ được gom cụm local để server biết "đây là cùng
 
 | Thành phần | File | Hàm/Struct |
 |------------|------|------------|
-| STT → nhận diện người nói | `lelamp/service/voice/voice_service.py` | `_identify_and_decorate()` |
-| Cổng đăng ký | `lelamp/service/voice/voice_service.py` | `_should_request_enroll()` |
-| Định dạng message | `lelamp/service/voice/voice_service.py` | `_format_unknown_speaker()` |
-| Bộ nhận diện giọng nói | `lelamp/service/voice/speaker_recognizer/speaker_recognizer.py` | `SpeakerRecognizer` |
+| STT → nhận diện người nói | `os/hal/drivers/voice/voice_service.py` | `_identify_and_decorate()` |
+| Cổng đăng ký | `os/hal/drivers/voice/voice_service.py` | `_should_request_enroll()` |
+| Định dạng message | `os/hal/drivers/voice/voice_service.py` | `_format_unknown_speaker()` |
+| Bộ nhận diện giọng nói | `os/hal/drivers/voice/speaker_recognizer/speaker_recognizer.py` | `SpeakerRecognizer` |
 | Chèn instruction + cooldown | `lamp/domain/voice.go` | `AppendEnrollNudge()` |
 | Đường trực tiếp | `lamp/server/sensing/delivery/http/handler.go` | `PostEvent()` |
 | Đường hàng đợi/phát lại | `lamp/internal/openclaw/service.go` | `drainPendingEvents()` |
 | Skill agent | `lamp/resources/openclaw-skills/speaker-recognizer/SKILL.md` | — |
 | Model embedding | `dlbackend/src/core/audio_recognition/audio_recognizer.py` | `ResNet34Recognizer` (mặc định), `EcapaTdnn1024Recognizer`, `CamPPlusRecognizer` — chọn qua env `AUDIO_RECOGNIZER_ENGINE` |
 | Endpoint embedding | `dlbackend/src/protocols/htpp/audio_recognizer.py` | `embed_audio()` |
-| Cấu hình | `lelamp/config.py` | Các hằng số `SPEAKER_*` |
+| Cấu hình | `os/hal/config.py` | Các hằng số `SPEAKER_*` |
 
 ## Ví dụ luồng message
 

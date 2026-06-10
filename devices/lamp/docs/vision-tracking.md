@@ -58,7 +58,7 @@ Real-time object following after initial detection.
 
 ## Tracker: TrackerVit
 
-**Model:** `lelamp/service/tracking/vittrack.onnx` (714KB, checked into repo)
+**Model:** `os/hal/drivers/tracking/models/vittrack.onnx` (714KB, checked into repo)
 
 | Feature | Value |
 |---------|-------|
@@ -251,7 +251,7 @@ Camera section shows:
 ## Dependencies
 
 - `opencv-python>=4.8.0` (already in `pyproject.toml`)
-- `vittrack.onnx` — checked into repo at `lelamp/service/tracking/vittrack.onnx`
+- `vittrack.onnx` — checked into repo at `os/hal/drivers/tracking/models/vittrack.onnx`
 - `requests` (already in project)
 - **YOLOWorld API** — RunPod DL backend at `DL_BACKEND_URL/detect/yoloworld`
 

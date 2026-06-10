@@ -260,5 +260,5 @@ Disk cost for Option B is negligible (under 5 MB per user for everything). Risk 
 - `lamp/lib/skillcontext/{wellbeing,posture,emotion}.go` — pre-fetched context blocks
 - `lamp/lib/sensingmsg/sensingmsg.go` — context injection
 - `lamp/lib/wellbeing/wellbeing.go` — parallel `NormalizeUser`
-- `lelamp/service/sensing/perceptions/processors/motion.py` — `motion.activity` emitter, wellbeing log poster
+- `os/hal/drivers/sensing/perceptions/processors/motion.py` — `motion.activity` emitter, wellbeing log poster
 - `lamp/resources/openclaw-skills/{guard,sensing,sensing-track,wellbeing,posture,habit,mood,emotion,user-emotion-detection,music-suggestion}/SKILL.md`

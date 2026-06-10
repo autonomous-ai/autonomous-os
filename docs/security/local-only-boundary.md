@@ -48,7 +48,7 @@ Current references found:
   ExecStart=/opt/hal/.venv/bin/uvicorn hal.server:app --host 0.0.0.0 --port 5001
   ```
 
-- `lelamp/server.py:707`
+- `os/hal/server.py:707`
   ```py
   uvicorn.run(app, host="0.0.0.0", port=HTTP_PORT)
   ```
@@ -121,17 +121,17 @@ With:
 cd $(HAL_DIR) && PYTHONPATH=.. .venv/bin/uvicorn hal.server:app --host 127.0.0.1 --port $(HAL_PORT) --reload
 ```
 
-#### File: `lelamp/server.py`
+#### File: `os/hal/server.py`
 
 Prefer introducing config instead of hardcoding:
 
 ```py
-# lelamp/config.py
+# os/hal/config.py
 HTTP_HOST = os.environ.get("HAL_HTTP_HOST", "127.0.0.1")
 HTTP_PORT = int(os.environ.get("HAL_HTTP_PORT", "5001"))
 ```
 
-Then in `lelamp/server.py` import `HTTP_HOST` and replace:
+Then in `os/hal/server.py` import `HTTP_HOST` and replace:
 
 ```py
 uvicorn.run(app, host="0.0.0.0", port=HTTP_PORT)
@@ -143,7 +143,7 @@ With:
 uvicorn.run(app, host=HTTP_HOST, port=HTTP_PORT)
 ```
 
-#### File: `lelamp/.env.example`
+#### File: `os/hal/.env.example`
 
 Add:
 
@@ -303,7 +303,7 @@ HTTP/1.1 200 OK
 
 ### Evidence
 
-`lelamp/server.py` currently has only request logging middleware:
+`os/hal/server.py` currently has only request logging middleware:
 
 ```py
 @app.middleware("http")
@@ -321,9 +321,9 @@ Also, if nginx proxies external clients, the TCP peer appears as `127.0.0.1` unl
 
 ### Required remediation
 
-Add a local-only middleware in `lelamp/server.py` and default-enable it via config.
+Add a local-only middleware in `os/hal/server.py` and default-enable it via config.
 
-#### File: `lelamp/config.py`
+#### File: `os/hal/config.py`
 
 Add:
 
@@ -336,7 +336,7 @@ LOCAL_ONLY_API = os.environ.get("HAL_LOCAL_ONLY_API", "true").strip().lower() in
 )
 ```
 
-#### File: `lelamp/server.py`
+#### File: `os/hal/server.py`
 
 Add imports:
 
@@ -415,7 +415,7 @@ async def local_only_api_middleware(request, call_next):
     return await call_next(request)
 ```
 
-#### File: `lelamp/.env.example`
+#### File: `os/hal/.env.example`
 
 Add:
 
@@ -1130,7 +1130,7 @@ Document baseline status codes.
    - `scripts/provision/setup.sh`
    - `imager/build.sh`
    - `Makefile`
-   - `lelamp/server.py` via `HTTP_HOST`
+   - `os/hal/server.py` via `HTTP_HOST`
 2. Block nginx `/hw/` externally in:
    - `scripts/provision/setup.sh`
    - `imager/build.sh`
@@ -1231,16 +1231,16 @@ After remediation, this should be true:
 
 Files to edit:
 
-- `lelamp/config.py`
+- `os/hal/config.py`
   - Add `HTTP_HOST=127.0.0.1` default.
   - Add `LOCAL_ONLY_API=true` default.
 
-- `lelamp/server.py`
+- `os/hal/server.py`
   - Import `HTTP_HOST`, `LOCAL_ONLY_API`.
   - Add local-only middleware checking client IP and forwarded headers.
   - Change `uvicorn.run(... host=HTTP_HOST ...)`.
 
-- `lelamp/.env.example`
+- `os/hal/.env.example`
   - Add `HAL_HTTP_HOST=127.0.0.1`.
   - Add `HAL_LOCAL_ONLY_API=true`.
 

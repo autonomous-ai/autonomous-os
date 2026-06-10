@@ -1,6 +1,6 @@
 # Wiring
 
-Pin-by-pin map for everything connected to the SBC. Two columns: **Raspberry Pi 5** and **OrangePi 4 Pro (Allwinner A733 / sun60iw2)**. Numbers come straight from the code so this stays verifiable — `lelamp/service/...` references are noted in each row.
+Pin-by-pin map for everything connected to the SBC. Two columns: **Raspberry Pi 5** and **OrangePi 4 Pro (Allwinner A733 / sun60iw2)**. Numbers come straight from the code so this stays verifiable — `os/hal/drivers/...` references are noted in each row.
 
 Keep this in sync when wiring changes. Mismatch between this file and the code is a bug.
 
@@ -23,7 +23,7 @@ Single momentary tactile, normally-open. Single-click = stop / unmute. Triple-cl
 | Signal | BCM 17 | PL9 |
 | Char device | `/dev/gpiochip0` line 17 | `/dev/gpiochip1` line 9 |
 | GND | pin 9 | pin 9 |
-| Code | `lelamp/service/gpio_button.py:22-24` | `lelamp/service/gpio_button.py:30-32` |
+| Code | `os/hal/drivers/gpio_button.py:22-24` | `os/hal/drivers/gpio_button.py:30-32` |
 
 ---
 
@@ -39,7 +39,7 @@ Single momentary tactile, normally-open. Single-click = stop / unmute. Triple-cl
 | Bus speed | 6.4 MHz | 6.4 MHz |
 | 5 V | external 5 V rail (not header) | external 5 V rail (not header) |
 | GND | header pin 6 (common with rail) | header pin 6 (common with rail) |
-| Code | `lelamp/service/rgb/rgb_service.py:102-111` | `lelamp/service/rgb/rgb_service.py:176-180` |
+| Code | `os/hal/drivers/rgb/rgb_service.py:102-111` | `os/hal/drivers/rgb/rgb_service.py:176-180` |
 
 > **Pi 4 fallback**: PWM driver on GPIO 12 (header pin 32). See `lelamp/service/rgb/rgb_service.py:182-186`.
 
