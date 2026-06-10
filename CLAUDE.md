@@ -21,6 +21,7 @@ This repo is developed in both **Cursor** and **Claude Code**. The following rul
    | OTA, bootstrap | `docs/bootstrap-ota.md` | `docs/vi/bootstrap-ota.md` |
    | Speech emotion recognition (SER) | `docs/speech-emotion.md` | `docs/vi/speech-emotion_vi.md` |
    | DL backend, load balancer, encryption, models | `docs/dlbackend.md` | `docs/vi/dlbackend_vi.md` |
+   | Hermes agent backend (`agent_runtime`, internal/hermes) | `docs/hermes.md` | `docs/vi/hermes_vi.md` |
 
    **Lamp-specific docs** (`devices/lamp/docs/` + `devices/lamp/docs/vi/`):
 

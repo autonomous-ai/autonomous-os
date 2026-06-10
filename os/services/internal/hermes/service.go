@@ -1,7 +1,7 @@
 // Package hermes implements domain.AgentGateway against the Hermes HTTP+SSE
-// API server (OpenAI Responses API style). See hermes.md at the repo root for
-// the full design — protocol mapping, session strategy, and the runtime
-// boundaries with OpenClaw.
+// API server (OpenAI Responses API style). See docs/hermes.md for the full
+// design — protocol mapping, session strategy, and the runtime boundaries with
+// OpenClaw.
 //
 // Hermes is assumed to be running locally on the Pi at Hermes.BaseURL with
 // all skills already provisioned. Lumi only acts as a per-request client and

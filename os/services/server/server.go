@@ -750,7 +750,7 @@ func (s *Server) runConfigChangeListener(ctx context.Context) {
 }
 
 // handleDeviceIDChange restarts claude-desktop-buddy when device_id changes. Buddy's
-// BLE name is now derived from the hardware MAC suffix (Claude-lamp-{MAC}) so the
+// BLE name is now derived from the device id (Claude-{MAC}, e.g. Claude-lamp-a1b2) so the
 // restart isn't needed for name resolution, but a device_id transition is
 // still a useful signal that the device has been re-provisioned — restarting
 // buddy clears any stale BLE pairing state from the previous identity.

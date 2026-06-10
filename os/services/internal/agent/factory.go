@@ -17,7 +17,7 @@ import (
 // 127.0.0.1:18789. See internal/openclaw and docs/os-server.md.
 //
 // "hermes": HTTP+SSE client against the Hermes API server (default
-// 127.0.0.1:8642). See internal/hermes and hermes.md at the repo root.
+// 127.0.0.1:8642). See internal/hermes and docs/hermes.md.
 func ProvideGateway(cfg *config.Config, bus *monitor.Bus, sled *statusled.Service) domain.AgentGateway {
 	switch cfg.AgentRuntime {
 	case "hermes":

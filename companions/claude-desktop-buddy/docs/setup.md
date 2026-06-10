@@ -89,7 +89,7 @@ matching binary. Bumping the version there is what ships an update to the fleet.
 ```json
 {
   "enabled": true,
-  "device_name": "Claude-lamp-{MAC}",
+  "device_name": "Claude-{MAC}",
   "http_port": 5002,
   "lelamp_url": "http://127.0.0.1:5001",
   "lamp_url": "http://127.0.0.1:5000",
@@ -101,7 +101,7 @@ matching binary. Bumping the version there is what ships an update to the fleet.
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `enabled` | `true` | if `false`, the process logs and exits immediately |
-| `device_name` | `Claude-lamp-{MAC}` | BLE advertised name; `{MAC}` → last 4 hex from Lamp's `/api/system/network`, lowercased to match `lamp-xxxx.local` |
+| `device_name` | `Claude-{MAC}` | BLE advertised name; `{MAC}` resolves to the device id `<device_type>-<4hex>` (e.g. `lamp-a1b2`) from the `mac` field of `/api/system/network`, lowercased to match the mDNS hostname `<device_type>-xxxx.local` |
 | `http_port` | `5002` | Buddy's local HTTP API port |
 | `lelamp_url` | `http://127.0.0.1:5001` | LeLamp hardware runtime base URL |
 | `lamp_url` | `http://127.0.0.1:5000` | Lamp Go API base URL (monitor/sensing buses, MAC lookup) |
@@ -171,7 +171,7 @@ re-sent).
 
 `WARN: failed to fetch mac ...` or `mac is empty` means Lamp's
 `/api/system/network` wasn't reachable/ready (Buddy retries ~15× / 2 s). The
-device still runs, advertising as `Claude-lamp-unk`. Ensure `os-server.service` is up.
+device still runs, advertising as `Claude-unk`. Ensure `os-server.service` is up.
 
 ### Useful checks
 

@@ -15,7 +15,7 @@ import (
 )
 
 // hermesSessionHeader is the response header Hermes uses to publish the
-// server-side session UUID (see hermes.md §3). One UUID per conversation;
+// server-side session UUID (see docs/hermes.md §3). One UUID per conversation;
 // stays stable across reconnects.
 const hermesSessionHeader = "X-Hermes-Session-Id"
 

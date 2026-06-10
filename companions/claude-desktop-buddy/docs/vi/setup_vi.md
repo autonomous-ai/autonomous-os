@@ -89,7 +89,7 @@ binary tương ứng. Việc tăng phiên bản tại đó chính là cách phá
 ```json
 {
   "enabled": true,
-  "device_name": "Claude-lamp-{MAC}",
+  "device_name": "Claude-{MAC}",
   "http_port": 5002,
   "lelamp_url": "http://127.0.0.1:5001",
   "lamp_url": "http://127.0.0.1:5000",
@@ -101,7 +101,7 @@ binary tương ứng. Việc tăng phiên bản tại đó chính là cách phá
 | Key | Mặc định | Ý nghĩa |
 |-----|---------|---------|
 | `enabled` | `true` | nếu `false`, tiến trình ghi log rồi thoát ngay lập tức |
-| `device_name` | `Claude-lamp-{MAC}` | tên BLE được quảng bá; `{MAC}` → 4 ký tự hex cuối lấy từ `/api/system/network` của Lamp, viết thường để khớp với `lamp-xxxx.local` |
+| `device_name` | `Claude-{MAC}` | tên BLE được quảng bá; `{MAC}` phân giải thành device id `<device_type>-<4hex>` (ví dụ `lamp-a1b2`) lấy từ trường `mac` của `/api/system/network`, viết thường để khớp với hostname mDNS `<device_type>-xxxx.local` |
 | `http_port` | `5002` | cổng HTTP API cục bộ của Buddy |
 | `lelamp_url` | `http://127.0.0.1:5001` | base URL của runtime phần cứng LeLamp |
 | `lamp_url` | `http://127.0.0.1:5000` | base URL của Lamp Go API (bus monitor/sensing, tra cứu MAC) |
@@ -170,7 +170,7 @@ vô hại; nhưng nếu rớt giữa chừng một lần truyền thì việc đ
 
 `WARN: failed to fetch mac ...` hoặc `mac is empty` nghĩa là `/api/system/network` của Lamp
 không truy cập được/chưa sẵn sàng (Buddy thử lại ~15 lần / mỗi 2 s). Thiết bị
-vẫn chạy, advertising với tên `Claude-lamp-unk`. Hãy đảm bảo `os-server.service` đang hoạt động.
+vẫn chạy, advertising với tên `Claude-unk`. Hãy đảm bảo `os-server.service` đang hoạt động.
 
 ### Các lệnh kiểm tra hữu ích
 
