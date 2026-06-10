@@ -1,6 +1,6 @@
 // Forwards Twitch chat lines into Lamp's sensing pipeline as a sensing
 // event, mirroring how LeLamp's voice service posts voice_command
-// transcripts (see lelamp/service/voice/voice_service.py: same URL, same
+// transcripts (see os/hal/drivers/voice/voice_service.py: same URL, same
 // body shape). The "[source: twitch]" prefix lets SOUL.md distinguish this
 // from real microphone input.
 

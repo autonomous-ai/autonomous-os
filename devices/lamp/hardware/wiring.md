@@ -41,7 +41,7 @@ Single momentary tactile, normally-open. Single-click = stop / unmute. Triple-cl
 | GND | header pin 6 (common with rail) | header pin 6 (common with rail) |
 | Code | `os/hal/drivers/rgb/rgb_service.py:102-111` | `os/hal/drivers/rgb/rgb_service.py:176-180` |
 
-> **Pi 4 fallback**: PWM driver on GPIO 12 (header pin 32). See `lelamp/service/rgb/rgb_service.py:182-186`.
+> **Pi 4 fallback**: PWM driver on GPIO 12 (header pin 32). See `os/hal/drivers/rgb/rgb_service.py:182-186`.
 
 > **Power note**: 64 px × 60 mA white worst-case = 3.84 A. Software caps brightness; do not test at full white without a 5 A-capable rail.
 
@@ -58,10 +58,10 @@ Feetech STS3215 servos on a TTL daisy chain, driven by a USB-to-TTL servo contro
 | Servo count | 5 (chained) | 5 |
 | Servo power | external 5 V (NOT from USB) | external 5 V (NOT from USB) |
 | Protocol | Feetech SCS via `scservo_sdk` | same |
-| `P_Coefficient` | 16 (do **not** override — see `lelamp/UPSTREAM.md:37`) | 16 |
-| Code | `lelamp/config.py:13`, `lelamp/routes/servo.py:383` | same |
+| `P_Coefficient` | 16 (do **not** override — see `os/hal/UPSTREAM.md:37`) | 16 |
+| Code | `os/hal/config.py:13`, `os/hal/routes/servo.py:383` | same |
 
-> Servo and camera **share serialization** in software because of bus contention (`lelamp/UPSTREAM.md:26-27`). Mechanically they're independent — this is purely a runtime concern.
+> Servo and camera **share serialization** in software because of bus contention (`os/hal/UPSTREAM.md:26-27`). Mechanically they're independent — this is purely a runtime concern.
 
 ---
 
