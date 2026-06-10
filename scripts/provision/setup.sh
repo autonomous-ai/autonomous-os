@@ -132,12 +132,12 @@ stage_rpi5_wifi_stability() {
   echo "[stage] Disable IPv6"
 
   mkdir -p /etc/sysctl.d
-  cat >/etc/sysctl.d/99-lamp-wifi.conf <<'EOF'
+  cat >/etc/sysctl.d/99-${DEVICE_TYPE}-wifi.conf <<'EOF'
 net.ipv6.conf.all.disable_ipv6 = 1
 net.ipv6.conf.default.disable_ipv6 = 1
 net.ipv6.conf.lo.disable_ipv6 = 1
 EOF
-  sysctl -p /etc/sysctl.d/99-lamp-wifi.conf 2>/dev/null || true
+  sysctl -p /etc/sysctl.d/99-${DEVICE_TYPE}-wifi.conf 2>/dev/null || true
 }
 
 # ----------------------------------------------------------
@@ -358,12 +358,12 @@ PULSE_EOF
   # owner differs from the connecting uid). Pairs with the PULSE_SERVER env
   # added to the hal.service unit below. Required for Bluetooth
   # headset routing (pactl set-default-sink to a bluez sink).
-  if [ -f "$PULSE_CONF" ] && ! grep -q "pulse-anon-lamp" "$PULSE_CONF"; then
+  if [ -f "$PULSE_CONF" ] && ! grep -q "pulse-anon" "$PULSE_CONF"; then
     echo "[stage] Configuring PulseAudio anonymous socket for root access"
-    cat >> "$PULSE_CONF" <<'PULSE_EOF'
+    cat >> "$PULSE_CONF" <<PULSE_EOF
 
 ### Anonymous unix socket so root-owned hal can reach this PA daemon
-load-module module-native-protocol-unix auth-anonymous=1 socket=/tmp/pulse-anon-lamp
+load-module module-native-protocol-unix auth-anonymous=1 socket=/tmp/pulse-anon-${DEVICE_TYPE}
 PULSE_EOF
   fi
 
@@ -455,7 +455,7 @@ EnvironmentFile=$HAL_DIR/.env
 Environment="PYTHONPATH=/opt"
 # Anonymous PulseAudio socket — see /etc/pulse/default.pa. Lets root reach the
 # desktop user's PulseAudio so the Bluetooth headset routing works.
-Environment="PULSE_SERVER=unix:/tmp/pulse-anon-lamp"
+Environment="PULSE_SERVER=unix:/tmp/pulse-anon-${DEVICE_TYPE}"
 ExecStart=$HAL_DIR/.venv/bin/uvicorn hal.server:app --host 127.0.0.1 --port 5001
 Restart=always
 RestartSec=5
@@ -696,7 +696,7 @@ stage_nginx() {
   unzip -o -q /tmp/setup.zip -d /usr/share/nginx/html/setup
   rm -f /tmp/setup.zip
 
-  cat >/etc/nginx/conf.d/lamp.conf <<EOF
+  cat >/etc/nginx/conf.d/${DEVICE_TYPE}.conf <<EOF
 upstream backend  { server 127.0.0.1:5000; }
 upstream hal   { server 127.0.0.1:5001; }
 upstream openclaw { server 127.0.0.1:18789; }
@@ -985,7 +985,7 @@ EOF
 
   # dnsmasq: use .d drop-in so we don't break system config; bind range to wlan0 explicitly
   mkdir -p /etc/dnsmasq.d
-  cat >/etc/dnsmasq.d/99-lamp.conf <<EOF
+  cat >/etc/dnsmasq.d/99-${DEVICE_TYPE}.conf <<EOF
 interface=wlan0
 bind-interfaces
 dhcp-range=wlan0,192.168.100.50,192.168.100.150,255.255.255.0,24h
@@ -996,7 +996,7 @@ no-resolv
 EOF
   # Remove any conflicting global interface in main config (leave rest intact)
   if [ -f /etc/dnsmasq.conf ]; then
-    sed -i 's/^interface=wlan0/#interface=wlan0  # use dnsmasq.d/99-lamp.conf/' /etc/dnsmasq.conf 2>/dev/null || true
+    sed -i 's/^interface=wlan0/#interface=wlan0  # use dnsmasq.d/99-${DEVICE_TYPE}.conf/' /etc/dnsmasq.conf 2>/dev/null || true
   fi
 
   # dhcpcd: remove wlan0 block (including when it's at end-of-file with no trailing blank line)
@@ -1017,6 +1017,10 @@ EOF
   cat >/usr/local/bin/device-ap-mode <<'EOF'
 #!/bin/bash
 set -e
+
+# Device class — drives the dnsmasq drop-in filename (99-<device_type>.conf).
+# Resolved at runtime from the env baked at provisioning (always present).
+DEVICE_TYPE="$(grep -E '^DEVICE_TYPE=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
 
 echo "Switching to AP mode..."
 
@@ -1074,8 +1078,8 @@ command -v resolvconf >/dev/null 2>&1 && resolvconf -d wlan0.dhcp 2>/dev/null ||
 # strips this line so DNS resolves correctly in STA mode; must be re-added here
 # so dnsmasq loads with the wildcard active on first start, not just after a
 # second restart.
-grep -q '^address=/#/' /etc/dnsmasq.d/99-lamp.conf 2>/dev/null || \
-  echo 'address=/#/192.168.100.1' >> /etc/dnsmasq.d/99-lamp.conf
+grep -q '^address=/#/' /etc/dnsmasq.d/99-${DEVICE_TYPE}.conf 2>/dev/null || \
+  echo 'address=/#/192.168.100.1' >> /etc/dnsmasq.d/99-${DEVICE_TYPE}.conf
 
 # Enable AP services — start nginx+dnsmasq first so web UI is ready before
 # the SSID becomes visible, preventing a 404 on first connect.
@@ -1135,6 +1139,10 @@ EOF
 #!/bin/bash
 set -e
 
+# Device class — drives the dnsmasq drop-in filename (99-<device_type>.conf).
+# Resolved at runtime from the env baked at provisioning (always present).
+DEVICE_TYPE="$(grep -E '^DEVICE_TYPE=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
+
 echo "Switching to STA mode..."
 
 # Check required commands
@@ -1173,7 +1181,7 @@ sed -i '/nohook wpa_supplicant/d' /etc/dhcpcd.conf
 
 # Remove AP captive-portal DNS wildcard — redirects ALL queries to 192.168.100.1
 # which breaks LLM/internet connectivity when switching to STA mode.
-sed -i '/^address=\/#\//d' /etc/dnsmasq.d/99-lamp.conf 2>/dev/null || true
+sed -i '/^address=\/#\//d' /etc/dnsmasq.d/99-${DEVICE_TYPE}.conf 2>/dev/null || true
 
 # Enable STA services
 systemctl unmask wpa_supplicant@wlan0 2>/dev/null || true

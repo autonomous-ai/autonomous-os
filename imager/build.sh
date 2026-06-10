@@ -576,7 +576,7 @@ keyboard-configuration keyboard-configuration/xkb-keymap select us
 keyboard-configuration keyboard-configuration/variant select English (US)
 keyboard-configuration keyboard-configuration/model select Generic 105-key PC (intl.)
 DBCONF
-cat > ${MNT}/etc/apt/apt.conf.d/99-lamp-silent <<'APT'
+cat > ${MNT}/etc/apt/apt.conf.d/99-${DEVICE_TYPE}-silent <<'APT'
 Dpkg::Use-Pty "false";
 APT
 
@@ -783,12 +783,12 @@ date -u '+%Y-%m-%d %H:%M:%S' > /etc/fake-hwclock.data
 if [ "${RPI_MODEL}" = "5" ]; then
 echo "[stage] WiFi stability (IPv6 off, Pi 5 only)"
 mkdir -p /etc/sysctl.d
-cat > /etc/sysctl.d/99-lamp-wifi.conf <<'EOF'
+cat > /etc/sysctl.d/99-${DEVICE_TYPE}-wifi.conf <<'EOF'
 net.ipv6.conf.all.disable_ipv6 = 1
 net.ipv6.conf.default.disable_ipv6 = 1
 net.ipv6.conf.lo.disable_ipv6 = 1
 EOF
-sysctl -p /etc/sysctl.d/99-lamp-wifi.conf 2>/dev/null || true
+sysctl -p /etc/sysctl.d/99-${DEVICE_TYPE}-wifi.conf 2>/dev/null || true
 fi
 
 # ── stage: SPI ────────────────────────────────────────────────────────────────
@@ -981,7 +981,7 @@ rm -f /etc/nginx/sites-enabled/default
 mkdir -p /usr/share/nginx/html/setup
 # Web UI download moved to Phase 2 (overlay) — only config is in base
 
-cat > /etc/nginx/conf.d/lamp.conf <<'EOF'
+cat > /etc/nginx/conf.d/${DEVICE_TYPE}.conf <<'EOF'
 upstream backend  { server 127.0.0.1:5000; }
 upstream hal   { server 127.0.0.1:5001; }
 upstream openclaw { server 127.0.0.1:18789; }
@@ -1177,7 +1177,7 @@ echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' > /etc/default/hostapd
 # dnsmasq config — DHCP range 192.168.100.50-150 on wlan0
 # address=/#/192.168.100.1 redirects ALL DNS queries to the Pi (captive portal)
 mkdir -p /etc/dnsmasq.d
-cat > /etc/dnsmasq.d/99-lamp.conf <<'EOF'
+cat > /etc/dnsmasq.d/99-${DEVICE_TYPE}.conf <<'EOF'
 interface=wlan0
 bind-interfaces
 dhcp-range=wlan0,192.168.100.50,192.168.100.150,255.255.255.0,24h
@@ -2115,7 +2115,7 @@ for BIN in /sbin/init \
 done
 
 # Check critical config files
-for CFG in /etc/fstab /etc/hostapd/hostapd.conf /etc/nginx/conf.d/lamp.conf \
+for CFG in /etc/fstab /etc/hostapd/hostapd.conf /etc/nginx/conf.d/${DEVICE_TYPE}.conf \
            /boot/firmware/cmdline.txt; do
   if [ -f "${MNT}${CFG}" ]; then
     echo "  [OK] $CFG"

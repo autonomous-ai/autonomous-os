@@ -7,7 +7,8 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-CONF="/etc/nginx/conf.d/lamp.conf"
+DEVICE_TYPE="$(grep -E '^DEVICE_TYPE=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
+CONF="/etc/nginx/conf.d/${DEVICE_TYPE}.conf"
 
 if [ ! -f "$CONF" ]; then
   echo "Error: $CONF not found"

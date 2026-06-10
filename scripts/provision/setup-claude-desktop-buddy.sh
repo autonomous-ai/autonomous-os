@@ -120,7 +120,7 @@ echo "[buddy] Creating systemd service..."
 
 cat >/etc/systemd/system/claude-desktop-buddy.service <<EOF
 [Unit]
-Description=Lamp Claude Desktop Buddy (BLE)
+Description=Claude Desktop Buddy (BLE)
 After=bluetooth.target os-server.service
 Wants=bluetooth.target
 

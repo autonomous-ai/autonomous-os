@@ -75,7 +75,7 @@ Phase 3  OTA bake from metadata.json:
          - Web UI to /usr/share/nginx/html/setup
          - Claude Desktop Buddy BLE plugin (optional, if `claude-desktop-buddy.url` in metadata)
          - Writes /tmp/ota-versions.env (web/os-server/bootstrap/hal/buddy versions baked in)
-Phase 4  lamp-resize-once.service installed
+Phase 4  resize-once.service installed
          - oneshot, first-boot only, self-destructing
          - growpart + resize2fs to fill the actual SD card (image is 14 GB, SD likely larger)
 Phase 5  Finalize
@@ -93,7 +93,7 @@ efficiently).
 
 1. U-Boot reads `/boot/orangepiEnv.txt` (left intact from vendor image) →
    mounts `/dev/mmcblk1p1` as ext4 root.
-2. `lamp-resize-once.service` runs once: `growpart /dev/mmcblk1 1 && resize2fs
+2. `resize-once.service` runs once: `growpart /dev/mmcblk1 1 && resize2fs
    /dev/mmcblk1p1` → ext4 fills the real SD size. Service self-disables +
    removes itself. Re-flash will reinstall it.
 3. Operator runs `sudo device-ap-mode` (or the bootstrap-server triggers it
@@ -196,7 +196,7 @@ ls /opt/hal/.venv/bin/uvicorn       # LeLamp uv sync succeeded
 openclaw --version                       # OpenClaw npm global installed
 ls /etc/asound.conf /etc/udev/rules.d/91-pulseaudio-hal-ignore.rules
 findmnt /                                # ext4 root, expanded to full SD
-systemctl is-enabled lamp-resize-once 2>&1 | grep -q "not found" && echo OK_resize-once-self-destructed
+systemctl is-enabled resize-once 2>&1 | grep -q "not found" && echo OK_resize-once-self-destructed
 ```
 
 > Note: the vendor OrangePi image also has an `orangepi` user (password `orangepi`) that is not removed by the builder. Both `system/12345` and `orangepi/orangepi` work for SSH.

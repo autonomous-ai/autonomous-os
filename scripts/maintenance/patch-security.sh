@@ -12,7 +12,8 @@ set -euo pipefail
 
 LELAMP_SVC="/etc/systemd/system/hal.service"
 LELAMP_UNIT="hal"
-NGINX_CONF="/etc/nginx/conf.d/lamp.conf"
+DEVICE_TYPE="$(grep -E '^DEVICE_TYPE=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
+NGINX_CONF="/etc/nginx/conf.d/${DEVICE_TYPE}.conf"
 
 # Hash watched files before patching so the end-of-script restart only fires
 # when something actually changed. Idempotent re-runs (everything already
