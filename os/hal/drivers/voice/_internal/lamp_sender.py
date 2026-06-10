@@ -46,9 +46,9 @@ class LampSender:
             return True
         return False
 
-    def send(self, message: str, event_type: str = "voice") -> None:
+    def send(self, message: str, event_type: str = "voice", skip_echo: bool = False) -> None:
         """POST decorated message to Lamp /api/sensing/event with retry."""
-        if self.is_echo(message):
+        if not skip_echo and self.is_echo(message):
             return
 
         payload = {"type": event_type, "message": message}

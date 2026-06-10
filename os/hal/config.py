@@ -333,3 +333,58 @@ SPEECH_EMOTION_AUDIO_DIR: str = os.environ.get(
     "HAL_SPEECH_EMOTION_AUDIO_DIR",
     os.path.join(tempfile.gettempdir(), "lamp-speech-emotion"),
 )
+
+# --- Realtime voice agent ---
+REALTIME_ENABLED: bool = os.environ.get("HAL_REALTIME_ENABLED", "true").lower() in ("1", "true", "yes")
+REALTIME_PROVIDER: str = os.environ.get("HAL_REALTIME_PROVIDER", "gemini")  # none | gemini | openai
+# Turn detection / VAD: "server_vad" | "semantic_vad" | "off"
+# For Gemini: "off" disables automatic activity detection; any other value enables it.
+# For OpenAI: maps to turn_detection type in session config.
+REALTIME_TURN_DETECTION: str = os.environ.get("HAL_REALTIME_TURN_DETECTION", "off")
+
+# --- Realtime: Gemini Live ---
+REALTIME_GEMINI_API_KEY: str = (
+    os.environ.get("GEMINI_API_KEY", "")
+    or os.environ.get("GOOGLE_API_KEY", "")
+    or _lamp_cfg_get("llm_api_key", "")
+)
+REALTIME_GEMINI_BASE_URL: str = os.environ.get(
+    "HAL_GEMINI_LIVE_BASE_URL",
+    (_lamp_cfg_get("llm_base_url", "").rstrip("/") + "/ws/gemini") if _lamp_cfg_get("llm_base_url", "") else "",
+)
+REALTIME_GEMINI_MODEL: str = os.environ.get("HAL_GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview")
+REALTIME_GEMINI_VOICE: str = os.environ.get("HAL_GEMINI_LIVE_VOICE", "Kore")
+REALTIME_GEMINI_SAMPLE_RATE: int = 16000
+REALTIME_GEMINI_THINKING_LEVEL: str = os.environ.get("HAL_GEMINI_THINKING_LEVEL", "HIGH")
+REALTIME_GEMINI_USE_LANGUAGE_CODES: bool = os.environ.get("HAL_GEMINI_USE_LANGUAGE_CODES", "false").lower() in ("1", "true", "yes")
+
+# --- Realtime: OpenAI Realtime ---
+REALTIME_OPENAI_API_KEY: str = (
+    os.environ.get("OPENAI_API_KEY", "")
+    or _lamp_cfg_get("llm_api_key", "")
+)
+REALTIME_OPENAI_BASE_URL: str = os.environ.get(
+    "HAL_OPENAI_REALTIME_BASE_URL",
+    (_lamp_cfg_get("llm_base_url", "").rstrip("/") + "/ws/openai") if _lamp_cfg_get("llm_base_url", "") else "",
+)
+REALTIME_OPENAI_MODEL: str = os.environ.get("HAL_OPENAI_REALTIME_MODEL", "gpt-realtime-2")
+REALTIME_OPENAI_VOICE: str = os.environ.get("HAL_OPENAI_REALTIME_VOICE", "alloy")
+REALTIME_OPENAI_SAMPLE_RATE: int = 24000
+REALTIME_OPENAI_REASONING_EFFORT: str = os.environ.get("HAL_OPENAI_REASONING_EFFORT", "xhigh")
+
+# --- Realtime: Context manager ---
+REALTIME_WORKSPACE_DIR: str = os.environ.get("HAL_OPENCLAW_WORKSPACE_DIR", "/root/.openclaw/workspace")
+_rt_workspace: str = REALTIME_WORKSPACE_DIR.rstrip("/")
+REALTIME_MEMORY_PATH: str = os.environ.get("HAL_REALTIME_MEMORY_PATH", f"{_rt_workspace}/realtime/memory.jsonl")
+REALTIME_MAX_MEMORY_ENTRIES: int = int(os.environ.get("HAL_REALTIME_MAX_MEMORY_ENTRIES", "1000"))
+REALTIME_MEMORY_TRIM_KEEP: int = int(os.environ.get("HAL_REALTIME_MEMORY_TRIM_KEEP", "500"))
+REALTIME_LAMP_MEMORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_LAMP_MEMORY_MAX_CHARS", "100000"))
+REALTIME_MEMORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_MEMORY_MAX_CHARS", "100000"))
+
+# --- Realtime: Summarizer (Anthropic Messages API) ---
+REALTIME_SUMMARIZER_ENABLED: bool = os.environ.get("HAL_REALTIME_SUMMARIZER_ENABLED", "true").lower() in ("1", "true", "yes")
+REALTIME_SUMMARIZER_API_KEY: str = os.environ.get("HAL_REALTIME_SUMMARIZER_API_KEY", "") or _lamp_cfg_get("llm_api_key", "")
+# Anthropic SDK appends /v1/messages, so strip trailing /v1 from llm_base_url
+_summarizer_base: str = os.environ.get("HAL_REALTIME_SUMMARIZER_BASE_URL", "") or _lamp_cfg_get("llm_base_url", "")
+REALTIME_SUMMARIZER_BASE_URL: str = _summarizer_base.rstrip("/").removesuffix("/v1") if _summarizer_base else ""
+REALTIME_SUMMARIZER_MODEL: str = os.environ.get("HAL_REALTIME_SUMMARIZER_MODEL", "claude-haiku-4-5-20251001")
