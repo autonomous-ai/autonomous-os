@@ -40,7 +40,7 @@
 #         - Generate locale
 #         - stage_rpi5_wifi_stability: disable IPv6 (legacy RPi 5 workaround)
 #         - stage_enable_spi: dtparam=spi=on in config.txt
-#         - stage_backend_units: systemd services (bootstrap, lamp, lamp-hal) + software-update
+#         - stage_backend_units: systemd services (bootstrap, lamp, hal) + software-update
 #         - stage_pulseaudio: PulseAudio echo cancellation (WebRTC AEC for mic/speaker)
 #         - stage_hal_uv: install uv (Python package manager for HAL)
 #         - stage_nginx: write nginx config with backend/hal/openclaw upstreams
@@ -122,6 +122,11 @@ OUT_IMG_SIZE="8G"           # Output image size (expands to full SD on first boo
 # hardcoded default: fail fast if the caller did not provide one. Baked into the
 # image's /root/config/bootstrap.json below.
 OTA_METADATA_URL="${OTA_METADATA_URL:?OTA_METADATA_URL is required — build via 'make build OTA_METADATA_URL=...'}"
+# Device profile baked into this golden image: 1 device type = 1 image. The
+# matching devices.<type> artifact (DEVICE.md + SOUL.md) is fetched from OTA
+# metadata and staged into DEVICES_DIR/<type>. Forwarded by the Makefile (-e).
+DEVICE_TYPE="${DEVICE_TYPE:-lamp}"
+DEVICES_DIR="${DEVICES_DIR:-/opt/devices}"
 AP_BAND="${AP_BAND:-2.4}"   # 2.4 or 5 (5 GHz needs supported regulatory domain + chip)
 AP_CHANNEL="${AP_CHANNEL:-}" # default: 6 for 2.4 GHz, 36 for 5 GHz
 COUNTRY_CODE="US"           # Regulatory country code for hostapd
@@ -826,7 +831,7 @@ SyslogIdentifier=bootstrap
 WantedBy=multi-user.target
 EOF
 
-cat > /etc/systemd/system/os-server.service <<'EOF'
+cat > /etc/systemd/system/os-server.service <<EOF
 [Unit]
 Description=Lamp Backend
 After=network.target
@@ -834,6 +839,8 @@ After=network.target
 [Service]
 User=root
 WorkingDirectory=/root
+Environment=DEVICE_TYPE=${DEVICE_TYPE}
+Environment=DEVICES_DIR=${DEVICES_DIR}
 ExecStart=/usr/local/bin/os-server
 Restart=always
 RestartSec=5
@@ -845,7 +852,7 @@ SyslogIdentifier=os-server
 WantedBy=multi-user.target
 EOF
 
-cat > /etc/systemd/system/lamp-hal.service <<'EOF'
+cat > /etc/systemd/system/hal.service <<'EOF'
 [Unit]
 Description=Lamp HAL Hardware Runtime
 After=network.target
@@ -860,12 +867,12 @@ Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=lamp-hal
+SyslogIdentifier=hal
 
 [Install]
 WantedBy=multi-user.target
 EOF
-systemctl enable bootstrap os-server lamp-hal
+systemctl enable bootstrap os-server hal
 
 # Seed the bootstrap worker config so the OTA metadata URL comes from
 # /root/config/bootstrap.json at runtime (single source of truth). The bootstrap
@@ -952,7 +959,7 @@ elif [ "\$KIND" = "hal" ]; then
   rm -rf "\$HAL_DIR/.venv"
   cd "\$HAL_DIR" && "\$UV_BIN" sync --python 3.12 --extra hardware || { echo "uv sync failed"; exit 1; }
   cd /
-  systemctl restart lamp-hal 2>/dev/null || true
+  systemctl restart hal 2>/dev/null || true
 elif [ "\$KIND" = "openclaw" ]; then
   V="\${VER:-latest}"
   npm install -g "openclaw@\${V}" || { echo "npm install openclaw failed"; exit 1; }
@@ -1807,6 +1814,8 @@ set -euo pipefail
 trap 'echo "OVERLAY ERROR: command failed at line \$LINENO (exit code \$?): \$BASH_COMMAND"' ERR
 export DEBIAN_FRONTEND=noninteractive
 export OTA_METADATA_URL="${OTA_METADATA_URL}"
+export DEVICE_TYPE="${DEVICE_TYPE}"
+export DEVICES_DIR="${DEVICES_DIR}"
 
 retry() {
   local cmd="\$1" max="\${2:-5}" delay="\${3:-2}" n=0
@@ -1838,6 +1847,7 @@ WEB_URL=\$(jq -r '.web.url // empty'         "\$META")
 OS_SERVER_URL=\$(jq -r '."os-server".url // empty'       "\$META")
 BOOTSTRAP_URL=\$(jq -r '.bootstrap.url // empty' "\$META")
 LELAMP_URL=\$(jq -r '.hal.url // empty'   "\$META")
+DEVICES_URL=\$(jq -r --arg t "\$DEVICE_TYPE" '.devices[\$t].url // empty' "\$META")
 BUDDY_URL=\$(jq -r '."claude-desktop-buddy".url // empty' "\$META")
 WEB_VER=\$(jq -r '.web.version // empty'     "\$META")
 OS_SERVER_VER=\$(jq -r '."os-server".version // empty'   "\$META")
@@ -1951,6 +1961,31 @@ WEBRTCVAD_EOF
   cd /
 else
   echo "[overlay] WARN: No hal URL in OTA metadata, skipping HAL download"
+fi
+
+# Seed /opt/hal/.env with the baked device profile (idempotent grep-append).
+# Read by HAL for capability mounting; mirrors os-server.service Environment=.
+mkdir -p "\$HAL_DIR"
+touch "\$HAL_DIR/.env"
+grep -q "^DEVICE_TYPE=" "\$HAL_DIR/.env" \
+  || echo "DEVICE_TYPE=\$DEVICE_TYPE" >> "\$HAL_DIR/.env"
+grep -q "^DEVICES_DIR=" "\$HAL_DIR/.env" \
+  || echo "DEVICES_DIR=\$DEVICES_DIR" >> "\$HAL_DIR/.env"
+
+# ── stage: device profile ────────────────────────────────────────────────────
+# Per-device: install ONLY this device_type's artifact (devices.<type> in OTA
+# metadata) into DEVICES_DIR/<type>. Absent → skip (agent keeps the gateway's
+# default soul; HAL mounts all routes). Read by os-server (soul) and HAL.
+echo "[overlay] Install device profile (\$DEVICE_TYPE)"
+DEVICE_DEST="\$DEVICES_DIR/\$DEVICE_TYPE"
+mkdir -p "\$DEVICE_DEST"
+if [ -n "\${DEVICES_URL:-}" ]; then
+  retry "curl -fsSL -H 'Cache-Control: no-cache' -o /tmp/device.zip '\$DEVICES_URL'" 5
+  unzip -o -q /tmp/device.zip -d "\$DEVICE_DEST"
+  rm -f /tmp/device.zip
+  echo "[overlay] Device profile '\$DEVICE_TYPE' installed at \$DEVICE_DEST"
+else
+  echo "[overlay] WARN: no devices.\$DEVICE_TYPE url in OTA metadata — skipping (default soul, all routes mount)"
 fi
 
 # ── stage: web UI ────────────────────────────────────────────────────────────
@@ -2087,7 +2122,7 @@ for CFG in /etc/fstab /etc/hostapd/hostapd.conf /etc/nginx/conf.d/lamp.conf \
 done
 
 # Check systemd services are enabled
-for SVC in bootstrap lamp lamp-hal nginx openclaw btrfs-resize-once firstrun-wifi; do
+for SVC in bootstrap lamp hal nginx openclaw btrfs-resize-once firstrun-wifi; do
   if [ -L "${MNT}/etc/systemd/system/multi-user.target.wants/${SVC}.service" ] || \
      [ -L "${MNT}/etc/systemd/system/sysinit.target.wants/${SVC}.service" ]; then
     echo "  [OK] ${SVC}.service enabled"

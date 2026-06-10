@@ -24,14 +24,25 @@ BUILD_SCRIPT := $(BUILD_SCRIPT_$(TARGET))
 # /root/config/bootstrap.json. Empty → build fails in preflight.
 OTA_METADATA_URL ?=
 
+# Device class baked into this golden image — one image per device type (3 device
+# types = 3 golden images). Forwarded into the build container; the build script
+# bakes it into os-server.service + /opt/hal/.env and stages only devices/<type>/
+# into the image. Default "lamp"; e.g. make build TARGET=opi DEVICE_TYPE=intern.
+DEVICE_TYPE ?= lamp
+
 ifndef BUILD_SCRIPT
 $(error Unknown TARGET=$(TARGET). Supported: rpi, opi)
 endif
 
-# Image filename per target so RPi + OPi builds don't clobber each other.
+# Image filename per target AND per device type so neither board nor device-type
+# builds clobber each other. The build script always writes BUILT_IMG; the build
+# target renames it to the device-typed IMG_FILE (3 device types = 3 images).
 # OPi build produces .img.xz (compressed); RPi build produces raw .img.
-IMG_FILE_rpi := golden.img
-IMG_FILE_opi := golden-opi.img.xz
+BUILT_IMG_rpi := golden.img
+BUILT_IMG_opi := golden-opi.img.xz
+BUILT_IMG := $(BUILT_IMG_$(TARGET))
+IMG_FILE_rpi := golden-$(DEVICE_TYPE).img
+IMG_FILE_opi := golden-opi-$(DEVICE_TYPE).img.xz
 IMG_FILE := $(IMG_FILE_$(TARGET))
 
 # Preflight — check Docker resources + clean dangling layers before a long
@@ -44,6 +55,7 @@ build-preflight:
 	@echo "==> Preflight checks"
 	@[ -n "$(OTA_METADATA_URL)" ] || { echo "ERROR: OTA_METADATA_URL is required — e.g. make build OTA_METADATA_URL=https://.../metadata.json"; exit 1; }
 	@echo "    OTA metadata URL: $(OTA_METADATA_URL)"
+	@echo "    Device type:      $(DEVICE_TYPE)"
 	@command -v docker >/dev/null 2>&1 || { echo "ERROR: Docker not installed"; exit 1; }
 	@docker info >/dev/null 2>&1 || { echo "ERROR: Docker daemon not running (start Docker Desktop)"; exit 1; }
 	@DOCKER_MEM_GB=$$(docker info --format '{{.MemTotal}}' | awk '{printf "%.1f", $$1/1024/1024/1024}'); \
@@ -74,7 +86,11 @@ build: build-preflight
 	-e BUILD_SCRIPT=$(BUILD_SCRIPT) \
 	-e RPI_MODEL=$(RPI_MODEL) \
 	-e OTA_METADATA_URL=$(OTA_METADATA_URL) \
+	-e DEVICE_TYPE=$(DEVICE_TYPE) \
 	pi-builder /work/$(BUILD_SCRIPT)
+	@# Name the output per device type so lamp/intern/dog images don't clobber.
+	@if [ "$(BUILT_IMG)" != "$(IMG_FILE)" ] && [ -f output/$(BUILT_IMG) ]; then mv -f output/$(BUILT_IMG) output/$(IMG_FILE); fi
+	@echo "==> Built image: output/$(IMG_FILE)  (device_type=$(DEVICE_TYPE))"
 
 sd-card-list:
 	diskutil list
@@ -119,7 +135,7 @@ VERSION    := $(shell date -u +%Y%m%d-%H%M%S)-$(shell git -C .. rev-parse --shor
 TARGET_PREFIX_rpi := golden-rpi
 TARGET_PREFIX_opi := golden-opi
 TARGET_PREFIX := $(TARGET_PREFIX_$(TARGET))
-VERSIONED_BASE := $(TARGET_PREFIX)-$(VERSION)
+VERSIONED_BASE := $(TARGET_PREFIX)-$(DEVICE_TYPE)-$(VERSION)
 VERSIONED_IMG  := $(VERSIONED_BASE)$(if $(filter %.xz,$(IMG_FILE)),.img.xz,.img)
 RELEASE_NOTE   := output/$(VERSIONED_BASE).release.txt
 MANIFEST_FILE  := output/manifest-$(TARGET).json

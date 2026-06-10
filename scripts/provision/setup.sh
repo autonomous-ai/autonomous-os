@@ -191,6 +191,7 @@ stage_ota_metadata() {
   HAL_URL=$(jq -r '.hal.url // empty' "$METADATA_TMP")
   BUDDY_VERSION=$(jq -r '."claude-desktop-buddy".version // empty' "$METADATA_TMP")
   BUDDY_URL=$(jq -r '."claude-desktop-buddy".url // empty' "$METADATA_TMP")
+  DEVICES_URL=$(jq -r --arg t "$DEVICE_TYPE" '.devices[$t].url // empty' "$METADATA_TMP")
   rm -f "$METADATA_TMP"
   if [ -z "$WEB_URL" ] || [ -z "$OS_SERVER_URL" ] || [ -z "$BOOTSTRAP_URL" ]; then
     echo "ERROR: OTA metadata missing web.url, os-server.url or bootstrap.url. Check $OTA_METADATA_URL"
@@ -349,16 +350,16 @@ set-default-sink aec_sink
 PULSE_EOF
   fi
 
-  # Anonymous unix socket so the root-owned lamp-hal service can reach the
+  # Anonymous unix socket so the root-owned hal service can reach the
   # uid-1000 PulseAudio daemon (libpulse rejects cookie auth when the socket
   # owner differs from the connecting uid). Pairs with the PULSE_SERVER env
-  # added to the lamp-hal.service unit below. Required for Bluetooth
+  # added to the hal.service unit below. Required for Bluetooth
   # headset routing (pactl set-default-sink to a bluez sink).
   if [ -f "$PULSE_CONF" ] && ! grep -q "pulse-anon-lamp" "$PULSE_CONF"; then
     echo "[stage] Configuring PulseAudio anonymous socket for root access"
     cat >> "$PULSE_CONF" <<'PULSE_EOF'
 
-### Anonymous unix socket so root-owned lamp-hal can reach this PA daemon
+### Anonymous unix socket so root-owned hal can reach this PA daemon
 load-module module-native-protocol-unix auth-anonymous=1 socket=/tmp/pulse-anon-lamp
 PULSE_EOF
   fi
@@ -438,7 +439,7 @@ WEBRTCVAD_EOF
   grep -q "^DEVICES_DIR=" "$HAL_DIR/.env" \
     || echo "DEVICES_DIR=$DEVICES_DIR" >> "$HAL_DIR/.env"
 
-  cat >/etc/systemd/system/lamp-hal.service <<EOF
+  cat >/etc/systemd/system/hal.service <<EOF
 [Unit]
 Description=Lamp LeLamp Hardware Runtime
 After=network.target
@@ -457,15 +458,15 @@ Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=lamp-hal
+SyslogIdentifier=hal
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
   systemctl daemon-reload
-  systemctl enable lamp-hal
-  systemctl restart lamp-hal
+  systemctl enable hal
+  systemctl restart hal
 }
 
 # ----------------------------------------------------------
@@ -1258,11 +1259,11 @@ if [ -z "$OTA_METADATA_URL" ]; then
 fi
 echo "[software-update] OTA metadata: $OTA_METADATA_URL"
 [ "$(id -u)" -ne 0 ] && { echo "Run as root."; exit 1; }
-[ $# -ne 1 ] && { echo "Usage: software-update <os-server|openclaw|web>"; exit 1; }
+[ $# -ne 1 ] && { echo "Usage: software-update <os-server|openclaw|bootstrap|web|hal|claude-desktop-buddy|device>"; exit 1; }
 APP="$1"
 case "$APP" in
-  os-server|openclaw|bootstrap|web|hal|claude-desktop-buddy) ;;
-  *) echo "Unknown app: $APP. Use os-server, openclaw, bootstrap, web, hal, or claude-desktop-buddy."; exit 1 ;;
+  os-server|openclaw|bootstrap|web|hal|claude-desktop-buddy|device) ;;
+  *) echo "Unknown app: $APP. Use os-server, openclaw, bootstrap, web, hal, claude-desktop-buddy, or device."; exit 1 ;;
 esac
 
 METADATA_TMP=$(mktemp)
@@ -1270,9 +1271,18 @@ ZIP_TMP=""
 DIR_TMP=""
 trap 'rm -f "$METADATA_TMP" "$ZIP_TMP"; rm -rf "$DIR_TMP"' EXIT
 curl -fsSL -H "Cache-Control: no-cache" -H "Pragma: no-cache" -o "$METADATA_TMP" "$OTA_METADATA_URL" || { echo "Failed to fetch metadata from $OTA_METADATA_URL"; exit 1; }
-META_KEY="$APP"
-VERSION=$(jq -r --arg a "$META_KEY" '.[$a].version // empty' "$METADATA_TMP")
-URL=$(jq -r --arg a "$META_KEY" '.[$a].url // empty' "$METADATA_TMP")
+if [ "$APP" = "device" ]; then
+  # Device profile lives nested under devices.<type>; resolve THIS device's type.
+  DEVICE_TYPE="$(grep -E '^DEVICE_TYPE=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
+  [ -z "$DEVICE_TYPE" ] && DEVICE_TYPE="$(jq -r '.device_type // empty' /root/config/config.json 2>/dev/null)"
+  [ -z "$DEVICE_TYPE" ] && DEVICE_TYPE="lamp"
+  VERSION=$(jq -r --arg t "$DEVICE_TYPE" '.devices[$t].version // empty' "$METADATA_TMP")
+  URL=$(jq -r --arg t "$DEVICE_TYPE" '.devices[$t].url // empty' "$METADATA_TMP")
+else
+  META_KEY="$APP"
+  VERSION=$(jq -r --arg a "$META_KEY" '.[$a].version // empty' "$METADATA_TMP")
+  URL=$(jq -r --arg a "$META_KEY" '.[$a].url // empty' "$METADATA_TMP")
+fi
 [ -z "$VERSION" ] && { echo "Metadata has no version for $APP"; exit 1; }
 
 if [ "$APP" = "os-server" ]; then
@@ -1330,7 +1340,7 @@ elif [ "$APP" = "hal" ]; then
   find /root/.cache/uv -name "lerobot.egg-info" -type d 2>/dev/null | xargs rm -rf
   cd "$HAL_DIR" && "$UV_BIN" sync --python 3.12 --extra hardware || { echo "uv sync failed"; exit 1; }
   cd /
-  systemctl restart lamp-hal
+  systemctl restart hal
   echo "hal updated to $VERSION"
 elif [ "$APP" = "claude-desktop-buddy" ]; then
   [ -z "$URL" ] && { echo "Metadata has no url for claude-desktop-buddy"; exit 1; }
@@ -1345,6 +1355,18 @@ elif [ "$APP" = "claude-desktop-buddy" ]; then
   echo "$VERSION" > "$BUDDY_DIR/VERSION_BUDDY"
   systemctl restart claude-desktop-buddy
   echo "claude-desktop-buddy updated to $VERSION"
+elif [ "$APP" = "device" ]; then
+  [ -z "$URL" ] && { echo "Metadata has no url for devices.$DEVICE_TYPE"; exit 1; }
+  DEVICES_DIR="$(grep -E '^DEVICES_DIR=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
+  [ -z "$DEVICES_DIR" ] && DEVICES_DIR="/opt/devices"
+  DEST="$DEVICES_DIR/$DEVICE_TYPE"
+  ZIP_TMP=$(mktemp)
+  curl -fsSL -H "Cache-Control: no-cache" -o "$ZIP_TMP" "$URL" || { echo "Failed to download device profile"; exit 1; }
+  mkdir -p "$DEST"
+  unzip -o -q "$ZIP_TMP" -d "$DEST"
+  systemctl restart os-server 2>/dev/null || true
+  systemctl restart hal 2>/dev/null || true
+  echo "device profile ($DEVICE_TYPE) updated to $VERSION"
 fi
 SOFTWAREUPDATE
   chmod +x /usr/local/bin/software-update
@@ -1358,6 +1380,24 @@ SOFTWAREUPDATE
 # ----------------------------------------------------------
 ensure_root
 
+# Install this device's profile (DEVICE.md + SOUL.md) into DEVICES_DIR/<type>.
+# Per-device: downloads ONLY this device_type's artifact (devices.<type> in OTA
+# metadata). Absent → skip (agent keeps the gateway's default soul; HAL mounts
+# all routes). Read by os-server (soul) and HAL (capability mounting).
+stage_devices() {
+  echo "[stage] Install device profile ($DEVICE_TYPE)"
+  local dest="$DEVICES_DIR/$DEVICE_TYPE"
+  mkdir -p "$dest"
+  if [ -n "${DEVICES_URL:-}" ]; then
+    retry "curl -fsSL -H \"Cache-Control: no-cache\" -H \"Pragma: no-cache\" -o /tmp/device.zip \"$DEVICES_URL\"" 5
+    unzip -o -q /tmp/device.zip -d "$dest"
+    rm -f /tmp/device.zip
+    echo "[stage] Device profile '$DEVICE_TYPE' installed at $dest"
+  else
+    echo "[stage] WARN: no devices.$DEVICE_TYPE url in OTA metadata — skipping (default soul, all routes mount)"
+  fi
+}
+
 # Stop lamp if running from a previous setup — it switches to AP mode when unconfigured, killing internet.
 systemctl stop os-server.service 2>/dev/null || true
 systemctl disable os-server.service 2>/dev/null || true
@@ -1369,6 +1409,7 @@ run_stage stage_enable_spi
 run_stage stage_ota_metadata
 run_stage stage_backend
 run_stage stage_hal
+run_stage stage_devices
 run_stage stage_buddy
 run_stage stage_openclaw
 run_stage stage_nginx
@@ -1384,7 +1425,7 @@ echo "======================================"
 echo "Setup complete!"
 echo "AP SSID: Lamp-XXXX (actual: ${AP_SSID:-unknown — stage_ap may have failed})"
 echo "Setup page: http://192.168.100.1 (AP) — or http://${LAMP_HOSTNAME:-lamp-xxxx}.local once on home Wi-Fi"
-echo "Backends: systemctl status bootstrap lamp lamp-hal claude-desktop-buddy"
+echo "Backends: systemctl status bootstrap lamp hal claude-desktop-buddy"
 echo "Updates:  software-update <bootstrap|os-server|openclaw|hal|claude-desktop-buddy|web>"
 if [ -n "$FAILED_STAGES" ]; then
   echo ""

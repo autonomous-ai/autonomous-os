@@ -35,6 +35,11 @@ AP_BAND="${AP_BAND:-2.4}"
 AP_CHANNEL="${AP_CHANNEL:-}"
 COUNTRY_CODE="${COUNTRY_CODE:-US}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-2026.5.27}"
+# Device class this golden image is for — bakes devices/<type>/{DEVICE,SOUL}.md
+# so one DEVICE_TYPE = one golden image. Forwarded by the Makefile via docker -e.
+# Default "lamp"; override e.g. DEVICE_TYPE=intern.
+DEVICE_TYPE="${DEVICE_TYPE:-lamp}"
+DEVICES_DIR="${DEVICES_DIR:-/opt/devices}"
 
 # Google Drive file ID for the bookworm server image. Override via env var when
 # the dev team rotates the .7z (new Orange Pi release).
@@ -191,6 +196,8 @@ export AP_BAND="${AP_BAND}"
 export AP_CHANNEL="${AP_CHANNEL}"
 export COUNTRY_CODE="${COUNTRY_CODE}"
 export OPENCLAW_VERSION="${OPENCLAW_VERSION}"
+export DEVICE_TYPE="${DEVICE_TYPE}"
+export DEVICES_DIR="${DEVICES_DIR}"
 
 retry() {
   local cmd="\$1" max="\${2:-5}" delay="\${3:-3}" n=0
@@ -292,7 +299,10 @@ mkdir -p /opt/hal
 # ── systemd units ────────────────────────────────────────────────────────────
 echo "[stage] systemd units"
 
-cat > /etc/systemd/system/os-server.service <<'UNIT'
+# Unquoted heredoc so \${DEVICE_TYPE}/\${DEVICES_DIR} expand from the chroot env
+# (exported above). The unit has no other shell-expandable tokens, so leaving it
+# unquoted is safe.
+cat > /etc/systemd/system/os-server.service <<UNIT
 [Unit]
 Description=Lamp Backend
 After=network-online.target
@@ -300,6 +310,8 @@ After=network-online.target
 [Service]
 User=root
 WorkingDirectory=/root
+Environment=DEVICE_TYPE=\${DEVICE_TYPE}
+Environment=DEVICES_DIR=\${DEVICES_DIR}
 ExecStart=/usr/local/bin/os-server
 Restart=always
 RestartSec=5
@@ -343,7 +355,7 @@ cat > /root/config/bootstrap.json <<BSJSON
 }
 BSJSON
 
-cat > /etc/systemd/system/lamp-hal.service <<'UNIT'
+cat > /etc/systemd/system/hal.service <<'UNIT'
 [Unit]
 Description=Lamp HAL Hardware Runtime
 After=network.target
@@ -359,7 +371,7 @@ Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=lamp-hal
+SyslogIdentifier=hal
 
 [Install]
 WantedBy=multi-user.target
@@ -398,6 +410,12 @@ LELAMP_DL_ENCRYPTION_REQUIRED=false
 OMP_NUM_THREADS=1
 OPENBLAS_NUM_THREADS=1
 ENV
+
+# Device profile selector for HAL — appended idempotently so the quoted ENV
+# heredoc above stays literal while \${DEVICE_TYPE}/\${DEVICES_DIR} expand here
+# from the chroot env.
+grep -q "^DEVICE_TYPE=" /opt/hal/.env || echo "DEVICE_TYPE=\${DEVICE_TYPE}" >> /opt/hal/.env
+grep -q "^DEVICES_DIR=" /opt/hal/.env || echo "DEVICES_DIR=\${DEVICES_DIR}" >> /opt/hal/.env
 
 # OpenClaw service — env block matches production OPi exactly.
 CHROME_PATH=\$(command -v chromium 2>/dev/null || echo /usr/bin/chromium)
@@ -692,7 +710,7 @@ elif [ "\$APP" = "hal" ]; then
   find /root/.cache/uv -name "lerobot.egg-info" -type d 2>/dev/null | xargs rm -rf
   cd "\$HAL_DIR" && "\$UV_BIN" sync --python 3.12 --extra hardware || { echo "uv sync failed"; exit 1; }
   cd /
-  systemctl restart lamp-hal
+  systemctl restart hal
   echo "hal updated to \$VERSION"
 elif [ "\$APP" = "claude-desktop-buddy" ]; then
   [ -z "\$URL" ] && { echo "Metadata has no url for claude-desktop-buddy"; exit 1; }
@@ -934,7 +952,7 @@ systemctl mask orangepi-firstrun-config.service 2>/dev/null || true
 
 # ── enable Lamp services (symlink, since chroot has no running systemd) ──────
 echo "[stage] enable Lamp services"
-for unit in lamp bootstrap lamp-hal openclaw avahi-daemon bluetooth ssh; do
+for unit in lamp bootstrap hal openclaw avahi-daemon bluetooth ssh; do
   systemctl enable "\$unit" 2>/dev/null || true
 done
 
@@ -959,6 +977,8 @@ set -euo pipefail
 trap 'echo "OVERLAY ERROR: command failed at line \$LINENO (exit \$?): \$BASH_COMMAND"' ERR
 export DEBIAN_FRONTEND=noninteractive
 export PATH="/root/.local/bin:\$PATH"
+export DEVICE_TYPE="${DEVICE_TYPE}"
+export DEVICES_DIR="${DEVICES_DIR}"
 
 retry() {
   local cmd="\$1" max="\${2:-5}" delay="\${3:-3}" n=0
@@ -992,6 +1012,7 @@ OS_SERVER_URL=\$(jq -r '."os-server".url // empty'             "\$META")
 BOOTSTRAP_URL=\$(jq -r '.bootstrap.url // empty'   "\$META")
 LELAMP_URL=\$(jq -r '.hal.url // empty'         "\$META")
 BUDDY_URL=\$(jq -r '."claude-desktop-buddy".url // empty' "\$META")
+DEVICES_URL=\$(jq -r --arg t "\$DEVICE_TYPE" '.devices[\$t].url // empty' "\$META")
 WEB_VER=\$(jq -r '.web.version // empty'           "\$META")
 OS_SERVER_VER=\$(jq -r '."os-server".version // empty'         "\$META")
 BOOTSTRAP_VER=\$(jq -r '.bootstrap.version // empty' "\$META")
@@ -1056,6 +1077,21 @@ WEBRTCVAD_EOF
   cd /
 else
   echo "[overlay] WARN: no hal URL — skipping"
+fi
+
+echo "[overlay] device profile (\$DEVICE_TYPE)"
+# Bake the device profile so one DEVICE_TYPE = one golden image. The chroot's
+# root is the image rootfs, so \$DEVICES_DIR/\$DEVICE_TYPE/ is the in-image path
+# (same convention as /opt/hal above). No URL → WARN + skip, never fail.
+if [ -n "\$DEVICES_URL" ]; then
+  DEVICE_PROFILE_DIR="\$DEVICES_DIR/\$DEVICE_TYPE"
+  mkdir -p "\$DEVICE_PROFILE_DIR"
+  retry "curl -fsSL -H 'Cache-Control: no-cache' -o /tmp/device-profile.zip '\$DEVICES_URL'" 5
+  unzip -o -q /tmp/device-profile.zip -d "\$DEVICE_PROFILE_DIR"
+  rm -f /tmp/device-profile.zip
+  echo "[overlay] device profile baked → \$DEVICE_PROFILE_DIR"
+else
+  echo "[overlay] WARN: no devices.\$DEVICE_TYPE.url in OTA metadata — skipping device profile"
 fi
 
 echo "[overlay] web UI"

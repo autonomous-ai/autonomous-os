@@ -113,7 +113,7 @@ autonomous-build-chat:
 # Upload (OTA to GCS) — unified format: make upload-<component>
 # ============================================================================
 
-.PHONY: upload-os-server upload-bootstrap upload-hal upload-claude-desktop-buddy upload-autonomous-buddy upload-web upload-skills upload-hooks upload-setup upload-setup-ap upload-openclaw upload-twitch-irc upload-autonomous-chat upload-all
+.PHONY: upload-os-server upload-bootstrap upload-hal upload-claude-desktop-buddy upload-autonomous-buddy upload-web upload-skills upload-hooks upload-setup upload-setup-ap upload-openclaw upload-device upload-twitch-irc upload-autonomous-chat upload-all
 
 upload-os-server:
 	bash scripts/release/upload-os-server.sh
@@ -166,6 +166,20 @@ endif
 upload-openclaw:
 	@if [ -z "$(OPENCLAW_VERSION_ARG)" ]; then echo "Usage: make upload-openclaw <version>" >&2; exit 1; fi
 	bash scripts/release/upload-openclaw.sh "$(OPENCLAW_VERSION_ARG)"
+
+# Allow positional device type: `make upload-device lamp` (publishes ONE device
+# profile). Per-device by design — each type versions + publishes independently,
+# so it's NOT in upload-all (publishing lamp must not touch intern).
+ifeq (upload-device,$(firstword $(MAKECMDGOALS)))
+  DEVICE_TYPE_ARG := $(word 2,$(MAKECMDGOALS))
+  ifneq ($(DEVICE_TYPE_ARG),)
+    $(eval $(DEVICE_TYPE_ARG):;@:)
+  endif
+endif
+
+upload-device:
+	@if [ -z "$(DEVICE_TYPE_ARG)" ]; then echo "Usage: make upload-device <type>   (e.g. lamp, intern, unitree-go2w)" >&2; exit 1; fi
+	bash scripts/release/upload-device.sh "$(DEVICE_TYPE_ARG)"
 
 # upload-openclaw is intentionally NOT in upload-all — bumping the OpenClaw
 # version is an explicit decision, not a side effect of pushing other artifacts.
