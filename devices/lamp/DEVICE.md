@@ -11,12 +11,12 @@ capabilities:
   audio:        { routes: [audio, speaker, voice], required: true }
   vision:       { routes: [camera], required: true }
   sensing:      { routes: [sensing], required: true }
-  presence:     { routes: [emotion, scene], required: false }
-  motion:       { routes: [servo], driver: feetech, required: false, safety: SAFETY.md#motion }
-  light:        { routes: [led], driver: ws2812, required: false, safety: SAFETY.md#light }
-  display:      { routes: [display], driver: gc9a01, required: false }
-  media:        { routes: [music], required: false }
-  connectivity: { routes: [bluetooth], required: false }
+  presence:     { routes: [emotion, scene], required: true }
+  motion:       { routes: [servo], driver: feetech, required: true, safety: SAFETY.md#motion }
+  light:        { routes: [led], driver: ws2812, required: true, safety: SAFETY.md#light }
+  display:      { routes: [display], driver: gc9a01, required: true }
+  media:        { routes: [music], required: true }
+  connectivity: { routes: [bluetooth], required: true }
   system:       { routes: [system], required: true }
 soul_ref:   autonomous://souls/lamp-companion
 safety_ref: SAFETY.md
