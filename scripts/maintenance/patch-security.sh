@@ -10,8 +10,8 @@
 
 set -euo pipefail
 
-LELAMP_SVC="/etc/systemd/system/lamp-hal.service"
-LELAMP_UNIT="lamp-hal"
+LELAMP_SVC="/etc/systemd/system/hal.service"
+LELAMP_UNIT="hal"
 NGINX_CONF="/etc/nginx/conf.d/lamp.conf"
 
 # Hash watched files before patching so the end-of-script restart only fires

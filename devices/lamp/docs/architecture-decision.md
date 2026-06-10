@@ -66,7 +66,7 @@ Already running on the Pi4. Provides event-driven services with priority dispatc
 - **Audio** — Seeed mic/speaker, amixer volume, record WAV, play tone
 - **DisplayService** — small round display (GC9A01 1.28" or similar), dual-mode: eyes emotion (default) + info display (time, weather, timer, notifications)
 
-All hardware exposed via FastAPI on `127.0.0.1:5001` (systemd service: `lamp-hal.service`). Nginx proxies `/hw/*` for same-machine callers only — external clients receive 403. Swagger UI at `/hw/docs` is not accessible from LAN.
+All hardware exposed via FastAPI on `127.0.0.1:5001` (systemd service: `hal.service`). Nginx proxies `/hw/*` for same-machine callers only — external clients receive 403. Swagger UI at `/hw/docs` is not accessible from LAN.
 
 ### Lamp Server — System Layer + HTTP API Bridge (Go)
 
@@ -307,7 +307,7 @@ Dashboard layout with 4 sections:
 │  • Audio          — Seeed mic/speaker, amixer volume, record WAV    │
 │  • ServiceBase    — event-driven with priority dispatch             │
 │                                                                     │
-│  FastAPI on :5001 | systemd: lamp-hal.service                    │
+│  FastAPI on :5001 | systemd: hal.service                    │
 │  nginx: /hw/* → 127.0.0.1:5001 (Swagger at /hw/docs)              │
 │                                                                     │
 └──────────────────────────────────┬──────────────────────────────────┘

@@ -10,7 +10,7 @@ The device runs **5 software components** on a supported board (Raspberry Pi 4, 
 | **Bootstrap Server** | Go binary (ARM64) | Download zip from OTA | `bootstrap.service` | `/usr/local/bin/bootstrap-server` |
 | **Web (Setup SPA)** | React/Vite bundle | Download zip from OTA | nginx serves static | `/usr/share/nginx/html/setup/` |
 | **OpenClaw** | Node.js package | `npm install -g` | `openclaw.service` | Global npm |
-| **HAL** | Python package | Download zip from OTA | `lamp-hal.service` | `/opt/hal/` |
+| **HAL** | Python package | Download zip from OTA | `hal.service` | `/opt/hal/` |
 
 ### Architecture Diagram
 
@@ -150,7 +150,7 @@ stage_install_hal() {
     /opt/hal/venv/bin/pip install -r /opt/hal/requirements.txt
 
     # 5. Create systemd service
-    cat > /etc/systemd/system/lamp-hal.service << 'UNIT'
+    cat > /etc/systemd/system/hal.service << 'UNIT'
 [Unit]
 Description=HAL Python Runtime — Hardware Drivers
 After=network.target
@@ -170,8 +170,8 @@ WantedBy=multi-user.target
 UNIT
 
     systemctl daemon-reload
-    systemctl enable lamp-hal.service
-    systemctl start lamp-hal.service
+    systemctl enable hal.service
+    systemctl start hal.service
 
     echo "HAL $HAL_VERSION installed at /opt/hal/"
 }
@@ -184,7 +184,7 @@ UNIT
 | `os-server.service` | `/usr/local/bin/os-server` | 5000 | Main HTTP API, always running |
 | `bootstrap.service` | `/usr/local/bin/bootstrap-server` | 8080 | OTA worker, polls for updates. Exposes `POST /force-check` to trigger immediate OTA check |
 | `openclaw.service` | `xvfb-run ... openclaw gateway run` | — | AI brain, memory limit 1500M |
-| `lamp-hal.service` | `uvicorn hal.server:app --host 127.0.0.1 --port 5001` | 5001 | Hardware drivers (servo, LED, camera, audio) |
+| `hal.service` | `uvicorn hal.server:app --host 127.0.0.1 --port 5001` | 5001 | Hardware drivers (servo, LED, camera, audio) |
 | nginx | `nginx` | 80 | Setup SPA + reverse proxy (`/api/` → OS Server 5000, `/hw/` → HAL 5001) |
 
 ### Service Dependency Order
@@ -193,7 +193,7 @@ UNIT
 boot
   → os-server.service   (system layer, LED boot animation)
   → bootstrap.service   (starts polling for updates)
-  → lamp-hal.service          (hardware drivers ready)
+  → hal.service          (hardware drivers ready)
   → openclaw.service    (AI brain, connects to os-server via HTTP)
   → nginx               (web UI for setup)
 ```
@@ -297,7 +297,7 @@ Bootstrap uses `lib/hal` to show update status on LEDs. See [status-led.md](stat
 | `bootstrap` | Spawn detached `software-update bootstrap` (self-update, survives restart) |
 | `web` | Run `software-update web` |
 | `openclaw` | ~~Run `npm install -g openclaw@{version}` → `systemctl restart openclaw`~~ (temporarily disabled) |
-| `hal` | Run `software-update hal` → `systemctl restart lamp-hal` |
+| `hal` | Run `software-update hal` → `systemctl restart hal` |
 
 ---
 
@@ -320,7 +320,7 @@ aborts with an error if neither is set — no compiled-in URL.
     curl -fsSL "$URL" -o /tmp/hal-update.zip
 
     # Stop service before updating
-    systemctl stop lamp-hal.service
+    systemctl stop hal.service
 
     # Backup current
     cp -r /opt/hal /opt/hal.bak 2>/dev/null || true
@@ -332,7 +332,7 @@ aborts with an error if neither is set — no compiled-in URL.
     /opt/hal/venv/bin/pip install -r /opt/hal/requirements.txt --quiet
 
     # Restart
-    systemctl start lamp-hal.service
+    systemctl start hal.service
 
     # Cleanup
     rm -f /tmp/hal-update.zip
@@ -557,7 +557,7 @@ HAL version is a plain text `VERSION` file in the package root. Read by bootstra
 | Components | 4 (lamp, bootstrap, web, openclaw) | **5** (+ hal) |
 | OTA keys | lamp, bootstrap, web, openclaw | + **hal** |
 | Setup stages | 7 (stages -1 to 4) | **8** (+ stage 2b: HAL) |
-| Systemd services | 4 | **5** (+ lamp-hal.service) |
+| Systemd services | 4 | **5** (+ hal.service) |
 | Python runtime | None | **HAL** at /opt/hal/ with venv |
 | Hardware bridge | N/A | Lamp HTTP → HAL HTTP (localhost proxy) |
 | SPI usage | LED only | LED + **Display (GC9A01)** |

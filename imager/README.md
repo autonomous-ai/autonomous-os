@@ -51,7 +51,7 @@ Phase 2  chroot qemu-arm64:
          - openclaw onboard --skip-health (creates /root/.openclaw scaffolding)
          - Discord + Slack plugins baked in: openclaw@$OPENCLAW_VERSION
          - uv (Python pkg mgr for LeLamp)
-         - systemd units: lamp, bootstrap, lamp-hal, openclaw
+         - systemd units: lamp, bootstrap, hal, openclaw
          - helper scripts /usr/local/bin/{device-ap-mode, device-sta-mode, connect-wifi,
            software-update} synced from scripts/ in this repo
          - configs: hostapd, dnsmasq, dhcpcd, full prod nginx (CSP + WS + captive-portal
@@ -180,7 +180,7 @@ imager/
 SSH in (`ssh system@lamp-xxxx.local`, password `12345`) and verify:
 
 ```bash
-systemctl is-enabled lamp lamp-hal openclaw avahi-daemon
+systemctl is-enabled lamp hal openclaw avahi-daemon
 ls /usr/local/bin/{os-server,bootstrap-server,device-ap-mode,connect-wifi,software-update}
 ls /opt/hal/.venv/bin/uvicorn       # LeLamp uv sync succeeded
 openclaw --version                       # OpenClaw npm global installed

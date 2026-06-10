@@ -11,7 +11,7 @@ picks one of three audible cues based on what's actually happening:
   speak PHRASE_REBOOT (reboot/kexec target) or PHRASE_SHUTDOWN
   (poweroff/halt target). User hears the board is going down for
   minutes.
-- Service-level restart (`systemctl restart lamp-hal` from OTA,
+- Service-level restart (`systemctl restart hal` from OTA,
   deploy, or dev — OS itself stays `running`) → speak
   PHRASE_SERVICE_RESTART ("Be right back."). User hears the lamp
   blinking but will return in seconds.

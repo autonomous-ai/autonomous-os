@@ -358,7 +358,7 @@ make web-build        # tsc + vite build → os/services/web/dist/
 make web-deploy       # web-build + rsync dist/ → /usr/share/nginx/html/setup/
 
 # Deploy HAL (khi thay đổi server.py)
-make hal-deploy       # rsync + pip install + systemctl restart lamp-hal.service
+make hal-deploy       # rsync + pip install + systemctl restart hal.service
 ```
 
 > Deploy dùng `PI_HOST=lamp.local` (mDNS). Nếu không resolve được, dùng IP trực tiếp:

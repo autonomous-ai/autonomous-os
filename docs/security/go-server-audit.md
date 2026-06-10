@@ -752,7 +752,7 @@ s.RePushVoiceConfig()
 `RePushVoiceConfig` restarts service:
 
 ```go
-exec.Command("systemctl", "restart", "lamp-hal").CombinedOutput()
+exec.Command("systemctl", "restart", "hal").CombinedOutput()
 ```
 
 ### Why it is risky
@@ -812,7 +812,7 @@ func validateExternalBaseURL(raw string) error {
 
 #### Rate limit restarts
 
-Do not let config updates restart `lamp-hal` unlimited times. Add debounce:
+Do not let config updates restart `hal` unlimited times. Add debounce:
 
 ```go
 // only restart once after config settles, e.g. after 2s debounce

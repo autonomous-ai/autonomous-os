@@ -890,10 +890,10 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 			} else {
 				slog.Warn("agent gateway ready timeout", "component", "server")
 			}
-			// Restart lamp-hal so it picks up the fresh config written during setup.
-			exec.Command("systemctl", "restart", "lamp-hal").Run()
+			// Restart hal so it picks up the fresh config written during setup.
+			exec.Command("systemctl", "restart", "hal").Run()
 			// Start voice pipeline on HAL (if Deepgram key configured)
-			// Retry because lamp-hal may not be running yet at setup time.
+			// Retry because hal may not be running yet at setup time.
 			if s.config.DeepgramAPIKey != "" {
 				for attempt := 1; attempt <= 10; attempt++ {
 					err := s.agentGateway.StartHALVoice(s.config.DeepgramAPIKey, s.config.LLMAPIKey, s.config.GetSTTAPIKey(), s.config.GetTTSAPIKey(), s.config.LLMBaseURL, s.config.GetSTTBaseURL(), s.config.GetTTSBaseURL(), s.config.TTSVoice, s.config.TTSInstructions, s.config.TTSProvider)

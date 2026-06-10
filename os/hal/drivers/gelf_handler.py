@@ -17,7 +17,7 @@ _LEVEL_MAP = {
 class GELFHandler(logging.Handler):
     """Sends log records to a GELF HTTP endpoint. Fire-and-forget."""
 
-    def __init__(self, service_name: str = "lamp-hal"):
+    def __init__(self, service_name: str = "hal"):
         super().__init__(level=logging.INFO)
         self._host = socket.gethostname() or "hal"
         self._pid = os.getpid()

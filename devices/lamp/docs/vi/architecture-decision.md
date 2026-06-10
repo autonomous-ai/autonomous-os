@@ -84,7 +84,7 @@ Giữ nguyên từ dự án HAL hiện tại, nhưng bỏ phần AI/LiveKit:
 - **Audio** — Seeed mic/speaker, amixer volume, thu WAV, phát tone
 - Event-driven **ServiceBase** với priority dispatch
 
-Tất cả hardware expose qua FastAPI trên `127.0.0.1:5001` (systemd: `lamp-hal.service`). Nginx proxy `/hw/*` chỉ cho caller trên cùng máy — client bên ngoài nhận 403. Swagger UI tại `/hw/docs` không truy cập được từ LAN.
+Tất cả hardware expose qua FastAPI trên `127.0.0.1:5001` (systemd: `hal.service`). Nginx proxy `/hw/*` chỉ cho caller trên cùng máy — client bên ngoài nhận 403. Swagger UI tại `/hw/docs` không truy cập được từ LAN.
 
 ### Lamp Server (Go) — Hệ Thống + HTTP API Bridge
 
@@ -366,7 +366,7 @@ Dashboard gồm 4 phần:
 │  • Audio          — Seeed mic/speaker, amixer volume, thu WAV       │
 │  • ServiceBase    — Event-driven, priority dispatch                 │
 │                                                                     │
-│  FastAPI :5001 | systemd: lamp-hal.service                       │
+│  FastAPI :5001 | systemd: hal.service                       │
 │  nginx: /hw/* → 127.0.0.1:5001 (local-only, external → 403)       │
 │                                                                     │
 └───────────────────────────┬─────────────────────────────────────────┘

@@ -369,9 +369,9 @@ func readHALVersion() string {
 	return v
 }
 
-// readHALUptime returns uptime in seconds of the lamp-hal systemd service.
+// readHALUptime returns uptime in seconds of the hal systemd service.
 func readHALUptime() int64 {
-	out, err := exec.Command("systemctl", "show", "lamp-hal",
+	out, err := exec.Command("systemctl", "show", "hal",
 		"--property=ActiveEnterTimestamp", "--value").Output()
 	if err != nil {
 		return 0

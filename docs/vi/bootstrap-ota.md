@@ -10,7 +10,7 @@ Thiết bị chạy **5 thành phần phần mềm** trên board được hỗ t
 | **Bootstrap Server** | Go binary (ARM64) | Tải zip từ OTA | `bootstrap.service` | `/usr/local/bin/bootstrap-server` |
 | **Web (Setup SPA)** | React/Vite | Tải zip từ OTA | nginx serve static | `/usr/share/nginx/html/setup/` |
 | **OpenClaw** | Node.js package | `npm install -g` | `openclaw.service` | Global npm |
-| **HAL** | Python package | Tải zip từ OTA | `lamp-hal.service` | `/opt/hal/` |
+| **HAL** | Python package | Tải zip từ OTA | `hal.service` | `/opt/hal/` |
 
 ### Sơ đồ hệ thống
 
@@ -148,7 +148,7 @@ stage_install_hal() {
     /opt/hal/venv/bin/pip install -r /opt/hal/requirements.txt
 
     # 5. Tạo systemd service
-    cat > /etc/systemd/system/lamp-hal.service << 'UNIT'
+    cat > /etc/systemd/system/hal.service << 'UNIT'
 [Unit]
 Description=HAL Python Runtime — Hardware Drivers
 After=network.target
@@ -168,8 +168,8 @@ WantedBy=multi-user.target
 UNIT
 
     systemctl daemon-reload
-    systemctl enable lamp-hal.service
-    systemctl start lamp-hal.service
+    systemctl enable hal.service
+    systemctl start hal.service
 
     echo "HAL $HAL_VERSION installed at /opt/hal/"
 }
@@ -182,7 +182,7 @@ UNIT
 | `os-server.service` | `/usr/local/bin/os-server` | 5000 | HTTP API chính, luôn chạy |
 | `bootstrap.service` | `/usr/local/bin/bootstrap-server` | 8080 | OTA worker, poll cập nhật. Expose `POST /force-check` để kích hoạt kiểm tra OTA ngay lập tức |
 | `openclaw.service` | `xvfb-run ... openclaw gateway run` | — | AI brain, memory limit 1500M |
-| `lamp-hal.service` | `uvicorn hal.server:app --host 127.0.0.1 --port 5001` | 5001 | Hardware drivers (servo, LED, camera, audio) |
+| `hal.service` | `uvicorn hal.server:app --host 127.0.0.1 --port 5001` | 5001 | Hardware drivers (servo, LED, camera, audio) |
 | nginx | `nginx` | 80 | Setup SPA + reverse proxy (`/api/` → OS Server 5000, `/hw/` → HAL 5001) |
 
 ### Thứ tự khởi động
@@ -191,7 +191,7 @@ UNIT
 boot
   → os-server.service   (tầng hệ thống, LED boot animation)
   → bootstrap.service   (bắt đầu poll cập nhật)
-  → lamp-hal.service          (hardware drivers sẵn sàng)
+  → hal.service          (hardware drivers sẵn sàng)
   → openclaw.service    (AI brain, kết nối os-server qua HTTP)
   → nginx               (web UI cho setup)
 ```
@@ -295,7 +295,7 @@ Bootstrap dùng `lib/hal` để báo trạng thái update qua LED. Xem chi tiế
 | `bootstrap` | Spawn detached `software-update bootstrap` (tự cập nhật, sống sót sau restart) |
 | `web` | Chạy `software-update web` |
 | `openclaw` | ~~Chạy `npm install -g openclaw@{version}` → `systemctl restart openclaw`~~ (tạm thời tắt) |
-| `hal` | Chạy `software-update hal` → `systemctl restart lamp-hal` |
+| `hal` | Chạy `software-update hal` → `systemctl restart hal` |
 
 ---
 
@@ -318,7 +318,7 @@ và exit lỗi nếu cả hai đều rỗng — không có URL hardcode.
     curl -fsSL "$URL" -o /tmp/hal-update.zip
 
     # Dừng service trước khi cập nhật
-    systemctl stop lamp-hal.service
+    systemctl stop hal.service
 
     # Backup
     cp -r /opt/hal /opt/hal.bak 2>/dev/null || true
@@ -330,7 +330,7 @@ và exit lỗi nếu cả hai đều rỗng — không có URL hardcode.
     /opt/hal/venv/bin/pip install -r /opt/hal/requirements.txt --quiet
 
     # Khởi động lại
-    systemctl start lamp-hal.service
+    systemctl start hal.service
 
     # Dọn dẹp
     rm -f /tmp/hal-update.zip
@@ -555,7 +555,7 @@ Version của HAL là file text `VERSION` trong thư mục gốc package. Bootst
 | Số thành phần | 4 (lamp, bootstrap, web, openclaw) | **5** (+ hal) |
 | OTA keys | lamp, bootstrap, web, openclaw | + **hal** |
 | Setup stages | 7 (stage -1 đến 4) | **8** (+ stage 2b: HAL) |
-| Systemd services | 4 | **5** (+ lamp-hal.service) |
+| Systemd services | 4 | **5** (+ hal.service) |
 | Python runtime | Không có | **HAL** tại /opt/hal/ với venv |
 | Hardware bridge | Không có | Lamp HTTP → HAL HTTP (localhost proxy) |
 | SPI usage | Chỉ LED | LED + **Display (GC9A01)** |
