@@ -2,7 +2,7 @@
 
 Date: 2026-05-16  
 Repo: `lamp`  
-Scope: Lamp Go server only (`lamp/server`, `lamp/internal`, `lamp/domain`, nginx `/api/` wiring).  
+Scope: Lamp Go server only (`os/services/server`, `os/services/internal`, `os/services/domain`, nginx `/api/` wiring).  
 Instruction: report issues and exact remediation guidance only; do **not** patch runtime code in this document.
 
 ## Executive summary
