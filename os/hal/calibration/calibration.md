@@ -4,15 +4,19 @@ LeLamp uses 5x Feetech STS3215 servos controlled via the `lerobot` library. Each
 
 ## Calibration files
 
-On the Pi, lerobot looks for calibration at:
+lerobot looks for calibration at `~/.cache/huggingface/lerobot/calibration/` for the user running the service:
 
 ```
-/root/.cache/huggingface/lerobot/calibration/
+<user_home>/.cache/huggingface/lerobot/calibration/
 ├── robots/lelamp_follower/lelamp.json
 └── teleoperators/lelamp_leader/lelamp.json
 ```
 
-The path resolves from `~/.cache/huggingface/lerobot/calibration/` — since the service runs as **root**, it uses `/root/`.
+| Device | Service user | Calibration path |
+|--------|-------------|-----------------|
+| lumi2 / lumi3 (RPi 5) | `root` | `/root/.cache/huggingface/lerobot/calibration/` |
+| lumi4 (OrangePi 4P) | `root` | `/root/.cache/huggingface/lerobot/calibration/` |
+| lumi_final (OrangePi) | `orangepi` | `/home/orangepi/.cache/huggingface/lerobot/calibration/` |
 
 Each JSON contains per-servo values:
 
@@ -34,26 +38,33 @@ Each JSON contains per-servo values:
 | 4 | `wrist_roll` | Wrist rotation |
 | 5 | `wrist_pitch` | Wrist tilt |
 
-## Deploy to a new Pi (copy existing calibration)
+## Deploy to a device (copy existing calibration)
 
-If the new Pi uses the same servo hardware as an already-calibrated lamp, copy the calibration files:
+If the device uses the same servo hardware as an already-calibrated lamp, copy the calibration files.
 
+**Root-user devices (lumi2, lumi3, lumi4):**
 ```bash
-# On the new Pi, create the directories
 sudo mkdir -p /root/.cache/huggingface/lerobot/calibration/robots/lelamp_follower
 sudo mkdir -p /root/.cache/huggingface/lerobot/calibration/teleoperators/lelamp_leader
-
-# Copy from this repo
 sudo cp calibration/robots/lelamp_follower/lelamp.json \
   /root/.cache/huggingface/lerobot/calibration/robots/lelamp_follower/lelamp.json
-
 sudo cp calibration/teleoperators/lelamp_leader/lelamp.json \
   /root/.cache/huggingface/lerobot/calibration/teleoperators/lelamp_leader/lelamp.json
 ```
 
+**orangepi-user devices (lumi_final):**
+```bash
+mkdir -p /home/orangepi/.cache/huggingface/lerobot/calibration/robots/lelamp_follower
+mkdir -p /home/orangepi/.cache/huggingface/lerobot/calibration/teleoperators/lelamp_leader
+cp calibration/robots/lelamp_follower/lelamp.json \
+  /home/orangepi/.cache/huggingface/lerobot/calibration/robots/lelamp_follower/lelamp.json
+cp calibration/teleoperators/lelamp_leader/lelamp.json \
+  /home/orangepi/.cache/huggingface/lerobot/calibration/teleoperators/lelamp_leader/lelamp.json
+```
+
 Then restart the lelamp service. The servos will use the copied calibration values.
 
-> **Note:** Copied calibration will be close but may not be exact — each servo has slightly different mechanical offsets. For precise movement, run a fresh calibration (see below).
+> **Note:** The calibration files in this branch (`feat/lumi-final`) are tuned for **lumi_final's** servo hardware. The `wrist_pitch` recordings are scaled to ±55.8° to match lumi_final's physical range (vs ±113° on the original hardware).
 
 ## Run fresh calibration on a Pi
 
