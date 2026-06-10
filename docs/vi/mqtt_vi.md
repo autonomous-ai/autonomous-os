@@ -234,7 +234,7 @@ nên code không tin cậy không thể thoát khỏi thư mục configs qua pat
 | Khóa `credentials` | Tác dụng |
 |--------------------|----------|
 | `mcp_url` | Có → connector MCP: ghi `mcp.servers.<code>` (`{type:"http", url, headers.Authorization}`) vào `openclaw.json` và restart gateway. Không có → connector chỉ-credential (vd `gmail`/`google_*`): lưu token, **không** ghi entry `openclaw.json`. |
-| `mcp_auth_header` | `bearer_access_token` (mặc định) → `Authorization: Bearer <access_token>`; `bearer_api_key` → `Bearer <api_key>` (connector dùng khóa tĩnh, vd `ahrefs`). |
+| `mcp_auth_header` | `bearer_access_token` (mặc định) → `Authorization: Bearer <access_token>`; `bearer_api_key` → `Bearer <api_key>` (connector dùng khóa tĩnh, vd `ahrefs`); `header:<Name>` → header thô `<Name>: <token>` không prefix Bearer (token ưu tiên `api_key`, fallback `access_token`) cho provider không dùng Bearer, vd Figma PAT `header:X-Figma-Token`. Connector PAT relay `auth_type:"pat"` với token trong `api_key`. |
 
 **Bảng fallback:** với các connector ra đời trước khi wire mang các khóa này
 (`notion`, `asana`, `linear`, `github`, `ahrefs`), một bảng compile-in cung
