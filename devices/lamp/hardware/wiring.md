@@ -119,7 +119,7 @@ USB UVC. Plug into any free USB port (prefer USB 3 if available for headroom; 10
 | Enumeration | `/dev/video0` (first UVC device) | `/dev/video0` |
 | Pixel format | MJPG @ 1080p / 30 fps | MJPG @ 1080p / 30 fps |
 | Notes | Camera + servo serialize in software | same |
-| Code | `lelamp/service/camera/`, `lelamp/server.py` | same |
+| Code | `os/hal/routes/camera.py`, `os/hal/server.py` | same |
 
 ---
 
