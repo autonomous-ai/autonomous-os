@@ -1057,7 +1057,7 @@ func resolveLogPaths(pattern string) ([]string, error) {
 // logTail returns the last N lines of a whitelisted log file (or merged glob).
 // GET /api/logs/tail?source=hal|os-server|openclaw|openclaw-service&lines=200
 func (s *Server) logTail(c *gin.Context) {
-	source := c.DefaultQuery("source", "lamp")
+	source := c.DefaultQuery("source", "os-server")
 	pattern, ok := allowedLogs[source]
 	if !ok {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError("unknown log source"))
@@ -1125,7 +1125,7 @@ func (s *Server) logTail(c *gin.Context) {
 // logStream streams new log lines via SSE from one or more log files.
 // GET /api/logs/stream?source=hal|os-server|openclaw|openclaw-service
 func (s *Server) logStream(c *gin.Context) {
-	source := c.DefaultQuery("source", "lamp")
+	source := c.DefaultQuery("source", "os-server")
 	pattern, ok := allowedLogs[source]
 	if !ok {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError("unknown log source"))

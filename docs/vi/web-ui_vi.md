@@ -253,7 +253,7 @@ Hành vi gom nhóm Turn Pipeline:
 
 ### 5.5 Logs Section
 
-- Tab log runtime cho HAL, Lamp, và OpenClaw service logs.
+- Tab log runtime cho HAL, OS (os-server), và OpenClaw service logs.
 - Mỗi panel stream qua SSE (`GET /api/logs/stream?source=<source>`) với fallback polling.
 - Hỗ trợ filter theo level (ALL/DEBUG/INFO/WARN/ERROR) và tìm kiếm text/regex.
 

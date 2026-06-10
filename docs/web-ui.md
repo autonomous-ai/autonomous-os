@@ -254,7 +254,7 @@ Turn Pipeline grouping behavior:
 
 ### 5.5 Logs Section
 
-- Dedicated runtime log panels for HAL, Lamp, and OpenClaw service logs.
+- Dedicated runtime log panels for HAL, OS (os-server), and OpenClaw service logs.
 - Each panel streams via SSE (`GET /api/logs/stream?source=<source>`) with fallback polling.
 - Supports level filtering (ALL/DEBUG/INFO/WARN/ERROR) and text/regex search.
 
