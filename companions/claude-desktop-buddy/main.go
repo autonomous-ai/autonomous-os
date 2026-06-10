@@ -416,21 +416,28 @@ func resolveDeviceName(name, lampURL string) string {
 	return strings.ReplaceAll(name, "{MAC}", short)
 }
 
-// shortMAC returns a compact lowercase form of the MAC suitable for the
-// BLE local name. Takes the last dash-separated segment (e.g. "Lamp-A1B2"
-// → "a1b2") and truncates to 4 chars. Lowercasing matches the mDNS
-// hostname convention (`lamp-xxxx.local`).
+// shortMAC returns a compact lowercase form of the device id suitable for the
+// BLE local name: `<device_type>-<4hex>` (e.g. "Lamp-A1B2" → "lamp-a1b2",
+// "intern-3C4D" → "intern-3c4d"). The hardware suffix is truncated to 4 chars
+// so the name stays short for the BLE advertisement; the device-type prefix is
+// kept so the name is brand-free and matches the mDNS hostname
+// (`<device_type>-xxxx.local`).
 func shortMAC(mac string) string {
 	if mac == "" {
 		return "unk"
 	}
+	mac = strings.ToLower(mac)
 	if i := strings.LastIndexByte(mac, '-'); i >= 0 && i+1 < len(mac) {
-		mac = mac[i+1:]
+		prefix, suffix := mac[:i+1], mac[i+1:]
+		if len(suffix) > 4 {
+			suffix = suffix[len(suffix)-4:]
+		}
+		return prefix + suffix
 	}
 	if len(mac) > 4 {
 		mac = mac[len(mac)-4:]
 	}
-	return strings.ToLower(mac)
+	return mac
 }
 
 const fetchAttempts = 15
