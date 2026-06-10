@@ -26,7 +26,7 @@ Pi services:
 
 | Path | Content | Rotation |
 |---|---|---|
-| `/var/log/lamp.log` | Live backend log (needs `sudo`) | rotates to `/var/log/lamp-<ts>.log` |
+| `/var/log/os-server.log` | Live backend log (needs `sudo`) | rotates to `/var/log/os-server-<ts>.log` |
 | `/root/local/flow_events_YYYY-MM-DD.jsonl` | Structured pipeline trace (one line per flow node: `sensing_input`, `chat_send`, `agent_thinking`, `tool_call`, `tts_send`, `hw_emotion`, etc.) | daily |
 | `/root/local/users/<user>/mood/YYYY-MM-DD.jsonl` | Per-user mood log (both `signal` + `decision` rows) | daily |
 | `/root/local/users/<user>/wellbeing/YYYY-MM-DD.jsonl` | Per-user wellbeing activity log | daily |
@@ -180,7 +180,7 @@ For a single motion.activity event, the expected chain is:
 
 | Stage | Expected | How to verify |
 |---|---|---|
-| Ingress | `sensing event received type=motion.activity` in lamp.log | `sudo grep 'sensing event received' /var/log/lamp.log \| tail` |
+| Ingress | `sensing event received type=motion.activity` in os-server.log | `sudo grep 'sensing event received' /var/log/os-server.log \| tail` |
 | Forward | `chat_send` node with `[context: current_user=X]` + `[MANDATORY: …]` | grep flow JSONL for `chat_send` |
 | Agent lifecycle | `lifecycle_start` → `lifecycle_end` | same |
 | Mood signal log | POST to `/api/mood/log` with `kind=signal` | check `tool_call` with `curl .*mood/log` in args |

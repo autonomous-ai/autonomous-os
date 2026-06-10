@@ -1020,7 +1020,7 @@ func (s *Server) voicePreview(c *gin.Context) {
 // Entries prefixed with "journal:" use journalctl instead of file reading.
 var allowedLogs = map[string]string{
 	"hal":           "/var/log/hal/server.log",
-	"lamp":             "/var/log/lamp.log",
+	"lamp":             "/var/log/os-server.log",
 	"openclaw":         "/var/log/openclaw/lamp.log",
 	"openclaw-service": "journal:openclaw.service",
 	"buddy":            "/var/log/claude-desktop-buddy.log",

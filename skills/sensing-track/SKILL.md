@@ -171,10 +171,10 @@ Note: `motion.activity` event messages contain `[pose_bucket: <id>]` and `[pose_
 
 ## Fallback: system log
 
-For detailed debugging or when you need Go-side log context (errors, warnings, lifecycle details), fall back to `${LAMP_LOG:-/var/log/lamp.log}`:
+For detailed debugging or when you need Go-side log context (errors, warnings, lifecycle details), fall back to `${LAMP_LOG:-/var/log/os-server.log}`:
 
 ```bash
-LOG="${LAMP_LOG:-/var/log/lamp.log}"
+LOG="${LAMP_LOG:-/var/log/os-server.log}"
 sed 's/\x1b\[[0-9;]*m//g' "$LOG" | grep "sensing event received"
 ```
 
