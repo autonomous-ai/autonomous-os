@@ -678,7 +678,7 @@ def _device_profile_or_none():
     """This device's DeviceProfile, or None to mount all routes (safe fallback)."""
     try:
         from hal.board.device import load_device
-        devices_dir = os.environ.get("HAL_DEVICES_DIR") or os.path.normpath(
+        devices_dir = os.environ.get("DEVICES_DIR") or os.path.normpath(
             os.path.join(os.path.dirname(__file__), "..", "..", "..", "devices")
         )
         return load_device(_resolve_device_type(), devices_dir)
