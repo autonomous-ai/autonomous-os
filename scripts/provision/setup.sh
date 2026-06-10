@@ -52,6 +52,11 @@ run_stage() {
 AP_BAND="${AP_BAND:-2.4}"       # 2.4 or 5 (5 GHz for better throughput)
 AP_CHANNEL="${AP_CHANNEL:-}"    # default: 6 (2.4 GHz) or 36 (5 GHz); override e.g. AP_CHANNEL=11 or 40
 
+# Device class this install is for — selects devices/<type>/{DEVICE,SOUL}.md at
+# runtime (os-server + HAL). Default "lamp"; override e.g. DEVICE_TYPE=intern.
+DEVICE_TYPE="${DEVICE_TYPE:-lamp}"
+DEVICES_DIR="${DEVICES_DIR:-/opt/devices}"
+
 # ----------------------------------------------------------
 # Stage -1: Locale (Bookworm hygiene)
 # ----------------------------------------------------------
@@ -288,6 +293,8 @@ After=network-online.target
 [Service]
 User=root
 WorkingDirectory=/root
+Environment=DEVICE_TYPE=$DEVICE_TYPE
+Environment=DEVICES_DIR=$DEVICES_DIR
 ExecStart=/usr/local/bin/os-server
 Restart=always
 RestartSec=5
@@ -426,6 +433,10 @@ WEBRTCVAD_EOF
   touch "$HAL_DIR/.env"
   grep -q "^HAL_MODE=" "$HAL_DIR/.env" \
     || echo "HAL_MODE=production" >> "$HAL_DIR/.env"
+  grep -q "^DEVICE_TYPE=" "$HAL_DIR/.env" \
+    || echo "DEVICE_TYPE=$DEVICE_TYPE" >> "$HAL_DIR/.env"
+  grep -q "^DEVICES_DIR=" "$HAL_DIR/.env" \
+    || echo "DEVICES_DIR=$DEVICES_DIR" >> "$HAL_DIR/.env"
 
   cat >/etc/systemd/system/lamp-hal.service <<EOF
 [Unit]

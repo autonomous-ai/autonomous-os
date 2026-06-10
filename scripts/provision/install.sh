@@ -7,8 +7,12 @@ set -euo pipefail
 # Override by exporting OTA_METADATA_URL before running. setup.sh consumes it.
 OTA_METADATA_URL="${OTA_METADATA_URL:-https://storage.googleapis.com/s3-autonomous-upgrade-3/os/ota/metadata.json}"
 
+# Device class for this install — picks devices/<type>/{DEVICE,SOUL}.md at
+# runtime. Default "lamp"; override e.g. DEVICE_TYPE=intern before running.
+DEVICE_TYPE="${DEVICE_TYPE:-lamp}"
+
 curl -fsSL -H "Cache-Control: no-cache" -H "Pragma: no-cache" \
   -o /tmp/setup.sh \
   "https://cdn.autonomous.ai/os/setup.sh"
 chmod +x /tmp/setup.sh
-OTA_METADATA_URL="$OTA_METADATA_URL" bash /tmp/setup.sh
+OTA_METADATA_URL="$OTA_METADATA_URL" DEVICE_TYPE="$DEVICE_TYPE" bash /tmp/setup.sh

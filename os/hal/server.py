@@ -664,7 +664,7 @@ _ROUTERS_BY_NAME = {
 
 
 def _resolve_device_type() -> str:
-    dev = os.environ.get("HAL_DEVICE_TYPE")
+    dev = os.environ.get("DEVICE_TYPE")
     if dev:
         return dev
     try:

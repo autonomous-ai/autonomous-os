@@ -23,7 +23,11 @@ func repoDevicesDir(t *testing.T) string {
 func soulFor(t *testing.T, deviceType string) ([]byte, bool) {
 	t.Helper()
 	t.Setenv("DEVICES_DIR", repoDevicesDir(t))
-	s := &Service{config: &config.Config{DeviceType: deviceType}}
+	// DEVICE_TYPE is the primary resolver (env-first); set it explicitly so the
+	// test is deterministic regardless of ambient env. Empty → falls back to
+	// config.json device_type ("" here) → "lamp".
+	t.Setenv("DEVICE_TYPE", deviceType)
+	s := &Service{config: &config.Config{}}
 	return s.deviceSoulCore()
 }
 
