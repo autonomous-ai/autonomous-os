@@ -178,6 +178,7 @@ class TTSService:
             channels=TTS_CHANNELS,
             dtype="float32",
             device=self._output_device,
+            latency=0.2,
         )
         stream.start()
         self._stream = stream
