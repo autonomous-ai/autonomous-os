@@ -89,6 +89,13 @@ def _parse_scalar(front_matter: str, key: str) -> str:
     return m.group(1) if m else ""
 
 
+def _parse_memory_backend(front_matter: str) -> str:
+    """The `memory: { backend: <x> }` backend name, or ''. Informational — the
+    brain owns memory today; there is no memory-backend abstraction to gate on."""
+    m = re.search(r"^memory:\s*\{[^}]*\bbackend:\s*([^\s,}]+)", front_matter, re.MULTILINE)
+    return m.group(1) if m else ""
+
+
 def validate_schema(front_matter: str) -> str:
     """Parse and validate the `schema:` ABI tag. Returns the raw schema string.
 
@@ -169,6 +176,7 @@ class DeviceProfile:
     schema: str
     boards: List[str]
     safety_ref: str
+    memory_backend: str
     capabilities: Dict[str, Capability]
 
     def declared_routes(self) -> Dict[str, bool]:
@@ -201,6 +209,7 @@ def parse_device(device_type: str, text: str) -> DeviceProfile:
         schema=schema,
         boards=parse_boards(front_matter),
         safety_ref=_parse_scalar(front_matter, "safety_ref"),
+        memory_backend=_parse_memory_backend(front_matter),
         capabilities=parse_capabilities(front_matter),
     )
 

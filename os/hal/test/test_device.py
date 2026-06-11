@@ -68,6 +68,11 @@ class TestParsing(unittest.TestCase):
         self.assertEqual(parse_device("sample", SAMPLE).safety_ref, "")
         self.assertEqual(load_device("lamp", DEVICES_DIR).safety_ref, "SAFETY.md")
 
+    def test_memory_backend_parsed(self):
+        # SAMPLE declares no memory block; lamp declares { backend: local }.
+        self.assertEqual(parse_device("sample", SAMPLE).memory_backend, "")
+        self.assertEqual(load_device("lamp", DEVICES_DIR).memory_backend, "local")
+
     def test_declared_routes_required_rollup(self):
         dev = parse_device("sample", SAMPLE)
         routes = dev.declared_routes()

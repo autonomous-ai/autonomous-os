@@ -946,6 +946,7 @@ def device():
         "board": _board_id,
         "boards": _profile.boards,
         "safety_ref": _profile.safety_ref,
+        "memory": {"backend": _profile.memory_backend} if _profile.memory_backend else None,
         "routes": sorted(_plan.mounted),
         # Declared implementation families (informational hardware manifest; the
         # route is the contract, the driver behind it is free to change).
