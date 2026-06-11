@@ -913,7 +913,7 @@ retry() {
   echo "ERROR: failed \$max attempts"; return 1
 }
 [ "\$(id -u)" -ne 0 ] && { echo "Run as root."; exit 1; }
-[ \$# -lt 1 ] && { echo "Usage: software-update <bootstrap|os-server|hal|openclaw|web|device>"; exit 1; }
+[ \$# -lt 1 ] && { echo "Usage: software-update <bootstrap|os-server|hal|openclaw|web|claude-desktop-buddy|device>"; exit 1; }
 
 # Wait for NTP time sync (RPi has no battery-backed RTC; clock may be wrong on boot)
 for i in \$(seq 1 10); do
@@ -922,7 +922,7 @@ for i in \$(seq 1 10); do
   sleep 2
 done
 KIND="\$1"
-case "\$KIND" in bootstrap|os-server|hal|openclaw|web|device) ;; *) echo "Unknown: \$KIND (bootstrap, os-server, hal, openclaw, web, device)"; exit 1 ;; esac
+case "\$KIND" in bootstrap|os-server|hal|openclaw|web|claude-desktop-buddy|device) ;; *) echo "Unknown: \$KIND (bootstrap, os-server, hal, openclaw, web, claude-desktop-buddy, device)"; exit 1 ;; esac
 META="\$(mktemp)"
 retry "curl -fsSL -H 'Cache-Control: no-cache' -o '\$META' '\$OTA_METADATA_URL'" 5
 if [ "\$KIND" = "device" ]; then
@@ -975,6 +975,16 @@ elif [ "\$KIND" = "openclaw" ]; then
   V="\${VER:-latest}"
   npm install -g "openclaw@\${V}" || { echo "npm install openclaw failed"; exit 1; }
   systemctl restart openclaw 2>/dev/null || true
+elif [ "\$KIND" = "claude-desktop-buddy" ]; then
+  BUDDY_DIR="/opt/claude-desktop-buddy"; D="\$(mktemp -d)"
+  curl -fsSL -o /tmp/buddy.zip "\$URL"
+  unzip -o -q /tmp/buddy.zip -d "\$D"; rm -f /tmp/buddy.zip
+  mkdir -p "\$BUDDY_DIR"
+  [ -f "\$D/buddy-plugin" ] && cp -f "\$D/buddy-plugin" "\$BUDDY_DIR/buddy-plugin" && chmod +x "\$BUDDY_DIR/buddy-plugin"
+  [ ! -f "/root/config/buddy.json" ] && [ -f "\$D/config/buddy.json" ] && mkdir -p /root/config && cp -f "\$D/config/buddy.json" /root/config/buddy.json
+  echo "\$VER" > "\$BUDDY_DIR/VERSION_BUDDY"
+  rm -rf "\$D"
+  systemctl restart claude-desktop-buddy 2>/dev/null || true
 elif [ "\$KIND" = "device" ]; then
   DEVICES_DIR="\$(grep -E '^DEVICES_DIR=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
   [ -z "\$DEVICES_DIR" ] && DEVICES_DIR="/opt/devices"
