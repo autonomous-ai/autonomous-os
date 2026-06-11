@@ -2,10 +2,10 @@ import time
 import sys
 import os
 
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))  # repo os/ → `hal` package
 
-from service.rgb import RGBService
-from service.base import Priority
+from hal.drivers.rgb import RGBService
+from hal.drivers.base import Priority
 
 def test_rgb_service():
     print("Testing RGB Service...")

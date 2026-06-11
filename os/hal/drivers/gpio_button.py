@@ -80,7 +80,7 @@ class GPIOButtonHandler:
         self._hold_watcher_stop = None
         self._chip = 0
         self._pin = 0
-        self._debounce_ns = PI_DEBOUNCE_NS
+        self._debounce_ns = 0  # placeholder; overwritten in start() from board_profile().button.debounce_ns
         self._last_press_tick = 0
         self._last_release_tick = 0
 

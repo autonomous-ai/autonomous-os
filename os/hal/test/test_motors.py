@@ -3,10 +3,10 @@ import time
 import sys
 import os
 
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))  # repo os/ → `hal` package
 
-from service.motors import MotorsService
-from service.base import Priority
+from hal.drivers.motors import MotorsService
+from hal.drivers.base import Priority
 
 def test_motors_service():
     parser = argparse.ArgumentParser(description="Test Motors Service")
