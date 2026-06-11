@@ -40,7 +40,7 @@ tell "no servo by design" from "servo lib missing" from "servo broken."
 | `name` | yes | Display name. Exposed via HAL `GET /device`. |
 | `type` | yes | Free-form class (`desk_robot`, `desk_agent`). Exposed via HAL `GET /device`. |
 | `boards` | yes | Supported boards. At boot the runtime resolves the physical board (`os/hal/board`) and aborts if it is unknown or not in this list. |
-| `gateway` | yes | Default agentic gateway + protocol. |
+| `gateway` | yes | Default agentic gateway (`default`) + wire transport (`protocol`). The transport follows from the runtime (openclaw→websocket, hermes→sse); `protocol` is validated for consistency against `default` (a warning, not a driver). |
 | `capabilities` | yes | Map of capability group → declaration (below). |
 | `soul_ref` | no | Soul artifact for this body: a path read relative to the device folder (e.g. `SOUL.md`), or an `http(s)://` URL the runtime downloads. Absent → the gateway's default soul. |
 | `safety_ref` | no | Path to this device's `SAFETY.md`. |

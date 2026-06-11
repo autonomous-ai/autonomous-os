@@ -8,10 +8,11 @@ import (
 )
 
 var (
-	reFrontMatter    = regexp.MustCompile(`(?s)^---\s*\n(.*?)\n---\s*\n`)
-	reGatewayBlock   = regexp.MustCompile(`(?m)^gateway:[ \t]*\n((?:[ \t]+.*\n?)+)`)
-	reGatewayDefault = regexp.MustCompile(`(?m)^[ \t]+default:[ \t]*(\S+)`)
-	reSoulRef        = regexp.MustCompile(`(?m)^soul_ref:[ \t]*(\S+)`)
+	reFrontMatter     = regexp.MustCompile(`(?s)^---\s*\n(.*?)\n---\s*\n`)
+	reGatewayBlock    = regexp.MustCompile(`(?m)^gateway:[ \t]*\n((?:[ \t]+.*\n?)+)`)
+	reGatewayDefault  = regexp.MustCompile(`(?m)^[ \t]+default:[ \t]*(\S+)`)
+	reGatewayProtocol = regexp.MustCompile(`(?m)^[ \t]+protocol:[ \t]*(\S+)`)
+	reSoulRef         = regexp.MustCompile(`(?m)^soul_ref:[ \t]*(\S+)`)
 )
 
 // SoulRef returns the `soul_ref` declared in devices/<deviceType>/DEVICE.md, or
@@ -43,10 +44,10 @@ func DevicesDir() string {
 	return "/opt/devices"
 }
 
-// GatewayDefault returns the `gateway.default` declared in
-// devices/<deviceType>/DEVICE.md, or "" if absent/unreadable. Dependency-free
+// gatewayField extracts one sub-field (matched by re) from the `gateway:` block
+// of devices/<deviceType>/DEVICE.md, or "" if absent/unreadable. Dependency-free
 // front-matter parse (no YAML lib), mirroring hal/board/device.py.
-func GatewayDefault(deviceType string) string {
+func gatewayField(deviceType string, re *regexp.Regexp) string {
 	b, err := os.ReadFile(filepath.Join(DevicesDir(), deviceType, "DEVICE.md"))
 	if err != nil {
 		return ""
@@ -59,9 +60,23 @@ func GatewayDefault(deviceType string) string {
 	if blk == nil {
 		return ""
 	}
-	m := reGatewayDefault.FindSubmatch(blk[1])
+	m := re.FindSubmatch(blk[1])
 	if m == nil {
 		return ""
 	}
 	return strings.TrimSpace(string(m[1]))
+}
+
+// GatewayDefault returns the `gateway.default` (agentic runtime) declared in
+// devices/<deviceType>/DEVICE.md, or "" if absent.
+func GatewayDefault(deviceType string) string {
+	return gatewayField(deviceType, reGatewayDefault)
+}
+
+// GatewayProtocol returns the `gateway.protocol` (wire transport) declared in
+// devices/<deviceType>/DEVICE.md, or "" if absent. The transport is actually a
+// property of the runtime (openclaw→websocket, hermes→sse), so this is consumed
+// only as a consistency guard — see agent.ProvideGateway.
+func GatewayProtocol(deviceType string) string {
+	return gatewayField(deviceType, reGatewayProtocol)
 }

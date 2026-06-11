@@ -56,3 +56,34 @@ func TestGatewayDefault_Missing(t *testing.T) {
 		t.Fatalf("GatewayDefault = %q, want empty", got)
 	}
 }
+
+func TestGatewayProtocol_Present(t *testing.T) {
+	writeDeviceMD(t, "lamp", `---
+schema: autonomous.device.v1
+gateway:
+  default: openclaw
+  protocol: websocket
+capabilities:
+  audio: { required: true }
+---
+
+# Lamp
+`)
+	if got := GatewayProtocol("lamp"); got != "websocket" {
+		t.Fatalf("GatewayProtocol = %q, want %q", got, "websocket")
+	}
+}
+
+func TestGatewayProtocol_NoGatewayBlock(t *testing.T) {
+	writeDeviceMD(t, "lamp", `---
+schema: autonomous.device.v1
+capabilities:
+  audio: { required: true }
+---
+
+# Lamp
+`)
+	if got := GatewayProtocol("lamp"); got != "" {
+		t.Fatalf("GatewayProtocol = %q, want empty", got)
+	}
+}
