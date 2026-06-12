@@ -533,7 +533,7 @@ def _auto_camera_on(reason: str) -> bool:
     return True
 
 
-def _read_agent_name(lamp_cfg: dict) -> str:
+def _read_agent_name() -> str:
     """Read agent name from IDENTITY.md. Falls back to default 'lamp'."""
     identity_path = os.path.join(_OPENCLAW_WORKSPACE, "IDENTITY.md")
     try:

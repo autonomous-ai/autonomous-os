@@ -86,7 +86,7 @@ _MIN_AUDIO_S: float = float(
 )
 _API_URL: str = getattr(config, "SPEECH_EMOTION_API_URL", "") or ""
 _API_KEY: str = getattr(config, "SPEECH_EMOTION_API_KEY", "") or ""
-_LAMP_URL: str = config.OS_SENSING_URL
+_SENSING_URL: str = config.OS_SENSING_URL
 _AUDIO_DIR: str = getattr(config, "SPEECH_EMOTION_AUDIO_DIR", "") or ""
 _SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9_-]+")
 
@@ -137,7 +137,7 @@ class SpeechEmotionService:
         flush_s: float = _FLUSH_S,
         dedup_window_s: float = _DEDUP_WINDOW_S,
         min_audio_s: float = _MIN_AUDIO_S,
-        lamp_url: str = _LAMP_URL,
+        sensing_url: str = _SENSING_URL,
         audio_dir: str = _AUDIO_DIR,
         queue_maxsize: int = DEFAULT_QUEUE_MAXSIZE,
     ):
@@ -147,7 +147,7 @@ class SpeechEmotionService:
         self._flush_s: float = flush_s
         self._dedup_window_s: float = dedup_window_s
         self._min_audio_s: float = min_audio_s
-        self._lamp_url: str = lamp_url
+        self._sensing_url: str = sensing_url
         self._audio_dir: str = audio_dir
 
         # mutable state — guarded by _lock
@@ -176,10 +176,10 @@ class SpeechEmotionService:
             logger.info(
                 "[speech_emotion] SERVICE STARTED — flush=%.1fs dedup=%.1fs "
                 "min_audio=%.1fs per-label thresholds=%s default=%.2f "
-                "lamp_url=%s audio_dir=%s recognizer=%s",
+                "sensing_url=%s audio_dir=%s recognizer=%s",
                 flush_s, dedup_window_s, min_audio_s,
                 CONFIDENCE_THRESHOLD_BY_LABEL, DEFAULT_CONFIDENCE_THRESHOLD,
-                self._lamp_url, self._audio_dir or "<disabled>",
+                self._sensing_url, self._audio_dir or "<disabled>",
                 type(self._recognizer).__name__,
             )
         else:
@@ -450,26 +450,26 @@ class SpeechEmotionService:
             "[speech_emotion] EMIT — user=%r message=%r audio=%s",
             user, message, latest_audio_path or "<none>",
         )
-        self._send_to_lamp(
+        self._send_to_sensing(
             message=message, user=user, audio_path=latest_audio_path,
         )
 
     # --- transport --------------------------------------------------------
 
-    def _send_to_lamp(
+    def _send_to_sensing(
         self, *, message: str, user: str, audio_path: str = "",
     ) -> None:
         """POST sensing event to Lamp with 3x retry on connection error / 503.
 
-        Same shape as voice_service.send_to_lamp but carries `current_user`
+        Same shape as SensingSender.send but carries `current_user`
         explicitly so the Lamp sensing handler doesn't have to look it up.
         ``audio_path`` is the on-disk path of the latest WAV that produced
         the dominant label this flush; empty when persistence is disabled
         or the write failed.
         """
-        if not self._lamp_url:
+        if not self._sensing_url:
             logger.warning(
-                "[speech_emotion] send_to_lamp skipped — empty lamp_url"
+                "[speech_emotion] send_to_sensing skipped — empty sensing_url"
             )
             return
         payload = {
@@ -480,12 +480,12 @@ class SpeechEmotionService:
         }
         logger.info(
             "[speech_emotion] POST -> %s payload.user=%r payload.type=%s audio=%s",
-            self._lamp_url, user, SENSING_EVENT_TYPE, audio_path or "<none>",
+            self._sensing_url, user, SENSING_EVENT_TYPE, audio_path or "<none>",
         )
         max_retries = 3
         for attempt in range(1, max_retries + 1):
             try:
-                resp = requests.post(self._lamp_url, json=payload, timeout=5)
+                resp = requests.post(self._sensing_url, json=payload, timeout=5)
             except requests.ConnectionError as e:
                 if attempt < max_retries:
                     logger.warning(

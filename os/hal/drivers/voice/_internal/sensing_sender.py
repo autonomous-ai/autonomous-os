@@ -1,4 +1,4 @@
-"""POST transcripts to Lamp Server + drop transcripts that echo our own TTS.
+"""POST transcripts to os-server + drop transcripts that echo our own TTS.
 
 `_is_echo` is the third layer of echo handling:
   Layer 1: temporal isolation (mic closed during TTS) — voice_service main loop
@@ -22,8 +22,8 @@ from hal.drivers.voice._internal.config import (
 logger = logging.getLogger("hal.voice")
 
 
-class LampSender:
-    """Send sensing events to Lamp Server with retry + echo suppression."""
+class SensingSender:
+    """Send sensing events to os-server with retry + echo suppression."""
 
     def __init__(self, tts_service=None):
         self._tts = tts_service
@@ -47,7 +47,7 @@ class LampSender:
         return False
 
     def send(self, message: str, event_type: str = "voice", skip_echo: bool = False) -> None:
-        """POST decorated message to Lamp /api/sensing/event with retry."""
+        """POST decorated message to os-server /api/sensing/event with retry."""
         if not skip_echo and self.is_echo(message):
             return
 
@@ -62,28 +62,28 @@ class LampSender:
                 resp = requests.post(OS_SENSING_URL, json=payload, timeout=5)
                 if resp.status_code == 503 and attempt < max_retries:
                     logger.warning(
-                        "Lamp agent not ready (503), retrying in 2s... (attempt %d/%d)",
+                        "os-server agent not ready (503), retrying in 2s... (attempt %d/%d)",
                         attempt, max_retries,
                     )
                     time.sleep(2)
                     continue
                 elif resp.status_code != 200:
-                    logger.warning("Lamp returned %d: %s", resp.status_code, resp.text)
+                    logger.warning("os-server returned %d: %s", resp.status_code, resp.text)
                 else:
-                    logger.info("Sent to Lamp: %r", message)
+                    logger.info("Sent to os-server: %r", message)
                 return
             except requests.ConnectionError as e:
                 if attempt < max_retries:
                     logger.warning(
-                        "Lamp not reachable (attempt %d/%d), retrying in 2s...",
+                        "os-server not reachable (attempt %d/%d), retrying in 2s...",
                         attempt, max_retries,
                     )
                     time.sleep(2)
                 else:
                     logger.warning(
-                        "Failed to send voice event to Lamp after %d attempts: %s",
+                        "Failed to send voice event to os-server after %d attempts: %s",
                         max_retries, e,
                     )
             except requests.RequestException as e:
-                logger.warning("Failed to send voice event to Lamp: %s", e)
+                logger.warning("Failed to send voice event to os-server: %s", e)
                 return

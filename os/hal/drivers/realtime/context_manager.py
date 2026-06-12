@@ -1,4 +1,4 @@
-"""Realtime context manager — builds instructions from lamp identity, skills, and memory."""
+"""Realtime context manager — builds instructions from device identity, skills, and memory."""
 
 import json
 import logging
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class RealtimeContextManager:
-    """Builds rich instructions for the realtime voice agent from lamp context."""
+    """Builds rich instructions for the realtime voice agent from device context."""
 
     DEFAULT_PROMPT_PATH: Path = RESOURCES_DIR / "system_prompt.md"
     PROVIDER_PROMPT_PATHS: dict[str, Path] = {
@@ -36,7 +36,7 @@ class RealtimeContextManager:
         provider: str = "",
         max_memory_entries: int = app_config.REALTIME_MAX_MEMORY_ENTRIES,
         trim_keep: int = app_config.REALTIME_MEMORY_TRIM_KEEP,
-        lamp_memory_max_chars: int = app_config.REALTIME_DEVICE_MEMORY_MAX_CHARS,
+        device_memory_max_chars: int = app_config.REALTIME_DEVICE_MEMORY_MAX_CHARS,
         realtime_memory_max_chars: int = app_config.REALTIME_MEMORY_MAX_CHARS,
         summarizer: RealtimeSummarizer | None = None,
     ) -> None:
@@ -46,7 +46,7 @@ class RealtimeContextManager:
         self._provider: str = provider.strip().lower()
         self._max_memory_entries: int = max_memory_entries
         self._trim_keep: int = trim_keep
-        self._lamp_memory_max_chars: int = lamp_memory_max_chars
+        self._device_memory_max_chars: int = device_memory_max_chars
         self._realtime_memory_max_chars: int = realtime_memory_max_chars
         self._summarizer: RealtimeSummarizer | None = summarizer
         # Summary files alongside the memory JSONL
@@ -70,7 +70,7 @@ class RealtimeContextManager:
             sections.append(prompt)
 
         # Lamp identity
-        identity: str = self._load_lamp_identity()
+        identity: str = self._load_device_identity()
         if identity:
             sections.append(f"# LAMP IDENTITY\n\n{identity}")
 
@@ -80,9 +80,9 @@ class RealtimeContextManager:
             sections.append(f"# SKILLS CATALOG\n\n{catalog}")
 
         # Lamp memory (pre-summarized at startup + recent entries)
-        lamp_mem: str = self._build_lamp_memory()
-        if lamp_mem:
-            sections.append(f"# LAMP MEMORY\n\n{lamp_mem}")
+        device_mem: str = self._build_lamp_memory()
+        if device_mem:
+            sections.append(f"# DEVICE MEMORY\n\n{device_mem}")
 
         # Realtime memory (pre-summarized at startup + recent conversation)
         rt_mem: str = self._build_realtime_memory()
@@ -240,7 +240,7 @@ class RealtimeContextManager:
             self._summary_path, recent_lines, self._format_jsonl_entry,
         )
 
-    def _load_lamp_identity(self) -> str:
+    def _load_device_identity(self) -> str:
         """Load SOUL.md, IDENTITY.md, and USER.md from the workspace."""
         parts: list[str] = []
         for filename in ("SOUL.md", "IDENTITY.md", "USER.md"):
@@ -296,7 +296,7 @@ class RealtimeContextManager:
                 return summary
         return "\n\n".join(entries)
 
-    def _load_lamp_memory_entries(self) -> list[str]:
+    def _load_device_memory_entries(self) -> list[str]:
         """Load entries from workspace/memory/*.md up to char budget."""
         memory_dir: Path = self._workspace / "memory"
         if not memory_dir.is_dir():
@@ -312,7 +312,7 @@ class RealtimeContextManager:
                 if not content:
                     continue
                 entry: str = f"## {md_file.stem}\n\n{content}"
-                if total_chars + len(entry) > self._lamp_memory_max_chars:
+                if total_chars + len(entry) > self._device_memory_max_chars:
                     break
                 entries.append(entry)
                 total_chars += len(entry)

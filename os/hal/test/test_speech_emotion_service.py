@@ -9,7 +9,7 @@ What it exercises:
 
 To avoid needing a running Lamp instance on the dev machine, the script
 spins up a tiny mock HTTP listener on `127.0.0.1:5000` that captures
-every `/api/sensing/event` POST and prints it. Override with --lamp-url
+every `/api/sensing/event` POST and prints it. Override with --sensing-url
 to talk to a real Lamp instead.
 
 Usage (from repo root):
@@ -29,7 +29,7 @@ Usage (from repo root):
 
     # Point at a real Lamp
     python -m hal.test.test_speech_emotion_service \\
-        --lamp-url http://192.168.1.42:5000/api/sensing/event
+        --sensing-url http://192.168.1.42:5000/api/sensing/event
 
 Run the engine-only script first
 (`python -m hal.test.test_speech_emotion_engine`) to confirm
@@ -60,15 +60,15 @@ logger = logging.getLogger("test.speech_emotion_service")
 
 SAMPLE_RATE = 16000
 CHANNELS = 1
-MOCK_LAMP_HOST = "127.0.0.1"
-MOCK_LAMP_PORT = 5000
+MOCK_OS_HOST = "127.0.0.1"
+MOCK_OS_PORT = 5000
 # Hit FastAPI directly. Production prefix `/hal/api/dl/ser/recognize`
 # only works when nginx fronts dlbackend (RunPod) and strips `/hal/`.
 # Local dev hits uvicorn straight on its port, no prefix.
 DEFAULT_SER_ENDPOINT = "/api/dl/ser/recognize"
 
 
-# --- Mock Lamp listener ---------------------------------------------------
+# --- Mock os-server listener ---------------------------------------------------
 
 class _CapturedPost:
     def __init__(self, path: str, payload: dict):
@@ -79,7 +79,7 @@ class _CapturedPost:
         return f"<POST {self.path} payload={self.payload}>"
 
 
-class _MockLampHandler(http.server.BaseHTTPRequestHandler):
+class _MockOSHandler(http.server.BaseHTTPRequestHandler):
     captured: list[_CapturedPost] = []
 
     def do_POST(self) -> None:  # noqa: N802 (http.server contract)
@@ -89,7 +89,7 @@ class _MockLampHandler(http.server.BaseHTTPRequestHandler):
             payload = json.loads(body)
         except json.JSONDecodeError:
             payload = {"_raw": body}
-        _MockLampHandler.captured.append(_CapturedPost(self.path, payload))
+        _MockOSHandler.captured.append(_CapturedPost(self.path, payload))
         logger.info("[mock-lamp] received %s payload=%s", self.path, payload)
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -100,15 +100,15 @@ class _MockLampHandler(http.server.BaseHTTPRequestHandler):
         return
 
 
-def _start_mock_lamp() -> http.server.HTTPServer:
+def _start_mock_os() -> http.server.HTTPServer:
     server = http.server.HTTPServer(
-        (MOCK_LAMP_HOST, MOCK_LAMP_PORT), _MockLampHandler,
+        (MOCK_OS_HOST, MOCK_OS_PORT), _MockOSHandler,
     )
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
     logger.info(
-        "Mock Lamp listening on http://%s:%d  (override with --lamp-url)",
-        MOCK_LAMP_HOST, MOCK_LAMP_PORT,
+        "Mock os-server listening on http://%s:%d  (override with --sensing-url)",
+        MOCK_OS_HOST, MOCK_OS_PORT,
     )
     return server
 
@@ -159,9 +159,9 @@ def main() -> int:
              "direct — no nginx prefix).",
     )
     parser.add_argument(
-        "--lamp-url", default="",
+        "--sensing-url", default="",
         help="Override Lamp sensing URL. Default: spin up a local mock on "
-             f"http://{MOCK_LAMP_HOST}:{MOCK_LAMP_PORT}/api/sensing/event",
+             f"http://{MOCK_OS_HOST}:{MOCK_OS_PORT}/api/sensing/event",
     )
     parser.add_argument("--user", default="alice",
                         help="Identifier to attribute each clip to. Use "
@@ -201,12 +201,12 @@ def main() -> int:
     _cfg.SPEECH_EMOTION_API_KEY = args.api_key
     logger.info("Resolved SER URL: %s", _cfg.SPEECH_EMOTION_API_URL)
 
-    # Mock Lamp unless --lamp-url given.
+    # Mock os-server unless --sensing-url given.
     server = None
-    if not args.lamp_url:
-        server = _start_mock_lamp()
-        args.lamp_url = f"http://{MOCK_LAMP_HOST}:{MOCK_LAMP_PORT}/api/sensing/event"
-    _cfg.OS_SENSING_URL = args.lamp_url
+    if not args.sensing_url:
+        server = _start_mock_os()
+        args.sensing_url = f"http://{MOCK_OS_HOST}:{MOCK_OS_PORT}/api/sensing/event"
+    _cfg.OS_SENSING_URL = args.sensing_url
 
     # Import AFTER config patch so module-level defaults see the right values.
     from hal.drivers.voice.speech_emotion import SpeechEmotionService
@@ -244,8 +244,8 @@ def main() -> int:
     print()
     print("=" * 60)
     print(f"Submitted clips     : {args.reps}")
-    print(f"Lamp POSTs captured : {len(_MockLampHandler.captured)}")
-    for cap in _MockLampHandler.captured:
+    print(f"os-server POSTs captured : {len(_MockOSHandler.captured)}")
+    for cap in _MockOSHandler.captured:
         print(f"  - {cap.path}  type={cap.payload.get('type')}  "
               f"user={cap.payload.get('current_user')}")
         print(f"    message={cap.payload.get('message')!r}")

@@ -57,7 +57,7 @@ from hal.drivers.voice._internal.config import (
     WEBRTCVAD_AGGRESSIVENESS,
     WEBRTCVAD_ENABLED,
 )
-from hal.drivers.voice._internal.lamp_sender import LampSender
+from hal.drivers.voice._internal.sensing_sender import SensingSender
 from hal.drivers.voice._internal.speaker_decorate import SpeakerDecorator
 from hal.drivers.voice._internal.vad_filters import SileroVADFilter, WebRTCVADFilter
 from hal.drivers.voice.backchannel import Backchannel
@@ -150,7 +150,7 @@ class VoiceService:
         )
 
         # Lamp Server event sender (with echo similarity filter)
-        self._lamp_sender = LampSender(tts_service=tts_service)
+        self._sensing_sender = SensingSender(tts_service=tts_service)
 
         # Realtime voice agent — parallel audio pipeline (Gemini Live / OpenAI Realtime).
         self._realtime = RealtimeOrchestrator()
@@ -976,7 +976,7 @@ class VoiceService:
                 if rt_handled:
                     # Realtime already spoke — send as "voice_handled" to skip dead-air filler.
                     # Include skill hint so OpenClaw reads input-branching and responds NO_REPLY.
-                    self._lamp_sender.send(
+                    self._sensing_sender.send(
                         f"[skills: input-branching]\n[HANDLED] {final_msg}\n[REPLY] {rt_transcript}",
                         event_type="voice_agent_handled",
                         skip_echo=True,
@@ -984,15 +984,15 @@ class VoiceService:
                 elif rt_delegated:
                     # Delegated — send voice agent's summary + STT transcript to Lamp
                     if rt_delegate_msg:
-                        lamp_msg: str = f"[voice-instruction] {rt_delegate_msg}\n[transcript] {final_msg}"
+                        sensing_msg: str = f"[voice-instruction] {rt_delegate_msg}\n[transcript] {final_msg}"
                     else:
-                        lamp_msg = final_msg
-                    logger.info("[realtime] Delegated with message: %r", lamp_msg[:100] if lamp_msg else "")
-                    if lamp_msg:
-                        self._lamp_sender.send(lamp_msg, event_type=event_type)
+                        sensing_msg = final_msg
+                    logger.info("[realtime] Delegated with message: %r", sensing_msg[:100] if sensing_msg else "")
+                    if sensing_msg:
+                        self._sensing_sender.send(sensing_msg, event_type=event_type)
                 else:
                     # Realtime not active — send to Lamp normally
-                    self._lamp_sender.send(final_msg, event_type=event_type)
+                    self._sensing_sender.send(final_msg, event_type=event_type)
 
             # 2. Submit SER — uses the UNTRIMMED snapshot so laughter / sighs
             self._decorator.submit_speech_emotion_from_session(

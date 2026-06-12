@@ -111,7 +111,7 @@ def start_voice(req: VoiceStartRequest):
     try:
         stt_provider = None
         if req.deepgram_api_key and DeepgramSTT:
-            agent_name = state._read_agent_name({})
+            agent_name = state._read_agent_name()
             stt_provider = DeepgramSTT(api_key=req.deepgram_api_key, keywords=[f"{agent_name}:3"])
         elif AutonomousSTT:
             stt_provider = AutonomousSTT(
@@ -119,7 +119,7 @@ def start_voice(req: VoiceStartRequest):
             )
         if not stt_provider:
             raise HTTPException(503, "No STT provider available")
-        wake_words = state._build_wake_words(state._read_agent_name({}))
+        wake_words = state._build_wake_words(state._read_agent_name())
         state.voice_service = VoiceService(
             stt_provider=stt_provider,
             input_device=state.audio_input_device,

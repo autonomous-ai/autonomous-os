@@ -319,12 +319,12 @@ async def lifespan(app: FastAPI):
     os_config_path = OS_CONFIG_PATH
     try:
         with open(os_config_path) as f:
-            lamp_cfg = json.load(f)
-        dgk = lamp_cfg.get("deepgram_api_key", "")
-        llm_key = lamp_cfg.get("llm_api_key", "")
-        llm_url = lamp_cfg.get("llm_base_url", "")
-        voice = lamp_cfg.get("tts_voice", "") or TTS_VOICE
-        tts_provider = lamp_cfg.get("tts_provider", PROVIDER_OPENAI)
+            os_cfg = json.load(f)
+        dgk = os_cfg.get("deepgram_api_key", "")
+        llm_key = os_cfg.get("llm_api_key", "")
+        llm_url = os_cfg.get("llm_base_url", "")
+        voice = os_cfg.get("tts_voice", "") or TTS_VOICE
+        tts_provider = os_cfg.get("tts_provider", PROVIDER_OPENAI)
         if llm_key and llm_url and TTSService and not state.tts_service:
             state.tts_service = TTSService(
                 api_key=llm_key,
@@ -334,7 +334,7 @@ async def lifespan(app: FastAPI):
                 output_device=state.audio_output_device,
                 voice=voice,
                 speed=TTS_SPEED,
-                instructions=lamp_cfg.get("tts_instructions", "") or TTS_INSTRUCTIONS or None,
+                instructions=os_cfg.get("tts_instructions", "") or TTS_INSTRUCTIONS or None,
                 on_speak_start=state._on_tts_speak_start,
                 on_speak_end=state._on_tts_speak_end,
                 provider=tts_provider,
@@ -346,7 +346,7 @@ async def lifespan(app: FastAPI):
                 state.tts_service.available,
             )
         if VoiceService and not state.voice_service:
-            agent_name = state._read_agent_name(lamp_cfg)
+            agent_name = state._read_agent_name()
             wake_words = state._build_wake_words(agent_name)
             stt_provider = None
             logger.info("STT selection: deepgram_key=%s, DeepgramSTT=%s, AutonomousSTT=%s, agent=%s",
@@ -357,8 +357,8 @@ async def lifespan(app: FastAPI):
                     dg_keywords.append(" ".join(agent_name) + ":2")
                 stt_provider = DeepgramSTT(api_key=dgk, keywords=dg_keywords)
             elif llm_key and llm_url and AutonomousSTT:
-                stt_model = (lamp_cfg.get("stt_model") or "").strip() or None
-                stt_language = (lamp_cfg.get("stt_language") or "").strip() or None
+                stt_model = (os_cfg.get("stt_model") or "").strip() or None
+                stt_language = (os_cfg.get("stt_language") or "").strip() or None
                 stt_kwargs = {}
                 if stt_model:
                     stt_kwargs["model"] = stt_model
@@ -387,7 +387,7 @@ async def lifespan(app: FastAPI):
             f"os-server config not found at {os_config_path}, voice will wait for /voice/start"
         )
     except Exception as e:
-        logger.warning(f"Auto-start voice from lamp config failed: {e}")
+        logger.warning(f"Auto-start voice from os-server config failed: {e}")
 
     # Start music service
     if MusicService:
@@ -680,9 +680,16 @@ def _resolve_device_type() -> str:
         return dev
     try:
         from hal.config import _os_cfg_get
-        return _os_cfg_get("device_type") or "lamp"
+        cfg = _os_cfg_get("device_type")
     except Exception:
-        return "lamp"
+        cfg = None
+    if cfg:
+        return cfg
+    # No "lamp" fallback — refuse to boot the wrong body's drivers/soul/OTA.
+    raise RuntimeError(
+        "DEVICE_TYPE unresolved: set the DEVICE_TYPE env (provisioning) or "
+        "config.json device_type — refusing to assume 'lamp'"
+    )
 
 
 def _device_profile():
