@@ -3,6 +3,7 @@
 import base64
 import logging
 import queue
+import threading
 import time
 from typing import Any, override
 
@@ -53,6 +54,10 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
         self._connection: RealtimeConnection | None = None
         self._speech_stopped_at: float | None = None
         self._reconnect_delay_s: float = 2.0
+        # Signals that the model is idle (no active response). Set by default,
+        # cleared when response.create() is called, set again on response.done.
+        self._response_done: threading.Event = threading.Event()
+        self._response_done.set()
 
     @property
     @override
@@ -158,12 +163,21 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                     "output": input.output,
                 }
             )
-            self._connection.response.create()
+            self._safe_response_create()
 
     def _sync_commit(self) -> None:
         if self._connection is None:
             return
         self._connection.input_audio_buffer.commit()
+        self._safe_response_create()
+
+    def _safe_response_create(self) -> None:
+        """Wait for any active response to finish, then create a new one."""
+        if self._connection is None:
+            return
+        if not self._response_done.wait(timeout=10.0):
+            logger.warning("Timed out waiting for active response to finish — forcing new response")
+        self._response_done.clear()
         self._connection.response.create()
 
     def _sync_receive_turn(self) -> None:
@@ -217,6 +231,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
 
                 case "response.done":
                     logger.debug("Response complete")
+                    self._response_done.set()
                     self._recv_queue.put(TurnDoneEvent())
                     return
 
@@ -231,6 +246,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
 
     def _reconnect(self) -> None:
         self._connected.clear()
+        self._response_done.set()  # unblock any waiting commit
         try:
             logger.info("Reconnecting...")
             self._sync_disconnect()

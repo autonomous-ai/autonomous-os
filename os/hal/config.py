@@ -337,6 +337,7 @@ SPEECH_EMOTION_AUDIO_DIR: str = os.environ.get(
 # --- Realtime voice agent ---
 REALTIME_ENABLED: bool = os.environ.get("HAL_REALTIME_ENABLED", "true").lower() in ("1", "true", "yes")
 REALTIME_PROVIDER: str = os.environ.get("HAL_REALTIME_PROVIDER", "gemini")  # none | gemini | openai
+REALTIME_CONNECT_MAX_RETRIES: int = int(os.environ.get("HAL_REALTIME_CONNECT_MAX_RETRIES", "3"))
 # Turn detection / VAD: "server_vad" | "semantic_vad" | "off"
 # For Gemini: "off" disables automatic activity detection; any other value enables it.
 # For OpenAI: maps to turn_detection type in session config.

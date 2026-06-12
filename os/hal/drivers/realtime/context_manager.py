@@ -18,6 +18,10 @@ class RealtimeContextManager:
     """Builds rich instructions for the realtime voice agent from lamp context."""
 
     DEFAULT_PROMPT_PATH: Path = RESOURCES_DIR / "system_prompt.md"
+    PROVIDER_PROMPT_PATHS: dict[str, Path] = {
+        "openai": RESOURCES_DIR / "system_prompt_openai.md",
+        "gemini": RESOURCES_DIR / "system_prompt_gemini.md",
+    }
 
     # Regex to extract YAML frontmatter from SKILL.md
     FRONTMATTER_RE: re.Pattern[str] = re.compile(r"^---\s*\n(.*?)\n---", re.DOTALL)
@@ -29,6 +33,7 @@ class RealtimeContextManager:
         workspace_dir: str = app_config.REALTIME_WORKSPACE_DIR,
         realtime_memory_path: str = app_config.REALTIME_MEMORY_PATH,
         language: str | None = None,
+        provider: str = "",
         max_memory_entries: int = app_config.REALTIME_MAX_MEMORY_ENTRIES,
         trim_keep: int = app_config.REALTIME_MEMORY_TRIM_KEEP,
         lamp_memory_max_chars: int = app_config.REALTIME_LAMP_MEMORY_MAX_CHARS,
@@ -38,13 +43,16 @@ class RealtimeContextManager:
         self._workspace: Path = Path(workspace_dir)
         self._realtime_memory_path: Path = Path(realtime_memory_path)
         self._language: str = language or "English"
+        self._provider: str = provider.strip().lower()
         self._max_memory_entries: int = max_memory_entries
         self._trim_keep: int = trim_keep
         self._lamp_memory_max_chars: int = lamp_memory_max_chars
         self._realtime_memory_max_chars: int = realtime_memory_max_chars
         self._summarizer: RealtimeSummarizer | None = summarizer
-        # Summary file alongside the memory JSONL
+        # Summary files alongside the memory JSONL
         self._summary_path: Path = self._realtime_memory_path.parent / "summary.md"
+        self._lamp_summary_path: Path = self._realtime_memory_path.parent / "lamp_summary.md"
+        self._summary_max_chars: int = 10000
 
     # --- Public API ---
 
@@ -71,19 +79,15 @@ class RealtimeContextManager:
         if catalog:
             sections.append(f"# SKILLS CATALOG\n\n{catalog}")
 
-        # Lamp memory
-        lamp_mem_raw: list[str] = self._load_lamp_memory_entries()
-        if lamp_mem_raw:
-            lamp_mem: str = self._summarize_or_join(lamp_mem_raw)
-            if lamp_mem:
-                sections.append(f"# LAMP MEMORY\n\n{lamp_mem}")
+        # Lamp memory (pre-summarized at startup + recent entries)
+        lamp_mem: str = self._build_lamp_memory()
+        if lamp_mem:
+            sections.append(f"# LAMP MEMORY\n\n{lamp_mem}")
 
-        # Realtime memory
-        rt_mem_raw: list[str] = self._load_realtime_memory_entries()
-        if rt_mem_raw:
-            rt_mem: str = self._summarize_or_join(rt_mem_raw)
-            if rt_mem:
-                sections.append(f"# REALTIME MEMORY\n\n{rt_mem}")
+        # Realtime memory (pre-summarized at startup + recent conversation)
+        rt_mem: str = self._build_realtime_memory()
+        if rt_mem:
+            sections.append(f"# REALTIME MEMORY\n\n{rt_mem}")
 
         return "\n\n".join(sections)
 
@@ -142,13 +146,99 @@ class RealtimeContextManager:
     }
 
     def _load_system_prompt(self) -> str:
-        """Load system_prompt.md with {language} placeholder resolved to full name."""
+        """Load provider-specific system prompt with {language} placeholder resolved.
+
+        Falls back to the shared system_prompt.md if no provider-specific file exists.
+        """
+        prompt_path: Path = self.PROVIDER_PROMPT_PATHS.get(
+            self._provider, self.DEFAULT_PROMPT_PATH
+        )
+        if not prompt_path.exists():
+            prompt_path = self.DEFAULT_PROMPT_PATH
         try:
-            template: str = self.DEFAULT_PROMPT_PATH.read_text(encoding="utf-8").strip()
+            template: str = prompt_path.read_text(encoding="utf-8").strip()
             lang_name: str = self.LANGUAGE_NAMES.get(self._language, self._language)
             return template.replace("{language}", lang_name)
         except FileNotFoundError:
             return ""
+
+    def _load_file_capped(self, path: Path, max_chars: int) -> str:
+        """Load a text file, truncated to max_chars."""
+        try:
+            content: str = path.read_text(encoding="utf-8").strip()
+            return content[:max_chars] if content else ""
+        except FileNotFoundError:
+            return ""
+        except Exception as e:
+            logger.warning("Failed to read %s: %s", path, e)
+            return ""
+
+    def _load_recent_entries(
+        self, lines: list[str], max_chars: int, formatter: Any = None,
+    ) -> str:
+        """Load most recent entries from a list of lines, up to max_chars.
+
+        If formatter is provided, each line is passed through it (e.g. JSONL parsing).
+        Otherwise lines are used as-is.
+        """
+        total_chars: int = 0
+        selected: list[str] = []
+        for line in reversed(lines):
+            entry: str = formatter(line) if formatter else line.strip()
+            if not entry:
+                continue
+            if total_chars + len(entry) > max_chars:
+                break
+            selected.append(entry)
+            total_chars += len(entry)
+        selected.reverse()
+        return "\n".join(selected)
+
+    def _build_memory_section(
+        self, summary_path: Path, recent_lines: list[str], formatter: Any = None,
+    ) -> str:
+        """Build a memory section: summary + recent entries, each capped at _summary_max_chars."""
+        parts: list[str] = []
+        summary: str = self._load_file_capped(summary_path, self._summary_max_chars)
+        if summary:
+            parts.append(summary)
+        if recent_lines:
+            recent: str = self._load_recent_entries(
+                recent_lines, self._summary_max_chars, formatter,
+            )
+            if recent:
+                parts.append(recent)
+        return "\n\n".join(parts)
+
+    def _build_lamp_memory(self) -> str:
+        """Load lamp memory: summary + most recent .md entries."""
+        memory_dir: Path = self._workspace / "memory"
+        recent_lines: list[str] = []
+        if memory_dir.is_dir():
+            for md_file in sorted(memory_dir.glob("*.md"), key=lambda f: f.stat().st_mtime, reverse=True):
+                try:
+                    content: str = md_file.read_text(encoding="utf-8").strip()
+                    if content:
+                        recent_lines.append(f"## {md_file.stem}\n\n{content}")
+                except Exception as e:
+                    logger.warning("Failed to read memory %s: %s", md_file, e)
+        return self._build_memory_section(self._lamp_summary_path, recent_lines)
+
+    def _build_realtime_memory(self) -> str:
+        """Load realtime memory: summary + most recent JSONL conversation entries."""
+        recent_lines: list[str] = []
+        if self._realtime_memory_path.exists():
+            try:
+                recent_lines = (
+                    self._realtime_memory_path.read_text(encoding="utf-8")
+                    .strip()
+                    .splitlines()
+                )
+            except Exception as e:
+                logger.warning("Failed to read realtime memory JSONL: %s", e)
+        return self._build_memory_section(
+            self._summary_path, recent_lines, self._format_jsonl_entry,
+        )
 
     def _load_lamp_identity(self) -> str:
         """Load SOUL.md, IDENTITY.md, and USER.md from the workspace."""

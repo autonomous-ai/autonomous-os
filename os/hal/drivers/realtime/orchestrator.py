@@ -24,13 +24,13 @@ import numpy.typing as npt
 import hal.config as config
 from hal.drivers.realtime.config import GeminiConfig, OpenAIConfig, _load_language
 from hal.drivers.realtime.context_manager import RealtimeContextManager
-from hal.drivers.realtime.summarizer import RealtimeSummarizer
 from hal.drivers.realtime.models import (
     FunctionCallOutput,
     FunctionCallResultInput,
     OutputBase,
     TextInput,
 )
+from hal.drivers.realtime.summarizer import RealtimeSummarizer
 from hal.drivers.realtime.voice_agent.base import VoiceAgentBase
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,7 @@ DELEGATE_TOOL_DESCRIPTION: str = (
 )
 
 DELEGATE_TOOL: dict[str, Any] = {
+    "type": "function",
     "name": DELEGATE_TOOL_NAME,
     "description": DELEGATE_TOOL_DESCRIPTION,
     "parameters": {
@@ -80,18 +81,24 @@ class RealtimeOrchestrator:
     def __init__(
         self,
         extra_tools: list[dict[str, Any]] | None = None,
+        max_retries: int = config.REALTIME_CONNECT_MAX_RETRIES,
     ) -> None:
         self._tools: list[dict[str, Any]] = [DELEGATE_TOOL] + (extra_tools or [])
+        self._max_retries: int = max_retries
         self._agent: VoiceAgentBase | None = None
         summarizer: RealtimeSummarizer | None = None
         if config.REALTIME_SUMMARIZER_ENABLED:
             try:
                 summarizer = RealtimeSummarizer()
-                logger.info("Realtime summarizer enabled (model=%s)", config.REALTIME_SUMMARIZER_MODEL)
+                logger.info(
+                    "Realtime summarizer enabled (model=%s)",
+                    config.REALTIME_SUMMARIZER_MODEL,
+                )
             except Exception as e:
                 logger.warning("Failed to create summarizer: %s", e)
         self._context: RealtimeContextManager = RealtimeContextManager(
             language=_load_language() or "English",
+            provider=config.REALTIME_PROVIDER,
             summarizer=summarizer,
         )
 
@@ -120,26 +127,39 @@ class RealtimeOrchestrator:
             from hal.drivers.realtime.voice_agent.gemini_live import GeminiLiveAgent
 
             self._agent = GeminiLiveAgent(
-                config=GeminiConfig(instructions=instructions), tools=self._tools,
+                config=GeminiConfig(instructions=instructions),
+                tools=self._tools,
             )
 
         elif provider == "openai":
-            from hal.drivers.realtime.voice_agent.openai_realtime import OpenAIRealtimeAgent
+            from hal.drivers.realtime.voice_agent.openai_realtime import (
+                OpenAIRealtimeAgent,
+            )
 
             self._agent = OpenAIRealtimeAgent(
-                config=OpenAIConfig(instructions=instructions), tools=self._tools,
+                config=OpenAIConfig(instructions=instructions),
+                tools=self._tools,
             )
 
         else:
             logger.warning("Unknown realtime provider: %s — disabled", provider)
             return
 
-        try:
-            self._agent.connect()
-            logger.info("Realtime orchestrator started (provider=%s)", provider)
-        except Exception:
-            logger.exception("Failed to connect realtime agent")
-            self._agent = None
+        for attempt in range(1, self._max_retries + 1):
+            try:
+                self._agent.connect()
+                logger.info("Realtime orchestrator started (provider=%s)", provider)
+                return
+            except Exception:
+                logger.exception(
+                    "Failed to connect realtime agent (attempt %d/%d)",
+                    attempt, self._max_retries,
+                )
+                if attempt < self._max_retries:
+                    import time
+                    time.sleep(2)
+        logger.error("Realtime agent failed to connect after %d attempts", self._max_retries)
+        self._agent = None
 
     def stop(self) -> None:
         """Disconnect the agent."""
@@ -174,22 +194,33 @@ class RealtimeOrchestrator:
             return
 
         for output in self._agent.receive(stop_on_done=True):
-            if isinstance(output, FunctionCallOutput) and output.name == DELEGATE_TOOL_NAME:
+            if (
+                isinstance(output, FunctionCallOutput)
+                and output.name == DELEGATE_TOOL_NAME
+            ):
                 # Extract message from tool call arguments
                 import json as _json
+
                 delegate_msg: str = ""
                 try:
-                    args: dict = _json.loads(output.arguments) if output.arguments else {}
+                    args: dict = (
+                        _json.loads(output.arguments) if output.arguments else {}
+                    )
                     delegate_msg = args.get("message", "")
                 except (ValueError, TypeError):
                     pass
-                logger.info("Model delegated to main flow (message=%r)", delegate_msg[:100] if delegate_msg else "")
-                self._agent.send([
-                    FunctionCallResultInput(
-                        call_id=output.call_id,
-                        output='{"result": "delegated"}',
-                    )
-                ])
+                logger.info(
+                    "Model delegated to main flow (message=%r)",
+                    delegate_msg[:100] if delegate_msg else "",
+                )
+                self._agent.send(
+                    [
+                        FunctionCallResultInput(
+                            call_id=output.call_id,
+                            output='{"result": "delegated"}',
+                        )
+                    ]
+                )
                 yield DelegateSignal(message=delegate_msg)
                 return
             yield output
