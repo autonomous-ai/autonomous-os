@@ -11,7 +11,7 @@ function fmtAgo(seconds: number | null | undefined): string {
   return `${Math.floor(seconds / 3600)}h ago`;
 }
 
-// Raw per-side ergo data from dlbackend (passed through by lelamp).
+// Raw per-side ergo data from dlbackend (passed through by the device).
 interface PoseSide {
   score?: number;
   risk_level?: number;
@@ -144,7 +144,7 @@ function lightTier(level: number): { label: string; color: string } {
   return                  { label: "Sunlit", color: "var(--lm-green)" };
 }
 
-// Risk tier for pose samples. Mirrors the lelamp risk_level enum:
+// Risk tier for pose samples. Mirrors the device risk_level enum:
 // 0 (no data) / 1 (negligible) / 2 (low) / 3 (medium) / 4 (high).
 function poseDotColor(sample: PoseSample): string {
   switch (sample.risk_level) {

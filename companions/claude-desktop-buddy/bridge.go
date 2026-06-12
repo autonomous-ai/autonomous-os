@@ -10,10 +10,10 @@ import (
 )
 
 // claudeBrand is the Claude app icon color (#C15F3C) used for all
-// buddy state LED cues so the lamp visibly speaks "Claude".
+// buddy state LED cues so the device visibly speaks "Claude".
 var claudeBrand = [3]int{193, 95, 60}
 
-// Bridge maps buddy state changes to LeLamp and Lamp HTTP calls.
+// Bridge maps buddy state changes to device and OS server HTTP calls.
 type Bridge struct {
 	lelampURL string
 	lampURL   string
@@ -82,11 +82,11 @@ func (b *Bridge) OnStateChange(old, next BuddyState, hb *Heartbeat) {
 	b.postBuddyState(next, hb)
 }
 
-// --- LeLamp calls (port 5001) ---
+// --- Device calls (port 5001) ---
 //
 // All LED writes from Buddy are marked transient: they paint the strip
 // but don't overwrite the user's saved LED state (e.g. "đèn xanh lá").
-// When Buddy returns to Idle, ledRestore() asks LeLamp to repaint
+// When Buddy returns to Idle, ledRestore() asks the device to repaint
 // whatever the user had set before Buddy took the strip.
 
 func (b *Bridge) ledOff() {
@@ -136,9 +136,9 @@ func (b *Bridge) displayEyesMode() {
 	b.post(b.lelampURL+"/display/eyes-mode", nil)
 }
 
-// --- Lamp calls (port 5000) ---
+// --- OS server calls (port 5000) ---
 
-// postBuddyState sends buddy state to Lamp monitor bus.
+// postBuddyState sends buddy state to the OS server monitor bus.
 func (b *Bridge) postBuddyState(state BuddyState, hb *Heartbeat) {
 	detail := map[string]interface{}{
 		"state": string(state),
@@ -155,7 +155,7 @@ func (b *Bridge) postBuddyState(state BuddyState, hb *Heartbeat) {
 	})
 }
 
-// postSensingEvent sends approval event to Lamp sensing pipeline.
+// postSensingEvent sends approval event to the OS server sensing pipeline.
 func (b *Bridge) postSensingEvent(prompt *Prompt) {
 	b.post(b.lampURL+"/api/sensing/event", map[string]interface{}{
 		"type":    "buddy_approval",
@@ -164,8 +164,8 @@ func (b *Bridge) postSensingEvent(prompt *Prompt) {
 }
 
 // expressEmotion triggers a coordinated LED + servo animation on
-// LeLamp. Used by the buddy state listener to celebrate the end of a
-// Claude turn ("Claude is done" → happy emotion). LeLamp owns the
+// the device. Used by the buddy state listener to celebrate the end of a
+// Claude turn ("Claude is done" → happy emotion). The device owns the
 // LED/servo timeline from there so we don't fight its ambient logic.
 func (b *Bridge) expressEmotion(name string, intensity float64) {
 	if name == "" {
@@ -177,9 +177,9 @@ func (b *Bridge) expressEmotion(name string, intensity float64) {
 	})
 }
 
-// prerenderTTS asks LeLamp to synthesize a phrase and store it in the
+// prerenderTTS asks the device to synthesize a phrase and store it in the
 // on-disk TTS cache without playing it. Used at startup to warm the
-// cache for every narration phrase the lamp will need, so the very
+// cache for every narration phrase the device will need, so the very
 // first announcement of each one plays instantly instead of waiting
 // on a provider round-trip.
 func (b *Bridge) prerenderTTS(text string) {
@@ -192,13 +192,13 @@ func (b *Bridge) prerenderTTS(text string) {
 	})
 }
 
-// speakTTS posts a short narration string to LeLamp's TTS endpoint
-// (POST /voice/speak). Fire-and-forget: LeLamp rejects with 409 when
+// speakTTS posts a short narration string to the device's TTS endpoint
+// (POST /voice/speak). Fire-and-forget: the device rejects with 409 when
 // music is playing or 503 when TTS isn't initialized; both responses
 // are ignored at the bridge layer so callers (mostly the Narrator)
 // don't have to coordinate with the voice pipeline.
 //
-// `cached: true` tells LeLamp to look the text up in its on-disk TTS
+// `cached: true` tells the device to look the text up in its on-disk TTS
 // cache before calling the provider. Narration phrases are a small,
 // repetitive set ("Đang sửa file", "Xong", …) so after each phrase
 // has been spoken once the rest of the day hits the cache — zero
@@ -213,7 +213,7 @@ func (b *Bridge) speakTTS(text string) {
 	})
 }
 
-// OnEvent forwards a parsed Event (chat turn etc.) to Lamp so use cases
+// OnEvent forwards a parsed Event (chat turn etc.) to the OS server so use cases
 // like "speak Claude's reply" or "show recent message on display" can
 // subscribe to /api/monitor/event with type=buddy_event. The bridge is
 // purely fire-and-forget; downstream consumers decide whether to do

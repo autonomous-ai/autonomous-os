@@ -59,8 +59,8 @@ interface StrangersData {
   clusters: StrangerCluster[];
 }
 
-// Familiar-stranger threshold mirrors lelamp's _FAMILIAR_VISIT_THRESHOLD.
-// At this count lelamp pushes an enroll prompt to the agent (one-shot).
+// Familiar-stranger threshold mirrors the device's _FAMILIAR_VISIT_THRESHOLD.
+// At this count the device pushes an enroll prompt to the agent (one-shot).
 const FAMILIAR_VISIT_THRESHOLD = 2;
 
 interface FaceStrangerStat {
@@ -91,8 +91,8 @@ export function FaceOwnersSection() {
   const [cdError, setCdError] = useState(false);
   const [resetting, setResetting] = useState(false);
 
-  // Current user (effective user LeLamp sees right now). Polled separately
-  // from /face/current-user — this is the source used by Lamp handler,
+  // Current user (effective user the device sees right now). Polled separately
+  // from /face/current-user — this is the source used by the OS-server handler,
   // activity logging, and the "Here now" UI.
   const [currentUser, setCurrentUser] = useState<string>("");
 
@@ -131,7 +131,7 @@ export function FaceOwnersSection() {
   const [deletingCluster, setDeletingCluster] = useState<string | null>(null);
   const [deletingStrangerFile, setDeletingStrangerFile] = useState<string | null>(null); // "hash/filename"
 
-  // Face stranger visit stats (/face/stranger-stats). Lelamp tracks each
+  // Face stranger visit stats (/face/stranger-stats). The device tracks each
   // unrecognized face's visit count and surfaces a familiar-stranger enroll
   // prompt to the agent when count crosses FAMILIAR_VISIT_THRESHOLD.
   const [faceStrangers, setFaceStrangers] = useState<FaceStrangerStat[] | null>(null);
@@ -454,7 +454,7 @@ export function FaceOwnersSection() {
 
   // Voice sample delete — only audio files. JSON/NPY (metadata, embedding
   // cache) are protected because deleting them silently corrupts the
-  // speaker_recognizer profile. Backend Lamp /api/voice/file/remove
+  // speaker_recognizer profile. Backend OS server /api/voice/file/remove
   // re-enrolls from remaining samples to refresh the embedding.
   const handleRemoveVoiceFile = async (label: string, filename: string) => {
     if (!confirm(`Remove voice sample "${filename}" from ${label}?`)) return;
