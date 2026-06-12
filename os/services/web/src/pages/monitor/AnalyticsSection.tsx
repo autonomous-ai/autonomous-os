@@ -226,7 +226,7 @@ export function AnalyticsSection() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `lamp-analytics-${dateRange.from}_to_${dateRange.to}.csv`;
+    a.download = `analytics-${dateRange.from}_to_${dateRange.to}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };

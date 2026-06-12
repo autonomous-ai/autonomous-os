@@ -1152,7 +1152,7 @@ export function ChatSection({ events, isActive }: Props) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `lamp-chat-${active.id}.txt`;
+    a.download = `chat-${active.id}.txt`;
     a.click();
     URL.revokeObjectURL(url);
   };

@@ -154,7 +154,7 @@ export function FlowSection({
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `lamp_flow_ui_snapshot_${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    a.download = `flow_ui_snapshot_${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
     a.rel = "noopener";
     document.body.appendChild(a);
     a.click();
@@ -171,7 +171,7 @@ export function FlowSection({
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `lamp_flow_${day}_last${FLOW_EVENTS_MAX}.jsonl`;
+      a.download = `flow_${day}_last${FLOW_EVENTS_MAX}.jsonl`;
       a.rel = "noopener";
       document.body.appendChild(a);
       a.click();
