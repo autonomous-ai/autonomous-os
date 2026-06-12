@@ -6,7 +6,7 @@ description: Low-level speaker and microphone hardware control — adjust volume
 # Audio Control
 
 ## Quick Start
-Control the lamp's speaker and microphone hardware directly. Use this for volume adjustments, test tones, and raw audio recording. This is LOW-LEVEL hardware control only.
+Control the device's speaker and microphone hardware directly. Use this for volume adjustments, test tones, and raw audio recording. This is LOW-LEVEL hardware control only.
 
 ## Workflow
 1. Determine the user's audio hardware need:

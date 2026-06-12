@@ -78,7 +78,7 @@ Output: `[HW:/buddy/exec/click_button:{"label":"Submit"}]` Clicked.
 Input: "Hello" / "What time is it?"
 Output: Do NOT use this skill. Reply normally.
 
-Input: "Turn the lamp yellow"
+Input: "Turn the light yellow"
 Output: Do NOT use this skill — use **led-control** skill instead.
 
 Input: "Reading mode" / "Make it cozy"
@@ -173,7 +173,7 @@ Markers fire in order. Useful patterns:
 
 ## Error handling
 
-- **No buddy paired** (`no buddy connected`): respond "No Mac is paired with the lamp yet. Open the Monitor page → Buddy card to pair one." Do NOT fire any markers.
+- **No buddy paired** (`no buddy connected`): respond "No Mac is paired with the device yet. Open the Monitor page → Buddy card to pair one." Do NOT fire any markers.
 - **Timeout / connection error**: respond "I couldn't reach your Mac — the Buddy app may be offline."
 - **Unknown action**: not possible if you only use the actions listed above. Stick to the table.
 

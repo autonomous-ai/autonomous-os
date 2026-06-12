@@ -1,12 +1,12 @@
 ---
 name: emotion
-description: Express emotion through coordinated servo + LED + display eyes on EVERY conversational response. This is the PRIMARY response skill that makes the lamp feel alive. Do NOT use for ambiance lighting (use Scene) or custom LED colors (use LED Control).
+description: Express emotion through coordinated servo + LED + display eyes on EVERY conversational response. This is the PRIMARY response skill that makes the device feel alive. Do NOT use for ambiance lighting (use Scene) or custom LED colors (use LED Control).
 ---
 
 # Emotion Expression
 
 ## Quick Start
-Express emotion through the lamp's servo motors, LED colors, and display eyes simultaneously via a single API call. Call this with EVERY conversational response to make the lamp feel alive.
+Express emotion through the device's servo motors, LED colors, and display eyes simultaneously via a single API call. Call this with EVERY conversational response to make the device feel alive.
 
 ## Workflow
 1. Determine which emotion best matches your conversational tone
@@ -94,7 +94,7 @@ Output: Do NOT use this skill. Use **LED Control** skill instead.
 - Use `goodbye` when a person leaves or at the end of a conversation.
 - Use `sleepy` before transitioning to sleep/night mode.
 - Use `stretching` after waking up or starting a new session.
-- Do **NOT** call `idle` explicitly — the lamp returns to idle automatically after any animation finishes. Calling idle interrupts smooth transitions.
+- Do **NOT** call `idle` explicitly — the device returns to idle automatically after any animation finishes. Calling idle interrupts smooth transitions.
 - **Always include `intensity`** — never omit it. Use 0.3-0.5 for subtle reactions, 0.7 for normal, 0.8-1.0 for strong ones.
 - You can call emotion multiple times in one response for a sequence (e.g., `shock` then `happy`).
 - **Emotion LED is temporary** — it shows YOUR reaction. If the user previously set a Scene (reading, night, etc.), the scene color takes precedence for ambient lighting. Emotion is a brief flash of personality.

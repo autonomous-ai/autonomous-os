@@ -6,7 +6,7 @@ description: Use when the user asks to change eye expression directly, show info
 # Display — Eyes & Info
 
 ## Quick Start
-Controls the lamp's 1.28" round LCD display (GC9A01, 240x240). Two modes: animated eyes (default) and info text. Usually auto-synced by the Emotion skill — only call directly for manual eye control or info display.
+Controls the device's display. Two modes: animated eyes (default) and info text. Usually auto-synced by the Emotion skill — only call directly for manual eye control or info display.
 
 ## Workflow
 1. Determine the mode needed:

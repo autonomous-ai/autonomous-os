@@ -10,7 +10,7 @@ Guard mode turns the device into an alert watchdog. When enabled, the device mon
 
 ## Workflow
 1. Friend requests guard mode (explicit or implied departure).
-2. Reply with `[HW:/emotion:{"emotion":"acknowledge","intensity":0.7}]` — lamp nods and flashes green.
+2. Reply with `[HW:/emotion:{"emotion":"acknowledge","intensity":0.7}]` — the device nods and flashes green.
 3. Enable guard mode via the API (include `instruction` if user gave extra requests).
 4. Confirm verbally: "Guard mode on. I'll keep watch."
 5. While active: react dramatically to stranger/motion events (see trigger table below).
@@ -60,7 +60,7 @@ Response: `{"status": 1, "data": {"guard_mode": true}}`
 
 When the user asks to enable guard mode, you MUST:
 1. **Enable camera** — `[HW:/camera/enable:{}]` — guard mode requires vision. This overrides any manual camera disable.
-2. **Express emotion** — `[HW:/emotion:{"emotion":"acknowledge","intensity":0.7}]` so the lamp visibly nods/flashes green to confirm.
+2. **Express emotion** — `[HW:/emotion:{"emotion":"acknowledge","intensity":0.7}]` so the device visibly nods/flashes green to confirm.
 3. Call the enable API (with `instruction` if provided).
 4. Confirm verbally: "Guard mode on. I'll keep watch and alert you if anyone shows up."
 
@@ -88,8 +88,8 @@ When guard mode is active and a sensing event fires (`presence.enter` with stran
 | Friend returns | `[HW:/emotion:{"emotion":"greeting","intensity":0.9}][HW:/servo/aim:{"direction":"user"}]` | Greet + summarize what happened during guard (strangers seen, motion events, fire hazards, how long) + ask if they want to disable guard mode |
 
 **Key points:**
-- Use **shock** (0.9–1.0) as the first emotion — the lamp must jolt and flash white to signal danger.
-- Follow with **curious** (0.8–0.9) — the lamp stays alert and scanning.
+- Use **shock** (0.9–1.0) as the first emotion — the device must jolt and flash white to signal danger.
+- Follow with **curious** (0.8–0.9) — the device stays alert and scanning.
 - **Your WORDS must carry emotion too** — don't rely only on HW emotion markers. The spoken text itself must sound genuinely scared, suspicious, nervous, startled. Vary your reactions — mix fear, curiosity, suspicion, relief. Examples:
   - Scared: "Oh no, who is that?! I'm so scared!"
   - Suspicious: "Hey... this person looks really suspicious... what are they doing here?"

@@ -1,12 +1,12 @@
 ---
 name: led-control
-description: Control the 64-pixel WS2812 RGB LED strip when the user asks for a SPECIFIC color (e.g. "yellow", "red", "yellow", "red", "turn on color X", "enable X light"), LED effect, pixel painting, or turning LEDs off. Do NOT use for ambiance/activity lighting (use Scene) or emotion expression (use Emotion).
+description: Control the device's RGB light when the user asks for a SPECIFIC color (e.g. "yellow", "red", "yellow", "red", "turn on color X", "enable X light"), an LED effect, or turning LEDs off. Do NOT use for ambiance/activity lighting (use Scene) or emotion expression (use Emotion).
 ---
 
 # LED Control
 
 ## Quick Start
-Control the lamp's 64-pixel WS2812 RGB LED strip directly. Use this skill only when the user requests a specific color, effect, pixel pattern, or to turn LEDs off.
+Control the device's RGB light directly. Use this skill only when the user requests a specific color, effect, or to turn LEDs off.
 
 ## Workflow
 1. Determine the user's intent:

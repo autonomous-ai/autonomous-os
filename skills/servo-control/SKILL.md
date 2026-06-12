@@ -1,12 +1,12 @@
 ---
 name: servo-control
-description: Use to aim/point/look the lamp in a DIRECTION, toggle servo state (hold/resume/release), or play a named servo animation (nod/shake/etc). Directions are fixed named locations or axes — supported: desk, wall, left, right, up, down, center, user. Furniture and surfaces ("desk", "table", "floor", "ceiling", "wall", "door", "workspace") are ALWAYS directions, never tracking targets — map them to the closest of the supported names (table/workspace → desk). MUST use /servo/aim (not /servo/track) for: "look at the desk"→desk, "point at my table"→desk, "look at the wall"→wall, "look left"→left, "point up"→up, "look at me"→user. For following a movable OBJECT by vision (cup, phone, hand, person, pet) use servo-tracking instead. Compound: if user names a direction AND an object ("look at desk and follow cup"), fire THIS aim skill first, then tracking.
+description: Use to aim/point/look the device in a DIRECTION, toggle servo state (hold/resume/release), or play a named servo animation (nod/shake/etc). Directions are fixed named locations or axes — supported: desk, wall, left, right, up, down, center, user. Furniture and surfaces ("desk", "table", "floor", "ceiling", "wall", "door", "workspace") are ALWAYS directions, never tracking targets — map them to the closest of the supported names (table/workspace → desk). MUST use /servo/aim (not /servo/track) for: "look at the desk"→desk, "point at my table"→desk, "look at the wall"→wall, "look left"→left, "point up"→up, "look at me"→user. For following a movable OBJECT by vision (cup, phone, hand, person, pet) use servo-tracking instead. Compound: if user names a direction AND an object ("look at desk and follow cup"), fire THIS aim skill first, then tracking.
 ---
 
 # Servo Control
 
 ## Quick Start
-Controls the lamp's 5-axis servo motors for aiming light direction and playing physical animations. Use `/servo/aim` for directional pointing, `/servo/play` for expressive animations.
+Controls the device's servo motors for directional aiming and physical animations. Use `/servo/aim` for directional pointing, `/servo/play` for expressive animations.
 
 ## Workflow
 1. Determine if the user wants to **aim** the light or **play an animation**.
@@ -45,7 +45,7 @@ Controls the lamp's 5-axis servo motors for aiming light direction and playing p
 **Output:** `[HW:/servo/nudge:{"pitch":10}]` Tilted up slightly.
 
 **Input:** "Release the motors"
-**Output:** `[HW:/servo/release:{}]` Servos released — you can move the lamp by hand now.
+**Output:** `[HW:/servo/release:{}]` Servos released — you can move the device by hand now.
 
 **Input:** "Stop moving" / "Hold still" / "Freeze" / "Stand still"
 **Output:** `[HW:/servo/hold:{}]` OK, holding still.
@@ -133,7 +133,7 @@ Available animations:
 [HW:/servo/hold:{}] OK, holding still.
 ```
 
-Suppresses idle and ambient animations — lamp freezes in current pose. Emotions still play through (the lamp reacts when you talk, then holds still again). Call `/servo/resume` to return to normal.
+Suppresses idle and ambient animations — the device freezes in current pose. Emotions still play through (the device reacts when you talk, then holds still again). Call `/servo/resume` to return to normal.
 
 **Triggers:** "stop moving", "hold still", "freeze", "don't move", "stand still"
 
@@ -166,8 +166,8 @@ Disables all servo motors so they can be moved freely by hand.
 - Aim positions are persistent until changed.
 - Use `/servo/aim` as the primary way to control light direction — do not use raw joint control unless testing.
 - Always confirm the action to the user after execution.
-- **Hold vs Release**: Hold keeps torque ON (lamp stays rigid in place). Release turns torque OFF (lamp goes limp). Use hold for "stop moving", release for "let me reposition the lamp by hand".
-- **Hold is soft** — emotions still animate through, then the lamp holds still again. This keeps the lamp feeling alive during conversation while respecting the user's request to stop fidgeting.
+- **Hold vs Release**: Hold keeps torque ON (the device stays rigid in place). Release turns torque OFF (the device goes limp). Use hold for "stop moving", release for "let me reposition the device by hand".
+- **Hold is soft** — emotions still animate through, then the device holds still again. This keeps the device feeling alive during conversation while respecting the user's request to stop fidgeting.
 
 ## Output Template
 
