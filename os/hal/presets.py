@@ -5,7 +5,7 @@ All pure data, no runtime dependencies. Import from server.py.
 """
 
 # --- Language code constants (device stt_language / TTS language) ---
-# Keep these aligned with the language codes returned by /lamp config and
+# Keep these aligned with the language codes returned by /os-server config and
 # the keys used in TTS phrase dictionaries. DEFAULT_LANG is the fallback
 # when stt_language is empty or unknown.
 LANG_EN = "en"
