@@ -6,7 +6,7 @@ The OS server uses MQTT to communicate with the backend server (status reporting
 
 - Client: Eclipse Paho autopaho (Go)
 - Auto-reconnect on connection loss
-- Client ID format: `lamp-device-{DeviceID}`
+- Client ID format: `device-{DeviceID}`
 
 ## Configuration
 
