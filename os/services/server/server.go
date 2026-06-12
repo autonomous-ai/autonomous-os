@@ -483,10 +483,11 @@ func corsMiddleware() gin.HandlerFunc {
 }
 
 func (s *Server) Serve(closeFn func()) error {
-	// Set GELF host to device_id for centralized logging
+	// Set GELF host to device_id + stamp device class for centralized logging
 	if s.config.DeviceID != "" {
 		logger.SetGELFHost(s.config.DeviceID)
 	}
+	logger.SetGELFDeviceType(s.config.DeviceTypeOrDefault())
 
 	// Register the shared bearer token for outbound HAL HTTP calls.
 	// HAL's local_only_middleware accepts Authorization: Bearer <llm_api_key>

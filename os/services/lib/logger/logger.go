@@ -155,11 +155,12 @@ func (m *multiHandler) WithGroup(name string) slog.Handler {
 
 // gelfHandler sends log records to a centralized GELF endpoint over HTTP.
 type gelfHandler struct {
-	level  slog.Level
-	host   string
-	client *http.Client
-	attrs  []slog.Attr
-	group  string
+	level      slog.Level
+	host       string
+	deviceType string
+	client     *http.Client
+	attrs      []slog.Attr
+	group      string
 }
 
 func newGELFHandler(level slog.Level, host string) *gelfHandler {
@@ -194,9 +195,12 @@ func (h *gelfHandler) Handle(_ context.Context, r slog.Record) error {
 		"short_message": r.Message,
 		"timestamp":     float64(r.Time.UnixNano()) / 1e9,
 		"level":         slogLevelToGELF(r.Level),
-		"_service_name": "lamp-golang",
+		"_service_name": "os-server",
 		"_level_name":   r.Level.String(),
 		"_pid":          os.Getpid(),
+	}
+	if h.deviceType != "" {
+		msg["_device_type"] = h.deviceType // device class, for centralized filtering
 	}
 
 	// Add attributes as GELF extra fields (prefixed with _)
@@ -269,6 +273,15 @@ func SetGELFHost(host string) {
 	}
 }
 
+// SetGELFDeviceType stamps the device class on every shipped log as `_device_type`
+// (call after config loads) so centralized logs are filterable by device, not the
+// per-unit host. Device-agnostic: each device reports its own class, not "lamp".
+func SetGELFDeviceType(deviceType string) {
+	if activeGELF != nil && deviceType != "" {
+		activeGELF.deviceType = deviceType
+	}
+}
+
 // Init sets up the global slog default logger with colored console output.
 // If logFilePath is non-empty, logs are also written to that file (plain text, no color).
 // Returns a cleanup function to close the log file (call via defer).
@@ -303,7 +316,7 @@ func Init(level slog.Level, logFilePath string) func() {
 
 	handlers := []slog.Handler{consoleHandler, fileHandler}
 	if gelfURL != "" {
-		gelf := newGELFHandler(slog.LevelInfo, "lamp")
+		gelf := newGELFHandler(slog.LevelInfo, "os-server") // pre-config host; SetGELFHost(DeviceID) overrides once config loads
 		activeGELF = gelf
 		handlers = append(handlers, gelf)
 	}
