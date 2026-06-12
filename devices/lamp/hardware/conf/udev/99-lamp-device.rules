@@ -1,0 +1,12 @@
+# Camera: SunplusIT OPENAICAM -> video symlink + stable ALSA card name for built-in mic
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="1bcf", ATTRS{idProduct}=="28cc", ATTR{index}=="0", SYMLINK+="device-camera"
+SUBSYSTEM=="sound", ACTION=="change", ATTRS{idVendor}=="1bcf", ATTRS{idProduct}=="28cc", ATTR{id}="device_camera_mic"
+
+# Servo driver: QinHeng CH340
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d3", SYMLINK+="device-servo"
+
+# USB Mic: Jieli Technology -> stable ALSA card name
+SUBSYSTEM=="sound", ACTION=="change", ATTRS{idVendor}=="4c4a", ATTRS{idProduct}=="4155", ATTR{id}="device_usb_mic"
+
+# USB Speaker: TTGK Technology -> stable ALSA card name
+SUBSYSTEM=="sound", ACTION=="change", ATTRS{idVendor}=="3302", ATTRS{idProduct}=="1292", ATTR{id}="device_usb_speaker"

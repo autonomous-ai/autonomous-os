@@ -1,0 +1,5 @@
+# Keep PulseAudio away from all lamp audio devices so HAL can own them.
+SUBSYSTEM=="sound", ATTR{id}=="sndi2s4", ENV{PULSE_IGNORE}="1"
+SUBSYSTEM=="sound", ATTR{id}=="device_usb_mic", ENV{PULSE_IGNORE}="1"
+SUBSYSTEM=="sound", ATTR{id}=="device_usb_speaker", ENV{PULSE_IGNORE}="1"
+SUBSYSTEM=="sound", ATTR{id}=="device_camera_mic", ENV{PULSE_IGNORE}="1"
