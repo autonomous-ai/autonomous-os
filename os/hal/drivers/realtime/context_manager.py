@@ -51,7 +51,9 @@ class RealtimeContextManager:
         self._summarizer: RealtimeSummarizer | None = summarizer
         # Summary files alongside the memory JSONL
         self._summary_path: Path = self._realtime_memory_path.parent / "summary.md"
-        self._device_summary_path: Path = self._realtime_memory_path.parent / "device_summary.md"
+        self._device_summary_path: Path = (
+            self._realtime_memory_path.parent / "device_summary.md"
+        )
         self._summary_max_chars: int = 10000
 
     # --- Public API ---
@@ -72,14 +74,14 @@ class RealtimeContextManager:
         # Device identity
         identity: str = self._load_device_identity()
         if identity:
-            sections.append(f"# IDENTITY\n\n{identity}")
+            sections.append(f"# DEVICE IDENTITY\n\n{identity}")
 
         # Skills catalog
         catalog: str = self._load_skills_catalog()
         if catalog:
             sections.append(f"# SKILLS CATALOG\n\n{catalog}")
 
-        # Device memory (pre-summarized at startup + recent entries)
+        # device memory (pre-summarized at startup + recent entries)
         device_mem: str = self._build_device_memory()
         if device_mem:
             sections.append(f"# DEVICE MEMORY\n\n{device_mem}")
@@ -174,7 +176,10 @@ class RealtimeContextManager:
             return ""
 
     def _load_recent_entries(
-        self, lines: list[str], max_chars: int, formatter: Any = None,
+        self,
+        lines: list[str],
+        max_chars: int,
+        formatter: Any = None,
     ) -> str:
         """Load most recent entries from a list of lines, up to max_chars.
 
@@ -195,7 +200,10 @@ class RealtimeContextManager:
         return "\n".join(selected)
 
     def _build_memory_section(
-        self, summary_path: Path, recent_lines: list[str], formatter: Any = None,
+        self,
+        summary_path: Path,
+        recent_lines: list[str],
+        formatter: Any = None,
     ) -> str:
         """Build a memory section: summary + recent entries, each capped at _summary_max_chars."""
         parts: list[str] = []
@@ -204,7 +212,9 @@ class RealtimeContextManager:
             parts.append(summary)
         if recent_lines:
             recent: str = self._load_recent_entries(
-                recent_lines, self._summary_max_chars, formatter,
+                recent_lines,
+                self._summary_max_chars,
+                formatter,
             )
             if recent:
                 parts.append(recent)
@@ -215,7 +225,9 @@ class RealtimeContextManager:
         memory_dir: Path = self._workspace / "memory"
         recent_lines: list[str] = []
         if memory_dir.is_dir():
-            for md_file in sorted(memory_dir.glob("*.md"), key=lambda f: f.stat().st_mtime, reverse=True):
+            for md_file in sorted(
+                memory_dir.glob("*.md"), key=lambda f: f.stat().st_mtime, reverse=True
+            ):
                 try:
                     content: str = md_file.read_text(encoding="utf-8").strip()
                     if content:
@@ -237,7 +249,9 @@ class RealtimeContextManager:
             except Exception as e:
                 logger.warning("Failed to read realtime memory JSONL: %s", e)
         return self._build_memory_section(
-            self._summary_path, recent_lines, self._format_jsonl_entry,
+            self._summary_path,
+            recent_lines,
+            self._format_jsonl_entry,
         )
 
     def _load_device_identity(self) -> str:
@@ -385,7 +399,9 @@ class RealtimeContextManager:
                 existing_summary: str = ""
                 if self._summary_path.exists():
                     try:
-                        existing_summary = self._summary_path.read_text(encoding="utf-8").strip()
+                        existing_summary = self._summary_path.read_text(
+                            encoding="utf-8"
+                        ).strip()
                     except Exception:
                         pass
 
@@ -397,7 +413,9 @@ class RealtimeContextManager:
                 new_summary: str = self._summarizer.summarize(to_summarize)
                 if new_summary:
                     self._summary_path.write_text(new_summary + "\n", encoding="utf-8")
-                    logger.info("Summarized %d old entries into summary.md", len(old_entries))
+                    logger.info(
+                        "Summarized %d old entries into summary.md", len(old_entries)
+                    )
 
             # Keep only recent entries
             self._realtime_memory_path.write_text(
