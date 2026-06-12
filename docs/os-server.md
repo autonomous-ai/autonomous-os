@@ -85,7 +85,7 @@ Config field: `guard_mode` in `config/config.json` (bool, default `false`). The 
 | `presence.leave` | Camera (3 consecutive ticks without face) | No | Person left |
 | `light.level` | Camera (mean brightness) | No | Significant ambient light change (>30/255) |
 | `sound` | Mic (RMS energy) | No | Loud noise |
-| `presence.away` | PresenceService (15 min no motion) | No | No one around for 15+ min — Lamp going to sleep |
+| `presence.away` | PresenceService (15 min no motion) | No | No one around for 15+ min — device going to sleep |
 | `motion.activity` | MotionPerception (while PRESENT) | No | Activity detected while user is present — emotional actions logged via Mood skill |
 
 **Processing flow:**
@@ -98,7 +98,7 @@ Config field: `guard_mode` in `config/config.json` (bool, default `false`). The 
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/openclaw/status` | WS connection status; includes `uptime` (Lamp WS uptime) and `agentUptime` (OpenClaw process uptime, survives Lamp restarts) |
+| GET | `/api/openclaw/status` | WS connection status; includes `uptime` (OS server WS uptime) and `agentUptime` (OpenClaw process uptime, survives OS server restarts) |
 | GET | `/api/openclaw/events` | SSE stream real-time events |
 | GET | `/api/openclaw/recent` | 100 most recent events (ring buffer) |
 
@@ -118,7 +118,7 @@ Accessed via nginx proxy: `/hw/*` → `127.0.0.1:5001`
 | POST | `/servo/release` | Disable torque on all servos |
 | GET | `/servo/position` | Current servo positions |
 | GET | `/servo/aim` | List aim directions |
-| POST | `/servo/aim` | Aim lamp head (center, desk, wall, left, right, up, down, user) |
+| POST | `/servo/aim` | Aim device head (center, desk, wall, left, right, up, down, user) |
 | GET | `/servo/track/targets` | List suggested target names for YOLOWorld detection |
 | POST | `/servo/track` | Start tracking — `{"target":"cup"}` (auto-detect) or `{"bbox":[x,y,w,h]}`. See [vision-tracking.md](vision-tracking.md) |
 | POST | `/servo/track/stop` | Stop current tracking session |
@@ -154,7 +154,7 @@ Accessed via nginx proxy: `/hw/*` → `127.0.0.1:5001`
 | GET | `/audio/volume` | Get volume |
 | POST | `/audio/play-tone` | Play test tone |
 | POST | `/audio/record` | Record WAV |
-| POST | `/audio/play` | Play music by query. Body: `{"query":"song artist","person":"name"}`. `person` optional — enables per-user history. Fires a short cached TTS cue ("On it.", "Coming up.", …) before yt-dlp resolve so the lamp sounds responsive while ffmpeg loads. Cue is suppressed when speaker muted, TTS busy, music already playing, or VoiceService is mid-STT-session. |
+| POST | `/audio/play` | Play music by query. Body: `{"query":"song artist","person":"name"}`. `person` optional — enables per-user history. Fires a short cached TTS cue ("On it.", "Coming up.", …) before yt-dlp resolve so the device sounds responsive while ffmpeg loads. Cue is suppressed when speaker muted, TTS busy, music already playing, or VoiceService is mid-STT-session. |
 | POST | `/audio/stop` | Stop current music playback |
 | GET | `/audio/status` | Current playback status (playing, title, elapsed) |
 | GET | `/audio/history` | Music play history. Query: `?person=name&date=YYYY-MM-DD&last=50`. `person` filters per-user; omit for shared. |
@@ -199,7 +199,7 @@ Requires sensing with camera (InsightFace). Enrolled person JPEGs persist under 
 |--------|----------|-------------|
 | GET | `/user/info?name=X` | User metadata: `name`, `is_friend`, `telegram_id`, `telegram_username`. Defaults to `"unknown"` if name omitted. Auto-creates folder. |
 
-> Wellbeing activity history lives on the Lamp HTTP API (port 5000). See `POST /api/wellbeing/log` and `GET /api/openclaw/wellbeing-history` — entries are JSONL under `/root/local/users/{user}/wellbeing/YYYY-MM-DD.jsonl` with schema `{ts, seq, hour, action, notes}` (action ∈ `drink`/`break`/`sedentary`/`emotional`). HAL no longer hosts wellbeing endpoints.
+> Wellbeing activity history lives on the OS server HTTP API (port 5000). See `POST /api/wellbeing/log` and `GET /api/openclaw/wellbeing-history` — entries are JSONL under `/root/local/users/{user}/wellbeing/YYYY-MM-DD.jsonl` with schema `{ts, seq, hour, action, notes}` (action ∈ `drink`/`break`/`sedentary`/`emotional`). HAL no longer hosts wellbeing endpoints.
 
 ### Display (GC9A01 1.28" round LCD)
 
@@ -252,7 +252,7 @@ HAL (Python): FastAPI standard JSON responses.
 
 ## Local Intent Matching
 
-When receiving a `voice_command` or `voice` event, Lamp checks local intent first (~50ms):
+When receiving a `voice_command` or `voice` event, the OS server checks local intent first (~50ms):
 
 | Command | Action |
 |---------|--------|

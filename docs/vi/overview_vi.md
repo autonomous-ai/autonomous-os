@@ -47,7 +47,7 @@ os/hal/
 ├── devices/                      — Camera device abstraction (LocalVideoCaptureDevice)
 ├── service/
 │   ├── voice/voice_service.py    — Local VAD + Deepgram STT, speaker ID, SER submit
-│   ├── voice/speech_emotion/     — Queue SER → dlbackend → Lamp speech_emotion.detected
+│   ├── voice/speech_emotion/     — Queue SER → dlbackend → OS server speech_emotion.detected
 │   ├── voice/tts_service.py      — OpenAI-compatible TTS
 │   ├── sensing/
 │   │   ├── sensing_service.py    — Vòng lặp sensing nền
@@ -83,7 +83,7 @@ Mic (always on) → Local VAD (RMS energy, free)
         → "hey lamp, tắt đèn" → voice_command → local intent → thực thi
         → "anh ơi đi ăn không" → voice (ambient) → OpenClaw
     → Silence 3s → Disconnect Deepgram
-    → _submit_speech_emotion_from_session: WAV → dlbackend SER → Lamp event (luôn chạy, độc lập transcript)
+    → _submit_speech_emotion_from_session: WAV → dlbackend SER → OS server event (luôn chạy, độc lập transcript)
     → _identify_and_decorate (1 lần) → if transcript: _send_to_lamp voice/voice_command
 ```
 
@@ -104,7 +104,7 @@ Event có ảnh? (large motion, face enter) → encode frame full-resolution JPE
 Ảnh face enter: frame gốc được vẽ bounding box + nhãn friend/stranger
 
 POST /api/sensing/event {type, message, image?}
-    → Lamp Go:
+    → OS server (Go):
         1. Voice event + local intent match? → thực thi trực tiếp (~50ms)
         2. Không match → forward OpenClaw:
            - Có image → SendChatMessageWithImage (text + vision content block)

@@ -99,7 +99,7 @@ Event has image? (large motion, face enter) → encode frame full-resolution JPE
 Face enter image: original frame annotated with bounding boxes + labels
 
 POST /api/sensing/event {type, message, image?}
-    → Lamp Go:
+    → OS server (Go):
         1. Voice event + local intent match? → execute directly (~50ms)
         2. No match → forward to OpenClaw:
            - Has image → SendChatMessageWithImage (text + vision content block)

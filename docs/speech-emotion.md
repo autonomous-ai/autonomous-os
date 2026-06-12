@@ -1,10 +1,10 @@
 # Speech Emotion Recognition (SER)
 
-Recognize the **user's** emotion from their voice (not the lamp's). At the end of every mic session (VAD trigger → ~2.5 s silence stop), `VoiceService._submit_speech_emotion_from_session` builds a mono 16 kHz WAV from the session `audio_buffer` and enqueues it on `SpeechEmotionService`, which buffers per-user, dedups by polarity bucket, and fires `speech_emotion.detected` sensing events to Lamp. **SER runs independently of STT** — laughter, sighs, "uh-huh"s, and other non-verbal cues that leave the transcript empty still classify. Speaker recognition is invoked inline to populate the `user` field (falls back to `unknown` when speaker ID is unavailable, the buffer is too short for an embedding, or there's no match); it never gates whether SER runs.
+Recognize the **user's** emotion from their voice (not the device's). At the end of every mic session (VAD trigger → ~2.5 s silence stop), `VoiceService._submit_speech_emotion_from_session` builds a mono 16 kHz WAV from the session `audio_buffer` and enqueues it on `SpeechEmotionService`, which buffers per-user, dedups by polarity bucket, and fires `speech_emotion.detected` sensing events to the OS server. **SER runs independently of STT** — laughter, sighs, "uh-huh"s, and other non-verbal cues that leave the transcript empty still classify. Speaker recognition is invoked inline to populate the `user` field (falls back to `unknown` when speaker ID is unavailable, the buffer is too short for an embedding, or there's no match); it never gates whether SER runs.
 
 This is the voice-side twin of facial emotion detection (`emotion.detected`). The architecture, polarity bucketing, and dedup window are intentionally symmetric so both modalities land in the same downstream skills (`user-emotion-detection/SKILL.md`, mood logging, music suggestion).
 
-> Not to be confused with **Emotion Expression** (`emotion/SKILL.md`) — that controls the lamp's own emotional output (servo + LED + eyes). SER is about sensing what the *user* feels through speech; expression is how *Lamp* shows its feelings.
+> Not to be confused with **Emotion Expression** (`emotion/SKILL.md`) — that controls the device's own emotional output (servo + LED + eyes). SER is about sensing what the *user* feels through speech; expression is how the *agent* shows its feelings.
 
 **Vietnamese:** [docs/vi/speech-emotion_vi.md](vi/speech-emotion_vi.md)
 
@@ -22,7 +22,7 @@ voice_service._stream_session(...) finally:                      ← every mic s
     │       → (final_msg, user_name | None)
     │  user = user_name or "unknown"
     │
-    ├─ if combined: _send_to_lamp(final_msg, event_type)         ← Lamp message path
+    ├─ if combined: _send_to_lamp(final_msg, event_type)         ← OS server message path
     │
     └─ _submit_speech_emotion_from_session(audio_buffer, user)   ← ALWAYS — SER pipeline
             └─ _session_wav_for_ser(buffer) → (wav, duration_s)
@@ -45,10 +45,10 @@ flush:
     ② mode(label) across this user's buffered samples
     ③ bucket = polarity(mode)                ← positive | negative | other
     ④ TTL dedup: key=(user, bucket) over SPEECH_EMOTION_DEDUP_WINDOW_S
-    ⑤ POST Lamp /api/sensing/event with type="speech_emotion.detected"
+    ⑤ POST OS server /api/sensing/event with type="speech_emotion.detected"
 ```
 
-HAL's voice pipeline **only calls `submit()`**. All HTTP I/O to dlbackend, buffering, bucketing, dedup, retry, and Lamp POST are contained inside the `speech_emotion/` module — they never block the STT path.
+HAL's voice pipeline **only calls `submit()`**. All HTTP I/O to dlbackend, buffering, bucketing, dedup, retry, and the OS server POST are contained inside the `speech_emotion/` module — they never block the STT path.
 
 ---
 
@@ -75,7 +75,7 @@ Two daemon threads, started in `SpeechEmotionService.__init__` only when `recogn
 | Thread | Loop | Drains | Produces |
 |--------|------|--------|----------|
 | `speech-emotion-worker` | `_worker_loop` | submission queue (`queue.Queue`, maxsize 32) | per-user buffer entries |
-| `speech-emotion-flush` | `_flush_loop` (wait + tick every `SPEECH_EMOTION_FLUSH_S`) | per-user buffer | `speech_emotion.detected` POSTs to Lamp |
+| `speech-emotion-flush` | `_flush_loop` (wait + tick every `SPEECH_EMOTION_FLUSH_S`) | per-user buffer | `speech_emotion.detected` POSTs to the OS server |
 
 Both threads exit cleanly on `stop()` — the worker is poisoned with a `None` sentinel, the flush thread observes the stop event during its `Event.wait`.
 
@@ -118,7 +118,7 @@ Labels (emotion2vec_plus_large, from `/api/dl/ser/labels`):
 angry, disgusted, fearful, happy, neutral, other, sad, surprised, <unk>
 ```
 
-### Sensing event → Lamp
+### Sensing event → OS server
 
 ```http
 POST http://127.0.0.1:5000/api/sensing/event
@@ -134,11 +134,11 @@ Content-Type: application/json
 }
 ```
 
-The raw `Speech emotion detected: <Label>.` prefix is the parser anchor for Lamp-side routing. The parenthetical is a hedge clause to stop the LLM from over-committing on noisy SER reads — same pattern as the facial `Emotion detected: …` message.
+The raw `Speech emotion detected: <Label>.` prefix is the parser anchor for OS-server-side routing. The parenthetical is a hedge clause to stop the LLM from over-committing on noisy SER reads — same pattern as the facial `Emotion detected: …` message.
 
 The `audio` field is a **separate, optional** field — the on-disk path of the WAV clip that produced this event. It is **not** embedded in `message` and is **never** forwarded to the LLM (see [Debug Audio Persistence](#debug-audio-persistence) below). Empty when persistence is disabled or the write failed.
 
-Retry policy: 3 attempts with 2 s back-off on `ConnectionError` or HTTP `503`. Other 4xx/5xx are logged and dropped (the sample is gone — we don't retry-storm Lamp).
+Retry policy: 3 attempts with 2 s back-off on `ConnectionError` or HTTP `503`. Other 4xx/5xx are logged and dropped (the sample is gone — we don't retry-storm the OS server).
 
 ---
 
@@ -154,9 +154,9 @@ In `_process_job`, every inference that clears the per-label confidence gate is 
 - **Filename:** `<ms>_<user>_<label>.wav`, where `<ms>` is the inference timestamp in milliseconds and `<user>`/`<label>` are sanitized to `[a-zA-Z0-9_-]` (anything else collapsed to `_`).
 - **Flush selection:** when a user's flush emits the dominant non-neutral label, it attaches the **latest** clip among the dominant-label inferences — `max(dom_inferences, key=lambda i: i.ts).audio_path` — as the `audio` field in the POST.
 
-### Serve side (Lamp)
+### Serve side (OS server)
 
-The Lamp backend exposes the clip to the Flow Monitor UI **only** via a new route `GET /api/sensing/audio/:name` (`SensingHandler.GetAudio`). It serves the WAV by **basename** (the full path never leaves the device) from one of:
+The OS server backend exposes the clip to the Flow Monitor UI **only** via a new route `GET /api/sensing/audio/:name` (`SensingHandler.GetAudio`). It serves the WAV by **basename** (the full path never leaves the device) from one of:
 
 ```
 /var/lib/hal/speech-emotion
@@ -237,7 +237,7 @@ Negative emotions get higher gates to avoid false-positive alarms; happy is loos
 
 ## Integration Point
 
-Called from `VoiceService._stream_session`'s `finally` block. Speaker recognize runs **once** per session and its result feeds both the Lamp-message decoration and the SER `user` field:
+Called from `VoiceService._stream_session`'s `finally` block. Speaker recognize runs **once** per session and its result feeds both the OS-server-message decoration and the SER `user` field:
 
 ```python
 # In _stream_session finally, after trim:
@@ -252,7 +252,7 @@ if combined:
 final_msg, se_user = self._identify_and_decorate(final_text, audio_buffer)
 user = se_user if se_user else UNKNOWN_USER_LABEL
 
-# 3. Decorate → Lamp (only when STT had text)
+# 3. Decorate → OS server (only when STT had text)
 if combined:
     self._send_to_lamp(final_msg, event_type=event_type) 
 
@@ -270,7 +270,7 @@ wav_bytes, duration_s = session_audio
 self._speech_emotion.submit(user=user, wav_bytes=wav_bytes, duration_s=duration_s)
 ```
 
-The previous `_send_best` closure has been inlined into the finally block. SER is still decoupled from STT (fires even when `combined` is empty), and now shares one `/embed` call with the Lamp-decoration path.
+The previous `_send_best` closure has been inlined into the finally block. SER is still decoupled from STT (fires even when `combined` is empty), and now shares one `/embed` call with the OS-server-decoration path.
 
 ### SER user attribution
 
@@ -297,10 +297,10 @@ Lazy init in `VoiceService.__init__` mirrors the speaker recognizer pattern: ins
 
 Speaker recognize fires **once** per mic session. The single `(final_msg, user_name)` result is reused by:
 
-1. The Lamp POST (`_send_to_lamp(final_msg, event_type)`) — when STT had a transcript.
+1. The OS server POST (`_send_to_lamp(final_msg, event_type)`) — when STT had a transcript.
 2. The SER submit (`_submit_speech_emotion_from_session(..., user=...)`) — always.
 
-This is the reason the finally block ordering is: wake-word split → `_identify_and_decorate` once → Lamp POST → SER submit. `_submit_speech_emotion_from_session` accepts `user` as an argument now; it no longer issues its own `/embed` request.
+This is the reason the finally block ordering is: wake-word split → `_identify_and_decorate` once → OS server POST → SER submit. `_submit_speech_emotion_from_session` accepts `user` as an argument now; it no longer issues its own `/embed` request.
 
 ---
 
@@ -308,11 +308,11 @@ This is the reason the finally block ordering is: wake-word split → `_identify
 
 | Failure | Effect | Recovery |
 |---------|--------|----------|
-| `DL_BACKEND_URL` not configured | `recognizer.available` is False, threads never start, `submit()` is a no-op | Set `llm_base_url` in Lamp config |
+| `DL_BACKEND_URL` not configured | `recognizer.available` is False, threads never start, `submit()` is a no-op | Set `llm_base_url` in the OS server config |
 | dlbackend down (connection refused) | Worker logs warning, sample dropped, no retry | Next utterance retries automatically |
 | dlbackend returns non-200 | Worker logs warning, sample dropped | Same as above |
 | Worker queue full | `submit()` logs warning, returns immediately | Indicates backend overload; investigate |
-| Lamp sensing endpoint down | 3 retries with 2 s back-off, then sample dropped | Buffer continues filling for next flush |
+| OS server sensing endpoint down | 3 retries with 2 s back-off, then sample dropped | Buffer continues filling for next flush |
 | `duration_s < MIN_AUDIO_S` | Dropped in `submit()` with debug log | Expected — short utterances aren't worth classifying |
 
 Nothing here blocks the STT path or speaker recognition — SER failures are silent at the user level and visible only in the HAL server log.
@@ -345,4 +345,4 @@ Nothing here blocks the STT path or speaker recognition — SER failures are sil
 | Mood synthesis (Mood skill) | — | Any emotion signal | mood `signal` / `decision` rows | — |
 | Sound (`sound.py` perception) | Mic RMS | Loud noise | `sound` | dog-bark escalation, separate skill |
 
-Speech emotion shares the polarity vocabulary with facial emotion deliberately. Lamp's sensing handler tags incoming events with `[speech_emotion]` (vs `[emotion]` for face), pre-fetches the same `[emotion_context: ...]` block via `skillcontext.BuildEmotionContext`, and routes to `user-emotion-detection/SKILL.md`. The label-to-mood map covers both vocabularies (`Fear`/`Fearful → stressed`, `Surprise`/`Surprised → excited`, `Disgust`/`Disgusted → frustrated`); the only modality-specific behavior in the skill is `source:"voice"` vs `source:"camera"` on the mood signal log row. Music-suggestion cooldown is shared across modalities so voice cannot bypass a recent camera-driven suggestion, and vice versa.
+Speech emotion shares the polarity vocabulary with facial emotion deliberately. The OS server's sensing handler tags incoming events with `[speech_emotion]` (vs `[emotion]` for face), pre-fetches the same `[emotion_context: ...]` block via `skillcontext.BuildEmotionContext`, and routes to `user-emotion-detection/SKILL.md`. The label-to-mood map covers both vocabularies (`Fear`/`Fearful → stressed`, `Surprise`/`Surprised → excited`, `Disgust`/`Disgusted → frustrated`); the only modality-specific behavior in the skill is `source:"voice"` vs `source:"camera"` on the mood signal log row. Music-suggestion cooldown is shared across modalities so voice cannot bypass a recent camera-driven suggestion, and vice versa.

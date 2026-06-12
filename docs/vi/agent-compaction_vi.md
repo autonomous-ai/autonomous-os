@@ -6,7 +6,7 @@
 
 ## Vì sao có compact
 
-Agentic runtime giữ conversation history dài. Mỗi turn là tập hợp các entry `user event`, `thinking`, `tool_call`, `tool_result`, `assistant reply` — tất cả được ghi trong session `.jsonl`. Sau vài giờ hoạt động, tokens tăng nhanh. Khi tổng context chạm **~80k tokens**, LLM không nhét thêm input được nữa → runtime (hoặc Lamp — xem phần trigger) compact: gộp entry cũ thành 1 đoạn summary, xóa entry gốc, tiếp tục.
+Agentic runtime giữ conversation history dài. Mỗi turn là tập hợp các entry `user event`, `thinking`, `tool_call`, `tool_result`, `assistant reply` — tất cả được ghi trong session `.jsonl`. Sau vài giờ hoạt động, tokens tăng nhanh. Khi tổng context chạm **~80k tokens**, LLM không nhét thêm input được nữa → runtime (hoặc OS server — xem phần trigger) compact: gộp entry cũ thành 1 đoạn summary, xóa entry gốc, tiếp tục.
 
 ## Record compaction
 
@@ -78,12 +78,12 @@ Có ít nhất 3 cách 1 compaction có thể fire:
 | Nguồn | Trigger | Side-effects | `fromHook` quan sát |
 |---|---|---|---|
 | **Hook nội bộ OpenClaw** | tokens ≥ 80k, detect server-side | — | `true` |
-| **Lamp RPC** (`os/services/server/openclaw/delivery/sse/handler_events.go:380-406`) | Lamp thấy `u.TotalTokens > 80_000` trên lifecycle event, gọi `agentGateway.CompactSession(sessionKey)` | TTS nói *"Hold on, tidying up a bit."*; cooldown 2 phút qua `h.compacting` atomic | chưa rõ — cần verify từ source OpenClaw |
+| **OS server RPC** (`os/services/server/openclaw/delivery/sse/handler_events.go:380-406`) | OS server thấy `u.TotalTokens > 80_000` trên lifecycle event, gọi `agentGateway.CompactSession(sessionKey)` | TTS nói *"Hold on, tidying up a bit."*; cooldown 2 phút qua `h.compacting` atomic | chưa rõ — cần verify từ source OpenClaw |
 | **Manual / debug** | Ai đó gọi `sessions.compact` RPC trực tiếp | — | nhiều khả năng `false` |
 
-**Heuristic tạm để phân biệt:** nếu `timestamp` record cách vài giây sau log `"sessions.compact sent"` của Lamp cho cùng `sessionKey` → Lamp initiate. Ngược lại → hook nội bộ OpenClaw.
+**Heuristic tạm để phân biệt:** nếu `timestamp` record cách vài giây sau log `"sessions.compact sent"` của OS server cho cùng `sessionKey` → OS server initiate. Ngược lại → hook nội bộ OpenClaw.
 
-Tương lai có thể: modal correlate timestamp của compact mới nhất với log Lamp để label trigger.
+Tương lai có thể: modal correlate timestamp của compact mới nhất với log OS server để label trigger.
 
 ## Tần suất thực tế (mẫu 48h, session main)
 
@@ -103,7 +103,7 @@ Burst bất thường chưa rõ nguyên nhân — có thể session restart / ch
 4. **Generational loss.** Mỗi compaction đọc summary *trước đó* như input. Rule méo bị summarize lại → drift dồn, kiểu JPEG-save-JPEG.
 5. **Hard cap.** Summary cap quanh 16000 chars (quan sát: 3 record riêng biệt đều chạm đúng số này). Nội dung bị drop không xác định được khi đụng cap.
 
-Khi Flow Monitor cho thấy Lamp viện rule mà `grep` không tìm thấy trong bất kỳ `skills/**/SKILL.md` → nguồn gần như luôn là compaction summary, không phải skill đang load.
+Khi Flow Monitor cho thấy agent viện rule mà `grep` không tìm thấy trong bất kỳ `skills/**/SKILL.md` → nguồn gần như luôn là compaction summary, không phải skill đang load.
 
 ## Cách xem summary đang active
 
@@ -127,7 +127,7 @@ for l in sys.stdin:
 | File | Vai trò |
 |---|---|
 | `os/services/server/openclaw/delivery/sse/handler_api_compaction.go` | HTTP handler: đọc `sessions.json`, scan session `.jsonl` tìm `type:"compaction"` mới nhất. |
-| `os/services/server/openclaw/delivery/sse/handler_events.go` | Lamp-side RPC trigger (auto-compact khi `TotalTokens > 80_000`, TTS notice, cooldown 2 phút). |
+| `os/services/server/openclaw/delivery/sse/handler_events.go` | RPC trigger phía OS server (auto-compact khi `TotalTokens > 80_000`, TTS notice, cooldown 2 phút). |
 | `os/services/internal/openclaw/service_chat.go` | `CompactSession(sessionKey)` — sender của `sessions.compact` RPC. |
 | `os/services/domain/agent.go` | Interface `AgentGateway.CompactSession`. |
 | `os/services/web/src/pages/monitor/FlowSection/CompactionModal.tsx` | UI modal — show timestamp, summary chars, session file, toàn văn summary; link về doc này. |

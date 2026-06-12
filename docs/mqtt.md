@@ -2,7 +2,7 @@
 
 ## Overview
 
-Lamp uses MQTT to communicate with the backend server (status reporting, OTA commands, channel management).
+The OS server uses MQTT to communicate with the backend server (status reporting, OTA commands, channel management).
 
 - Client: Eclipse Paho autopaho (Go)
 - Auto-reconnect on connection loss

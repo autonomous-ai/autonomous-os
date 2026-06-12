@@ -168,7 +168,7 @@ GET /api/dl/health
 6. **RunPod**: Tiền xử lý (BGR→RGB, center crop, normalization), chạy softmax trên whitelist
 7. **WebSocket**: Trả về `{"detected_classes": [["walking", 0.87], ["reading book", 0.42]]}`
 8. **Pi**: Đệm actions + snapshots trong `MOTION_FLUSH_S`, rồi gửi event tổng hợp
-9. **Pi → Lamp**: `POST /api/sensing/event` với `type: "motion.activity"`
+9. **Pi → OS server**: `POST /api/sensing/event` với `type: "motion.activity"`
 
 ### Phân tích Cảm xúc
 
@@ -374,7 +374,7 @@ docker run --gpus all -p 8888:8888 dlbackend
 | `service/sensing/perceptions/processors/motion.py` | `RemoteMotionChecker` — WS client, mã hóa frame, đệm hành động |
 | `service/sensing/perceptions/processors/emotion.py` | `RemoteEmotionRecognizer` — HTTP client, face crop → phân loại cảm xúc |
 | `service/sensing/crypto.py` | `CryptoSession` phía client, wire-format models, phân giải public key |
-| `service/voice/speech_emotion/service.py` | `SpeechEmotionService` — queue + worker + flush + dedup + Lamp POST |
+| `service/voice/speech_emotion/service.py` | `SpeechEmotionService` — queue + worker + flush + dedup + OS server POST |
 | `config.py` | `DL_BACKEND_URL`, `DL_API_KEY`, ngưỡng, `SPEECH_EMOTION_*` |
 | `service/sensing/sensing_service.py` | Điều phối tất cả perceptions trong `_tick()` |
 

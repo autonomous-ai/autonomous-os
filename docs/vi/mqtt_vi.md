@@ -2,7 +2,7 @@
 
 ## Tổng Quan
 
-Lamp sử dụng MQTT để giao tiếp với backend server (báo cáo trạng thái, nhận lệnh OTA, thêm channel).
+OS server sử dụng MQTT để giao tiếp với backend server (báo cáo trạng thái, nhận lệnh OTA, thêm channel).
 
 - Client: Eclipse Paho autopaho (Go)
 - Auto-reconnect khi mất kết nối

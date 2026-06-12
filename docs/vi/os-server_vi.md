@@ -85,7 +85,7 @@ Config field: `guard_mode` trong `config/config.json` (bool, mặc định `fals
 | `presence.leave` | Camera (3 tick liên tục không thấy mặt) | Không | Người rời đi |
 | `light.level` | Camera (mean brightness) | Không | Ánh sáng môi trường thay đổi đáng kể (>30/255) |
 | `sound` | Mic (RMS energy) | Không | Tiếng động lớn |
-| `presence.away` | PresenceService (15 phút không chuyển động) | Không | Không ai xung quanh 15+ phút — Lamp đi ngủ |
+| `presence.away` | PresenceService (15 phút không chuyển động) | Không | Không ai xung quanh 15+ phút — thiết bị đi ngủ |
 | `motion.activity` | MotionPerception (khi PRESENT) | Không | Phát hiện hoạt động khi user có mặt — emotional actions được ghi qua Mood skill |
 
 **Flow xử lý:**
@@ -98,7 +98,7 @@ Config field: `guard_mode` trong `config/config.json` (bool, mặc định `fals
 
 | Method | Endpoint | Mô tả |
 |--------|----------|-------|
-| GET | `/api/openclaw/status` | Trạng thái kết nối WS; gồm `uptime` (uptime WS phía Lamp) và `agentUptime` (uptime tiến trình OpenClaw, không reset khi Lamp restart) |
+| GET | `/api/openclaw/status` | Trạng thái kết nối WS; gồm `uptime` (uptime WS phía OS server) và `agentUptime` (uptime tiến trình OpenClaw, không reset khi OS server restart) |
 | GET | `/api/openclaw/events` | SSE stream events real-time |
 | GET | `/api/openclaw/recent` | 100 events gần nhất (ring buffer) |
 
@@ -118,7 +118,7 @@ Truy cập qua nginx proxy: `/hw/*` → `127.0.0.1:5001`
 | POST | `/servo/release` | Tắt torque tất cả servo |
 | GET | `/servo/position` | Vị trí servo hiện tại |
 | GET | `/servo/aim` | Danh sách aim directions |
-| POST | `/servo/aim` | Aim đầu đèn (center, desk, wall, left, right, up, down, user) |
+| POST | `/servo/aim` | Aim đầu thiết bị (center, desk, wall, left, right, up, down, user) |
 | GET | `/servo/track/targets` | Danh sách target gợi ý cho YOLOWorld |
 | POST | `/servo/track` | Bắt đầu tracking — `{"target":"cup"}` (tự detect) hoặc `{"bbox":[x,y,w,h]}`. Xem [vision-tracking_vi.md](vision-tracking_vi.md) |
 | POST | `/servo/track/stop` | Dừng phiên tracking |
@@ -154,7 +154,7 @@ Truy cập qua nginx proxy: `/hw/*` → `127.0.0.1:5001`
 | GET | `/audio/volume` | Get volume |
 | POST | `/audio/play-tone` | Phát test tone |
 | POST | `/audio/record` | Thu âm WAV |
-| POST | `/audio/play` | Phát nhạc theo query. Body: `{"query":"tên bài","person":"tên"}`. `person` tuỳ chọn — lưu lịch sử theo người. Trước khi yt-dlp resolve sẽ phát một câu TTS ngắn cached ("On it.", "Coming up.", …) để lamp không im lặng trong lúc ffmpeg load. Bỏ qua câu này khi loa đang mute, TTS đang nói, nhạc đang phát, hoặc VoiceService đang giữa session STT. |
+| POST | `/audio/play` | Phát nhạc theo query. Body: `{"query":"tên bài","person":"tên"}`. `person` tuỳ chọn — lưu lịch sử theo người. Trước khi yt-dlp resolve sẽ phát một câu TTS ngắn cached ("On it.", "Coming up.", …) để thiết bị không im lặng trong lúc ffmpeg load. Bỏ qua câu này khi loa đang mute, TTS đang nói, nhạc đang phát, hoặc VoiceService đang giữa session STT. |
 | POST | `/audio/stop` | Dừng phát nhạc |
 | GET | `/audio/status` | Trạng thái phát nhạc (đang phát, tên bài, thời gian) |
 | GET | `/audio/history` | Lịch sử phát nhạc. Query: `?person=tên&date=YYYY-MM-DD&last=50`. `person` lọc theo người; bỏ trống = shared. |
@@ -199,7 +199,7 @@ Cần sensing có camera (InsightFace). Mặc định ảnh người đã đăng
 |--------|----------|-------|
 | GET | `/user/info?name=X` | Metadata user: `name`, `is_friend`, `telegram_id`, `telegram_username`. Mặc định `"unknown"` nếu thiếu name. Tự tạo folder. |
 
-> Wellbeing activity history giờ nằm trên Lamp HTTP API (port 5000). Xem `POST /api/wellbeing/log` và `GET /api/openclaw/wellbeing-history` — entries ghi JSONL tại `/root/local/users/{user}/wellbeing/YYYY-MM-DD.jsonl` với schema `{ts, seq, hour, action, notes}` (action ∈ `drink`/`break`/`sedentary`/`emotional`). HAL không còn host endpoint wellbeing.
+> Wellbeing activity history giờ nằm trên OS server HTTP API (port 5000). Xem `POST /api/wellbeing/log` và `GET /api/openclaw/wellbeing-history` — entries ghi JSONL tại `/root/local/users/{user}/wellbeing/YYYY-MM-DD.jsonl` với schema `{ts, seq, hour, action, notes}` (action ∈ `drink`/`break`/`sedentary`/`emotional`). HAL không còn host endpoint wellbeing.
 
 ### Display (GC9A01 1.28" LCD tròn)
 
@@ -252,7 +252,7 @@ HAL (Python): FastAPI standard JSON responses.
 
 ## Local Intent Matching
 
-Khi nhận `voice_command` hoặc `voice` event, Lamp check local intent trước (~50ms):
+Khi nhận `voice_command` hoặc `voice` event, OS server check local intent trước (~50ms):
 
 | Lệnh | Hành động |
 |-------|-----------|

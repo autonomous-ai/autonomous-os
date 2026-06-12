@@ -559,7 +559,7 @@ HAL version is a plain text `VERSION` file in the package root. Read by bootstra
 | Setup stages | 7 (stages -1 to 4) | **8** (+ stage 2b: HAL) |
 | Systemd services | 4 | **5** (+ hal.service) |
 | Python runtime | None | **HAL** at /opt/hal/ with venv |
-| Hardware bridge | N/A | Lamp HTTP → HAL HTTP (localhost proxy) |
+| Hardware bridge | N/A | OS server HTTP → HAL HTTP (localhost proxy) |
 | SPI usage | LED only | LED + **Display (GC9A01)** |
 
 ---

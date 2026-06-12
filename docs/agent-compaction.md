@@ -6,7 +6,7 @@
 
 ## Why compaction exists
 
-The agentic runtime keeps a long conversation history. Each turn is the union of `user event`, `thinking`, `tool_call`, `tool_result`, and `assistant reply` entries — all stored in the session `.jsonl`. Over hours of activity, the tokens balloon. Once total context approaches **~80k tokens**, the LLM cannot fit any more input, so the runtime (or Lamp — see triggers below) performs a compaction: condense older entries into a single summary text, drop the originals, keep working.
+The agentic runtime keeps a long conversation history. Each turn is the union of `user event`, `thinking`, `tool_call`, `tool_result`, and `assistant reply` entries — all stored in the session `.jsonl`. Over hours of activity, the tokens balloon. Once total context approaches **~80k tokens**, the LLM cannot fit any more input, so the runtime (or the OS server — see triggers below) performs a compaction: condense older entries into a single summary text, drop the originals, keep working.
 
 ## Compaction record
 
@@ -78,12 +78,12 @@ There are at least three ways a compaction can fire:
 | Source | Trigger | Side-effects | Observed `fromHook` |
 |---|---|---|---|
 | **Runtime internal hook** | tokens ≥ 80k, server-side detection | — | `true` |
-| **Lamp RPC** (`os/services/server/openclaw/delivery/sse/handler_events.go:380-406`) | Lamp sees `u.TotalTokens > 80_000` on a lifecycle event, calls `agentGateway.CompactSession(sessionKey)` | TTS speaks *"Hold on, tidying up a bit."*; 2-minute cooldown via `h.compacting` atomic | unknown — needs verification against runtime source |
+| **OS server RPC** (`os/services/server/openclaw/delivery/sse/handler_events.go:380-406`) | The OS server sees `u.TotalTokens > 80_000` on a lifecycle event, calls `agentGateway.CompactSession(sessionKey)` | TTS speaks *"Hold on, tidying up a bit."*; 2-minute cooldown via `h.compacting` atomic | unknown — needs verification against runtime source |
 | **Manual / debug** | Someone invokes `sessions.compact` RPC directly (e.g. from a client tool) | — | likely `false` |
 
-**Heuristic to distinguish on UI today:** if a record's `timestamp` is within a few seconds after a `"sessions.compact sent"` log line in Lamp's journal for the same `sessionKey`, it was Lamp-initiated. Otherwise the runtime's internal hook.
+**Heuristic to distinguish on UI today:** if a record's `timestamp` is within a few seconds after a `"sessions.compact sent"` log line in the OS server's journal for the same `sessionKey`, it was OS-server-initiated. Otherwise the runtime's internal hook.
 
-A future enhancement: the compaction modal could correlate the latest compact's timestamp against Lamp's log to label the trigger.
+A future enhancement: the compaction modal could correlate the latest compact's timestamp against the OS server's log to label the trigger.
 
 ## Observed frequency (48h sample, main session)
 
@@ -103,7 +103,7 @@ The abnormal burst pattern is unexplained — possibly a session restart / check
 4. **Generational loss.** Each compaction reads the *previous* summary as input. Rule distortions get re-summarized → drift compounds, JPEG-save-JPEG style.
 5. **Hard cap.** The summary is capped around 16000 characters (observed: three distinct records hit exactly that value). Content is dropped non-deterministically when the cap is reached.
 
-When Flow Monitor shows Lamp citing rules that `grep` cannot find in any `skills/**/SKILL.md`, the compaction summary is almost always the real source — not the loaded skill.
+When Flow Monitor shows the agent citing rules that `grep` cannot find in any `skills/**/SKILL.md`, the compaction summary is almost always the real source — not the loaded skill.
 
 ## Inspecting the active summary
 
@@ -147,7 +147,7 @@ for l in sys.stdin:
 | File | Role |
 |---|---|
 | `os/services/server/openclaw/delivery/sse/handler_api_compaction.go` | HTTP handler: reads `sessions.json`, scans session `.jsonl` for newest `type:"compaction"`. |
-| `os/services/server/openclaw/delivery/sse/handler_events.go` | Lamp-side RPC trigger (auto-compact when `TotalTokens > 80_000`, TTS notice, 2-min cooldown). |
+| `os/services/server/openclaw/delivery/sse/handler_events.go` | OS-server-side RPC trigger (auto-compact when `TotalTokens > 80_000`, TTS notice, 2-min cooldown). |
 | `os/services/internal/openclaw/service_chat.go` | `CompactSession(sessionKey)` — the `sessions.compact` RPC sender. |
 | `os/services/domain/agent.go` | `AgentGateway.CompactSession` interface. |
 | `os/services/web/src/pages/monitor/FlowSection/CompactionModal.tsx` | UI modal — shows timestamp, summary chars, session file, full summary text; links back to this doc. |

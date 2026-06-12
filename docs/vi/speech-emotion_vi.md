@@ -1,6 +1,6 @@
 # Nhận Diện Cảm Xúc Giọng Nói (SER)
 
-HAL phân tích cảm xúc từ giọng nói **sau mỗi phiên mic** (VAD trigger → im lặng ~2.5 s đóng phiên), độc lập với việc STT có trả transcript hay không. Nhờ vậy, tiếng cười, thở dài, "ờ ờ" và các tín hiệu phi-lời nói (vốn để lại transcript rỗng) vẫn được phân loại. Kết quả được gom theo người dùng, lọc trùng theo bucket cảm xúc, rồi gửi sự kiện `speech_emotion.detected` tới Lamp để OpenClaw phản ứng. Speaker recognition vẫn được gọi nội bộ để xác định trường `user` (rơi về `unknown` khi không nhận diện được); nó **không còn là cổng chặn** trước SER.
+HAL phân tích cảm xúc từ giọng nói **sau mỗi phiên mic** (VAD trigger → im lặng ~2.5 s đóng phiên), độc lập với việc STT có trả transcript hay không. Nhờ vậy, tiếng cười, thở dài, "ờ ờ" và các tín hiệu phi-lời nói (vốn để lại transcript rỗng) vẫn được phân loại. Kết quả được gom theo người dùng, lọc trùng theo bucket cảm xúc, rồi gửi sự kiện `speech_emotion.detected` tới OS server để OpenClaw phản ứng. Speaker recognition vẫn được gọi nội bộ để xác định trường `user` (rơi về `unknown` khi không nhận diện được); nó **không còn là cổng chặn** trước SER.
 
 **Tài liệu liên quan:** [Tuning sensing (SER)](../sensing-tuning.md#speech-emotion-recognition-ser) · [dlbackend](../dlbackend.md) · [Sensing behavior](sensing-behavior_vi.md)
 
@@ -21,7 +21,7 @@ VoiceService._stream_session(...) finally   ← cuối MỌI phiên mic
     │  user = user_name hoặc "unknown"
     │
     ├─ if combined:
-    │       _send_to_lamp(final_msg, event_type)   ← POST Lamp voice / voice_command
+    │       _send_to_lamp(final_msg, event_type)   ← POST OS server voice / voice_command
     │
     └─ _submit_speech_emotion_from_session(audio_buffer, user)   ← LUÔN
             │
@@ -33,12 +33,12 @@ VoiceService._stream_session(...) finally   ← cuối MỌI phiên mic
                     │       → label + confidence → buffer _Inference theo user
                     │
                     └─ Flush mỗi SPEECH_EMOTION_FLUSH_S:
-                            mode label → bucket → dedup → POST Lamp speech_emotion.detected
+                            mode label → bucket → dedup → POST OS server speech_emotion.detected
 ```
 
 **Tách bạch SER khỏi STT, dùng chung speaker recognize:**
-- `_identify_and_decorate` chạy **đúng 1 lần** mỗi phiên — kết quả phục vụ cả Lamp message lẫn SER user.
-- Lamp POST chỉ chạy khi STT có transcript; SER submit chạy mọi phiên (kể cả tiếng cười, sighs).
+- `_identify_and_decorate` chạy **đúng 1 lần** mỗi phiên — kết quả phục vụ cả OS server message lẫn SER user.
+- OS server POST chỉ chạy khi STT có transcript; SER submit chạy mọi phiên (kể cả tiếng cười, sighs).
 - `_submit_speech_emotion_from_session` giờ nhận `user` qua tham số, **không tự gọi speaker** nữa.
 - Closure `_send_best` cũ đã được inline trực tiếp vào finally block.
 
@@ -50,7 +50,7 @@ VoiceService._stream_session(...) finally   ← cuối MỌI phiên mic
 |------|---------|
 | `service.py` | `SpeechEmotionService`: queue, worker HTTP, flush, dedup |
 | `recognizer.py` | `Emotion2VecRecognizer`: POST WAV tới dlbackend |
-| `labels.py` | Map label model → bucket Lamp (`positive` / `negative` / `neutral`) |
+| `labels.py` | Map label model → bucket OS server (`positive` / `negative` / `neutral`) |
 | `messages.py` | Chuỗi human-readable cho event message |
 
 ### `SpeechEmotionService`
@@ -58,7 +58,7 @@ VoiceService._stream_session(...) finally   ← cuối MỌI phiên mic
 - **Khởi tạo:** `VoiceService` tạo instance khi `SPEECH_EMOTION_ENABLED` và dlbackend URL sẵn sàng.
 - **`submit(user, wav_bytes, duration_s)`** — trả về ngay (non-blocking). Bỏ qua nếu: service tắt, `user`/`wav` rỗng, `duration_s < SPEECH_EMOTION_MIN_AUDIO_S` (mặc định **3.0s**), queue đầy.
 - **Worker:** gọi API; bỏ mẫu có `confidence < CONFIDENCE_THRESHOLD_BY_LABEL[label]` (per-label, khai báo trong `constants.py` — xem mục Cấu Hình).
-- **Flush:** mỗi `SPEECH_EMOTION_FLUSH_S` giây, gom buffer theo `user`, lấy **mode** label, map bucket, bỏ **neutral**, dedup `(user, bucket)` trong `SPEECH_EMOTION_DEDUP_WINDOW_S`, POST Lamp.
+- **Flush:** mỗi `SPEECH_EMOTION_FLUSH_S` giây, gom buffer theo `user`, lấy **mode** label, map bucket, bỏ **neutral**, dedup `(user, bucket)` trong `SPEECH_EMOTION_DEDUP_WINDOW_S`, POST OS server.
 
 ### `_Job` vs `_Inference`
 
@@ -76,7 +76,7 @@ VoiceService._stream_session(...) finally   ← cuối MỌI phiên mic
 | `_identify_and_decorate` | Speaker `/embed` + prefix transcript (`Alice: ...` / `Unknown Speaker: ...`). Trả `(final_msg, user_name)`: `user_name` = tên khi match; `UNKNOWN_USER_LABEL` (`"unknown"`) khi API OK nhưng không match; `None` khi skip/lỗi/tắt speaker. **Không gọi SER.** |
 | `_session_wav_for_ser` | Mono 16 kHz WAV + `duration_s` từ `audio_buffer` (cần `>= SPEAKER_MIN_AUDIO_S`, mặc định 0.8s). |
 | `_submit_speech_emotion_from_session` | Orchestrator mới: build WAV → gọi `_identify_and_decorate("", buffer)` lấy `user_name` → fallback `"unknown"` → `SpeechEmotionService.submit(...)`. Được gọi **bất điều kiện** trong `_stream_session` finally. |
-| `_stream_session` finally | Inline toàn bộ: wake-word split → 1 lần `_identify_and_decorate(final_text, buffer)` → POST Lamp `voice` / `voice_command` (nếu có transcript) → `_submit_speech_emotion_from_session(buffer, user)`. Closure `_send_best` cũ đã được gỡ. |
+| `_stream_session` finally | Inline toàn bộ: wake-word split → 1 lần `_identify_and_decorate(final_text, buffer)` → POST OS server `voice` / `voice_command` (nếu có transcript) → `_submit_speech_emotion_from_session(buffer, user)`. Closure `_send_best` cũ đã được gỡ. |
 
 ### Gán `user` cho SER
 
@@ -86,7 +86,7 @@ VoiceService._stream_session(...) finally   ← cuối MỌI phiên mic
 | Không match (API OK) | `"unknown"` | `"unknown"` |
 | Lỗi / exception / speaker tắt / buffer ngắn | `None` | `"unknown"` (fallback trong `_submit_speech_emotion_from_session`) |
 
-Transcript Lamp vẫn có thể là `Unknown Speaker:` trong khi SER dùng key dedup chung `unknown` cho mọi người lạ.
+Transcript gửi OS server vẫn có thể là `Unknown Speaker:` trong khi SER dùng key dedup chung `unknown` cho mọi người lạ.
 
 ---
 
@@ -99,7 +99,7 @@ Transcript Lamp vẫn có thể là `Unknown Speaker:` trong khi SER dùng key d
 | `duration_s < SPEECH_EMOTION_MIN_AUDIO_S` | `submit()` bỏ qua (mặc định 3.0s) |
 | Queue đầy | Log warning, bỏ job |
 | Confidence thấp | Worker không buffer |
-| Label neutral sau flush | Không POST Lamp |
+| Label neutral sau flush | Không POST OS server |
 | Dedup `(user, bucket)` | Trong cửa sổ `SPEECH_EMOTION_DEDUP_WINDOW_S` |
 
 **VAD:** chỉ mở phiên mic phía trước (`_vad_loop`); không có VAD thứ hai trước SER. Cuối phiên (im lặng 2.5s) đóng mic → SER tự kích hoạt từ finally block, **không cần STT có transcript**.
@@ -110,7 +110,7 @@ Transcript Lamp vẫn có thể là `Unknown Speaker:` trong khi SER dùng key d
 
 ---
 
-## Sự Kiện Lamp
+## Sự Kiện OS Server
 
 ```
 POST http://127.0.0.1:5000/api/sensing/event
@@ -140,9 +140,9 @@ Trong `_process_job`, mọi inference vượt qua ngưỡng confidence theo labe
 - **Tên file:** `<ms>_<user>_<label>.wav`, trong đó `<ms>` là timestamp inference tính bằng mili-giây, còn `<user>`/`<label>` được sanitize về `[a-zA-Z0-9_-]` (ký tự khác gộp thành `_`).
 - **Chọn lúc flush:** khi flush của một user phát ra label dominant non-neutral, nó đính kèm clip **mới nhất** trong nhóm inference cùng label dominant — `max(dom_inferences, key=lambda i: i.ts).audio_path` — làm trường `audio` trong POST.
 
-### Phía phục vụ (Lamp)
+### Phía phục vụ (OS server)
 
-Lamp backend chỉ expose clip cho Flow Monitor UI qua route mới `GET /api/sensing/audio/:name` (`SensingHandler.GetAudio`). Nó phục vụ WAV theo **basename** (đường dẫn đầy đủ không bao giờ rời khỏi thiết bị) từ một trong:
+OS server backend chỉ expose clip cho Flow Monitor UI qua route mới `GET /api/sensing/audio/:name` (`SensingHandler.GetAudio`). Nó phục vụ WAV theo **basename** (đường dẫn đầy đủ không bao giờ rời khỏi thiết bị) từ một trong:
 
 ```
 /var/lib/hal/speech-emotion
@@ -193,10 +193,10 @@ Chi tiết tuning / log: [sensing-tuning_vi.md](sensing-tuning_vi.md).
 | Hệ thống | Quan hệ |
 |----------|---------|
 | Speaker recognition | Cùng WAV session; decorate transcript tách với SER |
-| STT (Deepgram) | SER chạy sau khi phiên mic kết thúc, **độc lập với transcript** — gọi từ `_stream_session` finally sau khi Lamp POST (nếu có) |
+| STT (Deepgram) | SER chạy sau khi phiên mic kết thúc, **độc lập với transcript** — gọi từ `_stream_session` finally sau khi OS server POST (nếu có) |
 | dlbackend | ONNX emotion2vec; xem [dlbackend.md](../dlbackend.md) |
 | Face / motion emotion | Khác pipeline (camera); không dùng chung buffer SER |
-| Lamp dedup / cooldown | `speech_emotion.detected` có cooldown riêng trên Lamp (nếu cấu hình) |
+| OS server dedup / cooldown | `speech_emotion.detected` có cooldown riêng trên OS server (nếu cấu hình) |
 
 ---
 
@@ -207,7 +207,7 @@ Log tag `[speech_emotion]`:
 ```
 INFO ... [speech_emotion] buffered: alice -> sad (0.72, 2.40s)
 INFO ... [speech_emotion] flushing alice: Speech emotion detected: Sad. ...
-INFO ... [speech_emotion] sent to Lamp: ...
+INFO ... [speech_emotion] sent to OS server: ...
 INFO ... [speech_emotion] dedup drop: angry bucket=negative (key seen 87.4s ago)
 ```
 

@@ -557,7 +557,7 @@ Version của HAL là file text `VERSION` trong thư mục gốc package. Bootst
 | Setup stages | 7 (stage -1 đến 4) | **8** (+ stage 2b: HAL) |
 | Systemd services | 4 | **5** (+ hal.service) |
 | Python runtime | Không có | **HAL** tại /opt/hal/ với venv |
-| Hardware bridge | Không có | Lamp HTTP → HAL HTTP (localhost proxy) |
+| Hardware bridge | Không có | OS server HTTP → HAL HTTP (localhost proxy) |
 | SPI usage | Chỉ LED | LED + **Display (GC9A01)** |
 
 ---
