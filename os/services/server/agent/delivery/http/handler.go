@@ -59,7 +59,7 @@ type AgentHandler struct {
 
 	// channelRuns tracks runs confirmed from a real channel user (Telegram/etc.)
 	// via senderLabel. Prevents TTS when a Telegram UUID gets mapped to a
-	// sensing trace (race: flowRunID becomes lamp-sensing-* → isChannelRun false).
+	// sensing trace (race: flowRunID becomes device-sensing-* → isChannelRun false).
 	channelRunsMu sync.Mutex
 	channelRuns   map[string]bool
 

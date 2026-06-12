@@ -84,14 +84,14 @@ func extractSayTag(text string) string {
 	return inner
 }
 
-// isLampOutboundChatRunID is true when runID matches the device's chat.send idempotency key
-// (lamp-chat-* current; lamp-sensing-* legacy). Used so traceless lifecycle_start is not
+// isDeviceOutboundChatRunID is true when runID matches the device's chat.send idempotency key
+// (device-chat-* / device-sensing-*). Used so traceless lifecycle_start is not
 // mis-tagged as Telegram-only when the turn was initiated from the device.
-func isLampOutboundChatRunID(runID string) bool {
+func isDeviceOutboundChatRunID(runID string) bool {
 	if runID == "" {
 		return false
 	}
-	return strings.HasPrefix(runID, "lamp-chat-") || strings.HasPrefix(runID, "lamp-sensing-")
+	return strings.HasPrefix(runID, "device-chat-") || strings.HasPrefix(runID, "device-sensing-")
 }
 
 // labelForLampInternal returns the UI label that best describes a device-
@@ -132,7 +132,7 @@ func labelForLampInternal(text string) string {
 // a Telegram user turn (see handler_events.go ~line 1157).
 //
 // This is the positive-evidence signal for "real channel user", replacing the
-// older "anything NOT lamp-chat-*" default which mis-classified UUID runs
+// older "anything NOT device-chat-*" default which mis-classified UUID runs
 // from OpenClaw steer-mode self-fire / cron / heartbeat as Telegram and
 // suppressed their TTS even when no real user was on the other end.
 //

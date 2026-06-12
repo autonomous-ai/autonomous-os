@@ -303,25 +303,25 @@ export function FlowSection({
     // avoid coincidental short-string matches.
     const normalizeForMatch = (s: string) =>
       s.replace(/^\[[^\]]+\]\s*/, "").replace(/…\s*$/, "").trim();
-    const isLamp = (id: string) => id.startsWith("lamp-");
+    const isDeviceRun = (id: string) => id.startsWith("device-");
     for (let i = 0; i < filteredTurns.length - 1; i++) {
       const a = filteredTurns[i];
       const b = filteredTurns[i + 1];
-      const tryPair = (lampTurn: typeof a, uuidTurn: typeof b) => {
-        if (!isLamp(lampTurn.id) || isLamp(uuidTurn.id)) return false;
-        const closedEmpty = lampTurn.events.some((ev) =>
+      const tryPair = (deviceTurn: typeof a, uuidTurn: typeof b) => {
+        if (!isDeviceRun(deviceTurn.id) || isDeviceRun(uuidTurn.id)) return false;
+        const closedEmpty = deviceTurn.events.some((ev) =>
           ev.type === "flow_event" && (
             (ev.detail as Record<string, any>)?.node === "chat_final_empty" ||
             (ev.detail as Record<string, any>)?.node === "turn_steered"
           )
         );
         if (!closedEmpty) return false;
-        const lampIn = normalizeForMatch(turnIO(lampTurn).input);
+        const deviceIn = normalizeForMatch(turnIO(deviceTurn).input);
         const uuidIn = normalizeForMatch(turnIO(uuidTurn).input);
-        if (!lampIn || !uuidIn) return false;
-        if (Math.min(lampIn.length, uuidIn.length) < 32) return false;
-        if (!lampIn.includes(uuidIn) && !uuidIn.includes(lampIn)) return false;
-        const color = hashColor(lampTurn.id);
+        if (!deviceIn || !uuidIn) return false;
+        if (Math.min(deviceIn.length, uuidIn.length) < 32) return false;
+        if (!deviceIn.includes(uuidIn) && !uuidIn.includes(deviceIn)) return false;
+        const color = hashColor(deviceTurn.id);
         map.set(a.id, color);
         map.set(b.id, color);
         return true;

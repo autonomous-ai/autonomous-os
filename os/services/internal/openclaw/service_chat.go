@@ -80,7 +80,7 @@ func (s *Service) SendChatMessageWithImage(message string, imageBase64 string) (
 // NextChatRunID allocates ids for the next chat.send so callers can flow.SetTrace(runID) before flow.Start.
 func (s *Service) NextChatRunID() (reqID string, runID string) {
 	reqID = fmt.Sprintf("chat-%d", s.reqCounter.Add(1))
-	runID = fmt.Sprintf("lamp-%s-%d", reqID, time.Now().UnixMilli())
+	runID = fmt.Sprintf("device-%s-%d", reqID, time.Now().UnixMilli())
 	return reqID, runID
 }
 
@@ -134,7 +134,7 @@ func (s *Service) sendChat(message string, imageBase64 string, fixedReqID string
 	}
 
 	// reqID labels outbound chat.send from the os server (sensing POST, wake greeting, etc.) — not "audio only".
-	// Idempotency key must stay stable for OpenClaw run_id mapping; use lamp-chat-* (not lamp-sensing-*)
+	// Idempotency key must stay stable for OpenClaw run_id mapping; use device-chat-* (not device-sensing-*)
 	// so logs are not mistaken for sound/voice-only turns vs Telegram.
 	var reqID string
 	var idempotencyKey string
@@ -143,7 +143,7 @@ func (s *Service) sendChat(message string, imageBase64 string, fixedReqID string
 		idempotencyKey = fixedRunID
 	} else {
 		reqID = fmt.Sprintf("chat-%d", s.reqCounter.Add(1))
-		idempotencyKey = fmt.Sprintf("lamp-%s-%d", reqID, time.Now().UnixMilli())
+		idempotencyKey = fmt.Sprintf("device-%s-%d", reqID, time.Now().UnixMilli())
 	}
 
 	params := map[string]interface{}{
@@ -170,7 +170,7 @@ func (s *Service) sendChat(message string, imageBase64 string, fixedReqID string
 	// real telegram/channel input.
 	s.markOutboundChat(wsMessage)
 	// Emit chat_input flow event so Flow Monitor's IN field shows the
-	// actual message text. Without this, lamp-chat-* turns render as
+	// actual message text. Without this, device-chat-* turns render as
 	// "Input not captured" because the agent path skips chat.history
 	// fetch for os-server-originated runs (only channel turns hit that path).
 	previewMsg := message

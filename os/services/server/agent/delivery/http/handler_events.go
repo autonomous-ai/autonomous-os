@@ -92,7 +92,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 		// sessions have independent runs that must NOT be merged into sensing traces.
 		//
 		// Two paths depending on payload.RunID format:
-		//   • device-format (lamp-chat-*): OpenClaw 5.4+ echoes the idempotencyKey as
+		//   • device-format (device-chat-*): OpenClaw 5.4+ echoes the idempotencyKey as
 		//     the runId — already IS the device trace. Just remove from pending.
 		//   • UUID: produced when OpenClaw drains its followup queue (the
 		//     FollowupRun type does not carry idempotencyKey, so
@@ -112,7 +112,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 		lampSession := h.agentGateway.GetSessionKey()
 		isLampSession := lampSession != "" && payload.SessionKey == lampSession
 		if payload.Stream == "lifecycle" && payload.Data.Phase == "start" && payload.RunID != "" && isLampSession {
-			if isLampOutboundChatRunID(payload.RunID) {
+			if isDeviceOutboundChatRunID(payload.RunID) {
 				h.agentGateway.RemovePendingChatTraceByRunID(payload.RunID)
 			} else {
 				hist, err := h.agentGateway.FetchChatHistory(payload.SessionKey, 5)
@@ -166,9 +166,9 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 			// the cron event lacks the upcoming runId AND (for sessionTarget=
 			// "main" jobs) lacks sessionKey too, so we consume the oldest
 			// timestamp within cronFireWindowMs. Restricted to UUID runIds
-			// (no lamp- prefix) so chat.send/sensing turns can't accidentally
+			// (no device- prefix) so chat.send/sensing turns can't accidentally
 			// claim a queued cron slot.
-			if payload.Data.Phase == "start" && payload.RunID != "" && !isLampOutboundChatRunID(payload.RunID) {
+			if payload.Data.Phase == "start" && payload.RunID != "" && !isDeviceOutboundChatRunID(payload.RunID) {
 				now := time.Now().UnixMilli()
 				cutoff := now - cronFireWindowMs
 				h.cronFireExpectedMu.Lock()
@@ -196,7 +196,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 			}
 
 			// Detect external channel-initiated turns: lifecycle_start arrives from OpenClaw
-			// with a UUID run_id (not lamp-chat-* prefix). This covers:
+			// with a UUID run_id (not device-chat-* prefix). This covers:
 			// 1. No active trace (original case)
 			// 2. Active trace from a different turn (sensing trace still active when Telegram arrives)
 			//
@@ -208,7 +208,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 			isCronFireTurn := h.cronFireRuns[payload.RunID]
 			h.cronFireRunsMu.Unlock()
 			isChannelTurn := payload.Data.Phase == "start" && payload.RunID != "" &&
-				!isLampOutboundChatRunID(payload.RunID) && !isLampOutboundChatRunID(flowRunID) &&
+				!isDeviceOutboundChatRunID(payload.RunID) && !isDeviceOutboundChatRunID(flowRunID) &&
 				!isCronFireTurn
 			if isChannelTurn {
 				// Emit chat_input immediately so UI shows turn-started.
@@ -252,7 +252,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 					userMsg, senderLabel := extractLastUserMessageFromHistory(historyPayload)
 					// Mark as confirmed channel run if a real sender is present.
 					// Guards against race: Telegram UUID mapped to sensing trace
-					// makes flowRunID = lamp-sensing-* → isChannelRun wrongly false.
+					// makes flowRunID = device-sensing-* → isChannelRun wrongly false.
 					if senderLabel != "" {
 						h.channelRunsMu.Lock()
 						h.channelRuns[capturedRunID] = true
@@ -329,13 +329,13 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 			// (service_chat.go), so a missed lifecycle.start here is harmless.
 			// LED is managed by the agent via /emotion skill calls — do not override here.
 			if payload.Data.Phase == "start" {
-				lampInitiated := isLampOutboundChatRunID(payload.RunID) || isLampOutboundChatRunID(flowRunID)
-				if lampInitiated {
+				deviceInitiated := isDeviceOutboundChatRunID(payload.RunID) || isDeviceOutboundChatRunID(flowRunID)
+				if deviceInitiated {
 					h.agentGateway.SetBusy(true)
 				} else {
 					slog.Info("lifecycle.start skipped for busy gating",
 						"component", "agent", "run_id", payload.RunID, "flow_run_id", flowRunID,
-						"reason", "not lamp-initiated — heartbeat/channel/cron handled by OpenClaw steer batching")
+						"reason", "not device-initiated — heartbeat/channel/cron handled by OpenClaw steer batching")
 				}
 				// Arm the dead-air filler timer for voice turns. No-op
 				// unless sensing handler called MarkVoiceRun(flowRunID)
@@ -911,11 +911,11 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 				} else {
 					// Channel detection: positive-evidence only. tg- runIDs are
 					// synthesised by the device from session.message events (real Telegram
-					// users); anything else (lamp-chat-*, UUID from steer/cron/
+					// users); anything else (device-chat-*, UUID from steer/cron/
 					// heartbeat) is NOT a channel run unless explicitly marked
 					// via channelRuns below.
 					//
-					// Previously this defaulted to `!isLampOutboundChatRunID(...)`,
+					// Previously this defaulted to `!isDeviceOutboundChatRunID(...)`,
 					// which mis-classified OpenClaw UUID self-fire / cron / heartbeat
 					// runs as Telegram and suppressed their TTS — most visibly,
 					// music-suggestion replies on emotion.detected events when the
@@ -942,7 +942,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 						isChannelRun = true
 					}
 					// Override: confirmed channel turn via senderLabel always suppresses TTS.
-					// Covers race where Telegram UUID mapped to sensing trace (lamp-sensing-*).
+					// Covers race where Telegram UUID mapped to sensing trace (device-sensing-*).
 					h.channelRunsMu.Lock()
 					if h.channelRuns[payload.RunID] || h.channelRuns[flowRunID] {
 						isChannelRun = true
@@ -1136,13 +1136,13 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 		flowRunID := h.resolveRunID(payload.RunID)
 		// Debug alignment: OpenClaw "chat" stream may or may not include user messages for outbound chat.send.
 		// When flowRunID belongs to the device, log role/state/message so we can confirm whether chat_input can be emitted.
-		if strings.HasPrefix(flowRunID, "lamp-") {
+		if strings.HasPrefix(flowRunID, "device-") {
 			msgPreview := payload.Message
 			msgPreview = strings.ReplaceAll(msgPreview, "\n", " ")
 			if len(msgPreview) > 120 {
 				msgPreview = msgPreview[:120] + "…"
 			}
-			slog.Info("openclaw chat event (lamp)", "component", "agent",
+			slog.Info("openclaw chat event (device)", "component", "agent",
 				"backend", h.agentGateway.Name(),
 				"openclaw_run_id", payload.RunID,
 				"flow_run_id", flowRunID,
@@ -1188,8 +1188,8 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 		// "merged" / "self-reply" — those are downstream interpretations
 		// the operator makes from the timeline (e.g. a UUID lifecycle
 		// arriving later with matching input).
-		isLampOutboundFinal := payload.State == "final" && isLampOutboundChatRunID(flowRunID)
-		isEmptyFinalNoLifecycle := isLampOutboundFinal &&
+		isDeviceOutboundFinal := payload.State == "final" && isDeviceOutboundChatRunID(flowRunID)
+		isEmptyFinalNoLifecycle := isDeviceOutboundFinal &&
 			strings.TrimSpace(payload.Message) == "" &&
 			h.agentGateway.RemovePendingChatTraceByRunID(flowRunID)
 		if isEmptyFinalNoLifecycle {
@@ -1228,7 +1228,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 		// The existing isEmptyFinalNoLifecycle check above already consumed the
 		// pending entry when it fires, so this Remove call is naturally false
 		// when both conditions could match — no double-emit possible.
-		isSlashFinalOk := isLampOutboundFinal &&
+		isSlashFinalOk := isDeviceOutboundFinal &&
 			!isEmptyFinalNoLifecycle &&
 			strings.TrimSpace(payload.Message) != "" &&
 			h.agentGateway.RemovePendingChatTraceByRunID(flowRunID)
@@ -1344,8 +1344,8 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 			// Queue-mode interleave: a Telegram user message can arrive WHILE a
 			// device-issued run (sensing/voice chat.send) is being processed.
 			// OpenClaw injects it into the running turn and the agent's reply
-			// goes back on the Lamp run's stream — its runID is "lamp-chat-*"
-			// so isLampOutboundChatRunID() is true → isChannelRun=false →
+			// goes back on the device run's stream — its runID is "device-chat-*"
+			// so isDeviceOutboundChatRunID() is true → isChannelRun=false →
 			// reply ends up on TTS instead of Telegram. Capture the chat_id
 			// here (before the skip) and mark the active run so lifecycle.end
 			// suppresses TTS and routes the reply via DM.
@@ -1409,7 +1409,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 		if sm.Message.Role == "user" {
 			text := extractMessageContentText(sm.Message.Content)
 			if text != "" && (isLampInternalMessage(text) || h.agentGateway.IsRecentOutboundChat(text)) {
-				slog.Info("session.message skipped — Lamp-outbound echo",
+				slog.Info("session.message skipped — device-outbound echo",
 					"component", "agent", "sessionKey", sm.SessionKey,
 					"preview", text[:min(len(text), 80)])
 				break

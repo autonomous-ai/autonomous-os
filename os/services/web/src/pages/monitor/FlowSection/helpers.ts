@@ -673,7 +673,7 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
 
     const prevIsChannelFallback = isChannelType(prev.type) && !turnHasRealChannelInput(prev);
     if (prevIsChannelFallback && prevHasNoOutput && currLooksAgentReply && closeInTime) {
-      if (turn.runId && /^lamp-(chat|sensing)-/i.test(turn.runId)) {
+      if (turn.runId && /^device-(chat|sensing)-/i.test(turn.runId)) {
         stitched.push(turn);
         continue;
       }
