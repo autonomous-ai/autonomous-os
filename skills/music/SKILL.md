@@ -51,7 +51,7 @@ Do NOT use `track`, `artist`, `title`, `song` — those return 422.
 
 ## How HW markers work
 
-The Go server intercepts `[HW:/audio/play:...]` / `[HW:/audio/stop:...]` and forwards to LeLamp. This is the ONLY way to play music — never use `exec`, `mpv`, `vlc`, `yt-dlp`, or `curl /audio/play`.
+The Go server intercepts `[HW:/audio/play:...]` / `[HW:/audio/stop:...]` and forwards to HAL. This is the ONLY way to play music — never use `exec`, `mpv`, `vlc`, `yt-dlp`, or `curl /audio/play`.
 
 ## Error handling
 

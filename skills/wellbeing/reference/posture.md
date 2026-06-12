@@ -2,12 +2,12 @@
 
 Triggered by decision row #5: `[posture_summary]` block present in the
 `motion.activity` message. One spoken nudge per cooldown window
-(~30 min), then silent — the cooldown is enforced upstream on lelamp,
+(~30 min), then silent — the cooldown is enforced upstream on HAL,
 so a second summary won't arrive for ~30 min anyway.
 
 ## When the block appears
 
-LeLamp folds two extra blocks into `motion.activity` ONLY when ALL hold:
+HAL folds two extra blocks into `motion.activity` ONLY when ALL hold:
 
 - The tumbling pose window has completed (open for ≥ `POSE_WINDOW_DURATION_S`
   — debug 300 s / prod target 3600 s — since the user first turned
@@ -108,7 +108,7 @@ Anti-patterns:
 - ❌ *"you've got tech neck"* / *"that's carpal tunnel territory"* —
   never name a condition as a fact, even framed as "risk".
 
-The hedge baked into LeLamp's contract — *"camera-based posture
+The hedge baked into HAL's contract — *"camera-based posture
 assessment; treat as a gentle nudge, not a diagnosis"* — is what keeps
 you within scope. Don't override it.
 

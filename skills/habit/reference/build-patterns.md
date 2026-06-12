@@ -131,7 +131,7 @@ Steps:
 3. **peak_hour** = the hour 0..23 with the most alert rows across the window. Ties → earlier hour.
 4. **side_bias** = compare summed `left_score` vs summed `right_score` across all alerts. Diff ≥ 1.5× the smaller side → name the dominant side; otherwise `"none"`.
 5. **typical_risk_bucket** = mode of `risk` field (`"medium"` vs `"high"`).
-6. **top_offenders** (best-effort): not available from row schema (alert rows store only `score`, `risk`, `left_score`, `right_score` — sub-region scores live in the original event message, not persisted). Leave as `[]` until lelamp side starts logging top offenders. Field exists for forward compatibility.
+6. **top_offenders** (best-effort): not available from row schema (alert rows store only `score`, `risk`, `left_score`, `right_score` — sub-region scores live in the original event message, not persisted). Leave as `[]` until the backend starts logging top offenders. Field exists for forward compatibility.
 7. **alerts_per_day** = round(total_alerts / days_observed, 1).
 8. **strength**: same table as wellbeing. Use `(days_with_alerts / days_observed)` as the frequency analog. `< 0.50` → skip pattern; `0.50–0.75` → moderate; `> 0.75` → strong.
 

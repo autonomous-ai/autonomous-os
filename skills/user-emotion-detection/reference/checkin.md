@@ -44,7 +44,7 @@ The aim is variety. If the previous checkin this cooldown window was Ask, defaul
 
 ## Reply format
 
-Embed the log marker alongside `[HW:/emotion:...]` (and `[HW:/dm:...]` for known users). Replace `<emotion>` with the lowercased raw emotion label (`sad`, `fear` / `fearful`, `angry`, `disgust` / `disgusted`, `happy`, `surprise` / `surprised`) — keep the form lelamp shipped so the trigger string stays trace-friendly.
+Embed the log marker alongside `[HW:/emotion:...]` (and `[HW:/dm:...]` for known users). Replace `<emotion>` with the lowercased raw emotion label (`sad`, `fear` / `fearful`, `angry`, `disgust` / `disgusted`, `happy`, `surprise` / `surprised`) — keep the form HAL shipped so the trigger string stays trace-friendly.
 
 - **Known user** (speak + DM):
   ```

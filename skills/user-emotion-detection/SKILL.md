@@ -115,7 +115,7 @@ Rules:
 - **Output ownership:** `music` → produced by `music-suggestion/SKILL.md`. `checkin` → produced by `reference/checkin.md` (this skill). `action` → emitted inline by this router (the `[HW:/emotion:...]` marker in row #1).
 - **Cooldown is shared** between music and checkin: both log via `music-suggestion/log` so `last_suggestion_age_min` reflects either channel.
 - Never narrate the routing decision in the spoken reply.
-- `Neutral` is filtered upstream at lelamp and never reaches this skill in practice; no special case needed here.
+- `Neutral` is filtered upstream at HAL and never reaches this skill in practice; no special case needed here.
 
 ## Voice cue is weaker than camera cue
 
@@ -126,4 +126,4 @@ Practical rules:
 - **Don't relax the cooldown.** Music suggestions still gate on `last_suggestion_age_min ∉ [0, 7)` regardless of source. A fresh voice signal does NOT reset the cooldown that a recent camera-driven music suggestion left.
 - **Prefer Comfort/Invite phrasing on voice-only negative reads.** When the router falls through to checkin (row #3) and the trigger is `[speech_emotion]` with `bucket=negative`, lean toward Comfort/Invite rather than Ask — probing a maybe-misclassified utterance feels worse than acknowledging it.
 - **Cross-modal reinforcement still applies.** If `recent_signals` shows the same `mapped_mood` from `source="camera"` in the last ~10 min and now voice fires the same mood, treat it as a confirmation — the Mood skill's decision synthesis already handles this; no extra logic here.
-- **No skip-on-low-confidence.** Don't read `confidence=...` out of the hedge text and pre-filter; lelamp already enforced `confidence >= SPEECH_EMOTION_CONFIDENCE_THRESHOLD` before sending. Anything that reaches this skill is worth logging.
+- **No skip-on-low-confidence.** Don't read `confidence=...` out of the hedge text and pre-filter; HAL already enforced `confidence >= SPEECH_EMOTION_CONFIDENCE_THRESHOLD` before sending. Anything that reaches this skill is worth logging.

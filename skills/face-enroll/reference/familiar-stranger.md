@@ -1,6 +1,6 @@
-# Flow C — Familiar-stranger prompt (lelamp surfaces the hint)
+# Flow C — Familiar-stranger prompt (HAL surfaces the hint)
 
-LeLamp tracks how often each `stranger_id` is seen. When the visit count first reaches `_FAMILIAR_VISIT_THRESHOLD` (=2), lelamp:
+HAL tracks how often each `stranger_id` is seen. When the visit count first reaches `_FAMILIAR_VISIT_THRESHOLD` (=2), HAL:
 
 1. Saves the current raw frame to `<STRANGERS_DIR>/snapshots/<stranger_id>_<ts_ms>.jpg`.
 2. Appends a hint to the outgoing `presence.enter` message:
@@ -27,11 +27,11 @@ Still self-enrollment in spirit — the prompt is addressed **to the person stan
    - Base64-encode the file at `<path>`.
    - Call `POST /face/enroll` with `image_base64`, `label`. **Omit `telegram_username` and `telegram_id`** — the camera-person isn't the Telegram sender, so any Telegram metadata in context belongs to someone else.
    - Confirm: "Got it, I'll remember you as {Name} from now on."
-5. **If the reply declines** ("no" / "skip" / "ignore"): acknowledge once ("Okay, I won't ask again.") and stop. LeLamp will not re-prompt for the same `stranger_id` (the threshold fires only once per id).
+5. **If the reply declines** ("no" / "skip" / "ignore"): acknowledge once ("Okay, I won't ask again.") and stop. HAL will not re-prompt for the same `stranger_id` (the threshold fires only once per id).
 6. **If the reply is ambiguous** ("maybe later", silence-ish): treat as decline.
 
 ## One-shot rule
-The lelamp hint surfaces exactly once per stranger when the count first reaches the threshold. Don't re-ask in later turns even if you see the same `stranger_id` again — only act on the hint when it appears in the current sensing message. Visit counts above the threshold do not re-fire.
+The HAL hint surfaces exactly once per stranger when the count first reaches the threshold. Don't re-ask in later turns even if you see the same `stranger_id` again — only act on the hint when it appears in the current sensing message. Visit counts above the threshold do not re-fire.
 
 ## Example
 

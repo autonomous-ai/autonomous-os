@@ -66,7 +66,7 @@ jq -c 'select(.node=="sensing_input" and .kind=="enter" and .ts >= '"$FROM_TS"' 
 
 ### Events of a specific type in the last N hours
 
-Use `"motion"` for raw motion, `"motion.activity"` for activity analysis (LeLamp-categorised — bucket names `drink`/`break` and raw Kinetics sedentary labels like `using computer`, `writing`, `reading book`). Most queries want both:
+Use `"motion"` for raw motion, `"motion.activity"` for activity analysis (HAL-categorised — bucket names `drink`/`break` and raw Kinetics sedentary labels like `using computer`, `writing`, `reading book`). Most queries want both:
 
 ```bash
 export TZ=$(cat /etc/timezone)
