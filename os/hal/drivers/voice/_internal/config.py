@@ -97,9 +97,12 @@ SPEECH_EMOTION_ENABLED = _hal_config.SPEECH_EMOTION_ENABLED
 
 
 # ---------------------------------------------------------------------------
-# Wake words — default for agent named "Lamp"
+# Wake words — fallback derived from the device type (lamp/dog/intern) when no
+# IDENTITY.md name is set, so an unnamed device isn't hardcoded to "lamp".
+# Last resort "friend" when device_type is also unavailable.
 # ---------------------------------------------------------------------------
-DEFAULT_WAKE_WORDS = ["hello lamp", "hey lamp", "này lamp", "ê lamp", "lamp ơi"]
+_wake_name = (_hal_config._os_cfg_get("device_type") or "friend").strip().lower()
+DEFAULT_WAKE_WORDS = [f"hello {_wake_name}", f"hey {_wake_name}", f"này {_wake_name}", f"ê {_wake_name}", f"{_wake_name} ơi"]
 
 
 # ---------------------------------------------------------------------------

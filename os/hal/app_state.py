@@ -109,7 +109,7 @@ DEFAULT_USER = os.environ.get("HAL_DEFAULT_USER", "unknown")
 
 # --- OpenClaw workspace ---
 
-_DEFAULT_AGENT_NAME = "lamp"
+_DEFAULT_AGENT_NAME = "friend"  # last-resort only; device_type is preferred (see _read_agent_name)
 _OPENCLAW_WORKSPACE = os.environ.get("OPENCLAW_WORKSPACE", "/root/.openclaw/workspace")
 
 
@@ -534,7 +534,8 @@ def _auto_camera_on(reason: str) -> bool:
 
 
 def _read_agent_name() -> str:
-    """Read agent name from IDENTITY.md. Falls back to default 'lamp'."""
+    """Read agent name from IDENTITY.md. Falls back to the device type
+    (lamp/dog/intern) so wake words follow the device class, not a brand."""
     identity_path = os.path.join(_OPENCLAW_WORKSPACE, "IDENTITY.md")
     try:
         with open(identity_path) as f:
@@ -551,6 +552,15 @@ def _read_agent_name() -> str:
                     )
                     if name:
                         return name.lower()
+    except Exception:
+        pass
+    # No IDENTITY.md name → use the device type (lamp/dog/intern) so an unnamed
+    # device is addressed by its class instead of a hardcoded "lamp".
+    try:
+        from hal.config import _os_cfg_get
+        device_type = (_os_cfg_get("device_type") or "").strip().lower()
+        if device_type:
+            return device_type
     except Exception:
         pass
     return _DEFAULT_AGENT_NAME
