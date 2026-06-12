@@ -8,7 +8,7 @@ function isChannelType(type: string): boolean {
   return CHANNEL_TYPES.has(type);
 }
 
-// Lamp emits motion.activity/emotion.detected/speech_emotion.detected/pose.ergo_risk
+// The device emits motion.activity/emotion.detected/speech_emotion.detected/pose.ergo_risk
 // with domain-specific prefixes ([activity]/[emotion]/[speech_emotion]/[posture])
 // instead of [sensing:*] so SOUL.md's [sensing:*] rule doesn't force the sensing
 // skill into context. Parsing here supports all domain-specific sensing prefixes.
@@ -122,7 +122,7 @@ export function aggregateEvents(events: DisplayEvent[]): PipelineRow[] {
       continue;
     }
 
-    // Tool call events. Lamp flow.Log("tool_call") fires twice per phase
+    // Tool call events. OS-server flow.Log("tool_call") fires twice per phase
     // for each tool (once from the `agent` stream without args, once from
     // `session.tool` with args + source) — collapse those duplicates by
     // merging into the trailing row when the preceding event was the same
@@ -314,7 +314,7 @@ export function refineTurnTypeFromSensingInputs(turn: Turn): void {
   }
 
   // Reclassify channel turns that are actually sensing events routed via OpenClaw channel.
-  // node-host is Lamp's own WebSocket identity in OpenClaw — it sends sensing events AND
+  // node-host is the device's own WebSocket identity in OpenClaw — it sends sensing events AND
   // voice commands via chat.send, so sender=node-host alone doesn't mean "system".
   if (isChannelType(turn.type)) {
     let hasRealUser = false;
@@ -334,7 +334,7 @@ export function refineTurnTypeFromSensingInputs(turn: Turn): void {
     if (hasRealUser) return; // keep as channel type
     if (sensingType) { turn.type = sensingType; return; }
     // Cron-fired turns: primary signal is the cron_fire flow event emitted by
-    // Lamp at lifecycle_start when it correlates an OpenClaw event:"cron"
+    // the OS server at lifecycle_start when it correlates an OpenClaw event:"cron"
     // (action:"started"). Fallback to the systemEvent wrapper string match if
     // the event was dropped (OpenClaw broadcasts cron with dropIfSlow:true).
     let isCron = false;
@@ -427,9 +427,9 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
       const d = ev.detail as Record<string, any> | undefined;
       const msg = d?.message ?? d?.data?.message ?? ev.summary ?? "";
       const sender = d?.sender ?? d?.data?.sender ?? "";
-      // Skip node-host echo — Lamp's own chat.send echoed back via session.message.
+      // Skip node-host echo — the device's own chat.send echoed back via session.message.
       // These duplicate the sensing_input / voice_pipeline turn that already exists.
-      // Detect by: sender is node-host + message contains Lamp-injected directives.
+      // Detect by: sender is node-host + message contains device-injected directives.
       if (sender === "node-host" && (containsSensingPrefix(msg) || /\[MANDATORY:/.test(msg) || /\[Follow /.test(msg) || /\[REPLY RULE:/.test(msg) || /\[context: current_user=/.test(msg))) {
         return null;
       }
@@ -598,7 +598,7 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
       current.endTime = ev.time;
     }
     // chat_final_empty: OpenClaw sent state:"final" with empty Message for a
-    // Lamp-format runId that never opened a lifecycle. Factual close event —
+    // device-format runId that never opened a lifecycle. Factual close event —
     // no interpretation. (Legacy `turn_steered` is back-compat for old JSONL.)
     // chat_final_ok: same shape but non-empty Message — slash commands
     // (/status, /new, /compact) dispatched pre-LLM by OpenClaw return a
@@ -1041,7 +1041,7 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
     if (ev.type === "hw_wellbeing" || (ev.type === "flow_event" && ev.detail?.node === "hw_wellbeing")) {
       const { path, body } = parseHWEvent(ev, "/wellbeing/log");
       if (body && body.startsWith("{")) {
-        // Wellbeing log goes to Lamp (port 5000), not LeLamp (5001), via the /api/ prefix.
+        // Wellbeing log goes to the OS server (port 5000), not the device (5001), via the /api/ prefix.
         pushUnique(info.hw_wellbeing, `⚡ HW marker → curl -s -X POST http://127.0.0.1:5000/api${path} -d '${body}'`);
         const m = body.match(/"action"\s*:\s*"([^"]+)"/);
         pushUnique(info.lamp_gate, `💧 → wellbeing ${m ? m[1] : path}`);
@@ -1194,7 +1194,7 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
   // local_match: intent_match duration (instant, but show if > 0)
   // (local_match is triggered by intent_match, timing is included in intent_check)
 
-  // agent_call has no duration of its own — it's the act of Lamp writing
+  // agent_call has no duration of its own — it's the act of the OS server writing
   // chat.send to the WS, which is sub-millisecond on localhost. The 1-2s
   // commonly seen between chat_send and lifecycle_start is OpenClaw's
   // internal init (queue + hooks + skill load + prompt build), shown on
@@ -1295,7 +1295,7 @@ export function turnIO(turn: Turn): {
         input = dataMsg || (m ? m[2] : "") || ev.summary;
       }
       // Debug audio clip (speech_emotion) — carried as a servable URL in the
-      // sensing_input detail by the Lamp backend, never in the message text
+      // sensing_input detail by the OS server backend, never in the message text
       // (audio is never sent to the LLM). Surfaced as a click-to-play player.
       const audioUrl = d?.data?.audio ?? d?.audio;
       if (typeof audioUrl === "string" && audioUrl && !audioUrls.includes(audioUrl)) {
@@ -1311,7 +1311,7 @@ export function turnIO(turn: Turn): {
           if (!snapshotUrls.includes(url)) snapshotUrls.push(url);
         }
         // Pose bucket markers (motion.activity only) — emitted by HAL
-        // when a posture nudge folds into the turn. Lamp strips them from
+        // when a posture nudge folds into the turn. The device strips them from
         // the LLM-facing text but they survive in the sensing_input JSONL.
         // Pattern aligned with Go-side rePoseBucketMarker — accept any char
         // except ']' so future debug ids that include underscores or hyphens

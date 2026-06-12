@@ -280,7 +280,7 @@ function demoPhraseFor(lang?: string): string {
 }
 
 /** POST /api/voice/preview — server reads the TTS API key + base URL from
- *  cfg and forwards to LeLamp. Browser never sees or ships the credential
+ *  cfg and forwards to the device. Browser never sees or ships the credential
  *  (audit web F13). Operator can still pick a non-default voice/provider for
  *  the test by passing `provider` in opts. */
 export async function testTTSVoice(voice: string, opts: TestTTSOptions = {}): Promise<void> {

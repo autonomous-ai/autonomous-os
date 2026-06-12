@@ -102,24 +102,24 @@ export function FlowDiagram({
   };
 
   const positions: Record<FlowStage, { x: number; y: number }> = {
-    // Lamp — top row
+    // OS server — top row
     intent_check:      { x: 80, y: 50 },
     local_match:       { x: 200, y: 50 },
     lamp_gate:         { x: 467, y: 795 },
-    // LeLamp — input row (MIC/CAM/BTN)
+    // Device — input row (MIC/CAM/BTN)
     mic_input:         { x: -40, y: 240 },
     cam_input:         { x: 80, y: 240 },
     // Button / touch input — physical interaction (GPIO button, TTP223
     // touchpad). Sits below mic so it doesn't crowd the input row and
     // its edge to intent_check has a clear path up-right past mic.
     button_input:      { x: -40, y: 350 },
-    // LeLamp — output column (stacked vertically, same x, gap=135)
+    // Device — output column (stacked vertically, same x, gap=135)
     hw_emotion:        { x: 200, y: 390 },
     hw_led:            { x: 200, y: 525 },
     hw_servo:          { x: 200, y: 660 },
     hw_audio:          { x: 200, y: 795 },
-    // Lamp-side log writes — stack BELOW the BCAST node (tg_alert at y=930)
-    // so HOOK / BCAST stay grouped at the top of the Lamp column and the
+    // OS-server-side log writes — stack BELOW the BCAST node (tg_alert at y=930)
+    // so HOOK / BCAST stay grouped at the top of the OS-server column and the
     // three async-POST logs hang off the bottom in their own block.
     // x=467 same column. Edges from lamp_gate use elbow routing
     // (right → down → left) to avoid running through tg_alert.
