@@ -41,8 +41,8 @@ def _default_fillers_for_active_lang() -> str:
     back to DEFAULT_LANG when the config can't be read or the language is
     empty/unknown. Caller can still override with HAL_BACKCHANNEL_FILLERS."""
     try:
-        from hal.config import _lamp_cfg_get
-        lang = (_lamp_cfg_get("stt_language") or "").strip()
+        from hal.config import _os_cfg_get
+        lang = (_os_cfg_get("stt_language") or "").strip()
     except Exception:
         lang = ""
     return DEFAULT_FILLERS_BY_LANG.get(lang, DEFAULT_FILLERS_BY_LANG[DEFAULT_LANG])

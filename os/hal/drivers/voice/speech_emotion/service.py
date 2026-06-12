@@ -86,7 +86,7 @@ _MIN_AUDIO_S: float = float(
 )
 _API_URL: str = getattr(config, "SPEECH_EMOTION_API_URL", "") or ""
 _API_KEY: str = getattr(config, "SPEECH_EMOTION_API_KEY", "") or ""
-_LAMP_URL: str = config.LAMP_SENSING_URL
+_LAMP_URL: str = config.OS_SENSING_URL
 _AUDIO_DIR: str = getattr(config, "SPEECH_EMOTION_AUDIO_DIR", "") or ""
 _SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9_-]+")
 

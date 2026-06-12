@@ -898,7 +898,7 @@ class FacePerception(Perception[cv2.typing.MatLike]):
             return
         try:
             resp = requests.post(
-                config.LAMP_WELLBEING_LOG_URL,
+                config.OS_WELLBEING_LOG_URL,
                 json={"action": action, "notes": "", "user": user},
                 timeout=2,
             )

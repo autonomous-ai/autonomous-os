@@ -206,7 +206,7 @@ def main() -> int:
     if not args.lamp_url:
         server = _start_mock_lamp()
         args.lamp_url = f"http://{MOCK_LAMP_HOST}:{MOCK_LAMP_PORT}/api/sensing/event"
-    _cfg.LAMP_SENSING_URL = args.lamp_url
+    _cfg.OS_SENSING_URL = args.lamp_url
 
     # Import AFTER config patch so module-level defaults see the right values.
     from hal.drivers.voice.speech_emotion import SpeechEmotionService

@@ -31,7 +31,7 @@ class RealtimeContextManager:
         language: str | None = None,
         max_memory_entries: int = app_config.REALTIME_MAX_MEMORY_ENTRIES,
         trim_keep: int = app_config.REALTIME_MEMORY_TRIM_KEEP,
-        lamp_memory_max_chars: int = app_config.REALTIME_LAMP_MEMORY_MAX_CHARS,
+        lamp_memory_max_chars: int = app_config.REALTIME_DEVICE_MEMORY_MAX_CHARS,
         realtime_memory_max_chars: int = app_config.REALTIME_MEMORY_MAX_CHARS,
         summarizer: RealtimeSummarizer | None = None,
     ) -> None:

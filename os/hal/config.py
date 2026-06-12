@@ -1,7 +1,7 @@
 """
 HAL runtime configuration — all values read from environment variables.
 
-Import: from hal.config import LAMP_ID, SERVO_PORT, ...
+Import: from hal.config import DEVICE_ID, SERVO_PORT, ...
 """
 
 import os
@@ -11,7 +11,7 @@ from typing import Optional, Union
 
 # --- Hardware ---
 SERVO_PORT = os.environ.get("HAL_SERVO_PORT", "/dev/ttyACM0")
-LAMP_ID = os.environ.get("HAL_LAMP_ID", "hal")
+DEVICE_ID = os.environ.get("HAL_DEVICE_ID", "hal")
 SERVO_FPS = int(os.environ.get("HAL_SERVO_FPS", "30"))
 SERVO_HOLD_S = float(os.environ.get("HAL_SERVO_HOLD_S", "3.0"))
 HTTP_PORT = int(os.environ.get("HAL_HTTP_PORT", "5001"))
@@ -61,9 +61,9 @@ TRACKING_FACE_DETECTOR_ENABLED: bool = os.environ.get(
 
 # --- Data layout ---
 
-# --- Sensing: Lamp integration ---
-LAMP_SENSING_URL = "http://127.0.0.1:5000/api/sensing/event"
-LAMP_WELLBEING_LOG_URL = "http://127.0.0.1:5000/api/wellbeing/log"
+# --- Sensing: os-server integration ---
+OS_SENSING_URL = "http://127.0.0.1:5000/api/sensing/event"
+OS_WELLBEING_LOG_URL = "http://127.0.0.1:5000/api/wellbeing/log"
 GUARD_STATUS_URL = "http://127.0.0.1:5000/api/guard"
 GUARD_CHECK_INTERVAL_S = float(os.environ.get("HAL_GUARD_CHECK_INTERVAL_S", "10.0"))
 
@@ -91,25 +91,25 @@ FACE_STRANGER_FLUSH_S = float(os.environ.get("HAL_FACE_STRANGER_FLUSH_S", "10.0"
 FACE_AREA_RATIO_THRESHOLD = float(os.environ.get("HAL_FACE_AREA_RATIO_THRESHOLD", "0.05"))
 
 # --- DL backend connection ---
-LAMP_CONFIG_PATH = os.environ.get("LAMP_CONFIG_PATH", "/root/config/config.json")
+OS_CONFIG_PATH = os.environ.get("OS_CONFIG_PATH", "/root/config/config.json")
 
-def _lamp_cfg_get(key: str, default: str = "") -> str:
-    """Read a value from Lamp's config.json (shared with Go server)."""
+def _os_cfg_get(key: str, default: str = "") -> str:
+    """Read a value from the os-server config.json (shared with the Go server)."""
     try:
         import json
-        with open(LAMP_CONFIG_PATH) as f:
+        with open(OS_CONFIG_PATH) as f:
             return json.load(f).get(key, default)
     except Exception:
         return default
 
-DL_BACKEND_URL = _lamp_cfg_get("llm_base_url") or os.environ.get("DL_BACKEND_URL", "")
-DL_API_KEY = _lamp_cfg_get("llm_api_key") or os.environ.get("DL_API_KEY", "")
+DL_BACKEND_URL = _os_cfg_get("llm_base_url") or os.environ.get("DL_BACKEND_URL", "")
+DL_API_KEY = _os_cfg_get("llm_api_key") or os.environ.get("DL_API_KEY", "")
 # Device-internal auth token — the secret a caller presents to reach this HAL,
 # kept SEPARATE from the LLM provider key (DL_API_KEY). Falls back to the LLM key
 # for backward compatibility with devices provisioned before the split; new
 # provisioning should set a distinct device_auth_token. See SECURITY.md.
 DEVICE_AUTH_TOKEN = (
-    _lamp_cfg_get("device_auth_token")
+    _os_cfg_get("device_auth_token")
     or os.environ.get("HAL_DEVICE_AUTH_TOKEN")
     or DL_API_KEY
 )
@@ -346,11 +346,11 @@ REALTIME_TURN_DETECTION: str = os.environ.get("HAL_REALTIME_TURN_DETECTION", "of
 REALTIME_GEMINI_API_KEY: str = (
     os.environ.get("GEMINI_API_KEY", "")
     or os.environ.get("GOOGLE_API_KEY", "")
-    or _lamp_cfg_get("llm_api_key", "")
+    or _os_cfg_get("llm_api_key", "")
 )
 REALTIME_GEMINI_BASE_URL: str = os.environ.get(
     "HAL_GEMINI_LIVE_BASE_URL",
-    (_lamp_cfg_get("llm_base_url", "").rstrip("/") + "/ws/gemini") if _lamp_cfg_get("llm_base_url", "") else "",
+    (_os_cfg_get("llm_base_url", "").rstrip("/") + "/ws/gemini") if _os_cfg_get("llm_base_url", "") else "",
 )
 REALTIME_GEMINI_MODEL: str = os.environ.get("HAL_GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview")
 REALTIME_GEMINI_VOICE: str = os.environ.get("HAL_GEMINI_LIVE_VOICE", "Kore")
@@ -361,11 +361,11 @@ REALTIME_GEMINI_USE_LANGUAGE_CODES: bool = os.environ.get("HAL_GEMINI_USE_LANGUA
 # --- Realtime: OpenAI Realtime ---
 REALTIME_OPENAI_API_KEY: str = (
     os.environ.get("OPENAI_API_KEY", "")
-    or _lamp_cfg_get("llm_api_key", "")
+    or _os_cfg_get("llm_api_key", "")
 )
 REALTIME_OPENAI_BASE_URL: str = os.environ.get(
     "HAL_OPENAI_REALTIME_BASE_URL",
-    (_lamp_cfg_get("llm_base_url", "").rstrip("/") + "/ws/openai") if _lamp_cfg_get("llm_base_url", "") else "",
+    (_os_cfg_get("llm_base_url", "").rstrip("/") + "/ws/openai") if _os_cfg_get("llm_base_url", "") else "",
 )
 REALTIME_OPENAI_MODEL: str = os.environ.get("HAL_OPENAI_REALTIME_MODEL", "gpt-realtime-2")
 REALTIME_OPENAI_VOICE: str = os.environ.get("HAL_OPENAI_REALTIME_VOICE", "alloy")
@@ -378,13 +378,13 @@ _rt_workspace: str = REALTIME_WORKSPACE_DIR.rstrip("/")
 REALTIME_MEMORY_PATH: str = os.environ.get("HAL_REALTIME_MEMORY_PATH", f"{_rt_workspace}/realtime/memory.jsonl")
 REALTIME_MAX_MEMORY_ENTRIES: int = int(os.environ.get("HAL_REALTIME_MAX_MEMORY_ENTRIES", "1000"))
 REALTIME_MEMORY_TRIM_KEEP: int = int(os.environ.get("HAL_REALTIME_MEMORY_TRIM_KEEP", "500"))
-REALTIME_LAMP_MEMORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_LAMP_MEMORY_MAX_CHARS", "100000"))
+REALTIME_DEVICE_MEMORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_DEVICE_MEMORY_MAX_CHARS", "100000"))
 REALTIME_MEMORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_MEMORY_MAX_CHARS", "100000"))
 
 # --- Realtime: Summarizer (Anthropic Messages API) ---
 REALTIME_SUMMARIZER_ENABLED: bool = os.environ.get("HAL_REALTIME_SUMMARIZER_ENABLED", "true").lower() in ("1", "true", "yes")
-REALTIME_SUMMARIZER_API_KEY: str = os.environ.get("HAL_REALTIME_SUMMARIZER_API_KEY", "") or _lamp_cfg_get("llm_api_key", "")
+REALTIME_SUMMARIZER_API_KEY: str = os.environ.get("HAL_REALTIME_SUMMARIZER_API_KEY", "") or _os_cfg_get("llm_api_key", "")
 # Anthropic SDK appends /v1/messages, so strip trailing /v1 from llm_base_url
-_summarizer_base: str = os.environ.get("HAL_REALTIME_SUMMARIZER_BASE_URL", "") or _lamp_cfg_get("llm_base_url", "")
+_summarizer_base: str = os.environ.get("HAL_REALTIME_SUMMARIZER_BASE_URL", "") or _os_cfg_get("llm_base_url", "")
 REALTIME_SUMMARIZER_BASE_URL: str = _summarizer_base.rstrip("/").removesuffix("/v1") if _summarizer_base else ""
 REALTIME_SUMMARIZER_MODEL: str = os.environ.get("HAL_REALTIME_SUMMARIZER_MODEL", "claude-haiku-4-5-20251001")

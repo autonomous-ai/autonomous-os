@@ -16,7 +16,7 @@ import requests
 from hal.drivers.voice._internal.config import (
     ECHO_RELEVANCE_WINDOW_S,
     ECHO_SIMILARITY_THRESHOLD,
-    LAMP_SENSING_URL,
+    OS_SENSING_URL,
 )
 
 logger = logging.getLogger("hal.voice")
@@ -54,12 +54,12 @@ class LampSender:
         payload = {"type": event_type, "message": message}
         logger.info(
             "curl -s -X POST %s -H 'Content-Type: application/json' -d '%s'",
-            LAMP_SENSING_URL, _json.dumps(payload),
+            OS_SENSING_URL, _json.dumps(payload),
         )
         max_retries = 3
         for attempt in range(1, max_retries + 1):
             try:
-                resp = requests.post(LAMP_SENSING_URL, json=payload, timeout=5)
+                resp = requests.post(OS_SENSING_URL, json=payload, timeout=5)
                 if resp.status_code == 503 and attempt < max_retries:
                     logger.warning(
                         "Lamp agent not ready (503), retrying in 2s... (attempt %d/%d)",

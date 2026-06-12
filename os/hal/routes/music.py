@@ -93,8 +93,8 @@ _last_backchannel_idx: int = -1
 def _active_stt_language() -> str:
     """Read stt_language from Lamp's config.json. Empty/missing → ""."""
     try:
-        from hal.config import _lamp_cfg_get
-        return (_lamp_cfg_get("stt_language") or "").strip()
+        from hal.config import _os_cfg_get
+        return (_os_cfg_get("stt_language") or "").strip()
     except Exception:
         return ""
 

@@ -38,7 +38,7 @@ FACTORY_RESET_DURATION = 10.0  # seconds held → factory-reset on release (supe
 # Lamp Go sensing endpoint. Head-pat notify is fire-and-forget — Lamp
 # Go appends a NO_REPLY hint so the agent records the event in
 # conversation history without speaking back.
-LAMP_SENSING_URL = "http://127.0.0.1:5000/api/sensing/event"
+OS_SENSING_URL = "http://127.0.0.1:5000/api/sensing/event"
 
 
 def _notify_head_pat(spoken: str):
@@ -55,7 +55,7 @@ def _notify_head_pat(spoken: str):
     differently than "I sighed and asked them to stop"."""
     try:
         requests.post(
-            LAMP_SENSING_URL,
+            OS_SENSING_URL,
             json={
                 "type": "touch.head_pat",
                 "message": f'Lamp was petted and responded: "{spoken}"',
@@ -68,8 +68,8 @@ def _notify_head_pat(spoken: str):
 
 def _current_lang() -> str:
     try:
-        from hal.config import _lamp_cfg_get
-        return (_lamp_cfg_get("stt_language") or "").strip()
+        from hal.config import _os_cfg_get
+        return (_os_cfg_get("stt_language") or "").strip()
     except Exception:
         return ""
 

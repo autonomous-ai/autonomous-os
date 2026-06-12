@@ -60,8 +60,8 @@ def _is_reboot_pending() -> bool:
 
 def _phrase(key: str) -> str:
     try:
-        from hal.config import _lamp_cfg_get
-        lang = (_lamp_cfg_get("stt_language") or "").strip()
+        from hal.config import _os_cfg_get
+        lang = (_os_cfg_get("stt_language") or "").strip()
     except Exception:
         lang = ""
     pool = PHRASES_BY_LANG.get(key, {})

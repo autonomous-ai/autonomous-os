@@ -36,7 +36,7 @@ from hal.config import (
     DEVICE_AUTH_TOKEN,
     HTTP_HOST,
     HTTP_PORT,
-    LAMP_ID,
+    DEVICE_ID,
     MODE,
     SERVO_FPS,
     SERVO_HOLD_S,
@@ -44,7 +44,7 @@ from hal.config import (
     TTS_SPEED,
     TTS_VOICE,
     TTS_INSTRUCTIONS,
-    LAMP_CONFIG_PATH,
+    OS_CONFIG_PATH,
 )
 from hal.models import HealthResponse, StatusResponse
 from hal.presets import SCENE_PRESETS, SERVO_CMD_PLAY
@@ -96,11 +96,11 @@ _root.addHandler(_file)
 # GELF handler: send INFO+ logs to centralized Graylog
 try:
     from hal.drivers.gelf_handler import GELFHandler
-    from hal.config import _lamp_cfg_get
+    from hal.config import _os_cfg_get
 
     _gelf = GELFHandler()
     _gelf.setFormatter(logging.Formatter("%(message)s"))
-    _device_id = _lamp_cfg_get("device_id")
+    _device_id = _os_cfg_get("device_id")
     if _device_id:
         _gelf.set_host(_device_id)
     _root.addHandler(_gelf)
@@ -201,7 +201,7 @@ async def lifespan(app: FastAPI):
             return
         try:
             svc = AnimationService(
-                port=SERVO_PORT, lamp_id=LAMP_ID, fps=SERVO_FPS, hold_s=SERVO_HOLD_S
+                port=SERVO_PORT, lamp_id=DEVICE_ID, fps=SERVO_FPS, hold_s=SERVO_HOLD_S
             )
             svc.start()
             state.animation_service = svc
@@ -315,10 +315,10 @@ async def lifespan(app: FastAPI):
         if state.audio_input_device is not None:
             logger.info(f"Audio input device: {state.audio_input_device}")
 
-    # Auto-start voice pipeline from Lamp config
-    lamp_config_path = LAMP_CONFIG_PATH
+    # Auto-start voice pipeline from os-server config
+    os_config_path = OS_CONFIG_PATH
     try:
-        with open(lamp_config_path) as f:
+        with open(os_config_path) as f:
             lamp_cfg = json.load(f)
         dgk = lamp_cfg.get("deepgram_api_key", "")
         llm_key = lamp_cfg.get("llm_api_key", "")
@@ -384,7 +384,7 @@ async def lifespan(app: FastAPI):
                 logger.info("VoiceService auto-started (%s, wake_words=%s)", stt_provider.name, wake_words)
     except FileNotFoundError:
         logger.info(
-            f"Lamp config not found at {lamp_config_path}, voice will wait for /voice/start"
+            f"os-server config not found at {os_config_path}, voice will wait for /voice/start"
         )
     except Exception as e:
         logger.warning(f"Auto-start voice from lamp config failed: {e}")
@@ -679,8 +679,8 @@ def _resolve_device_type() -> str:
     if dev:
         return dev
     try:
-        from hal.config import _lamp_cfg_get
-        return _lamp_cfg_get("device_type") or "lamp"
+        from hal.config import _os_cfg_get
+        return _os_cfg_get("device_type") or "lamp"
     except Exception:
         return "lamp"
 
