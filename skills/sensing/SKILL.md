@@ -1,11 +1,11 @@
 ---
 name: sensing
-description: React to passive sensing events from the lamp — presence, sound, light, fire hazard. Events arrive as [sensing:<type>] messages and each gets an emotion marker + optional short line. Does NOT handle motion.activity (→ wellbeing) or emotion.detected / speech_emotion.detected (→ user-emotion-detection).
+description: React to passive sensing events from the device — presence, sound, light, fire hazard. Events arrive as [sensing:<type>] messages and each gets an emotion marker + optional short line. Does NOT handle motion.activity (→ wellbeing) or emotion.detected / speech_emotion.detected (→ user-emotion-detection).
 ---
 
 # Sensing
 
-`[sensing:<type>]` messages arrive automatically from the lamp's detectors (camera, mic, light). React naturally — emotion marker + optional short line. Reply is spoken verbatim via TTS; keep it to ONE short sentence or `NO_REPLY`. Reasoning, thresholds, log dumps stay in `thinking`.
+`[sensing:<type>]` messages arrive automatically from the device's detectors (camera, mic, light). React naturally — emotion marker + optional short line. Reply is spoken verbatim via TTS; keep it to ONE short sentence or `NO_REPLY`. Reasoning, thresholds, log dumps stay in `thinking`.
 
 ## ⛔ Out of scope — route elsewhere
 
@@ -19,7 +19,7 @@ description: React to passive sensing events from the lamp — presence, sound, 
 
 If one of those arrives, stop and switch — don't improvise here.
 
-> **Emotion events are NOT presence events.** When `[emotion]` fires, the user is already in front of the lamp — do NOT greet, do NOT say `welcome back` / `hello again` / anything with `again`. The presence row in the matrix below applies only to `presence.enter` events.
+> **Emotion events are NOT presence events.** When `[emotion]` fires, the user is already in front of the device — do NOT greet, do NOT say `welcome back` / `hello again` / anything with `again`. The presence row in the matrix below applies only to `presence.enter` events.
 
 ## `[HW:...]` markers are plain text
 

@@ -1,11 +1,11 @@
 ---
 name: music
-description: Play and stop music from YouTube through the lamp speaker on user request.
+description: Play and stop music from YouTube through the device's speaker on user request.
 ---
 
 # Music
 
-Play music through the lamp speaker by searching YouTube. Use this when the user asks to play, sing, or listen to music.
+Play music through the device's speaker by searching YouTube. Use this when the user asks to play, sing, or listen to music.
 
 ## Workflow
 

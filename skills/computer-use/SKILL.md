@@ -1,13 +1,13 @@
 ---
 name: computer-use
-description: Control the user's Mac via the paired Autonomous Buddy companion app — open/close apps, navigate URLs in Chrome, type text into focused fields, fire keyboard shortcuts, show desktop notifications, write to clipboard, click named UI buttons via macOS Accessibility. Also covers vision-driven tasks (screenshot, find/click unlabelled UI, read text off the screen, drag) — those load `reference/vision.md` for the synchronous see-think-act loop. Use when the user explicitly asks Lamp to do something on their COMPUTER (e.g. "open Chrome", "go to Gmail", "join Meet", "close Slack", "type … into my Mac", "copy … to clipboard", "click the blue button on my screen", "what's on my Mac right now?"). Do NOT use for hardware control of the lamp itself (LED, scene, emotion, music, servo) — those are separate skills. Do NOT use if no Mac is paired (the lamp web UI shows pairing status under the Buddy card).
+description: Control the user's Mac via the paired Autonomous Buddy companion app — open/close apps, navigate URLs in Chrome, type text into focused fields, fire keyboard shortcuts, show desktop notifications, write to clipboard, click named UI buttons via macOS Accessibility. Also covers vision-driven tasks (screenshot, find/click unlabelled UI, read text off the screen, drag) — those load `reference/vision.md` for the synchronous see-think-act loop. Use when the user explicitly asks Lamp to do something on their COMPUTER (e.g. "open Chrome", "go to Gmail", "join Meet", "close Slack", "type … into my Mac", "copy … to clipboard", "click the blue button on my screen", "what's on my Mac right now?"). Do NOT use for hardware control of the device itself (LED, scene, emotion, music, servo) — those are separate skills. Do NOT use if no Mac is paired (the device's web UI shows pairing status under the Buddy card).
 ---
 
 # Computer Use (Mac via Autonomous Buddy)
 
 ## Quick Start
 
-Autonomous Buddy is a small macOS app the user installs on their Mac. Once paired with the lamp via the Buddy card on the Monitor web UI, it lets Lamp launch apps, open URLs, type text, fire keyboard shortcuts, and click UI elements **on the user's actual Mac**.
+Autonomous Buddy is a small macOS app the user installs on their Mac. Once paired with the device via the Buddy card on the Monitor web UI, it lets Lamp launch apps, open URLs, type text, fire keyboard shortcuts, and click UI elements **on the user's actual Mac**.
 
 This skill emits inline markers that Lamp fires asynchronously while TTS speaks the confirmation:
 
@@ -15,7 +15,7 @@ This skill emits inline markers that Lamp fires asynchronously while TTS speaks 
 [HW:/buddy/exec/<action>:<params-json>]
 ```
 
-The marker hits `/api/buddy/exec/<action>` on the lamp, which dispatches over the buddy's persistent WebSocket. Fire-and-forget — no response is awaited (TTS continues immediately).
+The marker hits `/api/buddy/exec/<action>` on the device, which dispatches over the buddy's persistent WebSocket. Fire-and-forget — no response is awaited (TTS continues immediately).
 
 ## Workflow
 
@@ -182,10 +182,10 @@ Markers fire in order. Useful patterns:
 - **Markers must appear at the START of the reply**, before the TTS sentence. Lamp parses and strips them before reading.
 - **No nested JSON** in marker params (the marker regex doesn't support nested `{}`). All actions above take flat params.
 - **One action per marker.** Don't try to batch multiple ops into a single marker body.
-- **Don't use this skill for lamp hardware** (LED, scene, emotion, audio playback on the lamp speaker, servo, display) — those are separate skills.
+- **Don't use this skill for the device's hardware** (LED, scene, emotion, audio playback on the device's speaker, servo, display) — those are separate skills.
 - **Don't fire `screenshot`, `click_at`, `scroll`, `mouse_move`, `drag`, `read_clipboard`, `cursor_pos`, `list_displays`** through inline markers. Those need return values (vision loop) and use a different transport. If the task needs visual reasoning (find an unlabelled button, drag a slider, read text off the screen), load `reference/vision.md` and follow its synchronous bash/curl pattern instead.
 - **Match the user's input language** in the TTS confirmation (English in, English out; Vietnamese in, Vietnamese out). Keep the TTS reply to one short sentence.
-- **If the user asks for lamp-side actions** ("turn yellow", "play music", "show emotion"), redirect to the appropriate skill (`led-control`, `music`, `emotion`, `scene`).
+- **If the user asks for device-side actions** ("turn yellow", "play music", "show emotion"), redirect to the appropriate skill (`led-control`, `music`, `emotion`, `scene`).
 
 ## Output template
 

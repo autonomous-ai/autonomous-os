@@ -6,7 +6,7 @@ description: Camera control — snapshot, stream, and privacy toggle. Trigger on
 # Camera
 
 ## Quick Start
-Accesses the lamp's built-in camera at `http://127.0.0.1:5001` to take snapshots or check the environment. Only use when the user explicitly asks you to look at something.
+Accesses the device's built-in camera at `http://127.0.0.1:5001` to take snapshots or check the environment. Only use when the user explicitly asks you to look at something.
 
 ## Capture Protocol
 

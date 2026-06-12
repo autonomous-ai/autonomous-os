@@ -2,7 +2,7 @@
 
 This reference unlocks the **synchronous vision loop**: take a screenshot of the user's Mac, look at it, decide where to click, fire the click, screenshot again. Use this **only** when the marker-based actions in the parent `SKILL.md` cannot do the job — for example, the user asks you to click a UI element that has no stable label, drag a slider, locate a window by appearance, or read text off the screen.
 
-The marker pattern (`[HW:/buddy/exec/<action>:{...}]`) is fire-and-forget and cannot return data. Vision needs return values, so it uses a different transport: **bash + curl against the lamp's local API** with the full Command schema.
+The marker pattern (`[HW:/buddy/exec/<action>:{...}]`) is fire-and-forget and cannot return data. Vision needs return values, so it uses a different transport: **bash + curl against the device's local API** with the full Command schema.
 
 ## When to load this reference
 
@@ -17,7 +17,7 @@ Do NOT load this for tasks the parent skill already handles (open app, open URL,
 
 ## Transport
 
-Call the lamp's local HTTP endpoint via bash:
+Call the device's local HTTP endpoint via bash:
 
 ```bash
 curl -s -X POST http://127.0.0.1:5000/api/buddy/command \
@@ -25,7 +25,7 @@ curl -s -X POST http://127.0.0.1:5000/api/buddy/command \
   -d '{"action":"<action>","params":{...},"timeout_ms":15000}'
 ```
 
-The endpoint is localhost-only (lamp-internal). The lamp dispatches over the buddy's persistent WebSocket and returns the buddy's response **synchronously** wrapped in the standard envelope:
+The endpoint is localhost-only (device-internal). The device dispatches over the buddy's persistent WebSocket and returns the buddy's response **synchronously** wrapped in the standard envelope:
 
 ```json
 {"status": 1, "data": {"id": "...", "ok": true, "result": {...}, "error": null, "duration_ms": 213}, "message": null}
@@ -33,7 +33,7 @@ The endpoint is localhost-only (lamp-internal). The lamp dispatches over the bud
 
 - `status: 1` + `data.ok: true` → use `data.result`.
 - `data.ok: false` → read `data.error`. Common errors: `"no buddy connected"`, `"buddy paused by user"`, `"unknown action"`, `"timeout after Nms"`, `"Screen Recording access required"`, `"Accessibility access required"`.
-- `status: 0` → lamp-level failure (buddy not paired, bad params).
+- `status: 0` → device-level failure (buddy not paired, bad params).
 
 ## Coordinate system — read this once before clicking
 
@@ -106,7 +106,7 @@ Some practical rules for the loop:
 
 ## Reading the screenshot
 
-The screenshot result includes `path` (filesystem path on the user's Mac, visible only to the buddy app) and optionally `image_b64`. The lamp-side LLM cannot read the user's filesystem, so to actually **see** the image you must request base64.
+The screenshot result includes `path` (filesystem path on the user's Mac, visible only to the buddy app) and optionally `image_b64`. The device-side LLM cannot read the user's filesystem, so to actually **see** the image you must request base64.
 
 **Recipe — call once at session start, then reuse:**
 

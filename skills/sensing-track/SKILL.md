@@ -184,7 +184,7 @@ The system log uses lumberjack rotation (1 MB cap, 3 backups) — it may miss da
 
 ## Mood history
 
-A dedicated mood history log tracks **user mood** per user. Only the user's emotional state is logged — not system events or lamp emotions. Each user's mood data lives in their own directory.
+A dedicated mood history log tracks **user mood** per user. Only the user's emotional state is logged — not system events or device emotions. Each user's mood data lives in their own directory.
 
 **Read API:**
 ```bash

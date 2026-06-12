@@ -1,11 +1,11 @@
 # Flow B — Self-enroll via camera capture (no photo supplied)
 
-User asks the lamp to remember their face WITHOUT sending a photo. Works for:
+User asks the device to remember their face WITHOUT sending a photo. Works for:
 
-- **Voice** — user is in front of the lamp, says "remember my face", "I'm Gray".
-- **Telegram chat (text only)** — "take a photo and remember me", "capture and enroll me". User assumed to be in front of the lamp (or at least someone is — they're explicitly asking the camera to capture).
+- **Voice** — user is in front of the device, says "remember my face", "I'm Gray".
+- **Telegram chat (text only)** — "take a photo and remember me", "capture and enroll me". User assumed to be in front of the device (or at least someone is — they're explicitly asking the camera to capture).
 
-Do NOT activate on **web chat without a photo** — the web user may not be in front of the lamp at all (remote browser). Ask them to send a selfie instead (Flow A).
+Do NOT activate on **web chat without a photo** — the web user may not be in front of the device at all (remote browser). Ask them to send a selfie instead (Flow A).
 
 The agent grabs a snapshot via `/camera/snapshot` and uses it for `/face/enroll`. This counts as **self-enrollment** because the user is the subject — not naming someone else.
 

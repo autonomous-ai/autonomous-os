@@ -1,18 +1,18 @@
 ---
 name: face-enroll
-description: Manage the lamp's face recognition roster — enroll new faces (3 paths: user-supplied photo, agent-captured snapshot on user request, or HAL's familiar-stranger prompt) and maintain the enrolled set (status / remove / reset). All enrolled persons are friends; strangers stay unnamed until promoted via one of the enroll flows.
+description: Manage the device's face recognition roster — enroll new faces (3 paths: user-supplied photo, agent-captured snapshot on user request, or HAL's familiar-stranger prompt) and maintain the enrolled set (status / remove / reset). All enrolled persons are friends; strangers stay unnamed until promoted via one of the enroll flows.
 ---
 
 # Face Enroll
 
-Manage faces for the lamp's face recognition system. Faces live under `/root/local/users/<label>/`. All enrolled persons are treated as **friends** — distinguished from `stranger_*` IDs the camera hasn't been told about yet.
+Manage faces for the device's face recognition system. Faces live under `/root/local/users/<label>/`. All enrolled persons are treated as **friends** — distinguished from `stranger_*` IDs the camera hasn't been told about yet.
 
 ## Flow router — pick ONE per user message
 
 | Flow | When | Detail |
 |---|---|---|
 | **A — Self-enroll with a photo** | User sends a photo of themselves + intro ("remember my face", "this is me"). | `reference/self-enroll-photo.md` |
-| **B — Self-enroll via camera capture** | User asks to be remembered without sending a photo, on **voice** or **Telegram text** (assumes user is near the lamp). Examples: "remember my face", "I'm Gray", "capture and enroll me". Web chat without a photo → ask for a selfie (Flow A) instead. | `reference/self-enroll-camera.md` |
+| **B — Self-enroll via camera capture** | User asks to be remembered without sending a photo, on **voice** or **Telegram text** (assumes user is near the device). Examples: "remember my face", "I'm Gray", "capture and enroll me". Web chat without a photo → ask for a selfie (Flow A) instead. | `reference/self-enroll-camera.md` |
 | **C — Familiar-stranger prompt** | Current sensing message contains HAL's hint `(familiar stranger ... — seen N times, ask user if they want to remember this face; image saved at <path>)`, OR the user is replying to your previous prompt about that stranger. | `reference/familiar-stranger.md` |
 | **M — Maintenance** | "who do you recognize?", "forget my face", "reset faces". | `reference/maintenance.md` |
 
