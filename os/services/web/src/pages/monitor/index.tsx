@@ -219,7 +219,7 @@ export default function Monitor() {
   }, []);
 
   // HAL version comes from /api/system/info (sys.halVersion), populated
-  // by lamp via a cached loopback call to :5001/version. Avoids a direct
+  // by the OS server via a cached loopback call to :5001/version. Avoids a direct
   // browser fetch to /hw/version which nginx gates to loopback only.
 
   // One-shot fetch for system info on mount — populates sidebar version /
@@ -474,7 +474,7 @@ export default function Monitor() {
             <iframe
               title="API Docs"
               // Routed through `/api/hardware/*` (admin-auth gated reverse
-              // proxy to LeLamp) instead of `/hw/docs` directly: nginx /hw/
+              // proxy to the device) instead of `/hw/docs` directly: nginx /hw/
               // is `allow 127.0.0.1; deny all;` per audit local F2, so the
               // direct path is broken from any remote browser. The proxy
               // accepts the session cookie via fetch credentials.

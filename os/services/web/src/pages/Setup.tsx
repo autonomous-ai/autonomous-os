@@ -22,7 +22,7 @@ import type { ChannelType, NetworkItem } from "@/types";
 import { Wifi, Lamp, Brain, Volume2, MessageSquare, UserCircle, Mic, Globe, Check } from "lucide-react";
 
 // SetupMode controls which sections render. Initial = AP/offline (hide
-// online-only enrollments + tests), Continue = LAN/online (lamp can hit
+// online-only enrollments + tests), Continue = LAN/online (the device can hit
 // APIs, so Voice/Face enroll + TTS preview become available).
 export type SetupMode = "initial" | "continue";
 
@@ -62,7 +62,7 @@ interface SetupProps {
 // ── main page ─────────────────────────────────────────────────────────────────
 
 export default function Setup({ mode = "initial" }: SetupProps = {}) {
-  // #force in App.tsx forces mode="initial" for UI testing, but the lamp's
+  // #force in App.tsx forces mode="initial" for UI testing, but the device's
   // backend is still reachable in that scenario — so for feature-gating we
   // treat #force the same as continue (show Voice/Face sections, allow
   // prefill-driven checks, etc.). The redirect logic still keys off the raw
@@ -70,7 +70,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
   const forceHash = typeof window !== "undefined" && window.location.hash === "#force";
   const isContinue = mode === "continue" || forceHash;
   // Dev hosts (localhost / 127.0.0.1) are local Vite servers pointed at a
-  // remote lamp — auto-bouncing to /monitor while debugging Setup is annoying.
+  // remote device — auto-bouncing to /monitor while debugging Setup is annoying.
   const isLocalDev = typeof window !== "undefined" &&
     (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
   const [theme, toggleTheme, themeClass] = useTheme();
@@ -85,9 +85,9 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
 
   const urlParams = useSetupUrlParams(searchParams);
 
-  // When Lamp (golang) pushes provisioning credentials via query params, the
+  // When the OS server (golang) pushes provisioning credentials via query params, the
   // operator only needs to pick a Wi-Fi — every other field is already filled.
-  // Treat presence of llm_api_key as the signal Lamp handed us a full config:
+  // Treat presence of llm_api_key as the signal the OS server handed us a full config:
   // hide the AI Brain / Channels / Language / TTS menu entries and keep those
   // sections mounted (display:none) so their state still submits with the form.
   // Gated to initial (AP) mode so editing on the LAN IP keeps the full menu.
