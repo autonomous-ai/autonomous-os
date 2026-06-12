@@ -226,7 +226,9 @@ func (b *Bootstrap) checkOnce(ctx context.Context) error {
 }
 
 // resolveDeviceType returns this device's class for picking devices.<type> in
-// OTA metadata: DEVICE_TYPE env → config.json device_type → "lamp".
+// OTA metadata: DEVICE_TYPE env → config.json device_type. Returns "" when
+// unresolved — NO "lamp" fallback (callers skip the device-profile OTA rather
+// than pull the wrong device's profile).
 func resolveDeviceType() string {
 	if t := strings.TrimSpace(os.Getenv("DEVICE_TYPE")); t != "" {
 		return t
@@ -239,7 +241,7 @@ func resolveDeviceType() string {
 			return strings.TrimSpace(c.DeviceType)
 		}
 	}
-	return "lamp"
+	return ""
 }
 
 // fetchDeviceComponent reads metadata.devices.<type>. The profile is nested, so
@@ -273,6 +275,10 @@ func (b *Bootstrap) fetchDeviceComponent(ctx context.Context, deviceType string)
 // for this device type → no-op (the device simply has no published profile).
 func (b *Bootstrap) reconcileDevice(ctx context.Context) (bool, error) {
 	deviceType := resolveDeviceType()
+	if deviceType == "" {
+		slog.Warn("device_type unresolved — skipping device-profile OTA (set DEVICE_TYPE; refusing to assume lamp)", "component", "bootstrap")
+		return false, nil
+	}
 	comp, ok, err := b.fetchDeviceComponent(ctx, deviceType)
 	if err != nil {
 		return false, err

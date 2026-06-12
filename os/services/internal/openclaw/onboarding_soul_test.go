@@ -65,11 +65,11 @@ func TestDeviceSoulCore_DogHasOwnSoul(t *testing.T) {
 	}
 }
 
-// Empty device_type falls back to "lamp" (DeviceTypeOrDefault).
-func TestDeviceSoulCore_EmptyTypeDefaultsToLamp(t *testing.T) {
-	content, has := soulFor(t, "")
-	if !has || !strings.Contains(string(content), "You are **Lamp**") {
-		t.Errorf("empty device_type should resolve to the lamp soul")
+// Empty device_type no longer falls back to "lamp" — DeviceTypeOrDefault returns
+// "" and resolves no soul (the Serve startup guard fail-louds instead).
+func TestDeviceSoulCore_EmptyTypeNoLampFallback(t *testing.T) {
+	if _, has := soulFor(t, ""); has {
+		t.Error("empty device_type must NOT resolve the lamp soul (no fallback)")
 	}
 }
 

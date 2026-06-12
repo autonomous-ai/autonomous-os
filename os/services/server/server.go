@@ -483,14 +483,21 @@ func corsMiddleware() gin.HandlerFunc {
 }
 
 func (s *Server) Serve(closeFn func()) error {
+	// Device type is mandatory — refuse to boot rather than silently assume a
+	// "lamp" (wrong soul/hardware/OTA). Mirrors the fail-loud provisioning layer.
+	deviceType := s.config.DeviceTypeOrDefault()
+	if deviceType == "" {
+		log.Fatal("[config] device_type unresolved — set DEVICE_TYPE env (provisioning) or config.json device_type; refusing to assume 'lamp'")
+	}
+
 	// Set GELF host to device_id + stamp device class for centralized logging
 	if s.config.DeviceID != "" {
 		logger.SetGELFHost(s.config.DeviceID)
 	}
-	logger.SetGELFDeviceType(s.config.DeviceTypeOrDefault())
+	logger.SetGELFDeviceType(deviceType)
 	// i18n device name (wake-words + {name}/{Name} in strings) — device_type as the
 	// startup fallback; WatchIdentity overrides with the agent name once IDENTITY.md loads.
-	i18n.SetDeviceName(s.config.DeviceTypeOrDefault())
+	i18n.SetDeviceName(deviceType)
 
 	// Register the shared bearer token for outbound HAL HTTP calls.
 	// HAL's local_only_middleware accepts Authorization: Bearer <llm_api_key>

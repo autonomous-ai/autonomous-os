@@ -218,15 +218,14 @@ func Default() Config {
 // DeviceTypeOrDefault resolves the device class used to pick
 // devices/<type>/{DEVICE,SOUL}.md. Order mirrors HAL's _resolve_device_type:
 // the DEVICE_TYPE env (set at provisioning — an immutable hardware identity that
-// must outrank anything the web UI writes) → config.json "device_type" → "lamp".
+// must outrank anything the web UI writes) → config.json "device_type".
+// Returns "" when unresolved — NO "lamp" fallback; the startup guard in Serve
+// fail-louds rather than let a device masquerade as a lamp.
 func (c *Config) DeviceTypeOrDefault() string {
 	if t := os.Getenv("DEVICE_TYPE"); t != "" {
 		return t
 	}
-	if c.DeviceType != "" {
-		return c.DeviceType
-	}
-	return "lamp"
+	return c.DeviceType
 }
 
 func ProvideConfig() *Config {

@@ -21,12 +21,12 @@ func GetDeviceMac() string {
 	// Device-type-driven identity: <device_type>-<suffix>, lowercase — matches the
 	// mDNS hostname / AP SSID set by setup.sh, and is the redirect target the web UI
 	// derives from this field. DEVICE_TYPE is the immutable hardware identity (env,
-	// baked into the systemd unit at provisioning). Mirrors the env tier + final
-	// "lamp" fallback of config.DeviceTypeOrDefault (config.json tier omitted — the
-	// env is always set on a provisioned device).
+	// baked into the systemd unit at provisioning). Env-only (config.json tier
+	// omitted — the env is always set on a provisioned device). No "lamp"
+	// fallback: without a device_type we can't form a valid id, so return empty.
 	deviceType := strings.ToLower(os.Getenv("DEVICE_TYPE"))
 	if deviceType == "" {
-		deviceType = "lamp"
+		return ""
 	}
 	return deviceType + "-" + strings.ToLower(suffix)
 }
