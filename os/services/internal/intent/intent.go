@@ -100,7 +100,7 @@ var chitchatRules = []chitchatRule{
 // matchChitchat returns a Result when text starts with a chitchat phrase in
 // any supported language AND looks short/social (≤5 words, no command verbs).
 // Reply is picked in the matched-input language so "hi" → English reply,
-// "chào" → Vietnamese reply — keeps the lamp on the user's current language
+// "chào" → Vietnamese reply — keeps the agent on the user's current language
 // regardless of configured i18n.Lang().
 func matchChitchat(text string) *Result {
 	if text == "" {
@@ -109,15 +109,15 @@ func matchChitchat(text string) *Result {
 	t := strings.ToLower(strings.TrimSpace(text))
 	t = strings.TrimRight(t, ".!?,。！？，")
 
-	// Strip leading wake word so "Lamp xin chào" → "xin chào", "Lami cảm
-	// ơn" → "cảm ơn". Bare wake-word / "lamp ơi" → "" → user is just
-	// calling Lamp by name; short-circuit with a greeting reply.
+	// Strip leading wake word so "<name> xin chào" → "xin chào", "<name> cảm
+	// ơn" → "cảm ơn". Bare wake-word / "<name> ơi" → "" → user is just
+	// calling the device by name; short-circuit with a greeting reply.
 	t = stripWakeWord(t)
 	if t == "" {
 		return bareAttentionResult()
 	}
 
-	// Length gate: greeting/farewell/thanks are short. "Chào Lamp hôm nay
+	// Length gate: greeting/farewell/thanks are short. "Chào <name> hôm nay
 	// bạn thế nào" → 6 words → fall through to LLM so context isn't lost.
 	// Word counting on bytes works for VN/EN; for ZH treat each rune as a
 	// word since CJK has no spaces.
@@ -139,7 +139,7 @@ func matchChitchat(text string) *Result {
 				// Substring match — exact / prefix / suffix all hit. The
 				// length gate above (≤5 words) and command-verb reject
 				// already bound false positives, so Contains is safe and
-				// catches real speech variation: "chào nha", "lamp chào
+				// catches real speech variation: "chào nha", "<name> chào
 				// em", "cảm ơn rất nhiều", "thanks man", etc.
 				if !strings.Contains(t, p) {
 					continue
@@ -234,13 +234,13 @@ func stripChitchatPrefixes(s string) string {
 	return s
 }
 
-// stripWakeWord removes a leading wake-word token ("lamp", "làmi", "lamp
-// ơi", …) from already-lowercased chitchat input. Boundary check ensures
-// "lamppost" / "lamplight" aren't accidentally stripped — must be followed by
-// whitespace, comma, punctuation, or end-of-string. The wake-word list is
-// kept longest-first by i18n.ChitchatWakeWords so "lamp ơi xin chào" strips
-// the compound form rather than just "lamp", which would leave a dangling
-// "ơi" that matches no rule.
+// stripWakeWord removes a leading wake-word token (the device name, "<name>
+// ơi", …) from already-lowercased chitchat input. Boundary check ensures a
+// longer token with the name as a prefix isn't accidentally stripped — must be
+// followed by whitespace, comma, punctuation, or end-of-string. The wake-word
+// list is kept longest-first by i18n.ChitchatWakeWords so "<name> ơi xin chào"
+// strips the compound form rather than just "<name>", which would leave a
+// dangling "ơi" that matches no rule.
 func stripWakeWord(s string) string {
 	for _, w := range i18n.ChitchatWakeWords() {
 		if !strings.HasPrefix(s, w) {
@@ -258,9 +258,9 @@ func stripWakeWord(s string) string {
 	return s
 }
 
-// bareAttentionResult fires when the user said only the wake word ("Lamp",
-// "Lamp ơi", "Lami"). Replies with a greeting in the configured language —
-// skipping LLM RT keeps the lamp responsive when the user is just calling.
+// bareAttentionResult fires when the user said only the wake word (the device
+// name, "<name> ơi"). Replies with a greeting in the configured language —
+// skipping LLM RT keeps the device responsive when the user is just calling.
 func bareAttentionResult() *Result {
 	reply := i18n.Pick(i18n.PhraseChitchatGreeting)
 	if reply == "" {
@@ -459,7 +459,7 @@ var rules = []rule{
 		},
 	},
 
-	// --- TTS stop (interrupt Lamp speaking) ---
+	// --- TTS stop (interrupt the device speaking) ---
 	{
 		name:  "stop_talking",
 		match: anyOf("stop talking", "ok stop"),

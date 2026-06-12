@@ -62,7 +62,7 @@ func (s *Service) Start(ctx context.Context) {
 	// voiceWasRunning is true once we confirm voice:true from HAL.
 	// Recovery is only triggered after voice was running — this prevents
 	// false positives when HAL just restarted (systemd or cold boot)
-	// and voice hasn't been started yet by Lamp.
+	// and voice hasn't been started yet by the os-server.
 	voiceWasRunning := false
 	// wasUnreachable tracks HAL downtime so we can announce recovery via TTS.
 	wasUnreachable := false
@@ -147,7 +147,7 @@ func (s *Service) Start(ctx context.Context) {
 
 			// sensing: false — but only act if voice was running before.
 			// If voice was never running (e.g. HAL just restarted and
-			// Lamp hasn't called /voice/start yet), sensing=false is expected
+			// the os-server hasn't called /voice/start yet), sensing=false is expected
 			// and we should not interfere.
 			if !voiceWasRunning {
 				slog.Debug("sensing false but voice never ran — skipping (HAL startup?)", "component", "healthwatch")
@@ -193,7 +193,7 @@ func (s *Service) Start(ctx context.Context) {
 	}
 }
 
-// speakRecovery announces over TTS that the lamp is back after a HAL
+// speakRecovery announces over TTS that the device is back after a HAL
 // downtime. Phrase pool lives in lib/i18n (PhraseRecovery).
 func (s *Service) speakRecovery() {
 	phrase := i18n.Pick(i18n.PhraseRecovery)

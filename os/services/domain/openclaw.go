@@ -26,7 +26,7 @@ type AgentPayload struct {
 		EndedAt   int64  `json:"endedAt,omitempty"`
 		Error     string `json:"error,omitempty"`
 		// Tool stream fields
-		// OpenClaw uses "name" for tool name; "tool" is a Lamp alias kept for backwards compat.
+		// OpenClaw uses "name" for tool name; "tool" is a device alias kept for backwards compat.
 		Tool          string          `json:"tool,omitempty"`
 		Name          string          `json:"name,omitempty"`
 		ToolCallID    string          `json:"toolCallId,omitempty"`
@@ -48,7 +48,7 @@ type AgentPayload struct {
 	} `json:"data"`
 }
 
-// ToolName returns the resolved tool name from either "name" (OpenClaw) or "tool" (Lamp legacy).
+// ToolName returns the resolved tool name from either "name" (OpenClaw) or "tool" (device legacy).
 func (p *AgentPayload) ToolName() string {
 	if p.Data.Name != "" {
 		return p.Data.Name
@@ -57,7 +57,7 @@ func (p *AgentPayload) ToolName() string {
 }
 
 // ToolArguments returns tool arguments as a string.
-// OpenClaw sends args as an object (e.g. {"command":"curl ..."}), Lamp legacy uses a flat string.
+// OpenClaw sends args as an object (e.g. {"command":"curl ..."}), device legacy uses a flat string.
 func (p *AgentPayload) ToolArguments() string {
 	if p.Data.ToolArgs != "" {
 		return p.Data.ToolArgs

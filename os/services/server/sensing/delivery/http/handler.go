@@ -44,11 +44,11 @@ type SensingEventRequest struct {
 	// Image is an optional base64-encoded JPEG snapshot from the camera.
 	// Attached automatically for significant events (large motion, face detected) so AI can see.
 	Image string `json:"image,omitempty"`
-	// CurrentUser is HAL's view of who is effectively in front of the lamp
+	// CurrentUser is HAL's view of who is effectively in front of the device
 	// right now (from FaceRecognizer.current_user()). Empty when nobody is
 	// visible. This is the source of truth — do NOT re-derive by parsing
 	// Message. Text parsing gave wrong answers when a stranger-only enter
-	// event fired while a friend was still present (Lamp would downgrade
+	// event fired while a friend was still present (the agent would downgrade
 	// mood to "unknown" even though the friend was within forget window).
 	CurrentUser string `json:"current_user,omitempty"`
 	// Audio is an optional path (on the Pi) to the WAV clip that produced this
@@ -105,7 +105,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		return
 	}
 	if req.Type == "voice_listening_end" {
-		// Extend window 5s to cover STT → Lamp → LLM → TTS pipeline.
+		// Extend window 5s to cover STT → os-server → LLM → TTS pipeline.
 		h.voiceActiveUntil.Store(time.Now().Add(5 * time.Second).UnixMilli())
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(nil))
 		return
@@ -181,7 +181,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 
 	// Sleep guard: while the agent is in "sleepy" state, drop all passive sensing
 	// (light.level, motion, sound) so they don't wake the agent and override the
-	// sleepy emotion. Only presence.enter, fire_hazard.detected, and voice_command can wake the lamp.
+	// sleepy emotion. Only presence.enter, fire_hazard.detected, and voice_command can wake the device.
 	// web_chat is user-initiated text from the monitor UI — bypasses sleep-drop
 	// (forwarded to agent, TTS suppressed) but does NOT trigger physical wake.
 	// web_chat counts as passive for busy-gate so it queues on agent busy
@@ -226,7 +226,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	if isPassive && h.agentGateway.IsBusy() {
 		// motion.activity and emotion.detected get queued (not dropped) because
 		// HAL deduplicates both with a 5-min window at the source — if one
-		// reaches Lamp it's genuinely new. Dropping it here would make HAL's
+		// reaches the os-server it's genuinely new. Dropping it here would make HAL's
 		// dedup think "sent" while the agent never saw the event, blocking the
 		// next real transition for 5 min.
 		if shouldQueueEvent(req.Type, req.Message, inVoiceWindow) {
@@ -313,7 +313,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// posture JSONL — the habit skill's Flow A reads those rows to
 	// derive peak_hour / side_bias / typical_risk. Without this bridge
 	// the habit-skill posture extension stays starved (agent only logs
-	// nudge/praise; the raw alert signal had no Lamp-side writer).
+	// nudge/praise; the raw alert signal had no os-server-side writer).
 	if req.Type == "motion.activity" {
 		if bid, worst := extractPoseBucketMarkers(req.Message); bid != "" {
 			h.agentGateway.MarkPoseBucketRun(runID, bid, worst)

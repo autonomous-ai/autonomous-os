@@ -15,7 +15,7 @@ import (
 // bootstrap), so 150K here ≈ 185K actual context — well below the
 // gpt-5.5 272K window and below the ~200K mark where OpenClaw's
 // native overflow auto-compaction kicks in (3-min freeze observed
-// 2026-05-11). Lamp's /new resets in ~3s, so it races and wins under
+// 2026-05-11). The OS server's /new resets in ~3s, so it races and wins under
 // normal usage. Previously 80K (≈115K actual) — bumped because resets
 // felt too aggressive for short conversational sessions.
 const autoSessionThreshold = 150_000
@@ -81,7 +81,7 @@ func (h *AgentHandler) maybeAutoCompact(sessionKey string, totalTokens int, flow
 // Trade-off vs compact:
 //   - loses verbatim in-session conversation flow ("what we said an
 //     hour ago")
-//   - keeps all Lamp external memory: mood log, habit tracking, voice
+//   - keeps all device external memory: mood log, habit tracking, voice
 //     clusters, owner identity, music suggestion history — those live
 //     outside the agent session JSONL and survive a session swap
 //   - no TTS notice — the swap is meant to be invisible

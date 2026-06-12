@@ -133,7 +133,7 @@ func (s *Service) sendChat(message string, imageBase64 string, fixedReqID string
 		return "", fmt.Errorf("websocket not connected")
 	}
 
-	// reqID labels outbound chat.send from Lamp (sensing POST, wake greeting, etc.) — not "audio only".
+	// reqID labels outbound chat.send from the os server (sensing POST, wake greeting, etc.) — not "audio only".
 	// Idempotency key must stay stable for OpenClaw run_id mapping; use lamp-chat-* (not lamp-sensing-*)
 	// so logs are not mistaken for sound/voice-only turns vs Telegram.
 	var reqID string
@@ -172,7 +172,7 @@ func (s *Service) sendChat(message string, imageBase64 string, fixedReqID string
 	// Emit chat_input flow event so Flow Monitor's IN field shows the
 	// actual message text. Without this, lamp-chat-* turns render as
 	// "Input not captured" because the agent path skips chat.history
-	// fetch for Lamp-originated runs (only channel turns hit that path).
+	// fetch for os-server-originated runs (only channel turns hit that path).
 	previewMsg := message
 	if len(previewMsg) > 500 {
 		previewMsg = previewMsg[:500] + "…"

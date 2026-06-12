@@ -29,8 +29,8 @@ type pairConfirmRequest struct {
 // RevokeSelf clears the pairing when the buddy app itself initiates unpair
 // (user clicks "Revoke pairing" in the menu bar). Buddy authenticates with its
 // Bearer token so this can't be triggered by random LAN clients. Without this
-// endpoint, the lamp would keep a stale pairing record and the buddy would
-// have to re-fail a WS handshake before the lamp notices anything is wrong.
+// endpoint, the device would keep a stale pairing record and the buddy would
+// have to re-fail a WS handshake before the device notices anything is wrong.
 func (h *BuddyHandler) RevokeSelf(c *gin.Context) {
 	auth := c.GetHeader("Authorization")
 	if !strings.HasPrefix(auth, "Bearer ") {

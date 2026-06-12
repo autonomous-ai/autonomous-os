@@ -64,8 +64,8 @@ type AgentHandler struct {
 	channelRuns   map[string]bool
 
 	// interleavedDMByRunID captures Telegram chat_ids when a Telegram message
-	// is injected mid-turn into a Lamp-issued run (queue mode). At lifecycle.end
-	// the reply is routed back to that chat instead of TTS — fixes "Lamp
+	// is injected mid-turn into a device-issued run (queue mode). At lifecycle.end
+	// the reply is routed back to that chat instead of TTS — fixes "the device
 	// answered Telegram question on the speaker" when sensing/voice was the
 	// run originator. Protected by channelRunsMu.
 	interleavedDMByRunID map[string]string
@@ -75,7 +75,7 @@ type AgentHandler struct {
 	// shortly after an event:"cron" (action:"started") — OpenClaw's cron
 	// event omits sessionKey for sessionTarget="main" jobs, so we can't
 	// correlate by session and instead consume from a FIFO timestamp queue.
-	// Membership forces isChannelRun=false so the lamp speaker fires.
+	// Membership forces isChannelRun=false so the device speaker fires.
 	cronFireRunsMu sync.Mutex
 	cronFireRuns   map[string]bool
 
@@ -88,7 +88,7 @@ type AgentHandler struct {
 
 	// channelTurns tracks active channel-initiated turns (Telegram, etc.) keyed
 	// by sessionKey. OpenClaw 5.x gates the `agent` lifecycle stream behind
-	// isControlUiVisible, so non-Lamp-originated runs receive only
+	// isControlUiVisible, so non-device-originated runs receive only
 	// `session.message` / `session.tool` / `sessions.changed`. chat_input,
 	// lifecycle synthesis, and HW marker firing for those turns must be
 	// driven from `session.message` here. Each entry holds the synthetic
@@ -160,7 +160,7 @@ const cronFireWindowMs int64 = 10_000
 // ProvideAgentHandler returns an OpenClaw events handler.
 func ProvideAgentHandler(gw domain.AgentGateway, bus *monitor.Bus, sled *statusled.Service) AgentHandler {
 	// Init flow emitter here so ws_connect events (fired from StartWS before any HTTP request)
-	// are broadcast to SSE. Lamp is a single-user device so the global trace ID is sufficient;
+	// are broadcast to SSE. The device is single-user so the global trace ID is sufficient;
 	// concurrent turn interleaving is not a concern in normal operation.
 	flow.Init(bus, config.LampVersion)
 	mood.Init()

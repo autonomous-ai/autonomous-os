@@ -47,7 +47,7 @@ const (
 
 	// FillerCooldown is the minimum gap between two filler reactions in
 	// the same turn — covers both filler-spoken and hardware-reaction
-	// events. Keeps the lamp from chattering "one sec... still working"
+	// events. Keeps the device from chattering "one sec... still working"
 	// on top of "/emotion thinking" within a fraction of a second.
 	// Tuned 2026-05-12 from 4s → 2.5s so short ~3s tool gaps still get a
 	// filler instead of going silent — cached audio plays in ~1s so a
@@ -67,7 +67,7 @@ const (
 
 // fillerCancelToolMarkers are URL fragments for tool calls that themselves
 // act as audible/visible reactions — when one fires, no filler is needed
-// at that moment because the user already perceived the lamp reacting.
+// at that moment because the user already perceived the device reacting.
 var fillerCancelToolMarkers = []string{"/emotion", "/audio/play", "/scene", "/servo"}
 
 // isHWReactionTool reports whether toolArgs invokes a hardware reaction.
@@ -390,7 +390,7 @@ func (fm *FillerManager) OnTurnStart(runID string) {
 // OnToolStart records the most recently started tool name so the next
 // filler picks a tool-aware phrase (see ToolFillers*), and soft-cancels
 // the pending filler when the tool is a hardware reaction (the user
-// already perceives the lamp reacting — no filler needed at that moment).
+// already perceives the device reacting — no filler needed at that moment).
 // Non-hardware tools leave the filler timer ticking so it can still fire
 // during a long Bash/Read/web_search.
 func (fm *FillerManager) OnToolStart(runID, toolArgs, toolName string) {

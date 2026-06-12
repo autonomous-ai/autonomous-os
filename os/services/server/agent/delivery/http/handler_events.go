@@ -16,7 +16,7 @@ import (
 
 // poseBucketRoot is the on-disk base where hal writes pose buckets.
 // Matches hal/config.py:SNAPSHOT_TMP_DIR + "/sensing_pose/buckets/".
-// hal and lamp share the same Pi so this is the same FS location for
+// hal and os-server share the same Pi so this is the same FS location for
 // both processes.
 const poseBucketRoot = "/tmp/hal-sensing-snapshots/sensing_pose/buckets"
 
@@ -49,7 +49,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 	// src/cron/service/state.ts CronEvent): { jobId, action, sessionKey,
 	// runAtMs, ... }. We cache sessionKey → timestamp; the next lifecycle_start
 	// matching that sessionKey within cronFireWindowMs gets marked as a cron
-	// fire so isChannelRun is overridden and TTS reaches the lamp speaker.
+	// fire so isChannelRun is overridden and TTS reaches the device speaker.
 	if evt.Event == "cron" {
 		// Diagnostic: dump raw cron payload — keep until correlation is proven
 		// stable across all sessionTarget variants.
@@ -88,11 +88,11 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 		}
 
 		// Map OpenClaw UUID → device idempotencyKey on lifecycle_start.
-		// Only map when the lifecycle belongs to Lamp's own direct session — group/channel
+		// Only map when the lifecycle belongs to the device's own direct session — group/channel
 		// sessions have independent runs that must NOT be merged into sensing traces.
 		//
 		// Two paths depending on payload.RunID format:
-		//   • Lamp-format (lamp-chat-*): OpenClaw 5.4+ echoes the idempotencyKey as
+		//   • device-format (lamp-chat-*): OpenClaw 5.4+ echoes the idempotencyKey as
 		//     the runId — already IS the device trace. Just remove from pending.
 		//   • UUID: produced when OpenClaw drains its followup queue (the
 		//     FollowupRun type does not carry idempotencyKey, so
@@ -216,7 +216,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 				// configured channel — the goroutine below will replace this
 				// with the right label ([telegram:Gray] / [voice] / [emotion]
 				// / ...) once chat.history reveals whether it's a real
-				// channel user or a Lamp-internal sensing/voice merge. If
+				// channel user or a device-internal sensing/voice merge. If
 				// the goroutine fails or times out, this generic label
 				// stays — better than mis-attributing to Telegram.
 				flow.Log("chat_input", map[string]any{"run_id": payload.RunID, "source": "channel"}, payload.RunID)
@@ -275,7 +275,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 						// Label selection (priority order):
 						//  1. Real channel user (senderLabel filled by chat.history) →
 						//     `[telegram:Gray]` — keeps existing Telegram UI.
-						//  2. Lamp-internal sensing/voice/wellbeing/system message
+						//  2. device-internal sensing/voice/wellbeing/system message
 						//     merged into this UUID turn via OpenClaw steer →
 						//     `[voice]` / `[emotion]` / `[activity]` / ... so the
 						//     monitor doesn't mis-label self-fire turns as
@@ -312,20 +312,20 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 			}
 
 			// Track busy state so passive sensing events can be suppressed during active turns.
-			// Only gate on lifecycles that belong to a Lamp-initiated turn — these are
+			// Only gate on lifecycles that belong to a device-initiated turn — these are
 			// the only ones whose `end` is reliably round-tripped through SSE.
 			// Heartbeat (target:"none"), channel turns merged by steer mode, and other
 			// OpenClaw self-trigger lifecycles can drop their `end` SSE (per the
 			// busyTTL comment in service_events.go); gating on them strands activeTurn=true
-			// for up to 5 minutes — every Lamp sensing event in that window queues
+			// for up to 5 minutes — every device sensing event in that window queues
 			// instead of forwarding.
 			//
-			// External turns don't NEED Lamp-side gating: with messages.queue.mode=steer
+			// External turns don't NEED device-side gating: with messages.queue.mode=steer
 			// (pinned in onboarding), concurrent sensing events arriving during a
 			// channel/cron turn are batched into the active turn at the next model
-			// boundary by OpenClaw itself — no need for Lamp to pre-suppress them.
+			// boundary by OpenClaw itself — no need for the device to pre-suppress them.
 			//
-			// Lamp-initiated turns also flip activeTurn=true at chat.send time
+			// device-initiated turns also flip activeTurn=true at chat.send time
 			// (service_chat.go), so a missed lifecycle.start here is harmless.
 			// LED is managed by the agent via /emotion skill calls — do not override here.
 			if payload.Data.Phase == "start" {
@@ -484,7 +484,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 								// h.maybeAutoCompact(h.agentGateway.GetSessionKey(), u.TotalTokens, capturedFlowRunID)
 
 								// Auto-new-session — instant, drops in-session conversation
-								// history but keeps Lamp external memory (mood/habit/owner).
+								// history but keeps device external memory (mood/habit/owner).
 								h.maybeAutoNewSession(h.agentGateway.GetSessionKey(), u.TotalTokens, capturedFlowRunID)
 								break
 							}
@@ -531,7 +531,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 			summary := toolName
 			if payload.Data.Phase == "start" {
 				// Hardware-reaction tools soft-cancel any pending filler —
-				// the user already perceives the lamp reacting. Non-HW
+				// the user already perceives the device reacting. Non-HW
 				// tools leave the timer running so the filler can fire
 				// during a long Bash/curl/Read.
 				sensinghttp.DefaultFillerManager.OnToolStart(flowRunID, toolArgs, toolName)
@@ -653,7 +653,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 			// Don't truncate deltas — they are merged in the frontend
 			if delta != "" {
 				// Real assistant text is streaming — hard-cancel any
-				// pending or in-flight filler so the lamp doesn't talk
+				// pending or in-flight filler so the device doesn't talk
 				// over the actual reply. Cancel is idempotent so calling
 				// it on every delta is safe.
 				sensinghttp.DefaultFillerManager.Cancel(flowRunID)
@@ -675,7 +675,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 
 			// Sentence-streaming: dispatch the FIRST complete sentence to
 			// /voice/speak as soon as the agent emits the boundary so the
-			// lamp starts speaking before generation finishes. Only the
+			// device starts speaking before generation finishes. Only the
 			// first sentence streams here — chaining every sentence as its
 			// own POST exposes a per-sentence TTFB gap. Lifecycle:end sends
 			// the remainder through /voice/speak-queue so Python pre-synths
@@ -910,7 +910,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 					flow.Log("tts_suppressed", map[string]any{"run_id": flowRunID, "reason": suppressReason, "text": text}, flowRunID)
 				} else {
 					// Channel detection: positive-evidence only. tg- runIDs are
-					// synthesised by Lamp from session.message events (real Telegram
+					// synthesised by the device from session.message events (real Telegram
 					// users); anything else (lamp-chat-*, UUID from steer/cron/
 					// heartbeat) is NOT a channel run unless explicitly marked
 					// via channelRuns below.
@@ -921,7 +921,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 					// music-suggestion replies on emotion.detected events when the
 					// sensing turn got steered into a UUID host turn.
 					isChannelRun := isChannelOriginatedRun(payload.RunID, flowRunID)
-					// Cron-fire turns always TTS on the lamp speaker even though their
+					// Cron-fire turns always TTS on the device speaker even though their
 					// UUID runIds look like channel runs. Detected from chat.history
 					// systemEvent template at lifecycle_start (see cronFireRuns map).
 					h.cronFireRunsMu.Lock()
@@ -987,7 +987,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 						// Auto-attach the worst pose frames when this turn was
 						// triggered by a motion.activity that surfaced a posture
 						// nudge. Mirrors the guard-snapshot path: agent doesn't
-						// know any file paths — Lamp resolved them at ingest.
+						// know any file paths — the device resolved them at ingest.
 						poseBucket, poseFiles, hasPoseBucket := h.agentGateway.ConsumePoseBucketRun(flowRunID)
 						var poseImagePaths []string
 						if hasPoseBucket {
@@ -1135,7 +1135,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 		// Same as agent stream: OpenClaw may send UUID while lifecycle/tool/tts used resolved device id.
 		flowRunID := h.resolveRunID(payload.RunID)
 		// Debug alignment: OpenClaw "chat" stream may or may not include user messages for outbound chat.send.
-		// When flowRunID belongs to Lamp, log role/state/message so we can confirm whether chat_input can be emitted.
+		// When flowRunID belongs to the device, log role/state/message so we can confirm whether chat_input can be emitted.
 		if strings.HasPrefix(flowRunID, "lamp-") {
 			msgPreview := payload.Message
 			msgPreview = strings.ReplaceAll(msgPreview, "\n", " ")
@@ -1180,7 +1180,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 		}
 
 		// Factual detection: OpenClaw sent a `state:"final"` chat event with
-		// empty Message for a Lamp-format runId, and Lamp never opened a
+		// empty Message for a device-format runId, and the device never opened a
 		// lifecycle for that runId (pendingChatTrace entry still present —
 		// lifecycle_start would have removed it; see ~line 84).
 		//
@@ -1280,10 +1280,10 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 
 	case "session.message":
 		// OpenClaw 5.x gates the `agent` lifecycle stream behind
-		// isControlUiVisible (server-chat.ts), so non-Lamp-originated runs
+		// isControlUiVisible (server-chat.ts), so non-device-originated runs
 		// (Telegram, etc.) emit no lifecycle_start/end on the agent path.
 		// Drive chat_input + HW marker firing for those turns from
-		// `session.message` instead. Lamp's own chat.send flows still use
+		// `session.message` instead. The device's own chat.send flows still use
 		// the agent path above — guarded by sessionKey + origin.provider.
 		var sm struct {
 			SessionKey string `json:"sessionKey"`
@@ -1315,7 +1315,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 		}
 		// Skip heartbeat / cron / proactive turns up front — they may share
 		// a telegram session key but must keep the lifecycle path so their
-		// reply reaches the lamp speaker, not just Telegram.
+		// reply reaches the device speaker, not just Telegram.
 		if sm.Session.Origin.Provider == "heartbeat" {
 			break
 		}
@@ -1342,7 +1342,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 		h.agentLifecycleMu.Unlock()
 		if recentLifecycleMs > 0 && time.Now().UnixMilli()-recentLifecycleMs < agentLifecycleWindowMs {
 			// Queue-mode interleave: a Telegram user message can arrive WHILE a
-			// Lamp-issued run (sensing/voice chat.send) is being processed.
+			// device-issued run (sensing/voice chat.send) is being processed.
 			// OpenClaw injects it into the running turn and the agent's reply
 			// goes back on the Lamp run's stream — its runID is "lamp-chat-*"
 			// so isLampOutboundChatRunID() is true → isChannelRun=false →
@@ -1359,9 +1359,9 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 				sm.Session.Origin.Provider == "telegram" ||
 				sm.Session.DeliveryContext.Channel == "telegram"
 			if sm.Message.Role == "user" && activeRunID != "" && isTelegramChannel {
-				// Skip Lamp's own outbound echoes. Origin.Provider on a shared
+				// Skip the device's own outbound echoes. Origin.Provider on a shared
 				// `agent:main:main` session goes "sticky telegram" after any
-				// real Telegram turn, so subsequent Lamp-issued chat.send
+				// real Telegram turn, so subsequent device-issued chat.send
 				// echoes (sensing/voice/wakeup) would otherwise look like
 				// Telegram messages and falsely DM the last seen chat_id.
 				// Two-layer check: prefix match (deterministic, survives the
@@ -1399,13 +1399,13 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 				"ageMs", time.Now().UnixMilli()-recentLifecycleMs)
 			break
 		}
-		// Skip echoes of Lamp's own chat.send messages. session.message
+		// Skip echoes of the device's own chat.send messages. session.message
 		// arrives BEFORE the corresponding agent lifecycle.start (race), so
 		// the lifecycle window above doesn't catch the first turn frame.
-		// Match by exact text Lamp pushed via markOutboundChat (in sendChat),
+		// Match by exact text the device pushed via markOutboundChat (in sendChat),
 		// plus a deterministic prefix check so burst voice/sensing turns that
 		// overflow the 32-entry recent-outbound buffer or arrive >30s late
-		// still get correctly classified as Lamp-internal (not Telegram).
+		// still get correctly classified as device-internal (not Telegram).
 		if sm.Message.Role == "user" {
 			text := extractMessageContentText(sm.Message.Content)
 			if text != "" && (isLampInternalMessage(text) || h.agentGateway.IsRecentOutboundChat(text)) {
@@ -1429,7 +1429,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 			// Capture Telegram user ID for outbound DM at lifecycle.end.
 			// OpenClaw 5.4 queue mode does NOT auto-deliver replies to the
 			// originating Telegram chat when the session is `agent:main:main`
-			// (per-sender mode), so Lamp must DM via Bot API itself. Two
+			// (per-sender mode), so the device must DM via Bot API itself. Two
 			// signals tried in order: conversation metadata block injected
 			// into content (most reliable when present), then senderLabel
 			// regex (always available since OpenClaw populates session info).
@@ -1540,7 +1540,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 		// count is normally 0 — call is defensive against future changes.
 		_ = h.consumeFiredHWCount(runID)
 
-		// Fire HW markers (LED, emotion, servo, audio) on the local lamp
+		// Fire HW markers (LED, emotion, servo, audio) on the local device
 		// even though the spoken text goes back to the originating channel.
 		h.fireHWCalls(hwCalls, runID)
 
@@ -1558,7 +1558,7 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 
 		// Channel turns: TTS stays silent on the speaker. OpenClaw 5.4 queue
 		// mode does NOT auto-deliver replies to the originating Telegram chat
-		// when session is `agent:main:main`, so Lamp DMs the reply via Bot API
+		// when session is `agent:main:main`, so the device DMs the reply via Bot API
 		// using telegramID captured at channel-turn start.
 		switch {
 		case isAgentNoReply(cleanText):
@@ -1608,10 +1608,10 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 			// 	// response" before the agent (which can take 20s+) finishes.
 			// 	// The eventual reply lands in chat history but never gets
 			// 	// fanned out to the originating Telegram chat. Until OpenClaw
-			// 	// fixes that path, Lamp DMs via Bot API itself. REMOVE this
+			// 	// fixes that path, the device DMs via Bot API itself. REMOVE this
 			// 	// goroutine + flow.Log when upstream fix lands — otherwise
 			// 	// users will receive duplicate replies (one from OpenClaw,
-			// 	// one from Lamp). The interleave fix above is a separate
+			// 	// one from the device). The interleave fix above is a separate
 			// 	// case and should stay even after upstream fixes this one.
 			// 	go func(t, tid string) {
 			// 		slog.Info("channel turn → Telegram DM", "component", "agent", "run_id", runID, "telegram_id", tid)

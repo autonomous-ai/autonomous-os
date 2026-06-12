@@ -69,8 +69,8 @@ func (h *DeviceMQTTHandler) handleSystemNetwork(env domain.MQTTDataCommand) erro
 	return h.publishDataResult(env.Kind, "success", "", n)
 }
 
-// probeVersions collects lamp + bootstrap + hal + openclaw versions.
-//   - lamp: read straight from the ldflags-injected build var (no exec needed).
+// probeVersions collects os-server + bootstrap + hal + openclaw versions.
+//   - os-server: read straight from the ldflags-injected build var (no exec needed).
 //   - bootstrap: exec `bootstrap-server --version`; "" on any error.
 //   - hal: queried over HTTP from the local HAL service /version endpoint.
 //   - openclaw: read from the cached version probed by the agent monitor.

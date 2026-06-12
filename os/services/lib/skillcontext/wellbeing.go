@@ -95,7 +95,7 @@ type wellbeingContext struct {
 	CurrentHour                 int                      `json:"current_hour"`        // exact hour (0-23) for routing — finer than time_of_day
 	FirstActivityToday          bool                     `json:"first_activity_today"` // true when no wellbeing events logged yet today (this event is the first)
 	MealWindow                  string                   `json:"meal_window,omitempty"` // "lunch" | "dinner" | "" — set when current_hour is inside a meal window
-	MealSignalInWindow          bool                     `json:"meal_signal_in_window"` // true when a meal signal (meal_reminder log OR any raw eat label) was already logged in the current window today — gates meal-reminder so Lamp doesn't ask "ăn chưa?" after a real meal
+	MealSignalInWindow          bool                     `json:"meal_signal_in_window"` // true when a meal signal (meal_reminder log OR any raw eat label) was already logged in the current window today — gates meal-reminder so the agent doesn't ask "ăn chưa?" after a real meal
 	MorningGreetingDoneToday    bool                     `json:"morning_greeting_done_today"`    // true when a morning_greeting action exists today
 	SleepWinddownDoneToday      bool                     `json:"sleep_winddown_done_today"`      // true when a sleep_winddown action exists today
 	DrinksSinceToiletNudge      int                      `json:"drinks_since_toilet_nudge"`      // count of `drink` rows logged after the most recent `nudge_toilet` today (or all today's drinks if none); resets via nudge_toilet POST
@@ -279,9 +279,9 @@ func mealWindowFor(now time.Time) string {
 
 // hasMealSignalInWindow returns true when a meal signal already happened
 // today inside the same named window. A meal signal is EITHER a
-// meal_reminder Lamp already fired OR a raw eat label HAL logged when
+// meal_reminder the agent already fired OR a raw eat label HAL logged when
 // the user actually ate (eating burger / dining / …). Used to suppress
-// the meal-reminder route so Lamp doesn't ask "ăn chưa?" after a real meal.
+// the meal-reminder route so the agent doesn't ask "ăn chưa?" after a real meal.
 func hasMealSignalInWindow(events []wellbeing.Event, window string, now time.Time) bool {
 	if window == "" {
 		return false

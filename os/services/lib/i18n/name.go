@@ -5,16 +5,16 @@ import (
 	"sync"
 )
 
-// Device/agent name injected into i18n strings so nothing hardcodes "lamp".
+// Device/agent name injected into i18n strings so nothing hardcodes a device name.
 // Two placeholders:
 //
-//	{name} — lowercase, for input matchers   (e.g. "hi {name}"   -> "hi lamp")
-//	{Name} — display/title, for spoken text  (e.g. "{Name} đây"  -> "Lamp đây")
+//	{name} — lowercase, for input matchers   (e.g. "hi {name}"   -> "hi <name>")
+//	{Name} — display/title, for spoken text  (e.g. "{Name} đây"  -> "<Name> đây")
 //
 // Device-agnostic: each device supplies its own name — the agent name from
 // IDENTITY.md when known, its device_type at startup as the fallback — never a
-// compiled-in "lamp". For the Lamp reference device both resolve to "Lamp"/"lamp"
-// so its strings are unchanged.
+// compiled-in device name. Both placeholders resolve to the same name (lower /
+// title cased), so a device's strings render with its own identity.
 var (
 	deviceNameMu      sync.RWMutex
 	deviceNameLower   string

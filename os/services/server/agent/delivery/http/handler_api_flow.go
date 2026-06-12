@@ -180,8 +180,8 @@ func flowEventToMonitor(fe flow.Event, channelName string) domain.MonitorEvent {
 		if source == "channel" {
 			// Label routing mirrors handler_events.go goroutine:
 			//  1. sender filled → "[telegram:Gray]" (real channel user)
-			//  2. message is Lamp-internal prefix → "[voice]" / "[emotion]"
-			//     / ... (sensing or voice event Lamp posted via chat.send
+			//  2. message is device-internal prefix → "[voice]" / "[emotion]"
+			//     / ... (sensing or voice event the device posted via chat.send
 			//     that OpenClaw merged into a UUID host turn via steer)
 			//  3. otherwise fall back to channelName (or "[…]" when no msg
 			//     yet — first emit before chat.history goroutine returns)

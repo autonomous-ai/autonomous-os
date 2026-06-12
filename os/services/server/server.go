@@ -89,7 +89,7 @@ type Server struct {
 	lastSetupCompleted *bool
 	// lastDeviceID is the last DeviceID value we acted on. When this changes (typically empty → assigned at first /device/setup), we restart claude-desktop-buddy so its BLE name picks up the new device_id.
 	lastDeviceID *string
-	// lastMQTTEndpoint is the last MQTTEndpoint value we acted on. When this changes (typically empty → assigned via status-reporter ping response), we restart the MQTT client so it picks up the new broker config without requiring a full lamp restart.
+	// lastMQTTEndpoint is the last MQTTEndpoint value we acted on. When this changes (typically empty → assigned via status-reporter ping response), we restart the MQTT client so it picks up the new broker config without requiring a full device restart.
 	lastMQTTEndpoint *string
 }
 
@@ -248,7 +248,7 @@ func goSameOrigin(header, host string) bool {
 // siblingDeviceHost matches an Autonomous device's mDNS hostname:
 // `<device_type>-<4 hex>.local` (see GetDeviceMac / setup.sh). Device-agnostic by
 // design — trusts any device class on the LAN, e.g. lamp-a1b2.local,
-// intern-3c4d.local — not just lamp.
+// intern-3c4d.local — not just one device type.
 var siblingDeviceHost = regexp.MustCompile(`^[a-z0-9]+-[0-9a-f]{4}\.local$`)
 
 // isAllowedOrigin returns true for same-host origins and approved external
@@ -273,7 +273,7 @@ func isAllowedOrigin(origin, requestHost string) bool {
 		return true
 	}
 	// Autonomous parent app (www.autonomous.ai + any subdomain). Driven by
-	// product flows that embed Lamp screens or hit device APIs from the
+	// product flows that embed device screens or hit device APIs from the
 	// cloud dashboard; mixed-content rules still apply at the browser layer
 	// (HTTPS parent → HTTP device fails before CORS) — this just stops the
 	// device from rejecting the request when the parent reaches it over the
@@ -635,7 +635,7 @@ func (s *Server) Serve(closeFn func()) error {
 	buddy.DELETE("", adminAuthMiddleware(s.config), s.buddyHandler.Revoke)
 	// /self auth via Bearer token (the buddy app's own token), used when the
 	// user unpairs from inside the buddy app — symmetric counterpart to the
-	// admin DELETE above. Keeps lamp + buddy state in sync without manual web
+	// admin DELETE above. Keeps device + buddy state in sync without manual web
 	// UI clicks.
 	buddy.DELETE("self", s.buddyHandler.RevokeSelf)
 	buddy.GET("ws", s.buddyHandler.WS)
@@ -702,7 +702,7 @@ func (s *Server) Serve(closeFn func()) error {
 	s.statusLED.Clear(statusled.StateBooting)
 
 	// When the device is still in AP/provisioning mode, paint the strip solid
-	// white as a visual "ready for WiFi setup" signal. lamp typically reaches
+	// white as a visual "ready for WiFi setup" signal. os-server typically reaches
 	// this point before HAL's FastAPI is up on :5001 (Python boot is
 	// slower — loads rpi_ws281x, SPI, audio, camera), so we poll /health in
 	// the background and fire SetSolid only once LED hardware reports ready.
@@ -788,7 +788,7 @@ func (s *Server) handleDeviceIDChange(deviceID string) {
 		defer cancel()
 
 		// Skip silently if claude-desktop-buddy isn't installed on this Pi. `systemctl cat`
-		// exits non-zero when the unit doesn't exist; that's expected on lamps
+		// exits non-zero when the unit doesn't exist; that's expected on devices
 		// without the buddy plugin and we don't want to spam logs there.
 		if err := exec.CommandContext(ctx, "systemctl", "cat", "claude-desktop-buddy.service").Run(); err != nil {
 			return
@@ -805,7 +805,7 @@ func (s *Server) handleDeviceIDChange(deviceID string) {
 
 // handleMQTTEndpointChange restarts the MQTT client when MQTTEndpoint changes,
 // so a backend-pushed broker config (delivered via status-reporter ping response)
-// is picked up without requiring a full lamp restart.
+// is picked up without requiring a full device restart.
 //
 // On the first call (startup bootstrap) we just record the current value
 // without restarting — handleSetUpCompleteChange already brings MQTT up on

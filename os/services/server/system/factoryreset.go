@@ -153,10 +153,10 @@ func wipePath(prefix, p string) {
 	log.Printf("%s wiped %s", prefix, p)
 }
 
-// FactoryReset performs a soft factory reset: wipe Lamp state (config / API
+// FactoryReset performs a soft factory reset: wipe device state (config / API
 // keys / enrollments / WiFi creds) + reboot. Kernel / OS / system packages /
 // binaries / hal .venv are NOT touched — this is a state reset, not a
-// reflash. After reboot the device boots into AP "Lamp-XXXX" with a fresh
+// reflash. After reboot the device boots into AP "<device_type>-XXXX" with a fresh
 // setup wizard.
 //
 // POST /api/system/factory-reset

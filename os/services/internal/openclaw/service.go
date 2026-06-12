@@ -78,7 +78,7 @@ type Service struct {
 	wsConnectedAt atomic.Int64 // unix seconds when wsConnected last flipped to true; 0 when disconnected
 	// agentStartedAt is the unix-seconds timestamp the OpenClaw gateway process
 	// started, derived from the server.uptimeMs field of the hello-ok response
-	// at handshake. Survives Lamp restarts because each fresh hello-ok carries
+	// at handshake. Survives os-server restarts because each fresh hello-ok carries
 	// the gateway's own age. 0 when not yet observed or disconnected.
 	agentStartedAt atomic.Int64
 	activeTurn     atomic.Bool  // true while agent is processing a turn (lifecycle start → end)
@@ -143,8 +143,8 @@ type Service struct {
 	pendingChatMu  sync.Mutex
 	pendingChatBuf []pendingTrace
 
-	// recentOutboundTexts is a small ring buffer of message texts Lamp sent
-	// via chat.send (wake greeting, ambient guard, sensing events). Used by
+	// recentOutboundTexts is a small ring buffer of message texts the os server
+	// sent via chat.send (wake greeting, ambient guard, sensing events). Used by
 	// the session.message SSE handler to skip echoes — OpenClaw rebroadcasts
 	// every chat.send-injected message as session.message role=user, which
 	// is indistinguishable from real channel input on shape alone.
@@ -204,7 +204,7 @@ func (s *Service) Name() string {
 	return "OpenClaw"
 }
 
-// markOutboundChat records a Lamp-sent chat.send message text so the SSE
+// markOutboundChat records an os-server-sent chat.send message text so the SSE
 // session.message handler can skip its echo. Trims expired + over-cap.
 func (s *Service) markOutboundChat(text string) {
 	if text == "" {
@@ -227,8 +227,8 @@ func (s *Service) markOutboundChat(text string) {
 	s.recentOutboundTexts = pruned
 }
 
-// IsRecentOutboundChat reports whether Lamp sent this text recently. Match
-// is exact on the message string Lamp passes to chat.send (after sensing
+// IsRecentOutboundChat reports whether the os server sent this text recently.
+// Match is exact on the message string the os server passes to chat.send (after sensing
 // snapshot path stripping — caller needs to compare against the same form).
 func (s *Service) IsRecentOutboundChat(text string) bool {
 	if text == "" {
@@ -258,8 +258,8 @@ func (s *Service) ConnectedAt() int64 {
 }
 
 // AgentUptime returns the OpenClaw gateway process uptime in seconds, derived
-// from server.uptimeMs in the hello-ok response. Independent of Lamp's WS
-// reconnect cycles — restarting Lamp does not reset this value. Returns 0 when
+// from server.uptimeMs in the hello-ok response. Independent of the os server's
+// WS reconnect cycles — restarting the os server does not reset this value. Returns 0 when
 // the gateway uptime has not yet been observed or the WS is disconnected.
 func (s *Service) AgentUptime() int64 {
 	if !s.wsConnected.Load() {

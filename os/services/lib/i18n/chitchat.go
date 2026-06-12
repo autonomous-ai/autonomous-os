@@ -62,7 +62,7 @@ var chitchatInputs = map[Phrase]map[string][]string{
 // chitchat Phrase p. Returns nil when p isn't a chitchat phrase.
 func InputPhrases(p Phrase) map[string][]string {
 	// Resolve {name} placeholders to the device's runtime name so matchers
-	// like "chào {name}" become "chào <device>" instead of a hardcoded "lamp".
+	// like "chào {name}" become "chào <device>" instead of a hardcoded name.
 	in := chitchatInputs[p]
 	if in == nil {
 		return nil
@@ -93,7 +93,7 @@ func ChitchatPhrases() []Phrase {
 
 // chitchatCommandWords are verbs/nouns per language that signal an action
 // request, not a social phrase. The intent matcher rejects chitchat match
-// when any of these appear in the input ("chào lamp bật đèn" → bật in VN
+// when any of these appear in the input ("chào <name> bật đèn" → bật in VN
 // command words → fall through to command rules so the LED toggle fires).
 var chitchatCommandWords = map[string][]string{
 	LangVI: {
@@ -123,10 +123,10 @@ func ChitchatCommandWords() []string {
 }
 
 // chitchatWakeWords are the name tokens the user prepends before chitchat,
-// stripped from the head of normalized input so "Lamp xin chào" matches "xin
-// chào" and bare "Lamp ơi" → "" → greeting reply path. Device-agnostic: the
+// stripped from the head of normalized input so "<name> xin chào" matches "xin
+// chào" and bare "<name> ơi" → "" → greeting reply path. Device-agnostic: the
 // list is built from the device's own name (its device_type) at startup via
-// SetChitchatWakeWords, NOT a hardcoded "lamp" — see BuildChitchatWakeWords.
+// SetChitchatWakeWords, NOT a hardcoded name — see BuildChitchatWakeWords.
 var (
 	chitchatWakeMu    sync.RWMutex
 	chitchatWakeWords []string

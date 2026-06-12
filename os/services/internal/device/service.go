@@ -84,7 +84,7 @@ func ProvideService(config *config.Config, ns *network.Service, gw domain.AgentG
 // can poll progress through the AP→STA switch. When no Setup run has
 // happened (phase=idle) but the device is already on home Wi-Fi from a
 // previous session, fall back to the live wlan0 address so the web
-// client can still detect "you're at the AP IP but the lamp lives at X"
+// client can still detect "you're at the AP IP but the device lives at X"
 // and redirect.
 func (s *Service) SetupStatus() (phase, lanIP, errMsg string) {
 	phase, lanIP, errMsg = s.setupState.snapshot()
@@ -390,7 +390,7 @@ func (s *Service) VerifyAdminPassword(password string) error {
 // UpdateConfig saves updated config fields. All fields are optional; empty strings are skipped.
 // Side effects per field cluster: wifi → connect-wifi (wpa_supplicant reload),
 // llm_model/thinking → openclaw, stt_language → openclaw NewSession + hal,
-// voice-pipeline fields → hal. Other fields persist only; restart Lamp for full effect.
+// voice-pipeline fields → hal. Other fields persist only; restart os-server for full effect.
 func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 	// bcrypt is CPU-intensive; compute before acquiring the config lock.
 	var adminHash string
@@ -582,7 +582,7 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 			}
 		}()
 	}
-	// Sync primary model into openclaw.json (Lamp → OpenClaw direction).
+	// Sync primary model into openclaw.json (os-server → OpenClaw direction).
 	// config.mu is released by WithLockSave above; openclaw calls now acquire
 	// primarySyncMu without risk of deadlock (consistent lock order).
 	// When thinking also changed, RefreshModelsConfig handles primary update +

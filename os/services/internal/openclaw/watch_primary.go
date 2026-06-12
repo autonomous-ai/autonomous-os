@@ -19,7 +19,7 @@ const primaryWatchRetryInterval = 5 * time.Second
 
 // setLampWriteFlag writes expectedPrimary (e.g. "autonomous/claude-opus-4-6")
 // into the flag file. The watcher reads this value back and only treats a write
-// as Lamp-initiated when the file's primary matches the flag content exactly —
+// as os-server-initiated when the file's primary matches the flag content exactly —
 // preventing the race where an external write arrives within the 3 s mtime
 // window but carries a different primary value.
 //
@@ -58,7 +58,7 @@ func clearLampWriteFlag(configDir string) {
 // openclaw.json. When a change originates externally (flag absent or content
 // mismatch), it reads agents.defaults.model.primary and syncs it back to
 // config.LLMModel — but only when the provider is "autonomous". Non-autonomous
-// providers are logged at WARN level and skipped (Lamp does not manage their
+// providers are logged at WARN level and skipped (the os server does not manage their
 // credentials).
 //
 // Uses directory-level watching instead of file-level because atomicWriteFile
@@ -133,7 +133,7 @@ func (s *Service) StartPrimaryModelWatch(ctx context.Context) {
 }
 
 // syncPrimaryFromFile is the debounced handler that fires after openclaw.json
-// changes. It reads the new primary, skips Lamp-initiated writes (flag content
+// changes. It reads the new primary, skips os-server-initiated writes (flag content
 // matches), and syncs autonomous-provider changes back into config.LLMModel.
 func (s *Service) syncPrimaryFromFile() {
 	// Serialize concurrent invocations (debounce timer fires in its own
@@ -161,7 +161,7 @@ func (s *Service) syncPrimaryFromFile() {
 	}
 
 	// Check both recency AND content: flag must carry the same primary value
-	// Lamp just wrote. If an external write arrives within the 3 s window with
+	// the os server just wrote. If an external write arrives within the 3 s window with
 	// a different primary, the content mismatch correctly flags it as external.
 	if isLampWrite(configDir, primary) {
 		clearLampWriteFlag(configDir)
@@ -172,7 +172,7 @@ func (s *Service) syncPrimaryFromFile() {
 	provider, modelKey, ok := splitProviderModel(primary)
 	if !ok || provider != customProviderName {
 		// External change switched to a non-autonomous provider.
-		// Lamp does not manage credentials for other providers — log state
+		// The os server does not manage credentials for other providers — log state
 		// drift at WARN so operators are aware and skip silently.
 		slog.Warn("[primarysync] external primary switched to non-autonomous provider, Lamp config NOT updated (state drift)",
 			"primary", primary, "lamp_model", s.config.LLMModelKey())

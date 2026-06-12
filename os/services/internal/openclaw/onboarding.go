@@ -112,7 +112,6 @@ func (s *Service) EnsureOnboarding() error {
 		needRestart = true
 	}
 
-
 	// Download skills from CDN
 	skillsDir := filepath.Join(workspace, "skills")
 	if err := os.MkdirAll(skillsDir, 0755); err != nil {
@@ -234,7 +233,7 @@ func (s *Service) EnsureOnboarding() error {
 		needRestart = true
 	}
 
-	// Pin messages.queue.mode=steer so Lamp's concurrent producers (sensing
+	// Pin messages.queue.mode=steer so the os server's concurrent producers (sensing
 	// drains, voice, Telegram, web chat) batch into the active turn at the
 	// next model boundary instead of fanning out as serialized followup turns.
 	if queueAdded, err := s.ensureMessagesQueueConfig(); err != nil {
@@ -400,8 +399,8 @@ func devicesDir() string {
 // A declared soul_ref that fails to resolve is a deploy fault (named a soul but
 // did not ship it), so it returns an error rather than silently going soulless.
 //
-// This is what makes "device → which soul" real: Lamp gets its soul, Dog its
-// own, Intern none — from the same binary, no embedded hardcode.
+// This is what makes "device → which soul" real: each device type gets its own
+// soul (or none) — from the same binary, no embedded hardcode.
 func (s *Service) deviceSoulCore() (content []byte, hasSoul bool, err error) {
 	devType := s.config.DeviceTypeOrDefault()
 	ref := device.SoulRef(devType)
@@ -469,7 +468,7 @@ func (s *Service) ensureSoulMDBlock() (bool, error) {
 	// Fast path: file already contains the current block verbatim. Without
 	// this, the strip/rejoin path below re-introduces an extra blank line
 	// after `---` on every run, so output != content and we keep rewriting
-	// SOUL.md (and restarting OpenClaw) on every Lamp boot.
+	// SOUL.md (and restarting OpenClaw) on every os-server boot.
 	if strings.Contains(text, soulMDBlock) {
 		return false, nil
 	}
@@ -730,7 +729,7 @@ func (s *Service) ensureControlUIConfig() (bool, error) {
 // ensureMessagesQueueConfig pins messages.queue.mode to "steer" so concurrent
 // messages (sensing drains, voice + Telegram interleave) get batched into the
 // active turn at the next model boundary instead of spawning serialized
-// followup turns. Lamp has multiple producers (sensing handler, voice, web
+// followup turns. The os server has multiple producers (sensing handler, voice, web
 // chat, Telegram) feeding agent:main:main; legacy "queue" mode runs each as
 // its own turn, missing batch opportunities the steer path can collapse.
 //
@@ -738,8 +737,8 @@ func (s *Service) ensureControlUIConfig() (bool, error) {
 // main session via KeyedAsyncQueue) and the ReplyRunAlreadyActive race seen
 // on 5.2 — verify on 5.7+ before relying on steer batching savings.
 //
-// Always overwrites — Lamp owns this config knob; an operator who flips it
-// to "queue" will see Lamp correct on the next boot.
+// Always overwrites — the os server owns this config knob; an operator who flips it
+// to "queue" will see the os server correct on the next boot.
 func (s *Service) ensureMessagesQueueConfig() (bool, error) {
 	configPath := filepath.Join(s.config.OpenclawConfigDir, "openclaw.json")
 	configBytes, err := os.ReadFile(configPath)
@@ -865,7 +864,7 @@ func (s *Service) ensureAgentDefaults() (bool, error) {
 	// Compaction
 	// reserveTokensFloor=5000: keep safeguard only as a last-resort guard near
 	// the model context limit (~195k for 200k models). Previously 80000, which
-	// made OpenClaw fire compact at ~120k actual context — same range Lamp's
+	// made OpenClaw fire compact at ~120k actual context — same range the os server's
 	// /new RPC trigger fires (chat.history TotalTokens > 80k undercounts ~35k),
 	// so the two layers raced and produced the 30-60s compact freeze that
 	// /new was supposed to avoid.

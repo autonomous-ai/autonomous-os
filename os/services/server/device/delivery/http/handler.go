@@ -116,10 +116,10 @@ func (h *DeviceHandler) GetConfig(c *gin.Context) {
 //	@Router			/device/setup/status [get]
 func (h *DeviceHandler) SetupStatus(c *gin.Context) {
 	phase, lanIP, errMsg := h.service.SetupStatus()
-	// `mac` (hardware-derived "Lamp-XXXX") is exposed here intentionally — the
-	// device already broadcasts `lamp-xxxx.local` via avahi-daemon on the LAN,
+	// `mac` (hardware-derived "<device_type>-XXXX") is exposed here intentionally — the
+	// device already broadcasts `<device_type>-xxxx.local` via avahi-daemon on the LAN,
 	// so the suffix isn't sensitive. The web client uses it to auto-redirect
-	// 192.168.100.1 → lamp-xxxx.local even before the operator is authed,
+	// 192.168.100.1 → <device_type>-xxxx.local even before the operator is authed,
 	// since /api/device/config requires admin auth and fresh devices have
 	// none.
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{
@@ -134,7 +134,7 @@ func (h *DeviceHandler) SetupStatus(c *gin.Context) {
 //
 //	@Summary	update device config
 //	@Schemes
-//	@Description	update device config fields (all optional; saves to disk, restart Lamp for full effect)
+//	@Description	update device config fields (all optional; saves to disk, restart os-server for full effect)
 //	@Tags			device
 //	@Accept			json
 //	@Param			body	body		domain.UpdateConfigRequest	true	"update config request"

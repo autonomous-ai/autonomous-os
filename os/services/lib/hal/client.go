@@ -1,5 +1,5 @@
 // Package hal provides a lightweight HTTP client for the HAL hardware API.
-// Both os-server and bootstrap-server use this to control the lamp on port 5001.
+// Both os-server and bootstrap-server use this to control the device on port 5001.
 package hal
 
 import (
@@ -77,7 +77,7 @@ func doPost(path string, body io.Reader) (*http.Response, error) {
 
 // SetEffect stops any running effect, then starts a new one.
 //
-// All callers from Lamp (statusled health signals, ambient breathing, bootstrap
+// All callers from the os-server (statusled health signals, ambient breathing, bootstrap
 // OTA progress) are system-level overlays — they must not clobber the user's
 // saved LED state, which emotion restore reads back from. The transient flag
 // tells HAL to dispatch the effect without writing _user_led_state.
@@ -95,7 +95,7 @@ func StopEffect() {
 // SetSolid paints the strip a single color and saves it as the user LED state
 // (no transient flag) so subsequent RestoreLED calls repaint to this color.
 // Fire-and-forget: HAL may not be up yet at the moment this is called
-// (e.g. lamp boots faster than the Python server during AP-mode startup);
+// (e.g. the device boots faster than the Python server during AP-mode startup);
 // callers don't care about the outcome.
 func SetSolid(r, g, b int) {
 	body := fmt.Sprintf(`{"color":[%d,%d,%d]}`, r, g, b)
@@ -178,9 +178,9 @@ func SpeakCachedInterruptible(text string) error {
 }
 
 // SpeakPreview plays a TTS preview using the supplied voice/provider/credentials.
-// Lamp's /api/voice/preview handler uses this to fan out the operator's
+// The os-server's /api/voice/preview handler uses this to fan out the operator's
 // "test voice" click without exposing the TTS API key in the browser body —
-// Lamp reads the key server-side from config and passes it here. Each arg
+// the os-server reads the key server-side from config and passes it here. Each arg
 // can be empty: HAL falls back to its own config-loaded defaults when a
 // field is missing, so partial overrides (e.g. just voice) work.
 func SpeakPreview(text, voice, provider, apiKey, baseURL string) error {

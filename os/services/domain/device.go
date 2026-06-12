@@ -494,7 +494,7 @@ type MQTTNetworkData struct {
 type MQTTHostData struct {
 	Hostname      string `json:"hostname"`
 	DeviceID      string `json:"device_id"`
-	DeviceName    string `json:"device_name"` // friendly "Lamp-XXXX"
+	DeviceName    string `json:"device_name"` // friendly "<device_type>-xxxx"
 	UptimeSeconds int64  `json:"uptime_seconds"`
 }
 
