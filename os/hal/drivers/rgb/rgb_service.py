@@ -132,7 +132,7 @@ class _StripSPI:
         buf.extend([0x00] * self._RESET_BYTES)
         try:
             self._spi.writebytes2(buf)
-            logger.info("SPI write OK — pixel[0]=%s", self._pixels[0] if self._pixels else None)
+            logger.debug("SPI write OK — pixel[0]=%s", self._pixels[0] if self._pixels else None)
         except Exception as e:
             logger.error("SPI write failed — LED signal did not reach strip: %s", e)
 

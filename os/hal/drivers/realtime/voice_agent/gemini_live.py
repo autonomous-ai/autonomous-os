@@ -72,6 +72,10 @@ class GeminiLiveAgent(VoiceAgentBase):
         self._recv_timeout_s: float = self.DEFAULT_RECV_TIMEOUT_S
         self._queue_poll_s: float = self.DEFAULT_QUEUE_POLL_S
         self._join_timeout_s: float = self.DEFAULT_JOIN_TIMEOUT_S
+        # Signals that the model is idle (no active turn). Set by default,
+        # cleared when activityEnd is sent, set again on turn_complete.
+        self._turn_done: threading.Event = threading.Event()
+        self._turn_done.set()
 
     @property
     @override
@@ -209,6 +213,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         if self._vad_disabled and self._activity_started:
             await self._session.send_realtime_input(activity_end=types.ActivityEnd())
             self._activity_started = False
+            self._turn_done.clear()
             logger.debug("Sent activityEnd (manual VAD)")
 
     async def _async_receive_turn(self) -> None:
@@ -256,10 +261,12 @@ class GeminiLiveAgent(VoiceAgentBase):
                 if content.interrupted:
                     logger.debug("Response interrupted")
                     self._first_audio_received = False
+                    self._turn_done.set()
 
                 if content.turn_complete:
                     logger.debug("Turn complete")
                     self._first_audio_received = False
+                    self._turn_done.set()
                     self._recv_queue.put(TurnDoneEvent())
                     return
 
@@ -292,6 +299,7 @@ class GeminiLiveAgent(VoiceAgentBase):
     def _reconnect(self) -> None:
         self._connected.clear()
         self._activity_started = False
+        self._turn_done.set()  # unblock any waiting commit
         if self._loop is None:
             logger.error("Cannot reconnect — event loop is None")
             return
@@ -354,6 +362,8 @@ class GeminiLiveAgent(VoiceAgentBase):
 
             try:
                 if isinstance(event, AudioCommitEvent):
+                    if not self._turn_done.wait(timeout=10.0):
+                        logger.warning("Timed out waiting for turn to finish — forcing commit")
                     self._submit_and_wait(
                         self._async_commit(), timeout=self._send_timeout_s
                     )
