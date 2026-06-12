@@ -107,7 +107,7 @@ Structured `slog.Info` lines for end-to-end ID alignment (device idempotency key
 | `op` | `section` (when set) | When |
 |------|------------------------|------|
 | `ws_chat_send` | `lamp_to_openclaw_ws` | Every `chat.send` from Lamp (`device_run_id` = idempotency key). |
-| `lelamp_agent_out` | `lelamp_to_openclaw` | Sensing handler after `SetTrace` + `agent_call` (same `device_run_id`). |
+| `hal_agent_out` | `hal_to_openclaw` | Sensing handler after `SetTrace` + `agent_call` (same `device_run_id`). |
 | `openclaw_uuid_map` | `openclaw` | `lifecycle_start`: OpenClaw UUID stored → device id. |
 | `chat_run_resolve` | `openclaw_chat` | Chat stream event where `resolveRunID` changed the id (UUID → device). |
 

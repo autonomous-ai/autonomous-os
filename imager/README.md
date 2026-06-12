@@ -59,7 +59,7 @@ Phase 2  chroot qemu-arm64:
          - openclaw onboard --skip-health (creates /root/.openclaw scaffolding)
          - Discord + Slack plugins baked in: openclaw@$OPENCLAW_VERSION
          - uv (Python pkg mgr for LeLamp)
-         - systemd units: lamp, bootstrap, hal, openclaw
+         - systemd units: os-server, bootstrap, hal, openclaw
          - helper scripts /usr/local/bin/{device-ap-mode, device-sta-mode, connect-wifi,
            software-update} synced from scripts/ in this repo
          - configs: hostapd, dnsmasq, dhcpcd, full prod nginx (CSP + WS + captive-portal
@@ -190,7 +190,7 @@ imager/
 SSH in (`ssh system@<device_type>-xxxx.local`, e.g. `lamp-a1b2.local`, password `12345`) and verify:
 
 ```bash
-systemctl is-enabled lamp hal openclaw avahi-daemon
+systemctl is-enabled os-server hal openclaw avahi-daemon
 ls /usr/local/bin/{os-server,bootstrap-server,device-ap-mode,connect-wifi,software-update}
 ls /opt/hal/.venv/bin/uvicorn       # LeLamp uv sync succeeded
 openclaw --version                       # OpenClaw npm global installed
@@ -280,7 +280,7 @@ Expected: non-zero bytes near offsets 0x2000 (SPL header) and 0x20000 (U-Boot pr
 
 **2026-06-04** — `software-update` full implementation:
 - Replaced stub with full implementation covering all components:
-  lamp, bootstrap, hal, openclaw, web, claude-desktop-buddy
+  os-server, bootstrap, hal, openclaw, web, claude-desktop-buddy
 - Discord + Slack plugins reinstalled on openclaw update
 
 **2026-06-03** — SPI3 overlay baked in:

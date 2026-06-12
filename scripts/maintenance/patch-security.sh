@@ -366,7 +366,7 @@ else
 fi
 
 if [ "$LELAMP_HASH_BEFORE" != "$LELAMP_HASH_AFTER" ]; then
-  LAMP_UNIT="lamp"
+  LAMP_UNIT="os-server"
   echo "[patch] ${LELAMP_UNIT}.service changed → restarting ${LELAMP_UNIT} + ${LAMP_UNIT}"
   systemctl restart "$LELAMP_UNIT" "$LAMP_UNIT"
 else
