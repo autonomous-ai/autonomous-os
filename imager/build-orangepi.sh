@@ -1156,6 +1156,11 @@ if [ -n "\$DEVICES_URL" ]; then
     done < "\${DEVICE_PROFILE_DIR}/hardware/conf/hal.env"
     echo "[overlay] hal.env overrides from device profile applied"
   fi
+  # Install device-specific udev rules if present in the profile.
+  if [ -d "\${DEVICE_PROFILE_DIR}/hardware/conf/udev" ]; then
+    cp "\${DEVICE_PROFILE_DIR}/hardware/conf/udev/"*.rules /etc/udev/rules.d/ 2>/dev/null || true
+    echo "[overlay] udev rules from device profile installed"
+  fi
 else
   echo "[overlay] ERROR: no devices.\$DEVICE_TYPE url in OTA metadata — device profile is required (one image = one device type). Run 'make upload-device \$DEVICE_TYPE' before building." >&2
   exit 1

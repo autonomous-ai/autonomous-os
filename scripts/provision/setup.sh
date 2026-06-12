@@ -1492,6 +1492,13 @@ stage_devices() {
     done < "$hal_env_src"
     echo "[stage] hal.env overrides from device profile applied"
   fi
+  # Install device-specific udev rules if present in the profile.
+  if [ -d "$dest/hardware/conf/udev" ]; then
+    cp "$dest/hardware/conf/udev/"*.rules /etc/udev/rules.d/ 2>/dev/null || true
+    udevadm control --reload-rules 2>/dev/null || true
+    udevadm trigger 2>/dev/null || true
+    echo "[stage] udev rules from device profile installed"
+  fi
 }
 
 # Stop os-server if running from a previous setup — it switches to AP mode when unconfigured, killing internet.
