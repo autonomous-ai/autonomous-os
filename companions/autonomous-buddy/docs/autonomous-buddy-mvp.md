@@ -68,7 +68,7 @@ Each phase is independently shippable and reviewable.
 
 **Acceptance:** When a lamp is running on LAN (advertises `_autonomous._tcp.local`), buddy menu shows e.g. `lamp-a1b2.local — 192.168.1.50` as a clickable item. Also: manual hostname entry option.
 
-> Note: confirm the device's existing mDNS service name. It publishes `<device_type>-<last4hex>.local` (e.g. `lamp-a1b2.local`); may need to also advertise a `_autonomous._tcp.local` service for browsability. May require a small device-side tweak (see device-side §1 below).
+> Note: the device publishes both the host record `<device_type>-<last4hex>.local` (e.g. `lamp-a1b2.local`) AND the `_autonomous._tcp` service for browsability. The service comes from a static avahi file (`/etc/avahi/services/autonomous.service`, port 80) dropped at provisioning (`scripts/provision/setup.sh` + `imager/build.sh` + `imager/build-orangepi.sh`). It uses avahi's `%h` wildcard, so one file serves every device class.
 
 ### Phase 1C — Pairing flow
 
@@ -224,7 +224,7 @@ Each phase is independently shippable and reviewable.
 
 ## Lamp-side prerequisites (verify before Phase 1B)
 
-1. **mDNS browsability** — confirm the device publishes `_autonomous._tcp.local` for `NWBrowser`. If only the `<device_type>-xxxx.local` host record exists, add service publishing (likely in device startup or avahi config).
+1. **mDNS browsability** — ✓ Done. The device publishes `_autonomous._tcp` for `NWBrowser` via a static avahi service file (`/etc/avahi/services/autonomous.service`, port 80) baked at provisioning (`setup.sh` + `imager/build*.sh`), alongside the `<device_type>-xxxx.local` host record. The `%h` wildcard keeps it device-agnostic.
 2. **Admin auth header convention** — confirm whether new buddy endpoints should use `Authorization: Bearer <token>` (cookie or bearer); reuse `project_security_login_ui_batch.md` patterns.
 3. **OpenClaw skill location** — find where existing skills live, naming convention, how lamp registers them. (Possibly in lamp's filesystem `~/.openclaw/skills/<name>/SKILL.md`.)
 
@@ -352,7 +352,7 @@ lamp/web/src/
 
 ## Risks specific to MVP
 
-1. **mDNS service publishing** — if lamp doesn't currently publish `_autonomous._tcp.local` (only host record), buddy can't browse without a small lamp-side change.
+1. **mDNS service publishing** — ✓ Resolved. The device publishes `_autonomous._tcp` via `/etc/avahi/services/autonomous.service` (dropped at provisioning), so buddy can browse without manual entry.
 2. **OpenClaw skill conventions** — unknown until inspected. May affect phase 1G design.
 3. **Permission UX on first launch** — Accessibility prompt is one-shot; if user denies and we don't re-prompt cleanly, keyboard actions silently fail. Need fallback UX.
 4. **WS keepalive across Mac sleep** — Mac sleep kills WS. Reconnect must handle gracefully.

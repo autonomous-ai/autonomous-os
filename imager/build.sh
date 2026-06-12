@@ -1006,6 +1006,23 @@ chmod +x /usr/local/bin/software-update
 #   2. API proxy at /api/ → localhost:5000 (os-server), /hw/ → :5001 (hal), /gw/ → :18789 (openclaw)
 # Captive portal detection endpoints return 204 (no content) to prevent
 # the OS from auto-opening a browser when connecting to the AP.
+# Advertise _autonomous._tcp via mDNS so the Autonomous Buddy (macOS) auto-finds
+# this device. Static + device-agnostic: avahi's %h wildcard = the running
+# hostname (<device_type>-<suffix>), so one baked file serves every device class.
+# Port 80 = the nginx front door the buddy pairs through (/api/buddy/pair/confirm).
+mkdir -p /etc/avahi/services
+cat > /etc/avahi/services/autonomous.service <<'AVAHI'
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">%h</name>
+  <service>
+    <type>_autonomous._tcp</type>
+    <port>80</port>
+  </service>
+</service-group>
+AVAHI
+
 echo "[stage] Setup nginx"
 rm -f /etc/nginx/sites-enabled/default
 mkdir -p /usr/share/nginx/html/setup

@@ -817,6 +817,23 @@ EOF
 
 systemctl mask wpa_supplicant.service 2>/dev/null || true
 
+# Advertise _autonomous._tcp via mDNS so the Autonomous Buddy (macOS) auto-finds
+# this device. Static + device-agnostic: avahi's %h wildcard = the running
+# hostname (<device_type>-<suffix>), so one baked file serves every device class.
+# Port 80 = the nginx front door the buddy pairs through (/api/buddy/pair/confirm).
+mkdir -p /etc/avahi/services
+cat > /etc/avahi/services/autonomous.service <<'AVAHI'
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">%h</name>
+  <service>
+    <type>_autonomous._tcp</type>
+    <port>80</port>
+  </service>
+</service-group>
+AVAHI
+
 # ── nginx config (verbatim from production OPi) ──────────────────────────────
 echo "[stage] nginx"
 rm -f /etc/nginx/sites-enabled/default

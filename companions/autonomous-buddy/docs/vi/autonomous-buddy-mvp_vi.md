@@ -68,7 +68,7 @@ Mỗi phase ship & review độc lập được.
 
 **Acceptance:** Khi lamp đang chạy trên LAN (advertise `_autonomous._tcp.local`), menu buddy hiện ví dụ `lamp-a1b2.local — 192.168.1.50` như item bấm được. Cũng có: option nhập hostname thủ công.
 
-> Note: confirm tên service mDNS hiện có của thiết bị. Publish `<device_type>-<last4hex>.local` (ví dụ `lamp-a1b2.local`); có thể cần advertise thêm service `_autonomous._tcp.local` cho browsable. Có thể cần sửa nhỏ bên device (xem §device-side dưới).
+> Note: thiết bị publish cả host record `<device_type>-<last4hex>.local` (ví dụ `lamp-a1b2.local`) LẪN service `_autonomous._tcp` cho browsable. Service đến từ file avahi tĩnh (`/etc/avahi/services/autonomous.service`, port 80) drop lúc provisioning (`scripts/provision/setup.sh` + `imager/build.sh` + `imager/build-orangepi.sh`). Dùng wildcard `%h` của avahi nên một file dùng chung mọi device class.
 
 ### Phase 1C — Luồng pairing
 
@@ -224,7 +224,7 @@ Mỗi phase ship & review độc lập được.
 
 ## Lamp-side cần verify trước Phase 1B
 
-1. **mDNS browsability** — confirm thiết bị publish `_autonomous._tcp.local` cho `NWBrowser`. Nếu chỉ có host record `<device_type>-xxxx.local`, cần thêm service publishing (chắc trong device startup hoặc avahi config).
+1. **mDNS browsability** — ✓ Xong. Thiết bị publish `_autonomous._tcp` cho `NWBrowser` qua file avahi tĩnh (`/etc/avahi/services/autonomous.service`, port 80) bake lúc provisioning (`setup.sh` + `imager/build*.sh`), cạnh host record `<device_type>-xxxx.local`. Wildcard `%h` giữ device-agnostic.
 2. **Convention header admin auth** — confirm endpoint buddy mới dùng `Authorization: Bearer <token>` (cookie hay bearer); reuse pattern `project_security_login_ui_batch.md`.
 3. **Vị trí OpenClaw skill** — tìm xem skill đang sống ở đâu, naming convention, lamp đăng ký skill thế nào. (Có thể trong filesystem lamp `~/.openclaw/skills/<name>/SKILL.md`.)
 
@@ -352,7 +352,7 @@ lamp/web/src/
 
 ## Risk riêng của MVP
 
-1. **Publishing mDNS service** — nếu lamp chưa publish `_autonomous._tcp.local` (chỉ host record), buddy không browse được nếu không sửa nhỏ bên lamp.
+1. **Publishing mDNS service** — ✓ Đã giải quyết. Thiết bị publish `_autonomous._tcp` qua `/etc/avahi/services/autonomous.service` (drop lúc provisioning), nên buddy browse được không cần nhập tay.
 2. **Convention skill OpenClaw** — chưa biết cho đến khi inspect. Có thể ảnh hưởng design phase 1G.
 3. **UX permission lần chạy đầu** — Accessibility prompt 1 lần; nếu user deny mà mình không re-prompt sạch, action keyboard fail âm thầm. Cần UX fallback.
 4. **WS keepalive qua Mac sleep** — Mac sleep kill WS. Reconnect phải xử lý gracefully.

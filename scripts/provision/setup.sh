@@ -898,6 +898,23 @@ stage_ap() {
   else
     echo "127.0.1.1 $DEVICE_HOSTNAME" >> /etc/hosts
   fi
+  # Advertise an _autonomous._tcp mDNS service so the Autonomous Buddy (macOS)
+  # auto-discovers this device instead of the user typing <hostname>.local by
+  # hand. Static + device-agnostic: avahi's %h wildcard resolves to the running
+  # hostname (<device_type>-<suffix>), so one file serves every device class.
+  # Port 80 = the nginx front door the buddy pairs through (/api/buddy/pair/confirm).
+  mkdir -p /etc/avahi/services
+  cat > /etc/avahi/services/autonomous.service <<'AVAHI'
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">%h</name>
+  <service>
+    <type>_autonomous._tcp</type>
+    <port>80</port>
+  </service>
+</service-group>
+AVAHI
   systemctl enable avahi-daemon 2>/dev/null || true
   systemctl restart avahi-daemon 2>/dev/null || true
   echo "[stage] mDNS hostname = $DEVICE_HOSTNAME.local"
