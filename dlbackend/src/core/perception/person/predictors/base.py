@@ -2,6 +2,7 @@
 
 import logging
 from abc import ABC
+from typing import Any
 
 import cv2
 import cv2.typing as cv2t
@@ -18,6 +19,16 @@ class PersonDetector(PredictorBase[cv2t.MatLike, RawPersonDetection], ABC):
     Subclasses implement ``start``, ``stop``, ``is_ready``, and ``predict``.
     ``extract_largest_crop`` is provided by the base class.
     """
+
+    def predict(
+        self,
+        input: list[cv2t.MatLike],
+        *,
+        preprocess: bool = True,
+        **kwargs: Any,
+    ) -> list[RawPersonDetection]:
+        with self._gpu_lock:
+            return super().predict(input, preprocess=preprocess, **kwargs)
 
     def extract_largest_crop(
         self,

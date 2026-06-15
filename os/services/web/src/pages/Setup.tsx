@@ -392,7 +392,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
   });
 
   useSetupStatusPolling({
-    setupWorking, setupPhase, setupLanIP, lampMdnsHost,
+    setupWorking, setupLanIP, lampMdnsHost,
     setSetupPhase, setSetupLanIP, setSetupErrorMsg,
   });
 
