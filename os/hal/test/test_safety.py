@@ -12,6 +12,7 @@ from hal.safety.policy import (
     MotionBounds,
     QuietHours,
     SafetyPolicy,
+    ThermalBounds,
     active_max_brightness,
     audio_quiet_now,
     clamp_brightness,
@@ -20,8 +21,12 @@ from hal.safety.policy import (
     load_safety,
     min_move_duration,
     parse_safety,
+    read_soc_temp_c,
+    thermal_over,
     validate_schema,
 )
+
+_FM_THERMAL = "---\nschema: autonomous.safety.v1\nthermal:\n  max_temp_c: 95\n---\n"
 
 _FM_MOTION = (
     "---\n"
@@ -261,6 +266,67 @@ class TestMinMoveDuration(unittest.TestCase):
     def test_unknown_current_joint_ignored(self):
         # no known start for the joint -> can't bound its speed -> requested kept
         self.assertEqual(min_move_duration(self.p, {"pan.pos": 200.0}, {}, 0.1), 0.1)
+
+
+class TestParseThermal(unittest.TestCase):
+    def test_parse_default_resume(self):
+        t = parse_safety(_FM_THERMAL).thermal
+        self.assertEqual(t, ThermalBounds(max_temp_c=95, resume_temp_c=85))  # resume = max - 10
+
+    def test_explicit_resume(self):
+        fm = "---\nschema: autonomous.safety.v1\nthermal:\n  max_temp_c: 95\n  resume_temp_c: 80\n---\n"
+        self.assertEqual(parse_safety(fm).thermal, ThermalBounds(95, 80))
+
+    def test_no_max_temp_is_none(self):
+        fm = "---\nschema: autonomous.safety.v1\nthermal:\n  # max_temp_c: <int>\n---\n"
+        self.assertIsNone(parse_safety(fm).thermal)
+
+    def test_bad_max_temp_raises(self):
+        with self.assertRaises(ValueError):
+            parse_safety("---\nschema: autonomous.safety.v1\nthermal:\n  max_temp_c: 0\n---\n")
+
+    def test_resume_not_below_max_raises(self):
+        with self.assertRaises(ValueError):
+            parse_safety("---\nschema: autonomous.safety.v1\nthermal:\n  max_temp_c: 90\n  resume_temp_c: 90\n---\n")
+
+
+class TestThermalOver(unittest.TestCase):
+    def setUp(self):
+        self.p = parse_safety(_FM_THERMAL)  # max 95, resume 85
+
+    def test_trips_at_or_above_max(self):
+        self.assertTrue(thermal_over(self.p, 95.0, False))
+        self.assertTrue(thermal_over(self.p, 96.5, False))
+
+    def test_below_max_not_over(self):
+        self.assertFalse(thermal_over(self.p, 94.0, False))
+
+    def test_hysteresis_stays_over_above_resume(self):
+        # already over, cooled to 90 (> resume 85) -> still over
+        self.assertTrue(thermal_over(self.p, 90.0, True))
+
+    def test_clears_at_or_below_resume(self):
+        self.assertFalse(thermal_over(self.p, 85.0, True))
+        self.assertFalse(thermal_over(self.p, 84.0, True))
+
+    def test_no_policy_or_no_thermal_or_no_temp(self):
+        self.assertFalse(thermal_over(None, 200.0, False))
+        self.assertFalse(thermal_over(parse_safety(_FM), 200.0, False))  # no thermal section
+        self.assertFalse(thermal_over(self.p, None, True))                # unreadable temp
+
+
+class TestReadSocTemp(unittest.TestCase):
+    def test_reads_millidegrees_as_celsius(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".temp", delete=False) as f:
+            f.write("85123\n")
+            path = f.name
+        try:
+            self.assertAlmostEqual(read_soc_temp_c(path), 85.123, places=3)
+        finally:
+            os.unlink(path)
+
+    def test_unreadable_returns_none(self):
+        self.assertIsNone(read_soc_temp_c("/nonexistent/thermal/zone"))
 
 
 if __name__ == "__main__":

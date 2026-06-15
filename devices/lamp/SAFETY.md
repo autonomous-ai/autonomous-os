@@ -12,6 +12,12 @@ motion:
   max_speed: 120             # deg/s ceiling; the servo route stretches a move's duration so no joint exceeds it
   stop_always: true          # motion.stop/release are deterministic and never gated
   # max_accel: <int>         # reserved
+thermal:
+  # SoC over-temp → health event (/health) + stop discretionary tracking. 95°C is
+  # provisional: this SoC idles hot (~80–90°C is normal), so verify the board's own
+  # critical trip in /sys/class/thermal/.../trip_point_*_temp and tune. resume
+  # defaults to max_temp_c - 10 (clears at 85°C).
+  max_temp_c: 95
 ---
 
 # SAFETY.md — Autonomous Lamp
