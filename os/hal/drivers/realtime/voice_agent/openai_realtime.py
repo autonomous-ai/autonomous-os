@@ -52,14 +52,14 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
             base_url=config.base_url,
         )
         self._connection: RealtimeConnection | None = None
-        self._speech_stopped_at: float | None = None
+        self._speech_ended_at: float | None = None
         self._reconnect_delay_s: float = config.reconnect_delay_s
         self._max_retries: int = config.max_retries
         self._last_reconnect_at: float = 0.0
         # Signals that the model is idle (no active response). Set by default,
         # cleared when response.create() is called, set again on response.done.
-        self._response_done: threading.Event = threading.Event()
-        self._response_done.set()
+        self._turn_done: threading.Event = threading.Event()
+        self._turn_done.set()
 
     @property
     @override
@@ -177,9 +177,10 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
         """Wait for any active response to finish, then create a new one."""
         if self._connection is None:
             return
-        if not self._response_done.wait(timeout=10.0):
+        if not self._turn_done.wait(timeout=10.0):
             logger.warning("[realtime] Timed out waiting for active response to finish — forcing new response")
-        self._response_done.clear()
+        self._turn_done.clear()
+        self._speech_ended_at = time.monotonic()
         self._connection.response.create()
 
     def _sync_receive_turn(self) -> None:
@@ -190,7 +191,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
         for event in self._connection:
             match event.type:
                 case "input_audio_buffer.speech_stopped":
-                    self._speech_stopped_at = time.monotonic()
+                    self._speech_ended_at = time.monotonic()
 
                 case "response.output_text.delta":
                     self._recv_queue.put(
@@ -198,12 +199,12 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                     )
 
                 case "response.output_audio.delta":
-                    if self._speech_stopped_at is not None:
+                    if self._speech_ended_at is not None:
                         latency_ms: float = (
-                            time.monotonic() - self._speech_stopped_at
+                            time.monotonic() - self._speech_ended_at
                         ) * 1000
                         logger.info("[realtime] Response latency: %.0fms", latency_ms)
-                        self._speech_stopped_at = None
+                        self._speech_ended_at = None
                     self._recv_queue.put(
                         OutputEvent(
                             output=AudioOutput(
@@ -233,7 +234,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
 
                 case "response.done":
                     logger.debug("[realtime] Response complete")
-                    self._response_done.set()
+                    self._turn_done.set()
                     self._recv_queue.put(TurnDoneEvent())
                     return
 
@@ -258,7 +259,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
 
     def _reconnect(self) -> None:
         self._connected.clear()
-        self._response_done.set()  # unblock any waiting commit
+        self._turn_done.set()  # unblock any waiting commit
         try:
             logger.info("[realtime] Reconnecting...")
             self._sync_disconnect()
