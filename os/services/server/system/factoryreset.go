@@ -18,11 +18,11 @@ import (
 
 const configFilePath = "/root/config/config.json"
 
-var lumiWipePaths = []string{
+var deviceWipePaths = []string{
 	"/root/config",                                  // os-server config.json (API keys, channel tokens, MQTT creds)
 	"/root/local/users",                             // face + voice enrollments (owner)
 	"/root/local/strangers",                         // face + voice enrollments (stranger)
-	"/var/lib/hal/snapshots",                     // persistent camera snapshots (sensing_face / motion / emotion, 72h TTL)
+	"/var/lib/hal/snapshots",                        // persistent camera snapshots (sensing_face / motion / emotion, 72h TTL)
 	"/etc/wpa_supplicant/wpa_supplicant-wlan0.conf", // home WiFi credentials → forces AP mode on next boot
 }
 
@@ -102,8 +102,8 @@ func runFactoryReset(opts FactoryResetOptions) (started bool, errStatus int, err
 		log.Printf("[factory-reset] backend resolution: source=%s value=%q", source, backend)
 	}
 
-	log.Printf("[factory-reset] accepted — backend=%s → reset → wipe %d lumi paths → reboot",
-		backend, len(lumiWipePaths))
+	log.Printf("[factory-reset] accepted — backend=%s → reset → wipe %d device paths → reboot",
+		backend, len(deviceWipePaths))
 
 	go func() {
 		defer func() {
@@ -119,7 +119,7 @@ func runFactoryReset(opts FactoryResetOptions) (started bool, errStatus int, err
 			wipeOpenclawState()
 		}
 
-		wipeLumiState()
+		wipeDeviceState()
 
 		// Detached reboot so the HTTP response escapes before init kills us.
 		log.Printf("[factory-reset] all done — rebooting in 2s")
@@ -131,10 +131,10 @@ func runFactoryReset(opts FactoryResetOptions) (started bool, errStatus int, err
 	return true, 0, ""
 }
 
-// wipeLumiState removes per-device Lumi state independent of the agent backend
-func wipeLumiState() {
-	log.Printf("[factory-reset] wiping %d lumi paths", len(lumiWipePaths))
-	for _, p := range lumiWipePaths {
+// wipeDeviceState removes per-device state independent of the agent backend
+func wipeDeviceState() {
+	log.Printf("[factory-reset] wiping %d device paths", len(deviceWipePaths))
+	for _, p := range deviceWipePaths {
 		wipePath("[factory-reset]", p)
 	}
 }
@@ -190,9 +190,9 @@ func FactoryReset(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusAccepted, serializers.ResponseSuccess(gin.H{
-		"started":    true,
-		"message":    "Soft factory reset started. Device will wipe Lamp state and reboot into AP setup mode (~30s).",
-		"lumi_wipes": lumiWipePaths,
+		"started":      true,
+		"message":      "Soft factory reset started. Device will wipe its state and reboot into AP setup mode (~30s).",
+		"device_wipes": deviceWipePaths,
 	}))
 }
 
