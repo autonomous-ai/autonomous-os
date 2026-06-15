@@ -179,6 +179,7 @@ stop-runpod-dlserver:
 		kill $$(cat $(DLSERVER_PID)) 2>/dev/null || true; \
 		rm -f $(DLSERVER_PID); \
 	fi
+	@rm -f /workspace/logs/dlserver/stderr/lock
 	@sleep 2
 	@echo "dlserver stopped"
 
@@ -200,6 +201,7 @@ stop-runpod-lbserver:
 		kill $$(cat $(LBSERVER_PID)) 2>/dev/null || true; \
 		rm -f $(LBSERVER_PID); \
 	fi
+	@rm -f /workspace/logs/lbserver/stderr/lock
 	@sleep 2
 	@echo "lbserver stopped"
 
