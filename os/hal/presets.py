@@ -170,7 +170,7 @@ SCENE_PRESETS = {
 AIM_PRESETS = {
     AIM_CENTER: {"base_yaw.pos": 3.0,   "base_pitch.pos": -20.0, "elbow_pitch.pos": 32.0, "wrist_roll.pos": 0.0, "wrist_pitch.pos": 0.0},
     AIM_DESK:   {"base_yaw.pos": 3.0,   "base_pitch.pos": 5.0,   "elbow_pitch.pos": 20.0, "wrist_roll.pos": 0.0, "wrist_pitch.pos": 40.0},
-    AIM_WALL:   {"base_yaw.pos": 3.0,   "base_pitch.pos": 5.0,   "elbow_pitch.pos": -20.0, "wrist_roll.pos": 0.0, "wrist_pitch.pos": -47.82},
+    AIM_WALL:   {"base_yaw.pos": 3.0,   "base_pitch.pos": 5.0,   "elbow_pitch.pos": -10.0, "wrist_roll.pos": 0.0, "wrist_pitch.pos": -89},
     AIM_LEFT:   {"base_yaw.pos": -90.0, "base_pitch.pos": -30.0, "elbow_pitch.pos": 57.0, "wrist_roll.pos": 0.0, "wrist_pitch.pos": 18.0},
     AIM_RIGHT:  {"base_yaw.pos": 90.0,  "base_pitch.pos": -30.0, "elbow_pitch.pos": 57.0, "wrist_roll.pos": 0.0, "wrist_pitch.pos": 18.0},
     AIM_UP:     {"base_yaw.pos": 3.0,   "base_pitch.pos": 10.0,  "elbow_pitch.pos": 70.0,  "wrist_roll.pos": 0.0, "wrist_pitch.pos": 10.0},
