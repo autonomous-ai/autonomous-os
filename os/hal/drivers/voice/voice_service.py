@@ -77,6 +77,7 @@ class VoiceService:
         r"|\[(?:cheerfully|playfully|quietly|nervously|deadpan|flatly|dramatic tone|resigned tone|excited|calm|tired|sad|sorrowful|nervous|frustrated)"
         r"[^\]]*\]"
         r"|`\[[^\]]*\]`"
+        r"|/(?:emotion|servo|led|skills)[^\s]*"
         r"|NO_REPLY",
         re.IGNORECASE,
     )
