@@ -15,7 +15,6 @@ export type SetupPhase = "connecting" | "connected" | "failed";
 //       the user's computer rejoins home Wi-Fi, mDNS resolves and we redirect.
 export function useSetupStatusPolling({
   setupWorking,
-  setupPhase,
   setupLanIP,
   lampMdnsHost,
   setSetupPhase,
@@ -23,7 +22,6 @@ export function useSetupStatusPolling({
   setSetupErrorMsg,
 }: {
   setupWorking: boolean;
-  setupPhase: SetupPhase;
   setupLanIP: string;
   lampMdnsHost: string;
   setSetupPhase: Dispatch<SetStateAction<SetupPhase>>;
@@ -63,8 +61,17 @@ export function useSetupStatusPolling({
 
   // Best-effort auto-redirect: once we know the LAN IP, probe it from the
   // browser. When reachable (= user has rejoined home Wi-Fi) navigate there.
+  //
+  // Gated on setupWorking (form submitted), NOT setupPhase==="connected": the
+  // phase poll runs against the AP IP and usually goes dark when the AP shuts
+  // down during the AP→STA switch, so it frequently never reports "connected".
+  // A successful probe of the device's new LAN address is itself proof the
+  // device is online and reachable — a stronger signal than the phase poll —
+  // so we don't wait on the phase. We still only have setupLanIP once a phase
+  // poll happened to return it before the AP died; the mDNS probe below is the
+  // primary channel for the common case where it didn't.
   useEffect(() => {
-    if (setupPhase !== "connected" || !setupLanIP) return;
+    if (!setupWorking || !setupLanIP) return;
     let cancelled = false;
     const newURL = `http://${setupLanIP}/`;
     const probe = async () => {
@@ -78,7 +85,7 @@ export function useSetupStatusPolling({
     probe();
     const id = setInterval(probe, 3000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [setupPhase, setupLanIP]);
+  }, [setupWorking, setupLanIP]);
 
   // mDNS probe — the primary auto-redirect channel since the LAN-IP one
   // rarely fires in real AP→STA transitions. Carries the current pathname +
@@ -87,14 +94,25 @@ export function useSetupStatusPolling({
   // them via the form submit. Manual button in Setup.tsx renders unconditionally
   // as the safety net if mDNS is blocked on the network.
   //
+  // Gated on setupWorking (form submitted), NOT setupPhase==="connected". The
+  // phase poll hits the AP IP and goes dark the moment the AP tears down for
+  // the AP→STA switch, so it commonly never flips to "connected" — which used
+  // to leave this probe disabled and the user stranded on the "connecting"
+  // screen even after the device was fully online on home Wi-Fi (the exact
+  // case the manual fallback link exists for). A successful health probe of
+  // `<host>.local` is itself proof the device rejoined the LAN AND the user's
+  // browser can resolve it, so it's the authoritative go-signal — we no longer
+  // wait on the phase. The probe only succeeds once the user is back on home
+  // Wi-Fi, so this can't fire prematurely while they're still on the AP.
+  //
   // Critical: when the pre-submit redirect already moved us to the .local
-  // URL, `setupPhase === "connected"` lands us with target URL == current URL.
-  // Browsers no-op `location.href = sameURL` — would leave the user stuck on
-  // the "connecting" screen even though wifi is up. Force `reload()` for the
-  // same-host case so SetupGate re-runs, hits the now-reachable
-  // `checkInternet`, and re-mounts Setup in continue mode (full menu).
+  // URL, the target URL == current URL. Browsers no-op `location.href =
+  // sameURL` — would leave the user stuck on the "connecting" screen even
+  // though wifi is up. Force `reload()` for the same-host case so SetupGate
+  // re-runs, hits the now-reachable `checkInternet`, and re-mounts Setup in
+  // continue mode (full menu).
   useEffect(() => {
-    if (setupPhase !== "connected" || !lampMdnsHost) return;
+    if (!setupWorking || !lampMdnsHost) return;
     let cancelled = false;
     const targetHost = `${lampMdnsHost}.local`;
     const base = `http://${targetHost}`;
@@ -117,7 +135,7 @@ export function useSetupStatusPolling({
     probe();
     const id = setInterval(probe, 3000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [setupPhase, lampMdnsHost, carrySearch]);
+  }, [setupWorking, lampMdnsHost, carrySearch]);
 
   // Pre-submit canonical URL upgrade: when user lands on the AP IP
   // (192.168.100.1) we silently bounce to `http://lamp-XXXX.local/…` once we
