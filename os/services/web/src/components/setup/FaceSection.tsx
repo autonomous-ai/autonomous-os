@@ -26,7 +26,7 @@ export function FaceSection({
   return (
     <SectionCard id="face" title="Face Enroll (optional)" active={active}>
       <div style={{ fontSize: 11, color: C.textDim, marginBottom: 12 }}>
-        Upload photos so the lamp can recognize you.
+        Upload photos so your device can recognize you.
       </div>
       <Field label="Name" id="face_name" value={faceName} onChange={setFaceName} placeholder="e.g. Leo" />
       <div style={{ marginBottom: 12 }}>

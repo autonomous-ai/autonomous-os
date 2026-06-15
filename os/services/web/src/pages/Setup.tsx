@@ -51,7 +51,7 @@ function normaliseSetupError(message: string): string {
   const parts: string[] = [];
   if (missing.length > 0) parts.push(`Missing: ${missing.join(", ")}.`);
   if (other.length > 0) parts.push(`Invalid: ${other.join(", ")}.`);
-  parts.push("Re-open Setup from the Lamp app, or add ?debug=true to enter them manually.");
+  parts.push("Re-open Setup from the companion app, or add ?debug=true to enter them manually.");
   return parts.join(" ");
 }
 
@@ -114,7 +114,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
       { id: "llm" as SectionId,     label: "AI Brain",   icon: <Brain size={15} /> },
       { id: "channel" as SectionId, label: "Channels",   icon: <MessageSquare size={15} /> },
       { id: "language" as SectionId, label: "Language",  icon: <Globe size={15} /> },
-      { id: "tts" as SectionId,     label: "Lamp's Voice", icon: <Volume2 size={15} /> },
+      { id: "tts" as SectionId,     label: "Voice", icon: <Volume2 size={15} /> },
     ] : []),
     // Voice / Face appear in continue mode only — they need the device's
     // hardware + backend, both unavailable while we're still on the AP.
@@ -668,7 +668,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                   <>
                     <div style={{ fontSize: 32, marginBottom: 12 }}>⏳</div>
                     <div style={{ fontSize: 15, fontWeight: 600, color: C.amber, marginBottom: 8 }}>
-                      Lamp is joining your Wi-Fi…
+                      Your device is joining Wi-Fi…
                     </div>
                     <div style={{ fontSize: 12, color: C.textDim, marginBottom: lampMdnsHost ? 18 : 0 }}>
                       This usually takes 10-30 seconds. Stay on this network.
@@ -705,7 +705,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                   <>
                     <div style={{ fontSize: 32, marginBottom: 12 }}>✦</div>
                     <div style={{ fontSize: 15, fontWeight: 600, color: C.amber, marginBottom: 16 }}>
-                      Lamp is online!
+                      Your device is online!
                     </div>
 
                     {/* mDNS path (primary): the device publishes
@@ -733,7 +733,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                           // Force reload when the user is already on the
                           // canonical .local URL — otherwise the browser
                           // no-ops the same-URL click and they stay stuck on
-                          // the "Lamp is online!" screen even though the device
+                          // the "Your device is online!" screen even though the device
                           // is reachable in continue mode now.
                           href={`http://${lampMdnsHost}.local${window.location.pathname}${getInitialSearch()}`}
                           onClick={(e) => {
@@ -757,13 +757,13 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                           {setupLanIP && (
                             <> Try <span style={{ fontFamily: "ui-monospace, monospace" }}>http://{setupLanIP}/</span> or </>
                           )}
-                          {" "}find Lamp's IP in your router's admin page (look
+                          {" "}find your device's IP in your router's admin page (look
                           for "{lampMdnsHost}").
                         </div>
                       </>
                     ) : (
                       <div style={{ fontSize: 12, color: C.textDim }}>
-                        Lamp connected. Open your router's admin page to find
+                        Your device is connected. Open your router's admin page to find
                         the device's IP address (look for "{lampMdnsHost || "lamp-"}").
                       </div>
                     )}

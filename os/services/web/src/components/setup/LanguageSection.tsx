@@ -10,7 +10,7 @@ export function LanguageSection({
   return (
     <SectionCard id="language" title="Language" active={active}>
       <div style={{ fontSize: 11, color: C.textDim, marginBottom: 10 }}>
-        Pick the language the lamp listens for. You can change this anytime from the Edit page.
+        Pick the language your device listens for. You can change this anytime from the Edit page.
       </div>
       <div style={{ marginBottom: 4 }}>
         <label htmlFor="stt_language" style={{ display: "block", fontSize: 11, color: C.textDim, marginBottom: 5 }}>
