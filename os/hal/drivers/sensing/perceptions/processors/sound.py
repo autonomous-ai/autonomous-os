@@ -45,7 +45,7 @@ class SoundPerception(Perception[Any]):
         self._np = np_module
         # Resolve ALSA device name to sounddevice index if needed
         if isinstance(input_device, str):
-            # Strip ALSA plugin prefix (e.g. "plug:lamp_micro1" → "lamp_micro1")
+            # Strip ALSA plugin prefix (e.g. "plug:device_micro1" → "device_micro1")
             search_name = (
                 input_device.split(":")[-1] if ":" in input_device else input_device
             )

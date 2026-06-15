@@ -282,7 +282,7 @@ async def lifespan(app: FastAPI):
                 # PortAudio caches its device list at sd import time. At OS cold
                 # boot, sndi2s4 (ES8389 codec) often isn't registered yet, so the
                 # cached enum lacks both the hw card and any asound.conf plug
-                # alias that points at it (e.g. plug:lamp_speaker). Force a
+                # alias that points at it (e.g. plug:device_speaker). Force a
                 # fresh enum each retry via _terminate+_initialize, until the
                 # alias appears or we time out (~10s).
                 _matched = False

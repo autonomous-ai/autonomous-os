@@ -32,9 +32,9 @@ except ImportError:
 def _amixer_ctl_device() -> Optional[str]:
     """Derive the amixer control (-D) device from HAL_AUDIO_OUTPUT_ALSA.
 
-    The env names a PCM (e.g. 'plug:lamp_speaker'), but amixer needs a control
+    The env names a PCM (e.g. 'plug:device_speaker'), but amixer needs a control
     device. Our asound.conf defines `ctl.<alias>` alongside every `pcm.<alias>`,
-    so the bare alias ('lamp_speaker') is a valid amixer -D target pointing at the
+    so the bare alias ('device_speaker') is a valid amixer -D target pointing at the
     real speaker card. Returning None falls back to amixer's default card (card 0
     — often the camera mic), so volume changes silently miss the speaker.
     """

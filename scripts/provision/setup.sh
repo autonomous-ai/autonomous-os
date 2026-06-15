@@ -369,7 +369,7 @@ PULSE_EOF
 
   # Keep PulseAudio off the lamp speaker codec. hal's TTS opens this card
   # directly via ALSA hw for a persistent low-latency OutputStream, and `aplay`
-  # in the music pipeline also writes to it via plug:lamp_speaker. If PA
+  # in the music pipeline also writes to it via plug:device_speaker. If PA
   # auto-loads module-alsa-card for the same card (which it does once udev
   # finishes settling), the device becomes exclusively held and every other
   # consumer fails open with EBUSY / PaErrorCode -9985.

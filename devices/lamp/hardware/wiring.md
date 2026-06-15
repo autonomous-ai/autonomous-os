@@ -79,7 +79,7 @@ SBC → USB → USB audio board (DAC) → 3.5 mm line-out → PAM8610 L/R in →
 |---|---|---|
 | Audio source | USB audio board (line-out) | USB audio board (line-out) |
 | Connection | USB-A | USB-A |
-| ALSA alias | `plug:lamp_speaker` (mapped to USB DAC card) | `plug:lamp_speaker` (mapped to USB DAC card) |
+| ALSA alias | `plug:device_speaker` (mapped to USB DAC card) | `plug:device_speaker` (mapped to USB DAC card) |
 | DAC out → amp | 3.5 mm TRS → PAM8610 L/R inputs (twisted pair, short run) | same |
 | Speaker A | PAM8610 L+ / L− → speaker A | same |
 | Speaker B | PAM8610 R+ / R− → speaker B | same |
@@ -98,8 +98,8 @@ Two mics: a USB mic for voice capture, an onboard mic for ambient sensing.
 
 | Role | Device | ALSA alias | Code |
 |---|---|---|---|
-| Voice (Mic 1) | USB mic (`lamp_usb_mic` card) | `plug:lamp_micro2` | `/opt/hal/.env` (`HAL_AUDIO_INPUT_ALSA`) |
-| Sensing (Mic 2) | onboard codec capture | `plug:lamp_micro1` | `/opt/hal/.env` (`HAL_AUDIO_SENSING_DEVICE`) |
+| Voice (Mic 1) | USB mic (`Device` card) | `plug:device_micro2` | `/opt/hal/.env` (`HAL_AUDIO_INPUT_ALSA`) |
+| Sensing (Mic 2) | onboard codec capture | `plug:device_micro1` | `/opt/hal/.env` (`HAL_AUDIO_SENSING_DEVICE`) |
 
 > Mic 2 is the onboard MEMS mic that ships on the OrangePi 4 Pro PCB. It must be **desoldered from the OPi board and re-mounted in the lamp base with an extended cord** to the original pads. Keep the cord short enough to avoid noise pickup — twist the signal and ground together.
 

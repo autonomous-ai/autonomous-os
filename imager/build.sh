@@ -1415,7 +1415,7 @@ fi
 
 # Keep PulseAudio off the lamp speaker codec. hal's TTS opens this card
 # directly via ALSA hw for a persistent low-latency OutputStream, and aplay
-# in the music pipeline also writes to it via plug:lamp_speaker. If PA
+# in the music pipeline also writes to it via plug:device_speaker. If PA
 # auto-loads module-alsa-card for the same card, the device becomes
 # exclusively held and every other consumer fails open with EBUSY.
 # ATTR{id} values: sndi2s4 = OrangePi onboard ES8389 codec; wm8960soundcard

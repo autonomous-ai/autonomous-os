@@ -36,7 +36,7 @@ Build order for one lamp. Skeleton — fill in photos and torque values as we bu
     - Power on with current meter inline if possible.
     - Confirm SBC boots (LEDs on board).
     - Confirm fan spins.
-    - SSH in, run `aplay -D plug:lamp_speaker /home/orangepi/tiger.wav` (or similar).
+    - SSH in, run `aplay -D plug:device_speaker /home/orangepi/tiger.wav` (or similar).
     - LED ring should breathe boot animation.
 11. **Calibrate** — see [`calibration.md`](calibration.md).
 12. **Close enclosure**.
