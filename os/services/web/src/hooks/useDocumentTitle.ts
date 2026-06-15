@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-const BASE = "Lamp";
+const BASE = "Autonomous";
 
 export function useDocumentTitle(parts: string | string[]) {
   useEffect(() => {
