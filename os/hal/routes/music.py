@@ -7,6 +7,7 @@ import threading
 from fastapi import APIRouter, HTTPException
 
 import hal.app_state as state
+from hal.safety.policy import audio_quiet_now
 from hal.models import (
     MusicPlayRequest,
     MusicStatusResponse,
@@ -203,6 +204,12 @@ def audio_play(req: MusicPlayRequest):
     """Search YouTube and play audio through the speaker."""
     if state._speaker_muted:
         state.logger.info("POST /audio/play: suppressed -- speaker muted (query='%s')", req.query[:80])
+        return {"status": "suppressed"}
+    # Safety gate (SAFETY.md audio.quiet_hours): no loud discretionary output
+    # during the window. Deterministic, real wall-clock; spoken replies (TTS) are
+    # unaffected — only music is suppressed.
+    if audio_quiet_now(state.safety_policy):
+        state.logger.info("POST /audio/play: suppressed -- audio quiet hours (query='%s')", req.query[:80])
         return {"status": "suppressed"}
     if not state.music_service:
         raise HTTPException(503, "Music service not available")

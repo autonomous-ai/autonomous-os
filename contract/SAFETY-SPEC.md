@@ -46,23 +46,28 @@ unenforced (and logged) — see *Fail-safe* below for the per-capability rule.
 schema: autonomous.safety.v1
 light:
   max_brightness: 180        # 0–255 ceiling; the runtime clamps any higher request
+  quiet_hours: { start: "22:00", end: "07:00", max_brightness: 40 }  # reduced ceiling in-window
+audio:
+  quiet_hours: { start: "22:00", end: "07:00" }  # suppress loud output (music) in-window
 motion:                      # reserved (not yet enforced) — see roadmap
   # max_speed:  <int>
   # max_accel:  <int>
   # stop_always: true
-audio:                       # reserved
-  # quiet_hours: { start: "22:00", end: "07:00" }
 ---
 ```
+
+Times are device-local wall-clock (HH:MM, 24h); a window whose `start` > `end`
+wraps past midnight (e.g. `22:00`→`07:00`). The gate reads the clock on every
+request, so the bound changes with the time of day without a restart.
 
 | Field | Required | Status | Meaning |
 |-------|----------|--------|---------|
 | `schema` | yes | enforced | Contract version. `autonomous.safety.v1`. Frozen ABI — fields are only added within a major. |
 | `light.max_brightness` | no | **enforced (v1)** | Integer `0–255`. The LED route clamps any requested brightness to this ceiling. |
-| `light.quiet_hours` | no | reserved | A window during which `max_brightness` is further reduced. (Slice 2.) |
+| `light.quiet_hours` | no | **enforced (v1)** | `{ start, end, max_brightness }`. Inside the window the LED ceiling drops to this lower `max_brightness`. (Slice 2.) |
+| `audio.quiet_hours` | no | **enforced (v1)** | `{ start, end }`. Inside the window loud discretionary output (music via `/audio/play`) is suppressed; spoken replies still play. (Slice 2.) |
 | `motion.max_speed` / `max_accel` | no | reserved | Speed/acceleration ceilings the servo route clamps to. (Slice 3.) |
 | `motion.stop_always` | no | reserved | `motion.stop` is deterministic and always available, never queued behind the gateway. (Slice 3.) |
-| `audio.quiet_hours` | no | reserved | No loud output during the window. (Slice 2.) |
 
 Sections are keyed by **capability group** (the same vocabulary as `DEVICE.md`
 `capabilities` and `contract/capabilities.md`) so each `## <group>` prose heading,

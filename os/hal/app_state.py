@@ -47,6 +47,12 @@ tts_service = None
 music_service = None
 tracker_service = None
 
+# Resolved SAFETY.md bounds (hal.safety.policy.SafetyPolicy), or None when the
+# device declares none. Routes consult it as a deterministic gate before
+# actuating (e.g. music suppressed during audio quiet hours). The LED gate gets
+# the same policy via RGBService(safety_policy=...).
+safety_policy = None
+
 # --- Audio devices ---
 
 audio_output_device: Optional[int] = None

@@ -6,17 +6,33 @@ unit clamp behavior, schema fail-loud, and the load_safety fail-safe rules.
 import os
 import tempfile
 import unittest
+from datetime import time as dtime
 
 from hal.safety.policy import (
+    QuietHours,
     SafetyPolicy,
+    active_max_brightness,
+    audio_quiet_now,
     clamp_brightness,
     clamp_color,
+    in_window,
     load_safety,
     parse_safety,
     validate_schema,
 )
 
 _FM = "---\nschema: autonomous.safety.v1\nlight:\n  max_brightness: 180\n---\n# prose\n"
+
+_FM_QUIET = (
+    "---\n"
+    "schema: autonomous.safety.v1\n"
+    "light:\n"
+    "  max_brightness: 180\n"
+    '  quiet_hours: { start: "22:00", end: "07:00", max_brightness: 40 }\n'
+    "audio:\n"
+    '  quiet_hours: { start: "22:00", end: "07:00" }\n'
+    "---\n"
+)
 
 
 class TestParse(unittest.TestCase):
@@ -120,6 +136,70 @@ class TestLoadSafety(unittest.TestCase):
         d = self._write("SAFETY.md", "---\nschema: autonomous.safety.v9\n---\n")
         with self.assertRaises(ValueError):
             load_safety(d, "SAFETY.md")
+
+
+class TestQuietHoursParse(unittest.TestCase):
+    def test_parses_both_windows_and_base(self):
+        p = parse_safety(_FM_QUIET)
+        # base ceiling is the light max_brightness, NOT the quiet one
+        self.assertEqual(p.max_brightness, 180)
+        self.assertEqual(p.light_quiet, QuietHours(dtime(22, 0), dtime(7, 0), 40))
+        self.assertEqual(p.audio_quiet, QuietHours(dtime(22, 0), dtime(7, 0), None))
+
+    def test_no_quiet_hours(self):
+        p = parse_safety(_FM)
+        self.assertIsNone(p.light_quiet)
+        self.assertIsNone(p.audio_quiet)
+
+
+class TestInWindow(unittest.TestCase):
+    def setUp(self):
+        self.wrap = QuietHours(dtime(22, 0), dtime(7, 0))      # crosses midnight
+        self.same = QuietHours(dtime(9, 0), dtime(17, 0))      # same day
+
+    def test_wrap_evening_inside(self):
+        self.assertTrue(in_window(self.wrap, dtime(23, 0)))
+
+    def test_wrap_early_morning_inside(self):
+        self.assertTrue(in_window(self.wrap, dtime(6, 0)))
+
+    def test_wrap_daytime_outside(self):
+        self.assertFalse(in_window(self.wrap, dtime(12, 0)))
+
+    def test_wrap_boundary_end_exclusive(self):
+        self.assertFalse(in_window(self.wrap, dtime(7, 0)))
+
+    def test_same_day_inside_outside(self):
+        self.assertTrue(in_window(self.same, dtime(10, 0)))
+        self.assertFalse(in_window(self.same, dtime(8, 0)))
+
+
+class TestQuietHoursGate(unittest.TestCase):
+    def setUp(self):
+        self.p = parse_safety(_FM_QUIET)
+
+    def test_ceiling_reduced_inside_window(self):
+        self.assertEqual(active_max_brightness(self.p, dtime(23, 0)), 40)
+
+    def test_ceiling_base_outside_window(self):
+        self.assertEqual(active_max_brightness(self.p, dtime(12, 0)), 180)
+
+    def test_clamp_color_night_vs_day(self):
+        # full white: clamps to 40 at night, 180 by day (real wall-clock injected)
+        self.assertEqual(clamp_color(self.p, (255, 255, 255), dtime(23, 0)), (40, 40, 40))
+        self.assertEqual(clamp_color(self.p, (255, 255, 255), dtime(12, 0)), (180, 180, 180))
+
+    def test_clamp_brightness_night(self):
+        self.assertEqual(clamp_brightness(self.p, 200, dtime(2, 0)), 40)
+        self.assertEqual(clamp_brightness(self.p, 30, dtime(2, 0)), 30)
+
+    def test_audio_quiet_now(self):
+        self.assertTrue(audio_quiet_now(self.p, dtime(23, 30)))
+        self.assertFalse(audio_quiet_now(self.p, dtime(15, 0)))
+
+    def test_audio_quiet_none_when_no_policy(self):
+        self.assertFalse(audio_quiet_now(None, dtime(23, 30)))
+        self.assertFalse(audio_quiet_now(parse_safety(_FM), dtime(23, 30)))
 
 
 if __name__ == "__main__":

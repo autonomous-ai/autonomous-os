@@ -739,10 +739,40 @@ _profile = _device_profile()
 # fail-louds inside load_safety, like DEVICE.md. Slice 1 = light.max_brightness.
 from hal.safety.policy import load_safety
 _safety = load_safety(os.path.join(_devices_dir(), _resolve_device_type()), _profile.safety_ref)
+state.safety_policy = _safety  # route-level gates (e.g. music quiet hours) read it here
 logger.info(
-    "Safety policy: device=%s max_brightness=%s",
-    _resolve_device_type(), _safety.max_brightness if _safety else None,
+    "Safety policy: device=%s max_brightness=%s light_quiet=%s audio_quiet=%s",
+    _resolve_device_type(),
+    _safety.max_brightness if _safety else None,
+    bool(_safety and _safety.light_quiet),
+    bool(_safety and _safety.audio_quiet),
 )
+
+
+def _safety_view(p):
+    """Serialize the resolved SafetyPolicy for GET /device (null when no bounds)."""
+    if p is None:
+        return None
+
+    def _qh(q):
+        if q is None:
+            return None
+        d = {"start": q.start.strftime("%H:%M"), "end": q.end.strftime("%H:%M")}
+        if q.max_brightness is not None:
+            d["max_brightness"] = q.max_brightness
+        return d
+
+    light = {}
+    if p.max_brightness is not None:
+        light["max_brightness"] = p.max_brightness
+    if p.light_quiet is not None:
+        light["quiet_hours"] = _qh(p.light_quiet)
+    out = {}
+    if light:
+        out["light"] = light
+    if p.audio_quiet is not None:
+        out["audio"] = {"quiet_hours": _qh(p.audio_quiet)}
+    return out or None
 
 # Board gate: refuse to boot on hardware this device doesn't declare in
 # DEVICE.md `boards`. Wrong/unknown board → wrong pin maps → fail loud before we
@@ -967,13 +997,9 @@ def device():
         "board": _board_id,
         "boards": _profile.boards,
         "safety_ref": _profile.safety_ref,
-        # Resolved, enforced safety bounds (not just the ref). Slice 1 = light
-        # brightness ceiling; null when the device declares no machine bounds.
-        "safety": (
-            {"light": {"max_brightness": _safety.max_brightness}}
-            if (_safety and _safety.max_brightness is not None)
-            else None
-        ),
+        # Resolved, enforced safety bounds (not just the ref): brightness ceiling +
+        # quiet-hours windows. null when the device declares no machine bounds.
+        "safety": _safety_view(_safety),
         "memory": {"backend": _profile.memory_backend} if _profile.memory_backend else None,
         "routes": sorted(_plan.mounted),
         # Declared implementation families (informational hardware manifest; the

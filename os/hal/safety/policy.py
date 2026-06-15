@@ -8,10 +8,13 @@ is below the brain*: the gate sits in the request path between the agent and the
 hardware, runs on every request regardless of who issued it, and cannot be
 bypassed by prompting.
 
-Slice 1 enforces `light.max_brightness` (an LED brightness ceiling that has no
-prior enforcement). Later slices add quiet_hours / motion bounds to the same
-SafetyPolicy + gate shape — the autonomous.safety.v1 ABI only ever gains fields.
-See contract/SAFETY-SPEC.md and docs/safety.md.
+Enforced bounds:
+  - slice 1: light.max_brightness            — LED brightness ceiling
+  - slice 2: light.quiet_hours{max_brightness}, audio.quiet_hours — a nightly
+             window that lowers the LED ceiling and suppresses loud audio (music)
+
+The autonomous.safety.v1 ABI only ever gains fields. See contract/SAFETY-SPEC.md
+and docs/safety.md.
 """
 from __future__ import annotations
 
@@ -20,6 +23,7 @@ import os
 import re
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, time as dtime
 from typing import Optional, Tuple
 
 logger = logging.getLogger("hal.safety")
@@ -38,11 +42,23 @@ MAX_CHANNEL = 255  # 8-bit per-channel RGB ceiling
 
 
 @dataclass(frozen=True)
+class QuietHours:
+    """A daily time window (may wrap past midnight). `max_brightness` is the
+    reduced LED ceiling that applies inside the window (light only; None for the
+    audio window, which suppresses loud output rather than dimming it)."""
+    start: dtime
+    end: dtime
+    max_brightness: Optional[int] = None
+
+
+@dataclass(frozen=True)
 class SafetyPolicy:
     schema: str
     # light brightness ceiling (0–255). None = no ceiling declared → pass-through
     # (light fail-safe: a calm LED is not a hazard; never invent a limit).
     max_brightness: Optional[int] = None
+    light_quiet: Optional[QuietHours] = None   # nightly reduced LED ceiling
+    audio_quiet: Optional[QuietHours] = None    # nightly window: suppress loud audio
 
 
 def extract_front_matter(text: str) -> str:
@@ -78,54 +94,140 @@ def validate_schema(front_matter: str) -> str:
     return schema
 
 
-def _parse_max_brightness(front_matter: str) -> Optional[int]:
-    """`light.max_brightness` as an int, or None if absent. The field name is
-    unique in the v1 contract, so a direct match is unambiguous (block or flow
-    style: `light:\\n  max_brightness: 180` or `light: { max_brightness: 180 }`)."""
-    m = re.search(r"\bmax_brightness:\s*(\d+)", front_matter)
+def _section_body(front_matter: str, key: str) -> str:
+    """Return the body of a top-level `key:` section — either flow style
+    (`key: { ... }`) or block style (`key:` then indented lines). '' if absent.
+    Scoping by section keeps `max_brightness` under `light` distinct from the one
+    inside `light.quiet_hours`."""
+    flow = re.search(
+        r"^" + re.escape(key) + r":[ \t]*\{(.*?)\}[ \t]*$",
+        front_matter, re.MULTILINE | re.DOTALL,
+    )
+    if flow:
+        return flow.group(1)
+    block = re.search(
+        r"^" + re.escape(key) + r":[ \t]*\n((?:[ \t]+.*\n?)*)",
+        front_matter, re.MULTILINE,
+    )
+    return block.group(1) if block else ""
+
+
+def _int_field(body: str, name: str) -> Optional[int]:
+    m = re.search(r"\b" + re.escape(name) + r":\s*(\d+)", body)
+    return int(m.group(1)) if m else None
+
+
+def _validate_brightness(val: Optional[int], where: str) -> Optional[int]:
+    if val is not None and not (0 <= val <= MAX_CHANNEL):
+        raise ValueError(f"SAFETY.md {where} {val} out of range 0–{MAX_CHANNEL}")
+    return val
+
+
+def _parse_hhmm(s: str) -> dtime:
+    h, m = s.split(":")
+    hi, mi = int(h), int(m)
+    if not (0 <= hi <= 23 and 0 <= mi <= 59):
+        raise ValueError(f"SAFETY.md quiet_hours time '{s}' is not a valid HH:MM")
+    return dtime(hour=hi, minute=mi)
+
+
+def _parse_quiet_hours(section_body: str, *, with_brightness: bool) -> Optional[QuietHours]:
+    """Parse a `quiet_hours: { start: "HH:MM", end: "HH:MM"[, max_brightness: N] }`
+    object out of a section body, or None if absent."""
+    m = re.search(r"quiet_hours:\s*\{([^}]*)\}", section_body)
     if not m:
         return None
-    val = int(m.group(1))
-    if not (0 <= val <= MAX_CHANNEL):
-        raise ValueError(
-            f"SAFETY.md light.max_brightness {val} out of range 0–{MAX_CHANNEL}"
-        )
-    return val
+    body = m.group(1)
+    ms = re.search(r'start:\s*"?(\d{1,2}:\d{2})"?', body)
+    me = re.search(r'end:\s*"?(\d{1,2}:\d{2})"?', body)
+    if not ms or not me:
+        raise ValueError("SAFETY.md quiet_hours requires both 'start' and 'end' (HH:MM)")
+    mb = _validate_brightness(_int_field(body, "max_brightness"), "quiet_hours.max_brightness") if with_brightness else None
+    return QuietHours(start=_parse_hhmm(ms.group(1)), end=_parse_hhmm(me.group(1)), max_brightness=mb)
 
 
 def parse_safety(text: str) -> SafetyPolicy:
     """Parse SAFETY.md text (which HAS front matter) into a SafetyPolicy.
-    Validates the schema fail-loud; raises on an out-of-range bound."""
+    Validates the schema fail-loud; raises on an out-of-range/malformed bound."""
     fm = extract_front_matter(text)
     schema = validate_schema(fm)
-    return SafetyPolicy(schema=schema, max_brightness=_parse_max_brightness(fm))
+    light_body = _section_body(fm, "light")
+    audio_body = _section_body(fm, "audio")
+    # base light ceiling = max_brightness outside the quiet_hours object
+    light_base_body = re.sub(r"quiet_hours:\s*\{[^}]*\}", "", light_body)
+    return SafetyPolicy(
+        schema=schema,
+        max_brightness=_validate_brightness(_int_field(light_base_body, "max_brightness"), "light.max_brightness"),
+        light_quiet=_parse_quiet_hours(light_body, with_brightness=True),
+        audio_quiet=_parse_quiet_hours(audio_body, with_brightness=False),
+    )
 
 
-# ── gate functions — pure, deterministic, the single enforcement point ───────────
+# ── time helpers ─────────────────────────────────────────────────────────────
 
-def clamp_brightness(policy: Optional[SafetyPolicy], value: int) -> int:
-    """Clamp a 0–255 brightness scalar to the policy ceiling. No policy / no
-    ceiling → pass-through unchanged (light fail-safe)."""
-    if policy is None or policy.max_brightness is None:
-        return value
-    return min(value, policy.max_brightness)
+def _now() -> dtime:
+    """Device-local wall-clock time. Isolated so gates stay unit-testable: callers
+    pass an explicit `now` in tests; production reads the clock here."""
+    return datetime.now().time()
+
+
+def in_window(window: QuietHours, now: dtime) -> bool:
+    """True if `now` falls inside the window, handling wrap past midnight
+    (start > end, e.g. 22:00→07:00 = late evening OR early morning)."""
+    if window.start <= window.end:
+        return window.start <= now < window.end
+    return now >= window.start or now < window.end
+
+
+# ── gate functions — pure when `now` is passed, deterministic, single point ──────
+
+def active_max_brightness(policy: Optional[SafetyPolicy], now: Optional[dtime] = None) -> Optional[int]:
+    """The LED brightness ceiling in effect right now: the base ceiling, lowered
+    to the quiet-hours ceiling while inside the light quiet window. None = no
+    ceiling (pass-through)."""
+    if policy is None:
+        return None
+    if now is None:
+        now = _now()
+    base = policy.max_brightness
+    q = policy.light_quiet
+    if q is not None and q.max_brightness is not None and in_window(q, now):
+        return q.max_brightness if base is None else min(base, q.max_brightness)
+    return base
+
+
+def clamp_brightness(policy: Optional[SafetyPolicy], value: int, now: Optional[dtime] = None) -> int:
+    """Clamp a 0–255 brightness scalar to the ceiling in effect now. No ceiling →
+    pass-through unchanged (light fail-safe)."""
+    ceiling = active_max_brightness(policy, now)
+    return value if ceiling is None else min(value, ceiling)
 
 
 def clamp_color(
-    policy: Optional[SafetyPolicy], color: Tuple[int, int, int]
+    policy: Optional[SafetyPolicy], color: Tuple[int, int, int], now: Optional[dtime] = None
 ) -> Tuple[int, int, int]:
-    """Scale an (r,g,b) tuple so its brightest channel respects the ceiling,
-    preserving hue (full white 255 with ceiling 180 → 180,180,180; pure red
-    255,0,0 → 180,0,0). Pass-through when no ceiling or already within it."""
-    if policy is None or policy.max_brightness is None:
+    """Scale an (r,g,b) tuple so its brightest channel respects the ceiling in
+    effect now, preserving hue (full white 255, ceiling 180 → 180,180,180; pure
+    red → 180,0,0). Pass-through when no ceiling or already within it."""
+    ceiling = active_max_brightness(policy, now)
+    if ceiling is None:
         return color
     r, g, b = color
     peak = max(r, g, b)
-    ceiling = policy.max_brightness
     if peak <= ceiling:
         return color
     scale = ceiling / peak
     return (round(r * scale), round(g * scale), round(b * scale))
+
+
+def audio_quiet_now(policy: Optional[SafetyPolicy], now: Optional[dtime] = None) -> bool:
+    """True if loud discretionary audio (music) must be suppressed right now —
+    i.e. inside the declared audio quiet-hours window."""
+    if policy is None or policy.audio_quiet is None:
+        return False
+    if now is None:
+        now = _now()
+    return in_window(policy.audio_quiet, now)
 
 
 # ── loader ───────────────────────────────────────────────────────────────────

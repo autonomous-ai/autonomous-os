@@ -1,13 +1,17 @@
 ---
 schema: autonomous.safety.v1
 light:
-  max_brightness: 180        # 0–255 ceiling; the LED route clamps any higher request
+  max_brightness: 180        # 0–255 daytime ceiling; the LED route clamps any higher request
+  # Quiet hours lower the ceiling on real wall-clock time (the device runs all
+  # day; this is not a nightlight). 22:00–07:00 → ring dims to 40, agent-independent.
+  quiet_hours: { start: "22:00", end: "07:00", max_brightness: 40 }
+audio:
+  # No loud discretionary output (music) during quiet hours; spoken replies still allowed.
+  quiet_hours: { start: "22:00", end: "07:00" }
 motion:                      # reserved (slice 3) — bounds still in board.py for now
   # max_speed:  <int>
   # max_accel:  <int>
   # stop_always: true
-audio:                       # reserved (slice 2)
-  # quiet_hours: { start: "22:00", end: "07:00" }
 ---
 
 # SAFETY.md — Autonomous Lamp

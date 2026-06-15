@@ -69,7 +69,7 @@ unknown-major `schema` aborts boot rather than enforce an ABI it cannot read.
 | Slice | Scope | Gate | Enforced where | Status |
 |-------|-------|------|----------------|--------|
 | 1 | `light.max_brightness` ceiling | `clamp_brightness` / `clamp_color` | LED gate (`rgb_service` `_handle_solid`/`_handle_paint`) | **enforced (v1)** |
-| 2 | `quiet_hours` (light + audio) | `quiet_now` + reduced ceiling | LED + music routes | reserved |
+| 2 | `quiet_hours` (light + audio) | `active_max_brightness` (time-aware) + `audio_quiet_now` | LED gate + music route | **enforced (v1)** |
 | 3 | `motion.max_speed`/`max_accel`, `stop_always` (fail-closed) | `clamp_motion`, stop guarantee | servo route | reserved |
 | 4 | fail-safe states (network loss → hold pose, board fault → disable capability) | state gate | lifespan + routes | reserved |
 
@@ -115,9 +115,32 @@ network/access-control security — ports, RCE, CORS — not actuation bounds.)
 - [x] **Determinism:** `clamp_color` is pure and never consults the caller, so the
       clamp is identical for the agent, the Web UI, or a raw `curl`.
 
-Later slices extend this checklist (quiet-hours: assert reduced ceiling inside the
-window and normal outside, with an injected clock; motion: assert fail-closed when
-bounds are absent, and that `stop` preempts an in-flight move).
+### Slice 2 — quiet hours (checklist)
+
+Quiet hours add a **time** dimension: the LED ceiling drops and music is
+suppressed inside a daily window (device-local wall-clock; the device runs all
+day, so this is real time-of-day, not "off at night"). The gate reads the clock
+on every request, so it flips at the boundary with no restart.
+
+- [x] **Unit (injected clock):** `in_window` handles the midnight wrap
+      (22:00→07:00 true at 23:00 and 06:00, false at 12:00, end-exclusive at 07:00);
+      `active_max_brightness` returns the reduced ceiling (40) inside the window and
+      the base (180) outside; `clamp_color((255,255,255), now=23:00)` → `(40,40,40)`,
+      `now=12:00` → `(180,180,180)`; `audio_quiet_now` true in-window, false out /
+      when no policy. (`os/hal/test/test_safety.py`.)
+- [x] **Runtime:** `GET /device` reports `safety.light.quiet_hours` +
+      `safety.audio.quiet_hours`. With the window set to the current time, the LED
+      ring clamps to the reduced ceiling and `POST /audio/play` returns
+      `{"status":"suppressed"}`; outside the window both behave normally.
+- [x] **Bypass audit:** the LED quiet ceiling rides the same `rgb_service`
+      `_handle_solid`/`_handle_paint` chokepoint as slice 1 (no new path). Music
+      suppression sits in `/audio/play` — the only route that starts discretionary
+      audio (TTS is intentionally exempt).
+- [x] **Determinism:** the window check is pure given `now`; the only impurity is
+      reading the system clock, isolated in `policy._now()` so tests inject time.
+
+Later slices extend this checklist (motion: assert fail-closed when bounds are
+absent, and that `stop` preempts an in-flight move).
 
 ## Relationship to existing ad-hoc enforcement
 
