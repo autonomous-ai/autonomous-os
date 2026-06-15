@@ -37,7 +37,9 @@ DLSERVER_PORT ?= 8001
 JUPYTER_PORT ?= 8890
 
 DLSERVER_PID ?= /tmp/dlserver.pid
+DLSERVER_WRAPPER_PID ?= /tmp/dlserver-wrapper.pid
 LBSERVER_PID ?= /tmp/lbserver.pid
+LBSERVER_WRAPPER_PID ?= /tmp/lbserver-wrapper.pid
 
 # Resolve TensorRT/cuDNN LD_LIBRARY_PATH (evaluated once, cached)
 define SET_TRT_LD_PATH
@@ -162,30 +164,46 @@ start-nginx-ssl: gen-ssl-cert
 start-runpod-dlserver: install stop-runpod-dlserver
 	@command -v multilog >/dev/null || apt-get install -y daemontools
 	@mkdir -p /workspace/logs/dlserver/stderr
-	@$(SET_TRT_LD_PATH); nohup python -m dlserver --host 127.0.0.1 --port $(DLSERVER_PORT) --log-dir /workspace/logs/dlserver --pid-file $(DLSERVER_PID) </dev/null 2>&1 | multilog t s1048576 n3 /workspace/logs/dlserver/stderr &
-	@echo "dlserver started on port $(DLSERVER_PORT)"
+	@$(SET_TRT_LD_PATH); nohup bash scripts/run-with-restart.sh \
+		--pid-file $(DLSERVER_PID) --wrapper-pid-file $(DLSERVER_WRAPPER_PID) --cooldown 5 -- \
+		python -m dlserver --host 127.0.0.1 --port $(DLSERVER_PORT) --log-dir /workspace/logs/dlserver \
+		</dev/null 2>&1 | multilog t s1048576 n3 /workspace/logs/dlserver/stderr &
+	@echo "dlserver started on port $(DLSERVER_PORT) (auto-restart enabled)"
 
 stop-runpod-dlserver:
+	@if [ -f $(DLSERVER_WRAPPER_PID) ]; then \
+		kill $$(cat $(DLSERVER_WRAPPER_PID)) 2>/dev/null || true; \
+		rm -f $(DLSERVER_WRAPPER_PID); \
+	fi
 	@if [ -f $(DLSERVER_PID) ]; then \
 		kill $$(cat $(DLSERVER_PID)) 2>/dev/null || true; \
 		rm -f $(DLSERVER_PID); \
-		sleep 3; \
-		echo "dlserver stopped"; \
 	fi
+	@rm -f /workspace/logs/dlserver/stderr/lock
+	@sleep 2
+	@echo "dlserver stopped"
 
 start-runpod-lbserver: install-lb stop-runpod-lbserver
 	@command -v multilog >/dev/null || apt-get install -y daemontools
 	@mkdir -p /workspace/logs/lbserver/stderr
-	@nohup python -m lbserver --host 127.0.0.1 --port $(LBSERVER_PORT) --log-dir /workspace/logs/lbserver --pid-file $(LBSERVER_PID) </dev/null 2>&1 | multilog t s1048576 n3 /workspace/logs/lbserver/stderr &
-	@echo "lbserver started on port $(LBSERVER_PORT)"
+	@nohup bash scripts/run-with-restart.sh \
+		--pid-file $(LBSERVER_PID) --wrapper-pid-file $(LBSERVER_WRAPPER_PID) --cooldown 5 -- \
+		python -m lbserver --host 127.0.0.1 --port $(LBSERVER_PORT) --log-dir /workspace/logs/lbserver \
+		</dev/null 2>&1 | multilog t s1048576 n3 /workspace/logs/lbserver/stderr &
+	@echo "lbserver started on port $(LBSERVER_PORT) (auto-restart enabled)"
 
 stop-runpod-lbserver:
+	@if [ -f $(LBSERVER_WRAPPER_PID) ]; then \
+		kill $$(cat $(LBSERVER_WRAPPER_PID)) 2>/dev/null || true; \
+		rm -f $(LBSERVER_WRAPPER_PID); \
+	fi
 	@if [ -f $(LBSERVER_PID) ]; then \
 		kill $$(cat $(LBSERVER_PID)) 2>/dev/null || true; \
 		rm -f $(LBSERVER_PID); \
-		sleep 3; \
-		echo "lbserver stopped"; \
 	fi
+	@rm -f /workspace/logs/lbserver/stderr/lock
+	@sleep 2
+	@echo "lbserver stopped"
 
 start-jupyter:
 	@if ! command -v jupyter-lab > /dev/null 2>&1; then \
@@ -214,13 +232,21 @@ info:
 	@echo "=== Processes ==="
 	@printf "  dlserver:  "; \
 	if [ -f $(DLSERVER_PID) ] && kill -0 $$(cat $(DLSERVER_PID)) 2>/dev/null; then \
-		echo "running (pid=$$(cat $(DLSERVER_PID)))"; \
+		WRAPPER=""; \
+		if [ -f $(DLSERVER_WRAPPER_PID) ] && kill -0 $$(cat $(DLSERVER_WRAPPER_PID)) 2>/dev/null; then \
+			WRAPPER=" (watchdog=$$(cat $(DLSERVER_WRAPPER_PID)))"; \
+		fi; \
+		echo "running (pid=$$(cat $(DLSERVER_PID))$$WRAPPER)"; \
 	else \
 		echo "stopped"; \
 	fi
 	@printf "  lbserver:  "; \
 	if [ -f $(LBSERVER_PID) ] && kill -0 $$(cat $(LBSERVER_PID)) 2>/dev/null; then \
-		echo "running (pid=$$(cat $(LBSERVER_PID)))"; \
+		WRAPPER=""; \
+		if [ -f $(LBSERVER_WRAPPER_PID) ] && kill -0 $$(cat $(LBSERVER_WRAPPER_PID)) 2>/dev/null; then \
+			WRAPPER=" (watchdog=$$(cat $(LBSERVER_WRAPPER_PID)))"; \
+		fi; \
+		echo "running (pid=$$(cat $(LBSERVER_PID))$$WRAPPER)"; \
 	else \
 		echo "stopped"; \
 	fi
