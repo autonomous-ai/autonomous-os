@@ -39,8 +39,6 @@ cleanup() {
         kill "$CHILD_PID" 2>/dev/null || true
         wait "$CHILD_PID" 2>/dev/null || true
     fi
-    [[ -n "$PID_FILE" ]] && rm -f "$PID_FILE"
-    [[ -n "$WRAPPER_PID_FILE" ]] && rm -f "$WRAPPER_PID_FILE"
 }
 
 trap cleanup SIGTERM SIGINT
