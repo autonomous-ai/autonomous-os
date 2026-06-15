@@ -24,6 +24,11 @@ class PredictorFactory(Generic[PREDICTOR_T], ABC):
 
 class PredictorBase(Generic[INPUT_T, OUTPUT_T], ABC):
     DEFAULT_BATCH_SIZE: int = 1
+    # Shared lock for PyTorch GPU inference. PyTorch models running concurrently
+    # on the default CUDA stream cause cuDNN/stream collisions. Subclasses that
+    # use PyTorch (ObjectDetector, PersonDetector) acquire this in predict().
+    # ONNX Runtime predictors don't need it — they use a separate CUDA context.
+    _gpu_lock: threading.RLock = threading.RLock()
 
     def __init__(self, batch_size: int | None = None) -> None:
         self._logger: logging.Logger = logging.getLogger(
