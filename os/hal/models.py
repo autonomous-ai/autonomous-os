@@ -427,6 +427,9 @@ class HealthResponse(BaseModel):
     tts: bool
     music: bool
     display: bool
+    # Thermal fail-safe: null when no `thermal` bound is declared (monitoring off);
+    # otherwise {over, temp_c, max_temp_c}. over=True means SoC is above its ceiling.
+    thermal: Optional[dict] = None
 
 
 class ServoMoveRequest(BaseModel):

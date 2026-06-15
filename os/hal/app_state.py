@@ -53,6 +53,13 @@ tracker_service = None
 # the same policy via RGBService(safety_policy=...).
 safety_policy = None
 
+# Thermal fail-safe state, updated by the background SoC-temp monitor (server.py)
+# when `thermal` bounds are declared. thermal_over flips True on over-temp and
+# clears on cool-down (hysteresis); soc_temp_c is the last reading (None if not
+# monitored / unreadable). Surfaced at GET /health.
+thermal_over = False
+soc_temp_c = None
+
 # --- Audio devices ---
 
 audio_output_device: Optional[int] = None

@@ -14,6 +14,8 @@ Enforced bounds:
              window that lowers the LED ceiling and suppresses loud audio (music)
   - slice 3: motion.max_speed                — deg/s ceiling, enforced by
              stretching a move's duration (see min_move_duration)
+  - slice 4: thermal.max_temp_c              — SoC over-temp → health event +
+             stop discretionary motion (background monitor, see thermal_over)
 
 Enforcement is presence-driven and uniform across capabilities: a declared bound
 is enforced, an absent one is pass-through — the engine never invents a limit
@@ -70,6 +72,18 @@ class MotionBounds:
 
 
 @dataclass(frozen=True)
+class ThermalBounds:
+    # SoC temperature (°C) at/above which the device is "thermally over": the
+    # runtime surfaces a health event and stops discretionary motion (tracking).
+    # The threshold is device/SoC-specific — read the board's own critical trip
+    # point (`/sys/class/thermal/.../trip_point_*_temp`); never a generic guess.
+    max_temp_c: int
+    # cooled to/below this clears the over state (hysteresis, avoids flapping at
+    # the boundary). Defaults to max_temp_c - 10 when not declared.
+    resume_temp_c: int
+
+
+@dataclass(frozen=True)
 class SafetyPolicy:
     schema: str
     # light brightness ceiling (0–255). None = no ceiling declared → pass-through
@@ -82,6 +96,10 @@ class SafetyPolicy:
     # absent one is not (the engine never invents a limit nobody wrote). The only
     # motion enforcement is the speed cap (see min_move_duration).
     motion: Optional[MotionBounds] = None
+    # Thermal bound. None = no SoC over-temp monitoring declared → off (the same
+    # presence-driven rule). When set, a background monitor reads SoC temp and, on
+    # crossing max_temp_c, raises a health event + stops discretionary motion.
+    thermal: Optional[ThermalBounds] = None
 
 
 def extract_front_matter(text: str) -> str:
@@ -181,6 +199,24 @@ def _parse_motion(motion_body: str) -> Optional[MotionBounds]:
     return MotionBounds(max_speed=max_speed, stop_always=stop_always)
 
 
+def _parse_thermal(thermal_body: str) -> Optional[ThermalBounds]:
+    """Parse the `thermal:` section into ThermalBounds, or None if it declares no
+    `max_temp_c` (absent → no thermal monitoring, like every other bound)."""
+    max_temp = _int_field(thermal_body, "max_temp_c")
+    if max_temp is None:
+        return None
+    if max_temp <= 0:
+        raise ValueError(f"SAFETY.md thermal.max_temp_c {max_temp} must be > 0 (°C)")
+    resume = _int_field(thermal_body, "resume_temp_c")
+    if resume is None:
+        resume = max_temp - 10
+    if resume >= max_temp:
+        raise ValueError(
+            f"SAFETY.md thermal.resume_temp_c {resume} must be < max_temp_c {max_temp}"
+        )
+    return ThermalBounds(max_temp_c=max_temp, resume_temp_c=resume)
+
+
 def parse_safety(text: str) -> SafetyPolicy:
     """Parse SAFETY.md text (which HAS front matter) into a SafetyPolicy.
     Validates the schema fail-loud; raises on an out-of-range/malformed bound."""
@@ -200,6 +236,7 @@ def parse_safety(text: str) -> SafetyPolicy:
         light_quiet=_parse_quiet_hours(light_body, with_brightness=True),
         audio_quiet=_parse_quiet_hours(audio_body, with_brightness=False),
         motion=_parse_motion(_section_body(fm, "motion")),
+        thermal=_parse_thermal(_section_body(fm, "thermal")),
     )
 
 
@@ -293,6 +330,37 @@ def min_move_duration(
         max_delta = max(max_delta, abs(float(tgt) - float(cur)))
     needed = max_delta / policy.motion.max_speed
     return max(requested, needed)
+
+
+def thermal_over(policy: Optional[SafetyPolicy], temp_c: Optional[float], was_over: bool) -> bool:
+    """Hysteresis gate for SoC over-temperature. Returns whether the device should
+    be in the thermal-over state given the current temp and the previous state:
+
+      - no policy / no thermal bound / unreadable temp → False (monitoring off).
+      - not yet over: trip True once temp reaches `max_temp_c`.
+      - already over: stay True until temp cools to/below `resume_temp_c`.
+
+    Pure (no IO) so the state machine is unit-testable; the caller supplies temp."""
+    if policy is None or policy.thermal is None or temp_c is None:
+        return False
+    t = policy.thermal
+    if was_over:
+        return temp_c > t.resume_temp_c
+    return temp_c >= t.max_temp_c
+
+
+_THERMAL_ZONE = "/sys/class/thermal/thermal_zone0/temp"
+
+
+def read_soc_temp_c(path: str = _THERMAL_ZONE) -> Optional[float]:
+    """Read the SoC temperature in °C from the kernel thermal zone (millidegrees),
+    or None if unreadable (no zone, permission, parse error) — best-effort, never
+    raises. Isolated like _now() so the gate stays pure in tests."""
+    try:
+        with open(path, "r") as f:
+            return int(f.read().strip()) / 1000.0
+    except Exception:
+        return None
 
 
 # ── loader ───────────────────────────────────────────────────────────────────

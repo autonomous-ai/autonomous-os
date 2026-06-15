@@ -518,7 +518,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"BT route restore scheduling failed: {e}")
 
+    # Thermal fail-safe monitor (only when `thermal` bounds are declared).
+    if _safety and _safety.thermal:
+        threading.Thread(
+            target=_thermal_monitor, args=(_safety,), daemon=True, name="thermal-monitor"
+        ).start()
+        logger.info(
+            "Thermal monitor: max_temp_c=%d resume_temp_c=%d",
+            _safety.thermal.max_temp_c, _safety.thermal.resume_temp_c,
+        )
+
     yield
+
+    _thermal_stop.set()
 
     # Shutdown — announce + park servos first (only when OS is actually
     # going down and no button path already announced), so the audible cue
@@ -777,7 +789,57 @@ def _safety_view(p):
         if p.motion.max_speed is not None:
             m["max_speed"] = p.motion.max_speed
         out["motion"] = m
+    if p.thermal is not None:
+        out["thermal"] = {
+            "max_temp_c": p.thermal.max_temp_c,
+            "resume_temp_c": p.thermal.resume_temp_c,
+        }
     return out or None
+
+
+# Thermal fail-safe monitor — a background daemon that reads SoC temperature and,
+# when `thermal` bounds are declared, raises a health event + stops discretionary
+# motion (tracking) on over-temp, clearing on cool-down (hysteresis). Only started
+# when _safety.thermal is set (presence-driven; off otherwise). The CPU heat isn't
+# the servo's fault, so we don't freeze idle — same posture as the network reflex.
+_thermal_stop = threading.Event()
+
+
+def _thermal_monitor(policy, interval: float = 10.0):
+    from hal.safety.policy import read_soc_temp_c, thermal_over
+    while not _thermal_stop.is_set():
+        temp = read_soc_temp_c()
+        state.soc_temp_c = temp
+        over = thermal_over(policy, temp, state.thermal_over)
+        if over and not state.thermal_over:
+            state.thermal_over = True
+            logger.warning(
+                "[thermal] SoC %.1f°C >= %d°C — over-temp; stopping discretionary motion",
+                temp, policy.thermal.max_temp_c,
+            )
+            try:
+                if state.tracker_service and state.tracker_service.is_tracking:
+                    state.tracker_service.stop()
+            except Exception as e:
+                logger.warning("[thermal] stop tracking failed: %s", e)
+        elif state.thermal_over and not over:
+            state.thermal_over = False
+            logger.info(
+                "[thermal] SoC %s°C <= %d°C — recovered",
+                f"{temp:.1f}" if temp is not None else "?", policy.thermal.resume_temp_c,
+            )
+        _thermal_stop.wait(interval)
+
+
+def _thermal_view():
+    """Thermal status for GET /health — null when no `thermal` bound is declared."""
+    if not (_safety and _safety.thermal):
+        return None
+    return {
+        "over": state.thermal_over,
+        "temp_c": state.soc_temp_c,
+        "max_temp_c": _safety.thermal.max_temp_c,
+    }
 
 # Board gate: refuse to boot on hardware this device doesn't declare in
 # DEVICE.md `boards`. Wrong/unknown board → wrong pin maps → fail loud before we
@@ -1033,6 +1095,7 @@ def health():
         if state.music_service
         else False,
         "display": state.display_service is not None,
+        "thermal": _thermal_view(),
     }
 
 
