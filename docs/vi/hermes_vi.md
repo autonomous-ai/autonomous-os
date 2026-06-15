@@ -38,7 +38,7 @@ máy** cho các giá trị này — chúng là hằng số compile-time trong
 |---|---|---|
 | `BaseURL` | `http://127.0.0.1:8642` | Hermes API server cục bộ |
 | `APIKey` | `hermes-api-key` | Bearer cho Hermes |
-| `Conversation` | `lumi-main` | Kênh mà mọi lượt đổ vào |
+| `Conversation` | `device-main` | Kênh mà mọi lượt đổ vào |
 | `Model` | `hermes-agent` | Model id gửi cho Hermes |
 
 Giả định Hermes đã chạy sẵn trên thiết bị tại `BaseURL` với skills đã provision;
@@ -66,7 +66,7 @@ Hermes không có socket, nên "session" nằm phía server:
 
 - Mỗi response mang header `X-Hermes-Session-Id` — một UUID cho mỗi conversation,
   ổn định qua các lần reconnect. `Service.sessionUUID` lưu bóng của nó.
-- `Conversation` (`lumi-main`) là kênh có tên mà mọi lượt đổ vào; tất cả lượt
+- `Conversation` (`device-main`) là kênh có tên mà mọi lượt đổ vào; tất cả lượt
   chat/sensing/Telegram dùng chung để agent giữ một context.
 - `Service.lastResponseID` cache `response.id` mới nhất, dùng để nối lượt (kiểu
   continuation của Responses API).
@@ -82,7 +82,7 @@ restart os-server.
 ```jsonc
 {
   "model": "hermes-agent",
-  "conversation": "lumi-main",
+  "conversation": "device-main",
   "stream": true,
   "instructions": "…",        // text hệ thống/role, optional
   "input": "<text>",           // lượt text thường …

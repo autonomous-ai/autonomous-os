@@ -86,7 +86,7 @@ type Service struct {
 
 	// Session/conversation state. sessionUUID is the X-Hermes-Session-Id header
 	// captured from any response; conversation is the named channel everything
-	// flows into (default "lumi-main").
+	// flows into (default "device-main").
 	sessionUUID    atomic.Value // string
 	lastResponseID atomic.Value // string — last response.id observed
 	reqCounter     atomic.Int64

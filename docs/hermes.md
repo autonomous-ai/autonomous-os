@@ -38,7 +38,7 @@ config** for these yet — they are compile-time constants in
 |---|---|---|
 | `BaseURL` | `http://127.0.0.1:8642` | Local Hermes API server |
 | `APIKey` | `hermes-api-key` | Bearer for Hermes |
-| `Conversation` | `lumi-main` | Named channel all turns flow into |
+| `Conversation` | `device-main` | Named channel all turns flow into |
 | `Model` | `hermes-agent` | Model id sent to Hermes |
 
 Hermes itself is assumed to be already running on the device at `BaseURL` with
@@ -66,7 +66,7 @@ Hermes has no socket, so the "session" is server-side:
 
 - Every response carries the `X-Hermes-Session-Id` response header — one UUID per
   conversation, stable across reconnects. `Service.sessionUUID` shadows it.
-- `Conversation` (`lumi-main`) is the named channel every turn flows into; all
+- `Conversation` (`device-main`) is the named channel every turn flows into; all
   chat/sensing/Telegram turns share it so the agent keeps one context.
 - `Service.lastResponseID` caches the latest `response.id`, used to chain turns
   (Responses-API style continuation).
@@ -82,7 +82,7 @@ an os-server restart.
 ```jsonc
 {
   "model": "hermes-agent",
-  "conversation": "lumi-main",
+  "conversation": "device-main",
   "stream": true,
   "instructions": "…",        // optional system/role text
   "input": "<text>",           // plain turn …

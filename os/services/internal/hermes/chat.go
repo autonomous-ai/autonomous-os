@@ -36,7 +36,7 @@ func (s *Service) SendChatMessageWithImage(message string, imageBase64 string) (
 // identical across backends.
 func (s *Service) NextChatRunID() (reqID string, runID string) {
 	reqID = fmt.Sprintf("chat-%d", s.reqCounter.Add(1))
-	runID = fmt.Sprintf("lumi-%s-%d", reqID, time.Now().UnixMilli())
+	runID = fmt.Sprintf("device-%s-%d", reqID, time.Now().UnixMilli())
 	return reqID, runID
 }
 
