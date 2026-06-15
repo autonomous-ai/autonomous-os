@@ -49,10 +49,10 @@ light:
   quiet_hours: { start: "22:00", end: "07:00", max_brightness: 40 }  # reduced ceiling in-window
 audio:
   quiet_hours: { start: "22:00", end: "07:00" }  # suppress loud output (music) in-window
-motion:                      # reserved (not yet enforced) — see roadmap
-  # max_speed:  <int>
-  # max_accel:  <int>
-  # stop_always: true
+motion:
+  max_speed: 120             # deg/s; the servo route stretches a move's duration so no joint exceeds it
+  stop_always: true          # motion.stop/release are deterministic and never gated
+  # max_accel: <int>         # reserved
 ---
 ```
 
@@ -66,8 +66,10 @@ request, so the bound changes with the time of day without a restart.
 | `light.max_brightness` | no | **enforced (v1)** | Integer `0–255`. The LED route clamps any requested brightness to this ceiling. |
 | `light.quiet_hours` | no | **enforced (v1)** | `{ start, end, max_brightness }`. Inside the window the LED ceiling drops to this lower `max_brightness`. (Slice 2.) |
 | `audio.quiet_hours` | no | **enforced (v1)** | `{ start, end }`. Inside the window loud discretionary output (music via `/audio/play`) is suppressed; spoken replies still play. (Slice 2.) |
-| `motion.max_speed` / `max_accel` | no | reserved | Speed/acceleration ceilings the servo route clamps to. (Slice 3.) |
-| `motion.stop_always` | no | reserved | `motion.stop` is deterministic and always available, never queued behind the gateway. (Slice 3.) |
+| `motion.max_speed` | no | **enforced (v1)** | deg/s ceiling. The servo route stretches a move's duration so no joint exceeds it (the move still reaches its target). (Slice 3.) |
+| `motion.max_accel` | no | reserved | Acceleration ceiling. (Reserved — no accel model yet.) |
+| `motion.stop_always` | no | **enforced (v1)** | `motion.stop`/release are deterministic and never gated, even when moves are fail-closed. (Slice 3.) |
+| **(motion declared, no bounds)** | — | **fail-closed (v1)** | A device that declares the `motion` capability but ships no `motion:` bounds **refuses to actuate** (`/servo/move`, `play`, `aim`, `nudge`, `track`). The inverse of the light fail-safe. |
 
 Sections are keyed by **capability group** (the same vocabulary as `DEVICE.md`
 `capabilities` and `contract/capabilities.md`) so each `## <group>` prose heading,

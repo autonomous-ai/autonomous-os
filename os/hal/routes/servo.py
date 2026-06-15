@@ -12,6 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, File, Form, UploadFile
 
 import hal.app_state as state
+from hal.safety.policy import motion_allowed, min_move_duration
 from hal.models import (
     ServoAimRequest,
     ServoAimResponse,
@@ -53,6 +54,20 @@ def _sanitize_recording_name(name: str) -> str:
 
 
 # --- Endpoints ---
+
+
+def _require_motion_bounds():
+    """FAIL-CLOSED guard for discretionary motion endpoints. The servo route only
+    mounts when the device declares the motion capability, so SAFETY.md must carry
+    motion bounds; if it doesn't, refuse to actuate (moving against unknown limits
+    is a hardware fault). Recovery actions (release/zero/hold/stop) stay ungated —
+    you must always be able to halt or safe the body."""
+    if not motion_allowed(state.safety_policy):
+        raise HTTPException(
+            403,
+            "motion refused: device declares motion but SAFETY.md has no motion bounds (fail-closed)",
+        )
+
 
 
 @router.get("/servo", response_model=ServoStateResponse)
@@ -176,6 +191,7 @@ async def upload_servo_recording(
 @router.post("/servo/play", response_model=StatusResponse)
 def play_recording(req: ServoRequest):
     """Play a pre-recorded servo animation by name."""
+    _require_motion_bounds()
     state.logger.debug("POST /servo/play recording=%s", req.recording)
     if not state.animation_service:
         raise HTTPException(503, "Servo not available")
@@ -257,11 +273,31 @@ def move_servo(req: ServoMoveRequest):
             400, f"Unknown joints: {unknown}. Valid: {sorted(valid_joints)}"
         )
 
+    # Safety gate (SAFETY.md motion) — FAIL-CLOSED: the servo route only mounts
+    # when the device declares the motion capability, so motion bounds are
+    # required. Missing bounds → refuse to move (moving against unknown limits is
+    # a hardware fault). stop/release/zero are recovery actions and stay ungated.
+    _require_motion_bounds()
+
+    # Speed ceiling (motion.max_speed): read the current pose and stretch the
+    # duration so no joint exceeds it. Best-effort read — if it fails we fall back
+    # to the requested duration (the move still happens, just unclamped this once).
+    current = {}
+    try:
+        with state.animation_service.bus_lock:
+            current = {
+                k: v for k, v in state.animation_service.robot.get_observation().items()
+                if k.endswith(".pos")
+            }
+    except Exception as e:
+        state.logger.warning("move: could not read current pose for speed clamp: %s", e)
+    eff_duration = min_move_duration(state.safety_policy, req.positions, current, req.duration)
+
     errors = {}
 
     try:
-        if req.duration > 0:
-            state.animation_service.move_to(req.positions, duration=req.duration)
+        if eff_duration > 0:
+            state.animation_service.move_to(req.positions, duration=eff_duration)
         else:
             with state.animation_service.bus_lock:
                 state.animation_service.robot.send_action(req.positions)
@@ -286,7 +322,7 @@ def move_servo(req: ServoMoveRequest):
         "status": "error" if "move" in errors else "ok",
         "requested": req.positions,
         "clamped": req.positions,
-        "duration": req.duration,
+        "duration": eff_duration,  # may exceed req.duration when speed-clamped
         "errors": errors if errors else None,
     }
 
@@ -433,6 +469,7 @@ def list_aim_directions():
 @router.post("/servo/aim", response_model=ServoAimResponse)
 def aim_servo(req: ServoAimRequest):
     """Aim the device head to a named direction."""
+    _require_motion_bounds()
     if not state.animation_service:
         raise HTTPException(503, "Servo not available")
     if not state.animation_service.robot:
@@ -489,6 +526,7 @@ def aim_servo(req: ServoAimRequest):
 @router.post("/servo/nudge", response_model=ServoAimResponse)
 def nudge_servo(req: ServoNudgeRequest):
     """Move servo by relative degrees from current position."""
+    _require_motion_bounds()
     if not state.animation_service:
         raise HTTPException(503, "Servo not available")
     if not state.animation_service.robot:
@@ -519,6 +557,7 @@ def nudge_servo(req: ServoNudgeRequest):
 @router.post("/servo/track", response_model=ServoTrackResponse)
 def start_tracking(req: ServoTrackRequest):
     """Start tracking an object by bounding box. Servo follows the object in real-time."""
+    _require_motion_bounds()
     if not state.tracker_service:
         raise HTTPException(503, "Tracker service not available")
     if not state.animation_service:
@@ -575,6 +614,7 @@ def get_tracking_status():
 @router.post("/servo/track/update", response_model=ServoTrackResponse)
 def update_tracking_bbox(req: ServoTrackRequest):
     """Re-initialize tracker with a new bounding box."""
+    _require_motion_bounds()
     if not state.tracker_service:
         raise HTTPException(503, "Tracker service not available")
     if not state.tracker_service.is_tracking:

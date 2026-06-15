@@ -9,6 +9,7 @@ import unittest
 from datetime import time as dtime
 
 from hal.safety.policy import (
+    MotionBounds,
     QuietHours,
     SafetyPolicy,
     active_max_brightness,
@@ -17,8 +18,20 @@ from hal.safety.policy import (
     clamp_color,
     in_window,
     load_safety,
+    min_move_duration,
+    motion_allowed,
     parse_safety,
     validate_schema,
+)
+
+_FM_MOTION = (
+    "---\n"
+    "schema: autonomous.safety.v1\n"
+    "motion:\n"
+    "  max_speed: 120\n"
+    "  stop_always: true\n"
+    "  # max_accel: <int>\n"   # comment must NOT be parsed as a bound
+    "---\n"
 )
 
 _FM = "---\nschema: autonomous.safety.v1\nlight:\n  max_brightness: 180\n---\n# prose\n"
@@ -200,6 +213,67 @@ class TestQuietHoursGate(unittest.TestCase):
     def test_audio_quiet_none_when_no_policy(self):
         self.assertFalse(audio_quiet_now(None, dtime(23, 30)))
         self.assertFalse(audio_quiet_now(parse_safety(_FM), dtime(23, 30)))
+
+
+class TestMotionParse(unittest.TestCase):
+    def test_parses_motion(self):
+        p = parse_safety(_FM_MOTION)
+        self.assertEqual(p.motion, MotionBounds(max_speed=120, stop_always=True))
+
+    def test_no_motion_section(self):
+        self.assertIsNone(parse_safety(_FM).motion)
+
+    def test_commented_stop_always_not_a_bound(self):
+        # a motion section with ONLY commented placeholders → no real bounds → None
+        fm = "---\nschema: autonomous.safety.v1\nmotion:\n  # stop_always: true\n  # max_speed: <int>\n---\n"
+        self.assertIsNone(parse_safety(fm).motion)
+
+    def test_bad_max_speed_raises(self):
+        with self.assertRaises(ValueError):
+            parse_safety("---\nschema: autonomous.safety.v1\nmotion:\n  max_speed: 0\n---\n")
+
+
+class TestMotionAllowed(unittest.TestCase):
+    def setUp(self):
+        self.p = parse_safety(_FM_MOTION)
+
+    def test_allowed_with_bounds(self):
+        self.assertTrue(motion_allowed(self.p, declares_motion=True))
+
+    def test_fail_closed_no_bounds(self):
+        self.assertFalse(motion_allowed(parse_safety(_FM), declares_motion=True))
+
+    def test_fail_closed_no_policy(self):
+        self.assertFalse(motion_allowed(None, declares_motion=True))
+
+    def test_non_motion_device_unaffected(self):
+        self.assertTrue(motion_allowed(None, declares_motion=False))
+
+
+class TestMinMoveDuration(unittest.TestCase):
+    def setUp(self):
+        self.p = parse_safety(_FM_MOTION)  # max_speed 120 deg/s
+
+    def test_stretches_when_too_fast(self):
+        # 120 deg move requested in 0.1s -> needs 1.0s at 120 deg/s
+        d = min_move_duration(self.p, {"pan.pos": 120.0}, {"pan.pos": 0.0}, 0.1)
+        self.assertAlmostEqual(d, 1.0, places=3)
+
+    def test_passes_when_slow_enough(self):
+        d = min_move_duration(self.p, {"pan.pos": 12.0}, {"pan.pos": 0.0}, 5.0)
+        self.assertEqual(d, 5.0)
+
+    def test_instant_request_bounded(self):
+        # duration 0 with a real delta -> stretched to the speed-safe minimum
+        d = min_move_duration(self.p, {"pan.pos": 60.0}, {"pan.pos": 0.0}, 0.0)
+        self.assertAlmostEqual(d, 0.5, places=3)
+
+    def test_no_speed_bound_passthrough(self):
+        self.assertEqual(min_move_duration(parse_safety(_FM), {"a.pos": 99}, {"a.pos": 0}, 0.2), 0.2)
+
+    def test_unknown_current_joint_ignored(self):
+        # no known start for the joint -> can't bound its speed -> requested kept
+        self.assertEqual(min_move_duration(self.p, {"pan.pos": 200.0}, {}, 0.1), 0.1)
 
 
 if __name__ == "__main__":

@@ -8,10 +8,10 @@ light:
 audio:
   # No loud discretionary output (music) during quiet hours; spoken replies still allowed.
   quiet_hours: { start: "22:00", end: "07:00" }
-motion:                      # reserved (slice 3) — bounds still in board.py for now
-  # max_speed:  <int>
-  # max_accel:  <int>
-  # stop_always: true
+motion:
+  max_speed: 120             # deg/s ceiling; the servo route stretches a move's duration so no joint exceeds it
+  stop_always: true          # motion.stop/release are deterministic and never gated
+  # max_accel: <int>         # reserved
 ---
 
 # SAFETY.md — Autonomous Lamp

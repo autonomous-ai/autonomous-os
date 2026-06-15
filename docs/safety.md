@@ -70,7 +70,7 @@ unknown-major `schema` aborts boot rather than enforce an ABI it cannot read.
 |-------|-------|------|----------------|--------|
 | 1 | `light.max_brightness` ceiling | `clamp_brightness` / `clamp_color` | LED gate (`rgb_service` `_handle_solid`/`_handle_paint`) | **enforced (v1)** |
 | 2 | `quiet_hours` (light + audio) | `active_max_brightness` (time-aware) + `audio_quiet_now` | LED gate + music route | **enforced (v1)** |
-| 3 | `motion.max_speed`/`max_accel`, `stop_always` (fail-closed) | `clamp_motion`, stop guarantee | servo route | reserved |
+| 3 | `motion.max_speed` + `stop_always`, **fail-closed** | `motion_allowed` + `min_move_duration` | servo route | **enforced (v1)** (`max_accel` reserved) |
 | 4 | fail-safe states (network loss → hold pose, board fault → disable capability) | state gate | lifespan + routes | reserved |
 
 Each slice adds fields to the `SafetyPolicy` and gate functions and wires one or more
@@ -139,8 +139,31 @@ on every request, so it flips at the boundary with no restart.
 - [x] **Determinism:** the window check is pure given `now`; the only impurity is
       reading the system clock, isolated in `policy._now()` so tests inject time.
 
-Later slices extend this checklist (motion: assert fail-closed when bounds are
-absent, and that `stop` preempts an in-flight move).
+### Slice 3 — motion (checklist)
+
+Motion is **fail-closed** (the inverse of light): a device that declares the
+`motion` capability but ships no `motion:` bounds refuses to actuate. `max_speed`
+is enforced by *stretching a move's duration* (the move still reaches its target;
+only speed is capped) — never by truncating the destination. Recovery actions
+(`release`/`zero`/`hold`/`stop`) stay ungated so you can always safe the body.
+
+- [x] **Unit:** `motion_allowed` → False when motion declared but no bounds (or no
+      policy), True with bounds, True for non-motion devices; `min_move_duration`
+      stretches a too-fast move (120° at 120 deg/s → 1.0s), passes a slow one,
+      bounds an instant (duration 0) request, passes through with no `max_speed`,
+      ignores joints with no known start; commented `# stop_always` is not parsed
+      as a bound; `max_speed: 0` fails loud. (`os/hal/test/test_safety.py`.)
+- [ ] **Runtime (NOT yet verified on device — user deploys):** `GET /device`
+      reports `safety.motion`; `/servo/move` at a tiny duration returns a stretched
+      `duration` and the ring/arm moves at the capped speed; a device with motion
+      declared but no bounds returns 403 on `/servo/move|play|aim|nudge|track`.
+- [x] **Bypass audit (routes):** the fail-closed guard `_require_motion_bounds()`
+      is on every discretionary servo endpoint (move, play, aim, nudge, track,
+      track/update); recovery endpoints are intentionally exempt. NOTE: internal
+      animation (idle/emotion poses driven by the runtime, not the agent) is not
+      gated — that is device-controlled, not agent-requested; revisit if needed.
+- [x] **Determinism:** `motion_allowed`/`min_move_duration` are pure (no clock, no
+      caller identity).
 
 ## Relationship to existing ad-hoc enforcement
 

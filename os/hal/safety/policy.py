@@ -52,6 +52,17 @@ class QuietHours:
 
 
 @dataclass(frozen=True)
+class MotionBounds:
+    # deg/s ceiling — enforced by stretching a move's duration so its fastest
+    # joint never exceeds it (the move still reaches its target, just not too
+    # fast). None = no speed ceiling declared.
+    max_speed: Optional[int] = None
+    # motion.stop is deterministic and never gated (you must always be able to
+    # halt a body — stop/release are not refused even when moves are fail-closed).
+    stop_always: bool = False
+
+
+@dataclass(frozen=True)
 class SafetyPolicy:
     schema: str
     # light brightness ceiling (0–255). None = no ceiling declared → pass-through
@@ -59,6 +70,10 @@ class SafetyPolicy:
     max_brightness: Optional[int] = None
     light_quiet: Optional[QuietHours] = None   # nightly reduced LED ceiling
     audio_quiet: Optional[QuietHours] = None    # nightly window: suppress loud audio
+    # Motion bounds. None = the device declared NO machine motion bounds. Unlike
+    # light, motion is FAIL-CLOSED: a device that declares the motion capability
+    # but has no bounds here must refuse to move (see motion_allowed).
+    motion: Optional[MotionBounds] = None
 
 
 def extract_front_matter(text: str) -> str:
@@ -146,11 +161,28 @@ def _parse_quiet_hours(section_body: str, *, with_brightness: bool) -> Optional[
     return QuietHours(start=_parse_hhmm(ms.group(1)), end=_parse_hhmm(me.group(1)), max_brightness=mb)
 
 
+def _parse_motion(motion_body: str) -> Optional[MotionBounds]:
+    """Parse the `motion:` section into MotionBounds, or None if it declares no
+    real bounds (so a device that declares the motion capability but leaves this
+    empty fails closed)."""
+    max_speed = _int_field(motion_body, "max_speed")
+    if max_speed is not None and max_speed <= 0:
+        raise ValueError(f"SAFETY.md motion.max_speed {max_speed} must be > 0 (deg/s)")
+    stop_always = bool(re.search(r"\bstop_always:\s*true\b", motion_body))
+    if max_speed is None and not stop_always:
+        return None
+    return MotionBounds(max_speed=max_speed, stop_always=stop_always)
+
+
 def parse_safety(text: str) -> SafetyPolicy:
     """Parse SAFETY.md text (which HAS front matter) into a SafetyPolicy.
     Validates the schema fail-loud; raises on an out-of-range/malformed bound."""
     fm = extract_front_matter(text)
     schema = validate_schema(fm)
+    # Drop full-line comments so commented-out placeholders (e.g. `# stop_always:
+    # true`) are not mistaken for declared bounds. Inline trailing comments stay
+    # (the int/time regexes stop at the value).
+    fm = "\n".join(ln for ln in fm.splitlines() if not ln.lstrip().startswith("#"))
     light_body = _section_body(fm, "light")
     audio_body = _section_body(fm, "audio")
     # base light ceiling = max_brightness outside the quiet_hours object
@@ -160,6 +192,7 @@ def parse_safety(text: str) -> SafetyPolicy:
         max_brightness=_validate_brightness(_int_field(light_base_body, "max_brightness"), "light.max_brightness"),
         light_quiet=_parse_quiet_hours(light_body, with_brightness=True),
         audio_quiet=_parse_quiet_hours(audio_body, with_brightness=False),
+        motion=_parse_motion(_section_body(fm, "motion")),
     )
 
 
@@ -228,6 +261,44 @@ def audio_quiet_now(policy: Optional[SafetyPolicy], now: Optional[dtime] = None)
     if now is None:
         now = _now()
     return in_window(policy.audio_quiet, now)
+
+
+def motion_allowed(policy: Optional[SafetyPolicy], declares_motion: bool = True) -> bool:
+    """FAIL-CLOSED gate for actuating capabilities. A device that declares the
+    motion capability must carry motion bounds in SAFETY.md; if it doesn't (no
+    policy, or no motion section), moving against unknown limits is a hardware
+    fault — refuse actuation. A device that declares no motion is unaffected.
+
+    This is the inverse of the light fail-safe (pass-through): for a body that can
+    physically move, absence of bounds means *stop*, not *go*."""
+    if not declares_motion:
+        return True
+    return policy is not None and policy.motion is not None
+
+
+def min_move_duration(
+    policy: Optional[SafetyPolicy],
+    target: dict,
+    current: dict,
+    requested: float,
+) -> float:
+    """The duration to actually use for a move: at least `requested`, but stretched
+    so the fastest joint stays within motion.max_speed (deg/s). The move still
+    reaches `target` — only its speed is capped, never its destination. Pure;
+    pass-through (returns `requested`) when no speed ceiling is declared.
+
+    target/current: {joint: degrees}. Joints absent from `current` are ignored
+    (no known start → can't bound their speed here)."""
+    if policy is None or policy.motion is None or policy.motion.max_speed is None:
+        return requested
+    max_delta = 0.0
+    for joint, tgt in target.items():
+        cur = current.get(joint)
+        if cur is None:
+            continue
+        max_delta = max(max_delta, abs(float(tgt) - float(cur)))
+    needed = max_delta / policy.motion.max_speed
+    return max(requested, needed)
 
 
 # ── loader ───────────────────────────────────────────────────────────────────

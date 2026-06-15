@@ -772,6 +772,11 @@ def _safety_view(p):
         out["light"] = light
     if p.audio_quiet is not None:
         out["audio"] = {"quiet_hours": _qh(p.audio_quiet)}
+    if p.motion is not None:
+        m = {"stop_always": p.motion.stop_always}
+        if p.motion.max_speed is not None:
+            m["max_speed"] = p.motion.max_speed
+        out["motion"] = m
     return out or None
 
 # Board gate: refuse to boot on hardware this device doesn't declare in
