@@ -77,7 +77,7 @@ AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
 
 class TestHealthEndpoint:
     def test_health_reports_pose_model(self, client):
-        resp = client.get("/lelamp/api/dl/health", headers=AUTH_HEADERS)
+        resp = client.get("/hal/api/dl/health", headers=AUTH_HEADERS)
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "ok"
@@ -86,7 +86,7 @@ class TestHealthEndpoint:
     def test_health_pose_not_loaded(self, client):
         saved = get_pose_model()
         set_pose_model(None)
-        resp = client.get("/lelamp/api/dl/health", headers=AUTH_HEADERS)
+        resp = client.get("/hal/api/dl/health", headers=AUTH_HEADERS)
         assert resp.json()["models"]["pose"] is False
         set_pose_model(saved)
 
@@ -94,7 +94,7 @@ class TestHealthEndpoint:
 class TestPoseEstimationWebSocket:
     def test_frame_returns_pose_2d(self, client):
         with client.websocket_connect(
-            "/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
+            "/hal/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
         ) as ws:
             ws.send_text(
                 json.dumps({"type": "frame", "task": "pose", "frame_b64": _make_frame_b64()})
@@ -108,7 +108,7 @@ class TestPoseEstimationWebSocket:
 
     def test_frame_joints_have_xy(self, client):
         with client.websocket_connect(
-            "/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
+            "/hal/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
         ) as ws:
             ws.send_text(
                 json.dumps({"type": "frame", "task": "pose", "frame_b64": _make_person_frame_b64()})
@@ -122,7 +122,7 @@ class TestPoseEstimationWebSocket:
 
     def test_multiple_frames(self, client):
         with client.websocket_connect(
-            "/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
+            "/hal/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
         ) as ws:
             for _ in range(3):
                 ws.send_text(
@@ -133,7 +133,7 @@ class TestPoseEstimationWebSocket:
 
     def test_config_update_frame_interval(self, client):
         with client.websocket_connect(
-            "/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
+            "/hal/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
         ) as ws:
             ws.send_text(json.dumps({"type": "config", "task": "pose", "frame_interval": 0.5}))
             resp = ws.receive_json()
@@ -141,7 +141,7 @@ class TestPoseEstimationWebSocket:
 
     def test_invalid_json(self, client):
         with client.websocket_connect(
-            "/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
+            "/hal/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
         ) as ws:
             ws.send_text("not json at all")
             resp = ws.receive_json()
@@ -149,7 +149,7 @@ class TestPoseEstimationWebSocket:
 
     def test_missing_type_field(self, client):
         with client.websocket_connect(
-            "/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
+            "/hal/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
         ) as ws:
             ws.send_text(json.dumps({"frame_b64": "abc"}))
             resp = ws.receive_json()
@@ -157,7 +157,7 @@ class TestPoseEstimationWebSocket:
 
     def test_frame_missing_frame_b64(self, client):
         with client.websocket_connect(
-            "/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
+            "/hal/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
         ) as ws:
             ws.send_text(json.dumps({"type": "frame", "task": "pose"}))
             resp = ws.receive_json()
@@ -168,7 +168,7 @@ class TestPoseEstimationWebSocket:
         set_pose_model(None)
         with pytest.raises(Exception):
             with client.websocket_connect(
-                "/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
+                "/hal/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
             ) as ws:
                 ws.send_text(json.dumps({"type": "frame", "task": "pose", "frame_b64": "abc"}))
                 ws.receive_json()
@@ -176,7 +176,7 @@ class TestPoseEstimationWebSocket:
 
     def test_heartbeat_returns_ok(self, client):
         with client.websocket_connect(
-            "/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
+            "/hal/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
         ) as ws:
             ws.send_text(json.dumps({"type": "heartbeat", "task": "pose"}))
             resp = ws.receive_json()
@@ -184,7 +184,7 @@ class TestPoseEstimationWebSocket:
 
     def test_heartbeat_multiple(self, client):
         with client.websocket_connect(
-            "/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
+            "/hal/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
         ) as ws:
             for _ in range(3):
                 ws.send_text(json.dumps({"type": "heartbeat", "task": "pose"}))
@@ -193,7 +193,7 @@ class TestPoseEstimationWebSocket:
 
     def test_heartbeat_interleaved_with_frames(self, client):
         with client.websocket_connect(
-            "/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
+            "/hal/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
         ) as ws:
             ws.send_text(
                 json.dumps({"type": "frame", "task": "pose", "frame_b64": _make_frame_b64()})
@@ -212,6 +212,6 @@ class TestPoseEstimationWebSocket:
 
     def test_ws_without_api_key_rejected(self, client):
         with pytest.raises(Exception):
-            with client.websocket_connect("/lelamp/api/dl/pose-estimation/ws") as ws:
+            with client.websocket_connect("/hal/api/dl/pose-estimation/ws") as ws:
                 ws.send_text(json.dumps({"type": "heartbeat", "task": "pose"}))
                 ws.receive_json()

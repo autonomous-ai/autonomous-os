@@ -285,7 +285,7 @@ class TestWSEncryption:
 
 
 # ---------------------------------------------------------------------------
-# Client-side encryption (simulates lelamp calling the API)
+# Client-side encryption (simulates hal calling the API)
 # ---------------------------------------------------------------------------
 
 GCM_NONCE_SIZE = 12

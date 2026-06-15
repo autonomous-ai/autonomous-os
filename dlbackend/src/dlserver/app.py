@@ -174,16 +174,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="DL Backend", lifespan=lifespan)
 
-# Existing perceptions — /lelamp/api/dl/ prefix
-app.include_router(action_ws_router, prefix="/lelamp/api/dl")
-app.include_router(emotion_ws_router, prefix="/lelamp/api/dl")
-app.include_router(emotion_http_router, prefix="/lelamp/api/dl", dependencies=[Depends(verify_api_key)])
-app.include_router(health_router, prefix="/lelamp/api/dl", dependencies=[Depends(verify_api_key)])
+# Existing perceptions — /hal/api/dl/ prefix
+app.include_router(action_ws_router, prefix="/hal/api/dl")
+app.include_router(emotion_ws_router, prefix="/hal/api/dl")
+app.include_router(emotion_http_router, prefix="/hal/api/dl", dependencies=[Depends(verify_api_key)])
+app.include_router(health_router, prefix="/hal/api/dl", dependencies=[Depends(verify_api_key)])
 app.include_router(
-    audio_router, prefix="/lelamp/api/dl", dependencies=[Depends(verify_api_key)]
+    audio_router, prefix="/hal/api/dl", dependencies=[Depends(verify_api_key)]
 )
-app.include_router(audio_emotion_router, prefix="/lelamp/api/dl", dependencies=[Depends(verify_api_key)])
-app.include_router(pose_ws_router, prefix="/lelamp/api/dl")
+app.include_router(audio_emotion_router, prefix="/hal/api/dl", dependencies=[Depends(verify_api_key)])
+app.include_router(pose_ws_router, prefix="/hal/api/dl")
 
 
 # Object detection — /api/dl/ prefix (backward-compatible with go2)

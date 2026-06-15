@@ -47,22 +47,22 @@ AUTH_HEADERS = {"X-API-Key": DL_API_KEY}
 class TestApiKeyAuth:
     @pytest.mark.skipif(not DL_API_KEY, reason="DL_API_KEY not set — skipping auth tests")
     def test_health_without_key_returns_401(self):
-        resp = httpx.get(_http_url("/lelamp/api/dl/health"))
+        resp = httpx.get(_http_url("/hal/api/dl/health"))
         assert resp.status_code == 401
 
     @pytest.mark.skipif(not DL_API_KEY, reason="DL_API_KEY not set — skipping auth tests")
     def test_health_with_wrong_key_returns_401(self):
-        resp = httpx.get(_http_url("/lelamp/api/dl/health"), headers={"X-API-Key": "wrong"})
+        resp = httpx.get(_http_url("/hal/api/dl/health"), headers={"X-API-Key": "wrong"})
         assert resp.status_code == 401
 
     def test_health_with_valid_key(self):
-        resp = httpx.get(_http_url("/lelamp/api/dl/health"), headers=AUTH_HEADERS)
+        resp = httpx.get(_http_url("/hal/api/dl/health"), headers=AUTH_HEADERS)
         assert resp.status_code == 200
 
 
 class TestHealthEndpoint:
     def test_health_ok(self):
-        resp = httpx.get(_http_url("/lelamp/api/dl/health"), headers=AUTH_HEADERS)
+        resp = httpx.get(_http_url("/hal/api/dl/health"), headers=AUTH_HEADERS)
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "ok"
@@ -74,7 +74,7 @@ class TestActionAnalysisWebSocket:
     async def ws(self):
         """Connect to the remote WebSocket with auth headers."""
         async with websockets.connect(
-            _ws_url("/lelamp/api/dl/action-analysis/ws"),
+            _ws_url("/hal/api/dl/action-analysis/ws"),
             additional_headers=AUTH_HEADERS,
         ) as conn:
             yield conn
@@ -178,7 +178,7 @@ class TestActionAnalysisWebSocket:
     async def test_ws_without_api_key_rejected(self):
         with pytest.raises(Exception):
             async with websockets.connect(
-                _ws_url("/lelamp/api/dl/action-analysis/ws"),
+                _ws_url("/hal/api/dl/action-analysis/ws"),
             ) as conn:
                 await conn.send(json.dumps({"type": "config", "task": "action", "whitelist": None}))
                 _ = await conn.recv()

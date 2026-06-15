@@ -20,8 +20,8 @@
 # Variables
 # ---------------------------------------------------------------------------
 
-NGINX_CONF ?= /workspace/lamp/dlbackend/nginx.conf
-NGINX_SSL_CONF ?= /workspace/lamp/dlbackend/nginx-ssl.conf
+NGINX_CONF ?= nginx.conf
+NGINX_SSL_CONF ?= nginx-ssl.conf
 SSL_DIR ?= /workspace/ssl
 SSL_CERT ?= $(SSL_DIR)/cert.pem
 SSL_KEY ?= $(SSL_DIR)/key.pem
@@ -145,17 +145,19 @@ start-nginx:
 	@if ! command -v nginx > /dev/null 2>&1; then \
 		apt-get update && apt-get install -y nginx; \
 	fi
+	cp $(NGINX_CONF) /etc/nginx/dlbackend-nginx.conf
 	nginx -s stop 2>/dev/null || true
 	pkill nginx 2>/dev/null || true
-	nginx -c $(NGINX_CONF)
+	nginx -c /etc/nginx/dlbackend-nginx.conf
 
 start-nginx-ssl: gen-ssl-cert
 	@if ! command -v nginx > /dev/null 2>&1; then \
 		apt-get update && apt-get install -y nginx; \
 	fi
+	cp $(NGINX_SSL_CONF) /etc/nginx/dlbackend-nginx-ssl.conf
 	nginx -s stop 2>/dev/null || true
 	pkill nginx 2>/dev/null || true
-	nginx -c $(NGINX_SSL_CONF)
+	nginx -c /etc/nginx/dlbackend-nginx-ssl.conf
 
 start-runpod-dlserver: install stop-runpod-dlserver
 	@command -v multilog >/dev/null || apt-get install -y daemontools

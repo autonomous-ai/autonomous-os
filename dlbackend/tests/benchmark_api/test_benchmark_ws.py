@@ -96,20 +96,20 @@ def _ws_frame_msg(task: str) -> dict[str, Any]:
 ALL_WS_ENDPOINTS: list[WSEndpointSpec] = [
     WSEndpointSpec(
         name="ws_pose",
-        path="/lelamp/api/dl/pose-estimation/ws",
+        path="/hal/api/dl/pose-estimation/ws",
         task="pose",
         frame_msg_fn=lambda: _ws_frame_msg("pose"),
         frames_per_conn=243,
     ),
     WSEndpointSpec(
         name="ws_fer",
-        path="/lelamp/api/dl/emotion-analysis/ws",
+        path="/hal/api/dl/emotion-analysis/ws",
         task="emotion",
         frame_msg_fn=lambda: _ws_frame_msg("emotion"),
     ),
     WSEndpointSpec(
         name="ws_action",
-        path="/lelamp/api/dl/action-analysis/ws",
+        path="/hal/api/dl/action-analysis/ws",
         task="action",
         frame_msg_fn=lambda: _ws_frame_msg("action"),
     ),

@@ -52,7 +52,7 @@ def _wav_to_b64(path: Path) -> str:
 def _post_recognize(audio_b64: str, return_scores: bool = True) -> httpx.Response:
     payload: dict = {"audio_b64": audio_b64, "return_scores": return_scores}
     return httpx.post(
-        _url("/lelamp/api/dl/ser/recognize"),
+        _url("/hal/api/dl/ser/recognize"),
         json=payload,
         headers=_headers(),
         timeout=30.0,
@@ -138,7 +138,7 @@ class TestEmotionDetection:
 class TestLabelsEndpoint:
     def test_get_labels(self):
         resp = httpx.get(
-            _url("/lelamp/api/dl/ser/labels"),
+            _url("/hal/api/dl/ser/labels"),
             headers=_headers(),
             timeout=10.0,
         )
@@ -157,7 +157,7 @@ class TestErrorHandling:
 
     def test_missing_api_key_rejected(self):
         resp = httpx.post(
-            _url("/lelamp/api/dl/ser/recognize"),
+            _url("/hal/api/dl/ser/recognize"),
             json={"audio_b64": _wav_to_b64(HAPPY_WAV)},
             headers={"Content-Type": "application/json"},
             timeout=10.0,

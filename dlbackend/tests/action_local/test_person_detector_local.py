@@ -168,7 +168,7 @@ class TestActionWithPersonDetector:
         """Person drinking image should produce action detections."""
         frame_b64 = _img_to_b64(PERSON_DRINKING_IMG)
         with client_with_detector.websocket_connect(
-            "/lelamp/api/dl/action-analysis/ws", headers=AUTH_HEADERS
+            "/hal/api/dl/action-analysis/ws", headers=AUTH_HEADERS
         ) as ws:
             # Send enough frames to fill the buffer
             resp = None
@@ -186,7 +186,7 @@ class TestActionWithPersonDetector:
         """Black frame (no person) should return empty detected_classes."""
         frame_b64 = _make_empty_frame_b64()
         with client_with_detector.websocket_connect(
-            "/lelamp/api/dl/action-analysis/ws", headers=AUTH_HEADERS
+            "/hal/api/dl/action-analysis/ws", headers=AUTH_HEADERS
         ) as ws:
             ws.send_text(json.dumps({"type": "frame", "task": "action", "frame_b64": frame_b64}))
             resp = ws.receive_json()
@@ -197,7 +197,7 @@ class TestActionWithPersonDetector:
         """After multiple frames of person drinking, 'drinking' should appear."""
         frame_b64 = _img_to_b64(PERSON_DRINKING_IMG)
         with client_with_detector.websocket_connect(
-            "/lelamp/api/dl/action-analysis/ws", headers=AUTH_HEADERS
+            "/hal/api/dl/action-analysis/ws", headers=AUTH_HEADERS
         ) as ws:
             # Set whitelist to drinking-related actions
             ws.send_text(
@@ -235,7 +235,7 @@ class TestActionWithPersonDetector:
 
         for client in [client_with_detector, client_without_detector]:
             with client.websocket_connect(
-                "/lelamp/api/dl/action-analysis/ws", headers=AUTH_HEADERS
+                "/hal/api/dl/action-analysis/ws", headers=AUTH_HEADERS
             ) as ws:
                 for _ in range(8):
                     ws.send_text(

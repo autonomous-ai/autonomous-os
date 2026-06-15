@@ -74,7 +74,7 @@ class TestErgoViaWebSocket:
     def test_frame_returns_ergo(self, client):
         """With ergo assessor configured, response should include ergo field."""
         with client.websocket_connect(
-            "/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
+            "/hal/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
         ) as ws:
             ws.send_text(
                 json.dumps({"type": "frame", "task": "pose", "frame_b64": _make_frame_b64()})
@@ -85,7 +85,7 @@ class TestErgoViaWebSocket:
 
     def test_ergo_has_expected_fields(self, client):
         with client.websocket_connect(
-            "/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
+            "/hal/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
         ) as ws:
             ws.send_text(
                 json.dumps({"type": "frame", "task": "pose", "frame_b64": _make_frame_b64()})
@@ -99,7 +99,7 @@ class TestErgoViaWebSocket:
 
     def test_ergo_side_has_body_scores(self, client):
         with client.websocket_connect(
-            "/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
+            "/hal/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
         ) as ws:
             ws.send_text(
                 json.dumps({"type": "frame", "task": "pose", "frame_b64": _make_frame_b64()})
@@ -117,7 +117,7 @@ class TestErgoViaWebSocket:
 
     def test_ergo_score_range(self, client):
         with client.websocket_connect(
-            "/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
+            "/hal/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
         ) as ws:
             ws.send_text(
                 json.dumps({"type": "frame", "task": "pose", "frame_b64": _make_frame_b64()})
@@ -129,7 +129,7 @@ class TestErgoViaWebSocket:
 
     def test_ergo_overall_is_max_of_sides(self, client):
         with client.websocket_connect(
-            "/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
+            "/hal/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
         ) as ws:
             ws.send_text(
                 json.dumps({"type": "frame", "task": "pose", "frame_b64": _make_frame_b64()})
@@ -141,7 +141,7 @@ class TestErgoViaWebSocket:
 
     def test_multiple_frames_all_have_ergo(self, client):
         with client.websocket_connect(
-            "/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
+            "/hal/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
         ) as ws:
             for _ in range(3):
                 ws.send_text(
@@ -171,7 +171,7 @@ class TestNoErgoWithoutAssessor:
         test_client = TestClient(server.app)
 
         with test_client.websocket_connect(
-            "/lelamp/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
+            "/hal/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
         ) as ws:
             ws.send_text(
                 json.dumps({"type": "frame", "task": "pose", "frame_b64": _make_frame_b64()})

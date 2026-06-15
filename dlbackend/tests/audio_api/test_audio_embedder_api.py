@@ -51,7 +51,7 @@ def _wav_to_b64(path: Path) -> str:
 def _post_embed(audios_b64: list[str], return_chunks: bool = False) -> httpx.Response:
     payload = {"audios_b64": audios_b64, "return_chunks": return_chunks}
     return httpx.post(
-        _url("/lelamp/api/dl/audio-recognizer/embed"),
+        _url("/hal/api/dl/audio-recognizer/embed"),
         json=payload,
         headers=_headers(),
         timeout=30.0,
@@ -151,7 +151,7 @@ class TestSpeakerDiscrimination:
 class TestErrorHandling:
     def test_empty_audios_rejected(self):
         resp = httpx.post(
-            _url("/lelamp/api/dl/audio-recognizer/embed"),
+            _url("/hal/api/dl/audio-recognizer/embed"),
             json={"audios_b64": []},
             headers=_headers(),
             timeout=10.0,
@@ -164,7 +164,7 @@ class TestErrorHandling:
 
     def test_missing_api_key_rejected(self):
         resp = httpx.post(
-            _url("/lelamp/api/dl/audio-recognizer/embed"),
+            _url("/hal/api/dl/audio-recognizer/embed"),
             json={"audios_b64": [_wav_to_b64(next((FIXTURES_DIR / "speaker_a").glob("*.wav")))]},
             headers={"Content-Type": "application/json"},
             timeout=10.0,

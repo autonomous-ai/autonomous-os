@@ -91,9 +91,9 @@ class TestHTTPProxy:
         assert b1 != b2
 
     def test_internal_prefix_prepended(self, lb_client):
-        resp = lb_client.get("/lelamp/api/dl/health")
+        resp = lb_client.get("/hal/api/dl/health")
         assert resp.status_code == 200
-        assert resp.json()["path"] == "/_internal/lelamp/api/dl/health"
+        assert resp.json()["path"] == "/_internal/hal/api/dl/health"
 
     def test_method_forwarded(self, lb_client):
         resp = lb_client.post("/api/dl/detect", content=b"test")

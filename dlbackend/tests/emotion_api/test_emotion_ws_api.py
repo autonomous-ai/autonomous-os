@@ -65,7 +65,7 @@ AUTH_HEADERS = {"X-API-Key": DL_API_KEY}
 
 class TestHealthEndpoint:
     def test_health_reports_emotion_model(self):
-        resp = httpx.get(_http_url("/lelamp/api/dl/health"), headers=AUTH_HEADERS)
+        resp = httpx.get(_http_url("/hal/api/dl/health"), headers=AUTH_HEADERS)
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "ok"
@@ -77,7 +77,7 @@ class TestEmotionAnalysisWebSocket:
     async def ws(self):
         """Connect to the remote emotion WebSocket with auth headers."""
         async with websockets.connect(
-            _ws_url("/lelamp/api/dl/emotion-analysis/ws"),
+            _ws_url("/hal/api/dl/emotion-analysis/ws"),
             additional_headers=AUTH_HEADERS,
         ) as conn:
             yield conn
@@ -205,7 +205,7 @@ class TestEmotionAnalysisWebSocket:
     async def test_ws_without_api_key_rejected(self):
         with pytest.raises(Exception):
             async with websockets.connect(
-                _ws_url("/lelamp/api/dl/emotion-analysis/ws"),
+                _ws_url("/hal/api/dl/emotion-analysis/ws"),
             ) as conn:
                 await conn.send(
                     json.dumps({"type": "config", "task": "emotion", "threshold": 0.5})

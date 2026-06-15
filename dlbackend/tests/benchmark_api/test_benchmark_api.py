@@ -141,19 +141,19 @@ ALL_ENDPOINTS: list[EndpointSpec] = [
     EndpointSpec(
         name="fer",
         method="POST",
-        path="/lelamp/api/dl/emotion-recognize",
+        path="/hal/api/dl/emotion-recognize",
         payload_fn=_fer_payload,
     ),
     EndpointSpec(
         name="ser",
         method="POST",
-        path="/lelamp/api/dl/ser/recognize",
+        path="/hal/api/dl/ser/recognize",
         payload_fn=_ser_payload,
     ),
     EndpointSpec(
         name="audio_embed",
         method="POST",
-        path="/lelamp/api/dl/audio-recognizer/embed",
+        path="/hal/api/dl/audio-recognizer/embed",
         payload_fn=_audio_embed_payload,
     ),
     EndpointSpec(
@@ -173,7 +173,7 @@ ALL_ENDPOINTS: list[EndpointSpec] = [
     EndpointSpec(
         name="health",
         method="GET",
-        path="/lelamp/api/dl/health",
+        path="/hal/api/dl/health",
         payload_fn=lambda: {},
     ),
 ]

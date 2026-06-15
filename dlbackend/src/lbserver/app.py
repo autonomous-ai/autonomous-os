@@ -1,7 +1,7 @@
 """DL Backend Load Balancer — round-robin reverse proxy with encryption.
 
 All incoming requests are prefixed with /_internal and forwarded back
-through nginx, which routes /_internal/lelamp/ → :8001 (DL server)
+through nginx, which routes /_internal/hal/ → :8001 (DL server)
 and /_internal/ → :8000 (old DL server), stripping the prefix.
 
 When crypto is enabled, the LB handles encryption/decryption:

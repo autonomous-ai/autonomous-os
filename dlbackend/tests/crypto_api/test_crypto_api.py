@@ -158,7 +158,7 @@ class TestEncryptedEmotionHTTP:
         }).encode()
 
         resp = httpx.post(
-            _http_url("/lelamp/api/dl/emotion-recognize"),
+            _http_url("/hal/api/dl/emotion-recognize"),
             content=crypto_session.wrap_http_request(plain),
             headers={**AUTH_HEADERS, "Content-Type": "application/json"},
             timeout=15.0,
@@ -176,7 +176,7 @@ class TestEncryptedEmotionHTTP:
         }).encode()
 
         resp = httpx.post(
-            _http_url("/lelamp/api/dl/emotion-recognize"),
+            _http_url("/hal/api/dl/emotion-recognize"),
             content=crypto_session.wrap_http_request(plain),
             headers={**AUTH_HEADERS, "Content-Type": "application/json"},
             timeout=15.0,
@@ -197,7 +197,7 @@ class TestEncryptedActionWS:
     async def ws_session(self, crypto_session):
         """Connect WS, perform key exchange, yield (ws, crypto_session)."""
         async with websockets.connect(
-            _ws_url("/lelamp/api/dl/action-analysis/ws"),
+            _ws_url("/hal/api/dl/action-analysis/ws"),
             additional_headers=AUTH_HEADERS,
         ) as ws:
             await ws.send(json.dumps({
@@ -260,7 +260,7 @@ class TestEncryptedEmotionWS:
     @pytest_asyncio.fixture()
     async def ws_session(self, crypto_session):
         async with websockets.connect(
-            _ws_url("/lelamp/api/dl/emotion-analysis/ws"),
+            _ws_url("/hal/api/dl/emotion-analysis/ws"),
             additional_headers=AUTH_HEADERS,
         ) as ws:
             await ws.send(json.dumps({
@@ -305,7 +305,7 @@ class TestEncryptedPoseWS:
     @pytest_asyncio.fixture()
     async def ws_session(self, crypto_session):
         async with websockets.connect(
-            _ws_url("/lelamp/api/dl/pose-estimation/ws"),
+            _ws_url("/hal/api/dl/pose-estimation/ws"),
             additional_headers=AUTH_HEADERS,
         ) as ws:
             await ws.send(json.dumps({
@@ -378,7 +378,7 @@ class TestRequireEncryptionHTTP:
 
     def test_plain_post_rejected(self):
         resp = httpx.post(
-            _http_url("/lelamp/api/dl/emotion-recognize"),
+            _http_url("/hal/api/dl/emotion-recognize"),
             json={"image_b64": _make_face_frame_b64(), "threshold": 0.5},
             headers=AUTH_HEADERS,
             timeout=15.0,
@@ -389,7 +389,7 @@ class TestRequireEncryptionHTTP:
     def test_encrypted_post_accepted(self, crypto_session):
         plain = json.dumps({"image_b64": _make_face_frame_b64(), "threshold": 0.5}).encode()
         resp = httpx.post(
-            _http_url("/lelamp/api/dl/emotion-recognize"),
+            _http_url("/hal/api/dl/emotion-recognize"),
             content=crypto_session.wrap_http_request(plain),
             headers={**AUTH_HEADERS, "Content-Type": "application/json"},
             timeout=15.0,
@@ -398,7 +398,7 @@ class TestRequireEncryptionHTTP:
 
     def test_get_requests_unaffected(self):
         """GET /api/dl/health should still work without encryption."""
-        resp = httpx.get(_http_url("/lelamp/api/dl/health"), headers=AUTH_HEADERS)
+        resp = httpx.get(_http_url("/hal/api/dl/health"), headers=AUTH_HEADERS)
         assert resp.status_code == 200
 
     def test_public_key_still_accessible(self):
@@ -415,7 +415,7 @@ class TestRequireEncryptionWS:
     async def test_ws_without_key_exchange_closed(self):
         with pytest.raises(Exception):
             async with websockets.connect(
-                _ws_url("/lelamp/api/dl/action-analysis/ws"),
+                _ws_url("/hal/api/dl/action-analysis/ws"),
                 additional_headers=AUTH_HEADERS,
             ) as ws:
                 # Send a plain frame without key exchange
@@ -429,7 +429,7 @@ class TestRequireEncryptionWS:
     @pytest.mark.asyncio
     async def test_ws_with_key_exchange_works(self, crypto_session):
         async with websockets.connect(
-            _ws_url("/lelamp/api/dl/action-analysis/ws"),
+            _ws_url("/hal/api/dl/action-analysis/ws"),
             additional_headers=AUTH_HEADERS,
         ) as ws:
             # Key exchange first
