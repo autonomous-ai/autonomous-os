@@ -53,17 +53,25 @@ That is the template for everything here.
 ## autonomy
 
 - Proactive behavior is allowed within limits; **destructive actions are forbidden.**
-- On network loss the device fails *quiet*, not chaotic: hold last safe state, keep
-  local reflexes (stop, mute, sleep, wake) alive, do not improvise motion.
+- On network loss the device fails *quiet*, not chaotic: stop agent-driven tracking,
+  keep local idle presence + reflexes (stop, mute, sleep, wake) alive, and start no
+  new agent-driven motion.
 
 ## fail-safe states
 
-| Condition | Behavior |
-|-----------|----------|
-| Network loss | Local reflexes only; no new motion; hold pose |
-| Gateway unreachable | System layer + local intents run; no agent-driven actuation |
-| Board / driver fault | Disable the faulting capability, report health, keep the rest |
-| Setup incomplete | Motion disabled; setup/identity reflexes only |
-| Thermal / over-current | Halt motion, surface a health event |
+The behaviors below are the contract; the **Enforced** column states what the runtime
+actually wires today (the rest are reserved — declared intent, not yet enforced, in the
+spirit of "what isn't enforced isn't claimed as enforced").
+
+| Condition | Behavior | Enforced |
+|-----------|----------|----------|
+| Network / gateway loss | Stop any in-flight object-tracking (don't chase a target with no fresh vision updates); local idle presence + reflexes (stop, mute, sleep, wake) stay alive; no new agent-driven motion | **yes** — `os/services` calls HAL `/servo/track/stop` on gateway WebSocket disconnect |
+| Board / driver fault | Disable the faulting capability, keep the rest, report health | **yes** — per-capability `503` isolation in HAL routes + `/health` |
+| Setup incomplete | Setup / identity reflexes only | reserved — not gated in the runtime yet |
+| Thermal / over-current | Halt motion, surface a health event | reserved — **no thermal / current sensor on this hardware** |
+
+Idle animation is local and self-contained, so the device stays "alive" (breathing,
+emoting) when the cloud is gone rather than freezing — only *agent-driven* tracking and
+new motion stop. `motion.stop`/release stay available throughout.
 
 Intern inherits this contract minus the `motion`/`light` sections it does not declare.

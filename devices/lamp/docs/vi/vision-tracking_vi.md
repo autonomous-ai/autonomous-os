@@ -143,6 +143,10 @@ TrackerVit cung cấp confidence scoring, khác với MIL/KCF chỉ drift âm th
 | Tracking > 5 phút | Dừng — timeout tiết kiệm motor/CPU |
 | `tracker.update()` trả `ok=False` | Tính là frame confidence thấp |
 
+### Tự dừng khi mất kết nối gateway/mạng
+
+Object tracking được điều khiển bởi các cập nhật vision từ xa của agent/cloud. Khi gateway WebSocket ngắt kết nối (mất cloud hoặc internet), thiết bị tự động dừng mọi servo tracking đang chạy — `os/services/internal/openclaw/service_ws.go` gọi `hal.StopServoTracking()` → HAL `POST /servo/track/stop` (best-effort, được bảo vệ bởi `SetUpCompleted`). Không có cập nhật từ xa mới, nếu tiếp tục tracking thì thân máy sẽ cứ hướng vào một target cũ mà không còn sửa được, nên dừng lại như một phản xạ an toàn. Idle animation cục bộ vẫn tiếp tục (thiết bị vẫn "sống", không đứng hình) và việc khôi phục (`/servo/track/stop`, stop/release) luôn sẵn sàng. Xem `devices/lamp/SAFETY.md` → `## fail-safe states` (dòng Network/gateway loss, được enforced).
+
 ## API Endpoints
 
 Tất cả dưới `/servo/track`.

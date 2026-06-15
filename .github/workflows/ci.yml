@@ -38,7 +38,7 @@ jobs:
           python-version: '3.12'
       - name: unit tests (board + device — no hardware deps)
         working-directory: os
-        run: python -m unittest hal.test.test_board hal.test.test_device -v
+        run: python -m unittest hal.test.test_board hal.test.test_device hal.test.test_safety -v
       - name: conformance suite (CTS — devices vs COMPATIBILITY.md)
         run: python -m unittest discover -s cts -v
       - name: syntax check board + drivers

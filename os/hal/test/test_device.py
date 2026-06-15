@@ -1,7 +1,7 @@
 """Tests for the device-profile layer: DEVICE.md parsing + mount planning.
 
 Pure logic, no hardware. Also parses the REAL committed devices/lamp and
-devices/intern DEVICE.md files to guard the contract against drift.
+devices/intern-v2 DEVICE.md files to guard the contract against drift.
 """
 import os
 import unittest
@@ -106,7 +106,7 @@ class TestSchemaValidation(unittest.TestCase):
 
     def test_real_devices_declare_v1(self):
         self.assertEqual(load_device("lamp", DEVICES_DIR).schema, "autonomous.device.v1")
-        self.assertEqual(load_device("intern", DEVICES_DIR).schema, "autonomous.device.v1")
+        self.assertEqual(load_device("intern-v2", DEVICES_DIR).schema, "autonomous.device.v1")
 
 
 class TestIdentityFields(unittest.TestCase):
@@ -122,7 +122,7 @@ class TestIdentityFields(unittest.TestCase):
             parse_device("other", SAMPLE)
 
     def test_real_devices_id_equals_folder(self):
-        for t in ("lamp", "intern", "unitree-go2w"):
+        for t in ("lamp", "intern-v2", "unitree-go2w"):
             self.assertEqual(load_device(t, DEVICES_DIR).id, t)
 
 
@@ -148,15 +148,18 @@ class TestRealDeviceFiles(unittest.TestCase):
 
     def test_intern_is_lamp_minus_motion_and_display(self):
         lamp = set(load_device("lamp", DEVICES_DIR).capabilities)
-        intern = set(load_device("intern", DEVICES_DIR).capabilities)
+        intern = set(load_device("intern-v2", DEVICES_DIR).capabilities)
         # Intern strips Lamp's expressive/actuation capabilities; motion + display
         # are the headline removals, and Intern adds nothing Lamp lacks.
-        self.assertEqual(lamp - intern, {"presence", "motion", "light", "display", "media", "connectivity"})
+        # NOTE: intern-v2's DEVICE.md frontmatter declares `light` (the machine
+        # truth this test tracks). Its prose contradicts this — flagged to the HW
+        # team separately; the device declaration is out of scope here.
+        self.assertEqual(lamp - intern, {"vision", "motion", "presence", "display", "media", "connectivity"})
         self.assertEqual(intern - lamp, set())
         self.assertNotIn("motion", intern)
         self.assertNotIn("display", intern)
         self.assertIn("audio", intern)
-        self.assertTrue(load_device("intern", DEVICES_DIR).capabilities["audio"].required)
+        self.assertTrue(load_device("intern-v2", DEVICES_DIR).capabilities["audio"].required)
 
 
 class TestSafetyRefs(unittest.TestCase):
@@ -233,18 +236,18 @@ class TestInternBootProof(unittest.TestCase):
         self.assertIn("display", m)
 
     def test_intern_mounts_neither_servo_nor_display(self):
-        m = self._mounted("intern")
+        m = self._mounted("intern-v2")
         self.assertNotIn("servo", m)
         self.assertNotIn("display", m)
 
     def test_both_mount_the_shared_audio_stack(self):
-        lamp, intern = self._mounted("lamp"), self._mounted("intern")
+        lamp, intern = self._mounted("lamp"), self._mounted("intern-v2")
         for route in ("audio", "voice", "system"):
             self.assertIn(route, lamp)
             self.assertIn(route, intern)
 
     def test_intern_is_a_strict_subset_of_lamp(self):
-        self.assertTrue(self._mounted("intern") < self._mounted("lamp"))
+        self.assertTrue(self._mounted("intern-v2") < self._mounted("lamp"))
 
 
 if __name__ == "__main__":

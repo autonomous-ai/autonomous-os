@@ -74,7 +74,7 @@ mới là pass-through.
 | 1 | trần `light.max_brightness` | `clamp_brightness` / `clamp_color` | gate LED (`rgb_service` `_handle_solid`/`_handle_paint`) | **đã thực thi (v1)** |
 | 2 | `quiet_hours` (light + audio) | `active_max_brightness` (theo giờ) + `audio_quiet_now` | gate LED + route music | **đã thực thi (v1)** |
 | 3 | `motion.max_speed` + `stop_always` (theo sự hiện diện) | `min_move_duration` | route servo | **đã thực thi (v1)** (`max_accel` dự trữ) |
-| 4 | trạng thái fail-safe (mất mạng → giữ pose, lỗi board → tắt capability) | state gate | lifespan + routes | dự trữ |
+| 4 | trạng thái fail-safe (mất mạng/gateway → dừng tracking do agent điều khiển; lỗi board → cô lập `503`; setup + nhiệt dự trữ) | hook WS-disconnect + `503` theo từng capability | `os/services` khi gateway WS disconnect + route HAL/`/health` | **thực thi một phần (v1)** (setup + nhiệt dự trữ) |
 
 Mỗi slice thêm field vào `SafetyPolicy` và gate function rồi nối một/nhiều route;
 loader và contract front-matter **không** đổi hình dạng giữa các slice (chỉ thêm field
@@ -158,6 +158,30 @@ dài duration** (move vẫn tới target, chỉ chậm lại) — không cắt c
       (endpoint duy nhất nhận duration). LƯU Ý: animation nội bộ (idle/emotion do
       runtime, không phải agent) chưa gate.
 - [x] **Tất định:** `min_move_duration` thuần (không clock, không xét caller).
+
+### Slice 4 — trạng thái fail-safe (checklist)
+
+Fail-safe **theo trạng thái** chứ không clamp từng request: khi thiết bị mất một phụ
+thuộc tới hạn, nó rơi về tư thế an toàn một cách tất định, *dưới* tầng agent. Hai điều
+kiện đã thực thi hôm nay; hai điều kiện còn dự trữ.
+
+- [x] **Mất mạng / gateway → dừng tracking do agent điều khiển.** Khi gateway
+      WebSocket disconnect, `os/services/internal/openclaw/service_ws.go` gọi
+      `hal.StopServoTracking()` (`os/services/lib/hal`) → HAL `POST /servo/track/stop`,
+      để body thôi đuổi theo một target không còn cập nhật vision mới. Best-effort và
+      được gác bởi `SetUpCompleted`. Lưu ý then chốt: thiết bị **không** đóng băng hay
+      "giữ pose" — animation idle local vẫn tiếp tục (nó local và vô hại) và các reflex
+      phục hồi (`motion.stop`/release, mute, sleep, wake) luôn sẵn sàng; chỉ tracking và
+      motion mới *do agent điều khiển* mới dừng.
+- [x] **Lỗi board / driver → cô lập `503`.** Đã có sẵn: capability bị lỗi trả `503`
+      theo từng route trong khi phần còn lại vẫn phục vụ, lộ ra qua `/health`. Không cơ
+      chế mới — contract fail-safe tái dùng cô lập đã có.
+- [ ] **Setup chưa xong → dự trữ.** Chưa gate trong runtime (chỉ reflex setup/identity
+      là ý định đã khai, chưa thực thi).
+- [ ] **Nhiệt / quá dòng → dự trữ.** **Không có cảm biến nhiệt / dòng trên phần cứng
+      này**, nên không có gì để đọc; dự trữ cho phần cứng có cảm biến.
+- [ ] **Runtime (CHƯA verify trên máy):** đường WS-disconnect → `/servo/track/stop`
+      mới ở mức repo; chưa xác nhận bằng cách ngắt link gateway trên thiết bị thật.
 
 ## Quan hệ với enforcement hardcode rời rạc hiện có
 

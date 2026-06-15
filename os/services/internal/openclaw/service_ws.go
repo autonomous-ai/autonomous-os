@@ -16,6 +16,7 @@ import (
 	"go.autonomous.ai/os/domain"
 	"go.autonomous.ai/os/internal/statusled"
 	"go.autonomous.ai/os/lib/flow"
+	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/lib/i18n"
 )
 
@@ -39,6 +40,17 @@ func (s *Service) StartWS(ctx context.Context, handler domain.AgentEventHandler)
 		// setup-needed solid white painted by server.waitAndPaintSetupReady.
 		if s.statusLED != nil && s.config.SetUpCompleted {
 			s.statusLED.Set(statusled.StateAgentDown)
+		}
+		// Safety reflex: the gateway link just dropped, so any in-flight servo
+		// object-tracking is now chasing a target it can no longer get vision
+		// updates for. Stop it (best-effort, idempotent) so the body doesn't
+		// keep aiming at stale coordinates. Local idle animation is untouched —
+		// it's harmless and self-contained — and recovery reflexes stay
+		// available. Never block or affect the reconnect/backoff loop below.
+		if s.config.SetUpCompleted {
+			if err := hal.StopServoTracking(); err != nil {
+				slog.Warn("stop servo tracking on ws disconnect failed", "component", "openclaw", "error", err)
+			}
 		}
 		if err != nil {
 			slog.Warn("websocket disconnected, reconnecting", "component", "openclaw", "error", err, "backoff", backoff)

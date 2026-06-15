@@ -76,7 +76,7 @@ pass-through.
 | 1 | `light.max_brightness` ceiling | `clamp_brightness` / `clamp_color` | LED gate (`rgb_service` `_handle_solid`/`_handle_paint`) | **enforced (v1)** |
 | 2 | `quiet_hours` (light + audio) | `active_max_brightness` (time-aware) + `audio_quiet_now` | LED gate + music route | **enforced (v1)** |
 | 3 | `motion.max_speed` + `stop_always` (presence-driven) | `min_move_duration` | servo route | **enforced (v1)** (`max_accel` reserved) |
-| 4 | fail-safe states (network loss → hold pose, board fault → disable capability) | state gate | lifespan + routes | reserved |
+| 4 | fail-safe states (network/gateway loss → stop agent-driven tracking; board fault → 503 isolation; setup + thermal reserved) | WS-disconnect hook + per-capability `503` | `os/services` on gateway WS disconnect + HAL routes/`/health` | **partially enforced (v1)** (setup + thermal reserved) |
 
 Each slice adds fields to the `SafetyPolicy` and gate functions and wires one or more
 routes; the loader and the front-matter contract do not change shape between slices
@@ -167,6 +167,30 @@ capped) — never by truncating the destination. Recovery actions
       animation (idle/emotion poses driven by the runtime, not the agent) is not
       gated — that is device-controlled, not agent-requested; revisit if needed.
 - [x] **Determinism:** `min_move_duration` is pure (no clock, no caller identity).
+
+### Slice 4 — fail-safe states (checklist)
+
+Fail-safe is **state-driven** rather than per-request clamping: when the device loses a
+critical dependency it falls into a safe posture deterministically, below the agent.
+Two conditions are enforced today; two are reserved.
+
+- [x] **Network / gateway loss → stop agent-driven tracking.** On gateway WebSocket
+      disconnect, `os/services/internal/openclaw/service_ws.go` calls
+      `hal.StopServoTracking()` (`os/services/lib/hal`) → HAL `POST /servo/track/stop`,
+      so the body stops chasing a target it has no fresh vision for. Best-effort and
+      guarded by `SetUpCompleted`. Key nuance: the device does **not** freeze or "hold
+      pose" — local idle animation continues (it is local and harmless) and recovery
+      reflexes (`motion.stop`/release, mute, sleep, wake) stay available; only
+      *agent-driven* tracking and new motion stop.
+- [x] **Board / driver fault → 503 isolation.** Already met: a faulting capability
+      returns `503` per-route while the rest keep serving, surfaced via `/health`. No
+      new mechanism — the fail-safe contract reuses the existing isolation.
+- [ ] **Setup incomplete → reserved.** Not gated in the runtime yet (setup/identity
+      reflexes only is declared intent, not enforced).
+- [ ] **Thermal / over-current → reserved.** **No thermal / current sensor on this
+      hardware**, so there is nothing to read; reserved for hardware that has one.
+- [ ] **Runtime (NOT device-verified):** the WS-disconnect → `/servo/track/stop` path
+      is repo-level only; not yet confirmed by pulling the gateway link on a live device.
 
 ## Relationship to existing ad-hoc enforcement
 

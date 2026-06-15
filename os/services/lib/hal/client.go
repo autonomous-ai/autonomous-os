@@ -410,6 +410,12 @@ func PlayServo(recording string) error {
 	return post("/servo/play", body)
 }
 
+// StopServoTracking halts any in-flight servo object-tracking on HAL. Used as a
+// safety reflex when the gateway link drops: tracking is fed by remote vision
+// updates, so without the cloud the device would keep chasing a stale target.
+// Idempotent — safe to call when nothing is tracking.
+func StopServoTracking() error { return post("/servo/track/stop", nil) }
+
 // ─── Emotion ────────────────────────────────────────────────────────────────
 
 // SetEmotion triggers an emotion animation on HAL.
