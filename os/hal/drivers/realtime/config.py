@@ -51,6 +51,8 @@ class OpenAIConfig(BaseModel):
     )
     truncation_type: OpenAITruncationType = OpenAITruncationType.RETENTION_RATIO
     truncation_retention_ratio: float = 0.5
+    max_retries: int = 3
+    reconnect_delay_s: float = 2.0
 
 
 class GeminiConfig(BaseModel):
@@ -71,3 +73,9 @@ class GeminiConfig(BaseModel):
         "",
     )
     context_window_compression: bool = True
+    max_retries: int = 3
+    reconnect_delay_s: float = 2.0
+    send_timeout_s: float = 10.0
+    recv_timeout_s: float = 300.0
+    queue_poll_s: float = 1.0
+    join_timeout_s: float = 5.0

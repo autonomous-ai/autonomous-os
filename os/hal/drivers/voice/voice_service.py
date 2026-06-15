@@ -163,11 +163,7 @@ class VoiceService:
             def _tts_speak_end_with_realtime_feedback() -> None:
                 if original_on_speak_end:
                     original_on_speak_end()
-                if (
-                    hal_config.REALTIME_ENABLED
-                    and self._realtime.available
-                    and tts_service.last_spoken_text
-                ):
+                if hal_config.REALTIME_ENABLED and tts_service.last_spoken_text:
                     text: str = tts_service.last_spoken_text
                     logger.info("[realtime] Feeding TTS history: %r", text[:100])
                     self._realtime.send_text(f"[TTS HISTORY] {text}")
@@ -767,9 +763,11 @@ class VoiceService:
                     stt_session.send_audio(frame)
                     audio_buffer.append(frame)
                     # Also send pre-buffer to realtime model (non-blocking queue put)
-                    if hal_config.REALTIME_ENABLED and self._realtime.available:
+                    if hal_config.REALTIME_ENABLED:
                         audio_f32 = pcm16_bytes_to_float32(frame)
-                        audio_f32 = resample_float32(audio_f32, STT_RATE, self._realtime.sample_rate)
+                        audio_f32 = resample_float32(
+                            audio_f32, STT_RATE, self._realtime.sample_rate
+                        )
                         self._realtime.append_audio(audio_f32)
                         rt_audio_buffer.append(audio_f32)
 
@@ -822,9 +820,11 @@ class VoiceService:
                 audio_buffer.append(resampled)
 
                 # Parallel: stream to realtime model (non-blocking queue put)
-                if hal_config.REALTIME_ENABLED and self._realtime.available:
+                if hal_config.REALTIME_ENABLED:
                     audio_f32 = pcm16_bytes_to_float32(resampled)
-                    audio_f32 = resample_float32(audio_f32, STT_RATE, self._realtime.sample_rate)
+                    audio_f32 = resample_float32(
+                        audio_f32, STT_RATE, self._realtime.sample_rate
+                    )
                     self._realtime.append_audio(audio_f32)
                     rt_audio_buffer.append(audio_f32)
 
@@ -883,9 +883,11 @@ class VoiceService:
             rt_delegated = False
             rt_handled = False
             rt_transcript = ""
-            if hal_config.REALTIME_ENABLED and self._realtime.available and rt_audio_buffer:
-                logger.info("[realtime] Entering realtime flow — committing audio (stt=%r)",
-                            combined[:100] if combined else "(empty)")
+            if hal_config.REALTIME_ENABLED and rt_audio_buffer:
+                logger.info(
+                    "[realtime] Entering realtime flow — committing audio (stt=%r)",
+                    combined[:100] if combined else "(empty)",
+                )
                 try:
                     # Inject per-turn context before committing
                     turn_ctx: list[str] = [
@@ -893,7 +895,10 @@ class VoiceService:
                     ]
                     try:
                         if hal_app_state.sensing_service:
-                            cu: str = hal_app_state.sensing_service._perception_orchestrator.current_user or ""
+                            cu: str = (
+                                hal_app_state.sensing_service._perception_orchestrator.current_user
+                                or ""
+                            )
                             if cu:
                                 turn_ctx.append(f"Current user: {cu}")
                     except Exception:
@@ -917,32 +922,48 @@ class VoiceService:
                             text_parts.append(output.text)
                             sentence_buf += output.text
                             # Flush complete sentences to TTS as they arrive
-                            if self._tts is not None and sentence_buf.rstrip().endswith(SENTENCE_ENDS):
+                            if self._tts is not None and sentence_buf.rstrip().endswith(
+                                SENTENCE_ENDS
+                            ):
                                 sentence: str = self.strip_rt_markers(sentence_buf)
                                 if sentence:
                                     if not first_sentence_sent:
-                                        logger.info("[realtime] First sentence → speak: %r", sentence[:80])
+                                        logger.info(
+                                            "[realtime] First sentence → speak: %r",
+                                            sentence[:80],
+                                        )
                                         self._tts.speak(sentence)
                                         first_sentence_sent = True
                                     else:
-                                        logger.info("[realtime] Next sentence → speak_queue: %r", sentence[:80])
+                                        logger.info(
+                                            "[realtime] Next sentence → speak_queue: %r",
+                                            sentence[:80],
+                                        )
                                         self._tts.speak_queue(sentence)
                                 sentence_buf = ""
 
                     rt_transcript = self.strip_rt_markers("".join(text_parts))
 
                     if rt_delegated:
-                        logger.info("[realtime] Model delegated → will forward to OS server")
+                        logger.info(
+                            "[realtime] Model delegated → will forward to OS server"
+                        )
                     else:
                         rt_handled = True
                         # Flush any remaining text that didn't end with a sentence boundary
                         remaining: str = self.strip_rt_markers(sentence_buf)
                         if remaining and self._tts is not None:
                             if not first_sentence_sent:
-                                logger.info("[realtime] Final fragment → speak: %r", remaining[:80])
+                                logger.info(
+                                    "[realtime] Final fragment → speak: %r",
+                                    remaining[:80],
+                                )
                                 self._tts.speak(remaining)
                             else:
-                                logger.info("[realtime] Final fragment → speak_queue: %r", remaining[:80])
+                                logger.info(
+                                    "[realtime] Final fragment → speak_queue: %r",
+                                    remaining[:80],
+                                )
                                 self._tts.speak_queue(remaining)
                         logger.info(
                             "[realtime] Chit-chat complete — transcript=%r",
@@ -955,10 +976,15 @@ class VoiceService:
                                 agent_text=rt_transcript or "(audio only)",
                             )
                 except Exception as e:
-                    logger.warning("[realtime] Processing failed: %s — will forward to OS server", e)
+                    logger.warning(
+                        "[realtime] Processing failed: %s — will forward to OS server",
+                        e,
+                    )
                     rt_delegated = True  # fall through to OS server on error
             elif hal_config.REALTIME_ENABLED:
-                logger.warning("[realtime] Enabled but agent not available — falling back to OS server")
+                logger.warning(
+                    "[realtime] Enabled but agent not available — falling back to OS server"
+                )
 
             # --- Speaker recognition + OS server send ---
             from hal.drivers.voice.speech_emotion.constants import UNKNOWN_USER_LABEL
@@ -987,7 +1013,10 @@ class VoiceService:
                         sensing_msg: str = f"[voice-instruction] {rt_delegate_msg}\n[transcript] {final_msg}"
                     else:
                         sensing_msg = final_msg
-                    logger.info("[realtime] Delegated with message: %r", sensing_msg[:100] if sensing_msg else "")
+                    logger.info(
+                        "[realtime] Delegated with message: %r",
+                        sensing_msg[:100] if sensing_msg else "",
+                    )
                     if sensing_msg:
                         self._sensing_sender.send(sensing_msg, event_type=event_type)
                 else:

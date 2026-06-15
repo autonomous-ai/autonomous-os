@@ -81,10 +81,8 @@ class RealtimeOrchestrator:
     def __init__(
         self,
         extra_tools: list[dict[str, Any]] | None = None,
-        max_retries: int = config.REALTIME_CONNECT_MAX_RETRIES,
     ) -> None:
         self._tools: list[dict[str, Any]] = [DELEGATE_TOOL] + (extra_tools or [])
-        self._max_retries: int = max_retries
         self._agent: VoiceAgentBase | None = None
         summarizer: RealtimeSummarizer | None = None
         if config.REALTIME_SUMMARIZER_ENABLED:
@@ -152,21 +150,11 @@ class RealtimeOrchestrator:
             logger.warning("Unknown realtime provider: %s — disabled", provider)
             return
 
-        for attempt in range(1, self._max_retries + 1):
-            try:
-                self._agent.connect()
-                logger.info("Realtime orchestrator started (provider=%s)", provider)
-                return
-            except Exception:
-                logger.exception(
-                    "Failed to connect realtime agent (attempt %d/%d)",
-                    attempt, self._max_retries,
-                )
-                if attempt < self._max_retries:
-                    import time
-                    time.sleep(2)
-        logger.error("Realtime agent failed to connect after %d attempts", self._max_retries)
-        self._agent = None
+        try:
+            self._agent.connect()
+            logger.info("[realtime] Realtime orchestrator started (provider=%s)", provider)
+        except Exception:
+            logger.exception("[realtime] Failed to connect realtime agent — will retry on next audio")
 
     def stop(self) -> None:
         """Disconnect the agent and summarize unsummarized memory."""
