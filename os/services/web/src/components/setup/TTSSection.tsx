@@ -1,4 +1,5 @@
-import { C, SectionCard } from "./shared";
+import { Volume2 } from "lucide-react";
+import { C, SectionCard, LABEL_STYLE, INPUT_STYLE, FIELD_GAP } from "./shared";
 import { testTTSVoice } from "@/lib/api";
 
 export function TTSSection({
@@ -16,44 +17,35 @@ export function TTSSection({
   sttLanguage: string;
 }) {
   return (
-    <SectionCard id="tts" title="Voice" active={active}>
+    <SectionCard id="tts" title="Voice" active={active} icon={<Volume2 size={17} />}
+      description="Choose how your device sounds when it speaks back to you.">
       {/* tts_api_key + tts_base_url are not exposed in Setup —
           they're auto-mirrored from AI Brain via useEffect and
           submitted silently. */}
-      <div style={{ marginBottom: 12 }}>
-        <label htmlFor="tts_provider" style={{ display: "block", fontSize: 11, color: C.textDim, marginBottom: 5 }}>
+      <div style={{ marginBottom: FIELD_GAP }}>
+        <label htmlFor="tts_provider" style={LABEL_STYLE}>
           Provider
         </label>
         <select
           id="tts_provider"
           value={ttsProvider}
           onChange={(e) => setTtsProvider(e.target.value)}
-          style={{
-            width: "100%", boxSizing: "border-box",
-            background: C.surface, border: `1px solid ${C.border}`,
-            borderRadius: 7, padding: "8px 11px",
-            fontSize: 12.5, color: C.text, outline: "none", cursor: "pointer",
-          }}
+          style={{ ...INPUT_STYLE, cursor: "pointer" }}
         >
           {(ttsProviders.length > 0 ? ttsProviders : ["openai"]).map((p) => (
             <option key={p} value={p}>{p}</option>
           ))}
         </select>
       </div>
-      <div style={{ marginBottom: 12 }}>
-        <label htmlFor="tts_voice" style={{ display: "block", fontSize: 11, color: C.textDim, marginBottom: 5 }}>
+      <div style={{ marginBottom: FIELD_GAP }}>
+        <label htmlFor="tts_voice" style={LABEL_STYLE}>
           Voice
         </label>
         <select
           id="tts_voice"
           value={ttsVoice}
           onChange={(e) => setTtsVoice(e.target.value)}
-          style={{
-            width: "100%", boxSizing: "border-box",
-            background: C.surface, border: `1px solid ${C.border}`,
-            borderRadius: 7, padding: "8px 11px",
-            fontSize: 12.5, color: C.text, outline: "none", cursor: "pointer",
-          }}
+          style={{ ...INPUT_STYLE, cursor: "pointer" }}
         >
           {(ttsVoices.length > 0 ? ttsVoices : ["alloy"]).map((v) => (
             <option key={v} value={v}>{v}</option>
@@ -67,15 +59,15 @@ export function TTSSection({
               provider: ttsProvider,
             })}
             style={{
-              marginTop: 8, width: "100%", padding: "8px 0",
-              background: C.amber, color: "#fff", border: "none",
-              borderRadius: 7, fontSize: 12, cursor: "pointer", fontWeight: 600,
+              marginTop: 10, width: "100%", padding: "10px 0",
+              background: C.amber, color: "#0C0B09", border: "none",
+              borderRadius: 8, fontSize: 13, cursor: "pointer", fontWeight: 600,
             }}
           >
             Test Voice
           </button>
         ) : (
-          <div style={{ marginTop: 8, fontSize: 11, color: C.textDim }}>
+          <div style={{ marginTop: 8, fontSize: 12.5, color: C.textDim }}>
             You can preview voices after your device is online (next step).
           </div>
         )}

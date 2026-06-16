@@ -26,48 +26,59 @@
 }
 
 @layer base {
+  /*
+   * ── Unified palette: Amber (primary) + Teal (accent) ──
+   * Hue anchors:  amber ≈ 70 (oklch),  teal ≈ 180 (oklch),  warm-neutral ≈ 70 chroma~0.01.
+   * Two surfaces only need to be defined here — `.dark` (default) and `:root` (light).
+   * The Lamp Monitor `--lm-*` scope is derived from these tokens further down so the
+   * whole app shares one source of truth. Default theme is DARK (see theme-provider).
+   */
+
+  /* Light theme */
   :root {
-    --background: oklch(0.985 0.002 247);
-    --foreground: oklch(0.145 0.02 260);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0.02 260);
+    --background: oklch(0.985 0.004 80);          /* warm white  #FAFAF8 */
+    --foreground: oklch(0.205 0.01 60);           /* warm near-black #1C1917 */
+    --card: oklch(1 0 0);                          /* #FFFFFF */
+    --card-foreground: oklch(0.205 0.01 60);
     --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0.02 260);
-    --primary: oklch(0.488 0.243 264);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.96 0.02 247);
-    --secondary-foreground: oklch(0.25 0.02 260);
-    --muted: oklch(0.96 0.01 247);
-    --muted-foreground: oklch(0.45 0.02 260);
-    --accent: oklch(0.92 0.04 247);
-    --accent-foreground: oklch(0.25 0.02 260);
-    --destructive: oklch(0.577 0.245 27.325);
-    --destructive-foreground: oklch(0.985 0 0);
-    --border: oklch(0.9 0.01 247);
-    --input: oklch(0.9 0.01 247);
-    --ring: oklch(0.488 0.243 264);
+    --popover-foreground: oklch(0.205 0.01 60);
+    --primary: oklch(0.68 0.165 60);              /* amber  #D97706 */
+    --primary-foreground: oklch(0.99 0.01 90);    /* near-white on amber */
+    --secondary: oklch(0.955 0.008 80);           /* warm surface #F5F4F0 */
+    --secondary-foreground: oklch(0.30 0.01 60);
+    --muted: oklch(0.955 0.008 80);
+    --muted-foreground: oklch(0.50 0.01 60);      /* #57534E */
+    --accent: oklch(0.70 0.12 185);               /* teal  #0D9488 */
+    --accent-foreground: oklch(0.99 0.01 90);
+    --destructive: oklch(0.58 0.21 27);           /* red  #DC2626 */
+    --destructive-foreground: oklch(0.99 0.01 90);
+    --border: oklch(0.90 0.006 80);               /* #E0DED6 */
+    --input: oklch(0.90 0.006 80);
+    --ring: oklch(0.68 0.165 60);                 /* amber */
     --radius: 1rem;
   }
+
+  /* Dark theme — DEFAULT */
   .dark {
-    --background: oklch(0.145 0.02 260);
-    --foreground: oklch(0.965 0.01 247);
-    --card: oklch(0.2 0.02 260);
-    --card-foreground: oklch(0.965 0.01 247);
-    --popover: oklch(0.28 0.02 260);
-    --popover-foreground: oklch(0.965 0.01 247);
-    --primary: oklch(0.65 0.2 264);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.27 0.02 260);
-    --secondary-foreground: oklch(0.965 0 0);
-    --muted: oklch(0.27 0.02 260);
-    --muted-foreground: oklch(0.65 0.02 247);
-    --accent: oklch(0.32 0.04 264);
-    --accent-foreground: oklch(0.965 0 0);
-    --destructive: oklch(0.396 0.141 25.723);
-    --destructive-foreground: oklch(0.637 0.237 25.331);
-    --border: oklch(0.28 0.02 260);
-    --input: oklch(0.28 0.02 260);
-    --ring: oklch(0.65 0.2 264);
+    --background: oklch(0.16 0.006 70);           /* warm near-black #0C0B09 */
+    --foreground: oklch(0.95 0.008 80);           /* #F0EEE8 */
+    --card: oklch(0.205 0.006 70);                /* #17160F */
+    --card-foreground: oklch(0.95 0.008 80);
+    --popover: oklch(0.24 0.007 70);              /* #1E1D14 */
+    --popover-foreground: oklch(0.95 0.008 80);
+    --primary: oklch(0.78 0.165 65);              /* amber  #F59E0B */
+    --primary-foreground: oklch(0.18 0.02 60);    /* dark text on amber */
+    --secondary: oklch(0.255 0.006 70);           /* #1E1D14 */
+    --secondary-foreground: oklch(0.95 0.008 80);
+    --muted: oklch(0.255 0.006 70);
+    --muted-foreground: oklch(0.66 0.012 80);     /* #9A9080 */
+    --accent: oklch(0.80 0.13 185);               /* teal  #2DD4BF */
+    --accent-foreground: oklch(0.18 0.02 185);
+    --destructive: oklch(0.70 0.18 25);           /* red  #F87171 */
+    --destructive-foreground: oklch(0.18 0.02 25);
+    --border: oklch(0.30 0.008 70);               /* #2A2820 */
+    --input: oklch(0.30 0.008 70);
+    --ring: oklch(0.78 0.165 65);                 /* amber */
   }
   /* Select / popover: solid background, no transparency */
   [data-slot="select-content"],
@@ -167,6 +178,155 @@
     --lm-text:        #1C1917;
     --lm-text-dim:    #57534E;
     --lm-text-muted:  #A8A29E;
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Interactive utilities (lamp scope) — hover / active / focus feedback.
+ *
+ * For lamp pages that use inline styles but DON'T already ship their own button
+ * styling (e.g. Monitor, Login). Add these classes alongside the inline style to
+ * get the missing :hover/:active/:focus feedback. They drive off --lm-* tokens
+ * so they track the unified amber/teal palette in both dark and light.
+ *
+ * The `lm-u-` ("utility") prefix is deliberately distinct from the Setup/Edit
+ * wizards' own `.lm-setup .lm-btn*` styles further down, so the two never collide
+ * regardless of source order. Setup is already fully styled — don't use these
+ * there. shadcn <Button>/<Input> also carry their own hover — don't use these there.
+ *
+ * Usage:
+ *   <button className="lm-u-btn" style={...}>           neutral surface button
+ *   <button className="lm-u-btn lm-u-btn-primary" ...>  amber call-to-action
+ *   <button className="lm-u-icon-btn" ...>              square icon/ghost button
+ *   <input  className="lm-u-input" ... />               text field
+ *   <div    className="lm-u-interactive" ...>           hoverable card / row
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/* Shared: smooth, GPU-cheap transitions on the props we animate. */
+.lm-root .lm-u-btn,
+.lm-root .lm-u-icon-btn,
+.lm-root .lm-u-input,
+.lm-root .lm-u-interactive {
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.08s ease;
+}
+
+/* Neutral / secondary button */
+.lm-root .lm-u-btn {
+  cursor: pointer;
+  background: var(--lm-surface);
+  border: 1px solid var(--lm-border);
+  color: var(--lm-text);
+}
+.lm-root .lm-u-btn:hover {
+  background: var(--lm-border);
+  border-color: var(--lm-border-hi);
+}
+.lm-root .lm-u-btn:active {
+  transform: translateY(1px);
+}
+.lm-root .lm-u-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--lm-amber-dim);
+  border-color: var(--lm-amber);
+}
+.lm-root .lm-u-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Primary amber call-to-action — compose with .lm-u-btn */
+.lm-root .lm-u-btn-primary {
+  background: var(--lm-amber);
+  border-color: var(--lm-amber);
+  color: var(--lm-bg);
+  font-weight: 600;
+}
+.lm-root .lm-u-btn-primary:hover {
+  background: var(--lm-yellow);
+  border-color: var(--lm-yellow);
+  box-shadow: 0 0 14px var(--lm-amber-glow);
+}
+.lm-root .lm-u-btn-primary:focus-visible {
+  box-shadow: 0 0 0 3px var(--lm-amber-glow);
+}
+
+/* Square icon / ghost button */
+.lm-root .lm-u-icon-btn {
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--lm-text-dim);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.lm-root .lm-u-icon-btn:hover {
+  background: var(--lm-surface);
+  color: var(--lm-text);
+}
+.lm-root .lm-u-icon-btn:active {
+  transform: scale(0.92);
+}
+.lm-root .lm-u-icon-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--lm-amber-dim);
+  color: var(--lm-text);
+}
+
+/* Text input / textarea / select */
+.lm-root .lm-u-input {
+  background: var(--lm-card);
+  border: 1px solid var(--lm-border);
+  color: var(--lm-text);
+}
+.lm-root .lm-u-input::placeholder {
+  color: var(--lm-text-muted);
+}
+.lm-root .lm-u-input:hover {
+  border-color: var(--lm-border-hi);
+}
+.lm-root .lm-u-input:focus,
+.lm-root .lm-u-input:focus-visible {
+  outline: none;
+  border-color: var(--lm-amber);
+  box-shadow: 0 0 0 3px var(--lm-amber-dim);
+}
+.lm-root .lm-u-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Hoverable card / list row */
+.lm-root .lm-u-interactive {
+  cursor: pointer;
+  border: 1px solid var(--lm-border);
+}
+.lm-root .lm-u-interactive:hover {
+  border-color: var(--lm-border-hi);
+  background: var(--lm-surface);
+}
+.lm-root .lm-u-interactive:active {
+  transform: translateY(1px);
+}
+
+/* Respect reduced-motion preference: keep color feedback, drop movement. */
+@media (prefers-reduced-motion: reduce) {
+  .lm-root .lm-u-btn,
+  .lm-root .lm-u-icon-btn,
+  .lm-root .lm-u-input,
+  .lm-root .lm-u-interactive {
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  }
+  .lm-root .lm-u-btn:active,
+  .lm-root .lm-u-icon-btn:active,
+  .lm-root .lm-u-interactive:active {
+    transform: none;
   }
 }
 
@@ -277,6 +437,169 @@
   .lm-grid-5 { grid-template-columns: 1fr 1fr; gap: 6px; }
 }
 
+/* ── Setup wizard ─────────────────────────────────────────────────────────── */
+
+/* Sidebar nav item: hover lift + animated left active-bar. The ::before is the
+   amber accent rail that grows in when a step is active. */
+.lm-setup .lm-nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px 10px 16px;
+  border-radius: 9px;
+  margin: 2px 8px;
+  font-size: 13.5px;
+  background: transparent;
+  border: none;
+  width: calc(100% - 16px);
+  text-align: left;
+  cursor: pointer;
+  color: var(--lm-text-dim);
+  transition: background 0.15s, color 0.15s;
+}
+.lm-setup .lm-nav-item::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%) scaleY(0);
+  width: 3px;
+  height: 18px;
+  border-radius: 3px;
+  background: var(--lm-amber);
+  transition: transform 0.18s ease;
+}
+.lm-setup .lm-nav-item:hover { background: var(--lm-surface); color: var(--lm-text); }
+.lm-setup .lm-nav-item--done { color: var(--lm-text-muted); }
+.lm-setup .lm-nav-item--active {
+  background: var(--lm-amber-dim);
+  color: var(--lm-amber);
+  font-weight: 600;
+}
+.lm-setup .lm-nav-item--active::before { transform: translateY(-50%) scaleY(1); }
+
+/* Step progress bar in the topbar. */
+.lm-setup .lm-progress-track {
+  height: 3px;
+  border-radius: 3px;
+  background: var(--lm-border);
+  overflow: hidden;
+}
+.lm-setup .lm-progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--lm-amber), var(--lm-yellow));
+  transition: width 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Setup card: subtle elevation; lifts a touch on hover. */
+.lm-setup .lm-card {
+  background: var(--lm-card);
+  border: 1px solid var(--lm-border);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 8px 24px -16px rgba(0, 0, 0, 0.5);
+  transition: border-color 0.18s, box-shadow 0.18s;
+}
+.lm-setup .lm-card:hover { border-color: var(--lm-border-hi); }
+
+/* Wizard primary/secondary buttons: hover lift + glow on the amber CTA. */
+.lm-setup .lm-btn {
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.12s, box-shadow 0.18s, background 0.15s, opacity 0.15s;
+}
+.lm-setup .lm-btn:not(:disabled):hover { transform: translateY(-1px); }
+.lm-setup .lm-btn:not(:disabled):active { transform: translateY(0); }
+.lm-setup .lm-btn-primary { background: var(--lm-amber); color: #0C0B09; border: none; }
+.lm-setup .lm-btn-primary:not(:disabled):hover { box-shadow: 0 4px 16px -4px var(--lm-amber-glow); }
+.lm-setup .lm-btn-primary:disabled {
+  background: var(--lm-surface);
+  color: var(--lm-text-muted);
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+.lm-setup .lm-btn-ghost {
+  background: var(--lm-surface);
+  color: var(--lm-text);
+  border: 1px solid var(--lm-border);
+}
+.lm-setup .lm-btn-ghost:hover { border-color: var(--lm-border-hi); }
+
+/* Eye / reveal toggle inside password & masked inputs (PasswordField,
+   LockedPasswordField, MaskedReadField). Rests dim so it doesn't compete with
+   the typed value, then brightens + shows a subtle amber chip on hover/focus so
+   it's clearly tappable. The square chip is inset from the input edge so it
+   reads as a button, not a full-height bar. */
+.lm-root .lm-eye-btn {
+  color: var(--lm-text-muted);
+  border-radius: 7px;
+  transition: color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+}
+.lm-root .lm-eye-btn:hover {
+  color: var(--lm-amber);
+  background: var(--lm-amber-dim);
+}
+.lm-root .lm-eye-btn:active {
+  transform: scale(0.9);
+}
+.lm-root .lm-eye-btn:focus-visible {
+  outline: none;
+  color: var(--lm-amber);
+  box-shadow: 0 0 0 2px var(--lm-amber-glow);
+}
+
+/* Mobile tab pill row. */
+.lm-setup .lm-tab {
+  padding: 7px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--lm-text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.lm-setup .lm-tab--active {
+  background: var(--lm-amber-dim);
+  color: var(--lm-amber);
+  border-color: var(--lm-amber-glow);
+  font-weight: 600;
+}
+
+/* Mobile tab row: a right-edge fade hints there are more tabs to scroll to
+   (Voice/Face often sit off-screen). The wrapper clips the gradient overlay. */
+.lm-setup .lm-mobile-tabs-wrap { position: relative; }
+.lm-setup .lm-mobile-tabs-wrap::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 28px;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--lm-bg));
+}
+
+/* Input placeholders: the browser default (~0.5 opacity) reads too faint on the
+   dark surface. Bump toward 0.65 so hints stay legible without competing with
+   real typed text. Scoped to the setup wizard's inputs/selects. */
+.lm-setup input::placeholder,
+.lm-setup textarea::placeholder {
+  color: var(--lm-text-dim);
+  opacity: 0.75;
+}
+
+@media (max-width: 640px) {
+  .lm-setup .lm-sidebar { display: none !important; }
+  .lm-setup .lm-mobile-tabs-wrap { display: flex !important; }
+  .lm-setup .lm-main-content { padding: 16px !important; }
+}
+
 /* Animations */
 @keyframes lm-fade-in {
   from { opacity: 0; transform: translateY(6px); }
@@ -287,6 +610,13 @@
   50%       { box-shadow: 0 0 14px var(--lm-amber-glow); }
 }
 .lm-fade-in  { animation: lm-fade-in 0.35s ease-out both; }
+/* Pop-in for the sidebar step checkmark — a small spring as a step turns done. */
+@keyframes lm-pop {
+  0%   { opacity: 0; transform: scale(0.4); }
+  60%  { opacity: 1; transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+.lm-pop { animation: lm-pop 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
 @keyframes lm-blink { 0%, 80%, 100% { opacity: 0.2; } 40% { opacity: 1; } }
 @keyframes lm-cursor-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 .lm-cursor { animation: lm-cursor-blink 0.8s step-end infinite; }
@@ -297,3 +627,102 @@
 .lm-d2 { animation-delay: 120ms; }
 .lm-d3 { animation-delay: 180ms; }
 .lm-d4 { animation-delay: 240ms; }
+
+/* Spinner — amber ring with a transparent top, used on the "connecting" post-
+   submit screen so the wait reads as active work rather than a frozen page. */
+@keyframes lm-spin { to { transform: rotate(360deg); } }
+.lm-spinner {
+  display: inline-block;
+  width: 34px;
+  height: 34px;
+  border: 3px solid var(--lm-amber-dim);
+  border-top-color: var(--lm-amber);
+  border-radius: 50%;
+  animation: lm-spin 0.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lm-spinner { animation-duration: 1.6s; }
+}
+
+/* Copy button confirm flash — briefly tints the button amber when the address
+   was copied, a clearer "it worked" signal than the label swap alone. */
+.lm-root .lm-copied {
+  background: var(--lm-amber) !important;
+  border-color: var(--lm-amber) !important;
+  color: var(--lm-bg) !important;
+}
+
+/* Indeterminate progress bar — a slim amber sliver that sweeps left↔right while
+   the device joins Wi-Fi. Unlike a fill bar it doesn't imply a known % done
+   (we can't know when the join completes), only that work is in progress. */
+@keyframes lm-indeterminate {
+  0%   { left: -40%; }
+  100% { left: 100%; }
+}
+.lm-root .lm-indeterminate {
+  position: relative;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--lm-border);
+  overflow: hidden;
+}
+.lm-root .lm-indeterminate::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -40%;
+  width: 40%;
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, transparent, var(--lm-amber), transparent);
+  animation: lm-indeterminate 1.3s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lm-root .lm-indeterminate::after { animation-duration: 2.6s; }
+}
+
+/* ── Wi-Fi pulse rings ──────────────────────────────────────────────────────
+   A centered Wi-Fi glyph with concentric amber rings that scale out and fade,
+   like a radar ping — reads instantly as "connecting to Wi-Fi". Pure CSS, no
+   JS. The .lm-wifi-pulse box is the positioning context; .lm-wifi-ring spans
+   are the expanding circles (staggered via animation-delay); the icon sits on
+   top via a higher z-index. */
+.lm-root .lm-wifi-pulse {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lm-root .lm-wifi-pulse .lm-wifi-icon {
+  position: relative;
+  z-index: 2;
+  color: var(--lm-amber);
+  display: flex;
+  filter: drop-shadow(0 0 6px var(--lm-amber-glow));
+}
+.lm-root .lm-wifi-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 24px;
+  height: 24px;
+  margin: -12px 0 0 -12px;
+  border-radius: 50%;
+  border: 2px solid var(--lm-amber);
+  opacity: 0;
+  animation: lm-wifi-ping 2.4s cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
+}
+.lm-root .lm-wifi-ring.lm-r2 { animation-delay: 0.8s; }
+.lm-root .lm-wifi-ring.lm-r3 { animation-delay: 1.6s; }
+@keyframes lm-wifi-ping {
+  0%   { transform: scale(0.5); opacity: 0; }
+  15%  { opacity: 0.7; }
+  100% { transform: scale(2.9); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Drop the moving rings; keep just the gently glowing icon. */
+  .lm-root .lm-wifi-ring { display: none; }
+  .lm-root .lm-wifi-pulse .lm-wifi-icon { animation: lm-pulse-glow 2s ease-in-out infinite; }
+}

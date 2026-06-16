@@ -1,4 +1,5 @@
-import { C, ConfiguredHint, PasswordField, SectionCard, SkeletonBlock } from "./shared";
+import { Wifi } from "lucide-react";
+import { C, ConfiguredHint, PasswordField, SectionCard, SkeletonBlock, LABEL_STYLE, INPUT_STYLE, FIELD_GAP } from "./shared";
 import type { NetworkItem } from "@/types";
 
 // 802.11 caps SSID at 32 bytes (not 32 chars). Each Chinese UTF-8 char is
@@ -25,11 +26,15 @@ export function WifiSection({
 }) {
   const bytes = ssidByteLength(ssid);
   const overLimit = bytes > SSID_MAX_BYTES;
-  const showCounter = bytes > 0 && (overLimit || bytes !== ssid.length);
+  // "bytes" is jargon to a normal user, so only surface the counter once the
+  // SSID actually exceeds the 802.11 limit — at that point the number is
+  // actionable ("trim it down"). Below the limit we stay silent.
+  const showCounter = overLimit;
   return (
-    <SectionCard id="wifi" title="Wi-Fi" active={active}>
-      <div style={{ marginBottom: 12 }}>
-        <label htmlFor="ssid" style={{ display: "block", fontSize: 11, color: C.textDim, marginBottom: 5 }}>
+    <SectionCard id="wifi" title="Wi-Fi" active={active} icon={<Wifi size={17} />}
+      description="Pick the home network your device should join, then enter its password.">
+      <div style={{ marginBottom: FIELD_GAP }}>
+        <label htmlFor="ssid" style={LABEL_STYLE}>
           Wi-Fi network
         </label>
         {loadingList ? (
@@ -40,11 +45,9 @@ export function WifiSection({
             value={ssid}
             onChange={(e) => setSsid(e.target.value)}
             style={{
-              width: "100%", boxSizing: "border-box",
-              background: C.surface,
+              ...INPUT_STYLE,
               border: `1px solid ${overLimit ? C.red : C.border}`,
-              borderRadius: 7, padding: "8px 11px",
-              fontSize: 12.5, color: C.text, outline: "none", cursor: "pointer",
+              cursor: "pointer",
             }}
           >
             <option value="">Select network</option>
@@ -58,17 +61,14 @@ export function WifiSection({
             onChange={(e) => setSsid(e.target.value)}
             placeholder="Enter Wi-Fi name" autoComplete="off"
             style={{
-              width: "100%", boxSizing: "border-box",
-              background: C.surface,
+              ...INPUT_STYLE,
               border: `1px solid ${overLimit ? C.red : C.border}`,
-              borderRadius: 7, padding: "8px 11px",
-              fontSize: 12.5, color: C.text, outline: "none",
             }}
           />
         )}
         {showCounter && (
           <div style={{
-            marginTop: 5, fontSize: 11,
+            marginTop: 6, fontSize: 12,
             color: overLimit ? C.red : C.textDim,
           }}>
             {overLimit

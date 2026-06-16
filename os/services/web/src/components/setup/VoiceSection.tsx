@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { Mic } from "lucide-react";
 import { C, Field, SectionCard } from "./shared";
 import { pickVoicePhrases, pickVoiceIntro, VOICE_DURATION_SEC } from "./voice-phrases";
 import type { FaceOwner } from "@/hooks/setup/useFaceEnroll";
@@ -96,14 +97,11 @@ export function VoiceSection({
   const enrolled = faceOwners.filter((p) => (p.voice_samples?.length ?? 0) > 0);
 
   return (
-    <SectionCard id="voice" title="My Voice (optional)" active={active}>
-      <div style={{ fontSize: 11, color: C.textDim, marginBottom: 12 }}>
-        {VOICE_INTRO}
-      </div>
+    <SectionCard id="voice" title="My Voice (optional)" active={active} description={VOICE_INTRO} icon={<Mic size={17} />}>
       <Field label="Name" id="voice_label" value={voiceLabel} onChange={setVoiceLabel} placeholder="e.g. Leo" />
       <div style={{
         background: C.surface, border: `1px solid ${C.border}`,
-        borderRadius: 7, padding: "10px 12px", marginBottom: 10, fontSize: 12, lineHeight: 1.5,
+        borderRadius: 8, padding: "12px 14px", marginBottom: 12, fontSize: 13, lineHeight: 1.5,
       }}>
         {VOICE_PHRASES.map((p, i) => (
           <div key={i} style={{ marginBottom: i < VOICE_PHRASES.length - 1 ? 6 : 0 }}>
@@ -117,10 +115,10 @@ export function VoiceSection({
           type="button" disabled={voicePhase !== "idle"}
           onClick={startVoiceEnroll}
           style={{
-            flex: 1, padding: "8px 0",
+            flex: 1, padding: "10px 0",
             background: voicePhase === "idle" ? C.amber : C.surface,
-            color: voicePhase === "idle" ? "#fff" : C.textDim,
-            border: "none", borderRadius: 7, fontSize: 12,
+            color: voicePhase === "idle" ? "#0C0B09" : C.textDim,
+            border: "none", borderRadius: 8, fontSize: 13,
             cursor: voicePhase === "idle" ? "pointer" : "default", fontWeight: 600,
           }}
         >

@@ -1,4 +1,5 @@
 import type { RefObject } from "react";
+import { UserCircle } from "lucide-react";
 import { C, Field, SectionCard } from "./shared";
 import type { FaceOwner } from "@/hooks/setup/useFaceEnroll";
 
@@ -24,10 +25,8 @@ export function FaceSection({
   handleFaceEnroll: () => void;
 }) {
   return (
-    <SectionCard id="face" title="Face Enroll (optional)" active={active}>
-      <div style={{ fontSize: 11, color: C.textDim, marginBottom: 12 }}>
-        Upload photos so your device can recognize you.
-      </div>
+    <SectionCard id="face" title="Face Enroll (optional)" active={active} icon={<UserCircle size={17} />}
+      description="Upload a few photos so your device can recognize you on sight.">
       <Field label="Name" id="face_name" value={faceName} onChange={setFaceName} placeholder="e.g. Leo" />
       <div style={{ marginBottom: 12 }}>
         <input
@@ -41,10 +40,10 @@ export function FaceSection({
         disabled={faceUploading || !faceName.trim() || faceFiles.length === 0}
         onClick={handleFaceEnroll}
         style={{
-          width: "100%", padding: "8px 0",
+          width: "100%", padding: "10px 0",
           background: !faceUploading && faceName.trim() && faceFiles.length > 0 ? C.amber : C.surface,
-          color: !faceUploading && faceName.trim() && faceFiles.length > 0 ? "#fff" : C.textDim,
-          border: "none", borderRadius: 7, fontSize: 12,
+          color: !faceUploading && faceName.trim() && faceFiles.length > 0 ? "#0C0B09" : C.textDim,
+          border: "none", borderRadius: 8, fontSize: 13,
           cursor: faceUploading ? "default" : "pointer", fontWeight: 600,
         }}
       >
