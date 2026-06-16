@@ -34,7 +34,7 @@ const (
 
 Follow the instructions in whichever file you read.
 
-**Version check:** ` + "`os-server --version`" + ` (Lamp), ` + "`openclaw --version`" + ` (OpenClaw), ` + "`curl -s http://127.0.0.1:5001/version`" + ` (HAL).
+**Version check:** ` + "`os-server --version`" + ` (OS), ` + "`openclaw --version`" + ` (OpenClaw), ` + "`curl -s http://127.0.0.1:5001/version`" + ` (HAL).
 
 **Session Startup — also read:** ` + "`KNOWLEDGE.md`" + ` (accumulated learnings) in addition to the steps listed below.
 
@@ -506,7 +506,7 @@ func (s *Service) ensureSoulMDBlock() (bool, error) {
 	var output string
 	if strings.TrimSpace(text) == "" {
 		// First install or clean migration → seed an owner-editable Personal section.
-		output = soulMDBlock + "\n\n## Personal\n\n_Owner-editable. Add notes about yourself, family, routines, or personality tweaks for Lamp here. The block above is managed by Lamp and will be refreshed on each update — keep your edits in this section._\n"
+		output = soulMDBlock + "\n\n## Personal\n\n_Owner-editable. Add notes about yourself, family, routines, or personality tweaks here. The block above is managed by the OS and will be refreshed on each update — keep your edits in this section._\n"
 	} else {
 		output = soulMDBlock + "\n\n" + text
 	}

@@ -24,8 +24,8 @@ func soulFor(t *testing.T, deviceType string) ([]byte, bool) {
 	t.Helper()
 	t.Setenv("DEVICES_DIR", repoDevicesDir(t))
 	// DEVICE_TYPE is the primary resolver (env-first); set it explicitly so the
-	// test is deterministic regardless of ambient env. Empty → falls back to
-	// config.json device_type ("" here) → "lamp".
+	// test is deterministic regardless of ambient env. Empty → config.json
+	// device_type ("" here) → DeviceTypeOrDefault returns "" (no "lamp" fallback).
 	t.Setenv("DEVICE_TYPE", deviceType)
 	s := &Service{config: &config.Config{}}
 	content, has, err := s.deviceSoulCore()
@@ -46,11 +46,11 @@ func TestDeviceSoulCore_LampHasOwnSoul(t *testing.T) {
 	}
 }
 
-// Intern is a body with no persona → no soul_ref → we must NOT override; the
+// Intern-v2 is a body with no persona → no soul_ref → we must NOT override; the
 // agentic runtime (OpenClaw) keeps its own default soul.
 func TestDeviceSoulCore_InternHasNoSoul(t *testing.T) {
-	if _, has := soulFor(t, "intern"); has {
-		t.Error("intern declares no soul_ref — deviceSoulCore must return hasSoul=false")
+	if _, has := soulFor(t, "intern-v2"); has {
+		t.Error("intern-v2 declares no soul_ref — deviceSoulCore must return hasSoul=false")
 	}
 }
 
