@@ -1,6 +1,6 @@
-# Autonomous
+# Autonomous OS
 
-**Autonomous is the open source operating system for physical AI agents.** It runs on edge devices
+**Autonomous OS is the open source operating system for physical AI agents.** It runs on edge devices
 with cameras, microphones, speakers, displays, motors, lights, and sensors, and gives
 an AI agent a body: it sees, hears, speaks, moves, senses, remembers, runs skills, and
 updates itself — locally first.
@@ -9,7 +9,7 @@ updates itself — locally first.
 build a third.
 
 > The brain is a swappable **agentic runtime** (OpenClaw, Hermes, or any LLM + skills +
-> memory). Autonomous is everything else — the body, the skills, and the bounds.
+> memory). Autonomous OS is everything else — the body, the skills, and the bounds.
 
 ## Reference devices
 
@@ -27,7 +27,7 @@ calling `motion.move` runs on it and on Lamp alike — skills address capabiliti
 
 ## Architecture
 
-Autonomous is a layered stack: each layer exposes an interface to the one above and
+Autonomous OS is a layered stack: each layer exposes an interface to the one above and
 depends only on the one below, so any layer can be replaced without touching the others.
 
 ![Autonomous architecture](docs/architecture/autonomous-stack.svg)
@@ -53,7 +53,7 @@ The always-on Go daemon: `intent` (fast local commands), `network`, `OTA`, `sens
 ### Agentic Runtime
 
 **OpenClaw**, **Hermes**, or a custom runtime. Runs the skills, embodies the device's
-`SOUL.md`, and decides what to act on. Swappable — and where Autonomous's differentiated
+`SOUL.md`, and decides what to act on. Swappable — and where Autonomous OS's differentiated
 value (the default brain, memory, character) lives. *(`os/services/internal/openclaw`)*
 
 ### Hardware Abstraction Layer (HAL)
