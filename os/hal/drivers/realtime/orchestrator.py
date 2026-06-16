@@ -23,7 +23,12 @@ import numpy.typing as npt
 
 import hal.config as config
 from hal.drivers.realtime.config import GeminiConfig, OpenAIConfig, _load_language
-from hal.drivers.realtime.context_manager import RealtimeContextManager
+from hal.drivers.realtime.context_manager import (
+    ContextManagerBase,
+    HermesContextManager,
+    OpenClawContextManager,
+)
+from hal.drivers.realtime.enums import AgentGateway
 from hal.drivers.realtime.models import (
     FunctionCallOutput,
     FunctionCallResultInput,
@@ -78,8 +83,19 @@ class RealtimeOrchestrator:
     flow (device → OpenClaw).
     """
 
+    CONTEXT_MANAGERS: dict[str, type[ContextManagerBase]] = {
+        AgentGateway.OPENCLAW: OpenClawContextManager,
+        AgentGateway.HERMES: HermesContextManager,
+    }
+
+    WORKSPACE_DIRS: dict[str, str] = {
+        AgentGateway.OPENCLAW: config.OPENCLAW_WORKSPACE_DIR,
+        AgentGateway.HERMES: config.HERMES_WORKSPACE_DIR,
+    }
+
     def __init__(
         self,
+        gateway: AgentGateway = AgentGateway.OPENCLAW,
         extra_tools: list[dict[str, Any]] | None = None,
     ) -> None:
         self._tools: list[dict[str, Any]] = [DELEGATE_TOOL] + (extra_tools or [])
@@ -94,7 +110,9 @@ class RealtimeOrchestrator:
                 )
             except Exception as e:
                 logger.warning("Failed to create summarizer: %s", e)
-        self._context: RealtimeContextManager = RealtimeContextManager(
+        context_cls = self.CONTEXT_MANAGERS.get(gateway, OpenClawContextManager)
+        self._context: ContextManagerBase = context_cls(
+            workspace_dir=self.WORKSPACE_DIRS.get(gateway, config.OPENCLAW_WORKSPACE_DIR),
             language=_load_language() or "English",
             provider=config.REALTIME_PROVIDER,
             summarizer=summarizer,

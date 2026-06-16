@@ -3,6 +3,11 @@
 from enum import StrEnum
 
 
+class AgentGateway(StrEnum):
+    OPENCLAW = "openclaw"
+    HERMES = "hermes"
+
+
 class InputTypeEnum(StrEnum):
     TEXT = "text"
     IMAGE = "image"

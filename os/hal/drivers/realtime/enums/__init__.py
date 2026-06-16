@@ -8,6 +8,7 @@ from hal.drivers.realtime.enums.openai import (
     OpenAIVoice,
 )
 from hal.drivers.realtime.enums.shared import (
+    AgentGateway,
     InputEventTypeEnum,
     InputTypeEnum,
     OutputEventTypeEnum,
@@ -15,6 +16,7 @@ from hal.drivers.realtime.enums.shared import (
 )
 
 __all__ = [
+    "AgentGateway",
     "InputTypeEnum",
     "OutputTypeEnum",
     "InputEventTypeEnum",

@@ -1,9 +1,12 @@
-"""Realtime context manager — builds instructions from device identity, skills, and memory."""
+"""Base context manager — shared logic for summarization, turn management, and prompt assembly.
+
+Subclasses implement agent-specific context loading (identity files, device memory, skill catalog).
+"""
 
 import json
 import logging
-import re
 import threading
+from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -15,8 +18,13 @@ from hal.drivers.realtime.summarizer import RealtimeSummarizer
 logger = logging.getLogger(__name__)
 
 
-class RealtimeContextManager:
-    """Builds rich instructions for the realtime voice agent from device context."""
+class ContextManagerBase(ABC):
+    """Abstract base for realtime voice agent context managers.
+
+    Concrete subclasses (OpenClawContextManager, HermesContextManager) implement
+    the four abstract methods to load agent-specific context. The base class handles
+    summarization, turn persistence, prompt assembly, and memory trimming.
+    """
 
     DEFAULT_PROMPT_PATH: Path = RESOURCES_DIR / "system_prompt.md"
     PROVIDER_PROMPT_PATHS: dict[str, Path] = {
@@ -24,14 +32,24 @@ class RealtimeContextManager:
         "gemini": RESOURCES_DIR / "system_prompt_gemini.md",
     }
 
-    # Regex to extract YAML frontmatter from SKILL.md
-    FRONTMATTER_RE: re.Pattern[str] = re.compile(r"^---\s*\n(.*?)\n---", re.DOTALL)
-    NAME_RE: re.Pattern[str] = re.compile(r"^name:\s*(.+)$", re.MULTILINE)
-    DESC_RE: re.Pattern[str] = re.compile(r"^description:\s*(.+)$", re.MULTILINE)
+    LANGUAGE_NAMES: dict[str, str] = {
+        "en": "English",
+        "vi": "Vietnamese",
+        "zh-CN": "Chinese (Simplified)",
+        "zh-TW": "Chinese (Traditional)",
+        "ko": "Korean",
+        "ja": "Japanese",
+        "fr": "French",
+        "de": "German",
+        "es": "Spanish",
+        "pt": "Portuguese",
+        "id": "Indonesian",
+        "th": "Thai",
+    }
 
     def __init__(
         self,
-        workspace_dir: str = app_config.REALTIME_WORKSPACE_DIR,
+        workspace_dir: str = "",
         realtime_memory_path: str = app_config.REALTIME_MEMORY_PATH,
         language: str | None = None,
         provider: str = "",
@@ -64,75 +82,25 @@ class RealtimeContextManager:
         self._realtime_memory_lock: threading.Lock = threading.Lock()
         self._realtime_summarize_lock: threading.Lock = threading.Lock()
 
-    # --- Public API ---
+    # --- Abstract methods (subclasses implement) ---
 
+    @abstractmethod
+    def load_device_context(self) -> str:
+        """Load agent identity context (e.g. SOUL.md, IDENTITY.md, USER.md)."""
+
+    @abstractmethod
+    def load_device_memory(self) -> list[str]:
+        """Load device memory entries (summary + unsummarized recent files)."""
+
+    @abstractmethod
+    def load_skills_catalog(self) -> str:
+        """Load skill definitions as a formatted string (e.g. markdown table)."""
+
+    @abstractmethod
     def summarize_device_memory(self) -> None:
-        """Summarize device memory files modified after the last device_summary.md.
+        """Summarize device memory files into a persistent summary."""
 
-        Reads files newer than device_summary.md by mtime, summarizes them
-        together with the existing summary, and writes the result.
-        """
-        if not self._summarizer:
-            return
-        memory_dir: Path = self._workspace / "memory"
-        if not memory_dir.is_dir():
-            return
-
-        summary_mtime: float = (
-            self._device_summary_path.stat().st_mtime
-            if self._device_summary_path.exists()
-            else 0.0
-        )
-
-        # Collect files modified after the last summary
-        new_files: list[Path] = [
-            f
-            for f in sorted(memory_dir.glob("*.md"), key=lambda f: f.stat().st_mtime)
-            if f.stat().st_mtime > summary_mtime
-        ]
-        if not new_files:
-            return
-
-        new_entries: list[str] = []
-        total_chars: int = 0
-        for md_file in new_files:
-            try:
-                content: str = md_file.read_text(encoding="utf-8").strip()
-                if not content:
-                    continue
-                entry: str = f"## {md_file.stem}\n\n{content}"
-                remaining = self._device_memory_max_chars - total_chars
-                if remaining <= 0:
-                    break
-                new_entries.append(f"...{entry[-remaining:]}")
-                total_chars += len(new_entries[-1])
-            except Exception as e:
-                logger.warning("[realtime] Failed to read memory %s: %s", md_file, e)
-        if not new_entries:
-            return
-
-        to_summarize: list[str] = []
-        if self._device_summary_path.exists():
-            try:
-                existing: str = self._device_summary_path.read_text(
-                    encoding="utf-8"
-                ).strip()
-                if existing:
-                    to_summarize.append(f"[Previous summary]\n{existing}")
-            except Exception:
-                pass
-        to_summarize.extend(new_entries)
-
-        logger.info(
-            "[realtime] Summarizing %d new device memory files...", len(new_files)
-        )
-        new_summary: str = self._summarizer.summarize(to_summarize)
-        if new_summary:
-            self._device_summary_path.parent.mkdir(parents=True, exist_ok=True)
-            self._device_summary_path.write_text(new_summary + "\n", encoding="utf-8")
-            logger.info(
-                "[realtime] Device memory summarization complete → device_summary.md"
-            )
+    # --- Public API (shared logic) ---
 
     def summarize_realtime_memory(self) -> None:
         """Summarize entries in memory.jsonl into summary.md, keeping entries added during summarization."""
@@ -202,32 +170,48 @@ class RealtimeContextManager:
         """Build the full instruction string from all context sources."""
         sections: list[str] = []
 
-        # System prompt
         prompt: str = self._load_system_prompt()
         if prompt:
             sections.append(prompt)
 
-        # Device identity
-        identity: str = self._load_device_identity()
+        identity: str = self.load_device_context()
         if identity:
             sections.append(f"# DEVICE IDENTITY\n\n{identity}")
 
-        # Skills catalog
-        catalog: str = self._load_skills_catalog()
+        catalog: str = self.load_skills_catalog()
         if catalog:
             sections.append(f"# SKILLS CATALOG\n\n{catalog}")
 
-        # Device memory — device_summary.md + unsummarized recent files
-        device_mem_raw: list[str] = self._load_device_memory_entries()
-        if device_mem_raw:
-            sections.append("# DEVICE MEMORY\n\n" + "\n\n".join(device_mem_raw))
+        device_mem: list[str] = self.load_device_memory()
+        if device_mem:
+            sections.append("# DEVICE MEMORY\n\n" + "\n\n".join(device_mem))
 
-        # Realtime memory — summary.md + unsummarized entries from memory.jsonl
-        rt_mem_raw: list[str] = self._load_realtime_memory_entries()
-        if rt_mem_raw:
-            sections.append("# REALTIME MEMORY\n\n" + "\n\n".join(rt_mem_raw))
+        rt_mem: list[str] = self.load_realtime_memory()
+        if rt_mem:
+            sections.append("# REALTIME MEMORY\n\n" + "\n\n".join(rt_mem))
 
         return "\n\n".join(sections)
+
+    def add_turn(self, user_text: str, agent_text: str) -> None:
+        """Save a conversation turn to both working memory and raw archive."""
+        entry: dict[str, Any] = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "user": user_text,
+            "agent": agent_text,
+        }
+        line: str = json.dumps(entry, ensure_ascii=False) + "\n"
+        try:
+            with self._realtime_memory_lock:
+                self._realtime_memory_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(self._realtime_memory_path, "a", encoding="utf-8") as f:
+                    f.write(line)
+                with open(self._raw_memory_path, "a", encoding="utf-8") as f:
+                    f.write(line)
+            self._trim_memory_if_needed()
+        except Exception as e:
+            logger.warning("[realtime] Failed to save realtime memory: %s", e)
+
+    # --- Private shared helpers ---
 
     @staticmethod
     def _format_jsonl_entry(line: str) -> str:
@@ -246,54 +230,13 @@ class RealtimeContextManager:
         """Parse multiple JSONL lines into formatted strings, skipping failures."""
         entries: list[str] = []
         for line in lines:
-            formatted: str = RealtimeContextManager._format_jsonl_entry(line)
+            formatted: str = ContextManagerBase._format_jsonl_entry(line)
             if formatted:
                 entries.append(formatted)
         return entries
 
-    def add_turn(self, user_text: str, agent_text: str) -> None:
-        """Save a conversation turn to both working memory and raw archive."""
-        entry: dict[str, Any] = {
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "user": user_text,
-            "agent": agent_text,
-        }
-        line: str = json.dumps(entry, ensure_ascii=False) + "\n"
-        try:
-            with self._realtime_memory_lock:
-                self._realtime_memory_path.parent.mkdir(parents=True, exist_ok=True)
-                # Working memory (summarized periodically, then cleared)
-                with open(self._realtime_memory_path, "a", encoding="utf-8") as f:
-                    f.write(line)
-                # Raw archive (append-only, trimmed by flushing oldest)
-                with open(self._raw_memory_path, "a", encoding="utf-8") as f:
-                    f.write(line)
-            self._trim_memory_if_needed()
-        except Exception as e:
-            logger.warning("[realtime] Failed to save realtime memory: %s", e)
-
-    # --- Private loaders ---
-
-    LANGUAGE_NAMES: dict[str, str] = {
-        "en": "English",
-        "vi": "Vietnamese",
-        "zh-CN": "Chinese (Simplified)",
-        "zh-TW": "Chinese (Traditional)",
-        "ko": "Korean",
-        "ja": "Japanese",
-        "fr": "French",
-        "de": "German",
-        "es": "Spanish",
-        "pt": "Portuguese",
-        "id": "Indonesian",
-        "th": "Thai",
-    }
-
     def _load_system_prompt(self) -> str:
-        """Load provider-specific system prompt with {language} placeholder resolved.
-
-        Falls back to the shared system_prompt.md if no provider-specific file exists.
-        """
+        """Load provider-specific system prompt with {language} placeholder resolved."""
         prompt_path: Path = self.PROVIDER_PROMPT_PATHS.get(
             self._provider, self.DEFAULT_PROMPT_PATH
         )
@@ -306,111 +249,14 @@ class RealtimeContextManager:
         except FileNotFoundError:
             return ""
 
-    def _load_device_identity(self) -> str:
-        """Load SOUL.md, IDENTITY.md, and USER.md from the workspace."""
-        parts: list[str] = []
-        for filename in ("SOUL.md", "IDENTITY.md", "USER.md"):
-            path: Path = self._workspace / filename
-            try:
-                content: str = path.read_text(encoding="utf-8").strip()
-                if content:
-                    parts.append(content)
-            except FileNotFoundError:
-                continue
-            except Exception as e:
-                logger.warning("[realtime] Failed to read %s: %s", path, e)
-        return "\n\n".join(parts)
-
-    def _load_skills_catalog(self) -> str:
-        """Parse SKILL.md frontmatter from all skills, return a markdown table."""
-        skills_dir: Path = self._workspace / "skills"
-        if not skills_dir.is_dir():
-            return ""
-
-        rows: list[tuple[str, str]] = []
-        for skill_md in sorted(skills_dir.glob("*/SKILL.md")):
-            try:
-                text: str = skill_md.read_text(encoding="utf-8")
-                fm_match = self.FRONTMATTER_RE.match(text)
-                if not fm_match:
-                    continue
-                frontmatter: str = fm_match.group(1)
-                name_match = self.NAME_RE.search(frontmatter)
-                desc_match = self.DESC_RE.search(frontmatter)
-                name: str = (
-                    name_match.group(1).strip() if name_match else skill_md.parent.name
-                )
-                desc: str = desc_match.group(1).strip() if desc_match else ""
-                if name:
-                    rows.append((name, desc))
-            except Exception as e:
-                logger.warning("[realtime] Failed to parse %s: %s", skill_md, e)
-
-        if not rows:
-            return ""
-
-        lines: list[str] = ["| Skill | Description |", "|-------|-------------|"]
-        for name, desc in rows:
-            lines.append(f"| {name} | {desc} |")
-        return "\n".join(lines)
-
-    def _load_device_memory_entries(self) -> list[str]:
-        """Load device_summary.md + unsummarized memory files (modified after last summary)."""
-        entries: list[str] = []
-
-        # Load existing device summary
-        if self._device_summary_path.exists():
-            try:
-                summary: str = self._device_summary_path.read_text(
-                    encoding="utf-8"
-                ).strip()
-                if summary:
-                    entries.append(f"[Previous summary]\n{summary}")
-            except Exception as e:
-                logger.warning("[realtime] Failed to read device summary: %s", e)
-
-        # Load memory files modified after the device summary
-        memory_dir: Path = self._workspace / "memory"
-        if not memory_dir.is_dir():
-            return entries
-
-        summary_mtime: float = (
-            self._device_summary_path.stat().st_mtime
-            if self._device_summary_path.exists()
-            else 0.0
-        )
-
-        md_files: list[Path] = sorted(
-            memory_dir.glob("*.md"),
-            key=lambda f: f.stat().st_mtime,
-            reverse=True,
-        )
-        total_chars: int = sum(len(e) for e in entries)
-        for md_file in md_files:
-            if md_file.stat().st_mtime <= summary_mtime:
-                break  # Older than summary — already summarized
-            try:
-                content: str = md_file.read_text(encoding="utf-8").strip()
-                if not content:
-                    continue
-                entry: str = f"## {md_file.stem}\n\n{content}"
-                if total_chars + len(entry) > self._device_memory_max_chars:
-                    break
-                entries.append(entry)
-                total_chars += len(entry)
-            except Exception as e:
-                logger.warning("[realtime] Failed to read memory %s: %s", md_file, e)
-        return entries
-
-    def _load_realtime_memory_entries(self) -> list[str]:
+    def load_realtime_memory(self) -> list[str]:
         """Load existing summary + latest entries from realtime memory JSONL."""
         with self._realtime_memory_lock:
-            return self._load_realtime_memory_entries_unlocked()
+            return self._load_realtime_memory_unlocked()
 
-    def _load_realtime_memory_entries_unlocked(self) -> list[str]:
+    def _load_realtime_memory_unlocked(self) -> list[str]:
         entries: list[str] = []
 
-        # Load existing summary if present
         if self._summary_path.exists():
             try:
                 summary: str = self._summary_path.read_text(encoding="utf-8").strip()
@@ -419,7 +265,6 @@ class RealtimeContextManager:
             except Exception as e:
                 logger.warning("[realtime] Failed to read summary: %s", e)
 
-        # Load recent JSONL entries
         if not self._realtime_memory_path.exists():
             return entries
 
@@ -433,7 +278,6 @@ class RealtimeContextManager:
             logger.warning("[realtime] Failed to read realtime memory: %s", e)
             return entries
 
-        # Load entries from the end until char budget is reached
         total_chars: int = sum(len(e) for e in entries)
         selected_lines: list[str] = []
         for line in reversed(lines):
@@ -453,7 +297,6 @@ class RealtimeContextManager:
         try:
             needs_summarize: bool = False
 
-            # Check if working memory exceeds char limit
             if self._realtime_memory_path.exists() and self._summarizer:
                 with self._realtime_memory_lock:
                     raw: str = self._realtime_memory_path.read_text(
@@ -461,7 +304,6 @@ class RealtimeContextManager:
                     ).strip()
                     needs_summarize = len(raw) > self._realtime_memory_max_chars
 
-            # Raw archive: flush oldest half
             with self._realtime_memory_lock:
                 if self._raw_memory_path.exists():
                     raw_lines: list[str] = (
@@ -480,7 +322,6 @@ class RealtimeContextManager:
                             len(kept),
                         )
 
-            # Background summarization
             if needs_summarize:
                 logger.info(
                     "[realtime] Memory.jsonl exceeds char limit — summarizing in background"

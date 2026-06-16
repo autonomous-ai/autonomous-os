@@ -28,6 +28,7 @@ import requests
 from hal import app_state as hal_app_state
 from hal import config as hal_config
 from hal.drivers.realtime.models import TextOutput as RTTextOutput
+from hal.drivers.realtime.enums import AgentGateway
 from hal.drivers.realtime.orchestrator import DelegateSignal, RealtimeOrchestrator
 from hal.drivers.realtime.utils import pcm16_bytes_to_float32, resample_float32
 from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
@@ -153,7 +154,9 @@ class VoiceService:
         self._sensing_sender = SensingSender(tts_service=tts_service)
 
         # Realtime voice agent — parallel audio pipeline (Gemini Live / OpenAI Realtime).
-        self._realtime = RealtimeOrchestrator()
+        self._realtime = RealtimeOrchestrator(
+            gateway=AgentGateway(hal_config.AGENT_GATEWAY),
+        )
 
         # Hook into TTS on_speak_end to feed spoken text back to the realtime agent.
         # With turn_complete=False on text inputs, this won't trigger a standalone response.

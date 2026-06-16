@@ -334,6 +334,14 @@ SPEECH_EMOTION_AUDIO_DIR: str = os.environ.get(
     os.path.join(tempfile.gettempdir(), "hal-speech-emotion"),
 )
 
+# --- Agent gateway ---
+# Mirrors the Go server's agent/factory.go cascade: env > config.json > default.
+AGENT_GATEWAY: str = (
+    os.environ.get("HAL_AGENT_GATEWAY")
+    or _os_cfg_get("agent_runtime")
+    or "openclaw"
+).strip().lower()
+
 # --- Realtime voice agent ---
 REALTIME_ENABLED: bool = os.environ.get("HAL_REALTIME_ENABLED", "true").lower() in ("1", "true", "yes")
 REALTIME_PROVIDER: str = os.environ.get("HAL_REALTIME_PROVIDER", "gemini")  # none | gemini | openai
@@ -373,8 +381,9 @@ REALTIME_OPENAI_SAMPLE_RATE: int = 24000
 REALTIME_OPENAI_REASONING_EFFORT: str = os.environ.get("HAL_OPENAI_REASONING_EFFORT", "xhigh")
 
 # --- Realtime: Context manager ---
-REALTIME_WORKSPACE_DIR: str = os.environ.get("HAL_OPENCLAW_WORKSPACE_DIR", "/root/.openclaw/workspace")
-_rt_workspace: str = REALTIME_WORKSPACE_DIR.rstrip("/")
+OPENCLAW_WORKSPACE_DIR: str = os.environ.get("HAL_OPENCLAW_WORKSPACE_DIR", "/root/.openclaw/workspace")
+HERMES_WORKSPACE_DIR: str = os.environ.get("HAL_HERMES_WORKSPACE_DIR", "/root/.hermes")
+_rt_workspace: str = OPENCLAW_WORKSPACE_DIR.rstrip("/")
 REALTIME_MEMORY_PATH: str = os.environ.get("HAL_REALTIME_MEMORY_PATH", f"{_rt_workspace}/realtime/memory.jsonl")
 REALTIME_MAX_MEMORY_ENTRIES: int = int(os.environ.get("HAL_REALTIME_MAX_MEMORY_ENTRIES", "1000"))
 REALTIME_MEMORY_TRIM_KEEP: int = int(os.environ.get("HAL_REALTIME_MEMORY_TRIM_KEEP", "500"))
