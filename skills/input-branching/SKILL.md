@@ -1,105 +1,91 @@
 ---
 name: input-branching
-description: Understand voice input from the realtime voice agent pipeline. Messages may contain [voice-instruction]/[transcript] (delegated with context), [HANDLED]/[REPLY] (chit-chat already spoken), or plain text. Route and respond accordingly.
+description: Route voice input from the realtime voice agent pipeline based on message tags.
 ---
 
-# Input Branching — Realtime Voice Agent Prefixes
+# Input Branching
 
-Voice input passes through a realtime voice agent (Gemini Live / OpenAI Realtime) before reaching you. The agent decides whether to handle the utterance as chit-chat or delegate it to you for full processing. The message format tells you which path was taken.
+Voice input passes through a realtime voice agent before reaching you. The agent handles chit-chat directly and delegates everything else. Message tags tell you which path was taken.
 
-## Message formats
+## Message Formats
 
-### 1. Delegated with voice instruction
-
-```
-[voice-instruction] Turn on the desk light to warm white
-[transcript] turn on the light please warm
-```
-
-The realtime agent decided this needs the main system and provided a summarized instruction. Two tags are present:
-
-| Tag | Meaning |
-|---|---|
-| `[voice-instruction]` | The realtime agent's interpretation/summary of the user's request — cleaner and more actionable than raw STT. **Use this as the primary input for processing.** |
-| `[transcript]` | The raw STT transcript with speaker decoration. May be noisy, incomplete, or in the wrong language — STT is locked to one language while the realtime voice agent understands multiple languages. Use as supplementary context only. |
-
-**Process the `[voice-instruction]` as the user's request.** Run tools, call APIs, reply as usual. The instruction is what the realtime agent understood from the audio — it's typically more accurate than the raw transcript.
-
-### 2. Delegated without instruction (fallback)
+### Delegated with instruction
 
 ```
-play some jazz music
+[voice-instruction] Play jazz music on Spotify
+[transcript] play some jazz please on spotify
 ```
 
-No prefix. The realtime agent delegated but didn't provide an instruction (older flow or instruction was empty). **Process the message as-is** — same as a normal voice event.
+- `[voice-instruction]` — the realtime agent's clean summary of what the user wants. **Use this as the primary input.**
+- `[transcript]` — raw STT transcript. Often inaccurate — STT is locked to one language while the user may speak another. Treat as noisy supplementary context only, never as the source of truth.
 
-### 3. Handled by realtime agent (chit-chat)
+### Delegated without instruction (fallback)
+
+```
+turn on the lights
+```
+
+No tags. Process as a normal voice event.
+
+### Handled (history entry)
 
 ```
 [HANDLED] Hey, how's it going?
 [REPLY] I'm doing great! How about you?
 ```
 
-The realtime agent already answered via TTS. The user heard the reply.
+- `[HANDLED]` — the user's original message, already answered via TTS.
+- `[REPLY]` — what the realtime agent said. The user already heard it.
 
-| Tag | Meaning |
-|---|---|
-| `[HANDLED]` | The user's original message. Already spoken to by the realtime model. |
-| `[REPLY]` | The realtime model's response text. Already spoken via TTS. |
-
-**Do NOT reply with speech.** The user already heard the answer. Instead:
-
-- **Update context** — note the conversation happened (for memory, mood tracking, habit awareness).
-- **Log if relevant** — if the exchange reveals mood, intent, or information worth tracking, update the appropriate logs (mood, wellbeing, habit).
-- **Stay silent** — respond with `NO_REPLY`. Do not echo, paraphrase, or add to what was already said.
-- **Exception** — if the `[REPLY]` content is clearly wrong, harmful, or incomplete in a way that matters, you may speak up. This should be rare.
+This is a **history entry only**. The conversation already happened. You are being notified, not asked to respond.
 
 ## Rules
 
-1. **Never strip or echo the tags in your reply.** They are metadata for routing, not user-facing text.
-2. **`[voice-instruction]` is the preferred input.** When present, use it over `[transcript]` for processing the request.
-3. **`[HANDLED]` messages are informational.** Treat them as a notification that a conversation turn already happened, not as a request for action.
-4. **The realtime agent handles casual conversation only.** Anything requiring tools, device control, memory, scheduling, or skills is always delegated.
-5. **Both paths include speaker decoration.** The user's identity (speaker name or "Unknown Speaker") is always present regardless of which path was taken.
-6. **Do not duplicate TTS.** If `[HANDLED]` is present, respond `NO_REPLY` to stay silent.
+1. **`[voice-instruction]` is the primary input.** When present, use it over `[transcript]`.
+2. **`[HANDLED]` → always `NO_REPLY`.** No exceptions. Even if the reply seems wrong or incomplete — the user already heard it. Do not correct, echo, paraphrase, or add to it.
+3. **Log context from `[HANDLED]` silently.** If the exchange reveals mood, intent, or information worth tracking (fatigue, stress, preferences), update memory/mood/wellbeing.
+4. **Never echo tags.** `[voice-instruction]`, `[transcript]`, `[HANDLED]`, `[REPLY]` are routing metadata, not user-facing text.
+5. **No prefix = normal voice event.** Process the message as-is.
 
 ## Examples
 
-### Delegated with instruction — process the instruction
-
-Input:
+**Delegated — use instruction, ignore noisy transcript:**
 ```
-[voice-instruction] Play jazz music on Spotify
-[transcript] play some jazz please on spotify
+[voice-instruction] Set brightness to 50%
+[transcript] set the brightness to like half
 ```
+→ Process "Set brightness to 50%". Route to LED skill.
 
-Action: Use "Play jazz music on Spotify" as the request. Route to music skill.
-
-### Delegated without instruction — process as-is
-
-Input:
+**Delegated — transcript in wrong language (user spoke Vietnamese, STT is English):**
 ```
-turn on the lights
+[voice-instruction] Turn off the light and play some relaxing music
+[transcript] ton of delay and play some relate music
 ```
+→ Process the `[voice-instruction]`. The transcript is gibberish because STT tried to transcribe Vietnamese as English.
 
-Action: Route to LED/scene skill, turn on lights, reply with confirmation.
-
-### Handled — stay silent
-
-Input:
+**Delegated — transcript garbled by accent/noise:**
 ```
-[HANDLED] What's the weather like?
-[REPLY] It looks pretty nice outside today!
+[voice-instruction] What is the weather like tomorrow
+[transcript] what is the wetter like to morrow
 ```
+→ Process the `[voice-instruction]`. The transcript has misheard words.
 
-Action: Note the exchange. Respond `NO_REPLY`. The user already heard the answer.
+**Delegated without instruction:**
+```
+play some jazz music
+```
+→ Process as-is. Route to music skill.
 
-### Handled — mood signal worth logging
+**Handled — silent:**
+```
+[HANDLED] What time is it?
+[REPLY] It's 3:15 PM.
+```
+→ `NO_REPLY`.
 
-Input:
+**Handled — log mood:**
 ```
 [HANDLED] I'm so tired today
 [REPLY] That sounds rough. Maybe take a short break?
 ```
-
-Action: Log mood signal (fatigue) via mood/wellbeing. Respond `NO_REPLY`.
+→ Log fatigue via mood/wellbeing. `NO_REPLY`.
