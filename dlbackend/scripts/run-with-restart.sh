@@ -56,5 +56,6 @@ while $RUNNING; do
     fi
 
     echo "[watchdog] Process exited (code=$EXIT_CODE), restarting in ${COOLDOWN}s..."
-    sleep "$COOLDOWN"
+    sleep "$COOLDOWN" &
+    wait $! 2>/dev/null || true
 done

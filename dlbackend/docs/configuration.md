@@ -113,6 +113,9 @@ checkpoint override and threshold(s).
 | `PERSON_DETECTOR__MIN_AREA_RATIO` | `0.25` | Min person/frame area to use |
 | `AUDIO_EMBEDDER__ENABLED` | `false` | Enable speaker embedder |
 | `AUDIO_EMBEDDER__MODEL` | `resnet34` | `resnet34` \| `ecapa-tdnn1024` \| `campplus` |
+| `AUDIO_EMBEDDER__MODEL_PATH` | _(auto)_ | Local embedder weights override path |
+| `AUDIO_EMBEDDER__REMOTE_URL` | _(auto)_ | Alternate remote URL or HuggingFace repo id |
+| `AUDIO_EMBEDDER__BATCH_SIZE` | _(auto)_ | Inference batch size |
 
 ### Object detectors (all opt-in)
 
@@ -122,7 +125,7 @@ where `<NAME>` ∈ `YOLO_WORLD`, `YOLOE`, `OWLV2`, `GROUNDING_DINO`. All default
 
 ### Audio processor (SER / embedder front-end)
 
-`AUDIO_EMBEDDER__*` processor toggles: `TARGET_SAMPLE_RATE`, `ENABLE_RESAMPLE`
+`AUDIO_EMBEDDER__PROCESSOR__*` toggles (e.g. `AUDIO_EMBEDDER__PROCESSOR__TARGET_SAMPLE_RATE`): `TARGET_SAMPLE_RATE`, `ENABLE_RESAMPLE`
 (`true`), `ENABLE_HIGH_PASS` (`true`), `HIGH_PASS_CUTOFF_HZ`, `ENABLE_NOISE_REDUCE`
 (`true`), `NOISE_REDUCE_STATIONARY` (`false`), `ENABLE_VAD` (`true`),
 `VAD_MIN_DURATION_SEC`, `VAD_MIN_VOICE_RATIO`, `ENABLE_RMS_NORMALIZE` (`true`),

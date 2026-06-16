@@ -29,7 +29,7 @@ class PersonDetectorSetting(BaseModel):
 
 class ActionSetting(BaseModel):
     enabled: bool = True
-    model: HumanActionRecognizerEnum = HumanActionRecognizerEnum.X3D
+    model: HumanActionRecognizerEnum = HumanActionRecognizerEnum.UNIFORMERV2
     ckpt_path: str | None = None
     remote_url: str | None = None
     confidence_threshold: float | None = None
@@ -92,7 +92,7 @@ class AudioProcessorSetting(BaseModel):
 
 class AudioEmbedderSetting(BaseModel):
     enabled: bool = False
-    model: AudioEmbedderEnum = AudioEmbedderEnum.RESNET34
+    model: AudioEmbedderEnum = AudioEmbedderEnum.ECAPA_TDNN_1024
     model_path: str | None = None
     remote_url: str | None = None
     batch_size: int | None = None

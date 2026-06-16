@@ -176,7 +176,7 @@ stages are enabled. See [perceptions.md](perceptions.md#3-pose-estimation).
 ## Object detection — WebSocket + HTTP
 
 Detector is selected by the `{detector_name}` path segment, one of
-`yolo_world`, `yoloe`, `owlv2`, `grounding_dino` (only if enabled in config).
+`yoloworld`, `yoloe`, `owlv2`, `grounding-dino` (only if enabled in config).
 Mounted under `/api/dl` (not `/hal/api/dl`) for GO2 backward compatibility.
 
 ```
@@ -216,7 +216,7 @@ open-vocabulary prompt; omit to use the detector's default class list.
 `POST /api/dl/{detector_name}` is the legacy form: identical body, but the response
 is a **flat array** of detection items instead of the `{"detections": [...]}` wrapper.
 
-`GET /api/dl/object-detect/models` → `{"models": [{"name": "yolo_world", "ready": true}, ...]}`.
+`GET /api/dl/object-detect/models` → `{"models": [{"name": "yoloworld", "ready": true}, ...]}`.
 
 ---
 
@@ -230,8 +230,8 @@ GET /hal/api/dl/health
 {"status": "ok",
  "models": {"action": true, "emotion": true, "ser": true, "pose": true,
             "audio_embedder": false,
-            "object_detectors": {"yolo_world": false, "yoloe": false,
-                                 "owlv2": false, "grounding_dino": false}}}
+            "object_detectors": {"yoloworld": false, "yoloe": false,
+                                 "owlv2": false, "grounding-dino": false}}}
 ```
 
 ---
