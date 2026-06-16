@@ -11,7 +11,65 @@ environment / `.env`. Nested settings use a `__` delimiter
 | `DL_API_KEY` | _(required)_ | Shared API key; `dlserver` raises at startup if unset |
 | `CACHE_DIR` | `~/.cache/dlbackend` | Root cache dir |
 | `MODEL_CACHE_DIR` | `~/.cache/dlbackend/models` | Downloaded model weights |
-| `CDN_BASE` | `https://storage.googleapis.com/autonomous-models` | Where weights are fetched from |
+| `CDN_BASE` | `https://storage.googleapis.com/autonomous-models` | Public bucket weights are fetched from (see [Model downloading](#model-downloading)) |
+
+## Model downloading
+
+Model weights are **not** committed to the repo. Each perception downloads its
+weights on first load and caches them, so the binary stays small and a fresh
+checkout pulls only the models it actually uses.
+
+How it works (`src/core/utils/files.py`, `ensure_downloaded`):
+
+1. The predictor resolves a local path under `MODEL_CACHE_DIR`
+   (default `~/.cache/dlbackend/models/<filename>`).
+2. If the file already exists → use it, no network.
+3. If missing → download from the resolved `remote`:
+   - an `http(s)` URL → direct download (atomic: `.part` temp → `replace`);
+   - otherwise treated as a **HuggingFace repo id** → `huggingface_hub.hf_hub_download`.
+
+The default `remote` is `CDN_BASE` + the model's path. Downloads are lazy (only
+when a perception is first used) and cached, so subsequent runs don't re-fetch.
+
+### Public weights (Google Cloud Storage)
+
+Base URL: `https://storage.googleapis.com/autonomous-models/`
+
+| Model | Download URL |
+|-------|--------------|
+| X3D (action) | `…/onnx_models/x3d_m_16x5x1_int8.onnx` |
+| VideoMAE (action) | `…/onnx_models/videomae_fp32.onnx` |
+| UniformerV2 (action) | `…/onnx_models/uniformerv2-l-224-k400_fp32.onnx` |
+| POSTER V2 (FER) | `…/onnx_models/posterv2_7cls.onnx` |
+| EmoNet-8 (FER) | `…/onnx_models/emonet_8.onnx` |
+| EmoNet-5 (FER) | `…/onnx_models/emonet_5.onnx` |
+| emotion2vec (SER) | `…/onnx_models/emotion2vec.onnx` |
+| RTMPose-m (pose 2D) | `…/onnx_models/rtmpose-m.onnx` |
+| TCPFormer (pose 3D) | `…/onnx_models/tcpformer_h36m_243.onnx` |
+| WeSpeaker ResNet34 (embed) | `…/onnx_models/wespeaker_resnet34.onnx` |
+| WeSpeaker ECAPA-1024 (embed) | `…/onnx_models/wespeaker_ecapa_tdnn1024.onnx` |
+| WeSpeaker CAM++ (embed) | `…/onnx_models/wespeaker_campplus.onnx` |
+| YuNet (face) | `…/onnx_models/face_detection_yunet_2023mar.onnx` |
+| YOLO person | `…/pytorch_models/yolo12x.pt` |
+| YOLO-World (object) | `…/pytorch_models/yolov8x-worldv2.pt` |
+
+(`…` = the base URL above. The mapping lives in `CDN_PATHS` in
+`src/core/utils/files.py` — keep this table in sync with it.)
+
+Object detectors **OWLv2** and **Grounding DINO** are pulled from the HuggingFace
+Hub instead (`google/owlv2-large-patch14-ensemble`,
+`IDEA-Research/grounding-dino-tiny`), not from this bucket.
+
+### Notes for self-hosting / forks
+
+- The bucket objects must be **public-read** for the unauthenticated runtime
+  download to work; a private bucket returns `403`. You can fetch any URL above
+  directly with `curl`/`wget` to pre-seed the cache.
+- To host your own weights, set `CDN_BASE` to your bucket/CDN and mirror the same
+  `onnx_models/` + `pytorch_models/` layout.
+- To use a specific local file (air-gapped or custom-trained), set the per-model
+  `<NAME>__CKPT_PATH`, or override the source with `<NAME>__REMOTE_URL` (a URL or a
+  HuggingFace repo id).
 
 ## Perceptions
 

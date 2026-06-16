@@ -18,6 +18,7 @@ over WebSocket and HTTP behind an optional encrypting load balancer.
 | [perceptions.md](perceptions.md) | The 8 perception subsystems, models, enums, output types |
 | [crypto-and-loadbalancer.md](crypto-and-loadbalancer.md) | `lbserver` round-robin proxy + RSA/AES encryption + nginx |
 | [configuration.md](configuration.md) | All environment variables with defaults |
+| [configuration.md#model-downloading](configuration.md#model-downloading) | How model weights auto-download from the public bucket + per-model URLs |
 
 ## What it does
 
@@ -66,6 +67,13 @@ cd dlbackend
 export DL_API_KEY=dev-secret
 python -m dlserver --host 0.0.0.0 --port 8001
 ```
+
+On first use each perception auto-downloads its weights from the public bucket
+(`CDN_BASE`, default `https://storage.googleapis.com/autonomous-models`) into
+`~/.cache/dlbackend/models`, so the first call to a model is slower. Weights are
+not committed to the repo. See
+[configuration.md#model-downloading](configuration.md#model-downloading) for the
+per-model URLs and how to self-host or override them.
 
 Then hit the health check:
 
