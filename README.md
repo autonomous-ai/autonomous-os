@@ -16,7 +16,7 @@ build a third.
 | | Device | What it is | Declares |
 |---|--------|-----------|----------|
 | <img src="devices/lamp/images/lamp.webp" width="210"> | [**Autonomous Lamp**](devices/lamp) | 5-DOF expressive desk robot | the maximal set — audio, vision, motion, light, display, sensing |
-| <img src="devices/intern/images/intern.webp" width="210"> | [**Autonomous Intern**](devices/intern-v2) | always-on desk agent | audio, vision, sensing — **no** motion or display |
+| <img src="devices/intern-v2/images/intern.webp" width="210"> | [**Autonomous Intern**](devices/intern-v2) | always-on desk agent | audio, sensing, light — **no** camera, motion, or display |
 | <img src="devices/unitree-go2w/images/go2-w.webp" width="210"> | [**Unitree Go2-W**](devices/unitree-go2w) | a *different manufacturer's* mobile robot, running Autonomous | audio, vision (+ depth), motion (locomotion), sensing |
 
 Lamp and Intern are **Autonomous's own** devices; the **Unitree Go2-W is a different
@@ -101,7 +101,7 @@ os/
   hal/            HAL (Python) — the package; capability host + routes
     drivers/      Drivers — by subsystem (motion, audio, vision, light, display, sensing)
     board/        Board Support — per-board profiles + declaration-driven mounting
-devices/          reference devices: lamp/, intern/ (DEVICE · SOUL · SAFETY · README · hardware/)
+devices/          reference devices: lamp/, intern-v2/ (DEVICE · SOUL · SAFETY · README · hardware/)
 
 # Supporting
 docs/             documentation, incl. docs/architecture/
@@ -113,8 +113,7 @@ chat-hooks/       on-device chat bridges (Twitch, web chat)
 dlbackend/        off-device cloud inference service
 ```
 
-> `Drivers` and `Board Support` are now surfaced as `os/hal/drivers` and `os/hal/board`. The
-> on-device env vars remain `LELAMP_*` as legacy aliases until a field OTA cycle migrates them.
+> `Drivers` and `Board Support` are surfaced as `os/hal/drivers` and `os/hal/board`.
 
 ## Quick start
 
