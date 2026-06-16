@@ -215,15 +215,33 @@ $(RELEASE_NOTE):
 	@echo "==> Release note written:"
 	@cat $(RELEASE_NOTE)
 
-upload-source:
-	@[ -f input/orangepi.7z ] || { echo "ERROR: input/orangepi.7z not found"; exit 1; }
-	@command -v gcloud >/dev/null 2>&1 || { echo "ERROR: gcloud not installed"; exit 1; }
-	@echo "==> Mirroring input/orangepi.7z → gs://$(GCS_BUCKET)/os/imager/source/$(OPI_FILE_NAME)"
-	gcloud storage cp input/orangepi.7z gs://$(GCS_BUCKET)/os/imager/source/$(OPI_FILE_NAME)
-	@echo "==> Public URL (use as OPI_SOURCE_URL):"
-	@echo "    https://storage.googleapis.com/$(GCS_BUCKET)/os/imager/source/$(OPI_FILE_NAME)"
-
+# ── upload-source — mirror source/base images to GCS ─────────────────────────
+# No DEVICE_TYPE (default): upload the stock OrangePi vendor .7z
+#   make upload-source
+# With DEVICE_TYPE: upload the hardware team's per-device base image
+#   make upload-source DEVICE_TYPE=lamp
+#   make upload-source DEVICE_TYPE=intern-v2
 OPI_FILE_NAME := Orangepi4pro_1.0.6_debian_bookworm_server_linux5.15.147.7z
+GCS_BASE_PATH := os/imager/base
+
+# Per-device base image local paths + GCS destination filenames
+_BASE_LOCAL_lamp      := input/lamp/golden-opi-dev.img.xz
+_BASE_LOCAL_intern-v2 := input/intern-v2/golden-opi-dev-intern.img.xz
+_BASE_GCS_lamp        := golden-opi-dev-lamp.img.xz
+_BASE_GCS_intern-v2   := golden-opi-dev-intern-v2.img.xz
+
+# Resolve to stock .7z when DEVICE_TYPE is empty
+_UPLOAD_LOCAL := $(if $(DEVICE_TYPE),$(_BASE_LOCAL_$(DEVICE_TYPE)),input/orangepi.7z)
+_UPLOAD_GCS   := $(if $(DEVICE_TYPE),$(GCS_BASE_PATH)/$(_BASE_GCS_$(DEVICE_TYPE)),os/imager/source/$(OPI_FILE_NAME))
+
+upload-source:
+	@command -v gcloud >/dev/null 2>&1 || { echo "ERROR: gcloud not installed. brew install --cask gcloud-cli"; exit 1; }
+	@[ -n "$(_UPLOAD_LOCAL)" ] || { echo "ERROR: unknown DEVICE_TYPE=$(DEVICE_TYPE). Supported: lamp, intern-v2"; exit 1; }
+	@[ -f "$(_UPLOAD_LOCAL)" ] || { echo "ERROR: $(_UPLOAD_LOCAL) not found"; exit 1; }
+	@echo "==> Uploading $(_UPLOAD_LOCAL) → gs://$(GCS_BUCKET)/$(_UPLOAD_GCS)"
+	gcloud storage cp $(_UPLOAD_LOCAL) gs://$(GCS_BUCKET)/$(_UPLOAD_GCS)
+	@echo "==> Public URL:"
+	@echo "    https://storage.googleapis.com/$(GCS_BUCKET)/$(_UPLOAD_GCS)"
 
 # ── housekeeping ───────────────────────────────────────────────────────────
 # `make clean` wipes output/ entirely (built images, release notes, manifest,
