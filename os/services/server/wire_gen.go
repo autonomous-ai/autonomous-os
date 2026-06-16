@@ -17,13 +17,13 @@ import (
 	"go.autonomous.ai/os/internal/network"
 	"go.autonomous.ai/os/internal/statusled"
 	"go.autonomous.ai/os/lib/mqtt"
-	"go.autonomous.ai/os/server/config"
+	http6 "go.autonomous.ai/os/server/agent/delivery/http"
 	http7 "go.autonomous.ai/os/server/buddy/delivery/http"
+	"go.autonomous.ai/os/server/config"
 	http3 "go.autonomous.ai/os/server/device/delivery/http"
-	"go.autonomous.ai/os/server/device/delivery/mqtt"
+	mqtthandler "go.autonomous.ai/os/server/device/delivery/mqtt"
 	"go.autonomous.ai/os/server/health/delivery/http"
 	http2 "go.autonomous.ai/os/server/network/delivery/http"
-	http6 "go.autonomous.ai/os/server/agent/delivery/http"
 	http5 "go.autonomous.ai/os/server/sensing/delivery/http"
 )
 
@@ -35,6 +35,7 @@ func InitializeServer() (*Server, error) {
 	bus := monitor.ProvideBus()
 	statusledService := statusled.ProvideService(configConfig)
 	agentGateway := agent.ProvideGateway(configConfig, bus, statusledService)
+	personaMigration := agent.ProvidePersonaMigration(configConfig)
 	healthHandler := http.ProvideHealthHandler(configConfig, service, agentGateway)
 	client := beclient.ProvideClient(configConfig)
 	deviceService := device.ProvideService(configConfig, service, agentGateway, client)
@@ -55,6 +56,6 @@ func InitializeServer() (*Server, error) {
 		return nil, err
 	}
 	buddyHandler := http7.ProvideBuddyHandler(configConfig, buddyService)
-	server := ProvideServer(configConfig, healthHandler, networkHandler, deviceHandler, deviceMQTTHandler, agentHandler, sensingHandler, buddyHandler, deviceService, agentGateway, service, factory, ambientService, healthwatchService, statusledService)
+	server := ProvideServer(configConfig, healthHandler, networkHandler, deviceHandler, deviceMQTTHandler, agentHandler, sensingHandler, buddyHandler, deviceService, agentGateway, personaMigration, service, factory, ambientService, healthwatchService, statusledService)
 	return server, nil
 }
