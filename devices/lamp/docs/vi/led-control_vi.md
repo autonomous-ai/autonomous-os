@@ -144,3 +144,36 @@ Mỗi emotion preset có LED color riêng:
 | excited | Cam sáng |
 | shy | Hồng nhạt |
 | shock | Trắng flash |
+
+## Override preset theo từng thiết bị
+
+Các *giá trị* preset emotion / scene / aim trong `os/hal/presets.py` (màu, độ sáng, vị
+trí servo) và kích thước vòng LED là **mặc định nền tảng** — mọi thiết bị kế thừa. Một
+thiết bị chỉ ghi đè cái nó muốn khác bằng file thưa `devices/<type>/presets.json`. Lúc
+HAL khởi động, `board/presets_overlay.py` deep-merge file này lên bảng mặc định **tại
+chỗ**, trước khi bất kỳ route/driver nào đọc; thiết bị không có `presets.json` thì giữ
+nguyên bảng nền (Lamp là vậy).
+
+```json
+{
+  "led_count": 60,
+  "emotion": { "listening": { "color": [255, 120, 0] } },
+  "scene":   { "relax":     { "brightness": 0.3 } },
+  "aim":     { "desk":      { "base_pitch.pos": 8.0 } }
+}
+```
+
+Quy tắc:
+- Mọi section (`led_count`, `emotion`, `scene`, `aim`) đều tùy chọn.
+- Mỗi entry vá **theo từng field** vào entry nền tương ứng — chỉ field được ghi mới đổi
+  (vd chỉ ghi đè `listening.color`, vẫn giữ effect/speed của nó).
+- Ghi đè một preset **không tồn tại** trong bảng nền (gõ sai) → **báo lỗi to lúc boot**,
+  tương tự file hỏng hoặc `led_count` không phải số dương.
+- Chỉ HAL: preset là look-and-feel của LED/servo; lõi OS (Go) không đọc. Override chỉ có
+  tác dụng với route mà thiết bị thực sự mount — vd override `emotion.*` vô tác dụng trên
+  thiết bị không có capability `expression` (không có route `/emotion`); `scene`/`aim` cần
+  `light`/`motion` tương ứng.
+
+File mẫu để copy: [`devices/_base/presets.example.json`](../../../_base/presets.example.json)
+(template có chú thích đủ mọi section — đuôi `.example.json` nên HAL không bao giờ nạp;
+đổi tên thành `presets.json` trong thư mục thiết bị để kích hoạt).

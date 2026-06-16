@@ -1,0 +1,14 @@
+{
+  "_comment": "EXAMPLE per-device preset override. Copy to devices/<type>/presets.json (drop the .example) and keep ONLY the values your device wants different from the platform defaults in os/hal/presets.py. Every section is optional. Each entry patches the matching base entry field-by-field — only the fields you list change; the rest stay at the default. Naming a preset that does not exist (a typo) fails loud at HAL boot. Overrides only take effect for routes the device mounts: emotion needs the `expression` capability, scene needs `light`, aim needs `motion`. HAL-only — the Go OS core does not read this file. See devices/lamp/docs/led-control.md.",
+  "led_count": 60,
+  "emotion": {
+    "listening": { "color": [255, 120, 0] },
+    "happy": { "color": [255, 200, 40], "speed": 1.2 }
+  },
+  "scene": {
+    "relax": { "brightness": 0.3, "color": [255, 150, 70] }
+  },
+  "aim": {
+    "desk": { "base_pitch.pos": 8.0, "wrist_pitch.pos": 50.0 }
+  }
+}

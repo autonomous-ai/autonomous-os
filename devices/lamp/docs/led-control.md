@@ -135,3 +135,36 @@ Auto-pauses on interaction, resumes after 60s of silence.
 ## LED in Emotion
 
 See [emotion-led-mapping.md](emotion-led-mapping.md) for the full emotion → LED color + effect + servo mapping.
+
+## Per-device preset overrides
+
+The emotion / scene / aim preset *values* in `os/hal/presets.py` (colors, brightness,
+servo positions) and the LED ring size are the **platform default** — every device
+inherits them. A device overrides only the values it wants different by shipping a
+sparse `devices/<type>/presets.json`. At HAL startup `board/presets_overlay.py`
+deep-merges this file onto the base tables in place, before any route or driver
+reads them; a device with no `presets.json` keeps the base verbatim (Lamp does).
+
+```json
+{
+  "led_count": 60,
+  "emotion": { "listening": { "color": [255, 120, 0] } },
+  "scene":   { "relax":     { "brightness": 0.3 } },
+  "aim":     { "desk":      { "base_pitch.pos": 8.0 } }
+}
+```
+
+Rules:
+- Every section (`led_count`, `emotion`, `scene`, `aim`) is optional.
+- Each entry patches the matching base entry **field-by-field** — only the named
+  fields change (e.g. override just `listening.color`, keep its effect/speed).
+- An override naming a preset that does not exist in the base table (a typo) **fails
+  loud at boot**, as does a malformed file or a non-positive `led_count`.
+- HAL-only: presets are LED/servo look-and-feel; the OS core (Go) does not read them.
+  An override only takes effect for routes the device actually mounts — e.g. an
+  `emotion.*` override does nothing on a device without the `expression` capability
+  (no `/emotion` route), and `scene`/`aim` need `light`/`motion` respectively.
+
+Copy-paste reference: [`devices/_base/presets.example.json`](../../_base/presets.example.json)
+(an annotated template covering every section — it is `.example.json`, so HAL never
+loads it; rename to `presets.json` in your device folder to activate).

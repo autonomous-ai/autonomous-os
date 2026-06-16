@@ -213,7 +213,7 @@ async def lifespan(app: FastAPI):
         if not RGBService:
             return
         try:
-            svc = RGBService(led_count=64, safety_policy=_safety)
+            svc = RGBService(led_count=_led_count, safety_policy=_safety)
             svc.start()
             state.rgb_service = svc
             logger.info("RGBService started")
@@ -762,6 +762,14 @@ _profile = _device_profile()
 from hal.safety.policy import load_safety
 _safety = load_safety(os.path.join(_devices_dir(), _resolve_device_type()), _profile.safety_ref)
 state.safety_policy = _safety  # route-level gates (e.g. music quiet hours) read it here
+
+# Per-device preset overlay: deep-merge devices/<type>/presets.json onto the base
+# EMOTION/SCENE/AIM tables in place (a device declares only the look/behaviour
+# values it wants different) and resolve the LED ring size. Runs at import, before
+# lifespan builds RGBService and before any route reads a preset. No file → base
+# presets verbatim and the default LED count.
+from hal.board.presets_overlay import apply_device_presets
+_led_count = apply_device_presets(_resolve_device_type(), _devices_dir())
 logger.info(
     "Safety policy: device=%s max_brightness=%s light_quiet=%s audio_quiet=%s",
     _resolve_device_type(),
