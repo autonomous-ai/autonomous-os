@@ -204,8 +204,6 @@ class VoiceService:
             )
             return
         self._running = True
-        if hal_config.REALTIME_ENABLED:
-            self._realtime.start()
         self._thread = threading.Thread(target=self._loop, daemon=True, name="voice")
         self._thread.start()
         logger.info("VoiceService started (local VAD + %s)", self._stt.name)
@@ -478,6 +476,11 @@ class VoiceService:
     # ------------------------------------------------------------------
     def _loop(self):
         """Main loop: local VAD → STT on speech → disconnect on silence."""
+        if hal_config.REALTIME_ENABLED:
+            threading.Thread(
+                target=self._realtime.start, daemon=True, name="realtime-start"
+            ).start()
+
         time.sleep(0.5)  # Brief pause for audio subsystem to settle
 
         # Use arecord only when explicitly configured via HAL_AUDIO_INPUT_ALSA.
@@ -722,6 +725,7 @@ class VoiceService:
             longest_partial[0] = ""
             final_sent[0] = True
 
+        rt_audio_buffer: list = []
         try:
             if preconnected_session:
                 # Already connected — swap in the real transcript callback.
@@ -757,7 +761,6 @@ class VoiceService:
             if not connect_ok[0]:
                 return
 
-            rt_audio_buffer: list = []
             # Flush holdoff audio (frames captured before STT connect, both paths)
             all_pre = (speech_pre_buffer or []) + pre_buffer
             if all_pre:
@@ -770,7 +773,7 @@ class VoiceService:
                     stt_session.send_audio(frame)
                     audio_buffer.append(frame)
                     # Also send pre-buffer to realtime model (non-blocking queue put)
-                    if hal_config.REALTIME_ENABLED:
+                    if hal_config.REALTIME_ENABLED and self._realtime.available:
                         audio_f32 = pcm16_bytes_to_float32(frame)
                         audio_f32 = resample_float32(
                             audio_f32, STT_RATE, self._realtime.sample_rate
@@ -827,7 +830,7 @@ class VoiceService:
                 audio_buffer.append(resampled)
 
                 # Parallel: stream to realtime model (non-blocking queue put)
-                if hal_config.REALTIME_ENABLED:
+                if hal_config.REALTIME_ENABLED and self._realtime.available:
                     audio_f32 = pcm16_bytes_to_float32(resampled)
                     audio_f32 = resample_float32(
                         audio_f32, STT_RATE, self._realtime.sample_rate
@@ -890,7 +893,7 @@ class VoiceService:
             rt_delegated = False
             rt_handled = False
             rt_transcript = ""
-            if hal_config.REALTIME_ENABLED and rt_audio_buffer:
+            if hal_config.REALTIME_ENABLED and self._realtime.available and rt_audio_buffer:
                 logger.info(
                     "[realtime] Entering realtime flow — committing audio (stt=%r)",
                     combined[:100] if combined else "(empty)",

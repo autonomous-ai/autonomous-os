@@ -14,6 +14,7 @@ The caller (voice_service) drives the orchestrator:
 """
 
 import logging
+import threading
 from collections.abc import Generator
 from dataclasses import dataclass
 from typing import Any
@@ -100,6 +101,7 @@ class RealtimeOrchestrator:
     ) -> None:
         self._tools: list[dict[str, Any]] = [DELEGATE_TOOL] + (extra_tools or [])
         self._agent: VoiceAgentBase | None = None
+        self._started: threading.Event = threading.Event()
         summarizer: RealtimeSummarizer | None = None
         if config.REALTIME_SUMMARIZER_ENABLED:
             try:
@@ -120,7 +122,7 @@ class RealtimeOrchestrator:
 
     @property
     def available(self) -> bool:
-        return self._agent is not None and self._agent.available
+        return self._started.is_set() and self._agent is not None
 
     @property
     def sample_rate(self) -> int:
@@ -173,6 +175,7 @@ class RealtimeOrchestrator:
             logger.info("[realtime] Realtime orchestrator started (provider=%s)", provider)
         except Exception:
             logger.exception("[realtime] Failed to connect realtime agent — will retry on next audio")
+        self._started.set()
 
     def stop(self) -> None:
         """Disconnect the agent and summarize unsummarized memory."""
@@ -189,6 +192,7 @@ class RealtimeOrchestrator:
             except Exception:
                 logger.exception("Failed to disconnect realtime agent")
             self._agent = None
+        self._started.clear()
         logger.info("Realtime orchestrator stopped")
 
     def append_audio(self, frame: npt.NDArray[np.float32]) -> None:
