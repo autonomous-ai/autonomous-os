@@ -208,12 +208,25 @@ class RealtimeOrchestrator:
                     args: dict = (
                         _json.loads(output.arguments) if output.arguments else {}
                     )
-                    delegate_msg = args.get("message", "")
+                    delegate_msg = args.get("message", "").strip()
                 except (ValueError, TypeError):
                     pass
+
+                if not delegate_msg:
+                    logger.warning("[realtime] Model called delegate_to_main with empty message — ignoring")
+                    self._agent.send(
+                        [
+                            FunctionCallResultInput(
+                                call_id=output.call_id,
+                                output='{"error": "message must not be empty"}',
+                            )
+                        ]
+                    )
+                    continue
+
                 logger.info(
-                    "Model delegated to main flow (message=%r)",
-                    delegate_msg[:100] if delegate_msg else "",
+                    "[realtime] Model delegated to main flow (message=%r)",
+                    delegate_msg[:100],
                 )
                 self._agent.send(
                     [
