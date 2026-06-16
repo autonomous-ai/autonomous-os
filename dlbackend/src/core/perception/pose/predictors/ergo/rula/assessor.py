@@ -114,6 +114,11 @@ class RULAAssessor(ErgoAssessor):
             upper_arm_angle = 0.0
             upper_arm_score = 1
 
+        # When a required joint is below the confidence threshold we cannot measure
+        # its angle, so we fall back to the NEUTRAL posture (RULA score 1, the best /
+        # lowest-risk bucket). Rationale: a missing joint should not inflate the risk
+        # score — it is reported via `skipped_joints` instead so the caller knows the
+        # value is a default rather than a measurement.
         # --- Lower arm angle (3D elbow flexion) ---
         if shoulder_ok and elbow_ok and wrist_ok:
             forearm_vec: npt.NDArray[np.float32] = kps[wrist_idx] - kps[elbow_idx]
@@ -121,6 +126,7 @@ class RULAAssessor(ErgoAssessor):
             lower_arm_angle: float = angle_between_3d(forearm_vec, upper_arm_neg)
             lower_arm_score: int = score_lower_arm(lower_arm_angle)
         else:
+            # 80° ≈ mid-point of the neutral 60–100° elbow-flexion band → score 1.
             lower_arm_angle = 80.0
             lower_arm_score = 1
 

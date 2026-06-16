@@ -134,10 +134,20 @@ class PoseEstimator2D(PredictorBase[cv2t.MatLike, RawPose2DDetection]):
         OW: npt.NDArray[np.float32] = original_sizes[:, 0:1]  # (N, 1)
         OH: npt.NDArray[np.float32] = original_sizes[:, 1:2]  # (N, 1)
 
-        # Vectorized decode: (N, K)
+        # Vectorized SimCC decode → keypoints in ORIGINAL frame pixels: (N, K)
+        #
+        # SimCC represents each coordinate as a 1-D classification over a grid that is
+        # `simcc_split_ratio` times finer than the model input resolution (RTMPose uses
+        # split_ratio = 2.0). So:
+        #   - argmax(-1)          → bin index in the finer SimCC grid, range [0, IW * ratio)
+        #   - * 0.5  (= 1/ratio)  → convert bin index back to model-input pixels [0, IW)
+        #   - * OW / IW           → rescale from model input size to the original frame
+        # If the split ratio ever changes, the 0.5 must change to 1/ratio.
         loc_x: npt.NDArray[np.float32] = simcc_x.argmax(-1).astype(np.float32) * OW / IW * 0.5
         loc_y: npt.NDArray[np.float32] = simcc_y.argmax(-1).astype(np.float32) * OH / IH * 0.5
         all_keypoints: npt.NDArray[np.float32] = np.stack([loc_x, loc_y], axis=-1)  # (N, K, 2)
+        # Per-keypoint confidence = the weaker of the two axis peak responses (x vs y),
+        # so a keypoint is only confident when BOTH axes peak strongly.
         all_scores: npt.NDArray[np.float32] = np.minimum(simcc_x.max(-1), simcc_y.max(-1)).astype(
             np.float32
         )  # (N, K)

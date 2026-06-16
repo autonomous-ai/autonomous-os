@@ -123,7 +123,13 @@ class PoseEstimator3DLifting(PredictorBase[Pose3DInput, RawPose3DDetection | Non
             norm: npt.NDArray[np.float32] = np.concatenate(
                 [norm_kps, scores[..., None]], axis=-1
             ).astype(np.float32)  # (T, K, 3)
-            # Pad or truncate to n_frames
+            # Pad or truncate to the fixed temporal window the model expects.
+            # Short clips are padded by REPEATING the last frame (not zero-padding):
+            # the lifter is trained on continuous motion, so a held final pose is a
+            # benign "person stopped moving" signal, whereas zeros would inject an
+            # impossible jump to the origin and corrupt the temporal features.
+            # Long clips keep the MOST RECENT n_frames (tail) so the prediction
+            # tracks the current pose rather than stale history.
             T: int = norm.shape[0]
             if T < self._n_frames:
                 norm = np.concatenate(

@@ -17,9 +17,17 @@ def signed_flexion_angle(
 
     Positive = forward flexion, negative = extension.
     Computed fully in 3D using the cross product to determine sign.
+
+    Assumes the skeleton has been aligned via ``align_to_vertical`` so the
+    coordinate frame is x=right, y=down, z=depth and ``trunk_up`` ≈ [0, -1, 0].
+    Flexion happens in the sagittal (y-z) plane, i.e. as a rotation about the
+    X axis, so the SIGN of the X component of ``cross(trunk_up, v)`` tells
+    forward (+) from backward (−) lean. ``angle_between_3d`` only gives the
+    unsigned magnitude, hence this separate sign step.
     """
     angle: float = angle_between_3d(v, trunk_up)
     cross: npt.NDArray[np.float32] = np.cross(trunk_up, v)
+    # cross[0] = X component = rotation direction in the sagittal plane.
     if cross[0] > 0:
         return angle
     else:
