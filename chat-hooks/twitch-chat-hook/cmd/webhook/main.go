@@ -148,7 +148,7 @@ func (h *handler) dispatch(ctx context.Context, env twitch.Envelope) error {
 }
 
 // handleChatMessage logs the chat line and forwards it to Lamp's sensing
-// endpoint, mirroring LeLamp's voice_service.py — same URL, same body
+// endpoint, mirroring HAL's voice_service.py — same URL, same body
 // shape, with a "[source: twitch]" prefix so SOUL.md can route it.
 func handleChatMessage(ctx context.Context, ev twitch.ChatMessageEvent) error {
 	log.Printf("[twitch-chat] #%s <%s> %s",

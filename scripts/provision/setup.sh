@@ -764,7 +764,7 @@ server {
   add_header X-Content-Type-Options "nosniff" always;
   add_header Referrer-Policy "no-referrer" always;
   add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
-  # Strict CSP. LeLamp self-hosts Swagger UI assets under /static/ (served
+  # Strict CSP. HAL self-hosts Swagger UI assets under /static/ (served
   # via the Lamp /api/hardware/* proxy) so no CDN whitelist or
   # `'unsafe-inline'` is needed for the in-iframe docs to render. React app
   # 'unsafe-inline' stays only on style-src for its inline style props.
