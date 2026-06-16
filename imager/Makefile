@@ -226,7 +226,7 @@ GCS_BASE_PATH := os/imager/base
 
 # Per-device base image local paths + GCS destination filenames
 _BASE_LOCAL_lamp      := input/lamp/golden-opi-dev.img.xz
-_BASE_LOCAL_intern-v2 := input/intern-v2/golden-opi-dev-intern.img.xz
+_BASE_LOCAL_intern-v2 := input/intern-v2/golden-opi-dev.img.xz
 _BASE_GCS_lamp        := golden-opi-dev-lamp.img.xz
 _BASE_GCS_intern-v2   := golden-opi-dev-intern-v2.img.xz
 

@@ -48,7 +48,7 @@ case "${DEVICE_TYPE}" in
     DEVICE_BASE_IMG="${DEVICE_BASE_IMG:-/input/lamp/golden-opi-dev.img.xz}"
     ;;
   intern-v2)
-    DEVICE_BASE_IMG="${DEVICE_BASE_IMG:-/input/intern-v2/golden-opi-dev-intern.img.xz}"
+    DEVICE_BASE_IMG="${DEVICE_BASE_IMG:-/input/intern-v2/golden-opi-dev.img.xz}"
     ;;
   *)
     DEVICE_BASE_IMG=""
