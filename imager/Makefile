@@ -40,10 +40,10 @@ endif
 # target renames it to the device-typed IMG_FILE (3 device types = 3 images).
 # OPi build produces .img.xz (compressed); RPi build produces raw .img.
 BUILT_IMG_rpi := golden.img
-BUILT_IMG_opi := golden-opi.img.xz
+BUILT_IMG_opi := $(DEVICE_TYPE)/golden-opi.img.xz
 BUILT_IMG := $(BUILT_IMG_$(TARGET))
 IMG_FILE_rpi := golden-$(DEVICE_TYPE).img
-IMG_FILE_opi := golden-opi-$(DEVICE_TYPE).img.xz
+IMG_FILE_opi := $(DEVICE_TYPE)/golden-opi-$(DEVICE_TYPE).img.xz
 IMG_FILE := $(IMG_FILE_$(TARGET))
 
 # Preflight — check Docker resources + clean dangling layers before a long
@@ -139,8 +139,8 @@ TARGET_PREFIX_opi := golden-opi
 TARGET_PREFIX := $(TARGET_PREFIX_$(TARGET))
 VERSIONED_BASE := $(TARGET_PREFIX)-$(DEVICE_TYPE)-$(VERSION)
 VERSIONED_IMG  := $(VERSIONED_BASE)$(if $(filter %.xz,$(IMG_FILE)),.img.xz,.img)
-RELEASE_NOTE   := output/$(VERSIONED_BASE).release.txt
-MANIFEST_FILE  := output/manifest-$(TARGET).json
+RELEASE_NOTE   := output/$(DEVICE_TYPE)/$(VERSIONED_BASE).release.txt
+MANIFEST_FILE  := output/$(DEVICE_TYPE)/manifest-$(TARGET).json
 
 upload: $(RELEASE_NOTE)
 	@command -v gcloud >/dev/null 2>&1 || { echo "ERROR: gcloud not installed. brew install --cask gcloud-cli"; exit 1; }
@@ -215,15 +215,32 @@ $(RELEASE_NOTE):
 	@echo "==> Release note written:"
 	@cat $(RELEASE_NOTE)
 
-upload-source:
-	@[ -f input/orangepi.7z ] || { echo "ERROR: input/orangepi.7z not found"; exit 1; }
-	@command -v gcloud >/dev/null 2>&1 || { echo "ERROR: gcloud not installed"; exit 1; }
-	@echo "==> Mirroring input/orangepi.7z → gs://$(GCS_BUCKET)/os/imager/source/$(OPI_FILE_NAME)"
-	gcloud storage cp input/orangepi.7z gs://$(GCS_BUCKET)/os/imager/source/$(OPI_FILE_NAME)
-	@echo "==> Public URL (use as OPI_SOURCE_URL):"
-	@echo "    https://storage.googleapis.com/$(GCS_BUCKET)/os/imager/source/$(OPI_FILE_NAME)"
-
 OPI_FILE_NAME := Orangepi4pro_1.0.6_debian_bookworm_server_linux5.15.147.7z
+GCS_BASE_PATH := os/imager/base
+
+# Per-device base image local paths + GCS destination filenames.
+# Differentiated by directory (same filename golden-opi-dev.img.xz, different GCS key).
+_BASE_LOCAL_lamp      := input/lamp/golden-opi-dev.img.xz
+_BASE_LOCAL_intern-v2 := input/intern-v2/golden-opi-dev.img.xz
+_BASE_GCS_lamp        := golden-opi-dev-lamp.img.xz
+_BASE_GCS_intern-v2   := golden-opi-dev-intern-v2.img.xz
+
+# Resolve to stock .7z when DEVICE_TYPE is empty.
+_UPLOAD_LOCAL := $(if $(DEVICE_TYPE),$(_BASE_LOCAL_$(DEVICE_TYPE)),input/orangepi.7z)
+_UPLOAD_GCS   := $(if $(DEVICE_TYPE),$(GCS_BASE_PATH)/$(_BASE_GCS_$(DEVICE_TYPE)),os/imager/source/$(OPI_FILE_NAME))
+
+# Upload stock .7z OR a per-device pre-built base image to GCS.
+#   make upload-source                    — stock OrangePi vendor .7z
+#   make upload-source DEVICE_TYPE=lamp   — hardware team's lamp base image
+#   make upload-source DEVICE_TYPE=intern-v2
+upload-source:
+	@command -v gcloud >/dev/null 2>&1 || { echo "ERROR: gcloud not installed. brew install --cask gcloud-cli"; exit 1; }
+	@[ -n "$(_UPLOAD_LOCAL)" ] || { echo "ERROR: unknown DEVICE_TYPE=$(DEVICE_TYPE). Supported: lamp, intern-v2"; exit 1; }
+	@[ -f "$(_UPLOAD_LOCAL)" ] || { echo "ERROR: $(_UPLOAD_LOCAL) not found"; exit 1; }
+	@echo "==> Uploading $(_UPLOAD_LOCAL) → gs://$(GCS_BUCKET)/$(_UPLOAD_GCS)"
+	gcloud storage cp $(_UPLOAD_LOCAL) gs://$(GCS_BUCKET)/$(_UPLOAD_GCS)
+	@echo "==> Public URL:"
+	@echo "    https://storage.googleapis.com/$(GCS_BUCKET)/$(_UPLOAD_GCS)"
 
 # ── housekeeping ───────────────────────────────────────────────────────────
 # `make clean` wipes output/ entirely (built images, release notes, manifest,
