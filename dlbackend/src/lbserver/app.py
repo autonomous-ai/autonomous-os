@@ -97,7 +97,13 @@ async def proxy_http(request: Request, path: str) -> Response:
     body: bytes = await request.body()
     encrypted_key: bytes | None = None
 
-    # Decrypt if encrypted
+    # HTTP is stateless (no persistent session like WS), so each encrypted request
+    # carries its own RSA-wrapped AES key. We capture that `encrypted_key` here and
+    # reuse it below to encrypt the RESPONSE with the same AES session — that is the
+    # only thing tying request and response together. `encrypted_key is not None`
+    # therefore doubles as the "this exchange is encrypted" flag.
+    # When crypto is off (or the body is plaintext and require_encryption is false)
+    # `try_decrypt_http_body` returns the body unchanged and encrypted_key stays None.
     if request.method in ("POST", "PUT", "PATCH") and body:
         body, encrypted_key = try_decrypt_http_body(body)
 
