@@ -118,9 +118,10 @@ type Config struct {
 	DeviceID string `json:"device_id" yaml:"deviceID"`
 
 	// DeviceType is the device class/profile id — the folder name under devices/
-	// (e.g. "lamp", "intern", "unitree-go2w"). Selects which DEVICE.md/SOUL.md the
-	// runtime loads. Empty defaults to "lamp" (see DeviceTypeOrDefault); HAL reads
-	// the same key from config.json via _lamp_cfg_get("device_type").
+	// (e.g. "lamp", "intern-v2", "unitree-go2w"). Selects which DEVICE.md/SOUL.md the
+	// runtime loads. Empty resolves to "" — no "lamp" fallback (see DeviceTypeOrDefault;
+	// the Serve startup guard fail-louds). HAL reads the same key from config.json via
+	// _os_cfg_get("device_type").
 	DeviceType string `json:"device_type,omitempty" yaml:"deviceType"`
 
 	// MQTT (optional): empty broker URL means MQTT disabled
