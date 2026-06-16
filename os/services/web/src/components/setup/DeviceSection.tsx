@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { SecretUpdateField } from "@/components/SecretUpdateField";
 import { Cpu } from "lucide-react";
-import { C, Field, PasswordField, SectionCard, LABEL_STYLE, INPUT_STYLE, INPUT_READONLY_STYLE, INPUT_PAD_ONE_ICON, FIELD_GAP } from "./shared";
+import { C, Field, PasswordField, SectionCard, LABEL_STYLE, INPUT_STYLE, INPUT_READONLY_STYLE, INPUT_PAD_ONE_ICON, FIELD_GAP, ADMIN_PASSWORD_MIN } from "./shared";
 
 // Read-only MAC field masked behind ••••, with an eye toggle to reveal. The
 // caller only renders this when `value` is non-empty — on the pre-auth Setup
@@ -46,24 +46,24 @@ function MaskedReadField({ label, id, value }: {
 // PasswordStrength — lightweight meter under the admin password input. This
 // guards a device with a camera/mic, so we nudge toward something stronger than
 // the bare minimum: score on length + character-class variety, render a 3-segment
-// bar + label. Purely advisory (the only hard gate is the 8-char min); the goal
-// is to discourage "11111111"-class passwords without hard-blocking.
+// bar + label. Purely advisory (the only hard gate is the ADMIN_PASSWORD_MIN min);
+// the goal is to discourage "1111"-class passwords without hard-blocking.
 //
-// UX rule: RED is reserved for the one blocking state (< 8 chars). Once the
+// UX rule: RED is reserved for the one blocking state (below the min). Once the
 // password is long enough to submit, every other state is advisory, so the
 // hint switches to amber/green — never red — to match the fact that Next stays
 // enabled. And every message is ACTION-ORIENTED ("add a number…") rather than a
 // bare verdict ("Weak"), so the user always knows what to do next.
 function PasswordStrength({ value }: { value: string }) {
   if (!value) return null;
-  const tooShort = value.length < 8;
+  const tooShort = value.length < ADMIN_PASSWORD_MIN;
   if (tooShort) {
     return (
       <StrengthRow level={-1} color={C.red}
-        message={`At least 8 characters needed (${value.length}/8).`} />
+        message={`At least ${ADMIN_PASSWORD_MIN} characters needed (${value.length}/${ADMIN_PASSWORD_MIN}).`} />
     );
   }
-  // Score variety + length on the already-valid (≥8) password.
+  // Score variety + length on the already-valid (≥ min) password.
   const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^a-zA-Z0-9]/].filter((re) => re.test(value)).length;
   let score = 0;
   if (value.length >= 12) score += 1;
@@ -152,7 +152,7 @@ export function DeviceSection({
             id="admin_password"
             value={adminPassword ?? ""}
             onChange={setAdminPassword!}
-            placeholder="At least 8 characters"
+            placeholder={`At least ${ADMIN_PASSWORD_MIN} characters`}
           />
           <PasswordStrength value={adminPassword ?? ""} />
           <PasswordField
@@ -173,7 +173,7 @@ export function DeviceSection({
             configured={true}
             value={rotateAdminPassword ?? ""}
             onChange={setRotateAdminPassword!}
-            placeholder="New password (min 8 chars)"
+            placeholder={`New password (min ${ADMIN_PASSWORD_MIN} chars)`}
           />
           {/* Same strength meter as the setup flow — only meaningful once the
               operator starts typing a new password. Empty (the resting "keep
