@@ -382,7 +382,7 @@ func loadConfig(path string) Config {
 // MAC suffix is preferred over device_id because it's hardware-derived
 // (last 4 chars of Pi serial, or eth0 MAC on non-Pi boards) and available
 // before /device/setup runs, whereas DeviceID is empty pre-provisioning.
-// Matching the mDNS hostname (`lamp-xxxx.local`) also makes the BLE name
+// Matching the mDNS hostname (`<device_type>-xxxx.local`) also makes the BLE name
 // recognisable to users who already know their device by its .local name.
 //
 // The suffix is truncated to 4 chars so the resolved name fits in the
@@ -400,7 +400,7 @@ func resolveDeviceName(name, deviceURL string) string {
 	mac, reason := fetchMAC(deviceURL)
 	switch {
 	case mac != "":
-		log.Printf("[buddy] resolved mac=%q from Lamp", mac)
+		log.Printf("[buddy] resolved mac=%q from device", mac)
 	case reason == "empty":
 		log.Printf("[buddy] WARN: Device reachable at %s but mac is empty — hardware serial/MAC unreadable", deviceURL)
 		mac = "unk"
