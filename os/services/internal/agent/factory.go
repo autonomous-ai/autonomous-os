@@ -45,17 +45,8 @@ func ProvideGateway(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 		}
 	}
 
-	// Backend resolution: explicit config.agent_runtime wins; if unset, fall back
-	// to the device's declared gateway.default (DEVICE.md); else OpenClaw default.
-	runtime := cfg.AgentRuntime
-	source := "config.agent_runtime"
-	if runtime == "" {
-		if g := device.GatewayDefault(devType); g != "" {
-			runtime, source = g, "DEVICE.md gateway.default"
-		}
-	}
-
-	switch runtime {
+	eff, raw_runtime, source := resolveRuntime(cfg)
+	switch eff {
 	case "hermes":
 		logBackendBanner("HERMES", map[string]string{
 			"base_url":     hermes.BaseURL,
@@ -66,11 +57,11 @@ func ProvideGateway(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 		})
 		return hermes.ProvideService(cfg, bus, sled)
 	default:
-		effective := runtime
+		effective := raw_runtime
 		if effective == "" {
 			effective = "openclaw (default — agent_runtime + gateway.default both unset)"
 		} else if effective != "openclaw" {
-			effective = "openclaw (FALLBACK — unknown runtime=" + runtime + ")"
+			effective = "openclaw (FALLBACK — unknown runtime=" + raw_runtime + ")"
 		}
 		logBackendBanner("OPENCLAW", map[string]string{
 			"config_dir":      cfg.OpenclawConfigDir,
@@ -78,6 +69,24 @@ func ProvideGateway(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 			"source":          source,
 		})
 		return openclaw.ProvideService(cfg, bus, sled)
+	}
+}
+
+// resolveRuntime returns the effective agent runtime ("openclaw" or "hermes"), the raw value, and the source.
+// Prefers config.agent_runtime > DEVICE.md gateway.default > "openclaw" (default).
+func resolveRuntime(cfg *config.Config) (effective, raw, source string) {
+	raw = cfg.AgentRuntime
+	source = "config.agent_runtime"
+	if raw == "" {
+		if g := device.GatewayDefault(cfg.DeviceTypeOrDefault()); g != "" {
+			raw, source = g, "DEVICE.md gateway.default"
+		}
+	}
+	switch raw {
+	case "hermes":
+		return "hermes", raw, source
+	default:
+		return "openclaw", raw, source
 	}
 }
 

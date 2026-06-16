@@ -29,23 +29,24 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"go.autonomous.ai/os/domain"
+	"go.autonomous.ai/os/internal/agent"
 	"go.autonomous.ai/os/internal/ambient"
 	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/internal/healthwatch"
 	"go.autonomous.ai/os/internal/network"
 	"go.autonomous.ai/os/internal/statusled"
-	"go.autonomous.ai/os/lib/i18n"
 	"go.autonomous.ai/os/lib/hal"
+	"go.autonomous.ai/os/lib/i18n"
 	"go.autonomous.ai/os/lib/logger"
 	"go.autonomous.ai/os/lib/mqtt"
 	"go.autonomous.ai/os/lib/safego"
+	_agentHttpDeliver "go.autonomous.ai/os/server/agent/delivery/http"
+	_buddyHttpDeliver "go.autonomous.ai/os/server/buddy/delivery/http"
 	"go.autonomous.ai/os/server/config"
 	_deviceHttpDeliver "go.autonomous.ai/os/server/device/delivery/http"
 	_deviceMQTTDeliver "go.autonomous.ai/os/server/device/delivery/mqtt"
 	_healthHttpDeliver "go.autonomous.ai/os/server/health/delivery/http"
 	_networkHttpDeliver "go.autonomous.ai/os/server/network/delivery/http"
-	_agentHttpDeliver "go.autonomous.ai/os/server/agent/delivery/http"
-	_buddyHttpDeliver "go.autonomous.ai/os/server/buddy/delivery/http"
 	_sensingHttpDeliver "go.autonomous.ai/os/server/sensing/delivery/http"
 	"go.autonomous.ai/os/server/serializers"
 	"go.autonomous.ai/os/server/session"
@@ -61,16 +62,17 @@ type Server struct {
 	networkHandler    _networkHttpDeliver.NetworkHandler
 	deviceHandler     _deviceHttpDeliver.DeviceHandler
 	deviceMQTTHandler _deviceMQTTDeliver.DeviceMQTTHandler
-	agentHandler   _agentHttpDeliver.AgentHandler
+	agentHandler      _agentHttpDeliver.AgentHandler
 	sensingHandler    _sensingHttpDeliver.SensingHandler
 	buddyHandler      _buddyHttpDeliver.BuddyHandler
 
-	agentGateway   domain.AgentGateway
-	networkService *network.Service
-	deviceService  *device.Service
-	ambientService *ambient.Service
-	healthWatch    *healthwatch.Service
-	statusLED      *statusled.Service
+	agentGateway     domain.AgentGateway
+	personaMigration *agent.PersonaMigration
+	networkService   *network.Service
+	deviceService    *device.Service
+	ambientService   *ambient.Service
+	healthWatch      *healthwatch.Service
+	statusLED        *statusled.Service
 
 	// mqttFactory is the optional MQTT factory (nil when broker not configured).
 	mqttFactory *mqtt.Factory
@@ -119,6 +121,7 @@ func ProvideServer(
 	buddyH _buddyHttpDeliver.BuddyHandler,
 	ds *device.Service,
 	agentGW domain.AgentGateway,
+	pm *agent.PersonaMigration,
 	ns *network.Service,
 	mqttFactory *mqtt.Factory,
 	ambientSvc *ambient.Service,
@@ -131,10 +134,11 @@ func ProvideServer(
 		networkHandler:    nh,
 		deviceHandler:     dh,
 		deviceMQTTHandler: dqth,
-		agentHandler:   agentH,
+		agentHandler:      agentH,
 		sensingHandler:    sensingH,
 		buddyHandler:      buddyH,
 		agentGateway:      agentGW,
+		personaMigration:  pm,
 		networkService:    ns,
 		deviceService:     ds,
 		mqttFactory:       mqttFactory,
@@ -890,6 +894,9 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 		s.restartMQTT()
 
 		safego.Go("startup-sequence", func() {
+			// Migrate persona/memory if agent runtime switched; non-blocking.
+			s.personaMigration.Reconcile()
+
 			// Seed SOUL.md + IDENTITY.md into workspace (factory defaults, once only)
 			if err := s.agentGateway.EnsureOnboarding(); err != nil {
 				slog.Error("onboarding seed failed", "component", "server", "error", err)
@@ -1037,7 +1044,7 @@ func (s *Server) voicePreview(c *gin.Context) {
 // allowedLogs maps source names to their log file paths (supports glob patterns).
 // Entries prefixed with "journal:" use journalctl instead of file reading.
 var allowedLogs = map[string]string{
-	"hal":           "/var/log/hal/server.log",
+	"hal":              "/var/log/hal/server.log",
 	"os-server":        "/var/log/os-server.log",
 	"openclaw":         "/var/log/openclaw/agent.log",
 	"openclaw-service": "journal:openclaw.service",
