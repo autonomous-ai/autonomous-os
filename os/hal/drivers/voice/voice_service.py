@@ -96,6 +96,7 @@ class VoiceService:
         music_service=None,
         wake_words: Optional[list] = None,
         alsa_device: Optional[str] = None,
+        enable_people_perception: bool = True,
     ):
         self._stt = stt_provider
         self._input_device = input_device
@@ -143,10 +144,12 @@ class VoiceService:
         if not SILERO_VAD_ENABLED:
             logger.info("Silero VAD disabled via HAL_SILERO_ENABLED=false")
 
-        # Speaker decoration (wake-word + speaker recognizer + SER)
+        # Speaker decoration (wake-word + speaker recognizer + SER). SER (speech
+        # emotion) is people perception — gated on the `presence` capability.
         self._decorator = SpeakerDecorator(
             wake_words=list(wake_words) if wake_words else list(DEFAULT_WAKE_WORDS),
             nudge_cooldown_s=ENROLL_NUDGE_COOLDOWN_S,
+            enable_people_perception=enable_people_perception,
         )
 
         # OS server event sender (with echo similarity filter)

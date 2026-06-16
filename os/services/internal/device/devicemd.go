@@ -44,6 +44,72 @@ func Capabilities(deviceType string) map[string]bool {
 	return caps
 }
 
+// Capability names — the frozen capability vocabulary (capabilities.v1) from
+// contract/capabilities.md. This is the platform-wide feature taxonomy every
+// DEVICE.md declares against and every OS-core gate asks about; it is NOT a
+// device-specific value. Defined once here (the package that parses the
+// capabilities block) so the strings have a single source of truth: a typo is a
+// compile error, not a silent fail-open. Keep in sync with contract/
+// capabilities.md and the skills.Capability / skills.HookCapability maps.
+const (
+	CapAudio    = "audio"
+	CapVision   = "vision"
+	CapSensing  = "sensing"
+	CapPresence = "presence"
+	CapMotion   = "motion"
+	CapLight    = "light"
+	CapDisplay  = "display"
+	// CapExpression — the body can show emotion (the /emotion route). An output
+	// capability declared when the device has a screen, LED, or servo to express
+	// through; the route degrades to whatever output is present. Distinct from the
+	// perception capabilities (vision/sensing/presence). See contract/capabilities.md.
+	CapExpression   = "expression"
+	CapMedia        = "media"
+	CapConnectivity = "connectivity"
+	CapCompanion    = "companion"
+	CapSystem       = "system"
+)
+
+// RouteCapability maps a HAL hardware-route path to the capability it requires,
+// or "" when the path has no hardware dependency (os-server routes like /speak,
+// /broadcast, /wellbeing, or always-present audio paths). It lets the os-server
+// drop an agent's [HW:/path:...] marker for hardware the body doesn't have —
+// the OS, not the swappable brain, is the deterministic gate over the body. Keep
+// the route→capability mapping aligned with the DEVICE.md route declarations and
+// skills.Capability. Conservative: unmapped paths fail open (the POST proceeds,
+// HAL handles it), so only the clearly expressive/motor routes are gated here.
+func RouteCapability(path string) string {
+	switch {
+	case strings.HasPrefix(path, "/emotion"):
+		return CapExpression
+	case strings.HasPrefix(path, "/scene"), strings.HasPrefix(path, "/led"):
+		return CapLight
+	case strings.HasPrefix(path, "/servo"):
+		return CapMotion
+	case strings.HasPrefix(path, "/display"):
+		return CapDisplay
+	case strings.HasPrefix(path, "/music"):
+		return CapMedia
+	default:
+		return ""
+	}
+}
+
+// Has reports whether deviceType declares the given capability in its DEVICE.md.
+// Fail-open: a device whose capabilities block is absent/unreadable → true,
+// preserving legacy single-device behavior (the maximal reference device, Lamp,
+// declares every capability anyway). Use it to gate OS-core calls to OPTIONAL
+// hardware (servo/camera/display) so a device that lacks the capability is never
+// driven against hardware it doesn't have — e.g. intern-v2 (audio+light only)
+// must not be told to move a servo or polled for a display it has no concept of.
+func Has(deviceType, capability string) bool {
+	caps := Capabilities(deviceType)
+	if len(caps) == 0 {
+		return true
+	}
+	return caps[capability]
+}
+
 // SoulRef returns the `soul_ref` declared in devices/<deviceType>/DEVICE.md, or
 // "" if absent/unreadable. The value is either a path (read relative to the
 // device dir) or an http(s) URL (downloaded) — see openclaw.deviceSoulCore.

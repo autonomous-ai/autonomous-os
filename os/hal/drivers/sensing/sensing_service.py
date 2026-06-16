@@ -81,6 +81,7 @@ class SensingService:
         animation_service: AnimationService | None = None,
         on_restore_aim: Callable[[], None] | None = None,
         is_sleeping: Callable[[], bool] | None = None,
+        enable_people_perception: bool = True,
     ):
         self._camera: VideoCaptureDeviceBase | None = camera_capture
         self._input_device: int | str | None = input_device
@@ -101,11 +102,27 @@ class SensingService:
             poll_interval_ts=self._poll_interval,
             send_event=self._send_event,
             perception_config=PerceptionConfig(
-                enable_face=True,
-                enable_motion=config.MOTION_ENABLED,
-                enable_motion_per_face=config.MOTION_PER_FACE_ENABLED,
-                enable_emotion=config.EMOTION_ENABLED,
-                enable_pose=config.POSE_ENABLED,
+                # People perception (face identity + facial emotion) is the
+                # `presence` capability — ML over the camera via dlbackend. Gated
+                # on enable_people_perception so a device that doesn't declare
+                # `presence` (e.g. a camera that only streams / does motion) never
+                # runs face/emotion recognition or calls dlbackend for them. The
+                # `presence.enter/leave` light state machine still works off motion.
+                enable_face=enable_people_perception,
+                # `motion` here is human ACTIVITY recognition (Kinetics action
+                # labels — drinking/eating/sedentary — via dlbackend), i.e. what
+                # the person is doing: people perception, gated on presence too.
+                # (presence.enter/leave is emitted by face recognition, not this,
+                # so gating motion off does not break person detection.)
+                enable_motion=enable_people_perception and config.MOTION_ENABLED,
+                enable_motion_per_face=enable_people_perception and config.MOTION_PER_FACE_ENABLED,
+                enable_emotion=enable_people_perception and config.EMOTION_ENABLED,
+                # Pose/ergonomics reads the USER's body posture — people perception
+                # too (the physical axis of `presence`, via the camera). Gated on
+                # presence like face/emotion. (Fire-hazard below is NOT people: it
+                # detects flame/smoke in the ENVIRONMENT — a vision/safety concern,
+                # self-limited by camera availability, so it stays on its own flag.)
+                enable_pose=enable_people_perception and config.POSE_ENABLED,
                 enable_light=True,
                 enable_sound=True,
                 enable_fire_hazard=config.FIRE_HAZARD_ENABLED,

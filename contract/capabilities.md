@@ -13,16 +13,44 @@ LLM). **Skills and agents address capabilities, never routes or hardware models.
 | Group | Capabilities | HAL routes (today) | Privacy | Safety |
 |-------|--------------|--------------------|---------|--------|
 | `audio` | `audio.speak`, `audio.listen` | audio, speaker, voice | microphone | loud-output |
-| `vision` | `vision.snapshot`, `vision.stream` | camera | camera | — |
+| `vision` | `vision.snapshot`, `vision.stream` | camera, depth | camera | — |
 | `sensing` | `sensing.presence`, `sensing.motion`, `sensing.sound`, `sensing.light` | sensing | ambient | — |
-| `presence` | `presence.face`, `presence.emotion` | emotion, scene | biometric | — |
-| `motion` | `motion.move`, `motion.track`, `motion.stop` | servo | — | motion |
-| `light` | `light.paint`, `light.effect` | led | — | bright-output |
+| `presence` | `presence.face`, `presence.emotion` | — (perception loop → sensing events; see below) | biometric | — |
+| `motion` | `motion.move`, `motion.track`, `motion.stop` | servo, locomotion | — | motion |
+| `light` | `light.paint`, `light.effect` | led, scene | — | bright-output |
 | `display` | `display.render` | display | — | — |
+| `expression` | `expression.emote` | emotion | — | — |
 | `media` | `media.play` | music | — | loud-output |
 | `connectivity` | `connectivity.bluetooth` | bluetooth | — | — |
 | `companion` | `companion.control` | buddy (os-server) | computer | — |
 | `system` | `system.health`, `system.ota`, `system.network`, `system.setup` | system | — | — |
+
+## Perception vs expression — the two-way split
+
+The OS is bidirectional, and every capability sits on one side of it. Classify it by
+asking: does it take the world **IN**, or does it drive the body **OUT**?
+
+- **Perception (IN).** `vision`, `sensing`, `presence` take the world *in*. `presence`
+  (face identity, user emotion) is **routeless on purpose**: it runs a background loop —
+  camera → dlbackend ML → `sensing` events POSTed up to the os-server — it is not a route
+  the agent calls *down*. Declaring `presence` is what tells HAL to run that people-
+  perception loop and which dlbackend models to call. (Raw ambient sensors are `sensing`;
+  raw frames are `vision`. `presence` is the ML people-layer over them.)
+- **Expression / output (OUT).** Driven *down* from agent → os-server → HAL → body:
+  - **`expression`** owns the `emotion` route — the body showing *its own* feeling. It is
+    its own capability, not "lighting": a device declares `expression` when it has a way to
+    emote (a screen face, an LED ring, or servo body-language), and the route **degrades**
+    to whatever output is present.
+  - **`light`** owns `led` (direct control) **and `scene`** — `scene` is an ambient *mode*
+    (lighting + mic/speaker mute + camera/servo policy), not an emotion; it lives with
+    `light` because the HAL route **requires an LED** (returns 503 without one) and degrades
+    the rest. `display` and `motion` own their own routes.
+
+> Historical note: `emotion` and `scene` were originally both mis-filed under `presence`,
+> conflating expression (out) with perception (in). Corrected: `emotion` → its own
+> `expression` capability; `scene` → `light` (it is a lighting mode, not an emotion);
+> `presence` keeps its true meaning (people perception). Capability *names* already
+> published are unchanged; `expression` is a new name added to the vocabulary.
 
 ## Rules
 

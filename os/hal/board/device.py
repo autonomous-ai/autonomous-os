@@ -201,6 +201,22 @@ def parse_device(device_type: str, text: str) -> DeviceProfile:
             f"DEVICE.md id '{dev_id}' does not match its folder '{device_type}' — "
             f"id must equal the device folder name"
         )
+    capabilities = parse_capabilities(front_matter)
+    # `presence` (people perception: who is here + their emotional state) is a
+    # routeless capability — it runs ML over a sensor via dlbackend. It reads the
+    # user's emotion from EITHER the camera (facial emotion, needs `vision`) OR the
+    # microphone (speech emotion / SER, needs `audio`), so it needs at least one
+    # people sensor to function. This is what `required: true` MEANS for a
+    # perception capability: its prerequisite must be present, mirroring how a
+    # required route's driver must be available (else FAIL LOUD). Declared
+    # non-required → people perception simply degrades off when no sensor exists.
+    presence = capabilities.get("presence")
+    if presence and presence.required and "vision" not in capabilities and "audio" not in capabilities:
+        raise ValueError(
+            f"DEVICE.md for '{device_type}' declares 'presence: required: true' but no "
+            f"people sensor — perceiving a user's identity/emotion needs 'vision' (face) "
+            f"or 'audio' (voice). Add one, or drop presence to required: false."
+        )
     return DeviceProfile(
         device_type=device_type,
         id=dev_id,
@@ -210,7 +226,7 @@ def parse_device(device_type: str, text: str) -> DeviceProfile:
         boards=parse_boards(front_matter),
         safety_ref=_parse_scalar(front_matter, "safety_ref"),
         memory_backend=_parse_memory_backend(front_matter),
-        capabilities=parse_capabilities(front_matter),
+        capabilities=capabilities,
     )
 
 

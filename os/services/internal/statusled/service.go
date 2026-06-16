@@ -9,7 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/lib/hal"
+	"go.autonomous.ai/os/server/config"
 )
 
 // State represents a named LED status.
@@ -20,33 +22,33 @@ const (
 	StateError        State = "error"        // System error
 	StateBooting      State = "booting"      // Starting up
 	StateConnectivity State = "connectivity" // No internet connection
-	StateHALDown   State = "hal_down"  // HAL hardware server unreachable
+	StateHALDown      State = "hal_down"     // HAL hardware server unreachable
 	StateAgentDown    State = "agent_down"   // OpenClaw agent disconnected
 	StateHardware     State = "hardware"     // Hardware component failure (servo/led/audio/voice)
 )
 
 // stateConfig defines the LED effect for each state.
 type stateConfig struct {
-	Effect string
+	Effect  string
 	R, G, B int
-	Speed  float64
+	Speed   float64
 }
 
 var configs = map[State]stateConfig{
-	StateOTA:          {Effect: "breathing", R: 0, G: 255, B: 0, Speed: 3.0},     // green — firmware updating
-	StateError:        {Effect: "breathing", R: 255, G: 0, B: 0, Speed: 3.0},    // red — system error
-	StateBooting:      {Effect: "breathing", R: 0, G: 80, B: 255, Speed: 3.0},   // blue — starting up
-	StateConnectivity: {Effect: "breathing", R: 255, G: 80, B: 0, Speed: 3.0},   // orange — no internet
-	StateHALDown:   {Effect: "breathing", R: 180, G: 0, B: 255, Speed: 3.0},  // purple — HAL down
-	StateAgentDown:    {Effect: "breathing", R: 0, G: 200, B: 200, Speed: 3.0},  // cyan — OpenClaw disconnected
-	StateHardware:     {Effect: "breathing", R: 255, G: 255, B: 0, Speed: 3.0},  // yellow — hardware component failure
+	StateOTA:          {Effect: "breathing", R: 0, G: 255, B: 0, Speed: 3.0},   // green — firmware updating
+	StateError:        {Effect: "breathing", R: 255, G: 0, B: 0, Speed: 3.0},   // red — system error
+	StateBooting:      {Effect: "breathing", R: 0, G: 80, B: 255, Speed: 3.0},  // blue — starting up
+	StateConnectivity: {Effect: "breathing", R: 255, G: 80, B: 0, Speed: 3.0},  // orange — no internet
+	StateHALDown:      {Effect: "breathing", R: 180, G: 0, B: 255, Speed: 3.0}, // purple — HAL down
+	StateAgentDown:    {Effect: "breathing", R: 0, G: 200, B: 200, Speed: 3.0}, // cyan — OpenClaw disconnected
+	StateHardware:     {Effect: "breathing", R: 255, G: 255, B: 0, Speed: 3.0}, // yellow — hardware component failure
 }
 
 // priority determines which state wins when multiple are active.
 var priority = map[State]int{
 	StateHardware:     1,
 	StateAgentDown:    2,
-	StateHALDown:   3,
+	StateHALDown:      3,
 	StateBooting:      4,
 	StateOTA:          5,
 	StateError:        6,
@@ -55,19 +57,26 @@ var priority = map[State]int{
 
 // Service manages status LED states.
 type Service struct {
-	mu     sync.Mutex
-	active map[State]bool
+	mu       sync.Mutex
+	active   map[State]bool
+	hasLight bool // device declares the light capability — else status LED is a no-op
 }
 
-// ProvideService creates a StatusLED service.
-func ProvideService() *Service {
+// ProvideService creates a StatusLED service. A device with no LED (no `light`
+// capability) gets a no-op service: status states are never painted, since there
+// is no strip to paint and the /led route isn't mounted.
+func ProvideService(cfg *config.Config) *Service {
 	return &Service{
-		active: make(map[State]bool),
+		active:   make(map[State]bool),
+		hasLight: device.Has(cfg.DeviceTypeOrDefault(), device.CapLight),
 	}
 }
 
 // Set activates a status LED state.
 func (s *Service) Set(state State) {
+	if !s.hasLight {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -78,6 +87,9 @@ func (s *Service) Set(state State) {
 
 // Clear deactivates a status LED state. No-op if state wasn't active.
 func (s *Service) Clear(state State) {
+	if !s.hasLight {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -121,6 +133,9 @@ func (s *Service) applyHighest() {
 // No-ops if a status state is already active (avoids interrupting error/processing indicators).
 // After 1s the flash stops and ambient resumes.
 func (s *Service) FlashReady() {
+	if !s.hasLight {
+		return
+	}
 	s.mu.Lock()
 	if len(s.active) > 0 {
 		s.mu.Unlock()

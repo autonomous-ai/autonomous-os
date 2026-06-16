@@ -379,6 +379,10 @@ async def lifespan(app: FastAPI):
                     music_service=state.music_service,
                     wake_words=wake_words,
                     alsa_device=AUDIO_INPUT_ALSA,
+                    # `presence` gates people perception: speech emotion (reading
+                    # the user's emotion from voice) only runs if the device
+                    # declares it — mirrors face emotion in the sensing loop.
+                    enable_people_perception=("presence" in _profile.capabilities),
                 )
                 state.voice_service.start()
                 logger.info("VoiceService auto-started (%s, wake_words=%s)", stt_provider.name, wake_words)
@@ -458,6 +462,11 @@ async def lifespan(app: FastAPI):
                 else:
                     logger.debug("Presence aim restore: scene=%s has no aim -- skipping", state._active_scene)
 
+            # `presence` capability gates the people-perception loop: face
+            # identity + facial emotion (ML over the camera via dlbackend). A
+            # device with a camera but no `presence` (it only streams / does
+            # motion) must not run those models. Declaration-driven, not env.
+            _has_presence = "presence" in _profile.capabilities
             state.sensing_service = SensingService(
                 camera_capture=state.camera_capture,
                 input_device=AUDIO_SENSING_DEVICE if AUDIO_SENSING_DEVICE is not None else state.audio_input_device,
@@ -467,9 +476,10 @@ async def lifespan(app: FastAPI):
                 animation_service=state.animation_service,
                 on_restore_aim=_presence_restore_aim,
                 is_sleeping=lambda: state._sleeping,
+                enable_people_perception=_has_presence,
             )
             state.sensing_service.start()
-            logger.info("SensingService started")
+            logger.info("SensingService started (people_perception=%s via presence capability)", _has_presence)
         except Exception as e:
             logger.warning(f"SensingService failed to start: {e}")
             state.sensing_service = None

@@ -13,10 +13,12 @@ import (
 	"time"
 
 	"go.autonomous.ai/os/domain"
+	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/internal/monitor"
 	"go.autonomous.ai/os/lib/flow"
 	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/lib/i18n"
+	"go.autonomous.ai/os/server/config"
 )
 
 // resumeDelay is how long after the last interaction before ambient resumes.
@@ -25,6 +27,7 @@ const resumeDelay = 60 * time.Second
 // Service orchestrates ambient idle behaviors.
 type Service struct {
 	bus *monitor.Bus
+	cfg *config.Config
 
 	mu     sync.Mutex
 	paused bool
@@ -40,9 +43,10 @@ type Service struct {
 }
 
 // ProvideService constructs an AmbientLifeService.
-func ProvideService(bus *monitor.Bus) *Service {
+func ProvideService(bus *monitor.Bus, cfg *config.Config) *Service {
 	return &Service{
 		bus:    bus,
+		cfg:    cfg,
 		paused: true, // start paused until explicitly started
 	}
 }
@@ -62,13 +66,27 @@ func (s *Service) Start(ctx context.Context) {
 	time.Sleep(5 * time.Second)
 	s.resume()
 
-	// Run behavior loops concurrently
+	// Run behavior loops concurrently — but only the ones this device's body
+	// can actually perform. Each loop drives one peripheral, so gate it by the
+	// matching capability: breathing→light, micro-movement→motion (servo),
+	// mumble→audio. A device that lacks a peripheral (e.g. intern-v2 has no
+	// servo) must not run its loop, else it spams HAL with calls it can't serve.
+	// Fail-open (nil caps → all loops run, matching legacy Lamp behavior).
+	devType := s.cfg.DeviceTypeOrDefault()
 	var wg sync.WaitGroup
-
-	wg.Add(3)
-	go func() { defer wg.Done(); s.breathingLoop(ctx) }()
-	go func() { defer wg.Done(); s.microMovementLoop(ctx) }()
-	go func() { defer wg.Done(); s.mumbleLoop(ctx) }()
+	start := func(loop func(context.Context)) {
+		wg.Add(1)
+		go func() { defer wg.Done(); loop(ctx) }()
+	}
+	if device.Has(devType, device.CapLight) {
+		start(s.breathingLoop)
+	}
+	if device.Has(devType, device.CapMotion) {
+		start(s.microMovementLoop)
+	}
+	if device.Has(devType, device.CapAudio) {
+		start(s.mumbleLoop)
+	}
 
 	<-ctx.Done()
 	wg.Wait()

@@ -19,6 +19,7 @@ import (
 	"go.autonomous.ai/os/bootstrap/config"
 	"go.autonomous.ai/os/bootstrap/state"
 	"go.autonomous.ai/os/domain"
+	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/lib/core/system"
 	"go.autonomous.ai/os/lib/hal"
 )
@@ -225,6 +226,16 @@ func (b *Bootstrap) checkOnce(ctx context.Context) error {
 	return nil
 }
 
+// progressLED paints an OTA-progress effect, but only on a body with an LED.
+// hal.SetEffect is already best-effort (silent on failure), but a device with no
+// `light` capability has no /led route at all — skip the POST. Fail-open when the
+// device type is unresolved (device.Has returns true), matching legacy behavior.
+func (b *Bootstrap) progressLED(effect string, r, g, blue int, speed float64) {
+	if device.Has(resolveDeviceType(), device.CapLight) {
+		hal.SetEffect(effect, r, g, blue, speed)
+	}
+}
+
 // resolveDeviceType returns this device's class for picking devices.<type> in
 // OTA metadata: DEVICE_TYPE env → config.json device_type. Returns "" when
 // unresolved — NO "lamp" fallback (callers skip the device-profile OTA rather
@@ -312,15 +323,15 @@ func (b *Bootstrap) reconcile(ctx context.Context, key string, target domain.OTA
 	slog.Info("update available", "component", "bootstrap", "key", key, "current", current, "target", targetVersion)
 
 	// Status LED: orange breathing while updating
-	hal.SetEffect("breathing", 255, 140, 0, 0.4)
+	b.progressLED("breathing", 255, 140, 0, 0.4)
 
 	if err := b.applyUpdate(ctx, key, target); err != nil {
-		hal.SetEffect("pulse", 255, 30, 30, 1.5) // red pulse on error
+		b.progressLED("pulse", 255, 30, 30, 1.5) // red pulse on error
 		return false, err
 	}
 
 	// Brief green flash to confirm success, then stop
-	hal.SetEffect("notification_flash", 0, 255, 80, 1.0)
+	b.progressLED("notification_flash", 0, 255, 80, 1.0)
 	slog.Info("updated", "component", "bootstrap", "key", key, "version", targetVersion)
 	b.state.Components[key] = targetVersion
 	return true, nil

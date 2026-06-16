@@ -19,6 +19,7 @@ import (
 	"github.com/go-playground/validator/v10"
 
 	"go.autonomous.ai/os/domain"
+	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/internal/intent"
 	"go.autonomous.ai/os/internal/monitor"
 	"go.autonomous.ai/os/internal/statusled"
@@ -73,7 +74,15 @@ type SensingHandler struct {
 
 // ProvideSensingHandler constructs a SensingHandler.
 func ProvideSensingHandler(gw domain.AgentGateway, bus *monitor.Bus, cfg *config.Config, sled *statusled.Service, isSleeping func() bool) SensingHandler {
-	return SensingHandler{agentGateway: gw, monitorBus: bus, config: cfg, statusLED: sled, isSleeping: isSleeping}
+	// Gate local intent rules to what this device's body can do — set once here.
+	intent.Configure(device.Capabilities(cfg.DeviceTypeOrDefault()))
+	return SensingHandler{
+		agentGateway: gw,
+		monitorBus:   bus,
+		config:       cfg,
+		statusLED:    sled,
+		isSleeping:   isSleeping,
+	}
 }
 
 // PostEvent receives a sensing event and sends it to the agent as a chat message.
@@ -206,7 +215,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// to HAL so it wakes up (LED + servo) before the agent processes the turn.
 	// Without this, the agent's emotion:thinking would be blocked by HAL's wake guard.
 	// web_chat skips wake — typing in the monitor isn't a request for physical interaction.
-	if isVoiceCommand && h.isSleeping != nil && h.isSleeping() {
+	if isVoiceCommand && h.isSleeping != nil && h.isSleeping() && device.Has(h.config.DeviceTypeOrDefault(), device.CapExpression) {
 		slog.Info("voice wake — firing greeting to wake HAL", "component", "sensing")
 		go func() {
 			if err := hal.SetEmotion("greeting", 0.8); err != nil {

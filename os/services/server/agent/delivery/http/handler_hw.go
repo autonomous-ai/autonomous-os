@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.autonomous.ai/os/domain"
+	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/lib/flow"
 	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/lib/i18n"
@@ -119,6 +120,16 @@ func extractLeadingHWCalls(text string) []hwCall {
 func (h *AgentHandler) fireHWCall(c hwCall, flowRunID string, client *http.Client) bool {
 	// /broadcast, /speak, /dm are internal control markers — not HAL endpoints.
 	if c.path == "/broadcast" || c.path == "/speak" || c.path == "/dm" {
+		return true
+	}
+	// The OS — not the brain — is the deterministic gate over the body. Drop a
+	// HW marker the agent emitted for hardware this device doesn't declare, so a
+	// swappable/hallucinating brain (or an over-eager SOUL) can never drive a
+	// peripheral that isn't there. Skill-gating already keeps the LLM from
+	// knowing about absent hardware; this enforces it regardless of the brain.
+	if cap := device.RouteCapability(c.path); cap != "" && !device.Has(h.config.DeviceTypeOrDefault(), cap) {
+		slog.Debug("HW marker dropped — device lacks capability",
+			"component", "openclaw", "path", c.path, "capability", cap)
 		return true
 	}
 	// Lamp-bound HW markers (log writes that live on Lamp, not HAL):

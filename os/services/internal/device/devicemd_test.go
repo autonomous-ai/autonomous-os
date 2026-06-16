@@ -64,6 +64,29 @@ func TestCapabilities_Missing(t *testing.T) {
 	}
 }
 
+func TestRouteCapability(t *testing.T) {
+	cases := map[string]string{
+		"/emotion":          CapExpression,
+		"/scene":            CapLight,
+		"/scene/off":        CapLight,
+		"/led/solid":        CapLight,
+		"/servo/track":      CapMotion,
+		"/servo/track/stop": CapMotion,
+		"/display":          CapDisplay,
+		"/music/play":       CapMedia,
+		"/voice/status":     "", // audio paths fail open (almost always present)
+		"/audio/volume":     "",
+		"/wellbeing/log":    "", // os-server routes — no hardware gate
+		"/buddy/screenshot": "",
+		"/speak":            "",
+	}
+	for path, want := range cases {
+		if got := RouteCapability(path); got != want {
+			t.Errorf("RouteCapability(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
 func TestGatewayDefault_Present(t *testing.T) {
 	writeDeviceMD(t, "lamp", `---
 schema: autonomous.device.v1

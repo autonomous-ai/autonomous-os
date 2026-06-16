@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/lib/i18n"
 )
@@ -29,11 +30,15 @@ type Result struct {
 	Actions []string
 }
 
-// Match tries to match a voice command to a local intent.
-// Returns nil if no match — caller should fall through to OpenClaw.
-// Chitchat (exact-match greetings/farewells/thanks across vi/en/zh) is
-// checked first so a bare "chào" / "hi" / "你好" hits the WAV cache in
-// ~50ms instead of going through the 8s LLM TTFT.
+// Match tries to match a voice command to a local intent. Returns nil if no
+// match — caller should fall through to OpenClaw. Chitchat (exact-match
+// greetings/farewells/thanks across vi/en/zh) is checked first so a bare
+// "chào" / "hi" / "你好" hits the WAV cache in ~50ms instead of the 8s LLM TTFT.
+//
+// Rules that drive a peripheral are gated by the device's declared capabilities
+// (set once via Configure): a body without that hardware (e.g. intern-v2 has no
+// servo) never matches a command it can't execute, and never POSTs to a HAL
+// route its body doesn't serve.
 func Match(text string) *Result {
 	// Chitchat needs a stricter normalization than command rules — speaker
 	// prefixes, voice tags, and the (audio saved at ...) suffix from the
@@ -44,6 +49,9 @@ func Match(text string) *Result {
 
 	t := normalize(text)
 	for _, r := range rules {
+		if !capEnabled(r.capability) {
+			continue
+		}
 		if r.match(t) {
 			res := r.exec(t)
 			res.Rule = r.name
@@ -51,6 +59,37 @@ func Match(text string) *Result {
 		}
 	}
 	return nil
+}
+
+// deviceCaps is the device's declared capability set (DEVICE.md), set once at
+// startup via Configure and read-only after. It gates which command rules run
+// and which HAL peripherals local intents drive. nil = fail-open (all rules),
+// matching legacy single-device behavior.
+var deviceCaps map[string]bool
+
+// Configure sets the capability set used to gate local intents. Call once at
+// startup before any Match. nil/empty caps = fail-open.
+func Configure(caps map[string]bool) { deviceCaps = caps }
+
+// capEnabled is fail-open: an empty capability (no hardware dependency) is always
+// on; otherwise nil/empty deviceCaps → true. The maximal reference device (Lamp)
+// declares every capability, so it keeps every rule.
+func capEnabled(capability string) bool {
+	if capability == "" {
+		return true
+	}
+	return len(deviceCaps) == 0 || deviceCaps[capability]
+}
+
+// postEmotion drives an emotion expression, but only on a body that can show one
+// (declares the `expression` capability — a screen, LED, or servo to express
+// through). Emotion is cross-cutting (fired as a flourish by several command/
+// chitchat rules), so the guard lives here rather than on each rule's capability.
+// Fail-open via capEnabled.
+func postEmotion(body string) {
+	if capEnabled(device.CapExpression) {
+		post("/emotion", body)
+	}
 }
 
 // CacheableReplies is the set of intent reply phrases that should be
@@ -148,7 +187,7 @@ func matchChitchat(text string) *Result {
 				if reply == "" {
 					continue
 				}
-				post("/emotion", fmt.Sprintf(`{"emotion":"%s","intensity":0.7}`, r.emotion))
+				postEmotion(fmt.Sprintf(`{"emotion":"%s","intensity":0.7}`, r.emotion))
 				return &Result{
 					TTSText: reply,
 					Emotion: r.emotion,
@@ -266,7 +305,7 @@ func bareAttentionResult() *Result {
 	if reply == "" {
 		return nil
 	}
-	post("/emotion", `{"emotion":"happy","intensity":0.7}`)
+	postEmotion(`{"emotion":"happy","intensity":0.7}`)
 	return &Result{
 		TTSText: reply,
 		Emotion: "happy",
@@ -290,6 +329,9 @@ type rule struct {
 	name  string
 	match func(string) bool
 	exec  func(string) *Result
+	// capability gates the rule to devices that declare it in DEVICE.md (e.g.
+	// "motion" for servo tracking). Empty = no hardware dependency, always on.
+	capability string
 }
 
 // colorKeywords maps color keywords to RGB values.
@@ -337,7 +379,8 @@ func isLEDOnCommand(t string) bool {
 var rules = []rule{
 	// --- LED color (must be before generic LED on/off) ---
 	{
-		name: "led_color",
+		name:       "led_color",
+		capability: device.CapLight,
 		match: func(t string) bool {
 			if !isLEDOnCommand(t) {
 				return false
@@ -356,27 +399,30 @@ var rules = []rule{
 
 	// --- LED on/off ---
 	{
-		name:  "led_on",
-		match: anyOf("turn on the light", "light on"),
+		name:       "led_on",
+		capability: device.CapLight,
+		match:      anyOf("turn on the light", "light on"),
 		exec: func(string) *Result {
 			post("/led/solid", `{"color":[255,220,180]}`)
-			post("/emotion", `{"emotion":"happy","intensity":0.6}`)
+			postEmotion(`{"emotion":"happy","intensity":0.6}`)
 			return &Result{TTSText: "Light on!", LEDChanged: true, Actions: []string{`POST /led/solid {"color":[255,220,180]}`, `POST /emotion {"emotion":"happy","intensity":0.6}`}}
 		},
 	},
 	{
-		name:  "led_off",
-		match: anyOf("turn off the light", "light off"),
+		name:       "led_off",
+		capability: device.CapLight,
+		match:      anyOf("turn off the light", "light off"),
 		exec: func(string) *Result {
 			post("/led/off", "")
-			post("/emotion", `{"emotion":"idle","intensity":0.3}`)
+			postEmotion(`{"emotion":"idle","intensity":0.3}`)
 			return &Result{TTSText: "Light off!", LEDOff: true, Actions: []string{"POST /led/off", `POST /emotion {"emotion":"idle","intensity":0.3}`}}
 		},
 	},
 
 	// --- Scene off (must be before scene activation rules) ---
 	{
-		name: "scene_off",
+		name:       "scene_off",
+		capability: device.CapLight,
 		match: func(t string) bool {
 			return (strings.Contains(t, "turn off") || strings.Contains(t, "disable")) &&
 				(strings.Contains(t, "mode") || strings.Contains(t, "scene"))
@@ -389,60 +435,69 @@ var rules = []rule{
 
 	// --- Scenes ---
 	{
-		name:  "scene_reading",
-		match: anyOf("reading mode", "reading light"),
-		exec:  sceneExec("reading", "Reading mode!"),
+		name:       "scene_reading",
+		capability: device.CapLight,
+		match:      anyOf("reading mode", "reading light"),
+		exec:       sceneExec("reading", "Reading mode!"),
 	},
 	{
-		name:  "scene_focus",
-		match: anyOf("focus mode", "focus light"),
-		exec:  sceneExec("focus", "Focus mode!"),
+		name:       "scene_focus",
+		capability: device.CapLight,
+		match:      anyOf("focus mode", "focus light"),
+		exec:       sceneExec("focus", "Focus mode!"),
 	},
 	{
-		name:  "scene_relax",
-		match: anyOf("relax mode", "relax light"),
-		exec:  sceneExec("relax", "Relax mode!"),
+		name:       "scene_relax",
+		capability: device.CapLight,
+		match:      anyOf("relax mode", "relax light"),
+		exec:       sceneExec("relax", "Relax mode!"),
 	},
 	{
-		name:  "scene_movie",
-		match: anyOf("movie mode", "movie light"),
-		exec:  sceneExec("movie", "Movie mode!"),
+		name:       "scene_movie",
+		capability: device.CapLight,
+		match:      anyOf("movie mode", "movie light"),
+		exec:       sceneExec("movie", "Movie mode!"),
 	},
 	{
-		name:  "scene_night",
-		match: anyOf("goodnight", "good night", "night mode"),
+		name:       "scene_night",
+		capability: device.CapLight,
+		match:      anyOf("goodnight", "good night", "night mode"),
 		exec: func(string) *Result {
 			post("/scene", `{"scene":"night"}`)
-			post("/emotion", `{"emotion":"sleepy","intensity":0.4}`)
+			postEmotion(`{"emotion":"sleepy","intensity":0.4}`)
 			return &Result{TTSText: "Goodnight!", LEDChanged: true, Actions: []string{`POST /scene {"scene":"night"}`, `POST /emotion {"emotion":"sleepy","intensity":0.4}`}}
 		},
 	},
 	{
-		name:  "scene_energize",
-		match: anyOf("brighter", "energize", "max brightness"),
-		exec:  sceneExec("energize", "Max brightness!"),
+		name:       "scene_energize",
+		capability: device.CapLight,
+		match:      anyOf("brighter", "energize", "max brightness"),
+		exec:       sceneExec("energize", "Max brightness!"),
 	},
 
 	// --- Volume ---
 	{
-		name:  "volume_up",
-		match: anyOf("volume up", "louder"),
+		name:       "volume_up",
+		capability: device.CapAudio,
+		match:      anyOf("volume up", "louder"),
 		exec: func(string) *Result {
 			post("/audio/volume", `{"volume":100}`)
 			return &Result{TTSText: "Volume up!", Actions: []string{`POST /audio/volume {"volume":80}`}}
 		},
 	},
 	{
-		name:  "volume_down",
-		match: anyOf("volume down", "quieter"),
+		name:       "volume_down",
+		capability: device.CapAudio,
+		match:      anyOf("volume down", "quieter"),
 		exec: func(string) *Result {
 			post("/audio/volume", `{"volume":30}`)
 			return &Result{TTSText: "Volume down!", Actions: []string{`POST /audio/volume {"volume":30}`}}
 		},
 	},
 	{
-		name:  "mute_speaker",
-		match: anyOf("mute speaker", "mute the speaker"),
+		name:       "mute_speaker",
+		capability: device.CapMedia,
+		match:      anyOf("mute speaker", "mute the speaker"),
 		exec: func(string) *Result {
 			post("/speaker/mute", "")
 			return &Result{TTSText: "", Actions: []string{`POST /speaker/mute`}}
@@ -451,8 +506,9 @@ var rules = []rule{
 
 	// --- Music control ---
 	{
-		name:  "music_stop",
-		match: anyOf("stop music", "stop the music", "music off", "stop playing"),
+		name:       "music_stop",
+		capability: device.CapMedia,
+		match:      anyOf("stop music", "stop the music", "music off", "stop playing"),
 		exec: func(string) *Result {
 			post("/audio/stop", "")
 			return &Result{TTSText: "Music stopped.", Actions: []string{"POST /audio/stop"}}
@@ -461,8 +517,9 @@ var rules = []rule{
 
 	// --- TTS stop (interrupt the device speaking) ---
 	{
-		name:  "stop_talking",
-		match: anyOf("stop talking", "ok stop"),
+		name:       "stop_talking",
+		capability: device.CapAudio,
+		match:      anyOf("stop talking", "ok stop"),
 		exec: func(string) *Result {
 			post("/tts/stop", "")
 			return &Result{TTSText: "", Actions: []string{"POST /tts/stop"}}
@@ -482,8 +539,9 @@ var rules = []rule{
 
 	// --- Dim / brightness ---
 	{
-		name:  "dim",
-		match: anyOf("dim the light", "dimmer", "dim light"),
+		name:       "dim",
+		capability: device.CapLight,
+		match:      anyOf("dim the light", "dimmer", "dim light"),
 		exec: func(string) *Result {
 			post("/led/solid", `{"color":[80,60,40]}`)
 			return &Result{TTSText: "Dimmed.", LEDChanged: true, Actions: []string{`POST /led/solid {"color":[80,60,40]}`}}
@@ -495,15 +553,17 @@ var rules = []rule{
 	// match → direct POST /servo/track keeps the latency under ~100ms so the
 	// camera starts following before the user has finished their next breath.
 	{
-		name:  "servo_track_stop",
-		match: anyOf("stop tracking", "stop following", "stop watching", "stop track"),
+		name:       "servo_track_stop",
+		capability: device.CapMotion,
+		match:      anyOf("stop tracking", "stop following", "stop watching", "stop track"),
 		exec: func(string) *Result {
 			post("/servo/track/stop", "")
 			return &Result{TTSText: "Stopped tracking.", Actions: []string{"POST /servo/track/stop"}}
 		},
 	},
 	{
-		name: "servo_track",
+		name:       "servo_track",
+		capability: device.CapMotion,
 		match: func(t string) bool {
 			if !hasTrackVerb(t) {
 				return false
@@ -609,7 +669,7 @@ func sceneExec(scene, reply string) func(string) *Result {
 func emotionExec(emotion, reply string) func(string) *Result {
 	return func(string) *Result {
 		body := fmt.Sprintf(`{"emotion":"%s","intensity":0.8}`, emotion)
-		post("/emotion", body)
+		postEmotion(body)
 		return &Result{TTSText: reply, Emotion: emotion, Actions: []string{"POST /emotion " + body}}
 	}
 }

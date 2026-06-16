@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"go.autonomous.ai/os/domain"
+	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/internal/statusled"
 	"go.autonomous.ai/os/lib/flow"
 	"go.autonomous.ai/os/lib/hal"
@@ -47,7 +48,10 @@ func (s *Service) StartWS(ctx context.Context, handler domain.AgentEventHandler)
 		// keep aiming at stale coordinates. Local idle animation is untouched —
 		// it's harmless and self-contained — and recovery reflexes stay
 		// available. Never block or affect the reconnect/backoff loop below.
-		if s.config.SetUpCompleted {
+		// Only devices that can servo-track (motion) have anything to stop —
+		// skip on bodies without it (e.g. intern-v2) so we don't POST to a
+		// /servo endpoint they don't serve.
+		if s.config.SetUpCompleted && device.Has(s.config.DeviceTypeOrDefault(), device.CapMotion) {
 			if err := hal.StopServoTracking(); err != nil {
 				slog.Warn("stop servo tracking on ws disconnect failed", "component", "openclaw", "error", err)
 			}

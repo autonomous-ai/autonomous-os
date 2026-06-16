@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -65,6 +66,7 @@ func (h *HealthHandler) SystemInfo(c *gin.Context) {
 		"goRoutines":    runtime.NumGoroutine(),
 		"version":       config.OSVersion,
 		"deviceId":      h.config.DeviceID,
+		"capabilities":  h.deviceCapabilities(),
 		"agent":         h.agentInfo(),
 	}
 
@@ -90,6 +92,23 @@ func (h *HealthHandler) SystemInfo(c *gin.Context) {
 	info["diskPercent"] = diskPercent
 
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(info))
+}
+
+// deviceCapabilities returns this device's DECLARED capabilities (sorted), read
+// from devices/<type>/DEVICE.md via device.Capabilities. This is the OS contract
+// surface the web gates tabs on ("address capabilities, not routes"): Go is the
+// capability owner — it already parses the same DEVICE.md and gates intent,
+// skills, ambient, etc. on it — so the web asks the OS here rather than reaching
+// through to the HAL runtime for a declaration-level fact. Empty slice (never
+// null) when the device declares none, so the client always gets an array.
+func (h *HealthHandler) deviceCapabilities() []string {
+	caps := device.Capabilities(h.config.DeviceTypeOrDefault())
+	out := make([]string, 0, len(caps))
+	for c := range caps {
+		out = append(out, c)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // agentInfo returns the OpenClaw agent connection snapshot — name, connected

@@ -18,7 +18,7 @@ import {
 } from "chart.js";
 
 import { S } from "./styles";
-import { API, HW, HISTORY_LEN, FLOW_EVENTS_MAX, NAV, isNavGroup, isNavLink } from "./types";
+import { API, HW, HISTORY_LEN, FLOW_EVENTS_MAX, NAV, isNavGroup, isNavLink, Cap } from "./types";
 import type { Section, SystemInfo, NetworkInfo, HWHealth, OCStatus, PresenceInfo, VoiceStatus, ServoState, DisplayState, AudioVolume, LEDColor, SceneInfo, MonitorEvent, DisplayEvent, NavEntry } from "./types";
 import { OverviewSection } from "./OverviewSection";
 import { SystemSection } from "./SystemSection";
@@ -41,6 +41,19 @@ const EMBED_SECTIONS = new Set<Section>(["api-docs", "agent-config"]);
 // Sections shown to non-debug users. Append `?debug=true` to the URL to reveal
 // the full menu (Sensing, Analytics, Servo, Logs, CLI, API Docs, Agent gateway).
 const PUBLIC_SECTIONS = new Set<Section>(["chat", "overview", "system", "flow", "camera", "face-owners", "bluetooth"]);
+
+// The capability a section requires, read from its NAV leaf (single source: the
+// nav definition itself declares `cap`). undefined → no hardware dependency, the
+// section is always shown.
+function sectionCap(id: Section): string | undefined {
+  for (const entry of NAV) {
+    if (isNavGroup(entry)) {
+      const child = entry.children.find((c) => !isNavLink(c) && c.id === id);
+      if (child && !isNavLink(child)) return child.cap;
+    } else if (entry.id === id) return entry.cap;
+  }
+  return undefined;
+}
 
 const iframeStyle: React.CSSProperties = {
   width: "100%",
@@ -230,6 +243,23 @@ export default function Monitor() {
     }).catch(() => {});
   }, []);
 
+  // Device's DECLARED capabilities, served by os-server on /api/system/info
+  // (sys.capabilities) — Go owns the contract and parses DEVICE.md, so the web
+  // asks the OS rather than reaching through to the HAL runtime. Used to gate
+  // tabs + controls. null (not yet loaded) → show everything (fail-open).
+  const caps = sys?.capabilities ? new Set(sys.capabilities) : null;
+  const hasCap = (c: string): boolean => !caps || caps.has(c);
+  const sectionVisible = (id: Section): boolean => {
+    const cap = sectionCap(id);
+    return !cap || hasCap(cap);
+  };
+
+  // If the active section is for hardware this device lacks, fall back to overview.
+  useEffect(() => {
+    if (caps && !sectionVisible(section)) setSection("overview");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sys?.capabilities, section]);
+
   // Section ref so polling callback always sees current section without re-mounting
   const sectionRef = useRef(section);
   useEffect(() => { sectionRef.current = section; }, [section]);
@@ -275,21 +305,29 @@ export default function Monitor() {
       setPresence(presR);
       if (sceneR.scenes) setSceneInfo(sceneR);
 
-      const [voiceR, servoR, dispR, audioR, musicR, ledR] = await Promise.all([
-        fetch(`${HW}/voice/status`, { signal }).then((r) => r.json()),
-        fetch(`${HW}/servo`, { signal }).then((r) => r.json()),
-        fetch(`${HW}/display`, { signal }).then((r) => r.json()),
-        fetch(`${HW}/audio/volume`, { signal }).then((r) => r.json()),
-        fetch(`${HW}/audio/status`, { signal }).then((r) => r.json()),
-        fetch(`${HW}/led/color`, { signal }).then((r) => r.json()),
+      // Each peripheral panel is fetched ONLY when health reports that hardware
+      // present — its HAL route is mounted by the device's declared capability,
+      // so an absent peripheral means the route 404s. Gating here keeps a device
+      // that lacks a peripheral (e.g. intern-v2 has no servo/display, and no
+      // `media` → no music; a device with no speaker has audio:false) from
+      // hitting 404 endpoints every 5s poll. Panels render null-safe when their
+      // state stays at the initial value.
+      const json = (r: Response) => r.json();
+      const [voiceR, audioR, musicR, ledR, servoR, dispR] = await Promise.all([
+        hwR.voice ? fetch(`${HW}/voice/status`, { signal }).then(json) : null,
+        hwR.audio ? fetch(`${HW}/audio/volume`, { signal }).then(json) : null,
+        hwR.music ? fetch(`${HW}/audio/status`, { signal }).then(json) : null,
+        hwR.led ? fetch(`${HW}/led/color`, { signal }).then(json) : null,
+        hwR.servo ? fetch(`${HW}/servo`, { signal }).then(json) : null,
+        hwR.display ? fetch(`${HW}/display`, { signal }).then(json) : null,
       ]);
-      setVoice(voiceR);
-      setServo(servoR);
-      setDisplayState(dispR);
-      setAudio(audioR);
-      if (musicR.playing !== undefined) setMusicPlaying(musicR.playing);
-      if (musicR.speaker_muted !== undefined) setSpeakerMuted(musicR.speaker_muted);
-      if (ledR.hex) setLedColor(ledR);
+      if (voiceR) setVoice(voiceR);
+      if (audioR) setAudio(audioR);
+      if (musicR?.playing !== undefined) setMusicPlaying(musicR.playing);
+      if (musicR?.speaker_muted !== undefined) setSpeakerMuted(musicR.speaker_muted);
+      if (ledR?.hex) setLedColor(ledR);
+      if (servoR) setServo(servoR);
+      if (dispR) setDisplayState(dispR);
       setDisplayTs(Date.now());
     }
   }, 5_000, { timeoutMs: 8000 });
@@ -353,12 +391,14 @@ export default function Monitor() {
             .filter((e) => isNavGroup(e) || (!isNavGroup(e) && e.id !== "chat"))
             .map((entry) => {
               if (isNavGroup(entry)) {
-                const filtered = isDebug
-                  ? entry
-                  : {
-                      ...entry,
-                      children: entry.children.filter((c) => isNavLink(c) ? false : PUBLIC_SECTIONS.has(c.id)),
-                    };
+                const filtered = {
+                  ...entry,
+                  children: entry.children.filter((c) => {
+                    if (isNavLink(c)) return isDebug; // external links: debug only
+                    if (!isDebug && !PUBLIC_SECTIONS.has(c.id)) return false;
+                    return sectionVisible(c.id); // hide tabs for absent hardware
+                  }),
+                };
                 if (filtered.children.length === 0) return null;
                 return <NavGroupItem key={entry.group} entry={filtered} section={section} setSection={setSection} closeSidebar={closeSidebar} />;
               }
@@ -437,6 +477,7 @@ export default function Monitor() {
               speakerMuted={speakerMuted}
               ledColor={ledColor}
               sceneInfo={sceneInfo}
+              hasEmotion={hasCap(Cap.Expression)}
               webVersion={__WEB_VERSION__}
               halVersion={sys?.halVersion ?? null}
               onSceneActivate={(scene) => {

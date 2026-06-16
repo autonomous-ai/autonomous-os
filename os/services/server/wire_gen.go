@@ -33,7 +33,7 @@ func InitializeServer() (*Server, error) {
 	configConfig := config.ProvideConfig()
 	service := network.ProvideService(configConfig)
 	bus := monitor.ProvideBus()
-	statusledService := statusled.ProvideService()
+	statusledService := statusled.ProvideService(configConfig)
 	agentGateway := agent.ProvideGateway(configConfig, bus, statusledService)
 	healthHandler := http.ProvideHealthHandler(configConfig, service, agentGateway)
 	client := beclient.ProvideClient(configConfig)
@@ -46,9 +46,9 @@ func InitializeServer() (*Server, error) {
 		return nil, err
 	}
 	deviceMQTTHandler := mqtthandler.ProvideDeviceMQTTHandler(configConfig, factory, deviceService, service, agentGateway)
-	agentHandler := http6.ProvideAgentHandler(agentGateway, bus, statusledService)
+	agentHandler := http6.ProvideAgentHandler(agentGateway, bus, statusledService, configConfig)
 	sensingHandler := http5.ProvideSensingHandler(agentGateway, bus, configConfig, statusledService, agentHandler.IsSleeping)
-	ambientService := ambient.ProvideService(bus)
+	ambientService := ambient.ProvideService(bus, configConfig)
 	healthwatchService := healthwatch.ProvideService(bus, configConfig, statusledService)
 	buddyService, err := buddy.ProvideService()
 	if err != nil {

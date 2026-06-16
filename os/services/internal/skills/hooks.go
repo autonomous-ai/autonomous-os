@@ -1,5 +1,7 @@
 package skills
 
+import "go.autonomous.ai/os/internal/device"
+
 // Hooks are runtime triggers (HOOK.md + handler.ts on the CDN) that fire
 // automatically before a turn. They are a sibling mechanism to skills and gate
 // the same way (see SupportedHooks) — also platform metadata, not runtime-coupled.
@@ -12,11 +14,11 @@ var Hooks = []string{
 
 // HookCapability maps a hook to the DEVICE.md capability it requires. A hook
 // absent from this map has no hardware dependency and is always installed.
-// emotion-acknowledge fires an expression every turn, so it needs an expressive
-// body (presence): a device without it (e.g. intern-v2) must not register the
-// hook, or it POSTs to a route the device never mounts.
+// emotion-acknowledge fires an expression every turn, so it needs `expression`
+// (the body can show emotion): a device without it (e.g. a sensor-only box) must
+// not register the hook, or it POSTs to a route the device never mounts.
 var HookCapability = map[string]string{
-	"emotion-acknowledge": "presence",
+	"emotion-acknowledge": device.CapExpression,
 }
 
 // SupportedHooks filters Hooks to those a device with deviceCaps can run, the

@@ -11,10 +11,11 @@ capabilities:
   audio:        { routes: [audio, speaker, voice], required: true }
   vision:       { routes: [camera], required: true }
   sensing:      { routes: [sensing], required: true }
-  presence:     { routes: [emotion, scene], required: true }
+  presence:     { required: true }
   motion:       { routes: [servo], driver: feetech, required: true, safety: SAFETY.md#motion }
-  light:        { routes: [led], driver: ws2812, required: true, safety: SAFETY.md#light }
+  light:        { routes: [led, scene], driver: ws2812, required: true, safety: SAFETY.md#light }
   display:      { routes: [display], driver: gc9a01, required: true }
+  expression:   { routes: [emotion], required: true }
   media:        { routes: [music], required: true }
   connectivity: { routes: [bluetooth], required: true }
   companion:    { routes: [buddy], required: false }

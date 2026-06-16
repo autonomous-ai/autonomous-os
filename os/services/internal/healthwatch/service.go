@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"go.autonomous.ai/os/domain"
+	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/internal/monitor"
 	"go.autonomous.ai/os/internal/statusled"
 	"go.autonomous.ai/os/lib/hal"
@@ -67,6 +68,16 @@ func (s *Service) Start(ctx context.Context) {
 	// wasUnreachable tracks HAL downtime so we can announce recovery via TTS.
 	wasUnreachable := false
 
+	// Which optional bodies this device actually has — resolved once. The
+	// hardware check below must only require a component the device declares,
+	// else a device that lacks it (e.g. intern-v2 has no servo) would be flagged
+	// "hardware failure" forever for hardware it was never built with. Fail-open
+	// (nil caps → require all, matching legacy Lamp behavior).
+	devType := s.cfg.DeviceTypeOrDefault()
+	hasMotion := device.Has(devType, device.CapMotion)
+	hasLight := device.Has(devType, device.CapLight)
+	hasAudio := device.Has(devType, device.CapAudio)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -102,23 +113,29 @@ func (s *Service) Start(ctx context.Context) {
 				s.statusLED.Clear(statusled.StateHALDown)
 			}
 
-			// Hardware component check — servo/led/audio/voice.
-			// Camera and sensing excluded (may be off by scene preset).
-			servoOK := h.Servo
-			if ss, err := hal.GetServoStatus(); err == nil {
-				for name, info := range ss.Servos {
-					if !info.Online {
-						servoOK = false
-						slog.Warn("servo offline", "component", "healthwatch", "servo", name, "id", info.ID)
+			// Hardware component check — servo/led/audio/voice, each required
+			// only if the device declares that capability (camera and sensing
+			// excluded — may be off by scene preset).
+			servoOK := !hasMotion || h.Servo
+			if hasMotion {
+				if ss, err := hal.GetServoStatus(); err == nil {
+					for name, info := range ss.Servos {
+						if !info.Online {
+							servoOK = false
+							slog.Warn("servo offline", "component", "healthwatch", "servo", name, "id", info.ID)
+						}
 					}
 				}
 			}
-			if servoOK && h.LED && h.Audio && h.Voice {
+			ledOK := !hasLight || h.LED
+			audioOK := !hasAudio || h.Audio
+			voiceOK := !hasAudio || h.Voice
+			if servoOK && ledOK && audioOK && voiceOK {
 				s.statusLED.Clear(statusled.StateHardware)
 			} else {
 				s.statusLED.Set(statusled.StateHardware)
 				slog.Warn("hardware component failure", "component", "healthwatch",
-					"servo", servoOK, "led", h.LED, "audio", h.Audio, "voice", h.Voice)
+					"servo", servoOK, "led", ledOK, "audio", audioOK, "voice", voiceOK)
 			}
 
 			// Announce via TTS once voice+TTS are ready.

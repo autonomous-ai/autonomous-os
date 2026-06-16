@@ -665,11 +665,14 @@ EOF
   # internal/skills/skills.go). Empty = platform skill, always seeded.
   skill_cap() {
     case "$1" in
-      audio|voice|speaker-recognizer) echo audio ;;
-      camera|face-enroll|guard)       echo vision ;;
+      audio|voice)                    echo audio ;;
+      camera)                         echo vision ;;
+      # people-perception skills (understand the person) → presence, not raw sensor
+      face-enroll|guard|speaker-recognizer|user-emotion-detection) echo presence ;;
       computer-use)                   echo companion ;;
       display)                        echo display ;;
-      emotion|scene)                  echo presence ;;
+      emotion)                        echo expression ;;
+      scene)                          echo light ;;
       led-control)                    echo light ;;
       servo-control|servo-tracking)   echo motion ;;
       music)                          echo media ;;

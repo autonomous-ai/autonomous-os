@@ -15,7 +15,7 @@ func contains(xs []string, want string) bool {
 func TestSupported_MaximalDeviceKeepsAll(t *testing.T) {
 	caps := map[string]bool{
 		"audio": true, "vision": true, "sensing": true, "presence": true,
-		"motion": true, "light": true, "display": true, "media": true,
+		"motion": true, "light": true, "display": true, "expression": true, "media": true,
 		"connectivity": true, "companion": true, "system": true,
 	}
 	if got := Supported(caps); len(got) != len(Catalog) {
@@ -39,17 +39,20 @@ func TestSupported_ReducedDevicePrunesHardware(t *testing.T) {
 	// A speaker-only box: audio + sensing, no motion/light/display/vision/presence/media.
 	got := Supported(map[string]bool{"audio": true, "sensing": true})
 
-	for _, gone := range []string{"servo-control", "servo-tracking", "led-control", "display", "emotion", "scene", "camera", "music", "face-enroll", "guard", "computer-use"} {
+	// People-perception skills (face-enroll, guard, speaker-recognizer,
+	// user-emotion-detection) need `presence`, which this box lacks — so they
+	// prune even though it has audio/sensing.
+	for _, gone := range []string{"servo-control", "servo-tracking", "led-control", "display", "emotion", "scene", "camera", "music", "face-enroll", "guard", "speaker-recognizer", "user-emotion-detection", "computer-use"} {
 		if contains(got, gone) {
 			t.Errorf("expected %q pruned (device lacks its capability)", gone)
 		}
 	}
-	for _, kept := range []string{"audio", "voice", "speaker-recognizer", "sensing", "sensing-track"} {
+	for _, kept := range []string{"audio", "voice", "sensing", "sensing-track"} {
 		if !contains(got, kept) {
 			t.Errorf("expected %q kept (audio/sensing satisfied)", kept)
 		}
 	}
-	for _, kept := range []string{"wellbeing", "mood", "habit", "connectors", "music-suggestion", "user-emotion-detection", "input-branching"} {
+	for _, kept := range []string{"wellbeing", "mood", "habit", "connectors", "music-suggestion", "input-branching"} {
 		if !contains(got, kept) {
 			t.Errorf("expected platform skill %q kept", kept)
 		}
@@ -62,7 +65,7 @@ func TestSupported_ReducedDevicePrunesHardware(t *testing.T) {
 func TestCapability_Consistency(t *testing.T) {
 	known := map[string]bool{
 		"audio": true, "vision": true, "sensing": true, "presence": true,
-		"motion": true, "light": true, "display": true, "media": true,
+		"motion": true, "light": true, "display": true, "expression": true, "media": true,
 		"connectivity": true, "companion": true, "system": true,
 	}
 	for skill, cap := range Capability {

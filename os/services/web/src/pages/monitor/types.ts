@@ -34,6 +34,10 @@ export interface SystemInfo {
   goRoutines: number;
   version: string;
   deviceId: string;
+  // Device's DECLARED capabilities (see Cap), from os-server's parse of
+  // DEVICE.md. The web gates tabs/controls on these. Absent until /system/info
+  // loads → treat as "all present" (fail-open).
+  capabilities?: string[];
   diskTotal: number;
   diskUsed: number;
   diskPercent: number;
@@ -57,6 +61,7 @@ export interface HWHealth {
   sensing: boolean;
   voice: boolean;
   tts: boolean;
+  music: boolean;
   display: boolean;
 }
 export interface OCStatus {
@@ -149,7 +154,22 @@ export interface DisplayEvent extends MonitorEvent {
 
 export type Section = "overview" | "system" | "flow" | "camera" | "servo" | "face-owners" | "analytics" | "logs" | "chat" | "cli" | "sensing" | "bluetooth" | "api-docs" | "agent-config";
 
-export type NavLeaf = { id: Section; label: string; icon: string };
+// Capability names — the web mirror of Go's device.Cap* / contract/
+// capabilities.md. Single source for the capability strings the web references,
+// so a tab's hardware requirement is a named constant, not a scattered literal.
+// Keep in sync with the capability vocabulary (capabilities.v1).
+export const Cap = {
+  Vision: "vision",
+  Motion: "motion",
+  Sensing: "sensing",
+  Connectivity: "connectivity",
+  Expression: "expression",
+} as const;
+
+// A nav leaf may declare the capability it requires; the nav hides it and the
+// router redirects away when the device lacks that capability. Omit `cap` for
+// sections with no hardware dependency (always shown).
+export type NavLeaf = { id: Section; label: string; icon: string; cap?: string };
 export type NavLink = { href: string; label: string; icon: string; external?: boolean };
 export type NavChild = NavLeaf | NavLink;
 export type NavGroup = { group: string; label: string; icon: string; children: NavChild[] };
@@ -172,12 +192,12 @@ export const NAV: NavEntry[] = [
       { id: "overview",    label: "Overview",  icon: "⊞" },
       { id: "system",      label: "System",    icon: "⚙" },
       { id: "flow",        label: "Flow",      icon: "⇄" },
-      { id: "face-owners", label: "Users",     icon: "☺" },
-      { id: "camera",      label: "Camera",    icon: "◎" },
-      { id: "sensing",     label: "Sensing",   icon: "◉" },
+      { id: "face-owners", label: "Users",     icon: "☺", cap: Cap.Vision }, // user roster needs the camera
+      { id: "camera",      label: "Camera",    icon: "◎", cap: Cap.Vision },
+      { id: "sensing",     label: "Sensing",   icon: "◉", cap: Cap.Sensing },
       { id: "analytics",   label: "Analytics", icon: "⊟" },
-      { id: "servo",       label: "Servo",     icon: "⎈" },
-      { id: "bluetooth",   label: "Bluetooth", icon: "✦" },
+      { id: "servo",       label: "Servo",     icon: "⎈", cap: Cap.Motion },
+      { id: "bluetooth",   label: "Bluetooth", icon: "✦", cap: Cap.Connectivity },
       { id: "logs",        label: "Logs",      icon: "☰" },
       { id: "cli",         label: "CLI",       icon: "▸" },
       { id: "api-docs",    label: "API Docs",  icon: "⎗" },

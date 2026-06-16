@@ -30,7 +30,7 @@ logger = logging.getLogger("hal.voice")
 class SpeakerDecorator:
     """Owns wake-word list + speaker recognizer + speech-emotion service."""
 
-    def __init__(self, wake_words: list, nudge_cooldown_s: float):
+    def __init__(self, wake_words: list, nudge_cooldown_s: float, enable_people_perception: bool = True):
         self._wake_words: list = list(wake_words)
         self._wake_words_lock = threading.Lock()
 
@@ -39,14 +39,20 @@ class SpeakerDecorator:
         self._last_nudge_time: dict[str, float] = {}
         self._nudge_cooldown_s: float = nudge_cooldown_s
 
-        self._speaker = self._init_speaker()
-        self._speech_emotion = self._init_speech_emotion()
+        self._speaker = self._init_speaker(enable_people_perception)
+        self._speech_emotion = self._init_speech_emotion(enable_people_perception)
 
     # ------------------------------------------------------------------
     # Lazy service init
     # ------------------------------------------------------------------
     @staticmethod
-    def _init_speaker():
+    def _init_speaker(enable_people_perception: bool = True):
+        # Speaker recognition (identifying WHO is speaking from their voiceprint)
+        # is people perception — the `presence` capability, via the mic. A device
+        # that doesn't declare `presence` must not run it even with a mic.
+        if not enable_people_perception:
+            logger.info("Speaker recognition off — device does not declare 'presence' (people perception)")
+            return None
         if not SPEAKER_RECOGNITION_ENABLED:
             logger.info(
                 "Speaker recognizer disabled by HAL_SPEAKER_RECOGNITION_ENABLED=false. "
@@ -69,7 +75,14 @@ class SpeakerDecorator:
             return None
 
     @staticmethod
-    def _init_speech_emotion():
+    def _init_speech_emotion(enable_people_perception: bool = True):
+        # Speech emotion (reading the user's emotion from voice) is people
+        # perception — the `presence` capability, via the mic instead of the
+        # camera. A device that doesn't declare `presence` must not run it even
+        # if it has a mic: it listens for commands, it doesn't profile the user.
+        if not enable_people_perception:
+            logger.info("Speech emotion recognition off — device does not declare 'presence' (people perception)")
+            return None
         if not SPEECH_EMOTION_ENABLED:
             logger.info("Speech emotion recognition disabled by HAL_SPEECH_EMOTION_ENABLED=false")
             return None

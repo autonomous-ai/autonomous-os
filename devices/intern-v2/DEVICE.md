@@ -12,7 +12,8 @@ capabilities:
   sensing:   { routes: [sensing], required: false }
   companion: { routes: [buddy], required: false }
   system:    { routes: [system], required: true }
-  light:     { routes: [led], driver: ws2812, required: true, safety: SAFETY.md#light }
+  light:     { routes: [led, scene], driver: ws2812, required: true, safety: SAFETY.md#light }
+  expression: { routes: [emotion], required: true }
 safety_ref: SAFETY.md
 memory:     { backend: local }
 ---

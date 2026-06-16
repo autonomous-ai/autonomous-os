@@ -50,6 +50,7 @@ export function OverviewSection({
   speakerMuted,
   ledColor,
   sceneInfo,
+  hasEmotion,
   webVersion,
   halVersion,
   onSceneActivate,
@@ -67,6 +68,7 @@ export function OverviewSection({
   speakerMuted: boolean;
   ledColor: LEDColor | null;
   sceneInfo: SceneInfo | null;
+  hasEmotion: boolean; // device declares the expression capability (/emotion route)
   webVersion: string;
   halVersion: string | null;
   onSceneActivate: (scene: string) => void;
@@ -346,6 +348,7 @@ export function OverviewSection({
               </div>
             </div>
           </div>
+          {hasEmotion && (
           <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 4, marginTop: 10 }}>
             {ALL_EMOTIONS.map((e) => {
               const active = e === emotion;
@@ -372,6 +375,7 @@ export function OverviewSection({
               );
             })}
           </div>
+          )}
         </div>
 
         {/* Hardware */}

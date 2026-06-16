@@ -2,20 +2,23 @@ package skills
 
 import "testing"
 
-// A device with presence keeps every hook; one without it drops the expression
-// hook (emotion-acknowledge) but keeps the agnostic one (turn-gate).
+// A device that can express (declares `expression`) keeps every hook; one that
+// cannot drops the expression hook (emotion-acknowledge) but keeps the agnostic
+// one (turn-gate). emotion-acknowledge is expression (out) — gated on
+// `expression`, NOT on presence (which is perception/in).
 func TestSupportedHooks_GatesExpressionHook(t *testing.T) {
-	withPresence := SupportedHooks(map[string]bool{"presence": true})
-	if !contains(withPresence, "emotion-acknowledge") || !contains(withPresence, "turn-gate") {
-		t.Fatalf("presence device should keep all hooks, got %v", withPresence)
+	withExpression := SupportedHooks(map[string]bool{"expression": true})
+	if !contains(withExpression, "emotion-acknowledge") || !contains(withExpression, "turn-gate") {
+		t.Fatalf("expression device should keep all hooks, got %v", withExpression)
 	}
 
-	noPresence := SupportedHooks(map[string]bool{"audio": true, "sensing": true})
-	if contains(noPresence, "emotion-acknowledge") {
-		t.Errorf("emotion-acknowledge must be pruned without presence, got %v", noPresence)
+	// audio + sensing + presence but NO expression → cannot emote.
+	noExpression := SupportedHooks(map[string]bool{"audio": true, "sensing": true, "presence": true})
+	if contains(noExpression, "emotion-acknowledge") {
+		t.Errorf("emotion-acknowledge must be pruned without expression, got %v", noExpression)
 	}
-	if !contains(noPresence, "turn-gate") {
-		t.Errorf("turn-gate (no capability) must always survive, got %v", noPresence)
+	if !contains(noExpression, "turn-gate") {
+		t.Errorf("turn-gate (no capability) must always survive, got %v", noExpression)
 	}
 }
 
@@ -30,7 +33,7 @@ func TestSupportedHooks_FailOpen(t *testing.T) {
 func TestHookCapability_KnownCapabilities(t *testing.T) {
 	known := map[string]bool{
 		"audio": true, "vision": true, "sensing": true, "presence": true,
-		"motion": true, "light": true, "display": true, "media": true,
+		"motion": true, "light": true, "display": true, "expression": true, "media": true,
 		"connectivity": true, "system": true,
 	}
 	for hook, cap := range HookCapability {

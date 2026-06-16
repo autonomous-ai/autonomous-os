@@ -21,6 +21,7 @@ type AgentHandler struct {
 	agentGateway domain.AgentGateway
 	monitorBus   *monitor.Bus
 	statusLED    *statusled.Service
+	config       *config.Config // device type → capability gate for agent HW markers
 
 	// assistantBuf accumulates assistant deltas per runId so we can send the
 	// full text to TTS when the agent turn ends (lifecycle "end").
@@ -158,7 +159,7 @@ type channelTurnState struct {
 const cronFireWindowMs int64 = 10_000
 
 // ProvideAgentHandler returns an OpenClaw events handler.
-func ProvideAgentHandler(gw domain.AgentGateway, bus *monitor.Bus, sled *statusled.Service) AgentHandler {
+func ProvideAgentHandler(gw domain.AgentGateway, bus *monitor.Bus, sled *statusled.Service, cfg *config.Config) AgentHandler {
 	// Init flow emitter here so ws_connect events (fired from StartWS before any HTTP request)
 	// are broadcast to SSE. The device is single-user so the global trace ID is sufficient;
 	// concurrent turn interleaving is not a concern in normal operation.
@@ -176,6 +177,7 @@ func ProvideAgentHandler(gw domain.AgentGateway, bus *monitor.Bus, sled *statusl
 		agentGateway:         gw,
 		monitorBus:           bus,
 		statusLED:            sled,
+		config:               cfg,
 		assistantBuf:         make(map[string]*strings.Builder),
 		streamedCleanLen:     make(map[string]int),
 		firedHWCount:         make(map[string]int),
