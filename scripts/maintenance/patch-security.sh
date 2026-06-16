@@ -10,8 +10,8 @@
 
 set -euo pipefail
 
-LELAMP_SVC="/etc/systemd/system/hal.service"
-LELAMP_UNIT="hal"
+HAL_SVC="/etc/systemd/system/hal.service"
+HAL_UNIT="hal"
 DEVICE_TYPE="$(grep -E '^DEVICE_TYPE=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
 NGINX_CONF="/etc/nginx/conf.d/${DEVICE_TYPE}.conf"
 
@@ -21,17 +21,17 @@ NGINX_CONF="/etc/nginx/conf.d/${DEVICE_TYPE}.conf"
 # restart caused on a no-op re-run.
 hash_file() { [ -e "$1" ] && sha256sum "$1" | awk '{print $1}' || echo "missing"; }
 NGINX_HASH_BEFORE=$(hash_file "$NGINX_CONF")
-LELAMP_HASH_BEFORE=$(hash_file "$LELAMP_SVC")
+HAL_HASH_BEFORE=$(hash_file "$HAL_SVC")
 
 echo "[patch] Starting security patch..."
 
 # 1. LeLamp systemd: bind 127.0.0.1 instead of 0.0.0.0
-if grep -q "\-\-host 0.0.0.0" "$LELAMP_SVC" 2>/dev/null; then
-  sed -i 's/--host 0\.0\.0\.0/--host 127.0.0.1/' "$LELAMP_SVC"
+if grep -q "\-\-host 0.0.0.0" "$HAL_SVC" 2>/dev/null; then
+  sed -i 's/--host 0\.0\.0\.0/--host 127.0.0.1/' "$HAL_SVC"
   systemctl daemon-reload
-  echo "[patch] ${LELAMP_UNIT}: bind changed to 127.0.0.1"
+  echo "[patch] ${HAL_UNIT}: bind changed to 127.0.0.1"
 else
-  echo "[patch] ${LELAMP_UNIT}: already on 127.0.0.1, skipping"
+  echo "[patch] ${HAL_UNIT}: already on 127.0.0.1, skipping"
 fi
 
 # 2. nginx /hw/: add allow/deny if missing
@@ -320,24 +320,24 @@ with open(path, "w") as f:
 print("[patch] nginx security headers: added")
 PYEOF
 
-# 4. Set LELAMP_MODE=production in .env (activates same-origin middleware)
-LELAMP_ENV="/opt/hal/.env"
-touch "$LELAMP_ENV"
-if grep -q "^LELAMP_MODE=" "$LELAMP_ENV" 2>/dev/null; then
-  sed -i "s/^LELAMP_MODE=.*/LELAMP_MODE=production/" "$LELAMP_ENV"
-  echo "[patch] LELAMP_MODE set to production"
+# 4. Set HAL_MODE=production in .env (activates same-origin middleware)
+HAL_ENV="/opt/hal/.env"
+touch "$HAL_ENV"
+if grep -q "^HAL_MODE=" "$HAL_ENV" 2>/dev/null; then
+  sed -i "s/^HAL_MODE=.*/HAL_MODE=production/" "$HAL_ENV"
+  echo "[patch] HAL_MODE set to production"
 else
-  echo "LELAMP_MODE=production" >> "$LELAMP_ENV"
-  echo "[patch] LELAMP_MODE=production added to .env"
+  echo "HAL_MODE=production" >> "$HAL_ENV"
+  echo "[patch] HAL_MODE=production added to .env"
 fi
 
 # 5. Add EnvironmentFile to hal unit if missing
-if ! grep -q "^EnvironmentFile=" "$LELAMP_SVC" 2>/dev/null; then
-  sed -i '/^\[Service\]/a EnvironmentFile=\/opt\/hal\/.env' "$LELAMP_SVC"
+if ! grep -q "^EnvironmentFile=" "$HAL_SVC" 2>/dev/null; then
+  sed -i '/^\[Service\]/a EnvironmentFile=\/opt\/hal\/.env' "$HAL_SVC"
   systemctl daemon-reload
-  echo "[patch] ${LELAMP_UNIT}.service: EnvironmentFile added"
+  echo "[patch] ${HAL_UNIT}.service: EnvironmentFile added"
 else
-  echo "[patch] ${LELAMP_UNIT}.service: EnvironmentFile already present, skipping"
+  echo "[patch] ${HAL_UNIT}.service: EnvironmentFile already present, skipping"
 fi
 
 # 6. Bind os-server to 127.0.0.1 (defense-in-depth: port 5000 unreachable from LAN
@@ -356,7 +356,7 @@ echo "[patch] To close port 5000 on LAN: run 'sudo software-update os-server' to
 # 7. Apply — only reload/restart when files actually changed. Avoids the
 # unnecessary 502 window on idempotent re-runs.
 NGINX_HASH_AFTER=$(hash_file "$NGINX_CONF")
-LELAMP_HASH_AFTER=$(hash_file "$LELAMP_SVC")
+HAL_HASH_AFTER=$(hash_file "$HAL_SVC")
 
 if [ "$NGINX_HASH_BEFORE" != "$NGINX_HASH_AFTER" ]; then
   echo "[patch] nginx config changed → reloading nginx"
@@ -365,12 +365,12 @@ else
   echo "[patch] nginx config unchanged, skipping reload"
 fi
 
-if [ "$LELAMP_HASH_BEFORE" != "$LELAMP_HASH_AFTER" ]; then
+if [ "$HAL_HASH_BEFORE" != "$HAL_HASH_AFTER" ]; then
   LAMP_UNIT="os-server"
-  echo "[patch] ${LELAMP_UNIT}.service changed → restarting ${LELAMP_UNIT} + ${LAMP_UNIT}"
-  systemctl restart "$LELAMP_UNIT" "$LAMP_UNIT"
+  echo "[patch] ${HAL_UNIT}.service changed → restarting ${HAL_UNIT} + ${LAMP_UNIT}"
+  systemctl restart "$HAL_UNIT" "$LAMP_UNIT"
 else
-  echo "[patch] ${LELAMP_UNIT}.service unchanged, skipping service restart"
+  echo "[patch] ${HAL_UNIT}.service unchanged, skipping service restart"
 fi
 
 echo "[patch] Done. Device is patched."

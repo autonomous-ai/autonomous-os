@@ -15,15 +15,15 @@ var claudeBrand = [3]int{193, 95, 60}
 
 // Bridge maps buddy state changes to device and OS server HTTP calls.
 type Bridge struct {
-	lelampURL string
-	lampURL   string
+	halURL string
+	deviceURL   string
 	client    *http.Client
 }
 
-func NewBridge(lelampURL, lampURL string) *Bridge {
+func NewBridge(halURL, deviceURL string) *Bridge {
 	return &Bridge{
-		lelampURL: lelampURL,
-		lampURL:   lampURL,
+		halURL: halURL,
+		deviceURL:   deviceURL,
 		client:    &http.Client{Timeout: 5 * time.Second},
 	}
 }
@@ -90,13 +90,13 @@ func (b *Bridge) OnStateChange(old, next BuddyState, hb *Heartbeat) {
 // whatever the user had set before Buddy took the strip.
 
 func (b *Bridge) ledOff() {
-	b.post(b.lelampURL+"/led/off", map[string]interface{}{
+	b.post(b.halURL+"/led/off", map[string]interface{}{
 		"transient": true,
 	})
 }
 
 func (b *Bridge) ledSolid(color [3]int) {
-	b.post(b.lelampURL+"/led/solid", map[string]interface{}{
+	b.post(b.halURL+"/led/solid", map[string]interface{}{
 		"color":     color,
 		"transient": true,
 	})
@@ -112,28 +112,28 @@ func (b *Bridge) ledEffect(effect string, color [3]int, speed float64, durationM
 	if durationMs > 0 {
 		payload["duration_ms"] = durationMs
 	}
-	b.post(b.lelampURL+"/led/effect", payload)
+	b.post(b.halURL+"/led/effect", payload)
 }
 
 func (b *Bridge) ledRestore() {
-	b.post(b.lelampURL+"/led/restore", nil)
+	b.post(b.halURL+"/led/restore", nil)
 }
 
 func (b *Bridge) displayInfo(text, subtitle string) {
-	b.post(b.lelampURL+"/display/info", map[string]interface{}{
+	b.post(b.halURL+"/display/info", map[string]interface{}{
 		"text":     text,
 		"subtitle": subtitle,
 	})
 }
 
 func (b *Bridge) displayEyes(expression string) {
-	b.post(b.lelampURL+"/display/eyes", map[string]interface{}{
+	b.post(b.halURL+"/display/eyes", map[string]interface{}{
 		"expression": expression,
 	})
 }
 
 func (b *Bridge) displayEyesMode() {
-	b.post(b.lelampURL+"/display/eyes-mode", nil)
+	b.post(b.halURL+"/display/eyes-mode", nil)
 }
 
 // --- OS server calls (port 5000) ---
@@ -148,7 +148,7 @@ func (b *Bridge) postBuddyState(state BuddyState, hb *Heartbeat) {
 		detail["hint"] = hb.Prompt.Hint
 	}
 
-	b.post(b.lampURL+"/api/monitor/event", map[string]interface{}{
+	b.post(b.deviceURL+"/api/monitor/event", map[string]interface{}{
 		"type":    "buddy_state",
 		"summary": fmt.Sprintf("buddy: %s", state),
 		"detail":  detail,
@@ -157,7 +157,7 @@ func (b *Bridge) postBuddyState(state BuddyState, hb *Heartbeat) {
 
 // postSensingEvent sends approval event to the OS server sensing pipeline.
 func (b *Bridge) postSensingEvent(prompt *Prompt) {
-	b.post(b.lampURL+"/api/sensing/event", map[string]interface{}{
+	b.post(b.deviceURL+"/api/sensing/event", map[string]interface{}{
 		"type":    "buddy_approval",
 		"message": fmt.Sprintf("Claude Desktop needs approval: %s on %s [prompt_id:%s]", prompt.Tool, prompt.Hint, prompt.ID),
 	})
@@ -171,7 +171,7 @@ func (b *Bridge) expressEmotion(name string, intensity float64) {
 	if name == "" {
 		return
 	}
-	b.post(b.lelampURL+"/emotion", map[string]interface{}{
+	b.post(b.halURL+"/emotion", map[string]interface{}{
 		"emotion":   name,
 		"intensity": intensity,
 	})
@@ -186,7 +186,7 @@ func (b *Bridge) prerenderTTS(text string) {
 	if text == "" {
 		return
 	}
-	b.post(b.lelampURL+"/voice/speak", map[string]interface{}{
+	b.post(b.halURL+"/voice/speak", map[string]interface{}{
 		"text":      text,
 		"prerender": true,
 	})
@@ -207,7 +207,7 @@ func (b *Bridge) speakTTS(text string) {
 	if text == "" {
 		return
 	}
-	b.post(b.lelampURL+"/voice/speak", map[string]interface{}{
+	b.post(b.halURL+"/voice/speak", map[string]interface{}{
 		"text":   text,
 		"cached": true,
 	})
@@ -222,7 +222,7 @@ func (b *Bridge) OnEvent(evt *Event) {
 	if evt == nil {
 		return
 	}
-	b.post(b.lampURL+"/api/monitor/event", map[string]interface{}{
+	b.post(b.deviceURL+"/api/monitor/event", map[string]interface{}{
 		"type":    "buddy_event",
 		"summary": fmt.Sprintf("buddy %s %s", evt.Evt, evt.Role),
 		"detail": map[string]interface{}{

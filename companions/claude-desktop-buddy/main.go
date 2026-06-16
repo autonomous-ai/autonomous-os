@@ -37,8 +37,8 @@ type Config struct {
 	Enabled            bool   `json:"enabled"`
 	DeviceName         string `json:"device_name"`
 	HTTPPort           int    `json:"http_port"`
-	LeLampURL          string `json:"lelamp_url"`
-	LampURL            string `json:"lamp_url"`
+	HALURL          string `json:"hal_url"`
+	DeviceURL            string `json:"device_url"`
 	ApprovalTimeoutSec int    `json:"approval_timeout_sec"`
 	// NarrationLang picks the language used by the Narrator (UC-9
 	// activity status announcements). Supported values live in
@@ -70,7 +70,7 @@ func main() {
 		return
 	}
 
-	cfg.DeviceName = resolveDeviceName(cfg.DeviceName, cfg.LampURL)
+	cfg.DeviceName = resolveDeviceName(cfg.DeviceName, cfg.DeviceURL)
 
 	// Register a BlueZ agent so LE Secure Connections pairing can complete.
 	// Without an agent, BlueZ rejects pairing requests and Claude Desktop's
@@ -79,7 +79,7 @@ func main() {
 		log.Printf("[buddy] WARN: register agent failed: %v (pairing will likely fail)", err)
 	}
 
-	bridge := NewBridge(cfg.LeLampURL, cfg.LampURL)
+	bridge := NewBridge(cfg.HALURL, cfg.DeviceURL)
 	startTime := time.Now()
 
 	// Narrator (UC-9): short TTS announcements on state changes and
@@ -159,7 +159,7 @@ func main() {
 
 	// Start BLE (blocking — advertising loop)
 	log.Printf("[buddy] starting Claude Desktop Buddy plugin (%s)", cfg.DeviceName)
-	log.Printf("[buddy] LeLamp: %s, Lamp: %s, HTTP: :%d", cfg.LeLampURL, cfg.LampURL, cfg.HTTPPort)
+	log.Printf("[buddy] HAL: %s, Device: %s, HTTP: :%d", cfg.HALURL, cfg.DeviceURL, cfg.HTTPPort)
 
 	if err := ble.Start(); err != nil {
 		log.Fatalf("[buddy] BLE start error: %v", err)
@@ -353,8 +353,8 @@ func loadConfig(path string) Config {
 		Enabled:            true,
 		DeviceName:         "Claude-{MAC}",
 		HTTPPort:           5002,
-		LeLampURL:          "http://127.0.0.1:5001",
-		LampURL:            "http://127.0.0.1:5000",
+		HALURL:          "http://127.0.0.1:5001",
+		DeviceURL:            "http://127.0.0.1:5000",
 		ApprovalTimeoutSec: 30,
 		NarrationLang:      "vi",
 	}
@@ -389,7 +389,7 @@ func loadConfig(path string) Config {
 // 31-byte primary BLE advertisement alongside the 128-bit Nordic UART
 // service UUID. With a long name the system pushes it to the scan
 // response, which some scanners only fetch via active scan and may miss.
-func resolveDeviceName(name, lampURL string) string {
+func resolveDeviceName(name, deviceURL string) string {
 	if name == "" {
 		name = "Claude-{MAC}"
 	}
@@ -397,16 +397,16 @@ func resolveDeviceName(name, lampURL string) string {
 		return name
 	}
 
-	mac, reason := fetchMAC(lampURL)
+	mac, reason := fetchMAC(deviceURL)
 	switch {
 	case mac != "":
 		log.Printf("[buddy] resolved mac=%q from Lamp", mac)
 	case reason == "empty":
-		log.Printf("[buddy] WARN: Lamp reachable at %s but mac is empty — hardware serial/MAC unreadable", lampURL)
+		log.Printf("[buddy] WARN: Device reachable at %s but mac is empty — hardware serial/MAC unreadable", deviceURL)
 		mac = "unk"
 	default:
 		log.Printf("[buddy] WARN: failed to fetch mac from %s after %d attempts (%s)",
-			lampURL, fetchAttempts, reason)
+			deviceURL, fetchAttempts, reason)
 		mac = "unk"
 	}
 	short := shortMAC(mac)
@@ -447,9 +447,9 @@ const fetchAttempts = 15
 //	"" on success, "empty" if the OS server answered with an empty mac (hardware
 //	serial/MAC unreadable), or a transport-level failure summary if all
 //	retries failed.
-func fetchMAC(lampURL string) (string, string) {
+func fetchMAC(deviceURL string) (string, string) {
 	client := &http.Client{Timeout: 3 * time.Second}
-	url := lampURL + "/api/system/network"
+	url := deviceURL + "/api/system/network"
 	var lastErr string
 	for i := 0; i < fetchAttempts; i++ {
 		mac, ok, errStr := tryFetchMAC(client, url)
