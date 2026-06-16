@@ -19,7 +19,7 @@ import { TTSSection } from "@/components/setup/TTSSection";
 import { VoiceSection } from "@/components/setup/VoiceSection";
 import { FaceSection } from "@/components/setup/FaceSection";
 import type { ChannelType, NetworkItem } from "@/types";
-import { Wifi, Cpu, Brain, Volume2, MessageSquare, UserCircle, Mic, Globe, Check } from "lucide-react";
+import { Wifi, Cpu, Brain, Volume2, MessageSquare, UserCircle, Mic, Globe, Check, XCircle, CheckCircle2 } from "lucide-react";
 
 // SetupMode controls which sections render. Initial = AP/offline (hide
 // online-only enrollments + tests), Continue = LAN/online (the device can hit
@@ -57,6 +57,47 @@ function normaliseSetupError(message: string): string {
 
 interface SetupProps {
   mode?: SetupMode;
+}
+
+// CopyAddress — the device's .local address with a one-tap Copy button. Shown
+// on the post-submit screen so the operator can capture the address BEFORE they
+// switch Wi-Fi networks (at which point this page loses its connection and any
+// un-copied address is gone). Falls back silently if the Clipboard API is
+// unavailable (older/non-secure contexts) — the text is still selectable.
+function CopyAddress({ host }: { host: string }) {
+  const [copied, setCopied] = useState(false);
+  const text = `http://${host}.local/`;
+  const copy = () => {
+    navigator.clipboard?.writeText(text).then(
+      () => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1800);
+      },
+      () => { /* clipboard blocked — user can still select the text */ },
+    );
+  };
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 8,
+      background: C.surface, border: `1px solid ${C.border}`,
+      borderRadius: 8, padding: "8px 10px",
+    }}>
+      <span style={{
+        flex: 1, textAlign: "left", fontSize: 13.5, color: C.text,
+        fontFamily: "ui-monospace, monospace", overflow: "hidden", textOverflow: "ellipsis",
+      }}>
+        {text}
+      </span>
+      <button
+        type="button"
+        onClick={copy}
+        className={`lm-btn lm-btn-ghost${copied ? " lm-copied" : ""}`}
+        style={{ padding: "5px 10px", fontSize: 11, flexShrink: 0, transition: "background 0.15s, color 0.15s, border-color 0.15s", minWidth: 64 }}
+      >
+        {copied ? "Copied ✓" : "Copy"}
+      </button>
+    </div>
+  );
 }
 
 // ── main page ─────────────────────────────────────────────────────────────────
@@ -107,7 +148,10 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
   // wired up and submitted with empty or URL-prefilled defaults, so
   // re-adding a SectionCard + a SECTIONS entry brings them back without
   // other plumbing.
-  const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode }[] = [
+  // `optional` flags the enrollment steps (Voice/Face) that the operator can
+  // skip — drives the "Optional" sidebar tag and the Skip button so they don't
+  // feel like a blocking requirement. Required steps omit the flag.
+  const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; optional?: boolean }[] = [
     { id: "device", label: "Device", icon: <Cpu size={15} /> },
     { id: "wifi",   label: "Wi-Fi",  icon: <Wifi size={15} /> },
     ...(debug ? [
@@ -117,10 +161,11 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
       { id: "tts" as SectionId,     label: "Voice", icon: <Volume2 size={15} /> },
     ] : []),
     // Voice / Face appear in continue mode only — they need the device's
-    // hardware + backend, both unavailable while we're still on the AP.
+    // hardware + backend, both unavailable while we're still on the AP. Both
+    // are optional enrollments the operator can skip.
     ...(isContinue ? [
-      { id: "voice" as SectionId, label: "My Voice", icon: <Mic size={15} /> },
-      { id: "face"  as SectionId, label: "Face",     icon: <UserCircle size={15} /> },
+      { id: "voice" as SectionId, label: "My Voice", icon: <Mic size={15} />, optional: true },
+      { id: "face"  as SectionId, label: "Face",     icon: <UserCircle size={15} />, optional: true },
     ] : []),
   ];
 
@@ -138,12 +183,20 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
   const [loading, setLoading] = useState(false);
   const [loadingList, setLoadingList] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Per-step validation hint shown under the wizard buttons when Next is
+  // blocked. Distinct from `error` (submit-level / backend errors) so the two
+  // don't clobber each other. Cleared on any successful navigation.
+  const [stepError, setStepError] = useState<string | null>(null);
   const [setupWorking, setSetupWorking] = useState(false);
   // Setup phase mirrors the backend SetupStatus enum: connecting → connected
   // (success path) or failed. Drives the post-submit screen UI.
   const [setupPhase, setSetupPhase] = useState<"connecting" | "connected" | "failed">("connecting");
   const [setupLanIP, setSetupLanIP] = useState<string>("");
   const [setupErrorMsg, setSetupErrorMsg] = useState<string>("");
+  // Seconds elapsed since the join started, shown on the connecting screen so
+  // the wait feels measured rather than open-ended. Reset + ticked by the
+  // effect below whenever we enter the connecting phase.
+  const [elapsed, setElapsed] = useState(0);
   // Always start on Device. The admin-password input lives there (fresh
   // devices need it; the OS-server push doesn't carry that field via URL), so the
   // user must see it before submitting. For already-provisioned devices
@@ -296,8 +349,17 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
     // device-section is "done" when a device id exists AND, if the device has
     // no admin password on file yet, the operator has filled + confirmed one.
     // Devices that already have a hash satisfy the gate automatically.
-    device: !!deviceId && (hasAdminPassword || (!!adminPassword && adminPassword === adminPasswordConfirm)),
-    wifi: !!ssid,
+    // NOTE: do NOT gate on deviceId. It's a read-only, device-populated field
+    // and in initial/AP mode GET /api/device/config is admin-gated (401), so it
+    // arrives empty — the operator can't fill it. The only thing they actually
+    // do here is set the admin password, so that's the gate. (Submit also
+    // doesn't require deviceId — it merges server-side — so this keeps per-step
+    // gating consistent with submit.)
+    device: hasAdminPassword || (adminPassword.length >= 8 && adminPassword === adminPasswordConfirm),
+    // Wi-Fi step needs a network plus either a typed password or one already on
+    // file (re-setup via #force). Mirrors the submit-time preflight so per-step
+    // gating and the final submit agree on what "done" means.
+    wifi: !!ssid && (!!password || hasNetworkPassword),
     llm: !!llmApiKey || llmLoaded.apiKey,
     language: true, // Auto/empty is a valid choice — never block on this.
     channel: channel === "telegram"
@@ -415,6 +477,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
 
   const scrollTo = (id: SectionId) => {
     setActiveSection(id);
+    setStepError(null); // moving to any section clears a stale per-step hint
     // Pop the content area back to the top so a Back/Next click never lands
     // the operator mid-scroll of the previous section.
     contentRef.current?.scrollTo({ top: 0 });
@@ -425,14 +488,45 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
   // cases (activeSection on a hidden section) fall back to index 0 so Next
   // still advances into the visible set.
   const currentStepIndex = Math.max(0, visibleSections.findIndex((s) => s.id === activeSection));
+  const currentStep = visibleSections[currentStepIndex];
   const isFirstStep = currentStepIndex === 0;
   const isLastStep = currentStepIndex >= visibleSections.length - 1;
+  // On an optional step the operator hasn't completed yet, the forward action
+  // reads "Skip" rather than "Next" so they understand they can move on without
+  // enrolling. Once they've enrolled (sectionDone), it reverts to "Next".
+  const isSkippableStep = !!currentStep?.optional && !sectionDone[currentStep.id];
+  // Overall completion drives the sidebar + topbar progress bars. Counts only
+  // the sections currently visible so the denominator matches what the
+  // operator actually sees (e.g. ?debug, devicePushedConfig, continue mode).
+  const doneCount = visibleSections.filter((s) => sectionDone[s.id]).length;
+  const progressPct = visibleSections.length
+    ? Math.round((doneCount / visibleSections.length) * 100)
+    : 0;
   const goPrev = () => {
+    setStepError(null);
     if (isFirstStep) return;
     scrollTo(visibleSections[currentStepIndex - 1].id);
   };
+  // Per-step gate: a required step that isn't `sectionDone` blocks Next with an
+  // inline, field-specific hint — far better than walking all the way to submit
+  // and bouncing back several steps, and clearer than a silently-disabled
+  // button (which never explains *why* it won't advance). Optional steps
+  // (Voice/Face) always pass. Back never validates.
+  const STEP_BLOCK_HINTS: Partial<Record<SectionId, string>> = {
+    device: hasAdminPassword
+      ? "Device info is still loading."
+      : "Set an admin password (min 8 characters) and confirm it before continuing.",
+    wifi: "Choose a Wi-Fi network and enter its password before continuing.",
+    llm: "Add the AI Brain API key before continuing.",
+    channel: "Add the messaging channel token before continuing.",
+  };
   const goNext = () => {
     if (isLastStep) return;
+    if (currentStep && !currentStep.optional && !sectionDone[currentStep.id]) {
+      setStepError(STEP_BLOCK_HINTS[currentStep.id] ?? "Complete this step before continuing.");
+      return;
+    }
+    setStepError(null);
     scrollTo(visibleSections[currentStepIndex + 1].id);
   };
 
@@ -440,6 +534,16 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
     () => [...new Map(networks.filter((n) => n.ssid !== "").map((n) => [n.ssid, n])).values()],
     [networks],
   );
+
+  // Elapsed-seconds ticker for the connecting screen. Runs only while we're in
+  // the connecting phase; resets on entry so re-tries (failed → Back → submit)
+  // start from zero. Cleared on unmount / phase change.
+  useEffect(() => {
+    if (!setupWorking || setupPhase !== "connecting") return;
+    setElapsed(0);
+    const id = setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [setupWorking, setupPhase]);
 
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
@@ -451,10 +555,20 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
     if (!hasAdminPassword) {
       if (!adminPassword) {
         setError("Pick an admin password — you'll use it to sign in later.");
+        setActiveSection("device");
+        return;
+      }
+      // 8-char floor is a frontend-only policy (the backend bcrypts any
+      // non-empty value). This protects a device with a camera/mic from a
+      // trivially guessable admin login.
+      if (adminPassword.length < 8) {
+        setError("Admin password must be at least 8 characters.");
+        setActiveSection("device");
         return;
       }
       if (adminPassword !== adminPasswordConfirm) {
         setError("Admin password and confirmation don't match.");
+        setActiveSection("device");
         return;
       }
     }
@@ -551,14 +665,6 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
       background: C.bg, color: C.text,
       fontFamily: "'Inter', 'Segoe UI', sans-serif", fontSize: 14,
     }}>
-      <style>{`
-        @media (max-width: 640px) {
-          .lm-setup .lm-sidebar { display: none !important; }
-          .lm-setup .lm-mobile-tabs { display: flex !important; }
-          .lm-setup .lm-main-content { padding: 16px !important; }
-        }
-      `}</style>
-
       {/* ── Sidebar (hidden on mobile) ── */}
       <aside className="lm-sidebar" style={{
         width: 192, flexShrink: 0,
@@ -566,7 +672,21 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
         display: "flex", flexDirection: "column",
       }}>
 
-        <nav style={{ padding: "10px 0", flex: 1 }}>
+        {/* Brand header + overall progress so the operator always sees how far
+            they are into the wizard from the sidebar. */}
+        <div style={{ padding: "16px 16px 12px" }}>
+          <div style={{ fontSize: 14.5, fontWeight: 700, color: C.text, letterSpacing: "0.01em" }}>
+            Device Setup
+          </div>
+          <div style={{ fontSize: 12, color: C.textMuted, marginTop: 3 }}>
+            {doneCount} of {visibleSections.length} done
+          </div>
+          <div className="lm-progress-track" style={{ marginTop: 10 }}>
+            <div className="lm-progress-fill" style={{ width: `${progressPct}%` }} />
+          </div>
+        </div>
+
+        <nav style={{ padding: "4px 0 10px", flex: 1 }}>
           {visibleSections.map((s) => {
             const active = activeSection === s.id;
             // Show checks whenever a section's value is filled — including in
@@ -575,18 +695,22 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
             // because sectionDone returns false across the board.
             const done = sectionDone[s.id];
             return (
-              <button key={s.id} onClick={() => scrollTo(s.id)} style={{
-                display: "flex", alignItems: "center", gap: 9,
-                padding: "8px 14px", borderRadius: 8, margin: "2px 8px",
-                fontSize: 12.5, fontWeight: active ? 600 : 400,
-                color: active ? C.amber : (done ? C.textMuted : "var(--lm-text-dim)"),
-                background: active ? C.amberDim : "transparent",
-                cursor: "pointer", transition: "all 0.15s",
-                border: "none", width: "calc(100% - 16px)", textAlign: "left",
-              }}>
+              <button
+                key={s.id}
+                onClick={() => scrollTo(s.id)}
+                className={`lm-nav-item${active ? " lm-nav-item--active" : ""}${done && !active ? " lm-nav-item--done" : ""}`}
+              >
                 {s.icon}
                 <span style={{ flex: 1 }}>{s.label}</span>
-                {done && <Check size={13} style={{ color: C.green }} />}
+                {s.optional && !done && (
+                  <span style={{
+                    fontSize: 10, fontWeight: 600, color: C.textMuted,
+                    textTransform: "uppercase", letterSpacing: "0.04em",
+                  }}>
+                    Optional
+                  </span>
+                )}
+                {done && <Check size={14} className="lm-pop" style={{ color: C.green }} />}
               </button>
             );
           })}
@@ -615,46 +739,68 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
       {/* ── Main ── */}
       <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
 
-        {/* Mobile tabs (hidden on desktop) */}
-        <div className="lm-mobile-tabs" style={{
-          display: "none", overflowX: "auto", gap: 4, padding: "8px 12px",
-          borderBottom: `1px solid ${C.border}`, flexShrink: 0, alignItems: "center",
+        {/* Mobile tabs (hidden on desktop). The theme toggle sits OUTSIDE the
+            horizontally-scrolling tab row so it stays pinned (margin-left:auto
+            doesn't pin inside an overflow-x flex container) and isn't hidden
+            under the right-edge scroll-hint fade. */}
+        <div className="lm-mobile-tabs-wrap" style={{
+          display: "none", flexShrink: 0,
+          borderBottom: `1px solid ${C.border}`,
+          alignItems: "center", gap: 4, padding: "8px 8px 8px 12px",
         }}>
-          {visibleSections.map((s) => {
-            const active = activeSection === s.id;
-            return (
-              <button key={s.id} onClick={() => scrollTo(s.id)} style={{
-                padding: "5px 10px", borderRadius: 6, fontSize: 11, fontWeight: active ? 600 : 400,
-                color: active ? C.amber : C.textDim,
-                background: active ? C.amberDim : "transparent",
-                border: "none", cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
-              }}>
-                {s.label}
-              </button>
-            );
-          })}
+          <div className="lm-mobile-tabs lm-hide-scroll" style={{
+            display: "flex", overflowX: "auto", gap: 4, flex: 1, alignItems: "center",
+          }}>
+            {visibleSections.map((s) => {
+              const active = activeSection === s.id;
+              return (
+                <button
+                  key={s.id}
+                  onClick={() => scrollTo(s.id)}
+                  className={`lm-tab${active ? " lm-tab--active" : ""}`}
+                >
+                  {s.label}
+                </button>
+              );
+            })}
+          </div>
           <button onClick={toggleTheme} style={{
             background: "none", border: "none", cursor: "pointer",
-            fontSize: 14, color: C.textMuted, padding: "2px 6px", marginLeft: "auto", flexShrink: 0,
+            fontSize: 14, color: C.textMuted, padding: "2px 6px", flexShrink: 0,
           }}>
             {theme === "dark" ? "◑" : "◐"}
           </button>
         </div>
 
         {/* Topbar */}
-        <div style={{
-          padding: "10px 24px", borderBottom: `1px solid ${C.border}`,
-          display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0,
-        }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>
-            {setupWorking ? "Setting up…" : SECTIONS.find((s) => s.id === activeSection)?.label ?? "Wi-Fi"}
-          </span>
-          {/* Submit lives at the bottom of the form alongside Back/Next so the
-              operator follows a single wizard flow per step. */}
-          {!setupWorking && !isFirstStep && (
-            <span style={{ fontSize: 11, color: C.textDim }}>
-              Step {currentStepIndex + 1} / {visibleSections.length}
+        <div style={{ borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
+          <div style={{
+            padding: "12px 24px 10px",
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+          }}>
+            <span style={{ fontSize: 15, fontWeight: 600, color: C.text }}>
+              {setupWorking ? "Setting up…" : SECTIONS.find((s) => s.id === activeSection)?.label ?? "Wi-Fi"}
             </span>
+            {/* Submit lives at the bottom of the form alongside Back/Next so the
+                operator follows a single wizard flow per step. */}
+            {!setupWorking && (
+              <span style={{ fontSize: 12, color: C.textDim }}>
+                Step {currentStepIndex + 1} / {visibleSections.length}
+              </span>
+            )}
+          </div>
+          {/* Per-step progress mirrors the wizard position (not section-done
+              count) so the bar advances as the operator walks Back/Next. */}
+          {!setupWorking && (
+            <div className="lm-progress-track" style={{ borderRadius: 0 }}>
+              <div
+                className="lm-progress-fill"
+                style={{
+                  borderRadius: 0,
+                  width: `${((currentStepIndex + 1) / Math.max(1, visibleSections.length)) * 100}%`,
+                }}
+              />
+            </div>
           )}
         </div>
 
@@ -668,42 +814,59 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                 Wi-Fi, then a QR + IP for the user to continue setup on the
                 home network once the AP shuts down. */}
             {setupWorking ? (
-              <div style={{
-                background: C.card, border: `1px solid ${C.border}`,
-                borderRadius: 12, padding: "32px 24px", textAlign: "center",
+              <div className="lm-card lm-fade-in" style={{
+                padding: "32px 24px", textAlign: "center",
               }}>
                 {setupPhase === "connecting" && (
                   <>
-                    <div style={{ fontSize: 32, marginBottom: 12 }}>⏳</div>
-                    <div style={{ fontSize: 15, fontWeight: 600, color: C.amber, marginBottom: 8 }}>
-                      Your device is joining Wi-Fi…
+                    <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
+                      <span className="lm-wifi-pulse" aria-hidden>
+                        <span className="lm-wifi-ring" />
+                        <span className="lm-wifi-ring lm-r2" />
+                        <span className="lm-wifi-ring lm-r3" />
+                        <span className="lm-wifi-icon">
+                          <Wifi size={26} strokeWidth={2} />
+                        </span>
+                      </span>
                     </div>
-                    <div style={{ fontSize: 12, color: C.textDim, marginBottom: deviceMdnsHost ? 18 : 0 }}>
+                    <div style={{ fontSize: 14.5, fontWeight: 600, color: C.amber, marginBottom: 8 }}>
+                      Your device is joining Wi-Fi
+                      <span className="lm-blink">.</span><span>.</span><span>.</span>
+                    </div>
+                    <div style={{ fontSize: 13, color: C.textDim, marginBottom: 14, lineHeight: 1.5 }}>
                       This usually takes 10-30 seconds. Stay on this network.
                     </div>
-                    {/* Fallback manual link: the auto-redirect can fail when
-                        the user's network blocks mDNS (Android Chrome) or
-                        when the AP shuts down before the phase poll flips
-                        to "connected". Offering the same .local link here
-                        means a stuck operator can always click their way
-                        out by reconnecting to home Wi-Fi first. */}
+                    {/* Indeterminate progress + elapsed counter: the join has no
+                        knowable %, so a sweeping bar signals "working" while the
+                        seconds give the wait a measured feel. */}
+                    <div className="lm-indeterminate" style={{ marginBottom: 7 }} />
+                    <div style={{ fontSize: 11, color: C.textMuted, marginBottom: deviceMdnsHost ? 18 : 0 }}>
+                      Elapsed {elapsed}s
+                    </div>
+                    {/* Surface the .local address NOW, while we still have a
+                        connection — once the operator switches to home Wi-Fi
+                        this page goes away and an un-copied address is lost.
+                        The auto-redirect on "connected" still handles the happy
+                        path; this is the safety net for when mDNS auto-redirect
+                        fails (Android Chrome, mDNS-blocking networks, or the AP
+                        dropping before the phase poll flips).
+                        Toned down here vs. the "connected" screen: a single
+                        compact label + the copy field, no long paragraph, so it
+                        stays a quiet safety net rather than competing with the
+                        primary "joining…" message. */}
                     {deviceMdnsHost && (
                       <div style={{
-                        marginTop: 6, paddingTop: 14,
+                        marginTop: 4, paddingTop: 14,
                         borderTop: `1px solid ${C.border}`,
-                        fontSize: 11, color: C.textMuted, lineHeight: 1.55,
+                        textAlign: "left",
                       }}>
-                        Stuck here? Reconnect to your home Wi-Fi, then open{" "}
-                        <a
-                          href={`http://${deviceMdnsHost}.local${window.location.pathname}${getInitialSearch()}`}
-                          style={{
-                            color: C.amber, textDecoration: "none",
-                            fontFamily: "ui-monospace, monospace",
-                          }}
-                        >
-                          http://{deviceMdnsHost}.local/
-                        </a>
-                        .
+                        <div style={{
+                          fontSize: 13, color: C.textDim, marginBottom: 6, lineHeight: 1.5,
+                        }}>
+                          This page disconnects when you rejoin home Wi-Fi — save
+                          this address to continue:
+                        </div>
+                        <CopyAddress host={deviceMdnsHost} />
                       </div>
                     )}
                   </>
@@ -711,8 +874,10 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
 
                 {setupPhase === "connected" && (
                   <>
-                    <div style={{ fontSize: 32, marginBottom: 12 }}>✦</div>
-                    <div style={{ fontSize: 15, fontWeight: 600, color: C.amber, marginBottom: 16 }}>
+                    <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
+                      <CheckCircle2 size={34} color={C.green} strokeWidth={1.75} aria-hidden />
+                    </div>
+                    <div style={{ fontSize: 14.5, fontWeight: 600, color: C.amber, marginBottom: 16 }}>
                       Your device is online!
                     </div>
 
@@ -725,10 +890,13 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                         router-admin hint when the host is unreachable. */}
                     {deviceMdnsHost ? (
                       <>
-                        <div style={{ fontSize: 13, color: C.text, marginBottom: 4, fontFamily: "ui-monospace, monospace" }}>
-                          http://{deviceMdnsHost}.local/
-                        </div>
-                        <div style={{ fontSize: 11, color: C.textDim, marginBottom: 18, lineHeight: 1.5 }}>
+                        {/* Action-first ordering: the one thing the user must do
+                            now (rejoin home Wi-Fi, then Continue) leads, with the
+                            primary button right under it. The .local address +
+                            router fallback drop below a divider as a quiet
+                            safety-net for when auto-redirect/Continue doesn't
+                            land — mirroring the connecting screen's hierarchy. */}
+                        <div style={{ fontSize: 13, color: C.textDim, marginBottom: 16, lineHeight: 1.5 }}>
                           Reconnect your computer to your home Wi-Fi, then click
                           Continue.
                         </div>
@@ -750,27 +918,37 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                               window.location.reload();
                             }
                           }}
+                          className="lm-btn lm-btn-primary"
                           style={{
-                            display: "inline-block", padding: "9px 18px",
-                            background: C.amber, color: "#fff",
-                            borderRadius: 7, fontSize: 12.5, fontWeight: 600,
+                            display: "inline-block", padding: "10px 22px",
                             textDecoration: "none",
-                            marginBottom: 14,
                           }}
                         >
                           Continue setup →
                         </a>
-                        <div style={{ fontSize: 10.5, color: C.textMuted, lineHeight: 1.5 }}>
-                          Can't reach it?
-                          {setupLanIP && (
-                            <> Try <span style={{ fontFamily: "ui-monospace, monospace" }}>http://{setupLanIP}/</span> or </>
-                          )}
-                          {" "}find your device's IP in your router's admin page (look
-                          for "{deviceMdnsHost}").
+                        {/* Safety-net block: divider + the canonical address and a
+                            router-admin hint, toned down so it doesn't compete
+                            with the Continue button above. */}
+                        <div style={{
+                          marginTop: 18, paddingTop: 16,
+                          borderTop: `1px solid ${C.border}`, textAlign: "left",
+                        }}>
+                          <div style={{ fontSize: 13, color: C.textDim, marginBottom: 6, lineHeight: 1.5 }}>
+                            Or open this address once you're back on home Wi-Fi:
+                          </div>
+                          <CopyAddress host={deviceMdnsHost} />
+                          <div style={{ fontSize: 12, color: C.textMuted, marginTop: 8, lineHeight: 1.5 }}>
+                            Can't reach it?
+                            {setupLanIP && (
+                              <> Try <span style={{ fontFamily: "ui-monospace, monospace" }}>http://{setupLanIP}/</span> or </>
+                            )}
+                            {" "}find your device's IP in your router's admin page (look
+                            for "{deviceMdnsHost}").
+                          </div>
                         </div>
                       </>
                     ) : (
-                      <div style={{ fontSize: 12, color: C.textDim }}>
+                      <div style={{ fontSize: 13, color: C.textDim, lineHeight: 1.5 }}>
                         Your device is connected. Open your router's admin page to find
                         the device's IP address{deviceTypePrefix ? ` (look for "${deviceTypePrefix}")` : ""}.
                       </div>
@@ -780,22 +958,42 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
 
                 {setupPhase === "failed" && (
                   <>
-                    <div style={{ fontSize: 32, marginBottom: 12, color: C.red }}>✕</div>
-                    <div style={{ fontSize: 15, fontWeight: 600, color: C.red, marginBottom: 8 }}>
+                    <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
+                      <XCircle size={34} color={C.red} strokeWidth={1.75} aria-hidden />
+                    </div>
+                    <div style={{ fontSize: 14.5, fontWeight: 600, color: C.red, marginBottom: 8 }}>
                       Wi-Fi setup failed
                     </div>
-                    <div style={{ fontSize: 12, color: C.textDim, marginBottom: 14 }}>
-                      {setupErrorMsg || "Couldn't connect to the network you chose. Double-check the password and try again."}
+                    <div style={{ fontSize: 13, color: C.textDim, marginBottom: 16, lineHeight: 1.5 }}>
+                      {setupErrorMsg || "Couldn't connect to the network you chose."}
                     </div>
+
+                    {/* Actionable checklist. Wi-Fi join failures on these
+                        devices are overwhelmingly one of these three causes, so
+                        we spell them out instead of a generic "try again" —
+                        the 2.4GHz one in particular is non-obvious to most
+                        people and the single most common cause. */}
+                    <div style={{
+                      textAlign: "left", background: C.surface,
+                      border: `1px solid ${C.border}`, borderRadius: 8,
+                      padding: "12px 14px", marginBottom: 18, fontSize: 13,
+                      color: C.textDim, lineHeight: 1.6,
+                    }}>
+                      <div style={{ fontWeight: 600, color: C.text, marginBottom: 6 }}>
+                        Things to check:
+                      </div>
+                      <div>• Use a <strong style={{ color: C.text }}>2.4GHz</strong> Wi-Fi network — most devices can't join 5GHz.</div>
+                      <div>• Double-check the Wi-Fi password (it's case-sensitive).</div>
+                      <div>• Keep the device close to your router during setup.</div>
+                    </div>
+
                     <button
                       type="button"
-                      onClick={() => { setSetupWorking(false); setSetupPhase("connecting"); }}
-                      style={{
-                        padding: "8px 16px", background: C.amber, color: "#fff",
-                        border: "none", borderRadius: 7, fontSize: 12, cursor: "pointer", fontWeight: 600,
-                      }}
+                      className="lm-btn lm-btn-primary"
+                      onClick={() => { setSetupWorking(false); setSetupPhase("connecting"); setActiveSection("wifi"); }}
+                      style={{ padding: "9px 18px" }}
                     >
-                      Back to setup
+                      Back to Wi-Fi
                     </button>
                   </>
                 )}
@@ -803,7 +1001,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
             ) : (
               <>
                 {error && (
-                  <div style={{
+                  <div className="lm-fade-in" style={{
                     background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.25)",
                     borderRadius: 8, padding: "10px 14px", fontSize: 12, color: C.red, marginBottom: 16,
                   }}>
@@ -899,6 +1097,15 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                     />
                   )}
 
+                  {stepError && (
+                    <div className="lm-fade-in" style={{
+                      fontSize: 12, color: C.red, marginBottom: 10,
+                      display: "flex", alignItems: "center", gap: 6,
+                    }}>
+                      <span aria-hidden>⚠</span>{stepError}
+                    </div>
+                  )}
+
                   <div style={{
                     display: "flex", gap: 10, justifyContent: "space-between",
                     alignItems: "center", marginTop: 8,
@@ -907,11 +1114,8 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                       <button
                         type="button"
                         onClick={goPrev}
-                        style={{
-                          padding: "9px 18px", borderRadius: 7, fontSize: 12.5, fontWeight: 500,
-                          background: C.surface, color: C.text,
-                          border: `1px solid ${C.border}`, cursor: "pointer",
-                        }}
+                        className="lm-btn lm-btn-ghost"
+                        style={{ padding: "9px 18px", fontWeight: 500 }}
                       >
                         ← Back
                       </button>
@@ -927,13 +1131,10 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                           key="done"
                           type="button"
                           onClick={() => navigate("/monitor")}
-                          style={{
-                            padding: "9px 22px", borderRadius: 7, fontSize: 12.5, fontWeight: 600,
-                            background: C.amber, color: "#0C0B09",
-                            border: "none", cursor: "pointer",
-                          }}
+                          className="lm-btn lm-btn-primary"
+                          style={{ padding: "9px 22px" }}
                         >
-                          Go to monitor →
+                          {isSkippableStep ? "Skip & finish →" : "Go to monitor →"}
                         </button>
                       ) : (
                         <button
@@ -946,14 +1147,8 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                           key="submit"
                           type="submit"
                           disabled={loading || loadingList}
-                          style={{
-                            padding: "9px 22px", borderRadius: 7, fontSize: 12.5, fontWeight: 600,
-                            background: loading || loadingList ? C.surface : C.amber,
-                            color: loading || loadingList ? C.textMuted : "#0C0B09",
-                            border: "none",
-                            cursor: loading || loadingList ? "not-allowed" : "pointer",
-                            opacity: loading || loadingList ? 0.6 : 1,
-                          }}
+                          className="lm-btn lm-btn-primary"
+                          style={{ padding: "9px 22px" }}
                         >
                           {loading ? "Setting up…" : "Setup"}
                         </button>
@@ -963,13 +1158,10 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                         key="next"
                         type="button"
                         onClick={goNext}
-                        style={{
-                          padding: "9px 22px", borderRadius: 7, fontSize: 12.5, fontWeight: 600,
-                          background: C.amber, color: "#0C0B09",
-                          border: "none", cursor: "pointer",
-                        }}
+                        className="lm-btn lm-btn-primary"
+                        style={{ padding: "9px 22px" }}
                       >
-                        Next →
+                        {isSkippableStep ? "Skip →" : "Next →"}
                       </button>
                     )}
                   </div>

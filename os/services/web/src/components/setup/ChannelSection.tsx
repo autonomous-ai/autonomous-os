@@ -1,4 +1,5 @@
-import { C, ConfiguredHint, LockedField, LockedPasswordField, SectionCard } from "./shared";
+import { MessageSquare } from "lucide-react";
+import { ConfiguredHint, LockedField, LockedPasswordField, SectionCard, LABEL_STYLE, INPUT_STYLE, FIELD_GAP } from "./shared";
 import type { ChannelType } from "@/types";
 import type { ChannelLoadedState } from "@/hooks/setup/types";
 
@@ -23,19 +24,15 @@ export function ChannelSection({
   discordUserId: string; setDiscordUserId: (v: string) => void;
 }) {
   return (
-    <SectionCard id="channel" title="Messaging Channels" active={active}>
-      <div style={{ marginBottom: 12 }}>
-        <label htmlFor="channel" style={{ display: "block", fontSize: 11, color: C.textDim, marginBottom: 5 }}>Channel *</label>
+    <SectionCard id="channel" title="Messaging Channels" active={active} icon={<MessageSquare size={17} />}
+      description="Connect a chat app so you can message your device and get its replies.">
+      <div style={{ marginBottom: FIELD_GAP }}>
+        <label htmlFor="channel" style={LABEL_STYLE}>Channel *</label>
         <select
           id="channel"
           value={channel}
           onChange={(e) => setChannel(e.target.value as ChannelType)}
-          style={{
-            width: "100%", boxSizing: "border-box",
-            background: C.surface, border: `1px solid ${C.border}`,
-            borderRadius: 7, padding: "8px 11px",
-            fontSize: 12.5, color: C.text, outline: "none", cursor: "pointer",
-          }}
+          style={{ ...INPUT_STYLE, cursor: "pointer" }}
         >
           <option value="telegram">Telegram</option>
           <option value="slack">Slack</option>

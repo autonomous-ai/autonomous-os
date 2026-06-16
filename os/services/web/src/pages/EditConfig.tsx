@@ -341,6 +341,14 @@ export default function EditConfig() {
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    // Admin password rotation is optional here (empty = keep current). But when
+    // the operator IS rotating, hold them to the same 8-char floor as initial
+    // setup so /edit can't be used to weaken the admin login below the policy
+    // the setup flow enforces. Backend has no min-length, so this is the gate.
+    if (adminPassword && adminPassword.length < 8) {
+      setError("New admin password must be at least 8 characters.");
+      return;
+    }
     setSaving(true);
     try {
       // Build the payload from non-secret fields first, then layer on each

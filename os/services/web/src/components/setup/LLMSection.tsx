@@ -1,3 +1,4 @@
+import { Brain } from "lucide-react";
 import { ConfiguredHint, LockedField, LockedPasswordField, SectionCard } from "./shared";
 import type { LlmLoadedState } from "@/hooks/setup/types";
 
@@ -14,7 +15,8 @@ export function LLMSection({
   llmModel: string; setLlmModel: (v: string) => void;
 }) {
   return (
-    <SectionCard id="llm" title="AI Brain" active={active}>
+    <SectionCard id="llm" title="AI Brain" active={active} icon={<Brain size={17} />}
+      description="The LLM that powers your device. Paste the API key and endpoint from your provider.">
       {llmLoaded.apiKey ? (
         <ConfiguredHint label="API Key" />
       ) : (

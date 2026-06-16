@@ -1,4 +1,5 @@
-import { C, SectionCard } from "./shared";
+import { Globe } from "lucide-react";
+import { SectionCard, LABEL_STYLE, INPUT_STYLE } from "./shared";
 
 export function LanguageSection({
   active, sttLanguage, setSttLanguage,
@@ -8,24 +9,17 @@ export function LanguageSection({
   setSttLanguage: (v: string) => void;
 }) {
   return (
-    <SectionCard id="language" title="Language" active={active}>
-      <div style={{ fontSize: 11, color: C.textDim, marginBottom: 10 }}>
-        Pick the language your device listens for. You can change this anytime from the Edit page.
-      </div>
+    <SectionCard id="language" title="Language" active={active} icon={<Globe size={17} />}
+      description="Pick the language your device listens for. You can change this anytime from the Edit page.">
       <div style={{ marginBottom: 4 }}>
-        <label htmlFor="stt_language" style={{ display: "block", fontSize: 11, color: C.textDim, marginBottom: 5 }}>
+        <label htmlFor="stt_language" style={LABEL_STYLE}>
           Language
         </label>
         <select
           id="stt_language"
           value={sttLanguage}
           onChange={(e) => setSttLanguage(e.target.value)}
-          style={{
-            width: "100%", boxSizing: "border-box",
-            background: C.surface, border: `1px solid ${C.border}`,
-            borderRadius: 7, padding: "8px 11px",
-            fontSize: 12.5, color: C.text, outline: "none", cursor: "pointer",
-          }}
+          style={{ ...INPUT_STYLE, cursor: "pointer" }}
         >
           <option value="">Auto (default)</option>
           <option value="en">English</option>
