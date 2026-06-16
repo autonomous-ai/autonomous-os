@@ -1,13 +1,13 @@
 """Runtime audio routing — hot-swap TTS output + VoiceService input between
-the lamp's built-in speaker/mic and a connected Bluetooth headset.
+the device's built-in speaker/mic and a connected Bluetooth headset.
 
 Routing strategy (matches the Pi/OrangePi PulseAudio setup):
 
-  * Lamp mode (default): TTS writes directly to the ALSA plughw device,
+  * Built-in mode (default): TTS writes directly to the ALSA plughw device,
     VoiceService captures from its plughw mic. Same path hal had before.
   * Bluetooth mode: `pactl set-default-sink <bluez_sink>`, then point TTS
     at the PortAudio `pulse` device so every byte routes through PulseAudio
-    onto the BT sink. STT input keeps the lamp mic unless the headset
+    onto the BT sink. STT input keeps the built-in mic unless the headset
     exposes a true HFP source.
 
 This module never edits TTS/VoiceService source files; it mutates instance
@@ -25,42 +25,42 @@ logger = logging.getLogger("hal.audio_route")
 
 _lock = threading.Lock()
 
-_LAMP_OUT_IDX: Optional[int] = None
-_LAMP_IN_IDX: Optional[int] = None
-_LAMP_ALSA_IN: Optional[str] = None
-_LAMP_PA_SINK: Optional[str] = None
-_LAMP_PA_SOURCE: Optional[str] = None
+_BUILTIN_OUT_IDX: Optional[int] = None
+_BUILTIN_IN_IDX: Optional[int] = None
+_BUILTIN_ALSA_IN: Optional[str] = None
+_BUILTIN_PA_SINK: Optional[str] = None
+_BUILTIN_PA_SOURCE: Optional[str] = None
 _defaults_captured: bool = False
 
-_current_label: str = "lamp"
+_current_label: str = "builtin"
 
 
-def _capture_lamp_defaults() -> None:
-    """Latch the lamp-default device indices + the PulseAudio default sink/source
+def _capture_builtin_defaults() -> None:
+    """Latch the built-in device indices + the PulseAudio default sink/source
     on first call. Re-running is a no-op so we never overwrite the originals."""
-    global _LAMP_OUT_IDX, _LAMP_IN_IDX, _LAMP_ALSA_IN
-    global _LAMP_PA_SINK, _LAMP_PA_SOURCE, _defaults_captured
+    global _BUILTIN_OUT_IDX, _BUILTIN_IN_IDX, _BUILTIN_ALSA_IN
+    global _BUILTIN_PA_SINK, _BUILTIN_PA_SOURCE, _defaults_captured
     if _defaults_captured:
         return
-    _LAMP_OUT_IDX = state.audio_output_device
-    _LAMP_IN_IDX = state.audio_input_device
+    _BUILTIN_OUT_IDX = state.audio_output_device
+    _BUILTIN_IN_IDX = state.audio_input_device
     try:
         from hal.config import AUDIO_INPUT_ALSA
-        _LAMP_ALSA_IN = AUDIO_INPUT_ALSA
+        _BUILTIN_ALSA_IN = AUDIO_INPUT_ALSA
     except Exception:
-        _LAMP_ALSA_IN = None
+        _BUILTIN_ALSA_IN = None
     try:
         from hal.drivers.bluetooth_manager import BluetoothManager
         mgr = BluetoothManager()
-        _LAMP_PA_SINK = mgr.pa_default_sink()
-        _LAMP_PA_SOURCE = mgr.pa_default_source()
+        _BUILTIN_PA_SINK = mgr.pa_default_sink()
+        _BUILTIN_PA_SOURCE = mgr.pa_default_source()
     except Exception:
-        _LAMP_PA_SINK = None
-        _LAMP_PA_SOURCE = None
+        _BUILTIN_PA_SINK = None
+        _BUILTIN_PA_SOURCE = None
     _defaults_captured = True
     logger.info(
-        "Lamp audio defaults captured: out_idx=%s in_idx=%s alsa_in=%s pa_sink=%s pa_source=%s",
-        _LAMP_OUT_IDX, _LAMP_IN_IDX, _LAMP_ALSA_IN, _LAMP_PA_SINK, _LAMP_PA_SOURCE,
+        "Built-in audio defaults captured: out_idx=%s in_idx=%s alsa_in=%s pa_sink=%s pa_source=%s",
+        _BUILTIN_OUT_IDX, _BUILTIN_IN_IDX, _BUILTIN_ALSA_IN, _BUILTIN_PA_SINK, _BUILTIN_PA_SOURCE,
     )
 
 
@@ -111,25 +111,25 @@ def _swap_voice(input_idx: Optional[int], alsa_device: Optional[str]) -> None:
         logger.exception("voice_service restart failed")
 
 
-def route_to_lamp() -> None:
-    """Switch TTS + voice back to the lamp's built-in speaker/mic and restore
+def route_to_builtin() -> None:
+    """Switch TTS + voice back to the device's built-in speaker/mic and restore
     the PulseAudio default sink to whatever it was before we touched it."""
     global _current_label
-    _capture_lamp_defaults()
+    _capture_builtin_defaults()
     with _lock:
         logger.info(
-            "Route → lamp (out=%s in=%s pa_sink=%s)",
-            _LAMP_OUT_IDX, _LAMP_IN_IDX, _LAMP_PA_SINK,
+            "Route → built-in (out=%s in=%s pa_sink=%s)",
+            _BUILTIN_OUT_IDX, _BUILTIN_IN_IDX, _BUILTIN_PA_SINK,
         )
-        if _LAMP_PA_SINK:
+        if _BUILTIN_PA_SINK:
             try:
                 from hal.drivers.bluetooth_manager import BluetoothManager
-                BluetoothManager().set_pa_default_sink(_LAMP_PA_SINK)
+                BluetoothManager().set_pa_default_sink(_BUILTIN_PA_SINK)
             except Exception:
                 logger.exception("PA default-sink restore failed")
-        _swap_tts(_LAMP_OUT_IDX)
-        _swap_voice(_LAMP_IN_IDX, _LAMP_ALSA_IN)
-        _current_label = "lamp"
+        _swap_tts(_BUILTIN_OUT_IDX)
+        _swap_voice(_BUILTIN_IN_IDX, _BUILTIN_ALSA_IN)
+        _current_label = "builtin"
 
 
 def route_to_bluetooth_pa(
@@ -140,10 +140,10 @@ def route_to_bluetooth_pa(
 ) -> None:
     """Switch to BT via PulseAudio. Sets the PA default sink (and source, if
     the headset exposes a real HFP source) and points TTS at PortAudio's
-    generic `pulse` device. STT input falls back to the lamp mic when the
+    generic `pulse` device. STT input falls back to the built-in mic when the
     headset is A2DP-only — most cheap BT speakers/AirPods in A2DP profile."""
     global _current_label
-    _capture_lamp_defaults()
+    _capture_builtin_defaults()
     with _lock:
         logger.info(
             "Route → bt:%s (pulse_sd=%s sink=%s source=%s)",
@@ -166,16 +166,16 @@ def route_to_bluetooth_pa(
             # the sd.InputStream(device=pulse_sd_index) path.
             _swap_voice(pulse_sd_index, None)
         else:
-            # A2DP-only headset → keep the lamp mic for STT so the user can
-            # still talk to Lamp while listening through the headset.
-            _swap_voice(_LAMP_IN_IDX, _LAMP_ALSA_IN)
+            # A2DP-only headset → keep the built-in mic for STT so the user can
+            # still talk to the device while listening through the headset.
+            _swap_voice(_BUILTIN_IN_IDX, _BUILTIN_ALSA_IN)
         _current_label = f"bt:{mac}"
 
 
 def maybe_restore_bt_route() -> None:
     """Called once at server startup. If the user had a BT headset active
     before reboot, try to reconnect + re-route. Best effort — failures fall
-    back silently to the lamp route already in place."""
+    back silently to the built-in route already in place."""
     try:
         from hal.drivers.bluetooth_manager import BluetoothManager
     except Exception:

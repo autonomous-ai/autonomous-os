@@ -16,7 +16,7 @@ import hal.app_state as state
 from hal.drivers.audio_route import (
     current_label,
     route_to_bluetooth_pa,
-    route_to_lamp,
+    route_to_builtin,
 )
 from hal.drivers.bluetooth_manager import BluetoothManager
 
@@ -100,7 +100,7 @@ def bt_forget(req: MacRequest):
     if mgr.active_mac and mgr.active_mac == target:
         # Bring TTS/STT back to the device before it disappears,
         # otherwise the persistent OutputStream is left pointed at a gone sink.
-        route_to_lamp()
+        route_to_builtin()
     if not mgr.forget(target):
         raise HTTPException(500, "Forget failed")
     return {"status": "ok"}
@@ -125,7 +125,7 @@ def bt_active_set(req: ActiveRequest):
     target = (req.mac or "").strip().upper() or None
 
     if target is None:
-        route_to_lamp()
+        route_to_builtin()
         mgr.set_active_mac(None)
         return {"status": "ok", "active_mac": None, "label": current_label()}
 
