@@ -16,14 +16,14 @@ export type SetupPhase = "connecting" | "connected" | "failed";
 export function useSetupStatusPolling({
   setupWorking,
   setupLanIP,
-  lampMdnsHost,
+  deviceMdnsHost,
   setSetupPhase,
   setSetupLanIP,
   setSetupErrorMsg,
 }: {
   setupWorking: boolean;
   setupLanIP: string;
-  lampMdnsHost: string;
+  deviceMdnsHost: string;
   setSetupPhase: Dispatch<SetStateAction<SetupPhase>>;
   setSetupLanIP: Dispatch<SetStateAction<string>>;
   setSetupErrorMsg: Dispatch<SetStateAction<string>>;
@@ -112,9 +112,9 @@ export function useSetupStatusPolling({
   // re-runs, hits the now-reachable `checkInternet`, and re-mounts Setup in
   // continue mode (full menu).
   useEffect(() => {
-    if (!setupWorking || !lampMdnsHost) return;
+    if (!setupWorking || !deviceMdnsHost) return;
     let cancelled = false;
-    const targetHost = `${lampMdnsHost}.local`;
+    const targetHost = `${deviceMdnsHost}.local`;
     const base = `http://${targetHost}`;
     const newURL = `${base}${window.location.pathname}${carrySearch}`;
     const navigate = () => {
@@ -135,7 +135,7 @@ export function useSetupStatusPolling({
     probe();
     const id = setInterval(probe, 3000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [setupWorking, lampMdnsHost, carrySearch]);
+  }, [setupWorking, deviceMdnsHost, carrySearch]);
 
   // Pre-submit canonical URL upgrade: when user lands on the AP IP
   // (192.168.100.1) we silently bounce to `http://lamp-XXXX.local/…` once we
@@ -154,18 +154,18 @@ export function useSetupStatusPolling({
   // without spamming the network forever on Android-blocked cases.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (!lampMdnsHost) {
-      console.info("[setup] pre-submit canonical-URL upgrade: skip — no lampMdnsHost yet");
+    if (!deviceMdnsHost) {
+      console.info("[setup] pre-submit canonical-URL upgrade: skip — no deviceMdnsHost yet");
       return;
     }
     if (window.location.hostname !== "192.168.100.1") {
       console.info("[setup] pre-submit canonical-URL upgrade: skip — not on AP IP", window.location.hostname);
       return;
     }
-    console.info(`[setup] pre-submit canonical-URL upgrade: probing http://${lampMdnsHost}.local/api/health`);
+    console.info(`[setup] pre-submit canonical-URL upgrade: probing http://${deviceMdnsHost}.local/api/health`);
     let cancelled = false;
     let attempt = 0;
-    const base = `http://${lampMdnsHost}.local`;
+    const base = `http://${deviceMdnsHost}.local`;
     const target = `${base}${window.location.pathname}${carrySearch}`;
     let timer: number | undefined;
     const probe = async () => {
@@ -188,5 +188,5 @@ export function useSetupStatusPolling({
     };
     probe();
     return () => { cancelled = true; if (timer) window.clearTimeout(timer); };
-  }, [lampMdnsHost, carrySearch]);
+  }, [deviceMdnsHost, carrySearch]);
 }

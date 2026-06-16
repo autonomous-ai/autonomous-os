@@ -91,7 +91,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
   // hide the AI Brain / Channels / Language / TTS menu entries and keep those
   // sections mounted (display:none) so their state still submits with the form.
   // Gated to initial (AP) mode so editing on the LAN IP keeps the full menu.
-  const lampPushedConfig = mode === "initial" && !!urlParams.llmApiKey;
+  const devicePushedConfig = mode === "initial" && !!urlParams.llmApiKey;
 
   // Language + Lamp's Voice are gated behind ?debug=true: regular operators
   // get the auto-detected language and the "alloy"/openai voice defaults,
@@ -126,9 +126,9 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
 
   // When the OS server pushed config, the operator only needs Device + Wi-Fi visible —
   // the rest are filled from URL and submitted silently. Sections remain in
-  // the DOM (see `lampPushedConfig` display:none wrappers below) so values
+  // the DOM (see `devicePushedConfig` display:none wrappers below) so values
   // still flow through the form; we just hide the menu entries.
-  const visibleSections = lampPushedConfig
+  const visibleSections = devicePushedConfig
     ? SECTIONS.filter((s) => s.id === "device" || s.id === "wifi")
     : SECTIONS;
 
@@ -183,7 +183,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
   // device class (lamp-a1b2 / intern-3c4d). The 4-char hex tail is validated to
   // guard against an empty/partial config. Empty when the config hasn't returned
   // yet, or when the device couldn't determine a serial.
-  const lampMdnsHost = useMemo(() => {
+  const deviceMdnsHost = useMemo(() => {
     const host = (mac || "").trim().toLowerCase();
     if (!/^[0-9a-f]{4}$/.test(host.slice(-4))) return "";
     return host;
@@ -392,7 +392,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
   });
 
   useSetupStatusPolling({
-    setupWorking, setupLanIP, lampMdnsHost,
+    setupWorking, setupLanIP, deviceMdnsHost,
     setSetupPhase, setSetupLanIP, setSetupErrorMsg,
   });
 
@@ -678,7 +678,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                     <div style={{ fontSize: 15, fontWeight: 600, color: C.amber, marginBottom: 8 }}>
                       Your device is joining Wi-Fi…
                     </div>
-                    <div style={{ fontSize: 12, color: C.textDim, marginBottom: lampMdnsHost ? 18 : 0 }}>
+                    <div style={{ fontSize: 12, color: C.textDim, marginBottom: deviceMdnsHost ? 18 : 0 }}>
                       This usually takes 10-30 seconds. Stay on this network.
                     </div>
                     {/* Fallback manual link: the auto-redirect can fail when
@@ -687,7 +687,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                         to "connected". Offering the same .local link here
                         means a stuck operator can always click their way
                         out by reconnecting to home Wi-Fi first. */}
-                    {lampMdnsHost && (
+                    {deviceMdnsHost && (
                       <div style={{
                         marginTop: 6, paddingTop: 14,
                         borderTop: `1px solid ${C.border}`,
@@ -695,13 +695,13 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                       }}>
                         Stuck here? Reconnect to your home Wi-Fi, then open{" "}
                         <a
-                          href={`http://${lampMdnsHost}.local${window.location.pathname}${getInitialSearch()}`}
+                          href={`http://${deviceMdnsHost}.local${window.location.pathname}${getInitialSearch()}`}
                           style={{
                             color: C.amber, textDecoration: "none",
                             fontFamily: "ui-monospace, monospace",
                           }}
                         >
-                          http://{lampMdnsHost}.local/
+                          http://{deviceMdnsHost}.local/
                         </a>
                         .
                       </div>
@@ -723,10 +723,10 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                         Supported out-of-box: Windows 10 1803+, Windows 11,
                         macOS, iOS, most desktop Linux. Falls back to a
                         router-admin hint when the host is unreachable. */}
-                    {lampMdnsHost ? (
+                    {deviceMdnsHost ? (
                       <>
                         <div style={{ fontSize: 13, color: C.text, marginBottom: 4, fontFamily: "ui-monospace, monospace" }}>
-                          http://{lampMdnsHost}.local/
+                          http://{deviceMdnsHost}.local/
                         </div>
                         <div style={{ fontSize: 11, color: C.textDim, marginBottom: 18, lineHeight: 1.5 }}>
                           Reconnect your computer to your home Wi-Fi, then click
@@ -743,9 +743,9 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                           // no-ops the same-URL click and they stay stuck on
                           // the "Your device is online!" screen even though the device
                           // is reachable in continue mode now.
-                          href={`http://${lampMdnsHost}.local${window.location.pathname}${getInitialSearch()}`}
+                          href={`http://${deviceMdnsHost}.local${window.location.pathname}${getInitialSearch()}`}
                           onClick={(e) => {
-                            if (window.location.hostname === `${lampMdnsHost}.local`) {
+                            if (window.location.hostname === `${deviceMdnsHost}.local`) {
                               e.preventDefault();
                               window.location.reload();
                             }
@@ -766,7 +766,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                             <> Try <span style={{ fontFamily: "ui-monospace, monospace" }}>http://{setupLanIP}/</span> or </>
                           )}
                           {" "}find your device's IP in your router's admin page (look
-                          for "{lampMdnsHost}").
+                          for "{deviceMdnsHost}").
                         </div>
                       </>
                     ) : (
@@ -834,12 +834,12 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                     uniqueNetworks={uniqueNetworks}
                   />
 
-                  {/* When lampPushedConfig is on, the four sections below are
+                  {/* When devicePushedConfig is on, the four sections below are
                       kept mounted but visually hidden — their state autofills
                       from URL params and still flows through the form submit. */}
-                  <div style={lampPushedConfig ? { display: "none" } : undefined}>
+                  <div style={devicePushedConfig ? { display: "none" } : undefined}>
                     <LLMSection
-                      active={lampPushedConfig || activeSection === "llm"}
+                      active={devicePushedConfig || activeSection === "llm"}
                       llmLoaded={llmLoaded}
                       llmApiKey={llmApiKey} setLlmApiKey={setLlmApiKey}
                       llmUrl={llmUrl} setLlmUrl={setLlmUrl}
@@ -847,7 +847,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                     />
 
                     <ChannelSection
-                      active={lampPushedConfig || activeSection === "channel"}
+                      active={devicePushedConfig || activeSection === "channel"}
                       channel={channel} setChannel={setChannel}
                       channelLoaded={channelLoaded}
                       teleToken={teleToken} setTeleToken={setTeleToken}
@@ -861,12 +861,12 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                     />
 
                     <LanguageSection
-                      active={lampPushedConfig || activeSection === "language"}
+                      active={devicePushedConfig || activeSection === "language"}
                       sttLanguage={sttLanguage} setSttLanguage={setSttLanguage}
                     />
 
                     <TTSSection
-                      active={lampPushedConfig || activeSection === "tts"}
+                      active={devicePushedConfig || activeSection === "tts"}
                       isContinue={isContinue}
                       ttsProvider={ttsProvider} setTtsProvider={setTtsProvider}
                       ttsProviders={ttsProviders}

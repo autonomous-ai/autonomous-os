@@ -135,7 +135,7 @@ export function BluetoothSection() {
   };
 
   const setActive = async (mac: string | null) => {
-    setBusyMac(mac || "__lamp__");
+    setBusyMac(mac || "__device__");
     setActionError(null);
     try {
       const r = await fetch(`${HW}/bluetooth/active`, {
@@ -240,7 +240,7 @@ export function BluetoothSection() {
                 </div>
                 <button
                   onClick={() => setActive(isActive ? null : d.mac)}
-                  disabled={rowBusy || busyMac === "__lamp__"}
+                  disabled={rowBusy || busyMac === "__device__"}
                   style={isActive ? toggleBtnOn : toggleBtnOff}
                   title={isActive ? "Turn off private mode" : "Turn on private mode"}
                 >

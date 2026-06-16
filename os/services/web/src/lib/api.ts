@@ -20,7 +20,7 @@ export interface JSONResponse<T = unknown> {
 // `os_session` cookie set by POST /api/login, but scripted callers and
 // shareable dev links may still pass an explicit token. Cleared on logout;
 // not persisted on first load (cookie auth makes sessionStorage unnecessary).
-const TOKEN_STORAGE_KEY = "lamp_api_token";
+const TOKEN_STORAGE_KEY = "device_api_token";
 let apiToken: string =
   typeof window !== "undefined" ? sessionStorage.getItem(TOKEN_STORAGE_KEY) ?? "" : "";
 
