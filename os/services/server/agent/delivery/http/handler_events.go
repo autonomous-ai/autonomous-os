@@ -578,9 +578,10 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 					if ttsText := extractTTSText(toolArgs); ttsText != "" {
 						isChannelRun := isChannelOriginatedRun(payload.RunID, flowRunID)
 						isWebChat := h.agentGateway.IsWebChatRun(flowRunID)
-						slog.Info("intercepted built-in tts tool, routing to HAL", "component", "agent", "run_id", flowRunID, "text", ttsText[:min(len(ttsText), 80)], "channel_run", isChannelRun, "web_chat", isWebChat)
+						isSilent := h.agentGateway.IsSilentRun(flowRunID)
+						slog.Info("intercepted built-in tts tool, routing to HAL", "component", "agent", "run_id", flowRunID, "text", ttsText[:min(len(ttsText), 80)], "channel_run", isChannelRun, "web_chat", isWebChat, "silent", isSilent)
 						flow.Log("tts_send", map[string]any{"run_id": flowRunID, "text": ttsText, "source": "tts_tool_intercept"}, flowRunID)
-						if !isChannelRun && !isWebChat {
+						if !isChannelRun && !isWebChat && !isSilent {
 							go func(t string) {
 								if err := h.agentGateway.SendToHALTTS(t); err != nil {
 									slog.Error("TTS intercept delivery failed", "component", "agent", "error", err)
@@ -763,6 +764,11 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 			// Web monitor chat: suppress TTS — response displayed in web UI only.
 			if suppressReason == "" && h.agentGateway.ConsumeWebChatRun(flowRunID) {
 				suppressReason = "web_chat"
+			}
+			// Realtime voice agent already spoke this turn (voice_agent_handled):
+			// suppress TTS so OpenClaw's reply isn't double-spoken.
+			if suppressReason == "" && h.agentGateway.ConsumeSilentRun(flowRunID) {
+				suppressReason = "voice_agent_handled"
 			}
 			text, hwCalls := h.flushAssistantText(payload.RunID)
 			// streamedCleanLen > 0 means the first sentence was dispatched
@@ -1083,9 +1089,10 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 				if ttsText := extractTTSText(toolArgs); ttsText != "" {
 					isChannelRun := isChannelOriginatedRun(payload.RunID, flowRunID)
 					isWebChat := h.agentGateway.IsWebChatRun(flowRunID)
-					slog.Info("intercepted built-in tts tool (session.tool), routing to HAL", "component", "agent", "run_id", flowRunID, "text", ttsText[:min(len(ttsText), 80)], "channel_run", isChannelRun, "web_chat", isWebChat)
+					isSilent := h.agentGateway.IsSilentRun(flowRunID)
+					slog.Info("intercepted built-in tts tool (session.tool), routing to HAL", "component", "agent", "run_id", flowRunID, "text", ttsText[:min(len(ttsText), 80)], "channel_run", isChannelRun, "web_chat", isWebChat, "silent", isSilent)
 					flow.Log("tts_send", map[string]any{"run_id": flowRunID, "text": ttsText, "source": "tts_tool_intercept"}, flowRunID)
-					if !isChannelRun && !isWebChat {
+					if !isChannelRun && !isWebChat && !isSilent {
 						go func(t string) {
 							if err := h.agentGateway.SendToHALTTS(t); err != nil {
 								slog.Error("TTS intercept delivery failed", "component", "agent", "error", err)

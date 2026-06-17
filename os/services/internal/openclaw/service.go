@@ -120,6 +120,16 @@ type Service struct {
 	webChatRunsMu sync.Mutex
 	webChatRuns   map[string]bool
 
+	// silentRuns tracks runIDs whose spoken reply must be suppressed even though
+	// the agent still processes the turn. Used for voice_agent_handled: the
+	// realtime voice agent already answered the user, so OpenClaw absorbs the
+	// exchange for memory/mood (input-branching SKILL.md rule #3) but must not
+	// speak it again. Suppression skips the TTS POST entirely (no synth, no cost —
+	// same as web chat / Telegram), and is a deterministic backstop for that
+	// skill's NO_REPLY, which the LLM can ignore.
+	silentRunsMu sync.Mutex
+	silentRuns   map[string]bool
+
 	// poseBucketRuns associates a motion.activity runID with the hal
 	// pose bucket whose window just fired. Populated by the sensing
 	// handler when it parses [pose_bucket:...] / [pose_worst:...] markers,
@@ -190,6 +200,7 @@ func ProvideService(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 		guardRuns:      make(map[string]string),
 		broadcastRuns:  make(map[string]bool),
 		webChatRuns:    make(map[string]bool),
+		silentRuns:     make(map[string]bool),
 		poseBucketRuns: make(map[string]poseBucketInfo),
 	}
 	// Register channel senders.

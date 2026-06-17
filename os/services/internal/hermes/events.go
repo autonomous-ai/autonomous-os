@@ -174,6 +174,12 @@ func (s *Service) drainPendingEvents() {
 		msg = strings.ReplaceAll(msg, "\n\n\n", "\n\n")
 		msg = strings.TrimSpace(msg)
 
+		// Replayed voice_agent_handled: realtime agent already spoke, suppress TTS
+		// on the reply (same as the live PostEvent path).
+		if ev.eventType == "voice_agent_handled" {
+			s.MarkSilentRun(runID)
+		}
+
 		var err error
 		if ev.image != "" {
 			_, err = s.SendChatMessageWithImageAndRun(msg, ev.image, reqID, runID)

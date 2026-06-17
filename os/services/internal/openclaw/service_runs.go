@@ -148,6 +148,35 @@ func (s *Service) ConsumeWebChatRun(runID string) bool {
 	return ok
 }
 
+// MarkSilentRun marks a runID whose spoken reply must be suppressed even though
+// the agent still processes the turn (e.g. voice_agent_handled: the realtime
+// voice agent already replied, OpenClaw absorbs context but must stay silent).
+func (s *Service) MarkSilentRun(runID string) {
+	s.silentRunsMu.Lock()
+	s.silentRuns[runID] = true
+	s.silentRunsMu.Unlock()
+	slog.Info("silent run marked — TTS will be suppressed", "component", "openclaw", "runID", runID)
+}
+
+// IsSilentRun checks if a runID is a silent run (non-consuming).
+func (s *Service) IsSilentRun(runID string) bool {
+	s.silentRunsMu.Lock()
+	ok := s.silentRuns[runID]
+	s.silentRunsMu.Unlock()
+	return ok
+}
+
+// ConsumeSilentRun checks and removes a silent-marked runID. One-shot.
+func (s *Service) ConsumeSilentRun(runID string) bool {
+	s.silentRunsMu.Lock()
+	ok := s.silentRuns[runID]
+	if ok {
+		delete(s.silentRuns, runID)
+	}
+	s.silentRunsMu.Unlock()
+	return ok
+}
+
 // pendingChatTTL bounds how long an unclaimed pending trace stays around.
 // Longer than any realistic chat.send → lifecycle_start gap; short enough to
 // recover automatically if OpenClaw drops a lifecycle event.

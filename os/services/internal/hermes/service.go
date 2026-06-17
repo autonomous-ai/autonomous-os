@@ -111,6 +111,12 @@ type Service struct {
 	webChatRunsMu sync.Mutex
 	webChatRuns   map[string]bool
 
+	// silentRuns tracks runIDs whose spoken reply must be suppressed even though
+	// the agent still processes the turn (e.g. voice_agent_handled). Mirrors the
+	// openclaw backend.
+	silentRunsMu sync.Mutex
+	silentRuns   map[string]bool
+
 	poseBucketRunsMu sync.Mutex
 	poseBucketRuns   map[string]poseBucketInfo
 
@@ -167,6 +173,7 @@ func ProvideService(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 		guardRuns:         make(map[string]string),
 		broadcastRuns:     make(map[string]bool),
 		webChatRuns:       make(map[string]bool),
+		silentRuns:        make(map[string]bool),
 		poseBucketRuns:    make(map[string]poseBucketInfo),
 		telegramRunOrigin: make(map[string]string),
 	}

@@ -131,6 +131,30 @@ func (s *Service) ConsumeWebChatRun(runID string) bool {
 	return ok
 }
 
+func (s *Service) MarkSilentRun(runID string) {
+	s.silentRunsMu.Lock()
+	s.silentRuns[runID] = true
+	s.silentRunsMu.Unlock()
+	slog.Info("silent run marked — TTS will be suppressed", "component", "hermes", "runID", runID)
+}
+
+func (s *Service) IsSilentRun(runID string) bool {
+	s.silentRunsMu.Lock()
+	ok := s.silentRuns[runID]
+	s.silentRunsMu.Unlock()
+	return ok
+}
+
+func (s *Service) ConsumeSilentRun(runID string) bool {
+	s.silentRunsMu.Lock()
+	ok := s.silentRuns[runID]
+	if ok {
+		delete(s.silentRuns, runID)
+	}
+	s.silentRunsMu.Unlock()
+	return ok
+}
+
 const pendingChatTTL = 2 * time.Minute
 const pendingSendBusyWindow = 30 * time.Second
 

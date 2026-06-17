@@ -186,6 +186,18 @@ type AgentGateway interface {
 	// ConsumeWebChatRun checks and removes a web-chat-marked runID. One-shot.
 	ConsumeWebChatRun(runID string) bool
 
+	// MarkSilentRun marks a runID whose spoken reply must be suppressed even
+	// though the agent still processes the turn (e.g. voice_agent_handled: the
+	// realtime voice agent already replied, so the body stays silent but still
+	// absorbs the exchange for memory).
+	MarkSilentRun(runID string)
+
+	// IsSilentRun checks if a runID is a silent run (non-consuming).
+	IsSilentRun(runID string) bool
+
+	// ConsumeSilentRun checks and removes a silent-marked runID. One-shot.
+	ConsumeSilentRun(runID string) bool
+
 	// SetPendingChatTrace records the idempotencyKey and exact message text of
 	// an outbound chat.send so a later UUID lifecycle (drained from OpenClaw's
 	// followup queue, which strips the idempotencyKey) can be mapped back via

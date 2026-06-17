@@ -313,6 +313,13 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		snap := extractSnapshotPath(req.Message)
 		h.agentGateway.MarkGuardRun(runID, snap)
 	}
+	// The realtime voice agent already spoke this turn (voice_agent_handled): the
+	// agent still processes it to absorb context (memory/mood), but its reply must
+	// NOT be spoken again. Deterministic TTS suppress — the input-branching skill's
+	// NO_REPLY is a soft backstop the LLM can ignore.
+	if req.Type == "voice_agent_handled" {
+		h.agentGateway.MarkSilentRun(runID)
+	}
 	// motion.activity events that fold in a posture nudge ship two extra
 	// markers ([pose_bucket: ...] / [pose_worst: ...]). Stash them keyed
 	// by runID so the SSE /dm path can attach the worst frames to the
