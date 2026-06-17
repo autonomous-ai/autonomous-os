@@ -91,7 +91,9 @@ class TestProfiles(unittest.TestCase):
         self.assertIsNone(PROFILES["raspberry_pi_4"].touch)
         self.assertIsNone(PROFILES["raspberry_pi_5"].touch)
         self.assertEqual(PROFILES["orangepi_sun60"].touch.chip, 0)
-        self.assertEqual(PROFILES["orangepi_sun60"].touch.lines, [96, 97, 99])
+        # S1=PD0(pin29), S3=PD2(pin33), S4=PD4(pin37). Lines 97/99 dropped —
+        # their pad runs picked up EMI (phantom triggers); pads relocated.
+        self.assertEqual(PROFILES["orangepi_sun60"].touch.lines, [96, 98, 100])
 
 
 class TestBoardProfileCaching(unittest.TestCase):
