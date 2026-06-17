@@ -56,7 +56,12 @@ var prunedImageMarkerRe = regexp.MustCompile(`\[image[^\]]*removed[^\]]*\]`)
 
 // hwMarkerRe matches inline hardware markers like [HW:/emotion:{"emotion":"happy","intensity":0.9}]
 // JSON body must not contain '}' except as the final closing brace (no nested objects).
-var hwMarkerRe = regexp.MustCompile(`\[HW:(/[^:]+):(\{[^}]*\})\]`)
+// The body is OPTIONAL: bodyless markers like [HW:/led/off] are valid — several HAL
+// endpoints (e.g. /led/off, /led/effect/stop) take no body, and the LLM naturally
+// omits the empty `{}` for them. Without the optional group, [HW:/led/off] failed to
+// match and the command was silently dropped (the LED never turned off) while
+// [HW:/led/solid:{...}] worked. extractHWCalls defaults a missing body to `{}`.
+var hwMarkerRe = regexp.MustCompile(`\[HW:(/[^:]+)(?::(\{[^}]*\}))?\]`)
 
 type hwCall struct {
 	path string
@@ -69,7 +74,11 @@ func extractHWCalls(text string) ([]hwCall, string) {
 	matches := hwMarkerRe.FindAllStringSubmatch(text, -1)
 	calls := make([]hwCall, 0, len(matches))
 	for _, m := range matches {
-		calls = append(calls, hwCall{path: m[1], body: m[2]})
+		body := m[2]
+		if body == "" { // bodyless marker like [HW:/led/off] → default to empty JSON
+			body = "{}"
+		}
+		calls = append(calls, hwCall{path: m[1], body: body})
 	}
 	// Log only when buddy markers are present — keeps signal-to-noise high
 	// while answering the "did OpenClaw fire a /buddy/* marker?" question.
@@ -107,7 +116,13 @@ func extractLeadingHWCalls(text string) []hwCall {
 			}
 			expectedPos++
 		}
-		calls = append(calls, hwCall{path: text[m[2]:m[3]], body: text[m[4]:m[5]]})
+		// Body group (m[4]:m[5]) is optional — it's -1 for a bodyless marker
+		// like [HW:/led/off]; default that to empty JSON (text[-1:] would panic).
+		body := "{}"
+		if m[4] >= 0 {
+			body = text[m[4]:m[5]]
+		}
+		calls = append(calls, hwCall{path: text[m[2]:m[3]], body: body})
 		expectedPos = end
 	}
 	return calls
