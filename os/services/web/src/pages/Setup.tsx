@@ -8,6 +8,7 @@ import { useTTSCatalog } from "@/hooks/setup/useTTSCatalog";
 import { useConfigPrefill } from "@/hooks/setup/useConfigPrefill";
 import { useSetupStatusPolling } from "@/hooks/setup/useSetupStatusPolling";
 import { useFaceEnroll } from "@/hooks/setup/useFaceEnroll";
+import { setupBridge } from "@/lib/setupBridge";
 import type { SectionId, LlmLoadedState, ChannelLoadedState } from "@/hooks/setup/types";
 import { C, ADMIN_PASSWORD_MIN } from "@/components/setup/shared";
 import { DeviceSection } from "@/components/setup/DeviceSection";
@@ -487,6 +488,31 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
     setSetupPhase, setSetupLanIP, setSetupErrorMsg,
   });
 
+  // ── Parent-window event bridge (autonomous.ai) ──────────────────────────────
+  // Notify whoever opened this popup of each meaningful Setup milestone via
+  // postMessage (see lib/setupBridge.ts). All emits are best-effort no-ops when
+  // there's no opener, so they never affect the flow. Each milestone is fired
+  // from a focused effect so it tracks the real state transition exactly once.
+
+  // Wizard mounted and ready.
+  useEffect(() => {
+    setupBridge.opened({ mode, deviceId, mac });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Operator moved to a new step.
+  useEffect(() => { setupBridge.stepChanged(activeSection); }, [activeSection]);
+  // A WiFi network was chosen.
+  useEffect(() => { if (ssid) setupBridge.wifiSelected(ssid); }, [ssid]);
+  // Validation / backend error surfaced.
+  useEffect(() => { if (error) setupBridge.error(error); }, [error]);
+  // Post-submit phase transitions: connecting → connected | failed.
+  useEffect(() => {
+    if (!setupWorking) return;
+    if (setupPhase === "connecting") setupBridge.connecting();
+    else if (setupPhase === "connected") setupBridge.connected({ mdns_host: deviceMdnsHost, lan_ip: setupLanIP });
+    else if (setupPhase === "failed") setupBridge.failed(setupErrorMsg || "Wi-Fi setup failed.");
+  }, [setupWorking, setupPhase, deviceMdnsHost, setupLanIP, setupErrorMsg]);
+
 
   // Auto-mirror AI Brain key/URL into TTS while TTS field is empty.
   // Once the user types into TTS the sync stops; clearing it re-enables mirroring.
@@ -688,6 +714,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
           fd_channel: fdChannel || urlParams.fdChannel || undefined,
         });
       }
+      setupBridge.submitted({ ssid: ssid.trim(), channel });
       const result = await setupDevice(body);
       setSetupWorking(result);
       setSetupPhase("connecting");
@@ -958,6 +985,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                           // is reachable in continue mode now.
                           href={`http://${deviceMdnsHost}.local${window.location.pathname}${getInitialSearch()}`}
                           onClick={(e) => {
+                            setupBridge.continueClicked({ mdns_host: deviceMdnsHost });
                             if (window.location.hostname === `${deviceMdnsHost}.local`) {
                               e.preventDefault();
                               window.location.reload();
@@ -1035,7 +1063,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                     <button
                       type="button"
                       className="lm-btn lm-btn-primary"
-                      onClick={() => { setSetupWorking(false); setSetupPhase("connecting"); setActiveSection("wifi"); }}
+                      onClick={() => { setupBridge.retryClicked(); setSetupWorking(false); setSetupPhase("connecting"); setActiveSection("wifi"); }}
                       style={{ padding: "9px 18px" }}
                     >
                       Back to Wi-Fi
@@ -1185,7 +1213,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                         <button
                           key="done"
                           type="button"
-                          onClick={() => navigate("/monitor")}
+                          onClick={() => { setupBridge.monitorClicked(); navigate("/monitor"); }}
                           className="lm-btn lm-btn-primary"
                           style={{ padding: "9px 22px" }}
                         >

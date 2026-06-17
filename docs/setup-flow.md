@@ -106,11 +106,53 @@ Config stored at `config/config.json`. Managed by `server/config/config.go`.
 | `FAChannel` | MQTT subscribe topic (server→device) |
 | `FDChannel` | MQTT publish topic (device→server) |
 
+## Parent-window event bridge
+
+When the Setup page is opened as a popup/iframe from another site (e.g.
+`autonomous.ai`), it reports each milestone back to the opener via
+`window.postMessage`. This is the only cross-origin channel that works
+popup→opener, since Setup is served from the device's AP IP
+(`http://192.168.100.1`) or its `<type>-<id>.local` host — a different origin.
+
+The opener should pass its origin so the device knows where to post and the
+payload isn't broadcast to `*`:
+
+```js
+const origin = encodeURIComponent(window.location.origin);
+window.open(`http://192.168.100.1/setup?parent_origin=${origin}&...`, "_blank");
+```
+
+Origin resolution order: `?parent_origin=` → `document.referrer` origin → `*`.
+
+Every message is a flat JSON envelope:
+`{ source: "autonomous-device-setup", v: 1, event, ts, ...data }`. Filter on
+`source` and switch on `event`:
+
+| `event` | When | Extra fields |
+|---------|------|--------------|
+| `setup_opened` | Wizard mounted | `mode`, `deviceId`, `mac` |
+| `step_changed` | Operator changed wizard step | `step` |
+| `wifi_selected` | A WiFi network was chosen | `ssid` |
+| `setup_submitted` | "Setup" clicked, request about to send | `ssid`, `channel` |
+| `setup_error` | Validation/backend error surfaced | `message` |
+| `setup_connecting` | Device is joining WiFi (post-submit) | — |
+| `setup_connected` | Device online + reachable | `mdns_host`, `lan_ip` |
+| `setup_failed` | WiFi join failed | `message` |
+| `retry_clicked` | "Back to Wi-Fi" after a failure | — |
+| `continue_clicked` | "Continue setup →" clicked | `mdns_host` |
+| `monitor_clicked` | "Go to monitor →" clicked | — |
+
+Emits are best-effort: with no opener/parent they're a no-op, and postMessage
+failures are swallowed, so the bridge never affects the setup flow itself. A
+full listener example lives in the file header of `lib/setupBridge.ts`.
+
 ## Code
 
 | File | Role |
 |------|------|
 | `os/services/internal/device/service.go` | Setup orchestration |
+| `os/services/web/src/lib/setupBridge.ts` | Parent-window event bridge (postMessage) |
+| `os/services/web/src/pages/Setup.tsx` | Setup wizard UI + bridge emit call sites |
 | `os/services/internal/network/service.go` | WiFi connect, AP mode |
 | `os/services/server/device/delivery/http/handler.go` | HTTP setup handler |
 | `os/services/server/config/config.go` | Config load/save |
