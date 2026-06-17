@@ -205,6 +205,15 @@ class RealtimeOrchestrator:
         if self._agent is not None:
             self._agent.commit_audio()
 
+    def flush_output(self) -> None:
+        """Discard buffered outputs from a prior turn before committing a new one.
+
+        Prevents a stale response (from an earlier, possibly noise-triggered turn)
+        being read and spoken on the current turn — see VoiceAgentBase.flush_output.
+        """
+        if self._agent is not None:
+            self._agent.flush_output()
+
     def stream_output(self) -> Generator[OutputBase | DelegateSignal, None, None]:
         """Yield outputs from the model one by one as they arrive.
 

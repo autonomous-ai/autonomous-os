@@ -130,6 +130,7 @@ device's `config.json` (`llm_api_key`, `llm_base_url`, `agent_runtime`).
 | `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` |
 | `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = manual activity detection) |
 | `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Max seconds `receive()` waits for the next output event before ending a silent turn (fallback to main agent) |
+| `HAL_REALTIME_MIN_COMMIT_DURATION_S` | `0.8` | Sessions shorter than this with no STT transcript are treated as VAD noise and not committed to the model |
 | `HAL_AGENT_GATEWAY` | `openclaw` | Selects the context manager (also from `agent_runtime` in config.json) |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | Gemini key; falls back to `llm_api_key` |
 | `HAL_GEMINI_LIVE_MODEL` | `gemini-3.1-flash-live-preview` | |

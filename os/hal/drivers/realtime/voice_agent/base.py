@@ -93,6 +93,29 @@ class VoiceAgentBase(ABC):
         if self.available:
             self._send_queue.put(AudioCommitEvent())
 
+    def flush_output(self) -> None:
+        """Drop any output events left on the recv queue from a previous turn.
+
+        Provider responses land on `_recv_queue` asynchronously and can lag the
+        caller's local-VAD turn cadence. If the queue is not cleared, the next
+        turn's `receive()` reads a STALE prior response (read in milliseconds,
+        well before this turn's real reply) and speaks it — the "agent talks on
+        its own after a noise blip" + double-reply bug. Call right before
+        `commit_audio()` so every turn starts from an empty queue and only ever
+        reads its own response.
+        """
+        dropped = 0
+        while True:
+            try:
+                self._recv_queue.get_nowait()
+            except queue.Empty:
+                break
+            dropped += 1
+        if dropped:
+            logger.info(
+                "[realtime] Flushed %d stale output event(s) before new turn", dropped
+            )
+
     def send(self, inputs: list[InputBase]) -> None:
         """Queue inputs for sending (non-blocking)."""
         if self.available:

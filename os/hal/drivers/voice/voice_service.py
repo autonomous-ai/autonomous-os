@@ -893,7 +893,21 @@ class VoiceService:
             rt_delegated = False
             rt_handled = False
             rt_transcript = ""
-            if hal_config.REALTIME_ENABLED and self._realtime.available and rt_audio_buffer:
+            # Noise/false-trigger guard: a session with no STT transcript AND only
+            # a sliver of audio (just the VAD pre-roll, no sustained speech) is not
+            # worth a model turn — committing it makes the model answer silence,
+            # which then desyncs onto a later real turn. A real audio-only turn runs
+            # longer than the threshold, so it still commits.
+            rt_noise_turn = (
+                not combined
+                and buf_duration < hal_config.REALTIME_MIN_COMMIT_DURATION_S
+            )
+            if (
+                hal_config.REALTIME_ENABLED
+                and self._realtime.available
+                and rt_audio_buffer
+                and not rt_noise_turn
+            ):
                 logger.info(
                     "[realtime] Entering realtime flow — committing audio (stt=%r)",
                     combined[:100] if combined else "(empty)",
@@ -915,6 +929,12 @@ class VoiceService:
                         pass
                     self._realtime.send_text("[TURN CONTEXT] " + " | ".join(turn_ctx))
 
+                    # Drop any output still queued from a previous turn so this
+                    # turn only reads its OWN response. Provider replies arrive
+                    # async and can lag the local-VAD cadence; without this, a
+                    # noise blip reads a stale prior reply in milliseconds and
+                    # speaks it ("Moon talks on its own" + double TTS).
+                    self._realtime.flush_output()
                     self._realtime.commit_audio()
                     logger.info("[realtime] Audio committed — streaming output")
                     text_parts: list[str] = []
@@ -996,9 +1016,14 @@ class VoiceService:
                                     agent_text=rt_transcript or "(audio only)",
                                 )
                         else:
-                            logger.warning(
-                                "[realtime] Empty output (timeout / no response) — "
-                                "forwarding to OS server for the main agent to handle"
+                            # No spoken output from the realtime agent (empty /
+                            # timeout). Do NOT claim a forward here — whether the
+                            # turn actually reaches the OS server is decided below
+                            # by `if combined:`. A pure noise turn with empty STT
+                            # is correctly dropped (nothing to forward).
+                            logger.info(
+                                "[realtime] No realtime output (empty / timeout) — "
+                                "turn falls back to OS server only if STT produced a transcript"
                             )
                 except Exception as e:
                     logger.warning(
@@ -1006,6 +1031,13 @@ class VoiceService:
                         e,
                     )
                     rt_delegated = True  # fall through to OS server on error
+            elif hal_config.REALTIME_ENABLED and rt_noise_turn:
+                logger.info(
+                    "[realtime] Skipping commit — noise/false-trigger turn "
+                    "(dur=%.2fs < %.2fs, empty STT)",
+                    buf_duration,
+                    hal_config.REALTIME_MIN_COMMIT_DURATION_S,
+                )
             elif hal_config.REALTIME_ENABLED:
                 logger.warning(
                     "[realtime] Enabled but agent not available — falling back to OS server"

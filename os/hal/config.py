@@ -355,6 +355,15 @@ REALTIME_PROVIDER: str = os.environ.get("HAL_REALTIME_PROVIDER", "gemini")  # no
 REALTIME_RECV_QUEUE_TIMEOUT_S: float = float(
     os.environ.get("HAL_REALTIME_RECV_QUEUE_TIMEOUT_S", "8.0")
 )
+# A captured session shorter than this AND with no STT transcript is treated as a
+# VAD false-trigger (a noise blip that only grabbed the pre-roll, no sustained
+# speech) and is NOT committed to the realtime model. Committing such turns wastes
+# a model turn and often makes it answer the silence, which then desyncs onto a
+# later real turn. A genuine audio-only turn (real speech STT happened to miss)
+# runs longer than this, so it still commits.
+REALTIME_MIN_COMMIT_DURATION_S: float = float(
+    os.environ.get("HAL_REALTIME_MIN_COMMIT_DURATION_S", "0.8")
+)
 # Turn detection / VAD: "server_vad" | "semantic_vad" | "off"
 # For Gemini: "off" disables automatic activity detection; any other value enables it.
 # For OpenAI: maps to turn_detection type in session config.
