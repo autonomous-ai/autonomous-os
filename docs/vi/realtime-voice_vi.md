@@ -43,7 +43,9 @@ trên queue:
 - **Non-blocking**: `append_audio()`, `commit_audio()`, `send()` (đẩy vào queue,
   gate trên `available`).
 - **Blocking**: `connect()`, `disconnect()`, `receive()` (generator yield
-  `OutputBase` đến khi gặp `TurnDoneEvent`, timeout idle 30 s).
+  `OutputBase` đến khi gặp `TurnDoneEvent`, hoặc khi không có event nào trong
+  `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` — mặc định 8 s — để kết thúc lượt im lặng
+  và fallback sang main agent mà không bị dead-air dài).
 - `available` ⇔ websocket/session đã connect (`_connected`).
 
 ### An toàn connection của OpenAI
@@ -124,6 +126,7 @@ của thiết bị (`llm_api_key`, `llm_base_url`, `agent_runtime`).
 | `HAL_REALTIME_ENABLED` | `true` | Cổng tổng cho pipeline realtime |
 | `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` |
 | `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = activity detection thủ công) |
+| `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Số giây tối đa `receive()` chờ output event kế tiếp trước khi kết thúc lượt im lặng (fallback sang main agent) |
 | `HAL_AGENT_GATEWAY` | `openclaw` | Chọn context manager (cũng đọc từ `agent_runtime` trong config.json) |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | Key Gemini; fallback về `llm_api_key` |
 | `HAL_GEMINI_LIVE_MODEL` | `gemini-3.1-flash-live-preview` | |

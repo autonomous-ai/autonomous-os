@@ -345,6 +345,16 @@ AGENT_GATEWAY: str = (
 # --- Realtime voice agent ---
 REALTIME_ENABLED: bool = os.environ.get("HAL_REALTIME_ENABLED", "true").lower() in ("1", "true", "yes")
 REALTIME_PROVIDER: str = os.environ.get("HAL_REALTIME_PROVIDER", "gemini")  # none | gemini | openai
+# Max seconds receive() waits for the NEXT output event from the agent's recv
+# queue before giving up on the turn. This is the gap between events, not the
+# whole turn: a streaming reply puts events on the queue sub-second apart and
+# ends with a turn-done signal, so this only fires when the model stays SILENT
+# (a noise/non-directed turn it correctly ignores, or a stall). It is therefore
+# the dead-air the user waits through before the turn falls back to the main
+# agent — keep it just above realtime first-token latency (~1-2s), not minutes.
+REALTIME_RECV_QUEUE_TIMEOUT_S: float = float(
+    os.environ.get("HAL_REALTIME_RECV_QUEUE_TIMEOUT_S", "8.0")
+)
 # Turn detection / VAD: "server_vad" | "semantic_vad" | "off"
 # For Gemini: "off" disables automatic activity detection; any other value enables it.
 # For OpenAI: maps to turn_detection type in session config.

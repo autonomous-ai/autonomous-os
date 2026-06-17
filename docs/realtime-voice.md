@@ -43,7 +43,9 @@ queue-based contract:
 - **Non-blocking**: `append_audio()`, `commit_audio()`, `send()` (queue puts,
   gated on `available`).
 - **Blocking**: `connect()`, `disconnect()`, `receive()` (a generator yielding
-  `OutputBase` until a `TurnDoneEvent`, with a 30 s idle timeout).
+  `OutputBase` until a `TurnDoneEvent`, or until no event arrives within
+  `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` — default 8 s — which ends the turn quietly
+  so a silent/no-response turn falls back to the main agent without long dead-air).
 - `available` ⇔ the websocket/session is connected (`_connected`).
 
 ### OpenAI connection safety
@@ -127,6 +129,7 @@ device's `config.json` (`llm_api_key`, `llm_base_url`, `agent_runtime`).
 | `HAL_REALTIME_ENABLED` | `true` | Master gate for the realtime pipeline |
 | `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` |
 | `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = manual activity detection) |
+| `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Max seconds `receive()` waits for the next output event before ending a silent turn (fallback to main agent) |
 | `HAL_AGENT_GATEWAY` | `openclaw` | Selects the context manager (also from `agent_runtime` in config.json) |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | Gemini key; falls back to `llm_api_key` |
 | `HAL_GEMINI_LIVE_MODEL` | `gemini-3.1-flash-live-preview` | |

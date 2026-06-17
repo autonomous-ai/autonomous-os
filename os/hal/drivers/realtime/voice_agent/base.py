@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
+from hal import config as app_config
 from hal.drivers.realtime.models import (
     AgentInputEvent,
     AgentOutputEvent,
@@ -106,9 +107,17 @@ class VoiceAgentBase(ABC):
         """
         while True:
             try:
-                event = self._recv_queue.get(timeout=30)
+                event = self._recv_queue.get(
+                    timeout=app_config.REALTIME_RECV_QUEUE_TIMEOUT_S
+                )
             except queue.Empty:
-                logger.warning("receive() timed out waiting for output")
+                # No output within the gap window — almost always the model
+                # staying silent on a noise / non-directed turn (correct), not an
+                # error. End the turn quietly so it can fall back to the main agent.
+                logger.info(
+                    "receive() got no output within %.1fs — ending turn (model stayed silent)",
+                    app_config.REALTIME_RECV_QUEUE_TIMEOUT_S,
+                )
                 break
             if isinstance(event, TurnDoneEvent):
                 if stop_on_done:
