@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/lib/core/system"
 	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/server/serializers"
@@ -115,6 +116,13 @@ func (h *AgentHandler) Status(c *gin.Context) {
 // fetchHALEmotion calls HAL /emotion/status to get the current emotion.
 // Falls back to lastEmotion if HAL is unreachable.
 func (h *AgentHandler) fetchHALEmotion() string {
+	// Only devices that declare the `expression` capability mount HAL's /emotion
+	// route. On a device without it (e.g. intern-v2: audio+light only) the call
+	// just 404s on every status poll. Gate on the declared capability so the OS
+	// never reaches for a route the body doesn't have.
+	if !device.Has(h.config.DeviceTypeOrDefault(), device.CapExpression) {
+		return ""
+	}
 	emotion, err := hal.GetEmotion()
 	if err != nil {
 		h.lastEmotionMu.Lock()
