@@ -127,10 +127,18 @@ class GeminiLiveAgent(VoiceAgentBase):
             ]
             live_config.tools = [types.Tool(function_declarations=declarations)]
 
-        if self._resumption_handle is not None:
-            live_config.session_resumption = types.SessionResumptionConfig(
-                handle=self._resumption_handle,
-            )
+        # Always enable session resumption. On the FIRST connect `handle` is None,
+        # which tells the server to start emitting resumption handles
+        # (session_resumption_update); on a reconnect we pass the latest handle to
+        # resume the SAME session — context preserved and far faster than a cold
+        # restart. Gating this on `handle is not None` was a chicken-and-egg bug:
+        # without session_resumption set on the first connect the server never sent
+        # a handle, so `_resumption_handle` stayed None forever and every reconnect
+        # (e.g. after the server's go_away session-time-limit) was a cold restart —
+        # a longer "agent not available" gap and lost conversation context.
+        live_config.session_resumption = types.SessionResumptionConfig(
+            handle=self._resumption_handle,
+        )
 
         return live_config
 

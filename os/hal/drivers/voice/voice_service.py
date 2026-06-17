@@ -1005,8 +1005,12 @@ class VoiceService:
                         # through to the normal forward below so the main agent answers.
                         if first_sentence_sent or rt_transcript:
                             rt_handled = True
+                            # Label this `agent_reply`, not `transcript`: it is what
+                            # Moon SAID, not what the user said. Elsewhere `transcript`
+                            # means the user's STT (Session END / STT final), so using
+                            # the same word for the agent's output read as role-reversed.
                             logger.info(
-                                "[realtime] Chit-chat complete — transcript=%r",
+                                "[realtime] Chit-chat complete — agent_reply=%r",
                                 rt_transcript[:200] if rt_transcript else "(empty)",
                             )
                             # Save turn to realtime memory
