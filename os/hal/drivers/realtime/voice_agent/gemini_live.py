@@ -158,8 +158,8 @@ class GeminiLiveAgent(VoiceAgentBase):
             self._exit_stack = None
             self._session = None
 
-    async def _async_send_input(self, input: InputBase) -> None:
-        if self._session is None:
+    async def _async_send_input(self, input: InputBase | None) -> None:
+        if self._session is None or input is None:
             return
         if isinstance(input, AudioInput):
             # When VAD is disabled, send activityStart before first audio
@@ -194,11 +194,21 @@ class GeminiLiveAgent(VoiceAgentBase):
                 video=types.Blob(data=buf.tobytes(), mime_type="image/jpeg")
             )
         elif isinstance(input, FunctionCallResultInput):
+            # input.output is normally a JSON object string, but send_function_result()
+            # is public and may be handed arbitrary text — Gemini's response field
+            # requires a dict, so coerce non-object/invalid payloads instead of
+            # letting json.loads crash the IO loop.
+            try:
+                parsed: Any = json.loads(input.output)
+            except (json.JSONDecodeError, TypeError):
+                parsed = {"result": input.output}
+            if not isinstance(parsed, dict):
+                parsed = {"result": parsed}
             await self._session.send_tool_response(
                 function_responses=[
                     types.FunctionResponse(
                         id=input.call_id,
-                        response=json.loads(input.output),
+                        response=parsed,
                     )
                 ]
             )
@@ -377,7 +387,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                         self._submit_and_wait(
                             self._async_commit(), timeout=self._send_timeout_s
                         )
-                    elif isinstance(event, InputEvent):
+                    elif isinstance(event, InputEvent) and event.input is not None:
                         self._submit_and_wait(
                             self._async_send_input(event.input),
                             timeout=self._send_timeout_s,

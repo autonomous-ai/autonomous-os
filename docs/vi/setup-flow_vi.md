@@ -106,11 +106,53 @@ Config lưu tại `config/config.json`. Managed bởi `server/config/config.go`.
 | `FAChannel` | MQTT subscribe topic (server→device) |
 | `FDChannel` | MQTT publish topic (device→server) |
 
+## Bridge sự kiện về cửa sổ cha (parent window)
+
+Khi trang Setup được mở dạng popup/iframe từ một site khác (ví dụ
+`autonomous.ai`), nó báo từng cột mốc ngược về cửa sổ đã mở nó qua
+`window.postMessage`. Đây là kênh cross-origin duy nhất hoạt động được
+popup→opener, vì Setup được phục vụ từ AP IP của thiết bị
+(`http://192.168.100.1`) hoặc host `<type>-<id>.local` — khác origin.
+
+Cửa sổ cha nên truyền origin của mình để thiết bị biết gửi về đâu và payload
+không bị broadcast ra `*`:
+
+```js
+const origin = encodeURIComponent(window.location.origin);
+window.open(`http://192.168.100.1/setup?parent_origin=${origin}&...`, "_blank");
+```
+
+Thứ tự resolve origin: `?parent_origin=` → origin của `document.referrer` → `*`.
+
+Mỗi message là một JSON envelope phẳng:
+`{ source: "autonomous-device-setup", v: 1, event, ts, ...data }`. Lọc theo
+`source` và switch theo `event`:
+
+| `event` | Khi nào | Trường thêm |
+|---------|---------|-------------|
+| `setup_opened` | Wizard đã mount | `mode`, `deviceId`, `mac` |
+| `step_changed` | Operator đổi bước wizard | `step` |
+| `wifi_selected` | Đã chọn một mạng WiFi | `ssid` |
+| `setup_submitted` | Bấm "Setup", chuẩn bị gửi request | `ssid`, `channel` |
+| `setup_error` | Có lỗi validation/backend | `message` |
+| `setup_connecting` | Thiết bị đang join WiFi (sau submit) | — |
+| `setup_connected` | Thiết bị online + reachable | `mdns_host`, `lan_ip` |
+| `setup_failed` | Join WiFi thất bại | `message` |
+| `retry_clicked` | Bấm "Back to Wi-Fi" sau khi lỗi | — |
+| `continue_clicked` | Bấm "Continue setup →" | `mdns_host` |
+| `monitor_clicked` | Bấm "Go to monitor →" | — |
+
+Các emit đều best-effort: không có opener/parent thì là no-op, và lỗi
+postMessage bị nuốt, nên bridge không bao giờ ảnh hưởng tới luồng setup. Ví dụ
+listener đầy đủ nằm ở phần header của file `lib/setupBridge.ts`.
+
 ## Code
 
 | File | Vai trò |
 |------|---------|
 | `os/services/internal/device/service.go` | Setup orchestration |
+| `os/services/web/src/lib/setupBridge.ts` | Bridge sự kiện về cửa sổ cha (postMessage) |
+| `os/services/web/src/pages/Setup.tsx` | UI wizard Setup + các điểm gọi emit bridge |
 | `os/services/internal/network/service.go` | WiFi connect, AP mode |
 | `os/services/server/device/delivery/http/handler.go` | HTTP setup handler |
 | `os/services/server/config/config.go` | Config load/save |

@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Pencil, X, Eye, EyeOff } from "lucide-react";
 import type { SectionId } from "@/hooks/setup/types";
-import { C, FIELD_GAP, LABEL_STYLE, INPUT_STYLE, INPUT_READONLY_STYLE, INPUT_FOCUS_SHADOW, INPUT_ERROR_SHADOW, INPUT_PAD_ONE_ICON, INPUT_PAD_TWO_ICONS } from "./styles";
+import { C, FIELD_GAP, ADMIN_PASSWORD_MIN, LABEL_STYLE, INPUT_STYLE, INPUT_READONLY_STYLE, INPUT_FOCUS_SHADOW, INPUT_ERROR_SHADOW, INPUT_PAD_ONE_ICON, INPUT_PAD_TWO_ICONS } from "./styles";
 
 // Re-export the design tokens so existing `import { C } from "./shared"` sites
 // keep working — the source of truth now lives in ./styles (a plain module, so
 // it doesn't trip react-refresh's component-only-export rule).
-export { C, FIELD_GAP, LABEL_STYLE, INPUT_STYLE, INPUT_READONLY_STYLE, INPUT_FOCUS_SHADOW, INPUT_ERROR_SHADOW, INPUT_PAD_ONE_ICON, INPUT_PAD_TWO_ICONS };
+export { C, FIELD_GAP, ADMIN_PASSWORD_MIN, LABEL_STYLE, INPUT_STYLE, INPUT_READONLY_STYLE, INPUT_FOCUS_SHADOW, INPUT_ERROR_SHADOW, INPUT_PAD_ONE_ICON, INPUT_PAD_TWO_ICONS };
 
 // FieldError — the red message line shown under an invalid input. Centralised so
 // every field renders errors identically (icon + 12px red text). Returns null
@@ -72,9 +72,11 @@ export function PasswordField({ label, id, value, onChange, placeholder, readOnl
   const hasError = !!error && !readOnly;
   return (
     <div style={{ marginBottom: FIELD_GAP }}>
-      <label htmlFor={id} style={LABEL_STYLE}>
-        {label}
-      </label>
+      {label && (
+        <label htmlFor={id} style={LABEL_STYLE}>
+          {label}
+        </label>
+      )}
       <div style={{ position: "relative" }}>
         <input
           id={id} type={show ? "text" : "password"} value={value}
@@ -203,9 +205,11 @@ export function LockedPasswordField({
   // the user can verify a saved password without unlocking it for edit first.
   return (
     <div style={{ marginBottom: FIELD_GAP }}>
-      <label htmlFor={id} style={LABEL_STYLE}>
-        {label}
-      </label>
+      {label && (
+        <label htmlFor={id} style={LABEL_STYLE}>
+          {label}
+        </label>
+      )}
       <div style={{ position: "relative" }}>
         <input
           id={id} type={show ? "text" : "password"} value={value}
@@ -263,7 +267,7 @@ export function LockedPasswordField({
 export function ConfiguredHint({ label, editPath = "/edit" }: { label: string; editPath?: string }) {
   return (
     <div style={{ marginBottom: FIELD_GAP }}>
-      <label style={LABEL_STYLE}>{label}</label>
+      {label && <label style={LABEL_STYLE}>{label}</label>}
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
         gap: 10, padding: "10px 13px",

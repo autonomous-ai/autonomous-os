@@ -8,8 +8,9 @@ import { useTTSCatalog } from "@/hooks/setup/useTTSCatalog";
 import { useConfigPrefill } from "@/hooks/setup/useConfigPrefill";
 import { useSetupStatusPolling } from "@/hooks/setup/useSetupStatusPolling";
 import { useFaceEnroll } from "@/hooks/setup/useFaceEnroll";
+import { setupBridge } from "@/lib/setupBridge";
 import type { SectionId, LlmLoadedState, ChannelLoadedState } from "@/hooks/setup/types";
-import { C } from "@/components/setup/shared";
+import { C, ADMIN_PASSWORD_MIN } from "@/components/setup/shared";
 import { DeviceSection } from "@/components/setup/DeviceSection";
 import { WifiSection } from "@/components/setup/WifiSection";
 import { LLMSection } from "@/components/setup/LLMSection";
@@ -372,17 +373,17 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
     // doesn't require deviceId — it merges server-side — so this keeps per-step
     // gating consistent with submit.)
     // V1: Device step is done when the device already has a password on file,
-    //     or the operator typed one ≥8 chars AND it matches the confirm field.
+    //     or the operator typed one ≥ min chars AND it matches the confirm field.
     // V2: Device is not a step (merged into Wi-Fi) → always satisfied.
     device: isV1
-      ? (hasAdminPassword || (adminPassword.length >= 8 && adminPassword === adminPasswordConfirm))
+      ? (hasAdminPassword || (adminPassword.length >= ADMIN_PASSWORD_MIN && adminPassword === adminPasswordConfirm))
       : true,
     // Wi-Fi step needs a network + a Wi-Fi password (or one on file). In V2 it
-    // ALSO owns the admin password, so the admin requirement (on file, or ≥8
-    // chars typed) is folded in. V1 leaves the admin gate to the Device step.
+    // ALSO owns the admin password, so the admin requirement (on file, or
+    // ≥ min chars typed) is folded in. V1 leaves the admin gate to the Device step.
     // Mirrors the submit-time preflight so per-step gating and final submit agree.
     wifi: !!ssid && (!!password || hasNetworkPassword)
-      && (isV1 || hasAdminPassword || adminPassword.length >= 8),
+      && (isV1 || hasAdminPassword || adminPassword.length >= ADMIN_PASSWORD_MIN),
     llm: !!llmApiKey || llmLoaded.apiKey,
     language: true, // Auto/empty is a valid choice — never block on this.
     channel: channel === "telegram"
@@ -487,6 +488,31 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
     setSetupPhase, setSetupLanIP, setSetupErrorMsg,
   });
 
+  // ── Parent-window event bridge (autonomous.ai) ──────────────────────────────
+  // Notify whoever opened this popup of each meaningful Setup milestone via
+  // postMessage (see lib/setupBridge.ts). All emits are best-effort no-ops when
+  // there's no opener, so they never affect the flow. Each milestone is fired
+  // from a focused effect so it tracks the real state transition exactly once.
+
+  // Wizard mounted and ready.
+  useEffect(() => {
+    setupBridge.opened({ mode, deviceId, mac });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Operator moved to a new step.
+  useEffect(() => { setupBridge.stepChanged(activeSection); }, [activeSection]);
+  // A WiFi network was chosen.
+  useEffect(() => { if (ssid) setupBridge.wifiSelected(ssid); }, [ssid]);
+  // Validation / backend error surfaced.
+  useEffect(() => { if (error) setupBridge.error(error); }, [error]);
+  // Post-submit phase transitions: connecting → connected | failed.
+  useEffect(() => {
+    if (!setupWorking) return;
+    if (setupPhase === "connecting") setupBridge.connecting();
+    else if (setupPhase === "connected") setupBridge.connected({ mdns_host: deviceMdnsHost, lan_ip: setupLanIP });
+    else if (setupPhase === "failed") setupBridge.failed(setupErrorMsg || "Wi-Fi setup failed.");
+  }, [setupWorking, setupPhase, deviceMdnsHost, setupLanIP, setupErrorMsg]);
+
 
   // Auto-mirror AI Brain key/URL into TTS while TTS field is empty.
   // Once the user types into TTS the sync stops; clearing it re-enables mirroring.
@@ -549,13 +575,13 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
       ? {
           device: hasAdminPassword
             ? "Device info is still loading."
-            : "Set an admin password (min 8 characters) and confirm it before continuing.",
+            : `Set an admin password (min ${ADMIN_PASSWORD_MIN} characters) and confirm it before continuing.`,
           wifi: "Choose a Wi-Fi network and enter its password before continuing.",
         }
       : {
           wifi: hasAdminPassword
             ? "Choose a Wi-Fi network and enter its password before continuing."
-            : "Set a password (min 8 characters), then choose a Wi-Fi network and enter its password.",
+            : `Set a password (min ${ADMIN_PASSWORD_MIN} characters), then choose a Wi-Fi network and enter its password.`,
         }),
     llm: "Add the AI Brain API key before continuing.",
     channel: "Add the messaging channel token before continuing.",
@@ -601,11 +627,11 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
         setActiveSection(pwStep);
         return;
       }
-      // 8-char floor is a frontend-only policy (the backend bcrypts any
+      // The min-length floor is a frontend-only policy (the backend bcrypts any
       // non-empty value). This protects a device with a camera/mic from a
       // trivially guessable admin login.
-      if (adminPassword.length < 8) {
-        setError("Password must be at least 8 characters.");
+      if (adminPassword.length < ADMIN_PASSWORD_MIN) {
+        setError(`Password must be at least ${ADMIN_PASSWORD_MIN} characters.`);
         setActiveSection(pwStep);
         return;
       }
@@ -688,6 +714,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
           fd_channel: fdChannel || urlParams.fdChannel || undefined,
         });
       }
+      setupBridge.submitted({ ssid: ssid.trim(), channel });
       const result = await setupDevice(body);
       setSetupWorking(result);
       setSetupPhase("connecting");
@@ -958,6 +985,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                           // is reachable in continue mode now.
                           href={`http://${deviceMdnsHost}.local${window.location.pathname}${getInitialSearch()}`}
                           onClick={(e) => {
+                            setupBridge.continueClicked({ mdns_host: deviceMdnsHost });
                             if (window.location.hostname === `${deviceMdnsHost}.local`) {
                               e.preventDefault();
                               window.location.reload();
@@ -1035,7 +1063,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                     <button
                       type="button"
                       className="lm-btn lm-btn-primary"
-                      onClick={() => { setSetupWorking(false); setSetupPhase("connecting"); setActiveSection("wifi"); }}
+                      onClick={() => { setupBridge.retryClicked(); setSetupWorking(false); setSetupPhase("connecting"); setActiveSection("wifi"); }}
                       style={{ padding: "9px 18px" }}
                     >
                       Back to Wi-Fi
@@ -1185,7 +1213,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                         <button
                           key="done"
                           type="button"
-                          onClick={() => navigate("/monitor")}
+                          onClick={() => { setupBridge.monitorClicked(); navigate("/monitor"); }}
                           className="lm-btn lm-btn-primary"
                           style={{ padding: "9px 22px" }}
                         >

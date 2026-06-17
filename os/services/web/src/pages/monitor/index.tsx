@@ -278,58 +278,67 @@ export default function Monitor() {
 
   // Section-specific polling at 5s. The fetcher branches on the active
   // section so hidden sections don't pull data they won't show.
+  //
+  // Every card's fetch is fired CONCURRENTLY and commits its own state the
+  // moment it resolves — no card waits on a slower sibling. Previously this was
+  // three sequential `await Promise.all` waves (system → health → peripherals),
+  // so the Audio panel (last wave) only appeared after system/info + network +
+  // health had all returned, stacking the latency of the `/api/hardware/*`
+  // proxy hops to HAL. The only real dependency is the peripheral panels on
+  // `/health` (it reports which capability routes are mounted), so those alone
+  // chain off it; system/info, network, presence and scene run in parallel.
   usePolling(async (signal) => {
     const s = sectionRef.current;
+    const json = (r: Response) => r.json();
+    const tasks: Promise<unknown>[] = [];
 
     if (s === "overview" || s === "system") {
-      const [sysR, netR] = await Promise.all([
-        fetch(`${API}/system/info`, { signal }).then((r) => r.json()),
-        fetch(`${API}/system/network`, { signal }).then((r) => r.json()),
-      ]);
-      if (sysR.status === 1) {
-        const d = sysR.data;
-        setSys(d);
-        setCpuHistory((h) => [...h.slice(-(HISTORY_LEN - 1)), d.cpuLoad]);
-        setRamHistory((h) => [...h.slice(-(HISTORY_LEN - 1)), d.memPercent]);
-      }
-      if (netR.status === 1) setNet(netR.data);
+      tasks.push(
+        fetch(`${API}/system/info`, { signal }).then(json).then((sysR) => {
+          if (sysR.status === 1) {
+            const d = sysR.data;
+            setSys(d);
+            setCpuHistory((h) => [...h.slice(-(HISTORY_LEN - 1)), d.cpuLoad]);
+            setRamHistory((h) => [...h.slice(-(HISTORY_LEN - 1)), d.memPercent]);
+          }
+        }).catch(() => {}),
+        fetch(`${API}/system/network`, { signal }).then(json).then((netR) => {
+          if (netR.status === 1) setNet(netR.data);
+        }).catch(() => {}),
+      );
     }
 
     if (s === "overview") {
-      const [hwR, presR, sceneR] = await Promise.all([
-        fetch(`${HW}/health`, { signal }).then((r) => r.json()),
-        fetch(`${HW}/presence`, { signal }).then((r) => r.json()),
-        fetch(`${HW}/scene`, { signal }).then((r) => r.json()),
-      ]);
-      setHw(hwR);
-      setPresence(presR);
-      if (sceneR.scenes) setSceneInfo(sceneR);
-
-      // Each peripheral panel is fetched ONLY when health reports that hardware
-      // present — its HAL route is mounted by the device's declared capability,
-      // so an absent peripheral means the route 404s. Gating here keeps a device
-      // that lacks a peripheral (e.g. intern-v2 has no servo/display, and no
-      // `media` → no music; a device with no speaker has audio:false) from
-      // hitting 404 endpoints every 5s poll. Panels render null-safe when their
-      // state stays at the initial value.
-      const json = (r: Response) => r.json();
-      const [voiceR, audioR, musicR, ledR, servoR, dispR] = await Promise.all([
-        hwR.voice ? fetch(`${HW}/voice/status`, { signal }).then(json) : null,
-        hwR.audio ? fetch(`${HW}/audio/volume`, { signal }).then(json) : null,
-        hwR.music ? fetch(`${HW}/audio/status`, { signal }).then(json) : null,
-        hwR.led ? fetch(`${HW}/led/color`, { signal }).then(json) : null,
-        hwR.servo ? fetch(`${HW}/servo`, { signal }).then(json) : null,
-        hwR.display ? fetch(`${HW}/display`, { signal }).then(json) : null,
-      ]);
-      if (voiceR) setVoice(voiceR);
-      if (audioR) setAudio(audioR);
-      if (musicR?.playing !== undefined) setMusicPlaying(musicR.playing);
-      if (musicR?.speaker_muted !== undefined) setSpeakerMuted(musicR.speaker_muted);
-      if (ledR?.hex) setLedColor(ledR);
-      if (servoR) setServo(servoR);
-      if (dispR) setDisplayState(dispR);
-      setDisplayTs(Date.now());
+      tasks.push(
+        fetch(`${HW}/presence`, { signal }).then(json).then(setPresence).catch(() => {}),
+        fetch(`${HW}/scene`, { signal }).then(json).then((sceneR) => {
+          if (sceneR.scenes) setSceneInfo(sceneR);
+        }).catch(() => {}),
+        // Each peripheral panel is fetched ONLY when health reports that hardware
+        // present — its HAL route is mounted by the device's declared capability,
+        // so an absent peripheral means the route 404s. Gating here keeps a device
+        // that lacks a peripheral (e.g. intern-v2 has no servo/display, and no
+        // `media` → no music; a device with no speaker has audio:false) from
+        // hitting 404 endpoints every 5s poll. Panels render null-safe when their
+        // state stays at the initial value.
+        fetch(`${HW}/health`, { signal }).then(json).then((hwR) => {
+          setHw(hwR);
+          const peripherals: Promise<unknown>[] = [];
+          if (hwR.voice) peripherals.push(fetch(`${HW}/voice/status`, { signal }).then(json).then((r) => { if (r) setVoice(r); }).catch(() => {}));
+          if (hwR.audio) peripherals.push(fetch(`${HW}/audio/volume`, { signal }).then(json).then((r) => { if (r) setAudio(r); }).catch(() => {}));
+          if (hwR.music) peripherals.push(fetch(`${HW}/audio/status`, { signal }).then(json).then((r) => {
+            if (r?.playing !== undefined) setMusicPlaying(r.playing);
+            if (r?.speaker_muted !== undefined) setSpeakerMuted(r.speaker_muted);
+          }).catch(() => {}));
+          if (hwR.led) peripherals.push(fetch(`${HW}/led/color`, { signal }).then(json).then((r) => { if (r?.hex) setLedColor(r); }).catch(() => {}));
+          if (hwR.servo) peripherals.push(fetch(`${HW}/servo`, { signal }).then(json).then((r) => { if (r) setServo(r); }).catch(() => {}));
+          if (hwR.display) peripherals.push(fetch(`${HW}/display`, { signal }).then(json).then((r) => { if (r) setDisplayState(r); }).catch(() => {}));
+          return Promise.all(peripherals).then(() => setDisplayTs(Date.now()));
+        }).catch(() => {}),
+      );
     }
+
+    await Promise.all(tasks);
   }, 5_000, { timeoutMs: 8000 });
 
   // Flow SSE: only open when flow or chat section is active. useEventSource

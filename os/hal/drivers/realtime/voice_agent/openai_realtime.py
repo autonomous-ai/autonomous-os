@@ -52,6 +52,12 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
             base_url=config.base_url,
         )
         self._connection: RealtimeConnection | None = None
+        # Serializes all access to self._connection across the send/recv threads.
+        # Reentrant: a send op holds it while triggering _safe_response_create,
+        # which re-acquires it on the same thread. The blocking recv iteration
+        # runs OUTSIDE the lock (on a snapshot) so sends aren't starved during a
+        # turn — only connection swaps, writes, and teardown are serialized.
+        self._conn_lock: threading.RLock = threading.RLock()
         self._speech_ended_at: float | None = None
         self._reconnect_delay_s: float = config.reconnect_delay_s
         self._max_retries: int = config.max_retries
@@ -127,68 +133,76 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
             self._connection = None
 
     def _sync_send_input(self, input: InputBase) -> None:
-        if self._connection is None:
-            return
+        with self._conn_lock:
+            if self._connection is None:
+                return
 
-        if isinstance(input, AudioInput):
-            b64_audio: str = float32_to_base64_pcm16(input.audio)
-            self._connection.input_audio_buffer.append(audio=b64_audio)
+            if isinstance(input, AudioInput):
+                b64_audio: str = float32_to_base64_pcm16(input.audio)
+                self._connection.input_audio_buffer.append(audio=b64_audio)
 
-        elif isinstance(input, TextInput):
-            self._connection.conversation.item.create(
-                item={
-                    "type": "message",
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": input.text}],
-                }
-            )
+            elif isinstance(input, TextInput):
+                self._connection.conversation.item.create(
+                    item={
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": input.text}],
+                    }
+                )
 
-        elif isinstance(input, ImageInput):
-            _: bool
-            buf: np.ndarray
-            _, buf = cv2.imencode(".png", input.image)
-            b64_img: str = base64.b64encode(buf.tobytes()).decode("ascii")
-            data_uri: str = f"data:image/png;base64,{b64_img}"
-            self._connection.conversation.item.create(
-                item={
-                    "type": "message",
-                    "role": "user",
-                    "content": [{"type": "input_image", "image_url": data_uri}],
-                }
-            )
+            elif isinstance(input, ImageInput):
+                _: bool
+                buf: np.ndarray
+                _, buf = cv2.imencode(".png", input.image)
+                b64_img: str = base64.b64encode(buf.tobytes()).decode("ascii")
+                data_uri: str = f"data:image/png;base64,{b64_img}"
+                self._connection.conversation.item.create(
+                    item={
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_image", "image_url": data_uri}],
+                    }
+                )
 
-        elif isinstance(input, FunctionCallResultInput):
-            self._connection.conversation.item.create(
-                item={
-                    "type": "function_call_output",
-                    "call_id": input.call_id,
-                    "output": input.output,
-                }
-            )
-            self._safe_response_create()
+            elif isinstance(input, FunctionCallResultInput):
+                self._connection.conversation.item.create(
+                    item={
+                        "type": "function_call_output",
+                        "call_id": input.call_id,
+                        "output": input.output,
+                    }
+                )
+                self._safe_response_create()
 
     def _sync_commit(self) -> None:
-        if self._connection is None:
-            return
-        self._connection.input_audio_buffer.commit()
-        self._safe_response_create()
+        with self._conn_lock:
+            if self._connection is None:
+                return
+            self._connection.input_audio_buffer.commit()
+            self._safe_response_create()
 
     def _safe_response_create(self) -> None:
-        """Wait for any active response to finish, then create a new one."""
-        if self._connection is None:
-            return
+        """Wait for any active response to finish, then create a new one.
+
+        The wait runs before taking the connection lock so the recv thread can
+        keep draining events (and set _turn_done) without contending with us.
+        """
         if not self._turn_done.wait(timeout=10.0):
             logger.warning("[realtime] Timed out waiting for active response to finish — forcing new response")
-        self._turn_done.clear()
-        self._speech_ended_at = time.monotonic()
-        self._connection.response.create()
+        with self._conn_lock:
+            if self._connection is None:
+                return
+            self._turn_done.clear()
+            self._speech_ended_at = time.monotonic()
+            self._connection.response.create()
 
-    def _sync_receive_turn(self) -> None:
-        """Read one full turn from the connection, put outputs on _recv_queue."""
-        if self._connection is None:
-            return
+    def _sync_receive_turn(self, conn: RealtimeConnection) -> None:
+        """Read one full turn from `conn`, put outputs on _recv_queue.
 
-        for event in self._connection:
+        Iterates on the caller-supplied connection snapshot (not self._connection)
+        so a concurrent reconnect that swaps the connection can't be read mid-turn.
+        """
+        for event in conn:
             match event.type:
                 case "input_audio_buffer.speech_stopped":
                     self._speech_ended_at = time.monotonic()
@@ -258,15 +272,30 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
         self._reconnect()
 
     def _reconnect(self) -> None:
-        self._connected.clear()
-        self._turn_done.set()  # unblock any waiting commit
-        try:
-            logger.info("[realtime] Reconnecting...")
-            self._sync_disconnect()
-            self._sync_connect()
-            self._connected.set()
-        except Exception as e:
-            logger.warning("[realtime] Reconnect failed: %s — will retry on next audio", e)
+        with self._conn_lock:
+            # Another thread may have reconnected while we waited for the lock —
+            # don't tear a healthy connection back down.
+            if self._connected.is_set():
+                return
+            self._turn_done.set()  # unblock any waiting commit
+            try:
+                logger.info("[realtime] Reconnecting...")
+                self._sync_disconnect()
+                self._sync_connect()
+                self._connected.set()
+            except Exception as e:
+                logger.warning("[realtime] Reconnect failed: %s — will retry on next audio", e)
+
+    def _drop_connection(self, conn: RealtimeConnection | None) -> None:
+        """Mark the connection dead — only if `conn` is still the current one.
+
+        Both loops call this on error; the identity check stops one thread from
+        nulling a connection the other thread just re-established.
+        """
+        with self._conn_lock:
+            if conn is None or self._connection is conn:
+                self._connected.clear()
+                self._connection = None
 
     # --- VoiceAgentBase implementation ---
 
@@ -291,6 +320,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                 if not self._connected.is_set():
                     logger.debug("[realtime] Not connected, skipping attempt %d/%d", attempt + 1, self._max_retries)
                     continue
+                conn: RealtimeConnection | None = self._connection
                 try:
                     if isinstance(event, AudioCommitEvent):
                         self._sync_commit()
@@ -299,8 +329,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                     break  # Success
                 except Exception as e:
                     logger.exception("[realtime] Send failed (attempt %d/%d): %s", attempt + 1, self._max_retries, e)
-                    self._connected.clear()
-                    self._connection = None
+                    self._drop_connection(conn)
 
     @override
     def _recv_loop(self) -> None:
@@ -311,17 +340,19 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
 
             for attempt in range(self._max_retries):
                 self._ensure_connected()
-                if not self._connected.is_set():
+                with self._conn_lock:
+                    conn: RealtimeConnection | None = (
+                        self._connection if self._connected.is_set() else None
+                    )
+                if conn is None:
                     logger.debug("[realtime] Not connected, skipping attempt %d/%d", attempt + 1, self._max_retries)
                     continue
                 try:
-                    self._sync_receive_turn()
+                    self._sync_receive_turn(conn)
                     break  # Success
                 except OpenAIRealtimeError as e:
                     logger.warning("[realtime] Recv failed (attempt %d/%d): %s", attempt + 1, self._max_retries, e)
-                    self._connected.clear()
-                    self._connection = None
+                    self._drop_connection(conn)
                 except Exception as e:
                     logger.exception("[realtime] Unexpected recv error (attempt %d/%d): %s", attempt + 1, self._max_retries, e)
-                    self._connected.clear()
-                    self._connection = None
+                    self._drop_connection(conn)

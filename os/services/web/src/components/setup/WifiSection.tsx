@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Wifi, Eye, EyeOff, Settings } from "lucide-react";
-import { C, ConfiguredHint, PasswordField, SectionCard, SkeletonBlock, LABEL_STYLE, INPUT_STYLE, INPUT_PAD_ONE_ICON, FIELD_GAP } from "./shared";
+import { C, ConfiguredHint, PasswordField, SectionCard, SkeletonBlock, LABEL_STYLE, INPUT_STYLE, INPUT_PAD_ONE_ICON, FIELD_GAP, ADMIN_PASSWORD_MIN } from "./shared";
 import type { NetworkItem } from "@/types";
 
 // Small uppercase group label that separates the Device and Wi-Fi field groups
@@ -81,14 +81,11 @@ export function WifiSection({
         <>
           <GroupLabel first>Device</GroupLabel>
           <div style={{ marginBottom: FIELD_GAP }}>
-            <label htmlFor="admin_password" style={LABEL_STYLE}>
-              Device password
-            </label>
-          <div style={{ position: "relative" }}>
+            <div style={{ position: "relative" }}>
             <input
               id="admin_password" type={adminVisible ? "text" : "password"} value={adminPassword ?? ""}
               onChange={(e) => setAdminPassword!(e.target.value)}
-              placeholder="At least 8 characters" autoComplete="off"
+              placeholder={`At least ${ADMIN_PASSWORD_MIN} characters`} autoComplete="off"
               style={{ ...INPUT_STYLE, padding: INPUT_PAD_ONE_ICON }}
             />
             <button
@@ -112,9 +109,11 @@ export function WifiSection({
         </>
       )}
       <div style={{ marginBottom: FIELD_GAP }}>
-        <label htmlFor="ssid" style={LABEL_STYLE}>
-          Wi-Fi network
-        </label>
+        {!showAdminPassword && (
+          <label htmlFor="ssid" style={LABEL_STYLE}>
+            Wi-Fi network
+          </label>
+        )}
         {loadingList ? (
           <SkeletonBlock />
         ) : uniqueNetworks.length > 0 ? (
@@ -156,9 +155,9 @@ export function WifiSection({
         )}
       </div>
       {passwordConfigured ? (
-        <ConfiguredHint label="Wi-Fi password" />
+        <ConfiguredHint label={showAdminPassword ? "" : "Wi-Fi password"} />
       ) : (
-        <PasswordField label="Wi-Fi password" id="password" value={password} onChange={setPassword} placeholder="Wi-Fi password" />
+        <PasswordField label={showAdminPassword ? "" : "Wi-Fi password"} id="password" value={password} onChange={setPassword} placeholder="Wi-Fi password" />
       )}
     </SectionCard>
   );

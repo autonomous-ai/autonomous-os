@@ -28,6 +28,32 @@ jobs:
         working-directory: os/services
         run: go test ./...
 
+  web:
+    name: Web (os/services/web) — typecheck · build · lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: os/services/web/package-lock.json
+      - name: install
+        working-directory: os/services/web
+        run: npm ci
+      # `npm run build` runs `tsc -b && vite build`, so it catches type errors
+      # and a broken production bundle in one step.
+      - name: typecheck + build
+        working-directory: os/services/web
+        run: npm run build
+      # Advisory: surfaces PRE-EXISTING eslint findings across the Monitor/web
+      # code (set-state-in-effect, react-refresh, etc.). Not introduced by the
+      # current change — so it reports without blocking the merge gate.
+      - name: lint (advisory)
+        working-directory: os/services/web
+        continue-on-error: true
+        run: npm run lint
+
   python:
     name: Python (os/hal) — unit tests · syntax
     runs-on: ubuntu-latest

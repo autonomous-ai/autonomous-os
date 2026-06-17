@@ -30,6 +30,12 @@ export const C = {
 // these so the scale stays consistent — change here, change everywhere.
 export const FIELD_GAP = 14;
 
+// Minimum admin/device password length. Frontend-only policy — the backend
+// bcrypts any non-empty value (see internal/device/service.go), so this is the
+// single knob for the floor enforced in the Setup wizard. One source of truth
+// so the validation gate, the strength meter, and the field copy never drift.
+export const ADMIN_PASSWORD_MIN = 4;
+
 export const LABEL_STYLE: CSSProperties = {
   display: "block",
   fontSize: 13,
