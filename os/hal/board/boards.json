@@ -16,7 +16,7 @@
       "match": ["sun60iw2"],
       "led": { "transport": "spi", "spi_bus": 3, "spi_device": 0 },
       "button": { "chip": 1, "line": 9, "debounce_ns": 200000000 },
-      "touch": { "chip": 0, "lines": [96, 97, 99] }
+      "touch": { "chip": 0, "lines": [96, 98, 100] }
     }
   }
 }

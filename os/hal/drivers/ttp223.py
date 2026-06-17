@@ -72,6 +72,14 @@ PET_SESSION_THRESHOLD = 2
 # PET_COOLDOWN_S consecutively.
 PET_COOLDOWN_S = 1.5
 
+# Settle window after claiming the lines. lgpio reports each line's current
+# level as an initial edge the moment the alert callback is registered. The
+# pads rest HIGH, so without this guard those startup reports are read as a
+# real touch and fire a phantom single_click ~DECISION_WINDOW after every HAL
+# start (Restart=always makes it recur). Ignore all edges for this long after
+# claim so the startup transient never starts a session.
+SETTLE_S = 0.5
+
 
 def _board_label() -> str:
     return board_profile().id
@@ -101,6 +109,9 @@ class TTP223Handler:
         # eaten (cooldown after pet to avoid stuttering single_clicks
         # during a continuous stroke).
         self._pet_cooldown_until = 0.0
+        # monotonic deadline before which edges are ignored (startup transient
+        # from claiming the lines — see SETTLE_S).
+        self._ignore_edges_until = 0.0
 
     def start(self):
         config = _resolve_board_config()
@@ -115,6 +126,10 @@ class TTP223Handler:
 
         self._chip, self._lines = config
         self._lgpio = lgpio
+
+        # Arm the settle window now, before claiming: the callback registration
+        # below emits an initial edge per line (the current resting level).
+        self._ignore_edges_until = time.monotonic() + SETTLE_S
 
         try:
             self._handle = lgpio.gpiochip_open(self._chip)
@@ -148,6 +163,11 @@ class TTP223Handler:
         )
 
     def _on_edge(self, chip, gpio, level, tick):
+        # Drop the startup transient: lgpio reports each line's initial level
+        # as an edge when the callback is registered. The resting-HIGH pads
+        # would otherwise fire a phantom gesture on every HAL start.
+        if time.monotonic() < self._ignore_edges_until:
+            return
         # Any edge keeps the current session alive — cross-talk and
         # FastMode auto-LOW produce flurries of edges per physical
         # touch; coalesce them by resetting the session-end timer.
