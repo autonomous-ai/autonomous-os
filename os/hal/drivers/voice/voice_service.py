@@ -172,7 +172,14 @@ class VoiceService:
                     original_on_speak_end()
                 if hal_config.REALTIME_ENABLED and tts_service.last_spoken_text:
                     text: str = tts_service.last_spoken_text
-                    logger.info("[realtime] Feeding TTS history: %r", text[:100])
+                    # Direction is INTO the realtime model: whatever was just
+                    # spoken (often an OpenClaw reply, not Gemini's own output) is
+                    # pushed to Gemini as history so it stays aware of what the
+                    # device said and won't repeat it. Not a Gemini-generated line.
+                    logger.info(
+                        "[realtime<-tts] Notifying realtime agent of spoken text: %r",
+                        text[:100],
+                    )
                     self._realtime.send_text(f"[TTS HISTORY] {text}")
 
             tts_service._on_speak_end = _tts_speak_end_with_realtime_feedback
