@@ -35,7 +35,10 @@ asking: does it take the world **IN**, or does it drive the body **OUT**?
   camera → dlbackend ML → `sensing` events POSTed up to the os-server — it is not a route
   the agent calls *down*. Declaring `presence` is what tells HAL to run that people-
   perception loop and which dlbackend models to call. (Raw ambient sensors are `sensing`;
-  raw frames are `vision`. `presence` is the ML people-layer over them.)
+  raw frames are `vision`. `presence` is the ML people-layer over them.) It also gates the
+  idle→away→sleep auto-light state machine (dim → lights-off + `presence.away` sleep
+  announcement): that machine's only `on_motion()` source is the people-perception loop, so
+  a device without `presence` starts it disabled rather than falsely timing out to AWAY.
 - **Expression / output (OUT).** Driven *down* from agent → os-server → HAL → body:
   - **`expression`** owns the `emotion` route — the body showing *its own* feeling. It is
     its own capability, not "lighting": a device declares `expression` when it has a way to

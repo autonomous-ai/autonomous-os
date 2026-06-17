@@ -109,6 +109,8 @@ The full presence auto-control timeline:
 
 HAL manages the light control; the agent only handles the verbal announcement. If the user returns (motion detected), light restores automatically and a `presence.enter` event fires.
 
+This auto-control state machine is gated on the `presence` capability: its only motion source is the people-perception loop (face/motion/emotion processors), which HAL runs only when the device declares `presence`. A device without `presence` starts the state machine disabled, so it never falsely times out to AWAY. Lamp declares `presence: required` so the timeline above always applies.
+
 ---
 
 ## Motion

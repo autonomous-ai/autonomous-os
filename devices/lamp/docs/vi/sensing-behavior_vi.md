@@ -109,6 +109,8 @@ Timeline tự động điều khiển presence:
 
 HAL quản lý việc điều khiển đèn; agent chỉ xử lý thông báo bằng giọng nói. Nếu người dùng quay lại (phát hiện chuyển động), đèn tự phục hồi và event `presence.enter` được kích hoạt.
 
+State machine tự điều khiển này được gate theo capability `presence`: nguồn `on_motion()` duy nhất của nó là vòng people-perception (processor face/motion/emotion), mà HAL chỉ chạy khi device khai báo `presence`. Device **không** có `presence` sẽ khởi tạo state machine ở trạng thái disabled, nên không bao giờ bị timeout sang AWAY một cách sai lệch. Lamp khai báo `presence: required` nên timeline ở trên luôn áp dụng.
+
 ---
 
 ## Chuyển động (Motion)

@@ -36,13 +36,20 @@ class PresenceState(str, Enum):
 class PresenseService:
     """Tracks presence state based on motion events. Controls LED via rgb_service."""
 
-    def __init__(self, rgb_service=None, send_event=None, on_restore_aim=None):
+    def __init__(self, rgb_service=None, send_event=None, on_restore_aim=None, auto_enabled: bool = True):
         self._rgb_service = rgb_service
         self._send_event = send_event
         self._on_restore_aim = on_restore_aim
-        self._state = PresenceState.PRESENT
+        # The idle→away→sleep state machine is driven ONLY by on_motion(), which
+        # is fed exclusively by the people-perception processors (face / motion /
+        # emotion) gated on the `presence` capability. A device that doesn't
+        # declare `presence` has no motion source, so leaving auto-control on
+        # would make it falsely transition to AWAY (lights off + sleep announce)
+        # after the timeout despite being unable to sense anyone. Start disabled
+        # in that case; manual /presence/enable can still turn it on.
+        self._enabled = auto_enabled
+        self._state = PresenceState.PRESENT if auto_enabled else PresenceState.DISABLED
         self._last_motion_time: float = time.time()
-        self._enabled = True
 
         # Guard mode cache — checked periodically from the OS server API
         self._guard_mode: bool = False

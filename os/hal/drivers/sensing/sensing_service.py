@@ -106,8 +106,10 @@ class SensingService:
                 # `presence` capability — ML over the camera via dlbackend. Gated
                 # on enable_people_perception so a device that doesn't declare
                 # `presence` (e.g. a camera that only streams / does motion) never
-                # runs face/emotion recognition or calls dlbackend for them. The
-                # `presence.enter/leave` light state machine still works off motion.
+                # runs face/emotion recognition or calls dlbackend for them. These
+                # processors are also the only source of on_motion() for the
+                # presence light/away state machine, so without `presence` that
+                # state machine is started disabled (see PresenseService below).
                 enable_face=enable_people_perception,
                 # `motion` here is human ACTIVITY recognition (Kinetics action
                 # labels — drinking/eating/sedentary — via dlbackend), i.e. what
@@ -129,11 +131,17 @@ class SensingService:
             ),
         )
 
-        # Presence auto on/off state machine
+        # Presence auto on/off state machine. Its idle→away→sleep transitions
+        # are fed only by the people-perception processors (face/motion/emotion),
+        # which are themselves gated on the `presence` capability via
+        # enable_people_perception. Without `presence` there is no motion source,
+        # so auto-control starts disabled to avoid a false AWAY (lights off +
+        # sleep announcement) firing on the timeout alone.
         self._presense_service: PresenseService = PresenseService(
             rgb_service=rgb_service,
             send_event=self._send_event,
             on_restore_aim=on_restore_aim,
+            auto_enabled=enable_people_perception,
         )
         _ = self._perception_orchestrator.with_presence_service(self._presense_service)
 
