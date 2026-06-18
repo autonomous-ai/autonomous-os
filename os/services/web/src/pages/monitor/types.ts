@@ -159,6 +159,7 @@ export type Section = "overview" | "system" | "flow" | "camera" | "servo" | "fac
 // so a tab's hardware requirement is a named constant, not a scattered literal.
 // Keep in sync with the capability vocabulary (capabilities.v1).
 export const Cap = {
+  Audio: "audio",
   Vision: "vision",
   Motion: "motion",
   Sensing: "sensing",
