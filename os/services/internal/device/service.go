@@ -41,6 +41,11 @@ const (
 	SetupPhaseFailed     = "failed"
 )
 
+// apSetupIP is wlan0's static address while the device runs the provisioning
+// AP (see scripts/provision/setup-ap.sh). The early LAN-IP poll skips it so it
+// only ever publishes the STA-side address from the home router's DHCP.
+const apSetupIP = "192.168.100.1"
+
 type setupState struct {
 	mu    sync.RWMutex
 	phase string
@@ -102,7 +107,41 @@ func (s *Service) Setup(data domain.SetupRequest) error {
 	data.STTBaseURL = normalizeBaseURL(data.STTBaseURL)
 	data.TTSBaseURL = normalizeBaseURL(data.TTSBaseURL)
 	s.setupState.set(SetupPhaseConnecting, "", "")
+
+	// Early LAN-IP capture: SetupNetwork() blocks up to 60s waiting for
+	// internet, but the AP (192.168.100.1) tears down within ~2s of the
+	// AP→STA switch — so by the time SetupNetwork returns and we'd normally
+	// read the IP, the web client can no longer poll us over the AP. This
+	// goroutine polls wlan0 while SetupNetwork runs and publishes the new STA
+	// IP into setupState the instant it appears (before internet is even up),
+	// giving the FE the largest possible window to read lan_ip during the
+	// brief overlap where it's still polling. Phase stays "connecting" — a
+	// LAN IP alone doesn't prove the join fully succeeded; SetupNetwork's
+	// return flips it to connected/failed below.
+	ipPollDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ipPollDone:
+				return
+			case <-ticker.C:
+				ip, ipErr := s.networkService.GetCurrentIP()
+				// Ignore the AP's own static IP — we want the STA-side
+				// address handed out by the home router's DHCP.
+				if ipErr == nil && ip != "" && ip != apSetupIP {
+					if _, prevIP, _ := s.setupState.snapshot(); prevIP != ip {
+						s.setupState.set(SetupPhaseConnecting, ip, "")
+						slog.Info("setup: early LAN IP captured", "component", "device", "lan_ip", ip)
+					}
+				}
+			}
+		}
+	}()
+
 	result, err := s.networkService.SetupNetwork(data.SSID, data.Password)
+	close(ipPollDone)
 	if err != nil {
 		s.setupState.set(SetupPhaseFailed, "", err.Error())
 		return fmt.Errorf("setup network: %w", err)
@@ -113,7 +152,15 @@ func (s *Service) Setup(data domain.SetupRequest) error {
 	}
 	// Capture the LAN IP immediately after WiFi associates so the web
 	// client polling /api/setup/status can read it before AP shuts down.
-	if ip, ipErr := s.networkService.GetCurrentIP(); ipErr == nil && ip != "" {
+	// Re-reading here can fail transiently while the AP tears down — in that
+	// case keep whatever the early-capture goroutine already published rather
+	// than clobbering a good IP with an empty string.
+	ip, ipErr := s.networkService.GetCurrentIP()
+	if ipErr != nil || ip == "" || ip == apSetupIP {
+		_, prevIP, _ := s.setupState.snapshot()
+		ip = prevIP
+	}
+	if ip != "" {
 		s.setupState.set(SetupPhaseConnected, ip, "")
 		slog.Info("setup: WiFi associated", "component", "device", "lan_ip", ip)
 	} else {

@@ -73,22 +73,48 @@ interface SetupProps {
   mode?: SetupMode;
 }
 
-// CopyAddress — the device's .local address with a one-tap Copy button. Shown
-// on the post-submit screen so the operator can capture the address BEFORE they
+// CopyAddress — a device URL with a one-tap Copy button. Shown on the
+// post-submit screen so the operator can capture the address BEFORE they
 // switch Wi-Fi networks (at which point this page loses its connection and any
-// un-copied address is gone). Falls back silently if the Clipboard API is
-// unavailable (older/non-secure contexts) — the text is still selectable.
-function CopyAddress({ host }: { host: string }) {
+// un-copied address is gone). Pass the full URL via `url` — callers prefer the
+// raw-IP address (works on every LAN) over the .local name (fails when the
+// router blocks mDNS).
+//
+// Clipboard: the Setup page is served over plain HTTP (http://192.168.100.1),
+// where `navigator.clipboard` is undefined (it requires a secure context), so
+// the modern API silently no-ops. Fall back to a hidden-textarea +
+// document.execCommand("copy"), which works on http:// origins, so the button
+// actually copies instead of doing nothing.
+function CopyAddress({ url }: { url: string }) {
   const [copied, setCopied] = useState(false);
-  const text = `http://${host}.local/`;
+  const text = url;
+  const flashCopied = () => {
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1800);
+  };
+  const legacyCopy = () => {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      // Keep it off-screen and non-disruptive to scroll/focus.
+      ta.style.position = "fixed";
+      ta.style.top = "-9999px";
+      ta.setAttribute("readonly", "");
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      if (ok) flashCopied();
+    } catch {
+      /* copy unsupported — user can still select the text manually */
+    }
+  };
   const copy = () => {
-    navigator.clipboard?.writeText(text).then(
-      () => {
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 1800);
-      },
-      () => { /* clipboard blocked — user can still select the text */ },
-    );
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(flashCopied, legacyCopy);
+    } else {
+      legacyCopy();
+    }
   };
   return (
     <div style={{
@@ -939,7 +965,13 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                           This page disconnects when you rejoin home Wi-Fi — save
                           this address to continue:
                         </div>
-                        <CopyAddress host={deviceMdnsHost} />
+                        {/* Prefer the raw-IP URL: it resolves on every LAN,
+                            whereas the .local name fails when the router blocks
+                            mDNS. Fall back to .local only until the early
+                            lan_ip poll lands. */}
+                        <CopyAddress url={setupLanIP
+                          ? `http://${setupLanIP}/setup`
+                          : `http://${deviceMdnsHost}.local/setup`} />
                       </div>
                     )}
                   </>
@@ -1010,7 +1042,10 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                           <div style={{ fontSize: 13, color: C.textDim, marginBottom: 6, lineHeight: 1.5 }}>
                             Or open this address once you're back on home Wi-Fi:
                           </div>
-                          <CopyAddress host={deviceMdnsHost} />
+                          {/* IP-first (mDNS-blocked networks); .local until lan_ip lands. */}
+                          <CopyAddress url={setupLanIP
+                            ? `http://${setupLanIP}/setup`
+                            : `http://${deviceMdnsHost}.local/setup`} />
                           <div style={{ fontSize: 12, color: C.textMuted, marginTop: 8, lineHeight: 1.5 }}>
                             Can't reach it?
                             {setupLanIP && (

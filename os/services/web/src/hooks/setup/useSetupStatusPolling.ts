@@ -73,10 +73,17 @@ export function useSetupStatusPolling({
   useEffect(() => {
     if (!setupWorking || !setupLanIP) return;
     let cancelled = false;
-    const newURL = `http://${setupLanIP}/`;
+    const base = `http://${setupLanIP}`;
+    // Carry pathname + original search across so the IP host lands back on
+    // /setup with the OS-server-pushed params intact, same as the mDNS path.
+    const newURL = `${base}${window.location.pathname}${carrySearch}`;
     const probe = async () => {
       try {
-        await fetch(`${newURL}api/health`, { mode: "no-cors", cache: "no-store" });
+        // Raw-IP probe: works on every LAN regardless of mDNS, which is why
+        // it's the reliable fallback when the router blocks multicast. The
+        // device CSP must allow plain `http:` in connect-src for this fetch
+        // to leave the browser (the IP is cross-origin from the AP page).
+        await fetch(`${base}/api/health`, { mode: "no-cors", cache: "no-store" });
         if (!cancelled) window.location.href = newURL;
       } catch {
         /* not reachable yet — user still on AP SSID */
@@ -85,7 +92,7 @@ export function useSetupStatusPolling({
     probe();
     const id = setInterval(probe, 3000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [setupWorking, setupLanIP]);
+  }, [setupWorking, setupLanIP, carrySearch]);
 
   // mDNS probe — the primary auto-redirect channel since the LAN-IP one
   // rarely fires in real AP→STA transitions. Carries the current pathname +

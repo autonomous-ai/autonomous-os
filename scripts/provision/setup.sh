@@ -785,7 +785,7 @@ server {
   # via the Lamp /api/hardware/* proxy) so no CDN whitelist or
   # `'unsafe-inline'` is needed for the in-iframe docs to render. React app
   # 'unsafe-inline' stays only on style-src for its inline style props.
-  add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' ws: wss: http://*.local; frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'" always;
+  add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' ws: wss: http:; frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'" always;
 
   location / {
     try_files \$uri /index.html;
