@@ -150,13 +150,23 @@ os-server materializes it to `/usr/local/lib/os-runtimes/hermes/install.sh` and
 switch-runtime runs that local copy — fully offline, no CDN round-trip. (The CDN
 path `${RUNTIMES_BASE_URL}/hermes/install.sh` remains a fallback for backends not
 compiled into the binary.) The installer pulls the Hermes CLI to
-`/usr/local/bin/hermes`, runs `hermes claw
-migrate` (skills only), seeds `~/.hermes/{.env,config.yaml}`, creates an
-**inactive** `hermes.service`, and drops the `runtime-hermes-presync` hook (§11).
+`/usr/local/bin/hermes`, runs `hermes claw migrate` (skills only), seeds
+`~/.hermes/.env`, **patches only `.model` + `.custom_providers` in
+`config.yaml`** (via `yq`, preserving anything else the CLI wrote — not a
+full-file overwrite), drops the `runtime-hermes-presync` hook (§11) and **runs
+it once inline**, then installs + starts the gateway as a **system service** via
+`hermes gateway install --system --run-as-user root` + `hermes gateway start
+--system` (unit: **`hermes-gateway.service`**). Because presync runs during
+install, a direct `bash install.sh` is fully configured and running without
+relying on switch-runtime.
+
+> Unit name: the gateway runs as `hermes-gateway.service`. The installer declares
+> this in `/usr/local/lib/os-runtimes/hermes/service` so `switch-runtime` enables
+> the right unit (§11); `reset_hermes.go` targets the same unit.
 
 `hermes claw migrate` does **not** carry the model config across, so the presync
-hook syncs the device's `llm_*` from `config.json` into the Hermes config on
-every switch:
+hook syncs the device's `llm_*` from `config.json` into the Hermes config — once
+during install, and again on every later switch:
 
 | `config.json` | → | Hermes |
 |---|---|---|
@@ -191,13 +201,15 @@ switch-runtime <new> <old>
 the binary and needs **no imager/setup.sh change ever**. For a target backend `X`
 it:
 
-1. ensures `X.service` exists, else runs `X`'s installer — the binary-embedded
-   copy at `/usr/local/lib/os-runtimes/X/install.sh` first, else
+1. resolves `X`'s unit name (default `X.service`, or whatever the installer
+   declared in `/usr/local/lib/os-runtimes/X/service` — hermes →
+   `hermes-gateway`) and ensures it exists, else runs `X`'s installer — the
+   binary-embedded copy at `/usr/local/lib/os-runtimes/X/install.sh` first, else
    `curl ${RUNTIMES_BASE_URL}/X/install.sh | bash` (openclaw is skipped —
    `openclaw.service` is baked by setup.sh);
 2. runs the optional `/usr/local/bin/runtime-X-presync` hook (hermes's syncs
    `llm_*`, per §10);
-3. `systemctl enable --now X` + `disable --now <old>`;
+3. `systemctl enable --now <X-unit>` + `disable --now <old-unit>`;
 4. `systemctl restart os-server`, so `factory.go` re-resolves the gateway.
 
 Confirm the swap from the new `AGENT BACKEND ACTIVE → …` banner + a healthy
