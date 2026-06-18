@@ -279,6 +279,26 @@ export async function getRealtimeOptions(): Promise<RealtimeOptions> {
   return apiRequest<RealtimeOptions>(`${API_BASE}/api/device/realtime-options`);
 }
 
+export interface AgentRuntimeStatus {
+  current: string;
+  options: string[];
+}
+
+export async function getAgentRuntime(): Promise<AgentRuntimeStatus> {
+  return apiRequest<AgentRuntimeStatus>(`${API_BASE}/api/device/agent-runtime`);
+}
+
+/** POST /api/device/agent-runtime — swap the agentic backend (openclaw ⇄ hermes).
+ *  The device restarts os-server right after, so the connection drops; callers
+ *  should treat success as "accepted, reconnecting" and re-poll once it's back. */
+export async function setAgentRuntime(runtime: string): Promise<boolean> {
+  return apiRequest<boolean>(`${API_BASE}/api/device/agent-runtime`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ runtime }),
+  });
+}
+
 export interface TestTTSOptions {
   text?: string;
   /** BCP-47 stt_language code; picks a friendly demo phrase in that language. */

@@ -798,6 +798,80 @@ func (s *Service) RePushRealtimeConfig() {
 	}()
 }
 
+// CurrentAgentRuntime returns the effective agentic backend, resolved the same
+// way as internal/agent/factory.go: config.agent_runtime, else the device's
+// DEVICE.md gateway.default, else openclaw. Used by GET /api/device/agent-runtime
+// so the web settings page shows what is actually running.
+func (s *Service) CurrentAgentRuntime() string {
+	if r := strings.ToLower(strings.TrimSpace(s.config.AgentRuntime)); r != "" {
+		return r
+	}
+	if g := GatewayDefault(s.config.DeviceTypeOrDefault()); g != "" {
+		return strings.ToLower(strings.TrimSpace(g))
+	}
+	return domain.AgentRuntimeOpenClaw
+}
+
+// UpdateAgentRuntime swaps the agentic backend (openclaw ⇄ hermes). It persists
+// config.agent_runtime, then spawns switch-runtime to do the systemd toggle +
+// os-server restart. Shared by the MQTT agent_runtime.set handler and the HTTP
+// config API. Returns after the switcher is launched — the actual gateway swap
+// completes asynchronously when os-server restarts.
+func (s *Service) UpdateAgentRuntime(d domain.AgentRuntimeSetData) error {
+	runtime := strings.ToLower(strings.TrimSpace(d.Runtime))
+	// Reject unknown values outright. factory.go falls back to openclaw on
+	// garbage, but an unknown runtime from the BFF/web is a contract error we
+	// surface rather than silently coerce.
+	switch runtime {
+	case domain.AgentRuntimeOpenClaw, domain.AgentRuntimeHermes:
+	default:
+		return fmt.Errorf("invalid runtime %q (want openclaw|hermes)", d.Runtime)
+	}
+
+	// Resolve the currently-active runtime BEFORE the save so switch-runtime
+	// knows which backend to stop. Default to openclaw (matches factory.go).
+	old := strings.ToLower(strings.TrimSpace(s.config.AgentRuntime))
+	if old == "" {
+		old = domain.AgentRuntimeOpenClaw
+	}
+
+	// No-op guard: re-sending the active runtime shouldn't churn services or
+	// bounce os-server. Drift between config and running units is reconciled at
+	// next boot by factory.go, so skipping here is safe.
+	if old == runtime {
+		slog.Info("agent runtime unchanged, skipping switch", "component", "device", "runtime", runtime)
+		return nil
+	}
+
+	// Make sure the embedded switcher is on disk before we depend on it, and
+	// materialize the target's embedded installer (if compiled in) so the switch
+	// works fully offline — switch-runtime runs the local copy, no CDN needed.
+	if err := ensureSwitchRuntime(); err != nil {
+		return fmt.Errorf("install switch-runtime: %w", err)
+	}
+	if err := materializeInstaller(runtime); err != nil {
+		return fmt.Errorf("materialize %s installer: %w", runtime, err)
+	}
+
+	if err := s.config.WithLockSave(func(c *config.Config) {
+		c.AgentRuntime = runtime
+	}); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+	slog.Info("agent runtime persisted, spawning switch-runtime", "component", "device", "from", old, "to", runtime)
+
+	// Launch the switcher in its OWN transient systemd unit. switch-runtime ends
+	// by restarting os-server, which tears down os-server's cgroup — a plain
+	// child would die with it. systemd-run --collect runs it detached and
+	// garbage-collects the unit on exit. Pass <new> <old> so the switch is fully
+	// generic (no hardcoded backend list anywhere).
+	if err := exec.Command("systemd-run", "--quiet", "--collect",
+		"--unit=os-runtime-switch", switchRuntimeBin, runtime, old).Start(); err != nil {
+		return fmt.Errorf("spawn switch-runtime: %w", err)
+	}
+	return nil
+}
+
 // sttModelForLanguage maps a BCP-47 language code to the Deepgram SKU exposed
 // by the Autonomous STT proxy. Empty input → empty model so hal falls back
 // to its built-in default (flux-general-en). Vietnamese rides on Nova-3 (added
