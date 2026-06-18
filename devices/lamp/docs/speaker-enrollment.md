@@ -130,7 +130,7 @@ Every unknown voice is locally clustered so the server can say "this is the same
 | Voice stranger match threshold | 0.65 | `HAL_VOICE_STRANGER_MATCH_THRESHOLD` | Cosine similarity to cluster unknown voice into existing `voice_N` |
 | Max voice strangers | 50 | `HAL_MAX_VOICE_STRANGERS` | Cluster cap; oldest evicted when exceeded |
 | Voice strangers dir | `/root/local/voice_strangers` | `HAL_VOICE_STRANGERS_DIR` | Persist cluster embeddings (survives reboot) |
-| Speaker recognition enabled | false | `HAL_SPEAKER_RECOGNITION_ENABLED` | Master toggle |
+| Speaker recognition enabled | true | `HAL_SPEAKER_RECOGNITION_ENABLED` | Master toggle (default on; gated on the `audio` capability) |
 
 ## Storage
 

@@ -55,8 +55,8 @@ class SpeakerDecorator:
             return None
         if not SPEAKER_RECOGNITION_ENABLED:
             logger.info(
-                "Speaker recognizer disabled by HAL_SPEAKER_RECOGNITION_ENABLED=false. "
-                "This is the default value.",
+                "Speaker recognizer disabled by HAL_SPEAKER_RECOGNITION_ENABLED=false "
+                "(default is true — this is an explicit opt-out).",
             )
             return None
         try:
