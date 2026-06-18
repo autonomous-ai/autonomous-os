@@ -4,6 +4,8 @@ import { getDeviceConfig, updateDeviceConfig, getTTSVoices, getTTSProviders } fr
 import type { DeviceConfig } from "@/lib/api";
 import { useTheme } from "@/lib/useTheme";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
+import { useCapabilities } from "@/hooks/useCapabilities";
+import { Cap } from "@/pages/monitor/types";
 import type { ChannelType } from "@/types";
 import type { SectionId as SharedSectionId } from "@/hooks/setup/types";
 import type { FaceOwner } from "@/hooks/setup/useFaceEnroll";
@@ -24,18 +26,23 @@ import { Wifi, UserCircle, Cpu, Brain, Volume2, MicVocal, MessageSquare, Globe, 
 // rendered under id="stt"), not `language` / `deepgram` like Setup.
 type SectionId = Extract<SharedSectionId, "device" | "wifi" | "llm" | "voice" | "face" | "tts" | "realtime" | "stt" | "channel" | "mqtt">;
 const ICON_SIZE = 15;
-const ALL_SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; debugOnly?: boolean }[] = [
+// `cap` declares the device capability a section's hardware needs; the section
+// is hidden when the device doesn't have it (mirrors the Monitor nav gating).
+// Omit `cap` for sections with no hardware dependency (always shown):
+//   - Language/Voice/Realtime/My Voice → audio (mic + speaker)
+//   - Face → vision (camera)
+const ALL_SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; debugOnly?: boolean; cap?: string }[] = [
   { id: "device",   label: "Device",   icon: <Cpu size={ICON_SIZE} /> },
   { id: "wifi",     label: "Wi-Fi",    icon: <Wifi size={ICON_SIZE} /> },
   // AI Brain, Language, Voice, Channels, MQTT are gated behind
   // ?debug=true. Typical operators only need Device + Wi-Fi + voice/face
   // enrollment; deeper provider knobs stay hidden by default.
   { id: "llm",      label: "AI Brain", icon: <Brain size={ICON_SIZE} />, debugOnly: true },
-  { id: "stt",      label: "Language", icon: <Globe size={ICON_SIZE} />, debugOnly: true },
-  { id: "tts",      label: "Voice", icon: <Volume2 size={ICON_SIZE} />, debugOnly: true },
-  { id: "realtime", label: "Realtime", icon: <Zap size={ICON_SIZE} />, debugOnly: true },
-  { id: "voice",    label: "My Voice", icon: <MicVocal size={ICON_SIZE} /> },
-  { id: "face",     label: "Face",     icon: <UserCircle size={ICON_SIZE} /> },
+  { id: "stt",      label: "Language", icon: <Globe size={ICON_SIZE} />, debugOnly: true, cap: Cap.Audio },
+  { id: "tts",      label: "Voice", icon: <Volume2 size={ICON_SIZE} />, debugOnly: true, cap: Cap.Audio },
+  { id: "realtime", label: "Realtime", icon: <Zap size={ICON_SIZE} />, debugOnly: true, cap: Cap.Audio },
+  { id: "voice",    label: "My Voice", icon: <MicVocal size={ICON_SIZE} />, cap: Cap.Audio },
+  { id: "face",     label: "Face",     icon: <UserCircle size={ICON_SIZE} />, cap: Cap.Vision },
   { id: "channel",  label: "Channels", icon: <MessageSquare size={ICON_SIZE} />, debugOnly: true },
   { id: "mqtt",     label: "MQTT",     icon: <Link size={ICON_SIZE} />, debugOnly: true },
 ];
@@ -70,11 +77,23 @@ export default function EditConfig() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const debug = isDebugMode();
-  const SECTIONS = debug ? ALL_SECTIONS : ALL_SECTIONS.filter((s) => !s.debugOnly);
+  // Hide sections whose hardware this device lacks (DEVICE.md capabilities via
+  // /api/system/info). Fail-open while caps load → no flash of an empty menu.
+  const { hasCap } = useCapabilities();
+  const SECTIONS = ALL_SECTIONS.filter(
+    (s) => (debug || !s.debugOnly) && (!s.cap || hasCap(s.cap)),
+  );
   const [activeSection, setActiveSection] = useState<SectionId>(() => {
     const hash = window.location.hash.replace("#", "") as SectionId;
-    return SECTIONS.some((s) => s.id === hash) ? hash : "device";
+    return ALL_SECTIONS.some((s) => s.id === hash) ? hash : "device";
   });
+
+  // If the active section is for hardware this device lacks (caps loaded after
+  // mount, or a deep-linked #hash to a gated section), fall back to Device.
+  useEffect(() => {
+    if (!SECTIONS.some((s) => s.id === activeSection)) setActiveSection("device");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [SECTIONS.length, activeSection]);
   const contentRef = useRef<HTMLDivElement>(null);
 
   const activeSectionLabel = SECTIONS.find((s) => s.id === activeSection)?.label ?? "Settings";
