@@ -1051,7 +1051,7 @@ server {
   # Strict CSP. HAL self-hosts Swagger UI assets under /static/ (served
   # via the Lamp /api/hardware/* proxy), so no CDN whitelist or
   # `'unsafe-inline'` script-src is needed. Mirrors scripts/provision/setup.sh.
-  add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' ws: wss:; frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'" always;
+  add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' ws: wss: http://*.local; frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'" always;
 
   location / { try_files \$uri /index.html; }
   # Interactive shell WebSocket (xterm.js PTY) — must come before generic /api/.

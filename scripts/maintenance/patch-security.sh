@@ -284,6 +284,15 @@ if "Content-Security-Policy" in content:
         "connect-src 'self' ws: wss: https://cdn.jsdelivr.net;",
         "connect-src 'self' ws: wss:;",
     )
+    # Migrate connect-src to allow the device's own .local mDNS origin. The
+    # Setup page probes http://<host>.local/api/health to auto-redirect after
+    # the AP→home-WiFi handoff; without this the probe is CSP-blocked and the
+    # "joining Wi-Fi…" screen never advances. Idempotent — the second replace
+    # is a no-op once *.local is already present.
+    new_content = new_content.replace(
+        "connect-src 'self' ws: wss:;",
+        "connect-src 'self' ws: wss: http://*.local;",
+    )
     if new_content != content:
         with open(path, "w") as f:
             f.write(new_content)
@@ -310,7 +319,7 @@ block = (
     "  add_header X-Content-Type-Options \"nosniff\" always;\n"
     "  add_header Referrer-Policy \"no-referrer\" always;\n"
     "  add_header Permissions-Policy \"camera=(), microphone=(), geolocation=(), payment=()\" always;\n"
-    "  add_header Content-Security-Policy \"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss:; frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'\" always;\n"
+    "  add_header Content-Security-Policy \"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss: http://*.local; frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'\" always;\n"
 )
 
 end = anchor.end()
