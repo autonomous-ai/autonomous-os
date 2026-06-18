@@ -113,6 +113,37 @@ func TestRealtime_MissingSubAndKeyOverride(t *testing.T) {
 	}
 }
 
+// DefaultRealtimeConfig seeds enabled + gemini with the cost-lean defaults and
+// both provider sub-objects (so switching provider keeps tuned values). api_key /
+// base_url stay empty → LLM fallback.
+func TestRealtime_DefaultSeed(t *testing.T) {
+	rt := DefaultRealtimeConfig()
+	if rt.Enabled == nil || !*rt.Enabled {
+		t.Error("seed: want enabled true")
+	}
+	if rt.Provider != "gemini" {
+		t.Errorf("seed provider = %q, want gemini", rt.Provider)
+	}
+	if rt.APIKey != "" || rt.BaseURL != "" {
+		t.Error("seed: api_key/base_url should be empty (LLM fallback)")
+	}
+	if rt.Gemini == nil || rt.Gemini.ThinkingLevel != "MINIMAL" || rt.Gemini.Model != defaultRealtimeGeminiModel {
+		t.Errorf("seed gemini wrong: %+v", rt.Gemini)
+	}
+	if rt.OpenAI == nil || rt.OpenAI.ReasoningEffort != "minimal" {
+		t.Errorf("seed openai wrong: %+v", rt.OpenAI)
+	}
+
+	// Default() now carries the seeded block, so a fresh config.json includes it.
+	if Default().Realtime == nil {
+		t.Error("Default() should seed Realtime")
+	}
+	data, _ := json.Marshal(Default())
+	if !strings.Contains(string(data), `"realtime"`) {
+		t.Errorf("Default() marshal should include realtime block: %s", data)
+	}
+}
+
 // The pointer field must omit cleanly: a nil Realtime emits no "realtime" key,
 // while a present block round-trips. (Guards the omitempty-on-struct gotcha — a
 // value field would always marshal "realtime":{}.)
