@@ -171,4 +171,68 @@ on first use. Override with `<NAME>__CKPT_PATH` (local) or `<NAME>__REMOTE_URL` 
 | YOLO-World v2 | `yolov8x-worldv2.pt` | PyTorch | `pytorch_models/` |
 | OWLv2 | `google/owlv2-large-patch14-ensemble` | HuggingFace | (HF Hub) |
 | Grounding DINO | `IDEA-Research/grounding-dino-tiny` | HuggingFace | (HF Hub) |
+
+---
+
+## ONNX export scripts
+
+Export PyTorch/HuggingFace models to ONNX for dlbackend inference. Scripts live in
+`src/core/export/entries/`. After `pip install -e .` each is available as a CLI command.
+
+```bash
+export-all              # run all exports (skips missing checkpoints)
+export-uniformerv2      # UniformerV2 action recognition
+export-posterv2         # POSTER V2 facial emotion
+export-emonet           # EmoNet facial emotion (5 or 8 class)
+export-emotion2vec      # emotion2vec+ speech emotion (downloads from HF)
+export-tcpformer        # TCPFormer 3D pose lifter
+export-owlv2            # OWLv2 zero-shot object detection (downloads from HF)
+export-grounding-dino   # Grounding DINO zero-shot (downloads from HF)
+export-yolo             # YOLO person detection
+export-yolo-world       # YOLO-World zero-shot object detection
+export-yoloe            # YOLO-E zero-shot object detection
+```
+
+### Model I/O specifications
+
+All models export with ONNX opset 17. `B` = batch, `T` = variable time, `K` = num classes, `L` = token length.
+
+| Model | Input name(s) | Input shape | Preprocessing | Output name(s) | Output shape |
+|-------|--------------|-------------|---------------|----------------|--------------|
+| **UniformerV2** | `videos` | `[B,1,3,8,224,224]` | Normalize: mean=0.45, std=0.225 | `probs` | `[B, num_classes]` softmax |
+| **POSTER V2** | `images` | `[B,3,224,224]` | ImageNet norm: mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225] | `probs` | `[B, 7]` softmax |
+| **EmoNet** | `images` | `[B,3,256,256]` | Range [0,1], no normalization | `probs`, `valence`, `arousal` | `[B,N]` softmax, `[B]`, `[B]` |
+| **emotion2vec+** | `audio` | `[B, T]` (16kHz mono) | Optional mean/var normalize | `probs` | `[B, 9]` softmax |
+| **TCPFormer** | `keypoints` | `[B,243,17,3]` | Raw 2D skeleton (x,y,conf) | `poses` | `[B,243,17,3]` 3D coords |
+| **OWLv2** | `images`, `class_tokens` | `[B,3,H,W]`, `[K,16]` int64 | OWLv2Processor | `boxes`, `probs`, `labels` | `[B,N,4]` xywh, `[B,N,K]`, `[B,N]` |
+| **Grounding DINO** | `images`, `class_tokens` | `[B,3,H,W]`, `[B,L]` int64 | GroundingDINOProcessor | `boxes`, `probs`, `labels` | `[B,N,4]` xywh, `[B,N,L]`, `[B,N]` |
+| **YOLO** | `images` | `[B,3,640,640]` | Raw tensor | `boxes`, `probs`, `labels` | `[B,N,4]` xywh, `[B,N]`, `[B,N]` |
+| **YOLO-World** | `images`, `class_tokens` | `[B,3,640,640]`, `[K,L]` int64 | CLIP tokenize + L2 norm | `boxes`, `probs`, `labels` | `[B,N,4]` xywh, `[B,N,K]`, `[B,N]` |
+| **YOLO-E** | `images`, `class_tokens` | `[B,3,640,640]`, `[K,L]` int64 | MobileCLIP tokenize + L2 norm | `boxes`, `probs`, `labels` | `[B,N,4]` xywh, `[B,N,K]`, `[B,N]` |
+
+**Image input convention:** All image inputs expect float32 in [0, 1] range (rescale from uint8 [0, 255] before inference). Models that require further normalization (ImageNet mean/std, custom mean/std) bake it into the ONNX graph — the caller only needs to rescale to [0, 1].
+
+**Models with external preprocessors:** OWLv2 and Grounding DINO use their HuggingFace processor (`Owlv2Processor`, `GroundingDinoProcessor`) for image preprocessing and text tokenization — do NOT manually rescale, the processor handles it. UniformerV2 bakes normalization into the ONNX wrapper. YOLO models accept raw [0, 1] tensors resized to 640×640.
+
+**Detection outputs:** `boxes` are normalized [0,1] xywh. `labels` use -1 for padding. NMS is baked into the ONNX graph by default.
+
+**Text encoders:** OWLv2 and Grounding DINO embed the full text encoder (CLIP/BERT) in the ONNX; YOLO-World uses CLIP ViT-B/32; YOLO-E uses MobileCLIP-blt.
+
+### Script → checkpoint mapping
+
+| Script | Source | Pretrained checkpoint | ONNX output |
+|--------|--------|-----------------------|-------------|
+| `export-uniformerv2` | PyTorch `.pth` | `models/pretrained/<config>.pth` | `models/onnx/uniformerv2-*_fp32.onnx` |
+| `export-posterv2` | PyTorch `.pth` | `models/pretrained/posterv2_7cls.pth` | `models/onnx/posterv2_7cls.onnx` |
+| `export-emonet` | PyTorch `.pth` | `models/pretrained/emonet_{5,8}.pth` | `models/onnx/emonet_{5,8}.onnx` |
+| `export-emotion2vec` | HuggingFace | `iic/emotion2vec_plus_large` | `models/onnx/emotion2vec.onnx` |
+| `export-tcpformer` | PyTorch `.pth.tr` | `models/pretrained/TCPFormer_h36m_243_379.pth.tr` | `models/onnx/tcpformer_h36m_243.onnx` |
+| `export-owlv2` | HuggingFace | `google/owlv2-large-patch14-ensemble` | `models/onnx/owlv2.onnx` |
+| `export-grounding-dino` | HuggingFace | `IDEA-Research/grounding-dino-tiny` | `models/onnx/grounding_dino.onnx` |
+| `export-yolo` | Ultralytics `.pt` | `yolo12x.pt` | ONNX via ultralytics export |
+| `export-yolo-world` | Ultralytics `.pt` | `yolov8x-worldv2.pt` | ONNX via ultralytics export |
+| `export-yoloe` | Ultralytics `.pt` | `yoloe-26x-seg.pt` | ONNX via ultralytics export |
+
+Components (model definitions, preprocessing) are in `src/core/export/components/`.
+Utilities (constants, evaluation, NMS, preprocessing) are in `src/core/export/utils/`.
 </content>
