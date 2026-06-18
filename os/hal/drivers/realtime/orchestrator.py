@@ -49,7 +49,12 @@ DELEGATE_TOOL_DESCRIPTION: str = (
     "device control, music, scheduling, memory, skills, real-time facts, "
     "or anything beyond casual conversation. "
     "Pass a message summarizing what the user wants so the main system "
-    "can act without re-listening to the audio."
+    "can act without re-listening to the audio. "
+    "ONLY call this when you clearly understood an actual request. NEVER "
+    "invent, guess, or infer a request from unclear, minimal, or noise-like "
+    "audio (e.g. 'oh', 'uh', a cough, a single unclear syllable) — if you are "
+    "not sure what the user wants, do NOT delegate; stay silent instead. "
+    "The message must reflect what the user actually said, never a fabrication."
 )
 
 DELEGATE_TOOL: dict[str, Any] = {
@@ -61,7 +66,7 @@ DELEGATE_TOOL: dict[str, Any] = {
         "properties": {
             "message": {
                 "type": "string",
-                "description": "A short summary of the user's request to pass to the main system. Must not be empty.",
+                "description": "A short summary of what the user ACTUALLY asked for, to pass to the main system. Must not be empty and must not be invented — if you didn't clearly understand a request, don't call this tool at all.",
             },
         },
         "required": ["message"],
