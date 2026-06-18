@@ -27,9 +27,10 @@ import requests
 
 from hal import app_state as hal_app_state
 from hal import config as hal_config
-from hal.drivers.realtime.models import TextOutput as RTTextOutput
 from hal.drivers.realtime.enums import AgentGateway
-from hal.drivers.realtime.orchestrator import DelegateSignal, RealtimeOrchestrator
+from hal.drivers.realtime.models import TextOutput as RTTextOutput
+from hal.drivers.realtime.models.signal import DelegateSignal
+from hal.drivers.realtime.orchestrator import RealtimeOrchestrator
 from hal.drivers.realtime.utils import pcm16_bytes_to_float32, resample_float32
 from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
 from hal.drivers.voice._internal.audio_recorder import ArecordStream
@@ -955,7 +956,9 @@ class VoiceService:
                         if isinstance(output, DelegateSignal):
                             rt_delegated = True
                             rt_delegate_msg = output.message
-                            break
+                            continue
+                        if rt_delegated:
+                            continue
                         if isinstance(output, RTTextOutput):
                             text_parts.append(output.text)
                             sentence_buf += output.text

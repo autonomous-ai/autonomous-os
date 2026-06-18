@@ -3,12 +3,15 @@
 import numpy as np
 import numpy.typing as npt
 from pydantic import BaseModel, ConfigDict
+from typing_extensions import ClassVar
 
 from hal.drivers.realtime.enums import OutputTypeEnum
 
 
 class OutputBase(BaseModel):
-    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        frozen=True, arbitrary_types_allowed=True
+    )
     type: OutputTypeEnum
 
 
