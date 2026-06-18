@@ -36,6 +36,7 @@ from hal.drivers.voice._internal.realtime_turn import run_realtime_turn
 from hal.drivers.voice._internal.sensing_sender import SensingSender
 from hal.drivers.voice._internal.session_finalize import finalize_session
 from hal.drivers.voice._internal.speaker_decorate import SpeakerDecorator
+from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
 from hal.drivers.voice._internal.vad_filters import SileroVADFilter, WebRTCVADFilter
 from hal.drivers.voice.backchannel import Backchannel
 from hal.drivers.voice.stt import STTProvider
@@ -862,48 +863,14 @@ class VoiceService:
                 buf_duration,
             )
 
-            # --- Speaker recognition + OS server send ---
-            from hal.drivers.voice.speech_emotion.constants import UNKNOWN_USER_LABEL
-
-            final_text, event_type = self._decorator.resolve_wake_word_split(combined)
-            user = UNKNOWN_USER_LABEL
-
-            if combined:
-                final_msg, se_user = self._decorator.identify_and_decorate(
-                    final_text, audio_buffer
-                )
-                user = se_user if se_user else UNKNOWN_USER_LABEL
-                logger.info("Final message → OS server (%s): %r", event_type, final_msg)
-
-                if rt.handled:
-                    # Realtime already spoke — send as "voice_handled" to skip dead-air filler.
-                    # Include skill hint so OpenClaw reads input-branching and responds NO_REPLY.
-                    self._sensing_sender.send(
-                        f"[skills: input-branching]\n[HANDLED] {final_msg}\n[REPLY] {rt.transcript}",
-                        event_type="voice_agent_handled",
-                        skip_echo=True,
-                    )
-                elif rt.delegated:
-                    # Delegated — send voice agent's summary + STT transcript to the OS server
-                    if rt.delegate_msg:
-                        sensing_msg: str = f"[voice-instruction] {rt.delegate_msg}\n[transcript] {final_msg}"
-                    else:
-                        sensing_msg = final_msg
-                    logger.info(
-                        "[realtime] Delegated with message: %r",
-                        sensing_msg[:100] if sensing_msg else "",
-                    )
-                    if sensing_msg:
-                        self._sensing_sender.send(sensing_msg, event_type=event_type)
-                else:
-                    # Realtime not active, OR it was active but produced no output
-                    # (e.g. receive() timed out) — send to the OS server normally so
-                    # the main agent handles the turn instead of nobody answering.
-                    self._sensing_sender.send(final_msg, event_type=event_type)
-
-            # 2. Submit SER — uses the UNTRIMMED snapshot so laughter / sighs
-            self._decorator.submit_speech_emotion_from_session(
-                ser_audio_buffer, user=user
+            # --- Speaker recognition + OS server send + SER ---
+            dispatch_turn(
+                self._decorator,
+                self._sensing_sender,
+                combined,
+                audio_buffer,
+                ser_audio_buffer,
+                rt,
             )
 
             # Clear listening LED
