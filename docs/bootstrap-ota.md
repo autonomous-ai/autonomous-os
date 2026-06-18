@@ -117,8 +117,8 @@ Workflow:
    `min_version` (skills/hooks have no `min_version`). The fleet does **not**
    move — only `version` changed.
 2. SSH into a device, run `software-update <key>` → it pulls `version`. Test it.
-3. Happy? `make promote-ota <component> [version]` (e.g. `make promote-ota hal`,
-   `make promote-ota os-server 1.4.0`, `make promote-ota device lamp`) raises
+3. Happy? `make promote-<component> [V=<version>]` (e.g. `make promote-hal`,
+   `make promote-os-server V=1.4.0`, `make promote-device DT=lamp`) raises
    `min_version` (default: up to `version`). Bootstrap now auto-updates every
    device below the new floor on its next check.
 

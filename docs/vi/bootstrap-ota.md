@@ -116,8 +116,8 @@ Quy trình:
    `min_version` (skills/hooks không có `min_version`). Fleet **không** đổi —
    chỉ `version` thay đổi.
 2. SSH vào thiết bị, chạy `software-update <key>` → kéo `version`. Test.
-3. Ổn? `make promote-ota <component> [version]` (vd `make promote-ota hal`,
-   `make promote-ota os-server 1.4.0`, `make promote-ota device lamp`) nâng
+3. Ổn? `make promote-<component> [V=<version>]` (vd `make promote-hal`,
+   `make promote-os-server V=1.4.0`, `make promote-device DT=lamp`) nâng
    `min_version` (mặc định = `version`). Bootstrap sẽ tự cập nhật mọi thiết bị
    dưới sàn mới ở lần check kế tiếp.
 
