@@ -377,6 +377,11 @@ func (b *Bootstrap) reconcile(ctx context.Context, key string, target domain.OTA
 	// At or above the approved floor → nothing to auto-apply. Keep persisted
 	// state in sync with what's actually installed.
 	if compareVersions(current, minVersion) >= 0 {
+		// A newer build exists but the approved floor holds it back — surface it
+		// so staged rollouts are visible (promote min_version to release it).
+		if compareVersions(current, targetVersion) < 0 {
+			slog.Info("update held by min_version floor", "component", "bootstrap", "key", key, "current", current, "min", minVersion, "target", targetVersion)
+		}
 		if current != "" && b.state.Components[key] != current {
 			b.state.Components[key] = current
 			return true, nil
