@@ -73,22 +73,48 @@ interface SetupProps {
   mode?: SetupMode;
 }
 
-// CopyAddress — the device's .local address with a one-tap Copy button. Shown
-// on the post-submit screen so the operator can capture the address BEFORE they
+// CopyAddress — a device URL with a one-tap Copy button. Shown on the
+// post-submit screen so the operator can capture the address BEFORE they
 // switch Wi-Fi networks (at which point this page loses its connection and any
-// un-copied address is gone). Falls back silently if the Clipboard API is
-// unavailable (older/non-secure contexts) — the text is still selectable.
-function CopyAddress({ host }: { host: string }) {
+// un-copied address is gone). Pass the full URL via `url` — callers prefer the
+// raw-IP address (works on every LAN) over the .local name (fails when the
+// router blocks mDNS).
+//
+// Clipboard: the Setup page is served over plain HTTP (http://192.168.100.1),
+// where `navigator.clipboard` is undefined (it requires a secure context), so
+// the modern API silently no-ops. Fall back to a hidden-textarea +
+// document.execCommand("copy"), which works on http:// origins, so the button
+// actually copies instead of doing nothing.
+function CopyAddress({ url }: { url: string }) {
   const [copied, setCopied] = useState(false);
-  const text = `http://${host}.local/`;
+  const text = url;
+  const flashCopied = () => {
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1800);
+  };
+  const legacyCopy = () => {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      // Keep it off-screen and non-disruptive to scroll/focus.
+      ta.style.position = "fixed";
+      ta.style.top = "-9999px";
+      ta.setAttribute("readonly", "");
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      if (ok) flashCopied();
+    } catch {
+      /* copy unsupported — user can still select the text manually */
+    }
+  };
   const copy = () => {
-    navigator.clipboard?.writeText(text).then(
-      () => {
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 1800);
-      },
-      () => { /* clipboard blocked — user can still select the text */ },
-    );
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(flashCopied, legacyCopy);
+    } else {
+      legacyCopy();
+    }
   };
   return (
     <div style={{
@@ -386,6 +412,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
       && (isV1 || hasAdminPassword || adminPassword.length >= ADMIN_PASSWORD_MIN),
     llm: !!llmApiKey || llmLoaded.apiKey,
     language: true, // Auto/empty is a valid choice — never block on this.
+    realtime: true, // Not a setup step (edit-only card); never blocks setup.
     channel: channel === "telegram"
       ? (!!teleToken || channelLoaded.teleToken)
       : channel === "slack"
@@ -484,7 +511,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
   });
 
   useSetupStatusPolling({
-    setupWorking, setupLanIP, deviceMdnsHost,
+    setupWorking, setupLanIP,
     setSetupPhase, setSetupLanIP, setSetupErrorMsg,
   });
 
@@ -814,7 +841,11 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
         {/* Mobile tabs (hidden on desktop). The theme toggle sits OUTSIDE the
             horizontally-scrolling tab row so it stays pinned (margin-left:auto
             doesn't pin inside an overflow-x flex container) and isn't hidden
-            under the right-edge scroll-hint fade. */}
+            under the right-edge scroll-hint fade.
+            Hidden entirely for a single-step flow (e.g. device-pushed config
+            collapses the wizard to just Wi-Fi) — a lone tab chip is noise and
+            looked like a stray label in the companion-app popup. */}
+        {visibleSections.length > 1 && (
         <div className="lm-mobile-tabs-wrap" style={{
           display: "none", flexShrink: 0,
           borderBottom: `1px solid ${C.border}`,
@@ -843,6 +874,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
             {theme === "dark" ? "◑" : "◐"}
           </button>
         </div>
+        )}
 
         {/* Topbar */}
         <div style={{ borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
@@ -862,8 +894,10 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
             )}
           </div>
           {/* Per-step progress mirrors the wizard position (not section-done
-              count) so the bar advances as the operator walks Back/Next. */}
-          {!setupWorking && (
+              count) so the bar advances as the operator walks Back/Next.
+              Hidden for a single-step flow — there's no progress to show when
+              Wi-Fi is the only step (device-pushed config). */}
+          {!setupWorking && visibleSections.length > 1 && (
             <div className="lm-progress-track" style={{ borderRadius: 0 }}>
               <div
                 className="lm-progress-fill"
@@ -912,21 +946,23 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                         knowable %, so a sweeping bar signals "working" while the
                         seconds give the wait a measured feel. */}
                     <div className="lm-indeterminate" style={{ marginBottom: 7 }} />
-                    <div style={{ fontSize: 11, color: C.textMuted, marginBottom: deviceMdnsHost ? 18 : 0 }}>
+                    <div style={{ fontSize: 11, color: C.textMuted, marginBottom: setupLanIP ? 18 : 0 }}>
                       Elapsed {elapsed}s
                     </div>
-                    {/* Surface the .local address NOW, while we still have a
+                    {/* Surface the raw-IP address NOW, while we still have a
                         connection — once the operator switches to home Wi-Fi
                         this page goes away and an un-copied address is lost.
                         The auto-redirect on "connected" still handles the happy
-                        path; this is the safety net for when mDNS auto-redirect
-                        fails (Android Chrome, mDNS-blocking networks, or the AP
-                        dropping before the phase poll flips).
+                        path; this is the safety net for when it doesn't land
+                        (AP dropping before the phase poll flips).
+                        IP-only by design: the .local name is unreliable on
+                        mDNS-blocking networks, so we show nothing until the
+                        backend's early-capture poll hands us a LAN IP.
                         Toned down here vs. the "connected" screen: a single
                         compact label + the copy field, no long paragraph, so it
                         stays a quiet safety net rather than competing with the
                         primary "joining…" message. */}
-                    {deviceMdnsHost && (
+                    {setupLanIP && (
                       <div style={{
                         marginTop: 4, paddingTop: 14,
                         borderTop: `1px solid ${C.border}`,
@@ -938,7 +974,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                           This page disconnects when you rejoin home Wi-Fi — save
                           this address to continue:
                         </div>
-                        <CopyAddress host={deviceMdnsHost} />
+                        <CopyAddress url={`http://${setupLanIP}/setup`} />
                       </div>
                     )}
                   </>
@@ -953,21 +989,20 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                       Your device is online!
                     </div>
 
-                    {/* mDNS path (primary): the device publishes
-                        `<device_type>-<last4mac>.local` via avahi-daemon, so we don't
-                        need to know its new LAN IP to redirect — the browser
-                        resolves it once the user is on home Wi-Fi.
-                        Supported out-of-box: Windows 10 1803+, Windows 11,
-                        macOS, iOS, most desktop Linux. Falls back to a
-                        router-admin hint when the host is unreachable. */}
-                    {deviceMdnsHost ? (
+                    {/* IP path (only path): we redirect to the device's raw LAN
+                        IP, never its `.local` mDNS name — `.local` is unreliable
+                        on mDNS-blocking routers, whereas an IP resolves on every
+                        network. Shown once the backend's early-capture poll has
+                        handed us a LAN IP; otherwise we fall back to a
+                        router-admin hint so the operator can find the IP. */}
+                    {setupLanIP ? (
                       <>
                         {/* Action-first ordering: the one thing the user must do
                             now (rejoin home Wi-Fi, then Continue) leads, with the
-                            primary button right under it. The .local address +
-                            router fallback drop below a divider as a quiet
-                            safety-net for when auto-redirect/Continue doesn't
-                            land — mirroring the connecting screen's hierarchy. */}
+                            primary button right under it. The IP address + router
+                            fallback drop below a divider as a quiet safety-net for
+                            when auto-redirect/Continue doesn't land — mirroring
+                            the connecting screen's hierarchy. */}
                         <div style={{ fontSize: 13, color: C.textDim, marginBottom: 16, lineHeight: 1.5 }}>
                           Reconnect your computer to your home Wi-Fi, then click
                           Continue.
@@ -978,15 +1013,15 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                           // the new host (redundant — the OS server already persisted
                           // them via submit — but cheap and useful when the
                           // operator re-runs setup with different overrides).
-                          // Force reload when the user is already on the
-                          // canonical .local URL — otherwise the browser
-                          // no-ops the same-URL click and they stay stuck on
-                          // the "Your device is online!" screen even though the device
-                          // is reachable in continue mode now.
-                          href={`http://${deviceMdnsHost}.local${window.location.pathname}${getInitialSearch()}`}
+                          // Force reload when the user is already on the device's
+                          // IP — otherwise the browser no-ops the same-URL click
+                          // and they stay stuck on the "Your device is online!"
+                          // screen even though the device is reachable in continue
+                          // mode now.
+                          href={`http://${setupLanIP}${window.location.pathname}${getInitialSearch()}`}
                           onClick={(e) => {
                             setupBridge.continueClicked({ mdns_host: deviceMdnsHost });
-                            if (window.location.hostname === `${deviceMdnsHost}.local`) {
+                            if (window.location.hostname === setupLanIP) {
                               e.preventDefault();
                               window.location.reload();
                             }
@@ -999,7 +1034,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                         >
                           Continue setup →
                         </a>
-                        {/* Safety-net block: divider + the canonical address and a
+                        {/* Safety-net block: divider + the IP address and a
                             router-admin hint, toned down so it doesn't compete
                             with the Continue button above. */}
                         <div style={{
@@ -1009,14 +1044,10 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                           <div style={{ fontSize: 13, color: C.textDim, marginBottom: 6, lineHeight: 1.5 }}>
                             Or open this address once you're back on home Wi-Fi:
                           </div>
-                          <CopyAddress host={deviceMdnsHost} />
+                          <CopyAddress url={`http://${setupLanIP}/setup`} />
                           <div style={{ fontSize: 12, color: C.textMuted, marginTop: 8, lineHeight: 1.5 }}>
-                            Can't reach it?
-                            {setupLanIP && (
-                              <> Try <span style={{ fontFamily: "ui-monospace, monospace" }}>http://{setupLanIP}/</span> or </>
-                            )}
-                            {" "}find your device's IP in your router's admin page (look
-                            for "{deviceMdnsHost}").
+                            Can't reach it? Find your device's IP in your router's
+                            admin page{deviceTypePrefix ? ` (look for "${deviceTypePrefix}")` : ""}.
                           </div>
                         </div>
                       </>

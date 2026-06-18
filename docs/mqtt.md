@@ -35,7 +35,7 @@ The OS server uses MQTT to communicate with the backend server (status reporting
 
 ```json
 {
-  "cmd": "info|add_channel|slack_event|whatsapp_pair|ota|data",
+  "cmd": "info|add_channel|slack_event|slack_command|whatsapp_pair|ota|data",
   ...payload fields
 }
 ```
@@ -151,6 +151,38 @@ window) and forwards headers verbatim so OpenClaw's signature check validates.
 For the proxy to route inbound events back to the right device, each `/ping` includes
 `slack_team_id` — the workspace ID the device resolves on-device via Slack `auth.test`
 against its stored `botToken` (cached, sent once resolved).
+
+### `slack_command` — Forward a Slack slash command (HTTP mode)
+
+Sent by the same Slack proxy (bff-campaign-service) when Slack delivers a slash-command
+invocation (`/openclaw`, `/new`, ...) for a workspace this device owns. Forwarded and
+verified exactly like `slack_event`: the device POSTs the verbatim body + signature
+headers to the **same** OpenClaw gateway `webhook_path` (default
+`http://127.0.0.1:18789/slack/events`) — OpenClaw's single HTTP endpoint routes events
+vs. commands by body shape (urlencoded `command=` vs. JSON `type`) and replies to the
+user via the command's `response_url`. Only relevant when the device's slack channel is
+configured with `mode:"http"` (see `add_channel`).
+
+**Receive:**
+```json
+{
+  "cmd": "slack_command",
+  "event_id": "<trigger_id>",
+  "body": "<raw urlencoded form body>",
+  "headers": {
+    "X-Slack-Signature": "v0=...",
+    "X-Slack-Request-Timestamp": "...",
+    "Content-Type": "application/x-www-form-urlencoded"
+  }
+}
+```
+
+Differences from `slack_event`: the body is the urlencoded slash-command form (it carries
+`command`, `text`, `response_url`, `trigger_id`, ...), the `Content-Type` is
+`application/x-www-form-urlencoded`, and the `event_id` slot carries Slack's `trigger_id`
+(slash commands have no `event_id`) — reused as the dedup key.
+
+**Response (publish fd_channel):** same shape as `slack_event` but `type:"slack_command"`.
 
 ### `data` — Generic data envelope
 
@@ -271,7 +303,7 @@ Handled by bootstrap worker, not through MQTT handler directly.
 | `os/services/server/device/delivery/mqtt/handler.go` | Command dispatcher |
 | `os/services/server/device/delivery/mqtt/info_handler.go` | Handle `info` command |
 | `os/services/server/device/delivery/mqtt/add_channel_hander.go` | Handle `add_channel` command (streams pairing events for WhatsApp) |
-| `os/services/server/device/delivery/mqtt/slack_event_handler.go` | Handle `slack_event` command (forwards Slack HTTP-mode events to local gateway) |
+| `os/services/server/device/delivery/mqtt/slack_event_handler.go` | Handle `slack_event` / `slack_command` (forwards Slack HTTP-mode events and slash commands to local gateway) |
 | `os/services/server/device/delivery/mqtt/data_handler.go` | Handle `data` command kinds `oauth.set`/`oauth.remove` (+ access-token store) |
 | `os/services/server/device/delivery/mqtt/connector_handler.go` | Handle `connector.set.<code>`/`connector.remove.<code>` (async, writer dispatch via `connectorWriterFor`) |
 | `os/services/server/device/delivery/mqtt/connector_writer.go` | `ConnectorWriter` interface + shared `<code>_access_tokens.json` file helpers |

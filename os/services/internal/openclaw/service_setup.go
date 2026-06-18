@@ -171,19 +171,24 @@ func (s *Service) SetupAgent(data domain.SetupRequest) error {
 
 	switch channel {
 	case "slack":
-		slog.Debug("setting channels.slack (socket mode)", "component", "openclaw")
-		slackMap := ensureMap(channelsMap, "slack")
-		slackMap["enabled"] = true
-		slackMap["mode"] = "socket"
-		slackMap["botToken"] = data.SlackBotToken
-		slackMap["appToken"] = data.SlackAppToken
-		if data.SlackUserID != "" {
-			slackMap["dmPolicy"] = "allowlist"
-			slackMap["allowFrom"] = mergeStringList(slackMap["allowFrom"], data.SlackUserID)
-		} else {
-			slackMap["dmPolicy"] = "open"
-			slackMap["allowFrom"] = mergeStringList(slackMap["allowFrom"], "*")
+		slog.Debug("setting channels.slack", "component", "openclaw")
+		// Slack is an externalized plugin (@openclaw/slack) — ensure it's
+		// installed+enabled before writing config (self-heals a missing plugin).
+		slackPluginCtx, slackCancel := context.WithTimeout(context.Background(), channelPluginInstallTimeout)
+		slackPluginErr := ensureChannelPlugin(slackPluginCtx, domain.ChannelSlack, slackPluginPackage)
+		slackCancel()
+		if slackPluginErr != nil {
+			return fmt.Errorf("ensure slack plugin: %w", slackPluginErr)
 		}
+		slackMap := ensureMap(channelsMap, "slack")
+		// Initial setup always provisions Socket Mode; the HTTP-mode switch goes
+		// through AddChannel after setup completes.
+		applySlackChannelConfig(slackMap, slackChannelConfig{
+			BotToken: data.SlackBotToken,
+			AppToken: data.SlackAppToken,
+			UserID:   data.SlackUserID,
+			Runtime:  currentOpenclawRuntime(),
+		})
 		channelsMap["slack"] = slackMap
 		if telegramMap, ok := channelsMap["telegram"].(map[string]any); ok {
 			telegramMap["enabled"] = false
@@ -192,22 +197,17 @@ func (s *Service) SetupAgent(data domain.SetupRequest) error {
 		slackEntryMap["enabled"] = true
 	case "discord":
 		slog.Debug("setting channels.discord", "component", "openclaw")
-		discordMap := ensureMap(channelsMap, "discord")
-		discordMap["enabled"] = true
-		discordMap["dmPolicy"] = "allowlist"
-		discordMap["token"] = data.DiscordBotToken
-		discordMap["allowFrom"] = mergeStringList(discordMap["allowFrom"], data.DiscordUserID)
-		if data.DiscordGuildID != "" {
-			discordMap["groupPolicy"] = "allowlist"
-			discordMap["guilds"] = map[string]any{
-				data.DiscordGuildID: map[string]any{
-					"requireMention": false,
-					"users": []string{
-						data.DiscordUserID,
-					},
-				},
-			}
+		// Discord is an externalized plugin (@openclaw/discord) — ensure it's
+		// installed+enabled before writing config. Enable is instant when the
+		// plugin is already provisioned; this self-heals a missing plugin.
+		pluginCtx, cancel := context.WithTimeout(context.Background(), channelPluginInstallTimeout)
+		err := ensureChannelPlugin(pluginCtx, domain.ChannelDiscord, discordPluginPackage)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("ensure discord plugin: %w", err)
 		}
+		discordMap := ensureMap(channelsMap, "discord")
+		applyDiscordChannelConfig(discordMap, data.DiscordBotToken, data.DiscordUserID, data.DiscordGuildID)
 		channelsMap["discord"] = discordMap
 		discordEntryMap := ensureMap(entriesMap, "discord")
 		discordEntryMap["enabled"] = true
@@ -376,57 +376,37 @@ func (s *Service) AddChannel(ctx context.Context, data domain.AddChannelRequest)
 
 	switch channel {
 	case domain.ChannelSlack:
+		// Ensure the externalized @openclaw/slack plugin is installed+enabled
+		// before writing config (self-heals a missing plugin).
+		if err := ensureChannelPlugin(ctx, domain.ChannelSlack, slackPluginPackage); err != nil {
+			return fmt.Errorf("ensure slack plugin: %w", err)
+		}
 		slackMap := ensureMap(channelsMap, domain.ChannelSlack)
-		slackMap["enabled"] = true
-		slackMap["botToken"] = data.SlackBotToken
-		if data.SlackUserID != "" {
-			slackMap["dmPolicy"] = "allowlist"
-			slackMap["allowFrom"] = mergeStringList(slackMap["allowFrom"], data.SlackUserID)
-		} else {
-			slackMap["dmPolicy"] = "open"
-			slackMap["allowFrom"] = mergeStringList(slackMap["allowFrom"], "*")
-		}
-		// Mode-specific block. Default (empty / "socket") preserves pre-existing
-		// behaviour so installs without slack_mode set stay byte-identical.
 		// HTTP mode is the message-loss-tolerant path: a public proxy forwards
-		// Slack events over MQTT to this device's slack_event handler, which
-		// POSTs them to the local gateway's webhookPath — so the gateway needs
-		// the signing secret (to re-verify) and no Slack WebSocket / appToken.
-		if data.EffectiveSlackMode() == "http" {
-			slackMap["mode"] = "http"
-			slackMap["signingSecret"] = data.SlackSigningSecret
-			webhookPath := data.SlackWebhookPath
-			if webhookPath == "" {
-				webhookPath = "/slack/events"
-			}
-			slackMap["webhookPath"] = webhookPath
-			delete(slackMap, "appToken")
-		} else {
-			slackMap["mode"] = "socket"
-			slackMap["appToken"] = data.SlackAppToken
-			delete(slackMap, "signingSecret")
-			delete(slackMap, "webhookPath")
-		}
+		// Slack events over MQTT to this device's slack_event handler, which POSTs
+		// them to the local gateway's webhookPath — so the gateway needs the signing
+		// secret (to re-verify) and no Slack WebSocket / appToken. Socket mode opens
+		// an outbound WSS to Slack and needs the appToken instead.
+		applySlackChannelConfig(slackMap, slackChannelConfig{
+			BotToken:      data.SlackBotToken,
+			AppToken:      data.SlackAppToken,
+			UserID:        data.SlackUserID,
+			Mode:          data.SlackMode,
+			SigningSecret: data.SlackSigningSecret,
+			WebhookPath:   data.SlackWebhookPath,
+			Runtime:       currentOpenclawRuntime(),
+		})
 		channelsMap[domain.ChannelSlack] = slackMap
 		slackEntryMap := ensureMap(entriesMap, domain.ChannelSlack)
 		slackEntryMap["enabled"] = true
 	case domain.ChannelDiscord:
-		discordMap := ensureMap(channelsMap, domain.ChannelDiscord)
-		discordMap["enabled"] = true
-		discordMap["dmPolicy"] = "allowlist"
-		discordMap["token"] = data.DiscordBotToken
-		discordMap["allowFrom"] = mergeStringList(discordMap["allowFrom"], data.DiscordUserID)
-		if data.DiscordGuildID != "" {
-			discordMap["groupPolicy"] = "allowlist"
-			discordMap["guilds"] = map[string]any{
-				data.DiscordGuildID: map[string]any{
-					"requireMention": false,
-					"users": []string{
-						data.DiscordUserID,
-					},
-				},
-			}
+		// Ensure the externalized @openclaw/discord plugin is installed+enabled
+		// before writing config (self-heals a missing plugin).
+		if err := ensureChannelPlugin(ctx, domain.ChannelDiscord, discordPluginPackage); err != nil {
+			return fmt.Errorf("ensure discord plugin: %w", err)
 		}
+		discordMap := ensureMap(channelsMap, domain.ChannelDiscord)
+		applyDiscordChannelConfig(discordMap, data.DiscordBotToken, data.DiscordUserID, data.DiscordGuildID)
 		channelsMap[domain.ChannelDiscord] = discordMap
 		discordEntryMap := ensureMap(entriesMap, domain.ChannelDiscord)
 		discordEntryMap["enabled"] = true
@@ -452,16 +432,9 @@ func (s *Service) AddChannel(ctx context.Context, data domain.AddChannelRequest)
 		whatsappMap := ensureMap(channelsMap, domain.ChannelWhatsapp)
 		applyWhatsappChannelConfig(whatsappMap, data.WhatsappUserID)
 		channelsMap[domain.ChannelWhatsapp] = whatsappMap
-		// Try enable first (works on bundled releases). If that fails, install
-		// + enable (externalized plugin model).
-		if err := runOpenclawCLI(ctx, "plugins", "enable", domain.ChannelWhatsapp); err != nil {
-			slog.Warn("plugins enable whatsapp failed, attempting install", "component", "openclaw", "error", err)
-			if installErr := runOpenclawCLI(ctx, "plugins", "install", whatsappPluginPackage); installErr != nil {
-				return fmt.Errorf("plugins install %s: %w", whatsappPluginPackage, installErr)
-			}
-			if err := runOpenclawCLI(ctx, "plugins", "enable", domain.ChannelWhatsapp); err != nil {
-				return fmt.Errorf("plugins enable whatsapp after install: %w", err)
-			}
+		// Ensure the externalized @openclaw/whatsapp plugin is installed+enabled.
+		if err := ensureChannelPlugin(ctx, domain.ChannelWhatsapp, whatsappPluginPackage); err != nil {
+			return err
 		}
 		whatsappEntryMap := ensureMap(entriesMap, domain.ChannelWhatsapp)
 		whatsappEntryMap["enabled"] = true

@@ -107,6 +107,17 @@ type Config struct {
 	// AgentRuntime selects which agentic backend to use: "openclaw" (default), "hermes", "picoclaw", "claudecode", etc.
 	AgentRuntime string `json:"agent_runtime" yaml:"agentRuntime"`
 
+	// Realtime configures the realtime voice agent (audio-native brain — Gemini
+	// Live / OpenAI Realtime). Sibling selector to AgentRuntime: AgentRuntime picks
+	// the turn-based text brain, Realtime picks the live-audio brain. Grouped under
+	// one "realtime" JSON key (the first nested sub-object in this config) because
+	// it carries shared + per-provider knobs. Pointer only so the key omits cleanly
+	// from config.json when unconfigured — a nil block is NOT "off": the accessors
+	// default to HAL's own defaults (enabled + provider gemini), so realtime runs
+	// out of the box exactly as before. See RealtimeConfig and the Realtime*
+	// accessors below.
+	Realtime *RealtimeConfig `json:"realtime,omitempty" yaml:"realtime"`
+
 	OpenclawConfigDir string `json:"openclaw_config_dir" yaml:"openclawConfigDir"`
 
 	NetworkSSID     string `json:"network_ssid" yaml:"networkSSID" validate:"required"`
@@ -212,6 +223,10 @@ func Default() Config {
 		MQTTPassword: "",
 		MQTTPort:     0,
 
+		// Seed the realtime block so a fresh config.json always carries an editable
+		// realtime config (HAL reads it from there). See DefaultRealtimeConfig.
+		Realtime: DefaultRealtimeConfig(),
+
 		notify: make(chan bool, 1),
 	}
 }
@@ -260,6 +275,16 @@ func ProvideConfig() *Config {
 			if err := cfg.Save(); err != nil {
 				slog.Error("save config after migration failed", "component", "config", "error", err)
 			}
+		}
+	}
+
+	// Seed the realtime block with defaults if an already-provisioned config.json
+	// predates it, so the file always carries an editable realtime config (HAL
+	// reads it from there). Idempotent — only the first start after upgrade writes.
+	if cfg.Realtime == nil {
+		cfg.Realtime = DefaultRealtimeConfig()
+		if err := cfg.Save(); err != nil {
+			slog.Error("seed realtime config failed", "component", "config", "error", err)
 		}
 	}
 

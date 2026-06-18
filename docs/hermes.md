@@ -143,11 +143,83 @@ regardless of backend.
 
 ## 10. Operating it
 
-1. Run Hermes on the device at `http://127.0.0.1:8642` with skills provisioned.
-2. Set `"agent_runtime": "hermes"` in `config.json`, restart os-server.
-3. Confirm the `AGENT BACKEND ACTIVE → HERMES` banner + a healthy `/health` poll
-   in the logs.
+Hermes is installed by `os/services/internal/hermes/install.sh` (co-located with
+its implementation). The script is **embedded in os-server** (`go:embed`,
+registered via `lib/runtimereg`), so it ships + OTA-updates with the binary;
+os-server materializes it to `/usr/local/lib/os-runtimes/hermes/install.sh` and
+switch-runtime runs that local copy — fully offline, no CDN round-trip. (The CDN
+path `${RUNTIMES_BASE_URL}/hermes/install.sh` remains a fallback for backends not
+compiled into the binary.) The installer pulls the Hermes CLI to
+`/usr/local/bin/hermes`, runs `hermes claw migrate` (skills only), seeds
+`~/.hermes/.env`, **patches only `.model` + `.custom_providers` in
+`config.yaml`** (via `yq`, preserving anything else the CLI wrote — not a
+full-file overwrite), drops the `runtime-hermes-presync` hook (§11) and **runs
+it once inline**, then installs + starts the gateway as a **system service** via
+`hermes gateway install --system --run-as-user root` + `hermes gateway start
+--system` (unit: **`hermes-gateway.service`**). Because presync runs during
+install, a direct `bash install.sh` is fully configured and running without
+relying on switch-runtime.
+
+> Unit name: the gateway runs as `hermes-gateway.service`. The installer declares
+> this in `/usr/local/lib/os-runtimes/hermes/service` so `switch-runtime` enables
+> the right unit (§11); `reset_hermes.go` targets the same unit.
+
+`hermes claw migrate` does **not** carry the model config across, so the presync
+hook syncs the device's `llm_*` from `config.json` into the Hermes config — once
+during install, and again on every later switch:
+
+| `config.json` | → | Hermes |
+|---|---|---|
+| `llm_model` | → | `config.yaml` `.model.default` |
+| `llm_base_url` | → | `config.yaml` `.custom_providers[0].base_url` |
+| `llm_api_key` | → | `.env` `AUTONOMOUS_API_KEY` |
+
+`.env` `API_SERVER_KEY` must equal `constants.go` `APIKey` (`hermes-api-key`) or
+every turn 401s. Hermes must listen on `127.0.0.1:8642` to match `BaseURL`.
 
 To target a different Hermes endpoint / key / model today, edit
 `internal/hermes/constants.go` and rebuild (making these per-unit configurable is
 future work).
+
+## 11. Switching backends at runtime
+
+You do not edit `config.json` by hand. Three triggers — **MQTT** `agent_runtime.set`
+(`{"runtime":"hermes"}`), **HTTP** `POST /api/device/agent-runtime`, and the
+**web** Settings → *Runtime* section — all funnel into one method,
+`device.Service.UpdateAgentRuntime` (`internal/device/service.go`). It validates
+the runtime, persists `config.agent_runtime`, and launches the switcher in its
+own transient systemd unit (`systemd-run`, so the os-server restart at the end
+can't kill it mid-flight):
+
+```
+switch-runtime <new> <old>
+```
+
+`switch-runtime` is **generic and backend-agnostic** — it is embedded in os-server
+(`internal/device/switch_runtime.sh` via `go:embed`) and written to
+`/usr/local/bin/switch-runtime` on demand, so it is versioned and OTA-updated with
+the binary and needs **no imager/setup.sh change ever**. For a target backend `X`
+it:
+
+1. resolves `X`'s unit name (default `X.service`, or whatever the installer
+   declared in `/usr/local/lib/os-runtimes/X/service` — hermes →
+   `hermes-gateway`) and ensures it exists, else runs `X`'s installer — the
+   binary-embedded copy at `/usr/local/lib/os-runtimes/X/install.sh` first, else
+   `curl ${RUNTIMES_BASE_URL}/X/install.sh | bash` (openclaw is skipped —
+   `openclaw.service` is baked by setup.sh);
+2. runs the optional `/usr/local/bin/runtime-X-presync` hook (hermes's syncs
+   `llm_*`, per §10);
+3. `systemctl enable --now <X-unit>` + `disable --now <old-unit>`;
+4. `systemctl restart os-server`, so `factory.go` re-resolves the gateway.
+
+Confirm the swap from the new `AGENT BACKEND ACTIVE → …` banner + a healthy
+`/health` poll in the logs.
+
+**Adding a new backend** (picoclaw, claudecode, …) is just an `install.sh` next
+to that backend's implementation (`internal/<name>/install.sh`), `go:embed`-ed +
+registered in `lib/runtimereg` from the package's `init()` (it must create
+`<name>.service`, optionally drop `runtime-<name>-presync`), plus a
+`domain.AgentRuntimes` entry for validation + the web dropdown. A backend already
+needs a gateway client under `internal/<name>` and a `factory.go` case, so the
+embedded installer adds no new coupling — and nothing in the imager, switcher, or
+CDN has to change.

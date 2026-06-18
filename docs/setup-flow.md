@@ -13,7 +13,10 @@ When the OS server is not yet configured (`SetUpCompleted = false`), the device 
 4. Enters: WiFi SSID/password + LLM config + channel
 5. POST /api/device/setup
 6. OS Server processes (async):
-   a. Connect WiFi (connect-wifi CLI)
+   a. Connect WiFi (connect-wifi CLI) — in parallel, an early-capture
+      goroutine publishes the STA LAN IP into setup state as soon as wlan0
+      gets one (before internet is up), so the Web UI can read it while the
+      AP is still briefly alive (see "AP→STA Auto-Redirect")
    b. Wait for internet (poll 60s)
    c. Setup agent gateway
    d. Save config
@@ -21,6 +24,8 @@ When the OS server is not yet configured (`SetUpCompleted = false`), the device 
    f. Report to backend (MQTT)
    g. SetUpCompleted = true
 7. On failure → return to AP mode
+8. Web UI auto-redirects the browser to http://<lan_ip>/setup once the
+   operator is back on home Wi-Fi (IP-only — no mDNS .local dependency)
 ```
 
 ## API
@@ -73,6 +78,111 @@ Change messaging channel after setup is complete. Accepts `telegram`, `slack`, `
 - `SwitchToAPMode()` in `internal/network/service.go`
 - **LED indicator:** once HTTP server is listening, if `SetUpCompleted == false` the OS server spawns a background goroutine (`waitAndPaintSetupReady` in `server/server.go`) that polls HAL `GET /health` once per second up to 30s. As soon as `health.led == true`, it fires `POST /led/solid` with `{"color":[255,255,255]}` to paint the strip solid white. The poll exists because os-server typically binds :5000 before HAL's FastAPI is up on :5001 (Python loads `rpi_ws281x`, SPI, audio, camera) — a fire-and-forget paint would silently drop on `connection refused`. White stays on until setup completes (agent flash + ambient repaint it). The booting blue-breathing still shows during init.
 - **AP-mode LED suppression:** the openclaw WS reconnect loop (`internal/openclaw/service_ws.go`) skips `StateAgentDown` Set/Clear while `config.SetUpCompleted == false`, so the cyan disconnect overlay doesn't fight the setup-needed white during provisioning. WS still runs (`device.Setup` needs it ready to satisfy `WaitForAgentReady` before flipping `SetUpCompleted=true`), only the LED side-effect is gated.
+
+## AP→STA Auto-Redirect (the "joining Wi-Fi…" screen)
+
+After the operator submits, the Setup page shows a "Your device is joining
+Wi-Fi…" screen and tries to **automatically redirect the browser to the
+device's new home-Wi-Fi address** once it's reachable, so the operator doesn't
+have to hunt for an IP. This section documents how that redirect works, why it
+used to get stuck, and what changed.
+
+### The hard constraint
+
+The device has **one Wi-Fi radio (`wlan0`)**. During provisioning it runs as an
+access point at `192.168.100.1`. To join the home network it must switch the
+same radio AP→STA — which **tears the AP down**. The moment the AP dies, the
+browser (still associated to the AP SSID) **loses all network access to the
+device** until the operator manually rejoins their home Wi-Fi. There is no
+window in which the browser is on both networks at once.
+
+Consequence: the browser can only learn the device's new LAN IP **before** the
+AP tears down, or via mDNS **after** the operator is back on home Wi-Fi.
+
+### Redirect channels (`useSetupStatusPolling.ts`)
+
+Redirect is **IP-only by design.** The device's `.local` mDNS name is
+deliberately **not** used as a redirect target: many home/office routers block
+mDNS multicast (and Android Chrome has no native mDNS), so `.local` silently
+fails to resolve and strands the operator. A raw LAN IP resolves on every
+network, so it's the single source of truth for "where the device now lives."
+
+1. **Phase poll** — polls `GET /api/device/setup/status` against the AP IP while
+   the AP is alive. Reads `phase` + `lan_ip`. Goes dark the instant the AP tears
+   down. (The backend captures the STA IP early so this poll can return a
+   `lan_ip` during the brief window the AP is still alive — see
+   `internal/device/service.go`.)
+2. **LAN-IP probe** — once `lan_ip` is known, probes `http://<lan_ip>/api/health`
+   from the browser; when it succeeds (operator is back on home Wi-Fi and the
+   device is up) it redirects to `http://<lan_ip>/setup?<params>`. **This is the
+   only redirect channel** — there is no `.local` fallback.
+
+**Pre-submit canonical-URL upgrade.** The LAN-IP probe above also runs *before*
+submit: when the page is on the AP IP (`http://192.168.100.1`) and a `lan_ip` is
+already known, it bounces the browser off the soon-to-die AP IP onto
+`http://<lan_ip>/setup`, which survives the AP→STA switch. **Before submit, with
+wlan0 still serving the AP and no STA IP yet, `lan_ip` is empty and the page
+simply stays on `192.168.100.1`** — there is no automatic `.local` jump.
+
+### Root cause of the "stuck forever" bug
+
+Two independent defects made the screen hang indefinitely even though the device
+had successfully joined Wi-Fi:
+
+1. **CSP blocked every cross-origin probe.** The device's nginx served
+   `Content-Security-Policy: …; connect-src 'self' ws: wss:`. The Setup page is
+   served from the AP IP, so `'self'` is `http://192.168.100.1`. Both the
+   `lan_ip` probe (`http://172.x.x.x/…`) and the mDNS probe
+   (`http://…​.local/…`) are a **different origin**, so the browser refused the
+   `fetch` with *"Refused to connect because it violates the document's Content
+   Security Policy"* — `mode: "no-cors"` does **not** bypass CSP. Every channel's
+   probe died before leaving the browser.
+
+2. **The LAN-IP channel almost never had a `lan_ip` to use.** `lan_ip` was only
+   published into setup state *after* `SetupNetwork()` finished its **up-to-60s**
+   wait for internet. But the AP tears down within ~2s of that call starting, so
+   the phase poll went dark long before `lan_ip` existed → the LAN-IP channel
+   stayed disabled → only the mDNS channel remained → and on mDNS-blocking
+   networks that one can't resolve either. Result: **no channel ever fires.**
+
+So on a router that blocks mDNS multicast (the exact field case), the page was
+permanently stuck on "joining Wi-Fi…" despite a fully successful join.
+
+### The fix
+
+| Layer | Change | Why |
+|-------|--------|-----|
+| **CSP** (`imager/build*.sh`, `scripts/provision/setup.sh`, `scripts/maintenance/patch-security.sh`) | `connect-src 'self' ws: wss:` → `connect-src 'self' ws: wss: http:` | Lets the browser `fetch` the cross-origin LAN-IP probe. `http:` (not `http://*.local`) is required because **CSP can't express an IP range** — a single `http:` token is the only way to allow `http://<any-lan-ip>/…`, so the fix is independent of the customer's subnet (`172.x`, `192.168.x`, `10.x`). |
+| **Backend** (`internal/device/service.go`) | A goroutine polls `GetCurrentIP()` once per second **in parallel with** `SetupNetwork()` and publishes the STA IP into setup state the instant it appears (skipping the AP's own `192.168.100.1`), before the 60s internet wait completes. | Gives the FE the **largest possible window** to read `lan_ip` during the brief overlap where it's still polling the AP — so the LAN-IP channel actually has an IP to redirect to. A guard keeps an already-captured IP from being clobbered by a later empty read during AP teardown. |
+| **Frontend** (`useSetupStatusPolling.ts`) | Removed the `.local` mDNS redirect channel entirely. The single remaining redirect is the LAN-IP probe, which carries `pathname + search` and targets `http://<lan_ip>/setup?<params>`; it also serves as the pre-submit canonical-URL upgrade. | `.local` is unreliable on mDNS-blocking networks, so it can't be a redirect target. The IP is read dynamically from the backend — **no hardcoded subnet, no mDNS dependency**. |
+| **Frontend** (`Setup.tsx`) | The "save this address" copy field and the "Continue setup" link now use the **raw-IP URL** (`http://<lan_ip>/setup`); both screens gate on `setupLanIP` instead of the mDNS host, falling back to a router-admin hint when no IP is known yet. | IP-only, end to end — the operator is never handed a `.local` address that can't resolve on their network. |
+| **Frontend** (`Setup.tsx`) | The Copy button gained a `document.execCommand("copy")` fallback (hidden textarea) for when `navigator.clipboard` is unavailable. | The Setup page is served over plain HTTP (`http://192.168.100.1`), where `navigator.clipboard` is `undefined` (it needs a secure context) — so the modern API silently no-op'd and the button did nothing. The legacy path works on `http://` origins. |
+
+### Redirect target
+
+The happy path now redirects to **`http://<lan_ip>/setup?<params>`** (e.g.
+`http://172.168.20.145/setup?…`) — the raw IP, which works regardless of mDNS.
+Until the early `lan_ip` poll lands, the manual copy link falls back to
+`http://<type>-<id>.local/setup?<params>`.
+
+### Assessment & trade-offs
+
+- **What it fixes:** the auto-redirect (and the manual copy link) now work on
+  mDNS-blocking networks, which was the reported field failure. The solution is
+  **subnet-agnostic** — it doesn't assume any particular private IP range.
+- **What it still depends on:** the auto-redirect via the LAN-IP channel only
+  fires if the FE captured `lan_ip` during the ~2s AP-alive overlap. The
+  early-capture goroutine maximizes that window but can't guarantee it on a slow
+  DHCP lease. The **manual IP copy link is the guaranteed fallback** — it's
+  always shown and always uses the raw IP, so the operator is never stranded.
+- **Security trade-off of `http:` in CSP:** `connect-src http:` permits the
+  Setup page to `fetch` any plaintext-HTTP origin, not just the device.
+  Acceptable here because the Setup bundle is served only on the LAN/AP, ships
+  no secrets in these health probes, and CSP offers no narrower way to allow an
+  arbitrary LAN IP. Tracked in `docs/security/CHECKLIST.md` (F9).
+- **Why not avoid the AP teardown entirely:** a dual-radio or wired path would
+  remove the constraint, but the target hardware has a single Wi-Fi radio — so
+  the "learn the IP before AP dies, or via mDNS after" model is inherent.
 
 ## Post-Setup
 
@@ -150,9 +260,12 @@ full listener example lives in the file header of `lib/setupBridge.ts`.
 
 | File | Role |
 |------|------|
-| `os/services/internal/device/service.go` | Setup orchestration |
+| `os/services/internal/device/service.go` | Setup orchestration + early LAN-IP capture goroutine |
 | `os/services/web/src/lib/setupBridge.ts` | Parent-window event bridge (postMessage) |
-| `os/services/web/src/pages/Setup.tsx` | Setup wizard UI + bridge emit call sites |
+| `os/services/web/src/pages/Setup.tsx` | Setup wizard UI + bridge emit call sites + IP-first copy link |
+| `os/services/web/src/hooks/setup/useSetupStatusPolling.ts` | AP→STA auto-redirect: phase poll + LAN-IP probe + mDNS probe |
 | `os/services/internal/network/service.go` | WiFi connect, AP mode |
-| `os/services/server/device/delivery/http/handler.go` | HTTP setup handler |
+| `os/services/server/device/delivery/http/handler.go` | HTTP setup handler (async goroutine) |
 | `os/services/server/config/config.go` | Config load/save |
+| `imager/build-orangepi.sh`, `imager/build.sh`, `scripts/provision/setup.sh` | nginx config baked into the image (incl. `connect-src` CSP) |
+| `scripts/maintenance/patch-security.sh` | OTA security patch for already-provisioned devices (migrates CSP) |

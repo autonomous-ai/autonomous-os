@@ -3,6 +3,7 @@ package hermes
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 
 	"go.autonomous.ai/os/domain"
@@ -22,6 +23,13 @@ func (s *Service) SetupAgent(_ domain.SetupRequest) error {
 func (s *Service) AddChannel(_ context.Context, _ domain.AddChannelRequest) error {
 	slog.Info("AddChannel: no-op (hermes backend)", "component", "hermes")
 	return nil
+}
+
+// RefreshChannelConfig — refresh re-applies channels.<channel> in openclaw.json,
+// but Hermes owns its own ~/.hermes config layout. Not supported on this backend.
+func (s *Service) RefreshChannelConfig(_ context.Context, _ domain.RefreshChannelRequest) (string, error) {
+	slog.Info("RefreshChannelConfig: not supported (hermes backend)", "component", "hermes")
+	return "", fmt.Errorf("channel refresh not supported on hermes backend")
 }
 
 func (s *Service) HasWhatsappSession(_ string) bool { return false }

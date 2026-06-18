@@ -18,13 +18,13 @@ make clean                         # wipe output/ (input/ kept)
 make clean-all                     # wipe both output/ and input/
 ```
 
-Lần đầu build ~25–40 phút (download/decompress base image, qemu-arm64 chroot apt
-install + HAL uv sync, OTA backend bake, xz compress). Re-runs nhanh hơn nhiều —
-base image được cache ở `input/`, chỉ Phase 3+ re-run.
+First build takes ~25–40 min (download/decompress base image, qemu-arm64 chroot apt
+install + HAL uv sync, OTA backend bake, xz compress). Re-runs are much faster —
+base image is cached at `input/`; only Phase 3+ reruns.
 
 ## Base image — per device type
 
-lamp và intern-v2 dùng **hardware team's pre-built base image** thay vì stock vendor .7z:
+lamp and intern-v2 use the **hardware team's pre-built base image** instead of the stock vendor .7z:
 
 | DEVICE_TYPE | Local path | GCS key |
 |---|---|---|
@@ -32,18 +32,27 @@ lamp và intern-v2 dùng **hardware team's pre-built base image** thay vì stock
 | `intern-v2` | `input/intern-v2/golden-opi-dev.img.xz` | `os/imager/base/golden-opi-dev-intern-v2.img.xz` |
 | other | `input/orangepi.7z` (Google Drive) | `os/imager/source/Orangepi4pro_*.7z` |
 
-Hardware team upload base image mới → `make upload-source DEVICE_TYPE=lamp` để push lên GCS.
+When the hardware team ships a new base image, run `make upload-source DEVICE_TYPE=lamp` to push it to GCS so other devs can pull it for their next build.
+
+**Manual download** (if you received the file via AirDrop / file share and need to place it yourself):
+
+| DEVICE_TYPE | Download | Place at |
+|---|---|---|
+| `lamp` | [golden-opi-dev-lamp.img.xz](https://storage.googleapis.com/s3-autonomous-upgrade-3/os/imager/base/golden-opi-dev-lamp.img.xz) | `imager/input/lamp/golden-opi-dev.img.xz` |
+| `intern-v2` | [golden-opi-dev-intern-v2.img.xz](https://storage.googleapis.com/s3-autonomous-upgrade-3/os/imager/base/golden-opi-dev-intern-v2.img.xz) | `imager/input/intern-v2/golden-opi-dev.img.xz` |
+
+After placing the file, run `make build DEVICE_TYPE=lamp OTA_METADATA_URL=…` as usual.
 
 ## Config ownership
 
 | Config | Owner | How it gets on the Pi |
 |---|---|---|
-| `hal.env` | **OS team** | build-orangepi.sh Phase 2 viết vào image |
-| `asound.conf` | **Hardware team** | Baked vào base image, không ship trong device profile |
-| udev rules | **Hardware team** | Baked vào base image |
-| SPI3 overlay | **Hardware team** | Baked vào base image |
+| `hal.env` | **OS team** | Written into the image by build-orangepi.sh Phase 2 |
+| `asound.conf` | **Hardware team** | Baked into base image — not shipped in device profile |
+| udev rules | **Hardware team** | Baked into base image |
+| SPI3 overlay | **Hardware team** | Baked into base image |
 
-Device profile overlay (`devices/<type>/rootfs/`) chỉ chứa những gì OS team sở hữu.
+The device profile overlay (`devices/<type>/rootfs/`) only contains files owned by the OS team.
 
 ## Targets
 

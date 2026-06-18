@@ -4,6 +4,8 @@ import { getDeviceConfig, updateDeviceConfig, getTTSVoices, getTTSProviders } fr
 import type { DeviceConfig } from "@/lib/api";
 import { useTheme } from "@/lib/useTheme";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
+import { useCapabilities } from "@/hooks/useCapabilities";
+import { Cap } from "@/pages/monitor/types";
 import type { ChannelType } from "@/types";
 import type { SectionId as SharedSectionId } from "@/hooks/setup/types";
 import type { FaceOwner } from "@/hooks/setup/useFaceEnroll";
@@ -14,26 +16,35 @@ import { WifiSection } from "@/components/edit/WifiSection";
 import { VoiceSection as EditVoiceSection } from "@/components/edit/VoiceSection";
 import { FaceSection as EditFaceSection } from "@/components/edit/FaceSection";
 import { TTSSection } from "@/components/edit/TTSSection";
+import { RealtimeSection } from "@/components/edit/RealtimeSection";
+import { AgentRuntimeSection } from "@/components/edit/AgentRuntimeSection";
 import { STTSection, type SttProvider } from "@/components/edit/STTSection";
 import { ChannelSection } from "@/components/edit/ChannelSection";
 import { MqttSection } from "@/components/edit/MqttSection";
-import { Wifi, UserCircle, Cpu, Brain, Volume2, MicVocal, MessageSquare, Globe, Link } from "lucide-react";
+import { Wifi, UserCircle, Cpu, Brain, Volume2, MicVocal, MessageSquare, Globe, Link, Zap, Server } from "lucide-react";
 
 // Local subset of the shared SectionId — EditConfig uses `stt` (Language is
 // rendered under id="stt"), not `language` / `deepgram` like Setup.
-type SectionId = Extract<SharedSectionId, "device" | "wifi" | "llm" | "voice" | "face" | "tts" | "stt" | "channel" | "mqtt">;
+type SectionId = Extract<SharedSectionId, "device" | "wifi" | "llm" | "voice" | "face" | "tts" | "realtime" | "stt" | "channel" | "mqtt"> | "runtime";
 const ICON_SIZE = 15;
-const ALL_SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; debugOnly?: boolean }[] = [
+// `cap` declares the device capability a section's hardware needs; the section
+// is hidden when the device doesn't have it (mirrors the Monitor nav gating).
+// Omit `cap` for sections with no hardware dependency (always shown):
+//   - Language/Voice/Realtime/My Voice → audio (mic + speaker)
+//   - Face → vision (camera)
+const ALL_SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; debugOnly?: boolean; cap?: string }[] = [
   { id: "device",   label: "Device",   icon: <Cpu size={ICON_SIZE} /> },
   { id: "wifi",     label: "Wi-Fi",    icon: <Wifi size={ICON_SIZE} /> },
   // AI Brain, Language, Voice, Channels, MQTT are gated behind
   // ?debug=true. Typical operators only need Device + Wi-Fi + voice/face
   // enrollment; deeper provider knobs stay hidden by default.
   { id: "llm",      label: "AI Brain", icon: <Brain size={ICON_SIZE} />, debugOnly: true },
-  { id: "stt",      label: "Language", icon: <Globe size={ICON_SIZE} />, debugOnly: true },
-  { id: "tts",      label: "Voice", icon: <Volume2 size={ICON_SIZE} />, debugOnly: true },
-  { id: "voice",    label: "My Voice", icon: <MicVocal size={ICON_SIZE} /> },
-  { id: "face",     label: "Face",     icon: <UserCircle size={ICON_SIZE} /> },
+  { id: "runtime",  label: "Runtime",  icon: <Server size={ICON_SIZE} />, debugOnly: true },
+  { id: "stt",      label: "Language", icon: <Globe size={ICON_SIZE} />, debugOnly: true, cap: Cap.Audio },
+  { id: "tts",      label: "Voice", icon: <Volume2 size={ICON_SIZE} />, debugOnly: true, cap: Cap.Audio },
+  { id: "realtime", label: "Realtime", icon: <Zap size={ICON_SIZE} />, debugOnly: true, cap: Cap.Audio },
+  { id: "voice",    label: "My Voice", icon: <MicVocal size={ICON_SIZE} />, cap: Cap.Audio },
+  { id: "face",     label: "Face",     icon: <UserCircle size={ICON_SIZE} />, cap: Cap.Vision },
   { id: "channel",  label: "Channels", icon: <MessageSquare size={ICON_SIZE} />, debugOnly: true },
   { id: "mqtt",     label: "MQTT",     icon: <Link size={ICON_SIZE} />, debugOnly: true },
 ];
@@ -68,11 +79,23 @@ export default function EditConfig() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const debug = isDebugMode();
-  const SECTIONS = debug ? ALL_SECTIONS : ALL_SECTIONS.filter((s) => !s.debugOnly);
+  // Hide sections whose hardware this device lacks (DEVICE.md capabilities via
+  // /api/system/info). Fail-open while caps load → no flash of an empty menu.
+  const { caps, hasCap } = useCapabilities();
+  const SECTIONS = ALL_SECTIONS.filter(
+    (s) => (debug || !s.debugOnly) && (!s.cap || hasCap(s.cap)),
+  );
   const [activeSection, setActiveSection] = useState<SectionId>(() => {
     const hash = window.location.hash.replace("#", "") as SectionId;
-    return SECTIONS.some((s) => s.id === hash) ? hash : "device";
+    return ALL_SECTIONS.some((s) => s.id === hash) ? hash : "device";
   });
+
+  // If the active section is for hardware this device lacks (caps loaded after
+  // mount, or a deep-linked #hash to a gated section), fall back to Device.
+  useEffect(() => {
+    if (!SECTIONS.some((s) => s.id === activeSection)) setActiveSection("device");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [SECTIONS.length, activeSection]);
   const contentRef = useRef<HTMLDivElement>(null);
 
   const activeSectionLabel = SECTIONS.find((s) => s.id === activeSection)?.label ?? "Settings";
@@ -107,6 +130,12 @@ export default function EditConfig() {
   const [ttsProviders, setTtsProviders] = useState<string[]>([]);
   const [ttsVoice, setTtsVoice] = useState("alloy");
   const [ttsVoices, setTtsVoices] = useState<string[]>([]);
+  const [realtimeEnabled, setRealtimeEnabled] = useState(true);
+  const [realtimeProvider, setRealtimeProvider] = useState("gemini");
+  const [realtimeVoice, setRealtimeVoice] = useState("Kore");
+  const [realtimeReasoning, setRealtimeReasoning] = useState("MINIMAL");
+  const [realtimeApiKey, setRealtimeApiKey] = useState("");
+  const [realtimeBaseUrl, setRealtimeBaseUrl] = useState("");
   const [channel, setChannel] = useState<ChannelType>("telegram");
   const [teleToken, setTeleToken] = useState("");
   const [teleUserId, setTeleUserId] = useState("");
@@ -138,6 +167,7 @@ export default function EditConfig() {
   const [wifiLoaded, setWifiLoaded] = useState({ ssid: false, password: false });
   const [llmLoaded, setLlmLoaded] = useState({ apiKey: false, baseUrl: false, model: false });
   const [ttsLoaded, setTtsLoaded] = useState({ apiKey: false, baseUrl: false });
+  const [realtimeLoaded, setRealtimeLoaded] = useState({ apiKey: false });
   const [sttLoaded, setSttLoaded] = useState({ deepgram: false, apiKey: false, baseUrl: false });
 
   // Baseline snapshot of non-secret fields captured after load (and after every
@@ -169,7 +199,15 @@ export default function EditConfig() {
     } catch {}
   }, []);
 
-  useEffect(() => { loadFaceOwners(); }, [loadFaceOwners]);
+  // Load the person roster (`/hw/face/owners`) only when a section that consumes
+  // it is reachable: Face (vision) shows face owners, My Voice (audio) attaches
+  // voice samples to the same records. A device with neither (e.g. motion-only)
+  // would otherwise fire a premature 404. Wait for caps to resolve first
+  // (caps === null = still loading) so the gate is decided, not raced.
+  useEffect(() => {
+    if (caps === null) return;
+    if (caps.has(Cap.Vision) || caps.has(Cap.Audio)) loadFaceOwners();
+  }, [caps, loadFaceOwners]);
 
   useEffect(() => {
     getDeviceConfig()
@@ -189,6 +227,14 @@ export default function EditConfig() {
         setTtsBaseUrl(cfg.tts_base_url ?? "");
         setTtsProvider(cfg.tts_provider || "openai");
         setTtsVoice(cfg.tts_voice || "alloy");
+        if (cfg.realtime) {
+          setRealtimeEnabled(cfg.realtime.enabled ?? true);
+          setRealtimeProvider(cfg.realtime.provider || "gemini");
+          if (cfg.realtime.voice) setRealtimeVoice(cfg.realtime.voice);
+          if (cfg.realtime.reasoning) setRealtimeReasoning(cfg.realtime.reasoning);
+          setRealtimeBaseUrl(cfg.realtime.base_url ?? "");
+          setRealtimeLoaded({ apiKey: !!cfg.realtime.has_api_key });
+        }
         setChannel((cfg.channel as ChannelType) || "telegram");
         setTeleUserId(cfg.telegram_user_id ?? "");
         setSlackUserId(cfg.slack_user_id ?? "");
@@ -371,6 +417,12 @@ export default function EditConfig() {
       };
       if (password) body.password = password;
       if (adminPassword) body.admin_password = adminPassword;
+      // Realtime block — server applies + restarts hal. api_key only when typed.
+      const realtime: Record<string, unknown> = { enabled: realtimeEnabled, provider: realtimeProvider };
+      if (realtimeProvider !== "none") { realtime.voice = realtimeVoice; realtime.reasoning = realtimeReasoning; }
+      if (realtimeBaseUrl) realtime.base_url = realtimeBaseUrl;
+      if (realtimeApiKey) realtime.api_key = realtimeApiKey;
+      body.realtime = realtime;
       if (llmApiKey) body.llm_api_key = llmApiKey;
       if (ttsApiKey) body.tts_api_key = ttsApiKey;
       if (mqttPassword) body.mqtt_password = mqttPassword;
@@ -532,7 +584,7 @@ export default function EditConfig() {
           <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>
             {SECTIONS.find((s) => s.id === activeSection)?.label}
           </span>
-          {activeSection !== "face" && activeSection !== "voice" && (
+          {activeSection !== "face" && activeSection !== "voice" && activeSection !== "runtime" && (
             <button
               form="edit-form"
               type="submit"
@@ -567,13 +619,6 @@ export default function EditConfig() {
               </div>
             )}
 
-            <div style={{
-              background: C.amberDim, border: "1px solid rgba(245,158,11,0.2)",
-              borderRadius: 8, padding: "10px 14px", fontSize: 11.5,
-              color: C.textDim, marginBottom: 20, lineHeight: 1.6,
-            }}>
-              ↻ &nbsp;Restart your device after saving for AI brain and channel changes to take full effect.
-            </div>
 
             {loadingCfg ? <SkeletonBlock /> : (
               <form id="edit-form" onSubmit={handleSubmit}>
@@ -601,6 +646,8 @@ export default function EditConfig() {
                   llmModel={llmModel} setLlmModel={setLlmModel}
                 />
 
+                <AgentRuntimeSection active={activeSection === "runtime"} />
+
                 <EditVoiceSection
                   active={activeSection === "voice"}
                   sttLanguage={sttLanguage}
@@ -625,6 +672,18 @@ export default function EditConfig() {
                   ttsVoice={ttsVoice} setTtsVoice={setTtsVoice}
                   ttsVoices={ttsVoices}
                   sttLanguage={sttLanguage}
+                />
+
+                <RealtimeSection
+                  active={activeSection === "realtime"}
+                  realtimeLoaded={realtimeLoaded}
+                  llmLoaded={llmLoaded}
+                  enabled={realtimeEnabled} setEnabled={setRealtimeEnabled}
+                  provider={realtimeProvider} setProvider={setRealtimeProvider}
+                  voice={realtimeVoice} setVoice={setRealtimeVoice}
+                  reasoning={realtimeReasoning} setReasoning={setRealtimeReasoning}
+                  apiKey={realtimeApiKey} setApiKey={setRealtimeApiKey}
+                  baseUrl={realtimeBaseUrl} setBaseUrl={setRealtimeBaseUrl}
                 />
 
                 <STTSection

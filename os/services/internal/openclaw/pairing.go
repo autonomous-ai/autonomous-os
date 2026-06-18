@@ -33,6 +33,22 @@ const (
 	// WhatsApp plugin (used on openclaw 2026.5.x+; earlier bundled releases
 	// already ship the channel and `plugins enable` succeeds directly).
 	whatsappPluginPackage = "@openclaw/whatsapp"
+
+	// discordPluginPackage / slackPluginPackage / whatsappPluginPackage above are
+	// the BASE npm names for the externalized channel plugins (slack/discord are
+	// external on openclaw 2026.5.x+; only telegram is stock). ensureChannelPlugin
+	// pins the install to the running gateway version at runtime (see below), so
+	// these stay version-less here — the version is resolved from GetOpenClawVersion()
+	// to match what provisioning installs (`@openclaw/<chan>@<version>`), avoiding
+	// both a stale hardcoded pin (downgrade) and an unpinned `latest` (upgrade skew).
+	discordPluginPackage = "@openclaw/discord"
+	slackPluginPackage   = "@openclaw/slack"
+
+	// channelPluginInstallTimeout bounds enable+install of a channel plugin when
+	// invoked outside an existing request context (the setup path). Enable is
+	// instant when the plugin is already provisioned; the budget covers a cold
+	// npm install on a device that is missing it.
+	channelPluginInstallTimeout = 5 * time.Minute
 )
 
 // Per-process mutex: only one pairing flow runs at a time. The CLI binds
@@ -230,6 +246,36 @@ func runOpenclawCLI(ctx context.Context, args ...string) error {
 	}
 	if output != "" {
 		slog.Info("openclaw cli", "component", "openclaw", "args", strings.Join(args, " "), "output", output)
+	}
+	return nil
+}
+
+// ensureChannelPlugin enables a channel's openclaw plugin, installing it first
+// when enable fails (the externalized-plugin model on openclaw 2026.5.x+).
+// Enable is cheap when the plugin is already present (provisioned via OTA), so
+// this is a no-op fast path on healthy devices and a self-heal on devices that
+// are missing the plugin. Generalizes the WhatsApp add path so Slack/Discord
+// reuse the same idiom.
+//
+// basePkg is the version-less npm name (e.g. "@openclaw/slack"); the install is
+// pinned to the running gateway version (GetOpenClawVersion) so it matches what
+// provisioning installs (`@openclaw/<chan>@<version>`) — avoiding a `latest`
+// that is newer than the gateway. Falls back to the unpinned name only when the
+// version is unknown (probe failed).
+func ensureChannelPlugin(ctx context.Context, channel, basePkg string) error {
+	if err := runOpenclawCLI(ctx, "plugins", "enable", channel); err == nil {
+		return nil
+	}
+	pkg := basePkg
+	if v := GetOpenClawVersion(); v != "" {
+		pkg = basePkg + "@" + v
+	}
+	slog.Warn("plugins enable failed, attempting install", "component", "openclaw", "channel", channel, "package", pkg)
+	if err := runOpenclawCLI(ctx, "plugins", "install", pkg); err != nil {
+		return fmt.Errorf("plugins install %s: %w", pkg, err)
+	}
+	if err := runOpenclawCLI(ctx, "plugins", "enable", channel); err != nil {
+		return fmt.Errorf("plugins enable %s after install: %w", channel, err)
 	}
 	return nil
 }

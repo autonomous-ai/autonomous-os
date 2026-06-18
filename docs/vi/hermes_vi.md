@@ -140,11 +140,80 @@ bất kể backend.
 
 ## 10. Vận hành
 
-1. Chạy Hermes trên thiết bị tại `http://127.0.0.1:8642` với skills đã provision.
-2. Đặt `"agent_runtime": "hermes"` trong `config.json`, restart os-server.
-3. Xác nhận banner `AGENT BACKEND ACTIVE → HERMES` + một lần poll `/health` khỏe
-   trong log.
+Hermes được cài bởi `os/services/internal/hermes/install.sh` (đặt cạnh phần hiện
+thực của nó). Script này được **embed trong os-server** (`go:embed`, đăng ký qua
+`lib/runtimereg`), nên đi kèm + OTA chung với binary; os-server ghi nó ra
+`/usr/local/lib/os-runtimes/hermes/install.sh` và switch-runtime chạy bản local
+đó — hoàn toàn offline, không cần CDN. (Đường CDN
+`${RUNTIMES_BASE_URL}/hermes/install.sh` vẫn là fallback cho backend không
+compile vào binary.) Installer kéo Hermes CLI về `/usr/local/bin/hermes`, chạy
+`hermes claw migrate` (chỉ skills), seed `~/.hermes/.env`, **chỉ patch `.model`
++ `.custom_providers` trong `config.yaml`** (bằng `yq`, giữ nguyên phần còn lại
+CLI đã ghi — không ghi đè cả file), drop hook `runtime-hermes-presync` (§11) và
+**chạy hook đó một lần ngay trong install**, rồi cài + start gateway như một
+**system service** qua `hermes gateway install --system --run-as-user root` +
+`hermes gateway start --system` (unit: **`hermes-gateway.service`**). Vì presync
+chạy ngay trong install, một lệnh `bash install.sh` trực tiếp đã được cấu hình
+đầy đủ và chạy, không phụ thuộc switch-runtime.
+
+> Tên unit: gateway chạy dưới `hermes-gateway.service`. Installer khai báo tên
+> này trong `/usr/local/lib/os-runtimes/hermes/service` để `switch-runtime`
+> enable đúng unit (§11); `reset_hermes.go` nhắm tới cùng unit đó.
+
+`hermes claw migrate` **không** mang model config qua, nên hook presync sync
+`llm_*` của thiết bị từ `config.json` vào config Hermes — một lần trong install,
+và mỗi lần switch sau đó:
+
+| `config.json` | → | Hermes |
+|---|---|---|
+| `llm_model` | → | `config.yaml` `.model.default` |
+| `llm_base_url` | → | `config.yaml` `.custom_providers[0].base_url` |
+| `llm_api_key` | → | `.env` `AUTONOMOUS_API_KEY` |
+
+`.env` `API_SERVER_KEY` phải bằng `constants.go` `APIKey` (`hermes-api-key`) nếu
+không mọi lượt sẽ 401. Hermes phải listen tại `127.0.0.1:8642` để khớp `BaseURL`.
 
 Để trỏ tới Hermes endpoint / key / model khác ở hiện tại, sửa
 `internal/hermes/constants.go` rồi build lại (việc cho phép cấu hình theo từng máy
 là phần làm sau).
+
+## 11. Switch backend lúc runtime
+
+Bạn không sửa tay `config.json`. Ba trigger — **MQTT** `agent_runtime.set`
+(`{"runtime":"hermes"}`), **HTTP** `POST /api/device/agent-runtime`, và section
+**web** Settings → *Runtime* — đều dồn vào một hàm,
+`device.Service.UpdateAgentRuntime` (`internal/device/service.go`). Nó validate
+runtime, lưu `config.agent_runtime`, rồi chạy switcher trong một transient unit
+systemd riêng (`systemd-run`, để cú restart os-server ở cuối không giết nó giữa
+chừng):
+
+```
+switch-runtime <new> <old>
+```
+
+`switch-runtime` **generic, không biết backend cụ thể** — nó được embed trong
+os-server (`internal/device/switch_runtime.sh` qua `go:embed`) và ghi ra
+`/usr/local/bin/switch-runtime` khi cần, nên được version + OTA chung với binary
+và **không cần đụng imager/setup.sh bao giờ**. Với backend đích `X` nó:
+
+1. phân giải tên unit của `X` (mặc định `X.service`, hoặc tên mà installer khai
+   báo trong `/usr/local/lib/os-runtimes/X/service` — hermes → `hermes-gateway`)
+   và đảm bảo nó tồn tại, nếu chưa thì chạy installer của `X` — ưu tiên bản embed
+   ở `/usr/local/lib/os-runtimes/X/install.sh`, không có thì
+   `curl ${RUNTIMES_BASE_URL}/X/install.sh | bash` (openclaw được bỏ qua —
+   `openclaw.service` đã bake bởi setup.sh);
+2. chạy hook tùy chọn `/usr/local/bin/runtime-X-presync` (của hermes sync `llm_*`,
+   theo §10);
+3. `systemctl enable --now <X-unit>` + `disable --now <old-unit>`;
+4. `systemctl restart os-server`, để `factory.go` resolve lại gateway.
+
+Xác nhận đã switch qua banner `AGENT BACKEND ACTIVE → …` mới + một lần poll
+`/health` khỏe trong log.
+
+**Thêm backend mới** (picoclaw, claudecode, …) vì vậy chỉ là một `install.sh`
+cạnh phần hiện thực của backend (`internal/<name>/install.sh`), `go:embed` +
+đăng ký vào `lib/runtimereg` từ `init()` của package (phải tạo `<name>.service`,
+tùy chọn drop `runtime-<name>-presync`), cộng một entry trong
+`domain.AgentRuntimes` để validate + dropdown web. Backend mới vốn đã cần một
+gateway client ở `internal/<name>` và một case trong `factory.go`, nên việc embed
+installer không thêm coupling mới — và không đụng imager, switcher, hay CDN.

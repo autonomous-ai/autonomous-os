@@ -81,7 +81,10 @@ try:
 except json.JSONDecodeError:
     data = {}
 devices = data.setdefault('devices', {})
-devices[sys.argv[1]] = {'version': sys.argv[2], 'url': sys.argv[3], 'updated_at': sys.argv[4]}
+entry = devices.get(sys.argv[1]) if isinstance(devices.get(sys.argv[1]), dict) else {}
+entry.update({'version': sys.argv[2], 'url': sys.argv[3], 'updated_at': sys.argv[4]})
+# preserve existing min_version (staged-rollout floor); bump it via promote-ota.sh
+devices[sys.argv[1]] = entry
 print(json.dumps(data, indent=2))
 " "$DEVICE_TYPE" "$new_version" "$DEVICE_URL" "$(date '+%Y-%m-%d %H:%M:%S %z')")
 

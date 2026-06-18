@@ -172,7 +172,11 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                         "output": input.output,
                     }
                 )
-                self._safe_response_create()
+                # Fire-and-forget tools (trigger_response=False) only record the
+                # result; they must NOT spawn a fresh response or the model would
+                # speak a second time and add a full round-trip of latency.
+                if input.trigger_response:
+                    self._safe_response_create()
 
     def _sync_commit(self) -> None:
         with self._conn_lock:

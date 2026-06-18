@@ -20,49 +20,26 @@ import subprocess
 import threading
 import time
 from collections import deque
-from datetime import datetime
 from typing import Optional
 
 import requests
 
-from hal import app_state as hal_app_state
 from hal import config as hal_config
-from hal.drivers.realtime.models import TextOutput as RTTextOutput
+from hal import presets
 from hal.drivers.realtime.enums import AgentGateway
-from hal.drivers.realtime.orchestrator import DelegateSignal, RealtimeOrchestrator
+from hal.drivers.realtime.orchestrator import RealtimeOrchestrator
 from hal.drivers.realtime.utils import pcm16_bytes_to_float32, resample_float32
+from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
 from hal.drivers.voice._internal.audio_recorder import ArecordStream
-from hal.drivers.voice._internal.config import (
-    BARGE_IN_BLOCK_MS,
-    BARGE_IN_ENABLED,
-    BARGE_IN_RMS_THRESHOLD,
-    BARGE_IN_TRIGGER_FRAMES,
-    CHANNELS,
-    DEFAULT_WAKE_WORDS,
-    ECHO_GATE_MAX_WAIT_S,
-    ECHO_GATE_WINDOW_S,
-    ECHO_RMS_FLOOR,
-    ENROLL_NUDGE_COOLDOWN_S,
-    FRAME_DURATION_MS,
-    MAX_SESSION_DURATION_S,
-    PRE_ROLL_FRAMES,
-    RMS_THRESHOLD,
-    SESSION_COOLDOWN_S,
-    SILENCE_TIMEOUT_S,
-    SILERO_MODEL_PATH,
-    SILERO_VAD_ENABLED,
-    SPEECH_HOLDOFF_S,
-    STT_KEEPALIVE,
-    STT_RATE,
-    WEBRTCVAD_AGGRESSIVENESS,
-    WEBRTCVAD_ENABLED,
-)
+from hal.drivers.voice._internal.realtime_turn import run_realtime_turn
 from hal.drivers.voice._internal.sensing_sender import SensingSender
+from hal.drivers.voice._internal.session_finalize import finalize_session
 from hal.drivers.voice._internal.speaker_decorate import SpeakerDecorator
+from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
 from hal.drivers.voice._internal.vad_filters import SileroVADFilter, WebRTCVADFilter
 from hal.drivers.voice.backchannel import Backchannel
-from hal.drivers.voice.stt_provider import STTProvider
+from hal.drivers.voice.stt import STTProvider
 
 logger = logging.getLogger("hal.voice")
 
@@ -99,6 +76,7 @@ class VoiceService:
         wake_words: Optional[list] = None,
         alsa_device: Optional[str] = None,
         enable_people_perception: bool = True,
+        enable_expression: bool = False,
     ):
         self._stt = stt_provider
         self._input_device = input_device
@@ -133,25 +111,25 @@ class VoiceService:
         # WebRTC VAD — fast C-based pre-filter (~0.1ms vs Silero ~20ms).
         # Enable via HAL_WEBRTCVAD_ENABLED=true in .env.
         self._webrtc_vad = (
-            WebRTCVADFilter(WEBRTCVAD_AGGRESSIVENESS, self._np)
-            if WEBRTCVAD_ENABLED
+            WebRTCVADFilter(voice_cfg.WEBRTCVAD_AGGRESSIVENESS, self._np)
+            if voice_cfg.WEBRTCVAD_ENABLED
             else None
         )
-        if not WEBRTCVAD_ENABLED:
+        if not voice_cfg.WEBRTCVAD_ENABLED:
             logger.info("WebRTC VAD disabled (HAL_WEBRTCVAD_ENABLED=false)")
 
         self._silero_vad = (
-            SileroVADFilter(SILERO_MODEL_PATH, self._np) if SILERO_VAD_ENABLED else None
+            SileroVADFilter(voice_cfg.SILERO_MODEL_PATH, self._np) if voice_cfg.SILERO_VAD_ENABLED else None
         )
-        if not SILERO_VAD_ENABLED:
+        if not voice_cfg.SILERO_VAD_ENABLED:
             logger.info("Silero VAD disabled via HAL_SILERO_ENABLED=false")
 
         # Speaker decoration (wake-word + speaker recognizer + SER). Speaker-ID and
         # SER (speech emotion) are voice people-perception — gated on the `audio`
         # capability (the mic), passed in via enable_people_perception.
         self._decorator = SpeakerDecorator(
-            wake_words=list(wake_words) if wake_words else list(DEFAULT_WAKE_WORDS),
-            nudge_cooldown_s=ENROLL_NUDGE_COOLDOWN_S,
+            wake_words=list(wake_words) if wake_words else list(voice_cfg.DEFAULT_WAKE_WORDS),
+            nudge_cooldown_s=voice_cfg.ENROLL_NUDGE_COOLDOWN_S,
             enable_people_perception=enable_people_perception,
         )
 
@@ -161,6 +139,7 @@ class VoiceService:
         # Realtime voice agent — parallel audio pipeline (Gemini Live / OpenAI Realtime).
         self._realtime = RealtimeOrchestrator(
             gateway=AgentGateway(hal_config.AGENT_GATEWAY),
+            enable_expression=enable_expression,
         )
 
         # Hook into TTS on_speak_end to feed spoken text back to the realtime agent.
@@ -191,6 +170,23 @@ class VoiceService:
     def set_wake_words(self, words: list) -> None:
         """Update wake word list at runtime (called when agent is renamed)."""
         self._decorator.set_wake_words(words)
+
+    @staticmethod
+    def _set_emotion_local(emotion: str) -> None:
+        """Set a device emotion by calling the HAL handler in-process.
+
+        VoiceService runs inside the HAL process, so we call the route handler
+        directly instead of an HTTP loopback to our own :5001/emotion — no
+        serialization, no network stack. (Cross-process calls to the os-server
+        on :5000 stay over HTTP — those are a different process.)
+        """
+        try:
+            from hal.models import EmotionRequest
+            from hal.routes.emotion import express_emotion
+
+            express_emotion(EmotionRequest(emotion=emotion))
+        except Exception as e:
+            logger.warning("emotion '%s' trigger failed: %s", emotion, e)
 
     @property
     def available(self) -> bool:
@@ -280,29 +276,29 @@ class VoiceService:
             try:
                 with sd.InputStream(
                     device=self._input_device,
-                    samplerate=STT_RATE,
-                    channels=CHANNELS,
+                    samplerate=voice_cfg.STT_RATE,
+                    channels=voice_cfg.CHANNELS,
                     dtype="int16",
                     blocksize=512,
                 ):
                     pass
                 logger.info(
                     "Audio device opened at %dHz natively (no resample needed)",
-                    STT_RATE,
+                    voice_cfg.STT_RATE,
                 )
-                return STT_RATE
+                return voice_cfg.STT_RATE
             except Exception:
                 logger.info(
                     "Audio device native rate: %dHz (will resample to %dHz for STT)",
                     native,
-                    STT_RATE,
+                    voice_cfg.STT_RATE,
                 )
                 return native
         except Exception as e:
             logger.warning(
-                "Could not detect device rate, defaulting to %dHz: %s", STT_RATE, e
+                "Could not detect device rate, defaulting to %dHz: %s", voice_cfg.STT_RATE, e
             )
-            return STT_RATE
+            return voice_cfg.STT_RATE
 
     # ------------------------------------------------------------------
     # VAD helpers — thin wrappers that fail-open when filter is None
@@ -348,7 +344,7 @@ class VoiceService:
             return
 
         barged_in = False
-        if BARGE_IN_ENABLED:
+        if voice_cfg.BARGE_IN_ENABLED:
             barged_in = self._monitor_barge_in()
         else:
             logger.info("TTS is speaking, pausing mic until done...")
@@ -362,46 +358,46 @@ class VoiceService:
             return
 
         # Adaptive RMS gate: wait for reverb/echo to decay instead of fixed sleep
-        logger.info("TTS done, waiting for reverb decay (RMS < %d)...", ECHO_RMS_FLOOR)
+        logger.info("TTS done, waiting for reverb decay (RMS < %d)...", voice_cfg.ECHO_RMS_FLOOR)
         np = self._np
-        device_rate = self._device_rate or STT_RATE
-        window_frames = int(device_rate * ECHO_GATE_WINDOW_S)
+        device_rate = self._device_rate or voice_cfg.STT_RATE
+        window_frames = int(device_rate * voice_cfg.ECHO_GATE_WINDOW_S)
         try:
             # Prefer arecord backend (same as recording loop) — avoids PortAudio rate errors
             if self._alsa_device is not None:
                 mic_ctx = ArecordStream(
                     alsa_device=self._alsa_device,
                     rate=device_rate,
-                    channels=CHANNELS,
+                    channels=voice_cfg.CHANNELS,
                     blocksize=window_frames,
                     np=np,
                 )
             else:
                 mic_ctx = self._sd.InputStream(
                     samplerate=device_rate,
-                    channels=CHANNELS,
+                    channels=voice_cfg.CHANNELS,
                     dtype="int16",
                     blocksize=window_frames,
                     device=self._input_device,
                 )
             elapsed = 0.0
             with mic_ctx as tmp_mic:
-                while elapsed < ECHO_GATE_MAX_WAIT_S and self._running:
+                while elapsed < voice_cfg.ECHO_GATE_MAX_WAIT_S and self._running:
                     data, overflowed = tmp_mic.read(window_frames)
                     if overflowed:
                         continue
                     measured = float(np.sqrt(np.mean(data.astype(np.float32) ** 2)))
-                    elapsed += ECHO_GATE_WINDOW_S
-                    if measured < ECHO_RMS_FLOOR:
+                    elapsed += voice_cfg.ECHO_GATE_WINDOW_S
+                    if measured < voice_cfg.ECHO_RMS_FLOOR:
                         logger.info(
                             "Reverb decayed (RMS=%.0f < %d) after %.2fs",
                             measured,
-                            ECHO_RMS_FLOOR,
+                            voice_cfg.ECHO_RMS_FLOOR,
                             elapsed,
                         )
                         return
             logger.info(
-                "Reverb gate timeout after %.1fs, resuming anyway", ECHO_GATE_MAX_WAIT_S
+                "Reverb gate timeout after %.1fs, resuming anyway", voice_cfg.ECHO_GATE_MAX_WAIT_S
             )
         except Exception as e:
             logger.warning("RMS gate failed, falling back to fixed delay: %s", e)
@@ -420,13 +416,13 @@ class VoiceService:
         """
         logger.info(
             "TTS speaking — barge-in monitor active (threshold=%d, trigger=%d × %dms blocks)",
-            BARGE_IN_RMS_THRESHOLD,
-            BARGE_IN_TRIGGER_FRAMES,
-            BARGE_IN_BLOCK_MS,
+            voice_cfg.BARGE_IN_RMS_THRESHOLD,
+            voice_cfg.BARGE_IN_TRIGGER_FRAMES,
+            voice_cfg.BARGE_IN_BLOCK_MS,
         )
         np = self._np
-        device_rate = self._device_rate or STT_RATE
-        frame_size = int(device_rate * BARGE_IN_BLOCK_MS / 1000)
+        device_rate = self._device_rate or voice_cfg.STT_RATE
+        frame_size = int(device_rate * voice_cfg.BARGE_IN_BLOCK_MS / 1000)
         consecutive = 0
         max_seen = 0.0  # diagnostic: peak RMS observed during this monitor session
         try:
@@ -434,14 +430,14 @@ class VoiceService:
                 mic_ctx = ArecordStream(
                     alsa_device=self._alsa_device,
                     rate=device_rate,
-                    channels=CHANNELS,
+                    channels=voice_cfg.CHANNELS,
                     blocksize=frame_size,
                     np=np,
                 )
             else:
                 mic_ctx = self._sd.InputStream(
                     samplerate=device_rate,
-                    channels=CHANNELS,
+                    channels=voice_cfg.CHANNELS,
                     dtype="int16",
                     blocksize=frame_size,
                     device=self._input_device,
@@ -455,13 +451,13 @@ class VoiceService:
                     measured = float(np.sqrt(np.mean(data.astype(np.float32) ** 2)))
                     if measured > max_seen:
                         max_seen = measured
-                    if measured > BARGE_IN_RMS_THRESHOLD:
+                    if measured > voice_cfg.BARGE_IN_RMS_THRESHOLD:
                         consecutive += 1
-                        if consecutive >= BARGE_IN_TRIGGER_FRAMES:
+                        if consecutive >= voice_cfg.BARGE_IN_TRIGGER_FRAMES:
                             logger.info(
                                 "BARGE-IN: RMS=%.0f > %d for %d frames → stop TTS",
                                 measured,
-                                BARGE_IN_RMS_THRESHOLD,
+                                voice_cfg.BARGE_IN_RMS_THRESHOLD,
                                 consecutive,
                             )
                             if self._tts is not None:
@@ -498,7 +494,7 @@ class VoiceService:
         # Auto-detection is safe only on Pi5 where SoundPerception is not using the mic.
         # Set HAL_AUDIO_INPUT_ALSA=plughw:X,0 in .env to opt in explicitly.
         if self._alsa_device is not None:
-            device_rate = STT_RATE  # plughw does SRC; record directly at STT rate
+            device_rate = voice_cfg.STT_RATE  # plughw does SRC; record directly at STT rate
             logger.info(
                 "Using arecord backend (%s) at %dHz", self._alsa_device, device_rate
             )
@@ -512,7 +508,7 @@ class VoiceService:
                 device_rate,
             )
 
-        frame_size = int(device_rate * FRAME_DURATION_MS / 1000)
+        frame_size = int(device_rate * voice_cfg.FRAME_DURATION_MS / 1000)
         self._device_rate = device_rate  # store for _wait_for_tts
 
         while self._running:
@@ -529,14 +525,14 @@ class VoiceService:
                     mic_ctx = ArecordStream(
                         alsa_device=self._alsa_device,
                         rate=device_rate,
-                        channels=CHANNELS,
+                        channels=voice_cfg.CHANNELS,
                         blocksize=frame_size,
                         np=self._np,
                     )
                 else:
                     mic_ctx = self._sd.InputStream(
                         samplerate=device_rate,
-                        channels=CHANNELS,
+                        channels=voice_cfg.CHANNELS,
                         dtype="int16",
                         blocksize=frame_size,
                         device=self._input_device,
@@ -544,7 +540,7 @@ class VoiceService:
                 with mic_ctx as mic:
                     logger.info(
                         "Listening for speech (RMS=%d, rate=%dHz, backend=%s)...",
-                        RMS_THRESHOLD,
+                        voice_cfg.RMS_THRESHOLD,
                         device_rate,
                         f"arecord({self._alsa_device})"
                         if self._alsa_device
@@ -564,11 +560,11 @@ class VoiceService:
         Breaks out when TTS starts speaking so _loop can close mic and reopen after."""
         speech_start = None
         speech_pre_buffer = []  # frames buffered during holdoff period
-        lookback = deque(maxlen=PRE_ROLL_FRAMES)
+        lookback = deque(maxlen=voice_cfg.PRE_ROLL_FRAMES)
 
         # Keepalive: pre-connect STT WS so it's ready before speech is detected.
         keepalive_session = None
-        if STT_KEEPALIVE:
+        if voice_cfg.STT_KEEPALIVE:
             keepalive_session = self._stt.create_session()
             if not keepalive_session.start(lambda text, is_final: None):
                 keepalive_session = None
@@ -596,14 +592,14 @@ class VoiceService:
 
             energy = rms(data, self._np)
 
-            if energy >= RMS_THRESHOLD and self._webrtcvad_is_speech(data, device_rate):
+            if energy >= voice_cfg.RMS_THRESHOLD and self._webrtcvad_is_speech(data, device_rate):
                 if speech_start is None:
                     speech_start = time.time()
                     speech_pre_buffer = [data]
                 else:
                     speech_pre_buffer.append(data)
                 # Wait for holdoff before connecting STT (avoid short noises)
-                if (time.time() - speech_start) >= SPEECH_HOLDOFF_S:
+                if (time.time() - speech_start) >= voice_cfg.SPEECH_HOLDOFF_S:
                     # Run Silero on accumulated buffer (needs multiple chunks for LSTM)
                     if self._silero_vad is not None:
                         combined = self._np.concatenate(speech_pre_buffer)
@@ -621,11 +617,11 @@ class VoiceService:
                         "Speech detected (RMS=%.0f) — pre-roll=%d frames (~%dms) + holdoff=%d frames",
                         energy,
                         len(history),
-                        len(history) * FRAME_DURATION_MS,
+                        len(history) * voice_cfg.FRAME_DURATION_MS,
                         buffered,
                     )
                     speech_pre_buffer = [
-                        resample_to_stt(f, device_rate, STT_RATE, self._np)
+                        resample_to_stt(f, device_rate, voice_cfg.STT_RATE, self._np)
                         for f in all_frames
                     ]
                     self._stream_session(
@@ -643,9 +639,9 @@ class VoiceService:
                     self._silero_reset_state()
                     logger.info("VAD resumed — mic active, waiting for next speech")
                     # Cooldown after session to let resources clean up
-                    time.sleep(SESSION_COOLDOWN_S)
+                    time.sleep(voice_cfg.SESSION_COOLDOWN_S)
                     # Pre-connect next session immediately
-                    if STT_KEEPALIVE and self._running and not self._tts_is_speaking():
+                    if voice_cfg.STT_KEEPALIVE and self._running and not self._tts_is_speaking():
                         keepalive_session = self._stt.create_session()
                         if not keepalive_session.start(lambda text, is_final: None):
                             keepalive_session = None
@@ -656,7 +652,7 @@ class VoiceService:
             else:
                 speech_start = None
                 speech_pre_buffer = []
-                if energy >= RMS_THRESHOLD:
+                if energy >= voice_cfg.RMS_THRESHOLD:
                     logger.debug(
                         "VAD: RMS=%.0f above threshold but Silero rejected — not speech",
                         energy,
@@ -712,14 +708,7 @@ class VoiceService:
                 self._backchannel.on_partial(text)
                 if not listening_emotion_sent[0]:
                     listening_emotion_sent[0] = True
-                    try:
-                        requests.post(
-                            "http://127.0.0.1:5001/emotion",
-                            json={"emotion": "listening"},
-                            timeout=0.3,
-                        )
-                    except Exception as e:
-                        logger.warning("listening emotion trigger failed: %s", e)
+                    self._set_emotion_local(presets.EMO_LISTENING)
                 return
             # Accumulate final segments — don't send yet, wait for session close.
             # Flux model fires multiple EndOfTurn events for natural pauses within
@@ -763,7 +752,7 @@ class VoiceService:
                 data, overflowed = mic.read(frame_size)
                 if not overflowed:
                     pre_buffer.append(
-                        resample_to_stt(data, device_rate, STT_RATE, self._np)
+                        resample_to_stt(data, device_rate, voice_cfg.STT_RATE, self._np)
                     )
 
             if not connect_ok[0]:
@@ -775,7 +764,7 @@ class VoiceService:
                 logger.info(
                     "Session FILL (pre-flush) — added %d frames (~%.0fms) to buffer",
                     len(all_pre),
-                    len(all_pre) * FRAME_DURATION_MS,
+                    len(all_pre) * voice_cfg.FRAME_DURATION_MS,
                 )
                 for frame in all_pre:
                     stt_session.send_audio(frame)
@@ -784,7 +773,7 @@ class VoiceService:
                     if hal_config.REALTIME_ENABLED and self._realtime.available:
                         audio_f32 = pcm16_bytes_to_float32(frame)
                         audio_f32 = resample_float32(
-                            audio_f32, STT_RATE, self._realtime.sample_rate
+                            audio_f32, voice_cfg.STT_RATE, self._realtime.sample_rate
                         )
                         self._realtime.append_audio(audio_f32)
                         rt_audio_buffer.append(audio_f32)
@@ -818,10 +807,10 @@ class VoiceService:
                     break
 
                 # Guard against zombie sessions
-                if (time.time() - session_start) > MAX_SESSION_DURATION_S:
+                if (time.time() - session_start) > voice_cfg.MAX_SESSION_DURATION_S:
                     logger.warning(
                         "STT session exceeded %ds, force-closing",
-                        MAX_SESSION_DURATION_S,
+                        voice_cfg.MAX_SESSION_DURATION_S,
                     )
                     break
 
@@ -829,7 +818,7 @@ class VoiceService:
                 if overflowed:
                     continue
 
-                resampled = resample_to_stt(data, device_rate, STT_RATE, self._np)
+                resampled = resample_to_stt(data, device_rate, voice_cfg.STT_RATE, self._np)
                 try:
                     stt_session.send_audio(resampled)
                 except Exception as e:
@@ -841,16 +830,16 @@ class VoiceService:
                 if hal_config.REALTIME_ENABLED and self._realtime.available:
                     audio_f32 = pcm16_bytes_to_float32(resampled)
                     audio_f32 = resample_float32(
-                        audio_f32, STT_RATE, self._realtime.sample_rate
+                        audio_f32, voice_cfg.STT_RATE, self._realtime.sample_rate
                     )
                     self._realtime.append_audio(audio_f32)
                     rt_audio_buffer.append(audio_f32)
 
                 energy = rms(data, self._np)
-                if energy >= RMS_THRESHOLD:
+                if energy >= voice_cfg.RMS_THRESHOLD:
                     last_speech_time = time.time()
                     last_speech_idx = len(audio_buffer) - 1
-                elif (time.time() - last_speech_time) > SILENCE_TIMEOUT_S:
+                elif (time.time() - last_speech_time) > voice_cfg.SILENCE_TIMEOUT_S:
                     logger.info("Silence detected, disconnecting STT")
                     break
         except Exception as e:
@@ -859,244 +848,29 @@ class VoiceService:
             self._backchannel.reset()
             self._listening = False
             stt_session.close()
-            # Combine all final segments + any trailing partial into one transcript.
-            if longest_partial[0]:
-                final_segments.append(longest_partial[0])
-            combined = " ".join(final_segments).strip()
-
-            # Snapshot the FULL (untrimmed) buffer for SER before trimming.
-            ser_audio_buffer = list(audio_buffer)
-
-            # Remove trailing silence from audio_buffer for speaker recognition.
-            # Leaves a 200ms tail for word endings; STT buffer unaffected.
-            if last_speech_idx >= 0:
-                tail_frames = int(200 / FRAME_DURATION_MS) + 1
-                trim_end = min(last_speech_idx + tail_frames + 1, len(audio_buffer))
-                dropped = len(audio_buffer) - trim_end
-                if dropped > 0:
-                    del audio_buffer[trim_end:]
-                    logger.info(
-                        "Session TRIM — dropped %d trailing-silence frames (~%.2fs) "
-                        "[speaker-recog buffer only; SER keeps full %d frames]",
-                        dropped,
-                        dropped * FRAME_DURATION_MS / 1000,
-                        len(ser_audio_buffer),
-                    )
-
-            # Final snapshot of the buffer for traceability before it goes
-            # out of scope. 1 session = 1 speaking turn = this many frames.
-            buf_frames = len(audio_buffer)
-            buf_bytes = sum(len(b) for b in audio_buffer)
-            buf_duration = buf_bytes / (STT_RATE * 2)
-            logger.info(
-                "Session END — buffer frames=%d bytes=%d duration=%.2fs transcript=%r",
-                buf_frames,
-                buf_bytes,
-                buf_duration,
-                combined or "(empty)",
+            combined, ser_audio_buffer, buf_duration = finalize_session(
+                audio_buffer, longest_partial, final_segments, last_speech_idx
             )
 
             # --- Realtime voice agent (runs first, before speaker ID / OS server) ---
             # Runs even if STT transcript is empty — the model has the raw audio.
-            rt_delegated = False
-            rt_handled = False
-            rt_transcript = ""
-            # Noise/false-trigger guard: a session with no STT transcript AND only
-            # a sliver of audio (just the VAD pre-roll, no sustained speech) is not
-            # worth a model turn — committing it makes the model answer silence,
-            # which then desyncs onto a later real turn. A real audio-only turn runs
-            # longer than the threshold, so it still commits.
-            rt_noise_turn = (
-                not combined
-                and buf_duration < hal_config.REALTIME_MIN_COMMIT_DURATION_S
+            rt = run_realtime_turn(
+                self._realtime,
+                self._tts,
+                self.strip_rt_markers,
+                combined,
+                rt_audio_buffer,
+                buf_duration,
             )
-            if (
-                hal_config.REALTIME_ENABLED
-                and self._realtime.available
-                and rt_audio_buffer
-                and not rt_noise_turn
-            ):
-                logger.info(
-                    "[realtime] Entering realtime flow — committing audio (stt=%r)",
-                    combined[:100] if combined else "(empty)",
-                )
-                try:
-                    # Inject per-turn context before committing
-                    turn_ctx: list[str] = [
-                        f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S %A')}",
-                    ]
-                    try:
-                        if hal_app_state.sensing_service:
-                            cu: str = (
-                                hal_app_state.sensing_service._perception_orchestrator.current_user
-                                or ""
-                            )
-                            if cu:
-                                turn_ctx.append(f"Current user: {cu}")
-                    except Exception:
-                        pass
-                    self._realtime.send_text("[TURN CONTEXT] " + " | ".join(turn_ctx))
 
-                    # Drop any output still queued from a previous turn so this
-                    # turn only reads its OWN response. Provider replies arrive
-                    # async and can lag the local-VAD cadence; without this, a
-                    # noise blip reads a stale prior reply in milliseconds and
-                    # speaks it ("Moon talks on its own" + double TTS).
-                    self._realtime.flush_output()
-                    self._realtime.commit_audio()
-                    logger.info("[realtime] Audio committed — streaming output")
-                    text_parts: list[str] = []
-                    sentence_buf: str = ""
-                    first_sentence_sent: bool = False
-                    SENTENCE_ENDS = (".", "!", "?", "。", "！", "？")
-
-                    rt_delegate_msg: str = ""
-                    for output in self._realtime.stream_output():
-                        if isinstance(output, DelegateSignal):
-                            rt_delegated = True
-                            rt_delegate_msg = output.message
-                            break
-                        if isinstance(output, RTTextOutput):
-                            text_parts.append(output.text)
-                            sentence_buf += output.text
-                            # Flush complete sentences to TTS as they arrive
-                            if self._tts is not None and sentence_buf.rstrip().endswith(
-                                SENTENCE_ENDS
-                            ):
-                                sentence: str = self.strip_rt_markers(sentence_buf)
-                                if sentence:
-                                    if not first_sentence_sent:
-                                        logger.info(
-                                            "[realtime] First sentence → speak: %r",
-                                            sentence[:80],
-                                        )
-                                        self._tts.speak(sentence)
-                                        first_sentence_sent = True
-                                    else:
-                                        logger.info(
-                                            "[realtime] Next sentence → speak_queue: %r",
-                                            sentence[:80],
-                                        )
-                                        self._tts.speak_queue(sentence)
-                                sentence_buf = ""
-
-                    rt_transcript = self.strip_rt_markers("".join(text_parts))
-
-                    if rt_delegated:
-                        logger.info(
-                            "[realtime] Model delegated → will forward to OS server"
-                        )
-                    else:
-                        # Flush any remaining text that didn't end with a sentence boundary
-                        remaining: str = self.strip_rt_markers(sentence_buf)
-                        if remaining and self._tts is not None:
-                            if not first_sentence_sent:
-                                logger.info(
-                                    "[realtime] Final fragment → speak: %r",
-                                    remaining[:80],
-                                )
-                                self._tts.speak(remaining)
-                                first_sentence_sent = True
-                            else:
-                                logger.info(
-                                    "[realtime] Final fragment → speak_queue: %r",
-                                    remaining[:80],
-                                )
-                                self._tts.speak_queue(remaining)
-                        # Only claim the turn as HANDLED if the model actually
-                        # produced a spoken reply. An empty result — e.g.
-                        # receive() timed out with no output — must NOT be reported
-                        # as handled: that sends [HANDLED] with an empty [REPLY],
-                        # OpenClaw's input-branching reads it as "already answered"
-                        # and stays silent, so the user hears nothing from anyone.
-                        # Leaving rt_handled False (rt_delegated also False) falls
-                        # through to the normal forward below so the main agent answers.
-                        if first_sentence_sent or rt_transcript:
-                            rt_handled = True
-                            # Label this `agent_reply`, not `transcript`: it is what
-                            # Moon SAID, not what the user said. Elsewhere `transcript`
-                            # means the user's STT (Session END / STT final), so using
-                            # the same word for the agent's output read as role-reversed.
-                            logger.info(
-                                "[realtime] Chit-chat complete — agent_reply=%r",
-                                rt_transcript[:200] if rt_transcript else "(empty)",
-                            )
-                            # Save turn to realtime memory
-                            if combined or rt_transcript:
-                                self._realtime.save_turn(
-                                    user_text=combined or "(audio only)",
-                                    agent_text=rt_transcript or "(audio only)",
-                                )
-                        else:
-                            # No spoken output from the realtime agent (empty /
-                            # timeout). Do NOT claim a forward here — whether the
-                            # turn actually reaches the OS server is decided below
-                            # by `if combined:`. A pure noise turn with empty STT
-                            # is correctly dropped (nothing to forward).
-                            logger.info(
-                                "[realtime] No realtime output (empty / timeout) — "
-                                "turn falls back to OS server only if STT produced a transcript"
-                            )
-                except Exception as e:
-                    logger.warning(
-                        "[realtime] Processing failed: %s — will forward to OS server",
-                        e,
-                    )
-                    rt_delegated = True  # fall through to OS server on error
-            elif hal_config.REALTIME_ENABLED and rt_noise_turn:
-                logger.info(
-                    "[realtime] Skipping commit — noise/false-trigger turn "
-                    "(dur=%.2fs < %.2fs, empty STT)",
-                    buf_duration,
-                    hal_config.REALTIME_MIN_COMMIT_DURATION_S,
-                )
-            elif hal_config.REALTIME_ENABLED:
-                logger.warning(
-                    "[realtime] Enabled but agent not available — falling back to OS server"
-                )
-
-            # --- Speaker recognition + OS server send ---
-            from hal.drivers.voice.speech_emotion.constants import UNKNOWN_USER_LABEL
-
-            final_text, event_type = self._decorator.resolve_wake_word_split(combined)
-            user = UNKNOWN_USER_LABEL
-
-            if combined:
-                final_msg, se_user = self._decorator.identify_and_decorate(
-                    final_text, audio_buffer
-                )
-                user = se_user if se_user else UNKNOWN_USER_LABEL
-                logger.info("Final message → OS server (%s): %r", event_type, final_msg)
-
-                if rt_handled:
-                    # Realtime already spoke — send as "voice_handled" to skip dead-air filler.
-                    # Include skill hint so OpenClaw reads input-branching and responds NO_REPLY.
-                    self._sensing_sender.send(
-                        f"[skills: input-branching]\n[HANDLED] {final_msg}\n[REPLY] {rt_transcript}",
-                        event_type="voice_agent_handled",
-                        skip_echo=True,
-                    )
-                elif rt_delegated:
-                    # Delegated — send voice agent's summary + STT transcript to the OS server
-                    if rt_delegate_msg:
-                        sensing_msg: str = f"[voice-instruction] {rt_delegate_msg}\n[transcript] {final_msg}"
-                    else:
-                        sensing_msg = final_msg
-                    logger.info(
-                        "[realtime] Delegated with message: %r",
-                        sensing_msg[:100] if sensing_msg else "",
-                    )
-                    if sensing_msg:
-                        self._sensing_sender.send(sensing_msg, event_type=event_type)
-                else:
-                    # Realtime not active, OR it was active but produced no output
-                    # (e.g. receive() timed out) — send to the OS server normally so
-                    # the main agent handles the turn instead of nobody answering.
-                    self._sensing_sender.send(final_msg, event_type=event_type)
-
-            # 2. Submit SER — uses the UNTRIMMED snapshot so laughter / sighs
-            self._decorator.submit_speech_emotion_from_session(
-                ser_audio_buffer, user=user
+            # --- Speaker recognition + OS server send + SER ---
+            dispatch_turn(
+                self._decorator,
+                self._sensing_sender,
+                combined,
+                audio_buffer,
+                ser_audio_buffer,
+                rt,
             )
 
             # Clear listening LED
@@ -1120,12 +894,8 @@ class VoiceService:
                     try:
                         from hal import app_state
 
-                        if app_state._current_emotion == "listening":
-                            requests.post(
-                                "http://127.0.0.1:5001/emotion",
-                                json={"emotion": "idle"},
-                                timeout=0.3,
-                            )
+                        if app_state._current_emotion == presets.EMO_LISTENING:
+                            self._set_emotion_local(presets.EMO_IDLE)
                     except Exception as e:
                         logger.warning("listening idle-reset failed: %s", e)
 

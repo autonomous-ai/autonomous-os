@@ -4,9 +4,9 @@ import logging
 import re
 from typing import Iterator, Optional
 
-from hal.drivers.voice.tts_backend import TTSBackend, STREAM_CHUNK_SIZE
+from hal.drivers.voice.tts.backend import TTSBackend, STREAM_CHUNK_SIZE
 
-logger = logging.getLogger("hal.voice.tts_backend")
+logger = logging.getLogger("hal.voice.tts")
 
 
 def _ensure_openai_v1(base_url: str) -> str:

@@ -3,6 +3,7 @@ package device
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os/exec"
@@ -41,6 +42,11 @@ const (
 	SetupPhaseFailed     = "failed"
 )
 
+// apSetupIP is wlan0's static address while the device runs the provisioning
+// AP (see scripts/provision/setup-ap.sh). The early LAN-IP poll skips it so it
+// only ever publishes the STA-side address from the home router's DHCP.
+const apSetupIP = "192.168.100.1"
+
 type setupState struct {
 	mu    sync.RWMutex
 	phase string
@@ -61,6 +67,16 @@ func (st *setupState) set(phase, ip, errMsg string) {
 	st.error = errMsg
 	st.mu.Unlock()
 }
+
+// ErrSlackCredentialsMissing is returned by RefreshChannelConfig when the
+// device's config.json has no slack bot token — refresh cannot synthesize it, so
+// the caller must run /api/device/setup or add_channel first.
+var ErrSlackCredentialsMissing = errors.New("slack_credentials_missing")
+
+// ErrChannelNotSupported is returned by RefreshChannelConfig for channels that
+// cannot be refreshed in a config-only way (or unknown channel names). Today
+// only slack is wired into the refresh path.
+var ErrChannelNotSupported = errors.New("channel_not_supported")
 
 type Service struct {
 	config         *config.Config
@@ -102,7 +118,41 @@ func (s *Service) Setup(data domain.SetupRequest) error {
 	data.STTBaseURL = normalizeBaseURL(data.STTBaseURL)
 	data.TTSBaseURL = normalizeBaseURL(data.TTSBaseURL)
 	s.setupState.set(SetupPhaseConnecting, "", "")
+
+	// Early LAN-IP capture: SetupNetwork() blocks up to 60s waiting for
+	// internet, but the AP (192.168.100.1) tears down within ~2s of the
+	// AP→STA switch — so by the time SetupNetwork returns and we'd normally
+	// read the IP, the web client can no longer poll us over the AP. This
+	// goroutine polls wlan0 while SetupNetwork runs and publishes the new STA
+	// IP into setupState the instant it appears (before internet is even up),
+	// giving the FE the largest possible window to read lan_ip during the
+	// brief overlap where it's still polling. Phase stays "connecting" — a
+	// LAN IP alone doesn't prove the join fully succeeded; SetupNetwork's
+	// return flips it to connected/failed below.
+	ipPollDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ipPollDone:
+				return
+			case <-ticker.C:
+				ip, ipErr := s.networkService.GetCurrentIP()
+				// Ignore the AP's own static IP — we want the STA-side
+				// address handed out by the home router's DHCP.
+				if ipErr == nil && ip != "" && ip != apSetupIP {
+					if _, prevIP, _ := s.setupState.snapshot(); prevIP != ip {
+						s.setupState.set(SetupPhaseConnecting, ip, "")
+						slog.Info("setup: early LAN IP captured", "component", "device", "lan_ip", ip)
+					}
+				}
+			}
+		}
+	}()
+
 	result, err := s.networkService.SetupNetwork(data.SSID, data.Password)
+	close(ipPollDone)
 	if err != nil {
 		s.setupState.set(SetupPhaseFailed, "", err.Error())
 		return fmt.Errorf("setup network: %w", err)
@@ -113,7 +163,15 @@ func (s *Service) Setup(data domain.SetupRequest) error {
 	}
 	// Capture the LAN IP immediately after WiFi associates so the web
 	// client polling /api/setup/status can read it before AP shuts down.
-	if ip, ipErr := s.networkService.GetCurrentIP(); ipErr == nil && ip != "" {
+	// Re-reading here can fail transiently while the AP tears down — in that
+	// case keep whatever the early-capture goroutine already published rather
+	// than clobbering a good IP with an empty string.
+	ip, ipErr := s.networkService.GetCurrentIP()
+	if ipErr != nil || ip == "" || ip == apSetupIP {
+		_, prevIP, _ := s.setupState.snapshot()
+		ip = prevIP
+	}
+	if ip != "" {
 		s.setupState.set(SetupPhaseConnected, ip, "")
 		slog.Info("setup: WiFi associated", "component", "device", "lan_ip", ip)
 	} else {
@@ -263,6 +321,47 @@ func (s *Service) AddChannel(ctx context.Context, data domain.AddChannelRequest)
 	return s.agentGateway.PairWhatsapp(ctx), nil
 }
 
+// RefreshChannelConfig re-applies the canonical channel config block to
+// openclaw.json on the device. Triggered by the channel.refresh_config MQTT kind
+// to fix older devices whose config predates schema additions (e.g. the
+// socketMode block, object-form streaming, dmPolicy).
+//
+// Reads credentials from config.json (set previously by /api/device/setup or
+// add_channel) — refresh does NOT carry tokens over MQTT. Delegates the
+// write+restart to AgentGateway.RefreshChannelConfig, the separate
+// non-AddChannel code path so the two flows can diverge cleanly.
+//
+// Returns the detected runtime version string ("Y.M.P", empty when undetected)
+// and sentinel errors the MQTT handler maps to stable status codes:
+//   - ErrSlackCredentialsMissing — config.json has no slack bot token
+//   - ErrChannelNotSupported     — unknown channel or one not wired into refresh
+func (s *Service) RefreshChannelConfig(ctx context.Context, channel string) (string, error) {
+	switch channel {
+	case domain.ChannelSlack:
+		// Bot token is the one mandatory credential for both transports.
+		// AppToken is socket-mode-only — refresh succeeds without it when
+		// migrating to HTTP mode (signing_secret comes from LLMAPIKey instead,
+		// which the device always has).
+		if s.config.SlackBotToken == "" {
+			return "", ErrSlackCredentialsMissing
+		}
+		// Refresh defaults to HTTP mode: use the device's llm_api_key (LLMAPIKey
+		// on disk) as the signingSecret so it matches what the backend proxy
+		// re-signs with. Socket-mode installs flip to HTTP the first time the
+		// backend sends channel.refresh_config — no per-device add_channel push.
+		return s.agentGateway.RefreshChannelConfig(ctx, domain.RefreshChannelRequest{
+			Channel:            channel,
+			SlackBotToken:      s.config.SlackBotToken,
+			SlackAppToken:      s.config.SlackAppToken, // ignored in http mode, kept for back-compat
+			SlackUserID:        s.config.SlackUserID,
+			SlackMode:          "http",
+			SlackSigningSecret: s.config.LLMAPIKey,
+		})
+	default:
+		return "", ErrChannelNotSupported
+	}
+}
+
 // PairWhatsapp re-runs the WhatsApp Linked Devices pairing flow without
 // re-bootstrapping the channel config. Used by the whatsapp_pair MQTT command
 // for re-pair after session loss.
@@ -373,6 +472,15 @@ func (s *Service) GetPublicConfig() domain.ConfigPublicResponse {
 		HasNetworkPassword:  s.config.NetworkPassword != "",
 		HasMQTTPassword:     s.config.MQTTPassword != "",
 		HasAdminPassword:    s.config.AdminPasswordHash != "",
+		Realtime: domain.RealtimePublic{
+			Enabled:   s.config.RealtimeEnabled(),
+			Provider:  s.config.RealtimeProvider(),
+			Model:     s.config.RealtimeModel(),
+			Voice:     s.config.RealtimeVoice(),
+			Reasoning: s.config.RealtimeReasoning(),
+			BaseURL:   s.config.RealtimeBaseURL(),
+			HasAPIKey: s.config.Realtime != nil && s.config.Realtime.APIKey != "",
+		},
 	}
 }
 
@@ -402,6 +510,14 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 		adminHash = string(hash)
 	}
 
+	// Validate the realtime payload before the lock so an invalid request fails
+	// without a partial save (same as bcrypt above).
+	if data.Realtime != nil {
+		if err := s.validateRealtimeSet(*data.Realtime); err != nil {
+			return err
+		}
+	}
+
 	// All field mutations happen inside WithLockSave so they are marshalled
 	// atomically — the watcher goroutine's SetLLMModel cannot interleave with
 	// a partial config snapshot. Side-effect flags are captured inside the
@@ -413,11 +529,14 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 		wifiChanged     bool
 		langChanged     bool
 		voiceChanged    bool
+		realtimeChanged bool
+		channelChanged  bool
 		newModel        string
 		newSSID         string
 		newPassword     string
 		prevLang        string
 		newLang         string
+		chanReq         domain.AddChannelRequest
 	)
 	if err := s.config.WithLockSave(func(c *config.Config) {
 		prevModel := c.LLMModel
@@ -434,6 +553,17 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 		prevTTSBaseURL := c.TTSBaseURL
 		prevTTSProvider := c.TTSProvider
 		prevTTSVoice := c.TTSVoice
+		// Snapshot channel fields so we can tell whether the messaging channel /
+		// its tokens actually changed and need re-pushing into the gateway.
+		prevChannel := c.Channel
+		prevTelegramBotToken := c.TelegramBotToken
+		prevTelegramUserID := c.TelegramUserID
+		prevSlackBotToken := c.SlackBotToken
+		prevSlackAppToken := c.SlackAppToken
+		prevSlackUserID := c.SlackUserID
+		prevDiscordBotToken := c.DiscordBotToken
+		prevDiscordGuildID := c.DiscordGuildID
+		prevDiscordUserID := c.DiscordUserID
 
 		if data.LLMAPIKey != "" {
 			c.LLMAPIKey = data.LLMAPIKey
@@ -485,6 +615,11 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 		}
 		if data.TTSVoice != "" {
 			c.TTSVoice = data.TTSVoice
+		}
+		// Realtime block (validated above the lock). Sent = apply + restart hal.
+		if data.Realtime != nil {
+			applyRealtimeSet(c, *data.Realtime)
+			realtimeChanged = true
 		}
 		if data.DeviceID != "" {
 			c.DeviceID = data.DeviceID
@@ -570,6 +705,19 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 			c.TTSBaseURL != prevTTSBaseURL ||
 			c.TTSProvider != prevTTSProvider ||
 			c.TTSVoice != prevTTSVoice
+
+		channelChanged = c.Channel != prevChannel ||
+			c.TelegramBotToken != prevTelegramBotToken || c.TelegramUserID != prevTelegramUserID ||
+			c.SlackBotToken != prevSlackBotToken || c.SlackAppToken != prevSlackAppToken || c.SlackUserID != prevSlackUserID ||
+			c.DiscordBotToken != prevDiscordBotToken || c.DiscordGuildID != prevDiscordGuildID || c.DiscordUserID != prevDiscordUserID
+		// Build the request from the post-save config (full current values, since
+		// PATCH semantics mean a token the operator didn't touch keeps its value).
+		chanReq = domain.AddChannelRequest{
+			Channel:          c.Channel,
+			TelegramBotToken: c.TelegramBotToken, TelegramUserID: c.TelegramUserID,
+			SlackBotToken: c.SlackBotToken, SlackAppToken: c.SlackAppToken, SlackUserID: c.SlackUserID,
+			DiscordBotToken: c.DiscordBotToken, DiscordGuildID: c.DiscordGuildID, DiscordUserID: c.DiscordUserID,
+		}
 	}); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
@@ -579,6 +727,21 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 			slog.Info("reconnecting to new WiFi", "component", "device", "ssid", newSSID)
 			if _, err := s.networkService.SetupNetwork(newSSID, newPassword); err != nil {
 				slog.Error("WiFi reconnect failed", "component", "device", "error", err)
+			}
+		}()
+	}
+	// Channel/token edits via the Settings form only land in config.json, but the
+	// gateway keeps messaging tokens in its OWN config (written by AddChannel:
+	// `openclaw channels add` + plugin enable) and reads from there first. So a
+	// save — even a gateway restart — won't apply them; re-run AddChannel to push
+	// the change into the gateway. WhatsApp needs interactive QR pairing (MQTT
+	// add_channel only), so it is excluded here.
+	if channelChanged && chanReq.Channel != domain.ChannelWhatsapp {
+		go func() {
+			if _, err := s.AddChannel(context.Background(), chanReq); err != nil {
+				slog.Error("apply channel change to gateway failed", "component", "device", "channel", chanReq.Channel, "error", err)
+			} else {
+				slog.Info("channel change applied to gateway", "component", "device", "channel", chanReq.Channel)
 			}
 		}()
 	}
@@ -619,7 +782,7 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 	// Restart hal only when a field it reads at boot actually changed.
 	// stt_language is covered by langChanged (hal reads it via stt_language /
 	// derived stt_model). Wifi/channel/MQTT/admin saves skip the restart.
-	if voiceChanged || langChanged {
+	if voiceChanged || langChanged || realtimeChanged {
 		s.RePushVoiceConfig()
 	}
 	return nil
@@ -667,6 +830,186 @@ func (s *Service) RePushVoiceConfig() {
 			slog.Info("hal restarted for TTS config", "component", "device", "voice", s.config.TTSVoice, "provider", s.config.TTSProvider)
 		}
 	}()
+}
+
+// validateRealtimeSet checks a realtime payload before any write: the provider
+// selector, and (when per-provider knobs are present) the target provider's
+// voice/reasoning. The target is the provider being set, or the current one when
+// `provider` is omitted. Returns a descriptive error; nothing is written.
+func (s *Service) validateRealtimeSet(d domain.RealtimeSetData) error {
+	if err := config.ValidateRealtimeProvider(d.Provider); err != nil {
+		return err
+	}
+	if d.Model != "" || d.Voice != "" || d.Reasoning != "" {
+		target := strings.TrimSpace(d.Provider)
+		if target == "" {
+			target = s.config.RealtimeProvider() // current resolved provider
+		}
+		if err := config.ValidateRealtimeKnobs(target, d.Voice, d.Reasoning); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// applyRealtimeSet mutates the `realtime` block in c per the payload. Caller must
+// have run validateRealtimeSet first; this only writes. Empty/omitted fields leave
+// the current value unchanged; per-provider knobs land in the active provider's
+// sub-object. Must run inside WithLockSave.
+func applyRealtimeSet(c *config.Config, d domain.RealtimeSetData) {
+	if c.Realtime == nil {
+		c.Realtime = config.DefaultRealtimeConfig()
+	}
+	rt := c.Realtime
+	if d.Enabled != nil {
+		rt.Enabled = d.Enabled
+	}
+	if d.Provider != "" {
+		rt.Provider = strings.ToLower(strings.TrimSpace(d.Provider))
+	}
+	if d.APIKey != "" {
+		rt.APIKey = d.APIKey
+	}
+	if d.BaseURL != "" {
+		rt.BaseURL = d.BaseURL
+	}
+	if d.Model == "" && d.Voice == "" && d.Reasoning == "" {
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(rt.Provider)) {
+	case "gemini":
+		if rt.Gemini == nil {
+			rt.Gemini = &config.GeminiRealtime{}
+		}
+		if d.Model != "" {
+			rt.Gemini.Model = d.Model
+		}
+		if d.Voice != "" {
+			rt.Gemini.Voice = d.Voice
+		}
+		if d.Reasoning != "" {
+			rt.Gemini.ThinkingLevel = d.Reasoning
+		}
+	case "openai":
+		if rt.OpenAI == nil {
+			rt.OpenAI = &config.OpenAIRealtime{}
+		}
+		if d.Model != "" {
+			rt.OpenAI.Model = d.Model
+		}
+		if d.Voice != "" {
+			rt.OpenAI.Voice = d.Voice
+		}
+		if d.Reasoning != "" {
+			rt.OpenAI.ReasoningEffort = d.Reasoning
+		}
+	}
+}
+
+// UpdateRealtimeConfig applies a realtime payload (MQTT realtime.set or the HTTP
+// `realtime` field) to config.json under the config lock, then restarts hal so it
+// reads the new block (HAL reads config.json at import).
+func (s *Service) UpdateRealtimeConfig(d domain.RealtimeSetData) error {
+	if err := s.validateRealtimeSet(d); err != nil {
+		return err
+	}
+	if err := s.config.WithLockSave(func(c *config.Config) {
+		applyRealtimeSet(c, d)
+	}); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+	slog.Info("realtime config updated", "component", "device",
+		"provider", s.config.RealtimeProvider(), "enabled", s.config.RealtimeEnabled())
+	s.RePushRealtimeConfig()
+	return nil
+}
+
+// RePushRealtimeConfig restarts hal so it picks up the new realtime block from
+// config.json (HAL reads it at import).
+func (s *Service) RePushRealtimeConfig() {
+	go func() {
+		slog.Info("restarting hal for realtime config change", "component", "device", "provider", s.config.RealtimeProvider())
+		out, err := exec.Command("systemctl", "restart", "hal").CombinedOutput()
+		if err != nil {
+			slog.Warn("hal restart failed", "component", "device", "error", err, "output", string(out))
+		} else {
+			slog.Info("hal restarted for realtime config", "component", "device", "provider", s.config.RealtimeProvider())
+		}
+	}()
+}
+
+// CurrentAgentRuntime returns the effective agentic backend, resolved the same
+// way as internal/agent/factory.go: config.agent_runtime, else the device's
+// DEVICE.md gateway.default, else openclaw. Used by GET /api/device/agent-runtime
+// so the web settings page shows what is actually running.
+func (s *Service) CurrentAgentRuntime() string {
+	if r := strings.ToLower(strings.TrimSpace(s.config.AgentRuntime)); r != "" {
+		return r
+	}
+	if g := GatewayDefault(s.config.DeviceTypeOrDefault()); g != "" {
+		return strings.ToLower(strings.TrimSpace(g))
+	}
+	return domain.AgentRuntimeOpenClaw
+}
+
+// UpdateAgentRuntime swaps the agentic backend (openclaw ⇄ hermes). It persists
+// config.agent_runtime, then spawns switch-runtime to do the systemd toggle +
+// os-server restart. Shared by the MQTT agent_runtime.set handler and the HTTP
+// config API. Returns after the switcher is launched — the actual gateway swap
+// completes asynchronously when os-server restarts.
+func (s *Service) UpdateAgentRuntime(d domain.AgentRuntimeSetData) error {
+	runtime := strings.ToLower(strings.TrimSpace(d.Runtime))
+	// Reject unknown values outright. factory.go falls back to openclaw on
+	// garbage, but an unknown runtime from the BFF/web is a contract error we
+	// surface rather than silently coerce.
+	switch runtime {
+	case domain.AgentRuntimeOpenClaw, domain.AgentRuntimeHermes:
+	default:
+		return fmt.Errorf("invalid runtime %q (want openclaw|hermes)", d.Runtime)
+	}
+
+	// Resolve the currently-active runtime BEFORE the save so switch-runtime
+	// knows which backend to stop. Default to openclaw (matches factory.go).
+	old := strings.ToLower(strings.TrimSpace(s.config.AgentRuntime))
+	if old == "" {
+		old = domain.AgentRuntimeOpenClaw
+	}
+
+	// No-op guard: re-sending the active runtime shouldn't churn services or
+	// bounce os-server. Drift between config and running units is reconciled at
+	// next boot by factory.go, so skipping here is safe.
+	if old == runtime {
+		slog.Info("agent runtime unchanged, skipping switch", "component", "device", "runtime", runtime)
+		return nil
+	}
+
+	// Make sure the embedded switcher is on disk before we depend on it, and
+	// materialize the target's embedded installer (if compiled in) so the switch
+	// works fully offline — switch-runtime runs the local copy, no CDN needed.
+	if err := ensureSwitchRuntime(); err != nil {
+		return fmt.Errorf("install switch-runtime: %w", err)
+	}
+	if err := materializeInstaller(runtime); err != nil {
+		return fmt.Errorf("materialize %s installer: %w", runtime, err)
+	}
+
+	if err := s.config.WithLockSave(func(c *config.Config) {
+		c.AgentRuntime = runtime
+	}); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+	slog.Info("agent runtime persisted, spawning switch-runtime", "component", "device", "from", old, "to", runtime)
+
+	// Launch the switcher in its OWN transient systemd unit. switch-runtime ends
+	// by restarting os-server, which tears down os-server's cgroup — a plain
+	// child would die with it. systemd-run --collect runs it detached and
+	// garbage-collects the unit on exit. Pass <new> <old> so the switch is fully
+	// generic (no hardcoded backend list anywhere).
+	if err := exec.Command("systemd-run", "--quiet", "--collect",
+		"--unit=os-runtime-switch", switchRuntimeBin, runtime, old).Start(); err != nil {
+		return fmt.Errorf("spawn switch-runtime: %w", err)
+	}
+	return nil
 }
 
 // sttModelForLanguage maps a BCP-47 language code to the Deepgram SKU exposed

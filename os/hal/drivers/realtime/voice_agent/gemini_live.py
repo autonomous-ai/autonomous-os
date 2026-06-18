@@ -437,7 +437,15 @@ class GeminiLiveAgent(VoiceAgentBase):
                     self._connected.clear()
                     self._session = None
                 except genai_errors.APIError as e:
-                    logger.warning("[realtime] Recv API error (attempt %d/%d): %s", attempt + 1, self._max_retries, e)
+                    # The genai SDK surfaces a normal WS close (code 1000 — idle /
+                    # session-duration timeout) as an APIError whose str is
+                    # "1000 None", not as ConnectionClosed. Mirror the 1000 special
+                    # case in the ConnectionClosed branch above: log at INFO so a
+                    # benign idle-reconnect doesn't show up as a red WARNING.
+                    if str(e).split(" ", 1)[0] == "1000":
+                        logger.info("[realtime] Session closed normally (idle) — reconnecting")
+                    else:
+                        logger.warning("[realtime] Recv API error (attempt %d/%d): %s", attempt + 1, self._max_retries, e)
                     self._connected.clear()
                     self._session = None
                 except Exception as e:

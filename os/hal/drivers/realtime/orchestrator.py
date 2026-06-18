@@ -13,16 +13,18 @@ The caller (voice_service) drives the orchestrator:
      - Yields DelegateSignal if model called delegate_to_main (then stops)
 """
 
+import json
 import logging
 import threading
+import time
 from collections.abc import Generator
-from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 import numpy.typing as npt
 
 import hal.config as config
+import hal.presets as presets
 from hal.drivers.realtime.config import GeminiConfig, OpenAIConfig, _load_language
 from hal.drivers.realtime.context_manager import (
     ContextManagerBase,
@@ -36,6 +38,7 @@ from hal.drivers.realtime.models import (
     OutputBase,
     TextInput,
 )
+from hal.drivers.realtime.models.signal import DelegateSignal
 from hal.drivers.realtime.summarizer import RealtimeSummarizer
 from hal.drivers.realtime.voice_agent.base import VoiceAgentBase
 
@@ -73,12 +76,48 @@ DELEGATE_TOOL: dict[str, Any] = {
     },
 }
 
+DEFAULT_EMOTION_INTENSITY: float = 0.8
 
-@dataclass
-class DelegateSignal:
-    """Yielded by stream_output() when the model calls delegate_to_main."""
+EMOTION_TOOL_NAME: str = "express_emotion"
+# Conversational emotions the agent may set to match its own spoken tone.
+# Excludes system/background states (idle, listening, sleepy, scan, nod, music_*)
+# which are driven by the device, not the agent.
+EMOTION_TOOL_EMOTIONS: list[str] = [
+    presets.EMO_HAPPY, presets.EMO_EXCITED, presets.EMO_CURIOUS,
+    presets.EMO_THINKING, presets.EMO_CARING, presets.EMO_LAUGH,
+    presets.EMO_SHY, presets.EMO_SAD, presets.EMO_SHOCK,
+    presets.EMO_CONFUSED, presets.EMO_GREETING, presets.EMO_GOODBYE,
+]
+EMOTION_TOOL_DESCRIPTION: str = (
+    "Set the device's physical face (LED + servo) to match the emotional tone "
+    "of the reply you are ABOUT TO SPEAK. This is FIRE-AND-FORGET and is the ONE "
+    "exception to the binary tool rule: it does NOT delegate and does NOT replace "
+    "speech — call it IN PARALLEL with speaking, then immediately speak your reply. "
+    "Never wait for it, never mention it, never speak the emotion name or any "
+    "marker syntax aloud. Calling it is optional; only call it when an emotion "
+    "clearly fits your reply. Available emotions: " + ", ".join(EMOTION_TOOL_EMOTIONS) + "."
+)
 
-    message: str = ""
+EMOTION_TOOL: dict[str, Any] = {
+    "type": "function",
+    "name": EMOTION_TOOL_NAME,
+    "description": EMOTION_TOOL_DESCRIPTION,
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "emotion": {
+                "type": "string",
+                "enum": EMOTION_TOOL_EMOTIONS,
+                "description": "The facial emotion that matches the tone of the reply you are about to speak.",
+            },
+            "intensity": {
+                "type": "number",
+                "description": "Expression strength from 0.0 (subtle) to 1.0 (full). Defaults to about 0.8.",
+            },
+        },
+        "required": ["emotion"],
+    },
+}
 
 
 class RealtimeOrchestrator:
@@ -103,8 +142,17 @@ class RealtimeOrchestrator:
         self,
         gateway: AgentGateway = AgentGateway.OPENCLAW,
         extra_tools: list[dict[str, Any]] | None = None,
+        enable_expression: bool = False,
     ) -> None:
-        self._tools: list[dict[str, Any]] = [DELEGATE_TOOL] + (extra_tools or [])
+        # express_emotion is registered ONLY when the device declares the
+        # `expression` capability (DEVICE.md → expression: { routes: [emotion] }).
+        # A device with no face (e.g. mic+speaker only) never sees the tool, so
+        # the model can't call it and nothing fires.
+        self._expression_enabled: bool = enable_expression
+        tools: list[dict[str, Any]] = [DELEGATE_TOOL]
+        if enable_expression:
+            tools.append(EMOTION_TOOL)
+        self._tools: list[dict[str, Any]] = tools + (extra_tools or [])
         self._agent: VoiceAgentBase | None = None
         self._started: threading.Event = threading.Event()
         summarizer: RealtimeSummarizer | None = None
@@ -119,7 +167,9 @@ class RealtimeOrchestrator:
                 logger.warning("Failed to create summarizer: %s", e)
         context_cls = self.CONTEXT_MANAGERS.get(gateway, OpenClawContextManager)
         self._context: ContextManagerBase = context_cls(
-            workspace_dir=self.WORKSPACE_DIRS.get(gateway, config.OPENCLAW_WORKSPACE_DIR),
+            workspace_dir=self.WORKSPACE_DIRS.get(
+                gateway, config.OPENCLAW_WORKSPACE_DIR
+            ),
             language=_load_language() or "English",
             provider=config.REALTIME_PROVIDER,
             summarizer=summarizer,
@@ -151,7 +201,10 @@ class RealtimeOrchestrator:
             logger.exception("[realtime] Failed to catch up on memory summarization")
 
         instructions: str = self._context.build_instructions()
-        logger.info("[realtime] Context manager built instructions (%d chars)", len(instructions))
+        logger.info(
+            "[realtime] Context manager built instructions (%d chars)",
+            len(instructions),
+        )
 
         if provider == "gemini":
             from hal.drivers.realtime.voice_agent.gemini_live import GeminiLiveAgent
@@ -177,9 +230,13 @@ class RealtimeOrchestrator:
 
         try:
             self._agent.connect()
-            logger.info("[realtime] Realtime orchestrator started (provider=%s)", provider)
+            logger.info(
+                "[realtime] Realtime orchestrator started (provider=%s)", provider
+            )
         except Exception:
-            logger.exception("[realtime] Failed to connect realtime agent — will retry on next audio")
+            logger.exception(
+                "[realtime] Failed to connect realtime agent — will retry on next audio"
+            )
         self._started.set()
 
     def stop(self) -> None:
@@ -234,22 +291,27 @@ class RealtimeOrchestrator:
         for output in self._agent.receive(stop_on_done=True):
             if (
                 isinstance(output, FunctionCallOutput)
+                and output.name == EMOTION_TOOL_NAME
+            ):
+                self._handle_emotion_call(output)
+                continue
+            if (
+                isinstance(output, FunctionCallOutput)
                 and output.name == DELEGATE_TOOL_NAME
             ):
-                # Extract message from tool call arguments
-                import json as _json
-
                 delegate_msg: str = ""
                 try:
-                    args: dict = (
-                        _json.loads(output.arguments) if output.arguments else {}
+                    args: dict[str, Any] = (
+                        json.loads(output.arguments) if output.arguments else {}
                     )
                     delegate_msg = args.get("message", "").strip()
                 except (ValueError, TypeError):
                     pass
 
                 if not delegate_msg:
-                    logger.warning("[realtime] Model called delegate_to_main with empty message — ignoring")
+                    logger.warning(
+                        "[realtime] Model called delegate_to_main with empty message — ignoring"
+                    )
                     self._agent.send(
                         [
                             FunctionCallResultInput(
@@ -273,8 +335,92 @@ class RealtimeOrchestrator:
                     ]
                 )
                 yield DelegateSignal(message=delegate_msg)
-                return
+                continue
             yield output
+
+    def _handle_emotion_call(self, output: FunctionCallOutput) -> None:
+        """Fire the device's emotion expression without blocking the spoken turn.
+
+        Fire-and-forget: the HAL /emotion call runs in a daemon thread (parallel
+        to the audio already streaming), and the function result is acknowledged
+        with trigger_response=False so it does NOT spawn a second model response.
+        Net added latency to speech is ~zero.
+        """
+        emotion: str = ""
+        intensity: float = DEFAULT_EMOTION_INTENSITY
+        try:
+            args: dict[str, Any] = (
+                json.loads(output.arguments) if output.arguments else {}
+            )
+            emotion = str(args.get("emotion", "")).strip().lower()
+            intensity = float(args.get("intensity", DEFAULT_EMOTION_INTENSITY))
+        except (ValueError, TypeError):
+            pass
+        intensity = max(0.0, min(1.0, intensity))
+
+        if emotion:
+            threading.Thread(
+                target=self._fire_emotion,
+                args=(emotion, intensity),
+                daemon=True,
+            ).start()
+            logger.info(
+                "[realtime] express_emotion fired (emotion=%s intensity=%.2f)",
+                emotion,
+                intensity,
+            )
+        else:
+            logger.warning(
+                "[realtime] express_emotion called with empty emotion — ignoring"
+            )
+
+        # Acknowledge the call in history but do NOT trigger a new response.
+        if self._agent is not None:
+            self._agent.send(
+                [
+                    FunctionCallResultInput(
+                        call_id=output.call_id,
+                        output='{"result": "expressed"}',
+                        trigger_response=False,
+                    )
+                ]
+            )
+
+    @staticmethod
+    def _fire_emotion(emotion: str, intensity: float) -> None:
+        """Drive the device face by calling the HAL emotion handler in-process.
+
+        The realtime agent runs inside the HAL process, so we call the route
+        handler directly instead of looping back over HTTP — no serialization,
+        no network stack, lower latency. Runs in a daemon thread; logs the
+        outcome (status ok / ignored) so device testing can confirm the emotion
+        actually fired and measure how long it took.
+        """
+        started: float = time.monotonic()
+        try:
+            # Lazy import: the emotion handler pulls in app_state / LED / servo;
+            # keep that out of the driver's module-load graph and avoid any cycle.
+            from hal.models import EmotionRequest
+            from hal.routes.emotion import express_emotion as hal_express_emotion
+
+            result: Any = hal_express_emotion(
+                EmotionRequest(emotion=emotion, intensity=intensity)
+            )
+            took_ms: float = (time.monotonic() - started) * 1000
+            status: str = (
+                result.get("status", "?") if isinstance(result, dict) else "?"
+            )
+            logger.info(
+                "[realtime] emotion expressed (emotion=%s intensity=%.2f status=%s %.0fms)",
+                emotion,
+                intensity,
+                status,
+                took_ms,
+            )
+        except Exception as e:
+            logger.warning(
+                "[realtime] emotion expression failed (emotion=%s): %s", emotion, e
+            )
 
     def send_text(self, text: str) -> None:
         """Send a text message to the agent as context (non-blocking).

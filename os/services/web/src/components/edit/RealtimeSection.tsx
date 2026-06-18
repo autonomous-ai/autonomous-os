@@ -1,0 +1,109 @@
+import { useEffect, useState } from "react";
+import { C, LockedField, LockedPasswordField, SectionCard } from "@/components/setup/shared";
+import { getRealtimeOptions } from "@/lib/api";
+import type { LlmLoadedState } from "@/hooks/setup/types";
+
+// Realtime voice-agent (Gemini Live / OpenAI Realtime) config. Values map 1:1 to
+// the config.json `realtime` block (HAL reads it; os-server restarts HAL on save).
+// Voice + reasoning are provider-specific — keep these lists in sync with
+// os/services/server/config/realtime.go (ValidateRealtimeKnobs) and the HAL enums.
+const PROVIDERS = ["gemini", "openai", "none"];
+const VOICES: Record<string, string[]> = {
+  gemini: ["Puck", "Charon", "Kore", "Fenrir", "Aoede"],
+  openai: ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"],
+};
+// Reasoning depth = cost knob. First entry (cheapest) is the default.
+const REASONING: Record<string, string[]> = {
+  gemini: ["MINIMAL", "LOW", "MEDIUM", "HIGH"],
+  openai: ["minimal", "low", "medium", "high", "xhigh"],
+};
+
+export interface RealtimeLoadedState {
+  apiKey: boolean;
+}
+
+const selectStyle = {
+  width: "100%", boxSizing: "border-box" as const,
+  background: C.surface, border: `1px solid ${C.border}`,
+  borderRadius: 7, padding: "8px 11px",
+  fontSize: 12.5, color: C.text, outline: "none", cursor: "pointer",
+};
+
+const labelStyle = { display: "block", fontSize: 11, color: C.textDim, marginBottom: 5 };
+
+export function RealtimeSection({
+  active,
+  realtimeLoaded, llmLoaded,
+  enabled, setEnabled,
+  provider, setProvider,
+  voice, setVoice,
+  reasoning, setReasoning,
+  apiKey, setApiKey,
+  baseUrl, setBaseUrl,
+}: {
+  active: boolean;
+  realtimeLoaded: RealtimeLoadedState;
+  llmLoaded: LlmLoadedState;
+  enabled: boolean; setEnabled: (v: boolean) => void;
+  provider: string; setProvider: (v: string) => void;
+  voice: string; setVoice: (v: string) => void;
+  reasoning: string; setReasoning: (v: string) => void;
+  apiKey: string; setApiKey: (v: string) => void;
+  baseUrl: string; setBaseUrl: (v: string) => void;
+}) {
+  // Options come from the API (single source = server config); the const lists
+  // above are only a fallback if the fetch fails.
+  const [opts, setOpts] = useState<{ providers: string[]; voices: Record<string, string[]>; reasoning: Record<string, string[]> } | null>(null);
+  useEffect(() => { getRealtimeOptions().then(setOpts).catch(() => {}); }, []);
+  const providers = opts?.providers ?? PROVIDERS;
+  const voices = (opts?.voices ?? VOICES)[provider] ?? [];
+  const reasonings = (opts?.reasoning ?? REASONING)[provider] ?? [];
+
+  // Switching provider resets voice/reasoning to that provider's defaults so we
+  // never submit, e.g., an OpenAI voice while provider=gemini (server rejects it).
+  function onProviderChange(p: string) {
+    setProvider(p);
+    if (p === "none") return;
+    if (!(VOICES[p] ?? []).includes(voice)) setVoice((VOICES[p] ?? [""])[0]);
+    if (!(REASONING[p] ?? []).includes(reasoning)) setReasoning((REASONING[p] ?? [""])[0]);
+  }
+
+  return (
+    <SectionCard id="realtime" title="Realtime" active={active}>
+      <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, cursor: "pointer", fontSize: 12.5, color: C.text }}>
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+        Enabled (audio-native brain — Gemini Live / OpenAI Realtime)
+      </label>
+
+      <div style={{ marginBottom: 12 }}>
+        <label htmlFor="realtime_provider" style={labelStyle}>Provider</label>
+        <select id="realtime_provider" value={provider} onChange={(e) => onProviderChange(e.target.value)} style={selectStyle}>
+          {providers.map((p) => <option key={p} value={p}>{p}</option>)}
+        </select>
+      </div>
+
+      {provider !== "none" && (
+        <>
+          {/* Realtime voice output is NOT used (device speaks via TTS), so the
+              voice selector is hidden via display:none — code kept for re-enable. */}
+          <div style={{ marginBottom: 12, display: "none" }}>
+            <label htmlFor="realtime_voice" style={labelStyle}>Voice</label>
+            <select id="realtime_voice" value={voice} onChange={(e) => setVoice(e.target.value)} style={selectStyle}>
+              {voices.map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <label htmlFor="realtime_reasoning" style={labelStyle}>Reasoning (cost — cheapest first)</label>
+            <select id="realtime_reasoning" value={reasoning} onChange={(e) => setReasoning(e.target.value)} style={selectStyle}>
+              {reasonings.map((r) => <option key={r} value={r}>{r}</option>)}
+            </select>
+          </div>
+
+          <LockedPasswordField lockedInitially={realtimeLoaded.apiKey || llmLoaded.apiKey} label="API Key (optional — leave blank to reuse AI brain key)" id="realtime_api_key" value={apiKey} onChange={setApiKey} placeholder="sk-... / AIza..." />
+          <LockedField lockedInitially={llmLoaded.baseUrl} label="Base URL (optional — leave blank to derive from AI brain base URL)" id="realtime_base_url" value={baseUrl} onChange={setBaseUrl} placeholder="wss://… /ws/gemini" />
+        </>
+      )}
+    </SectionCard>
+  );
+}

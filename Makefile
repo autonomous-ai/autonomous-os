@@ -118,7 +118,7 @@ autonomous-build-chat:
 # Upload (OTA to GCS) — unified format: make upload-<component>
 # ============================================================================
 
-.PHONY: upload-os-server upload-bootstrap upload-hal upload-claude-desktop-buddy upload-autonomous-buddy upload-web upload-skills upload-hooks upload-setup upload-setup-ap upload-openclaw upload-device upload-twitch-irc upload-autonomous-chat upload-all
+.PHONY: upload-os-server upload-bootstrap upload-hal upload-claude-desktop-buddy upload-autonomous-buddy upload-web upload-skills upload-hooks upload-setup upload-setup-ap upload-openclaw upload-device upload-twitch-irc upload-autonomous-chat upload-all promote-os-server promote-bootstrap promote-web promote-hal promote-claude-desktop-buddy promote-openclaw promote-device
 
 upload-os-server:
 	bash scripts/release/upload-os-server.sh
@@ -185,6 +185,20 @@ endif
 upload-device:
 	@if [ -z "$(DEVICE_TYPE_ARG)" ]; then echo "Usage: make upload-device <type>   (e.g. lamp, intern, unitree-go2w)" >&2; exit 1; fi
 	bash scripts/release/upload-device.sh "$(DEVICE_TYPE_ARG)"
+
+# Promote the auto-rollout floor (min_version) so bootstrap pushes a build to the
+# fleet. One target per component (mirrors upload-*) so the names never collide
+# with real targets like `hal`/`web`. Optional V=<version> pins an explicit floor
+# (default: the entry's current version).
+#   make promote-hal                # min_version = hal.version
+#   make promote-os-server V=1.4.0  # pin floor explicitly
+#   make promote-device DT=lamp     # devices.lamp profile
+promote-os-server promote-bootstrap promote-web promote-hal promote-claude-desktop-buddy promote-openclaw:
+	bash scripts/release/promote-ota.sh $(patsubst promote-%,%,$@) $(V)
+
+promote-device:
+	@if [ -z "$(DT)" ]; then echo "Usage: make promote-device DT=<type> [V=<min_version>]" >&2; exit 1; fi
+	bash scripts/release/promote-ota.sh device "$(DT)" $(V)
 
 # upload-openclaw is intentionally NOT in upload-all — bumping the OpenClaw
 # version is an explicit decision, not a side effect of pushing other artifacts.

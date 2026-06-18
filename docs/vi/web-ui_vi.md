@@ -101,7 +101,7 @@ Monitor poll API system/HW mỗi **3 giây**. Flow dùng hybrid theo file: REST 
 
 | Endpoint | Dữ liệu |
 |----------|---------|
-| `GET /api/system/info` | CPU load, RAM (KB), nhiệt độ, uptime, goroutines, version, deviceId, capabilities (tên các capability đã khai báo — Monitor ẩn/hiện tab phần cứng theo danh sách này) |
+| `GET /api/system/info` | CPU load, RAM (KB), nhiệt độ, uptime, goroutines, version, deviceId, capabilities (tên các capability đã khai báo — cả Monitor lẫn trang Edit/Settings đều ẩn/hiện tab phần cứng theo danh sách này; xem hook dùng chung `useCapabilities`) |
 | `GET /api/system/network` | SSID, IP, public IP, Tailscale IP, signal (dBm), internet (bool) |
 | `GET /api/openclaw/status` | name, connected (bool), sessionKey (bool), version, emotion, uptime (uptime kết nối WS phía OS server, giây), agentUptime (uptime tiến trình OpenClaw lấy từ `server.uptimeMs` trong hello-ok, giây — không reset khi OS server restart) |
 | `GET /api/openclaw/recent` | Các flow event mới nhất từ JSONL của ngày hiện tại (`local/flow_events_<date>.jsonl`) |

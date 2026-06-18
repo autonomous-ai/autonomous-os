@@ -343,8 +343,50 @@ AGENT_GATEWAY: str = (
 ).strip().lower()
 
 # --- Realtime voice agent ---
-REALTIME_ENABLED: bool = os.environ.get("HAL_REALTIME_ENABLED", "true").lower() in ("1", "true", "yes")
-REALTIME_PROVIDER: str = os.environ.get("HAL_REALTIME_PROVIDER", "gemini")  # none | gemini | openai
+# Operator overrides for the realtime voice agent come from the nested "realtime"
+# block in os-server's config.json (written by the web UI; modelled in Go at
+# server/config/realtime.go). HAL reads it DIRECTLY here — same pattern as
+# llm_api_key / stt_language via _os_cfg_get — rather than having os-server push
+# it down through the agent gateway. Precedence per knob: HAL_* env var (dev
+# override) > realtime block > built-in default. NOTE: read once at import, so a
+# config change needs a HAL restart to take effect.
+def _os_cfg_realtime() -> dict:
+    """The nested 'realtime' dict from os-server config.json, or {} if absent."""
+    try:
+        import json
+        with open(OS_CONFIG_PATH) as f:
+            rt = json.load(f).get("realtime")
+        return rt if isinstance(rt, dict) else {}
+    except Exception:
+        return {}
+
+
+_RT: dict = _os_cfg_realtime()
+_RT_GEMINI: dict = _RT.get("gemini") if isinstance(_RT.get("gemini"), dict) else {}
+_RT_OPENAI: dict = _RT.get("openai") if isinstance(_RT.get("openai"), dict) else {}
+
+
+def _rt_str(env_key: str, cfg_val, default: str) -> str:
+    """Resolve a realtime string knob: env var > config.json value > default."""
+    env = os.environ.get(env_key)
+    if env:
+        return env
+    if cfg_val:
+        return str(cfg_val)
+    return default
+
+
+def _rt_enabled() -> bool:
+    env = os.environ.get("HAL_REALTIME_ENABLED")
+    if env is not None:
+        return env.lower() in ("1", "true", "yes")
+    if "enabled" in _RT:
+        return bool(_RT["enabled"])
+    return True
+
+
+REALTIME_ENABLED: bool = _rt_enabled()
+REALTIME_PROVIDER: str = _rt_str("HAL_REALTIME_PROVIDER", _RT.get("provider"), "gemini")  # none | gemini | openai
 # Max seconds receive() waits for the NEXT output event from the agent's recv
 # queue before giving up on the turn. This is the gap between events, not the
 # whole turn: a streaming reply puts events on the queue sub-second apart and
@@ -373,16 +415,18 @@ REALTIME_TURN_DETECTION: str = os.environ.get("HAL_REALTIME_TURN_DETECTION", "of
 REALTIME_GEMINI_API_KEY: str = (
     os.environ.get("GEMINI_API_KEY", "")
     or os.environ.get("GOOGLE_API_KEY", "")
+    or _RT.get("api_key", "")
     or _os_cfg_get("llm_api_key", "")
 )
-REALTIME_GEMINI_BASE_URL: str = os.environ.get(
-    "HAL_GEMINI_LIVE_BASE_URL",
-    (_os_cfg_get("llm_base_url", "").rstrip("/") + "/ws/gemini") if _os_cfg_get("llm_base_url", "") else "",
+REALTIME_GEMINI_BASE_URL: str = (
+    os.environ.get("HAL_GEMINI_LIVE_BASE_URL", "")
+    or _RT.get("base_url", "")
+    or ((_os_cfg_get("llm_base_url", "").rstrip("/") + "/ws/gemini") if _os_cfg_get("llm_base_url", "") else "")
 )
-REALTIME_GEMINI_MODEL: str = os.environ.get("HAL_GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview")
-REALTIME_GEMINI_VOICE: str = os.environ.get("HAL_GEMINI_LIVE_VOICE", "Kore")
+REALTIME_GEMINI_MODEL: str = _rt_str("HAL_GEMINI_LIVE_MODEL", _RT_GEMINI.get("model"), "gemini-3.1-flash-live-preview")
+REALTIME_GEMINI_VOICE: str = _rt_str("HAL_GEMINI_LIVE_VOICE", _RT_GEMINI.get("voice"), "Kore")
 REALTIME_GEMINI_SAMPLE_RATE: int = 16000
-REALTIME_GEMINI_THINKING_LEVEL: str = os.environ.get("HAL_GEMINI_THINKING_LEVEL", "HIGH")
+REALTIME_GEMINI_THINKING_LEVEL: str = _rt_str("HAL_GEMINI_THINKING_LEVEL", _RT_GEMINI.get("thinking_level"), "MINIMAL")
 REALTIME_GEMINI_USE_LANGUAGE_CODES: bool = os.environ.get("HAL_GEMINI_USE_LANGUAGE_CODES", "false").lower() in ("1", "true", "yes")
 # Session resumption lets a reconnect resume the SAME server session (context
 # preserved). It requires the WS endpoint to faithfully forward the resumption
@@ -398,16 +442,18 @@ REALTIME_GEMINI_SESSION_RESUMPTION: bool = os.environ.get(
 # --- Realtime: OpenAI Realtime ---
 REALTIME_OPENAI_API_KEY: str = (
     os.environ.get("OPENAI_API_KEY", "")
+    or _RT.get("api_key", "")
     or _os_cfg_get("llm_api_key", "")
 )
-REALTIME_OPENAI_BASE_URL: str = os.environ.get(
-    "HAL_OPENAI_REALTIME_BASE_URL",
-    (_os_cfg_get("llm_base_url", "").rstrip("/") + "/ws/openai") if _os_cfg_get("llm_base_url", "") else "",
+REALTIME_OPENAI_BASE_URL: str = (
+    os.environ.get("HAL_OPENAI_REALTIME_BASE_URL", "")
+    or _RT.get("base_url", "")
+    or ((_os_cfg_get("llm_base_url", "").rstrip("/") + "/ws/openai") if _os_cfg_get("llm_base_url", "") else "")
 )
-REALTIME_OPENAI_MODEL: str = os.environ.get("HAL_OPENAI_REALTIME_MODEL", "gpt-realtime-2")
-REALTIME_OPENAI_VOICE: str = os.environ.get("HAL_OPENAI_REALTIME_VOICE", "alloy")
+REALTIME_OPENAI_MODEL: str = _rt_str("HAL_OPENAI_REALTIME_MODEL", _RT_OPENAI.get("model"), "gpt-realtime-2")
+REALTIME_OPENAI_VOICE: str = _rt_str("HAL_OPENAI_REALTIME_VOICE", _RT_OPENAI.get("voice"), "alloy")
 REALTIME_OPENAI_SAMPLE_RATE: int = 24000
-REALTIME_OPENAI_REASONING_EFFORT: str = os.environ.get("HAL_OPENAI_REASONING_EFFORT", "xhigh")
+REALTIME_OPENAI_REASONING_EFFORT: str = _rt_str("HAL_OPENAI_REASONING_EFFORT", _RT_OPENAI.get("reasoning_effort"), "minimal")
 
 # --- Realtime: Context manager ---
 OPENCLAW_WORKSPACE_DIR: str = os.environ.get("HAL_OPENCLAW_WORKSPACE_DIR", "/root/.openclaw/workspace")

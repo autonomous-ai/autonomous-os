@@ -8,7 +8,7 @@ from typing import Optional, Union
 
 from pydantic import BaseModel, Field
 
-from hal.drivers.voice.tts_backend import PROVIDER_OPENAI, PROVIDER_ELEVENLABS
+from hal.drivers.voice.tts import PROVIDER_OPENAI, PROVIDER_ELEVENLABS
 
 
 class ServoRequest(BaseModel):

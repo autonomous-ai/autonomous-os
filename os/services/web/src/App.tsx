@@ -45,13 +45,16 @@ function SetupGate() {
         const s = await getSetupStatus();
         if (cancelled) return;
         const here = window.location.hostname;
-        // Skip the lan_ip bounce when:
-        //   - on Tailscale (CGNAT) — deliberate remote-access path
-        //   - on the canonical .local mDNS name — bouncing to a raw IP would
-        //     undo the post-AP→STA redirect (URL must stay stable so the
-        //     browser auto-resolves to the new IP on every wifi change)
-        const isCanonicalMdns = here.endsWith(".local");
-        if (s.lan_ip && s.lan_ip !== here && !isTailscaleHost(here) && !isCanonicalMdns) {
+        // IP-only: we deliberately do NOT special-case the `.local` mDNS host.
+        // The whole flow standardizes on the raw LAN IP because `.local`
+        // silently fails on mDNS-blocking routers, so even when the browser
+        // happens to be on `<type>-<id>.local` we still bounce to the IP — the
+        // single reliable address. Only Tailscale (CGNAT) is skipped: that's a
+        // deliberate remote-access path where the IP bounce doesn't apply.
+        // safeSearch() keeps stripping secrets (llm_api_key, …) from the URL;
+        // continue mode rehydrates them from saved config (has_llm_api_key),
+        // so dropping them here is safe and avoids leaking secrets in the bar.
+        if (s.lan_ip && s.lan_ip !== here && !isTailscaleHost(here)) {
           window.location.replace(`http://${s.lan_ip}${window.location.pathname}${safeSearch()}`);
           return;
         }

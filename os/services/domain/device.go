@@ -160,6 +160,25 @@ type AddChannelRequest struct {
 	WhatsappUserID string `json:"whatsapp_user_id"`
 }
 
+// RefreshChannelRequest carries the credentials needed to re-apply a channel's
+// canonical config block via AgentGateway.RefreshChannelConfig. The caller
+// (device.Service.RefreshChannelConfig) sources the creds from config.json on
+// the device — refresh does NOT carry tokens over MQTT.
+type RefreshChannelRequest struct {
+	Channel string
+
+	// slack
+	SlackBotToken string
+	SlackAppToken string
+	SlackUserID   string
+	// SlackMode selects the Slack transport — see AddChannelRequest.SlackMode for
+	// semantics. Empty / "socket" preserves existing behaviour; "http" switches to
+	// proxy mode and consults SlackSigningSecret / SlackWebhookPath.
+	SlackMode          string
+	SlackSigningSecret string
+	SlackWebhookPath   string
+}
+
 // EffectiveSlackMode resolves SlackMode, defaulting to "socket" so unset
 // payloads keep current behaviour (existing installs unaffected).
 func (r *AddChannelRequest) EffectiveSlackMode() string {
@@ -253,6 +272,23 @@ const (
 	// (gateway has no /slack/events route in that mode) — proxy SHOULD route only to
 	// devices the backend has flipped to slack_mode="http".
 	CommandSlackEvent = "slack_event"
+
+	// CommandSlackCommand is sent by the same Slack proxy (bff-campaign-service)
+	// when Slack delivers a slash-command invocation (/openclaw, /new, ...) for a
+	// workspace this device owns. It is forwarded and verified exactly like
+	// CommandSlackEvent — POSTed verbatim to the local OpenClaw gateway's single
+	// HTTP webhook (default http://127.0.0.1:18789/slack/events), which routes it
+	// to the slash-command handler by body shape and replies to the user via the
+	// command's response_url. The only wire differences from slack_event are the
+	// urlencoded Content-Type the proxy sets in headers and that the event_id slot
+	// carries Slack's trigger_id (slash commands have no event_id).
+	//
+	// Wire format: {"cmd":"slack_command","event_id":"<trigger_id>","body":"<raw urlencoded form>",
+	//               "headers":{"X-Slack-Signature":"v0=...","X-Slack-Request-Timestamp":"...",
+	//                          "Content-Type":"application/x-www-form-urlencoded"}}
+	//
+	// Like slack_event, only relevant for devices in slack_mode="http".
+	CommandSlackCommand = "slack_command"
 )
 
 // Data kinds carried inside CommandData envelope.
@@ -262,6 +298,18 @@ const (
 	KindDeviceRename = "device.rename" // rewrite IDENTITY.md Name (WatchIdentity picks up wake-words)
 	KindOAuthSet     = "oauth.set"     // store/replace OAuth token for a provider
 	KindOAuthRemove  = "oauth.remove"  // delete OAuth token for a provider
+	KindRealtimeSet  = "realtime.set"  // persist realtime voice-agent config (provider/voice/reasoning…)
+
+	// KindAgentRuntimeSet swaps the agentic backend (openclaw ⇄ hermes). Persists
+	// config.agent_runtime then runs switch-runtime.sh (toggle systemd units +
+	// restart os-server so agent/factory.go re-resolves the gateway).
+	KindAgentRuntimeSet = "agent_runtime.set"
+
+	// AgentRuntimeOpenClaw / AgentRuntimeHermes are the swappable agentic
+	// backends. Source of truth mirrored by internal/agent/factory.go's resolver
+	// and /usr/local/bin/switch-runtime.
+	AgentRuntimeOpenClaw = "openclaw"
+	AgentRuntimeHermes   = "hermes"
 
 	KindSystemInfo    = "system.info"    // aggregate: versions + network + host
 	KindSystemVersion = "system.version" // lamp + bootstrap + hal + openclaw versions
@@ -269,6 +317,24 @@ const (
 
 	// KindSkillsInstall installs a role's skill bundle. Data: {"role":"<role>"}.
 	KindSkillsInstall = "skills.install"
+
+	// KindChannelRefreshConfig re-applies the canonical channels.<channel> block on
+	// an already-onboarded device. Targets older customers whose openclaw.json
+	// predates schema additions (e.g. the socketMode block, object-form streaming,
+	// dmPolicy) — backend pushes this so the device rewrites the block using the
+	// current applySlackChannelConfig writer without a full re-onboarding flow.
+	//
+	// Separate from add_channel by design: refresh is config-only (no plugin
+	// install, no CLI bootstrap, no pairing). Today only channel:"slack" is
+	// implemented; other channels return a distinct error code so the backend can
+	// branch. Credentials are read from config.json on the device — they are NOT
+	// carried in the payload.
+	//
+	// Flow:
+	//   server → device : kind=channel.refresh_config data={channel}
+	//   device → server : status=configuring → status=success data={channel, runtime}
+	//                                        | status=failure error=<code>
+	KindChannelRefreshConfig = "channel.refresh_config"
 )
 
 // Connector (MCP) data-kind prefixes. The connector code is the suffix, e.g.
@@ -515,6 +581,23 @@ type MQTTOAuthRemoveData struct {
 	Provider string `json:"provider"`
 }
 
+// MQTTChannelRefreshConfigData is the Data payload for kind:"channel.refresh_config".
+// Channel selects which channels.<channel> block to re-apply. Today only "slack"
+// is implemented; other channels return an error. Credentials are read from
+// config.json on the device — they are NOT carried in this payload.
+type MQTTChannelRefreshConfigData struct {
+	Channel string `json:"channel"`
+}
+
+// MQTTChannelRefreshConfigResultData is the Data payload echoed in fd_channel
+// success/failure messages for kind:"channel.refresh_config". Runtime carries
+// the detected openclaw runtime version string (empty if probing failed) so the
+// backend can correlate refresh outcomes with runtime upgrades.
+type MQTTChannelRefreshConfigResultData struct {
+	Channel string `json:"channel"`
+	Runtime string `json:"runtime,omitempty"`
+}
+
 // OAuthTokenEntry is the on-disk representation of a single provider's token
 // inside access_tokens.json.
 type OAuthTokenEntry struct {
@@ -620,6 +703,126 @@ type MQTTTTSSetAck struct {
 	Data   *MQTTTTSSetData `json:"data,omitempty"`
 }
 
+// ===========================================================================
+// Configure the realtime voice agent (Gemini Live / OpenAI Realtime) from the
+// backend / web dashboard. The payload (RealtimeSetData) is shared by TWO
+// transports — pick whichever fits:
+//   • MQTT  — `realtime.set` downlink (envelope below). Async ack on fd_channel.
+//   • HTTP  — POST the device config endpoint with a `"realtime"` object holding
+//             the SAME fields: {"realtime": { ...RealtimeSetData... }} (rides the
+//             existing UpdateConfig route, exactly like tts_provider/stt_language).
+// Both paths validate, write the `realtime` block to config.json, and restart HAL.
+//
+// HOW TO PUSH over MQTT (for FE / BFF teams)
+// --------------------------------
+// Publish a DOWNLINK to the device's command channel (the same `fa_channel`
+// topic tts.set uses — i.e. the topic the device subscribes to). Envelope:
+//
+//	{ "cmd": "data", "kind": "realtime.set", "data": { ...RealtimeSetData... } }
+//
+// The device replies on its `fd_channel` (uplink) with MQTTRealtimeSetAck:
+//   1) {"kind":"realtime.set","status":"starting"}            — received
+//   2) {"kind":"realtime.set","status":"success","data":{…}}  — applied, OR
+//      {"kind":"realtime.set","status":"failure","error":"…"} — rejected
+//
+// EFFECT: the device writes the values into the `realtime` block of its
+// config.json and RESTARTS HAL (takes a few seconds). HAL then reads the new
+// block on boot. So `success` means "saved + hal restarting", not "live yet".
+//
+// FIELD SEMANTICS (all fields optional; omit a field = leave it unchanged)
+//   enabled   bool   — turn the realtime brain on/off. false = off (device
+//                      falls back to the classic STT→agent→TTS path).
+//   provider  string — "gemini" | "openai" | "none". "none" = off.
+//   model     string — applied to the ACTIVE provider (the one in `provider`,
+//                      or the current provider if `provider` is omitted).
+//   voice     string — active provider's voice. Valid:
+//                        gemini: Puck | Charon | Kore | Fenrir | Aoede
+//                        openai: alloy | ash | coral | echo | fable | onyx |
+//                                nova | sage | shimmer
+//   reasoning string — active provider's reasoning depth (cost knob). Valid:
+//                        gemini (thinking_level): MINIMAL | LOW | MEDIUM | HIGH
+//                        openai (reasoning_effort): minimal|low|medium|high|xhigh
+//                      Defaults are the CHEAPEST tier (MINIMAL / minimal).
+//   api_key   string — override the realtime provider key. Empty/omitted →
+//                      falls back to the device's llm_api_key.
+//   base_url  string — override the realtime endpoint. Empty/omitted → derived
+//                      from llm_base_url (…/ws/gemini or …/ws/openai).
+//
+// RULES
+//   - When any of model/voice/reasoning is sent, `provider` (or the current
+//     provider) MUST be a concrete gemini|openai — those knobs are per-provider.
+//   - Invalid provider/voice/reasoning → status:"failure" with a descriptive
+//     error; nothing is written.
+//
+// EXAMPLES
+//   Switch to OpenAI Realtime with a voice:
+//     {"cmd":"data","kind":"realtime.set","data":{"provider":"openai","voice":"alloy"}}
+//   Tune Gemini reasoning up (more expensive):
+//     {"cmd":"data","kind":"realtime.set","data":{"provider":"gemini","reasoning":"HIGH"}}
+//   Turn realtime off:
+//     {"cmd":"data","kind":"realtime.set","data":{"enabled":false}}
+// ===========================================================================
+
+// RealtimeSetData is the realtime-config payload, shared by the MQTT
+// `realtime.set` downlink (data block) and the HTTP UpdateConfig `realtime` field.
+type RealtimeSetData struct {
+	Enabled   *bool  `json:"enabled,omitempty"`   // nil = leave unchanged
+	Provider  string `json:"provider,omitempty"`  // gemini | openai | none
+	Model     string `json:"model,omitempty"`     // active provider's model
+	Voice     string `json:"voice,omitempty"`     // active provider's voice
+	Reasoning string `json:"reasoning,omitempty"` // gemini thinking_level OR openai reasoning_effort
+	APIKey    string `json:"api_key,omitempty"`   // optional override; empty → llm_api_key
+	BaseURL   string `json:"base_url,omitempty"`  // optional override; empty → llm_base_url-derived
+}
+
+// MQTTRealtimeSetCommand wraps the full realtime.set downlink envelope for unmarshalling.
+type MQTTRealtimeSetCommand struct {
+	Data RealtimeSetData `json:"data"`
+}
+
+// MQTTRealtimeSetAck is published to fd_channel after applying (or failing) a
+// realtime.set downlink. status: "starting" | "success" | "failure".
+type MQTTRealtimeSetAck struct {
+	MQTTInfoResponse
+	Kind   string           `json:"kind"`
+	Status string           `json:"status"`
+	Error  string           `json:"error,omitempty"`
+	Data   *RealtimeSetData `json:"data,omitempty"`
+}
+
+// AgentRuntimeSetData is the payload for cmd:"data", kind:"agent_runtime.set".
+// Runtime selects the agentic backend. The valid set mirrors agent/factory.go's
+// resolver; anything else is rejected (we don't silently fall back here — an
+// unknown value from the BFF is a contract error, not a default).
+//
+//	{ "cmd": "data", "kind": "agent_runtime.set", "data": { "runtime": "hermes" } }
+type AgentRuntimeSetData struct {
+	Runtime string `json:"runtime"` // "openclaw" | "hermes"
+}
+
+// AgentRuntimes is the valid set, surfaced to the web settings dropdown via
+// GET /api/device/agent-runtime so the UI never hardcodes the list.
+var AgentRuntimes = []string{AgentRuntimeOpenClaw, AgentRuntimeHermes}
+
+// AgentRuntimeStatus is returned by GET /api/device/agent-runtime: the active
+// backend plus the selectable options.
+type AgentRuntimeStatus struct {
+	Current string   `json:"current"`
+	Options []string `json:"options"`
+}
+
+// AgentRuntimeSetAck is published to fd_channel after applying (or failing)
+// an agent_runtime.set downlink. status: "starting" | "success" | "failure".
+// On "success" the device restarts os-server, so the BFF should expect a brief
+// reconnect — the new banner (AGENT BACKEND ACTIVE) confirms the swap landed.
+type AgentRuntimeSetAck struct {
+	MQTTInfoResponse
+	Kind   string               `json:"kind"`
+	Status string               `json:"status"`
+	Error  string               `json:"error,omitempty"`
+	Data   *AgentRuntimeSetData `json:"data,omitempty"`
+}
+
 // MQTTTTSPreviewData is the nested data payload for cmd:"data", kind:"tts.preview".
 // Text is required; Provider/Voice/Language are optional overrides — empty
 // fields make HAL fall back to the device's current TTS config.
@@ -648,6 +851,20 @@ type MQTTDeviceRenameData struct {
 // presence flags so the web UI can render "configured ✓" + a write-only
 // SecretUpdateField. Non-secret fields (URLs, IDs, model name, language)
 // are returned as-is because they're useful for the UI and not sensitive.
+// RealtimePublic is the read-back view of the realtime voice-agent config — the
+// RESOLVED active-provider values (provider/model/voice/reasoning for whichever
+// provider is active, enabled state, resolved base_url). Mirrors how
+// tts_provider/tts_voice are surfaced; the key is exposed only as HasAPIKey.
+type RealtimePublic struct {
+	Enabled   bool   `json:"enabled"`
+	Provider  string `json:"provider"` // "" when realtime is off
+	Model     string `json:"model"`
+	Voice     string `json:"voice"`
+	Reasoning string `json:"reasoning"`
+	BaseURL   string `json:"base_url"` // resolved (may be llm-derived)
+	HasAPIKey bool   `json:"has_api_key"`
+}
+
 type ConfigPublicResponse struct {
 	Channel            string `json:"channel"`
 	TelegramUserID     string `json:"telegram_user_id"`
@@ -672,6 +889,12 @@ type ConfigPublicResponse struct {
 	MQTTPort           int    `json:"mqtt_port"`
 	FAChannel          string `json:"fa_channel"`
 	FDChannel          string `json:"fd_channel"`
+
+	// Realtime voice-agent config — RESOLVED active-provider values for the web to
+	// render the form. Write back via UpdateConfig's `realtime` field. The api_key
+	// is never returned (only HasAPIKey, the realtime-specific override; the LLM
+	// key fallback is reported by HasLLMAPIKey).
+	Realtime RealtimePublic `json:"realtime"`
 
 	// Presence booleans replace raw secret values. Frontend renders
 	// "configured · update" affordance when true, empty input when false.
@@ -730,6 +953,11 @@ type UpdateConfigRequest struct {
 
 	TTSProvider string `json:"tts_provider"`
 	TTSVoice    string `json:"tts_voice"`
+
+	// Realtime voice-agent config (Gemini Live / OpenAI Realtime). Same payload
+	// as the MQTT realtime.set downlink; omit to leave the realtime block alone.
+	// See RealtimeSetData for field semantics + valid values.
+	Realtime *RealtimeSetData `json:"realtime,omitempty"`
 
 	// AdminPassword rotates the bcrypt hash when non-empty. Existing sessions
 	// keep working (they ride config.SessionSecret, not the hash); to nuke

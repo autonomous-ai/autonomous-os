@@ -14,7 +14,7 @@ from hal.models import (
     StatusResponse,
 )
 from hal.i18n import MUSIC_BACKCHANNEL_POOLS
-from hal.drivers.voice.tts_backend import PROVIDER_ELEVENLABS
+from hal.drivers.voice.tts import PROVIDER_ELEVENLABS
 from hal.presets import (
     DEFAULT_LANG,
     EMO_CURIOUS,

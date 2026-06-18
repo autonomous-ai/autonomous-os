@@ -1,65 +1,31 @@
 package http
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
-	"regexp"
-	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"go.autonomous.ai/os/internal/device"
-	"go.autonomous.ai/os/lib/core/system"
+	"go.autonomous.ai/os/internal/openclaw"
 	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/server/serializers"
 )
 
-// openclawSemverRe captures the first semver-like token in `openclaw --version`
-// output (e.g. "OpenClaw 2026.3.8 (3caab92)" → "2026.3.8"). Mirrors the regex
-// used in bootstrap; duplicated here to avoid pulling bootstrap into server.
-var openclawSemverRe = regexp.MustCompile(`(\d+\.\d+\.\d+(?:[-+._][0-9A-Za-z.-]+)?)`)
-
-// openClawVersion caches the OpenClaw runtime version. Package-level (not
-// a struct field) because AgentHandler is returned by value through wire
-// and a struct copy would orphan the field. Populated once at handler init
-// via populateOpenClawVersion(); stays valid until the process restarts.
-var openClawVersion atomic.Pointer[string]
-
 // GetOpenClawVersion returns the cached OpenClaw binary version (e.g. "2026.5.27").
-// Empty string if openclaw is not installed or version has not been populated yet.
+// The cache lives in the openclaw package — single source of truth, shared with
+// the MQTT `info` message and the channel-config writers — so this is a thin
+// pass-through for the agent HTTP/MQTT handlers.
 func GetOpenClawVersion() string {
-	if v := openClawVersion.Load(); v != nil {
-		return *v
-	}
-	return ""
+	return openclaw.GetOpenClawVersion()
 }
 
-// populateOpenClawVersion shells out to `openclaw --version` with a short
-// timeout and stores the normalized semver in openClawVersion. Empty result
-// when openclaw is not on PATH or the command fails — the Status endpoint
-// then returns "" and the UI renders nothing for that field.
+// populateOpenClawVersion populates the shared openclaw version cache at startup.
 func populateOpenClawVersion() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	out, err := system.Run(ctx, "openclaw", "--version")
-	if err != nil {
-		slog.Warn("read openclaw version failed (expected if not on openclaw backend)", "component", "openclaw-probe", "error", err)
-		return
-	}
-	line := strings.TrimSpace(strings.TrimRight(string(out), "\r\n"))
-	if i := strings.IndexByte(line, '\n'); i >= 0 {
-		line = strings.TrimSpace(line[:i])
-	}
-	v := ""
-	if loc := openclawSemverRe.FindStringSubmatch(line); len(loc) > 1 {
-		v = loc[1]
-	}
-	openClawVersion.Store(&v)
+	openclaw.PopulateOpenClawVersion()
 }
 
 // StopTTS interrupts active TTS playback on HAL.
@@ -85,10 +51,7 @@ func (h *AgentHandler) Status(c *gin.Context) {
 	// Get real emotion from HAL (source of truth) instead of parsed text
 	emotion := h.fetchHALEmotion()
 
-	version := ""
-	if v := openClawVersion.Load(); v != nil {
-		version = *v
-	}
+	version := openclaw.GetOpenClawVersion()
 
 	// uptime: seconds since the WS connection last became ready (resets when
 	// the OS server reconnects). agentUptime: actual OpenClaw process uptime sourced from

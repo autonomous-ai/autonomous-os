@@ -14,7 +14,7 @@ import threading
 from typing import Any, Callable, Dict, List, Optional
 
 from hal.presets import LANG_EN
-from hal.drivers.voice.stt_provider import STTProvider, STTSession
+from hal.drivers.voice.stt.provider import STTProvider, STTSession
 
 logger = logging.getLogger("hal.voice.stt")
 

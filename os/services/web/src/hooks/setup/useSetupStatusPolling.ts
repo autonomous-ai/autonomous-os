@@ -5,25 +5,30 @@ import { getInitialSearch } from "./useSetupUrlParams";
 
 export type SetupPhase = "connecting" | "connected" | "failed";
 
-// Three paired pollers driving the post-submit "Setting up…" UI:
+// Two paired pollers driving the post-submit "Setting up…" UI. Redirect is
+// IP-only by design — the device's `.local` mDNS name is deliberately NOT used
+// because many home/office routers block mDNS multicast (and Android Chrome has
+// no native mDNS), which leaves the operator stranded. A raw LAN IP resolves on
+// every network, so it's the single source of truth for "where the device now
+// lives":
 //   (1) phase poll — runs while setupWorking, hits the AP IP for phase/lan_ip
-//   (2) LAN probe — once we know the LAN IP, probe it from the browser; when
-//       reachable (user rejoined home Wi-Fi) navigate there.
-//   (3) mDNS probe — primary auto-redirect path. The LAN-IP channel almost
-//       always fails in practice (AP shuts down before its lan_ip propagates
-//       to the FE poll), so we also probe `lamp-XXXX.local` directly. When
-//       the user's computer rejoins home Wi-Fi, mDNS resolves and we redirect.
+//       (the backend captures the STA IP early so the FE can read it during the
+//       brief window the AP is still alive — see internal/device/service.go).
+//   (2) LAN-IP probe — once lan_ip is known, probe http://<lan_ip>/api/health;
+//       when it succeeds (operator rejoined home Wi-Fi, device is up) redirect
+//       to http://<lan_ip>/setup. Also runs as the pre-submit canonical-URL
+//       upgrade so the URL bar moves off the soon-to-die AP IP onto the IP that
+//       survives the AP→STA switch. Requires the device CSP to allow plain
+//       `http:` in connect-src (the IP is cross-origin from the AP page).
 export function useSetupStatusPolling({
   setupWorking,
   setupLanIP,
-  deviceMdnsHost,
   setSetupPhase,
   setSetupLanIP,
   setSetupErrorMsg,
 }: {
   setupWorking: boolean;
   setupLanIP: string;
-  deviceMdnsHost: string;
   setSetupPhase: Dispatch<SetStateAction<SetupPhase>>;
   setSetupLanIP: Dispatch<SetStateAction<string>>;
   setSetupErrorMsg: Dispatch<SetStateAction<string>>;
@@ -59,134 +64,59 @@ export function useSetupStatusPolling({
     return () => { cancelled = true; clearInterval(id); };
   }, [setupWorking, setSetupPhase, setSetupLanIP, setSetupErrorMsg]);
 
-  // Best-effort auto-redirect: once we know the LAN IP, probe it from the
-  // browser. When reachable (= user has rejoined home Wi-Fi) navigate there.
+  // IP-only auto-redirect. Once we know the device's LAN IP, probe it from the
+  // browser; when the probe succeeds the user is back on home Wi-Fi and the
+  // device is reachable, so navigate to http://<lan_ip>/setup?<params>.
   //
-  // Gated on setupWorking (form submitted), NOT setupPhase==="connected": the
-  // phase poll runs against the AP IP and usually goes dark when the AP shuts
-  // down during the AP→STA switch, so it frequently never reports "connected".
-  // A successful probe of the device's new LAN address is itself proof the
-  // device is online and reachable — a stronger signal than the phase poll —
-  // so we don't wait on the phase. We still only have setupLanIP once a phase
-  // poll happened to return it before the AP died; the mDNS probe below is the
-  // primary channel for the common case where it didn't.
+  // This is the ONLY redirect channel — there is no `.local` fallback. A raw
+  // IP resolves on every LAN, including the mDNS-blocked networks where the
+  // `.local` name silently fails, so the IP is the reliable single target.
+  //
+  // It also serves as the pre-submit canonical-URL upgrade: while the page is
+  // on the AP IP (192.168.100.1) and a lan_ip is already known (e.g. re-setup
+  // from a device that's still on home Wi-Fi, or after the early-capture poll
+  // lands), it bounces the URL bar off the soon-to-die AP IP onto the IP that
+  // survives the AP→STA switch. Before submit, with wlan0 still serving the AP
+  // and no STA IP yet, lan_ip is empty and this effect simply does nothing —
+  // the page stays on 192.168.100.1, exactly as intended.
+  //
+  // Not gated on setupWorking: it must also run pre-submit for the canonical
+  // upgrade. It's safe — it can only fire once setupLanIP is non-empty, and
+  // the probe only succeeds once the device is actually reachable at that IP.
   useEffect(() => {
-    if (!setupWorking || !setupLanIP) return;
+    if (typeof window === "undefined" || !setupLanIP) return;
+    // Already on the target IP — nothing to redirect to. (Avoids a same-URL
+    // navigation no-op loop once we've landed.)
+    if (window.location.hostname === setupLanIP) return;
     let cancelled = false;
-    const newURL = `http://${setupLanIP}/`;
-    const probe = async () => {
-      try {
-        await fetch(`${newURL}api/health`, { mode: "no-cors", cache: "no-store" });
-        if (!cancelled) window.location.href = newURL;
-      } catch {
-        /* not reachable yet — user still on AP SSID */
-      }
-    };
-    probe();
-    const id = setInterval(probe, 3000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [setupWorking, setupLanIP]);
-
-  // mDNS probe — the primary auto-redirect channel since the LAN-IP one
-  // rarely fires in real AP→STA transitions. Carries the current pathname +
-  // search across, so any URL params from the OS server (llm_api_key, device_id, …)
-  // remain in scope on the new host even though the OS server already persisted
-  // them via the form submit. Manual button in Setup.tsx renders unconditionally
-  // as the safety net if mDNS is blocked on the network.
-  //
-  // Gated on setupWorking (form submitted), NOT setupPhase==="connected". The
-  // phase poll hits the AP IP and goes dark the moment the AP tears down for
-  // the AP→STA switch, so it commonly never flips to "connected" — which used
-  // to leave this probe disabled and the user stranded on the "connecting"
-  // screen even after the device was fully online on home Wi-Fi (the exact
-  // case the manual fallback link exists for). A successful health probe of
-  // `<host>.local` is itself proof the device rejoined the LAN AND the user's
-  // browser can resolve it, so it's the authoritative go-signal — we no longer
-  // wait on the phase. The probe only succeeds once the user is back on home
-  // Wi-Fi, so this can't fire prematurely while they're still on the AP.
-  //
-  // Critical: when the pre-submit redirect already moved us to the .local
-  // URL, the target URL == current URL. Browsers no-op `location.href =
-  // sameURL` — would leave the user stuck on the "connecting" screen even
-  // though wifi is up. Force `reload()` for the same-host case so SetupGate
-  // re-runs, hits the now-reachable `checkInternet`, and re-mounts Setup in
-  // continue mode (full menu).
-  useEffect(() => {
-    if (!setupWorking || !deviceMdnsHost) return;
-    let cancelled = false;
-    const targetHost = `${deviceMdnsHost}.local`;
-    const base = `http://${targetHost}`;
-    const newURL = `${base}${window.location.pathname}${carrySearch}`;
-    const navigate = () => {
-      if (window.location.hostname === targetHost) {
-        window.location.reload();
-      } else {
-        window.location.href = newURL;
-      }
-    };
-    const probe = async () => {
-      try {
-        await fetch(`${base}/api/health`, { mode: "no-cors", cache: "no-store" });
-        if (!cancelled) navigate();
-      } catch {
-        /* mDNS not resolvable yet — user still on AP, or network blocks mDNS */
-      }
-    };
-    probe();
-    const id = setInterval(probe, 3000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [setupWorking, deviceMdnsHost, carrySearch]);
-
-  // Pre-submit canonical URL upgrade: when user lands on the AP IP
-  // (192.168.100.1) we silently bounce to `http://lamp-XXXX.local/…` once we
-  // know the hostname AND the .local name is reachable from the current
-  // network. On the AP itself avahi runs on the device so the same multicast
-  // reaches both peers — resolution is almost instant on Windows/macOS/iOS.
-  // Benefit: the URL stays the same through the AP→STA wifi switch, so when
-  // the user rejoins home Wi-Fi the browser reloads the same .local URL and
-  // mDNS transparently maps it to the device's new LAN IP — no manual click.
-  // Android Chrome (no native mDNS) just sees probes fail and stays on the
-  // AP IP — current behavior, no regression.
-  //
-  // Aggressive timing on first attempts: browsers sometimes hold negative
-  // mDNS results for a few seconds on the first lookup. Start polling at
-  // 800ms and back off so the redirect lands sub-second when mDNS is healthy
-  // without spamming the network forever on Android-blocked cases.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (!deviceMdnsHost) {
-      console.info("[setup] pre-submit canonical-URL upgrade: skip — no deviceMdnsHost yet");
-      return;
-    }
-    if (window.location.hostname !== "192.168.100.1") {
-      console.info("[setup] pre-submit canonical-URL upgrade: skip — not on AP IP", window.location.hostname);
-      return;
-    }
-    console.info(`[setup] pre-submit canonical-URL upgrade: probing http://${deviceMdnsHost}.local/api/health`);
-    let cancelled = false;
-    let attempt = 0;
-    const base = `http://${deviceMdnsHost}.local`;
+    const base = `http://${setupLanIP}`;
+    // Carry pathname + original search so the IP host lands back on /setup with
+    // the OS-server-pushed params (llm_api_key, device_id, …) intact.
     const target = `${base}${window.location.pathname}${carrySearch}`;
+    let attempt = 0;
     let timer: number | undefined;
     const probe = async () => {
       attempt += 1;
       try {
+        // The device CSP must allow plain `http:` in connect-src for this
+        // cross-origin fetch to leave the browser. `mode: "no-cors"` does not
+        // bypass CSP — it only suppresses the opaque-response read.
         await fetch(`${base}/api/health`, { mode: "no-cors", cache: "no-store" });
         if (cancelled) return;
-        console.info(`[setup] mDNS reachable after ${attempt} probe(s) — redirecting to ${target}`);
+        console.info(`[setup] device reachable at ${setupLanIP} after ${attempt} probe(s) — redirecting to ${target}`);
         window.location.replace(target);
         return;
-      } catch (err) {
-        console.info(`[setup] probe attempt ${attempt} failed`, err);
+      } catch {
+        /* not reachable yet — user still on AP SSID, or device not up */
       }
       if (cancelled) return;
-      // Back-off: 800ms × 4 then 2s × ∞ — fast initial retries when mDNS is
-      // slow-resolving for the first lookup, then slow polls so we don't
-      // hammer the network on Android-blocked clients.
+      // Back-off: 800ms × 4 then 2s × ∞ — fast initial retries so the redirect
+      // lands sub-second when reachable, then slow polls so we don't hammer the
+      // network while the user is still on the AP.
       const next = attempt < 4 ? 800 : 2000;
       timer = window.setTimeout(probe, next);
     };
     probe();
     return () => { cancelled = true; if (timer) window.clearTimeout(timer); };
-  }, [deviceMdnsHost, carrySearch]);
+  }, [setupLanIP, carrySearch]);
 }

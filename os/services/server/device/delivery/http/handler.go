@@ -179,6 +179,43 @@ func (h *DeviceHandler) GetTTSProviders(c *gin.Context) {
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(domain.TTSProviders))
 }
 
+// GetRealtimeOptions returns the valid realtime providers + per-provider voice /
+// reasoning lists, so the web never hardcodes them (single source = config).
+func (h *DeviceHandler) GetRealtimeOptions(c *gin.Context) {
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(config.GetRealtimeOptions()))
+}
+
+// GetAgentRuntime returns the active agentic backend + selectable options for
+// the web settings dropdown.
+//
+//	@Router	/device/agent-runtime [get]
+func (h *DeviceHandler) GetAgentRuntime(c *gin.Context) {
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(domain.AgentRuntimeStatus{
+		Current: h.service.CurrentAgentRuntime(),
+		Options: domain.AgentRuntimes,
+	}))
+}
+
+// SetAgentRuntime swaps the agentic backend (openclaw ⇄ hermes). It persists the
+// choice and spawns switch-runtime, which toggles the systemd units and restarts
+// os-server — so the HTTP connection drops shortly after this returns 200. The
+// web should treat 200 as "accepted, reconnecting" and re-poll GetAgentRuntime /
+// the agent banner once os-server is back.
+//
+//	@Router	/device/agent-runtime [post]
+func (h *DeviceHandler) SetAgentRuntime(c *gin.Context) {
+	var req domain.AgentRuntimeSetData
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
+		return
+	}
+	if err := h.service.UpdateAgentRuntime(req); err != nil {
+		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
+		return
+	}
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(true))
+}
+
 // ChangeChannel godoc
 //
 //	@Summary	change messaging channel

@@ -43,7 +43,10 @@ asking: does it take the world **IN**, or does it drive the body **OUT**?
   - **`expression`** owns the `emotion` route — the body showing *its own* feeling. It is
     its own capability, not "lighting": a device declares `expression` when it has a way to
     emote (a screen face, an LED ring, or servo body-language), and the route **degrades**
-    to whatever output is present.
+    to whatever output is present. The realtime voice agent is also gated on it: its
+    `express_emotion` tool is registered (and able to drive the `emotion` route from inside
+    HAL) only when the device declares `expression` — a faceless device never sees the tool.
+    See `docs/realtime-voice.md`.
   - **`light`** owns `led` (direct control) **and `scene`** — `scene` is an ambient *mode*
     (lighting + mic/speaker mute + camera/servo policy), not an emotion; it lives with
     `light` because the HAL route **requires an LED** (returns 503 without one) and degrades
