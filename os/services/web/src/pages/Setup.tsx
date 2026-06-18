@@ -841,7 +841,11 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
         {/* Mobile tabs (hidden on desktop). The theme toggle sits OUTSIDE the
             horizontally-scrolling tab row so it stays pinned (margin-left:auto
             doesn't pin inside an overflow-x flex container) and isn't hidden
-            under the right-edge scroll-hint fade. */}
+            under the right-edge scroll-hint fade.
+            Hidden entirely for a single-step flow (e.g. device-pushed config
+            collapses the wizard to just Wi-Fi) — a lone tab chip is noise and
+            looked like a stray label in the companion-app popup. */}
+        {visibleSections.length > 1 && (
         <div className="lm-mobile-tabs-wrap" style={{
           display: "none", flexShrink: 0,
           borderBottom: `1px solid ${C.border}`,
@@ -870,6 +874,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
             {theme === "dark" ? "◑" : "◐"}
           </button>
         </div>
+        )}
 
         {/* Topbar */}
         <div style={{ borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
@@ -889,8 +894,10 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
             )}
           </div>
           {/* Per-step progress mirrors the wizard position (not section-done
-              count) so the bar advances as the operator walks Back/Next. */}
-          {!setupWorking && (
+              count) so the bar advances as the operator walks Back/Next.
+              Hidden for a single-step flow — there's no progress to show when
+              Wi-Fi is the only step (device-pushed config). */}
+          {!setupWorking && visibleSections.length > 1 && (
             <div className="lm-progress-track" style={{ borderRadius: 0 }}>
               <div
                 className="lm-progress-fill"
