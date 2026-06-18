@@ -35,31 +35,7 @@ from hal.drivers.realtime.orchestrator import RealtimeOrchestrator
 from hal.drivers.realtime.utils import pcm16_bytes_to_float32, resample_float32
 from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
 from hal.drivers.voice._internal.audio_recorder import ArecordStream
-from hal.drivers.voice._internal.config import (
-    BARGE_IN_BLOCK_MS,
-    BARGE_IN_ENABLED,
-    BARGE_IN_RMS_THRESHOLD,
-    BARGE_IN_TRIGGER_FRAMES,
-    CHANNELS,
-    DEFAULT_WAKE_WORDS,
-    ECHO_GATE_MAX_WAIT_S,
-    ECHO_GATE_WINDOW_S,
-    ECHO_RMS_FLOOR,
-    ENROLL_NUDGE_COOLDOWN_S,
-    FRAME_DURATION_MS,
-    MAX_SESSION_DURATION_S,
-    PRE_ROLL_FRAMES,
-    RMS_THRESHOLD,
-    SESSION_COOLDOWN_S,
-    SILENCE_TIMEOUT_S,
-    SILERO_MODEL_PATH,
-    SILERO_VAD_ENABLED,
-    SPEECH_HOLDOFF_S,
-    STT_KEEPALIVE,
-    STT_RATE,
-    WEBRTCVAD_AGGRESSIVENESS,
-    WEBRTCVAD_ENABLED,
-)
+from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice._internal.sensing_sender import SensingSender
 from hal.drivers.voice._internal.speaker_decorate import SpeakerDecorator
 from hal.drivers.voice._internal.vad_filters import SileroVADFilter, WebRTCVADFilter
@@ -136,25 +112,25 @@ class VoiceService:
         # WebRTC VAD — fast C-based pre-filter (~0.1ms vs Silero ~20ms).
         # Enable via HAL_WEBRTCVAD_ENABLED=true in .env.
         self._webrtc_vad = (
-            WebRTCVADFilter(WEBRTCVAD_AGGRESSIVENESS, self._np)
-            if WEBRTCVAD_ENABLED
+            WebRTCVADFilter(voice_cfg.WEBRTCVAD_AGGRESSIVENESS, self._np)
+            if voice_cfg.WEBRTCVAD_ENABLED
             else None
         )
-        if not WEBRTCVAD_ENABLED:
+        if not voice_cfg.WEBRTCVAD_ENABLED:
             logger.info("WebRTC VAD disabled (HAL_WEBRTCVAD_ENABLED=false)")
 
         self._silero_vad = (
-            SileroVADFilter(SILERO_MODEL_PATH, self._np) if SILERO_VAD_ENABLED else None
+            SileroVADFilter(voice_cfg.SILERO_MODEL_PATH, self._np) if voice_cfg.SILERO_VAD_ENABLED else None
         )
-        if not SILERO_VAD_ENABLED:
+        if not voice_cfg.SILERO_VAD_ENABLED:
             logger.info("Silero VAD disabled via HAL_SILERO_ENABLED=false")
 
         # Speaker decoration (wake-word + speaker recognizer + SER). Speaker-ID and
         # SER (speech emotion) are voice people-perception — gated on the `audio`
         # capability (the mic), passed in via enable_people_perception.
         self._decorator = SpeakerDecorator(
-            wake_words=list(wake_words) if wake_words else list(DEFAULT_WAKE_WORDS),
-            nudge_cooldown_s=ENROLL_NUDGE_COOLDOWN_S,
+            wake_words=list(wake_words) if wake_words else list(voice_cfg.DEFAULT_WAKE_WORDS),
+            nudge_cooldown_s=voice_cfg.ENROLL_NUDGE_COOLDOWN_S,
             enable_people_perception=enable_people_perception,
         )
 
@@ -301,29 +277,29 @@ class VoiceService:
             try:
                 with sd.InputStream(
                     device=self._input_device,
-                    samplerate=STT_RATE,
-                    channels=CHANNELS,
+                    samplerate=voice_cfg.STT_RATE,
+                    channels=voice_cfg.CHANNELS,
                     dtype="int16",
                     blocksize=512,
                 ):
                     pass
                 logger.info(
                     "Audio device opened at %dHz natively (no resample needed)",
-                    STT_RATE,
+                    voice_cfg.STT_RATE,
                 )
-                return STT_RATE
+                return voice_cfg.STT_RATE
             except Exception:
                 logger.info(
                     "Audio device native rate: %dHz (will resample to %dHz for STT)",
                     native,
-                    STT_RATE,
+                    voice_cfg.STT_RATE,
                 )
                 return native
         except Exception as e:
             logger.warning(
-                "Could not detect device rate, defaulting to %dHz: %s", STT_RATE, e
+                "Could not detect device rate, defaulting to %dHz: %s", voice_cfg.STT_RATE, e
             )
-            return STT_RATE
+            return voice_cfg.STT_RATE
 
     # ------------------------------------------------------------------
     # VAD helpers — thin wrappers that fail-open when filter is None
@@ -369,7 +345,7 @@ class VoiceService:
             return
 
         barged_in = False
-        if BARGE_IN_ENABLED:
+        if voice_cfg.BARGE_IN_ENABLED:
             barged_in = self._monitor_barge_in()
         else:
             logger.info("TTS is speaking, pausing mic until done...")
@@ -383,46 +359,46 @@ class VoiceService:
             return
 
         # Adaptive RMS gate: wait for reverb/echo to decay instead of fixed sleep
-        logger.info("TTS done, waiting for reverb decay (RMS < %d)...", ECHO_RMS_FLOOR)
+        logger.info("TTS done, waiting for reverb decay (RMS < %d)...", voice_cfg.ECHO_RMS_FLOOR)
         np = self._np
-        device_rate = self._device_rate or STT_RATE
-        window_frames = int(device_rate * ECHO_GATE_WINDOW_S)
+        device_rate = self._device_rate or voice_cfg.STT_RATE
+        window_frames = int(device_rate * voice_cfg.ECHO_GATE_WINDOW_S)
         try:
             # Prefer arecord backend (same as recording loop) — avoids PortAudio rate errors
             if self._alsa_device is not None:
                 mic_ctx = ArecordStream(
                     alsa_device=self._alsa_device,
                     rate=device_rate,
-                    channels=CHANNELS,
+                    channels=voice_cfg.CHANNELS,
                     blocksize=window_frames,
                     np=np,
                 )
             else:
                 mic_ctx = self._sd.InputStream(
                     samplerate=device_rate,
-                    channels=CHANNELS,
+                    channels=voice_cfg.CHANNELS,
                     dtype="int16",
                     blocksize=window_frames,
                     device=self._input_device,
                 )
             elapsed = 0.0
             with mic_ctx as tmp_mic:
-                while elapsed < ECHO_GATE_MAX_WAIT_S and self._running:
+                while elapsed < voice_cfg.ECHO_GATE_MAX_WAIT_S and self._running:
                     data, overflowed = tmp_mic.read(window_frames)
                     if overflowed:
                         continue
                     measured = float(np.sqrt(np.mean(data.astype(np.float32) ** 2)))
-                    elapsed += ECHO_GATE_WINDOW_S
-                    if measured < ECHO_RMS_FLOOR:
+                    elapsed += voice_cfg.ECHO_GATE_WINDOW_S
+                    if measured < voice_cfg.ECHO_RMS_FLOOR:
                         logger.info(
                             "Reverb decayed (RMS=%.0f < %d) after %.2fs",
                             measured,
-                            ECHO_RMS_FLOOR,
+                            voice_cfg.ECHO_RMS_FLOOR,
                             elapsed,
                         )
                         return
             logger.info(
-                "Reverb gate timeout after %.1fs, resuming anyway", ECHO_GATE_MAX_WAIT_S
+                "Reverb gate timeout after %.1fs, resuming anyway", voice_cfg.ECHO_GATE_MAX_WAIT_S
             )
         except Exception as e:
             logger.warning("RMS gate failed, falling back to fixed delay: %s", e)
@@ -441,13 +417,13 @@ class VoiceService:
         """
         logger.info(
             "TTS speaking — barge-in monitor active (threshold=%d, trigger=%d × %dms blocks)",
-            BARGE_IN_RMS_THRESHOLD,
-            BARGE_IN_TRIGGER_FRAMES,
-            BARGE_IN_BLOCK_MS,
+            voice_cfg.BARGE_IN_RMS_THRESHOLD,
+            voice_cfg.BARGE_IN_TRIGGER_FRAMES,
+            voice_cfg.BARGE_IN_BLOCK_MS,
         )
         np = self._np
-        device_rate = self._device_rate or STT_RATE
-        frame_size = int(device_rate * BARGE_IN_BLOCK_MS / 1000)
+        device_rate = self._device_rate or voice_cfg.STT_RATE
+        frame_size = int(device_rate * voice_cfg.BARGE_IN_BLOCK_MS / 1000)
         consecutive = 0
         max_seen = 0.0  # diagnostic: peak RMS observed during this monitor session
         try:
@@ -455,14 +431,14 @@ class VoiceService:
                 mic_ctx = ArecordStream(
                     alsa_device=self._alsa_device,
                     rate=device_rate,
-                    channels=CHANNELS,
+                    channels=voice_cfg.CHANNELS,
                     blocksize=frame_size,
                     np=np,
                 )
             else:
                 mic_ctx = self._sd.InputStream(
                     samplerate=device_rate,
-                    channels=CHANNELS,
+                    channels=voice_cfg.CHANNELS,
                     dtype="int16",
                     blocksize=frame_size,
                     device=self._input_device,
@@ -476,13 +452,13 @@ class VoiceService:
                     measured = float(np.sqrt(np.mean(data.astype(np.float32) ** 2)))
                     if measured > max_seen:
                         max_seen = measured
-                    if measured > BARGE_IN_RMS_THRESHOLD:
+                    if measured > voice_cfg.BARGE_IN_RMS_THRESHOLD:
                         consecutive += 1
-                        if consecutive >= BARGE_IN_TRIGGER_FRAMES:
+                        if consecutive >= voice_cfg.BARGE_IN_TRIGGER_FRAMES:
                             logger.info(
                                 "BARGE-IN: RMS=%.0f > %d for %d frames → stop TTS",
                                 measured,
-                                BARGE_IN_RMS_THRESHOLD,
+                                voice_cfg.BARGE_IN_RMS_THRESHOLD,
                                 consecutive,
                             )
                             if self._tts is not None:
@@ -519,7 +495,7 @@ class VoiceService:
         # Auto-detection is safe only on Pi5 where SoundPerception is not using the mic.
         # Set HAL_AUDIO_INPUT_ALSA=plughw:X,0 in .env to opt in explicitly.
         if self._alsa_device is not None:
-            device_rate = STT_RATE  # plughw does SRC; record directly at STT rate
+            device_rate = voice_cfg.STT_RATE  # plughw does SRC; record directly at STT rate
             logger.info(
                 "Using arecord backend (%s) at %dHz", self._alsa_device, device_rate
             )
@@ -533,7 +509,7 @@ class VoiceService:
                 device_rate,
             )
 
-        frame_size = int(device_rate * FRAME_DURATION_MS / 1000)
+        frame_size = int(device_rate * voice_cfg.FRAME_DURATION_MS / 1000)
         self._device_rate = device_rate  # store for _wait_for_tts
 
         while self._running:
@@ -550,14 +526,14 @@ class VoiceService:
                     mic_ctx = ArecordStream(
                         alsa_device=self._alsa_device,
                         rate=device_rate,
-                        channels=CHANNELS,
+                        channels=voice_cfg.CHANNELS,
                         blocksize=frame_size,
                         np=self._np,
                     )
                 else:
                     mic_ctx = self._sd.InputStream(
                         samplerate=device_rate,
-                        channels=CHANNELS,
+                        channels=voice_cfg.CHANNELS,
                         dtype="int16",
                         blocksize=frame_size,
                         device=self._input_device,
@@ -565,7 +541,7 @@ class VoiceService:
                 with mic_ctx as mic:
                     logger.info(
                         "Listening for speech (RMS=%d, rate=%dHz, backend=%s)...",
-                        RMS_THRESHOLD,
+                        voice_cfg.RMS_THRESHOLD,
                         device_rate,
                         f"arecord({self._alsa_device})"
                         if self._alsa_device
@@ -585,11 +561,11 @@ class VoiceService:
         Breaks out when TTS starts speaking so _loop can close mic and reopen after."""
         speech_start = None
         speech_pre_buffer = []  # frames buffered during holdoff period
-        lookback = deque(maxlen=PRE_ROLL_FRAMES)
+        lookback = deque(maxlen=voice_cfg.PRE_ROLL_FRAMES)
 
         # Keepalive: pre-connect STT WS so it's ready before speech is detected.
         keepalive_session = None
-        if STT_KEEPALIVE:
+        if voice_cfg.STT_KEEPALIVE:
             keepalive_session = self._stt.create_session()
             if not keepalive_session.start(lambda text, is_final: None):
                 keepalive_session = None
@@ -617,14 +593,14 @@ class VoiceService:
 
             energy = rms(data, self._np)
 
-            if energy >= RMS_THRESHOLD and self._webrtcvad_is_speech(data, device_rate):
+            if energy >= voice_cfg.RMS_THRESHOLD and self._webrtcvad_is_speech(data, device_rate):
                 if speech_start is None:
                     speech_start = time.time()
                     speech_pre_buffer = [data]
                 else:
                     speech_pre_buffer.append(data)
                 # Wait for holdoff before connecting STT (avoid short noises)
-                if (time.time() - speech_start) >= SPEECH_HOLDOFF_S:
+                if (time.time() - speech_start) >= voice_cfg.SPEECH_HOLDOFF_S:
                     # Run Silero on accumulated buffer (needs multiple chunks for LSTM)
                     if self._silero_vad is not None:
                         combined = self._np.concatenate(speech_pre_buffer)
@@ -642,11 +618,11 @@ class VoiceService:
                         "Speech detected (RMS=%.0f) — pre-roll=%d frames (~%dms) + holdoff=%d frames",
                         energy,
                         len(history),
-                        len(history) * FRAME_DURATION_MS,
+                        len(history) * voice_cfg.FRAME_DURATION_MS,
                         buffered,
                     )
                     speech_pre_buffer = [
-                        resample_to_stt(f, device_rate, STT_RATE, self._np)
+                        resample_to_stt(f, device_rate, voice_cfg.STT_RATE, self._np)
                         for f in all_frames
                     ]
                     self._stream_session(
@@ -664,9 +640,9 @@ class VoiceService:
                     self._silero_reset_state()
                     logger.info("VAD resumed — mic active, waiting for next speech")
                     # Cooldown after session to let resources clean up
-                    time.sleep(SESSION_COOLDOWN_S)
+                    time.sleep(voice_cfg.SESSION_COOLDOWN_S)
                     # Pre-connect next session immediately
-                    if STT_KEEPALIVE and self._running and not self._tts_is_speaking():
+                    if voice_cfg.STT_KEEPALIVE and self._running and not self._tts_is_speaking():
                         keepalive_session = self._stt.create_session()
                         if not keepalive_session.start(lambda text, is_final: None):
                             keepalive_session = None
@@ -677,7 +653,7 @@ class VoiceService:
             else:
                 speech_start = None
                 speech_pre_buffer = []
-                if energy >= RMS_THRESHOLD:
+                if energy >= voice_cfg.RMS_THRESHOLD:
                     logger.debug(
                         "VAD: RMS=%.0f above threshold but Silero rejected — not speech",
                         energy,
@@ -777,7 +753,7 @@ class VoiceService:
                 data, overflowed = mic.read(frame_size)
                 if not overflowed:
                     pre_buffer.append(
-                        resample_to_stt(data, device_rate, STT_RATE, self._np)
+                        resample_to_stt(data, device_rate, voice_cfg.STT_RATE, self._np)
                     )
 
             if not connect_ok[0]:
@@ -789,7 +765,7 @@ class VoiceService:
                 logger.info(
                     "Session FILL (pre-flush) — added %d frames (~%.0fms) to buffer",
                     len(all_pre),
-                    len(all_pre) * FRAME_DURATION_MS,
+                    len(all_pre) * voice_cfg.FRAME_DURATION_MS,
                 )
                 for frame in all_pre:
                     stt_session.send_audio(frame)
@@ -798,7 +774,7 @@ class VoiceService:
                     if hal_config.REALTIME_ENABLED and self._realtime.available:
                         audio_f32 = pcm16_bytes_to_float32(frame)
                         audio_f32 = resample_float32(
-                            audio_f32, STT_RATE, self._realtime.sample_rate
+                            audio_f32, voice_cfg.STT_RATE, self._realtime.sample_rate
                         )
                         self._realtime.append_audio(audio_f32)
                         rt_audio_buffer.append(audio_f32)
@@ -832,10 +808,10 @@ class VoiceService:
                     break
 
                 # Guard against zombie sessions
-                if (time.time() - session_start) > MAX_SESSION_DURATION_S:
+                if (time.time() - session_start) > voice_cfg.MAX_SESSION_DURATION_S:
                     logger.warning(
                         "STT session exceeded %ds, force-closing",
-                        MAX_SESSION_DURATION_S,
+                        voice_cfg.MAX_SESSION_DURATION_S,
                     )
                     break
 
@@ -843,7 +819,7 @@ class VoiceService:
                 if overflowed:
                     continue
 
-                resampled = resample_to_stt(data, device_rate, STT_RATE, self._np)
+                resampled = resample_to_stt(data, device_rate, voice_cfg.STT_RATE, self._np)
                 try:
                     stt_session.send_audio(resampled)
                 except Exception as e:
@@ -855,16 +831,16 @@ class VoiceService:
                 if hal_config.REALTIME_ENABLED and self._realtime.available:
                     audio_f32 = pcm16_bytes_to_float32(resampled)
                     audio_f32 = resample_float32(
-                        audio_f32, STT_RATE, self._realtime.sample_rate
+                        audio_f32, voice_cfg.STT_RATE, self._realtime.sample_rate
                     )
                     self._realtime.append_audio(audio_f32)
                     rt_audio_buffer.append(audio_f32)
 
                 energy = rms(data, self._np)
-                if energy >= RMS_THRESHOLD:
+                if energy >= voice_cfg.RMS_THRESHOLD:
                     last_speech_time = time.time()
                     last_speech_idx = len(audio_buffer) - 1
-                elif (time.time() - last_speech_time) > SILENCE_TIMEOUT_S:
+                elif (time.time() - last_speech_time) > voice_cfg.SILENCE_TIMEOUT_S:
                     logger.info("Silence detected, disconnecting STT")
                     break
         except Exception as e:
@@ -884,7 +860,7 @@ class VoiceService:
             # Remove trailing silence from audio_buffer for speaker recognition.
             # Leaves a 200ms tail for word endings; STT buffer unaffected.
             if last_speech_idx >= 0:
-                tail_frames = int(200 / FRAME_DURATION_MS) + 1
+                tail_frames = int(200 / voice_cfg.FRAME_DURATION_MS) + 1
                 trim_end = min(last_speech_idx + tail_frames + 1, len(audio_buffer))
                 dropped = len(audio_buffer) - trim_end
                 if dropped > 0:
@@ -893,7 +869,7 @@ class VoiceService:
                         "Session TRIM — dropped %d trailing-silence frames (~%.2fs) "
                         "[speaker-recog buffer only; SER keeps full %d frames]",
                         dropped,
-                        dropped * FRAME_DURATION_MS / 1000,
+                        dropped * voice_cfg.FRAME_DURATION_MS / 1000,
                         len(ser_audio_buffer),
                     )
 
@@ -901,7 +877,7 @@ class VoiceService:
             # out of scope. 1 session = 1 speaking turn = this many frames.
             buf_frames = len(audio_buffer)
             buf_bytes = sum(len(b) for b in audio_buffer)
-            buf_duration = buf_bytes / (STT_RATE * 2)
+            buf_duration = buf_bytes / (voice_cfg.STT_RATE * 2)
             logger.info(
                 "Session END — buffer frames=%d bytes=%d duration=%.2fs transcript=%r",
                 buf_frames,
