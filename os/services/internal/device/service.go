@@ -478,11 +478,13 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 		langChanged     bool
 		voiceChanged    bool
 		realtimeChanged bool
+		channelChanged  bool
 		newModel        string
 		newSSID         string
 		newPassword     string
 		prevLang        string
 		newLang         string
+		chanReq         domain.AddChannelRequest
 	)
 	if err := s.config.WithLockSave(func(c *config.Config) {
 		prevModel := c.LLMModel
@@ -499,6 +501,17 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 		prevTTSBaseURL := c.TTSBaseURL
 		prevTTSProvider := c.TTSProvider
 		prevTTSVoice := c.TTSVoice
+		// Snapshot channel fields so we can tell whether the messaging channel /
+		// its tokens actually changed and need re-pushing into the gateway.
+		prevChannel := c.Channel
+		prevTelegramBotToken := c.TelegramBotToken
+		prevTelegramUserID := c.TelegramUserID
+		prevSlackBotToken := c.SlackBotToken
+		prevSlackAppToken := c.SlackAppToken
+		prevSlackUserID := c.SlackUserID
+		prevDiscordBotToken := c.DiscordBotToken
+		prevDiscordGuildID := c.DiscordGuildID
+		prevDiscordUserID := c.DiscordUserID
 
 		if data.LLMAPIKey != "" {
 			c.LLMAPIKey = data.LLMAPIKey
@@ -640,6 +653,19 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 			c.TTSBaseURL != prevTTSBaseURL ||
 			c.TTSProvider != prevTTSProvider ||
 			c.TTSVoice != prevTTSVoice
+
+		channelChanged = c.Channel != prevChannel ||
+			c.TelegramBotToken != prevTelegramBotToken || c.TelegramUserID != prevTelegramUserID ||
+			c.SlackBotToken != prevSlackBotToken || c.SlackAppToken != prevSlackAppToken || c.SlackUserID != prevSlackUserID ||
+			c.DiscordBotToken != prevDiscordBotToken || c.DiscordGuildID != prevDiscordGuildID || c.DiscordUserID != prevDiscordUserID
+		// Build the request from the post-save config (full current values, since
+		// PATCH semantics mean a token the operator didn't touch keeps its value).
+		chanReq = domain.AddChannelRequest{
+			Channel:          c.Channel,
+			TelegramBotToken: c.TelegramBotToken, TelegramUserID: c.TelegramUserID,
+			SlackBotToken: c.SlackBotToken, SlackAppToken: c.SlackAppToken, SlackUserID: c.SlackUserID,
+			DiscordBotToken: c.DiscordBotToken, DiscordGuildID: c.DiscordGuildID, DiscordUserID: c.DiscordUserID,
+		}
 	}); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
@@ -649,6 +675,21 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 			slog.Info("reconnecting to new WiFi", "component", "device", "ssid", newSSID)
 			if _, err := s.networkService.SetupNetwork(newSSID, newPassword); err != nil {
 				slog.Error("WiFi reconnect failed", "component", "device", "error", err)
+			}
+		}()
+	}
+	// Channel/token edits via the Settings form only land in config.json, but the
+	// gateway keeps messaging tokens in its OWN config (written by AddChannel:
+	// `openclaw channels add` + plugin enable) and reads from there first. So a
+	// save — even a gateway restart — won't apply them; re-run AddChannel to push
+	// the change into the gateway. WhatsApp needs interactive QR pairing (MQTT
+	// add_channel only), so it is excluded here.
+	if channelChanged && chanReq.Channel != domain.ChannelWhatsapp {
+		go func() {
+			if _, err := s.AddChannel(context.Background(), chanReq); err != nil {
+				slog.Error("apply channel change to gateway failed", "component", "device", "channel", chanReq.Channel, "error", err)
+			} else {
+				slog.Info("channel change applied to gateway", "component", "device", "channel", chanReq.Channel)
 			}
 		}()
 	}

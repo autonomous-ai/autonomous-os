@@ -1,9 +1,18 @@
 package domain
 
 // OTAComponent describes version and download URL for a single component.
+//
+// MinVersion is the "approved floor" the automatic OTA worker rolls devices up
+// to. Bootstrap auto-updates a device only when its current version is BELOW
+// MinVersion; manual `software-update <key>` over SSH ignores it and always
+// installs Version. When MinVersion is empty it defaults to Version, so the
+// auto worker simply tracks the latest. This lets a release bump Version (the
+// build everyone CAN pull manually) without auto-pushing it to the fleet until
+// MinVersion is promoted. Skills and hooks do not use MinVersion.
 type OTAComponent struct {
-	Version string `json:"version"`
-	URL     string `json:"url"`
+	Version    string `json:"version"`
+	MinVersion string `json:"min_version,omitempty"`
+	URL        string `json:"url"`
 }
 
 const (

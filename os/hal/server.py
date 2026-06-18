@@ -102,15 +102,15 @@ DeepgramSTT = None
 AutonomousSTT = None
 TTSService = None
 try:
-    from hal.drivers.voice.stt_autonomous import AutonomousSTT
-    from hal.drivers.voice.stt_deepgram import DeepgramSTT
+    from hal.drivers.voice.stt import AutonomousSTT
+    from hal.drivers.voice.stt import DeepgramSTT
     from hal.drivers.voice.voice_service import VoiceService
 except ImportError as e:
     logger.warning(f"Voice service not available: {e}")
 
 try:
-    from hal.drivers.voice.tts_service import TTSService
-    from hal.drivers.voice.tts_backend import PROVIDER_OPENAI
+    from hal.drivers.voice.tts import TTSService
+    from hal.drivers.voice.tts import PROVIDER_OPENAI
 except ImportError as e:
     logger.warning(f"TTS service not available: {e}")
 
@@ -340,6 +340,10 @@ async def lifespan(app: FastAPI):
                     # so any device with a mic runs them. (Face emotion in the
                     # sensing loop stays `presence`-gated; see SensingService below.)
                     enable_people_perception=("audio" in _profile.capabilities),
+                    # `expression` (LED+servo face) gates the realtime agent's
+                    # express_emotion tool. A device with no face never registers
+                    # the tool, so the realtime model can't set an emotion.
+                    enable_expression=("expression" in _profile.capabilities),
                 )
                 state.voice_service.start()
                 logger.info("VoiceService auto-started (%s, wake_words=%s)", stt_provider.name, wake_words)

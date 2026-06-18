@@ -25,6 +25,38 @@ STT pipeline. At end-of-turn the model either:
 The `delegate_to_main` tool is registered automatically by the orchestrator
 (`orchestrator.py`, `DELEGATE_TOOL`).
 
+## Emotion expression (fire-and-forget)
+
+If the device declares the `expression` capability
+(`DEVICE.md` → `expression: { routes: [emotion] }`), the orchestrator also
+registers an `express_emotion` tool (`orchestrator.py`, `EMOTION_TOOL`).
+Devices with no face (e.g. mic + speaker only) never get the tool, so the
+realtime model can't set an emotion — the registration is gated end-to-end:
+`server.py` (`"expression" in _profile.capabilities`) →
+`VoiceService(enable_expression=…)` →
+`RealtimeOrchestrator(enable_expression=…)`.
+
+Unlike `delegate_to_main`, `express_emotion` is **fire-and-forget** and is the
+one exception to the model's binary "tool OR speech" rule — the model calls it
+*in parallel* with speaking. When `stream_output()` sees the call
+(`_handle_emotion_call`), it:
+
+1. calls the HAL emotion handler **in-process** (`_fire_emotion` →
+   `routes/emotion.py` `express_emotion`) on a daemon thread — the realtime agent
+   runs inside the HAL process, so there is no HTTP loopback / serialization. It
+   runs parallel to the audio already streaming, so the face changes without
+   blocking speech;
+2. acknowledges the call with `FunctionCallResultInput(trigger_response=False)`,
+   which records the result in history **without** spawning a second model
+   response. For OpenAI this skips `response.create` (`openai_realtime.py`); for
+   Gemini the tool response simply lets the turn continue. Net added latency to
+   speech ≈ 0.
+
+The model is told (`resources/system_prompt*.md`, "Expression Exception") to
+never wait for, announce, or speak the emotion aloud. Note this is distinct from
+the non-realtime path, where the agent emits a `[HW:/emotion:…]` text marker that
+the Go layer parses and strips — the realtime path never uses text markers.
+
 ## Providers
 
 Two interchangeable backends, selected by `HAL_REALTIME_PROVIDER`
@@ -189,7 +221,7 @@ Each knob's `HAL_*` env var overrides the block (and is the dev-box path):
 
 | File | Role |
 |------|------|
-| `orchestrator.py` | Session lifecycle, `delegate_to_main` tool, turn streaming |
+| `orchestrator.py` | Session lifecycle, `delegate_to_main` + `express_emotion` tools, turn streaming |
 | `voice_agent/base.py` | Abstract agent: two-thread queue contract, `receive()` |
 | `voice_agent/gemini_live.py` | Gemini Live provider (asyncio IO loop) |
 | `voice_agent/openai_realtime.py` | OpenAI Realtime provider (sync, lock-serialized connection) |

@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -26,6 +27,55 @@ import (
 
 // semverRe captures the first semver-like token (e.g. 2026.3.8 or v1.2.3-beta).
 var semverRe = regexp.MustCompile(`(\d+\.\d+\.\d+(?:[-+._][0-9A-Za-z.-]+)?)`)
+
+// versionParts extracts the numeric dotted core (e.g. 1.2.3 → [1 2 3]) of a
+// version string, ignoring any pre-release/build suffix. Returns nil when no
+// semver-like token is present (treated as the lowest possible version).
+func versionParts(v string) []int {
+	core := semverRe.FindString(v)
+	if core == "" {
+		return nil
+	}
+	if i := strings.IndexAny(core, "-+_"); i >= 0 {
+		core = core[:i]
+	}
+	var out []int
+	for _, p := range strings.Split(core, ".") {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			break
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+// compareVersions returns -1 if a < b, 0 if equal, 1 if a > b, comparing the
+// numeric dotted core of each. An empty/unparseable version sorts lowest, so a
+// device with an unknown current version always falls below any real floor.
+func compareVersions(a, b string) int {
+	pa, pb := versionParts(a), versionParts(b)
+	n := len(pa)
+	if len(pb) > n {
+		n = len(pb)
+	}
+	for i := 0; i < n; i++ {
+		var x, y int
+		if i < len(pa) {
+			x = pa[i]
+		}
+		if i < len(pb) {
+			y = pb[i]
+		}
+		if x < y {
+			return -1
+		}
+		if x > y {
+			return 1
+		}
+	}
+	return 0
+}
 
 // Bootstrap is the simplified OTA worker.
 type Bootstrap struct {
@@ -301,11 +351,22 @@ func (b *Bootstrap) reconcileDevice(ctx context.Context) (bool, error) {
 	return b.reconcile(ctx, domain.OTAKeyDevice, comp)
 }
 
-// reconcile compares current vs target version and applies update if needed.
+// reconcile decides whether the automatic OTA worker should update a component.
+//
+// The worker only rolls a device UP TO the approved floor (target.MinVersion,
+// defaulting to target.Version when unset): it applies an update only when the
+// current version is strictly BELOW that floor. A release can therefore bump
+// Version without auto-pushing it — the fleet moves only once MinVersion is
+// promoted. Manual `software-update <key>` over SSH bypasses this entirely and
+// always installs Version (it self-fetches metadata and ignores MinVersion).
 func (b *Bootstrap) reconcile(ctx context.Context, key string, target domain.OTAComponent) (bool, error) {
 	targetVersion := strings.TrimSpace(target.Version)
 	if targetVersion == "" {
 		return false, fmt.Errorf("metadata[%s].version is empty", key)
+	}
+	minVersion := strings.TrimSpace(target.MinVersion)
+	if minVersion == "" {
+		minVersion = targetVersion
 	}
 
 	current := b.detectVersion(ctx, key)
@@ -313,15 +374,22 @@ func (b *Bootstrap) reconcile(ctx context.Context, key string, target domain.OTA
 		current = b.state.Components[key]
 	}
 
-	if current == targetVersion {
-		if b.state.Components[key] != targetVersion {
-			b.state.Components[key] = targetVersion
+	// At or above the approved floor → nothing to auto-apply. Keep persisted
+	// state in sync with what's actually installed.
+	if compareVersions(current, minVersion) >= 0 {
+		// A newer build exists but the approved floor holds it back — surface it
+		// so staged rollouts are visible (promote min_version to release it).
+		if compareVersions(current, targetVersion) < 0 {
+			slog.Info("update held by min_version floor", "component", "bootstrap", "key", key, "current", current, "min", minVersion, "target", targetVersion)
+		}
+		if current != "" && b.state.Components[key] != current {
+			b.state.Components[key] = current
 			return true, nil
 		}
 		return false, nil
 	}
 
-	slog.Info("update available", "component", "bootstrap", "key", key, "current", current, "target", targetVersion)
+	slog.Info("update available", "component", "bootstrap", "key", key, "current", current, "min", minVersion, "target", targetVersion)
 
 	// Status LED: orange breathing while updating
 	b.progressLED("ota_progress")

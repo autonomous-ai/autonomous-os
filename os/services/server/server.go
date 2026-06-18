@@ -75,8 +75,12 @@ type Server struct {
 	lastSetupCompleted *bool
 	// lastDeviceID is the last DeviceID value we acted on. When this changes (typically empty → assigned at first /device/setup), we restart claude-desktop-buddy so its BLE name picks up the new device_id.
 	lastDeviceID *string
-	// lastMQTTEndpoint is the last MQTTEndpoint value we acted on. When this changes (typically empty → assigned via status-reporter ping response), we restart the MQTT client so it picks up the new broker config without requiring a full device restart.
-	lastMQTTEndpoint *string
+	// lastMQTTSig is the last MQTT-connection signature we acted on (endpoint +
+	// port + username + password + fa_channel). When any of these change — via a
+	// status-reporter ping response OR a PUT /api/device/config edit — we restart
+	// the MQTT client so it reconnects/resubscribes with the new broker config,
+	// without requiring a full device restart.
+	lastMQTTSig *string
 }
 
 // Engine ...
@@ -165,7 +169,7 @@ func (s *Server) Serve(closeFn func()) error {
 
 	s.handleSetUpCompleteChange(s.config.SetUpCompleted)
 	s.handleDeviceIDChange(s.config.DeviceID)
-	s.handleMQTTEndpointChange(s.config.MQTTEndpoint)
+	s.handleMQTTConfigChange()
 
 	configCtx, cancelConfig := context.WithCancel(context.Background())
 	defer cancelConfig()

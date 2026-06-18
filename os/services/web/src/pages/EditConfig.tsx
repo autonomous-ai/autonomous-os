@@ -619,13 +619,6 @@ export default function EditConfig() {
               </div>
             )}
 
-            <div style={{
-              background: C.amberDim, border: "1px solid rgba(245,158,11,0.2)",
-              borderRadius: 8, padding: "10px 14px", fontSize: 11.5,
-              color: C.textDim, marginBottom: 20, lineHeight: 1.6,
-            }}>
-              ↻ &nbsp;Restart your device after saving for AI brain and channel changes to take full effect.
-            </div>
 
             {loadingCfg ? <SkeletonBlock /> : (
               <form id="edit-form" onSubmit={handleSubmit}>

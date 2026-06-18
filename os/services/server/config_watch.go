@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os/exec"
 	"strings"
@@ -26,7 +27,7 @@ func (s *Server) runConfigChangeListener(ctx context.Context) {
 			hal.SetAPIKey(s.config.LLMAPIKey)
 			s.handleSetUpCompleteChange(s.config.SetUpCompleted)
 			s.handleDeviceIDChange(s.config.DeviceID)
-			s.handleMQTTEndpointChange(s.config.MQTTEndpoint)
+			s.handleMQTTConfigChange()
 		}
 	}
 }
@@ -74,25 +75,29 @@ func (s *Server) handleDeviceIDChange(deviceID string) {
 	})
 }
 
-// handleMQTTEndpointChange restarts the MQTT client when MQTTEndpoint changes,
-// so a backend-pushed broker config (delivered via status-reporter ping response)
-// is picked up without requiring a full device restart.
+// handleMQTTConfigChange restarts the MQTT client when ANY broker-connection
+// field changes (endpoint, port, username, password, or the subscribed
+// fa_channel) — whether pushed by the backend (status-reporter ping response) or
+// edited via PUT /api/device/config — so the new config is picked up without a
+// full device restart. restartMQTT reconnects and re-subscribes to fa_channel.
 //
-// On the first call (startup bootstrap) we just record the current value
-// without restarting — handleSetUpCompleteChange already brings MQTT up on
-// the initial setup-completed flip, so we only need to act on later changes.
-func (s *Server) handleMQTTEndpointChange(endpoint string) {
-	if s.lastMQTTEndpoint == nil {
-		s.lastMQTTEndpoint = &endpoint
+// On the first call (startup bootstrap) we just record the current signature
+// without restarting — handleSetUpCompleteChange already brings MQTT up on the
+// initial setup-completed flip, so we only need to act on later changes.
+func (s *Server) handleMQTTConfigChange() {
+	sig := fmt.Sprintf("%s|%d|%s|%s|%s",
+		s.config.MQTTEndpoint, s.config.MQTTPort, s.config.MQTTUsername,
+		s.config.MQTTPassword, s.config.FAChannel)
+	if s.lastMQTTSig == nil {
+		s.lastMQTTSig = &sig
 		return
 	}
-	if *s.lastMQTTEndpoint == endpoint {
+	if *s.lastMQTTSig == sig {
 		return
 	}
-	prev := *s.lastMQTTEndpoint
-	s.lastMQTTEndpoint = &endpoint
+	s.lastMQTTSig = &sig
 
-	slog.Info("mqtt endpoint changed, restarting mqtt client", "component", "config", "old", prev, "new", endpoint)
+	slog.Info("mqtt config changed, restarting mqtt client", "component", "config", "endpoint", s.config.MQTTEndpoint)
 	s.restartMQTT()
 }
 

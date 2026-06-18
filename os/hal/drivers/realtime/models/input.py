@@ -33,3 +33,9 @@ class FunctionCallResultInput(InputBase):
     type: InputTypeEnum = InputTypeEnum.FUNCTION_CALL_RESULT
     call_id: str
     output: str  # JSON string
+    # When False, the result is recorded in conversation history WITHOUT
+    # triggering a new model response. Used for fire-and-forget tools (e.g.
+    # express_emotion) so acknowledging the call doesn't spawn a second spoken
+    # turn — which would add latency and make the device talk twice.
+    # delegate_to_main keeps the default (True).
+    trigger_response: bool = True
