@@ -76,6 +76,10 @@ build-preflight:
 	@echo
 
 build: build-preflight
+	# Clear stale pi-builder image so Docker always rebuilds from current build-orangepi.sh.
+	# Prevents the class of bug where a cached layer runs an old script version.
+	@docker rmi pi-builder 2>/dev/null || true
+	@docker builder prune -af >/dev/null 2>&1 || true
 	# Build the Docker build environment (shared for both targets)
 	docker build -t pi-builder .
 
