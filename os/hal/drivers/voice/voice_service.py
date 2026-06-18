@@ -27,7 +27,7 @@ import requests
 
 from hal import app_state as hal_app_state
 from hal import config as hal_config
-from hal.presets import EMO_IDLE, EMO_LISTENING
+from hal import presets
 from hal.drivers.realtime.enums import AgentGateway
 from hal.drivers.realtime.models import TextOutput as RTTextOutput
 from hal.drivers.realtime.models.signal import DelegateSignal
@@ -733,7 +733,7 @@ class VoiceService:
                 self._backchannel.on_partial(text)
                 if not listening_emotion_sent[0]:
                     listening_emotion_sent[0] = True
-                    self._set_emotion_local(EMO_LISTENING)
+                    self._set_emotion_local(presets.EMO_LISTENING)
                 return
             # Accumulate final segments — don't send yet, wait for session close.
             # Flux model fires multiple EndOfTurn events for natural pauses within
@@ -1136,8 +1136,8 @@ class VoiceService:
                     try:
                         from hal import app_state
 
-                        if app_state._current_emotion == EMO_LISTENING:
-                            self._set_emotion_local(EMO_IDLE)
+                        if app_state._current_emotion == presets.EMO_LISTENING:
+                            self._set_emotion_local(presets.EMO_IDLE)
                     except Exception as e:
                         logger.warning("listening idle-reset failed: %s", e)
 
