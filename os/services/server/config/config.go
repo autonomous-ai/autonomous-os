@@ -223,6 +223,10 @@ func Default() Config {
 		MQTTPassword: "",
 		MQTTPort:     0,
 
+		// Seed the realtime block so a fresh config.json always carries an editable
+		// realtime config (HAL reads it from there). See DefaultRealtimeConfig.
+		Realtime: DefaultRealtimeConfig(),
+
 		notify: make(chan bool, 1),
 	}
 }
@@ -271,6 +275,16 @@ func ProvideConfig() *Config {
 			if err := cfg.Save(); err != nil {
 				slog.Error("save config after migration failed", "component", "config", "error", err)
 			}
+		}
+	}
+
+	// Seed the realtime block with defaults if an already-provisioned config.json
+	// predates it, so the file always carries an editable realtime config (HAL
+	// reads it from there). Idempotent — only the first start after upgrade writes.
+	if cfg.Realtime == nil {
+		cfg.Realtime = DefaultRealtimeConfig()
+		if err := cfg.Save(); err != nil {
+			slog.Error("seed realtime config failed", "component", "config", "error", err)
 		}
 	}
 

@@ -63,6 +63,29 @@ const (
 	defaultRealtimeOpenAIReasoning = "minimal"
 )
 
+// DefaultRealtimeConfig returns the realtime block os-server seeds into
+// config.json on first start (or after an upgrade) when none is present, so the
+// file always carries an editable realtime config. Values come from the provider
+// defaults above; HAL then reads them straight from config.json. api_key/base_url
+// are intentionally left empty so they fall back to the LLM credentials.
+func DefaultRealtimeConfig() *RealtimeConfig {
+	enabled := true
+	return &RealtimeConfig{
+		Enabled:  &enabled,
+		Provider: "gemini",
+		Gemini: &GeminiRealtime{
+			Model:         defaultRealtimeGeminiModel,
+			Voice:         defaultRealtimeGeminiVoice,
+			ThinkingLevel: defaultRealtimeGeminiThinking,
+		},
+		OpenAI: &OpenAIRealtime{
+			Model:           defaultRealtimeOpenAIModel,
+			Voice:           defaultRealtimeOpenAIVoice,
+			ReasoningEffort: defaultRealtimeOpenAIReasoning,
+		},
+	}
+}
+
 // --- Realtime voice-agent accessors -----------------------------------------
 // All are nil-safe so callers never touch the nested struct directly; keys/URLs
 // fall back to the LLM credentials (same pattern as Get{TTS,STT}*), and the
