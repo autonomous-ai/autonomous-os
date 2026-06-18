@@ -34,6 +34,7 @@ from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
 from hal.drivers.voice._internal.audio_recorder import ArecordStream
 from hal.drivers.voice._internal.realtime_turn import run_realtime_turn
 from hal.drivers.voice._internal.sensing_sender import SensingSender
+from hal.drivers.voice._internal.session_finalize import finalize_session
 from hal.drivers.voice._internal.speaker_decorate import SpeakerDecorator
 from hal.drivers.voice._internal.vad_filters import SileroVADFilter, WebRTCVADFilter
 from hal.drivers.voice.backchannel import Backchannel
@@ -846,41 +847,8 @@ class VoiceService:
             self._backchannel.reset()
             self._listening = False
             stt_session.close()
-            # Combine all final segments + any trailing partial into one transcript.
-            if longest_partial[0]:
-                final_segments.append(longest_partial[0])
-            combined = " ".join(final_segments).strip()
-
-            # Snapshot the FULL (untrimmed) buffer for SER before trimming.
-            ser_audio_buffer = list(audio_buffer)
-
-            # Remove trailing silence from audio_buffer for speaker recognition.
-            # Leaves a 200ms tail for word endings; STT buffer unaffected.
-            if last_speech_idx >= 0:
-                tail_frames = int(200 / voice_cfg.FRAME_DURATION_MS) + 1
-                trim_end = min(last_speech_idx + tail_frames + 1, len(audio_buffer))
-                dropped = len(audio_buffer) - trim_end
-                if dropped > 0:
-                    del audio_buffer[trim_end:]
-                    logger.info(
-                        "Session TRIM — dropped %d trailing-silence frames (~%.2fs) "
-                        "[speaker-recog buffer only; SER keeps full %d frames]",
-                        dropped,
-                        dropped * voice_cfg.FRAME_DURATION_MS / 1000,
-                        len(ser_audio_buffer),
-                    )
-
-            # Final snapshot of the buffer for traceability before it goes
-            # out of scope. 1 session = 1 speaking turn = this many frames.
-            buf_frames = len(audio_buffer)
-            buf_bytes = sum(len(b) for b in audio_buffer)
-            buf_duration = buf_bytes / (voice_cfg.STT_RATE * 2)
-            logger.info(
-                "Session END — buffer frames=%d bytes=%d duration=%.2fs transcript=%r",
-                buf_frames,
-                buf_bytes,
-                buf_duration,
-                combined or "(empty)",
+            combined, ser_audio_buffer, buf_duration = finalize_session(
+                audio_buffer, longest_partial, final_segments, last_speech_idx
             )
 
             # --- Realtime voice agent (runs first, before speaker ID / OS server) ---
