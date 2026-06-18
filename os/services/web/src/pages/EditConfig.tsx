@@ -18,7 +18,7 @@ import { RealtimeSection } from "@/components/edit/RealtimeSection";
 import { STTSection, type SttProvider } from "@/components/edit/STTSection";
 import { ChannelSection } from "@/components/edit/ChannelSection";
 import { MqttSection } from "@/components/edit/MqttSection";
-import { Wifi, UserCircle, Cpu, Brain, Volume2, MicVocal, MessageSquare, Globe, Link } from "lucide-react";
+import { Wifi, UserCircle, Cpu, Brain, Volume2, MicVocal, MessageSquare, Globe, Link, Zap } from "lucide-react";
 
 // Local subset of the shared SectionId — EditConfig uses `stt` (Language is
 // rendered under id="stt"), not `language` / `deepgram` like Setup.
@@ -33,7 +33,7 @@ const ALL_SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; debug
   { id: "llm",      label: "AI Brain", icon: <Brain size={ICON_SIZE} />, debugOnly: true },
   { id: "stt",      label: "Language", icon: <Globe size={ICON_SIZE} />, debugOnly: true },
   { id: "tts",      label: "Voice", icon: <Volume2 size={ICON_SIZE} />, debugOnly: true },
-  { id: "realtime", label: "Realtime", icon: <Volume2 size={ICON_SIZE} />, debugOnly: true },
+  { id: "realtime", label: "Realtime", icon: <Zap size={ICON_SIZE} />, debugOnly: true },
   { id: "voice",    label: "My Voice", icon: <MicVocal size={ICON_SIZE} /> },
   { id: "face",     label: "Face",     icon: <UserCircle size={ICON_SIZE} /> },
   { id: "channel",  label: "Channels", icon: <MessageSquare size={ICON_SIZE} />, debugOnly: true },
