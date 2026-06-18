@@ -20,7 +20,7 @@ from typing import Optional
 
 import numpy as np
 
-from hal.drivers.voice.tts_backend import TTSBackend, TTS_SAMPLE_RATE, create_backend
+from hal.drivers.voice.tts.backend import TTSBackend, TTS_SAMPLE_RATE, create_backend
 
 # WAV cache for fixed-text TTS (fillers, intent confirms). Key includes
 # provider/voice/model/speed/text so config changes self-invalidate.

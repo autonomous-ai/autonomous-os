@@ -16,8 +16,8 @@ import threading
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlencode
 
-from hal.drivers.voice.stt_provider import STTProvider, STTSession
-from hal.drivers.voice.tts_openai import _ensure_openai_v1
+from hal.drivers.voice.stt.provider import STTProvider, STTSession
+from hal.drivers.voice.tts.openai import _ensure_openai_v1
 
 logger = logging.getLogger("hal.voice.stt")
 logger.setLevel(logging.INFO)

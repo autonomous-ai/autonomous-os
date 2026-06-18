@@ -31,7 +31,7 @@ Khác mic mute: mic mute = Lamp không nghe (deaf). Speaker mute = Lamp không n
 ## Implementation
 
 1. `server.py`: `_speaker_muted` flag + `POST /speaker/mute` + `POST /speaker/unmute` + include in `GET /audio/status`
-2. `tts_service.py`: check flag before play → return early
+2. `tts/service.py`: check flag before play → return early
 3. `music_service.py`: check flag before play → skip
 4. Voice skill: add speaker mute/unmute markers + meeting mode trigger phrases
 5. Web monitor: toggle button

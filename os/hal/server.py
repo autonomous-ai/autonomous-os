@@ -102,15 +102,15 @@ DeepgramSTT = None
 AutonomousSTT = None
 TTSService = None
 try:
-    from hal.drivers.voice.stt_autonomous import AutonomousSTT
-    from hal.drivers.voice.stt_deepgram import DeepgramSTT
+    from hal.drivers.voice.stt import AutonomousSTT
+    from hal.drivers.voice.stt import DeepgramSTT
     from hal.drivers.voice.voice_service import VoiceService
 except ImportError as e:
     logger.warning(f"Voice service not available: {e}")
 
 try:
-    from hal.drivers.voice.tts_service import TTSService
-    from hal.drivers.voice.tts_backend import PROVIDER_OPENAI
+    from hal.drivers.voice.tts import TTSService
+    from hal.drivers.voice.tts import PROVIDER_OPENAI
 except ImportError as e:
     logger.warning(f"TTS service not available: {e}")
 

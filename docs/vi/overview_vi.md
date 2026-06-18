@@ -48,7 +48,8 @@ os/hal/
 ├── service/
 │   ├── voice/voice_service.py    — Local VAD + Deepgram STT, speaker ID, SER submit
 │   ├── voice/speech_emotion/     — Queue SER → dlbackend → OS server speech_emotion.detected
-│   ├── voice/tts_service.py      — OpenAI-compatible TTS
+│   ├── voice/stt/                — STT có thể plug in (Deepgram / autonomous)
+│   ├── voice/tts/                — TTS service + backend plug in (OpenAI / ElevenLabs)
 │   ├── sensing/
 │   │   ├── sensing_service.py    — Vòng lặp sensing nền
 │   │   ├── presence_service.py   — State machine tự bật/tắt đèn theo presence

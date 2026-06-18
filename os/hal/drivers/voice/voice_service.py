@@ -40,7 +40,7 @@ from hal.drivers.voice._internal.sensing_sender import SensingSender
 from hal.drivers.voice._internal.speaker_decorate import SpeakerDecorator
 from hal.drivers.voice._internal.vad_filters import SileroVADFilter, WebRTCVADFilter
 from hal.drivers.voice.backchannel import Backchannel
-from hal.drivers.voice.stt_provider import STTProvider
+from hal.drivers.voice.stt import STTProvider
 
 logger = logging.getLogger("hal.voice")
 

@@ -22,7 +22,7 @@ from hal.drivers.sensing.perceptions.processors.fire_hazard import FireHazardPer
 from hal.drivers.sensing.perceptions.typing import SendEventCallable
 from hal.drivers.sensing.perceptions.utils import PerceptionStateObservers
 from hal.drivers.sensing.presence_service import PresenseService
-from hal.drivers.voice.tts_service import TTSService
+from hal.drivers.voice.tts import TTSService
 
 try:
     import cv2

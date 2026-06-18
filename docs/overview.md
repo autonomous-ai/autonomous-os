@@ -47,7 +47,8 @@ os/hal/
 ├── devices/                      — Camera device abstraction (LocalVideoCaptureDevice)
 ├── service/
 │   ├── voice/voice_service.py    — Local VAD + Deepgram STT
-│   ├── voice/tts_service.py      — OpenAI-compatible TTS
+│   ├── voice/stt/                — Pluggable STT (Deepgram / autonomous)
+│   ├── voice/tts/                — TTS service + pluggable backends (OpenAI / ElevenLabs)
 │   ├── sensing/
 │   │   ├── sensing_service.py    — Background sensing loop
 │   │   ├── presence_service.py   — Auto light on/off state machine

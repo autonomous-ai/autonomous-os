@@ -10,7 +10,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Iterator, Optional
 
-logger = logging.getLogger("hal.voice.tts_backend")
+logger = logging.getLogger("hal.voice.tts")
 
 # Provider constants
 PROVIDER_OPENAI = "openai"
@@ -59,8 +59,8 @@ def create_backend(
     """Factory: create a TTS backend by provider name."""
     provider = (provider or PROVIDER_OPENAI).lower().strip()
     if provider == PROVIDER_ELEVENLABS:
-        from hal.drivers.voice.tts_elevenlabs import ElevenLabsTTSBackend
+        from hal.drivers.voice.tts.elevenlabs import ElevenLabsTTSBackend
         return ElevenLabsTTSBackend(api_key=api_key, base_url=base_url)
     # Default: openai-compatible
-    from hal.drivers.voice.tts_openai import OpenAITTSBackend
+    from hal.drivers.voice.tts.openai import OpenAITTSBackend
     return OpenAITTSBackend(api_key=api_key, base_url=base_url)

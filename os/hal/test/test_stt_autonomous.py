@@ -34,7 +34,7 @@ def main():
         print("ERROR: provide --api-key or set LLM_API_KEY env var", file=sys.stderr)
         sys.exit(1)
 
-    from hal.drivers.voice.stt_autonomous import AutonomousSTT
+    from hal.drivers.voice.stt import AutonomousSTT
 
     print(f"[test] base_url={args.base_url}  model={args.model}")
 

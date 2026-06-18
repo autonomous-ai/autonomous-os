@@ -36,15 +36,15 @@ except ImportError:
     pass
 
 try:
-    from hal.drivers.voice.stt_autonomous import AutonomousSTT
-    from hal.drivers.voice.stt_deepgram import DeepgramSTT
+    from hal.drivers.voice.stt import AutonomousSTT
+    from hal.drivers.voice.stt import DeepgramSTT
     from hal.drivers.voice.voice_service import VoiceService
 except ImportError:
     pass
 
 try:
-    from hal.drivers.voice.tts_service import TTSService
-    from hal.drivers.voice.tts_backend import PROVIDER_OPENAI
+    from hal.drivers.voice.tts import TTSService
+    from hal.drivers.voice.tts import PROVIDER_OPENAI
 except ImportError:
     PROVIDER_OPENAI = "openai"
 
@@ -170,8 +170,8 @@ def get_voices(provider: Optional[str] = None, lang: Optional[str] = None):
     older clients that don't send lang). OpenAI voices ignore lang —
     its built-in voices are language-agnostic.
     """
-    from hal.drivers.voice.tts_elevenlabs import ElevenLabsTTSBackend
-    from hal.drivers.voice.tts_backend import PROVIDER_ELEVENLABS, PROVIDER_OPENAI as _PO
+    from hal.drivers.voice.tts import ElevenLabsTTSBackend
+    from hal.drivers.voice.tts import PROVIDER_ELEVENLABS, PROVIDER_OPENAI as _PO
     if provider is None:
         provider = getattr(state.tts_service, "_provider", _PO) if state.tts_service else _PO
     if provider == PROVIDER_ELEVENLABS:
@@ -220,7 +220,7 @@ def speak_text(req: SpeakRequest):
             or wanted_base_url != normalized_current_base
         )
         if needs_swap:
-            from hal.drivers.voice.tts_backend import create_backend
+            from hal.drivers.voice.tts import create_backend
             if state.tts_service.speaking:
                 state.tts_service.stop()
             try:

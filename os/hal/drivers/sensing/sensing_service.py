@@ -35,7 +35,7 @@ from hal.drivers.rgb.rgb_service import RGBService
 from hal.drivers.sensing.perceptions.models import PerceptionConfig
 from hal.drivers.sensing.perceptions.orchestrator import PerceptionOrchestrator
 from hal.drivers.sensing.presence_service import PresenseService
-from hal.drivers.voice.tts_service import TTSService
+from hal.drivers.voice.tts import TTSService
 
 logger = logging.getLogger(__name__)
 

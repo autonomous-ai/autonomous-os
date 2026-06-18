@@ -4,10 +4,10 @@ import logging
 from typing import Iterator, Optional
 
 from hal.presets import LANG_EN, LANG_VI
-from hal.drivers.voice.tts_backend import TTSBackend, STREAM_CHUNK_SIZE
-from hal.drivers.voice.tts_openai import _ensure_openai_v1
+from hal.drivers.voice.tts.backend import TTSBackend, STREAM_CHUNK_SIZE
+from hal.drivers.voice.tts.openai import _ensure_openai_v1
 
-logger = logging.getLogger("hal.voice.tts_backend")
+logger = logging.getLogger("hal.voice.tts")
 
 
 class ElevenLabsTTSBackend(TTSBackend):
