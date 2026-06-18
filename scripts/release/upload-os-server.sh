@@ -64,7 +64,10 @@ try:
     data = json.loads(raw) if raw.strip() else {}
 except json.JSONDecodeError:
     data = {}
-data['os-server'] = {'version': sys.argv[1], 'url': sys.argv[2], 'updated_at': sys.argv[3]}
+entry = data.get('os-server') if isinstance(data.get('os-server'), dict) else {}
+entry.update({'version': sys.argv[1], 'url': sys.argv[2], 'updated_at': sys.argv[3]})
+# preserve existing min_version (staged-rollout floor); bump it via promote-ota.sh
+data['os-server'] = entry
 print(json.dumps(data, indent=2))
 " "$new_version" "$BACKEND_URL" "$(date '+%Y-%m-%d %H:%M:%S %z')")
 

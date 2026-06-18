@@ -69,7 +69,10 @@ try:
     data = json.loads(raw) if raw.strip() else {}
 except json.JSONDecodeError:
     data = {}
-data['web'] = {'version': sys.argv[1], 'url': sys.argv[2], 'updated_at': sys.argv[3]}
+entry = data.get('web') if isinstance(data.get('web'), dict) else {}
+entry.update({'version': sys.argv[1], 'url': sys.argv[2], 'updated_at': sys.argv[3]})
+# preserve existing min_version (staged-rollout floor); bump it via promote-ota.sh
+data['web'] = entry
 print(json.dumps(data, indent=2))
 " "$new_version" "$WEB_URL" "$(date '+%Y-%m-%d %H:%M:%S %z')")
 

@@ -58,6 +58,7 @@ File JSON duy nhất trên GCS. Tất cả thành phần tham chiếu file này.
 {
   "os-server": {
     "version": "1.2.3",
+    "min_version": "1.2.0",
     "url": "https://storage.googleapis.com/{BUCKET}/{PREFIX}/ota/os-server/1.2.3/os-server-1.2.3.zip"
   },
   "bootstrap": {
@@ -92,10 +93,37 @@ const (
 type OTAMetadata map[string]OTAComponent
 
 type OTAComponent struct {
-    Version string `json:"version"`
-    URL     string `json:"url,omitempty"`
+    Version    string `json:"version"`
+    MinVersion string `json:"min_version,omitempty"`
+    URL        string `json:"url,omitempty"`
 }
 ```
+
+### Staged rollout — `version` vs `min_version`
+
+`version` là bản mới nhất; `min_version` là **sàn đã duyệt** mà worker tự động
+đẩy cả fleet lên tới. Hai trường tách bạch "đã publish" và "đã auto-push":
+
+- **Auto OTA (bootstrap worker)** chỉ cập nhật thiết bị khi version hiện tại
+  **thấp hơn hẳn `min_version`**. Nếu thiếu `min_version` thì mặc định bằng
+  `version` (worker bám latest — hành vi cũ).
+- **`software-update <key>` thủ công** (qua SSH) bỏ qua `min_version`, luôn cài
+  `version` — để test bản mới trên vài thiết bị trước.
+
+Quy trình:
+
+1. `scripts/release/upload-<component>.sh` bump `version` và **giữ nguyên**
+   `min_version` (skills/hooks không có `min_version`). Fleet **không** đổi —
+   chỉ `version` thay đổi.
+2. SSH vào thiết bị, chạy `software-update <key>` → kéo `version`. Test.
+3. Ổn? `make promote-ota <component> [version]` (vd `make promote-ota hal`,
+   `make promote-ota os-server 1.4.0`, `make promote-ota device lamp`) nâng
+   `min_version` (mặc định = `version`). Bootstrap sẽ tự cập nhật mọi thiết bị
+   dưới sàn mới ở lần check kế tiếp.
+
+So sánh version theo số trên từng đoạn (`bootstrap.compareVersions`):
+`2026.5.27 > 2026.5.9`; bỏ qua hậu tố pre-release/build; version hiện tại rỗng
+hoặc không parse được xem là thấp nhất (luôn dưới mọi sàn → cập nhật).
 
 ---
 
@@ -259,13 +287,16 @@ checkOnce():
 
 reconcile(key, target):
   1. Phát hiện version hiện tại đã cài
-  2. So sánh với version mục tiêu
-  3. Nếu giống → cập nhật state, return
-  4. Nếu khác →
+  2. floor = target.min_version (mặc định target.version nếu rỗng)
+  3. Nếu current >= floor → đồng bộ state, return (đã ở/trên sàn duyệt)
+  4. Nếu current < floor →
      a. Bật LED cam breathing (đang update)
-     b. applyUpdate(key, target)
+     b. applyUpdate(key, target)   # cài target.version qua software-update
      c. Thành công → flash xanh lá | Thất bại → đỏ pulse
 ```
+
+> `software-update <key>` thủ công qua SSH KHÔNG đi qua `reconcile` — nó cài
+> thẳng `target.version`, bỏ qua sàn `min_version`.
 
 ### OTA LED Feedback
 

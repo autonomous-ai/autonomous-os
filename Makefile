@@ -118,7 +118,7 @@ autonomous-build-chat:
 # Upload (OTA to GCS) — unified format: make upload-<component>
 # ============================================================================
 
-.PHONY: upload-os-server upload-bootstrap upload-hal upload-claude-desktop-buddy upload-autonomous-buddy upload-web upload-skills upload-hooks upload-setup upload-setup-ap upload-openclaw upload-device upload-twitch-irc upload-autonomous-chat upload-all
+.PHONY: upload-os-server upload-bootstrap upload-hal upload-claude-desktop-buddy upload-autonomous-buddy upload-web upload-skills upload-hooks upload-setup upload-setup-ap upload-openclaw upload-device upload-twitch-irc upload-autonomous-chat upload-all promote-ota
 
 upload-os-server:
 	bash scripts/release/upload-os-server.sh
@@ -185,6 +185,23 @@ endif
 upload-device:
 	@if [ -z "$(DEVICE_TYPE_ARG)" ]; then echo "Usage: make upload-device <type>   (e.g. lamp, intern, unitree-go2w)" >&2; exit 1; fi
 	bash scripts/release/upload-device.sh "$(DEVICE_TYPE_ARG)"
+
+# Promote the auto-rollout floor (min_version) so bootstrap pushes a build to the
+# fleet: `make promote-ota <component> [min_version]`. Examples:
+#   make promote-ota hal              # min_version = hal.version
+#   make promote-ota os-server 1.4.0  # pin floor explicitly
+#   make promote-ota device lamp      # devices.lamp (no colon for make)
+# Stubs the trailing positional args so make doesn't treat them as targets.
+ifeq (promote-ota,$(firstword $(MAKECMDGOALS)))
+  PROMOTE_ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+  ifneq ($(PROMOTE_ARGS),)
+    $(eval $(PROMOTE_ARGS):;@:)
+  endif
+endif
+
+promote-ota:
+	@if [ -z "$(PROMOTE_ARGS)" ]; then echo "Usage: make promote-ota <component> [min_version]   (e.g. hal | os-server 1.4.0 | device lamp)" >&2; exit 1; fi
+	bash scripts/release/promote-ota.sh $(PROMOTE_ARGS)
 
 # upload-openclaw is intentionally NOT in upload-all — bumping the OpenClaw
 # version is an explicit decision, not a side effect of pushing other artifacts.

@@ -58,6 +58,7 @@ Single JSON file hosted on GCS. All components reference this file.
 {
   "os-server": {
     "version": "1.2.3",
+    "min_version": "1.2.0",
     "url": "https://storage.googleapis.com/{BUCKET}/{PREFIX}/ota/os-server/1.2.3/os-server-1.2.3.zip"
   },
   "bootstrap": {
@@ -92,10 +93,38 @@ const (
 type OTAMetadata map[string]OTAComponent
 
 type OTAComponent struct {
-    Version string `json:"version"`
-    URL     string `json:"url,omitempty"`
+    Version    string `json:"version"`
+    MinVersion string `json:"min_version,omitempty"`
+    URL        string `json:"url,omitempty"`
 }
 ```
+
+### Staged rollout — `version` vs `min_version`
+
+`version` is the latest build; `min_version` is the **approved floor** the
+automatic worker rolls the fleet up to. They decouple "published" from
+"auto-pushed":
+
+- **Auto OTA (bootstrap worker)** updates a device only when its current version
+  is **strictly below `min_version`**. If `min_version` is absent it defaults to
+  `version` (so the worker simply tracks the latest — legacy behavior).
+- **Manual `software-update <key>`** (run over SSH) ignores `min_version` and
+  always installs `version` — for testing a build on a few devices first.
+
+Workflow:
+
+1. `scripts/release/upload-<component>.sh` bumps `version` and **preserves**
+   `min_version` (skills/hooks have no `min_version`). The fleet does **not**
+   move — only `version` changed.
+2. SSH into a device, run `software-update <key>` → it pulls `version`. Test it.
+3. Happy? `make promote-ota <component> [version]` (e.g. `make promote-ota hal`,
+   `make promote-ota os-server 1.4.0`, `make promote-ota device lamp`) raises
+   `min_version` (default: up to `version`). Bootstrap now auto-updates every
+   device below the new floor on its next check.
+
+Version comparison is numeric per dotted segment (`bootstrap.compareVersions`):
+`2026.5.27 > 2026.5.9`; pre-release/build suffixes are ignored; an empty or
+unparseable current version sorts lowest (always below any floor → updates).
 
 ---
 
@@ -261,13 +290,16 @@ checkOnce():
 
 reconcile(key, target):
   1. Detect current installed version
-  2. Compare to target version
-  3. If same → update state, return
-  4. If different →
+  2. floor = target.min_version (default target.version if empty)
+  3. If current >= floor → sync state, return (at/above approved floor)
+  4. If current < floor →
      a. Set LED orange breathing (OTA in progress)
-     b. applyUpdate(key, target)
+     b. applyUpdate(key, target)   # installs target.version via software-update
      c. Success → green flash | Failure → red pulse
 ```
+
+> Manual `software-update <key>` over SSH does NOT pass through `reconcile` — it
+> installs `target.version` directly, bypassing the `min_version` floor.
 
 ### OTA LED Feedback
 
