@@ -1,0 +1,125 @@
+"""Export YOLO person detector to ONNX."""
+
+import argparse
+import logging
+from copy import deepcopy
+from pathlib import Path
+from typing import override
+
+import numpy as np
+import torch
+from ultralytics import YOLO
+
+from core.export.utils.constants import MODELS_DIR
+from core.export.utils.evaluation import prepare_onnx_session
+from core.export.utils.nms import onnx_nms, xyxy_to_xywh_normalized
+
+logger: logging.Logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+
+class YOLOONNX(torch.nn.Module):
+    def __init__(self, model: torch.nn.Module, nms: bool = True):
+        super().__init__()
+        self.model = model
+        self.nms = nms
+
+    @override
+    def forward(self, x: torch.Tensor):
+        raw = self.model(x)  # [B, 4 + nc, A]
+        boxes_xywh = raw[:, :4, :].permute(0, 2, 1)  # [B, A, 4]
+        scores = raw[:, 4:, :].permute(0, 2, 1)       # [B, A, K]
+
+        # xywh → xyxy
+        xy = boxes_xywh[..., :2]
+        wh = boxes_xywh[..., 2:]
+        boxes_xyxy = torch.cat([xy - wh / 2, xy + wh / 2], dim=-1)
+
+        if self.nms:
+            return onnx_nms(boxes_xyxy, scores, input_hw=(x.shape[2], x.shape[3]))
+
+        # No NMS: return all anchors normalized
+        xywh = xyxy_to_xywh_normalized(boxes_xyxy, input_hw=(x.shape[2], x.shape[3]))
+        _, labels = scores.max(dim=-1)
+        return xywh, scores, labels
+
+
+def export(checkpoint: str, output: str, imgsz: int = 640, opset: int = 17, nms: bool = True):
+    logger.info(f"Loading YOLO from {checkpoint}")
+    yolo = YOLO(checkpoint)
+
+    net = deepcopy(yolo.model).float()
+    net.eval()
+    net = net.fuse()
+    for m in net.modules():
+        if hasattr(m, "export"):
+            m.export = True
+
+    wrapper = YOLOONNX(net, nms=nms)
+    wrapper.eval()
+
+    dummy = torch.zeros(1, 3, imgsz, imgsz)
+
+    if nms:
+        output_names = ["boxes", "probs", "labels"]
+        dynamic_axes = {
+            "images": {0: "batch", 2: "height", 3: "width"},
+            "boxes": {0: "batch", 1: "num_det"},
+            "probs": {0: "batch", 1: "num_det"},
+            "labels": {0: "batch", 1: "num_det"},
+        }
+    else:
+        output_names = ["boxes", "probs", "labels"]
+        dynamic_axes = {
+            "images": {0: "batch", 2: "height", 3: "width"},
+            "boxes": {0: "batch"},
+            "probs": {0: "batch"},
+        }
+
+    logger.info(f"Exporting to {output} (nms={nms})...")
+    torch.onnx.export(
+        wrapper,
+        dummy,
+        output,
+        input_names=["images"],
+        output_names=output_names,
+        dynamic_axes=dynamic_axes,
+        opset_version=opset,
+        do_constant_folding=True,
+    )
+
+    size_mb = Path(output).stat().st_size / 1024 / 1024
+    logger.info(f"Exported to {output} ({size_mb:.1f} MB)")
+
+    # Verify
+    dummy_np = np.random.randn(1, 3, imgsz, imgsz).astype(np.float32)
+
+    with torch.no_grad():
+        torch_out = wrapper(torch.tensor(dummy_np))
+        torch_boxes = torch_out[0].cpu().numpy()
+
+    sess = prepare_onnx_session(Path(output))
+    onnx_out = sess.run(None, {"images": dummy_np})
+
+    n = min(torch_boxes.shape[1], onnx_out[0].shape[1])
+    mean_err = np.mean(np.abs(torch_boxes[:, :n] - onnx_out[0][:, :n]))
+    max_err = np.max(np.abs(torch_boxes[:, :n] - onnx_out[0][:, :n]))
+    logger.info(f"Verification (boxes, n={n}): mean_err = {mean_err:.6f} | max_err = {max_err:.6f}")
+
+
+def entry():
+    logging.basicConfig(level=logging.DEBUG)
+
+    parser = argparse.ArgumentParser(description="Export YOLO to ONNX")
+    parser.add_argument("--checkpoint", default="yolo12x.pt")
+    parser.add_argument("--output", default=None)
+    parser.add_argument("--imgsz", type=int, default=640)
+    parser.add_argument("--opset", type=int, default=17)
+    parser.add_argument("--nms", action="store_true", default=True)
+    parser.add_argument("--no-nms", dest="nms", action="store_false")
+    args = parser.parse_args()
+
+    name = Path(args.checkpoint).stem
+    suffix = "" if args.nms else "_raw"
+    output = args.output or str(MODELS_DIR / "onnx" / f"{name}{suffix}.onnx")
+    export(args.checkpoint, output, args.imgsz, args.opset, args.nms)

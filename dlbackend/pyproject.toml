@@ -61,6 +61,17 @@ dev = [
 ]
 
 [project.scripts]
+export-all = "core.export.entries.export_all:entry"
+export-emonet = "core.export.entries.export_emonet:entry"
+export-emotion2vec = "core.export.entries.export_emotion2vec:entry"
+export-grounding-dino = "core.export.entries.export_grounding_dino:entry"
+export-owlv2 = "core.export.entries.export_owlv2:entry"
+export-posterv2 = "core.export.entries.export_posterv2:entry"
+export-tcpformer = "core.export.entries.export_tcpformer:entry"
+export-uniformerv2 = "core.export.entries.export_uniformerv2:entry"
+export-yolo = "core.export.entries.export_yolo:entry"
+export-yolo-world = "core.export.entries.export_yolo_world:entry"
+export-yoloe = "core.export.entries.export_yoloe:entry"
 
 [tool.setuptools_scm]
 
