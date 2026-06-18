@@ -19,7 +19,7 @@ import (
 const configFilePath = "/root/config/config.json"
 
 var deviceWipePaths = []string{
-	"/root/config",                                  // os-server config.json (API keys, channel tokens, MQTT creds)
+	"/root/config/config.json",                      // os-server config (API keys, channel tokens, MQTT creds) — bootstrap.json in the same dir is intentionally kept
 	"/root/local/users",                             // face + voice enrollments (owner)
 	"/root/local/strangers",                         // face + voice enrollments (stranger)
 	"/var/lib/hal/snapshots",                        // persistent camera snapshots (sensing_face / motion / emotion, 72h TTL)
