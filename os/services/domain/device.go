@@ -264,6 +264,17 @@ const (
 	KindOAuthRemove  = "oauth.remove"  // delete OAuth token for a provider
 	KindRealtimeSet  = "realtime.set"  // persist realtime voice-agent config (provider/voice/reasoning…)
 
+	// KindAgentRuntimeSet swaps the agentic backend (openclaw ⇄ hermes). Persists
+	// config.agent_runtime then runs switch-runtime.sh (toggle systemd units +
+	// restart os-server so agent/factory.go re-resolves the gateway).
+	KindAgentRuntimeSet = "agent_runtime.set"
+
+	// AgentRuntimeOpenClaw / AgentRuntimeHermes are the swappable agentic
+	// backends. Source of truth mirrored by internal/agent/factory.go's resolver
+	// and /usr/local/bin/switch-runtime.
+	AgentRuntimeOpenClaw = "openclaw"
+	AgentRuntimeHermes   = "hermes"
+
 	KindSystemInfo    = "system.info"    // aggregate: versions + network + host
 	KindSystemVersion = "system.version" // lamp + bootstrap + hal + openclaw versions
 	KindSystemNetwork = "system.network" // wlan0 IP, MAC, SSID, gateway
@@ -706,6 +717,39 @@ type MQTTRealtimeSetAck struct {
 	Status string           `json:"status"`
 	Error  string           `json:"error,omitempty"`
 	Data   *RealtimeSetData `json:"data,omitempty"`
+}
+
+// AgentRuntimeSetData is the payload for cmd:"data", kind:"agent_runtime.set".
+// Runtime selects the agentic backend. The valid set mirrors agent/factory.go's
+// resolver; anything else is rejected (we don't silently fall back here — an
+// unknown value from the BFF is a contract error, not a default).
+//
+//	{ "cmd": "data", "kind": "agent_runtime.set", "data": { "runtime": "hermes" } }
+type AgentRuntimeSetData struct {
+	Runtime string `json:"runtime"` // "openclaw" | "hermes"
+}
+
+// AgentRuntimes is the valid set, surfaced to the web settings dropdown via
+// GET /api/device/agent-runtime so the UI never hardcodes the list.
+var AgentRuntimes = []string{AgentRuntimeOpenClaw, AgentRuntimeHermes}
+
+// AgentRuntimeStatus is returned by GET /api/device/agent-runtime: the active
+// backend plus the selectable options.
+type AgentRuntimeStatus struct {
+	Current string   `json:"current"`
+	Options []string `json:"options"`
+}
+
+// AgentRuntimeSetAck is published to fd_channel after applying (or failing)
+// an agent_runtime.set downlink. status: "starting" | "success" | "failure".
+// On "success" the device restarts os-server, so the BFF should expect a brief
+// reconnect — the new banner (AGENT BACKEND ACTIVE) confirms the swap landed.
+type AgentRuntimeSetAck struct {
+	MQTTInfoResponse
+	Kind   string               `json:"kind"`
+	Status string               `json:"status"`
+	Error  string               `json:"error,omitempty"`
+	Data   *AgentRuntimeSetData `json:"data,omitempty"`
 }
 
 // MQTTTTSPreviewData is the nested data payload for cmd:"data", kind:"tts.preview".

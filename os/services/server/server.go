@@ -230,6 +230,8 @@ func (s *Server) Serve(closeFn func()) error {
 	device.GET("voices", s.deviceHandler.GetVoices)
 	device.GET("tts-providers", s.deviceHandler.GetTTSProviders)
 	device.GET("realtime-options", s.deviceHandler.GetRealtimeOptions)
+	device.GET("agent-runtime", adminAuthMiddleware(s.config), s.deviceHandler.GetAgentRuntime)
+	device.POST("agent-runtime", adminAuthMiddleware(s.config), s.deviceHandler.SetAgentRuntime)
 
 	network := api.Group("network")
 	network.GET("", s.networkHandler.GetNetworks)

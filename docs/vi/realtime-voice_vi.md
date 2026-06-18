@@ -25,6 +25,35 @@ lượt, model sẽ:
 Tool `delegate_to_main` được orchestrator đăng ký tự động (`orchestrator.py`,
 `DELEGATE_TOOL`).
 
+## Biểu cảm cảm xúc (fire-and-forget)
+
+Nếu thiết bị khai báo capability `expression`
+(`DEVICE.md` → `expression: { routes: [emotion] }`), orchestrator còn đăng ký
+thêm tool `express_emotion` (`orchestrator.py`, `EMOTION_TOOL`). Thiết bị không
+có "mặt" (vd: chỉ mic + loa) sẽ không có tool này, nên model realtime không thể
+set cảm xúc — gating chạy xuyên suốt: `server.py`
+(`"expression" in _profile.capabilities`) →
+`VoiceService(enable_expression=…)` →
+`RealtimeOrchestrator(enable_expression=…)`.
+
+Khác với `delegate_to_main`, `express_emotion` là **fire-and-forget** và là
+ngoại lệ duy nhất của quy tắc "tool HOẶC nói" — model gọi nó *song song* với
+việc nói. Khi `stream_output()` thấy lời gọi (`_handle_emotion_call`), nó:
+
+1. gọi handler emotion của HAL **in-process** (`_fire_emotion` →
+   `routes/emotion.py` `express_emotion`) trong một daemon thread — realtime agent
+   chạy ngay trong process HAL nên không cần loopback HTTP / serialize. Nó chạy
+   song song với audio đang stream, nên mặt đổi mà không chặn giọng;
+2. xác nhận lời gọi bằng `FunctionCallResultInput(trigger_response=False)`, tức
+   ghi kết quả vào history **mà không** sinh response thứ hai. Với OpenAI điều
+   này bỏ qua `response.create` (`openai_realtime.py`); với Gemini thì tool
+   response chỉ để lượt tiếp tục. Độ trễ cộng thêm vào giọng nói ≈ 0.
+
+Model được dặn (`resources/system_prompt*.md`, mục "Expression Exception") không
+chờ, không thông báo, không đọc tên cảm xúc thành tiếng. Lưu ý điều này khác
+path không-realtime: ở đó agent phát marker text `[HW:/emotion:…]` rồi lớp Go
+parse và cắt bỏ — path realtime không bao giờ dùng marker text.
+
 ## Các provider
 
 Hai backend thay thế cho nhau, chọn bằng `HAL_REALTIME_PROVIDER`
@@ -184,7 +213,7 @@ Mỗi knob có thể bị `HAL_*` env override (thắng block, và là đường
 
 | File | Vai trò |
 |------|---------|
-| `orchestrator.py` | Vòng đời session, tool `delegate_to_main`, stream lượt |
+| `orchestrator.py` | Vòng đời session, tool `delegate_to_main` + `express_emotion`, stream lượt |
 | `voice_agent/base.py` | Agent trừu tượng: contract 2-thread/queue, `receive()` |
 | `voice_agent/gemini_live.py` | Provider Gemini Live (IO loop asyncio) |
 | `voice_agent/openai_realtime.py` | Provider OpenAI Realtime (sync, connection serialize bằng lock) |

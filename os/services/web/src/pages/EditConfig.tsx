@@ -17,14 +17,15 @@ import { VoiceSection as EditVoiceSection } from "@/components/edit/VoiceSection
 import { FaceSection as EditFaceSection } from "@/components/edit/FaceSection";
 import { TTSSection } from "@/components/edit/TTSSection";
 import { RealtimeSection } from "@/components/edit/RealtimeSection";
+import { AgentRuntimeSection } from "@/components/edit/AgentRuntimeSection";
 import { STTSection, type SttProvider } from "@/components/edit/STTSection";
 import { ChannelSection } from "@/components/edit/ChannelSection";
 import { MqttSection } from "@/components/edit/MqttSection";
-import { Wifi, UserCircle, Cpu, Brain, Volume2, MicVocal, MessageSquare, Globe, Link, Zap } from "lucide-react";
+import { Wifi, UserCircle, Cpu, Brain, Volume2, MicVocal, MessageSquare, Globe, Link, Zap, Server } from "lucide-react";
 
 // Local subset of the shared SectionId — EditConfig uses `stt` (Language is
 // rendered under id="stt"), not `language` / `deepgram` like Setup.
-type SectionId = Extract<SharedSectionId, "device" | "wifi" | "llm" | "voice" | "face" | "tts" | "realtime" | "stt" | "channel" | "mqtt">;
+type SectionId = Extract<SharedSectionId, "device" | "wifi" | "llm" | "voice" | "face" | "tts" | "realtime" | "stt" | "channel" | "mqtt"> | "runtime";
 const ICON_SIZE = 15;
 // `cap` declares the device capability a section's hardware needs; the section
 // is hidden when the device doesn't have it (mirrors the Monitor nav gating).
@@ -38,6 +39,7 @@ const ALL_SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; debug
   // ?debug=true. Typical operators only need Device + Wi-Fi + voice/face
   // enrollment; deeper provider knobs stay hidden by default.
   { id: "llm",      label: "AI Brain", icon: <Brain size={ICON_SIZE} />, debugOnly: true },
+  { id: "runtime",  label: "Runtime",  icon: <Server size={ICON_SIZE} />, debugOnly: true },
   { id: "stt",      label: "Language", icon: <Globe size={ICON_SIZE} />, debugOnly: true, cap: Cap.Audio },
   { id: "tts",      label: "Voice", icon: <Volume2 size={ICON_SIZE} />, debugOnly: true, cap: Cap.Audio },
   { id: "realtime", label: "Realtime", icon: <Zap size={ICON_SIZE} />, debugOnly: true, cap: Cap.Audio },
@@ -582,7 +584,7 @@ export default function EditConfig() {
           <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>
             {SECTIONS.find((s) => s.id === activeSection)?.label}
           </span>
-          {activeSection !== "face" && activeSection !== "voice" && (
+          {activeSection !== "face" && activeSection !== "voice" && activeSection !== "runtime" && (
             <button
               form="edit-form"
               type="submit"
@@ -650,6 +652,8 @@ export default function EditConfig() {
                   llmUrl={llmUrl} setLlmUrl={setLlmUrl}
                   llmModel={llmModel} setLlmModel={setLlmModel}
                 />
+
+                <AgentRuntimeSection active={activeSection === "runtime"} />
 
                 <EditVoiceSection
                   active={activeSection === "voice"}

@@ -340,6 +340,10 @@ async def lifespan(app: FastAPI):
                     # so any device with a mic runs them. (Face emotion in the
                     # sensing loop stays `presence`-gated; see SensingService below.)
                     enable_people_perception=("audio" in _profile.capabilities),
+                    # `expression` (LED+servo face) gates the realtime agent's
+                    # express_emotion tool. A device with no face never registers
+                    # the tool, so the realtime model can't set an emotion.
+                    enable_expression=("expression" in _profile.capabilities),
                 )
                 state.voice_service.start()
                 logger.info("VoiceService auto-started (%s, wake_words=%s)", stt_provider.name, wake_words)
