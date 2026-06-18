@@ -33,9 +33,9 @@ from hal.drivers.realtime.models import TextOutput as RTTextOutput
 from hal.drivers.realtime.models.signal import DelegateSignal
 from hal.drivers.realtime.orchestrator import RealtimeOrchestrator
 from hal.drivers.realtime.utils import pcm16_bytes_to_float32, resample_float32
+from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
 from hal.drivers.voice._internal.audio_recorder import ArecordStream
-from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice._internal.sensing_sender import SensingSender
 from hal.drivers.voice._internal.speaker_decorate import SpeakerDecorator
 from hal.drivers.voice._internal.vad_filters import SileroVADFilter, WebRTCVADFilter
