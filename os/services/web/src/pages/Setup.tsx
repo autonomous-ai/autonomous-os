@@ -386,6 +386,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
       && (isV1 || hasAdminPassword || adminPassword.length >= ADMIN_PASSWORD_MIN),
     llm: !!llmApiKey || llmLoaded.apiKey,
     language: true, // Auto/empty is a valid choice — never block on this.
+    realtime: true, // Not a setup step (edit-only card); never blocks setup.
     channel: channel === "telegram"
       ? (!!teleToken || channelLoaded.teleToken)
       : channel === "slack"

@@ -4,7 +4,7 @@
 // for the same thing. Both kept here so SectionCard accepts either page's ids.
 export type SectionId =
   | "wifi" | "device" | "llm" | "language" | "stt" | "deepgram"
-  | "tts" | "channel" | "mqtt" | "voice" | "face";
+  | "tts" | "realtime" | "channel" | "mqtt" | "voice" | "face";
 
 export interface LlmLoadedState {
   apiKey: boolean;

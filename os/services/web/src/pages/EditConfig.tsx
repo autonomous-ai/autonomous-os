@@ -14,6 +14,7 @@ import { WifiSection } from "@/components/edit/WifiSection";
 import { VoiceSection as EditVoiceSection } from "@/components/edit/VoiceSection";
 import { FaceSection as EditFaceSection } from "@/components/edit/FaceSection";
 import { TTSSection } from "@/components/edit/TTSSection";
+import { RealtimeSection } from "@/components/edit/RealtimeSection";
 import { STTSection, type SttProvider } from "@/components/edit/STTSection";
 import { ChannelSection } from "@/components/edit/ChannelSection";
 import { MqttSection } from "@/components/edit/MqttSection";

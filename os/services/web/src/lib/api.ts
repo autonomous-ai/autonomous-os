@@ -226,6 +226,15 @@ export interface DeviceConfig {
   stt_model: string;
   tts_provider: string;
   tts_voice: string;
+  realtime?: {
+    enabled?: boolean;
+    provider?: string;
+    model?: string;
+    voice?: string;
+    reasoning?: string;
+    base_url?: string;
+    has_api_key?: boolean;
+  };
   device_id: string;
   mac: string;
   network_ssid: string;

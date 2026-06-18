@@ -34,16 +34,6 @@ export interface SetupRequest {
   tts_base_url?: string;
   tts_provider?: string;
   tts_voice?: string;
-  /** Realtime voice-agent config (resolved active-provider values; api_key never returned). */
-  realtime?: {
-    enabled?: boolean;
-    provider?: string;
-    model?: string;
-    voice?: string;
-    reasoning?: string;
-    base_url?: string;
-    has_api_key?: boolean;
-  };
   device_id?: string;
   /** Hardware-derived ID (Lamp-XXXX from Pi serial / eth MAC). Read-only — set by the device at runtime. */
   mac?: string;
