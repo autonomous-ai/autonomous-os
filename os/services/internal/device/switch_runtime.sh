@@ -3,11 +3,15 @@
 #
 # Backend-agnostic: knows NOTHING about hermes/openclaw/picoclaw specifically.
 # Everything backend-specific lives outside this script:
-#   - a backend "X" is installed by its install.sh, which must create an
-#     X.service systemd unit + seed its own config. The installer is found
-#     LOCALLY first at /usr/local/lib/os-runtimes/X/install.sh (materialized by
-#     os-server from a binary-embedded copy — works fully offline), else fetched
-#     from ${RUNTIMES_BASE_URL}/X/install.sh on the CDN;
+#   - a backend "X" is installed by its install.sh, which must create a systemd
+#     unit + seed its own config. The unit defaults to X.service, but an
+#     installer whose unit has a different name (e.g. hermes →
+#     hermes-gateway.service, created by `hermes gateway install --system`)
+#     declares it in /usr/local/lib/os-runtimes/X/service (one line, no .service
+#     suffix); this script reads that to stay name-agnostic. The installer is
+#     found LOCALLY first at /usr/local/lib/os-runtimes/X/install.sh (materialized
+#     by os-server from a binary-embedded copy — works fully offline), else
+#     fetched from ${RUNTIMES_BASE_URL}/X/install.sh on the CDN;
 #   - an optional pre-start hook  /usr/local/bin/runtime-X-presync  (dropped by
 #     that installer) runs right before X starts — e.g. hermes syncs llm_* from
 #     config.json into its own config there.
@@ -39,11 +43,26 @@ log() { echo "[switch-runtime] $*"; }
 
 unit_exists() { systemctl cat "${1}.service" >/dev/null 2>&1; }
 
-# 1. Ensure the target backend is installed. Its installer owns creating
-#    <NEW>.service. (openclaw.service is baked by setup.sh, so this is skipped
-#    for openclaw — uniform path, no special-case.) Prefer the binary-embedded
-#    installer materialized by os-server (offline); fall back to the CDN.
-if ! unit_exists "$NEW"; then
+# Resolve the systemd unit name a backend uses. Defaults to the runtime name,
+# but an installer may declare a different unit in
+# /usr/local/lib/os-runtimes/<name>/service (one line, no .service suffix) — e.g.
+# hermes → hermes-gateway. Keeps this script name-agnostic.
+unit_for() {
+  local f="/usr/local/lib/os-runtimes/${1}/service" name
+  if [ -r "$f" ] && name="$(tr -d '[:space:]' <"$f")" && [ -n "$name" ]; then
+    echo "$name"
+  else
+    echo "$1"
+  fi
+}
+
+# 1. Ensure the target backend is installed. Its installer owns creating its
+#    unit (and declaring a non-default unit name; see unit_for). (openclaw.service
+#    is baked by setup.sh, so this is skipped for openclaw — uniform path, no
+#    special-case.) Prefer the binary-embedded installer materialized by os-server
+#    (offline); fall back to the CDN.
+NEW_UNIT="$(unit_for "$NEW")"
+if ! unit_exists "$NEW_UNIT"; then
   LOCAL_INSTALLER="/usr/local/lib/os-runtimes/${NEW}/install.sh"
   if [ -x "$LOCAL_INSTALLER" ]; then
     log "$NEW not installed — running embedded $LOCAL_INSTALLER"
@@ -52,9 +71,10 @@ if ! unit_exists "$NEW"; then
     log "$NEW not installed — fetching ${RUNTIMES_BASE_URL}/${NEW}/install.sh"
     curl -fsSL "${RUNTIMES_BASE_URL}/${NEW}/install.sh" | bash
   fi
+  NEW_UNIT="$(unit_for "$NEW")" # re-read: the installer may have just declared it
 fi
-if ! unit_exists "$NEW"; then
-  log "ERROR: ${NEW}.service still absent after install — aborting (not restarting os-server)"
+if ! unit_exists "$NEW_UNIT"; then
+  log "ERROR: ${NEW_UNIT}.service still absent after install — aborting (not restarting os-server)"
   exit 1
 fi
 
@@ -66,11 +86,12 @@ if [ -x "$HOOK" ]; then
 fi
 
 # 3. Toggle units: start the new one, stop the old one (os-server tells us which).
-log "starting $NEW"
-systemctl enable --now "${NEW}.service"
+log "starting $NEW ($NEW_UNIT.service)"
+systemctl enable --now "${NEW_UNIT}.service"
 if [ -n "$OLD" ] && [ "$OLD" != "$NEW" ]; then
-  log "stopping $OLD"
-  systemctl disable --now "${OLD}.service" 2>/dev/null || true
+  OLD_UNIT="$(unit_for "$OLD")"
+  log "stopping $OLD ($OLD_UNIT.service)"
+  systemctl disable --now "${OLD_UNIT}.service" 2>/dev/null || true
 fi
 
 # 4. Restart os-server so internal/agent/factory.go re-resolves the gateway.

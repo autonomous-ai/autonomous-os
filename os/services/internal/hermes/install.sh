@@ -5,18 +5,29 @@
 # /usr/local/bin/switch-runtime the first time a device switches to hermes. It
 # is self-contained: nothing in the imager or os-server knows about hermes.
 #
-# Contract every backend installer must satisfy (see switch_runtime.sh):
-#   1. create a  <name>.service  systemd unit (here: hermes.service), NOT enabled
-#      — switch-runtime brings it up;
-#   2. optionally drop  /usr/local/bin/runtime-<name>-presync  for per-switch
-#      config sync (here: sync llm_* from config.json into the Hermes config,
-#      since `hermes claw migrate` does NOT carry model config across).
+# This installer is self-sufficient: a direct `bash install.sh` fully configures
+# AND starts Hermes — it no longer relies on switch-runtime to run the presync
+# hook or to enable the unit afterwards. It still also drops the presync hook so
+# later runtime switches re-sync the latest llm_* from config.json.
 #
-# Reference: hermes_setup (2).sh (repo root).
+# What it does:
+#   1. install the Hermes CLI + migrate skills from OpenClaw;
+#   2. seed .env, then patch ONLY .model + .custom_providers in config.yaml
+#      (yq, not a full-file overwrite), then run the presync hook once to pull
+#      the device's real llm_model / llm_base_url / llm_api_key from config.json;
+#   3. drop /usr/local/bin/runtime-hermes-presync for per-switch config sync
+#      (since `hermes claw migrate` does NOT carry model config across);
+#   4. install + start the gateway as a system service via
+#      `hermes gateway install/start --system` (unit: hermes-gateway.service).
+#
+# Reference: hermes_setup.sh (~/Downloads) for the yq config patch + .env seeding.
+#
+# UNIT NAME: the gateway runs as hermes-gateway.service; we declare it in
+#    /usr/local/lib/os-runtimes/hermes/service so switch_runtime.sh enables the
+#    right unit.
 #
 # ⚠️ VERIFY ON DEVICE: `hermes gateway` must listen on 127.0.0.1:8642 to match
-#    internal/hermes/constants.go BaseURL. If its default port differs, add the
-#    port flag/env to the ExecStart below.
+#    internal/hermes/constants.go BaseURL.
 set -euo pipefail
 
 HERMES_BIN="/usr/local/bin/hermes"
@@ -71,17 +82,23 @@ EOF
 # AUTONOMOUS_API_KEY (the LLM provider key) + model + base_url are written by the
 # presync hook from config.json on every switch, so the device's real values win.
 
-echo "[install-hermes] seed $CONFIG_YAML (model/base_url overwritten by presync)"
-cat >"$CONFIG_YAML" <<'EOF'
-model:
-  default: gpt-5.5
-  provider: custom:autonomous
-custom_providers:
-  - name: autonomous
-    base_url: https://campaign-api.autonomous.ai/api/v1/ai
-    key_env: AUTONOMOUS_API_KEY
-    api_mode: anthropic_messages
-EOF
+echo "[install-hermes] patch $CONFIG_YAML — only .model + .custom_providers (presync overwrites model.default/base_url from config.json)"
+# Patch in place: replace ONLY the two keys we own, preserving anything else the
+# Hermes CLI wrote to config.yaml (do not clobber the whole file). touch first so
+# yq has a doc to edit on a fresh standalone install where config.yaml is absent.
+touch "$CONFIG_YAML"
+yq -i '
+  .model = {"default": "gpt-5.5", "provider": "custom:autonomous"}
+  |
+  .custom_providers = [
+    {
+      "name": "autonomous",
+      "base_url": "https://campaign-api.autonomous.ai/api/v1/ai",
+      "key_env": "AUTONOMOUS_API_KEY",
+      "api_mode": "anthropic_messages"
+    }
+  ]
+' "$CONFIG_YAML"
 
 echo "[install-hermes] drop /usr/local/bin/runtime-hermes-presync (llm_* sync hook)"
 cat >/usr/local/bin/runtime-hermes-presync <<'PRESYNC'
@@ -117,29 +134,24 @@ fi
 PRESYNC
 chmod +x /usr/local/bin/runtime-hermes-presync
 
-echo "[install-hermes] create hermes.service (NOT enabled — switch-runtime starts it)"
-cat >/etc/systemd/system/hermes.service <<EOF
-[Unit]
-Description=Hermes Agent Backend
-After=network.target
+# Run the hook once now so a direct `bash install.sh` is fully configured (.env
+# AUTONOMOUS_API_KEY + config.yaml model/base_url synced from config.json),
+# instead of only on the next switch-runtime call. Later switches still re-run
+# this same hook to pick up the latest llm_* values.
+echo "[install-hermes] sync llm_* from config.json now (via runtime-hermes-presync)"
+/usr/local/bin/runtime-hermes-presync \
+  || echo "[install-hermes] WARN: presync failed (config.json missing? non-fatal — switch-runtime retries on next switch)"
 
-[Service]
-Type=simple
-User=root
-WorkingDirectory=$HERMES_DIR
-Environment="HOME=/root"
-LimitNOFILE=65535
-MemoryMax=1500M
-# ⚠️ Must listen on 127.0.0.1:8642 (internal/hermes/constants.go BaseURL).
-ExecStart=$HERMES_BIN gateway
-Restart=always
-RestartSec=5
-StandardOutput=append:/var/log/hermes/output.log
-StandardError=append:/var/log/hermes/error.log
+echo "[install-hermes] install + start hermes gateway as a system service"
+"$HERMES_BIN" gateway install --system --run-as-user root
+"$HERMES_BIN" gateway start --system
+"$HERMES_BIN" gateway status --system || true
 
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl daemon-reload
+# Declare our unit name (hermes-gateway, not the default <runtime>.service) so
+# switch-runtime enables/disables the right unit. Best-effort: the dir exists
+# when os-server materialized this installer; create it for standalone runs too.
+echo "[install-hermes] declare unit name for switch-runtime (hermes-gateway)"
+mkdir -p /usr/local/lib/os-runtimes/hermes
+echo "hermes-gateway" >/usr/local/lib/os-runtimes/hermes/service
 
-echo "[install-hermes] done — hermes.service created (inactive). switch-runtime will start it."
+echo "[install-hermes] done — hermes gateway installed + started as a system service (hermes-gateway.service)."
