@@ -622,15 +622,21 @@ type MQTTTTSSetAck struct {
 }
 
 // ===========================================================================
-// realtime.set — configure the realtime voice agent (Gemini Live / OpenAI
-// Realtime) from the backend / web dashboard. Same MQTT shape as tts.set.
+// Configure the realtime voice agent (Gemini Live / OpenAI Realtime) from the
+// backend / web dashboard. The payload (RealtimeSetData) is shared by TWO
+// transports — pick whichever fits:
+//   • MQTT  — `realtime.set` downlink (envelope below). Async ack on fd_channel.
+//   • HTTP  — POST the device config endpoint with a `"realtime"` object holding
+//             the SAME fields: {"realtime": { ...RealtimeSetData... }} (rides the
+//             existing UpdateConfig route, exactly like tts_provider/stt_language).
+// Both paths validate, write the `realtime` block to config.json, and restart HAL.
 //
-// HOW TO PUSH (for FE / BFF teams)
+// HOW TO PUSH over MQTT (for FE / BFF teams)
 // --------------------------------
 // Publish a DOWNLINK to the device's command channel (the same `fa_channel`
 // topic tts.set uses — i.e. the topic the device subscribes to). Envelope:
 //
-//	{ "cmd": "data", "kind": "realtime.set", "data": { ...MQTTRealtimeSetData... } }
+//	{ "cmd": "data", "kind": "realtime.set", "data": { ...RealtimeSetData... } }
 //
 // The device replies on its `fd_channel` (uplink) with MQTTRealtimeSetAck:
 //   1) {"kind":"realtime.set","status":"starting"}            — received
@@ -675,8 +681,9 @@ type MQTTTTSSetAck struct {
 //     {"cmd":"data","kind":"realtime.set","data":{"enabled":false}}
 // ===========================================================================
 
-// MQTTRealtimeSetData is the nested data payload for cmd:"data", kind:"realtime.set".
-type MQTTRealtimeSetData struct {
+// RealtimeSetData is the realtime-config payload, shared by the MQTT
+// `realtime.set` downlink (data block) and the HTTP UpdateConfig `realtime` field.
+type RealtimeSetData struct {
 	Enabled   *bool  `json:"enabled,omitempty"`   // nil = leave unchanged
 	Provider  string `json:"provider,omitempty"`  // gemini | openai | none
 	Model     string `json:"model,omitempty"`     // active provider's model
@@ -688,17 +695,17 @@ type MQTTRealtimeSetData struct {
 
 // MQTTRealtimeSetCommand wraps the full realtime.set downlink envelope for unmarshalling.
 type MQTTRealtimeSetCommand struct {
-	Data MQTTRealtimeSetData `json:"data"`
+	Data RealtimeSetData `json:"data"`
 }
 
 // MQTTRealtimeSetAck is published to fd_channel after applying (or failing) a
 // realtime.set downlink. status: "starting" | "success" | "failure".
 type MQTTRealtimeSetAck struct {
 	MQTTInfoResponse
-	Kind   string               `json:"kind"`
-	Status string               `json:"status"`
-	Error  string               `json:"error,omitempty"`
-	Data   *MQTTRealtimeSetData `json:"data,omitempty"`
+	Kind   string           `json:"kind"`
+	Status string           `json:"status"`
+	Error  string           `json:"error,omitempty"`
+	Data   *RealtimeSetData `json:"data,omitempty"`
 }
 
 // MQTTTTSPreviewData is the nested data payload for cmd:"data", kind:"tts.preview".
@@ -811,6 +818,11 @@ type UpdateConfigRequest struct {
 
 	TTSProvider string `json:"tts_provider"`
 	TTSVoice    string `json:"tts_voice"`
+
+	// Realtime voice-agent config (Gemini Live / OpenAI Realtime). Same payload
+	// as the MQTT realtime.set downlink; omit to leave the realtime block alone.
+	// See RealtimeSetData for field semantics + valid values.
+	Realtime *RealtimeSetData `json:"realtime,omitempty"`
 
 	// AdminPassword rotates the bcrypt hash when non-empty. Existing sessions
 	// keep working (they ride config.SessionSecret, not the hash); to nuke

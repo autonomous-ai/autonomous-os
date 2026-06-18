@@ -11,10 +11,10 @@ import (
 // handleRealtimeSet applies a `realtime.set` downlink — configure the realtime
 // voice agent (Gemini Live / OpenAI Realtime). Same flow as tts.set: ack
 // immediately, apply async (write config.json + restart hal), then ack the
-// outcome. See domain.MQTTRealtimeSetData for the full downlink contract the
+// outcome. See domain.RealtimeSetData for the full downlink contract the
 // FE / BFF push (envelope, fields, valid values, examples).
 
-func (h *DeviceMQTTHandler) publishRealtimeSetAck(status, errMsg string, data *domain.MQTTRealtimeSetData) {
+func (h *DeviceMQTTHandler) publishRealtimeSetAck(status, errMsg string, data *domain.RealtimeSetData) {
 	ack := domain.MQTTRealtimeSetAck{
 		MQTTInfoResponse: domain.NewMQTTInfoResponse(h.config, "data", device.GetDeviceMac()),
 		Kind:             domain.KindRealtimeSet,
@@ -28,7 +28,7 @@ func (h *DeviceMQTTHandler) publishRealtimeSetAck(status, errMsg string, data *d
 }
 
 func (h *DeviceMQTTHandler) handleRealtimeSet(env domain.MQTTDataCommand) error {
-	var req domain.MQTTRealtimeSetData
+	var req domain.RealtimeSetData
 	if err := json.Unmarshal(env.Data, &req); err != nil {
 		slog.Error("realtime.set: invalid payload", "component", "mqtt", "error", err)
 		h.publishRealtimeSetAck("failure", "invalid JSON payload", nil)

@@ -402,6 +402,14 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 		adminHash = string(hash)
 	}
 
+	// Validate the realtime payload before the lock so an invalid request fails
+	// without a partial save (same as bcrypt above).
+	if data.Realtime != nil {
+		if err := s.validateRealtimeSet(*data.Realtime); err != nil {
+			return err
+		}
+	}
+
 	// All field mutations happen inside WithLockSave so they are marshalled
 	// atomically — the watcher goroutine's SetLLMModel cannot interleave with
 	// a partial config snapshot. Side-effect flags are captured inside the
@@ -413,6 +421,7 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 		wifiChanged     bool
 		langChanged     bool
 		voiceChanged    bool
+		realtimeChanged bool
 		newModel        string
 		newSSID         string
 		newPassword     string
@@ -485,6 +494,11 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 		}
 		if data.TTSVoice != "" {
 			c.TTSVoice = data.TTSVoice
+		}
+		// Realtime block (validated above the lock). Sent = apply + restart hal.
+		if data.Realtime != nil {
+			applyRealtimeSet(c, *data.Realtime)
+			realtimeChanged = true
 		}
 		if data.DeviceID != "" {
 			c.DeviceID = data.DeviceID
@@ -619,7 +633,7 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 	// Restart hal only when a field it reads at boot actually changed.
 	// stt_language is covered by langChanged (hal reads it via stt_language /
 	// derived stt_model). Wifi/channel/MQTT/admin saves skip the restart.
-	if voiceChanged || langChanged {
+	if voiceChanged || langChanged || realtimeChanged {
 		s.RePushVoiceConfig()
 	}
 	return nil
@@ -669,20 +683,35 @@ func (s *Service) RePushVoiceConfig() {
 	}()
 }
 
-// UpdateRealtimeConfig applies a realtime.set MQTT downlink to the `realtime`
-// block in config.json, then restarts hal so it reads the new block (HAL reads
-// config.json at import). Mirrors UpdateVoiceConfig. Validates provider and the
-// per-provider voice/reasoning before writing — returns an error (no write) on
-// anything invalid. Empty/omitted fields leave the current value unchanged.
-func (s *Service) UpdateRealtimeConfig(d domain.MQTTRealtimeSetData) error {
+// validateRealtimeSet checks a realtime payload before any write: the provider
+// selector, and (when per-provider knobs are present) the target provider's
+// voice/reasoning. The target is the provider being set, or the current one when
+// `provider` is omitted. Returns a descriptive error; nothing is written.
+func (s *Service) validateRealtimeSet(d domain.RealtimeSetData) error {
 	if err := config.ValidateRealtimeProvider(d.Provider); err != nil {
 		return err
 	}
-	if s.config.Realtime == nil {
-		s.config.Realtime = config.DefaultRealtimeConfig()
+	if d.Model != "" || d.Voice != "" || d.Reasoning != "" {
+		target := strings.TrimSpace(d.Provider)
+		if target == "" {
+			target = s.config.RealtimeProvider() // current resolved provider
+		}
+		if err := config.ValidateRealtimeKnobs(target, d.Voice, d.Reasoning); err != nil {
+			return err
+		}
 	}
-	rt := s.config.Realtime
+	return nil
+}
 
+// applyRealtimeSet mutates the `realtime` block in c per the payload. Caller must
+// have run validateRealtimeSet first; this only writes. Empty/omitted fields leave
+// the current value unchanged; per-provider knobs land in the active provider's
+// sub-object. Must run inside WithLockSave.
+func applyRealtimeSet(c *config.Config, d domain.RealtimeSetData) {
+	if c.Realtime == nil {
+		c.Realtime = config.DefaultRealtimeConfig()
+	}
+	rt := c.Realtime
 	if d.Enabled != nil {
 		rt.Enabled = d.Enabled
 	}
@@ -695,45 +724,49 @@ func (s *Service) UpdateRealtimeConfig(d domain.MQTTRealtimeSetData) error {
 	if d.BaseURL != "" {
 		rt.BaseURL = d.BaseURL
 	}
-
-	// Per-provider knobs apply to the active provider (the one just set, or the
-	// current one). They require a concrete gemini|openai provider.
-	if d.Model != "" || d.Voice != "" || d.Reasoning != "" {
-		target := strings.ToLower(strings.TrimSpace(rt.Provider))
-		if err := config.ValidateRealtimeKnobs(target, d.Voice, d.Reasoning); err != nil {
-			return err
+	if d.Model == "" && d.Voice == "" && d.Reasoning == "" {
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(rt.Provider)) {
+	case "gemini":
+		if rt.Gemini == nil {
+			rt.Gemini = &config.GeminiRealtime{}
 		}
-		switch target {
-		case "gemini":
-			if rt.Gemini == nil {
-				rt.Gemini = &config.GeminiRealtime{}
-			}
-			if d.Model != "" {
-				rt.Gemini.Model = d.Model
-			}
-			if d.Voice != "" {
-				rt.Gemini.Voice = d.Voice
-			}
-			if d.Reasoning != "" {
-				rt.Gemini.ThinkingLevel = d.Reasoning
-			}
-		case "openai":
-			if rt.OpenAI == nil {
-				rt.OpenAI = &config.OpenAIRealtime{}
-			}
-			if d.Model != "" {
-				rt.OpenAI.Model = d.Model
-			}
-			if d.Voice != "" {
-				rt.OpenAI.Voice = d.Voice
-			}
-			if d.Reasoning != "" {
-				rt.OpenAI.ReasoningEffort = d.Reasoning
-			}
+		if d.Model != "" {
+			rt.Gemini.Model = d.Model
+		}
+		if d.Voice != "" {
+			rt.Gemini.Voice = d.Voice
+		}
+		if d.Reasoning != "" {
+			rt.Gemini.ThinkingLevel = d.Reasoning
+		}
+	case "openai":
+		if rt.OpenAI == nil {
+			rt.OpenAI = &config.OpenAIRealtime{}
+		}
+		if d.Model != "" {
+			rt.OpenAI.Model = d.Model
+		}
+		if d.Voice != "" {
+			rt.OpenAI.Voice = d.Voice
+		}
+		if d.Reasoning != "" {
+			rt.OpenAI.ReasoningEffort = d.Reasoning
 		}
 	}
+}
 
-	if err := s.config.Save(); err != nil {
+// UpdateRealtimeConfig applies a realtime payload (MQTT realtime.set or the HTTP
+// `realtime` field) to config.json under the config lock, then restarts hal so it
+// reads the new block (HAL reads config.json at import).
+func (s *Service) UpdateRealtimeConfig(d domain.RealtimeSetData) error {
+	if err := s.validateRealtimeSet(d); err != nil {
+		return err
+	}
+	if err := s.config.WithLockSave(func(c *config.Config) {
+		applyRealtimeSet(c, d)
+	}); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
 	slog.Info("realtime config updated", "component", "device",
