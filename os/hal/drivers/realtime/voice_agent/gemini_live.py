@@ -78,6 +78,12 @@ class GeminiLiveAgent(VoiceAgentBase):
     def sample_rate(self) -> int:
         return self._config.sample_rate
 
+    @property
+    def output_sample_rate(self) -> int:
+        # Gemini Live always streams native audio output at 24 kHz, regardless of
+        # the 16 kHz input rate (`sample_rate`).
+        return 24000
+
     def _build_config(self) -> types.LiveConnectConfig:
         lang: str | None = self._config.language
         lang_codes: list[str] | None = (

@@ -12,6 +12,7 @@ from typing import Callable, NamedTuple
 from hal import app_state as hal_app_state
 from hal import config as hal_config
 from hal.clock import device_now
+from hal.drivers.realtime.models import AudioOutput as RTAudioOutput
 from hal.drivers.realtime.models import TextOutput as RTTextOutput
 from hal.drivers.realtime.models.signal import DelegateSignal
 
@@ -47,6 +48,8 @@ def run_realtime_turn(
     handled = False
     transcript = ""
     delegate_msg = ""
+    native = hal_config.REALTIME_NATIVE_AUDIO and tts is not None
+    native_started = False
 
     # Noise/false-trigger guard: a session with no STT transcript AND only a
     # sliver of audio (just the VAD pre-roll, no sustained speech) is not worth
@@ -102,8 +105,25 @@ def run_realtime_turn(
                     continue
                 if delegated:
                     continue
+                # Native voice: play the model's OWN audio straight to the speaker.
+                if native and isinstance(output, RTAudioOutput):
+                    if not native_started:
+                        native_started = tts.native_play_begin(
+                            realtime.output_sample_rate
+                        )
+                        if native_started:
+                            logger.info("[realtime] Native audio → playing model voice")
+                    if native_started:
+                        tts.native_play_frame(output.audio)
+                    if output.transcript:
+                        text_parts.append(output.transcript)
+                    continue
                 if isinstance(output, RTTextOutput):
                     text_parts.append(output.text)
+                    if native:
+                        # Audio already carries the reply — keep text only for
+                        # memory + the [HANDLED] hint; don't synthesize it.
+                        continue
                     sentence_buf += output.text
                     # Flush complete sentences to TTS as they arrive
                     if tts is not None and sentence_buf.rstrip().endswith(SENTENCE_ENDS):
@@ -126,12 +146,18 @@ def run_realtime_turn(
 
             transcript = strip_markers("".join(text_parts))
 
+            # Native playback owns the speaker for the whole turn — release it
+            # once all frames are in (records transcript for STT echo cancel).
+            if native_started:
+                tts.native_play_end(transcript)
+
             if delegated:
                 logger.info("[realtime] Model delegated → will forward to OS server")
             else:
                 # Flush any remaining text that didn't end with a sentence boundary
+                # (ElevenLabs path only — native mode never fills sentence_buf).
                 remaining: str = strip_markers(sentence_buf)
-                if remaining and tts is not None:
+                if not native and remaining and tts is not None:
                     if not first_sentence_sent:
                         logger.info(
                             "[realtime] Final fragment → speak: %r", remaining[:80]
@@ -143,14 +169,16 @@ def run_realtime_turn(
                             "[realtime] Final fragment → speak_queue: %r", remaining[:80]
                         )
                         tts.speak_queue(remaining)
-                # Only claim the turn as HANDLED if the model actually produced a
-                # spoken reply. An empty result — e.g. receive() timed out with no
-                # output — must NOT be reported as handled: that sends [HANDLED]
-                # with an empty [REPLY], OpenClaw's input-branching reads it as
-                # "already answered" and stays silent, so the user hears nothing
-                # from anyone. Leaving handled False (delegated also False) falls
+                # Only claim the turn as HANDLED if the model actually SPOKE.
+                # Native mode → audio actually played (native_started); ElevenLabs
+                # mode → a sentence was synthesized OR a transcript exists. An empty
+                # result (receive() timed out, or native mode produced no audio) must
+                # NOT be reported as handled: that sends [HANDLED] with an empty
+                # [REPLY], OpenClaw's input-branching reads it as "already answered"
+                # and stays silent. Leaving handled False (delegated also False) falls
                 # through to the normal forward below so the main agent answers.
-                if first_sentence_sent or transcript:
+                spoke = native_started if native else (first_sentence_sent or bool(transcript))
+                if spoke:
                     handled = True
                     # Label this `agent_reply`, not `transcript`: it is what Moon
                     # SAID, not what the user said. Elsewhere `transcript` means the
@@ -178,6 +206,14 @@ def run_realtime_turn(
             logger.warning(
                 "[realtime] Processing failed: %s — will forward to OS server", e
             )
+            # Release the speaker if native playback was mid-flight (avoids a
+            # stuck TTS lock / native_mode flag).
+            if native_started:
+                try:
+                    tts.native_play_end(transcript)
+                except Exception:
+                    pass
+                native_started = False
             delegated = True  # fall through to OS server on error
     elif hal_config.REALTIME_ENABLED and noise_turn:
         logger.info(

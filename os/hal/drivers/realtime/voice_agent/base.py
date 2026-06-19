@@ -55,7 +55,13 @@ class VoiceAgentBase(ABC):
     @property
     @abstractmethod
     def sample_rate(self) -> int:
-        """Sample rate expected by this provider (Hz)."""
+        """Sample rate expected by this provider (Hz) — the INPUT/mic rate."""
+
+    @property
+    def output_sample_rate(self) -> int:
+        """Sample rate of the model's OWN audio output (Hz), for native playback.
+        Defaults to the input rate; providers override when they differ."""
+        return self.sample_rate
 
     def connect(self) -> None:
         """Connect to the provider and start send/recv loops."""

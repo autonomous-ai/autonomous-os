@@ -119,6 +119,14 @@ class TTSService:
         self._last_spoken_text: str = ""
         self._last_spoken_time: float = 0.0
 
+        # Native realtime playback (the model's own voice straight to the speaker):
+        # _native_mode True from native_play_begin() through on_speak_end so the
+        # realtime [TTS HISTORY] feedback hook can skip re-feeding (the model
+        # generated this audio, it already knows). _native_src_rate = the model's
+        # output rate, resampled to the device stream rate per frame.
+        self._native_mode: bool = False
+        self._native_src_rate: int = 0
+
         self._device_rate = None
         self._backend: Optional[TTSBackend] = None
         try:
@@ -277,6 +285,13 @@ class TTSService:
     @property
     def speaking(self) -> bool:
         return self._speaking
+
+    @property
+    def native_mode(self) -> bool:
+        """True while playing the realtime model's own audio (native voice). The
+        realtime [TTS HISTORY] feedback hook checks this to avoid re-feeding the
+        model its own words."""
+        return self._native_mode
 
     @property
     def last_spoken_text(self) -> str:
@@ -500,6 +515,80 @@ class TTSService:
                 stream.write(frame)
                 total += len(frame)
         return total
+
+    # ── Native realtime playback (model's own voice, no synthesis) ──────────────
+
+    def native_play_begin(self, src_rate: int) -> bool:
+        """Begin streaming the realtime model's OWN float32 mono audio straight to
+        the speaker, bypassing synthesis. Honors speaker mute and busy state.
+        Pair with native_play_frame() then native_play_end(). Returns False if it
+        can't start (unavailable / muted / busy)."""
+        if not self.available or self._sd is None:
+            return False
+        if self._speaker_muted():
+            logger.info("native audio suppressed -- speaker muted")
+            return False
+        if not self._lock.acquire(blocking=False):
+            logger.info("native audio: speaker busy, skipping")
+            return False
+        self._stop_event.clear()
+        self._native_src_rate = src_rate
+        self._native_mode = True
+        self._speaking = True          # pauses silence keepalive + gates mic->STT
+        self._interruptible = True     # stop()/barge-in can interrupt
+        self._speak_start_fired = False
+        return True
+
+    def native_play_frame(self, frame) -> bool:
+        """Write one float32 mono frame (resampled to the device stream rate).
+        Returns False once playback is stopped/interrupted — caller should stop."""
+        if not self._speaking or self._stop_event.is_set():
+            return False
+        np = self._np
+        if not self._speak_start_fired and self._on_speak_start:
+            self._speak_start_fired = True
+            try:
+                self._on_speak_start()
+            except Exception:
+                pass
+        try:
+            data = np.asarray(frame, dtype=np.float32)
+            with self._stream_lock:
+                stream = self._ensure_stream(self._device_rate)
+                dst = self._stream_rate
+                if self._native_src_rate and dst and self._native_src_rate != dst:
+                    data = self._resample(data, self._native_src_rate, dst)
+                if data.ndim == 1:
+                    data = data.reshape(-1, 1)
+                if self._stream is None or self._stop_event.is_set():
+                    return False
+                stream.write(data)
+        except Exception as e:
+            logger.warning("native audio write failed: %s", e)
+            self._invalidate_stream()
+            return False
+        return True
+
+    def native_play_end(self, transcript: str = "") -> None:
+        """Finish native playback: release the speaker, record what was said for
+        STT echo cancellation. Fires on_speak_end (LED restore) but keeps
+        native_mode True across it so the realtime feedback hook skips re-feeding
+        the model its own words."""
+        self._speaking = False
+        self._interruptible = False
+        if transcript:
+            self._last_spoken_text = transcript
+        self._last_spoken_time = time.time()
+        try:
+            self._lock.release()
+        except RuntimeError:
+            pass
+        if self._on_speak_end:
+            try:
+                self._on_speak_end()
+            except Exception:
+                pass
+        self._native_mode = False
 
     def _resample(self, audio, src_rate: int, dst_rate: int):
         """Linear interpolation resample (no scipy needed)."""

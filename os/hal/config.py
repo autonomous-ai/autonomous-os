@@ -411,6 +411,16 @@ REALTIME_MIN_COMMIT_DURATION_S: float = float(
 # For OpenAI: maps to turn_detection type in session config.
 REALTIME_TURN_DETECTION: str = os.environ.get("HAL_REALTIME_TURN_DETECTION", "off")
 
+# Native voice: for chit-chat handled by the realtime model, play the model's OWN
+# audio output (Gemini Live / OpenAI Realtime voice) straight to the speaker
+# instead of re-synthesizing the transcript through our ElevenLabs TTS. Lower
+# latency + native prosody, but loses the configured ElevenLabs voice. Default
+# off → keep the ElevenLabs path. Delegated turns are unaffected (spoken by the
+# main agent via TTS regardless). env > config.json `realtime.native_audio` > default.
+REALTIME_NATIVE_AUDIO: bool = os.environ.get(
+    "HAL_REALTIME_NATIVE_AUDIO", str(_RT.get("native_audio", False))
+).lower() in ("1", "true", "yes")
+
 # --- Realtime: Gemini Live ---
 REALTIME_GEMINI_API_KEY: str = (
     os.environ.get("GEMINI_API_KEY", "")

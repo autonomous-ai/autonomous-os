@@ -186,6 +186,13 @@ class RealtimeOrchestrator:
             return self._agent.sample_rate
         return DEFAULT_SAMPLE_RATE
 
+    @property
+    def output_sample_rate(self) -> int:
+        """Sample rate of the model's own audio output (for native playback)."""
+        if self._agent is not None:
+            return self._agent.output_sample_rate
+        return DEFAULT_SAMPLE_RATE
+
     def start(self) -> None:
         """Create the agent based on config and connect."""
         provider: str = config.REALTIME_PROVIDER.strip().lower()

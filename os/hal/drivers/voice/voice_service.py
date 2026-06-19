@@ -150,7 +150,11 @@ class VoiceService:
             def _tts_speak_end_with_realtime_feedback() -> None:
                 if original_on_speak_end:
                     original_on_speak_end()
-                if hal_config.REALTIME_ENABLED and tts_service.last_spoken_text:
+                if (
+                    hal_config.REALTIME_ENABLED
+                    and tts_service.last_spoken_text
+                    and not tts_service.native_mode
+                ):
                     text: str = tts_service.last_spoken_text
                     # Direction is INTO the realtime model: whatever was just
                     # spoken (often an OpenClaw reply, not Gemini's own output) is
