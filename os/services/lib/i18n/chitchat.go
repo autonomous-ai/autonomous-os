@@ -14,9 +14,15 @@ import (
 // matchers + entry in phrases.go for reply variants + entry in
 // ChitchatPhrases() so the intent matcher iterates it.
 var chitchatInputs = map[Phrase]map[string][]string{
-	PhraseChitchatGreeting: {
+	/* PhraseChitchatGreeting: {
 		LangVI:   {"chào", "chào {name}", "xin chào", "{name} ơi", "hey {name}"},
 		LangEN:   {"hi", "hello", "hi {name}", "hello {name}", "hey", "hey {name}"},
+		LangZhCN: {"你好", "你好啊", "嗨", "嘿"},
+		LangZhTW: {"你好", "嗨"},
+	}, */
+    PhraseChitchatGreeting: {
+		LangVI:   {"chào", "chào {name}", "{name} ơi", "hey {name}"},
+		LangEN:   {"hi", "hi {name}", "hello {name}", "hey", "hey {name}"},
 		LangZhCN: {"你好", "你好啊", "嗨", "嘿"},
 		LangZhTW: {"你好", "嗨"},
 	},
