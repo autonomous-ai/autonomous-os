@@ -15,6 +15,7 @@ from hal.presets import (
     FX_PULSE, FX_RAINBOW, FX_SPEAKING_WAVE, FX_SPEAKING_WAVE_RAINBOW,
     RGB_CMD_PAINT, RGB_CMD_SOLID,
 )
+from hal.board.presets_overlay import DEFAULT_LED_COUNT
 
 
 def is_done(deadline: Optional[float], stop_event: threading.Event) -> bool:
@@ -116,7 +117,7 @@ def candle(
 ):
     """Warm flicker effect with randomized warm tones."""
     step_delay = 0.05 / speed
-    led_count = getattr(svc, "led_count", 64)
+    led_count = getattr(svc, "led_count", DEFAULT_LED_COUNT)
     while not is_done(deadline, stop_event):
         pixels = []
         for _ in range(led_count):
@@ -138,7 +139,7 @@ def rainbow(
 ):
     """Cycle through hue spectrum across all pixels."""
     step_delay = 0.03 / speed
-    led_count = getattr(svc, "led_count", 64)
+    led_count = getattr(svc, "led_count", DEFAULT_LED_COUNT)
     offset = 0.0
     while not is_done(deadline, stop_event):
         pixels = []
@@ -205,7 +206,7 @@ def pulse(
     half-painted dark frame.
     """
     step_delay = 0.04 / speed
-    led_count = getattr(svc, "led_count", 64)
+    led_count = getattr(svc, "led_count", DEFAULT_LED_COUNT)
     center = led_count // 2
     max_radius = center + 1
     while not is_done(deadline, stop_event):
@@ -244,7 +245,7 @@ def speaking_wave(
     to its own speech.
     """
     step_delay = 0.04 / speed  # ~25fps
-    led_count = getattr(svc, "led_count", 64)
+    led_count = getattr(svc, "led_count", DEFAULT_LED_COUNT)
     num_segments = 8
     seg_size = led_count // num_segments
 
@@ -290,7 +291,7 @@ def speaking_wave_rainbow(
     the user hasn't set an LED color but music is playing.
     """
     step_delay = 0.04 / speed
-    led_count = getattr(svc, "led_count", 64)
+    led_count = getattr(svc, "led_count", DEFAULT_LED_COUNT)
     num_segments = 8
     seg_size = led_count // num_segments
 
