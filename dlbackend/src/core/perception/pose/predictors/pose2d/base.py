@@ -126,7 +126,8 @@ class PoseEstimator2D(PredictorBase[cv2t.MatLike, RawPose2DDetection]):
 
         # Batch inference: stack (1, C, H, W) → (N, C, H, W)
         batch: npt.NDArray[np.float32] = np.concatenate(preprocessed, axis=0)
-        simcc_x, simcc_y = self._session.run(self.ONNX_OUTPUT_NAMES, {self.ONNX_INPUT_NAME: batch})
+        with self._gpu_lock:        
+            simcc_x, simcc_y = self._session.run(self.ONNX_OUTPUT_NAMES, {self.ONNX_INPUT_NAME: batch})
         simcc_x = np.asarray(simcc_x, dtype=np.float32)  # (N, K, Lx)
         simcc_y = np.asarray(simcc_y, dtype=np.float32)  # (N, K, Ly)
 

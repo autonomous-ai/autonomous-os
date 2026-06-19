@@ -3,14 +3,14 @@
 import argparse
 import logging
 from pathlib import Path
-from typing import override
+from typing_extensions import override
 
 import torch
 
-from core.export.utils.constants import MODELS_DIR
-from core.export.utils.evaluation import evaluate_skeleton
 from core.export.components.uniformerv2 import UniformerV2
 from core.export.components.uniformerv2.model import CHECKPOINT_MAP, CONFIGS
+from core.export.utils.constants import MODELS_DIR
+from core.export.utils.evaluation import evaluate_video
 
 logger: logging.Logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -35,6 +35,9 @@ class UniformerV2ONNX(torch.nn.Module):
 
 
 def export(config_name: str, checkpoint: str, output: str, opset: int = 17):
+    dest = Path(output).expanduser().resolve()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
     logger.info(f"Loading weights from {checkpoint}")
     net = UniformerV2.load_from_checkpoint(config_name, Path(checkpoint))
     net.eval()
@@ -47,11 +50,11 @@ def export(config_name: str, checkpoint: str, output: str, opset: int = 17):
     res = cfg["input_resolution"]
     dummy = torch.randn(1, 1, 3, cfg["t_size"], res, res)
 
-    logger.info(f"Exporting to {output}...")
+    logger.info(f"Exporting to {dest}...")
     torch.onnx.export(
         wrapper,
         dummy,
-        output,
+        str(dest),
         input_names=["videos"],
         output_names=["probs"],
         dynamic_axes={
@@ -62,11 +65,11 @@ def export(config_name: str, checkpoint: str, output: str, opset: int = 17):
         do_constant_folding=True,
     )
 
-    size_mb = Path(output).stat().st_size / 1024 / 1024
-    logger.info(f"Exported to {output} ({size_mb:.1f} MB)")
+    size_mb = dest.stat().st_size / 1024 / 1024
+    logger.info(f"Exported to {dest} ({size_mb:.1f} MB)")
 
     # input_shape excludes batch dim: (clips, C, T, H, W)
-    errors = evaluate_skeleton(wrapper, Path(output), input_shape=(1, 3, cfg["t_size"], res, res))
+    errors = evaluate_video(wrapper, dest, input_shape=(1, 3, cfg["t_size"], res, res))
 
     logger.info("Verification:")
     for i, e in enumerate(errors):
@@ -78,7 +81,8 @@ def entry():
 
     parser = argparse.ArgumentParser(description="Export UniformerV2 to ONNX")
     parser.add_argument(
-        "--config", default="base-k400",
+        "--config",
+        default="base-k400",
         choices=list(CONFIGS.keys()),
         help="Model config preset",
     )
@@ -87,9 +91,7 @@ def entry():
     parser.add_argument("--opset", type=int, default=17)
     args = parser.parse_args()
 
-    checkpoint = args.checkpoint or str(
-        MODELS_DIR / "pretrained" / CHECKPOINT_MAP[args.config]
-    )
+    checkpoint = args.checkpoint or str(MODELS_DIR / "pretrained" / CHECKPOINT_MAP[args.config])
     output = args.output or str(
         MODELS_DIR / "onnx" / f"{Path(CHECKPOINT_MAP[args.config]).stem}_fp32.onnx"
     )

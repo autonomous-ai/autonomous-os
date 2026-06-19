@@ -3,13 +3,13 @@
 import argparse
 import logging
 from pathlib import Path
-from typing import override
 
 import torch
+from typing_extensions import override
 
+from core.export.components.tcpformer import MemoryInducedTransformer, build_model
 from core.export.utils.constants import MODELS_DIR
 from core.export.utils.evaluation import evaluate_skeleton
-from core.export.components.tcpformer import MemoryInducedTransformer, build_model
 
 logger: logging.Logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -26,6 +26,9 @@ class TCPFormerONNX(torch.nn.Module):
 
 
 def export(checkpoint: str, output: str, opset: int = 17):
+    dest = Path(output).expanduser().resolve()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
     state_dict_path = Path(checkpoint)
     logger.info(f"Loading weights from {state_dict_path}")
     ckpt = torch.load(str(state_dict_path), map_location="cpu", weights_only=False)
@@ -41,11 +44,11 @@ def export(checkpoint: str, output: str, opset: int = 17):
 
     dummy = torch.randn(1, 243, 17, 3)
 
-    logger.info(f"Exporting to {output}...")
+    logger.info(f"Exporting to {dest}...")
     torch.onnx.export(
         wrapper,
         dummy,
-        output,
+        str(dest),
         input_names=["keypoints"],
         output_names=["poses"],
         dynamic_axes={
@@ -55,10 +58,10 @@ def export(checkpoint: str, output: str, opset: int = 17):
         opset_version=opset,
     )
 
-    size_mb = Path(output).stat().st_size / 1024 / 1024
-    logger.info(f"Exported to {output} ({size_mb:.1f} MB)")
+    size_mb = dest.stat().st_size / 1024 / 1024
+    logger.info(f"Exported to {dest} ({size_mb:.1f} MB)")
 
-    errors = evaluate_skeleton(wrapper, Path(output), input_shape=(243, 17, 3))
+    errors = evaluate_skeleton(wrapper, dest, input_shape=(243, 17, 3))
 
     logger.info("Verification:")
     for i, e in enumerate(errors):
@@ -69,12 +72,12 @@ def entry():
     logging.basicConfig(level=logging.DEBUG)
 
     parser = argparse.ArgumentParser(description="Export TCPFormer to ONNX")
-    parser.add_argument("--checkpoint", default=str(MODELS_DIR / "pretrained" / "TCPFormer_h36m_243_379.pth.tr"))
+    parser.add_argument(
+        "--checkpoint", default=str(MODELS_DIR / "pretrained" / "TCPFormer_h36m_243_379.pth.tr")
+    )
     parser.add_argument("--output", default=None)
     parser.add_argument("--opset", type=int, default=17)
     args = parser.parse_args()
 
-    output = args.output or str(
-        MODELS_DIR / "onnx" / "tcpformer_h36m_243.onnx"
-    )
+    output = args.output or str(MODELS_DIR / "onnx" / "tcpformer_h36m_243.onnx")
     export(args.checkpoint, output, args.opset)

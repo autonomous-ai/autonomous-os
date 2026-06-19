@@ -41,17 +41,37 @@ def create_object_detector(
     threshold: float | None = None,
     batch_size: int | None = None,
 ) -> ObjectDetector:
-    """Instantiate the correct object detector."""
+    """Instantiate the correct object detector.
+
+    Uses ONNX predictors when an ONNX model path is provided (ends with .onnx),
+    otherwise falls back to PyTorch/HuggingFace predictors.
+    """
+    use_onnx = model_path is not None and str(model_path).endswith(".onnx")
+
     if model_name == ObjectDetectorEnum.YOLO_WORLD:
-        from core.perception.object.predictors.yolo_world import YOLOWorldDetector as detector_cls
+        if use_onnx:
+            from core.perception.object.predictors.yolo_world_onnx import YOLOWorldONNXDetector as detector_cls
+        else:
+            from core.perception.object.predictors.yolo_world import YOLOWorldDetector as detector_cls
     elif model_name == ObjectDetectorEnum.YOLOE:
-        from core.perception.object.predictors.yoloe import YOLOEDetector as detector_cls
+        if use_onnx:
+            from core.perception.object.predictors.yoloe_onnx import YOLOEONNXDetector as detector_cls
+        else:
+            from core.perception.object.predictors.yoloe import YOLOEDetector as detector_cls
     elif model_name == ObjectDetectorEnum.OWLV2:
-        from core.perception.object.predictors.owlv2 import OWLv2Detector as detector_cls
+        if use_onnx:
+            from core.perception.object.predictors.owlv2_onnx import OWLv2ONNXDetector as detector_cls
+        else:
+            from core.perception.object.predictors.owlv2 import OWLv2Detector as detector_cls
     elif model_name == ObjectDetectorEnum.GROUNDING_DINO:
-        from core.perception.object.predictors.grounding_dino import (
-            GroundingDINODetector as detector_cls,
-        )
+        if use_onnx:
+            from core.perception.object.predictors.grounding_dino_onnx import (
+                GroundingDINOONNXDetector as detector_cls,
+            )
+        else:
+            from core.perception.object.predictors.grounding_dino import (
+                GroundingDINODetector as detector_cls,
+            )
     else:
         raise ValueError(f"Unknown object detector: {model_name}")
 

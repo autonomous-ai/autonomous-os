@@ -2,9 +2,9 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from core.posterv2.ir50 import Backbone
-from core.posterv2.mobilefacenet import MobileFaceNet
-from core.posterv2.utils import (
+from core.export.components.posterv2.ir50 import Backbone
+from core.export.components.posterv2.mobilefacenet import MobileFaceNet
+from core.export.components.posterv2.utils import (
     FeedForward,
     Window,
     WindowAttentionGlobal,
@@ -12,7 +12,7 @@ from core.posterv2.utils import (
     to_channel_last,
     to_query,
 )
-from core.posterv2.vit import PatchEmbed, VisionTransformer
+from core.export.components.posterv2.vit import PatchEmbed, VisionTransformer
 
 
 class Posterv2(nn.Module):
@@ -89,17 +89,13 @@ class Posterv2(nn.Module):
             dim=dims[2], window_size=window_size[2], layer_scale=1e-5, drop_path=dpr[2]
         )
 
-        self.last_face_conv = nn.Conv2d(
-            in_channels=512, out_channels=256, kernel_size=3, padding=1
-        )
+        self.last_face_conv = nn.Conv2d(in_channels=512, out_channels=256, kernel_size=3, padding=1)
 
         self.embed_q = nn.Sequential(
             nn.Conv2d(dims[0], 768, kernel_size=3, stride=2, padding=1),
             nn.Conv2d(768, 768, kernel_size=3, stride=2, padding=1),
         )
-        self.embed_k = nn.Sequential(
-            nn.Conv2d(dims[1], 768, kernel_size=3, stride=2, padding=1)
-        )
+        self.embed_k = nn.Sequential(nn.Conv2d(dims[1], 768, kernel_size=3, stride=2, padding=1))
         self.embed_v = PatchEmbed(img_size=14, patch_size=14, in_c=256, embed_dim=768)
 
     def forward(self, x):

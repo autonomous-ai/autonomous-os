@@ -401,7 +401,7 @@ class MemoryInducedTransformer(nn.Module):
         return x
 
 
-def build_model() -> nn.Module:
+def build_model() -> MemoryInducedTransformer:
     return MemoryInducedTransformer(
         n_layers=16, dim_in=3, dim_feat=128, dim_rep=512, dim_out=3,
         mlp_ratio=4, act_layer=nn.GELU, attn_drop=0.0, drop=0.0,

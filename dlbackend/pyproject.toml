@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "deeplearning-backend"
 version = "0.1.0"
 
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.100.0",
     "uvicorn>=0.20.0",
@@ -20,7 +20,7 @@ dependencies = [
 [project.optional-dependencies]
 dl = [
     "ultralytics>=8.3.0",
-    "transformers>=4.40.0,<5",
+    "transformers>=4.40.0",
     "torch>=2.0.0",
     "torchvision>=0.15.0",
     "pillow>=10.0.0",

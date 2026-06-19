@@ -38,16 +38,23 @@ class PersonDetector(PredictorBase[cv2t.MatLike, RawPersonDetection], ABC):
                 continue
 
             H, W = input[i].shape[:2]
-            frame_area: int = H * W
-            filter_mask = (detected_people.area / frame_area) > min_area_ratio
+            frame_area: float = float(H * W)
+
+            # bbox_xyxy is [0, 1] — compute pixel area for filtering
+            pixel_xyxy = detected_people.bbox_xyxy.copy()
+            pixel_xyxy[:, [0, 2]] *= W
+            pixel_xyxy[:, [1, 3]] *= H
+            pixel_area = (pixel_xyxy[:, 2] - pixel_xyxy[:, 0]) * (pixel_xyxy[:, 3] - pixel_xyxy[:, 1])
+
+            filter_mask = (pixel_area / frame_area) > min_area_ratio
 
             if filter_mask.sum() == 0:
                 cropped_input.append(None)
                 continue
 
-            largest_id: int = int(detected_people.area.argmax(0))
+            largest_id: int = int(pixel_area.argmax(0))
 
-            x1, y1, x2, y2 = detected_people.bbox_xyxy[largest_id]
+            x1, y1, x2, y2 = pixel_xyxy[largest_id]
 
             x1, y1 = int(max(0, x1)), int(max(0, y1))
             x2, y2 = int(min(W, x2)), int(min(H, y2))

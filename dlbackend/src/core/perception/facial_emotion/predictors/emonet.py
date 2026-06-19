@@ -18,7 +18,6 @@ from core.enums.files import ModelEnum
 from core.models.facial_emotion import RawEmotionDetection
 from core.perception.facial_emotion.constants import RESOURCES_DIR
 from core.perception.facial_emotion.predictors.base import EmotionRecognizer
-from core.utils.compute import softmax
 from core.utils.files import get_default_cdn_url, get_default_model_path
 
 
@@ -67,12 +66,13 @@ class EmoNetRecognizer(EmotionRecognizer):
     def _postprocess_batch(
         self, raw_outputs: list[npt.NDArray], N: int
     ) -> list[RawEmotionDetection]:
-        """EmoNet has 3 outputs: expression (N, C), valence (N,), arousal (N,)."""
-        expression: npt.NDArray[np.float32] = cast(npt.NDArray[np.float32], raw_outputs[0])
+        """EmoNet has 3 outputs: probs (N, C), valence (N,), arousal (N,).
+
+        Softmax is baked into the ONNX graph — probs are ready to use.
+        """
+        probs: npt.NDArray[np.float32] = cast(npt.NDArray[np.float32], raw_outputs[0])
         valence: npt.NDArray[np.float32] = cast(npt.NDArray[np.float32], raw_outputs[1])
         arousal: npt.NDArray[np.float32] = cast(npt.NDArray[np.float32], raw_outputs[2])
-
-        probs: npt.NDArray[np.float32] = softmax(expression, axis=-1)  # (N, C)
 
         return [
             RawEmotionDetection(

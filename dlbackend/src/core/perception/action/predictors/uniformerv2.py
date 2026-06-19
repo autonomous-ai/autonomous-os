@@ -21,6 +21,9 @@ class UniformerV2Model(HumanActionRecognizer):
 
     DEFAULT_MAX_FRAMES: int = 8
     DEFAULT_FRAME_SIZE: tuple[int, int] = (224, 224)
+    ONNX_INPUT_NAME: str = "videos"
+    ONNX_OUTPUT_NAME: str = "probs"
 
-    MEAN: npt.NDArray[np.float32] = np.array([114.75, 114.75, 114.75], dtype=np.float32)
-    STD: npt.NDArray[np.float32] = np.array([57.375, 57.375, 57.375], dtype=np.float32)
+    # Identity — normalization and softmax are baked into the ONNX export wrapper.
+    MEAN: npt.NDArray[np.float32] = np.array([0, 0, 0], dtype=np.float32)
+    STD: npt.NDArray[np.float32] = np.array([1, 1, 1], dtype=np.float32)

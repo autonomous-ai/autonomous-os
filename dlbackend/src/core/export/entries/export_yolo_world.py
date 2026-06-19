@@ -19,14 +19,13 @@ from copy import deepcopy
 from pathlib import Path
 from typing import override
 
-import numpy as np
 import torch
 import torch.nn.functional as F
 from ultralytics import YOLOWorld
 from ultralytics.nn.text_model import build_text_model
 
 from core.export.utils.constants import MODELS_DIR
-from core.export.utils.evaluation import prepare_onnx_session
+from core.export.utils.evaluation import evaluate_image
 from core.export.utils.nms import onnx_nms, xyxy_to_xywh_normalized
 
 _PATCHED = False
@@ -61,6 +60,7 @@ def _patch_world_detect():
     WorldDetect.forward = _forward
     _PATCHED = True
 
+
 logger: logging.Logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -68,8 +68,9 @@ logger.setLevel(logging.INFO)
 class YOLOWorldONNX(torch.nn.Module):
     """Wraps WorldModel + CLIP text encoder into a single traceable module."""
 
-    def __init__(self, world_model: torch.nn.Module, clip_text_encoder: torch.nn.Module,
-                 nms: bool = True):
+    def __init__(
+        self, world_model: torch.nn.Module, clip_text_encoder: torch.nn.Module, nms: bool = True
+    ):
         super().__init__()
         self.world_model = world_model
         self.clip_text_encoder = clip_text_encoder
@@ -97,6 +98,9 @@ class YOLOWorldONNX(torch.nn.Module):
 
 
 def export(checkpoint: str, output: str, imgsz: int = 640, opset: int = 17, nms: bool = True):
+    dest = Path(output).expanduser().resolve()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
     _patch_world_detect()
 
     logger.info(f"Loading YOLO-World from {checkpoint}")
@@ -137,12 +141,12 @@ def export(checkpoint: str, output: str, imgsz: int = 640, opset: int = 17, nms:
             "probs": {0: "batch", 2: "num_classes"},
         }
 
-    logger.info(f"Exporting to {output} (nms={nms})...")
+    logger.info(f"Exporting to {dest} (nms={nms})...")
     with torch.no_grad():
         torch.onnx.export(
             wrapper,
             (dummy_images, dummy_class_tokens),
-            output,
+            str(dest),
             input_names=["images", "class_tokens"],
             output_names=output_names,
             dynamic_axes=dynamic_axes,
@@ -150,24 +154,20 @@ def export(checkpoint: str, output: str, imgsz: int = 640, opset: int = 17, nms:
             do_constant_folding=True,
         )
 
-    size_mb = Path(output).stat().st_size / 1024 / 1024
-    logger.info(f"Exported to {output} ({size_mb:.1f} MB)")
+    size_mb = dest.stat().st_size / 1024 / 1024
+    logger.info(f"Exported to {dest} ({size_mb:.1f} MB)")
 
-    # Verify
-    with torch.no_grad():
-        torch_boxes, torch_probs, torch_labels = wrapper(dummy_images, dummy_class_tokens)
-        torch_boxes = torch_boxes.cpu().numpy()
+    errors = evaluate_image(
+        wrapper,
+        dest,
+        dummy_images.shape[-2:],
+        original_kwargs={"class_tokens": dummy_class_tokens},
+        onnx_kwargs={"class_tokens": dummy_class_tokens.cpu().numpy()},
+    )
 
-    sess = prepare_onnx_session(Path(output))
-    onnx_out = sess.run(None, {
-        "images": dummy_images.numpy(),
-        "class_tokens": dummy_class_tokens.numpy(),
-    })
-
-    n = min(torch_boxes.shape[1], onnx_out[0].shape[1])
-    mean_err = np.mean(np.abs(torch_boxes[:, :n] - onnx_out[0][:, :n]))
-    max_err = np.max(np.abs(torch_boxes[:, :n] - onnx_out[0][:, :n]))
-    logger.info(f"Verification (boxes, n={n}): mean_err = {mean_err:.6f} | max_err = {max_err:.6f}")
+    logger.info("Verification:")
+    for i, e in enumerate(errors):
+        logger.info(f"\tChannel {i}: mean_err = {e[0]:.6f} | max_err = {e[1]:.6f}")
 
 
 def entry():

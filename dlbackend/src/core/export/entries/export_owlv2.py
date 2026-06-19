@@ -23,7 +23,7 @@ from transformers import Owlv2ForObjectDetection, Owlv2Processor
 from typing_extensions import override
 
 from core.export.utils.constants import MODELS_DIR
-from core.export.utils.evaluation import prepare_onnx_session
+from core.export.utils.evaluation import evaluate_image, prepare_onnx_session
 from core.export.utils.nms import onnx_nms, xyxy_to_xywh_normalized
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -125,24 +125,12 @@ def export(model_id: str, output: str | None = None, opset: int = 17, nms: bool 
     size_mb = dest.stat().st_size / 1024 / 1024
     logger.info(f"Exported to {dest} ({size_mb:.1f} MB)")
 
-    # Verify
-    with torch.no_grad():
-        torch_boxes, torch_probs, torch_labels = wrapper(dummy_images, dummy_class_tokens)
-        torch_boxes = torch_boxes.cpu().numpy()
+    errors = evaluate_image(wrapper, dest, dummy_images.shape[-2:])
 
-    sess = prepare_onnx_session(dest)
-    onnx_out = sess.run(
-        None,
-        {
-            "images": dummy_images.numpy(),
-            "class_tokens": dummy_class_tokens.numpy(),
-        },
-    )
+    logger.info("Verification:")
+    for i, e in enumerate(errors):
+        logger.info(f"\tChannel {i}: mean_err = {e[0]:.6f} | max_err = {e[1]:.6f}")
 
-    n = min(torch_boxes.shape[1], onnx_out[0].shape[1])
-    mean_err = np.mean(np.abs(torch_boxes[:, :n] - onnx_out[0][:, :n]))
-    max_err = np.max(np.abs(torch_boxes[:, :n] - onnx_out[0][:, :n]))
-    logger.info(f"Verification (boxes, n={n}): mean_err = {mean_err:.6f} | max_err = {max_err:.6f}")
 
 
 def entry():

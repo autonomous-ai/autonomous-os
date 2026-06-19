@@ -15,5 +15,5 @@ class Emotion2VecPlusLargeRecognizer(AudioEmotionRecognizer):
     DEFAULT_REMOTE_URL: str | None = get_default_cdn_url(ModelEnum.EMOTION2VEC)
     DEFAULT_LABELS_PATH: Path | None = RESOURCES_DIR / "emotion2vec" / "labels.txt"
     DEFAULT_SAMPLE_RATE: int = 16000
-    ONNX_INPUT_NAME: str = "input"
-    ONNX_OUTPUT_NAME: str = "logits"
+    ONNX_INPUT_NAME: str = "audio"
+    ONNX_OUTPUT_NAME: str = "probs"

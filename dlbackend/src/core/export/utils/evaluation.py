@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import cv2
 import numpy as np
@@ -8,7 +8,7 @@ import numpy.typing as npt
 import onnxruntime as ort
 import torch
 
-from core.constants import AUDIO_DIR, IMAGES_DIR
+from core.export.utils.constants import AUDIO_DIR, IMAGES_DIR
 
 
 def prepare_onnx_session(onnx_model: Path):
@@ -26,10 +26,19 @@ def prepare_onnx_session(onnx_model: Path):
     return session
 
 
+def shrink_to_same_shape(*arrays: npt.NDArray[np.number]):
+    min_shape = np.array([a.shape for a in arrays]).min(axis=0)
+    return tuple([a[tuple(slice(0, s) for s in min_shape)] for a in arrays])
+
+
 def evaluate_image(
-    original_model: torch.nn.Module, onnx_model: Path, input_size: tuple[int, int]
+    original_model: torch.nn.Module,
+    onnx_model: Path,
+    input_size: tuple[int, int],
+    original_kwargs: dict[str, Any],
+    onnx_kwargs: dict[str, Any],
 ):
-    images: list[cv2.typing.MatLike] = []
+    images: list[cv2.typing.MatLike] = [np.random.rand(*input_size, 3).astype(np.float32)]
     for image_path in IMAGES_DIR.glob("*"):
         if not image_path.is_file():
             continue
@@ -47,11 +56,11 @@ def evaluate_image(
 
     images_tensor = torch.Tensor(images_batch)
     with torch.no_grad():
-        original_result = original_model(images_tensor)
+        original_result = original_model(images_tensor, **original_kwargs)
 
     onnx_session = prepare_onnx_session(onnx_model)
     input_name = onnx_session.get_inputs()[0].name
-    onnx_result = onnx_session.run(None, {input_name: images_batch})
+    onnx_result = onnx_session.run(None, {input_name: images_batch, **onnx_kwargs})
 
     if not isinstance(original_result, Sequence):
         original_result = [original_result]
@@ -61,6 +70,7 @@ def evaluate_image(
     for orig, onnx in zip(original_result, onnx_result):
         orig = cast(npt.NDArray[np.float32], orig.cpu().numpy())
         onnx = cast(npt.NDArray[np.float32], onnx)
+        orig, onnx = shrink_to_same_shape(orig, onnx)
 
         mean_error = np.mean(np.abs(orig - onnx)).item()
         max_error = np.max(np.abs(orig - onnx)).item()
@@ -121,12 +131,46 @@ def evaluate_audio(
 
     return errors
 
+
+def evaluate_video(
+    original_model: torch.nn.Module,
+    onnx_model: Path,
+    input_shape: tuple[int, ...],
+    n_samples: int = 4,
+):
+    """Evaluate video model (input range [0,1])."""
+    dummy = np.random.rand(n_samples, *input_shape).astype(np.float32)
+
+    with torch.no_grad():
+        original_result = original_model(torch.Tensor(dummy))
+
+    onnx_session = prepare_onnx_session(onnx_model)
+    input_name = onnx_session.get_inputs()[0].name
+    onnx_result = onnx_session.run(None, {input_name: dummy})
+
+    if not isinstance(original_result, Sequence):
+        original_result = [original_result]
+        onnx_result = [onnx_result]
+
+    errors: list[tuple[float, float]] = []
+    for orig, onnx in zip(original_result, onnx_result):
+        orig = cast(npt.NDArray[np.float32], orig.cpu().numpy())
+        onnx = cast(npt.NDArray[np.float32], onnx)
+
+        mean_error = np.mean(np.abs(orig - onnx)).item()
+        max_error = np.max(np.abs(orig - onnx)).item()
+        errors.append((mean_error, max_error))
+
+    return errors
+
+
 def evaluate_skeleton(
     original_model: torch.nn.Module,
     onnx_model: Path,
     input_shape: tuple[int, ...],
     n_samples: int = 4,
 ):
+    """Evaluate skeleton model (input is raw coordinates, can be negative)."""
     dummy = np.random.randn(n_samples, *input_shape).astype(np.float32)
 
     with torch.no_grad():

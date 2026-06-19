@@ -40,8 +40,8 @@ class PoseEstimator3DLifting(PredictorBase[Pose3DInput, RawPose3DDetection | Non
     DEFAULT_REMOTE_URL: str | None = None
     DEFAULT_N_FRAMES: int = 243
     DEFAULT_INPUT_SIZE: tuple[int, int] = (1920, 1080)
-    ONNX_INPUT_NAME: str = "input"
-    ONNX_OUTPUT_NAME: str = "output"
+    ONNX_INPUT_NAME: str = "keypoints"
+    ONNX_OUTPUT_NAME: str = "poses"
     ONNX_NUM_JOINTS: int = 17
 
     # H36M joint index for neck (used as center for normalization)
@@ -167,7 +167,8 @@ class PoseEstimator3DLifting(PredictorBase[Pose3DInput, RawPose3DDetection | Non
         # Stack valid inputs: (B, n_frames, K, 3)
         batch: npt.NDArray[np.float32] = np.stack(preprocessed, axis=0).astype(np.float32)
 
-        (output,) = self._session.run([self.ONNX_OUTPUT_NAME], {self.ONNX_INPUT_NAME: batch})
+        with self._gpu_lock:
+            (output,) = self._session.run([self.ONNX_OUTPUT_NAME], {self.ONNX_INPUT_NAME: batch})
         output = cast(npt.NDArray[np.float32], output)  # (B, n_frames, K, 3)
 
         # Map results back — trim padded frames to original T

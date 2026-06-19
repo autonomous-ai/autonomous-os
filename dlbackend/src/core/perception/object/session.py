@@ -64,18 +64,25 @@ class ObjectPerceptionSession(
         if cur_ts - self._last_update_ts < self._config.frame_interval:
             return self._last_prediction
 
+        H, W = input.shape[:2]
+
         raw_results: list[RawObjectDetection] = await asyncio.to_thread(
             self._object_detector.predict, [input], classes=self._config.classes,
         )
         raw: RawObjectDetection = raw_results[0]
 
-        # Filter by threshold
+        # Filter by threshold, rescale [0,1] → pixel xywh
         detections: list[ObjectDetectionItem] = []
         for i in range(len(raw.class_names)):
             if raw.confidence[i] >= self._config.threshold:
+                xywh = raw.bbox_xywh[i].copy()
+                xywh[0] *= W
+                xywh[1] *= H
+                xywh[2] *= W
+                xywh[3] *= H
                 detections.append(ObjectDetectionItem(
                     class_name=raw.class_names[i],
-                    xywh=raw.bbox_xywh[i].tolist(),
+                    xywh=xywh.tolist(),
                     confidence=float(raw.confidence[i]),
                 ))
 

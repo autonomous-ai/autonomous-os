@@ -36,6 +36,7 @@ class PredictorBase(Generic[INPUT_T, OUTPUT_T], ABC):
         )
         self._logger.setLevel(logging.DEBUG)
         self._batch_size: int = get_or_default(batch_size, self.DEFAULT_BATCH_SIZE)
+        self._lock: threading.RLock = threading.RLock()
 
     @abstractmethod
     def _start_impl(self) -> None:
@@ -60,15 +61,16 @@ class PredictorBase(Generic[INPUT_T, OUTPUT_T], ABC):
         """Internal prediction logic. Subclasses implement this instead of predict."""
 
     def start(self) -> None:
-        with self._gpu_lock:
+        with self._lock:
             self._start_impl()
 
     def stop(self) -> None:
-        with self._gpu_lock:
+        with self._lock:
             self._stop_impl()
 
     def is_ready(self) -> bool:
-        return self._is_ready_impl()
+        with self._lock:
+            return self._is_ready_impl()
 
     def predict(
         self, input: list[INPUT_T], *, preprocess: bool = True, **kwargs: Any
@@ -86,13 +88,14 @@ class PredictorBase(Generic[INPUT_T, OUTPUT_T], ABC):
         Raises:
             RuntimeError: If the predictor is not ready.
         """
-        with self._gpu_lock:
+        with self._lock:
             if not self._is_ready_impl():
                 raise RuntimeError(f"{self.__class__.__name__} is not ready")
-            if len(input) <= self._batch_size:
-                return self._predict_impl(input, preprocess=preprocess, **kwargs)
-            results: list[OUTPUT_T] = []
-            for i in range(0, len(input), self._batch_size):
-                chunk = input[i : i + self._batch_size]
-                results.extend(self._predict_impl(chunk, preprocess=preprocess, **kwargs))
-            return results
+
+        if len(input) <= self._batch_size:
+            return self._predict_impl(input, preprocess=preprocess, **kwargs)
+        results: list[OUTPUT_T] = []
+        for i in range(0, len(input), self._batch_size):
+            chunk = input[i : i + self._batch_size]
+            results.extend(self._predict_impl(chunk, preprocess=preprocess, **kwargs))
+        return results

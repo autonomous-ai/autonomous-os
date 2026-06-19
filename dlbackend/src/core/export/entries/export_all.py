@@ -9,9 +9,14 @@ from core.export.utils.constants import MODELS_DIR
 from . import (
     export_emonet,
     export_emotion2vec,
+    export_grounding_dino,
+    export_owlv2,
     export_posterv2,
     export_tcpformer,
     export_uniformerv2,
+    export_yolo,
+    export_yolo_world,
+    export_yoloe,
 )
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -88,6 +93,56 @@ def export_all():
         else:
             logger.info("[skip] UniformerV2 %s: %s not found", config_name, ckpt)
 
+    # OWLv2
+    results["owlv2"] = _run(
+        "owlv2",
+        lambda: export_owlv2.export("google/owlv2-large-patch14-ensemble"),
+        required=False,
+    )
+
+    # Grounding DINO
+    results["grounding_dino"] = _run(
+        "grounding_dino",
+        lambda: export_grounding_dino.export("IDEA-Research/grounding-dino-tiny"),
+        required=False,
+    )
+
+    # YOLO (person detection)
+    ckpt = MODELS_DIR / "pretrained" / "yolo12x.pt"
+    if ckpt.exists():
+        output = str(MODELS_DIR / "onnx" / "yolo12x.onnx")
+        results["yolo"] = _run(
+            "yolo",
+            lambda: export_yolo.export(str(ckpt), output),
+            required=False,
+        )
+    else:
+        logger.info("[skip] YOLO: %s not found", ckpt)
+
+    # YOLO-World
+    ckpt = MODELS_DIR / "pretrained" / "yolov8x-worldv2.pt"
+    if ckpt.exists():
+        output = str(MODELS_DIR / "onnx" / "yolov8x-worldv2.onnx")
+        results["yolo_world"] = _run(
+            "yolo_world",
+            lambda: export_yolo_world.export(str(ckpt), output),
+            required=False,
+        )
+    else:
+        logger.info("[skip] YOLO-World: %s not found", ckpt)
+
+    # YOLO-E
+    ckpt = MODELS_DIR / "pretrained" / "yoloe-26x-seg.pt"
+    if ckpt.exists():
+        output = str(MODELS_DIR / "onnx" / "yoloe-26x-seg.onnx")
+        results["yoloe"] = _run(
+            "yoloe",
+            lambda: export_yoloe.export(str(ckpt), output),
+            required=False,
+        )
+    else:
+        logger.info("[skip] YOLO-E: %s not found", ckpt)
+
     # Summary
     logger.info("=" * 60)
     logger.info("Summary:")
@@ -98,5 +153,5 @@ def export_all():
 
 
 def entry():
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO)
     export_all()

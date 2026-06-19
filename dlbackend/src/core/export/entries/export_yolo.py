@@ -4,14 +4,13 @@ import argparse
 import logging
 from copy import deepcopy
 from pathlib import Path
-from typing import override
 
-import numpy as np
 import torch
+from typing_extensions import override
 from ultralytics import YOLO
 
 from core.export.utils.constants import MODELS_DIR
-from core.export.utils.evaluation import prepare_onnx_session
+from core.export.utils.evaluation import evaluate_image
 from core.export.utils.nms import onnx_nms, xyxy_to_xywh_normalized
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -28,7 +27,7 @@ class YOLOONNX(torch.nn.Module):
     def forward(self, x: torch.Tensor):
         raw = self.model(x)  # [B, 4 + nc, A]
         boxes_xywh = raw[:, :4, :].permute(0, 2, 1)  # [B, A, 4]
-        scores = raw[:, 4:, :].permute(0, 2, 1)       # [B, A, K]
+        scores = raw[:, 4:, :].permute(0, 2, 1)  # [B, A, K]
 
         # xywh → xyxy
         xy = boxes_xywh[..., :2]
@@ -45,6 +44,9 @@ class YOLOONNX(torch.nn.Module):
 
 
 def export(checkpoint: str, output: str, imgsz: int = 640, opset: int = 17, nms: bool = True):
+    dest = Path(output).expanduser().resolve()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
     logger.info(f"Loading YOLO from {checkpoint}")
     yolo = YOLO(checkpoint)
 
@@ -76,11 +78,11 @@ def export(checkpoint: str, output: str, imgsz: int = 640, opset: int = 17, nms:
             "probs": {0: "batch"},
         }
 
-    logger.info(f"Exporting to {output} (nms={nms})...")
+    logger.info(f"Exporting to {dest} (nms={nms})...")
     torch.onnx.export(
         wrapper,
         dummy,
-        output,
+        str(dest),
         input_names=["images"],
         output_names=output_names,
         dynamic_axes=dynamic_axes,
@@ -88,23 +90,14 @@ def export(checkpoint: str, output: str, imgsz: int = 640, opset: int = 17, nms:
         do_constant_folding=True,
     )
 
-    size_mb = Path(output).stat().st_size / 1024 / 1024
-    logger.info(f"Exported to {output} ({size_mb:.1f} MB)")
+    size_mb = dest.stat().st_size / 1024 / 1024
+    logger.info(f"Exported to {dest} ({size_mb:.1f} MB)")
 
-    # Verify
-    dummy_np = np.random.randn(1, 3, imgsz, imgsz).astype(np.float32)
+    errors = evaluate_image(wrapper, dest, dummy.shape[-2:])
 
-    with torch.no_grad():
-        torch_out = wrapper(torch.tensor(dummy_np))
-        torch_boxes = torch_out[0].cpu().numpy()
-
-    sess = prepare_onnx_session(Path(output))
-    onnx_out = sess.run(None, {"images": dummy_np})
-
-    n = min(torch_boxes.shape[1], onnx_out[0].shape[1])
-    mean_err = np.mean(np.abs(torch_boxes[:, :n] - onnx_out[0][:, :n]))
-    max_err = np.max(np.abs(torch_boxes[:, :n] - onnx_out[0][:, :n]))
-    logger.info(f"Verification (boxes, n={n}): mean_err = {mean_err:.6f} | max_err = {max_err:.6f}")
+    logger.info("Verification:")
+    for i, e in enumerate(errors):
+        logger.info(f"\tChannel {i}: mean_err = {e[0]:.6f} | max_err = {e[1]:.6f}")
 
 
 def entry():

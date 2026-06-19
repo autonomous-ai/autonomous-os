@@ -7,18 +7,18 @@ import logging
 # Inject unpickling stubs into __main__ so torch.load can resolve them
 import sys as _sys
 from pathlib import Path
-from typing import override
 
 import torch
+from typing_extensions import override
 
-from core.export.utils.constants import MODELS_DIR
-from core.export.utils.evaluation import evaluate_image
 from core.export.components.posterv2 import Posterv2
 from core.export.components.posterv2.utils import RecorderMeter, RecorderMeter1
+from core.export.utils.constants import MODELS_DIR
+from core.export.utils.evaluation import evaluate_image
 
 _main = _sys.modules["__main__"]
-_main.RecorderMeter = RecorderMeter  # type: ignore[attr-defined]
-_main.RecorderMeter1 = RecorderMeter1  # type: ignore[attr-defined]
+_main.RecorderMeter = RecorderMeter
+_main.RecorderMeter1 = RecorderMeter1
 
 logger: logging.Logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -42,6 +42,9 @@ class Posterv2ONNX(torch.nn.Module):
 
 
 def export(checkpoint: str, output: str, num_classes: int = 7, opset: int = 17):
+    dest = Path(output).expanduser().resolve()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
     ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
     state_dict = ckpt.get("state_dict", ckpt)
     clean = collections.OrderedDict()
@@ -61,21 +64,21 @@ def export(checkpoint: str, output: str, num_classes: int = 7, opset: int = 17):
 
     dummy = torch.randn(1, 3, 224, 224)
 
-    logger.info(f"Exporting to {output}...")
+    logger.info(f"Exporting to {dest}...")
     torch.onnx.export(
         wrapper,
         dummy,
-        output,
+        str(dest),
         opset_version=opset,
         input_names=["images"],
         output_names=["probs"],
         dynamic_axes={"images": {0: "batch"}, "probs": {0: "batch"}},
     )
 
-    size_mb = Path(output).stat().st_size / 1024 / 1024
-    logger.info(f"Exported to {output} ({size_mb:.1f} MB)")
+    size_mb = dest.stat().st_size / 1024 / 1024
+    logger.info(f"Exported to {dest} ({size_mb:.1f} MB)")
 
-    errors = evaluate_image(wrapper, Path(output), input_size=(224, 224))
+    errors = evaluate_image(wrapper, dest, input_size=(224, 224))
 
     logger.info("Verification:")
     for i, e in enumerate(errors):

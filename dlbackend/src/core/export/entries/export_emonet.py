@@ -27,6 +27,9 @@ class EmoNetONNX(torch.nn.Module):
 
 
 def export(n_expression: int, output: str, opset: int = 11):
+    dest = Path(output).expanduser().resolve()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
     state_dict_path = MODELS_DIR / "pretrained" / f"emonet_{n_expression}.pth"
     logger.info(f"Loading weights from {state_dict_path}")
     state_dict = torch.load(str(state_dict_path), map_location="cpu")
@@ -41,11 +44,11 @@ def export(n_expression: int, output: str, opset: int = 11):
 
     dummy = torch.rand(1, 3, 256, 256)
 
-    logger.info(f"Exporting to {output}...")
+    logger.info(f"Exporting to {dest}...")
     torch.onnx.export(
         wrapper,
         dummy,
-        output,
+        str(dest),
         input_names=["images"],
         output_names=["probs", "valence", "arousal"],
         dynamic_axes={
@@ -57,10 +60,10 @@ def export(n_expression: int, output: str, opset: int = 11):
         opset_version=opset,
     )
 
-    size_mb = Path(output).stat().st_size / 1024 / 1024
-    logger.info(f"Exported to {output} ({size_mb:.1f} MB)")
+    size_mb = dest.stat().st_size / 1024 / 1024
+    logger.info(f"Exported to {dest} ({size_mb:.1f} MB)")
 
-    errors = evaluate_image(wrapper, Path(output), input_size=(256, 256))
+    errors = evaluate_image(wrapper, dest, input_size=(256, 256))
 
     logger.info("Verification:")
     for i, e in enumerate(errors):
