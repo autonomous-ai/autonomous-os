@@ -127,6 +127,13 @@ suppressed inside a daily window (device-local wall-clock; the device runs all
 day, so this is real time-of-day, not "off at night"). The gate reads the clock
 on every request, so it flips at the boundary with no restart.
 
+The clock is read via `hal.clock.device_now()`, which resolves the device's
+**current** timezone from `/etc/timezone` (zoneinfo) on every call — so if the
+user changes the device timezone at runtime, quiet hours track the new zone
+immediately, without restarting HAL. (A plain `datetime.now()` would keep the
+timezone glibc cached at process start.) Falls back to naive system-local time
+when `/etc/timezone` is absent (dev/macOS).
+
 - [x] **Unit (injected clock):** `in_window` handles the midnight wrap
       (22:00→07:00 true at 23:00 and 06:00, false at 12:00, end-exclusive at 07:00);
       `active_max_brightness` returns the reduced ceiling (40) inside the window and
