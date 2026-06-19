@@ -32,8 +32,10 @@ import os
 import re
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, time as dtime
+from datetime import time as dtime
 from typing import Optional, Tuple
+
+from hal.clock import device_now
 
 logger = logging.getLogger("hal.safety")
 
@@ -244,8 +246,11 @@ def parse_safety(text: str) -> SafetyPolicy:
 
 def _now() -> dtime:
     """Device-local wall-clock time. Isolated so gates stay unit-testable: callers
-    pass an explicit `now` in tests; production reads the clock here."""
-    return datetime.now().time()
+    pass an explicit `now` in tests; production reads the clock here.
+
+    Reads the device's CURRENT timezone each call (see hal.clock) so quiet-hours
+    gates stay correct after a runtime timezone change without restarting HAL."""
+    return device_now().time()
 
 
 def in_window(window: QuietHours, now: dtime) -> bool:

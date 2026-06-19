@@ -26,6 +26,7 @@ from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import ClientConnection, connect
 
 import hal.config as config
+from hal.clock import device_fromtimestamp
 from hal.drivers.sensing.crypto import CryptoSession, WSKeyExchangeRequest, resolve_public_key
 from hal.drivers.sensing.perceptions.typing import SendEventCallable
 from hal.drivers.sensing.perceptions.utils import (
@@ -414,7 +415,7 @@ class PosePerception(Perception[cv2.typing.MatLike]):
         self._bucket_snapshots: list[dict[str, Any]] = []
 
     def _samples_file_path(self, ts: float) -> str:
-        day: str = time.strftime("%Y-%m-%d", time.localtime(ts))
+        day: str = device_fromtimestamp(ts).strftime("%Y-%m-%d")
         return os.path.join(self._samples_dir, f"samples_{day}.jsonl")
 
     def _current_bucket_id(self) -> str:

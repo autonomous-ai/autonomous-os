@@ -7,11 +7,11 @@ orchestrator / TTS handles and the marker-stripper passed in.
 """
 
 import logging
-from datetime import datetime
 from typing import Callable, NamedTuple
 
 from hal import app_state as hal_app_state
 from hal import config as hal_config
+from hal.clock import device_now
 from hal.drivers.realtime.models import TextOutput as RTTextOutput
 from hal.drivers.realtime.models.signal import DelegateSignal
 
@@ -69,7 +69,7 @@ def run_realtime_turn(
         try:
             # Inject per-turn context before committing
             turn_ctx: list[str] = [
-                f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S %A')}",
+                f"Time: {device_now().strftime('%Y-%m-%d %H:%M:%S %A')}",
             ]
             try:
                 if hal_app_state.sensing_service:

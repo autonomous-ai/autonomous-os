@@ -13,8 +13,9 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timezone
 from pathlib import Path
+
+from hal.clock import device_fromtimestamp, device_now
 from typing import Optional
 
 logger = logging.getLogger("hal.voice.music")
@@ -80,7 +81,7 @@ def _history_dir(person: str = "") -> Path:
 def _history_path(person: str = "", date_str: str | None = None) -> Path:
     """Return path to daily history JSONL file."""
     if date_str is None:
-        date_str = datetime.now().strftime("%Y-%m-%d")
+        date_str = device_now().strftime("%Y-%m-%d")
     return _history_dir(person) / f"{date_str}.jsonl"
 
 
@@ -99,8 +100,8 @@ def _log_play_event(
         hist_dir.mkdir(parents=True, exist_ok=True)
         entry = {
             "ts": started_at,
-            "date": datetime.fromtimestamp(started_at).strftime("%Y-%m-%d"),
-            "hour": datetime.fromtimestamp(started_at).hour,
+            "date": device_fromtimestamp(started_at).strftime("%Y-%m-%d"),
+            "hour": device_fromtimestamp(started_at).hour,
             "query": query,
             "title": title or "",
             "duration_s": round(ended_at - started_at, 1),
