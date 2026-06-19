@@ -24,6 +24,7 @@
 //         case "setup_submitted":   /* user clicked Setup — e.data.ssid/channel */ break;
 //         case "setup_error":       /* validation/backend error — e.data.message */ break;
 //         case "setup_connecting":  /* device is joining WiFi */ break;
+//         case "setup_join_progress": /* still joining — e.data.elapsed_sec (e.g. 10) */ break;
 //         case "setup_connected":   /* online — e.data.mdns_host / e.data.lan_ip */ break;
 //         case "setup_failed":      /* join failed — e.data.message */ break;
 //         case "retry_clicked":     /* user hit "Back to WiFi" after a failure */ break;
@@ -51,6 +52,7 @@ export type SetupBridgeEvent =
   | "setup_submitted"   // operator clicked Setup; request about to be sent
   | "setup_error"       // validation or backend error surfaced
   | "setup_connecting"  // device is joining WiFi (post-submit)
+  | "setup_join_progress" // still joining after N seconds (heartbeat, e.g. 10s)
   | "setup_connected"   // device reached home WiFi and is reachable
   | "setup_failed"      // WiFi join failed
   | "retry_clicked"     // operator clicked "Back to Wi-Fi" after a failure
@@ -126,6 +128,12 @@ export const setupBridge = {
     emit("setup_submitted", info),
   error: (message: string) => emit("setup_error", { message }),
   connecting: () => emit("setup_connecting", {}),
+  // Heartbeat fired once the device has been joining WiFi for `elapsedSec`
+  // seconds (e.g. 10s) without yet flipping to connected/failed. Lets the parent
+  // window know the join is taking a moment but is still in progress — useful
+  // for showing its own "still working…" hint or analytics on slow joins.
+  joinProgress: (elapsedSec: number) =>
+    emit("setup_join_progress", { elapsed_sec: elapsedSec }),
   connected: (info: { mdns_host?: string; lan_ip?: string }) =>
     emit("setup_connected", info),
   failed: (message: string) => emit("setup_failed", { message }),

@@ -79,7 +79,7 @@ export function WifiSection({
           setup); in V1 the password lives in the Device step instead. */}
       {showAdminPassword && (
         <>
-          <GroupLabel first>Device</GroupLabel>
+          <GroupLabel first>Device password</GroupLabel>
           <div style={{ marginBottom: FIELD_GAP }}>
             <div style={{ position: "relative" }}>
             <input
