@@ -39,6 +39,8 @@ export const ADMIN_PASSWORD_MIN = 4;
 export const LABEL_STYLE: CSSProperties = {
   display: "block",
   fontSize: 13,
+  fontWeight: 500,
+  letterSpacing: "0.01em",
   color: C.textDim,
   marginBottom: 6,
 };
@@ -48,7 +50,7 @@ export const INPUT_STYLE: CSSProperties = {
   boxSizing: "border-box",
   background: C.surface,
   border: `1px solid ${C.border}`,
-  borderRadius: 8,
+  borderRadius: 10,
   padding: "10px 13px",
   fontSize: 14,
   color: C.text,
@@ -79,7 +81,11 @@ export const INPUT_FOCUS_SHADOW = "0 0 0 3px var(--lm-amber-glow)";
 // Error ring — the red counterpart to the focus glow. Shown on invalid inputs
 // regardless of focus so the field stays visibly flagged until corrected. Built
 // from the red token at low alpha to match the soft-ring look.
-export const INPUT_ERROR_SHADOW = "0 0 0 3px rgba(248, 113, 113, 0.22)";
+export const INPUT_ERROR_SHADOW = "0 0 0 3px var(--lm-red-glow)";
+
+// Success ring — the green counterpart, available for "ready/ok" affordances
+// (e.g. enroll buttons in a ready state). Tracks the theme via the green token.
+export const INPUT_SUCCESS_SHADOW = "0 0 0 3px var(--lm-green-glow)";
 
 // Right padding presets for inputs with trailing icon buttons (eye / pencil).
 // Single button (eye OR pencil) vs. stacked (eye + pencil). Derived from the

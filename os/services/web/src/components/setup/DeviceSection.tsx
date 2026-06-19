@@ -1,7 +1,6 @@
 import { useState } from "react";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, Copy, Check, Cpu, Fingerprint, Network } from "lucide-react";
 import { SecretUpdateField } from "@/components/SecretUpdateField";
-import { Cpu } from "lucide-react";
 import { C, Field, PasswordField, SectionCard, LABEL_STYLE, INPUT_STYLE, INPUT_READONLY_STYLE, INPUT_PAD_ONE_ICON, FIELD_GAP, ADMIN_PASSWORD_MIN } from "./shared";
 
 // Read-only MAC field masked behind ••••, with an eye toggle to reveal. The
@@ -104,6 +103,82 @@ function StrengthRow({ level, color, message }: { level: number; color: string; 
   );
 }
 
+// DeviceMetaCard — compact read-only "device identity" card used in edit mode.
+// Groups Device ID + MAC into a single bordered surface with key/value rows and
+// a thin divider, instead of two free-floating read-only inputs. Device ID gets
+// a copy button; MAC keeps a reveal toggle. Purely presentational — the values
+// are server-set and never edited here, so there's no input/form state to carry.
+function MetaRow({ icon, label, children }: { icon: React.ReactNode; label: string; children: React.ReactNode }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", minHeight: 44 }}>
+      <span style={{ flexShrink: 0, color: C.textMuted, display: "flex" }}>{icon}</span>
+      <span style={{ flexShrink: 0, fontSize: 12.5, color: C.textDim, width: 84 }}>{label}</span>
+      <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8 }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function DeviceMetaCard({ deviceId, mac }: { deviceId: string; mac?: string }) {
+  const [copied, setCopied] = useState(false);
+  const [showMac, setShowMac] = useState(false);
+  const copyId = () => {
+    navigator.clipboard?.writeText(deviceId).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    }).catch(() => {});
+  };
+  const maskedMac = showMac ? mac : "•".repeat(Math.min(14, (mac?.length ?? 0) || 8));
+  const valueText: React.CSSProperties = {
+    fontFamily: "ui-monospace, monospace", fontSize: 13, color: C.text,
+    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+  };
+  const iconBtn: React.CSSProperties = {
+    flexShrink: 0, height: 28, width: 28, padding: 0, borderRadius: 7,
+    background: "transparent", border: "none", cursor: "pointer",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    color: C.textMuted, transition: "background 0.15s, color 0.15s",
+  };
+  return (
+    <div style={{ marginTop: 4 }}>
+      <div style={{ ...LABEL_STYLE, marginBottom: 8 }}>Device info</div>
+      <div style={{
+        border: `1px solid ${C.border}`, borderRadius: 12,
+        background: C.surface, overflow: "hidden",
+      }}>
+        <MetaRow icon={<Fingerprint size={15} />} label="Device ID">
+          <span style={valueText} title={deviceId}>{deviceId || "—"}</span>
+          {deviceId && (
+            <button
+              type="button" onClick={copyId} tabIndex={-1}
+              className="lm-eye-btn" style={iconBtn}
+              aria-label="Copy Device ID" title={copied ? "Copied!" : "Copy"}
+            >
+              {copied ? <Check size={14} style={{ color: C.green }} /> : <Copy size={14} />}
+            </button>
+          )}
+        </MetaRow>
+        {mac && (
+          <>
+            <div style={{ height: 1, background: C.border }} />
+            <MetaRow icon={<Network size={15} />} label="MAC">
+              <span style={valueText} title={showMac ? mac : undefined}>{maskedMac}</span>
+              <button
+                type="button" onClick={() => setShowMac((v) => !v)} tabIndex={-1}
+                className="lm-eye-btn" style={iconBtn}
+                aria-label={showMac ? "Hide MAC" : "Show MAC"} title={showMac ? "Hide" : "Reveal"}
+              >
+                {showMac ? <EyeOff size={14} /> : <Eye size={14} />}
+              </button>
+            </MetaRow>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function DeviceSection({
   active, deviceId, setDeviceId, mac,
   adminPassword, setAdminPassword,
@@ -182,12 +257,18 @@ export function DeviceSection({
         </>
       )}
 
-      {/* Read-only identity metadata. In setup mode (showAdminPasswordFields)
-          this is reference info, so it sits below the action. The device_id
-          input stays in the DOM (hidden when empty would lose the form value),
-          rendered compactly. */}
-      <Field label="Device ID" id="device_id" value={deviceId} onChange={setDeviceId} placeholder="device-001" readOnly />
-      {mac && <MaskedReadField label="MAC" id="mac" value={mac} />}
+      {/* Read-only identity metadata. Edit mode (Settings → General) groups
+          Device ID + MAC into a compact key/value card with copy/reveal — these
+          are server-set identifiers, never edited here. Setup mode keeps the
+          plain Field/MaskedReadField so the first-run flow is unchanged. */}
+      {showRotateField ? (
+        <DeviceMetaCard deviceId={deviceId} mac={mac} />
+      ) : (
+        <>
+          <Field label="Device ID" id="device_id" value={deviceId} onChange={setDeviceId} placeholder="device-001" readOnly />
+          {mac && <MaskedReadField label="MAC" id="mac" value={mac} />}
+        </>
+      )}
     </SectionCard>
   );
 }

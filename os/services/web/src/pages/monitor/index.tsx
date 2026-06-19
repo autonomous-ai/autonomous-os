@@ -158,7 +158,7 @@ function NavGroupItem({ entry, section, setSection, closeSidebar, leafHref }: {
         />
       </button>
       {open && (
-        <div>
+        <div className="lm-snav-children">
           {entry.children.map((child) =>
             isNavLink(child) ? (
               <a
@@ -221,7 +221,7 @@ function AgentGWMenu({ section, setSection, closeSidebar }: {
         />
       </button>
       {open && (
-        <div>
+        <div className="lm-snav-children">
           <a
             href="/gw/chat?session=agent:main:main"
             target="_blank"
@@ -601,7 +601,12 @@ export default function Monitor() {
           ...(section === "chat" ? { padding: 0, overflow: "hidden" } : {}),
           ...(EMBED_SECTIONS.has(section) ? { padding: 0, overflow: "hidden" } : {}),
           ...(section.startsWith("settings:") ? { padding: 0, overflow: "hidden" } : {}),
-        }} className="lm-content lm-fade-in">
+        }} className="lm-content">
+          {/* Non-chat sections share a keyed wrapper so switching between them
+              re-triggers the fade-in. Chat stays OUTSIDE this wrapper (always
+              mounted) so its history survives tab switches — keying it would
+              remount and wipe it. */}
+          <div key={section === "chat" ? "_keep" : section} className={section === "chat" ? undefined : "lm-fade-in"} style={{ display: "contents" }}>
           {section === "overview" && (
             <OverviewSection
               sys={sys}
@@ -646,10 +651,6 @@ export default function Monitor() {
           {section === "face-owners" && <FaceOwnersSection />}
           {section === "analytics" && <AnalyticsSection />}
           {section === "logs"      && <LogsSection />}
-          {/* Chat is always mounted to preserve history across tab switches */}
-          <div style={{ display: section === "chat" ? "contents" : "none" }}>
-            <ChatSection events={events} isActive={section === "chat"} />
-          </div>
           {section === "cli" && <CliSection />}
           {section === "api-docs" && (
             <iframe
@@ -677,6 +678,12 @@ export default function Monitor() {
           {section.startsWith("settings:") && (
             <SettingsPanel activeSection={section.slice("settings:".length) as SettingsSectionId} />
           )}
+          </div>
+          {/* Chat lives OUTSIDE the keyed fade wrapper so it stays mounted and
+              keeps its history across tab switches (keying it would remount). */}
+          <div style={{ display: section === "chat" ? "contents" : "none" }}>
+            <ChatSection events={events} isActive={section === "chat"} />
+          </div>
         </div>
       </main>
     </div>

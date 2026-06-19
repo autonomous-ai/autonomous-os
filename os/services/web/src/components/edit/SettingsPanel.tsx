@@ -432,11 +432,13 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
               type="submit"
               disabled={saving || loadingCfg || !dirty}
               style={{
-                padding: "6px 18px", borderRadius: 7, fontSize: 12, fontWeight: 600,
+                padding: "6px 18px", borderRadius: 8, fontSize: 12, fontWeight: 600,
                 cursor: saving || loadingCfg || !dirty ? "not-allowed" : "pointer",
                 border: "none",
                 background: saving || loadingCfg || !dirty ? C.surface : C.amber,
-                color: saving || loadingCfg || !dirty ? C.textMuted : "#0C0B09",
+                // Dark ink that reads on the amber fill in both themes; theme-
+                // constant on purpose (see --lm-on-amber in index.css).
+                color: saving || loadingCfg || !dirty ? C.textMuted : "var(--lm-on-amber)",
                 transition: "all 0.15s",
                 opacity: saving || loadingCfg || !dirty ? 0.6 : 1,
               }}
@@ -448,7 +450,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
 
         {error && (
           <div style={{
-            background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.25)",
+            background: "var(--lm-red-dim)", border: "1px solid var(--lm-red-glow)",
             borderRadius: 8, padding: "10px 14px", fontSize: 12, color: C.red, marginBottom: 16,
           }}>
             {error}
@@ -456,7 +458,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         )}
 
         <div style={{
-          background: C.amberDim, border: "1px solid rgba(245,158,11,0.2)",
+          background: C.amberDim, border: "1px solid var(--lm-amber-glow)",
           borderRadius: 8, padding: "10px 14px", fontSize: 11.5,
           color: C.textDim, marginBottom: 20, lineHeight: 1.6,
         }}>
