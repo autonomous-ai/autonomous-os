@@ -49,7 +49,8 @@ def run_realtime_turn(
     transcript = ""
     delegate_msg = ""
     native = hal_config.REALTIME_NATIVE_AUDIO and tts is not None
-    native_started = False
+    native_started = False  # cleanup guard: True between begin and end
+    native_played = False    # did native audio actually play this turn (for handled)
 
     # Noise/false-trigger guard: a session with no STT transcript AND only a
     # sliver of audio (just the VAD pre-roll, no sustained speech) is not worth
@@ -148,8 +149,12 @@ def run_realtime_turn(
 
             # Native playback owns the speaker for the whole turn — release it
             # once all frames are in (records transcript for STT echo cancel).
+            # Reset native_started so a later exception's cleanup can't double-end;
+            # native_played records that audio actually played (for `spoke` below).
             if native_started:
                 tts.native_play_end(transcript)
+                native_started = False
+                native_played = True
 
             if delegated:
                 logger.info("[realtime] Model delegated → will forward to OS server")
@@ -170,14 +175,14 @@ def run_realtime_turn(
                         )
                         tts.speak_queue(remaining)
                 # Only claim the turn as HANDLED if the model actually SPOKE.
-                # Native mode → audio actually played (native_started); ElevenLabs
+                # Native mode → audio actually played (native_played); ElevenLabs
                 # mode → a sentence was synthesized OR a transcript exists. An empty
                 # result (receive() timed out, or native mode produced no audio) must
                 # NOT be reported as handled: that sends [HANDLED] with an empty
                 # [REPLY], OpenClaw's input-branching reads it as "already answered"
                 # and stays silent. Leaving handled False (delegated also False) falls
                 # through to the normal forward below so the main agent answers.
-                spoke = native_started if native else (first_sentence_sent or bool(transcript))
+                spoke = native_played if native else (first_sentence_sent or bool(transcript))
                 if spoke:
                     handled = True
                     # Label this `agent_reply`, not `transcript`: it is what Moon
