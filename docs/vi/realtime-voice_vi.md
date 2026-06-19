@@ -126,7 +126,10 @@ Các lượt realtime được append vào file JSONL (`HAL_REALTIME_MEMORY_PATH
 (giữ lại `HAL_REALTIME_MEMORY_TRIM_KEEP`). `RealtimeSummarizer` (`summarizer.py`)
 nén device + realtime memory qua **Anthropic Messages API**
 (`HAL_REALTIME_SUMMARIZER_MODEL`, mặc định `claude-haiku-4-5-20251001`).
-Summarize chạy lúc `start()` (bù phần chưa tóm tắt) và `stop()` (flush).
+Summarize chạy lúc `start()` (bù phần chưa tóm tắt) và `stop()` (flush). Phần
+catch-up ở `start()` chạy trong **thread nền** (sau `connect()`), nên lời gọi
+Anthropic không chặn session trở thành `available` — nếu chặn thì một lượt nói
+sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
 
 ## Luồng một lượt (trong `voice_service.py`)
 

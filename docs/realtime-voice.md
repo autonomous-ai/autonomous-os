@@ -130,7 +130,10 @@ Realtime turns are appended to a JSONL log (`HAL_REALTIME_MEMORY_PATH`, default
 (keeping `HAL_REALTIME_MEMORY_TRIM_KEEP`). `RealtimeSummarizer` (`summarizer.py`)
 condenses device + realtime memory via the **Anthropic Messages API**
 (`HAL_REALTIME_SUMMARIZER_MODEL`, default `claude-haiku-4-5-20251001`).
-Summarization runs at `start()` (catch-up) and `stop()` (flush).
+Summarization runs at `start()` (catch-up) and `stop()` (flush). The `start()`
+catch-up runs in a **background thread** (after `connect()`), so the Anthropic
+call never blocks the session from becoming `available` — otherwise an early
+turn ("hello") right after a restart would leak to the main agent.
 
 ## Turn flow (in `voice_service.py`)
 

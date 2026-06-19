@@ -200,13 +200,6 @@ class RealtimeOrchestrator:
             logger.info("Realtime orchestrator disabled (provider=%s)", provider)
             return
 
-        # Catch up on any unsummarized memory from previous session
-        try:
-            self._context.summarize_device_memory()
-            self._context.summarize_realtime_memory()
-        except Exception:
-            logger.exception("[realtime] Failed to catch up on memory summarization")
-
         instructions: str = self._context.build_instructions()
         logger.info(
             "[realtime] Context manager built instructions (%d chars)",
@@ -245,6 +238,26 @@ class RealtimeOrchestrator:
                 "[realtime] Failed to connect realtime agent — will retry on next audio"
             )
         self._started.set()
+
+        # Catch up on any unsummarized memory from a previous (possibly crashed)
+        # session in the background. This is an LLM call and is NOT needed to serve
+        # turns — running it before connect would keep `available` False for seconds
+        # after a restart, leaking early turns ("hello") to the main agent. The
+        # summarizer is concurrency-safe (keeps entries appended during summarization),
+        # so it is safe to run alongside the live session.
+        threading.Thread(
+            target=self._catch_up_memory_summaries,
+            daemon=True,
+            name="realtime-catchup-summarize",
+        ).start()
+
+    def _catch_up_memory_summaries(self) -> None:
+        """Summarize memory left unsummarized by a previous session (background)."""
+        try:
+            self._context.summarize_device_memory()
+            self._context.summarize_realtime_memory()
+        except Exception:
+            logger.exception("[realtime] Failed to catch up on memory summarization")
 
     def stop(self) -> None:
         """Disconnect the agent and summarize unsummarized memory."""
