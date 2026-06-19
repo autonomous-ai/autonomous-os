@@ -12,6 +12,7 @@ import (
 
 	"go.autonomous.ai/os/domain"
 	"go.autonomous.ai/os/internal/device"
+	"go.autonomous.ai/os/internal/network"
 	"go.autonomous.ai/os/lib/core/system"
 	"go.autonomous.ai/os/lib/hal"
 	agenthttp "go.autonomous.ai/os/server/agent/delivery/http"
@@ -121,9 +122,11 @@ func probeNetwork(ctx context.Context) domain.MQTTNetworkData {
 		}
 	}
 
-	if v, err := system.Run(ctx, "iwgetid", "-r"); err == nil {
-		out.SSID = strings.TrimSpace(string(v))
-	}
+	// SSID via the shared fallback chain (iwgetid → iw → wpa_cli); iwgetid
+	// alone returns empty on some Pi images even while associated, which left
+	// this field blank in system.info while the HTTP monitor (same chain)
+	// showed it.
+	out.SSID = network.ReadCurrentSSID()
 
 	// `ip route show default` → "default via 192.168.1.1 dev wlan0 …".
 	// Pull the gateway IPv4 out of the via-field; the rest of the line varies.
