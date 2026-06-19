@@ -309,11 +309,28 @@ class TTSService:
         """Whether the current speech can be interrupted by a new speak() call."""
         return self._interruptible
 
+    @staticmethod
+    def _speaker_muted() -> bool:
+        """True when the device speaker is muted. Single mute gate for ALL TTS
+        playback so no caller can bypass it (HTTP routes, realtime agent, etc.).
+        Lazy import avoids an app_state import cycle (app_state holds the
+        TTSService instance)."""
+        try:
+            from hal import app_state
+
+            return app_state._speaker_muted
+        except Exception:
+            return False
+
     def speak(self, text: str, interruptible: bool = False) -> bool:
         """Synthesize and play text. Returns True if started, False if busy or unavailable.
         If interruptible=True, a subsequent speak() call can stop this one."""
         if not self.available:
             logger.warning("TTS not available")
+            return False
+
+        if self._speaker_muted():
+            logger.info("TTS suppressed -- speaker muted: %s", text[:50])
             return False
 
         if not self._lock.acquire(blocking=False):
@@ -364,6 +381,10 @@ class TTSService:
         """
         if not self.available:
             logger.warning("TTS not available")
+            return False
+
+        if self._speaker_muted():
+            logger.info("TTS suppressed (queue) -- speaker muted: %s", text[:50])
             return False
 
         if self._lock.acquire(blocking=False):
@@ -890,6 +911,11 @@ class TTSService:
         then play. prerender=True skips playback (warmup-only)."""
         if not self.available:
             logger.warning("TTS not available (cached path)")
+            return False
+
+        # Prerender only warms the cache (no playback), so it is NOT muted.
+        if not prerender and self._speaker_muted():
+            logger.info("TTS suppressed (cached) -- speaker muted: %s", text[:50])
             return False
 
         cache_path = self._tts_cache_path(text)
