@@ -208,20 +208,20 @@ def resume_servos():
     state.animation_service._running.clear()
     if state.animation_service._event_thread and state.animation_service._event_thread.is_alive():
         state.animation_service._event_thread.join(timeout=3.0)
-    # Re-enable torque and reconfigure servos (release left torque disabled)
+    # Re-enable torque and reconfigure servos (release left torque disabled).
+    # REQUIRED — without this the arm stays limp and idle can't move it.
     try:
         state.animation_service._configure_servos_raw()
     except Exception as e:
         state.logger.warning("resume: raw configure failed: %s", e)
-    # Move to wake position before entering idle (arm lifts from release pose)
-    try:
-        state.animation_service.move_to_raw(RESUME_STARTUP_RAW, duration=STARTUP_MOVE_DURATION)
-        state.logger.info("Servo moved to resume startup position")
-    except Exception as e:
-        state.logger.warning("resume: startup move failed: %s", e)
-    # Sync state from hardware now that arm is at a known position
+    # Sync state from the (released/folded) hardware pose so the idle dispatch
+    # below interpolates the lift FROM where the arm actually is — no jerk.
     state.animation_service._sync_state_from_hardware()
-    # Normal interpolation duration (arm arrives from a controlled position)
+    # Let the idle dispatch lift the arm via normal interpolation instead of a
+    # separate 5s startup ramp (PR 174 added that move_to_raw, which made resume
+    # take ~5-8s). _resume_duration controls that single folded→idle lift; use
+    # the normal move duration (~2s). NOTE: PR 174's 5s ramp was for smoothness
+    # on the new servo — if the lift looks jerky, raise this back up.
     state.animation_service._resume_duration = state.animation_service.duration
     # Restart event loop
     state.animation_service._running.set()
@@ -523,9 +523,13 @@ def nudge_servo(req: ServoNudgeRequest):
         if req.pitch != 0:
             positions["base_pitch.pos"] = current.get("base_pitch.pos", 0) + req.pitch
 
+        # Safety speed cap (SAFETY.md motion.max_speed) — stretch the duration so no
+        # joint exceeds the deg/s ceiling. nudge previously sent at duration=0 (an
+        # instant jump = unbounded speed); clamp it the same way /servo/move does.
+        eff_duration = min_move_duration(state.safety_policy, positions, current, req.duration)
         # move_and_hold preempts any in-flight emotion animation so it can't
         # overwrite the nudged pose (race fix); it also keeps the pose afterwards.
-        state.animation_service.move_and_hold(positions, duration=req.duration)
+        state.animation_service.move_and_hold(positions, duration=eff_duration)
 
         return {"status": "ok", "direction": f"nudge yaw={req.yaw} pitch={req.pitch}", "positions": positions}
     except Exception as e:
