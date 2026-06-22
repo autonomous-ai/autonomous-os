@@ -91,6 +91,14 @@ _DETECT_MODEL = "yoloworld"
 _YOLO_ENDPOINT = f"/detect/{_DETECT_MODEL}"
 _YOLO_TIMEOUT = 10.0
 
+# Remote-fallback throttle. Local YOLOv8n@320 misses small/far objects (e.g. a
+# cup across the room) that the remote open-vocab YOLOWorld can still find. On a
+# local miss we fall back to remote — but remote is ~1.3s + network, so a target
+# local genuinely can't see would fire remote on every redetect. Rate-limit it
+# to at most one remote attempt per this interval (seconds). The very first
+# detect (e.g. session start) is never throttled (timestamp starts at 0).
+REMOTE_FALLBACK_MIN_INTERVAL = 2.0
+
 # Singleton local YOLO model — loaded lazily on first detection.
 _local_yolo = None
 _local_yolo_lock = threading.Lock()
@@ -411,6 +419,8 @@ class TrackerService:
         self._servo_thread: Optional[threading.Thread] = None
         # Area (px²) of the last trusted bbox lock — baseline for bloat detection.
         self._track_init_area: float = 0.0
+        # perf_counter of the last remote-YOLOWorld fallback attempt (throttle).
+        self._last_remote_attempt_t: float = 0.0
 
         self._crypto: CryptoSession | None = None
         if config.DL_ENCRYPTION_ENABLED:
@@ -484,7 +494,15 @@ class TrackerService:
                                     target, bbox, conf, area_ratio * 100, t_ms)
                         return bbox
                     logger.info("[tracking_yolo_local] target='%s' not found latency=%.0fms", target, t_ms)
-                    return None
+                    # Local missed. Fall back to remote open-vocab YOLOWorld for
+                    # small/far objects local can't see — but throttle it so a
+                    # truly-unseeable target doesn't hit remote on every redetect.
+                    now_fb = time.perf_counter()
+                    if now_fb - self._last_remote_attempt_t < REMOTE_FALLBACK_MIN_INTERVAL:
+                        return None
+                    self._last_remote_attempt_t = now_fb
+                    logger.info("[tracking_yolo_local] miss → remote YOLOWorld fallback target='%s'", target)
+                    # fall through to Path 2 (remote)
                 except Exception as e:
                     logger.warning("Local YOLO inference failed: %s — falling back to remote", e)
         elif coco_idx is None:
