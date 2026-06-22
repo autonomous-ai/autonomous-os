@@ -13,6 +13,7 @@ class ObjectDetectorFactory(PredictorFactory[ObjectDetector]):
     def __init__(
         self,
         model_name: ObjectDetectorEnum,
+        use_onnx: bool = True,
         model_path: Path | None = None,
         remote_url: str | None = None,
         classes_path: Path | None = None,
@@ -20,6 +21,7 @@ class ObjectDetectorFactory(PredictorFactory[ObjectDetector]):
         batch_size: int | None = None,
     ) -> None:
         self._model_name = model_name
+        self._use_onnx = use_onnx
         self._model_path = model_path
         self._remote_url = remote_url
         self._classes_path = classes_path
@@ -29,6 +31,7 @@ class ObjectDetectorFactory(PredictorFactory[ObjectDetector]):
     def create(self) -> ObjectDetector:
         return create_object_detector(
             self._model_name,
+            use_onnx=self._use_onnx,
             model_path=self._model_path,
             remote_url=self._remote_url,
             classes_path=self._classes_path,
@@ -39,6 +42,7 @@ class ObjectDetectorFactory(PredictorFactory[ObjectDetector]):
 
 def create_object_detector(
     model_name: ObjectDetectorEnum,
+    use_onnx: bool = True,
     model_path: Path | None = None,
     remote_url: str | None = None,
     classes_path: Path | None = None,
@@ -47,10 +51,9 @@ def create_object_detector(
 ) -> ObjectDetector:
     """Instantiate the correct object detector.
 
-    Uses ONNX predictors when an ONNX model path is provided (ends with .onnx),
+    Uses ONNX predictors when use_onnx=True (default),
     otherwise falls back to PyTorch/HuggingFace predictors.
     """
-    use_onnx = model_path is not None and str(model_path).endswith(".onnx")
 
     if model_name == ObjectDetectorEnum.YOLO_WORLD:
         if use_onnx:

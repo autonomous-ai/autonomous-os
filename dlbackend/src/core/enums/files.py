@@ -36,10 +36,14 @@ class ModelEnum(StrEnum):
 
     # Person detection
     YOLO_PERSON_ONNX = "yolo_person_onnx"
+    YOLO_PERSON_NMS_ONNX = "yolo_person_nms_onnx"
     YOLO_PERSON_PTH = "yolo_person_pth"
 
     # Object detection
     YOLO_WORLD_ONNX = "yolo_world_onnx"
+    YOLO_WORLD_NMS_ONNX = "yolo_world_nms_onnx"
     YOLO_WORLD_PTH = "yolo_world_pth"
     OWLV2_ONNX = "owlv2_onnx"
+    OWLV2_NMS_ONNX = "owlv2_nms_onnx"
     GROUNDING_DINO_ONNX = "grounding_dino_onnx"
+    GROUNDING_DINO_NMS_ONNX = "grounding_dino_nms_onnx"

@@ -190,6 +190,7 @@ def build_object_perceptions() -> dict[str, ObjectPerception]:
 
         factory = ObjectDetectorFactory(
             model_name=name,
+            use_onnx=det_settings.use_onnx,
             model_path=model_path,
             remote_url=det_settings.remote_url,
             classes_path=classes_path,

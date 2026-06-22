@@ -11,8 +11,10 @@ import numpy as np
 import numpy.typing as npt
 from typing_extensions import override
 
+from core.enums.files import ModelEnum
 from core.utils.common import get_or_default
 from core.utils.detection import letterbox, unletterbox_boxes
+from core.utils.files import get_default_cdn_url, get_default_model_path
 
 from .base import ONNXObjectDetector
 
@@ -20,7 +22,8 @@ from .base import ONNXObjectDetector
 class YOLOONNXDetector(ONNXObjectDetector):
     """COCO object detection using YOLO ONNX model."""
 
-    DEFAULT_MODEL_PATH: Path | None = None
+    DEFAULT_MODEL_PATH: Path | None = get_default_model_path(ModelEnum.YOLO_PERSON_ONNX)
+    DEFAULT_REMOTE_URL: str | None = get_default_cdn_url(ModelEnum.YOLO_PERSON_ONNX)
     DEFAULT_THRESHOLD: float = 0.4
     DEFAULT_IMGSZ: int = 640
 

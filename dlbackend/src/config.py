@@ -108,6 +108,7 @@ class CryptoSetting(BaseModel):
 
 class SingleObjectDetectorSetting(BaseModel):
     enabled: bool = False
+    use_onnx: bool = True
     model_path: str | None = None
     remote_url: str | None = None
     classes_path: str | None = None

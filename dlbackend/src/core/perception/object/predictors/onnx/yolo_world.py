@@ -13,8 +13,10 @@ import numpy.typing as npt
 from typing_extensions import override
 from ultralytics.nn.text_model import build_text_model
 
+from core.enums.files import ModelEnum
 from core.utils.common import get_or_default
 from core.utils.detection import letterbox, unletterbox_boxes
+from core.utils.files import get_default_cdn_url, get_default_model_path
 
 from .base import ONNXObjectDetector
 
@@ -22,7 +24,8 @@ from .base import ONNXObjectDetector
 class YOLOWorldONNXDetector(ONNXObjectDetector):
     """Zero-shot object detection using YOLO-World ONNX model."""
 
-    DEFAULT_MODEL_PATH: Path | None = None
+    DEFAULT_MODEL_PATH: Path | None = get_default_model_path(ModelEnum.YOLO_WORLD_ONNX)
+    DEFAULT_REMOTE_URL: str | None = get_default_cdn_url(ModelEnum.YOLO_WORLD_ONNX)
     DEFAULT_THRESHOLD: float = 0.25
     DEFAULT_IMGSZ: int = 640
     DEFAULT_TEXT_MODEL: str = "clip:ViT-B/32"

@@ -13,8 +13,10 @@ import numpy.typing as npt
 from transformers import AutoProcessor
 from typing_extensions import override
 
+from core.enums.files import ModelEnum
 from core.utils.common import get_or_default
 from core.utils.detection import unowlv2_boxes
+from core.utils.files import get_default_cdn_url, get_default_model_path
 
 from .base import ONNXObjectDetector
 
@@ -22,7 +24,8 @@ from .base import ONNXObjectDetector
 class GroundingDINOONNXDetector(ONNXObjectDetector):
     """Zero-shot object detection using Grounding DINO ONNX model."""
 
-    DEFAULT_MODEL_PATH: Path | None = None
+    DEFAULT_MODEL_PATH: Path | None = get_default_model_path(ModelEnum.GROUNDING_DINO_ONNX)
+    DEFAULT_REMOTE_URL: str | None = get_default_cdn_url(ModelEnum.GROUNDING_DINO_ONNX)
     DEFAULT_THRESHOLD: float = 0.3
     DEFAULT_HF_MODEL_ID: str = "IDEA-Research/grounding-dino-tiny"
 
@@ -72,7 +75,7 @@ class GroundingDINOONNXDetector(ONNXObjectDetector):
         # Processor expects RGB PIL or numpy; we pass BGR numpy, convert in-place
         results: list[cv2t.MatLike] = []
         for img in input:
-            rgb = img[:, :, ::-1]
+            rgb = np.ascontiguousarray(img[:, :, ::-1])
             processed = self._processor(
                 text="dummy", images=rgb, return_tensors="np"
             )

@@ -43,12 +43,16 @@ CDN_PATHS: dict[ModelEnum, str] = {
     ModelEnum.YUNET_ONNX: "onnx_models/face_detection_yunet_2023mar.onnx",
     # Person detection
     ModelEnum.YOLO_PERSON_ONNX: "onnx_models/yolo12x_raw.onnx",
+    ModelEnum.YOLO_PERSON_NMS_ONNX: "onnx_models/yolo12x.onnx",
     ModelEnum.YOLO_PERSON_PTH: "pytorch_models/yolo12x.pt",
     # Object detection
     ModelEnum.YOLO_WORLD_ONNX: "onnx_models/yolov8x-worldv2_raw.onnx",
+    ModelEnum.YOLO_WORLD_NMS_ONNX: "onnx_models/yolov8x-worldv2.onnx",
     ModelEnum.YOLO_WORLD_PTH: "pytorch_models/yolov8x-worldv2.pt",
     ModelEnum.OWLV2_ONNX: "onnx_models/owlv2_raw.onnx",
+    ModelEnum.OWLV2_NMS_ONNX: "onnx_models/owlv2.onnx",
     ModelEnum.GROUNDING_DINO_ONNX: "onnx_models/grounding_dino_raw.onnx",
+    ModelEnum.GROUNDING_DINO_NMS_ONNX: "onnx_models/grounding_dino.onnx",
 }
 
 
