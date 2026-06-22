@@ -7,8 +7,6 @@ via ensure_downloaded — no need to check for local pretrained files here.
 import logging
 from pathlib import Path
 
-from core.export.components.uniformerv2.model import CONFIGS
-
 from . import (
     export_emonet,
     export_emotion2vec,
@@ -82,13 +80,12 @@ def export_all(output_dir: Path | None = None):
     )
 
     # UniformerV2
-    for config_name in CONFIGS:
-        results[f"uniformerv2-{config_name}"] = _run(
-            f"uniformerv2-{config_name}",
-            lambda c=config_name: export_uniformerv2.export(
-                c, output=_output(output_dir, f"uniformerv2_{c}.onnx"),
-            ),
-        )
+    results["uniformerv2"] = _run(
+        "uniformerv2",
+        lambda: export_uniformerv2.export(
+            "large-k400", output=_output(output_dir, "uniformerv2-l-224-k400_fp32.onnx"),
+        ),
+    )
 
     # OWLv2
     results["owlv2"] = _run(

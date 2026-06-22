@@ -89,7 +89,7 @@ def entry():
     parser = argparse.ArgumentParser(description="Export UniformerV2 to ONNX")
     parser.add_argument(
         "--config",
-        default="base-k400",
+        default="large-k400",
         choices=list(CONFIGS.keys()),
         help="Model config preset",
     )

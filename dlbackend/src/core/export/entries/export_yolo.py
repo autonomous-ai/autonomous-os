@@ -19,7 +19,7 @@ logger.setLevel(logging.INFO)
 
 
 class YOLOONNX(torch.nn.Module):
-    def __init__(self, model: torch.nn.Module, nms: bool = True):
+    def __init__(self, model: torch.nn.Module, nms: bool = False):
         super().__init__()
         self.model = model
         self.nms = nms
@@ -44,7 +44,7 @@ class YOLOONNX(torch.nn.Module):
         return xywh, scores, labels
 
 
-def export(checkpoint: str | None = None, output: str | None = None, imgsz: int = 640, opset: int = 17, nms: bool = True):
+def export(checkpoint: str | None = None, output: str | None = None, imgsz: int = 640, opset: int = 17, nms: bool = False):
     output = output or str(get_default_model_path(ModelEnum.YOLO_PERSON_ONNX))
     dest = Path(output).expanduser().resolve()
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -115,7 +115,7 @@ def entry():
     parser.add_argument("--output", default=None)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--opset", type=int, default=17)
-    parser.add_argument("--nms", action="store_true", default=True)
+    parser.add_argument("--nms", action="store_true", default=False)
     parser.add_argument("--no-nms", dest="nms", action="store_false")
     args = parser.parse_args()
 

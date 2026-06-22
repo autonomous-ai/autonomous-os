@@ -70,7 +70,7 @@ class YOLOWorldONNX(torch.nn.Module):
     """Wraps WorldModel + CLIP text encoder into a single traceable module."""
 
     def __init__(
-        self, world_model: torch.nn.Module, clip_text_encoder: torch.nn.Module, nms: bool = True
+        self, world_model: torch.nn.Module, clip_text_encoder: torch.nn.Module, nms: bool = False
     ):
         super().__init__()
         self.world_model = world_model
@@ -98,7 +98,7 @@ class YOLOWorldONNX(torch.nn.Module):
         return xywh, scores, labels
 
 
-def export(checkpoint: str | None = None, output: str | None = None, imgsz: int = 640, opset: int = 17, nms: bool = True):
+def export(checkpoint: str | None = None, output: str | None = None, imgsz: int = 640, opset: int = 17, nms: bool = False):
     output = output or str(get_default_model_path(ModelEnum.YOLO_WORLD_ONNX))
     dest = Path(output).expanduser().resolve()
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -185,7 +185,7 @@ def entry():
     parser.add_argument("--output", default=None)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--opset", type=int, default=17)
-    parser.add_argument("--nms", action="store_true", default=True)
+    parser.add_argument("--nms", action="store_true", default=False)
     parser.add_argument("--no-nms", dest="nms", action="store_false")
     args = parser.parse_args()
 

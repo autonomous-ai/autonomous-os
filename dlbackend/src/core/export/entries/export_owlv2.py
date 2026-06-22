@@ -33,7 +33,7 @@ logger.setLevel(logging.INFO)
 class OWLv2ONNX(torch.nn.Module):
     """Wraps OWLv2 model into the same interface as YOLO exports."""
 
-    def __init__(self, model: Owlv2ForObjectDetection, nms: bool = True):
+    def __init__(self, model: Owlv2ForObjectDetection, nms: bool = False):
         super().__init__()
         self.model = model
         self.nms = nms
@@ -49,10 +49,9 @@ class OWLv2ONNX(torch.nn.Module):
         )
 
         pred_boxes = outputs.pred_boxes  # [B, P, 4] cxcywh
-        logits = outputs.logits  # [B, P, Q+1]
+        logits = outputs.logits  # [B, P, Q]
 
-        # Drop "no object" class, combine with objectness
-        probs = logits[..., :-1].sigmoid()
+        probs = logits.sigmoid()
 
         # cxcywh → xyxy
         cx, cy, w, h = pred_boxes.unbind(-1)
@@ -66,7 +65,7 @@ class OWLv2ONNX(torch.nn.Module):
         return xywh, probs, labels
 
 
-def export(model_id: str, output: str | None = None, opset: int = 17, nms: bool = True):
+def export(model_id: str, output: str | None = None, opset: int = 17, nms: bool = False):
     output = output or str(get_default_model_path(ModelEnum.OWLV2_ONNX))
     dest = Path(output).expanduser().resolve()
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -145,7 +144,7 @@ def entry():
     )
     parser.add_argument("--output", default=None)
     parser.add_argument("--opset", type=int, default=17)
-    parser.add_argument("--nms", action="store_true", default=True)
+    parser.add_argument("--nms", action="store_true", default=False)
     parser.add_argument("--no-nms", dest="nms", action="store_false")
     args = parser.parse_args()
 

@@ -47,7 +47,7 @@ def export(
         state_dict_path = Path(checkpoint)
 
     logger.info(f"Loading weights from {state_dict_path}")
-    state_dict = torch.load(str(state_dict_path), map_location="cpu")
+    state_dict = torch.load(str(state_dict_path), map_location="cpu", weights_only=True)
     state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
 
     net = EmoNet(n_expression=n_expression)
