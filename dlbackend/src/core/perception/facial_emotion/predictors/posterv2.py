@@ -19,8 +19,8 @@ from core.utils.files import get_default_cdn_url, get_default_model_path
 class PosterV2Recognizer(EmotionRecognizer):
     """POSTER V2 ONNX emotion predictor."""
 
-    DEFAULT_MODEL_PATH: Path | None = get_default_model_path(ModelEnum.POSTERV2)
-    DEFAULT_REMOTE_URL: str | None = get_default_cdn_url(ModelEnum.POSTERV2)
+    DEFAULT_MODEL_PATH: Path | None = get_default_model_path(ModelEnum.POSTERV2_ONNX)
+    DEFAULT_REMOTE_URL: str | None = get_default_cdn_url(ModelEnum.POSTERV2_ONNX)
     DEFAULT_CLASSES_PATH: Path = RESOURCES_DIR / "posterv2_classes.txt"
     DEFAULT_INPUT_SIZE: tuple[int, int] = (224, 224)
 

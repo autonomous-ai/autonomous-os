@@ -1,8 +1,15 @@
 from pathlib import Path
 
-ROOT_DIR = Path(__file__).parents[2]
-MODELS_DIR = ROOT_DIR / "models"
-DEPS_DIR = ROOT_DIR / "deps"
-DATA_DIR = ROOT_DIR / "data"
+# Project root: dlbackend/
+PROJECT_ROOT = Path(__file__).parents[4]
+
+# Weights and export artifacts (outside src/)
+MODELS_DIR = PROJECT_ROOT / "checkpoints"
+PRETRAINED_DIR = MODELS_DIR / "pretrained"
+ONNX_DIR = MODELS_DIR / "onnx"
+
+# Export dependencies and evaluation data
+DEPS_DIR = PROJECT_ROOT / "deps"
+DATA_DIR = PROJECT_ROOT / "data"
 IMAGES_DIR = DATA_DIR / "images"
 AUDIO_DIR = DATA_DIR / "audio"

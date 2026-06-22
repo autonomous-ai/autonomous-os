@@ -18,8 +18,8 @@ from core.utils.files import ensure_downloaded, get_default_cdn_url, get_default
 class YuNetFaceDetector(FaceDetector):
     """YuNet-based face detector using OpenCV's FaceDetectorYN."""
 
-    DEFAULT_MODEL_PATH: Path = get_default_model_path(ModelEnum.YUNET)
-    DEFAULT_REMOTE_URL: str | None = get_default_cdn_url(ModelEnum.YUNET)
+    DEFAULT_MODEL_PATH: Path = get_default_model_path(ModelEnum.YUNET_ONNX)
+    DEFAULT_REMOTE_URL: str | None = get_default_cdn_url(ModelEnum.YUNET_ONNX)
     DEFAULT_INPUT_SIZE: tuple[int, int] = (320, 320)
     DEFAULT_SCORE_THRESHOLD: float = 0.7
     DEFAULT_NMS_THRESHOLD: float = 0.3

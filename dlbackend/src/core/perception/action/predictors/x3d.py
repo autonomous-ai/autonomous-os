@@ -18,8 +18,8 @@ class X3DModel(HumanActionRecognizer):
     Uses old ONNX export that outputs raw logits — softmax applied here.
     """
 
-    DEFAULT_MODEL_PATH: Path | None = get_default_model_path(ModelEnum.X3D)
-    DEFAULT_REMOTE_URL: str | None = get_default_cdn_url(ModelEnum.X3D)
+    DEFAULT_MODEL_PATH: Path | None = get_default_model_path(ModelEnum.X3D_ONNX)
+    DEFAULT_REMOTE_URL: str | None = get_default_cdn_url(ModelEnum.X3D_ONNX)
     DEFAULT_CLASSES_PATH: Path = RESOURCES_DIR / "kinect_classes.txt"
     DEFAULT_WHITELIST_PATH: Path | None = RESOURCES_DIR / "white_list.txt"
 

@@ -8,17 +8,19 @@ import pytest
 import soundfile as sf
 
 from core.enums import SpeechEmotionRecognizerEnum
+from core.enums.files import ModelEnum
 from core.models.audio_emotion import AudioEmotionDetection, AudioEmotionPerceptionSessionConfig
 from core.models.media import Audio
 from core.perception.audio_emotion.perception import AudioEmotionPerception
 from core.perception.audio_emotion.predictors.emotion2vec import Emotion2VecPlusLargeRecognizer
 from core.perception.audio_emotion.utils import AudioEmotionRecognizerFactory
+from core.utils.files import get_default_model_path
 
-MODEL_PATH = Path.cwd() / "local" / "emotion2vec.onnx"
+MODEL_PATH = get_default_model_path(ModelEnum.EMOTION2VEC_ONNX)
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "audio"
 
 pytestmark = pytest.mark.skipif(
-    not MODEL_PATH.exists() or not FIXTURES_DIR.exists(),
+    MODEL_PATH is None or not FIXTURES_DIR.exists(),
     reason="Model or audio fixtures not found",
 )
 

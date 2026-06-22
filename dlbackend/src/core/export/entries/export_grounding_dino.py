@@ -21,8 +21,9 @@ import torch
 from transformers import AutoProcessor, GroundingDinoForObjectDetection
 from typing_extensions import override
 
-from core.export.utils.constants import MODELS_DIR
+from core.enums.files import ModelEnum
 from core.export.utils.evaluation import evaluate_image
+from core.utils.files import get_default_model_path
 from core.export.utils.nms import onnx_nms, xyxy_to_xywh_normalized
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -63,7 +64,7 @@ class GroundingDINOONNX(torch.nn.Module):
 
 
 def export(model_id: str, output: str | None = None, opset: int = 17, nms: bool = True):
-    output = output or str(Path.cwd() / "grounding_dino.onnx")
+    output = output or str(get_default_model_path(ModelEnum.GROUNDING_DINO_ONNX))
     dest = Path(output).expanduser().resolve()
     dest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -120,7 +121,11 @@ def export(model_id: str, output: str | None = None, opset: int = 17, nms: bool 
     size_mb = dest.stat().st_size / 1024 / 1024
     logger.info(f"Exported to {dest} ({size_mb:.1f} MB)")
 
-    errors = evaluate_image(wrapper, dest, dummy_images.shape[-2:])
+    errors = evaluate_image(
+        wrapper, dest, dummy_images.shape[-2:],
+        original_kwargs={"class_tokens": dummy_class_tokens},
+        onnx_kwargs={"class_tokens": dummy_class_tokens.cpu().numpy()},
+    )
 
     logger.info("Verification:")
     for i, e in enumerate(errors):
@@ -141,10 +146,5 @@ def entry():
     parser.add_argument("--nms", action="store_true", default=True)
     parser.add_argument("--no-nms", dest="nms", action="store_false")
     args = parser.parse_args()
-
-    suffix = "" if args.nms else "_raw"
-    if args.output is None:
-        name = args.model_id.split("/")[-1]
-        args.output = str(MODELS_DIR / "onnx" / f"grounding_dino{suffix}.onnx")
 
     export(args.model_id, args.output, args.opset, args.nms)

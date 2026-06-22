@@ -11,10 +11,12 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
+from core.enums.files import ModelEnum
 from core.perception.face.utils import FaceDetectorFactory
 from core.perception.facial_emotion.constants import RESOURCES_DIR
 from core.perception.facial_emotion.perception import EmotionPerception
 from core.perception.facial_emotion.utils import EmotionRecognizerFactory
+from core.utils.files import get_default_model_path
 from dlserver.utils.state import get_emotion_model, set_emotion_model
 
 POSTERV2_EMOTIONS: list[str] = (
@@ -25,11 +27,11 @@ TEST_API_KEY = "test-secret-key"
 os.environ["DL_API_KEY"] = TEST_API_KEY
 os.environ["EMOTION_RECOGNITION_MODEL"] = "posterv2"
 
-POSTERV2_MODEL_PATH = Path.cwd() / "local" / "posterv2_7cls.onnx"
+POSTERV2_MODEL_PATH = get_default_model_path(ModelEnum.POSTERV2_ONNX)
 
 pytestmark = pytest.mark.skipif(
-    not POSTERV2_MODEL_PATH.exists(),
-    reason=f"Local POSTER V2 model not found at {POSTERV2_MODEL_PATH}",
+    POSTERV2_MODEL_PATH is None,
+    reason="Model enum not found in CDN_PATHS",
 )
 
 

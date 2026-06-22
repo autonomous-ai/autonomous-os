@@ -31,8 +31,8 @@ class EmoNetRecognizer(EmotionRecognizer):
     DEFAULT_CLASSES_PATH_8: Path = RESOURCES_DIR / "emonet_8_classes.txt"
     DEFAULT_CLASSES_PATH_5: Path = RESOURCES_DIR / "emonet_5_classes.txt"
 
-    DEFAULT_MODEL_PATH_8: Path = get_default_model_path(ModelEnum.EMONET_8)
-    DEFAULT_MODEL_PATH_5: Path = get_default_model_path(ModelEnum.EMONET_5)
+    DEFAULT_MODEL_PATH_8: Path = get_default_model_path(ModelEnum.EMONET_8_ONNX)
+    DEFAULT_MODEL_PATH_5: Path = get_default_model_path(ModelEnum.EMONET_5_ONNX)
 
     DEFAULT_INPUT_SIZE: tuple[int, int] = (256, 256)
 
@@ -55,7 +55,7 @@ class EmoNetRecognizer(EmotionRecognizer):
         if model_path is None:
             model_path = self.DEFAULT_MODEL_PATH_8 if n_expression == 8 else self.DEFAULT_MODEL_PATH_5
         if remote_url is None:
-            model_enum = ModelEnum.EMONET_8 if n_expression == 8 else ModelEnum.EMONET_5
+            model_enum = ModelEnum.EMONET_8_ONNX if n_expression == 8 else ModelEnum.EMONET_5_ONNX
             remote_url = get_default_cdn_url(model_enum)
         if classes_path is None:
             classes_path = self.DEFAULT_CLASSES_PATH_8 if n_expression == 8 else self.DEFAULT_CLASSES_PATH_5

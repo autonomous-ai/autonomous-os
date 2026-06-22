@@ -7,9 +7,10 @@ from pathlib import Path
 import torch
 from typing_extensions import override
 
+from core.enums.files import ModelEnum
 from core.export.components.emonet import EmoNet
-from core.export.utils.constants import MODELS_DIR
 from core.export.utils.evaluation import evaluate_image
+from core.utils.files import ensure_downloaded, get_default_cdn_url, get_default_model_path
 
 logger: logging.Logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -26,12 +27,25 @@ class EmoNetONNX(torch.nn.Module):
         return torch.softmax(out["expression"], dim=-1), out["valence"], out["arousal"]
 
 
-def export(n_expression: int, output: str | None = None, opset: int = 11):
-    output = output or str(Path.cwd() / f"emonet_{n_expression}.onnx")
+def export(
+    n_expression: int,
+    checkpoint: str | None = None,
+    output: str | None = None,
+    opset: int = 11,
+):
+    model_enum_onnx = ModelEnum.EMONET_8_ONNX if n_expression == 8 else ModelEnum.EMONET_5_ONNX
+    output = output or str(get_default_model_path(model_enum_onnx))
     dest = Path(output).expanduser().resolve()
     dest.parent.mkdir(parents=True, exist_ok=True)
 
-    state_dict_path = MODELS_DIR / "pretrained" / f"emonet_{n_expression}.pth"
+    if checkpoint is None:
+        model_enum = ModelEnum.EMONET_8_PTH if n_expression == 8 else ModelEnum.EMONET_5_PTH
+        model_path = get_default_model_path(model_enum)
+        remote_url = get_default_cdn_url(model_enum)
+        state_dict_path = ensure_downloaded(model_path, remote=remote_url)
+    else:
+        state_dict_path = Path(checkpoint)
+
     logger.info(f"Loading weights from {state_dict_path}")
     state_dict = torch.load(str(state_dict_path), map_location="cpu")
     state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
@@ -76,9 +90,9 @@ def entry():
 
     parser = argparse.ArgumentParser(description="Export EmoNet to ONNX")
     parser.add_argument("--n-expression", type=int, default=5, choices=[5, 8])
+    parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--output", type=str, default=None)
     parser.add_argument("--opset", type=int, default=17)
     args = parser.parse_args()
 
-    output = args.output or str(MODELS_DIR / "onnx" / f"emonet_{args.n_expression}.onnx")
-    export(args.n_expression, output, args.opset)
+    export(args.n_expression, args.checkpoint, args.output, args.opset)

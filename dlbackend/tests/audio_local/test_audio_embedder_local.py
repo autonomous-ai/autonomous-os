@@ -6,18 +6,20 @@ import numpy as np
 import pytest
 import soundfile as sf
 
+from core.enums.files import ModelEnum
 from core.models.media import Audio
 from core.perception.audio.predictors.base import AudioEmbedder
 from core.perception.audio.processors.exceptions import PreprocessRejected
 from core.perception.audio.processors.utils import AudioProcessorFactory
 from core.perception.audio.processors.voice_activity_filter import VoiceActivityFilter
+from core.utils.files import get_default_model_path
 
-MODEL_PATH = Path.cwd() / "local" / "wespeaker_resnet34.onnx"
+MODEL_PATH = get_default_model_path(ModelEnum.WESPEAKER_RESNET34)
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "audio"
 
 pytestmark = pytest.mark.skipif(
-    not MODEL_PATH.exists() or not FIXTURES_DIR.exists(),
+    MODEL_PATH is None or not FIXTURES_DIR.exists(),
     reason="Model or audio fixtures not found",
 )
 

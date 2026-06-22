@@ -9,9 +9,10 @@ from pathlib import Path
 import torch
 from typing_extensions import override
 
+from core.enums.files import ModelEnum
 from core.export.components.emotion2vec import Emotion2vec
-from core.export.utils.constants import MODELS_DIR
 from core.export.utils.evaluation import evaluate_audio
+from core.utils.files import get_default_model_path
 
 logger: logging.Logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -94,7 +95,7 @@ class Emotion2VecONNX(torch.nn.Module):
 
 
 def export(model_id: str, output: str | None = None, opset: int = 17):
-    output = output or str(Path.cwd() / "emotion2vec.onnx")
+    output = output or str(get_default_model_path(ModelEnum.EMOTION2VEC_ONNX))
     dest = Path(output).expanduser().resolve()
     dest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -104,7 +105,7 @@ def export(model_id: str, output: str | None = None, opset: int = 17):
     if getattr(net, "proj", None) is None:
         raise RuntimeError(
             f"Model '{model_id}' has no classifier head (proj layer). "
-            "Use a variant with a classifier (e.g. iic/emotion2vec_plus_large)."
+            "Use a variant with a classifier (e.g. emotion2vec/emotion2vec_plus_large)."
         )
 
     with torch.no_grad():
@@ -159,7 +160,7 @@ def entry():
     parser = argparse.ArgumentParser(description="Export Emotion2Vec SER to ONNX")
     parser.add_argument(
         "--model-id",
-        default="iic/emotion2vec_plus_large",
+        default="emotion2vec/emotion2vec_plus_large",
         help="FunASR / HuggingFace model identifier",
     )
     parser.add_argument("--output", default=None)

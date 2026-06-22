@@ -7,9 +7,10 @@ from pathlib import Path
 import torch
 from typing_extensions import override
 
+from core.enums.files import ModelEnum
 from core.export.components.tcpformer import MemoryInducedTransformer, build_model
-from core.export.utils.constants import MODELS_DIR
 from core.export.utils.evaluation import evaluate_skeleton
+from core.utils.files import ensure_downloaded, get_default_cdn_url, get_default_model_path
 
 logger: logging.Logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -25,10 +26,15 @@ class TCPFormerONNX(torch.nn.Module):
         return self.tcpformer(x)
 
 
-def export(checkpoint: str, output: str | None = None, opset: int = 17):
-    output = output or str(Path.cwd() / "tcpformer.onnx")
+def export(checkpoint: str | None = None, output: str | None = None, opset: int = 17):
+    output = output or str(get_default_model_path(ModelEnum.TCPFORMER_H36M_243_ONNX))
     dest = Path(output).expanduser().resolve()
     dest.parent.mkdir(parents=True, exist_ok=True)
+
+    if checkpoint is None:
+        model_path = get_default_model_path(ModelEnum.TCPFORMER_H36M_243_PTH)
+        remote_url = get_default_cdn_url(ModelEnum.TCPFORMER_H36M_243_PTH)
+        checkpoint = str(ensure_downloaded(model_path, remote=remote_url))
 
     state_dict_path = Path(checkpoint)
     logger.info(f"Loading weights from {state_dict_path}")
@@ -73,12 +79,9 @@ def entry():
     logging.basicConfig(level=logging.DEBUG)
 
     parser = argparse.ArgumentParser(description="Export TCPFormer to ONNX")
-    parser.add_argument(
-        "--checkpoint", default=str(MODELS_DIR / "pretrained" / "TCPFormer_h36m_243_379.pth.tr")
-    )
+    parser.add_argument("--checkpoint", default=None)
     parser.add_argument("--output", default=None)
     parser.add_argument("--opset", type=int, default=17)
     args = parser.parse_args()
 
-    output = args.output or str(MODELS_DIR / "onnx" / "tcpformer_h36m_243.onnx")
-    export(args.checkpoint, output, args.opset)
+    export(args.checkpoint, args.output, args.opset)

@@ -18,8 +18,8 @@ class VideoMAEModel(HumanActionRecognizer):
     Uses old ONNX export that outputs raw logits — softmax applied here.
     """
 
-    DEFAULT_MODEL_PATH: Path | None = get_default_model_path(ModelEnum.VIDEOMAE)
-    DEFAULT_REMOTE_URL: str | None = get_default_cdn_url(ModelEnum.VIDEOMAE)
+    DEFAULT_MODEL_PATH: Path | None = get_default_model_path(ModelEnum.VIDEOMAE_ONNX)
+    DEFAULT_REMOTE_URL: str | None = get_default_cdn_url(ModelEnum.VIDEOMAE_ONNX)
     DEFAULT_CLASSES_PATH: Path = RESOURCES_DIR / "kinect_classes.txt"
     DEFAULT_WHITELIST_PATH: Path | None = RESOURCES_DIR / "white_list.txt"
 

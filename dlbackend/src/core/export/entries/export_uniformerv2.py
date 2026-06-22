@@ -7,10 +7,11 @@ from pathlib import Path
 import torch
 from typing_extensions import override
 
+from core.enums.files import ModelEnum
 from core.export.components.uniformerv2 import UniformerV2
-from core.export.components.uniformerv2.model import CHECKPOINT_MAP, CONFIGS
-from core.export.utils.constants import MODELS_DIR
+from core.export.components.uniformerv2.model import CONFIGS
 from core.export.utils.evaluation import evaluate_video
+from core.utils.files import ensure_downloaded, get_default_cdn_url, get_default_model_path
 
 logger: logging.Logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -34,10 +35,15 @@ class UniformerV2ONNX(torch.nn.Module):
         return torch.softmax(self.model(x), dim=-1)
 
 
-def export(config_name: str, checkpoint: str, output: str | None = None, opset: int = 17):
-    output = output or str(Path.cwd() / f"uniformerv2_{config_name}.onnx")
+def export(config_name: str, checkpoint: str | None = None, output: str | None = None, opset: int = 17):
+    output = output or str(get_default_model_path(ModelEnum.UNIFORMERV2_ONNX))
     dest = Path(output).expanduser().resolve()
     dest.parent.mkdir(parents=True, exist_ok=True)
+
+    if checkpoint is None:
+        model_path = get_default_model_path(ModelEnum.UNIFORMERV2_PTH)
+        remote_url = get_default_cdn_url(ModelEnum.UNIFORMERV2_PTH)
+        checkpoint = str(ensure_downloaded(model_path, remote=remote_url))
 
     logger.info(f"Loading weights from {checkpoint}")
     net = UniformerV2.load_from_checkpoint(config_name, Path(checkpoint))
@@ -92,8 +98,4 @@ def entry():
     parser.add_argument("--opset", type=int, default=17)
     args = parser.parse_args()
 
-    checkpoint = args.checkpoint or str(MODELS_DIR / "pretrained" / CHECKPOINT_MAP[args.config])
-    output = args.output or str(
-        MODELS_DIR / "onnx" / f"{Path(CHECKPOINT_MAP[args.config]).stem}_fp32.onnx"
-    )
-    export(args.config, checkpoint, output, args.opset)
+    export(args.config, args.checkpoint, args.output, args.opset)

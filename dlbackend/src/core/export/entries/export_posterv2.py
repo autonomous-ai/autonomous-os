@@ -11,10 +11,11 @@ from pathlib import Path
 import torch
 from typing_extensions import override
 
+from core.enums.files import ModelEnum
 from core.export.components.posterv2 import Posterv2
 from core.export.components.posterv2.utils import RecorderMeter, RecorderMeter1
-from core.export.utils.constants import MODELS_DIR
 from core.export.utils.evaluation import evaluate_image
+from core.utils.files import ensure_downloaded, get_default_cdn_url, get_default_model_path
 
 _main = _sys.modules["__main__"]
 _main.RecorderMeter = RecorderMeter
@@ -41,10 +42,15 @@ class Posterv2ONNX(torch.nn.Module):
         return torch.softmax(self.posterv2(x), dim=-1)
 
 
-def export(checkpoint: str, output: str | None = None, num_classes: int = 7, opset: int = 17):
-    output = output or str(Path.cwd() / "posterv2.onnx")
+def export(checkpoint: str | None = None, output: str | None = None, num_classes: int = 7, opset: int = 17):
+    output = output or str(get_default_model_path(ModelEnum.POSTERV2_ONNX))
     dest = Path(output).expanduser().resolve()
     dest.parent.mkdir(parents=True, exist_ok=True)
+
+    if checkpoint is None:
+        model_path = get_default_model_path(ModelEnum.POSTERV2_PTH)
+        remote_url = get_default_cdn_url(ModelEnum.POSTERV2_PTH)
+        checkpoint = str(ensure_downloaded(model_path, remote=remote_url))
 
     ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
     state_dict = ckpt.get("state_dict", ckpt)
@@ -90,13 +96,10 @@ def entry():
     logging.basicConfig(level=logging.DEBUG)
 
     parser = argparse.ArgumentParser(description="Export POSTER V2 to ONNX")
-    parser.add_argument(
-        "--checkpoint", default=str(MODELS_DIR / "pretrained" / "posterv2_7cls.pth")
-    )
+    parser.add_argument("--checkpoint", default=None)
     parser.add_argument("--output", default=None)
     parser.add_argument("--num-classes", type=int, default=7)
     parser.add_argument("--opset", type=int, default=17)
     args = parser.parse_args()
 
-    output = args.output or str(MODELS_DIR / "onnx" / "posterv2_7cls.onnx")
-    export(args.checkpoint, output, args.num_classes, args.opset)
+    export(args.checkpoint, args.output, args.num_classes, args.opset)

@@ -241,7 +241,7 @@ class Emotion2vec(torch.nn.Module):
         """Load model and token list from HuggingFace Hub.
 
         Args:
-            model_id: HuggingFace model identifier (e.g. "iic/emotion2vec_plus_large").
+            model_id: HuggingFace model identifier (e.g. "emotion2vec/emotion2vec_plus_large").
 
         Returns:
             Tuple of (model, token_list).
