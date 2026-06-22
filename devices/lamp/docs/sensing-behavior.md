@@ -147,7 +147,7 @@ Injection fires when **all** of the following hold:
 
 There is no separate "minimum sedentary streak" gate and no separate "nudge cooldown" — the window itself is the rhythm. Window start requires sedentary, so when it completes the user has been at the computer for at least `POSE_WINDOW_DURATION_S`; the unconditional reset after each cycle means the next fire is naturally one window away.
 
-When the inject fires, the dedup check is **bypassed** for that single event: a posture nudge is a meaningfully different signal from "user is still using computer", and losing it to dedup would mean waiting another full window before the next attempt.
+When the inject fires, both the per-label dedup check **and** the global event cooldown (`MOTION_EVENT_COOLDOWN_S`, default 360 s — the floor that bounds ordinary `motion.activity` emissions) are **bypassed** for that single event: a posture nudge is a meaningfully different signal from "user is still using computer", and losing it to dedup or cooldown would mean waiting another full window before the next attempt.
 
 Window lifecycle:
 1. **Open** — `pose.start_window()` called by motion-side when a sedentary label first appears. Clears any pre-window samples and anchors `_window_start_ts = now`. Idempotent — calls while a window is already open are no-ops.
