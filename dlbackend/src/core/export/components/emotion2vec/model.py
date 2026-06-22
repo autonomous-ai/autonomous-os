@@ -6,11 +6,11 @@
 
 import logging
 from contextlib import contextmanager
-from distutils.version import LooseVersion
 from functools import partial
 
 import numpy as np
 import torch
+from distutils.version import LooseVersion
 from omegaconf import OmegaConf
 
 from .audio import AudioEncoder

@@ -65,16 +65,6 @@ class TestObjectDetectionHTTPCompat:
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
 
-    def test_yoloe_returns_list(self):
-        resp = httpx.post(
-            _http_url("/api/dl/yoloe"),
-            json={"image_b64": _load_test_image_b64(), "classes": ["person"]},
-            headers=AUTH_HEADERS,
-            timeout=30,
-        )
-        # 200 if enabled, 503 if not — both are valid
-        assert resp.status_code in (200, 503)
-
     def test_owlv2_returns_list(self):
         resp = httpx.post(
             _http_url("/api/dl/owlv2"),

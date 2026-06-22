@@ -17,13 +17,12 @@ import argparse
 import logging
 from pathlib import Path
 
-import numpy as np
 import torch
 from transformers import AutoProcessor, GroundingDinoForObjectDetection
 from typing_extensions import override
 
 from core.export.utils.constants import MODELS_DIR
-from core.export.utils.evaluation import evaluate_image, prepare_onnx_session
+from core.export.utils.evaluation import evaluate_image
 from core.export.utils.nms import onnx_nms, xyxy_to_xywh_normalized
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -64,10 +63,7 @@ class GroundingDINOONNX(torch.nn.Module):
 
 
 def export(model_id: str, output: str | None = None, opset: int = 17, nms: bool = True):
-    if output is None:
-        name = model_id.split("/")[-1]
-        output = str(MODELS_DIR / "onnx" / "grounding_dino.onnx")
-
+    output = output or str(Path.cwd() / "grounding_dino.onnx")
     dest = Path(output).expanduser().resolve()
     dest.parent.mkdir(parents=True, exist_ok=True)
 

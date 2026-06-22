@@ -109,6 +109,7 @@ class CryptoSetting(BaseModel):
 class SingleObjectDetectorSetting(BaseModel):
     enabled: bool = False
     model_path: str | None = None
+    remote_url: str | None = None
     classes_path: str | None = None
     threshold: float | None = None
     batch_size: int | None = None
@@ -116,7 +117,6 @@ class SingleObjectDetectorSetting(BaseModel):
 
 class ObjectDetectorSetting(BaseModel):
     yolo_world: SingleObjectDetectorSetting = SingleObjectDetectorSetting(enabled=True)
-    yoloe: SingleObjectDetectorSetting = SingleObjectDetectorSetting()
     owlv2: SingleObjectDetectorSetting = SingleObjectDetectorSetting(enabled=True)
     grounding_dino: SingleObjectDetectorSetting = SingleObjectDetectorSetting()
 

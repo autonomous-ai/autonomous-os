@@ -174,7 +174,6 @@ def build_object_perceptions() -> dict[str, ObjectPerception]:
     """Create one ObjectPerception per enabled detector from settings."""
     detector_settings: dict[ObjectDetectorEnum, Any] = {
         ObjectDetectorEnum.YOLO_WORLD: settings.object_detector.yolo_world,
-        ObjectDetectorEnum.YOLOE: settings.object_detector.yoloe,
         ObjectDetectorEnum.OWLV2: settings.object_detector.owlv2,
         ObjectDetectorEnum.GROUNDING_DINO: settings.object_detector.grounding_dino,
     }
@@ -192,6 +191,7 @@ def build_object_perceptions() -> dict[str, ObjectPerception]:
         factory = ObjectDetectorFactory(
             model_name=name,
             model_path=model_path,
+            remote_url=det_settings.remote_url,
             classes_path=classes_path,
             threshold=det_settings.threshold,
             batch_size=det_settings.batch_size,

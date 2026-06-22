@@ -3,9 +3,9 @@
 import argparse
 import logging
 from pathlib import Path
-from typing_extensions import override
 
 import torch
+from typing_extensions import override
 
 from core.export.components.uniformerv2 import UniformerV2
 from core.export.components.uniformerv2.model import CHECKPOINT_MAP, CONFIGS
@@ -34,7 +34,8 @@ class UniformerV2ONNX(torch.nn.Module):
         return torch.softmax(self.model(x), dim=-1)
 
 
-def export(config_name: str, checkpoint: str, output: str, opset: int = 17):
+def export(config_name: str, checkpoint: str, output: str | None = None, opset: int = 17):
+    output = output or str(Path.cwd() / f"uniformerv2_{config_name}.onnx")
     dest = Path(output).expanduser().resolve()
     dest.parent.mkdir(parents=True, exist_ok=True)
 

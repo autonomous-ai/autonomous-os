@@ -13,7 +13,7 @@ from ultralytics import YOLOWorld
 from core.models.object import RawObjectDetection
 from core.utils.detection import xyxy_to_normalized_xywh
 
-from .base import ObjectDetector
+from core.perception.object.predictors.base import ObjectDetector
 
 
 class YOLOWorldDetector(ObjectDetector):
@@ -27,11 +27,12 @@ class YOLOWorldDetector(ObjectDetector):
     def __init__(
         self,
         model_path: Path | None = None,
+        remote_url: str | None = None,
         classes_path: Path | None = None,
         threshold: float | None = None,
         batch_size: int | None = None,
     ) -> None:
-        super().__init__(model_path=model_path, classes_path=classes_path, threshold=threshold, batch_size=batch_size)
+        super().__init__(model_path=model_path, remote_url=remote_url, classes_path=classes_path, threshold=threshold, batch_size=batch_size)
         self._model: YOLOWorld | None = None
         self._running: bool = False
 

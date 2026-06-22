@@ -94,10 +94,7 @@ class Emotion2VecONNX(torch.nn.Module):
 
 
 def export(model_id: str, output: str | None = None, opset: int = 17):
-    if output is None:
-        name = model_id.split("/")[-1]
-        output = str(MODELS_DIR / "onnx" / "emotion2vec.onnx")
-
+    output = output or str(Path.cwd() / "emotion2vec.onnx")
     dest = Path(output).expanduser().resolve()
     dest.parent.mkdir(parents=True, exist_ok=True)
 

@@ -71,7 +71,6 @@ export-tcpformer = "core.export.entries.export_tcpformer:entry"
 export-uniformerv2 = "core.export.entries.export_uniformerv2:entry"
 export-yolo = "core.export.entries.export_yolo:entry"
 export-yolo-world = "core.export.entries.export_yolo_world:entry"
-export-yoloe = "core.export.entries.export_yoloe:entry"
 
 [tool.setuptools_scm]
 

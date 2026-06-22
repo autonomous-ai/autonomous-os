@@ -12,7 +12,7 @@ import numpy as np
 from typing_extensions import override
 
 from core.models.person import RawPersonDetection
-from core.perception.object.predictors.yolo_onnx import YOLOONNXDetector
+from core.perception.object.predictors.onnx.yolo import YOLOONNXDetector
 from core.utils.common import get_or_default
 from core.utils.detection import expand_boxes_xyxy, xywh_to_xyxy
 

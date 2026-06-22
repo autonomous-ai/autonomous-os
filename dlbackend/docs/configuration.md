@@ -120,7 +120,7 @@ checkpoint override and threshold(s).
 ### Object detectors (all opt-in)
 
 Each detector has its own block: `OBJECT_DETECTOR__<NAME>__{ENABLED,MODEL_PATH,CLASSES_PATH,THRESHOLD}`
-where `<NAME>` ∈ `YOLO_WORLD`, `YOLOE`, `OWLV2`, `GROUNDING_DINO`. All default to
+where `<NAME>` ∈ `YOLO_WORLD`, `OWLV2`, `GROUNDING_DINO`. All default to
 `ENABLED=false`; enable the detectors you intend to call by path segment.
 
 ### Audio processor (SER / embedder front-end)

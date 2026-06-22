@@ -25,7 +25,8 @@ class TCPFormerONNX(torch.nn.Module):
         return self.tcpformer(x)
 
 
-def export(checkpoint: str, output: str, opset: int = 17):
+def export(checkpoint: str, output: str | None = None, opset: int = 17):
+    output = output or str(Path.cwd() / "tcpformer.onnx")
     dest = Path(output).expanduser().resolve()
     dest.parent.mkdir(parents=True, exist_ok=True)
 

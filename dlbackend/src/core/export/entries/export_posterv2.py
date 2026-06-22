@@ -41,7 +41,8 @@ class Posterv2ONNX(torch.nn.Module):
         return torch.softmax(self.posterv2(x), dim=-1)
 
 
-def export(checkpoint: str, output: str, num_classes: int = 7, opset: int = 17):
+def export(checkpoint: str, output: str | None = None, num_classes: int = 7, opset: int = 17):
+    output = output or str(Path.cwd() / "posterv2.onnx")
     dest = Path(output).expanduser().resolve()
     dest.parent.mkdir(parents=True, exist_ok=True)
 

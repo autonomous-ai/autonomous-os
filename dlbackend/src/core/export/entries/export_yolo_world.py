@@ -97,7 +97,8 @@ class YOLOWorldONNX(torch.nn.Module):
         return xywh, scores, labels
 
 
-def export(checkpoint: str, output: str, imgsz: int = 640, opset: int = 17, nms: bool = True):
+def export(checkpoint: str, output: str | None = None, imgsz: int = 640, opset: int = 17, nms: bool = True):
+    output = output or str(Path.cwd() / "yolo_world.onnx")
     dest = Path(output).expanduser().resolve()
     dest.parent.mkdir(parents=True, exist_ok=True)
 

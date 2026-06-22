@@ -98,13 +98,12 @@ Classifies emotion from a speech waveform (independent of any transcript).
 Open-vocabulary / zero-shot detection. Each detector is independently enabled and
 selected by URL path segment (`{detector_name}`).
 
-- Enum `ObjectDetectorEnum` (`enums/object.py`): `yoloworld`, `yoloe`, `owlv2`, `grounding-dino`
+- Enum `ObjectDetectorEnum` (`enums/object.py`): `yoloworld`, `owlv2`, `grounding-dino`
 - Predictors (`perception/object/predictors/`):
 
   | Detector | Enum value | File | Backend | Default weights | GPU |
   |----------|-----------|------|---------|-----------------|-----|
   | YOLO-World | `yoloworld` | `yolo_world.py` | Ultralytics `.pt` | `yolov8x-worldv2.pt` | CUDA / CPU |
-  | YOLOE | `yoloe` | `yoloe.py` | Ultralytics `.pt` | `yoloe-26x-seg.pt` | CUDA / CPU |
   | OWLv2 | `owlv2` | `owlv2.py` | HF Transformers | `google/owlv2-large-patch14-ensemble` | CUDA / CPU |
   | Grounding DINO | `grounding-dino` | `grounding_dino.py` | HF Transformers | `IDEA-Research/grounding-dino-tiny` | CUDA / CPU |
 
@@ -190,7 +189,6 @@ export-owlv2            # OWLv2 zero-shot object detection (downloads from HF)
 export-grounding-dino   # Grounding DINO zero-shot (downloads from HF)
 export-yolo             # YOLO person detection
 export-yolo-world       # YOLO-World zero-shot object detection
-export-yoloe            # YOLO-E zero-shot object detection
 ```
 
 ### Model I/O specifications
@@ -208,7 +206,6 @@ All models export with ONNX opset 17. `B` = batch, `T` = variable time, `K` = nu
 | **Grounding DINO** | `images`, `class_tokens` | `[B,3,H,W]`, `[B,L]` int64 | GroundingDINOProcessor | `boxes`, `probs`, `labels` | `[B,N,4]` xywh, `[B,N,L]`, `[B,N]` |
 | **YOLO** | `images` | `[B,3,640,640]` | Raw tensor | `boxes`, `probs`, `labels` | `[B,N,4]` xywh, `[B,N]`, `[B,N]` |
 | **YOLO-World** | `images`, `class_tokens` | `[B,3,640,640]`, `[K,L]` int64 | CLIP tokenize + L2 norm | `boxes`, `probs`, `labels` | `[B,N,4]` xywh, `[B,N,K]`, `[B,N]` |
-| **YOLO-E** | `images`, `class_tokens` | `[B,3,640,640]`, `[K,L]` int64 | MobileCLIP tokenize + L2 norm | `boxes`, `probs`, `labels` | `[B,N,4]` xywh, `[B,N,K]`, `[B,N]` |
 
 **Image input convention:** All image inputs expect float32 in [0, 1] range (rescale from uint8 [0, 255] before inference). Models that require further normalization (ImageNet mean/std, custom mean/std) bake it into the ONNX graph — the caller only needs to rescale to [0, 1].
 
@@ -216,7 +213,7 @@ All models export with ONNX opset 17. `B` = batch, `T` = variable time, `K` = nu
 
 **Detection outputs:** `boxes` are normalized [0,1] xywh. `labels` use -1 for padding. NMS is baked into the ONNX graph by default.
 
-**Text encoders:** OWLv2 and Grounding DINO embed the full text encoder (CLIP/BERT) in the ONNX; YOLO-World uses CLIP ViT-B/32; YOLO-E uses MobileCLIP-blt.
+**Text encoders:** OWLv2 and Grounding DINO embed the full text encoder (CLIP/BERT) in the ONNX; YOLO-World uses CLIP ViT-B/32.
 
 ### Script → checkpoint mapping
 
@@ -231,7 +228,6 @@ All models export with ONNX opset 17. `B` = batch, `T` = variable time, `K` = nu
 | `export-grounding-dino` | HuggingFace | `IDEA-Research/grounding-dino-tiny` | `models/onnx/grounding_dino.onnx` |
 | `export-yolo` | Ultralytics `.pt` | `yolo12x.pt` | ONNX via ultralytics export |
 | `export-yolo-world` | Ultralytics `.pt` | `yolov8x-worldv2.pt` | ONNX via ultralytics export |
-| `export-yoloe` | Ultralytics `.pt` | `yoloe-26x-seg.pt` | ONNX via ultralytics export |
 
 Components (model definitions, preprocessing) are in `src/core/export/components/`.
 Utilities (constants, evaluation, NMS, preprocessing) are in `src/core/export/utils/`.

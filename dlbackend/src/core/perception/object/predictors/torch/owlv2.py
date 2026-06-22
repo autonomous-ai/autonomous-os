@@ -1,4 +1,4 @@
-"""Grounding DINO zero-shot object detector (HuggingFace transformers)."""
+"""OWLv2 zero-shot object detector (HuggingFace transformers)."""
 
 from pathlib import Path
 from typing import Any
@@ -8,38 +8,35 @@ import numpy as np
 import numpy.typing as npt
 import torch
 from PIL import Image
-from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
+from transformers import Owlv2ForObjectDetection, Owlv2Processor
 from typing_extensions import override
 
 from core.models.object import RawObjectDetection
 from core.utils.detection import xyxy_to_normalized_xywh
-from core.utils.common import get_or_default
 
-from .base import ObjectDetector
+from core.perception.object.predictors.base import ObjectDetector
 
 
-class GroundingDINODetector(ObjectDetector):
-    """Zero-shot object detection using Grounding DINO.
+class OWLv2Detector(ObjectDetector):
+    """Zero-shot object detection using OWLv2.
 
-    Classes are joined into a period-separated text prompt per request.
+    Text queries are constructed fresh per request. Supports batch processing.
     """
 
-    DEFAULT_MODEL_PATH: Path | None = Path("IDEA-Research/grounding-dino-tiny")
-    DEFAULT_THRESHOLD: float = 0.25
-    DEFAULT_TEXT_THRESHOLD: float = 0.25
+    DEFAULT_MODEL_PATH: Path | None = Path("google/owlv2-large-patch14-ensemble")
+    DEFAULT_THRESHOLD: float = 0.1
 
     def __init__(
         self,
         model_path: Path | None = None,
+        remote_url: str | None = None,
         classes_path: Path | None = None,
         threshold: float | None = None,
-        text_threshold: float | None = None,
         batch_size: int | None = None,
     ) -> None:
-        super().__init__(model_path=model_path, classes_path=classes_path, threshold=threshold, batch_size=batch_size)
-        self._text_threshold: float = get_or_default(text_threshold, self.DEFAULT_TEXT_THRESHOLD)
-        self._processor: AutoProcessor | None = None
-        self._model: AutoModelForZeroShotObjectDetection | None = None
+        super().__init__(model_path=model_path, remote_url=remote_url, classes_path=classes_path, threshold=threshold, batch_size=batch_size)
+        self._processor: Owlv2Processor | None = None
+        self._model: Owlv2ForObjectDetection | None = None
         self._device: str = ""
         self._running: bool = False
 
@@ -51,10 +48,10 @@ class GroundingDINODetector(ObjectDetector):
 
         self._logger.info("Loading model from %s", self._model_path)
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
-        self._processor = AutoProcessor.from_pretrained(str(self._model_path))
-        self._model = AutoModelForZeroShotObjectDetection.from_pretrained(
-            str(self._model_path)
-        ).to(self._device)
+        self._processor = Owlv2Processor.from_pretrained(str(self._model_path))
+        self._model = Owlv2ForObjectDetection.from_pretrained(str(self._model_path)).to(
+            self._device
+        )
         self._class_names = self._load_classes(self._classes_path)
         self._running = True
         self._logger.info("Ready")
@@ -88,7 +85,7 @@ class GroundingDINODetector(ObjectDetector):
             raise RuntimeError("Model not started")
 
         effective_classes: list[str] = classes if classes else self._class_names
-        text_prompt: str = " . ".join(effective_classes) + " ."
+        text_queries: list[str] = [f"a photo of {c}" for c in effective_classes]
 
         # Batch: convert all images to PIL
         pil_images: list[Image.Image] = [
@@ -99,25 +96,30 @@ class GroundingDINODetector(ObjectDetector):
         ]
 
         inputs = self._processor(
-            images=pil_images, text=text_prompt, return_tensors="pt"
+            text=text_queries, images=pil_images, return_tensors="pt"
         ).to(self._device)
 
         self._model.eval()
         outputs = self._model(**inputs)
 
+        target_sizes_tensor = torch.tensor(target_sizes, device=self._device)
         batch_results = self._processor.post_process_grounded_object_detection(
-            outputs,
-            inputs["input_ids"],
+            outputs=outputs,
+            target_sizes=target_sizes_tensor,
             threshold=self._threshold,
-            text_threshold=self._text_threshold,
-            target_sizes=target_sizes,
         )
 
         results: list[RawObjectDetection] = []
         for post in batch_results:
             xyxy_np: npt.NDArray[np.float32] = post["boxes"].cpu().numpy().astype(np.float32)
             conf_np: npt.NDArray[np.float32] = post["scores"].cpu().numpy().astype(np.float32)
-            labels: list[str] = [lbl.strip() for lbl in post["labels"]]
+            labels_np: npt.NDArray[np.int64] = post["labels"].cpu().numpy().astype(np.int64)
+
+            # Discard unknown
+            valid_np = labels_np < len(effective_classes)
+            xyxy_np = xyxy_np[valid_np]
+            conf_np = conf_np[valid_np]
+            labels_np = labels_np[valid_np]
 
             if len(xyxy_np) == 0:
                 results.append(RawObjectDetection(
@@ -129,11 +131,13 @@ class GroundingDINODetector(ObjectDetector):
 
             # xyxy pixel → xywh normalized [0, 1]
             H, W = input[len(results)].shape[:2]
-            xywh_np = xyxy_to_normalized_xywh(xyxy_np, float(W), float(H))
+            xywh_np = xyxy_to_normalized_xywh(xyxy_np, W, H)
+
+            names: list[str] = [effective_classes[i] for i in labels_np]
 
             results.append(RawObjectDetection(
                 bbox_xywh=xywh_np,
-                class_names=labels,
+                class_names=names,
                 confidence=conf_np,
             ))
 

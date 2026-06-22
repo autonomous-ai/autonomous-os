@@ -26,7 +26,8 @@ class EmoNetONNX(torch.nn.Module):
         return torch.softmax(out["expression"], dim=-1), out["valence"], out["arousal"]
 
 
-def export(n_expression: int, output: str, opset: int = 11):
+def export(n_expression: int, output: str | None = None, opset: int = 11):
+    output = output or str(Path.cwd() / f"emonet_{n_expression}.onnx")
     dest = Path(output).expanduser().resolve()
     dest.parent.mkdir(parents=True, exist_ok=True)
 

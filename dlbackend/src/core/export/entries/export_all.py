@@ -16,7 +16,6 @@ from . import (
     export_uniformerv2,
     export_yolo,
     export_yolo_world,
-    export_yoloe,
 )
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -96,24 +95,32 @@ def export_all():
     # OWLv2
     results["owlv2"] = _run(
         "owlv2",
-        lambda: export_owlv2.export("google/owlv2-large-patch14-ensemble"),
+        lambda: export_owlv2.export(
+            "google/owlv2-large-patch14-ensemble",
+            output=str(MODELS_DIR / "onnx" / "owlv2_raw.onnx"),
+            nms=False,
+        ),
         required=False,
     )
 
     # Grounding DINO
     results["grounding_dino"] = _run(
         "grounding_dino",
-        lambda: export_grounding_dino.export("IDEA-Research/grounding-dino-tiny"),
+        lambda: export_grounding_dino.export(
+            "IDEA-Research/grounding-dino-tiny",
+            output=str(MODELS_DIR / "onnx" / "grounding_dino_raw.onnx"),
+            nms=False,
+        ),
         required=False,
     )
 
     # YOLO (person detection)
     ckpt = MODELS_DIR / "pretrained" / "yolo12x.pt"
     if ckpt.exists():
-        output = str(MODELS_DIR / "onnx" / "yolo12x.onnx")
+        output = str(MODELS_DIR / "onnx" / "yolo12x_raw.onnx")
         results["yolo"] = _run(
             "yolo",
-            lambda: export_yolo.export(str(ckpt), output),
+            lambda: export_yolo.export(str(ckpt), output, nms=False),
             required=False,
         )
     else:
@@ -122,26 +129,14 @@ def export_all():
     # YOLO-World
     ckpt = MODELS_DIR / "pretrained" / "yolov8x-worldv2.pt"
     if ckpt.exists():
-        output = str(MODELS_DIR / "onnx" / "yolov8x-worldv2.onnx")
+        output = str(MODELS_DIR / "onnx" / "yolov8x-worldv2_raw.onnx")
         results["yolo_world"] = _run(
             "yolo_world",
-            lambda: export_yolo_world.export(str(ckpt), output),
+            lambda: export_yolo_world.export(str(ckpt), output, nms=False),
             required=False,
         )
     else:
         logger.info("[skip] YOLO-World: %s not found", ckpt)
-
-    # YOLO-E
-    ckpt = MODELS_DIR / "pretrained" / "yoloe-26x-seg.pt"
-    if ckpt.exists():
-        output = str(MODELS_DIR / "onnx" / "yoloe-26x-seg.onnx")
-        results["yoloe"] = _run(
-            "yoloe",
-            lambda: export_yoloe.export(str(ckpt), output),
-            required=False,
-        )
-    else:
-        logger.info("[skip] YOLO-E: %s not found", ckpt)
 
     # Summary
     logger.info("=" * 60)
