@@ -135,7 +135,14 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
 
 1. **Dựng + start.** `RealtimeOrchestrator(gateway=AGENT_GATEWAY)` được tạo;
    `start()` chạy trong daemon thread (`realtime-start`) khi `HAL_REALTIME_ENABLED`.
-   TTS `on_speak_end` được hook để feed lại text đã nói dạng `[TTS HISTORY]`.
+   TTS `on_speak_end` được hook để feed lại text đã nói dạng `[TTS HISTORY]`,
+   nhưng **chỉ khi lượt nói đó opt-in** (`TTSService.realtime_feedback`, đặt bởi
+   cờ `realtime_feedback` trên `/voice/speak[-queue]`). Chỉ reply thật của agentic
+   runtime mới opt-in — os-server gửi qua `hal.SpeakReply` / `hal.SpeakQueueReply`
+   (được `SendToHALTTS` / `SendToHALTTSQueue` dùng). Mọi TTS hardcode (dead-air
+   filler, ambient mumble, backchannel, thông báo reconnect/health, chitchat
+   local) đi qua `hal.Speak` thường và **không bao giờ** được feed lại — nếu không
+   model sẽ lặp lại (echo) những câu nó chưa từng sinh ra.
 2. **Stream.** Khi session STT đang mở, mỗi frame mic được resample về rate của
    provider và gửi qua `append_audio()` (song song, non-blocking), đồng thời buffer
    vào `rt_audio_buffer`.

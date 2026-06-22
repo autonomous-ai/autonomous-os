@@ -147,6 +147,23 @@ func SpeakQueue(text string) error {
 	return post("/voice/speak-queue", body)
 }
 
+// SpeakReply is Speak for the agentic runtime's actual reply: it sets
+// realtime_feedback so HAL feeds the spoken text back to the realtime voice
+// agent as [TTS HISTORY] (keeping it aware of what the device said). Use this
+// ONLY for genuine agent output — hardcoded TTS (fillers, mumble, system
+// notices) must use plain Speak so it never pollutes the realtime model.
+func SpeakReply(text string) error {
+	body, _ := json.Marshal(map[string]any{"text": text, "realtime_feedback": true})
+	return post("/voice/speak", body)
+}
+
+// SpeakQueueReply is SpeakQueue with realtime feedback — the queued sibling of
+// SpeakReply for sentence-streamed agent replies. See SpeakReply.
+func SpeakQueueReply(text string) error {
+	body, _ := json.Marshal(map[string]any{"text": text, "realtime_feedback": true})
+	return post("/voice/speak-queue", body)
+}
+
 // SpeakInterruptible sends text to TTS; playback can be cut short by incoming voice.
 func SpeakInterruptible(text string) error {
 	body, _ := json.Marshal(map[string]any{"text": text, "interruptible": true})

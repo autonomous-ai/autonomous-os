@@ -262,11 +262,16 @@ def speak_text(req: SpeakRequest):
             req.text,
             interruptible=req.interruptible,
             prerender=req.prerender,
+            realtime_feedback=req.realtime_feedback,
         )
         if not started:
             raise HTTPException(409, "TTS is busy speaking" if not req.prerender else 503)
         return {"status": "prerendered" if req.prerender else "ok"}
-    started = state.tts_service.speak(req.text, interruptible=req.interruptible)
+    started = state.tts_service.speak(
+        req.text,
+        interruptible=req.interruptible,
+        realtime_feedback=req.realtime_feedback,
+    )
     if not started:
         raise HTTPException(409, "TTS is busy speaking")
     return {"status": "ok"}
@@ -306,7 +311,11 @@ def speak_queue_text(req: SpeakRequest):
         len(req.text or ""),
         req.interruptible,
     )
-    ok = state.tts_service.speak_queue(req.text, interruptible=req.interruptible)
+    ok = state.tts_service.speak_queue(
+        req.text,
+        interruptible=req.interruptible,
+        realtime_feedback=req.realtime_feedback,
+    )
     if not ok:
         raise HTTPException(503, "TTS not available")
     return {"status": "ok"}

@@ -127,6 +127,13 @@ class TTSService:
         self._native_mode: bool = False
         self._native_src_rate: int = 0
 
+        # Whether the CURRENT speech should be fed back to the realtime voice
+        # agent as [TTS HISTORY] (via the on_speak_end hook in VoiceService).
+        # Set per-speak: only the agentic runtime's reply passes True. Hardcoded
+        # TTS (fillers, ambient mumble, system notices) leaves it False so those
+        # never reach the realtime model. Default False = safe (no feedback).
+        self._realtime_feedback: bool = False
+
         self._device_rate = None
         self._backend: Optional[TTSBackend] = None
         try:
@@ -294,6 +301,14 @@ class TTSService:
         return self._native_mode
 
     @property
+    def realtime_feedback(self) -> bool:
+        """Whether the current/last speech opted into realtime [TTS HISTORY]
+        feedback. Only the agentic runtime's reply sets this; hardcoded TTS
+        (fillers, mumble, system notices) leaves it False so the feedback hook
+        skips them."""
+        return self._realtime_feedback
+
+    @property
     def last_spoken_text(self) -> str:
         """Last text sent to TTS (for echo cancellation transcript filtering)."""
         return self._last_spoken_text
@@ -337,9 +352,11 @@ class TTSService:
         except Exception:
             return False
 
-    def speak(self, text: str, interruptible: bool = False) -> bool:
+    def speak(self, text: str, interruptible: bool = False, realtime_feedback: bool = False) -> bool:
         """Synthesize and play text. Returns True if started, False if busy or unavailable.
-        If interruptible=True, a subsequent speak() call can stop this one."""
+        If interruptible=True, a subsequent speak() call can stop this one.
+        realtime_feedback=True feeds this text to the realtime agent on completion
+        (agent replies only — see _realtime_feedback)."""
         if not self.available:
             logger.warning("TTS not available")
             return False
@@ -369,6 +386,7 @@ class TTSService:
         self._speaking = True
         self._interruptible = interruptible
         self._last_spoken_text = text
+        self._realtime_feedback = realtime_feedback
 
         thread = threading.Thread(
             target=self._speak_sync,
@@ -379,7 +397,7 @@ class TTSService:
         thread.start()
         return True
 
-    def speak_queue(self, text: str, interruptible: bool = False) -> bool:
+    def speak_queue(self, text: str, interruptible: bool = False, realtime_feedback: bool = False) -> bool:
         """Speak `text`. If TTS is idle, plays immediately (same as speak()).
         If TTS is currently speaking, the text is appended to a pending queue
         and pre-synthesized in the background; once the current playback
@@ -408,6 +426,7 @@ class TTSService:
             self._speaking = True
             self._interruptible = interruptible
             self._last_spoken_text = text
+            self._realtime_feedback = realtime_feedback
             thread = threading.Thread(
                 target=self._speak_sync,
                 args=(text,),
@@ -534,6 +553,10 @@ class TTSService:
         self._stop_event.clear()
         self._native_src_rate = src_rate
         self._native_mode = True
+        # Native playback is the realtime model's OWN voice — never feed it back
+        # (the native_mode check in the hook already skips it; clear the flag too
+        # so a stale True from a prior agent reply can't leak through).
+        self._realtime_feedback = False
         self._speaking = True          # pauses silence keepalive + gates mic->STT
         self._interruptible = True     # stop()/barge-in can interrupt
         self._speak_start_fired = False
@@ -995,9 +1018,11 @@ class TTSService:
     def _tts_cache_path(self, text: str) -> Path:
         return _TTS_CACHE_DIR / f"{self._tts_cache_key(text)}.wav"
 
-    def speak_cached(self, text: str, interruptible: bool = False, prerender: bool = False) -> bool:
+    def speak_cached(self, text: str, interruptible: bool = False, prerender: bool = False, realtime_feedback: bool = False) -> bool:
         """Cache-aware speak. On hit -> ~50ms playback. On miss -> render+save
-        then play. prerender=True skips playback (warmup-only)."""
+        then play. prerender=True skips playback (warmup-only).
+        realtime_feedback=True feeds this text to the realtime agent on
+        completion (agent replies only)."""
         if not self.available:
             logger.warning("TTS not available (cached path)")
             return False
@@ -1039,6 +1064,7 @@ class TTSService:
         self._speaking = True
         self._interruptible = interruptible
         self._last_spoken_text = text
+        self._realtime_feedback = realtime_feedback
 
         threading.Thread(
             target=self._cached_play_thread,

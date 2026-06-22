@@ -90,7 +90,9 @@ func (s *Service) SendToHALTTS(text string) error {
 	if text == "" {
 		return nil
 	}
-	if err := hal.Speak(text); err != nil {
+	// SpeakReply (not Speak): the agent's actual reply, fed back to the realtime
+	// voice agent as history. Hardcoded fillers use hal.Speak so they don't.
+	if err := hal.SpeakReply(text); err != nil {
 		return fmt.Errorf("speak: %w", err)
 	}
 	slog.Info("TTS sent", "component", "hermes", "text", truncRunes(text, 80))
@@ -103,7 +105,7 @@ func (s *Service) SendToHALTTSQueue(text string) error {
 	if text == "" {
 		return nil
 	}
-	if err := hal.SpeakQueue(text); err != nil {
+	if err := hal.SpeakQueueReply(text); err != nil {
 		return fmt.Errorf("speak-queue: %w", err)
 	}
 	slog.Info("TTS queued", "component", "hermes", "text", truncRunes(text, 80))

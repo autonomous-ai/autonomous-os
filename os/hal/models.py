@@ -242,6 +242,15 @@ class SpeakRequest(BaseModel):
     # provider/voice/model/speed/text so config changes invalidate naturally.
     cached: bool = Field(False, description="Look up WAV cache; render+save on miss")
     prerender: bool = Field(False, description="Render+save to cache without playing (warmup)")
+    # Feed this spoken text back to the realtime voice agent as [TTS HISTORY]
+    # so it stays aware of what the device said. ONLY the agentic runtime's
+    # actual reply should set this. Hardcoded TTS (dead-air fillers, ambient
+    # mumble, backchannel, system notices, local chitchat) must leave it False
+    # — feeding those pollutes the realtime model's context and makes it echo
+    # lines it never generated.
+    realtime_feedback: bool = Field(
+        False, description="Feed this text to the realtime agent as history (agent replies only)"
+    )
 
     model_config = {
         "json_schema_extra": {"examples": [{"text": "[laugh] Hey! How are you doing today? I missed you! [sigh] It has been so quiet around here.", "voice": "Rachel"}]}

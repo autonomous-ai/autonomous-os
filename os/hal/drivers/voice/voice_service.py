@@ -154,6 +154,7 @@ class VoiceService:
                     hal_config.REALTIME_ENABLED
                     and tts_service.last_spoken_text
                     and not tts_service.native_mode
+                    and tts_service.realtime_feedback
                 ):
                     text: str = tts_service.last_spoken_text
                     # Direction is INTO the realtime model: whatever was just

@@ -12,6 +12,7 @@ import (
 	"go.autonomous.ai/os/domain"
 	"go.autonomous.ai/os/internal/statusled"
 	"go.autonomous.ai/os/lib/flow"
+	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/lib/i18n"
 )
 
@@ -110,7 +111,9 @@ func (s *Service) transitionReady(now bool) {
 		if s.hasConnected.Swap(true) {
 			go func() {
 				phrase := i18n.Pick(i18n.PhraseReconnect)
-				if err := s.SendToHALTTS(phrase); err != nil {
+				// hal.Speak (not SendToHALTTS): hardcoded system filler, must NOT
+				// be fed to the realtime voice agent as history.
+				if err := hal.Speak(phrase); err != nil {
 					slog.Warn("reconnect TTS failed", "component", "hermes", "error", err)
 				}
 			}()

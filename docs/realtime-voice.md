@@ -139,7 +139,14 @@ turn ("hello") right after a restart would leak to the main agent.
 
 1. **Construct + start.** `RealtimeOrchestrator(gateway=AGENT_GATEWAY)` is built;
    `start()` runs in a daemon thread (`realtime-start`) when `HAL_REALTIME_ENABLED`.
-   TTS `on_speak_end` is hooked to feed spoken text back as `[TTS HISTORY]`.
+   TTS `on_speak_end` is hooked to feed spoken text back as `[TTS HISTORY]`,
+   but **only when that speech opted in** (`TTSService.realtime_feedback`, set by
+   the `realtime_feedback` flag on `/voice/speak[-queue]`). Only the agentic
+   runtime's actual reply opts in — os-server sends it via `hal.SpeakReply` /
+   `hal.SpeakQueueReply` (which `SendToHALTTS` / `SendToHALTTSQueue` use).
+   Hardcoded TTS (dead-air fillers, ambient mumble, backchannel, reconnect /
+   health notices, local chitchat) goes through plain `hal.Speak` and is **never**
+   fed back — otherwise the model would echo lines it never generated.
 2. **Stream.** While the STT session is open, each mic frame is also resampled to
    the provider rate and sent via `append_audio()` (parallel, non-blocking), and
    buffered in `rt_audio_buffer`.
