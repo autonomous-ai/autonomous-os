@@ -122,6 +122,7 @@ class GeminiLiveAgent(VoiceAgentBase):
             ),
         )
 
+        live_tools: list[types.Tool] = []
         if self._tools:
             declarations: list[types.FunctionDeclaration] = [
                 types.FunctionDeclaration(
@@ -131,7 +132,16 @@ class GeminiLiveAgent(VoiceAgentBase):
                 )
                 for tool in self._tools
             ]
-            live_config.tools = [types.Tool(function_declarations=declarations)]
+            live_tools.append(types.Tool(function_declarations=declarations))
+        # Google Search grounding is a separate built-in Tool (no function
+        # declaration). Gemini decides on its own when to ground; results are
+        # synthesized into the spoken reply, so the user never sees raw search
+        # output. This lets weather/news/live-lookup turns resolve in-session
+        # instead of delegating to main.
+        if self._config.google_search_enabled:
+            live_tools.append(types.Tool(google_search=types.GoogleSearch()))
+        if live_tools:
+            live_config.tools = live_tools
 
         # Session resumption (OPT-IN, default off). When enabled, the FIRST connect
         # sends handle=None to make the server start emitting resumption handles;

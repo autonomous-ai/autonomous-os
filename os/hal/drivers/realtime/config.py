@@ -65,6 +65,7 @@ class GeminiConfig(BaseModel):
     language: str | None = _load_language()
     use_language_codes: bool = app_config.REALTIME_GEMINI_USE_LANGUAGE_CODES
     session_resumption_enabled: bool = app_config.REALTIME_GEMINI_SESSION_RESUMPTION
+    google_search_enabled: bool = app_config.REALTIME_GEMINI_GOOGLE_SEARCH
     thinking_level: GeminiThinkingLevel = GeminiThinkingLevel(
         app_config.REALTIME_GEMINI_THINKING_LEVEL
     )

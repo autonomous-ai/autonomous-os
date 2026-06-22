@@ -448,6 +448,19 @@ REALTIME_GEMINI_USE_LANGUAGE_CODES: bool = os.environ.get("HAL_GEMINI_USE_LANGUA
 REALTIME_GEMINI_SESSION_RESUMPTION: bool = os.environ.get(
     "HAL_GEMINI_SESSION_RESUMPTION", "false"
 ).lower() in ("1", "true", "yes")
+# Google Search grounding lets Gemini Live answer live-data questions (weather,
+# news, lookups) directly in the realtime session instead of delegating to main —
+# faster, and it skips a full main-agent turn. It bills per grounded request on
+# top of tokens, but only fires when Gemini actually decides to search (the prompt
+# tells it to ground only for genuine live data, not general knowledge). Defaults
+# ON; env HAL_GEMINI_GOOGLE_SEARCH or realtime.gemini.google_search overrides.
+REALTIME_GEMINI_GOOGLE_SEARCH: bool = (
+    os.environ.get(
+        "HAL_GEMINI_GOOGLE_SEARCH",
+        str(_RT_GEMINI.get("google_search", True)),
+    ).lower()
+    in ("1", "true", "yes")
+)
 
 # --- Realtime: OpenAI Realtime ---
 REALTIME_OPENAI_API_KEY: str = (
