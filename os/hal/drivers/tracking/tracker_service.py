@@ -46,6 +46,12 @@ logger = logging.getLogger(__name__)
 # and the Pi never needs internet at boot to start tracking. Source:
 # https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt
 _LOCAL_MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "yolov8n.pt")
+# Inference size for local YOLO. Kept at 320: on the Allwinner A523 CPU, 640
+# pushed inference to 1.3–2.9s/call, so YOLO could not confirm within the
+# trust window (yolo_age climbed past 20s) and the tracker sat in BLOAT-HOLD
+# pointing the wrong way. 320 keeps detection ~260ms — fast enough to correct
+# ViT drift every redetect. (Small/far objects that 320 misses are better
+# handled by the remote open-vocab detector than by a slower local imgsz.)
 _LOCAL_IMGSZ = 320
 
 # YuNet face detector (OpenCV built-in). Lighter than InsightFace, ~30ms/frame on
@@ -282,6 +288,12 @@ PITCH_WEIGHT_BASE  = 0.10
 PITCH_WEIGHT_ELBOW = 0.90
 PITCH_WEIGHT_WRIST = 0.0
 
+# Elbow servo polarity. The elbow_pitch motor's positive direction was reversed
+# in hardware (2026-06-19), so a positive pitch_correction now drives the camera
+# the opposite way. Flip the elbow contribution by this sign so the camera still
+# chases dy in the correct direction. Set back to +1 if the wiring is restored.
+ELBOW_PITCH_SIGN = -1.0
+
 # Edge proximity boost — when object nears frame edge, multiply correction
 # to pull it back toward center before it exits the frame.
 EDGE_BOOST_THRESHOLD = 0.30   # fraction of frame (30%)
@@ -300,6 +312,16 @@ WRIST_PITCH_MIN, WRIST_PITCH_MAX = -90.0, 90.0
 DETECT_MIN_AREA_RATIO = 0.003
 DETECT_MAX_AREA_RATIO = 0.80
 DETECT_MIN_CONFIDENCE = 0.15  # lowered to catch phone at angles/back-facing
+
+# Bbox-trust guard (ViT bloat protection).
+# ViT can dissolve its lock into a box that overflows the whole frame — it stops
+# tracking the object and "tracks" everything. Driving the servo off that
+# bloated centroid causes jitter when the object is still and useless chase when
+# it moves. We only treat a bbox as garbage when it MEETS OR EXCEEDS the full
+# frame area: nothing real can be bigger than the frame, so this never freezes a
+# legitimately large object (e.g. a person standing close fills 80–90% and must
+# still track). On garbage we HOLD the servo and let YOLO/retry relock.
+BBOX_FREEZE_RATIO = 1.0   # bbox area ≥ this fraction of frame ⇒ ViT dissolved
 
 # Ghost-lock detection via tracker confidence (ViT only).
 CONFIDENCE_THRESHOLD = 0.15
@@ -378,6 +400,17 @@ class TrackerService:
         self.last_error: str = ""
         self._yaw_pid = PID(PID_YAW_KP, PID_YAW_KI, PID_YAW_KD)
         self._pitch_pid = PID(PID_PITCH_KP, PID_PITCH_KI, PID_PITCH_KD)
+
+        # Servo follow runs on its own worker thread so the vision loop never
+        # blocks on motor ramp/settle. The vision loop publishes an absolute
+        # goal; the worker glides toward it in anti-click substeps. This keeps
+        # CSRT/ViT updating at full speed instead of ~halving fps waiting for
+        # each servo command to finish.
+        self._servo_lock = threading.Lock()
+        self._servo_goal: Optional[dict] = None
+        self._servo_thread: Optional[threading.Thread] = None
+        # Area (px²) of the last trusted bbox lock — baseline for bloat detection.
+        self._track_init_area: float = 0.0
 
         self._crypto: CryptoSession | None = None
         if config.DL_ENCRYPTION_ENABLED:
@@ -723,7 +756,7 @@ class TrackerService:
         return {
             "base_yaw.pos":    max(YAW_MIN,         min(YAW_MAX,         self._track_yaw         + yaw_step)),
             "base_pitch.pos":  max(BASE_PITCH_MIN,  min(BASE_PITCH_MAX,  self._track_base_pitch  + pitch_total * PITCH_WEIGHT_BASE)),
-            "elbow_pitch.pos": max(ELBOW_PITCH_MIN, min(ELBOW_PITCH_MAX, self._track_elbow_pitch + pitch_total * PITCH_WEIGHT_ELBOW)),
+            "elbow_pitch.pos": max(ELBOW_PITCH_MIN, min(ELBOW_PITCH_MAX, self._track_elbow_pitch + ELBOW_PITCH_SIGN * pitch_total * PITCH_WEIGHT_ELBOW)),
             "wrist_pitch.pos": max(WRIST_PITCH_MIN, min(WRIST_PITCH_MAX, self._track_wrist_pitch - pitch_total * PITCH_WEIGHT_WRIST)),
         }
 
@@ -826,7 +859,7 @@ class TrackerService:
         target = {
             "base_yaw.pos":    max(YAW_MIN,         min(YAW_MAX,         self._track_yaw         + yaw_step)),
             "base_pitch.pos":  max(BASE_PITCH_MIN,  min(BASE_PITCH_MAX,  self._track_base_pitch  + pitch_correction * PITCH_WEIGHT_BASE)),
-            "elbow_pitch.pos": max(ELBOW_PITCH_MIN, min(ELBOW_PITCH_MAX, self._track_elbow_pitch + pitch_correction * PITCH_WEIGHT_ELBOW)),
+            "elbow_pitch.pos": max(ELBOW_PITCH_MIN, min(ELBOW_PITCH_MAX, self._track_elbow_pitch + ELBOW_PITCH_SIGN * pitch_correction * PITCH_WEIGHT_ELBOW)),
             "wrist_pitch.pos": max(WRIST_PITCH_MIN, min(WRIST_PITCH_MAX, self._track_wrist_pitch + pitch_correction * PITCH_WEIGHT_WRIST)),
         }
         # Warn loudly when an axis has saturated against its mechanical limit and
@@ -844,7 +877,64 @@ class TrackerService:
         ):
             logger.warning("[saturation] wrist at limit %.1f° but PID still demanding pitch=%.2f° — recenter device",
                            self._track_wrist_pitch, pitch_correction)
-        return self._send_gimbal_target(target, animation_service)
+        # Non-blocking: hand the target to the servo worker and return. The
+        # worker glides toward it while the vision loop grabs the next frame.
+        self._set_servo_goal(target)
+        return 0.0
+
+    def _set_servo_goal(self, target: dict) -> None:
+        """Publish a new absolute servo goal for the follow worker (non-blocking)."""
+        with self._servo_lock:
+            self._servo_goal = dict(target)
+
+    def _servo_worker(self, animation_service, state) -> None:
+        """Continuously glide servos toward the latest goal, decoupled from the
+        vision loop.
+
+        One synchronized substep per iteration (the fastest joint moves
+        SERVO_SUBSTEP_DEG, the others scale proportionally so all arrive
+        together) with SERVO_SUBSTEP_SLEEP spacing — the same anti-click ramp as
+        the old blocking path, but it no longer stalls CSRT. When a fresh goal
+        arrives mid-ramp the worker simply retargets, producing continuous glide
+        instead of discrete fire-then-settle chunks. The worker owns the
+        self._track_* current-position state.
+        """
+        idle_sleep = 0.01
+        while state.running.is_set():
+            with self._servo_lock:
+                goal = dict(self._servo_goal) if self._servo_goal is not None else None
+                cur = {
+                    "base_yaw.pos":    self._track_yaw,
+                    "base_pitch.pos":  self._track_base_pitch,
+                    "elbow_pitch.pos": self._track_elbow_pitch,
+                    "wrist_pitch.pos": self._track_wrist_pitch,
+                }
+            if goal is None:
+                time.sleep(idle_sleep)
+                continue
+            deltas = {k: goal[k] - cur[k] for k in cur}
+            max_delta = max(abs(v) for v in deltas.values())
+            if max_delta < 0.05:
+                time.sleep(idle_sleep)
+                continue
+            if max_delta <= SERVO_SUBSTEP_DEG:
+                step = dict(goal)
+            else:
+                frac = SERVO_SUBSTEP_DEG / max_delta
+                step = {k: cur[k] + deltas[k] * frac for k in cur}
+            try:
+                with animation_service.bus_lock:
+                    animation_service.robot.send_action(step)
+            except Exception as e:
+                logger.warning("[servo-worker] send failed: %s", e)
+                time.sleep(idle_sleep)
+                continue
+            with self._servo_lock:
+                self._track_yaw         = step["base_yaw.pos"]
+                self._track_base_pitch  = step["base_pitch.pos"]
+                self._track_elbow_pitch = step["elbow_pitch.pos"]
+                self._track_wrist_pitch = step["wrist_pitch.pos"]
+            time.sleep(SERVO_SUBSTEP_SLEEP)
 
     # --- Internal tracking loop ---
 
@@ -888,6 +978,24 @@ class TrackerService:
         # Reset PID state for a clean session.
         self._yaw_pid.reset()
         self._pitch_pid.reset()
+
+        # Seed the servo goal with the current pose and start the follow worker
+        # so it holds position until the vision loop publishes corrections.
+        with self._servo_lock:
+            self._servo_goal = {
+                "base_yaw.pos":    self._track_yaw,
+                "base_pitch.pos":  self._track_base_pitch,
+                "elbow_pitch.pos": self._track_elbow_pitch,
+                "wrist_pitch.pos": self._track_wrist_pitch,
+            }
+        self._servo_thread = threading.Thread(
+            target=self._servo_worker, args=(animation_service, state),
+            daemon=True, name="servo-follow-worker",
+        )
+        self._servo_thread.start()
+
+        # Baseline bbox area for bloat detection — the initial lock is trusted.
+        self._track_init_area = float(state.bbox[2] * state.bbox[3]) if state.bbox else 0.0
 
         ema_dx: Optional[float] = None
         ema_dy: Optional[float] = None
@@ -938,6 +1046,7 @@ class TrackerService:
                             if _t.init(_f, _bbox) is not False:
                                 state.tracker = _t
                                 state.bbox = _bbox
+                                self._track_init_area = float(_bbox[2] * _bbox[3])
                                 logger.info("[retry] tracker reinit OK bbox=%s", _bbox)
                         except Exception as _e:
                             logger.warning("[retry] tracker init failed: %s", _e)
@@ -1006,12 +1115,17 @@ class TrackerService:
                     if miss_count == 1:
                         # First miss: force YOLO immediately instead of waiting for interval
                         last_yolo_t = 0
-                    # Sweep base_yaw to search for object — alternates direction every 8 frames
+                    # Sweep base_yaw to search for object — alternates direction every 8 frames.
+                    # Route through the servo goal so the follow worker drives it (one owner).
                     _sweep_dir = 1 if ((miss_count - 1) // 8) % 2 == 0 else -1
-                    _new_yaw = max(YAW_MIN, min(YAW_MAX, self._track_yaw + 2.0 * _sweep_dir))
-                    with animation_service.bus_lock:
-                        animation_service.robot.send_action({"base_yaw.pos": _new_yaw})
-                    self._track_yaw = _new_yaw
+                    with self._servo_lock:
+                        _new_yaw = max(YAW_MIN, min(YAW_MAX, self._track_yaw + 2.0 * _sweep_dir))
+                        self._servo_goal = {
+                            "base_yaw.pos":    _new_yaw,
+                            "base_pitch.pos":  self._track_base_pitch,
+                            "elbow_pitch.pos": self._track_elbow_pitch,
+                            "wrist_pitch.pos": self._track_wrist_pitch,
+                        }
                     if miss_count >= YOLO_MAX_MISS:
                         if _do_retry():
                             continue
@@ -1090,6 +1204,13 @@ class TrackerService:
                 now_t = time.perf_counter()
                 in_zone = abs(dx) <= w_fr * DEAD_ZONE_YAW_PCT and abs(dy) <= h_fr * DEAD_ZONE_PITCH_PCT
                 yolo_age = now_t - last_yolo_confirm_t
+                # Bbox-trust guard: ViT bloated past its last trusted lock (or the
+                # absolute ceiling) → centroid is garbage. Hold the servo instead
+                # of chasing it; YOLO redetect / ghost-lock retry will relock.
+                # Untrusted only when the bbox overflows the frame (ViT dissolved).
+                # A real object — even a person standing close — is ≤ frame, so
+                # this never freezes a legitimately large target.
+                bbox_untrusted = bbox_ratio >= BBOX_FREEZE_RATIO
                 # Ghost-lock recovery: ViT/CSRT sometimes reports ok=True with a
                 # bbox larger than the frame (lock dissolved into background).
                 # If that persists with no detector confirm, _do_retry instead of
@@ -1102,14 +1223,24 @@ class TrackerService:
                         last_yolo_confirm_t = time.perf_counter()
                         continue
                     break
-                if in_zone:
-                    self._yaw_pid.reset()
-                    self._pitch_pid.reset()
-                    motion_state = "CENTERED"
-                elif yolo_age >= STOP_NO_YOLO_S:
+                if yolo_age >= STOP_NO_YOLO_S:
                     logger.warning("[yolo-trust] no YOLO confirm for %.1fs > %.1fs — stopping ghost",
                                    yolo_age, STOP_NO_YOLO_S)
                     break
+                elif bbox_untrusted:
+                    # Bloated/garbage bbox — hold position, reset PID so the
+                    # integral doesn't wind up while we wait for a clean relock.
+                    self._yaw_pid.reset()
+                    self._pitch_pid.reset()
+                    motion_state = "BLOAT-HOLD"
+                    if not yolo_running.is_set() and state.target_label:
+                        last_yolo_t = 0  # force YOLO redetect ASAP to relock
+                    logger.info("[bbox] untrusted (overflow): area=%.0f%% — HOLD servo, await YOLO relock",
+                                bbox_ratio * 100)
+                elif in_zone:
+                    self._yaw_pid.reset()
+                    self._pitch_pid.reset()
+                    motion_state = "CENTERED"
                 elif yolo_age >= TRUST_TRACKER_S and confidence < TRACKER_TRUST_CONF:
                     # Tracker AND detector both unsure — hold servo, don't chase
                     # phantom. If ViT confidence is high we trust the tracker
@@ -1174,6 +1305,7 @@ class TrackerService:
                                         if ok_r is not False:
                                             state.tracker = new_tracker
                                             state.bbox = yolo_bbox
+                                            self._track_init_area = float(yolo_bbox[2] * yolo_bbox[3])
                                             motion_state = "INIT"
                                             stable_count = 0
                                     except Exception as e:
@@ -1254,6 +1386,15 @@ class TrackerService:
             animation_service._tracking_active = False
             animation_service._hold_mode = False
             state.running.clear()
+
+            # Stop the follow worker before re-centering so it doesn't fight the
+            # zero command (both would write the bus concurrently).
+            if self._servo_thread and self._servo_thread.is_alive():
+                self._servo_thread.join(timeout=2.0)
+                if self._servo_thread.is_alive():
+                    logger.warning("[servo-worker] refused to exit within 2s")
+            with self._servo_lock:
+                self._servo_goal = None
 
             try:
                 # Return to zero at tracking speed — keep velocity+accel low so
