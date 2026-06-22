@@ -39,6 +39,10 @@ type GeminiRealtime struct {
 	Model         string `json:"model,omitempty" yaml:"model"`
 	Voice         string `json:"voice,omitempty" yaml:"voice"`                  // Gemini voice set (e.g. Kore)
 	ThinkingLevel string `json:"thinking_level,omitempty" yaml:"thinkingLevel"` // Gemini-only reasoning knob (e.g. HIGH)
+	// GoogleSearch toggles Google Search grounding (Gemini-only). nil → HAL default
+	// (on). Kept here so an operator's explicit override survives config re-saves
+	// instead of being silently dropped on the next marshal.
+	GoogleSearch *bool `json:"google_search,omitempty" yaml:"googleSearch"`
 }
 
 // OpenAIRealtime holds OpenAI Realtime's provider-specific knobs. Empty fields →

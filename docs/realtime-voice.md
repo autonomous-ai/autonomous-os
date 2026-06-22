@@ -57,6 +57,30 @@ never wait for, announce, or speak the emotion aloud. Note this is distinct from
 the non-realtime path, where the agent emits a `[HW:/emotion:…]` text marker that
 the Go layer parses and strips — the realtime path never uses text markers.
 
+## Google Search grounding (Gemini only)
+
+By default Gemini Live is given a built-in **Google Search** tool
+(`HAL_GEMINI_GOOGLE_SEARCH`, default on; wired in `gemini_live.py` as a separate
+`types.Tool(google_search=…)` alongside the function-declaration tools). This
+lets the realtime model answer **public live-data** questions — weather, news,
+sports, prices, "what time is sunset" — by grounding in-session and speaking the
+result itself, instead of calling `delegate_to_main` and paying a full main-agent
+round-trip. The Gemini system prompt (`system_prompt_gemini.md`) lists these
+public lookups under *Direct Home Run* and routes only **account/private** live
+data (the user's calendar, their smart-home device states, their messages) to
+`delegate_to_main`.
+
+Trade-offs:
+
+- **Gemini only.** OpenAI Realtime has no equivalent built-in tool, so its prompt
+  (`system_prompt_openai.md`) still delegates all external lookups.
+- **Cost.** Grounding bills per grounded request on top of tokens, but only when
+  Gemini actually decides to search. The prompt tells it to ground *only* for
+  genuine fresh/public facts, not general knowledge it already holds. Net effect
+  vs. before is mostly a **shift** of cost (and latency) off the main agent.
+- **Read-only.** Grounding answers questions; it never performs actions. Music,
+  hardware, memory writes, and skills still delegate.
+
 ## Providers
 
 Two interchangeable backends, selected by `HAL_REALTIME_PROVIDER`
@@ -217,6 +241,7 @@ Each knob's `HAL_*` env var overrides the block (and is the dev-box path):
 | `HAL_GEMINI_LIVE_VOICE` | `Kore` | |
 | `HAL_GEMINI_LIVE_BASE_URL` | `<llm_base_url>/ws/gemini` | |
 | `HAL_GEMINI_THINKING_LEVEL` | `MINIMAL` | `MINIMAL` \| `LOW` \| `MEDIUM` \| `HIGH` — cost-lean default (was `HIGH`) |
+| `HAL_GEMINI_GOOGLE_SEARCH` | `true` | Google Search grounding (Gemini only). Lets the realtime model answer public live-data questions (weather, news, lookups) in-session instead of delegating. Bills per grounded request on top of tokens; fires only when Gemini decides to search. Also settable via `realtime.gemini.google_search` in config.json. |
 | `OPENAI_API_KEY` | — | OpenAI key; falls back to `llm_api_key` |
 | `HAL_OPENAI_REALTIME_MODEL` | `gpt-realtime-2` | |
 | `HAL_OPENAI_REALTIME_VOICE` | `alloy` | |

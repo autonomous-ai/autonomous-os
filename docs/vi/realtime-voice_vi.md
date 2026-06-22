@@ -54,6 +54,30 @@ chờ, không thông báo, không đọc tên cảm xúc thành tiếng. Lưu ý
 path không-realtime: ở đó agent phát marker text `[HW:/emotion:…]` rồi lớp Go
 parse và cắt bỏ — path realtime không bao giờ dùng marker text.
 
+## Google Search grounding (chỉ Gemini)
+
+Mặc định Gemini Live được cấp sẵn tool **Google Search** built-in
+(`HAL_GEMINI_GOOGLE_SEARCH`, mặc định bật; wiring trong `gemini_live.py` như một
+`types.Tool(google_search=…)` riêng, đặt cạnh các tool function-declaration). Nhờ
+đó model realtime tự trả lời các câu **dữ liệu công khai theo thời gian thực** —
+thời tiết, tin tức, thể thao, giá cả, "mấy giờ mặt trời lặn" — bằng cách grounding
+ngay trong phiên và tự nói kết quả, thay vì gọi `delegate_to_main` và chịu nguyên
+một vòng round-trip xuống main agent. System prompt của Gemini
+(`system_prompt_gemini.md`) xếp các lookup công khai này vào mục *Direct Home Run*,
+và chỉ chuyển dữ liệu live **thuộc tài khoản/riêng tư** (lịch của user, trạng thái
+thiết bị smart-home của họ, tin nhắn của họ) cho `delegate_to_main`.
+
+Đánh đổi:
+
+- **Chỉ Gemini.** OpenAI Realtime không có tool built-in tương đương, nên prompt
+  của nó (`system_prompt_openai.md`) vẫn delegate mọi lookup bên ngoài.
+- **Chi phí.** Grounding tính phí theo mỗi grounded request (cộng thêm token),
+  nhưng chỉ phát sinh khi Gemini thực sự quyết định search. Prompt dặn nó *chỉ*
+  ground cho dữ kiện công khai/mới thật sự, không ground cho kiến thức chung đã có
+  sẵn. So với trước, phần lớn là **dời** chi phí (và latency) khỏi main agent.
+- **Chỉ đọc.** Grounding chỉ trả lời câu hỏi, không thực hiện hành động. Nhạc,
+  phần cứng, ghi memory, và skill vẫn delegate.
+
 ## Các provider
 
 Hai backend thay thế cho nhau, chọn bằng `HAL_REALTIME_PROVIDER`
@@ -209,6 +233,7 @@ Mỗi knob có thể bị `HAL_*` env override (thắng block, và là đường
 | `HAL_GEMINI_LIVE_VOICE` | `Kore` | |
 | `HAL_GEMINI_LIVE_BASE_URL` | `<llm_base_url>/ws/gemini` | |
 | `HAL_GEMINI_THINKING_LEVEL` | `MINIMAL` | `MINIMAL` \| `LOW` \| `MEDIUM` \| `HIGH` — default rẻ (trước là `HIGH`) |
+| `HAL_GEMINI_GOOGLE_SEARCH` | `true` | Google Search grounding (chỉ Gemini). Cho model realtime tự trả lời câu dữ liệu công khai theo thời gian thực (thời tiết, tin tức, lookup) ngay trong phiên thay vì delegate. Tính phí theo mỗi grounded request (cộng token); chỉ phát sinh khi Gemini quyết định search. Cũng đặt được qua `realtime.gemini.google_search` trong config.json. |
 | `OPENAI_API_KEY` | — | Key OpenAI; fallback về `llm_api_key` |
 | `HAL_OPENAI_REALTIME_MODEL` | `gpt-realtime-2` | |
 | `HAL_OPENAI_REALTIME_VOICE` | `alloy` | |
