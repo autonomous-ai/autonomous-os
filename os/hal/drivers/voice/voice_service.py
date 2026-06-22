@@ -50,7 +50,7 @@ class VoiceService:
     # Strip HW markers, audio tags, and system tags from realtime agent output.
     RT_MARKER_RE: re.Pattern[str] = re.compile(
         r"\[HW:/[^\]]*\]"
-        r"|\[(?:laughs|LAUGHS|sighs|chuckle|light chuckle|giggle|big laugh|gasps|gulps|breathes|clears throat|whispers|pauses|hesitates|stammers)"
+        r"|\[(?:laughs|LAUGHS|sighs|chuckle|light chuckle|giggle|big laugh|gasps|gulps|breathes|clears throat|whispers|pause|pauses|hesitates|stammers|thinking|thinks|thought|thoughtful|pondering|ponders|reasoning)"
         r"[^\]]*\]"
         r"|\[(?:cheerfully|playfully|quietly|nervously|deadpan|flatly|dramatic tone|resigned tone|excited|calm|tired|sad|sorrowful|nervous|frustrated)"
         r"[^\]]*\]"
@@ -562,10 +562,17 @@ class VoiceService:
     # ------------------------------------------------------------------
     def _vad_loop(self, mic, frame_size: int, device_rate: int):
         """Monitor mic with local VAD, connect STT when speech detected.
-        Breaks out when TTS starts speaking so _loop can close mic and reopen after."""
+
+        Legacy mode: returns when TTS/music starts so _loop closes the mic and
+        reopens it after (incurs arecord reopen latency on the next turn).
+        Warm-mic mode (HAL_WARM_MIC): never returns for TTS/music — it drains +
+        discards frames while they play and resumes in place after a short
+        echo-skip, keeping the arecord stream open so the next turn pays no
+        reopen latency (no clipped first words after a push-to-talk cue)."""
         speech_start = None
         speech_pre_buffer = []  # frames buffered during holdoff period
         lookback = deque(maxlen=voice_cfg.PRE_ROLL_FRAMES)
+        draining = False  # warm-mic: True while draining frames during TTS/music
 
         # Keepalive: pre-connect STT WS so it's ready before speech is detected.
         keepalive_session = None
@@ -577,12 +584,53 @@ class VoiceService:
                 logger.info("STT keepalive: pre-connected, waiting for speech...")
 
         while self._running:
-            # Yield mic to TTS or music — break so _loop closes InputStream first
-            if self._tts_is_speaking() or self._music_is_playing():
-                logger.info("TTS/music started, releasing mic...")
-                if keepalive_session:
-                    keepalive_session.close()
-                return
+            tts_or_music = self._tts_is_speaking() or self._music_is_playing()
+
+            # --- TTS/music active ---
+            if tts_or_music:
+                if not voice_cfg.WARM_MIC:
+                    # Legacy: yield the mic — return so _loop closes the stream
+                    # and reopens it after playback (arecord reopen latency).
+                    logger.info("TTS/music started, releasing mic...")
+                    if keepalive_session:
+                        keepalive_session.close()
+                    return
+                # Warm: keep arecord OPEN, drain + discard so the speaker's audio
+                # never reaches STT and the next turn pays no reopen latency.
+                if not draining:
+                    logger.info("TTS/music active — draining mic (warm, arecord kept open)")
+                    if keepalive_session:
+                        keepalive_session.close()
+                        keepalive_session = None
+                    speech_start = None
+                    speech_pre_buffer = []
+                    draining = True
+                mic.read(frame_size)  # blocks ~one frame; discard. Raises if arecord dies.
+                continue
+
+            # --- Warm mic: TTS/music just ended → resume in place ---
+            if draining:
+                # Skip a short echo window so post-playback reverb doesn't
+                # false-trigger, then resume. Bounded ≪ the 1.5s legacy reverb
+                # gate so a user talking right after a cue resumes fast and the
+                # pre-roll lookback (refilling below) captures their first words.
+                logger.info("TTS/music ended — echo-skip then resume VAD (warm mic)")
+                skip_elapsed = 0.0
+                while skip_elapsed < voice_cfg.WARM_MIC_ECHO_SKIP_MAX_S and self._running:
+                    d, ov = mic.read(frame_size)
+                    skip_elapsed += voice_cfg.FRAME_DURATION_MS / 1000.0
+                    if not ov and rms(d, self._np) < voice_cfg.ECHO_RMS_FLOOR:
+                        break
+                lookback.clear()
+                self._silero_reset_state()
+                draining = False
+                if voice_cfg.STT_KEEPALIVE and self._running and not self._tts_is_speaking():
+                    keepalive_session = self._stt.create_session()
+                    if not keepalive_session.start(lambda text, is_final: None):
+                        keepalive_session = None
+                    else:
+                        logger.info("STT keepalive: pre-connected, waiting for speech...")
+                continue
 
             data, overflowed = mic.read(frame_size)
             if overflowed:
@@ -590,7 +638,9 @@ class VoiceService:
 
             # Re-check after blocking read — music/TTS may have started during mic.read
             if self._tts_is_speaking() or self._music_is_playing():
-                return
+                if not voice_cfg.WARM_MIC:
+                    return
+                continue  # warm: loop back → drain branch handles it
 
             # Append to lookback for pre-roll.
             lookback.append(data)

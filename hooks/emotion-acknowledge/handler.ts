@@ -20,6 +20,14 @@ const handler = async (event: any): Promise<void> => {
     return;
   }
 
+  // Realtime agent already handled & spoke this turn. os-server replays it to
+  // the main agent (`voice_agent_handled`) ONLY to absorb memory/mood — TTS is
+  // suppressed and no real reply/emotion follows. Firing "thinking" here would
+  // leave the lamp stuck on the thinking face *after* the turn already finished
+  // (the POST lands a few hundred ms after the spoken reply, with nothing to
+  // overwrite it). The realtime path sets its own face via express_emotion.
+  if (text.includes("[HANDLED]")) return;
+
   const req = http.request({
     hostname: "127.0.0.1",
     port: 5001,

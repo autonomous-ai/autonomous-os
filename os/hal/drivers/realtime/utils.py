@@ -16,9 +16,7 @@ def float32_to_base64_pcm16(audio: npt.NDArray[np.float32]) -> str:
 
 def base64_pcm16_to_float32(b64_audio: str) -> npt.NDArray[np.float32]:
     """Convert base64-encoded PCM16 to float32 [-1.0, 1.0]. Used by OpenAI."""
-    raw = base64.b64decode(b64_audio)
-    pcm16 = np.frombuffer(raw, dtype=np.int16)
-    return (pcm16.astype(np.float32) / 32767.0)
+    return pcm16_bytes_to_float32(base64.b64decode(b64_audio))
 
 
 def float32_to_pcm16_bytes(audio: npt.NDArray[np.float32]) -> bytes:
@@ -29,8 +27,18 @@ def float32_to_pcm16_bytes(audio: npt.NDArray[np.float32]) -> bytes:
 
 
 def pcm16_bytes_to_float32(data: bytes) -> npt.NDArray[np.float32]:
-    """Convert raw PCM16 bytes to float32 [-1.0, 1.0]. Used by Gemini."""
-    pcm16 = np.frombuffer(data, dtype=np.int16)
+    """Convert raw PCM16 bytes to float32 [-1.0, 1.0]. Used by Gemini.
+
+    Trims a trailing odd byte before decoding: streamed audio chunks can split
+    mid-sample, and np.frombuffer(dtype=int16) requires an even length (2 bytes
+    per sample) — an odd buffer otherwise raises "buffer size must be a multiple
+    of element size" and kills the recv loop. Dropping the half-sample is
+    inaudible.
+    """
+    usable = len(data) - (len(data) % 2)
+    if usable <= 0:
+        return np.empty(0, dtype=np.float32)
+    pcm16 = np.frombuffer(data[:usable], dtype=np.int16)
     return (pcm16.astype(np.float32) / 32767.0)
 
 

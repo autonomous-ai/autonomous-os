@@ -63,6 +63,19 @@ ECHO_SIMILARITY_THRESHOLD = float(os.environ.get("HAL_ECHO_SIMILARITY_THRESHOLD"
 ECHO_RELEVANCE_WINDOW_S = float(os.environ.get("HAL_ECHO_RELEVANCE_WINDOW_S", "15.0"))
 MAX_SESSION_DURATION_S = float(os.environ.get("HAL_MAX_SESSION_DURATION_S", "30"))
 
+# Warm mic — keep the arecord capture stream OPEN across TTS/music (drain +
+# discard frames) instead of closing it and paying a cold arecord reopen
+# (~1s on slow USB mics) on the next turn. That reopen latency is dead air
+# right after a push-to-talk cue ("listening!"), so the user's first words
+# land before the mic is live and get clipped. Default off → legacy behavior
+# (close on TTS, reopen after). Opt in with HAL_WARM_MIC=true.
+WARM_MIC = os.environ.get("HAL_WARM_MIC", "false").lower() == "true"
+# Max echo-skip after TTS/music ends before resuming VAD (warm mic only).
+# Bounded ≪ the legacy 1.5s reverb gate so a user who talks right after a cue
+# resumes fast and the pre-roll lookback captures their opening words. Skips
+# early once the room drops below ECHO_RMS_FLOOR.
+WARM_MIC_ECHO_SKIP_MAX_S = float(os.environ.get("HAL_WARM_MIC_ECHO_SKIP_MAX_S", "0.3"))
+
 
 # ---------------------------------------------------------------------------
 # STT keepalive — pre-connect WS before speech is detected to cut latency

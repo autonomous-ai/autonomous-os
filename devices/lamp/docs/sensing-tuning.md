@@ -27,37 +27,46 @@ INFO lelamp.service.sensing.sensing_service: [sensing] motion: Small movement de
 
 ---
 
-## Motion Detection
+## Motion Detection (Activity Recognition)
+
+`MotionPerception` runs Kinetics action recognition (via dlbackend) and emits a
+`motion.activity` event with the recognized activity labels.
 
 **File:** `os/hal/config.py`
 
 ```python
-MOTION_THRESHOLD = 50                         # pixel intensity change to count as "changed"
-MOTION_BIGGEST_CONTOURS_RATIO = 0.1           # top 10% contours = "biggest"
-MOTION_MIN_BIGGEST_COUNTOURS_TO_TOTAL = 0.01  # biggest contours must cover ≥1% of frame
-MOTION_MIN_BIGGEST_COUNTOURS_TO_CONTOURS = 0.5 # biggest contours must be ≥50% of all contour area
-MOTION_LARGE_TOTAL_RATIO = 0.25               # ≥25% of frame changing = "large movement"
-EVENT_COOLDOWN_S = 60.0                       # min seconds between events of same type
+MOTION_CONFIDENCE_THRESHOLD = 0.3   # min action-recognition confidence to buffer a label
+MOTION_FLUSH_S = 10.0               # buffer drain cadence — at most one flush per 10s
+MOTION_EVENT_COOLDOWN_S = 360.0     # global floor between motion.activity emissions (6 min)
 ```
+
+**Emission gates (in order, `motion.py`):**
+
+1. **Flush cadence** — buffered detections are drained at most once per `MOTION_FLUSH_S`.
+2. **Presence gate** — no event unless presence == PRESENT.
+3. **Global cooldown** — no `motion.activity` more than once per `MOTION_EVENT_COOLDOWN_S`,
+   regardless of label changes. Bypassed by a posture nudge (already time-gated by the
+   pose window) and by a user change (a new user/session sees a fresh event immediately).
+4. **Per-label dedup** — even within cooldown is cleared, the same `(user, label-set)`
+   within a 5-min window is dropped. Noisy Kinetics labels flip the set often, so the
+   global cooldown above is the dominant gate.
 
 **How to read the log:**
-Each frame with any contour activity prints the raw contour areas:
 
 ```
-INFO lelamp.service.sensing.perceptions.motion: [1234.5  890.2  456.1]
+INFO hal...motion: [motion] raw actions in window: ['writing', 'typing']
+INFO hal...motion: [motion] flushing: Activity detected: writing.
+INFO hal...motion: [motion] cooldown drop: ... (last event 42.1s ago < 360s floor)
 ```
-
-Use these numbers to judge whether the threshold is in the right range.
 
 **Tuning:**
 
 | Symptom | Fix |
 |---------|-----|
-| False triggers when no one is around (fan, flickering light) | Increase `MOTION_THRESHOLD` (50 → 80+) |
-| Real movement not detected | Decrease `MOTION_THRESHOLD` (50 → 30) |
-| Too many events when someone is just sitting still | Increase `MOTION_MIN_BIGGEST_COUNTOURS_TO_TOTAL` |
-| Events firing too frequently | Increase `EVENT_COOLDOWN_S` |
-| "Large movement" triggers when it should be small | Increase `MOTION_LARGE_TOTAL_RATIO` |
+| `motion.activity` fires constantly (every ~10s) | Increase `MOTION_EVENT_COOLDOWN_S` (360 → 600+) — this is the global floor |
+| Activity not picked up at all | Decrease `MOTION_CONFIDENCE_THRESHOLD` (0.3 → 0.2) |
+| Spurious activity labels | Increase `MOTION_CONFIDENCE_THRESHOLD` (0.3 → 0.4) |
+| Reaction lags a real activity change | Decrease `MOTION_FLUSH_S` (10 → 5) and/or `MOTION_EVENT_COOLDOWN_S` |
 
 ---
 

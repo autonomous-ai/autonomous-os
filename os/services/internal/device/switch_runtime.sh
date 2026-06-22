@@ -56,6 +56,24 @@ unit_for() {
   fi
 }
 
+# stop_unit_retry <unit> — stop + disable a unit, retrying up to 3 times if it is
+# still active afterwards. Always returns 0 (proceeds) so a stubborn old runtime
+# never blocks the switch; logs a warning if it never went inactive.
+stop_unit_retry() {
+  local unit="$1" attempt
+  for attempt in 1 2 3; do
+    systemctl disable --now "${unit}.service" 2>/dev/null || true
+    if ! systemctl is-active --quiet "${unit}.service"; then
+      log "stopped ${unit}.service (attempt ${attempt}/3)"
+      return 0
+    fi
+    log "WARN: ${unit}.service still active after attempt ${attempt}/3"
+    sleep 1
+  done
+  log "WARN: ${unit}.service still active after 3 attempts — continuing anyway"
+  return 0
+}
+
 # 1. Ensure the target backend is installed. Its installer owns creating its
 #    unit (and declaring a non-default unit name; see unit_for). (openclaw.service
 #    is baked by setup.sh, so this is skipped for openclaw — uniform path, no
@@ -91,7 +109,7 @@ systemctl enable --now "${NEW_UNIT}.service"
 if [ -n "$OLD" ] && [ "$OLD" != "$NEW" ]; then
   OLD_UNIT="$(unit_for "$OLD")"
   log "stopping $OLD ($OLD_UNIT.service)"
-  systemctl disable --now "${OLD_UNIT}.service" 2>/dev/null || true
+  stop_unit_retry "$OLD_UNIT"
 fi
 
 # 4. Restart os-server so internal/agent/factory.go re-resolves the gateway.

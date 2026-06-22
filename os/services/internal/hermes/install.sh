@@ -63,7 +63,19 @@ fi
 "$HERMES_BIN" --version || true
 
 echo "[install-hermes] stop openclaw before migrating (avoid racing its state)"
-systemctl stop openclaw 2>/dev/null || true
+# Retry the stop up to 3 times, verifying openclaw actually went inactive between
+# tries. After 3 attempts proceed regardless so a stuck openclaw never blocks the
+# install — claw migrate is non-fatal anyway.
+for attempt in 1 2 3; do
+  systemctl stop openclaw 2>/dev/null || true
+  if ! systemctl is-active --quiet openclaw; then
+    echo "[install-hermes] openclaw stopped (attempt ${attempt}/3)"
+    break
+  fi
+  echo "[install-hermes] WARN: openclaw still active after attempt ${attempt}/3"
+  [ "$attempt" -eq 3 ] && echo "[install-hermes] WARN: openclaw still active after 3 attempts — continuing anyway"
+  sleep 1
+done
 
 echo "[install-hermes] migrate skills from OpenClaw (model config is synced separately)"
 "$HERMES_BIN" claw migrate --preset full --overwrite --skill-conflict rename --yes --migrate-secrets \
@@ -72,10 +84,12 @@ echo "[install-hermes] migrate skills from OpenClaw (model config is synced sepa
 mkdir -p "$HERMES_DIR" /var/log/hermes
 touch "$ENV_FILE"
 
-echo "[install-hermes] seed $ENV_FILE"
+echo "[install-hermes] seed $ENV_FILE (upsert — other vars preserved)"
 for k in API_SERVER_ENABLED API_SERVER_KEY API_SERVER_CORS_ORIGINS; do
   sed -i "/^${k}=/d" "$ENV_FILE"
 done
+
+[ -s "$ENV_FILE" ] && [ -n "$(tail -c1 "$ENV_FILE")" ] && printf '\n' >>"$ENV_FILE"
 cat >>"$ENV_FILE" <<EOF
 API_SERVER_ENABLED=true
 API_SERVER_KEY=${HERMES_API_SERVER_KEY}
@@ -129,16 +143,19 @@ if [ -n "$LLM_BASE_URL" ]; then
   log "custom_providers[0].base_url = $LLM_BASE_URL"
 fi
 
-# .env secrets/IDs: config.json wins — copy each non-empty config.json field to
-# its Hermes env var (replacing any existing line). Empty/missing fields are
-# skipped, so whatever `hermes claw migrate` already carried over from OpenClaw
-# is kept as the fallback. (Bot tokens like TELEGRAM_BOT_TOKEN usually arrive via
-# migrate, but we still sync them in case OpenClaw had none.)
+# .env secrets/IDs: config.json wins — UPSERT each non-empty config.json field
+# into its Hermes env var (replace the existing line, or append if absent). Other
+# variables are never touched, so whatever `hermes claw migrate` carried over
+# from OpenClaw is kept as the fallback. Empty/missing config fields are skipped.
+# (Bot tokens like TELEGRAM_BOT_TOKEN usually arrive via migrate, but we still
+# sync them in case OpenClaw had none.)
 sync_env() {
   local key="$1" var="$2" val
   val="$(jq -r ".${key} // empty" "$CONFIG_JSON" 2>/dev/null || true)"
   [ -n "$val" ] || return 0
   sed -i "/^${var}=/d" "$ENV_FILE"
+  # guard against gluing onto a previous line that lacks a trailing newline
+  [ -s "$ENV_FILE" ] && [ -n "$(tail -c1 "$ENV_FILE")" ] && printf '\n' >>"$ENV_FILE"
   echo "${var}=${val}" >>"$ENV_FILE"
   log "${var} synced"
 }
