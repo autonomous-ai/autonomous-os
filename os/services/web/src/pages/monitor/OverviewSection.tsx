@@ -33,7 +33,7 @@ function useEmotionPresets() {
   return { emotions, colors };
 }
 import type { SystemInfo, NetworkInfo, HWHealth, OCStatus, PresenceInfo, VoiceStatus, ServoState, DisplayState, AudioVolume, LEDColor, SceneInfo } from "./types";
-import { StatusDot, HWBadge, SignalBars, formatUptime, SoftwareUpdateButton } from "./components";
+import { StatusDot, HWBadge, SignalBars, formatUptime, SoftwareUpdateButton, StatRow, StatusBadge, STATUS_TONE } from "./components";
 import { BuddyCard } from "./BuddyCard";
 
 export function OverviewSection({
@@ -114,29 +114,13 @@ export function OverviewSection({
         <div style={S.card}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
             <div style={S.cardLabel}>Agent Gateway</div>
-            <span style={{
-              fontSize: 10, padding: "3px 9px", borderRadius: 4, fontWeight: 700,
-              background: oc?.connected ? "rgba(52,211,153,0.1)" : "rgba(239,68,68,0.1)",
-              color: oc?.connected ? "var(--lm-green)" : "var(--lm-red)",
-              border: `1px solid ${oc?.connected ? "rgba(52,211,153,0.3)" : "rgba(239,68,68,0.3)"}`,
-            }}>
-              {oc?.connected ? "ONLINE" : "OFFLINE"}
-            </span>
+            <StatusBadge text={oc?.connected ? "ONLINE" : "OFFLINE"} ok={!!oc?.connected} />
           </div>
           {oc ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 12.5, color: "var(--lm-text-dim)" }}>Agent</span>
-                <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--lm-text)" }}>{oc.name}</span>
-              </div>
-              {oc.version && (
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <span style={{ fontSize: 12.5, color: "var(--lm-text-dim)" }}>Version</span>
-                  <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--lm-text)", fontFamily: "monospace" }}>{oc.version}</span>
-                </div>
-              )}
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 12.5, color: "var(--lm-text-dim)" }}>Session</span>
+              <StatRow label="Agent" value={oc.name} />
+              {oc.version && <StatRow label="Version" value={oc.version} mono />}
+              <StatRow label="Session" value={
                 <span style={{
                   fontSize: 10, padding: "1px 6px", borderRadius: 4, fontWeight: 600,
                   background: oc.sessionKey ? "rgba(52,211,153,0.1)" : "rgba(80,74,60,0.4)",
@@ -144,13 +128,8 @@ export function OverviewSection({
                 }}>
                   {oc.sessionKey ? "Active" : "Pending"}
                 </span>
-              </div>
-              {oc.emotion && (
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <span style={{ fontSize: 12.5, color: "var(--lm-text-dim)" }}>Emotion</span>
-                  <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--lm-amber)" }}>{oc.emotion}</span>
-                </div>
-              )}
+              } />
+              {oc.emotion && <StatRow label="Emotion" value={oc.emotion} color="var(--lm-amber)" />}
             </div>
           ) : <span style={{ fontSize: 11, color: "var(--lm-text-muted)" }}>Loading…</span>}
         </div>
@@ -162,39 +141,19 @@ export function OverviewSection({
           </div>
           {net ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 12.5, color: "var(--lm-text-dim)" }}>SSID</span>
-                <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--lm-text)" }}>{net.ssid || "—"}</span>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 12.5, color: "var(--lm-text-dim)" }}>IP</span>
-                <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--lm-teal)" }}>{net.ip}</span>
-              </div>
-              {net.tailscaleIp && (
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <span style={{ fontSize: 12.5, color: "var(--lm-text-dim)" }}>Tailscale</span>
-                  <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--lm-teal)" }}>{net.tailscaleIp}</span>
-                </div>
-              )}
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 12.5, color: "var(--lm-text-dim)" }}>Internet</span>
-                <span style={{ fontSize: 12.5, fontWeight: 600, color: net.internet ? "var(--lm-green)" : "var(--lm-red)" }}>
-                  {net.internet ? "Connected" : "No"}
-                </span>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 12.5, color: "var(--lm-text-dim)" }}>Speed</span>
+              <StatRow label="SSID" value={net.ssid || "—"} />
+              <StatRow label="IP" value={net.ip} color="var(--lm-teal)" />
+              {net.tailscaleIp && <StatRow label="Tailscale" value={net.tailscaleIp} color="var(--lm-teal)" />}
+              <StatRow label="Internet" value={net.internet ? "Connected" : "No"} color={net.internet ? "var(--lm-green)" : "var(--lm-red)"} />
+              <StatRow label="Speed" value={
                 <span style={{ display: "flex", alignItems: "center", gap: 6 }} title={`Signal ${net.signal} dBm`}>
                   <SignalBars value={net.signal} />
                   <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--lm-text)" }}>
                     {net.linkRate > 0 ? `${net.linkRate} Mbps` : "—"}
                   </span>
                 </span>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 12.5, color: "var(--lm-text-dim)" }}>MAC</span>
-                <span style={{ fontSize: 11, fontFamily: "monospace", color: "var(--lm-text)" }}>{net.mac || "—"}</span>
-              </div>
+              } />
+              <StatRow label="MAC" value={net.mac || "—"} mono />
             </div>
           ) : <span style={{ fontSize: 11, color: "var(--lm-text-muted)" }}>Loading…</span>}
         </div>
@@ -203,27 +162,12 @@ export function OverviewSection({
         <div style={S.card}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
             <div style={S.cardLabel}>Presence</div>
-            <span style={{
-              fontSize: 10, padding: "3px 9px", borderRadius: 4, fontWeight: 700,
-              background: presence?.state === "active" ? "rgba(245,158,11,0.1)" : "rgba(80,74,60,0.4)",
-              color: presence?.state === "active" ? "var(--lm-amber)" : "var(--lm-text-muted)",
-              border: `1px solid ${presence?.state === "active" ? "rgba(245,158,11,0.3)" : "var(--lm-border)"}`,
-            }}>
-              {(presence?.state ?? "—").toUpperCase()}
-            </span>
+            <StatusBadge text={(presence?.state ?? "—").toUpperCase()} tone={presence?.state === "active" ? "active" : "idle"} />
           </div>
           {presence ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 12.5, color: "var(--lm-text-dim)" }}>Sensing</span>
-                <span style={{ fontSize: 12.5, fontWeight: 600, color: presence.enabled ? "var(--lm-green)" : "var(--lm-red)" }}>
-                  {presence.enabled ? "On" : "Off"}
-                </span>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 12.5, color: "var(--lm-text-dim)" }}>Last motion</span>
-                <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--lm-text)" }}>{presence.seconds_since_motion}s ago</span>
-              </div>
+              <StatRow label="Sensing" value={presence.enabled ? "On" : "Off"} color={presence.enabled ? "var(--lm-green)" : "var(--lm-red)"} />
+              <StatRow label="Last motion" value={`${presence.seconds_since_motion}s ago`} />
             </div>
           ) : <span style={{ fontSize: 11, color: "var(--lm-text-muted)" }}>Loading…</span>}
         </div>
@@ -244,14 +188,8 @@ export function OverviewSection({
                     <span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 4, background: "var(--lm-amber-dim)", color: "var(--lm-amber)" }}>LIVE</span>
                   ) : null}
                 </div>
-                <button onClick={() => fetch(`${HW}/voice/${voice.mic_muted ? "unmute" : "mute"}`, { method: "POST" }).catch(() => {})} style={{
-                  fontSize: 11, padding: "5px 14px", borderRadius: 6, fontWeight: 600, cursor: "pointer",
-                  background: voice.mic_muted ? "rgba(52,211,153,0.1)" : "rgba(239,68,68,0.08)",
-                  border: `1px solid ${voice.mic_muted ? "rgba(52,211,153,0.3)" : "rgba(239,68,68,0.25)"}`,
-                  color: voice.mic_muted ? "var(--lm-green)" : "#f87171",
-                }}>
-                  {voice.mic_muted ? "Unmute" : "Mute"}
-                </button>
+                <ToggleButton active={!voice.mic_muted} label={voice.mic_muted ? "Unmute" : "Mute"}
+                  onClick={() => fetch(`${HW}/voice/${voice.mic_muted ? "unmute" : "mute"}`, { method: "POST" }).catch(() => {})} />
               </div>
 
               {/* TTS row */}
@@ -267,10 +205,8 @@ export function OverviewSection({
                   )}
                 </div>
                 {(voice.tts_speaking || musicPlaying) && (
-                  <button onClick={() => fetch(`${API}/agent/tts/stop`, { method: "POST" }).catch(() => {})} style={{
-                    fontSize: 11, padding: "5px 14px", borderRadius: 6, fontWeight: 600, cursor: "pointer",
-                    background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", color: "#f87171",
-                  }}>Stop</button>
+                  <ToggleButton active={false} label="Stop"
+                    onClick={() => fetch(`${API}/agent/tts/stop`, { method: "POST" }).catch(() => {})} />
                 )}
               </div>
 
@@ -283,14 +219,8 @@ export function OverviewSection({
                     <span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 4, background: "rgba(239,68,68,0.12)", color: "#f87171" }}>MUTED</span>
                   )}
                 </div>
-                <button onClick={() => fetch(`${HW}/speaker/${speakerMuted ? "unmute" : "mute"}`, { method: "POST" }).catch(() => {})} style={{
-                  fontSize: 11, padding: "5px 14px", borderRadius: 6, fontWeight: 600, cursor: "pointer",
-                  background: speakerMuted ? "rgba(52,211,153,0.1)" : "rgba(239,68,68,0.08)",
-                  border: `1px solid ${speakerMuted ? "rgba(52,211,153,0.3)" : "rgba(239,68,68,0.25)"}`,
-                  color: speakerMuted ? "var(--lm-green)" : "#f87171",
-                }}>
-                  {speakerMuted ? "Unmute" : "Mute"}
-                </button>
+                <ToggleButton active={!speakerMuted} label={speakerMuted ? "Unmute" : "Mute"}
+                  onClick={() => fetch(`${HW}/speaker/${speakerMuted ? "unmute" : "mute"}`, { method: "POST" }).catch(() => {})} />
               </div>
 
               {/* Volume slider */}
@@ -496,12 +426,11 @@ export function OverviewSection({
                   }}>{p}</span>
                 ))}
               </div>
-              <button onClick={() => {
+              <button className="lm-u-btn" onClick={() => {
                 fetch(`${HW}/servo/release`, { method: "POST", headers: { accept: "application/json" } }).catch(() => {});
               }} style={{
-                marginTop: 2, fontSize: 10, padding: "3px 9px", borderRadius: 4,
-                background: "var(--lm-surface)", border: "1px solid var(--lm-border)",
-                color: "var(--lm-text-dim)", cursor: "pointer",
+                marginTop: 2, fontSize: 10, padding: "3px 9px", borderRadius: 6,
+                color: "var(--lm-text-dim)", alignSelf: "flex-start",
               }}>Release</button>
             </div>
           ) : <span style={{ color: "var(--lm-text-muted)" }}>Loading…</span>}
@@ -549,6 +478,26 @@ export function OverviewSection({
       </div>
 
     </div>
+  );
+}
+
+// ToggleButton is the small Mute/Unmute/Stop control in the Audio card. When
+// `active` (e.g. mic live) it shows a destructive red tone; when inactive
+// (already muted) it offers a green "Unmute". Tones come from STATUS_TONE so
+// they stay theme-aware (the old code hardcoded #f87171 which broke on light).
+function ToggleButton({ active, label, onClick }: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  const tone = active ? STATUS_TONE.error : STATUS_TONE.ok;
+  return (
+    <button className="lm-u-btn" onClick={onClick} style={{
+      fontSize: 11, padding: "5px 14px", borderRadius: 6, fontWeight: 600,
+      background: tone.bg, border: `1px solid ${tone.border}`, color: tone.color,
+    }}>
+      {label}
+    </button>
   );
 }
 

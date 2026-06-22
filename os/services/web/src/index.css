@@ -878,3 +878,113 @@
   .lm-root .lm-wifi-ring { display: none; }
   .lm-root .lm-wifi-pulse .lm-wifi-icon { animation: lm-pulse-glow 2s ease-in-out infinite; }
 }
+
+/* ── Settings panel polish (Edit page + embedded Monitor settings) ──────────
+   The shared SettingsPanel renders under .lm-edit and plain .lm-root — NOT
+   .lm-setup — so the elevated-card styling defined for the wizard never
+   reached it and the cards read flat. These rules give the section cards real
+   depth, a hover lift, and a hairline amber accent on the leading edge, plus a
+   fancier restart banner. All theme-token based so light + dark both track. */
+.lm-edit .lm-card,
+.lm-root .lm-settings-panel .lm-card {
+  position: relative;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--lm-amber) 3%, transparent), transparent 120px),
+    var(--lm-card);
+  border: 1px solid var(--lm-border);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 10px 30px -18px rgba(0, 0, 0, 0.55);
+  transition: border-color 0.18s, box-shadow 0.22s, transform 0.22s;
+}
+/* Hairline accent down the leading edge — lights amber as the card lifts. */
+.lm-edit .lm-card::before,
+.lm-root .lm-settings-panel .lm-card::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 14px; bottom: 14px;
+  width: 2px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--lm-amber), transparent);
+  opacity: 0;
+  transition: opacity 0.22s;
+}
+.lm-edit .lm-card:hover,
+.lm-root .lm-settings-panel .lm-card:hover {
+  border-color: var(--lm-border-hi);
+  transform: translateY(-2px);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.18),
+    0 18px 40px -20px rgba(0, 0, 0, 0.6),
+    0 0 0 1px var(--lm-amber-glow);
+}
+.lm-edit .lm-card:hover::before,
+.lm-root .lm-settings-panel .lm-card:hover::before { opacity: 0.9; }
+
+/* Restart banner — a gradient callout with a softly glowing rotating-icon chip.
+   Replaces the flat amber box for a higher-end "info" affordance. */
+.lm-restart-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(
+    100deg,
+    color-mix(in srgb, var(--lm-amber) 14%, transparent),
+    color-mix(in srgb, var(--lm-amber) 5%, transparent) 60%,
+    transparent
+  );
+  border: 1px solid var(--lm-amber-glow);
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin-bottom: 22px;
+}
+/* A slow sheen sweeping across the banner gives it a subtle "alive" feel. */
+.lm-restart-banner::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    color-mix(in srgb, var(--lm-amber) 10%, transparent) 50%,
+    transparent 70%
+  );
+  transform: translateX(-100%);
+  animation: lm-banner-sheen 6s ease-in-out infinite;
+}
+@keyframes lm-banner-sheen {
+  0%, 100% { transform: translateX(-100%); }
+  55%, 80% { transform: translateX(100%); }
+}
+.lm-restart-banner .lm-restart-chip {
+  flex-shrink: 0;
+  width: 30px; height: 30px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 9px;
+  color: var(--lm-amber);
+  background: var(--lm-amber-dim);
+  box-shadow: inset 0 0 0 1px var(--lm-amber-glow), 0 0 10px -2px var(--lm-amber-glow);
+}
+.lm-restart-banner .lm-restart-chip svg { animation: lm-spin 5s linear infinite; }
+.lm-restart-banner .lm-restart-text {
+  position: relative;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--lm-text-dim);
+}
+@media (prefers-reduced-motion: reduce) {
+  .lm-restart-banner::after { animation: none; }
+  .lm-restart-banner .lm-restart-chip svg { animation: none; }
+  .lm-edit .lm-card:hover,
+  .lm-root .lm-settings-panel .lm-card:hover { transform: none; }
+}
+
+/* Section title gets a soft amber-to-text gradient — a touch of flair on the
+   header without shouting. Falls back to plain text where unsupported. */
+.lm-settings-title {
+  background: linear-gradient(90deg, var(--lm-text), color-mix(in srgb, var(--lm-amber) 55%, var(--lm-text)));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}

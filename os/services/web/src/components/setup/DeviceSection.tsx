@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { toast } from "sonner";
 import { Eye, EyeOff, Copy, Check, Cpu, Fingerprint, Network } from "lucide-react";
 import { SecretUpdateField } from "@/components/SecretUpdateField";
 import { C, Field, PasswordField, SectionCard, LABEL_STYLE, INPUT_STYLE, INPUT_READONLY_STYLE, INPUT_PAD_ONE_ICON, FIELD_GAP, ADMIN_PASSWORD_MIN } from "./shared";
@@ -126,6 +127,7 @@ function DeviceMetaCard({ deviceId, mac }: { deviceId: string; mac?: string }) {
   const copyId = () => {
     navigator.clipboard?.writeText(deviceId).then(() => {
       setCopied(true);
+      toast.success("Device ID copied");
       setTimeout(() => setCopied(false), 1400);
     }).catch(() => {});
   };

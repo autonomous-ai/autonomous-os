@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import { RotateCw } from "lucide-react";
 import { toast } from "sonner";
 import { getDeviceConfig, updateDeviceConfig, getTTSVoices, getTTSProviders } from "@/lib/api";
 import type { DeviceConfig } from "@/lib/api";
@@ -445,14 +446,16 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const showSave = activeSection !== "face" && activeSection !== "voice" && activeSection !== "runtime";
 
   return (
-    <div className="lm-fade-in" style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "24px 32px" }}>
+    <div className="lm-fade-in lm-settings-panel" style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "24px 32px" }}>
       <div style={{ maxWidth: 560, margin: "0 auto" }}>
 
-        {/* Header row: active-section label on the left, Save button on the right. */}
+        {/* Header row: active-section label on the left, Save button on the right.
+            A hairline divider under the row separates the title from the body. */}
         <div style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16,
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          marginBottom: 18, paddingBottom: 14, borderBottom: `1px solid ${C.border}`,
         }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>
+          <span className="lm-settings-title" style={{ fontSize: 18, fontWeight: 700, letterSpacing: "-0.01em" }}>
             {SECTION_LABELS[activeSection]}
           </span>
           {showSave && (
@@ -486,12 +489,13 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
           </div>
         )}
 
-        <div style={{
-          background: C.amberDim, border: "1px solid var(--lm-amber-glow)",
-          borderRadius: 8, padding: "10px 14px", fontSize: 11.5,
-          color: C.textDim, marginBottom: 20, lineHeight: 1.6,
-        }}>
-          ↻ &nbsp;Restart your device after saving for AI brain and channel changes to take full effect.
+        <div className="lm-restart-banner">
+          <span className="lm-restart-chip" aria-hidden="true">
+            <RotateCw size={15} />
+          </span>
+          <span className="lm-restart-text">
+            Restart your device after saving for AI brain and channel changes to take full effect.
+          </span>
         </div>
 
         {loadingCfg ? <SkeletonBlock /> : (

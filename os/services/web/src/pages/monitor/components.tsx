@@ -336,6 +336,63 @@ export function StatPill({ label, value, color, bullet }: {
   );
 }
 
+// StatRow renders the recurring "label left / value right" row used across the
+// Overview status cards (Agent Gateway, Network, Presence, Versions…). value can
+// be a plain string/number (styled via `color`/`mono`) or any node for custom
+// content (badges, signal bars). Centralizes the fontSize/spacing that was
+// previously copy-pasted ~12 times.
+export function StatRow({ label, value, color, mono }: {
+  label: string;
+  value: React.ReactNode;
+  color?: string;
+  mono?: boolean;
+}) {
+  const isPrimitive = typeof value === "string" || typeof value === "number";
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <span style={{ fontSize: 12.5, color: "var(--lm-text-dim)" }}>{label}</span>
+      {isPrimitive ? (
+        <span style={{
+          fontSize: mono ? 11 : 12.5,
+          fontWeight: 600,
+          color: color ?? "var(--lm-text)",
+          fontFamily: mono ? "monospace" : undefined,
+        }}>{value}</span>
+      ) : value}
+    </div>
+  );
+}
+
+// STATUS_TONE maps a semantic status to its (text color, soft background, border)
+// triple. Replaces the rgba(…,0.1)/(…,0.3) literals that were hand-written per
+// pill. `ok`/`error`/`active` mirror the green/red/amber states already used.
+export const STATUS_TONE = {
+  ok:     { color: "var(--lm-green)",      bg: "rgba(52,211,153,0.1)",  border: "rgba(52,211,153,0.3)" },
+  error:  { color: "var(--lm-red)",        bg: "rgba(239,68,68,0.1)",   border: "rgba(239,68,68,0.3)" },
+  active: { color: "var(--lm-amber)",      bg: "rgba(245,158,11,0.1)",  border: "rgba(245,158,11,0.3)" },
+  idle:   { color: "var(--lm-text-muted)", bg: "rgba(80,74,60,0.4)",    border: "var(--lm-border)" },
+} as const;
+
+export type StatusTone = keyof typeof STATUS_TONE;
+
+// StatusBadge is the uppercase pill in card headers (ONLINE/OFFLINE, ACTIVE,
+// session Active/Pending). Pass an explicit tone, or let `ok` pick ok/error.
+export function StatusBadge({ text, tone, ok }: {
+  text: string;
+  tone?: StatusTone;
+  ok?: boolean;
+}) {
+  const t = STATUS_TONE[tone ?? (ok ? "ok" : "error")];
+  return (
+    <span style={{
+      fontSize: 10, padding: "3px 9px", borderRadius: 4, fontWeight: 700,
+      background: t.bg, color: t.color, border: `1px solid ${t.border}`,
+    }}>
+      {text}
+    </span>
+  );
+}
+
 export function formatUptime(s: number) {
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
