@@ -140,7 +140,7 @@ class TTP223Handler:
         for line in self._lines:
             try:
                 lgpio.gpio_claim_alert(
-                    self._handle, line, lgpio.BOTH_EDGES, lgpio.SET_PULL_DOWN
+                    self._handle, line, lgpio.BOTH_EDGES, lgpio.SET_PULL_UP
                 )
                 cb = lgpio.callback(
                     self._handle, line, lgpio.BOTH_EDGES, self._on_edge
