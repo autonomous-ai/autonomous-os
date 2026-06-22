@@ -359,6 +359,17 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
         self._last_sent_ts: float = 0.0
         self._dedup_window_s: float = 300.0  # 5 min
 
+        # Global cooldown floor between ANY two motion.activity emissions,
+        # independent of the per-label dedup above. The dedup keys on the exact
+        # label set, but noisy Kinetics labels (sedentary/eat keep their raw
+        # label) flip the key almost every flush, so the dedup alone lets the
+        # event fire every ~MOTION_FLUSH_S (~10s). This floor bounds that.
+        # Bypassed by posture nudges (already time-gated by the pose window) and
+        # by a user change (reset_dedup nulls _last_sent_key on presence.enter),
+        # so a new user/session still sees a fresh event immediately.
+        self._event_cooldown_s: float = config.MOTION_EVENT_COOLDOWN_S
+        self._last_event_ts: float = 0.0
+
         self._state_lock: threading.RLock = threading.RLock()
 
         # Sedentary streak — tracks how long the user has been in a
@@ -631,6 +642,24 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
             # sit-down would evaluate stale data from the previous cycle.
             self._pose_perception.reset_window()
 
+        # Global cooldown floor: regardless of label changes, don't emit more
+        # than once per _event_cooldown_s. This is the dominant gate — it stops
+        # noisy label flips from re-firing the event every flush. Skipped when
+        # there is no prior send (_last_sent_key is None: first event ever, or
+        # just reset by a user change) and for posture nudges (time-gated).
+        if (
+            not posture_injected
+            and self._last_sent_key is not None
+            and (cur_ts - self._last_event_ts) < self._event_cooldown_s
+        ):
+            logger.info(
+                "[motion] cooldown drop: %s (last event %.1fs ago < %.0fs floor)",
+                message,
+                cur_ts - self._last_event_ts,
+                self._event_cooldown_s,
+            )
+            return
+
         # Dedup: drop if the outbound state (user + outbound labels) hasn't
         # changed since the last send AND we're still within the dedup window.
         # A user change or a label-set change flips the key — those always
@@ -657,6 +686,7 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
             )
         self._last_sent_key = key
         self._last_sent_ts = cur_ts
+        self._last_event_ts = cur_ts
 
         # Log each outbound label to the OS server wellbeing BEFORE firing the event.
         # Log-first means when the agent reads history on motion.activity,
@@ -728,6 +758,7 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
         )
         self._last_sent_key = None
         self._last_sent_ts = 0.0
+        self._last_event_ts = 0.0
         self._sedentary_streak_start_ts = 0.0
 
     def to_dict(self) -> dict[str, Any]:
