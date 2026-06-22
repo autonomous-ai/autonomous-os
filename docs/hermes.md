@@ -23,6 +23,7 @@ which brain is active.
 | unset | falls back to `gateway.default` in `devices/<type>/DEVICE.md`, then OpenClaw if that is empty too |
 | `"openclaw"` | OpenClaw (default) |
 | `"hermes"` | Hermes (`hermes.ProvideService`) |
+| `"picoclaw"` | accepted as a valid runtime (the `picoclaw.setup` switch + `switch-runtime` install it), but has **no `factory.go` case yet** — os-server's gateway client currently falls back to OpenClaw. Wiring `internal/picoclaw` + a resolver case is the remaining "adding a new backend" work (§11). |
 | anything else | OpenClaw (logged as `FALLBACK — unknown runtime=…`) |
 
 When `agent_runtime` is unset in `config.json`, the backend is taken from the
@@ -196,9 +197,11 @@ future work).
 
 ## 11. Switching backends at runtime
 
-You do not edit `config.json` by hand. Three triggers — **MQTT** `agent_runtime.set`
-(`{"runtime":"hermes"}`), **HTTP** `POST /api/device/agent-runtime`, and the
-**web** Settings → *Runtime* section — all funnel into one method,
+You do not edit `config.json` by hand. Three triggers — **MQTT** `hermes.setup` /
+`picoclaw.setup` (the kind itself names the target backend — no `runtime` field;
+each maps `hermes.setup → hermes`, `picoclaw.setup → picoclaw`), **HTTP**
+`POST /api/device/agent-runtime` (`{"runtime":"hermes"}`), and the **web**
+Settings → *Runtime* section — all funnel into one method,
 `device.Service.UpdateAgentRuntime` (`internal/device/service.go`). It validates
 the runtime, persists `config.agent_runtime`, and launches the switcher in its
 own transient systemd unit (`systemd-run`, so the os-server restart at the end
@@ -231,7 +234,7 @@ it:
 Confirm the swap from the new `AGENT BACKEND ACTIVE → …` banner + a healthy
 `/health` poll in the logs.
 
-**Adding a new backend** (picoclaw, claudecode, …) is just an `install.sh` next
+**Adding a new backend** (claudecode, …) is just an `install.sh` next
 to that backend's implementation (`internal/<name>/install.sh`), `go:embed`-ed +
 registered in `lib/runtimereg` from the package's `init()` (it must create
 `<name>.service`, optionally drop `runtime-<name>-presync`), plus a

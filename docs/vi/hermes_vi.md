@@ -23,6 +23,7 @@ nào đang chạy.
 | không set | fallback về `gateway.default` trong `devices/<type>/DEVICE.md`, rồi OpenClaw nếu cái đó cũng trống |
 | `"openclaw"` | OpenClaw (mặc định) |
 | `"hermes"` | Hermes (`hermes.ProvideService`) |
+| `"picoclaw"` | được chấp nhận là runtime hợp lệ (lệnh switch `picoclaw.setup` + `switch-runtime` cài nó), nhưng **chưa có case trong `factory.go`** — gateway client của os-server hiện fallback về OpenClaw. Việc nối `internal/picoclaw` + một case resolver là phần "thêm backend mới" còn lại (§11). |
 | giá trị khác | OpenClaw (log là `FALLBACK — unknown runtime=…`) |
 
 Khi `agent_runtime` không được set trong `config.json`, backend lấy từ
@@ -192,9 +193,11 @@ là phần làm sau).
 
 ## 11. Switch backend lúc runtime
 
-Bạn không sửa tay `config.json`. Ba trigger — **MQTT** `agent_runtime.set`
-(`{"runtime":"hermes"}`), **HTTP** `POST /api/device/agent-runtime`, và section
-**web** Settings → *Runtime* — đều dồn vào một hàm,
+Bạn không sửa tay `config.json`. Ba trigger — **MQTT** `hermes.setup` /
+`picoclaw.setup` (chính kind đã đặt tên backend đích — không có field `runtime`;
+mỗi kind map `hermes.setup → hermes`, `picoclaw.setup → picoclaw`), **HTTP**
+`POST /api/device/agent-runtime` (`{"runtime":"hermes"}`), và section **web**
+Settings → *Runtime* — đều dồn vào một hàm,
 `device.Service.UpdateAgentRuntime` (`internal/device/service.go`). Nó validate
 runtime, lưu `config.agent_runtime`, rồi chạy switcher trong một transient unit
 systemd riêng (`systemd-run`, để cú restart os-server ở cuối không giết nó giữa
@@ -225,7 +228,7 @@ và **không cần đụng imager/setup.sh bao giờ**. Với backend đích `X`
 Xác nhận đã switch qua banner `AGENT BACKEND ACTIVE → …` mới + một lần poll
 `/health` khỏe trong log.
 
-**Thêm backend mới** (picoclaw, claudecode, …) vì vậy chỉ là một `install.sh`
+**Thêm backend mới** (claudecode, …) vì vậy chỉ là một `install.sh`
 cạnh phần hiện thực của backend (`internal/<name>/install.sh`), `go:embed` +
 đăng ký vào `lib/runtimereg` từ `init()` của package (phải tạo `<name>.service`,
 tùy chọn drop `runtime-<name>-presync`), cộng một entry trong

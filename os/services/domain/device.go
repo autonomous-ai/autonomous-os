@@ -300,16 +300,23 @@ const (
 	KindOAuthRemove  = "oauth.remove"  // delete OAuth token for a provider
 	KindRealtimeSet  = "realtime.set"  // persist realtime voice-agent config (provider/voice/reasoning…)
 
-	// KindAgentRuntimeSet swaps the agentic backend (openclaw ⇄ hermes). Persists
-	// config.agent_runtime then runs switch-runtime.sh (toggle systemd units +
-	// restart os-server so agent/factory.go re-resolves the gateway).
-	KindAgentRuntimeSet = "agent_runtime.set"
+	// KindHermesSetup / KindPicoclawSetup switch the active agentic backend. The
+	// kind itself names the target runtime — the worker (stand-to-earn-worker's
+	// steoauthkind.HermesSetup / PicoclawSetup) publishes the backend-specific
+	// kind instead of a generic envelope carrying a runtime field. Both funnel
+	// into device.Service.UpdateAgentRuntime, which persists config.agent_runtime
+	// then runs switch-runtime.sh (toggle systemd units + restart os-server so
+	// agent/factory.go re-resolves the gateway). The device acks each on
+	// fd_channel with the same kind. Replaces the former generic agent_runtime.set.
+	KindHermesSetup   = "hermes.setup"
+	KindPicoclawSetup = "picoclaw.setup"
 
-	// AgentRuntimeOpenClaw / AgentRuntimeHermes are the swappable agentic
-	// backends. Source of truth mirrored by internal/agent/factory.go's resolver
-	// and /usr/local/bin/switch-runtime.
+	// AgentRuntimeOpenClaw / AgentRuntimeHermes / AgentRuntimePicoclaw are the
+	// swappable agentic backends. Source of truth mirrored by
+	// internal/agent/factory.go's resolver and /usr/local/bin/switch-runtime.
 	AgentRuntimeOpenClaw = "openclaw"
 	AgentRuntimeHermes   = "hermes"
+	AgentRuntimePicoclaw = "picoclaw"
 
 	KindSystemInfo    = "system.info"    // aggregate: versions + network + host
 	KindSystemVersion = "system.version" // lamp + bootstrap + hal + openclaw versions
@@ -790,19 +797,23 @@ type MQTTRealtimeSetAck struct {
 	Data   *RealtimeSetData `json:"data,omitempty"`
 }
 
-// AgentRuntimeSetData is the payload for cmd:"data", kind:"agent_runtime.set".
-// Runtime selects the agentic backend. The valid set mirrors agent/factory.go's
-// resolver; anything else is rejected (we don't silently fall back here — an
-// unknown value from the BFF is a contract error, not a default).
+// AgentRuntimeSetData carries the target backend for a runtime switch. The MQTT
+// path no longer reads Runtime off the wire — the hermes.setup / picoclaw.setup
+// kind names the target — but it is still the request body for the HTTP
+// POST /api/device/agent-runtime path and the value persisted to config. The
+// valid set mirrors agent/factory.go's resolver; anything else is rejected (we
+// don't silently fall back here — an unknown value from the BFF is a contract
+// error, not a default).
 //
-//	{ "cmd": "data", "kind": "agent_runtime.set", "data": { "runtime": "hermes" } }
+//	{ "cmd": "data", "kind": "hermes.setup" }    // switch to hermes
+//	{ "cmd": "data", "kind": "picoclaw.setup" }  // switch to picoclaw
 type AgentRuntimeSetData struct {
-	Runtime string `json:"runtime"` // "openclaw" | "hermes"
+	Runtime string `json:"runtime"` // "openclaw" | "hermes" | "picoclaw"
 }
 
 // AgentRuntimes is the valid set, surfaced to the web settings dropdown via
 // GET /api/device/agent-runtime so the UI never hardcodes the list.
-var AgentRuntimes = []string{AgentRuntimeOpenClaw, AgentRuntimeHermes}
+var AgentRuntimes = []string{AgentRuntimeOpenClaw, AgentRuntimeHermes, AgentRuntimePicoclaw}
 
 // AgentRuntimeStatus is returned by GET /api/device/agent-runtime: the active
 // backend plus the selectable options.
@@ -811,9 +822,10 @@ type AgentRuntimeStatus struct {
 	Options []string `json:"options"`
 }
 
-// AgentRuntimeSetAck is published to fd_channel after applying (or failing)
-// an agent_runtime.set downlink. status: "starting" | "success" | "failure".
-// On "success" the device restarts os-server, so the BFF should expect a brief
+// AgentRuntimeSetAck is published to fd_channel after applying (or failing) a
+// hermes.setup / picoclaw.setup downlink — Kind echoes the triggering kind so
+// the worker can match it. status: "starting" | "success" | "failure". On
+// "success" the device restarts os-server, so the BFF should expect a brief
 // reconnect — the new banner (AGENT BACKEND ACTIVE) confirms the swap landed.
 type AgentRuntimeSetAck struct {
 	MQTTInfoResponse

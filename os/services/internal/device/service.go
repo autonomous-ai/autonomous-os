@@ -952,20 +952,20 @@ func (s *Service) CurrentAgentRuntime() string {
 	return domain.AgentRuntimeOpenClaw
 }
 
-// UpdateAgentRuntime swaps the agentic backend (openclaw ⇄ hermes). It persists
-// config.agent_runtime, then spawns switch-runtime to do the systemd toggle +
-// os-server restart. Shared by the MQTT agent_runtime.set handler and the HTTP
-// config API. Returns after the switcher is launched — the actual gateway swap
-// completes asynchronously when os-server restarts.
+// UpdateAgentRuntime swaps the agentic backend (openclaw / hermes / picoclaw).
+// It persists config.agent_runtime, then spawns switch-runtime to do the systemd
+// toggle + os-server restart. Shared by the MQTT hermes.setup / picoclaw.setup
+// handlers and the HTTP config API. Returns after the switcher is launched — the
+// actual gateway swap completes asynchronously when os-server restarts.
 func (s *Service) UpdateAgentRuntime(d domain.AgentRuntimeSetData) error {
 	runtime := strings.ToLower(strings.TrimSpace(d.Runtime))
 	// Reject unknown values outright. factory.go falls back to openclaw on
 	// garbage, but an unknown runtime from the BFF/web is a contract error we
 	// surface rather than silently coerce.
 	switch runtime {
-	case domain.AgentRuntimeOpenClaw, domain.AgentRuntimeHermes:
+	case domain.AgentRuntimeOpenClaw, domain.AgentRuntimeHermes, domain.AgentRuntimePicoclaw:
 	default:
-		return fmt.Errorf("invalid runtime %q (want openclaw|hermes)", d.Runtime)
+		return fmt.Errorf("invalid runtime %q (want openclaw|hermes|picoclaw)", d.Runtime)
 	}
 
 	// Resolve the currently-active runtime BEFORE the save so switch-runtime

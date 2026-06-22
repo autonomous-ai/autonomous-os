@@ -214,8 +214,10 @@ func (h *DeviceMQTTHandler) dispatchData(env domain.MQTTDataCommand) error {
 		return h.handleTTSSet(env)
 	case domain.KindRealtimeSet:
 		return h.handleRealtimeSet(env)
-	case domain.KindAgentRuntimeSet:
-		return h.handleAgentRuntimeSet(env)
+	case domain.KindHermesSetup:
+		return h.handleRuntimeSetup(env, domain.AgentRuntimeHermes)
+	case domain.KindPicoclawSetup:
+		return h.handleRuntimeSetup(env, domain.AgentRuntimePicoclaw)
 	case domain.KindTTSPreview:
 		return h.handleTTSPreview(env)
 	case domain.KindDeviceRename:
