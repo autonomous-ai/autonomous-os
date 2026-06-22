@@ -172,7 +172,16 @@ function App() {
         <Route path="/" element={<RootRedirect />} />
         <Route path="/setup" element={<SetupGate />} />
         <Route path="/login" element={<Login />} />
-        <Route path="/monitor" element={<AuthGate><Monitor /></AuthGate>} />
+        {/* Monitor + Settings share ONE shell instance. Both paths are child
+            routes of a single layout route whose element renders <Monitor/>.
+            React Router keeps the layout element mounted while only the matched
+            child path changes, so the sidebar does NOT remount when switching
+            between /monitor and /setting (no full-page flash). Monitor derives
+            its area ("monitor" | "setting") from useLocation().pathname. */}
+        <Route element={<AuthGate><Monitor /></AuthGate>}>
+          <Route path="/monitor" element={null} />
+          <Route path="/setting" element={null} />
+        </Route>
         <Route path="/edit" element={<AuthGate><EditConfig /></AuthGate>} />
         <Route path="/gw-config" element={<AuthGate><GwConfig /></AuthGate>} />
         <Route path="/dashboard" element={<Navigate to="/monitor" replace />} />

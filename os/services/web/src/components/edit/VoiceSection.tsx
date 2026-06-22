@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
-import { C, Field, SectionCard } from "@/components/setup/shared";
+import { MicVocal, Mic, Loader2 } from "lucide-react";
+import { C, Field, SectionCard, LABEL_STYLE } from "@/components/setup/shared";
 import { pickVoicePhrases, pickVoiceIntro, VOICE_DURATION_SEC } from "@/components/setup/voice-phrases";
 import type { FaceOwner } from "@/hooks/setup/useFaceEnroll";
 
@@ -97,27 +98,41 @@ export function VoiceSection({
   const withVoice = faceOwners.filter((p) => (p.voice_samples?.length ?? 0) > 0);
 
   return (
-    <SectionCard id="voice" title="My Voice (optional)" active={active}>
-      <div style={{ fontSize: 11, color: C.textDim, marginBottom: 12 }}>
-        {VOICE_INTRO}
-      </div>
+    <SectionCard
+      id="voice"
+      title="My Voice (optional)"
+      active={active}
+      description={VOICE_INTRO}
+      icon={<MicVocal size={17} />}
+    >
       <Field label="Name" id="voice_label" value={voiceLabel} onChange={setVoiceLabel} placeholder="e.g. Leo" />
+      <div style={{ ...LABEL_STYLE, marginBottom: 8 }}>Read these aloud</div>
       <div style={{
-        background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7,
-        padding: "12px 14px", marginBottom: 12, fontSize: 13, lineHeight: 1.55, color: C.text,
+        background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12,
+        padding: "6px 8px", marginBottom: 14,
       }}>
         {VOICE_PHRASES.map((p, i) => (
-          <div key={i} style={{ marginBottom: i < VOICE_PHRASES.length - 1 ? 6 : 0 }}>
-            <span style={{ color: C.textMuted, marginRight: 6 }}>{i + 1}.</span>
-            {p}
+          <div key={i} style={{
+            display: "flex", alignItems: "flex-start", gap: 10,
+            padding: "9px 8px",
+            borderBottom: i < VOICE_PHRASES.length - 1 ? `1px solid ${C.border}` : "none",
+          }}>
+            <span style={{
+              flexShrink: 0, width: 20, height: 20, borderRadius: 999,
+              background: C.amberDim, color: C.amber,
+              fontSize: 11, fontWeight: 700,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              marginTop: 1,
+            }}>{i + 1}</span>
+            <span style={{ fontSize: 13, lineHeight: 1.5, color: C.text }}>{p}</span>
           </div>
         ))}
       </div>
       {voiceMsg && (
         <div style={{
-          fontSize: 11, padding: "6px 10px", borderRadius: 6, marginBottom: 10,
-          background: voiceMsg.startsWith("Error") ? "rgba(248,113,113,0.08)" : "rgba(52,211,153,0.08)",
-          color: voiceMsg.startsWith("Error") ? C.red : "rgb(52,211,153)",
+          fontSize: 11, padding: "6px 10px", borderRadius: 8, marginBottom: 10,
+          background: voiceMsg.startsWith("Error") ? "var(--lm-red-dim)" : "var(--lm-green-dim)",
+          color: voiceMsg.startsWith("Error") ? C.red : C.green,
         }}>{voiceMsg}</div>
       )}
       <button
@@ -125,25 +140,35 @@ export function VoiceSection({
         onClick={startVoiceEnroll}
         disabled={!voiceLabel.trim() || voicePhase !== "idle"}
         style={{
-          width: "100%", padding: "11px 0", borderRadius: 7, fontSize: 13, fontWeight: 600,
+          width: "100%", padding: "11px 0", borderRadius: 10, fontSize: 13, fontWeight: 600,
           cursor: voicePhase === "idle" && voiceLabel.trim() ? "pointer" : "not-allowed",
-          background: voicePhase === "recording" ? "rgba(248,113,113,0.18)"
-            : voicePhase === "countdown" ? "rgba(245,158,11,0.18)"
+          transition: "all 0.15s",
+          display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+          background: voicePhase === "recording" ? "var(--lm-red-dim)"
+            : voicePhase === "countdown" ? "var(--lm-amber-dim)"
             : voicePhase === "processing" ? C.surface
-            : !voiceLabel.trim() ? C.surface : "rgba(52,211,153,0.12)",
-          border: `1px solid ${voicePhase === "recording" ? "rgba(248,113,113,0.4)"
-            : voicePhase === "countdown" ? "rgba(245,158,11,0.4)"
-            : !voiceLabel.trim() ? C.border : "rgba(52,211,153,0.35)"}`,
+            : !voiceLabel.trim() ? C.surface : "var(--lm-green-dim)",
+          border: `1px solid ${voicePhase === "recording" ? "var(--lm-red-glow)"
+            : voicePhase === "countdown" ? C.amber
+            : !voiceLabel.trim() ? C.border : "var(--lm-green-glow)"}`,
           color: voicePhase === "recording" ? C.red
             : voicePhase === "countdown" ? C.amber
             : voicePhase === "processing" ? C.textDim
-            : !voiceLabel.trim() ? C.textMuted : "rgb(52,211,153)",
+            : !voiceLabel.trim() ? C.textMuted : C.green,
         }}
       >
-        {voicePhase === "idle" && `Start Recording (${VOICE_DURATION_SEC}s on device)`}
+        {voicePhase === "idle" && <><Mic size={15} />{`Start Recording (${VOICE_DURATION_SEC}s on device)`}</>}
         {voicePhase === "countdown" && `Get ready... ${voiceCountdown}`}
-        {voicePhase === "recording" && `● Recording on device — read aloud (${voiceCountdown}s)`}
-        {voicePhase === "processing" && "Processing..."}
+        {voicePhase === "recording" && (
+          <>
+            <span style={{
+              width: 9, height: 9, borderRadius: 999, background: C.red,
+              boxShadow: "0 0 6px var(--lm-red-glow)", animation: "lm-pulse-dot 1s ease-in-out infinite",
+            }} />
+            {`Recording on device — read aloud (${voiceCountdown}s)`}
+          </>
+        )}
+        {voicePhase === "processing" && <><Loader2 size={15} className="lm-spin-ico" />Processing…</>}
       </button>
       {withVoice.length > 0 && (
         <div style={{ marginTop: 16, borderTop: `1px solid ${C.border}`, paddingTop: 14 }}>

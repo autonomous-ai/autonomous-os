@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
+import { UserCircle, UserPlus, ImagePlus, Loader2 } from "lucide-react";
 import { hwUrl } from "@/lib/api";
-import { C, Field, SectionCard } from "@/components/setup/shared";
+import { C, Field, SectionCard, LABEL_STYLE } from "@/components/setup/shared";
 import type { FaceOwner } from "@/hooks/setup/useFaceEnroll";
 
 // Face enroll for edit-mode owners. State is local since nothing outside the
@@ -88,29 +89,58 @@ export function FaceSection({
   const enrolled = faceOwners.filter((p) => p.photo_count > 0);
 
   return (
-    <SectionCard id="face" title="Face Enroll (optional)" active={active}>
-      <div style={{ fontSize: 11, color: C.textDim, marginBottom: 12 }}>
-        Upload photos of the owner so your device can recognize them.
-      </div>
+    <SectionCard
+      id="face"
+      title="Face Enroll (optional)"
+      active={active}
+      description="Upload photos of the owner so your device can recognize them."
+      icon={<UserCircle size={17} />}
+    >
       <Field label="Name" id="face_name" value={faceName} onChange={setFaceName} placeholder="e.g. Leo" />
-      <div style={{ marginBottom: 12 }}>
-        <label style={{ display: "block", fontSize: 11, color: C.textDim, marginBottom: 5 }}>Photos ({faceFiles.length} selected)</label>
+      <div style={{ marginBottom: 14 }}>
+        <label style={{ ...LABEL_STYLE, marginBottom: 8 }}>Photos</label>
+        {/* Hidden native input keeps all enroll logic intact; the styled
+            dropzone below is just a click target that proxies to it. */}
         <input
           ref={faceInputRef}
           type="file"
           accept="image/*"
           multiple
           onChange={(e) => setFaceFiles(e.target.files ? Array.from(e.target.files) : [])}
-          style={{ fontSize: 12, color: C.text, width: "100%", boxSizing: "border-box" }}
+          style={{ display: "none" }}
         />
+        <button
+          type="button"
+          onClick={() => faceInputRef.current?.click()}
+          className="lm-face-drop"
+          style={{
+            width: "100%", boxSizing: "border-box", cursor: "pointer",
+            display: "flex", alignItems: "center", gap: 12,
+            padding: "14px 16px", borderRadius: 12,
+            border: `1px dashed ${faceFiles.length ? "var(--lm-amber-glow)" : C.border}`,
+            background: faceFiles.length ? "var(--lm-amber-dim)" : C.surface,
+            color: faceFiles.length ? C.amber : C.textDim,
+            transition: "all 0.15s",
+          }}
+        >
+          <ImagePlus size={20} style={{ flexShrink: 0 }} />
+          <span style={{ flex: 1, textAlign: "left", fontSize: 13, fontWeight: faceFiles.length ? 600 : 400 }}>
+            {faceFiles.length
+              ? `${faceFiles.length} photo${faceFiles.length !== 1 ? "s" : ""} selected`
+              : "Choose photos…"}
+          </span>
+          <span style={{ flexShrink: 0, fontSize: 11, color: C.textMuted }}>
+            {faceFiles.length ? "Change" : "Browse"}
+          </span>
+        </button>
       </div>
       {faceMsg && (
         <div style={{
-          fontSize: 11, padding: "6px 10px", borderRadius: 6, marginBottom: 10,
+          fontSize: 11, padding: "6px 10px", borderRadius: 8, marginBottom: 10,
           background: faceMsg.startsWith("Error") || faceMsg.includes("failed")
-            ? "rgba(248,113,113,0.08)" : "rgba(52,211,153,0.08)",
+            ? "var(--lm-red-dim)" : "var(--lm-green-dim)",
           color: faceMsg.startsWith("Error") || faceMsg.includes("failed")
-            ? C.red : "rgb(52,211,153)",
+            ? C.red : C.green,
         }}>{faceMsg}</div>
       )}
       <button
@@ -118,14 +148,18 @@ export function FaceSection({
         onClick={handleFaceEnroll}
         disabled={!faceName.trim() || faceFiles.length === 0 || faceUploading}
         style={{
-          width: "100%", padding: "9px 0", borderRadius: 7, fontSize: 12.5,
+          width: "100%", padding: "10px 0", borderRadius: 10, fontSize: 12.5,
           fontWeight: 600, cursor: faceUploading ? "wait" : "pointer",
-          background: !faceName.trim() || faceFiles.length === 0 ? C.surface : "rgba(52,211,153,0.12)",
-          border: `1px solid ${!faceName.trim() || faceFiles.length === 0 ? C.border : "rgba(52,211,153,0.35)"}`,
-          color: !faceName.trim() || faceFiles.length === 0 ? C.textMuted : "rgb(52,211,153)",
+          transition: "all 0.15s",
+          display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+          background: !faceName.trim() || faceFiles.length === 0 ? C.surface : "var(--lm-green-dim)",
+          border: `1px solid ${!faceName.trim() || faceFiles.length === 0 ? C.border : "var(--lm-green-glow)"}`,
+          color: !faceName.trim() || faceFiles.length === 0 ? C.textMuted : C.green,
         }}
       >
-        {faceUploading ? "Uploading…" : "Enroll Face"}
+        {faceUploading
+          ? <><Loader2 size={15} className="lm-spin-ico" />Uploading…</>
+          : <><UserPlus size={15} />Enroll Face</>}
       </button>
       {enrolled.length > 0 && (
         <div style={{ marginTop: 16, borderTop: `1px solid ${C.border}`, paddingTop: 14 }}>

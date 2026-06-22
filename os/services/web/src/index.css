@@ -115,7 +115,11 @@
   --lm-teal:        #2DD4BF;
   --lm-teal-dim:    rgba(45,212,191,0.12);
   --lm-green:       #34D399;
+  --lm-green-dim:   rgba(52,211,153,0.12);
+  --lm-green-glow:  rgba(52,211,153,0.35);
   --lm-red:         #F87171;
+  --lm-red-dim:     rgba(248,113,113,0.10);
+  --lm-red-glow:    rgba(248,113,113,0.22);
   --lm-blue:        #60A5FA;
   --lm-purple:      #A78BFA;
   --lm-orange:      #FB923C;
@@ -124,6 +128,14 @@
   --lm-text:        #F0EEE8;
   --lm-text-dim:    #9A9080;
   --lm-text-muted:  #504A3C;
+
+  /* Text colour that sits ON the amber fill (Save button / primary CTA). Kept
+     identical in dark + light on purpose: the text always rests on the amber
+     surface, which is dark enough (#F59E0B dark / #D97706 light) for a near-
+     black ink to read well in both themes. A theme-flipping value would break
+     contrast on the light theme's near-white background if the fill were ever
+     removed, so we pin it. */
+  --lm-on-amber:    #1A1206;
 
   background: var(--lm-bg);
   color: var(--lm-text);
@@ -144,7 +156,11 @@
   --lm-teal:        #0D9488;
   --lm-teal-dim:    rgba(13,148,136,0.10);
   --lm-green:       #059669;
+  --lm-green-dim:   rgba(5,150,105,0.10);
+  --lm-green-glow:  rgba(5,150,105,0.28);
   --lm-red:         #DC2626;
+  --lm-red-dim:     rgba(220,38,38,0.08);
+  --lm-red-glow:    rgba(220,38,38,0.18);
   --lm-blue:        #2563EB;
   --lm-purple:      #7C3AED;
   --lm-orange:      #EA580C;
@@ -153,6 +169,9 @@
   --lm-text:        #1C1917;
   --lm-text-dim:    #57534E;
   --lm-text-muted:  #A8A29E;
+
+  /* Theme-constant — see the dark-block note. */
+  --lm-on-amber:    #1A1206;
 }
 @media (prefers-color-scheme: light) {
   .lm-root:not(.lm-dark) {
@@ -169,7 +188,11 @@
     --lm-teal:        #0D9488;
     --lm-teal-dim:    rgba(13,148,136,0.10);
     --lm-green:       #059669;
+    --lm-green-dim:   rgba(5,150,105,0.10);
+    --lm-green-glow:  rgba(5,150,105,0.28);
     --lm-red:         #DC2626;
+    --lm-red-dim:     rgba(220,38,38,0.08);
+    --lm-red-glow:    rgba(220,38,38,0.18);
     --lm-blue:        #2563EB;
     --lm-purple:      #7C3AED;
     --lm-orange:      #EA580C;
@@ -178,6 +201,9 @@
     --lm-text:        #1C1917;
     --lm-text-dim:    #57534E;
     --lm-text-muted:  #A8A29E;
+
+    /* Theme-constant — see the dark-block note. */
+    --lm-on-amber:    #1A1206;
   }
 }
 
@@ -437,6 +463,125 @@
   .lm-grid-5 { grid-template-columns: 1fr 1fr; gap: 6px; }
 }
 
+/* ── Monitor/Settings sidebar — Setup nav styling + fancy upgrades ─────────── */
+
+/* These classes live under the Monitor root (.lm-root), scoped with a distinct
+   `lm-snav-*` prefix to avoid colliding with the Setup `.lm-nav-item` rules.
+   The base treatment (padding, radius, font-size, animated amber left rail,
+   hover) mirrors the Setup nav so both flows feel identical, plus three layers
+   of polish: (1) micro-interactions — icon scales on hover, the whole row nudges
+   right, the active icon goes amber; (2) glow + depth — the active row carries a
+   soft amber shadow and the rail is a rounded amber gradient with its own glow;
+   (3) motion — group children slide+fade open instead of snapping. Colors come
+   from --lm-* vars only, so dark/light flip automatically via the
+   .lm-light / .lm-dark class on the root. `prefers-reduced-motion` neutralises
+   the transforms at the bottom of this block. */
+.lm-snav-item,
+.lm-snav-sub,
+.lm-snav-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 9px;
+  margin: 2px 8px;
+  background: transparent;
+  border: none;
+  width: calc(100% - 16px);
+  text-align: left;
+  cursor: pointer;
+  color: var(--lm-text-dim);
+  text-decoration: none;
+  /* transform + box-shadow join the transition so the hover nudge and active
+     glow ease in rather than snap. */
+  transition: background 0.15s ease, color 0.15s ease,
+              transform 0.15s ease, box-shadow 0.2s ease;
+}
+.lm-snav-item { padding: 10px 14px 10px 16px; font-size: 13.5px; }
+.lm-snav-sub  { padding: 8px 14px 8px 38px;  font-size: 13px; }
+.lm-snav-group {
+  padding: 10px 14px 10px 16px;
+  font-size: 13.5px;
+  justify-content: space-between;
+  user-select: none;
+}
+
+/* Icons ride a fast spring so hover/active feel responsive, not laggy. The SVG
+   is a direct child of the row (no wrapper span), so target `> svg`. */
+.lm-snav-item > svg,
+.lm-snav-sub > svg,
+.lm-snav-group > span > svg {
+  flex-shrink: 0;
+  transition: transform 0.2s cubic-bezier(0.34, 1.4, 0.64, 1), color 0.15s ease;
+}
+
+/* Amber active rail — rounded gradient with a soft glow, scales in from the
+   centre. Shared by item + sub. */
+.lm-snav-item::before,
+.lm-snav-sub::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%) scaleY(0);
+  width: 3px;
+  height: 18px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, var(--lm-amber), color-mix(in srgb, var(--lm-amber) 70%, transparent));
+  box-shadow: 0 0 8px var(--lm-amber-glow);
+  transition: transform 0.22s cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+/* Hover: lift the row a touch to the right, warm the surface, nudge the icon. */
+.lm-snav-item:hover,
+.lm-snav-sub:hover,
+.lm-snav-group:hover {
+  background: var(--lm-surface);
+  color: var(--lm-text);
+  transform: translateX(2px);
+}
+.lm-snav-item:hover > svg,
+.lm-snav-sub:hover > svg,
+.lm-snav-group:hover > span > svg { transform: scale(1.12); }
+
+/* Active: amber text/weight, amber-dim fill, a soft amber glow for depth, and a
+   slightly enlarged amber icon. The rail snaps to full height. */
+.lm-snav-item--active,
+.lm-snav-sub--active {
+  background: var(--lm-amber-dim);
+  color: var(--lm-amber);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--lm-amber) 22%, transparent),
+              0 4px 14px -6px var(--lm-amber-glow);
+}
+.lm-snav-item--active::before,
+.lm-snav-sub--active::before { transform: translateY(-50%) scaleY(1); }
+.lm-snav-item--active > svg,
+.lm-snav-sub--active > svg { color: var(--lm-amber); transform: scale(1.06); }
+
+/* Group header: when a child is active it reads amber + bold (no fill), and its
+   icon goes amber to anchor the expanded section. */
+.lm-snav-group--active { color: var(--lm-amber); font-weight: 600; }
+.lm-snav-group--active > span > svg { color: var(--lm-amber); }
+
+/* Children reveal — slide + fade down when a group opens, instead of an abrupt
+   show. Applied to the wrapper <div> around the children. */
+@keyframes lm-snav-reveal {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.lm-snav-children { animation: lm-snav-reveal 0.18s ease-out both; overflow: hidden; }
+
+@media (prefers-reduced-motion: reduce) {
+  .lm-snav-item,
+  .lm-snav-sub,
+  .lm-snav-group,
+  .lm-snav-item > svg,
+  .lm-snav-sub > svg,
+  .lm-snav-group > span > svg { transition: background 0.15s ease, color 0.15s ease; transform: none !important; }
+  .lm-snav-children { animation: none; }
+}
+
 /* ── Setup wizard ─────────────────────────────────────────────────────────── */
 
 /* Sidebar nav item: hover lift + animated left active-bar. The ::before is the
@@ -631,6 +776,13 @@
 /* Spinner — amber ring with a transparent top, used on the "connecting" post-
    submit screen so the wait reads as active work rather than a frozen page. */
 @keyframes lm-spin { to { transform: rotate(360deg); } }
+/* Inline spinner icon (e.g. lucide Loader2 on a busy button) — spins in place. */
+.lm-spin-ico { animation: lm-spin 0.8s linear infinite; }
+/* Recording dot — soft amber/red pulse for an active "● recording" affordance. */
+@keyframes lm-pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.45; transform: scale(0.82); }
+}
 .lm-spinner {
   display: inline-block;
   width: 34px;

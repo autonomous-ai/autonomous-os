@@ -20,8 +20,8 @@ Tiêu đề tab trình duyệt (`document.title`) hiển thị đúng theo page/
 | Route / trạng thái | Title |
 |--------------------|-------|
 | `/setup` (và `/` khi chưa provision) | `Lamp · Setup` |
-| `/monitor` (theo section đang chọn) | `Lamp · <tên section>` — ví dụ `Lamp · Chat`, `Lamp · Overview`, `Lamp · Info`, `Lamp · Flow`, `Lamp · Users`, `Lamp · Camera`, `Lamp · Sensing`, `Lamp · Analytics`, `Lamp · Servo`, `Lamp · Logs`, `Lamp · CLI` |
-| `/edit` (Settings, theo section đang chọn) | `Lamp · Settings · <tên section>` — ví dụ `Lamp · Settings · Device`, `Lamp · Settings · Wi-Fi`, `Lamp · Settings · AI Brain`, `Lamp · Settings · Face`, `Lamp · Settings · TTS`, `Lamp · Settings · STT`, `Lamp · Settings · Channels`, `Lamp · Settings · MQTT` |
+| `/monitor#<section>` (theo section đang chọn) | `Lamp · <tên section>` — ví dụ `Lamp · Chat`, `Lamp · Overview`, `Lamp · Info`, `Lamp · Flow`, `Lamp · Users`, `Lamp · Camera`, `Lamp · Sensing`, `Lamp · Analytics`, `Lamp · Servo`, `Lamp · Logs`, `Lamp · CLI` |
+| `/setting#<section>` (Settings, theo section đang chọn) | `Lamp · Settings · <tên section>` — ví dụ `Lamp · Settings · General`, `Lamp · Settings · Wi-Fi`, `Lamp · Settings · AI Brain`, `Lamp · Settings · Language`, `Lamp · Settings · Voice`, `Lamp · Settings · My Voice`, `Lamp · Settings · Face`, `Lamp · Settings · Channels`, `Lamp · Settings · MQTT` |
 | `/gw-config` | `Lamp · GW Config` |
 
 `<title>Lamp Setup</title>` tĩnh trong `index.html` chỉ là fallback trước khi React mount; hook sẽ ghi đè khi mount và khôi phục title cũ khi unmount.
@@ -90,6 +90,30 @@ Góc dưới sidebar hiển thị trạng thái OpenClaw (online/offline) và th
 --lm-text-dim:    #9A9080
 --lm-text-muted:  #504A3C
 ```
+
+### 3.4 Settings (`/setting`) — shell dùng chung
+
+Settings **không phải là một trang riêng**. Nó là một khu vực (area) của chính shell Monitor (`os/services/web/src/pages/monitor/index.tsx`), truy cập tại route `/setting`. Trong `App.tsx`, `/monitor` và `/setting` là các route con của một layout route duy nhất có element render `<Monitor/>`; React Router giữ element đó luôn mounted khi chỉ đường dẫn con thay đổi, nên sidebar **không** bị remount khi chuyển giữa Monitor và Settings (không có hiện tượng nháy toàn trang). Shell suy ra khu vực — `"monitor"` hoặc `"setting"` — từ `useLocation().pathname`.
+
+Nhóm Settings có thể thu gọn nằm trong `NAV` của sidebar dùng chung (`os/services/web/src/pages/monitor/types.ts`). Bấm một mục Settings sẽ điều hướng tới `/setting` và render `SettingsPanel` (`os/services/web/src/components/edit/SettingsPanel.tsx`) ở khu vực chính; bấm một mục Monitor sẽ điều hướng tới `/monitor`.
+
+**Sơ đồ URL hash** — section trong bộ nhớ vẫn giữ id nội bộ `settings:*`, nhưng URL hash dùng nhãn ngắn trong khu vực setting (các helper `sectionToHash`/`hashToSection` trong `types.ts`):
+
+| Mục | URL |
+|-----|-----|
+| General | `/setting#general` (nội bộ `settings:device`) |
+| Wi-Fi | `/setting#wifi` |
+| My Voice | `/setting#voice` |
+| Face | `/setting#face` |
+| AI Brain | `/setting#llm` |
+| Language | `/setting#stt` |
+| Voice | `/setting#tts` |
+| Channels | `/setting#channel` |
+| MQTT | `/setting#mqtt` |
+
+Các mục Monitor được serialize thành id thuần, ví dụ `/monitor#overview`, `/monitor#system`, `/monitor#flow`. Mặc định: `/monitor` không có hash / hash không hợp lệ → `overview`; `/setting` không có hash / hash không hợp lệ → `general` (URL được chuẩn hóa thành `/setting#general`). Deep-link (ví dụ `/setting#wifi`) và nút back/forward của trình duyệt được tôn trọng qua một effect dựa trên `useLocation`. Người dùng không-debug chỉ thấy các mục trong `PUBLIC_SECTIONS`; `?debug=true` mở khóa phần còn lại.
+
+Trang `/edit` độc lập (`EditConfig.tsx`) vẫn tồn tại như một phương án dự phòng và nhúng cùng `SettingsPanel`.
 
 ---
 

@@ -152,7 +152,63 @@ export interface DisplayEvent extends MonitorEvent {
   _seq: number;
 }
 
-export type Section = "overview" | "system" | "flow" | "camera" | "servo" | "face-owners" | "analytics" | "logs" | "chat" | "cli" | "sensing" | "bluetooth" | "api-docs" | "agent-config";
+export type Section = "overview" | "system" | "flow" | "camera" | "servo" | "face-owners" | "analytics" | "logs" | "chat" | "cli" | "sensing" | "bluetooth" | "api-docs" | "agent-config" | "settings:device" | "settings:wifi" | "settings:llm" | "settings:voice" | "settings:face" | "settings:tts" | "settings:stt" | "settings:channel" | "settings:mqtt";
+
+// ─── Area + URL serialization ────────────────────────────────────────────────
+//
+// The shell is mounted on two routes: /monitor and /setting. `Area` is derived
+// from the current pathname. The in-memory section model keeps the internal
+// `settings:*` ids untouched (so all rendering/cap/polling logic is unchanged),
+// but the URL hash uses SHORT labels in the setting area. The only asymmetry —
+// "General" (internal `settings:device`) serializes to the short hash `general`
+// — lives ONLY in the two helpers below.
+
+export type Area = "monitor" | "setting";
+
+// Maps the URL path for an area. Used to build hrefs + navigate targets.
+export function areaPath(area: Area): string {
+  return area === "setting" ? "/setting" : "/monitor";
+}
+
+// The area a section belongs to: settings:* → "setting", everything else →
+// "monitor".
+export function sectionArea(section: Section): Area {
+  return section.startsWith("settings:") ? "setting" : "monitor";
+}
+
+// short hash ↔ internal settings id. General↔device is the lone asymmetry.
+const SHORT_TO_SETTING: Record<string, Section> = {
+  general: "settings:device",
+  wifi: "settings:wifi",
+  voice: "settings:voice",
+  face: "settings:face",
+  llm: "settings:llm",
+  stt: "settings:stt",
+  tts: "settings:tts",
+  channel: "settings:channel",
+  mqtt: "settings:mqtt",
+};
+const SETTING_TO_SHORT: Record<string, string> = Object.fromEntries(
+  Object.entries(SHORT_TO_SETTING).map(([short, id]) => [id, short]),
+);
+
+// Serialize a section to the URL hash (no leading "#") for the given area.
+// In the setting area, settings:* ids become their short label; monitor
+// sections stay as their plain id.
+export function sectionToHash(section: Section, area: Area): string {
+  if (area === "setting") return SETTING_TO_SHORT[section] ?? "general";
+  return section;
+}
+
+// Parse a URL hash (no leading "#") into a Section for the given area.
+// Returns null when the hash is empty/unknown for that area, so callers can
+// apply the area's default.
+export function hashToSection(hash: string, area: Area): Section | null {
+  const h = hash.replace(/^#/, "");
+  if (area === "setting") return SHORT_TO_SETTING[h] ?? null;
+  if (!h) return null;
+  return h as Section;
+}
 
 // Capability names — the web mirror of Go's device.Cap* / contract/
 // capabilities.md. Single source for the capability strings the web references,
@@ -185,6 +241,22 @@ export function isNavLink(c: NavChild): c is NavLink {
 
 export const NAV: NavEntry[] = [
   { id: "chat",     label: "Chat",     icon: "▤" },
+  {
+    group: "settings",
+    label: "Settings",
+    icon: "⚙",
+    children: [
+      { id: "settings:device",  label: "General",   icon: "⚙" },
+      { id: "settings:wifi",    label: "Wi-Fi",     icon: "⌁" },
+      { id: "settings:llm",     label: "AI Brain",  icon: "✦" },
+      { id: "settings:stt",     label: "Language",  icon: "⌘" },
+      { id: "settings:tts",     label: "Voice",     icon: "♫" },
+      { id: "settings:voice",   label: "My Voice",  icon: "◉" },
+      { id: "settings:face",    label: "Face",      icon: "☺" },
+      { id: "settings:channel", label: "Channels",  icon: "✉" },
+      { id: "settings:mqtt",    label: "MQTT",      icon: "⇄" },
+    ],
+  },
   {
     group: "device",
     label: "Device",

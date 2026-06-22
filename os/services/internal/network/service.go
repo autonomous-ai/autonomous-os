@@ -81,12 +81,12 @@ func (s *Service) listNetworksIW() ([]domain.Network, error) {
 }
 
 var (
-	reBSS      = regexp.MustCompile(`BSS ([0-9a-f:]+)`)
-	reSSID     = regexp.MustCompile(`SSID: (.+)`)
-	reSignal   = regexp.MustCompile(`signal: ([\d.-]+)`)
-	reTxRate   = regexp.MustCompile(`tx bitrate:\s*([\d.]+)\s*MBit/s`)
-	reDS       = regexp.MustCompile(`DS Parameter set: channel (\d+)`)
-	reInet     = regexp.MustCompile(`inet (\d+\.\d+\.\d+\.\d+)`)
+	reBSS    = regexp.MustCompile(`BSS ([0-9a-f:]+)`)
+	reSSID   = regexp.MustCompile(`SSID: (.+)`)
+	reSignal = regexp.MustCompile(`signal: ([\d.-]+)`)
+	reTxRate = regexp.MustCompile(`tx bitrate:\s*([\d.]+)\s*MBit/s`)
+	reDS     = regexp.MustCompile(`DS Parameter set: channel (\d+)`)
+	reInet   = regexp.MustCompile(`inet (\d+\.\d+\.\d+\.\d+)`)
 )
 
 // decodeIWSSIDEscape reverses the byte-escape format that `iw` (and wpa_cli)
@@ -195,7 +195,7 @@ func (s *Service) GetCurrentIP() (string, error) {
 
 // CurrentNetwork returns the currently connected network using iwgetid -r wlan0.
 func (s *Service) CurrentNetwork() (*domain.Network, error) {
-	ssid := readCurrentSSID()
+	ssid := ReadCurrentSSID()
 	if ssid == "" {
 		return nil, nil
 	}
@@ -233,12 +233,13 @@ func readCurrentLink() (signal int, linkRate int) {
 	return signal, linkRate
 }
 
-// readCurrentSSID resolves the current SSID via a fallback chain — iwgetid
+// ReadCurrentSSID resolves the current SSID via a fallback chain — iwgetid
 // alone has been observed to return empty on some Pi images even with an
 // active connection (driver / utility version skew). Try the most direct
 // tool first, then fall back to iw and wpa_cli so the polling loop in
-// SetupNetwork can confirm the association without timing out.
-func readCurrentSSID() string {
+// SetupNetwork can confirm the association without timing out. Exported so the
+// system.info MQTT probe reuses the same chain instead of calling iwgetid alone.
+func ReadCurrentSSID() string {
 	if out, err := exec.Command("iwgetid", "-r", defaultInterface).Output(); err == nil {
 		if s := strings.TrimSpace(string(out)); s != "" {
 			return s

@@ -20,8 +20,8 @@ The browser tab title (`document.title`) reflects the focused page/tab so multip
 | Route / state | Title |
 |---------------|-------|
 | `/setup` (and `/` when not provisioned) | `Lamp · Setup` |
-| `/monitor` (active section) | `Lamp · <section label>` — e.g. `Lamp · Chat`, `Lamp · Overview`, `Lamp · Info`, `Lamp · Flow`, `Lamp · Users`, `Lamp · Camera`, `Lamp · Sensing`, `Lamp · Analytics`, `Lamp · Servo`, `Lamp · Logs`, `Lamp · CLI` |
-| `/edit` (Settings, active section) | `Lamp · Settings · <section label>` — e.g. `Lamp · Settings · Device`, `Lamp · Settings · Wi-Fi`, `Lamp · Settings · AI Brain`, `Lamp · Settings · Face`, `Lamp · Settings · TTS`, `Lamp · Settings · STT`, `Lamp · Settings · Channels`, `Lamp · Settings · MQTT` |
+| `/monitor#<section>` (active section) | `Lamp · <section label>` — e.g. `Lamp · Chat`, `Lamp · Overview`, `Lamp · Info`, `Lamp · Flow`, `Lamp · Users`, `Lamp · Camera`, `Lamp · Sensing`, `Lamp · Analytics`, `Lamp · Servo`, `Lamp · Logs`, `Lamp · CLI` |
+| `/setting#<section>` (Settings, active section) | `Lamp · Settings · <section label>` — e.g. `Lamp · Settings · General`, `Lamp · Settings · Wi-Fi`, `Lamp · Settings · AI Brain`, `Lamp · Settings · Language`, `Lamp · Settings · Voice`, `Lamp · Settings · My Voice`, `Lamp · Settings · Face`, `Lamp · Settings · Channels`, `Lamp · Settings · MQTT` |
 | `/gw-config` | `Lamp · GW Config` |
 
 The static `<title>Lamp Setup</title>` in `index.html` is the pre-mount fallback; the hook overrides it once React mounts and reverts to the previous title on unmount.
@@ -90,6 +90,30 @@ Defined at `.lm-root` in `index.css`:
 --lm-text-dim:    #9A9080
 --lm-text-muted:  #504A3C
 ```
+
+### 3.4 Settings (`/setting`) — shared shell
+
+Settings is **not a separate page**. It is an area of the same Monitor shell (`os/services/web/src/pages/monitor/index.tsx`), reached at the `/setting` route. In `App.tsx`, `/monitor` and `/setting` are child routes of a single layout route whose element renders `<Monitor/>`; React Router keeps that element mounted while only the matched child path changes, so the sidebar does **not** remount when switching between Monitor and Settings (no full-page flash). The shell derives its area — `"monitor"` or `"setting"` — from `useLocation().pathname`.
+
+The Settings collapsible group lives in the shared sidebar `NAV` (`os/services/web/src/pages/monitor/types.ts`). Clicking a Settings leaf navigates to `/setting` and renders `SettingsPanel` (`os/services/web/src/components/edit/SettingsPanel.tsx`) in the main area; clicking a Monitor leaf navigates to `/monitor`.
+
+**URL hash scheme** — the in-memory section keeps internal `settings:*` ids, but the URL hash uses short labels in the setting area (helpers `sectionToHash`/`hashToSection` in `types.ts`):
+
+| Leaf | URL |
+|------|-----|
+| General | `/setting#general` (internal `settings:device`) |
+| Wi-Fi | `/setting#wifi` |
+| My Voice | `/setting#voice` |
+| Face | `/setting#face` |
+| AI Brain | `/setting#llm` |
+| Language | `/setting#stt` |
+| Voice | `/setting#tts` |
+| Channels | `/setting#channel` |
+| MQTT | `/setting#mqtt` |
+
+Monitor leaves serialize as the plain id, e.g. `/monitor#overview`, `/monitor#system`, `/monitor#flow`. Defaults: `/monitor` with no/invalid hash → `overview`; `/setting` with no/invalid hash → `general` (URL normalized to `/setting#general`). Deep-links (e.g. `/setting#wifi`) and browser back/forward are honored via a `useLocation`-driven effect. Non-debug users only see the leaves in `PUBLIC_SECTIONS`; `?debug=true` reveals the rest.
+
+The standalone `/edit` page (`EditConfig.tsx`) still exists as a fallback and embeds the same `SettingsPanel`.
 
 ---
 

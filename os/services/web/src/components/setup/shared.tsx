@@ -272,7 +272,7 @@ export function ConfiguredHint({ label, editPath = "/edit" }: { label: string; e
         display: "flex", alignItems: "center", justifyContent: "space-between",
         gap: 10, padding: "10px 13px",
         background: C.bg, border: `1px solid ${C.border}`,
-        borderRadius: 8, fontSize: 14, color: C.textDim,
+        borderRadius: 10, fontSize: 14, color: C.textDim,
       }}>
         <span><span style={{ color: C.green }}>✓</span>&nbsp;configured</span>
         <a href={editPath} style={{ color: C.amber, textDecoration: "none", fontSize: 13 }}>
@@ -313,9 +313,11 @@ export function SectionCard({ id, title, description, icon, active, children }: 
         {icon && (
           <div style={{
             flexShrink: 0,
-            width: 34, height: 34, borderRadius: 9,
+            width: 36, height: 36, borderRadius: 10,
             background: C.amberDim, color: C.amber,
             display: "flex", alignItems: "center", justifyContent: "center",
+            // Soft amber ring for a touch of depth; theme-var so it flips.
+            boxShadow: "inset 0 0 0 1px var(--lm-amber-glow)",
           }}>
             {icon}
           </div>

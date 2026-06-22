@@ -1,5 +1,6 @@
 declare const __WEB_VERSION__: string;
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useTheme } from "@/lib/useTheme";
 import { usePolling } from "../../hooks/usePolling";
 import { useEventSource } from "../../hooks/useEventSource";
@@ -17,9 +18,17 @@ import {
   Filler,
 } from "chart.js";
 
+import {
+  MessageCircle, Settings, Cpu, Wifi, Brain, Globe, Volume2, MicVocal,
+  UserCircle, MessageSquare, Link as LinkIcon, MonitorSmartphone, LayoutGrid,
+  Workflow, Users, Camera, Radar, ChartColumn, Move3d, Bluetooth, ScrollText,
+  Terminal, FileCode, Hexagon, ExternalLink, SlidersHorizontal, ChevronRight,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+
 import { S } from "./styles";
-import { API, HW, HISTORY_LEN, FLOW_EVENTS_MAX, NAV, isNavGroup, isNavLink, Cap } from "./types";
-import type { Section, SystemInfo, NetworkInfo, HWHealth, OCStatus, PresenceInfo, VoiceStatus, ServoState, DisplayState, AudioVolume, LEDColor, SceneInfo, MonitorEvent, DisplayEvent, NavEntry } from "./types";
+import { API, HW, HISTORY_LEN, FLOW_EVENTS_MAX, NAV, isNavGroup, isNavLink, Cap, areaPath, sectionArea, sectionToHash, hashToSection } from "./types";
+import type { Section, Area, SystemInfo, NetworkInfo, HWHealth, OCStatus, PresenceInfo, VoiceStatus, ServoState, DisplayState, AudioVolume, LEDColor, SceneInfo, MonitorEvent, DisplayEvent, NavEntry } from "./types";
 import { OverviewSection } from "./OverviewSection";
 import { SystemSection } from "./SystemSection";
 import { FlowSection } from "./FlowSection";
@@ -32,6 +41,8 @@ import { ChatSection } from "./ChatSection";
 import { FaceOwnersSection } from "./FaceOwnersSection";
 import { BluetoothSection } from "./BluetoothSection";
 import { CliSection } from "./CliSection";
+import { SettingsPanel } from "@/components/edit/SettingsPanel";
+import type { SettingsSectionId } from "@/components/edit/SettingsPanel";
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
@@ -40,7 +51,7 @@ const EMBED_SECTIONS = new Set<Section>(["api-docs", "agent-config"]);
 
 // Sections shown to non-debug users. Append `?debug=true` to the URL to reveal
 // the full menu (Sensing, Analytics, Servo, Logs, CLI, API Docs, Agent gateway).
-const PUBLIC_SECTIONS = new Set<Section>(["chat", "overview", "system", "flow", "camera", "face-owners", "bluetooth"]);
+const PUBLIC_SECTIONS = new Set<Section>(["chat", "overview", "system", "flow", "camera", "face-owners", "bluetooth", "settings:device", "settings:wifi", "settings:voice", "settings:face"]);
 
 // The capability a section requires, read from its NAV leaf (single source: the
 // nav definition itself declares `cap`). undefined → no hardware dependency, the
@@ -63,6 +74,52 @@ const iframeStyle: React.CSSProperties = {
   background: "var(--lm-card)",
 };
 
+// Lucide icon map for the sidebar, keyed by leaf Section id, by group name, and
+// by the Agent-menu pseudo ids. NAV still carries the legacy unicode `icon`
+// string for backwards-compat; the sidebar/topbar render these lucide icons
+// instead, falling back to nothing when a key is missing.
+const NAV_ICONS: Record<string, LucideIcon> = {
+  // top-level leaf
+  chat: MessageCircle,
+  // group headers
+  settings: Settings,
+  device: MonitorSmartphone,
+  // settings children
+  "settings:device": Cpu,
+  "settings:wifi": Wifi,
+  "settings:llm": Brain,
+  "settings:stt": Globe,
+  "settings:tts": Volume2,
+  "settings:voice": MicVocal,
+  "settings:face": UserCircle,
+  "settings:channel": MessageSquare,
+  "settings:mqtt": LinkIcon,
+  // device children
+  overview: LayoutGrid,
+  system: Cpu,
+  flow: Workflow,
+  "face-owners": Users,
+  camera: Camera,
+  sensing: Radar,
+  analytics: ChartColumn,
+  servo: Move3d,
+  bluetooth: Bluetooth,
+  logs: ScrollText,
+  cli: Terminal,
+  "api-docs": FileCode,
+  // Agent gateway menu
+  agent: Hexagon,
+  "agent-gateway": ExternalLink,
+  "agent-config": SlidersHorizontal,
+};
+
+// Renders the lucide icon for a given nav id (leaf Section, group name, or Agent
+// pseudo id). Returns null when no icon is mapped.
+const NavIcon = ({ id, size = 16 }: { id: string; size?: number }) => {
+  const I = NAV_ICONS[id];
+  return I ? <I size={size} strokeWidth={1.9} /> : null;
+};
+
 function allNavLeaves(): { id: Section; label: string; icon: string }[] {
   const leaves: { id: Section; label: string; icon: string }[] = [];
   for (const entry of NAV) {
@@ -75,11 +132,12 @@ function allNavLeaves(): { id: Section; label: string; icon: string }[] {
   return leaves;
 }
 
-function NavGroupItem({ entry, section, setSection, closeSidebar }: {
+function NavGroupItem({ entry, section, setSection, closeSidebar, leafHref }: {
   entry: Extract<NavEntry, { group: string }>;
   section: Section;
   setSection: (s: Section) => void;
   closeSidebar: () => void;
+  leafHref: (id: Section) => string;
 }) {
   const hasActiveChild = entry.children.some((c) => !isNavLink(c) && c.id === section);
   const [open, setOpen] = useState(hasActiveChild);
@@ -87,37 +145,41 @@ function NavGroupItem({ entry, section, setSection, closeSidebar }: {
     <div>
       <button
         onClick={() => setOpen((v) => !v)}
-        style={{ ...S.navGroupHeader(hasActiveChild), display: "flex", alignItems: "center", justifyContent: "space-between" }}
+        className={"lm-snav-group" + (hasActiveChild ? " lm-snav-group--active" : "")}
       >
-        <span style={{ display: "flex", alignItems: "center", gap: 9 }}>
-          <span style={{ fontSize: 14, lineHeight: 1 }}>{entry.icon}</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <NavIcon id={entry.group} size={16} />
           {entry.label}
         </span>
-        <span style={{ fontSize: 9, color: "var(--lm-text-muted)", transition: "transform 0.15s", transform: open ? "rotate(90deg)" : "none" }}>▶</span>
+        <ChevronRight
+          size={14}
+          strokeWidth={2}
+          style={{ color: "var(--lm-text-muted)", transition: "transform 0.15s", transform: open ? "rotate(90deg)" : "none" }}
+        />
       </button>
       {open && (
-        <div>
+        <div className="lm-snav-children">
           {entry.children.map((child) =>
             isNavLink(child) ? (
               <a
                 key={child.href}
                 href={child.href}
-                style={S.navSubItem(false)}
+                className="lm-snav-sub"
                 target={child.external ? "_blank" : undefined}
                 rel={child.external ? "noreferrer" : undefined}
                 onClick={closeSidebar}
               >
-                <span style={{ fontSize: 13, lineHeight: 1 }}>{child.icon}</span>
+                <NavIcon id={child.label} size={15} />
                 {child.label}
               </a>
             ) : (
               <a
                 key={child.id}
-                href={`#${child.id}`}
-                style={S.navSubItem(section === child.id)}
+                href={leafHref(child.id)}
+                className={"lm-snav-sub" + (section === child.id ? " lm-snav-sub--active" : "")}
                 onClick={(e) => { e.preventDefault(); setSection(child.id); closeSidebar(); }}
               >
-                <span style={{ fontSize: 13, lineHeight: 1 }}>{child.icon}</span>
+                <NavIcon id={child.id} size={15} />
                 {child.label}
               </a>
             )
@@ -146,37 +208,37 @@ function AgentGWMenu({ section, setSection, closeSidebar }: {
     <div>
       <button
         onClick={() => setOpen((v) => !v)}
-        style={{
-          ...S.navItem(false),
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          background: "transparent", cursor: "pointer",
-        }}
+        className={"lm-snav-group" + (hasActive ? " lm-snav-group--active" : "")}
       >
-        <span style={{ display: "flex", alignItems: "center", gap: 9 }}>
-          <span style={{ fontSize: 14, lineHeight: 1 }}>⬡</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <NavIcon id="agent" size={16} />
           Agent
         </span>
-        <span style={{ fontSize: 9, color: "var(--lm-text-muted)", transition: "transform 0.15s", transform: open ? "rotate(90deg)" : "none" }}>▶</span>
+        <ChevronRight
+          size={14}
+          strokeWidth={2}
+          style={{ color: "var(--lm-text-muted)", transition: "transform 0.15s", transform: open ? "rotate(90deg)" : "none" }}
+        />
       </button>
       {open && (
-        <div style={{ paddingLeft: 12 }}>
+        <div className="lm-snav-children">
           <a
             href="/gw/chat?session=agent:main:main"
             target="_blank"
             rel="noopener noreferrer"
-            style={S.navItem(false)}
+            className="lm-snav-sub"
             onClick={closeSidebar}
             title="Opens in a new tab — Agent blocks iframe embedding"
           >
-            <span style={{ fontSize: 12, lineHeight: 1 }}>↗</span>
+            <NavIcon id="agent-gateway" size={15} />
             Gateway
           </a>
           <a
             href="#agent-config"
-            style={S.navItem(section === "agent-config")}
+            className={"lm-snav-sub" + (section === "agent-config" ? " lm-snav-sub--active" : "")}
             onClick={(e) => { e.preventDefault(); setSection("agent-config"); closeSidebar(); }}
           >
-            <span style={{ fontSize: 12, lineHeight: 1 }}>◈</span>
+            <NavIcon id="agent-config" size={15} />
             Config
           </a>
         </div>
@@ -185,25 +247,72 @@ function AgentGWMenu({ section, setSection, closeSidebar }: {
   );
 }
 
+// Resolve the initial / location-derived section for an area. Falls back to the
+// area default ("overview" for monitor, "settings:device" for setting) when the
+// hash is empty or unknown, and to "overview" when a non-debug user deep-links a
+// private section.
+function resolveSection(area: Area, hash: string, isDebug: boolean): Section {
+  const parsed = hashToSection(hash, area);
+  if (parsed === null) return area === "setting" ? "settings:device" : "overview";
+  const known = allNavLeaves().some((n) => n.id === parsed);
+  if (!known) return area === "setting" ? "settings:device" : "overview";
+  if (!isDebug && !PUBLIC_SECTIONS.has(parsed)) return area === "setting" ? "settings:device" : "overview";
+  return parsed;
+}
+
 export default function Monitor() {
   const [theme, toggleTheme, themeClass] = useTheme();
+  const location = useLocation();
+  const navigate = useNavigate();
   const isDebug = new URLSearchParams(window.location.search).get("debug") === "true";
-  const [section, setSectionRaw] = useState<Section>(() => {
-    const h = window.location.hash.replace("#", "") as Section;
-    const known = allNavLeaves().some((n) => n.id === h);
-    if (!known) return "overview";
-    if (!isDebug && !PUBLIC_SECTIONS.has(h)) return "overview";
-    return h;
-  });
-  const setSection = (s: Section) => {
-    window.location.hash = s;
+
+  // Area is derived from the route path: /setting → "setting", else "monitor".
+  const area: Area = location.pathname.startsWith("/setting") ? "setting" : "monitor";
+
+  const [section, setSectionRaw] = useState<Section>(() =>
+    resolveSection(area, window.location.hash, isDebug),
+  );
+
+  // setSection switches BOTH the in-memory section and the URL. When the target
+  // section's area differs from the current path, navigate to the other route
+  // (no remount — see App.tsx layout route); the hash is always the area's
+  // serialized form (short label in the setting area, e.g. /setting#general).
+  const setSection = useCallback((s: Section) => {
+    const targetArea = sectionArea(s);
+    const hash = sectionToHash(s, targetArea);
+    const path = areaPath(targetArea);
+    if (targetArea !== area) {
+      navigate(`${path}#${hash}`);
+    } else {
+      window.location.hash = hash;
+    }
     setSectionRaw(s);
-  };
+  }, [area, navigate]);
+
+  // React to location changes (back/forward, deep-links, path switches): keep
+  // the in-memory section in sync with pathname + hash. Also normalize an empty
+  // setting hash to /setting#general so the URL is always explicit.
+  const search = location.search;
+  useEffect(() => {
+    if (area === "setting" && !location.hash) {
+      navigate("/setting#general" + search, { replace: true });
+      setSectionRaw("settings:device");
+      return;
+    }
+    setSectionRaw(resolveSection(area, location.hash, isDebug));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname, location.hash, area]);
 
   const sectionLeaf = allNavLeaves().find((n) => n.id === section);
   const sectionLabel = sectionLeaf?.label ?? "Monitor";
-  const sectionIcon = sectionLeaf?.icon ?? "";
-  useDocumentTitle(sectionLabel);
+  useDocumentTitle(area === "setting" ? ["Settings", sectionLabel] : sectionLabel);
+
+  // Build the real href for a nav leaf (path + serialized hash) so middle-click
+  // / open-in-new-tab land on the correct URL.
+  const leafHref = (id: Section): string => {
+    const a = sectionArea(id);
+    return `${areaPath(a)}#${sectionToHash(id, a)}`;
+  };
 
   const [sys, setSys] = useState<SystemInfo | null>(null);
   const [net, setNet] = useState<NetworkInfo | null>(null);
@@ -376,28 +485,49 @@ export default function Monitor() {
       {/* Sidebar */}
       <aside style={S.sidebar} className={`lm-sidebar${sidebarOpen ? " lm-sidebar--open" : ""}`}>
         <nav style={{ padding: "10px 0", flex: 1 }}>
-          {/* Order: Chat → Settings → Agent Gateway → System (then any other groups) */}
+          {/* Order: Chat → Device → Settings → Agent Gateway → (other groups) */}
           {NAV.filter((e) => !isNavGroup(e) && e.id === "chat").map((entry) => {
             const leaf = entry as Extract<NavEntry, { id: Section }>;
             return (
               <a
                 key={leaf.id}
-                href={`#${leaf.id}`}
-                style={S.navItem(section === leaf.id)}
+                href={leafHref(leaf.id)}
+                className={"lm-snav-item" + (section === leaf.id ? " lm-snav-item--active" : "")}
                 onClick={(e) => { e.preventDefault(); setSection(leaf.id); closeSidebar(); }}
               >
-                <span style={{ fontSize: 14, lineHeight: 1 }}>{leaf.icon}</span>
+                <NavIcon id={leaf.id} size={16} />
                 {leaf.label}
               </a>
             );
           })}
-          <a href="/edit" style={S.navItem(false)} onClick={closeSidebar}>
-            <span style={{ fontSize: 14, lineHeight: 1 }}>⚙</span>
-            Settings
-          </a>
+          {/* Device and Settings rendered explicitly here (Device above
+              Settings, both before Agent) so the visible order stays
+              Chat → Device → Settings → Agent → (other groups). Their children
+              come from NAV; the generic groups loop below excludes both to
+              avoid a duplicate render. */}
+          {NAV
+            .filter((e) => isNavGroup(e) && (e.group === "device" || e.group === "settings"))
+            // Force Device before Settings regardless of NAV declaration order.
+            .sort((a, b) => {
+              const rank = (e: NavEntry) => ((e as Extract<NavEntry, { group: string }>).group === "device" ? 0 : 1);
+              return rank(a) - rank(b);
+            })
+            .map((entry) => {
+              const group = entry as Extract<NavEntry, { group: string }>;
+              const filtered = {
+                ...group,
+                children: group.children.filter((c) => {
+                  if (isNavLink(c)) return isDebug; // external links: debug only
+                  if (!isDebug && !PUBLIC_SECTIONS.has(c.id)) return false;
+                  return sectionVisible(c.id); // hide tabs for absent hardware; settings leaves have no cap
+                }),
+              };
+              if (filtered.children.length === 0) return null;
+              return <NavGroupItem key={group.group} entry={filtered} section={section} setSection={setSection} closeSidebar={closeSidebar} leafHref={leafHref} />;
+            })}
           {isDebug && <AgentGWMenu section={section} setSection={setSection} closeSidebar={closeSidebar} />}
           {NAV
-            .filter((e) => isNavGroup(e) || (!isNavGroup(e) && e.id !== "chat"))
+            .filter((e) => (isNavGroup(e) ? (e.group !== "settings" && e.group !== "device") : e.id !== "chat"))
             .map((entry) => {
               if (isNavGroup(entry)) {
                 const filtered = {
@@ -409,17 +539,17 @@ export default function Monitor() {
                   }),
                 };
                 if (filtered.children.length === 0) return null;
-                return <NavGroupItem key={entry.group} entry={filtered} section={section} setSection={setSection} closeSidebar={closeSidebar} />;
+                return <NavGroupItem key={entry.group} entry={filtered} section={section} setSection={setSection} closeSidebar={closeSidebar} leafHref={leafHref} />;
               }
               if (!isDebug && !PUBLIC_SECTIONS.has(entry.id)) return null;
               return (
                 <a
                   key={entry.id}
-                  href={`#${entry.id}`}
-                  style={S.navItem(section === entry.id)}
+                  href={leafHref(entry.id)}
+                  className={"lm-snav-item" + (section === entry.id ? " lm-snav-item--active" : "")}
                   onClick={(e) => { e.preventDefault(); setSection(entry.id); closeSidebar(); }}
                 >
-                  <span style={{ fontSize: 14, lineHeight: 1 }}>{entry.icon}</span>
+                  <NavIcon id={entry.id} size={16} />
                   {entry.label}
                 </a>
               );
@@ -452,7 +582,7 @@ export default function Monitor() {
             display: "flex", alignItems: "center", gap: 8,
             fontSize: 13, fontWeight: 600, color: "var(--lm-text)",
           }}>
-            <span style={{ fontSize: 14, color: "var(--lm-amber)" }}>{sectionIcon}</span>
+            <span style={{ display: "flex", color: "var(--lm-amber)" }}><NavIcon id={section} size={16} /></span>
             <span>{sectionLabel}</span>
           </span>
           <span style={{ flex: 1 }} />
@@ -470,7 +600,13 @@ export default function Monitor() {
           ...S.content,
           ...(section === "chat" ? { padding: 0, overflow: "hidden" } : {}),
           ...(EMBED_SECTIONS.has(section) ? { padding: 0, overflow: "hidden" } : {}),
-        }} className="lm-content lm-fade-in">
+          ...(section.startsWith("settings:") ? { padding: 0, overflow: "hidden" } : {}),
+        }} className="lm-content">
+          {/* Non-chat sections share a keyed wrapper so switching between them
+              re-triggers the fade-in. Chat stays OUTSIDE this wrapper (always
+              mounted) so its history survives tab switches — keying it would
+              remount and wipe it. */}
+          <div key={section === "chat" ? "_keep" : section} className={section === "chat" ? undefined : "lm-fade-in"} style={{ display: "contents" }}>
           {section === "overview" && (
             <OverviewSection
               sys={sys}
@@ -516,10 +652,6 @@ export default function Monitor() {
           {section === "face-owners" && <FaceOwnersSection />}
           {section === "analytics" && <AnalyticsSection />}
           {section === "logs"      && <LogsSection />}
-          {/* Chat is always mounted to preserve history across tab switches */}
-          <div style={{ display: section === "chat" ? "contents" : "none" }}>
-            <ChatSection events={events} isActive={section === "chat"} />
-          </div>
           {section === "cli" && <CliSection />}
           {section === "api-docs" && (
             <iframe
@@ -540,6 +672,19 @@ export default function Monitor() {
               style={iframeStyle}
             />
           )}
+          {/* Settings leaves render the shared SettingsPanel, which owns its
+              own scroll container + padding (content wrapper is padding:0 above
+              for these sections). The "settings:" prefix is stripped to the
+              SettingsSectionId the panel expects. */}
+          {section.startsWith("settings:") && (
+            <SettingsPanel activeSection={section.slice("settings:".length) as SettingsSectionId} />
+          )}
+          </div>
+          {/* Chat lives OUTSIDE the keyed fade wrapper so it stays mounted and
+              keeps its history across tab switches (keying it would remount). */}
+          <div style={{ display: section === "chat" ? "contents" : "none" }}>
+            <ChatSection events={events} isActive={section === "chat"} />
+          </div>
         </div>
       </main>
     </div>
