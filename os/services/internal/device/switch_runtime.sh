@@ -74,6 +74,38 @@ stop_unit_retry() {
   return 0
 }
 
+# Roll back to OLD if the switch fails before we reach the os-server restart. The
+# hermes installer stops openclaw EARLY (before it finishes installing), so a
+# mid-switch failure would otherwise leave the device with NO backend running
+# while config.agent_runtime (persisted by os-server before this ran) already
+# points at the half-installed NEW one — dead on the next reboot. This trap
+# restarts OLD and reverts config.agent_runtime so the device stays fully
+# consistent on OLD. Disarmed (switched=1) once NEW is up and OLD is stopped.
+CONFIG_JSON="${CONFIG_JSON:-/root/config/config.json}"
+switched=0
+
+rollback() {
+  [ "$switched" = 1 ] && return 0
+  [ -n "$OLD" ] && [ "$OLD" != "$NEW" ] || return 0
+  log "ERROR: switch to $NEW failed — rolling back to $OLD"
+  if systemctl enable --now "$(unit_for "$OLD").service" 2>/dev/null; then
+    log "restored $OLD"
+  else
+    log "WARN: could not restore $OLD"
+  fi
+  if command -v jq >/dev/null 2>&1 && [ -w "$CONFIG_JSON" ]; then
+    local tmp
+    tmp="$(mktemp)"
+    if jq --arg r "$OLD" '.agent_runtime = $r' "$CONFIG_JSON" >"$tmp" && mv "$tmp" "$CONFIG_JSON"; then
+      log "reverted config.agent_runtime → $OLD"
+    else
+      log "WARN: could not revert config.agent_runtime"
+      rm -f "$tmp" 2>/dev/null || true
+    fi
+  fi
+}
+trap rollback EXIT
+
 # 1. Ensure the target backend is installed. Its installer owns creating its
 #    unit (and declaring a non-default unit name; see unit_for). (openclaw.service
 #    is baked by setup.sh, so this is skipped for openclaw — uniform path, no
@@ -106,6 +138,13 @@ fi
 # 3. Toggle units: start the new one, stop the old one (os-server tells us which).
 log "starting $NEW ($NEW_UNIT.service)"
 systemctl enable --now "${NEW_UNIT}.service"
+# Verify NEW actually came up before we stop OLD. `enable --now` returning 0 only
+# means systemd attempted the start; a unit that crashes immediately can still
+# exit 0 here. If NEW isn't active, abort — the EXIT trap rolls back to OLD.
+if ! systemctl is-active --quiet "${NEW_UNIT}.service"; then
+  log "ERROR: ${NEW_UNIT}.service not active after start — aborting"
+  exit 1
+fi
 if [ -n "$OLD" ] && [ "$OLD" != "$NEW" ]; then
   OLD_UNIT="$(unit_for "$OLD")"
   log "stopping $OLD ($OLD_UNIT.service)"
@@ -113,6 +152,10 @@ if [ -n "$OLD" ] && [ "$OLD" != "$NEW" ]; then
 fi
 
 # 4. Restart os-server so internal/agent/factory.go re-resolves the gateway.
+# Past the point of no return: NEW is up and OLD is stopped, so disarm the
+# rollback trap (the os-server restart below does not kill us — we run in our own
+# transient unit).
+switched=1
 log "restarting os-server"
 systemctl restart os-server
 log "done — now running $NEW"

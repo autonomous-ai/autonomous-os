@@ -1007,6 +1007,14 @@ func (s *Service) UpdateAgentRuntime(d domain.AgentRuntimeSetData) error {
 	// generic (no hardcoded backend list anywhere).
 	if err := exec.Command("systemd-run", "--quiet", "--collect",
 		"--unit=os-runtime-switch", switchRuntimeBin, runtime, old).Start(); err != nil {
+		// We persisted agent_runtime above so the restarted os-server would resolve
+		// NEW, but the switcher never launched — nothing toggled. Leaving config at
+		// NEW would resolve to a never-started backend on the next boot, so revert.
+		if rerr := s.config.WithLockSave(func(c *config.Config) {
+			c.AgentRuntime = old
+		}); rerr != nil {
+			slog.Error("revert agent_runtime after spawn failure", "component", "device", "err", rerr)
+		}
 		return fmt.Errorf("spawn switch-runtime: %w", err)
 	}
 	return nil
