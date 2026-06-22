@@ -112,6 +112,11 @@ class GeminiLiveAgent(VoiceAgentBase):
             ),
             thinking_config=types.ThinkingConfig(
                 thinking_level=self._config.thinking_level.value,
+                # Don't return thought summaries to the client — otherwise the
+                # model's reasoning leaks into model_turn parts and gets spoken /
+                # transcribed. We still filter thought parts on parse (below) as a
+                # second line of defense.
+                include_thoughts=False,
             ),
             context_window_compression=(
                 types.ContextWindowCompressionConfig(
@@ -259,6 +264,12 @@ class GeminiLiveAgent(VoiceAgentBase):
 
                 if content.model_turn and content.model_turn.parts:
                     for part in content.model_turn.parts:
+                        # Skip reasoning parts: Gemini flags thought parts with
+                        # part.thought=True. Emitting them would speak/show the
+                        # model's internal reasoning. Belt-and-suspenders with
+                        # include_thoughts=False in the live config.
+                        if getattr(part, "thought", False):
+                            continue
                         if part.inline_data and part.inline_data.data:
                             if not self._first_audio_received:
                                 self._first_audio_received = True

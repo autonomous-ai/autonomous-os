@@ -684,6 +684,22 @@ class VoiceService:
                      scope → garbage-collected. NO state leaks to the next
                      ``_stream_session`` call.
         """
+        # A keepalive session pre-connected on the previous turn can go STALE if
+        # the user stayed silent past the STT provider's inactivity window (~10s):
+        # the upstream closes the idle WS (code 1000) and the next send() raises
+        # ConnectionClosed → the whole turn's STT is lost. Detect the dead session
+        # up front and fall through to a fresh connect instead of reusing it.
+        if preconnected_session is not None and preconnected_session.is_closed():
+            logger.warning(
+                "STT keepalive: pre-connected session went stale (idle close) — "
+                "connecting a fresh session for this turn"
+            )
+            try:
+                preconnected_session.close()
+            except Exception:
+                pass
+            preconnected_session = None
+
         stt_session = preconnected_session or self._stt.create_session()
 
         longest_partial = [""]

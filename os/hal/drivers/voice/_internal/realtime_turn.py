@@ -21,6 +21,23 @@ logger = logging.getLogger("hal.voice")
 SENTENCE_ENDS = (".", "!", "?", "。", "！", "？")
 
 
+def _reply_language_name() -> str:
+    """Resolve the device's reply language to a human name (e.g. "Vietnamese").
+
+    Reads stt_language from config.json and maps it via the same table the system
+    prompt uses, so the per-turn reminder and the prompt stay in sync. Returns ""
+    when no language is configured — we don't force a default, mirroring the
+    prompt's `_load_language() or "English"` only when one is actually set.
+    """
+    from hal.config import _os_cfg_get
+    from hal.drivers.realtime.context_manager.base import ContextManagerBase
+
+    code: str = (_os_cfg_get("stt_language", "") or "").strip()
+    if not code:
+        return ""
+    return ContextManagerBase.LANGUAGE_NAMES.get(code, code)
+
+
 class RealtimeTurnResult(NamedTuple):
     """Outcome of a realtime turn, consumed by the OS-server dispatch step."""
 
@@ -75,6 +92,16 @@ def run_realtime_turn(
             turn_ctx: list[str] = [
                 f"Time: {device_now().strftime('%Y-%m-%d %H:%M:%S %A')}",
             ]
+            # Per-turn language reminder. The system prompt already locks the
+            # language, but Google Search grounding pulls English source text into
+            # context and can drag the spoken reply into English. A reminder right
+            # next to the turn (closest to generation) is the strongest lever.
+            lang_name: str = _reply_language_name()
+            if lang_name:
+                turn_ctx.append(
+                    f"Reply language: {lang_name} (answer ONLY in {lang_name}, "
+                    "even if a search result or any context is in another language)"
+                )
             try:
                 if hal_app_state.sensing_service:
                     cu: str = (
