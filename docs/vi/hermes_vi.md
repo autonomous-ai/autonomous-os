@@ -217,7 +217,9 @@ và **không cần đụng imager/setup.sh bao giờ**. Với backend đích `X`
    `openclaw.service` đã bake bởi setup.sh);
 2. chạy hook tùy chọn `/usr/local/bin/runtime-X-presync` (của hermes sync `llm_*`,
    theo §10);
-3. `systemctl enable --now <X-unit>` + `disable --now <old-unit>`;
+3. `systemctl enable --now <X-unit>`, rồi stop unit cũ với tối đa 3 lần thử
+   `disable --now <old-unit>` (kiểm tra đã inactive giữa các lần); sau 3 lần thì
+   đi tiếp bất kể, để runtime cũ bị kẹt không chặn việc switch;
 4. `systemctl restart os-server`, để `factory.go` resolve lại gateway.
 
 Xác nhận đã switch qua banner `AGENT BACKEND ACTIVE → …` mới + một lần poll

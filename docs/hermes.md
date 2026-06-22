@@ -222,7 +222,10 @@ it:
    `openclaw.service` is baked by setup.sh);
 2. runs the optional `/usr/local/bin/runtime-X-presync` hook (hermes's syncs
    `llm_*`, per §10);
-3. `systemctl enable --now <X-unit>` + `disable --now <old-unit>`;
+3. `systemctl enable --now <X-unit>`, then stop the old unit with up to 3
+   `disable --now <old-unit>` retries (verifying it went inactive between tries);
+   after 3 attempts it proceeds regardless so a stuck old runtime never blocks
+   the switch;
 4. `systemctl restart os-server`, so `factory.go` re-resolves the gateway.
 
 Confirm the swap from the new `AGENT BACKEND ACTIVE → …` banner + a healthy
