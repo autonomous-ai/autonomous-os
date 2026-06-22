@@ -147,7 +147,7 @@ Inject fire khi **tất cả** điều kiện sau đúng:
 
 Không có gate "minimum sedentary streak" riêng và không có "nudge cooldown" riêng — window chính là rhythm. Window-start yêu cầu sedentary nên khi complete, user đã ở máy tính ít nhất `POSE_WINDOW_DURATION_S`; unconditional reset sau mỗi cycle khiến lần fire kế tiếp tự nhiên cách 1 window.
 
-Khi inject fire, dedup check được **bypass** cho event đó: posture nudge là tín hiệu khác hẳn "user vẫn đang dùng máy tính", và mất nó vì dedup sẽ phải chờ thêm cả một window đầy đủ trước khi có cơ hội tiếp.
+Khi inject fire, cả per-label dedup check **lẫn** global event cooldown (`MOTION_EVENT_COOLDOWN_S`, default 360 s — sàn giới hạn các `motion.activity` thông thường) đều được **bypass** cho event đó: posture nudge là tín hiệu khác hẳn "user vẫn đang dùng máy tính", và mất nó vì dedup hay cooldown sẽ phải chờ thêm cả một window đầy đủ trước khi có cơ hội tiếp.
 
 Lifecycle window:
 1. **Open** — `pose.start_window()` gọi từ motion-side khi label sedentary đầu tiên xuất hiện. Clear samples pre-window và anchor `_window_start_ts = now`. Idempotent — call thêm khi window đã mở là no-op.
