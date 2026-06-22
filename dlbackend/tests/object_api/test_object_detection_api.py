@@ -49,20 +49,43 @@ AUTH_HEADERS: dict[str, str] = {"X-API-Key": DL_API_KEY}
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="session")
-def test_image() -> tuple[str, int, int]:
-    """Load the test image once. Returns (b64, width, height)."""
-    img = cv2.imread(str(FIXTURES_DIR / "person_drinking.jpg"))
+def _load_image(name: str) -> tuple[str, int, int]:
+    """Load a fixture image. Returns (b64, width, height)."""
+    img = cv2.imread(str(FIXTURES_DIR / name))
+    assert img is not None, f"Failed to load {FIXTURES_DIR / name}"
     h, w = img.shape[:2]
-    _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
-    b64 = base64.b64encode(buf.tobytes()).decode()
-    return b64, w, h
+    _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    return base64.b64encode(buf.tobytes()).decode(), w, h
 
 
 @pytest.fixture(scope="session")
-def test_image_b64(test_image: tuple[str, int, int]) -> str:
+def person_image() -> tuple[str, int, int]:
+    """person_drinking.jpg as (b64, width, height)."""
+    return _load_image("person_drinking.jpg")
+
+
+@pytest.fixture(scope="session")
+def office_image() -> tuple[str, int, int]:
+    """small-office-header.jpg as (b64, width, height)."""
+    return _load_image("small-office-header.jpg")
+
+
+@pytest.fixture(scope="session")
+def fire_image() -> tuple[str, int, int]:
+    """fire-1.jpg — house on fire, no people."""
+    return _load_image("fire-1.jpg")
+
+
+@pytest.fixture(scope="session")
+def test_image(person_image: tuple[str, int, int]) -> tuple[str, int, int]:
+    """Alias for person_image."""
+    return person_image
+
+
+@pytest.fixture(scope="session")
+def test_image_b64(person_image: tuple[str, int, int]) -> str:
     """Just the b64 string for tests that don't need dimensions."""
-    return test_image[0]
+    return person_image[0]
 
 
 @pytest.fixture(scope="session")
@@ -198,6 +221,102 @@ class TestObjectDetectionHTTP:
             timeout=10,
         )
         assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Performance / accuracy tests
+# ---------------------------------------------------------------------------
+
+
+def _detect(detector: str, b64: str, classes: list[str]) -> list[dict[str, Any]]:
+    resp = httpx.post(
+        _http_url(f"/api/dl/object-detect/{detector}"),
+        json={"image_b64": b64, "classes": classes},
+        headers=AUTH_HEADERS,
+        timeout=30,
+    )
+    assert resp.status_code == 200
+    return resp.json().get("detections", [])
+
+
+class TestObjectDetectionPerformance:
+    """Evaluate detection quality on known images via remote API."""
+
+    @pytest.mark.parametrize("detector", ALL_DETECTORS)
+    def test_person_drinking_detects_person(
+        self, detector: str, ready_detectors: set[str],
+        person_image: tuple[str, int, int],
+    ) -> None:
+        """person_drinking.jpg must detect at least one 'person' with high confidence."""
+        _skip_if_not_ready(detector, ready_detectors)
+        b64, img_w, img_h = person_image
+        dets = _detect(detector, b64, ["person"])
+
+        persons = [d for d in dets if d["class_name"] == "person"]
+        assert len(persons) >= 1, f"[{detector}] No person detected"
+
+        best = max(persons, key=lambda d: d["confidence"])
+        assert best["confidence"] > 0.2, (
+            f"[{detector}] Best person confidence too low: {best['confidence']:.3f}"
+        )
+        _, _, w, h = best["xywh"]
+        assert w > img_w * 0.1, f"[{detector}] Person bbox too narrow: w={w:.0f}"
+        assert h > img_h * 0.1, f"[{detector}] Person bbox too short: h={h:.0f}"
+
+    @pytest.mark.parametrize("detector", ALL_DETECTORS)
+    def test_office_detects_people(
+        self, detector: str, ready_detectors: set[str],
+        office_image: tuple[str, int, int],
+    ) -> None:
+        """Office header has ~6 people — should detect multiple persons."""
+        _skip_if_not_ready(detector, ready_detectors)
+        b64, img_w, img_h = office_image
+        dets = _detect(detector, b64, ["person"])
+
+        persons = [d for d in dets if d["class_name"] == "person"]
+        assert len(persons) >= 3, (
+            f"[{detector}] Expected >=3 persons in office, got {len(persons)}"
+        )
+        for det in persons:
+            x, y, w, h = det["xywh"]
+            assert 0 <= x <= img_w and 0 <= y <= img_h
+            assert 0 < w <= img_w and 0 < h <= img_h
+            assert 0 < det["confidence"] <= 1.0
+
+    @pytest.mark.parametrize("detector", ALL_DETECTORS)
+    def test_office_detects_furniture(
+        self, detector: str, ready_detectors: set[str],
+        office_image: tuple[str, int, int],
+    ) -> None:
+        """Office header has chairs, monitors, laptops — should detect some."""
+        _skip_if_not_ready(detector, ready_detectors)
+        b64, img_w, img_h = office_image
+        classes = ["chair", "monitor", "laptop", "desk", "table"]
+        dets = _detect(detector, b64, classes)
+
+        assert len(dets) >= 1, (
+            f"[{detector}] No furniture/equipment detected in office image"
+        )
+        for det in dets:
+            x, y, w, h = det["xywh"]
+            assert 0 <= x <= img_w and 0 <= y <= img_h
+            assert 0 < w <= img_w and 0 < h <= img_h
+            assert 0 < det["confidence"] <= 1.0
+
+    @pytest.mark.parametrize("detector", ALL_DETECTORS)
+    def test_no_person_in_fire_image(
+        self, detector: str, ready_detectors: set[str],
+        fire_image: tuple[str, int, int],
+    ) -> None:
+        """fire-1.jpg should not detect 'person' (no people in fire scenes)."""
+        _skip_if_not_ready(detector, ready_detectors)
+        b64, _, _ = fire_image
+        dets = _detect(detector, b64, ["person"])
+
+        persons = [d for d in dets if d["class_name"] == "person" and d["confidence"] > 0.5]
+        assert len(persons) == 0, (
+            f"[{detector}] False positive: detected {len(persons)} person(s) in fire image"
+        )
 
 
 # ---------------------------------------------------------------------------

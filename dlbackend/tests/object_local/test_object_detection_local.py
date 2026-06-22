@@ -5,6 +5,7 @@ parametrizes tests across all known detectors, and skips any that
 aren't ready.
 """
 
+import asyncio
 import base64
 import json
 import os
@@ -17,13 +18,12 @@ import pytest
 from dotenv import load_dotenv
 from fastapi.testclient import TestClient
 
-from dlserver.app import app
-
 load_dotenv(override=True)
 
-DL_API_KEY: str = os.getenv("DL_API_KEY", "")
+TEST_API_KEY: str = "test-secret-key"
+os.environ["DL_API_KEY"] = TEST_API_KEY
 FIXTURES_DIR: Path = Path(__file__).parent.parent / "fixtures" / "images"
-AUTH_HEADERS: dict[str, str] = {"X-API-Key": DL_API_KEY}
+AUTH_HEADERS: dict[str, str] = {"X-API-Key": TEST_API_KEY}
 
 ALL_DETECTORS: list[str] = ["yoloworld", "owlv2", "grounding-dino"]
 
@@ -33,20 +33,43 @@ ALL_DETECTORS: list[str] = ["yoloworld", "owlv2", "grounding-dino"]
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="session")
-def test_image() -> tuple[str, int, int]:
-    """Load the test image once. Returns (b64, width, height)."""
-    img = cv2.imread(str(FIXTURES_DIR / "person_drinking.jpg"))
+def _load_image(name: str) -> tuple[str, int, int]:
+    """Load a fixture image. Returns (b64, width, height)."""
+    img = cv2.imread(str(FIXTURES_DIR / name))
+    assert img is not None, f"Failed to load {FIXTURES_DIR / name}"
     h, w = img.shape[:2]
-    _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
-    b64 = base64.b64encode(buf.tobytes()).decode()
-    return b64, w, h
+    _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    return base64.b64encode(buf.tobytes()).decode(), w, h
 
 
 @pytest.fixture(scope="session")
-def test_image_b64(test_image: tuple[str, int, int]) -> str:
+def person_image() -> tuple[str, int, int]:
+    """person_drinking.jpg as (b64, width, height)."""
+    return _load_image("person_drinking.jpg")
+
+
+@pytest.fixture(scope="session")
+def office_image() -> tuple[str, int, int]:
+    """small-office-header.jpg as (b64, width, height)."""
+    return _load_image("small-office-header.jpg")
+
+
+@pytest.fixture(scope="session")
+def fire_image() -> tuple[str, int, int]:
+    """fire-1.jpg — house on fire, no people."""
+    return _load_image("fire-1.jpg")
+
+
+@pytest.fixture(scope="session")
+def test_image_b64(person_image: tuple[str, int, int]) -> str:
     """Just the b64 string for tests that don't need dimensions."""
-    return test_image[0]
+    return person_image[0]
+
+
+@pytest.fixture(scope="session")
+def test_image(person_image: tuple[str, int, int]) -> tuple[str, int, int]:
+    """Alias for person_image for backwards compat."""
+    return person_image
 
 
 @pytest.fixture(scope="session")
@@ -58,23 +81,56 @@ def random_frame_b64() -> str:
 
 
 @pytest.fixture(scope="session")
-def client() -> TestClient:
-    """Start local server — lifespan loads models from config."""
-    return TestClient(app)
+def models() -> dict[str, Any]:
+    """Build and start all object detection models."""
+    from core.enums.object import ObjectDetectorEnum
+    from core.perception.object.perception import ObjectPerception
+    from core.perception.object.utils import ObjectDetectorFactory
+
+    detector_configs: list[tuple[str, ObjectDetectorEnum]] = [
+        ("yoloworld", ObjectDetectorEnum.YOLO_WORLD),
+        ("owlv2", ObjectDetectorEnum.OWLV2),
+        ("grounding-dino", ObjectDetectorEnum.GROUNDING_DINO),
+    ]
+
+    perceptions: dict[str, ObjectPerception] = {}
+    for name, enum in detector_configs:
+        try:
+            factory = ObjectDetectorFactory(model_name=enum, use_onnx=True)
+            perception = ObjectPerception(object_detector_factory=factory)
+            asyncio.run(perception.start())
+            perceptions[name] = perception
+        except Exception as e:
+            pytest.skip(f"Failed to start {name}: {e}")
+
+    if not perceptions:
+        pytest.skip("No object detectors available")
+
+    return perceptions
 
 
 @pytest.fixture(scope="session")
-def ready_detectors(client: TestClient) -> set[str]:
-    """Query the models endpoint once and cache the set of ready names."""
-    resp = client.get("/api/dl/object-detect/models", headers=AUTH_HEADERS)
-    if resp.status_code != 200:
-        return set()
-    models: list[dict[str, Any]] = resp.json().get("models", [])
-    return {m["name"] for m in models if m.get("ready")}
+def client(models: dict[str, Any]) -> TestClient:
+    """Create TestClient with manually injected models."""
+    import config
+    import server
+
+    from dlserver.utils.state import set_object_models
+
+    config.settings.dl_api_key = TEST_API_KEY
+    set_object_models(models)
+    return TestClient(server.app)
+
+
+@pytest.fixture(scope="session")
+def ready_detectors(models: dict[str, Any]) -> set[str]:
+    """Return the set of successfully started detector names."""
+    return set(models.keys())
 
 
 def _skip_if_not_ready(
-    detector: str, ready_detectors: set[str],
+    detector: str,
+    ready_detectors: set[str],
 ) -> None:
     if detector not in ready_detectors:
         pytest.skip(f"Detector '{detector}' not ready")
@@ -94,10 +150,13 @@ class TestObjectDetectionHTTP:
 
     @pytest.mark.parametrize("detector", ALL_DETECTORS)
     def test_compat_endpoint_returns_list(
-        self, client: TestClient, detector: str,
-        ready_detectors: set[str], test_image_b64: str,
+        self,
+        client: TestClient,
+        detector: str,
+        ready_detectors: set[str],
+        test_image_b64: str,
     ) -> None:
-        _skip_if_not_ready(detector, ready_detectors)
+        # _skip_if_not_ready(detector, ready_detectors)
         resp = client.post(
             f"/api/dl/{detector}",
             json={"image_b64": test_image_b64, "classes": ["person", "chair"]},
@@ -108,8 +167,11 @@ class TestObjectDetectionHTTP:
 
     @pytest.mark.parametrize("detector", ALL_DETECTORS)
     def test_wrapped_endpoint_returns_detections(
-        self, client: TestClient, detector: str,
-        ready_detectors: set[str], test_image_b64: str,
+        self,
+        client: TestClient,
+        detector: str,
+        ready_detectors: set[str],
+        test_image_b64: str,
     ) -> None:
         _skip_if_not_ready(detector, ready_detectors)
         resp = client.post(
@@ -124,8 +186,11 @@ class TestObjectDetectionHTTP:
 
     @pytest.mark.parametrize("detector", ALL_DETECTORS)
     def test_detect_without_classes_uses_defaults(
-        self, client: TestClient, detector: str,
-        ready_detectors: set[str], test_image_b64: str,
+        self,
+        client: TestClient,
+        detector: str,
+        ready_detectors: set[str],
+        test_image_b64: str,
     ) -> None:
         _skip_if_not_ready(detector, ready_detectors)
         resp = client.post(
@@ -138,8 +203,11 @@ class TestObjectDetectionHTTP:
 
     @pytest.mark.parametrize("detector", ALL_DETECTORS)
     def test_detection_item_fields(
-        self, client: TestClient, detector: str,
-        ready_detectors: set[str], test_image: tuple[str, int, int],
+        self,
+        client: TestClient,
+        detector: str,
+        ready_detectors: set[str],
+        test_image: tuple[str, int, int],
     ) -> None:
         """Detection items have class_name, xywh (pixel coords), and confidence."""
         _skip_if_not_ready(detector, ready_detectors)
@@ -168,7 +236,9 @@ class TestObjectDetectionHTTP:
         )
 
     def test_unknown_detector_returns_503(
-        self, client: TestClient, random_frame_b64: str,
+        self,
+        client: TestClient,
+        random_frame_b64: str,
     ) -> None:
         resp = client.post(
             "/api/dl/nonexistent",
@@ -179,6 +249,114 @@ class TestObjectDetectionHTTP:
 
 
 # ---------------------------------------------------------------------------
+# Performance / accuracy tests
+# ---------------------------------------------------------------------------
+
+
+def _detect(
+    client: TestClient,
+    detector: str,
+    b64: str,
+    classes: list[str],
+) -> list[dict[str, Any]]:
+    resp = client.post(
+        f"/api/dl/object-detect/{detector}",
+        json={"image_b64": b64, "classes": classes},
+        headers=AUTH_HEADERS,
+    )
+    assert resp.status_code == 200
+    return resp.json().get("detections", [])
+
+
+class TestObjectDetectionPerformance:
+    """Evaluate detection quality on known images."""
+
+    @pytest.mark.parametrize("detector", ALL_DETECTORS)
+    def test_person_drinking_detects_person(
+        self,
+        client: TestClient,
+        detector: str,
+        ready_detectors: set[str],
+        person_image: tuple[str, int, int],
+    ) -> None:
+        """person_drinking.jpg must detect at least one 'person' with high confidence."""
+        _skip_if_not_ready(detector, ready_detectors)
+        b64, img_w, img_h = person_image
+        dets = _detect(client, detector, b64, ["person"])
+
+        persons = [d for d in dets if d["class_name"] == "person"]
+        assert len(persons) >= 1, f"[{detector}] No person detected"
+
+        best = max(persons, key=lambda d: d["confidence"])
+        assert best["confidence"] > 0.2, (
+            f"[{detector}] Best person confidence too low: {best['confidence']:.3f}"
+        )
+        _, _, w, h = best["xywh"]
+        assert w > img_w * 0.1, f"[{detector}] Person bbox too narrow: w={w:.0f}"
+        assert h > img_h * 0.1, f"[{detector}] Person bbox too short: h={h:.0f}"
+
+    @pytest.mark.parametrize("detector", ALL_DETECTORS)
+    def test_office_detects_people(
+        self,
+        client: TestClient,
+        detector: str,
+        ready_detectors: set[str],
+        office_image: tuple[str, int, int],
+    ) -> None:
+        """Office header has ~6 people — should detect multiple persons."""
+        _skip_if_not_ready(detector, ready_detectors)
+        b64, img_w, img_h = office_image
+        dets = _detect(client, detector, b64, ["person"])
+
+        persons = [d for d in dets if d["class_name"] == "person"]
+        assert len(persons) >= 3, f"[{detector}] Expected >=3 persons in office, got {len(persons)}"
+        for det in persons:
+            x, y, w, h = det["xywh"]
+            assert 0 <= x <= img_w and 0 <= y <= img_h
+            assert 0 < w <= img_w and 0 < h <= img_h
+            assert 0 < det["confidence"] <= 1.0
+
+    @pytest.mark.parametrize("detector", ALL_DETECTORS)
+    def test_office_detects_furniture(
+        self,
+        client: TestClient,
+        detector: str,
+        ready_detectors: set[str],
+        office_image: tuple[str, int, int],
+    ) -> None:
+        """Office header has chairs, monitors, laptops — should detect some."""
+        _skip_if_not_ready(detector, ready_detectors)
+        b64, img_w, img_h = office_image
+        classes = ["chair", "monitor", "laptop", "desk", "table"]
+        dets = _detect(client, detector, b64, classes)
+
+        assert len(dets) >= 1, f"[{detector}] No furniture/equipment detected in office image"
+        for det in dets:
+            x, y, w, h = det["xywh"]
+            assert 0 <= x <= img_w and 0 <= y <= img_h
+            assert 0 < w <= img_w and 0 < h <= img_h
+            assert 0 < det["confidence"] <= 1.0
+
+    @pytest.mark.parametrize("detector", ALL_DETECTORS)
+    def test_no_person_in_fire_image(
+        self,
+        client: TestClient,
+        detector: str,
+        ready_detectors: set[str],
+        fire_image: tuple[str, int, int],
+    ) -> None:
+        """fire-1.jpg should not detect 'person' (no people in fire scenes)."""
+        _skip_if_not_ready(detector, ready_detectors)
+        b64, _, _ = fire_image
+        dets = _detect(client, detector, b64, ["person"])
+
+        persons = [d for d in dets if d["class_name"] == "person" and d["confidence"] > 0.5]
+        assert len(persons) == 0, (
+            f"[{detector}] False positive: detected {len(persons)} person(s) in fire image"
+        )
+
+
+# ---------------------------------------------------------------------------
 # WebSocket tests
 # ---------------------------------------------------------------------------
 
@@ -186,7 +364,10 @@ class TestObjectDetectionHTTP:
 class TestObjectDetectionWebSocket:
     @pytest.mark.parametrize("detector", ALL_DETECTORS)
     def test_heartbeat(
-        self, client: TestClient, detector: str, ready_detectors: set[str],
+        self,
+        client: TestClient,
+        detector: str,
+        ready_detectors: set[str],
     ) -> None:
         _skip_if_not_ready(detector, ready_detectors)
         with client.websocket_connect(
@@ -198,34 +379,50 @@ class TestObjectDetectionWebSocket:
 
     @pytest.mark.parametrize("detector", ALL_DETECTORS)
     def test_frame_returns_detections(
-        self, client: TestClient, detector: str,
-        ready_detectors: set[str], test_image_b64: str,
+        self,
+        client: TestClient,
+        detector: str,
+        ready_detectors: set[str],
+        test_image_b64: str,
     ) -> None:
         _skip_if_not_ready(detector, ready_detectors)
         with client.websocket_connect(
             f"/api/dl/object-detection/{detector}/ws", headers=AUTH_HEADERS
         ) as ws:
-            ws.send_text(json.dumps({
-                "type": "frame", "task": "object",
-                "frame_b64": test_image_b64,
-            }))
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "frame",
+                        "task": "object",
+                        "frame_b64": test_image_b64,
+                    }
+                )
+            )
             resp: dict[str, Any] = ws.receive_json()
             assert "detections" in resp
             assert isinstance(resp["detections"], list)
 
     @pytest.mark.parametrize("detector", ALL_DETECTORS)
     def test_config_update(
-        self, client: TestClient, detector: str, ready_detectors: set[str],
+        self,
+        client: TestClient,
+        detector: str,
+        ready_detectors: set[str],
     ) -> None:
         _skip_if_not_ready(detector, ready_detectors)
         with client.websocket_connect(
             f"/api/dl/object-detection/{detector}/ws", headers=AUTH_HEADERS
         ) as ws:
-            ws.send_text(json.dumps({
-                "type": "config", "task": "object",
-                "classes": ["person", "dog"],
-                "threshold": 0.5,
-            }))
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "config",
+                        "task": "object",
+                        "classes": ["person", "dog"],
+                        "threshold": 0.5,
+                    }
+                )
+            )
             resp: dict[str, Any] = ws.receive_json()
             assert resp["status"] == "config_updated"
 
@@ -239,7 +436,10 @@ class TestObjectDetectionWebSocket:
 
     @pytest.mark.parametrize("detector", ALL_DETECTORS)
     def test_invalid_json(
-        self, client: TestClient, detector: str, ready_detectors: set[str],
+        self,
+        client: TestClient,
+        detector: str,
+        ready_detectors: set[str],
     ) -> None:
         _skip_if_not_ready(detector, ready_detectors)
         with client.websocket_connect(
