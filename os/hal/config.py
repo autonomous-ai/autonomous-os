@@ -401,6 +401,17 @@ REALTIME_PROVIDER: str = _rt_str("HAL_REALTIME_PROVIDER", _RT.get("provider"), "
 REALTIME_RECV_QUEUE_TIMEOUT_S: float = float(
     os.environ.get("HAL_REALTIME_RECV_QUEUE_TIMEOUT_S", "8.0")
 )
+# Zombie-session guard. A long-lived Gemini Live session can stop responding
+# (the campaign-api proxy doesn't always relay Gemini's go_away/close, so the
+# WS stays "connected", accepts audio, but never replies — every turn hits the
+# recv timeout above). The normal reconnect only fires on an explicit WS
+# error/close, which never arrives here, so the session stays zombie until a
+# HAL restart. After this many CONSECUTIVE silent turns (committed audio, zero
+# output) we force a fresh session — what a manual restart does, automatically.
+# Consecutive (not total) so genuine interspersed noise turns don't trip it.
+REALTIME_ZOMBIE_RECONNECT_AFTER: int = int(
+    os.environ.get("HAL_REALTIME_ZOMBIE_RECONNECT_AFTER", "3")
+)
 # A captured session shorter than this AND with no STT transcript is treated as a
 # VAD false-trigger (a noise blip that only grabbed the pre-roll, no sustained
 # speech) and is NOT committed to the realtime model. Committing such turns wastes

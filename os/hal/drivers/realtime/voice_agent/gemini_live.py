@@ -348,6 +348,26 @@ class GeminiLiveAgent(VoiceAgentBase):
         self._last_reconnect_at = now
         self._reconnect()
 
+    @override
+    def force_reconnect(self) -> None:
+        """Recover a zombie session: close the live session so the recv loop —
+        which may be blocked in `async for session.receive()` on a dead socket —
+        unblocks and rebuilds a fresh session via _ensure_connected. Resets the
+        reconnect throttle so reconnect happens immediately, not after
+        reconnect_delay_s."""
+        logger.warning("[realtime] Forcing reconnect — session looks zombie (silent)")
+        self._connected.clear()
+        self._activity_started = False
+        self._turn_done.set()  # unblock any waiting commit
+        self._last_reconnect_at = 0.0  # bypass _ensure_connected throttle
+        if self._loop is not None:
+            try:
+                self._submit_and_wait(self._async_disconnect(), timeout=10.0)
+            except Exception as e:
+                logger.warning("[realtime] force_reconnect disconnect failed: %s", e)
+        self._session = None
+        # The recv/send loops' _ensure_connected now rebuilds a fresh session.
+
     def _reconnect(self) -> None:
         self._connected.clear()
         self._activity_started = False

@@ -155,6 +155,7 @@ class RealtimeOrchestrator:
         self._tools: list[dict[str, Any]] = tools + (extra_tools or [])
         self._agent: VoiceAgentBase | None = None
         self._started: threading.Event = threading.Event()
+        self._consecutive_silent: int = 0  # zombie-session guard (see stream_output)
         summarizer: RealtimeSummarizer | None = None
         if config.REALTIME_SUMMARIZER_ENABLED:
             try:
@@ -308,6 +309,7 @@ class RealtimeOrchestrator:
         if self._agent is None:
             return
 
+        produced = False  # did this turn yield any real output (vs stay silent)?
         for output in self._agent.receive(stop_on_done=True):
             if (
                 isinstance(output, FunctionCallOutput)
@@ -354,9 +356,33 @@ class RealtimeOrchestrator:
                         )
                     ]
                 )
+                produced = True
                 yield DelegateSignal(message=delegate_msg)
                 continue
+            produced = True
             yield output
+
+        # Zombie-session guard: a turn that committed audio but yielded nothing
+        # is "silent". A long-lived Gemini session can wedge (connected, accepts
+        # audio, never replies — no go_away/close to trigger the normal
+        # reconnect), so after N CONSECUTIVE silent turns force a fresh session.
+        # Reset on any real output so interspersed noise turns don't trip it.
+        if produced:
+            self._consecutive_silent = 0
+        else:
+            self._consecutive_silent += 1
+            if self._consecutive_silent >= config.REALTIME_ZOMBIE_RECONNECT_AFTER:
+                logger.warning(
+                    "[realtime] %d consecutive silent turns — forcing reconnect "
+                    "(zombie session)",
+                    self._consecutive_silent,
+                )
+                self._consecutive_silent = 0
+                if self._agent is not None:
+                    try:
+                        self._agent.force_reconnect()
+                    except Exception:
+                        logger.exception("[realtime] force_reconnect failed")
 
     def _handle_emotion_call(self, output: FunctionCallOutput) -> None:
         """Fire the device's emotion expression without blocking the spoken turn.
