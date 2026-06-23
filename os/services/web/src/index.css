@@ -1093,62 +1093,7 @@
   .lm-root .lm-pulse::after { animation: none; }
 }
 
-/* Restart banner — a gradient callout with a softly glowing rotating-icon chip.
-   Replaces the flat amber box for a higher-end "info" affordance. */
-.lm-restart-banner {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  position: relative;
-  overflow: hidden;
-  background: linear-gradient(
-    100deg,
-    color-mix(in srgb, var(--lm-amber) 14%, transparent),
-    color-mix(in srgb, var(--lm-amber) 5%, transparent) 60%,
-    transparent
-  );
-  border: 1px solid var(--lm-amber-glow);
-  border-radius: 12px;
-  padding: 12px 16px;
-  margin-bottom: 22px;
-}
-/* A slow sheen sweeping across the banner gives it a subtle "alive" feel. */
-.lm-restart-banner::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    100deg,
-    transparent 30%,
-    color-mix(in srgb, var(--lm-amber) 10%, transparent) 50%,
-    transparent 70%
-  );
-  transform: translateX(-100%);
-  animation: lm-banner-sheen 6s ease-in-out infinite;
-}
-@keyframes lm-banner-sheen {
-  0%, 100% { transform: translateX(-100%); }
-  55%, 80% { transform: translateX(100%); }
-}
-.lm-restart-banner .lm-restart-chip {
-  flex-shrink: 0;
-  width: 30px; height: 30px;
-  display: flex; align-items: center; justify-content: center;
-  border-radius: 9px;
-  color: var(--lm-amber);
-  background: var(--lm-amber-dim);
-  box-shadow: inset 0 0 0 1px var(--lm-amber-glow), 0 0 10px -2px var(--lm-amber-glow);
-}
-.lm-restart-banner .lm-restart-chip svg { animation: lm-spin 5s linear infinite; }
-.lm-restart-banner .lm-restart-text {
-  position: relative;
-  font-size: 12px;
-  line-height: 1.55;
-  color: var(--lm-text-dim);
-}
 @media (prefers-reduced-motion: reduce) {
-  .lm-restart-banner::after { animation: none; }
-  .lm-restart-banner .lm-restart-chip svg { animation: none; }
   .lm-edit .lm-card:hover,
   .lm-root .lm-settings-panel .lm-card:hover { transform: none; }
 }

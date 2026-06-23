@@ -23,6 +23,7 @@ import {
   UserCircle, MessageSquare, Link as LinkIcon, MonitorSmartphone, LayoutGrid,
   Workflow, Users, Camera, Radar, ChartColumn, Move3d, Bluetooth, ScrollText,
   Terminal, FileCode, Hexagon, ExternalLink, SlidersHorizontal, ChevronRight,
+  Server, Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -88,8 +89,10 @@ const NAV_ICONS: Record<string, LucideIcon> = {
   "settings:device": Cpu,
   "settings:wifi": Wifi,
   "settings:llm": Brain,
+  "settings:runtime": Server,
   "settings:stt": Globe,
   "settings:tts": Volume2,
+  "settings:realtime": Zap,
   "settings:voice": MicVocal,
   "settings:face": UserCircle,
   "settings:channel": MessageSquare,
@@ -282,12 +285,15 @@ export default function Monitor() {
     const hash = sectionToHash(s, targetArea);
     const path = areaPath(targetArea);
     if (targetArea !== area) {
-      navigate(`${path}#${hash}`);
+      // Preserve the query string (?debug=true, etc.) across the area switch —
+      // dropping it would, e.g., hide every debug-only Settings leaf the moment
+      // you cross from /monitor into /setting.
+      navigate(`${path}${location.search}#${hash}`);
     } else {
       window.location.hash = hash;
     }
     setSectionRaw(s);
-  }, [area, navigate]);
+  }, [area, navigate, location.search]);
 
   // React to location changes (back/forward, deep-links, path switches): keep
   // the in-memory section in sync with pathname + hash. Also normalize an empty
@@ -308,10 +314,11 @@ export default function Monitor() {
   useDocumentTitle(area === "setting" ? ["Settings", sectionLabel] : sectionLabel);
 
   // Build the real href for a nav leaf (path + serialized hash) so middle-click
-  // / open-in-new-tab land on the correct URL.
+  // / open-in-new-tab land on the correct URL. Carry the current query string so
+  // ?debug=true (and friends) survive an open-in-new-tab across areas.
   const leafHref = (id: Section): string => {
     const a = sectionArea(id);
-    return `${areaPath(a)}#${sectionToHash(id, a)}`;
+    return `${areaPath(a)}${location.search}#${sectionToHash(id, a)}`;
   };
 
   const [sys, setSys] = useState<SystemInfo | null>(null);

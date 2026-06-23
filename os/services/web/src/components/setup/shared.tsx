@@ -264,7 +264,7 @@ export function LockedPasswordField({
 // `has_*=true` — instead of showing an empty + locked password input (the
 // raw value isn't returned anymore), we hide the input entirely and tell the
 // operator to rotate via /edit. Keeps the Setup form short on re-setup.
-export function ConfiguredHint({ label, editPath = "/edit" }: { label: string; editPath?: string }) {
+export function ConfiguredHint({ label, editPath = "/setting" }: { label: string; editPath?: string }) {
   return (
     <div style={{ marginBottom: FIELD_GAP }}>
       {label && <label style={LABEL_STYLE}>{label}</label>}
