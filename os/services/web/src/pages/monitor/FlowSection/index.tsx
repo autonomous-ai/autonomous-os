@@ -77,13 +77,14 @@ export function FlowSection({
   const [sortBy, setSortBy] = useState<"newest" | "oldest" | "time_desc" | "time_asc" | "tokens_desc" | "tokens_asc">("newest");
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  // Shared button styles for the Flow Panel toolbar. Keeping them as plain
-  // objects (not className) so existing inline-style patterns in this file
-  // stay consistent — see flowDangerBtn etc. below.
+  // Shared button styles for the Flow Panel toolbar. Pair these with the
+  // `.lm-u-btn` utility class (hover/focus/active states, theme-aware) so the
+  // toolbar matches the setup/settings buttons; the inline object only sets the
+  // size + the per-variant accent (amber primary, red danger).
   const flowGhostBtn = {
     fontSize: 11, padding: "4px 10px", borderRadius: 6,
     background: "transparent", border: "1px solid var(--lm-border)",
-    color: "var(--lm-text-dim)", cursor: "pointer", fontWeight: 600,
+    color: "var(--lm-text-dim)", fontWeight: 600,
     whiteSpace: "nowrap" as const,
   };
   const flowPrimaryBtn = {
@@ -93,7 +94,7 @@ export function FlowSection({
   };
   const flowDangerBtn = {
     ...flowGhostBtn,
-    border: "1px solid rgba(248,113,113,0.35)", color: "var(--lm-red)", fontWeight: 700,
+    border: "1px solid var(--lm-red)", color: "var(--lm-red)", fontWeight: 700,
   };
   const flowSep = {
     width: 1, height: 18, background: "var(--lm-border)", margin: "0 2px",
@@ -517,11 +518,13 @@ export function FlowSection({
                 "• Rủi ro: nếu summary vô tình copy/méo rule từ SKILL.md, KNOWLEDGE.md, SOUL.md → agent sẽ theo summary (đứng đầu prompt) thay vì SKILL.md → trợ lý trả lời sai lý do không giải thích nổi.\n\n" +
                 "Click để xem: timestamp, summary chars, session file, và TOÀN VĂN summary đang điều khiển trợ lý."
               }
+              className="lm-u-btn"
               style={flowGhostBtn}
             >📋 Summary</button>
             <button
               onClick={() => setShowCanvas(true)}
               title="Open the flow canvas — a stacked timeline of all turns."
+              className="lm-u-btn"
               style={flowPrimaryBtn}
             >⬢ Canvas</button>
 
@@ -532,12 +535,14 @@ export function FlowSection({
               type="button"
               onClick={() => void downloadFlowBundle()}
               title={`Downloads 3 files: (1) server JSONL last ${FLOW_EVENTS_MAX} lines — same tail as this panel; (2) UI snapshot JSON (events + turns); (3) Agent debug payload JSONL.`}
+              className="lm-u-btn"
               style={flowGhostBtn}
             >↓ Bundle</button>
             <a
               href={`${API}/agent/flow-logs`}
               download
               title="Full day JSONL on server (all lines today — wider than the panel window)"
+              className="lm-u-btn"
               style={{ ...flowGhostBtn, textDecoration: "none", display: "inline-flex", alignItems: "center" }}
             >📅 Full day</a>
 
@@ -547,6 +552,7 @@ export function FlowSection({
             <button
               onClick={clearServerFlowLog}
               title="Clear server flow log + Agent debug logs"
+              className="lm-u-btn"
               style={flowDangerBtn}
             >🗑 Clear</button>
           </div>
@@ -589,10 +595,11 @@ export function FlowSection({
       {/* Flow diagram + turn list */}
       <div className="lm-flow-layout" style={{ display: "flex", gap: 14, flex: 1, minHeight: 0 }}>
 
-        {/* Turn history list */}
+        {/* Turn history list. Width is driven by the `.lm-flow-turns` CSS class
+            (clamps wider on big screens so the dense IN/REPLY text is readable,
+            and the canvas keeps less dead space) rather than a fixed inline px. */}
         <div className="lm-flow-turns" style={{
           ...S.card,
-          width: 280,
           flexShrink: 0,
           display: "flex",
           flexDirection: "column" as const,
@@ -623,7 +630,7 @@ export function FlowSection({
                       marginLeft: "auto", padding: "2px 8px", borderRadius: 4, fontSize: 10,
                       cursor: "pointer", fontWeight: 600,
                       border: `1px solid ${activeFilters > 0 ? "var(--lm-amber)" : "var(--lm-border)"}`,
-                      background: activeFilters > 0 ? "rgba(245,158,11,0.12)" : "transparent",
+                      background: activeFilters > 0 ? "var(--lm-amber-dim)" : "transparent",
                       color: activeFilters > 0 ? "var(--lm-amber)" : "var(--lm-text-muted)",
                       display: "inline-flex", alignItems: "center", gap: 4,
                     }}
@@ -642,11 +649,11 @@ export function FlowSection({
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
               placeholder="🔍 search input / output…"
+              className="lm-u-input"
               style={{
                 width: "100%", boxSizing: "border-box" as const,
                 padding: "5px 9px", borderRadius: 5, fontSize: 11,
-                background: "var(--lm-bg)", border: "1px solid var(--lm-border)",
-                color: "var(--lm-text)", marginBottom: 6, outline: "none",
+                marginBottom: 6, outline: "none",
               }}
             />
 
@@ -671,7 +678,7 @@ export function FlowSection({
                   <button key={f.key} onClick={() => toggleCategory(f.key)} style={{
                     padding: "3px 8px", borderRadius: 4, fontSize: 10, cursor: "pointer",
                     border: `1px solid ${border}`,
-                    background: active ? "rgba(245,158,11,0.15)" : partial ? "rgba(45,212,191,0.1)" : "transparent",
+                    background: active ? "var(--lm-amber-dim)" : partial ? "var(--lm-teal-dim)" : "transparent",
                     color, fontWeight: active || partial ? 600 : 400,
                   }}>
                     {f.icon} {f.label}
@@ -685,7 +692,7 @@ export function FlowSection({
                   <button onClick={() => toggleType("__dropped")} style={{
                     padding: "3px 8px", borderRadius: 4, fontSize: 10, cursor: "pointer",
                     border: `1px solid ${on ? "var(--lm-red)" : "var(--lm-border)"}`,
-                    background: on ? "rgba(239,68,68,0.15)" : "transparent",
+                    background: on ? "var(--lm-red-dim)" : "transparent",
                     color: on ? "var(--lm-red)" : "var(--lm-text-muted)",
                     fontWeight: on ? 600 : 400,
                   }}>
@@ -721,7 +728,7 @@ export function FlowSection({
                         style={{
                           padding: "2px 7px", borderRadius: 3, fontSize: 10, cursor: "pointer",
                           border: `1px solid ${sortBy === s.key ? "var(--lm-amber)" : "var(--lm-border)"}`,
-                          background: sortBy === s.key ? "rgba(245,158,11,0.15)" : "transparent",
+                          background: sortBy === s.key ? "var(--lm-amber-dim)" : "transparent",
                           color: sortBy === s.key ? "var(--lm-amber)" : "var(--lm-text-muted)",
                           fontWeight: sortBy === s.key ? 600 : 400,
                         }}
@@ -755,7 +762,7 @@ export function FlowSection({
                             style={{
                               padding: "1px 6px", borderRadius: 3, fontSize: 9, cursor: "pointer", fontWeight: 600,
                               border: `1px solid ${allOn ? "var(--lm-amber)" : "var(--lm-border)"}`,
-                              background: allOn ? "rgba(245,158,11,0.15)" : "transparent",
+                              background: allOn ? "var(--lm-amber-dim)" : "transparent",
                               color: allOn ? "var(--lm-amber)" : "var(--lm-text-muted)",
                               textTransform: "none", letterSpacing: 0,
                             }}
@@ -772,7 +779,7 @@ export function FlowSection({
                           <button key={type} onClick={() => toggleType(type)} title={type} style={{
                             padding: "2px 6px", borderRadius: 3, fontSize: 10, cursor: "pointer",
                             border: `1px solid ${on ? "var(--lm-teal)" : "var(--lm-border)"}`,
-                            background: on ? "rgba(45,212,191,0.12)" : "transparent",
+                            background: on ? "var(--lm-teal-dim)" : "transparent",
                             color: on ? "var(--lm-teal)" : "var(--lm-text-muted)",
                             fontWeight: on ? 600 : 400,
                           }}>

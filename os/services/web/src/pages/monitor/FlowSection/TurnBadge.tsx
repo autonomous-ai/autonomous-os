@@ -94,7 +94,7 @@ export function TurnBadge({ turn, pairTint, onViewPipeline }: { turn: Turn; pair
         {hasBroadcast && (
           <span style={{
             fontSize: 8, padding: "1px 5px", borderRadius: 3,
-            background: "#e5393518", color: "#e53935", fontWeight: 700,
+            background: "var(--lm-red-dim)", color: "var(--lm-red)", fontWeight: 700,
           }}>📢 BROADCAST</span>
         )}
         {currentUser && (() => {
@@ -145,13 +145,16 @@ export function TurnBadge({ turn, pairTint, onViewPipeline }: { turn: Turn; pair
         {formatTurnTime(turn.startTime)}
       </div>
       {/* Turn ID for tracing — label by ID origin (device-emitted vs OpenClaw-assigned UUID) */}
-      <div style={{ fontSize: 8, color: "var(--lm-text)", fontFamily: "monospace", marginBottom: 3, opacity: 0.7 }}>
+      <div style={{
+        fontSize: 8, color: "var(--lm-text)", fontFamily: "monospace", marginBottom: 3, opacity: 0.7,
+        overflowWrap: "anywhere" as const,
+      }}>
         {turn.id.startsWith("device-") ? "device id" : "agent uuid"}: {turn.id}
       </div>
       {/* Row 2: input */}
       <div style={{
-        fontSize: 10, color: "var(--lm-text-dim)", marginBottom: 3,
-        wordBreak: "break-word" as const, lineHeight: 1.4,
+        fontSize: 11.5, color: "var(--lm-text-dim)", marginBottom: 3,
+        overflowWrap: "anywhere" as const, lineHeight: 1.45,
       }}>
         <span style={{ color: "var(--lm-teal)", fontWeight: 600, marginRight: 4 }}>IN</span>
         {input || TURN_INPUT_FALLBACK}
@@ -252,30 +255,30 @@ export function TurnBadge({ turn, pairTint, onViewPipeline }: { turn: Turn; pair
       {/* Row 3: output — TTS or no reply */}
       {output === "[no reply]" ? (
         <div style={{
-          fontSize: 10, color: "var(--lm-text-muted)", marginBottom: 2,
-          wordBreak: "break-word" as const, lineHeight: 1.4, fontStyle: "italic",
+          fontSize: 11.5, color: "var(--lm-text-muted)", marginBottom: 2,
+          lineHeight: 1.45, fontStyle: "italic",
         }}>
           🚫 no reply — agent decided to do nothing
         </div>
       ) : output ? (
         <div style={{
-          fontSize: 10, color: "var(--lm-text-dim)", marginBottom: 2,
-          wordBreak: "break-word" as const, lineHeight: 1.4,
+          fontSize: 11.5, color: "var(--lm-text-dim)", marginBottom: 2,
+          overflowWrap: "anywhere" as const, lineHeight: 1.45,
         }}>
           <span style={{ color: "var(--lm-purple)", fontWeight: 600, marginRight: 4 }}>{["telegram","discord","slack","wechat","channel"].includes(turn.type) ? "💬" : "TTS 🔊"}</span>
           {output}
         </div>
       ) : turn.path === "dropped" ? (
         <div style={{
-          fontSize: 10, color: "var(--lm-red)", marginBottom: 2,
-          wordBreak: "break-word" as const, lineHeight: 1.4, fontStyle: "italic",
+          fontSize: 11.5, color: "var(--lm-red)", marginBottom: 2,
+          lineHeight: 1.45, fontStyle: "italic",
         }}>
           ⏸ dropped — agent was busy
         </div>
       ) : turn.path === "queued" ? (
         <div style={{
-          fontSize: 10, color: "var(--lm-amber)", marginBottom: 2,
-          wordBreak: "break-word" as const, lineHeight: 1.4, fontStyle: "italic",
+          fontSize: 11.5, color: "var(--lm-amber)", marginBottom: 2,
+          lineHeight: 1.45, fontStyle: "italic",
         }}>
           ⏸ queued — agent busy, will replay when idle
         </div>
@@ -290,8 +293,8 @@ export function TurnBadge({ turn, pairTint, onViewPipeline }: { turn: Turn; pair
             "Adjacent paired turns are tinted purple in the list."
           }
           style={{
-            fontSize: 10, color: "var(--lm-red)", marginBottom: 2,
-            wordBreak: "break-word" as const, lineHeight: 1.4,
+            fontSize: 11.5, color: "var(--lm-red)", marginBottom: 2,
+            overflowWrap: "anywhere" as const, lineHeight: 1.45,
             fontWeight: 700, cursor: "help",
           }}
         >
@@ -299,8 +302,8 @@ export function TurnBadge({ turn, pairTint, onViewPipeline }: { turn: Turn; pair
         </div>
       ) : turn.status === "done" ? (
         <div style={{
-          fontSize: 10, color: "var(--lm-text-muted)", marginBottom: 2,
-          wordBreak: "break-word" as const, lineHeight: 1.4, fontStyle: "italic",
+          fontSize: 11.5, color: "var(--lm-text-muted)", marginBottom: 2,
+          lineHeight: 1.45, fontStyle: "italic",
         }}>
           💤 no output — agent processed silently
         </div>
@@ -308,8 +311,8 @@ export function TurnBadge({ turn, pairTint, onViewPipeline }: { turn: Turn; pair
       {/* Row 3b: output — Hardware actions */}
       {hwOutput && (
         <div style={{
-          fontSize: 10, color: "var(--lm-text-dim)",
-          wordBreak: "break-word" as const, lineHeight: 1.4,
+          fontSize: 11.5, color: "var(--lm-text-dim)",
+          overflowWrap: "anywhere" as const, lineHeight: 1.45,
         }}>
           <span style={{ color: "var(--lm-amber)", fontWeight: 600, marginRight: 4 }}>HW 💡</span>
           {hwOutput}
