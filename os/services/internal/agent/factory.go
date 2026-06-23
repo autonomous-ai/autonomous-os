@@ -8,6 +8,7 @@ import (
 	"go.autonomous.ai/os/internal/hermes"
 	"go.autonomous.ai/os/internal/monitor"
 	"go.autonomous.ai/os/internal/openclaw"
+	"go.autonomous.ai/os/internal/picoclaw"
 	"go.autonomous.ai/os/internal/statusled"
 	"go.autonomous.ai/os/server/config"
 )
@@ -27,6 +28,7 @@ import (
 var gatewayTransport = map[string]string{
 	"openclaw": "websocket",
 	"hermes":   "sse",
+	"picoclaw": "websocket",
 }
 
 func ProvideGateway(cfg *config.Config, bus *monitor.Bus, sled *statusled.Service) domain.AgentGateway {
@@ -56,6 +58,13 @@ func ProvideGateway(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 			"source":       source,
 		})
 		return hermes.ProvideService(cfg, bus, sled)
+	case "picoclaw":
+		logBackendBanner("PICOCLAW", map[string]string{
+			"ws_url":       picoclaw.WSURL,
+			"conversation": picoclaw.Conversation,
+			"source":       source,
+		})
+		return picoclaw.ProvideService(cfg, bus, sled)
 	default:
 		effective := raw_runtime
 		if effective == "" {
@@ -85,6 +94,8 @@ func resolveRuntime(cfg *config.Config) (effective, raw, source string) {
 	switch raw {
 	case "hermes":
 		return "hermes", raw, source
+	case "picoclaw":
+		return "picoclaw", raw, source
 	default:
 		return "openclaw", raw, source
 	}

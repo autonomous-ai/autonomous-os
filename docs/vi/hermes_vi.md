@@ -23,7 +23,7 @@ nào đang chạy.
 | không set | fallback về `gateway.default` trong `devices/<type>/DEVICE.md`, rồi OpenClaw nếu cái đó cũng trống |
 | `"openclaw"` | OpenClaw (mặc định) |
 | `"hermes"` | Hermes (`hermes.ProvideService`) |
-| `"picoclaw"` | được chấp nhận là runtime hợp lệ (lệnh switch `picoclaw.setup` + `switch-runtime` cài nó), nhưng **chưa có case trong `factory.go`** — gateway client của os-server hiện fallback về OpenClaw. Việc nối `internal/picoclaw` + một case resolver là phần "thêm backend mới" còn lại (§11). |
+| `"picoclaw"` | PicoClaw (`picoclaw.ProvideService`) — client WebSocket bền; giả định service PicoClaw đã chạy sẵn. Xem `docs/picoclaw.md` + `internal/picoclaw`. |
 | giá trị khác | OpenClaw (log là `FALLBACK — unknown runtime=…`) |
 
 Khi `agent_runtime` không được set trong `config.json`, backend lấy từ

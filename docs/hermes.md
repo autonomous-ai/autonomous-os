@@ -23,7 +23,7 @@ which brain is active.
 | unset | falls back to `gateway.default` in `devices/<type>/DEVICE.md`, then OpenClaw if that is empty too |
 | `"openclaw"` | OpenClaw (default) |
 | `"hermes"` | Hermes (`hermes.ProvideService`) |
-| `"picoclaw"` | accepted as a valid runtime (the `picoclaw.setup` switch + `switch-runtime` install it), but has **no `factory.go` case yet** — os-server's gateway client currently falls back to OpenClaw. Wiring `internal/picoclaw` + a resolver case is the remaining "adding a new backend" work (§11). |
+| `"picoclaw"` | PicoClaw (`picoclaw.ProvideService`) — persistent WebSocket client; assumes the PicoClaw service is already running. See `docs/picoclaw.md` + `internal/picoclaw`. |
 | anything else | OpenClaw (logged as `FALLBACK — unknown runtime=…`) |
 
 When `agent_runtime` is unset in `config.json`, the backend is taken from the
