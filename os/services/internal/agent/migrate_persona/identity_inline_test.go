@@ -29,6 +29,90 @@ func TestBuildIdentityBlock_FilledFieldsOnly(t *testing.T) {
 	}
 }
 
+// A switch must carry the source runtime's soul into the target even when the
+// target already has a SOUL.md (here a factory-reset stub): copyPersona overwrites
+// (Overwrite=true), then the identity card is inlined on top.
+func TestMigrate_OverwritesTargetSoulOnSwitch(t *testing.T) {
+	cfgDir := t.TempDir()
+	hermesRoot := t.TempDir()
+	ws := filepath.Join(cfgDir, "workspace")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const lampSoul = "# Soul\n\nYou are **Lamp** — a living being on the desk.\n"
+	if err := os.WriteFile(filepath.Join(ws, "SOUL.md"), []byte(lampSoul), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "IDENTITY.md"), []byte("- **Name:** Hà\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Target already holds the factory-reset stub — the case that used to
+	// conflict-skip and lose the persona.
+	if err := os.WriteFile(filepath.Join(hermesRoot, "SOUL.md"), []byte("# Hermes Agent Persona\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := DefaultOptions(cfgDir, hermesRoot)
+	opts.Execute = true
+	opts.Overwrite = true // mirrors ProvidePersonaMigration (a switch is explicit)
+
+	if _, err := Run(OpenclawToHermes, opts); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(hermesRoot, "SOUL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	soul := string(got)
+	if strings.Contains(soul, "# Hermes Agent Persona") {
+		t.Errorf("stub not overwritten — soul body did not migrate:\n%s", soul)
+	}
+	if !strings.Contains(soul, "You are **Lamp**") {
+		t.Errorf("openclaw soul body missing after switch:\n%s", soul)
+	}
+	if !strings.Contains(soul, identityCardHeading) || !strings.Contains(soul, "- **Name:** Hà") {
+		t.Errorf("identity card not inlined on top of migrated soul:\n%s", soul)
+	}
+}
+
+// The reverse switch (hermes→openclaw) must NOT carry the Hermes-only identity
+// card back into the OpenClaw SOUL — OpenClaw owns the name via IDENTITY.md.
+func TestMigrate_StripsIdentityCardOnReverseSwitch(t *testing.T) {
+	cfgDir := t.TempDir()
+	hermesRoot := t.TempDir()
+	ws := filepath.Join(cfgDir, "workspace")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Hermes soul = real soul body + the inlined identity card (trailing).
+	hermesSoul := "# Soul\n\nYou are **Lamp**.\n\n" + identityCardHeading +
+		"\n\nYour owner set this — it overrides any default name or vibe above.\n\n- **Name:** Ngân\n"
+	if err := os.WriteFile(filepath.Join(hermesRoot, "SOUL.md"), []byte(hermesSoul), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := DefaultOptions(cfgDir, hermesRoot)
+	opts.Execute = true
+	opts.Overwrite = true
+
+	if _, err := Run(HermesToOpenclaw, opts); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(ws, "SOUL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	soul := string(got)
+	if strings.Contains(soul, identityCardHeading) || strings.Contains(soul, "Ngân") {
+		t.Errorf("identity card leaked back into openclaw soul:\n%s", soul)
+	}
+	if !strings.Contains(soul, "You are **Lamp**") {
+		t.Errorf("soul body lost on reverse switch:\n%s", soul)
+	}
+}
+
 func TestBuildIdentityBlock_MissingFile(t *testing.T) {
 	if got := buildIdentityBlock(filepath.Join(t.TempDir(), "nope.md")); got != "" {
 		t.Fatalf("expected empty for missing file, got %q", got)

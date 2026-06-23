@@ -107,6 +107,15 @@ func ProvidePersonaMigration(cfg *config.Config) *PersonaMigration {
 
 	opts := migratepersona.DefaultOptions(cfg.OpenclawConfigDir, hermesHome)
 	opts.Execute = true // a runtime switch is an explicit user action — apply it
+	// Overwrite the destination SOUL.md too: a switch means "carry the persona I
+	// was just using into the runtime I'm switching to", so the source runtime's
+	// soul is the source of truth and must win even when the target already has a
+	// SOUL.md (a prior session, the claw-migrate default, or a factory-reset stub).
+	// Without this, copyPersona conflict-skips any existing target soul and the
+	// persona never actually migrates after the very first switch. copyPersona
+	// backs up the replaced file (.bak-<nano>) first, so this stays recoverable.
+	// Only SOUL.md is affected — memory files always entry-merge regardless.
+	opts.Overwrite = true
 
 	pm := &PersonaMigration{
 		Current:   current,
