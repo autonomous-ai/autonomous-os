@@ -50,11 +50,18 @@ type inputMessage struct {
 // text (caller may want for sync send-and-wait paths), and any reported
 // session UUID.
 type streamResult struct {
-	ResponseID string
-	SessionID  string
-	FinalText  string
-	Errored    bool
-	ErrorText  string
+	// DeviceRunID is the device-side idempotency key (device-chat-N-…) the turn
+	// was started with. The translator emits THIS as the runId on every WSEvent
+	// (lifecycle/tool/assistant/chat) instead of Hermes's own response.id, so the
+	// web monitor — which correlates replies by the runId returned from its POST —
+	// matches them, exactly like OpenClaw 5.4+ echoing the idempotencyKey. Without
+	// it, events carry resp_… and the web never renders the hermes reply.
+	DeviceRunID string
+	ResponseID  string
+	SessionID   string
+	FinalText   string
+	Errored     bool
+	ErrorText   string
 }
 
 // postStream issues POST /v1/responses with stream:true and reads the SSE
@@ -64,7 +71,7 @@ type streamResult struct {
 // The HTTP request is built with NO client-side timeout (the client's
 // Timeout is 0); ctx is the only cancellation handle. Long agent turns are
 // expected (minutes is normal), so a fixed timeout would cut them short.
-func (s *Service) postStream(ctx context.Context, body streamRequest, dispatch func(domain.WSEvent)) (streamResult, error) {
+func (s *Service) postStream(ctx context.Context, deviceRunID string, body streamRequest, dispatch func(domain.WSEvent)) (streamResult, error) {
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
 		return streamResult{}, fmt.Errorf("marshal request: %w", err)
@@ -98,20 +105,20 @@ func (s *Service) postStream(ctx context.Context, body streamRequest, dispatch f
 		return streamResult{}, fmt.Errorf("hermes /v1/responses status %d: %s", resp.StatusCode, truncRunes(string(raw), 400))
 	}
 
-	return s.readSSE(ctx, resp.Body, dispatch)
+	return s.readSSE(ctx, deviceRunID, resp.Body, dispatch)
 }
 
 // readSSE consumes the SSE byte stream line-by-line into (event, data) pairs
 // and forwards each to translateAndDispatch. Buffer is sized for the largest
 // tool output a single function_call_output frame might carry (8MB).
-func (s *Service) readSSE(ctx context.Context, body io.Reader, dispatch func(domain.WSEvent)) (streamResult, error) {
+func (s *Service) readSSE(ctx context.Context, deviceRunID string, body io.Reader, dispatch func(domain.WSEvent)) (streamResult, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 1<<20), 8<<20)
 
 	var (
 		currentEvent string
 		dataBuf      strings.Builder
-		result       streamResult
+		result       = streamResult{DeviceRunID: deviceRunID}
 	)
 
 	flush := func() {

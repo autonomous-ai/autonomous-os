@@ -13,6 +13,22 @@ import (
 // frame timestamp convention).
 func nowUnixMs() int64 { return time.Now().UnixMilli() }
 
+// emitRunID returns the runId the translator stamps on every WSEvent. It is the
+// device-side idempotency key (device-chat-N-…) so downstream — the web monitor
+// especially — correlates the reply exactly like OpenClaw 5.4+ echoing the
+// idempotencyKey. Falls back to Hermes's response.id only if the device key is
+// somehow absent (e.g. a non-runStream caller).
+func (s *Service) emitRunID(result *streamResult, respID string) string {
+	if result != nil && result.DeviceRunID != "" {
+		return result.DeviceRunID
+	}
+	if respID != "" {
+		return respID
+	}
+	id, _ := s.lastResponseID.Load().(string)
+	return id
+}
+
 // hermesUsage decodes the Hermes /v1/responses usage block (snake_case) so we
 // can rewrap it into domain.TokenUsage (camelCase) without exporting Hermes-
 // specific types.
@@ -63,11 +79,11 @@ func (s *Service) translateSSE(eventName, data string, dispatch func(domain.WSEv
 	case "response.created":
 		s.handleResponseCreated(probe, dispatch, result)
 	case "response.output_item.added":
-		s.handleOutputItemAdded(probe, dispatch)
+		s.handleOutputItemAdded(probe, dispatch, result)
 	case "response.output_item.done":
 		s.handleOutputItemDone(probe, dispatch)
 	case "response.output_text.delta":
-		s.handleOutputTextDelta(probe, dispatch)
+		s.handleOutputTextDelta(probe, dispatch, result)
 	case "response.output_text.done":
 		// Final text already streamed via deltas; the consumer will get the
 		// authoritative copy via response.completed.
@@ -108,11 +124,12 @@ func (s *Service) handleResponseCreated(probe map[string]json.RawMessage, dispat
 
 	slog.Info("hermes <<< SSE response.created (turn started)", "component", "hermes",
 		"responseID", respID,
+		"runId", s.emitRunID(result, respID),
 		"sessionID", s.GetSessionKey(),
 		"model", inner.Response.Model)
 
 	payload, _ := json.Marshal(map[string]any{
-		"runId":      respID,
+		"runId":      s.emitRunID(result, respID),
 		"sessionKey": s.GetSessionKey(),
 		"stream":     "lifecycle",
 		"data": map[string]any{
@@ -127,7 +144,7 @@ func (s *Service) handleResponseCreated(probe map[string]json.RawMessage, dispat
 //   - function_call         → tool.start
 //   - function_call_output  → tool.end (carries the result)
 //   - message               → no event (text comes via output_text.delta)
-func (s *Service) handleOutputItemAdded(probe map[string]json.RawMessage, dispatch func(domain.WSEvent)) {
+func (s *Service) handleOutputItemAdded(probe map[string]json.RawMessage, dispatch func(domain.WSEvent), result *streamResult) {
 	var inner struct {
 		OutputIndex int `json:"output_index"`
 		Item        struct {
@@ -143,7 +160,7 @@ func (s *Service) handleOutputItemAdded(probe map[string]json.RawMessage, dispat
 		return
 	}
 
-	runID, _ := s.lastResponseID.Load().(string)
+	runID := s.emitRunID(result, "")
 
 	switch inner.Item.Type {
 	case "function_call":
@@ -208,14 +225,14 @@ func (s *Service) handleOutputItemDone(_ map[string]json.RawMessage, _ func(doma
 }
 
 // handleOutputTextDelta streams assistant deltas.
-func (s *Service) handleOutputTextDelta(probe map[string]json.RawMessage, dispatch func(domain.WSEvent)) {
+func (s *Service) handleOutputTextDelta(probe map[string]json.RawMessage, dispatch func(domain.WSEvent), result *streamResult) {
 	var inner struct {
 		Delta string `json:"delta"`
 	}
 	if err := jsonRemarshal(probe, &inner); err != nil || inner.Delta == "" {
 		return
 	}
-	runID, _ := s.lastResponseID.Load().(string)
+	runID := s.emitRunID(result, "")
 	// Delta logging stays at Debug — a single assistant reply can emit 100+
 	// deltas and would drown the log. Final text is logged once at completed.
 	slog.Debug("hermes <<< SSE delta", "component", "hermes",
@@ -251,11 +268,14 @@ func (s *Service) handleResponseCompleted(probe map[string]json.RawMessage, disp
 	}
 	_ = jsonRemarshal(probe, &inner)
 
-	runID := inner.Response.ID
-	if runID == "" {
-		runID, _ = s.lastResponseID.Load().(string)
+	respID := inner.Response.ID
+	if respID == "" {
+		respID, _ = s.lastResponseID.Load().(string)
 	}
-	result.ResponseID = runID
+	result.ResponseID = respID
+	// emitID is what downstream/web correlate on (device runId); respID stays for
+	// Hermes-side logs only.
+	emitID := s.emitRunID(result, respID)
 
 	// Collect every message content[].text part as the authoritative final text.
 	var b strings.Builder
@@ -275,7 +295,8 @@ func (s *Service) handleResponseCompleted(probe map[string]json.RawMessage, disp
 	usage := inner.Response.Usage
 	logArgs := []any{
 		"component", "hermes",
-		"runID", runID,
+		"runID", respID,
+		"emitRunID", emitID,
 		"finalLen", len(finalText),
 		"final", truncRunes(finalText, 500),
 	}
@@ -290,7 +311,7 @@ func (s *Service) handleResponseCompleted(probe map[string]json.RawMessage, disp
 	// (a) Emit chat.final so handler_events.go's session.message handler picks
 	//     up the assistant reply for TTS / [HW:/...] dispatch.
 	chatMsg, _ := json.Marshal(map[string]any{
-		"runId":      runID,
+		"runId":      emitID,
 		"sessionKey": s.GetSessionKey(),
 		"state":      "final",
 		"role":       "assistant",
@@ -301,7 +322,7 @@ func (s *Service) handleResponseCompleted(probe map[string]json.RawMessage, disp
 	// (b) Emit lifecycle.end with usage so the busy flag clears and the run
 	//     trace closes out.
 	endPayload, _ := json.Marshal(map[string]any{
-		"runId":      runID,
+		"runId":      emitID,
 		"sessionKey": s.GetSessionKey(),
 		"stream":     "lifecycle",
 		"data": map[string]any{
@@ -338,15 +359,16 @@ func (s *Service) handleResponseFailed(probe map[string]json.RawMessage, dispatc
 	result.Errored = true
 	result.ErrorText = msg
 
-	runID := inner.Response.ID
-	if runID == "" {
-		runID, _ = s.lastResponseID.Load().(string)
+	respID := inner.Response.ID
+	if respID == "" {
+		respID, _ = s.lastResponseID.Load().(string)
 	}
+	emitID := s.emitRunID(result, respID)
 
 	slog.Warn("hermes <<< SSE response.failed", "component", "hermes",
-		"runID", runID, "error", msg)
+		"runID", respID, "emitRunID", emitID, "error", msg)
 	payload, _ := json.Marshal(map[string]any{
-		"runId":      runID,
+		"runId":      emitID,
 		"sessionKey": s.GetSessionKey(),
 		"stream":     "lifecycle",
 		"data": map[string]any{

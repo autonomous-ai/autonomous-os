@@ -943,10 +943,18 @@ func (s *Service) RePushRealtimeConfig() {
 // DEVICE.md gateway.default, else openclaw. Used by GET /api/device/agent-runtime
 // so the web settings page shows what is actually running.
 func (s *Service) CurrentAgentRuntime() string {
-	if r := strings.ToLower(strings.TrimSpace(s.config.AgentRuntime)); r != "" {
+	return CurrentAgentRuntimeFromConfig(s.config)
+}
+
+// CurrentAgentRuntimeFromConfig resolves the effective agentic backend without a
+// Service receiver, so callers holding only a *config.Config (e.g. the MQTT info
+// handler) can report what is actually running. Same precedence as factory.go:
+// config.agent_runtime, else DEVICE.md gateway.default, else openclaw.
+func CurrentAgentRuntimeFromConfig(cfg *config.Config) string {
+	if r := strings.ToLower(strings.TrimSpace(cfg.AgentRuntime)); r != "" {
 		return r
 	}
-	if g := GatewayDefault(s.config.DeviceTypeOrDefault()); g != "" {
+	if g := GatewayDefault(cfg.DeviceTypeOrDefault()); g != "" {
 		return strings.ToLower(strings.TrimSpace(g))
 	}
 	return domain.AgentRuntimeOpenClaw

@@ -52,9 +52,16 @@ The OS server uses MQTT to communicate with the backend server (status reporting
   "version": "0.0.35",
   "id": "{DeviceID}",
   "mac": "{MAC address}",
-  "time": "2026-03-26T17:00:00Z"
+  "time": "2026-03-26T17:00:00Z",
+  "agent_runtime": "openclaw"
 }
 ```
+
+`agent_runtime` is the **effective** agentic backend currently running
+(`openclaw` | `hermes` | `picoclaw`) — resolved as `config.agent_runtime`, else
+the device's `DEVICE.md` `gateway.default`, else `openclaw`. The response also
+carries these optional fields when known: `hal_version`, `openclaw_version`,
+`local_ip`, `tts_provider`, `tts_voice`, `stt_language`.
 
 ### `add_channel` — Add messaging channel
 

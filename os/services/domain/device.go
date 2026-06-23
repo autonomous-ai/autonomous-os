@@ -483,6 +483,7 @@ type MQTTInfoResponse struct {
 	STTLanguage     string `json:"stt_language,omitempty"`
 	HalVersion      string `json:"hal_version,omitempty"`
 	OpenClawVersion string `json:"openclaw_version,omitempty"`
+	AgentRuntime    string `json:"agent_runtime,omitempty"`
 	LocalIP         string `json:"local_ip,omitempty"`
 }
 

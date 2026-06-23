@@ -15,6 +15,7 @@ func (h *DeviceMQTTHandler) handleInfo(_ domain.MQTTMessage) error {
 		msg.HalVersion = v
 	}
 	msg.OpenClawVersion = agenthttp.GetOpenClawVersion()
+	msg.AgentRuntime = device.CurrentAgentRuntimeFromConfig(h.config)
 	if ip, err := h.networkService.GetCurrentIP(); err == nil {
 		msg.LocalIP = ip
 	}
@@ -23,6 +24,7 @@ func (h *DeviceMQTTHandler) handleInfo(_ domain.MQTTMessage) error {
 		"version", msg.Version,
 		"hal_version", msg.HalVersion,
 		"openclaw_version", msg.OpenClawVersion,
+		"agent_runtime", msg.AgentRuntime,
 		"local_ip", msg.LocalIP,
 		"tts_provider", msg.TTSProvider,
 		"tts_voice", msg.TTSVoice,

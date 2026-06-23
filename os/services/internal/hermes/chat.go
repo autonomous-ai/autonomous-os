@@ -184,7 +184,7 @@ func (s *Service) runStream(runID string, body streamRequest) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	res, err := s.postStream(ctx, body, dispatch)
+	res, err := s.postStream(ctx, runID, body, dispatch)
 	if err != nil {
 		slog.Error("hermes stream error", "component", "hermes", "runID", runID, "error", err)
 		// Make sure busy clears so the next sensing/voice round can proceed.
