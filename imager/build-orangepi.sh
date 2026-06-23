@@ -309,17 +309,8 @@ timeout 60 openclaw onboard --non-interactive --accept-risk --skip-health || \\
 openclaw plugins install @openclaw/discord@${OPENCLAW_VERSION} --force 2>&1 || echo "WARN: discord plugin install failed (non-fatal)"
 openclaw plugins install @openclaw/slack@${OPENCLAW_VERSION} --force 2>&1 || echo "WARN: slack plugin install failed (non-fatal)"
 
-# ── Hermes prereq — pre-bake yq so install.sh runs offline on first switch ───
-# Full Hermes install happens at runtime via switch-runtime (uses the install.sh
-# embedded in os-server). yq is the only dep install.sh needs that apt doesn't
-# provide — bake it here so the first switch doesn't need GitHub.
-echo "[stage] Hermes prereq — yq"
-if ! command -v yq >/dev/null 2>&1; then
-  curl -fsSL "https://github.com/mikefarah/yq/releases/download/v4.46.1/yq_linux_arm64" \
-    -o /usr/local/bin/yq
-  chmod +x /usr/local/bin/yq
-fi
-yq --version || true
+curl -fsSL "https://github.com/mikefarah/yq/releases/download/v4.46.1/yq_linux_arm64" -o /usr/local/bin/yq
+chmod +x /usr/local/bin/yq
 
 # ── uv (Python pkg mgr for HAL) ───────────────────────────────────────────
 echo "[stage] uv"
