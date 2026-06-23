@@ -1,6 +1,7 @@
 declare const __WEB_VERSION__: string;
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { logout } from "@/lib/api";
 import { useTheme } from "@/lib/useTheme";
 import { usePolling } from "../../hooks/usePolling";
 import { useEventSource } from "../../hooks/useEventSource";
@@ -23,7 +24,7 @@ import {
   UserCircle, MessageSquare, Link as LinkIcon, MonitorSmartphone, LayoutGrid,
   Workflow, Users, Camera, Radar, ChartColumn, Move3d, Bluetooth, ScrollText,
   Terminal, FileCode, Hexagon, ExternalLink, SlidersHorizontal, ChevronRight,
-  Server, Zap,
+  Server, Zap, LogOut,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -42,6 +43,7 @@ import { ChatSection } from "./ChatSection";
 import { FaceOwnersSection } from "./FaceOwnersSection";
 import { BluetoothSection } from "./BluetoothSection";
 import { CliSection } from "./CliSection";
+import { ConfirmDialog } from "./components";
 import { SettingsPanel } from "@/components/edit/SettingsPanel";
 import type { SettingsSectionId } from "@/components/edit/SettingsPanel";
 
@@ -313,6 +315,17 @@ export default function Monitor() {
   const sectionLabel = sectionLeaf?.label ?? "Monitor";
   useDocumentTitle(area === "setting" ? ["Settings", sectionLabel] : sectionLabel);
 
+  // Clear the session (token + os_session cookie via POST /api/logout), then
+  // send the user to /login. We navigate even if the network call fails — the
+  // local token is already cleared, so the session is effectively gone client-side.
+  const handleLogout = useCallback(async () => {
+    try {
+      await logout();
+    } finally {
+      navigate("/login" + location.search);
+    }
+  }, [navigate, location.search]);
+
   // Build the real href for a nav leaf (path + serialized hash) so middle-click
   // / open-in-new-tab land on the correct URL. Carry the current query string so
   // ?debug=true (and friends) survive an open-in-new-tab across areas.
@@ -480,6 +493,7 @@ export default function Monitor() {
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const closeSidebar = () => setSidebarOpen(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
   return (
     <div className={`lm-root ${themeClass}`} style={S.root}>
@@ -569,8 +583,16 @@ export default function Monitor() {
           color: "var(--lm-text-muted)",
           display: "flex",
           flexDirection: "column",
-          gap: 3,
+          gap: 8,
         }}>
+          <button
+            onClick={() => setShowLogoutConfirm(true)}
+            className="lm-logout-btn"
+            title="Log out of this device"
+          >
+            <LogOut size={15} strokeWidth={1.9} />
+            Logout
+          </button>
           {lastUpdate && <div>Updated {lastUpdate}</div>}
         </div>
       </aside>
@@ -694,6 +716,17 @@ export default function Monitor() {
           </div>
         </div>
       </main>
+
+      {showLogoutConfirm && (
+        <ConfirmDialog
+          title="Log out?"
+          message="You'll need to sign in again with the admin password to access this device."
+          confirmLabel="Logout"
+          destructive
+          onConfirm={() => { setShowLogoutConfirm(false); handleLogout(); }}
+          onCancel={() => setShowLogoutConfirm(false)}
+        />
+      )}
     </div>
   );
 }
