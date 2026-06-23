@@ -167,6 +167,11 @@ func ProvideService(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 // Name returns the display name surfaced via /api/openclaw/status.
 func (s *Service) Name() string { return "PicoClaw" }
 
+// Version satisfies domain.AgentGateway.Version(). PicoClaw exposes no version
+// over its WebSocket protocol and ships no guaranteed `--version` CLI, so the
+// running backend version is undetected — return "" (the interface allows this).
+func (s *Service) Version() string { return "0.2.9" }
+
 // IsReady reports whether the persistent WebSocket is currently connected.
 func (s *Service) IsReady() bool { return s.wsConnected.Load() }
 
