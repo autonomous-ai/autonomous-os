@@ -309,32 +309,8 @@ timeout 60 openclaw onboard --non-interactive --accept-risk --skip-health || \\
 openclaw plugins install @openclaw/discord@${OPENCLAW_VERSION} --force 2>&1 || echo "WARN: discord plugin install failed (non-fatal)"
 openclaw plugins install @openclaw/slack@${OPENCLAW_VERSION} --force 2>&1 || echo "WARN: slack plugin install failed (non-fatal)"
 
-# ── Hermes agentic backend (pre-install) ─────────────────────────────────────
-# Pre-bake Hermes so switch-runtime skips the CDN download on first switch.
-# gateway start --system requires live systemd (absent in chroot) and will fail;
-# we run with || true then manually create the switch-runtime discovery files
-# (service + verify) that install.sh writes AFTER gateway start.
-echo "[stage] Hermes pre-install"
-HERMES_INSTALLER_TMP=\$(mktemp)
-if retry "curl -fsSL https://cdn.autonomous.ai/os/runtimes/hermes/install.sh -o '\$HERMES_INSTALLER_TMP'" 3; then
-  chmod +x "\$HERMES_INSTALLER_TMP"
-  bash "\$HERMES_INSTALLER_TMP" || true
-  if [ -x /usr/local/bin/hermes ]; then
-    mkdir -p /usr/local/lib/os-runtimes/hermes
-    echo "hermes-gateway" > /usr/local/lib/os-runtimes/hermes/service
-    cat > /usr/local/lib/os-runtimes/hermes/verify <<'VERIFY_HERMES'
-#!/usr/bin/env bash
-command -v hermes >/dev/null 2>&1
-VERIFY_HERMES
-    chmod +x /usr/local/lib/os-runtimes/hermes/verify
-    echo "[stage] Hermes pre-install OK — binary ready, gateway starts on first switch"
-  else
-    echo "[stage] WARN: hermes binary not found after install (non-fatal)"
-  fi
-else
-  echo "[stage] WARN: hermes installer fetch failed (non-fatal)"
-fi
-rm -f "\$HERMES_INSTALLER_TMP"
+curl -fsSL "https://github.com/mikefarah/yq/releases/download/v4.46.1/yq_linux_arm64" -o /usr/local/bin/yq
+chmod +x /usr/local/bin/yq
 
 # ── uv (Python pkg mgr for HAL) ───────────────────────────────────────────
 echo "[stage] uv"
