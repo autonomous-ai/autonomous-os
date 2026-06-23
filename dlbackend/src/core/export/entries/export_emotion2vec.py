@@ -1,16 +1,17 @@
-"""Export Emotion2Vec SER model to ONNX."""
+"""Export Emotion2Vec (FunASR) to ONNX.
+
+Uses FunASR's AutoModel to load the model with correct weights,
+then wraps with softmax and exports to ONNX.
+"""
 
 import argparse
 import logging
-import os
-import types
 from pathlib import Path
 
 import torch
 from typing_extensions import override
 
 from core.enums.files import ModelEnum
-from core.export.components.emotion2vec import Emotion2vec
 from core.export.utils.evaluation import evaluate_audio
 from core.export.utils.onnx import run_shape_inference
 from core.utils.files import get_default_model_path
@@ -19,7 +20,8 @@ logger: logging.Logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-def _normalize_label(raw):
+def _normalize_label(raw: str) -> str | None:
+    """Extract English label from bilingual token (e.g. '开心/happy' → 'happy')."""
     line = raw.strip()
     if not line:
         return None
@@ -43,56 +45,45 @@ def _materialize_labels(token_list: list[str], output_dir: Path):
     return labels_dest
 
 
-def _export_forward(self, x):
-    with torch.no_grad():
-        if self.cfg.normalize:
-            mean = torch.mean(x, dim=1, keepdim=True)
-            var = torch.var(x, dim=1, keepdim=True, unbiased=False)
-            x = (x - mean) / torch.sqrt(var + 1e-5)
-            x = x.view(x.shape[0], -1)
-
-        res = self._original_forward(
-            source=x,
-            padding_mask=None,
-            mask=False,
-            features_only=True,
-            remove_extra_tokens=True,
-        )
-        h = res["x"]
-        if self.proj is None:
-            return h
-
-        z = h.mean(dim=1)
-        logits = self.proj(z)
-        if getattr(self, "_export_logit_bias", None) is not None:
-            logits = logits + self._export_logit_bias.to(device=logits.device, dtype=logits.dtype)
-        return logits
-
-
-def _rebuild_for_export(model, token_list: list[str] | None = None):
-    model._original_forward = model.forward
-
-    if getattr(model, "proj", None) is not None:
-        n = model.proj.out_features
-        bias = torch.zeros(n, dtype=torch.float32)
-        if token_list is not None and len(token_list) == n:
-            for i, lab in enumerate(token_list):
-                if str(lab).startswith("unuse"):
-                    bias[i] = -1e4
-        model.register_buffer("_export_logit_bias", bias)
-
-    model.forward = types.MethodType(_export_forward, model)
-    return model
-
-
 class Emotion2VecONNX(torch.nn.Module):
-    def __init__(self, model: torch.nn.Module):
+    """Wraps FunASR emotion2vec model for ONNX export.
+
+    Applies layer_norm (if cfg.normalize), runs the model, applies proj head,
+    masks unused tokens, and applies softmax — matching FunASR's inference path.
+    """
+
+    def __init__(self, model: torch.nn.Module, token_list: list[str]):
         super().__init__()
         self.model = model
+        self.normalize = model.cfg.normalize
+
+        # Build bias to mask "unused" tokens with -inf before softmax
+        n = model.proj.out_features
+        bias = torch.zeros(n, dtype=torch.float32)
+        for i, lab in enumerate(token_list):
+            if str(lab).startswith("unuse"):
+                bias[i] = -1e4
+        self.register_buffer("logit_bias", bias)
 
     @override
-    def forward(self, x: torch.Tensor):
-        return torch.softmax(self.model(x), dim=-1)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Instance norm on raw waveform (equivalent to F.layer_norm(x, x.shape)
+        # but ONNX-traceable since normalized_shape must be static)
+        if self.normalize:
+            mean = torch.mean(x, dim=-1, keepdim=True)
+            var = torch.var(x, dim=-1, keepdim=True, unbiased=False)
+            x = (x - mean) / torch.sqrt(var + 1e-5)
+        x = x.view(x.shape[0], -1)
+
+        # Extract features
+        feats = self.model.extract_features(x, padding_mask=None)
+        h = feats["x"]  # [B, T, D]
+
+        # Pool + classify
+        z = h.mean(dim=1)  # [B, D]
+        logits = self.model.proj(z)  # [B, C]
+        logits = logits + self.logit_bias
+        return torch.softmax(logits, dim=-1)
 
 
 def export(model_id: str, output: str | None = None, opset: int = 17):
@@ -100,8 +91,16 @@ def export(model_id: str, output: str | None = None, opset: int = 17):
     dest = Path(output).expanduser().resolve()
     dest.parent.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Loading weights from HuggingFace (model_id={model_id})...")
-    net, token_list = Emotion2vec.load_from_hf(model_id)
+    logger.info(f"Loading model via FunASR (model_id={model_id})...")
+    from funasr import AutoModel
+
+    fm = AutoModel(model=model_id, hub="hf", disable_update=True)
+    net = fm.model
+    net.eval()
+
+    token_list = fm.kwargs.get("tokenizer").token_list if fm.kwargs.get("tokenizer") else []
+    if not token_list:
+        logger.warning("No token list found — labels.txt will not be generated")
 
     if getattr(net, "proj", None) is None:
         raise RuntimeError(
@@ -109,25 +108,18 @@ def export(model_id: str, output: str | None = None, opset: int = 17):
             "Use a variant with a classifier (e.g. emotion2vec/emotion2vec_plus_large)."
         )
 
+    wrapper = Emotion2VecONNX(net, token_list)
+    wrapper.eval()
+
+    # 30s dummy so ALiBi bias is traced large enough for real audio
+    dummy = torch.randn(1, 16000 * 30)
+
+    logger.info(f"Exporting to {dest}...")
     with torch.no_grad():
-        rebuilt = _rebuild_for_export(net, token_list=token_list)
-        rebuilt.eval()
-
-        wrapper = Emotion2VecONNX(rebuilt)
-        wrapper.eval()
-
-        # Use a long dummy input (30 seconds) so the ALiBi attention bias
-        # is traced at a size large enough to handle real audio.  Shorter
-        # inputs at runtime are handled by the [:T, :T] slicing inside the
-        # attention module.
-        dummy = torch.randn(1, 16000 * 30)
-        intermediate = dest.parent / "emotion2vec.onnx"
-
-        logger.info(f"Exporting to {dest}...")
         torch.onnx.export(
             wrapper,
             (dummy,),
-            str(intermediate),
+            str(dest),
             do_constant_folding=True,
             input_names=["audio"],
             output_names=["probs"],
@@ -137,11 +129,6 @@ def export(model_id: str, output: str | None = None, opset: int = 17):
             },
             opset_version=opset,
         )
-
-    if intermediate != dest:
-        if dest.exists():
-            dest.unlink()
-        os.replace(intermediate, dest)
 
     run_shape_inference(dest)
     _materialize_labels(token_list, dest.parent)
