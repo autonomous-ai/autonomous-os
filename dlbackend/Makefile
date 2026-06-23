@@ -172,11 +172,11 @@ start-nginx-ssl: gen-ssl-cert stop-nginx
 
 start-runpod-dlserver: install stop-runpod-dlserver
 	@command -v multilog >/dev/null || apt-get install -y daemontools
-	@mkdir -p /workspace/logs/dlserver/stderr
 	@$(SET_TRT_LD_PATH); nohup bash scripts/run-with-restart.sh \
-		--pid-file $(DLSERVER_PID) --wrapper-pid-file $(DLSERVER_WRAPPER_PID) --cooldown 5 -- \
+		--pid-file $(DLSERVER_PID) --wrapper-pid-file $(DLSERVER_WRAPPER_PID) --cooldown 5 \
+		--log-dir /workspace/logs/dlserver -- \
 		python -m dlserver --host 127.0.0.1 --port $(DLSERVER_PORT) --log-dir /workspace/logs/dlserver \
-		</dev/null 2>&1 | multilog t s1048576 n3 /workspace/logs/dlserver/stderr &
+		</dev/null &
 	@echo "dlserver started on port $(DLSERVER_PORT) (auto-restart enabled)"
 
 stop-runpod-dlserver:
@@ -194,11 +194,11 @@ stop-runpod-dlserver:
 
 start-runpod-lbserver: install-lb stop-runpod-lbserver
 	@command -v multilog >/dev/null || apt-get install -y daemontools
-	@mkdir -p /workspace/logs/lbserver/stderr
 	@nohup bash scripts/run-with-restart.sh \
-		--pid-file $(LBSERVER_PID) --wrapper-pid-file $(LBSERVER_WRAPPER_PID) --cooldown 5 -- \
+		--pid-file $(LBSERVER_PID) --wrapper-pid-file $(LBSERVER_WRAPPER_PID) --cooldown 5 \
+		--log-dir /workspace/logs/lbserver -- \
 		python -m lbserver --host 127.0.0.1 --port $(LBSERVER_PORT) --log-dir /workspace/logs/lbserver \
-		</dev/null 2>&1 | multilog t s1048576 n3 /workspace/logs/lbserver/stderr &
+		</dev/null &
 	@echo "lbserver started on port $(LBSERVER_PORT) (auto-restart enabled)"
 
 stop-runpod-lbserver:

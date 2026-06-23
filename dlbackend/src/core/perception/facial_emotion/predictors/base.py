@@ -142,8 +142,7 @@ class EmotionRecognizer(PredictorBase[cv2t.MatLike, RawEmotionDetection]):
         input_np = (input_np / 255.0 - self.MEAN) / self.STD
         input_np = input_np.transpose(0, 3, 1, 2)  # (N, C, H, W)
 
-        with self._gpu_lock:        
-            raw_outputs: list[npt.NDArray[np.float32]] = self._session.run(None, {self.ONNX_INPUT_NAME: input_np})
+        raw_outputs: list[npt.NDArray[np.float32]] = self._session.run(None, {self.ONNX_INPUT_NAME: input_np})
 
         return self._postprocess_batch(raw_outputs, len(input))
 

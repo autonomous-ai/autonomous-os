@@ -5,6 +5,7 @@ import numpy as np
 import onnxruntime as ort
 
 from config import settings
+from core.perception.base.predictor import gpu_lock
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +49,9 @@ def prepare_ort_session(
                     "trt_timing_cache_enable": True,
                     "trt_timing_cache_path": trt_cache,
                     "trt_builder_optimization_level": 3,
-                    "trt_max_workspace_size": 1 << 30,
+                    "trt_max_workspace_size": 2 << 30,
                     "trt_layer_norm_fp32_fallback": True,
+                    "trt_cuda_graph_enable": False,
                 },
             )
         )
@@ -69,18 +71,19 @@ def prepare_ort_session(
 
     providers.append("CPUExecutionProvider")
 
-    session = ort.InferenceSession(str(model_path), sess_options=opts, providers=providers)
-    logger.info(
-        "ONNX session created for %s — providers: %s",
-        model_path.name,
-        [p if isinstance(p, str) else p[0] for p in session.get_providers()],
-    )
+    with gpu_lock:
+        session = ort.InferenceSession(str(model_path), sess_options=opts, providers=providers)
+        logger.info(
+            "ONNX session created for %s — providers: %s",
+            model_path.name,
+            [p if isinstance(p, str) else p[0] for p in session.get_providers()],
+        )
 
-    if warmup_inputs is not None:
-        n_warmup = 3
-        logger.info("Warming up ONNX session for %s (%d runs)", model_path.name, n_warmup)
-        for _ in range(n_warmup):
-            session.run(None, warmup_inputs)
-        logger.info("Warmup complete for %s", model_path.name)
+        if warmup_inputs is not None:
+            n_warmup = 3
+            logger.info("Warming up ONNX session for %s (%d runs)", model_path.name, n_warmup)
+            for _ in range(n_warmup):
+                session.run(None, warmup_inputs)
+            logger.info("Warmup complete for %s", model_path.name)
 
     return session

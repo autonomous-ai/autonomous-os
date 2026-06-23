@@ -46,7 +46,7 @@ def _output(output_dir: Path | None, filename: str) -> str | None:
     return str(output_dir / filename)
 
 
-def export_all(output_dir: Path | None = None):
+def export_all(output_dir: Path | None = None, opset: int = 17):
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -56,19 +56,25 @@ def export_all(output_dir: Path | None = None):
     for n in (5, 8):
         results[f"emonet_{n}"] = _run(
             f"emonet_{n}",
-            lambda n=n: export_emonet.export(n, output=_output(output_dir, f"emonet_{n}.onnx")),
+            lambda n=n: export_emonet.export(
+                n, output=_output(output_dir, f"emonet_{n}.onnx"), opset=opset,
+            ),
         )
 
     # POSTER V2
     results["posterv2"] = _run(
         "posterv2",
-        lambda: export_posterv2.export(output=_output(output_dir, "posterv2_7cls.onnx")),
+        lambda: export_posterv2.export(
+            output=_output(output_dir, "posterv2_7cls.onnx"), opset=opset,
+        ),
     )
 
     # TCPFormer
     results["tcpformer"] = _run(
         "tcpformer",
-        lambda: export_tcpformer.export(output=_output(output_dir, "tcpformer_h36m_243.onnx")),
+        lambda: export_tcpformer.export(
+            output=_output(output_dir, "tcpformer_h36m_243.onnx"), opset=opset,
+        ),
     )
 
     # Emotion2Vec
@@ -77,6 +83,7 @@ def export_all(output_dir: Path | None = None):
         lambda: export_emotion2vec.export(
             "emotion2vec/emotion2vec_plus_large",
             output=_output(output_dir, "emotion2vec.onnx"),
+            opset=opset,
         ),
     )
 
@@ -86,6 +93,7 @@ def export_all(output_dir: Path | None = None):
         lambda: export_uniformerv2.export(
             "large-k400",
             output=_output(output_dir, "uniformerv2-l-224-k400_fp32.onnx"),
+            opset=opset,
         ),
     )
 
@@ -97,7 +105,7 @@ def export_all(output_dir: Path | None = None):
         lambda: export_owlv2.export(
             "google/owlv2-large-patch14-ensemble",
             output=_output(output_dir, "owlv2_raw.onnx"),
-            nms=False,
+            opset=opset, nms=False,
         ),
         required=True,
     )
@@ -106,7 +114,7 @@ def export_all(output_dir: Path | None = None):
         lambda: export_owlv2.export(
             "google/owlv2-large-patch14-ensemble",
             output=_output(output_dir, "owlv2.onnx"),
-            nms=True,
+            opset=opset, nms=True,
         ),
         required=True,
     )
@@ -116,7 +124,7 @@ def export_all(output_dir: Path | None = None):
         "yolo (raw)",
         lambda: export_yolo.export(
             output=_output(output_dir, "yolo12x_raw.onnx"),
-            nms=False,
+            opset=opset, nms=False,
         ),
         required=True,
     )
@@ -124,7 +132,7 @@ def export_all(output_dir: Path | None = None):
         "yolo (nms)",
         lambda: export_yolo.export(
             output=_output(output_dir, "yolo12x.onnx"),
-            nms=True,
+            opset=opset, nms=True,
         ),
         required=True,
     )
@@ -134,7 +142,7 @@ def export_all(output_dir: Path | None = None):
         "yolo_world (raw)",
         lambda: export_yolo_world.export(
             output=_output(output_dir, "yolov8x-worldv2_raw.onnx"),
-            nms=False,
+            opset=opset, nms=False,
         ),
         required=True,
     )
@@ -142,7 +150,7 @@ def export_all(output_dir: Path | None = None):
         "yolo_world (nms)",
         lambda: export_yolo_world.export(
             output=_output(output_dir, "yolov8x-worldv2.onnx"),
-            nms=True,
+            opset=opset, nms=True,
         ),
         required=True,
     )
@@ -168,6 +176,12 @@ def entry():
         default=None,
         help="Directory for ONNX outputs. If omitted, uses default model cache path.",
     )
+    parser.add_argument(
+        "--opset",
+        type=int,
+        default=17,
+        help="ONNX opset version (default: 17).",
+    )
     args = parser.parse_args()
 
-    export_all(output_dir=args.output_dir)
+    export_all(output_dir=args.output_dir, opset=args.opset)

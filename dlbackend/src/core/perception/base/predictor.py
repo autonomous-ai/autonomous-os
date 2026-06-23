@@ -9,6 +9,12 @@ INPUT_T = TypeVar("INPUT_T")
 OUTPUT_T = TypeVar("OUTPUT_T")
 PREDICTOR_T = TypeVar("PREDICTOR_T")
 
+# Global GPU lock. ANY code that touches the GPU (ONNX inference, PyTorch
+# forward, TorchScript VAD, model loading/warmup) must hold this lock.
+# Prevents CUDA stream collisions, cuDNN race conditions, and OOM from
+# concurrent GPU allocations across all predictor and processor instances.
+gpu_lock: threading.RLock = threading.RLock()
+
 
 class PredictorFactory(Generic[PREDICTOR_T], ABC):
     """Base class for predictor factories.
@@ -24,11 +30,7 @@ class PredictorFactory(Generic[PREDICTOR_T], ABC):
 
 class PredictorBase(Generic[INPUT_T, OUTPUT_T], ABC):
     DEFAULT_BATCH_SIZE: int = 1
-    # Global GPU lock shared across ALL predictor instances. Concurrent GPU
-    # inference (PyTorch or ONNX Runtime) on the same device causes CUDA
-    # stream collisions and cuDNN/cuBLAS errors that poison the GPU context.
-    # Serializes all GPU inference to prevent cascading failures.
-    _gpu_lock: threading.RLock = threading.RLock()
+    _gpu_lock = gpu_lock  # Class-level alias for backward compat
 
     def __init__(self, batch_size: int | None = None) -> None:
         self._logger: logging.Logger = logging.getLogger(
@@ -62,11 +64,13 @@ class PredictorBase(Generic[INPUT_T, OUTPUT_T], ABC):
 
     def start(self) -> None:
         with self._lock:
-            self._start_impl()
+            with self._gpu_lock:
+                self._start_impl()
 
     def stop(self) -> None:
         with self._lock:
-            self._stop_impl()
+            with self._gpu_lock:
+                self._stop_impl()
 
     def is_ready(self) -> bool:
         with self._lock:
@@ -77,7 +81,10 @@ class PredictorBase(Generic[INPUT_T, OUTPUT_T], ABC):
     ) -> list[OUTPUT_T]:
         """Make prediction on a batch of input. Thread-safe via global GPU lock.
 
-        Large batches are chunked by ``_batch_size`` to limit peak memory.
+        The entire predict call (preprocessing + inference + postprocessing)
+        runs under ``_gpu_lock`` to prevent CUDA stream collisions between
+        concurrent sessions. Large batches are chunked by ``_batch_size``
+        to limit peak memory.
 
         Args:
             input: Batch of inputs.
