@@ -180,9 +180,6 @@ func ProvideService(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 	s.channels = []domain.ChannelSender{
 		&TelegramSender{svc: s},
 	}
-	// Pre-warm the CLI version cache (probed off `hermes --version`) so the agent
-	// Status endpoint reports Hermes's version, not OpenClaw's, while hermes runs.
-	go probeHermesVersion()
 	return s
 }
 

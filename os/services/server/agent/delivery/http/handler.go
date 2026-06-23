@@ -173,6 +173,7 @@ func ProvideAgentHandler(gw domain.AgentGateway, bus *monitor.Bus, sled *statusl
 	// struct is returned by value through wire — capturing &h.field here
 	// would write to a soon-to-be-discarded copy.
 	go populateOpenClawVersion()
+	go populateHermesVersion()
 	return AgentHandler{
 		agentGateway:         gw,
 		monitorBus:           bus,

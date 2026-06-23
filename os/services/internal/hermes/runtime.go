@@ -19,21 +19,31 @@ const hermesVersionProbeTimeout = 5 * time.Second
 // output (e.g. "Hermes Agent v0.17.0 (2026.6.19)" → "0.17.0").
 var hermesSemverRe = regexp.MustCompile(`(\d+\.\d+\.\d+(?:[-+._][0-9A-Za-z.-]+)?)`)
 
-// hermesVersion caches the parsed Hermes CLI version, populated once at startup
-// by probeHermesVersion(). The agent Status endpoint (and any version surface)
-// reads it via Service.Version() so the web shows the ACTIVE backend's version
-// instead of OpenClaw's when Hermes is the runtime.
+// hermesVersion caches the parsed Hermes CLI version. Single source of truth,
+// mirroring openclaw.openClawVersion: the MQTT `info` message reports it next to
+// openclaw_version, and the agent Status endpoint reads it via Service.Version()
+// so the web shows the active backend's version. Populated once at startup by
+// PopulateHermesVersion(); valid until the process restarts.
 var hermesVersion atomic.Pointer[string]
 
-// probeHermesVersion shells out to `hermes --version` with a short timeout and
-// caches the normalized semver. Empty result (cache stays unset) when hermes is
-// not on PATH or the command fails.
-func probeHermesVersion() {
+// GetHermesVersion returns the cached Hermes CLI version (e.g. "0.17.0"). Empty
+// when hermes is not installed or the version hasn't been populated yet.
+func GetHermesVersion() string {
+	if v := hermesVersion.Load(); v != nil {
+		return *v
+	}
+	return ""
+}
+
+// PopulateHermesVersion shells out to `hermes --version` with a short timeout and
+// caches the normalized semver. Empty result when hermes is not on PATH or the
+// command fails — callers then report "" for that field.
+func PopulateHermesVersion() {
 	ctx, cancel := context.WithTimeout(context.Background(), hermesVersionProbeTimeout)
 	defer cancel()
 	out, err := system.Run(ctx, "hermes", "--version")
 	if err != nil {
-		slog.Warn("read hermes version failed", "component", "hermes-probe", "error", err)
+		slog.Warn("read hermes version failed (expected if not on hermes backend)", "component", "hermes-probe", "error", err)
 		return
 	}
 	line := strings.TrimSpace(string(out))
@@ -47,11 +57,8 @@ func probeHermesVersion() {
 	hermesVersion.Store(&v)
 }
 
-// Version returns the cached Hermes CLI version (e.g. "0.17.0"). Empty string
-// until the startup probe completes or when hermes is not installed.
+// Version satisfies domain.AgentGateway.Version(): the cached Hermes CLI version,
+// or empty when undetected.
 func (s *Service) Version() string {
-	if v := hermesVersion.Load(); v != nil {
-		return *v
-	}
-	return ""
+	return GetHermesVersion()
 }
