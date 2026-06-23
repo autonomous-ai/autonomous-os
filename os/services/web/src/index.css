@@ -1153,6 +1153,14 @@
   .lm-root .lm-settings-panel .lm-card:hover { transform: none; }
 }
 
+/* Chat composer — lights up with the same amber focus ring as every other
+   input in the app when the textarea inside it gains focus, so the pill reads
+   as a first-class field rather than a flat box. */
+.lm-root .lm-chat-composer:focus-within {
+  border-color: var(--lm-amber);
+  box-shadow: 0 0 0 3px var(--lm-amber-glow), 0 8px 24px -16px rgba(0, 0, 0, 0.5);
+}
+
 /* Section title gets a soft amber-to-text gradient — a touch of flair on the
    header without shouting. Falls back to plain text where unsupported. */
 .lm-settings-title {
