@@ -28,9 +28,9 @@ func TestPresyncOwnsConfigStructure(t *testing.T) {
 		`.model.provider = "custom:autonomous"`,        // static provider
 		`.custom_providers[0].api_mode = "anthropic_messages"`, // static routing mode
 		`.custom_providers[0].name     = "autonomous"`,         // static provider name
-		`.model.default = (.model.default // "gpt-5.5")`,       // default with fallback
-		"AUTONOMOUS_API_KEY",                                   // dynamic key sync
-		"llm_model",                                            // dynamic model sync
+		`.model.default = "Auto-AI"`,                           // fixed campaign-api model alias (NOT openclaw llm_model)
+		`yq -i '.model = {}'`,                                  // coerce model:'' (post hermes setup --reset) to a map
+		"AUTONOMOUS_API_KEY",                                   // dynamic key sync (.env)
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("presync.sh missing %q — config structure/sync incomplete", want)

@@ -36,13 +36,26 @@ fi
 # touch first so yq has a doc to edit on a fresh/absent config.yaml.
 touch "$CONFIG_YAML"
 
+# `hermes setup --reset` leaves top-level `.model` as an EMPTY STRING ('') and may
+# leave `.custom_providers` as a scalar too — yq cannot index `.model.provider` /
+# `.custom_providers[0]` into a scalar, so the structure assignment below would
+# no-op and the config stays broken (`model: ''`). Coerce each to its expected
+# container type FIRST, but only when it isn't already one, so a populated config
+# is preserved.
+[ "$(yq '.model | tag' "$CONFIG_YAML" 2>/dev/null)" = "!!map" ] || yq -i '.model = {}' "$CONFIG_YAML"
+[ "$(yq '.custom_providers | tag' "$CONFIG_YAML" 2>/dev/null)" = "!!seq" ] || yq -i '.custom_providers = []' "$CONFIG_YAML"
+
 # ── 1. STRUCTURE (idempotent) ──────────────────────────────────────────────────
 # Assert the static provider wiring. `// default` keeps any existing value (so a
 # real llm_* already synced below is not stomped) and only fills it when missing.
+# os-server sends a fixed request model ("hermes-agent", constants.go); .model
+# .provider = custom:autonomous is what routes that bare model at the campaign-api
+# custom provider, so this is the field that actually matters (the .default value
+# is only a never-used fallback once a per-request model is sent).
 log "ensure config.yaml model + custom_providers structure"
 yq -i '
   .model.provider = "custom:autonomous"
-  | .model.default = (.model.default // "gpt-5.5")
+  | .model.default = "Auto-AI"
   | .custom_providers[0].name     = "autonomous"
   | .custom_providers[0].key_env  = "AUTONOMOUS_API_KEY"
   | .custom_providers[0].api_mode = "anthropic_messages"
@@ -50,12 +63,12 @@ yq -i '
 ' "$CONFIG_YAML"
 
 # ── 2. DYNAMIC (config.json wins) ──────────────────────────────────────────────
-LLM_MODEL="$(jq -r '.llm_model    // empty' "$CONFIG_JSON" 2>/dev/null || true)"
+# NOTE: .model.default is NOT synced from llm_model — that is the OpenClaw primary
+# model (e.g. claude-opus-4-6), which is irrelevant to Hermes: os-server sends a
+# fixed request model (constants.go Model) to the campaign-api custom provider, so
+# the Hermes model default is the fixed "Auto-AI" alias set above, not the device's
+# OpenClaw model. Only the provider endpoint + secrets are device-specific.
 LLM_BASE_URL="$(jq -r '.llm_base_url // empty' "$CONFIG_JSON" 2>/dev/null || true)"
-if [ -n "$LLM_MODEL" ]; then
-  yq -i ".model.default = \"$LLM_MODEL\"" "$CONFIG_YAML"
-  log "model.default = $LLM_MODEL"
-fi
 if [ -n "$LLM_BASE_URL" ]; then
   yq -i ".custom_providers[0].base_url = \"$LLM_BASE_URL\"" "$CONFIG_YAML"
   log "custom_providers[0].base_url = $LLM_BASE_URL"
