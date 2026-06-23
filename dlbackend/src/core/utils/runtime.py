@@ -55,7 +55,7 @@ def prepare_ort_session(
             (
                 "CUDAExecutionProvider",
                 {
-                    "arena_extend_strategy": "kSameAsRequested",
+                    "arena_extend_strategy": "kNextPowerOfTwo",
                     "cudnn_conv_algo_search": "DEFAULT",
                     "do_copy_in_default_stream": True,
                 },
@@ -72,8 +72,10 @@ def prepare_ort_session(
     )
 
     if warmup_inputs is not None:
-        logger.info("Warming up ONNX session for %s", model_path.name)
-        session.run(None, warmup_inputs)
+        n_warmup = 3
+        logger.info("Warming up ONNX session for %s (%d runs)", model_path.name, n_warmup)
+        for _ in range(n_warmup):
+            session.run(None, warmup_inputs)
         logger.info("Warmup complete for %s", model_path.name)
 
     return session

@@ -31,7 +31,7 @@ class OWLv2ONNXDetector(ONNXObjectDetector):
 
     ONNX_INPUT_NAMES: list[str] = ["images", "class_tokens"]
     ONNX_OUTPUT_NAMES: list[str] = ["boxes", "probs", "labels"]
-    WARMUP_IMGSZ: int = 224
+    WARMUP_IMGSZ: int = 640
 
     def __init__(
         self,
