@@ -77,17 +77,6 @@ class VoiceAgentBase(ABC):
         self._send_thread.start()
         self._recv_thread.start()
 
-    def force_reconnect(self) -> None:
-        """Drop the current session so the send/recv loops rebuild a fresh one.
-
-        For recovering a ZOMBIE session: connected (so `available` stays True)
-        and accepting audio, but never replying — no WS error/close arrives to
-        trigger the normal reconnect path. Default clears the connected flag so
-        `available` goes False and the loops' reconnect machinery re-establishes;
-        providers override to also close the live session (e.g. to unblock a recv
-        coroutine stuck waiting on a dead socket)."""
-        self._connected.clear()
-
     def disconnect(self) -> None:
         """Stop loops and disconnect."""
         self._stop_event.set()
