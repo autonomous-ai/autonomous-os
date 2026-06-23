@@ -106,14 +106,16 @@ The Settings collapsible group lives in the shared sidebar `NAV` (`os/services/w
 | My Voice | `/setting#voice` |
 | Face | `/setting#face` |
 | AI Brain | `/setting#llm` |
+| Runtime | `/setting#runtime` |
 | Language | `/setting#stt` |
 | Voice | `/setting#tts` |
+| Realtime | `/setting#realtime` |
 | Channels | `/setting#channel` |
 | MQTT | `/setting#mqtt` |
 
-Monitor leaves serialize as the plain id, e.g. `/monitor#overview`, `/monitor#system`, `/monitor#flow`. Defaults: `/monitor` with no/invalid hash → `overview`; `/setting` with no/invalid hash → `general` (URL normalized to `/setting#general`). Deep-links (e.g. `/setting#wifi`) and browser back/forward are honored via a `useLocation`-driven effect. Non-debug users only see the leaves in `PUBLIC_SECTIONS` (which includes Chat, Overview, Info, Flow, Camera, Users, Bluetooth, **Logs**, **CLI**, and the Settings leaves); `?debug=true` reveals the rest (Sensing, Analytics, Servo, API Docs, Agent gateway).
+Monitor leaves serialize as the plain id, e.g. `/monitor#overview`, `/monitor#system`, `/monitor#flow`. Defaults: `/monitor` with no/invalid hash → `overview`; `/setting` with no/invalid hash → `general` (URL normalized to `/setting#general`). Deep-links (e.g. `/setting#wifi`) and browser back/forward are honored via a `useLocation`-driven effect. Non-debug users only see the leaves in `PUBLIC_SECTIONS` (which includes Chat, Overview, Info, Flow, Camera, Users, Bluetooth, **Logs**, **CLI**, and the public Settings leaves General/Wi-Fi/My Voice/Face); `?debug=true` reveals the rest (Sensing, Analytics, Servo, API Docs, Agent gateway, and the deeper Settings leaves AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT).
 
-The standalone `/edit` page (`EditConfig.tsx`) still exists as a fallback and embeds the same `SettingsPanel`.
+The legacy standalone `/edit` page was removed; its `SettingsPanel` is now reachable only through the `/setting` tabs inside Monitor. `/edit` (and the Setup "update →" hint) now redirect to `/setting`.
 
 ---
 
@@ -371,7 +373,7 @@ def get_led_color():
 
 ## 8. Global Source Footer (GPL v3 §6 Compliance)
 
-`os/services/web/src/components/SourceFooter.tsx` is a tiny `position: fixed` link mounted at the App root (`App.tsx`, outside `<Routes>`), so it appears on every page — Setup, Login, Monitor, EditConfig, GwConfig.
+`os/services/web/src/components/SourceFooter.tsx` is a tiny `position: fixed` link mounted at the App root (`App.tsx`, outside `<Routes>`), so it appears on every page — Setup, Login, Monitor, GwConfig.
 
 Renders at `bottom: 6px, right: 8px` with monospace 10px text and opacity `0.7` — visible to anyone who looks for it without blocking form action buttons (Back / Next / Setup / Save) or scroll. Link target: `https://github.com/autonomous-ai/autonomous-os`.
 

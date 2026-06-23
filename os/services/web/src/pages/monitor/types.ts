@@ -152,7 +152,7 @@ export interface DisplayEvent extends MonitorEvent {
   _seq: number;
 }
 
-export type Section = "overview" | "system" | "flow" | "camera" | "servo" | "face-owners" | "analytics" | "logs" | "chat" | "cli" | "sensing" | "bluetooth" | "api-docs" | "agent-config" | "settings:device" | "settings:wifi" | "settings:llm" | "settings:voice" | "settings:face" | "settings:tts" | "settings:stt" | "settings:channel" | "settings:mqtt";
+export type Section = "overview" | "system" | "flow" | "camera" | "servo" | "face-owners" | "analytics" | "logs" | "chat" | "cli" | "sensing" | "bluetooth" | "api-docs" | "agent-config" | "settings:device" | "settings:wifi" | "settings:llm" | "settings:runtime" | "settings:voice" | "settings:face" | "settings:tts" | "settings:realtime" | "settings:stt" | "settings:channel" | "settings:mqtt";
 
 // ─── Area + URL serialization ────────────────────────────────────────────────
 //
@@ -183,8 +183,10 @@ const SHORT_TO_SETTING: Record<string, Section> = {
   voice: "settings:voice",
   face: "settings:face",
   llm: "settings:llm",
+  runtime: "settings:runtime",
   stt: "settings:stt",
   tts: "settings:tts",
+  realtime: "settings:realtime",
   channel: "settings:channel",
   mqtt: "settings:mqtt",
 };
@@ -246,15 +248,17 @@ export const NAV: NavEntry[] = [
     label: "Settings",
     icon: "⚙",
     children: [
-      { id: "settings:device",  label: "General",   icon: "⚙" },
-      { id: "settings:wifi",    label: "Wi-Fi",     icon: "⌁" },
-      { id: "settings:llm",     label: "AI Brain",  icon: "✦" },
-      { id: "settings:stt",     label: "Language",  icon: "⌘" },
-      { id: "settings:tts",     label: "Voice",     icon: "♫" },
-      { id: "settings:voice",   label: "My Voice",  icon: "◉" },
-      { id: "settings:face",    label: "Face",      icon: "☺" },
-      { id: "settings:channel", label: "Channels",  icon: "✉" },
-      { id: "settings:mqtt",    label: "MQTT",      icon: "⇄" },
+      { id: "settings:device",   label: "General",   icon: "⚙" },
+      { id: "settings:wifi",     label: "Wi-Fi",     icon: "⌁" },
+      { id: "settings:llm",      label: "AI Brain",  icon: "✦" },
+      { id: "settings:runtime",  label: "Runtime",   icon: "▦" },
+      { id: "settings:stt",      label: "Language",  icon: "⌘" },
+      { id: "settings:tts",      label: "Voice",     icon: "♫" },
+      { id: "settings:realtime", label: "Realtime",  icon: "⚡" },
+      { id: "settings:voice",    label: "My Voice",  icon: "◉" },
+      { id: "settings:face",     label: "Face",      icon: "☺" },
+      { id: "settings:channel",  label: "Channels",  icon: "✉" },
+      { id: "settings:mqtt",     label: "MQTT",      icon: "⇄" },
     ],
   },
   {
