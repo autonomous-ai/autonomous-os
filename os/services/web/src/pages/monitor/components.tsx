@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { ReactNode } from "react";
 import { getApiToken } from "@/lib/api";
 import { API } from "./types";
@@ -429,4 +429,69 @@ export function formatSize(value: number, unit: "KB" | "MB"): string {
     i++;
   }
   return i >= 3 ? `${bytes.toFixed(1)} ${units[i]}` : `${Math.round(bytes)} ${units[i]}`;
+}
+
+// ConfirmDialog — a small modal that asks the user to confirm an action before
+// it runs. Follows the repo's modal convention (fixed full-screen scrim, click
+// the backdrop or press Esc to cancel, stopPropagation on the card). Set
+// `destructive` for actions like logout/delete so the confirm button reads red.
+export function ConfirmDialog({
+  title,
+  message,
+  confirmLabel = "Confirm",
+  cancelLabel = "Cancel",
+  destructive = false,
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  message: ReactNode;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  destructive?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  // Esc cancels — matches the click-outside affordance for keyboard users.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  return (
+    <div
+      onClick={onCancel}
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
+        display: "flex", justifyContent: "center", alignItems: "center",
+        zIndex: 1100, padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ ...S.card, width: "min(380px, 100%)", display: "flex", flexDirection: "column", gap: 14 }}
+      >
+        <div style={{ fontSize: 15, fontWeight: 700, color: "var(--lm-text)" }}>{title}</div>
+        <div style={{ fontSize: 13, lineHeight: 1.55, color: "var(--lm-text-dim)" }}>{message}</div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+          <button onClick={onCancel} className="lm-confirm-btn lm-confirm-btn--cancel">
+            {cancelLabel}
+          </button>
+          <button
+            onClick={onConfirm}
+            autoFocus
+            className={"lm-confirm-btn " + (destructive ? "lm-confirm-btn--danger" : "lm-confirm-btn--primary")}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }

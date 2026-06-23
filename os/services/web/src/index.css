@@ -564,6 +564,61 @@
 .lm-snav-item--active > svg,
 .lm-snav-sub--active > svg { color: var(--lm-amber); transform: scale(1.06); }
 
+/* Sidebar footer logout — quiet by default, turns red on hover to signal it
+   ends the session. Mirrors the nav item's gap/radius so it reads as part of
+   the same rail. */
+.lm-logout-btn {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--lm-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--lm-text-dim);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.lm-logout-btn:hover {
+  background: var(--lm-red-dim);
+  border-color: var(--lm-red-glow);
+  color: var(--lm-red);
+}
+
+/* Confirm-dialog action buttons (Cancel / Confirm). Cancel is quiet; the
+   primary/danger variants carry the action's tone. */
+.lm-confirm-btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.lm-confirm-btn--cancel {
+  background: transparent;
+  border-color: var(--lm-border);
+  color: var(--lm-text-dim);
+}
+.lm-confirm-btn--cancel:hover {
+  background: var(--lm-surface);
+  color: var(--lm-text);
+}
+.lm-confirm-btn--primary {
+  background: var(--lm-amber);
+  color: #1a1206;
+}
+.lm-confirm-btn--primary:hover { filter: brightness(1.08); }
+.lm-confirm-btn--danger {
+  background: var(--lm-red);
+  color: #2a0d0d;
+}
+.lm-confirm-btn--danger:hover { filter: brightness(1.08); }
+
 /* Group header: when a child is active it reads amber + bold (no fill), and its
    icon goes amber to anchor the expanded section. */
 .lm-snav-group--active { color: var(--lm-amber); font-weight: 600; }
