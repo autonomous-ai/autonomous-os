@@ -89,11 +89,9 @@ func (s *Service) WatchIdentity(ctx context.Context) {
 	<-ctx.Done()
 }
 
-// StartSkillWatcher — skills are pre-provisioned on the Hermes box (per user).
-// No download/notify loop. No-op.
-func (s *Service) StartSkillWatcher(ctx context.Context) {
-	<-ctx.Done()
-}
+// StartSkillWatcher for Hermes lives in skill_watcher.go — it keeps the
+// OpenClaw-imported skills (~/.hermes/skills/openclaw-imports) fresh from the CDN,
+// mirroring internal/openclaw/skill_watcher.go.
 
 // StartModelSync — model registry is owned by Hermes. No-op.
 func (s *Service) StartModelSync(ctx context.Context) {

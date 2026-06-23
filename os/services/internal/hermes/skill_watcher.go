@@ -1,4 +1,4 @@
-package openclaw
+package hermes
 
 import (
 	"context"
@@ -6,26 +6,31 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/internal/skills"
 )
 
 const skillWatchInterval = 5 * time.Minute
 
-// StartSkillWatcher polls OTA metadata for per-skill version changes.
-// When any skill version changes, downloads that skill zip from CDN,
-// extracts atomically, and notifies the agent to re-read it.
+// StartSkillWatcher polls OTA metadata for per-skill version changes and keeps the
+// device's OpenClaw-imported skills fresh UNDER HERMES too. Skills reach Hermes by
+// being copied (not converted) into ~/.hermes/skills/openclaw-imports by `claw
+// migrate`, so the same CDN <name>.zip OpenClaw downloads drops in here verbatim —
+// the watcher just targets the openclaw-imports dir instead of the OpenClaw
+// workspace.
 //
-// The CDN fetch / atomic extract / content-hash plumbing is runtime-agnostic and
-// lives in internal/skills (FetchSkillVersions / DownloadToTempFile / FolderHash /
-// ExtractSkillZip); this file holds only the OpenClaw-specific loop, target dir,
-// and notify. internal/hermes/skill_watcher.go is its parallel under Hermes.
+// This deliberately mirrors internal/openclaw/skill_watcher.go: identical loop,
+// shared CDN/extract/hash plumbing from internal/skills. The only differences are
+// the target dir and the notify path — keep the two files parallel so they are
+// easy to diff.
 func (s *Service) StartSkillWatcher(ctx context.Context) {
 
-	slog.Info("skill watcher started", "component", "skill-watcher", "interval", skillWatchInterval)
+	slog.Info("skill watcher started", "component", "skill-watcher", "backend", "Hermes", "interval", skillWatchInterval)
 
-	// Seed last known versions from current metadata so first poll doesn't re-notify
+	// Seed last known versions from current metadata so first poll doesn't re-notify.
 	lastVersions := map[string]string{}
 	if initial, err := skills.FetchSkillVersions(s.config.OTAMetadataURL); err == nil && initial != nil {
 		lastVersions = initial
@@ -48,9 +53,8 @@ func (s *Service) StartSkillWatcher(ctx context.Context) {
 			}
 			slog.Info("skill watcher: checked", "component", "skill-watcher", "skills", len(remote))
 
-			// Find skills with changed versions, gated to what this device
-			// supports so a CDN version bump never re-adds a capability-pruned
-			// skill (e.g. servo-control on a motionless device).
+			// Gate to what this device supports so a CDN version bump never re-adds
+			// a capability-pruned skill (e.g. servo-control on a motionless device).
 			supported := map[string]bool{}
 			for _, n := range s.supportedSkills() {
 				supported[n] = true
@@ -76,24 +80,42 @@ func (s *Service) StartSkillWatcher(ctx context.Context) {
 	}
 }
 
-// downloadSkills downloads the skills this device supports from CDN (capability-
-// gated via supportedSkills), returning names of changed ones.
-func (s *Service) downloadSkills() []string {
-	return s.downloadSkillsByName(s.supportedSkills())
+// supportedSkills resolves this device's capabilities from DEVICE.md and filters
+// the platform skill catalog — identical gating to OpenClaw (skills.Supported is
+// runtime-agnostic platform metadata; the backend is just another consumer).
+func (s *Service) supportedSkills() []string {
+	return skills.Supported(device.Capabilities(s.config.DeviceTypeOrDefault()))
 }
 
-// downloadSkillsByName downloads specific skill zips from CDN, extracts each
-// atomically into workspace/skills/<name>, returns names of skills that actually
-// changed on disk. Each skill is published as <name>.zip containing the whole
-// skill folder; the version pre-filter + content hash mean a returned name had
-// real content changes.
+// otaBaseURL derives the CDN base from the device's OTA metadata URL (config.json),
+// minus "/ota/metadata.json". Returns "" when unconfigured so callers skip rather
+// than hit a hardcoded URL. Mirrors OpenClaw's otaBaseURL.
+func (s *Service) otaBaseURL() string {
+	u := strings.TrimSpace(s.config.OTAMetadataURL)
+	if u == "" {
+		return ""
+	}
+	return strings.TrimSuffix(u, "/ota/metadata.json")
+}
+
+func (s *Service) skillsBaseURL() string {
+	if base := s.otaBaseURL(); base != "" {
+		return base + "/skills"
+	}
+	return ""
+}
+
+// downloadSkillsByName downloads specific skill zips from CDN and extracts each
+// atomically into ~/.hermes/skills/openclaw-imports/<name> (where `claw migrate`
+// puts OpenClaw-imported skills). Returns names of skills that actually changed on
+// disk. Parallel to OpenClaw's downloadSkillsByName — only the target dir differs.
 func (s *Service) downloadSkillsByName(names []string) []string {
 	base := s.skillsBaseURL()
 	if base == "" {
 		slog.Info("skill download skipped: no ota_metadata_url configured", "component", "skill-watcher")
 		return nil
 	}
-	skillsDir := filepath.Join(s.config.OpenclawConfigDir, "workspace", "skills")
+	skillsDir := filepath.Join(hermesHome, "skills", "openclaw-imports")
 	var changed []string
 	for _, name := range names {
 		url := fmt.Sprintf("%s/%s.zip", base, name)
@@ -127,18 +149,18 @@ func (s *Service) downloadSkillsByName(names []string) []string {
 	return changed
 }
 
-// notifySkillChanges sends a single message to the agent listing all changed skills.
+// notifySkillChanges tells the Hermes agent to re-read the changed skills.
 func (s *Service) notifySkillChanges(changedSkills []string) {
 	if len(changedSkills) == 0 {
 		return
 	}
 	list := ""
 	for _, name := range changedSkills {
-		list += fmt.Sprintf("\n- skills/%s/SKILL.md", name)
+		list += fmt.Sprintf("\n- skills/openclaw-imports/%s/SKILL.md", name)
 	}
 	msg := fmt.Sprintf("[system] The following skills have been updated. Re-read them now — files on disk have changed. Follow the updated instructions strictly. Keep your reply under 5 words.%s", list)
 	slog.Info("INBOUND from system → agent (skill update)",
-		"component", "skill-watcher", "backend", "OpenClaw",
+		"component", "skill-watcher", "backend", "Hermes",
 		"source", "skill_watcher", "changed", changedSkills)
 	if _, err := s.SendSystemChatMessage(msg); err != nil {
 		slog.Warn("notify agent failed", "component", "skill-watcher", "error", err)

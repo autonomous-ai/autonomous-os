@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"go.autonomous.ai/os/internal/skills"
 )
 
 const (
@@ -55,7 +57,7 @@ func InstallRoleSkills(configDir, role string) (int, error) {
 	var tmpZip string
 	var lastErr error
 	for attempt := 1; attempt <= roleSkillsMaxRetries; attempt++ {
-		p, err := downloadToTempFile(url, "role-skills-*.zip")
+		p, err := skills.DownloadToTempFile(url, "role-skills-*.zip")
 		if err != nil {
 			lastErr = err
 			slog.Warn("[role-skills] zip download failed", "component", "openclaw", "role", role, "attempt", attempt, "error", err)
@@ -104,7 +106,7 @@ func EnsureMCPSkill(configDir, name string) error {
 	var tmpZip string
 	var lastErr error
 	for attempt := 1; attempt <= roleSkillsMaxRetries; attempt++ {
-		p, err := downloadToTempFile(url, "mcp-skill-*.zip")
+		p, err := skills.DownloadToTempFile(url, "mcp-skill-*.zip")
 		if err != nil {
 			lastErr = err
 			slog.Warn("[mcp-skill] zip download failed", "component", "openclaw", "name", name, "attempt", attempt, "error", err)
