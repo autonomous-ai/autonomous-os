@@ -152,7 +152,15 @@ prev ≠ current). What to carry:
 - Set **`Overwrite = true`** for the soul copy on a switch: a switch means "adopt
   the persona I was just using." `copyPersona` backs up first (`.bak-<nano>`).
 - The reverse direction must **strip backend-only artifacts** it added (e.g. the
-  identity card — OpenClaw keeps the name in its own IDENTITY.md).
+  identity card — OpenClaw keeps the name in its own IDENTITY.md) **and restore
+  what the forward inlined back into its native slot**. Inlining the name into the
+  Hermes SOUL but only stripping it on the way back **loses the name** — the reverse
+  must parse the card and write the fields into the OpenClaw `IDENTITY.md`
+  (`restoreIdentityCard`, the inverse of `ensureIdentityInlined`: line
+  replace-or-append, preserving the existing template; relies on the same
+  "onboard does not clobber an existing IDENTITY.md" guarantee `UpdateIdentityName`
+  uses). Every forward inline needs a matching reverse restore, or round-tripping
+  silently drops state.
 
 Do **NOT** carry runtime-specific files: `AGENTS.md`, `TOOLS.md`, `HEARTBEAT.md`,
 `hooks/` — they belong to the source runtime. The backend's **deep memory engine**
@@ -264,7 +272,8 @@ Use the runtime-agnostic platform metadata in `internal/skills`:
 - [ ] `verify` hook is cheap (CLI presence), not a structure check.
 - [ ] `migrate_persona/openclaw_to_<name>.go` + reverse: SOUL(+identity inline),
       MEMORY+daily+KNOWLEDGE (folded into a file the backend LOADS BY NAME), USER;
-      `Overwrite=true`; reverse strips backend-only artifacts.
+      `Overwrite=true`; reverse strips backend-only artifacts AND restores each
+      forward-inlined field into its native slot (e.g. identity → IDENTITY.md).
 - [ ] Skills: copy-import + **restore-in-presync** (guarded) + `skill_watcher.go`
       (parallel to openclaw, shared `internal/skills/skillzip.go`).
 - [ ] Hooks: backend-native or OS-side — decided & documented (not silently absent).

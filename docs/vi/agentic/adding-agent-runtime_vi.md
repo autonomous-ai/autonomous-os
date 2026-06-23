@@ -150,7 +150,14 @@ prev ≠ current). Mang gì:
 - Đặt **`Overwrite = true`** cho copy soul khi switch: switch nghĩa là "lấy persona
   vừa dùng sang". `copyPersona` backup trước (`.bak-<nano>`).
 - Chiều ngược phải **strip artifact riêng của backend** mà nó đã thêm (vd identity
-  card — OpenClaw giữ tên trong IDENTITY.md riêng).
+  card — OpenClaw giữ tên trong IDENTITY.md riêng) **VÀ khôi phục thứ chiều xuôi đã
+  inline về đúng slot gốc của nó**. Inline tên vào SOUL của Hermes nhưng chiều ngược
+  chỉ strip thì **mất tên** — chiều ngược phải parse card và ghi field về OpenClaw
+  `IDENTITY.md` (`restoreIdentityCard`, nghịch đảo của `ensureIdentityInlined`:
+  thay-hoặc-thêm dòng, giữ template sẵn có; dựa trên cùng đảm bảo "onboard không
+  ghi đè IDENTITY.md đã tồn tại" mà `UpdateIdentityName` dùng). Mỗi inline ở chiều
+  xuôi cần một restore tương ứng ở chiều ngược, nếu không round-trip sẽ âm thầm mất
+  state.
 
 **ĐỪNG** mang file riêng-runtime: `AGENTS.md`, `TOOLS.md`, `HEARTBEAT.md`,
 `hooks/` — chúng thuộc runtime nguồn. **Bộ nhớ sâu** của backend (DB
@@ -257,7 +264,8 @@ Dùng metadata nền tảng runtime-agnostic trong `internal/skills`:
 - [ ] `verify` hook rẻ (CLI có mặt), không phải structure-check.
 - [ ] `migrate_persona/openclaw_to_<name>.go` + chiều ngược: SOUL(+inline identity),
       MEMORY+daily+KNOWLEDGE (fold vào file backend LOAD THEO TÊN), USER;
-      `Overwrite=true`; chiều ngược strip artifact riêng-backend.
+      `Overwrite=true`; chiều ngược strip artifact riêng-backend VÀ restore mỗi
+      field đã inline ở chiều xuôi về slot gốc (vd identity → IDENTITY.md).
 - [ ] Skills: copy-import + **restore-trong-presync** (guard) + `skill_watcher.go`
       (song song openclaw, share `internal/skills/skillzip.go`).
 - [ ] Hooks: native-backend hoặc OS-side — đã quyết & ghi (không thiếu âm thầm).

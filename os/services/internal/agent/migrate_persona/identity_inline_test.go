@@ -160,6 +160,82 @@ func TestMigrate_FoldsKnowledgeIntoMemory(t *testing.T) {
 	}
 }
 
+// The reverse switch must RESTORE the owner's name into workspace/IDENTITY.md
+// (the file OpenClaw reads for wake words) — the name set under Hermes lives only
+// in the SOUL identity card, which is stripped from the OpenClaw SOUL. Restoring
+// into an existing template must replace the placeholder line and keep the rest.
+func TestMigrate_RestoresIdentityNameOnReverseSwitch(t *testing.T) {
+	cfgDir := t.TempDir()
+	hermesRoot := t.TempDir()
+	ws := filepath.Join(cfgDir, "workspace")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hermesSoul := "# Soul\n\nYou are **Lamp**.\n\n" + identityCardHeading +
+		"\n\nYour owner set this — it overrides any default name or vibe above.\n\n- **Name:** Ngân\n"
+	if err := os.WriteFile(filepath.Join(hermesRoot, "SOUL.md"), []byte(hermesSoul), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// OpenClaw template with an unfilled Name placeholder + an unrelated slot.
+	tmpl := "# IDENTITY.md - Who Am I?\n\n- **Name:**\n  _(pick something you like)_\n- **Vibe:** calm\n"
+	if err := os.WriteFile(filepath.Join(ws, "IDENTITY.md"), []byte(tmpl), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := DefaultOptions(cfgDir, hermesRoot)
+	opts.Execute = true
+	opts.Overwrite = true
+	if _, err := Run(HermesToOpenclaw, opts); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(ws, "IDENTITY.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := string(got)
+	if !strings.Contains(id, "- **Name:** Ngân") {
+		t.Errorf("name not restored into IDENTITY.md:\n%s", id)
+	}
+	if strings.Contains(id, "pick something you like") {
+		t.Errorf("stale placeholder hint not dropped:\n%s", id)
+	}
+	if !strings.Contains(id, "- **Vibe:** calm") {
+		t.Errorf("unrelated template slot lost:\n%s", id)
+	}
+}
+
+// When workspace/IDENTITY.md does not exist yet (first switch, before OpenClaw's
+// own onboard creates it), the reverse restore must create it with the name.
+func TestMigrate_CreatesIdentityWhenAbsentOnReverseSwitch(t *testing.T) {
+	cfgDir := t.TempDir()
+	hermesRoot := t.TempDir()
+	ws := filepath.Join(cfgDir, "workspace")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hermesSoul := "# Soul\n\nYou are **Lamp**.\n\n" + identityCardHeading +
+		"\n\nYour owner set this.\n\n- **Name:** Ngân\n"
+	if err := os.WriteFile(filepath.Join(hermesRoot, "SOUL.md"), []byte(hermesSoul), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := DefaultOptions(cfgDir, hermesRoot)
+	opts.Execute = true
+	opts.Overwrite = true
+	if _, err := Run(HermesToOpenclaw, opts); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(ws, "IDENTITY.md"))
+	if err != nil {
+		t.Fatalf("IDENTITY.md not created: %v", err)
+	}
+	if !strings.Contains(string(got), "- **Name:** Ngân") {
+		t.Errorf("name not written to created IDENTITY.md:\n%s", string(got))
+	}
+}
+
 func TestBuildIdentityBlock_MissingFile(t *testing.T) {
 	if got := buildIdentityBlock(filepath.Join(t.TempDir(), "nope.md")); got != "" {
 		t.Fatalf("expected empty for missing file, got %q", got)
