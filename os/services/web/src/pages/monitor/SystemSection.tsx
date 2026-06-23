@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { Line } from "react-chartjs-2";
 import type { TooltipItem } from "chart.js";
+import { Cpu, Activity, MemoryStick, HardDrive, Thermometer, Server, Network } from "lucide-react";
 import { S } from "./styles";
 import type { SystemInfo, NetworkInfo } from "./types";
-import { GaugeRing, StatPill, formatUptime, formatSize } from "./components";
+import { GaugeRing, StatPill, formatUptime, formatSize, CardLabel } from "./components";
 
 // Polling interval (ms) that populates cpuHistory/ramHistory. Used to label
 // the time axis on history charts since each datapoint is one poll tick.
@@ -11,7 +12,23 @@ const POLL_MS = 5000;
 
 // Build chart.js datasets + options for a percentage history series.
 // `now` is "0s" (right edge), older values stretch back as negative seconds.
-function historyChart(data: number[], color: string, label: string) {
+// Resolve a CSS custom property to its computed color so chart.js (canvas, which
+// can't read CSS vars) still tracks the active theme. Falls back to the passed
+// default if the var is empty (e.g. during SSR/first paint).
+function cssVar(name: string, fallback: string): string {
+  if (typeof window === "undefined") return fallback;
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+
+// `colorVar` is a CSS custom property name (e.g. "--lm-amber"); resolved here so
+// the line/fill colors track the theme like everything else.
+function historyChart(data: number[], colorVar: string, label: string) {
+  const color = cssVar(colorVar, "#f59e0b");
+  // Grid/tick colors pulled from theme tokens so the chart chrome stays legible
+  // on both dark and light backgrounds (the old hardcoded white vanished on light).
+  const gridColor = cssVar("--lm-border", "rgba(255,255,255,0.06)");
+  const tickColor = cssVar("--lm-text-muted", "rgba(255,255,255,0.4)");
   const labels = data.map((_, i) => {
     const offsetSec = (data.length - 1 - i) * (POLL_MS / 1000);
     if (offsetSec === 0) return "now";
@@ -51,9 +68,9 @@ function historyChart(data: number[], color: string, label: string) {
       },
       scales: {
         x: {
-          grid: { color: "rgba(255,255,255,0.06)" },
+          grid: { color: gridColor },
           ticks: {
-            color: "rgba(255,255,255,0.4)",
+            color: tickColor,
             font: { size: 9 },
             maxRotation: 0,
             autoSkip: true,
@@ -63,9 +80,9 @@ function historyChart(data: number[], color: string, label: string) {
         y: {
           min: 0,
           max: 100,
-          grid: { color: "rgba(255,255,255,0.06)" },
+          grid: { color: gridColor },
           ticks: {
-            color: "rgba(255,255,255,0.4)",
+            color: tickColor,
             font: { size: 9 },
             stepSize: 25,
             callback: (v: string | number) => `${v}%`,
@@ -114,6 +131,12 @@ export function SystemSection({
 
   const diskColor = pctColor(sys.diskPercent ?? 0, "var(--lm-teal)");
 
+  // The `.lm-mon-card` class owns the resting + hover box-shadow (plus the
+  // gradient/accent/glow), so we strip the inline boxShadow from S.card to let
+  // the class's :hover shadow win — matching the Overview cards.
+  const monCard = { ...S.card, boxShadow: undefined };
+  const monCard12 = { ...monCard, padding: 12 };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       {/* Performance — one card per metric so each gets a clean visual unit.
@@ -126,9 +149,9 @@ export function SystemSection({
       </div>
       {/* Row 1: CPU (1/4) + CPU history (3/4) */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 3fr", gap: 14 }}>
-        <div style={{ ...S.card, padding: 12 }}>
+        <div className="lm-mon-card" style={monCard12}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-            <div style={S.cardLabel}>CPU</div>
+            <CardLabel icon={<Cpu size={13} />} text="CPU" />
             <span style={{ fontSize: 11, color: "var(--lm-amber)", fontWeight: 600 }}>
               {sys.cpuCount ? `${sys.cpuCount} cores` : ""}
             </span>
@@ -140,14 +163,14 @@ export function SystemSection({
             )}
           </div>
         </div>
-        <div style={{ ...S.card, padding: 12 }}>
+        <div className="lm-mon-card" style={monCard12}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-            <div style={S.cardLabel}>CPU History</div>
+            <CardLabel icon={<Activity size={13} />} text="CPU History" />
             <span style={{ fontSize: 11, color: pctColor(sys.cpuLoad, "var(--lm-amber)"), fontWeight: 600 }}>{sys.cpuLoad.toFixed(1)}%</span>
           </div>
           <div style={{ height: 140 }}>
             {cpuHistory.length > 1 ? (
-              (() => { const c = historyChart(cpuHistory, "rgba(245,158,11,0.85)", "CPU"); return <Line data={c.data} options={c.options} />; })()
+              (() => { const c = historyChart(cpuHistory, "--lm-amber", "CPU"); return <Line data={c.data} options={c.options} />; })()
             ) : <span style={{ fontSize: 11, color: "var(--lm-text-muted)" }}>Collecting samples…</span>}
           </div>
         </div>
@@ -155,9 +178,9 @@ export function SystemSection({
 
       {/* Row 2: Memory (1/4) + RAM history (3/4) */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 3fr", gap: 14 }}>
-        <div style={{ ...S.card, padding: 12 }}>
+        <div className="lm-mon-card" style={monCard12}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-            <div style={S.cardLabel}>Memory</div>
+            <CardLabel icon={<MemoryStick size={13} />} text="Memory" />
             <span style={{ fontSize: 11, color: "var(--lm-blue)", fontWeight: 600 }}>
               {formatSize(sys.memUsed, "KB")} / {formatSize(sys.memTotal, "KB")}
             </span>
@@ -188,14 +211,14 @@ export function SystemSection({
             </div>
           )}
         </div>
-        <div style={{ ...S.card, padding: 12 }}>
+        <div className="lm-mon-card" style={monCard12}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-            <div style={S.cardLabel}>RAM History</div>
+            <CardLabel icon={<Activity size={13} />} text="RAM History" />
             <span style={{ fontSize: 11, color: pctColor(sys.memPercent, "var(--lm-blue)"), fontWeight: 600 }}>{sys.memPercent.toFixed(0)}%</span>
           </div>
           <div style={{ height: 140 }}>
             {ramHistory.length > 1 ? (
-              (() => { const c = historyChart(ramHistory, "rgba(96,165,250,0.85)", "RAM"); return <Line data={c.data} options={c.options} />; })()
+              (() => { const c = historyChart(ramHistory, "--lm-blue", "RAM"); return <Line data={c.data} options={c.options} />; })()
             ) : <span style={{ fontSize: 11, color: "var(--lm-text-muted)" }}>Collecting samples…</span>}
           </div>
         </div>
@@ -203,9 +226,9 @@ export function SystemSection({
 
       {/* Row 3: Disk + Temp + Service + Network Detail — 4 cards one row */}
       <div className="lm-grid-4">
-        <div style={{ ...S.card, padding: 12 }}>
+        <div className="lm-mon-card" style={monCard12}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-            <div style={S.cardLabel}>Disk</div>
+            <CardLabel icon={<HardDrive size={13} />} text="Disk" />
             <span style={{ fontSize: 11, color: diskColor, fontWeight: 600 }}>
               {formatSize(sys.diskUsed ?? 0, "MB")} / {formatSize(sys.diskTotal ?? 0, "MB")}
             </span>
@@ -214,9 +237,9 @@ export function SystemSection({
             <GaugeRing value={sys.diskPercent ?? 0} label="" detail={`${(sys.diskPercent ?? 0).toFixed(0)}%`} color={diskColor} size={110} />
           </div>
         </div>
-        <div style={{ ...S.card, padding: 12 }}>
+        <div className="lm-mon-card" style={monCard12}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-            <div style={S.cardLabel}>Temp</div>
+            <CardLabel icon={<Thermometer size={13} />} text="Temp" />
             <span style={{ fontSize: 11, color: tempColor(sys.cpuTemp), fontWeight: 600 }}>{sys.cpuTemp.toFixed(1)}°C</span>
           </div>
           <div style={{ display: "flex", justifyContent: "center" }}>
@@ -229,8 +252,8 @@ export function SystemSection({
             />
           </div>
         </div>
-        <div style={S.card}>
-          <div style={S.cardLabel}>Service</div>
+        <div className="lm-mon-card" style={monCard}>
+          <div style={{ marginBottom: 12 }}><CardLabel icon={<Server size={13} />} text="Service" /></div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <StatPill label="OS Uptime"       value={formatUptime(sys.uptime)}                                                  bullet="var(--lm-text-dim)" />
             <StatPill label="Server Uptime"   value={sys.serviceUptime ? formatUptime(sys.serviceUptime) : "—"} color="var(--lm-amber)" bullet="var(--lm-amber)" />
@@ -239,8 +262,8 @@ export function SystemSection({
             <DeviceIdPill deviceId={sys.deviceId} />
           </div>
         </div>
-        <div style={S.card}>
-          <div style={S.cardLabel}>Network Detail</div>
+        <div className="lm-mon-card" style={monCard}>
+          <div style={{ marginBottom: 12 }}><CardLabel icon={<Network size={13} />} text="Network Detail" /></div>
           {net ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               <StatPill label="Link Rate"    value={net.linkRate > 0 ? `${net.linkRate} Mbps` : "—"} color="var(--lm-teal)" />
@@ -302,7 +325,7 @@ function CoreStrip({ values }: { values: number[] }) {
           );
         })}
       </div>
-      <span style={{ fontSize: 9.5, color: "var(--lm-text-muted)", letterSpacing: 0.3 }}>per-core</span>
+      <span style={{ fontSize: 9, color: "var(--lm-text-muted)", letterSpacing: 0.3 }}>per-core</span>
     </div>
   );
 }

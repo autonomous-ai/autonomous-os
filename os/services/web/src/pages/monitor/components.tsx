@@ -1,6 +1,8 @@
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { getApiToken } from "@/lib/api";
 import { API } from "./types";
+import { S } from "./styles";
 
 export function StatusDot({ ok }: { ok: boolean }) {
   return (
@@ -78,8 +80,8 @@ export function HWBadge({ label, ok }: { label: string; ok: boolean }) {
         gap: 6,
         padding: "5px 10px",
         borderRadius: 8,
-        background: ok ? "rgba(52,211,153,0.08)" : "rgba(248,113,113,0.08)",
-        border: `1px solid ${ok ? "rgba(52,211,153,0.25)" : "rgba(248,113,113,0.2)"}`,
+        background: ok ? "var(--lm-green-dim)" : "var(--lm-red-dim)",
+        border: `1px solid ${ok ? "color-mix(in srgb, var(--lm-green) 30%, transparent)" : "color-mix(in srgb, var(--lm-red) 25%, transparent)"}`,
         fontSize: 11.5,
         fontWeight: 500,
         color: ok ? "var(--lm-green)" : "var(--lm-red)",
@@ -377,19 +379,35 @@ export type StatusTone = keyof typeof STATUS_TONE;
 
 // StatusBadge is the uppercase pill in card headers (ONLINE/OFFLINE, ACTIVE,
 // session Active/Pending). Pass an explicit tone, or let `ok` pick ok/error.
-export function StatusBadge({ text, tone, ok }: {
+export function StatusBadge({ text, tone, ok, pulse }: {
   text: string;
   tone?: StatusTone;
   ok?: boolean;
+  // pulse adds a gentle breathing ring (see `.lm-pulse` in index.css) to signal
+  // a live/real-time state. Purely decorative.
+  pulse?: boolean;
 }) {
   const t = STATUS_TONE[tone ?? (ok ? "ok" : "error")];
   return (
-    <span style={{
+    <span className={pulse ? "lm-pulse" : undefined} style={{
       fontSize: 10, padding: "3px 9px", borderRadius: 4, fontWeight: 700,
       background: t.bg, color: t.color, border: `1px solid ${t.border}`,
     }}>
       {text}
     </span>
+  );
+}
+
+// CardLabel renders a card's uppercase heading with a small amber icon chip in
+// front — the same header affordance as the setup SectionCard. Shared across the
+// Overview and System tabs. `icon` is a lucide glyph (inherits the chip's amber
+// color via currentColor).
+export function CardLabel({ icon, text }: { icon: ReactNode; text: string }) {
+  return (
+    <div style={{ ...S.cardLabel, display: "flex", alignItems: "center", gap: 8, marginBottom: 0 }}>
+      <span className="lm-mon-chip" aria-hidden>{icon}</span>
+      <span>{text}</span>
+    </div>
   );
 }
 

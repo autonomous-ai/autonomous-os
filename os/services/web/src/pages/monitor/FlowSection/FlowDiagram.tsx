@@ -196,7 +196,7 @@ export function FlowDiagram({
   );
 
   function nodeColor(id: FlowStage) {
-    if (id === "tts_speak" && ttsSuppressed) return "#ef4444";
+    if (id === "tts_speak" && ttsSuppressed) return "var(--lm-red)";
     if (id === activeStage || visitedStages.has(id)) {
       return FLOW_NODES.find((n) => n.id === id)?.color ?? "var(--lm-text-muted)";
     }
@@ -459,10 +459,10 @@ export function FlowDiagram({
           const rowColor = (kind: string) => {
             if (kind === "thinking" || kind === "thinking_first_token") return "var(--lm-purple)";
             if (kind === "assistant" || kind === "agent_first_token") return "var(--lm-blue)";
-            if (kind === "tool" || kind === "tool_result") return "#f59e0b";
+            if (kind === "tool" || kind === "tool_result") return "var(--lm-amber)";
             if (kind === "lifecycle_start" || kind === "lifecycle_end") return "var(--lm-green)";
-            if (kind === "error") return "#ef4444";
-            if (kind === "compaction") return "#a78bfa";
+            if (kind === "error") return "var(--lm-red)";
+            if (kind === "compaction") return "var(--lm-purple)";
             return "var(--lm-text-muted)";
           };
           const guideBtnX = px + pw - 14;
@@ -881,7 +881,7 @@ export function FlowDiagram({
                     >
                       {textLines.map((line, i) => (
                         <div key={i} style={{
-                          color: line.startsWith("⏱") ? "#fbbf24" : color,
+                          color: line.startsWith("⏱") ? "var(--lm-amber)" : color,
                           fontWeight: line.startsWith("⏱") ? 700 : 400,
                         }}>
                           {line}
@@ -907,7 +907,7 @@ export function FlowDiagram({
                 x={snapX - imgW / 2} y={snapY - imgH / 2}
                 width={imgW} height={imgH}
                 rx={6} ry={6}
-                fill="var(--lm-card)" stroke="#fbbf24" strokeWidth={1}
+                fill="var(--lm-card)" stroke="var(--lm-amber)" strokeWidth={1}
                 opacity={0.9}
               />
               <image
@@ -923,7 +923,7 @@ export function FlowDiagram({
                 <text
                   x={snapX} y={snapY + imgH / 2 + 10}
                   textAnchor="middle"
-                  fill="#fbbf24" fontSize={6} fontWeight={600}
+                  fill="var(--lm-amber)" fontSize={6} fontWeight={600}
                 >
                   📷 {snapshotUrls.length > 1 ? `${snapshotUrls.length} Snapshots` : "Snapshot"}
                 </text>
@@ -944,7 +944,7 @@ export function FlowDiagram({
                 x={snapX - imgW / 2} y={snapY - imgH / 2}
                 width={imgW} height={imgH}
                 rx={6} ry={6}
-                fill="var(--lm-card)" stroke="#60a5fa" strokeWidth={1}
+                fill="var(--lm-card)" stroke="var(--lm-blue)" strokeWidth={1}
                 opacity={0.9}
               />
               <image
@@ -959,7 +959,7 @@ export function FlowDiagram({
               <text
                 x={snapX} y={snapY + imgH / 2 + 10}
                 textAnchor="middle"
-                fill="#60a5fa" fontSize={6} fontWeight={600}
+                fill="var(--lm-blue)" fontSize={6} fontWeight={600}
               >
                 📷 → Agent
               </text>
@@ -1048,10 +1048,9 @@ export function FlowDiagram({
           { label: "⟳", action: resetView },
           { label: "+", action: () => setZoom((z) => Math.min(4, z + 0.2)) },
         ].map((btn) => (
-          <button key={btn.label} onClick={btn.action} style={{
-            width: 22, height: 22, borderRadius: 5, border: "1px solid var(--lm-border)",
-            background: "var(--lm-surface)", color: "var(--lm-text-dim)",
-            cursor: "pointer", fontSize: 12, lineHeight: 1, padding: 0,
+          <button key={btn.label} onClick={btn.action} className="lm-u-btn" style={{
+            width: 22, height: 22, borderRadius: 5,
+            color: "var(--lm-text-dim)", fontSize: 12, lineHeight: 1, padding: 0,
             display: "flex", alignItems: "center", justifyContent: "center",
           }}>{btn.label}</button>
         ))}

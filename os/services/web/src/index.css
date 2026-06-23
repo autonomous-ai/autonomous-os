@@ -394,6 +394,11 @@
 .lm-grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
 .lm-grid-5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
 
+/* Flow turn-list width (desktop). Clamps wider on large screens so the dense
+   IN/REPLY text in turn cards stays readable and the canvas loses dead space;
+   the mobile breakpoint below overrides this to full-width. */
+.lm-flow-turns { width: clamp(300px, 24vw, 380px); }
+
 @media (max-width: 900px) {
   .lm-grid-4 { grid-template-columns: repeat(2, 1fr); gap: 10px; }
   .lm-grid-5 { grid-template-columns: repeat(3, 1fr); gap: 8px; }
@@ -919,6 +924,174 @@
 }
 .lm-edit .lm-card:hover::before,
 .lm-root .lm-settings-panel .lm-card:hover::before { opacity: 0.9; }
+
+/* ── Monitor Overview cards ──────────────────────────────────────────────────
+   Same depth language as the settings cards (gradient sheen at the top, a
+   hairline amber accent on the leading edge that lights on hover, a subtle
+   lift) so the dashboard feels designed rather than a grid of bordered boxes.
+   Applied via `.lm-mon-card` on top of the inline `S.card` base. All token
+   based → dark + light both track. */
+.lm-root .lm-mon-card {
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--lm-amber) 3.5%, transparent), transparent 110px),
+    var(--lm-card);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 8px 24px -16px rgba(0, 0, 0, 0.5);
+  transition: border-color 0.2s, box-shadow 0.24s, transform 0.24s;
+}
+/* Hairline accent down the leading edge. */
+.lm-root .lm-mon-card::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 14px; bottom: 14px;
+  width: 2px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--lm-amber), transparent);
+  opacity: 0;
+  transition: opacity 0.24s;
+  pointer-events: none;
+}
+/* Soft radial glow that blooms from the top-left on hover — the "cool" touch. */
+.lm-root .lm-mon-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(420px 160px at 0% 0%, var(--lm-amber-glow), transparent 70%);
+  opacity: 0;
+  transition: opacity 0.3s;
+  pointer-events: none;
+}
+.lm-root .lm-mon-card:hover {
+  border-color: var(--lm-border-hi);
+  transform: translateY(-2px);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.18),
+    0 18px 44px -22px rgba(0, 0, 0, 0.6),
+    0 0 0 1px var(--lm-amber-glow);
+}
+.lm-root .lm-mon-card:hover::before { opacity: 0.9; }
+.lm-root .lm-mon-card:hover::after  { opacity: 0.5; }
+
+@media (prefers-reduced-motion: reduce) {
+  .lm-root .lm-mon-card { transition: border-color 0.2s, box-shadow 0.24s; }
+  .lm-root .lm-mon-card:hover { transform: none; }
+}
+
+/* ── Overview hero banner ────────────────────────────────────────────────────
+   A wide gradient header strip at the top of the Overview that gives the page a
+   designed "command-center" feel. Purely presentational — the chips inside it
+   read from already-fetched props. */
+.lm-root .lm-mon-hero {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--lm-border);
+  border-radius: 14px;
+  padding: 16px 20px;
+  background:
+    radial-gradient(640px 200px at 0% -40%, color-mix(in srgb, var(--lm-amber) 16%, transparent), transparent 70%),
+    radial-gradient(540px 200px at 100% 140%, color-mix(in srgb, var(--lm-teal) 12%, transparent), transparent 70%),
+    var(--lm-card);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 10px 30px -18px rgba(0, 0, 0, 0.5);
+}
+/* Faint animated sheen sweeping across the hero. */
+.lm-root .lm-mon-hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 30%, color-mix(in srgb, var(--lm-amber) 8%, transparent) 50%, transparent 70%);
+  transform: translateX(-100%);
+  animation: lm-hero-sheen 7s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes lm-hero-sheen {
+  0%, 60% { transform: translateX(-100%); }
+  100%    { transform: translateX(100%); }
+}
+
+/* ── Card-label icon chip ────────────────────────────────────────────────────
+   A small amber-tinted square holding the section glyph next to each card's
+   label — same affordance as the setup SectionCard header. */
+.lm-root .lm-mon-chip {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1;
+  background: var(--lm-amber-dim);
+  color: var(--lm-amber);
+  box-shadow: inset 0 0 0 1px var(--lm-amber-glow);
+}
+
+/* ── Status-badge pulse ──────────────────────────────────────────────────────
+   A gentle breathing ring on "live" badges (ONLINE, LIVE) to signal real-time
+   activity. Applied alongside the existing badge styles. */
+.lm-root .lm-pulse {
+  position: relative;
+}
+.lm-root .lm-pulse::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  border: 1px solid currentColor;
+  opacity: 0;
+  animation: lm-pulse-ring 2.2s ease-out infinite;
+  pointer-events: none;
+}
+@keyframes lm-pulse-ring {
+  0%   { opacity: 0.5; transform: scale(1); }
+  70%  { opacity: 0;   transform: scale(1.18); }
+  100% { opacity: 0;   transform: scale(1.18); }
+}
+
+/* ── Volume slider — amber gradient track ────────────────────────────────────
+   Restyles the range input in the Audio card into a filled amber track with a
+   glowing thumb. Behaviour (value/onChange) is untouched; this is paint only.
+   The filled portion is driven by a --lm-fill custom property set inline. */
+.lm-root input[type="range"].lm-mon-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, var(--lm-amber), var(--lm-yellow)) 0 / var(--lm-fill, 50%) 100% no-repeat,
+    var(--lm-surface);
+  outline: none;
+}
+.lm-root input[type="range"].lm-mon-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--lm-amber);
+  border: 2px solid var(--lm-card);
+  box-shadow: 0 0 8px var(--lm-amber-glow);
+  cursor: pointer;
+  transition: transform 0.12s;
+}
+.lm-root input[type="range"].lm-mon-range::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+.lm-root input[type="range"].lm-mon-range::-moz-range-thumb {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--lm-amber);
+  border: 2px solid var(--lm-card);
+  box-shadow: 0 0 8px var(--lm-amber-glow);
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lm-root .lm-mon-hero::after,
+  .lm-root .lm-pulse::after { animation: none; }
+}
 
 /* Restart banner — a gradient callout with a softly glowing rotating-icon chip.
    Replaces the flat amber box for a higher-end "info" affordance. */

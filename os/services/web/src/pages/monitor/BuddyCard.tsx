@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Laptop } from "lucide-react";
 import { S } from "./styles";
 import { API } from "./types";
 
@@ -133,9 +134,12 @@ export function BuddyCard() {
   const codeTtl = codeExpiresAt ? Math.max(0, Math.ceil((codeExpiresAt - now) / 1000)) : 0;
 
   return (
-    <div style={S.card}>
+    <div className="lm-mon-card" style={{ ...S.card, boxShadow: undefined }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-        <div style={S.cardLabel}>Autonomous Buddy (Mac)</div>
+        <div style={{ ...S.cardLabel, display: "flex", alignItems: "center", gap: 8, marginBottom: 0 }}>
+          <span className="lm-mon-chip" aria-hidden><Laptop size={13} /></span>
+          <span>Autonomous Buddy (Mac)</span>
+        </div>
         <span
           style={{
             fontSize: 10,
