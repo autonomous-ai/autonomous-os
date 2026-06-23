@@ -35,11 +35,6 @@ class InputProcessorBase(Generic[INPUT_T, OUTPUT_T], ABC):
     def _process_impl(self, input: INPUT_T) -> OUTPUT_T:
         """Process a single input. Subclasses implement this."""
 
-    def process(self, input: INPUT_T) -> OUTPUT_T:
-        """Process a single input. Thread-safe via lock."""
-        with self._lock:
-            return self._process_impl(input)
-
     def start(self) -> None:
         with self._lock:
             self._start_impl()
@@ -51,3 +46,11 @@ class InputProcessorBase(Generic[INPUT_T, OUTPUT_T], ABC):
     def is_ready(self) -> bool:
         with self._lock:
             return self._is_ready_impl()
+
+    def process(self, input: INPUT_T) -> OUTPUT_T:
+        """Process a single input. Thread-safe via lock."""
+        with self._lock:
+            if not self._is_ready_impl():
+                raise RuntimeError(f"{self.__class__.__name__} is not ready")
+
+        return self._process_impl(input)

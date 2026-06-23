@@ -7,6 +7,7 @@ Run with: pytest tests/emotion_api/test_emotion_ws_api.py -v
 import base64
 import json
 import os
+from pathlib import Path
 
 import cv2
 import httpx
@@ -211,3 +212,64 @@ class TestEmotionAnalysisWebSocket:
                     json.dumps({"type": "config", "task": "emotion", "threshold": 0.5})
                 )
                 _ = await conn.recv()
+
+
+FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
+
+
+class TestEmotionPerformance:
+    """Validate that the emotion model correctly identifies emotions on known images."""
+
+    @pytest.fixture(scope="session")
+    def happy_frame_b64(self) -> str:
+        img_path = FIXTURES_DIR / "images" / "happy.jpeg"
+        if not img_path.exists():
+            pytest.skip(f"Fixture image not found: {img_path}")
+        frame = cv2.imread(str(img_path))
+        _, buf = cv2.imencode(".jpg", frame)
+        return base64.b64encode(buf.tobytes()).decode()
+
+    @pytest.fixture(scope="session")
+    def sad_frame_b64(self) -> str:
+        img_path = FIXTURES_DIR / "images" / "sad.jpg"
+        if not img_path.exists():
+            pytest.skip(f"Fixture image not found: {img_path}")
+        frame = cv2.imread(str(img_path))
+        _, buf = cv2.imencode(".jpg", frame)
+        return base64.b64encode(buf.tobytes()).decode()
+
+    @pytest_asyncio.fixture()
+    async def ws(self):
+        async with websockets.connect(
+            _ws_url("/hal/api/dl/emotion-analysis/ws"),
+            additional_headers=AUTH_HEADERS,
+        ) as conn:
+            yield conn
+
+    @pytest.mark.asyncio
+    async def test_happy_face_detected(self, ws, happy_frame_b64: str) -> None:
+        """Send a known happy face image and assert happiness is detected."""
+        await ws.send(
+            json.dumps({"type": "frame", "task": "emotion", "frame_b64": happy_frame_b64})
+        )
+        resp = json.loads(await ws.recv())
+        assert "detections" in resp
+        assert len(resp["detections"]) > 0, "Expected at least one face detection"
+        detected_emotions = [d["emotion"].lower() for d in resp["detections"]]
+        assert any(
+            e in ("happy", "happiness") for e in detected_emotions
+        ), f"Expected 'happy' or 'happiness' in {detected_emotions}"
+
+    @pytest.mark.asyncio
+    async def test_sad_face_detected(self, ws, sad_frame_b64: str) -> None:
+        """Send a known sad face image and assert sadness is detected."""
+        await ws.send(
+            json.dumps({"type": "frame", "task": "emotion", "frame_b64": sad_frame_b64})
+        )
+        resp = json.loads(await ws.recv())
+        assert "detections" in resp
+        assert len(resp["detections"]) > 0, "Expected at least one face detection"
+        detected_emotions = [d["emotion"].lower() for d in resp["detections"]]
+        assert any(
+            e in ("sad", "sadness") for e in detected_emotions
+        ), f"Expected 'sad' or 'sadness' in {detected_emotions}"

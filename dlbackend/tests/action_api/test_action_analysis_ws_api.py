@@ -7,6 +7,7 @@ Run with: pytest tests/test_action_analysis_ws_api.py -v
 import base64
 import json
 import os
+from pathlib import Path
 
 import cv2
 import httpx
@@ -81,7 +82,9 @@ class TestActionAnalysisWebSocket:
 
     @pytest.mark.asyncio
     async def test_frame_returns_detected_classes(self, ws):
-        await ws.send(json.dumps({"type": "frame", "task": "action", "frame_b64": _make_frame_b64()}))
+        await ws.send(
+            json.dumps({"type": "frame", "task": "action", "frame_b64": _make_frame_b64()})
+        )
         resp = json.loads(await ws.recv())
         assert "detected_classes" in resp
         assert isinstance(resp["detected_classes"], list)
@@ -89,13 +92,19 @@ class TestActionAnalysisWebSocket:
     @pytest.mark.asyncio
     async def test_multiple_frames(self, ws):
         for _ in range(3):
-            await ws.send(json.dumps({"type": "frame", "task": "action", "frame_b64": _make_frame_b64()}))
+            await ws.send(
+                json.dumps({"type": "frame", "task": "action", "frame_b64": _make_frame_b64()})
+            )
             resp = json.loads(await ws.recv())
             assert "detected_classes" in resp
 
     @pytest.mark.asyncio
     async def test_whitelist_update(self, ws):
-        await ws.send(json.dumps({"type": "config", "task": "action", "whitelist": ["applauding", "clapping"]}))
+        await ws.send(
+            json.dumps(
+                {"type": "config", "task": "action", "whitelist": ["applauding", "clapping"]}
+            )
+        )
         resp = json.loads(await ws.recv())
         assert resp["status"] == "config_updated"
 
@@ -112,7 +121,9 @@ class TestActionAnalysisWebSocket:
         resp = json.loads(await ws.recv())
         assert resp["status"] == "config_updated"
 
-        await ws.send(json.dumps({"type": "frame", "task": "action", "frame_b64": _make_frame_b64()}))
+        await ws.send(
+            json.dumps({"type": "frame", "task": "action", "frame_b64": _make_frame_b64()})
+        )
         resp = json.loads(await ws.recv())
         assert "detected_classes" in resp
         for det in resp["detected_classes"]:
@@ -163,14 +174,18 @@ class TestActionAnalysisWebSocket:
     @pytest.mark.asyncio
     async def test_heartbeat_interleaved_with_frames(self, ws):
         """Heartbeat should work between frame requests."""
-        await ws.send(json.dumps({"type": "frame", "task": "action", "frame_b64": _make_frame_b64()}))
+        await ws.send(
+            json.dumps({"type": "frame", "task": "action", "frame_b64": _make_frame_b64()})
+        )
         await ws.recv()
 
         await ws.send(json.dumps({"type": "heartbeat", "task": "action"}))
         resp = json.loads(await ws.recv())
         assert resp == {"status": "ok"}
 
-        await ws.send(json.dumps({"type": "frame", "task": "action", "frame_b64": _make_frame_b64()}))
+        await ws.send(
+            json.dumps({"type": "frame", "task": "action", "frame_b64": _make_frame_b64()})
+        )
         resp = json.loads(await ws.recv())
         assert "detected_classes" in resp
 
@@ -182,3 +197,105 @@ class TestActionAnalysisWebSocket:
             ) as conn:
                 await conn.send(json.dumps({"type": "config", "task": "action", "whitelist": None}))
                 _ = await conn.recv()
+
+
+FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
+
+
+def _extract_frames_b64(video_path: Path, max_frames: int = 16) -> list[str]:
+    """Extract up to *max_frames* frames from a GIF / WebP / video file and return as base64 JPEGs."""
+    cap = cv2.VideoCapture(str(video_path))
+    frames: list[str] = []
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        _, buf = cv2.imencode(".jpg", frame)
+        frames.append(base64.b64encode(buf.tobytes()).decode())
+    cap.release()
+    interval = max(len(frames) // max_frames, 1)
+    return frames[0 : len(frames) : interval]
+
+
+class TestActionPerformance:
+    """Validate that the action model correctly identifies actions on known images."""
+
+    @pytest.fixture(scope="session")
+    def person_drinking_b64(self) -> str:
+        img_path = FIXTURES_DIR / "images" / "person_drinking.jpg"
+        if not img_path.exists():
+            pytest.skip(f"Fixture image not found: {img_path}")
+        frame = cv2.imread(str(img_path))
+        _, buf = cv2.imencode(".jpg", frame)
+        return base64.b64encode(buf.tobytes()).decode()
+
+    @pytest.fixture(scope="session")
+    def drinking_gif_frames(self) -> list[str]:
+        vid_path = FIXTURES_DIR / "images" / "drinking.mp4"
+        if not vid_path.exists():
+            pytest.skip(f"Fixture video not found: {vid_path}")
+        frames = _extract_frames_b64(vid_path, max_frames=16)
+        if not frames:
+            pytest.skip("Could not extract frames from drinking.mp4")
+        return frames
+
+    @pytest.fixture(scope="session")
+    def eating_gif_frames(self) -> list[str]:
+        vid_path = FIXTURES_DIR / "images" / "eating.mp4"
+        if not vid_path.exists():
+            pytest.skip(f"Fixture video not found: {vid_path}")
+        frames = _extract_frames_b64(vid_path, max_frames=16)
+        if not frames:
+            pytest.skip("Could not extract frames from eating.mp4")
+        return frames
+
+    @pytest_asyncio.fixture()
+    async def ws(self):
+        async with websockets.connect(
+            _ws_url("/hal/api/dl/action-analysis/ws"),
+            additional_headers=AUTH_HEADERS,
+        ) as conn:
+            yield conn
+
+    @pytest.mark.asyncio
+    async def test_drinking_gif_action_detected(self, ws, drinking_gif_frames: list[str]) -> None:
+        """Send frames extracted from drinking.webp and assert 'drinking' is detected."""
+        resp = None
+        # Pad to 16 frames by repeating if the clip is shorter
+        frames = drinking_gif_frames
+        while len(frames) < 16:
+            frames = frames + drinking_gif_frames
+
+        await ws.send(json.dumps({"type": "config", "task": "action", "threshold": 0.5}))
+        await ws.recv()
+        for frame_b64 in frames[:16]:
+            await ws.send(json.dumps({"type": "frame", "task": "action", "frame_b64": frame_b64}))
+            resp = json.loads(await ws.recv())
+        assert resp is not None
+        assert "detected_classes" in resp
+        class_names = [d["class_name"].lower() for d in resp["detected_classes"]]
+        assert any("drinking" in name for name in class_names), (
+            f"Expected 'drinking' in detected classes from webp, got {class_names}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_eating_gif_action_detected(self, ws, eating_gif_frames: list[str]) -> None:
+        """Send frames extracted from eating.gif and assert 'eating' is detected."""
+        resp = None
+        # Pad to 16 frames by repeating if the clip is shorter
+        frames = eating_gif_frames
+        while len(frames) < 16:
+            frames = frames + eating_gif_frames
+
+        await ws.send(json.dumps({"type": "config", "task": "action", "threshold": 0.5}))
+        await ws.recv()
+        for frame_b64 in frames[:16]:
+            await ws.send(json.dumps({"type": "frame", "task": "action", "frame_b64": frame_b64}))
+            resp = json.loads(await ws.recv())
+
+        assert resp is not None
+        assert "detected_classes" in resp
+        class_names = [d["class_name"].lower() for d in resp["detected_classes"]]
+        assert any("eating" in name for name in class_names), (
+            f"Expected 'eating' in detected classes from gif, got {class_names}"
+        )

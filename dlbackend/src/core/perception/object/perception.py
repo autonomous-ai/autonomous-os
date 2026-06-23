@@ -82,18 +82,25 @@ class ObjectPerception(PerceptionBase[ObjectPerceptionSession]):
         if self._object_detector is None:
             raise RuntimeError("ObjectPerception not started")
 
+        H, W = image.shape[:2]
+
         raw_results: list[RawObjectDetection] = await asyncio.to_thread(
             self._object_detector.predict, [image], classes=classes
         )
         raw: RawObjectDetection = raw_results[0]
 
-        return ObjectDetection(
-            detections=[
-                ObjectDetectionItem(
-                    class_name=raw.class_names[i],
-                    xywh=raw.bbox_xywh[i].tolist(),
-                    confidence=float(raw.confidence[i]),
-                )
-                for i in range(len(raw.class_names))
-            ]
-        )
+        # Rescale [0,1] → pixel xywh
+        detections: list[ObjectDetectionItem] = []
+        for i in range(len(raw.class_names)):
+            xywh = raw.bbox_xywh[i].copy()
+            xywh[0] *= W
+            xywh[1] *= H
+            xywh[2] *= W
+            xywh[3] *= H
+            detections.append(ObjectDetectionItem(
+                class_name=raw.class_names[i],
+                xywh=xywh.tolist(),
+                confidence=float(raw.confidence[i]),
+            ))
+
+        return ObjectDetection(detections=detections)

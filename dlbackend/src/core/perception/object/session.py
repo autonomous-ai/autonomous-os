@@ -16,6 +16,7 @@ from core.models.object import (
 from core.perception.base import PerceptionSessionBase
 from core.perception.object.predictors.base import ObjectDetector
 from core.types import Omit, omit
+from core.utils.common import get_or_default
 
 
 class ObjectPerceptionSession(
@@ -30,8 +31,9 @@ class ObjectPerceptionSession(
     def __init__(
         self,
         object_detector: ObjectDetector,
-        config: ObjectPerceptionSessionConfig = DEFAULT_CONFIG,
+        config: ObjectPerceptionSessionConfig | None = None,
     ) -> None:
+        config = get_or_default(config, ObjectPerceptionSessionConfig())
         super().__init__(config)
 
         self._object_detector: ObjectDetector = object_detector
@@ -64,18 +66,25 @@ class ObjectPerceptionSession(
         if cur_ts - self._last_update_ts < self._config.frame_interval:
             return self._last_prediction
 
+        H, W = input.shape[:2]
+
         raw_results: list[RawObjectDetection] = await asyncio.to_thread(
             self._object_detector.predict, [input], classes=self._config.classes,
         )
         raw: RawObjectDetection = raw_results[0]
 
-        # Filter by threshold
+        # Filter by threshold, rescale [0,1] → pixel xywh
         detections: list[ObjectDetectionItem] = []
         for i in range(len(raw.class_names)):
             if raw.confidence[i] >= self._config.threshold:
+                xywh = raw.bbox_xywh[i].copy()
+                xywh[0] *= W
+                xywh[1] *= H
+                xywh[2] *= W
+                xywh[3] *= H
                 detections.append(ObjectDetectionItem(
                     class_name=raw.class_names[i],
-                    xywh=raw.bbox_xywh[i].tolist(),
+                    xywh=xywh.tolist(),
                     confidence=float(raw.confidence[i]),
                 ))
 

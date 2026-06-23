@@ -19,7 +19,6 @@ from core.models.media import Video
 from core.perception.action.constants import RESOURCES_DIR
 from core.perception.base import PredictorBase
 from core.utils.common import get_or_default
-from core.utils.compute import softmax
 from core.utils.files import ensure_downloaded
 from core.utils.runtime import prepare_ort_session
 
@@ -38,7 +37,7 @@ class HumanActionRecognizer(PredictorBase[Video, RawHumanActionDetection]):
     ONNX_OUTPUT_NAME: str = "pred"
 
     MEAN: npt.NDArray[np.float32] = np.array([0, 0, 0], dtype=np.float32)
-    STD: npt.NDArray[np.float32] = np.array([0, 0, 0], dtype=np.float32)
+    STD: npt.NDArray[np.float32] = np.array([1, 1, 1], dtype=np.float32)
 
     def __init__(
         self,
@@ -157,10 +156,6 @@ class HumanActionRecognizer(PredictorBase[Video, RawHumanActionDetection]):
         input_np = (input_np - self.MEAN) / self.STD
 
         # The model needs exactly `max_frames` along the temporal axis (axis=1).
-        # Short clips (only at stream startup, before the buffer fills) are
-        # zero-padded at the TAIL; the few resulting black frames briefly dampen
-        # confidence but clear once enough real frames arrive. Long buffers keep the
-        # MOST RECENT max_frames so predictions track current activity, not history.
         if T < self._max_frames:
             input_np = np.pad(
                 input_np,
@@ -179,12 +174,20 @@ class HumanActionRecognizer(PredictorBase[Video, RawHumanActionDetection]):
         else:
             class_mask = self._default_class_mask
 
-        (preds,) = self._session.run([self.ONNX_OUTPUT_NAME], {self.ONNX_INPUT_NAME: input_np})
-        preds = cast(npt.NDArray[np.float32], preds)  # (N, C)
-        probs = softmax(preds, axis=-1)
+        with self._gpu_lock:
+            (probs,) = self._session.run([self.ONNX_OUTPUT_NAME], {self.ONNX_INPUT_NAME: input_np})
+
+        probs = cast(npt.NDArray[np.float32], probs)  # (N, C)
+        probs = self._postprocess_probs(probs)
         probs[:, ~class_mask] = 0
 
         return [RawHumanActionDetection(prob_np=prob) for prob in probs]
+
+    def _postprocess_probs(self, probs: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
+        """Post-process ONNX output probabilities. No-op for models that bake
+        softmax into the ONNX graph (e.g. UniformerV2). Subclasses whose ONNX
+        outputs raw logits (X3D, VideoMAE) override to apply softmax."""
+        return probs
 
     def preprocess_single_frame(
         self,

@@ -50,8 +50,8 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineEleme
 const EMBED_SECTIONS = new Set<Section>(["api-docs", "agent-config"]);
 
 // Sections shown to non-debug users. Append `?debug=true` to the URL to reveal
-// the full menu (Sensing, Analytics, Servo, Logs, CLI, API Docs, Agent gateway).
-const PUBLIC_SECTIONS = new Set<Section>(["chat", "overview", "system", "flow", "camera", "face-owners", "bluetooth", "settings:device", "settings:wifi", "settings:voice", "settings:face"]);
+// the rest of the menu (Sensing, Analytics, Servo, API Docs, Agent gateway).
+const PUBLIC_SECTIONS = new Set<Section>(["chat", "overview", "system", "flow", "camera", "face-owners", "bluetooth", "logs", "cli", "settings:device", "settings:wifi", "settings:voice", "settings:face"]);
 
 // The capability a section requires, read from its NAV leaf (single source: the
 // nav definition itself declares `cap`). undefined → no hardware dependency, the

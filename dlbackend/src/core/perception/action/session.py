@@ -19,6 +19,7 @@ from core.perception.action.predictors import HumanActionRecognizer
 from core.perception.base import PerceptionSessionBase
 from core.perception.person.predictors import PersonDetector
 from core.types import Omit, omit
+from core.utils.common import get_or_default
 
 
 class ActionPerceptionSession(
@@ -34,8 +35,9 @@ class ActionPerceptionSession(
         self,
         action_recognizer: HumanActionRecognizer,
         person_detector: PersonDetector | None,
-        config: ActionPerceptionSessionConfig = DEFAULT_CONFIG,
+        config: ActionPerceptionSessionConfig | None = None,
     ) -> None:
+        config = get_or_default(config, ActionPerceptionSessionConfig())
         super().__init__(config)
 
         self._action_recognizer: HumanActionRecognizer = action_recognizer

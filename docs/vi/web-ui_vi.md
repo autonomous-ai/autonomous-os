@@ -111,7 +111,7 @@ Nhóm Settings có thể thu gọn nằm trong `NAV` của sidebar dùng chung (
 | Channels | `/setting#channel` |
 | MQTT | `/setting#mqtt` |
 
-Các mục Monitor được serialize thành id thuần, ví dụ `/monitor#overview`, `/monitor#system`, `/monitor#flow`. Mặc định: `/monitor` không có hash / hash không hợp lệ → `overview`; `/setting` không có hash / hash không hợp lệ → `general` (URL được chuẩn hóa thành `/setting#general`). Deep-link (ví dụ `/setting#wifi`) và nút back/forward của trình duyệt được tôn trọng qua một effect dựa trên `useLocation`. Người dùng không-debug chỉ thấy các mục trong `PUBLIC_SECTIONS`; `?debug=true` mở khóa phần còn lại.
+Các mục Monitor được serialize thành id thuần, ví dụ `/monitor#overview`, `/monitor#system`, `/monitor#flow`. Mặc định: `/monitor` không có hash / hash không hợp lệ → `overview`; `/setting` không có hash / hash không hợp lệ → `general` (URL được chuẩn hóa thành `/setting#general`). Deep-link (ví dụ `/setting#wifi`) và nút back/forward của trình duyệt được tôn trọng qua một effect dựa trên `useLocation`. Người dùng không-debug chỉ thấy các mục trong `PUBLIC_SECTIONS` (gồm Chat, Overview, Info, Flow, Camera, Users, Bluetooth, **Logs**, **CLI**, và các mục Settings); `?debug=true` mở khóa phần còn lại (Sensing, Analytics, Servo, API Docs, Agent gateway).
 
 Trang `/edit` độc lập (`EditConfig.tsx`) vẫn tồn tại như một phương án dự phòng và nhúng cùng `SettingsPanel`.
 

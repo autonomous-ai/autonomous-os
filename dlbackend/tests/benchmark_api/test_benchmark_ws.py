@@ -20,7 +20,7 @@ import itertools
 import json
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -180,15 +180,38 @@ def _ws_send_n_frames(ep: WSEndpointSpec, n_frames: int) -> list[WSResult]:
     return results
 
 
+MAX_PROCESSES = 16
+
+
+def _ws_worker_batch(
+    tasks: list[tuple[WSEndpointSpec, int]],
+) -> list[WSResult]:
+    """Run a chunk of WS tasks inside one worker process using threads."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _do(args: tuple[WSEndpointSpec, int]) -> list[WSResult]:
+        return _ws_send_n_frames(args[0], args[1])
+
+    with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+        return list(itertools.chain.from_iterable(pool.map(_do, tasks)))
+
+
 def _ws_concurrent_connections(
     ep: WSEndpointSpec,
     n_connections: int,
     frames_per_conn: int | None = None,
 ) -> list[WSResult]:
     n_frames = frames_per_conn if frames_per_conn is not None else ep.frames_per_conn
-    with ThreadPoolExecutor(max_workers=n_connections) as pool:
-        futures = [pool.submit(_ws_send_n_frames, ep, n_frames) for _ in range(n_connections)]
-        return list(itertools.chain.from_iterable(f.result() for f in futures))
+    all_tasks = [(ep, n_frames) for _ in range(n_connections)]
+    n_procs = min(len(all_tasks), MAX_PROCESSES)
+
+    chunks: list[list[tuple[WSEndpointSpec, int]]] = [[] for _ in range(n_procs)]
+    for i, task in enumerate(all_tasks):
+        chunks[i % n_procs].append(task)
+
+    with ProcessPoolExecutor(max_workers=n_procs) as pool:
+        chunk_results = list(pool.map(_ws_worker_batch, chunks))
+    return [r for batch in chunk_results for r in batch]
 
 
 def _ws_all_endpoints_concurrent(
@@ -196,14 +219,20 @@ def _ws_all_endpoints_concurrent(
     n_connections: int,
     frames_per_conn: int | None = None,
 ) -> list[WSResult]:
-    tasks = [
+    all_tasks = [
         (ep, frames_per_conn if frames_per_conn is not None else ep.frames_per_conn)
         for ep in endpoints
         for _ in range(n_connections)
     ]
-    with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
-        futures = [pool.submit(_ws_send_n_frames, ep, n) for ep, n in tasks]
-        return list(itertools.chain.from_iterable(f.result() for f in futures))
+    n_procs = min(len(all_tasks), MAX_PROCESSES)
+
+    chunks: list[list[tuple[WSEndpointSpec, int]]] = [[] for _ in range(n_procs)]
+    for i, task in enumerate(all_tasks):
+        chunks[i % n_procs].append(task)
+
+    with ProcessPoolExecutor(max_workers=n_procs) as pool:
+        chunk_results = list(pool.map(_ws_worker_batch, chunks))
+    return [r for batch in chunk_results for r in batch]
 
 
 def _print_ws_report(

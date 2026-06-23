@@ -23,6 +23,7 @@ from core.perception.base import PerceptionSessionBase
 from core.perception.face.predictors.base import FaceDetector
 from core.perception.facial_emotion.predictors.base import EmotionRecognizer
 from core.types import Omit, omit
+from core.utils.common import get_or_default
 
 
 class EmotionPerceptionSession(
@@ -40,8 +41,9 @@ class EmotionPerceptionSession(
         self,
         emotion_recognizer: EmotionRecognizer,
         face_detector: FaceDetector,
-        config: EmotionPerceptionSessionConfig = DEFAULT_CONFIG,
+        config: EmotionPerceptionSessionConfig | None = None,
     ) -> None:
+        config = get_or_default(config, EmotionPerceptionSessionConfig())
         super().__init__(config)
         self._emotion_recognizer: EmotionRecognizer = emotion_recognizer
         self._face_detector: FaceDetector = face_detector

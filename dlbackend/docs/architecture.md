@@ -96,7 +96,7 @@ perceptions actually initialized:
     "ser": true,
     "pose": true,
     "audio_embedder": false,
-    "object_detectors": {"yolo_world": false, "yoloe": false, "owlv2": false, "grounding_dino": false}
+    "object_detectors": {"yoloworld": false, "owlv2": false}
   }
 }
 ```

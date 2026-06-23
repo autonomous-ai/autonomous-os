@@ -19,6 +19,7 @@ from core.models.media import Audio
 from core.perception.audio_emotion.predictors.base import AudioEmotionRecognizer
 from core.perception.base import PerceptionSessionBase
 from core.types import Omit, omit
+from core.utils.common import get_or_default
 
 
 class AudioEmotionPerceptionSession(
@@ -35,8 +36,9 @@ class AudioEmotionPerceptionSession(
     def __init__(
         self,
         audio_emotion_recognizer: AudioEmotionRecognizer,
-        config: AudioEmotionPerceptionSessionConfig = DEFAULT_CONFIG,
+        config: AudioEmotionPerceptionSessionConfig | None = None,
     ) -> None:
+        config = get_or_default(config, AudioEmotionPerceptionSessionConfig())
         super().__init__(config)
         self._audio_emotion_recognizer: AudioEmotionRecognizer = audio_emotion_recognizer
         self._running: bool = False

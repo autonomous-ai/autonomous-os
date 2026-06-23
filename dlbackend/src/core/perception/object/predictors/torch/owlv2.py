@@ -12,8 +12,9 @@ from transformers import Owlv2ForObjectDetection, Owlv2Processor
 from typing_extensions import override
 
 from core.models.object import RawObjectDetection
+from core.utils.detection import xyxy_to_normalized_xywh
 
-from .base import ObjectDetector
+from core.perception.object.predictors.base import ObjectDetector
 
 
 class OWLv2Detector(ObjectDetector):
@@ -28,11 +29,12 @@ class OWLv2Detector(ObjectDetector):
     def __init__(
         self,
         model_path: Path | None = None,
+        remote_url: str | None = None,
         classes_path: Path | None = None,
         threshold: float | None = None,
         batch_size: int | None = None,
     ) -> None:
-        super().__init__(model_path=model_path, classes_path=classes_path, threshold=threshold, batch_size=batch_size)
+        super().__init__(model_path=model_path, remote_url=remote_url, classes_path=classes_path, threshold=threshold, batch_size=batch_size)
         self._processor: Owlv2Processor | None = None
         self._model: Owlv2ForObjectDetection | None = None
         self._device: str = ""
@@ -127,12 +129,9 @@ class OWLv2Detector(ObjectDetector):
                 ))
                 continue
 
-            # xyxy → xywh
-            xywh_np: npt.NDArray[np.float32] = np.empty_like(xyxy_np)
-            xywh_np[:, 0] = (xyxy_np[:, 0] + xyxy_np[:, 2]) / 2
-            xywh_np[:, 1] = (xyxy_np[:, 1] + xyxy_np[:, 3]) / 2
-            xywh_np[:, 2] = xyxy_np[:, 2] - xyxy_np[:, 0]
-            xywh_np[:, 3] = xyxy_np[:, 3] - xyxy_np[:, 1]
+            # xyxy pixel → xywh normalized [0, 1]
+            H, W = input[len(results)].shape[:2]
+            xywh_np = xyxy_to_normalized_xywh(xyxy_np, W, H)
 
             names: list[str] = [effective_classes[i] for i in labels_np]
 

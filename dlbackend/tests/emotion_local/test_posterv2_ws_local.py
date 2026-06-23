@@ -11,10 +11,12 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
+from core.enums.files import ModelEnum
 from core.perception.face.utils import FaceDetectorFactory
 from core.perception.facial_emotion.constants import RESOURCES_DIR
 from core.perception.facial_emotion.perception import EmotionPerception
 from core.perception.facial_emotion.utils import EmotionRecognizerFactory
+from core.utils.files import get_default_model_path
 from dlserver.utils.state import get_emotion_model, set_emotion_model
 
 POSTERV2_EMOTIONS: list[str] = (
@@ -25,12 +27,23 @@ TEST_API_KEY = "test-secret-key"
 os.environ["DL_API_KEY"] = TEST_API_KEY
 os.environ["EMOTION_RECOGNITION_MODEL"] = "posterv2"
 
-POSTERV2_MODEL_PATH = Path.cwd() / "local" / "posterv2_7cls.onnx"
+POSTERV2_MODEL_PATH = get_default_model_path(ModelEnum.POSTERV2_ONNX)
 
 pytestmark = pytest.mark.skipif(
-    not POSTERV2_MODEL_PATH.exists(),
-    reason=f"Local POSTER V2 model not found at {POSTERV2_MODEL_PATH}",
+    POSTERV2_MODEL_PATH is None,
+    reason="Model enum not found in CDN_PATHS",
 )
+
+
+FIXTURES_DIR: Path = Path(__file__).resolve().parent.parent / "fixtures" / "images"
+
+
+def _load_image_b64(name: str) -> str:
+    """Load a fixture image as base64."""
+    img = cv2.imread(str(FIXTURES_DIR / name))
+    assert img is not None, f"Failed to load {FIXTURES_DIR / name}"
+    _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    return base64.b64encode(buf.tobytes()).decode()
 
 
 def _make_frame_b64(width: int = 320, height: int = 240) -> str:
@@ -246,3 +259,88 @@ class TestEmotionAnalysisWebSocket:
             with client.websocket_connect("/hal/api/dl/emotion-analysis/ws") as ws:
                 ws.send_text(json.dumps({"type": "config", "task": "emotion", "threshold": 0.5}))
                 ws.receive_json()
+
+
+# ---------------------------------------------------------------------------
+# Performance / accuracy tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def happy_frame_b64() -> str:
+    """Load happy face image once."""
+    return _load_image_b64("happy.jpeg")
+
+
+@pytest.fixture(scope="session")
+def sad_frame_b64() -> str:
+    """Load sad face image once."""
+    return _load_image_b64("sad.jpg")
+
+
+class TestEmotionPerformance:
+    """Evaluate emotion recognition quality on known images."""
+
+    def test_happy_face_detected(self, client: TestClient, happy_frame_b64: str) -> None:
+        """happy.jpeg should detect 'happy' or 'happiness' as top emotion."""
+        with client.websocket_connect(
+            "/hal/api/dl/emotion-analysis/ws", headers=AUTH_HEADERS
+        ) as ws:
+            ws.send_text(json.dumps({"type": "config", "task": "emotion", "threshold": 0.0}))
+            ws.receive_json()
+
+            ws.send_text(
+                json.dumps({"type": "frame", "task": "emotion", "frame_b64": happy_frame_b64})
+            )
+            resp = ws.receive_json()
+
+        assert len(resp["detections"]) >= 1, "No face detected in happy image"
+        emotions = [d["emotion"].lower() for d in resp["detections"]]
+        assert any("happ" in e for e in emotions), (
+            f"Expected 'happy'/'happiness', got: {emotions}"
+        )
+        best = resp["detections"][0]
+        assert best["confidence"] > 0.3, (
+            f"Happy confidence too low: {best['confidence']:.3f}"
+        )
+
+    def test_sad_face_detected(self, client: TestClient, sad_frame_b64: str) -> None:
+        """sad.jpg should detect 'sad' or 'sadness' as top emotion."""
+        with client.websocket_connect(
+            "/hal/api/dl/emotion-analysis/ws", headers=AUTH_HEADERS
+        ) as ws:
+            ws.send_text(json.dumps({"type": "config", "task": "emotion", "threshold": 0.0}))
+            ws.receive_json()
+
+            ws.send_text(
+                json.dumps({"type": "frame", "task": "emotion", "frame_b64": sad_frame_b64})
+            )
+            resp = ws.receive_json()
+
+        assert len(resp["detections"]) >= 1, "No face detected in sad image"
+        emotions = [d["emotion"].lower() for d in resp["detections"]]
+        assert any("sad" in e for e in emotions), (
+            f"Expected 'sad'/'sadness', got: {emotions}"
+        )
+
+    def test_office_detects_multiple_faces(self, client: TestClient) -> None:
+        """Office header has ~6 people — should detect multiple faces."""
+        office_b64 = _load_image_b64("small-office-header.jpg")
+        with client.websocket_connect(
+            "/hal/api/dl/emotion-analysis/ws", headers=AUTH_HEADERS
+        ) as ws:
+            ws.send_text(json.dumps({"type": "config", "task": "emotion", "threshold": 0.0}))
+            ws.receive_json()
+
+            ws.send_text(
+                json.dumps({"type": "frame", "task": "emotion", "frame_b64": office_b64})
+            )
+            resp = ws.receive_json()
+
+        assert len(resp["detections"]) >= 3, (
+            f"Expected >=3 faces in office image, got {len(resp['detections'])}"
+        )
+        for det in resp["detections"]:
+            assert det["emotion"] in POSTERV2_EMOTIONS
+            assert 0.0 <= det["confidence"] <= 1.0
+            assert len(det["bbox"]) == 4

@@ -13,13 +13,17 @@ class ObjectDetectorFactory(PredictorFactory[ObjectDetector]):
     def __init__(
         self,
         model_name: ObjectDetectorEnum,
+        use_onnx: bool = True,
         model_path: Path | None = None,
+        remote_url: str | None = None,
         classes_path: Path | None = None,
         threshold: float | None = None,
         batch_size: int | None = None,
     ) -> None:
         self._model_name = model_name
+        self._use_onnx = use_onnx
         self._model_path = model_path
+        self._remote_url = remote_url
         self._classes_path = classes_path
         self._threshold = threshold
         self._batch_size = batch_size
@@ -27,7 +31,9 @@ class ObjectDetectorFactory(PredictorFactory[ObjectDetector]):
     def create(self) -> ObjectDetector:
         return create_object_detector(
             self._model_name,
+            use_onnx=self._use_onnx,
             model_path=self._model_path,
+            remote_url=self._remote_url,
             classes_path=self._classes_path,
             threshold=self._threshold,
             batch_size=self._batch_size,
@@ -36,23 +42,39 @@ class ObjectDetectorFactory(PredictorFactory[ObjectDetector]):
 
 def create_object_detector(
     model_name: ObjectDetectorEnum,
+    use_onnx: bool = True,
     model_path: Path | None = None,
+    remote_url: str | None = None,
     classes_path: Path | None = None,
     threshold: float | None = None,
     batch_size: int | None = None,
 ) -> ObjectDetector:
-    """Instantiate the correct object detector."""
+    """Instantiate the correct object detector.
+
+    Uses ONNX predictors when use_onnx=True (default),
+    otherwise falls back to PyTorch/HuggingFace predictors.
+    """
+
     if model_name == ObjectDetectorEnum.YOLO_WORLD:
-        from core.perception.object.predictors.yolo_world import YOLOWorldDetector as detector_cls
-    elif model_name == ObjectDetectorEnum.YOLOE:
-        from core.perception.object.predictors.yoloe import YOLOEDetector as detector_cls
+        if use_onnx:
+            from core.perception.object.predictors.onnx.yolo_world import (
+                YOLOWorldONNXDetector as detector_cls,
+            )
+        else:
+            from core.perception.object.predictors.torch.yolo_world import (
+                YOLOWorldDetector as detector_cls,
+            )
     elif model_name == ObjectDetectorEnum.OWLV2:
-        from core.perception.object.predictors.owlv2 import OWLv2Detector as detector_cls
-    elif model_name == ObjectDetectorEnum.GROUNDING_DINO:
-        from core.perception.object.predictors.grounding_dino import (
-            GroundingDINODetector as detector_cls,
-        )
+        if use_onnx:
+            from core.perception.object.predictors.onnx.owlv2 import (
+                OWLv2ONNXDetector as detector_cls,
+            )
+        else:
+            from core.perception.object.predictors.torch.owlv2 import OWLv2Detector as detector_cls
     else:
         raise ValueError(f"Unknown object detector: {model_name}")
 
-    return detector_cls(model_path=model_path, classes_path=classes_path, threshold=threshold, batch_size=batch_size)
+    return detector_cls(
+        model_path=model_path, remote_url=remote_url, classes_path=classes_path,
+        threshold=threshold, batch_size=batch_size,
+    )

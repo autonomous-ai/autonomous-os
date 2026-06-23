@@ -1,4 +1,4 @@
-"""YOLO-E zero-shot object detector."""
+"""YOLO-World zero-shot object detector."""
 
 from pathlib import Path
 from typing import Any
@@ -8,30 +8,32 @@ import numpy as np
 import numpy.typing as npt
 import torch
 from typing_extensions import override
-from ultralytics import YOLOE
+from ultralytics import YOLOWorld
 
 from core.models.object import RawObjectDetection
+from core.utils.detection import xyxy_to_normalized_xywh
 
-from .base import ObjectDetector
+from core.perception.object.predictors.base import ObjectDetector
 
 
-class YOLOEDetector(ObjectDetector):
-    """Zero-shot object detection using YOLO-E (ultralytics).
+class YOLOWorldDetector(ObjectDetector):
+    """Zero-shot object detection using YOLO-World (ultralytics).
 
     Classes are set per-request via model.set_classes().
     """
 
-    DEFAULT_MODEL_PATH: Path | None = Path("yoloe-26x-seg.pt")
+    DEFAULT_MODEL_PATH: Path | None = Path("yolov8s-worldv2.pt")
 
     def __init__(
         self,
         model_path: Path | None = None,
+        remote_url: str | None = None,
         classes_path: Path | None = None,
         threshold: float | None = None,
         batch_size: int | None = None,
     ) -> None:
-        super().__init__(model_path=model_path, classes_path=classes_path, threshold=threshold, batch_size=batch_size)
-        self._model: YOLOE | None = None
+        super().__init__(model_path=model_path, remote_url=remote_url, classes_path=classes_path, threshold=threshold, batch_size=batch_size)
+        self._model: YOLOWorld | None = None
         self._running: bool = False
 
     @override
@@ -42,7 +44,7 @@ class YOLOEDetector(ObjectDetector):
 
         self._logger.info("Loading model from %s", self._model_path)
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        self._model = YOLOE(str(self._model_path)).to(device)
+        self._model = YOLOWorld(str(self._model_path)).to(device)
         self._class_names = self._load_classes(self._classes_path)
         self._running = True
         self._logger.info("Ready")
@@ -93,16 +95,15 @@ class YOLOEDetector(ObjectDetector):
             conf_np: npt.NDArray[np.float32] = boxes.conf.cpu().numpy().astype(np.float32)
             cls_np: npt.NDArray[np.int64] = boxes.cls.cpu().numpy().astype(np.int64)
 
+            # Discard unknown class indices
             valid_np = cls_np < len(effective_classes)
             xyxy_np = xyxy_np[valid_np]
             conf_np = conf_np[valid_np]
             cls_np = cls_np[valid_np]
 
-            xywh_np: npt.NDArray[np.float32] = np.empty_like(xyxy_np)
-            xywh_np[:, 0] = (xyxy_np[:, 0] + xyxy_np[:, 2]) / 2
-            xywh_np[:, 1] = (xyxy_np[:, 1] + xyxy_np[:, 3]) / 2
-            xywh_np[:, 2] = xyxy_np[:, 2] - xyxy_np[:, 0]
-            xywh_np[:, 3] = xyxy_np[:, 3] - xyxy_np[:, 1]
+            # xyxy pixel → xywh normalized [0, 1]
+            H, W = input[len(results)].shape[:2]
+            xywh_np = xyxy_to_normalized_xywh(xyxy_np, float(W), float(H))
 
             names: list[str] = [effective_classes[i] for i in cls_np]
 

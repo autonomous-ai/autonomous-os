@@ -174,7 +174,7 @@ ALL_ENDPOINTS: list[EndpointSpec] = [
         name="health",
         method="GET",
         path="/hal/api/dl/health",
-        payload_fn=lambda: {},
+        payload_fn=dict,
     ),
 ]
 
@@ -236,15 +236,42 @@ def _fire_request(ep: EndpointSpec) -> RequestResult:
         )
 
 
+MAX_PROCESSES = 16
+
+
+def _worker_batch(tasks: list[EndpointSpec]) -> list[RequestResult]:
+    """Run a chunk of tasks inside one worker process using threads."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+        return list(pool.map(_fire_request, tasks))
+
+
 def _run_concurrent_batch(
     endpoints: list[EndpointSpec],
     n_per_endpoint: int,
 ) -> list[RequestResult]:
-    from concurrent.futures import ThreadPoolExecutor
+    """Distribute tasks across up to MAX_PROCESSES processes.
 
-    tasks = [ep for ep in endpoints for _ in range(n_per_endpoint)]
-    with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
-        return list(pool.map(_fire_request, tasks))
+    Each process fans out its share of tasks via threads, giving true
+    multi-process concurrency (separate GILs, TCP stacks) while keeping
+    the process count bounded.
+    """
+    from concurrent.futures import ProcessPoolExecutor
+
+    all_tasks = [ep for ep in endpoints for _ in range(n_per_endpoint)]
+    n_procs = min(len(all_tasks), MAX_PROCESSES)
+    print(len(all_tasks))
+
+    # Split tasks into roughly equal chunks for each process
+    chunks: list[list[EndpointSpec]] = [[] for _ in range(n_procs)]
+    for i, task in enumerate(all_tasks):
+        chunks[i % n_procs].append(task)
+
+    with ProcessPoolExecutor(max_workers=n_procs) as pool:
+        chunk_results = list(pool.map(_worker_batch, chunks))
+
+    return [r for batch in chunk_results for r in batch]
 
 
 def _print_report(

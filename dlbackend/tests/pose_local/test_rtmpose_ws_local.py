@@ -11,18 +11,20 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
+from core.enums.files import ModelEnum
 from core.perception.pose.perception import PosePerception
 from core.perception.pose.utils import PoseEstimator2DFactory
+from core.utils.files import get_default_model_path
 from dlserver.utils.state import get_pose_model, set_pose_model
 
 TEST_API_KEY = "test-secret-key"
 os.environ["DL_API_KEY"] = TEST_API_KEY
 
-RTMPOSE_MODEL_PATH = Path.cwd() / "local" / "rtmpose-m.onnx"
+RTMPOSE_MODEL_PATH = get_default_model_path(ModelEnum.RTMPOSE_M_ONNX)
 
 pytestmark = pytest.mark.skipif(
-    not RTMPOSE_MODEL_PATH.exists(),
-    reason=f"Local RTMPose model not found at {RTMPOSE_MODEL_PATH}",
+    RTMPOSE_MODEL_PATH is None,
+    reason="Model enum not found in CDN_PATHS",
 )
 
 
@@ -215,3 +217,53 @@ class TestPoseEstimationWebSocket:
             with client.websocket_connect("/hal/api/dl/pose-estimation/ws") as ws:
                 ws.send_text(json.dumps({"type": "heartbeat", "task": "pose"}))
                 ws.receive_json()
+
+
+# ---------------------------------------------------------------------------
+# Performance / accuracy tests using real fixture images
+# ---------------------------------------------------------------------------
+
+FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "images"
+
+
+def _load_image_b64(path: Path) -> str:
+    """Read an image from disk and return its base64-encoded JPEG string."""
+    frame = cv2.imread(str(path))
+    assert frame is not None, f"Could not load image: {path}"
+    _, buf = cv2.imencode(".jpg", frame)
+    return base64.b64encode(buf.tobytes()).decode()
+
+
+@pytest.fixture(scope="session")
+def person_frame_b64() -> str:
+    return _load_image_b64(FIXTURES_DIR / "person_drinking.jpg")
+
+
+class TestPosePerformance:
+    def test_person_keypoints_detected(self, client, person_frame_b64: str) -> None:
+        """Send a real person image and verify keypoint quality."""
+        with client.websocket_connect(
+            "/hal/api/dl/pose-estimation/ws", headers=AUTH_HEADERS
+        ) as ws:
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "frame",
+                        "task": "pose",
+                        "frame_b64": person_frame_b64,
+                    }
+                )
+            )
+            resp = ws.receive_json()
+
+            assert "pose_2d" in resp
+            joints = resp["pose_2d"]["joints"]
+            confs = resp["pose_2d"]["confs"]
+
+            assert len(joints) == 17, f"Expected 17 keypoints, got {len(joints)}"
+
+            high_conf_count = sum(1 for c in confs if c > 0.3)
+            assert high_conf_count >= 10, (
+                f"Expected at least 10 keypoints with confidence > 0.3, "
+                f"got {high_conf_count} (confs: {confs})"
+            )

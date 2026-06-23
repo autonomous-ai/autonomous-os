@@ -8,14 +8,18 @@ import numpy.typing as npt
 from core.enums.files import ModelEnum
 from core.perception.action.constants import RESOURCES_DIR
 from core.perception.action.predictors.base import HumanActionRecognizer
+from core.utils.compute import softmax
 from core.utils.files import get_default_cdn_url, get_default_model_path
 
 
 class VideoMAEModel(HumanActionRecognizer):
-    """VideoMAE ONNX model for action recognition."""
+    """VideoMAE ONNX model for action recognition.
 
-    DEFAULT_MODEL_PATH: Path | None = get_default_model_path(ModelEnum.VIDEOMAE)
-    DEFAULT_REMOTE_URL: str | None = get_default_cdn_url(ModelEnum.VIDEOMAE)
+    Uses old ONNX export that outputs raw logits — softmax applied here.
+    """
+
+    DEFAULT_MODEL_PATH: Path | None = get_default_model_path(ModelEnum.VIDEOMAE_ONNX)
+    DEFAULT_REMOTE_URL: str | None = get_default_cdn_url(ModelEnum.VIDEOMAE_ONNX)
     DEFAULT_CLASSES_PATH: Path = RESOURCES_DIR / "kinect_classes.txt"
     DEFAULT_WHITELIST_PATH: Path | None = RESOURCES_DIR / "white_list.txt"
 
@@ -24,3 +28,6 @@ class VideoMAEModel(HumanActionRecognizer):
 
     MEAN: npt.NDArray[np.float32] = np.array([123.675, 116.28, 103.53], dtype=np.float32)
     STD: npt.NDArray[np.float32] = np.array([58.395, 57.12, 57.375], dtype=np.float32)
+
+    def _postprocess_probs(self, probs: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
+        return softmax(probs, axis=-1)

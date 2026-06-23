@@ -17,6 +17,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"go.autonomous.ai/os/domain"
+	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/server/serializers"
 )
 
@@ -28,6 +30,39 @@ var allowedLogs = map[string]string{
 	"openclaw":         "/var/log/openclaw/agent.log",
 	"openclaw-service": "journal:openclaw.service",
 	"buddy":            "/var/log/claude-desktop-buddy.log",
+}
+
+// hermesAgentLog is Hermes's own rich per-turn agent log under $HERMES_DIR/logs
+// (HERMES_DIR=/root/.hermes, see internal/hermes/install.sh) — the analogue of
+// openclaw's agent.log file.
+const hermesAgentLog = "/root/.hermes/logs/agent.log"
+
+// resolveLogSource maps a web log-source id to its file/journal pattern, with one
+// runtime-aware twist: the generic "Agent"/"Agent Service" tabs follow whichever
+// agentic backend is ACTIVE. When agent_runtime=hermes, openclaw isn't running so
+// its file/journal is empty/stale — so, exactly mirroring the openclaw mapping
+// (Agent → main file log, Agent Service → systemd journal), the tabs serve:
+//   - "openclaw"         (Agent)         → ~/.hermes/logs/agent.log
+//   - "openclaw-service" (Agent Service) → journal:hermes-gateway.service
+// "openclaw" also bakes in resolveOpenclawLog()'s /tmp fallback so callers don't
+// special-case it. The explicit "hermes" id always maps to the hermes agent log.
+func (s *Server) resolveLogSource(source string) (string, bool) {
+	hermesActive := device.CurrentAgentRuntimeFromConfig(s.config) == domain.AgentRuntimeHermes
+	switch source {
+	case "hermes":
+		return hermesAgentLog, true
+	case "openclaw":
+		if hermesActive {
+			return hermesAgentLog, true
+		}
+		return resolveOpenclawLog(), true
+	case "openclaw-service":
+		if hermesActive {
+			return "journal:hermes-gateway.service", true
+		}
+	}
+	p, ok := allowedLogs[source]
+	return p, ok
 }
 
 // resolveOpenclawLog returns the openclaw log path, falling back to the newest
@@ -62,7 +97,7 @@ func resolveLogPaths(pattern string) ([]string, error) {
 // GET /api/logs/tail?source=hal|os-server|openclaw|openclaw-service&lines=200
 func (s *Server) logTail(c *gin.Context) {
 	source := c.DefaultQuery("source", "os-server")
-	pattern, ok := allowedLogs[source]
+	pattern, ok := s.resolveLogSource(source)
 	if !ok {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError("unknown log source"))
 		return
@@ -88,10 +123,6 @@ func (s *Server) logTail(c *gin.Context) {
 			"error":  errMsg,
 		}))
 		return
-	}
-
-	if source == "openclaw" {
-		pattern = resolveOpenclawLog()
 	}
 
 	paths, err := resolveLogPaths(pattern)
@@ -130,7 +161,7 @@ func (s *Server) logTail(c *gin.Context) {
 // GET /api/logs/stream?source=hal|os-server|openclaw|openclaw-service
 func (s *Server) logStream(c *gin.Context) {
 	source := c.DefaultQuery("source", "os-server")
-	pattern, ok := allowedLogs[source]
+	pattern, ok := s.resolveLogSource(source)
 	if !ok {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError("unknown log source"))
 		return
@@ -146,10 +177,6 @@ func (s *Server) logStream(c *gin.Context) {
 		unit := strings.TrimPrefix(pattern, "journal:")
 		s.streamJournal(c, unit)
 		return
-	}
-
-	if source == "openclaw" {
-		pattern = resolveOpenclawLog()
 	}
 
 	paths, err := resolveLogPaths(pattern)

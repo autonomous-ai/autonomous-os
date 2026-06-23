@@ -111,7 +111,7 @@ The Settings collapsible group lives in the shared sidebar `NAV` (`os/services/w
 | Channels | `/setting#channel` |
 | MQTT | `/setting#mqtt` |
 
-Monitor leaves serialize as the plain id, e.g. `/monitor#overview`, `/monitor#system`, `/monitor#flow`. Defaults: `/monitor` with no/invalid hash → `overview`; `/setting` with no/invalid hash → `general` (URL normalized to `/setting#general`). Deep-links (e.g. `/setting#wifi`) and browser back/forward are honored via a `useLocation`-driven effect. Non-debug users only see the leaves in `PUBLIC_SECTIONS`; `?debug=true` reveals the rest.
+Monitor leaves serialize as the plain id, e.g. `/monitor#overview`, `/monitor#system`, `/monitor#flow`. Defaults: `/monitor` with no/invalid hash → `overview`; `/setting` with no/invalid hash → `general` (URL normalized to `/setting#general`). Deep-links (e.g. `/setting#wifi`) and browser back/forward are honored via a `useLocation`-driven effect. Non-debug users only see the leaves in `PUBLIC_SECTIONS` (which includes Chat, Overview, Info, Flow, Camera, Users, Bluetooth, **Logs**, **CLI**, and the Settings leaves); `?debug=true` reveals the rest (Sensing, Analytics, Servo, API Docs, Agent gateway).
 
 The standalone `/edit` page (`EditConfig.tsx`) still exists as a fallback and embeds the same `SettingsPanel`.
 

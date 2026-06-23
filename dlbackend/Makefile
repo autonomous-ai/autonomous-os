@@ -1,7 +1,7 @@
 .PHONY: install install-cpu install-gpu install-tensorrt install-lb install-dev \
        start start-dlserver start-lbserver \
        start-runpod-master start-runpod-master-ssl start-runpod-slave start-runpod-slave-ssl \
-       start-nginx start-nginx-ssl gen-ssl-cert \
+       start-nginx start-nginx-ssl stop-nginx gen-ssl-cert \
        start-runpod-dlserver start-runpod-lbserver stop-runpod-dlserver stop-runpod-lbserver start-jupyter \
        info \
        test test-api test-local \
@@ -143,31 +143,40 @@ gen-ssl-cert:
 		echo "SSL cert already exists at $(SSL_DIR)"; \
 	fi
 
-start-nginx:
+stop-nginx:
+	@nginx -s stop 2>/dev/null || true
+	@if [ -f /tmp/nginx.pid ]; then \
+		kill $$(cat /tmp/nginx.pid) 2>/dev/null || true; \
+		sleep 1; \
+		if kill -0 $$(cat /tmp/nginx.pid) 2>/dev/null; then \
+			kill -9 $$(cat /tmp/nginx.pid) 2>/dev/null || true; \
+			sleep 1; \
+		fi; \
+		rm -f /tmp/nginx.pid; \
+	fi
+	@echo "nginx stopped"
+
+start-nginx: stop-nginx
 	@if ! command -v nginx > /dev/null 2>&1; then \
 		apt-get update && apt-get install -y nginx; \
 	fi
 	cp $(NGINX_CONF) /etc/nginx/dlbackend-nginx.conf
-	nginx -s stop 2>/dev/null || true
-	pkill nginx 2>/dev/null || true
 	nginx -c /etc/nginx/dlbackend-nginx.conf
 
-start-nginx-ssl: gen-ssl-cert
+start-nginx-ssl: gen-ssl-cert stop-nginx
 	@if ! command -v nginx > /dev/null 2>&1; then \
 		apt-get update && apt-get install -y nginx; \
 	fi
 	cp $(NGINX_SSL_CONF) /etc/nginx/dlbackend-nginx-ssl.conf
-	nginx -s stop 2>/dev/null || true
-	pkill nginx 2>/dev/null || true
 	nginx -c /etc/nginx/dlbackend-nginx-ssl.conf
 
 start-runpod-dlserver: install stop-runpod-dlserver
 	@command -v multilog >/dev/null || apt-get install -y daemontools
-	@mkdir -p /workspace/logs/dlserver/stderr
 	@$(SET_TRT_LD_PATH); nohup bash scripts/run-with-restart.sh \
-		--pid-file $(DLSERVER_PID) --wrapper-pid-file $(DLSERVER_WRAPPER_PID) --cooldown 5 -- \
+		--pid-file $(DLSERVER_PID) --wrapper-pid-file $(DLSERVER_WRAPPER_PID) --cooldown 5 \
+		--log-dir /workspace/logs/dlserver -- \
 		python -m dlserver --host 127.0.0.1 --port $(DLSERVER_PORT) --log-dir /workspace/logs/dlserver \
-		</dev/null 2>&1 | multilog t s1048576 n3 /workspace/logs/dlserver/stderr &
+		</dev/null >/dev/null 2>&1 &
 	@echo "dlserver started on port $(DLSERVER_PORT) (auto-restart enabled)"
 
 stop-runpod-dlserver:
@@ -185,11 +194,11 @@ stop-runpod-dlserver:
 
 start-runpod-lbserver: install-lb stop-runpod-lbserver
 	@command -v multilog >/dev/null || apt-get install -y daemontools
-	@mkdir -p /workspace/logs/lbserver/stderr
 	@nohup bash scripts/run-with-restart.sh \
-		--pid-file $(LBSERVER_PID) --wrapper-pid-file $(LBSERVER_WRAPPER_PID) --cooldown 5 -- \
+		--pid-file $(LBSERVER_PID) --wrapper-pid-file $(LBSERVER_WRAPPER_PID) --cooldown 5 \
+		--log-dir /workspace/logs/lbserver -- \
 		python -m lbserver --host 127.0.0.1 --port $(LBSERVER_PORT) --log-dir /workspace/logs/lbserver \
-		</dev/null 2>&1 | multilog t s1048576 n3 /workspace/logs/lbserver/stderr &
+		</dev/null >/dev/null 2>&1 &
 	@echo "lbserver started on port $(LBSERVER_PORT) (auto-restart enabled)"
 
 stop-runpod-lbserver:

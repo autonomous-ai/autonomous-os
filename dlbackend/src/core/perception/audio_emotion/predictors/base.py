@@ -22,7 +22,6 @@ from core.perception.audio.processors import CompositeAudioProcessor
 from core.perception.audio.processors.utils import AudioProcessorFactory
 from core.perception.base import PredictorBase
 from core.utils.common import get_or_default
-from core.utils.compute import softmax
 from core.utils.files import ensure_downloaded
 from core.utils.runtime import prepare_ort_session
 
@@ -147,18 +146,21 @@ class AudioEmotionRecognizer(PredictorBase[Audio, RawAudioEmotionDetection]):
         for i, w in enumerate(waveforms):
             batch[i, : w.shape[0]] = w
 
-        raw_outputs: list[npt.NDArray[np.float32]] = cast(
-            list[npt.NDArray[np.float32]],
-            self._session.run([self.ONNX_OUTPUT_NAME], {self.ONNX_INPUT_NAME: batch}),
-        )
+        with self._gpu_lock:
+            raw_outputs: list[npt.NDArray[np.float32]] = cast(
+                list[npt.NDArray[np.float32]],
+                self._session.run([self.ONNX_OUTPUT_NAME], {self.ONNX_INPUT_NAME: batch}),
+            )
         return self._postprocess_batch(raw_outputs, len(input))
 
     def _postprocess_batch(
         self, raw_outputs: list[npt.NDArray[np.float32]], N: int
     ) -> list[RawAudioEmotionDetection]:
-        """Convert batched ONNX output to per-sample RawAudioEmotionDetection."""
-        logits: npt.NDArray[np.float32] = np.asarray(raw_outputs[0], dtype=np.float32)
-        probs: npt.NDArray[np.float32] = softmax(logits, axis=-1)
+        """Convert batched ONNX output to per-sample RawAudioEmotionDetection.
+
+        Softmax is baked into the ONNX graph — output is probs directly.
+        """
+        probs: npt.NDArray[np.float32] = np.asarray(raw_outputs[0], dtype=np.float32)
 
         return [RawAudioEmotionDetection(expression_probs=probs[i]) for i in range(N)]
 

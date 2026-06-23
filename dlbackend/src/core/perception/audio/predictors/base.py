@@ -192,7 +192,8 @@ class AudioEmbedder(PredictorBase[Audio, RawAudioEmbedding]):
 
         for i in range(0, len(windows), self._batch_size):
             batch = windows[i : i + self._batch_size]  # (B, W, M)
-            (output,) = self._session.run(None, {self.ONNX_INPUT_NAME: batch})
+            with self._gpu_lock:
+                (output,) = self._session.run(None, {self.ONNX_INPUT_NAME: batch})
             output = np.asarray(output, dtype=np.float32)  # (B, D)
 
             norms = np.linalg.norm(output, axis=1, keepdims=True)

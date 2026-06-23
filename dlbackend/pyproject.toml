@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "deeplearning-backend"
 version = "0.1.0"
 
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.100.0",
     "uvicorn>=0.20.0",
@@ -20,7 +20,7 @@ dependencies = [
 [project.optional-dependencies]
 dl = [
     "ultralytics>=8.3.0",
-    "transformers>=4.40.0,<5",
+    "transformers>=4.40.0",
     "torch>=2.0.0",
     "torchvision>=0.15.0",
     "pillow>=10.0.0",
@@ -61,6 +61,15 @@ dev = [
 ]
 
 [project.scripts]
+export-all = "core.export.entries.export_all:entry"
+export-emonet = "core.export.entries.export_emonet:entry"
+export-emotion2vec = "core.export.entries.export_emotion2vec:entry"
+export-owlv2 = "core.export.entries.export_owlv2:entry"
+export-posterv2 = "core.export.entries.export_posterv2:entry"
+export-tcpformer = "core.export.entries.export_tcpformer:entry"
+export-uniformerv2 = "core.export.entries.export_uniformerv2:entry"
+export-yolo = "core.export.entries.export_yolo:entry"
+export-yolo-world = "core.export.entries.export_yolo_world:entry"
 
 [tool.setuptools_scm]
 

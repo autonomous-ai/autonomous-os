@@ -17,8 +17,8 @@ class RTMPose2D(PoseEstimator2D):
 
     GRAPH_TYPE: GraphEnum = GraphEnum.COCO
 
-    DEFAULT_MODEL_PATH: Path | None = get_default_model_path(ModelEnum.RTMPOSE_M)
-    DEFAULT_REMOTE_URL: str | None = get_default_cdn_url(ModelEnum.RTMPOSE_M)
+    DEFAULT_MODEL_PATH: Path | None = get_default_model_path(ModelEnum.RTMPOSE_M_ONNX)
+    DEFAULT_REMOTE_URL: str | None = get_default_cdn_url(ModelEnum.RTMPOSE_M_ONNX)
     DEFAULT_INPUT_SIZE: tuple[int, int] = (192, 256)
 
     INPUT_MEAN: npt.NDArray[np.float32] = np.array([123.675, 116.28, 103.53], dtype=np.float32)

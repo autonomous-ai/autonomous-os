@@ -61,7 +61,9 @@ The OS server uses MQTT to communicate with the backend server (status reporting
 (`openclaw` | `hermes` | `picoclaw`) — resolved as `config.agent_runtime`, else
 the device's `DEVICE.md` `gateway.default`, else `openclaw`. The response also
 carries these optional fields when known: `hal_version`, `openclaw_version`,
-`local_ip`, `tts_provider`, `tts_voice`, `stt_language`.
+`hermes_version`, `local_ip`, `tts_provider`, `tts_voice`, `stt_language`.
+`openclaw_version` and `hermes_version` are both probed at startup (each from its
+own `--version`) and reported side by side; `agent_runtime` names the active one.
 
 ### `add_channel` — Add messaging channel
 
