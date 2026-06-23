@@ -98,7 +98,7 @@ func categorize(p picoPayload) category {
 }
 
 // translateFrame parses one inbound PicoClaw frame and emits 0..N domain.WSEvent
-// frames into dispatch. Mapping (keep in sync with docs/picoclaw.md):
+// frames into dispatch. Mapping (keep in sync with docs/agentic/picoclaw.md):
 //
 //	typing.start                    → lifecycle.start (once per turn)
 //	message.create/update placeholder/thought → ignored (state, not content)

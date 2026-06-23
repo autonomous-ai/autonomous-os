@@ -10,7 +10,7 @@ import (
 )
 
 // SetupAgent — PicoClaw is assumed already running on the Pi as a systemd
-// service with skills provisioned externally (see docs/picoclaw.md). This is a
+// service with skills provisioned externally (see docs/agentic/picoclaw.md). This is a
 // no-op so the setup flow doesn't try to write a config / restart a gateway.
 func (s *Service) SetupAgent(_ domain.SetupRequest) error {
 	slog.Info("SetupAgent: no-op (picoclaw backend)", "component", "picoclaw")

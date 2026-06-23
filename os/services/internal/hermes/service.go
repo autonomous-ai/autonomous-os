@@ -1,5 +1,5 @@
 // Package hermes implements domain.AgentGateway against the Hermes HTTP+SSE
-// API server (OpenAI Responses API style). See docs/hermes.md for the full
+// API server (OpenAI Responses API style). See docs/agentic/hermes.md for the full
 // design — protocol mapping, session strategy, and the runtime boundaries with
 // OpenClaw.
 //
