@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
+import { Satellite, Globe, Eye, Volume2, Cpu, Drama, Clapperboard, Bot, Tag, Wifi, LayoutDashboard } from "lucide-react";
 import { S } from "./styles";
 import { API, HW } from "./types";
 
@@ -33,7 +35,7 @@ function useEmotionPresets() {
   return { emotions, colors };
 }
 import type { SystemInfo, NetworkInfo, HWHealth, OCStatus, PresenceInfo, VoiceStatus, ServoState, DisplayState, AudioVolume, LEDColor, SceneInfo } from "./types";
-import { StatusDot, HWBadge, SignalBars, formatUptime, SoftwareUpdateButton, StatRow, StatusBadge, STATUS_TONE } from "./components";
+import { StatusDot, HWBadge, SignalBars, formatUptime, SoftwareUpdateButton, StatRow, StatusBadge, STATUS_TONE, CardLabel } from "./components";
 import { BuddyCard } from "./BuddyCard";
 
 export function OverviewSection({
@@ -105,16 +107,59 @@ export function OverviewSection({
     }).catch(() => {});
   }, []);
 
+  // Base card style for the Overview: the `.lm-mon-card` class owns the
+  // resting + hover box-shadow (and the gradient/accent/glow), so we strip the
+  // inline boxShadow from S.card to let the class's :hover shadow win.
+  const monCard = { ...S.card, boxShadow: undefined };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+
+      {/* Hero banner — a command-center header summarizing live device state.
+          Read-only: every chip reflects an already-fetched prop, no new calls. */}
+      <div className="lm-mon-hero">
+        <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <div style={{
+              width: 44, height: 44, borderRadius: 12, flexShrink: 0,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: "var(--lm-amber-dim)", color: "var(--lm-amber)",
+              boxShadow: "inset 0 0 0 1px var(--lm-amber-glow)",
+            }} aria-hidden><LayoutDashboard size={22} /></div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 19, fontWeight: 700, color: "var(--lm-text)", letterSpacing: "-0.3px", lineHeight: 1.2 }}>
+                Device Overview
+              </div>
+              <div style={{ fontSize: 12, color: "var(--lm-text-dim)", marginTop: 2 }}>
+                Live status across agent, network, presence & hardware
+              </div>
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <HeroChip
+              icon={<Bot size={14} />}
+              label="Agent"
+              value={oc?.connected ? "Online" : "Offline"}
+              tone={oc?.connected ? "ok" : "error"}
+            />
+            <HeroChip icon={<Wifi size={14} />} label="IP" value={net?.ip ?? "—"} tone="neutral" />
+            <HeroChip
+              icon={<Eye size={14} />}
+              label="Presence"
+              value={presence?.state ? presence.state[0].toUpperCase() + presence.state.slice(1) : "—"}
+              tone={presence?.state === "active" ? "active" : "neutral"}
+            />
+          </div>
+        </div>
+      </div>
 
       {/* Row 1: 4 status cards in one row */}
       <div className="lm-grid-4">
         {/* Agent Gateway */}
-        <div style={S.card}>
+        <div className="lm-mon-card" style={monCard}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-            <div style={S.cardLabel}>Agent Gateway</div>
-            <StatusBadge text={oc?.connected ? "ONLINE" : "OFFLINE"} ok={!!oc?.connected} />
+            <CardLabel icon={<Satellite size={13} />} text="Agent Gateway" />
+            <StatusBadge text={oc?.connected ? "ONLINE" : "OFFLINE"} ok={!!oc?.connected} pulse={!!oc?.connected} />
           </div>
           {oc ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -135,9 +180,9 @@ export function OverviewSection({
         </div>
 
         {/* Network */}
-        <div style={S.card}>
+        <div className="lm-mon-card" style={monCard}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-            <div style={S.cardLabel}>Network</div>
+            <CardLabel icon={<Globe size={13} />} text="Network" />
           </div>
           {net ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -159,10 +204,10 @@ export function OverviewSection({
         </div>
 
         {/* Presence */}
-        <div style={S.card}>
+        <div className="lm-mon-card" style={monCard}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-            <div style={S.cardLabel}>Presence</div>
-            <StatusBadge text={(presence?.state ?? "—").toUpperCase()} tone={presence?.state === "active" ? "active" : "idle"} />
+            <CardLabel icon={<Eye size={13} />} text="Presence" />
+            <StatusBadge text={(presence?.state ?? "—").toUpperCase()} tone={presence?.state === "active" ? "active" : "idle"} pulse={presence?.state === "active"} />
           </div>
           {presence ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -173,8 +218,8 @@ export function OverviewSection({
         </div>
 
         {/* Audio */}
-        <div style={S.card}>
-          <div style={S.cardLabel}>Audio</div>
+        <div className="lm-mon-card" style={monCard}>
+          <div style={{ marginBottom: 12 }}><CardLabel icon={<Volume2 size={13} />} text="Audio" /></div>
           {voice ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {/* Mic row */}
@@ -242,9 +287,11 @@ export function OverviewSection({
                   }}
                   onMouseUp={(e) => commitVolume(Number((e.target as HTMLInputElement).value))}
                   onTouchEnd={(e) => commitVolume(Number((e.target as HTMLInputElement).value))}
+                  className="lm-mon-range"
                   style={{
-                    width: "100%", height: 6, cursor: "pointer",
-                    accentColor: "var(--lm-amber)",
+                    width: "100%", cursor: "pointer",
+                    // Drives the amber-fill width in the .lm-mon-range track (paint only).
+                    ["--lm-fill" as string]: `${localVolume ?? audio?.volume ?? 50}%`,
                   }}
                 />
               </div>
@@ -265,7 +312,7 @@ export function OverviewSection({
           border: `1px solid ${emotion ? emotionColor + "55" : "var(--lm-border)"}`,
           transition: "all 0.4s ease",
         }}>
-          <div style={S.cardLabel}>Emotion</div>
+          <div style={{ marginBottom: 12 }}><CardLabel icon={<Drama size={13} />} text="Emotion" /></div>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <div style={{
               fontSize: 36, lineHeight: 1, flexShrink: 0,
@@ -295,7 +342,7 @@ export function OverviewSection({
                     body: JSON.stringify({ emotion: e, intensity: 1.0 }),
                   }).catch(() => {});
                 }} style={{
-                  fontSize: 9.5, padding: "1px 6px", borderRadius: 8,
+                  fontSize: 9, padding: "1px 6px", borderRadius: 8,
                   background: active ? `${c}22` : "var(--lm-surface)",
                   border: `1px solid ${active ? c + "88" : "var(--lm-border)"}`,
                   color: active ? c : "var(--lm-text-muted)",
@@ -313,9 +360,9 @@ export function OverviewSection({
         )}
 
         {/* Hardware */}
-        <div style={S.card}>
+        <div className="lm-mon-card" style={monCard}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-            <div style={S.cardLabel}>Hardware</div>
+            <CardLabel icon={<Cpu size={13} />} text="Hardware" />
             {ledColor && (
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <div style={{
@@ -365,8 +412,8 @@ export function OverviewSection({
             capability omits the scene route leaves /scene 404ing, so sceneInfo stays
             null and the card never renders (rather than showing "Loading…" forever). */}
         {sceneInfo && (
-        <div style={S.card}>
-          <div style={S.cardLabel}>Scene</div>
+        <div className="lm-mon-card" style={monCard}>
+          <div style={{ marginBottom: 12 }}><CardLabel icon={<Clapperboard size={13} />} text="Scene" /></div>
             <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 5 }}>
               {sceneInfo.scenes.map((s) => (
                 <span key={s} role="button" onClick={() => onSceneActivate(s)} style={{
@@ -397,8 +444,8 @@ export function OverviewSection({
 
         {/* Servo — only for devices that declare the motion capability (e.g. lamp, not intern-v2) */}
         {hasMotion && (
-        <div style={S.card}>
-          <div style={S.cardLabel}>Servo Pose</div>
+        <div className="lm-mon-card" style={monCard}>
+          <div style={{ marginBottom: 12 }}><CardLabel icon={<Bot size={13} />} text="Servo Pose" /></div>
           {servo ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: "var(--lm-amber)" }}>
@@ -464,8 +511,8 @@ export function OverviewSection({
       {/* Versions + Autonomous Buddy pairing.
           OS uptime sits in the host row; detailed CPU/RAM/Disk live in System tab. */}
       <div className="lm-grid-4">
-        <div style={S.card}>
-          <div style={{ ...S.cardLabel, marginBottom: 10 }}>Versions</div>
+        <div className="lm-mon-card" style={monCard}>
+          <div style={{ marginBottom: 10 }}><CardLabel icon={<Tag size={13} />} text="Versions" /></div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <VersionRow name="Host"   color="var(--lm-text)"   version={null}                    uptime={sys?.uptime ?? null}                                   updateTarget={null} />
             <VersionRow name="Web"    color="var(--lm-teal)"   version={webVersion}              uptime={null}                                                  updateTarget={isDebug ? "web" : null} />
@@ -477,6 +524,34 @@ export function OverviewSection({
         <BuddyCard />
       </div>
 
+    </div>
+  );
+}
+
+// HeroChip is a compact pill in the hero banner showing a single live stat
+// (Agent / IP / Presence). Presentational only — values are passed in.
+function HeroChip({ icon, label, value, tone }: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  tone: "ok" | "error" | "active" | "neutral";
+}) {
+  const color =
+    tone === "ok" ? "var(--lm-green)" :
+    tone === "error" ? "var(--lm-red)" :
+    tone === "active" ? "var(--lm-amber)" :
+    "var(--lm-text)";
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 8,
+      padding: "6px 12px", borderRadius: 10,
+      background: "color-mix(in srgb, var(--lm-card) 70%, transparent)",
+      border: "1px solid var(--lm-border)",
+      backdropFilter: "blur(4px)",
+    }}>
+      <span style={{ display: "flex", color }} aria-hidden>{icon}</span>
+      <span style={{ fontSize: 10, color: "var(--lm-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</span>
+      <span style={{ fontSize: 12.5, fontWeight: 700, color, fontFamily: label === "IP" ? "monospace" : undefined }}>{value}</span>
     </div>
   );
 }

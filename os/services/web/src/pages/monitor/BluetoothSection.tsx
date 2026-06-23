@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
+import { Bluetooth } from "lucide-react";
 import { HW } from "./types";
 import { usePolling } from "../../hooks/usePolling";
 import { S } from "./styles";
+import { CardLabel } from "./components";
 
 interface BTDevice {
   mac: string;
@@ -26,9 +28,10 @@ interface DiscoveredDevice {
 }
 
 function Pill({ text, tone }: { text: string; tone: "ok" | "warn" | "off" }) {
+  // Theme-aware tones (the old hardcoded #3ad29f/#e8a849 didn't track light mode).
   const palette = {
-    ok:   { fg: "#3ad29f", bg: "#3ad29f26", bd: "#3ad29f55" },
-    warn: { fg: "#e8a849", bg: "#e8a84926", bd: "#e8a84955" },
+    ok:   { fg: "var(--lm-green)", bg: "var(--lm-green-dim)", bd: "color-mix(in srgb, var(--lm-green) 33%, transparent)" },
+    warn: { fg: "var(--lm-amber)", bg: "var(--lm-amber-dim)", bd: "color-mix(in srgb, var(--lm-amber) 33%, transparent)" },
     off:  { fg: "var(--lm-text-muted)", bg: "transparent", bd: "var(--lm-border)" },
   }[tone];
   return (
@@ -179,10 +182,15 @@ export function BluetoothSection() {
 
   // --- Render ---
 
+  // The `.lm-mon-card` class owns the resting + hover box-shadow (plus the
+  // gradient/accent/glow), so strip the inline boxShadow from S.card to let the
+  // class's :hover shadow win — matching the Overview/System cards.
+  const monCard = { ...S.card, boxShadow: undefined };
+
   if (status && !status.available) {
     return (
-      <div style={S.card}>
-        <div style={S.cardLabel}>Bluetooth Headset</div>
+      <div className="lm-mon-card" style={monCard}>
+        <div style={{ marginBottom: 12 }}><CardLabel icon={<Bluetooth size={13} />} text="Bluetooth Headset" /></div>
         <p style={{ fontSize: 13, color: "var(--lm-text-muted)" }}>
           Bluetooth is not available on this host (bluetoothctl missing).
           Install BlueZ + PipeWire/PulseAudio on the Pi to use a BT headset.
@@ -195,9 +203,9 @@ export function BluetoothSection() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <div style={S.card}>
+      <div className="lm-mon-card" style={monCard}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <div style={S.cardLabel}>Bluetooth Headset</div>
+          <CardLabel icon={<Bluetooth size={13} />} text="Bluetooth Headset" />
           <div style={{ display: "flex", gap: 6 }}>
             {active
               ? <Pill text="Private mode" tone="ok" />
@@ -241,6 +249,7 @@ export function BluetoothSection() {
                 <button
                   onClick={() => setActive(isActive ? null : d.mac)}
                   disabled={rowBusy || busyMac === "__device__"}
+                  className={isActive ? "lm-u-btn lm-u-btn-primary" : "lm-u-btn"}
                   style={isActive ? toggleBtnOn : toggleBtnOff}
                   title={isActive ? "Turn off private mode" : "Turn on private mode"}
                 >
@@ -251,6 +260,7 @@ export function BluetoothSection() {
                 <button
                   onClick={() => setForgetConfirm(d.mac)}
                   disabled={rowBusy}
+                  className="lm-u-btn"
                   style={ghostBtn}
                   title="Forget device"
                 >
@@ -262,7 +272,7 @@ export function BluetoothSection() {
         </div>
 
         <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end" }}>
-          <button onClick={startScan} style={primaryBtn}>
+          <button onClick={startScan} className="lm-u-btn lm-u-btn-primary" style={primaryBtn}>
             + Connect headset
           </button>
         </div>
@@ -284,6 +294,7 @@ export function BluetoothSection() {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Filter by name or MAC..."
+            className="lm-u-input"
             style={searchInput}
           />
           {(() => {
@@ -311,6 +322,7 @@ export function BluetoothSection() {
                 key={d.mac}
                 onClick={() => pairDevice(d.mac)}
                 disabled={!!pairingMac}
+                className="lm-u-interactive"
                 style={listRowBtn}
               >
                 <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
@@ -326,8 +338,8 @@ export function BluetoothSection() {
             );
           })()}
           <div style={{ display: "flex", gap: 8, marginTop: 12, justifyContent: "flex-end" }}>
-            <button onClick={startScan} style={ghostBtn}>Rescan</button>
-            <button onClick={() => setPairOpen(false)} style={primaryBtn}>Close</button>
+            <button onClick={startScan} className="lm-u-btn" style={ghostBtn}>Rescan</button>
+            <button onClick={() => setPairOpen(false)} className="lm-u-btn lm-u-btn-primary" style={primaryBtn}>Close</button>
           </div>
         </Modal>
       )}
@@ -339,10 +351,11 @@ export function BluetoothSection() {
             After forgetting, you'll have to pair the headset again (30-60s) next time you want to use it.
           </p>
           <div style={{ display: "flex", gap: 8, marginTop: 12, justifyContent: "flex-end" }}>
-            <button onClick={() => setForgetConfirm(null)} style={ghostBtn}>Cancel</button>
+            <button onClick={() => setForgetConfirm(null)} className="lm-u-btn" style={ghostBtn}>Cancel</button>
             <button
               onClick={() => forgetDevice(forgetConfirm)}
-              style={{ ...primaryBtn, background: "#d24a4a", border: "1px solid #d24a4a" }}
+              className="lm-u-btn"
+              style={{ ...primaryBtn, background: "var(--lm-red)", color: "#fff", border: "1px solid var(--lm-red)" }}
             >
               Forget
             </button>
@@ -357,8 +370,8 @@ export function BluetoothSection() {
 
 const errBox: React.CSSProperties = {
   fontSize: 12, padding: "6px 10px", marginBottom: 10,
-  background: "#d24a4a26", color: "#e88080", borderRadius: 6,
-  border: "1px solid #d24a4a55",
+  background: "var(--lm-red-dim)", color: "var(--lm-red)", borderRadius: 6,
+  border: "1px solid color-mix(in srgb, var(--lm-red) 33%, transparent)",
 };
 
 const deviceRow: React.CSSProperties = {
@@ -404,9 +417,6 @@ const searchInput: React.CSSProperties = {
   padding: "8px 12px",
   fontSize: 13,
   borderRadius: 6,
-  background: "var(--lm-bg)",
-  color: "var(--lm-text)",
-  border: "1px solid var(--lm-border)",
   marginBottom: 10,
   outline: "none",
   boxSizing: "border-box",
