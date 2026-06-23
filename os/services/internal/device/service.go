@@ -953,9 +953,10 @@ func (s *Service) CurrentAgentRuntime() string {
 }
 
 // UpdateAgentRuntime swaps the agentic backend (openclaw / hermes / picoclaw). It
-// persists config.agent_runtime, then runs switch-runtime and BLOCKS until the
-// switch finishes, so the outcome is known here rather than guessed. Shared by the
-// MQTT hermes.setup / picoclaw.setup handlers and the HTTP config API.
+// runs switch-runtime and BLOCKS until the switch finishes, then persists
+// config.agent_runtime ONLY if it landed — so a failed install never leaves disk
+// pointing at a backend that isn't actually running. Shared by the MQTT
+// hermes.setup / picoclaw.setup handlers and the HTTP config API.
 //
 // Returns:
 //   - (true, nil)  — the switch landed; the caller MUST report success and then
@@ -1000,26 +1001,26 @@ func (s *Service) UpdateAgentRuntime(d domain.AgentRuntimeSetData) (bool, error)
 		return false, fmt.Errorf("materialize %s installer: %w", runtime, err)
 	}
 
-	// Persist the target BEFORE switching so a restart resolves the new backend.
+	slog.Info("running switch-runtime", "component", "device", "from", old, "to", runtime)
+
+	// Run the switcher and WAIT for its exit code. We deliberately do NOT persist
+	// config.agent_runtime first: if the install/start fails, config.json stays at
+	// `old`, so the device — including after a crash or reboot mid-switch — resolves
+	// the still-installed old backend instead of a half-installed new one. On failure
+	// switch-runtime has already rolled the systemd units back to `old`, and since we
+	// never touched config (memory or disk) there is nothing to revert.
+	if err := s.runSwitchRuntime(runtime, old); err != nil {
+		return false, fmt.Errorf("switch to %s failed, rolled back to %s: %w", runtime, old, err)
+	}
+
+	// Switch landed (NEW up, OLD stopped) — only NOW persist the new runtime, so the
+	// imminent RestartForAgentRuntime (and every future boot) resolves it. If this
+	// save fails the units are already on NEW while disk still says `old`; surface the
+	// error so the caller skips the restart and an operator can re-trigger.
 	if err := s.config.WithLockSave(func(c *config.Config) {
 		c.AgentRuntime = runtime
 	}); err != nil {
-		return false, fmt.Errorf("save config: %w", err)
-	}
-	slog.Info("agent runtime persisted, running switch-runtime", "component", "device", "from", old, "to", runtime)
-
-	// Run the switcher and WAIT for its exit code. On failure switch-runtime has
-	// already rolled the systemd units back and reverted config.json (its jq trap),
-	// so we revert our IN-MEMORY copy too: os-server never re-reads config.json at
-	// runtime, so leaving s.config at the failed target would drift from disk and
-	// make the next switch a false no-op.
-	if err := s.runSwitchRuntime(runtime, old); err != nil {
-		if rerr := s.config.WithLockSave(func(c *config.Config) {
-			c.AgentRuntime = old
-		}); rerr != nil {
-			slog.Error("revert agent_runtime after failed switch", "component", "device", "err", rerr)
-		}
-		return false, fmt.Errorf("switch to %s failed, rolled back to %s: %w", runtime, old, err)
+		return false, fmt.Errorf("switch to %s landed but persisting agent_runtime failed: %w", runtime, err)
 	}
 
 	slog.Info("agent runtime switch landed", "component", "device", "from", old, "to", runtime)

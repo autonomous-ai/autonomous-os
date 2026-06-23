@@ -33,9 +33,10 @@
 # os-server (it used to); os-server restarts itself AFTER acking, which is also
 # what makes factory.go re-resolve the gateway.
 #
-# config.agent_runtime itself is persisted by os-server BEFORE this runs; this
-# script only owns the systemd + backend-install side effects (and, on failure,
-# rolling those + config.agent_runtime back).
+# config.agent_runtime is owned entirely by os-server: it persists the new value
+# only AFTER this script exits 0 (never before). So this script never reads or
+# writes config.json — it owns only the systemd + backend-install side effects, and
+# on failure rolls just those back (config is still `old` on disk, nothing to undo).
 set -euo pipefail
 
 NEW="${1:-}"
@@ -79,14 +80,12 @@ stop_unit_retry() {
   return 0
 }
 
-# Roll back to OLD if the switch fails before we reach the os-server restart. The
-# hermes installer stops openclaw EARLY (before it finishes installing), so a
-# mid-switch failure would otherwise leave the device with NO backend running
-# while config.agent_runtime (persisted by os-server before this ran) already
-# points at the half-installed NEW one — dead on the next reboot. This trap
-# restarts OLD and reverts config.agent_runtime so the device stays fully
-# consistent on OLD. Disarmed (switched=1) once NEW is up and OLD is stopped.
-CONFIG_JSON="${CONFIG_JSON:-/root/config/config.json}"
+# Roll back to OLD if the switch fails before NEW is confirmed up. The hermes
+# installer stops openclaw EARLY (before it finishes installing), so a mid-switch
+# failure would otherwise leave the device with NO backend running. This trap
+# restarts OLD so the device stays consistent on OLD. config.agent_runtime needs no
+# revert here: os-server persists NEW only after we exit 0, so on any failure config
+# is still OLD on disk. Disarmed (switched=1) once NEW is up and OLD is stopped.
 switched=0
 
 rollback() {
@@ -97,16 +96,6 @@ rollback() {
     log "restored $OLD"
   else
     log "WARN: could not restore $OLD"
-  fi
-  if command -v jq >/dev/null 2>&1 && [ -w "$CONFIG_JSON" ]; then
-    local tmp
-    tmp="$(mktemp)"
-    if jq --arg r "$OLD" '.agent_runtime = $r' "$CONFIG_JSON" >"$tmp" && mv "$tmp" "$CONFIG_JSON"; then
-      log "reverted config.agent_runtime → $OLD"
-    else
-      log "WARN: could not revert config.agent_runtime"
-      rm -f "$tmp" 2>/dev/null || true
-    fi
   fi
 }
 trap rollback EXIT

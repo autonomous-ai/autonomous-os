@@ -33,7 +33,10 @@ set -euo pipefail
 # Tee all output (stdout+stderr) to a log file so the install can be followed
 # live (`tail -f $HERMES_LOG`) and inspected after the fact. Console output is
 # preserved. Override the path with HERMES_LOG=... before invoking if needed.
-HERMES_LOG="${HERMES_LOG:-/var/log/hermes/install.log}"
+# NOTE: default lives under /root/.hermes (persistent rootfs), NOT /var/log —
+# on these boards /var/log is a volatile zram mount (log2ram) that is wiped on
+# reboot, which would lose the install log exactly when you need it.
+HERMES_LOG="${HERMES_LOG:-/root/.hermes/install.log}"
 mkdir -p "$(dirname "$HERMES_LOG")"
 exec > >(tee -a "$HERMES_LOG") 2>&1
 echo "[install-hermes] ===== install start $(date -u '+%Y-%m-%dT%H:%M:%SZ') (log: $HERMES_LOG) ====="
@@ -61,8 +64,25 @@ if ! command -v yq >/dev/null 2>&1; then
   chmod +x /usr/local/bin/yq
 fi
 
-echo "[install-hermes] install Hermes CLI"
-curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --skip-setup
+echo "[install-hermes] install Hermes CLI (staged — skip node-deps browser tools)"
+# The upstream installer's `node-deps` stage runs `npm install` of browser-tool
+# native modules (node-gyp prebuild/rebuild) that hangs indefinitely on this ARM
+# board (CPU idle, no compiler children — it stalls, never returns), and a voice
+# lamp never uses browser tools. So instead of the monolithic
+# `curl | bash --skip-setup`, drive the installer STAGE BY STAGE and skip
+# `node-deps`. These stages reproduce the monolithic runtime install minus
+# node-deps and the interactive setup/gateway stages (we install the gateway
+# ourselves below). See `bash <installer> --manifest` for the full stage list.
+HERMES_INSTALLER="$(mktemp)"
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o "$HERMES_INSTALLER"
+for stage in prerequisites repository venv python-deps path config; do
+  echo "[install-hermes] hermes installer stage: ${stage}"
+  bash "$HERMES_INSTALLER" --stage "$stage" --non-interactive
+done
+rm -f "$HERMES_INSTALLER"
+# Stamp the install method the monolithic flow writes at its end, so a later
+# `hermes update` recognizes this as a git install (root layout default dir).
+echo "git" >/usr/local/lib/hermes-agent/.install_method 2>/dev/null || true
 if [ ! -x "$HERMES_BIN" ]; then
   echo "[install-hermes] ERROR: hermes not found at $HERMES_BIN after install" >&2
   command -v hermes || true
@@ -89,7 +109,7 @@ echo "[install-hermes] migrate skills from OpenClaw (model config is synced sepa
 "$HERMES_BIN" claw migrate --preset full --overwrite --skill-conflict rename --yes --migrate-secrets \
   || echo "[install-hermes] WARN: claw migrate failed (non-fatal — no OpenClaw state yet?)"
 
-mkdir -p "$HERMES_DIR" /var/log/hermes
+mkdir -p "$HERMES_DIR"
 touch "$ENV_FILE"
 
 echo "[install-hermes] seed $ENV_FILE (upsert — other vars preserved)"
