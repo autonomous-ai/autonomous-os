@@ -250,6 +250,7 @@ func extractMarkdownEntries(text string) []string {
 	}
 
 	inCode := false
+	inComment := false
 	for _, raw := range strings.Split(text, "\n") {
 		line := strings.TrimRight(raw, " \t\r")
 		stripped := strings.TrimSpace(line)
@@ -260,6 +261,25 @@ func extractMarkdownEntries(text string) []string {
 			continue
 		}
 		if inCode {
+			continue
+		}
+
+		// Skip HTML comments. KNOWLEDGE.md ships `<!-- ... -->` placeholders under
+		// each empty section; those are scaffolding, never real memory, so they must
+		// not become entries when the file is folded into MEMORY.md. Handles both
+		// single-line and multi-line comments.
+		if inComment {
+			if strings.Contains(stripped, "-->") {
+				inComment = false
+			}
+			flush()
+			continue
+		}
+		if strings.HasPrefix(stripped, "<!--") {
+			flush()
+			if !strings.Contains(stripped, "-->") {
+				inComment = true
+			}
 			continue
 		}
 

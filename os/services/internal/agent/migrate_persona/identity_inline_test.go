@@ -113,6 +113,53 @@ func TestMigrate_StripsIdentityCardOnReverseSwitch(t *testing.T) {
 	}
 }
 
+// KNOWLEDGE.md (the agent's distilled learnings) must be folded into the Hermes
+// MEMORY.md — Hermes reads only MEMORY.md/USER.md by name, so a separate file
+// would be ignored. Its section headings survive as entry prefixes, and its
+// `<!-- ... -->` template placeholders must NOT leak in as memory entries.
+func TestMigrate_FoldsKnowledgeIntoMemory(t *testing.T) {
+	cfgDir := t.TempDir()
+	hermesRoot := t.TempDir()
+	ws := filepath.Join(cfgDir, "workspace")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "MEMORY.md"), []byte("- Owner sleeps late on weekends.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	knowledge := "# KNOWLEDGE.md — Accumulated Learnings\n\n## Hardware\n\n" +
+		"<!-- Lessons about the body, quirks, limits. -->\n\n" +
+		"- Servo elbow jitters above 60 degrees.\n\n" +
+		"## Mistakes Made\n\n- Said NO_REPLY to a direct question once.\n"
+	if err := os.WriteFile(filepath.Join(ws, "KNOWLEDGE.md"), []byte(knowledge), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := DefaultOptions(cfgDir, hermesRoot)
+	opts.Execute = true
+	if _, err := Run(OpenclawToHermes, opts); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(hermesRoot, "memories", "MEMORY.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mem := string(got)
+	if !strings.Contains(mem, "Servo elbow jitters above 60 degrees.") {
+		t.Errorf("knowledge entry not folded into MEMORY.md:\n%s", mem)
+	}
+	if !strings.Contains(mem, "Hardware:") {
+		t.Errorf("section heading not preserved as entry prefix:\n%s", mem)
+	}
+	if !strings.Contains(mem, "Owner sleeps late") {
+		t.Errorf("original MEMORY.md content lost:\n%s", mem)
+	}
+	if strings.Contains(mem, "Lessons about the body") {
+		t.Errorf("HTML comment placeholder leaked into memory:\n%s", mem)
+	}
+}
+
 func TestBuildIdentityBlock_MissingFile(t *testing.T) {
 	if got := buildIdentityBlock(filepath.Join(t.TempDir(), "nope.md")); got != "" {
 		t.Fatalf("expected empty for missing file, got %q", got)

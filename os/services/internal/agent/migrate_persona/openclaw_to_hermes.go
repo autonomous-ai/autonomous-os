@@ -139,8 +139,17 @@ func (m *openclawToHermes) Migrate() (*Report, error) {
 	// exists, so the custom name (e.g. "Ngân") survives the switch regardless.
 	m.ensureIdentityInlined(soulDest, buildIdentityBlock(filepath.Join(ws, "IDENTITY.md")))
 
-	// Long-term memory: MEMORY.md (+ daily memory/*.md) → memories/MEMORY.md.
-	memSources := []string{filepath.Join(ws, "MEMORY.md")}
+	// Long-term memory: MEMORY.md (+ KNOWLEDGE.md + daily memory/*.md) →
+	// memories/MEMORY.md. KNOWLEDGE.md is the agent's distilled, curated learnings
+	// (higher signal than the raw daily logs). Hermes loads only MEMORY.md + USER.md
+	// by name (no memories/ glob), so a standalone memories/KNOWLEDGE.md would never
+	// be read — we fold it into MEMORY.md instead, where its `## Hardware` /
+	// `## Mistakes Made` headings survive as per-entry context prefixes. Placed
+	// before the daily files so its high-value entries win dedup + the char budget.
+	memSources := []string{
+		filepath.Join(ws, "MEMORY.md"),
+		filepath.Join(ws, "KNOWLEDGE.md"),
+	}
 	if m.opts.IncludeDailyMemory {
 		memSources = append(memSources, dailyMemoryFiles(filepath.Join(ws, "memory"))...)
 	}
