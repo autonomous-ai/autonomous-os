@@ -145,11 +145,14 @@ gen-ssl-cert:
 
 stop-nginx:
 	@nginx -s stop 2>/dev/null || true
-	@pkill -f "nginx: master" 2>/dev/null || true
-	@sleep 1
-	@if pgrep -f "nginx: master" >/dev/null 2>&1; then \
-		pkill -9 -f "nginx: master" 2>/dev/null || true; \
+	@if [ -f /tmp/nginx.pid ]; then \
+		kill $$(cat /tmp/nginx.pid) 2>/dev/null || true; \
 		sleep 1; \
+		if kill -0 $$(cat /tmp/nginx.pid) 2>/dev/null; then \
+			kill -9 $$(cat /tmp/nginx.pid) 2>/dev/null || true; \
+			sleep 1; \
+		fi; \
+		rm -f /tmp/nginx.pid; \
 	fi
 	@echo "nginx stopped"
 
