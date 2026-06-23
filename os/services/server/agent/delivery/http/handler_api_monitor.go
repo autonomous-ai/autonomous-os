@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"go.autonomous.ai/os/internal/device"
+	"go.autonomous.ai/os/internal/hermes"
 	"go.autonomous.ai/os/internal/openclaw"
 	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/server/serializers"
@@ -26,6 +27,18 @@ func GetOpenClawVersion() string {
 // populateOpenClawVersion populates the shared openclaw version cache at startup.
 func populateOpenClawVersion() {
 	openclaw.PopulateOpenClawVersion()
+}
+
+// GetHermesVersion returns the cached Hermes CLI version (e.g. "0.17.0"). Thin
+// pass-through to the hermes package cache, mirroring GetOpenClawVersion so the
+// MQTT `info` message can report hermes_version next to openclaw_version.
+func GetHermesVersion() string {
+	return hermes.GetHermesVersion()
+}
+
+// populateHermesVersion populates the shared hermes version cache at startup.
+func populateHermesVersion() {
+	hermes.PopulateHermesVersion()
 }
 
 // StopTTS interrupts active TTS playback on HAL.
@@ -51,7 +64,9 @@ func (h *AgentHandler) Status(c *gin.Context) {
 	// Get real emotion from HAL (source of truth) instead of parsed text
 	emotion := h.fetchHALEmotion()
 
-	version := openclaw.GetOpenClawVersion()
+	// Active backend's own version (OpenClaw → "2026.5.27", Hermes → "0.17.0"),
+	// so the web Overview shows the running runtime's version, not always OpenClaw's.
+	version := h.agentGateway.Version()
 
 	// uptime: seconds since the WS connection last became ready (resets when
 	// the OS server reconnects). agentUptime: actual OpenClaw process uptime sourced from

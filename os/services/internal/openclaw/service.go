@@ -215,6 +215,12 @@ func (s *Service) Name() string {
 	return "OpenClaw"
 }
 
+// Version returns the cached OpenClaw binary version (e.g. "2026.5.27"), or empty
+// when undetected. Satisfies domain.AgentGateway.Version().
+func (s *Service) Version() string {
+	return GetOpenClawVersion()
+}
+
 // markOutboundChat records an os-server-sent chat.send message text so the SSE
 // session.message handler can skip its echo. Trims expired + over-cap.
 func (s *Service) markOutboundChat(text string) {

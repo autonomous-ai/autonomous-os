@@ -7,6 +7,7 @@ Run with: pytest tests/pose_api/test_pose_estimation_api.py -v
 import base64
 import json
 import os
+from pathlib import Path
 
 import cv2
 import httpx
@@ -193,3 +194,89 @@ class TestErgoAssessmentWebSocket:
                     resp["ergo"]["left"]["score"],
                     resp["ergo"]["right"]["score"],
                 )
+
+
+FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
+
+
+class TestPosePerformance:
+    """Validate that the pose model produces correct results on known images."""
+
+    @pytest.fixture(scope="session")
+    def person_drinking_b64(self) -> str:
+        img_path = FIXTURES_DIR / "images" / "person_drinking.jpg"
+        if not img_path.exists():
+            pytest.skip(f"Fixture image not found: {img_path}")
+        frame = cv2.imread(str(img_path))
+        _, buf = cv2.imencode(".jpg", frame)
+        return base64.b64encode(buf.tobytes()).decode()
+
+    @pytest.fixture(scope="session")
+    def bad_ergo_b64(self) -> str:
+        img_path = FIXTURES_DIR / "images" / "bad-ergo.jpeg"
+        if not img_path.exists():
+            pytest.skip(f"Fixture image not found: {img_path}")
+        frame = cv2.imread(str(img_path))
+        _, buf = cv2.imencode(".jpg", frame)
+        return base64.b64encode(buf.tobytes()).decode()
+
+    @pytest.fixture(scope="session")
+    def good_ergo_b64(self) -> str:
+        img_path = FIXTURES_DIR / "images" / "good-ergo.jpeg"
+        if not img_path.exists():
+            pytest.skip(f"Fixture image not found: {img_path}")
+        frame = cv2.imread(str(img_path))
+        _, buf = cv2.imencode(".jpg", frame)
+        return base64.b64encode(buf.tobytes()).decode()
+
+    @pytest_asyncio.fixture()
+    async def ws(self):
+        async with websockets.connect(
+            _ws_url("/hal/api/dl/pose-estimation/ws"),
+            additional_headers=AUTH_HEADERS,
+        ) as conn:
+            yield conn
+
+    @pytest.mark.asyncio
+    async def test_person_keypoints_detected(self, ws, person_drinking_b64: str) -> None:
+        """A clearly visible person should produce at least 10 confident keypoints."""
+        await ws.send(
+            json.dumps({"type": "frame", "task": "pose", "frame_b64": person_drinking_b64})
+        )
+        resp = json.loads(await ws.recv())
+        assert "pose_2d" in resp
+        assert "joints" in resp["pose_2d"]
+        confs = resp["pose_2d"]["confs"]
+        # Count keypoints with non-trivial confidence (> 0.3)
+        confident_keypoints = sum(1 for c in confs if c > 0.3)
+        assert confident_keypoints >= 10, (
+            f"Expected at least 10 confident keypoints, got {confident_keypoints}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_ergo_score_on_bad_posture(self, ws, bad_ergo_b64: str) -> None:
+        """Bad posture image should yield a RULA score >= 3."""
+        await ws.send(
+            json.dumps({"type": "frame", "task": "pose", "frame_b64": bad_ergo_b64})
+        )
+        resp = json.loads(await ws.recv())
+        assert "ergo" in resp, "Expected 'ergo' field in response for bad posture image"
+        ergo = resp["ergo"]
+        assert "score" in ergo
+        assert ergo["score"] >= 3, (
+            f"Expected RULA score >= 3 for bad posture, got {ergo['score']}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_ergo_score_on_good_posture(self, ws, good_ergo_b64: str) -> None:
+        """Good posture image should yield a RULA score <= 4."""
+        await ws.send(
+            json.dumps({"type": "frame", "task": "pose", "frame_b64": good_ergo_b64})
+        )
+        resp = json.loads(await ws.recv())
+        assert "ergo" in resp, "Expected 'ergo' field in response for good posture image"
+        ergo = resp["ergo"]
+        assert "score" in ergo
+        assert ergo["score"] <= 4, (
+            f"Expected RULA score <= 4 for good posture, got {ergo['score']}"
+        )

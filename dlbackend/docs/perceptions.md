@@ -98,17 +98,22 @@ Classifies emotion from a speech waveform (independent of any transcript).
 Open-vocabulary / zero-shot detection. Each detector is independently enabled and
 selected by URL path segment (`{detector_name}`).
 
-- Enum `ObjectDetectorEnum` (`enums/object.py`): `yoloworld`, `yoloe`, `owlv2`, `grounding-dino`
-- Predictors (`perception/object/predictors/`):
+- Enum `ObjectDetectorEnum` (`enums/object.py`): `yoloworld`, `owlv2`
+- Predictors are split into two backend directories:
+  - `predictors/torch/` — PyTorch / HuggingFace Transformers backends
+  - `predictors/onnx/` — ONNX Runtime backends (default, controlled by `USE_ONNX`)
 
-  | Detector | Enum value | File | Backend | Default weights | GPU |
-  |----------|-----------|------|---------|-----------------|-----|
-  | YOLO-World | `yoloworld` | `yolo_world.py` | Ultralytics `.pt` | `yolov8x-worldv2.pt` | CUDA / CPU |
-  | YOLOE | `yoloe` | `yoloe.py` | Ultralytics `.pt` | `yoloe-26x-seg.pt` | CUDA / CPU |
-  | OWLv2 | `owlv2` | `owlv2.py` | HF Transformers | `google/owlv2-large-patch14-ensemble` | CUDA / CPU |
-  | Grounding DINO | `grounding-dino` | `grounding_dino.py` | HF Transformers | `IDEA-Research/grounding-dino-tiny` | CUDA / CPU |
+  | Detector | Enum value | Torch file | ONNX file | Default weights (ONNX) | GPU |
+  |----------|-----------|------------|-----------|------------------------|-----|
+  | YOLO-World | `yoloworld` | `torch/yolo_world.py` | `onnx/yolo_world.py` | auto-download from CDN | CUDA / CPU |
+  | OWLv2 | `owlv2` | `torch/owlv2.py` | `onnx/owlv2.py` | auto-download from CDN | CUDA / CPU |
+
+  ONNX predictors have `DEFAULT_MODEL_PATH` and `DEFAULT_REMOTE_URL` resolved from
+  `ModelEnum` entries — models are auto-downloaded on first use via `ensure_downloaded`.
 
 - Output `ObjectDetection` → items `{class_name, xywh:[cx,cy,w,h], confidence}`.
+  All object detectors return **normalized [0,1] bbox_xywh**; the session/perception
+  layer rescales coordinates to pixel dimensions before returning to the client.
 - `classes` is supplied per request (the open-vocabulary prompt). All detectors are
   **disabled by default** — enable the ones you need via `OBJECT_DETECTOR__<NAME>__ENABLED`.
 
@@ -140,9 +145,11 @@ the caller).
 ## 8. Person detection (internal)
 
 - Enum `PersonDetectorEnum` (`enums/person.py`): `yolo`
-- Predictor `perception/person/predictors/yolo.py` — Ultralytics YOLO (`yolo12x.pt`)
-  filtered to COCO class 0, confidence 0.4, bbox expanded 2.0×. `extract_largest_crop()`
-  feeds the action recognizer. Disabled by default (`PERSON_DETECTOR__ENABLED=false`).
+- Predictors in `perception/person/predictors/` (torch and ONNX backends available).
+  Ultralytics YOLO (`yolo12x.pt`) filtered to COCO class 0, confidence 0.4, bbox
+  expanded 2.0x. Person detectors return **normalized [0,1] bbox_xyxy**.
+  `extract_largest_crop()` feeds the action recognizer. Disabled by default
+  (`PERSON_DETECTOR__ENABLED=false`).
 
 ---
 
@@ -167,8 +174,78 @@ on first use. Override with `<NAME>__CKPT_PATH` (local) or `<NAME>__REMOTE_URL` 
 | ResNet34 | `wespeaker_resnet34.onnx` | ONNX | `onnx_models/` |
 | CAM++ | `wespeaker_campplus.onnx` | ONNX | `onnx_models/` |
 | YuNet | `face_detection_yunet_2023mar.onnx` | ONNX | `onnx_models/` |
-| YOLO person | `yolo12x.pt` | PyTorch | `pytorch_models/` |
-| YOLO-World v2 | `yolov8x-worldv2.pt` | PyTorch | `pytorch_models/` |
-| OWLv2 | `google/owlv2-large-patch14-ensemble` | HuggingFace | (HF Hub) |
-| Grounding DINO | `IDEA-Research/grounding-dino-tiny` | HuggingFace | (HF Hub) |
+| YOLO person (ONNX) | `yolo12x_raw.onnx` / `yolo12x.onnx` | ONNX | `onnx_models/` |
+| YOLO person (PyTorch) | `yolo12x.pt` | PyTorch | `pytorch_models/` |
+| YOLO-World v2 (ONNX) | `yolov8x-worldv2_raw.onnx` / `yolov8x-worldv2.onnx` | ONNX | `onnx_models/` |
+| YOLO-World v2 (PyTorch) | `yolov8x-worldv2.pt` | PyTorch | `pytorch_models/` |
+| OWLv2 (ONNX) | `owlv2_raw.onnx` / `owlv2.onnx` | ONNX | `onnx_models/` |
+| OWLv2 (HuggingFace) | `google/owlv2-large-patch14-ensemble` | HuggingFace | (HF Hub) |
+
+---
+
+## ONNX export scripts
+
+Export PyTorch/HuggingFace models to ONNX for dlbackend inference. Scripts live in
+`src/core/export/entries/`. After `pip install -e .` each is available as a CLI command.
+
+```bash
+export-all              # run all exports (skips missing checkpoints)
+                        #   --output-dir <dir>  write all ONNX files into <dir>
+export-uniformerv2      # UniformerV2 action recognition
+export-posterv2         # POSTER V2 facial emotion
+export-emonet           # EmoNet facial emotion (5 or 8 class)
+export-emotion2vec      # emotion2vec+ speech emotion (downloads from HF)
+export-tcpformer        # TCPFormer 3D pose lifter
+export-owlv2            # OWLv2 zero-shot object detection (downloads from HF)
+export-yolo             # YOLO person detection
+export-yolo-world       # YOLO-World zero-shot object detection
+```
+
+Detection models (OWLv2, YOLO, YOLO-World) default to `nms=False` (raw export).
+`export-all` exports **both** raw and NMS-baked variants for each detection model.
+Individual scripts accept `--nms` / `--no-nms` flags (default: `--no-nms`).
+
+### Model I/O specifications
+
+All models export with ONNX opset 17. `B` = batch, `T` = variable time, `K` = num classes, `L` = token length.
+
+| Model | Input name(s) | Input shape | Preprocessing | Output name(s) | Output shape |
+|-------|--------------|-------------|---------------|----------------|--------------|
+| **UniformerV2** | `videos` | `[B,1,3,8,224,224]` | Normalize: mean=0.45, std=0.225 | `probs` | `[B, num_classes]` softmax |
+| **POSTER V2** | `images` | `[B,3,224,224]` | ImageNet norm: mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225] | `probs` | `[B, 7]` softmax |
+| **EmoNet** | `images` | `[B,3,256,256]` | Range [0,1], no normalization | `probs`, `valence`, `arousal` | `[B,N]` softmax, `[B]`, `[B]` |
+| **emotion2vec+** | `audio` | `[B, T]` (16kHz mono) | Optional mean/var normalize | `probs` | `[B, 9]` softmax |
+| **TCPFormer** | `keypoints` | `[B,243,17,3]` | Raw 2D skeleton (x,y,conf) | `poses` | `[B,243,17,3]` 3D coords |
+| **OWLv2** | `images`, `class_tokens` | `[B,3,H,W]`, `[K,16]` int64 | OWLv2Processor | `boxes`, `probs`, `labels` | `[B,N,4]` xywh, `[B,N,K]`, `[B,N]` |
+| **YOLO** | `images` | `[B,3,640,640]` | Raw tensor | `boxes`, `probs`, `labels` | `[B,N,4]` xywh, `[B,N]`, `[B,N]` |
+| **YOLO-World** | `images`, `class_tokens` | `[B,3,640,640]`, `[K,L]` int64 | CLIP tokenize + L2 norm | `boxes`, `probs`, `labels` | `[B,N,4]` xywh, `[B,N,K]`, `[B,N]` |
+
+**Image input convention:** All image inputs expect float32 in [0, 1] range (rescale from uint8 [0, 255] before inference). Models that require further normalization (ImageNet mean/std, custom mean/std) bake it into the ONNX graph — the caller only needs to rescale to [0, 1].
+
+**Models with external preprocessors:** OWLv2 uses its HuggingFace processor (`Owlv2Processor`) for image preprocessing and text tokenization — do NOT manually rescale, the processor handles it. UniformerV2 bakes normalization into the ONNX wrapper. YOLO models accept raw [0, 1] tensors resized to 640×640.
+
+**Detection outputs:** `boxes` are normalized [0,1] xywh. `labels` use -1 for padding. Export scripts default to `nms=False` (raw); the NMS variant bakes NMS into the graph. The ONNX runtime predictors apply NMS in postprocessing by default.
+
+**Text encoders:** OWLv2 embeds the full text encoder (CLIP) in the ONNX; YOLO-World uses CLIP ViT-B/32.
+
+`ModelEnum` entries (`enums/files.py`) use suffixes to distinguish formats:
+`_ONNX` (raw ONNX), `_NMS_ONNX` (ONNX with NMS baked in), `_PTH` (PyTorch
+checkpoint). For example: `YOLO_WORLD_ONNX`, `YOLO_WORLD_NMS_ONNX`,
+`YOLO_WORLD_PTH`.
+
+### Script → checkpoint mapping
+
+| Script | Source | Pretrained checkpoint | ONNX output |
+|--------|--------|-----------------------|-------------|
+| `export-uniformerv2` | PyTorch `.pth` | `models/pretrained/<config>.pth` | `models/onnx/uniformerv2-*_fp32.onnx` |
+| `export-posterv2` | PyTorch `.pth` | `models/pretrained/posterv2_7cls.pth` | `models/onnx/posterv2_7cls.onnx` |
+| `export-emonet` | PyTorch `.pth` | `models/pretrained/emonet_{5,8}.pth` | `models/onnx/emonet_{5,8}.onnx` |
+| `export-emotion2vec` | HuggingFace | `iic/emotion2vec_plus_large` | `models/onnx/emotion2vec.onnx` |
+| `export-tcpformer` | PyTorch `.pth.tr` | `models/pretrained/TCPFormer_h36m_243_379.pth.tr` | `models/onnx/tcpformer_h36m_243.onnx` |
+| `export-owlv2` | HuggingFace | `google/owlv2-large-patch14-ensemble` | `models/onnx/owlv2_raw.onnx` (raw) / `owlv2.onnx` (NMS) |
+| `export-yolo` | Ultralytics `.pt` | `yolo12x.pt` | `models/onnx/yolo12x_raw.onnx` (raw) / `yolo12x.onnx` (NMS) |
+| `export-yolo-world` | Ultralytics `.pt` | `yolov8x-worldv2.pt` | `models/onnx/yolov8x-worldv2_raw.onnx` (raw) / `yolov8x-worldv2.onnx` (NMS) |
+
+Components (model definitions, preprocessing) are in `src/core/export/components/`.
+Utilities (constants, evaluation, NMS, preprocessing) are in `src/core/export/utils/`.
 </content>

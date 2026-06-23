@@ -24,6 +24,7 @@ from core.perception.pose.predictors.ergo.base import ErgoAssessor, ErgoInput
 from core.perception.pose.predictors.pose2d.base import PoseEstimator2D
 from core.perception.pose.predictors.pose3d.base import PoseEstimator3DLifting
 from core.types import Omit, omit
+from core.utils.common import get_or_default
 
 
 class PosePerceptionSession(
@@ -40,8 +41,9 @@ class PosePerceptionSession(
         estimator_2d: PoseEstimator2D,
         lifter_3d: PoseEstimator3DLifting | None = None,
         ergo_assessor: ErgoAssessor | None = None,
-        config: PosePerceptionSessionConfig = DEFAULT_CONFIG,
+        config: PosePerceptionSessionConfig | None = None,
     ) -> None:
+        config = get_or_default(config, PosePerceptionSessionConfig())
         super().__init__(config)
 
         self._estimator_2d: PoseEstimator2D = estimator_2d

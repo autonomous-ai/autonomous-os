@@ -23,6 +23,7 @@ This repo is developed in both **Cursor** and **Claude Code**. The following rul
    | Realtime voice agent (HAL `drivers/realtime`, Gemini Live / OpenAI Realtime, delegate) | `docs/realtime-voice.md` | `docs/vi/realtime-voice_vi.md` |
    | DL backend, load balancer, encryption, models | `docs/dlbackend.md` | `docs/vi/dlbackend_vi.md` |
    | Hermes agent backend (`agent_runtime`, internal/hermes) | `docs/hermes.md` | `docs/vi/hermes_vi.md` |
+   | PicoClaw agent backend (`agent_runtime`, internal/picoclaw, WebSocket) | `docs/picoclaw.md` | `docs/vi/picoclaw_vi.md` |
    | Safety engine (SAFETY.md bounds, deterministic enforcement gate) | `docs/safety.md` | `docs/vi/safety_vi.md` |
 
    **Lamp-specific docs** (`devices/lamp/docs/` + `devices/lamp/docs/vi/`):

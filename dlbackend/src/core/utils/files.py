@@ -17,29 +17,40 @@ logger: logging.Logger = logging.getLogger(__name__)
 # Keep this in sync with dlbackend/docs/configuration.md ("Model downloading").
 CDN_PATHS: dict[ModelEnum, str] = {
     # Action recognition
-    ModelEnum.X3D: "onnx_models/x3d_m_16x5x1_int8.onnx",
-    ModelEnum.VIDEOMAE: "onnx_models/videomae_fp32.onnx",
-    ModelEnum.UNIFORMERV2: "onnx_models/uniformerv2-l-224-k400_fp32.onnx",
+    ModelEnum.X3D_ONNX: "onnx_models/x3d_m_16x5x1_int8.onnx",
+    ModelEnum.VIDEOMAE_ONNX: "onnx_models/videomae_fp32.onnx",
+    ModelEnum.UNIFORMERV2_ONNX: "onnx_models/uniformerv2-l-224-k400_fp32.onnx",
+    ModelEnum.UNIFORMERV2_PTH: "pytorch_models/uniformerv2-l-224-k400.pth",
     # Facial emotion (FER)
-    ModelEnum.POSTERV2: "onnx_models/posterv2_7cls.onnx",
-    ModelEnum.EMONET_8: "onnx_models/emonet_8.onnx",
-    ModelEnum.EMONET_5: "onnx_models/emonet_5.onnx",
+    ModelEnum.POSTERV2_ONNX: "onnx_models/posterv2_7cls.onnx",
+    ModelEnum.POSTERV2_PTH: "pytorch_models/posterv2_7cls.pth",
+    ModelEnum.EMONET_8_ONNX: "onnx_models/emonet_8.onnx",
+    ModelEnum.EMONET_8_PTH: "pytorch_models/emonet_8.pth",
+    ModelEnum.EMONET_5_ONNX: "onnx_models/emonet_5.onnx",
+    ModelEnum.EMONET_5_PTH: "pytorch_models/emonet_5.pth",
     # Audio emotion (SER)
-    ModelEnum.EMOTION2VEC: "onnx_models/emotion2vec.onnx",
+    ModelEnum.EMOTION2VEC_ONNX: "onnx_models/emotion2vec.onnx",
     # Pose 2D
-    ModelEnum.RTMPOSE_M: "onnx_models/rtmpose-m.onnx",
+    ModelEnum.RTMPOSE_M_ONNX: "onnx_models/rtmpose-m.onnx",
     # Pose 3D
-    ModelEnum.TCPFORMER_H36M_243: "onnx_models/tcpformer_h36m_243.onnx",
+    ModelEnum.TCPFORMER_H36M_243_ONNX: "onnx_models/tcpformer_h36m_243.onnx",
+    ModelEnum.TCPFORMER_H36M_243_PTH: "pytorch_models/TCPFormer_h36m_243_379.pth.tr",
     # Audio embedder (WeSpeaker)
     ModelEnum.WESPEAKER_RESNET34: "onnx_models/wespeaker_resnet34.onnx",
     ModelEnum.WESPEAKER_ECAPA_TDNN_1024: "onnx_models/wespeaker_ecapa_tdnn1024.onnx",
     ModelEnum.WESPEAKER_CAMPPLUS: "onnx_models/wespeaker_campplus.onnx",
     # Face detection
-    ModelEnum.YUNET: "onnx_models/face_detection_yunet_2023mar.onnx",
+    ModelEnum.YUNET_ONNX: "onnx_models/face_detection_yunet_2023mar.onnx",
     # Person detection
-    ModelEnum.YOLO_PERSON: "pytorch_models/yolo12x.pt",
+    ModelEnum.YOLO_PERSON_ONNX: "onnx_models/yolo12x_raw.onnx",
+    ModelEnum.YOLO_PERSON_NMS_ONNX: "onnx_models/yolo12x.onnx",
+    ModelEnum.YOLO_PERSON_PTH: "pytorch_models/yolo12x.pt",
     # Object detection
-    ModelEnum.YOLO_WORLD: "pytorch_models/yolov8x-worldv2.pt",
+    ModelEnum.YOLO_WORLD_ONNX: "onnx_models/yolov8x-worldv2_raw.onnx",
+    ModelEnum.YOLO_WORLD_NMS_ONNX: "onnx_models/yolov8x-worldv2.onnx",
+    ModelEnum.YOLO_WORLD_PTH: "pytorch_models/yolov8x-worldv2.pt",
+    ModelEnum.OWLV2_ONNX: "onnx_models/owlv2_raw.onnx",
+    ModelEnum.OWLV2_NMS_ONNX: "onnx_models/owlv2.onnx",
 }
 
 

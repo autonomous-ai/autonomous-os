@@ -2,10 +2,10 @@
 
 import logging
 from abc import ABC
-from typing import Any
 
 import cv2
 import cv2.typing as cv2t
+import numpy as np
 
 from core.models.person import RawPersonDetection
 from core.perception.base import PredictorBase
@@ -19,16 +19,6 @@ class PersonDetector(PredictorBase[cv2t.MatLike, RawPersonDetection], ABC):
     Subclasses implement ``start``, ``stop``, ``is_ready``, and ``predict``.
     ``extract_largest_crop`` is provided by the base class.
     """
-
-    def predict(
-        self,
-        input: list[cv2t.MatLike],
-        *,
-        preprocess: bool = True,
-        **kwargs: Any,
-    ) -> list[RawPersonDetection]:
-        with self._gpu_lock:
-            return super().predict(input, preprocess=preprocess, **kwargs)
 
     def extract_largest_crop(
         self,
@@ -49,16 +39,25 @@ class PersonDetector(PredictorBase[cv2t.MatLike, RawPersonDetection], ABC):
                 continue
 
             H, W = input[i].shape[:2]
-            frame_area: int = H * W
-            filter_mask = (detected_people.area / frame_area) > min_area_ratio
+            frame_area: float = float(H * W)
+
+            # bbox_xyxy is [0, 1] — compute pixel area for filtering
+            pixel_xyxy = detected_people.bbox_xyxy.copy()
+            pixel_xyxy[:, [0, 2]] *= W
+            pixel_xyxy[:, [1, 3]] *= H
+            pixel_area = (pixel_xyxy[:, 2] - pixel_xyxy[:, 0]) * (pixel_xyxy[:, 3] - pixel_xyxy[:, 1])
+
+            filter_mask = (pixel_area / frame_area) > min_area_ratio
 
             if filter_mask.sum() == 0:
                 cropped_input.append(None)
                 continue
 
-            largest_id: int = int(detected_people.area.argmax(0))
+            # Find largest among those passing the area filter
+            filtered_area = np.where(filter_mask, pixel_area, 0.0)
+            largest_id: int = int(filtered_area.argmax(0))
 
-            x1, y1, x2, y2 = detected_people.bbox_xyxy[largest_id]
+            x1, y1, x2, y2 = pixel_xyxy[largest_id]
 
             x1, y1 = int(max(0, x1)), int(max(0, y1))
             x2, y2 = int(min(W, x2)), int(min(H, y2))

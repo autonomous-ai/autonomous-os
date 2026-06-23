@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from core.enums.person import PersonDetectorEnum
 from core.perception.base import PredictorFactory
 from core.perception.person.predictors.base import PersonDetector
@@ -35,11 +37,29 @@ def create_person_detector(
     bbox_expand_scale: float | None = None,
     batch_size: int | None = None,
 ) -> PersonDetector:
-    """Instantiate the correct recognizer model."""
-    if model_name == PersonDetectorEnum.YOLO:
-        from core.perception.person.predictors.yolo import YOLOPersonDetector as predictor_cls
-    else:
-        msg = f"Unknown person detector model: {model_name}"
-        raise ValueError(msg)
+    """Instantiate the correct person detector.
 
-    return predictor_cls(model_path, threshold=threshold, bbox_expand_scale=bbox_expand_scale, batch_size=batch_size)
+    Uses ONNX predictor when an ONNX model path is provided,
+    otherwise falls back to ultralytics.
+    """
+    use_onnx = model_path is not None and str(model_path).endswith(".onnx")
+
+    if model_name == PersonDetectorEnum.YOLO:
+        if use_onnx:
+            from core.perception.person.predictors.yolo_onnx import YOLOONNXPersonDetector
+
+            return YOLOONNXPersonDetector(
+                model_path=Path(model_path),
+                threshold=threshold,
+                bbox_expand_scale=bbox_expand_scale,
+                batch_size=batch_size,
+            )
+        from core.perception.person.predictors.yolo import YOLOPersonDetector
+
+        return YOLOPersonDetector(
+            model_path, threshold=threshold,
+            bbox_expand_scale=bbox_expand_scale, batch_size=batch_size,
+        )
+
+    msg = f"Unknown person detector model: {model_name}"
+    raise ValueError(msg)

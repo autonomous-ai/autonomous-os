@@ -483,8 +483,12 @@ type MQTTInfoResponse struct {
 	STTLanguage     string `json:"stt_language,omitempty"`
 	HalVersion      string `json:"hal_version,omitempty"`
 	OpenClawVersion string `json:"openclaw_version,omitempty"`
-	AgentRuntime    string `json:"agent_runtime,omitempty"`
-	LocalIP         string `json:"local_ip,omitempty"`
+	// HermesVersion sits next to openclaw_version: the installed Hermes CLI version
+	// (e.g. "0.17.0"), empty when hermes isn't installed. agent_runtime says which
+	// one is actually active.
+	HermesVersion string `json:"hermes_version,omitempty"`
+	AgentRuntime  string `json:"agent_runtime,omitempty"`
+	LocalIP       string `json:"local_ip,omitempty"`
 }
 
 // NewDeviceMessage creates a base message with required fields populated from config.

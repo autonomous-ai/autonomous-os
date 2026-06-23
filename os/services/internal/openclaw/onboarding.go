@@ -439,6 +439,20 @@ func downloadSoul(url string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
+// isDefaultSoulHeading reports whether trimmed begins with a MANAGED soul template
+// heading that must never be preserved as owner content below the device block:
+//   - "# Soul"     — the legacy lamp self-seed (pre-marker onboarding)
+//   - "# SOUL.md"  — the OpenClaw gateway's OWN default soul ("# SOUL.md - Who You
+//     Are"), which the gateway seeds into workspace/SOUL.md on first boot.
+//
+// Either, left below the device block, becomes a duplicate second soul (the
+// historical SOUL.md duplication bug). HasPrefix is case-sensitive, so "# Soul"
+// alone never matched the gateway's "# SOUL.md" default — that gap is exactly what
+// let the dup persist.
+func isDefaultSoulHeading(trimmed string) bool {
+	return strings.HasPrefix(trimmed, "# Soul") || strings.HasPrefix(trimmed, "# SOUL.md")
+}
+
 // ensureSoulMDBlock wraps this device's soul as a marker-delimited core block
 // at the top of workspace/SOUL.md. The soul is resolved per device_type from
 // the DEVICE.md `soul_ref` (path or URL) — see deviceSoulCore. Anything the
@@ -465,12 +479,17 @@ func (s *Service) ensureSoulMDBlock() (bool, error) {
 	}
 	text := string(content)
 
-	// Fast path: file already contains the current block verbatim. Without
-	// this, the strip/rejoin path below re-introduces an extra blank line
-	// after `---` on every run, so output != content and we keep rewriting
-	// SOUL.md (and restarting OpenClaw) on every os-server boot.
-	if strings.Contains(text, soulMDBlock) {
-		return false, nil
+	// Fast path: the block is already present AND nothing but owner content sits
+	// below it. Skipping the strip/rejoin here avoids re-introducing an extra
+	// blank line after `---` on every run (which would rewrite SOUL.md and
+	// restart OpenClaw each boot). But when a default soul template lingers below
+	// the block — the historical duplication bug, or an OpenClaw re-seed — fall
+	// through to the rebuild path so it gets stripped and the dup self-heals.
+	if idx := strings.Index(text, soulMDBlock); idx >= 0 {
+		below := strings.TrimLeft(text[idx+len(soulMDBlock):], " \t\r\n")
+		if !isDefaultSoulHeading(below) {
+			return false, nil
+		}
 	}
 
 	// Strip any prior marker block first so the legacy-seed heuristic below
@@ -479,23 +498,21 @@ func (s *Service) ensureSoulMDBlock() (bool, error) {
 		text = stripMarkedBlock(text)
 	}
 
-	// Legacy migration: before the marker block existed, onboarding overwrote
-	// SOUL.md with the embedded core verbatim every run via seedFile, so
-	// unmodified devices have content shaped like the embedded core. The
-	// previous strict-equality check (file == current coreContent) silently
-	// failed whenever the embedded core had drifted since the device's last
-	// seed (e.g. soft-door / language-mirror / no-JSONL-duplicate updates),
-	// which preserved the stale core as fake "owner edits" and duplicated
-	// it on top of the new marker block. The same shape — current marker
-	// block followed by another `# Soul` block — also persists on devices
-	// that already ran the broken migration; stripping the marker first
-	// lets this branch self-heal them on the next onboarding run.
-	//
-	// Detect any legacy-seed shape by the `# Soul` heading at the start of
-	// the remaining text. If the owner has added their own `## Personal`
-	// section below it, keep only that section; otherwise discard entirely.
+	// Discard any managed default soul left in the remaining text so it is not
+	// preserved as fake "owner edits" and duplicated below the device block.
+	// Two shapes reach here:
+	//   - legacy lamp self-seed ("# Soul"): before the marker block existed,
+	//     onboarding overwrote SOUL.md with the embedded core verbatim every run,
+	//     so unmodified devices carry that core as fake owner content.
+	//   - OpenClaw gateway default ("# SOUL.md - Who You Are"): the gateway seeds
+	//     its own soul into workspace/SOUL.md, which the device block is meant to
+	//     override — keeping it below `---` is the SOUL.md duplication bug.
+	// Both also persist on devices that already ran the broken onboarding;
+	// stripping the marker first then dropping the default self-heals them.
+	// If the owner added their own `## Personal` section below it, keep only that
+	// section; otherwise discard entirely.
 	trimmed := strings.TrimLeft(text, " \t\r\n")
-	if strings.HasPrefix(trimmed, "# Soul") {
+	if isDefaultSoulHeading(trimmed) {
 		if idx := strings.Index(text, "## Personal"); idx >= 0 {
 			text = text[idx:]
 		} else {

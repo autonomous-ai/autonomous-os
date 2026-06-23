@@ -6,18 +6,20 @@ import numpy as np
 import pytest
 import soundfile as sf
 
+from core.enums.files import ModelEnum
 from core.models.media import Audio
 from core.perception.audio.predictors.base import AudioEmbedder
 from core.perception.audio.processors.exceptions import PreprocessRejected
 from core.perception.audio.processors.utils import AudioProcessorFactory
 from core.perception.audio.processors.voice_activity_filter import VoiceActivityFilter
+from core.utils.files import get_default_model_path
 
-MODEL_PATH = Path.cwd() / "local" / "wespeaker_resnet34.onnx"
+MODEL_PATH = get_default_model_path(ModelEnum.WESPEAKER_RESNET34)
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "audio"
 
 pytestmark = pytest.mark.skipif(
-    not MODEL_PATH.exists() or not FIXTURES_DIR.exists(),
+    MODEL_PATH is None or not FIXTURES_DIR.exists(),
     reason="Model or audio fixtures not found",
 )
 
@@ -182,6 +184,43 @@ class TestRejection:
         emb.stop()
         with pytest.raises(RuntimeError, match="not ready"):
             emb.predict([speaker_a_audios[0]])
+
+
+class TestEmbedderPerformance:
+    """Performance tests asserting embedding quality for speaker similarity."""
+
+    @staticmethod
+    def _cosine(a: np.ndarray, b: np.ndarray) -> float:
+        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+    def test_same_speaker_higher_similarity(
+        self, embedder: AudioEmbedder, speaker_a_audios: list
+    ) -> None:
+        """Two clips from the same speaker should have cosine similarity > 0.5."""
+        results = embedder.predict(speaker_a_audios[:2])
+        assert len(results) >= 2
+        sim = self._cosine(results[0].embedding, results[1].embedding)
+        assert sim > 0.5, (
+            f"Same-speaker cosine similarity {sim:.4f} should be > 0.5"
+        )
+
+    def test_different_speaker_lower_similarity(
+        self,
+        embedder: AudioEmbedder,
+        speaker_a_audios: list,
+        speaker_b_audios: list,
+    ) -> None:
+        """Cross-speaker similarity should be lower than same-speaker similarity."""
+        a_results = embedder.predict(speaker_a_audios[:2])
+        b_results = embedder.predict(speaker_b_audios[:1])
+
+        same_sim = self._cosine(a_results[0].embedding, a_results[1].embedding)
+        diff_sim = self._cosine(a_results[0].embedding, b_results[0].embedding)
+
+        assert diff_sim < same_sim, (
+            f"Cross-speaker similarity ({diff_sim:.4f}) should be less than "
+            f"same-speaker similarity ({same_sim:.4f})"
+        )
 
 
 class TestPreprocessRejection:

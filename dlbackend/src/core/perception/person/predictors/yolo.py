@@ -14,6 +14,7 @@ from ultralytics.models.yolo import YOLO
 from core.models.person import RawPersonDetection
 from core.perception.person.predictors.base import PersonDetector
 from core.utils.common import get_or_default
+from core.utils.detection import expand_boxes_xyxy
 
 # COCO class index for "person"
 _PERSON_CLASS_ID = 0
@@ -74,20 +75,10 @@ class YOLOPersonDetector(PersonDetector):
     def _is_ready_impl(self) -> bool:
         return self._running and self._model is not None
 
-    def _scale_and_clamp_bbox(self, bbox: list[int], h: int, w: int, scale: float = 1.0):
-        x1, y1, x2, y2 = bbox
-        cx = (x1 + x2) // 2
-        cy = (y1 + y2) // 2
-
-        x1 = int(max(min(cx + (x1 - cx) * scale, w - 1), 0))
-        x2 = int(max(min(cx + (x2 - cx) * scale, w - 1), 0))
-        y1 = int(max(min(cy + (y1 - cy) * scale, h - 1), 0))
-        y2 = int(max(min(cy + (y2 - cy) * scale, h - 1), 0))
-
-        return [x1, y1, x2, y2]
-
     @override
-    def _predict_impl(self, input: list[cv2t.MatLike], *, preprocess: bool = True, **kwargs: Any) -> list[RawPersonDetection]:
+    def _predict_impl(
+        self, input: list[cv2t.MatLike], *, preprocess: bool = True, **kwargs: Any
+    ) -> list[RawPersonDetection]:
         """Run person detection on each frame and return all person detections."""
         _EMPTY: RawPersonDetection = RawPersonDetection(
             bbox_xyxy=np.zeros((0, 4), dtype=np.float32),
@@ -104,27 +95,31 @@ class YOLOPersonDetector(PersonDetector):
                     conf=self._threshold,
                     verbose=False,
                 )
-                bbox_xyxy_list: list[list[int]] = []
+                bbox_xyxy_list: list[list[float]] = []
                 conf_list: list[float] = []
                 for r in results:
                     if r.boxes is None or len(r.boxes) == 0:
                         continue
 
                     for box in r.boxes:
-                        raw: list[int] = [int(v) for v in box.xyxy[0].tolist()]
-                        x1, y1, x2, y2 = self._scale_and_clamp_bbox(
-                            raw, H, W, self._bbox_expand_scale
-                        )
-
-                        bbox_xyxy_list.append([x1, y1, x2, y2])
+                        bbox_xyxy_list.append(box.xyxy[0].tolist())
                         conf_list.append(float(box.conf[0]))
 
                 if not bbox_xyxy_list:
                     person_detections.append(_EMPTY)
                 else:
+                    xyxy = np.array(bbox_xyxy_list, dtype=np.float32)
+
+                    if self._bbox_expand_scale != 1.0:
+                        xyxy = expand_boxes_xyxy(xyxy, self._bbox_expand_scale, float(W), float(H))
+
+                    # Normalize to [0, 1]
+                    xyxy[:, [0, 2]] /= W
+                    xyxy[:, [1, 3]] /= H
+
                     person_detections.append(
                         RawPersonDetection(
-                            bbox_xyxy=np.array(bbox_xyxy_list, dtype=np.float32),
+                            bbox_xyxy=xyxy,
                             confidence=np.array(conf_list, dtype=np.float32),
                         )
                     )

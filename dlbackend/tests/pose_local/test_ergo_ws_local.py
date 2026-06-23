@@ -11,19 +11,21 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
+from core.enums.files import ModelEnum
 from core.models.pose import PosePerceptionSessionConfig
 from core.perception.pose.perception import PosePerception
 from core.perception.pose.utils import ErgoAssessorFactory, PoseEstimator2DFactory
+from core.utils.files import get_default_model_path
 from dlserver.utils.state import get_pose_model, set_pose_model
 
 TEST_API_KEY = "test-secret-key"
 os.environ["DL_API_KEY"] = TEST_API_KEY
 
-RTMPOSE_MODEL_PATH = Path.cwd() / "local" / "rtmpose-m.onnx"
+RTMPOSE_MODEL_PATH = get_default_model_path(ModelEnum.RTMPOSE_M_ONNX)
 
 pytestmark = pytest.mark.skipif(
-    not RTMPOSE_MODEL_PATH.exists(),
-    reason=f"Local RTMPose model not found at {RTMPOSE_MODEL_PATH}",
+    RTMPOSE_MODEL_PATH is None,
+    reason="Model enum not found in CDN_PATHS",
 )
 
 

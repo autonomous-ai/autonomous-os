@@ -9,6 +9,7 @@ from silero_vad import get_speech_timestamps, load_silero_vad
 from typing_extensions import override
 
 from core.models.media import Audio
+from core.perception.base.predictor import gpu_lock
 from core.perception.audio.processors.exceptions import (
     REJECT_LOW_VOICE_RATIO,
     REJECT_TOO_SHORT,
@@ -53,7 +54,8 @@ class VoiceActivityFilter(AudioProcessorBase):
         if self._model is not None:
             self._logger.info("Already running")
             return
-        self._model = load_silero_vad()
+        with gpu_lock:
+            self._model = load_silero_vad()
         self._running = True
         self._logger.info("Processor started")
 
@@ -72,15 +74,16 @@ class VoiceActivityFilter(AudioProcessorBase):
     ) -> list[dict]:
         """Run silero-vad and return [{start, end}] in sample indices."""
         try:
-            ts = get_speech_timestamps(
-                torch.from_numpy(waveform),
-                self._model,
-                sampling_rate=sample_rate,
-                min_speech_duration_ms=int(self._min_speech_sec * 1000),
-                min_silence_duration_ms=int(self._min_silence_sec * 1000),
-                speech_pad_ms=int(self._speech_pad_sec * 1000),
-                return_seconds=False,
-            )
+            with gpu_lock:
+                ts = get_speech_timestamps(
+                    torch.from_numpy(waveform),
+                    self._model,
+                    sampling_rate=sample_rate,
+                    min_speech_duration_ms=int(self._min_speech_sec * 1000),
+                    min_silence_duration_ms=int(self._min_silence_sec * 1000),
+                    speech_pad_ms=int(self._speech_pad_sec * 1000),
+                    return_seconds=False,
+                )
             return list(ts) if ts else []
         except Exception as exc:
             self._logger.warning("silero-vad inference failed: %s", exc)

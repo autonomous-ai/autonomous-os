@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { RotateCw } from "lucide-react";
 import { toast } from "sonner";
 import { getDeviceConfig, updateDeviceConfig, getTTSVoices, getTTSProviders } from "@/lib/api";
 import type { DeviceConfig } from "@/lib/api";
@@ -488,15 +487,6 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
             {error}
           </div>
         )}
-
-        <div className="lm-restart-banner">
-          <span className="lm-restart-chip" aria-hidden="true">
-            <RotateCw size={15} />
-          </span>
-          <span className="lm-restart-text">
-            Restart your device after saving for AI brain and channel changes to take full effect.
-          </span>
-        </div>
 
         {loadingCfg ? <SkeletonBlock /> : (
           <form id="edit-form" onSubmit={handleSubmit}>

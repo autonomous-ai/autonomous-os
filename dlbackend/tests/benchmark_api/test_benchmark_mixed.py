@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import itertools
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 
 import pytest
@@ -68,34 +68,52 @@ def _run_mixed(
         for _ in range(n_ws_connections)
     ]
 
-    total_workers = len(http_tasks) + len(ws_tasks)
+    MAX_PROCESSES = 16
 
-    def _do_http(ep: EndpointSpec) -> list[MixedResult]:
-        r = _fire_request(ep)
-        return [MixedResult(
-            endpoint=r.endpoint, protocol="http",
-            latency_ms=r.latency_ms, error=r.error,
-        )]
+    # Build unified task list: ("http", ep) or ("ws", ep, n_frames)
+    all_tasks: list[tuple] = []
+    for ep in http_tasks:
+        all_tasks.append(("http", ep))
+    for ep, n_frames in ws_tasks:
+        all_tasks.append(("ws", ep, n_frames))
 
-    def _do_ws(args: tuple[WSEndpointSpec, int]) -> list[MixedResult]:
-        ep, n_frames = args
-        ws_results = _ws_send_n_frames(ep, n_frames)
-        return [
-            MixedResult(
-                endpoint=r.endpoint, protocol="ws",
+    n_procs = min(len(all_tasks), MAX_PROCESSES)
+
+    # Split into chunks
+    chunks: list[list[tuple]] = [[] for _ in range(n_procs)]
+    for i, task in enumerate(all_tasks):
+        chunks[i % n_procs].append(task)
+
+    with ProcessPoolExecutor(max_workers=n_procs) as pool:
+        chunk_results = list(pool.map(_mixed_worker_batch, chunks))
+
+    return [r for batch in chunk_results for r in batch]
+
+
+def _mixed_worker_batch(tasks: list[tuple]) -> list[MixedResult]:
+    """Run a chunk of mixed HTTP+WS tasks using threads inside one process."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _do(task: tuple) -> list[MixedResult]:
+        if task[0] == "http":
+            r = _fire_request(task[1])
+            return [MixedResult(
+                endpoint=r.endpoint, protocol="http",
                 latency_ms=r.latency_ms, error=r.error,
-            )
-            for r in ws_results
-        ]
+            )]
+        else:
+            ep, n_frames = task[1], task[2]
+            ws_results = _ws_send_n_frames(ep, n_frames)
+            return [
+                MixedResult(
+                    endpoint=r.endpoint, protocol="ws",
+                    latency_ms=r.latency_ms, error=r.error,
+                )
+                for r in ws_results
+            ]
 
-    with ThreadPoolExecutor(max_workers=total_workers) as pool:
-        http_futures = [pool.submit(_do_http, ep) for ep in http_tasks]
-        ws_futures = [pool.submit(_do_ws, t) for t in ws_tasks]
-        all_results = list(itertools.chain.from_iterable(
-            f.result() for f in http_futures + ws_futures
-        ))
-
-    return all_results
+    with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+        return list(itertools.chain.from_iterable(pool.map(_do, tasks)))
 
 
 def _print_mixed_report(

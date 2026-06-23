@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 
 import cv2
+import cv2.typing as cv2t
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
@@ -25,48 +26,55 @@ from dlserver.utils.state import set_action_model
 TEST_API_KEY = "test-secret-key"
 os.environ["DL_API_KEY"] = TEST_API_KEY
 
+from core.enums.files import ModelEnum
+from core.utils.files import get_default_model_path
+
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
 PERSON_DRINKING_IMG = FIXTURES_DIR / "images" / "person_drinking.jpg"
-X3D_MODEL_PATH = Path.cwd() / "local" / "x3d_m_16x5x1_int8.onnx"
+X3D_MODEL_PATH = get_default_model_path(ModelEnum.X3D_ONNX)
 
 pytestmark = pytest.mark.skipif(
-    not X3D_MODEL_PATH.exists(),
-    reason=f"Local X3D model not found at {X3D_MODEL_PATH}",
+    X3D_MODEL_PATH is None,
+    reason="Model enum not found in CDN_PATHS",
 )
 
 
-def _img_to_b64(path: Path) -> str:
-    data = path.read_bytes()
-    return base64.b64encode(data).decode()
-
-
-def _make_frame_b64(width: int = 320, height: int = 240) -> str:
-    frame = np.random.randint(0, 255, (height, width, 3), dtype=np.uint8)
-    _, buf = cv2.imencode(".jpg", frame)
-    return base64.b64encode(buf.tobytes()).decode()
-
-
-def _make_empty_frame_b64(width: int = 320, height: int = 240) -> str:
-    """Black frame with no person — person detector should return empty."""
-    frame = np.zeros((height, width, 3), dtype=np.uint8)
-    _, buf = cv2.imencode(".jpg", frame)
-    return base64.b64encode(buf.tobytes()).decode()
-
-
 # ---------------------------------------------------------------------------
-# Fixtures
+# Fixtures — media loaded once per session
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="session")
-def person_detector():
+def person_frame() -> cv2t.MatLike:
+    """Load the person drinking image once for the entire test session."""
+    frame = cv2.imread(str(PERSON_DRINKING_IMG))
+    assert frame is not None, f"Failed to load {PERSON_DRINKING_IMG}"
+    return frame
+
+
+@pytest.fixture(scope="session")
+def person_frame_b64() -> str:
+    """Encode person drinking image as base64 once."""
+    return base64.b64encode(PERSON_DRINKING_IMG.read_bytes()).decode()
+
+
+@pytest.fixture(scope="session")
+def empty_frame_b64() -> str:
+    """Black frame with no person — person detector should return empty."""
+    frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    _, buf = cv2.imencode(".jpg", frame)
+    return base64.b64encode(buf.tobytes()).decode()
+
+
+@pytest.fixture(scope="session")
+def person_detector() -> PersonDetector:
     det = YOLOPersonDetector(model_path="yolo11n.pt")
     det.start()
     return det
 
 
 @pytest.fixture(scope="session")
-def model_with_detector():
+def model_with_detector() -> ActionPerception:
     from core.enums import HumanActionRecognizerEnum
     from core.enums.person import PersonDetectorEnum
     from core.perception.action.utils import ActionRecognizerFactory
@@ -87,7 +95,7 @@ def model_with_detector():
 
 
 @pytest.fixture(scope="session")
-def model_without_detector():
+def model_without_detector() -> ActionPerception:
     from core.enums import HumanActionRecognizerEnum
     from core.perception.action.utils import ActionRecognizerFactory
 
@@ -103,7 +111,7 @@ def model_without_detector():
 
 
 @pytest.fixture()
-def client_with_detector(model_with_detector):
+def client_with_detector(model_with_detector: ActionPerception) -> TestClient:
     import config
     import server
 
@@ -113,7 +121,7 @@ def client_with_detector(model_with_detector):
 
 
 @pytest.fixture()
-def client_without_detector(model_without_detector):
+def client_without_detector(model_without_detector: ActionPerception) -> TestClient:
     import config
     import server
 
@@ -122,7 +130,7 @@ def client_without_detector(model_without_detector):
     return TestClient(server.app)
 
 
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+AUTH_HEADERS: dict[str, str] = {"X-API-Key": TEST_API_KEY}
 
 
 # ---------------------------------------------------------------------------
@@ -131,27 +139,35 @@ AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
 
 
 class TestPersonDetector:
-    def test_detect_person_in_image(self, person_detector: PersonDetector):
-        """Should detect at least one person in the drinking image."""
-        frame = cv2.imread(str(PERSON_DRINKING_IMG))
-        assert frame is not None, f"Failed to load {PERSON_DRINKING_IMG}"
-        detections = person_detector.predict([frame])[0]
+    def test_detect_person_in_image(
+        self, person_detector: PersonDetector, person_frame: cv2t.MatLike,
+    ) -> None:
+        """Should detect at least one person in the drinking image.
+
+        Bounding boxes are normalized [0, 1] relative to image dimensions.
+        """
+        detections = person_detector.predict([person_frame])[0]
         assert detections.bbox_xyxy.shape[0] >= 1
         for conf, bbox in zip(detections.confidence, detections.bbox_xyxy):
             x1, y1, x2, y2 = bbox
+            assert 0.0 <= x1 <= 1.0
+            assert 0.0 <= y1 <= 1.0
+            assert 0.0 <= x2 <= 1.0
+            assert 0.0 <= y2 <= 1.0
             assert x2 > x1
             assert y2 > y1
             assert conf > 0.3
 
-    def test_crop_largest_person(self, person_detector: PersonDetector):
+    def test_crop_largest_person(
+        self, person_detector: PersonDetector, person_frame: cv2t.MatLike,
+    ) -> None:
         """Should return a non-empty crop of the person."""
-        frame = cv2.imread(str(PERSON_DRINKING_IMG))
-        crop = person_detector.extract_largest_crop([frame])[0]
+        crop = person_detector.extract_largest_crop([person_frame])[0]
         assert crop is not None
         assert crop.shape[0] > 0
         assert crop.shape[1] > 0
 
-    def test_no_person_in_empty_frame(self, person_detector: PersonDetector):
+    def test_no_person_in_empty_frame(self, person_detector: PersonDetector) -> None:
         """Black frame should return no detections."""
         frame = np.zeros((240, 320, 3), dtype=np.uint8)
         crop = person_detector.extract_largest_crop([frame])[0]
@@ -164,17 +180,17 @@ class TestPersonDetector:
 
 
 class TestActionWithPersonDetector:
-    def test_frame_with_person_returns_detections(self, client_with_detector):
+    def test_frame_with_person_returns_detections(
+        self, client_with_detector: TestClient, person_frame_b64: str,
+    ) -> None:
         """Person drinking image should produce action detections."""
-        frame_b64 = _img_to_b64(PERSON_DRINKING_IMG)
         with client_with_detector.websocket_connect(
             "/hal/api/dl/action-analysis/ws", headers=AUTH_HEADERS
         ) as ws:
-            # Send enough frames to fill the buffer
             resp = None
             for _ in range(16):
                 ws.send_text(
-                    json.dumps({"type": "frame", "task": "action", "frame_b64": frame_b64})
+                    json.dumps({"type": "frame", "task": "action", "frame_b64": person_frame_b64})
                 )
                 resp = ws.receive_json()
             assert resp is not None
@@ -182,24 +198,25 @@ class TestActionWithPersonDetector:
             assert isinstance(resp["detected_classes"], list)
             assert "drinking" in resp["detected_classes"][0]["class_name"]
 
-    def test_empty_frame_returns_empty_detections(self, client_with_detector):
+    def test_empty_frame_returns_empty_detections(
+        self, client_with_detector: TestClient, empty_frame_b64: str,
+    ) -> None:
         """Black frame (no person) should return empty detected_classes."""
-        frame_b64 = _make_empty_frame_b64()
         with client_with_detector.websocket_connect(
             "/hal/api/dl/action-analysis/ws", headers=AUTH_HEADERS
         ) as ws:
-            ws.send_text(json.dumps({"type": "frame", "task": "action", "frame_b64": frame_b64}))
+            ws.send_text(json.dumps({"type": "frame", "task": "action", "frame_b64": empty_frame_b64}))
             resp = ws.receive_json()
             assert "detected_classes" in resp
             assert resp["detected_classes"] == []
 
-    def test_person_drinking_detected(self, client_with_detector):
+    def test_person_drinking_detected(
+        self, client_with_detector: TestClient, person_frame_b64: str,
+    ) -> None:
         """After multiple frames of person drinking, 'drinking' should appear."""
-        frame_b64 = _img_to_b64(PERSON_DRINKING_IMG)
         with client_with_detector.websocket_connect(
             "/hal/api/dl/action-analysis/ws", headers=AUTH_HEADERS
         ) as ws:
-            # Set whitelist to drinking-related actions
             ws.send_text(
                 json.dumps(
                     {
@@ -217,10 +234,9 @@ class TestActionWithPersonDetector:
             )
             ws.receive_json()
 
-            # Feed frames to fill buffer
             for _ in range(8):
                 ws.send_text(
-                    json.dumps({"type": "frame", "task": "action", "frame_b64": frame_b64})
+                    json.dumps({"type": "frame", "task": "action", "frame_b64": person_frame_b64})
                 )
                 resp = ws.receive_json()
 
@@ -229,17 +245,20 @@ class TestActionWithPersonDetector:
                 f"Expected at least one drinking-related action, got empty. Full response: {resp}"
             )
 
-    def test_detector_vs_no_detector_both_work(self, client_with_detector, client_without_detector):
+    def test_detector_vs_no_detector_both_work(
+        self,
+        client_with_detector: TestClient,
+        client_without_detector: TestClient,
+        person_frame_b64: str,
+    ) -> None:
         """Both paths (with and without person detector) should return valid responses."""
-        frame_b64 = _img_to_b64(PERSON_DRINKING_IMG)
-
         for client in [client_with_detector, client_without_detector]:
             with client.websocket_connect(
                 "/hal/api/dl/action-analysis/ws", headers=AUTH_HEADERS
             ) as ws:
                 for _ in range(8):
                     ws.send_text(
-                        json.dumps({"type": "frame", "task": "action", "frame_b64": frame_b64})
+                        json.dumps({"type": "frame", "task": "action", "frame_b64": person_frame_b64})
                     )
                     resp = ws.receive_json()
                 assert "detected_classes" in resp

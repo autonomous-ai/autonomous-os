@@ -50,8 +50,11 @@ Base URL: `https://storage.googleapis.com/autonomous-models/`
 | WeSpeaker ECAPA-1024 (embed) | `…/onnx_models/wespeaker_ecapa_tdnn1024.onnx` |
 | WeSpeaker CAM++ (embed) | `…/onnx_models/wespeaker_campplus.onnx` ⚠️ |
 | YuNet (face) | `…/onnx_models/face_detection_yunet_2023mar.onnx` |
-| YOLO person | `…/pytorch_models/yolo12x.pt` |
-| YOLO-World (object) | `…/pytorch_models/yolov8x-worldv2.pt` |
+| YOLO person (PyTorch) | `…/pytorch_models/yolo12x.pt` |
+| YOLO person (ONNX) | `…/onnx_models/yolo12x_raw.onnx`, `…/onnx_models/yolo12x.onnx` |
+| YOLO-World (PyTorch) | `…/pytorch_models/yolov8x-worldv2.pt` |
+| YOLO-World (ONNX) | `…/onnx_models/yolov8x-worldv2_raw.onnx`, `…/onnx_models/yolov8x-worldv2.onnx` |
+| OWLv2 (ONNX) | `…/onnx_models/owlv2_raw.onnx`, `…/onnx_models/owlv2.onnx` |
 
 (`…` = the base URL above. The mapping lives in `CDN_PATHS` in
 `src/core/utils/files.py` — keep this table in sync with it.)
@@ -67,9 +70,9 @@ Base URL: `https://storage.googleapis.com/autonomous-models/`
 > pointing the model at a local file / alternate source via `<NAME>__CKPT_PATH` or
 > `<NAME>__REMOTE_URL`.
 
-Object detectors **OWLv2** and **Grounding DINO** are pulled from the HuggingFace
-Hub instead (`google/owlv2-large-patch14-ensemble`,
-`IDEA-Research/grounding-dino-tiny`), not from this bucket.
+Object detector **OWLv2** has both ONNX (default, from CDN) and HuggingFace
+(`google/owlv2-large-patch14-ensemble`) backends. The ONNX backend is used when
+`USE_ONNX=true` (the default).
 
 ### Notes for self-hosting / forks
 
@@ -119,9 +122,24 @@ checkpoint override and threshold(s).
 
 ### Object detectors (all opt-in)
 
-Each detector has its own block: `OBJECT_DETECTOR__<NAME>__{ENABLED,MODEL_PATH,CLASSES_PATH,THRESHOLD}`
-where `<NAME>` ∈ `YOLO_WORLD`, `YOLOE`, `OWLV2`, `GROUNDING_DINO`. All default to
+Each detector has its own block: `OBJECT_DETECTOR__<NAME>__{ENABLED,USE_ONNX,MODEL_PATH,REMOTE_URL,CLASSES_PATH,THRESHOLD}`
+where `<NAME>` ∈ `YOLO_WORLD`, `OWLV2`. All default to
 `ENABLED=false`; enable the detectors you intend to call by path segment.
+
+| Env var | Default | Meaning |
+|---------|---------|---------|
+| `OBJECT_DETECTOR__<NAME>__ENABLED` | `false` | Enable this detector |
+| `OBJECT_DETECTOR__<NAME>__USE_ONNX` | `true` | Use ONNX Runtime backend (when `false`, falls back to PyTorch/HF) |
+| `OBJECT_DETECTOR__<NAME>__MODEL_PATH` | _(auto)_ | Local model weights override |
+| `OBJECT_DETECTOR__<NAME>__REMOTE_URL` | _(auto)_ | Custom download URL (overrides CDN default) |
+| `OBJECT_DETECTOR__<NAME>__CLASSES_PATH` | _(none)_ | Default class list file |
+| `OBJECT_DETECTOR__<NAME>__THRESHOLD` | per-model | Confidence threshold |
+| `OBJECT_DETECTOR__<NAME>__BATCH_SIZE` | _(auto)_ | Inference batch size |
+
+When `USE_ONNX=true` (the default), ONNX predictors resolve their model path and
+remote URL from `ModelEnum` entries and auto-download via `ensure_downloaded` on
+first use. Models are cached in `MODEL_CACHE_DIR` (`~/.cache/dlbackend/models/` by
+default). No manual download step is needed.
 
 ### Audio processor (SER / embedder front-end)
 

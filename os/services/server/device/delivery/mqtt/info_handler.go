@@ -15,6 +15,9 @@ func (h *DeviceMQTTHandler) handleInfo(_ domain.MQTTMessage) error {
 		msg.HalVersion = v
 	}
 	msg.OpenClawVersion = agenthttp.GetOpenClawVersion()
+	// hermes_version sits next to openclaw_version (both probed at startup); the
+	// active one is named by agent_runtime.
+	msg.HermesVersion = agenthttp.GetHermesVersion()
 	msg.AgentRuntime = device.CurrentAgentRuntimeFromConfig(h.config)
 	if ip, err := h.networkService.GetCurrentIP(); err == nil {
 		msg.LocalIP = ip
@@ -24,6 +27,7 @@ func (h *DeviceMQTTHandler) handleInfo(_ domain.MQTTMessage) error {
 		"version", msg.Version,
 		"hal_version", msg.HalVersion,
 		"openclaw_version", msg.OpenClawVersion,
+		"hermes_version", msg.HermesVersion,
 		"agent_runtime", msg.AgentRuntime,
 		"local_ip", msg.LocalIP,
 		"tts_provider", msg.TTSProvider,

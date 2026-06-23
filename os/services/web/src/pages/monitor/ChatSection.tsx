@@ -22,7 +22,7 @@ function renderInline(line: string, keyPrefix: string): ReactNode[] {
     if (match[2]) parts.push(<strong key={k}>{match[2]}</strong>);
     else if (match[3]) parts.push(<em key={k}>{match[3]}</em>);
     else if (match[4]) parts.push(<del key={k} style={{ opacity: 0.6 }}>{match[4]}</del>);
-    else if (match[5]) parts.push(<code key={k} style={{ background: "rgba(255,255,255,0.06)", padding: "1px 5px", borderRadius: 3, fontSize: "0.9em" }}>{match[5]}</code>);
+    else if (match[5]) parts.push(<code key={k} style={{ background: "var(--lm-surface)", padding: "1px 5px", borderRadius: 3, fontSize: "0.9em" }}>{match[5]}</code>);
     else if (match[6]) parts.push(<a key={k} href={match[6]} target="_blank" rel="noopener noreferrer" style={{ color: "var(--lm-teal)", textDecoration: "underline" }}>{match[6].length > 50 ? match[6].slice(0, 50) + "…" : match[6]}</a>);
     last = match.index + match[0].length;
   }
@@ -47,7 +47,7 @@ function renderMarkdown(text: string): ReactNode {
       if (i < lines.length) i++; // skip closing ```
       result.push(
         <pre key={`cb-${i}`} style={{
-          background: "rgba(0,0,0,0.3)", padding: "8px 12px", borderRadius: 6,
+          background: "var(--lm-bg)", padding: "8px 12px", borderRadius: 6,
           fontSize: "0.85em", overflowX: "auto", margin: "4px 0",
           border: "1px solid var(--lm-border)", whiteSpace: "pre-wrap", wordBreak: "break-word",
         }}>
@@ -130,7 +130,7 @@ function renderMarkdown(text: string): ReactNode {
                 <tr key={ri}>
                   {row.map((cell, ci) => (
                     <td key={ci} style={{
-                      padding: "3px 8px", borderBottom: "1px solid rgba(255,255,255,0.05)",
+                      padding: "3px 8px", borderBottom: "1px solid var(--lm-border)",
                     }}>{renderInline(cell, `td-${i}-${ri}-${ci}`)}</td>
                   ))}
                 </tr>
@@ -1547,18 +1547,21 @@ export function ChatSection({ events, isActive }: Props) {
             </span>
           </div>
         )}
-        {/* Chat header bar */}
+        {/* Chat header bar — matches the monitor topbar rhythm (10px/14px pad,
+            44px tall) so Chat reads as part of the same shell as Overview /
+            System rather than a denser one-off. */}
         <div style={{
-          padding: "6px 12px", borderBottom: "1px solid var(--lm-border)",
+          padding: "10px 16px", borderBottom: "1px solid var(--lm-border)",
           display: "flex", alignItems: "center", justifyContent: "space-between",
-          background: "var(--lm-sidebar)", minHeight: 36,
+          background: "var(--lm-sidebar)", minHeight: 44, gap: 12,
         }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: 1 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0, flex: 1 }}>
+            <Sparkles size={15} style={{ color: "var(--lm-amber)", flexShrink: 0 }} />
             <span style={{
-              fontSize: 13.5,
+              fontSize: 14,
               color: active ? "var(--lm-text)" : "var(--lm-text-muted)",
               fontWeight: 700,
-              letterSpacing: "0.01em",
+              letterSpacing: "-0.01em",
               whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
             }}>
               {active ? active.title : "Select or start a chat"}
@@ -1604,7 +1607,7 @@ export function ChatSection({ events, isActive }: Props) {
         <div
           ref={scrollContainerRef}
           onScroll={onScroll}
-          style={{ flex: 1, overflowY: "auto", padding: "20px 16px 8px" }}
+          style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "20px 16px 8px" }}
         >
           <div style={{ maxWidth: 760, margin: "0 auto", width: "100%", display: "flex", flexDirection: "column", gap: 12 }}>
           {messages.length === 0 && (
@@ -1661,7 +1664,7 @@ export function ChatSection({ events, isActive }: Props) {
                   background: msg.role === "user" ? "rgba(245,158,11,0.15)" : "var(--lm-surface)",
                   border: `1px solid ${msg.role === "user" ? "rgba(245,158,11,0.25)" : "var(--lm-border)"}`,
                   color: msg.error ? "var(--lm-red)" : "var(--lm-text)",
-                  fontSize: 13, lineHeight: 1.55, wordBreak: "break-word",
+                  fontSize: 13.5, lineHeight: 1.55, wordBreak: "break-word",
                   minWidth: 40, minHeight: 36, position: "relative",
                 }}>
                   {msg.imageUrl && (
@@ -1678,8 +1681,8 @@ export function ChatSection({ events, isActive }: Props) {
                     <div style={{
                       display: "flex", alignItems: "center", gap: 6,
                       padding: "4px 8px", borderRadius: 6,
-                      background: "rgba(255,255,255,0.04)", border: "1px solid var(--lm-border)",
-                      marginBottom: msg.text ? 6 : 0, fontSize: 11,
+                      background: "var(--lm-surface)", border: "1px solid var(--lm-border)",
+                      marginBottom: msg.text ? 6 : 0, fontSize: 11.5,
                     }}>
                       <span>📎</span>
                       <span style={{ color: "var(--lm-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 160 }}>
@@ -1773,23 +1776,28 @@ export function ChatSection({ events, isActive }: Props) {
 
         {/* Input — ChatGPT-style pill. File preview lives INSIDE the pill (top
             slot) so the attach state is visually part of the input, not a
-            separate banner. Centered with max-width like the messages column. */}
+            separate banner. Centered with max-width like the messages column.
+            flexShrink:0 pins the composer so it can never be squeezed/clipped by
+            the scroll area above it. */}
         <div style={{
-          padding: "10px 16px 14px",
+          flexShrink: 0,
+          padding: "10px 16px 12px",
           borderTop: "1px solid var(--lm-border)",
           background: "var(--lm-sidebar)",
         }}>
           <div style={{ maxWidth: 760, margin: "0 auto", width: "100%" }}>
             <input ref={fileInputRef} type="file" style={{ display: "none" }} onChange={handleFileSelect} />
-            <div style={{
-              display: "flex", flexDirection: "column", gap: 6,
-              background: "var(--lm-surface)",
-              border: "1px solid var(--lm-border)",
-              borderRadius: 18,
-              padding: "6px 6px 6px 6px",
-              boxShadow: "0 1px 2px rgba(0,0,0,0.15)",
-              transition: "border-color 0.15s",
-            }}>
+            <div
+              className="lm-chat-composer"
+              style={{
+                display: "flex", flexDirection: "column", gap: 6,
+                background: "var(--lm-card)",
+                border: "1px solid var(--lm-border)",
+                borderRadius: 16,
+                padding: 6,
+                boxShadow: "0 1px 2px rgba(0,0,0,0.18), 0 8px 24px -16px rgba(0,0,0,0.5)",
+                transition: "border-color 0.15s, box-shadow 0.15s",
+              }}>
               {/* Attached file chip inside the pill — fixed slot above the input row. */}
               {fileName && (
                 <div style={{
@@ -1877,7 +1885,7 @@ export function ChatSection({ events, isActive }: Props) {
                     ? "var(--lm-amber)"
                     : "color-mix(in srgb, var(--lm-text) 15%, transparent)",
                   border: "none",
-                  color: input.trim() && !sending ? "#0b0a08" : "var(--lm-text-muted)",
+                  color: input.trim() && !sending ? "var(--lm-on-amber)" : "var(--lm-text-muted)",
                   cursor: input.trim() && !sending ? "pointer" : "default",
                   transition: "all 0.15s",
                   display: "inline-flex", alignItems: "center", justifyContent: "center",

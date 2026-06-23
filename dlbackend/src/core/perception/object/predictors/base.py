@@ -1,7 +1,6 @@
-"""Abstract base class for zero-shot object detectors.
+"""Abstract base class for object detectors.
 
-Extends PredictorBase. Input is MatLike (BGR image), output is RawObjectDetection.
-Classes to detect are passed via the `classes` kwarg on predict().
+ObjectDetector — base for all detectors (PyTorch, HF, ONNX).
 """
 
 from abc import ABC
@@ -25,12 +24,14 @@ class ObjectDetector(PredictorBase[cv2t.MatLike, RawObjectDetection], ABC):
     """
 
     DEFAULT_MODEL_PATH: Path | None = None
+    DEFAULT_REMOTE_URL: str | None = None
     DEFAULT_CLASSES_PATH: Path = RESOURCES_DIR / "default_classes.txt"
     DEFAULT_THRESHOLD: float = 0.25
 
     def __init__(
         self,
         model_path: Path | None = None,
+        remote_url: str | None = None,
         classes_path: Path | None = None,
         threshold: float | None = None,
         batch_size: int | None = None,
@@ -42,6 +43,7 @@ class ObjectDetector(PredictorBase[cv2t.MatLike, RawObjectDetection], ABC):
             raise RuntimeError("model_path must not be None")
 
         self._model_path: Path = model_path
+        self._remote_url: str | None = get_or_default(remote_url, self.DEFAULT_REMOTE_URL)
         self._classes_path: Path = get_or_default(classes_path, self.DEFAULT_CLASSES_PATH)
         self._threshold: float = get_or_default(threshold, self.DEFAULT_THRESHOLD)
 
@@ -64,5 +66,4 @@ class ObjectDetector(PredictorBase[cv2t.MatLike, RawObjectDetection], ABC):
         classes: list[str] | None = None,
         **kwargs: Any,
     ) -> list[RawObjectDetection]:
-        with self._gpu_lock:
-            return super().predict(input, preprocess=preprocess, classes=classes, **kwargs)
+        return super().predict(input, preprocess=preprocess, classes=classes, **kwargs)

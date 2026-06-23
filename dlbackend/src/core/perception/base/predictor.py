@@ -9,6 +9,12 @@ INPUT_T = TypeVar("INPUT_T")
 OUTPUT_T = TypeVar("OUTPUT_T")
 PREDICTOR_T = TypeVar("PREDICTOR_T")
 
+# Global GPU lock. ANY code that touches the GPU (ONNX inference, PyTorch
+# forward, TorchScript VAD, model loading/warmup) must hold this lock.
+# Prevents CUDA stream collisions, cuDNN race conditions, and OOM from
+# concurrent GPU allocations across all predictor and processor instances.
+gpu_lock: threading.RLock = threading.RLock()
+
 
 class PredictorFactory(Generic[PREDICTOR_T], ABC):
     """Base class for predictor factories.
@@ -24,19 +30,15 @@ class PredictorFactory(Generic[PREDICTOR_T], ABC):
 
 class PredictorBase(Generic[INPUT_T, OUTPUT_T], ABC):
     DEFAULT_BATCH_SIZE: int = 1
-    # Shared lock for PyTorch GPU inference. PyTorch models running concurrently
-    # on the default CUDA stream cause cuDNN/stream collisions. Subclasses that
-    # use PyTorch (ObjectDetector, PersonDetector) acquire this in predict().
-    # ONNX Runtime predictors don't need it — they use a separate CUDA context.
-    _gpu_lock: threading.RLock = threading.RLock()
+    _gpu_lock = gpu_lock  # Class-level alias for backward compat
 
     def __init__(self, batch_size: int | None = None) -> None:
         self._logger: logging.Logger = logging.getLogger(
             f"{self.__class__.__module__}.{self.__class__.__name__}"
         )
         self._logger.setLevel(logging.DEBUG)
-        self._lock: threading.RLock = threading.RLock()
         self._batch_size: int = get_or_default(batch_size, self.DEFAULT_BATCH_SIZE)
+        self._lock: threading.RLock = threading.RLock()
 
     @abstractmethod
     def _start_impl(self) -> None:
@@ -62,11 +64,13 @@ class PredictorBase(Generic[INPUT_T, OUTPUT_T], ABC):
 
     def start(self) -> None:
         with self._lock:
-            self._start_impl()
+            with self._gpu_lock:
+                self._start_impl()
 
     def stop(self) -> None:
         with self._lock:
-            self._stop_impl()
+            with self._gpu_lock:
+                self._stop_impl()
 
     def is_ready(self) -> bool:
         with self._lock:
@@ -75,9 +79,12 @@ class PredictorBase(Generic[INPUT_T, OUTPUT_T], ABC):
     def predict(
         self, input: list[INPUT_T], *, preprocess: bool = True, **kwargs: Any
     ) -> list[OUTPUT_T]:
-        """Make prediction on a batch of input. Thread-safe via lock.
+        """Make prediction on a batch of input. Thread-safe via global GPU lock.
 
-        Large batches are chunked by ``_batch_size`` to limit peak memory.
+        The entire predict call (preprocessing + inference + postprocessing)
+        runs under ``_gpu_lock`` to prevent CUDA stream collisions between
+        concurrent sessions. Large batches are chunked by ``_batch_size``
+        to limit peak memory.
 
         Args:
             input: Batch of inputs.
@@ -91,10 +98,11 @@ class PredictorBase(Generic[INPUT_T, OUTPUT_T], ABC):
         with self._lock:
             if not self._is_ready_impl():
                 raise RuntimeError(f"{self.__class__.__name__} is not ready")
-            if len(input) <= self._batch_size:
-                return self._predict_impl(input, preprocess=preprocess, **kwargs)
-            results: list[OUTPUT_T] = []
-            for i in range(0, len(input), self._batch_size):
-                chunk = input[i : i + self._batch_size]
-                results.extend(self._predict_impl(chunk, preprocess=preprocess, **kwargs))
-            return results
+
+        if len(input) <= self._batch_size:
+            return self._predict_impl(input, preprocess=preprocess, **kwargs)
+        results: list[OUTPUT_T] = []
+        for i in range(0, len(input), self._batch_size):
+            chunk = input[i : i + self._batch_size]
+            results.extend(self._predict_impl(chunk, preprocess=preprocess, **kwargs))
+        return results

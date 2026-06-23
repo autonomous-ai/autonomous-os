@@ -56,6 +56,13 @@ class VoiceService:
         r"[^\]]*\]"
         r"|`\[[^\]]*\]`"
         r"|/(?:emotion|servo|led|skills)[^\s]*"
+        # Bare emotion-annotation prefix the realtime model sometimes emits and
+        # then mimics from its own saved history (e.g.
+        # "emotion_user:concentration intensity:1.0 emotion_model:calm intensity:1.0 …").
+        # It has no brackets/slash so the markers above miss it; strip each token so
+        # it never reaches TTS NOR the saved transcript (which breaks the loop).
+        r"|emotion_(?:user|model)\s*:\s*\S+"
+        r"|\bintensity\s*:\s*[0-9.]+"
         r"|NO_REPLY",
         re.IGNORECASE,
     )

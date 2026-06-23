@@ -20,6 +20,7 @@ const configFilePath = "/root/config/config.json"
 
 var deviceWipePaths = []string{
 	"/root/config/config.json",                      // os-server config (API keys, channel tokens, MQTT creds) — bootstrap.json in the same dir is intentionally kept
+	"/root/config/agent_state.json",                 // agent-runtime switch history/baseline — MUST wipe in lockstep with config.json (which holds agent_runtime). Leaving it makes prev (stale, e.g. hermes) diverge from the reset current (default) and triggers a spurious persona migration on next boot that propagates the just-wiped stub persona across runtimes.
 	"/root/local/users",                             // face + voice enrollments (owner)
 	"/root/local/strangers",                         // face + voice enrollments (stranger)
 	"/var/lib/hal/snapshots",                        // persistent camera snapshots (sensing_face / motion / emotion, 72h TTL)

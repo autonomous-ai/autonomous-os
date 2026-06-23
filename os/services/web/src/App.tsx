@@ -5,7 +5,6 @@ import { SourceFooter } from "@/components/SourceFooter";
 import Setup from "@/pages/Setup";
 import Login from "@/pages/Login";
 import Monitor from "@/pages/monitor";
-import EditConfig from "@/pages/EditConfig";
 import GwConfig from "@/pages/GwConfig";
 import { checkInternet, getDeviceConfig, getSetupStatus, safeSearch, scrubLocationSecrets, setApiToken } from "@/lib/api";
 
@@ -130,6 +129,14 @@ function RootRedirect() {
   );
 }
 
+// Legacy /edit → /setting redirect that carries the query string + hash over, so
+// links like /edit?debug=true#face still land on the right Settings tab in debug
+// mode. (<Navigate to="/setting"> alone would drop ?debug=true and the hash.)
+function EditRedirect() {
+  const location = useLocation();
+  return <Navigate to={`/setting${location.search}${location.hash}`} replace />;
+}
+
 // On every mount, scrub secret query params from the URL so they don't
 // survive in browser history or address bar after the page reads them.
 function useScrubSecrets() {
@@ -182,7 +189,12 @@ function App() {
           <Route path="/monitor" element={null} />
           <Route path="/setting" element={null} />
         </Route>
-        <Route path="/edit" element={<AuthGate><EditConfig /></AuthGate>} />
+        {/* /edit was a standalone settings page that rendered the same
+            SettingsPanel as the /setting tab inside Monitor. The page was
+            removed; redirect legacy links (incl. the Setup "update →" hint and
+            any bookmarks) to the in-Monitor settings shell, preserving the
+            query string (e.g. ?debug=true). */}
+        <Route path="/edit" element={<EditRedirect />} />
         <Route path="/gw-config" element={<AuthGate><GwConfig /></AuthGate>} />
         <Route path="/dashboard" element={<Navigate to="/monitor" replace />} />
       </Routes>

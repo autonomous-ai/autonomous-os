@@ -137,13 +137,8 @@ func (s *Service) NewSession(sessionKey string) error {
 	return nil
 }
 
-// TODO(hermes-identity): implement UpdateIdentityName once Hermes has an
-// identity surface (wake word / personality name). Currently bypassed — under
-// Hermes, IDENTITY.md is owned by the external Hermes server, not Lumi.
-func (s *Service) UpdateIdentityName(_ string) error {
-	slog.Info("UpdateIdentityName: no-op (hermes backend — TODO)", "component", "hermes")
-	return nil
-}
+// UpdateIdentityName for Hermes lives in identity.go — it rewrites the name in
+// <hermes>/SOUL.md (Hermes's identity file; it has no separate IDENTITY.md slot).
 
 // TODO(hermes-mcp): implement WriteMCPEntry once Hermes exposes an MCP
 // connector config surface. Currently bypassed so the AgentGateway interface

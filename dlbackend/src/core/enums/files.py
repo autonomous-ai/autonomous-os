@@ -8,32 +8,40 @@ class ModelEnum(StrEnum):
     WESPEAKER_CAMPPLUS = "wespeaker_campplus"
 
     # Audio emotion (SER)
-    EMOTION2VEC = "emotion2vec"
+    EMOTION2VEC_ONNX = "emotion2vec_onnx"
 
     # Facial emotion (FER)
-    POSTERV2 = "posterv2"
-    EMONET_8 = "emonet_8"
-    EMONET_5 = "emonet_5"
+    POSTERV2_ONNX = "posterv2_onnx"
+    POSTERV2_PTH = "posterv2_pth"
+    EMONET_8_ONNX = "emonet_8_onnx"
+    EMONET_8_PTH = "emonet_8_pth"
+    EMONET_5_ONNX = "emonet_5_onnx"
+    EMONET_5_PTH = "emonet_5_pth"
 
     # Action recognition
-    X3D = "x3d"
-    VIDEOMAE = "videomae"
-    UNIFORMERV2 = "uniformerv2"
+    X3D_ONNX = "x3d_onnx"
+    VIDEOMAE_ONNX = "videomae_onnx"
+    UNIFORMERV2_ONNX = "uniformerv2_onnx"
+    UNIFORMERV2_PTH = "uniformerv2_pth"
 
     # Pose 2D estimation
-    RTMPOSE_M = "rtmpose_m"
+    RTMPOSE_M_ONNX = "rtmpose_m_onnx"
 
     # Pose 3D lifting
-    TCPFORMER_H36M_243 = "tcpformer_h36m_243"
+    TCPFORMER_H36M_243_ONNX = "tcpformer_h36m_243_onnx"
+    TCPFORMER_H36M_243_PTH = "tcpformer_h36m_243_pth"
 
     # Face detection
-    YUNET = "yunet"
+    YUNET_ONNX = "yunet_onnx"
 
     # Person detection
-    YOLO_PERSON = "yolo_person"
+    YOLO_PERSON_ONNX = "yolo_person_onnx"
+    YOLO_PERSON_NMS_ONNX = "yolo_person_nms_onnx"
+    YOLO_PERSON_PTH = "yolo_person_pth"
 
     # Object detection
-    YOLO_WORLD = "yolo_world"
-    YOLOE = "yoloe"
-    OWLV2 = "owlv2"
-    GROUNDING_DINO = "grounding_dino"
+    YOLO_WORLD_ONNX = "yolo_world_onnx"
+    YOLO_WORLD_NMS_ONNX = "yolo_world_nms_onnx"
+    YOLO_WORLD_PTH = "yolo_world_pth"
+    OWLV2_ONNX = "owlv2_onnx"
+    OWLV2_NMS_ONNX = "owlv2_nms_onnx"

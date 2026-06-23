@@ -31,6 +31,11 @@ type AgentGateway interface {
 	// Name returns the display name of this agent gateway (e.g. "OpenClaw", "PicoClaw").
 	Name() string
 
+	// Version returns the active backend's own version (e.g. OpenClaw "2026.5.27",
+	// Hermes "0.17.0"), so version surfaces (web Status, etc.) reflect the running
+	// runtime rather than always reporting OpenClaw. Empty when undetected.
+	Version() string
+
 	// IsReady returns true when the agent runtime is connected and ready.
 	IsReady() bool
 

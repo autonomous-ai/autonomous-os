@@ -25,7 +25,6 @@ from core.models.facial_emotion import RawEmotionDetection
 from core.perception.base import PredictorBase
 from core.perception.facial_emotion.constants import RESOURCES_DIR
 from core.utils.common import get_or_default
-from core.utils.compute import softmax
 from core.utils.files import ensure_downloaded
 from core.utils.runtime import prepare_ort_session
 
@@ -42,7 +41,7 @@ class EmotionRecognizer(PredictorBase[cv2t.MatLike, RawEmotionDetection]):
     DEFAULT_REMOTE_URL: str | None = None
     DEFAULT_CLASSES_PATH: Path = RESOURCES_DIR / "posterv2_classes.txt"
     DEFAULT_INPUT_SIZE: tuple[int, int] = (224, 224)
-    ONNX_INPUT_NAME: str = "input"
+    ONNX_INPUT_NAME: str = "images"
 
     MEAN: npt.NDArray[np.float32] = np.array([0, 0, 0], dtype=np.float32)
     STD: npt.NDArray[np.float32] = np.array([1, 1, 1], dtype=np.float32)
@@ -144,6 +143,7 @@ class EmotionRecognizer(PredictorBase[cv2t.MatLike, RawEmotionDetection]):
         input_np = input_np.transpose(0, 3, 1, 2)  # (N, C, H, W)
 
         raw_outputs: list[npt.NDArray[np.float32]] = self._session.run(None, {self.ONNX_INPUT_NAME: input_np})
+
         return self._postprocess_batch(raw_outputs, len(input))
 
     def _postprocess_batch(
@@ -151,11 +151,11 @@ class EmotionRecognizer(PredictorBase[cv2t.MatLike, RawEmotionDetection]):
     ) -> list[RawEmotionDetection]:
         """Convert batched ONNX output to per-sample RawEmotionDetection.
 
-        Default: first output is expression logits (N, C). Subclasses
-        override for models with additional outputs (valence, arousal).
+        Default: first output is expression probs (N, C) — softmax is baked
+        into the ONNX graph. Subclasses override for models with additional
+        outputs (valence, arousal).
         """
-        logits: npt.NDArray[np.float32] = cast(npt.NDArray[np.float32], raw_outputs[0])
-        probs: npt.NDArray[np.float32] = softmax(logits, axis=-1)  # (N, C)
+        probs: npt.NDArray[np.float32] = cast(npt.NDArray[np.float32], raw_outputs[0])
 
         return [RawEmotionDetection(expression_probs=probs[i]) for i in range(N)]
 
