@@ -156,6 +156,7 @@ class RealtimeOrchestrator:
         self._agent: VoiceAgentBase | None = None
         self._started: threading.Event = threading.Event()
         self._consecutive_silent: int = 0  # zombie-session guard (see stream_output)
+        self._rebuild_lock: threading.Lock = threading.Lock()  # guards _force_rebuild
         summarizer: RealtimeSummarizer | None = None
         if config.REALTIME_SUMMARIZER_ENABLED:
             try:
@@ -194,6 +195,69 @@ class RealtimeOrchestrator:
             return self._agent.output_sample_rate
         return DEFAULT_SAMPLE_RATE
 
+    def _make_agent(self, provider: str, instructions: str) -> VoiceAgentBase | None:
+        """Build (not connect) a fresh agent for the provider. Shared by start()
+        and the zombie rebuild so both create the agent identically."""
+        if provider == "gemini":
+            from hal.drivers.realtime.voice_agent.gemini_live import GeminiLiveAgent
+
+            return GeminiLiveAgent(
+                config=GeminiConfig(instructions=instructions), tools=self._tools,
+            )
+        if provider == "openai":
+            from hal.drivers.realtime.voice_agent.openai_realtime import (
+                OpenAIRealtimeAgent,
+            )
+
+            return OpenAIRealtimeAgent(
+                config=OpenAIConfig(instructions=instructions), tools=self._tools,
+            )
+        return None
+
+    def _force_rebuild(self) -> None:
+        """Recover a zombie session by building a BRAND-NEW agent and swapping it
+        in, then discarding the old one.
+
+        We do NOT reconnect the existing agent: its recv thread is wedged inside
+        `async for session.receive()` on a dead socket, and closing that session
+        does not reliably unblock it — so an in-place reconnect never fires (the
+        send loop only reconnects on a queued input, but inputs are gated on
+        `available`, which is False once we clear `_connected` → deadlock). A
+        fresh agent has its own loop / threads / session, sidestepping the wedge
+        entirely (this is what a HAL restart does, minus the process). Runs on a
+        daemon thread so the voice turn doesn't block on connect; a lock prevents
+        overlapping rebuilds while one is in flight."""
+        if not self._rebuild_lock.acquire(blocking=False):
+            return  # a rebuild is already running
+        provider: str = config.REALTIME_PROVIDER.strip().lower()
+
+        def _run() -> None:
+            old = self._agent
+            try:
+                instructions = self._context.build_instructions()
+                new = self._make_agent(provider, instructions)
+                if new is None:
+                    return
+                new.connect()
+                self._agent = new
+                logger.info("[realtime] Zombie recovery: fresh session connected")
+            except Exception:
+                logger.exception("[realtime] Zombie rebuild failed")
+            finally:
+                self._rebuild_lock.release()
+                # Tear down the old (wedged) agent in the background — its recv
+                # thread only exits once its loop is stopped by disconnect(); it
+                # is a separate instance so it can't disturb the new agent.
+                if old is not None and old is not self._agent:
+                    try:
+                        old.disconnect()
+                    except Exception:
+                        logger.exception("[realtime] old agent disconnect failed")
+
+        threading.Thread(
+            target=_run, daemon=True, name="rt-zombie-rebuild"
+        ).start()
+
     def start(self) -> None:
         """Create the agent based on config and connect."""
         provider: str = config.REALTIME_PROVIDER.strip().lower()
@@ -207,25 +271,8 @@ class RealtimeOrchestrator:
             len(instructions),
         )
 
-        if provider == "gemini":
-            from hal.drivers.realtime.voice_agent.gemini_live import GeminiLiveAgent
-
-            self._agent = GeminiLiveAgent(
-                config=GeminiConfig(instructions=instructions),
-                tools=self._tools,
-            )
-
-        elif provider == "openai":
-            from hal.drivers.realtime.voice_agent.openai_realtime import (
-                OpenAIRealtimeAgent,
-            )
-
-            self._agent = OpenAIRealtimeAgent(
-                config=OpenAIConfig(instructions=instructions),
-                tools=self._tools,
-            )
-
-        else:
+        self._agent = self._make_agent(provider, instructions)
+        if self._agent is None:
             logger.warning("Unknown realtime provider: %s — disabled", provider)
             return
 
@@ -378,11 +425,7 @@ class RealtimeOrchestrator:
                     self._consecutive_silent,
                 )
                 self._consecutive_silent = 0
-                if self._agent is not None:
-                    try:
-                        self._agent.force_reconnect()
-                    except Exception:
-                        logger.exception("[realtime] force_reconnect failed")
+                self._force_rebuild()
 
     def _handle_emotion_call(self, output: FunctionCallOutput) -> None:
         """Fire the device's emotion expression without blocking the spoken turn.
