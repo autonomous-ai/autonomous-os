@@ -25,6 +25,27 @@ ENV_FILE="$HERMES_DIR/.env"
 CONFIG_YAML="$HERMES_DIR/config.yaml"
 log() { echo "[hermes-presync] $*"; }
 
+# ── 0. SKILLS (restore OpenClaw-imported skills if missing) ─────────────────────
+# `hermes claw migrate` imports the device's OpenClaw skills into
+# ~/.hermes/skills/openclaw-imports. It runs from install.sh on first install, but
+# a factory reset (wipeHermesState) wipes that dir while leaving the OpenClaw
+# workspace intact — and install.sh does NOT re-run on a later switch (verify
+# passes), so the skills would never come back. Restore them here when the dir is
+# empty/absent. GUARDED so a normal switch is a no-op (re-running every switch with
+# --skill-conflict rename would pile up renamed duplicates). claw migrate has no
+# skills-only preset (it also touches SOUL/MEMORY), but that is harmless: the Go
+# persona migration runs afterwards (os-server boot) and re-writes SOUL/MEMORY
+# cleanly, so only the skills it imported actually persist.
+HERMES_BIN="${HERMES_BIN:-/usr/local/bin/hermes}"
+IMPORTS_DIR="$HERMES_DIR/skills/openclaw-imports"
+if [ ! -d "$IMPORTS_DIR" ] || [ -z "$(ls -A "$IMPORTS_DIR" 2>/dev/null)" ]; then
+  if [ -x "$HERMES_BIN" ] && [ -d /root/.openclaw ]; then
+    log "openclaw-imported skills missing — restoring via claw migrate"
+    "$HERMES_BIN" claw migrate --preset full --overwrite --skill-conflict rename --yes --migrate-secrets \
+      || log "WARN: claw migrate failed (non-fatal)"
+  fi
+fi
+
 # yq is required for the structured config.yaml edits. install.sh installs it; if
 # it is somehow absent we cannot safely patch — bail loudly (non-fatal to the
 # switch: the caller treats presync failure as a warning).

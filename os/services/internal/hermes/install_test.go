@@ -38,6 +38,26 @@ func TestPresyncOwnsConfigStructure(t *testing.T) {
 	}
 }
 
+// presync must restore the OpenClaw-imported skills (claw migrate) when they are
+// missing — a factory reset wipes skills/openclaw-imports and install.sh (which
+// used to own the import) does not re-run on a later switch. Must be GUARDED on the
+// dir being empty so a normal switch doesn't re-import every time.
+func TestPresyncRestoresSkills(t *testing.T) {
+	s := string(PresyncScript)
+	if !strings.Contains(s, "claw migrate") {
+		t.Error("presync.sh must run `claw migrate` to restore openclaw-imported skills")
+	}
+	if !strings.Contains(s, "openclaw-imports") {
+		t.Error("presync.sh must guard the skill restore on the openclaw-imports dir")
+	}
+	// install.sh must NOT also INVOKE claw migrate (single owner = presync; otherwise
+	// a reset fix in presync would drift from a stale copy in install.sh). A comment
+	// referencing it is fine — only the executed command (with args) is forbidden.
+	if strings.Contains(string(InstallScript), "claw migrate --preset") {
+		t.Error("install.sh still invokes claw migrate — must delegate skill import to presync.sh")
+	}
+}
+
 // install.sh must NOT carry its own config.yaml patch or a presync heredoc anymore
 // — both are owned by presync.sh / os-server materialization. A regression here
 // would re-introduce the activation gap (install.sh-only fix never reaching an

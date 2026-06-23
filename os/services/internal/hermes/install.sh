@@ -106,9 +106,10 @@ for attempt in 1 2 3; do
   sleep 1
 done
 
-echo "[install-hermes] migrate skills from OpenClaw (model config is synced separately)"
-"$HERMES_BIN" claw migrate --preset full --overwrite --skill-conflict rename --yes --migrate-secrets \
-  || echo "[install-hermes] WARN: claw migrate failed (non-fatal — no OpenClaw state yet?)"
+# OpenClaw skill import (`hermes claw migrate`) is owned by the presync hook now —
+# it restores skills/openclaw-imports whenever that dir is empty (first install OR
+# after a factory reset wiped it). openclaw was stopped above so the presync call
+# below runs the import without racing OpenClaw's state. See presync.sh §0.
 
 mkdir -p "$HERMES_DIR"
 touch "$ENV_FILE"
