@@ -70,7 +70,7 @@ Single JSON file hosted on GCS. All components reference this file.
     "url": "https://storage.googleapis.com/{BUCKET}/{PREFIX}/ota/web/0.9.0/setup-0.9.0.zip"
   },
   "openclaw": {
-    "version": "2026.5.27"
+    "version": "2026.6.9"
   },
   "hal": {
     "version": "1.0.0",
@@ -123,7 +123,7 @@ Workflow:
    device below the new floor on its next check.
 
 Version comparison is numeric per dotted segment (`bootstrap.compareVersions`):
-`2026.5.27 > 2026.5.9`; pre-release/build suffixes are ignored; an empty or
+`2026.6.9 > 2026.5.9`; pre-release/build suffixes are ignored; an empty or
 unparseable current version sorts lowest (always below any floor → updates).
 
 ---
@@ -267,7 +267,7 @@ Tracks last known installed version per component:
     "os-server": "1.2.3",
     "bootstrap": "1.0.5",
     "web": "0.9.0",
-    "openclaw": "2026.5.27",
+    "openclaw": "2026.6.9",
     "hal": "1.0.0"
   }
 }

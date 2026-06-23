@@ -4,9 +4,9 @@ import (
 	"testing"
 )
 
-// modern2026_5 mimics the production target runtime (2026.5.x), where the legacy
+// modern2026_6 mimics the production target runtime (2026.6.x), where the legacy
 // streaming string is hard-rejected and the object form is required.
-var modern2026_5 = RuntimeInfo{Year: 2026, Minor: 5, Patch: 27, Detected: true}
+var modern2026_6 = RuntimeInfo{Year: 2026, Minor: 6, Patch: 9, Detected: true}
 
 func TestApplySlackChannelConfig_HTTPMode(t *testing.T) {
 	m := map[string]any{}
@@ -16,7 +16,7 @@ func TestApplySlackChannelConfig_HTTPMode(t *testing.T) {
 		UserID:        "U123",
 		Mode:          "http",
 		SigningSecret: "sign-secret",
-		Runtime:       modern2026_5,
+		Runtime:       modern2026_6,
 	})
 
 	if m["mode"] != "http" {
@@ -70,7 +70,7 @@ func TestApplySlackChannelConfig_SocketMode(t *testing.T) {
 		BotToken: "xoxb-bot",
 		AppToken: "xapp-app",
 		UserID:   "U123",
-		Runtime:  modern2026_5,
+		Runtime:  modern2026_6,
 	})
 
 	if m["mode"] != "socket" {
@@ -94,10 +94,10 @@ func TestApplySlackChannelConfig_SocketMode(t *testing.T) {
 }
 
 func TestRuntimeVersionString(t *testing.T) {
-	if got := runtimeVersionString(modern2026_5); got != "2026.5.27" {
-		t.Errorf("runtimeVersionString(detected) = %q, want 2026.5.27", got)
+	if got := runtimeVersionString(modern2026_6); got != "2026.6.9" {
+		t.Errorf("runtimeVersionString(detected) = %q, want 2026.6.9", got)
 	}
-	if got := runtimeVersionString(RuntimeInfo{Year: 2026, Minor: 5, Patch: 27}); got != "" {
+	if got := runtimeVersionString(RuntimeInfo{Year: 2026, Minor: 6, Patch: 9}); got != "" {
 		t.Errorf("runtimeVersionString(undetected) = %q, want empty", got)
 	}
 }

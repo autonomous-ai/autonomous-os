@@ -129,7 +129,7 @@ Phase 5  Finalize
 | `OTA_METADATA_URL` | **(required)** | Baked into `/root/config/bootstrap.json` |
 | `OUT_IMG_SIZE` | `14G` | OPi partition size after expansion |
 | `OPI_FILE_ID` | `1CYfOaY6f5DozJBNvPJ0Gx1jBIFlGe8fn` | Google Drive ID for stock OPi .7z |
-| `OPENCLAW_VERSION` | `2026.5.27` | npm package version pin |
+| `OPENCLAW_VERSION` | `2026.6.9` | npm package version pin |
 | `AP_BAND` | `2.4` | `2.4` or `5` — hostapd hw_mode |
 | `COUNTRY_CODE` | `US` | Regulatory domain |
 

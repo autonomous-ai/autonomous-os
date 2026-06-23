@@ -34,7 +34,7 @@ OTA_METADATA_URL="${OTA_METADATA_URL:?OTA_METADATA_URL is required — build via
 AP_BAND="${AP_BAND:-2.4}"
 AP_CHANNEL="${AP_CHANNEL:-}"
 COUNTRY_CODE="${COUNTRY_CODE:-US}"
-OPENCLAW_VERSION="${OPENCLAW_VERSION:-2026.5.27}"
+OPENCLAW_VERSION="${OPENCLAW_VERSION:-2026.6.9}"
 # Device class this golden image is for — bakes devices/<type>/{DEVICE,SOUL}.md
 # so one DEVICE_TYPE = one golden image. Forwarded by the Makefile via docker -e.
 # REQUIRED, no default — a golden image must declare which device class it is.

@@ -215,7 +215,7 @@ func (s *Service) Name() string {
 	return "OpenClaw"
 }
 
-// Version returns the cached OpenClaw binary version (e.g. "2026.5.27"), or empty
+// Version returns the cached OpenClaw binary version (e.g. "2026.6.9"), or empty
 // when undetected. Satisfies domain.AgentGateway.Version().
 func (s *Service) Version() string {
 	return GetOpenClawVersion()

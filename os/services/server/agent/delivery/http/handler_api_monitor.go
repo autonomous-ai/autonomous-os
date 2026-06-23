@@ -16,7 +16,7 @@ import (
 	"go.autonomous.ai/os/server/serializers"
 )
 
-// GetOpenClawVersion returns the cached OpenClaw binary version (e.g. "2026.5.27").
+// GetOpenClawVersion returns the cached OpenClaw binary version (e.g. "2026.6.9").
 // The cache lives in the openclaw package — single source of truth, shared with
 // the MQTT `info` message and the channel-config writers — so this is a thin
 // pass-through for the agent HTTP/MQTT handlers.
@@ -64,7 +64,7 @@ func (h *AgentHandler) Status(c *gin.Context) {
 	// Get real emotion from HAL (source of truth) instead of parsed text
 	emotion := h.fetchHALEmotion()
 
-	// Active backend's own version (OpenClaw → "2026.5.27", Hermes → "0.17.0"),
+	// Active backend's own version (OpenClaw → "2026.6.9", Hermes → "0.17.0"),
 	// so the web Overview shows the running runtime's version, not always OpenClaw's.
 	version := h.agentGateway.Version()
 

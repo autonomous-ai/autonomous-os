@@ -227,7 +227,7 @@ falls back to its zero value on failure.
       "os-server": "0.0.35",
       "bootstrap": "0.0.10",
       "hal": "1.2.3",
-      "openclaw": "2026.5.27",
+      "openclaw": "2026.6.9",
       "openclaw_detected": true
     },
     "network": {

@@ -1448,7 +1448,7 @@ fi
 echo "node=\$(node -v) npm=\$(npm -v)"
 
 echo "[stage] Install OpenClaw"
-OPENCLAW_VERSION="\${OPENCLAW_VERSION:-2026.5.27}"
+OPENCLAW_VERSION="\${OPENCLAW_VERSION:-2026.6.9}"
 retry "npm install -g openclaw@\${OPENCLAW_VERSION} --omit=optional" 5
 openclaw --version || true
 

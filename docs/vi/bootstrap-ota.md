@@ -70,7 +70,7 @@ File JSON duy nhất trên GCS. Tất cả thành phần tham chiếu file này.
     "url": "https://storage.googleapis.com/{BUCKET}/{PREFIX}/ota/web/0.9.0/setup-0.9.0.zip"
   },
   "openclaw": {
-    "version": "2026.5.27"
+    "version": "2026.6.9"
   },
   "hal": {
     "version": "1.0.0",
@@ -122,7 +122,7 @@ Quy trình:
    dưới sàn mới ở lần check kế tiếp.
 
 So sánh version theo số trên từng đoạn (`bootstrap.compareVersions`):
-`2026.5.27 > 2026.5.9`; bỏ qua hậu tố pre-release/build; version hiện tại rỗng
+`2026.6.9 > 2026.5.9`; bỏ qua hậu tố pre-release/build; version hiện tại rỗng
 hoặc không parse được xem là thấp nhất (luôn dưới mọi sàn → cập nhật).
 
 ---
@@ -264,7 +264,7 @@ Lưu version đã cài của mỗi thành phần:
     "os-server": "1.2.3",
     "bootstrap": "1.0.5",
     "web": "0.9.0",
-    "openclaw": "2026.5.27",
+    "openclaw": "2026.6.9",
     "hal": "1.0.0"
   }
 }

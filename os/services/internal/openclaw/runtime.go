@@ -17,7 +17,7 @@ import (
 const openclawVersionProbeTimeout = 5 * time.Second
 
 // openclawSemverRe captures the first semver-like token in `openclaw --version`
-// output (e.g. "OpenClaw 2026.5.27 (27ae826)" → "2026.5.27"). Mirrors the regex
+// output (e.g. "OpenClaw 2026.6.9 (c645ec4)" → "2026.6.9"). Mirrors the regex
 // used in bootstrap; duplicated to avoid pulling bootstrap into this package.
 var openclawSemverRe = regexp.MustCompile(`(\d+\.\d+\.\d+(?:[-+._][0-9A-Za-z.-]+)?)`)
 
@@ -25,14 +25,14 @@ var openclawSemverRe = regexp.MustCompile(`(\d+\.\d+\.\d+(?:[-+._][0-9A-Za-z.-]+
 // normalized semver string (the cached version) for RuntimeInfo comparisons.
 var openclawSemverNumRe = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)`)
 
-// openClawVersion caches the normalized OpenClaw binary version (e.g. "2026.5.27"),
+// openClawVersion caches the normalized OpenClaw binary version (e.g. "2026.6.9"),
 // populated once at startup by PopulateOpenClawVersion(). Single source of truth:
 // the MQTT `info` message reports it AND channel-config writers parse it to pick
 // runtime-compatible field shapes (see RuntimeInfo / currentOpenclawRuntime). Valid
 // until the process restarts.
 var openClawVersion atomic.Pointer[string]
 
-// GetOpenClawVersion returns the cached OpenClaw binary version (e.g. "2026.5.27").
+// GetOpenClawVersion returns the cached OpenClaw binary version (e.g. "2026.6.9").
 // Empty string if openclaw is not installed or the version hasn't been populated yet.
 func GetOpenClawVersion() string {
 	if v := openClawVersion.Load(); v != nil {
