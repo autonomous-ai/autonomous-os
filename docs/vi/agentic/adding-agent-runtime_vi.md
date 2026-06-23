@@ -164,6 +164,24 @@ prev ≠ current). Mang gì:
 episodic/semantic, dream-diary, grounded-short-term) **không portable** — bản
 distilled `MEMORY.md`/`USER.md` mới là dạng mang đi được.
 
+### Phân loại mỗi bước migration: fold vs move
+
+Switch có round-trip không mất hay không là **tuỳ từng backend**, quyết định bởi
+backend đích có slot nào. Đừng giả định đối xứng — phân loại mỗi bước xuôi:
+
+- **Move / inline** (field sang slot *khác*, vd tên IDENTITY → inline vào SOUL):
+  đảo ngược được, và chiều ngược **BẮT BUỘC** restore về slot gốc. Bỏ restore là âm
+  thầm mất state — chính là bug mất tên. **Mỗi inline cần một restore tương ứng.**
+- **Fold** (hai cấu trúc nguồn gộp vào *một* đích, vì backend đích thiếu slot cho
+  một trong số đó): cố hữu mất **cấu trúc** (không mất dữ liệu), và **không có
+  nghịch đảo trung thực** — đã gộp thì không tách lại được. Chỉ fold khi đích thực
+  sự thiếu slot, và ghi nó như một asymmetry một-chiều đã biết **trong doc riêng
+  của backend đó** (đây là tính chất của backend đó, không phải của framework
+  migration — backend khác *có* slot sẽ map 1:1 và round-trip sạch).
+
+Vậy tính đối xứng migration của một backend là fact về *slot của backend đó*, ghi
+trong doc backend (vd `docs/agentic/hermes.md`), không phải đảm bảo chung ở đây.
+
 ---
 
 ## 5. Skills

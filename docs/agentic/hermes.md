@@ -277,11 +277,28 @@ Switching openclaw→hermes runs a Go persona migration
 - **USER.md** → `memories/USER.md`.
 
 The soul copy uses `Overwrite=true` (a switch adopts the source runtime's persona;
-backed up first). The reverse hermes→openclaw strips the identity card (OpenClaw
-owns the name in its own IDENTITY.md). **Skills** stay fresh under Hermes via
+backed up first). The reverse hermes→openclaw **strips the identity card from the
+SOUL and restores its fields back into OpenClaw's `IDENTITY.md`** (`restoreIdentityCard`,
+the inverse of the inline) — so the name set under Hermes survives the trip back,
+not just the trip out. **Skills** stay fresh under Hermes via
 `internal/hermes/skill_watcher.go` — CDN auto-update into `skills/openclaw-imports`,
 capability-gated, mirroring the OpenClaw watcher (shared engine in
 `internal/skills/skillzip.go`).
+
+### Round-trip is content-lossless but structurally one-way (Hermes-specific)
+
+Persona, name, user profile, and memory **content** survive openclaw→hermes→openclaw
+without loss. The one **structural** asymmetry is a consequence of Hermes loading
+only `MEMORY.md` + `USER.md` by name (no `KNOWLEDGE.md`, no daily-memory slot):
+
+- The forward step **folds** OpenClaw's `KNOWLEDGE.md` and daily `memory/*.md` **into**
+  the single Hermes `MEMORY.md`. On the way back those entries are already merged, so
+  they all land in OpenClaw's `MEMORY.md` — **never split back out** into a
+  `KNOWLEDGE.md` or per-day files. No data is lost; the structure is flattened.
+
+This is specific to Hermes's memory model — a backend that *does* have those slots
+would map them 1:1 and round-trip cleanly. (See the fold-vs-move rule in
+[`adding-agent-runtime.md`](adding-agent-runtime.md) §4.)
 
 > **Adding another backend** is a generic recipe — see
 > [`adding-agent-runtime.md`](adding-agent-runtime.md) for the `AgentGateway`

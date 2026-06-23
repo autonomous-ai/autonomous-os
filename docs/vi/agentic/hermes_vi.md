@@ -263,11 +263,27 @@ Switch openclaw→hermes chạy một migration persona Go
 - **USER.md** → `memories/USER.md`.
 
 Copy soul dùng `Overwrite=true` (switch lấy persona của runtime nguồn; backup
-trước). Chiều ngược hermes→openclaw strip identity card (OpenClaw giữ tên trong
-IDENTITY.md riêng). **Skills** được giữ tươi dưới Hermes nhờ
+trước). Chiều ngược hermes→openclaw **strip identity card khỏi SOUL VÀ restore các
+field của nó về `IDENTITY.md` của OpenClaw** (`restoreIdentityCard`, nghịch đảo của
+inline) — nên tên đặt dưới Hermes sống sót cả chiều về, không chỉ chiều đi.
+**Skills** được giữ tươi dưới Hermes nhờ
 `internal/hermes/skill_watcher.go` — auto-update từ CDN vào `skills/openclaw-imports`,
 gate theo capability, mirror watcher OpenClaw (engine chung ở
 `internal/skills/skillzip.go`).
+
+### Round-trip không mất nội dung nhưng một-chiều về cấu trúc (đặc thù Hermes)
+
+Persona, tên, user profile, và **nội dung** memory sống sót openclaw→hermes→openclaw
+không mất. Asymmetry **cấu trúc** duy nhất là hệ quả của việc Hermes chỉ load
+`MEMORY.md` + `USER.md` theo tên (không có slot `KNOWLEDGE.md`, không có daily-memory):
+
+- Chiều xuôi **gộp** `KNOWLEDGE.md` + daily `memory/*.md` của OpenClaw **VÀO** một
+  `MEMORY.md` của Hermes. Chiều về các entry đó đã merge sẵn nên đổ hết vào
+  `MEMORY.md` của OpenClaw — **không tách lại** thành `KNOWLEDGE.md` hay file theo
+  ngày. Không mất dữ liệu; cấu trúc bị làm phẳng.
+
+Đây là đặc thù mô hình bộ nhớ Hermes — backend *có* slot đó sẽ map 1:1 và round-trip
+sạch. (Xem quy tắc fold-vs-move ở [`adding-agent-runtime_vi.md`](adding-agent-runtime_vi.md) §4.)
 
 > **Thêm backend khác** là công thức generic — xem
 > [`adding-agent-runtime_vi.md`](adding-agent-runtime_vi.md) cho hợp đồng

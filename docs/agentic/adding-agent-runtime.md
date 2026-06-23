@@ -167,6 +167,26 @@ Do **NOT** carry runtime-specific files: `AGENTS.md`, `TOOLS.md`, `HEARTBEAT.md`
 (episodic/semantic DB, dream-diary, grounded-short-term) is **not portable** —
 the distilled `MEMORY.md`/`USER.md` is the portable form.
 
+### Classify every migration step: fold vs move
+
+Whether a switch round-trips losslessly is **per-backend**, decided by which slots
+the target backend has. Don't assume symmetry — classify each forward step:
+
+- **Move / inline** (a field goes to a *different* slot, e.g. IDENTITY name →
+  inlined into SOUL): reversible, and the reverse **MUST** restore it to its native
+  slot. Skipping the restore silently drops state — that was the identity-name bug.
+  **Every inline needs a matching reverse restore.**
+- **Fold** (two source structures collapse into *one* target, because the target
+  backend lacks a slot for one of them): inherently lossy on **structure** (not on
+  data), and has **no faithful inverse** — once merged, the entries can't be split
+  back apart. Only do a fold when the target genuinely lacks the slot, and document
+  it as a known one-way asymmetry **in that backend's own doc** (it is a property of
+  that backend, not of the migration framework — another backend that *has* the slot
+  would map 1:1 and round-trip cleanly).
+
+So a backend's migration symmetry is a fact about *that backend's slots*, recorded
+in its backend doc (e.g. `docs/agentic/hermes.md`), not a blanket guarantee here.
+
 ---
 
 ## 5. Skills
