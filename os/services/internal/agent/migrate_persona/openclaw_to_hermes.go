@@ -23,37 +23,54 @@ func rebrandToHermes(text string) string {
 	return text
 }
 
-// identityCardHeading marks the block soulToHermes appends; also the idempotency
-// guard so a round-trip (hermes→openclaw→hermes) doesn't append it twice.
+// identityCardHeading marks the identity block inlined into the Hermes soul; it's
+// also the idempotency guard so a round-trip (hermes→openclaw→hermes) doesn't
+// inline it twice.
 const identityCardHeading = "## Your identity card"
 
-// identityReadInstruction is appended to the SOUL.md copied into the Hermes home.
-// OpenClaw auto-injects IDENTITY.md into the agent's prompt; Hermes does not — it
-// only loads SOUL.md — so the soul itself must tell the agent to open IDENTITY.md
-// (Hermes has file-read tools). Without this the agent keeps its SOUL persona but
-// loses the IDENTITY.md name/vibe the owner set.
-const identityReadInstruction = "\n\n" + identityCardHeading + "\n\n" +
-	"Your name and identity — name, vibe, emoji — live in `IDENTITY.md` in your home " +
-	"directory. **Read `IDENTITY.md` at the start of each session.** It is who you " +
-	"currently are; if it names you, that name wins over any default above.\n"
+// identityFieldRe matches a FILLED OpenClaw IDENTITY.md field line, e.g.
+// "- **Name:** Ngân". Unfilled fields keep the placeholder on the next line, so a
+// same-line value requirement naturally skips them.
+var identityFieldRe = regexp.MustCompile(`^- \*\*(.+?):\*\*\s*(\S.*)$`)
 
-// soulToHermes rebrands the soul AND appends the identity-card read instruction,
-// since Hermes (unlike OpenClaw) does not load IDENTITY.md into the prompt for you.
-// Idempotent: skips the append if the soul already carries the block (e.g. it came
-// back through a prior hermes→openclaw→hermes round-trip).
-func soulToHermes(text string) string {
-	text = rebrandToHermes(text)
-	if strings.Contains(text, identityCardHeading) {
-		return text
+// buildIdentityBlock reads OpenClaw's IDENTITY.md and renders its filled fields
+// (Name / Vibe / Emoji the owner set) as a SOUL.md section. Hermes loads SOUL.md
+// as the agent's identity but has NO slot for a separate IDENTITY.md (its own
+// claw-migrate archives that file), so inlining into SOUL is the only reliable way
+// to keep the owner's custom name under Hermes instead of falling back to SOUL's
+// default. Returns "" when the file is absent or has no filled fields, leaving the
+// soul unchanged.
+func buildIdentityBlock(identityPath string) string {
+	raw, err := os.ReadFile(identityPath)
+	if err != nil {
+		return ""
 	}
-	return text + identityReadInstruction
+	var fields []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		mt := identityFieldRe.FindStringSubmatch(strings.TrimSpace(line))
+		if mt == nil {
+			continue
+		}
+		val := strings.TrimSpace(mt[2])
+		if val == "" || strings.HasPrefix(val, "_(") { // unfilled placeholder
+			continue
+		}
+		fields = append(fields, "- **"+mt[1]+":** "+val)
+	}
+	if len(fields) == 0 {
+		return ""
+	}
+	body := rebrandToHermes(strings.Join(fields, "\n"))
+	return "\n\n" + identityCardHeading + "\n\n" +
+		"Your owner set this — it overrides any default name or vibe above.\n\n" +
+		body + "\n"
 }
 
 // openclawToHermes migrates persona + memory from an OpenClaw workspace into a
 // Hermes home, following the upstream mapping:
 //
-//	workspace/SOUL.md      → <hermes>/SOUL.md                 (direct copy, rebranded)
-//	workspace/IDENTITY.md  → <hermes>/IDENTITY.md            (direct copy, rebranded)
+//	workspace/SOUL.md      → <hermes>/SOUL.md                 (rebranded; IDENTITY.md
+//	                         fields inlined — Hermes has no separate IDENTITY slot)
 //	workspace/MEMORY.md    → <hermes>/memories/MEMORY.md      (entry-merge, deduped)
 //	workspace/memory/*.md  → <hermes>/memories/MEMORY.md      (daily files folded in)
 //	workspace/USER.md      → <hermes>/memories/USER.md        (entry-merge, deduped)
@@ -67,20 +84,22 @@ func (m *openclawToHermes) Migrate() (*Report, error) {
 	ws := m.opts.OpenclawWorkspace
 	hermesMem := filepath.Join(m.opts.HermesRoot, "memories")
 
-	// Persona: SOUL.md → <hermes>/SOUL.md (rebranded + identity-card read hint,
-	// since Hermes won't auto-load IDENTITY.md the way OpenClaw does).
+	// Persona: SOUL.md → <hermes>/SOUL.md. Rebrand, then INLINE the owner's
+	// IDENTITY.md fields (name/vibe) into the soul: Hermes reads SOUL.md as its
+	// identity and has no slot for a standalone IDENTITY.md, so inlining is what
+	// keeps the custom name (e.g. "Ngân") instead of reverting to SOUL's default.
+	identityBlock := buildIdentityBlock(filepath.Join(ws, "IDENTITY.md"))
+	soulTransform := func(text string) string {
+		text = rebrandToHermes(text)
+		if identityBlock == "" || strings.Contains(text, identityCardHeading) {
+			return text
+		}
+		return text + identityBlock
+	}
 	m.copyPersona("soul",
 		filepath.Join(ws, "SOUL.md"),
 		filepath.Join(m.opts.HermesRoot, "SOUL.md"),
-		soulToHermes)
-
-	// Identity card: IDENTITY.md → <hermes>/IDENTITY.md (rebranded). Carries the
-	// agent's name/vibe across so the persona's identity isn't lost on the switch
-	// (OpenClaw stores name + vibe + avatar here, separate from SOUL.md).
-	m.copyPersona("identity",
-		filepath.Join(ws, "IDENTITY.md"),
-		filepath.Join(m.opts.HermesRoot, "IDENTITY.md"),
-		rebrandToHermes)
+		soulTransform)
 
 	// Long-term memory: MEMORY.md (+ daily memory/*.md) → memories/MEMORY.md.
 	memSources := []string{filepath.Join(ws, "MEMORY.md")}
