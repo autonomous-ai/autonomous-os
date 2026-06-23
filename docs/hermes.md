@@ -232,84 +232,53 @@ future work).
 
 ## 11. Switching backends at runtime
 
-You do not edit `config.json` by hand. Three triggers — **MQTT** `hermes.setup` /
-`picoclaw.setup` / `openclaw.setup` (the kind itself names the target backend — no
-`runtime` field; each maps `hermes.setup → hermes`, `picoclaw.setup → picoclaw`,
-`openclaw.setup → openclaw`, the last being the revert-to-baseline path), **HTTP**
-`POST /api/device/agent-runtime` (`{"runtime":"hermes"}`), and the **web**
-Settings → *Runtime* section — all funnel into one method,
-`device.Service.UpdateAgentRuntime` (`internal/device/service.go`). It validates
-the runtime, resolves the currently-active `old` runtime, then launches the
-switcher in its own transient systemd unit **and blocks on its exit code**
-(`systemd-run --wait`, so it learns whether the switch landed or rolled back):
+The switch mechanism is **generic** (backend-agnostic) and fully documented in
+[`adding-agent-runtime.md`](adding-agent-runtime.md) §2–§3: three triggers (MQTT
+`hermes.setup`, HTTP `POST /api/device/agent-runtime {"runtime":"hermes"}`, web
+Settings → *Runtime*) funnel into `device.Service.UpdateAgentRuntime`, which runs
+`switch-runtime <new> <old>` under `systemd-run --wait` and persists
+`config.agent_runtime` only after a clean exit (so a mid-switch crash resolves the
+still-installed old backend). Hermes-specific facts the generic switcher relies on:
 
-```
-switch-runtime <new> <old>
-```
+- **Unit name** `hermes-gateway.service` (not `hermes.service`) — declared in
+  `/usr/local/lib/os-runtimes/hermes/service` so `switch-runtime` enables the right
+  unit; `reset_hermes.go` targets the same unit.
+- **Verify hook** `/usr/local/lib/os-runtimes/hermes/verify` runs `command -v
+  hermes` (cheap CLI-presence check). It is deliberately **not** a config-structure
+  check — config self-heals via presync (§10), so a verify failure would force an
+  unnecessary full reinstall.
+- **Presync** `runtime-hermes-presync` runs before the gateway starts (§10).
+- The MQTT `hermes.setup` ack reflects the **real** outcome (success only after the
+  switch lands; failure with the rollback reason otherwise), since
+  `UpdateAgentRuntime` blocks on the switcher's exit code.
 
-**`config.agent_runtime` is persisted only AFTER the switch lands, never before.**
-`UpdateAgentRuntime` runs `switch-runtime` first and writes `config.agent_runtime
-= <new>` (under the config lock) **only if it exits 0**. On failure `config.json`
-stays at `<old>` — so a crash or reboot mid-switch resolves the still-installed old
-backend instead of a half-installed new one, and there is nothing to revert
-(neither memory nor disk was ever moved to `<new>`). `switch-runtime` itself never
-reads or writes `config.json`; os-server owns it entirely.
+Confirm the swap from the `AGENT BACKEND ACTIVE → HERMES` banner + a healthy
+`/health` poll.
 
-Because `UpdateAgentRuntime` waits for the real result, the MQTT path can ack the
-**actual** outcome: `hermes.setup` / `picoclaw.setup` reply `success` only after the
-switch lands, or `failure` (with the rollback reason) if it doesn't — no optimistic
-"success". On a confirmed switch the device acks success **first**, then restarts
-os-server itself (`device.Service.RestartForAgentRuntime`) so `factory.go`
-re-resolves the gateway. The restart is intentionally deferred until after the ack:
-if `switch-runtime` restarted os-server itself (as it used to), it would kill the
-goroutine before the ack went out.
+## 12. Persona, memory & skills carried across a switch
 
-`switch-runtime` is **generic and backend-agnostic** — it is embedded in os-server
-(`internal/device/switch_runtime.sh` via `go:embed`) and written to
-`/usr/local/bin/switch-runtime` on demand, so it is versioned and OTA-updated with
-the binary and needs **no imager/setup.sh change ever**. For a target backend `X`
-it:
+Switching openclaw→hermes runs a Go persona migration
+(`internal/agent/migrate_persona/openclaw_to_hermes.go`) at os-server boot —
+**separate from `claw migrate`**. It carries, into `~/.hermes/`:
 
-1. resolves `X`'s unit name (default `X.service`, or whatever the installer
-   declared in `/usr/local/lib/os-runtimes/X/service` — hermes →
-   `hermes-gateway`) and checks whether `X` is **installed AND usable** — not just
-   that the unit file exists. A backend counts as installed only when the unit is
-   present **and** an optional installer-provided verify hook at
-   `/usr/local/lib/os-runtimes/X/verify` passes (hermes drops one that runs
-   `command -v hermes`); backends without a verify hook (e.g. openclaw, whose
-   `openclaw.service` is baked by setup.sh) fall back to unit-presence alone. If it
-   is not installed/usable, it runs `X`'s installer — the binary-embedded copy at
-   `/usr/local/lib/os-runtimes/X/install.sh` first, else
-   `curl ${RUNTIMES_BASE_URL}/X/install.sh | bash`. This closes the orphaned-unit
-   trap: a stale `<X>.service` left behind with the backend's binary gone/broken
-   used to read as "installed" and never reinstall;
-2. runs the optional `/usr/local/bin/runtime-X-presync` hook (hermes's syncs
-   `llm_*`, per §10);
-3. `systemctl enable --now <X-unit>` **and asserts it actually reached active**
-   (a unit can `enable --now` cleanly yet crash immediately, e.g. a missing
-   binary). If it does **not** start and the installer hadn't already run this run,
-   the unit looks orphaned from a prior half-install — switch-runtime
-   **reinstalls once and retries** (re-running the presync hook) before giving up;
-   this self-heals even backends without a verify hook. Once `<X>` is confirmed
-   active it stops the old unit with up to 3 `disable --now <old-unit>` retries
-   (verifying it went inactive between tries); after 3 attempts it proceeds
-   regardless so a stuck old runtime never blocks the switch;
-4. exits `0`. It does **not** restart os-server (it used to) — os-server, which is
-   blocked on `--wait`, acks the outcome and then restarts itself. On any failure
-   before the switch is confirmed, its rollback trap restarts the **old** systemd
-   unit only and exits non-zero. It does **not** touch `config.json` — os-server
-   owns `config.agent_runtime` and never persisted `<new>` (it persists only on a
-   clean exit 0), so on failure config is already `<old>` on disk and there is
-   nothing to revert.
+- **SOUL.md** (rebranded) — and, because Hermes has no separate IDENTITY.md slot,
+  inlines the owner's filled IDENTITY fields as a `## Your identity card` block so
+  the custom name (e.g. "Ngân") survives. `UpdateIdentityName` (device rename) edits
+  that block.
+- **MEMORY.md + daily `memory/*.md` + KNOWLEDGE.md** → merged into
+  `memories/MEMORY.md`. Hermes loads only `MEMORY.md` + `USER.md` **by name** (no
+  `memories/*.md` glob), so KNOWLEDGE is folded in rather than kept as a separate,
+  ignored file.
+- **USER.md** → `memories/USER.md`.
 
-Confirm the swap from the new `AGENT BACKEND ACTIVE → …` banner + a healthy
-`/health` poll in the logs.
+The soul copy uses `Overwrite=true` (a switch adopts the source runtime's persona;
+backed up first). The reverse hermes→openclaw strips the identity card (OpenClaw
+owns the name in its own IDENTITY.md). **Skills** stay fresh under Hermes via
+`internal/hermes/skill_watcher.go` — CDN auto-update into `skills/openclaw-imports`,
+capability-gated, mirroring the OpenClaw watcher (shared engine in
+`internal/skills/skillzip.go`).
 
-**Adding a new backend** (claudecode, …) is just an `install.sh` next
-to that backend's implementation (`internal/<name>/install.sh`), `go:embed`-ed +
-registered in `lib/runtimereg` from the package's `init()` (it must create
-`<name>.service`, optionally drop `runtime-<name>-presync`), plus a
-`domain.AgentRuntimes` entry for validation + the web dropdown. A backend already
-needs a gateway client under `internal/<name>` and a `factory.go` case, so the
-embedded installer adds no new coupling — and nothing in the imager, switcher, or
-CDN has to change.
+> **Adding another backend** is a generic recipe — see
+> [`adding-agent-runtime.md`](adding-agent-runtime.md) for the `AgentGateway`
+> contract, the install/presync pattern, migration, skills, hooks, reset, and the
+> full checklist.

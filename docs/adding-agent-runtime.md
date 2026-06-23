@@ -70,6 +70,33 @@ The installer contract (`switch_runtime.sh` expects):
   (exit 0 = "installed & usable"). Keep it **cheap** — see §3 for why it must not
   over-check.
 
+### The switch flow (what happens on a switch)
+
+`device.Service.UpdateAgentRuntime` validates the runtime, captures the active
+`old`, then runs the switcher under `systemd-run --wait` and **blocks on its exit
+code**. `config.agent_runtime` is persisted **only after a clean exit 0** — so a
+crash/reboot mid-switch resolves the still-installed `old`, and there is nothing to
+revert. `switch-runtime <new> <old>` (generic, `internal/device/switch_runtime.sh`,
+`go:embed`-materialized to `/usr/local/bin/switch-runtime`):
+
+1. resolves `<new>`'s unit name (default `<new>.service`, or the name declared in
+   `/usr/local/lib/os-runtimes/<new>/service`) and checks **installed AND usable** —
+   unit present **and** the `verify` hook passes (no verify hook → unit-presence
+   alone). If not, runs the installer (embedded copy first, CDN fallback). This
+   closes the orphaned-unit trap (a stale `.service` whose binary is gone).
+2. runs `/usr/local/bin/runtime-<new>-presync` (materialized by os-server — §3).
+3. `enable --now <new-unit>` **and asserts it actually reached active** (a unit can
+   enable cleanly yet crash on a missing binary). If it didn't start and the
+   installer hadn't run this pass, it **reinstalls once and retries**. Then stops
+   the old unit (up to 3 `disable --now` retries).
+4. exits 0 — it does **not** restart os-server (os-server, blocked on `--wait`, acks
+   the real outcome then restarts itself so `factory.go` re-resolves the gateway).
+   On failure a rollback trap restarts only the **old** unit. It never touches
+   `config.json`.
+
+So `switch-runtime` is fully backend-agnostic — **no imager / setup.sh / switcher
+change is ever needed to add a backend.**
+
 ---
 
 ## 3. The golden rule: install-once vs every-switch (the *activation gap*)
