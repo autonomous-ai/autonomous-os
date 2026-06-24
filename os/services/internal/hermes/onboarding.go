@@ -54,17 +54,29 @@ func (s *HermesService) EnsureOnboarding() error {
 	if err := s.runPresync(); err != nil {
 		return fmt.Errorf("hermes presync: %w", err)
 	}
+	configChanged := fileHash(hermesConfigYAML) != before
 
-	if after := fileHash(hermesConfigYAML); before == after {
-		slog.Info("hermes onboarding: config.yaml unchanged, no restart", "component", "hermes")
+	// Materialize the os-server-observer hook so channel turns surface in Flow
+	// Monitor. Best-effort: a hook write failure must not block the boot path
+	// (config self-heal above already succeeded).
+	hookChanged, err := s.ensureObserverHook()
+	if err != nil {
+		slog.Warn("hermes observer hook materialize failed", "component", "hermes", "error", err)
+	}
+
+	// Restart the gateway only when config.yaml OR the hook actually changed —
+	// both are loaded only at gateway start, so an unchanged boot is a no-op.
+	if !configChanged && !hookChanged {
+		slog.Info("hermes onboarding: config.yaml + hooks unchanged, no restart", "component", "hermes")
 		return nil
 	}
 
-	slog.Info("hermes onboarding: config.yaml changed, restarting gateway",
-		"component", "hermes", "unit", hermesGatewayUnit)
+	slog.Info("hermes onboarding: change detected, restarting gateway",
+		"component", "hermes", "unit", hermesGatewayUnit,
+		"config_changed", configChanged, "hook_changed", hookChanged)
 	if err := restartHermesGateway(); err != nil {
-		// Non-fatal: the new config is on disk; the gateway picks it up on its next
-		// (re)start even if this one failed. Don't block the os-server boot path.
+		// Non-fatal: the new config/hook is on disk; the gateway picks it up on its
+		// next (re)start even if this one failed. Don't block the os-server boot path.
 		slog.Warn("hermes gateway restart failed", "component", "hermes", "error", err)
 	}
 	return nil

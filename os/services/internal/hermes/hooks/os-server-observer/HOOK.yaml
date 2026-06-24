@@ -1,0 +1,5 @@
+name: os-server-observer
+description: Forward every gateway turn to os-server so channel (Telegram/Slack/Discord/…) turns appear in the device Flow Monitor.
+events:
+  - agent:start
+  - agent:end

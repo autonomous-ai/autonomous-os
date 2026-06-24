@@ -326,6 +326,9 @@ func (s *Server) Serve(closeFn func()) error {
 	agent.DELETE("flow-logs", adminAuthMiddleware(s.config), s.agentHandler.ClearFlowLogs)
 	agent.GET("analytics", adminAuthMiddleware(s.config), s.agentHandler.Analytics)
 	agent.GET("config-json", localOnlyMiddleware(), s.agentHandler.ConfigJSON)
+	// channel-turn: the Hermes gateway observer hook POSTs each turn here so
+	// channel (Telegram/Slack/…) turns surface in Flow Monitor. Loopback-only.
+	agent.POST("channel-turn", localOnlyMiddleware(), s.agentHandler.ChannelTurn)
 	agent.GET("compaction-latest", adminAuthMiddleware(s.config), s.agentHandler.CompactionLatest)
 
 	logs := api.Group("logs")
