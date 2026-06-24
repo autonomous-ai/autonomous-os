@@ -18,7 +18,7 @@ func nowUnixMs() int64 { return time.Now().UnixMilli() }
 // especially — correlates the reply exactly like OpenClaw 5.4+ echoing the
 // idempotencyKey. Falls back to Hermes's response.id only if the device key is
 // somehow absent (e.g. a non-runStream caller).
-func (s *Service) emitRunID(result *streamResult, respID string) string {
+func (s *HermesService) emitRunID(result *streamResult, respID string) string {
 	if result != nil && result.DeviceRunID != "" {
 		return result.DeviceRunID
 	}
@@ -57,11 +57,13 @@ func (u *hermesUsage) toDomain() *domain.TokenUsage {
 //
 // Mapping table is documented in hermes.md §2 — keep both in sync.
 // We tolerate two SSE shapes:
-//   (a) event-line + data-line (preferred; canonical OpenAI Responses API)
-//   (b) data-only with type embedded in the JSON ({"type": "response.xxx", ...})
+//
+//	(a) event-line + data-line (preferred; canonical OpenAI Responses API)
+//	(b) data-only with type embedded in the JSON ({"type": "response.xxx", ...})
+//
 // Hermes appears to emit (a); (b) is kept defensive in case the proxy
 // strips event lines.
-func (s *Service) translateSSE(eventName, data string, dispatch func(domain.WSEvent), result *streamResult) {
+func (s *HermesService) translateSSE(eventName, data string, dispatch func(domain.WSEvent), result *streamResult) {
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(data), &probe); err != nil {
 		slog.Debug("hermes SSE: non-JSON data, ignored", "component", "hermes", "data", truncRunes(data, 200))
@@ -98,11 +100,11 @@ func (s *Service) translateSSE(eventName, data string, dispatch func(domain.WSEv
 
 // handleResponseCreated extracts the response.id and session UUID (carried in
 // the response object), stores them, and emits lifecycle.start.
-func (s *Service) handleResponseCreated(probe map[string]json.RawMessage, dispatch func(domain.WSEvent), result *streamResult) {
+func (s *HermesService) handleResponseCreated(probe map[string]json.RawMessage, dispatch func(domain.WSEvent), result *streamResult) {
 	var inner struct {
 		Response struct {
-			ID         string `json:"id"`
-			Model      string `json:"model"`
+			ID           string `json:"id"`
+			Model        string `json:"model"`
 			Conversation struct {
 				ID string `json:"id"`
 			} `json:"conversation"`
@@ -144,7 +146,7 @@ func (s *Service) handleResponseCreated(probe map[string]json.RawMessage, dispat
 //   - function_call         → tool.start
 //   - function_call_output  → tool.end (carries the result)
 //   - message               → no event (text comes via output_text.delta)
-func (s *Service) handleOutputItemAdded(probe map[string]json.RawMessage, dispatch func(domain.WSEvent), result *streamResult) {
+func (s *HermesService) handleOutputItemAdded(probe map[string]json.RawMessage, dispatch func(domain.WSEvent), result *streamResult) {
 	var inner struct {
 		OutputIndex int `json:"output_index"`
 		Item        struct {
@@ -221,11 +223,11 @@ func (s *Service) handleOutputItemAdded(probe map[string]json.RawMessage, dispat
 // handleOutputItemDone is largely a parity hook. We already emitted tool.end
 // in output_item.added (for function_call_output); other item.done variants
 // don't surface anything new for the consumer.
-func (s *Service) handleOutputItemDone(_ map[string]json.RawMessage, _ func(domain.WSEvent)) {
+func (s *HermesService) handleOutputItemDone(_ map[string]json.RawMessage, _ func(domain.WSEvent)) {
 }
 
 // handleOutputTextDelta streams assistant deltas.
-func (s *Service) handleOutputTextDelta(probe map[string]json.RawMessage, dispatch func(domain.WSEvent), result *streamResult) {
+func (s *HermesService) handleOutputTextDelta(probe map[string]json.RawMessage, dispatch func(domain.WSEvent), result *streamResult) {
 	var inner struct {
 		Delta string `json:"delta"`
 	}
@@ -251,7 +253,7 @@ func (s *Service) handleOutputTextDelta(probe map[string]json.RawMessage, dispat
 // handleResponseCompleted emits (a) the final chat message and (b) the
 // lifecycle.end with usage. Order matches OpenClaw so handler_events.go sees
 // the chat.final before lifecycle.end → idle.
-func (s *Service) handleResponseCompleted(probe map[string]json.RawMessage, dispatch func(domain.WSEvent), result *streamResult) {
+func (s *HermesService) handleResponseCompleted(probe map[string]json.RawMessage, dispatch func(domain.WSEvent), result *streamResult) {
 	var inner struct {
 		Response struct {
 			ID     string `json:"id"`
@@ -334,7 +336,7 @@ func (s *Service) handleResponseCompleted(probe map[string]json.RawMessage, disp
 	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: endPayload})
 }
 
-func (s *Service) handleResponseFailed(probe map[string]json.RawMessage, dispatch func(domain.WSEvent), result *streamResult) {
+func (s *HermesService) handleResponseFailed(probe map[string]json.RawMessage, dispatch func(domain.WSEvent), result *streamResult) {
 	var inner struct {
 		Response struct {
 			ID    string `json:"id"`

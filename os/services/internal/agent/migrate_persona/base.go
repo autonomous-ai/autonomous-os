@@ -74,78 +74,61 @@ func (b *baseMigrator) backup(path string) (string, error) {
 	return dst, nil
 }
 
-// copyPersona migrates a single persona file (SOUL.md) with a brand transform.
-// Whole-file copy — no entry merging.
-//   - missing source            → skipped
-//   - dest equals transformed    → skipped ("already matches")
+// writePersona writes an already-transformed persona body (SOUL.md) into the
+// destination — the write half of the old copyPersona, driven by the bundle's
+// in-memory Soul instead of a source file.
+//   - empty content            → skipped (no source persona)
+//   - dest equals content       → skipped ("already matches")
 //   - dest exists, !overwrite    → conflict
 //   - otherwise                  → backup (if any) + write   (execute)
 //     or "would copy"            (dry-run)
-func (b *baseMigrator) copyPersona(kind, source, destination string, transform func(string) string) {
-	raw, err := os.ReadFile(source)
-	if err != nil {
-		b.record(kind, source, destination, StatusSkipped, "source file not found", nil)
+func (b *baseMigrator) writePersona(kind, content, destination string) {
+	if strings.TrimSpace(content) == "" {
+		b.record(kind, "", destination, StatusSkipped, "no source persona", nil)
 		return
 	}
-	content := transform(string(raw))
 
 	if existing, err := os.ReadFile(destination); err == nil {
 		if string(existing) == content {
-			b.record(kind, source, destination, StatusSkipped, "target already matches source", nil)
+			b.record(kind, "", destination, StatusSkipped, "target already matches source", nil)
 			return
 		}
 		if !b.opts.Overwrite {
-			b.record(kind, source, destination, StatusConflict, "target exists and overwrite is disabled", nil)
+			b.record(kind, "", destination, StatusConflict, "target exists and overwrite is disabled", nil)
 			return
 		}
 	}
 
 	if !b.opts.Execute {
-		b.record(kind, source, destination, StatusMigrated, "would copy", nil)
+		b.record(kind, "", destination, StatusMigrated, "would copy", nil)
 		return
 	}
 
 	details := map[string]any{}
 	if bak, err := b.backup(destination); err != nil {
-		b.record(kind, source, destination, StatusError, "backup failed: "+err.Error(), nil)
+		b.record(kind, "", destination, StatusError, "backup failed: "+err.Error(), nil)
 		return
 	} else if bak != "" {
 		details["backup"] = bak
 	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
-		b.record(kind, source, destination, StatusError, "create dest dir: "+err.Error(), nil)
+		b.record(kind, "", destination, StatusError, "create dest dir: "+err.Error(), nil)
 		return
 	}
 	if err := os.WriteFile(destination, []byte(content), 0o644); err != nil {
-		b.record(kind, source, destination, StatusError, "write: "+err.Error(), nil)
+		b.record(kind, "", destination, StatusError, "write: "+err.Error(), nil)
 		return
 	}
-	b.record(kind, source, destination, StatusMigrated, "", details)
+	b.record(kind, "", destination, StatusMigrated, "", details)
 }
 
-// mergeMemory parses, transforms, and merges entries from sources into the destination,
-// deduping and enforcing a char limit. dstFormat controls the output format.
-// Idempotent; kind/primarySource label the report; extra sources noted in details.
-func (b *baseMigrator) mergeMemory(kind string, sources []string, primarySource, destination string, limit int, dstFormat entryFormat, transform func(string) string) {
-	var incoming []string
-	var usedSources []string
-	for _, src := range sources {
-		raw, err := os.ReadFile(src)
-		if err != nil {
-			continue
-		}
-		usedSources = append(usedSources, src)
-		for _, e := range parseEntriesText(string(raw)) {
-			incoming = append(incoming, transform(e))
-		}
-	}
-
-	if len(usedSources) == 0 {
-		b.record(kind, primarySource, destination, StatusSkipped, "source file not found", nil)
-		return
-	}
+// writeMemoryEntries entry-merges already-transformed incoming entries into the
+// destination memory file, deduping and enforcing a char limit. The write half of
+// the old mergeMemory — the read adapter has parsed sources into the bundle, the
+// write adapter rebrands + concatenates the relevant slots into incoming.
+func (b *baseMigrator) writeMemoryEntries(kind string, incoming []string, destination string, limit int, dstFormat entryFormat) {
 	if len(incoming) == 0 {
-		b.record(kind, primarySource, destination, StatusSkipped, "no importable entries found", nil)
+		b.record(kind, "", destination, StatusSkipped, "no importable entries found", nil)
 		return
 	}
 
@@ -159,34 +142,113 @@ func (b *baseMigrator) mergeMemory(kind string, sources []string, primarySource,
 		"overflowed_entries": stats.overflowed,
 		"char_limit":         limit,
 	}
-	if len(usedSources) > 1 {
-		details["sources"] = usedSources
-	}
 
 	if !b.opts.Execute {
-		b.record(kind, primarySource, destination, StatusMigrated, "would merge entries", details)
+		b.record(kind, "", destination, StatusMigrated, "would merge entries", details)
 		return
 	}
 	if stats.added == 0 && len(overflowed) == 0 {
-		b.record(kind, primarySource, destination, StatusSkipped, "no new entries to import", details)
+		b.record(kind, "", destination, StatusSkipped, "no new entries to import", details)
 		return
 	}
 
 	if bak, err := b.backup(destination); err != nil {
-		b.record(kind, primarySource, destination, StatusError, "backup failed: "+err.Error(), nil)
+		b.record(kind, "", destination, StatusError, "backup failed: "+err.Error(), nil)
 		return
 	} else if bak != "" {
 		details["backup"] = bak
 	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
-		b.record(kind, primarySource, destination, StatusError, "create dest dir: "+err.Error(), nil)
+		b.record(kind, "", destination, StatusError, "create dest dir: "+err.Error(), nil)
 		return
 	}
 	if err := os.WriteFile(destination, []byte(dstFormat.serialize(merged)), 0o644); err != nil {
-		b.record(kind, primarySource, destination, StatusError, "write: "+err.Error(), nil)
+		b.record(kind, "", destination, StatusError, "write: "+err.Error(), nil)
 		return
 	}
-	b.record(kind, primarySource, destination, StatusMigrated, "", details)
+	b.record(kind, "", destination, StatusMigrated, "", details)
+}
+
+// inlineIdentityCard appends an identity-card block to a SOUL.md when it is not
+// already present — idempotent, for runtimes that have no separate IDENTITY.md
+// slot and carry the owner's name inside SOUL (Hermes). No-op when block is empty
+// (no filled fields) or the soul is absent.
+func (b *baseMigrator) inlineIdentityCard(soulPath, block string) {
+	const kind = "identity-inline"
+	if block == "" {
+		b.record(kind, "", soulPath, StatusSkipped, "no filled identity fields", nil)
+		return
+	}
+	raw, err := os.ReadFile(soulPath)
+	if err != nil {
+		b.record(kind, "", soulPath, StatusSkipped, "soul not present to inline into", nil)
+		return
+	}
+	if strings.Contains(string(raw), identityCardHeading) {
+		b.record(kind, "", soulPath, StatusSkipped, "identity already inlined", nil)
+		return
+	}
+	if !b.opts.Execute {
+		b.record(kind, "", soulPath, StatusMigrated, "would inline identity", nil)
+		return
+	}
+	details := map[string]any{}
+	if bak, berr := b.backup(soulPath); berr != nil {
+		b.record(kind, "", soulPath, StatusError, "backup failed: "+berr.Error(), nil)
+		return
+	} else if bak != "" {
+		details["backup"] = bak
+	}
+	updated := strings.TrimRight(string(raw), "\n") + block
+	if werr := os.WriteFile(soulPath, []byte(updated), 0o644); werr != nil {
+		b.record(kind, "", soulPath, StatusError, "write: "+werr.Error(), nil)
+		return
+	}
+	b.record(kind, "", soulPath, StatusMigrated, "identity inlined into soul", details)
+}
+
+// writeIdentityFields restores identity fields into an IDENTITY.md (the slot
+// OpenClaw owns), line replace-or-append per field so an existing template
+// (descriptions, other slots) is preserved; the file is created when absent.
+// brand rebrands each value to the destination runtime. No-op when fields empty.
+func (b *baseMigrator) writeIdentityFields(kind string, fields []IdentityField, identityPath string, brand func(string) string) {
+	if len(fields) == 0 {
+		b.record(kind, "", identityPath, StatusSkipped, "no identity fields to restore", nil)
+		return
+	}
+	existing, rerr := os.ReadFile(identityPath)
+	if rerr != nil && !os.IsNotExist(rerr) {
+		b.record(kind, "", identityPath, StatusError, "read identity: "+rerr.Error(), nil)
+		return
+	}
+	updated := string(existing)
+	for _, f := range fields {
+		updated = setIdentityField(updated, f.name, brand(f.value))
+	}
+	if updated == string(existing) {
+		b.record(kind, "", identityPath, StatusSkipped, "identity already current", nil)
+		return
+	}
+	if !b.opts.Execute {
+		b.record(kind, "", identityPath, StatusMigrated, "would restore identity", nil)
+		return
+	}
+	details := map[string]any{}
+	if bak, berr := b.backup(identityPath); berr != nil {
+		b.record(kind, "", identityPath, StatusError, "backup failed: "+berr.Error(), nil)
+		return
+	} else if bak != "" {
+		details["backup"] = bak
+	}
+	if err := os.MkdirAll(filepath.Dir(identityPath), 0o755); err != nil {
+		b.record(kind, "", identityPath, StatusError, "create dest dir: "+err.Error(), nil)
+		return
+	}
+	if err := os.WriteFile(identityPath, []byte(updated), 0o644); err != nil {
+		b.record(kind, "", identityPath, StatusError, "write: "+err.Error(), nil)
+		return
+	}
+	b.record(kind, "", identityPath, StatusMigrated, "identity restored to IDENTITY.md", details)
 }
 
 // Memory entry utils: Hermes delimiter, markdown extraction, dedupe, char limit.
@@ -250,6 +312,7 @@ func extractMarkdownEntries(text string) []string {
 	}
 
 	inCode := false
+	inComment := false
 	for _, raw := range strings.Split(text, "\n") {
 		line := strings.TrimRight(raw, " \t\r")
 		stripped := strings.TrimSpace(line)
@@ -260,6 +323,25 @@ func extractMarkdownEntries(text string) []string {
 			continue
 		}
 		if inCode {
+			continue
+		}
+
+		// Skip HTML comments. KNOWLEDGE.md ships `<!-- ... -->` placeholders under
+		// each empty section; those are scaffolding, never real memory, so they must
+		// not become entries when the file is folded into MEMORY.md. Handles both
+		// single-line and multi-line comments.
+		if inComment {
+			if strings.Contains(stripped, "-->") {
+				inComment = false
+			}
+			flush()
+			continue
+		}
+		if strings.HasPrefix(stripped, "<!--") {
+			flush()
+			if !strings.Contains(stripped, "-->") {
+				inComment = true
+			}
 			continue
 		}
 

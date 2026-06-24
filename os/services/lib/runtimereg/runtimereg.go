@@ -8,9 +8,12 @@
 // dependencies of its own, runtimereg can be imported from either side.
 package runtimereg
 
-// installers is populated at init() time, before any runtime switch can fire, so
-// no locking is needed for the read path.
-var installers = map[string][]byte{}
+// installers + presyncs are populated at init() time, before any runtime switch
+// can fire, so no locking is needed for the read path.
+var (
+	installers = map[string][]byte{}
+	presyncs   = map[string][]byte{}
+)
 
 // Register records a backend's embedded installer. Called from a backend
 // package's init(); the last registration for a name wins.
@@ -23,5 +26,21 @@ func Register(name string, script []byte) {
 // the CDN).
 func Get(name string) ([]byte, bool) {
 	s, ok := installers[name]
+	return s, ok
+}
+
+// RegisterPresync records a backend's embedded pre-start hook (runtime-<name>-presync).
+// Materializing it from os-server — rather than letting the installer write it — is
+// what lets a plain os-server OTA refresh the hook on disk: the installer only re-runs
+// on a first install or a failed verify, so a config fix shipped only inside it would
+// never reach an already-installed backend until the next reinstall.
+func RegisterPresync(name string, script []byte) {
+	presyncs[name] = script
+}
+
+// GetPresync returns the embedded pre-start hook for a runtime, or (nil, false) when
+// the backend ships none (it then relies on whatever its installer wrote, if any).
+func GetPresync(name string) ([]byte, bool) {
+	s, ok := presyncs[name]
 	return s, ok
 }

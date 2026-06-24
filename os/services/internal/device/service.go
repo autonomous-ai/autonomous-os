@@ -179,14 +179,9 @@ func (s *Service) Setup(data domain.SetupRequest) error {
 		slog.Warn("setup: WiFi associated but no IP detected", "component", "device", "error", ipErr)
 	}
 
-	// Persist the user's model selection BEFORE running SetupAgent. When the
-	// model API is reachable, SetupAgent overrides LLMModel with the upstream
-	// default_model; when it is unreachable, SetupAgent falls back to this value.
+	// Persist the user's model selection so SetupAgent (run below, AFTER the full
+	// config is saved) can fall back to it when the model API is unreachable.
 	s.config.LLMModel = data.LLMModel
-
-	if err := s.agentGateway.SetupAgent(data); err != nil {
-		return err
-	}
 
 	llmAPIKey := data.LLMAPIKey
 	llmBaseURL := data.LLMBaseURL
@@ -247,6 +242,16 @@ func (s *Service) Setup(data domain.SetupRequest) error {
 		slog.Error("save config failed", "component", "device", "error", err)
 	}
 	slog.Info("config saved", "component", "device")
+
+	// SetupAgent runs AFTER config.json is saved: a backend that materializes its
+	// own config from config.json (Hermes presync) then sees the freshly-entered
+	// llm_api_key/base_url + channel tokens immediately, instead of waiting for the
+	// next os-server boot. OpenClaw writes openclaw.json from the request `data`, so
+	// its result is unchanged; any LLMModel override it applies is persisted by the
+	// SetUpCompleted save below.
+	if err := s.agentGateway.SetupAgent(data); err != nil {
+		return err
+	}
 
 	// Wait for agent gateway to be ready before marking device as working.
 	if ok := s.WaitForAgentReady(120 * time.Second); !ok {
@@ -1007,6 +1012,14 @@ func (s *Service) UpdateAgentRuntime(d domain.AgentRuntimeSetData) (bool, error)
 	}
 	if err := materializeInstaller(runtime); err != nil {
 		return false, fmt.Errorf("materialize %s installer: %w", runtime, err)
+	}
+	// Refresh the pre-start hook on disk too, so a plain os-server OTA delivers
+	// its latest version (config self-heal) even when the backend is already
+	// installed and install.sh is therefore skipped. switch-runtime runs it
+	// right before the backend starts. Non-fatal: a backend without a presync, or
+	// a transient write error, must not block the switch.
+	if err := materializePresync(runtime); err != nil {
+		slog.Warn("materialize presync hook failed (non-fatal)", "component", "device", "runtime", runtime, "error", err)
 	}
 
 	slog.Info("running switch-runtime", "component", "device", "from", old, "to", runtime)

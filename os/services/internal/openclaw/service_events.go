@@ -40,7 +40,7 @@ const busyTTL = 5 * time.Minute
 // Auto-clears activeTurn after busyTTL since the last SetBusy(true) so a
 // dropped lifecycle.end cannot wedge the sensing pipeline indefinitely; even
 // after that, fresh pending sends still keep IsBusy true.
-func (s *Service) IsBusy() bool {
+func (s *OpenclawService) IsBusy() bool {
 	if s.activeTurn.Load() {
 		since := s.busySince.Load()
 		if since > 0 && time.Since(time.UnixMilli(since)) > busyTTL {
@@ -57,7 +57,7 @@ func (s *Service) IsBusy() bool {
 
 // SetBusy marks the agent as busy or idle. Called by the SSE handler on lifecycle start/end.
 // When transitioning to idle, any buffered sensing events are replayed.
-func (s *Service) SetBusy(busy bool) {
+func (s *OpenclawService) SetBusy(busy bool) {
 	if busy {
 		s.busySince.Store(time.Now().UnixMilli())
 	}
@@ -69,7 +69,7 @@ func (s *Service) SetBusy(busy bool) {
 
 // QueuePendingEvent buffers a sensing event to replay when the agent becomes idle.
 // All events are appended — motion/presence must not be missed.
-func (s *Service) QueuePendingEvent(eventType, msg, image, fixedRunID string) {
+func (s *OpenclawService) QueuePendingEvent(eventType, msg, image, fixedRunID string) {
 	now := time.Now()
 	curUser := mood.CurrentUser()
 	if curUser == "" {
@@ -91,7 +91,7 @@ func (s *Service) QueuePendingEvent(eventType, msg, image, fixedRunID string) {
 }
 
 // drainPendingEvents replays all buffered sensing events in order and clears the buffer.
-func (s *Service) drainPendingEvents() {
+func (s *OpenclawService) drainPendingEvents() {
 	s.pendingEventsMu.Lock()
 	events := s.pendingEvents
 	s.pendingEvents = nil

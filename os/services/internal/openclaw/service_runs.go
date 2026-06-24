@@ -9,20 +9,20 @@ import (
 )
 
 // SetSessionKey stores the session key for outgoing chat messages.
-func (s *Service) SetSessionKey(key string) {
+func (s *OpenclawService) SetSessionKey(key string) {
 	s.lastSessionKey.Store(key)
 	slog.Info("session key stored", "component", "openclaw", "key", key)
 	flow.Log("session_key_acquired", map[string]any{"key_len": len(key)})
 }
 
 // GetSessionKey returns the last observed session key, or empty string if none.
-func (s *Service) GetSessionKey() string {
+func (s *OpenclawService) GetSessionKey() string {
 	v, _ := s.lastSessionKey.Load().(string)
 	return v
 }
 
 // MarkGuardRun marks a runID as guard-active so the SSE handler broadcasts the response.
-func (s *Service) MarkGuardRun(runID string, snapshotPath string) {
+func (s *OpenclawService) MarkGuardRun(runID string, snapshotPath string) {
 	s.guardRunsMu.Lock()
 	s.guardRuns[runID] = snapshotPath
 	s.guardRunsMu.Unlock()
@@ -30,7 +30,7 @@ func (s *Service) MarkGuardRun(runID string, snapshotPath string) {
 }
 
 // ConsumeGuardRun checks and removes a guard-active runID. Returns snapshot path and true if found.
-func (s *Service) ConsumeGuardRun(runID string) (string, bool) {
+func (s *OpenclawService) ConsumeGuardRun(runID string) (string, bool) {
 	s.guardRunsMu.Lock()
 	snap, ok := s.guardRuns[runID]
 	if ok {
@@ -51,7 +51,7 @@ const poseBucketRunTTL = 10 * time.Minute
 // MarkPoseBucketRun stores the bucket + worst-snapshot filenames for a
 // motion.activity turn. Mirrors MarkGuardRun's lifecycle but carries a
 // slice instead of a single path.
-func (s *Service) MarkPoseBucketRun(runID string, bucketID string, worstFilenames []string) {
+func (s *OpenclawService) MarkPoseBucketRun(runID string, bucketID string, worstFilenames []string) {
 	if runID == "" || bucketID == "" {
 		return
 	}
@@ -76,7 +76,7 @@ func (s *Service) MarkPoseBucketRun(runID string, bucketID string, worstFilename
 
 // ConsumePoseBucketRun returns the bucket info for a runID and deletes
 // the entry. One-shot.
-func (s *Service) ConsumePoseBucketRun(runID string) (string, []string, bool) {
+func (s *OpenclawService) ConsumePoseBucketRun(runID string) (string, []string, bool) {
 	s.poseBucketRunsMu.Lock()
 	defer s.poseBucketRunsMu.Unlock()
 	s.prunePoseBucketRunsLocked()
@@ -90,7 +90,7 @@ func (s *Service) ConsumePoseBucketRun(runID string) (string, []string, bool) {
 
 // prunePoseBucketRunsLocked drops marker entries older than poseBucketRunTTL.
 // Caller must hold poseBucketRunsMu.
-func (s *Service) prunePoseBucketRunsLocked() {
+func (s *OpenclawService) prunePoseBucketRunsLocked() {
 	if len(s.poseBucketRuns) == 0 {
 		return
 	}
@@ -103,7 +103,7 @@ func (s *Service) prunePoseBucketRunsLocked() {
 }
 
 // MarkBroadcastRun marks a runID so the agent's response is broadcast to all channels.
-func (s *Service) MarkBroadcastRun(runID string) {
+func (s *OpenclawService) MarkBroadcastRun(runID string) {
 	s.broadcastRunsMu.Lock()
 	s.broadcastRuns[runID] = true
 	s.broadcastRunsMu.Unlock()
@@ -111,7 +111,7 @@ func (s *Service) MarkBroadcastRun(runID string) {
 }
 
 // ConsumeBroadcastRun checks and removes a broadcast-marked runID. One-shot.
-func (s *Service) ConsumeBroadcastRun(runID string) bool {
+func (s *OpenclawService) ConsumeBroadcastRun(runID string) bool {
 	s.broadcastRunsMu.Lock()
 	ok := s.broadcastRuns[runID]
 	if ok {
@@ -122,7 +122,7 @@ func (s *Service) ConsumeBroadcastRun(runID string) bool {
 }
 
 // MarkWebChatRun marks a runID as originating from the web monitor chat.
-func (s *Service) MarkWebChatRun(runID string) {
+func (s *OpenclawService) MarkWebChatRun(runID string) {
 	s.webChatRunsMu.Lock()
 	s.webChatRuns[runID] = true
 	s.webChatRunsMu.Unlock()
@@ -130,7 +130,7 @@ func (s *Service) MarkWebChatRun(runID string) {
 }
 
 // IsWebChatRun checks if a runID is a web chat run (non-consuming).
-func (s *Service) IsWebChatRun(runID string) bool {
+func (s *OpenclawService) IsWebChatRun(runID string) bool {
 	s.webChatRunsMu.Lock()
 	ok := s.webChatRuns[runID]
 	s.webChatRunsMu.Unlock()
@@ -138,7 +138,7 @@ func (s *Service) IsWebChatRun(runID string) bool {
 }
 
 // ConsumeWebChatRun checks and removes a web-chat-marked runID. One-shot.
-func (s *Service) ConsumeWebChatRun(runID string) bool {
+func (s *OpenclawService) ConsumeWebChatRun(runID string) bool {
 	s.webChatRunsMu.Lock()
 	ok := s.webChatRuns[runID]
 	if ok {
@@ -151,7 +151,7 @@ func (s *Service) ConsumeWebChatRun(runID string) bool {
 // MarkSilentRun marks a runID whose spoken reply must be suppressed even though
 // the agent still processes the turn (e.g. voice_agent_handled: the realtime
 // voice agent already replied, OpenClaw absorbs context but must stay silent).
-func (s *Service) MarkSilentRun(runID string) {
+func (s *OpenclawService) MarkSilentRun(runID string) {
 	s.silentRunsMu.Lock()
 	s.silentRuns[runID] = true
 	s.silentRunsMu.Unlock()
@@ -159,7 +159,7 @@ func (s *Service) MarkSilentRun(runID string) {
 }
 
 // IsSilentRun checks if a runID is a silent run (non-consuming).
-func (s *Service) IsSilentRun(runID string) bool {
+func (s *OpenclawService) IsSilentRun(runID string) bool {
 	s.silentRunsMu.Lock()
 	ok := s.silentRuns[runID]
 	s.silentRunsMu.Unlock()
@@ -167,7 +167,7 @@ func (s *Service) IsSilentRun(runID string) bool {
 }
 
 // ConsumeSilentRun checks and removes a silent-marked runID. One-shot.
-func (s *Service) ConsumeSilentRun(runID string) bool {
+func (s *OpenclawService) ConsumeSilentRun(runID string) bool {
 	s.silentRunsMu.Lock()
 	ok := s.silentRuns[runID]
 	if ok {
@@ -191,7 +191,7 @@ const pendingSendBusyWindow = 30 * time.Second
 
 // pruneStalePendingChatLocked drops entries older than pendingChatTTL.
 // Caller must hold pendingChatMu.
-func (s *Service) pruneStalePendingChatLocked() {
+func (s *OpenclawService) pruneStalePendingChatLocked() {
 	if len(s.pendingChatBuf) == 0 {
 		return
 	}
@@ -209,7 +209,7 @@ func (s *Service) pruneStalePendingChatLocked() {
 // pendingSendBusyWindow but has not yet been paired with lifecycle_start.
 // Used by IsBusy() to close the window between WS write and the agent
 // acknowledging the turn.
-func (s *Service) HasFreshPendingChatSend() bool {
+func (s *OpenclawService) HasFreshPendingChatSend() bool {
 	s.pendingChatMu.Lock()
 	defer s.pendingChatMu.Unlock()
 	cutoff := time.Now().Add(-pendingSendBusyWindow)
@@ -225,7 +225,7 @@ func (s *Service) HasFreshPendingChatSend() bool {
 // lifecycle can be mapped back via MatchPendingByMessage. The message text
 // must be exactly what was passed in the chat.send WS payload — chat.history
 // returns it verbatim and is matched against this field.
-func (s *Service) SetPendingChatTrace(runID string, message string) {
+func (s *OpenclawService) SetPendingChatTrace(runID string, message string) {
 	s.pendingChatMu.Lock()
 	s.pruneStalePendingChatLocked()
 	s.pendingChatBuf = append(s.pendingChatBuf, pendingTrace{
@@ -242,7 +242,7 @@ func (s *Service) SetPendingChatTrace(runID string, message string) {
 // mapping needed, but the entry must be cleared so MatchPendingByMessage
 // doesn't pick it up for a later UUID lifecycle with the same message.
 // Returns true if found+removed.
-func (s *Service) RemovePendingChatTraceByRunID(target string) bool {
+func (s *OpenclawService) RemovePendingChatTraceByRunID(target string) bool {
 	if target == "" {
 		return false
 	}
@@ -273,7 +273,7 @@ func (s *Service) RemovePendingChatTraceByRunID(target string) bool {
 // twice), the OLDEST matching entry is returned — that's the one most likely
 // to have been drained first by OpenClaw's queue. This is the only place FIFO
 // ordering still influences mapping, and only within a same-text subset.
-func (s *Service) MatchPendingByMessage(needle string) string {
+func (s *OpenclawService) MatchPendingByMessage(needle string) string {
 	needle = strings.TrimSpace(needle)
 	if needle == "" {
 		return ""

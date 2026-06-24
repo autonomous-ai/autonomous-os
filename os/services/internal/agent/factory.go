@@ -21,7 +21,7 @@ import (
 // 127.0.0.1:18789. See internal/openclaw and docs/os-server.md.
 //
 // "hermes": HTTP+SSE client against the Hermes API server (default
-// 127.0.0.1:8642). See internal/hermes and docs/hermes.md.
+// 127.0.0.1:8642). See internal/hermes and docs/agentic/hermes.md.
 // gatewayTransport is the wire transport each runtime uses. The transport is a
 // property of the runtime, not an independent knob, so DEVICE.md
 // `gateway.protocol` is only validated against this (a consistency guard).

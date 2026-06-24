@@ -21,11 +21,11 @@ const healthPollInterval = 10 * time.Second
 // StartWS — naming carried over from the domain.AgentGateway interface for
 // parity with openclaw, but under Hermes there is no persistent WebSocket.
 // We instead:
-//   1. Record the handler so per-request SSE consumers can dispatch into it.
-//   2. Spin a /health poller that drives IsReady / ConnectedAt / status LED.
-//   3. Block on ctx.Done() to satisfy the same call shape as openclaw's
-//      reconnect loop (server.go invokes this inside a goroutine).
-func (s *Service) StartWS(ctx context.Context, handler domain.AgentEventHandler) {
+//  1. Record the handler so per-request SSE consumers can dispatch into it.
+//  2. Spin a /health poller that drives IsReady / ConnectedAt / status LED.
+//  3. Block on ctx.Done() to satisfy the same call shape as openclaw's
+//     reconnect loop (server.go invokes this inside a goroutine).
+func (s *HermesService) StartWS(ctx context.Context, handler domain.AgentEventHandler) {
 	s.handlerMu.Lock()
 	s.handler = handler
 	s.handlerMu.Unlock()
@@ -38,7 +38,7 @@ func (s *Service) StartWS(ctx context.Context, handler domain.AgentEventHandler)
 // First success unlocks the gateway-down LED + emits ws_ready flow event.
 // A success after a failure (i.e. reconnect) triggers the i18n reconnect
 // TTS so the user knows the agent is back, matching openclaw.
-func (s *Service) runHealthLoop(ctx context.Context) {
+func (s *HermesService) runHealthLoop(ctx context.Context) {
 	tick := time.NewTicker(healthPollInterval)
 	defer tick.Stop()
 	// Run one probe immediately so IsReady() doesn't sit false for 10s.
@@ -56,7 +56,7 @@ func (s *Service) runHealthLoop(ctx context.Context) {
 // probeHealth issues GET /health and updates connection state. /health/detailed
 // is fetched on transition to ready=true so we can capture uptime_s if Hermes
 // publishes it.
-func (s *Service) probeHealth(ctx context.Context) {
+func (s *HermesService) probeHealth(ctx context.Context) {
 	url := strings.TrimRight(BaseURL, "/") + "/health"
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -89,7 +89,7 @@ func (s *Service) probeHealth(ctx context.Context) {
 
 // transitionReady applies the new readiness state, updates statusled, and
 // emits the one-shot reconnect TTS on re-up.
-func (s *Service) transitionReady(now bool) {
+func (s *HermesService) transitionReady(now bool) {
 	was := s.ready.Swap(now)
 	if now == was {
 		return
@@ -130,7 +130,7 @@ func (s *Service) transitionReady(now bool) {
 
 // maybeFetchUptime hits /health/detailed and captures uptime_s if present.
 // Best-effort: never modifies ready state — that's owned by the basic probe.
-func (s *Service) maybeFetchUptime(ctx context.Context) {
+func (s *HermesService) maybeFetchUptime(ctx context.Context) {
 	if s.agentStartedAt.Load() > 0 {
 		return // already captured
 	}

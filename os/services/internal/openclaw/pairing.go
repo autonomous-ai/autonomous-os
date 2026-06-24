@@ -62,7 +62,7 @@ var (
 // HasWhatsappSession reports whether a Baileys session exists on disk for the
 // given account. Empty account resolves to "default". Used to skip pairing
 // when the gateway can auto-resume an existing link.
-func (s *Service) HasWhatsappSession(account string) bool {
+func (s *OpenclawService) HasWhatsappSession(account string) bool {
 	if account == "" {
 		account = "default"
 	}
@@ -79,7 +79,7 @@ func (s *Service) HasWhatsappSession(account string) bool {
 //
 // Caller MUST drain the channel; goroutine writes are buffered (capacity 8)
 // but will block once buffer fills.
-func (s *Service) PairWhatsapp(ctx context.Context) <-chan domain.PairingEvent {
+func (s *OpenclawService) PairWhatsapp(ctx context.Context) <-chan domain.PairingEvent {
 	ch := make(chan domain.PairingEvent, 8)
 
 	whatsappPairingMu.Lock()
@@ -108,7 +108,7 @@ func (s *Service) PairWhatsapp(ctx context.Context) <-chan domain.PairingEvent {
 // runPairingProcess spawns the login CLI, scans its stdout for QR blocks and
 // terminal markers, and emits PairingEvents. Returns when the subprocess exits
 // or the context is cancelled.
-func (s *Service) runPairingProcess(ctx context.Context, ch chan<- domain.PairingEvent) {
+func (s *OpenclawService) runPairingProcess(ctx context.Context, ch chan<- domain.PairingEvent) {
 	runCtx, cancel := context.WithTimeout(ctx, whatsappPairingTimeout)
 	defer cancel()
 

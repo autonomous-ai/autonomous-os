@@ -29,7 +29,7 @@ var (
 // llmKey / llmBaseURL so households with separate STT / TTS accounts can
 // configure each independently. Pass empty for any of them to make HAL
 // fall back to the LLM equivalent.
-func (s *Service) StartHALVoice(deepgramKey, llmKey, sttKey, ttsKey, llmBaseURL, sttBaseURL, ttsBaseURL, ttsVoice, ttsInstructions, ttsProvider string) error {
+func (s *OpenclawService) StartHALVoice(deepgramKey, llmKey, sttKey, ttsKey, llmBaseURL, sttBaseURL, ttsBaseURL, ttsVoice, ttsInstructions, ttsProvider string) error {
 	if deepgramKey == "" {
 		return nil
 	}
@@ -74,7 +74,7 @@ func truncRunes(s string, n int) string {
 }
 
 // SetVolume sets speaker volume on HAL (0-100).
-func (s *Service) SetVolume(pct int) error {
+func (s *OpenclawService) SetVolume(pct int) error {
 	if err := hal.SetVolume(pct); err != nil {
 		return err
 	}
@@ -84,7 +84,7 @@ func (s *Service) SetVolume(pct int) error {
 
 // StopTTS interrupts active TTS playback and music on HAL immediately,
 // freeing the speaker so the voice mic can receive new commands.
-func (s *Service) StopTTS() error {
+func (s *OpenclawService) StopTTS() error {
 	if err := hal.StopTTS(); err != nil {
 		return err
 	}
@@ -98,7 +98,7 @@ func (s *Service) StopTTS() error {
 
 // SendToHALTTS posts response text to HAL for TTS playback.
 // Text must already be stripped of HW markers by the caller (SSE handler).
-func (s *Service) SendToHALTTS(text string) error {
+func (s *OpenclawService) SendToHALTTS(text string) error {
 	text = stripForTTS(text)
 	if text == "" {
 		return nil
@@ -125,7 +125,7 @@ func (s *Service) SendToHALTTS(text string) error {
 // pre-synthesizes this text and chains it onto the same open ALSA stream so
 // the user hears the agent's sentence-streamed reply as one continuous
 // utterance.
-func (s *Service) SendToHALTTSQueue(text string) error {
+func (s *OpenclawService) SendToHALTTSQueue(text string) error {
 	text = stripForTTS(text)
 	if text == "" {
 		return nil

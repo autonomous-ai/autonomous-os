@@ -10,26 +10,26 @@ import (
 
 // SetSessionKey stores the session id. PicoClaw assigns it on its first inbound
 // frame (translateFrame captures it), so the read loop is the usual caller.
-func (s *Service) SetSessionKey(key string) {
+func (s *PicoclawService) SetSessionKey(key string) {
 	s.sessionUUID.Store(key)
 	slog.Info("session key stored", "component", "picoclaw", "key", key)
 	flow.Log("session_key_acquired", map[string]any{"key_len": len(key)})
 }
 
 // GetSessionKey returns the PicoClaw session id or "".
-func (s *Service) GetSessionKey() string {
+func (s *PicoclawService) GetSessionKey() string {
 	v, _ := s.sessionUUID.Load().(string)
 	return v
 }
 
-func (s *Service) MarkGuardRun(runID string, snapshotPath string) {
+func (s *PicoclawService) MarkGuardRun(runID string, snapshotPath string) {
 	s.guardRunsMu.Lock()
 	s.guardRuns[runID] = snapshotPath
 	s.guardRunsMu.Unlock()
 	slog.Info("guard run marked", "component", "picoclaw", "runID", runID, "snapshot", snapshotPath)
 }
 
-func (s *Service) ConsumeGuardRun(runID string) (string, bool) {
+func (s *PicoclawService) ConsumeGuardRun(runID string) (string, bool) {
 	s.guardRunsMu.Lock()
 	snap, ok := s.guardRuns[runID]
 	if ok {
@@ -41,7 +41,7 @@ func (s *Service) ConsumeGuardRun(runID string) (string, bool) {
 
 const poseBucketRunTTL = 10 * time.Minute
 
-func (s *Service) MarkPoseBucketRun(runID string, bucketID string, worstFilenames []string) {
+func (s *PicoclawService) MarkPoseBucketRun(runID string, bucketID string, worstFilenames []string) {
 	if runID == "" || bucketID == "" {
 		return
 	}
@@ -64,7 +64,7 @@ func (s *Service) MarkPoseBucketRun(runID string, bucketID string, worstFilename
 		"component", "picoclaw", "runID", runID, "bucket", bucketID, "worst_count", len(clean))
 }
 
-func (s *Service) ConsumePoseBucketRun(runID string) (string, []string, bool) {
+func (s *PicoclawService) ConsumePoseBucketRun(runID string) (string, []string, bool) {
 	s.poseBucketRunsMu.Lock()
 	defer s.poseBucketRunsMu.Unlock()
 	s.prunePoseBucketRunsLocked()
@@ -76,7 +76,7 @@ func (s *Service) ConsumePoseBucketRun(runID string) (string, []string, bool) {
 	return info.bucketID, info.filenames, true
 }
 
-func (s *Service) prunePoseBucketRunsLocked() {
+func (s *PicoclawService) prunePoseBucketRunsLocked() {
 	if len(s.poseBucketRuns) == 0 {
 		return
 	}
@@ -88,14 +88,14 @@ func (s *Service) prunePoseBucketRunsLocked() {
 	}
 }
 
-func (s *Service) MarkBroadcastRun(runID string) {
+func (s *PicoclawService) MarkBroadcastRun(runID string) {
 	s.broadcastRunsMu.Lock()
 	s.broadcastRuns[runID] = true
 	s.broadcastRunsMu.Unlock()
 	slog.Info("broadcast run marked", "component", "picoclaw", "runID", runID)
 }
 
-func (s *Service) ConsumeBroadcastRun(runID string) bool {
+func (s *PicoclawService) ConsumeBroadcastRun(runID string) bool {
 	s.broadcastRunsMu.Lock()
 	ok := s.broadcastRuns[runID]
 	if ok {
@@ -105,21 +105,21 @@ func (s *Service) ConsumeBroadcastRun(runID string) bool {
 	return ok
 }
 
-func (s *Service) MarkWebChatRun(runID string) {
+func (s *PicoclawService) MarkWebChatRun(runID string) {
 	s.webChatRunsMu.Lock()
 	s.webChatRuns[runID] = true
 	s.webChatRunsMu.Unlock()
 	slog.Info("web chat run marked — TTS will be suppressed", "component", "picoclaw", "runID", runID)
 }
 
-func (s *Service) IsWebChatRun(runID string) bool {
+func (s *PicoclawService) IsWebChatRun(runID string) bool {
 	s.webChatRunsMu.Lock()
 	ok := s.webChatRuns[runID]
 	s.webChatRunsMu.Unlock()
 	return ok
 }
 
-func (s *Service) ConsumeWebChatRun(runID string) bool {
+func (s *PicoclawService) ConsumeWebChatRun(runID string) bool {
 	s.webChatRunsMu.Lock()
 	ok := s.webChatRuns[runID]
 	if ok {
@@ -129,21 +129,21 @@ func (s *Service) ConsumeWebChatRun(runID string) bool {
 	return ok
 }
 
-func (s *Service) MarkSilentRun(runID string) {
+func (s *PicoclawService) MarkSilentRun(runID string) {
 	s.silentRunsMu.Lock()
 	s.silentRuns[runID] = true
 	s.silentRunsMu.Unlock()
 	slog.Info("silent run marked — TTS will be suppressed", "component", "picoclaw", "runID", runID)
 }
 
-func (s *Service) IsSilentRun(runID string) bool {
+func (s *PicoclawService) IsSilentRun(runID string) bool {
 	s.silentRunsMu.Lock()
 	ok := s.silentRuns[runID]
 	s.silentRunsMu.Unlock()
 	return ok
 }
 
-func (s *Service) ConsumeSilentRun(runID string) bool {
+func (s *PicoclawService) ConsumeSilentRun(runID string) bool {
 	s.silentRunsMu.Lock()
 	ok := s.silentRuns[runID]
 	if ok {
@@ -156,7 +156,7 @@ func (s *Service) ConsumeSilentRun(runID string) bool {
 const pendingChatTTL = 2 * time.Minute
 const pendingSendBusyWindow = 30 * time.Second
 
-func (s *Service) pruneStalePendingChatLocked() {
+func (s *PicoclawService) pruneStalePendingChatLocked() {
 	if len(s.pendingChatBuf) == 0 {
 		return
 	}
@@ -170,7 +170,7 @@ func (s *Service) pruneStalePendingChatLocked() {
 	s.pendingChatBuf = kept
 }
 
-func (s *Service) HasFreshPendingChatSend() bool {
+func (s *PicoclawService) HasFreshPendingChatSend() bool {
 	s.pendingChatMu.Lock()
 	defer s.pendingChatMu.Unlock()
 	cutoff := time.Now().Add(-pendingSendBusyWindow)
@@ -182,7 +182,7 @@ func (s *Service) HasFreshPendingChatSend() bool {
 	return false
 }
 
-func (s *Service) SetPendingChatTrace(runID string, message string) {
+func (s *PicoclawService) SetPendingChatTrace(runID string, message string) {
 	s.pendingChatMu.Lock()
 	s.pruneStalePendingChatLocked()
 	s.pendingChatBuf = append(s.pendingChatBuf, pendingTrace{
@@ -193,7 +193,7 @@ func (s *Service) SetPendingChatTrace(runID string, message string) {
 	s.pendingChatMu.Unlock()
 }
 
-func (s *Service) RemovePendingChatTraceByRunID(target string) bool {
+func (s *PicoclawService) RemovePendingChatTraceByRunID(target string) bool {
 	if target == "" {
 		return false
 	}
@@ -209,7 +209,7 @@ func (s *Service) RemovePendingChatTraceByRunID(target string) bool {
 	return false
 }
 
-func (s *Service) MatchPendingByMessage(needle string) string {
+func (s *PicoclawService) MatchPendingByMessage(needle string) string {
 	needle = strings.TrimSpace(needle)
 	if needle == "" {
 		return ""

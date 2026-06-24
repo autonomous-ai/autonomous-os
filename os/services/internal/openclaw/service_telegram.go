@@ -15,7 +15,7 @@ import (
 
 // GetTelegramBotToken returns the Telegram bot token from the agent runtime config.
 // Prefers the runtime config (OpenClaw) over Lamp config, since the runtime owns the sessions.
-func (s *Service) GetTelegramBotToken() string {
+func (s *OpenclawService) GetTelegramBotToken() string {
 	if token := s.readOpenClawTelegramToken(); token != "" {
 		return token
 	}
@@ -24,7 +24,7 @@ func (s *Service) GetTelegramBotToken() string {
 
 // GetTelegramTargets returns all Telegram chats by reading sessions.json directly
 // from the OpenClaw agent's session store (no RPC round-trip required).
-func (s *Service) GetTelegramTargets() ([]domain.TelegramTarget, error) {
+func (s *OpenclawService) GetTelegramTargets() ([]domain.TelegramTarget, error) {
 	sessionsPath := filepath.Join(s.config.OpenclawConfigDir, "agents", "main", "sessions", "sessions.json")
 	data, err := os.ReadFile(sessionsPath)
 	if err != nil {
@@ -86,7 +86,7 @@ func (s *Service) GetTelegramTargets() ([]domain.TelegramTarget, error) {
 
 // Broadcast sends a message to all connected messaging channels.
 // It iterates over registered ChannelSenders, skipping any that are not configured.
-func (s *Service) Broadcast(msg string, imagePath string) error {
+func (s *OpenclawService) Broadcast(msg string, imagePath string) error {
 	var sent int
 	var lastErr error
 	for _, ch := range s.channels {
@@ -111,7 +111,7 @@ func (s *Service) Broadcast(msg string, imagePath string) error {
 
 // SendToUser sends a direct message to a specific Telegram user ID.
 // If the ID is empty the message is silently dropped.
-func (s *Service) SendToUser(telegramID string, msg string, imagePath string) error {
+func (s *OpenclawService) SendToUser(telegramID string, msg string, imagePath string) error {
 	if telegramID == "" {
 		return nil
 	}
@@ -131,7 +131,7 @@ func (s *Service) SendToUser(telegramID string, msg string, imagePath string) er
 // Reduces to SendToUser when imagePaths has 0 or 1 entries so callers
 // can pass through whatever ConsumePoseBucketRun returned without
 // branching.
-func (s *Service) SendToUserWithMedia(telegramID string, msg string, imagePaths []string) error {
+func (s *OpenclawService) SendToUserWithMedia(telegramID string, msg string, imagePaths []string) error {
 	if telegramID == "" {
 		return nil
 	}
@@ -154,7 +154,7 @@ func (s *Service) SendToUserWithMedia(telegramID string, msg string, imagePaths 
 }
 
 // readOpenClawTelegramToken reads the Telegram bot token from OpenClaw's config file.
-func (s *Service) readOpenClawTelegramToken() string {
+func (s *OpenclawService) readOpenClawTelegramToken() string {
 	// Try configured dir first, then common locations.
 	candidates := []string{s.config.OpenclawConfigDir}
 	home, _ := os.UserHomeDir()

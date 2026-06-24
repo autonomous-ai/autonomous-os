@@ -1,6 +1,6 @@
 # Web UI — Monitor Dashboard
 
-## Last updated: 2026-05-27
+## Last updated: 2026-06-24
 
 ---
 
@@ -38,6 +38,8 @@ os/services/web/
 │   │   └── ...                # Setup pages
 │   ├── components/
 │   │   └── ui/                # shadcn/ui components
+│   ├── lib/
+│   │   └── i18n.ts            # UI string localization (en/vi/zh-CN/zh-TW, English fallback)
 │   ├── index.css              # Global styles + theme variables
 │   └── main.tsx
 ├── vite.config.ts
@@ -299,7 +301,8 @@ Interactive chat interface for communicating with the agent. Layout: sidebar (co
 **Conversations**
 - Multiple conversations stored in localStorage (max 50, 200 messages each)
 - Sidebar with search, pin, rename (double-click), delete (double-click confirm), export as TXT
-- Grouped by date: Today / Yesterday / This week / Older, pinned at top
+- Grouped by date: Today / Yesterday / This week / Older, pinned at top. Each group header shows a hairline divider and an item count.
+- Each row shows a deterministic on-palette avatar dot (hashed from the conversation id), the title, a localized relative timestamp (`now` / `5m` / `2h` / `yesterday` / `3d`, hidden on hover), and a last-message preview. The active conversation is marked with an amber left rail.
 - Keyboard shortcut: Cmd/Ctrl+N for new chat
 - Collapsible sidebar
 
@@ -311,7 +314,7 @@ Interactive chat interface for communicating with the agent. Layout: sidebar (co
 **Real-time Streaming**
 - **Thinking indicator**: collapsible purple block showing LLM reasoning tokens as they stream in (`thinking` events). Click to expand full text (max-height 200px scrollable). Auto-hides on response completion.
 - **Assistant delta streaming**: response text appears token-by-token via `assistant_delta` events, instead of waiting for final response. Fallback to `chat_response` partial events for non-agent paths.
-- **Tool call chips**: teal badges showing tools the agent invoked during the response (emotion, LED, servo, audio, etc.). Displayed above the message bubble during streaming and persisted on completed messages.
+- **Tool call chips**: teal badges showing tools the agent invoked during the response (emotion, LED, servo, audio, etc.). Displayed above the message bubble during streaming and persisted on completed messages. A single tool renders as one chip; **two or more collapse into a summary pill** ("N steps" with stacked tool icons + a live/`DONE` marker) that expands on click to reveal the individual chips.
 
 **Response Handling**
 - Tracks response by `runId` correlation across SSE events
@@ -319,7 +322,15 @@ Interactive chat interface for communicating with the agent. Layout: sidebar (co
 - 30-second timeout: if streaming text received, shows partial text; otherwise shows error with retry button
 - Local intent fast path: sub-50ms responses bypassing agent
 - Busy/dropped handling: shows "busy — try again"
-- Markdown rendering: bold, italic, inline code, code blocks, URLs, ordered/unordered lists
+- Markdown rendering: bold, italic, inline code (amber-tinted), code blocks (monospace), URLs, ordered/unordered lists, and tables (styled header + zebra rows)
+
+**Empty State & Suggestions**
+- When a conversation has no messages, the chat area shows a large breathing assistant orb, a localized title/subtitle, and four clickable **suggestion chips**. Clicking a chip fills the composer (does not auto-send) so the user can edit first.
+
+**Localization (i18n)**
+- The chat's own UI strings (empty-state title/subtitle, suggestion chips, the top-bar "thinking"/"online" status) are localized via `src/lib/i18n.ts` — a lightweight hand-rolled module mirroring the Go backend's `os/services/lib/i18n` conventions (canonical codes `en` / `vi` / `zh-CN` / `zh-TW`, alias normalization, **English fallback** per key).
+- The active language is resolved from the device config's `stt_language` field (the same source Go's `i18n.Lang()` reads from `config.STTLanguage`) via `setLanguage()` in `App.tsx` on first config load, with the Chat section re-applying it from its own config fetch. Components read strings through the `useT()` hook, which re-renders when the language resolves.
+- This i18n module currently covers only the chat strings added with the redesign; the rest of the Monitor UI remains hardcoded English.
 
 **Data Flow**
 ```

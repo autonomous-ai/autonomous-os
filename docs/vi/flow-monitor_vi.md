@@ -127,6 +127,10 @@ Chi tiết:
 
 OpenClaw agent trả `NO_REPLY` (hoặc dạng cắt ngắn `NO`, `NO_RE`, `NO_...`) khi quyết định không cần trả lời — thường cho passive sensing events (sound, motion). `isAgentNoReply()` trong `handler.go` suppress: không phát TTS, không hiện output. Match: `"NO"` chính xác, hoặc bắt đầu bằng `"NO_"` / `"NO_RE"` (case-insensitive).
 
+### Output text & first-sentence streaming
+
+Web (chat + flow Output) đọc text reply từ event `tts_send`, ưu tiên `data.full_text` (toàn bộ reply) rồi fallback `data.text`. Khi câu đầu được stream sớm tới TTS giữa turn (event `tts_stream_send`, gửi trước để giảm latency), `data.text` chỉ chứa **phần còn lại** (câu 1 đã bị cắt để không phát 2 lần), còn `data.full_text` mới giữ câu 1 + phần còn lại. Web không đọc `tts_stream_send`, nên thiếu `full_text` thì câu 1 sẽ không hiện. `data.streamed_len` là byte offset nơi phần còn lại bắt đầu.
+
 ### TTS suppress event
 
 Khi `SendToHalTTS` thật sự bị skip (loa không phát), OS server emit `tts_suppressed` thay vì `tts_send`. Field `data.reason` discriminate: `channel_run` (real Telegram user turn — detect qua runID có prefix `tg-` OS server tự sinh trong `session.message` handler, hoặc `channelRuns` map mark từ chat.history fallback; reply đi qua OpenClaw session fan-out thay vì loa thiết bị), `music_playing` (audio đang chiếm loa), `already_spoken` (built-in tts tool đã route trước), `web_chat` (Flow Monitor chat — reply chỉ hiện trên web UI). UI hiển thị 🔇 ở Gate column thay vì 🔊 — tránh case trước đây log nói "TTS" nhưng loa im. Classifier chỉ dùng positive evidence: UUID runs từ OpenClaw steer-mode self-fire, cron fire, heartbeat KHÔNG bị coi là `channel_run` và VẪN phát loa.

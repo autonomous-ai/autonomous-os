@@ -24,7 +24,7 @@ var (
 
 // StartHALVoice starts the HAL voice pipeline. Backend-agnostic — only talks to
 // the HAL daemon on the Pi.
-func (s *Service) StartHALVoice(deepgramKey, llmKey, sttKey, ttsKey, llmBaseURL, sttBaseURL, ttsBaseURL, ttsVoice, ttsInstructions, ttsProvider string) error {
+func (s *PicoclawService) StartHALVoice(deepgramKey, llmKey, sttKey, ttsKey, llmBaseURL, sttBaseURL, ttsBaseURL, ttsVoice, ttsInstructions, ttsProvider string) error {
 	if deepgramKey == "" {
 		return nil
 	}
@@ -66,7 +66,7 @@ func truncRunes(s string, n int) string {
 	return string(r[:n])
 }
 
-func (s *Service) SetVolume(pct int) error {
+func (s *PicoclawService) SetVolume(pct int) error {
 	if err := hal.SetVolume(pct); err != nil {
 		return err
 	}
@@ -74,7 +74,7 @@ func (s *Service) SetVolume(pct int) error {
 	return nil
 }
 
-func (s *Service) StopTTS() error {
+func (s *PicoclawService) StopTTS() error {
 	if err := hal.StopTTS(); err != nil {
 		return err
 	}
@@ -85,7 +85,7 @@ func (s *Service) StopTTS() error {
 	return nil
 }
 
-func (s *Service) SendToHALTTS(text string) error {
+func (s *PicoclawService) SendToHALTTS(text string) error {
 	text = stripForTTS(text)
 	if text == "" {
 		return nil
@@ -100,7 +100,7 @@ func (s *Service) SendToHALTTS(text string) error {
 	return nil
 }
 
-func (s *Service) SendToHALTTSQueue(text string) error {
+func (s *PicoclawService) SendToHALTTSQueue(text string) error {
 	text = stripForTTS(text)
 	if text == "" {
 		return nil

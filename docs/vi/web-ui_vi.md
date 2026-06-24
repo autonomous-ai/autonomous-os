@@ -1,6 +1,6 @@
 # Web UI — Monitor Dashboard
 
-## Ngày cập nhật: 2026-05-27
+## Ngày cập nhật: 2026-06-24
 
 ---
 
@@ -38,6 +38,8 @@ os/services/web/
 │   │   └── ...                # Các trang setup
 │   ├── components/
 │   │   └── ui/                # shadcn/ui components
+│   ├── lib/
+│   │   └── i18n.ts            # Bản địa hóa chuỗi UI (en/vi/zh-CN/zh-TW, fallback tiếng Anh)
 │   ├── index.css              # Global styles + theme variables
 │   └── main.tsx
 ├── vite.config.ts
@@ -298,7 +300,8 @@ Giao diện chat tương tác với agent. Layout: sidebar (danh sách hội tho
 **Hội thoại**
 - Nhiều hội thoại lưu trong localStorage (tối đa 50, mỗi cái 200 tin nhắn)
 - Sidebar: tìm kiếm, ghim, đổi tên (double-click), xóa (xác nhận 2 lần), xuất TXT
-- Nhóm theo ngày: Today / Yesterday / This week / Older, ghim lên đầu
+- Nhóm theo ngày: Today / Yesterday / This week / Older, ghim lên đầu. Mỗi header nhóm có đường kẻ mảnh và số lượng item.
+- Mỗi dòng hiển thị một chấm avatar màu (hash từ id hội thoại, theo palette), tiêu đề, nhãn thời gian tương đối đã bản địa hóa (`vừa xong` / `5 phút` / `2 giờ` / `hôm qua` / `3 ngày`, ẩn khi hover), và preview tin nhắn cuối. Hội thoại đang mở được đánh dấu bằng thanh dọc amber bên trái.
 - Phím tắt: Cmd/Ctrl+N tạo chat mới
 - Sidebar thu gọn được
 
@@ -310,7 +313,7 @@ Giao diện chat tương tác với agent. Layout: sidebar (danh sách hội tho
 **Streaming real-time**
 - **Thinking indicator**: khối tím thu gọn được, hiển thị reasoning tokens của LLM khi stream (`thinking` events). Click mở rộng toàn bộ (max-height 200px, scroll). Tự ẩn khi response hoàn tất.
 - **Assistant delta streaming**: text response hiện từng token qua `assistant_delta` events, thay vì đợi response cuối cùng. Fallback sang `chat_response` partial cho đường non-agent.
-- **Tool call chips**: badge màu teal hiển thị các tool agent gọi trong response (emotion, LED, servo, audio, v.v.). Hiển thị phía trên bubble tin nhắn khi đang stream, lưu lại trên tin nhắn đã hoàn tất.
+- **Tool call chips**: badge màu teal hiển thị các tool agent gọi trong response (emotion, LED, servo, audio, v.v.). Hiển thị phía trên bubble tin nhắn khi đang stream, lưu lại trên tin nhắn đã hoàn tất. Một tool hiển thị thành một chip; **từ hai tool trở lên sẽ gom thành một pill tóm tắt** ("N steps" với các icon tool xếp chồng + marker đang chạy/`DONE`), bấm vào để mở ra các chip riêng lẻ.
 
 **Xử lý response**
 - Theo dõi response qua `runId` correlation trên SSE events
@@ -318,7 +321,15 @@ Giao diện chat tương tác với agent. Layout: sidebar (danh sách hội tho
 - Timeout 30 giây: nếu đã nhận streaming text thì hiển thị phần đó; nếu không thì báo lỗi với nút retry
 - Local intent fast path: response dưới 50ms bypass agent
 - Busy/dropped: hiển thị "busy — try again"
-- Markdown: bold, italic, inline code, code block, URL, danh sách
+- Markdown: bold, italic, inline code (tô màu amber), code block (monospace), URL, danh sách, và bảng (header có nền + hàng zebra)
+
+**Empty State & Gợi ý**
+- Khi cuộc trò chuyện chưa có tin nhắn, khu vực chat hiển thị một quả cầu assistant lớn đang "thở", tiêu đề/phụ đề đã bản địa hóa, và bốn **chip gợi ý** bấm được. Bấm một chip sẽ điền sẵn vào ô nhập (không tự gửi) để người dùng chỉnh trước.
+
+**Bản địa hóa (i18n)**
+- Các chuỗi UI riêng của chat (tiêu đề/phụ đề empty-state, chip gợi ý, trạng thái "đang suy nghĩ"/"trực tuyến" trên thanh trên cùng) được bản địa hóa qua `src/lib/i18n.ts` — một module nhẹ tự viết, mô phỏng convention của backend Go `os/services/lib/i18n` (mã chuẩn `en` / `vi` / `zh-CN` / `zh-TW`, chuẩn hóa alias, **fallback về tiếng Anh** theo từng key).
+- Ngôn ngữ active được lấy từ trường `stt_language` trong device config (cùng nguồn mà `i18n.Lang()` của Go đọc từ `config.STTLanguage`) qua `setLanguage()` trong `App.tsx` khi load config lần đầu, và Chat section áp lại từ lần fetch config của chính nó. Các component đọc chuỗi qua hook `useT()`, hook này re-render khi ngôn ngữ được xác định.
+- Module i18n này hiện chỉ phủ các chuỗi chat thêm vào trong đợt redesign; phần còn lại của UI Monitor vẫn hardcode tiếng Anh.
 
 **Luồng dữ liệu**
 ```

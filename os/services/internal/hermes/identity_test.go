@@ -29,3 +29,25 @@ func TestRewriteSoulName_PreservesBulletPrefix(t *testing.T) {
 		t.Fatalf("prefix mismatch:\n got=%q\nwant=%q", got, want)
 	}
 }
+
+func TestParseSoulName(t *testing.T) {
+	cases := []struct {
+		name string
+		soul string
+		want string
+	}{
+		{"card line", "# Soul\n\nYou are Lamp.\n\n## Your identity card\n\n- **Name:** Ngân\n", "Ngân"},
+		{"strips trailing description", "- **Name:** Noah — the desk companion\n", "Noah"},
+		{"strips dash description", "- **Name:** Lamp - a living being\n", "Lamp"},
+		{"no name line → empty", "# Soul\n\nYou are **Lamp**.\n", ""},
+		{"empty value → empty", "- **Name:**\n", ""},
+		{"first name line wins", "- **Name:** Ngân\n- **Name:** Hà\n", "Ngân"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := parseSoulName(c.soul); got != c.want {
+				t.Fatalf("parseSoulName(%q) = %q, want %q", c.soul, got, c.want)
+			}
+		})
+	}
+}

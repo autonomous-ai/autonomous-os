@@ -24,10 +24,10 @@ type pendingEvent struct {
 
 const busyTTL = 5 * time.Minute
 
-// IsBusy mirrors openclaw.Service.IsBusy: true while a turn is in flight OR a
+// IsBusy mirrors openclaw.HermesService.IsBusy: true while a turn is in flight OR a
 // chat.send is still waiting for response.created. Auto-clears after busyTTL
 // if response.completed got dropped so the sensing pipeline cannot wedge.
-func (s *Service) IsBusy() bool {
+func (s *HermesService) IsBusy() bool {
 	if s.activeTurn.Load() {
 		since := s.busySince.Load()
 		if since > 0 && time.Since(time.UnixMilli(since)) > busyTTL {
@@ -43,7 +43,7 @@ func (s *Service) IsBusy() bool {
 }
 
 // SetBusy flips active state. Drains pending events on idle.
-func (s *Service) SetBusy(busy bool) {
+func (s *HermesService) SetBusy(busy bool) {
 	if busy {
 		s.busySince.Store(time.Now().UnixMilli())
 	}
@@ -53,7 +53,7 @@ func (s *Service) SetBusy(busy bool) {
 	}
 }
 
-func (s *Service) QueuePendingEvent(eventType, msg, image, fixedRunID string) {
+func (s *HermesService) QueuePendingEvent(eventType, msg, image, fixedRunID string) {
 	now := time.Now()
 	curUser := mood.CurrentUser()
 	if curUser == "" {
@@ -75,7 +75,7 @@ func (s *Service) QueuePendingEvent(eventType, msg, image, fixedRunID string) {
 // openclaw drain: voice events prioritised, expirable high-frequency types
 // (presence / motion / emotion) coalesced to latest-only and stale entries
 // dropped after expireAfter.
-func (s *Service) drainPendingEvents() {
+func (s *HermesService) drainPendingEvents() {
 	s.pendingEventsMu.Lock()
 	events := s.pendingEvents
 	s.pendingEvents = nil

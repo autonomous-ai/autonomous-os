@@ -26,7 +26,12 @@ rules apply to all code changes:
    | MQTT, dispatch, publish | `docs/mqtt.md` | `docs/vi/mqtt_vi.md` |
    | OTA, bootstrap | `docs/bootstrap-ota.md` | `docs/vi/bootstrap-ota.md` |
    | Speech emotion recognition (SER) | `docs/speech-emotion.md` | `docs/vi/speech-emotion_vi.md` |
+   | Realtime voice agent (HAL `drivers/realtime`, Gemini Live / OpenAI Realtime, delegate) | `docs/realtime-voice.md` | `docs/vi/realtime-voice_vi.md` |
    | DL backend, load balancer, encryption, models | `docs/dlbackend.md` | `docs/vi/dlbackend_vi.md` |
+   | Hermes agent backend (`agent_runtime`, internal/hermes) | `docs/agentic/hermes.md` | `docs/vi/agentic/hermes_vi.md` |
+   | PicoClaw agent backend (`agent_runtime`, internal/picoclaw, WebSocket) | `docs/agentic/picoclaw.md` | `docs/vi/agentic/picoclaw_vi.md` |
+   | Adding/changing an agentic backend (AgentGateway contract, switch, install/presync, migration, skills, hooks, reset) | `docs/agentic/adding-agent-runtime.md` | `docs/vi/agentic/adding-agent-runtime_vi.md` |
+   | Safety engine (SAFETY.md bounds, deterministic enforcement gate) | `docs/safety.md` | `docs/vi/safety_vi.md` |
 
    **Lamp-specific docs** (`devices/lamp/docs/` + `devices/lamp/docs/vi/`):
 
@@ -48,6 +53,50 @@ rules apply to all code changes:
    build time.
 
 See `docs/DEV-MULTI-IDE.md` for full conventions.
+
+## Working Style
+
+- The user reviews and commits by hand. Do not create commits unless explicitly
+  asked.
+- Work in small, reviewable chunks. When a task spans multiple concerns, split
+  it by concern and verify each batch before moving to the next.
+- Stay in scope. Flag unrelated issues instead of fixing them opportunistically.
+- Verify with concrete evidence such as focused tests, builds, greps, `bash -n`,
+  or compile checks. Report what was and was not verified.
+- Do not "clean up" inherited drift such as unrelated gofmt churn, duplicate
+  dependency metadata, or upstream-preserved style unless it is required for the
+  task.
+- Respond to the user in Vietnamese unless they request otherwise.
+- Do not auto-deploy to devices. Default to repo changes plus local verification;
+  any on-device SSH/SCP/restart step is opt-in and must be confirmed first.
+
+## Parallel Work / Subagents
+
+When work can be split across independent, file-scoped tasks, use available
+parallelism instead of doing everything sequentially. In Codex, prefer
+`multi_tool_use.parallel` for independent local reads/checks, and use subagents
+only when the tool is available and the overhead is justified.
+
+Common cases in this repo:
+
+- Repetitive edits across many files, such as rebranding strings across EN + VI
+  docs: split by file or language, with exact rules and a verification grep.
+- Long-running builds or cross-compile checks, such as `swift build` or
+  `GOOS=linux GOARCH=arm64 go build`: run in parallel/background when possible
+  and continue with independent work.
+- Repo-wide audits, such as stale paths after folder moves or broken cross-refs:
+  use audit-only scope unless edits are explicitly part of the task.
+- Independent English and Vietnamese doc updates after a code change: keep both
+  sides consistent and verify matching numbers, endpoints, states, and flows.
+
+Rules:
+
+- Brief any delegated worker with goal, context, exact files/scope, verification
+  step, and concise report format.
+- Do not delegate when the overhead is larger than the work itself, especially
+  for one or two quick edits in files already open.
+- Trust but verify: spot-check actual diffs and run focused greps/tests before
+  considering delegated work done.
 
 ## Device Access Rules
 
@@ -71,24 +120,25 @@ All targets run from the repo root via the top-level `Makefile`.
 
 ```bash
 # Build Go services (cross-compiles to linux/arm64)
-make os-build
-make os-build-bootstrap
+make os-build                # Builds os-server binary
+make os-build-bootstrap      # Builds bootstrap-server binary
 
 # Code generation (Google Wire DI)
-make os-generate
+make os-generate             # Runs: cd os/services && GOFLAGS=-mod=mod go generate ./...
 
 # Lint + tests (Go)
-make os-lint
-make os-test
+make os-lint                 # cd os/services && golangci-lint run
+make os-test                 # cd os/services && go test ./...
 
 # HAL (Python hardware runtime, os/hal)
-make hal-dev
-make hal-test
+make hal-dev                 # Install deps + run HAL locally
+make hal-lint                # Catch broken local imports + undefined names
+make hal-test                # Run HAL tests
 
 # Web frontend (React/Vite/Tailwind in os/services/web)
-make web-install
-make web-dev
-make web-build
+make web-install             # npm install
+make web-dev                 # Vite dev server
+make web-build               # Production build to dist/
 ```
 
 Go version is injected at build time via ldflags. HAL/web versions live in
@@ -196,4 +246,3 @@ handler level before passing data to services.
 - Services: `internal/<domain>/service.go`
 - Wire providers: `server/wire.go`, `bootstrap/wire.go`
 - Domain types: `domain/<type>.go`
-

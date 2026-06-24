@@ -27,7 +27,7 @@ func soulFor(t *testing.T, deviceType string) ([]byte, bool) {
 	// test is deterministic regardless of ambient env. Empty → config.json
 	// device_type ("" here) → DeviceTypeOrDefault returns "" (no "lamp" fallback).
 	t.Setenv("DEVICE_TYPE", deviceType)
-	s := &Service{config: &config.Config{}}
+	s := &OpenclawService{config: &config.Config{}}
 	content, has, err := s.deviceSoulCore()
 	if err != nil {
 		t.Fatalf("deviceSoulCore(%q): %v", deviceType, err)
@@ -96,9 +96,9 @@ _You're not a chatbot. You're becoming someone._
 - [SOUL.md personality guide](/concepts/soul)
 `
 
-// soulService builds a Service whose OpenclawConfigDir is an isolated temp dir and
+// soulService builds a OpenclawService whose OpenclawConfigDir is an isolated temp dir and
 // whose device soul resolves from the committed devices/ tree.
-func soulService(t *testing.T, deviceType string) (*Service, string) {
+func soulService(t *testing.T, deviceType string) (*OpenclawService, string) {
 	t.Helper()
 	t.Setenv("DEVICES_DIR", repoDevicesDir(t))
 	t.Setenv("DEVICE_TYPE", deviceType)
@@ -106,7 +106,7 @@ func soulService(t *testing.T, deviceType string) (*Service, string) {
 	if err := os.MkdirAll(filepath.Join(cfgDir, "workspace"), 0o755); err != nil {
 		t.Fatalf("mkdir workspace: %v", err)
 	}
-	return &Service{config: &config.Config{OpenclawConfigDir: cfgDir, DeviceType: deviceType}}, cfgDir
+	return &OpenclawService{config: &config.Config{OpenclawConfigDir: cfgDir, DeviceType: deviceType}}, cfgDir
 }
 
 func readSoul(t *testing.T, cfgDir string) string {

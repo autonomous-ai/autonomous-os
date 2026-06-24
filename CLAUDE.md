@@ -22,8 +22,9 @@ This repo is developed in both **Cursor** and **Claude Code**. The following rul
    | Speech emotion recognition (SER) | `docs/speech-emotion.md` | `docs/vi/speech-emotion_vi.md` |
    | Realtime voice agent (HAL `drivers/realtime`, Gemini Live / OpenAI Realtime, delegate) | `docs/realtime-voice.md` | `docs/vi/realtime-voice_vi.md` |
    | DL backend, load balancer, encryption, models | `docs/dlbackend.md` | `docs/vi/dlbackend_vi.md` |
-   | Hermes agent backend (`agent_runtime`, internal/hermes) | `docs/hermes.md` | `docs/vi/hermes_vi.md` |
-   | PicoClaw agent backend (`agent_runtime`, internal/picoclaw, WebSocket) | `docs/picoclaw.md` | `docs/vi/picoclaw_vi.md` |
+   | Hermes agent backend (`agent_runtime`, internal/hermes) | `docs/agentic/hermes.md` | `docs/vi/agentic/hermes_vi.md` |
+   | PicoClaw agent backend (`agent_runtime`, internal/picoclaw, WebSocket) | `docs/agentic/picoclaw.md` | `docs/vi/agentic/picoclaw_vi.md` |
+   | Adding/changing an agentic backend (AgentGateway contract, switch, install/presync, migration, skills, hooks, reset) | `docs/agentic/adding-agent-runtime.md` | `docs/vi/agentic/adding-agent-runtime_vi.md` |
    | Safety engine (SAFETY.md bounds, deterministic enforcement gate) | `docs/safety.md` | `docs/vi/safety_vi.md` |
 
    **Lamp-specific docs** (`devices/lamp/docs/` + `devices/lamp/docs/vi/`):

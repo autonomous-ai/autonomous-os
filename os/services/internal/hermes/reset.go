@@ -1,4 +1,4 @@
-package system
+package hermes
 
 import (
 	"log"
@@ -7,17 +7,31 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"go.autonomous.ai/os/lib/osreset"
 )
 
-// stopVerifyTimeout caps how long we wait for hermes-gateway to actually leave the active state after `systemctl stop`.
+// ResetAgent performs the Hermes factory-reset wipe. The factory-reset flow
+// (server/system/factoryreset.go) resolves the active gateway and calls this on
+// it — so adding a backend means implementing ResetAgent, not editing a switch.
+func (s *HermesService) ResetAgent() error {
+	wipeHermesState()
+	return nil
+}
+
+// stopVerifyTimeout caps how long we wait for hermes-gateway to actually leave
+// the active state after `systemctl stop`.
 const stopVerifyTimeout = 5 * time.Second
 
-// isServiceActive returns true if `systemctl is-active <unit>` exits 0 (active). All other states (inactive, failed, unknown, activating) are treated as "not active" — safe to wipe.
+// isServiceActive returns true if `systemctl is-active <unit>` exits 0 (active).
+// All other states (inactive, failed, unknown, activating) are treated as "not
+// active" — safe to wipe.
 func isServiceActive(unit string) bool {
 	return exec.Command("systemctl", "is-active", "--quiet", unit).Run() == nil
 }
 
-// waitForServiceStop polls is-active until the unit is no longer active or the timeout elapses. Returns true if the service is confirmed stopped within the window.
+// waitForServiceStop polls is-active until the unit is no longer active or the
+// timeout elapses. Returns true if the service is confirmed stopped in the window.
 func waitForServiceStop(unit string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -31,34 +45,30 @@ func waitForServiceStop(unit string, timeout time.Duration) bool {
 	}
 }
 
-// hermesRoot is the Hermes home dir on the Pi. All Hermes-side wipe paths
-// derive from this so the wipe stays scoped to the agent runtime.
-const hermesRoot = "/root/.hermes"
-
 // hermesWipeDirs are Hermes state subdirs we recursively remove on factory
-// reset. Top-level files inside hermesRoot are handled separately by the
+// reset. Top-level files inside hermesHome are handled separately by the
 // directory sweep (see hermesKeepFiles) — anything NOT in this list and NOT in
 // hermesKeepFiles stays untouched (skills/, bin/, audio_cache/, pairing/, …).
 var hermesWipeDirs = []string{
-	hermesRoot + "/sessions",                // conversation session state
-	hermesRoot + "/memories",                // semantic memory store
-	hermesRoot + "/tasks",                   // background task runs
-	hermesRoot + "/subagents",               // subagent history
-	hermesRoot + "/checkpoints",             // run checkpoints
-	hermesRoot + "/logs",                    // runtime logs
-	hermesRoot + "/.cache",                  // cache dir (dotted)
-	hermesRoot + "/cron",                    // scheduled jobs
-	hermesRoot + "/cache",                   // runtime cache (non-dotted, see tree)
-	hermesRoot + "/gateway",                 // gateway runtime state dir
-	hermesRoot + "/migration",               // migration history
-	hermesRoot + "/skills/openclaw-imports", // CDN-downloaded user-defined skills
-	hermesRoot + "/skills/audio_cache",      // audio cache
-	hermesRoot + "/skills/image_cache",      // image cache
+	hermesHome + "/sessions",                // conversation session state
+	hermesHome + "/memories",                // semantic memory store
+	hermesHome + "/tasks",                   // background task runs
+	hermesHome + "/subagents",               // subagent history
+	hermesHome + "/checkpoints",             // run checkpoints
+	hermesHome + "/logs",                    // runtime logs
+	hermesHome + "/.cache",                  // cache dir (dotted)
+	hermesHome + "/cron",                    // scheduled jobs
+	hermesHome + "/cache",                   // runtime cache (non-dotted, see tree)
+	hermesHome + "/gateway",                 // gateway runtime state dir
+	hermesHome + "/migration",               // migration history
+	hermesHome + "/skills/openclaw-imports", // CDN-downloaded user-defined skills
+	hermesHome + "/skills/audio_cache",      // audio cache
+	hermesHome + "/skills/image_cache",      // image cache
 }
 
 // hermesKeepFiles is the allow-list of TOP-LEVEL FILES (not dirs) under
-// hermesRoot that survive factory reset. The sweep removes every regular file
-// at hermesRoot whose name is NOT a key here.
+// hermesHome that survive factory reset. The sweep removes every regular file
+// at hermesHome whose name is NOT a key here.
 //
 //   - .env, config.yaml: reset in place by `hermes setup --reset` (Step 3)
 //   - auth.lock:         lock file — leave for daemon to manage on restart
@@ -141,15 +151,15 @@ func wipeHermesState() {
 	log.Printf("[factory-reset/hermes] step 5/5 — wiping %d dirs + top-level file sweep", len(hermesWipeDirs))
 
 	for _, d := range hermesWipeDirs {
-		wipePath("[factory-reset/hermes]", d)
+		osreset.WipePath("[factory-reset/hermes]", d)
 	}
 
-	// Top-level file sweep: ReadDir(hermesRoot), delete every regular file
+	// Top-level file sweep: ReadDir(hermesHome), delete every regular file
 	// whose name is NOT in hermesKeepFiles. Dirs at top level are untouched
 	// here — they're handled (or intentionally preserved) above.
-	entries, err := os.ReadDir(hermesRoot)
+	entries, err := os.ReadDir(hermesHome)
 	if err != nil {
-		log.Printf("[factory-reset/hermes] sweep: cannot read %s: %v (non-fatal)", hermesRoot, err)
+		log.Printf("[factory-reset/hermes] sweep: cannot read %s: %v (non-fatal)", hermesHome, err)
 	} else {
 		swept := 0
 		for _, e := range entries {
@@ -159,7 +169,7 @@ func wipeHermesState() {
 			if hermesKeepFiles[e.Name()] {
 				continue
 			}
-			wipePath("[factory-reset/hermes]", filepath.Join(hermesRoot, e.Name()))
+			osreset.WipePath("[factory-reset/hermes]", filepath.Join(hermesHome, e.Name()))
 			swept++
 		}
 		log.Printf("[factory-reset/hermes] sweep: removed %d top-level files (keep-list: %d)", swept, len(hermesKeepFiles))
@@ -168,7 +178,7 @@ func wipeHermesState() {
 	// SOUL.md: kept by sweep, but its previous content (user-customized
 	// persona) must not survive a factory reset. Overwrite with a blank
 	// template so the agent starts from "# Hermes Agent Persona" next boot.
-	soulPath := filepath.Join(hermesRoot, "SOUL.md")
+	soulPath := filepath.Join(hermesHome, "SOUL.md")
 	if err := os.WriteFile(soulPath, []byte(hermesSoulTemplate), 0o644); err != nil {
 		log.Printf("[factory-reset/hermes] reset SOUL.md: %v (non-fatal)", err)
 	} else {

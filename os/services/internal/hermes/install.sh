@@ -44,7 +44,8 @@ echo "[install-hermes] ===== install start $(date -u '+%Y-%m-%dT%H:%M:%SZ') (log
 HERMES_BIN="/usr/local/bin/hermes"
 HERMES_DIR="/root/.hermes"
 ENV_FILE="$HERMES_DIR/.env"
-CONFIG_YAML="$HERMES_DIR/config.yaml"
+# config.yaml is owned by the presync hook (internal/hermes/presync.sh), not this
+# installer — see the presync section below.
 
 # API_SERVER_KEY MUST equal internal/hermes/constants.go APIKey — os-server sends
 # it as the Bearer on every /v1/responses call. Mismatch ⇒ 401 on every turn.
@@ -105,9 +106,10 @@ for attempt in 1 2 3; do
   sleep 1
 done
 
-echo "[install-hermes] migrate skills from OpenClaw (model config is synced separately)"
-"$HERMES_BIN" claw migrate --preset full --overwrite --skill-conflict rename --yes --migrate-secrets \
-  || echo "[install-hermes] WARN: claw migrate failed (non-fatal — no OpenClaw state yet?)"
+# OpenClaw skill import (`hermes claw migrate`) is owned by the presync hook now —
+# it restores skills/openclaw-imports whenever that dir is empty (first install OR
+# after a factory reset wiped it). openclaw was stopped above so the presync call
+# below runs the import without racing OpenClaw's state. See presync.sh §0.
 
 mkdir -p "$HERMES_DIR"
 touch "$ENV_FILE"
@@ -127,87 +129,24 @@ EOF
 # written by the presync hook from config.json on every switch, so the device's
 # real values win.
 
-echo "[install-hermes] patch $CONFIG_YAML — only .model + .custom_providers (presync overwrites model.default/base_url from config.json)"
-# Patch in place: replace ONLY the two keys we own, preserving anything else the
-# Hermes CLI wrote to config.yaml (do not clobber the whole file). touch first so
-# yq has a doc to edit on a fresh standalone install where config.yaml is absent.
-touch "$CONFIG_YAML"
-yq -i '
-  .model = {"default": "gpt-5.5", "provider": "custom:autonomous"}
-  |
-  .custom_providers = [
-    {
-      "name": "autonomous",
-      "base_url": "https://campaign-api.autonomous.ai/api/v1/ai",
-      "key_env": "AUTONOMOUS_API_KEY",
-      "api_mode": "anthropic_messages"
-    }
-  ]
-' "$CONFIG_YAML"
-
-echo "[install-hermes] drop /usr/local/bin/runtime-hermes-presync (llm_* sync hook)"
-cat >/usr/local/bin/runtime-hermes-presync <<'PRESYNC'
-#!/usr/bin/env bash
-# runtime-hermes-presync — run by switch-runtime right before hermes starts.
-# Syncs llm_* from config.json into the Hermes config; `hermes claw migrate`
-# does NOT carry model config across, so without this Hermes runs the wrong
-# model/key/endpoint vs the device's configured AI brain.
-set -euo pipefail
-CONFIG_JSON="/root/config/config.json"
-HERMES_DIR="/root/.hermes"
-ENV_FILE="$HERMES_DIR/.env"
-CONFIG_YAML="$HERMES_DIR/config.yaml"
-log() { echo "[hermes-presync] $*"; }
-
-# config.yaml model/provider come from llm_* (structured edits via yq).
-LLM_MODEL="$(jq -r '.llm_model    // empty' "$CONFIG_JSON" 2>/dev/null || true)"
-LLM_BASE_URL="$(jq -r '.llm_base_url // empty' "$CONFIG_JSON" 2>/dev/null || true)"
-if [ -n "$LLM_MODEL" ]; then
-  yq -i ".model.default = \"$LLM_MODEL\"" "$CONFIG_YAML"
-  log "model.default = $LLM_MODEL"
+# config.yaml model wiring (static provider STRUCTURE + dynamic llm_*/channel sync
+# from config.json) is owned ENTIRELY by the presync hook, NOT patched here. The
+# hook is materialized to /usr/local/bin/runtime-hermes-presync by os-server BEFORE
+# this installer runs (see internal/hermes/presync.sh + internal/device materialize).
+# Owning it there — not in this installer — is what lets a plain os-server OTA refresh
+# it: this installer only re-runs on a first install / failed verify, so a config fix
+# baked in here would never reach an already-installed hermes. Running the hook now
+# configures this fresh install; switch-runtime re-runs it before every later start,
+# so the config self-heals (e.g. after a factory reset's `hermes setup --reset` wiped
+# .model/.custom_providers).
+PRESYNC_HOOK="/usr/local/bin/runtime-hermes-presync"
+if [ -x "$PRESYNC_HOOK" ]; then
+  echo "[install-hermes] ensure config.yaml structure + sync llm_* now (via $PRESYNC_HOOK)"
+  "$PRESYNC_HOOK" \
+    || echo "[install-hermes] WARN: presync failed (config.json missing? non-fatal — switch-runtime retries on next switch)"
+else
+  echo "[install-hermes] WARN: $PRESYNC_HOOK absent — os-server did not materialize it (standalone/offline run?); Hermes model config NOT set"
 fi
-if [ -n "$LLM_BASE_URL" ]; then
-  yq -i ".custom_providers[0].base_url = \"$LLM_BASE_URL\"" "$CONFIG_YAML"
-  log "custom_providers[0].base_url = $LLM_BASE_URL"
-fi
-
-# .env secrets/IDs: config.json wins — UPSERT each non-empty config.json field
-# into its Hermes env var (replace the existing line, or append if absent). Other
-# variables are never touched, so whatever `hermes claw migrate` carried over
-# from OpenClaw is kept as the fallback. Empty/missing config fields are skipped.
-# (Bot tokens like TELEGRAM_BOT_TOKEN usually arrive via migrate, but we still
-# sync them in case OpenClaw had none.)
-sync_env() {
-  local key="$1" var="$2" val
-  val="$(jq -r ".${key} // empty" "$CONFIG_JSON" 2>/dev/null || true)"
-  [ -n "$val" ] || return 0
-  sed -i "/^${var}=/d" "$ENV_FILE"
-  # guard against gluing onto a previous line that lacks a trailing newline
-  [ -s "$ENV_FILE" ] && [ -n "$(tail -c1 "$ENV_FILE")" ] && printf '\n' >>"$ENV_FILE"
-  echo "${var}=${val}" >>"$ENV_FILE"
-  log "${var} synced"
-}
-
-sync_env llm_api_key        AUTONOMOUS_API_KEY
-sync_env telegram_bot_token TELEGRAM_BOT_TOKEN
-sync_env telegram_user_id   TELEGRAM_ALLOWED_USERS
-sync_env slack_bot_token    SLACK_BOT_TOKEN
-sync_env slack_app_token    SLACK_APP_TOKEN
-sync_env slack_user_id      SLACK_ALLOWED_USERS
-sync_env discord_bot_token  DISCORD_BOT_TOKEN
-sync_env discord_guild_id   DISCORD_GUILD_ID
-sync_env discord_user_id    DISCORD_ALLOWED_USERS
-sync_env whatsapp_user_id   WHATSAPP_ALLOWED_USERS
-PRESYNC
-chmod +x /usr/local/bin/runtime-hermes-presync
-
-# Run the hook once now so a direct `bash install.sh` is fully configured (.env
-# AUTONOMOUS_API_KEY + config.yaml model/base_url synced from config.json),
-# instead of only on the next switch-runtime call. Later switches still re-run
-# this same hook to pick up the latest llm_* values.
-echo "[install-hermes] sync llm_* from config.json now (via runtime-hermes-presync)"
-/usr/local/bin/runtime-hermes-presync \
-  || echo "[install-hermes] WARN: presync failed (config.json missing? non-fatal — switch-runtime retries on next switch)"
 
 echo "[install-hermes] install + start hermes gateway as a system service"
 # Auto-answer the installer's interactive [Y/n] prompts. `yes` outruns the prompt

@@ -21,7 +21,7 @@ var hermesSemverRe = regexp.MustCompile(`(\d+\.\d+\.\d+(?:[-+._][0-9A-Za-z.-]+)?
 
 // hermesVersion caches the parsed Hermes CLI version. Single source of truth,
 // mirroring openclaw.openClawVersion: the MQTT `info` message reports it next to
-// openclaw_version, and the agent Status endpoint reads it via Service.Version()
+// openclaw_version, and the agent Status endpoint reads it via HermesService.Version()
 // so the web shows the active backend's version. Populated once at startup by
 // PopulateHermesVersion(); valid until the process restarts.
 var hermesVersion atomic.Pointer[string]
@@ -59,6 +59,6 @@ func PopulateHermesVersion() {
 
 // Version satisfies domain.AgentGateway.Version(): the cached Hermes CLI version,
 // or empty when undetected.
-func (s *Service) Version() string {
+func (s *HermesService) Version() string {
 	return GetHermesVersion()
 }

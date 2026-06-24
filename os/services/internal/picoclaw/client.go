@@ -33,8 +33,8 @@ const (
 
 // StartWS connects to the PicoClaw WebSocket and runs the read loop, calling
 // handler for each translated event. Runs until ctx is cancelled, auto-
-// reconnecting on drop. Mirrors the openclaw.Service.StartWS shape.
-func (s *Service) StartWS(ctx context.Context, handler domain.AgentEventHandler) {
+// reconnecting on drop. Mirrors the openclaw.PicoclawService.StartWS shape.
+func (s *PicoclawService) StartWS(ctx context.Context, handler domain.AgentEventHandler) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -73,7 +73,7 @@ func (s *Service) StartWS(ctx context.Context, handler domain.AgentEventHandler)
 
 // runWSConn dials, marks the socket ready, then pumps inbound frames through the
 // translator until the socket errors or ctx is cancelled.
-func (s *Service) runWSConn(ctx context.Context, handler domain.AgentEventHandler) error {
+func (s *PicoclawService) runWSConn(ctx context.Context, handler domain.AgentEventHandler) error {
 	s.wsConnected.Store(false)
 	s.wsConnectedAt.Store(0)
 	defer func() {
@@ -162,7 +162,7 @@ func (s *Service) runWSConn(ctx context.Context, handler domain.AgentEventHandle
 // keepAlive sends an application-level ping every pingInterval. PicoClaw replies
 // with a pong frame (ignored by the translator) which refreshes the read
 // deadline and keeps an idle socket alive.
-func (s *Service) keepAlive(ctx context.Context) {
+func (s *PicoclawService) keepAlive(ctx context.Context) {
 	tick := time.NewTicker(pingInterval)
 	defer tick.Stop()
 	for {
@@ -184,7 +184,7 @@ func (s *Service) keepAlive(ctx context.Context) {
 
 // sendFrame marshals v and writes it to the WebSocket under wsMu. Returns an
 // error when the socket is not connected.
-func (s *Service) sendFrame(v any) error {
+func (s *PicoclawService) sendFrame(v any) error {
 	body, err := json.Marshal(v)
 	if err != nil {
 		return fmt.Errorf("marshal frame: %w", err)

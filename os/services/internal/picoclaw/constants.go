@@ -2,7 +2,7 @@ package picoclaw
 
 // Wire constants for the PicoClaw backend. PicoClaw is assumed already running
 // on the Pi as a systemd service exposing a WebSocket endpoint — os-server only
-// acts as a client (no onboarding / install path; see docs/picoclaw.md).
+// acts as a client (no onboarding / install path; see docs/agentic/picoclaw.md).
 const (
 	// WSURL is the PicoClaw WebSocket endpoint. PicoClaw speaks a single
 	// message-oriented protocol over this socket (message.send out;

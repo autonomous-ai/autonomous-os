@@ -12,44 +12,44 @@ import (
 
 // SendChatMessage sends a user message to PicoClaw. Returns the run ID the
 // caller uses to correlate flow/monitor events with the resulting turn.
-func (s *Service) SendChatMessage(message string) (string, error) {
+func (s *PicoclawService) SendChatMessage(message string) (string, error) {
 	return s.sendChat(message, "", "", "", "user")
 }
 
 // SendSystemChatMessage flags the flow event as system-originated (skill watcher,
 // wake greeting, /compact). Wire payload is identical to SendChatMessage.
-func (s *Service) SendSystemChatMessage(message string) (string, error) {
+func (s *PicoclawService) SendSystemChatMessage(message string) (string, error) {
 	return s.sendChat(message, "", "", "", "system")
 }
 
-func (s *Service) SendChatMessageWithImage(message string, imageBase64 string) (string, error) {
+func (s *PicoclawService) SendChatMessageWithImage(message string, imageBase64 string) (string, error) {
 	return s.sendChat(message, imageBase64, "", "", "user")
 }
 
 // NextChatRunID allocates the run / req id pair. Same shape as openclaw/hermes so
 // logs / monitor stay identical across backends.
-func (s *Service) NextChatRunID() (reqID string, runID string) {
+func (s *PicoclawService) NextChatRunID() (reqID string, runID string) {
 	reqID = fmt.Sprintf("chat-%d", s.reqCounter.Add(1))
 	runID = fmt.Sprintf("device-%s-%d", reqID, time.Now().UnixMilli())
 	return reqID, runID
 }
 
-func (s *Service) SendChatMessageWithRun(message string, reqID string, runID string) (string, error) {
+func (s *PicoclawService) SendChatMessageWithRun(message string, reqID string, runID string) (string, error) {
 	return s.sendChat(message, "", reqID, runID, "user")
 }
 
-func (s *Service) SendChatMessageWithImageAndRun(message string, imageBase64 string, reqID string, runID string) (string, error) {
+func (s *PicoclawService) SendChatMessageWithImageAndRun(message string, imageBase64 string, reqID string, runID string) (string, error) {
 	return s.sendChat(message, imageBase64, reqID, runID, "user")
 }
 
 // SendSlashCommandWithRun — PicoClaw has no per-channel "deliver:false" flag, so
 // slash commands look the same as any other user input on the wire. We still tag
 // the flow source so logs distinguish web-monitor input from voice.
-func (s *Service) SendSlashCommandWithRun(message string, reqID string, runID string) (string, error) {
+func (s *PicoclawService) SendSlashCommandWithRun(message string, reqID string, runID string) (string, error) {
 	return s.sendChat(message, "", reqID, runID, "user_slash")
 }
 
-func (s *Service) SendSlashCommandWithImageAndRun(message string, imageBase64 string, reqID string, runID string) (string, error) {
+func (s *PicoclawService) SendSlashCommandWithImageAndRun(message string, imageBase64 string, reqID string, runID string) (string, error) {
 	return s.sendChat(message, imageBase64, reqID, runID, "user_slash")
 }
 
@@ -57,7 +57,7 @@ func (s *Service) SendSlashCommandWithImageAndRun(message string, imageBase64 st
 // chat_input / chat_send flow events for parity with openclaw, and writes the
 // message.send frame to the persistent WebSocket. The reply arrives on the read
 // loop and is translated there — this returns as soon as the frame is sent.
-func (s *Service) sendChat(message, imageBase64, fixedReqID, fixedRunID, sourceType string) (string, error) {
+func (s *PicoclawService) sendChat(message, imageBase64, fixedReqID, fixedRunID, sourceType string) (string, error) {
 	if !s.wsConnected.Load() {
 		return "", fmt.Errorf("picoclaw not connected")
 	}
