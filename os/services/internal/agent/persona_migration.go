@@ -77,24 +77,26 @@ func appendAgentRuntime(path, runtime string) error {
 	return nil
 }
 
-// Persona migration coordination.
-func migrationDirection(prev, current string) (migratepersona.Direction, bool) {
-	switch {
-	case prev == "openclaw" && current == "hermes":
-		return migratepersona.OpenclawToHermes, true
-	case prev == "hermes" && current == "openclaw":
-		return migratepersona.HermesToOpenclaw, true
-	default:
-		return "", false
+// Persona migration coordination. A switch is migratable when BOTH runtimes have
+// a registered persona adapter (CanMigrate). This is hub-driven: adding a new
+// device-local runtime needs only its adapter — no new direction enum, no change
+// here. External runtimes (e.g. PicoClaw) have no adapter, so switches to/from
+// them are skipped, not migrated.
+func migrationRuntimes(prev, current string) (from, to migratepersona.Runtime, ok bool) {
+	from, to = migratepersona.Runtime(prev), migratepersona.Runtime(current)
+	if migratepersona.CanMigrate(from) && migratepersona.CanMigrate(to) {
+		return from, to, true
 	}
+	return "", "", false
 }
 
 // PersonaMigration tracks agent runtime changes and handles persona + memory migration.
 type PersonaMigration struct {
-	Prev      string                   // last recorded runtime ("" on first boot)
-	Current   string                   // runtime the gateway is starting now
-	Direction migratepersona.Direction // valid only when Needed
-	Needed    bool                     // true when a supported switch was detected
+	Prev    string                 // last recorded runtime ("" on first boot)
+	Current string                 // runtime the gateway is starting now
+	From    migratepersona.Runtime // migration source; valid only when Needed
+	To      migratepersona.Runtime // migration destination; valid only when Needed
+	Needed  bool                   // true when a supported switch was detected
 
 	firstBoot bool
 	statePath string
@@ -137,9 +139,10 @@ func ProvidePersonaMigration(cfg *config.Config) *PersonaMigration {
 	case pm.Prev == current:
 		// nothing
 	default:
-		if dir, ok := migrationDirection(pm.Prev, current); ok {
+		if from, to, ok := migrationRuntimes(pm.Prev, current); ok {
 			pm.Needed = true
-			pm.Direction = dir
+			pm.From = from
+			pm.To = to
 		} else {
 			slog.Info("agent runtime switched but no persona migrator for this pair; skipping",
 				"component", "agent", "from", pm.Prev, "to", current)
@@ -161,8 +164,9 @@ func (p *PersonaMigration) Reconcile() {
 
 	if p.Needed {
 		slog.Info("agent runtime switched — migrating persona + memory",
-			"component", "agent", "from", p.Prev, "to", p.Current, "direction", string(p.Direction))
-		rep, err := migratepersona.Run(p.Direction, p.opts)
+			"component", "agent", "from", p.Prev, "to", p.Current,
+			"direction", string(p.From)+"_to_"+string(p.To))
+		rep, err := migratepersona.RunMigration(p.From, p.To, p.opts)
 		switch {
 		case err != nil:
 			slog.Error("persona migration failed to run; agent keeps its existing persona",

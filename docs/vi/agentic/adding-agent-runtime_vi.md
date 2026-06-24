@@ -135,9 +135,24 @@ nặng trong khi presync tự lành đủ rồi.
 
 ## 4. Migrate persona + memory (Go, chạy mỗi switch)
 
-Thêm `internal/agent/migrate_persona/openclaw_to_<name>.go` và chiều ngược. Nó
-chạy lúc os-server boot sau một switch thật (`Reconcile`, khi `agent_state.json`
-prev ≠ current). Mang gì:
+**Hub-and-spoke, không phải per-pair.** Migration đi qua một `PersonaBundle`
+trung lập: mỗi runtime có MỘT adapter **read** (layout đĩa → bundle) và MỘT
+adapter **write** (bundle → layout), trong
+`internal/agent/migrate_persona/runtime_<name>.go`. Migrate = `read[from] →
+write[to]` (`RunMigration(from, to, opts)`). Nên thêm runtime = **đúng 1 file
+adapter**, tự động chạy với mọi runtime sẵn có, cả 2 chiều — số file **tuyến tính
+(2/runtime)**, không phải N×(N-1) như per-pair. Đăng ký adapter vào map `adapters`
+trong `migrator.go`; không cần `Direction` enum mới. Runtime không có adapter
+(persona external/out-of-band, vd PicoClaw) bị `CanMigrate` bỏ qua — switch
+tới/từ nó không migrate.
+
+> **Template copy-là-chạy:** `internal/agent/migrate_persona/runtime_example.go` là
+> skeleton build-ignored, comment đầy đủ — copy sang `runtime_<name>.go`, xóa dòng
+> `//go:build ignore`, rồi điền 5 bước wiring + read/write. Nó ghi sẵn quyết định
+> từng field (slot riêng vs inline vs fold) ngay trong comment.
+
+Chạy lúc os-server boot sau switch thật (`Reconcile`, khi `agent_state.json`
+prev ≠ current). Mỗi adapter mang gì:
 
 - **SOUL.md** → file identity của backend. Nếu backend **không có slot IDENTITY.md
   riêng** (Hermes không có), inline các field IDENTITY đã điền của owner thành
@@ -280,10 +295,11 @@ Dùng metadata nền tảng runtime-agnostic trong `internal/skills`:
       materialize bởi os-server mỗi switch. Không gì reset-fragile chỉ nằm trong
       `install.sh`.
 - [ ] `verify` hook rẻ (CLI có mặt), không phải structure-check.
-- [ ] `migrate_persona/openclaw_to_<name>.go` + chiều ngược: SOUL(+inline identity),
-      MEMORY+daily+KNOWLEDGE (fold vào file backend LOAD THEO TÊN), USER;
-      `Overwrite=true`; chiều ngược strip artifact riêng-backend VÀ restore mỗi
-      field đã inline ở chiều xuôi về slot gốc (vd identity → IDENTITY.md).
+- [ ] `migrate_persona/runtime_<name>.go` (copy `runtime_example.go`): MỘT adapter
+      read + MỘT write (bundle ↔ layout), đăng ký vào map `adapters`. `read` xuất SOUL, field identity,
+      MEMORY/USER, và slot KNOWLEDGE/daily nếu có; `write` restore từng cái về slot
+      gốc (identity → file riêng, hoặc inline nếu không có slot) và fold slot mà
+      backend thiếu. `Overwrite=true` cho SOUL. Không cần `Direction` enum mới.
 - [ ] Skills: copy-import + **restore-trong-presync** (guard) + `skill_watcher.go`
       (song song openclaw, share `internal/skills/skillzip.go`).
 - [ ] Hooks: native-backend hoặc OS-side — đã quyết & ghi (không thiếu âm thầm).

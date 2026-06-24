@@ -137,9 +137,25 @@ is empty). Keep `verify` CLI-only (`command -v <bin>`) — a structure-check in
 
 ## 4. Persona + memory migration (Go, runs every switch)
 
-Add `internal/agent/migrate_persona/openclaw_to_<name>.go` and the reverse. It runs
-at os-server boot after a real switch (`Reconcile`, when `agent_state.json`
-prev ≠ current). What to carry:
+**Hub-and-spoke, not per-pair.** Migration goes through a runtime-neutral
+`PersonaBundle`: each runtime has ONE **read** adapter (its on-disk layout →
+bundle) and ONE **write** adapter (bundle → its layout), in
+`internal/agent/migrate_persona/runtime_<name>.go`. A migration is
+`read[from] → write[to]` (`RunMigration(from, to, opts)`). So adding a runtime is
+**one adapter file** that interoperates with every existing runtime in both
+directions — file count is **linear (2 per runtime)**, not the quadratic N×(N-1)
+a per-pair migrator needs. Register the adapter in the `adapters` map in
+`migrator.go`; nothing else changes (no new `Direction` enum). A runtime with no
+registered adapter (external/out-of-band persona, e.g. PicoClaw) is simply
+skipped by `CanMigrate` — switches to/from it don't migrate.
+
+> **Copy-me template:** `internal/agent/migrate_persona/runtime_example.go` is a
+> build-ignored, fully-annotated skeleton — copy it to `runtime_<name>.go`, delete
+> the `//go:build ignore` line, and fill in the 5 wiring steps + read/write. It
+> spells out the per-field decision (separate slot vs inline vs fold) inline.
+
+Migration runs at os-server boot after a real switch (`Reconcile`, when
+`agent_state.json` prev ≠ current). What each adapter carries:
 
 - **SOUL.md** → backend's identity file. If the backend has **no separate
   IDENTITY.md slot** (Hermes doesn't), inline the owner's filled IDENTITY fields
@@ -290,10 +306,11 @@ Use the runtime-agnostic platform metadata in `internal/skills`:
       materialized by os-server every switch. Nothing reset-fragile lives only in
       `install.sh`.
 - [ ] `verify` hook is cheap (CLI presence), not a structure check.
-- [ ] `migrate_persona/openclaw_to_<name>.go` + reverse: SOUL(+identity inline),
-      MEMORY+daily+KNOWLEDGE (folded into a file the backend LOADS BY NAME), USER;
-      `Overwrite=true`; reverse strips backend-only artifacts AND restores each
-      forward-inlined field into its native slot (e.g. identity → IDENTITY.md).
+- [ ] `migrate_persona/runtime_<name>.go` (copy `runtime_example.go`): ONE read +
+      ONE write adapter (bundle ↔ layout), registered in the `adapters` map. `read` surfaces SOUL, identity
+      fields, MEMORY/USER, and any KNOWLEDGE/daily slots; `write` restores each to
+      its native slot (identity → its own file, or inline if no slot) and folds
+      slots the backend lacks. `Overwrite=true` for SOUL. No new `Direction` enum.
 - [ ] Skills: copy-import + **restore-in-presync** (guarded) + `skill_watcher.go`
       (parallel to openclaw, shared `internal/skills/skillzip.go`).
 - [ ] Hooks: backend-native or OS-side — decided & documented (not silently absent).

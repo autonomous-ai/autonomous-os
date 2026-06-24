@@ -236,6 +236,58 @@ func TestMigrate_CreatesIdentityWhenAbsentOnReverseSwitch(t *testing.T) {
 	}
 }
 
+// Hub round-trip: openclaw → hermes → openclaw on one device must preserve the
+// owner's name (restored to IDENTITY.md), the soul body, and memory content
+// (folded into Hermes MEMORY then carried back). Exercises the runtime-keyed
+// RunMigration entry point both ways.
+func TestRoundTrip_OpenclawHermesOpenclaw_PreservesContent(t *testing.T) {
+	cfgDir := t.TempDir()
+	hermesRoot := t.TempDir()
+	ws := filepath.Join(cfgDir, "workspace")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(p, s string) {
+		if err := os.WriteFile(filepath.Join(ws, p), []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("SOUL.md", "# Soul\n\nYou are **Lamp** — a living being on the desk.\n")
+	write("IDENTITY.md", "# IDENTITY.md\n\n- **Name:** Ngân\n")
+	write("MEMORY.md", "- Owner sleeps late on weekends.\n")
+	write("KNOWLEDGE.md", "# KNOWLEDGE.md\n\n## Hardware\n\n- Servo elbow jitters above 60 degrees.\n")
+
+	opts := DefaultOptions(cfgDir, hermesRoot)
+	opts.Execute = true
+	opts.Overwrite = true
+
+	if _, err := RunMigration(RuntimeOpenclaw, RuntimeHermes, opts); err != nil {
+		t.Fatalf("forward: %v", err)
+	}
+	if _, err := RunMigration(RuntimeHermes, RuntimeOpenclaw, opts); err != nil {
+		t.Fatalf("reverse: %v", err)
+	}
+
+	id, _ := os.ReadFile(filepath.Join(ws, "IDENTITY.md"))
+	if !strings.Contains(string(id), "- **Name:** Ngân") {
+		t.Errorf("name lost on round-trip:\n%s", id)
+	}
+	soul, _ := os.ReadFile(filepath.Join(ws, "SOUL.md"))
+	if !strings.Contains(string(soul), "You are **Lamp**") {
+		t.Errorf("soul body lost on round-trip:\n%s", soul)
+	}
+	if strings.Contains(string(soul), identityCardHeading) {
+		t.Errorf("identity card leaked into openclaw soul:\n%s", soul)
+	}
+	mem, _ := os.ReadFile(filepath.Join(ws, "MEMORY.md"))
+	if !strings.Contains(string(mem), "Servo elbow jitters above 60 degrees.") {
+		t.Errorf("knowledge content lost on round-trip:\n%s", mem)
+	}
+	if !strings.Contains(string(mem), "Owner sleeps late") {
+		t.Errorf("memory content lost on round-trip:\n%s", mem)
+	}
+}
+
 func TestBuildIdentityBlock_MissingFile(t *testing.T) {
 	if got := buildIdentityBlock(filepath.Join(t.TempDir(), "nope.md")); got != "" {
 		t.Fatalf("expected empty for missing file, got %q", got)
