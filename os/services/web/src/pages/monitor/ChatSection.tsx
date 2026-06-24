@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, useCallback, type ReactNode } from "react";
 import {
-  Paperclip, X, Copy, Check, RotateCcw, Download, ArrowDown,
+  Paperclip, X, Copy, Check, RotateCcw, Download, ArrowDown, ArrowUp,
   Pin, ChevronRight, Sparkles, Plus, Trash2, History,
   Wrench, Lightbulb, Cog, Music, Palette, Search, Smile, ChevronDown,
 } from "lucide-react";
 import { API } from "./types";
 import { getDeviceConfig } from "@/lib/api";
+import { useT, setLanguage } from "@/lib/i18n";
 import type { DisplayEvent, MonitorEvent } from "./types";
 
 // ─── Markdown ───────────────────────────────────────────────────────────────
@@ -22,7 +23,7 @@ function renderInline(line: string, keyPrefix: string): ReactNode[] {
     if (match[2]) parts.push(<strong key={k}>{match[2]}</strong>);
     else if (match[3]) parts.push(<em key={k}>{match[3]}</em>);
     else if (match[4]) parts.push(<del key={k} style={{ opacity: 0.6 }}>{match[4]}</del>);
-    else if (match[5]) parts.push(<code key={k} style={{ background: "var(--lm-surface)", padding: "1px 5px", borderRadius: 3, fontSize: "0.9em" }}>{match[5]}</code>);
+    else if (match[5]) parts.push(<code key={k} style={{ background: "color-mix(in srgb, var(--lm-amber) 12%, var(--lm-surface))", color: "var(--lm-amber)", padding: "1.5px 5px", borderRadius: 4, fontSize: "0.86em", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", border: "1px solid color-mix(in srgb, var(--lm-amber) 18%, transparent)" }}>{match[5]}</code>);
     else if (match[6]) parts.push(<a key={k} href={match[6]} target="_blank" rel="noopener noreferrer" style={{ color: "var(--lm-teal)", textDecoration: "underline" }}>{match[6].length > 50 ? match[6].slice(0, 50) + "…" : match[6]}</a>);
     last = match.index + match[0].length;
   }
@@ -47,11 +48,13 @@ function renderMarkdown(text: string): ReactNode {
       if (i < lines.length) i++; // skip closing ```
       result.push(
         <pre key={`cb-${i}`} style={{
-          background: "var(--lm-bg)", padding: "8px 12px", borderRadius: 6,
-          fontSize: "0.85em", overflowX: "auto", margin: "4px 0",
+          background: "var(--lm-bg)", padding: "10px 13px", borderRadius: 8,
+          fontSize: "0.82em", lineHeight: 1.5, overflowX: "auto", margin: "6px 0",
           border: "1px solid var(--lm-border)", whiteSpace: "pre-wrap", wordBreak: "break-word",
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          color: "var(--lm-text-dim)",
         }}>
-          <code>{codeLines.join("\n")}</code>
+          <code style={{ fontFamily: "inherit" }}>{codeLines.join("\n")}</code>
         </pre>,
       );
       continue;
@@ -111,26 +114,34 @@ function renderMarkdown(text: string): ReactNode {
         i++;
       }
       result.push(
-        <div key={`tw-${i}`} style={{ overflowX: "auto", margin: "4px 0" }}>
+        <div key={`tw-${i}`} style={{
+          overflowX: "auto", margin: "6px 0",
+          border: "1px solid var(--lm-border)", borderRadius: 8,
+        }}>
           <table style={{
-            borderCollapse: "collapse", fontSize: "0.9em", width: "100%",
+            borderCollapse: "collapse", fontSize: "0.88em", width: "100%",
           }}>
             <thead>
               <tr>
                 {headerCells.map((h, ci) => (
                   <th key={ci} style={{
-                    padding: "4px 8px", borderBottom: "1px solid var(--lm-border)",
-                    textAlign: "left", fontWeight: 600, fontSize: "0.9em",
+                    padding: "6px 10px", borderBottom: "1px solid var(--lm-border-hi)",
+                    background: "color-mix(in srgb, var(--lm-amber) 8%, var(--lm-surface))",
+                    textAlign: "left", fontWeight: 700, fontSize: "0.92em",
+                    color: "var(--lm-text)", whiteSpace: "nowrap",
                   }}>{renderInline(h, `th-${i}-${ci}`)}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {rows.map((row, ri) => (
-                <tr key={ri}>
+                <tr key={ri} style={{
+                  background: ri % 2 === 1 ? "color-mix(in srgb, var(--lm-text) 3%, transparent)" : "transparent",
+                }}>
                   {row.map((cell, ci) => (
                     <td key={ci} style={{
-                      padding: "3px 8px", borderBottom: "1px solid var(--lm-border)",
+                      padding: "5px 10px",
+                      borderBottom: ri < rows.length - 1 ? "1px solid var(--lm-border)" : "none",
                     }}>{renderInline(cell, `td-${i}-${ri}-${ci}`)}</td>
                   ))}
                 </tr>
@@ -146,10 +157,10 @@ function renderMarkdown(text: string): ReactNode {
     if (/^[\-\*]\s/.test(lines[i])) {
       const items: ReactNode[] = [];
       while (i < lines.length && /^[\-\*]\s/.test(lines[i])) {
-        items.push(<li key={`li-${i}`}>{renderInline(lines[i].replace(/^[\-\*]\s/, ""), `ul-${i}`)}</li>);
+        items.push(<li key={`li-${i}`} style={{ margin: "2px 0", lineHeight: 1.55, paddingLeft: 2 }}>{renderInline(lines[i].replace(/^[\-\*]\s/, ""), `ul-${i}`)}</li>);
         i++;
       }
-      result.push(<ul key={`ul-${i}`} style={{ margin: "4px 0", paddingLeft: 20 }}>{items}</ul>);
+      result.push(<ul key={`ul-${i}`} style={{ margin: "5px 0", paddingLeft: 22 }}>{items}</ul>);
       continue;
     }
 
@@ -157,10 +168,10 @@ function renderMarkdown(text: string): ReactNode {
     if (/^\d+\.\s/.test(lines[i])) {
       const items: ReactNode[] = [];
       while (i < lines.length && /^\d+\.\s/.test(lines[i])) {
-        items.push(<li key={`oli-${i}`}>{renderInline(lines[i].replace(/^\d+\.\s/, ""), `ol-${i}`)}</li>);
+        items.push(<li key={`oli-${i}`} style={{ margin: "2px 0", lineHeight: 1.55, paddingLeft: 2 }}>{renderInline(lines[i].replace(/^\d+\.\s/, ""), `ol-${i}`)}</li>);
         i++;
       }
-      result.push(<ol key={`ol-${i}`} style={{ margin: "4px 0", paddingLeft: 20 }}>{items}</ol>);
+      result.push(<ol key={`ol-${i}`} style={{ margin: "5px 0", paddingLeft: 22 }}>{items}</ol>);
       continue;
     }
 
@@ -200,6 +211,17 @@ const TOOL_EVENT_TYPES = new Set(["tool_call", "hw_emotion", "hw_led", "hw_audio
 // Tools that route through hw_* events already — skip the generic tool_call
 // chip for them to avoid duplicates.
 const HW_SHADOW_TOOLS = new Set(["set_emotion", "set_led", "play_music", "move_servo"]);
+
+// Starter prompts shown on the empty chat screen. Clicking one fills the
+// composer (not auto-send) so the user can tweak before sending. Kept short and
+// device-flavoured (music, status, LED) to hint at what the assistant can do.
+// `key` resolves to the localized text via i18n at render time.
+const CHAT_SUGGESTIONS: { icon: ReactNode; key: string }[] = [
+  { icon: <Music size={14} />, key: "chat.suggest.music" },
+  { icon: <Smile size={14} />, key: "chat.suggest.howAreYou" },
+  { icon: <Lightbulb size={14} />, key: "chat.suggest.warmLight" },
+  { icon: <Sparkles size={14} />, key: "chat.suggest.whatCanYouDo" },
+];
 
 // Map a tool name to which lucide icon best represents it. web_search and
 // similar lookup tools get a search icon, the rest fall back to Wrench.
@@ -482,6 +504,9 @@ interface Props {
 }
 
 export function ChatSection({ events, isActive }: Props) {
+  // Language-aware string lookup; re-renders when the active language resolves
+  // from the device config (see lib/i18n).
+  const t = useT();
   const [convos, setConvos] = useState<Conversation[]>(loadConvos);
   const [activeId, setActiveId] = useState<string | null>(() => {
     const saved = loadActiveId();
@@ -507,6 +532,10 @@ export function ChatSection({ events, isActive }: Props) {
   useEffect(() => {
     getDeviceConfig()
       .then((cfg) => {
+        // Keep the UI language in sync with the device's STT language. App.tsx
+        // also sets this on first load; doing it here too covers the case where
+        // the chat is reached without that gate having resolved config yet.
+        setLanguage(cfg.stt_language);
         const primary = cfg.llm_model;
         if (!primary) return;
         // Strip provider prefix and collapse Anthropic's trailing version
@@ -1323,6 +1352,9 @@ export function ChatSection({ events, isActive }: Props) {
       })
     : convos;
   const grouped = groupConvosByDate(filtered);
+  // Single timestamp reference for all relative-time labels this render, so
+  // rows in the same list stay consistent.
+  const nowTs = Date.now();
 
   // ─── Render ─────────────────────────────────────────────────────────────
 
@@ -1397,12 +1429,28 @@ export function ChatSection({ events, isActive }: Props) {
             </div>
           )}
           {grouped.map(({ label, items }) => (
-            <div key={label} style={{ marginBottom: 6 }}>
+            <div key={label} style={{ marginBottom: 8 }}>
               <div style={{
-                fontSize: 9.5, fontWeight: 700, color: "var(--lm-text-muted)",
-                padding: "10px 6px 6px", textTransform: "uppercase", letterSpacing: "0.06em",
+                display: "flex", alignItems: "center", gap: 7,
+                padding: "10px 6px 6px",
               }}>
-                {label}
+                <span style={{
+                  fontSize: 9.5, fontWeight: 700, color: "var(--lm-text-muted)",
+                  textTransform: "uppercase", letterSpacing: "0.06em",
+                }}>
+                  {label === "Pinned" ? (
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                      <Pin size={9} fill="currentColor" /> {label}
+                    </span>
+                  ) : label}
+                </span>
+                {/* Hairline divider + count so each date group reads as a
+                    distinct section without heavy chrome. */}
+                <span style={{ flex: 1, height: 1, background: "var(--lm-border)", opacity: 0.6 }} />
+                <span style={{
+                  fontSize: 9, fontWeight: 600, color: "var(--lm-text-muted)",
+                  opacity: 0.7,
+                }}>{items.length}</span>
               </div>
               {items.map((c) => {
                 const isActive = c.id === activeId;
@@ -1413,16 +1461,26 @@ export function ChatSection({ events, isActive }: Props) {
                   onClick={() => switchTo(c.id)}
                   onMouseEnter={() => setHoveredConvoId(c.id)}
                   onMouseLeave={() => setHoveredConvoId((cur) => (cur === c.id ? null : cur))}
+                  className="lm-convo-row"
                   style={{
                     position: "relative",
-                    padding: "8px 10px", borderRadius: 7, cursor: "pointer",
+                    padding: "8px 10px 8px 12px", borderRadius: 8, cursor: "pointer",
                     background: isActive
                       ? "color-mix(in srgb, var(--lm-amber) 14%, transparent)"
                       : isHovered ? "color-mix(in srgb, var(--lm-text) 4%, transparent)" : "transparent",
-                    marginBottom: 2,
+                    marginBottom: 3,
                     transition: "background 0.15s",
                   }}
                 >
+                  {/* Active rail — amber vertical bar on the left edge marking the
+                      open conversation (Linear/Slack style). */}
+                  {isActive && (
+                    <span style={{
+                      position: "absolute", left: 0, top: 7, bottom: 7, width: 3,
+                      borderRadius: 999, background: "var(--lm-amber)",
+                      boxShadow: "0 0 8px -1px var(--lm-amber-glow)",
+                    }} />
+                  )}
                   {/* Pin badge — small inline marker top-right when pinned */}
                   {c.pinned && !isHovered && (
                     <span style={{
@@ -1431,7 +1489,16 @@ export function ChatSection({ events, isActive }: Props) {
                       pointerEvents: "none",
                     }}><Pin size={10} fill="currentColor" /></span>
                   )}
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {/* Per-conversation avatar dot — deterministic on-palette hue
+                        so the list is quicker to scan. */}
+                    <span style={{
+                      flexShrink: 0, width: 7, height: 7, borderRadius: "50%",
+                      background: convoColor(c.id),
+                      boxShadow: isActive ? `0 0 6px -1px ${convoColor(c.id)}` : "none",
+                      opacity: isActive || isHovered ? 1 : 0.65,
+                      transition: "opacity 0.15s",
+                    }} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       {editingId === c.id ? (
                         <input
@@ -1448,18 +1515,30 @@ export function ChatSection({ events, isActive }: Props) {
                           }}
                         />
                       ) : (
-                        <div
-                          onDoubleClick={(e) => { e.stopPropagation(); startRename(c); }}
-                          title="Double-click to rename"
-                          style={{
-                            fontSize: 12.5,
-                            color: isActive ? "var(--lm-amber)" : "var(--lm-text)",
-                            whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                            fontWeight: isActive ? 600 : 500,
-                            paddingRight: c.pinned ? 14 : 0,
-                          }}
-                        >
-                          {c.title}
+                        <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                          <div
+                            onDoubleClick={(e) => { e.stopPropagation(); startRename(c); }}
+                            title="Double-click to rename"
+                            style={{
+                              flex: 1, minWidth: 0,
+                              fontSize: 12.5,
+                              color: isActive ? "var(--lm-amber)" : "var(--lm-text)",
+                              whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                              fontWeight: isActive ? 600 : 500,
+                              paddingRight: c.pinned ? 14 : 0,
+                            }}
+                          >
+                            {c.title}
+                          </div>
+                          {/* Relative timestamp — hidden on hover so it doesn't
+                              collide with the pin badge / action buttons. */}
+                          {!isHovered && (
+                            <span style={{
+                              flexShrink: 0, fontSize: 9.5, fontWeight: 500,
+                              color: "var(--lm-text-muted)",
+                              paddingRight: c.pinned ? 12 : 0,
+                            }}>{relativeTime(c.createdAt, nowTs, t)}</span>
+                          )}
                         </div>
                       )}
                       {c.messages.length > 0 && (
@@ -1506,7 +1585,7 @@ export function ChatSection({ events, isActive }: Props) {
           ))}
         </div>
         {convos.length > 1 && (
-          <div style={{ padding: "10px 14px", borderTop: "1px solid var(--lm-border)" }}>
+          <div style={{ padding: "8px 12px 12px", borderTop: "1px solid var(--lm-border)" }}>
             <button
               onClick={() => {
                 if (confirm(`Delete all ${convos.filter((c) => !c.pinned).length} unpinned conversations?`)) {
@@ -1515,14 +1594,15 @@ export function ChatSection({ events, isActive }: Props) {
                 }
               }}
               style={{
-                width: "100%", padding: "6px 0", borderRadius: 6,
-                background: "none", border: "1px solid var(--lm-border)",
-                color: "var(--lm-text-muted)", fontSize: 10.5, cursor: "pointer",
-                transition: "all 0.15s",
+                width: "100%", padding: "7px 0", borderRadius: 7,
+                background: "transparent", border: "1px solid transparent",
+                color: "var(--lm-text-muted)", fontSize: 10.5, fontWeight: 500, cursor: "pointer",
+                display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5,
+                transition: "color 0.15s, background 0.15s, border-color 0.15s",
               }}
-              onMouseEnter={(e) => { e.currentTarget.style.color = "var(--lm-red)"; e.currentTarget.style.borderColor = "var(--lm-red)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.color = "var(--lm-text-muted)"; e.currentTarget.style.borderColor = "var(--lm-border)"; }}
-            >Clear all unpinned</button>
+              onMouseEnter={(e) => { e.currentTarget.style.color = "var(--lm-red)"; e.currentTarget.style.background = "color-mix(in srgb, var(--lm-red) 10%, transparent)"; e.currentTarget.style.borderColor = "color-mix(in srgb, var(--lm-red) 25%, transparent)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = "var(--lm-text-muted)"; e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "transparent"; }}
+            ><Trash2 size={11} /> Clear all unpinned</button>
           </div>
         )}
       </div>
@@ -1530,6 +1610,7 @@ export function ChatSection({ events, isActive }: Props) {
 
       {/* ── Chat area ── */}
       <div
+        className="lm-chat-panel"
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
         onDrop={onDrop}
@@ -1558,17 +1639,40 @@ export function ChatSection({ events, isActive }: Props) {
           display: "flex", alignItems: "center", justifyContent: "space-between",
           background: "var(--lm-sidebar)", minHeight: 44, gap: 12,
         }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0, flex: 1 }}>
-            <Sparkles size={15} style={{ color: "var(--lm-amber)", flexShrink: 0 }} />
-            <span style={{
-              fontSize: 14,
-              color: active ? "var(--lm-text)" : "var(--lm-text-muted)",
-              fontWeight: 700,
-              letterSpacing: "-0.01em",
-              whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-            }}>
-              {active ? active.title : "Select or start a chat"}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, flex: 1 }}>
+            {/* Assistant presence: a breathing amber orb + live status dot. Gives
+                the chat a "someone's here" feel and a clear thinking/idle cue. */}
+            <span className={sending ? "lm-orb-ring" : undefined} style={{ position: "relative", flexShrink: 0, display: "inline-flex" }}>
+              <span
+                className={`lm-assistant-orb${sending ? " lm-orb-live" : ""}`}
+                style={{ width: 26, height: 26 }}
+              >
+                <Sparkles size={13} />
+              </span>
+              <span
+                className={`lm-status-dot${sending ? " lm-thinking" : ""}`}
+                style={{ position: "absolute", right: -1, bottom: -1 }}
+              />
             </span>
+            <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+              <span style={{
+                fontSize: 14,
+                color: active ? "var(--lm-text)" : "var(--lm-text-muted)",
+                fontWeight: 700,
+                letterSpacing: "-0.01em",
+                lineHeight: 1.2,
+                whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+              }}>
+                {active ? active.title : "Select or start a chat"}
+              </span>
+              <span style={{
+                fontSize: 10, fontWeight: 600, lineHeight: 1.2,
+                color: sending ? "var(--lm-amber)" : "var(--lm-text-dim)",
+                whiteSpace: "nowrap",
+              }}>
+                {sending ? t("chat.status.thinking") : t("chat.status.online")}
+              </span>
+            </div>
           </div>
           {/* Header actions — Export + History sharing the same pill style for a
               uniform right-side toolbar. */}
@@ -1610,16 +1714,56 @@ export function ChatSection({ events, isActive }: Props) {
         <div
           ref={scrollContainerRef}
           onScroll={onScroll}
-          style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "20px 16px 8px" }}
+          style={{
+            flex: 1, minHeight: 0, overflowY: "auto", padding: "20px 16px 8px",
+            display: "flex", flexDirection: "column",
+          }}
         >
-          <div style={{ maxWidth: 760, margin: "0 auto", width: "100%", display: "flex", flexDirection: "column", gap: 12 }}>
+          {/* When there are messages, marginTop:auto anchors a short thread to
+              the bottom of the viewport (iMessage/ChatGPT style) instead of
+              floating at the top with empty space below; once it overflows it
+              scrolls normally. Empty state keeps full auto-centering so the
+              greeting sits in the middle. */}
+          <div style={{ maxWidth: 760, margin: messages.length === 0 ? "auto" : "auto auto 0", width: "100%", display: "flex", flexDirection: "column", gap: 12 }}>
           {messages.length === 0 && (
-            <div style={{ margin: "auto", textAlign: "center", color: "var(--lm-text-muted)", fontSize: 13, lineHeight: 1.8 }}>
-              <div style={{ marginBottom: 10, display: "flex", justifyContent: "center", color: "var(--lm-amber)" }}>
-                <Sparkles size={28} />
+            <div style={{ margin: "auto", textAlign: "center", color: "var(--lm-text-dim)", maxWidth: 460 }}>
+              {/* Large breathing lamp orb — the device's "presence" greeting the
+                  user in an otherwise empty room. */}
+              <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
+                <span className="lm-assistant-orb lm-orb-live" style={{ width: 56, height: 56 }}>
+                  <Sparkles size={26} />
+                </span>
               </div>
-              <div>Chat with Assistant</div>
-              <div style={{ fontSize: 11, marginTop: 4 }}>Type a message or press Shift+Enter for multi-line</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "var(--lm-text)", letterSpacing: "-0.01em" }}>
+                {t("chat.empty.title")}
+              </div>
+              <div style={{ fontSize: 12.5, marginTop: 5, lineHeight: 1.6 }}>
+                {t("chat.empty.subtitle")}
+              </div>
+              {/* Suggestion chips — click fills the composer so the user can edit
+                  before sending. Lowers the blank-page barrier. */}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center", marginTop: 16 }}>
+                {CHAT_SUGGESTIONS.map((s) => {
+                  const label = t(s.key);
+                  return (
+                  <button
+                    key={s.key}
+                    onClick={() => { setInput(label); setTimeout(() => textareaRef.current?.focus(), 0); }}
+                    className="lm-suggestion-chip"
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: 7,
+                      padding: "8px 13px", borderRadius: 999,
+                      background: "var(--lm-card)", border: "1px solid var(--lm-border)",
+                      color: "var(--lm-text)", fontSize: 12.5, cursor: "pointer",
+                      fontFamily: "inherit",
+                    }}
+                  >
+                    <span style={{ color: "var(--lm-amber)", display: "inline-flex" }}>{s.icon}</span>
+                    {label}
+                  </button>
+                  );
+                })}
+              </div>
             </div>
           )}
           {messages.map((msg, i) => {
@@ -1638,12 +1782,29 @@ export function ChatSection({ events, isActive }: Props) {
               )}
               <div
                 className="lm-chat-msg"
+                data-role={msg.role}
                 style={{ display: "flex", flexDirection: msg.role === "user" ? "row-reverse" : "row", alignItems: "flex-end" }}
               >
+              {/* Assistant avatar gutter — small breathing orb aligned to the
+                  bubble's bottom. Only on the agent side; rendered as a spacer
+                  for follow-up agent turns so bubbles stay aligned. */}
+              {msg.role === "agent" && (() => {
+                const isFirstOfTurn = i === 0 || messages[i - 1]?.role === "user";
+                return (
+                  <div style={{ width: 26, flexShrink: 0, marginRight: 8, display: "flex", justifyContent: "center" }}>
+                    {isFirstOfTurn && (
+                      <span
+                        className={`lm-assistant-orb${msg.pending ? " lm-orb-live" : ""}`}
+                        style={{ width: 26, height: 26 }}
+                      ><Sparkles size={13} /></span>
+                    )}
+                  </div>
+                );
+              })()}
               <div style={{ maxWidth: msg.role === "user" ? "72%" : "85%", display: "flex", flexDirection: "column", alignItems: msg.role === "user" ? "flex-end" : "flex-start", gap: 3 }}>
                 {/* Sender label for first device message or after user message */}
                 {msg.role === "agent" && (i === 0 || messages[i - 1]?.role === "user") && (
-                  <span style={{ fontSize: 10, color: "var(--lm-amber)", fontWeight: 600, paddingLeft: 4 }}>Assistant</span>
+                  <span style={{ fontSize: 11, color: "var(--lm-amber)", fontWeight: 600, letterSpacing: "0.01em", paddingLeft: 4 }}>Assistant</span>
                 )}
                 {/* Thinking indicator — shown only for the active pending message */}
                 {msg.pending && msg.role === "agent" && msg.runId === pendingRunIdRef.current && thinkingText && (
@@ -1652,20 +1813,18 @@ export function ChatSection({ events, isActive }: Props) {
                 {/* Tool call chips — live during pending, persisted after finalize.
                     Click a chip to expand its args/result panel. */}
                 {msg.role === "agent" && (() => {
-                  const isActivePending = msg.pending && msg.runId === pendingRunIdRef.current;
+                  const isActivePending = !!msg.pending && msg.runId === pendingRunIdRef.current;
                   const chips = isActivePending ? toolChips : msg.tools;
                   if (!chips || chips.length === 0) return null;
-                  return (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 4, alignItems: "flex-start" }}>
-                      {chips.map((c) => <ToolChipView key={c.id} chip={c} />)}
-                    </div>
-                  );
+                  return <ToolChipGroup chips={chips} live={isActivePending} />;
                 })()}
-                <div style={{
+                <div data-bubble style={{
                   padding: "9px 13px",
                   borderRadius: msg.role === "user" ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
-                  background: msg.role === "user" ? "rgba(245,158,11,0.15)" : "var(--lm-surface)",
-                  border: `1px solid ${msg.role === "user" ? "rgba(245,158,11,0.25)" : "var(--lm-border)"}`,
+                  background: msg.role === "user"
+                    ? "linear-gradient(135deg, rgba(245,158,11,0.20), rgba(245,158,11,0.12))"
+                    : "var(--lm-surface)",
+                  border: `1px solid ${msg.role === "user" ? "rgba(245,158,11,0.28)" : "var(--lm-border)"}`,
                   color: msg.error ? "var(--lm-red)" : "var(--lm-text)",
                   fontSize: 13.5, lineHeight: 1.55, wordBreak: "break-word",
                   minWidth: 40, minHeight: 36, position: "relative",
@@ -1723,14 +1882,15 @@ export function ChatSection({ events, isActive }: Props) {
                   {!msg.pending && msg.text && msg.text !== "…" && (
                     <button
                       onClick={() => copyMessage(msg)}
+                      className={copiedId === msg.id ? undefined : "lm-msg-action"}
                       style={{
                         background: "none", border: "none", cursor: "pointer",
                         color: copiedId === msg.id ? "var(--lm-green)" : "var(--lm-text-muted)",
-                        padding: 0, opacity: 0.6, transition: "opacity 0.15s",
+                        padding: 0, transition: "opacity 0.15s, color 0.15s",
                         display: "inline-flex", alignItems: "center",
                       }}
-                      onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.6"; }}
+                      onMouseEnter={(e) => { e.currentTarget.style.color = "var(--lm-text)"; }}
+                      onMouseLeave={(e) => { if (copiedId !== msg.id) e.currentTarget.style.color = "var(--lm-text-muted)"; }}
                       title="Copy"
                       aria-label="Copy message"
                     >{copiedId === msg.id ? <Check size={12} /> : <Copy size={12} />}</button>
@@ -1883,6 +2043,7 @@ export function ChatSection({ events, isActive }: Props) {
               <button
                 onClick={send}
                 disabled={!input.trim() || sending}
+                className={input.trim() && !sending ? "lm-send-ready" : undefined}
                 style={{
                   width: 34, height: 34, borderRadius: "50%", flexShrink: 0,
                   background: input.trim() && !sending
@@ -1891,12 +2052,15 @@ export function ChatSection({ events, isActive }: Props) {
                   border: "none",
                   color: input.trim() && !sending ? "var(--lm-on-amber)" : "var(--lm-text-muted)",
                   cursor: input.trim() && !sending ? "pointer" : "default",
-                  transition: "all 0.15s",
+                  boxShadow: input.trim() && !sending ? "0 2px 10px -2px var(--lm-amber-glow)" : "none",
+                  transition: "background 0.15s, color 0.15s, box-shadow 0.15s, transform 0.12s",
                   display: "inline-flex", alignItems: "center", justifyContent: "center",
                 }}
                 title="Send (Enter)"
                 aria-label="Send message"
-              >{sending ? <span style={{ fontSize: 14, fontWeight: 700 }}>…</span> : <ArrowDown size={16} style={{ transform: "rotate(180deg)" }} strokeWidth={2.5} />}</button>
+              >{sending
+                ? <span className="lm-spin-ico" style={{ width: 14, height: 14, border: "2px solid currentColor", borderTopColor: "transparent", borderRadius: "50%", display: "inline-block" }} />
+                : <ArrowUp size={17} strokeWidth={2.6} />}</button>
               </div>
             </div>
             <div style={{
@@ -1957,6 +2121,84 @@ function UsageBadge({ usage, model }: { usage: NonNullable<ChatMessage["tokenUsa
         <span style={{ color: "var(--lm-text-dim)" }}>{model}</span>
       )}
     </span>
+  );
+}
+
+// ─── Tool Chip group ─────────────────────────────────────────────────────────
+
+// Collapses a run's tool calls into a single tidy summary row ("🔧 N steps")
+// so the conversation reads like a product, not a debug log. A single tool
+// renders as its own chip directly (no point hiding one behind a summary).
+// Click the summary to fan the individual chips open.
+function ToolChipGroup({ chips, live }: { chips: ToolChip[]; live: boolean }) {
+  const [open, setOpen] = useState(false);
+
+  if (chips.length === 1) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 4, alignItems: "flex-start" }}>
+        <ToolChipView chip={chips[0]} />
+      </div>
+    );
+  }
+
+  const accent = "var(--lm-teal)";
+  // Up to 4 distinct icons, stacked, as a glanceable preview of what ran.
+  const previewIcons: ToolChip[] = [];
+  const seen = new Set<string>();
+  for (const c of chips) {
+    if (!seen.has(c.iconKind)) { seen.add(c.iconKind); previewIcons.push(c); }
+    if (previewIcons.length >= 4) break;
+  }
+  const allDone = chips.every((c) => c.result);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 4, alignItems: "flex-start", maxWidth: "100%" }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 8,
+          padding: "4px 10px", borderRadius: 999,
+          background: `color-mix(in srgb, ${accent} 10%, transparent)`,
+          border: `1px solid color-mix(in srgb, ${accent} 22%, transparent)`,
+          color: accent, cursor: "pointer", fontSize: 11.5,
+        }}
+        title={open ? "Hide steps" : "Show steps"}
+      >
+        {/* Stacked tool icons */}
+        <span style={{ display: "inline-flex", alignItems: "center" }}>
+          {previewIcons.map((c, idx) => (
+            <span key={c.id} style={{
+              display: "inline-flex", marginLeft: idx === 0 ? 0 : -5,
+              width: 17, height: 17, borderRadius: "50%",
+              alignItems: "center", justifyContent: "center",
+              background: "var(--lm-card)",
+              border: `1px solid color-mix(in srgb, ${accent} 30%, transparent)`,
+              zIndex: previewIcons.length - idx,
+            }}>{renderToolIcon(c.iconKind, 10)}</span>
+          ))}
+        </span>
+        <strong style={{ fontWeight: 600 }}>
+          {chips.length} {chips.length === 1 ? "step" : "steps"}
+        </strong>
+        {live && !allDone ? (
+          <span style={{ fontSize: 10, opacity: 0.85 }} className="lm-blink">●</span>
+        ) : allDone ? (
+          <span style={{
+            fontSize: 9, padding: "0 5px", borderRadius: 3,
+            background: "color-mix(in srgb, var(--lm-green) 18%, transparent)",
+            color: "var(--lm-green)", fontWeight: 700, letterSpacing: "0.04em",
+          }}>DONE</span>
+        ) : null}
+        <span style={{ marginLeft: 1, opacity: 0.7, display: "inline-flex" }}>
+          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        </span>
+      </button>
+      {open && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start", paddingLeft: 6 }}>
+          {chips.map((c) => <ToolChipView key={c.id} chip={c} />)}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2117,6 +2359,36 @@ function formatDateLabel(dateStr: string): string {
   if (diff <= 0) return "Today";
   if (diff <= 86400_000) return "Yesterday";
   return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
+
+// Compact relative timestamp for a conversation row ("now", "5m", "2h",
+// "yesterday", "3d"). Localized via the passed-in t(); `now` is injected so the
+// value stays stable within a render (Date.now() is banned in some contexts and
+// jitter here would be noise). Falls back to an absolute date past a week.
+function relativeTime(ts: number, now: number, t: (k: string, p?: Record<string, string | number>) => string): string {
+  const sec = Math.max(0, Math.floor((now - ts) / 1000));
+  if (sec < 60) return t("chat.time.now");
+  const min = Math.floor(sec / 60);
+  if (min < 60) return t("chat.time.minutes", { n: min });
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return t("chat.time.hours", { n: hr });
+  const day = Math.floor(hr / 24);
+  if (day === 1) return t("chat.time.yesterday");
+  if (day < 7) return t("chat.time.days", { n: day });
+  return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// Deterministic accent colour for a conversation's avatar dot, derived from its
+// id so the same chat always gets the same hue. Drawn from the theme's existing
+// accent tokens so it stays on-palette (no random rainbow).
+const CONVO_DOT_COLORS = [
+  "var(--lm-amber)", "var(--lm-teal)", "var(--lm-green)",
+  "var(--lm-blue)", "var(--lm-purple)", "var(--lm-orange)",
+];
+function convoColor(id: string): string {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return CONVO_DOT_COLORS[h % CONVO_DOT_COLORS.length];
 }
 
 function groupConvosByDate(convos: Conversation[]): { label: string; items: Conversation[] }[] {
