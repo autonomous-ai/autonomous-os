@@ -19,7 +19,7 @@ MODEL_PATH = get_default_model_path(ModelEnum.WESPEAKER_RESNET34)
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "audio"
 
 pytestmark = pytest.mark.skipif(
-    MODEL_PATH is None or not FIXTURES_DIR.exists(),
+    MODEL_PATH is None or not MODEL_PATH.exists() or not FIXTURES_DIR.exists(),
     reason="Model or audio fixtures not found",
 )
 

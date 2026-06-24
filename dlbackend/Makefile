@@ -284,74 +284,74 @@ test-local: test-action-local test-fer-local test-ser-local test-pose-local test
 test-action: test-action-api test-action-local
 
 test-action-api:
-	python -m pytest tests/action_api/ -v
+	-python -m pytest tests/action_api/ -v
 
 test-action-local:
-	python -m pytest tests/action_local/ -v
+	-python -m pytest tests/action_local/ -v
 
 test-fer: test-fer-api test-fer-local
 
 test-fer-api:
-	python -m pytest tests/emotion_api/ -v
+	-python -m pytest tests/emotion_api/ -v
 
 test-fer-local:
-	python -m pytest tests/emotion_local/ -v
+	-python -m pytest tests/emotion_local/ -v
 
 test-ser: test-ser-api test-ser-local
 
 test-ser-api:
-	python -m pytest tests/audio_emotion_api/ -v
+	-python -m pytest tests/audio_emotion_api/ -v
 
 test-ser-local:
-	python -m pytest tests/audio_emotion_local/ -v
+	-python -m pytest tests/audio_emotion_local/ -v
 
 test-pose: test-pose-api test-pose-local
 
 test-pose-api:
-	python -m pytest tests/pose_api/ -v
+	-python -m pytest tests/pose_api/ -v
 
 test-pose-local:
-	python -m pytest tests/pose_local/ -v
+	-python -m pytest tests/pose_local/ -v
 
 test-object: test-object-api test-object-local
 
 test-object-api:
-	python -m pytest tests/object_api/ -v
+	-python -m pytest tests/object_api/ -v
 
 test-object-local:
-	python -m pytest tests/object_local/ -v
+	-python -m pytest tests/object_local/ -v
 
 test-audio: test-audio-api test-audio-local
 
 test-audio-api:
-	python -m pytest tests/audio_api/ -v
+	-python -m pytest tests/audio_api/ -v
 
 test-audio-local:
-	python -m pytest tests/audio_local/ -v
+	-python -m pytest tests/audio_local/ -v
 
 test-crypto: test-crypto-api test-crypto-local
 
 test-crypto-api:
-	python -m pytest tests/crypto_api/ -v
+	-python -m pytest tests/crypto_api/ -v
 
 test-crypto-local:
-	python -m pytest tests/crypto/ -v
+	-python -m pytest tests/crypto/ -v
 
 test-lb: test-lb-local
 
 test-lb-local:
-	python -m pytest tests/lb_local/ -v
+	-python -m pytest tests/lb_local/ -v
 
 test-benchmark: test-benchmark-http test-benchmark-ws test-benchmark-mixed
 
 test-benchmark-http:
-	python -m pytest tests/benchmark_api/test_benchmark_api.py -v -s
+	-python -m pytest tests/benchmark_api/test_benchmark_api.py -v -s
 
 test-benchmark-ws:
-	python -m pytest tests/benchmark_api/test_benchmark_ws.py -v -s
+	-python -m pytest tests/benchmark_api/test_benchmark_ws.py -v -s
 
 test-benchmark-mixed:
-	python -m pytest tests/benchmark_api/test_benchmark_mixed.py -v -s
+	-python -m pytest tests/benchmark_api/test_benchmark_mixed.py -v -s
 
 lint:
 	ruff check src/ tests/

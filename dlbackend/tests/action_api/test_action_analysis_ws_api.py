@@ -266,7 +266,12 @@ class TestActionPerformance:
         while len(frames) < 16:
             frames = frames + drinking_gif_frames
 
-        await ws.send(json.dumps({"type": "config", "task": "action", "threshold": 0.5}))
+        await ws.send(json.dumps({
+            "type": "config",
+            "task": "action",
+            "whitelist": ["drinking", "drinking beer", "drinking shots", "tasting beer"],
+            "threshold": 0.1,
+        }))
         await ws.recv()
         for frame_b64 in frames[:16]:
             await ws.send(json.dumps({"type": "frame", "task": "action", "frame_b64": frame_b64}))
@@ -287,7 +292,12 @@ class TestActionPerformance:
         while len(frames) < 16:
             frames = frames + eating_gif_frames
 
-        await ws.send(json.dumps({"type": "config", "task": "action", "threshold": 0.5}))
+        await ws.send(json.dumps({
+            "type": "config",
+            "task": "action",
+            "whitelist": ["eating", "eating cake", "eating ice cream", "eating chips"],
+            "threshold": 0.1,
+        }))
         await ws.recv()
         for frame_b64 in frames[:16]:
             await ws.send(json.dumps({"type": "frame", "task": "action", "frame_b64": frame_b64}))

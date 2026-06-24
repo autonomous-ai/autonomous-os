@@ -1,7 +1,7 @@
 import asyncio
 import time
 from collections import deque
-from typing import Any
+from typing import Any, cast
 
 import cv2.typing as cv2t
 import numpy as np
@@ -15,8 +15,10 @@ from core.models.action import (
     RawHumanActionDetection,
 )
 from core.models.media import Video
+from core.models.person import RawPersonDetection
 from core.perception.action.predictors import HumanActionRecognizer
 from core.perception.base import PerceptionSessionBase
+from core.perception.base.batching import InputBatcher
 from core.perception.person.predictors import PersonDetector
 from core.types import Omit, omit
 from core.utils.common import get_or_default
@@ -33,17 +35,18 @@ class ActionPerceptionSession(
 
     def __init__(
         self,
-        action_recognizer: HumanActionRecognizer,
-        person_detector: PersonDetector | None,
+        action_batcher: InputBatcher[Video, RawHumanActionDetection],
+        person_batcher: InputBatcher[cv2t.MatLike, RawPersonDetection] | None,
         config: ActionPerceptionSessionConfig | None = None,
     ) -> None:
         config = get_or_default(config, ActionPerceptionSessionConfig())
         super().__init__(config)
 
-        self._action_recognizer: HumanActionRecognizer = action_recognizer
-        self._person_detector: PersonDetector | None = person_detector
+        self._action_batcher: InputBatcher[Video, RawHumanActionDetection] = action_batcher
+        self._person_batcher: InputBatcher[cv2t.MatLike, RawPersonDetection] | None = person_batcher
 
-        self._class_mask: npt.NDArray[np.bool_] = self._action_recognizer.default_class_mask.copy()
+        action_recognizer = cast(HumanActionRecognizer, self._action_batcher.predictor)
+        self._class_mask: npt.NDArray[np.bool_] = action_recognizer.default_class_mask.copy()
         self._frame_buffer: deque[cv2t.MatLike] = deque()
 
         self._running: bool = False
@@ -52,13 +55,6 @@ class ActionPerceptionSession(
     async def start(self) -> None:
         if self._running:
             self._logger.info("Already running")
-
-        if not self._action_recognizer.is_ready():
-            await asyncio.to_thread(self._action_recognizer.start)
-
-        if self._person_detector and not self._person_detector.is_ready():
-            await asyncio.to_thread(self._person_detector.start)
-
         self._running = True
 
     @override
@@ -67,11 +63,8 @@ class ActionPerceptionSession(
 
     @override
     def is_ready(self) -> bool:
-        if not self._action_recognizer.is_ready():
+        if not self._action_batcher.is_ready():
             return False
-        if self._person_detector and not self._action_recognizer.is_ready():
-            return False
-
         return self._running
 
     @override
@@ -84,10 +77,12 @@ class ActionPerceptionSession(
         """
         cur_ts: float = time.time()
         if cur_ts - self._last_update_ts >= self._config.frame_interval:
-            if self._person_detector is not None and self._config.person_detection_enabled:
-                crops = await asyncio.to_thread(
-                    self._person_detector.extract_largest_crop,
-                    [input], self._config.person_min_area_ratio,
+            if self._person_batcher is not None and self._config.person_detection_enabled:
+                person_detector = cast(PersonDetector, self._person_batcher.predictor)
+                person_futures = await self._person_batcher.submit([input])
+                person_raw: RawPersonDetection = await person_futures[0]
+                crops = person_detector.extract_largest_crop_from_raw(
+                    [input], [person_raw], self._config.person_min_area_ratio,
                 )
                 crop = crops[0]
 
@@ -96,27 +91,27 @@ class ActionPerceptionSession(
 
                 input = crop
 
+            action_recognizer = cast(HumanActionRecognizer, self._action_batcher.predictor)
             preprocessed_input = await asyncio.to_thread(
-                self._action_recognizer.preprocess_single_frame, input,
+                action_recognizer.preprocess_single_frame, input,
             )
 
             self._frame_buffer.append(preprocessed_input)
-            while len(self._frame_buffer) > self._action_recognizer.max_frames:
+            while len(self._frame_buffer) > action_recognizer.max_frames:
                 _ = self._frame_buffer.popleft()
 
-            raw_predictions = await asyncio.to_thread(
-                self._action_recognizer.predict,
+            futures = await self._action_batcher.submit(
                 [Video(frames=list(self._frame_buffer))],
                 preprocess=False,
                 class_mask=self._class_mask,
             )
-            raw_prediction: RawHumanActionDetection = raw_predictions[0]
+            raw_prediction: RawHumanActionDetection = await futures[0]
 
             action_ids = np.where(raw_prediction.prob_np > self._config.threshold)[0]
 
             detected_actions = [
                 HumanAction(
-                    class_name=self._action_recognizer.class_names[i],
+                    class_name=action_recognizer.class_names[i],
                     conf=raw_prediction.prob_np[i].item(),
                 )
                 for i in action_ids
@@ -159,12 +154,13 @@ class ActionPerceptionSession(
 
     @override
     def _post_config_update(self) -> None:
+        action_recognizer = cast(HumanActionRecognizer, self._action_batcher.predictor)
         if self._config.whitelist is None:
-            self._class_mask = self._action_recognizer.default_class_mask.copy()
+            self._class_mask = action_recognizer.default_class_mask.copy()
         else:
             allowed: set[str] = set(self._config.whitelist)
             self._class_mask = np.array(
-                [name in allowed for name in self._action_recognizer.class_names], dtype=np.bool_
+                [name in allowed for name in action_recognizer.class_names], dtype=np.bool_
             )
 
         self._logger.info(

@@ -25,6 +25,7 @@ class PersonDetectorSetting(BaseModel):
     bbox_expand_scale: float = 2.0
     min_area_ratio: float = 0.25  # skip persons covering less than 1/4 of frame
     batch_size: int | None = None
+    batch_timeout: float | None = None
 
 
 class ActionSetting(BaseModel):
@@ -38,6 +39,7 @@ class ActionSetting(BaseModel):
     w: int | None = None
     h: int | None = None
     batch_size: int | None = None
+    batch_timeout: float | None = None
 
 
 class FERSetting(BaseModel):
@@ -48,6 +50,7 @@ class FERSetting(BaseModel):
     confidence_threshold: float | None = None
     frame_interval: float | None = None
     batch_size: int | None = None
+    batch_timeout: float | None = None
 
 
 class PoseSetting(BaseModel):
@@ -65,6 +68,7 @@ class PoseSetting(BaseModel):
     ergo_assessor: ErgoAssessorEnum | None = ErgoAssessorEnum.RULA
     ergo_confidence_threshold: float | None = None
     batch_size: int | None = None
+    batch_timeout: float | None = None
 
 
 class SERSetting(BaseModel):
@@ -74,6 +78,7 @@ class SERSetting(BaseModel):
     remote_url: str | None = None
     labels_path: str | None = None
     batch_size: int | None = None
+    batch_timeout: float | None = None
 
 
 class AudioProcessorSetting(BaseModel):
@@ -96,6 +101,7 @@ class AudioEmbedderSetting(BaseModel):
     model_path: str | None = None
     remote_url: str | None = None
     batch_size: int | None = None
+    batch_timeout: float | None = None
     processor: AudioProcessorSetting = AudioProcessorSetting()
 
 
@@ -114,6 +120,7 @@ class SingleObjectDetectorSetting(BaseModel):
     classes_path: str | None = None
     threshold: float | None = None
     batch_size: int | None = None
+    batch_timeout: float | None = None
 
 
 class ObjectDetectorSetting(BaseModel):
