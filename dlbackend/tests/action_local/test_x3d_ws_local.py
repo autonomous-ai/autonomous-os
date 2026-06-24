@@ -273,7 +273,7 @@ class TestActionPerformance:
             ws.receive_json()
 
             last_resp: dict = {}
-            for _ in range(8):
+            for _ in range(16):
                 ws.send_text(
                     json.dumps(
                         {
