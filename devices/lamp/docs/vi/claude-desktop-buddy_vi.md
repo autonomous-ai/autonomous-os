@@ -52,7 +52,7 @@ tay, stream chat turns ra display/TTS, và feed context presence ngược lại.
 │                  │   Ack, PermissionDecision      │  │   protocol.go          │  │
 │                  │                                │  │   state.go             │  │
 │                  │                                │  │   bridge.go            │  │
-│                  │                                │  │   httpserver.go        │  │
+│                  │                                │  │   httpapi/             │  │
 │                  │                                │  │   transfer.go          │  │
 │                  │                                │  └──┬──────────┬──────────┘  │
 │                  │                                │     │ HTTP     │ HTTP        │
@@ -71,18 +71,29 @@ tay, stream chat turns ra display/TTS, và feed context presence ngược lại.
 
 ```
 claude-desktop-buddy/
-├── main.go              Entry, load config, wire BLE/HTTP, dispatch message
-├── ble.go               BLE peripheral (GATT server, advertising, tune interval qua debugfs)
-├── agent.go             BlueZ DisplayOnly pairing agent (đã register nhưng chưa dùng — §5)
-├── protocol.go          Wire types: Heartbeat, TimeSync, Event, Command, Ack, PermissionDecision
-├── state.go             6-state machine (sleep/idle/busy/attention/heart/celebrate)
-├── bridge.go            HTTP outbound tới HAL (:5001) + Lamp (:5000)
-├── httpserver.go        HTTP API :5002 — /status /health /approve /deny
-├── transfer.go          Nhận folder character-pack push (lưu vào chars/)
+├── main.go              Entrypoint mỏng: flags + logging, rồi gọi buddy.Run()
+├── buddy/               Logic daemon (package buddy)
+│   ├── app.go           Orchestration Run(), load config, dispatch message BLE
+│   ├── ble.go           BLE peripheral (GATT server, advertising, tune interval qua debugfs)
+│   ├── agent.go         BlueZ DisplayOnly pairing agent (đã register nhưng chưa dùng — §5)
+│   ├── protocol.go      Wire types: Heartbeat, TimeSync, Event, Command, Ack, PermissionDecision
+│   ├── state.go         6-state machine (sleep/idle/busy/attention/heart/celebrate)
+│   ├── bridge.go        HTTP outbound tới HAL (:5001) + Lamp (:5000)
+│   ├── transfer.go      Nhận folder character-pack push (lưu vào chars/)
+│   ├── narrator.go,i18n.go  TTS narration dedupe theo từng turn (EN/VI)
+│   ├── stats.go         Counter approve/deny lifetime (lưu dưới /var/lib)
+│   └── approval_service.go, status_provider.go, activity_sink.go   Impl của các port httpapi
+├── httpapi/             Tầng delivery HTTP API :5002 (package httpapi)
+│   ├── server.go        Server + registry routes() + JSON helpers
+│   ├── ports.go         Interface: StatusProvider, ApprovalService, ActivitySink
+│   ├── status.go        GET /status, GET /health
+│   ├── claudedesktop.go POST /claude-desktop/approve, /deny
+│   └── claudecode.go    POST /claude-code/notify, /usage (plugin Claude Code push)
+├── claude-code-buddy/   Plugin Claude Code (Python) — push tới /claude-code/* (xem README riêng)
 ├── skill/SKILL.md       Skill OpenClaw cho voice approval flow
-├── config/buddy.json    Template config (chỉ template — runtime đọc /root/config/buddy.json)
+├── config/buddy.json    Template config (runtime đọc /root/config/buddy.json)
 ├── third_party/bluetooth/  Vendor tinygo bluetooth v0.14.0 + patch secure-* flag
-├── go.mod               Go module riêng với `replace tinygo.org/x/bluetooth => ./third_party/...`
+├── go.mod               Go module riêng với replace tinygo.org/x/bluetooth => ./third_party/...
 └── VERSION_BUDDY        Version stamp text, inject lúc build
 ```
 
@@ -381,7 +392,7 @@ encrypted-only khi Anthropic bật auto-pairing hoặc khi tìm ra cơ chế
                     │ LED: blink  │
                     │ + sensing   │
                     └──────┬──────┘
-                           │ /approve hoặc /deny
+                           │ /claude-desktop/approve hoặc /deny
                            ▼
                     ┌─────────────┐
                     │   heart     │  approve <5s
@@ -482,7 +493,7 @@ Agent emotion vẫn thắng buddy; voice intent của user thắng cả 2.
      - Đọc prompt qua TTS một cách tự nhiên
      - Đợi user nói "yes/approve/ok" hoặc "no/deny/skip"
 5. Skill curl ngược lại:
-     POST http://127.0.0.1:5002/approve  {"id":"req_abc123"}   (hoặc /deny)
+     POST http://127.0.0.1:5002/claude-desktop/approve  {"id":"req_abc123"}   (hoặc /claude-desktop/deny)
 6. buddy-plugin trả BLE PermissionDecision:
      {"cmd":"permission","id":"req_abc123","decision":"once" | "deny"}
 7. Desktop unblock. State → heart (nếu user trả lời <5s) → busy → idle.
@@ -515,8 +526,10 @@ buddy tại runtime (xem SKILL.md cho rule discovery chính xác).
 |---|---|---|---|
 | `GET` | `/health` | Liveness | `{status, ble_advertising, uptime_seconds}` |
 | `GET` | `/status` | State buddy hiện tại | Xem bên dưới |
-| `POST` | `/approve` | Approve prompt đang pending | Body `{id}`. Trả `{ok}`. |
-| `POST` | `/deny` | Deny prompt đang pending | Body `{id}`. Trả `{ok}`. |
+| `POST` | `/claude-desktop/approve` | Approve prompt đang pending | Body `{id}`. Trả `{ok}`. |
+| `POST` | `/claude-desktop/deny` | Deny prompt đang pending | Body `{id}`. Trả `{ok}`. |
+| `POST` | `/claude-code/notify` | Push hoạt động Claude Code (plugin) | Body `{title,subtitle,level,sound}`. Log; trả `{ok}`. HAL bridge chưa wire. |
+| `POST` | `/claude-code/usage` | Push usage Claude Code (plugin) | Body `{five_hour,seven_day,reset_5h,reset_7d,sound}`. Log; trả `{ok}`. |
 
 Response `/status`:
 
@@ -535,7 +548,7 @@ Response `/status`:
 }
 ```
 
-`/approve` và `/deny` reject `409 Conflict` nếu không có prompt pending
+`/claude-desktop/approve` và `/claude-desktop/deny` reject `409 Conflict` nếu không có prompt pending
 hoặc `id` không match prompt hiện tại — chặn skill OpenClaw act trên
 prompt cũ.
 
