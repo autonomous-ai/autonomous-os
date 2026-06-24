@@ -763,6 +763,30 @@ elif [ "\$APP" = "claude-desktop-buddy" ]; then
   unzip -o -q "\$ZIP_TMP" -d "\$DIR_TMP"
   [ -f "\$DIR_TMP/buddy-plugin" ] && cp -f "\$DIR_TMP/buddy-plugin" "\$BUDDY_DIR/buddy-plugin" && chmod +x "\$BUDDY_DIR/buddy-plugin"
   [ ! -f "/root/config/buddy.json" ] && [ -f "\$DIR_TMP/config/buddy.json" ] && mkdir -p /root/config && cp -f "\$DIR_TMP/config/buddy.json" /root/config/buddy.json
+  if [ ! -f /etc/systemd/system/claude-desktop-buddy.service ]; then
+    cat > /etc/systemd/system/claude-desktop-buddy.service <<'BUDDY_UNIT'
+[Unit]
+Description=Claude Desktop Buddy (BLE)
+After=bluetooth.target os-server.service
+Wants=bluetooth.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/claude-desktop-buddy
+ExecStart=/opt/claude-desktop-buddy/buddy-plugin -config /root/config/buddy.json
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=claude-desktop-buddy
+
+[Install]
+WantedBy=multi-user.target
+BUDDY_UNIT
+    systemctl daemon-reload
+    systemctl enable claude-desktop-buddy
+  fi
   echo "\$VERSION" > "\$BUDDY_DIR/VERSION_BUDDY"
   systemctl restart claude-desktop-buddy
   echo "claude-desktop-buddy updated to \$VERSION"
