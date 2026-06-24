@@ -31,8 +31,8 @@ const (
 	openclawRuntimeUser   = "root"
 )
 
-// Compile-time check: *Service implements domain.AgentGateway.
-var _ domain.AgentGateway = (*Service)(nil)
+// Compile-time check: *OpenclawService implements domain.AgentGateway.
+var _ domain.AgentGateway = (*OpenclawService)(nil)
 
 // reSnapshotPath matches [snapshot: /path/to/file.jpg] markers in sensing messages.
 var reSnapshotPath = regexp.MustCompile(`\[snapshot:\s*[^\]]+\]`)
@@ -69,8 +69,8 @@ func extractPoseBucketMarkers(message string) (string, []string) {
 	return bucketID, worst
 }
 
-// Service provides setup, reset, restart of openclaw config/gateway and StartWS.
-type Service struct {
+// OpenclawService provides setup, reset, restart of openclaw config/gateway and StartWS.
+type OpenclawService struct {
 	config        *config.Config
 	monitorBus    *monitor.Bus
 	statusLED     *statusled.Service
@@ -191,8 +191,8 @@ type poseBucketInfo struct {
 }
 
 // ProvideService constructs the openclaw service.
-func ProvideService(cfg *config.Config, bus *monitor.Bus, sled *statusled.Service) *Service {
-	s := &Service{
+func ProvideService(cfg *config.Config, bus *monitor.Bus, sled *statusled.Service) *OpenclawService {
+	s := &OpenclawService{
 		config:         cfg,
 		monitorBus:     bus,
 		statusLED:      sled,
@@ -211,19 +211,19 @@ func ProvideService(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 }
 
 // Name returns the display name of this agent gateway.
-func (s *Service) Name() string {
+func (s *OpenclawService) Name() string {
 	return "OpenClaw"
 }
 
 // Version returns the cached OpenClaw binary version (e.g. "2026.5.27"), or empty
 // when undetected. Satisfies domain.AgentGateway.Version().
-func (s *Service) Version() string {
+func (s *OpenclawService) Version() string {
 	return GetOpenClawVersion()
 }
 
 // markOutboundChat records an os-server-sent chat.send message text so the SSE
 // session.message handler can skip its echo. Trims expired + over-cap.
-func (s *Service) markOutboundChat(text string) {
+func (s *OpenclawService) markOutboundChat(text string) {
 	if text == "" {
 		return
 	}
@@ -247,7 +247,7 @@ func (s *Service) markOutboundChat(text string) {
 // IsRecentOutboundChat reports whether the os server sent this text recently.
 // Match is exact on the message string the os server passes to chat.send (after sensing
 // snapshot path stripping — caller needs to compare against the same form).
-func (s *Service) IsRecentOutboundChat(text string) bool {
+func (s *OpenclawService) IsRecentOutboundChat(text string) bool {
 	if text == "" {
 		return false
 	}
@@ -264,13 +264,13 @@ func (s *Service) IsRecentOutboundChat(text string) bool {
 }
 
 // IsReady returns true when the gateway WebSocket is connected and OpenClaw is ready to receive messages.
-func (s *Service) IsReady() bool {
+func (s *OpenclawService) IsReady() bool {
 	return s.wsConnected.Load()
 }
 
 // ConnectedAt returns the unix-seconds timestamp when the WS connection last
 // became ready, or 0 when not currently connected.
-func (s *Service) ConnectedAt() int64 {
+func (s *OpenclawService) ConnectedAt() int64 {
 	return s.wsConnectedAt.Load()
 }
 
@@ -278,7 +278,7 @@ func (s *Service) ConnectedAt() int64 {
 // from server.uptimeMs in the hello-ok response. Independent of the os server's
 // WS reconnect cycles — restarting the os server does not reset this value. Returns 0 when
 // the gateway uptime has not yet been observed or the WS is disconnected.
-func (s *Service) AgentUptime() int64 {
+func (s *OpenclawService) AgentUptime() int64 {
 	if !s.wsConnected.Load() {
 		return 0
 	}

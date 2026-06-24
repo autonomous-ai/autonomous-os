@@ -16,7 +16,7 @@ import (
 )
 
 // GetConfigJSON reads and returns the raw bytes of openclaw.json.
-func (s *Service) GetConfigJSON() (json.RawMessage, error) {
+func (s *OpenclawService) GetConfigJSON() (json.RawMessage, error) {
 	path := filepath.Join(s.config.OpenclawConfigDir, "openclaw.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -27,7 +27,7 @@ func (s *Service) GetConfigJSON() (json.RawMessage, error) {
 
 // GetConfiguredChannel reads openclaw.json and returns the first enabled channel name.
 // Falls back to "channel" if none can be determined.
-func (s *Service) GetConfiguredChannel() string {
+func (s *OpenclawService) GetConfiguredChannel() string {
 	configPath := filepath.Join(s.config.OpenclawConfigDir, "openclaw.json")
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -60,37 +60,37 @@ func (s *Service) GetConfiguredChannel() string {
 
 // SendChatMessage sends a user message to the OpenClaw agent via WebSocket chat.send RPC.
 // Returns the reqID on success.
-func (s *Service) SendChatMessage(message string) (string, error) {
+func (s *OpenclawService) SendChatMessage(message string) (string, error) {
 	return s.sendChat(message, "", "", "", "user")
 }
 
 // SendSystemChatMessage sends a system-originated message (skill watcher notifications,
 // wake greeting, /compact, …) so Flow Monitor can distinguish it from real user input.
 // The WS RPC payload is identical to SendChatMessage — only the flow event `type` differs.
-func (s *Service) SendSystemChatMessage(message string) (string, error) {
+func (s *OpenclawService) SendSystemChatMessage(message string) (string, error) {
 	return s.sendChat(message, "", "", "", "system")
 }
 
 // SendChatMessageWithImage sends a message with a base64 JPEG image to the OpenClaw agent.
 // The image is included as a vision content block so the LLM can analyze the camera snapshot.
-func (s *Service) SendChatMessageWithImage(message string, imageBase64 string) (string, error) {
+func (s *OpenclawService) SendChatMessageWithImage(message string, imageBase64 string) (string, error) {
 	return s.sendChat(message, imageBase64, "", "", "user")
 }
 
 // NextChatRunID allocates ids for the next chat.send so callers can flow.SetTrace(runID) before flow.Start.
-func (s *Service) NextChatRunID() (reqID string, runID string) {
+func (s *OpenclawService) NextChatRunID() (reqID string, runID string) {
 	reqID = fmt.Sprintf("chat-%d", s.reqCounter.Add(1))
 	runID = fmt.Sprintf("device-%s-%d", reqID, time.Now().UnixMilli())
 	return reqID, runID
 }
 
 // SendChatMessageWithRun sends using ids from NextChatRunID (must match that pair).
-func (s *Service) SendChatMessageWithRun(message string, reqID string, runID string) (string, error) {
+func (s *OpenclawService) SendChatMessageWithRun(message string, reqID string, runID string) (string, error) {
 	return s.sendChat(message, "", reqID, runID, "user")
 }
 
 // SendChatMessageWithImageAndRun sends with image using ids from NextChatRunID.
-func (s *Service) SendChatMessageWithImageAndRun(message string, imageBase64 string, reqID string, runID string) (string, error) {
+func (s *OpenclawService) SendChatMessageWithImageAndRun(message string, imageBase64 string, reqID string, runID string) (string, error) {
 	return s.sendChat(message, imageBase64, reqID, runID, "user")
 }
 
@@ -100,12 +100,12 @@ func (s *Service) SendChatMessageWithImageAndRun(message string, imageBase64 str
 // chat.send behavior — OpenClaw's system prompt then dispatches the slash to
 // the appropriate tool (e.g. session_status). Use only when the message text
 // starts with "/" and originates from the web monitor chat.
-func (s *Service) SendSlashCommandWithRun(message string, reqID string, runID string) (string, error) {
+func (s *OpenclawService) SendSlashCommandWithRun(message string, reqID string, runID string) (string, error) {
 	return s.sendChat(message, "", reqID, runID, "user", withDeliver(false))
 }
 
 // SendSlashCommandWithImageAndRun is SendSlashCommandWithRun with image attachment.
-func (s *Service) SendSlashCommandWithImageAndRun(message string, imageBase64 string, reqID string, runID string) (string, error) {
+func (s *OpenclawService) SendSlashCommandWithImageAndRun(message string, imageBase64 string, reqID string, runID string) (string, error) {
 	return s.sendChat(message, imageBase64, reqID, runID, "user", withDeliver(false))
 }
 
@@ -125,7 +125,7 @@ func withDeliver(v bool) sendChatOpt {
 // If fixedReqID and fixedRunID are both non-empty, they are used (caller already incremented reqCounter via NextChatRunID).
 // sourceType labels the flow event ("user" for real user / sensing-driven input, "system" for
 // watcher / wake / compact notifications). Does not affect the WS RPC payload.
-func (s *Service) sendChat(message string, imageBase64 string, fixedReqID string, fixedRunID string, sourceType string, opts ...sendChatOpt) (string, error) {
+func (s *OpenclawService) sendChat(message string, imageBase64 string, fixedReqID string, fixedRunID string, sourceType string, opts ...sendChatOpt) (string, error) {
 	s.wsMu.Lock()
 	conn := s.wsConn
 	s.wsMu.Unlock()
@@ -273,7 +273,7 @@ func (s *Service) sendChat(message string, imageBase64 string, fixedReqID string
 }
 
 // CompactSession sends a sessions.compact RPC to reduce conversation history.
-func (s *Service) CompactSession(sessionKey string) error {
+func (s *OpenclawService) CompactSession(sessionKey string) error {
 	s.wsMu.Lock()
 	conn := s.wsConn
 	s.wsMu.Unlock()
@@ -323,7 +323,7 @@ func (s *Service) CompactSession(sessionKey string) error {
 // `sessionKey` is accepted for call-site compatibility but is implicit
 // in the chat.send routing — the command applies to the session keyed
 // by the WS connection's active sessionKey.
-func (s *Service) NewSession(sessionKey string) error {
+func (s *OpenclawService) NewSession(sessionKey string) error {
 	if _, err := s.sendChat("/new", "", "", "", "system"); err != nil {
 		return fmt.Errorf("send /new: %w", err)
 	}

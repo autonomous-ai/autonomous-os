@@ -37,7 +37,7 @@ const (
 )
 
 // mcpEntryWriter is the subset of the agent gateway the connector writer needs.
-// domain.AgentGateway (backed by openclaw.Service) satisfies it; tests supply a
+// domain.AgentGateway (backed by openclaw.OpenclawService) satisfies it; tests supply a
 // fake to assert routing without touching openclaw.json / restarting the gateway.
 type mcpEntryWriter interface {
 	WriteMCPEntry(name string, entry map[string]any) error

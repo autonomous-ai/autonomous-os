@@ -44,7 +44,7 @@ func IsKnownMCPConnector(name string) bool {
 // The read-modify-write cycle is serialized under primarySyncMu so it cannot
 // interleave with UpdatePrimaryModel / syncPrimaryFromFile, which mutate the
 // same file.
-func (s *Service) WriteMCPEntry(name string, entry map[string]any) error {
+func (s *OpenclawService) WriteMCPEntry(name string, entry map[string]any) error {
 	s.primarySyncMu.Lock()
 	defer s.primarySyncMu.Unlock()
 
@@ -74,7 +74,7 @@ func (s *Service) WriteMCPEntry(name string, entry map[string]any) error {
 // RemoveMCPEntry deletes mcp.servers.<name> from openclaw.json. Returns
 // removed=false (no write, no restart) when the entry was already absent or the
 // config file does not exist yet.
-func (s *Service) RemoveMCPEntry(name string) (bool, error) {
+func (s *OpenclawService) RemoveMCPEntry(name string) (bool, error) {
 	s.primarySyncMu.Lock()
 	defer s.primarySyncMu.Unlock()
 

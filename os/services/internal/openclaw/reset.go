@@ -13,7 +13,7 @@ import (
 // ResetAgent performs the OpenClaw factory-reset wipe. The factory-reset flow
 // (server/system/factoryreset.go) resolves the active gateway and calls this on
 // it — so adding a backend means implementing ResetAgent, not editing a switch.
-func (s *Service) ResetAgent() error {
+func (s *OpenclawService) ResetAgent() error {
 	wipeOpenclawState()
 	return nil
 }

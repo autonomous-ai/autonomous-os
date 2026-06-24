@@ -15,7 +15,7 @@ import (
 // Lamp-initiated write and does not sync it back.
 //
 // No-op when modelKey is empty or when openclaw.json does not yet exist.
-func (s *Service) UpdatePrimaryModel(modelKey string) error {
+func (s *OpenclawService) UpdatePrimaryModel(modelKey string) error {
 	if modelKey == "" {
 		return nil
 	}

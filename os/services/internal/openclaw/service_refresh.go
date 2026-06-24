@@ -25,7 +25,7 @@ import (
 // The runtime is read ONCE per call from the cached OpenClaw version
 // (currentOpenclawRuntime — the same value the MQTT info message reports), not a
 // fresh shell-out, so refresh stays consistent with setup/add_channel.
-func (s *Service) RefreshChannelConfig(ctx context.Context, req domain.RefreshChannelRequest) (string, error) {
+func (s *OpenclawService) RefreshChannelConfig(ctx context.Context, req domain.RefreshChannelRequest) (string, error) {
 	_ = ctx // config-only path: no subprocess to bound, ctx kept for interface symmetry.
 	runtime := currentOpenclawRuntime()
 	runtimeStr := runtimeVersionString(runtime)

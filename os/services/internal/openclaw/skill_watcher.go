@@ -21,7 +21,7 @@ const skillWatchInterval = 5 * time.Minute
 // lives in internal/skills (FetchSkillVersions / DownloadToTempFile / FolderHash /
 // ExtractSkillZip); this file holds only the OpenClaw-specific loop, target dir,
 // and notify. internal/hermes/skill_watcher.go is its parallel under Hermes.
-func (s *Service) StartSkillWatcher(ctx context.Context) {
+func (s *OpenclawService) StartSkillWatcher(ctx context.Context) {
 
 	slog.Info("skill watcher started", "component", "skill-watcher", "interval", skillWatchInterval)
 
@@ -78,7 +78,7 @@ func (s *Service) StartSkillWatcher(ctx context.Context) {
 
 // downloadSkills downloads the skills this device supports from CDN (capability-
 // gated via supportedSkills), returning names of changed ones.
-func (s *Service) downloadSkills() []string {
+func (s *OpenclawService) downloadSkills() []string {
 	return s.downloadSkillsByName(s.supportedSkills())
 }
 
@@ -87,7 +87,7 @@ func (s *Service) downloadSkills() []string {
 // changed on disk. Each skill is published as <name>.zip containing the whole
 // skill folder; the version pre-filter + content hash mean a returned name had
 // real content changes.
-func (s *Service) downloadSkillsByName(names []string) []string {
+func (s *OpenclawService) downloadSkillsByName(names []string) []string {
 	base := s.skillsBaseURL()
 	if base == "" {
 		slog.Info("skill download skipped: no ota_metadata_url configured", "component", "skill-watcher")
@@ -128,7 +128,7 @@ func (s *Service) downloadSkillsByName(names []string) []string {
 }
 
 // notifySkillChanges sends a single message to the agent listing all changed skills.
-func (s *Service) notifySkillChanges(changedSkills []string) {
+func (s *OpenclawService) notifySkillChanges(changedSkills []string) {
 	if len(changedSkills) == 0 {
 		return
 	}

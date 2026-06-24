@@ -38,7 +38,7 @@ import (
 // Holds primarySyncMu for the entire read-modify-write cycle so it cannot
 // interleave with other openclaw.json writers (watcher, refresh, setup).
 // The network fetch happens before the lock to keep the critical section short.
-func (s *Service) SyncModelsFromAPI() (bool, error) {
+func (s *OpenclawService) SyncModelsFromAPI() (bool, error) {
 	resp, err := FetchModelsFromAPI()
 	if err != nil {
 		return false, fmt.Errorf("fetch models: %w", err)
@@ -73,7 +73,7 @@ func (s *Service) SyncModelsFromAPI() (bool, error) {
 // tick is wrapped in panic recovery so a third-party JSON parser regression
 // can't kill the loop. A failed sync logs and continues — the device must
 // keep running.
-func (s *Service) StartModelSync(ctx context.Context) {
+func (s *OpenclawService) StartModelSync(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("[modelsync] PANIC recovered, sync loop stopped", "panic", r)
@@ -164,7 +164,7 @@ func autonomousProviderMap(configData map[string]any) (map[string]any, bool) {
 // version-gated default text/image model, writes the file when anything
 // changed, restarts the openclaw gateway, and persists the applied catalog
 // version (and resolved primary) into config. Idempotent.
-func (s *Service) applyModelsToConfig(configPath string, configData map[string]any, autonomousMap map[string]any, resp *domain.LLMModelsListResponse) (bool, error) {
+func (s *OpenclawService) applyModelsToConfig(configPath string, configData map[string]any, autonomousMap map[string]any, resp *domain.LLMModelsListResponse) (bool, error) {
 	fetched := resp.Models
 
 	existingProvider, _ := autonomousMap["models"].([]any)
@@ -267,7 +267,7 @@ func (s *Service) applyModelsToConfig(configPath string, configData map[string]a
 // persistModelState records the applied catalog version (and optionally the new
 // primary model) into config under the config mutex. newModel == "" leaves
 // LLMModel untouched. version only advances (never regresses).
-func (s *Service) persistModelState(version int, newModel string) {
+func (s *OpenclawService) persistModelState(version int, newModel string) {
 	if err := s.config.WithLockSave(func(c *config.Config) {
 		if version > c.DefaultModelVersion {
 			c.DefaultModelVersion = version

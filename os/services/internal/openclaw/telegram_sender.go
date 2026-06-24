@@ -21,7 +21,7 @@ const telegramMaxMediaGroup = 10
 
 // TelegramSender delivers messages via Telegram Bot API.
 type TelegramSender struct {
-	svc *Service
+	svc *OpenclawService
 }
 
 func (t *TelegramSender) Name() string { return "telegram" }

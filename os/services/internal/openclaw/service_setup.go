@@ -42,7 +42,7 @@ var defaultModels = []domain.LLMModel{
 }
 
 // SetupAgent writes openclaw.json from the setup request and restarts the gateway.
-func (s *Service) SetupAgent(data domain.SetupRequest) error {
+func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 	slog.Debug("checking openclaw in PATH", "component", "openclaw")
 	if _, err := exec.LookPath("openclaw"); err != nil {
 		return fmt.Errorf("openclaw not found in PATH: %w", err)
@@ -89,7 +89,7 @@ func (s *Service) SetupAgent(data domain.SetupRequest) error {
 
 	// Primary precedence: fetch OK → upstream default_model; fallback (API down)
 	// → the user's selection already persisted in config.LLMModel (set by
-	// device.Service.Setup before this call); else first in the catalog.
+	// device.OpenclawService.Setup before this call); else first in the catalog.
 	wantKey := strings.TrimSpace(modelsResp.DefaultModel)
 	if usedFallback {
 		wantKey = strings.TrimSpace(s.config.LLMModel)
@@ -326,8 +326,8 @@ func (s *Service) SetupAgent(data domain.SetupRequest) error {
 	// On a successful fetch, update config.LLMModel to the resolved upstream
 	// default_model and record the catalog version. On fallback (API down) leave
 	// config.LLMModel as-is — it already holds the user's selection set by
-	// device.Service.Setup. The shared *config.Config is persisted by
-	// device.Service.Setup's config.Save() after this returns.
+	// device.OpenclawService.Setup. The shared *config.Config is persisted by
+	// device.OpenclawService.Setup's config.Save() after this returns.
 	if !usedFallback {
 		s.config.LLMModel = defaultModel.Key
 		if modelsResp.Version > 0 {
@@ -351,7 +351,7 @@ func (s *Service) SetupAgent(data domain.SetupRequest) error {
 // mediaMaxMb) ride through unchanged; the plugin is also enabled/installed.
 // ctx flows through to all subprocess calls so the MQTT 10-minute cap bounds
 // the whole flow.
-func (s *Service) AddChannel(ctx context.Context, data domain.AddChannelRequest) error {
+func (s *OpenclawService) AddChannel(ctx context.Context, data domain.AddChannelRequest) error {
 	channel := data.EffectiveChannel()
 
 	// Hold primarySyncMu for the full read-modify-write cycle so this cannot
@@ -498,7 +498,7 @@ func (s *Service) AddChannel(ctx context.Context, data domain.AddChannelRequest)
 // based on current config and restarts the agent. Safe to call after UpdateConfig.
 // Holds primarySyncMu for the entire read-modify-write cycle so it cannot
 // interleave with other openclaw.json writers (watcher, model-sync, setup).
-func (s *Service) RefreshModelsConfig() error {
+func (s *OpenclawService) RefreshModelsConfig() error {
 	s.primarySyncMu.Lock()
 	defer s.primarySyncMu.Unlock()
 
@@ -588,7 +588,7 @@ func (s *Service) RefreshModelsConfig() error {
 }
 
 // RestartAgent restarts the openclaw gateway only.
-func (s *Service) RestartAgent() error {
+func (s *OpenclawService) RestartAgent() error {
 	slog.Debug("restarting openclaw gateway", "component", "openclaw")
 	if err := restartOpenclawGateway(); err != nil {
 		return err

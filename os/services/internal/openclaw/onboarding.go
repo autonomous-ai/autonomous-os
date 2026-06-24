@@ -63,7 +63,7 @@ Follow the instructions in whichever file you read.
 // catalog and skill→capability map are runtime-agnostic platform metadata in
 // internal/skills — OpenClaw is only one consumer (Hermes or any other runtime
 // would gate the same way).
-func (s *Service) supportedSkills() []string {
+func (s *OpenclawService) supportedSkills() []string {
 	return skills.Supported(device.Capabilities(s.config.DeviceTypeOrDefault()))
 }
 
@@ -75,7 +75,7 @@ func (s *Service) supportedSkills() []string {
 // Skills and hooks live alongside it at <base>/skills and <base>/hooks. Returns
 // "" when no metadata URL is configured (device not provisioned) so callers skip
 // rather than fall back to a hardcoded URL.
-func (s *Service) otaBaseURL() string {
+func (s *OpenclawService) otaBaseURL() string {
 	u := strings.TrimSpace(s.config.OTAMetadataURL)
 	if u == "" {
 		return ""
@@ -83,21 +83,21 @@ func (s *Service) otaBaseURL() string {
 	return strings.TrimSuffix(u, "/ota/metadata.json")
 }
 
-func (s *Service) skillsBaseURL() string {
+func (s *OpenclawService) skillsBaseURL() string {
 	if base := s.otaBaseURL(); base != "" {
 		return base + "/skills"
 	}
 	return ""
 }
 
-func (s *Service) hooksBaseURL() string {
+func (s *OpenclawService) hooksBaseURL() string {
 	if base := s.otaBaseURL(); base != "" {
 		return base + "/hooks"
 	}
 	return ""
 }
 
-func (s *Service) EnsureOnboarding() error {
+func (s *OpenclawService) EnsureOnboarding() error {
 	workspace := filepath.Join(s.config.OpenclawConfigDir, "workspace")
 	if err := os.MkdirAll(workspace, 0755); err != nil {
 		return fmt.Errorf("create workspace dir: %w", err)
@@ -262,7 +262,7 @@ func (s *Service) EnsureOnboarding() error {
 // hooks this device supports: it registers any missing supported hook and removes
 // any published hook (skills.Hooks) the device does not support. Returns true if
 // the file was modified.
-func (s *Service) ensureHooksRegistered(hookNames []string) (bool, error) {
+func (s *OpenclawService) ensureHooksRegistered(hookNames []string) (bool, error) {
 	configPath := filepath.Join(s.config.OpenclawConfigDir, "openclaw.json")
 	configBytes, err := os.ReadFile(configPath)
 	if err != nil {
@@ -318,7 +318,7 @@ func (s *Service) ensureHooksRegistered(hookNames []string) (bool, error) {
 
 // ensureAgentsMDBlock injects the mandatory skills block into AGENTS.md.
 // Returns true if the file was modified.
-func (s *Service) ensureAgentsMDBlock() (bool, error) {
+func (s *OpenclawService) ensureAgentsMDBlock() (bool, error) {
 	agentsFile := filepath.Join(s.config.OpenclawConfigDir, "workspace", "AGENTS.md")
 
 	// If AGENTS.md is missing, run `openclaw setup` to regenerate the base template
@@ -401,7 +401,7 @@ func devicesDir() string {
 //
 // This is what makes "device → which soul" real: each device type gets its own
 // soul (or none) — from the same binary, no embedded hardcode.
-func (s *Service) deviceSoulCore() (content []byte, hasSoul bool, err error) {
+func (s *OpenclawService) deviceSoulCore() (content []byte, hasSoul bool, err error) {
 	devType := s.config.DeviceTypeOrDefault()
 	ref := device.SoulRef(devType)
 	if ref == "" {
@@ -459,7 +459,7 @@ func isDefaultSoulHeading(trimmed string) bool {
 // owner writes below the closing `---` is preserved on subsequent onboarding
 // runs, mirroring the AGENTS.md / HEARTBEAT.md pattern. Returns true if the file
 // was modified. A device that declares no soul injects no block.
-func (s *Service) ensureSoulMDBlock() (bool, error) {
+func (s *OpenclawService) ensureSoulMDBlock() (bool, error) {
 	soulFile := filepath.Join(s.config.OpenclawConfigDir, "workspace", "SOUL.md")
 
 	coreContent, hasSoul, err := s.deviceSoulCore()
@@ -543,7 +543,7 @@ func (s *Service) ensureSoulMDBlock() (bool, error) {
 
 // ensureHeartbeatMDBlock injects the knowledge-synthesis block into HEARTBEAT.md.
 // Returns true if the file was modified.
-func (s *Service) ensureHeartbeatMDBlock() (bool, error) {
+func (s *OpenclawService) ensureHeartbeatMDBlock() (bool, error) {
 	heartbeatFile := filepath.Join(s.config.OpenclawConfigDir, "workspace", "HEARTBEAT.md")
 
 	content, err := os.ReadFile(heartbeatFile)
@@ -628,7 +628,7 @@ func stripLegacyMandatoryBlock(text string) string {
 
 // ensureLoggingConfig adds the logging block to openclaw.json if it is missing.
 // Returns true if the file was modified.
-func (s *Service) ensureLoggingConfig() (bool, error) {
+func (s *OpenclawService) ensureLoggingConfig() (bool, error) {
 	configPath := filepath.Join(s.config.OpenclawConfigDir, "openclaw.json")
 	configBytes, err := os.ReadFile(configPath)
 	if err != nil {
@@ -674,7 +674,7 @@ func (s *Service) ensureLoggingConfig() (bool, error) {
 // (allowedOrigins=["*"], allowInsecureAuth=true — used before F6 closed LAN
 // access at nginx) are upgraded automatically here. Operators who set custom
 // origins are left untouched.
-func (s *Service) ensureControlUIConfig() (bool, error) {
+func (s *OpenclawService) ensureControlUIConfig() (bool, error) {
 	configPath := filepath.Join(s.config.OpenclawConfigDir, "openclaw.json")
 	configBytes, err := os.ReadFile(configPath)
 	if err != nil {
@@ -756,7 +756,7 @@ func (s *Service) ensureControlUIConfig() (bool, error) {
 //
 // Always overwrites — the os server owns this config knob; an operator who flips it
 // to "queue" will see the os server correct on the next boot.
-func (s *Service) ensureMessagesQueueConfig() (bool, error) {
+func (s *OpenclawService) ensureMessagesQueueConfig() (bool, error) {
 	configPath := filepath.Join(s.config.OpenclawConfigDir, "openclaw.json")
 	configBytes, err := os.ReadFile(configPath)
 	if err != nil {
@@ -862,7 +862,7 @@ func seedFile(efs embed.FS, src, dst string) bool {
 
 // ensureAgentDefaults patches agents.defaults in openclaw.json with performance config.
 // Returns true if the file was modified.
-func (s *Service) ensureAgentDefaults() (bool, error) {
+func (s *OpenclawService) ensureAgentDefaults() (bool, error) {
 	configPath := filepath.Join(s.config.OpenclawConfigDir, "openclaw.json")
 	configBytes, err := os.ReadFile(configPath)
 	if err != nil {
