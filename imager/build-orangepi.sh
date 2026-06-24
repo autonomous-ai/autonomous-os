@@ -404,46 +404,6 @@ SyslogIdentifier=hal
 WantedBy=multi-user.target
 UNIT
 
-# Default hal env — production-safe defaults. Secrets (GELF, API keys) are
-# filled by the device operator via setup wizard; not baked into the image.
-cat > /opt/hal/.env <<'ENV'
-HAL_MODE=production
-HAL_LOG_LEVEL=INFO
-HAL_AUDIO_INPUT_ALSA=plug:device_micro2
-HAL_AUDIO_SENSING_DEVICE=plug:device_micro1
-HAL_AUDIO_OUTPUT_ALSA=plug:device_speaker
-HAL_VAD_THRESHOLD=1500
-HAL_STT_KEEPALIVE=true
-HAL_SPEECH_HOLDOFF=0.05
-HAL_SOUND_RMS_THRESHOLD=3000
-HAL_TTS_SPEED=1.1
-HAL_SILERO_ENABLED=false
-HAL_WEBRTCVAD_ENABLED=true
-HAL_MOTION_ENABLED=true
-HAL_EMOTION_ENABLED=true
-HAL_POSE_MOTION_ENABLED=false
-HAL_MOTION_CONFIDENCE_THRESHOLD=0.4
-HAL_EMOTION_CONFIDENCE_THRESHOLD=0.8
-HAL_BACKCHANNEL_INTERVAL_S=5
-HAL_CAMERA_WIDTH=2560
-HAL_CAMERA_HEIGHT=1440
-HAL_CAMERA_STREAM_WIDTH=2560
-HAL_CAMERA_STREAM_HEIGHT=1440
-HAL_CAMERA_INDEX=0
-SPEAKER_MATCH_THRESHOLD=0.75
-SPEAKER_ENROLL_CONSISTENCY_THRESHOLD=0.75
-HAL_DL_ENCRYPTION=true
-HAL_DL_ENCRYPTION_REQUIRED=false
-OMP_NUM_THREADS=1
-OPENBLAS_NUM_THREADS=1
-ENV
-
-# Device profile selector for HAL — appended idempotently so the quoted ENV
-# heredoc above stays literal while \${DEVICE_TYPE}/\${DEVICES_DIR} expand here
-# from the chroot env.
-grep -q "^DEVICE_TYPE=" /opt/hal/.env || echo "DEVICE_TYPE=\${DEVICE_TYPE}" >> /opt/hal/.env
-grep -q "^DEVICES_DIR=" /opt/hal/.env || echo "DEVICES_DIR=\${DEVICES_DIR}" >> /opt/hal/.env
-
 # OpenClaw service — env block matches production OPi exactly.
 CHROME_PATH=\$(command -v chromium 2>/dev/null || echo /usr/bin/chromium)
 OPENCLAW_BIN=\$(command -v openclaw)
