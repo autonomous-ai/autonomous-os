@@ -152,17 +152,41 @@ func (h *AgentHandler) ChannelTurn(c *gin.Context) {
 
 	case "agent:end":
 		runID := channelHook.end(ctx.Platform, sessionID)
+		// Close the lifecycle (RESP node → done), then carry the reply text. The
+		// gateway delivered the reply to the channel, not the device speaker, so —
+		// exactly like the openclaw channel path (handler_event_session_message.go)
+		// — it is logged as tts_suppressed, which is the node Flow Monitor renders
+		// as the turn's response in the persisted JSONL (chat_response alone only
+		// lives in the monitor SSE/RAM and is lost on reload).
 		flow.Log("lifecycle_end", map[string]any{
 			"run_id": runID,
 			"source": "channel_hook",
 		}, runID)
-		h.monitorBus.Push(domain.MonitorEvent{
-			Type:    "chat_response",
-			Summary: channelTurnPreview(ctx.Response, 200),
-			RunID:   runID,
-			State:   "final",
-			Detail:  map[string]string{"role": "assistant", "message": ctx.Response, "channel": ctx.Platform},
-		})
+		resp := strings.TrimSpace(ctx.Response)
+		switch {
+		case resp == "" || isAgentNoReply(resp):
+			flow.Log("no_reply", map[string]any{"run_id": runID}, runID)
+			h.monitorBus.Push(domain.MonitorEvent{
+				Type:    "chat_response",
+				Summary: "[no reply]",
+				RunID:   runID,
+				State:   "final",
+				Detail:  map[string]string{"role": "assistant", "message": "[no reply]", "channel": ctx.Platform},
+			})
+		default:
+			flow.Log("tts_suppressed", map[string]any{
+				"run_id": runID,
+				"reason": "channel_run",
+				"text":   resp,
+			}, runID)
+			h.monitorBus.Push(domain.MonitorEvent{
+				Type:    "chat_response",
+				Summary: channelTurnPreview(resp, 200),
+				RunID:   runID,
+				State:   "final",
+				Detail:  map[string]string{"role": "assistant", "message": resp, "channel": ctx.Platform},
+			})
+		}
 	}
 }
 
