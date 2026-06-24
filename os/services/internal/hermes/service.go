@@ -4,7 +4,7 @@
 // OpenClaw.
 //
 // Hermes is assumed to be running locally on the Pi at Hermes.BaseURL with
-// all skills already provisioned. Lumi only acts as a per-request client and
+// all skills already provisioned. Device only acts as a per-request client and
 // translates SSE events into the same domain.WSEvent shape that the OpenClaw
 // handler at server/agent/delivery/http/handler_events.go consumes — so the
 // downstream pipeline (HAL TTS, [HW:/...] markers, monitor SSE, sensing
@@ -141,7 +141,7 @@ type HermesService struct {
 	recentOutboundTexts []recentOutbound
 
 	// telegramRunOrigin maps a runID → telegram chatID for runs originated
-	// from a Lumi-side Telegram receive loop. The SSE handler consults this
+	// from a Device-side Telegram receive loop. The SSE handler consults this
 	// on response.completed to route the reply back to the chat instead of
 	// (or alongside) TTS.
 	telegramRunOriginMu sync.Mutex
@@ -221,7 +221,7 @@ func (s *HermesService) AgentUptime() int64 {
 }
 
 // markOutboundChat / IsRecentOutboundChat mirror openclaw.Service. Used by the
-// session.message handler to skip echoes of Lumi-injected user messages
+// session.message handler to skip echoes of Device-injected user messages
 // (wake greeting, sensing events) that the server rebroadcasts.
 func (s *HermesService) markOutboundChat(text string) {
 	if text == "" {
@@ -244,7 +244,7 @@ func (s *HermesService) markOutboundChat(text string) {
 	s.recentOutboundTexts = pruned
 }
 
-// IsRecentOutboundChat reports whether Lumi sent this text recently.
+// IsRecentOutboundChat reports whether Device sent this text recently.
 func (s *HermesService) IsRecentOutboundChat(text string) bool {
 	if text == "" {
 		return false

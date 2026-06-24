@@ -183,7 +183,7 @@ func (s *PicoclawService) ConnectedAt() int64 { return s.wsConnectedAt.Load() }
 func (s *PicoclawService) AgentUptime() int64 { return 0 }
 
 // markOutboundChat / IsRecentOutboundChat mirror openclaw.PicoclawService. Used by the
-// session.message handler to skip echoes of Lumi-injected user messages.
+// session.message handler to skip echoes of Device-injected user messages.
 func (s *PicoclawService) markOutboundChat(text string) {
 	if text == "" {
 		return
@@ -205,7 +205,7 @@ func (s *PicoclawService) markOutboundChat(text string) {
 	s.recentOutboundTexts = pruned
 }
 
-// IsRecentOutboundChat reports whether Lumi sent this text recently.
+// IsRecentOutboundChat reports whether Device sent this text recently.
 func (s *PicoclawService) IsRecentOutboundChat(text string) bool {
 	if text == "" {
 		return false

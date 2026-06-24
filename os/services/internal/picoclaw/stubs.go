@@ -17,9 +17,9 @@ func (s *PicoclawService) SetupAgent(_ domain.SetupRequest) error {
 	return nil
 }
 
-// AddChannel — channels run inside Lumi (Telegram receive loop) when on
+// AddChannel — channels run inside Device (Telegram receive loop) when on
 // PicoClaw, not as plugins inside the agent runtime. No-op here; channel
-// credentials live in the regular Lumi config (TelegramBotToken, etc.).
+// credentials live in the regular Device config (TelegramBotToken, etc.).
 func (s *PicoclawService) AddChannel(_ context.Context, _ domain.AddChannelRequest) error {
 	slog.Info("AddChannel: no-op (picoclaw backend)", "component", "picoclaw")
 	return nil
@@ -105,7 +105,7 @@ func (s *PicoclawService) StartPrimaryModelWatch(ctx context.Context) {
 	<-ctx.Done()
 }
 
-// GetConfiguredChannel — Lumi config is the source of truth under PicoClaw.
+// GetConfiguredChannel — Device config is the source of truth under PicoClaw.
 // Returns "telegram" when a bot token is set, otherwise the generic label.
 func (s *PicoclawService) GetConfiguredChannel() string {
 	if s.config.TelegramBotToken != "" {
@@ -129,7 +129,7 @@ func (s *PicoclawService) NewSession(sessionKey string) error {
 }
 
 // UpdateIdentityName — under PicoClaw, IDENTITY.md is owned by the external
-// PicoClaw server, not Lumi. No-op.
+// PicoClaw server, not Device. No-op.
 func (s *PicoclawService) UpdateIdentityName(_ string) error {
 	slog.Info("UpdateIdentityName: no-op (picoclaw backend)", "component", "picoclaw")
 	return nil

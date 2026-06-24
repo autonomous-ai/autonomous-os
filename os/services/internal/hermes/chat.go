@@ -162,7 +162,7 @@ func (s *HermesService) sendChat(message string, imageBase64 string, fixedReqID 
 		RunID:   idempotencyKey,
 	})
 
-	// Run the SSE stream in a background goroutine: Lumi callers (sensing
+	// Run the SSE stream in a background goroutine: Device callers (sensing
 	// handler, voice loop) shouldn't block for the full turn duration.
 	go s.runStream(idempotencyKey, body)
 

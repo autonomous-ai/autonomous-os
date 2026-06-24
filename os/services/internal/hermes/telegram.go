@@ -12,7 +12,7 @@ import (
 	"go.autonomous.ai/os/domain"
 )
 
-// telegramTargetsFile is the Lumi-owned store of known Telegram chats. Hermes
+// telegramTargetsFile is the Device-owned store of known Telegram chats. Hermes
 // has no plugin/channel layer of its own (unlike OpenClaw which keeps
 // agents/main/sessions/sessions.json), so the receive loop populates this
 // file each time a new chat DMs the bot.
@@ -33,13 +33,13 @@ type telegramTargetsFileContent struct {
 // across the disk I/O so the receive loop never blocks the broadcast path.
 var targetsFileMu sync.Mutex
 
-// GetTelegramBotToken returns the bot token from Lumi config. There is no
+// GetTelegramBotToken returns the bot token from Device config. There is no
 // agent-side config to consult under Hermes.
 func (s *HermesService) GetTelegramBotToken() string {
 	return s.config.TelegramBotToken
 }
 
-// GetTelegramTargets reads the Lumi-owned target store. Returns nil + nil
+// GetTelegramTargets reads the Device-owned target store. Returns nil + nil
 // (no error) when the file doesn't exist yet — that's the steady state before
 // any user has messaged the bot.
 func (s *HermesService) GetTelegramTargets() ([]domain.TelegramTarget, error) {

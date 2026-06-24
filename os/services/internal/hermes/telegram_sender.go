@@ -21,7 +21,7 @@ const telegramMaxMediaGroup = 10
 
 // TelegramSender delivers messages via the Telegram Bot API. Identical wire
 // protocol to the openclaw implementation; the only behavioural difference is
-// that GetTelegramTargets() reads from the Lumi-owned store.
+// that GetTelegramTargets() reads from the Device-owned store.
 type TelegramSender struct {
 	svc *HermesService
 }
