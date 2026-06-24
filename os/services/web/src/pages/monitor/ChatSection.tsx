@@ -1779,7 +1779,7 @@ export function ChatSection({ events, isActive }: Props) {
             separate banner. Centered with max-width like the messages column.
             flexShrink:0 pins the composer so it can never be squeezed/clipped by
             the scroll area above it. */}
-        <div style={{
+        <div  id="CHAT_BOX" style={{
           flexShrink: 0,
           padding: "10px 16px 12px",
           borderTop: "1px solid var(--lm-border)",
@@ -1857,6 +1857,7 @@ export function ChatSection({ events, isActive }: Props) {
                 aria-label="Attach file"
               ><Paperclip size={17} /></button>
               <textarea
+                id="CHAT_TEXTAREA"
                 ref={textareaRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -1872,7 +1873,7 @@ export function ChatSection({ events, isActive }: Props) {
                   color: "var(--lm-text)", fontSize: 14,
                   outline: "none", opacity: sending ? 0.6 : 1,
                   resize: "none", lineHeight: 1.5, fontFamily: "inherit",
-                  minHeight: 22, maxHeight: 200, overflow: "auto",
+                  minHeight: 35, maxHeight: 200, overflow: "auto",
                   boxSizing: "border-box",
                 }}
               />
