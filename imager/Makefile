@@ -15,7 +15,29 @@ TARGET ?= opi
 RPI_MODEL ?= 5
 BUILD_SCRIPT_rpi := build.sh
 BUILD_SCRIPT_opi := build-orangepi.sh
+BUILD_SCRIPT_opi-dev := build-orangepi-dev.sh
+BUILD_SCRIPT_opi-stock := build-orangepi-dev.sh
 BUILD_SCRIPT := $(BUILD_SCRIPT_$(TARGET))
+
+# opi-dev / opi-stock use the minimal builder (build-orangepi-dev.sh): vendor OS +
+# a thin dev layer (or, for stock, nothing). Device-AGNOSTIC — no OTA bake, no
+# DEVICE_TYPE. opi-stock additionally skips the dev layer (STOCK=1) → a pure base
+# image the software team flashes, then runs setup.sh on. Dev-build knobs below.
+DEV_BUILD :=
+STOCK :=
+DEV_LABEL ?=
+CONFIG_SRC ?=
+DEV_OVERLAYS ?=
+DEV_ROOT_PW ?=
+DEV_IMG_SIZE ?=
+XZ_MEMLIMIT ?=
+ifeq ($(TARGET),opi-dev)
+DEV_BUILD := 1
+endif
+ifeq ($(TARGET),opi-stock)
+DEV_BUILD := 1
+STOCK := 1
+endif
 
 # OTA metadata URL must be passed in at build time (no hardcoded default in the
 # build scripts). Provide it via env or command line, e.g.:
@@ -32,7 +54,7 @@ OTA_METADATA_URL ?=
 DEVICE_TYPE ?=
 
 ifndef BUILD_SCRIPT
-$(error Unknown TARGET=$(TARGET). Supported: rpi, opi)
+$(error Unknown TARGET=$(TARGET). Supported: rpi, opi, opi-dev, opi-stock)
 endif
 
 # Image filename per target AND per device type so neither board nor device-type
@@ -41,9 +63,13 @@ endif
 # OPi build produces .img.xz (compressed); RPi build produces raw .img.
 BUILT_IMG_rpi := golden.img
 BUILT_IMG_opi := $(DEVICE_TYPE)/golden-opi.img.xz
+BUILT_IMG_opi-dev := golden-opi-dev$(if $(DEV_LABEL),-$(DEV_LABEL)).img.xz
+BUILT_IMG_opi-stock := stock-opi.img.xz
 BUILT_IMG := $(BUILT_IMG_$(TARGET))
 IMG_FILE_rpi := golden-$(DEVICE_TYPE).img
 IMG_FILE_opi := $(DEVICE_TYPE)/golden-opi-$(DEVICE_TYPE).img.xz
+IMG_FILE_opi-dev := golden-opi-dev$(if $(DEV_LABEL),-$(DEV_LABEL)).img.xz
+IMG_FILE_opi-stock := stock-opi.img.xz
 IMG_FILE := $(IMG_FILE_$(TARGET))
 
 # Preflight — check Docker resources + clean dangling layers before a long
@@ -54,10 +80,14 @@ IMG_FILE := $(IMG_FILE_$(TARGET))
 # images (UV cache / lerobot clone stay intact).
 build-preflight:
 	@echo "==> Preflight checks"
+ifndef DEV_BUILD
 	@[ -n "$(OTA_METADATA_URL)" ] || { echo "ERROR: OTA_METADATA_URL is required — e.g. make build OTA_METADATA_URL=https://.../metadata.json"; exit 1; }
 	@[ -n "$(DEVICE_TYPE)" ] || { echo "ERROR: DEVICE_TYPE is required — e.g. make build DEVICE_TYPE=lamp"; exit 1; }
 	@echo "    OTA metadata URL: $(OTA_METADATA_URL)"
 	@echo "    Device type:      $(DEVICE_TYPE)"
+else
+	@echo "    Build variant:    $(TARGET) (device-agnostic minimal builder; no OTA bake, no DEVICE_TYPE)"
+endif
 	@command -v docker >/dev/null 2>&1 || { echo "ERROR: Docker not installed"; exit 1; }
 	@docker info >/dev/null 2>&1 || { echo "ERROR: Docker daemon not running (start Docker Desktop)"; exit 1; }
 	@DOCKER_MEM_GB=$$(docker info --format '{{.MemTotal}}' | awk '{printf "%.1f", $$1/1024/1024/1024}'); \
@@ -93,6 +123,13 @@ build: build-preflight
 	-e RPI_MODEL=$(RPI_MODEL) \
 	-e OTA_METADATA_URL=$(OTA_METADATA_URL) \
 	-e DEVICE_TYPE=$(DEVICE_TYPE) \
+	-e STOCK="$(STOCK)" \
+	-e DEV_LABEL="$(DEV_LABEL)" \
+	-e CONFIG_SRC="$(CONFIG_SRC)" \
+	-e DEV_OVERLAYS="$(DEV_OVERLAYS)" \
+	-e DEV_ROOT_PW="$(DEV_ROOT_PW)" \
+	-e DEV_IMG_SIZE="$(DEV_IMG_SIZE)" \
+	-e XZ_MEMLIMIT="$(XZ_MEMLIMIT)" \
 	pi-builder /work/$(BUILD_SCRIPT)
 	@# Name the output per device type so lamp/intern/dog images don't clobber.
 	@if [ "$(BUILT_IMG)" != "$(IMG_FILE)" ] && [ -f output/$(BUILT_IMG) ]; then mv -f output/$(BUILT_IMG) output/$(IMG_FILE); fi

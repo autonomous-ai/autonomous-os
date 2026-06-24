@@ -34,6 +34,29 @@ lamp and intern-v2 use the **hardware team's pre-built base image** instead of t
 
 When the hardware team ships a new base image, run `make upload-source DEVICE_TYPE=lamp` to push it to GCS so other devs can pull it for their next build.
 
+## Stock / dev images (device-agnostic, no OTA bake)
+
+Two extra targets use `build-orangepi-dev.sh` — the minimal builder (no apt, no qemu
+chroot, no OTA bake; ~5–10 min). They are **device-agnostic**, so they do **not** take
+`DEVICE_TYPE` / `OTA_METADATA_URL`:
+
+```bash
+make TARGET=opi-stock build            # → output/stock-opi.img.xz
+make TARGET=opi-dev DEV_LABEL=intern CONFIG_SRC=/input/<dir> build   # → output/golden-opi-dev-intern.img.xz
+```
+
+- **`opi-stock`** — pure vendor OS + a self-destructing first-boot SD-resize, and **nothing
+  else** (no app stack, no device config, no dev layer). The software team flashes it, boots,
+  and runs `scripts/provision/setup.sh` (with `DEVICE_TYPE=lamp|intern-v2`) to initialize the
+  unit. One image serves both. SSH via the vendor `orangepi`/`orangepi` (no root login).
+- **`opi-dev`** — stock OS + a thin dev layer for hardware bring-up: bakes `etc/asound.conf` +
+  udev rules from `CONFIG_SRC` (drop the dir under `input/`), permissive dev-node access
+  (`spidev/i2c/gpiochip/ttyS/pwm` = 0666), the SPI3 LED overlay (`DEV_OVERLAYS`), SSH password
+  login (**root login disabled**), first-boot resize. `DEV_LABEL` suffixes the output.
+
+Both produce a flat `output/*.img.xz` (not per-device-type dirs). Knobs: `DEV_LABEL`,
+`CONFIG_SRC`, `DEV_OVERLAYS`, `DEV_IMG_SIZE`, `XZ_MEMLIMIT`.
+
 **Manual download** (if you received the file via AirDrop / file share and need to place it yourself):
 
 | DEVICE_TYPE | Download | Place at |

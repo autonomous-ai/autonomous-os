@@ -27,8 +27,9 @@ RUN which wpa_passphrase
 WORKDIR /work
 COPY build.sh /work/build.sh
 COPY build-orangepi.sh /work/build-orangepi.sh
+COPY build-orangepi-dev.sh /work/build-orangepi-dev.sh
 COPY lib /work/lib
-RUN chmod +x /work/build.sh /work/build-orangepi.sh
+RUN chmod +x /work/build.sh /work/build-orangepi.sh /work/build-orangepi-dev.sh
 
 # Default to OrangePi build; the Makefile overrides at run-time by appending
 # /work/build.sh when TARGET=rpi.
