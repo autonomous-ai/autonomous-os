@@ -1154,6 +1154,57 @@
   .lm-root .lm-pulse::after { animation: none; }
 }
 
+/* ── Auto-fit card row ────────────────────────────────────────────────────────
+   Like .lm-grid-4 but the column count follows the number of cards actually
+   rendered, so rows with capability-gated cards (Emotion/Scene/Servo only on
+   some devices) stay flush left and never leave a hole on the right. Each card
+   keeps a comfortable min width and grows to fill — a lone card spans the row
+   rather than collapsing to a quarter-width stub. */
+.lm-root .lm-grid-auto {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+@media (max-width: 480px) {
+  .lm-root .lm-grid-auto { grid-template-columns: 1fr; gap: 8px; }
+}
+
+/* ── Skeleton loaders ─────────────────────────────────────────────────────────
+   Placeholder bars that hold a card's height while data is in flight, replacing
+   the "Loading…" text that caused a layout jump when the real rows arrived. A
+   slow amber-tinted sheen sweeps across to read as "live, fetching". */
+.lm-root .lm-skel {
+  border-radius: 6px;
+  background: linear-gradient(
+    100deg,
+    var(--lm-surface) 30%,
+    color-mix(in srgb, var(--lm-amber) 8%, var(--lm-surface)) 50%,
+    var(--lm-surface) 70%
+  );
+  background-size: 220% 100%;
+  animation: lm-skel-sheen 1.4s ease-in-out infinite;
+}
+@keyframes lm-skel-sheen {
+  0%   { background-position: 180% 0; }
+  100% { background-position: -80% 0; }
+}
+
+/* ── Hardware badge — offline pulse ───────────────────────────────────────────
+   An offline (red) HW badge gets a soft breathing glow so a failed subsystem
+   (Servo/Camera down) pulls the eye, while healthy green badges stay calm. */
+.lm-root .lm-hw-down {
+  animation: lm-hw-down-pulse 1.8s ease-in-out infinite;
+}
+@keyframes lm-hw-down-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--lm-red) 30%, transparent); }
+  50%      { box-shadow: 0 0 8px 1px color-mix(in srgb, var(--lm-red) 40%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lm-root .lm-skel { animation: none; }
+  .lm-root .lm-hw-down { animation: none; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .lm-edit .lm-card:hover,
   .lm-root .lm-settings-panel .lm-card:hover { transform: none; }
