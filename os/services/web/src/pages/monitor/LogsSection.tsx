@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getApiToken, withApiToken } from "@/lib/api";
 import { S } from "./styles";
 import { API } from "./types";
+import { StatusBadge } from "./components";
 
 type LogSource = "hal" | "os-server" | "openclaw" | "openclaw-service" | "buddy";
 const LOG_SOURCES: { id: LogSource; label: string; color: string }[] = [
@@ -39,6 +40,27 @@ const levelColor: Record<LogLevel, string> = {
   WARN: "var(--lm-amber)",
   ERROR: "var(--lm-red)",
 };
+
+// Level → (accent, soft bg) for the active level-filter dropdown, so picking
+// ERROR reads red, WARN amber, DEBUG purple, INFO blue — purely a visual tweak
+// to the dropdown chrome; the filtering logic itself is unchanged.
+const levelFilterTone: Record<Exclude<LogLevel, "ALL">, { fg: string; bg: string }> = {
+  DEBUG: { fg: "var(--lm-purple)", bg: "rgba(167,139,250,0.14)" },
+  INFO:  { fg: "var(--lm-blue)",   bg: "rgba(96,165,250,0.14)" },
+  WARN:  { fg: "var(--lm-amber)",  bg: "var(--lm-amber-dim)" },
+  ERROR: { fg: "var(--lm-red)",    bg: "var(--lm-red-dim)" },
+};
+
+// chipTone maps a raw level token (as captured by formatLine — e.g. "DEBUG",
+// "INF", or the Go "[abcDEBUG]" form) to a chip color. Display-only: it just
+// looks at which level word the token contains, and never changes parsing.
+function chipTone(token: string): { fg: string; bg: string } {
+  const u = token.toUpperCase();
+  if (/ERR/.test(u))   return levelFilterTone.ERROR;
+  if (/WARN/.test(u))  return levelFilterTone.WARN;
+  if (/DBG|DEBUG/.test(u)) return levelFilterTone.DEBUG;
+  return levelFilterTone.INFO;
+}
 
 // Strip ANSI escape codes only when prefixed by ESC. The earlier fallback that
 // matched any `[…m` ate parts of content like `[200ms]` from app logs.
@@ -143,6 +165,18 @@ function LogPanel({ source, label, color, initialFilter, initialLevel, onFilterC
     return result;
   }, [lines, level, filter]);
 
+  // Per-level counts for the toolbar summary chips. Uses the same detectLevel()
+  // as filtering/rendering — purely a display aggregate, no logic change.
+  const counts = useMemo(() => {
+    const c = { ERROR: 0, WARN: 0 };
+    for (const l of lines) {
+      const ll = detectLevel(l);
+      if (ll === "ERROR") c.ERROR++;
+      else if (ll === "WARN") c.WARN++;
+    }
+    return c;
+  }, [lines]);
+
   useEffect(() => {
     if (autoScroll && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -153,6 +187,11 @@ function LogPanel({ source, label, color, initialFilter, initialLevel, onFilterC
     if (!scrollRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
     setAutoScroll(scrollHeight - scrollTop - clientHeight < 40);
+  };
+
+  const jumpToBottom = () => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    setAutoScroll(true);
   };
 
   const highlightLine = (line: string) => {
@@ -195,11 +234,25 @@ function LogPanel({ source, label, color, initialFilter, initialLevel, onFilterC
       meta = rest.slice(metaIdx);
     }
 
+    const tone = chipTone(lvl);
     return (
       <>
         <span style={{ opacity: 0.35 }}>{ts}</span>
         {" "}
-        <span style={{ fontWeight: 700 }}>{lvl}</span>
+        <span
+          style={{
+            display: "inline-block",
+            background: tone.bg,
+            color: tone.fg,
+            fontWeight: 700,
+            fontSize: "0.92em",
+            letterSpacing: "0.03em",
+            padding: "1px 6px",
+            borderRadius: 4,
+            lineHeight: 1.4,
+            verticalAlign: "baseline",
+          }}
+        >{lvl}</span>
         {" "}
         {msg}
         {meta && <span style={{ opacity: 0.3 }}>{meta}</span>}
@@ -208,19 +261,31 @@ function LogPanel({ source, label, color, initialFilter, initialLevel, onFilterC
   };
 
   const btnStyle: React.CSSProperties = {
-    fontSize: 10, padding: "3px 8px", borderRadius: 5,
+    fontSize: 12, padding: "5px 10px", borderRadius: 6,
     background: "var(--lm-surface)", border: "1px solid var(--lm-border)",
-    color: "var(--lm-text-dim)", cursor: "pointer", fontWeight: 600,
+    color: "var(--lm-text-dim)", cursor: "pointer", fontWeight: 600, lineHeight: 1,
   };
+  // Shared sizing for the two <select>s so they line up with the buttons.
+  const selectStyle: React.CSSProperties = {
+    fontSize: 12, padding: "5px 8px", borderRadius: 6,
+    background: "var(--lm-surface)", border: "1px solid var(--lm-border)",
+    color: "var(--lm-text)", cursor: "pointer",
+  };
+
+  const lvlTone = level !== "ALL" ? levelFilterTone[level] : null;
+  const isEmpty = filtered.length === 0;
 
   return (
     <div style={{ ...S.card, flex: 1, minHeight: 0, padding: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-      <div style={{ padding: "8px 12px", borderBottom: "1px solid var(--lm-border)", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-        <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
-        <span style={{ ...S.cardLabel, marginBottom: 0, fontSize: 12 }}>{label}</span>
-        <button onClick={fetchLines} style={btnStyle}>↻</button>
+      <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--lm-border)", display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+        <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0, boxShadow: `0 0 6px ${color}` }} />
+        <span style={{ ...S.cardLabel, marginBottom: 0, fontSize: 13 }}>{label}</span>
+
+        {/* group: stream controls */}
+        <button onClick={fetchLines} style={btnStyle} title="Refresh">↻</button>
         <button
           onClick={() => setPaused((p) => !p)}
+          title={paused ? "Resume live stream" : "Pause live stream"}
           style={{
             ...btnStyle,
             background: paused ? "var(--lm-amber-dim)" : "var(--lm-surface)",
@@ -232,20 +297,25 @@ function LogPanel({ source, label, color, initialFilter, initialLevel, onFilterC
         <select
           value={lastN}
           onChange={(e) => setLastN(Number(e.target.value))}
-          style={{ fontSize: 10, padding: "3px 6px", borderRadius: 5, background: "var(--lm-surface)", border: "1px solid var(--lm-border)", color: "var(--lm-text)" }}
+          title="Tail size"
+          style={selectStyle}
         >
           {[100, 200, 500, 1000].map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
-        <span style={{ width: 1, height: 16, background: "var(--lm-border)", margin: "0 2px" }} />
+
+        <span className="lm-log-sep" />
+
+        {/* group: filtering — the active level dropdown takes that level's own
+            accent (ERROR=red, WARN=amber, DEBUG=purple, INFO=blue). */}
         <select
           value={level}
           onChange={(e) => { const v = e.target.value as LogLevel; setLevel(v); onFilterChange(source, filter, v); }}
           style={{
-            fontSize: 10, padding: "3px 6px", borderRadius: 5,
-            background: level !== "ALL" ? "var(--lm-amber-dim)" : "var(--lm-surface)",
-            border: "1px solid var(--lm-border)",
-            color: level !== "ALL" ? "var(--lm-amber)" : "var(--lm-text)",
-            fontWeight: level !== "ALL" ? 700 : 400,
+            ...selectStyle,
+            background: lvlTone ? lvlTone.bg : "var(--lm-surface)",
+            border: `1px solid ${lvlTone ? lvlTone.fg : "var(--lm-border)"}`,
+            color: lvlTone ? lvlTone.fg : "var(--lm-text)",
+            fontWeight: lvlTone ? 700 : 400,
           }}
         >
           {LOG_LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}
@@ -254,9 +324,9 @@ function LogPanel({ source, label, color, initialFilter, initialLevel, onFilterC
           type="text"
           value={filter}
           onChange={(e) => { setFilter(e.target.value); onFilterChange(source, e.target.value, level); }}
-          placeholder="grep..."
+          placeholder="grep…"
           style={{
-            fontSize: 10, padding: "3px 8px", borderRadius: 5, width: 120,
+            fontSize: 12, padding: "5px 10px", borderRadius: 6, width: 150,
             background: filter ? "var(--lm-amber-dim)" : "var(--lm-surface)",
             border: `1px solid ${filter ? "var(--lm-amber)" : "var(--lm-border)"}`,
             color: "var(--lm-text)", fontFamily: "monospace",
@@ -264,8 +334,12 @@ function LogPanel({ source, label, color, initialFilter, initialLevel, onFilterC
           }}
         />
         {filter && (
-          <button onClick={() => { setFilter(""); onFilterChange(source, "", level); }} style={{ ...btnStyle, padding: "3px 6px" }}>✕</button>
+          <button onClick={() => { setFilter(""); onFilterChange(source, "", level); }} style={{ ...btnStyle, padding: "5px 9px" }} title="Clear filter">✕</button>
         )}
+
+        <span className="lm-log-sep" />
+
+        {/* group: actions */}
         <button
           onClick={() => {
             const text = (filtered.length ? filtered : lines).join("\n");
@@ -280,50 +354,84 @@ function LogPanel({ source, label, color, initialFilter, initialLevel, onFilterC
           title="Download visible lines as .log"
           style={btnStyle}
         >↓</button>
-        <button onClick={() => setLines([])} style={btnStyle}>Clear</button>
-        <label style={{ marginLeft: "auto", fontSize: 9, color: "var(--lm-text-muted)", display: "flex", alignItems: "center", gap: 4, cursor: "pointer", userSelect: "none" }}>
+        <button onClick={() => setLines([])} style={btnStyle} title="Clear view">Clear</button>
+
+        {/* error/warn pressure chips — reuse the shared StatusBadge tones so they
+            match the ONLINE/OFFLINE pills used across Overview/System. Counts
+            come from the same detectLevel() used everywhere else. */}
+        {counts.ERROR > 0 && <StatusBadge text={`${counts.ERROR} ERR`} tone="error" />}
+        {counts.WARN > 0 && <StatusBadge text={`${counts.WARN} WARN`} tone="active" />}
+
+        <label style={{ marginLeft: "auto", fontSize: 11, color: "var(--lm-text-muted)", display: "flex", alignItems: "center", gap: 5, cursor: "pointer", userSelect: "none" }}>
           <input
             type="checkbox"
             checked={autoScroll}
             onChange={(e) => setAutoScroll(e.target.checked)}
-            style={{ width: 11, height: 11, accentColor: "var(--lm-amber)", cursor: "pointer" }}
+            style={{ width: 13, height: 13, accentColor: "var(--lm-amber)", cursor: "pointer" }}
           />
           Auto-scroll
         </label>
-        <span style={{ fontSize: 9, color: "var(--lm-text-muted)" }}>
-          {loading ? "Loading..." : error ? error : filtered.length !== lines.length ? `${filtered.length}/${lines.length}` : `${lines.length} lines`}
+        <span style={{ fontSize: 11, color: "var(--lm-text-muted)", fontVariantNumeric: "tabular-nums" }}>
+          {loading ? "Loading…" : error ? error : filtered.length !== lines.length ? `${filtered.length}/${lines.length}` : `${lines.length} lines`}
         </span>
       </div>
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        style={{
-          flex: 1, overflowY: "auto", padding: "6px 0",
-          fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
-          fontSize: 10.5, lineHeight: 1.55,
-          whiteSpace: "pre-wrap" as const,
-          overflowWrap: "anywhere" as const,
-        }}
-        className="lm-hide-scroll"
-      >
-        {filtered.length === 0 ? (
-          <div style={{ padding: "12px 14px", color: "var(--lm-text-muted)", fontSize: 11 }}>
-            {error ? error : filter || level !== "ALL" ? "No matching lines." : `No log lines from ${label} yet.`}
-          </div>
-        ) : (
-          filtered.map((line, i) => {
-            const ll = detectLevel(line);
-            return (
-              <div key={i} style={{
-                padding: "3px 12px",
-                color: levelColor[ll],
-                borderLeft: `2px solid ${ll === "ERROR" ? "#f87171" : ll === "WARN" ? "#fbbf24" : "transparent"}`,
-                background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.02)",
-              }}>
-                {highlightLine(line)}
-              </div>
-            );
-          })
+
+      {/* scroll body wrapper is relative so the jump pill can float over it */}
+      <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          style={{
+            height: "100%", overflowY: "auto", padding: "6px 0",
+            fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+            fontSize: 11, lineHeight: 1.55,
+            whiteSpace: "pre-wrap" as const,
+            overflowWrap: "anywhere" as const,
+          }}
+          className="lm-hide-scroll"
+        >
+          {isEmpty ? (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 8, color: "var(--lm-text-muted)", textAlign: "center", padding: 24 }}>
+              {loading ? (
+                <>
+                  <span className="lm-spin-ico" style={{ display: "inline-block", width: 18, height: 18, border: "2px solid var(--lm-border-hi)", borderTopColor: "var(--lm-amber)", borderRadius: "50%" }} />
+                  <span style={{ fontSize: 11 }}>Loading {label} logs…</span>
+                </>
+              ) : (
+                <>
+                  <span style={{ fontSize: 22, opacity: 0.5 }}>{error ? "⚠" : "≋"}</span>
+                  <span style={{ fontSize: 11 }}>
+                    {error ? error : filter || level !== "ALL" ? "No matching lines." : `No log lines from ${label} yet.`}
+                  </span>
+                </>
+              )}
+            </div>
+          ) : (
+            filtered.map((line, i) => {
+              const ll = detectLevel(line);
+              return (
+                <div
+                  key={i}
+                  className="lm-log-line"
+                  style={{
+                    padding: "3px 14px",
+                    color: levelColor[ll],
+                    borderLeft: `2px solid ${ll === "ERROR" ? "var(--lm-red)" : ll === "WARN" ? "var(--lm-amber)" : "transparent"}`,
+                    background: ll === "ERROR" ? "var(--lm-red-dim)" : i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.018)",
+                  }}
+                >
+                  {highlightLine(line)}
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* float a jump-to-bottom pill while the user has scrolled up */}
+        {!autoScroll && !isEmpty && (
+          <button className="lm-log-jump" onClick={jumpToBottom}>
+            ↓ Jump to latest
+          </button>
         )}
       </div>
     </div>
@@ -385,11 +493,11 @@ export function LogsSection() {
             key={s.id}
             onClick={() => handleTabChange(s.id)}
             style={{
-              fontSize: 11, padding: "4px 12px", borderRadius: 6, cursor: "pointer",
+              fontSize: 11, padding: "5px 14px", borderRadius: 6, cursor: "pointer",
               border: active === s.id ? `1px solid ${s.color}` : "1px solid var(--lm-border)",
               background: active === s.id ? `${s.color}22` : "var(--lm-surface)",
               color: active === s.id ? s.color : "var(--lm-text-dim)",
-              fontWeight: active === s.id ? 700 : 400,
+              fontWeight: active === s.id ? 700 : 500,
               transition: "all 0.15s",
             }}
           >

@@ -128,6 +128,7 @@
   --lm-red-glow:    rgba(248,113,113,0.22);
   --lm-blue:        #60A5FA;
   --lm-purple:      #A78BFA;
+  --lm-cyan:        #22D3EE;
   --lm-orange:      #FB923C;
   --lm-yellow:      #FCD34D;
 
@@ -169,6 +170,7 @@
   --lm-red-glow:    rgba(220,38,38,0.18);
   --lm-blue:        #2563EB;
   --lm-purple:      #7C3AED;
+  --lm-cyan:        #0891B2;
   --lm-orange:      #EA580C;
   --lm-yellow:      #CA8A04;
 
@@ -201,6 +203,7 @@
     --lm-red-glow:    rgba(220,38,38,0.18);
     --lm-blue:        #2563EB;
     --lm-purple:      #7C3AED;
+    --lm-cyan:        #0891B2;
     --lm-orange:      #EA580C;
     --lm-yellow:      #CA8A04;
 
@@ -369,6 +372,35 @@
 .lm-root ::-webkit-scrollbar-thumb:hover { background: var(--lm-amber); }
 .lm-hide-scroll { scrollbar-width: none; }
 .lm-hide-scroll::-webkit-scrollbar { display: none; }
+
+/* Log viewer (monitor#logs) — subtle row hover for scannability */
+.lm-log-line { transition: background 0.1s; }
+.lm-log-line:hover { background: var(--lm-amber-dim) !important; }
+/* floating "jump to bottom" pill */
+.lm-log-jump {
+  position: absolute;
+  right: 16px;
+  bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--lm-amber);
+  color: #1a1505;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 4px 16px -4px var(--lm-amber-glow), 0 2px 6px rgba(0,0,0,0.4);
+  animation: lm-jump-in 0.18s ease-out;
+}
+@keyframes lm-jump-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+/* toolbar control group separators */
+.lm-log-sep { width: 1px; align-self: stretch; background: var(--lm-border); margin: 2px 3px; }
 
 /* Hamburger button — hidden on desktop */
 .lm-hamburger {
