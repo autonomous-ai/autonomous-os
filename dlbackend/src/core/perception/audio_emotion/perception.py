@@ -71,8 +71,8 @@ class AudioEmotionPerception(PerceptionBase[AudioEmotionPerceptionSession]):
 
         self._batcher = InputBatcher(
             self._audio_emotion_recognizer,
-            batch_size=self._batch_size or InputBatcher.DEFAULT_BATCH_SIZE,
-            batch_timeout=self._batch_timeout or InputBatcher.DEFAULT_BATCH_TIMEOUT_S,
+            batch_size=self._batch_size,
+            batch_timeout=self._batch_timeout,
         )
         await self._batcher.start()
 

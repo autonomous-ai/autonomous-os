@@ -57,17 +57,14 @@ class ActionPerception(PerceptionBase[ActionPerceptionSession]):
         self._action_recognizer = self._action_recognizer_factory.create()
         await asyncio.to_thread(self._action_recognizer.start)
 
-        bs = self._batch_size or InputBatcher.DEFAULT_BATCH_SIZE
-        bt = self._batch_timeout or InputBatcher.DEFAULT_BATCH_TIMEOUT_S
-
-        self._action_batcher = InputBatcher(self._action_recognizer, batch_size=bs, batch_timeout=bt)
+        self._action_batcher = InputBatcher(self._action_recognizer, batch_size=self._batch_size, batch_timeout=self._batch_timeout)
         await self._action_batcher.start()
 
         if self._person_detector_factory is not None:
             self._person_detector = self._person_detector_factory.create()
             await asyncio.to_thread(self._person_detector.start)
 
-            self._person_batcher = InputBatcher(self._person_detector, batch_size=bs, batch_timeout=bt)
+            self._person_batcher = InputBatcher(self._person_detector, batch_size=self._batch_size, batch_timeout=self._batch_timeout)
             await self._person_batcher.start()
 
         self._running = True

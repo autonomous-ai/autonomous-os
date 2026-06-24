@@ -61,24 +61,21 @@ class PosePerception(PerceptionBase[PosePerceptionSession]):
             self._logger.info("Already running")
             return
 
-        bs = self._batch_size or InputBatcher.DEFAULT_BATCH_SIZE
-        bt = self._batch_timeout or InputBatcher.DEFAULT_BATCH_TIMEOUT_S
-
         self._estimator_2d = self._estimator_2d_factory.create()
         await asyncio.to_thread(self._estimator_2d.start)
-        self._pose2d_batcher = InputBatcher(self._estimator_2d, batch_size=bs, batch_timeout=bt)
+        self._pose2d_batcher = InputBatcher(self._estimator_2d, batch_size=self._batch_size, batch_timeout=self._batch_timeout)
         await self._pose2d_batcher.start()
 
         if self._lifter_3d_factory is not None:
             self._lifter_3d = self._lifter_3d_factory.create()
             await asyncio.to_thread(self._lifter_3d.start)
-            self._pose3d_batcher = InputBatcher(self._lifter_3d, batch_size=bs, batch_timeout=bt)
+            self._pose3d_batcher = InputBatcher(self._lifter_3d, batch_size=self._batch_size, batch_timeout=self._batch_timeout)
             await self._pose3d_batcher.start()
 
         if self._ergo_assessor_factory is not None:
             self._ergo_assessor = self._ergo_assessor_factory.create()
             await asyncio.to_thread(self._ergo_assessor.start)
-            self._ergo_batcher = InputBatcher(self._ergo_assessor, batch_size=bs, batch_timeout=bt)
+            self._ergo_batcher = InputBatcher(self._ergo_assessor, batch_size=self._batch_size, batch_timeout=self._batch_timeout)
             await self._ergo_batcher.start()
 
         self._running = True

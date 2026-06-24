@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar
 
 from core.perception.base.predictor import PredictorBase
-from core.utils.common import deep_hash
+from core.utils.common import deep_hash, get_or_default
 
 INPUT_T = TypeVar("INPUT_T")
 OUTPUT_T = TypeVar("OUTPUT_T")
@@ -37,12 +37,12 @@ class InputBatcher(Generic[INPUT_T, OUTPUT_T]):
     def __init__(
         self,
         predictor: PredictorBase[INPUT_T, OUTPUT_T],
-        batch_size: int = DEFAULT_BATCH_SIZE,
-        batch_timeout: float = DEFAULT_BATCH_TIMEOUT_S,
+        batch_size: int | None = None,
+        batch_timeout: float | None = None,
     ):
         self._predictor: PredictorBase[INPUT_T, OUTPUT_T] = predictor
-        self._batch_size: int = batch_size
-        self._batch_timeout: float = batch_timeout
+        self._batch_size: int = get_or_default(batch_size, self.DEFAULT_BATCH_SIZE)
+        self._batch_timeout: float = get_or_default(batch_timeout, self.DEFAULT_BATCH_TIMEOUT_S)
 
         self._logger: logging.Logger = logging.getLogger(
             f"{self.__class__.__module__}.{self.__class__.__name__}"

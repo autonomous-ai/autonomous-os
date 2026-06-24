@@ -73,13 +73,10 @@ class EmotionPerception(PerceptionBase[EmotionPerceptionSession]):
         self._face_detector = self._face_detector_factory.create()
         await asyncio.to_thread(self._face_detector.start)
 
-        bs = self._batch_size or InputBatcher.DEFAULT_BATCH_SIZE
-        bt = self._batch_timeout or InputBatcher.DEFAULT_BATCH_TIMEOUT_S
-
-        self._emotion_batcher = InputBatcher(self._emotion_recognizer, batch_size=bs, batch_timeout=bt)
+        self._emotion_batcher = InputBatcher(self._emotion_recognizer, batch_size=self._batch_size, batch_timeout=self._batch_timeout)
         await self._emotion_batcher.start()
 
-        self._face_batcher = InputBatcher(self._face_detector, batch_size=bs, batch_timeout=bt)
+        self._face_batcher = InputBatcher(self._face_detector, batch_size=self._batch_size, batch_timeout=self._batch_timeout)
         await self._face_batcher.start()
 
         self._running = True
