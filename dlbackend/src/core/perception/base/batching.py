@@ -118,9 +118,7 @@ class InputBatcher(Generic[INPUT_T, OUTPUT_T]):
     def is_ready(self) -> bool:
         return self._running and self._predictor.is_ready()
 
-    async def submit(
-        self, inputs: list[INPUT_T], **kwargs: Any
-    ) -> list[asyncio.Future[OUTPUT_T]]:
+    async def submit(self, inputs: list[INPUT_T], **kwargs: Any) -> list[asyncio.Future[OUTPUT_T]]:
         """Submit inputs for batched inference.
 
         Returns a list of futures, one per input. Await them to get results.
@@ -181,33 +179,33 @@ class InputBatcher(Generic[INPUT_T, OUTPUT_T]):
             if len(self._pending_items) < self._batch_size and interval_ts <= self._batch_timeout:
                 continue
 
-            self._last_dispatch_ts = now_ts
+            while self._pending_items:
+                self._last_dispatch_ts = time.monotonic()
+                # Collect up to batch_size items from pending.
+                dispatch_items: list[BatchingQueueItem[INPUT_T, OUTPUT_T]] = []
+                while len(dispatch_items) < self._batch_size and self._pending_items:
+                    dispatch_items.append(self._pending_items.popleft())
 
-            # Collect up to batch_size items from pending.
-            dispatch_items: list[BatchingQueueItem[INPUT_T, OUTPUT_T]] = []
-            while len(dispatch_items) < self._batch_size and self._pending_items:
-                dispatch_items.append(self._pending_items.popleft())
+                # Group by kwargs for correct dispatch.
+                groups: dict[
+                    int,
+                    list[BatchingQueueItem[INPUT_T, OUTPUT_T]],
+                ] = defaultdict(list)
+                for item in dispatch_items:
+                    groups[item.kwargs_key].append(item)
 
-            # Group by kwargs for correct dispatch.
-            groups: dict[
-                int,
-                list[BatchingQueueItem[INPUT_T, OUTPUT_T]],
-            ] = defaultdict(list)
-            for item in dispatch_items:
-                groups[item.kwargs_key].append(item)
-
-            # Dispatch each group.
-            for items in groups.values():
-                input_batch: list[INPUT_T] = [it.input for it in items]
-                kwargs = items[0].kwargs
-                try:
-                    output_batch: list[OUTPUT_T] = await asyncio.to_thread(
-                        self._predictor.predict, input_batch, **kwargs
-                    )
-                    for i, out in enumerate(output_batch):
-                        if not items[i].future.done():
-                            items[i].future.set_result(out)
-                except Exception as exc:
-                    for it in items:
-                        if not it.future.done():
-                            it.future.set_exception(exc)
+                # Dispatch each group.
+                for items in groups.values():
+                    input_batch: list[INPUT_T] = [it.input for it in items]
+                    kwargs = items[0].kwargs
+                    try:
+                        output_batch: list[OUTPUT_T] = await asyncio.to_thread(
+                            self._predictor.predict, input_batch, **kwargs
+                        )
+                        for i, out in enumerate(output_batch):
+                            if not items[i].future.done():
+                                items[i].future.set_result(out)
+                    except Exception as exc:
+                        for it in items:
+                            if not it.future.done():
+                                it.future.set_exception(exc)
