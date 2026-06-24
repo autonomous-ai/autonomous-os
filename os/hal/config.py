@@ -23,6 +23,21 @@ HTTP_HOST: str = "0.0.0.0" if MODE == "developer" else "127.0.0.1"
 CAMERA_INDEX = int(os.environ.get("HAL_CAMERA_INDEX", "0"))
 CAMERA_WIDTH = int(os.environ.get("HAL_CAMERA_WIDTH", "640"))
 CAMERA_HEIGHT = int(os.environ.get("HAL_CAMERA_HEIGHT", "480"))
+# Camera exposure. Defaults to MANUAL (exposure=500 / gain=255, baked in below)
+# so auto-exposure can't throttle the frame rate: UVC auto-exposure stretches
+# integration time in low light (~60ms), capping delivery at ~16fps at EVERY
+# resolution (not a bandwidth limit). The manual defaults give a bright image at
+# ~20fps in a dim room; in a bright room a fixed 50ms exposure can overexpose —
+# set HAL_CAMERA_AUTO_EXPOSURE=auto to restore the camera's adaptive auto-exposure
+# (brighter/adaptive but throttles fps in low light), or tune the values below.
+# exposure_absolute is V4L2 ×100µs: 200=20ms (30fps), 330=33ms (≈30fps), 500=50ms.
+CAMERA_AUTO_EXPOSURE = os.environ.get("HAL_CAMERA_AUTO_EXPOSURE", "manual").strip().lower()
+CAMERA_EXPOSURE = int(os.environ.get("HAL_CAMERA_EXPOSURE", "500"))
+# Sensor gain (camera-specific range, e.g. 0–255). Brightens without costing fps
+# but adds noise. Applied in manual mode.
+CAMERA_GAIN = int(os.environ.get("HAL_CAMERA_GAIN", "255"))
+# Optional brightness offset (camera-specific, e.g. -64..64); unset = camera default.
+CAMERA_BRIGHTNESS = int(os.environ["HAL_CAMERA_BRIGHTNESS"]) if os.environ.get("HAL_CAMERA_BRIGHTNESS") else None
 
 # --- Audio ---
 # Hardware overrides — set in .env to bypass auto-detection

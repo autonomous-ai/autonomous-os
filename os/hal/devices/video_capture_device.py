@@ -25,6 +25,10 @@ class VideoCaptureDeviceBase(
         self._max_width: int | None = device_info.max_width
         self._max_height: int | None = device_info.max_height
         self._rotate: float | None = device_info.rotate
+        self._auto_exposure: str | None = device_info.auto_exposure
+        self._exposure: int | None = device_info.exposure
+        self._gain: int | None = device_info.gain
+        self._brightness: int | None = device_info.brightness
 
     def capture(
         self, need_description: bool = False
@@ -133,6 +137,42 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
             cap = cv2.VideoCapture(device_id)
         return cap
 
+    def _apply_camera_controls(self, video_capture):
+        """Pin exposure (when configured) so auto-exposure can't throttle FPS.
+
+        UVC auto-exposure stretches integration time in low light (~60ms),
+        capping delivery at ~16fps regardless of resolution. A fixed exposure
+        below the frame budget (e.g. 20ms < 33ms for 30fps) restores the full
+        rate; the trade-off is a darker image in dim light, offset by gain /
+        brightness, or a longer exposure (fewer fps).
+
+        Opt-in: only runs when auto_exposure == "manual" (default "auto" leaves
+        the camera untouched). V4L2/UVC CAP_PROP_AUTO_EXPOSURE: 1 = manual,
+        3 = aperture-priority (auto). CAP_PROP_EXPOSURE is exposure_absolute in
+        ×100µs units. Best-effort: unsupported controls are logged and skipped.
+        """
+        if (self._auto_exposure or "auto") != "manual":
+            return
+        try:
+            video_capture.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+            if self._exposure is not None:
+                video_capture.set(cv2.CAP_PROP_EXPOSURE, float(self._exposure))
+            if self._gain is not None:
+                video_capture.set(cv2.CAP_PROP_GAIN, float(self._gain))
+            if self._brightness is not None:
+                video_capture.set(cv2.CAP_PROP_BRIGHTNESS, float(self._brightness))
+            self._logger.info(
+                "Camera exposure: manual (auto_exposure=%.0f exposure=%.0f gain=%.0f brightness=%.0f)",
+                video_capture.get(cv2.CAP_PROP_AUTO_EXPOSURE),
+                video_capture.get(cv2.CAP_PROP_EXPOSURE),
+                video_capture.get(cv2.CAP_PROP_GAIN),
+                video_capture.get(cv2.CAP_PROP_BRIGHTNESS),
+            )
+        except Exception:
+            self._logger.exception(
+                "Camera exposure control failed — continuing with camera defaults"
+            )
+
     def _video_capture_loop(self):
 
         device_id = self.device_info.device_id
@@ -172,6 +212,9 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
             video_capture.set(cv2.CAP_PROP_FRAME_WIDTH, self._max_width)
         if self._max_height:
             video_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self._max_height)
+
+        # Pin exposure (if configured) so auto-exposure doesn't throttle FPS.
+        self._apply_camera_controls(video_capture)
 
         w = int(video_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(video_capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -236,6 +279,15 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
                             self._logger.error("Camera reopen failed, exiting loop")
                             break
                         video_capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                        # Re-apply resolution + exposure: a fresh open resets the
+                        # device to its defaults, which would silently drop manual
+                        # exposure (re-introducing the FPS throttle) and snap back
+                        # to the default capture mode.
+                        if self._max_width:
+                            video_capture.set(cv2.CAP_PROP_FRAME_WIDTH, self._max_width)
+                        if self._max_height:
+                            video_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self._max_height)
+                        self._apply_camera_controls(video_capture)
                         self._logger.info("Camera reopened, resuming loop")
                         continue
 
