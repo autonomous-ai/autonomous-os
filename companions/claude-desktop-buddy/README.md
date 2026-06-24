@@ -40,6 +40,9 @@ by voice.
   file", "Claude is done") so you can keep your eyes on the Mac.
 - **Folder push** — receives a character/data folder streamed from Claude Desktop
   and writes it under `/opt/claude-desktop-buddy/chars`.
+- **Claude Code counterpart** — a sibling Claude Code plugin (`claude-code-buddy/`)
+  pushes Claude Code activity to the same device over HTTP `:5002` instead of BLE.
+  See [docs/claude-code-plugin.md](docs/claude-code-plugin.md).
 
 ## Documentation
 
@@ -49,6 +52,7 @@ by voice.
 | [`docs/ble-protocol.md`](docs/ble-protocol.md) | Nordic UART wire format: framing, every message type, salvage, chunking, folder-push |
 | [`docs/setup.md`](docs/setup.md) | Build, deploy (systemd / OTA), `buddy.json` config, BLE pairing, troubleshooting |
 | [`skill/SKILL.md`](skill/SKILL.md) | The OpenClaw skill that drives voice approvals + state awareness |
+| [`docs/claude-code-plugin.md`](docs/claude-code-plugin.md) | The Claude Code plugin counterpart (`claude-code-buddy/`): the `:5002` HTTP push contract, mDNS discovery, install/usage |
 
 Vietnamese versions live under [`docs/vi/`](docs/vi/).
 
