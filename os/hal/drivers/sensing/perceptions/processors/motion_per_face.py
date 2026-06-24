@@ -13,7 +13,7 @@ import logging
 import threading
 import time
 from copy import copy
-from typing import override
+from typing import Any, override
 
 import cv2
 
@@ -206,6 +206,15 @@ class MotionPerFacePerception(Perception[FaceDetectionData]):
         new_y2 = min(frame_h, int(new_y2))
 
         return new_x1, new_y1, new_x2, new_y2
+
+    @override
+    def to_dict(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "type": "motion_per_face",
+                "active_sessions": len(self._sessions),
+                "tracked_faces": list(self._sessions.keys()),
+            }
 
     @override
     def cleanup(self) -> None:

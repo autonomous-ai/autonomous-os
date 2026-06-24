@@ -1,8 +1,7 @@
 """Per-connection pose estimation session."""
 
-import asyncio
 import time
-from typing import Any
+from typing import Any, cast
 
 import cv2.typing as cv2t
 import numpy as np
@@ -11,18 +10,22 @@ from typing_extensions import override
 
 from core.enums.pose import GraphEnum
 from core.models.pose import (
+    ErgoAssessment,
     Point2D,
     Point3D,
     Pose2D,
     Pose3D,
     PoseDetection,
     PosePerceptionSessionConfig,
+    RawPose2DDetection,
+    RawPose3DDetection,
 )
 from core.perception.base import PerceptionSessionBase
+from core.perception.base.batching import InputBatcher
 from core.perception.pose.graph.convert import convert_graph
 from core.perception.pose.predictors.ergo.base import ErgoAssessor, ErgoInput
 from core.perception.pose.predictors.pose2d.base import PoseEstimator2D
-from core.perception.pose.predictors.pose3d.base import PoseEstimator3DLifting
+from core.perception.pose.predictors.pose3d.base import Pose3DInput, PoseEstimator3DLifting
 from core.types import Omit, omit
 from core.utils.common import get_or_default
 
@@ -38,17 +41,19 @@ class PosePerceptionSession(
 
     def __init__(
         self,
-        estimator_2d: PoseEstimator2D,
-        lifter_3d: PoseEstimator3DLifting | None = None,
-        ergo_assessor: ErgoAssessor | None = None,
+        pose2d_batcher: InputBatcher[cv2t.MatLike, RawPose2DDetection],
+        pose3d_batcher: InputBatcher[Pose3DInput, RawPose3DDetection | None] | None = None,
+        ergo_batcher: InputBatcher[ErgoInput, ErgoAssessment | None] | None = None,
         config: PosePerceptionSessionConfig | None = None,
     ) -> None:
         config = get_or_default(config, PosePerceptionSessionConfig())
         super().__init__(config)
 
-        self._estimator_2d: PoseEstimator2D = estimator_2d
-        self._lifter_3d: PoseEstimator3DLifting | None = lifter_3d
-        self._ergo_assessor: ErgoAssessor | None = ergo_assessor
+        self._pose2d_batcher: InputBatcher[cv2t.MatLike, RawPose2DDetection] = pose2d_batcher
+        self._pose3d_batcher: InputBatcher[Pose3DInput, RawPose3DDetection | None] | None = (
+            pose3d_batcher
+        )
+        self._ergo_batcher: InputBatcher[ErgoInput, ErgoAssessment | None] | None = ergo_batcher
 
         self._kps_buffer: list[npt.NDArray[np.float32]] = []
         self._scores_buffer: list[npt.NDArray[np.float32]] = []
@@ -68,9 +73,9 @@ class PosePerceptionSession(
 
     @override
     def is_ready(self) -> bool:
-        if not self._estimator_2d.is_ready():
+        if not self._pose2d_batcher.is_ready():
             return False
-        if self._lifter_3d is not None and not self._lifter_3d.is_ready():
+        if self._pose3d_batcher is not None and not self._pose3d_batcher.is_ready():
             return False
         return self._running
 
@@ -85,11 +90,15 @@ class PosePerceptionSession(
         if cur_ts - self._last_update_ts < self._config.frame_interval:
             return self._last_prediction
 
-        # 2D estimation (batch of 1)
-        raw_2d = (await asyncio.to_thread(self._estimator_2d.predict, [input]))[0]
+        estimator_2d = cast(PoseEstimator2D, self._pose2d_batcher.predictor)
+
+        # 2D estimation via batcher
+        futures_2d = await self._pose2d_batcher.submit([input])
+        raw_2d: RawPose2DDetection = await futures_2d[0]
+
         kps: npt.NDArray[np.float32] = raw_2d.keypoints[0]  # (K, 2)
         confs: npt.NDArray[np.float32] = raw_2d.scores[0]  # (K,)
-        src_graph: GraphEnum = self._estimator_2d.GRAPH_TYPE
+        src_graph: GraphEnum = estimator_2d.GRAPH_TYPE
 
         pose_2d: Pose2D = Pose2D(
             graph_type=src_graph,
@@ -103,21 +112,23 @@ class PosePerceptionSession(
         num_valid: int = int((confs >= self._config.confidence_threshold_2d).sum())
         has_valid_pose: bool = num_valid >= self._config.min_valid_keypoints
 
-        # Optional 3D lifting (2D graph → lifter graph)
+        # Optional 3D lifting (2D graph -> lifter graph)
         lifter_kps: npt.NDArray[np.float32] | None = None
         lifter_scores: npt.NDArray[np.float32] | None = None
-        if self._lifter_3d is not None and has_valid_pose:
+        if self._pose3d_batcher is not None and has_valid_pose:
+            lifter_3d = cast(PoseEstimator3DLifting, self._pose3d_batcher.predictor)
+
             lifter_kps, lifter_scores = convert_graph(
                 raw_2d.keypoints,
                 raw_2d.scores,
                 src_graph,
-                self._lifter_3d.GRAPH_TYPE,
+                lifter_3d.GRAPH_TYPE,
             )
 
             self._kps_buffer.append(lifter_kps[0])
             self._scores_buffer.append(lifter_scores[0])
 
-            n_frames: int = self._lifter_3d.n_frames
+            n_frames: int = lifter_3d.n_frames
             if len(self._kps_buffer) > n_frames:
                 self._kps_buffer = self._kps_buffer[-n_frames:]
             if len(self._scores_buffer) > n_frames:
@@ -126,13 +137,13 @@ class PosePerceptionSession(
             kps_stack: npt.NDArray[np.float32] = np.stack(self._kps_buffer, axis=0)
             scores_stack: npt.NDArray[np.float32] = np.stack(self._scores_buffer, axis=0)
 
-            raw_3d = (await asyncio.to_thread(
-                self._lifter_3d.predict, [(kps_stack, scores_stack)],
-            ))[0]
+            futures_3d = await self._pose3d_batcher.submit([(kps_stack, scores_stack)])
+            raw_3d: RawPose3DDetection | None = await futures_3d[0]
+
             if raw_3d is not None:
                 joints_last: npt.NDArray[np.float32] = raw_3d.joints_3d[-1]  # (K, 3)
                 result.pose_3d = Pose3D(
-                    graph_type=self._lifter_3d.GRAPH_TYPE,
+                    graph_type=lifter_3d.GRAPH_TYPE,
                     joints=[
                         Point3D(
                             x=float(joints_last[i, 0]),
@@ -145,24 +156,24 @@ class PosePerceptionSession(
                 )
 
         # Optional ergo assessment
-        if self._ergo_assessor is not None and has_valid_pose:
-            ergo_graph: GraphEnum = self._ergo_assessor.GRAPH_TYPE
+        if self._ergo_batcher is not None and has_valid_pose:
+            ergo_assessor = cast(ErgoAssessor, self._ergo_batcher.predictor)
+            ergo_graph: GraphEnum = ergo_assessor.GRAPH_TYPE
 
             if (
                 result.pose_3d is not None
-                and self._lifter_3d is not None
+                and self._pose3d_batcher is not None
                 and lifter_kps is not None
                 and lifter_scores is not None
             ):
-                # Prefer 3D output → convert lifter graph → ergo graph
+                lifter_3d = cast(PoseEstimator3DLifting, self._pose3d_batcher.predictor)
                 ergo_kps, ergo_scores = convert_graph(
                     lifter_kps,
-                    lifter_scores,  # type: ignore[arg-type]
-                    self._lifter_3d.GRAPH_TYPE,
+                    lifter_scores,
+                    lifter_3d.GRAPH_TYPE,
                     ergo_graph,
                 )
             else:
-                # No 3D lifter — convert 2D graph → ergo graph
                 ergo_kps, ergo_scores = convert_graph(
                     raw_2d.keypoints,
                     raw_2d.scores,
@@ -171,9 +182,8 @@ class PosePerceptionSession(
                 )
 
             ergo_input: ErgoInput = (ergo_kps[0], ergo_scores[0])
-            ergo_result = (await asyncio.to_thread(
-                self._ergo_assessor.predict, [ergo_input],
-            ))[0]
+            ergo_futures = await self._ergo_batcher.submit([ergo_input])
+            ergo_result: ErgoAssessment | None = await ergo_futures[0]
             if ergo_result is not None:
                 result.ergo = ergo_result
 

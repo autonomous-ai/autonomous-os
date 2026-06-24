@@ -61,6 +61,10 @@ class Perception[T](ABC):
     def _check_impl(self, data: T) -> None:
         """Run detection on a single frame. Called in the shared thread pool."""
 
+    def to_dict(self) -> dict[str, Any]:
+        """Return current state for monitoring. Override in subclasses."""
+        return {"type": type(self).__name__}
+
     @abstractmethod
     def cleanup(self) -> None:
         """Release external resources (WS connections, files, etc.). Called on shutdown."""

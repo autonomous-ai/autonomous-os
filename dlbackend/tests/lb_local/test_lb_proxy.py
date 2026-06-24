@@ -31,6 +31,17 @@ def _mock_response(request: httpx.Request) -> httpx.Response:
     )
 
 
+def _patch_httpx_mock(monkeypatch) -> None:
+    """Monkeypatch httpx.AsyncClient in lbserver.app to use MockTransport."""
+    _real_async_client = httpx.AsyncClient
+
+    def _mocked_client(**kwargs):
+        kwargs["transport"] = httpx.MockTransport(_mock_response)
+        return _real_async_client(**kwargs)
+
+    monkeypatch.setattr("lbserver.app.httpx.AsyncClient", _mocked_client)
+
+
 @pytest.fixture()
 def lb_client(monkeypatch):
     """Create a TestClient for the LB with mocked backends."""
@@ -40,10 +51,7 @@ def lb_client(monkeypatch):
     monkeypatch.setattr("lbserver.app.BACKENDS", backends)
     monkeypatch.setattr("lbserver.app.INTERNAL_PREFIX", "/_internal")
     monkeypatch.setattr("lbserver.app.http_rr", RoundRobin(backends))
-    monkeypatch.setattr(
-        "lbserver.app._client",
-        httpx.AsyncClient(transport=httpx.MockTransport(_mock_response)),
-    )
+    _patch_httpx_mock(monkeypatch)
 
     from lbserver.app import app
     return TestClient(app)
@@ -64,10 +72,7 @@ def lb_client_with_crypto(monkeypatch, crypto):
     monkeypatch.setattr("lbserver.app.BACKENDS", backends)
     monkeypatch.setattr("lbserver.app.INTERNAL_PREFIX", "")
     monkeypatch.setattr("lbserver.app.http_rr", RoundRobin(backends))
-    monkeypatch.setattr(
-        "lbserver.app._client",
-        httpx.AsyncClient(transport=httpx.MockTransport(_mock_response)),
-    )
+    _patch_httpx_mock(monkeypatch)
 
     from lbserver.utils.state import set_crypto
     set_crypto(crypto)
@@ -121,7 +126,6 @@ class TestHTTPProxyErrors:
 
         monkeypatch.setattr("lbserver.app.http_rr", RoundRobin(["http://127.0.0.1:19999"]))
         monkeypatch.setattr("lbserver.app.INTERNAL_PREFIX", "")
-        monkeypatch.setattr("lbserver.app._client", httpx.AsyncClient(timeout=2.0))
 
         from lbserver.app import app
         client = TestClient(app)

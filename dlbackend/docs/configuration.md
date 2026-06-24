@@ -96,29 +96,70 @@ checkpoint override and threshold(s).
 | `ACTION__MODEL` | `x3d` | `x3d` \| `uniformerv2` \| `videomae` |
 | `ACTION__CKPT_PATH` | _(auto)_ | Local ONNX override |
 | `ACTION__CONFIDENCE_THRESHOLD` | _(none)_ | Min action score |
-| `ACTION__MAX_FRAMES`, `ACTION__FRAME_INTERVAL`, `ACTION__W`, `ACTION__H`, `ACTION__BATCH_SIZE` | per-model | Clip/inference shape |
+| `ACTION__MAX_FRAMES`, `ACTION__FRAME_INTERVAL`, `ACTION__W`, `ACTION__H` | per-model | Clip/inference shape |
+| `ACTION__BATCH_SIZE` | `1` | Max items per GPU batch |
+| `ACTION__BATCH_TIMEOUT` | `0.1` | Seconds to wait for batch to fill |
 | `FER__ENABLED` | `true` | Enable facial emotion |
 | `FER__MODEL` | `posterv2` | `posterv2` \| `emonet_8` \| `emonet_5` |
-| `FER__CONFIDENCE_THRESHOLD`, `FER__FRAME_INTERVAL`, `FER__CKPT_PATH`, `FER__BATCH_SIZE` | per-model | |
+| `FER__CONFIDENCE_THRESHOLD`, `FER__FRAME_INTERVAL`, `FER__CKPT_PATH` | per-model | |
+| `FER__BATCH_SIZE` | `1` | Max items per GPU batch |
+| `FER__BATCH_TIMEOUT` | `0.1` | Seconds to wait for batch to fill |
 | `SER__ENABLED` | `true` | Enable speech emotion |
 | `SER__MODEL` | `emotion2vec` | SER engine |
-| `SER__CKPT_PATH`, `SER__LABELS_PATH`, `SER__BATCH_SIZE` | _(auto)_ | Overrides |
+| `SER__CKPT_PATH`, `SER__LABELS_PATH` | _(auto)_ | Overrides |
+| `SER__BATCH_SIZE` | `1` | Max items per GPU batch |
+| `SER__BATCH_TIMEOUT` | `0.1` | Seconds to wait for batch to fill |
 | `POSE__ENABLED` | `true` | Enable pose estimation |
 | `POSE__MODEL` | `rtmpose` | 2D estimator |
 | `POSE__LIFTER_3D` | `tcpformer` | 3D lifter (set empty to disable 3D) |
 | `POSE__ERGO_ASSESSOR` | `rula` | Ergonomics assessor (empty to disable) |
 | `POSE__CONFIDENCE_THRESHOLD_2D`, `POSE__ERGO_CONFIDENCE_THRESHOLD` | _(none)_ | Thresholds |
+| `POSE__BATCH_SIZE` | `1` | Max items per GPU batch |
+| `POSE__BATCH_TIMEOUT` | `0.1` | Seconds to wait for batch to fill |
 | `PERSON_DETECTOR__ENABLED` | `false` | Crop person before action recognition |
 | `PERSON_DETECTOR__MODEL` | `yolo` | Person detector |
 | `PERSON_DETECTOR__MODEL_NAME` | `yolo12x.pt` | Weights |
 | `PERSON_DETECTOR__CONFIDENCE_THRESHOLD` | `0.4` | |
 | `PERSON_DETECTOR__BBOX_EXPAND_SCALE` | `2.0` | Expand crop around person |
 | `PERSON_DETECTOR__MIN_AREA_RATIO` | `0.25` | Min person/frame area to use |
+| `PERSON_DETECTOR__BATCH_SIZE` | `1` | Max items per GPU batch |
+| `PERSON_DETECTOR__BATCH_TIMEOUT` | `0.1` | Seconds to wait for batch to fill |
 | `AUDIO_EMBEDDER__ENABLED` | `false` | Enable speaker embedder |
 | `AUDIO_EMBEDDER__MODEL` | `resnet34` | `resnet34` \| `ecapa-tdnn1024` \| `campplus` |
 | `AUDIO_EMBEDDER__MODEL_PATH` | _(auto)_ | Local embedder weights override path |
 | `AUDIO_EMBEDDER__REMOTE_URL` | _(auto)_ | Alternate remote URL or HuggingFace repo id |
-| `AUDIO_EMBEDDER__BATCH_SIZE` | _(auto)_ | Inference batch size |
+| `AUDIO_EMBEDDER__BATCH_SIZE` | `1` | Max items per GPU batch |
+| `AUDIO_EMBEDDER__BATCH_TIMEOUT` | `0.1` | Seconds to wait for batch to fill |
+
+### Batching
+
+Every perception uses an `InputBatcher` (`src/core/perception/base/batching.py`)
+that queues inference requests from concurrent WebSocket sessions and dispatches
+them to the GPU predictor in batches. Two knobs per model:
+
+| Parameter | Effect |
+|-----------|--------|
+| `BATCH_SIZE` | Max items dispatched in a single `predict()` call. Higher = better GPU utilization under concurrent load, but more VRAM per call. |
+| `BATCH_TIMEOUT` | Max seconds to wait for the batch to fill before dispatching what's available. Lower = less latency under light load. |
+
+Both default to `1` / `0.1` when omitted. The predictor's ONNX warmup runs at
+`BATCH_SIZE` so TensorRT pre-allocates the right amount of VRAM.
+
+Requests with different kwargs (e.g. different `classes` for object detection)
+are automatically grouped into separate sub-batches.
+
+Recommended values for an RTX A5000 (24 GB) with all models loaded:
+
+| Model | `BATCH_SIZE` | `BATCH_TIMEOUT` | Reason |
+|-------|-------------|-----------------|--------|
+| UniformerV2 (action) | 1 | 0.05 | ~3 GB model, large temporal activations |
+| PosterV2 (FER) | 8 | 0.05 | ~50 MB model, small 224×224 input |
+| emotion2vec (SER) | 4 | 0.05 | ~300 MB model, variable-length audio |
+| RTMPose (pose) | 8 | 0.05 | ~30 MB model, small 256×192 input |
+| YOLO person | 2 | 0.05 | ~200 MB model, 640×640 input |
+| ECAPA-TDNN (audio) | 8 | 0.05 | ~50 MB model, small mel input |
+| YOLO-World (object) | 2 | 0.05 | ~500 MB model + CLIP encoder |
+| OWLv2 (object) | 1 | 0.05 | ~600 MB model, 960×960 ViT |
 
 ### Object detectors (all opt-in)
 
@@ -134,7 +175,8 @@ where `<NAME>` ∈ `YOLO_WORLD`, `OWLV2`. All default to
 | `OBJECT_DETECTOR__<NAME>__REMOTE_URL` | _(auto)_ | Custom download URL (overrides CDN default) |
 | `OBJECT_DETECTOR__<NAME>__CLASSES_PATH` | _(none)_ | Default class list file |
 | `OBJECT_DETECTOR__<NAME>__THRESHOLD` | per-model | Confidence threshold |
-| `OBJECT_DETECTOR__<NAME>__BATCH_SIZE` | _(auto)_ | Inference batch size |
+| `OBJECT_DETECTOR__<NAME>__BATCH_SIZE` | `1` | Max items per GPU batch |
+| `OBJECT_DETECTOR__<NAME>__BATCH_TIMEOUT` | `0.1` | Seconds to wait for batch to fill |
 
 When `USE_ONNX=true` (the default), ONNX predictors resolve their model path and
 remote URL from `ModelEnum` entries and auto-download via `ensure_downloaded` on

@@ -408,5 +408,16 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
             self._last_sent_by_type.clear()
 
     @override
+    def to_dict(self) -> dict[str, Any]:
+        with self._state_lock:
+            return {
+                "type": "fire_hazard",
+                "buffered_hazards": len(self._hazard_buffer),
+                "buffered_snapshots": len(self._snapshot_buffer),
+                "confirmed_types": list(self._first_seen_by_type.keys()),
+                "dedup_keys": len(self._last_sent_by_type),
+            }
+
+    @override
     def cleanup(self) -> None:
         pass

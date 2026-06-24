@@ -35,7 +35,7 @@ function useEmotionPresets() {
   return { emotions, colors };
 }
 import type { SystemInfo, NetworkInfo, HWHealth, OCStatus, PresenceInfo, VoiceStatus, ServoState, DisplayState, AudioVolume, LEDColor, SceneInfo } from "./types";
-import { StatusDot, HWBadge, SignalBars, formatUptime, SoftwareUpdateButton, StatRow, StatusBadge, STATUS_TONE, CardLabel } from "./components";
+import { StatusDot, HWBadge, SignalBars, formatUptime, formatAgo, useCountUp, Skeleton, SkeletonRows, SoftwareUpdateButton, StatRow, StatusBadge, STATUS_TONE, CardLabel } from "./components";
 import { BuddyCard } from "./BuddyCard";
 
 export function OverviewSection({
@@ -90,6 +90,9 @@ export function OverviewSection({
   // Volume slider: local state for smooth dragging, API call only on release
   const [localVolume, setLocalVolume] = useState<number | null>(null);
   const draggingVolume = useRef(false);
+  // Reactive mirror of draggingVolume so render can decide between the exact
+  // handle value (mid-drag) and the eased count-up (idle) without reading a ref.
+  const [dragging, setDragging] = useState(false);
 
   // Sync from server when not dragging
   useEffect(() => {
@@ -98,8 +101,14 @@ export function OverviewSection({
     }
   }, [audio?.volume]);
 
+  // Animated stats: link rate and volume tick to their new value instead of
+  // snapping, so a refresh reads as a live needle rather than a hard cut.
+  const animatedLinkRate = useCountUp(net?.linkRate ?? 0);
+  const animatedVolume = useCountUp(localVolume ?? audio?.volume ?? 0);
+
   const commitVolume = useCallback((vol: number) => {
     draggingVolume.current = false;
+    setDragging(false);
     fetch(`${HW}/audio/volume`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -176,7 +185,7 @@ export function OverviewSection({
               } />
               {oc.emotion && <StatRow label="Emotion" value={oc.emotion} color="var(--lm-amber)" />}
             </div>
-          ) : <span style={{ fontSize: 11, color: "var(--lm-text-muted)" }}>Loading…</span>}
+          ) : <SkeletonRows lines={3} />}
         </div>
 
         {/* Network */}
@@ -194,13 +203,13 @@ export function OverviewSection({
                 <span style={{ display: "flex", alignItems: "center", gap: 6 }} title={`Signal ${net.signal} dBm`}>
                   <SignalBars value={net.signal} />
                   <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--lm-text)" }}>
-                    {net.linkRate > 0 ? `${net.linkRate} Mbps` : "—"}
+                    {net.linkRate > 0 ? `${animatedLinkRate} Mbps` : "—"}
                   </span>
                 </span>
               } />
               <StatRow label="MAC" value={net.mac || "—"} mono />
             </div>
-          ) : <span style={{ fontSize: 11, color: "var(--lm-text-muted)" }}>Loading…</span>}
+          ) : <SkeletonRows lines={5} />}
         </div>
 
         {/* Presence */}
@@ -212,9 +221,9 @@ export function OverviewSection({
           {presence ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               <StatRow label="Sensing" value={presence.enabled ? "On" : "Off"} color={presence.enabled ? "var(--lm-green)" : "var(--lm-red)"} />
-              <StatRow label="Last motion" value={`${presence.seconds_since_motion}s ago`} />
+              <StatRow label="Last motion" value={formatAgo(presence.seconds_since_motion)} />
             </div>
-          ) : <span style={{ fontSize: 11, color: "var(--lm-text-muted)" }}>Loading…</span>}
+          ) : <SkeletonRows lines={2} />}
         </div>
 
         {/* Audio */}
@@ -273,7 +282,9 @@ export function OverviewSection({
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
                   <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--lm-text-dim)" }}>Volume</span>
                   <span style={{ fontSize: 14, fontWeight: 700, color: "var(--lm-amber)", fontFamily: "monospace" }}>
-                    {localVolume ?? audio?.volume ?? "—"}%
+                    {/* While dragging show the exact handle value (no easing lag);
+                        when idle let it tick to the server-confirmed value. */}
+                    {dragging ? (localVolume ?? audio?.volume ?? "—") : animatedVolume}%
                   </span>
                 </div>
                 <input
@@ -283,6 +294,7 @@ export function OverviewSection({
                   value={localVolume ?? audio?.volume ?? 50}
                   onChange={(e) => {
                     draggingVolume.current = true;
+                    setDragging(true);
                     setLocalVolume(Number(e.target.value));
                   }}
                   onMouseUp={(e) => commitVolume(Number((e.target as HTMLInputElement).value))}
@@ -296,12 +308,66 @@ export function OverviewSection({
                 />
               </div>
             </div>
-          ) : <span style={{ color: "var(--lm-text-muted)" }}>Loading…</span>}
+          ) : <AudioSkeleton />}
         </div>
       </div>
 
-      {/* Row 2: Emotion + Hardware + Scene + Servo Pose */}
-      <div className="lm-grid-4">
+      {/* Row 2: device & capability cluster — Hardware, the capability-gated
+          cards (Emotion/Scene/Servo), then Versions + Buddy, all in ONE auto-fit
+          grid. Keeping them together means a minimal device (intern-v2: just
+          Hardware + Versions + Buddy) lays out as three even cards instead of a
+          lone Hardware strip stretched across the row; a lamp fills the grid and
+          wraps. minmax(260px,1fr) never stretches a single card full-width once
+          there are ≥2 cards. Order puts Hardware adjacent to Versions/Buddy on
+          minimal devices and groups the capability cards together on a lamp. */}
+      <div className="lm-grid-auto">
+        {/* Hardware */}
+        <div className="lm-mon-card" style={monCard}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+            <CardLabel icon={<Cpu size={13} />} text="Hardware" />
+            {ledColor && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{
+                  width: 14, height: 14, borderRadius: "50%",
+                  background: ledColor.on ? ledColor.hex : "transparent",
+                  boxShadow: ledColor.on ? `0 0 8px ${ledColor.hex}cc` : "none",
+                  border: `2px solid ${ledColor.on ? ledColor.hex : "var(--lm-border)"}`,
+                  flexShrink: 0,
+                }} title={`RGB(${ledColor.color.join(", ")})`} />
+                <span style={{ fontSize: 10, fontFamily: "monospace", color: ledColor.on ? "var(--lm-text)" : "var(--lm-text-muted)" }}>
+                  {ledColor.on ? ledColor.hex : "off"}
+                </span>
+                {ledColor.on && (
+                  <span style={{ fontSize: 10, color: "var(--lm-text-dim)" }}>
+                    {Math.round(ledColor.brightness * 100)}%
+                  </span>
+                )}
+                {ledColor.effect && (
+                  <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 4, background: "rgba(167,139,250,0.15)", color: "var(--lm-purple)", fontWeight: 600 }}>
+                    {ledColor.effect}
+                  </span>
+                )}
+                {ledColor.scene && !ledColor.effect && (
+                  <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 4, background: "var(--lm-amber-dim)", color: "var(--lm-amber)", fontWeight: 600 }}>
+                    {ledColor.scene}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+          {hw ? (
+            <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 7 }}>
+              <HWBadge label="Servo" ok={hw.servo} />
+              <HWBadge label="LED" ok={hw.led} />
+              <HWBadge label="Camera" ok={hw.camera} />
+              <HWBadge label="Audio" ok={hw.audio} />
+              <HWBadge label="Sensing" ok={hw.sensing} />
+              <HWBadge label="Voice" ok={hw.voice} />
+              <HWBadge label="TTS" ok={hw.tts} />
+            </div>
+          ) : <SkeletonRows lines={2} />}
+        </div>
+
         {/* Emotion — only for devices that declare the expression capability (the
             /emotion route). intern-v2 has no expression, so the whole card is hidden
             rather than showing an agent emotion the device can't actually express. */}
@@ -358,53 +424,6 @@ export function OverviewSection({
           </div>
         </div>
         )}
-
-        {/* Hardware */}
-        <div className="lm-mon-card" style={monCard}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-            <CardLabel icon={<Cpu size={13} />} text="Hardware" />
-            {ledColor && (
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <div style={{
-                  width: 14, height: 14, borderRadius: "50%",
-                  background: ledColor.on ? ledColor.hex : "transparent",
-                  boxShadow: ledColor.on ? `0 0 8px ${ledColor.hex}cc` : "none",
-                  border: `2px solid ${ledColor.on ? ledColor.hex : "var(--lm-border)"}`,
-                  flexShrink: 0,
-                }} title={`RGB(${ledColor.color.join(", ")})`} />
-                <span style={{ fontSize: 10, fontFamily: "monospace", color: ledColor.on ? "var(--lm-text)" : "var(--lm-text-muted)" }}>
-                  {ledColor.on ? ledColor.hex : "off"}
-                </span>
-                {ledColor.on && (
-                  <span style={{ fontSize: 10, color: "var(--lm-text-dim)" }}>
-                    {Math.round(ledColor.brightness * 100)}%
-                  </span>
-                )}
-                {ledColor.effect && (
-                  <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 4, background: "rgba(167,139,250,0.15)", color: "var(--lm-purple)", fontWeight: 600 }}>
-                    {ledColor.effect}
-                  </span>
-                )}
-                {ledColor.scene && !ledColor.effect && (
-                  <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 4, background: "var(--lm-amber-dim)", color: "var(--lm-amber)", fontWeight: 600 }}>
-                    {ledColor.scene}
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-          {hw ? (
-            <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 7 }}>
-              <HWBadge label="Servo" ok={hw.servo} />
-              <HWBadge label="LED" ok={hw.led} />
-              <HWBadge label="Camera" ok={hw.camera} />
-              <HWBadge label="Audio" ok={hw.audio} />
-              <HWBadge label="Sensing" ok={hw.sensing} />
-              <HWBadge label="Voice" ok={hw.voice} />
-              <HWBadge label="TTS" ok={hw.tts} />
-            </div>
-          ) : <span style={{ color: "var(--lm-text-muted)" }}>Loading…</span>}
-        </div>
 
         {/* Scene — `scene` is a route WITHIN the `light` capability (lamp declares
             light:[led,scene]; intern-v2 declares light:[led] only), so the capability
@@ -483,6 +502,24 @@ export function OverviewSection({
           ) : <span style={{ color: "var(--lm-text-muted)" }}>Loading…</span>}
         </div>
         )}
+
+        {/* Versions — part of the same device cluster. On a minimal device this
+            sits right after Hardware; on a lamp it follows the capability cards.
+            OS uptime sits in the host row; detailed CPU/RAM/Disk live in System tab. */}
+        <div className="lm-mon-card" style={monCard}>
+          <div style={{ marginBottom: 10 }}><CardLabel icon={<Tag size={13} />} text="Versions" /></div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <VersionRow name="Host"   color="var(--lm-text)"   version={null}                    uptime={sys?.uptime ?? null}                                   updateTarget={null} />
+            <VersionRow name="Web"    color="var(--lm-teal)"   version={webVersion}              uptime={null}                                                  updateTarget={isDebug ? "web" : null} />
+            <VersionRow name="OS"     color="var(--lm-amber)"  version={sys?.version ?? null}    uptime={sys?.serviceUptime ?? null}                            updateTarget={isDebug ? "os-server" : null} />
+            <VersionRow name="HAL"    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={isDebug ? "hal" : null} />
+            <VersionRow name="Agent"  color="var(--lm-purple)" version={oc?.version ?? null}     uptime={oc?.connected ? (oc?.agentUptime ?? null) : null}      updateTarget={null} />
+          </div>
+        </div>
+
+        {/* Autonomous Buddy pairing — rounds out the cluster as the third card on
+            a minimal device, so no card is ever left stretched alone in a row. */}
+        <BuddyCard />
       </div>
 
       {/* Display Eyes — hidden via display:none, code kept for future re-enable */}
@@ -506,22 +543,6 @@ export function OverviewSection({
             </div>
           </div>
         ) : <span style={{ color: "var(--lm-text-muted)" }}>Loading…</span>}
-      </div>
-
-      {/* Versions + Autonomous Buddy pairing.
-          OS uptime sits in the host row; detailed CPU/RAM/Disk live in System tab. */}
-      <div className="lm-grid-4">
-        <div className="lm-mon-card" style={monCard}>
-          <div style={{ marginBottom: 10 }}><CardLabel icon={<Tag size={13} />} text="Versions" /></div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <VersionRow name="Host"   color="var(--lm-text)"   version={null}                    uptime={sys?.uptime ?? null}                                   updateTarget={null} />
-            <VersionRow name="Web"    color="var(--lm-teal)"   version={webVersion}              uptime={null}                                                  updateTarget={isDebug ? "web" : null} />
-            <VersionRow name="OS"     color="var(--lm-amber)"  version={sys?.version ?? null}    uptime={sys?.serviceUptime ?? null}                            updateTarget={isDebug ? "os-server" : null} />
-            <VersionRow name="HAL"    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={isDebug ? "hal" : null} />
-            <VersionRow name="Agent"  color="var(--lm-purple)" version={oc?.version ?? null}     uptime={oc?.connected ? (oc?.agentUptime ?? null) : null}      updateTarget={null} />
-          </div>
-        </div>
-        <BuddyCard />
       </div>
 
     </div>
@@ -552,6 +573,29 @@ function HeroChip({ icon, label, value, tone }: {
       <span style={{ display: "flex", color }} aria-hidden>{icon}</span>
       <span style={{ fontSize: 10, color: "var(--lm-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</span>
       <span style={{ fontSize: 12.5, fontWeight: 700, color, fontFamily: label === "IP" ? "monospace" : undefined }}>{value}</span>
+    </div>
+  );
+}
+
+// AudioSkeleton mirrors the Audio card's layout (three labelled toggle rows +
+// a volume slider) so the card holds its height while voice status loads,
+// avoiding the jump the old "Loading…" text caused.
+function AudioSkeleton() {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {[0, 1, 2].map((i) => (
+        <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <Skeleton width={7} height={7} style={{ borderRadius: "50%" }} />
+            <Skeleton width={54} height={12} />
+          </div>
+          <Skeleton width={60} height={24} style={{ borderRadius: 6 }} />
+        </div>
+      ))}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <Skeleton width="40%" height={11} />
+        <Skeleton width="100%" height={6} style={{ borderRadius: 999 }} />
+      </div>
     </div>
   );
 }

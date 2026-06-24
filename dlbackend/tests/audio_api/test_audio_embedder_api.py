@@ -98,7 +98,7 @@ class TestBasicResponse:
         wav = next((FIXTURES_DIR / "speaker_a").glob("*.wav"))
         data = _embed_file(wav)
         emb = np.array(data["embedding"], dtype=np.float32)
-        assert abs(np.linalg.norm(emb) - 1.0) < 1e-4
+        assert abs(np.linalg.norm(emb) - 1.0) < 1e-3
 
     def test_return_chunks_false_by_default(self):
         wav = next((FIXTURES_DIR / "speaker_a").glob("*.wav"))

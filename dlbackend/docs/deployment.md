@@ -115,14 +115,85 @@ The `*-ssl` targets call this automatically. Override `SSL_DIR`, `SSL_CERT`,
 
 ## Process management
 
+### Makefile targets
+
+Starting:
+
+Default ports: dlserver=`8001`, lbserver=`7999`, nginx=`8899`, jupyter=`8890`.
+Override with `DLSERVER_PORT`, `LBSERVER_PORT`, `JUPYTER_PORT` make variables.
+
+| Target | What it does |
+|--------|-------------|
+| `make start` | Foreground dlserver on `:8001` (alias: `make start-dlserver`) |
+| `make start-lbserver` | Foreground lbserver on `:7999` |
+| `make start-runpod-master` | Background: nginx + dlserver + lbserver (HTTP) |
+| `make start-runpod-master-ssl` | Same with self-signed TLS |
+| `make start-runpod-slave` | Background: nginx + dlserver only (no LB) |
+| `make start-runpod-slave-ssl` | Same with TLS |
+| `make start-runpod-dlserver` | Background dlserver with auto-restart watchdog |
+| `make start-runpod-lbserver` | Background lbserver with auto-restart watchdog |
+| `make start-nginx` | Start nginx (HTTP) |
+| `make start-nginx-ssl` | Start nginx (HTTPS, auto-generates self-signed cert) |
+| `make start-jupyter` | Jupyter Lab on `:8890` |
+
+Stopping:
+
+| Target | What it does |
+|--------|-------------|
+| `make stop-runpod-dlserver` | Kill dlserver + its watchdog wrapper |
+| `make stop-runpod-lbserver` | Kill lbserver + its watchdog wrapper |
+| `make stop-nginx` | Stop nginx |
+
+Status:
+
 ```bash
-make info                    # port layout + running/stopped state of each process
-make stop-runpod-dlserver    # stop dlserver (+ its watchdog)
-make stop-runpod-lbserver    # stop lbserver (+ its watchdog)
+make info    # port layout + running/stopped state of each process
 ```
 
-Logs (RunPod layout): `/workspace/logs/{dlserver,lbserver,jupyter}/`. PID files
-live in `/tmp/{dlserver,lbserver}*.pid`.
+### Testing
+
+```bash
+make test              # all API + local tests
+make test-local        # all local tests (no remote server needed)
+make test-api          # all remote API tests (needs DL_BACKEND_URL)
+make test-action-local # single subsystem
+make test-benchmark    # HTTP + WS + mixed stress tests
+```
+
+All test targets use `-` (continue on error) so a single test failure does not
+block later suites.
+
+### Watchdog (`scripts/run-with-restart.sh`)
+
+Background targets (`start-runpod-*`) wrap the server process in a watchdog
+script that restarts it on crash:
+
+```
+run-with-restart.sh [OPTIONS] -- COMMAND [ARGS...]
+
+  --pid-file PATH           inner process PID (for stop targets)
+  --wrapper-pid-file PATH   watchdog's own PID
+  --cooldown SECONDS        wait between restarts (default: 5)
+  --log-dir PATH            structured logging via multilog:
+                              log-dir/stdout/   server stdout
+                              log-dir/stderr/   server stderr
+                              log-dir/watchdog/ restart events
+```
+
+Sending `SIGTERM` to the wrapper gracefully stops the inner process and exits.
+
+### PID files and logs
+
+| File | Purpose |
+|------|---------|
+| `/tmp/dlserver.pid` | dlserver process PID |
+| `/tmp/dlserver-wrapper.pid` | dlserver watchdog PID |
+| `/tmp/lbserver.pid` | lbserver process PID |
+| `/tmp/lbserver-wrapper.pid` | lbserver watchdog PID |
+| `/tmp/nginx.pid` | nginx master process PID |
+| `/workspace/logs/dlserver/` | dlserver stdout/stderr/watchdog logs |
+| `/workspace/logs/lbserver/` | lbserver stdout/stderr/watchdog logs |
+| `/workspace/logs/jupyter/` | Jupyter Lab logs |
 
 Optional: `make start-jupyter` runs Jupyter Lab on `:8890`, reachable at
 `https://<host>:8899/jupyter/`.

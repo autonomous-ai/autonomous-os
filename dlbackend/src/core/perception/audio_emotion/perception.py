@@ -1,11 +1,12 @@
 """Audio emotion perception: model lifecycle, session management, and single-shot prediction.
 
-Wraps an AudioEmotionRecognizer.
+Wraps an AudioEmotionRecognizer behind an InputBatcher.
 Each connection creates an AudioEmotionPerceptionSession via create_session().
 Single-shot method (predict_audio) is provided for HTTP endpoints.
 """
 
 import asyncio
+from typing import cast
 
 from typing_extensions import override
 
@@ -20,6 +21,7 @@ from core.perception.audio_emotion.predictors.base import AudioEmotionRecognizer
 from core.perception.audio_emotion.session import AudioEmotionPerceptionSession
 from core.perception.audio_emotion.utils import AudioEmotionRecognizerFactory
 from core.perception.base import PerceptionBase
+from core.perception.base.batching import InputBatcher
 
 
 class AudioEmotionPerception(PerceptionBase[AudioEmotionPerceptionSession]):
@@ -29,6 +31,8 @@ class AudioEmotionPerception(PerceptionBase[AudioEmotionPerceptionSession]):
         self,
         audio_emotion_recognizer_factory: AudioEmotionRecognizerFactory,
         default_config: AudioEmotionPerceptionSessionConfig | None = None,
+        batch_size: int | None = None,
+        batch_timeout: float | None = None,
     ) -> None:
         super().__init__()
 
@@ -37,7 +41,11 @@ class AudioEmotionPerception(PerceptionBase[AudioEmotionPerceptionSession]):
         )
         self._default_config: AudioEmotionPerceptionSessionConfig | None = default_config
 
+        self._batch_size: int | None = batch_size
+        self._batch_timeout: float | None = batch_timeout
+
         self._audio_emotion_recognizer: AudioEmotionRecognizer | None = None
+        self._batcher: InputBatcher[Audio, RawAudioEmotionDetection] | None = None
         self._running: bool = False
 
     @property
@@ -61,11 +69,22 @@ class AudioEmotionPerception(PerceptionBase[AudioEmotionPerceptionSession]):
         self._audio_emotion_recognizer = self._audio_emotion_recognizer_factory.create()
         await asyncio.to_thread(self._audio_emotion_recognizer.start)
 
+        self._batcher = InputBatcher(
+            self._audio_emotion_recognizer,
+            batch_size=self._batch_size,
+            batch_timeout=self._batch_timeout,
+        )
+        await self._batcher.start()
+
         self._running = True
         self._logger.info("Ready")
 
     @override
     async def stop(self) -> None:
+        if self._batcher is not None:
+            await self._batcher.stop()
+            self._batcher = None
+
         if self._audio_emotion_recognizer is not None:
             await asyncio.to_thread(self._audio_emotion_recognizer.stop)
             self._audio_emotion_recognizer = None
@@ -77,36 +96,33 @@ class AudioEmotionPerception(PerceptionBase[AudioEmotionPerceptionSession]):
     def is_ready(self) -> bool:
         return (
             self._running
-            and self._audio_emotion_recognizer is not None
-            and self._audio_emotion_recognizer.is_ready()
+            and self._batcher is not None
+            and self._batcher.is_ready()
         )
 
     @override
     async def create_session(self) -> AudioEmotionPerceptionSession:
-        if self._audio_emotion_recognizer is None:
+        if self._batcher is None:
             raise RuntimeError("AudioEmotionPerception not started")
 
         config: AudioEmotionPerceptionSessionConfig = (
             self._default_config or AudioEmotionPerceptionSession.DEFAULT_CONFIG
         )
         return AudioEmotionPerceptionSession(
-            audio_emotion_recognizer=self._audio_emotion_recognizer,
+            batcher=self._batcher,
             config=config,
         )
 
     async def predict_audio(self, audio: Audio) -> AudioEmotionDetection:
         """Classify emotion from a single audio utterance."""
-        if self._audio_emotion_recognizer is None:
+        if self._batcher is None:
             raise RuntimeError("AudioEmotionPerception not started")
 
-        raw_results: list[RawAudioEmotionDetection] = await asyncio.to_thread(
-            self._audio_emotion_recognizer.predict, [audio]
-        )
-        if not raw_results:
-            return AudioEmotionDetection(emotions=[])
+        recognizer = cast(AudioEmotionRecognizer, self._batcher.predictor)
+        futures = await self._batcher.submit([audio])
+        raw: RawAudioEmotionDetection = await futures[0]
 
-        raw: RawAudioEmotionDetection = raw_results[0]
-        class_names: list[str] = self._audio_emotion_recognizer.class_names
+        class_names: list[str] = recognizer.class_names
 
         emotions: list[AudioEmotion] = [
             AudioEmotion(
