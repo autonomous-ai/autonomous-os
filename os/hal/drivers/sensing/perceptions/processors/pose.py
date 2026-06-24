@@ -553,7 +553,7 @@ class PosePerception(Perception[cv2.typing.MatLike]):
             s: _PoseSample | None = by_ts.get(ts_key)
             if s is None:
                 continue
-            if s.risk_level >= 3 or any(_hi_in_region(s, r) for r in _REGIONS):
+            if s.risk_level >= 2 or any(_hi_in_region(s, r) for r in _REGIONS):
                 bad_keys.append(ts_key)
         if not bad_keys:
             bad_keys = [int(e["ts"]) for e in self._bucket_snapshots]
@@ -856,7 +856,7 @@ class PosePerception(Perception[cv2.typing.MatLike]):
         FE can show a live bad_ratio mid-window for debugging).
 
         "Bad" sample = any single region (L or R) at sub-score
-        >= POSE_REGION_HIGH_SUBSCORE, OR whole-body risk_level >= 3.
+        >= POSE_REGION_HIGH_SUBSCORE, OR whole-body risk_level >= 2 (LOW+).
         The sub-score arm catches forward-head-thrust cases where the
         RULA total stays "low" because trunk+arms are fine but neck
         alone is clearly off.
@@ -880,7 +880,7 @@ class PosePerception(Perception[cv2.typing.MatLike]):
 
         bad: list[_PoseSample] = [
             s for s in self._samples
-            if s.risk_level >= 3 or _hi_subscore(s)
+            if s.risk_level >= 2 or _hi_subscore(s)
         ]
         bad_ratio: float = len(bad) / len(self._samples)
 
