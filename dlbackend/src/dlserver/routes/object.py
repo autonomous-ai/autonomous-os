@@ -49,8 +49,8 @@ async def object_detection_ws(websocket: WebSocket, detector_name: str):
         await websocket.close(code=1011, reason=f"Object detector '{detector_name}' not loaded")
         return
 
+    session = await object_model.create_session()
     try:
-        session = await object_model.create_session()
         while True:
             raw: str = await websocket.receive_text()
             try:
@@ -91,6 +91,8 @@ async def object_detection_ws(websocket: WebSocket, detector_name: str):
         logger.info("Object detection WebSocket disconnected (%s)", detector_name)
     except Exception:
         logger.exception("Object detection WebSocket handler crashed (%s)", detector_name)
+    finally:
+        await session.stop()
 
 
 @http_router.post("/object-detect/{detector_name}", response_model=ObjectDetectResponse)
@@ -110,7 +112,7 @@ async def object_detect(detector_name: str, req: ObjectDetectRequest):
         raise
     except Exception as exc:
         logger.exception("Error processing object detection HTTP message")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @http_router.post("/{detector_name}", response_model=list[ObjectDetectionItemResponse])
@@ -137,7 +139,7 @@ async def object_detect_compat(detector_name: str, req: ObjectDetectRequest):
         raise
     except Exception as exc:
         logger.exception("Error processing object detection HTTP message")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @http_router.get("/object-detect/models")

@@ -36,9 +36,9 @@ async def recognize_emotion(req: RecognizeEmotionRequest):
         return RecognizeEmotionResponse.from_detection(detection, return_scores=req.return_scores)
     except HTTPException:
         raise
-    except Exception as exc:
+    except Exception:
         logger.exception("Error processing audio emotion HTTP message")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/ser/labels", response_model=LabelsResponse)
