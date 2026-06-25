@@ -18,7 +18,7 @@ Let your device react to what Claude Code is doing — Task Done, high usage, an
 Open your terminal and run:
 
 ```bash
-claude plugins marketplace add https://github.com/autonomous-ai/autonomous
+claude plugins marketplace add https://raw.githubusercontent.com/autonomous-ai/autonomous-os/main/companions/claude-desktop-buddy/claude-code-buddy/.claude-plugin/marketplace.json
 ```
 
 ```bash

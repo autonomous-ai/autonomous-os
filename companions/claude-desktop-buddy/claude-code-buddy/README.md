@@ -7,7 +7,7 @@ The plugin POSTs a few simple events to a companion daemon on the device (HTTP, 
 ## Quick Start
 
 ```bash
-claude plugins marketplace add https://github.com/autonomous-ai/autonomous-os
+claude plugins marketplace add https://raw.githubusercontent.com/autonomous-ai/autonomous-os/main/companions/claude-desktop-buddy/claude-code-buddy/.claude-plugin/marketplace.json
 claude plugins install claude-code-buddy
 ```
 
