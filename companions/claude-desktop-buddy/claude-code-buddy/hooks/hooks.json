@@ -1,0 +1,29 @@
+{
+  "description": "Claude Code Buddy hooks",
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/on-stop-done.py",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/on-notify.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

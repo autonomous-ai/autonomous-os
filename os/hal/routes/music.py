@@ -13,7 +13,7 @@ from hal.models import (
     MusicStatusResponse,
     StatusResponse,
 )
-from hal.i18n import MUSIC_BACKCHANNEL_POOLS
+from hal.i18n import MUSIC_BACKCHANNEL_POOLS, PHRASE_QUIET_HOURS, localized_phrase
 from hal.drivers.voice.tts import PROVIDER_ELEVENLABS
 from hal.presets import (
     DEFAULT_LANG,
@@ -145,6 +145,23 @@ def _fire_music_backchannel() -> None:
         state.logger.warning("Music backchannel speak failed: %s", e)
 
 
+def _announce_quiet_hours() -> None:
+    """Speak the localized 'it's quiet hours' notice so a music request
+    suppressed by audio.quiet_hours isn't a silent failure — the user hears WHY
+    nothing played, in the device's stt_language (i18n PHRASE_QUIET_HOURS).
+    Best-effort: skipped if TTS is unavailable or already speaking, never raises."""
+    tts = state.tts_service
+    if tts is None or not getattr(tts, "available", False) or tts.speaking:
+        return
+    phrase = localized_phrase(PHRASE_QUIET_HOURS)
+    if not phrase:
+        return
+    try:
+        tts.speak(phrase)
+    except Exception as e:
+        state.logger.warning("quiet-hours TTS notice failed: %s", e)
+
+
 def _detect_music_style(query: str) -> str:
     """Return recording name matching the genre keywords in query, else music_groove."""
     q = query.lower()
@@ -210,6 +227,7 @@ def audio_play(req: MusicPlayRequest):
     # unaffected — only music is suppressed.
     if audio_quiet_now(state.safety_policy):
         state.logger.info("POST /audio/play: suppressed -- audio quiet hours (query='%s')", req.query[:80])
+        _announce_quiet_hours()
         return {"status": "suppressed"}
     if not state.music_service:
         raise HTTPException(503, "Music service not available")

@@ -26,9 +26,13 @@ which brain is active.
 > hook** — PicoClaw has **no** Go `migrate_persona` adapter, so it is intentionally
 > skipped by the boot-time reconciler (`internal/agent/persona_migration.go`). The Go
 > gateway itself stays **client-only**: most in-process lifecycle methods
-> (`SetupAgent`, identity/skill watchers …) remain no-ops (§7) because provisioning
+> (`SetupAgent`, identity/skill watchers …) remain no-ops (§8) because provisioning
 > happens out-of-process in install.sh/presync. The exception is `EnsureOnboarding`
 > (`onboarding.go`), which keeps the OS-managed block in `AGENTS.md` current (§1.1).
+> Remaining gaps (skills capability-gating, queue/steer pinning, gateway
+> reload-on-change) are tracked against the
+> [`adding-agent-runtime.md`](adding-agent-runtime.md) checklist — consult it before
+> raising PicoClaw to full parity.
 
 ## 1. When and how it is selected
 
@@ -222,14 +226,42 @@ inbound frame and stored (`SetSessionKey`) so the next `message.send` echoes it.
 `NewSession` just clears the local id so the next turn starts a fresh server
 session. There is no compact RPC, so `CompactSession` is a no-op.
 
-## 7. What is stubbed
+## 7. Channel capability
+
+PicoClaw runs **telegram only**. The Telegram receive loop is **device-owned**
+(driven by `config.TelegramBotToken`), and PicoClaw has no slack/discord delivery
+of its own. The three channel methods in `internal/picoclaw/channels.go` encode
+this honestly:
+
+| Method | telegram | slack / discord / whatsapp |
+|---|---|---|
+| `SupportedChannels()` | returns `[telegram]` (the only entry) | — |
+| `AddChannel(…)` | honest **no-op success** — telegram is device-owned, so there is nothing to write into the runtime | returns `domain.ErrChannelNotSupported` |
+| `RefreshChannelConfig(…)` | `("", nil)` — success no-op (no runtime re-apply needed) | returns `domain.ErrChannelNotSupported` |
+
+This is part of a **repo-wide generic capability model**: every runtime declares
+`SupportedChannels()` and returns `domain.ErrChannelNotSupported` (the string
+`"channel_not_supported"`) for channels it cannot run, instead of the old silent
+no-op. The shared not-supported behavior and the post-switch `ChannelReconcile`
+are documented in [`adding-agent-runtime.md`](adding-agent-runtime.md) — see there
+rather than duplicating here.
+
+**Switching FROM openclaw → picoclaw:** if openclaw had slack/discord configured,
+those channels become unsupported under PicoClaw. After the switch
+`ChannelReconcile` reports them in the MQTT info uplink's `unsupported_channels`
+field (`domain.MQTTInfoResponse`), and their creds **stay in `config.json`** —
+switching back to openclaw restores them.
+
+## 8. What is stubbed
 
 Everything not on the PicoClaw hot path is a no-op so the single
 `domain.AgentGateway` interface is satisfied without inventing features the
-backend does not have: `SetupAgent`, `AddChannel`, `RefreshChannelConfig`,
-WhatsApp pairing, `ResetAgent`, `RestartAgent`, `RefreshModelsConfig`,
-`FetchChatHistory`, `GetConfigJSON`, MCP entry writes, `WatchIdentity`,
-`UpdateIdentityName`, skill/model watchers, `UpdatePrimaryModel`.
+backend does not have: `SetupAgent`, WhatsApp pairing, `ResetAgent`,
+`RestartAgent`, `RefreshModelsConfig`, `FetchChatHistory`, `GetConfigJSON`,
+MCP entry writes, `WatchIdentity`, `UpdateIdentityName`, skill/model watchers,
+`UpdatePrimaryModel`. (`AddChannel` / `RefreshChannelConfig` are NOT stubs — they
+return `domain.ErrChannelNotSupported` for unsupported channels, see §7;
+`EnsureOnboarding` is real, see §1.1.)
 HAL TTS/voice, Telegram fan-out, sensing-event queue/drain, and the run-marker
 helpers (guard / broadcast / web-chat / silent / pose-bucket) are backend-agnostic
 and behave exactly like the Hermes backend.

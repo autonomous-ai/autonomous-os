@@ -14,7 +14,25 @@ Add new languages by adding a key to every dict — missing keys fall back
 to DEFAULT_LANG at lookup time, so a partial translation is safe.
 """
 
-from hal.presets import LANG_EN, LANG_VI, LANG_ZH_CN, LANG_ZH_TW
+from hal.presets import DEFAULT_LANG, LANG_EN, LANG_VI, LANG_ZH_CN, LANG_ZH_TW
+
+
+def localized_phrase(key: str, lang: str | None = None) -> str:
+    """Return PHRASES_BY_LANG[key] for the device's stt_language, falling back to
+    DEFAULT_LANG (then ""). Pass `lang` to override the config.json lookup.
+
+    Shared single-language lookup so callers (os_shutdown, music quiet-hours, …)
+    don't each re-implement the stt_language read + DEFAULT_LANG fallback.
+    """
+    if lang is None:
+        try:
+            from hal.config import _os_cfg_get
+            lang = (_os_cfg_get("stt_language") or "").strip()
+        except Exception:
+            lang = ""
+    pool = PHRASES_BY_LANG.get(key, {})
+    return pool.get(lang) or pool.get(DEFAULT_LANG, "")
+
 
 # --- Button / touch action phrases ---
 
@@ -22,6 +40,9 @@ PHRASE_LISTENING = "listening"
 PHRASE_REBOOT = "reboot"
 PHRASE_SHUTDOWN = "shutdown"
 PHRASE_SERVICE_RESTART = "service_restart"
+# Spoken when a music/audio play request is suppressed by the audio.quiet_hours
+# safety window, so the user hears WHY nothing played instead of silent failure.
+PHRASE_QUIET_HOURS = "quiet_hours"
 
 # Localized action announcements. reboot/shutdown phrases stay literal
 # in every language ("rebooting", "shutting down") because the user just
@@ -59,6 +80,12 @@ PHRASES_BY_LANG = {
         LANG_VI:    "Mình quay lại ngay.",
         LANG_ZH_CN: "我马上回来。",
         LANG_ZH_TW: "我馬上回來。",
+    },
+    PHRASE_QUIET_HOURS: {
+        LANG_EN:    "It's quiet hours right now, so I can't play music. Let's try again later.",
+        LANG_VI:    "Giờ đang là giờ yên tĩnh nên mình chưa mở nhạc được. Lát nữa mình thử lại nha.",
+        LANG_ZH_CN: "现在是安静时段，我先不放音乐啦，待会儿再试吧。",
+        LANG_ZH_TW: "現在是安靜時段，我先不放音樂啦，待會兒再試吧。",
     },
 }
 

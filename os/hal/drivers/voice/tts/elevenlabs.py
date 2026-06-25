@@ -1,6 +1,7 @@
 """ElevenLabs TTS backend with streaming support."""
 
 import logging
+import re
 from typing import Iterator, Optional
 
 from hal.presets import LANG_EN, LANG_VI
@@ -8,6 +9,10 @@ from hal.drivers.voice.tts.backend import TTSBackend, STREAM_CHUNK_SIZE
 from hal.drivers.voice.tts.openai import _ensure_openai_v1
 
 logger = logging.getLogger("hal.voice.tts")
+
+# Audio direction tags like "[laughs]" — eleven_v3 interprets them, but a chunk
+# with ONLY tags (no words) has no speakable content and ElevenLabs 400s it.
+_AUDIO_TAG_RE = re.compile(r"\[[^\]]*\]")
 
 
 class ElevenLabsTTSBackend(TTSBackend):
@@ -156,6 +161,13 @@ class ElevenLabsTTSBackend(TTSBackend):
         el_model = model if model.startswith("eleven_") else self.DEFAULT_MODEL
         # Resolve voice name to voice_id (pass through if already an ID)
         voice_id = self.VOICE_IDS.get(voice, voice)
+        # Skip non-speakable chunks: ElevenLabs 400s on empty / whitespace-only /
+        # audio-tag-only text (sentence splitting can emit a bare "[laughs]" or a
+        # trailing empty fragment). No words = nothing to synth — yield nothing
+        # instead of a failed request. Device-confirmed: "", " ", "[laughs]" → 400.
+        if not _AUDIO_TAG_RE.sub("", text or "").strip():
+            logger.debug("ElevenLabs TTS: skipping non-speakable chunk: %r", text)
+            return
         # output_format is a query param, not body — pcm_24000 = 24kHz 16-bit mono
         url = f"{self._base_url}/text-to-speech/{voice_id}/stream?output_format=pcm_24000"
         headers = {
@@ -172,6 +184,17 @@ class ElevenLabsTTSBackend(TTSBackend):
         with self._client.stream(
             "POST", url, headers=headers, json=body
         ) as response:
-            response.raise_for_status()
+            if response.status_code >= 400:
+                # raise_for_status alone swallows the body — log the real reason
+                # + the offending text so the next 400 (other cause) is diagnosable.
+                try:
+                    detail = response.read().decode(errors="replace")[:300]
+                except Exception:
+                    detail = "<unreadable>"
+                logger.error(
+                    "ElevenLabs TTS %d voice=%s model=%s speed=%s text=%r: %s",
+                    response.status_code, voice_id, el_model, speed, text[:80], detail,
+                )
+                response.raise_for_status()
             for chunk in response.iter_bytes(STREAM_CHUNK_SIZE):
                 yield chunk

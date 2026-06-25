@@ -1,4 +1,4 @@
-package main
+package buddy
 
 import "fmt"
 
@@ -23,7 +23,7 @@ const (
 	NarrateToolTask      NarrationCategory = "tool_task"   // Task (delegate to subagent)
 	NarrateToolTodo      NarrationCategory = "tool_todo"   // TodoWrite
 	NarrateToolNotebook  NarrationCategory = "tool_notebook"
-	NarrateToolMCP       NarrationCategory = "tool_mcp"    // mcp__* catch-all
+	NarrateToolMCP       NarrationCategory = "tool_mcp"     // mcp__* catch-all
 	NarrateToolGeneric   NarrationCategory = "tool_generic" // unknown tool — no name spoken
 )
 

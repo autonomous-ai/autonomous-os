@@ -171,3 +171,57 @@ class SileroVADFilter:
         except Exception as e:
             logger.warning("Silero VAD inference error: %s", e)
             return True
+
+    def speech_metrics(self, data, device_rate: int):
+        """Return (peak, mean, voiced_ratio) over the whole `data` buffer.
+
+        Unlike is_speech (which is peak-only — one transient chunk crossing the
+        threshold marks the whole buffer speech, fine for fast onset detection at
+        the entry gate but too lenient to REJECT a noisy turn), this reports the
+        fraction of 32ms chunks that are voiced. A real speaking turn is voiced
+        across most of its length; sustained noise has only sparse voiced chunks.
+
+        Fails open: returns (1.0, 1.0, 1.0) on error so callers treat it as speech.
+        """
+        if self._session is None:
+            return (1.0, 1.0, 1.0)
+        try:
+            np = self._np
+            if device_rate != STT_RATE:
+                import scipy.signal
+                samples = data.flatten().astype(np.float32)
+                g = gcd(STT_RATE, device_rate)
+                up, down = STT_RATE // g, device_rate // g
+                audio_16k = scipy.signal.resample_poly(samples, up, down).astype(np.float32)
+            else:
+                audio_16k = data.flatten().astype(np.float32)
+            audio_norm = audio_16k / 32768.0
+
+            confs = []
+            with self._lock:
+                for i in range(0, len(audio_norm), SILERO_CHUNK_SIZE):
+                    chunk = audio_norm[i:i + SILERO_CHUNK_SIZE]
+                    if len(chunk) < SILERO_CHUNK_SIZE:
+                        chunk = np.pad(chunk, (0, SILERO_CHUNK_SIZE - len(chunk)))
+                    x = np.concatenate([self._context, chunk.reshape(1, -1)], axis=1)
+                    out = self._session.run(
+                        None,
+                        {
+                            "input": x,
+                            "state": self._state,
+                            "sr": np.array(STT_RATE, dtype=np.int64),
+                        },
+                    )
+                    confs.append(float(out[0][0][0]))
+                    self._state = out[1]
+                    self._context = x[:, -64:]
+
+            if not confs:
+                return (1.0, 1.0, 1.0)
+            peak = max(confs)
+            mean = sum(confs) / len(confs)
+            ratio = sum(c >= SILERO_VAD_THRESHOLD for c in confs) / len(confs)
+            return (peak, mean, ratio)
+        except Exception as e:
+            logger.warning("Silero speech_metrics error: %s", e)
+            return (1.0, 1.0, 1.0)

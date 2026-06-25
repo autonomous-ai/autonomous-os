@@ -3,7 +3,6 @@ package hermes
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 
 	"go.autonomous.ai/os/domain"
@@ -13,20 +12,9 @@ import (
 // presync hook (via EnsureOnboarding) to materialize config.yaml from the
 // just-saved config.json (llm_* + channel tokens).
 
-// AddChannel — channels run inside Device (Telegram receive loop) when on
-// Hermes, not as plugins inside the agent runtime. No-op here; channel
-// credentials live in the regular Device config (TelegramBotToken, etc.).
-func (s *HermesService) AddChannel(_ context.Context, _ domain.AddChannelRequest) error {
-	slog.Info("AddChannel: no-op (hermes backend)", "component", "hermes")
-	return nil
-}
-
-// RefreshChannelConfig — refresh re-applies channels.<channel> in openclaw.json,
-// but Hermes owns its own ~/.hermes config layout. Not supported on this backend.
-func (s *HermesService) RefreshChannelConfig(_ context.Context, _ domain.RefreshChannelRequest) (string, error) {
-	slog.Info("RefreshChannelConfig: not supported (hermes backend)", "component", "hermes")
-	return "", fmt.Errorf("channel refresh not supported on hermes backend")
-}
+// AddChannel + RefreshChannelConfig + SupportedChannels live in channels.go —
+// Hermes delivers telegram/slack/discord natively via ~/.hermes/.env, so both apply
+// paths re-sync the .env (presync) and restart the gateway when it changed.
 
 func (s *HermesService) HasWhatsappSession(_ string) bool { return false }
 

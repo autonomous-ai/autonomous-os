@@ -54,6 +54,7 @@ def run_realtime_turn(
     combined: str,
     rt_audio_buffer: list,
     buf_duration: float,
+    audio_is_speech: bool = True,
 ) -> RealtimeTurnResult:
     """Commit the captured audio to the realtime agent and stream its reply.
 
@@ -69,13 +70,17 @@ def run_realtime_turn(
     native_started = False  # cleanup guard: True between begin and end
     native_played = False    # did native audio actually play this turn (for handled)
 
-    # Noise/false-trigger guard: a session with no STT transcript AND only a
-    # sliver of audio (just the VAD pre-roll, no sustained speech) is not worth
-    # a model turn — committing it makes the model answer silence, which then
-    # desyncs onto a later real turn. A real audio-only turn runs longer than
-    # the threshold, so it still commits.
-    noise_turn = (
-        not combined and buf_duration < hal_config.REALTIME_MIN_COMMIT_DURATION_S
+    # Noise/false-trigger guard: a session with no STT transcript is not worth a
+    # model turn — committing it makes the model answer silence/noise (spurious
+    # self-talk + wasted tokens), which then desyncs onto a later real turn.
+    # Two signals catch it: (1) a sliver of audio (just the VAD pre-roll, below
+    # the duration floor), or (2) Silero VAD judged the FULL buffer non-speech
+    # (catches sustained noise that runs LONGER than the floor — `audio_is_speech`
+    # is computed by the caller, default True so a missing check never drops a
+    # turn). A genuine audio-only turn (real speech STT missed) clears both.
+    noise_turn = not combined and (
+        buf_duration < hal_config.REALTIME_MIN_COMMIT_DURATION_S
+        or not audio_is_speech
     )
     if (
         hal_config.REALTIME_ENABLED
@@ -250,9 +255,10 @@ def run_realtime_turn(
     elif hal_config.REALTIME_ENABLED and noise_turn:
         logger.info(
             "[realtime] Skipping commit — noise/false-trigger turn "
-            "(dur=%.2fs < %.2fs, empty STT)",
+            "(empty STT, dur=%.2fs, min=%.2fs, silero_speech=%s)",
             buf_duration,
             hal_config.REALTIME_MIN_COMMIT_DURATION_S,
+            audio_is_speech,
         )
     elif hal_config.REALTIME_ENABLED:
         logger.warning(

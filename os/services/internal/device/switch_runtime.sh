@@ -33,10 +33,9 @@
 # os-server (it used to); os-server restarts itself AFTER acking, which is also
 # what makes factory.go re-resolve the gateway.
 #
-# config.agent_runtime is owned entirely by os-server: it persists the new value
-# only AFTER this script exits 0 (never before). So this script never reads or
-# writes config.json — it owns only the systemd + backend-install side effects, and
-# on failure rolls just those back (config is still `old` on disk, nothing to undo).
+# config.agent_runtime itself is persisted by os-server BEFORE this runs; this
+# script only owns the systemd + backend-install side effects (and, on failure,
+# rolling those + config.agent_runtime back).
 set -euo pipefail
 
 NEW="${1:-}"
@@ -143,17 +142,10 @@ run_presync() {
 # start_new — enable + start NEW; succeeds only when it actually reaches active.
 # `enable --now` returning 0 just means systemd attempted the start; a unit that
 # crashes immediately (e.g. missing binary) can still exit 0, so we assert
-# We poll is-active for a bit after enable --now, to allow slow backends to become active.
-START_GRACE_SECS="${START_GRACE_SECS:-30}"
+# is-active separately.
 start_new() {
   log "starting $NEW ($NEW_UNIT.service)"
   systemctl enable --now "${NEW_UNIT}.service" || true
-  local i=0
-  while [ "$i" -lt "$START_GRACE_SECS" ]; do
-    systemctl is-active --quiet "${NEW_UNIT}.service" && return 0
-    sleep 1
-    i=$((i + 1))
-  done
   systemctl is-active --quiet "${NEW_UNIT}.service"
 }
 

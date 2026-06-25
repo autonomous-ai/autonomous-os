@@ -130,6 +130,11 @@ class VoiceService:
         )
         if not voice_cfg.SILERO_VAD_ENABLED:
             logger.info("Silero VAD disabled via HAL_SILERO_ENABLED=false")
+        # Dedicated Silero instance for the realtime empty-STT noise guard, built
+        # lazily on first use. Kept SEPARATE from the entry-gate VAD above so it
+        # works even when HAL_SILERO_ENABLED is false (the common case) and never
+        # shares LSTM state with the entry gate. See _rt_noise_is_speech.
+        self._rt_noise_vad: SileroVADFilter | None = None
 
         # Speaker decoration (wake-word + speaker recognizer + SER). Speaker-ID and
         # SER (speech emotion) are voice people-perception — gated on the `audio`
@@ -330,6 +335,42 @@ class VoiceService:
     def _silero_reset_state(self) -> None:
         if self._silero_vad is not None:
             self._silero_vad.reset_state()
+
+    def _rt_noise_is_speech(self, pcm_int16) -> bool:
+        """Realtime noise guard: is `pcm_int16` (STT_RATE PCM16 samples) speech?
+
+        Uses a dedicated, lazily-built Silero instance — independent of
+        HAL_SILERO_ENABLED — so the empty-STT noise filter works regardless of
+        which VAD the entry gate runs. Fails open (returns True = treat as speech,
+        commit) on any error so a model glitch never drops a real turn. Resets the
+        LSTM state after each call (each turn is judged independently)."""
+        if self._rt_noise_vad is None:
+            try:
+                self._rt_noise_vad = SileroVADFilter(
+                    voice_cfg.SILERO_MODEL_PATH, self._np
+                )
+            except Exception as e:
+                logger.warning("Realtime noise-guard Silero load failed: %s", e)
+                return True
+        try:
+            peak, mean, ratio = self._rt_noise_vad.speech_metrics(
+                pcm_int16, voice_cfg.STT_RATE
+            )
+            self._rt_noise_vad.reset_state()
+            # Judge by VOICED RATIO, not peak: a real speaking turn is voiced
+            # across most of its length; sustained noise only spikes sparsely.
+            # (is_speech is peak-only — one transient chunk would pass noise.)
+            is_speech = ratio >= hal_config.REALTIME_NOISE_SPEECH_RATIO
+            logger.info(
+                "[realtime] noise-guard metrics: peak=%.3f mean=%.3f voiced_ratio=%.3f "
+                "(>= %.2f? %s)",
+                peak, mean, ratio,
+                hal_config.REALTIME_NOISE_SPEECH_RATIO, is_speech,
+            )
+            return is_speech
+        except Exception as e:
+            logger.warning("Realtime noise-guard Silero inference failed: %s", e)
+            return True
 
     # ------------------------------------------------------------------
     # State checks
@@ -936,6 +977,30 @@ class VoiceService:
                 audio_buffer, longest_partial, final_segments, last_speech_idx
             )
 
+            # Noise guard for empty-STT turns: a session can open on a noise blip
+            # that fools the entry VAD, then STT finds no words. Re-check the FULL
+            # captured buffer with Silero; if it isn't speech, run_realtime_turn
+            # treats it as noise and skips the commit (no self-talk, no wasted
+            # tokens). Fail-open: any error → leave it True (don't drop a real turn).
+            rt_audio_is_speech = True
+            if (
+                not combined
+                and hal_config.REALTIME_REQUIRE_SPEECH_ON_EMPTY_STT
+                and audio_buffer
+            ):
+                try:
+                    pcm = self._np.frombuffer(
+                        b"".join(audio_buffer), dtype=self._np.int16
+                    )
+                    rt_audio_is_speech = self._rt_noise_is_speech(pcm)
+                    logger.info(
+                        "[realtime] noise-guard ran: empty STT, silero_speech=%s "
+                        "(samples=%d, dur=%.2fs)",
+                        rt_audio_is_speech, len(pcm), buf_duration,
+                    )
+                except Exception as e:
+                    logger.warning("Realtime noise-guard buffer decode failed: %s", e)
+
             # --- Realtime voice agent (runs first, before speaker ID / OS server) ---
             # Runs even if STT transcript is empty — the model has the raw audio.
             rt = run_realtime_turn(
@@ -945,6 +1010,7 @@ class VoiceService:
                 combined,
                 rt_audio_buffer,
                 buf_duration,
+                rt_audio_is_speech,
             )
 
             # --- Speaker recognition + OS server send + SER ---

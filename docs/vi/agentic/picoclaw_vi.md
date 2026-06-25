@@ -26,9 +26,13 @@ não nào đang chạy.
 > hook presync** đảm nhiệm — PicoClaw **không** có adapter Go `migrate_persona`, nên
 > bộ reconcile lúc boot (`internal/agent/persona_migration.go`) cố tình bỏ qua nó.
 > Bản thân gateway Go vẫn **chỉ-client**: hầu hết method lifecycle in-process
-> (`SetupAgent`, watcher identity/skill …) vẫn no-op (§7) vì provisioning xảy ra ngoài
+> (`SetupAgent`, watcher identity/skill …) vẫn no-op (§8) vì provisioning xảy ra ngoài
 > tiến trình trong install.sh/presync. Ngoại lệ là `EnsureOnboarding`
 > (`onboarding.go`) — giữ khối OS-managed trong `AGENTS.md` luôn cập nhật (§1.1).
+> Các gap còn lại (capability-gate skills, pin queue/steer, reload gateway khi block
+> đổi) được theo dõi theo checklist
+> [`adding-agent-runtime_vi.md`](adding-agent-runtime_vi.md) — xem đó trước khi nâng
+> PicoClaw lên parity đầy đủ.
 
 ## 1. Khi nào và chọn ra sao
 
@@ -217,16 +221,43 @@ và lưu lại (`SetSessionKey`) để `message.send` kế tiếp gửi kèm. `N
 xóa id cục bộ để lượt kế tiếp bắt đầu session server mới. Không có RPC compact nên
 `CompactSession` là no-op.
 
-## 7. Những phần để stub
+## 7. Khả năng kênh (channel capability)
+
+PicoClaw **chỉ chạy telegram**. Vòng nhận Telegram do **thiết bị sở hữu** (điều
+khiển bởi `config.TelegramBotToken`), và PicoClaw không có delivery slack/discord
+riêng. Ba phương thức kênh trong `internal/picoclaw/channels.go` mã hóa điều này
+một cách trung thực:
+
+| Phương thức | telegram | slack / discord / whatsapp |
+|---|---|---|
+| `SupportedChannels()` | trả về `[telegram]` (mục duy nhất) | — |
+| `AddChannel(…)` | **no-op thành công** trung thực — telegram do thiết bị sở hữu, nên không có gì để ghi vào runtime | trả về `domain.ErrChannelNotSupported` |
+| `RefreshChannelConfig(…)` | `("", nil)` — no-op thành công (không cần re-apply runtime) | trả về `domain.ErrChannelNotSupported` |
+
+Đây là một phần của **mô hình capability generic toàn repo**: mọi runtime khai báo
+`SupportedChannels()` và trả về `domain.ErrChannelNotSupported` (chuỗi
+`"channel_not_supported"`) cho các kênh nó không chạy được, thay cho no-op im lặng
+kiểu cũ. Hành vi not-supported dùng chung và `ChannelReconcile` sau khi switch được
+mô tả trong [`adding-agent-runtime_vi.md`](adding-agent-runtime_vi.md) — xem ở đó
+thay vì lặp lại tại đây.
+
+**Khi switch TỪ openclaw → picoclaw:** nếu openclaw đã cấu hình slack/discord, các
+kênh đó trở thành không hỗ trợ dưới PicoClaw. Sau khi switch, `ChannelReconcile`
+báo cáo chúng trong trường `unsupported_channels` của uplink MQTT info
+(`domain.MQTTInfoResponse`), và creds của chúng **vẫn nằm trong `config.json`** —
+switch ngược lại openclaw sẽ khôi phục chúng.
+
+## 8. Những phần để stub
 
 Mọi thứ không nằm trên hot path của PicoClaw đều là no-op để thỏa interface
 `domain.AgentGateway` mà không bịa ra tính năng backend không có: `SetupAgent`,
-`AddChannel`, `RefreshChannelConfig`, pairing WhatsApp, `ResetAgent`,
-`RestartAgent`, `RefreshModelsConfig`, `FetchChatHistory`, `GetConfigJSON`, ghi MCP
-entry, `WatchIdentity`, `UpdateIdentityName`, watcher skill/model,
-`UpdatePrimaryModel`. HAL TTS/voice, fan-out Telegram, hàng đợi/drain sensing-event,
-và các helper run-marker (guard / broadcast / web-chat / silent / pose-bucket) đều
-backend-agnostic và hành xử y hệt backend Hermes.
+pairing WhatsApp, `ResetAgent`, `RestartAgent`, `RefreshModelsConfig`,
+`FetchChatHistory`, `GetConfigJSON`, ghi MCP entry, `WatchIdentity`,
+`UpdateIdentityName`, watcher skill/model, `UpdatePrimaryModel`. (`AddChannel` /
+`RefreshChannelConfig` KHÔNG phải stub — trả `domain.ErrChannelNotSupported` cho kênh
+không hỗ trợ, xem §7; `EnsureOnboarding` là thật, xem §1.1.) HAL TTS/voice, fan-out
+Telegram, hàng đợi/drain sensing-event, và các helper run-marker (guard / broadcast /
+web-chat / silent / pose-bucket) đều backend-agnostic và hành xử y hệt backend Hermes.
 
 Những phần này no-op **có chủ đích**: PicoClaw được provisioning ngoài tiến trình
 bởi `install.sh` + `presync.sh` (§1.1), không phải bằng các lời gọi gateway

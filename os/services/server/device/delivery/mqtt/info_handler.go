@@ -19,6 +19,9 @@ func (h *DeviceMQTTHandler) handleInfo(_ domain.MQTTMessage) error {
 	// active one is named by agent_runtime.
 	msg.HermesVersion = agenthttp.GetHermesVersion()
 	msg.AgentRuntime = device.CurrentAgentRuntimeFromConfig(h.config)
+	// Channels configured here that the active runtime can't run (set by
+	// ChannelReconcile after a runtime switch, e.g. slack after switching to picoclaw).
+	msg.UnsupportedChannels = h.config.ChannelsUnsupported
 	if ip, err := h.networkService.GetCurrentIP(); err == nil {
 		msg.LocalIP = ip
 	}

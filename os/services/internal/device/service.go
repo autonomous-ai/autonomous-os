@@ -3,7 +3,6 @@ package device
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os/exec"
@@ -68,15 +67,17 @@ func (st *setupState) set(phase, ip, errMsg string) {
 	st.mu.Unlock()
 }
 
-// ErrSlackCredentialsMissing is returned by RefreshChannelConfig when the
-// device's config.json has no slack bot token — refresh cannot synthesize it, so
-// the caller must run /api/device/setup or add_channel first.
-var ErrSlackCredentialsMissing = errors.New("slack_credentials_missing")
+// ErrSlackCredentialsMissing is returned by RefreshChannelConfig when config.json
+// has no credentials for the channel being refreshed — refresh cannot synthesize
+// them, so the caller must run /api/device/setup or add_channel first. Aliased to
+// the shared domain sentinel; the MQTT handler maps it to "slack_credentials_missing"
+// (kept for wire back-compat).
+var ErrSlackCredentialsMissing = domain.ErrChannelCredentialsMissing
 
-// ErrChannelNotSupported is returned by RefreshChannelConfig for channels that
-// cannot be refreshed in a config-only way (or unknown channel names). Today
-// only slack is wired into the refresh path.
-var ErrChannelNotSupported = errors.New("channel_not_supported")
+// ErrChannelNotSupported is returned when the active runtime cannot run the
+// requested channel. Aliased to the shared domain sentinel so runtime-level
+// not-supported errors compare equal here and in the MQTT handlers.
+var ErrChannelNotSupported = domain.ErrChannelNotSupported
 
 type Service struct {
 	config         *config.Config
@@ -87,12 +88,35 @@ type Service struct {
 }
 
 func ProvideService(config *config.Config, ns *network.Service, gw domain.AgentGateway, be *beclient.Client) *Service {
+	SeedAgentRuntimeFromGateway(config)
 	return &Service{
 		config:         config,
 		networkService: ns,
 		agentGateway:   gw,
 		beClient:       be,
 		setupState:     setupState{phase: SetupPhaseIdle},
+	}
+}
+
+// SeedAgentRuntimeFromGateway materializes DEVICE.md gateway.default into
+// config.agent_runtime when the field is still empty, then persists it. Once a
+// concrete value is on disk the device "owns" its runtime: a dev who set it
+// (via switch or by hand) is left untouched, and the resolve-fallback in
+// CurrentAgentRuntimeFromConfig becomes a no-op. Idempotent — only the first
+// boot of a fresh/legacy config.json writes. When gateway.default is itself
+// absent there is nothing to seed, so the field stays empty and the runtime
+// keeps resolving to openclaw at boot.
+func SeedAgentRuntimeFromGateway(cfg *config.Config) {
+	if cfg == nil || strings.TrimSpace(cfg.AgentRuntime) != "" {
+		return
+	}
+	g := strings.ToLower(strings.TrimSpace(GatewayDefault(cfg.DeviceTypeOrDefault())))
+	if g == "" || !domain.IsValidAgentRuntime(g) {
+		return
+	}
+	cfg.AgentRuntime = g
+	if err := cfg.Save(); err != nil {
+		slog.Error("seed agent_runtime from gateway.default failed", "component", "device", "runtime", g, "error", err)
 	}
 }
 
@@ -285,28 +309,44 @@ func (s *Service) Setup(data domain.SetupRequest) error {
 // both for first-time pairing and for resumed sessions (creds already on
 // disk).
 func (s *Service) AddChannel(ctx context.Context, data domain.AddChannelRequest) (<-chan domain.PairingEvent, error) {
-	if err := s.agentGateway.AddChannel(ctx, data); err != nil {
-		return nil, fmt.Errorf("add channel in agent: %w", err)
+	channel := data.EffectiveChannel()
+
+	// 1. Capability gate — reject before persisting anything, so an unsupported
+	// channel never leaves a dead token in config.json masquerading as configured.
+	if !domain.ChannelSupported(s.agentGateway, channel) {
+		return nil, fmt.Errorf("%s on runtime %s: %w", channel, s.agentGateway.Name(), domain.ErrChannelNotSupported)
 	}
 
-	channel := data.EffectiveChannel()
-	s.config.Channel = channel
-	switch channel {
-	case domain.ChannelSlack:
-		s.config.SlackBotToken = data.SlackBotToken
-		s.config.SlackAppToken = data.SlackAppToken
-		s.config.SlackUserID = data.SlackUserID
-	case domain.ChannelDiscord:
-		s.config.DiscordBotToken = data.DiscordBotToken
-		s.config.DiscordUserID = data.DiscordUserID
-	case domain.ChannelWhatsapp:
-		s.config.WhatsappUserID = data.WhatsappUserID
-	default:
-		s.config.TelegramBotToken = data.TelegramBotToken
-		s.config.TelegramUserID = data.TelegramUserID
-	}
-	if err := s.config.Save(); err != nil {
+	// 2. Persist creds FIRST: a config-reading runtime apply (hermes presync re-reads
+	// config.json to rebuild ~/.hermes/.env) must see the new tokens. A transient
+	// apply failure then leaves creds persisted, which is the recoverable direction —
+	// the boot presync / ChannelReconcile re-applies them. Mutate INSIDE WithLockSave so
+	// the field writes + marshal are atomic against concurrent config writers
+	// (UpdateConfig, the primary-model watcher).
+	if err := s.config.WithLockSave(func(c *config.Config) {
+		c.Channel = channel
+		switch channel {
+		case domain.ChannelSlack:
+			c.SlackBotToken = data.SlackBotToken
+			c.SlackAppToken = data.SlackAppToken
+			c.SlackUserID = data.SlackUserID
+		case domain.ChannelDiscord:
+			c.DiscordBotToken = data.DiscordBotToken
+			c.DiscordGuildID = data.DiscordGuildID
+			c.DiscordUserID = data.DiscordUserID
+		case domain.ChannelWhatsapp:
+			c.WhatsappUserID = data.WhatsappUserID
+		default:
+			c.TelegramBotToken = data.TelegramBotToken
+			c.TelegramUserID = data.TelegramUserID
+		}
+	}); err != nil {
 		slog.Error("save config failed", "component", "device", "error", err)
+	}
+
+	// 3. Apply the channel in the active runtime.
+	if err := s.agentGateway.AddChannel(ctx, data); err != nil {
+		return nil, fmt.Errorf("add channel in agent: %w", err)
 	}
 	slog.Info("added channel", "component", "device", "channel", channel)
 
@@ -338,9 +378,16 @@ func (s *Service) AddChannel(ctx context.Context, data domain.AddChannelRequest)
 //
 // Returns the detected runtime version string ("Y.M.P", empty when undetected)
 // and sentinel errors the MQTT handler maps to stable status codes:
-//   - ErrSlackCredentialsMissing — config.json has no slack bot token
-//   - ErrChannelNotSupported     — unknown channel or one not wired into refresh
+//   - ErrSlackCredentialsMissing — config.json has no credentials for the channel
+//   - ErrChannelNotSupported     — the active runtime can't run this channel
 func (s *Service) RefreshChannelConfig(ctx context.Context, channel string) (string, error) {
+	// Capability gate first: a channel the active runtime can't run is "not
+	// supported" regardless of whether creds happen to be on disk.
+	if !domain.ChannelSupported(s.agentGateway, channel) {
+		return "", ErrChannelNotSupported
+	}
+
+	req := domain.RefreshChannelRequest{Channel: channel}
 	switch channel {
 	case domain.ChannelSlack:
 		// Bot token is the one mandatory credential for both transports.
@@ -354,17 +401,35 @@ func (s *Service) RefreshChannelConfig(ctx context.Context, channel string) (str
 		// on disk) as the signingSecret so it matches what the backend proxy
 		// re-signs with. Socket-mode installs flip to HTTP the first time the
 		// backend sends channel.refresh_config — no per-device add_channel push.
-		return s.agentGateway.RefreshChannelConfig(ctx, domain.RefreshChannelRequest{
-			Channel:            channel,
-			SlackBotToken:      s.config.SlackBotToken,
-			SlackAppToken:      s.config.SlackAppToken, // ignored in http mode, kept for back-compat
-			SlackUserID:        s.config.SlackUserID,
-			SlackMode:          "http",
-			SlackSigningSecret: s.config.LLMAPIKey,
-		})
+		req.SlackBotToken = s.config.SlackBotToken
+		req.SlackAppToken = s.config.SlackAppToken // ignored in http mode, kept for back-compat
+		req.SlackUserID = s.config.SlackUserID
+		req.SlackMode = "http"
+		req.SlackSigningSecret = s.config.LLMAPIKey
+	case domain.ChannelDiscord:
+		if s.config.DiscordBotToken == "" {
+			return "", ErrSlackCredentialsMissing
+		}
+		req.DiscordBotToken = s.config.DiscordBotToken
+		req.DiscordGuildID = s.config.DiscordGuildID
+		req.DiscordUserID = s.config.DiscordUserID
+	case domain.ChannelTelegram:
+		if s.config.TelegramBotToken == "" {
+			return "", ErrSlackCredentialsMissing
+		}
+		req.TelegramBotToken = s.config.TelegramBotToken
+		req.TelegramUserID = s.config.TelegramUserID
 	default:
 		return "", ErrChannelNotSupported
 	}
+	return s.agentGateway.RefreshChannelConfig(ctx, req)
+}
+
+// SupportsChannel reports whether the active runtime can run the given channel.
+// Used by the HTTP add-channel handler to reject an unsupported channel
+// synchronously (before its fire-and-forget goroutine) with a real error.
+func (s *Service) SupportsChannel(channel string) bool {
+	return domain.ChannelSupported(s.agentGateway, channel)
 }
 
 // PairWhatsapp re-runs the WhatsApp Linked Devices pairing flow without

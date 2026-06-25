@@ -252,6 +252,22 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
 
                 case "response.done":
                     logger.debug("[realtime] Response complete")
+                    # Per-turn token bill. input_tokens is the input CONTEXT billed
+                    # this turn — it grows as a long-lived session accumulates
+                    # history and should drop right after an idle session recycle
+                    # (see orchestrator._mark_turn_start). cached covers prompt
+                    # caching. Grep "[realtime] OpenAI usage" to confirm cost cut.
+                    usage = getattr(getattr(event, "response", None), "usage", None)
+                    if usage is not None:
+                        details = getattr(usage, "input_token_details", None)
+                        logger.info(
+                            "[realtime] OpenAI usage: input(context)=%s output=%s "
+                            "total=%s cached=%s",
+                            getattr(usage, "input_tokens", None),
+                            getattr(usage, "output_tokens", None),
+                            getattr(usage, "total_tokens", None),
+                            getattr(details, "cached_tokens", None),
+                        )
                     self._turn_done.set()
                     self._recv_queue.put(TurnDoneEvent())
                     return

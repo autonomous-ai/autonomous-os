@@ -23,6 +23,21 @@ HTTP_HOST: str = "0.0.0.0" if MODE == "developer" else "127.0.0.1"
 CAMERA_INDEX = int(os.environ.get("HAL_CAMERA_INDEX", "0"))
 CAMERA_WIDTH = int(os.environ.get("HAL_CAMERA_WIDTH", "640"))
 CAMERA_HEIGHT = int(os.environ.get("HAL_CAMERA_HEIGHT", "480"))
+# Camera exposure. Defaults to MANUAL (exposure=500 / gain=255, baked in below)
+# so auto-exposure can't throttle the frame rate: UVC auto-exposure stretches
+# integration time in low light (~60ms), capping delivery at ~16fps at EVERY
+# resolution (not a bandwidth limit). The manual defaults give a bright image at
+# ~20fps in a dim room; in a bright room a fixed 50ms exposure can overexpose —
+# set HAL_CAMERA_AUTO_EXPOSURE=auto to restore the camera's adaptive auto-exposure
+# (brighter/adaptive but throttles fps in low light), or tune the values below.
+# exposure_absolute is V4L2 ×100µs: 200=20ms (30fps), 330=33ms (≈30fps), 500=50ms.
+CAMERA_AUTO_EXPOSURE = os.environ.get("HAL_CAMERA_AUTO_EXPOSURE", "manual").strip().lower()
+CAMERA_EXPOSURE = int(os.environ.get("HAL_CAMERA_EXPOSURE", "500"))
+# Sensor gain (camera-specific range, e.g. 0–255). Brightens without costing fps
+# but adds noise. Applied in manual mode.
+CAMERA_GAIN = int(os.environ.get("HAL_CAMERA_GAIN", "255"))
+# Optional brightness offset (camera-specific, e.g. -64..64); unset = camera default.
+CAMERA_BRIGHTNESS = int(os.environ["HAL_CAMERA_BRIGHTNESS"]) if os.environ.get("HAL_CAMERA_BRIGHTNESS") else None
 
 # --- Audio ---
 # Hardware overrides — set in .env to bypass auto-detection
@@ -412,6 +427,16 @@ REALTIME_RECV_QUEUE_TIMEOUT_S: float = float(
 REALTIME_ZOMBIE_RECONNECT_AFTER: int = int(
     os.environ.get("HAL_REALTIME_ZOMBIE_RECONNECT_AFTER", "3")
 )
+# Cost control: recycle (rebuild) the realtime session when a new turn arrives
+# after this many seconds of silence. A long-lived session accumulates per-turn
+# context the provider (Gemini Live / OpenAI Realtime) re-bills every turn; a turn
+# that follows a long pause is effectively a new conversation, so starting a fresh
+# session then drops that accumulation. Long-term continuity survives — the rebuild
+# reloads the persisted summary.md. 0 disables. Default 240s (4 min). See
+# RealtimeOrchestrator._mark_turn_start.
+REALTIME_SESSION_IDLE_RESET_S: float = float(
+    os.environ.get("HAL_REALTIME_SESSION_IDLE_RESET_S", "240")
+)
 # A captured session shorter than this AND with no STT transcript is treated as a
 # VAD false-trigger (a noise blip that only grabbed the pre-roll, no sustained
 # speech) and is NOT committed to the realtime model. Committing such turns wastes
@@ -420,6 +445,26 @@ REALTIME_ZOMBIE_RECONNECT_AFTER: int = int(
 # runs longer than this, so it still commits.
 REALTIME_MIN_COMMIT_DURATION_S: float = float(
     os.environ.get("HAL_REALTIME_MIN_COMMIT_DURATION_S", "0.8")
+)
+# Noise guard for empty-STT turns: the duration floor above only catches SHORT
+# noise blips — sustained background noise (fan, hum) runs longer than the floor,
+# fools the entry VAD, yields no STT transcript, yet still commits to the realtime
+# model, which then answers the noise (spurious self-talk + wasted tokens). When
+# enabled, an empty-STT turn is re-checked with Silero VAD over the FULL captured
+# buffer; if it isn't speech, the turn is dropped regardless of duration. A genuine
+# audio-only turn (real speech STT missed) passes Silero, so it still commits.
+# Fail-open: Silero unavailable/erroring → behaves as before (commits).
+REALTIME_REQUIRE_SPEECH_ON_EMPTY_STT: bool = os.environ.get(
+    "HAL_REALTIME_REQUIRE_SPEECH_ON_EMPTY_STT", "true"
+).lower() in ("1", "true", "yes")
+# Voiced-ratio floor for the empty-STT noise guard: the fraction of 32ms Silero
+# chunks that must be voiced for the buffer to count as real speech (and commit).
+# Peak confidence alone is too lenient — one transient chunk crossing the Silero
+# threshold would pass a noisy turn — so we require sustained voicing. A real
+# speaking turn is voiced across most of its length; sustained noise spikes only
+# sparsely. Provisional 0.30; tune from the `noise-guard metrics` logs.
+REALTIME_NOISE_SPEECH_RATIO: float = float(
+    os.environ.get("HAL_REALTIME_NOISE_SPEECH_RATIO", "0.30")
 )
 # Turn detection / VAD: "server_vad" | "semantic_vad" | "off"
 # For Gemini: "off" disables automatic activity detection; any other value enables it.

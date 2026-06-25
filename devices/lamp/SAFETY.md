@@ -13,8 +13,8 @@ light:
   # Quiet hours lower the ceiling on real wall-clock time (device runs all day; not a nightlight).
   quiet_hours: { start: "22:00", end: "07:00", max_brightness: 40 }   # 22:00–07:00 → ring dims to 40, agent-independent
 
-audio:
-  quiet_hours: { start: "22:00", end: "07:00" }   # suppress loud discretionary output (music) in-window; spoken replies still play
+#audio:
+#  quiet_hours: { start: "22:00", end: "07:00" }   # suppress loud discretionary output (music) in-window; spoken replies still play
 
 motion:
   max_speed: 120             # deg/s ceiling; the servo route stretches a move's duration so no joint exceeds it

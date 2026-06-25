@@ -168,6 +168,10 @@ type AddChannelRequest struct {
 type RefreshChannelRequest struct {
 	Channel string
 
+	// telegram
+	TelegramBotToken string
+	TelegramUserID   string
+
 	// slack
 	SlackBotToken string
 	SlackAppToken string
@@ -178,6 +182,11 @@ type RefreshChannelRequest struct {
 	SlackMode          string
 	SlackSigningSecret string
 	SlackWebhookPath   string
+
+	// discord
+	DiscordBotToken string
+	DiscordGuildID  string
+	DiscordUserID   string
 }
 
 // EffectiveSlackMode resolves SlackMode, defaulting to "socket" so unset
@@ -489,6 +498,11 @@ type MQTTInfoResponse struct {
 	HermesVersion string `json:"hermes_version,omitempty"`
 	AgentRuntime  string `json:"agent_runtime,omitempty"`
 	LocalIP       string `json:"local_ip,omitempty"`
+	// UnsupportedChannels lists channels configured in config.json that the active
+	// runtime cannot run (populated by ChannelReconcile after a runtime switch — e.g.
+	// slack/discord become unsupported after switching to picoclaw). Empty/omitted
+	// when every configured channel is supported.
+	UnsupportedChannels []string `json:"unsupported_channels,omitempty"`
 }
 
 // NewDeviceMessage creates a base message with required fields populated from config.

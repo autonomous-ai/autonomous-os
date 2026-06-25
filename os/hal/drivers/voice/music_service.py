@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -194,6 +195,18 @@ def _detect_alsa_output_device() -> str:
 # while TTS speaks, so no simultaneous access).
 ALSA_DEVICE = _detect_alsa_output_device()
 
+# YouTube extraction is flaky (intermittent throttling / bot-detection, esp. from
+# datacenter/VN IPs, plus the runtime EJS-challenge fetch). A single failure isn't
+# a dead video — a retry usually clears it. These bound the retries so a genuinely
+# unavailable video still fails fast.
+MUSIC_RESOLVE_TRIES = 2       # yt-dlp search/resolve attempts
+MUSIC_STREAM_TRIES = 2        # stream-start attempts (re-resolves URL between tries)
+MUSIC_RETRY_BACKOFF_S = 1.5   # wait between attempts
+# A stream that dies within this window of starting is a startup failure (bad/empty
+# yt-dlp output -> ffmpeg "Invalid data") worth retrying; a stream that ran longer
+# and then errored is treated as a real end (network drop mid-song), not retried.
+MUSIC_STREAM_PROBE_S = 1.5
+
 
 class MusicService:
     """YouTube music search + streaming playback via yt-dlp + ffmpeg + ALSA."""
@@ -212,6 +225,8 @@ class MusicService:
         self._playing = False
         self._stop_event = threading.Event()
         self._ytdlp_proc: Optional[subprocess.Popen] = None
+        self._ytdlp_stderr = None  # TemporaryFile capturing the stream yt-dlp's stderr
+        self._aplay_stderr = None  # TemporaryFile capturing aplay's (ALSA out) stderr
         self._ffmpeg_proc: Optional[subprocess.Popen] = None
         self._aplay_proc: Optional[subprocess.Popen] = None
         self._current_title: Optional[str] = None
@@ -459,47 +474,37 @@ class MusicService:
                 self._tts_service.release_stream()
                 time.sleep(0.1)
 
-            # Stream: yt-dlp stdout -> ffmpeg stdin -> ALSA (no temp file)
+            # Stream: yt-dlp stdout -> ffmpeg stdin -> ALSA (no temp file).
+            # Retry stream start on early failure (transient YouTube throttling) —
+            # re-resolve the URL each retry since the stream URL can be stale.
             logger.info("Starting playback: '%s'", title[:80] if title else query[:80])
-            self._ytdlp_proc = subprocess.Popen(
-                [
-                    sys.executable, "-m", "yt_dlp",
-                    "--js-runtimes", "node:/usr/bin/node",
-                    "--remote-components", "ejs:github",
-                    "-f", "bestaudio",
-                    "-o", "-",
-                    audio_url,
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
-            # ffmpeg decodes to raw PCM, aplay handles ALSA output.
-            # Direct ffmpeg -f alsa causes distorted audio on some wm8960 boards.
-            self._ffmpeg_proc = subprocess.Popen(
-                [
-                    "ffmpeg",
-                    "-hide_banner", "-loglevel", "error", "-nostats",
-                    "-threads", "1",
-                    "-i", "pipe:0",
-                    "-ac", "2",
-                    "-ar", "44100",
-                    "-f", "wav",
-                    "pipe:1",
-                ],
-                stdin=self._ytdlp_proc.stdout,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            self._aplay_proc = subprocess.Popen(
-                ["aplay", "-D", self._alsa_device, "-q"],
-                stdin=self._ffmpeg_proc.stdout,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-            )
-            self._ffmpeg_proc.stdout.close()
-            self._ytdlp_proc.stdout.close()
+            started = False
+            for stream_try in range(MUSIC_STREAM_TRIES):
+                if self._stop_event.is_set():
+                    return
+                if stream_try > 0:
+                    time.sleep(MUSIC_RETRY_BACKOFF_S)
+                    logger.info("Music stream retry %d/%d: '%s'",
+                                stream_try + 1, MUSIC_STREAM_TRIES, query[:60])
+                    audio_url, title = self._resolve_audio_url(query)
+                    if not audio_url:
+                        continue
+                    self._current_title = title
+                if self._start_stream(audio_url):
+                    started = True
+                    break
+                # Tear down the failed attempt's procs before retrying.
+                for proc in [self._aplay_proc, self._ffmpeg_proc, self._ytdlp_proc]:
+                    self._terminate_proc(proc)
+                self._aplay_proc = self._ffmpeg_proc = self._ytdlp_proc = None
 
-            # Notify caller that audio is actually starting (yt-dlp resolved, ffmpeg running).
+            if not started:
+                logger.error("Music stream failed to start after %d tries: '%s'",
+                             MUSIC_STREAM_TRIES, query[:60])
+                _stopped_by = "error"
+                return
+
+            # Notify caller that audio is actually playing (stream confirmed healthy).
             if self._on_started:
                 try:
                     self._on_started()
@@ -513,7 +518,12 @@ class MusicService:
                 if ret is not None:
                     if ret != 0:
                         stderr = self._ffmpeg_proc.stderr.read().decode(errors="replace")
-                        logger.error("ffmpeg exited with code %d: %s", ret, stderr[-500:])
+                        # Pair ffmpeg's error with yt-dlp's real stderr (B): without
+                        # it a stream failure only shows as "Invalid data".
+                        yt_err = self._read_ytdlp_stderr()
+                        logger.error("ffmpeg exited with code %d: %s | yt-dlp: %s | aplay: %s",
+                                     ret, stderr[-400:], yt_err[-300:],
+                                     self._read_aplay_stderr()[-300:])
                         _stopped_by = "error"
                     break
                 # Pause playback while TTS is speaking
@@ -536,6 +546,14 @@ class MusicService:
             for proc in [self._aplay_proc, self._ffmpeg_proc, self._ytdlp_proc]:
                 self._terminate_proc(proc)
             _log_play_event(query, self._current_title, _started_at, time.time(), _stopped_by, person)
+            for _f in (self._ytdlp_stderr, self._aplay_stderr):
+                if _f is not None:
+                    try:
+                        _f.close()
+                    except Exception:
+                        pass
+            self._ytdlp_stderr = None
+            self._aplay_stderr = None
             self._aplay_proc = None
             self._ffmpeg_proc = None
             self._ytdlp_proc = None
@@ -555,41 +573,157 @@ class MusicService:
                 except Exception as e:
                     logger.warning("failure apology speak failed: %s", e)
 
-    def _resolve_audio_url(self, query: str) -> tuple[Optional[str], Optional[str]]:
-        """Use yt-dlp to search YouTube and return (watch_url, title)."""
+    def _read_ytdlp_stderr(self) -> str:
+        """Tail of the stream yt-dlp's captured stderr, or "" if none. The real
+        reason a stream produced no decodable audio (vs ffmpeg's generic 'Invalid
+        data'). Captured to a temp file (not a pipe) so a chatty yt-dlp can't block
+        on a full stderr buffer mid-stream."""
+        f = self._ytdlp_stderr
+        if f is None:
+            return ""
         try:
-            result = subprocess.run(
-                [
-                    sys.executable, "-m", "yt_dlp",
-                    "--js-runtimes", "node:/usr/bin/node",
-                    "--remote-components", "ejs:github",
-                    "--dump-json",
-                    "--no-download",
-                    f"ytsearch1:{query}",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=90,
-            )
+            f.seek(0)
+            return f.read().decode(errors="replace")
+        except Exception:
+            return ""
 
-            if result.returncode != 0:
-                logger.error("yt-dlp failed: %s", result.stderr[:200])
-                return None, None
+    def _read_aplay_stderr(self) -> str:
+        """Tail of aplay's (ALSA output) captured stderr, or "" if none. Tells a
+        broken-pipe cascade apart at its source: 'device busy'/'cannot open' =
+        contention (software), 'underrun'/write error = driver/hardware. Captured
+        to a temp file so aplay can't block on a full stderr buffer mid-stream."""
+        f = self._aplay_stderr
+        if f is None:
+            return ""
+        try:
+            f.seek(0)
+            return f.read().decode(errors="replace")
+        except Exception:
+            return ""
 
-            info = json.loads(result.stdout)
-            title = info.get("title", query)
-            watch_url = info.get("webpage_url")
+    def _start_stream(self, audio_url: str) -> bool:
+        """Start yt-dlp -> ffmpeg -> aplay and probe for an early failure.
 
-            if not watch_url:
-                logger.warning("yt-dlp returned no URL for: '%s'", query[:80])
-                return None, None
+        Returns True if the pipeline survives the startup probe (audio is flowing),
+        False if ffmpeg dies during startup — the sign of bad/empty yt-dlp output
+        worth retrying. On False the real yt-dlp stderr is logged (B). Procs stay
+        assigned to self._*_proc for the caller to use (success) or tear down."""
+        self._ytdlp_stderr = tempfile.TemporaryFile()
+        self._ytdlp_proc = subprocess.Popen(
+            [
+                sys.executable, "-m", "yt_dlp",
+                "--js-runtimes", "node:/usr/bin/node",
+                "--remote-components", "ejs:github",
+                "-f", "bestaudio",
+                "-o", "-",
+                audio_url,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=self._ytdlp_stderr,
+        )
+        # ffmpeg decodes to raw PCM, aplay handles ALSA output.
+        # Direct ffmpeg -f alsa causes distorted audio on some wm8960 boards.
+        self._ffmpeg_proc = subprocess.Popen(
+            [
+                "ffmpeg",
+                "-hide_banner", "-loglevel", "error", "-nostats",
+                "-threads", "1",
+                "-i", "pipe:0",
+                "-ac", "2",
+                "-ar", "44100",
+                "-f", "wav",
+                "pipe:1",
+            ],
+            stdin=self._ytdlp_proc.stdout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self._aplay_stderr = tempfile.TemporaryFile()
+        self._aplay_proc = subprocess.Popen(
+            ["aplay", "-D", self._alsa_device, "-q"],
+            stdin=self._ffmpeg_proc.stdout,
+            stdout=subprocess.DEVNULL,
+            stderr=self._aplay_stderr,
+        )
+        self._ffmpeg_proc.stdout.close()
+        self._ytdlp_proc.stdout.close()
 
-            logger.info("Found: '%s' (%s)", title, watch_url)
-            return watch_url, title
+        # Startup probe: if ffmpeg exits within the window it never got decodable
+        # audio (bad/empty yt-dlp output) — a startup failure worth retrying. A
+        # stream that survives the probe is healthy; a later exit is a real end.
+        deadline = time.time() + MUSIC_STREAM_PROBE_S
+        while time.time() < deadline:
+            if self._stop_event.is_set():
+                return True  # stop requested — caller's finally tears down
+            ret = self._ffmpeg_proc.poll()
+            if ret is not None:
+                ff_err = ""
+                try:
+                    ff_err = self._ffmpeg_proc.stderr.read().decode(errors="replace")
+                except Exception:
+                    pass
+                logger.error(
+                    "Music stream start failed (ffmpeg rc=%s): %s | yt-dlp: %s | aplay: %s",
+                    ret, ff_err[-300:], self._read_ytdlp_stderr()[-400:],
+                    self._read_aplay_stderr()[-300:],
+                )
+                return False
+            time.sleep(0.1)
+        return True
 
-        except subprocess.TimeoutExpired:
-            logger.error("yt-dlp timed out for: '%s'", query[:80])
-            return None, None
-        except Exception as e:
-            logger.error("yt-dlp resolve failed: %s (type=%s)", e, type(e).__name__)
-            return None, None
+    def _resolve_audio_url(self, query: str) -> tuple[Optional[str], Optional[str]]:
+        """Use yt-dlp to search YouTube and return (watch_url, title).
+
+        Retries on transient failure (YouTube throttling / bot-detection) — a single
+        non-zero exit isn't a dead video. Gives up after MUSIC_RESOLVE_TRIES."""
+        last_err = ""
+        for attempt in range(MUSIC_RESOLVE_TRIES):
+            if attempt > 0:
+                time.sleep(MUSIC_RETRY_BACKOFF_S)
+                logger.info("yt-dlp resolve retry %d/%d: '%s'",
+                            attempt + 1, MUSIC_RESOLVE_TRIES, query[:60])
+            try:
+                result = subprocess.run(
+                    [
+                        sys.executable, "-m", "yt_dlp",
+                        "--js-runtimes", "node:/usr/bin/node",
+                        "--remote-components", "ejs:github",
+                        "--dump-json",
+                        "--no-download",
+                        f"ytsearch1:{query}",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=90,
+                )
+
+                if result.returncode != 0:
+                    last_err = (result.stderr or "").strip() or f"exit {result.returncode}"
+                    logger.warning("yt-dlp resolve attempt %d failed: %s",
+                                   attempt + 1, last_err[:200])
+                    continue
+
+                info = json.loads(result.stdout)
+                title = info.get("title", query)
+                watch_url = info.get("webpage_url")
+
+                if not watch_url:
+                    last_err = "no webpage_url in result"
+                    logger.warning("yt-dlp returned no URL for: '%s'", query[:80])
+                    continue
+
+                logger.info("Found: '%s' (%s)", title, watch_url)
+                return watch_url, title
+
+            except subprocess.TimeoutExpired:
+                last_err = "timed out"
+                logger.warning("yt-dlp resolve attempt %d timed out", attempt + 1)
+                continue
+            except Exception as e:
+                last_err = f"{type(e).__name__}: {e}"
+                logger.warning("yt-dlp resolve attempt %d errored: %s", attempt + 1, last_err)
+                continue
+
+        logger.error("yt-dlp resolve failed after %d tries for '%s': %s",
+                     MUSIC_RESOLVE_TRIES, query[:80], last_err[:200])
+        return None, None

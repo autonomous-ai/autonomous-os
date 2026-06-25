@@ -26,6 +26,10 @@ from hal.config import (
     AUDIO_INPUT_ALSA,
     AUDIO_OUTPUT_ALSA,
     AUDIO_SENSING_DEVICE,
+    CAMERA_AUTO_EXPOSURE,
+    CAMERA_BRIGHTNESS,
+    CAMERA_EXPOSURE,
+    CAMERA_GAIN,
     CAMERA_HEIGHT,
     CAMERA_INDEX,
     CAMERA_WIDTH,
@@ -184,6 +188,10 @@ async def lifespan(app: FastAPI):
                     device_id=CAMERA_INDEX,
                     max_width=CAMERA_WIDTH,
                     max_height=CAMERA_HEIGHT,
+                    auto_exposure=CAMERA_AUTO_EXPOSURE,
+                    exposure=CAMERA_EXPOSURE,
+                    gain=CAMERA_GAIN,
+                    brightness=CAMERA_BRIGHTNESS,
                 )
             )
             cap.start()

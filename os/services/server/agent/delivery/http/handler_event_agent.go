@@ -286,6 +286,17 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			// that block, so clean filler state here.
 			if payload.Data.Phase == "error" {
 				sensinghttp.DefaultFillerManager.Cancel(flowRunID)
+				// The lifecycle-end Slack finalize (further down) is skipped on error,
+				// so clean up any Slack stream here. DeliverSlackReply("") consumes the
+				// origin, stops the per-run stream goroutine, and posts nothing; it's a
+				// no-op for non-Slack runs (and runtimes that aren't a SlackBridge).
+				if sb, ok := h.agentGateway.(domain.SlackBridge); ok {
+					go func() {
+						if err := sb.DeliverSlackReply(flowRunID, ""); err != nil {
+							slog.Error("slack cleanup on error failed", "component", "agent", "err", err)
+						}
+					}()
+				}
 			}
 		}
 
@@ -612,6 +623,16 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 		// Accumulate deltas per runId and send to TTS when lifecycle "end" arrives.
 		h.accumulateAssistantDelta(payload.RunID, delta)
 
+		// Slack (hermes HTTP bridge): stream the reply progressively into the live
+		// Slack message (chat.appendStream). Feed the cleaned cumulative text so far;
+		// the bridge throttles + appends the new tail. Guarded by the SlackBridge
+		// type-assert + IsSlackOriginRun peek — non-Slack runs / openclaw are untouched.
+		if sb, ok := h.agentGateway.(domain.SlackBridge); ok && sb.IsSlackOriginRun(flowRunID) {
+			if clean, ready := h.cleanedSlackStreamText(payload.RunID); ready {
+				sb.StreamSlackDelta(flowRunID, clean)
+			}
+		}
+
 		// Sentence-streaming: dispatch the FIRST complete sentence to
 		// /voice/speak as soon as the agent emits the boundary so the
 		// device starts speaking before generation finishes. Only the
@@ -755,6 +776,13 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			// Consume broadcast marker early to prevent map leak on NO_REPLY/empty/suppressed paths.
 			isBroadcastRun := h.agentGateway.ConsumeBroadcastRun(flowRunID)
 
+			// Slack (hermes HTTP bridge): a Slack-origin turn replies in Slack with TTS
+			// suppressed. Peek (don't consume) so the mid-turn streaming gate can also
+			// see it; DeliverSlackReply consumes at reply time. isSlackRun is false for
+			// every non-Slack run and every runtime that isn't a SlackBridge (openclaw).
+			slackBridge, _ := h.agentGateway.(domain.SlackBridge)
+			isSlackRun := slackBridge != nil && slackBridge.IsSlackOriginRun(flowRunID)
+
 			// [HW:/broadcast] marker: fan-out reply text to all Telegram chats (guard-only).
 			// [HW:/speak] marker: force TTS on the speaker without any channel fan-out —
 			// used by proactive triggers (e.g. music suggestions) that run inside a
@@ -894,6 +922,10 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 				delete(h.channelRuns, payload.RunID)
 				delete(h.channelRuns, flowRunID)
 				h.channelRunsMu.Unlock()
+				// A Slack-origin turn replies in Slack, never on the speaker.
+				if isSlackRun {
+					isChannelRun = true
+				}
 				if isChannelRun {
 					// TTS would be gated by channel_run — log suppression so the
 					// monitor doesn't misleadingly show a "tts_send" event when the
@@ -967,6 +999,23 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 						}
 					}(text)
 				}
+			}
+
+			// Slack (hermes HTTP bridge): finalize the turn for EVERY end-phase outcome
+			// (real reply, NO_REPLY, suppressed, empty), not just the spoken-reply branch
+			// above — otherwise the per-run stream goroutine + origin/stream maps leak.
+			// DeliverSlackReply consumes the origin, stops the stream (chat.stopStream),
+			// and posts nothing when the text is empty. NO_REPLY → deliver "" (cleanup).
+			if isSlackRun && slackBridge != nil {
+				slackText := text
+				if isAgentNoReply(text) {
+					slackText = ""
+				}
+				go func(t string) {
+					if err := slackBridge.DeliverSlackReply(flowRunID, t); err != nil {
+						slog.Error("slack reply failed", "component", "agent", "err", err)
+					}
+				}(slackText)
 			}
 		}
 	}

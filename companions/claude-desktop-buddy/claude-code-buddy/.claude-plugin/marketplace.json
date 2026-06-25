@@ -1,0 +1,19 @@
+{
+  "name": "claude-code-buddy",
+  "description": "Show Claude Code activity on your device",
+  "owner": {
+    "name": "Autonomous",
+    "email": ""
+  },
+  "plugins": [
+    {
+      "name": "claude-code-buddy",
+      "description": "Show Claude Code activity (task-done, usage, approvals) on your device.",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/autonomous-ai/autonomous-os",
+        "path": "companions/claude-desktop-buddy/claude-code-buddy"
+      }
+    }
+  ]
+}
