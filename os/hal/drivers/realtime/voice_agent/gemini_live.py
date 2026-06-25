@@ -269,11 +269,34 @@ class GeminiLiveAgent(VoiceAgentBase):
                 # turn_complete, and the server_content branch returns on
                 # turn_complete — so a check placed after it never runs.
                 um = message.usage_metadata
-                logger.info(
-                    "[realtime] Gemini usage: prompt(context)=%s response=%s total=%s",
-                    um.prompt_token_count,
-                    um.response_token_count,
-                    um.total_token_count,
+                # gemini-3.1-flash-live-preview rates, USD per 1M tokens, by
+                # (direction, modality). Verified vs ai.google.dev/gemini-api/docs/
+                # pricing (2026-06): text-in $0.75, audio-in $3, audio-out $12. Text
+                # bills ~4-16x cheaper than audio, so per-modality is what matters.
+                rates = {
+                    ("in", "TEXT"): 0.75, ("in", "AUDIO"): 3.0,
+                    ("out", "TEXT"): 0.75, ("out", "AUDIO"): 12.0,
+                }
+                parts, cost, attributed = [], 0.0, {"in": 0, "out": 0}
+                for direction, details in (
+                    ("in", um.prompt_tokens_details),
+                    ("out", um.response_tokens_details),
+                ):
+                    for d in details or []:
+                        mod = getattr(d.modality, "name", str(d.modality))
+                        tok = d.token_count or 0
+                        attributed[direction] += tok
+                        c = tok * rates.get((direction, mod), 0.0) / 1_000_000
+                        cost += c
+                        parts.append("%s_%s=%d($%.5f)" % (direction, mod.lower(), tok, c))
+                # Tokens Google counted but didn't tag with a modality (system /
+                # thinking) — unpriced here, so est is a floor.
+                unattr_in = (um.prompt_token_count or 0) - attributed["in"]
+                unattr_out = (um.response_token_count or 0) - attributed["out"]
+                logger.debug(
+                    "[realtime] Gemini usage: %s +unattr(%din/%dout) | total=%dtok est>=$%.5f",
+                    " ".join(parts) or "-", unattr_in, unattr_out,
+                    um.total_token_count or 0, cost,
                 )
 
             if message.server_content:
