@@ -12,11 +12,16 @@ import (
 // gatewayRestartTimeout bounds a single `systemctl restart picoclaw`.
 const gatewayRestartTimeout = 60 * time.Second
 
-// restartPicoclawGateway restarts the picoclaw systemd unit so the gateway re-reads
-// changed workspace prompt files. Mirrors openclaw's restartOpenclawGateway (which
-// lives in internal/openclaw/service_gateway.go), but the picoclaw gateway has no
-// foreground-friendly `restart` subcommand, so when systemctl is unavailable
-// (non-root / dev box) we log and skip rather than hard-fail.
+// restartPicoclawGateway restarts the picoclaw systemd unit so the gateway fully
+// re-reads its workspace + config. Called after EnsureOnboarding rewrites an
+// OS-managed workspace block (SOUL/AGENTS/HEARTBEAT).
+//
+// We restart rather than hit the gateway's /reload endpoint: /reload needs a gateway
+// admin auth we don't hold (the pico channel token is rejected), and even when
+// reachable it is not confirmed to re-read the workspace markdown — a full restart
+// reliably does. The picoclaw gateway has no foreground-friendly `restart`
+// subcommand, so when systemctl is unavailable (non-root / dev box) we log and skip
+// rather than hard-fail.
 func restartPicoclawGateway() error {
 	ctx, cancel := context.WithTimeout(context.Background(), gatewayRestartTimeout)
 	defer cancel()
@@ -31,8 +36,6 @@ func restartPicoclawGateway() error {
 				"output", strings.TrimSpace(string(out)))
 		}
 	}
-	// TODO(picoclaw-reload): when systemctl is unavailable, fall back to POST
-	// http://localhost:18790/reload (the gateway exposes it) instead of skipping.
 	slog.Warn("no systemctl restart available — skipping picoclaw gateway restart (changes apply on next start)",
 		"component", "picoclaw-onboarding")
 	return nil

@@ -73,10 +73,8 @@ func (s *PicoclawService) WatchIdentity(ctx context.Context) {
 	<-ctx.Done()
 }
 
-// StartSkillWatcher — skills are pre-provisioned on the PicoClaw box. No-op.
-func (s *PicoclawService) StartSkillWatcher(ctx context.Context) {
-	<-ctx.Done()
-}
+// StartSkillWatcher lives in skill_watcher.go — it polls OTA metadata and
+// auto-updates workspace skills from the CDN (capability-gated), mirroring openclaw.
 
 // StartModelSync — model registry is owned by PicoClaw. No-op.
 func (s *PicoclawService) StartModelSync(ctx context.Context) {

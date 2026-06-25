@@ -102,6 +102,11 @@ func (s *PicoclawService) EnsureOnboarding() error {
 	seedFileIfAbsent(knowledgeFS, "resources/KNOWLEDGE.md",
 		filepath.Join(picoclawWorkspaceDir, "KNOWLEDGE.md"))
 
+	// Capability-gate skills: drop platform skills this device can't use (e.g.
+	// servo-control on a motionless device), keeping picoclaw's built-ins. Skill dirs
+	// are read per-turn from disk, so no gateway reload is needed.
+	s.pruneUnsupportedSkills()
+
 	needRestart := false
 
 	// SOUL.md per-device-type core block (owner-editable content stays below it).
@@ -125,7 +130,8 @@ func (s *PicoclawService) EnsureOnboarding() error {
 		needRestart = true
 	}
 
-	// Restart the gateway so it re-reads the changed workspace prompt files.
+	// Restart the gateway so it re-reads the changed workspace prompt files
+	// (systemctl restart — see service_gateway.go for why not /reload).
 	if needRestart {
 		slog.Info("restarting picoclaw gateway to pick up workspace changes", "component", "picoclaw-onboarding")
 		if err := restartPicoclawGateway(); err != nil {
@@ -133,11 +139,10 @@ func (s *PicoclawService) EnsureOnboarding() error {
 		}
 	}
 
-	// TODO(picoclaw-onboarding-parity): openclaw additionally capability-gates skills
-	// (prunes skills this DEVICE.md does not support) and pins messages.queue.mode.
-	// picoclaw skills are built-in/un-gated and its steering/queue model differs; add
-	// Go-side equivalents here if needed. (openclaw.json-specific steps —
-	// hooks/logging/controlUi — are N/A for picoclaw's config.json.)
+	// TODO(picoclaw-onboarding-parity): openclaw additionally pins messages.queue.mode
+	// (picoclaw has its own steering_mode — verify before mirroring). (openclaw.json-
+	// specific steps — hooks/logging/controlUi — are N/A for picoclaw's config.json;
+	// skill capability-gating is done above via pruneUnsupportedSkills.)
 	return nil
 }
 
@@ -342,6 +347,58 @@ func (s *PicoclawService) ensureHeartbeatMDBlock() (bool, error) {
 	}
 	slog.Info("injected mandatory block into HEARTBEAT.md", "component", "picoclaw-onboarding", "path", heartbeatFile)
 	return true, nil
+}
+
+// picoclawBuiltinSkills are PicoClaw's own bundled skills (created by `picoclaw
+// onboard`). They have no platform capability mapping in skills.Capability, are
+// lightweight + generally useful, so they are ALWAYS kept regardless of device
+// capabilities. Only the capability-gated platform skills (the migrated openclaw
+// catalog) are pruned. Keep in sync with what `picoclaw onboard` ships.
+var picoclawBuiltinSkills = map[string]bool{
+	"agent-browser": true,
+	"github":        true,
+	"hardware":      true,
+	"skill-creator": true,
+	"summarize":     true,
+	"tmux":          true,
+	"weather":       true,
+}
+
+// pruneUnsupportedSkills removes skill dirs the device can't use. A skill survives
+// when it is EITHER (a) supported by this device's capabilities (skills.Supported —
+// the same gate openclaw uses) OR (b) a picoclaw built-in (picoclawBuiltinSkills).
+// Everything else under workspace/skills is removed. Fail-open: when DEVICE.md
+// declares no capabilities, skills.Supported returns the full catalog, so nothing
+// capability-gated is pruned. Mirrors openclaw's onboarding prune, but iterates the
+// on-disk dirs (picoclaw has extra built-ins outside skills.Catalog) instead of the
+// catalog.
+func (s *PicoclawService) pruneUnsupportedSkills() {
+	skillsDir := filepath.Join(picoclawWorkspaceDir, "skills")
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Warn("prune skills: read dir failed", "component", "picoclaw-onboarding", "error", err)
+		}
+		return
+	}
+	keep := map[string]bool{}
+	for _, n := range s.supportedSkills() {
+		keep[n] = true
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if keep[name] || picoclawBuiltinSkills[name] {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(skillsDir, name)); err != nil {
+			slog.Warn("prune unsupported skill failed", "component", "picoclaw-onboarding", "skill", name, "error", err)
+			continue
+		}
+		slog.Info("pruned unsupported skill (capability/built-in gate)", "component", "picoclaw-onboarding", "skill", name)
+	}
 }
 
 // seedFileIfAbsent writes an embedded file to dst only when dst does not already

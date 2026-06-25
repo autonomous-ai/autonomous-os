@@ -26,11 +26,12 @@ which brain is active.
 > hook** — PicoClaw has **no** Go `migrate_persona` adapter, so it is intentionally
 > skipped by the boot-time reconciler (`internal/agent/persona_migration.go`). The Go
 > gateway itself stays **client-only**: most in-process lifecycle methods
-> (`SetupAgent`, identity/skill watchers …) remain no-ops (§8) because provisioning
-> happens out-of-process in install.sh/presync. The exception is `EnsureOnboarding`
-> (`onboarding.go`), which keeps the OS-managed block in `AGENTS.md` current (§1.1).
-> Remaining gaps (skills capability-gating, queue/steer pinning, gateway
-> reload-on-change) are tracked against the
+> (`SetupAgent`, identity watcher …) remain no-ops (§8) because provisioning happens
+> out-of-process in install.sh/presync. The exceptions are `EnsureOnboarding`
+> (`onboarding.go`, keeps the OS-managed blocks in SOUL/AGENTS/HEARTBEAT current) and
+> `StartSkillWatcher` (`skill_watcher.go`, CDN skill auto-update) — both real (§1.1).
+> Remaining gaps (an emotion-acknowledge hook, reverse persona migration, queue/steer
+> pinning) are tracked against the
 > [`adding-agent-runtime.md`](adding-agent-runtime.md) checklist — consult it before
 > raising PicoClaw to full parity.
 
@@ -102,12 +103,24 @@ self-heals after a factory reset, mirroring hermes' presync):
     skills/memory/priority rules), and `HEARTBEAT.md` (`ensureHeartbeatMDBlock`,
     daily knowledge-synthesis) — mirroring openclaw but stripped of OpenClaw-only
     content, so the blocks stay current on a plain os-server OTA;
+  - **capability-gates skills** (`pruneUnsupportedSkills`): removes skill dirs the
+    device can't use — a skill survives if it is supported by `skills.Supported(caps)`
+    (the same gate openclaw uses) **or** is a picoclaw built-in
+    (`picoclawBuiltinSkills`: `agent-browser`, `github`, `hardware`, `skill-creator`,
+    `summarize`, `tmux`, `weather`); everything else under `workspace/skills` is
+    deleted. Fail-open when DEVICE.md declares no caps. No reload (skills read per-turn);
   - when any block changed, **restarts the gateway** (`restartPicoclawGateway` →
-    `systemctl restart picoclaw`) so it re-reads the workspace files. (When systemctl
-    is unavailable it logs + skips; TODO: fall back to POST `…:18790/reload`.)
+    `systemctl restart picoclaw`) so it re-reads the workspace files (log+skip when
+    systemctl is unavailable). Not the gateway `/reload` endpoint — it needs an admin
+    auth we don't hold (the pico channel token is rejected) and isn't confirmed to
+    re-read workspace markdown; a restart reliably does.
   - openclaw.json-specific steps (hooks/logging/controlUi registration) are N/A for
-    picoclaw's `config.json`; skills capability-gating + queue/steer pinning are
-    TODO.
+    picoclaw's `config.json`; queue/steer pinning is TODO.
+
+A separate **skill watcher** (`skill_watcher.go`, started at boot like openclaw)
+polls OTA metadata every 5 min and auto-updates `workspace/skills/<name>` from the
+CDN when a supported skill's version bumps (capability-gated via
+`skills.Supported`), then notifies the agent with `SendSystemChatMessage`.
 - **§1 structure** (`jq` on `config.json`) — `agents.defaults` (provider
   `anthropic-messages`, `model_name "autonomous"`, `restrict_to_workspace:false`,
   `allow_read_outside_workspace:true`), the `autonomous` `model_list` entry, and the
@@ -258,10 +271,11 @@ Everything not on the PicoClaw hot path is a no-op so the single
 `domain.AgentGateway` interface is satisfied without inventing features the
 backend does not have: `SetupAgent`, WhatsApp pairing, `ResetAgent`,
 `RestartAgent`, `RefreshModelsConfig`, `FetchChatHistory`, `GetConfigJSON`,
-MCP entry writes, `WatchIdentity`, `UpdateIdentityName`, skill/model watchers,
-`UpdatePrimaryModel`. (`AddChannel` / `RefreshChannelConfig` are NOT stubs — they
-return `domain.ErrChannelNotSupported` for unsupported channels, see §7;
-`EnsureOnboarding` is real, see §1.1.)
+MCP entry writes, `WatchIdentity`, `UpdateIdentityName`, the model watchers
+(`StartModelSync`/`StartPrimaryModelWatch`), `UpdatePrimaryModel`. (`AddChannel` /
+`RefreshChannelConfig` are NOT stubs — they return `domain.ErrChannelNotSupported`
+for unsupported channels, see §7; `EnsureOnboarding` (§1.1) and `StartSkillWatcher`
+(skill auto-update, §1.1) are real.)
 HAL TTS/voice, Telegram fan-out, sensing-event queue/drain, and the run-marker
 helpers (guard / broadcast / web-chat / silent / pose-bucket) are backend-agnostic
 and behave exactly like the Hermes backend.

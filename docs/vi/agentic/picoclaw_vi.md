@@ -26,11 +26,12 @@ não nào đang chạy.
 > hook presync** đảm nhiệm — PicoClaw **không** có adapter Go `migrate_persona`, nên
 > bộ reconcile lúc boot (`internal/agent/persona_migration.go`) cố tình bỏ qua nó.
 > Bản thân gateway Go vẫn **chỉ-client**: hầu hết method lifecycle in-process
-> (`SetupAgent`, watcher identity/skill …) vẫn no-op (§8) vì provisioning xảy ra ngoài
-> tiến trình trong install.sh/presync. Ngoại lệ là `EnsureOnboarding`
-> (`onboarding.go`) — giữ khối OS-managed trong `AGENTS.md` luôn cập nhật (§1.1).
-> Các gap còn lại (capability-gate skills, pin queue/steer, reload gateway khi block
-> đổi) được theo dõi theo checklist
+> (`SetupAgent`, watcher identity …) vẫn no-op (§8) vì provisioning xảy ra ngoài tiến
+> trình trong install.sh/presync. Ngoại lệ là `EnsureOnboarding` (`onboarding.go`, giữ
+> khối OS-managed trong SOUL/AGENTS/HEARTBEAT cập nhật) và `StartSkillWatcher`
+> (`skill_watcher.go`, auto-update skill từ CDN) — đều là thật (§1.1).
+> Các gap còn lại (hook emotion-acknowledge, reverse persona
+> migration, pin queue/steer) được theo dõi theo checklist
 > [`adding-agent-runtime_vi.md`](adding-agent-runtime_vi.md) — xem đó trước khi nâng
 > PicoClaw lên parity đầy đủ.
 
@@ -101,11 +102,23 @@ tự-heal sau factory reset, giống presync của hermes):
     skills/memory/priority), và `HEARTBEAT.md` (`ensureHeartbeatMDBlock`, synthesis
     hằng ngày) — mirror openclaw nhưng lược nội dung chỉ-openclaw, giữ các block cập
     nhật qua OTA os-server thường;
+  - **capability-gate skills** (`pruneUnsupportedSkills`): xoá thư mục skill device
+    không dùng được — skill được giữ nếu được `skills.Supported(caps)` hỗ trợ (gate y
+    như openclaw) **hoặc** là built-in của picoclaw (`picoclawBuiltinSkills`:
+    `agent-browser`, `github`, `hardware`, `skill-creator`, `summarize`, `tmux`,
+    `weather`); còn lại trong `workspace/skills` thì xoá. Fail-open khi DEVICE.md không
+    khai cap. Không reload (skill đọc per-turn);
   - khi có block đổi, **restart gateway** (`restartPicoclawGateway` → `systemctl
-    restart picoclaw`) để nạp lại file workspace. (Nếu không có systemctl thì log +
-    skip; TODO: fallback POST `…:18790/reload`.)
+    restart picoclaw`) để nạp lại file workspace (log+skip nếu không có systemctl).
+    Không dùng endpoint `/reload` của gateway — nó cần auth admin mình không có (token
+    kênh pico bị từ chối) và chưa chắc re-read workspace markdown; restart thì chắc.
   - các bước đặc thù `openclaw.json` (đăng ký hooks/logging/controlUi) là N/A với
-    `config.json` của picoclaw; capability-gate skills + pin queue/steer là TODO.
+    `config.json` của picoclaw; pin queue/steer là TODO.
+
+Một **skill watcher** riêng (`skill_watcher.go`, chạy lúc boot như openclaw) poll OTA
+metadata mỗi 5 phút và tự cập nhật `workspace/skills/<name>` từ CDN khi version của
+skill được hỗ trợ thay đổi (gate qua `skills.Supported`), rồi báo agent qua
+`SendSystemChatMessage`.
 - **§1 cấu trúc** (`jq` trên `config.json`) — `agents.defaults` (provider
   `anthropic-messages`, `model_name "autonomous"`, `restrict_to_workspace:false`,
   `allow_read_outside_workspace:true`), entry `autonomous` trong `model_list`, và
@@ -253,9 +266,10 @@ Mọi thứ không nằm trên hot path của PicoClaw đều là no-op để th
 `domain.AgentGateway` mà không bịa ra tính năng backend không có: `SetupAgent`,
 pairing WhatsApp, `ResetAgent`, `RestartAgent`, `RefreshModelsConfig`,
 `FetchChatHistory`, `GetConfigJSON`, ghi MCP entry, `WatchIdentity`,
-`UpdateIdentityName`, watcher skill/model, `UpdatePrimaryModel`. (`AddChannel` /
-`RefreshChannelConfig` KHÔNG phải stub — trả `domain.ErrChannelNotSupported` cho kênh
-không hỗ trợ, xem §7; `EnsureOnboarding` là thật, xem §1.1.) HAL TTS/voice, fan-out
+`UpdateIdentityName`, watcher model (`StartModelSync`/`StartPrimaryModelWatch`),
+`UpdatePrimaryModel`. (`AddChannel` / `RefreshChannelConfig` KHÔNG phải stub — trả
+`domain.ErrChannelNotSupported` cho kênh không hỗ trợ, xem §7; `EnsureOnboarding`
+(§1.1) và `StartSkillWatcher` (auto-update skill, §1.1) là thật.) HAL TTS/voice, fan-out
 Telegram, hàng đợi/drain sensing-event, và các helper run-marker (guard / broadcast /
 web-chat / silent / pose-bucket) đều backend-agnostic và hành xử y hệt backend Hermes.
 
