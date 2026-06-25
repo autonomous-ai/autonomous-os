@@ -24,14 +24,15 @@ import (
 )
 
 // Runtime identifies an agent backend whose persona lives on-device in an
-// os-server-managed layout. Only registered runtimes (see adapters) participate
-// in migration; external runtimes (e.g. PicoClaw, provisioned out of band) are
-// intentionally absent.
+// os-server-managed layout. Only registered runtimes (see adapters) participate in
+// migration — openclaw, hermes, and picoclaw today. A backend with no adapter is
+// skipped by the reconciler.
 type Runtime string
 
 const (
 	RuntimeOpenclaw Runtime = "openclaw"
 	RuntimeHermes   Runtime = "hermes"
+	RuntimePicoclaw Runtime = "picoclaw"
 )
 
 // runtimeAdapter is the read/write surface every migratable runtime implements.
@@ -46,6 +47,7 @@ type runtimeAdapter interface {
 var adapters = map[Runtime]runtimeAdapter{
 	RuntimeOpenclaw: openclawAdapter{},
 	RuntimeHermes:   hermesAdapter{},
+	RuntimePicoclaw: picoclawAdapter{},
 }
 
 // CanMigrate reports whether a runtime participates in persona migration (has a
@@ -88,6 +90,10 @@ type Options struct {
 	// HermesRoot is the Hermes home dir (e.g. /root/.hermes). SOUL.md lives at
 	// its root; MEMORY.md / USER.md live under memories/.
 	HermesRoot string
+	// PicoclawWorkspace is the PicoClaw workspace dir (e.g.
+	// /root/.picoclaw/workspace). Layout matches OpenClaw — SOUL.md / IDENTITY.md /
+	// USER.md / KNOWLEDGE.md / memory/ — EXCEPT MEMORY.md lives under memory/.
+	PicoclawWorkspace string
 
 	// Execute writes changes; false performs a dry-run (records intended actions,
 	// touches nothing).
@@ -113,6 +119,7 @@ func DefaultOptions(openclawConfigDir, hermesRoot string) Options {
 	return Options{
 		OpenclawWorkspace:  filepath.Join(openclawConfigDir, "workspace"),
 		HermesRoot:         hermesRoot,
+		PicoclawWorkspace:  "/root/.picoclaw/workspace",
 		IncludeDailyMemory: true,
 		MemoryCharLimit:    DefaultMemoryCharLimit,
 		UserCharLimit:      DefaultUserCharLimit,

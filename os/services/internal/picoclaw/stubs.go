@@ -50,11 +50,9 @@ func (s *PicoclawService) RefreshModelsConfig() error {
 	return nil
 }
 
-// EnsureOnboarding — PicoClaw is provisioned externally with skills and soul.
-// No-op so the os-server boot path stays generic.
-func (s *PicoclawService) EnsureOnboarding() error {
-	return nil
-}
+// EnsureOnboarding lives in onboarding.go — it keeps the OS-managed block in the
+// workspace AGENTS.md current (the rest of provisioning is owned by install.sh /
+// presync.sh). Kept out of this stub file because it does real work.
 
 // FetchChatHistory — PicoClaw history is server-side and we don't walk it.
 // Returns empty so callers degrade gracefully (also keeps the read loop's
@@ -75,10 +73,8 @@ func (s *PicoclawService) WatchIdentity(ctx context.Context) {
 	<-ctx.Done()
 }
 
-// StartSkillWatcher — skills are pre-provisioned on the PicoClaw box. No-op.
-func (s *PicoclawService) StartSkillWatcher(ctx context.Context) {
-	<-ctx.Done()
-}
+// StartSkillWatcher lives in skill_watcher.go — it polls OTA metadata and
+// auto-updates workspace skills from the CDN (capability-gated), mirroring openclaw.
 
 // StartModelSync — model registry is owned by PicoClaw. No-op.
 func (s *PicoclawService) StartModelSync(ctx context.Context) {

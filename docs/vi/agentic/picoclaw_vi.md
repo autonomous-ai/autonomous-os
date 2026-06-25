@@ -18,11 +18,22 @@ não nào đang chạy.
 > (hợp đồng generic + cách thêm) · [`hermes_vi.md`](hermes_vi.md) (Hermes) ·
 > file này (PicoClaw).
 >
-> **Trạng thái: chỉ-client / chưa hoàn chỉnh.** PicoClaw mới được nối như *client*
-> gateway — **chưa có install, presync, migrate persona/memory, import/watch skill,
-> onboarding**. Mọi thứ ngoài hot-path WS đều no-op (§8). Coi như chưa đạt parity;
-> checklist trong `adding-agent-runtime_vi.md` là danh sách gap nếu sau này nâng nó
-> thành backend đầy đủ.
+> **Trạng thái: đạt parity về install; gateway vẫn chỉ-client.** PicoClaw nay đã có
+> installer + hook pre-start phía thiết bị (`internal/picoclaw/install.sh` +
+> `presync.sh`, được embed và đăng ký qua `install.go` → `runtimereg`), nên một lần
+> switch `picoclaw.setup` sẽ cài, cấu hình và khởi động nó giống hermes (§1.1).
+> Migrate persona/memory **2 chiều** qua reconciler Go — picoclaw có adapter
+> `migrate_persona` (`runtime_picoclaw.go`), nên switch tới/từ nó mang
+> SOUL/IDENTITY/MEMORY/USER/KNOWLEDGE cả 2 chiều; **skills** chiều VÀO do `picoclaw
+> migrate --workspace-only --force` trong hook presync lo (§1.1).
+> Bản thân gateway Go vẫn **chỉ-client**: hầu hết method lifecycle in-process
+> (`SetupAgent`, watcher identity …) vẫn no-op (§8) vì provisioning xảy ra ngoài tiến
+> trình trong install.sh/presync. Ngoại lệ là `EnsureOnboarding` (`onboarding.go`, giữ
+> khối OS-managed trong SOUL/AGENTS/HEARTBEAT cập nhật) và `StartSkillWatcher`
+> (`skill_watcher.go`, auto-update skill từ CDN) — đều là thật (§1.1).
+> Các gap còn lại (hook emotion-acknowledge, pin queue/steer) được theo dõi theo checklist
+> [`adding-agent-runtime_vi.md`](adding-agent-runtime_vi.md) — xem đó trước khi nâng
+> PicoClaw lên parity đầy đủ.
 
 ## 1. Khi nào và chọn ra sao
 
@@ -39,15 +50,93 @@ não nào đang chạy.
 Khi khởi động, `ProvideGateway` in banner `AGENT BACKEND ACTIVE → PICOCLAW` kèm
 `ws_url`, `conversation`, và `source`.
 
-### Onboarding / install nằm ngoài phạm vi
+## 1.1 Cài đặt + provisioning (`install.sh` + `presync.sh`)
 
-Khác OpenClaw và Hermes, backend này giả định **PicoClaw đã chạy sẵn** trên thiết
-bị dưới dạng systemd service và mở sẵn WebSocket. os-server chỉ là **client** —
-không có `install.sh`, không đăng ký `runtimereg`, không seed config. Luồng
-chuyển runtime `picoclaw.setup` qua MQTT + `switch-runtime` (lật
-`config.agent_runtime`) đã tồn tại sẵn (`server/device/delivery/mqtt/`,
-`internal/device/switch_runtime.sh`); việc cung cấp chính service PicoClaw được
-xử lý ngoài luồng này.
+Một lần switch `picoclaw.setup` chạy `internal/device/switch_runtime.sh` (generic),
+script này materialize các script nhúng của PicoClaw rồi điều phối chúng. Hai script
+nằm cạnh backend và được embed + đăng ký trong `install.go`:
+
+| Script | Đường dẫn trên đĩa | Chạy khi |
+|---|---|---|
+| `install.sh` | `/usr/local/lib/os-runtimes/picoclaw/install.sh` | lần switch đầu / `verify` thất bại |
+| `presync.sh` | `/usr/local/bin/runtime-picoclaw-presync` | **trước mỗi lần** picoclaw start (và một lần cuối install) |
+
+**`install.sh`** (một lần):
+1. cài `jq` + `yq` + binary `picoclaw` đã pin (GitHub release,
+   `picoclaw-linux-arm64`) vào `/usr/local/bin`;
+2. `picoclaw onboard` (chỉ khi chưa có `config.json`) tạo `/root/.picoclaw` —
+   workspace + `config.json` và `.security.yml` baseline;
+3. ghi **`picoclaw.service`** (`ExecStart=/usr/local/bin/picoclaw gateway`,
+   `HOME=/root`, `Restart=always`) — `picoclaw gateway` chỉ chạy foreground, nên
+   khác hermes (có `gateway install --system`) ta tự bọc nó. Tên unit trùng tên
+   runtime nên **không cần** file khai báo `os-runtimes/picoclaw/service`
+   (switch-runtime mặc định lấy tên đó);
+4. chạy hook presync một lần, rồi drop hook `verify` (`command -v picoclaw`) để
+   switch-runtime phát hiện + tự-heal unit mồ côi.
+
+**`presync.sh`** (mỗi lần switch — single owner của config model + channel, nên
+tự-heal sau factory reset, giống presync của hermes):
+- **§0 migrate** — chốt bằng marker `~/.picoclaw/.openclaw-migrated` (**không** check
+  `workspace/skills` rỗng — PicoClaw có sẵn built-in skills nên thư mục đó luôn
+  non-empty). Khi marker chưa có và `/root/.openclaw` tồn tại, stop openclaw rồi chạy
+  `picoclaw migrate --workspace-only --force` để mang persona/memory/skills từ OpenClaw
+  qua. **`--workspace-only`** nghĩa là migrate **không** đụng `config.json` — convert
+  `openclaw.json` thành config picoclaw cho ra config hỏng, nên `config.json` giữ bản
+  onboard hợp lệ và §1/§2 đắp model/channel/gateway lên trên. Sau đó làm các fixup
+  migrate không làm:
+  copy `HEARTBEAT.md` + `KNOWLEDGE.md` từ workspace openclaw (KNOWLEDGE.md là living-doc
+  learnings của openclaw, seed từ template nhúng rồi append hằng ngày — migrate bỏ qua),
+  xoá `AGENT.md` (để PicoClaw chạy đường legacy `AGENTS.md` — chế độ duy nhất đọc
+  `IDENTITY.md`), và copy `IDENTITY.md` của openclaw qua (migrate cũng bỏ qua). Cuối
+  cùng ghi marker. Factory reset xoá
+  `/root/.picoclaw` sẽ xoá marker nên migrate chạy lại; migrate lỗi thì không ghi
+  marker và thử lại ở lần switch sau.
+- **§0.5 onboarding (`onboarding.go`)** — `EnsureOnboarding`, gọi lúc
+  boot/config-change như openclaw/hermes, mirror reconcile của openclaw (rút gọn):
+  - seed `KNOWLEDGE.md` từ template nhúng (`resources/KNOWLEDGE.md`) **chỉ khi chưa
+    có** — bao case fresh device chỉ-picoclaw mà presync §0 không có bản openclaw để
+    copy; không bao giờ overwrite;
+  - inject khối managed `<!-- OS DO NOT REMOVE -->` vào `SOUL.md`
+    (`ensureSoulMDBlock`, soul theo device-type từ `soul_ref` của DEVICE.md; giữ nội
+    dung owner dưới `---`), `AGENTS.md` (`ensureAgentsMDBlock`, quy tắc
+    skills/memory/priority), và `HEARTBEAT.md` (`ensureHeartbeatMDBlock`, synthesis
+    hằng ngày) — mirror openclaw nhưng lược nội dung chỉ-openclaw, giữ các block cập
+    nhật qua OTA os-server thường;
+  - **capability-gate skills** (`pruneUnsupportedSkills`): xoá thư mục skill device
+    không dùng được — skill được giữ nếu được `skills.Supported(caps)` hỗ trợ (gate y
+    như openclaw) **hoặc** là built-in của picoclaw (`picoclawBuiltinSkills`:
+    `agent-browser`, `github`, `hardware`, `skill-creator`, `summarize`, `tmux`,
+    `weather`); còn lại trong `workspace/skills` thì xoá. Fail-open khi DEVICE.md không
+    khai cap. Không reload (skill đọc per-turn);
+  - khi có block đổi, **restart gateway** (`restartPicoclawGateway` → `systemctl
+    restart picoclaw`) để nạp lại file workspace (log+skip nếu không có systemctl).
+    Không dùng endpoint `/reload` của gateway — nó cần auth admin mình không có (token
+    kênh pico bị từ chối) và chưa chắc re-read workspace markdown; restart thì chắc.
+  - các bước đặc thù `openclaw.json` (đăng ký hooks/logging/controlUi) là N/A với
+    `config.json` của picoclaw; pin queue/steer là TODO.
+
+Một **skill watcher** riêng (`skill_watcher.go`, chạy lúc boot như openclaw) poll OTA
+metadata mỗi 5 phút và tự cập nhật `workspace/skills/<name>` từ CDN khi version của
+skill được hỗ trợ thay đổi (gate qua `skills.Supported`), rồi báo agent qua
+`SendSystemChatMessage`.
+- **§1 cấu trúc** (`jq` trên `config.json`) — `agents.defaults` (provider
+  `anthropic-messages`, `model_name "autonomous"`, `restrict_to_workspace:false`,
+  `allow_read_outside_workspace:true`), entry `autonomous` trong `model_list`, và
+  khung `channel_list`. `channel_list.pico` luôn được bật.
+- **§2 động** (secrets lấy từ `/root/config/config.json` cấp **project**, thắng) —
+  `model_list[autonomous].api_base` từ `llm_base_url` (PicoClaw cần đuôi `/v1`, khác
+  hermes), `.security.yml` `model_list."autonomous:0".api_keys` từ `llm_api_key`,
+  bearer token `pico` (phải khớp `constants.go` `Token`), và mỗi kênh non-pico **chỉ
+  bật khi có credential**: telegram (`telegram_bot_token` + `telegram_user_id`),
+  discord (`discord_bot_token` + `discord_user_id`), slack (`slack_bot_token` +
+  `slack_app_token` + `slack_user_id`), whatsapp native (`whatsapp_user_id` →
+  `allow_from`, không token, quét QR lần đầu). Secrets nằm trong `.security.yml` dưới
+  `channel_list.<ch>.settings`; phần cấu trúc ở `config.json`.
+
+Log của gateway xác nhận cấu hình khi boot (`Gateway started on 127.0.0.1:18790`,
+health ở `/health` `/ready` `/reload`, `Channels enabled: [pico]`). Cảnh báo
+`SECURITY: Channel allows EVERYONE (allow_from is empty) channel=pico` là bình
+thường: `pico` là gateway native cục bộ của thiết bị và cố tình không có `allow_from`.
 
 ## 2. Hằng số kết nối
 
@@ -175,9 +264,18 @@ switch ngược lại openclaw sẽ khôi phục chúng.
 
 Mọi thứ không nằm trên hot path của PicoClaw đều là no-op để thỏa interface
 `domain.AgentGateway` mà không bịa ra tính năng backend không có: `SetupAgent`,
-pairing WhatsApp, `ResetAgent`,
-`RestartAgent`, `RefreshModelsConfig`, `EnsureOnboarding`, `FetchChatHistory`,
-`GetConfigJSON`, ghi MCP entry, `WatchIdentity`, `UpdateIdentityName`, watcher
-skill/model, `UpdatePrimaryModel`. HAL TTS/voice, fan-out Telegram, hàng đợi/drain
-sensing-event, và các helper run-marker (guard / broadcast / web-chat / silent /
-pose-bucket) đều backend-agnostic và hành xử y hệt backend Hermes.
+pairing WhatsApp, `ResetAgent`, `RestartAgent`, `RefreshModelsConfig`,
+`FetchChatHistory`, `GetConfigJSON`, ghi MCP entry, `WatchIdentity`,
+`UpdateIdentityName`, watcher model (`StartModelSync`/`StartPrimaryModelWatch`),
+`UpdatePrimaryModel`. (`AddChannel` / `RefreshChannelConfig` KHÔNG phải stub — trả
+`domain.ErrChannelNotSupported` cho kênh không hỗ trợ, xem §7; `EnsureOnboarding`
+(§1.1) và `StartSkillWatcher` (auto-update skill, §1.1) là thật.) HAL TTS/voice, fan-out
+Telegram, hàng đợi/drain sensing-event, và các helper run-marker (guard / broadcast /
+web-chat / silent / pose-bucket) đều backend-agnostic và hành xử y hệt backend Hermes.
+
+Những phần này no-op **có chủ đích**: PicoClaw được provisioning ngoài tiến trình
+bởi `install.sh` + `presync.sh` (§1.1), không phải bằng các lời gọi gateway
+in-process. Cài đặt, cấu hình model/channel, và migrate persona đều diễn ra trong các
+script đó trong luồng `switch-runtime`. Ngoại lệ duy nhất là **`EnsureOnboarding`**
+(`onboarding.go`) — nó là thật: inject khối OS-managed vào `workspace/AGENTS.md` lúc
+boot/config-change (§1.1), đúng hợp đồng như openclaw.

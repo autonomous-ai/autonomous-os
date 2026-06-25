@@ -96,5 +96,6 @@ func rebrandToHermes(text string) string {
 	text = reOpenClaw.ReplaceAllStringFunc(text, repl)
 	text = reClawdBot.ReplaceAllStringFunc(text, repl)
 	text = reMoltBot.ReplaceAllStringFunc(text, repl)
+	text = rePicoClaw.ReplaceAllStringFunc(text, repl)
 	return text
 }
