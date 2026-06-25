@@ -27,6 +27,14 @@ install, migration, skills, hooks, reset.
 - `config.agent_runtime` (`/root/config/config.json`) chọn backend đang chạy.
 - `internal/agent/factory.go` `ProvideGateway` resolve lúc boot qua Wire DI:
   `config.agent_runtime` > DEVICE.md `gateway.default` > openclaw.
+- **Seed-khi-rỗng:** lúc boot `device.ProvideService` gọi
+  `SeedAgentRuntimeFromGateway` — khi `config.agent_runtime` rỗng/null **và**
+  DEVICE.md `gateway.default` là runtime hợp lệ, giá trị đó được ghi vào config.json
+  (idempotent; chỉ boot đầu của config fresh/legacy mới ghi). Khi đã có giá trị cụ
+  thể trên đĩa, device **sở hữu** runtime của nó: dev đã set (qua switch hoặc sửa
+  tay) thì để nguyên, và fallback-resolve ở trên thành no-op. Hệ quả: sửa
+  `gateway.default` trong DEVICE.md về sau KHÔNG còn ảnh hưởng device đã seed — phải
+  sửa config.json hoặc switch runtime.
 - Switch lúc runtime đi qua một core — `device.Service.UpdateAgentRuntime` — kích
   bởi 3 trigger (MQTT `agent_runtime.set`, HTTP `/api/device/agent-runtime`, web
   Runtime section). Xem `docs/vi/agentic/hermes_vi.md` §10–§11.

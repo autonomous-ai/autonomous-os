@@ -27,6 +27,14 @@ wire the switch, install, migration, skills, hooks, and reset.
 - `config.agent_runtime` (`/root/config/config.json`) selects the active backend.
 - `internal/agent/factory.go` `ProvideGateway` resolves it at boot via Wire DI:
   `config.agent_runtime` > DEVICE.md `gateway.default` > openclaw.
+- **Seed-on-empty:** at boot `device.ProvideService` calls
+  `SeedAgentRuntimeFromGateway` — when `config.agent_runtime` is empty/null **and**
+  DEVICE.md `gateway.default` names a valid runtime, that value is written into
+  config.json (idempotent; only the first boot of a fresh/legacy config writes).
+  Once a concrete value is on disk the device **owns** its runtime: a dev who set
+  it (via switch or by hand) is left untouched, and the resolve-fallback above
+  becomes a no-op. Corollary: changing `gateway.default` in DEVICE.md afterwards no
+  longer affects an already-seeded device — edit config.json or switch the runtime.
 - Switching at runtime goes through one core — `device.Service.UpdateAgentRuntime`
   — fired by 3 triggers (MQTT `agent_runtime.set`, HTTP `/api/device/agent-runtime`,
   web Runtime section). See `docs/agentic/hermes.md` §10–§11.

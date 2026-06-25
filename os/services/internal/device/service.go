@@ -88,12 +88,35 @@ type Service struct {
 }
 
 func ProvideService(config *config.Config, ns *network.Service, gw domain.AgentGateway, be *beclient.Client) *Service {
+	SeedAgentRuntimeFromGateway(config)
 	return &Service{
 		config:         config,
 		networkService: ns,
 		agentGateway:   gw,
 		beClient:       be,
 		setupState:     setupState{phase: SetupPhaseIdle},
+	}
+}
+
+// SeedAgentRuntimeFromGateway materializes DEVICE.md gateway.default into
+// config.agent_runtime when the field is still empty, then persists it. Once a
+// concrete value is on disk the device "owns" its runtime: a dev who set it
+// (via switch or by hand) is left untouched, and the resolve-fallback in
+// CurrentAgentRuntimeFromConfig becomes a no-op. Idempotent — only the first
+// boot of a fresh/legacy config.json writes. When gateway.default is itself
+// absent there is nothing to seed, so the field stays empty and the runtime
+// keeps resolving to openclaw at boot.
+func SeedAgentRuntimeFromGateway(cfg *config.Config) {
+	if cfg == nil || strings.TrimSpace(cfg.AgentRuntime) != "" {
+		return
+	}
+	g := strings.ToLower(strings.TrimSpace(GatewayDefault(cfg.DeviceTypeOrDefault())))
+	if g == "" || !domain.IsValidAgentRuntime(g) {
+		return
+	}
+	cfg.AgentRuntime = g
+	if err := cfg.Save(); err != nil {
+		slog.Error("seed agent_runtime from gateway.default failed", "component", "device", "runtime", g, "error", err)
 	}
 }
 
