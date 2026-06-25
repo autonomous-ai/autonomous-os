@@ -1045,6 +1045,9 @@ OS_SERVER_VER=\$(jq -r '."os-server".version // empty'         "\$META")
 BOOTSTRAP_VER=\$(jq -r '.bootstrap.version // empty' "\$META")
 HAL_VER=\$(jq -r '.hal.version // empty'     "\$META")
 BUDDY_VER=\$(jq -r '."claude-desktop-buddy".version // empty' "\$META")
+# Save snapshot before removing — host reads it back after chroot exits to bake
+# into /etc/autonomous-build.json. Must happen before rm -f below.
+cp "\${META}" /tmp/metadata-baked.json 2>/dev/null || true
 rm -f "\$META"
 [ -z "\$WEB_URL" ] || [ -z "\$OS_SERVER_URL" ] || [ -z "\$BOOTSTRAP_URL" ] && {
   echo "ERROR: OTA metadata missing web.url / os-server.url / bootstrap.url"; exit 1
@@ -1188,6 +1191,7 @@ BOOTSTRAP_VER=\${BOOTSTRAP_VER}
 HAL_VER=\${HAL_VER}
 BUDDY_VER=\${BUDDY_VER}
 MANIFEST
+
 OVERLAY_STAGES
 
 # Capture OTA versions for the build manifest before they get wiped by Phase 5.
@@ -1228,6 +1232,36 @@ cat > /output/manifest-opi.json <<MANIFEST_JSON
 }
 MANIFEST_JSON
 log "Manifest: /output/manifest-opi.json"
+
+# Bake a build snapshot into the image so anyone SSH-ing in can see exactly
+# what was flashed: when, from which git commit, what the hardware team's
+# manifest contained, and what OTA metadata was live at build time.
+# Check with: cat /etc/autonomous-build.json | jq .
+METADATA_FOR_SNAPSHOT="${MNT}/tmp/metadata-baked.json"
+HW_MANIFEST_FILE="/input/${DEVICE_TYPE}/manifest-opi-dev.json"
+if [ -f "${METADATA_FOR_SNAPSHOT}" ]; then
+  HW_MANIFEST_JSON="null"
+  if [ -f "${HW_MANIFEST_FILE}" ]; then
+    HW_MANIFEST_JSON=$(cat "${HW_MANIFEST_FILE}")
+  else
+    log "WARN: no hardware manifest at ${HW_MANIFEST_FILE} — hardware_manifest will be null"
+  fi
+  jq -n \
+    --arg build_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg git_commit "${BUILD_GIT_SHA:-unknown}" \
+    --argjson hw_manifest "${HW_MANIFEST_JSON}" \
+    --slurpfile ota_metadata "${METADATA_FOR_SNAPSHOT}" \
+    '{
+      build_date: $build_date,
+      git_commit: $git_commit,
+      hardware_manifest: $hw_manifest,
+      ota_metadata: $ota_metadata[0]
+    }' > "${MNT}/etc/autonomous-build.json"
+  rm -f "${METADATA_FOR_SNAPSHOT}"
+  log "Build snapshot: /etc/autonomous-build.json"
+else
+  log "WARN: skipping build snapshot — metadata missing"
+fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 4 — Install resize-once.service (first-boot SD-fill expand)
