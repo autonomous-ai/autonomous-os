@@ -312,6 +312,23 @@ openclaw plugins install @openclaw/slack@${OPENCLAW_VERSION} --force 2>&1 || ech
 curl -fsSL "https://github.com/mikefarah/yq/releases/download/v4.46.1/yq_linux_arm64" -o /usr/local/bin/yq
 chmod +x /usr/local/bin/yq
 
+# ── Hermes CLI binary pre-bake ────────────────────────────────────────────────
+# Run the same installer stages as install.sh, minus gateway/config/migrate.
+# Baking the binary + venv here means switch-runtime's install.sh skips the
+# slow git-clone + uv-sync on the device (stages fast-path because they detect
+# the existing install). Everything else (service unit, presync, claw migrate)
+# is handled by install.sh at actual switch time via Go switch-runtime.
+echo "[stage] hermes CLI binary pre-bake"
+HERMES_INSTALLER=\$(mktemp)
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o "\$HERMES_INSTALLER"
+for stage in prerequisites repository venv python-deps path config; do
+  echo "[hermes-prebake] stage: \${stage}"
+  bash "\$HERMES_INSTALLER" --stage "\$stage" --non-interactive
+done
+rm -f "\$HERMES_INSTALLER"
+echo "git" >/usr/local/lib/hermes-agent/.install_method 2>/dev/null || true
+hermes --version || true
+
 # ── uv (Python pkg mgr for HAL) ───────────────────────────────────────────
 echo "[stage] uv"
 if ! command -v uv &>/dev/null; then
