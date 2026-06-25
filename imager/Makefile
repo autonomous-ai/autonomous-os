@@ -93,6 +93,7 @@ build: build-preflight
 	-e RPI_MODEL=$(RPI_MODEL) \
 	-e OTA_METADATA_URL=$(OTA_METADATA_URL) \
 	-e DEVICE_TYPE=$(DEVICE_TYPE) \
+	-e BUILD_GIT_SHA=$(shell git -C .. rev-parse HEAD 2>/dev/null || echo unknown) \
 	pi-builder /work/$(BUILD_SCRIPT)
 	@# Name the output per device type so lamp/intern/dog images don't clobber.
 	@if [ "$(BUILT_IMG)" != "$(IMG_FILE)" ] && [ -f output/$(BUILT_IMG) ]; then mv -f output/$(BUILT_IMG) output/$(IMG_FILE); fi
