@@ -101,6 +101,13 @@ type AgentGateway interface {
 	// SetupAgent configures and starts the agent runtime from setup data.
 	SetupAgent(data SetupRequest) error
 
+	// SupportedChannels returns the messaging channels this runtime can run
+	// (e.g. "telegram", "slack"). Callers enforce supported-vs-not-supported before
+	// persisting credentials and decide what to re-apply on a runtime switch.
+	// openclaw: telegram/slack/discord/whatsapp; hermes: telegram/slack/discord
+	// (delivered by the Hermes server via ~/.hermes/.env); picoclaw: telegram.
+	SupportedChannels() []string
+
 	// AddChannel adds a messaging channel to the agent runtime. ctx caps the
 	// underlying CLI subprocess + restart so callers (MQTT 10-min budget) can
 	// bound the whole flow. WhatsApp pairing is a separate streaming call —

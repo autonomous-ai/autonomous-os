@@ -169,6 +169,11 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 			// Migrate persona/memory if agent runtime switched; non-blocking.
 			s.personaMigration.Reconcile()
 
+			// Re-apply configured messaging channels to the (possibly new) runtime
+			// and record any the runtime can't run. No-op when the runtime is
+			// unchanged; gated by config.ChannelsAppliedRuntime. Non-blocking.
+			s.channelReconcile.Reconcile()
+
 			// Seed SOUL.md + IDENTITY.md into workspace (factory defaults, once only)
 			if err := s.agentGateway.EnsureOnboarding(); err != nil {
 				slog.Error("onboarding seed failed", "component", "server", "error", err)

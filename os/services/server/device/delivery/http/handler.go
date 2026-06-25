@@ -263,6 +263,12 @@ func (h *DeviceHandler) ChangeChannel(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError("whatsapp pairing not supported via HTTP; use MQTT add_channel"))
 		return
 	}
+	// Reject a channel the active runtime can't run synchronously — the
+	// fire-and-forget goroutine below couldn't surface the not-supported error.
+	if !h.service.SupportsChannel(req.EffectiveChannel()) {
+		c.JSON(http.StatusBadRequest, serializers.ResponseError(req.EffectiveChannel()+" not supported on the active runtime"))
+		return
+	}
 
 	go func() {
 		// Background context — HTTP request is fire-and-forget; subprocess

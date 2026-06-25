@@ -7,4 +7,5 @@ import (
 var ProviderSet = wire.NewSet(
 	ProvideGateway,
 	ProvidePersonaMigration,
+	ProvideChannelReconcile,
 )

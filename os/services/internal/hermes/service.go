@@ -139,6 +139,19 @@ type HermesService struct {
 	// Recent outbound texts (echo-suppression for session.message handler).
 	recentOutboundMu    sync.Mutex
 	recentOutboundTexts []recentOutbound
+
+	// slackRunOrigin maps a runID → the Slack channel/thread an inbound HTTP-mode
+	// Slack event came from, so the SSE handler can post the reply back (and suppress
+	// TTS). Populated by HandleInboundSlack; consumed once by the agent event handler.
+	// See internal/hermes/slack.go.
+	slackRunOriginMu sync.Mutex
+	slackRunOrigin   map[string]slackOrigin
+
+	// slackStreams maps a runID → its live Slack streaming message (chat.startStream)
+	// so the reply renders progressively under the native typing indicator. See
+	// internal/hermes/slack_stream.go.
+	slackStreamsMu sync.Mutex
+	slackStreams   map[string]*slackStream
 }
 
 type recentOutbound struct {
@@ -174,9 +187,12 @@ func ProvideService(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 		webChatRuns:    make(map[string]bool),
 		silentRuns:     make(map[string]bool),
 		poseBucketRuns: make(map[string]poseBucketInfo),
+		slackRunOrigin: make(map[string]slackOrigin),
+		slackStreams:   make(map[string]*slackStream),
 	}
 	s.channels = []domain.ChannelSender{
 		&TelegramSender{svc: s},
+		&SlackSender{svc: s},
 	}
 	s.ackHookEnabled = ackEmotionEnabled(cfg.DeviceTypeOrDefault())
 	return s

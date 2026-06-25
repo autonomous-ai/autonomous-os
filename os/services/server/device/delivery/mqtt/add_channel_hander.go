@@ -3,6 +3,7 @@ package mqtthandler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -59,8 +60,14 @@ func (h *DeviceMQTTHandler) handleAddChannel(cmd domain.MQTTMessage) error {
 
 	events, err := h.deviceService.AddChannel(ctx, channelReq)
 	if err != nil {
-		slog.Error("add_channel: failed", "component", "mqtt", "channel", req.Channel, "error", err)
-		return h.publishAddChannelResult(req.Channel, "failure", err.Error(), nil)
+		// Map the shared sentinel to a stable code so the backend can branch
+		// without parsing free-form text (mirrors channel.refresh_config).
+		errMsg := err.Error()
+		if errors.Is(err, device.ErrChannelNotSupported) {
+			errMsg = "channel_not_supported"
+		}
+		slog.Error("add_channel: failed", "component", "mqtt", "channel", req.Channel, "code", errMsg, "error", err)
+		return h.publishAddChannelResult(req.Channel, "failure", errMsg, nil)
 	}
 
 	if events == nil {

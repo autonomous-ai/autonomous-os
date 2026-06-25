@@ -97,6 +97,40 @@ func (h *AgentHandler) tryFirstSentenceFlush(runID string) string {
 	return sentence
 }
 
+// cleanedSlackStreamText returns the cleaned cumulative reply text for runID, safe
+// to stream to Slack (chat.appendStream), and ready=false when streaming should
+// defer this round. It mirrors tryFirstSentenceFlush's cleaning but returns the WHOLE
+// text (not just the first sentence) and does not track a streamed offset — the Slack
+// bridge diffs against what it has already appended. Defers (ready=false) on a partial
+// `[HW:` marker, any `<say>` wrapper, or a NO_REPLY / HEARTBEAT_OK sentinel, so junk
+// never reaches the channel mid-stream.
+func (h *AgentHandler) cleanedSlackStreamText(runID string) (string, bool) {
+	h.assistantMu.Lock()
+	buf, ok := h.assistantBuf[runID]
+	var raw string
+	if ok && buf != nil {
+		raw = buf.String()
+	}
+	h.assistantMu.Unlock()
+	if raw == "" {
+		return "", false
+	}
+	if hasPartialHWMarker(raw) || strings.Contains(raw, "<say>") {
+		return "", false
+	}
+	upper := strings.ToUpper(raw)
+	if strings.Contains(upper, "NO_REPLY") || strings.Contains(upper, "HEARTBEAT_OK") {
+		return "", false
+	}
+	_, cleaned := extractHWCalls(raw)
+	cleaned = prunedImageMarkerRe.ReplaceAllString(cleaned, "")
+	cleaned = strings.TrimSpace(cleaned)
+	if cleaned == "" {
+		return "", false
+	}
+	return cleaned, true
+}
+
 // consumeStreamedCleanLen returns the byte offset into the cleaned reply
 // already streamed to TTS for runID and clears the entry. Called at
 // lifecycle:end so the remainder POST sends only what was not already

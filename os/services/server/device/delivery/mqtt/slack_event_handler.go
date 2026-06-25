@@ -142,6 +142,27 @@ func (h *DeviceMQTTHandler) forwardSlackHTTP(cmd domain.MQTTMessage, cmdType str
 		return h.publishSlackResult(cmdType, p.EventID, "skipped_duplicate", "", 0)
 	}
 
+	// Runtime branch: SlackBridge is the generic mechanism for a runtime whose native
+	// Slack support is Socket Mode only (today: hermes) and which therefore has no
+	// local HTTP webhook to receive events. For such a runtime os-server IS the
+	// HTTP-mode Slack frontend: it parses the event, drives a turn, and posts the
+	// reply via chat.postMessage. The openclaw path below (local webhook POST) is for
+	// runtimes that serve the Slack HTTP webhook themselves.
+	if sb, ok := h.agentGateway.(domain.SlackBridge); ok {
+		challenge, handled, err := sb.HandleInboundSlack(domain.SlackInbound{Body: p.Body})
+		if err != nil {
+			slog.Error("slack bridge: handle failed", "component", "mqtt", "cmd", cmdType, "event_id", p.EventID, "error", err)
+			return h.publishSlackResult(cmdType, p.EventID, "failure", err.Error(), 0)
+		}
+		if challenge != "" {
+			// url_verification normally terminates at the public proxy (it owns the
+			// Slack Request URL), so this is defensive; ack success either way.
+			slog.Info("slack bridge: url_verification handled", "component", "mqtt", "event_id", p.EventID)
+		}
+		slog.Debug("slack bridge: handled", "component", "mqtt", "cmd", cmdType, "event_id", p.EventID, "started_turn", handled)
+		return h.publishSlackResult(cmdType, p.EventID, "success", "", 200)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), slackEventForwardTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, slackEventForwardURL, bytes.NewBufferString(p.Body))

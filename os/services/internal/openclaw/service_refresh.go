@@ -65,8 +65,27 @@ func (s *OpenclawService) RefreshChannelConfig(ctx context.Context, req domain.R
 		channelsMap[domain.ChannelSlack] = slackMap
 		slackEntryMap := ensureMap(entriesMap, domain.ChannelSlack)
 		slackEntryMap["enabled"] = true
+	case domain.ChannelDiscord:
+		discordMap := ensureMap(channelsMap, domain.ChannelDiscord)
+		applyDiscordChannelConfig(discordMap, req.DiscordBotToken, req.DiscordUserID, req.DiscordGuildID)
+		channelsMap[domain.ChannelDiscord] = discordMap
+		ensureMap(entriesMap, domain.ChannelDiscord)["enabled"] = true
+	case domain.ChannelTelegram:
+		// Mirror AddChannel's telegram writer (built-in channel, no plugin).
+		telegramMap := ensureMap(channelsMap, domain.ChannelTelegram)
+		telegramMap["enabled"] = true
+		telegramMap["botToken"] = req.TelegramBotToken
+		if req.TelegramUserID != "" {
+			telegramMap["dmPolicy"] = "allowlist"
+			telegramMap["allowFrom"] = mergeStringList(telegramMap["allowFrom"], req.TelegramUserID)
+		} else {
+			telegramMap["dmPolicy"] = "open"
+			telegramMap["allowFrom"] = mergeStringList(telegramMap["allowFrom"], "*")
+		}
+		channelsMap[domain.ChannelTelegram] = telegramMap
+		ensureMap(entriesMap, domain.ChannelTelegram)["enabled"] = true
 	default:
-		return runtimeStr, fmt.Errorf("refresh not implemented for channel %q", req.Channel)
+		return runtimeStr, fmt.Errorf("refresh not implemented for channel %q: %w", req.Channel, domain.ErrChannelNotSupported)
 	}
 	configData["channels"] = channelsMap
 	configData["plugins"] = pluginsMap

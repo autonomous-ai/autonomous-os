@@ -53,7 +53,7 @@ Your backend lives in `internal/<name>/` and its `*Service` must satisfy the
 | **Identity** | `Name`, `Version`, `GetSessionKey`/`SetSessionKey` | **MUST** — surfaces in web Status. |
 | **HAL passthrough** | `SendToHALTTS*`, `StopTTS`, `SetVolume`, `StartHALVoice` | Usually identical across backends — share or copy. |
 | **Run markers** | `MarkGuardRun`/`Consume*`, `MarkBroadcastRun`, `MarkPoseBucketRun`, `MarkWebChatRun`, `MarkSilentRun`, `*PendingChatTrace*` | **MUST track** — os-server tags turns by runID; these are runtime-shaped but the OS depends on them. |
-| **Channels** | `AddChannel`, `RefreshChannelConfig`, `PairWhatsapp`, `HasWhatsappSession`, `GetTelegram*`, `Broadcast`, `SendToUser*` | No-op only if the backend genuinely can't (e.g. WhatsApp needs a Baileys plugin). Telegram usually still works via Lumi config. |
+| **Channels** | `SupportedChannels`, `AddChannel`, `RefreshChannelConfig`, `PairWhatsapp`, `HasWhatsappSession`, `GetTelegram*`, `Broadcast`, `SendToUser*` | `SupportedChannels()` declares real capability; `AddChannel`/`RefreshChannelConfig` **MUST** return `domain.ErrChannelNotSupported` for anything outside that list (no more silent no-op). See §9. |
 | **Lifecycle / onboarding** | `SetupAgent`, `EnsureOnboarding`, `ResetAgent`, `RestartAgent`, `RefreshModelsConfig` | Decide per backend; document the no-op. |
 | **Migration-adjacent** | `UpdateIdentityName`, `StartSkillWatcher`, `WatchIdentity`, `StartModelSync`, `UpdatePrimaryModel`, `StartPrimaryModelWatch`, `CompactSession`, `NewSession`, `FetchChatHistory`, `WriteMCPEntry`/`RemoveMCPEntry`, `GetConfigJSON` | **The danger zone** — easy to no-op, expensive to discover missing. See §4–§6. |
 
@@ -310,6 +310,90 @@ Use the runtime-agnostic platform metadata in `internal/skills`:
 
 ---
 
+## 9. Channels — capability model + switch re-apply
+
+Channels are a **declared capability**, not a silent best-effort. Each backend
+states which messaging channels it can run, and the OS uses that declaration both
+to reject unsupported setups up front and to re-apply the surviving ones when the
+runtime changes.
+
+### The capability declaration
+
+- **`SupportedChannels() []string`** (new `AgentGateway` method,
+  `domain/agent.go`) — returns the channels the runtime can run. Per backend:
+  - openclaw → `[telegram, slack, discord, whatsapp]` (`internal/openclaw/channels.go`)
+  - hermes → `[telegram, slack, discord]` (`internal/hermes/channels.go`)
+  - picoclaw → `[telegram]` (`internal/picoclaw/channels.go`)
+- Helper `domain.ChannelSupported(gw, channel) bool` (`domain/channel.go`) — the
+  one place callers test membership.
+- Shared sentinels in package `domain` (`domain/channel.go`):
+  `ErrChannelNotSupported` (`"channel_not_supported"`) and
+  `ErrChannelCredentialsMissing` (`"channel_credentials_missing"`). Compared by
+  the runtimes, the device layer, and the MQTT handlers, so everyone tests one
+  value.
+
+> **No more silent no-op.** The old behavior was for a backend to accept any
+> channel and quietly return `nil` for ones it couldn't run. That hid dead config.
+> Now `AddChannel`/`RefreshChannelConfig` **MUST** return
+> `domain.ErrChannelNotSupported` for a channel not in `SupportedChannels()`.
+
+### Capability-aware `AddChannel` / `RefreshChannelConfig`
+
+A **supported** channel is applied; an **unsupported** one returns
+`domain.ErrChannelNotSupported` from the gateway. The device layer
+(`internal/device/service.go` `AddChannel`) now gates on `SupportedChannels()`
+**before** persisting credentials, so an unsupported channel never leaves a dead
+token in `config.json`. The order is:
+
+1. **Capability gate** — `domain.ChannelSupported(gw, channel)`; reject with
+   `ErrChannelNotSupported` before touching `config.json`.
+2. **Persist creds → `config.json`** (the channel's tokens).
+3. **`gateway.AddChannel`** — apply in the active runtime.
+
+Persist-**before**-apply matters because a config-reading apply (hermes' presync
+re-reads `config.json` to rebuild `~/.hermes/.env`) must see the new tokens, and a
+transient apply failure then leaves creds persisted — the recoverable direction
+(boot presync / `ChannelReconcile` re-applies them).
+
+### Switch self-heal: `ChannelReconcile`
+
+`ChannelReconcile` (`internal/agent/channel_reconcile.go`) is a sibling of
+`PersonaMigration`. It runs in the startup sequence **right after**
+`personaMigration.Reconcile()` (`server/config_watch.go`). It is **non-blocking**.
+
+On a **runtime switch** — detected when `config.AgentRuntime` !=
+`config.ChannelsAppliedRuntime` — it re-applies each channel configured in
+`config.json` to the new runtime via the gateway's `AddChannel` (the **full
+provision path**). The load-bearing case is switching **into openclaw**: its
+slack/discord plugins are installed on demand by `AddChannel`, so a config-only
+refresh would **not** install them (`install.sh` doesn't pre-bundle those
+plugins). Switching into hermes is largely self-healed already — its presync
+re-syncs `.env` before the gateway starts, so the re-apply is an idempotent no-op.
+
+- Channels the new runtime **can't run** are collected into
+  `config.ChannelsUnsupported` and surfaced on the MQTT info uplink
+  (`unsupported_channels` field on `MQTTInfoResponse`, `domain/device.go`).
+- Creds for unsupported channels are **left in `config.json`**, so switching back
+  restores them.
+- The marker `config.ChannelsAppliedRuntime` advances **once per switch on a clean
+  pass**; a transient apply failure leaves it un-advanced so the next boot retries.
+
+### New `config.json` fields
+
+`channels_applied_runtime` and `channels_unsupported`
+(`server/config/config.go`).
+
+### Adding a new runtime
+
+- Implement `SupportedChannels()` to declare **real** capability.
+- Make `AddChannel`/`RefreshChannelConfig` return `domain.ErrChannelNotSupported`
+  for anything not in that list — never a silent no-op.
+- **Telegram is device-owned** on hermes/picoclaw: the receive loop is driven by
+  `config.TelegramBotToken`, so the runtime needs no write — an honest success
+  no-op inside `AddChannel`/`RefreshChannelConfig` (still gated on the list).
+
+---
+
 ## Checklist for a new backend
 
 - [ ] `internal/<name>/` package; `*Service` implements **all** of `AgentGateway`.
@@ -334,6 +418,10 @@ Use the runtime-agnostic platform metadata in `internal/skills`:
       `gw.ResetAgent()` on the active gateway — no `factoryreset.go` switch); **`agent_state.json` wiped with
       `config.json`**.
 - [ ] Capability gating via `skills.Supported` / `SupportedHooks`.
+- [ ] **Channels (§9):** `SupportedChannels()` declares real capability;
+      `AddChannel`/`RefreshChannelConfig` return `domain.ErrChannelNotSupported`
+      for channels not on the list (no silent no-op). Telegram is device-owned on
+      hermes/picoclaw (success no-op, no runtime write).
 - [ ] Notify the agent on skill change via `SendSystemChatMessage`.
 - [ ] Docs: update `docs/agentic/hermes.md`-style backend doc + this checklist if the
       contract changed.
