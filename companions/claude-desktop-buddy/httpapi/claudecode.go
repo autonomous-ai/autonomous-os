@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 )
 
@@ -28,7 +29,9 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "invalid json")
 		return
 	}
+	log.Printf("<--- Claude code buddy")
 	s.activity.Notify(req.Level, req.Title, req.Subtitle, req.Sound)
+	log.Printf("Claude code buddy ---> ")
 	ok(w)
 }
 
@@ -38,6 +41,8 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "invalid json")
 		return
 	}
+	log.Printf("<--- Claude code buddy")
 	s.activity.Usage(req.FiveHour, req.SevenDay, req.Reset5h, req.Reset7d, req.Sound)
+	log.Printf("Claude code buddy ---> ")
 	ok(w)
 }
