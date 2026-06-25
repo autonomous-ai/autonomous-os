@@ -16,12 +16,14 @@
 #
 # Three layers, mirroring internal/hermes/presync.sh:
 #   0. MIGRATE  — when workspace/skills is empty (first install OR after a factory
-#      reset wiped it), run `picoclaw migrate --force` to carry persona/memory/
-#      skills over from OpenClaw. PicoClaw has NO Go persona-migration adapter
-#      (internal/agent/migrate_persona only knows openclaw+hermes), so this hook is
-#      the ONLY thing that migrates persona/memory for picoclaw. Guarded so a
-#      normal switch is a no-op (migrate also converts openclaw.json -> config.json,
-#      so re-running it every switch would stomp the live config).
+#      reset wiped it), run `picoclaw migrate --workspace-only --force` to carry
+#      persona/memory/skills over from OpenClaw. PicoClaw has NO Go persona-migration
+#      adapter (internal/agent/migrate_persona only knows openclaw+hermes), so this
+#      hook is the ONLY thing that migrates persona/memory for picoclaw. --workspace-only
+#      means migrate does NOT touch config.json (converting openclaw.json yields a
+#      broken picoclaw config); config stays the onboard baseline that STRUCTURE/
+#      DYNAMIC below assert model/channel/gateway on. Guarded so a normal switch is a
+#      no-op (re-importing the workspace every switch would clobber local edits).
 #   1. STRUCTURE (static, idempotent) — assert the provider wiring that routes
 #      PicoClaw at the device's campaign-api brain via the anthropic-messages
 #      provider. `picoclaw migrate` does NOT set it, and onboard/factory-reset
@@ -87,9 +89,12 @@ if [ ! -f "$MIGRATE_MARKER" ]; then
       [ "$attempt" -eq 3 ] && log "WARN: openclaw still active after 3 attempts — continuing anyway"
       sleep 1
     done
-    # --force skips the interactive plan confirmation. migrate also converts
-    # openclaw.json -> config.json, so STRUCTURE/DYNAMIC below re-assert on top.
-    if HOME=/root "$PICO_BIN" migrate --force; then
+    # --workspace-only: migrate ONLY the workspace (persona/memory/skills), NOT
+    # config.json — converting openclaw.json into a picoclaw config produces a broken
+    # config (wrong model/channel/gateway shape). config.json therefore stays the
+    # valid onboard baseline, and STRUCTURE/DYNAMIC below assert model/channel/gateway
+    # on top. --force skips the interactive plan confirmation.
+    if HOME=/root "$PICO_BIN" migrate --workspace-only --force; then
       WS="$PICO_DIR/workspace"
       OC_WS="/root/.openclaw/workspace"
       # 1) HEARTBEAT.md — copy openclaw's verbatim into the picoclaw workspace.
@@ -148,7 +153,8 @@ jq_edit "$PICO_CONFIG" --arg ab "$DEFAULT_API_BASE" '
             model: "Auto-AI", api_base: ($existing // $ab) } ]
 '
 
-# Gateway server block.
+# Gateway server block — assert canonical host:port so it always matches constants.go
+# WSURL (ws://127.0.0.1:18790/pico/ws/), regardless of the onboard default.
 log "ensure gateway server block"
 jq_edit "$PICO_CONFIG" '
   .gateway = { host: "localhost", port: 18790, hot_reload: false, log_level: "warn" }

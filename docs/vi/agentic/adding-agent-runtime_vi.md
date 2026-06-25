@@ -146,7 +146,7 @@ trong `migrator.go`; không cần `Direction` enum mới. Runtime không có ada
 (persona external/out-of-band, vd PicoClaw) bị `CanMigrate` bỏ qua — bộ reconcile
 lúc boot không migrate tới/từ nó. Runtime kiểu này vẫn có thể tự migrate
 persona/memory theo cách riêng: PicoClaw làm việc đó trong hook presync qua
-`picoclaw migrate --force` (xem `picoclaw_vi.md` §1.1), nằm ngoài đường đi của
+`picoclaw migrate --workspace-only --force` (xem `picoclaw_vi.md` §1.1), nằm ngoài đường đi của
 reconciler Go.
 
 > **Template copy-là-chạy:** `internal/agent/migrate_persona/runtime_example.go` là

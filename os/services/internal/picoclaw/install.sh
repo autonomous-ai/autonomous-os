@@ -24,7 +24,7 @@
 #      .security.yml api_keys) AND the channel wiring (config.json channel_list +
 #      .security.yml channel tokens), and — when the .openclaw-migrated marker is
 #      absent (first install OR after a factory reset wiped /root/.picoclaw) — runs
-#      `picoclaw migrate --force` to carry persona/memory/skills over from OpenClaw.
+#      `picoclaw migrate --workspace-only --force` to carry persona/memory/skills over from OpenClaw.
 #      See presync.sh.
 #
 # UNIT NAME: picoclaw.service (== runtime name). No service-name declaration file
@@ -102,7 +102,7 @@ else
   echo "[install-picoclaw] config.json already present — skipping onboard"
 fi
 
-# OpenClaw persona/memory/skill import (`picoclaw migrate --force`) is owned by the
+# OpenClaw persona/memory/skill import (`picoclaw migrate --workspace-only --force`) is owned by the
 # presync hook now — it runs the migrate when the .openclaw-migrated marker is absent
 # (first install OR after a factory reset wiped /root/.picoclaw), then asserts the
 # model/channel config on top. Owning it there (not here) is what lets a plain

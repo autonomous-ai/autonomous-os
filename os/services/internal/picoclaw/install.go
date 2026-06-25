@@ -23,7 +23,7 @@ var InstallScript []byte
 // switch-runtime runs it right before picoclaw starts. It OWNS the model wiring
 // (config.json agents.defaults + model_list, .security.yml api_keys) and the
 // channel wiring (config.json channel_list + .security.yml channel tokens), plus a
-// guarded `picoclaw migrate --force` that carries persona/memory/skills over from
+// guarded `picoclaw migrate --workspace-only --force` that carries persona/memory/skills over from
 // OpenClaw when workspace/skills is empty — so the config self-heals on every
 // switch, including after a factory reset. Materializing it from os-server (not
 // from install.sh, which only re-runs on a first install / failed verify) is what

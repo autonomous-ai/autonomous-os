@@ -22,7 +22,7 @@ which brain is active.
 > installer + pre-start hook (`internal/picoclaw/install.sh` + `presync.sh`, embedded
 > and registered via `install.go` → `runtimereg`), so a `picoclaw.setup` switch
 > installs, provisions, and starts it like hermes (§1.1). Persona/memory/skill
-> migration from OpenClaw is done by `picoclaw migrate --force` **inside the presync
+> migration from OpenClaw is done by `picoclaw migrate --workspace-only --force` **inside the presync
 > hook** — PicoClaw has **no** Go `migrate_persona` adapter, so it is intentionally
 > skipped by the boot-time reconciler (`internal/agent/persona_migration.go`). The Go
 > gateway itself stays **client-only**: most in-process lifecycle methods
@@ -74,9 +74,12 @@ self-heals after a factory reset, mirroring hermes' presync):
 - **§0 migrate** — gated on a sentinel marker `~/.picoclaw/.openclaw-migrated`
   (**not** on `workspace/skills` emptiness — PicoClaw ships built-in skills so that
   dir is always non-empty). When the marker is absent and `/root/.openclaw` exists,
-  stop openclaw and run `picoclaw migrate --force` to carry persona/memory/skills
-  over from OpenClaw (also converts `openclaw.json` → `config.json`). It then does
-  the file fixups migrate doesn't: copy `HEARTBEAT.md` + `KNOWLEDGE.md` from the
+  stop openclaw and run `picoclaw migrate --workspace-only --force` to carry
+  persona/memory/skills over from OpenClaw. **`--workspace-only`** means migrate does
+  NOT touch `config.json` — converting `openclaw.json` into a picoclaw config produces
+  a broken config, so `config.json` stays the valid onboard baseline and §1/§2 assert
+  model/channel/gateway on top. It then does the file fixups migrate doesn't: copy
+  `HEARTBEAT.md` + `KNOWLEDGE.md` from the
   openclaw workspace (KNOWLEDGE.md is openclaw's living learnings doc, seeded from an
   embedded template then appended daily — migrate skips it), delete `AGENT.md` (so
   PicoClaw runs the legacy `AGENTS.md` path — the only mode that reads `IDENTITY.md`),

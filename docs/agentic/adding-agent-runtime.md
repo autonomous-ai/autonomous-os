@@ -149,7 +149,7 @@ a per-pair migrator needs. Register the adapter in the `adapters` map in
 registered adapter (external/out-of-band persona, e.g. PicoClaw) is simply
 skipped by `CanMigrate` — the boot-time reconciler doesn't migrate to/from it.
 Such a runtime can still migrate persona/memory in its own way: PicoClaw does it
-in its presync hook via `picoclaw migrate --force` (see `picoclaw.md` §1.1), out of
+in its presync hook via `picoclaw migrate --workspace-only --force` (see `picoclaw.md` §1.1), out of
 the Go reconciler's path.
 
 > **Copy-me template:** `internal/agent/migrate_persona/runtime_example.go` is a

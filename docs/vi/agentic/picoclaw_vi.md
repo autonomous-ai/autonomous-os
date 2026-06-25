@@ -22,7 +22,7 @@ não nào đang chạy.
 > installer + hook pre-start phía thiết bị (`internal/picoclaw/install.sh` +
 > `presync.sh`, được embed và đăng ký qua `install.go` → `runtimereg`), nên một lần
 > switch `picoclaw.setup` sẽ cài, cấu hình và khởi động nó giống hermes (§1.1).
-> Migrate persona/memory/skill từ OpenClaw do `picoclaw migrate --force` **bên trong
+> Migrate persona/memory/skill từ OpenClaw do `picoclaw migrate --workspace-only --force` **bên trong
 > hook presync** đảm nhiệm — PicoClaw **không** có adapter Go `migrate_persona`, nên
 > bộ reconcile lúc boot (`internal/agent/persona_migration.go`) cố tình bỏ qua nó.
 > Bản thân gateway Go vẫn **chỉ-client**: hầu hết method lifecycle in-process
@@ -74,8 +74,11 @@ tự-heal sau factory reset, giống presync của hermes):
 - **§0 migrate** — chốt bằng marker `~/.picoclaw/.openclaw-migrated` (**không** check
   `workspace/skills` rỗng — PicoClaw có sẵn built-in skills nên thư mục đó luôn
   non-empty). Khi marker chưa có và `/root/.openclaw` tồn tại, stop openclaw rồi chạy
-  `picoclaw migrate --force` để mang persona/memory/skills từ OpenClaw qua (đồng thời
-  convert `openclaw.json` → `config.json`). Sau đó làm các fixup migrate không làm:
+  `picoclaw migrate --workspace-only --force` để mang persona/memory/skills từ OpenClaw
+  qua. **`--workspace-only`** nghĩa là migrate **không** đụng `config.json` — convert
+  `openclaw.json` thành config picoclaw cho ra config hỏng, nên `config.json` giữ bản
+  onboard hợp lệ và §1/§2 đắp model/channel/gateway lên trên. Sau đó làm các fixup
+  migrate không làm:
   copy `HEARTBEAT.md` + `KNOWLEDGE.md` từ workspace openclaw (KNOWLEDGE.md là living-doc
   learnings của openclaw, seed từ template nhúng rồi append hằng ngày — migrate bỏ qua),
   xoá `AGENT.md` (để PicoClaw chạy đường legacy `AGENTS.md` — chế độ duy nhất đọc
