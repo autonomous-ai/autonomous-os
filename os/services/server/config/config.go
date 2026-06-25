@@ -70,6 +70,15 @@ type Config struct {
 	// persist its tokens here. Empty when no WhatsApp channel is configured.
 	WhatsappUserID string `json:"whatsapp_user_id" yaml:"whatsappUserID"`
 
+	// ChannelsAppliedRuntime is the agent runtime ChannelReconcile last applied the
+	// configured channels for. When it differs from AgentRuntime on boot, the
+	// reconcile re-applies the channels to the new runtime (and updates this).
+	// Empty until the first reconcile records a baseline.
+	ChannelsAppliedRuntime string `json:"channels_applied_runtime,omitempty" yaml:"channelsAppliedRuntime"`
+	// ChannelsUnsupported lists channels configured here that the active runtime
+	// cannot run, set by ChannelReconcile and surfaced on the MQTT info uplink.
+	ChannelsUnsupported []string `json:"channels_unsupported,omitempty" yaml:"channelsUnsupported"`
+
 	LLMAPIKey  string `json:"llm_api_key" yaml:"llmAPIKey" validate:"required"`
 	LLMModel   string `json:"llm_model" yaml:"llmModel" validate:"required"`
 	LLMBaseURL string `json:"llm_base_url" yaml:"llmBaseURL" validate:"required"`

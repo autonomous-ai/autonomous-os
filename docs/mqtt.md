@@ -61,9 +61,16 @@ The OS server uses MQTT to communicate with the backend server (status reporting
 (`openclaw` | `hermes` | `picoclaw`) — resolved as `config.agent_runtime`, else
 the device's `DEVICE.md` `gateway.default`, else `openclaw`. The response also
 carries these optional fields when known: `hal_version`, `openclaw_version`,
-`hermes_version`, `local_ip`, `tts_provider`, `tts_voice`, `stt_language`.
-`openclaw_version` and `hermes_version` are both probed at startup (each from its
-own `--version`) and reported side by side; `agent_runtime` names the active one.
+`hermes_version`, `local_ip`, `tts_provider`, `tts_voice`, `stt_language`,
+`unsupported_channels`. `openclaw_version` and `hermes_version` are both probed at
+startup (each from its own `--version`) and reported side by side; `agent_runtime`
+names the active one.
+
+`unsupported_channels` (omitted when empty) lists the channels configured on the
+device that the **active** runtime cannot run. It is populated by `ChannelReconcile`
+after a runtime switch — e.g. switching `openclaw` → `picoclaw` (telegram-only) leaves
+any configured `slack`/`discord` as unsupported. The list is sourced from
+`config.channels_unsupported`, which `ChannelReconcile` rewrites on each switch.
 
 ### `add_channel` — Add messaging channel
 
@@ -98,6 +105,14 @@ own `--version`) and reported side by side; `agent_runtime` names the active one
 }
 ```
 
+**Capability gate.** `add_channel` is capability-aware: when the **active** agent
+runtime cannot run the requested channel, the device replies `status:"failure"` with
+the stable error code `error:"channel_not_supported"` (mapped from
+`domain.ErrChannelNotSupported` via `errors.Is`, mirroring how `channel.refresh_config`
+maps its sentinels). Previously every runtime silently accepted any channel. Each
+runtime declares its own `SupportedChannels` — e.g. `picoclaw` runs telegram only, so
+`slack`/`discord`/`whatsapp` return `channel_not_supported`.
+
 **Response (streamed — whatsapp):** the device publishes one fd_channel message
 per pairing event:
 
@@ -121,11 +136,30 @@ Re-runs the QR-scan flow without re-bootstrapping the channel config. Used when 
 ### `slack_event` — Forward a Slack Events API delivery (HTTP mode)
 
 Sent by the public Slack-events proxy (bff-campaign-service) when Slack delivers an
-Events API POST for a workspace this device owns. The payload is a verbatim forward of
-Slack's HTTP request body + signature headers; the device POSTs them to the local
-OpenClaw gateway's `webhook_path` (default `http://127.0.0.1:18789/slack/events`), which
-re-verifies the Slack signature against the shared `signing_secret`. Only relevant when
-the device's slack channel is configured with `mode:"http"` (see `add_channel`).
+Events API POST for a workspace this device owns. The payload (a verbatim forward of
+Slack's HTTP request body + signature headers) and the MQTT wire shape are unchanged —
+but **how the device handles it now branches on the active runtime** (the handler
+type-asserts the agent gateway to `domain.SlackBridge`):
+
+- **Runtimes that serve the Slack webhook themselves** (not a `SlackBridge` — today:
+  OpenClaw) — unchanged behavior: the device POSTs the verbatim body + signature headers to
+  the local gateway's `webhook_path` (default `http://127.0.0.1:18789/slack/events`), which
+  re-verifies the Slack signature against the shared `signing_secret`. The fd_channel ack
+  carries the gateway's HTTP status. Only relevant when the device's slack channel is
+  configured with `mode:"http"` (see `add_channel`).
+- **Runtimes whose native Slack support is Socket Mode only** (implement
+  `domain.SlackBridge`) — this branch is **generic to any such runtime** (hermes is the
+  current example, not a special case): with only Socket Mode it has **no local HTTP Slack
+  webhook**, so os-server **is** the HTTP-mode Slack frontend for it. It parses the event
+  itself and drives a turn (`HandleInboundSlack`). The reply is rendered **straight to
+  Slack via the Bot API**, not relayed back over MQTT, using Slack's **native streaming
+  API**: `chat.startStream` (opens the streaming message) → `chat.appendStream`
+  (progressive `markdown_text`) → `chat.stopStream` (finalize), plus
+  `assistant.threads.setStatus` for the native "…is typing" indicator. The fd_channel ack
+  still becomes `status:"success"` (`http_status` 200) once the inbound turn is dispatched.
+  A `url_verification` challenge
+  normally terminates at the public proxy (which owns the Slack Request URL), so it is
+  handled defensively here and still acked `success`.
 
 **Receive:**
 ```json
@@ -191,6 +225,10 @@ Differences from `slack_event`: the body is the urlencoded slash-command form (i
 `application/x-www-form-urlencoded`, and the `event_id` slot carries Slack's `trigger_id`
 (slash commands have no `event_id`) — reused as the dedup key.
 
+**Runtime support:** slash commands remain **OpenClaw-only**. The hermes `SlackBridge`
+defers slash commands for now (v1) — only `slack_event` is runtime-aware — so on a hermes
+device `slack_command` still follows the OpenClaw local-webhook path described above.
+
 **Response (publish fd_channel):** same shape as `slack_event` but `type:"slack_command"`.
 
 ### `data` — Generic data envelope
@@ -210,6 +248,7 @@ optional `error`, and an optional `data` payload.
 | `oauth.remove` | Delete the stored OAuth token for a provider | `provider` |
 | `connector.set.<code>` | Store/replace credentials for a connector (async; acks `starting`) | `connector`, `auth_type`, optional `access_token`/`refresh_token`/`api_key`/`expires_in`/`expires_at`/`scopes`/`credentials`/`refresh` |
 | `connector.remove.<code>` | Delete a connector's credentials (async; acks `starting`) | `connector` |
+| `channel.refresh_config` | Re-apply a channel's canonical config block (async; acks `configuring`) | `channel` |
 | `system.info` | Aggregate snapshot: versions + network + host | _(none)_ |
 | `system.version` | Component versions only (cheaper than `system.info`) | _(none)_ |
 | `system.network` | wlan0 network facts only | _(none)_ |
@@ -297,6 +336,46 @@ carrying BOTH a `refresh_token` AND `refresh:true` (the backend owns refresh
 eligibility via the `refresh` flag) once it is within 10 minutes of expiry, via the
 backend `/connector/refresh-token` endpoint.
 
+#### `channel.refresh_config`
+
+Re-applies a channel's canonical config block on an already-onboarded device — for
+older customers whose runtime config predates schema additions (e.g. the Slack
+`socketMode` block, object-form streaming, `dmPolicy`). Config-only: **no** plugin
+install, CLI bootstrap, or pairing. Credentials are read from `config.json` on the
+device — they are **NOT** carried in the payload; the device builds the per-channel
+`RefreshChannelRequest` from config.json.
+
+**Generic.** Refresh now works for `telegram`, `slack`, and `discord` — previously only
+`slack` was wired, and other channels returned `channel_not_supported`. The capability
+gate still applies: a channel the **active** runtime can't run returns
+`channel_not_supported`.
+
+**Receive:** `{"cmd": "data", "kind": "channel.refresh_config", "data": {"channel": "slack"}}`
+
+**Async flow** — the device acks `configuring` (not `starting`, because the channel was
+already set up; this is a re-apply), then runs the write + gateway restart in the
+background and publishes a terminal status:
+
+```json
+{
+  "device": "lamp",
+  "type": "data",
+  "kind": "channel.refresh_config",
+  "status": "configuring | success | failure",
+  "error": "<code>",
+  "data": { "channel": "slack", "runtime": "2026.5.27" }
+}
+```
+
+`data.runtime` carries the detected runtime version string (empty when probing failed)
+so the backend can correlate refresh outcomes with runtime upgrades. Error codes (in
+`error` when `status:"failure"`, mapped from sentinels via `errors.Is`):
+
+| Code | Meaning |
+|------|---------|
+| `slack_credentials_missing` | config.json has no credentials for the channel being refreshed (kept for wire back-compat; applies to any channel, not just slack) |
+| `channel_not_supported` | the active runtime can't run this channel |
+
 ### `ota` — Trigger OTA update
 
 Handled by bootstrap worker, not through MQTT handler directly.
@@ -312,7 +391,7 @@ Handled by bootstrap worker, not through MQTT handler directly.
 | `os/services/server/device/delivery/mqtt/handler.go` | Command dispatcher |
 | `os/services/server/device/delivery/mqtt/info_handler.go` | Handle `info` command |
 | `os/services/server/device/delivery/mqtt/add_channel_hander.go` | Handle `add_channel` command (streams pairing events for WhatsApp) |
-| `os/services/server/device/delivery/mqtt/slack_event_handler.go` | Handle `slack_event` / `slack_command` (forwards Slack HTTP-mode events and slash commands to local gateway) |
+| `os/services/server/device/delivery/mqtt/slack_event_handler.go` | Handle `slack_event` / `slack_command` (runtime-aware: forwards Slack HTTP-mode events/slash commands to the local OpenClaw gateway, or drives a hermes turn when the runtime is a `SlackBridge`) |
 | `os/services/server/device/delivery/mqtt/data_handler.go` | Handle `data` command kinds `oauth.set`/`oauth.remove` (+ access-token store) |
 | `os/services/server/device/delivery/mqtt/connector_handler.go` | Handle `connector.set.<code>`/`connector.remove.<code>` (async, writer dispatch via `connectorWriterFor`) |
 | `os/services/server/device/delivery/mqtt/connector_writer.go` | `ConnectorWriter` interface + shared `<code>_access_tokens.json` file helpers |
@@ -320,6 +399,9 @@ Handled by bootstrap worker, not through MQTT handler directly.
 | `os/services/server/device/delivery/mqtt/mcp_connector_writer.go` | Special stdio MCP writer (`figma-api`): token file + local-wrapper `openclaw.json` MCP entry |
 | `os/services/server/device/delivery/mqtt/connector_refresh.go` | Connector token refresh loop (`/connector/refresh-token`) |
 | `os/services/server/device/delivery/mqtt/system_info_handler.go` | Handle `data` kinds `system.info`/`system.version`/`system.network` |
+| `os/services/server/device/delivery/mqtt/channel_refresh_handler.go` | Handle `data` kind `channel.refresh_config` (async re-apply of a channel's config block) |
+| `os/services/internal/device/service.go` | `RefreshChannelConfig` (generic per-channel request build + capability gate) |
+| `os/services/internal/agent/channel_reconcile.go` | `ChannelReconcile`: re-applies channels after a runtime switch, records `channels_unsupported` |
 | `os/services/server/device/delivery/mqtt/whatsapp_pair_handler.go` | Handle `whatsapp_pair` re-pair command |
 | `os/services/internal/openclaw/pairing.go` | WhatsApp Baileys QR pairing subprocess driver |
 | `os/services/domain/device.go` | MQTTMessage, command constants |

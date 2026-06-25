@@ -156,6 +156,11 @@ class RealtimeOrchestrator:
         self._agent: VoiceAgentBase | None = None
         self._started: threading.Event = threading.Event()
         self._consecutive_silent: int = 0  # zombie-session guard (see stream_output)
+        # Idle session recycle (cost): when a turn arrives after a long silence,
+        # rebuild the session AFTER that turn so the next turn drops the context
+        # the provider re-bills on a long-lived session. See _maybe_idle_reset.
+        self._last_turn_monotonic: float = 0.0  # end-of-turn timestamp; 0 = none yet
+        self._idle_reset_pending: bool = False
         self._rebuild_lock: threading.Lock = threading.Lock()  # guards _force_rebuild
         summarizer: RealtimeSummarizer | None = None
         if config.REALTIME_SUMMARIZER_ENABLED:
@@ -332,8 +337,32 @@ class RealtimeOrchestrator:
 
     def commit_audio(self) -> None:
         """Queue commit signal (non-blocking)."""
+        self._mark_turn_start()
         if self._agent is not None:
             self._agent.commit_audio()
+
+    def _mark_turn_start(self) -> None:
+        """Detect a long idle gap before this turn and arm a post-turn session
+        recycle. We measure end-of-previous-turn → start-of-this-turn (the silence
+        gap), and only ARM here — the rebuild itself fires at the END of
+        stream_output so it never swaps self._agent while this turn's audio
+        (already appended to the current session) is mid-commit. Cost rationale:
+        a session that has been chatting for a while re-bills its accumulated
+        context every turn; a turn that follows a long pause is effectively a new
+        conversation, so recycling then drops that context for ~free (long-term
+        continuity is preserved via the summary the rebuild reloads)."""
+        reset_s = config.REALTIME_SESSION_IDLE_RESET_S
+        if reset_s <= 0 or self._last_turn_monotonic <= 0.0:
+            return
+        idle = time.monotonic() - self._last_turn_monotonic
+        if idle >= reset_s:
+            logger.info(
+                "[realtime] %.0fs idle (>= %.0fs) — will recycle session after this "
+                "turn to drop accumulated context (cost)",
+                idle,
+                reset_s,
+            )
+            self._idle_reset_pending = True
 
     def flush_output(self) -> None:
         """Discard buffered outputs from a prior turn before committing a new one.
@@ -426,6 +455,17 @@ class RealtimeOrchestrator:
                 )
                 self._consecutive_silent = 0
                 self._force_rebuild()
+
+        # Stamp end-of-turn for the next turn's idle measurement, then run any
+        # idle-armed recycle (set in _mark_turn_start). Done here, between turns,
+        # so the rebuild never swaps self._agent mid-turn. Skipped if a zombie
+        # rebuild already fired above (the rebuild lock makes the second call a
+        # no-op anyway, but this avoids a redundant log).
+        self._last_turn_monotonic = time.monotonic()
+        if self._idle_reset_pending:
+            self._idle_reset_pending = False
+            logger.info("[realtime] recycling idle session (cost)")
+            self._force_rebuild()
 
     def _handle_emotion_call(self, output: FunctionCallOutput) -> None:
         """Fire the device's emotion expression without blocking the spoken turn.

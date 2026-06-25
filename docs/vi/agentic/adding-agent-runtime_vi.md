@@ -53,7 +53,7 @@ interface `AgentGateway`. Các method chia nhóm:
 | **Định danh** | `Name`, `Version`, `GetSessionKey`/`SetSessionKey` | **BẮT BUỘC** — hiện ở web Status. |
 | **HAL passthrough** | `SendToHALTTS*`, `StopTTS`, `SetVolume`, `StartHALVoice` | Thường giống nhau giữa các backend — share hoặc copy. |
 | **Run markers** | `MarkGuardRun`/`Consume*`, `MarkBroadcastRun`, `MarkPoseBucketRun`, `MarkWebChatRun`, `MarkSilentRun`, `*PendingChatTrace*` | **BẮT BUỘC track** — os-server gắn nhãn turn theo runID; OS phụ thuộc chúng. |
-| **Kênh** | `AddChannel`, `RefreshChannelConfig`, `PairWhatsapp`, `HasWhatsappSession`, `GetTelegram*`, `Broadcast`, `SendToUser*` | Chỉ no-op khi backend thật sự không làm được (vd WhatsApp cần plugin Baileys). Telegram thường vẫn chạy qua config Lumi. |
+| **Kênh** | `SupportedChannels`, `AddChannel`, `RefreshChannelConfig`, `PairWhatsapp`, `HasWhatsappSession`, `GetTelegram*`, `Broadcast`, `SendToUser*` | `SupportedChannels()` khai báo capability thật; `AddChannel`/`RefreshChannelConfig` **BẮT BUỘC** trả `domain.ErrChannelNotSupported` cho mọi kênh ngoài list (hết no-op âm thầm). Xem §9. |
 | **Lifecycle / onboarding** | `SetupAgent`, `EnsureOnboarding`, `ResetAgent`, `RestartAgent`, `RefreshModelsConfig` | Quyết theo backend; ghi rõ lý do no-op. |
 | **Cận-migration** | `UpdateIdentityName`, `StartSkillWatcher`, `WatchIdentity`, `StartModelSync`, `UpdatePrimaryModel`, `StartPrimaryModelWatch`, `CompactSession`, `NewSession`, `FetchChatHistory`, `WriteMCPEntry`/`RemoveMCPEntry`, `GetConfigJSON` | **Vùng nguy hiểm** — dễ no-op, đắt để phát hiện thiếu. Xem §4–§6. |
 
@@ -299,6 +299,90 @@ Dùng metadata nền tảng runtime-agnostic trong `internal/skills`:
 
 ---
 
+## 9. Kênh — mô hình capability + re-apply khi switch
+
+Kênh là một **capability được khai báo**, không phải best-effort âm thầm. Mỗi
+backend tuyên bố nó chạy được những kênh nhắn tin nào, và OS dùng khai báo đó để
+vừa từ chối các setup không hỗ trợ ngay từ đầu, vừa re-apply những kênh còn sống
+khi runtime đổi.
+
+### Khai báo capability
+
+- **`SupportedChannels() []string`** (method mới của `AgentGateway`,
+  `domain/agent.go`) — trả các kênh runtime chạy được. Theo backend:
+  - openclaw → `[telegram, slack, discord, whatsapp]` (`internal/openclaw/channels.go`)
+  - hermes → `[telegram, slack, discord]` (`internal/hermes/channels.go`)
+  - picoclaw → `[telegram]` (`internal/picoclaw/channels.go`)
+- Helper `domain.ChannelSupported(gw, channel) bool` (`domain/channel.go`) — chỗ
+  duy nhất caller kiểm tra thành viên.
+- Sentinel dùng chung trong package `domain` (`domain/channel.go`):
+  `ErrChannelNotSupported` (`"channel_not_supported"`) và
+  `ErrChannelCredentialsMissing` (`"channel_credentials_missing"`). Được so sánh
+  bởi các runtime, lớp device, và các MQTT handler, nên ai cũng test cùng một giá
+  trị.
+
+> **Hết no-op âm thầm.** Hành vi cũ là backend nhận mọi kênh rồi lặng lẽ trả `nil`
+> cho kênh nó không chạy được. Điều đó giấu config chết. Nay
+> `AddChannel`/`RefreshChannelConfig` **BẮT BUỘC** trả `domain.ErrChannelNotSupported`
+> cho kênh không có trong `SupportedChannels()`.
+
+### `AddChannel` / `RefreshChannelConfig` nhận biết capability
+
+Kênh **được hỗ trợ** thì áp dụng; kênh **không hỗ trợ** thì gateway trả
+`domain.ErrChannelNotSupported`. Lớp device (`internal/device/service.go`
+`AddChannel`) giờ gate theo `SupportedChannels()` **TRƯỚC** khi persist
+credentials, nên một kênh không hỗ trợ không bao giờ để lại token chết trong
+`config.json`. Thứ tự là:
+
+1. **Cổng capability** — `domain.ChannelSupported(gw, channel)`; từ chối với
+   `ErrChannelNotSupported` trước khi đụng `config.json`.
+2. **Persist creds → `config.json`** (token của kênh).
+3. **`gateway.AddChannel`** — áp dụng trong runtime đang chạy.
+
+Persist-**trước**-apply quan trọng vì một apply đọc-config (presync của hermes
+đọc lại `config.json` để dựng lại `~/.hermes/.env`) phải thấy token mới, và nếu
+apply lỗi tạm thời thì creds vẫn được persist — đúng chiều hồi phục được (presync
+lúc boot / `ChannelReconcile` re-apply lại).
+
+### Tự lành khi switch: `ChannelReconcile`
+
+`ChannelReconcile` (`internal/agent/channel_reconcile.go`) là anh em của
+`PersonaMigration`. Nó chạy trong startup sequence **ngay sau**
+`personaMigration.Reconcile()` (`server/config_watch.go`). Nó **không chặn**.
+
+Khi **switch runtime** — phát hiện khi `config.AgentRuntime` !=
+`config.ChannelsAppliedRuntime` — nó re-apply từng kênh đã cấu hình trong
+`config.json` sang runtime mới qua `AddChannel` của gateway (**đường provision
+đầy đủ**). Ca quan trọng là switch **sang openclaw**: plugin slack/discord của nó
+được cài theo nhu cầu bởi `AddChannel`, nên refresh chỉ-config sẽ **không** cài
+chúng (`install.sh` không pre-bundle các plugin đó). Switch sang hermes phần lớn
+đã tự lành — presync của nó re-sync `.env` trước khi gateway start, nên re-apply
+là no-op idempotent.
+
+- Các kênh runtime mới **không chạy được** được gom vào
+  `config.ChannelsUnsupported` và hiện trên info uplink MQTT (field
+  `unsupported_channels` trên `MQTTInfoResponse`, `domain/device.go`).
+- Creds của kênh không hỗ trợ được **giữ lại trong `config.json`**, nên switch
+  ngược lại sẽ khôi phục chúng.
+- Marker `config.ChannelsAppliedRuntime` tiến **một lần mỗi switch khi pass
+  sạch**; apply lỗi tạm thời để marker chưa tiến nên boot sau retry.
+
+### Field `config.json` mới
+
+`channels_applied_runtime` và `channels_unsupported`
+(`server/config/config.go`).
+
+### Khi thêm runtime mới
+
+- Implement `SupportedChannels()` để khai báo capability **thật**.
+- Cho `AddChannel`/`RefreshChannelConfig` trả `domain.ErrChannelNotSupported` cho
+  mọi thứ không có trong list — không bao giờ no-op âm thầm.
+- **Telegram do device sở hữu** trên hermes/picoclaw: receive loop được driven bởi
+  `config.TelegramBotToken`, nên runtime không cần ghi gì — một success no-op
+  trung thực trong `AddChannel`/`RefreshChannelConfig` (vẫn gate theo list).
+
+---
+
 ## Checklist cho backend mới
 
 - [ ] Package `internal/<name>/`; `*Service` implement **toàn bộ** `AgentGateway`.
@@ -323,6 +407,10 @@ Dùng metadata nền tảng runtime-agnostic trong `internal/skills`:
       `gw.ResetAgent()` trên gateway active — không có switch ở `factoryreset.go`); **`agent_state.json` wipe cùng
       `config.json`**.
 - [ ] Gate capability qua `skills.Supported` / `SupportedHooks`.
+- [ ] **Kênh (§9):** `SupportedChannels()` khai báo capability thật;
+      `AddChannel`/`RefreshChannelConfig` trả `domain.ErrChannelNotSupported` cho
+      kênh ngoài list (không no-op âm thầm). Telegram do device sở hữu trên
+      hermes/picoclaw (success no-op, không ghi runtime).
 - [ ] Notify agent khi skill đổi qua `SendSystemChatMessage`.
 - [ ] Docs: cập nhật backend doc kiểu `docs/agentic/hermes.md` + checklist này nếu hợp đồng đổi.
 

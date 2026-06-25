@@ -20,7 +20,7 @@ não nào đang chạy.
 >
 > **Trạng thái: chỉ-client / chưa hoàn chỉnh.** PicoClaw mới được nối như *client*
 > gateway — **chưa có install, presync, migrate persona/memory, import/watch skill,
-> onboarding**. Mọi thứ ngoài hot-path WS đều no-op (§7). Coi như chưa đạt parity;
+> onboarding**. Mọi thứ ngoài hot-path WS đều no-op (§8). Coi như chưa đạt parity;
 > checklist trong `adding-agent-runtime_vi.md` là danh sách gap nếu sau này nâng nó
 > thành backend đầy đủ.
 
@@ -145,11 +145,37 @@ và lưu lại (`SetSessionKey`) để `message.send` kế tiếp gửi kèm. `N
 xóa id cục bộ để lượt kế tiếp bắt đầu session server mới. Không có RPC compact nên
 `CompactSession` là no-op.
 
-## 7. Những phần để stub
+## 7. Khả năng kênh (channel capability)
+
+PicoClaw **chỉ chạy telegram**. Vòng nhận Telegram do **thiết bị sở hữu** (điều
+khiển bởi `config.TelegramBotToken`), và PicoClaw không có delivery slack/discord
+riêng. Ba phương thức kênh trong `internal/picoclaw/channels.go` mã hóa điều này
+một cách trung thực:
+
+| Phương thức | telegram | slack / discord / whatsapp |
+|---|---|---|
+| `SupportedChannels()` | trả về `[telegram]` (mục duy nhất) | — |
+| `AddChannel(…)` | **no-op thành công** trung thực — telegram do thiết bị sở hữu, nên không có gì để ghi vào runtime | trả về `domain.ErrChannelNotSupported` |
+| `RefreshChannelConfig(…)` | `("", nil)` — no-op thành công (không cần re-apply runtime) | trả về `domain.ErrChannelNotSupported` |
+
+Đây là một phần của **mô hình capability generic toàn repo**: mọi runtime khai báo
+`SupportedChannels()` và trả về `domain.ErrChannelNotSupported` (chuỗi
+`"channel_not_supported"`) cho các kênh nó không chạy được, thay cho no-op im lặng
+kiểu cũ. Hành vi not-supported dùng chung và `ChannelReconcile` sau khi switch được
+mô tả trong [`adding-agent-runtime_vi.md`](adding-agent-runtime_vi.md) — xem ở đó
+thay vì lặp lại tại đây.
+
+**Khi switch TỪ openclaw → picoclaw:** nếu openclaw đã cấu hình slack/discord, các
+kênh đó trở thành không hỗ trợ dưới PicoClaw. Sau khi switch, `ChannelReconcile`
+báo cáo chúng trong trường `unsupported_channels` của uplink MQTT info
+(`domain.MQTTInfoResponse`), và creds của chúng **vẫn nằm trong `config.json`** —
+switch ngược lại openclaw sẽ khôi phục chúng.
+
+## 8. Những phần để stub
 
 Mọi thứ không nằm trên hot path của PicoClaw đều là no-op để thỏa interface
 `domain.AgentGateway` mà không bịa ra tính năng backend không có: `SetupAgent`,
-`AddChannel`, `RefreshChannelConfig`, pairing WhatsApp, `ResetAgent`,
+pairing WhatsApp, `ResetAgent`,
 `RestartAgent`, `RefreshModelsConfig`, `EnsureOnboarding`, `FetchChatHistory`,
 `GetConfigJSON`, ghi MCP entry, `WatchIdentity`, `UpdateIdentityName`, watcher
 skill/model, `UpdatePrimaryModel`. HAL TTS/voice, fan-out Telegram, hàng đợi/drain

@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+
+	"go.autonomous.ai/os/domain"
 )
 
 var emotionRe = regexp.MustCompile(`(?:\\"|")emotion(?:\\"|")\s*:\s*(?:\\"|")([a-zA-Z_]+)(?:\\"|")`)
@@ -158,6 +160,12 @@ func (h *AgentHandler) canStreamSentenceTTS(runID, flowRunID string) bool {
 		return false
 	}
 	if h.agentGateway.IsWebChatRun(flowRunID) {
+		return false
+	}
+	// Slack (hermes HTTP bridge): a Slack turn replies in Slack, never on the
+	// speaker — suppress the mid-turn first-sentence stream too. Guarded by the
+	// SlackBridge type-assert so non-Slack runs and openclaw are unaffected.
+	if sb, ok := h.agentGateway.(domain.SlackBridge); ok && (sb.IsSlackOriginRun(runID) || sb.IsSlackOriginRun(flowRunID)) {
 		return false
 	}
 	h.channelRunsMu.Lock()

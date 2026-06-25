@@ -427,6 +427,16 @@ REALTIME_RECV_QUEUE_TIMEOUT_S: float = float(
 REALTIME_ZOMBIE_RECONNECT_AFTER: int = int(
     os.environ.get("HAL_REALTIME_ZOMBIE_RECONNECT_AFTER", "3")
 )
+# Cost control: recycle (rebuild) the realtime session when a new turn arrives
+# after this many seconds of silence. A long-lived session accumulates per-turn
+# context the provider (Gemini Live / OpenAI Realtime) re-bills every turn; a turn
+# that follows a long pause is effectively a new conversation, so starting a fresh
+# session then drops that accumulation. Long-term continuity survives — the rebuild
+# reloads the persisted summary.md. 0 disables. Default 240s (4 min). See
+# RealtimeOrchestrator._mark_turn_start.
+REALTIME_SESSION_IDLE_RESET_S: float = float(
+    os.environ.get("HAL_REALTIME_SESSION_IDLE_RESET_S", "240")
+)
 # A captured session shorter than this AND with no STT transcript is treated as a
 # VAD false-trigger (a noise blip that only grabbed the pre-roll, no sustained
 # speech) and is NOT committed to the realtime model. Committing such turns wastes

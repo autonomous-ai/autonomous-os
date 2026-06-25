@@ -259,6 +259,23 @@ class GeminiLiveAgent(VoiceAgentBase):
         self._first_audio_received = False
 
         async for message in self._session.receive():
+            if message.usage_metadata:
+                # Per-turn token bill. prompt_token_count is the input CONTEXT
+                # billed this turn — it grows as a long-lived session accumulates
+                # history and should drop sharply right after an idle session
+                # recycle (see orchestrator._mark_turn_start). Grep
+                # "[realtime] Gemini usage" to confirm the reset is cutting cost.
+                # Checked FIRST: Gemini ships usage_metadata on the SAME message as
+                # turn_complete, and the server_content branch returns on
+                # turn_complete — so a check placed after it never runs.
+                um = message.usage_metadata
+                logger.info(
+                    "[realtime] Gemini usage: prompt(context)=%s response=%s total=%s",
+                    um.prompt_token_count,
+                    um.response_token_count,
+                    um.total_token_count,
+                )
+
             if message.server_content:
                 content = message.server_content
 

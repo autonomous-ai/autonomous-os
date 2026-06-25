@@ -15,6 +15,7 @@ import (
 
 const (
 	hermesConfigYAML  = "/root/.hermes/config.yaml"
+	hermesEnvFile     = "/root/.hermes/.env"
 	hermesGatewayUnit = "hermes-gateway"
 )
 
@@ -49,12 +50,18 @@ func (s *HermesService) SetupAgent(_ domain.SetupRequest) error {
 // a steady boot writes nothing. We hash config.yaml around the run and restart
 // hermes-gateway ONLY when it actually changed, so there is no restart loop.
 func (s *HermesService) EnsureOnboarding() error {
-	before := fileHash(hermesConfigYAML)
+	// Hash both config.yaml AND .env: presync writes channel tokens to .env, so a
+	// channel-only change (e.g. adding Slack) leaves config.yaml untouched and must
+	// still trigger a gateway restart for the Hermes server to pick the channel up.
+	before := fileHash(hermesConfigYAML) + fileHash(hermesEnvFile)
 
 	if err := s.runPresync(); err != nil {
 		return fmt.Errorf("hermes presync: %w", err)
 	}
-	configChanged := fileHash(hermesConfigYAML) != before
+	// config "changed" covers config.yaml AND .env: presync writes channel tokens to
+	// .env, so a channel-only change (e.g. adding Slack) leaves config.yaml untouched
+	// and must still restart the gateway for the Hermes server to pick the channel up.
+	configChanged := fileHash(hermesConfigYAML)+fileHash(hermesEnvFile) != before
 
 	// Materialize the os-server-observer hook so channel turns surface in Flow
 	// Monitor. Best-effort: a hook write failure must not block the boot path
@@ -64,10 +71,10 @@ func (s *HermesService) EnsureOnboarding() error {
 		slog.Warn("hermes observer hook materialize failed", "component", "hermes", "error", err)
 	}
 
-	// Restart the gateway only when config.yaml OR the hook actually changed —
-	// both are loaded only at gateway start, so an unchanged boot is a no-op.
+	// Restart the gateway only when config.yaml/.env OR the hook actually changed —
+	// all are loaded only at gateway start, so an unchanged boot is a no-op.
 	if !configChanged && !hookChanged {
-		slog.Info("hermes onboarding: config.yaml + hooks unchanged, no restart", "component", "hermes")
+		slog.Info("hermes onboarding: config + hooks unchanged, no restart", "component", "hermes")
 		return nil
 	}
 

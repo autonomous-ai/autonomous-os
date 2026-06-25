@@ -3,7 +3,6 @@ package picoclaw
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 
 	"go.autonomous.ai/os/domain"
@@ -17,19 +16,9 @@ func (s *PicoclawService) SetupAgent(_ domain.SetupRequest) error {
 	return nil
 }
 
-// AddChannel — channels run inside Device (Telegram receive loop) when on
-// PicoClaw, not as plugins inside the agent runtime. No-op here; channel
-// credentials live in the regular Device config (TelegramBotToken, etc.).
-func (s *PicoclawService) AddChannel(_ context.Context, _ domain.AddChannelRequest) error {
-	slog.Info("AddChannel: no-op (picoclaw backend)", "component", "picoclaw")
-	return nil
-}
-
-// RefreshChannelConfig — PicoClaw owns its own config layout; not supported here.
-func (s *PicoclawService) RefreshChannelConfig(_ context.Context, _ domain.RefreshChannelRequest) (string, error) {
-	slog.Info("RefreshChannelConfig: not supported (picoclaw backend)", "component", "picoclaw")
-	return "", fmt.Errorf("channel refresh not supported on picoclaw backend")
-}
+// AddChannel + RefreshChannelConfig + SupportedChannels live in channels.go —
+// PicoClaw runs telegram only (device-owned receive loop); slack/discord/whatsapp
+// return domain.ErrChannelNotSupported.
 
 func (s *PicoclawService) HasWhatsappSession(_ string) bool { return false }
 
