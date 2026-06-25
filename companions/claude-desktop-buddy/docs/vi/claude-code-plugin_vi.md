@@ -139,6 +139,30 @@ ngữ tự nhiên: "push my usage to my device", "notify my device"). Hướng d
 đầy đủ của plugin nằm tại
 [`../../claude-code-buddy/GUIDE.md`](../../claude-code-buddy/GUIDE.md).
 
+## Khắc phục sự cố: Local Network trên macOS
+
+macOS gần đây (Sonoma / Sequoia) chặn ứng dụng truy cập thiết bị trong mạng LAN
+cho tới khi được cấp quyền **Local Network**. Plugin chạy bằng `python3`, nên nếu
+thiếu quyền này, Python không thể tới được thiết bị — dù thiết bị đang online và
+`curl` vẫn tới được bình thường.
+
+**Triệu chứng:** `connect my device` không tìm thấy thiết bị; và sau khi đã kết
+nối, **không có gì tới thiết bị** (không Task Done / usage / ping) vì các lời gọi
+mạng của hook bị chặn âm thầm.
+
+**Cách sửa:** mở **System Settings → Privacy & Security → Local Network** và bật
+cho ứng dụng đang chạy Claude Code (Terminal / iTerm / app Claude), rồi khởi động
+lại ứng dụng đó.
+
+Kiểm tra Python có tới được thiết bị không (thay bằng IP thiết bị của bạn):
+
+```bash
+python3 -c "import urllib.request as u; print(u.urlopen('http://192.168.1.50:5002/health', timeout=2).read())"
+```
+
+Trả về `{"status":"ok",...}` là đã thông. Nếu Python báo `No route to host` trong
+khi `curl` tới cùng địa chỉ vẫn được thì đó là dấu hiệu quyền vẫn đang tắt.
+
 ## Trạng thái / việc còn lại
 
 > **Các endpoint phía daemon `POST /claude-code/notify` và

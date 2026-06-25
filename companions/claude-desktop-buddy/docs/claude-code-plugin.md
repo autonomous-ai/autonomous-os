@@ -138,6 +138,31 @@ push on demand with `/claude-code-buddy:usage` or `/claude-code-buddy:notify` (o
 plain language: "push my usage to my device", "notify my device"). The full plugin
 setup guide lives at [`../claude-code-buddy/GUIDE.md`](../claude-code-buddy/GUIDE.md).
 
+## Troubleshooting: macOS Local Network
+
+Recent macOS (Sonoma / Sequoia) blocks apps from reaching local-network devices
+until they are granted **Local Network** permission. The plugin runs under
+`python3`, so without that permission Python cannot reach the device — even
+though the device is online and reachable from `curl`.
+
+**Symptoms:** `connect my device` can't find the device; and after connecting,
+nothing arrives on it (no Task Done / usage / ping) because the hooks' network
+calls are silently blocked.
+
+**Fix:** open **System Settings → Privacy & Security → Local Network** and enable
+it for the app that runs Claude Code (Terminal / iTerm / the Claude app), then
+restart that app.
+
+Confirm Python can reach the device (use your device's IP):
+
+```bash
+python3 -c "import urllib.request as u; print(u.urlopen('http://192.168.1.50:5002/health', timeout=2).read())"
+```
+
+A `{"status":"ok",...}` response means it works. `No route to host` from Python
+while `curl` to the same address succeeds is the tell-tale sign the permission is
+still off.
+
 ## Status / remaining work
 
 > **The daemon-side endpoints `POST /claude-code/notify` and
