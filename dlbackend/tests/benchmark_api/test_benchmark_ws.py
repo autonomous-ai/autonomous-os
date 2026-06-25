@@ -93,25 +93,37 @@ def _ws_frame_msg(task: str) -> dict[str, Any]:
     return {"type": "frame", "task": task, "frame_b64": _make_frame_b64()}
 
 
+def _pose_frame_msg() -> dict[str, Any]:
+    return _ws_frame_msg("pose")
+
+
+def _fer_frame_msg() -> dict[str, Any]:
+    return _ws_frame_msg("emotion")
+
+
+def _action_frame_msg() -> dict[str, Any]:
+    return _ws_frame_msg("action")
+
+
 ALL_WS_ENDPOINTS: list[WSEndpointSpec] = [
     WSEndpointSpec(
         name="ws_pose",
         path="/hal/api/dl/pose-estimation/ws",
         task="pose",
-        frame_msg_fn=lambda: _ws_frame_msg("pose"),
+        frame_msg_fn=_pose_frame_msg,
         frames_per_conn=243,
     ),
     WSEndpointSpec(
         name="ws_fer",
         path="/hal/api/dl/emotion-analysis/ws",
         task="emotion",
-        frame_msg_fn=lambda: _ws_frame_msg("emotion"),
+        frame_msg_fn=_fer_frame_msg,
     ),
     WSEndpointSpec(
         name="ws_action",
         path="/hal/api/dl/action-analysis/ws",
         task="action",
-        frame_msg_fn=lambda: _ws_frame_msg("action"),
+        frame_msg_fn=_action_frame_msg,
     ),
 ]
 

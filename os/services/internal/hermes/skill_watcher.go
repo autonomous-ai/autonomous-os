@@ -26,7 +26,7 @@ const skillWatchInterval = 5 * time.Minute
 // shared CDN/extract/hash plumbing from internal/skills. The only differences are
 // the target dir and the notify path — keep the two files parallel so they are
 // easy to diff.
-func (s *Service) StartSkillWatcher(ctx context.Context) {
+func (s *HermesService) StartSkillWatcher(ctx context.Context) {
 
 	slog.Info("skill watcher started", "component", "skill-watcher", "backend", "Hermes", "interval", skillWatchInterval)
 
@@ -83,14 +83,14 @@ func (s *Service) StartSkillWatcher(ctx context.Context) {
 // supportedSkills resolves this device's capabilities from DEVICE.md and filters
 // the platform skill catalog — identical gating to OpenClaw (skills.Supported is
 // runtime-agnostic platform metadata; the backend is just another consumer).
-func (s *Service) supportedSkills() []string {
+func (s *HermesService) supportedSkills() []string {
 	return skills.Supported(device.Capabilities(s.config.DeviceTypeOrDefault()))
 }
 
 // otaBaseURL derives the CDN base from the device's OTA metadata URL (config.json),
 // minus "/ota/metadata.json". Returns "" when unconfigured so callers skip rather
 // than hit a hardcoded URL. Mirrors OpenClaw's otaBaseURL.
-func (s *Service) otaBaseURL() string {
+func (s *HermesService) otaBaseURL() string {
 	u := strings.TrimSpace(s.config.OTAMetadataURL)
 	if u == "" {
 		return ""
@@ -98,7 +98,7 @@ func (s *Service) otaBaseURL() string {
 	return strings.TrimSuffix(u, "/ota/metadata.json")
 }
 
-func (s *Service) skillsBaseURL() string {
+func (s *HermesService) skillsBaseURL() string {
 	if base := s.otaBaseURL(); base != "" {
 		return base + "/skills"
 	}
@@ -109,7 +109,7 @@ func (s *Service) skillsBaseURL() string {
 // atomically into ~/.hermes/skills/openclaw-imports/<name> (where `claw migrate`
 // puts OpenClaw-imported skills). Returns names of skills that actually changed on
 // disk. Parallel to OpenClaw's downloadSkillsByName — only the target dir differs.
-func (s *Service) downloadSkillsByName(names []string) []string {
+func (s *HermesService) downloadSkillsByName(names []string) []string {
 	base := s.skillsBaseURL()
 	if base == "" {
 		slog.Info("skill download skipped: no ota_metadata_url configured", "component", "skill-watcher")
@@ -150,7 +150,7 @@ func (s *Service) downloadSkillsByName(names []string) []string {
 }
 
 // notifySkillChanges tells the Hermes agent to re-read the changed skills.
-func (s *Service) notifySkillChanges(changedSkills []string) {
+func (s *HermesService) notifySkillChanges(changedSkills []string) {
 	if len(changedSkills) == 0 {
 		return
 	}

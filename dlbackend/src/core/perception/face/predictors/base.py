@@ -25,10 +25,17 @@ class FaceDetector(PredictorBase[cv2t.MatLike, RawFaceDetection], ABC):
         from the original frame.
         """
         detections: list[RawFaceDetection] = self.predict(input)
+        return self.extract_crops_from_raw(input, detections)
 
+    @staticmethod
+    def extract_crops_from_raw(
+        frames: list[cv2t.MatLike],
+        detections: list[RawFaceDetection],
+    ) -> list[list[FaceCrop]]:
+        """Convert raw detections to face crops without re-running predict."""
         results: list[list[FaceCrop]] = []
         for i, raw in enumerate(detections):
-            frame: cv2t.MatLike = input[i]
+            frame: cv2t.MatLike = frames[i]
             H, W = frame.shape[:2]
             crops: list[FaceCrop] = []
 

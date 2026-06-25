@@ -201,7 +201,9 @@ func (s *Server) Serve(closeFn func()) error {
 	system.GET("network", s.healthHandler.NetworkInfo)
 	system.GET("dashboard", s.healthHandler.Dashboard)
 	system.POST("software-update/:target", adminAuthMiddleware(s.config), s.softwareUpdate)
-	system.POST("factory-reset", adminOrLoopbackAuth(s.config), systemshell.FactoryReset)
+	system.POST("factory-reset", adminOrLoopbackAuth(s.config), func(c *gin.Context) {
+		systemshell.FactoryReset(c, s.agentGateway)
+	})
 	system.POST("exec", localOnlyMiddleware(), s.execCommand)
 	// xterm.js shell: admin-gated. WS upgrade doesn't carry the Bearer header
 	// in browsers, so the cookie path inside adminAuthMiddleware is the live
@@ -324,6 +326,9 @@ func (s *Server) Serve(closeFn func()) error {
 	agent.DELETE("flow-logs", adminAuthMiddleware(s.config), s.agentHandler.ClearFlowLogs)
 	agent.GET("analytics", adminAuthMiddleware(s.config), s.agentHandler.Analytics)
 	agent.GET("config-json", localOnlyMiddleware(), s.agentHandler.ConfigJSON)
+	// channel-turn: the Hermes gateway observer hook POSTs each turn here so
+	// channel (Telegram/Slack/…) turns surface in Flow Monitor. Loopback-only.
+	agent.POST("channel-turn", localOnlyMiddleware(), s.agentHandler.ChannelTurn)
 	agent.GET("compaction-latest", adminAuthMiddleware(s.config), s.agentHandler.CompactionLatest)
 
 	logs := api.Group("logs")

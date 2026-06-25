@@ -4,9 +4,15 @@ All perceptions live under `src/core/perception/<name>` and follow the same shap
 
 - a **predictor** (`predictors/`) wraps the ML model (ONNX / PyTorch / HF) and
   implements `PredictorBase[INPUT, OUTPUT]` (`src/core/perception/base/`),
-- a **perception session** manages per-connection state and batching,
+- an **InputBatcher** (`base/batching.py`) queues requests from concurrent sessions
+  and dispatches them to the predictor in batches for GPU efficiency,
+- a **perception session** manages per-connection state, rate limiting, and submits
+  inputs to the batcher,
 - a **factory** picks the concrete predictor from an **enum** (`src/core/enums/`),
 - result **data models** live in `src/core/models/`.
+
+Batch size and timeout are configurable per model via `<NAME>__BATCH_SIZE` and
+`<NAME>__BATCH_TIMEOUT` — see [configuration.md](configuration.md#batching).
 
 The configured default for each subsystem comes from `src/config.py`
 (`<NAME>__MODEL`, `<NAME>__ENABLED`), summarized in

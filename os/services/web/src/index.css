@@ -97,6 +97,12 @@
     min-height: 100vh;
     background-color: var(--background);
     color: var(--foreground);
+    /* Crisper text on the dark theme + tabular-ish numerals for token/usage
+       readouts. Uses the system UI font (SF Pro / Segoe) from Tailwind's
+       default sans stack. */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
   }
 }
 
@@ -122,6 +128,7 @@
   --lm-red-glow:    rgba(248,113,113,0.22);
   --lm-blue:        #60A5FA;
   --lm-purple:      #A78BFA;
+  --lm-cyan:        #22D3EE;
   --lm-orange:      #FB923C;
   --lm-yellow:      #FCD34D;
 
@@ -163,6 +170,7 @@
   --lm-red-glow:    rgba(220,38,38,0.18);
   --lm-blue:        #2563EB;
   --lm-purple:      #7C3AED;
+  --lm-cyan:        #0891B2;
   --lm-orange:      #EA580C;
   --lm-yellow:      #CA8A04;
 
@@ -195,6 +203,7 @@
     --lm-red-glow:    rgba(220,38,38,0.18);
     --lm-blue:        #2563EB;
     --lm-purple:      #7C3AED;
+    --lm-cyan:        #0891B2;
     --lm-orange:      #EA580C;
     --lm-yellow:      #CA8A04;
 
@@ -363,6 +372,35 @@
 .lm-root ::-webkit-scrollbar-thumb:hover { background: var(--lm-amber); }
 .lm-hide-scroll { scrollbar-width: none; }
 .lm-hide-scroll::-webkit-scrollbar { display: none; }
+
+/* Log viewer (monitor#logs) — subtle row hover for scannability */
+.lm-log-line { transition: background 0.1s; }
+.lm-log-line:hover { background: var(--lm-amber-dim) !important; }
+/* floating "jump to bottom" pill */
+.lm-log-jump {
+  position: absolute;
+  right: 16px;
+  bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--lm-amber);
+  color: #1a1505;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 4px 16px -4px var(--lm-amber-glow), 0 2px 6px rgba(0,0,0,0.4);
+  animation: lm-jump-in 0.18s ease-out;
+}
+@keyframes lm-jump-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+/* toolbar control group separators */
+.lm-log-sep { width: 1px; align-self: stretch; background: var(--lm-border); margin: 2px 3px; }
 
 /* Hamburger button — hidden on desktop */
 .lm-hamburger {
@@ -1148,6 +1186,57 @@
   .lm-root .lm-pulse::after { animation: none; }
 }
 
+/* ── Auto-fit card row ────────────────────────────────────────────────────────
+   Like .lm-grid-4 but the column count follows the number of cards actually
+   rendered, so rows with capability-gated cards (Emotion/Scene/Servo only on
+   some devices) stay flush left and never leave a hole on the right. Each card
+   keeps a comfortable min width and grows to fill — a lone card spans the row
+   rather than collapsing to a quarter-width stub. */
+.lm-root .lm-grid-auto {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+@media (max-width: 480px) {
+  .lm-root .lm-grid-auto { grid-template-columns: 1fr; gap: 8px; }
+}
+
+/* ── Skeleton loaders ─────────────────────────────────────────────────────────
+   Placeholder bars that hold a card's height while data is in flight, replacing
+   the "Loading…" text that caused a layout jump when the real rows arrived. A
+   slow amber-tinted sheen sweeps across to read as "live, fetching". */
+.lm-root .lm-skel {
+  border-radius: 6px;
+  background: linear-gradient(
+    100deg,
+    var(--lm-surface) 30%,
+    color-mix(in srgb, var(--lm-amber) 8%, var(--lm-surface)) 50%,
+    var(--lm-surface) 70%
+  );
+  background-size: 220% 100%;
+  animation: lm-skel-sheen 1.4s ease-in-out infinite;
+}
+@keyframes lm-skel-sheen {
+  0%   { background-position: 180% 0; }
+  100% { background-position: -80% 0; }
+}
+
+/* ── Hardware badge — offline pulse ───────────────────────────────────────────
+   An offline (red) HW badge gets a soft breathing glow so a failed subsystem
+   (Servo/Camera down) pulls the eye, while healthy green badges stay calm. */
+.lm-root .lm-hw-down {
+  animation: lm-hw-down-pulse 1.8s ease-in-out infinite;
+}
+@keyframes lm-hw-down-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--lm-red) 30%, transparent); }
+  50%      { box-shadow: 0 0 8px 1px color-mix(in srgb, var(--lm-red) 40%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lm-root .lm-skel { animation: none; }
+  .lm-root .lm-hw-down { animation: none; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .lm-edit .lm-card:hover,
   .lm-root .lm-settings-panel .lm-card:hover { transform: none; }
@@ -1168,4 +1257,158 @@
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
+}
+
+/* ── Chat polish (warm & premium) ──────────────────────────────────────────
+   Subtle depth + motion that lifts the chat from "dev tool" to "product"
+   without leaving the existing amber/teal system. All effects respect
+   prefers-reduced-motion below. */
+
+/* Each message slides up + fades in as it mounts. Cheap (transform+opacity),
+   GPU-friendly, and reads as the message "arriving". */
+@keyframes lm-msg-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.lm-root .lm-chat-msg { animation: lm-msg-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+/* Message bubbles get a soft drop shadow so they float over the surface
+   instead of sitting flush. Agent bubble is the readable surface; the user
+   bubble keeps a faint amber-tinted shadow to echo its tint. */
+.lm-root .lm-chat-msg [data-bubble] {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22), 0 8px 22px -18px rgba(0, 0, 0, 0.65);
+  transition: box-shadow 0.18s ease, transform 0.18s ease;
+}
+.lm-root .lm-chat-msg:hover [data-bubble] {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28), 0 10px 28px -16px rgba(0, 0, 0, 0.7);
+}
+
+/* Assistant avatar — a small amber orb that gently breathes. The lamp's
+   "presence" in the conversation. */
+.lm-root .lm-assistant-orb {
+  position: relative;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  background: radial-gradient(circle at 32% 28%,
+    color-mix(in srgb, var(--lm-amber) 90%, white),
+    var(--lm-amber) 60%,
+    color-mix(in srgb, var(--lm-amber) 70%, black));
+  color: var(--lm-on-amber);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--lm-amber) 40%, transparent),
+              0 0 14px -2px var(--lm-amber-glow);
+  flex-shrink: 0;
+}
+.lm-root .lm-assistant-orb.lm-orb-live { animation: lm-orb-breathe 2.6s ease-in-out infinite; }
+@keyframes lm-orb-breathe {
+  0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--lm-amber) 40%, transparent), 0 0 12px -2px var(--lm-amber-glow); }
+  50%      { box-shadow: 0 0 0 1px color-mix(in srgb, var(--lm-amber) 55%, transparent), 0 0 22px 1px var(--lm-amber-glow); }
+}
+
+/* Live status dot on the header avatar — green when idle/online, amber pulse
+   while the assistant is thinking. */
+.lm-root .lm-status-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  border: 2px solid var(--lm-sidebar);
+  background: var(--lm-green);
+  box-shadow: 0 0 0 0 var(--lm-green-glow);
+}
+.lm-root .lm-status-dot.lm-thinking {
+  background: var(--lm-amber);
+  animation: lm-status-ping 1.6s ease-out infinite;
+}
+@keyframes lm-status-ping {
+  0%   { box-shadow: 0 0 0 0 var(--lm-amber-glow); }
+  70%  { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+/* Give the chat panel a faint inner top highlight so it reads as a raised
+   surface against the flat sidebars on either side. */
+.lm-root .lm-chat-panel {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--lm-amber) 3%, transparent), transparent 140px),
+    var(--lm-bg);
+}
+
+/* Empty-state suggestion chips — lift + amber-tint on hover so they invite a
+   click rather than just sitting there. */
+.lm-root .lm-suggestion-chip {
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+.lm-root .lm-suggestion-chip:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--lm-amber) 45%, transparent);
+  background: color-mix(in srgb, var(--lm-amber) 7%, var(--lm-card));
+  box-shadow: 0 6px 18px -10px var(--lm-amber-glow);
+}
+
+/* Send button — a quick "pop" press feedback when it's armed. */
+.lm-root .lm-send-ready:hover { transform: scale(1.06); }
+.lm-root .lm-send-ready:active { transform: scale(0.92); }
+
+/* Pulse ring around the header avatar while the assistant is thinking — an
+   amber halo that expands and fades. Purely decorative, sits behind the orb. */
+.lm-root .lm-orb-ring::before {
+  content: "";
+  position: absolute; inset: -3px;
+  border-radius: 50%;
+  border: 1.5px solid var(--lm-amber);
+  animation: lm-orb-ring 1.8s ease-out infinite;
+  pointer-events: none;
+}
+@keyframes lm-orb-ring {
+  0%   { opacity: 0.55; transform: scale(0.85); }
+  100% { opacity: 0;    transform: scale(1.5); }
+}
+
+/* Action buttons (copy/retry) under each message: hidden until you hover the
+   message, so the thread stays clean. Fade in, don't pop. */
+.lm-root .lm-msg-action { opacity: 0; transition: opacity 0.15s ease, color 0.15s ease; }
+.lm-root .lm-chat-msg:hover .lm-msg-action,
+.lm-root .lm-msg-action:focus-visible { opacity: 0.7; }
+
+/* iMessage-style tail on the user bubble's lower-right corner — a small amber
+   wedge so the bubble reads as "coming from you" instead of a plain box. */
+.lm-root .lm-chat-msg[data-role="user"] [data-bubble] { position: relative; }
+.lm-root .lm-chat-msg[data-role="user"] [data-bubble]::after {
+  content: "";
+  position: absolute; right: -5px; bottom: 0;
+  width: 12px; height: 16px;
+  background: rgba(245, 158, 11, 0.16);
+  border-bottom-left-radius: 14px;
+  -webkit-mask: radial-gradient(14px at 0 0, transparent 98%, #000) bottom right / 100% 100% no-repeat;
+  mask: radial-gradient(14px at 0 0, transparent 98%, #000) bottom right / 100% 100% no-repeat;
+  pointer-events: none;
+}
+
+/* History conversation rows — a subtle nudge to the right on hover so the
+   list feels responsive without shifting the whole panel. */
+.lm-root .lm-convo-row { transition: background 0.15s ease, transform 0.12s ease; }
+.lm-root .lm-convo-row:hover { transform: translateX(1px); }
+
+/* Slim, rounded scrollbar for the chat scroll area — replaces the chunky
+   default with an amber-muted thumb that brightens on hover. */
+.lm-root .lm-chat-panel *::-webkit-scrollbar { width: 8px; height: 8px; }
+.lm-root .lm-chat-panel *::-webkit-scrollbar-track { background: transparent; }
+.lm-root .lm-chat-panel *::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--lm-text) 14%, transparent);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.lm-root .lm-chat-panel *::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--lm-amber) 45%, transparent);
+  background-clip: padding-box;
+}
+.lm-root .lm-chat-panel * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--lm-text) 14%, transparent) transparent; }
+
+@media (prefers-reduced-motion: reduce) {
+  .lm-root .lm-chat-msg,
+  .lm-root .lm-assistant-orb.lm-orb-live,
+  .lm-root .lm-status-dot.lm-thinking,
+  .lm-root .lm-orb-ring::before,
+  .lm-root .lm-suggestion-chip:hover,
+  .lm-root .lm-send-ready:hover,
+  .lm-root .lm-send-ready:active,
+  .lm-root .lm-convo-row:hover { animation: none; transform: none; }
 }

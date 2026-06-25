@@ -1,10 +1,10 @@
 """Per-connection audio emotion detection session.
 
-Passes audio to the AudioEmotionRecognizer, filters results by threshold.
+Uses an InputBatcher to submit audio for batched inference,
+filters results by threshold.
 """
 
-import asyncio
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from typing_extensions import override
@@ -18,6 +18,7 @@ from core.models.audio_emotion import (
 from core.models.media import Audio
 from core.perception.audio_emotion.predictors.base import AudioEmotionRecognizer
 from core.perception.base import PerceptionSessionBase
+from core.perception.base.batching import InputBatcher
 from core.types import Omit, omit
 from core.utils.common import get_or_default
 
@@ -35,12 +36,12 @@ class AudioEmotionPerceptionSession(
 
     def __init__(
         self,
-        audio_emotion_recognizer: AudioEmotionRecognizer,
+        batcher: InputBatcher[Audio, RawAudioEmotionDetection],
         config: AudioEmotionPerceptionSessionConfig | None = None,
     ) -> None:
         config = get_or_default(config, AudioEmotionPerceptionSessionConfig())
         super().__init__(config)
-        self._audio_emotion_recognizer: AudioEmotionRecognizer = audio_emotion_recognizer
+        self._batcher: InputBatcher[Audio, RawAudioEmotionDetection] = batcher
         self._running: bool = False
 
     @override
@@ -48,10 +49,6 @@ class AudioEmotionPerceptionSession(
         if self._running:
             self._logger.info("Already running")
             return
-
-        if not self._audio_emotion_recognizer.is_ready():
-            await asyncio.to_thread(self._audio_emotion_recognizer.start)
-
         self._running = True
 
     @override
@@ -60,21 +57,16 @@ class AudioEmotionPerceptionSession(
 
     @override
     def is_ready(self) -> bool:
-        return self._running and self._audio_emotion_recognizer.is_ready()
+        return self._running and self._batcher.is_ready()
 
     @override
     async def update(self, input: Audio) -> AudioEmotionDetection | None:
         """Classify emotion from audio, filter by threshold."""
-        raw_detections: list[RawAudioEmotionDetection] = await asyncio.to_thread(
-            self._audio_emotion_recognizer.predict, [input]
-        )
+        futures = await self._batcher.submit([input])
+        raw: RawAudioEmotionDetection = await futures[0]
 
-        if not raw_detections:
-            self._last_prediction = AudioEmotionDetection(emotions=[])
-            return self._last_prediction
-
-        raw: RawAudioEmotionDetection = raw_detections[0]
-        class_names: list[str] = self._audio_emotion_recognizer.class_names
+        recognizer = cast(AudioEmotionRecognizer, self._batcher.predictor)
+        class_names: list[str] = recognizer.class_names
 
         indices = np.where(raw.expression_probs >= self._config.confidence_threshold)[0]
         emotions: list[AudioEmotion] = [

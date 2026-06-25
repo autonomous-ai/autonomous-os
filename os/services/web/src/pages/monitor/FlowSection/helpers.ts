@@ -1377,7 +1377,11 @@ export function turnIO(turn: Turn): {
     }
     if (!outputFromIntent && sameRun && (ev.type === "tts" || (ev.type === "flow_event" && (ev.detail?.node === "tts_send" || ev.detail?.node === "tts_suppressed")))) {
       const d = ev.detail as Record<string, any> | undefined;
-      output = d?.data?.text ?? d?.text ?? ev.summary ?? output;
+      // Prefer full_text: tts_send.text is only the remainder when sentence 1
+      // was streamed mid-turn (logged separately as tts_stream_send, which the
+      // web never reads). full_text carries the complete reply. Fall back to
+      // text for older JSONL / tts_suppressed (which already logs full text).
+      output = d?.data?.full_text ?? d?.full_text ?? d?.data?.text ?? d?.text ?? ev.summary ?? output;
     }
     if (!output && sameRun && ev.type === "chat_response" && ev.state === "final") {
       const d = ev.detail as Record<string, any> | undefined;

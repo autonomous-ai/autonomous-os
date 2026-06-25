@@ -26,7 +26,7 @@ class WebRTCVADFilter:
 
     Aggressiveness 0-3 (3 = most strict). The normal STT path uses aggressiveness=2;
     the barge-in path uses aggressiveness=3 to discriminate user voice from
-    Lumi's own speaker bleed during TTS playback.
+    Device's own speaker bleed during TTS playback.
     """
 
     def __init__(self, aggressiveness: int, np):

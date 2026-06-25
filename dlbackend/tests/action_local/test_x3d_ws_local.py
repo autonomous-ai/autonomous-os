@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import os
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -225,3 +226,69 @@ class TestActionAnalysisWebSocket:
             with client.websocket_connect("/hal/api/dl/action-analysis/ws") as ws:
                 ws.send_text(json.dumps({"type": "config", "task": "action", "whitelist": None}))
                 ws.receive_json()
+
+
+# ---------------------------------------------------------------------------
+# Performance / accuracy tests using real fixture images
+# ---------------------------------------------------------------------------
+
+FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "images"
+
+
+def _load_image_b64(path: Path) -> str:
+    """Read an image from disk and return its base64-encoded JPEG string."""
+    frame = cv2.imread(str(path))
+    if frame is None:
+        pytest.skip(f"Could not load image: {path}")
+    _, buf = cv2.imencode(".jpg", frame)
+    return base64.b64encode(buf.tobytes()).decode()
+
+
+@pytest.fixture(scope="session")
+def person_drinking_b64() -> str:
+    return _load_image_b64(FIXTURES_DIR / "person_drinking.jpg")
+
+
+class TestActionPerformance:
+    def test_drinking_action_detected(self, client, person_drinking_b64: str) -> None:
+        """Send 8 frames of a person drinking and assert a drinking-related action is detected."""
+        with client.websocket_connect(
+            "/hal/api/dl/action-analysis/ws", headers=AUTH_HEADERS
+        ) as ws:
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "config",
+                        "task": "action",
+                        "whitelist": [
+                            "drinking",
+                            "drinking beer",
+                            "drinking shots",
+                            "tasting beer",
+                        ],
+                        "threshold": 0.1,
+                    }
+                )
+            )
+            ws.receive_json()
+
+            last_resp: dict = {}
+            for _ in range(16):
+                ws.send_text(
+                    json.dumps(
+                        {
+                            "type": "frame",
+                            "task": "action",
+                            "frame_b64": person_drinking_b64,
+                        }
+                    )
+                )
+                last_resp = ws.receive_json()
+
+            assert "detected_classes" in last_resp
+            detected_names = [
+                det["class_name"] for det in last_resp["detected_classes"]
+            ]
+            assert len(detected_names) > 0, (
+                f"Expected at least one drinking-related action, got empty. Full response: {last_resp}"
+            )

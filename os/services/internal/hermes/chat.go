@@ -15,18 +15,18 @@ import (
 // SendChatMessage sends a user message to Hermes via POST /v1/responses.
 // Returns the run ID (== idempotency key) the caller should use to correlate
 // flow/monitor events with the resulting SSE stream.
-func (s *Service) SendChatMessage(message string) (string, error) {
+func (s *HermesService) SendChatMessage(message string) (string, error) {
 	return s.sendChat(message, "", "", "", "user", nil)
 }
 
 // SendSystemChatMessage flags the flow event as a system-originated message
 // (skill watcher, wake greeting, /compact) so Flow Monitor renders it
 // separately from real user input. Wire payload is identical otherwise.
-func (s *Service) SendSystemChatMessage(message string) (string, error) {
+func (s *HermesService) SendSystemChatMessage(message string) (string, error) {
 	return s.sendChat(message, "", "", "", "system", nil)
 }
 
-func (s *Service) SendChatMessageWithImage(message string, imageBase64 string) (string, error) {
+func (s *HermesService) SendChatMessageWithImage(message string, imageBase64 string) (string, error) {
 	return s.sendChat(message, imageBase64, "", "", "user", nil)
 }
 
@@ -34,17 +34,17 @@ func (s *Service) SendChatMessageWithImage(message string, imageBase64 string) (
 // before flow.Start so the sensing_input enter line matches the eventual
 // chat_send. Same shape as openclaw's allocator so logs / monitor stay
 // identical across backends.
-func (s *Service) NextChatRunID() (reqID string, runID string) {
+func (s *HermesService) NextChatRunID() (reqID string, runID string) {
 	reqID = fmt.Sprintf("chat-%d", s.reqCounter.Add(1))
 	runID = fmt.Sprintf("device-%s-%d", reqID, time.Now().UnixMilli())
 	return reqID, runID
 }
 
-func (s *Service) SendChatMessageWithRun(message string, reqID string, runID string) (string, error) {
+func (s *HermesService) SendChatMessageWithRun(message string, reqID string, runID string) (string, error) {
 	return s.sendChat(message, "", reqID, runID, "user", nil)
 }
 
-func (s *Service) SendChatMessageWithImageAndRun(message string, imageBase64 string, reqID string, runID string) (string, error) {
+func (s *HermesService) SendChatMessageWithImageAndRun(message string, imageBase64 string, reqID string, runID string) (string, error) {
 	return s.sendChat(message, imageBase64, reqID, runID, "user", nil)
 }
 
@@ -52,25 +52,25 @@ func (s *Service) SendChatMessageWithImageAndRun(message string, imageBase64 str
 // so slash commands look the same as any other user input on the wire.
 // Marker: we still tag the flow source so logs distinguish "this came from
 // web monitor" vs voice.
-func (s *Service) SendSlashCommandWithRun(message string, reqID string, runID string) (string, error) {
+func (s *HermesService) SendSlashCommandWithRun(message string, reqID string, runID string) (string, error) {
 	return s.sendChat(message, "", reqID, runID, "user_slash", nil)
 }
 
-func (s *Service) SendSlashCommandWithImageAndRun(message string, imageBase64 string, reqID string, runID string) (string, error) {
+func (s *HermesService) SendSlashCommandWithImageAndRun(message string, imageBase64 string, reqID string, runID string) (string, error) {
 	return s.sendChat(message, imageBase64, reqID, runID, "user_slash", nil)
 }
 
 // sendChat is the internal entry. It:
-//   1. allocates ids if not provided,
-//   2. marks busy + records pending trace,
-//   3. emits chat_input / chat_send flow events for parity with openclaw,
-//   4. builds the streamRequest (string input for text-only, array w/ image),
-//   5. fires postStream in a background goroutine and dispatches translated
-//      events into the registered handler.
+//  1. allocates ids if not provided,
+//  2. marks busy + records pending trace,
+//  3. emits chat_input / chat_send flow events for parity with openclaw,
+//  4. builds the streamRequest (string input for text-only, array w/ image),
+//  5. fires postStream in a background goroutine and dispatches translated
+//     events into the registered handler.
 //
 // Returns the device run ID (idempotency-style) once the POST has been
 // kicked off — not after response.completed. Caller correlates via SSE.
-func (s *Service) sendChat(message string, imageBase64 string, fixedReqID string, fixedRunID string, sourceType string, _ any) (string, error) {
+func (s *HermesService) sendChat(message string, imageBase64 string, fixedReqID string, fixedRunID string, sourceType string, _ any) (string, error) {
 	if !s.ready.Load() {
 		return "", fmt.Errorf("hermes not ready")
 	}
@@ -162,7 +162,7 @@ func (s *Service) sendChat(message string, imageBase64 string, fixedReqID string
 		RunID:   idempotencyKey,
 	})
 
-	// Run the SSE stream in a background goroutine: Lumi callers (sensing
+	// Run the SSE stream in a background goroutine: Device callers (sensing
 	// handler, voice loop) shouldn't block for the full turn duration.
 	go s.runStream(idempotencyKey, body)
 
@@ -171,7 +171,7 @@ func (s *Service) sendChat(message string, imageBase64 string, fixedReqID string
 
 // runStream issues the POST and pumps translated events into the registered
 // handler. Runs in its own goroutine — one per outbound chat.send.
-func (s *Service) runStream(runID string, body streamRequest) {
+func (s *HermesService) runStream(runID string, body streamRequest) {
 	handler := s.currentHandler()
 	dispatch := func(evt domain.WSEvent) {
 		if handler == nil {
@@ -221,7 +221,7 @@ func (s *Service) runStream(runID string, body streamRequest) {
 	}
 }
 
-func (s *Service) currentHandler() domain.AgentEventHandler {
+func (s *HermesService) currentHandler() domain.AgentEventHandler {
 	s.handlerMu.Lock()
 	h := s.handler
 	s.handlerMu.Unlock()

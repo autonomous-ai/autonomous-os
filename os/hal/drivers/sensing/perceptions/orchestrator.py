@@ -18,6 +18,7 @@ from hal.drivers.sensing.perceptions.processors import (
     PosePerception,
     SoundPerception,
 )
+from hal.drivers.sensing.perceptions.processors.base import Perception
 from hal.drivers.sensing.perceptions.processors.fire_hazard import FireHazardPerception
 from hal.drivers.sensing.perceptions.typing import SendEventCallable
 from hal.drivers.sensing.perceptions.utils import PerceptionStateObservers
@@ -51,6 +52,26 @@ class PerceptionProcessors:
     light_processor: LightLevelPerception | None = None
     sound_recognizer: SoundPerception | None = None
     fire_hazard_processor: FireHazardPerception | None = None
+
+    def processors_dict(self) -> dict[str, Perception]:
+        result: dict[str, Perception] = {}
+        if self.face_recognizer is not None:
+            result["face"] = self.face_recognizer
+        if self.motion_processor is not None:
+            result["motion"] = self.motion_processor
+        if self.motion_per_face_processor is not None:
+            result["motion_per_face"] = self.motion_per_face_processor
+        if self.emotion_processor is not None:
+            result["emotion"] = self.emotion_processor
+        if self.pose_processor is not None:
+            result["pose"] = self.pose_processor
+        if self.light_processor is not None:
+            result["light"] = self.light_processor
+        if self.sound_recognizer is not None:
+            result["sound"] = self.sound_recognizer
+        if self.fire_hazard_processor is not None:
+            result["fire_hazard"] = self.fire_hazard_processor
+        return result
 
 
 class PerceptionOrchestrator:
@@ -207,16 +228,11 @@ class PerceptionOrchestrator:
             self._main_loop_thread.join(timeout=5)
             self._main_loop_thread = None
 
-        for p in vars(self._processors).values():
-            if p is not None:
-                try:
-                    p.cleanup()
-                except Exception:
-                    self._logger.exception(
-                        "[%s] %s.cleanup() failed",
-                        self.__class__.__name__,
-                        p.__class__.__name__,
-                    )
+        for name, p in self._processors.processors_dict().items():
+            try:
+                p.cleanup()
+            except Exception:
+                self._logger.exception("[%s] %s.cleanup() failed", self.__class__.__name__, name)
 
         self._logger.info("SensingService stopped")
 
@@ -253,23 +269,17 @@ class PerceptionOrchestrator:
             self._presense_service.tick()
 
     def perceptions_state(self) -> list[dict[str, Any]]:
-        return [p.to_dict() for p in vars(self._processors).values() if p is not None]
+        return [p.to_dict() for p in self._processors.processors_dict().values()]
 
     def reset_dedup(self):
         new_user = self._perception_state.current_user.data or ""
-        for p in vars(self._processors).values():
-            if p is None:
-                continue
+        for name, p in self._processors.processors_dict().items():
             reset = getattr(p, "reset_dedup", None)
             if callable(reset):
                 try:
-                    _ = reset(new_user)
+                    reset(new_user)
                 except Exception:
-                    self._logger.exception(
-                        "[%s] %s.reset_dedup() failed",
-                        self.__class__.__name__,
-                        p.__class__.__name__,
-                    )
+                    self._logger.exception("[%s] %s.reset_dedup() failed", self.__class__.__name__, name)
 
     @property
     def current_user(self):

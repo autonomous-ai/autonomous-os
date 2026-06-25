@@ -35,6 +35,13 @@ class VideoCaptureDeviceInfo(IDeviceInfo):
     max_width: int | None = None
     max_height: int | None = None
     rotate: float | None = None
+    # Exposure control. auto_exposure="manual" pins exposure so auto-exposure
+    # can't throttle the frame rate (see config.py CAMERA_AUTO_EXPOSURE). The
+    # exposure/gain/brightness values are V4L2 units, applied only in manual mode.
+    auto_exposure: str | None = None
+    exposure: int | None = None
+    gain: int | None = None
+    brightness: int | None = None
 
 
 class VideoCaptureDeviceResponse(IDeviceResponse):

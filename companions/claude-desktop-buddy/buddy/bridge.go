@@ -1,4 +1,4 @@
-package main
+package buddy
 
 import (
 	"bytes"
@@ -15,15 +15,15 @@ var claudeBrand = [3]int{193, 95, 60}
 
 // Bridge maps buddy state changes to device and OS server HTTP calls.
 type Bridge struct {
-	halURL string
-	deviceURL   string
+	halURL    string
+	deviceURL string
 	client    *http.Client
 }
 
 func NewBridge(halURL, deviceURL string) *Bridge {
 	return &Bridge{
-		halURL: halURL,
-		deviceURL:   deviceURL,
+		halURL:    halURL,
+		deviceURL: deviceURL,
 		client:    &http.Client{Timeout: 5 * time.Second},
 	}
 }

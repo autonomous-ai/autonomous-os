@@ -4,7 +4,7 @@
 // OpenClaw.
 //
 // Hermes is assumed to be running locally on the Pi at Hermes.BaseURL with
-// all skills already provisioned. Lumi only acts as a per-request client and
+// all skills already provisioned. Device only acts as a per-request client and
 // translates SSE events into the same domain.WSEvent shape that the OpenClaw
 // handler at server/agent/delivery/http/handler_events.go consumes — so the
 // downstream pipeline (HAL TTS, [HW:/...] markers, monitor SSE, sensing
@@ -25,8 +25,8 @@ import (
 	"go.autonomous.ai/os/server/config"
 )
 
-// Compile-time check: *Service implements domain.AgentGateway.
-var _ domain.AgentGateway = (*Service)(nil)
+// Compile-time check: *HermesService implements domain.AgentGateway.
+var _ domain.AgentGateway = (*HermesService)(nil)
 
 // reSnapshotPath / rePoseBucketMarker / rePoseWorstMarker mirror the openclaw
 // regexes so the drain pipeline strips the same markers before send. Kept as
@@ -60,13 +60,13 @@ func extractPoseBucketMarkers(message string) (string, []string) {
 	return bucketID, worst
 }
 
-// Service is the Hermes backend implementation of domain.AgentGateway.
+// HermesService is the Hermes backend implementation of domain.AgentGateway.
 //
 // Unlike openclaw.Service which holds a persistent WebSocket, Hermes is
 // per-request: each SendChatMessage opens a POST /v1/responses with stream:true
 // and reads SSE until response.completed. Lifecycle/busy state, run tracking,
 // channel senders, and TTS plumbing are otherwise identical to openclaw.
-type Service struct {
+type HermesService struct {
 	config     *config.Config
 	monitorBus *monitor.Bus
 	statusLED  *statusled.Service
@@ -139,13 +139,6 @@ type Service struct {
 	// Recent outbound texts (echo-suppression for session.message handler).
 	recentOutboundMu    sync.Mutex
 	recentOutboundTexts []recentOutbound
-
-	// telegramRunOrigin maps a runID → telegram chatID for runs originated
-	// from a Lumi-side Telegram receive loop. The SSE handler consults this
-	// on response.completed to route the reply back to the chat instead of
-	// (or alongside) TTS.
-	telegramRunOriginMu sync.Mutex
-	telegramRunOrigin   map[string]string
 }
 
 type recentOutbound struct {
@@ -170,18 +163,17 @@ type poseBucketInfo struct {
 
 // ProvideService constructs the Hermes service. Wired via internal/agent/factory.go
 // when config.AgentRuntime == "hermes".
-func ProvideService(cfg *config.Config, bus *monitor.Bus, sled *statusled.Service) *Service {
-	s := &Service{
-		config:            cfg,
-		monitorBus:        bus,
-		statusLED:         sled,
-		httpClient:        &http.Client{Timeout: 0}, // per-request stream — no global timeout, use ctx
-		guardRuns:         make(map[string]string),
-		broadcastRuns:     make(map[string]bool),
-		webChatRuns:       make(map[string]bool),
-		silentRuns:        make(map[string]bool),
-		poseBucketRuns:    make(map[string]poseBucketInfo),
-		telegramRunOrigin: make(map[string]string),
+func ProvideService(cfg *config.Config, bus *monitor.Bus, sled *statusled.Service) *HermesService {
+	s := &HermesService{
+		config:         cfg,
+		monitorBus:     bus,
+		statusLED:      sled,
+		httpClient:     &http.Client{Timeout: 0}, // per-request stream — no global timeout, use ctx
+		guardRuns:      make(map[string]string),
+		broadcastRuns:  make(map[string]bool),
+		webChatRuns:    make(map[string]bool),
+		silentRuns:     make(map[string]bool),
+		poseBucketRuns: make(map[string]poseBucketInfo),
 	}
 	s.channels = []domain.ChannelSender{
 		&TelegramSender{svc: s},
@@ -191,21 +183,21 @@ func ProvideService(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 }
 
 // Name returns the display name surfaced via /api/openclaw/status.
-func (s *Service) Name() string { return "Hermes" }
+func (s *HermesService) Name() string { return "Hermes" }
 
 // IsReady reports whether the Hermes server has been reachable on a recent
 // /health poll. Driven by the health poller goroutine, not by per-request SSE
 // (a single failed POST does not flip readiness).
-func (s *Service) IsReady() bool { return s.ready.Load() }
+func (s *HermesService) IsReady() bool { return s.ready.Load() }
 
 // ConnectedAt returns the unix-seconds timestamp when readiness last became
-// true. Mirrors openclaw.Service.ConnectedAt for the monitor UI.
-func (s *Service) ConnectedAt() int64 { return s.connectedAt.Load() }
+// true. Mirrors openclaw.HermesService.ConnectedAt for the monitor UI.
+func (s *HermesService) ConnectedAt() int64 { return s.connectedAt.Load() }
 
 // AgentUptime returns Hermes process uptime in seconds when /health/detailed
 // has reported it. Returns 0 when the value has not yet been observed or the
 // server is currently unreachable.
-func (s *Service) AgentUptime() int64 {
+func (s *HermesService) AgentUptime() int64 {
 	if !s.ready.Load() {
 		return 0
 	}
@@ -221,9 +213,9 @@ func (s *Service) AgentUptime() int64 {
 }
 
 // markOutboundChat / IsRecentOutboundChat mirror openclaw.Service. Used by the
-// session.message handler to skip echoes of Lumi-injected user messages
+// session.message handler to skip echoes of Device-injected user messages
 // (wake greeting, sensing events) that the server rebroadcasts.
-func (s *Service) markOutboundChat(text string) {
+func (s *HermesService) markOutboundChat(text string) {
 	if text == "" {
 		return
 	}
@@ -244,8 +236,8 @@ func (s *Service) markOutboundChat(text string) {
 	s.recentOutboundTexts = pruned
 }
 
-// IsRecentOutboundChat reports whether Lumi sent this text recently.
-func (s *Service) IsRecentOutboundChat(text string) bool {
+// IsRecentOutboundChat reports whether Device sent this text recently.
+func (s *HermesService) IsRecentOutboundChat(text string) bool {
 	if text == "" {
 		return false
 	}
@@ -259,27 +251,4 @@ func (s *Service) IsRecentOutboundChat(text string) bool {
 		}
 	}
 	return false
-}
-
-// markTelegramOrigin records that a runID originated from a Telegram inbound
-// message so response.completed can route the reply back via DM.
-func (s *Service) markTelegramOrigin(runID, chatID string) {
-	if runID == "" || chatID == "" {
-		return
-	}
-	s.telegramRunOriginMu.Lock()
-	s.telegramRunOrigin[runID] = chatID
-	s.telegramRunOriginMu.Unlock()
-}
-
-// consumeTelegramOrigin returns the chatID associated with runID and clears
-// the entry. One-shot.
-func (s *Service) consumeTelegramOrigin(runID string) (string, bool) {
-	s.telegramRunOriginMu.Lock()
-	chatID, ok := s.telegramRunOrigin[runID]
-	if ok {
-		delete(s.telegramRunOrigin, runID)
-	}
-	s.telegramRunOriginMu.Unlock()
-	return chatID, ok
 }

@@ -68,7 +68,7 @@ func clearOSWriteFlag(configDir string) {
 // If the config directory does not exist yet (device not set up), the function
 // retries every primaryWatchRetryInterval until the directory appears or the
 // context is cancelled.
-func (s *Service) StartPrimaryModelWatch(ctx context.Context) {
+func (s *OpenclawService) StartPrimaryModelWatch(ctx context.Context) {
 	dir := s.config.OpenclawConfigDir
 
 	// Wait for the config dir to exist before starting the watcher.
@@ -135,7 +135,7 @@ func (s *Service) StartPrimaryModelWatch(ctx context.Context) {
 // syncPrimaryFromFile is the debounced handler that fires after openclaw.json
 // changes. It reads the new primary, skips os-server-initiated writes (flag content
 // matches), and syncs autonomous-provider changes back into config.LLMModel.
-func (s *Service) syncPrimaryFromFile() {
+func (s *OpenclawService) syncPrimaryFromFile() {
 	// Serialize concurrent invocations (debounce timer fires in its own
 	// goroutine and may overlap with UpdatePrimaryModel or other config paths).
 	s.primarySyncMu.Lock()

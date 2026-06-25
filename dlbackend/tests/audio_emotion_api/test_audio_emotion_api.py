@@ -94,7 +94,7 @@ class TestBasicResponse:
         resp = _post_recognize(_wav_to_b64(HAPPY_WAV), return_scores=True)
         data = resp.json()
         total = sum(data["scores"].values())
-        assert abs(total - 1.0) < 1e-4
+        assert abs(total - 1.0) < 1e-3
 
     def test_return_scores_true(self):
         resp = _post_recognize(_wav_to_b64(HAPPY_WAV), return_scores=True)

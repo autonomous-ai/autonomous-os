@@ -81,6 +81,8 @@ def build_action_perception() -> ActionPerception:
         action_recognizer_factory=action_factory,
         person_detector_factory=person_factory,
         default_config=default_config,
+        batch_size=settings.action.batch_size,
+        batch_timeout=settings.action.batch_timeout,
     )
 
 
@@ -113,6 +115,8 @@ def build_emotion_perception() -> EmotionPerception:
         emotion_recognizer_factory=emotion_factory,
         face_detector_factory=face_factory,
         default_config=default_config,
+        batch_size=settings.fer.batch_size,
+        batch_timeout=settings.fer.batch_timeout,
     )
 
 
@@ -167,6 +171,8 @@ def build_pose_perception() -> PosePerception:
         lifter_3d_factory=lifter_3d_factory,
         ergo_assessor_factory=ergo_factory,
         default_config=default_config,
+        batch_size=settings.pose.batch_size,
+        batch_timeout=settings.pose.batch_timeout,
     )
 
 
@@ -204,6 +210,8 @@ def build_object_perceptions() -> dict[str, ObjectPerception]:
         perceptions[name.value] = ObjectPerception(
             object_detector_factory=factory,
             default_config=default_config,
+            batch_size=det_settings.batch_size,
+            batch_timeout=det_settings.batch_timeout,
         )
 
     return perceptions
@@ -254,4 +262,6 @@ def build_audio_emotion_perception() -> AudioEmotionPerception:
 
     return AudioEmotionPerception(
         audio_emotion_recognizer_factory=factory,
+        batch_size=settings.ser.batch_size,
+        batch_timeout=settings.ser.batch_timeout,
     )

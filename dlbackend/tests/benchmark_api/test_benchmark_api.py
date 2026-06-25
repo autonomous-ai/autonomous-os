@@ -261,7 +261,6 @@ def _run_concurrent_batch(
 
     all_tasks = [ep for ep in endpoints for _ in range(n_per_endpoint)]
     n_procs = min(len(all_tasks), MAX_PROCESSES)
-    print(len(all_tasks))
 
     # Split tasks into roughly equal chunks for each process
     chunks: list[list[EndpointSpec]] = [[] for _ in range(n_procs)]

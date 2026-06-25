@@ -21,9 +21,9 @@ const telegramMaxMediaGroup = 10
 
 // TelegramSender delivers messages via the Telegram Bot API. Identical wire
 // protocol to the openclaw / hermes implementations; GetTelegramTargets() reads
-// from the Lumi-owned store.
+// from the Device-owned store.
 type TelegramSender struct {
-	svc *Service
+	svc *PicoclawService
 }
 
 func (t *TelegramSender) Name() string { return "telegram" }

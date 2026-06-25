@@ -11,7 +11,7 @@ import (
 	"go.autonomous.ai/os/domain"
 )
 
-// telegramTargetsFile is the Lumi-owned store of known Telegram chats. PicoClaw
+// telegramTargetsFile is the Device-owned store of known Telegram chats. PicoClaw
 // has no plugin/channel layer of its own, so the receive loop populates this
 // file each time a new chat DMs the bot.
 //
@@ -30,16 +30,16 @@ type telegramTargetsFileContent struct {
 // targetsFileMu serialises read-modify-write on telegramTargetsFile.
 var targetsFileMu sync.Mutex
 
-// GetTelegramBotToken returns the bot token from Lumi config. There is no
+// GetTelegramBotToken returns the bot token from Device config. There is no
 // agent-side config to consult under PicoClaw.
-func (s *Service) GetTelegramBotToken() string {
+func (s *PicoclawService) GetTelegramBotToken() string {
 	return s.config.TelegramBotToken
 }
 
-// GetTelegramTargets reads the Lumi-owned target store. Returns nil + nil (no
+// GetTelegramTargets reads the Device-owned target store. Returns nil + nil (no
 // error) when the file doesn't exist yet — that's the steady state before any
 // user has messaged the bot.
-func (s *Service) GetTelegramTargets() ([]domain.TelegramTarget, error) {
+func (s *PicoclawService) GetTelegramTargets() ([]domain.TelegramTarget, error) {
 	targetsFileMu.Lock()
 	data, err := os.ReadFile(telegramTargetsFile)
 	targetsFileMu.Unlock()
@@ -73,7 +73,7 @@ func (s *Service) GetTelegramTargets() ([]domain.TelegramTarget, error) {
 	return out, nil
 }
 
-func (s *Service) Broadcast(msg string, imagePath string) error {
+func (s *PicoclawService) Broadcast(msg string, imagePath string) error {
 	var sent int
 	var lastErr error
 	for _, ch := range s.channels {
@@ -96,7 +96,7 @@ func (s *Service) Broadcast(msg string, imagePath string) error {
 	return nil
 }
 
-func (s *Service) SendToUser(telegramID string, msg string, imagePath string) error {
+func (s *PicoclawService) SendToUser(telegramID string, msg string, imagePath string) error {
 	if telegramID == "" {
 		return nil
 	}
@@ -112,7 +112,7 @@ func (s *Service) SendToUser(telegramID string, msg string, imagePath string) er
 	return nil
 }
 
-func (s *Service) SendToUserWithMedia(telegramID string, msg string, imagePaths []string) error {
+func (s *PicoclawService) SendToUserWithMedia(telegramID string, msg string, imagePaths []string) error {
 	if telegramID == "" {
 		return nil
 	}

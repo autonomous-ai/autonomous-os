@@ -31,14 +31,22 @@ class PersonDetector(PredictorBase[cv2t.MatLike, RawPersonDetection], ABC):
         Returns ``None`` per frame when no qualifying person is found.
         """
         detections: list[RawPersonDetection] = self.predict(input)
+        return self.extract_largest_crop_from_raw(input, detections, min_area_ratio)
 
+    @staticmethod
+    def extract_largest_crop_from_raw(
+        frames: list[cv2t.MatLike],
+        detections: list[RawPersonDetection],
+        min_area_ratio: float = 0.0,
+    ) -> list[cv2.typing.MatLike | None]:
+        """Convert raw detections to largest-person crops without re-running predict."""
         cropped_input: list[cv2.typing.MatLike | None] = []
         for i, detected_people in enumerate(detections):
             if len(detected_people.bbox_xyxy) == 0:
                 cropped_input.append(None)
                 continue
 
-            H, W = input[i].shape[:2]
+            H, W = frames[i].shape[:2]
             frame_area: float = float(H * W)
 
             # bbox_xyxy is [0, 1] — compute pixel area for filtering
@@ -66,6 +74,6 @@ class PersonDetector(PredictorBase[cv2t.MatLike, RawPersonDetection], ABC):
                 cropped_input.append(None)
                 continue
 
-            cropped_input.append(input[i][y1:y2, x1:x2])
+            cropped_input.append(frames[i][y1:y2, x1:x2])
 
         return cropped_input

@@ -74,6 +74,17 @@ def crypto() -> RSAAESCrypto:
     return RSAAESCrypto()
 
 
+def _patch_httpx_mock(monkeypatch) -> None:
+    """Monkeypatch httpx.AsyncClient in lbserver.app to use MockTransport."""
+    _real_async_client = httpx.AsyncClient
+
+    def _mocked_client(**kwargs):
+        kwargs["transport"] = httpx.MockTransport(_mock_response)
+        return _real_async_client(**kwargs)
+
+    monkeypatch.setattr("lbserver.app.httpx.AsyncClient", _mocked_client)
+
+
 @pytest.fixture()
 def lb_client(monkeypatch, crypto):
     """LB TestClient with crypto enabled and mocked HTTP backend."""
@@ -83,10 +94,7 @@ def lb_client(monkeypatch, crypto):
     monkeypatch.setattr("lbserver.app.BACKENDS", ["http://backend:8001"])
     monkeypatch.setattr("lbserver.app.INTERNAL_PREFIX", "")
     monkeypatch.setattr("lbserver.app.http_rr", RoundRobin(["http://backend:8001"]))
-    monkeypatch.setattr(
-        "lbserver.app._client",
-        httpx.AsyncClient(transport=httpx.MockTransport(_mock_response)),
-    )
+    _patch_httpx_mock(monkeypatch)
     set_crypto(crypto)
 
     from lbserver.app import app
@@ -223,10 +231,7 @@ def lb_ws_client(monkeypatch, crypto):
     monkeypatch.setattr("lbserver.app.INTERNAL_PREFIX", "")
     monkeypatch.setattr("lbserver.app.http_rr", RoundRobin(backends))
     monkeypatch.setattr("lbserver.app.ws_rr", RoundRobin(backends))
-    monkeypatch.setattr(
-        "lbserver.app._client",
-        httpx.AsyncClient(transport=httpx.MockTransport(_mock_response)),
-    )
+    _patch_httpx_mock(monkeypatch)
     set_crypto(crypto)
 
     from lbserver.app import app
@@ -349,10 +354,7 @@ def lb_client_require_encryption(monkeypatch, crypto):
     monkeypatch.setattr("lbserver.app.BACKENDS", ["http://backend:8001"])
     monkeypatch.setattr("lbserver.app.INTERNAL_PREFIX", "")
     monkeypatch.setattr("lbserver.app.http_rr", RoundRobin(["http://backend:8001"]))
-    monkeypatch.setattr(
-        "lbserver.app._client",
-        httpx.AsyncClient(transport=httpx.MockTransport(_mock_response)),
-    )
+    _patch_httpx_mock(monkeypatch)
     monkeypatch.setattr("config.settings.crypto.require_encryption", True)
     set_crypto(crypto)
 
@@ -374,10 +376,7 @@ def lb_ws_client_require_encryption(monkeypatch, crypto):
     monkeypatch.setattr("lbserver.app.INTERNAL_PREFIX", "")
     monkeypatch.setattr("lbserver.app.http_rr", RoundRobin(backends))
     monkeypatch.setattr("lbserver.app.ws_rr", RoundRobin(backends))
-    monkeypatch.setattr(
-        "lbserver.app._client",
-        httpx.AsyncClient(transport=httpx.MockTransport(_mock_response)),
-    )
+    _patch_httpx_mock(monkeypatch)
     monkeypatch.setattr("config.settings.crypto.require_encryption", True)
     set_crypto(crypto)
 

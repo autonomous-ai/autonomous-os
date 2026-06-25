@@ -7,6 +7,7 @@ import Login from "@/pages/Login";
 import Monitor from "@/pages/monitor";
 import GwConfig from "@/pages/GwConfig";
 import { checkInternet, getDeviceConfig, getSetupStatus, safeSearch, scrubLocationSecrets, setApiToken } from "@/lib/api";
+import { setLanguage } from "@/lib/i18n";
 
 // Detect Tailscale access by either:
 //  - CGNAT IPv4 in 100.64.0.0/10 (100.64.0.0 – 100.127.255.255), or
@@ -90,6 +91,9 @@ function AuthGate({ children }: { children: React.ReactNode }) {
       try {
         const cfg = await getDeviceConfig();
         if (cancelled) return;
+        // Resolve the UI language from the device's STT language, the same
+        // source the Go backend's i18n.Lang() reads from (config.STTLanguage).
+        setLanguage(cfg.stt_language);
         if (!cfg.has_admin_password) {
           setState("setup");
         } else {

@@ -18,8 +18,8 @@ Về build, deploy, cấu hình và pairing, xem [`setup_vi.md`](setup_vi.md).
  └───────────────────┘  notify / write│  ble.go ─► state.go ─► bridge.go       │
                                        │     │                      │  │  │     │
                                        │     ▼                      ▼  ▼  ▼     │
-                                       │  httpserver.go        LeLamp / Lamp    │
-                                       │  :5002 (OpenClaw)     HTTP (LED, eyes, │
+                                       │  httpapi/ (:5002)     LeLamp / Lamp    │
+                                       │  (OpenClaw)           HTTP (LED, eyes, │
                                        │                       TTS, monitor)    │
                                        └───────────────────────────────────────┘
 ```
@@ -45,7 +45,8 @@ Về build, deploy, cấu hình và pairing, xem [`setup_vi.md`](setup_vi.md).
 | `protocol.go` | Tất cả các kiểu trên đường truyền (`Heartbeat`, `TimeSync`, `Event`, `Command`, `Ack`, `PermissionDecision`), bộ parser/salvager, và các builder ack/permission. |
 | `state.go` | `StateMachine` — suy ra một `BuddyState` từ heartbeat, theo dõi prompt đang chờ cùng các bộ đếm cấp/từ chối trọn đời (lifetime), và quản lý các transient state. |
 | `bridge.go` | Ánh xạ mỗi thay đổi trạng thái thành các lời gọi HTTP cụ thể tới LeLamp + Lamp (LED, màn hình, cảm xúc, TTS, sự kiện monitor/sensing). |
-| `httpserver.go` | API `:5002`: `GET /status`, `GET /health`, `POST /approve`, `POST /deny`. |
+| `httpapi/` | Gói delivery cho API `:5002` (clean architecture / đảo ngược phụ thuộc). `server.go` chứa `Server`, registry route duy nhất `routes()`, và các helper phản hồi JSON; `ports.go` khai báo các interface mà handler phụ thuộc (`StatusProvider`, `ApprovalService`, `ActivitySink`, cùng các sentinel error); `status.go` phục vụ `GET /status` + `GET /health`; `claudedesktop.go` phục vụ `POST /claude-desktop/approve` + `/deny` (vòng round-trip cấp quyền bằng giọng nói của Claude Desktop); `claudecode.go` phục vụ `POST /claude-code/notify` + `/usage` (các push của plugin Claude Code). |
+| `status_provider.go` / `approval_service.go` / `activity_sink.go` | Các hiện thực cụ thể của port `httpapi`, mỗi file một vai trò: `StatusReader` (read-adapter → snapshot trạng thái), `ApprovalService` (use case cấp quyền bằng giọng nói: validate id + gửi quyết định quyền qua BLE + cập nhật bộ đếm), `LogActivitySink` (ghi log các push của Claude Code — chỗ mà HAL bridge sẽ thay vào sau này). `main.go` là composition root ráp chúng vào `httpapi.New`. |
 | `agent.go` | BlueZ `org.bluez.Agent1` (DisplayOnly) để LE pairing có thể hoàn tất; ghi passkey ra journal. |
 | `transfer.go` | Bộ nhận folder-push — stream file từ Desktop tới `/opt/claude-desktop-buddy/chars` kèm các bảo vệ chống path-traversal. |
 | `narrator.go` + `i18n.go` | Các thông báo TTS ngắn về hoạt động của Claude, dedupe theo từng turn, được bản địa hóa (EN/VI). |
@@ -97,10 +98,10 @@ Desktop heartbeat carries `prompt`  ─►  state = attention, pending prompt st
    GET /status (skill polls) ◄────────────────────────────────────────────┘
         │  pending_prompt {id, tool, hint}
         ▼
-   user says yes/no  ─►  POST /approve|/deny {id}
+   user says yes/no  ─►  POST /claude-desktop/approve|/deny {id}
         │
         ▼
-   httpserver validates id == pending.id
+   ApprovalService validates id == pending.id
         │
         ▼
    ble.Send(MakePermission(id, "once"|"deny"))  ─►  Desktop applies the decision
@@ -109,8 +110,9 @@ Desktop heartbeat carries `prompt`  ─►  state = attention, pending prompt st
    StateMachine.Approved()/Denied()  ─►  counters++ , stats persisted
 ```
 
-`POST /approve` gửi quyết định `"once"`; `POST /deny` gửi `"deny"`. Cả hai trả về
-`409` nếu không có prompt đang chờ hoặc `id` không khớp với prompt hiện tại.
+`POST /claude-desktop/approve` gửi quyết định `"once"`; `POST /claude-desktop/deny`
+gửi `"deny"`. Cả hai trả về `409` nếu không có prompt đang chờ hoặc `id` không khớp
+với prompt hiện tại.
 
 ## State machine
 

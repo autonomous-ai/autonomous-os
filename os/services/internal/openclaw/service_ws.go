@@ -23,7 +23,7 @@ import (
 
 // StartWS connects to the gateway WebSocket and runs the read loop, calling handler for each event.
 // It runs until ctx is cancelled. Auto-reconnects when disconnected.
-func (s *Service) StartWS(ctx context.Context, handler domain.AgentEventHandler) {
+func (s *OpenclawService) StartWS(ctx context.Context, handler domain.AgentEventHandler) {
 	backoff := 5 * time.Second
 	for {
 		select {
@@ -69,7 +69,7 @@ func (s *Service) StartWS(ctx context.Context, handler domain.AgentEventHandler)
 	}
 }
 
-func (s *Service) runWSConn(ctx context.Context, handler domain.AgentEventHandler) error {
+func (s *OpenclawService) runWSConn(ctx context.Context, handler domain.AgentEventHandler) error {
 	s.wsConnected.Store(false)
 	s.wsConnectedAt.Store(0)
 	defer func() {
@@ -404,7 +404,7 @@ func (s *Service) runWSConn(ctx context.Context, handler domain.AgentEventHandle
 }
 
 // dispatchRPCResponse checks if msg is an RPC response and delivers it to the waiting caller.
-func (s *Service) dispatchRPCResponse(msg []byte) {
+func (s *OpenclawService) dispatchRPCResponse(msg []byte) {
 	var frame struct {
 		Type    string          `json:"type"`
 		ID      string          `json:"id"`
@@ -430,7 +430,7 @@ func (s *Service) dispatchRPCResponse(msg []byte) {
 
 // FetchChatHistory sends a chat.history RPC and returns the raw payload.
 // Best-effort with a 3-second timeout; returns nil on any failure.
-func (s *Service) FetchChatHistory(sessionKey string, limit int) (json.RawMessage, error) {
+func (s *OpenclawService) FetchChatHistory(sessionKey string, limit int) (json.RawMessage, error) {
 	s.wsMu.Lock()
 	conn := s.wsConn
 	s.wsMu.Unlock()
@@ -499,7 +499,7 @@ func (s *Service) FetchChatHistory(sessionKey string, limit int) (json.RawMessag
 	}
 }
 
-func (s *Service) readGatewayToken() (string, error) {
+func (s *OpenclawService) readGatewayToken() (string, error) {
 	path := filepath.Join(s.config.OpenclawConfigDir, "openclaw.json")
 	data, err := os.ReadFile(path)
 	if err != nil {

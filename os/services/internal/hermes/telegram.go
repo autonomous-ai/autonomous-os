@@ -5,20 +5,19 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
 	"go.autonomous.ai/os/domain"
 )
 
-// telegramTargetsFile is the Lumi-owned store of known Telegram chats. Hermes
-// has no plugin/channel layer of its own (unlike OpenClaw which keeps
-// agents/main/sessions/sessions.json), so the receive loop populates this
-// file each time a new chat DMs the bot.
+// telegramTargetsFile is the device-side store of Telegram chats os-server may
+// proactively broadcast to (sensing/guard alerts). Inbound telegram is owned by
+// the hermes gateway (it receives + replies), so this file is os-server's own
+// separate target list, not an inbound mirror.
 //
 // Schema: {"targets":[{"chat_id":"...","type":"private|group"}, ...]}
-const telegramTargetsFile = "/root/.lumi/telegram_targets.json"
+const telegramTargetsFile = "/root/config/telegram_targets.json"
 
 type telegramTargetEntry struct {
 	ChatID string `json:"chat_id"`
@@ -29,20 +28,20 @@ type telegramTargetsFileContent struct {
 	Targets []telegramTargetEntry `json:"targets"`
 }
 
-// targetsFileMu serialises read-modify-write on telegramTargetsFile. Held only
-// across the disk I/O so the receive loop never blocks the broadcast path.
+// targetsFileMu serialises reads on telegramTargetsFile, kept only across the
+// disk I/O so it never blocks the broadcast path.
 var targetsFileMu sync.Mutex
 
-// GetTelegramBotToken returns the bot token from Lumi config. There is no
+// GetTelegramBotToken returns the bot token from the device config. There is no
 // agent-side config to consult under Hermes.
-func (s *Service) GetTelegramBotToken() string {
+func (s *HermesService) GetTelegramBotToken() string {
 	return s.config.TelegramBotToken
 }
 
-// GetTelegramTargets reads the Lumi-owned target store. Returns nil + nil
-// (no error) when the file doesn't exist yet — that's the steady state before
-// any user has messaged the bot.
-func (s *Service) GetTelegramTargets() ([]domain.TelegramTarget, error) {
+// GetTelegramTargets reads the device-side target store. Returns nil + nil
+// (no error) when the file doesn't exist yet — the steady state until a
+// broadcast target list is provisioned.
+func (s *HermesService) GetTelegramTargets() ([]domain.TelegramTarget, error) {
 	targetsFileMu.Lock()
 	data, err := os.ReadFile(telegramTargetsFile)
 	targetsFileMu.Unlock()
@@ -76,50 +75,7 @@ func (s *Service) GetTelegramTargets() ([]domain.TelegramTarget, error) {
 	return out, nil
 }
 
-// upsertTelegramTarget appends chatID to the store if not present. Called by
-// the receive loop (when it lands) so future broadcasts reach this user.
-func upsertTelegramTarget(chatID, chatType string) error {
-	if chatID == "" {
-		return nil
-	}
-	if chatType == "" {
-		if strings.HasPrefix(chatID, "-") {
-			chatType = "group"
-		} else {
-			chatType = "private"
-		}
-	}
-	targetsFileMu.Lock()
-	defer targetsFileMu.Unlock()
-
-	var content telegramTargetsFileContent
-	data, err := os.ReadFile(telegramTargetsFile)
-	if err == nil {
-		_ = json.Unmarshal(data, &content)
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("read telegram_targets.json: %w", err)
-	}
-	for _, t := range content.Targets {
-		if t.ChatID == chatID {
-			return nil
-		}
-	}
-	content.Targets = append(content.Targets, telegramTargetEntry{ChatID: chatID, Type: chatType})
-
-	if err := os.MkdirAll(filepath.Dir(telegramTargetsFile), 0o755); err != nil {
-		return fmt.Errorf("mkdir telegram store: %w", err)
-	}
-	out, err := json.MarshalIndent(content, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal telegram_targets: %w", err)
-	}
-	if err := os.WriteFile(telegramTargetsFile, out, 0o600); err != nil {
-		return fmt.Errorf("write telegram_targets.json: %w", err)
-	}
-	return nil
-}
-
-func (s *Service) Broadcast(msg string, imagePath string) error {
+func (s *HermesService) Broadcast(msg string, imagePath string) error {
 	var sent int
 	var lastErr error
 	for _, ch := range s.channels {
@@ -142,7 +98,7 @@ func (s *Service) Broadcast(msg string, imagePath string) error {
 	return nil
 }
 
-func (s *Service) SendToUser(telegramID string, msg string, imagePath string) error {
+func (s *HermesService) SendToUser(telegramID string, msg string, imagePath string) error {
 	if telegramID == "" {
 		return nil
 	}
@@ -158,7 +114,7 @@ func (s *Service) SendToUser(telegramID string, msg string, imagePath string) er
 	return nil
 }
 
-func (s *Service) SendToUserWithMedia(telegramID string, msg string, imagePaths []string) error {
+func (s *HermesService) SendToUserWithMedia(telegramID string, msg string, imagePaths []string) error {
 	if telegramID == "" {
 		return nil
 	}

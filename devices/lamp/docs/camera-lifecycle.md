@@ -206,6 +206,29 @@ Zoom state lives on the device instance (`LocalVideoCaptureDevice.zoom`). Not pe
 
 Monitor → Camera tab → Live Stream card has a Zoom slider (1.0×–5.0×, step 0.1, debounced 200 ms POST) with a Reset button. Slider value shows amber when zoomed to warn about narrowed FOV.
 
+## Exposure & Frame Rate
+
+The USB camera's auto-exposure stretches integration time in low light (~60ms), capping delivery at **~16fps at every resolution** — this is the exposure clock, not USB bandwidth (720p and 4K both cap at 16fps). HAL therefore defaults to **manual** exposure (with baked-in `exposure=500`/`gain=255`) so the frame rate isn't throttled.
+
+### Config (env, read by `config.py`)
+
+| Var | Default | Meaning |
+|---|---|---|
+| `HAL_CAMERA_AUTO_EXPOSURE` | `manual` | `manual` pins exposure using the values below (default). `auto` restores the camera's adaptive auto-exposure (brighter/adaptive but throttles fps in low light). |
+| `HAL_CAMERA_EXPOSURE` | `500` | Manual exposure time, V4L2 `exposure_absolute` ×100µs: `200`=20ms (30fps), `330`=33ms (≈30fps ceiling), `500`=50ms (≈20fps). |
+| `HAL_CAMERA_GAIN` | `255` | Sensor gain (camera-specific, e.g. 0–255). Brightens without costing fps, but adds noise. |
+| `HAL_CAMERA_BRIGHTNESS` | _(unset)_ | Brightness offset (camera-specific, e.g. -64..64). Digital lift. |
+
+The defaults (`manual` / 500 / 255) give a bright image at ~20fps in a dim room and apply even with no `.env` entries. In a bright room a fixed 50ms exposure can overexpose — set `HAL_CAMERA_AUTO_EXPOSURE=auto` per device to fall back to adaptive auto-exposure.
+
+### How it works
+
+`_apply_camera_controls()` (`devices/video_capture_device.py`) runs after the resolution is set on open **and on every device reopen** — a fresh open resets the camera to defaults, which would otherwise silently drop manual exposure and re-introduce the FPS throttle. It maps to V4L2/UVC controls via OpenCV: `CAP_PROP_AUTO_EXPOSURE` (1=manual, 3=auto), `CAP_PROP_EXPOSURE`, `CAP_PROP_GAIN`, `CAP_PROP_BRIGHTNESS`.
+
+### Trade-off
+
+Frame rate vs brightness is a hard physical trade-off in a dark room: the max exposure that still holds 30fps is ~33ms (`HAL_CAMERA_EXPOSURE=330`); a brighter image needs a longer exposure (fewer fps) or more gain (noisier). The stream endpoint is separately capped at `HAL_CAMERA_STREAM_FPS` (default 10), so the monitor's live view does not reflect the capture rate.
+
 ## Edge Cases
 
 - **Guard mode + camera off**: ✅ Done — guard SKILL.md step 1: `[HW:/camera/enable:{}]` before enabling guard. Overrides manual disable.

@@ -71,7 +71,7 @@ type streamResult struct {
 // The HTTP request is built with NO client-side timeout (the client's
 // Timeout is 0); ctx is the only cancellation handle. Long agent turns are
 // expected (minutes is normal), so a fixed timeout would cut them short.
-func (s *Service) postStream(ctx context.Context, deviceRunID string, body streamRequest, dispatch func(domain.WSEvent)) (streamResult, error) {
+func (s *HermesService) postStream(ctx context.Context, deviceRunID string, body streamRequest, dispatch func(domain.WSEvent)) (streamResult, error) {
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
 		return streamResult{}, fmt.Errorf("marshal request: %w", err)
@@ -111,7 +111,7 @@ func (s *Service) postStream(ctx context.Context, deviceRunID string, body strea
 // readSSE consumes the SSE byte stream line-by-line into (event, data) pairs
 // and forwards each to translateAndDispatch. Buffer is sized for the largest
 // tool output a single function_call_output frame might carry (8MB).
-func (s *Service) readSSE(ctx context.Context, deviceRunID string, body io.Reader, dispatch func(domain.WSEvent)) (streamResult, error) {
+func (s *HermesService) readSSE(ctx context.Context, deviceRunID string, body io.Reader, dispatch func(domain.WSEvent)) (streamResult, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 1<<20), 8<<20)
 

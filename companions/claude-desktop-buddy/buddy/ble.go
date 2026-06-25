@@ -1,4 +1,4 @@
-package main
+package buddy
 
 import (
 	"bytes"

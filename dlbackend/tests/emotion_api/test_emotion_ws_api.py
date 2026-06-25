@@ -249,6 +249,9 @@ class TestEmotionPerformance:
     @pytest.mark.asyncio
     async def test_happy_face_detected(self, ws, happy_frame_b64: str) -> None:
         """Send a known happy face image and assert happiness is detected."""
+        await ws.send(json.dumps({"type": "config", "task": "emotion", "threshold": 0.5}))
+        await ws.recv()
+
         await ws.send(
             json.dumps({"type": "frame", "task": "emotion", "frame_b64": happy_frame_b64})
         )
@@ -263,6 +266,9 @@ class TestEmotionPerformance:
     @pytest.mark.asyncio
     async def test_sad_face_detected(self, ws, sad_frame_b64: str) -> None:
         """Send a known sad face image and assert sadness is detected."""
+        await ws.send(json.dumps({"type": "config", "task": "emotion", "threshold": 0.5}))
+        await ws.recv()
+
         await ws.send(
             json.dumps({"type": "frame", "task": "emotion", "frame_b64": sad_frame_b64})
         )

@@ -1,11 +1,9 @@
 package system
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -13,10 +11,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.autonomous.ai/os/domain"
+	"go.autonomous.ai/os/lib/osreset"
 	"go.autonomous.ai/os/server/serializers"
 )
-
-const configFilePath = "/root/config/config.json"
 
 var deviceWipePaths = []string{
 	"/root/config/config.json",                      // os-server config (API keys, channel tokens, MQTT creds) — bootstrap.json in the same dir is intentionally kept
@@ -41,30 +39,6 @@ var (
 	factoryResetLastFire time.Time
 )
 
-// FactoryResetOptions captures caller-supplied params.
-// Backend overrides the auto-detected agent backend (read from config.json
-// agent_runtime). Accepts "openclaw" | "hermes" | "" (auto). Unknown values
-// fall back to openclaw — matches the runtime selector in agent/factory.go.
-type FactoryResetOptions struct {
-	Backend string `json:"backend,omitempty"`
-}
-
-// readAgentRuntime returns the agent_runtime field from /root/config/config.json,
-// or "" if the file is missing/unreadable/malformed.
-func readAgentRuntime() string {
-	data, err := os.ReadFile(configFilePath)
-	if err != nil {
-		return ""
-	}
-	var c struct {
-		AgentRuntime string `json:"agent_runtime"`
-	}
-	if err := json.Unmarshal(data, &c); err != nil {
-		return ""
-	}
-	return strings.ToLower(strings.TrimSpace(c.AgentRuntime))
-}
-
 // runFactoryReset is the trigger-agnostic worker. Returns immediately after
 // spawning the wipe + reboot goroutine; callers (HTTP / MQTT / GPIO) decide
 // how to surface acceptance to the user.
@@ -72,7 +46,7 @@ func readAgentRuntime() string {
 // Returns (started, errStatus, errMessage). errStatus mirrors HTTP semantics
 // so HTTP callers can use it directly; non-HTTP callers (MQTT/GPIO) just
 // check started=false and log errMessage.
-func runFactoryReset(opts FactoryResetOptions) (started bool, errStatus int, errMessage string) {
+func runFactoryReset(gw domain.AgentGateway) (started bool, errStatus int, errMessage string) {
 	factoryResetMu.Lock()
 	if factoryResetInFlight {
 		factoryResetMu.Unlock()
@@ -89,22 +63,13 @@ func runFactoryReset(opts FactoryResetOptions) (started bool, errStatus int, err
 	factoryResetLastFire = time.Now()
 	factoryResetMu.Unlock()
 
-	// Detect active backend BEFORE we wipe config.json. Explicit opts.Backend (from HTTP body) wins over auto-detect; both fall back to openclaw.
-	backend := strings.ToLower(strings.TrimSpace(opts.Backend))
-	source := "request"
-	if backend == "" {
-		backend = readAgentRuntime()
-		source = "config"
-	}
-	if backend != "hermes" && backend != "openclaw" {
-		log.Printf("[factory-reset] backend resolution: source=%s value=%q → falling back to openclaw", source, backend)
-		backend = "openclaw"
-	} else {
-		log.Printf("[factory-reset] backend resolution: source=%s value=%q", source, backend)
-	}
-
-	log.Printf("[factory-reset] accepted — backend=%s → reset → wipe %d device paths → reboot",
-		backend, len(deviceWipePaths))
+	// The runtime to reset is whatever backend is currently running: factory reset
+	// calls gw.ResetAgent() on the active gateway, so there is no per-backend switch
+	// to keep in sync (adding a backend = implement ResetAgent, nothing here). A
+	// runtime whose state is owned externally (e.g. PicoClaw) ships a no-op
+	// ResetAgent, so it is correctly left untouched.
+	log.Printf("[factory-reset] accepted — resetting active agent → wipe %d device paths → reboot",
+		len(deviceWipePaths))
 
 	go func() {
 		defer func() {
@@ -113,11 +78,8 @@ func runFactoryReset(opts FactoryResetOptions) (started bool, errStatus int, err
 			factoryResetMu.Unlock()
 		}()
 
-		switch backend {
-		case "hermes":
-			wipeHermesState()
-		default:
-			wipeOpenclawState()
+		if err := gw.ResetAgent(); err != nil {
+			log.Printf("[factory-reset] agent reset error: %v (continuing with device wipe)", err)
 		}
 
 		wipeDeviceState()
@@ -136,22 +98,8 @@ func runFactoryReset(opts FactoryResetOptions) (started bool, errStatus int, err
 func wipeDeviceState() {
 	log.Printf("[factory-reset] wiping %d device paths", len(deviceWipePaths))
 	for _, p := range deviceWipePaths {
-		wipePath("[factory-reset]", p)
+		osreset.WipePath("[factory-reset]", p)
 	}
-}
-
-func wipePath(prefix, p string) {
-	if _, err := os.Stat(p); os.IsNotExist(err) {
-		return
-	}
-	if err := os.RemoveAll(p); err != nil {
-		if os.IsNotExist(err) {
-			return
-		}
-		log.Printf("%s wipe %s: %v (non-fatal)", prefix, p, err)
-		return
-	}
-	log.Printf("%s wiped %s", prefix, p)
 }
 
 // FactoryReset performs a soft factory reset: wipe device state (config / API
@@ -162,9 +110,8 @@ func wipePath(prefix, p string) {
 //
 // POST /api/system/factory-reset
 //
-// Body (optional): {"backend": "openclaw" | "hermes"} to override the
-// auto-detected backend. Empty body = auto-detect from config.json
-// agent_runtime field.
+// No body. The currently-active agent backend is reset via gw.ResetAgent() (a
+// backend whose state is owned externally ships a no-op ResetAgent).
 //
 // For per-component binary refresh use POST /api/system/software-update/:target.
 //
@@ -172,7 +119,7 @@ func wipePath(prefix, p string) {
 // goroutine reboots the device, so the response must be sent before reboot
 // fires. 409 Conflict if another reset is already running; 429 Too Many
 // Requests inside the cooldown window.
-func FactoryReset(c *gin.Context) {
+func FactoryReset(c *gin.Context, gw domain.AgentGateway) {
 	// Audit who triggered this destructive action. Logged BEFORE runFactoryReset
 	// so even a rejected attempt (cooldown / single-flight / failed auth) leaves a
 	// trail. RemoteAddr is the TCP peer (always 127.0.0.1 for nginx-proxied
@@ -199,10 +146,7 @@ func FactoryReset(c *gin.Context) {
 		cookieErr == nil,
 	)
 
-	var opts FactoryResetOptions
-	_ = c.ShouldBindJSON(&opts) // body is optional; empty body is fine
-
-	started, status, msg := runFactoryReset(opts)
+	started, status, msg := runFactoryReset(gw)
 	if !started {
 		if status == http.StatusTooManyRequests {
 			factoryResetMu.Lock()
@@ -226,7 +170,7 @@ func FactoryReset(c *gin.Context) {
 // TriggerFactoryReset is the entry point for non-HTTP triggers (MQTT command
 // handler, GPIO long-press service). Returns whether the trigger was accepted
 // (single-flight + cooldown gates apply identically). Caller logs the outcome.
-func TriggerFactoryReset(opts FactoryResetOptions) (started bool, reason string) {
-	started, _, msg := runFactoryReset(opts)
+func TriggerFactoryReset(gw domain.AgentGateway) (started bool, reason string) {
+	started, _, msg := runFactoryReset(gw)
 	return started, msg
 }

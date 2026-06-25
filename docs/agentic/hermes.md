@@ -133,13 +133,38 @@ Identical contract to OpenClaw: while a turn is active (`IsBusy`), passive sensi
 events are dropped or buffered (`QueuePendingEvent`, last-write-wins per type) and
 replayed when idle, so ambient signals never interrupt an in-flight command.
 
-## 8. Telegram fan-out
+## 8. Channels (Telegram/Slack/Discord) — inbound visibility + fan-out
 
-`telegram.go` / `telegram_sender.go` route agent replies back to the originating
-Telegram chat. `markTelegramOrigin(runID, chatID)` records where a turn came from
-and `consumeTelegramOrigin(runID)` reads it back at reply time, so a Telegram-
-initiated turn answers in the right chat while still flowing through the shared
-pipeline.
+The Hermes gateway **owns all messaging-channel I/O**: it polls Telegram (and
+Slack/Discord/WhatsApp) itself with the tokens `presync` syncs into
+`~/.hermes/.env`, runs the turn, and replies to the chat directly. os-server is
+not on that path, so — unlike OpenClaw, which pushes `session.message` WS events —
+a channel turn under Hermes would never show up in Flow Monitor. The gateway has
+no cross-platform turn broadcast to subscribe to either; the only seam is its
+**hook** system.
+
+So os-server installs a gateway hook, `os-server-observer`
+(`internal/hermes/hooks/os-server-observer/{HOOK.yaml,handler.py}`, materialized
+to `~/.hermes/hooks/` by `ensureObserverHook` on every boot — see §10). It fires
+on `agent:start` / `agent:end` for **every** platform and POSTs the turn to the
+loopback endpoint `POST /api/agent/channel-turn` (`handler_channel_turn.go`),
+which emits the same flow events a normal turn does:
+
+- `agent:start` → `chat_input` (source `channel`, with `sender` + `channel`) plus
+  `lifecycle_start`.
+- `agent:end` → `lifecycle_end` plus `tts_suppressed` carrying the reply text
+  (the reply went to the channel, not the device speaker — the same node the
+  OpenClaw channel path uses, so the web turn renders it), or `no_reply` for an
+  empty / `NO_REPLY` turn.
+
+Both events share one `run_id`, correlated by `session_id`. The handler is
+channel-agnostic (keyed on the `platform` field) and **skips** `api_server` / `cli`
+turns — those are os-server's own `/v1/responses` calls, already logged by
+`sendChat`; emitting them again would double the device-originated turns.
+
+Outbound (proactive) sends — `Broadcast` / `SendToUser` in `telegram.go` /
+`telegram_sender.go` — go straight to the Telegram Bot API for device-initiated
+alerts, using the bot token and the `telegramTargetsFile` chat list.
 
 ## 9. Voice
 
@@ -197,8 +222,34 @@ by the **presync hook** (`internal/hermes/presync.sh`), **not** by `install.sh`.
 every switch** (`materializePresync`, registered via `runtimereg.RegisterPresync`),
 so a plain os-server OTA refreshes it on disk — unlike a copy written once by
 `install.sh`, which `switch-runtime` skips on a later switch (the *activation gap*;
-see `docs/agentic/adding-agent-runtime.md` §3). The hook runs right before the gateway
-starts (and inline during install) and does three things, in order:
+see `docs/agentic/adding-agent-runtime.md` §3).
+
+**The hook also runs on every os-server boot AND at initial setup**, not only on a
+switch — both via `EnsureOnboarding` (`internal/hermes/onboarding.go`), which
+executes the embedded `PresyncScript` and restarts `hermes-gateway` only when
+`config.yaml` actually changed (content-hash guarded — no restart loop):
+
+- **Boot:** the startup sequence calls `EnsureOnboarding`. Closes the gap where a
+  device that **boots straight into Hermes** (`DEVICE.md gateway.default: hermes`,
+  or imaged with it) without ever switching from OpenClaw, or whose `llm_*` changed
+  while Hermes was already active, would keep a stale `config.yaml` that never
+  picked up `config.json`'s real `llm_api_key`/`base_url`.
+- **Setup:** `SetupAgent` (also in `onboarding.go`) just calls `EnsureOnboarding`.
+  This works because **Hermes provisions from `config.json`, not from the
+  `SetupRequest`** (unlike OpenClaw, whose `SetupAgent` writes `openclaw.json`
+  straight from the request — hence OpenClaw needs *two* distinct functions, Hermes
+  *one*). The device setup flow saves `config.json` **before** calling `SetupAgent`
+  (`internal/device/service.go` — the call was deliberately ordered after
+  `config.Save()`), so presync materializes `config.yaml`/`.env` from the
+  freshly-entered keys immediately instead of waiting for the next boot.
+
+This gives Hermes the same config self-heal OpenClaw has (`ensureAgentDefaults` +
+`StartModelSync`), reusing the one presync script instead of duplicating the sync
+in Go. (A live `llm_*` rotation via `PUT /api/device/config` without a reboot still
+waits for the next boot — a config-change trigger is a possible follow-up.)
+
+The hook runs right before the gateway starts (on switch and boot, and inline
+during install) and does three things, in order:
 
 1. **Restores skills** — when `~/.hermes/skills/openclaw-imports` is empty (first
    install OR after a factory reset wiped it), runs `hermes claw migrate` (it
@@ -269,7 +320,9 @@ Switching openclaw→hermes runs a Go persona migration
 - **SOUL.md** (rebranded) — and, because Hermes has no separate IDENTITY.md slot,
   inlines the owner's filled IDENTITY fields as a `## Your identity card` block so
   the custom name (e.g. "Ngân") survives. `UpdateIdentityName` (device rename) edits
-  that block.
+  that block; `WatchIdentity` (`internal/hermes/identity.go`) polls SOUL.md and, on
+  a name change, pushes the new wake words to HAL + `i18n.SetDeviceName` — mirroring
+  OpenClaw's `WatchIdentity`, just watching SOUL.md instead of IDENTITY.md.
 - **MEMORY.md + daily `memory/*.md` + KNOWLEDGE.md** → merged into
   `memories/MEMORY.md`. Hermes loads only `MEMORY.md` + `USER.md` **by name** (no
   `memories/*.md` glob), so KNOWLEDGE is folded in rather than kept as a separate,

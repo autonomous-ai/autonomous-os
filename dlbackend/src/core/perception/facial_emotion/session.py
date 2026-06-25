@@ -1,18 +1,17 @@
 """Per-connection emotion detection session.
 
-Handles face detection (via YuNet), passes crops to the EmotionRecognizer,
-filters results by threshold, and manages rate limiting.
+Uses InputBatchers for face detection and emotion classification.
+Filters results by threshold and manages rate limiting.
 """
 
-import asyncio
 import time
-from typing import Any
+from typing import Any, cast
 
 import cv2.typing as cv2t
 import numpy as np
 from typing_extensions import override
 
-from core.models.face import FaceCrop
+from core.models.face import FaceCrop, RawFaceDetection
 from core.models.facial_emotion import (
     Emotion,
     EmotionDetection,
@@ -20,6 +19,7 @@ from core.models.facial_emotion import (
     RawEmotionDetection,
 )
 from core.perception.base import PerceptionSessionBase
+from core.perception.base.batching import InputBatcher
 from core.perception.face.predictors.base import FaceDetector
 from core.perception.facial_emotion.predictors.base import EmotionRecognizer
 from core.types import Omit, omit
@@ -39,14 +39,14 @@ class EmotionPerceptionSession(
 
     def __init__(
         self,
-        emotion_recognizer: EmotionRecognizer,
-        face_detector: FaceDetector,
+        emotion_batcher: InputBatcher[cv2t.MatLike, RawEmotionDetection],
+        face_batcher: InputBatcher[cv2t.MatLike, RawFaceDetection],
         config: EmotionPerceptionSessionConfig | None = None,
     ) -> None:
         config = get_or_default(config, EmotionPerceptionSessionConfig())
         super().__init__(config)
-        self._emotion_recognizer: EmotionRecognizer = emotion_recognizer
-        self._face_detector: FaceDetector = face_detector
+        self._emotion_batcher: InputBatcher[cv2t.MatLike, RawEmotionDetection] = emotion_batcher
+        self._face_batcher: InputBatcher[cv2t.MatLike, RawFaceDetection] = face_batcher
         self._running: bool = False
 
     @override
@@ -54,13 +54,6 @@ class EmotionPerceptionSession(
         if self._running:
             self._logger.info("Already running")
             return
-
-        if not self._emotion_recognizer.is_ready():
-            await asyncio.to_thread(self._emotion_recognizer.start)
-
-        if not self._face_detector.is_ready():
-            await asyncio.to_thread(self._face_detector.start)
-
         self._running = True
 
     @override
@@ -70,7 +63,9 @@ class EmotionPerceptionSession(
     @override
     def is_ready(self) -> bool:
         return (
-            self._running and self._emotion_recognizer.is_ready() and self._face_detector.is_ready()
+            self._running
+            and self._emotion_batcher.is_ready()
+            and self._face_batcher.is_ready()
         )
 
     @override
@@ -80,24 +75,27 @@ class EmotionPerceptionSession(
         if cur_ts - self._last_update_ts < self._config.frame_interval:
             return self._last_prediction
 
-        # Detect faces and extract crops
-        face_crops_per_frame: list[list[FaceCrop]] = await asyncio.to_thread(
-            self._face_detector.extract_crops, [input]
-        )
-        face_crops: list[FaceCrop] = face_crops_per_frame[0] if face_crops_per_frame else []
+        # Detect faces via batcher
+        face_futures = await self._face_batcher.submit([input])
+        face_raw: RawFaceDetection = await face_futures[0]
+
+        face_crops: list[FaceCrop] = FaceDetector.extract_crops_from_raw(
+            [input], [face_raw]
+        )[0]
 
         if not face_crops:
-            self._last_prediction: EmotionDetection = EmotionDetection(emotions=[])
-            self._last_update_ts: float = cur_ts
+            self._last_prediction = EmotionDetection(emotions=[])
+            self._last_update_ts = cur_ts
             return self._last_prediction
 
-        # Classify emotions on each face crop
+        # Classify emotions on each face crop via batcher
         crops: list[cv2t.MatLike] = [fc.crop for fc in face_crops]
-        raw_detections: list[RawEmotionDetection] = await asyncio.to_thread(
-            self._emotion_recognizer.predict, crops
-        )
+        emotion_futures = await self._emotion_batcher.submit(crops)
+        raw_detections: list[RawEmotionDetection] = [await f for f in emotion_futures]
 
-        # Combine emotion_recognizer output with face detector info, filter by threshold
+        recognizer = cast(EmotionRecognizer, self._emotion_batcher.predictor)
+
+        # Combine output with face detector info, filter by threshold
         emotions: list[Emotion] = []
         for face_crop, raw in zip(face_crops, raw_detections):
             emotion_idx: int = int(np.argmax(raw.expression_probs))
@@ -108,7 +106,7 @@ class EmotionPerceptionSession(
 
             emotions.append(
                 Emotion(
-                    emotion=self._emotion_recognizer.class_names[emotion_idx],
+                    emotion=recognizer.class_names[emotion_idx],
                     confidence=confidence,
                     face_confidence=face_crop.confidence,
                     bbox=face_crop.bbox_xyxy,

@@ -1,4 +1,4 @@
-package system
+package openclaw
 
 import (
 	"log"
@@ -6,7 +6,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"go.autonomous.ai/os/lib/osreset"
 )
+
+// ResetAgent performs the OpenClaw factory-reset wipe. The factory-reset flow
+// (server/system/factoryreset.go) resolves the active gateway and calls this on
+// it — so adding a backend means implementing ResetAgent, not editing a switch.
+func (s *OpenclawService) ResetAgent() error {
+	wipeOpenclawState()
+	return nil
+}
 
 // openclawStatePaths are openclaw runtime state dirs wiped on factory reset.
 // openclaw reset --scope config+creds+sessions removes openclaw.json +
@@ -87,6 +97,6 @@ func wipeOpenclawState() {
 	}
 	log.Printf("[factory-reset/openclaw] step 3/3 — wiping %d openclaw state paths", len(openclawStatePaths))
 	for _, p := range openclawStatePaths {
-		wipePath("[factory-reset/openclaw]", p)
+		osreset.WipePath("[factory-reset/openclaw]", p)
 	}
 }

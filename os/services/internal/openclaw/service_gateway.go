@@ -28,7 +28,7 @@ func generateGatewayToken() (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
-func (s *Service) onboardOpenclaw() error {
+func (s *OpenclawService) onboardOpenclaw() error {
 	// openclaw default home is ~/.openclaw; OpenclawConfigDir must match this path.
 	// No env overrides needed — let openclaw use its standard paths.
 	cmd := exec.Command("bash", "-c", "openclaw onboard --non-interactive --accept-risk")

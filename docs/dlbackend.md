@@ -46,7 +46,8 @@ For single-node dev you can hit `dlserver:8001` directly with encryption off.
 Perception subsystems exposed to devices: action recognition, facial emotion,
 speech emotion (SER), pose estimation (with RULA ergonomics), object detection and
 speaker embedding. Face and person detection run internally to feed those
-pipelines. Model choices and outputs:
+pipelines. Requests from concurrent sessions are batched before GPU dispatch —
+tune `BATCH_SIZE` and `BATCH_TIMEOUT` per model. Model choices and outputs:
 [`dlbackend/docs/perceptions.md`](../dlbackend/docs/perceptions.md).
 
 ## Using it from a device

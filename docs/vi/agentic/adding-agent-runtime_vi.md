@@ -263,8 +263,14 @@ parity. Chỉ làm khi xuất hiện nguồn turn như vậy.
 
 ## 7. Factory reset
 
-- Thêm wipe của backend ở `server/system/reset_<name>.go` (`wipe<Name>State`) và
-  `case` trong `factoryreset.go`.
+- Implement wipe của backend **trong `ResetAgent()`** (`internal/<name>/reset.go`).
+  `server/system/factoryreset.go` resolve **gateway đang active** rồi gọi
+  `gw.ResetAgent()` — **không có `switch` per-backend** để đồng bộ (thêm backend =
+  implement `ResetAgent`, không đụng `server/system`). Backend mà state do bên
+  ngoài sở hữu (PicoClaw) ship **`ResetAgent` no-op** → để yên đúng (switch cũ
+  default PicoClaw về wipe OpenClaw — latent bug, refactor này xoá). Primitive dùng
+  chung duy nhất `osreset.WipePath` nằm ở `lib/osreset` để backend dùng được mà
+  không phải import `server/system`.
 - **Wipe `/root/config/agent_state.json` khoá-bước với `config.json`** — chúng là
   một cặp (runtime hiện tại + lịch sử switch). Để lại `agent_state.json` trong khi
   `config.json` reset làm `prev` cũ lệch với `current` bị reset → kích **migration
@@ -305,7 +311,8 @@ Dùng metadata nền tảng runtime-agnostic trong `internal/skills`:
 - [ ] Hooks: native-backend hoặc OS-side — đã quyết & ghi (không thiếu âm thầm).
       Nếu reimplement OS-side bằng Go (không liên kết compile-time với hook TS),
       thêm comment chéo trong cả hai file để sửa cái này cảnh báo cái kia.
-- [ ] `reset_<name>.go` + `factoryreset.go` case; **`agent_state.json` wipe cùng
+- [ ] `ResetAgent()` trong `internal/<name>/reset.go` (factory-reset gọi
+      `gw.ResetAgent()` trên gateway active — không có switch ở `factoryreset.go`); **`agent_state.json` wipe cùng
       `config.json`**.
 - [ ] Gate capability qua `skills.Supported` / `SupportedHooks`.
 - [ ] Notify agent khi skill đổi qua `SendSystemChatMessage`.

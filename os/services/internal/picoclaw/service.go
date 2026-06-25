@@ -32,8 +32,8 @@ import (
 	"go.autonomous.ai/os/server/config"
 )
 
-// Compile-time check: *Service implements domain.AgentGateway.
-var _ domain.AgentGateway = (*Service)(nil)
+// Compile-time check: *PicoclawService implements domain.AgentGateway.
+var _ domain.AgentGateway = (*PicoclawService)(nil)
 
 // reSnapshotPath / rePoseBucketMarker / rePoseWorstMarker mirror the openclaw
 // regexes so the drain pipeline strips the same markers before send.
@@ -66,8 +66,8 @@ func extractPoseBucketMarkers(message string) (string, []string) {
 	return bucketID, worst
 }
 
-// Service is the PicoClaw backend implementation of domain.AgentGateway.
-type Service struct {
+// PicoclawService is the PicoClaw backend implementation of domain.AgentGateway.
+type PicoclawService struct {
 	config     *config.Config
 	monitorBus *monitor.Bus
 	statusLED  *statusled.Service
@@ -147,8 +147,8 @@ type poseBucketInfo struct {
 
 // ProvideService constructs the PicoClaw service. Wired via internal/agent/factory.go
 // when config.AgentRuntime == "picoclaw".
-func ProvideService(cfg *config.Config, bus *monitor.Bus, sled *statusled.Service) *Service {
-	s := &Service{
+func ProvideService(cfg *config.Config, bus *monitor.Bus, sled *statusled.Service) *PicoclawService {
+	s := &PicoclawService{
 		config:         cfg,
 		monitorBus:     bus,
 		statusLED:      sled,
@@ -165,26 +165,26 @@ func ProvideService(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 }
 
 // Name returns the display name surfaced via /api/openclaw/status.
-func (s *Service) Name() string { return "PicoClaw" }
+func (s *PicoclawService) Name() string { return "PicoClaw" }
 
 // Version satisfies domain.AgentGateway.Version(). PicoClaw exposes no version
 // over its WebSocket protocol and ships no guaranteed `--version` CLI, so the
 // running backend version is undetected — return "" (the interface allows this).
-func (s *Service) Version() string { return "0.2.9" }
+func (s *PicoclawService) Version() string { return "0.2.9" }
 
 // IsReady reports whether the persistent WebSocket is currently connected.
-func (s *Service) IsReady() bool { return s.wsConnected.Load() }
+func (s *PicoclawService) IsReady() bool { return s.wsConnected.Load() }
 
 // ConnectedAt returns the unix-seconds timestamp when the socket last connected.
-func (s *Service) ConnectedAt() int64 { return s.wsConnectedAt.Load() }
+func (s *PicoclawService) ConnectedAt() int64 { return s.wsConnectedAt.Load() }
 
 // AgentUptime — PicoClaw does not report process uptime over the wire, so we
 // have no value independent of the local WS reconnect cycle. Returns 0 (unknown).
-func (s *Service) AgentUptime() int64 { return 0 }
+func (s *PicoclawService) AgentUptime() int64 { return 0 }
 
-// markOutboundChat / IsRecentOutboundChat mirror openclaw.Service. Used by the
-// session.message handler to skip echoes of Lumi-injected user messages.
-func (s *Service) markOutboundChat(text string) {
+// markOutboundChat / IsRecentOutboundChat mirror openclaw.PicoclawService. Used by the
+// session.message handler to skip echoes of Device-injected user messages.
+func (s *PicoclawService) markOutboundChat(text string) {
 	if text == "" {
 		return
 	}
@@ -205,8 +205,8 @@ func (s *Service) markOutboundChat(text string) {
 	s.recentOutboundTexts = pruned
 }
 
-// IsRecentOutboundChat reports whether Lumi sent this text recently.
-func (s *Service) IsRecentOutboundChat(text string) bool {
+// IsRecentOutboundChat reports whether Device sent this text recently.
+func (s *PicoclawService) IsRecentOutboundChat(text string) bool {
 	if text == "" {
 		return false
 	}

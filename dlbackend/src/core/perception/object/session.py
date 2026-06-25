@@ -1,6 +1,5 @@
 """Per-connection object detection session."""
 
-import asyncio
 import time
 from typing import Any
 
@@ -14,7 +13,7 @@ from core.models.object import (
     RawObjectDetection,
 )
 from core.perception.base import PerceptionSessionBase
-from core.perception.object.predictors.base import ObjectDetector
+from core.perception.base.batching import InputBatcher
 from core.types import Omit, omit
 from core.utils.common import get_or_default
 
@@ -30,13 +29,13 @@ class ObjectPerceptionSession(
 
     def __init__(
         self,
-        object_detector: ObjectDetector,
+        batcher: InputBatcher[cv2t.MatLike, RawObjectDetection],
         config: ObjectPerceptionSessionConfig | None = None,
     ) -> None:
         config = get_or_default(config, ObjectPerceptionSessionConfig())
         super().__init__(config)
 
-        self._object_detector: ObjectDetector = object_detector
+        self._batcher: InputBatcher[cv2t.MatLike, RawObjectDetection] = batcher
         self._running: bool = False
 
     @override
@@ -52,9 +51,7 @@ class ObjectPerceptionSession(
 
     @override
     def is_ready(self) -> bool:
-        if not self._object_detector.is_ready():
-            return False
-        return self._running
+        return self._running and self._batcher.is_ready()
 
     @override
     async def update(self, input: cv2t.MatLike) -> ObjectDetection | None:
@@ -68,12 +65,14 @@ class ObjectPerceptionSession(
 
         H, W = input.shape[:2]
 
-        raw_results: list[RawObjectDetection] = await asyncio.to_thread(
-            self._object_detector.predict, [input], classes=self._config.classes,
-        )
-        raw: RawObjectDetection = raw_results[0]
+        kwargs: dict[str, Any] = {}
+        if self._config.classes is not None:
+            kwargs["classes"] = self._config.classes
 
-        # Filter by threshold, rescale [0,1] → pixel xywh
+        futures = await self._batcher.submit([input], **kwargs)
+        raw: RawObjectDetection = await futures[0]
+
+        # Filter by threshold, rescale [0,1] -> pixel xywh
         detections: list[ObjectDetectionItem] = []
         for i in range(len(raw.class_names)):
             if raw.confidence[i] >= self._config.threshold:

@@ -81,7 +81,8 @@ class ONNXObjectDetector(ObjectDetector, ABC):
         try:
             sz = self.WARMUP_IMGSZ
             dummy = np.zeros((sz, sz, 3), dtype=np.uint8)
-            preprocessed = self.preprocess([dummy])
+            batch = [dummy] * self._batch_size
+            preprocessed = self.preprocess(batch)
             img_batch = np.stack(preprocessed, axis=0)
             classes = self._class_names[:1] or ["dummy"]
             return self._build_onnx_inputs(img_batch, classes)

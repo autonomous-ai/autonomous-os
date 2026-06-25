@@ -131,12 +131,36 @@ Hợp đồng giống hệt OpenClaw: khi một lượt đang active (`IsBusy`),
 event thụ động bị drop hoặc buffer (`QueuePendingEvent`, last-write-wins theo
 loại) và replay khi rảnh, để tín hiệu ambient không cắt ngang lệnh đang chạy.
 
-## 8. Telegram fan-out
+## 8. Channel (Telegram/Slack/Discord) — hiển thị inbound + fan-out
 
-`telegram.go` / `telegram_sender.go` định tuyến phản hồi của agent về đúng chat
-Telegram gốc. `markTelegramOrigin(runID, chatID)` ghi lượt đến từ đâu, còn
-`consumeTelegramOrigin(runID)` đọc lại lúc trả lời, nên một lượt khởi từ Telegram
-trả lời đúng chat mà vẫn chảy qua pipeline chung.
+hermes gateway **sở hữu toàn bộ I/O của messaging channel**: nó tự poll Telegram
+(và Slack/Discord/WhatsApp) bằng token mà `presync` sync vào `~/.hermes/.env`,
+chạy turn, rồi reply thẳng về chat. os-server không nằm trên đường này, nên — khác
+OpenClaw (đẩy WS event `session.message`) — một lượt channel dưới Hermes sẽ KHÔNG
+hiện trong Flow Monitor. Gateway cũng không có broadcast turn cross-platform để
+subscribe; seam duy nhất là hệ thống **hook** của nó.
+
+Vì vậy os-server cài một hook cho gateway, `os-server-observer`
+(`internal/hermes/hooks/os-server-observer/{HOOK.yaml,handler.py}`, được
+`ensureObserverHook` materialize vào `~/.hermes/hooks/` mỗi lần boot — xem §10).
+Hook fire ở `agent:start` / `agent:end` cho **mọi** platform và POST lượt đó tới
+endpoint loopback `POST /api/agent/channel-turn` (`handler_channel_turn.go`),
+nơi emit đúng các flow event như một turn bình thường:
+
+- `agent:start` → `chat_input` (source `channel`, kèm `sender` + `channel`) cùng
+  `lifecycle_start`.
+- `agent:end` → `lifecycle_end` cùng `tts_suppressed` mang text phản hồi (reply đi
+  về channel chứ không ra loa thiết bị — cùng node mà đường channel của OpenClaw
+  dùng, để web turn render được), hoặc `no_reply` cho lượt rỗng / `NO_REPLY`.
+
+Hai event dùng chung một `run_id`, tương quan qua `session_id`. Handler
+channel-agnostic (dựa vào field `platform`) và **skip** lượt `api_server` / `cli`
+— đó là các call `/v1/responses` của chính os-server, đã được `sendChat` log rồi;
+emit lại sẽ nhân đôi các turn khởi từ thiết bị.
+
+Gửi outbound (chủ động) — `Broadcast` / `SendToUser` trong `telegram.go` /
+`telegram_sender.go` — đi thẳng tới Telegram Bot API cho các cảnh báo do thiết bị
+khởi tạo, dùng bot token và danh sách chat trong `telegramTargetsFile`.
 
 ## 9. Voice
 
@@ -188,8 +212,32 @@ materialize hook ra `/usr/local/bin/runtime-hermes-presync` mỗi switch**
 (`materializePresync`, đăng ký qua `runtimereg.RegisterPresync`), nên OTA os-server
 thường cũng refresh nó trên disk — khác với bản `install.sh` ghi một lần mà
 `switch-runtime` skip ở switch sau (*activation gap*; xem
-`docs/vi/agentic/adding-agent-runtime_vi.md` §3). Hook chạy ngay trước khi gateway start
-(và inline lúc install), làm 3 việc theo thứ tự:
+`docs/vi/agentic/adding-agent-runtime_vi.md` §3).
+
+**Hook cũng chạy mỗi lần os-server boot VÀ lúc setup**, không chỉ khi switch — đều
+qua `EnsureOnboarding` (`internal/hermes/onboarding.go`), chạy `PresyncScript` embed
+và restart `hermes-gateway` **chỉ khi** `config.yaml` thật sự đổi (guard content-hash
+— không restart loop):
+
+- **Boot:** startup-sequence gọi `EnsureOnboarding`. Khắc ngách: device **boot thẳng
+  vào Hermes** (`DEVICE.md gateway.default: hermes`, hoặc imager pre-install) chưa
+  từng switch từ OpenClaw, hoặc `llm_*` đổi khi Hermes đang chạy, sẽ giữ `config.yaml`
+  cũ không lấy `llm_api_key`/`base_url` thật từ `config.json`.
+- **Setup:** `SetupAgent` (cũng trong `onboarding.go`) chỉ gọi `EnsureOnboarding`.
+  Được vì **Hermes provision từ `config.json`, không từ `SetupRequest`** (khác
+  OpenClaw, `SetupAgent` của nó viết `openclaw.json` thẳng từ request — nên OpenClaw
+  cần *hai* hàm riêng, Hermes *một*). Device setup flow lưu `config.json` **trước**
+  khi gọi `SetupAgent` (`internal/device/service.go` — call được cố ý đặt sau
+  `config.Save()`), nên presync materialize `config.yaml`/`.env` từ key vừa nhập ngay
+  lập tức thay vì chờ boot kế.
+
+Cho Hermes khả năng self-heal config giống OpenClaw (`ensureAgentDefaults` +
+`StartModelSync`), tái dùng đúng script presync thay vì viết lại sync trong Go. (Xoay
+`llm_*` live qua `PUT /api/device/config` không reboot thì vẫn chờ boot kế — trigger
+theo config-change là follow-up khả dĩ.)
+
+Hook chạy ngay trước khi gateway start (lúc switch và boot, và inline lúc install),
+làm 3 việc theo thứ tự:
 
 1. **Restore skills** — khi `~/.hermes/skills/openclaw-imports` rỗng (cài đầu HOẶC
    sau factory-reset wipe), chạy `hermes claw migrate` (nó **copy** skills openclaw,
@@ -256,7 +304,10 @@ Switch openclaw→hermes chạy một migration persona Go
 
 - **SOUL.md** (rebrand) — và vì Hermes không có slot IDENTITY.md riêng, inline các
   field IDENTITY đã điền của owner thành block `## Your identity card` để tên tùy
-  chỉnh (vd "Ngân") sống sót. `UpdateIdentityName` (đổi tên thiết bị) sửa block đó.
+  chỉnh (vd "Ngân") sống sót. `UpdateIdentityName` (đổi tên thiết bị) sửa block đó;
+  `WatchIdentity` (`internal/hermes/identity.go`) poll SOUL.md và khi tên đổi thì
+  đẩy wake words mới sang HAL + `i18n.SetDeviceName` — mirror `WatchIdentity` của
+  OpenClaw, chỉ khác là watch SOUL.md thay vì IDENTITY.md.
 - **MEMORY.md + daily `memory/*.md` + KNOWLEDGE.md** → merge vào `memories/MEMORY.md`.
   Hermes chỉ load `MEMORY.md` + `USER.md` **theo tên** (không glob `memories/*.md`),
   nên KNOWLEDGE được fold vào thay vì giữ thành file riêng bị bỏ qua.

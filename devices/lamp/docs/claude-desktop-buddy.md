@@ -53,7 +53,7 @@ context back.
 │                  │   Ack, PermissionDecision      │  │   protocol.go          │  │
 │                  │                                │  │   state.go             │  │
 │                  │                                │  │   bridge.go            │  │
-│                  │                                │  │   httpserver.go        │  │
+│                  │                                │  │   httpapi/             │  │
 │                  │                                │  │   transfer.go          │  │
 │                  │                                │  └──┬──────────┬──────────┘  │
 │                  │                                │     │ HTTP     │ HTTP        │
@@ -72,18 +72,29 @@ context back.
 
 ```
 claude-desktop-buddy/
-├── main.go              Entry, config load, BLE / HTTP wiring, message dispatch
-├── ble.go               BLE peripheral (GATT server, advertising, debugfs interval tune)
-├── agent.go             BlueZ DisplayOnly pairing agent (registered but unused — see §5)
-├── protocol.go          Wire types: Heartbeat, TimeSync, Event, Command, Ack, PermissionDecision
-├── state.go             6-state machine (sleep/idle/busy/attention/heart/celebrate)
-├── bridge.go            HTTP outbound to HAL (:5001) + Lamp (:5000)
-├── httpserver.go        HTTP API :5002 — /status /health /approve /deny
-├── transfer.go          Character-pack folder push receiver (saves under chars/)
+├── main.go              Thin entrypoint: flags + logging, then buddy.Run()
+├── buddy/               Daemon logic (package buddy)
+│   ├── app.go           Run() orchestration, config load, BLE message dispatch
+│   ├── ble.go           BLE peripheral (GATT server, advertising, debugfs interval tune)
+│   ├── agent.go         BlueZ DisplayOnly pairing agent (registered but unused — see §5)
+│   ├── protocol.go      Wire types: Heartbeat, TimeSync, Event, Command, Ack, PermissionDecision
+│   ├── state.go         6-state machine (sleep/idle/busy/attention/heart/celebrate)
+│   ├── bridge.go        HTTP outbound to HAL (:5001) + Lamp (:5000)
+│   ├── transfer.go      Character-pack folder push receiver (saves under chars/)
+│   ├── narrator.go,i18n.go  Per-turn-deduped TTS narration (EN/VI)
+│   ├── stats.go         Lifetime approve/deny counters (persisted under /var/lib)
+│   └── approval_service.go, status_provider.go, activity_sink.go   Impls of the httpapi ports
+├── httpapi/             HTTP API :5002 delivery layer (package httpapi)
+│   ├── server.go        Server + routes() registry + JSON helpers
+│   ├── ports.go         Interfaces: StatusProvider, ApprovalService, ActivitySink
+│   ├── status.go        GET /status, GET /health
+│   ├── claudedesktop.go POST /claude-desktop/approve, /deny
+│   └── claudecode.go    POST /claude-code/notify, /usage (Claude Code plugin pushes)
+├── claude-code-buddy/   Claude Code plugin (Python) — pushes to /claude-code/* (see its own README)
 ├── skill/SKILL.md       OpenClaw skill descriptor for voice approval flow
-├── config/buddy.json    Template config (template only — runtime reads /root/config/buddy.json)
+├── config/buddy.json    Template config (runtime reads /root/config/buddy.json)
 ├── third_party/bluetooth/  Vendored tinygo bluetooth v0.14.0 + secure-* flag patch
-├── go.mod               Separate module with `replace tinygo.org/x/bluetooth => ./third_party/...`
+├── go.mod               Separate module with replace tinygo.org/x/bluetooth => ./third_party/...
 └── VERSION_BUDDY        Plain-text version stamp injected at build time
 ```
 
@@ -388,7 +399,7 @@ drive.
                     │ LED: blink  │
                     │ + sensing   │
                     └──────┬──────┘
-                           │ /approve or /deny
+                           │ /claude-desktop/approve or /deny
                            ▼
                     ┌─────────────┐
                     │   heart     │  approved < 5 s
@@ -491,7 +502,7 @@ Agent emotion still wins over buddy; user voice intents win over both.
      - Speak the prompt naturally over TTS
      - Wait for verbal "yes/approve/ok" or "no/deny/skip"
 5. Skill curls back:
-     POST http://127.0.0.1:5002/approve  {"id":"req_abc123"}   (or /deny)
+     POST http://127.0.0.1:5002/claude-desktop/approve  {"id":"req_abc123"}   (or /claude-desktop/deny)
 6. buddy-plugin returns BLE PermissionDecision:
      {"cmd":"permission","id":"req_abc123","decision":"once" | "deny"}
 7. Desktop unblocks. State → heart (if user replied in <5 s) → busy → idle.
@@ -525,8 +536,10 @@ install dir at runtime (see SKILL.md for the exact discovery rule).
 |---|---|---|---|
 | `GET` | `/health` | Liveness | `{status, ble_advertising, uptime_seconds}` |
 | `GET` | `/status` | Current buddy state | See below |
-| `POST` | `/approve` | Approve the pending prompt | Body `{id}`. Returns `{ok}`. |
-| `POST` | `/deny` | Deny the pending prompt | Body `{id}`. Returns `{ok}`. |
+| `POST` | `/claude-desktop/approve` | Approve the pending prompt | Body `{id}`. Returns `{ok}`. |
+| `POST` | `/claude-desktop/deny` | Deny the pending prompt | Body `{id}`. Returns `{ok}`. |
+| `POST` | `/claude-code/notify` | Claude Code activity push (plugin) | Body `{title,subtitle,level,sound}`. Logs; returns `{ok}`. HAL bridge pending. |
+| `POST` | `/claude-code/usage` | Claude Code usage push (plugin) | Body `{five_hour,seven_day,reset_5h,reset_7d,sound}`. Logs; returns `{ok}`. |
 
 `/status` response:
 
@@ -545,7 +558,7 @@ install dir at runtime (see SKILL.md for the exact discovery rule).
 }
 ```
 
-`/approve` and `/deny` reject with `409 Conflict` if there is no pending
+`/claude-desktop/approve` and `/claude-desktop/deny` reject with `409 Conflict` if there is no pending
 prompt or the `id` doesn't match the current one — prevents the OpenClaw
 skill from acting on stale prompts.
 

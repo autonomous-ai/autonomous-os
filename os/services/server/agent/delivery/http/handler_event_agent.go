@@ -916,7 +916,12 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 						"streamed_len", streamedLen,
 						"broadcast", isBroadcastRun, "force_tts", forceTTS,
 						"cron_fire", isCronFire, "heartbeat", isHeartbeatRun)
-					flow.Log("tts_send", map[string]any{"run_id": flowRunID, "text": remainderText, "streamed_len": streamedLen}, flowRunID)
+					// `text` is the FULL reply (sentence 1 + remainder); `remainderText`
+					// excludes sentence 1 when it was streamed mid-turn via
+					// tts_stream_send. Carry `full_text` so the web (chat + flow turn)
+					// can display the complete reply — it only reads tts_send and would
+					// otherwise drop sentence 1 (logged separately as tts_stream_send).
+					flow.Log("tts_send", map[string]any{"run_id": flowRunID, "text": remainderText, "full_text": text, "streamed_len": streamedLen}, flowRunID)
 					go func(t string) {
 						if err := h.agentGateway.SendToHALTTSQueue(t); err != nil {
 							slog.Error("TTS delivery failed", "component", "agent", "error", err)

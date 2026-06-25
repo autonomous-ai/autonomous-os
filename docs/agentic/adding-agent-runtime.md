@@ -274,8 +274,14 @@ when such a turn source appears.
 
 ## 7. Factory reset
 
-- Add the backend wipe in `server/system/reset_<name>.go` (`wipe<Name>State`) and
-  the `case` in `factoryreset.go`.
+- Implement the backend wipe **in `ResetAgent()`** (`internal/<name>/reset.go`).
+  `server/system/factoryreset.go` resolves the **active gateway** and calls
+  `gw.ResetAgent()` — there is **no per-backend `switch`** to keep in sync (adding
+  a backend = implement `ResetAgent`, nothing in `server/system`). A backend whose
+  state is owned externally (PicoClaw) ships a **no-op `ResetAgent`**, so it is
+  correctly left untouched (the old `switch` defaulted PicoClaw to the OpenClaw
+  wipe — a latent bug this removed). The one shared primitive, `osreset.WipePath`,
+  lives in `lib/osreset` so a backend can use it without importing `server/system`.
 - **Wipe `/root/config/agent_state.json` in lockstep with `config.json`** — they
   are a pair (current runtime + switch history). Leaving `agent_state.json` while
   `config.json` resets makes a stale `prev` diverge from the reset `current` and
@@ -316,7 +322,8 @@ Use the runtime-agnostic platform metadata in `internal/skills`:
 - [ ] Hooks: backend-native or OS-side — decided & documented (not silently absent).
       If reimplemented OS-side in Go (no compile-time link to the TS hook), add
       cross-reference comments in both files so a change to one flags the other.
-- [ ] `reset_<name>.go` + `factoryreset.go` case; **`agent_state.json` wiped with
+- [ ] `ResetAgent()` in `internal/<name>/reset.go` (factory-reset calls
+      `gw.ResetAgent()` on the active gateway — no `factoryreset.go` switch); **`agent_state.json` wiped with
       `config.json`**.
 - [ ] Capability gating via `skills.Supported` / `SupportedHooks`.
 - [ ] Notify the agent on skill change via `SendSystemChatMessage`.

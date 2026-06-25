@@ -20,14 +20,14 @@ Claude Desktop is waiting for the user to approve or deny a tool call.
 
 **If user says approve/yes/ok/go ahead:**
 ```bash
-curl -s -X POST http://127.0.0.1:5002/approve \
+curl -s -X POST http://127.0.0.1:5002/claude-desktop/approve \
   -H "Content-Type: application/json" \
   -d '{"id": "<prompt_id from event>"}'
 ```
 
 **If user says deny/no/skip/cancel:**
 ```bash
-curl -s -X POST http://127.0.0.1:5002/deny \
+curl -s -X POST http://127.0.0.1:5002/claude-desktop/deny \
   -H "Content-Type: application/json" \
   -d '{"id": "<prompt_id from event>"}'
 ```

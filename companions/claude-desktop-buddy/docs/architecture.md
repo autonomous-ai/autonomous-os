@@ -18,8 +18,8 @@ For building, deploying, config, and pairing see [`setup.md`](setup.md).
  └───────────────────┘  notify / write│  ble.go ─► state.go ─► bridge.go       │
                                        │     │                      │  │  │     │
                                        │     ▼                      ▼  ▼  ▼     │
-                                       │  httpserver.go        LeLamp / Lamp    │
-                                       │  :5002 (OpenClaw)     HTTP (LED, eyes, │
+                                       │  httpapi/ (:5002)     LeLamp / Lamp    │
+                                       │  (OpenClaw)           HTTP (LED, eyes, │
                                        │                       TTS, monitor)    │
                                        └───────────────────────────────────────┘
 ```
@@ -44,7 +44,8 @@ For building, deploying, config, and pairing see [`setup.md`](setup.md).
 | `protocol.go` | All wire types (`Heartbeat`, `TimeSync`, `Event`, `Command`, `Ack`, `PermissionDecision`), the parser/salvager, and ack/permission builders. |
 | `state.go` | `StateMachine` — derives a `BuddyState` from heartbeats, tracks the pending prompt and lifetime approval/denial counters, and manages transient states. |
 | `bridge.go` | Maps each state change to concrete LeLamp + Lamp HTTP calls (LED, display, emotion, TTS, monitor/sensing events). |
-| `httpserver.go` | The `:5002` API: `GET /status`, `GET /health`, `POST /approve`, `POST /deny`. |
+| `httpapi/` | The `:5002` API delivery package (clean architecture / dependency inversion). `server.go` holds the `Server`, the single `routes()` registry, and JSON response helpers; `ports.go` declares the interfaces the handlers depend on (`StatusProvider`, `ApprovalService`, `ActivitySink`, plus sentinel errors); `status.go` serves `GET /status` + `GET /health`; `claudedesktop.go` serves `POST /claude-desktop/approve` + `/deny` (the Claude Desktop voice-approval round-trip); `claudecode.go` serves `POST /claude-code/notify` + `/usage` (the Claude Code plugin pushes). |
+| `status_provider.go` / `approval_service.go` / `activity_sink.go` | The concrete implementations of the `httpapi` ports, one per role: `StatusReader` (read-adapter → status snapshot), `ApprovalService` (the voice-approval use case: validate id + send the BLE permission decision + update counters), `LogActivitySink` (logs the Claude Code pushes — the seam a future HAL bridge replaces). `main.go` is the composition root that wires these into `httpapi.New`. |
 | `agent.go` | BlueZ `org.bluez.Agent1` (DisplayOnly) so LE pairing can complete; logs the passkey to the journal. |
 | `transfer.go` | Folder-push receiver — streams files from Desktop to `/opt/claude-desktop-buddy/chars` with path-traversal guards. |
 | `narrator.go` + `i18n.go` | Short, per-turn-deduped TTS announcements of Claude's activity, localized (EN/VI). |
@@ -95,10 +96,10 @@ Desktop heartbeat carries `prompt`  ─►  state = attention, pending prompt st
    GET /status (skill polls) ◄────────────────────────────────────────────┘
         │  pending_prompt {id, tool, hint}
         ▼
-   user says yes/no  ─►  POST /approve|/deny {id}
+   user says yes/no  ─►  POST /claude-desktop/approve|/deny {id}
         │
         ▼
-   httpserver validates id == pending.id
+   ApprovalService validates id == pending.id
         │
         ▼
    ble.Send(MakePermission(id, "once"|"deny"))  ─►  Desktop applies the decision
@@ -107,8 +108,9 @@ Desktop heartbeat carries `prompt`  ─►  state = attention, pending prompt st
    StateMachine.Approved()/Denied()  ─►  counters++ , stats persisted
 ```
 
-`POST /approve` sends decision `"once"`; `POST /deny` sends `"deny"`. Both return
-`409` if there is no pending prompt or the `id` doesn't match the current one.
+`POST /claude-desktop/approve` sends decision `"once"`; `POST /claude-desktop/deny`
+sends `"deny"`. Both return `409` if there is no pending prompt or the `id` doesn't
+match the current one.
 
 ## State machine
 

@@ -9,35 +9,31 @@ import (
 	"go.autonomous.ai/os/domain"
 )
 
-// SetupAgent — Hermes is assumed already running on the Pi with skills
-// provisioned externally (see hermes.md §10). This is a no-op so the setup
-// flow doesn't try to write openclaw.json / restart a gateway.
-func (s *Service) SetupAgent(_ domain.SetupRequest) error {
-	slog.Info("SetupAgent: no-op (hermes backend)", "component", "hermes")
-	return nil
-}
+// SetupAgent for Hermes lives in onboarding.go — at setup time it runs the
+// presync hook (via EnsureOnboarding) to materialize config.yaml from the
+// just-saved config.json (llm_* + channel tokens).
 
-// AddChannel — channels run inside Lumi (Telegram receive loop) when on
+// AddChannel — channels run inside Device (Telegram receive loop) when on
 // Hermes, not as plugins inside the agent runtime. No-op here; channel
-// credentials live in the regular Lumi config (TelegramBotToken, etc.).
-func (s *Service) AddChannel(_ context.Context, _ domain.AddChannelRequest) error {
+// credentials live in the regular Device config (TelegramBotToken, etc.).
+func (s *HermesService) AddChannel(_ context.Context, _ domain.AddChannelRequest) error {
 	slog.Info("AddChannel: no-op (hermes backend)", "component", "hermes")
 	return nil
 }
 
 // RefreshChannelConfig — refresh re-applies channels.<channel> in openclaw.json,
 // but Hermes owns its own ~/.hermes config layout. Not supported on this backend.
-func (s *Service) RefreshChannelConfig(_ context.Context, _ domain.RefreshChannelRequest) (string, error) {
+func (s *HermesService) RefreshChannelConfig(_ context.Context, _ domain.RefreshChannelRequest) (string, error) {
 	slog.Info("RefreshChannelConfig: not supported (hermes backend)", "component", "hermes")
 	return "", fmt.Errorf("channel refresh not supported on hermes backend")
 }
 
-func (s *Service) HasWhatsappSession(_ string) bool { return false }
+func (s *HermesService) HasWhatsappSession(_ string) bool { return false }
 
 // PairWhatsapp — WhatsApp pairing requires a Baileys-style plugin which lives
 // only in OpenClaw. Returns a one-shot failure event so the caller's drain
 // loop exits cleanly.
-func (s *Service) PairWhatsapp(_ context.Context) <-chan domain.PairingEvent {
+func (s *HermesService) PairWhatsapp(_ context.Context) <-chan domain.PairingEvent {
 	ch := make(chan domain.PairingEvent, 1)
 	ch <- domain.PairingEvent{
 		Status: domain.PairingStatusFailure,
@@ -47,69 +43,60 @@ func (s *Service) PairWhatsapp(_ context.Context) <-chan domain.PairingEvent {
 	return ch
 }
 
-func (s *Service) ResetAgent() error {
-	slog.Info("ResetAgent: no-op (hermes backend)", "component", "hermes")
-	return nil
-}
+// ResetAgent for Hermes lives in reset.go — the factory-reset wipe (stop daemon
+// + hermes setup --reset + surgical rm), invoked by server/system/factoryreset.go
+// on the active gateway.
 
-func (s *Service) RestartAgent() error {
-	slog.Info("RestartAgent: no-op (hermes backend — manage via systemctl externally)", "component", "hermes")
-	return nil
-}
+// RestartAgent for Hermes lives in onboarding.go — it restarts hermes-gateway
+// via restartHermesGateway, mirroring openclaw's RestartAgent.
 
 // RefreshModelsConfig — Hermes config (~/.hermes/...) is owned externally; we
-// don't patch it from Lumi. No-op.
-func (s *Service) RefreshModelsConfig() error {
+// don't patch it from Device. No-op.
+func (s *HermesService) RefreshModelsConfig() error {
 	return nil
 }
 
-// EnsureOnboarding — user has confirmed Hermes is provisioned with skills and
-// soul. No-op so the os-server boot path stays generic.
-func (s *Service) EnsureOnboarding() error {
-	return nil
-}
+// EnsureOnboarding for Hermes lives in onboarding.go — it runs the embedded
+// presync hook each boot to self-heal config.yaml from config.json (llm_* +
+// provider structure), and restarts hermes-gateway only when the config changed.
 
 // FetchChatHistory — Hermes per-conversation history is server-side, but we
 // don't currently walk the previous_response_id chain (hermes.md §17 decided
 // "conversation name is enough"). Returns empty so callers degrade gracefully.
-func (s *Service) FetchChatHistory(_ string, _ int) (json.RawMessage, error) {
+func (s *HermesService) FetchChatHistory(_ string, _ int) (json.RawMessage, error) {
 	return nil, nil
 }
 
 // GetConfigJSON — no agent-side config file under Hermes. Returns empty.
-func (s *Service) GetConfigJSON() (json.RawMessage, error) {
+func (s *HermesService) GetConfigJSON() (json.RawMessage, error) {
 	return json.RawMessage(`{}`), nil
 }
 
-// WatchIdentity — IDENTITY.md / wake-word rename watching is OpenClaw-specific
-// (it pushes the new word into the agent's prompt). Under Hermes, prompts are
-// owned by the Hermes server. No-op so the existing goroutine slot in
-// server.go stays valid.
-func (s *Service) WatchIdentity(ctx context.Context) {
-	<-ctx.Done()
-}
+// WatchIdentity for Hermes lives in identity.go — it polls SOUL.md (no IDENTITY.md
+// slot under Hermes) and pushes wake words to HAL + i18n device name on rename,
+// mirroring internal/openclaw/service_identity.go.
 
 // StartSkillWatcher for Hermes lives in skill_watcher.go — it keeps the
 // OpenClaw-imported skills (~/.hermes/skills/openclaw-imports) fresh from the CDN,
 // mirroring internal/openclaw/skill_watcher.go.
 
 // StartModelSync — model registry is owned by Hermes. No-op.
-func (s *Service) StartModelSync(ctx context.Context) {
+func (s *HermesService) StartModelSync(ctx context.Context) {
 	<-ctx.Done()
 }
 
-func (s *Service) UpdatePrimaryModel(_ string) error {
+func (s *HermesService) UpdatePrimaryModel(_ string) error {
 	return nil
 }
 
 // StartPrimaryModelWatch — no openclaw.json to watch.
-func (s *Service) StartPrimaryModelWatch(ctx context.Context) {
+func (s *HermesService) StartPrimaryModelWatch(ctx context.Context) {
 	<-ctx.Done()
 }
 
-// GetConfiguredChannel — Lumi config is the source of truth under Hermes.
+// GetConfiguredChannel — Device config is the source of truth under Hermes.
 // Returns "telegram" when a bot token is set, otherwise the generic label.
-func (s *Service) GetConfiguredChannel() string {
+func (s *HermesService) GetConfiguredChannel() string {
 	if s.config.TelegramBotToken != "" {
 		return "telegram"
 	}
@@ -119,7 +106,7 @@ func (s *Service) GetConfiguredChannel() string {
 // CompactSession — Hermes does not currently expose a compact API or CLI
 // (hermes.md §7 decided to no-op). Workaround: rotate the conversation name
 // via NewSession when context grows too large.
-func (s *Service) CompactSession(sessionKey string) error {
+func (s *HermesService) CompactSession(sessionKey string) error {
 	slog.Info("CompactSession: no-op (hermes backend)", "component", "hermes", "session", sessionKey)
 	return nil
 }
@@ -127,7 +114,7 @@ func (s *Service) CompactSession(sessionKey string) error {
 // NewSession — under Hermes, "new session" means routing future turns to a
 // fresh named conversation. Setting an empty key restores the default. We do
 // not delete prior history (Hermes server still has it under the old name).
-func (s *Service) NewSession(sessionKey string) error {
+func (s *HermesService) NewSession(sessionKey string) error {
 	slog.Info("NewSession: rotating conversation (hermes backend)", "component", "hermes", "key", sessionKey)
 	// sessionKey here is treated as the next conversation name. Empty means
 	// reset to default. The session UUID gets refreshed by the next response
@@ -141,7 +128,7 @@ func (s *Service) NewSession(sessionKey string) error {
 // TODO(hermes-mcp): implement WriteMCPEntry once Hermes exposes an MCP
 // connector config surface. Currently bypassed so the AgentGateway interface
 // is satisfied — MCP connector writes are an OpenClaw-only feature today.
-func (s *Service) WriteMCPEntry(_ string, _ map[string]any) error {
+func (s *HermesService) WriteMCPEntry(_ string, _ map[string]any) error {
 	slog.Info("WriteMCPEntry: no-op (hermes backend — TODO)", "component", "hermes")
 	return nil
 }
@@ -149,7 +136,7 @@ func (s *Service) WriteMCPEntry(_ string, _ map[string]any) error {
 // TODO(hermes-mcp): implement RemoveMCPEntry alongside WriteMCPEntry. Returns
 // removed=false so callers (mcp_connector_writer) treat it as "entry already
 // absent" — idempotent no-op, no restart triggered.
-func (s *Service) RemoveMCPEntry(_ string) (bool, error) {
+func (s *HermesService) RemoveMCPEntry(_ string) (bool, error) {
 	slog.Info("RemoveMCPEntry: no-op (hermes backend — TODO)", "component", "hermes")
 	return false, nil
 }

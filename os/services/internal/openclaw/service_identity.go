@@ -37,7 +37,7 @@ type deviceIdentity struct {
 // resolveDeviceKey reads the device key file, migrating a pre-debrand
 // lumi-device-key.json to deviceKeyFile on first sight so an already-paired
 // device keeps its identity. Returns the raw bytes, or an error if neither exists.
-func (s *Service) resolveDeviceKey() ([]byte, error) {
+func (s *OpenclawService) resolveDeviceKey() ([]byte, error) {
 	keyPath := filepath.Join(s.config.OpenclawConfigDir, deviceKeyFile)
 	if data, err := os.ReadFile(keyPath); err == nil {
 		return data, nil
@@ -59,7 +59,7 @@ func (s *Service) resolveDeviceKey() ([]byte, error) {
 
 // loadOrCreateDeviceIdentity loads the Ed25519 keypair from disk, or generates
 // a new one and persists it for future connections.
-func (s *Service) loadOrCreateDeviceIdentity() (*deviceIdentity, error) {
+func (s *OpenclawService) loadOrCreateDeviceIdentity() (*deviceIdentity, error) {
 	keyPath := filepath.Join(s.config.OpenclawConfigDir, deviceKeyFile)
 	if data, err := s.resolveDeviceKey(); err == nil {
 		var stored struct {
@@ -119,7 +119,7 @@ func (di *deviceIdentity) signConnectPayload(token, nonce string, signedAt int64
 
 // WatchIdentity polls IDENTITY.md in the OpenClaw workspace and pushes updated wake words
 // to HAL whenever the agent's name changes (e.g. user says "call yourself Noah").
-func (s *Service) WatchIdentity(ctx context.Context) {
+func (s *OpenclawService) WatchIdentity(ctx context.Context) {
 	identityPath := filepath.Join(s.config.OpenclawConfigDir, "workspace", "IDENTITY.md")
 	var lastName string
 	for {
@@ -147,7 +147,7 @@ func (s *Service) WatchIdentity(ctx context.Context) {
 // new agent name. Preserves any bullet prefix and everything else in the file;
 // appends a fresh `- **Name:** <name>` line when none exists yet. Atomic write
 // via tmp+rename so a mid-write crash cannot truncate the file.
-func (s *Service) UpdateIdentityName(name string) error {
+func (s *OpenclawService) UpdateIdentityName(name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return fmt.Errorf("identity name is required")

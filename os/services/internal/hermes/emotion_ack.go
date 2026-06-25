@@ -61,7 +61,7 @@ func ackEmotionEnabled(deviceType string) bool {
 // visible reply. Mirrors the OpenClaw emotion-acknowledge hook. Fire-and-forget
 // (the TS handler ignores POST errors too) and off the caller's goroutine so
 // sendChat never blocks on the HAL round-trip.
-func (s *Service) fireAckEmotion(runID, message string) {
+func (s *HermesService) fireAckEmotion(runID, message string) {
 	if !s.ackHookEnabled {
 		return
 	}

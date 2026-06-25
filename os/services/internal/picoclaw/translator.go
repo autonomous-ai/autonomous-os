@@ -106,7 +106,7 @@ func categorize(p picoPayload) category {
 //	message.create/update final     → chat.final + lifecycle.end (ends turn)
 //	error                           → lifecycle.error (ends turn)
 //	typing.stop / message.delete / pong → ignored
-func (s *Service) translateFrame(raw []byte, dispatch func(domain.WSEvent)) {
+func (s *PicoclawService) translateFrame(raw []byte, dispatch func(domain.WSEvent)) {
 	var f picoFrame
 	if err := json.Unmarshal(raw, &f); err != nil {
 		slog.Debug("picoclaw: non-JSON frame, ignored", "component", "picoclaw", "raw", truncRunes(string(raw), 200))
@@ -134,7 +134,7 @@ func (s *Service) translateFrame(raw []byte, dispatch func(domain.WSEvent)) {
 	}
 }
 
-func (s *Service) handleMessage(f picoFrame, dispatch func(domain.WSEvent)) {
+func (s *PicoclawService) handleMessage(f picoFrame, dispatch func(domain.WSEvent)) {
 	switch categorize(f.Payload) {
 	case catThinking:
 		// Open the turn so the lifecycle is consistent, but render nothing —
@@ -154,7 +154,7 @@ func (s *Service) handleMessage(f picoFrame, dispatch func(domain.WSEvent)) {
 // ensureTurnStarted emits lifecycle.start exactly once per turn. The runID is
 // adopted from a pending outbound SendChat when present, else freshly allocated
 // for an externally-initiated turn (e.g. a Telegram message PicoClaw processed).
-func (s *Service) ensureTurnStarted(dispatch func(domain.WSEvent)) {
+func (s *PicoclawService) ensureTurnStarted(dispatch func(domain.WSEvent)) {
 	if s.getCurrentRunID() != "" {
 		return // already started
 	}
@@ -184,7 +184,7 @@ func (s *Service) ensureTurnStarted(dispatch func(domain.WSEvent)) {
 // emitToolCalls surfaces each OpenAI-style tool call as a tool.start + tool.end
 // pair. PicoClaw reports calls after the fact and does not stream a separate
 // result frame, so tool.end carries an empty result purely to close the trace.
-func (s *Service) emitToolCalls(f picoFrame, dispatch func(domain.WSEvent)) {
+func (s *PicoclawService) emitToolCalls(f picoFrame, dispatch func(domain.WSEvent)) {
 	runID := s.getCurrentRunID()
 	for _, c := range f.Payload.ToolCalls {
 		name := c.Function.Name
@@ -233,7 +233,7 @@ func (s *Service) emitToolCalls(f picoFrame, dispatch func(domain.WSEvent)) {
 // (fresh pendingRunID). Clearing here lets that turn's runID survive instead of
 // being clobbered. Busy itself is owned by the consumer's SetBusy(false) — the
 // translator never touches it (matches the Hermes translator).
-func (s *Service) emitFinal(f picoFrame, dispatch func(domain.WSEvent)) {
+func (s *PicoclawService) emitFinal(f picoFrame, dispatch func(domain.WSEvent)) {
 	runID := s.getCurrentRunID()
 	finalText := f.Payload.Content
 
@@ -273,7 +273,7 @@ func (s *Service) emitFinal(f picoFrame, dispatch func(domain.WSEvent)) {
 	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: endPayload})
 }
 
-func (s *Service) handleError(f picoFrame, dispatch func(domain.WSEvent)) {
+func (s *PicoclawService) handleError(f picoFrame, dispatch func(domain.WSEvent)) {
 	s.ensureTurnStarted(dispatch) // make sure a runID exists for the error
 	runID := s.getCurrentRunID()
 	msg := f.Payload.Message
@@ -305,16 +305,16 @@ func (s *Service) handleError(f picoFrame, dispatch func(domain.WSEvent)) {
 
 // --- turn-correlation helpers ---
 
-func (s *Service) getCurrentRunID() string {
+func (s *PicoclawService) getCurrentRunID() string {
 	v, _ := s.currentRunID.Load().(string)
 	return v
 }
 
-func (s *Service) setCurrentRunID(runID string) { s.currentRunID.Store(runID) }
+func (s *PicoclawService) setCurrentRunID(runID string) { s.currentRunID.Store(runID) }
 
-func (s *Service) setPendingRunID(runID string) { s.pendingRunID.Store(runID) }
+func (s *PicoclawService) setPendingRunID(runID string) { s.pendingRunID.Store(runID) }
 
-func (s *Service) consumePendingRunID() string {
+func (s *PicoclawService) consumePendingRunID() string {
 	v, _ := s.pendingRunID.Load().(string)
 	if v != "" {
 		s.pendingRunID.Store("")
@@ -326,7 +326,7 @@ func (s *Service) consumePendingRunID() string {
 // disconnect / busyTTL expiry / send failure. The normal end-of-turn path clears
 // the ids inline in emitFinal / handleError (before dispatch) so a drained
 // follow-up turn's ids survive — see emitFinal.
-func (s *Service) clearTurn() {
+func (s *PicoclawService) clearTurn() {
 	s.currentRunID.Store("")
 	s.pendingRunID.Store("")
 }

@@ -1,4 +1,4 @@
-package main
+package buddy
 
 import (
 	"bytes"
@@ -9,14 +9,14 @@ import (
 
 // Heartbeat is sent by Claude Desktop every 10s or on state change.
 type Heartbeat struct {
-	Total      int      `json:"total"`
-	Running    int      `json:"running"`
-	Waiting    int      `json:"waiting"`
-	Msg        string   `json:"msg"`
-	Entries    []string `json:"entries"`
-	Tokens     int      `json:"tokens"`
-	TokensToday int    `json:"tokens_today"`
-	Prompt     *Prompt  `json:"prompt"`
+	Total       int      `json:"total"`
+	Running     int      `json:"running"`
+	Waiting     int      `json:"waiting"`
+	Msg         string   `json:"msg"`
+	Entries     []string `json:"entries"`
+	Tokens      int      `json:"tokens"`
+	TokensToday int      `json:"tokens_today"`
+	Prompt      *Prompt  `json:"prompt"`
 }
 
 // Prompt is present in Heartbeat only when permission is required.
@@ -49,12 +49,12 @@ type ContentBlock struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
 	Thinking  string          `json:"thinking,omitempty"`
-	Name      string          `json:"name,omitempty"`       // tool_use.name
-	ID        string          `json:"id,omitempty"`         // tool_use.id
-	Input     json.RawMessage `json:"input,omitempty"`      // tool_use.input
+	Name      string          `json:"name,omitempty"`  // tool_use.name
+	ID        string          `json:"id,omitempty"`    // tool_use.id
+	Input     json.RawMessage `json:"input,omitempty"` // tool_use.input
 	ToolUseID string          `json:"tool_use_id,omitempty"`
-	Content   json.RawMessage `json:"content,omitempty"`    // tool_result.content
-	ToolName  string          `json:"tool_name,omitempty"`  // tool_reference.tool_name
+	Content   json.RawMessage `json:"content,omitempty"`   // tool_result.content
+	ToolName  string          `json:"tool_name,omitempty"` // tool_reference.tool_name
 }
 
 // Blocks decodes the Event's content as an array of typed content
@@ -210,10 +210,10 @@ type Ack struct {
 
 // StatusData is the payload for status ack.
 type StatusData struct {
-	Name string     `json:"name"`
-	Sec  bool       `json:"sec"`
-	Bat  BatInfo    `json:"bat"`
-	Sys  SysInfo    `json:"sys"`
+	Name  string    `json:"name"`
+	Sec   bool      `json:"sec"`
+	Bat   BatInfo   `json:"bat"`
+	Sys   SysInfo   `json:"sys"`
 	Stats StatsInfo `json:"stats"`
 }
 
@@ -345,7 +345,7 @@ func MakeStatusAck(name string, uptime time.Duration, approvedCount, deniedCount
 		OK:     true,
 		Data: StatusData{
 			Name: name,
-			Sec:  false, // TODO: set true when BLE link is encrypted
+			Sec:  false,                                         // TODO: set true when BLE link is encrypted
 			Bat:  BatInfo{Pct: 100, MV: 5000, MA: 0, USB: true}, // Pi is always on USB
 			Sys:  SysInfo{Up: int(uptime.Seconds()), Heap: 0},
 			Stats: StatsInfo{
