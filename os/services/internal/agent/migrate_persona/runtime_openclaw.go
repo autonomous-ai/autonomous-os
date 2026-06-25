@@ -89,5 +89,8 @@ func dailyMemoryFiles(dir string) []string {
 var reHermes = regexp.MustCompile(`(?i)\bHermes\b`)
 
 func rebrandToOpenclaw(text string) string {
-	return reHermes.ReplaceAllStringFunc(text, casePreserving("OpenClaw"))
+	repl := casePreserving("OpenClaw")
+	text = reHermes.ReplaceAllStringFunc(text, repl)
+	text = rePicoClaw.ReplaceAllStringFunc(text, repl)
+	return text
 }

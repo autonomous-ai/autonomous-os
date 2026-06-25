@@ -18,11 +18,23 @@ which brain is active.
 > (generic contract + how to add one) · [`hermes.md`](hermes.md) (Hermes) ·
 > this file (PicoClaw).
 >
-> **Status: client-only / incomplete.** PicoClaw is wired as a gateway *client*
-> only — there is **no install, no presync, no persona/memory migration, no skill
-> import/watch, no onboarding**. Everything beyond the WS hot path is a no-op (§8).
-> Treat it as not-yet-at-parity; the `adding-agent-runtime.md` checklist is the gap
-> list if it is ever brought up to a full backend.
+> **Status: install parity; client-only gateway.** PicoClaw now ships a device-side
+> installer + pre-start hook (`internal/picoclaw/install.sh` + `presync.sh`, embedded
+> and registered via `install.go` → `runtimereg`), so a `picoclaw.setup` switch
+> installs, provisions, and starts it like hermes (§1.1). Persona/memory migration is
+> two-way through the Go reconciler — picoclaw has a `migrate_persona` adapter
+> (`runtime_picoclaw.go`), so switching to/from it carries SOUL/IDENTITY/MEMORY/USER/
+> KNOWLEDGE both directions; **skills** import on the way IN is done by `picoclaw
+> migrate --workspace-only --force` in the presync hook (§1.1). The Go
+> gateway itself stays **client-only**: most in-process lifecycle methods
+> (`SetupAgent`, identity watcher …) remain no-ops (§8) because provisioning happens
+> out-of-process in install.sh/presync. The exceptions are `EnsureOnboarding`
+> (`onboarding.go`, keeps the OS-managed blocks in SOUL/AGENTS/HEARTBEAT current) and
+> `StartSkillWatcher` (`skill_watcher.go`, CDN skill auto-update) — both real (§1.1).
+> Remaining gaps (an emotion-acknowledge hook, queue/steer pinning) are tracked
+> against the
+> [`adding-agent-runtime.md`](adding-agent-runtime.md) checklist — consult it before
+> raising PicoClaw to full parity.
 
 ## 1. When and how it is selected
 
@@ -39,15 +51,97 @@ which brain is active.
 On startup `ProvideGateway` prints an `AGENT BACKEND ACTIVE → PICOCLAW` banner
 with `ws_url`, `conversation`, and `source`.
 
-### Onboarding / install is out of scope here
+## 1.1 Install + provisioning (`install.sh` + `presync.sh`)
 
-Unlike OpenClaw and Hermes, this backend assumes **PicoClaw is already running**
-on the device as a systemd service exposing its WebSocket. os-server is only a
-**client** — there is no `install.sh`, no `runtimereg` registration, and no
-config seeding. The `picoclaw.setup` MQTT switch + `switch-runtime` flow that
-flips `config.agent_runtime` already exist (`server/device/delivery/mqtt/`,
-`internal/device/switch_runtime.sh`); provisioning the PicoClaw service itself is
-handled out of band.
+A `picoclaw.setup` switch runs the generic `internal/device/switch_runtime.sh`,
+which materializes PicoClaw's embedded scripts and drives them. The two scripts
+live next to the backend and are embedded + registered in `install.go`:
+
+| Script | On-disk path | Runs |
+|---|---|---|
+| `install.sh` | `/usr/local/lib/os-runtimes/picoclaw/install.sh` | first switch / failed `verify` |
+| `presync.sh` | `/usr/local/bin/runtime-picoclaw-presync` | **before every** picoclaw start (and once at end of install) |
+
+**`install.sh`** (one-time):
+1. installs `jq` + `yq` + the pinned `picoclaw` binary (GitHub release,
+   `picoclaw-linux-arm64`) into `/usr/local/bin`;
+2. `picoclaw onboard` (only when `config.json` is absent) creates `/root/.picoclaw`
+   — workspace + a baseline `config.json` and `.security.yml`;
+3. writes **`picoclaw.service`** (`ExecStart=/usr/local/bin/picoclaw gateway`,
+   `HOME=/root`, `Restart=always`) — `picoclaw gateway` only runs in the foreground,
+   so unlike hermes (which ships `gateway install --system`) we wrap it ourselves.
+   The unit name equals the runtime name, so **no** `os-runtimes/picoclaw/service`
+   declaration file is needed (switch-runtime defaults to it);
+4. runs the presync hook once, then drops a `verify` hook (`command -v picoclaw`) so
+   switch-runtime can detect + self-heal an orphaned unit.
+
+**`presync.sh`** (every switch — single owner of model + channel config, so it
+self-heals after a factory reset, mirroring hermes' presync):
+- **§0 migrate** — gated on a sentinel marker `~/.picoclaw/.openclaw-migrated`
+  (**not** on `workspace/skills` emptiness — PicoClaw ships built-in skills so that
+  dir is always non-empty). When the marker is absent and `/root/.openclaw` exists,
+  stop openclaw and run `picoclaw migrate --workspace-only --force` to carry
+  persona/memory/skills over from OpenClaw. **`--workspace-only`** means migrate does
+  NOT touch `config.json` — converting `openclaw.json` into a picoclaw config produces
+  a broken config, so `config.json` stays the valid onboard baseline and §1/§2 assert
+  model/channel/gateway on top. It then does the file fixups migrate doesn't: copy
+  `HEARTBEAT.md` + `KNOWLEDGE.md` from the
+  openclaw workspace (KNOWLEDGE.md is openclaw's living learnings doc, seeded from an
+  embedded template then appended daily — migrate skips it), delete `AGENT.md` (so
+  PicoClaw runs the legacy `AGENTS.md` path — the only mode that reads `IDENTITY.md`),
+  and copy openclaw's `IDENTITY.md` over (migrate skips it too). Finally it writes the
+  marker. A factory reset wiping `/root/.picoclaw` clears
+  the marker so migrate re-runs; a failed migrate leaves the marker unwritten and
+  retries next switch.
+- **§0.5 onboarding (`onboarding.go`)** — `EnsureOnboarding`, called on
+  boot/config-change like openclaw/hermes, mirrors openclaw's reconcile (trimmed):
+  - seeds `KNOWLEDGE.md` from an embedded template (`resources/KNOWLEDGE.md`) **only
+    if absent** — covers the fresh picoclaw-only device where presync §0 had no
+    openclaw copy; never overwrites;
+  - injects the OS-managed `<!-- OS DO NOT REMOVE -->` blocks into `SOUL.md`
+    (`ensureSoulMDBlock`, per-device-type soul from DEVICE.md `soul_ref`; owner
+    content below `---` preserved), `AGENTS.md` (`ensureAgentsMDBlock`,
+    skills/memory/priority rules), and `HEARTBEAT.md` (`ensureHeartbeatMDBlock`,
+    daily knowledge-synthesis) — mirroring openclaw but stripped of OpenClaw-only
+    content, so the blocks stay current on a plain os-server OTA;
+  - **capability-gates skills** (`pruneUnsupportedSkills`): removes skill dirs the
+    device can't use — a skill survives if it is supported by `skills.Supported(caps)`
+    (the same gate openclaw uses) **or** is a picoclaw built-in
+    (`picoclawBuiltinSkills`: `agent-browser`, `github`, `hardware`, `skill-creator`,
+    `summarize`, `tmux`, `weather`); everything else under `workspace/skills` is
+    deleted. Fail-open when DEVICE.md declares no caps. No reload (skills read per-turn);
+  - when any block changed, **restarts the gateway** (`restartPicoclawGateway` →
+    `systemctl restart picoclaw`) so it re-reads the workspace files (log+skip when
+    systemctl is unavailable). Not the gateway `/reload` endpoint — it needs an admin
+    auth we don't hold (the pico channel token is rejected) and isn't confirmed to
+    re-read workspace markdown; a restart reliably does.
+  - openclaw.json-specific steps (hooks/logging/controlUi registration) are N/A for
+    picoclaw's `config.json`; queue/steer pinning is TODO.
+
+A separate **skill watcher** (`skill_watcher.go`, started at boot like openclaw)
+polls OTA metadata every 5 min and auto-updates `workspace/skills/<name>` from the
+CDN when a supported skill's version bumps (capability-gated via
+`skills.Supported`), then notifies the agent with `SendSystemChatMessage`.
+- **§1 structure** (`jq` on `config.json`) — `agents.defaults` (provider
+  `anthropic-messages`, `model_name "autonomous"`, `restrict_to_workspace:false`,
+  `allow_read_outside_workspace:true`), the `autonomous` `model_list` entry, and the
+  `channel_list` skeleton. `channel_list.pico` is always enabled.
+- **§2 dynamic** (secrets from the **project** `/root/config/config.json`, which
+  wins) — `model_list[autonomous].api_base` from `llm_base_url` (PicoClaw needs a
+  trailing `/v1`, unlike hermes), `.security.yml` `model_list."autonomous:0".api_keys`
+  from `llm_api_key`, the `pico` bearer token (must equal `constants.go` `Token`),
+  and each non-pico channel **enabled only when its credentials exist**: telegram
+  (`telegram_bot_token` + `telegram_user_id`), discord (`discord_bot_token` +
+  `discord_user_id`), slack (`slack_bot_token` + `slack_app_token` + `slack_user_id`),
+  whatsapp native (`whatsapp_user_id` → `allow_from`, no token, QR pairing on first
+  run). Secrets land in `.security.yml` under `channel_list.<ch>.settings`; structure
+  stays in `config.json`.
+
+The running gateway logs confirm the wiring on boot (`Gateway started on
+127.0.0.1:18790`, health at `/health` `/ready` `/reload`, `Channels enabled:
+[pico]`). A `SECURITY: Channel allows EVERYONE (allow_from is empty) channel=pico`
+warning is expected: `pico` is the device-local native gateway and intentionally
+has no `allow_from`.
 
 ## 2. Wire constants
 
@@ -177,9 +271,19 @@ switching back to openclaw restores them.
 Everything not on the PicoClaw hot path is a no-op so the single
 `domain.AgentGateway` interface is satisfied without inventing features the
 backend does not have: `SetupAgent`, WhatsApp pairing, `ResetAgent`,
-`RestartAgent`, `RefreshModelsConfig`,
-`EnsureOnboarding`, `FetchChatHistory`, `GetConfigJSON`, MCP entry writes,
-`WatchIdentity`, `UpdateIdentityName`, skill/model watchers, `UpdatePrimaryModel`.
+`RestartAgent`, `RefreshModelsConfig`, `FetchChatHistory`, `GetConfigJSON`,
+MCP entry writes, `WatchIdentity`, `UpdateIdentityName`, the model watchers
+(`StartModelSync`/`StartPrimaryModelWatch`), `UpdatePrimaryModel`. (`AddChannel` /
+`RefreshChannelConfig` are NOT stubs — they return `domain.ErrChannelNotSupported`
+for unsupported channels, see §7; `EnsureOnboarding` (§1.1) and `StartSkillWatcher`
+(skill auto-update, §1.1) are real.)
 HAL TTS/voice, Telegram fan-out, sensing-event queue/drain, and the run-marker
 helpers (guard / broadcast / web-chat / silent / pose-bucket) are backend-agnostic
 and behave exactly like the Hermes backend.
+
+These stay no-ops **on purpose**: PicoClaw is provisioned out-of-process by
+`install.sh` + `presync.sh` (§1.1), not by in-process gateway calls. Install,
+model/channel config, and persona migration all happen in those scripts during the
+`switch-runtime` flow. The one exception is **`EnsureOnboarding`**
+(`onboarding.go`), which is real: it injects the OS-managed block into
+`workspace/AGENTS.md` on boot/config-change (§1.1), the same contract openclaw has.
