@@ -141,7 +141,7 @@ func Run(configPath string) {
 		cfg.HTTPPort,
 		NewStatusReader(sm),
 		NewApprovalService(sm, ble),
-		LogActivitySink{},
+		NewHALActivitySink(bridge), // logs each event + speaks via HAL :5001
 	)
 	go func() {
 		if err := httpSrv.Start(); err != nil {
