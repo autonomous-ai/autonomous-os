@@ -51,7 +51,7 @@ def setup_logging() -> logging.Logger:
     # File handler: 1 MB per file, keep 3 backups (~4 MB max) -- no color codes
     _file = logging.handlers.RotatingFileHandler(
         log_dir / "server.log",
-        maxBytes=1 * 1024 * 1024,
+        maxBytes=20 * 1024 * 1024,
         backupCount=3,
     )
     _file.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
