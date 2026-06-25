@@ -302,6 +302,20 @@ class GeminiLiveAgent(VoiceAgentBase):
             if message.server_content:
                 content = message.server_content
 
+                # Diagnostic: did Google Search grounding fire this turn? Grounding
+                # chunks (web content) get injected into the session context and
+                # re-billed as input every later turn — the suspected cause of a
+                # sudden persistent in_text jump. Logs the queries + chunk count so
+                # we can correlate a search with the cost bump.
+                gm = getattr(content, "grounding_metadata", None)
+                if gm is not None:
+                    queries = list(getattr(gm, "web_search_queries", None) or [])
+                    chunks = getattr(gm, "grounding_chunks", None) or []
+                    logger.info(
+                        "[realtime][grounding] Google Search fired: queries=%s chunks=%d",
+                        queries[:3], len(chunks),
+                    )
+
                 if content.model_turn and content.model_turn.parts:
                     for part in content.model_turn.parts:
                         # Skip reasoning parts: Gemini flags thought parts with
