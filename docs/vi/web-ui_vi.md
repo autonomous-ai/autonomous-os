@@ -97,7 +97,7 @@ Góc dưới sidebar hiển thị trạng thái OpenClaw (online/offline) và th
 
 Settings **không phải là một trang riêng**. Nó là một khu vực (area) của chính shell Monitor (`os/services/web/src/pages/monitor/index.tsx`), truy cập tại route `/setting`. Trong `App.tsx`, `/monitor` và `/setting` là các route con của một layout route duy nhất có element render `<Monitor/>`; React Router giữ element đó luôn mounted khi chỉ đường dẫn con thay đổi, nên sidebar **không** bị remount khi chuyển giữa Monitor và Settings (không có hiện tượng nháy toàn trang). Shell suy ra khu vực — `"monitor"` hoặc `"setting"` — từ `useLocation().pathname`.
 
-Nhóm Settings có thể thu gọn nằm trong `NAV` của sidebar dùng chung (`os/services/web/src/pages/monitor/types.ts`). Bấm một mục Settings sẽ điều hướng tới `/setting` và render `SettingsPanel` (`os/services/web/src/components/edit/SettingsPanel.tsx`) ở khu vực chính; bấm một mục Monitor sẽ điều hướng tới `/monitor`.
+Nhóm Settings có thể thu gọn nằm trong `NAV` của sidebar dùng chung (`os/services/web/src/pages/monitor/types.ts`). Bấm một mục Settings sẽ điều hướng tới `/setting` và render `SettingsPanel` (`os/services/web/src/pages/settings/SettingsPanel.tsx`) ở khu vực chính; bấm một mục Monitor sẽ điều hướng tới `/monitor`.
 
 **Sơ đồ URL hash** — section trong bộ nhớ vẫn giữ id nội bộ `settings:*`, nhưng URL hash dùng nhãn ngắn trong khu vực setting (các helper `sectionToHash`/`hashToSection` trong `types.ts`):
 

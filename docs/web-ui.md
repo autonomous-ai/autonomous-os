@@ -97,7 +97,7 @@ Defined at `.lm-root` in `index.css`:
 
 Settings is **not a separate page**. It is an area of the same Monitor shell (`os/services/web/src/pages/monitor/index.tsx`), reached at the `/setting` route. In `App.tsx`, `/monitor` and `/setting` are child routes of a single layout route whose element renders `<Monitor/>`; React Router keeps that element mounted while only the matched child path changes, so the sidebar does **not** remount when switching between Monitor and Settings (no full-page flash). The shell derives its area — `"monitor"` or `"setting"` — from `useLocation().pathname`.
 
-The Settings collapsible group lives in the shared sidebar `NAV` (`os/services/web/src/pages/monitor/types.ts`). Clicking a Settings leaf navigates to `/setting` and renders `SettingsPanel` (`os/services/web/src/components/edit/SettingsPanel.tsx`) in the main area; clicking a Monitor leaf navigates to `/monitor`.
+The Settings collapsible group lives in the shared sidebar `NAV` (`os/services/web/src/pages/monitor/types.ts`). Clicking a Settings leaf navigates to `/setting` and renders `SettingsPanel` (`os/services/web/src/pages/settings/SettingsPanel.tsx`) in the main area; clicking a Monitor leaf navigates to `/monitor`.
 
 **URL hash scheme** — the in-memory section keeps internal `settings:*` ids, but the URL hash uses short labels in the setting area (helpers `sectionToHash`/`hashToSection` in `types.ts`):
 

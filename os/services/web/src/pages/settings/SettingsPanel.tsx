@@ -7,15 +7,15 @@ import type { FaceOwner } from "@/hooks/setup/useFaceEnroll";
 import { C, ADMIN_PASSWORD_MIN } from "@/components/setup/shared";
 import { DeviceSection } from "@/components/setup/DeviceSection";
 import { LLMSection } from "@/components/setup/LLMSection";
-import { WifiSection } from "@/components/edit/WifiSection";
-import { VoiceSection as EditVoiceSection } from "@/components/edit/VoiceSection";
-import { FaceSection as EditFaceSection } from "@/components/edit/FaceSection";
-import { TTSSection } from "@/components/edit/TTSSection";
-import { RealtimeSection } from "@/components/edit/RealtimeSection";
-import { AgentRuntimeSection } from "@/components/edit/AgentRuntimeSection";
-import { STTSection, type SttProvider } from "@/components/edit/STTSection";
-import { ChannelSection } from "@/components/edit/ChannelSection";
-import { MqttSection } from "@/components/edit/MqttSection";
+import { WifiSection } from "@/pages/settings/WifiSection";
+import { VoiceSection as EditVoiceSection } from "@/pages/settings/VoiceSection";
+import { FaceSection as EditFaceSection } from "@/pages/settings/FaceSection";
+import { TTSSection } from "@/pages/settings/TTSSection";
+import { RealtimeSection } from "@/pages/settings/RealtimeSection";
+import { AgentRuntimeSection } from "@/pages/settings/AgentRuntimeSection";
+import { STTSection, type SttProvider } from "@/pages/settings/STTSection";
+import { ChannelSection } from "@/pages/settings/ChannelSection";
+import { MqttSection } from "@/pages/settings/MqttSection";
 
 // The set of sections this panel can render. Controlled by the parent now (the
 // page shell owns the sidebar / active-section state). `stt` is the Language

@@ -44,8 +44,8 @@ import { FaceOwnersSection } from "./FaceOwnersSection";
 import { BluetoothSection } from "./BluetoothSection";
 import { CliSection } from "./CliSection";
 import { ConfirmDialog } from "./components";
-import { SettingsPanel } from "@/components/edit/SettingsPanel";
-import type { SettingsSectionId } from "@/components/edit/SettingsPanel";
+import { SettingsPanel } from "@/pages/settings/SettingsPanel";
+import type { SettingsSectionId } from "@/pages/settings/SettingsPanel";
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
