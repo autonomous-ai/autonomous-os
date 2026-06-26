@@ -145,8 +145,8 @@ các luật cấp quyền của bạn.
    hình tròn hiện **"Approve `<tool>`?"**, và phát một sự kiện sensing
    `type=claude_code_approval` tới OS server `/api/sensing/event` — rồi chặn cho
    tới khi yêu cầu được giải quyết hoặc hết TTL của long-poll.
-4. Agent OpenClaw trên thiết bị nghe thấy sự kiện sensing (một skill trong
-   [`skill/SKILL.md`](../../skill/SKILL.md)) và hỏi người dùng; khi **"có"** nó gọi
+4. Agent OpenClaw trên thiết bị nghe thấy sự kiện sensing (platform skill
+   [`skills/claude-buddy/SKILL.md`](../../../../skills/claude-buddy/SKILL.md)) và hỏi người dùng; khi **"có"** nó gọi
    `POST 127.0.0.1:5002/claude-code/approve {id}`, khi **"không"**
    `POST 127.0.0.1:5002/claude-code/deny {id}`.
 5. Daemon mở chặn long-poll → trả về `{"decision":"allow"|"deny"}` → hook in ra
