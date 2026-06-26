@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -73,14 +74,16 @@ func (s *HermesService) EnsureOnboarding() error {
 
 	// Restart the gateway only when config.yaml/.env OR the hook actually changed —
 	// all are loaded only at gateway start, so an unchanged boot is a no-op.
-	if !configChanged && !hookChanged {
-		slog.Info("hermes onboarding: config + hooks unchanged, no restart", "component", "hermes")
+	skillsRestored := s.ensureSkills()
+
+	if !configChanged && !hookChanged && !skillsRestored {
+		slog.Info("hermes onboarding: config + hooks + skills unchanged, no restart", "component", "hermes")
 		return nil
 	}
 
 	slog.Info("hermes onboarding: change detected, restarting gateway",
 		"component", "hermes", "unit", hermesGatewayUnit,
-		"config_changed", configChanged, "hook_changed", hookChanged)
+		"config_changed", configChanged, "hook_changed", hookChanged, "skills_restored", skillsRestored)
 	if err := restartHermesGateway(); err != nil {
 		// Non-fatal: the new config/hook is on disk; the gateway picks it up on its
 		// next (re)start even if this one failed. Don't block the os-server boot path.
@@ -144,6 +147,36 @@ func (s *HermesService) RestartAgent() error {
 	}
 	slog.Info("restart completed", "component", "hermes")
 	return nil
+}
+
+// ensureSkills downloads all supported skills from CDN into
+// ~/.hermes/skills/openclaw-imports/ when the directory is absent or empty.
+// This covers two cases where skills are missing without a CDN version bump:
+//   - factory reset (wipes openclaw-imports/) with Hermes as the active runtime
+//   - first boot as Hermes when claw migrate had nothing to copy from
+//
+// Steady-state updates are handled by StartSkillWatcher (version-gated CDN
+// polling). This is intentionally a restore guard, not a full sync — we only
+// act when the dir is empty so we don't double-download on every boot.
+//
+// Returns true when skills were restored so EnsureOnboarding includes a gateway
+// restart — the running Hermes instance would otherwise not load skills that
+// landed on disk after it started.
+func (s *HermesService) ensureSkills() bool {
+	skillsDir := filepath.Join(hermesHome, "skills", "openclaw-imports")
+	entries, err := os.ReadDir(skillsDir)
+	if err == nil && len(entries) > 0 {
+		return false // skills present — watcher handles updates
+	}
+	names := s.supportedSkills()
+	if len(names) == 0 {
+		return false
+	}
+	slog.Info("hermes onboarding: skills dir empty — restoring from CDN",
+		"component", "hermes", "count", len(names))
+	changed := s.downloadSkillsByName(names)
+	slog.Info("hermes onboarding: skills restored", "component", "hermes", "restored", len(changed))
+	return len(changed) > 0
 }
 
 // restartHermesGateway bounces the hermes daemon so it reloads config.yaml. The
