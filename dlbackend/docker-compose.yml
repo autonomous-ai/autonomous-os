@@ -1,0 +1,36 @@
+# Single-node master deployment.
+#
+# For multi-GPU scaling, run slaves on separate machines:
+#   docker run --gpus all -e DL_API_KEY=<secret> -e ROLE=slave -p 8899:8899 dlbackend
+#
+# Then point the master's LB at the slaves:
+#   LB__BACKENDS=http://127.0.0.1:8001,https://<slave1>:8899,https://<slave2>:8899
+#
+# Usage:
+#   docker compose up          # master node
+#   docker compose up -d       # detached
+
+services:
+  master:
+    build: .
+    image: tnk2908/dlbackend:${DOCKER_TAG:-latest}
+    environment:
+      - DL_API_KEY=${DL_API_KEY:?DL_API_KEY must be set}
+      - MODEL_CACHE_DIR=/workspace/models
+      - ROLE=master
+      - LB__BACKENDS=${LB__BACKENDS:-http://127.0.0.1:8001}
+    ports:
+      - "8899:8899"
+    volumes:
+      - model-cache:/workspace/models
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  model-cache:

@@ -12,6 +12,7 @@ import (
 	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/internal/hermes"
 	"go.autonomous.ai/os/internal/openclaw"
+	"go.autonomous.ai/os/internal/picoclaw"
 	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/server/serializers"
 )
@@ -39,6 +40,15 @@ func GetHermesVersion() string {
 // populateHermesVersion populates the shared hermes version cache at startup.
 func populateHermesVersion() {
 	hermes.PopulateHermesVersion()
+}
+
+func GetPicoclawVersion() string {
+	return picoclaw.GetPicoclawVersion()
+}
+
+// populatePicoclawVersion populates the shared picoclaw version cache at startup.
+func populatePicoclawVersion() {
+	picoclaw.PopulatePicoclawVersion()
 }
 
 // StopTTS interrupts active TTS playback on HAL.

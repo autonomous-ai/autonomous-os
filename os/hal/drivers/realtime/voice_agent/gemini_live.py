@@ -59,10 +59,20 @@ class GeminiLiveAgent(VoiceAgentBase):
         self._resumption_handle: str | None = None
         self._speech_ended_at: float | None = None
         self._first_audio_received: bool = False
+        # Set when a Google Search grounding injects chunks this turn; consumed by
+        # the orchestrator (take_grounding_fired) to recycle the session afterward
+        # so the bulky snippets don't keep re-billing on later turns.
+        self._grounding_fired: bool = False
         self._vad_disabled: bool = not config.vad_enabled
         self._activity_started: bool = False
         self._reconnect_delay_s: float = config.reconnect_delay_s
         self._last_reconnect_at: float = 0.0
+        # Exponential backoff: the recv loop self-reconnects when disconnected, so a
+        # persistent failure (e.g. Gemini usage-limit 4029) would otherwise hammer
+        # the endpoint every reconnect_delay_s. Grow the throttle on each failed
+        # reconnect (capped), reset to the base on success.
+        self._reconnect_backoff: float = config.reconnect_delay_s
+        self._reconnect_backoff_max: float = 60.0
         self._max_retries: int = config.max_retries
         self._send_timeout_s: float = config.send_timeout_s
         self._recv_timeout_s: float = config.recv_timeout_s
@@ -118,20 +128,13 @@ class GeminiLiveAgent(VoiceAgentBase):
                 # second line of defense.
                 include_thoughts=False,
             ),
-            context_window_compression=(
-                types.ContextWindowCompressionConfig(
-                    # COST: compress session history once it exceeds trigger_tokens,
-                    # down to ~target_tokens. The default SlidingWindow() trigger
-                    # (~100k) never fires for our short sessions, so history climbs
-                    # and is re-billed as input text every turn — set a low trigger.
-                    trigger_tokens=self._config.compression_trigger_tokens,
-                    sliding_window=types.SlidingWindow(
-                        target_tokens=self._config.compression_target_tokens,
-                    ),
-                )
-                if self._config.context_window_compression
-                else None
-            ),
+            # NO context_window_compression. DO NOT re-add it while running behind the
+            # campaign-api proxy: when compression fires the Gemini server performs it
+            # via a session-resumption handoff (sessionResumptionUpdate + CLOSE 1000),
+            # and the proxy does not support resumption, so the in-flight turn dies
+            # mid-answer. Cost is controlled by shrinking the per-turn floor (memory
+            # caps + skills-catalog trim) + session recycle instead. Only reconsider
+            # against a resumption-capable endpoint (direct Google base_url).
         )
 
         live_tools: list[types.Tool] = []
@@ -300,10 +303,19 @@ class GeminiLiveAgent(VoiceAgentBase):
                 # thinking) — unpriced here, so est is a floor.
                 unattr_in = (um.prompt_token_count or 0) - attributed["in"]
                 unattr_out = (um.response_token_count or 0) - attributed["out"]
+                # Implicit context caching (on by default for Gemini 2.5+/3.1) re-bills
+                # the cached prefix — our ~8k-token system-instruction floor — at a 90%
+                # discount. `cost` above charges every prompt token at full rate, so
+                # subtract the saving on cached tokens to get the REAL estimate. cached
+                # tokens are text-in (the floor is text). cached=0 every turn means the
+                # cache is not hitting (e.g. session churn) — that's the cost red flag.
+                cached = getattr(um, "cached_content_token_count", 0) or 0
+                cost_cached = max(0.0, cost - cached * rates[("in", "TEXT")] * 0.90 / 1_000_000)
                 logger.debug(
-                    "[realtime] Gemini usage: %s +unattr(%din/%dout) | total=%dtok est>=$%.5f",
-                    " ".join(parts) or "-", unattr_in, unattr_out,
-                    um.total_token_count or 0, cost,
+                    "[realtime] Gemini usage: %s +unattr(%din/%dout) | cached=%dtok "
+                    "total=%dtok est_full>=$%.5f est_cached>=$%.5f",
+                    " ".join(parts) or "-", unattr_in, unattr_out, cached,
+                    um.total_token_count or 0, cost, cost_cached,
                 )
 
             if message.server_content:
@@ -322,6 +334,10 @@ class GeminiLiveAgent(VoiceAgentBase):
                         "[realtime][grounding] Google Search fired: queries=%s chunks=%d",
                         queries[:3], len(chunks),
                     )
+                    # Snippets were injected into the session context — flag for a
+                    # post-turn recycle so they don't re-bill on every later turn.
+                    if chunks:
+                        self._grounding_fired = True
 
                 if content.model_turn and content.model_turn.parts:
                     for part in content.model_turn.parts:
@@ -400,11 +416,12 @@ class GeminiLiveAgent(VoiceAgentBase):
     # --- Reconnect ---
 
     def _ensure_connected(self) -> None:
-        """Reconnect if not connected. Throttled to at most once per reconnect_delay_s."""
+        """Reconnect if not connected. Throttled by an exponential backoff that grows
+        on consecutive failures (reset to base on success)."""
         if self._connected.is_set():
             return
         now: float = time.monotonic()
-        if now - self._last_reconnect_at < self._reconnect_delay_s:
+        if now - self._last_reconnect_at < self._reconnect_backoff:
             return
         self._last_reconnect_at = now
         self._reconnect()
@@ -421,6 +438,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         self._activity_started = False
         self._turn_done.set()  # unblock any waiting commit
         self._last_reconnect_at = 0.0  # bypass _ensure_connected throttle
+        self._reconnect_backoff = self._reconnect_delay_s  # zombie recovery → retry now
         if self._loop is not None:
             try:
                 self._submit_and_wait(self._async_disconnect(), timeout=10.0)
@@ -441,8 +459,49 @@ class GeminiLiveAgent(VoiceAgentBase):
             self._submit_and_wait(self._async_disconnect())
             self._submit_and_wait(self._async_connect())
             self._connected.set()
+            self._reconnect_backoff = self._reconnect_delay_s  # success → reset backoff
         except Exception as e:
-            logger.warning("[realtime] Reconnect failed: %s — will retry on next audio", e)
+            # Grow backoff so a persistent failure (e.g. usage-limit 4029) doesn't
+            # hammer the endpoint every base delay.
+            self._reconnect_backoff = min(
+                self._reconnect_backoff * 2, self._reconnect_backoff_max
+            )
+            logger.warning(
+                "[realtime] Reconnect failed: %s — next retry in ~%.0fs",
+                e, self._reconnect_backoff,
+            )
+
+    def _fail_fast_turn(self, reason: str) -> None:
+        """End the current turn immediately on a non-idle recv error.
+
+        Without this, any backend failure (proxy go_away, quota / resource
+        exhausted, unexpected WS close — anything that is NOT a benign idle
+        close 1000) leaves the consumer blocked in receive() for the full
+        REALTIME_RECV_QUEUE_TIMEOUT_S before the turn falls back to the main
+        agent. Pushing a TurnDoneEvent unblocks receive() now so the main agent
+        answers without the dead-air wait. Only fires while a turn is actually
+        awaiting output (_turn_done clear); a stray sentinel between turns would
+        just be dropped by flush_output() at the next turn start anyway. Late
+        output from a successful reconnect is likewise flushed next turn.
+        """
+        if self._turn_done.is_set():
+            return  # no turn awaiting output — nothing to unblock
+        self._first_audio_received = False
+        self._turn_done.set()
+        self._recv_queue.put(TurnDoneEvent())
+        logger.info(
+            "[realtime] Recv error (%s) — ending turn now, falling back to main "
+            "(skipping receive timeout wait)",
+            reason,
+        )
+
+    @override
+    def take_grounding_fired(self) -> bool:
+        """Return + reset the grounding flag (see base). True when this turn's
+        Google Search injected chunks → orchestrator recycles to drop them."""
+        fired: bool = self._grounding_fired
+        self._grounding_fired = False
+        return fired
 
     # --- VoiceAgentBase implementation ---
 
@@ -523,7 +582,15 @@ class GeminiLiveAgent(VoiceAgentBase):
             if self._loop is None:
                 break
             if not self._connected.is_set():
-                _ = self._connected.wait(timeout=self._queue_poll_s)
+                # Proactively reconnect (throttled by reconnect_delay_s) so the
+                # session SELF-HEALS while disconnected even with NO audio flowing.
+                # Critical after a usage-limit (4029) close: voice_service stops
+                # feeding audio (orchestrator.available=False once disconnected), so
+                # the send loop never triggers a reconnect — without this the session
+                # would stay dead forever even after the limit is lifted.
+                self._ensure_connected()
+                if not self._connected.is_set():
+                    _ = self._connected.wait(timeout=self._queue_poll_s)
                 continue
 
             for attempt in range(self._max_retries):
@@ -542,6 +609,12 @@ class GeminiLiveAgent(VoiceAgentBase):
                         logger.info("[realtime] Session closed normally (idle) — reconnecting")
                     else:
                         logger.warning("[realtime] Recv failed (attempt %d/%d): %s", attempt + 1, self._max_retries, e)
+                    # Fail-fast on ANY close, including a benign idle-1000: if it
+                    # lands mid-turn the fresh session has no committed audio and
+                    # will never answer, so end the turn now instead of waiting out
+                    # the receive timeout. No-op when genuinely idle between turns
+                    # (_turn_done already set).
+                    self._fail_fast_turn(f"ws close {code}")
                     self._connected.clear()
                     self._session = None
                 except genai_errors.APIError as e:
@@ -550,13 +623,18 @@ class GeminiLiveAgent(VoiceAgentBase):
                     # "1000 None", not as ConnectionClosed. Mirror the 1000 special
                     # case in the ConnectionClosed branch above: log at INFO so a
                     # benign idle-reconnect doesn't show up as a red WARNING.
-                    if str(e).split(" ", 1)[0] == "1000":
+                    code_str: str = str(e).split(" ", 1)[0]
+                    if code_str == "1000":
                         logger.info("[realtime] Session closed normally (idle) — reconnecting")
                     else:
                         logger.warning("[realtime] Recv API error (attempt %d/%d): %s", attempt + 1, self._max_retries, e)
+                    # Fail-fast on ANY close (see ConnectionClosed branch): a mid-turn
+                    # idle-1000 loses the turn on the fresh session. No-op when idle.
+                    self._fail_fast_turn(f"api {code_str}")
                     self._connected.clear()
                     self._session = None
                 except Exception as e:
                     logger.exception("[realtime] Unexpected recv error (attempt %d/%d): %s", attempt + 1, self._max_retries, e)
+                    self._fail_fast_turn("unexpected")
                     self._connected.clear()
                     self._session = None

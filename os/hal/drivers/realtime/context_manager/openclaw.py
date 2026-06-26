@@ -10,6 +10,19 @@ from hal.drivers.realtime.context_manager.base import ContextManagerBase
 logger = logging.getLogger(__name__)
 
 
+def _first_sentence(text: str, cap: int = 150) -> str:
+    """First sentence of a skill description (cheap token cut for the catalog).
+
+    Collapses newlines, cuts at the first sentence terminator (. ! ?) followed
+    by whitespace, else hard-caps at `cap` chars. Keeps the catalog
+    declaration-driven while dropping the verbose main-agent-only tail.
+    """
+    text = " ".join(text.split())
+    m = re.search(r"[.!?](\s|$)", text)
+    s = text[: m.end()].strip() if m else text
+    return s[:cap].rstrip()
+
+
 class OpenClawContextManager(ContextManagerBase):
     """Context manager for the OpenClaw agent runtime.
 
@@ -104,7 +117,7 @@ class OpenClawContextManager(ContextManagerBase):
                 name: str = (
                     name_match.group(1).strip() if name_match else skill_md.parent.name
                 )
-                desc: str = desc_match.group(1).strip() if desc_match else ""
+                desc: str = _first_sentence(desc_match.group(1)) if desc_match else ""
                 if name:
                     rows.append((name, desc))
             except Exception as e:
