@@ -33,6 +33,7 @@ var Catalog = []string{
 	"user-emotion-detection",
 	"habit",
 	"input-branching",
+	"claude-buddy",
 }
 
 // Capability maps a skill to the DEVICE.md capabilities it requires, with
@@ -82,6 +83,10 @@ var Capability = map[string][]string{
 	"guard":                  {device.CapPresence},
 	"speaker-recognizer":     {device.CapAudio},
 	"user-emotion-detection": {device.CapAudio, device.CapPresence},
+	// Voice-approve Claude tool prompts from the Mac companion → needs a mic+speaker
+	// to ask the user out loud. Harmless on audio devices without the companion
+	// daemon (the sensing event simply never fires).
+	"claude-buddy": {device.CapAudio},
 }
 
 // Supported filters the catalog to the skills a device with deviceCaps can run:

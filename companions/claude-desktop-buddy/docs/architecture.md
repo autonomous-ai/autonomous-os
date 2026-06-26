@@ -52,7 +52,7 @@ For building, deploying, config, and pairing see [`setup.md`](setup.md).
 | `narrator.go` + `i18n.go` | Short, per-turn-deduped TTS announcements of Claude's activity, localized (EN/VI). |
 | `stats.go` | Persists lifetime approved/denied counters to `/var/lib/claude-desktop-buddy/stats.json`. |
 | `config/buddy.json` | Runtime config (see [`setup.md`](setup.md#configuration)). |
-| `skill/SKILL.md` | The OpenClaw skill that turns approvals into a voice interaction. |
+| `skill/SKILL.md` | Pointer only — the agent skill that turns approvals into a voice interaction is now the platform skill [`skills/claude-buddy/SKILL.md`](../../../skills/claude-buddy/SKILL.md), shipped to devices via the standard skill OTA (`upload-skills.sh`) and registered in `internal/skills/skills.go` (`audio` capability). |
 | `third_party/bluetooth/` | Local fork of `tinygo.org/x/bluetooth` (see below). |
 
 ## Data flow
@@ -153,7 +153,8 @@ CodeApprovals.Request registers the pending approval
 
 Opt-in via plugin config `approval_enabled` (default `false`). The
 `/claude-code/approve` + `/deny` handlers are **loopback-only** — the on-device
-OpenClaw agent resolves the prompt by calling them (per `skill/SKILL.md`).
+OpenClaw agent resolves the prompt by calling them (per the platform skill
+`skills/claude-buddy/SKILL.md`).
 Fail-safe: any error or timeout makes the hook defer to Claude Code's native
 permission dialog — it never auto-allows. Unlike the Desktop flow, the decision
 is returned as the hook's HTTP response (its return value) rather than pushed
