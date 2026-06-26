@@ -26,6 +26,35 @@
 | POST | `/api/device/setup` | Configure WiFi + LLM + channel + MQTT (async, returns immediately) |
 | POST | `/api/device/channel` | Change messaging channel |
 
+### Device Timezone
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/device/timezone` | Active IANA zone + selectable zone list (admin-gated) |
+| POST | `/api/device/timezone` | Apply an IANA zone (admin-gated) |
+
+**GET response** (`data`):
+```json
+{
+  "current": "Asia/Ho_Chi_Minh",
+  "zones": ["UTC", "Asia/Ho_Chi_Minh", "..."]
+}
+```
+
+- `current` is read live from `/etc/timezone`, falling back to resolving the `/etc/localtime` symlink, then the `timezone` field in `config/config.json`.
+- `zones` comes from `timedatectl list-timezones`, falling back to a walk of `/usr/share/zoneinfo`, then a built-in common list.
+
+**POST request body:**
+```json
+{ "timezone": "Asia/Ho_Chi_Minh" }
+```
+
+The zone is validated against `/usr/share/zoneinfo`; an unknown zone returns HTTP 400. On success the server: repoints the `/etc/localtime` symlink at the zone's tzdata file, writes `/etc/timezone` (Debian-style, trailing newline), runs `timedatectl set-timezone <tz>` best-effort (non-fatal if absent), and persists `timezone` to `config/config.json`.
+
+The change takes effect **without a HAL restart** — HAL's clock helpers (`os/hal/clock.py`) read `/etc/timezone` fresh on every call.
+
+Config field: `timezone` in `config/config.json` (IANA zone string, omitempty) — a record of the applied zone. The OS files (`/etc/timezone` + `/etc/localtime`) are the source of truth.
+
 ### Network
 
 | Method | Endpoint | Description |

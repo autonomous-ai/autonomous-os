@@ -26,6 +26,35 @@
 | POST | `/api/device/setup` | Cấu hình WiFi + LLM + channel + MQTT (async, trả về ngay) |
 | POST | `/api/device/channel` | Thay đổi messaging channel |
 
+### Device Timezone (Múi giờ)
+
+| Method | Endpoint | Mô tả |
+|--------|----------|-------|
+| GET | `/api/device/timezone` | IANA zone hiện tại + danh sách zone chọn được (admin-gated) |
+| POST | `/api/device/timezone` | Áp dụng một IANA zone (admin-gated) |
+
+**GET response** (`data`):
+```json
+{
+  "current": "Asia/Ho_Chi_Minh",
+  "zones": ["UTC", "Asia/Ho_Chi_Minh", "..."]
+}
+```
+
+- `current` được đọc trực tiếp (live) từ `/etc/timezone`, fallback sang resolve symlink `/etc/localtime`, rồi tới field `timezone` trong `config/config.json`.
+- `zones` lấy từ `timedatectl list-timezones`, fallback sang quét `/usr/share/zoneinfo`, rồi tới danh sách common có sẵn (built-in).
+
+**POST request body:**
+```json
+{ "timezone": "Asia/Ho_Chi_Minh" }
+```
+
+Zone được validate dựa trên `/usr/share/zoneinfo`; zone không tồn tại trả về HTTP 400. Khi thành công, server: trỏ lại symlink `/etc/localtime` về file tzdata của zone, ghi `/etc/timezone` (kiểu Debian, có newline cuối), chạy `timedatectl set-timezone <tz>` best-effort (không fatal nếu thiếu lệnh), và lưu `timezone` vào `config/config.json`.
+
+Thay đổi có hiệu lực **mà KHÔNG cần restart HAL** — các clock helper của HAL (`os/hal/clock.py`) đọc lại `/etc/timezone` mỗi lần gọi.
+
+Config field: `timezone` trong `config/config.json` (chuỗi IANA zone, omitempty) — bản ghi của zone đã áp dụng. Các file OS (`/etc/timezone` + `/etc/localtime`) mới là source of truth.
+
 ### Network
 
 | Method | Endpoint | Mô tả |

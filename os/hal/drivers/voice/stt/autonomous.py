@@ -218,6 +218,18 @@ class AutonomousSTTSession(STTSession):
                     len(data),
                 )
 
+    def send_keepalive(self):
+        """Send a Deepgram KeepAlive so the server doesn't idle-close the WS while
+        we sit pre-connected waiting for speech (no audio flowing). Without this the
+        pre-connect goes stale, the next turn cold-reconnects (~1s) and the short
+        utterance lands in the pre-roll then closes before a transcript finalizes →
+        empty STT. KeepAlive is a control frame, not counted as audio."""
+        if self._ws and not self._closed.is_set():
+            try:
+                self._ws.send(json.dumps({"type": "KeepAlive"}))
+            except Exception as e:
+                logger.debug("Autonomous STT: keepalive send failed: %s", e)
+
     def close(self):
         if self._closed.is_set():
             return

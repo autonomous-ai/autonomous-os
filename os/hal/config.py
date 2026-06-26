@@ -437,6 +437,15 @@ REALTIME_ZOMBIE_RECONNECT_AFTER: int = int(
 REALTIME_SESSION_IDLE_RESET_S: float = float(
     os.environ.get("HAL_REALTIME_SESSION_IDLE_RESET_S", "240")
 )
+# Cost control: recycle (rebuild) the realtime session after this many turns even
+# in an actively-ongoing conversation. Each turn's reply + audio accrues into the
+# session context the provider re-bills as input every turn, so context grows
+# unbounded in a long chat; recycling caps that growth back to the floor
+# (instructions + summary). Continuity survives via the reloaded summary.md. 0
+# disables. See RealtimeOrchestrator.stream_output.
+REALTIME_SESSION_MAX_TURNS: int = int(
+    os.environ.get("HAL_REALTIME_SESSION_MAX_TURNS", "12")
+)
 # A captured session shorter than this AND with no STT transcript is treated as a
 # VAD false-trigger (a noise blip that only grabbed the pre-roll, no sustained
 # speech) and is NOT committed to the realtime model. Committing such turns wastes

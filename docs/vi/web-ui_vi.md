@@ -21,7 +21,7 @@ Tiêu đề tab trình duyệt (`document.title`) hiển thị đúng theo page/
 |--------------------|-------|
 | `/setup` (và `/` khi chưa provision) | `Lamp · Setup` |
 | `/monitor#<section>` (theo section đang chọn) | `Lamp · <tên section>` — ví dụ `Lamp · Chat`, `Lamp · Overview`, `Lamp · Info`, `Lamp · Flow`, `Lamp · Users`, `Lamp · Camera`, `Lamp · Sensing`, `Lamp · Analytics`, `Lamp · Servo`, `Lamp · Logs`, `Lamp · CLI` |
-| `/setting#<section>` (Settings, theo section đang chọn) | `Lamp · Settings · <tên section>` — ví dụ `Lamp · Settings · General`, `Lamp · Settings · Wi-Fi`, `Lamp · Settings · AI Brain`, `Lamp · Settings · Language`, `Lamp · Settings · Voice`, `Lamp · Settings · My Voice`, `Lamp · Settings · Face`, `Lamp · Settings · Channels`, `Lamp · Settings · MQTT` |
+| `/setting#<section>` (Settings, theo section đang chọn) | `Lamp · Settings · <tên section>` — ví dụ `Lamp · Settings · General`, `Lamp · Settings · Wi-Fi`, `Lamp · Settings · AI Brain`, `Lamp · Settings · Language`, `Lamp · Settings · Voice`, `Lamp · Settings · My Voice`, `Lamp · Settings · Face`, `Lamp · Settings · Channels`, `Lamp · Settings · MQTT`, `Lamp · Settings · Timezone` |
 | `/gw-config` | `Lamp · GW Config` |
 
 `<title>Lamp Setup</title>` tĩnh trong `index.html` chỉ là fallback trước khi React mount; hook sẽ ghi đè khi mount và khôi phục title cũ khi unmount.
@@ -114,8 +114,11 @@ Nhóm Settings có thể thu gọn nằm trong `NAV` của sidebar dùng chung (
 | Realtime | `/setting#realtime` |
 | Channels | `/setting#channel` |
 | MQTT | `/setting#mqtt` |
+| Timezone | `/setting#timezone` |
 
-Các mục Monitor được serialize thành id thuần, ví dụ `/monitor#overview`, `/monitor#system`, `/monitor#flow`. Mặc định: `/monitor` không có hash / hash không hợp lệ → `overview`; `/setting` không có hash / hash không hợp lệ → `general` (URL được chuẩn hóa thành `/setting#general`). Deep-link (ví dụ `/setting#wifi`) và nút back/forward của trình duyệt được tôn trọng qua một effect dựa trên `useLocation`. Người dùng không-debug chỉ thấy các mục trong `PUBLIC_SECTIONS` (gồm Chat, Overview, Info, Flow, Camera, Users, Bluetooth, **Logs**, **CLI**, và các mục Settings công khai General/Wi-Fi/My Voice/Face); `?debug=true` mở khóa phần còn lại (Sensing, Analytics, Servo, API Docs, Agent gateway, và các mục Settings sâu hơn AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT).
+Các mục Monitor được serialize thành id thuần, ví dụ `/monitor#overview`, `/monitor#system`, `/monitor#flow`. Mặc định: `/monitor` không có hash / hash không hợp lệ → `overview`; `/setting` không có hash / hash không hợp lệ → `general` (URL được chuẩn hóa thành `/setting#general`). Deep-link (ví dụ `/setting#wifi`) và nút back/forward của trình duyệt được tôn trọng qua một effect dựa trên `useLocation`. Người dùng không-debug chỉ thấy các mục trong `PUBLIC_SECTIONS` (gồm Chat, Overview, Info, Flow, Camera, Users, Bluetooth, **Logs**, **CLI**, và các mục Settings công khai General/Wi-Fi/My Voice/Face/Timezone); `?debug=true` mở khóa phần còn lại (Sensing, Analytics, Servo, API Docs, Agent gateway, và các mục Settings sâu hơn AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT).
+
+**Timezone** (`/setting#timezone`, nội bộ `settings:timezone`, `TimezoneSection.tsx`) — một mục chỉ-admin mà, giống Agent Runtime, **không** nằm trong luồng "Save Changes" của form: nó có nút **Apply** riêng. Mục này tải zone hiện tại và danh sách zone IANA chọn được qua `GET /api/device/timezone`, cho người vận hành chọn một zone từ một dropdown duy nhất (`<select>` nhóm theo khu vực bằng `<optgroup>`, mỗi dòng ghi `(GMT+7) Ho Chi Minh` và sắp theo offset UTC, giống cách các trình chọn timezone phổ biến trên web làm), và hiển thị preview trực tiếp giờ địa phương theo zone đã chọn. Khi nhấn **Apply** nó gọi `POST /api/device/timezone {timezone}`; thay đổi áp dụng ngay lập tức (không cần khởi động lại thiết bị).
 
 Trang `/edit` độc lập (cũ) đã bị gỡ bỏ; `SettingsPanel` của nó giờ chỉ truy cập được qua các tab `/setting` bên trong Monitor. `/edit` (và link "update →" trong Setup) giờ redirect tới `/setting`.
 

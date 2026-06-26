@@ -309,6 +309,7 @@ const (
 	KindOAuthSet     = "oauth.set"     // store/replace OAuth token for a provider
 	KindOAuthRemove  = "oauth.remove"  // delete OAuth token for a provider
 	KindRealtimeSet  = "realtime.set"  // persist realtime voice-agent config (provider/voice/reasoning…)
+	KindTimezoneSet  = "timezone.set"  // apply device IANA timezone (/etc/localtime + /etc/timezone)
 
 	// KindHermesSetup / KindPicoclawSetup / KindOpenclawSetup switch the active
 	// agentic backend. The kind itself names the target runtime — the worker
@@ -481,15 +482,19 @@ type MQTTRemoveChannelResponse struct {
 // DeviceMessage is the base response published to fd_channel.
 // All messages MUST include these required fields per spec.
 type MQTTInfoResponse struct {
-	Device          string `json:"device"`
-	Type            string `json:"type"`
-	Version         string `json:"version"`
-	ID              string `json:"id"`
-	Mac             string `json:"mac"`
-	Time            string `json:"time"`
-	TTSProvider     string `json:"tts_provider,omitempty"`
-	TTSVoice        string `json:"tts_voice,omitempty"`
-	STTLanguage     string `json:"stt_language,omitempty"`
+	Device      string `json:"device"`
+	Type        string `json:"type"`
+	Version     string `json:"version"`
+	ID          string `json:"id"`
+	Mac         string `json:"mac"`
+	Time        string `json:"time"`
+	TTSProvider string `json:"tts_provider,omitempty"`
+	TTSVoice    string `json:"tts_voice,omitempty"`
+	STTLanguage string `json:"stt_language,omitempty"`
+	// Timezone is the device's active IANA zone (e.g. "Asia/Ho_Chi_Minh"). The
+	// base constructor seeds it from config (the record); the info / system.info
+	// handlers override it with the live system value via device.Service.
+	Timezone        string `json:"timezone,omitempty"`
 	HalVersion      string `json:"hal_version,omitempty"`
 	OpenClawVersion string `json:"openclaw_version,omitempty"`
 	// HermesVersion sits next to openclaw_version: the installed Hermes CLI version
@@ -517,6 +522,7 @@ func NewMQTTInfoResponse(cfg *config.Config, msgType string, mac string) MQTTInf
 		TTSProvider: cfg.TTSProvider,
 		TTSVoice:    cfg.TTSVoice,
 		STTLanguage: cfg.STTLanguage,
+		Timezone:    cfg.Timezone,
 	}
 }
 
@@ -591,6 +597,7 @@ type MQTTHostData struct {
 	DeviceID      string `json:"device_id"`
 	DeviceName    string `json:"device_name"` // friendly "<device_type>-xxxx"
 	UptimeSeconds int64  `json:"uptime_seconds"`
+	Timezone      string `json:"timezone,omitempty"` // active IANA zone, live from the device
 }
 
 // MQTTOAuthSetData is the Data payload for kind:"oauth.set".
@@ -858,6 +865,34 @@ func IsValidAgentRuntime(r string) bool {
 type AgentRuntimeStatus struct {
 	Current string   `json:"current"`
 	Options []string `json:"options"`
+}
+
+// TimezoneStatus is returned by GET /api/device/timezone: the device's active
+// IANA zone plus the selectable list (from the system tzdata), so the web picker
+// never hardcodes the zone list.
+type TimezoneStatus struct {
+	Current string   `json:"current"`
+	Zones   []string `json:"zones"`
+}
+
+// TimezoneSetData is the IANA zone name to apply (e.g. "Asia/Ho_Chi_Minh"),
+// shared by the HTTP POST /api/device/timezone body and the MQTT `timezone.set`
+// downlink data block. Invalid/unknown zones are rejected.
+//
+//	{ "cmd": "data", "kind": "timezone.set", "data": { "timezone": "Asia/Ho_Chi_Minh" } }
+type TimezoneSetData struct {
+	Timezone string `json:"timezone" validate:"required"`
+}
+
+// MQTTTimezoneSetAck is published to fd_channel after applying (or failing) a
+// timezone.set downlink. status: "starting" | "success" | "failure". Mirrors
+// MQTTRealtimeSetAck.
+type MQTTTimezoneSetAck struct {
+	MQTTInfoResponse
+	Kind   string           `json:"kind"`
+	Status string           `json:"status"`
+	Error  string           `json:"error,omitempty"`
+	Data   *TimezoneSetData `json:"data,omitempty"`
 }
 
 // AgentRuntimeSetAck is published to fd_channel after applying (or failing) a

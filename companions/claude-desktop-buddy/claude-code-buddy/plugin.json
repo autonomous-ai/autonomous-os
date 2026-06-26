@@ -1,5 +1,5 @@
 {
   "name": "claude-code-buddy",
   "description": "Show Claude Code activity (task-done, usage, approvals) on your device.",
-  "version": "0.1.0"
+  "version": "0.2.0"
 }

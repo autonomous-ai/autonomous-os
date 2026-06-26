@@ -161,6 +161,7 @@ class RealtimeOrchestrator:
         # the provider re-bills on a long-lived session. See _maybe_idle_reset.
         self._last_turn_monotonic: float = 0.0  # end-of-turn timestamp; 0 = none yet
         self._idle_reset_pending: bool = False
+        self._turns_since_recycle: int = 0  # turn-cap recycle counter (cost)
         self._rebuild_lock: threading.Lock = threading.Lock()  # guards _force_rebuild
         summarizer: RealtimeSummarizer | None = None
         if config.REALTIME_SUMMARIZER_ENABLED:
@@ -438,33 +439,50 @@ class RealtimeOrchestrator:
             produced = True
             yield output
 
-        # Zombie-session guard: a turn that committed audio but yielded nothing
-        # is "silent". A long-lived Gemini session can wedge (connected, accepts
-        # audio, never replies — no go_away/close to trigger the normal
-        # reconnect), so after N CONSECUTIVE silent turns force a fresh session.
-        # Reset on any real output so interspersed noise turns don't trip it.
+        # Track consecutive silent turns for the zombie guard: a turn that
+        # committed audio but yielded nothing. A long-lived Gemini session can
+        # wedge (connected, accepts audio, never replies — no go_away/close), so
+        # N consecutive silent turns means force a fresh session. Reset on any
+        # real output so interspersed noise turns don't trip it.
         if produced:
             self._consecutive_silent = 0
         else:
             self._consecutive_silent += 1
-            if self._consecutive_silent >= config.REALTIME_ZOMBIE_RECONNECT_AFTER:
+
+        # Stamp end-of-turn (next turn's idle measurement) + count this turn.
+        self._last_turn_monotonic = time.monotonic()
+        self._turns_since_recycle += 1
+
+        # Recycle the session (rebuild → drop the context the provider re-bills
+        # every turn) for any of three reasons, decided in ONE place so the
+        # rebuild never double-fires and all state resets together. Done between
+        # turns so it never swaps self._agent mid-turn; rebuild is async so the
+        # NEXT turn uses the fresh session. Continuity survives via summary.md.
+        #   - zombie:   N consecutive silent turns (wedged session)
+        #   - idle:     this turn followed a long silence (see _mark_turn_start)
+        #   - turn-cap: session handled enough turns that context grew large (cost)
+        zombie: bool = (
+            not produced
+            and self._consecutive_silent >= config.REALTIME_ZOMBIE_RECONNECT_AFTER
+        )
+        max_turns: int = config.REALTIME_SESSION_MAX_TURNS
+        turn_cap: bool = max_turns > 0 and self._turns_since_recycle >= max_turns
+        if zombie or self._idle_reset_pending or turn_cap:
+            if zombie:
                 logger.warning(
                     "[realtime] %d consecutive silent turns — forcing reconnect "
                     "(zombie session)",
                     self._consecutive_silent,
                 )
-                self._consecutive_silent = 0
-                self._force_rebuild()
-
-        # Stamp end-of-turn for the next turn's idle measurement, then run any
-        # idle-armed recycle (set in _mark_turn_start). Done here, between turns,
-        # so the rebuild never swaps self._agent mid-turn. Skipped if a zombie
-        # rebuild already fired above (the rebuild lock makes the second call a
-        # no-op anyway, but this avoids a redundant log).
-        self._last_turn_monotonic = time.monotonic()
-        if self._idle_reset_pending:
+            else:
+                reason: str = "idle" if self._idle_reset_pending else "turn-cap"
+                logger.info(
+                    "[realtime] recycling session (%s) after %d turns (cost)",
+                    reason, self._turns_since_recycle,
+                )
+            self._consecutive_silent = 0
             self._idle_reset_pending = False
-            logger.info("[realtime] recycling idle session (cost)")
+            self._turns_since_recycle = 0
             self._force_rebuild()
 
     def _handle_emotion_call(self, output: FunctionCallOutput) -> None:

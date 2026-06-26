@@ -79,6 +79,13 @@ type Config struct {
 	// cannot run, set by ChannelReconcile and surfaced on the MQTT info uplink.
 	ChannelsUnsupported []string `json:"channels_unsupported,omitempty" yaml:"channelsUnsupported"`
 
+	// MCPAppliedRuntime is the agent runtime MCPReconcile last cloned the configured
+	// MCP connectors for. When it differs from AgentRuntime on boot, the reconcile
+	// reads the previous runtime's MCP servers from its on-disk config and re-pushes
+	// them into the new runtime (and updates this). Empty until the first reconcile
+	// records a baseline. Mirrors ChannelsAppliedRuntime.
+	MCPAppliedRuntime string `json:"mcp_applied_runtime,omitempty" yaml:"mcpAppliedRuntime"`
+
 	LLMAPIKey  string `json:"llm_api_key" yaml:"llmAPIKey" validate:"required"`
 	LLMModel   string `json:"llm_model" yaml:"llmModel" validate:"required"`
 	LLMBaseURL string `json:"llm_base_url" yaml:"llmBaseURL" validate:"required"`
@@ -136,6 +143,13 @@ type Config struct {
 
 	// DeviceID is saved at setup, used for backend status reporting
 	DeviceID string `json:"device_id" yaml:"deviceID"`
+
+	// Timezone is the IANA zone name (e.g. "Asia/Ho_Chi_Minh") the operator
+	// picked in Settings. It is a record of the applied system zone — the source
+	// of truth is /etc/timezone + /etc/localtime on the device, which HAL's clock
+	// helpers read fresh per call (see os/hal/clock.py). Empty until the operator
+	// sets one; the device then keeps whatever the OS image shipped with.
+	Timezone string `json:"timezone,omitempty" yaml:"timezone"`
 
 	// DeviceType is the device class/profile id — the folder name under devices/
 	// (e.g. "lamp", "intern-v2", "unitree-go2w"). Selects which DEVICE.md/SOUL.md the

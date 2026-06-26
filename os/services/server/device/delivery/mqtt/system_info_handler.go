@@ -154,6 +154,7 @@ func (h *DeviceMQTTHandler) probeHost() domain.MQTTHostData {
 		out.Hostname = name
 	}
 	out.UptimeSeconds = readUptimeSeconds()
+	out.Timezone = h.deviceService.CurrentTimezone()
 	return out
 }
 

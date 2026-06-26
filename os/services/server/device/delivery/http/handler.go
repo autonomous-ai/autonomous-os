@@ -233,6 +233,41 @@ func (h *DeviceHandler) SetAgentRuntime(c *gin.Context) {
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(true))
 }
 
+// GetTimezone returns the device's current IANA timezone plus the selectable
+// zone list (from the system tzdata) for the web Settings picker.
+//
+//	@Router	/device/timezone [get]
+func (h *DeviceHandler) GetTimezone(c *gin.Context) {
+	current, zones := h.service.GetTimezone()
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(domain.TimezoneStatus{
+		Current: current,
+		Zones:   zones,
+	}))
+}
+
+// SetTimezone applies an IANA timezone (e.g. "Asia/Ho_Chi_Minh"): writes
+// /etc/localtime + /etc/timezone (best-effort timedatectl) and persists it to
+// config.json. HAL's clock helpers read /etc/timezone fresh per call, so the
+// change takes effect without a HAL restart. An unknown zone returns 400.
+//
+//	@Router	/device/timezone [post]
+func (h *DeviceHandler) SetTimezone(c *gin.Context) {
+	var req domain.TimezoneSetData
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
+		return
+	}
+	if err := validator.New().Struct(req); err != nil {
+		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
+		return
+	}
+	if err := h.service.SetTimezone(req.Timezone); err != nil {
+		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
+		return
+	}
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(true))
+}
+
 // ChangeChannel godoc
 //
 //	@Summary	change messaging channel

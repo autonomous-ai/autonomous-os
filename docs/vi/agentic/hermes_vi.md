@@ -405,6 +405,35 @@ riêng mình; việc duy nhất của nó là đặt creds vào `.env` rồi bou
   không thấy đổi và bỏ qua restart. Nó cũng ghi WhatsApp là không hỗ trợ
   (`ChannelsUnsupported`) cho info uplink, để creds đó lại cho lần switch về OpenClaw.
 
+### MCP connectors (`mcp_servers` trong `config.yaml`)
+
+Các remote-MCP connector (Notion, Linear, Asana, GitHub, Ahrefs, …) được nối bởi
+luồng MQTT `connector.set` của backend là công dân hạng nhất trên Hermes:
+`WriteMCPEntry`/`RemoveMCPEntry` (`internal/hermes/mcp.go`) upsert/xoá
+`mcp_servers.<name>` trong `~/.hermes/config.yaml` và restart `hermes-gateway`,
+mirror `internal/openclaw/mcp.go` (cái này sửa `mcp.servers` trong `openclaw.json`).
+
+Connector writer giao cho gateway một entry chuẩn, shape kiểu OpenClaw —
+`{type:"http", url, headers}` cho hosted MCP, hoặc `{command, args, env}` cho stdio.
+`toHermesMCPEntry` dịch nó sang schema `mcp_servers` của Hermes: Hermes suy ra
+transport từ việc có `url` hay `command`, nên discriminator `type` chỉ-OpenClaw bị
+bỏ và `enabled: true` được khẳng định. Hook presync chỉ sửa
+`.model`/`.custom_providers`/`.env` (qua `yq`) và để nguyên `mcp_servers`, nên hai
+chủ sở hữu của `config.yaml` không đụng nhau; read-modify-write được tuần tự hoá
+dưới `HermesService.mcpMu`. Như với OpenClaw, `config.yaml` phải đã tồn tại
+(connector được cấu hình sau onboarding) — một `hermes setup --reset` xoá sạch
+`mcp_servers` cùng với phần còn lại, và `connector.set` kế tiếp đẩy lại.
+
+**Clone khi switch runtime.** `MCPReconcile` (`internal/agent/mcp_reconcile.go`)
+mirror `ChannelReconcile`: gate bởi `config.MCPAppliedRuntime`, nó fire một lần
+trong startup-sequence khi quan sát thấy switch, đọc MCP entry của runtime **trước
+đó** thẳng từ config trên-disk của nó (`mcp.servers` trong `openclaw.json` ↔
+`mcp_servers` trong `config.yaml`, normalize mỗi cái về shape chuẩn), và đẩy lại
+chúng qua `WriteMCPEntry` của gateway giờ-đang-hoạt-động. Mỗi entry tự đủ (header
+auth mang token inline), nên clone là phép copy config→config thuần — không có cơ
+chế token-file/refresh. Một lỗi clone để marker chưa-tiến nên boot kế thử lại (không
+chiều switch nào xoá config của runtime kia).
+
 ## 11. Switch backend lúc runtime
 
 Cơ chế switch là **generic** (không biết backend cụ thể) và được mô tả đầy đủ ở
@@ -454,6 +483,11 @@ inline) — nên tên đặt dưới Hermes sống sót cả chiều về, khôn
 `internal/hermes/skill_watcher.go` — auto-update từ CDN vào `skills/openclaw-imports`,
 gate theo capability, mirror watcher OpenClaw (engine chung ở
 `internal/skills/skillzip.go`).
+
+**MCP connector cũng được mang qua** — các remote-MCP server đã cấu hình được clone
+config→config bởi `MCPReconcile` ở cùng boot switch đó (xem §10, *MCP connectors*),
+nên một thiết bị đã nối Notion/Linear dưới OpenClaw vẫn giữ chúng dưới Hermes (và
+ngược lại).
 
 ### Round-trip không mất nội dung nhưng một-chiều về cấu trúc (đặc thù Hermes)
 

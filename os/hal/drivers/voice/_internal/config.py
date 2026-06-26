@@ -81,6 +81,11 @@ WARM_MIC_ECHO_SKIP_MAX_S = float(os.environ.get("HAL_WARM_MIC_ECHO_SKIP_MAX_S", 
 # STT keepalive — pre-connect WS before speech is detected to cut latency
 # ---------------------------------------------------------------------------
 STT_KEEPALIVE = os.environ.get("HAL_STT_KEEPALIVE", "false").lower() == "true"
+# Send a KeepAlive every N seconds while pre-connected and idle, so the server
+# doesn't idle-close the WS (~10s) and force a slow cold-reconnect at speech start
+# (the cause of empty transcripts on short/quiet utterances). Must be < server
+# idle timeout.
+STT_KEEPALIVE_PING_S = float(os.environ.get("HAL_STT_KEEPALIVE_PING_S", "3"))
 
 
 # ---------------------------------------------------------------------------

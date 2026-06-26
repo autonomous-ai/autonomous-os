@@ -26,7 +26,7 @@ func (s HALActivitySink) Notify(level, title, subtitle string, sound bool) {
 	if text == "" {
 		text = subtitle
 	}
-	s.bridge.speakTTS(text) // → HAL :5001 /voice/speak (cached); empty text is a no-op
+	s.bridge.speakTTS("Claude code " + text) // → HAL :5001 /voice/speak (cached); empty text is a no-op
 }
 
 func (s HALActivitySink) Usage(fiveHour, sevenDay int, reset5h, reset7d string, sound bool) {
@@ -35,5 +35,5 @@ func (s HALActivitySink) Usage(fiveHour, sevenDay int, reset5h, reset7d string, 
 	if !sound {
 		return
 	}
-	s.bridge.speakTTS(fmt.Sprintf("Usage %d percent", fiveHour))
+	s.bridge.speakTTS(fmt.Sprintf("Claude code: "+"Usage %d percent", fiveHour))
 }

@@ -58,8 +58,11 @@ Your backend lives in `internal/<name>/` and its `*Service` must satisfy the
 | **Migration-adjacent** | `UpdateIdentityName`, `StartSkillWatcher`, `WatchIdentity`, `StartModelSync`, `UpdatePrimaryModel`, `StartPrimaryModelWatch`, `CompactSession`, `NewSession`, `FetchChatHistory`, `WriteMCPEntry`/`RemoveMCPEntry`, `GetConfigJSON` | **The danger zone** — easy to no-op, expensive to discover missing. See §4–§6. |
 
 **Lesson (Hermes):** ~15 of these were stubbed no-op in `internal/hermes/stubs.go`.
-Some are legitimately N/A (`WriteMCPEntry` — no `openclaw.json`; `PairWhatsapp` —
-no plugin). But `StartSkillWatcher`, `UpdateIdentityName`, and the config-sync path
+Some are legitimately N/A (`PairWhatsapp` — no plugin); `WriteMCPEntry`/`RemoveMCPEntry`
+were initially deferred (`TODO(hermes-mcp)`) and **later implemented** against
+`config.yaml` `mcp_servers` (`internal/hermes/mcp.go`), with a config→config clone on
+runtime switch (`internal/agent/mcp_reconcile.go`). But `StartSkillWatcher`,
+`UpdateIdentityName`, and the config-sync path
 were **functional gaps**, not N/A — they shipped as no-ops and we only noticed when
 skills went stale / rename did nothing / config broke after a reset. Audit every
 stub: write `// no-op because <reason>` or `// TODO(<backend>-<feature>)`, never a
@@ -442,11 +445,11 @@ re-syncs `.env` before the gateway starts, so the re-apply is an idempotent no-o
 restore), persona/memory migration (SOUL + inline identity, MEMORY + daily +
 KNOWLEDGE, USER), `UpdateIdentityName`, skill watcher, factory-reset
 `agent_state.json` lockstep, hooks (`emotion-acknowledge` reimplemented OS-side in
-Go; `turn-gate` redundant — §6).
+Go; `turn-gate` redundant — §6), `WriteMCPEntry`/`RemoveMCPEntry` (`config.yaml`
+`mcp_servers`) + MCP clone-on-switch (`MCPReconcile`).
 
 **Still open / no-op:** backend-native (Python) hooks for backend-internal turn
-sources (deferred YAGNI — §6), `WriteMCPEntry`/`RemoveMCPEntry`
-(`TODO(hermes-mcp)`), `CompactSession`,
+sources (deferred YAGNI — §6), `CompactSession`,
 `FetchChatHistory`, and the model-sync group (`StartModelSync`,
 `UpdatePrimaryModel`, `StartPrimaryModelWatch`, `RefreshModelsConfig` — largely
 N/A because os-server sends a fixed request model to the campaign-api custom

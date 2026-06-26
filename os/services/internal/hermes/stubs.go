@@ -113,18 +113,6 @@ func (s *HermesService) NewSession(sessionKey string) error {
 // UpdateIdentityName for Hermes lives in identity.go — it rewrites the name in
 // <hermes>/SOUL.md (Hermes's identity file; it has no separate IDENTITY.md slot).
 
-// TODO(hermes-mcp): implement WriteMCPEntry once Hermes exposes an MCP
-// connector config surface. Currently bypassed so the AgentGateway interface
-// is satisfied — MCP connector writes are an OpenClaw-only feature today.
-func (s *HermesService) WriteMCPEntry(_ string, _ map[string]any) error {
-	slog.Info("WriteMCPEntry: no-op (hermes backend — TODO)", "component", "hermes")
-	return nil
-}
-
-// TODO(hermes-mcp): implement RemoveMCPEntry alongside WriteMCPEntry. Returns
-// removed=false so callers (mcp_connector_writer) treat it as "entry already
-// absent" — idempotent no-op, no restart triggered.
-func (s *HermesService) RemoveMCPEntry(_ string) (bool, error) {
-	slog.Info("RemoveMCPEntry: no-op (hermes backend — TODO)", "component", "hermes")
-	return false, nil
-}
+// WriteMCPEntry + RemoveMCPEntry live in mcp.go — they upsert/delete
+// mcp_servers.<name> in ~/.hermes/config.yaml and restart the gateway, mirroring
+// internal/openclaw/mcp.go (which edits openclaw.json mcp.servers).

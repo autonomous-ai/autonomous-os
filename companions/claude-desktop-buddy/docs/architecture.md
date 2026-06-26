@@ -44,14 +44,15 @@ For building, deploying, config, and pairing see [`setup.md`](setup.md).
 | `protocol.go` | All wire types (`Heartbeat`, `TimeSync`, `Event`, `Command`, `Ack`, `PermissionDecision`), the parser/salvager, and ack/permission builders. |
 | `state.go` | `StateMachine` — derives a `BuddyState` from heartbeats, tracks the pending prompt and lifetime approval/denial counters, and manages transient states. |
 | `bridge.go` | Maps each state change to concrete LeLamp + Lamp HTTP calls (LED, display, emotion, TTS, monitor/sensing events). |
-| `httpapi/` | The `:5002` API delivery package (clean architecture / dependency inversion). `server.go` holds the `Server`, the single `routes()` registry, and JSON response helpers; `ports.go` declares the interfaces the handlers depend on (`StatusProvider`, `ApprovalService`, `ActivitySink`, plus sentinel errors); `status.go` serves `GET /status` + `GET /health`; `claudedesktop.go` serves `POST /claude-desktop/approve` + `/deny` (the Claude Desktop voice-approval round-trip); `claudecode.go` serves `POST /claude-code/notify` + `/usage` (the Claude Code plugin pushes). |
-| `status_provider.go` / `approval_service.go` / `activity_sink.go` | The concrete implementations of the `httpapi` ports, one per role: `StatusReader` (read-adapter → status snapshot), `ApprovalService` (the voice-approval use case: validate id + send the BLE permission decision + update counters), `LogActivitySink` (logs the Claude Code pushes — the seam a future HAL bridge replaces). `main.go` is the composition root that wires these into `httpapi.New`. |
+| `httpapi/` | The `:5002` API delivery package (clean architecture / dependency inversion). `server.go` holds the `Server`, the single `routes()` registry, and JSON response helpers; its `Start()` builds an explicit `http.Server` (ReadHeaderTimeout 10 s, ReadTimeout 15 s, IdleTimeout 60 s, and **WriteTimeout disabled (`0`)** because the approval long-poll holds the response ~55 s). `ports.go` declares the interfaces the handlers depend on (`StatusProvider`, `ApprovalService`, `ActivitySink`, `CodeApprovalService`, plus sentinel errors); `status.go` serves `GET /status` + `GET /health`; `claudedesktop.go` serves `POST /claude-desktop/approve` + `/deny` (the Claude Desktop voice-approval round-trip); `claudecode.go` serves `POST /claude-code/notify` + `/usage` (the Claude Code plugin pushes) plus the reverse-approval routes `POST /claude-code/approval-request` (long-poll), `POST /claude-code/approve` + `/deny` (loopback-only via an `isLoopback` helper), and `GET /claude-code/pending`; a `decodeJSON` helper caps request bodies at 64 KB. |
+| `status_provider.go` / `approval_service.go` / `hal_activity_sink.go` | The concrete implementations of the `httpapi` ports, one per role: `StatusReader` (read-adapter → status snapshot), `ApprovalService` (the voice-approval use case: validate id + send the BLE permission decision + update counters), `HALActivitySink` (the wired `ActivitySink` — logs the Claude Code pushes **and** speaks them via HAL `:5001`). `main.go` is the composition root that wires these into `httpapi.New`. |
+| `codeapproval.go` | `CodeApprovals` — the `httpapi.CodeApprovalService` implementation. An in-memory map of pending Claude Code approvals keyed by id, each with a buffered channel. `Request(ctx, req)` registers a pending approval, calls `bridge.announceCodeApproval`, then blocks on a select over {channel decision, ttl timeout, ctx cancel}, returning `"allow"`/`"deny"`/`"timeout"`; `Approve(id)`/`Deny(id)` send on the channel (non-blocking, first-writer-wins); `Pending()` lists them. ttl from config `code_approval_ttl_sec` (default 55 s). `main.go` builds it via `NewCodeApprovals(bridge, ttl)` and passes it as the 5th arg of `httpapi.New`. |
 | `agent.go` | BlueZ `org.bluez.Agent1` (DisplayOnly) so LE pairing can complete; logs the passkey to the journal. |
 | `transfer.go` | Folder-push receiver — streams files from Desktop to `/opt/claude-desktop-buddy/chars` with path-traversal guards. |
 | `narrator.go` + `i18n.go` | Short, per-turn-deduped TTS announcements of Claude's activity, localized (EN/VI). |
 | `stats.go` | Persists lifetime approved/denied counters to `/var/lib/claude-desktop-buddy/stats.json`. |
 | `config/buddy.json` | Runtime config (see [`setup.md`](setup.md#configuration)). |
-| `skill/SKILL.md` | The OpenClaw skill that turns approvals into a voice interaction. |
+| `skill/SKILL.md` | Pointer only — the agent skill that turns approvals into a voice interaction is now the platform skill [`skills/claude-buddy/SKILL.md`](../../../skills/claude-buddy/SKILL.md), shipped to devices via the standard skill OTA (`upload-skills.sh`) and registered in `internal/skills/skills.go` (`audio` capability). |
 | `third_party/bluetooth/` | Local fork of `tinygo.org/x/bluetooth` (see below). |
 
 ## Data flow
@@ -112,6 +113,53 @@ Desktop heartbeat carries `prompt`  ─►  state = attention, pending prompt st
 sends `"deny"`. Both return `409` if there is no pending prompt or the `id` doesn't
 match the current one.
 
+### The Claude Code approval round-trip
+
+This is the *reverse* direction of the Desktop flow: instead of Claude Desktop
+asking over BLE, a Claude Code **`PermissionRequest` hook**
+(`claude-code-buddy/scripts/on-permission-request.py`, registered in
+`hooks.json`) asks Buddy over HTTP and blocks on the answer, so Claude Code can
+approve a tool without showing its own dialog.
+
+```
+Claude Code wants to run a tool
+        │
+        ▼
+hook long-polls  POST /claude-code/approval-request {id, tool, hint, input}
+        │
+        ▼
+CodeApprovals.Request registers the pending approval
+        │                                  │
+        │                          bridge.announceCodeApproval
+        │                            → blink LED + display "Approve <tool>?"
+        │                            → Lamp /api/sensing/event
+        │                              type=claude_code_approval  ─► agent hears it,
+        │                                                            asks the user
+        │                                                                  │
+   GET /claude-code/pending  ◄──────────────────────────────────────────┘
+        │
+        ▼
+   user says yes/no  ─►  POST /claude-code/approve|/deny {id}  (loopback-only)
+        │
+        ▼
+   Approve(id)/Deny(id) sends on the channel; Request unblocks
+        │
+        ▼
+   returns "allow" / "deny"  (or "timeout" after code_approval_ttl_sec)
+        │
+        ▼
+   hook maps the decision to its allow/deny output ─► Claude Code proceeds, no dialog
+```
+
+Opt-in via plugin config `approval_enabled` (default `false`). The
+`/claude-code/approve` + `/deny` handlers are **loopback-only** — the on-device
+OpenClaw agent resolves the prompt by calling them (per the platform skill
+`skills/claude-buddy/SKILL.md`).
+Fail-safe: any error or timeout makes the hook defer to Claude Code's native
+permission dialog — it never auto-allows. Unlike the Desktop flow, the decision
+is returned as the hook's HTTP response (its return value) rather than pushed
+back over BLE.
+
 ## State machine
 
 States (`state.go`): `sleep`, `idle`, `busy`, `attention`, `heart`, `celebrate`.
@@ -145,6 +193,7 @@ permanently. The accent color is the Claude app color **`#C15F3C`** (`claudeBran
 | `speakTTS` (cached) / `prerenderTTS` | LeLamp `/voice/speak` | narration TTS (and cache warmup at startup) |
 | `postBuddyState` | Lamp `/api/monitor/event` (`type=buddy_state`) | surface state on the monitor |
 | `postSensingEvent` | Lamp `/api/sensing/event` (`type=buddy_approval`) | inject approval into the sensing pipeline |
+| `announceCodeApproval` / `restoreAfterCodeApproval` | Lamp `/api/sensing/event` (`type=claude_code_approval`) | transient blink LED (claudeBrand) + display "Approve `<tool>`?" while a Claude Code reverse-approval is pending, then repaint the user's LED + eyes |
 | `OnEvent` | Lamp `/api/monitor/event` (`type=buddy_event`) | surface chat turns for other use cases |
 
 All bridge calls are fire-and-forget with a 5 s timeout; LeLamp's own `409`

@@ -24,6 +24,18 @@
           }
         ]
       }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/on-permission-request.py",
+            "timeout": 60
+          }
+        ]
+      }
     ]
   }
 }

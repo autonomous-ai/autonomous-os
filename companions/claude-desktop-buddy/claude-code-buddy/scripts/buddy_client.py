@@ -102,6 +102,36 @@ def send(path, payload, dev=None):
         return False
 
 
+def request_approval(payload, dev=None, timeout=55):
+    """Long-poll the device for a Claude Code permission decision.
+
+    POSTs to /claude-code/approval-request and BLOCKS until the on-device agent
+    resolves it (the user answers by voice) or the server times out. Returns
+    "allow" | "deny" | "timeout", or None on any transport error.
+
+    Never raises — the permission hook must fail safe (defer to the native
+    dialog), never crash Claude Code.
+    """
+    if dev is None:
+        dev = default_device(load_config())
+    addr = device_addr(dev)
+    if not addr:
+        return None
+    try:
+        req = urllib.request.Request(
+            f"http://{addr}:{BUDDY_PORT}/claude-code/approval-request",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status != 200:
+                return None
+            return json.loads(resp.read()).get("decision")
+    except Exception:
+        return None
+
+
 # --- Claude Code usage helpers --------------------------------------------
 
 def _find_strings(obj):

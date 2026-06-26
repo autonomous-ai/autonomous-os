@@ -624,6 +624,7 @@ class VoiceService:
 
         # Keepalive: pre-connect STT WS so it's ready before speech is detected.
         keepalive_session = None
+        last_keepalive_ping = time.time()  # throttles send_keepalive in the wait loop
         if voice_cfg.STT_KEEPALIVE:
             keepalive_session = self._stt.create_session()
             if not keepalive_session.start(lambda text, is_final: None):
@@ -692,6 +693,18 @@ class VoiceService:
 
             # Append to lookback for pre-roll.
             lookback.append(data)
+
+            # Keep the pre-connected STT WS warm: ping every STT_KEEPALIVE_PING_S
+            # while idle (speech not started) so the server doesn't idle-close it
+            # and force a slow cold-reconnect at speech start (→ empty transcript).
+            if (
+                keepalive_session is not None
+                and speech_start is None
+                and (time.time() - last_keepalive_ping) >= voice_cfg.STT_KEEPALIVE_PING_S
+                and hasattr(keepalive_session, "send_keepalive")
+            ):
+                keepalive_session.send_keepalive()
+                last_keepalive_ping = time.time()
 
             energy = rms(data, self._np)
 

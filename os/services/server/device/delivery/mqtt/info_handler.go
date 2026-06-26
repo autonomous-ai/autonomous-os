@@ -25,6 +25,9 @@ func (h *DeviceMQTTHandler) handleInfo(_ domain.MQTTMessage) error {
 	if ip, err := h.networkService.GetCurrentIP(); err == nil {
 		msg.LocalIP = ip
 	}
+	// Override the config-seeded value with the live system zone (/etc/timezone),
+	// so the uplink reflects an out-of-band `timedatectl` change too.
+	msg.Timezone = h.deviceService.CurrentTimezone()
 	slog.Info("mqtt_handler_info",
 		"id", msg.ID,
 		"version", msg.Version,
@@ -36,6 +39,7 @@ func (h *DeviceMQTTHandler) handleInfo(_ domain.MQTTMessage) error {
 		"tts_provider", msg.TTSProvider,
 		"tts_voice", msg.TTSVoice,
 		"stt_language", msg.STTLanguage,
+		"timezone", msg.Timezone,
 	)
 	return h.publish(msg)
 }
