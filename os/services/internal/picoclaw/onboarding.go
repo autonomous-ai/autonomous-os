@@ -90,10 +90,11 @@ Follow the instructions in whichever file you read.
 ---`
 )
 
-// EnsureOnboarding reconciles the device-side PicoClaw workspace. Called on boot +
-// config changes via server/config_watch.go (same path openclaw/hermes use). Today
-// it only keeps the OS-managed block in AGENTS.md current; the rest of PicoClaw
-// provisioning is owned by install.sh/presync.sh (see file header).
+// EnsureOnboarding reconciles the device-side PicoClaw workspace on boot/config-change
+// (server/config_watch.go, same path openclaw/hermes use): seed KNOWLEDGE.md if
+// absent, capability-gate skills, refresh the OS-managed SOUL/AGENTS/HEARTBEAT blocks,
+// and restart the gateway if any block changed. Runtime install + model/channel config
+// are owned by install.sh/presync.sh (see file header).
 func (s *PicoclawService) EnsureOnboarding() error {
 	// Seed KNOWLEDGE.md from the embedded template only if absent. presync.sh §0
 	// copies openclaw's living KNOWLEDGE.md (with accumulated learnings) when
