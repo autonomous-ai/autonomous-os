@@ -174,6 +174,7 @@ func ProvideAgentHandler(gw domain.AgentGateway, bus *monitor.Bus, sled *statusl
 	// would write to a soon-to-be-discarded copy.
 	go populateOpenClawVersion()
 	go populateHermesVersion()
+	go populatePicoclawVersion()
 	return AgentHandler{
 		agentGateway:         gw,
 		monitorBus:           bus,

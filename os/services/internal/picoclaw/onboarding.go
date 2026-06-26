@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"go.autonomous.ai/os/domain"
 	"go.autonomous.ai/os/internal/device"
 )
 
@@ -89,6 +90,13 @@ Follow the instructions in whichever file you read.
 
 ---`
 )
+
+// SetupAgent runs onboarding. The runtime itself is
+// installed + provisioned out-of-process by install.sh/presync.sh; what os-server
+// owns at setup time is the workspace reconciliation EnsureOnboarding does.
+func (s *PicoclawService) SetupAgent(_ domain.SetupRequest) error {
+	return s.EnsureOnboarding()
+}
 
 // EnsureOnboarding reconciles the device-side PicoClaw workspace on boot/config-change
 // (server/config_watch.go, same path openclaw/hermes use): seed KNOWLEDGE.md if
