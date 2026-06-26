@@ -61,7 +61,11 @@ var prunedImageMarkerRe = regexp.MustCompile(`\[image[^\]]*removed[^\]]*\]`)
 // omits the empty `{}` for them. Without the optional group, [HW:/led/off] failed to
 // match and the command was silently dropped (the LED never turned off) while
 // [HW:/led/solid:{...}] worked. extractHWCalls defaults a missing body to `{}`.
-var hwMarkerRe = regexp.MustCompile(`\[HW:(/[^:]+)(?::(\{[^}]*\}))?\]`)
+//
+// The path group allows colon-separated segments (e.g. /audio:play) that some LLM
+// backends emit instead of the canonical slash form (/audio/play). extractHWCalls
+// normalizes these to slashes after capture.
+var hwMarkerRe = regexp.MustCompile(`\[HW:((?:/[^{:\]]+(?::[^{:\]]+)*))(?::(\{[^}]*\}))?\]`)
 
 type hwCall struct {
 	path string
