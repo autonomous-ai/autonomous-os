@@ -93,6 +93,15 @@ trên queue:
 
 - **2 thread mỗi agent**: `_send_loop` rút `_send_queue` → API; `_recv_loop` đọc
   API → `_recv_queue`. Cả hai tự reconnect khi lỗi.
+- **Fail-fast khi backend lỗi** (cả 2 driver): khi `_recv_loop` gặp lỗi thật
+  (Gemini Live: proxy `go_away`, hết quota / resource-exhausted, WS close bất
+  thường — tức **không phải** idle close `1000` lành tính; OpenAI: event `error`
+  của Realtime API hoặc socket rớt), nó đẩy `TurnDoneEvent` ngay lập tức
+  (`_fail_fast_turn`) để `receive()` thoát liền và lượt fallback sang main agent
+  **mà không** phải chờ hết `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S`. Idle close lành
+  tính vẫn reconnect êm (Gemini code `1000`; OpenAI kết thúc vòng lặp event êm,
+  không phải lỗi). Chỉ kích hoạt khi đang có lượt chờ output (`_turn_done` clear);
+  reconnect vẫn chạy nền để hồi phục session cho lượt sau.
 - **Non-blocking**: `append_audio()`, `commit_audio()`, `send()` (đẩy vào queue,
   gate trên `available`).
 - **Blocking**: `connect()`, `disconnect()`, `receive()` (generator yield
