@@ -98,6 +98,94 @@ Những endpoint sau được gói `httpapi/` của daemon phục vụ và dùng
 BLE/cấp quyền: `GET /status`, `GET /health`, `POST /claude-desktop/approve`,
 `POST /claude-desktop/deny`. Xem [`architecture_vi.md`](architecture_vi.md).
 
+## Phê duyệt bằng giọng nói (Claude Code reverse approval)
+
+Khi Claude Code trên máy Mac sắp hiện **hộp thoại cấp quyền cho công cụ**, một hook
+có thể hỏi thiết bị đã kết nối thay vì hiện hộp thoại: agent trên thiết bị đọc to
+yêu cầu, người dùng trả lời **có/không bằng giọng nói**, và quyết định chảy ngược
+về để Claude Code phê duyệt hoặc từ chối công cụ **mà không bao giờ hiện hộp
+thoại**. Đây là **bản sao HTTP** của vòng phê duyệt qua BLE của Claude Desktop vốn
+đã có (xem [`architecture_vi.md`](architecture_vi.md)).
+
+Khả năng mới làm được điều này là một **hook `PermissionRequest`** của Claude Code.
+Nó chỉ kích hoạt khi hộp thoại cấp quyền *sắp* hiện, chặn đồng bộ (tối đa đến
+timeout 60 giây của nó), và trả về quyết định qua stdout dưới dạng JSON:
+
+```json
+{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}
+```
+
+(exit `0`, `"behavior"` là `"allow"` hoặc `"deny"`). Nó **không** kích hoạt ở chế
+độ `-p` / headless, cũng không kích hoạt với các công cụ đã được cho phép sẵn bởi
+các luật cấp quyền của bạn.
+
+### Vòng đi-về (round-trip)
+
+```
+ Mac (Claude Code)                         Thiết bị (Pi / OrangePi)
+ ┌──────────────────────┐                  ┌────────────────────────────────────┐
+ │ công cụ cần cấp quyền │                  │  daemon claude-code-buddy :5002     │
+ │        │             │  POST            │                                    │
+ │        ▼             │  approval-request│  đăng ký chờ ──► báo hiệu thiết bị: │
+ │ hook PermissionRequest│ ────────────────►│    • nháy LED (thoáng qua)         │
+ │ (chặn ≤60s)          │  (long-poll)     │    • màn tròn "Approve <tool>?"     │
+ │        ▲             │                  │    • sự kiện sensing → OS server    │
+ │        │ {decision}  │ ◄────────────────│  chặn tới khi giải quyết / hết ttl │
+ └────────┼─────────────┘                  │            ▲                       │
+          │                                │  approve/deny (loopback) ◄─ agent  │
+   không hộp thoại, chạy tiếp              └────────────────────────────────────┘
+```
+
+1. Claude Code → hook `PermissionRequest` `scripts/on-permission-request.py`
+   (đăng ký trong `hooks/hooks.json` của plugin, matcher `*`, timeout 60 giây).
+2. Hook POST tới daemon thiết bị
+   `POST http://<device>:5002/claude-code/approval-request {id, tool, input}` và
+   **chặn** (long-poll).
+3. Daemon đăng ký yêu cầu đang chờ, báo hiệu thiết bị — nháy LED thoáng qua, màn
+   hình tròn hiện **"Approve `<tool>`?"**, và phát một sự kiện sensing
+   `type=claude_code_approval` tới OS server `/api/sensing/event` — rồi chặn cho
+   tới khi yêu cầu được giải quyết hoặc hết TTL của long-poll.
+4. Agent OpenClaw trên thiết bị nghe thấy sự kiện sensing (platform skill
+   [`skills/claude-buddy/SKILL.md`](../../../../skills/claude-buddy/SKILL.md)) và hỏi người dùng; khi **"có"** nó gọi
+   `POST 127.0.0.1:5002/claude-code/approve {id}`, khi **"không"**
+   `POST 127.0.0.1:5002/claude-code/deny {id}`.
+5. Daemon mở chặn long-poll → trả về `{"decision":"allow"|"deny"}` → hook in ra
+   JSON quyết định `PermissionRequest` → Claude Code chạy tiếp với **không hộp
+   thoại**.
+
+### Các endpoint phê duyệt bằng giọng nói (`:5002`)
+
+| Endpoint | Body | Hành vi |
+|----------|------|---------|
+| `POST /claude-code/approval-request` | `{id, tool, input, hint?}` | Long-poll; trả về `{"decision":"allow"｜"deny"｜"timeout"}`. `400` nếu thiếu `id`. |
+| `POST /claude-code/approve` | `{id}` | Giải quyết yêu cầu đang chờ thành allow. **Chỉ loopback (`403` nếu không)** — vì nó quyết định liệu code có chạy trên máy Mac của người dùng hay không. `409` nếu `id` không rõ hoặc đã được giải quyết. |
+| `POST /claude-code/deny` | `{id}` | Giống `approve` nhưng giải quyết thành deny (chỉ loopback, `403` / `409` như trên). |
+| `GET /claude-code/pending` | — | `{"pending":[{id,tool,hint}]}` — những gì đang chờ một câu trả lời bằng giọng nói. |
+
+### Cấu hình
+
+- **Plugin** (`~/.config/claude-code-buddy.json`) — cờ mới `approval_enabled`
+  (bool, mặc định **`false`**). Đây là tính năng **opt-in** vì nó thay đổi cách
+  Claude Code hỏi bạn. Khi `false`, hook không làm gì và **hộp thoại gốc** sẽ hiện.
+- **Daemon** (`config/buddy.json`) — `code_approval_ttl_sec` (mặc định **55**): một
+  yêu cầu long-poll trong bao lâu trước khi trả về `"timeout"`.
+
+### Cơ chế an toàn (fail-safe)
+
+Hook **fail-open về hộp thoại gốc** và **không bao giờ tự động phê duyệt trên đường
+lỗi**. Với bất kỳ trường hợp nào sau đây: tính năng bị tắt, không có thiết bị kết
+nối, thiết bị không tới được, timeout, hoặc bất kỳ lỗi nào khác — hook in ra
+**không gì cả** và exit `0`, nên Claude Code hiện hộp thoại cấp quyền **bình
+thường**.
+
+### Điều kiện tiên quyết / lưu ý
+
+- **Local Network Privacy của macOS** phải cấp **Local Network** cho ứng dụng đang
+  chạy Claude Code (`python3` của hook phải tới được IP thiết bị) — cùng cánh cổng
+  với push đi ra (xem [bên dưới](#khắc-phục-sự-cố-local-network-trên-macos)).
+- **Chế độ headless `-p`:** `PermissionRequest` không kích hoạt, nên phê duyệt bằng
+  giọng nói nằm ngoài phạm vi ở đó.
+
 ## Khám phá (discovery) và cấu hình
 
 - **Khám phá** — plugin tìm thiết bị qua **mDNS** với loại dịch vụ

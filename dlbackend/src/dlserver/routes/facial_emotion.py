@@ -46,8 +46,8 @@ async def emotion_analysis_ws(websocket: WebSocket):
         await websocket.close(code=1011, reason="Facial emotion model not loaded")
         return
 
+    session = await emotion_model.create_session()
     try:
-        session = await emotion_model.create_session()
         await session.start()
         while True:
             raw: str = await websocket.receive_text()
@@ -82,12 +82,14 @@ async def emotion_analysis_ws(websocket: WebSocket):
                 raise
             except Exception as e:
                 logger.exception("Error processing facial emotion WS message")
-                await websocket.send_json({"error": str(e)})
+                await websocket.send_json({"error": "Processing failed"})
 
     except WebSocketDisconnect:
         logger.info("Facial emotion analysis WebSocket disconnected")
     except Exception:
         logger.exception("Facial emotion WebSocket handler crashed")
+    finally:
+        await session.stop()
 
 
 @http_router.get("/emotion-labels")
@@ -128,6 +130,8 @@ async def emotion_recognize(req: EmotionRecognizeRequest):
         )
     except HTTPException:
         raise
-    except Exception as exc:
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception:
         logger.exception("Error processing facial emotion HTTP message")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail="Internal server error")

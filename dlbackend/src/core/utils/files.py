@@ -107,6 +107,8 @@ def ensure_downloaded(local_path: Path, remote: str | None = None) -> Path:
         )
 
     if remote.startswith("http://") or remote.startswith("https://"):
+        if remote.startswith("http://") and not remote.startswith(("http://127.", "http://localhost")):
+            logger.warning("Downloading model over insecure HTTP (MITM risk): %s", remote)
         _download_url(remote, local_path)
     else:
         _download_hf(remote, local_path)

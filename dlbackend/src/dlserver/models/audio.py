@@ -10,7 +10,7 @@ from core.models.audio import RawAudioEmbedding
 class EmbedAudioRequest(BaseModel):
     """Request for stateless embedding computation."""
 
-    audios_b64: list[str] = Field(min_length=1)
+    audios_b64: list[str] = Field(min_length=1, max_length=16)
     return_chunks: bool = False
 
 

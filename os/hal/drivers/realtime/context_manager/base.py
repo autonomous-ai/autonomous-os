@@ -73,7 +73,8 @@ class ContextManagerBase(ABC):
         self._device_summary_path: Path = (
             self._realtime_memory_path.parent / "device_summary.md"
         )
-        self._summary_max_chars: int = 10000
+        # Billed every turn as part of the floor → keep tight (~1.5k tokens).
+        self._summary_max_chars: int = app_config.REALTIME_SUMMARY_MAX_CHARS
         # Raw archive — append-only, trimmed by flushing oldest
         self._raw_memory_path: Path = self._realtime_memory_path.with_name(
             "memory_raw.jsonl"
@@ -167,30 +168,45 @@ class ContextManagerBase(ABC):
                 )
 
     def build_instructions(self) -> str:
-        """Build the full instruction string from all context sources."""
-        sections: list[str] = []
+        """Build the full instruction string from all context sources.
 
-        prompt: str = self._load_system_prompt()
-        if prompt:
-            sections.append(prompt)
+        This whole block is the per-turn "floor": it is set once as the model's
+        system_instruction, but the provider re-bills it as input context on EVERY
+        turn. The breakdown logged here (chars + ~token estimate, ~4 chars/token)
+        shows which section dominates the floor so cost cuts can be targeted.
+        """
+        sections: list[str] = []
+        sizes: list[tuple[str, int]] = []
+
+        def add(label: str, text: str) -> None:
+            if text:
+                sections.append(text)
+                sizes.append((label, len(text)))
+
+        add("prompt", self._load_system_prompt())
 
         identity: str = self.load_device_context()
-        if identity:
-            sections.append(f"# DEVICE IDENTITY\n\n{identity}")
+        add("identity", f"# DEVICE IDENTITY\n\n{identity}" if identity else "")
 
         catalog: str = self.load_skills_catalog()
-        if catalog:
-            sections.append(f"# SKILLS CATALOG\n\n{catalog}")
+        add("skills", f"# SKILLS CATALOG\n\n{catalog}" if catalog else "")
 
         device_mem: list[str] = self.load_device_memory()
-        if device_mem:
-            sections.append("# DEVICE MEMORY\n\n" + "\n\n".join(device_mem))
+        add("device_mem", "# DEVICE MEMORY\n\n" + "\n\n".join(device_mem) if device_mem else "")
 
         rt_mem: list[str] = self.load_realtime_memory()
-        if rt_mem:
-            sections.append("# REALTIME MEMORY\n\n" + "\n\n".join(rt_mem))
+        add("realtime_mem", "# REALTIME MEMORY\n\n" + "\n\n".join(rt_mem) if rt_mem else "")
 
-        return "\n\n".join(sections)
+        result: str = "\n\n".join(sections)
+        total: int = len(result)
+        breakdown: str = "  ".join(f"{label}={c}c(~{c // 4}t)" for label, c in sizes)
+        logger.info(
+            "[realtime] floor breakdown: total=%dc (~%dt billed EVERY turn) | %s",
+            total,
+            total // 4,
+            breakdown,
+        )
+        return result
 
     def add_turn(self, user_text: str, agent_text: str) -> None:
         """Save a conversation turn to both working memory and raw archive."""

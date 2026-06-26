@@ -3,7 +3,10 @@ package picoclaw
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 
 	"go.autonomous.ai/os/domain"
 )
@@ -40,9 +43,13 @@ func (s *PicoclawService) ResetAgent() error {
 	return nil
 }
 
+// RestartAgent restarts the picoclaw gateway via systemctl so callers that need a
+// full gateway reload (config/workspace re-read) get it. Delegates to
+// restartPicoclawGateway (service_gateway.go), which no-ops gracefully when
+// systemctl is unavailable (non-root / dev box).
 func (s *PicoclawService) RestartAgent() error {
-	slog.Info("RestartAgent: no-op (picoclaw backend — manage via systemctl externally)", "component", "picoclaw")
-	return nil
+	slog.Info("RestartAgent: restarting picoclaw gateway", "component", "picoclaw")
+	return restartPicoclawGateway()
 }
 
 // RefreshModelsConfig — PicoClaw config is owned externally; we don't patch it.
@@ -61,17 +68,22 @@ func (s *PicoclawService) FetchChatHistory(_ string, _ int) (json.RawMessage, er
 	return nil, nil
 }
 
-// GetConfigJSON — no agent-side config file under PicoClaw. Returns empty.
+// GetConfigJSON returns the raw bytes of PicoClaw's config.json (the structure
+// file: agents/model_list/gateway/channel_list — secrets live in .security.yml,
+// which we never expose). Read-only; feeds the gw-config debug UI. The config dir
+// is the parent of the workspace (HOME=/root → /root/.picoclaw).
 func (s *PicoclawService) GetConfigJSON() (json.RawMessage, error) {
-	return json.RawMessage(`{}`), nil
+	path := filepath.Join(filepath.Dir(picoclawWorkspaceDir), "config.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read picoclaw config.json: %w", err)
+	}
+	return json.RawMessage(data), nil
 }
 
-// WatchIdentity — IDENTITY.md / wake-word rename watching is OpenClaw-specific.
-// Under PicoClaw, prompts are owned by the PicoClaw server. No-op so the existing
-// goroutine slot in server.go stays valid.
-func (s *PicoclawService) WatchIdentity(ctx context.Context) {
-	<-ctx.Done()
-}
+// WatchIdentity + UpdateIdentityName live in identity.go — PicoClaw's IDENTITY.md
+// is a 1-for-1 copy of OpenClaw's (same format), so it watches/rewrites the
+// `**Name:**` card line just like OpenClaw does.
 
 // StartSkillWatcher lives in skill_watcher.go — it polls OTA metadata and
 // auto-updates workspace skills from the CDN (capability-gated), mirroring openclaw.
@@ -110,13 +122,6 @@ func (s *PicoclawService) CompactSession(sessionKey string) error {
 func (s *PicoclawService) NewSession(sessionKey string) error {
 	slog.Info("NewSession: clearing session (picoclaw backend)", "component", "picoclaw", "key", sessionKey)
 	s.sessionUUID.Store("")
-	return nil
-}
-
-// UpdateIdentityName — under PicoClaw, IDENTITY.md is owned by the external
-// PicoClaw server, not Device. No-op.
-func (s *PicoclawService) UpdateIdentityName(_ string) error {
-	slog.Info("UpdateIdentityName: no-op (picoclaw backend)", "component", "picoclaw")
 	return nil
 }
 

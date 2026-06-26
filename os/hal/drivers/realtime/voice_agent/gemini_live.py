@@ -120,7 +120,14 @@ class GeminiLiveAgent(VoiceAgentBase):
             ),
             context_window_compression=(
                 types.ContextWindowCompressionConfig(
-                    sliding_window=types.SlidingWindow(),
+                    # COST: compress session history once it exceeds trigger_tokens,
+                    # down to ~target_tokens. The default SlidingWindow() trigger
+                    # (~100k) never fires for our short sessions, so history climbs
+                    # and is re-billed as input text every turn — set a low trigger.
+                    trigger_tokens=self._config.compression_trigger_tokens,
+                    sliding_window=types.SlidingWindow(
+                        target_tokens=self._config.compression_target_tokens,
+                    ),
                 )
                 if self._config.context_window_compression
                 else None
