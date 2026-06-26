@@ -292,10 +292,19 @@ class GeminiLiveAgent(VoiceAgentBase):
                 # thinking) — unpriced here, so est is a floor.
                 unattr_in = (um.prompt_token_count or 0) - attributed["in"]
                 unattr_out = (um.response_token_count or 0) - attributed["out"]
+                # Implicit context caching (on by default for Gemini 2.5+/3.1) re-bills
+                # the cached prefix — our ~8k-token system-instruction floor — at a 90%
+                # discount. `cost` above charges every prompt token at full rate, so
+                # subtract the saving on cached tokens to get the REAL estimate. cached
+                # tokens are text-in (the floor is text). cached=0 every turn means the
+                # cache is not hitting (e.g. session churn) — that's the cost red flag.
+                cached = getattr(um, "cached_content_token_count", 0) or 0
+                cost_cached = max(0.0, cost - cached * rates[("in", "TEXT")] * 0.90 / 1_000_000)
                 logger.debug(
-                    "[realtime] Gemini usage: %s +unattr(%din/%dout) | total=%dtok est>=$%.5f",
-                    " ".join(parts) or "-", unattr_in, unattr_out,
-                    um.total_token_count or 0, cost,
+                    "[realtime] Gemini usage: %s +unattr(%din/%dout) | cached=%dtok "
+                    "total=%dtok est_full>=$%.5f est_cached>=$%.5f",
+                    " ".join(parts) or "-", unattr_in, unattr_out, cached,
+                    um.total_token_count or 0, cost, cost_cached,
                 )
 
             if message.server_content:
