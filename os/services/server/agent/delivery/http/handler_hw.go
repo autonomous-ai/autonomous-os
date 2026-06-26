@@ -78,7 +78,11 @@ func extractHWCalls(text string) ([]hwCall, string) {
 		if body == "" { // bodyless marker like [HW:/led/off] → default to empty JSON
 			body = "{}"
 		}
-		calls = append(calls, hwCall{path: m[1], body: body})
+		// Normalize colon-separated path segments to slash (e.g. /audio:play →
+		// /audio/play). Some LLM backends emit colons instead of slashes as path
+		// separators; normalizing here makes the parser tolerant of any backend.
+		path := "/" + strings.ReplaceAll(strings.TrimPrefix(m[1], "/"), ":", "/")
+		calls = append(calls, hwCall{path: path, body: body})
 	}
 	// Log only when buddy markers are present — keeps signal-to-noise high
 	// while answering the "did OpenClaw fire a /buddy/* marker?" question.
@@ -122,7 +126,9 @@ func extractLeadingHWCalls(text string) []hwCall {
 		if m[4] >= 0 {
 			body = text[m[4]:m[5]]
 		}
-		calls = append(calls, hwCall{path: text[m[2]:m[3]], body: body})
+		rawPath := text[m[2]:m[3]]
+		path := "/" + strings.ReplaceAll(strings.TrimPrefix(rawPath, "/"), ":", "/")
+		calls = append(calls, hwCall{path: path, body: body})
 		expectedPos = end
 	}
 	return calls
