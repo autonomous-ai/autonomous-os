@@ -59,14 +59,16 @@ class GeminiLiveAgent(VoiceAgentBase):
         self._resumption_handle: str | None = None
         self._speech_ended_at: float | None = None
         self._first_audio_received: bool = False
-        # Set when a Google Search grounding injects chunks this turn; consumed by
-        # the orchestrator (take_grounding_fired) to recycle the session afterward
-        # so the bulky snippets don't keep re-billing on later turns.
-        self._grounding_fired: bool = False
         self._vad_disabled: bool = not config.vad_enabled
         self._activity_started: bool = False
         self._reconnect_delay_s: float = config.reconnect_delay_s
         self._last_reconnect_at: float = 0.0
+        # Exponential backoff: the recv loop self-reconnects when disconnected, so a
+        # persistent failure (e.g. Gemini usage-limit 4029) would otherwise hammer
+        # the endpoint every reconnect_delay_s. Grow the throttle on each failed
+        # reconnect (capped), reset to the base on success.
+        self._reconnect_backoff: float = config.reconnect_delay_s
+        self._reconnect_backoff_max: float = 60.0
         self._max_retries: int = config.max_retries
         self._send_timeout_s: float = config.send_timeout_s
         self._recv_timeout_s: float = config.recv_timeout_s
@@ -102,7 +104,15 @@ class GeminiLiveAgent(VoiceAgentBase):
                         voice_name=self._config.voice.value,
                     )
                 ),
-                language_code=lang,
+                # Native-audio models (e.g. gemini-2.5-flash-native-audio) REJECT an
+                # explicit language_code (server closes setup with WS 1000) — they
+                # auto-detect the language. Only half-cascade / 3.x Live accept it.
+                # The system prompt already enforces the spoken language either way.
+                # Verified via on-device bisect: removing speech_config.language_code
+                # is the only change that lets 2.5 connect.
+                language_code=(
+                    None if "native-audio" in self._config.model else lang
+                ),
             ),
             system_instruction=self._config.instructions,
             input_audio_transcription=None,
@@ -273,13 +283,15 @@ class GeminiLiveAgent(VoiceAgentBase):
                 # turn_complete, and the server_content branch returns on
                 # turn_complete — so a check placed after it never runs.
                 um = message.usage_metadata
-                # gemini-3.1-flash-live-preview rates, USD per 1M tokens, by
-                # (direction, modality). Verified vs ai.google.dev/gemini-api/docs/
-                # pricing (2026-06): text-in $0.75, audio-in $3, audio-out $12. Text
-                # bills ~4-16x cheaper than audio, so per-modality is what matters.
+                # Rates USD per 1M tokens by (direction, modality), model-aware
+                # (ai.google.dev/gemini-api/docs/pricing, 2026-06). Audio is identical
+                # across models; text-in/out is where 2.5 native-audio is cheaper
+                # ($0.50/$2.00 vs 3.1 $0.75/$4.50). Without this the log would bill 2.5
+                # at 3.1 rates and over-state its cost ~50% on text.
+                _is_25 = "2.5" in self._config.model or "native-audio" in self._config.model
                 rates = {
-                    ("in", "TEXT"): 0.75, ("in", "AUDIO"): 3.0,
-                    ("out", "TEXT"): 0.75, ("out", "AUDIO"): 12.0,
+                    ("in", "TEXT"): 0.50 if _is_25 else 0.75, ("in", "AUDIO"): 3.0,
+                    ("out", "TEXT"): 2.0 if _is_25 else 4.5, ("out", "AUDIO"): 12.0,
                 }
                 parts, cost, attributed = [], 0.0, {"in": 0, "out": 0}
                 for direction, details in (
@@ -328,10 +340,6 @@ class GeminiLiveAgent(VoiceAgentBase):
                         "[realtime][grounding] Google Search fired: queries=%s chunks=%d",
                         queries[:3], len(chunks),
                     )
-                    # Snippets were injected into the session context — flag for a
-                    # post-turn recycle so they don't re-bill on every later turn.
-                    if chunks:
-                        self._grounding_fired = True
 
                 if content.model_turn and content.model_turn.parts:
                     for part in content.model_turn.parts:
@@ -410,11 +418,12 @@ class GeminiLiveAgent(VoiceAgentBase):
     # --- Reconnect ---
 
     def _ensure_connected(self) -> None:
-        """Reconnect if not connected. Throttled to at most once per reconnect_delay_s."""
+        """Reconnect if not connected. Throttled by an exponential backoff that grows
+        on consecutive failures (reset to base on success)."""
         if self._connected.is_set():
             return
         now: float = time.monotonic()
-        if now - self._last_reconnect_at < self._reconnect_delay_s:
+        if now - self._last_reconnect_at < self._reconnect_backoff:
             return
         self._last_reconnect_at = now
         self._reconnect()
@@ -431,6 +440,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         self._activity_started = False
         self._turn_done.set()  # unblock any waiting commit
         self._last_reconnect_at = 0.0  # bypass _ensure_connected throttle
+        self._reconnect_backoff = self._reconnect_delay_s  # zombie recovery → retry now
         if self._loop is not None:
             try:
                 self._submit_and_wait(self._async_disconnect(), timeout=10.0)
@@ -451,8 +461,17 @@ class GeminiLiveAgent(VoiceAgentBase):
             self._submit_and_wait(self._async_disconnect())
             self._submit_and_wait(self._async_connect())
             self._connected.set()
+            self._reconnect_backoff = self._reconnect_delay_s  # success → reset backoff
         except Exception as e:
-            logger.warning("[realtime] Reconnect failed: %s — will retry on next audio", e)
+            # Grow backoff so a persistent failure (e.g. usage-limit 4029) doesn't
+            # hammer the endpoint every base delay.
+            self._reconnect_backoff = min(
+                self._reconnect_backoff * 2, self._reconnect_backoff_max
+            )
+            logger.warning(
+                "[realtime] Reconnect failed: %s — next retry in ~%.0fs",
+                e, self._reconnect_backoff,
+            )
 
     def _fail_fast_turn(self, reason: str) -> None:
         """End the current turn immediately on a non-idle recv error.
@@ -477,14 +496,6 @@ class GeminiLiveAgent(VoiceAgentBase):
             "(skipping receive timeout wait)",
             reason,
         )
-
-    @override
-    def take_grounding_fired(self) -> bool:
-        """Return + reset the grounding flag (see base). True when this turn's
-        Google Search injected chunks → orchestrator recycles to drop them."""
-        fired: bool = self._grounding_fired
-        self._grounding_fired = False
-        return fired
 
     # --- VoiceAgentBase implementation ---
 

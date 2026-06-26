@@ -508,7 +508,11 @@ REALTIME_GEMINI_BASE_URL: str = (
     or _RT.get("base_url", "")
     or ((_os_cfg_get("llm_base_url", "").rstrip("/") + "/ws/gemini") if _os_cfg_get("llm_base_url", "") else "")
 )
-REALTIME_GEMINI_MODEL: str = _rt_str("HAL_GEMINI_LIVE_MODEL", _RT_GEMINI.get("model"), "gemini-3.1-flash-live-preview")
+# Default to 2.5 native-audio: same per-turn token usage as 3.1 (measured on
+# device) but ~33% cheaper text tokens ($0.50 vs $0.75 /M in). Requires the
+# language_code-omit fix in gemini_live.py (native-audio rejects an explicit
+# language_code). Override via realtime.gemini.model or HAL_GEMINI_LIVE_MODEL.
+REALTIME_GEMINI_MODEL: str = _rt_str("HAL_GEMINI_LIVE_MODEL", _RT_GEMINI.get("model"), "gemini-2.5-flash-native-audio-preview-12-2025")
 REALTIME_GEMINI_VOICE: str = _rt_str("HAL_GEMINI_LIVE_VOICE", _RT_GEMINI.get("voice"), "Kore")
 REALTIME_GEMINI_SAMPLE_RATE: int = 16000
 REALTIME_GEMINI_THINKING_LEVEL: str = _rt_str("HAL_GEMINI_THINKING_LEVEL", _RT_GEMINI.get("thinking_level"), "MINIMAL")

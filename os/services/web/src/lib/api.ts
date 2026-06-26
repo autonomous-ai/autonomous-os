@@ -52,6 +52,20 @@ export function hwUrl(path: string): string {
   return withApiToken(`/api/hardware${path}`);
 }
 
+/** Base64-encode a File for JSON bodies (e.g. face enroll). Uses FileReader
+ *  instead of `btoa(String.fromCharCode(...new Uint8Array(buf)))`: spreading a
+ *  full-resolution JPEG's bytes into a function call blows the call stack
+ *  (RangeError) on large photos, silently failing the upload. Strips the
+ *  `data:<mime>;base64,` prefix so the result is the raw base64 HAL expects. */
+export function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as string).split(",")[1]);
+    reader.onerror = () => reject(new Error("Failed to read file"));
+    reader.readAsDataURL(file);
+  });
+}
+
 // Setup query params that may carry secrets. When a redirect or shareable
 // link preserves window.location.search, these must be stripped so the
 // token doesn't propagate to a new origin, browser history, proxy log, or

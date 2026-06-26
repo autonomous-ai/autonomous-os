@@ -153,13 +153,23 @@ func isChannelOriginatedRun(runIDs ...string) bool {
 // canStreamSentenceTTS returns true when the run is eligible for first-
 // sentence streaming. Excludes channel-originated runs (their reply fans out
 // to Telegram at lifecycle:end, not the speaker), web chat (display-only),
-// and runs already flagged for TTS suppression (music playing / agent
-// already spoke via the built-in tts tool intercept).
+// silent runs (voice_agent_handled: the realtime agent already spoke), and
+// runs already flagged for TTS suppression (music playing / agent already
+// spoke via the built-in tts tool intercept).
 func (h *AgentHandler) canStreamSentenceTTS(runID, flowRunID string) bool {
 	if isChannelOriginatedRun(runID, flowRunID) {
 		return false
 	}
 	if h.agentGateway.IsWebChatRun(flowRunID) {
+		return false
+	}
+	// voice_agent_handled: the realtime voice agent already spoke this turn, so
+	// the main agent's reply must stay silent. lifecycle:end suppresses the
+	// remainder via ConsumeSilentRun, but the mid-turn first-sentence flush has
+	// its own path and would otherwise leak sentence 1 to the speaker when the
+	// LLM ignores the input-branching NO_REPLY hint. IsSilentRun is non-consuming
+	// so the lifecycle:end ConsumeSilentRun stays intact.
+	if h.agentGateway.IsSilentRun(flowRunID) || h.agentGateway.IsSilentRun(runID) {
 		return false
 	}
 	// Slack (hermes HTTP bridge): a Slack turn replies in Slack, never on the

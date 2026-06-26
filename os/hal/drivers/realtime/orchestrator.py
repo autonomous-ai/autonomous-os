@@ -192,10 +192,19 @@ class RealtimeOrchestrator:
         # blocks ~15s in receive() before falling back. Gating on the live
         # connection makes those turns skip realtime and go straight to the main
         # agent immediately (and auto-resume once the limit clears / reconnect wins).
+        #
+        # Also report unavailable WHILE a session rebuild is in flight. _force_rebuild
+        # keeps the old agent serving until the new one connects (~1s) then swaps and
+        # disconnects the old — so a turn that dispatches during that window commits
+        # its audio to the about-to-be-discarded old session and dies mid-turn with
+        # WS 1000 (the "async rebuild raced the next turn" failure). Gating on the
+        # rebuild lock routes such turns cleanly to the main agent for that ~1s
+        # instead, eliminating that whole class of mid-turn closes.
         return (
             self._started.is_set()
             and self._agent is not None
             and self._agent.available
+            and not self._rebuild_lock.locked()
         )
 
     @property
@@ -472,17 +481,20 @@ class RealtimeOrchestrator:
         #   - zombie:   N consecutive silent turns (wedged session)
         #   - idle:     this turn followed a long silence (see _mark_turn_start)
         #   - turn-cap: session handled enough turns that context grew large (cost)
-        #   - grounding: this turn ran a Google Search; recycle drops the bulky
-        #               injected snippets so they don't re-bill on every later turn
-        #               (the spoken answer survives via summary.md).
+        # NOTE: NO grounding-triggered recycle. Recycling after every Google-Search
+        # turn churned the session and the async rebuild raced the next turn (common
+        # when the user asks consecutive search questions) → frequent mid-turn WS 1000
+        # closes. The snippet-eviction saving (~200t) wasn't worth it; turn-cap/idle
+        # recycle already bounds accumulation. The race itself (rebuild swapping the
+        # agent under a dispatching turn) is now also blocked by the available-gate
+        # checking _rebuild_lock — see the `available` property.
         zombie: bool = (
             not produced
             and self._consecutive_silent >= config.REALTIME_ZOMBIE_RECONNECT_AFTER
         )
         max_turns: int = config.REALTIME_SESSION_MAX_TURNS
         turn_cap: bool = max_turns > 0 and self._turns_since_recycle >= max_turns
-        grounded: bool = self._agent.take_grounding_fired()
-        if zombie or self._idle_reset_pending or turn_cap or grounded:
+        if zombie or self._idle_reset_pending or turn_cap:
             if zombie:
                 logger.warning(
                     "[realtime] %d consecutive silent turns — forcing reconnect "
@@ -490,11 +502,7 @@ class RealtimeOrchestrator:
                     self._consecutive_silent,
                 )
             else:
-                reason: str = (
-                    "idle" if self._idle_reset_pending
-                    else "turn-cap" if turn_cap
-                    else "grounding"
-                )
+                reason: str = "idle" if self._idle_reset_pending else "turn-cap"
                 logger.info(
                     "[realtime] recycling session (%s) after %d turns (cost)",
                     reason, self._turns_since_recycle,

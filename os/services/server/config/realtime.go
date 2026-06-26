@@ -62,7 +62,10 @@ type OpenAIRealtime struct {
 // Values must stay valid against HAL's enums (GeminiThinkingLevel / GeminiVoice /
 // OpenAIReasoningEffort / OpenAI voices).
 const (
-	defaultRealtimeGeminiModel     = "gemini-3.1-flash-live-preview"
+	// 2.5 native-audio: same per-turn token usage as 3.1 but ~33% cheaper text
+	// tokens. HAL omits speech_config.language_code for native-audio models
+	// (they reject it). Override via realtime.gemini.model in config.json.
+	defaultRealtimeGeminiModel     = "gemini-2.5-flash-native-audio-preview-12-2025"
 	defaultRealtimeGeminiVoice     = "Kore"
 	defaultRealtimeGeminiThinking  = "MINIMAL"
 	defaultRealtimeOpenAIModel     = "gpt-realtime-2"

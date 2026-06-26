@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import { fileToBase64 } from "@/lib/api";
 
 export interface FaceOwner {
   label: string;
@@ -47,8 +48,7 @@ export function useFaceEnroll() {
     let lastErr = "";
     for (const file of faceFiles) {
       try {
-        const buf = await file.arrayBuffer();
-        const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+        const b64 = await fileToBase64(file);
         const resp = await fetch("/api/hardware/face/enroll", {
           method: "POST",
           headers: { "Content-Type": "application/json" },

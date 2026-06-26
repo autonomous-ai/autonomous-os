@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { toast } from "sonner";
-import { getDeviceConfig, updateDeviceConfig, getTTSVoices, getTTSProviders } from "@/lib/api";
+import { getDeviceConfig, updateDeviceConfig, getTTSVoices, getTTSProviders, hwUrl } from "@/lib/api";
 import type { DeviceConfig } from "@/lib/api";
 import type { ChannelType } from "@/types";
 import type { FaceOwner } from "@/hooks/setup/useFaceEnroll";
@@ -163,7 +163,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
 
   const loadFaceOwners = useCallback(async () => {
     try {
-      const r = await fetch("/hw/face/owners").then((x) => x.json());
+      const r = await fetch(hwUrl("/face/owners")).then((x) => x.json());
       if (Array.isArray(r?.persons)) setFaceOwners(r.persons);
     } catch {}
   }, []);
