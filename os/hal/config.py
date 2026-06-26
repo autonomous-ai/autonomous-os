@@ -533,7 +533,7 @@ REALTIME_GEMINI_COMPRESSION_TARGET_TOKENS: int = int(
 # → the user's question is dropped. Send a WS ping every N seconds while idle to
 # keep the session warm. 0 = off. Must be < the proxy idle window.
 REALTIME_GEMINI_KEEPALIVE_S: float = float(
-    os.environ.get("HAL_GEMINI_KEEPALIVE_S", "15")
+    os.environ.get("HAL_GEMINI_KEEPALIVE_S", "8")
 )
 # Session resumption lets a reconnect resume the SAME server session (context
 # preserved). It requires the WS endpoint to faithfully forward the resumption
