@@ -85,7 +85,7 @@ STT_KEEPALIVE = os.environ.get("HAL_STT_KEEPALIVE", "false").lower() == "true"
 # doesn't idle-close the WS (~10s) and force a slow cold-reconnect at speech start
 # (the cause of empty transcripts on short/quiet utterances). Must be < server
 # idle timeout.
-STT_KEEPALIVE_PING_S = float(os.environ.get("HAL_STT_KEEPALIVE_PING_S", "5"))
+STT_KEEPALIVE_PING_S = float(os.environ.get("HAL_STT_KEEPALIVE_PING_S", "3"))
 
 
 # ---------------------------------------------------------------------------
