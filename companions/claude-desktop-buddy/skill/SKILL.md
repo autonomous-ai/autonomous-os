@@ -32,6 +32,35 @@ curl -s -X POST http://127.0.0.1:5002/claude-desktop/deny \
   -d '{"id": "<prompt_id from event>"}'
 ```
 
+## When you receive a `[sensing:claude_code_approval]` event
+
+Claude Code (the CLI on the user's Mac) is waiting for the user to approve or deny
+a tool call. The Mac is **blocked** on your answer, so respond promptly.
+
+**Workflow:**
+1. Express emotion: curious (intensity 0.8)
+2. Read the approval details from the event message (tool name + what it affects)
+3. Ask the user naturally: mention the tool and what it will do
+4. Wait for the user's verbal response
+
+**If user says approve/yes/ok/go ahead:**
+```bash
+curl -s -X POST http://127.0.0.1:5002/claude-code/approve \
+  -H "Content-Type: application/json" \
+  -d '{"id": "<prompt_id from event>"}'
+```
+
+**If user says deny/no/skip/cancel:**
+```bash
+curl -s -X POST http://127.0.0.1:5002/claude-code/deny \
+  -H "Content-Type: application/json" \
+  -d '{"id": "<prompt_id from event>"}'
+```
+
+If you don't answer in time the Mac falls back to its own on-screen dialog — no
+harm done, but answering promptly is what makes the voice flow feel instant. Say
+"Claude Code" naturally; never mention prompt ids, HTTP, or these internals.
+
 ## Buddy state awareness
 
 You can check what Claude Desktop is doing:

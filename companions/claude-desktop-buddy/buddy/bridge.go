@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"time"
+
+	"claude-desktop-buddy/httpapi"
 )
 
 // claudeBrand is the Claude app icon color (#C15F3C) used for all
@@ -163,6 +165,34 @@ func (b *Bridge) postSensingEvent(prompt *Prompt) {
 	})
 }
 
+// --- Claude Code reverse approval ---
+
+// announceCodeApproval cues the device that Claude Code is waiting for the user
+// to approve a tool. Mirrors the Desktop StateAttention cue (blink LED + display)
+// but injects a `claude_code_approval` sensing event so the on-device agent asks
+// the user by voice and then POSTs the decision back to /claude-code/approve|deny.
+// All calls are fire-and-forget (the LED is transient, so it never steals the
+// user's saved strip state).
+func (b *Bridge) announceCodeApproval(req httpapi.CodeApprovalRequest) {
+	b.ledEffect("blink", claudeBrand, 1.5, 0)
+	b.displayInfo(
+		fmt.Sprintf("Approve %s?", req.Tool),
+		truncate(req.Hint, 40),
+	)
+	b.post(b.deviceURL+"/api/sensing/event", map[string]interface{}{
+		"type": "claude_code_approval",
+		"message": fmt.Sprintf("Claude Code needs approval: %s — %s [prompt_id:%s]",
+			req.Tool, req.Hint, req.ID),
+	})
+}
+
+// restoreAfterCodeApproval repaints the user's LED + eyes once a code approval
+// resolves (allow / deny / timeout), so Buddy never holds the attention cue.
+func (b *Bridge) restoreAfterCodeApproval() {
+	b.ledRestore()
+	b.displayEyesMode()
+}
+
 // expressEmotion triggers a coordinated LED + servo animation on
 // the device. Used by the buddy state listener to celebrate the end of a
 // Claude turn ("Claude is done" → happy emotion). The device owns the
@@ -267,9 +297,16 @@ func formatTokens(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
+// truncate shortens s to at most max runes, appending "..." when it cuts. Counts
+// runes (not bytes) so multi-byte text (Vietnamese hints, tool args) is never
+// sliced mid-rune, and guards small max so it can't panic.
 func truncate(s string, max int) string {
-	if len(s) <= max {
+	r := []rune(s)
+	if len(r) <= max {
 		return s
 	}
-	return s[:max-3] + "..."
+	if max <= 3 {
+		return string(r[:max])
+	}
+	return string(r[:max-3]) + "..."
 }

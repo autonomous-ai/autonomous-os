@@ -45,8 +45,9 @@ Về build, deploy, cấu hình và pairing, xem [`setup_vi.md`](setup_vi.md).
 | `protocol.go` | Tất cả các kiểu trên đường truyền (`Heartbeat`, `TimeSync`, `Event`, `Command`, `Ack`, `PermissionDecision`), bộ parser/salvager, và các builder ack/permission. |
 | `state.go` | `StateMachine` — suy ra một `BuddyState` từ heartbeat, theo dõi prompt đang chờ cùng các bộ đếm cấp/từ chối trọn đời (lifetime), và quản lý các transient state. |
 | `bridge.go` | Ánh xạ mỗi thay đổi trạng thái thành các lời gọi HTTP cụ thể tới LeLamp + Lamp (LED, màn hình, cảm xúc, TTS, sự kiện monitor/sensing). |
-| `httpapi/` | Gói delivery cho API `:5002` (clean architecture / đảo ngược phụ thuộc). `server.go` chứa `Server`, registry route duy nhất `routes()`, và các helper phản hồi JSON; `ports.go` khai báo các interface mà handler phụ thuộc (`StatusProvider`, `ApprovalService`, `ActivitySink`, cùng các sentinel error); `status.go` phục vụ `GET /status` + `GET /health`; `claudedesktop.go` phục vụ `POST /claude-desktop/approve` + `/deny` (vòng round-trip cấp quyền bằng giọng nói của Claude Desktop); `claudecode.go` phục vụ `POST /claude-code/notify` + `/usage` (các push của plugin Claude Code). |
-| `status_provider.go` / `approval_service.go` / `activity_sink.go` | Các hiện thực cụ thể của port `httpapi`, mỗi file một vai trò: `StatusReader` (read-adapter → snapshot trạng thái), `ApprovalService` (use case cấp quyền bằng giọng nói: validate id + gửi quyết định quyền qua BLE + cập nhật bộ đếm), `LogActivitySink` (ghi log các push của Claude Code — chỗ mà HAL bridge sẽ thay vào sau này). `main.go` là composition root ráp chúng vào `httpapi.New`. |
+| `httpapi/` | Gói delivery cho API `:5002` (clean architecture / đảo ngược phụ thuộc). `server.go` chứa `Server`, registry route duy nhất `routes()`, và các helper phản hồi JSON; `Start()` của nó dựng một `http.Server` tường minh (ReadHeaderTimeout 10 s, ReadTimeout 15 s, IdleTimeout 60 s, và **WriteTimeout bị vô hiệu (`0`)** vì long-poll cấp quyền giữ response ~55 s). `ports.go` khai báo các interface mà handler phụ thuộc (`StatusProvider`, `ApprovalService`, `ActivitySink`, `CodeApprovalService`, cùng các sentinel error); `status.go` phục vụ `GET /status` + `GET /health`; `claudedesktop.go` phục vụ `POST /claude-desktop/approve` + `/deny` (vòng round-trip cấp quyền bằng giọng nói của Claude Desktop); `claudecode.go` phục vụ `POST /claude-code/notify` + `/usage` (các push của plugin Claude Code) cùng các route cấp-quyền-ngược `POST /claude-code/approval-request` (long-poll), `POST /claude-code/approve` + `/deny` (chỉ loopback qua helper `isLoopback`), và `GET /claude-code/pending`; một helper `decodeJSON` giới hạn body request ở 64 KB. |
+| `status_provider.go` / `approval_service.go` / `hal_activity_sink.go` | Các hiện thực cụ thể của port `httpapi`, mỗi file một vai trò: `StatusReader` (read-adapter → snapshot trạng thái), `ApprovalService` (use case cấp quyền bằng giọng nói: validate id + gửi quyết định quyền qua BLE + cập nhật bộ đếm), `HALActivitySink` (`ActivitySink` được nối thực tế — ghi log các push của Claude Code **và** đọc chúng qua HAL `:5001`). `main.go` là composition root ráp chúng vào `httpapi.New`. |
+| `codeapproval.go` | `CodeApprovals` — hiện thực của `httpapi.CodeApprovalService`. Một map trong bộ nhớ chứa các approval Claude Code đang chờ, khóa theo id, mỗi cái có một channel có buffer. `Request(ctx, req)` đăng ký một approval đang chờ, gọi `bridge.announceCodeApproval`, rồi block trên một select qua {quyết định từ channel, timeout ttl, ctx cancel}, trả về `"allow"`/`"deny"`/`"timeout"`; `Approve(id)`/`Deny(id)` gửi lên channel (non-blocking, người-ghi-đầu-tiên-thắng); `Pending()` liệt kê chúng. ttl lấy từ config `code_approval_ttl_sec` (mặc định 55 s). `main.go` dựng nó qua `NewCodeApprovals(bridge, ttl)` và truyền làm tham số thứ 5 của `httpapi.New`. |
 | `agent.go` | BlueZ `org.bluez.Agent1` (DisplayOnly) để LE pairing có thể hoàn tất; ghi passkey ra journal. |
 | `transfer.go` | Bộ nhận folder-push — stream file từ Desktop tới `/opt/claude-desktop-buddy/chars` kèm các bảo vệ chống path-traversal. |
 | `narrator.go` + `i18n.go` | Các thông báo TTS ngắn về hoạt động của Claude, dedupe theo từng turn, được bản địa hóa (EN/VI). |
@@ -114,6 +115,52 @@ Desktop heartbeat carries `prompt`  ─►  state = attention, pending prompt st
 gửi `"deny"`. Cả hai trả về `409` nếu không có prompt đang chờ hoặc `id` không khớp
 với prompt hiện tại.
 
+### Vòng round-trip cấp quyền của Claude Code
+
+Đây là chiều *ngược lại* của luồng Desktop: thay vì Claude Desktop hỏi qua BLE,
+một **hook `PermissionRequest`** của Claude Code
+(`claude-code-buddy/scripts/on-permission-request.py`, đăng ký trong
+`hooks.json`) hỏi Buddy qua HTTP và block chờ câu trả lời, để Claude Code có thể
+chấp thuận một tool mà không hiện hộp thoại của chính nó.
+
+```
+Claude Code muốn chạy một tool
+        │
+        ▼
+hook long-poll  POST /claude-code/approval-request {id, tool, hint, input}
+        │
+        ▼
+CodeApprovals.Request đăng ký approval đang chờ
+        │                                  │
+        │                          bridge.announceCodeApproval
+        │                            → nhấp nháy LED + hiển thị "Approve <tool>?"
+        │                            → Lamp /api/sensing/event
+        │                              type=claude_code_approval  ─► agent nghe thấy,
+        │                                                            hỏi người dùng
+        │                                                                  │
+   GET /claude-code/pending  ◄──────────────────────────────────────────┘
+        │
+        ▼
+   người dùng nói yes/no  ─►  POST /claude-code/approve|/deny {id}  (chỉ loopback)
+        │
+        ▼
+   Approve(id)/Deny(id) gửi lên channel; Request unblock
+        │
+        ▼
+   trả về "allow" / "deny"  (hoặc "timeout" sau code_approval_ttl_sec)
+        │
+        ▼
+   hook ánh xạ quyết định thành output allow/deny của nó ─► Claude Code tiếp tục, không hộp thoại
+```
+
+Opt-in qua config plugin `approval_enabled` (mặc định `false`). Các handler
+`/claude-code/approve` + `/deny` **chỉ loopback** — agent OpenClaw trên thiết bị
+giải quyết prompt bằng cách gọi chúng (theo `skill/SKILL.md`). Fail-safe: bất kỳ
+lỗi hay timeout nào cũng khiến hook nhường lại cho hộp thoại cấp quyền gốc của
+Claude Code — không bao giờ tự động cho phép. Khác với luồng Desktop, quyết định
+được trả về như HTTP response của hook (giá trị trả về của nó) thay vì đẩy ngược
+qua BLE.
+
 ## State machine
 
 Các trạng thái (`state.go`): `sleep`, `idle`, `busy`, `attention`, `heart`, `celebrate`.
@@ -148,6 +195,7 @@ không bao giờ chiếm dải LED vĩnh viễn. Màu nhấn là màu app Claude
 | `speakTTS` (đã cache) / `prerenderTTS` | LeLamp `/voice/speak` | TTS thuật lại (và làm nóng cache lúc khởi động) |
 | `postBuddyState` | Lamp `/api/monitor/event` (`type=buddy_state`) | hiển thị trạng thái lên monitor |
 | `postSensingEvent` | Lamp `/api/sensing/event` (`type=buddy_approval`) | bơm yêu cầu cấp quyền vào pipeline sensing |
+| `announceCodeApproval` / `restoreAfterCodeApproval` | Lamp `/api/sensing/event` (`type=claude_code_approval`) | nhấp nháy LED transient (claudeBrand) + hiển thị "Approve `<tool>`?" khi đang có một approval-ngược của Claude Code chờ, rồi vẽ lại LED + mắt của người dùng |
 | `OnEvent` | Lamp `/api/monitor/event` (`type=buddy_event`) | hiển thị các lượt chat cho các use case khác |
 
 Mọi lời gọi của bridge đều theo kiểu fire-and-forget với timeout 5 s; các phản hồi

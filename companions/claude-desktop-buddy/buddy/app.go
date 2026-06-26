@@ -43,6 +43,11 @@ type Config struct {
 	// narrationStrings (i18n.go); unsupported values fall back to
 	// English at runtime via supportedLang().
 	NarrationLang string `json:"narration_lang"`
+	// CodeApprovalTTLSec bounds how long a Claude Code reverse-approval request
+	// blocks (long-poll) before falling back to "timeout" so the hook defers to
+	// Claude Code's native dialog. Should stay under the plugin hook's own
+	// timeout (60s) so the server answers first.
+	CodeApprovalTTLSec int `json:"code_approval_ttl_sec"`
 }
 
 // Run loads config and starts the daemon: BlueZ agent, bridge, narrator, state
@@ -137,11 +142,17 @@ func Run(configPath string) {
 	// Composition root: wire the concrete use case + adapters into the httpapi
 	// delivery layer. Each is defined in its own file by role (status_provider,
 	// approval_service, activity_sink).
+	// Claude Code reverse approval: the plugin's permission hook long-polls the
+	// daemon, which cues the device (LED + sensing event) so the agent asks the
+	// user, then relays the voice yes/no back as the hook's return value.
+	codeApprovals := NewCodeApprovals(bridge, time.Duration(cfg.CodeApprovalTTLSec)*time.Second)
+
 	httpSrv := httpapi.New(
 		cfg.HTTPPort,
 		NewStatusReader(sm),
 		NewApprovalService(sm, ble),
 		NewHALActivitySink(bridge), // logs each event + speaks via HAL :5001
+		codeApprovals,
 	)
 	go func() {
 		if err := httpSrv.Start(); err != nil {
@@ -349,6 +360,7 @@ func loadConfig(path string) Config {
 		DeviceURL:          "http://127.0.0.1:5000",
 		ApprovalTimeoutSec: 30,
 		NarrationLang:      "vi",
+		CodeApprovalTTLSec: 55,
 	}
 
 	data, err := os.ReadFile(path)
