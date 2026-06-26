@@ -472,8 +472,14 @@ REALTIME_REQUIRE_SPEECH_ON_EMPTY_STT: bool = os.environ.get(
 # threshold would pass a noisy turn — so we require sustained voicing. A real
 # speaking turn is voiced across most of its length; sustained noise spikes only
 # sparsely. Provisional 0.30; tune from the `noise-guard metrics` logs.
+# Empty-STT turns are committed to Gemini (full history + audio re-billed) only if
+# their voiced ratio clears this bar — the main guard against noise/false-trigger
+# turns inflating cost ("387 requests" when far fewer were real). Device data shows
+# a clean gap: real speech sits >=0.64 voiced, noise that leaked sat 0.30-0.55. Set
+# at 0.55 to drop the noise band while keeping real speech. Raise if noise still
+# leaks; lower if real short/quiet utterances get dropped.
 REALTIME_NOISE_SPEECH_RATIO: float = float(
-    os.environ.get("HAL_REALTIME_NOISE_SPEECH_RATIO", "0.30")
+    os.environ.get("HAL_REALTIME_NOISE_SPEECH_RATIO", "0.55")
 )
 # Turn detection / VAD: "server_vad" | "semantic_vad" | "off"
 # For Gemini: "off" disables automatic activity detection; any other value enables it.
@@ -507,6 +513,20 @@ REALTIME_GEMINI_VOICE: str = _rt_str("HAL_GEMINI_LIVE_VOICE", _RT_GEMINI.get("vo
 REALTIME_GEMINI_SAMPLE_RATE: int = 16000
 REALTIME_GEMINI_THINKING_LEVEL: str = _rt_str("HAL_GEMINI_THINKING_LEVEL", _RT_GEMINI.get("thinking_level"), "MINIMAL")
 REALTIME_GEMINI_USE_LANGUAGE_CODES: bool = os.environ.get("HAL_GEMINI_USE_LANGUAGE_CODES", "false").lower() in ("1", "true", "yes")
+# Context-window compression (COST): Gemini re-bills the whole accumulated session
+# (system instruction + conversation history) as input text on EVERY turn, so a long
+# session's growing history dominates input-text cost. The default SlidingWindow()
+# never actually triggers in practice (sessions recycle long before its ~100k-token
+# default), so we set an explicit LOW trigger: when context exceeds trigger_tokens,
+# Gemini compresses the history down to ~target_tokens. This caps per-turn in_text
+# around target..trigger instead of letting it climb toward 20k+. Lower = cheaper but
+# less recent conversation kept verbatim. trigger MUST be > target.
+REALTIME_GEMINI_COMPRESSION_TRIGGER_TOKENS: int = int(
+    os.environ.get("HAL_GEMINI_COMPRESSION_TRIGGER_TOKENS", "14000")
+)
+REALTIME_GEMINI_COMPRESSION_TARGET_TOKENS: int = int(
+    os.environ.get("HAL_GEMINI_COMPRESSION_TARGET_TOKENS", "7000")
+)
 # Session resumption lets a reconnect resume the SAME server session (context
 # preserved). It requires the WS endpoint to faithfully forward the resumption
 # handshake — the autonomous `campaign-api` proxy does NOT, so resuming through it
@@ -554,8 +574,16 @@ _rt_workspace: str = OPENCLAW_WORKSPACE_DIR.rstrip("/")
 REALTIME_MEMORY_PATH: str = os.environ.get("HAL_REALTIME_MEMORY_PATH", f"{_rt_workspace}/realtime/memory.jsonl")
 REALTIME_MAX_MEMORY_ENTRIES: int = int(os.environ.get("HAL_REALTIME_MAX_MEMORY_ENTRIES", "1000"))
 REALTIME_MEMORY_TRIM_KEEP: int = int(os.environ.get("HAL_REALTIME_MEMORY_TRIM_KEEP", "500"))
-REALTIME_DEVICE_MEMORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_DEVICE_MEMORY_MAX_CHARS", "100000"))
-REALTIME_MEMORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_MEMORY_MAX_CHARS", "100000"))
+# These bound the DEVICE MEMORY / REALTIME MEMORY sections of the per-turn floor
+# (build_instructions), which Gemini re-bills every turn. 100k chars (~25k tokens)
+# each was far too generous for something billed per-turn — capped to ~16k chars
+# (~4k tokens). Also makes realtime-memory summarization trigger sooner (fresher
+# in-context memory). The full history is preserved in summary.md + memory_raw.jsonl.
+REALTIME_DEVICE_MEMORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_DEVICE_MEMORY_MAX_CHARS", "16000"))
+REALTIME_MEMORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_MEMORY_MAX_CHARS", "16000"))
+# Cap on the rolling realtime summary.md — part of the per-turn floor, so kept
+# tight (~1.5k tokens). Env-overridable for tuning.
+REALTIME_SUMMARY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_SUMMARY_MAX_CHARS", "5000"))
 
 # --- Realtime: Summarizer (Anthropic Messages API) ---
 REALTIME_SUMMARIZER_ENABLED: bool = os.environ.get("HAL_REALTIME_SUMMARIZER_ENABLED", "true").lower() in ("1", "true", "yes")
