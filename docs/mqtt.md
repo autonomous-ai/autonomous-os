@@ -62,7 +62,9 @@ The OS server uses MQTT to communicate with the backend server (status reporting
 the device's `DEVICE.md` `gateway.default`, else `openclaw`. The response also
 carries these optional fields when known: `hal_version`, `openclaw_version`,
 `hermes_version`, `local_ip`, `tts_provider`, `tts_voice`, `stt_language`,
-`unsupported_channels`. `openclaw_version` and `hermes_version` are both probed at
+`timezone`, `unsupported_channels`. `timezone` is the device's **live** IANA zone
+(e.g. `Asia/Ho_Chi_Minh`), read fresh from `/etc/timezone` (falling back to config),
+not just the config record. `openclaw_version` and `hermes_version` are both probed at
 startup (each from its own `--version`) and reported side by side; `agent_runtime`
 names the active one.
 
@@ -244,6 +246,7 @@ optional `error`, and an optional `data` payload.
 |------|---------|---------------|
 | `tts.set` | Persist TTS voice/provider/language config | `provider`, `voice`, `language` |
 | `tts.preview` | One-shot TTS preview (no config write) | `text` (required), optional `provider`/`voice`/`language` |
+| `timezone.set` | Apply the device's IANA timezone (async; acks `starting`) | `timezone` (required, e.g. `Asia/Ho_Chi_Minh`) |
 | `oauth.set` | Store/replace an OAuth token for a provider | `provider`, `access_token`, optional `refresh_token`/`token_type`/`expires_at`/`scopes`/`user_email`/`client_id` |
 | `oauth.remove` | Delete the stored OAuth token for a provider | `provider` |
 | `connector.set.<code>` | Store/replace credentials for a connector (async; acks `starting`) | `connector`, `auth_type`, optional `access_token`/`refresh_token`/`api_key`/`expires_in`/`expires_at`/`scopes`/`credentials`/`refresh` |
@@ -280,11 +283,15 @@ falls back to its zero value on failure.
       "hostname": "lamp-7f72",
       "device_id": "{DeviceID}",
       "device_name": "lamp-7f72",
-      "uptime_seconds": 86400
+      "uptime_seconds": 86400,
+      "timezone": "Asia/Ho_Chi_Minh"
     }
   }
 }
 ```
+
+The `host.timezone` field is the device's **live** IANA zone, read fresh from the
+system (`/etc/timezone`, falling back to config); omitted when it can't be resolved.
 
 `system.version` returns just the `versions` block as `data`; `system.network`
 returns just the `network` block. Version probes: `os-server` from the ldflags build
@@ -293,6 +300,30 @@ local HAL `/version` endpoint, `openclaw` from the agent monitor's cached probe
 (`openclaw_detected` distinguishes "not installed" from "installed but unparseable").
 
 An unrecognized `kind` replies with `status:"failure"` and `error:"unknown kind: <kind>"`.
+
+#### `timezone.set`
+
+Sets the device's IANA timezone. Same async shape as `realtime.set` / `tts.set`:
+the device acks immediately, applies the change in the background, then acks the
+outcome.
+
+**Receive:** `{"cmd": "data", "kind": "timezone.set", "data": {"timezone": "Asia/Ho_Chi_Minh"}}`
+
+**Ack flow** (each on fd_channel, carrying the standard device/version metadata plus
+`kind:"timezone.set"`):
+
+1. `{"status":"starting"}` — command received, before applying.
+2. One terminal ack:
+   - `{"status":"success","data":{"timezone":"Asia/Ho_Chi_Minh"}}` — applied (the
+     requested zone is echoed back in `data`).
+   - `{"status":"failure","error":"..."}` — rejected (e.g. unknown zone, or invalid
+     JSON payload).
+
+**Apply:** the zone is validated against `/usr/share/zoneinfo` (an unknown zone →
+`failure`), then the device rewrites the `/etc/localtime` symlink, writes
+`/etc/timezone`, runs `timedatectl set-timezone` best-effort, and persists `timezone`
+to `config.json`. The change takes effect **without a HAL restart** — HAL's clock
+helpers read `/etc/timezone` fresh on each call.
 
 #### Connectors
 
@@ -400,6 +431,8 @@ Handled by bootstrap worker, not through MQTT handler directly.
 | `os/services/server/device/delivery/mqtt/connector_refresh.go` | Connector token refresh loop (`/connector/refresh-token`) |
 | `os/services/server/device/delivery/mqtt/system_info_handler.go` | Handle `data` kinds `system.info`/`system.version`/`system.network` |
 | `os/services/server/device/delivery/mqtt/channel_refresh_handler.go` | Handle `data` kind `channel.refresh_config` (async re-apply of a channel's config block) |
+| `os/services/server/device/delivery/mqtt/timezone_set_handler.go` | Handle `data` kind `timezone.set` (async apply of the device IANA timezone) |
+| `os/services/internal/device/timezone.go` | `SetTimezone`/`CurrentTimezone`: validate zone, rewrite `/etc/localtime` + `/etc/timezone`, best-effort `timedatectl`, persist config |
 | `os/services/internal/device/service.go` | `RefreshChannelConfig` (generic per-channel request build + capability gate) |
 | `os/services/internal/agent/channel_reconcile.go` | `ChannelReconcile`: re-applies channels after a runtime switch, records `channels_unsupported` |
 | `os/services/server/device/delivery/mqtt/whatsapp_pair_handler.go` | Handle `whatsapp_pair` re-pair command |
