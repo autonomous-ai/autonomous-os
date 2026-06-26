@@ -33,6 +33,7 @@ class InputBatcher(Generic[INPUT_T, OUTPUT_T]):
 
     DEFAULT_BATCH_SIZE: int = 1
     DEFAULT_BATCH_TIMEOUT_S: float = 0.1
+    MAX_QUEUE_FACTOR: int = 100
 
     def __init__(
         self,
@@ -89,7 +90,7 @@ class InputBatcher(Generic[INPUT_T, OUTPUT_T]):
             self._queue = None
             self._running_loop = None
         if self._queue is None:
-            self._queue = asyncio.Queue()
+            self._queue = asyncio.Queue(maxsize=self._batch_size * self.MAX_QUEUE_FACTOR)
         if self._running_loop is None or self._running_loop.done():
             self._running_loop = asyncio.create_task(self._loop())
         return self._queue
@@ -132,7 +133,7 @@ class InputBatcher(Generic[INPUT_T, OUTPUT_T]):
         loop = asyncio.get_running_loop()
         for inp in inputs:
             future: asyncio.Future[OUTPUT_T] = loop.create_future()
-            queue.put_nowait(
+            await queue.put(
                 BatchingQueueItem(
                     input=inp,
                     future=future,

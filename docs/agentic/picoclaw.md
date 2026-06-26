@@ -27,10 +27,12 @@ which brain is active.
 > KNOWLEDGE both directions; **skills** import on the way IN is done by `picoclaw
 > migrate --workspace-only --force` in the presync hook (§1.1). The Go
 > gateway itself stays **client-only**: most in-process lifecycle methods
-> (`SetupAgent`, identity watcher …) remain no-ops (§8) because provisioning happens
-> out-of-process in install.sh/presync. The exceptions are `EnsureOnboarding`
-> (`onboarding.go`, keeps the OS-managed blocks in SOUL/AGENTS/HEARTBEAT current) and
-> `StartSkillWatcher` (`skill_watcher.go`, CDN skill auto-update) — both real (§1.1).
+> (`SetupAgent`, `RefreshModelsConfig` …) remain no-ops (§8) because provisioning
+> happens out-of-process in install.sh/presync. The exceptions are `EnsureOnboarding`
+> (`onboarding.go`, keeps the OS-managed blocks in SOUL/AGENTS/HEARTBEAT current),
+> `StartSkillWatcher` (`skill_watcher.go`, CDN skill auto-update), and identity
+> (`identity.go`: `WatchIdentity`/`UpdateIdentityName` read/write `IDENTITY.md` like
+> OpenClaw) — all real (§1.1, §8).
 > Remaining gaps (an emotion-acknowledge hook, queue/steer pinning) are tracked
 > against the
 > [`adding-agent-runtime.md`](adding-agent-runtime.md) checklist — consult it before
@@ -271,12 +273,17 @@ switching back to openclaw restores them.
 Everything not on the PicoClaw hot path is a no-op so the single
 `domain.AgentGateway` interface is satisfied without inventing features the
 backend does not have: `SetupAgent`, WhatsApp pairing, `ResetAgent`,
-`RestartAgent`, `RefreshModelsConfig`, `FetchChatHistory`, `GetConfigJSON`,
-MCP entry writes, `WatchIdentity`, `UpdateIdentityName`, the model watchers
-(`StartModelSync`/`StartPrimaryModelWatch`), `UpdatePrimaryModel`. (`AddChannel` /
-`RefreshChannelConfig` are NOT stubs — they return `domain.ErrChannelNotSupported`
-for unsupported channels, see §7; `EnsureOnboarding` (§1.1) and `StartSkillWatcher`
-(skill auto-update, §1.1) are real.)
+`RefreshModelsConfig`, `FetchChatHistory`, `CompactSession`, MCP entry writes,
+the model watchers (`StartModelSync`/`StartPrimaryModelWatch`), `UpdatePrimaryModel`.
+(`AddChannel` / `RefreshChannelConfig` are NOT stubs — they return
+`domain.ErrChannelNotSupported` for unsupported channels, see §7; `EnsureOnboarding`
+(§1.1) and `StartSkillWatcher` (skill auto-update, §1.1) are real.) These are also
+real, not stubs: `RestartAgent` (restarts the `picoclaw` systemd unit via
+`restartPicoclawGateway`), `GetConfigJSON` (returns `/root/.picoclaw/config.json` —
+the structure file; secrets in `.security.yml` are never exposed), and
+`WatchIdentity` / `UpdateIdentityName` (`identity.go`) — PicoClaw's `IDENTITY.md` is
+a 1-for-1 copy of OpenClaw's, so the `**Name:**` card line is watched (→ wake words)
+and rewritten exactly as on OpenClaw.
 HAL TTS/voice, Telegram fan-out, sensing-event queue/drain, and the run-marker
 helpers (guard / broadcast / web-chat / silent / pose-bucket) are backend-agnostic
 and behave exactly like the Hermes backend.

@@ -42,8 +42,8 @@ async def action_analysis_ws(websocket: WebSocket):
         await websocket.close(code=1011, reason="Action model not loaded")
         return
 
+    session = await action_model.create_session()
     try:
-        action_recognizer = await action_model.create_session()
         while True:
             raw = await websocket.receive_text()
             try:
@@ -56,13 +56,13 @@ async def action_analysis_ws(websocket: WebSocket):
                 match req:
                     case ActionFrameRequest():
                         frame = decode_image(req.frame_b64)
-                        result = await action_recognizer.update(frame)
+                        result = await session.update(frame)
                         if result is not None:
                             response = ActionResponse.from_human_action_detection(result)
                             await websocket.send_json(response.model_dump())
 
                     case ActionConfigRequest():
-                        action_recognizer.update_config(
+                        session.update_config(
                             whitelist=req.whitelist,
                             threshold=req.threshold,
                             person_detection_enabled=req.person_detection_enabled,
@@ -78,9 +78,11 @@ async def action_analysis_ws(websocket: WebSocket):
                 raise
             except Exception as e:
                 logger.exception("Error processing action WS message")
-                await websocket.send_json({"error": str(e)})
+                await websocket.send_json({"error": "Processing failed"})
 
     except WebSocketDisconnect:
         logger.info("Action analysis WebSocket disconnected")
     except Exception:
         logger.exception("Action analysis WebSocket handler crashed")
+    finally:
+        await session.stop()

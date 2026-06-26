@@ -149,19 +149,23 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("Shutting down DL backend...")
-    for name, stopper in [
-        ("action", lambda: get_action_model().stop() if get_action_model() else None),
-        ("emotion", lambda: get_emotion_model().stop() if get_emotion_model() else None),
-        ("pose", lambda: get_pose_model().stop() if get_pose_model() else None),
-        ("audio_embedder", lambda: asyncio.to_thread(get_audio_embedder().stop) if get_audio_embedder() else None),
-        ("audio_emotion", lambda: get_audio_emotion_model().stop() if get_audio_emotion_model() else None),
+    for name, model in [
+        ("action", get_action_model()),
+        ("emotion", get_emotion_model()),
+        ("pose", get_pose_model()),
+        ("audio_emotion", get_audio_emotion_model()),
     ]:
+        if model is not None:
+            try:
+                await model.stop()
+            except Exception:
+                logger.exception("Failed to stop %s", name)
+    embedder = get_audio_embedder()
+    if embedder is not None:
         try:
-            result = stopper()
-            if result is not None:
-                await result
+            await asyncio.to_thread(embedder.stop)
         except Exception:
-            logger.exception("Failed to stop %s", name)
+            logger.exception("Failed to stop audio_embedder")
     for obj_name, obj_model in get_object_models().items():
         try:
             await obj_model.stop()
@@ -277,4 +281,10 @@ def main() -> None:
             logger.warning("Failed to write PID file %s: %s", args.pid_file, e)
 
     logger.info("Starting DL backend on %s:%d (pid=%d)", args.host, args.port, os.getpid())
-    uvicorn.run(app, host=args.host, port=args.port, log_config=uvicorn_log_config)
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        log_config=uvicorn_log_config,
+        limit_concurrency=200,
+    )

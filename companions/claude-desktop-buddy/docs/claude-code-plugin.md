@@ -144,8 +144,8 @@ hook**. It fires only when a permission dialog *would* show, blocks synchronousl
    LED, a round-display **"Approve `<tool>`?"**, and a sensing event
    `type=claude_code_approval` emitted to the OS server `/api/sensing/event` — then
    blocks until the request is resolved or the long-poll TTL elapses.
-4. The on-device OpenClaw agent hears the sensing event (a skill in
-   [`skill/SKILL.md`](../skill/SKILL.md)) and asks the user; on **"yes"** it calls
+4. The on-device OpenClaw agent hears the sensing event (the platform skill
+   [`skills/claude-buddy/SKILL.md`](../../../skills/claude-buddy/SKILL.md)) and asks the user; on **"yes"** it calls
    `POST 127.0.0.1:5002/claude-code/approve {id}`, on **"no"**
    `POST 127.0.0.1:5002/claude-code/deny {id}`.
 5. The daemon unblocks the long-poll → returns `{"decision":"allow"|"deny"}` → the

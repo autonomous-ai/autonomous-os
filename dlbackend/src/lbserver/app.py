@@ -286,7 +286,19 @@ async def proxy_ws(client_ws: WebSocket, path: str) -> None:
                 except websockets.exceptions.ConnectionClosed:
                     pass
 
-            await asyncio.gather(client_to_backend(), backend_to_client())
+            tasks = [
+                asyncio.create_task(client_to_backend()),
+                asyncio.create_task(backend_to_client()),
+            ]
+            try:
+                done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for t in done:
+                    if t.exception():
+                        logger.warning("[WS] proxy task failed: %s", t.exception())
+            finally:
+                for t in tasks:
+                    t.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
 
     except (websockets.exceptions.InvalidStatus, OSError) as e:
         logger.error("[WS] Backend connection failed: %s — %s", backend, e)

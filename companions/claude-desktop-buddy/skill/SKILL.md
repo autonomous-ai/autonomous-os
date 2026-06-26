@@ -1,87 +1,18 @@
 ---
-name: claude-desktop-buddy
-description: Coordinate with Claude Desktop Buddy plugin for approval prompts and state awareness
+name: claude-buddy
+description: MOVED — canonical skill now lives in the platform skills tree.
 ---
 
-# Claude Desktop Buddy
+# Moved
 
-Lamp is connected to Claude Desktop on the user's Mac via Bluetooth.
-A buddy-plugin runs on this device and syncs Desktop state to Lamp's LED/display.
+The on-device agent skill that turns Claude approval prompts into a voice
+interaction (and surfaces Claude activity) is now a **platform skill** so it
+ships to devices through the standard skill pipeline:
 
-## When you receive a `[sensing:buddy_approval]` event
+- Source of truth: **`skills/claude-buddy/SKILL.md`** (repo root)
+- Registered in `os/services/internal/skills/skills.go` (`Catalog` + `Capability`
+  → `audio`) and `scripts/provision/setup.sh` (`skill_caps`)
+- Deployed via `scripts/release/upload-skills.sh` (OTA) → loaded by the agent
+  runtime (`openclaw/skill_watcher`)
 
-Claude Desktop is waiting for the user to approve or deny a tool call.
-
-**Workflow:**
-1. Express emotion: curious (intensity 0.8)
-2. Read the approval details from the event message
-3. Ask the user naturally: mention the tool name and what it affects
-4. Wait for the user's verbal response
-
-**If user says approve/yes/ok/go ahead:**
-```bash
-curl -s -X POST http://127.0.0.1:5002/claude-desktop/approve \
-  -H "Content-Type: application/json" \
-  -d '{"id": "<prompt_id from event>"}'
-```
-
-**If user says deny/no/skip/cancel:**
-```bash
-curl -s -X POST http://127.0.0.1:5002/claude-desktop/deny \
-  -H "Content-Type: application/json" \
-  -d '{"id": "<prompt_id from event>"}'
-```
-
-## When you receive a `[sensing:claude_code_approval]` event
-
-Claude Code (the CLI on the user's Mac) is waiting for the user to approve or deny
-a tool call. The Mac is **blocked** on your answer, so respond promptly.
-
-**Workflow:**
-1. Express emotion: curious (intensity 0.8)
-2. Read the approval details from the event message (tool name + what it affects)
-3. Ask the user naturally: mention the tool and what it will do
-4. Wait for the user's verbal response
-
-**If user says approve/yes/ok/go ahead:**
-```bash
-curl -s -X POST http://127.0.0.1:5002/claude-code/approve \
-  -H "Content-Type: application/json" \
-  -d '{"id": "<prompt_id from event>"}'
-```
-
-**If user says deny/no/skip/cancel:**
-```bash
-curl -s -X POST http://127.0.0.1:5002/claude-code/deny \
-  -H "Content-Type: application/json" \
-  -d '{"id": "<prompt_id from event>"}'
-```
-
-If you don't answer in time the Mac falls back to its own on-screen dialog — no
-harm done, but answering promptly is what makes the voice flow feel instant. Say
-"Claude Code" naturally; never mention prompt ids, HTTP, or these internals.
-
-## Buddy state awareness
-
-You can check what Claude Desktop is doing:
-```bash
-curl -s http://127.0.0.1:5002/status
-```
-
-Response:
-```json
-{
-  "state": "busy",
-  "connected": true,
-  "sessions_running": 2,
-  "tokens_today": 8200,
-  "pending_prompt": null
-}
-```
-
-## Rules
-
-- When buddy state is `attention`: do NOT start ambient behaviors or proactive conversations — the user is being prompted for approval
-- When buddy state is `busy`: the user is actively using Claude Desktop — reduce proactive interruptions (no wellbeing reminders, no music suggestions)
-- When buddy state is `idle` or `sleep`: operate normally
-- NEVER mention "buddy-plugin", "BLE", "Bluetooth", or technical internals to the user — just say "Claude Desktop" naturally
+This file is kept only as a pointer; do not edit skill behavior here.

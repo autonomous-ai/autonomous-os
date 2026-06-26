@@ -191,6 +191,21 @@ default). No manual download step is needed.
 `VAD_MIN_DURATION_SEC`, `VAD_MIN_VOICE_RATIO`, `ENABLE_RMS_NORMALIZE` (`true`),
 `RMS_TARGET`.
 
+## Input limits
+
+Configurable guards against oversized payloads. Applied in `decode_image()` and
+`decode_b64_wav()` before any model inference.
+
+| Env var | Default | Meaning |
+|---------|---------|---------|
+| `INPUT_LIMITS__MAX_IMAGE_BYTES` | `52428800` (50 MB) | Max decoded image size in bytes |
+| `INPUT_LIMITS__MAX_IMAGE_DIM` | `4096` | Max width or height in pixels |
+| `INPUT_LIMITS__MAX_AUDIO_BYTES` | `20971520` (20 MB) | Max decoded audio size in bytes |
+| `INPUT_LIMITS__MAX_AUDIO_DURATION_S` | `60.0` | Max audio duration in seconds |
+| `INPUT_LIMITS__MAX_AUDIO_BATCH` | `10` | Max items in a single audio batch request |
+
+Requests exceeding these limits receive HTTP 400 before reaching the GPU.
+
 ## Crypto & load balancer (lbserver)
 
 | Env var | Default | Meaning |

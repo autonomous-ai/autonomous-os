@@ -53,7 +53,7 @@ Về build, deploy, cấu hình và pairing, xem [`setup_vi.md`](setup_vi.md).
 | `narrator.go` + `i18n.go` | Các thông báo TTS ngắn về hoạt động của Claude, dedupe theo từng turn, được bản địa hóa (EN/VI). |
 | `stats.go` | Lưu bền các bộ đếm approved/denied trọn đời vào `/var/lib/claude-desktop-buddy/stats.json`. |
 | `config/buddy.json` | Config lúc chạy (xem [`setup_vi.md`](setup_vi.md)). |
-| `skill/SKILL.md` | OpenClaw skill biến các lượt cấp quyền thành tương tác bằng giọng nói. |
+| `skill/SKILL.md` | Chỉ là con trỏ — skill agent biến các lượt cấp quyền thành tương tác giọng nói nay là platform skill [`skills/claude-buddy/SKILL.md`](../../../../skills/claude-buddy/SKILL.md), gửi tới thiết bị qua skill OTA chuẩn (`upload-skills.sh`) và đăng ký trong `internal/skills/skills.go` (capability `audio`). |
 | `third_party/bluetooth/` | Fork cục bộ của `tinygo.org/x/bluetooth` (xem bên dưới). |
 
 ## Luồng dữ liệu
@@ -155,7 +155,8 @@ CodeApprovals.Request đăng ký approval đang chờ
 
 Opt-in qua config plugin `approval_enabled` (mặc định `false`). Các handler
 `/claude-code/approve` + `/deny` **chỉ loopback** — agent OpenClaw trên thiết bị
-giải quyết prompt bằng cách gọi chúng (theo `skill/SKILL.md`). Fail-safe: bất kỳ
+giải quyết prompt bằng cách gọi chúng (theo platform skill
+`skills/claude-buddy/SKILL.md`). Fail-safe: bất kỳ
 lỗi hay timeout nào cũng khiến hook nhường lại cho hộp thoại cấp quyền gốc của
 Claude Code — không bao giờ tự động cho phép. Khác với luồng Desktop, quyết định
 được trả về như HTTP response của hook (giá trị trả về của nó) thay vì đẩy ngược

@@ -6,22 +6,29 @@ import secrets
 import cv2
 import cv2.typing as cv2t
 import numpy as np
-from fastapi import HTTPException, WebSocket
+from fastapi import WebSocket
 
 from config import settings
 
 
 def decode_image(image_b64: str) -> cv2t.MatLike:
-    """Decode a base64-encoded JPEG/PNG image to a BGR numpy array."""
-    try:
-        img_bytes = base64.b64decode(image_b64)
-        img_array = np.frombuffer(img_bytes, dtype=np.uint8)
-        image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-        if image is None:
-            raise ValueError("cv2.imdecode returned None")
-        return image
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to decode image: {e}")
+    """Decode a base64-encoded JPEG/PNG image to a BGR numpy array.
+
+    Raises ValueError on invalid input (works in both HTTP and WS contexts).
+    """
+    img_bytes = base64.b64decode(image_b64)
+    max_bytes = settings.input_limits.max_image_bytes
+    if len(img_bytes) > max_bytes:
+        raise ValueError(f"Image exceeds {max_bytes // (1024 * 1024)} MB limit")
+    img_array = np.frombuffer(img_bytes, dtype=np.uint8)
+    image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError("Failed to decode image")
+    h, w = image.shape[:2]
+    max_dim = settings.input_limits.max_image_dim
+    if h > max_dim or w > max_dim:
+        raise ValueError(f"Image dimensions {w}x{h} exceed {max_dim}x{max_dim} limit")
+    return image
 
 
 async def verify_ws_api_key(websocket: WebSocket) -> bool:

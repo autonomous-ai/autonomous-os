@@ -128,6 +128,14 @@ class ObjectDetectorSetting(BaseModel):
     owlv2: SingleObjectDetectorSetting = SingleObjectDetectorSetting(enabled=True)
 
 
+class InputLimitSetting(BaseModel):
+    max_image_bytes: int = 50 * 1024 * 1024  # 50 MB decoded
+    max_image_dim: int = 4096  # px per side
+    max_audio_bytes: int = 20 * 1024 * 1024  # 20 MB decoded
+    max_audio_duration_s: float = 60.0  # seconds
+    max_audio_batch: int = 16  # max items in a single audio batch request
+
+
 class LBSetting(BaseModel):
     backends: str = ""  # comma-separated backend URLs, e.g. "http://127.0.0.1:8888"
     host: str = "0.0.0.0"
@@ -162,6 +170,8 @@ class Settings(BaseSettings):
     person_detector: PersonDetectorSetting = PersonDetectorSetting()
     object_detector: ObjectDetectorSetting = ObjectDetectorSetting()
     audio_embedder: AudioEmbedderSetting = AudioEmbedderSetting()
+
+    input_limits: InputLimitSetting = InputLimitSetting()
 
     crypto: CryptoSetting = CryptoSetting()
     lb: LBSetting = LBSetting()

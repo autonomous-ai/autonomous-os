@@ -13,13 +13,16 @@ over WebSocket and HTTP behind an optional encrypting load balancer.
 
 | Doc | Covers |
 |-----|--------|
-| [architecture.md](architecture.md) | Process topology, ports, URL prefixes, request lifecycle |
+| [architecture.md](architecture.md) | Process topology, ports, URL prefixes, request lifecycle, security hardening |
 | [api.md](api.md) | Every endpoint: method, path, request/response schema, auth |
-| [perceptions.md](perceptions.md) | The 8 perception subsystems, models, enums, output types |
+| [perceptions.md](perceptions.md) | The 8 perception subsystems, models, enums, output types, batching |
 | [crypto-and-loadbalancer.md](crypto-and-loadbalancer.md) | `lbserver` round-robin proxy + RSA/AES encryption + nginx |
-| [deployment.md](deployment.md) | Install, single-node + master/slave GPU scaling, RunPod, Docker, TLS |
+| [deployment.md](deployment.md) | Install, Makefile targets, watchdog, single-node + master/slave GPU scaling, RunPod, Docker, TLS |
 | [configuration.md](configuration.md) | All environment variables with defaults |
+| [configuration.md#batching](configuration.md#batching) | Batch size / timeout tuning per model (GPU VRAM guide) |
+| [configuration.md#input-limits](configuration.md#input-limits) | Input size guards (image, audio) |
 | [configuration.md#model-downloading](configuration.md#model-downloading) | How model weights auto-download from the public bucket + per-model URLs |
+| [known-issues.md](known-issues.md) | Model accuracy limitations and architectural constraints |
 
 ## What it does
 
@@ -49,12 +52,12 @@ For a single-node dev setup you can talk to `dlserver` directly and skip
 
 | Subsystem | Transport | Default model | Output |
 |-----------|-----------|---------------|--------|
-| Action recognition | WS | X3D | Kinetics action classes + confidence |
+| Action recognition | WS | UniformerV2 | Kinetics action classes + confidence |
 | Facial emotion | WS + HTTP | POSTER V2 | Emotion + confidence (± valence/arousal) |
 | Speech emotion (SER) | HTTP | emotion2vec | 9-class emotion + confidence |
 | Pose estimation | WS | RTMPose (2D) + TCPFormer (3D) | 2D/3D keypoints + RULA ergonomics |
 | Object detection | WS + HTTP | per-detector (opt-in) | Open-vocabulary boxes |
-| Audio embedder | HTTP | WeSpeaker ResNet34 | Speaker embedding vector |
+| Audio embedder | HTTP | WeSpeaker ECAPA-TDNN-1024 | Speaker embedding vector |
 | Face detection | internal | YuNet | Face boxes (feeds emotion/pose) |
 | Person detection | internal | YOLO | Person crop (feeds action) |
 
@@ -85,10 +88,20 @@ curl -H "X-API-Key: dev-secret" http://localhost:8001/hal/api/dl/health
 For the full proxied + encrypted stack (nginx → lbserver → dlserver), see
 [architecture.md](architecture.md) and [crypto-and-loadbalancer.md](crypto-and-loadbalancer.md).
 
-## Authentication
+## Authentication & security
 
 All endpoints require the `X-API-Key` header matching the `DL_API_KEY` env var
 (validated on the HTTP request or the WebSocket handshake). `dlserver` raises at
 startup if `DL_API_KEY` is unset. See [api.md](api.md#authentication).
+
+Additional hardening: input size limits (image/audio), connection cap (200
+concurrent), bounded inference queues, session cleanup on WS disconnect, error
+masking in responses. See [architecture.md#security-hardening](architecture.md#security-hardening).
+
+## Known issues
+
+Model accuracy limitations that affect production: face misclassification,
+pose estimation without spine keypoints, RULA back assessment via hip proxy.
+See [known-issues.md](known-issues.md).
 </content>
 </invoke>

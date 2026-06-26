@@ -35,8 +35,10 @@ async def embed_audio(req: EmbedAudioRequest):
         audios: list[Audio] = []
         for item in req.audios_b64:
             audios.append(decode_b64_wav(item))
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid audio: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid audio format")
 
     if not audios:
         raise HTTPException(status_code=400, detail="No audio extracted from inputs")
@@ -46,6 +48,6 @@ async def embed_audio(req: EmbedAudioRequest):
         return EmbedAudioResponse.from_raw_embedding(results[0], return_chunks=req.return_chunks)
     except PreprocessRejected as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    except Exception as e:
+    except Exception:
         logger.exception("Error processing audio recognition embedding HTTP message")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Internal server error")

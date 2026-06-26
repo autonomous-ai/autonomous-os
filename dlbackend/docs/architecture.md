@@ -103,4 +103,18 @@ perceptions actually initialized:
 
 A perception that is disabled via config (`*__ENABLED=false`) or fails to load its
 weights reports `false` here while the rest of the server keeps serving.
+
+## Security hardening
+
+| Layer | Measure |
+|-------|---------|
+| **Auth** | `X-API-Key` header validated with `secrets.compare_digest` (timing-safe) on every HTTP and WS endpoint |
+| **Input limits** | Decoded image size, pixel dimensions, audio size and duration are all capped (see [configuration.md](configuration.md#input-limits)) |
+| **Connection limits** | Uvicorn `limit_concurrency=200` caps total concurrent connections |
+| **Session cleanup** | WS handlers wrap session lifecycle in `try/finally` — `session.stop()` runs on disconnect or crash |
+| **Backpressure** | `InputBatcher` queue is bounded (`batch_size × 100`); `await queue.put()` blocks when full |
+| **Error masking** | HTTP 500 responses return `"Internal server error"`, never raw exception details |
+| **Proxy safety** | LB WS proxy uses `asyncio.wait(FIRST_COMPLETED)` + task cancellation — no orphaned tasks on disconnect |
+| **Download safety** | `ensure_downloaded` warns on plain HTTP URLs (MITM risk); HTTPS recommended |
+| **Crypto** | RSA-2048 + AES-256-GCM with per-message random nonces; keys optionally persisted to disk |
 </content>

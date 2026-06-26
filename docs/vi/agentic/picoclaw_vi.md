@@ -27,10 +27,12 @@ não nào đang chạy.
 > SOUL/IDENTITY/MEMORY/USER/KNOWLEDGE cả 2 chiều; **skills** chiều VÀO do `picoclaw
 > migrate --workspace-only --force` trong hook presync lo (§1.1).
 > Bản thân gateway Go vẫn **chỉ-client**: hầu hết method lifecycle in-process
-> (`SetupAgent`, watcher identity …) vẫn no-op (§8) vì provisioning xảy ra ngoài tiến
-> trình trong install.sh/presync. Ngoại lệ là `EnsureOnboarding` (`onboarding.go`, giữ
-> khối OS-managed trong SOUL/AGENTS/HEARTBEAT cập nhật) và `StartSkillWatcher`
-> (`skill_watcher.go`, auto-update skill từ CDN) — đều là thật (§1.1).
+> (`SetupAgent`, `RefreshModelsConfig` …) vẫn no-op (§8) vì provisioning xảy ra ngoài
+> tiến trình trong install.sh/presync. Ngoại lệ là `EnsureOnboarding` (`onboarding.go`,
+> giữ khối OS-managed trong SOUL/AGENTS/HEARTBEAT cập nhật), `StartSkillWatcher`
+> (`skill_watcher.go`, auto-update skill từ CDN), và identity (`identity.go`:
+> `WatchIdentity`/`UpdateIdentityName` đọc/ghi `IDENTITY.md` như OpenClaw) — đều là
+> thật (§1.1, §8).
 > Các gap còn lại (hook emotion-acknowledge, pin queue/steer) được theo dõi theo checklist
 > [`adding-agent-runtime_vi.md`](adding-agent-runtime_vi.md) — xem đó trước khi nâng
 > PicoClaw lên parity đầy đủ.
@@ -264,12 +266,17 @@ switch ngược lại openclaw sẽ khôi phục chúng.
 
 Mọi thứ không nằm trên hot path của PicoClaw đều là no-op để thỏa interface
 `domain.AgentGateway` mà không bịa ra tính năng backend không có: `SetupAgent`,
-pairing WhatsApp, `ResetAgent`, `RestartAgent`, `RefreshModelsConfig`,
-`FetchChatHistory`, `GetConfigJSON`, ghi MCP entry, `WatchIdentity`,
-`UpdateIdentityName`, watcher model (`StartModelSync`/`StartPrimaryModelWatch`),
-`UpdatePrimaryModel`. (`AddChannel` / `RefreshChannelConfig` KHÔNG phải stub — trả
-`domain.ErrChannelNotSupported` cho kênh không hỗ trợ, xem §7; `EnsureOnboarding`
-(§1.1) và `StartSkillWatcher` (auto-update skill, §1.1) là thật.) HAL TTS/voice, fan-out
+pairing WhatsApp, `ResetAgent`, `RefreshModelsConfig`, `FetchChatHistory`,
+`CompactSession`, ghi MCP entry, watcher model
+(`StartModelSync`/`StartPrimaryModelWatch`), `UpdatePrimaryModel`. (`AddChannel` /
+`RefreshChannelConfig` KHÔNG phải stub — trả `domain.ErrChannelNotSupported` cho kênh
+không hỗ trợ, xem §7; `EnsureOnboarding` (§1.1) và `StartSkillWatcher` (auto-update
+skill, §1.1) là thật.) Các hàm sau cũng là **thật**, không phải stub: `RestartAgent`
+(restart systemd unit `picoclaw` qua `restartPicoclawGateway`), `GetConfigJSON` (trả
+`/root/.picoclaw/config.json` — file structure; secrets ở `.security.yml` không bao
+giờ lộ), và `WatchIdentity` / `UpdateIdentityName` (`identity.go`) — `IDENTITY.md` của
+PicoClaw copy 1-1 từ OpenClaw nên dòng card `**Name:**` được watch (→ wake words) và
+ghi lại y hệt OpenClaw. HAL TTS/voice, fan-out
 Telegram, hàng đợi/drain sensing-event, và các helper run-marker (guard / broadcast /
 web-chat / silent / pose-bucket) đều backend-agnostic và hành xử y hệt backend Hermes.
 

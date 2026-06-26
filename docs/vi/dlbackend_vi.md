@@ -47,6 +47,8 @@ cảm xúc giọng nói (SER), ước lượng tư thế (kèm công thái học
 và embedding người nói. Phát hiện khuôn mặt và phát hiện người chạy nội bộ để cấp dữ
 liệu cho các pipeline đó. Các request từ nhiều session đồng thời được gom lại (batch)
 trước khi gửi lên GPU — cấu hình `BATCH_SIZE` và `BATCH_TIMEOUT` cho từng model.
+Input được giới hạn kích thước (ảnh, audio) để chống tấn công DoS — xem
+[`configuration.md#input-limits`](../../dlbackend/docs/configuration.md#input-limits).
 Lựa chọn model và output:
 [`dlbackend/docs/perceptions.md`](../../dlbackend/docs/perceptions.md).
 
