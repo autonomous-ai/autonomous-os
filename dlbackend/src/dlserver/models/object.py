@@ -2,7 +2,7 @@
 
 from typing import Annotated, ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Discriminator, Tag
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag
 
 from core.models.object import ObjectDetection
 from core.types import Omit, omit
@@ -45,7 +45,7 @@ class ObjectDetectRequest(BaseModel):
     """HTTP request for single-image object detection."""
 
     image_b64: str
-    classes: list[str] | None = None
+    classes: list[str] | None = Field(None, max_length=500)
 
 
 class ObjectDetectionItemResponse(BaseModel):

@@ -42,8 +42,8 @@ async def pose_estimation_ws(websocket: WebSocket):
         await websocket.close(code=1011, reason="Pose model not loaded")
         return
 
+    session = await pose_model.create_session()
     try:
-        session = await pose_model.create_session()
         while True:
             raw: str = await websocket.receive_text()
             try:
@@ -78,9 +78,11 @@ async def pose_estimation_ws(websocket: WebSocket):
                 raise
             except Exception as e:
                 logger.exception("Error processing pose WS message")
-                await websocket.send_json({"error": str(e)})
+                await websocket.send_json({"error": "Processing failed"})
 
     except WebSocketDisconnect:
         logger.info("Pose estimation WebSocket disconnected")
     except Exception:
         logger.exception("Pose estimation WebSocket handler crashed")
+    finally:
+        await session.stop()

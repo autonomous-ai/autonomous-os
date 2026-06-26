@@ -45,8 +45,13 @@ matching `LD_LIBRARY_PATH` to `~/.bashrc`. If it fails it falls back to CUDA/CPU
 | `DL_API_KEY` | **yes** | Shared `X-API-Key`; both servers refuse to start without it |
 | `LB__BACKENDS` | master only | Comma-separated dlserver URLs the LB round-robins over |
 
-All other knobs (model selection, thresholds, crypto, model download) are in
-[configuration.md](configuration.md).
+All other knobs (model selection, thresholds, crypto, input limits, model download)
+are in [configuration.md](configuration.md).
+
+`dlserver` enforces a connection cap of 200 concurrent connections (uvicorn
+`limit_concurrency`). Each WebSocket connection creates a GPU-backed session, so
+this prevents memory exhaustion from connection floods. Input payloads are also
+size-capped — see [configuration.md#input-limits](configuration.md#input-limits).
 
 ## Single node — dev (foreground)
 
