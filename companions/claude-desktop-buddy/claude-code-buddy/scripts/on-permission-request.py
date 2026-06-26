@@ -28,9 +28,10 @@ import uuid
 # shared module imports directly.
 from buddy_client import default_device, load_config, request_approval
 
-# Slightly under the device long-poll (55s) and the hook `timeout` in hooks.json
-# (60s), so we return cleanly and defer before Claude Code kills the hook.
-REQUEST_TIMEOUT = 55
+# Sit between the device long-poll ttl (55s) and the hook `timeout` in hooks.json
+# (60s): give the server a moment to return its own "timeout" decision first, but
+# still return cleanly before Claude Code kills the hook.
+REQUEST_TIMEOUT = 58
 
 
 def main():
