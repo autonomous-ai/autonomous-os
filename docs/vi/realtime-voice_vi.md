@@ -93,6 +93,15 @@ trên queue:
 
 - **2 thread mỗi agent**: `_send_loop` rút `_send_queue` → API; `_recv_loop` đọc
   API → `_recv_queue`. Cả hai tự reconnect khi lỗi.
+- **Fail-fast khi backend lỗi** (cả 2 driver): khi `_recv_loop` gặp lỗi thật
+  (Gemini Live: proxy `go_away`, hết quota / resource-exhausted, WS close bất
+  thường — tức **không phải** idle close `1000` lành tính; OpenAI: event `error`
+  của Realtime API hoặc socket rớt), nó đẩy `TurnDoneEvent` ngay lập tức
+  (`_fail_fast_turn`) để `receive()` thoát liền và lượt fallback sang main agent
+  **mà không** phải chờ hết `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S`. Idle close lành
+  tính vẫn reconnect êm (Gemini code `1000`; OpenAI kết thúc vòng lặp event êm,
+  không phải lỗi). Chỉ kích hoạt khi đang có lượt chờ output (`_turn_done` clear);
+  reconnect vẫn chạy nền để hồi phục session cho lượt sau.
 - **Non-blocking**: `append_audio()`, `commit_audio()`, `send()` (đẩy vào queue,
   gate trên `available`).
 - **Blocking**: `connect()`, `disconnect()`, `receive()` (generator yield
@@ -200,6 +209,14 @@ Model ở Go tại `os/services/server/config/realtime.go`; đọc ở HAL tại
 `os/hal/config.py`. Field chung ở trên; knob theo provider nằm trong sub-object
 `gemini` / `openai`, `provider` chọn cái đang active (`none` hoặc vắng → tắt
 realtime). `api_key` / `base_url` rỗng → fallback `llm_api_key` / `llm_base_url`.
+
+> **Để `base_url` trống trừ khi có endpoint riêng (không qua proxy).** Khi trống,
+> HAL tự suy ra `<llm_base_url>/ws/gemini` (hoặc `/ws/openai`) — đúng suffix WS mà
+> proxy `campaign-api` route. Nếu `base_url` bị set bằng `llm_base_url` trần (thiếu
+> `/ws/...`), giá trị đó được đưa thẳng vào SDK provider và **404 ngay ở Live
+> handshake**. Vì vậy ô "Base URL" trong web Settings chỉ hiển thị *override tường
+> minh* (`RealtimeBaseURLOverride`, không phải giá trị đã resolve), để "để trống là
+> tự suy ra" luôn trống và mỗi lần Save không vô tình ghi đè URL trần.
 
 ```json
 "realtime": {

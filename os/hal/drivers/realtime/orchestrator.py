@@ -461,13 +461,17 @@ class RealtimeOrchestrator:
         #   - zombie:   N consecutive silent turns (wedged session)
         #   - idle:     this turn followed a long silence (see _mark_turn_start)
         #   - turn-cap: session handled enough turns that context grew large (cost)
+        #   - grounding: this turn ran a Google Search; recycle drops the bulky
+        #               injected snippets so they don't re-bill on every later turn
+        #               (the spoken answer survives via summary.md).
         zombie: bool = (
             not produced
             and self._consecutive_silent >= config.REALTIME_ZOMBIE_RECONNECT_AFTER
         )
         max_turns: int = config.REALTIME_SESSION_MAX_TURNS
         turn_cap: bool = max_turns > 0 and self._turns_since_recycle >= max_turns
-        if zombie or self._idle_reset_pending or turn_cap:
+        grounded: bool = self._agent.take_grounding_fired()
+        if zombie or self._idle_reset_pending or turn_cap or grounded:
             if zombie:
                 logger.warning(
                     "[realtime] %d consecutive silent turns — forcing reconnect "
@@ -475,7 +479,11 @@ class RealtimeOrchestrator:
                     self._consecutive_silent,
                 )
             else:
-                reason: str = "idle" if self._idle_reset_pending else "turn-cap"
+                reason: str = (
+                    "idle" if self._idle_reset_pending
+                    else "turn-cap" if turn_cap
+                    else "grounding"
+                )
                 logger.info(
                     "[realtime] recycling session (%s) after %d turns (cost)",
                     reason, self._turns_since_recycle,

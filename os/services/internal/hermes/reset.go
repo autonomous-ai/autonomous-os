@@ -1,21 +1,25 @@
 package hermes
 
 import (
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/lib/osreset"
+	"go.autonomous.ai/os/server/config"
 )
 
 // ResetAgent performs the Hermes factory-reset wipe. The factory-reset flow
 // (server/system/factoryreset.go) resolves the active gateway and calls this on
 // it — so adding a backend means implementing ResetAgent, not editing a switch.
 func (s *HermesService) ResetAgent() error {
-	wipeHermesState()
+	wipeHermesState(s.config)
 	return nil
 }
 
@@ -86,10 +90,10 @@ var hermesKeepFiles = map[string]bool{
 	"SOUL.md":     true,
 }
 
-// hermesSoulTemplate is the blank-slate content written to SOUL.md after the
-// sweep. Mirrors the openclaw factoryreset pattern of "wipe persona but keep
-// a stub the agent can rebuild from".
-const hermesSoulTemplate = "# Hermes Agent Persona\n"
+// hermesSoulFallback is written to SOUL.md only when the device has no soul_ref
+// and hermes setup --reset did not seed one. Keeps a parseable stub so Hermes
+// starts from a clean slate rather than a missing file.
+const hermesSoulFallback = "# Hermes Agent Persona\n"
 
 // wipeHermesState runs the Hermes reset flow. Unlike openclaw, Hermes has no
 // single "reset everything" CLI. Daemon MUST die before we touch state files,
@@ -99,12 +103,13 @@ const hermesSoulTemplate = "# Hermes Agent Persona\n"
 //  2. systemctl stop hermes-gateway + verify    (kill any systemd-supervised process)
 //  3. hermes setup --reset --non-interactive    (now-safe config.yaml/.env reset)
 //  4. systemctl disable hermes-gateway          (no auto-start; SetupAgent re-enables)
-//  5. surgical rm                               (dirs + top-level file sweep + SOUL.md template)
+//  5. surgical rm                               (dirs + top-level file sweep + SOUL.md reset)
 //
 // `~/.hermes/.env` and `~/.hermes/config.yaml` are NOT rm'd — Step 3 resets
-// them in place to defaults. `~/.hermes/SOUL.md` is overwritten in Step 5 with
-// a blank template.
-func wipeHermesState() {
+// them in place to defaults. `~/.hermes/SOUL.md` is seeded in Step 5:
+//   - device has soul_ref → write the device-specific soul content
+//   - no soul_ref         → write hermesSoulFallback (Hermes manages its own default)
+func wipeHermesState(cfg *config.Config) {
 	// Step 1: stop hermes gateway.
 	log.Printf("[factory-reset/hermes] step 1/5 — hermes gateway stop")
 	if out, err := exec.Command("hermes", "gateway", "stop").CombinedOutput(); err != nil {
@@ -175,13 +180,56 @@ func wipeHermesState() {
 		log.Printf("[factory-reset/hermes] sweep: removed %d top-level files (keep-list: %d)", swept, len(hermesKeepFiles))
 	}
 
-	// SOUL.md: kept by sweep, but its previous content (user-customized
-	// persona) must not survive a factory reset. Overwrite with a blank
-	// template so the agent starts from "# Hermes Agent Persona" next boot.
+	// SOUL.md: kept by sweep, but user-customised content must not survive a
+	// factory reset. Seed from the device's soul_ref if declared; otherwise
+	// fall back to the minimal stub so Hermes starts from a clean slate.
 	soulPath := filepath.Join(hermesHome, "SOUL.md")
-	if err := os.WriteFile(soulPath, []byte(hermesSoulTemplate), 0o644); err != nil {
+	soulContent := resolveSoulContent(cfg)
+	if err := os.WriteFile(soulPath, soulContent, 0o644); err != nil {
 		log.Printf("[factory-reset/hermes] reset SOUL.md: %v (non-fatal)", err)
 	} else {
-		log.Printf("[factory-reset/hermes] reset SOUL.md to template")
+		log.Printf("[factory-reset/hermes] reset SOUL.md (%d bytes)", len(soulContent))
 	}
+}
+
+// resolveSoulContent returns the SOUL.md bytes to seed after a factory reset:
+//   - device declares soul_ref → content of devices/<type>/<ref> (or URL)
+//   - no soul_ref              → hermesSoulFallback stub
+func resolveSoulContent(cfg *config.Config) []byte {
+	devType := cfg.DeviceTypeOrDefault()
+	ref := device.SoulRef(devType)
+	if ref == "" {
+		return []byte(hermesSoulFallback)
+	}
+	if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
+		client := &http.Client{Timeout: 15 * time.Second}
+		resp, err := client.Get(ref)
+		if err != nil {
+			log.Printf("[factory-reset/hermes] WARN soul_ref %q download failed: %v — using fallback", ref, err)
+			return []byte(hermesSoulFallback)
+		}
+		defer resp.Body.Close()
+		b, err := io.ReadAll(resp.Body)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			log.Printf("[factory-reset/hermes] WARN soul_ref %q download failed: status=%d err=%v — using fallback", ref, resp.StatusCode, err)
+			return []byte(hermesSoulFallback)
+		}
+		log.Printf("[factory-reset/hermes] soul_ref seeded from URL %q (%d bytes)", ref, len(b))
+		return b
+	}
+	// Reject unsupported schemes (e.g. ftp://, s3://) — mirrors openclaw's
+	// "unsupported soul_ref scheme" error so a mis-configured DEVICE.md is
+	// visible in logs rather than silently treated as a local path.
+	if strings.Contains(ref, "://") {
+		log.Printf("[factory-reset/hermes] WARN soul_ref %q has unsupported scheme — using fallback", ref)
+		return []byte(hermesSoulFallback)
+	}
+	path := filepath.Join(device.DevicesDir(), devType, ref)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		log.Printf("[factory-reset/hermes] WARN soul_ref %q read failed: %v — using fallback", path, err)
+		return []byte(hermesSoulFallback)
+	}
+	log.Printf("[factory-reset/hermes] soul_ref seeded from %q (%d bytes)", path, len(b))
+	return b
 }

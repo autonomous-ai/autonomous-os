@@ -136,11 +136,31 @@ func (c *Config) RealtimeAPIKey() string {
 }
 
 // RealtimeBaseURL returns the realtime provider base URL, falling back to LLMBaseURL.
+//
+// NOTE: this is the RESOLVED endpoint and is intentionally NOT what the public
+// config / web form shows. The bare LLMBaseURL fallback lacks the provider WS
+// suffix (HAL appends "/ws/gemini" itself when the override is empty), so echoing
+// it into the editable "Base URL (leave blank to derive)" field would make the
+// web re-persist a bare URL on the next save — which HAL then hands to the genai
+// SDK verbatim, producing a 404 at the Gemini Live handshake. Use
+// RealtimeBaseURLOverride for display so the field stays blank when deriving.
 func (c *Config) RealtimeBaseURL() string {
 	if c.Realtime != nil && c.Realtime.BaseURL != "" {
 		return c.Realtime.BaseURL
 	}
 	return c.LLMBaseURL
+}
+
+// RealtimeBaseURLOverride returns ONLY the operator's explicit base_url override
+// (empty when unset), without the LLMBaseURL fallback. The public config exposes
+// this so the web "Base URL (leave blank to derive)" field reflects whether an
+// override is actually set — see RealtimeBaseURL for why the resolved value must
+// not leak into the editable form.
+func (c *Config) RealtimeBaseURLOverride() string {
+	if c.Realtime != nil {
+		return c.Realtime.BaseURL
+	}
+	return ""
 }
 
 // RealtimeModel returns the active provider's model — the operator override when

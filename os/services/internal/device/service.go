@@ -548,7 +548,10 @@ func (s *Service) GetPublicConfig() domain.ConfigPublicResponse {
 			Model:     s.config.RealtimeModel(),
 			Voice:     s.config.RealtimeVoice(),
 			Reasoning: s.config.RealtimeReasoning(),
-			BaseURL:   s.config.RealtimeBaseURL(),
+			// Expose ONLY the explicit override (blank when deriving) so the web
+			// form's "leave blank to derive" works and does not re-persist a bare
+			// URL that breaks HAL's /ws/gemini handshake. See RealtimeBaseURL doc.
+			BaseURL:   s.config.RealtimeBaseURLOverride(),
 			HasAPIKey: s.config.Realtime != nil && s.config.Realtime.APIKey != "",
 		},
 	}

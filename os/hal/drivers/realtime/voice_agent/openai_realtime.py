@@ -200,11 +200,18 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
             self._speech_ended_at = time.monotonic()
             self._connection.response.create()
 
-    def _sync_receive_turn(self, conn: RealtimeConnection) -> None:
+    def _sync_receive_turn(self, conn: RealtimeConnection) -> bool:
         """Read one full turn from `conn`, put outputs on _recv_queue.
 
         Iterates on the caller-supplied connection snapshot (not self._connection)
         so a concurrent reconnect that swaps the connection can't be read mid-turn.
+
+        Returns True when the turn ended normally (a `response.done` was seen),
+        False when the event iteration ended WITHOUT one — i.e. a clean connection
+        close / session recycle. The caller uses this to decide whether to fail the
+        turn fast; returning the flag (instead of inspecting `_turn_done`) avoids a
+        race where a normal completion is mistaken for a mid-turn drop and a
+        spurious TurnDoneEvent ends the NEXT turn.
         """
         for event in conn:
             match event.type:
@@ -270,7 +277,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                         )
                     self._turn_done.set()
                     self._recv_queue.put(TurnDoneEvent())
-                    return
+                    return True
 
                 case "error":
                     logger.error("[realtime] Realtime API error: %s", event.error)
@@ -278,6 +285,9 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
 
                 case _:
                     pass
+
+        # Iteration ended without a response.done — connection closed cleanly.
+        return False
 
     # --- Reconnect ---
 
@@ -305,6 +315,30 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                 self._connected.set()
             except Exception as e:
                 logger.warning("[realtime] Reconnect failed: %s — will retry on next audio", e)
+
+    def _fail_fast_turn(self, reason: str) -> None:
+        """End the current turn immediately on a recv error.
+
+        Without this, any backend failure (a Realtime API `error` event, a
+        dropped socket, an unexpected exception) leaves the consumer blocked in
+        receive() for the full REALTIME_RECV_QUEUE_TIMEOUT_S before the turn
+        falls back to the main agent. Pushing a TurnDoneEvent unblocks receive()
+        now so the main agent answers without the dead-air wait. A benign idle
+        close is not an error here — it ends the `for event in conn` iteration
+        cleanly — so only real errors reach this path. Only fires while a turn is
+        actually awaiting output (_turn_done clear); a stray sentinel between
+        turns would just be dropped by flush_output() at the next turn start.
+        Late output from a successful reconnect is likewise flushed next turn.
+        """
+        if self._turn_done.is_set():
+            return  # no turn awaiting output — nothing to unblock
+        self._turn_done.set()
+        self._recv_queue.put(TurnDoneEvent())
+        logger.info(
+            "[realtime] Recv error (%s) — ending turn now, falling back to main "
+            "(skipping receive timeout wait)",
+            reason,
+        )
 
     def _drop_connection(self, conn: RealtimeConnection | None) -> None:
         """Mark the connection dead — only if `conn` is still the current one.
@@ -368,11 +402,21 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                     logger.debug("[realtime] Not connected, skipping attempt %d/%d", attempt + 1, self._max_retries)
                     continue
                 try:
-                    self._sync_receive_turn(conn)
+                    completed: bool = self._sync_receive_turn(conn)
+                    # `completed` is False when the event iteration ended WITHOUT a
+                    # response.done (a clean connection close / session recycle). If
+                    # that lands mid-turn the committed turn is lost, so end it now
+                    # instead of waiting out the receive timeout. Do NOT fail-fast on
+                    # a normal completion: that would race the next turn's commit and
+                    # could push a spurious TurnDoneEvent that ends turn N+1 empty.
+                    if not completed:
+                        self._fail_fast_turn("connection closed mid-turn")
                     break  # Success
                 except OpenAIRealtimeError as e:
                     logger.warning("[realtime] Recv failed (attempt %d/%d): %s", attempt + 1, self._max_retries, e)
+                    self._fail_fast_turn("api error")
                     self._drop_connection(conn)
                 except Exception as e:
                     logger.exception("[realtime] Unexpected recv error (attempt %d/%d): %s", attempt + 1, self._max_retries, e)
+                    self._fail_fast_turn("unexpected")
                     self._drop_connection(conn)

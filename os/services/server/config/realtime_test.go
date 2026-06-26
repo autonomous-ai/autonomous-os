@@ -37,6 +37,31 @@ func TestRealtime_DefaultsWhenUnset(t *testing.T) {
 	}
 }
 
+// RealtimeBaseURLOverride returns ONLY the explicit override (no LLM fallback) so
+// the public config / web form stays blank when deriving. Echoing the resolved
+// bare LLMBaseURL into the editable field would let the web re-persist a URL
+// missing the "/ws/gemini" suffix, breaking HAL's Gemini Live handshake (404).
+func TestRealtime_BaseURLOverride(t *testing.T) {
+	// No block, and an empty block: override is blank even though the resolver
+	// would fall back to LLMBaseURL.
+	for _, c := range []*Config{
+		{LLMBaseURL: "https://llm.example"},
+		{LLMBaseURL: "https://llm.example", Realtime: &RealtimeConfig{}},
+	} {
+		if got := c.RealtimeBaseURLOverride(); got != "" {
+			t.Errorf("RealtimeBaseURLOverride() = %q, want \"\" (no override)", got)
+		}
+		if got := c.RealtimeBaseURL(); got != "https://llm.example" {
+			t.Errorf("RealtimeBaseURL() = %q, want LLM fallback (resolver unchanged)", got)
+		}
+	}
+	// An explicit override is returned verbatim.
+	set := &Config{LLMBaseURL: "https://llm.example", Realtime: &RealtimeConfig{BaseURL: "https://rt.example/ws/gemini"}}
+	if got := set.RealtimeBaseURLOverride(); got != "https://rt.example/ws/gemini" {
+		t.Errorf("RealtimeBaseURLOverride() = %q, want explicit override", got)
+	}
+}
+
 // Enabled defaults true; only an explicit false (or provider none) turns it off.
 func TestRealtime_EnabledAndOff(t *testing.T) {
 	if (&Config{Realtime: &RealtimeConfig{}}).RealtimeEnabled() != true {

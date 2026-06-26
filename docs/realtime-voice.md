@@ -96,6 +96,16 @@ queue-based contract:
 
 - **Two threads per agent**: `_send_loop` drains `_send_queue` → API;
   `_recv_loop` reads API → `_recv_queue`. Both reconnect on error.
+- **Fail-fast on backend error** (both drivers): when `_recv_loop` hits a real
+  error (Gemini Live: proxy `go_away`, quota / resource-exhausted, unexpected WS
+  close — anything that is **not** a benign idle close `1000`; OpenAI: a Realtime
+  API `error` event or dropped socket), it pushes a `TurnDoneEvent` immediately
+  (`_fail_fast_turn`) so `receive()` unblocks now and the turn falls back to the
+  main agent **without** waiting out the full `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S`.
+  Benign idle closes still reconnect quietly (Gemini code `1000`; OpenAI ends the
+  event iteration cleanly, never an error). Only fires while a turn is awaiting
+  output (`_turn_done` clear); reconnect still runs in the background to heal the
+  session for the next turn.
 - **Non-blocking**: `append_audio()`, `commit_audio()`, `send()` (queue puts,
   gated on `available`).
 - **Blocking**: `connect()`, `disconnect()`, `receive()` (a generator yielding
@@ -208,6 +218,14 @@ Modelled in Go at `os/services/server/config/realtime.go`; read in HAL at
 `gemini` / `openai` sub-objects, with `provider` selecting the active one
 (`none` or absent → realtime off). Empty `api_key` / `base_url` fall back to
 `llm_api_key` / `llm_base_url`.
+
+> **Leave `base_url` blank unless you have a non-proxy endpoint.** When empty, HAL
+> derives `<llm_base_url>/ws/gemini` (or `/ws/openai`) — the WS suffix the
+> `campaign-api` proxy routes on. A `base_url` set to the bare `llm_base_url`
+> (no `/ws/...`) is handed verbatim to the provider SDK and **404s at the Live
+> handshake**. The web Settings "Base URL" field is therefore display-bound to the
+> *explicit override only* (`RealtimeBaseURLOverride`, not the resolved value), so
+> "leave blank to derive" stays blank and a save never re-persists the bare URL.
 
 ```json
 "realtime": {

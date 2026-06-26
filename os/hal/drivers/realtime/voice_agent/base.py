@@ -155,6 +155,14 @@ class VoiceAgentBase(ABC):
             if isinstance(event, OutputEvent):
                 yield event.output
 
+    def take_grounding_fired(self) -> bool:
+        """Return True if a live web-search grounding (with injected chunks) fired
+        since the last call, then reset. Lets the orchestrator recycle the session
+        after a search so the bulky grounding snippets don't keep re-billing on
+        later turns. Default False — providers without grounding never recycle for it.
+        """
+        return False
+
     # --- Abstract: provider-specific implementation ---
 
     @abstractmethod

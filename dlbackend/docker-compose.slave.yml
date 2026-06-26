@@ -1,0 +1,30 @@
+# Slave node deployment (run on each GPU machine).
+#
+# The slave exposes :8899 via nginx → dlserver :7999 (no load balancer).
+# The master's LB round-robins traffic to this slave's public URL.
+#
+# Usage:
+#   DL_API_KEY=<same-as-master> docker compose -f docker-compose.slave.yml up -d
+
+services:
+  slave:
+    image: tnk2908/dlbackend:${DOCKER_TAG:-latest}
+    environment:
+      - DL_API_KEY=${DL_API_KEY:?DL_API_KEY must be set}
+      - MODEL_CACHE_DIR=/workspace/models
+      - ROLE=slave
+    ports:
+      - "8899:8899"
+    volumes:
+      - model-cache:/workspace/models
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  model-cache:

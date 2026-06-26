@@ -205,16 +205,62 @@ Optional: `make start-jupyter` runs Jupyter Lab on `:8890`, reachable at
 
 ## Docker
 
-The `Dockerfile` (CUDA 12.4 + PyTorch + nginx) builds a single-node image:
+The `Dockerfile` (CUDA 12.4 + PyTorch + nginx) builds a single image that runs
+as either **master** or **slave** via the `ROLE` env var.
 
 ```bash
 docker build -t dlbackend .
+```
+
+### Single node (master only)
+
+```bash
+docker compose up                # or:
 docker run --gpus all -e DL_API_KEY=<secret> -p 8899:8899 dlbackend
 ```
 
-It installs `.[dl,gpu,lb]`, sets `LB__BACKENDS=http://127.0.0.1:8001`, and starts
-nginx + lbserver + dlserver (dlserver in the foreground). For multi-node scaling
-and auto-restart, prefer the Makefile targets above.
+Runs nginx :8899 → lbserver :7999 → dlserver :8001.
+
+### Multi-GPU (master + slaves on separate machines)
+
+On each **slave** GPU machine:
+
+```bash
+docker run --gpus all \
+  -e DL_API_KEY=<same-as-master> \
+  -e ROLE=slave \
+  -v model-cache:/workspace/models \
+  -p 8899:8899 \
+  dlbackend
+```
+
+Or with compose: `DL_API_KEY=<secret> docker compose -f docker-compose.slave.yml up -d`
+
+Slaves run nginx :8899 → dlserver :7999 (no load balancer).
+
+On the **master**, point `LB__BACKENDS` at the local dlserver plus every slave:
+
+```bash
+docker run --gpus all \
+  -e DL_API_KEY=<secret> \
+  -e ROLE=master \
+  -e LB__BACKENDS="http://127.0.0.1:8001,https://<slave1>:8899,https://<slave2>:8899" \
+  -v model-cache:/workspace/models \
+  -p 8899:8899 \
+  dlbackend
+```
+
+Or with compose: set `LB__BACKENDS` in `.env` and run `docker compose up -d`.
+
+### Compose files
+
+| File | Role | What it runs |
+|------|------|-------------|
+| `docker-compose.yml` | Master | nginx + lbserver + dlserver |
+| `docker-compose.slave.yml` | Slave | nginx + dlserver (no LB) |
+
+Model weights are stored on a named volume (`model-cache` → `/workspace/models`)
+so they persist across container restarts. First start downloads from CDN.
 
 ## RunPod notes
 
