@@ -53,6 +53,7 @@ type Server struct {
 	agentGateway     domain.AgentGateway
 	personaMigration *agent.PersonaMigration
 	channelReconcile *agent.ChannelReconcile
+	mcpReconcile     *agent.MCPReconcile
 	networkService   *network.Service
 	deviceService    *device.Service
 	ambientService   *ambient.Service
@@ -112,6 +113,7 @@ func ProvideServer(
 	agentGW domain.AgentGateway,
 	pm *agent.PersonaMigration,
 	cr *agent.ChannelReconcile,
+	mr *agent.MCPReconcile,
 	ns *network.Service,
 	mqttFactory *mqtt.Factory,
 	ambientSvc *ambient.Service,
@@ -130,6 +132,7 @@ func ProvideServer(
 		agentGateway:      agentGW,
 		personaMigration:  pm,
 		channelReconcile:  cr,
+		mcpReconcile:      mr,
 		networkService:    ns,
 		deviceService:     ds,
 		mqttFactory:       mqttFactory,

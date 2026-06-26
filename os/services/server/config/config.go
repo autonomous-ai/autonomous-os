@@ -79,6 +79,13 @@ type Config struct {
 	// cannot run, set by ChannelReconcile and surfaced on the MQTT info uplink.
 	ChannelsUnsupported []string `json:"channels_unsupported,omitempty" yaml:"channelsUnsupported"`
 
+	// MCPAppliedRuntime is the agent runtime MCPReconcile last cloned the configured
+	// MCP connectors for. When it differs from AgentRuntime on boot, the reconcile
+	// reads the previous runtime's MCP servers from its on-disk config and re-pushes
+	// them into the new runtime (and updates this). Empty until the first reconcile
+	// records a baseline. Mirrors ChannelsAppliedRuntime.
+	MCPAppliedRuntime string `json:"mcp_applied_runtime,omitempty" yaml:"mcpAppliedRuntime"`
+
 	LLMAPIKey  string `json:"llm_api_key" yaml:"llmAPIKey" validate:"required"`
 	LLMModel   string `json:"llm_model" yaml:"llmModel" validate:"required"`
 	LLMBaseURL string `json:"llm_base_url" yaml:"llmBaseURL" validate:"required"`

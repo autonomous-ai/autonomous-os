@@ -152,6 +152,10 @@ type HermesService struct {
 	// internal/hermes/slack_stream.go.
 	slackStreamsMu sync.Mutex
 	slackStreams   map[string]*slackStream
+
+	// mcpMu serializes config.yaml read-modify-write in WriteMCPEntry/RemoveMCPEntry
+	// (mcp.go) so concurrent connector.set writes cannot interleave.
+	mcpMu sync.Mutex
 }
 
 type recentOutbound struct {

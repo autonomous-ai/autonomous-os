@@ -174,6 +174,11 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 			// unchanged; gated by config.ChannelsAppliedRuntime. Non-blocking.
 			s.channelReconcile.Reconcile()
 
+			// Clone the previous runtime's MCP connectors into the (possibly new)
+			// runtime so wired connectors survive a switch. No-op when the runtime is
+			// unchanged; gated by config.MCPAppliedRuntime. Non-blocking.
+			s.mcpReconcile.Reconcile()
+
 			// Seed SOUL.md + IDENTITY.md into workspace (factory defaults, once only)
 			if err := s.agentGateway.EnsureOnboarding(); err != nil {
 				slog.Error("onboarding seed failed", "component", "server", "error", err)

@@ -58,12 +58,14 @@ interface `AgentGateway`. Các method chia nhóm:
 | **Cận-migration** | `UpdateIdentityName`, `StartSkillWatcher`, `WatchIdentity`, `StartModelSync`, `UpdatePrimaryModel`, `StartPrimaryModelWatch`, `CompactSession`, `NewSession`, `FetchChatHistory`, `WriteMCPEntry`/`RemoveMCPEntry`, `GetConfigJSON` | **Vùng nguy hiểm** — dễ no-op, đắt để phát hiện thiếu. Xem §4–§6. |
 
 **Bài học (Hermes):** ~15 method bị stub no-op trong `internal/hermes/stubs.go`.
-Một số đúng là N/A (`WriteMCPEntry` — không có `openclaw.json`; `PairWhatsapp` —
-không có plugin). Nhưng `StartSkillWatcher`, `UpdateIdentityName`, và đường
-config-sync là **gap chức năng**, không phải N/A — ship dạng no-op và chỉ phát
-hiện khi skills bị cũ / đổi tên vô tác dụng / config gãy sau reset. Soát mọi
-stub: ghi `// no-op because <lý do>` hoặc `// TODO(<backend>-<feature>)`, đừng để
-thân hàm rỗng trơ.
+Một số đúng là N/A (`PairWhatsapp` — không có plugin). `WriteMCPEntry`/`RemoveMCPEntry`
+ban đầu bị hoãn (`TODO(hermes-mcp)`) nhưng **sau đó được hiện thực** trên
+`mcp_servers` của `config.yaml` (`internal/hermes/mcp.go`), kèm clone config→config
+khi switch runtime (`internal/agent/mcp_reconcile.go`). Nhưng `StartSkillWatcher`,
+`UpdateIdentityName`, và đường config-sync là **gap chức năng**, không phải N/A —
+ship dạng no-op và chỉ phát hiện khi skills bị cũ / đổi tên vô tác dụng / config
+gãy sau reset. Soát mọi stub: ghi `// no-op because <lý do>` hoặc
+`// TODO(<backend>-<feature>)`, đừng để thân hàm rỗng trơ.
 
 ---
 
@@ -428,10 +430,11 @@ là no-op idempotent.
 **Xong:** nối switch, install nhúng + presync (config self-heal, restore skills),
 migrate persona/memory (SOUL + inline identity, MEMORY + daily + KNOWLEDGE, USER),
 `UpdateIdentityName`, skill watcher, factory-reset khoá-bước `agent_state.json`,
-hooks (`emotion-acknowledge` reimplement OS-side bằng Go; `turn-gate` thừa — §6).
+hooks (`emotion-acknowledge` reimplement OS-side bằng Go; `turn-gate` thừa — §6),
+`WriteMCPEntry`/`RemoveMCPEntry` (`mcp_servers` trong `config.yaml`) + clone MCP
+khi-switch (`MCPReconcile`).
 
 **Còn mở / no-op:** hook native (Python) cho nguồn turn nội-bộ-backend (hoãn YAGNI
-— §6), `WriteMCPEntry`/`RemoveMCPEntry` (`TODO(hermes-mcp)`), `CompactSession`,
-`FetchChatHistory`, và nhóm model-sync (`StartModelSync`, `UpdatePrimaryModel`,
-`StartPrimaryModelWatch`, `RefreshModelsConfig` — phần lớn N/A vì os-server gửi
-model cố định tới custom provider campaign-api).
+— §6), `CompactSession`, `FetchChatHistory`, và nhóm model-sync (`StartModelSync`,
+`UpdatePrimaryModel`, `StartPrimaryModelWatch`, `RefreshModelsConfig` — phần lớn N/A
+vì os-server gửi model cố định tới custom provider campaign-api).

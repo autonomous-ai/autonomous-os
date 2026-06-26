@@ -427,6 +427,35 @@ and bounce the gateway.
   unsupported (`ChannelsUnsupported`) for the info uplink, leaving its creds for a
   switch back to OpenClaw.
 
+### MCP connectors (`mcp_servers` in `config.yaml`)
+
+Remote-MCP connectors (Notion, Linear, Asana, GitHub, Ahrefs, …) wired by the
+backend's `connector.set` MQTT flow are first-class on Hermes:
+`WriteMCPEntry`/`RemoveMCPEntry` (`internal/hermes/mcp.go`) upsert/delete
+`mcp_servers.<name>` in `~/.hermes/config.yaml` and restart `hermes-gateway`,
+mirroring `internal/openclaw/mcp.go` (which edits `openclaw.json` `mcp.servers`).
+
+The connector writer hands the gateway a canonical, OpenClaw-shaped entry —
+`{type:"http", url, headers}` for hosted MCP, or `{command, args, env}` for stdio.
+`toHermesMCPEntry` translates it to the Hermes `mcp_servers` schema: Hermes infers
+the transport from the presence of `url` vs `command`, so the OpenClaw-only `type`
+discriminator is dropped and `enabled: true` is asserted. The presync hook edits
+only `.model`/`.custom_providers`/`.env` (via `yq`) and leaves `mcp_servers`
+untouched, so the two `config.yaml` owners do not collide; the read-modify-write is
+serialized under `HermesService.mcpMu`. As with OpenClaw, `config.yaml` must already
+exist (connectors are configured post-onboarding) — a `hermes setup --reset` wipes
+`mcp_servers` along with the rest, and the next `connector.set` re-pushes.
+
+**Cloned on a runtime switch.** `MCPReconcile` (`internal/agent/mcp_reconcile.go`)
+mirrors `ChannelReconcile`: gated by `config.MCPAppliedRuntime`, it fires once in the
+startup sequence on an observed switch, reads the **previous** runtime's MCP entries
+straight from its on-disk config (`openclaw.json` `mcp.servers` ↔ `config.yaml`
+`mcp_servers`, normalizing each to the canonical shape), and re-pushes them through
+the now-active gateway's `WriteMCPEntry`. Each entry is self-contained (the auth
+header carries the token inline), so the clone is a pure config→config copy — no
+token-file/refresh machinery. A clone error leaves the marker un-advanced so the next
+boot retries (neither switch direction wipes the other runtime's config).
+
 ## 11. Switching backends at runtime
 
 The switch mechanism is **generic** (backend-agnostic) and fully documented in
@@ -478,6 +507,11 @@ not just the trip out. **Skills** stay fresh under Hermes via
 `internal/hermes/skill_watcher.go` — CDN auto-update into `skills/openclaw-imports`,
 capability-gated, mirroring the OpenClaw watcher (shared engine in
 `internal/skills/skillzip.go`).
+
+**MCP connectors are carried across too** — the configured remote-MCP servers are
+cloned config→config by `MCPReconcile` on the same switch boot (see §10, *MCP
+connectors*), so a device that had Notion/Linear wired under OpenClaw keeps them
+under Hermes (and vice versa).
 
 ### Round-trip is content-lossless but structurally one-way (Hermes-specific)
 
