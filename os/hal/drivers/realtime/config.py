@@ -77,6 +77,7 @@ class GeminiConfig(BaseModel):
     context_window_compression: bool = True
     compression_trigger_tokens: int = app_config.REALTIME_GEMINI_COMPRESSION_TRIGGER_TOKENS
     compression_target_tokens: int = app_config.REALTIME_GEMINI_COMPRESSION_TARGET_TOKENS
+    keepalive_interval_s: float = app_config.REALTIME_GEMINI_KEEPALIVE_S
     max_retries: int = 3
     reconnect_delay_s: float = 2.0
     send_timeout_s: float = 10.0

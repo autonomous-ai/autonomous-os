@@ -527,6 +527,14 @@ REALTIME_GEMINI_COMPRESSION_TRIGGER_TOKENS: int = int(
 REALTIME_GEMINI_COMPRESSION_TARGET_TOKENS: int = int(
     os.environ.get("HAL_GEMINI_COMPRESSION_TARGET_TOKENS", "7000")
 )
+# Keepalive (RELIABILITY): the campaign-api proxy idle-closes the Gemini Live WS
+# after a short silence (~40s). When the next user turn lands on the just-closed
+# session, the committed audio is lost on cold-reconnect and the model stays silent
+# → the user's question is dropped. Send a WS ping every N seconds while idle to
+# keep the session warm. 0 = off. Must be < the proxy idle window.
+REALTIME_GEMINI_KEEPALIVE_S: float = float(
+    os.environ.get("HAL_GEMINI_KEEPALIVE_S", "15")
+)
 # Session resumption lets a reconnect resume the SAME server session (context
 # preserved). It requires the WS endpoint to faithfully forward the resumption
 # handshake — the autonomous `campaign-api` proxy does NOT, so resuming through it
