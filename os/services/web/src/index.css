@@ -683,6 +683,136 @@
   .lm-snav-children { animation: none; }
 }
 
+/* ── Sidebar feature search ───────────────────────────────────────────────────
+   A search box pinned to the top of the rail to tame a long nav. The input has a
+   leading magnifier and a trailing clear (×) button that only appears with a
+   query. When searching, the grouped nav is swapped for a flat result list
+   (rendered just below the box) where each row reuses .lm-snav-item so the amber
+   active treatment and hover nudge carry over. Colors come from --lm-* vars so
+   dark/light flips automatically. */
+.lm-snav-search { padding: 12px 12px 4px; }
+/* While a query is active the box owns the rail's vertical space so the result
+   list can scroll independently of the (hidden) grouped nav. */
+.lm-snav-search--active {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding-bottom: 8px;
+}
+.lm-snav-search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.lm-snav-search-icon {
+  position: absolute;
+  left: 11px;
+  color: var(--lm-text-muted);
+  pointer-events: none;
+  transition: color 0.15s ease;
+}
+.lm-snav-search-input {
+  width: 100%;
+  padding: 9px 32px 9px 34px;
+  border-radius: 10px;
+  border: 1px solid var(--lm-border);
+  background: var(--lm-surface);
+  color: var(--lm-text);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+.lm-snav-search-input::placeholder { color: var(--lm-text-muted); }
+.lm-snav-search-input:focus {
+  border-color: color-mix(in srgb, var(--lm-amber) 55%, transparent);
+  box-shadow: 0 0 0 3px var(--lm-amber-dim);
+  background: var(--lm-bg);
+}
+.lm-snav-search-box:focus-within .lm-snav-search-icon { color: var(--lm-amber); }
+.lm-snav-search-clear {
+  position: absolute;
+  right: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 21px;
+  height: 21px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--lm-text-muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.lm-snav-search-clear:hover {
+  background: var(--lm-amber-dim);
+  color: var(--lm-amber);
+}
+
+/* Flat result list — scrolls independently, fills the rail below the box. */
+.lm-snav-search-results {
+  margin-top: 6px;
+  overflow-y: auto;
+  flex: 1;
+  animation: lm-snav-reveal 0.16s ease-out both;
+}
+/* Result rows must never wrap: the rail is narrow (~216px), so the label gets
+   the slack (ellipsis when long) while the group chip stays compact and the icon
+   never shrinks. `gap` is tightened from the base nav item to buy label width. */
+.lm-snav-result {
+  flex-wrap: nowrap;
+  gap: 8px;
+  padding-right: 10px;
+  overflow: hidden;
+}
+.lm-snav-result > svg { flex-shrink: 0; }
+/* Label takes remaining space and truncates rather than pushing the chip onto a
+   second line. min-width:0 is what lets a flex child shrink below its content. */
+.lm-snav-result-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Parent-group chip — small, muted, right-aligned so a result reads
+   "⚙ General  Settings". Caps its own width and truncates so it can't crowd out
+   the label on a tight rail. */
+.lm-snav-result-group {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--lm-text-muted);
+  background: var(--lm-surface);
+  border: 1px solid var(--lm-border);
+  border-radius: 6px;
+  padding: 1px 6px;
+}
+.lm-snav-item--active .lm-snav-result-group { color: var(--lm-amber); }
+/* Enter hint on the first (default) result — hidden on very narrow rails so the
+   label keeps its room. */
+.lm-snav-result-enter { flex-shrink: 0; color: var(--lm-text-muted); margin-left: 2px; }
+@media (max-width: 240px) {
+  .lm-snav-result-enter { display: none; }
+}
+.lm-snav-search-empty {
+  padding: 14px 16px;
+  font-size: 12.5px;
+  color: var(--lm-text-muted);
+  text-align: center;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lm-snav-search-results { animation: none; }
+}
+
 /* ── Setup wizard ─────────────────────────────────────────────────────────── */
 
 /* Sidebar nav item: hover lift + animated left active-bar. The ::before is the

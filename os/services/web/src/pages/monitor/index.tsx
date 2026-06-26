@@ -24,7 +24,7 @@ import {
   UserCircle, MessageSquare, Link as LinkIcon, MonitorSmartphone, LayoutGrid,
   Workflow, Users, Camera, Radar, ChartColumn, Move3d, Bluetooth, ScrollText,
   Terminal, FileCode, Hexagon, ExternalLink, SlidersHorizontal, ChevronRight,
-  Server, Zap, LogOut, Clock,
+  Server, Zap, LogOut, Clock, Search, X, CornerDownLeft,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -138,6 +138,91 @@ function allNavLeaves(): { id: Section; label: string; icon: string }[] {
   return leaves;
 }
 
+// Flat, searchable list of nav leaves carrying their parent-group label (so a
+// result can show "Voice · Settings" for context). Top-level leaves (e.g. Chat)
+// carry no group. Order follows NAV; the sidebar search filters this list.
+type SearchLeaf = { id: Section; label: string; group: string | null };
+function searchableLeaves(): SearchLeaf[] {
+  const out: SearchLeaf[] = [];
+  for (const entry of NAV) {
+    if (isNavGroup(entry)) {
+      entry.children.forEach((c) => { if (!isNavLink(c)) out.push({ id: c.id, label: c.label, group: entry.label }); });
+    } else {
+      out.push({ id: entry.id, label: entry.label, group: null });
+    }
+  }
+  return out;
+}
+
+// Sidebar search box — filters nav by label/group, with a clear (×) button that
+// appears once there's a query. Renders a flat result list under .lm-root so the
+// theme + amber treatment match the rest of the rail.
+function SidebarSearch({ query, setQuery, results, section, setSection, closeSidebar, leafHref, onEnter }: {
+  query: string;
+  setQuery: (q: string) => void;
+  results: SearchLeaf[];
+  section: Section;
+  setSection: (s: Section) => void;
+  closeSidebar: () => void;
+  leafHref: (id: Section) => string;
+  onEnter: () => void;
+}) {
+  const go = (id: Section) => { setSection(id); setQuery(""); closeSidebar(); };
+  return (
+    <div className={"lm-snav-search" + (query ? " lm-snav-search--active" : "")}>
+      <div className="lm-snav-search-box">
+        <Search size={15} strokeWidth={1.9} className="lm-snav-search-icon" />
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") { e.preventDefault(); onEnter(); }
+            else if (e.key === "Escape") { e.preventDefault(); setQuery(""); }
+          }}
+          placeholder="Search features…"
+          className="lm-snav-search-input"
+          aria-label="Search features"
+          autoComplete="off"
+          spellCheck={false}
+        />
+        {query && (
+          <button
+            type="button"
+            className="lm-snav-search-clear"
+            onClick={() => setQuery("")}
+            aria-label="Clear search"
+            title="Clear"
+          >
+            <X size={14} strokeWidth={2.2} />
+          </button>
+        )}
+      </div>
+      {query && (
+        <div className="lm-snav-search-results">
+          {results.length === 0 ? (
+            <div className="lm-snav-search-empty">No matches for “{query}”</div>
+          ) : (
+            results.map((r, i) => (
+              <a
+                key={r.id}
+                href={leafHref(r.id)}
+                className={"lm-snav-item lm-snav-result" + (section === r.id ? " lm-snav-item--active" : "")}
+                onClick={(e) => { e.preventDefault(); go(r.id); }}
+              >
+                <NavIcon id={r.id} size={16} />
+                <span className="lm-snav-result-label">{r.label}</span>
+                {r.group && <span className="lm-snav-result-group">{r.group}</span>}
+                {i === 0 && <CornerDownLeft size={13} strokeWidth={2} className="lm-snav-result-enter" />}
+              </a>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function NavGroupItem({ entry, section, setSection, closeSidebar, leafHref }: {
   entry: Extract<NavEntry, { group: string }>;
   section: Section;
@@ -147,6 +232,12 @@ function NavGroupItem({ entry, section, setSection, closeSidebar, leafHref }: {
 }) {
   const hasActiveChild = entry.children.some((c) => !isNavLink(c) && c.id === section);
   const [open, setOpen] = useState(hasActiveChild);
+  // Sync expand state to the active section whenever it changes: a group
+  // auto-opens when navigation lands on one of its children and auto-collapses
+  // when it lands elsewhere (e.g. picking "My Voice" from search closes a Device
+  // group that was left open). Keyed on `section` only, so manual header toggles
+  // — which don't change the section — are preserved.
+  useEffect(() => { setOpen(hasActiveChild); }, [section]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div>
       <button
@@ -496,6 +587,21 @@ export default function Monitor() {
   const closeSidebar = () => setSidebarOpen(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
+  // Sidebar feature search. Filters nav leaves by label/group (case-insensitive,
+  // substring), honouring the same debug + hardware visibility gates as the
+  // rendered nav so search never surfaces a tab the user can't open. Enter jumps
+  // to the first result.
+  const [navQuery, setNavQuery] = useState("");
+  const q = navQuery.trim().toLowerCase();
+  const searchResults = q
+    ? searchableLeaves().filter((leaf) => {
+        if (!isDebug && !PUBLIC_SECTIONS.has(leaf.id)) return false;
+        if (!sectionVisible(leaf.id)) return false;
+        return leaf.label.toLowerCase().includes(q) || (leaf.group?.toLowerCase().includes(q) ?? false);
+      })
+    : [];
+  const gotoFirstResult = () => { if (searchResults.length > 0) { setSection(searchResults[0].id); setNavQuery(""); closeSidebar(); } };
+
   return (
     <div className={`lm-root ${themeClass}`} style={S.root}>
       {/* Mobile overlay */}
@@ -506,7 +612,19 @@ export default function Monitor() {
 
       {/* Sidebar */}
       <aside style={S.sidebar} className={`lm-sidebar${sidebarOpen ? " lm-sidebar--open" : ""}`}>
-        <nav style={{ padding: "10px 0", flex: 1 }}>
+        <SidebarSearch
+          query={navQuery}
+          setQuery={setNavQuery}
+          results={searchResults}
+          section={section}
+          setSection={setSection}
+          closeSidebar={closeSidebar}
+          leafHref={leafHref}
+          onEnter={gotoFirstResult}
+        />
+        {/* When a search query is active the grouped nav is replaced by the flat
+            result list rendered inside SidebarSearch, so skip the normal tree. */}
+        <nav style={{ padding: "10px 0", flex: 1, display: navQuery.trim() ? "none" : undefined }}>
           {/* Order: Chat → Device → Settings → Agent Gateway → (other groups) */}
           {NAV.filter((e) => !isNavGroup(e) && e.id === "chat").map((entry) => {
             const leaf = entry as Extract<NavEntry, { id: Section }>;

@@ -10,7 +10,7 @@ export const S = {
     fontSize: 14,
   } as React.CSSProperties,
   sidebar: {
-    width: 192,
+    width: 250,
     flexShrink: 0,
     background: "var(--lm-sidebar)",
     borderRight: "1px solid var(--lm-border)",

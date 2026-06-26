@@ -54,7 +54,7 @@ os/services/web/
 
 Monitor uses a dedicated dark theme with class `.lm-root` (defined in `index.css`), **not using Tailwind** — all styling uses inline styles with CSS variables `--lm-*`.
 
-Layout: **Fixed 192px sidebar + flexible main area**, 100vh height.
+Layout: **Fixed 216px sidebar + flexible main area**, 100vh height.
 
 ### 3.2 Sidebar Navigation
 
@@ -68,6 +68,8 @@ Layout: **Fixed 192px sidebar + flexible main area**, 100vh height.
 | ⬟ | Camera | MJPEG stream + Display LCD |
 
 Bottom of sidebar shows OpenClaw status (online/offline) and last update time.
+
+**Feature search.** A search box (`SidebarSearch`, `os/services/web/src/pages/monitor/index.tsx`) sits at the top of the rail to tame the long nav. It filters nav leaves by label **or** parent-group name (case-insensitive substring) and honours the same visibility gates as the rendered nav — debug-only sections (`PUBLIC_SECTIONS`) and absent-hardware tabs (`sectionVisible`) never appear in results. While a query is active the grouped tree is hidden and replaced by a flat result list; each row reuses `.lm-snav-item` so the amber active/hover treatment carries over, and shows a small parent-group chip (e.g. `General` · `Settings`). The leading magnifier turns amber on focus; a trailing clear (×) button appears once there's a query (also cleared by `Esc`). `Enter` jumps to the first result.
 
 ### 3.3 Dark Theme Variables
 

@@ -54,7 +54,7 @@ os/services/web/
 
 Monitor dùng dark theme riêng với class `.lm-root` (định nghĩa trong `index.css`), **không dùng Tailwind** — toàn bộ styling dùng inline styles với CSS variables `--lm-*`.
 
-Layout: **Sidebar 192px cố định + Main area co giãn**, chiều cao 100vh.
+Layout: **Sidebar 216px cố định + Main area co giãn**, chiều cao 100vh.
 
 ### 3.2 Sidebar Navigation
 
@@ -68,6 +68,8 @@ Layout: **Sidebar 192px cố định + Main area co giãn**, chiều cao 100vh.
 | ⬟ | Camera | MJPEG stream + Display LCD |
 
 Góc dưới sidebar hiển thị trạng thái OpenClaw (online/offline) và thời điểm cập nhật gần nhất.
+
+**Tìm kiếm chức năng.** Một ô tìm kiếm (`SidebarSearch`, `os/services/web/src/pages/monitor/index.tsx`) nằm ở đầu sidebar để gọn gàng hoá danh sách nav vốn rất dài. Nó lọc các mục nav theo nhãn **hoặc** tên nhóm cha (không phân biệt hoa thường, khớp chuỗi con) và tuân theo đúng các điều kiện hiển thị như nav gốc — các mục chỉ-debug (`PUBLIC_SECTIONS`) và các tab thiếu phần cứng (`sectionVisible`) sẽ không xuất hiện trong kết quả. Khi đang có từ khoá, cây nhóm bị ẩn và được thay bằng danh sách kết quả phẳng; mỗi dòng tái sử dụng `.lm-snav-item` nên giữ nguyên hiệu ứng active/hover màu hổ phách, kèm một chip nhỏ ghi tên nhóm cha (ví dụ `General` · `Settings`). Biểu tượng kính lúp ở đầu chuyển sang màu hổ phách khi focus; nút xoá (×) ở cuối xuất hiện ngay khi có từ khoá (cũng xoá được bằng `Esc`). `Enter` nhảy tới kết quả đầu tiên.
 
 ### 3.3 Dark Theme Variables
 
