@@ -205,22 +205,29 @@ func resolveSoulContent(cfg *config.Config) []byte {
 		client := &http.Client{Timeout: 15 * time.Second}
 		resp, err := client.Get(ref)
 		if err != nil {
-			log.Printf("[factory-reset/hermes] soul_ref download %q: %v — using fallback", ref, err)
+			log.Printf("[factory-reset/hermes] WARN soul_ref %q download failed: %v — using fallback", ref, err)
 			return []byte(hermesSoulFallback)
 		}
 		defer resp.Body.Close()
 		b, err := io.ReadAll(resp.Body)
 		if err != nil || resp.StatusCode != http.StatusOK {
-			log.Printf("[factory-reset/hermes] soul_ref download %q: status=%d err=%v — using fallback", ref, resp.StatusCode, err)
+			log.Printf("[factory-reset/hermes] WARN soul_ref %q download failed: status=%d err=%v — using fallback", ref, resp.StatusCode, err)
 			return []byte(hermesSoulFallback)
 		}
 		log.Printf("[factory-reset/hermes] soul_ref seeded from URL %q (%d bytes)", ref, len(b))
 		return b
 	}
+	// Reject unsupported schemes (e.g. ftp://, s3://) — mirrors openclaw's
+	// "unsupported soul_ref scheme" error so a mis-configured DEVICE.md is
+	// visible in logs rather than silently treated as a local path.
+	if strings.Contains(ref, "://") {
+		log.Printf("[factory-reset/hermes] WARN soul_ref %q has unsupported scheme — using fallback", ref)
+		return []byte(hermesSoulFallback)
+	}
 	path := filepath.Join(device.DevicesDir(), devType, ref)
 	b, err := os.ReadFile(path)
 	if err != nil {
-		log.Printf("[factory-reset/hermes] soul_ref read %q: %v — using fallback", path, err)
+		log.Printf("[factory-reset/hermes] WARN soul_ref %q read failed: %v — using fallback", path, err)
 		return []byte(hermesSoulFallback)
 	}
 	log.Printf("[factory-reset/hermes] soul_ref seeded from %q (%d bytes)", path, len(b))
