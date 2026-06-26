@@ -513,20 +513,6 @@ REALTIME_GEMINI_VOICE: str = _rt_str("HAL_GEMINI_LIVE_VOICE", _RT_GEMINI.get("vo
 REALTIME_GEMINI_SAMPLE_RATE: int = 16000
 REALTIME_GEMINI_THINKING_LEVEL: str = _rt_str("HAL_GEMINI_THINKING_LEVEL", _RT_GEMINI.get("thinking_level"), "MINIMAL")
 REALTIME_GEMINI_USE_LANGUAGE_CODES: bool = os.environ.get("HAL_GEMINI_USE_LANGUAGE_CODES", "false").lower() in ("1", "true", "yes")
-# Context-window compression (COST): Gemini re-bills the whole accumulated session
-# (system instruction + conversation history) as input text on EVERY turn, so a long
-# session's growing history dominates input-text cost. The default SlidingWindow()
-# never actually triggers in practice (sessions recycle long before its ~100k-token
-# default), so we set an explicit LOW trigger: when context exceeds trigger_tokens,
-# Gemini compresses the history down to ~target_tokens. This caps per-turn in_text
-# around target..trigger instead of letting it climb toward 20k+. Lower = cheaper but
-# less recent conversation kept verbatim. trigger MUST be > target.
-REALTIME_GEMINI_COMPRESSION_TRIGGER_TOKENS: int = int(
-    os.environ.get("HAL_GEMINI_COMPRESSION_TRIGGER_TOKENS", "14000")
-)
-REALTIME_GEMINI_COMPRESSION_TARGET_TOKENS: int = int(
-    os.environ.get("HAL_GEMINI_COMPRESSION_TARGET_TOKENS", "7000")
-)
 # Session resumption lets a reconnect resume the SAME server session (context
 # preserved). It requires the WS endpoint to faithfully forward the resumption
 # handshake — the autonomous `campaign-api` proxy does NOT, so resuming through it
@@ -575,12 +561,13 @@ REALTIME_MEMORY_PATH: str = os.environ.get("HAL_REALTIME_MEMORY_PATH", f"{_rt_wo
 REALTIME_MAX_MEMORY_ENTRIES: int = int(os.environ.get("HAL_REALTIME_MAX_MEMORY_ENTRIES", "1000"))
 REALTIME_MEMORY_TRIM_KEEP: int = int(os.environ.get("HAL_REALTIME_MEMORY_TRIM_KEEP", "500"))
 # These bound the DEVICE MEMORY / REALTIME MEMORY sections of the per-turn floor
-# (build_instructions), which Gemini re-bills every turn. 100k chars (~25k tokens)
-# each was far too generous for something billed per-turn — capped to ~16k chars
-# (~4k tokens). Also makes realtime-memory summarization trigger sooner (fresher
-# in-context memory). The full history is preserved in summary.md + memory_raw.jsonl.
-REALTIME_DEVICE_MEMORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_DEVICE_MEMORY_MAX_CHARS", "16000"))
-REALTIME_MEMORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_MEMORY_MAX_CHARS", "16000"))
+# (build_instructions), which Gemini re-bills EVERY turn — this floor is the main
+# realtime cost driver (in_text ≈ 9.2k tokens/turn at 16k+16k chars). Capped to
+# ~8k chars (~2k tokens) each to roughly halve the floor; the full history is
+# preserved in summary.md + memory_raw.jsonl, and the tighter cap also makes
+# realtime-memory summarization trigger sooner (fresher in-context memory).
+REALTIME_DEVICE_MEMORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_DEVICE_MEMORY_MAX_CHARS", "8000"))
+REALTIME_MEMORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_MEMORY_MAX_CHARS", "8000"))
 # Cap on the rolling realtime summary.md — part of the per-turn floor, so kept
 # tight (~1.5k tokens). Env-overridable for tuning.
 REALTIME_SUMMARY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_SUMMARY_MAX_CHARS", "5000"))

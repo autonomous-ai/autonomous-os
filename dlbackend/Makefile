@@ -14,7 +14,8 @@
        test-crypto test-crypto-api test-crypto-local \
        test-lb test-lb-local \
        test-benchmark test-benchmark-http test-benchmark-ws test-benchmark-mixed \
-       lint
+       lint \
+       deploy-master deploy-slave
 
 # ---------------------------------------------------------------------------
 # Variables
@@ -355,3 +356,66 @@ test-benchmark-mixed:
 
 lint:
 	ruff check src/ tests/
+
+# ---------------------------------------------------------------------------
+# Deploy (run from local machine)
+# ---------------------------------------------------------------------------
+# Usage:
+#   make deploy-master DEPLOY_HOST=root@<ip>
+#   make deploy-slave  DEPLOY_HOST=root@<ip>
+
+DEPLOY_HOST ?=
+DEPLOY_REPO ?= https://github.com/autonomous-ai/autonomous-os.git
+DEPLOY_BRANCH ?= main
+DEPLOY_ROOT ?= /workspace/autonomous-os
+DEPLOY_DL ?= $(DEPLOY_ROOT)/dlbackend
+DEPLOY_API_KEY ?=
+
+define DEPLOY_SYNC
+	ssh $(DEPLOY_HOST) "\
+		if [ -d $(DEPLOY_ROOT) ]; then \
+			cd $(DEPLOY_ROOT) && git pull; \
+		else \
+			git clone -b $(DEPLOY_BRANCH) $(DEPLOY_REPO) $(DEPLOY_ROOT); \
+		fi && \
+		cd $(DEPLOY_DL) && make install"
+endef
+
+define DEPLOY_ENSURE_ENV
+	@if [ -n "$(DEPLOY_API_KEY)" ]; then \
+		ssh $(DEPLOY_HOST) "\
+			if [ ! -f $(DEPLOY_DL)/.env ]; then \
+				cp $(DEPLOY_DL)/.env.example $(DEPLOY_DL)/.env && \
+				sed -i 's/DL_API_KEY=changeme/DL_API_KEY=$(DEPLOY_API_KEY)/' $(DEPLOY_DL)/.env && \
+				echo '.env created from .env.example'; \
+			fi"; \
+	fi
+endef
+
+define DEPLOY_HEALTH
+	@echo "Waiting for health check..."
+	@ssh $(DEPLOY_HOST) '\
+		cd $(DEPLOY_DL) && \
+		KEY=$$(grep DL_API_KEY .env | cut -d= -f2-) && \
+		while true; do \
+			RESP=$$(curl -sf -H "X-API-Key: $$KEY" http://127.0.0.1:$(1)/hal/api/dl/health 2>/dev/null) && \
+			echo "$$RESP" | grep -q '"'"'"status":"ok"'"'"' && \
+			echo "Health OK: $$RESP" && break; \
+			echo "Not ready yet... retrying in 5s"; \
+			sleep 5; \
+		done'
+endef
+
+deploy-master:
+	@if [ -z "$(DEPLOY_HOST)" ]; then echo "DEPLOY_HOST not set. Usage: make deploy-master DEPLOY_HOST=root@<ip> DEPLOY_API_KEY=<key>"; exit 1; fi
+	$(DEPLOY_SYNC)
+	$(DEPLOY_ENSURE_ENV)
+	ssh $(DEPLOY_HOST) "cd $(DEPLOY_DL) && make stop-runpod-dlserver stop-runpod-lbserver stop-nginx && make start-runpod-master"
+	$(call DEPLOY_HEALTH,8001)
+
+deploy-slave:
+	@if [ -z "$(DEPLOY_HOST)" ]; then echo "DEPLOY_HOST not set. Usage: make deploy-slave DEPLOY_HOST=root@<ip> DEPLOY_API_KEY=<key>"; exit 1; fi
+	$(DEPLOY_SYNC)
+	$(DEPLOY_ENSURE_ENV)
+	ssh $(DEPLOY_HOST) "cd $(DEPLOY_DL) && make stop-runpod-dlserver stop-nginx && make start-runpod-slave"
+	$(call DEPLOY_HEALTH,7999)
