@@ -261,24 +261,32 @@ class GeminiLiveAgent(VoiceAgentBase):
             logger.debug("[realtime] Sent activityEnd (manual VAD)")
 
     async def _async_keepalive(self) -> None:
-        """Send a WebSocket ping to keep an idle session warm.
+        """Keep an idle session warm so the proxy/Gemini doesn't idle-close it.
 
-        The campaign-api proxy idle-closes the Gemini WS after a short silence; the
-        next turn then lands on a dead session and the committed audio is lost on
-        cold-reconnect (model stays silent → user's question dropped). A periodic WS
-        ping is a control frame — it resets the proxy's idle timer without touching
-        the conversation (no turn, no tokens). Runs on the IO loop concurrently with
-        the pending receive(); websockets supports concurrent send+recv. Best-effort.
+        A WS-level ping does NOT work: the proxy idle-closes on application
+        inactivity (no realtime input), not on a dead link — device-verified that
+        pings keep flowing yet the session still closes "idle". So we send a short
+        SILENCE frame instead — a real `realtime_input` audio chunk that resets the
+        idle timer. Silence carries no speech, and in manual-VAD mode it is sent
+        without an activity_start, so it never opens a turn (no response, ~no
+        tokens). Sent only while idle (between turns), so it can't collide with a
+        real turn's audio on the send thread. Best-effort; guarded.
         """
         sess = self._session
-        ws = getattr(sess, "_ws", None) if sess is not None else None
-        if ws is None:
+        if sess is None or self._activity_started:
             return
         try:
-            await ws.ping()
-            logger.debug("[realtime] keepalive ping sent")
+            n = int(self._config.sample_rate * 0.02)  # 20ms of PCM16 silence
+            silence = b"\x00\x00" * n
+            await sess.send_realtime_input(
+                audio=types.Blob(
+                    data=silence,
+                    mime_type=f"audio/pcm;rate={self._config.sample_rate}",
+                )
+            )
+            logger.debug("[realtime] keepalive silence sent")
         except Exception as e:
-            logger.debug("[realtime] keepalive ping failed: %s", e)
+            logger.debug("[realtime] keepalive failed: %s", e)
 
     async def _async_receive_turn(self) -> None:
         """Read one full turn from the session, put outputs on _recv_queue."""
