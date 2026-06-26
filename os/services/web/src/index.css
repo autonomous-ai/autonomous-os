@@ -794,6 +794,32 @@
   box-shadow: 0 0 0 2px var(--lm-amber-glow);
 }
 
+/* Face-enroll capture controls (the "Browse" dropzone + "Take photo" button).
+   These set their border/background inline to track selection state, so the
+   hover cue uses box-shadow (an inset amber ring) + a hairline lift, neither of
+   which the inline styles touch — the affordance reads without fighting state. */
+.lm-root .lm-face-drop,
+.lm-root .lm-face-cam {
+  transition: box-shadow 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+}
+.lm-root .lm-face-drop:hover,
+.lm-root .lm-face-cam:hover {
+  border-color: var(--lm-amber-glow);
+  box-shadow: inset 0 0 0 1px var(--lm-amber-glow);
+}
+.lm-root .lm-face-cam:hover {
+  color: var(--lm-amber);
+}
+.lm-root .lm-face-drop:active,
+.lm-root .lm-face-cam:active {
+  transform: translateY(1px);
+}
+.lm-root .lm-face-drop:focus-visible,
+.lm-root .lm-face-cam:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--lm-amber-glow);
+}
+
 /* Mobile tab pill row. */
 .lm-setup .lm-tab {
   padding: 7px 14px;
@@ -983,6 +1009,18 @@
    reached it and the cards read flat. These rules give the section cards real
    depth, a hover lift, and a hairline amber accent on the leading edge, plus a
    fancier restart banner. All theme-token based so light + dark both track. */
+/* Settings panel padding. Roomy on desktop, tightened on phones so the
+   max-width:560px content column keeps usable width on a ~360px screen. Lives
+   in CSS (not inline) so the media query can win. */
+.lm-root .lm-settings-panel { padding: 24px 32px; }
+@media (max-width: 768px) {
+  .lm-root .lm-settings-panel { padding: 16px 14px; }
+  /* Tighten the section-card inner padding too. SectionCard sets it inline, so
+     !important is needed to win — scoped to the settings panel so other
+     .lm-card users (Setup wizard, monitor) are untouched. */
+  .lm-root .lm-settings-panel .lm-card { padding: 18px 16px !important; }
+}
+
 .lm-edit .lm-card,
 .lm-root .lm-settings-panel .lm-card {
   position: relative;

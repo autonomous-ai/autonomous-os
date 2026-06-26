@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Pencil, X, Eye, EyeOff } from "lucide-react";
+import { Pencil, X, Eye, EyeOff, AlertTriangle } from "lucide-react";
 import type { SectionId } from "@/hooks/setup/types";
 import { C, FIELD_GAP, ADMIN_PASSWORD_MIN, LABEL_STYLE, INPUT_STYLE, INPUT_READONLY_STYLE, INPUT_FOCUS_SHADOW, INPUT_ERROR_SHADOW, INPUT_PAD_ONE_ICON, INPUT_PAD_TWO_ICONS } from "./styles";
 
@@ -339,6 +339,94 @@ export function SectionCard({ id, title, description, icon, active, children }: 
         </div>
       </div>
       {children}
+    </div>
+  );
+}
+
+// ConfirmDialog — themed replacement for the native window.confirm(). Render it
+// conditionally from a section that holds the pending action in state; resolve
+// by calling onConfirm/onCancel. Destructive actions tint the confirm button
+// red (danger), everything else uses amber. Closes on overlay click, Escape,
+// and Enter (confirms). Keeps the dark-amber look consistent across sections.
+export function ConfirmDialog({
+  title, message, confirmLabel = "Confirm", cancelLabel = "Cancel",
+  danger = false, onConfirm, onCancel,
+}: {
+  title: string; message?: string; confirmLabel?: string; cancelLabel?: string;
+  danger?: boolean; onConfirm: () => void; onCancel: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+      else if (e.key === "Enter") onConfirm();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onConfirm, onCancel]);
+
+  const accent = danger ? C.red : C.amber;
+  const accentDim = danger ? "var(--lm-red-dim)" : C.amberDim;
+  const accentGlow = danger ? "var(--lm-red-glow)" : "var(--lm-amber-glow)";
+  return (
+    <div
+      onClick={onCancel}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
+        display: "flex", justifyContent: "center", alignItems: "center",
+        zIndex: 1000, padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={title}
+        className="lm-card lm-pop"
+        style={{ width: "min(380px, 100%)", padding: "20px 22px" }}
+      >
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: message ? 8 : 16 }}>
+          <div style={{
+            flexShrink: 0, width: 34, height: 34, borderRadius: 9,
+            background: accentDim, color: accent,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            boxShadow: `inset 0 0 0 1px ${accentGlow}`,
+          }}>
+            <AlertTriangle size={16} />
+          </div>
+          <div style={{ minWidth: 0, paddingTop: 1 }}>
+            <div style={{ fontSize: 14.5, fontWeight: 600, color: C.text, lineHeight: 1.3 }}>
+              {title}
+            </div>
+            {message && (
+              <div style={{ fontSize: 13, color: C.textDim, lineHeight: 1.5, marginTop: 4, wordBreak: "break-word" }}>
+                {message}
+              </div>
+            )}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+          <button
+            type="button" onClick={onCancel}
+            style={{
+              padding: "8px 14px", borderRadius: 9, fontSize: 12.5, fontWeight: 500,
+              cursor: "pointer", background: C.surface,
+              border: `1px solid ${C.border}`, color: C.textDim,
+            }}
+          >
+            {cancelLabel}
+          </button>
+          <button
+            type="button" onClick={onConfirm} autoFocus
+            style={{
+              padding: "8px 14px", borderRadius: 9, fontSize: 12.5, fontWeight: 600,
+              cursor: "pointer", background: accentDim,
+              border: `1px solid ${accentGlow}`, color: accent,
+            }}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

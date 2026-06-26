@@ -447,7 +447,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const showSave = activeSection !== "face" && activeSection !== "voice" && activeSection !== "runtime" && activeSection !== "timezone";
 
   return (
-    <div className="lm-fade-in lm-settings-panel" style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "24px 32px" }}>
+    <div className="lm-fade-in lm-settings-panel" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
       <div style={{ maxWidth: 560, margin: "0 auto" }}>
 
         {/* Header row: active-section label on the left, Save button on the right.

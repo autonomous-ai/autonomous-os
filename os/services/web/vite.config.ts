@@ -19,6 +19,8 @@ export default defineConfig(({ mode }) => {
     },
     plugins: [react(), tailwindcss()],
     server: {
+      // Listen on all interfaces so Vite prints the Network (local IP) URL.
+      // host: true,
       proxy: proxy ? {
         // ws: true is required so /api/system/shell (xterm.js PTY WebSocket)
         // is upgraded through the proxy to the Pi.
