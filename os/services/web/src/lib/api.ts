@@ -299,6 +299,27 @@ export async function setAgentRuntime(runtime: string): Promise<boolean> {
   });
 }
 
+export interface TimezoneStatus {
+  current: string;
+  zones: string[];
+}
+
+/** GET /api/device/timezone — current IANA zone + selectable list (from system tzdata). */
+export async function getTimezone(): Promise<TimezoneStatus> {
+  return apiRequest<TimezoneStatus>(`${API_BASE}/api/device/timezone`);
+}
+
+/** POST /api/device/timezone — apply an IANA zone (e.g. "Asia/Ho_Chi_Minh").
+ *  Writes /etc/localtime + /etc/timezone and persists to config; takes effect
+ *  without a HAL restart (clock helpers read /etc/timezone live). */
+export async function setTimezone(timezone: string): Promise<boolean> {
+  return apiRequest<boolean>(`${API_BASE}/api/device/timezone`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ timezone }),
+  });
+}
+
 export interface TestTTSOptions {
   text?: string;
   /** BCP-47 stt_language code; picks a friendly demo phrase in that language. */
