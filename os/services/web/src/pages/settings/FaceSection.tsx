@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { UserCircle, UserPlus, ImagePlus, Camera, Loader2, X } from "lucide-react";
-import { hwUrl } from "@/lib/api";
+import { hwUrl, fileToBase64 } from "@/lib/api";
 import { C, Field, SectionCard, ConfirmDialog, LABEL_STYLE } from "@/components/setup/shared";
 import { CameraCaptureModal } from "./CameraCaptureModal";
 import type { FaceOwner } from "@/hooks/setup/useFaceEnroll";
@@ -100,7 +100,7 @@ export function FaceSection({
 
   const removeFaceOwner = async (label: string) => {
     try {
-      await fetch("/hw/face/remove", {
+      await fetch(hwUrl("/face/remove"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ label }),
@@ -111,7 +111,7 @@ export function FaceSection({
 
   const removeFacePhoto = async (label: string, filename: string) => {
     try {
-      await fetch("/hw/face/photo/remove", {
+      await fetch(hwUrl("/face/photo/remove"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ label, filename }),
@@ -137,9 +137,8 @@ export function FaceSection({
     let lastErr = "";
     for (const { file } of pending) {
       try {
-        const buf = await file.arrayBuffer();
-        const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
-        const resp = await fetch("/hw/face/enroll", {
+        const b64 = await fileToBase64(file);
+        const resp = await fetch(hwUrl("/face/enroll"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ label, image_base64: b64 }),

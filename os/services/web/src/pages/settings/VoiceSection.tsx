@@ -3,6 +3,7 @@ import { MicVocal, Mic, Loader2 } from "lucide-react";
 import { C, Field, SectionCard, LABEL_STYLE } from "@/components/setup/shared";
 import { pickVoicePhrases, pickVoiceIntro, VOICE_DURATION_SEC } from "@/components/setup/voice-phrases";
 import type { FaceOwner } from "@/hooks/setup/useFaceEnroll";
+import { hwUrl } from "@/lib/api";
 
 // Voice enroll — remote-trigger the device's /speaker/record-enroll. The device captures
 // via its own mic; web only does countdown UI. Sharing label with face enroll
@@ -69,7 +70,7 @@ export function VoiceSection({
           setVoiceCountdown(remaining);
         }
       }, 1000);
-      fetch("/hw/speaker/record-enroll", {
+      fetch(hwUrl("/speaker/record-enroll"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: voiceLabel.trim().toLowerCase(), duration_sec: VOICE_DURATION_SEC }),
@@ -198,7 +199,7 @@ export function VoiceSection({
                     onClick={async () => {
                       if (!confirm(`Remove ALL voice files for "${p.label}"? Face data is preserved.`)) return;
                       try {
-                        await fetch("/hw/speaker/remove", {
+                        await fetch(hwUrl("/speaker/remove"), {
                           method: "POST",
                           headers: { "Content-Type": "application/json" },
                           body: JSON.stringify({ name: p.label }),
@@ -216,7 +217,7 @@ export function VoiceSection({
                 </div>
                 {expanded && p.voice_samples!.map((file) => {
                   const ext = file.toLowerCase().split(".").pop() || "";
-                  const url = `/hw/face/file/${p.label}/voice/${encodeURIComponent(file)}`;
+                  const url = hwUrl(`/face/file/${p.label}/voice/${encodeURIComponent(file)}`);
                   const isAudio = ["wav", "ogg", "mp3", "webm", "m4a"].includes(ext);
                   const viewLabel = ["json", "jsonl", "txt"].includes(ext) ? "view" : "open";
                   return (
