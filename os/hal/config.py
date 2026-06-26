@@ -446,31 +446,6 @@ REALTIME_SESSION_IDLE_RESET_S: float = float(
 REALTIME_SESSION_MAX_TURNS: int = int(
     os.environ.get("HAL_REALTIME_SESSION_MAX_TURNS", "12")
 )
-# Idle keepalive (reliability, NOT cost): proactively refresh the session with a
-# FRESH one during a conversational pause, BEFORE the provider's server-side
-# idle-close (~60-70s for Gemini Live via the proxy) silently fires. A session the
-# server has decided to close still reports connected locally, so a follow-up turn
-# commits into it and dies mid-turn with WS 1000 → falls back to the main agent.
-# Refreshing a few seconds early keeps the next turn on a young session. Must be
-# BELOW the server idle-close window. 0 disables. NOTE: this is NOT the old
-# ping/silence keepalive (HAL_GEMINI_KEEPALIVE_S, since removed) — that could not
-# keep the SAME socket open past idle (the proxy/Gemini idle-timer only resets on
-# real speech, device-verified). This instead stays AHEAD of the close by swapping
-# in a new session. See RealtimeOrchestrator._keepalive_loop. Default 20s: the proxy
-# idle-close was measured at ~33s on the device (Gemini Live via campaign-api), and
-# the watchdog polls every ~5s, so 20s fires at ~20-25s — comfortably ahead of the
-# close with margin for variance. Raise only if a higher idle-close is confirmed.
-REALTIME_KEEPALIVE_REFRESH_S: float = float(
-    os.environ.get("HAL_REALTIME_KEEPALIVE_REFRESH_S", "20")
-)
-# Bound the keepalive to a real conversation: only keep the session warm while a
-# turn happened within the last this-many seconds. After that the session is left
-# to idle-close on its own and the next turn reconnects fresh (a one-time ~1s cost),
-# so a quiet device doesn't churn the proxy / burn session quota every refresh
-# interval all day. 0 = always keep warm (not recommended). See _keepalive_loop.
-REALTIME_KEEPALIVE_MAX_IDLE_S: float = float(
-    os.environ.get("HAL_REALTIME_KEEPALIVE_MAX_IDLE_S", "300")
-)
 # A captured session shorter than this AND with no STT transcript is treated as a
 # VAD false-trigger (a noise blip that only grabbed the pre-roll, no sustained
 # speech) and is NOT committed to the realtime model. Committing such turns wastes
