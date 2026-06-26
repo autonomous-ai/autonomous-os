@@ -374,7 +374,7 @@ DEPLOY_API_KEY ?=
 define DEPLOY_SYNC
 	ssh $(DEPLOY_HOST) "\
 		if [ -d $(DEPLOY_ROOT) ]; then \
-			cd $(DEPLOY_ROOT) && git pull; \
+			cd $(DEPLOY_ROOT) && git fetch --all && git checkout $(DEPLOY_BRANCH) && git pull; \
 		else \
 			git clone -b $(DEPLOY_BRANCH) $(DEPLOY_REPO) $(DEPLOY_ROOT); \
 		fi && \
