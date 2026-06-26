@@ -61,10 +61,10 @@ def prepare_ort_session(
             (
                 "CUDAExecutionProvider",
                 {
-                    "arena_extend_strategy": "kNextPowerOfTwo",
-                    "cudnn_conv_algo_search": "EXHAUSTIVE",
+                    "arena_extend_strategy": "kSameAsRequested",
+                    "cudnn_conv_algo_search": "DEFAULT",
                     "do_copy_in_default_stream": True,
-                    "cudnn_conv_use_max_workspace": True,
+                    "cudnn_conv_use_max_workspace": False,
                 },
             )
         )
