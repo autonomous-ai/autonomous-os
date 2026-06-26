@@ -8,29 +8,37 @@ package httpapi
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"net/http"
 	"time"
 )
 
+// maxBodyBytes caps decoded request bodies — these endpoints take small JSON
+// from the LAN, so anything larger is malformed or hostile.
+const maxBodyBytes = 64 << 10
+
 // Server owns routing and response encoding and delegates all behaviour to its
 // injected ports.
 type Server struct {
-	port      int
-	startAt   time.Time
-	status    StatusProvider
-	approvals ApprovalService
-	activity  ActivitySink
+	port          int
+	startAt       time.Time
+	status        StatusProvider
+	approvals     ApprovalService
+	activity      ActivitySink
+	codeApprovals CodeApprovalService
 }
 
 // New builds the delivery layer from its ports.
-func New(port int, status StatusProvider, approvals ApprovalService, activity ActivitySink) *Server {
+func New(port int, status StatusProvider, approvals ApprovalService, activity ActivitySink, codeApprovals CodeApprovalService) *Server {
 	return &Server{
-		port:      port,
-		startAt:   time.Now(),
-		status:    status,
-		approvals: approvals,
-		activity:  activity,
+		port:          port,
+		startAt:       time.Now(),
+		status:        status,
+		approvals:     approvals,
+		activity:      activity,
+		codeApprovals: codeApprovals,
 	}
 }
 
@@ -38,7 +46,18 @@ func New(port int, status StatusProvider, approvals ApprovalService, activity Ac
 func (s *Server) Start() error {
 	addr := fmt.Sprintf(":%d", s.port)
 	log.Printf("[http] listening on %s", addr)
-	return http.ListenAndServe(addr, s.routes())
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           s.routes(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		// WriteTimeout is intentionally 0 (disabled): /claude-code/approval-request
+		// long-polls for up to ~55s, and a WriteTimeout would cut the held response.
+		// The long-poll is bounded by the use case's own ttl + the request context.
+		WriteTimeout: 0,
+		IdleTimeout:  60 * time.Second,
+	}
+	return srv.ListenAndServe()
 }
 
 // routes is the single registry of endpoints. Device-internal endpoints live at
@@ -60,7 +79,32 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /claude-code/notify", s.handleNotify)
 	mux.HandleFunc("POST /claude-code/usage", s.handleUsage)
 
+	// Claude Code reverse approval — the plugin's permission hook long-polls
+	// /approval-request; the on-device agent resolves via /approve|/deny
+	// (loopback-only). /pending lists what's awaiting a voice answer.
+	mux.HandleFunc("POST /claude-code/approval-request", s.handleApprovalRequest)
+	mux.HandleFunc("POST /claude-code/approve", s.handleCodeApprove)
+	mux.HandleFunc("POST /claude-code/deny", s.handleCodeDeny)
+	mux.HandleFunc("GET /claude-code/pending", s.handleCodePending)
+
 	return mux
+}
+
+// decodeJSON reads a size-capped JSON body into v.
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
+	return json.NewDecoder(io.LimitReader(r.Body, maxBodyBytes)).Decode(v)
+}
+
+// isLoopback reports whether the request came from the local host. Used to gate
+// the code approve/deny endpoints so only the on-device agent can let code run
+// on the user's Mac.
+func isLoopback(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // --- response helpers ---

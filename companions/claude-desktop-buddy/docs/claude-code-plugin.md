@@ -98,6 +98,92 @@ flow: `GET /status`, `GET /health`, `POST /claude-desktop/approve`,
 `POST /claude-desktop/deny`. See
 [`architecture.md`](architecture.md#the-approval-round-trip).
 
+## Voice-approve (Claude Code reverse approval)
+
+When Claude Code on the Mac would show a **tool-permission dialog**, a hook can ask
+the connected device instead: the on-device agent reads the request out loud, the
+user answers **yes/no by voice**, and the decision flows back so Claude Code
+approves or denies the tool **without ever showing the dialog**. This is the
+**HTTP mirror** of the existing Claude Desktop BLE approval round-trip
+(see [`architecture.md`](architecture.md#the-approval-round-trip)).
+
+The new capability that makes this possible is a Claude Code **`PermissionRequest`
+hook**. It fires only when a permission dialog *would* show, blocks synchronously
+(up to its 60 s timeout), and returns a decision over stdout as JSON:
+
+```json
+{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}
+```
+
+(exit `0`, `"behavior"` is `"allow"` or `"deny"`). It does **not** fire in
+`-p` / headless mode, nor for tools already permitted by your permission rules.
+
+### The round-trip
+
+```
+ Mac (Claude Code)                         Device (Pi / OrangePi)
+ ┌──────────────────────┐                  ┌────────────────────────────────────┐
+ │ tool needs permission│                  │  claude-code-buddy daemon :5002     │
+ │        │             │  POST            │                                    │
+ │        ▼             │  approval-request│  register pending ──► cue device:  │
+ │ PermissionRequest    │ ────────────────►│    • blink LED (transient)         │
+ │ hook (blocks ≤60s)   │  (long-poll)     │    • round display "Approve <tool>?"│
+ │        ▲             │                  │    • sensing event → OS server     │
+ │        │ {decision}  │ ◄────────────────│  block until resolved / ttl        │
+ └────────┼─────────────┘                  │            ▲                       │
+          │                                │  approve/deny (loopback) ◄─ agent  │
+   no dialog, proceed                      └────────────────────────────────────┘
+```
+
+1. Claude Code → `PermissionRequest` hook `scripts/on-permission-request.py`
+   (registered in the plugin's `hooks/hooks.json`, matcher `*`, timeout 60 s).
+2. The hook POSTs to the device daemon
+   `POST http://<device>:5002/claude-code/approval-request {id, tool, input}` and
+   **blocks** (long-poll).
+3. The daemon registers the pending approval, cues the device — a transient blink
+   LED, a round-display **"Approve `<tool>`?"**, and a sensing event
+   `type=claude_code_approval` emitted to the OS server `/api/sensing/event` — then
+   blocks until the request is resolved or the long-poll TTL elapses.
+4. The on-device OpenClaw agent hears the sensing event (a skill in
+   [`skill/SKILL.md`](../skill/SKILL.md)) and asks the user; on **"yes"** it calls
+   `POST 127.0.0.1:5002/claude-code/approve {id}`, on **"no"**
+   `POST 127.0.0.1:5002/claude-code/deny {id}`.
+5. The daemon unblocks the long-poll → returns `{"decision":"allow"|"deny"}` → the
+   hook prints the `PermissionRequest` decision JSON → Claude Code proceeds with
+   **no dialog**.
+
+### Voice-approve endpoints (`:5002`)
+
+| Endpoint | Body | Behavior |
+|----------|------|----------|
+| `POST /claude-code/approval-request` | `{id, tool, input, hint?}` | Long-polls; returns `{"decision":"allow"｜"deny"｜"timeout"}`. `400` if `id` is missing. |
+| `POST /claude-code/approve` | `{id}` | Resolves the pending request as allow. **Loopback-only (`403` otherwise)** — it decides whether code runs on the user's Mac. `409` if `id` is unknown or already resolved. |
+| `POST /claude-code/deny` | `{id}` | Same as `approve` but resolves as deny (loopback-only, `403` / `409` as above). |
+| `GET /claude-code/pending` | — | `{"pending":[{id,tool,hint}]}` — what's currently awaiting a voice answer. |
+
+### Config
+
+- **Plugin** (`~/.config/claude-code-buddy.json`) — new flag `approval_enabled`
+  (bool, default **`false`**). It is **opt-in** because it changes how Claude Code
+  prompts you. When `false`, the hook does nothing and the **native dialog** shows.
+- **Daemon** (`config/buddy.json`) — `code_approval_ttl_sec` (default **55**): how
+  long a request long-polls before returning `"timeout"`.
+
+### Fail-safe
+
+The hook is **fail-open to the native dialog** and **never auto-approves on an
+error path**. On any of: feature disabled, no device connected, device
+unreachable, timeout, or any other error — the hook prints **nothing** and exits
+`0`, so Claude Code shows its **normal** permission dialog.
+
+### Prerequisites / caveats
+
+- **macOS Local Network Privacy** must grant **Local Network** to the app running
+  Claude Code (the hook's `python3` must reach the device IP) — the same gate as
+  the outbound push (see [below](#troubleshooting-macos-local-network)).
+- **Headless `-p` mode:** `PermissionRequest` does not fire, so voice-approve is
+  out of scope there.
+
 ## Discovery and config
 
 - **Discovery** — the plugin finds the device via **mDNS** service type

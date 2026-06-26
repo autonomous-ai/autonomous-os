@@ -6,6 +6,7 @@
   "device_url": "http://127.0.0.1:5000",
   "approval_timeout_sec": 30,
   "narration_lang": "vi",
+  "code_approval_ttl_sec": 55,
   "led_mapping": {
     "sleep": { "action": "off" },
     "idle": { "action": "none" },
