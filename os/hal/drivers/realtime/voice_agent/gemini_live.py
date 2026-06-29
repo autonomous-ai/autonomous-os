@@ -275,6 +275,16 @@ class GeminiLiveAgent(VoiceAgentBase):
                 video=types.Blob(data=buf.tobytes(), mime_type="image/jpeg")
             )
         elif isinstance(input, FunctionCallResultInput):
+            # Fire-and-forget tools (trigger_response=False, e.g. express_emotion)
+            # must NOT be acknowledged on Gemini Live: unlike OpenAI (where the
+            # result is a conversation item and response.create is a separate call),
+            # Gemini's send_tool_response CONTINUES the turn — the model then
+            # RE-GENERATES and re-speaks its whole reply, double-billing TTS
+            # (device-observed 2026-06-29: reply spoken twice, with express_emotion
+            # logged between the two copies). The side effect already ran; just skip
+            # the ack. delegate_to_main keeps trigger_response=True and is sent.
+            if not input.trigger_response:
+                return
             # input.output is normally a JSON object string, but send_function_result()
             # is public and may be handed arbitrary text — Gemini's response field
             # requires a dict, so coerce non-object/invalid payloads instead of
