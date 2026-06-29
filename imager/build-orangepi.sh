@@ -312,12 +312,11 @@ openclaw plugins install @openclaw/slack@${OPENCLAW_VERSION} --force 2>&1 || ech
 curl -fsSL "https://github.com/mikefarah/yq/releases/download/v4.46.1/yq_linux_arm64" -o /usr/local/bin/yq
 chmod +x /usr/local/bin/yq
 
-# ── Hermes CLI binary pre-bake ────────────────────────────────────────────────
-# Run the same installer stages as install.sh, minus gateway/config/migrate.
-# Baking the binary + venv here means switch-runtime's install.sh skips the
-# slow git-clone + uv-sync on the device (stages fast-path because they detect
-# the existing install). Everything else (service unit, presync, claw migrate)
-# is handled by install.sh at actual switch time via Go switch-runtime.
+# ── Hermes CLI binary + gateway service pre-bake ─────────────────────────────
+# Stage 1 — binary: run the same installer stages as install.sh, skipping
+# gateway/config/migrate. Baking the binary + venv here means install.sh's
+# "install Hermes CLI" block fast-paths (detect existing install) so the only
+# real work left at device-install time is `hermes gateway install --system`.
 echo "[stage] hermes CLI binary pre-bake"
 HERMES_INSTALLER=\$(mktemp)
 curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o "\$HERMES_INSTALLER"
@@ -328,6 +327,35 @@ done
 rm -f "\$HERMES_INSTALLER"
 echo "git" >/usr/local/lib/hermes-agent/.install_method 2>/dev/null || true
 hermes --version || true
+
+# Stage 2 — gateway service: install hermes-gateway.service at image-build time
+# so EnsureOnboarding (internal/hermes/onboarding.go) never needs internet just
+# to get the gateway running. hermesGatewayInstalled() checks
+# /usr/local/lib/os-runtimes/hermes/service; if present it skips install.sh and
+# goes straight to presync — offline-safe for AP-mode first boot.
+# systemctl calls inside `hermes gateway install` fail in chroot (no running
+# systemd) but that's expected — the unit FILE is what matters and systemd picks
+# it up automatically on real first boot.
+echo "[stage] hermes gateway service pre-bake"
+yes y | hermes gateway install --system --run-as-user root || true
+# Remove the auto-start symlink if gateway install created one — hermes-gateway
+# needs config.yaml (written by presync during EnsureOnboarding) before it can
+# start; os-server starts it explicitly via restartHermesGateway() after presync.
+rm -f /etc/systemd/system/multi-user.target.wants/hermes-gateway.service 2>/dev/null || true
+# Write os-server's marker + verify hook (mirrors install.sh lines 170-182) only
+# when the unit file was actually written — guards against a silent chroot failure.
+if [ -f /etc/systemd/system/hermes-gateway.service ]; then
+  mkdir -p /usr/local/lib/os-runtimes/hermes
+  echo "hermes-gateway" >/usr/local/lib/os-runtimes/hermes/service
+  cat >/usr/local/lib/os-runtimes/hermes/verify <<'VERIFY'
+#!/usr/bin/env bash
+command -v hermes >/dev/null 2>&1
+VERIFY
+  chmod +x /usr/local/lib/os-runtimes/hermes/verify
+  echo "[hermes-prebake] hermes-gateway.service baked + marker written — no internet needed at setup time"
+else
+  echo "[hermes-prebake] WARN: hermes-gateway.service not written (chroot/systemctl issue?); EnsureOnboarding will install at setup time"
+fi
 
 # ── uv (Python pkg mgr for HAL) ───────────────────────────────────────────
 echo "[stage] uv"

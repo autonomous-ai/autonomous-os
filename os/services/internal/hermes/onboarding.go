@@ -39,11 +39,14 @@ func hermesGatewayInstalled() bool {
 	return err == nil
 }
 
-// runInstall materializes the embedded install.sh and runs it with bash. On a
-// device where the imager pre-baked the hermes binary (PR #68), the upstream
-// installer stages fast-path (detect existing install) so the only real work is
-// `hermes gateway install --system` + unit declaration — typically < 60 s.
-// Timeout is generous (10 min) to cover cold-start scenarios without a binary.
+// runInstall materializes the embedded install.sh and runs it with bash.
+// Primary path: imager pre-bakes hermes-gateway.service (build-orangepi.sh stage 2)
+// so hermesGatewayInstalled() returns true and this is never called on new images.
+// Fallback path: devices built before the gateway pre-bake step, or any image where
+// the hermes-gateway.service write failed at build time. Requires internet (install.sh
+// curls hermes-agent.nousresearch.com); called from SetupAgent → EnsureOnboarding
+// AFTER setup wizard connects WiFi, so internet is available at that point.
+// Timeout is generous (10 min) to cover full-install scenarios without a pre-baked binary.
 func (s *HermesService) runInstall() error {
 	f, err := os.CreateTemp("", "hermes-install-*.sh")
 	if err != nil {
