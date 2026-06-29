@@ -5,7 +5,7 @@ name: Autonomous Lamp
 type: desk_robot
 boards: [raspberry_pi_4, raspberry_pi_5, orangepi_sun60]
 gateway:
-  default: openclaw
+  default: hermes
   protocol: websocket
 capabilities:
   audio:        { routes: [audio, speaker, voice], required: true }
