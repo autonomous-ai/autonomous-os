@@ -19,6 +19,7 @@ from google.genai.live import AsyncSession
 from websockets.exceptions import ConnectionClosed
 
 from hal.drivers.realtime.config import GeminiConfig
+from hal.drivers.realtime.enums import GeminiThinkingLevel
 from hal.drivers.realtime.models import (
     AgentInputEvent,
     AudioCommitEvent,
@@ -133,6 +134,26 @@ class GeminiLiveAgent(VoiceAgentBase):
             [lang] if lang and self._config.use_language_codes else None
         )
 
+        # Thinking control is model-family-specific:
+        #   - 2.5 (incl. native-audio): thinking_budget (0 = OFF, -1 = dynamic).
+        #   - 3.x: thinking_level (MINIMAL..HIGH).
+        # Passing thinking_level to a 2.5 model is a NO-OP — the model keeps its
+        # default thinking budget and THINKS OUT LOUD, vocalizing chain-of-thought
+        # into the audio (device 2026-06-29: "The user is posing a classic riddle.
+        # I need to deduce..." spoken before the real answer). include_thoughts=False
+        # does NOT stop native audio from speaking reasoning. So on 2.5, map the
+        # level to a budget: MINIMAL → 0 (thinking off → no leak), anything higher
+        # → -1 (dynamic) for users who deliberately want reasoning depth.
+        if "2.5" in self._config.model or "native-audio" in self._config.model:
+            budget = 0 if self._config.thinking_level == GeminiThinkingLevel.MINIMAL else -1
+            thinking_config = types.ThinkingConfig(
+                thinking_budget=budget, include_thoughts=False
+            )
+        else:
+            thinking_config = types.ThinkingConfig(
+                thinking_level=self._config.thinking_level.value, include_thoughts=False
+            )
+
         live_config: types.LiveConnectConfig = types.LiveConnectConfig(
             response_modalities=[types.Modality.AUDIO],
             speech_config=types.SpeechConfig(
@@ -161,14 +182,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     disabled=self._vad_disabled,
                 ),
             ),
-            thinking_config=types.ThinkingConfig(
-                thinking_level=self._config.thinking_level.value,
-                # Don't return thought summaries to the client — otherwise the
-                # model's reasoning leaks into model_turn parts and gets spoken /
-                # transcribed. We still filter thought parts on parse (below) as a
-                # second line of defense.
-                include_thoughts=False,
-            ),
+            thinking_config=thinking_config,
             # NO context_window_compression. DO NOT re-add it while running behind the
             # campaign-api proxy: when compression fires the Gemini server performs it
             # via a session-resumption handoff (sessionResumptionUpdate + CLOSE 1000),
