@@ -57,6 +57,20 @@ def setup_logging() -> logging.Logger:
     _file.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     _root.addHandler(_file)
 
+    # Dedicated realtime token/cost log — its own file, kept OUT of server.log
+    # and the console (propagate=False) so per-turn "[realtime] Gemini usage"
+    # lines don't drown the main log and can be tailed/parsed on their own.
+    _usage = logging.getLogger("hal.realtime.usage")
+    _usage.setLevel(logging.DEBUG)
+    _usage_file = logging.handlers.RotatingFileHandler(
+        log_dir / "gemini_usage.log",
+        maxBytes=5 * 1024 * 1024,
+        backupCount=3,
+    )
+    _usage_file.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    _usage.addHandler(_usage_file)
+    _usage.propagate = False
+
     # GELF handler: send INFO+ logs to centralized Graylog
     try:
         from hal.drivers.gelf_handler import GELFHandler

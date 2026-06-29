@@ -38,6 +38,10 @@ from hal.drivers.realtime.utils import float32_to_pcm16_bytes, pcm16_bytes_to_fl
 from hal.drivers.realtime.voice_agent.base import VoiceAgentBase
 
 logger = logging.getLogger(__name__)
+# Per-turn token/cost lines go to their own file (gemini_usage.log) via a
+# dedicated logger configured in server_support/log_setup.py (propagate=False),
+# so they don't mix into server.log.
+usage_logger = logging.getLogger("hal.realtime.usage")
 
 
 class GeminiLiveAgent(VoiceAgentBase):
@@ -317,9 +321,10 @@ class GeminiLiveAgent(VoiceAgentBase):
                 # cache is not hitting (e.g. session churn) — that's the cost red flag.
                 cached = getattr(um, "cached_content_token_count", 0) or 0
                 cost_cached = max(0.0, cost - cached * rates[("in", "TEXT")] * 0.90 / 1_000_000)
-                logger.debug(
-                    "[realtime] Gemini usage: %s +unattr(%din/%dout) | cached=%dtok "
-                    "total=%dtok est_full>=$%.5f est_cached>=$%.5f",
+                usage_logger.info(
+                    "[realtime] Gemini usage: model=%s %s +unattr(%din/%dout) | "
+                    "cached=%dtok total=%dtok est_full>=$%.5f est_cached>=$%.5f",
+                    self._config.model,
                     " ".join(parts) or "-", unattr_in, unattr_out, cached,
                     um.total_token_count or 0, cost, cost_cached,
                 )
