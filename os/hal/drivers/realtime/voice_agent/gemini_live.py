@@ -43,6 +43,39 @@ logger = logging.getLogger(__name__)
 # so they don't mix into server.log.
 usage_logger = logging.getLogger("hal.realtime.usage")
 
+# Gemini Live pricing, USD per 1M tokens, keyed (direction, modality), PER MODEL.
+# Source: ai.google.dev/gemini-api/docs/pricing (verified 2026-06-29). Audio rates
+# happen to match across these models ($3 in / $12 out) — only text differs — but
+# the table is explicit per model so adding a new model is one entry and a wrong
+# audio rate can't hide behind a shared default. Keys match as a SUBSTRING of
+# self._config.model so a dated preview suffix (…-preview-12-2025) still resolves.
+_GEMINI_RATES: dict[str, dict[tuple[str, str], float]] = {
+    "gemini-2.5-flash-native-audio": {
+        ("in", "TEXT"): 0.50, ("in", "AUDIO"): 3.0,
+        ("out", "TEXT"): 2.0, ("out", "AUDIO"): 12.0,
+    },
+    "gemini-3.1-flash-live": {
+        ("in", "TEXT"): 0.75, ("in", "AUDIO"): 3.0,
+        ("out", "TEXT"): 4.5, ("out", "AUDIO"): 12.0,
+    },
+}
+# Unknown model → fall back to the entry with the highest text-out rate (the
+# dominant text cost), so a future/untabled model logs a cost CEILING rather than
+# an under-report. Avoids the old `"native-audio" in model` heuristic mis-pricing
+# a hypothetical 3.x native-audio model at 2.5 rates.
+_GEMINI_RATES_FALLBACK: dict[tuple[str, str], float] = max(
+    _GEMINI_RATES.values(), key=lambda r: r[("out", "TEXT")]
+)
+
+
+def _gemini_rates_for(model: str) -> dict[tuple[str, str], float]:
+    """Resolve the per-1M-token rate table for a model name (substring match);
+    unknown models fall back to the most expensive table (cost = ceiling)."""
+    for key, table in _GEMINI_RATES.items():
+        if key in model:
+            return table
+    return _GEMINI_RATES_FALLBACK
+
 
 class GeminiLiveAgent(VoiceAgentBase):
     def __init__(
@@ -287,16 +320,10 @@ class GeminiLiveAgent(VoiceAgentBase):
                 # turn_complete, and the server_content branch returns on
                 # turn_complete — so a check placed after it never runs.
                 um = message.usage_metadata
-                # Rates USD per 1M tokens by (direction, modality), model-aware
-                # (ai.google.dev/gemini-api/docs/pricing, 2026-06). Audio is identical
-                # across models; text-in/out is where 2.5 native-audio is cheaper
-                # ($0.50/$2.00 vs 3.1 $0.75/$4.50). Without this the log would bill 2.5
-                # at 3.1 rates and over-state its cost ~50% on text.
-                _is_25 = "2.5" in self._config.model or "native-audio" in self._config.model
-                rates = {
-                    ("in", "TEXT"): 0.50 if _is_25 else 0.75, ("in", "AUDIO"): 3.0,
-                    ("out", "TEXT"): 2.0 if _is_25 else 4.5, ("out", "AUDIO"): 12.0,
-                }
+                # Per-model rate table (see _GEMINI_RATES above). Resolved by model
+                # name so 2.5 native-audio (cheaper text) and 3.1 Live are billed at
+                # their own rates; unknown models fall back to a cost ceiling.
+                rates = _gemini_rates_for(self._config.model)
                 parts, cost, attributed = [], 0.0, {"in": 0, "out": 0}
                 for direction, details in (
                     ("in", um.prompt_tokens_details),
