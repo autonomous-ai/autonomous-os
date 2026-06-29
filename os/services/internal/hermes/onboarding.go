@@ -30,6 +30,47 @@ func (s *HermesService) SetupAgent(_ domain.SetupRequest) error {
 	return s.EnsureOnboarding()
 }
 
+// hermesGatewayInstalled reports whether install.sh has completed at least once.
+// It checks /usr/local/lib/os-runtimes/hermes/service, which install.sh writes
+// as its final step. Absent → install.sh never ran → hermes-gateway.service does
+// not exist and calling systemctl restart would fail.
+func hermesGatewayInstalled() bool {
+	_, err := os.Stat("/usr/local/lib/os-runtimes/hermes/service")
+	return err == nil
+}
+
+// runInstall materializes the embedded install.sh and runs it with bash. On a
+// device where the imager pre-baked the hermes binary (PR #68), the upstream
+// installer stages fast-path (detect existing install) so the only real work is
+// `hermes gateway install --system` + unit declaration — typically < 60 s.
+// Timeout is generous (10 min) to cover cold-start scenarios without a binary.
+func (s *HermesService) runInstall() error {
+	f, err := os.CreateTemp("", "hermes-install-*.sh")
+	if err != nil {
+		return fmt.Errorf("create temp: %w", err)
+	}
+	path := f.Name()
+	defer os.Remove(path)
+	if _, err := f.Write(InstallScript); err != nil {
+		f.Close()
+		return fmt.Errorf("write script: %w", err)
+	}
+	f.Close()
+	if err := os.Chmod(path, 0o755); err != nil {
+		return fmt.Errorf("chmod: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "bash", path).CombinedOutput()
+	if len(out) > 0 {
+		slog.Info("hermes install output", "component", "hermes", "output", strings.TrimSpace(string(out)))
+	}
+	if err != nil {
+		return fmt.Errorf("run install: %w", err)
+	}
+	return nil
+}
+
 // EnsureOnboarding reconciles the device-side Hermes config on every os-server
 // boot by running the embedded presync hook (PresyncScript) — the SAME script
 // switch-runtime runs right before hermes starts.
@@ -51,6 +92,22 @@ func (s *HermesService) SetupAgent(_ domain.SetupRequest) error {
 // a steady boot writes nothing. We hash config.yaml around the run and restart
 // hermes-gateway ONLY when it actually changed, so there is no restart loop.
 func (s *HermesService) EnsureOnboarding() error {
+	// If hermes-gateway.service was never installed (install.sh has not run),
+	// run the full installer now. This covers the first-boot-as-hermes path:
+	// DEVICE.md gateway.default: hermes → SeedAgentRuntimeFromGateway seeds
+	// config.json → but UpdateAgentRuntime (the normal install owner) is never
+	// called when there is no runtime switch. install.sh is self-contained and
+	// starts hermes-gateway at the end, so we return immediately after — no
+	// separate presync or restart step needed.
+	if !hermesGatewayInstalled() {
+		slog.Info("hermes gateway not installed, running installer", "component", "hermes")
+		if err := s.runInstall(); err != nil {
+			return fmt.Errorf("hermes install: %w", err)
+		}
+		slog.Info("hermes installer completed, gateway started", "component", "hermes")
+		return nil
+	}
+
 	// Hash both config.yaml AND .env: presync writes channel tokens to .env, so a
 	// channel-only change (e.g. adding Slack) leaves config.yaml untouched and must
 	// still trigger a gateway restart for the Hermes server to pick the channel up.
