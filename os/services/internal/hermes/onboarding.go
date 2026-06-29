@@ -56,8 +56,13 @@ func (s *HermesService) EnsureOnboarding() error {
 	// still trigger a gateway restart for the Hermes server to pick the channel up.
 	before := fileHash(hermesConfigYAML) + fileHash(hermesEnvFile)
 
+	// Presync is best-effort: a failure must not block gateway startup. A device
+	// that just had config.json written (setup wizard, first boot) needs the gateway
+	// running even when presync hits a transient error (missing dep, bad env, etc.).
+	// We log the error and continue so ensureGatewayUnit + restartHermesGateway still
+	// fire below.
 	if err := s.runPresync(); err != nil {
-		return fmt.Errorf("hermes presync: %w", err)
+		slog.Warn("hermes presync failed, continuing with gateway start", "component", "hermes", "error", err)
 	}
 	// config "changed" covers config.yaml AND .env: presync writes channel tokens to
 	// .env, so a channel-only change (e.g. adding Slack) leaves config.yaml untouched
