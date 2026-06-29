@@ -46,8 +46,9 @@ async def emotion_analysis_ws(websocket: WebSocket):
         await websocket.close(code=1011, reason="Facial emotion model not loaded")
         return
 
-    session = await emotion_model.create_session()
+    session = None
     try:
+        session = await emotion_model.create_session()
         await session.start()
         while True:
             raw: str = await websocket.receive_text()
@@ -89,7 +90,8 @@ async def emotion_analysis_ws(websocket: WebSocket):
     except Exception:
         logger.exception("Facial emotion WebSocket handler crashed")
     finally:
-        await session.stop()
+        if session is not None:
+            await session.stop()
 
 
 @http_router.get("/emotion-labels")

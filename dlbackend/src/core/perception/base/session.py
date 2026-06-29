@@ -15,7 +15,6 @@ class PerceptionSessionBase(Generic[INPUT_T, OUTPUT_T, CONFIG_T], ABC):
         self._logger: logging.Logger = logging.getLogger(
             f"{self.__class__.__module__}.{self.__class__.__name__}"
         )
-        self._logger.setLevel(logging.DEBUG)
 
         self._config: CONFIG_T = config
         self._last_update_ts: float = -1
