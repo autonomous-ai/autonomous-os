@@ -302,6 +302,35 @@ sẽ mất log install đúng lúc cần. Theo dõi trực tiếp bằng
 > này trong `/usr/local/lib/os-runtimes/hermes/service` để `switch-runtime`
 > enable đúng unit (§11); `reset_hermes.go` nhắm tới cùng unit đó.
 
+### Unit gateway được tự-vá (pre-bake trong image + backstop runtime)
+
+`IsReady()` và cổng gác của device-setup (`WaitForAgentReady`,
+`internal/device/service.go`) đều chờ HTTP `/health` của gateway
+(`127.0.0.1:8642`). Việc đó cần **unit `hermes-gateway.service` tồn tại** — chỉ có
+binary `hermes` trên `PATH` (`hermes --version` chạy được) là **chưa đủ**. Unit
+bình thường do `install.sh` tạo ở lần switch hermes đầu, nhưng device có thể tới
+hermes mà *không* đi qua đường đó — ví dụ operator sửa tay `agent_runtime` trong
+`config.json` thành `hermes` sau factory reset. Không có unit thì gateway không bao
+giờ chạy, `WaitForAgentReady` time-out, `SetUpCompleted` vẫn `false`, device về AP
+mode, và triệu chứng nhìn giống "**WiFi không kết nối được**" dù WiFi thực ra đã
+associate thành công. Hai lớp khắc phục:
+
+- **A — pre-bake trong image** (`imager/build-orangepi.sh`): ngay sau khi pre-bake
+  binary Hermes CLI, image chạy `hermes gateway install --system` để ghi file unit,
+  rồi `systemctl disable hermes-gateway` để nó **không** auto-start lúc boot
+  (OpenClaw là runtime active mặc định; enable cả hai sẽ chạy 2 agent). Best-effort
+  — chroot lúc build không có systemd đang chạy, nên nếu CLI không tạo được unit ở
+  đó thì lớp B cài lúc runtime.
+- **B — backstop runtime** (`ensureGatewayUnit`, `internal/hermes/gateway.go`, gọi
+  từ `EnsureOnboarding`): khi unit vắng (`systemctl cat hermes-gateway` fail), nó
+  chạy `hermes gateway install --system` theo nhu cầu và khai lại file
+  `service`/`verify` cho switch-runtime. Nhanh — binary + venv đã pre-bake, nên chỉ
+  ghi unit (không git clone / `uv sync`). `EnsureOnboarding` sau đó **`systemctl
+  enable`** unit (factory reset disable nó — `reset_hermes.go` bước 4, "SetupAgent
+  re-enables" — và unit vừa cài cũng chưa enable cho boot) và (re)start nó khi config
+  đổi, khi unit vừa được cài, **hoặc** khi unit có nhưng không active (crash /
+  disabled).
+
 ### Hook presync làm chủ `config.yaml` + skills
 
 Model config trong `config.yaml` và skills openclaw-imported do **hook presync**

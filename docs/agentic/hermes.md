@@ -314,6 +314,35 @@ inline, a direct `bash install.sh` is fully configured and running.
 > this in `/usr/local/lib/os-runtimes/hermes/service` so `switch-runtime` enables
 > the right unit (§11); `reset_hermes.go` targets the same unit.
 
+### The gateway unit is self-healed (image pre-bake + runtime backstop)
+
+`IsReady()` and the device-setup gate (`WaitForAgentReady`, `internal/device/service.go`)
+both wait on the gateway's HTTP `/health` (`127.0.0.1:8642`). That requires the
+**`hermes-gateway.service` unit to exist** — having the `hermes` binary on `PATH`
+(`hermes --version` works) is **not** sufficient. The unit is normally created by
+`install.sh` on the first switch to hermes, but a device can reach hermes *without*
+that path — e.g. an operator hand-edits `config.json`'s `agent_runtime` to `hermes`
+after a factory reset. With no unit, the gateway never starts, `WaitForAgentReady`
+times out, `SetUpCompleted` stays `false`, the device falls back to AP mode, and the
+symptom reads as "**WiFi won't connect**" even though the WiFi association itself
+succeeded. Two layers close this gap:
+
+- **A — image pre-bake** (`imager/build-orangepi.sh`): right after pre-baking the
+  Hermes CLI binary, the image runs `hermes gateway install --system` to write the
+  unit file, then `systemctl disable hermes-gateway` so it does **not** auto-start at
+  boot (OpenClaw is the default active runtime; enabling both would run two agents).
+  Best-effort — the build chroot has no running systemd, so if the CLI cannot create
+  the unit there, layer B installs it at runtime.
+- **B — runtime backstop** (`ensureGatewayUnit`, `internal/hermes/gateway.go`, called
+  from `EnsureOnboarding`): when the unit is absent (`systemctl cat hermes-gateway`
+  fails), it runs `hermes gateway install --system` on demand and re-declares the
+  switch-runtime `service`/`verify` files. This is fast — the binary + venv are
+  already pre-baked, so it only writes the unit (no git clone / `uv sync`).
+  `EnsureOnboarding` then **`systemctl enable`s** the unit (factory reset disables it
+  — `reset_hermes.go` step 4, "SetupAgent re-enables" — and a freshly installed one
+  is not enabled for boot) and (re)starts it whenever config changed, the unit was
+  just installed, **or** the unit exists but is not active (crashed / disabled).
+
 ### The presync hook owns `config.yaml` + skills
 
 The Hermes model config in `config.yaml` and the OpenClaw-imported skills are owned

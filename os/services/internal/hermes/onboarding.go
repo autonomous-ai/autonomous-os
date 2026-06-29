@@ -76,14 +76,30 @@ func (s *HermesService) EnsureOnboarding() error {
 	// all are loaded only at gateway start, so an unchanged boot is a no-op.
 	skillsRestored := s.ensureSkills()
 
-	if !configChanged && !hookChanged && !skillsRestored {
-		slog.Info("hermes onboarding: config + hooks + skills unchanged, no restart", "component", "hermes")
+	// B (self-heal): make sure the hermes-gateway.service unit actually exists before
+	// we rely on (re)starting it. A device that reached hermes WITHOUT switch-runtime
+	// (e.g. a hand-edited config.json agent_runtime=hermes after factory reset) has the
+	// pre-baked binary but no unit, so IsReady()'s /health probe — and the setup
+	// WaitForAgentReady gate — would fail forever. Install it on demand (fast; binary
+	// is pre-baked). Also (re)start when the unit exists but is not running: factory
+	// reset disables+stops it (reset.go step 4, "SetupAgent re-enables"), and it can
+	// crash on a stale config that presync just fixed.
+	gatewayInstalled := s.ensureGatewayUnit()
+	gatewayDown := !gatewayActive()
+
+	if !configChanged && !hookChanged && !skillsRestored && !gatewayInstalled && !gatewayDown {
+		slog.Info("hermes onboarding: config + hooks + skills unchanged, gateway up — no restart", "component", "hermes")
 		return nil
 	}
 
-	slog.Info("hermes onboarding: change detected, restarting gateway",
+	slog.Info("hermes onboarding: (re)starting gateway",
 		"component", "hermes", "unit", hermesGatewayUnit,
-		"config_changed", configChanged, "hook_changed", hookChanged, "skills_restored", skillsRestored)
+		"config_changed", configChanged, "hook_changed", hookChanged, "skills_restored", skillsRestored,
+		"gateway_installed", gatewayInstalled, "gateway_down", gatewayDown)
+	// Re-enable so hermes survives a reboot — factory reset disabled the unit, and a
+	// freshly installed one is not enabled for boot. Best-effort; restart still starts
+	// it for this session even if enable fails.
+	enableHermesGateway()
 	if err := restartHermesGateway(); err != nil {
 		// Non-fatal: the new config/hook is on disk; the gateway picks it up on its
 		// next (re)start even if this one failed. Don't block the os-server boot path.

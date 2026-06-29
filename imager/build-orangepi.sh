@@ -329,6 +329,40 @@ rm -f "\$HERMES_INSTALLER"
 echo "git" >/usr/local/lib/hermes-agent/.install_method 2>/dev/null || true
 hermes --version || true
 
+# ── Hermes gateway unit pre-bake (A — created, left DISABLED) ────────────────
+# Pre-baking the binary above is not enough: IsReady()/device setup wait on the
+# hermes-gateway HTTP /health, which needs the hermes-gateway.service unit to
+# exist. switch-runtime/install.sh creates it on the first switch to hermes — but
+# a hand-edited config.json agent_runtime=hermes flip never runs that path, so the
+# unit is absent, the gateway never starts, WaitForAgentReady times out,
+# SetUpCompleted stays false, the device falls back to AP mode, and the symptom
+# reads as "WiFi won't connect". Create the unit here so it is ready to start.
+# We do NOT enable it at boot: openclaw is the default active runtime and enabling
+# both would run two agents. os-server's EnsureOnboarding (B) and switch-runtime
+# enable+start it when hermes actually becomes active. Best-effort: chroot has no
+# running systemd, so if the CLI cannot write the unit here, EnsureOnboarding (B)
+# installs it at runtime instead — that is why we ship both.
+echo "[stage] hermes-gateway.service unit pre-bake (created, left disabled)"
+if command -v hermes >/dev/null 2>&1; then
+  set +o pipefail
+  yes y | hermes gateway install --system --run-as-user root \
+    || echo "WARN: hermes gateway unit write returned non-zero (chroot has no systemd; os-server EnsureOnboarding installs it at runtime)"
+  set -o pipefail
+  systemctl disable hermes-gateway 2>/dev/null || true
+  if systemctl cat hermes-gateway >/dev/null 2>&1 || [ -f /etc/systemd/system/hermes-gateway.service ]; then
+    echo "[stage] hermes-gateway unit present — declaring for switch-runtime"
+    mkdir -p /usr/local/lib/os-runtimes/hermes
+    echo "hermes-gateway" >/usr/local/lib/os-runtimes/hermes/service
+    cat >/usr/local/lib/os-runtimes/hermes/verify <<'VERIFY'
+#!/usr/bin/env bash
+command -v hermes >/dev/null 2>&1
+VERIFY
+    chmod +x /usr/local/lib/os-runtimes/hermes/verify
+  else
+    echo "WARN: hermes-gateway unit not created in chroot — switch-runtime / EnsureOnboarding will install on first hermes activation"
+  fi
+fi
+
 # ── uv (Python pkg mgr for HAL) ───────────────────────────────────────────
 echo "[stage] uv"
 if ! command -v uv &>/dev/null; then
