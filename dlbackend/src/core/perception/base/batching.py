@@ -48,7 +48,6 @@ class InputBatcher(Generic[INPUT_T, OUTPUT_T]):
         self._logger: logging.Logger = logging.getLogger(
             f"{self.__class__.__module__}.{self.__class__.__name__}"
         )
-        self._logger.setLevel(logging.DEBUG)
 
         self._running_loop: asyncio.Task[None] | None = None
         self._running: bool = False
@@ -127,6 +126,8 @@ class InputBatcher(Generic[INPUT_T, OUTPUT_T]):
         to group items into sub-batches (items with the same kwargs get
         batched together).
         """
+        if not self._running:
+            raise RuntimeError("InputBatcher is not running")
         queue = self._ensure_loop()
         kwargs_key = deep_hash(kwargs) if kwargs else 0
         futures: list[asyncio.Future[OUTPUT_T]] = []

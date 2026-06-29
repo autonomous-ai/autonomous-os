@@ -42,8 +42,9 @@ async def action_analysis_ws(websocket: WebSocket):
         await websocket.close(code=1011, reason="Action model not loaded")
         return
 
-    session = await action_model.create_session()
+    session = None
     try:
+        session = await action_model.create_session()
         while True:
             raw = await websocket.receive_text()
             try:
@@ -85,4 +86,5 @@ async def action_analysis_ws(websocket: WebSocket):
     except Exception:
         logger.exception("Action analysis WebSocket handler crashed")
     finally:
-        await session.stop()
+        if session is not None:
+            await session.stop()

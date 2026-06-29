@@ -16,7 +16,6 @@ class InputProcessorBase(Generic[INPUT_T, OUTPUT_T], ABC):
         self._logger: logging.Logger = logging.getLogger(
             f"{self.__class__.__module__}.{self.__class__.__name__}"
         )
-        self._logger.setLevel(logging.DEBUG)
         self._lock: threading.RLock = threading.RLock()
 
     @abstractmethod

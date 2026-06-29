@@ -55,6 +55,7 @@ class ActionPerceptionSession(
     async def start(self) -> None:
         if self._running:
             self._logger.info("Already running")
+            return
         self._running = True
 
     @override

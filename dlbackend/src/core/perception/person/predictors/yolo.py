@@ -62,6 +62,7 @@ class YOLOPersonDetector(PersonDetector):
         """Load the YOLO model weights (blocking)."""
         if self._running:
             self._logger.info("Already running")
+            return
 
         self._model = YOLO(self._model_name)
         self._running = True

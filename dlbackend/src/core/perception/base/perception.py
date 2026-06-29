@@ -10,7 +10,6 @@ class PerceptionBase(Generic[SESSION_T], ABC):
         self._logger: logging.Logger = logging.getLogger(
             f"{self.__class__.__module__}.{self.__class__.__name__}"
         )
-        self._logger.setLevel(logging.DEBUG)
 
         self._sessions_dict: dict[str, SESSION_T] = {}
 

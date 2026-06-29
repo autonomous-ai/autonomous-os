@@ -36,7 +36,6 @@ class PredictorBase(Generic[INPUT_T, OUTPUT_T], ABC):
         self._logger: logging.Logger = logging.getLogger(
             f"{self.__class__.__module__}.{self.__class__.__name__}"
         )
-        self._logger.setLevel(logging.DEBUG)
         self._batch_size: int = get_or_default(batch_size, self.DEFAULT_BATCH_SIZE)
         self._lock: threading.RLock = threading.RLock()
 
@@ -79,12 +78,12 @@ class PredictorBase(Generic[INPUT_T, OUTPUT_T], ABC):
     def predict(
         self, input: list[INPUT_T], *, preprocess: bool = True, **kwargs: Any
     ) -> list[OUTPUT_T]:
-        """Make prediction on a batch of input. Thread-safe via global GPU lock.
+        """Make prediction on a batch of input.
 
-        The entire predict call (preprocessing + inference + postprocessing)
-        runs under ``_gpu_lock`` to prevent CUDA stream collisions between
-        concurrent sessions. Large batches are chunked by ``_batch_size``
-        to limit peak memory.
+        Each subclass acquires ``gpu_lock`` around the ONNX ``session.run()``
+        call inside ``_predict_impl()``, serializing GPU access while allowing
+        preprocessing to run concurrently. Large batches are chunked by
+        ``_batch_size`` to limit peak memory.
 
         Args:
             input: Batch of inputs.

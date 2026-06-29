@@ -49,8 +49,9 @@ async def object_detection_ws(websocket: WebSocket, detector_name: str):
         await websocket.close(code=1011, reason=f"Object detector '{detector_name}' not loaded")
         return
 
-    session = await object_model.create_session()
+    session = None
     try:
+        session = await object_model.create_session()
         while True:
             raw: str = await websocket.receive_text()
             try:
@@ -92,7 +93,8 @@ async def object_detection_ws(websocket: WebSocket, detector_name: str):
     except Exception:
         logger.exception("Object detection WebSocket handler crashed (%s)", detector_name)
     finally:
-        await session.stop()
+        if session is not None:
+            await session.stop()
 
 
 @http_router.post("/object-detect/{detector_name}", response_model=ObjectDetectResponse)
