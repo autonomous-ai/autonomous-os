@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import type { DisplayEvent } from "../types";
 import type { FlowStage, ActiveFlowStage } from "./types";
 import { FLOW_NODES } from "./types";
@@ -16,6 +17,7 @@ export function CanvasModal({
 }) {
   return (
     <div
+      id="FLOW_CANVAS_MODAL_OVERLAY" data-region="FLOW_CANVAS_MODAL_OVERLAY"
       style={{
         position: "fixed", inset: 0, zIndex: 100,
         background: "rgba(0,0,0,0.72)", backdropFilter: "blur(4px)",
@@ -24,6 +26,7 @@ export function CanvasModal({
       onClick={onClose}
     >
       <div
+        id="FLOW_CANVAS_MODAL_PANEL" data-region="FLOW_CANVAS_MODAL_PANEL"
         style={{
           background: "var(--lm-card)", border: "1px solid var(--lm-border)",
           borderRadius: 16, padding: 32, maxWidth: 820, width: "90vw",
@@ -32,10 +35,11 @@ export function CanvasModal({
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
           <span style={{ fontSize: 14, fontWeight: 700, color: "var(--lm-text)" }}>Turn Workflow</span>
-          <button onClick={onClose} style={{
+          <button onClick={onClose} aria-label="Close" style={{
             background: "none", border: "none", color: "var(--lm-text-muted)",
-            cursor: "pointer", fontSize: 16, lineHeight: 1,
-          }}>✕</button>
+            cursor: "pointer", lineHeight: 1,
+            display: "inline-flex", alignItems: "center",
+          }}><X size={16} strokeWidth={2.25} /></button>
         </div>
 
         <FlowDiagram activeStage={activeStage} visitedStages={visitedStages} turnEvents={turnEvents} />

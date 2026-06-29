@@ -1,13 +1,26 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
+import {
+  Megaphone, Timer, PauseCircle, Mic, Armchair, Ban, MessageSquare,
+  Volume2, TriangleAlert, Moon, Lightbulb, X, Workflow, Circle,
+} from "lucide-react";
 import type { Turn } from "./types";
-import { SOURCE_ICON, TURN_INPUT_FALLBACK } from "./types";
+import { TYPE_LUCIDE, TURN_INPUT_FALLBACK } from "./types";
 import { HW } from "../types";
+import { useTheme } from "@/lib/useTheme";
 import { turnIO, turnTokenStats, turnCurrentUser } from "./helpers";
 import { PoseBucketModal } from "./PoseBucketModal";
+import { UserAvatar } from "./UserAvatar";
 
-export function TurnBadge({ turn, pairTint, onViewPipeline }: { turn: Turn; pairTint?: string; onViewPipeline?: () => void }) {
+export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
+  turn: Turn;
+  pairTint?: string;
+  userPhotos?: Record<string, string>;
+  onViewPipeline?: () => void;
+}) {
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [bucketOpen, setBucketOpen] = useState(false);
+  const [, , themeClass] = useTheme();
   const formatTurnTime = (iso: string): string => {
     const date = new Date(iso);
     const diffMs = Date.now() - date.getTime();
@@ -29,7 +42,19 @@ export function TurnBadge({ turn, pairTint, onViewPipeline }: { turn: Turn; pair
   const statusColor = turn.status === "done" ? "var(--lm-green)"
     : turn.status === "error" ? "var(--lm-red)"
     : "var(--lm-amber)";
-  const icon = SOURCE_ICON[turn.type] ?? SOURCE_ICON.unknown;
+  const SourceIcon = TYPE_LUCIDE[turn.type] ?? Circle;
+  // Source icon takes the turn's source-category color (mic / cam / channel /
+  // web / cron / system) instead of a dim grey, so it stands out and doubles
+  // as a quick at-a-glance source cue. Falls back to teal for unmapped types.
+  const sourceColor =
+    /voice|sound|speech_emotion/.test(turn.type) ? "var(--lm-purple)"        // mic
+    : /motion|presence|light|emotion|pose|environment/.test(turn.type) ? "var(--lm-blue)" // cam
+    : /telegram|discord|slack|wechat|channel/.test(turn.type) ? "var(--lm-cyan)"          // channel
+    : /web_chat/.test(turn.type) ? "var(--lm-teal)"                          // web
+    : /cron/.test(turn.type) ? "var(--lm-amber)"                            // cron
+    : /system|schedule|music/.test(turn.type) ? "var(--lm-text-dim)"        // system
+    : /touch|head_pat/.test(turn.type) ? "var(--lm-green)"                  // button
+    : "var(--lm-teal)";
   const { input, output, hwOutput, snapshotUrls, audioUrls, poseBucket } = turnIO(turn);
   // When a motion.activity turn folded in a posture nudge, append the
   // first two worst pose snapshots to the existing strip (capped to 3
@@ -67,7 +92,7 @@ export function TurnBadge({ turn, pairTint, onViewPipeline }: { turn: Turn; pair
   const pathLabel = turn.path === "agent" ? "Agent" : turn.path === "dropped" ? "dropped" : turn.path === "queued" ? "queued" : turn.path;
 
   return (
-    <div style={{
+    <div data-region="FLOW_TURN_CARD" data-turn-id={turn.id} data-turn-type={turn.type} style={{
       padding: "8px 10px",
       borderRadius: 8,
       background: pairTint || "var(--lm-surface)",
@@ -75,9 +100,21 @@ export function TurnBadge({ turn, pairTint, onViewPipeline }: { turn: Turn; pair
       fontSize: 11,
       cursor: "default",
     }}>
+      {/* Card header: the badge row (icon + type + path + status + user +
+          timing) and the time/id meta line — the part shown in the collapsed
+          turn card. Marked as a region so it can be targeted/inspected like
+          the other FLOW_* regions. */}
+      <div data-region="FLOW_TURN_CARD_HEADER">
       {/* Row 1: source icon + type + path + status tag + duration */}
-      <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 4, flexWrap: "wrap", rowGap: 3 }}>
-        <span style={{ fontSize: 14, lineHeight: 1 }}>{icon}</span>
+      <div data-region="FLOW_TURN_CARD_BADGES" style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 4, flexWrap: "wrap", rowGap: 3 }}>
+        <span className="lm-turn-src" style={{
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+          width: 18, height: 18, borderRadius: 5, flexShrink: 0,
+          color: sourceColor,
+          background: `color-mix(in srgb, ${sourceColor} 16%, transparent)`,
+        }}>
+          <SourceIcon size={12} strokeWidth={2.25} />
+        </span>
         <span style={{
           fontSize: 10, fontWeight: 700, color: "var(--lm-text)",
           textTransform: "uppercase" as const,
@@ -86,28 +123,38 @@ export function TurnBadge({ turn, pairTint, onViewPipeline }: { turn: Turn; pair
           fontSize: 8, padding: "1px 5px", borderRadius: 3,
           background: `${pathColor}18`, color: pathColor, fontWeight: 700,
         }}>{pathLabel}</span>
-        <span style={{
-          fontSize: 8, padding: "1px 5px", borderRadius: 3,
-          background: `${statusColor}18`, color: statusColor, fontWeight: 700,
-          textTransform: "uppercase" as const,
-        }}>{statusLabel}</span>
+        <span
+          className={statusLabel === "ACTIVE" ? "lm-turn-active" : undefined}
+          style={{
+            fontSize: 8, padding: "1px 5px", borderRadius: 3,
+            background: `${statusColor}18`, color: statusColor, fontWeight: 700,
+            textTransform: "uppercase" as const,
+          }}
+        >{statusLabel}</span>
         {hasBroadcast && (
           <span style={{
+            display: "inline-flex", alignItems: "center", gap: 3,
             fontSize: 8, padding: "1px 5px", borderRadius: 3,
             background: "var(--lm-red-dim)", color: "var(--lm-red)", fontWeight: 700,
-          }}>📢 BROADCAST</span>
+          }}><Megaphone size={9} strokeWidth={2.5} /> BROADCAST</span>
         )}
         {currentUser && (() => {
           const isUnknown = currentUser === "unknown";
           const color = isUnknown ? "var(--lm-text-muted)" : "var(--lm-teal)";
+          const photo = !isUnknown ? userPhotos?.[currentUser] : undefined;
           return (
             <span
               title={isUnknown ? "Current user: stranger/unknown" : `Current user: ${currentUser}`}
               style={{
-                fontSize: 8, padding: "1px 5px", borderRadius: 3,
+                display: "inline-flex", alignItems: "center", gap: 4,
+                fontSize: 8, padding: "1px 5px 1px 2px", borderRadius: 999,
                 background: `${color}18`, color, fontWeight: 700,
+                textTransform: "capitalize" as const,
               }}
-            >👤 {currentUser}</span>
+            >
+              <UserAvatar user={currentUser} photo={photo} size={13} color={color} />
+              {currentUser}
+            </span>
           );
         })()}
         {turn.endTime && (() => {
@@ -118,9 +165,10 @@ export function TurnBadge({ turn, pairTint, onViewPipeline }: { turn: Turn; pair
             : `${ms}ms`;
           const durColor = ms > 15_000 ? "var(--lm-red)" : ms > 5_000 ? "var(--lm-amber)" : "var(--lm-green)";
           return <span style={{
+            display: "inline-flex", alignItems: "center", gap: 3,
             fontSize: 8, padding: "1px 5px", borderRadius: 3,
             background: `${durColor}18`, color: durColor, fontWeight: 700,
-          }}>⏱ {label}</span>;
+          }}><Timer size={9} strokeWidth={2.5} /> {label}</span>;
         })()}
         {typeof turn.queuedForMs === "number" && turn.queuedForMs > 0 && (() => {
           const ms = turn.queuedForMs;
@@ -128,35 +176,43 @@ export function TurnBadge({ turn, pairTint, onViewPipeline }: { turn: Turn; pair
             : ms >= 1000 ? `${(ms / 1000).toFixed(1)}s`
             : `${ms}ms`;
           return <span style={{
+            display: "inline-flex", alignItems: "center", gap: 3,
             fontSize: 8, padding: "1px 5px", borderRadius: 3,
             background: "var(--lm-amber)18", color: "var(--lm-amber)", fontWeight: 700,
-          }} title="queued waiting for agent before processing">⏸ queued {label}</span>;
+          }} title="queued waiting for agent before processing"><PauseCircle size={9} strokeWidth={2.5} /> queued {label}</span>;
         })()}
       </div>
 
-      {/* Row 2: time */}
-      <div style={{
-        fontSize: 8,
-        color: "var(--lm-text)",
-        fontFamily: "monospace",
-        marginBottom: 3,
-        opacity: 0.95,
+      {/* Meta line: time + traceable id on one dim mono row. The id is a
+          debug detail (rarely read), so it's truncated to the tail and the
+          full value lives in `title` — keeping it from dominating the card. */}
+      <div data-region="FLOW_TURN_CARD_META" style={{
+        fontSize: 8.5, color: "var(--lm-text-muted)", fontFamily: "monospace",
+        marginBottom: 5, display: "flex", alignItems: "center", gap: 6,
+        whiteSpace: "nowrap", overflow: "hidden",
       }}>
-        {formatTurnTime(turn.startTime)}
+        <span style={{ color: "var(--lm-text-dim)", flexShrink: 0 }}>{formatTurnTime(turn.startTime)}</span>
+        <span style={{ opacity: 0.4, flexShrink: 0 }}>·</span>
+        <span
+          title={`${turn.id.startsWith("device-") ? "device id" : "agent uuid"}: ${turn.id}`}
+          style={{ overflow: "hidden", textOverflow: "ellipsis" }}
+        >
+          {turn.id.startsWith("device-") ? "device" : "uuid"}:…{turn.id.slice(-8)}
+        </span>
       </div>
-      {/* Turn ID for tracing — label by ID origin (device-emitted vs OpenClaw-assigned UUID) */}
-      <div style={{
-        fontSize: 8, color: "var(--lm-text)", fontFamily: "monospace", marginBottom: 3, opacity: 0.7,
-        overflowWrap: "anywhere" as const,
-      }}>
-        {turn.id.startsWith("device-") ? "device id" : "agent uuid"}: {turn.id}
       </div>
-      {/* Row 2: input */}
+      {/* Input — primary content, the loudest text in the card. */}
       <div style={{
-        fontSize: 11.5, color: "var(--lm-text-dim)", marginBottom: 3,
-        overflowWrap: "anywhere" as const, lineHeight: 1.45,
+        fontSize: 12, color: "var(--lm-text)", marginBottom: 4,
+        overflowWrap: "anywhere" as const, lineHeight: 1.5,
       }}>
-        <span style={{ color: "var(--lm-teal)", fontWeight: 600, marginRight: 4 }}>IN</span>
+        <span style={{
+          fontSize: 8, fontWeight: 700, letterSpacing: "0.06em",
+          color: "var(--lm-teal)", marginRight: 6,
+          padding: "1px 4px", borderRadius: 3,
+          background: "color-mix(in srgb, var(--lm-teal) 15%, transparent)",
+          verticalAlign: "1px",
+        }}>IN</span>
         {input || TURN_INPUT_FALLBACK}
       </div>
       {stripUrls.length > 0 && (
@@ -183,9 +239,12 @@ export function TurnBadge({ turn, pairTint, onViewPipeline }: { turn: Turn; pair
             <div key={i} style={{ display: "flex", alignItems: "center", gap: 4 }}>
               <span
                 title="Debug clip that produced this emotion — not sent to the LLM"
-                style={{ fontSize: 9, color: "var(--lm-text-dim)", whiteSpace: "nowrap" }}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 3,
+                  fontSize: 9, color: "var(--lm-text-dim)", whiteSpace: "nowrap",
+                }}
               >
-                🎙 debug
+                <Mic size={10} strokeWidth={2} /> debug
               </span>
               <audio
                 controls
@@ -214,17 +273,25 @@ export function TurnBadge({ turn, pairTint, onViewPipeline }: { turn: Turn; pair
             fontSize: 9,
             fontWeight: 700,
             letterSpacing: 0.3,
+            display: "inline-flex", alignItems: "center", gap: 4,
           }}
         >
-          🪑 LOAD MORE · pose bucket {poseBucket.id}
+          <Armchair size={11} strokeWidth={2.25} /> LOAD MORE · pose bucket {poseBucket.id}
           {poseBucket.files.length > 0 ? ` · ${poseBucket.files.length} worst` : ""}
         </button>
       )}
       {bucketOpen && poseBucket && (
         <PoseBucketModal bucketId={poseBucket.id} onClose={() => setBucketOpen(false)} />
       )}
-      {lightboxUrl && (
+      {lightboxUrl && createPortal(
+        // Portalled to <body> so the overlay's position:fixed anchors to the
+        // viewport, not to this card. The card has a transform/animation
+        // (hover lift + entrance), which would otherwise become the fixed
+        // containing block and let the lightbox overflow on top of the page
+        // instead of covering it. The `lm-root ${themeClass}` re-scope keeps
+        // the --lm-* tokens resolving outside the monitor root.
         <div
+          className={`lm-root ${themeClass}`}
           onClick={() => setLightboxUrl(null)}
           onMouseDown={(e) => e.stopPropagation()}
           style={{
@@ -236,51 +303,64 @@ export function TurnBadge({ turn, pairTint, onViewPipeline }: { turn: Turn; pair
         >
           <button
             onClick={() => setLightboxUrl(null)}
+            aria-label="Close"
             style={{
               position: "absolute", top: 16, right: 16,
               background: "rgba(255,255,255,0.15)", border: "none",
-              color: "#fff", fontSize: 20, width: 36, height: 36,
+              color: "#fff", width: 36, height: 36,
               borderRadius: "50%", cursor: "pointer",
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
             }}
           >
-            ✕
+            <X size={20} strokeWidth={2.25} />
           </button>
           <img
             src={lightboxUrl}
             onClick={(e) => e.stopPropagation()}
             style={{ width: "85vw", height: "85vh", objectFit: "contain", borderRadius: 8, cursor: "default" }}
           />
-        </div>
+        </div>,
+        document.body,
       )}
       {/* Row 3: output — TTS or no reply */}
       {output === "[no reply]" ? (
         <div style={{
           fontSize: 11.5, color: "var(--lm-text-muted)", marginBottom: 2,
           lineHeight: 1.45, fontStyle: "italic",
+          display: "flex", alignItems: "center", gap: 5,
         }}>
-          🚫 no reply — agent decided to do nothing
+          <Ban size={12} strokeWidth={2} style={{ flexShrink: 0 }} /> no reply — agent decided to do nothing
         </div>
       ) : output ? (
         <div style={{
-          fontSize: 11.5, color: "var(--lm-text-dim)", marginBottom: 2,
-          overflowWrap: "anywhere" as const, lineHeight: 1.45,
+          fontSize: 12, color: "var(--lm-text-dim)", marginBottom: 2,
+          overflowWrap: "anywhere" as const, lineHeight: 1.5,
         }}>
-          <span style={{ color: "var(--lm-purple)", fontWeight: 600, marginRight: 4 }}>{["telegram","discord","slack","wechat","channel"].includes(turn.type) ? "💬" : "TTS 🔊"}</span>
+          <span style={{
+            color: "var(--lm-purple)", fontWeight: 600, marginRight: 6,
+            display: "inline-flex", alignItems: "center", gap: 3, verticalAlign: "text-bottom",
+          }}>
+            {["telegram","discord","slack","wechat","channel"].includes(turn.type)
+              ? <MessageSquare size={12} strokeWidth={2} />
+              : <><Volume2 size={12} strokeWidth={2} /> TTS</>}
+          </span>
           {output}
         </div>
       ) : turn.path === "dropped" ? (
         <div style={{
           fontSize: 11.5, color: "var(--lm-red)", marginBottom: 2,
           lineHeight: 1.45, fontStyle: "italic",
+          display: "flex", alignItems: "center", gap: 5,
         }}>
-          ⏸ dropped — agent was busy
+          <PauseCircle size={12} strokeWidth={2} style={{ flexShrink: 0 }} /> dropped — agent was busy
         </div>
       ) : turn.path === "queued" ? (
         <div style={{
           fontSize: 11.5, color: "var(--lm-amber)", marginBottom: 2,
           lineHeight: 1.45, fontStyle: "italic",
+          display: "flex", alignItems: "center", gap: 5,
         }}>
-          ⏸ queued — agent busy, will replay when idle
+          <PauseCircle size={12} strokeWidth={2} style={{ flexShrink: 0 }} /> queued — agent busy, will replay when idle
         </div>
       ) : hasEmptyFinalNoLifecycle ? (
         <div
@@ -296,16 +376,18 @@ export function TurnBadge({ turn, pairTint, onViewPipeline }: { turn: Turn; pair
             fontSize: 11.5, color: "var(--lm-red)", marginBottom: 2,
             overflowWrap: "anywhere" as const, lineHeight: 1.45,
             fontWeight: 700, cursor: "help",
+            display: "flex", alignItems: "center", gap: 5,
           }}
         >
-          ⚠ Agent closed stream · no message · no lifecycle
+          <TriangleAlert size={12} strokeWidth={2.25} style={{ flexShrink: 0 }} /> Agent closed stream · no message · no lifecycle
         </div>
       ) : turn.status === "done" ? (
         <div style={{
           fontSize: 11.5, color: "var(--lm-text-muted)", marginBottom: 2,
           lineHeight: 1.45, fontStyle: "italic",
+          display: "flex", alignItems: "center", gap: 5,
         }}>
-          💤 no output — agent processed silently
+          <Moon size={12} strokeWidth={2} style={{ flexShrink: 0 }} /> no output — agent processed silently
         </div>
       ) : null}
       {/* Row 3b: output — Hardware actions */}
@@ -314,52 +396,43 @@ export function TurnBadge({ turn, pairTint, onViewPipeline }: { turn: Turn; pair
           fontSize: 11.5, color: "var(--lm-text-dim)",
           overflowWrap: "anywhere" as const, lineHeight: 1.45,
         }}>
-          <span style={{ color: "var(--lm-amber)", fontWeight: 600, marginRight: 4 }}>HW 💡</span>
+          <span style={{
+            color: "var(--lm-amber)", fontWeight: 600, marginRight: 5,
+            display: "inline-flex", alignItems: "center", gap: 3, verticalAlign: "text-bottom",
+          }}><Lightbulb size={12} strokeWidth={2} /> HW</span>
           {hwOutput}
         </div>
       )}
-      {tokenStats && (
-        <div style={{
-          marginTop: 6,
-          padding: "5px 7px",
-          borderRadius: 6,
-          border: "1px solid rgba(248,113,113,0.55)",
-          background: "rgba(248,113,113,0.14)",
-          fontSize: 9,
-          fontFamily: "monospace",
-          lineHeight: 1.6,
-        }}>
-          <div>
-            <span style={{ color: "var(--lm-text)" }}>Tokens </span>
-            <span style={{ color: "var(--lm-teal)" }}>in </span>
-            <span style={{ color: "var(--lm-text-dim)", fontWeight: 600 }}>{fmtToken(tokenStats.inTok)}</span>
-            <span style={{ color: "var(--lm-text)" }}> / </span>
-            <span style={{ color: "var(--lm-amber)" }}>out </span>
-            <span style={{ color: "var(--lm-text-dim)", fontWeight: 600 }}>{fmtToken(tokenStats.outTok)}</span>
-          </div>
-          <div>
-            <span style={{ color: "var(--lm-text)" }}>Total </span>
-            <span style={{ color: "var(--lm-text-dim)", fontWeight: 600 }}>{fmtToken(tokenStats.total)}</span>
-          </div>
-          {(tokenStats.cacheRead || tokenStats.cacheWrite) ? (
-            <>
-              <div>
-                <span style={{ color: "var(--lm-text)" }}>Cache read </span>
-                <span style={{ color: "var(--lm-teal)", fontWeight: 600 }}>{fmtToken(tokenStats.cacheRead)}</span>
-                <span style={{ color: "var(--lm-text)" }}> / write </span>
-                <span style={{ color: "var(--lm-amber)", fontWeight: 600 }}>{fmtToken(tokenStats.cacheWrite)}</span>
-              </div>
-              <div>
-                <span style={{ color: "var(--lm-text)" }}>Billed </span>
-                <span style={{ color: "var(--lm-purple)", fontWeight: 600 }}>~{fmtToken(tokenStats.inTok + tokenStats.cacheWrite + Math.round(tokenStats.cacheRead * 0.1) + tokenStats.outTok)}</span>
-              </div>
-            </>
-          ) : null}
-        </div>
-      )}
-      {/* Row 4: event count */}
-      <div style={{ fontSize: 9, color: "var(--lm-text-muted)", marginTop: 3, display: "flex", gap: 8, alignItems: "center" }}>
-        <span>{turn.events.length} events</span>
+      {/* Footer meta: events + tokens on one quiet hairline-topped row. Tokens
+          were a loud red box that read like an error; now a compact inline
+          summary, with the full cache/billed breakdown in `title` on hover. */}
+      <div data-region="FLOW_TURN_CARD_FOOTER" style={{
+        fontSize: 10.5, color: "var(--lm-text-dim)", marginTop: 7, paddingTop: 6,
+        borderTop: "1px solid var(--lm-border)",
+        display: "flex", gap: 9, alignItems: "center", flexWrap: "wrap",
+        fontFamily: "monospace",
+      }}>
+        <span style={{ fontWeight: 600 }}>{turn.events.length} events</span>
+        {tokenStats && (() => {
+          const billed = tokenStats.inTok + tokenStats.cacheWrite
+            + Math.round(tokenStats.cacheRead * 0.1) + tokenStats.outTok;
+          const title = `Tokens — in ${fmtToken(tokenStats.inTok)} / out ${fmtToken(tokenStats.outTok)} · total ${fmtToken(tokenStats.total)}`
+            + ((tokenStats.cacheRead || tokenStats.cacheWrite)
+              ? `\nCache read ${fmtToken(tokenStats.cacheRead)} / write ${fmtToken(tokenStats.cacheWrite)} · billed ~${fmtToken(billed)}`
+              : "");
+          return (
+            <span title={title} style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+              <span style={{ opacity: 0.4 }}>·</span>
+              <span>
+                <span style={{ color: "var(--lm-teal)", fontWeight: 700 }}>↓{fmtToken(tokenStats.inTok)}</span>
+                {" "}
+                <span style={{ color: "var(--lm-amber)", fontWeight: 700 }}>↑{fmtToken(tokenStats.outTok)}</span>
+                {" "}
+                <span style={{ color: "var(--lm-text-muted)" }}>tokens</span>
+              </span>
+            </span>
+          );
+        })()}
       </div>
       {onViewPipeline && (
         <button
@@ -367,6 +440,11 @@ export function TurnBadge({ turn, pairTint, onViewPipeline }: { turn: Turn; pair
           className="lm-view-pipeline-btn"
           onClick={(e) => { e.stopPropagation(); onViewPipeline(); }}
           style={{
+            // NOTE: do NOT set `display` here — visibility is controlled by
+            // `.lm-view-pipeline-btn` (none on desktop, flex on mobile). An
+            // inline `display` would override that non-!important rule and leak
+            // the mobile-only button onto desktop. The mobile CSS sets
+            // `display: flex`, which already aligns the icon + label.
             marginTop: 8,
             width: "100%",
             padding: "7px 10px",
@@ -381,7 +459,7 @@ export function TurnBadge({ turn, pairTint, onViewPipeline }: { turn: Turn; pair
             justifyContent: "center",
             gap: 6,
           }}
-        >⬢ View pipeline</button>
+        ><Workflow size={13} strokeWidth={2} /> View pipeline</button>
       )}
     </div>
   );

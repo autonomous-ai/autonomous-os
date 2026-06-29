@@ -273,5 +273,53 @@ export const SOURCE_ICON: Record<string, string> = {
   "music.mood": "🎵",
 };
 
+// Lucide icon per turn sub-type, replacing the emoji in SOURCE_ICON for the
+// filter chips so the drawer reads as a crisp, theme-tinted icon set (the icons
+// inherit currentColor and the on/off opacity treatment) instead of full-color
+// emoji glyphs. Keyed by the same sub-type tokens; callers fall back to a
+// neutral dot when a type isn't mapped here.
+import type { LucideIcon } from "lucide-react";
+import {
+  Mic, Mic2, Volume2, Eye, Activity, Smile, Hand, Armchair, Speech,
+  Thermometer, Settings, Music, Monitor, Clock, CircleHelp,
+  Wind, Bot, MessagesSquare, Moon, Droplet, Radio, Sun, UserPlus, UserMinus,
+} from "lucide-react";
+
+export const TYPE_LUCIDE: Record<string, LucideIcon> = {
+  voice: Mic, voice_command: Mic2, sound: Volume2,
+  motion: Eye, "motion.activity": Activity,
+  "presence.enter": Smile, "presence.leave": Hand, "presence.away": Moon,
+  "light.level": Sun, "emotion.detected": Smile,
+  "speech_emotion": Speech, "speech_emotion.detected": Speech,
+  "pose.ergo_risk": Armchair, "touch.head_pat": Hand,
+  "wellbeing.music": Music,
+  environment: Thermometer, system: Settings, unknown: CircleHelp,
+  web_chat: Monitor,
+  telegram: MessagesSquare, discord: MessagesSquare, slack: MessagesSquare,
+  wechat: MessagesSquare, channel: MessagesSquare, chat: MessagesSquare,
+  schedule: Clock,
+  emotion: Smile, activity: Activity, wellbeing: Droplet, music: Music,
+  sensing: Radio, posture: Armchair,
+  cron: Clock, "cron:music": Music,
+  "ambient:breathing": Wind, "ambient:movement": Bot, "ambient:mumble": Speech,
+  "ambient:idle": Moon,
+  "music.mood": Music,
+  // presence aliases used by some event payloads
+  enter: UserPlus, leave: UserMinus,
+};
+
+// Short display label per turn sub-type, used by the filter sub-type chips.
+export const TYPE_LABEL: Record<string, string> = {
+  voice: "voice", voice_command: "cmd", sound: "sound",
+  motion: "motion", "motion.activity": "activity", "emotion.detected": "emotion",
+  "speech_emotion": "voice_emo", "speech_emotion.detected": "voice_emo",
+  "pose.ergo_risk": "posture", "presence.enter": "enter", "presence.leave": "leave",
+  "presence.away": "away", "touch.head_pat": "head pat",
+  "light.level": "light", environment: "env", system: "sys",
+  "music.mood": "mood", web_chat: "web", telegram: "channel", discord: "channel",
+  slack: "channel", wechat: "channel", channel: "channel", schedule: "sched",
+  cron: "cron", "cron:music": "music",
+};
+
 export const CHANNEL_FALLBACK_MESSAGE = "Message from channel";
 export const TURN_INPUT_FALLBACK = "Input not captured";

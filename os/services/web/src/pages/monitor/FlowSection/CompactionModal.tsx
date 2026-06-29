@@ -61,6 +61,7 @@ export function CompactionModal({ onClose, at, turnLabel }: { onClose: () => voi
 
   return (
     <div
+      id="FLOW_COMPACTION_MODAL_OVERLAY" data-region="FLOW_COMPACTION_MODAL_OVERLAY"
       style={{
         position: "fixed", inset: 0, zIndex: 100,
         background: "rgba(0,0,0,0.72)", backdropFilter: "blur(4px)",
@@ -69,6 +70,7 @@ export function CompactionModal({ onClose, at, turnLabel }: { onClose: () => voi
       onClick={onClose}
     >
       <div
+        id="FLOW_COMPACTION_MODAL_PANEL" data-region="FLOW_COMPACTION_MODAL_PANEL"
         style={{
           background: "var(--lm-card)", border: "1px solid var(--lm-border)",
           borderRadius: 16, padding: 24, maxWidth: 960, width: "92vw",

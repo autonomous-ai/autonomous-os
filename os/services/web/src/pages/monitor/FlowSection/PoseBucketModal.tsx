@@ -115,6 +115,7 @@ export function PoseBucketModal({
 
   return (
     <div
+      id="FLOW_POSE_BUCKET_MODAL_OVERLAY" data-region="FLOW_POSE_BUCKET_MODAL_OVERLAY"
       onClick={onClose}
       style={{
         position: "fixed",
@@ -128,6 +129,7 @@ export function PoseBucketModal({
       }}
     >
       <div
+        id="FLOW_POSE_BUCKET_MODAL_PANEL" data-region="FLOW_POSE_BUCKET_MODAL_PANEL"
         onClick={(e) => e.stopPropagation()}
         style={{
           background: "var(--lm-card)",

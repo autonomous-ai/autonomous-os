@@ -16,6 +16,7 @@ export function PipelineModal({
 }) {
   return (
     <div
+      id="FLOW_PIPELINE_MODAL_OVERLAY" data-region="FLOW_PIPELINE_MODAL_OVERLAY"
       onClick={onClose}
       style={{
         position: "fixed", inset: 0, zIndex: 100,
@@ -24,6 +25,7 @@ export function PipelineModal({
       }}
     >
       <div
+        id="FLOW_PIPELINE_MODAL_PANEL" data-region="FLOW_PIPELINE_MODAL_PANEL"
         onClick={(e) => e.stopPropagation()}
         style={{
           background: "var(--lm-card)",

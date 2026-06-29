@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { X, Timer } from "lucide-react";
 import type { DisplayEvent } from "../types";
 import type { FlowStage, ActiveFlowStage } from "./types";
 import { FLOW_NODES } from "./types";
+import { useTheme } from "@/lib/useTheme";
 import { extractNodeInfo, aggregateEvents } from "./helpers";
 
 // Hidden-textarea clipboard fallback for non-secure origins (http://Pi.local).
@@ -33,6 +36,7 @@ export function FlowDiagram({
   const VW = 1200;
   const VH = 1080;
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [, , themeClass] = useTheme();
 
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -237,9 +241,10 @@ export function FlowDiagram({
   const imageSentToAgent: boolean = (nodeInfo.agent_call ?? []).some((l) => l.includes("📷 image attached"));
 
   return (
-    <div style={{ position: "relative", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+    <div id="FLOW_DIAGRAM" data-region="FLOW_DIAGRAM" style={{ position: "relative", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
       <svg
         ref={svgRef}
+        id="FLOW_DIAGRAM_SVG" data-region="FLOW_DIAGRAM_SVG"
         viewBox={`${vbX} ${vbY} ${vbW} ${vbH}`}
         style={{
           display: "block", width: "100%", flex: 1, minHeight: 0,
@@ -611,7 +616,9 @@ export function FlowDiagram({
                       borderBottom: "1px dashed color-mix(in srgb, var(--lm-blue) 40%, transparent)",
                       paddingBottom: 3,
                     }}>
-                      <span style={{ color: "var(--lm-purple)", fontWeight: 700 }}>⏱</span>
+                      <span style={{ color: "var(--lm-purple)", display: "inline-flex", alignItems: "center" }}>
+                        <Timer size={8} strokeWidth={2.5} />
+                      </span>
                       <span>{headerSummary}</span>
                     </div>
                   )}
@@ -723,11 +730,12 @@ export function FlowDiagram({
                         onMouseDown={(e: React.MouseEvent) => e.stopPropagation()}
                         onClick={(e: React.MouseEvent) => { e.stopPropagation(); setPipelineGuideOpen(false); }}
                         style={{
-                          cursor: "pointer", opacity: 0.85, fontWeight: 700, fontSize: 10,
+                          cursor: "pointer", opacity: 0.85,
                           background: "transparent", border: "none", color: "#0A2A1F",
                           padding: "0 4px", lineHeight: 1,
+                          display: "inline-flex", alignItems: "center",
                         }}
-                      >✕</button>
+                      ><X size={11} strokeWidth={2.5} /></button>
                     </div>
                     <div style={{ opacity: 0.8, marginBottom: 5, fontSize: 6.5, color: "#0A2A1F" }}>
                       Common turn: lifecycle:start → thinking / assistant / tool — lifecycle:end. The other 7 fire only in special situations.
@@ -968,9 +976,14 @@ export function FlowDiagram({
         })}
       </svg>
 
-      {/* Snapshot lightbox */}
-      {lightboxUrl && (
+      {/* Snapshot lightbox — portalled to <body> so position:fixed anchors to
+          the viewport. The diagram lives inside transformed/animated ancestors
+          (zoom/pan + the turn card), any of which would otherwise become the
+          fixed containing block and let the lightbox overflow on top of the
+          page rather than cover it. `lm-root ${themeClass}` re-scopes tokens. */}
+      {lightboxUrl && createPortal(
         <div
+          className={`lm-root ${themeClass}`}
           onClick={() => setLightboxUrl(null)}
           onMouseDown={(e) => e.stopPropagation()}
           style={{
@@ -982,21 +995,24 @@ export function FlowDiagram({
         >
           <button
             onClick={() => setLightboxUrl(null)}
+            aria-label="Close"
             style={{
               position: "absolute", top: 16, right: 16,
               background: "rgba(255,255,255,0.15)", border: "none",
-              color: "#fff", fontSize: 20, width: 36, height: 36,
+              color: "#fff", width: 36, height: 36,
               borderRadius: "50%", cursor: "pointer",
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
             }}
           >
-            ✕
+            <X size={20} strokeWidth={2.25} />
           </button>
           <img
             src={lightboxUrl}
             onClick={(e) => e.stopPropagation()}
             style={{ width: "85vw", height: "85vh", objectFit: "contain", borderRadius: 8, cursor: "default" }}
           />
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* Shape legend */}
