@@ -1,16 +1,22 @@
 import { useCallback, useMemo, useState } from "react";
+import {
+  Search, SlidersHorizontal, X, Hexagon, ClipboardList, LayoutDashboard,
+  PackageOpen, CalendarDays, Trash2, Inbox,
+} from "lucide-react";
 import { S } from "../styles";
 import { API, FLOW_EVENTS_MAX, HW } from "../types";
-import type { DisplayEvent } from "../types";
+import type { DisplayEvent, FaceOwnersDetail } from "../types";
 import type { FlowStage } from "./types";
 import { usePolling } from "../../../hooks/usePolling";
-import { FLOW_NODES, SOURCE_ICON } from "./types";
+import { FLOW_NODES } from "./types";
 import { deriveActiveStage, groupIntoTurns, turnIO, turnBilledTokens, turnDurationMs, extractSensingType, hasSensingPrefix } from "./helpers";
 import { FlowDiagram } from "./FlowDiagram";
 import { TurnBadge } from "./TurnBadge";
 import { CanvasModal } from "./CanvasModal";
 import { CompactionModal } from "./CompactionModal";
 import { PipelineModal } from "./PipelineModal";
+import { FiltersModal } from "./FiltersModal";
+import { UserAvatar } from "./UserAvatar";
 
 // Category → turn types mapping
 const CAT_TYPES: Record<string, string[]> = {
@@ -25,17 +31,6 @@ const CAT_TYPES: Record<string, string[]> = {
   // single/triple/long press are local-only (listen cue / reboot /
   // shutdown) and never POST to /sensing/event.
   button: ["touch.head_pat"],
-};
-const TYPE_ICON: Record<string, string> = {
-  ...SOURCE_ICON,
-  voice_command: "🎙",
-};
-const TYPE_LABEL: Record<string, string> = {
-  voice: "voice", voice_command: "cmd", sound: "sound",
-  motion: "motion", "motion.activity": "activity", "emotion.detected": "emotion", "speech_emotion": "voice_emo", "speech_emotion.detected": "voice_emo", "pose.ergo_risk": "posture", "presence.enter": "enter", "presence.leave": "leave", "presence.away": "away", "touch.head_pat": "head pat",
-  "light.level": "light", environment: "env", system: "sys",
-  "music.mood": "mood", web_chat: "web", telegram: "channel", discord: "channel", slack: "channel", wechat: "channel", channel: "channel", schedule: "sched",
-  cron: "cron", "cron:music": "🎵music",
 };
 
 // Preset sensing events for manual testing
@@ -96,8 +91,14 @@ export function FlowSection({
     ...flowGhostBtn,
     border: "1px solid var(--lm-red)", color: "var(--lm-red)", fontWeight: 700,
   };
-  const flowSep = {
-    width: 1, height: 18, background: "var(--lm-border)", margin: "0 2px",
+  // Segmented group — a subtle pill that visually bundles related actions
+  // (Modals / Downloads / Danger). The shared background + inner padding
+  // reads as one control cluster instead of a flat row of equal buttons.
+  const flowGroup = {
+    display: "inline-flex", alignItems: "center", gap: 4,
+    padding: 3, borderRadius: 9,
+    background: "color-mix(in srgb, var(--lm-text) 4%, transparent)",
+    border: "1px solid var(--lm-border)",
   };
   const [firing, setFiring] = useState<string | null>(null);
 
@@ -218,6 +219,12 @@ export function FlowSection({
     });
   };
 
+  // Reset every filter back to defaults (used by the modal footer).
+  const resetAll = useCallback(() => {
+    setSearchText(""); setFromTime(""); setToTime(""); setSortBy("newest");
+    setExcludedTypes(() => { saveExcluded(new Set()); return new Set(); });
+  }, []);
+
   const turns = useMemo(() => groupIntoTurns(events), [events]);
 
   // Live current_user — polled from the device every 2s (same source the Users
@@ -232,12 +239,49 @@ export function FlowSection({
     setCurrentUser(typeof j?.current_user === "string" ? j.current_user : "");
   }, 5000);
 
+  // First enrolled photo per known user, so the header chip can show the real
+  // face avatar (name + photo) instead of the generic icon — same source the
+  // Users tab uses (`GET /face/owners`). Polled lazily at a slow cadence: the
+  // enrolled set rarely changes, and we only need it to map a name → filename.
+  const [userPhotos, setUserPhotos] = useState<Record<string, string>>({});
+  usePolling(async (signal) => {
+    const r = await fetch(`${HW}/face/owners`, { signal });
+    if (!r.ok) return;
+    const j: FaceOwnersDetail = await r.json();
+    const map: Record<string, string> = {};
+    for (const p of j.persons ?? []) {
+      if (p.label && p.photos?.[0]) map[p.label] = p.photos[0];
+    }
+    setUserPhotos(map);
+  }, 30_000, { timeoutMs: 8000 });
+
   // Sub-types that actually appear in the current turns list
   const availableTypes = useMemo(() => {
     const seen = new Set<string>();
     for (const t of turns) seen.add(t.type);
     return [...seen];
   }, [turns]);
+
+  // Per-category enabled/partial state for the source quick-toggles. `active`:
+  // all of this category's available types are shown; `partial`: some shown.
+  // Hoisted here so the header chips and the modal chips read identically.
+  const catAvailability = useCallback((cat: string) => {
+    const catTypes = CAT_TYPES[cat] ?? [];
+    const available = catTypes.filter((t) => availableTypes.includes(t));
+    const active = available.length > 0 && available.every((t) => !excludedTypes.has(t));
+    const partial = !active && available.some((t) => !excludedTypes.has(t));
+    return { active, partial };
+  }, [availableTypes, excludedTypes]);
+
+  // Count of distinct active filter groups — drives the "Filters · N" badge on
+  // the header button and the "N active" pill in the modal header.
+  const activeFilters = useMemo(() =>
+    (searchText.trim() ? 1 : 0) +
+    (fromTime || toTime ? 1 : 0) +
+    (sortBy !== "newest" ? 1 : 0) +
+    (availableTypes.filter((t) => excludedTypes.has(t)).length > 0 ? 1 : 0),
+    [searchText, fromTime, toTime, sortBy, availableTypes, excludedTypes],
+  );
 
   const filteredTurns = useMemo(() => {
     const filtered = turns.filter((t) => {
@@ -439,9 +483,10 @@ export function FlowSection({
                 fontSize: 10, padding: "2px 8px", borderRadius: 4,
                 background: "var(--lm-purple)", border: "1px solid var(--lm-purple)",
                 color: "#fff", cursor: "pointer", fontWeight: 700,
+                display: "inline-flex", alignItems: "center", gap: 4,
               }}
             >
-              📋 summary prompt of this turn
+              <ClipboardList size={11} strokeWidth={2.25} /> summary prompt of this turn
             </button>
           )}
         </div>
@@ -457,7 +502,7 @@ export function FlowSection({
   );
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14, height: "100%", overflow: "hidden" }}>
+    <div id="FLOW_SECTION" data-region="FLOW_SECTION" style={{ display: "flex", flexDirection: "column", gap: 14, height: "100%", overflow: "hidden" }}>
       {showCanvas && (
         <CanvasModal
           activeStage={activeStage}
@@ -473,6 +518,30 @@ export function FlowSection({
         </PipelineModal>
       )}
 
+      {filtersOpen && (
+        <FiltersModal
+          onClose={() => setFiltersOpen(false)}
+          searchText={searchText}
+          setSearchText={setSearchText}
+          excludedTypes={excludedTypes}
+          toggleType={toggleType}
+          toggleCategory={toggleCategory}
+          availableTypes={availableTypes}
+          setExcludedTypes={setExcludedTypes}
+          saveExcluded={saveExcluded}
+          hasDropped={turns.some((t) => t.path === "dropped")}
+          sortBy={sortBy}
+          setSortBy={setSortBy}
+          fromTime={fromTime}
+          setFromTime={setFromTime}
+          toTime={toTime}
+          setToTime={setToTime}
+          onResetAll={resetAll}
+          activeFilters={activeFilters}
+          catAvailability={catAvailability}
+        />
+      )}
+
       {showCompaction && <CompactionModal onClose={() => setShowCompaction(false)} />}
       {compactionAt && (
         <CompactionModal
@@ -483,78 +552,124 @@ export function FlowSection({
       )}
 
       {/* Header card — neutral toolbar with one primary action (Canvas)
-          and one destructive (Clear). All other actions share the same
-          ghost-button style so the eye lands on the meaningful color,
-          not a rainbow of competing fills. */}
-      <div style={{ ...S.card, padding: "10px 14px" }}>
+          and one destructive (Clear). Actions are bundled into segmented
+          groups (Modals / Downloads / Danger) so the eye reads clusters,
+          not a flat row; the meaningful color (amber primary, red danger)
+          stays the only saturated fill. */}
+      <div
+        id="FLOW_TOPBAR" data-region="FLOW_TOPBAR"
+        style={{
+          ...S.card, padding: "9px 14px",
+          background: "linear-gradient(180deg, color-mix(in srgb, var(--lm-text) 3%, var(--lm-card)) 0%, var(--lm-card) 100%)",
+          boxShadow: "inset 0 1px 0 color-mix(in srgb, var(--lm-text) 8%, transparent)",
+        }}
+      >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" as const, gap: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" as const }}>
-            <span style={S.cardLabel}>Flow Panel</span>
+            {/* Brand mark — hexagon glyph + wordmark + live pulse dot.
+                The dot pulses teal while events stream; reuses the shared
+                lm-pulse-dot keyframe (respects prefers-reduced-motion). */}
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+              <span
+                aria-hidden
+                style={{
+                  display: "inline-flex", alignItems: "center", justifyContent: "center",
+                  width: 20, height: 20, borderRadius: 6,
+                  color: "var(--lm-amber)",
+                  background: "var(--lm-amber-dim)",
+                  border: "1px solid color-mix(in srgb, var(--lm-amber) 45%, transparent)",
+                }}
+              ><Hexagon size={12} strokeWidth={2.25} /></span>
+              <span style={{ ...S.cardLabel, marginBottom: 0 }}>Flow Panel</span>
+              <span
+                title={`${turns.length} turns captured`}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 4,
+                  fontSize: 9, fontWeight: 700, letterSpacing: "0.08em",
+                  textTransform: "uppercase" as const, color: "var(--lm-teal)",
+                }}
+              >
+                <span
+                  className="lm-live-dot"
+                  style={{
+                    width: 6, height: 6, borderRadius: "50%",
+                    background: "var(--lm-teal)",
+                    boxShadow: "0 0 6px var(--lm-teal)",
+                  }}
+                />
+                live
+              </span>
+            </span>
             {currentUser && (() => {
               const isUnknown = currentUser === "unknown";
               const color = isUnknown ? "var(--lm-text-muted)" : "var(--lm-teal)";
+              const photo = !isUnknown ? userPhotos[currentUser] : undefined;
               return (
                 <span
                   title={isUnknown ? "Device currently sees only strangers" : `Device's current user: ${currentUser}`}
                   style={{
-                    fontSize: 11, padding: "3px 9px", borderRadius: 6,
+                    display: "inline-flex", alignItems: "center", gap: 6,
+                    fontSize: 11, padding: "2px 9px 2px 3px", borderRadius: 999,
                     background: `${color}18`, color,
                     fontWeight: 700, textTransform: "capitalize",
                     border: `1px solid ${color}55`,
                   }}
-                >👤 {currentUser}</span>
+                >
+                  <UserAvatar user={currentUser} photo={photo} size={18} color={color} />
+                  {currentUser}
+                </span>
               );
             })()}
           </div>
 
-          <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 6, alignItems: "center" }}>
-            {/* Modals — Canvas is the primary visual entry, Summary is a
-                deep-dive button next to it. */}
-            <button
-              onClick={() => setShowCompaction(true)}
-              title={
-                "Xem 'bộ nhớ tóm tắt' mà Agent tự sinh và chèn vào đầu prompt của MỖI turn agent.\n\n" +
-                "• Vì sao cần: khi context vượt ~80k tokens, Agent auto-compact — gộp history cũ thành 1 đoạn summary, rồi dùng summary này thay cho history đến lần compact tiếp theo.\n" +
-                "• Rủi ro: nếu summary vô tình copy/méo rule từ SKILL.md, KNOWLEDGE.md, SOUL.md → agent sẽ theo summary (đứng đầu prompt) thay vì SKILL.md → trợ lý trả lời sai lý do không giải thích nổi.\n\n" +
-                "Click để xem: timestamp, summary chars, session file, và TOÀN VĂN summary đang điều khiển trợ lý."
-              }
-              className="lm-u-btn"
-              style={flowGhostBtn}
-            >📋 Summary</button>
-            <button
-              onClick={() => setShowCanvas(true)}
-              title="Open the flow canvas — a stacked timeline of all turns."
-              className="lm-u-btn"
-              style={flowPrimaryBtn}
-            >⬢ Canvas</button>
+          <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 8, alignItems: "center" }}>
+            {/* Group 1 · Views — Canvas is the primary visual entry, Summary
+                is a deep-dive button next to it. */}
+            <div style={flowGroup}>
+              <button
+                onClick={() => setShowCompaction(true)}
+                title={
+                  "Xem 'bộ nhớ tóm tắt' mà Agent tự sinh và chèn vào đầu prompt của MỖI turn agent.\n\n" +
+                  "• Vì sao cần: khi context vượt ~80k tokens, Agent auto-compact — gộp history cũ thành 1 đoạn summary, rồi dùng summary này thay cho history đến lần compact tiếp theo.\n" +
+                  "• Rủi ro: nếu summary vô tình copy/méo rule từ SKILL.md, KNOWLEDGE.md, SOUL.md → agent sẽ theo summary (đứng đầu prompt) thay vì SKILL.md → trợ lý trả lời sai lý do không giải thích nổi.\n\n" +
+                  "Click để xem: timestamp, summary chars, session file, và TOÀN VĂN summary đang điều khiển trợ lý."
+                }
+                className="lm-u-btn"
+                style={{ ...flowGhostBtn, display: "inline-flex", alignItems: "center", gap: 5 }}
+              ><ClipboardList size={13} strokeWidth={2} /> Summary</button>
+              <button
+                onClick={() => setShowCanvas(true)}
+                title="Open the flow canvas — a stacked timeline of all turns."
+                className="lm-u-btn"
+                style={{ ...flowPrimaryBtn, display: "inline-flex", alignItems: "center", gap: 5 }}
+              ><LayoutDashboard size={13} strokeWidth={2} /> Canvas</button>
+            </div>
 
-            <div style={flowSep} />
+            {/* Group 2 · Downloads */}
+            <div style={flowGroup}>
+              <button
+                type="button"
+                onClick={() => void downloadFlowBundle()}
+                title={`Downloads 3 files: (1) server JSONL last ${FLOW_EVENTS_MAX} lines — same tail as this panel; (2) UI snapshot JSON (events + turns); (3) Agent debug payload JSONL.`}
+                className="lm-u-btn"
+                style={{ ...flowGhostBtn, display: "inline-flex", alignItems: "center", gap: 5 }}
+              ><PackageOpen size={13} strokeWidth={2} /> Bundle</button>
+              <a
+                href={`${API}/agent/flow-logs`}
+                download
+                title="Full day JSONL on server (all lines today — wider than the panel window)"
+                className="lm-u-btn"
+                style={{ ...flowGhostBtn, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 5 }}
+              ><CalendarDays size={13} strokeWidth={2} /> Full day</a>
+            </div>
 
-            {/* Downloads */}
-            <button
-              type="button"
-              onClick={() => void downloadFlowBundle()}
-              title={`Downloads 3 files: (1) server JSONL last ${FLOW_EVENTS_MAX} lines — same tail as this panel; (2) UI snapshot JSON (events + turns); (3) Agent debug payload JSONL.`}
-              className="lm-u-btn"
-              style={flowGhostBtn}
-            >↓ Bundle</button>
-            <a
-              href={`${API}/agent/flow-logs`}
-              download
-              title="Full day JSONL on server (all lines today — wider than the panel window)"
-              className="lm-u-btn"
-              style={{ ...flowGhostBtn, textDecoration: "none", display: "inline-flex", alignItems: "center" }}
-            >📅 Full day</a>
-
-            <div style={flowSep} />
-
-            {/* Destructive */}
+            {/* Group 3 · Destructive */}
             <button
               onClick={clearServerFlowLog}
               title="Clear server flow log + Agent debug logs"
               className="lm-u-btn"
-              style={flowDangerBtn}
-            >🗑 Clear</button>
+              style={{ ...flowDangerBtn, display: "inline-flex", alignItems: "center", gap: 5 }}
+            ><Trash2 size={13} strokeWidth={2} /> Clear</button>
           </div>
         </div>
       </div>
@@ -593,12 +708,12 @@ export function FlowSection({
       )}
 
       {/* Flow diagram + turn list */}
-      <div className="lm-flow-layout" style={{ display: "flex", gap: 14, flex: 1, minHeight: 0 }}>
+      <div id="FLOW_BODY" data-region="FLOW_BODY" className="lm-flow-layout" style={{ display: "flex", gap: 14, flex: 1, minHeight: 0 }}>
 
         {/* Turn history list. Width is driven by the `.lm-flow-turns` CSS class
             (clamps wider on big screens so the dense IN/REPLY text is readable,
             and the canvas keeps less dead space) rather than a fixed inline px. */}
-        <div className="lm-flow-turns" style={{
+        <div id="FLOW_LEFTBAR" data-region="FLOW_LEFTBAR" className="lm-flow-turns" style={{
           ...S.card,
           flexShrink: 0,
           display: "flex",
@@ -607,253 +722,120 @@ export function FlowSection({
           padding: 0,
           overflow: "hidden",
         }}>
-          <div style={{ padding: "10px 12px 8px", borderBottom: "1px solid var(--lm-border)" }}>
+          <div id="FLOW_LEFTBAR_HEADER" data-region="FLOW_LEFTBAR_HEADER" className="lm-flow-turns-header" style={{ padding: "10px 12px 8px", borderBottom: "1px solid var(--lm-border)" }}>
             {/* Title + count + filters toggle.
                 Primary row stays compact: identity (Turns N/M) + a single
                 toggle that reveals advanced filters. Avoids the 6-row
                 tall header that earlier crowded the list area. */}
             <div style={{ display: "flex", alignItems: "center", marginBottom: 6, gap: 6 }}>
-              <span style={S.cardLabel}>Turns</span>
-              <span style={{ fontSize: 10, color: "var(--lm-text-muted)" }}>
-                {filteredTurns.length}/{turns.length}
-              </span>
+              <span style={{ ...S.cardLabel, marginBottom: 0 }}>Turns</span>
               {(() => {
-                const activeFilters =
-                  (searchText.trim() ? 1 : 0) +
-                  (fromTime || toTime ? 1 : 0) +
-                  (sortBy !== "newest" ? 1 : 0) +
-                  (availableTypes.filter((t) => excludedTypes.has(t)).length > 0 ? 1 : 0);
+                const filtered = filteredTurns.length !== turns.length;
                 return (
-                  <button
-                    onClick={() => setFiltersOpen((v) => !v)}
-                    style={{
-                      marginLeft: "auto", padding: "2px 8px", borderRadius: 4, fontSize: 10,
-                      cursor: "pointer", fontWeight: 600,
-                      border: `1px solid ${activeFilters > 0 ? "var(--lm-amber)" : "var(--lm-border)"}`,
-                      background: activeFilters > 0 ? "var(--lm-amber-dim)" : "transparent",
-                      color: activeFilters > 0 ? "var(--lm-amber)" : "var(--lm-text-muted)",
-                      display: "inline-flex", alignItems: "center", gap: 4,
-                    }}
-                    title={filtersOpen ? "Hide filters" : "Show filters"}
+                  <span
+                    className="lm-flow-count"
+                    title={filtered ? `${filteredTurns.length} shown · ${turns.length} total (filtered)` : `${turns.length} turns`}
+                    style={filtered ? {
+                      color: "var(--lm-amber)",
+                      background: "var(--lm-amber-dim)",
+                      borderColor: "color-mix(in srgb, var(--lm-amber) 45%, transparent)",
+                    } : undefined}
                   >
-                    Filters{activeFilters > 0 ? ` · ${activeFilters}` : ""}
-                    <span style={{ fontSize: 8, transition: "transform 0.15s", transform: filtersOpen ? "rotate(180deg)" : "none" }}>▾</span>
-                  </button>
+                    {filtered
+                      ? <>{filteredTurns.length}<span style={{ opacity: 0.6 }}> / {turns.length}</span></>
+                      : turns.length}
+                  </span>
                 );
               })()}
+              <button
+                onClick={() => setFiltersOpen(true)}
+                className="lm-u-btn"
+                style={{
+                  marginLeft: "auto", padding: "3px 9px", borderRadius: 6, fontSize: 11,
+                  fontWeight: 600,
+                  border: `1px solid ${activeFilters > 0 ? "var(--lm-amber)" : "var(--lm-border)"}`,
+                  background: activeFilters > 0 ? "var(--lm-amber-dim)" : "transparent",
+                  color: activeFilters > 0 ? "var(--lm-amber)" : "var(--lm-text-dim)",
+                  display: "inline-flex", alignItems: "center", gap: 5,
+                }}
+                title="Open filters"
+              >
+                <SlidersHorizontal size={12} strokeWidth={2} />
+                Filters{activeFilters > 0 ? ` · ${activeFilters}` : ""}
+              </button>
             </div>
 
-            {/* Search — always visible (most common quick-filter). */}
-            <input
-              type="text"
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-              placeholder="🔍 search input / output…"
-              className="lm-u-input"
-              style={{
-                width: "100%", boxSizing: "border-box" as const,
-                padding: "5px 9px", borderRadius: 5, fontSize: 11,
-                marginBottom: 6, outline: "none",
-              }}
-            />
-
-            {/* Category quick-toggle — always visible (primary filter UX). */}
-            <div style={{ display: "flex", gap: 4, flexWrap: "wrap" as const }}>
-              {([
-                { key: "mic", icon: "🎤", label: "Mic" },
-                { key: "cam", icon: "👁", label: "Cam" },
-                { key: "button", icon: "✋", label: "Btn" },
-                { key: "channel", icon: "💬", label: "CH" },
-                { key: "web", icon: "🖥", label: "Web" },
-                { key: "cron", icon: "⏰", label: "Cron" },
-                { key: "system", icon: "⚙", label: "Sys" },
-              ] as const).map((f) => {
-                const catTypes = CAT_TYPES[f.key] ?? [];
-                const available = catTypes.filter((t) => availableTypes.includes(t));
-                const active = available.length > 0 && available.every((t) => !excludedTypes.has(t));
-                const partial = !active && available.some((t) => !excludedTypes.has(t));
-                const border = active ? "var(--lm-amber)" : partial ? "var(--lm-teal)" : "var(--lm-border)";
-                const color = active ? "var(--lm-amber)" : partial ? "var(--lm-teal)" : "var(--lm-text-muted)";
-                return (
-                  <button key={f.key} onClick={() => toggleCategory(f.key)} style={{
-                    padding: "3px 8px", borderRadius: 4, fontSize: 10, cursor: "pointer",
-                    border: `1px solid ${border}`,
-                    background: active ? "var(--lm-amber-dim)" : partial ? "var(--lm-teal-dim)" : "transparent",
-                    color, fontWeight: active || partial ? 600 : 400,
-                  }}>
-                    {f.icon} {f.label}
-                  </button>
-                );
-              })}
-              {/* Dropped — appears inline when relevant */}
-              {turns.some((t) => t.path === "dropped") && (() => {
-                const on = !excludedTypes.has("__dropped");
-                return (
-                  <button onClick={() => toggleType("__dropped")} style={{
-                    padding: "3px 8px", borderRadius: 4, fontSize: 10, cursor: "pointer",
-                    border: `1px solid ${on ? "var(--lm-red)" : "var(--lm-border)"}`,
-                    background: on ? "var(--lm-red-dim)" : "transparent",
-                    color: on ? "var(--lm-red)" : "var(--lm-text-muted)",
-                    fontWeight: on ? 600 : 400,
-                  }}>
-                    ⏸ Dropped
-                  </button>
-                );
-              })()}
-            </div>
-
-            {/* Advanced filters: sort + sub-types + time range. Hidden by
-                default; click "Filters" to expand. Keeps power-user controls
-                accessible without dominating the header. */}
-            {filtersOpen && (
-              <div style={{
-                marginTop: 8, paddingTop: 8, borderTop: "1px dashed var(--lm-border)",
-                display: "flex", flexDirection: "column" as const, gap: 8,
-              }}>
-                {/* Sort */}
-                <div>
-                  <div style={{ fontSize: 9, color: "var(--lm-text-muted)", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.06em" }}>Sort</div>
-                  <div style={{ display: "flex", gap: 3, flexWrap: "wrap" as const }}>
-                    {([
-                      { key: "newest", label: "Newest" },
-                      { key: "oldest", label: "Oldest" },
-                      { key: "time_desc", label: "Slowest" },
-                      { key: "time_asc", label: "Fastest" },
-                      { key: "tokens_desc", label: "↑ Tokens" },
-                      { key: "tokens_asc", label: "↓ Tokens" },
-                    ] as const).map((s) => (
-                      <button
-                        key={s.key}
-                        onClick={() => setSortBy(s.key)}
-                        style={{
-                          padding: "2px 7px", borderRadius: 3, fontSize: 10, cursor: "pointer",
-                          border: `1px solid ${sortBy === s.key ? "var(--lm-amber)" : "var(--lm-border)"}`,
-                          background: sortBy === s.key ? "var(--lm-amber-dim)" : "transparent",
-                          color: sortBy === s.key ? "var(--lm-amber)" : "var(--lm-text-muted)",
-                          fontWeight: sortBy === s.key ? 600 : 400,
-                        }}
-                      >{s.label}</button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Sub-types */}
-                {availableTypes.length > 0 && (
-                  <div>
-                    <div style={{
-                      display: "flex", alignItems: "center", justifyContent: "space-between",
-                      fontSize: 9, color: "var(--lm-text-muted)", marginBottom: 3,
-                      textTransform: "uppercase", letterSpacing: "0.06em",
-                    }}>
-                      <span>Sub-types</span>
-                      {(() => {
-                        const allOn = availableTypes.every((t) => !excludedTypes.has(t));
-                        return (
-                          <button
-                            onClick={() => {
-                              setExcludedTypes((prev) => {
-                                const next = new Set(prev);
-                                if (allOn) { availableTypes.forEach((t) => next.add(t)); }
-                                else { availableTypes.forEach((t) => next.delete(t)); }
-                                saveExcluded(next);
-                                return next;
-                              });
-                            }}
-                            style={{
-                              padding: "1px 6px", borderRadius: 3, fontSize: 9, cursor: "pointer", fontWeight: 600,
-                              border: `1px solid ${allOn ? "var(--lm-amber)" : "var(--lm-border)"}`,
-                              background: allOn ? "var(--lm-amber-dim)" : "transparent",
-                              color: allOn ? "var(--lm-amber)" : "var(--lm-text-muted)",
-                              textTransform: "none", letterSpacing: 0,
-                            }}
-                          >{allOn ? "All on" : "Enable all"}</button>
-                        );
-                      })()}
-                    </div>
-                    <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 3 }}>
-                      {availableTypes.map((type) => {
-                        const on = !excludedTypes.has(type);
-                        const icon = TYPE_ICON[type] ?? "•";
-                        const label = TYPE_LABEL[type] ?? type.replace("ambient:", "~");
-                        return (
-                          <button key={type} onClick={() => toggleType(type)} title={type} style={{
-                            padding: "2px 6px", borderRadius: 3, fontSize: 10, cursor: "pointer",
-                            border: `1px solid ${on ? "var(--lm-teal)" : "var(--lm-border)"}`,
-                            background: on ? "var(--lm-teal-dim)" : "transparent",
-                            color: on ? "var(--lm-teal)" : "var(--lm-text-muted)",
-                            fontWeight: on ? 600 : 400,
-                          }}>
-                            {icon} {label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* Time range */}
-                <div>
-                  <div style={{ fontSize: 9, color: "var(--lm-text-muted)", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.06em" }}>Time range</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                    <input
-                      type="time"
-                      value={fromTime}
-                      onChange={(e) => setFromTime(e.target.value)}
-                      style={{
-                        flex: 1, padding: "3px 6px", borderRadius: 4, fontSize: 10,
-                        background: "var(--lm-bg)", border: "1px solid var(--lm-border)",
-                        color: fromTime ? "var(--lm-text)" : "var(--lm-text-muted)", outline: "none",
-                      }}
-                    />
-                    <span style={{ fontSize: 10, color: "var(--lm-text-muted)" }}>→</span>
-                    <input
-                      type="time"
-                      value={toTime}
-                      onChange={(e) => setToTime(e.target.value)}
-                      style={{
-                        flex: 1, padding: "3px 6px", borderRadius: 4, fontSize: 10,
-                        background: "var(--lm-bg)", border: "1px solid var(--lm-border)",
-                        color: toTime ? "var(--lm-text)" : "var(--lm-text-muted)", outline: "none",
-                      }}
-                    />
-                    {(fromTime || toTime) && (
-                      <button onClick={() => { setFromTime(""); setToTime(""); }} style={{
-                        padding: "2px 6px", borderRadius: 3, fontSize: 10, cursor: "pointer",
-                        border: "1px solid var(--lm-border)", background: "transparent",
-                        color: "var(--lm-red)", fontWeight: 700,
-                      }}>✕</button>
-                    )}
-                  </div>
-                </div>
-
-                {/* Reset all */}
+            {/* Search — always visible (most common quick-filter), with a quick
+                clear. The full filter set (sources, sort, sub-types, time range)
+                lives in the Filters modal opened from the button above. */}
+            <div style={{ position: "relative" }}>
+              <Search
+                size={13}
+                strokeWidth={2}
+                style={{
+                  position: "absolute", left: 9, top: "50%", transform: "translateY(-50%)",
+                  color: "var(--lm-text-muted)", pointerEvents: "none",
+                }}
+              />
+              <input
+                type="text"
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                placeholder="Search input / output…"
+                className="lm-u-input"
+                style={{
+                  width: "100%", boxSizing: "border-box" as const,
+                  padding: "6px 28px 6px 28px", borderRadius: 6, fontSize: 11,
+                  outline: "none",
+                }}
+              />
+              {searchText && (
                 <button
-                  onClick={() => {
-                    setSearchText(""); setFromTime(""); setToTime(""); setSortBy("newest");
-                    setExcludedTypes(() => { saveExcluded(new Set()); return new Set(); });
-                  }}
+                  onClick={() => setSearchText("")}
+                  aria-label="Clear search"
+                  className="lm-u-btn"
                   style={{
-                    alignSelf: "flex-start", padding: "3px 9px", borderRadius: 4, fontSize: 10,
-                    cursor: "pointer", border: "1px solid var(--lm-border)", background: "transparent",
-                    color: "var(--lm-text-muted)",
+                    position: "absolute", right: 5, top: "50%", transform: "translateY(-50%)",
+                    width: 20, height: 20, padding: 0, borderRadius: 5, border: "none",
+                    background: "transparent", color: "var(--lm-text-muted)",
+                    display: "inline-flex", alignItems: "center", justifyContent: "center",
                   }}
-                >Reset all</button>
-              </div>
-            )}
+                ><X size={13} strokeWidth={2} /></button>
+              )}
+            </div>
           </div>
-          <div style={{ flex: 1, overflowY: "auto", padding: "6px 8px", display: "flex", flexDirection: "column", gap: 5 }} className="lm-hide-scroll">
+          <div id="FLOW_LEFTBAR_LIST" data-region="FLOW_LEFTBAR_LIST" style={{ flex: 1, overflowY: "auto", padding: "6px 8px", display: "flex", flexDirection: "column", gap: 5 }} className="lm-flow-scroll">
             {filteredTurns.length === 0 ? (
-              <div style={{ padding: 12, color: "var(--lm-text-muted)", fontSize: 11 }}>No turns match filter</div>
+              <div style={{
+                flex: 1, display: "flex", flexDirection: "column",
+                alignItems: "center", justifyContent: "center", gap: 6,
+                padding: "32px 16px", color: "var(--lm-text-muted)", textAlign: "center" as const,
+              }}>
+                <Inbox size={26} strokeWidth={1.75} style={{ opacity: 0.5 }} />
+                <span style={{ fontSize: 11, fontWeight: 600 }}>
+                  {turns.length === 0 ? "No turns captured yet" : "No turns match filter"}
+                </span>
+                {turns.length > 0 && (
+                  <span style={{ fontSize: 9, opacity: 0.7 }}>Try widening the filters above</span>
+                )}
+              </div>
             ) : (
               filteredTurns.map((turn, i) => (
                 <div key={turn.id}>
                   {i > 0 && filteredTurns[i - 1].sessionBreak && (
                     <div style={{
-                      display: "flex", alignItems: "center", gap: 8, padding: "4px 0", margin: "2px 0",
+                      display: "flex", alignItems: "center", gap: 8, padding: "6px 4px", margin: "2px 0",
                     }}>
-                      <div style={{ flex: 1, borderTop: "1px dashed var(--lm-text-muted)", opacity: 0.4 }} />
-                      <span style={{ fontSize: 8, color: "var(--lm-text-muted)", whiteSpace: "nowrap" }}>session</span>
-                      <div style={{ flex: 1, borderTop: "1px dashed var(--lm-text-muted)", opacity: 0.4 }} />
+                      <div className="lm-flow-session-rule" />
+                      <span style={{
+                        fontSize: 8, fontWeight: 700, letterSpacing: "0.1em",
+                        textTransform: "uppercase" as const,
+                        color: "var(--lm-text-muted)", whiteSpace: "nowrap",
+                        padding: "1px 7px", borderRadius: 999,
+                        border: "1px solid var(--lm-border)",
+                        background: "color-mix(in srgb, var(--lm-text) 4%, transparent)",
+                      }}>session</span>
+                      <div className="lm-flow-session-rule is-right" />
                     </div>
                   )}
                   <div
@@ -862,13 +844,13 @@ export function FlowSection({
                     onClick={() => setSelectedTurnId(turn.id === selectedTurn?.id ? null : turn.id)}
                     style={{
                       borderRadius: 8,
-                      outline: turn.id === selectedTurn?.id ? `2px solid var(--lm-amber)` : "none",
                       cursor: "pointer",
                     }}
                   >
                     <TurnBadge
                       turn={turn}
                       pairTint={pairTintMap.get(turn.id)}
+                      userPhotos={userPhotos}
                       onViewPipeline={() => {
                         setSelectedTurnId(turn.id);
                         setMobilePipelineOpen(true);
@@ -885,8 +867,8 @@ export function FlowSection({
             users reach it through the "View pipeline" button on each
             TurnBadge, which opens PipelineModal full-screen with the same
             pipelineBody content. */}
-        <div className="lm-flow-pipeline" style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
-          <div style={{ ...S.card, flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <div id="FLOW_CANVAS" data-region="FLOW_CANVAS" className="lm-flow-pipeline" style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
+          <div id="FLOW_PIPELINE" data-region="FLOW_PIPELINE" style={{ ...S.card, flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
             {pipelineBody}
           </div>
         </div>

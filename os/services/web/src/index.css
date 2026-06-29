@@ -440,6 +440,147 @@
    the mobile breakpoint below overrides this to full-width. */
 .lm-flow-turns { width: clamp(300px, 24vw, 380px); }
 
+/* ── Flow turn list (monitor#flow LEFTBAR) polish ─────────────────────────
+   Desktop-only depth cues. Mobile keeps the flat collapse behavior below. */
+
+/* Sticky header: stays pinned while the list scrolls, with a soft gradient
+   wash + blur so rows scrolling underneath read as "behind glass". */
+.lm-root .lm-flow-turns-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--lm-text) 4%, var(--lm-card)) 0%,
+    var(--lm-card) 100%);
+  backdrop-filter: blur(6px);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--lm-text) 8%, transparent);
+}
+
+/* Count pill next to the "Turns" label. */
+.lm-root .lm-flow-count {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--lm-text-dim);
+  background: color-mix(in srgb, var(--lm-text) 6%, transparent);
+  border: 1px solid var(--lm-border);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Thin auto-hiding scrollbar for the turn list (replaces fully-hidden
+   scroll). Track stays invisible; thumb fades in on hover of the list. */
+.lm-root .lm-flow-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 0.2s ease;
+}
+.lm-root .lm-flow-scroll:hover { scrollbar-color: var(--lm-border-hi) transparent; }
+.lm-root .lm-flow-scroll::-webkit-scrollbar { width: 6px; }
+.lm-root .lm-flow-scroll::-webkit-scrollbar-track { background: transparent; }
+.lm-root .lm-flow-scroll::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 999px;
+  transition: background 0.2s ease;
+}
+.lm-root .lm-flow-scroll:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--lm-text) 22%, transparent);
+}
+.lm-root .lm-flow-scroll::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--lm-text) 38%, transparent);
+}
+
+/* Turn card hover/selected depth. Desktop only — the mobile block below owns
+   .lm-turn-card collapse behavior and must not inherit transforms. */
+@media (min-width: 769px) {
+  .lm-root .lm-turn-card {
+    position: relative;
+    transition: transform 0.12s ease, box-shadow 0.16s ease;
+  }
+  /* Left accent rail — grows in on hover, full + amber when selected. */
+  .lm-root .lm-turn-card::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 8px; bottom: 8px;
+    width: 3px;
+    border-radius: 999px;
+    background: var(--lm-border-hi);
+    opacity: 0;
+    transform: scaleY(0.4);
+    transform-origin: center;
+    transition: opacity 0.16s ease, transform 0.16s ease, background 0.16s ease;
+    pointer-events: none;
+  }
+  .lm-root .lm-turn-card:hover {
+    transform: translateX(2px);
+    box-shadow: 0 4px 14px -6px color-mix(in srgb, var(--lm-text) 30%, transparent);
+  }
+  .lm-root .lm-turn-card:hover::before { opacity: 0.7; transform: scaleY(0.85); }
+  .lm-root .lm-turn-card[data-expanded="true"]::before {
+    opacity: 1;
+    transform: scaleY(1);
+    background: var(--lm-amber);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--lm-amber) 60%, transparent);
+  }
+  /* Selected card: amber-tinted ring on the inner badge (which owns the
+     visible border), replacing the old hard 2px outline. */
+  .lm-root .lm-turn-card[data-expanded="true"] > div {
+    border-color: color-mix(in srgb, var(--lm-amber) 55%, var(--lm-border)) !important;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--lm-amber) 35%, transparent),
+                0 6px 18px -8px color-mix(in srgb, var(--lm-amber) 45%, transparent);
+  }
+}
+
+/* Honor reduced-motion: keep the visual states, drop the movement. */
+@media (prefers-reduced-motion: reduce) {
+  .lm-root .lm-turn-card,
+  .lm-root .lm-turn-card::before { transition: none; }
+  .lm-root .lm-turn-card:hover { transform: none; }
+}
+
+/* Turn card entrance — a new streamed turn fades in once, so the eye catches
+   "something new arrived" instead of a hard pop. Opacity-only on purpose: the
+   card's `transform` is owned by the hover/selected lift below, and animating
+   `transform` here (even with `both`) would freeze that lift once the entrance
+   settled. `forwards` keeps the final opacity without holding transform. */
+@keyframes lm-turn-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.lm-root .lm-turn-card { animation: lm-turn-in 0.28s ease-out forwards; }
+
+/* Source-icon: gentle scale + brighter tint on card hover, for a touch of
+   interactivity. The icon badge owns .lm-turn-src. */
+.lm-root .lm-turn-src { transition: transform 0.15s ease, background 0.15s ease; }
+.lm-root .lm-turn-card:hover .lm-turn-src { transform: scale(1.12); }
+
+/* ACTIVE status chip — soft pulsing dot signalling a live, in-flight turn.
+   Done/error turns render a static chip (no .lm-turn-active class). */
+.lm-root .lm-turn-active::before {
+  content: "";
+  display: inline-block;
+  width: 5px; height: 5px; border-radius: 50%;
+  margin-right: 4px; vertical-align: middle;
+  background: currentColor;
+  animation: lm-pulse-dot 1.8s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lm-root .lm-turn-card { animation: none; }
+  .lm-root .lm-turn-card:hover .lm-turn-src { transform: none; }
+  .lm-root .lm-turn-active::before { animation: none; }
+}
+
+/* Session divider — gradient hairline that fades toward the center label,
+   replacing the flat dashed rule. */
+.lm-root .lm-flow-session-rule {
+  height: 1px;
+  flex: 1;
+  background: linear-gradient(to var(--dir, right),
+    transparent, color-mix(in srgb, var(--lm-text) 28%, transparent));
+}
+.lm-root .lm-flow-session-rule.is-right { --dir: left; }
+
 @media (max-width: 900px) {
   .lm-grid-4 { grid-template-columns: repeat(2, 1fr); gap: 10px; }
   .lm-grid-5 { grid-template-columns: repeat(3, 1fr); gap: 8px; }
@@ -500,8 +641,9 @@
 }
 
 /* View pipeline button — hidden by default (desktop), shown only on mobile
-   via the media query above. */
-.lm-view-pipeline-btn { display: none; }
+   via the media query above. `!important` so a per-button inline `display`
+   (e.g. an icon+label flex) can't leak the mobile-only button onto desktop. */
+.lm-view-pipeline-btn { display: none !important; }
 
 @media (max-width: 480px) {
   .lm-grid-4 { grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -1007,6 +1149,37 @@
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+/* Flow filters modal — overlay fades, panel scales in. */
+#FLOW_FILTERS_MODAL_OVERLAY { animation: lm-fade-in 0.16s ease-out; }
+.lm-filters-modal { animation: lm-filters-pop 0.18s cubic-bezier(0.34, 1.4, 0.64, 1) both; }
+@keyframes lm-filters-pop {
+  from { opacity: 0; transform: scale(0.96) translateY(8px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #FLOW_FILTERS_MODAL_OVERLAY, .lm-filters-modal { animation: none; }
+}
+/* Time-range fields — de-chrome the native time input so it sits flush inside
+   the themed .lm-time-field pill (no native border/spinners; themed picker
+   indicator). */
+.lm-time-field:hover { border-color: var(--lm-border-hi); }
+.lm-time-field:focus-within { border-color: var(--lm-amber); }
+.lm-root .lm-time-input { padding: 0; color-scheme: dark; }
+.lm-time-input::-webkit-calendar-picker-indicator {
+  margin: 0; padding: 2px; cursor: pointer; border-radius: 4px;
+  opacity: 0.45; filter: grayscale(1);
+  transition: opacity 0.15s, background 0.15s;
+}
+.lm-time-input::-webkit-calendar-picker-indicator:hover {
+  opacity: 1; background: var(--lm-amber-dim);
+}
+.lm-time-input::-webkit-inner-spin-button,
+.lm-time-input::-webkit-clear-button { display: none; }
+/* Light mode: the native time UI should follow the page, not force dark. */
+.lm-root.lm-light .lm-time-input { color-scheme: light; }
+@media (prefers-color-scheme: light) {
+  .lm-root:not(.lm-dark) .lm-time-input { color-scheme: light; }
+}
 @keyframes lm-pulse-glow {
   0%, 100% { box-shadow: 0 0 6px var(--lm-amber-glow); }
   50%       { box-shadow: 0 0 14px var(--lm-amber-glow); }
@@ -1039,6 +1212,13 @@
 @keyframes lm-pulse-dot {
   0%, 100% { opacity: 1; transform: scale(1); }
   50%      { opacity: 0.45; transform: scale(0.82); }
+}
+/* Flow Panel brand "live" dot — gentle breathing pulse. */
+.lm-root .lm-live-dot {
+  animation: lm-pulse-dot 1.8s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lm-root .lm-live-dot { animation: none; }
 }
 .lm-spinner {
   display: inline-block;
