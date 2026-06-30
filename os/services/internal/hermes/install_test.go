@@ -25,12 +25,14 @@ func TestPresyncRegistered(t *testing.T) {
 func TestPresyncOwnsConfigStructure(t *testing.T) {
 	s := string(PresyncScript)
 	for _, want := range []string{
-		`.model.provider = "custom:autonomous"`,        // static provider
+		`.model.provider = "custom:autonomous"`,                // static provider
 		`.custom_providers[0].api_mode = "anthropic_messages"`, // static routing mode
 		`.custom_providers[0].name     = "autonomous"`,         // static provider name
 		`.model.default = "Auto-AI"`,                           // fixed campaign-api model alias (NOT openclaw llm_model)
 		`yq -i '.model = {}'`,                                  // coerce model:'' (post hermes setup --reset) to a map
 		"AUTONOMOUS_API_KEY",                                   // dynamic key sync (.env)
+		`.agent.reasoning_effort = "low"`,                      // cost knob self-heal (TUNING block)
+		`.prompt_caching.response_cache = true`,                // cost knob self-heal (TUNING block)
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("presync.sh missing %q — config structure/sync incomplete", want)

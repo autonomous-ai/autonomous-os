@@ -83,6 +83,21 @@ yq -i '
   | .custom_providers[0].base_url = (.custom_providers[0].base_url // "https://campaign-api.autonomous.ai/api/v1/ai")
 ' "$CONFIG_YAML"
 
+# ── 1b. TUNING (idempotent self-heal) ──────────────────────────────────────────
+# The gateway seeds agent.reasoning_effort + prompt_caching with sensible defaults
+# when it first writes config.yaml, but `hermes setup --reset` regenerates the file
+# from whatever the installed gateway defaults to at that time — so without us
+# re-asserting them, a reset could silently drift the cost knobs. Pin the two we
+# care about (low reasoning to favour latency, prompt cache on) so they self-heal,
+# mirroring the STRUCTURE block above and openclaw's ensureAgentDefaults. Minimal
+# on purpose: only the cost-relevant fields, hard-set (a reset is exactly when we
+# want our value, not the gateway's).
+log "ensure agent reasoning_effort + prompt_caching"
+yq -i '
+  .agent.reasoning_effort = "low"
+  | .prompt_caching.response_cache = true
+' "$CONFIG_YAML"
+
 # ── 2. DYNAMIC (config.json wins) ──────────────────────────────────────────────
 # NOTE: .model.default is NOT synced from llm_model — that is the OpenClaw primary
 # model (e.g. claude-opus-4-6), which is irrelevant to Hermes: os-server sends a
