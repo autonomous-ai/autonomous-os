@@ -573,6 +573,34 @@ REALTIME_GEMINI_GOOGLE_SEARCH: bool = (
     ).lower()
     in ("1", "true", "yes")
 )
+# In-session vision: register a `look` tool so Gemini Live captures one camera
+# frame and answers "what is this / what do you see" DIRECTLY in the realtime
+# session, instead of delegating to main (main → skill lookup → /camera/snapshot
+# → vision LLM, several seconds). One frame per call (tool-triggered, NOT a video
+# stream) keeps the added token cost marginal. Defaults ON; env HAL_GEMINI_VISION
+# or realtime.gemini.vision overrides. When OFF (or no camera / non-Gemini
+# provider) the tool isn't registered and visual questions fall back to the old
+# delegate flow. Defaults ON; set HAL_GEMINI_VISION=false (or realtime.gemini.vision
+# false) to force the old delegate flow. The captured frame is downscaled to
+# VISION_MAX_WIDTH before send to bound image tokens.
+REALTIME_GEMINI_VISION: bool = (
+    os.environ.get(
+        "HAL_GEMINI_VISION",
+        str(_RT_GEMINI.get("vision", True)),
+    ).lower()
+    in ("1", "true", "yes")
+)
+REALTIME_GEMINI_VISION_MAX_WIDTH: int = int(
+    os.environ.get("HAL_GEMINI_VISION_MAX_WIDTH", "768")
+)
+# Cost guard for `look`: minimum seconds between two image SENDS. A model can call
+# look several times in a row (same turn, or back-to-back turns); each new image
+# costs vision tokens. Within this window we DON'T capture/send a fresh frame —
+# the frame from the recent look is still in the session context, so we just let
+# the model answer from it. Set 0 to always send a fresh frame.
+REALTIME_GEMINI_VISION_MIN_INTERVAL_S: float = float(
+    os.environ.get("HAL_GEMINI_VISION_MIN_INTERVAL_S", "10.0")
+)
 
 # --- Realtime: OpenAI Realtime ---
 REALTIME_OPENAI_API_KEY: str = (

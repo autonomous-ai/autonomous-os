@@ -86,6 +86,44 @@ thiết bị smart-home của họ, tin nhắn của họ) cho `delegate_to_main
 - **Chỉ đọc.** Grounding chỉ trả lời câu hỏi, không thực hiện hành động. Nhạc,
   phần cứng, ghi memory, và skill vẫn delegate.
 
+## Thị giác trong phiên — tool `look` (chỉ Gemini)
+
+Khi người dùng hỏi về thứ thiết bị **nhìn thấy** ("cái này là gì?", "tôi đang cầm
+gì?", "đọc cái nhãn này", "màu gì đây?"), model realtime trả lời ngay trong phiên
+thay vì delegate. Orchestrator đăng ký tool `look` (`orchestrator.py`,
+`LOOK_TOOL`) và xử lý trong `_handle_look_call`:
+
+1. Lấy frame camera mới nhất **in-process** (`_capture_frame` đọc
+   `app_state.camera_capture.last_frame` — không qua HTTP loopback, không freeze
+   servo), downscale về `HAL_GEMINI_VISION_MAX_WIDTH` (mặc định 768px) để giới hạn
+   token ảnh.
+2. Đẩy vào làm **video input** realtime (`ImageInput` → `send_realtime_input(video=…)`).
+3. Gửi tool result với `trigger_response=True` để Gemini **tiếp tục cùng turn** và
+   nói câu trả lời với ảnh đã có trong context.
+
+Vì cả hai lần gửi đi qua cùng một send queue FIFO của agent, ảnh vào context trước
+khi model sinh tiếp. Khác với `delegate_to_main`, `look` **không** ngắt turn — model
+nhìn rồi nói.
+
+Cái này thay cho đường chậm (delegate → main → tìm skill → `/camera/snapshot` →
+LLM vision, vài giây) bằng một round-trip ngay trong phiên.
+
+Điều kiện kích hoạt (cần cả ba, nếu không câu hỏi thị giác sẽ rơi về delegate):
+
+- **Capability:** thiết bị khai báo `vision` (có camera) — `server.py` truyền
+  `enable_vision`.
+- **Flag:** `HAL_GEMINI_VISION` / `realtime.gemini.vision` (mặc định **bật**).
+- **Provider:** chỉ Gemini (luồng inject ảnh → tiếp tục turn đã làm + test cho
+  Gemini Live; OpenAI vẫn delegate). System prompt Gemini
+  (`system_prompt_gemini.md`) mô tả khi nào gọi `look`.
+
+Chi phí: một frame mỗi lần gọi (kích bằng tool, **không** stream video), nên token
+thêm vào là không đáng kể so với audio của turn. Frame 768px ≈ vài trăm token ảnh.
+Để chặn model gọi `look` quá nhiều làm tốn token ảnh, `_handle_look_call` chỉ gửi
+**tối đa một ảnh mỗi turn** và **không gửi ảnh mới trong vòng
+`HAL_GEMINI_VISION_MIN_INTERVAL_S` (mặc định 10s)** kể từ lần gửi trước — các lần
+`look` lặp lại sẽ xài lại ảnh đã có trong context.
+
 ## Các provider
 
 Hai backend thay thế cho nhau, chọn bằng `HAL_REALTIME_PROVIDER`
@@ -291,6 +329,9 @@ Mỗi knob có thể bị `HAL_*` env override (thắng block, và là đường
 | `HAL_GEMINI_LIVE_BASE_URL` | `<llm_base_url>/ws/gemini` | |
 | `HAL_GEMINI_THINKING_LEVEL` | `MINIMAL` | `MINIMAL` \| `LOW` \| `MEDIUM` \| `HIGH` — default rẻ (trước là `HIGH`) |
 | `HAL_GEMINI_GOOGLE_SEARCH` | `true` | Google Search grounding (chỉ Gemini). Cho model realtime tự trả lời câu dữ liệu công khai theo thời gian thực (thời tiết, tin tức, lookup) ngay trong phiên thay vì delegate. Tính phí theo mỗi grounded request (cộng token); chỉ phát sinh khi Gemini quyết định search. Cũng đặt được qua `realtime.gemini.google_search` trong config.json. |
+| `HAL_GEMINI_VISION` | `true` | Tool `look` trong phiên (chỉ Gemini). Cho model realtime chụp một frame camera và trả lời câu hỏi thị giác ("cái này là gì?") ngay trong phiên thay vì delegate. Mặc định bật; chỉ đăng ký khi thiết bị còn có capability `vision`. Cũng đặt được qua `realtime.gemini.vision` trong config.json. |
+| `HAL_GEMINI_VISION_MAX_WIDTH` | `768` | Bề rộng tối đa (px) frame được downscale trước khi gửi — giới hạn token ảnh. |
+| `HAL_GEMINI_VISION_MIN_INTERVAL_S` | `10` | Chặn chi phí: số giây tối thiểu giữa hai lần **gửi ảnh**. Gọi `look` lặp trong khoảng này (hoặc gọi lần hai trong cùng turn) sẽ xài lại ảnh đã có trong context thay vì gửi ảnh mới. `0` = luôn gửi ảnh mới. |
 | `OPENAI_API_KEY` | — | Key OpenAI; fallback về `llm_api_key` |
 | `HAL_OPENAI_REALTIME_MODEL` | `gpt-realtime-2` | |
 | `HAL_OPENAI_REALTIME_VOICE` | `alloy` | |
@@ -305,7 +346,7 @@ Mỗi knob có thể bị `HAL_*` env override (thắng block, và là đường
 
 | File | Vai trò |
 |------|---------|
-| `orchestrator.py` | Vòng đời session, tool `delegate_to_main` + `express_emotion`, stream lượt |
+| `orchestrator.py` | Vòng đời session, tool `delegate_to_main` + `express_emotion` + `look`, stream lượt |
 | `voice_agent/base.py` | Agent trừu tượng: contract 2-thread/queue, `receive()` |
 | `voice_agent/gemini_live.py` | Provider Gemini Live (IO loop asyncio) |
 | `voice_agent/openai_realtime.py` | Provider OpenAI Realtime (sync, connection serialize bằng lock) |

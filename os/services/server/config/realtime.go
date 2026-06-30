@@ -43,6 +43,11 @@ type GeminiRealtime struct {
 	// (on). Kept here so an operator's explicit override survives config re-saves
 	// instead of being silently dropped on the next marshal.
 	GoogleSearch *bool `json:"google_search,omitempty" yaml:"googleSearch"`
+	// Vision toggles the in-session `look` tool (Gemini-only): capture one camera
+	// frame and answer visual questions in the realtime session instead of
+	// delegating to main. nil → HAL default (on). Kept here so an operator's
+	// explicit override survives config re-saves.
+	Vision *bool `json:"vision,omitempty" yaml:"vision"`
 }
 
 // OpenAIRealtime holds OpenAI Realtime's provider-specific knobs. Empty fields →

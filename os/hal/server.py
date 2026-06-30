@@ -352,6 +352,11 @@ async def lifespan(app: FastAPI):
                     # express_emotion tool. A device with no face never registers
                     # the tool, so the realtime model can't set an emotion.
                     enable_expression=("expression" in _profile.capabilities),
+                    # `vision` (camera) gates the realtime agent's `look` tool, so
+                    # a device with no camera never registers it and visual
+                    # questions delegate to main. The config flag + Gemini-only
+                    # gate are applied inside the orchestrator.
+                    enable_vision=("vision" in _profile.capabilities),
                 )
                 state.voice_service.start()
                 logger.info("VoiceService auto-started (%s, wake_words=%s)", stt_provider.name, wake_words)

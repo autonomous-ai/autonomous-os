@@ -40,6 +40,7 @@ from hal.drivers.realtime.enums import AgentGateway
 from hal.drivers.realtime.models import (
     FunctionCallOutput,
     FunctionCallResultInput,
+    ImageInput,
     OutputBase,
     TextInput,
 )
@@ -124,6 +125,30 @@ EMOTION_TOOL: dict[str, Any] = {
     },
 }
 
+LOOK_TOOL_NAME: str = "look"
+LOOK_TOOL_DESCRIPTION: str = (
+    "Capture a single frame from the device's camera and look at it, so you can "
+    "answer a question about what you SEE right now (e.g. 'what is this?', 'what "
+    "am I holding?', 'what's in front of you?', 'read this label', 'what color is "
+    "this?'). Unlike delegate_to_main, this does NOT hand off — call it, the image "
+    "is added to your context, then you immediately SPEAK your answer in this same "
+    "turn. Use it whenever the user asks about the visible world or refers to "
+    "something physical ('this', 'that', 'here') that you need to see. Do NOT use "
+    "it for non-visual requests."
+)
+
+# No parameters: the model just signals intent to look; the device grabs the
+# current frame. Kept empty so the call is as cheap/fast as possible.
+LOOK_TOOL: dict[str, Any] = {
+    "type": "function",
+    "name": LOOK_TOOL_NAME,
+    "description": LOOK_TOOL_DESCRIPTION,
+    "parameters": {
+        "type": "object",
+        "properties": {},
+    },
+}
+
 
 class RealtimeOrchestrator:
     """Manages a single realtime voice agent session.
@@ -148,6 +173,7 @@ class RealtimeOrchestrator:
         gateway: AgentGateway = AgentGateway.OPENCLAW,
         extra_tools: list[dict[str, Any]] | None = None,
         enable_expression: bool = False,
+        enable_vision: bool = False,
     ) -> None:
         # express_emotion is registered ONLY when the device declares the
         # `expression` capability (DEVICE.md → expression: { routes: [emotion] }).
@@ -157,7 +183,24 @@ class RealtimeOrchestrator:
         tools: list[dict[str, Any]] = [DELEGATE_TOOL]
         if enable_expression:
             tools.append(EMOTION_TOOL)
+        # `look` (in-session vision) is registered only when ALL hold: the device
+        # declares the `vision` capability (camera present), the config flag is on
+        # (REALTIME_GEMINI_VISION), and the provider is Gemini (the image-injection
+        # → continue-turn flow is implemented + tested for Gemini Live; OpenAI keeps
+        # delegating). Otherwise visual questions fall back to delegate_to_main.
+        self._vision_enabled: bool = (
+            enable_vision
+            and config.REALTIME_GEMINI_VISION
+            and config.REALTIME_PROVIDER.strip().lower() == "gemini"
+        )
+        if self._vision_enabled:
+            tools.append(LOOK_TOOL)
         self._tools: list[dict[str, Any]] = tools + (extra_tools or [])
+        # `look` cost guards: at most ONE image sent per turn, and no fresh image
+        # within VISION_MIN_INTERVAL_S of the last send (the recent frame is still
+        # in context, so repeat looks reuse it instead of re-billing image tokens).
+        self._looked_this_turn: bool = False
+        self._last_look_sent_monotonic: float = 0.0
         self._agent: VoiceAgentBase | None = None
         self._started: threading.Event = threading.Event()
         self._consecutive_silent: int = 0  # zombie-session guard (see stream_output)
@@ -473,8 +516,19 @@ class RealtimeOrchestrator:
         if self._agent is None:
             return
 
+        self._looked_this_turn = False  # reset the per-turn `look` image-send guard
         produced = False  # did this turn yield any real output (vs stay silent)?
         for output in self._agent.receive(stop_on_done=True):
+            if (
+                isinstance(output, FunctionCallOutput)
+                and output.name == LOOK_TOOL_NAME
+            ):
+                # Inject the camera frame, then continue the SAME turn so the model
+                # describes it. No yield here: the spoken answer arrives as the
+                # turn resumes and is yielded by the branches below (which set
+                # produced=True). The recv loop keeps reading until turn_complete.
+                self._handle_look_call(output)
+                continue
             if (
                 isinstance(output, FunctionCallOutput)
                 and output.name == EMOTION_TOOL_NAME
@@ -672,6 +726,119 @@ class RealtimeOrchestrator:
             logger.warning(
                 "[realtime] emotion expression failed (emotion=%s): %s", emotion, e
             )
+
+    def _handle_look_call(self, output: FunctionCallOutput) -> None:
+        """Grab the current camera frame and feed it to the model, then continue
+        the turn so the model answers the visual question in-session.
+
+        Flow (Gemini Live): enqueue the frame as realtime video input, THEN send
+        the tool result with trigger_response=True. Both go through the agent's
+        single send queue (FIFO), so the image lands in the session context before
+        the tool response resumes generation — the model then speaks its answer in
+        the same turn. If the camera is unavailable we still send a result (with an
+        error) so the model can apologise instead of the turn hanging.
+        """
+        if self._agent is None:
+            return
+        now: float = time.monotonic()
+        # Cost guard: skip sending a NEW image when the model is over-calling look —
+        # one image per turn, and none within VISION_MIN_INTERVAL_S of the last send.
+        # The recent frame is still in the session context, so just ack and let the
+        # model answer from it (trigger_response=True continues the turn).
+        min_interval: float = config.REALTIME_GEMINI_VISION_MIN_INTERVAL_S
+        since_last: float = now - self._last_look_sent_monotonic
+        if self._looked_this_turn or (
+            min_interval > 0
+            and self._last_look_sent_monotonic > 0.0
+            and since_last < min_interval
+        ):
+            reason: str = (
+                "already looked this turn"
+                if self._looked_this_turn
+                else f"{since_last:.1f}s < {min_interval:.0f}s since last send"
+            )
+            logger.info(
+                "[realtime] look: reusing recent frame (%s) — no new image sent (cost)",
+                reason,
+            )
+            self._agent.send(
+                [
+                    FunctionCallResultInput(
+                        call_id=output.call_id,
+                        output='{"result": "using the current view; answer now"}',
+                    )
+                ]
+            )
+            return
+
+        frame = self._capture_frame()
+        if frame is not None:
+            self._agent.send([ImageInput(image=frame)])
+            self._looked_this_turn = True
+            self._last_look_sent_monotonic = now
+            result: str = '{"result": "captured"}'
+            logger.info(
+                "[realtime] look: captured frame %s in %.0fms",
+                getattr(frame, "shape", "?"),
+                (time.monotonic() - now) * 1000,
+            )
+        else:
+            result = '{"error": "camera unavailable"}'
+            logger.warning("[realtime] look: no camera frame available")
+        # trigger_response defaults True → Gemini continues the turn and speaks the
+        # answer now that the image is in context.
+        self._agent.send(
+            [FunctionCallResultInput(call_id=output.call_id, output=result)]
+        )
+
+    @staticmethod
+    def _capture_frame() -> Any:
+        """Return the latest camera frame (BGR ndarray) downscaled for cost, or
+        None if no camera. Reads HAL camera state in-process (no HTTP loopback);
+        mirrors the wait/disable handling of routes.camera.camera_snapshot but
+        skips the servo-freeze (realtime wants the answer fast, not a perfect
+        still)."""
+        try:
+            import cv2
+
+            import hal.app_state as state
+        except Exception:
+            return None
+        cap = getattr(state, "camera_capture", None)
+        if cap is None:
+            return None
+        was_disabled: bool = bool(getattr(state, "_camera_disabled", False))
+        try:
+            if was_disabled:
+                cap.start()
+            cap.acquire_consumer()
+            try:
+                deadline: float = time.monotonic() + 2.0
+                frame: Any = None
+                while time.monotonic() < deadline:
+                    frame = cap.last_frame
+                    if frame is not None:
+                        break
+                    time.sleep(0.05)
+            finally:
+                cap.release_consumer()
+                if was_disabled:
+                    cap.stop()
+            if frame is None:
+                return None
+            max_w: int = config.REALTIME_GEMINI_VISION_MAX_WIDTH
+            h, w = frame.shape[:2]
+            if max_w and w > max_w:
+                scale: float = max_w / float(w)
+                frame = cv2.resize(
+                    frame,
+                    (max(1, int(w * scale)), max(1, int(h * scale))),
+                    interpolation=cv2.INTER_AREA,
+                )
+            return frame
+        except Exception:
+            logger.exception("[realtime] look: frame capture failed")
+            return None
 
     def send_text(self, text: str) -> None:
         """Send a text message to the agent as context (non-blocking).

@@ -90,6 +90,43 @@ Trade-offs:
 - **Read-only.** Grounding answers questions; it never performs actions. Music,
   hardware, memory writes, and skills still delegate.
 
+## In-session vision — the `look` tool (Gemini only)
+
+When the user asks about what the device **sees** ("what is this?", "what am I
+holding?", "read this label", "what colour is this?"), the realtime model answers
+in-session instead of delegating. The orchestrator registers a `look` tool
+(`orchestrator.py`, `LOOK_TOOL`) and handles the call in `_handle_look_call`:
+
+1. Grab the latest camera frame **in-process** (`_capture_frame` reads
+   `app_state.camera_capture.last_frame` — no HTTP loopback, no servo-freeze),
+   downscaled to `HAL_GEMINI_VISION_MAX_WIDTH` (default 768px) to bound image
+   tokens.
+2. Enqueue it as realtime **video input** (`ImageInput` → `send_realtime_input(video=…)`).
+3. Send the tool result with `trigger_response=True` so Gemini **continues the
+   same turn** and speaks the answer with the image now in context.
+
+Because both sends go through the agent's single FIFO send queue, the frame
+lands in context before generation resumes. Unlike `delegate_to_main`, `look`
+does **not** break the turn — the model looks, then talks.
+
+This replaces the slow path (delegate → main → skill lookup → `/camera/snapshot`
+→ vision LLM, several seconds) with one in-session round-trip.
+
+Gating (all three required, else visual questions fall back to delegation):
+
+- **Capability:** the device declares `vision` (a camera) — `server.py` passes
+  `enable_vision`.
+- **Flag:** `HAL_GEMINI_VISION` / `realtime.gemini.vision` (default **on**).
+- **Provider:** Gemini only (the image-inject → continue-turn flow is
+  implemented + tested for Gemini Live; OpenAI keeps delegating). The
+  Gemini system prompt (`system_prompt_gemini.md`) describes when to call `look`.
+
+Cost: one frame per call (tool-triggered, **not** a video stream), so the added
+tokens are marginal next to the turn's audio. A 768px frame is a few hundred
+image tokens. To stop an over-eager model from re-billing images, `_handle_look_call`
+sends **at most one image per turn** and **none within `HAL_GEMINI_VISION_MIN_INTERVAL_S`
+(default 10s) of the last send** — repeat looks reuse the frame already in context.
+
 ## Providers
 
 Two interchangeable backends, selected by `HAL_REALTIME_PROVIDER`
@@ -301,6 +338,9 @@ Each knob's `HAL_*` env var overrides the block (and is the dev-box path):
 | `HAL_GEMINI_LIVE_BASE_URL` | `<llm_base_url>/ws/gemini` | |
 | `HAL_GEMINI_THINKING_LEVEL` | `MINIMAL` | `MINIMAL` \| `LOW` \| `MEDIUM` \| `HIGH` — cost-lean default (was `HIGH`) |
 | `HAL_GEMINI_GOOGLE_SEARCH` | `true` | Google Search grounding (Gemini only). Lets the realtime model answer public live-data questions (weather, news, lookups) in-session instead of delegating. Bills per grounded request on top of tokens; fires only when Gemini decides to search. Also settable via `realtime.gemini.google_search` in config.json. |
+| `HAL_GEMINI_VISION` | `true` | In-session `look` tool (Gemini only). Lets the realtime model capture one camera frame and answer visual questions ("what is this?") in-session instead of delegating. Default on; only registered when the device also has the `vision` capability. Also settable via `realtime.gemini.vision` in config.json. |
+| `HAL_GEMINI_VISION_MAX_WIDTH` | `768` | Max width (px) the captured frame is downscaled to before sending — bounds image tokens. |
+| `HAL_GEMINI_VISION_MIN_INTERVAL_S` | `10` | Cost guard: minimum seconds between two image **sends**. Repeat `look` calls within this window (or a second call in the same turn) reuse the frame already in context instead of sending a new one. `0` = always send fresh. |
 | `OPENAI_API_KEY` | — | OpenAI key; falls back to `llm_api_key` |
 | `HAL_OPENAI_REALTIME_MODEL` | `gpt-realtime-2` | |
 | `HAL_OPENAI_REALTIME_VOICE` | `alloy` | |
@@ -315,7 +355,7 @@ Each knob's `HAL_*` env var overrides the block (and is the dev-box path):
 
 | File | Role |
 |------|------|
-| `orchestrator.py` | Session lifecycle, `delegate_to_main` + `express_emotion` tools, turn streaming |
+| `orchestrator.py` | Session lifecycle, `delegate_to_main` + `express_emotion` + `look` tools, turn streaming |
 | `voice_agent/base.py` | Abstract agent: two-thread queue contract, `receive()` |
 | `voice_agent/gemini_live.py` | Gemini Live provider (asyncio IO loop) |
 | `voice_agent/openai_realtime.py` | OpenAI Realtime provider (sync, lock-serialized connection) |
