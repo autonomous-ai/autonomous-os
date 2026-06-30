@@ -112,6 +112,14 @@ FACE_AREA_RATIO_THRESHOLD = float(os.environ.get("HAL_FACE_AREA_RATIO_THRESHOLD"
 # --- DL backend connection ---
 OS_CONFIG_PATH = os.environ.get("OS_CONFIG_PATH", "/root/config/config.json")
 
+# Persisted speaker volume (0-100). set_volume writes it on every change so
+# os-server restores the user's last choice at next boot instead of resetting
+# to the DEVICE.md startup_volume. Sits next to config.json (the dir shared
+# with the Go server via OS_CONFIG_PATH).
+VOLUME_STATE_PATH = os.environ.get(
+    "HAL_VOLUME_STATE_PATH", os.path.join(os.path.dirname(OS_CONFIG_PATH), ".volume")
+)
+
 def _os_cfg_get(key: str, default: str = "") -> str:
     """Read a value from the os-server config.json (shared with the Go server)."""
     try:
@@ -565,6 +573,42 @@ REALTIME_GEMINI_GOOGLE_SEARCH: bool = (
     ).lower()
     in ("1", "true", "yes")
 )
+# In-session vision: register a `look` tool so Gemini Live captures one camera
+# frame and answers "what is this / what do you see" DIRECTLY in the realtime
+# session, instead of delegating to main (main → skill lookup → /camera/snapshot
+# → vision LLM, several seconds). One frame per call (tool-triggered, NOT a video
+# stream) keeps the added token cost marginal. Defaults ON; env HAL_GEMINI_VISION
+# or realtime.gemini.vision overrides. When OFF (or no camera / non-Gemini
+# provider) the tool isn't registered and visual questions fall back to the old
+# delegate flow. Defaults ON; set HAL_GEMINI_VISION=false (or realtime.gemini.vision
+# false) to force the old delegate flow. The captured frame is downscaled to
+# VISION_MAX_WIDTH before send to bound image tokens.
+REALTIME_GEMINI_VISION: bool = (
+    os.environ.get(
+        "HAL_GEMINI_VISION",
+        str(_RT_GEMINI.get("vision", True)),
+    ).lower()
+    in ("1", "true", "yes")
+)
+REALTIME_GEMINI_VISION_MAX_WIDTH: int = int(
+    os.environ.get("HAL_GEMINI_VISION_MAX_WIDTH", "768")
+)
+# Cost guard for `look`: minimum seconds between two image SENDS. A model can call
+# look several times in a row (same turn, or back-to-back turns); each new image
+# costs vision tokens. Within this window we DON'T capture/send a fresh frame —
+# the frame from the recent look is still in the session context, so we just let
+# the model answer from it. Set 0 to always send a fresh frame.
+REALTIME_GEMINI_VISION_MIN_INTERVAL_S: float = float(
+    os.environ.get("HAL_GEMINI_VISION_MIN_INTERVAL_S", "10.0")
+)
+# Vision handoff: when a `look` turn delegates / falls back to the main agent
+# (e.g. Gemini timed out mid-turn), the frame `look` already captured is handed
+# to the main agent BY PATH so it reuses it instead of snapshotting again. The
+# handoff path is only attached if the frame is younger than this (freshness
+# guard; the frame is also cleared per-turn). 0 disables the age guard.
+REALTIME_GEMINI_VISION_HANDOFF_MAX_AGE_S: float = float(
+    os.environ.get("HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S", "20.0")
+)
 
 # --- Realtime: OpenAI Realtime ---
 REALTIME_OPENAI_API_KEY: str = (
@@ -585,6 +629,21 @@ REALTIME_OPENAI_REASONING_EFFORT: str = _rt_str("HAL_OPENAI_REASONING_EFFORT", _
 # --- Realtime: Context manager ---
 OPENCLAW_WORKSPACE_DIR: str = os.environ.get("HAL_OPENCLAW_WORKSPACE_DIR", "/root/.openclaw/workspace")
 HERMES_WORKSPACE_DIR: str = os.environ.get("HAL_HERMES_WORKSPACE_DIR", "/root/.hermes")
+
+# Camera snapshot dir. MUST sit under the ACTIVE agent runtime's media root — the
+# agent's image tool only reads files under its allow-list, else it returns "not
+# under an allowed directory". So this follows AGENT_GATEWAY instead of a hardcoded
+# brand (the multi-agent bug). NOT /tmp: outside the allow-list AND wiped on
+# restart. Override with HAL_SNAPSHOT_DIR. The path is handed to the agent
+# absolute, so any runtime reads it as root.
+_AGENT_CONFIG_DIRS: dict[str, str] = {
+    "openclaw": "/root/.openclaw",
+    "hermes": "/root/.hermes",
+}
+SNAPSHOT_DIR: str = os.environ.get("HAL_SNAPSHOT_DIR") or (
+    _AGENT_CONFIG_DIRS.get(AGENT_GATEWAY, _AGENT_CONFIG_DIRS["openclaw"])
+    + "/media/hal-snapshots"
+)
 _rt_workspace: str = OPENCLAW_WORKSPACE_DIR.rstrip("/")
 REALTIME_MEMORY_PATH: str = os.environ.get("HAL_REALTIME_MEMORY_PATH", f"{_rt_workspace}/realtime/memory.jsonl")
 REALTIME_MAX_MEMORY_ENTRIES: int = int(os.environ.get("HAL_REALTIME_MAX_MEMORY_ENTRIES", "1000"))

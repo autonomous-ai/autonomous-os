@@ -228,13 +228,25 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 				}
 			}
 
-			// Init speaker volume from the device profile (DEVICE.md `startup_volume`,
-			// default 100). 100 keeps the legacy behavior — software at max so the
-			// hardware/alsactl level is the effective control — while a device with a
-			// loud speaker can declare a quieter boot level instead of hardcoding it.
-			startupVol := device.StartupVolume(s.config.DeviceTypeOrDefault())
-			if err := s.agentGateway.SetVolume(startupVol); err != nil {
-				slog.Warn("init volume failed", "component", "server", "error", err, "volume", startupVol)
+			// Init speaker volume — only for devices that declare the `audio`
+			// capability; a device with no speaker has no volume to set. A volume the
+			// user last set (persisted by HAL on every /audio/volume change) wins, so
+			// the boot level follows their last choice instead of resetting every
+			// reboot. Falls back to the device profile (DEVICE.md `startup_volume`,
+			// default 100) on first boot — 100 keeps the legacy behavior (software at
+			// max, hardware/alsactl is the effective control) while a loud-speaker
+			// device can declare a quieter boot level instead of hardcoding it.
+			if device.Has(s.config.DeviceTypeOrDefault(), device.CapAudio) {
+				startupVol := device.StartupVolume(s.config.DeviceTypeOrDefault())
+				volSrc := "device profile"
+				if v, ok := config.PersistedVolume(); ok {
+					startupVol, volSrc = v, "persisted"
+				}
+				if err := s.agentGateway.SetVolume(startupVol); err != nil {
+					slog.Warn("init volume failed", "component", "server", "error", err, "volume", startupVol)
+				} else {
+					slog.Info("init volume", "component", "server", "volume", startupVol, "source", volSrc)
+				}
 			}
 
 			// Greet user now that agent + voice pipeline are ready.

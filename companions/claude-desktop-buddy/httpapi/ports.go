@@ -9,6 +9,16 @@ import (
 // implementations are provided by package main, so the HTTP layer never imports
 // the BLE / state-machine internals (dependency inversion).
 
+// Authenticator gates the LAN-facing endpoints. The plugin presents the device
+// admin password (the same one used to log into the web UI) as a Bearer token;
+// the concrete implementation verifies it against the OS server's
+// admin_password_hash. Loopback-only endpoints (code approve/deny/pending) do
+// not go through this — they're already restricted to the on-device agent.
+type Authenticator interface {
+	// Authorize reports whether the presented secret (Bearer token) is valid.
+	Authorize(secret string) bool
+}
+
 // StatusProvider exposes a read-only snapshot of buddy state.
 type StatusProvider interface {
 	Status() Status

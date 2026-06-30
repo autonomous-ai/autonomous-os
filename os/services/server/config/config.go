@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -420,6 +421,29 @@ func SnapshotHALConfig() error {
 		return fmt.Errorf("write %s: %w", halConfigHashPath, err)
 	}
 	return nil
+}
+
+// volumeStatePath persists the last speaker volume (0-100) set through HAL's
+// /audio/volume endpoint. HAL writes it on every volume change (web slider,
+// agent, intent), so os-server can restore the user's last choice at the next
+// boot instead of resetting to the DEVICE.md startup_volume each reboot. Lives
+// next to config.json — the dir HAL already shares via OS_CONFIG_PATH.
+const volumeStatePath = "config/.volume"
+
+// PersistedVolume returns the last volume (0-100) persisted by HAL and true,
+// or (0, false) when no valid persisted value exists yet (first boot, file
+// missing / corrupt / out of range) so the caller falls back to the device
+// default. Read-only; HAL is the sole writer.
+func PersistedVolume() (int, bool) {
+	data, err := os.ReadFile(volumeStatePath)
+	if err != nil {
+		return 0, false
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || v < 0 || v > 100 {
+		return 0, false
+	}
+	return v, true
 }
 
 // SetLLMModel atomically sets LLMModel and saves the config in a single lock

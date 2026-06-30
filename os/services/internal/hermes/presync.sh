@@ -9,7 +9,9 @@
 #      to defaults. We assert it idempotently here so it self-heals on the next
 #      switch — without this, only the first install.sh run ever wrote it, and
 #      switch-runtime skips install.sh once hermes is installed, so a reset left
-#      hermes pointed at a broken/default provider with no path to recover.
+#      hermes pointed at a broken/default provider with no path to recover. The
+#      same layer also asserts two os-server-owned knobs: auxiliary.vision (the
+#      image-understanding model) and agent.image_input_mode.
 #
 #   2. DYNAMIC (per-device) — the real llm_model / llm_base_url / llm_api_key and
 #      channel tokens from /root/config/config.json, which override the defaults.
@@ -81,6 +83,25 @@ yq -i '
   | .custom_providers[0].key_env  = "AUTONOMOUS_API_KEY"
   | .custom_providers[0].api_mode = "anthropic_messages"
   | .custom_providers[0].base_url = (.custom_providers[0].base_url // "https://campaign-api.autonomous.ai/api/v1/ai")
+' "$CONFIG_YAML"
+
+# ── 1b. AUXILIARY VISION + AGENT IMAGE INPUT (always overwrite) ─────────────────
+# os-server-owned knobs, asserted unconditionally (self-heal after reset). Coerce
+# .auxiliary/.agent to maps first (reset can leave scalars, like .model). Only
+# .auxiliary.vision (overwritten whole) and .agent.image_input_mode are touched —
+# other keys under both are preserved.
+[ "$(yq '.auxiliary | tag' "$CONFIG_YAML" 2>/dev/null)" = "!!map" ] || yq -i '.auxiliary = {}' "$CONFIG_YAML"
+[ "$(yq '.agent | tag' "$CONFIG_YAML" 2>/dev/null)" = "!!map" ] || yq -i '.agent = {}' "$CONFIG_YAML"
+log "ensure config.yaml auxiliary.vision + agent.image_input_mode"
+yq -i '
+  .auxiliary.vision = {
+    "provider": "custom:autonomous",
+    "model": "qwen/qwen3.6-plus",
+    "timeout": 120,
+    "download_timeout": 30,
+    "extra_body": {}
+  }
+  | .agent.image_input_mode = "auto"
 ' "$CONFIG_YAML"
 
 # ── 2. DYNAMIC (config.json wins) ──────────────────────────────────────────────

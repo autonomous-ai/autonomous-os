@@ -522,14 +522,24 @@ buddy tại runtime (xem SKILL.md cho rule discovery chính xác).
 
 ## 9. HTTP API (port 5002)
 
-| Method | Path | Mô tả | Body / Response |
-|---|---|---|---|
-| `GET` | `/health` | Liveness | `{status, ble_advertising, uptime_seconds}` |
-| `GET` | `/status` | State buddy hiện tại | Xem bên dưới |
-| `POST` | `/claude-desktop/approve` | Approve prompt đang pending | Body `{id}`. Trả `{ok}`. |
-| `POST` | `/claude-desktop/deny` | Deny prompt đang pending | Body `{id}`. Trả `{ok}`. |
-| `POST` | `/claude-code/notify` | Push hoạt động Claude Code (plugin) | Body `{title,subtitle,level,sound}`. Log; trả `{ok}`. HAL bridge chưa wire. |
-| `POST` | `/claude-code/usage` | Push usage Claude Code (plugin) | Body `{five_hour,seven_day,reset_5h,reset_7d,sound}`. Log; trả `{ok}`. |
+| Method | Path | Mô tả | Truy cập | Body / Response |
+|---|---|---|---|---|
+| `GET` | `/health` | Liveness | mở | `{status, ble_advertising, uptime_seconds}` |
+| `GET` | `/status` | State buddy hiện tại | chỉ loopback | Xem bên dưới |
+| `POST` | `/claude-desktop/approve` | Approve prompt đang pending | chỉ loopback | Body `{id}`. Trả `{ok}`. |
+| `POST` | `/claude-desktop/deny` | Deny prompt đang pending | chỉ loopback | Body `{id}`. Trả `{ok}`. |
+| `POST` | `/claude-code/notify` | Push hoạt động Claude Code (plugin) | admin-password Bearer | Body `{title,subtitle,level,sound}`. Log; trả `{ok}`. HAL bridge chưa wire. |
+| `POST` | `/claude-code/usage` | Push usage Claude Code (plugin) | admin-password Bearer | Body `{five_hour,seven_day,reset_5h,reset_7d,sound}`. Log; trả `{ok}`. |
+
+**Kiểm soát truy cập.** Daemon bind `:5002` trên mọi interface (plugin Mac truy cập
+qua LAN), nên mỗi endpoint được gate theo caller mong đợi. Các push từ plugin phía
+LAN (`/claude-code/notify`, `/usage`, `/approval-request`) yêu cầu **mật khẩu admin
+của device** (chính mật khẩu dùng để đăng nhập web UI) dưới dạng
+`Authorization: Bearer <password>`, verify với `admin_password_hash` trong
+`config.json` của Lamp (bcrypt; `llm_api_key` cũng được chấp nhận cho curl/script) —
+thiếu/sai thì trả `401`. Các endpoint do agent OpenClaw trên device gọi
+(`/status`, `/claude-desktop/approve|deny`, `/claude-code/approve|deny|pending`)
+là **chỉ loopback** (`403` nếu gọi từ LAN). `/health` vẫn để mở cho discovery.
 
 Response `/status`:
 

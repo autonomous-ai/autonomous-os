@@ -1,6 +1,7 @@
 """Audio route handlers -- /audio devices, /audio/volume, /audio/play-tone, /audio/record."""
 
 import io
+import os
 import re
 import subprocess
 from typing import Optional
@@ -9,7 +10,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
 import hal.app_state as state
-from hal.config import AUDIO_OUTPUT_ALSA
+from hal.config import AUDIO_OUTPUT_ALSA, VOLUME_STATE_PATH
 from hal.models import (
     AudioDevicesResponse,
     StatusResponse,
@@ -97,6 +98,18 @@ def _db_to_pct(db: float) -> int:
     return max(0, min(100, pct))
 
 
+def _persist_volume(pct: int) -> None:
+    """Persist the last-set volume so os-server restores it at next boot
+    instead of resetting to the DEVICE.md startup_volume. Best-effort — a
+    write failure must not fail the volume change itself."""
+    try:
+        os.makedirs(os.path.dirname(VOLUME_STATE_PATH), exist_ok=True)
+        with open(VOLUME_STATE_PATH, "w") as f:
+            f.write(str(pct))
+    except Exception:
+        pass
+
+
 @router.post("/audio/volume", response_model=StatusResponse)
 def set_volume(req: VolumeRequest):
     """Set system speaker volume (0-100%)."""
@@ -118,6 +131,7 @@ def set_volume(req: VolumeRequest):
             )
         except Exception:
             pass
+    _persist_volume(pct)
     return {"status": "ok"}
 
 

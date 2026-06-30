@@ -29,7 +29,7 @@ Path: `~/.config/claude-code-buddy.json` (file permission `0600`).
 ```json
 {
   "devices": [
-    { "label": "My Device", "host": "lamp-a1b2.local", "last_known_ip": "192.168.1.50" }
+    { "label": "My Device", "host": "lamp-a1b2.local", "last_known_ip": "192.168.1.50", "password": "the-web-admin-password" }
   ],
   "default_host": "lamp-a1b2.local",
   "usage_threshold": 80,
@@ -41,6 +41,11 @@ Path: `~/.config/claude-code-buddy.json` (file permission `0600`).
 
 - `host` is the device's mDNS hostname (like `lamp-a1b2.local`); `last_known_ip`
   is the cached address used to avoid re-resolving every time.
+- `password` is the device's **admin password** — the same one used to log into
+  the device's web UI. The daemon gates its LAN endpoints (notify / usage /
+  approval) with it, sent as an `Authorization: Bearer` header; without it those
+  calls return HTTP 401. Discovery (`/health`) stays open, so the device is
+  still findable before a password is set. Stored only in this `0600` file.
 - Shared helpers live in `scripts/buddy_client.py` (config load/save, discovery,
   `send()`, usage fetch). Prefer them over re-implementing.
 
@@ -67,9 +72,15 @@ device(s) as JSON, e.g.:
 [{ "host": "lamp-a1b2.local", "ip": "192.168.1.50" }]
 ```
 
-**On success:** write the device into `devices[]` (append new, update existing
-by `host`), set `default_host` if it's the first device, and write the file with
-permission `0600`.
+**On success:** ask the user for the device's **admin password** (the same one
+they use to log into the device's web UI) — the daemon requires it to accept
+activity/approval pushes. Then write the device into `devices[]` (append new,
+update existing by `host`) including the `password` field, set `default_host` if
+it's the first device, and write the file with permission `0600`.
+
+If a later push returns **HTTP 401**, the stored `password` is missing or wrong
+(or was changed in the web UI) — ask the user for the current admin password and
+update the device entry.
 
 **On failure:** exits non-zero with `{"error": "not_found"}` on stderr. Suggest:
 device powered on? Same WiFi as the computer?

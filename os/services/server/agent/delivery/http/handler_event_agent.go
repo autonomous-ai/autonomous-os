@@ -485,11 +485,16 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			// during a long Bash/curl/Read.
 			sensinghttp.DefaultFillerManager.OnToolStart(flowRunID, toolArgs, toolName)
 			summary = fmt.Sprintf("Tool %s started", toolName)
-			// Detect music playback tool calls so we can suppress TTS on turn end.
-			// The Music skill uses Bash+curl to POST /audio/play.
+			// Detect music playback tool calls (Music skill uses Bash+curl to
+			// POST /audio/play) — emit the flow/monitor event only.
+			// [2026-06-30] Do NOT suppress TTS here: the agent's reply (e.g.
+			// "Chơi nhạc Ghibli tiếp nha!") must speak BEFORE music plays. The
+			// Python music_service already waits for TTS via wait_for_tts()
+			// before grabbing ALSA, so this Go-side suppress is redundant and
+			// was swallowing the spoken reply. Mirrors the 2026-05-11 fix that
+			// disabled the hwCalls /audio/play suppress below (this tool-call
+			// path was missed then, and re-surfaced in the 2026-06-18 refactor).
 			if strings.Contains(toolArgs, "/audio/play") {
-				h.suppressTTS(payload.RunID, "music_playing")
-				slog.Info("music tool detected, TTS will be suppressed for this turn", "component", "agent", "runId", payload.RunID)
 				h.monitorBus.Push(domain.MonitorEvent{Type: "hw_audio", Summary: toolArgs, RunID: flowRunID})
 				flow.Log("hw_audio", map[string]any{"args": toolArgs, "run_id": flowRunID}, flowRunID)
 				// music.play logged via flow.Log above

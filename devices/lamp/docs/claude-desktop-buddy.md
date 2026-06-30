@@ -532,14 +532,24 @@ install dir at runtime (see SKILL.md for the exact discovery rule).
 
 ## 9. HTTP API (port 5002)
 
-| Method | Path | Description | Body / Response |
-|---|---|---|---|
-| `GET` | `/health` | Liveness | `{status, ble_advertising, uptime_seconds}` |
-| `GET` | `/status` | Current buddy state | See below |
-| `POST` | `/claude-desktop/approve` | Approve the pending prompt | Body `{id}`. Returns `{ok}`. |
-| `POST` | `/claude-desktop/deny` | Deny the pending prompt | Body `{id}`. Returns `{ok}`. |
-| `POST` | `/claude-code/notify` | Claude Code activity push (plugin) | Body `{title,subtitle,level,sound}`. Logs; returns `{ok}`. HAL bridge pending. |
-| `POST` | `/claude-code/usage` | Claude Code usage push (plugin) | Body `{five_hour,seven_day,reset_5h,reset_7d,sound}`. Logs; returns `{ok}`. |
+| Method | Path | Description | Access | Body / Response |
+|---|---|---|---|---|
+| `GET` | `/health` | Liveness | open | `{status, ble_advertising, uptime_seconds}` |
+| `GET` | `/status` | Current buddy state | loopback-only | See below |
+| `POST` | `/claude-desktop/approve` | Approve the pending prompt | loopback-only | Body `{id}`. Returns `{ok}`. |
+| `POST` | `/claude-desktop/deny` | Deny the pending prompt | loopback-only | Body `{id}`. Returns `{ok}`. |
+| `POST` | `/claude-code/notify` | Claude Code activity push (plugin) | admin-password Bearer | Body `{title,subtitle,level,sound}`. Logs; returns `{ok}`. HAL bridge pending. |
+| `POST` | `/claude-code/usage` | Claude Code usage push (plugin) | admin-password Bearer | Body `{five_hour,seven_day,reset_5h,reset_7d,sound}`. Logs; returns `{ok}`. |
+
+**Access control.** The daemon binds `:5002` on all interfaces (the Mac plugin
+reaches it over the LAN), so each endpoint is gated by its expected caller. The
+LAN-facing plugin pushes (`/claude-code/notify`, `/usage`, `/approval-request`)
+require the **device admin password** (the same one used to log into the web UI)
+as `Authorization: Bearer <password>`, verified against `admin_password_hash` in
+the Lamp `config.json` (bcrypt; `llm_api_key` also accepted for curl/scripts) —
+missing/wrong yields `401`. Endpoints the on-device OpenClaw agent calls
+(`/status`, `/claude-desktop/approve|deny`, `/claude-code/approve|deny|pending`)
+are **loopback-only** (`403` from the LAN). `/health` stays open for discovery.
 
 `/status` response:
 

@@ -194,7 +194,7 @@ def speak_text(req: SpeakRequest):
     if state._speaker_muted:
         state.logger.info("POST /voice/speak: suppressed -- speaker muted (text='%s')", req.text[:80])
         return {"status": "suppressed"}
-    if state.music_service and state.music_service.playing:
+    if state.music_service and state.music_service.streaming:
         state.logger.info(
             "POST /voice/speak: rejected -- music is playing (text='%s')", req.text[:80]
         )
@@ -299,7 +299,7 @@ def speak_queue_text(req: SpeakRequest):
     if state._speaker_muted:
         state.logger.info("POST /voice/speak-queue: suppressed -- speaker muted")
         return {"status": "suppressed"}
-    if state.music_service and state.music_service.playing:
+    if state.music_service and state.music_service.streaming:
         state.logger.info("POST /voice/speak-queue: rejected -- music is playing")
         raise HTTPException(409, "Speaker busy -- music is playing")
     if not state.tts_service.available:

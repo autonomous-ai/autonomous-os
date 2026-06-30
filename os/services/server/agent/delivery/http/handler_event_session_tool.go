@@ -36,9 +36,12 @@ func (h *AgentHandler) handleSessionToolEvent(evt domain.WSEvent) error {
 	summary := toolName
 	if payload.Data.Phase == "start" {
 		summary = fmt.Sprintf("Tool %s started", toolName)
+		// [2026-06-30] Do NOT suppress TTS on /audio/play — the spoken reply
+		// must play before music. Python music_service waits for TTS via
+		// wait_for_tts() before grabbing ALSA, so the Go-side suppress is
+		// redundant and was swallowing the reply. See handler_event_agent.go
+		// for the full rationale (mirrors the 2026-05-11 hwCalls fix).
 		if strings.Contains(toolArgs, "/audio/play") {
-			h.suppressTTS(payload.RunID, "music_playing")
-			slog.Info("music tool detected (session.tool), TTS suppressed", "component", "agent", "runId", payload.RunID)
 			h.monitorBus.Push(domain.MonitorEvent{Type: "hw_audio", Summary: toolArgs, RunID: flowRunID})
 			flow.Log("hw_audio", map[string]any{"args": toolArgs, "run_id": flowRunID}, flowRunID)
 		}

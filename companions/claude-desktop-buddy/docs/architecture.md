@@ -32,8 +32,11 @@ For building, deploying, config, and pairing see [`setup.md`](setup.md).
   servers — **LeLamp** (the hardware runtime, default `:5001`) for LED / display
   / emotion / TTS, and **Lamp** (the Go API, default `:5000`) for the monitor and
   sensing buses.
-- **East (HTTP):** Buddy itself serves a small HTTP API on `:5002` that the
-  on-device agent (OpenClaw skill) calls to read status and approve/deny prompts.
+- **East (HTTP):** Buddy itself serves a small HTTP API on `:5002`. The
+  on-device agent (OpenClaw skill) calls it over loopback to read status and
+  approve/deny prompts; the Claude Code plugin (on the user's Mac) calls it over
+  the LAN to push activity. LAN endpoints require the device admin password as a
+  Bearer token (see **HTTP API security** below).
 
 ## Components (by file)
 
@@ -44,7 +47,8 @@ For building, deploying, config, and pairing see [`setup.md`](setup.md).
 | `protocol.go` | All wire types (`Heartbeat`, `TimeSync`, `Event`, `Command`, `Ack`, `PermissionDecision`), the parser/salvager, and ack/permission builders. |
 | `state.go` | `StateMachine` — derives a `BuddyState` from heartbeats, tracks the pending prompt and lifetime approval/denial counters, and manages transient states. |
 | `bridge.go` | Maps each state change to concrete LeLamp + Lamp HTTP calls (LED, display, emotion, TTS, monitor/sensing events). |
-| `httpapi/` | The `:5002` API delivery package (clean architecture / dependency inversion). `server.go` holds the `Server`, the single `routes()` registry, and JSON response helpers; its `Start()` builds an explicit `http.Server` (ReadHeaderTimeout 10 s, ReadTimeout 15 s, IdleTimeout 60 s, and **WriteTimeout disabled (`0`)** because the approval long-poll holds the response ~55 s). `ports.go` declares the interfaces the handlers depend on (`StatusProvider`, `ApprovalService`, `ActivitySink`, `CodeApprovalService`, plus sentinel errors); `status.go` serves `GET /status` + `GET /health`; `claudedesktop.go` serves `POST /claude-desktop/approve` + `/deny` (the Claude Desktop voice-approval round-trip); `claudecode.go` serves `POST /claude-code/notify` + `/usage` (the Claude Code plugin pushes) plus the reverse-approval routes `POST /claude-code/approval-request` (long-poll), `POST /claude-code/approve` + `/deny` (loopback-only via an `isLoopback` helper), and `GET /claude-code/pending`; a `decodeJSON` helper caps request bodies at 64 KB. |
+| `httpapi/` | The `:5002` API delivery package (clean architecture / dependency inversion). `server.go` holds the `Server`, the single `routes()` registry, and JSON response helpers; its `Start()` builds an explicit `http.Server` (ReadHeaderTimeout 10 s, ReadTimeout 15 s, IdleTimeout 60 s, and **WriteTimeout disabled (`0`)** because the approval long-poll holds the response ~55 s). `ports.go` declares the interfaces the handlers depend on (`Authenticator`, `StatusProvider`, `ApprovalService`, `ActivitySink`, `CodeApprovalService`, plus sentinel errors); `status.go` serves `GET /status` + `GET /health`; `claudedesktop.go` serves `POST /claude-desktop/approve` + `/deny` (the Claude Desktop voice-approval round-trip); `claudecode.go` serves `POST /claude-code/notify` + `/usage` (the Claude Code plugin pushes) plus the reverse-approval routes `POST /claude-code/approval-request` (long-poll), `POST /claude-code/approve` + `/deny`, and `GET /claude-code/pending`. Two wrappers enforce access: `s.guard` requires the admin-password Bearer token (LAN endpoints), and `s.loopbackOnly` (via an `isLoopback` helper) restricts on-device endpoints to the local host. A `decodeJSON` helper caps request bodies at 64 KB. |
+| `buddy/auth.go` | `Authenticator` — verifies the admin-password Bearer token on LAN endpoints. Reads `admin_password_hash` (bcrypt of the web-login password) and `llm_api_key` from the OS server's `config.json` (`os_config_path`, default a `config.json` sibling of `buddy.json`), hot-reloading on file change. The correct-password path is a cached constant-time compare so bcrypt runs only on first use / after a rotation. Fails closed: with neither credential set, every gated endpoint returns `401`. |
 | `status_provider.go` / `approval_service.go` / `hal_activity_sink.go` | The concrete implementations of the `httpapi` ports, one per role: `StatusReader` (read-adapter → status snapshot), `ApprovalService` (the voice-approval use case: validate id + send the BLE permission decision + update counters), `HALActivitySink` (the wired `ActivitySink` — logs the Claude Code pushes **and** speaks them via HAL `:5001`). `main.go` is the composition root that wires these into `httpapi.New`. |
 | `codeapproval.go` | `CodeApprovals` — the `httpapi.CodeApprovalService` implementation. An in-memory map of pending Claude Code approvals keyed by id, each with a buffered channel. `Request(ctx, req)` registers a pending approval, calls `bridge.announceCodeApproval`, then blocks on a select over {channel decision, ttl timeout, ctx cancel}, returning `"allow"`/`"deny"`/`"timeout"`; `Approve(id)`/`Deny(id)` send on the channel (non-blocking, first-writer-wins); `Pending()` lists them. ttl from config `code_approval_ttl_sec` (default 55 s). `main.go` builds it via `NewCodeApprovals(bridge, ttl)` and passes it as the 5th arg of `httpapi.New`. |
 | `agent.go` | BlueZ `org.bluez.Agent1` (DisplayOnly) so LE pairing can complete; logs the passkey to the journal. |
@@ -159,6 +163,29 @@ Fail-safe: any error or timeout makes the hook defer to Claude Code's native
 permission dialog — it never auto-allows. Unlike the Desktop flow, the decision
 is returned as the hook's HTTP response (its return value) rather than pushed
 back over BLE.
+
+## HTTP API security
+
+The daemon binds `:5002` on all interfaces (the Mac plugin reaches it over the
+LAN), so each endpoint is access-controlled by who is meant to call it:
+
+| Endpoint | Caller | Gate |
+|----------|--------|------|
+| `GET /health` | discovery (mDNS + `/24` sweep) | **open** — no secret, no sensitive data |
+| `POST /claude-code/notify` `/usage` `/approval-request` | Claude Code plugin (Mac, LAN) | **admin-password Bearer token** (`s.guard`) |
+| `GET /status` | on-device agent (loopback) | **loopback-only** (`s.loopbackOnly`) |
+| `POST /claude-desktop/approve` `/deny` | on-device agent (loopback) | **loopback-only** |
+| `POST /claude-code/approve` `/deny`, `GET /claude-code/pending` | on-device agent (loopback) | **loopback-only** |
+
+The Bearer token is the **device admin password** — the same one used to log
+into the device's web UI. `buddy/auth.go` verifies it against
+`admin_password_hash` in the OS server's `config.json` (bcrypt; `llm_api_key` is
+also accepted so curl/scripts keep working, mirroring the OS server's
+`adminAuthMiddleware`). The plugin stores the password per-device in its `0600`
+config and sends it as `Authorization: Bearer <password>`; a missing/stale
+password yields `401`, which the plugin treats as "ask the user for the current
+admin password". Without a configured credential the daemon fails closed (all
+gated endpoints `401`).
 
 ## State machine
 

@@ -446,6 +446,13 @@ during install) and does three things, in order:
      taken from `llm_model` (that is OpenClaw's primary model, irrelevant to Hermes).
    - `.custom_providers[0]` → `name: autonomous`, `key_env: AUTONOMOUS_API_KEY`,
      `api_mode: anthropic_messages`, `base_url` (default campaign-api, overridden below).
+   - `.auxiliary.vision` (the whole node is **overwritten**) → `provider: custom:autonomous`,
+     `model: qwen/qwen3.6-plus`, `timeout: 120`, `download_timeout: 30`, `extra_body: {}`
+     — the image-understanding model, routed through the same autonomous provider.
+   - `.agent.image_input_mode = "auto"` — lets the agent decide when to attach images.
+   - Only `.auxiliary.vision` and `.agent.image_input_mode` are written; **other keys
+     under `.auxiliary`/`.agent` are preserved** (both are coerced from a reset-left
+     scalar to a map first, same as `.model`).
 3. **Syncs per-device values** from `config.json` (only non-empty fields, so
    unconfigured channels are untouched):
 

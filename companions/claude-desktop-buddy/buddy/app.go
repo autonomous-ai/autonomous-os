@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -48,6 +49,10 @@ type Config struct {
 	// Claude Code's native dialog. Should stay under the plugin hook's own
 	// timeout (60s) so the server answers first.
 	CodeApprovalTTLSec int `json:"code_approval_ttl_sec"`
+	// OSConfigPath points at the OS server's config.json, the source of truth
+	// for the admin password (admin_password_hash) used to gate the LAN-facing
+	// HTTP endpoints. Defaults to a config.json sibling of buddy.json.
+	OSConfigPath string `json:"os_config_path"`
 }
 
 // Run loads config and starts the daemon: BlueZ agent, bridge, narrator, state
@@ -149,6 +154,7 @@ func Run(configPath string) {
 
 	httpSrv := httpapi.New(
 		cfg.HTTPPort,
+		NewAuthenticator(cfg.OSConfigPath),
 		NewStatusReader(sm),
 		NewApprovalService(sm, ble),
 		NewHALActivitySink(bridge), // logs each event + speaks via HAL :5001
@@ -366,15 +372,17 @@ func loadConfig(path string) Config {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		log.Printf("[buddy] config %s not found, using defaults", path)
-		return cfg
-	}
-
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	} else if err := json.Unmarshal(data, &cfg); err != nil {
 		log.Printf("[buddy] config parse error: %v, using defaults", err)
-		return cfg
+	} else {
+		log.Printf("[buddy] loaded config from %s", path)
 	}
 
-	log.Printf("[buddy] loaded config from %s", path)
+	// Default the OS config path to a config.json sibling of buddy.json so a
+	// standard install (/root/config/{buddy,config}.json) needs no extra key.
+	if cfg.OSConfigPath == "" {
+		cfg.OSConfigPath = filepath.Join(filepath.Dir(path), "config.json")
+	}
 	return cfg
 }
 

@@ -70,7 +70,7 @@ Component `FlowDiagram` trong `os/services/web/src/pages/Monitor.tsx` vẽ **ba 
 ### Gate
 
 - **Gate** nằm giữa OpenClaw output và HAL TTS. OS server listen WS events để phối hợp:
-  - Tool có `/audio/play` → suppress TTS (không speak chồng nhạc)
+  - Tool có `/audio/play` → KHÔNG suppress TTS nữa; thứ tự TTS-rồi-nhạc do HAL xử lý (music_service chờ TTS xong mới chiếm loa)
   - Tool có `/led/*` → pause ambient breathing (không ghi đè màu agent set)
   - Assistant text accumulate → flush sang TTS khi lifecycle_end
 
@@ -133,7 +133,7 @@ Web (chat + flow Output) đọc text reply từ event `tts_send`, ưu tiên `dat
 
 ### TTS suppress event
 
-Khi `SendToHalTTS` thật sự bị skip (loa không phát), OS server emit `tts_suppressed` thay vì `tts_send`. Field `data.reason` discriminate: `channel_run` (real Telegram user turn — detect qua runID có prefix `tg-` OS server tự sinh trong `session.message` handler, hoặc `channelRuns` map mark từ chat.history fallback; reply đi qua OpenClaw session fan-out thay vì loa thiết bị), `music_playing` (audio đang chiếm loa), `already_spoken` (built-in tts tool đã route trước), `web_chat` (Flow Monitor chat — reply chỉ hiện trên web UI). UI hiển thị 🔇 ở Gate column thay vì 🔊 — tránh case trước đây log nói "TTS" nhưng loa im. Classifier chỉ dùng positive evidence: UUID runs từ OpenClaw steer-mode self-fire, cron fire, heartbeat KHÔNG bị coi là `channel_run` và VẪN phát loa.
+Khi `SendToHalTTS` thật sự bị skip (loa không phát), OS server emit `tts_suppressed` thay vì `tts_send`. Field `data.reason` discriminate: `channel_run` (real Telegram user turn — detect qua runID có prefix `tg-` OS server tự sinh trong `session.message` handler, hoặc `channelRuns` map mark từ chat.history fallback; reply đi qua OpenClaw session fan-out thay vì loa thiết bị), `already_spoken` (built-in tts tool đã route trước), `voice_agent_handled` (realtime voice agent đã nói turn này), `web_chat` (Flow Monitor chat — reply chỉ hiện trên web UI). UI hiển thị 🔇 ở Gate column thay vì 🔊 — tránh case trước đây log nói "TTS" nhưng loa im. Lưu ý: KHÔNG còn reason `music_playing` — phát nhạc không còn nuốt câu reply; OS server luôn gửi reply TTS và HAL serialize cho nói trước rồi mới phát nhạc. Classifier chỉ dùng positive evidence: UUID runs từ OpenClaw steer-mode self-fire, cron fire, heartbeat KHÔNG bị coi là `channel_run` và VẪN phát loa.
 
 ### Cron-fire auto-force TTS
 

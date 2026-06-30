@@ -37,6 +37,18 @@ only POSTs events, and the device decides how to react.
 The plugin sends JSON to `http://<device>:5002`. The daemon replies `{"ok":true}`
 on success.
 
+### Authentication
+
+The push endpoints (`/claude-code/notify`, `/usage`, `/approval-request`) are
+gated by the **device admin password** — the same one used to log into the
+device's web UI — sent as `Authorization: Bearer <password>`. The plugin stores
+it per-device in `~/.config/claude-code-buddy.json` (`password` field, `0600`)
+and attaches the header automatically. A missing or stale password returns
+**HTTP 401**; the plugin then asks the user for the current admin password and
+updates the stored entry. Discovery (`GET /health`) stays unauthenticated so the
+device is still findable before a password is set. The `curl` examples below add
+`-H 'Authorization: Bearer <admin-password>'`.
+
 ### `POST /claude-code/notify`
 
 A discrete signal: Claude finished, needs you, or a custom message.
@@ -60,6 +72,7 @@ A discrete signal: Claude finished, needs you, or a custom message.
 ```bash
 curl -s -X POST http://my-device.local:5002/claude-code/notify \
   -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <admin-password>' \
   -d '{"title":"Claude is done","subtitle":"auth refactor","level":"done","sound":true}'
 ```
 
@@ -88,15 +101,17 @@ Current Claude Code usage, pushed when it crosses your threshold (or on demand).
 ```bash
 curl -s -X POST http://my-device.local:5002/claude-code/usage \
   -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <admin-password>' \
   -d '{"five_hour":72,"seven_day":40,"reset_5h":"3:00 PM","reset_7d":"Mon","sound":false}'
 ```
 
 ### Existing daemon endpoints
 
 These are served by the daemon's `httpapi/` package and used by the BLE/approval
-flow: `GET /status`, `GET /health`, `POST /claude-desktop/approve`,
-`POST /claude-desktop/deny`. See
-[`architecture.md`](architecture.md#the-approval-round-trip).
+flow: `GET /status`, `POST /claude-desktop/approve`, `POST /claude-desktop/deny`
+(all **loopback-only** — the on-device agent calls them), plus the unauthenticated
+`GET /health`. See
+[`architecture.md`](architecture.md#http-api-security).
 
 ## Voice-approve (Claude Code reverse approval)
 
@@ -156,18 +171,22 @@ hook**. It fires only when a permission dialog *would* show, blocks synchronousl
 
 | Endpoint | Body | Behavior |
 |----------|------|----------|
-| `POST /claude-code/approval-request` | `{id, tool, input, hint?}` | Long-polls; returns `{"decision":"allow"｜"deny"｜"timeout"}`. `400` if `id` is missing. |
+| `POST /claude-code/approval-request` | `{id, tool, input, hint?}` | Long-polls; returns `{"decision":"allow"｜"deny"｜"timeout"}`. **Admin-password Bearer token (`401` otherwise)** — it's a LAN call from the plugin. `400` if `id` is missing. |
 | `POST /claude-code/approve` | `{id}` | Resolves the pending request as allow. **Loopback-only (`403` otherwise)** — it decides whether code runs on the user's Mac. `409` if `id` is unknown or already resolved. |
 | `POST /claude-code/deny` | `{id}` | Same as `approve` but resolves as deny (loopback-only, `403` / `409` as above). |
-| `GET /claude-code/pending` | — | `{"pending":[{id,tool,hint}]}` — what's currently awaiting a voice answer. |
+| `GET /claude-code/pending` | — | `{"pending":[{id,tool,hint}]}` — what's currently awaiting a voice answer. **Loopback-only (`403` otherwise).** |
 
 ### Config
 
 - **Plugin** (`~/.config/claude-code-buddy.json`) — new flag `approval_enabled`
   (bool, default **`false`**). It is **opt-in** because it changes how Claude Code
   prompts you. When `false`, the hook does nothing and the **native dialog** shows.
+  Each device entry also carries `password` (the device admin password) used to
+  authenticate the LAN pushes.
 - **Daemon** (`config/buddy.json`) — `code_approval_ttl_sec` (default **55**): how
-  long a request long-polls before returning `"timeout"`.
+  long a request long-polls before returning `"timeout"`; `os_config_path`
+  (default a `config.json` sibling of `buddy.json`): where the daemon reads
+  `admin_password_hash` to verify the Bearer token.
 
 ### Fail-safe
 
@@ -190,9 +209,10 @@ unreachable, timeout, or any other error — the hook prints **nothing** and exi
   `_autonomous._tcp` (the same advertiser the device already runs), so there are
   no codes to type. The resolved address + port `:5002` is what the pushes target.
 - **Config (Mac)** — saved at `~/.config/claude-code-buddy.json`. It records the
-  device address and the plugin's notify/usage/sound preferences. The plugin edits
-  this file in response to plain-language requests ("mute my device", "warn me
-  earlier"); no restart is required.
+  device address, the device **admin password** (used to authenticate pushes),
+  and the plugin's notify/usage/sound preferences. The plugin edits this file in
+  response to plain-language requests ("mute my device", "warn me earlier"); no
+  restart is required.
 
 ## Plugin pieces
 

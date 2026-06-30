@@ -70,6 +70,15 @@ audio_input_device: Optional[int] = None
 _camera_disabled = False
 _camera_manual_override = False
 
+# Most recent frame captured by the realtime `look` tool, persisted to disk so a
+# turn that delegates / falls back to the main agent can hand off the SAME image
+# (by file path) instead of making the agent snapshot again — faster, and the
+# agent answers about the exact frame the user pointed at. Set in the realtime
+# orchestrator's look handler; consumed + cleared once in turn_dispatch (strictly
+# per-turn). Path is a file in _SNAPSHOT_DIR; ts is time.monotonic() of capture.
+realtime_look_frame_path: Optional[str] = None
+realtime_look_frame_ts: float = 0.0
+
 # --- LED effect state ---
 
 _effect_thread: Optional[threading.Thread] = None
@@ -116,9 +125,11 @@ _shutdown_announced = False
 
 # --- Snapshot state ---
 
-_SNAPSHOT_DIR = os.environ.get(
-    "HAL_SNAPSHOT_DIR", "/root/.openclaw/media/hal-snapshots"
-)
+# Agent-aware (config.SNAPSHOT_DIR follows AGENT_GATEWAY → the active runtime's
+# media root, so the agent's image tool can read the saved frame). See config.py.
+from hal import config as _hal_config
+
+_SNAPSHOT_DIR = _hal_config.SNAPSHOT_DIR
 _SNAPSHOT_MAX = 20
 _snapshot_paths: list = []
 

@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -24,6 +25,7 @@ const maxBodyBytes = 64 << 10
 type Server struct {
 	port          int
 	startAt       time.Time
+	auth          Authenticator
 	status        StatusProvider
 	approvals     ApprovalService
 	activity      ActivitySink
@@ -31,10 +33,11 @@ type Server struct {
 }
 
 // New builds the delivery layer from its ports.
-func New(port int, status StatusProvider, approvals ApprovalService, activity ActivitySink, codeApprovals CodeApprovalService) *Server {
+func New(port int, auth Authenticator, status StatusProvider, approvals ApprovalService, activity ActivitySink, codeApprovals CodeApprovalService) *Server {
 	return &Server{
 		port:          port,
 		startAt:       time.Now(),
+		auth:          auth,
 		status:        status,
 		approvals:     approvals,
 		activity:      activity,
@@ -66,26 +69,33 @@ func (s *Server) Start() error {
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 
-	// Status / liveness — on-device agent + plugin discovery (shared).
-	mux.HandleFunc("GET /status", s.handleStatus)
+	// Liveness — left open (no sensitive data) so the plugin's discovery
+	// (mDNS + /24 /health sweep) can find the device before it has a token.
 	mux.HandleFunc("GET /health", s.handleHealth)
 
-	// Claude Desktop path — voice-approval round-trip the OpenClaw agent uses
-	// to approve/deny a Desktop permission prompt (relayed back over BLE).
-	mux.HandleFunc("POST /claude-desktop/approve", s.handleApprove)
-	mux.HandleFunc("POST /claude-desktop/deny", s.handleDeny)
+	// Status — exposes device state + pending prompts. Only the on-device agent
+	// (the OpenClaw `claude-buddy` skill, loopback) reads it, so it's
+	// loopback-only rather than admin-token-gated.
+	mux.HandleFunc("GET /status", s.loopbackOnly(s.handleStatus))
 
-	// Claude Code path — activity pushed by the plugin (Mac → device over HTTP).
-	mux.HandleFunc("POST /claude-code/notify", s.handleNotify)
-	mux.HandleFunc("POST /claude-code/usage", s.handleUsage)
+	// Claude Desktop path — voice-approval round-trip the on-device OpenClaw
+	// agent uses to approve/deny a Desktop permission prompt (relayed over BLE).
+	// Called from loopback by the agent, so loopback-only.
+	mux.HandleFunc("POST /claude-desktop/approve", s.loopbackOnly(s.handleApprove))
+	mux.HandleFunc("POST /claude-desktop/deny", s.loopbackOnly(s.handleDeny))
+
+	// Claude Code path — activity pushed by the plugin (Mac → device over the
+	// LAN), so gated by the admin-password Bearer token via s.guard.
+	mux.HandleFunc("POST /claude-code/notify", s.guard(s.handleNotify))
+	mux.HandleFunc("POST /claude-code/usage", s.guard(s.handleUsage))
 
 	// Claude Code reverse approval — the plugin's permission hook long-polls
-	// /approval-request; the on-device agent resolves via /approve|/deny
-	// (loopback-only). /pending lists what's awaiting a voice answer.
-	mux.HandleFunc("POST /claude-code/approval-request", s.handleApprovalRequest)
+	// /approval-request (LAN → admin-token); the on-device agent resolves via
+	// /approve|/deny (loopback-only). /pending lists what's awaiting an answer.
+	mux.HandleFunc("POST /claude-code/approval-request", s.guard(s.handleApprovalRequest))
 	mux.HandleFunc("POST /claude-code/approve", s.handleCodeApprove)
 	mux.HandleFunc("POST /claude-code/deny", s.handleCodeDeny)
-	mux.HandleFunc("GET /claude-code/pending", s.handleCodePending)
+	mux.HandleFunc("GET /claude-code/pending", s.loopbackOnly(s.handleCodePending))
 
 	return mux
 }
@@ -93,6 +103,34 @@ func (s *Server) routes() http.Handler {
 // decodeJSON reads a size-capped JSON body into v.
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 	return json.NewDecoder(io.LimitReader(r.Body, maxBodyBytes)).Decode(v)
+}
+
+// guard wraps a LAN-facing handler with admin-password auth: the caller must
+// present a valid `Authorization: Bearer <admin-password>` header. Without a
+// configured Authenticator the daemon fails closed (401) — an unconfigured
+// device must not silently accept anonymous LAN traffic.
+func (s *Server) guard(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		if s.auth == nil || !s.auth.Authorize(token) {
+			fail(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		h(w, r)
+	}
+}
+
+// loopbackOnly wraps a handler so only the local host (the on-device agent) can
+// reach it. LAN callers get 403. This protects endpoints the device itself
+// drives — status reads and the agent's approve/deny relays.
+func (s *Server) loopbackOnly(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !isLoopback(r) {
+			fail(w, http.StatusForbidden, "loopback-only")
+			return
+		}
+		h(w, r)
+	}
 }
 
 // isLoopback reports whether the request came from the local host. Used to gate

@@ -222,7 +222,7 @@ agent_call → [Event Pipeline rect — thinking/assistant/tool rows] → agent_
 tool_exec → hw_emotion         (OpenClaw /emotion call → HAL)
 tool_exec → hw_led             (OpenClaw /led/* or /scene call → HAL)
 tool_exec → hw_servo           (OpenClaw /servo/* call → HAL)
-tool_exec → lamp_gate          (OS server listens: suppress TTS if music, pause ambient if LED)
+tool_exec → lamp_gate          (OS server listens: pause ambient if LED; TTS-vs-music ordering is handled in HAL, not suppressed here)
 agent_response → lamp_gate     (OS server accumulates assistant text for TTS)
 agent_response → tts_speak     (Direct TTS from response to HAL)
 agent_response → tg_out        (Telegram/Slack output)
@@ -249,7 +249,7 @@ Node info extracted from turn events:
   lamp_gate) anchor at the pipeline's right edge.
 - `lifecycle_end` → Response node + final row in the Event Pipeline.
 - `tts_send` → TTS Speak + Output nodes. Output text is read from `detail.data.full_text` (the complete reply) with fallback to `detail.data.text`. When the agent's first sentence is streamed to TTS mid-turn (`tts_stream_send`, sent early for lower latency), `data.text` holds only the **remainder** (sentence 1 sliced off so it isn't spoken twice); `data.full_text` carries sentence 1 + remainder so the web chat and flow Output show the full reply. `data.streamed_len` is the byte offset where the remainder begins.
-- `tts_suppressed` → 🔇 marker in the gate column. `data.reason` discriminates: `channel_run` (real Telegram user turn — detected by `tg-` runID prefix synthesised in the `session.message` handler, or `channelRuns` map mark from chat.history fallback; reply fans out via OpenClaw session instead of the device speaker), `music_playing` (audio shares the speaker), `already_spoken` (built-in tts tool already routed), `web_chat` (Flow Monitor chat — reply shown in web UI only). Emitted *instead of* `tts_send` when the actual `SendToHalTTS` call is skipped — prevents the UI from misleadingly claiming TTS happened. Classifier uses positive evidence only: UUID runs from OpenClaw steer-mode self-fire, cron fires, and heartbeats are NOT `channel_run` and DO speak on the device.
+- `tts_suppressed` → 🔇 marker in the gate column. `data.reason` discriminates: `channel_run` (real Telegram user turn — detected by `tg-` runID prefix synthesised in the `session.message` handler, or `channelRuns` map mark from chat.history fallback; reply fans out via OpenClaw session instead of the device speaker), `already_spoken` (built-in tts tool already routed), `voice_agent_handled` (realtime voice agent already spoke this turn), `web_chat` (Flow Monitor chat — reply shown in web UI only). Emitted *instead of* `tts_send` when the actual `SendToHalTTS` call is skipped — prevents the UI from misleadingly claiming TTS happened. Note: there is no `music_playing` reason — playing music no longer suppresses the spoken reply; the OS server always sends the reply TTS and HAL serializes it before music (the reply speaks first, then music plays). Classifier uses positive evidence only: UUID runs from OpenClaw steer-mode self-fire, cron fires, and heartbeats are NOT `channel_run` and DO speak on the device.
 - `token_usage` → Response node (token counts).
 
 ### NO_REPLY suppression
