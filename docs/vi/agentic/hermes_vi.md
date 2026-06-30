@@ -428,6 +428,13 @@ làm 3 việc theo thứ tự:
      từ `llm_model` (đó là model chính của OpenClaw, không liên quan Hermes).
    - `.custom_providers[0]` → `name: autonomous`, `key_env: AUTONOMOUS_API_KEY`,
      `api_mode: anthropic_messages`, `base_url` (mặc định campaign-api, override dưới).
+   - `.auxiliary.vision` (**ghi đè trọn node**) → `provider: custom:autonomous`,
+     `model: qwen/qwen3.6-plus`, `timeout: 120`, `download_timeout: 30`, `extra_body: {}`
+     — model hiểu ảnh, định tuyến qua cùng custom provider autonomous.
+   - `.agent.image_input_mode = "auto"` — để agent tự quyết khi nào đính kèm ảnh.
+   - Chỉ ghi `.auxiliary.vision` và `.agent.image_input_mode`; **các key khác dưới
+     `.auxiliary`/`.agent` được giữ nguyên** (cả hai được coerce từ scalar bị reset về
+     map trước, giống `.model`).
 3. **Sync giá trị theo máy** từ `config.json` (chỉ field khác rỗng, nên kênh chưa
    cấu hình giữ nguyên):
 
