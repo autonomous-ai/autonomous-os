@@ -106,10 +106,19 @@ matching binary. Bumping the version there is what ships an update to the fleet.
 | `lelamp_url` | `http://127.0.0.1:5001` | LeLamp hardware runtime base URL |
 | `lamp_url` | `http://127.0.0.1:5000` | Lamp Go API base URL (monitor/sensing buses, MAC lookup) |
 | `narration_lang` | `vi` | TTS narration language (`en`/`vi`; unknown → English) |
+| `os_config_path` | `config.json` sibling of `buddy.json` | path to the OS server `config.json` the daemon reads `admin_password_hash` from to authenticate LAN pushes (see auth note below) |
 
 > **Ignored / inert keys:** `led_mapping` (if present) is **not read** — it isn't in
 > the `Config` struct; LED behavior is hardcoded in `bridge.go`. `approval_timeout_sec`
 > is parsed but **unused** — there is no server-side approval timeout today.
+
+> **LAN endpoint auth:** the daemon binds `:5002` on all interfaces, so the
+> LAN-facing plugin pushes (`/claude-code/notify`, `/usage`, `/approval-request`)
+> now require the **device admin password** (same one used to log into the web UI)
+> as `Authorization: Bearer <password>`, verified against `admin_password_hash`
+> read from the OS server `config.json` (via the optional `os_config_path` key;
+> default: a `config.json` sibling of `buddy.json`). On-device agent endpoints
+> (`/status`, `/claude-desktop/approve|deny`) stay loopback-only.
 
 Missing config file → defaults are used (with a log line). Parse error → defaults.
 

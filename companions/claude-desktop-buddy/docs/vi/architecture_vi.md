@@ -32,9 +32,11 @@ Về build, deploy, cấu hình và pairing, xem [`setup_vi.md`](setup_vi.md).
   server cục bộ — **LeLamp** (runtime phần cứng, mặc định `:5001`) cho LED / màn
   hình / cảm xúc / TTS, và **Lamp** (Go API, mặc định `:5000`) cho monitor và các
   bus cảm biến (sensing).
-- **Hướng Đông (HTTP):** bản thân Buddy phục vụ một HTTP API nhỏ trên `:5002` để
-  agent trên thiết bị (OpenClaw skill) gọi đọc trạng thái và chấp thuận/từ chối các
-  prompt.
+- **Hướng Đông (HTTP):** bản thân Buddy phục vụ một HTTP API nhỏ trên `:5002`.
+  Agent trên thiết bị (OpenClaw skill) gọi nó qua loopback để đọc trạng thái và
+  chấp thuận/từ chối các prompt; còn plugin Claude Code (trên máy Mac của người
+  dùng) gọi nó qua LAN để đẩy hoạt động lên. Các endpoint LAN yêu cầu mật khẩu
+  admin của thiết bị làm Bearer token (xem **Bảo mật HTTP API** bên dưới).
 
 ## Các thành phần (theo file)
 
@@ -45,7 +47,8 @@ Về build, deploy, cấu hình và pairing, xem [`setup_vi.md`](setup_vi.md).
 | `protocol.go` | Tất cả các kiểu trên đường truyền (`Heartbeat`, `TimeSync`, `Event`, `Command`, `Ack`, `PermissionDecision`), bộ parser/salvager, và các builder ack/permission. |
 | `state.go` | `StateMachine` — suy ra một `BuddyState` từ heartbeat, theo dõi prompt đang chờ cùng các bộ đếm cấp/từ chối trọn đời (lifetime), và quản lý các transient state. |
 | `bridge.go` | Ánh xạ mỗi thay đổi trạng thái thành các lời gọi HTTP cụ thể tới LeLamp + Lamp (LED, màn hình, cảm xúc, TTS, sự kiện monitor/sensing). |
-| `httpapi/` | Gói delivery cho API `:5002` (clean architecture / đảo ngược phụ thuộc). `server.go` chứa `Server`, registry route duy nhất `routes()`, và các helper phản hồi JSON; `Start()` của nó dựng một `http.Server` tường minh (ReadHeaderTimeout 10 s, ReadTimeout 15 s, IdleTimeout 60 s, và **WriteTimeout bị vô hiệu (`0`)** vì long-poll cấp quyền giữ response ~55 s). `ports.go` khai báo các interface mà handler phụ thuộc (`StatusProvider`, `ApprovalService`, `ActivitySink`, `CodeApprovalService`, cùng các sentinel error); `status.go` phục vụ `GET /status` + `GET /health`; `claudedesktop.go` phục vụ `POST /claude-desktop/approve` + `/deny` (vòng round-trip cấp quyền bằng giọng nói của Claude Desktop); `claudecode.go` phục vụ `POST /claude-code/notify` + `/usage` (các push của plugin Claude Code) cùng các route cấp-quyền-ngược `POST /claude-code/approval-request` (long-poll), `POST /claude-code/approve` + `/deny` (chỉ loopback qua helper `isLoopback`), và `GET /claude-code/pending`; một helper `decodeJSON` giới hạn body request ở 64 KB. |
+| `httpapi/` | Gói delivery cho API `:5002` (clean architecture / đảo ngược phụ thuộc). `server.go` chứa `Server`, registry route duy nhất `routes()`, và các helper phản hồi JSON; `Start()` của nó dựng một `http.Server` tường minh (ReadHeaderTimeout 10 s, ReadTimeout 15 s, IdleTimeout 60 s, và **WriteTimeout bị vô hiệu (`0`)** vì long-poll cấp quyền giữ response ~55 s). `ports.go` khai báo các interface mà handler phụ thuộc (`Authenticator`, `StatusProvider`, `ApprovalService`, `ActivitySink`, `CodeApprovalService`, cùng các sentinel error); `status.go` phục vụ `GET /status` + `GET /health`; `claudedesktop.go` phục vụ `POST /claude-desktop/approve` + `/deny` (vòng round-trip cấp quyền bằng giọng nói của Claude Desktop); `claudecode.go` phục vụ `POST /claude-code/notify` + `/usage` (các push của plugin Claude Code) cùng các route cấp-quyền-ngược `POST /claude-code/approval-request` (long-poll), `POST /claude-code/approve` + `/deny`, và `GET /claude-code/pending`. Hai wrapper thực thi kiểm soát truy cập: `s.guard` yêu cầu admin-password Bearer token (các endpoint LAN), còn `s.loopbackOnly` (qua helper `isLoopback`) giới hạn các endpoint trên-thiết-bị chỉ cho local host. Một helper `decodeJSON` giới hạn body request ở 64 KB. |
+| `buddy/auth.go` | `Authenticator` — xác minh admin-password Bearer token trên các endpoint LAN. Đọc `admin_password_hash` (bcrypt của mật khẩu đăng nhập web) và `llm_api_key` từ `config.json` của OS server (`os_config_path`, mặc định là một `config.json` nằm cạnh `buddy.json`), hot-reload khi file thay đổi. Nhánh mật-khẩu-đúng là so sánh thời-gian-hằng (constant-time) có cache nên bcrypt chỉ chạy ở lần dùng đầu tiên / sau khi xoay (rotate) mật khẩu. Fail closed: nếu không có credential nào được đặt, mọi endpoint bị gate đều trả `401`. |
 | `status_provider.go` / `approval_service.go` / `hal_activity_sink.go` | Các hiện thực cụ thể của port `httpapi`, mỗi file một vai trò: `StatusReader` (read-adapter → snapshot trạng thái), `ApprovalService` (use case cấp quyền bằng giọng nói: validate id + gửi quyết định quyền qua BLE + cập nhật bộ đếm), `HALActivitySink` (`ActivitySink` được nối thực tế — ghi log các push của Claude Code **và** đọc chúng qua HAL `:5001`). `main.go` là composition root ráp chúng vào `httpapi.New`. |
 | `codeapproval.go` | `CodeApprovals` — hiện thực của `httpapi.CodeApprovalService`. Một map trong bộ nhớ chứa các approval Claude Code đang chờ, khóa theo id, mỗi cái có một channel có buffer. `Request(ctx, req)` đăng ký một approval đang chờ, gọi `bridge.announceCodeApproval`, rồi block trên một select qua {quyết định từ channel, timeout ttl, ctx cancel}, trả về `"allow"`/`"deny"`/`"timeout"`; `Approve(id)`/`Deny(id)` gửi lên channel (non-blocking, người-ghi-đầu-tiên-thắng); `Pending()` liệt kê chúng. ttl lấy từ config `code_approval_ttl_sec` (mặc định 55 s). `main.go` dựng nó qua `NewCodeApprovals(bridge, ttl)` và truyền làm tham số thứ 5 của `httpapi.New`. |
 | `agent.go` | BlueZ `org.bluez.Agent1` (DisplayOnly) để LE pairing có thể hoàn tất; ghi passkey ra journal. |
@@ -161,6 +164,29 @@ lỗi hay timeout nào cũng khiến hook nhường lại cho hộp thoại cấ
 Claude Code — không bao giờ tự động cho phép. Khác với luồng Desktop, quyết định
 được trả về như HTTP response của hook (giá trị trả về của nó) thay vì đẩy ngược
 qua BLE.
+
+## Bảo mật HTTP API
+
+Daemon bind `:5002` trên tất cả các interface (plugin Mac tiếp cận nó qua LAN),
+nên mỗi endpoint được kiểm soát truy cập theo ai được phép gọi nó:
+
+| Endpoint | Người gọi | Cổng chặn (gate) |
+|----------|-----------|------------------|
+| `GET /health` | discovery (mDNS + quét `/24`) | **mở** — không secret, không dữ liệu nhạy cảm |
+| `POST /claude-code/notify` `/usage` `/approval-request` | plugin Claude Code (Mac, LAN) | **admin-password Bearer token** (`s.guard`) |
+| `GET /status` | agent trên thiết bị (loopback) | **chỉ loopback** (`s.loopbackOnly`) |
+| `POST /claude-desktop/approve` `/deny` | agent trên thiết bị (loopback) | **chỉ loopback** |
+| `POST /claude-code/approve` `/deny`, `GET /claude-code/pending` | agent trên thiết bị (loopback) | **chỉ loopback** |
+
+Bearer token chính là **mật khẩu admin của thiết bị** — cùng mật khẩu dùng để đăng
+nhập web UI của thiết bị. `buddy/auth.go` xác minh nó dựa trên
+`admin_password_hash` trong `config.json` của OS server (bcrypt; `llm_api_key`
+cũng được chấp nhận để curl/script vẫn chạy được, phản chiếu
+`adminAuthMiddleware` của OS server). Plugin lưu mật khẩu theo từng thiết bị trong
+config `0600` của nó và gửi dưới dạng `Authorization: Bearer <password>`; mật khẩu
+thiếu/cũ sẽ trả `401`, mà plugin coi là "hỏi người dùng mật khẩu admin hiện tại".
+Nếu không có credential nào được cấu hình, daemon fail closed (mọi endpoint bị
+gate trả `401`).
 
 ## State machine
 

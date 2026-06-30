@@ -106,10 +106,19 @@ binary tương ứng. Việc tăng phiên bản tại đó chính là cách phá
 | `lelamp_url` | `http://127.0.0.1:5001` | base URL của runtime phần cứng LeLamp |
 | `lamp_url` | `http://127.0.0.1:5000` | base URL của Lamp Go API (bus monitor/sensing, tra cứu MAC) |
 | `narration_lang` | `vi` | ngôn ngữ thuyết minh TTS (`en`/`vi`; không xác định → tiếng Anh) |
+| `os_config_path` | `config.json` cạnh `buddy.json` | đường dẫn tới `config.json` của OS server mà daemon đọc `admin_password_hash` để xác thực các push từ LAN (xem ghi chú auth bên dưới) |
 
 > **Các key bị bỏ qua / không tác dụng:** `led_mapping` (nếu có) **không được đọc** — nó không nằm
 > trong struct `Config`; hành vi LED được hardcode trong `bridge.go`. `approval_timeout_sec`
 > được parse nhưng **không dùng** — hiện chưa có timeout phê duyệt phía server.
+
+> **Auth cho endpoint LAN:** daemon bind `:5002` trên mọi interface, nên các push
+> từ plugin phía LAN (`/claude-code/notify`, `/usage`, `/approval-request`) giờ
+> yêu cầu **mật khẩu admin của device** (chính mật khẩu dùng để đăng nhập web UI)
+> dưới dạng `Authorization: Bearer <password>`, verify với `admin_password_hash`
+> đọc từ `config.json` của OS server (qua key tùy chọn `os_config_path`; mặc định:
+> `config.json` cạnh `buddy.json`). Các endpoint do agent trên device gọi
+> (`/status`, `/claude-desktop/approve|deny`) vẫn chỉ loopback.
 
 Thiếu file config → dùng giá trị mặc định (kèm một dòng log). Lỗi parse → dùng mặc định.
 
