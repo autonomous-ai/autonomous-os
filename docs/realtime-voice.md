@@ -114,8 +114,10 @@ This replaces the slow path (delegate → main → skill lookup → `/camera/sna
 
 Gating (all three required, else visual questions fall back to delegation):
 
-- **Capability:** the device declares `vision` (a camera) — `server.py` passes
-  `enable_vision`.
+- **Capability:** a camera is present (`app_state.camera_capture` is set). This is
+  the device's `vision` capability at runtime — `server.py` only creates
+  `camera_capture` when DEVICE.md declares `vision`. The orchestrator reads that
+  one signal (`_camera_present()`), so it's correct for every construction path.
 - **Flag:** `HAL_GEMINI_VISION` / `realtime.gemini.vision` (default **on**).
 - **Provider:** Gemini only (the image-inject → continue-turn flow is
   implemented + tested for Gemini Live; OpenAI keeps delegating). The
