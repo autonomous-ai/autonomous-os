@@ -219,6 +219,15 @@ func (s *OpenclawService) EnsureOnboarding() error {
 		needRestart = true
 	}
 
+	// Ensure gateway auth token — generated only in SetupAgent but must also exist
+	// when switching TO openclaw from another runtime (e.g. hermes). EnsureOnboarding
+	// runs on every boot/switch; SetupAgent never runs in that path.
+	if tokenSeeded, err := s.ensureGatewayToken(); err != nil {
+		slog.Error("ensure gateway token failed", "component", "onboarding", "error", err)
+	} else if tokenSeeded {
+		needRestart = true
+	}
+
 	// Ensure agent defaults (compaction, bootstrap limits, caching)
 	if defaultsPatched, err := s.ensureAgentDefaults(); err != nil {
 		slog.Error("ensure agent defaults failed", "component", "onboarding", "error", err)
@@ -858,6 +867,51 @@ func seedFile(efs embed.FS, src, dst string) bool {
 	}
 	slog.Info("seeded file", "component", "onboarding", "file", filepath.Base(dst))
 	return true
+}
+
+// ensureGatewayToken generates and persists gateway.auth.token in openclaw.json when
+// the field is absent. Covers the switch-from-another-runtime path: SetupAgent (the
+// only prior source of token generation) is never called when switching TO openclaw
+// from hermes; EnsureOnboarding is. Without a token, readGatewayToken() errors on
+// every WS connect-challenge and the gateway disconnects in a tight retry loop.
+// Returns true if the file was modified (caller triggers a gateway restart).
+func (s *OpenclawService) ensureGatewayToken() (bool, error) {
+	configPath := filepath.Join(s.config.OpenclawConfigDir, "openclaw.json")
+	configBytes, err := os.ReadFile(configPath)
+	if err != nil {
+		return false, fmt.Errorf("read openclaw.json: %w", err)
+	}
+	var configData map[string]interface{}
+	if err := json.Unmarshal(configBytes, &configData); err != nil {
+		return false, fmt.Errorf("parse openclaw.json: %w", err)
+	}
+
+	gatewayMap := ensureMap(configData, "gateway")
+	gatewayAuthMap := ensureMap(gatewayMap, "auth")
+	if strings.TrimSpace(getStringValue(gatewayAuthMap, "token")) != "" {
+		return false, nil
+	}
+
+	token, err := generateGatewayToken()
+	if err != nil {
+		return false, fmt.Errorf("generate gateway token: %w", err)
+	}
+	gatewayAuthMap["token"] = token
+	if _, ok := gatewayAuthMap["mode"]; !ok {
+		gatewayAuthMap["mode"] = "token"
+	}
+	gatewayMap["auth"] = gatewayAuthMap
+	configData["gateway"] = gatewayMap
+
+	outBytes, err := json.MarshalIndent(configData, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("marshal openclaw.json: %w", err)
+	}
+	if err := os.WriteFile(configPath, outBytes, 0600); err != nil {
+		return false, fmt.Errorf("write openclaw.json: %w", err)
+	}
+	slog.Info("seeded gateway auth token in openclaw.json", "component", "onboarding")
+	return true, nil
 }
 
 // ensureAgentDefaults patches agents.defaults in openclaw.json with performance config.
