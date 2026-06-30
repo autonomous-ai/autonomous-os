@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"go.autonomous.ai/os/domain"
 	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/internal/skills"
 )
@@ -958,30 +959,27 @@ func (s *OpenclawService) ensureProviderConfig() (bool, error) {
 		return false, nil
 	}
 
-	// Try full catalog refresh; fall back to patching auth fields only.
+	// Try full catalog refresh; fall back to hardcoded defaultModels (same as
+	// SetupAgent) so the provider entry is always complete even when offline.
+	// A partial entry (apiKey only, no models) would still fail on the next turn.
 	modelsResp, err := FetchModelsFromAPI()
 	if err != nil {
-		slog.Warn("ensureProviderConfig: model API fetch failed, patching auth fields only",
+		slog.Warn("ensureProviderConfig: model API fetch failed, using hardcoded fallback",
 			"component", "onboarding", "error", err)
-		if autonomousMap == nil {
-			autonomousMap = map[string]interface{}{}
+		modelsResp = &domain.LLMModelsListResponse{Models: defaultModels}
+	}
+	entries := make([]any, 0, len(modelsResp.Models))
+	for _, m := range modelsResp.Models {
+		if s.config.LLMThinkingDisabled() {
+			m.Reasoning = false
 		}
-		autonomousMap["apiKey"] = s.config.LLMAPIKey
-		autonomousMap["baseUrl"] = s.config.LLMBaseURL
-	} else {
-		entries := make([]any, 0, len(modelsResp.Models))
-		for _, m := range modelsResp.Models {
-			if s.config.LLMThinkingDisabled() {
-				m.Reasoning = false
-			}
-			entries = append(entries, openclawModelToProviderEntry(m))
-		}
-		autonomousMap = map[string]interface{}{
-			"baseUrl": s.config.LLMBaseURL,
-			"api":     resolveAutonomousAPI(modelsResp.API),
-			"apiKey":  s.config.LLMAPIKey,
-			"models":  entries,
-		}
+		entries = append(entries, openclawModelToProviderEntry(m))
+	}
+	autonomousMap = map[string]interface{}{
+		"baseUrl": s.config.LLMBaseURL,
+		"api":     resolveAutonomousAPI(modelsResp.API),
+		"apiKey":  s.config.LLMAPIKey,
+		"models":  entries,
 	}
 
 	modelsMap["mode"] = "merge"
