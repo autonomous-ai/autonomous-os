@@ -25,7 +25,7 @@ func TestPresyncRegistered(t *testing.T) {
 func TestPresyncOwnsConfigStructure(t *testing.T) {
 	s := string(PresyncScript)
 	for _, want := range []string{
-		`.model.provider = "custom:autonomous"`,        // static provider
+		`.model.provider = "custom:autonomous"`,                // static provider
 		`.custom_providers[0].api_mode = "anthropic_messages"`, // static routing mode
 		`.custom_providers[0].name     = "autonomous"`,         // static provider name
 		`.model.default = "Auto-AI"`,                           // fixed campaign-api model alias (NOT openclaw llm_model)
