@@ -153,10 +153,19 @@ which emits the same flow events a normal turn does:
 
 - `agent:start` → `chat_input` (source `channel`, with `sender` + `channel`) plus
   `lifecycle_start`.
-- `agent:end` → `lifecycle_end` plus `tts_suppressed` carrying the reply text
-  (the reply went to the channel, not the device speaker — the same node the
-  OpenClaw channel path uses, so the web turn renders it), or `no_reply` for an
-  empty / `NO_REPLY` turn.
+- `agent:end` → `lifecycle_end` plus `tts_suppressed` carrying the **marker-stripped**
+  reply text (the reply went to the channel, not the device speaker — the same node
+  the OpenClaw channel path uses, so the web turn renders it), or `no_reply` for an
+  empty / `NO_REPLY` turn, or `hw_only_reply` when the turn was markers with no
+  spoken text. On this event the handler also runs `extractHWCalls` over the reply
+  and fires any `[HW:/…]` markers on the **local device** (LED/emotion/servo/audio)
+  via `fireHWCalls`, so a gateway-owned channel turn (Telegram/Discord) can drive the
+  hardware — matching the OpenClaw `session.message` path and the device
+  `/v1/responses` path. (Slack is unaffected: its turns run through `/v1/responses`
+  and are skipped here as `api_server`, so `handler_event_agent` already fired their
+  markers.) **Caveat:** the gateway may truncate `response` (~500 chars), so a marker
+  near the end of a long reply can be clipped and dropped — raise the gateway-side
+  truncation if end-of-reply markers go missing in practice.
 
 Both events share one `run_id`, correlated by `session_id`. The handler is
 channel-agnostic (keyed on the `platform` field) and **skips** `api_server` / `cli`

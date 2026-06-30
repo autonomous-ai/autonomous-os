@@ -151,9 +151,19 @@ nơi emit đúng các flow event như một turn bình thường:
 
 - `agent:start` → `chat_input` (source `channel`, kèm `sender` + `channel`) cùng
   `lifecycle_start`.
-- `agent:end` → `lifecycle_end` cùng `tts_suppressed` mang text phản hồi (reply đi
-  về channel chứ không ra loa thiết bị — cùng node mà đường channel của OpenClaw
-  dùng, để web turn render được), hoặc `no_reply` cho lượt rỗng / `NO_REPLY`.
+- `agent:end` → `lifecycle_end` cùng `tts_suppressed` mang text phản hồi **đã loại
+  bỏ marker** (reply đi về channel chứ không ra loa thiết bị — cùng node mà đường
+  channel của OpenClaw dùng, để web turn render được), hoặc `no_reply` cho lượt rỗng
+  / `NO_REPLY`, hoặc `hw_only_reply` khi lượt chỉ có marker mà không có text nói. Ở
+  event này handler còn chạy `extractHWCalls` trên reply và bắn mọi marker `[HW:/…]`
+  xuống **thiết bị cục bộ** (LED/emotion/servo/audio) qua `fireHWCalls`, để một lượt
+  channel do gateway sở hữu (Telegram/Discord) điều khiển được phần cứng — khớp với
+  đường `session.message` của OpenClaw và đường `/v1/responses` của thiết bị. (Slack
+  không bị ảnh hưởng: lượt của nó chạy qua `/v1/responses` và bị skip ở đây dưới
+  dạng `api_server`, nên `handler_event_agent` đã bắn marker của nó rồi.) **Lưu ý:**
+  gateway có thể cắt `response` (~500 ký tự), nên marker nằm cuối một reply dài có
+  thể bị cụt và mất — cần chỉnh truncation phía gateway nếu thực tế marker cuối reply
+  bị thiếu.
 
 Hai event dùng chung một `run_id`, tương quan qua `session_id`. Handler
 channel-agnostic (dựa vào field `platform`) và **skip** lượt `api_server` / `cli`

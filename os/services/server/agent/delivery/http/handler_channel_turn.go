@@ -105,6 +105,8 @@ func (t *channelHookTracker) pruneLocked() {
 // makes Telegram/Slack/Discord turns visible under Hermes — the gateway owns the
 // channel I/O and never streams those turns to os-server, so without the hook
 // os-server is blind to them (OpenClaw gets the equivalent via session.message).
+// On agent:end it also fires any [HW:] markers in the reply so these channel turns
+// drive the local hardware, like the openclaw session.message path.
 // Channel-agnostic: the platform comes from the payload. Loopback-only; the hook
 // runs on-device.
 func (h *AgentHandler) ChannelTurn(c *gin.Context) {
@@ -162,9 +164,20 @@ func (h *AgentHandler) ChannelTurn(c *gin.Context) {
 			"run_id": runID,
 			"source": "channel_hook",
 		}, runID)
-		resp := strings.TrimSpace(ctx.Response)
+
+		// Fire [HW:] markers from the reply so Telegram/Discord turns drive the local
+		// hardware, like the openclaw session.message path (Slack runs via
+		// /v1/responses and is skipped above as api_server).
+		// CAVEAT: the gateway may truncate ctx.Response (~500 chars), clipping
+		// end-of-reply markers — raise the gateway truncation if that happens.
+		raw := prunedImageMarkerRe.ReplaceAllString(ctx.Response, "")
+		hwCalls, cleanText := extractHWCalls(raw)
+		cleanText = extractSayTag(cleanText)
+		cleanText = sanitizeAgentText(cleanText)
+		h.fireHWCalls(hwCalls, runID)
+
 		switch {
-		case resp == "" || isAgentNoReply(resp):
+		case isAgentNoReply(cleanText):
 			flow.Log("no_reply", map[string]any{"run_id": runID}, runID)
 			h.monitorBus.Push(domain.MonitorEvent{
 				Type:    "chat_response",
@@ -173,18 +186,33 @@ func (h *AgentHandler) ChannelTurn(c *gin.Context) {
 				State:   "final",
 				Detail:  map[string]string{"role": "assistant", "message": "[no reply]", "channel": ctx.Platform},
 			})
+		case strings.TrimSpace(cleanText) == "":
+			// Markers but no spoken text — HW fired, still a valid turn (not no_reply).
+			if len(hwCalls) > 0 {
+				flow.Log("hw_only_reply", map[string]any{"run_id": runID}, runID)
+			} else {
+				flow.Log("no_reply", map[string]any{"run_id": runID}, runID)
+				h.monitorBus.Push(domain.MonitorEvent{
+					Type:    "chat_response",
+					Summary: "[no reply]",
+					RunID:   runID,
+					State:   "final",
+					Detail:  map[string]string{"role": "assistant", "message": "[no reply]", "channel": ctx.Platform},
+				})
+			}
 		default:
+			// Render marker-stripped text so the UI bubble has no raw [HW:...].
 			flow.Log("tts_suppressed", map[string]any{
 				"run_id": runID,
 				"reason": "channel_run",
-				"text":   resp,
+				"text":   cleanText,
 			}, runID)
 			h.monitorBus.Push(domain.MonitorEvent{
 				Type:    "chat_response",
-				Summary: channelTurnPreview(resp, 200),
+				Summary: channelTurnPreview(cleanText, 200),
 				RunID:   runID,
 				State:   "final",
-				Detail:  map[string]string{"role": "assistant", "message": resp, "channel": ctx.Platform},
+				Detail:  map[string]string{"role": "assistant", "message": cleanText, "channel": ctx.Platform},
 			})
 		}
 	}
