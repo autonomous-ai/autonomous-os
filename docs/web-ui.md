@@ -208,6 +208,19 @@ Cards included:
 - Each can be played via `POST /hw/servo/play` (recording name)
 - UI also provides an `Upload CSV` button to add/replace recordings via `POST /hw/servo/upload` (multipart: `file`, `recording_name`)
 
+> **Layout & pill clouds.** The device cluster (row 2) splits into two equal
+> columns: the right column holds the expressive cards (Emotion, Servo Pose,
+> Versions) and the left column holds the compact status cards (Hardware, Scene,
+> Buddy); they collapse to one column under ~860px. Versions sits in the right
+> column so the two columns balance in height rather than the right ending short
+> under Servo Pose. The Emotion preset list and the Servo recording list each
+> render as a **pill cloud** — the active pill is hoisted to the front so the
+> current state reads first, and the full set free-wraps (no scroll). Both the Emotion
+> and Servo Pose cards split into two columns: the current-state summary (Emotion
+> emoji + name; Servo current pose + Release button) in a fixed-width left column
+> and the preset/recording cloud filling the rest on the right. Under ~360px the
+> two columns stack.
+
 **Display Eyes**
 - Currently displayed expression (mode)
 - List of available expressions

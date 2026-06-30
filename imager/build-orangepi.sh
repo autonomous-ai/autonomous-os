@@ -344,6 +344,23 @@ hermes --version || true
 # installs it at runtime instead — that is why we ship both.
 echo "[stage] hermes-gateway.service unit pre-bake (created, left disabled)"
 if command -v hermes >/dev/null 2>&1; then
+  # Seed .env with API server keys before gateway install — mirrors install.sh
+  # lines 117-127. Without this the gateway starts with API_SERVER_ENABLED unset
+  # and os-server's Bearer auth fails (401 on every turn).
+  HERMES_DIR="/root/.hermes"
+  ENV_FILE="\$HERMES_DIR/.env"
+  HERMES_API_SERVER_KEY="hermes-api-key"
+  mkdir -p "\$HERMES_DIR"
+  touch "\$ENV_FILE"
+  for k in API_SERVER_ENABLED API_SERVER_KEY API_SERVER_CORS_ORIGINS; do
+    sed -i "/^\${k}=/d" "\$ENV_FILE"
+  done
+  [ -s "\$ENV_FILE" ] && [ -n "\$(tail -c1 "\$ENV_FILE")" ] && printf '\n' >>"\$ENV_FILE"
+  printf '%s\n' \
+    "API_SERVER_ENABLED=true" \
+    "API_SERVER_KEY=\$HERMES_API_SERVER_KEY" \
+    "API_SERVER_CORS_ORIGINS=http://localhost:3000" >>"\$ENV_FILE"
+  echo "[stage] hermes .env pre-seeded (API_SERVER_ENABLED + API_SERVER_KEY + CORS)"
   set +o pipefail
   yes y | hermes gateway install --system --run-as-user root \
     || echo "WARN: hermes gateway unit write returned non-zero (chroot has no systemd; os-server EnsureOnboarding installs it at runtime)"
