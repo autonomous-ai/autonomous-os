@@ -312,15 +312,137 @@ export function OverviewSection({
         </div>
       </div>
 
-      {/* Row 2: device & capability cluster — Hardware, the capability-gated
-          cards (Emotion/Scene/Servo), then Versions + Buddy, all in ONE auto-fit
-          grid. Keeping them together means a minimal device (intern-v2: just
-          Hardware + Versions + Buddy) lays out as three even cards instead of a
-          lone Hardware strip stretched across the row; a lamp fills the grid and
-          wraps. minmax(260px,1fr) never stretches a single card full-width once
-          there are ≥2 cards. Order puts Hardware adjacent to Versions/Buddy on
-          minimal devices and groups the capability cards together on a lamp. */}
-      <div className="lm-grid-auto">
+      {/* Row 2: device & capability cluster, split into two masonry columns so
+          cards pack by their natural height instead of being forced to equal
+          height by one auto-fit grid (which left dead space in the compact cards
+          and cramped the tall pill-cloud ones). The RIGHT column carries the
+          expressive cards (Emotion + Servo pose), each with a scrollable pill
+          cloud; the LEFT column carries the compact status cards (Hardware,
+          Scene, Versions, Buddy). DOM order keeps the expressive cards first but
+          CSS `order` paints them on the right. On a minimal device the capability-gated cards
+          simply don't render, and the remaining cards still read cleanly. On a
+          narrow viewport the two columns collapse to one (see .lm-cluster). */}
+      <div className="lm-cluster">
+        {/* Expressive cards (Emotion + Servo) — painted on the RIGHT via order: 2 */}
+        <div className="lm-cluster-col" style={{ order: 2 }}>
+        {/* Emotion — only for devices that declare the expression capability (the
+            /emotion route). intern-v2 has no expression, so the whole card is hidden
+            rather than showing an agent emotion the device can't actually express. */}
+        {hasEmotion && (
+        <div style={{
+          ...S.card, padding: "14px 16px",
+          background: emotion ? `linear-gradient(135deg, var(--lm-bg) 60%, ${emotionColor}18)` : "var(--lm-bg)",
+          border: `1px solid ${emotion ? emotionColor + "55" : "var(--lm-border)"}`,
+          transition: "all 0.4s ease",
+        }}>
+          <div style={{ marginBottom: 12 }}><CardLabel icon={<Drama size={13} />} text="Emotion" /></div>
+          {/* Two-column body: the current-emotion summary (emoji + name) sits in
+              a fixed-width left column, and the full preset list wraps as a tidy
+              cloud filling the rest on the right — instead of stacking the cloud
+              full-width under the summary. Wraps to stacked under ~360px. */}
+          <div style={{ display: "flex", flexWrap: "wrap" as const, alignItems: "flex-start", gap: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, flex: "0 0 140px", minWidth: 0 }}>
+              <div style={{
+                fontSize: 36, lineHeight: 1, flexShrink: 0,
+                filter: emotion ? `drop-shadow(0 0 8px ${emotionColor}88)` : "none",
+                transition: "filter 0.4s ease",
+              }}>
+                {emotion ? emotionEmoji : "✦"}
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 10, color: "var(--lm-text-muted)", marginBottom: 2, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                  Your device is feeling
+                </div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: emotion ? emotionColor : "var(--lm-text-muted)", textTransform: "capitalize", transition: "color 0.4s ease" }}>
+                  {emotion || "—"}
+                </div>
+              </div>
+            </div>
+            <div style={{ flex: "1 1 200px", minWidth: 0 }}>
+              <PillCloud
+                items={ALL_EMOTIONS}
+                active={emotion}
+                label={(e) => <>{EMOTION_EMOJI[e]} {e}</>}
+                accent={(e) => EMOTION_COLOR[e] ?? "#fff"}
+                onPick={(e) => {
+                  fetch(`${HW}/emotion`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ emotion: e, intensity: 1.0 }),
+                  }).catch(() => {});
+                }}
+                title={(e) => `Test emotion: ${e}`}
+              />
+            </div>
+          </div>
+        </div>
+        )}
+
+        {/* Servo — only for devices that declare the motion capability (e.g. lamp, not intern-v2) */}
+        {hasMotion && (
+        <div className="lm-mon-card" style={monCard}>
+          <div style={{ marginBottom: 12 }}><CardLabel icon={<Bot size={13} />} text="Servo Pose" /></div>
+          {servo ? (
+            // Two-column body mirroring the Emotion card: the current pose +
+            // Release control sit in a fixed-width left column, and the recording
+            // list wraps as a tidy cloud filling the rest on the right. Wraps to
+            // stacked under ~360px.
+            <div style={{ display: "flex", flexWrap: "wrap" as const, alignItems: "flex-start", gap: 16 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: "0 0 140px", minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--lm-amber)" }}>
+                  {servo.current || "idle"}
+                  {(servo.bus_connected === false || servo.robot_connected === false) && (
+                    <span style={{ fontSize: 10, color: "var(--lm-danger, #c44)", marginLeft: 6 }}>
+                      (bus {servo.bus_connected === false ? "down" : "ok"}{servo.robot_connected === false ? ", robot off" : ""})
+                    </span>
+                  )}
+                </div>
+                <button className="lm-u-btn" onClick={() => {
+                  fetch(`${HW}/servo/release`, { method: "POST", headers: { accept: "application/json" } }).catch(() => {});
+                }} style={{
+                  fontSize: 10, padding: "3px 9px", borderRadius: 6,
+                  color: "var(--lm-text-dim)", alignSelf: "flex-start",
+                }}>Release</button>
+              </div>
+              <div style={{ flex: "1 1 200px", minWidth: 0 }}>
+                <PillCloud
+                  items={servo.available_recordings ?? []}
+                  active={servo.current ?? ""}
+                  label={(p) => p}
+                  accent={() => "var(--lm-amber)"}
+                  onPick={(p) => {
+                    fetch(`${HW}/servo/play`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ recording: p }),
+                    }).catch(() => {});
+                  }}
+                />
+              </div>
+            </div>
+          ) : <span style={{ color: "var(--lm-text-muted)" }}>Loading…</span>}
+        </div>
+        )}
+
+        {/* Versions — kept in the expressive (right) column so the two columns
+            balance in height: Hardware + Scene + Buddy on the left roughly match
+            Emotion + Servo + Versions on the right, instead of the right column
+            ending short under Servo Pose. OS uptime sits in the host row;
+            detailed CPU/RAM/Disk live in the System tab. */}
+        <div className="lm-mon-card" style={monCard}>
+          <div style={{ marginBottom: 10 }}><CardLabel icon={<Tag size={13} />} text="Versions" /></div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <VersionRow name="Host"   color="var(--lm-text)"   version={null}                    uptime={sys?.uptime ?? null}                                   updateTarget={null} />
+            <VersionRow name="Web"    color="var(--lm-teal)"   version={webVersion}              uptime={null}                                                  updateTarget={isDebug ? "web" : null} />
+            <VersionRow name="OS"     color="var(--lm-amber)"  version={sys?.version ?? null}    uptime={sys?.serviceUptime ?? null}                            updateTarget={isDebug ? "os-server" : null} />
+            <VersionRow name="HAL"    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={isDebug ? "hal" : null} />
+            <VersionRow name="Agent"  color="var(--lm-purple)" version={oc?.version ?? null}     uptime={oc?.connected ? (oc?.agentUptime ?? null) : null}      updateTarget={null} />
+          </div>
+        </div>
+        </div>
+
+        {/* Compact status cards — painted on the LEFT via order: 1 */}
+        <div className="lm-cluster-col" style={{ order: 1 }}>
         {/* Hardware */}
         <div className="lm-mon-card" style={monCard}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
@@ -368,63 +490,6 @@ export function OverviewSection({
           ) : <SkeletonRows lines={2} />}
         </div>
 
-        {/* Emotion — only for devices that declare the expression capability (the
-            /emotion route). intern-v2 has no expression, so the whole card is hidden
-            rather than showing an agent emotion the device can't actually express. */}
-        {hasEmotion && (
-        <div style={{
-          ...S.card, padding: "14px 16px",
-          background: emotion ? `linear-gradient(135deg, var(--lm-bg) 60%, ${emotionColor}18)` : "var(--lm-bg)",
-          border: `1px solid ${emotion ? emotionColor + "55" : "var(--lm-border)"}`,
-          transition: "all 0.4s ease",
-        }}>
-          <div style={{ marginBottom: 12 }}><CardLabel icon={<Drama size={13} />} text="Emotion" /></div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <div style={{
-              fontSize: 36, lineHeight: 1, flexShrink: 0,
-              filter: emotion ? `drop-shadow(0 0 8px ${emotionColor}88)` : "none",
-              transition: "filter 0.4s ease",
-            }}>
-              {emotion ? emotionEmoji : "✦"}
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 10, color: "var(--lm-text-muted)", marginBottom: 2, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                Your device is feeling
-              </div>
-              <div style={{ fontSize: 18, fontWeight: 700, color: emotion ? emotionColor : "var(--lm-text-muted)", textTransform: "capitalize", transition: "color 0.4s ease" }}>
-                {emotion || "—"}
-              </div>
-            </div>
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 4, marginTop: 10 }}>
-            {ALL_EMOTIONS.map((e) => {
-              const active = e === emotion;
-              const c = EMOTION_COLOR[e] ?? "#fff";
-              return (
-                <span key={e} role="button" title={`Test emotion: ${e}`} onClick={() => {
-                  fetch(`${HW}/emotion`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ emotion: e, intensity: 1.0 }),
-                  }).catch(() => {});
-                }} style={{
-                  fontSize: 9, padding: "1px 6px", borderRadius: 8,
-                  background: active ? `${c}22` : "var(--lm-surface)",
-                  border: `1px solid ${active ? c + "88" : "var(--lm-border)"}`,
-                  color: active ? c : "var(--lm-text-muted)",
-                  fontWeight: active ? 700 : 400,
-                  textTransform: "capitalize",
-                  transition: "all 0.3s ease",
-                  cursor: "pointer",
-                }}>
-                  {EMOTION_EMOJI[e]} {e}
-                </span>
-              );
-            })}
-          </div>
-        </div>
-        )}
-
         {/* Scene — `scene` is a route WITHIN the `light` capability (lamp declares
             light:[led,scene]; intern-v2 declares light:[led] only), so the capability
             list can't distinguish it. Gate on data instead: a device whose light
@@ -461,65 +526,9 @@ export function OverviewSection({
         </div>
         )}
 
-        {/* Servo — only for devices that declare the motion capability (e.g. lamp, not intern-v2) */}
-        {hasMotion && (
-        <div className="lm-mon-card" style={monCard}>
-          <div style={{ marginBottom: 12 }}><CardLabel icon={<Bot size={13} />} text="Servo Pose" /></div>
-          {servo ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--lm-amber)" }}>
-                {servo.current || "idle"}
-                {(servo.bus_connected === false || servo.robot_connected === false) && (
-                  <span style={{ fontSize: 10, color: "var(--lm-danger, #c44)", marginLeft: 6 }}>
-                    (bus {servo.bus_connected === false ? "down" : "ok"}{servo.robot_connected === false ? ", robot off" : ""})
-                  </span>
-                )}
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 4 }}>
-                {(servo.available_recordings ?? []).map((p) => (
-                  <span key={p} role="button" onClick={() => {
-                    fetch(`${HW}/servo/play`, {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ recording: p }),
-                    }).catch(() => {});
-                  }} style={{
-                    fontSize: 10, padding: "2px 6px", borderRadius: 4,
-                    background: p === servo.current ? "var(--lm-amber-dim)" : "var(--lm-surface)",
-                    border: `1px solid ${p === servo.current ? "var(--lm-amber)" : "var(--lm-border)"}`,
-                    color: p === servo.current ? "var(--lm-amber)" : "var(--lm-text-dim)",
-                    cursor: "pointer",
-                  }}>{p}</span>
-                ))}
-              </div>
-              <button className="lm-u-btn" onClick={() => {
-                fetch(`${HW}/servo/release`, { method: "POST", headers: { accept: "application/json" } }).catch(() => {});
-              }} style={{
-                marginTop: 2, fontSize: 10, padding: "3px 9px", borderRadius: 6,
-                color: "var(--lm-text-dim)", alignSelf: "flex-start",
-              }}>Release</button>
-            </div>
-          ) : <span style={{ color: "var(--lm-text-muted)" }}>Loading…</span>}
-        </div>
-        )}
-
-        {/* Versions — part of the same device cluster. On a minimal device this
-            sits right after Hardware; on a lamp it follows the capability cards.
-            OS uptime sits in the host row; detailed CPU/RAM/Disk live in System tab. */}
-        <div className="lm-mon-card" style={monCard}>
-          <div style={{ marginBottom: 10 }}><CardLabel icon={<Tag size={13} />} text="Versions" /></div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <VersionRow name="Host"   color="var(--lm-text)"   version={null}                    uptime={sys?.uptime ?? null}                                   updateTarget={null} />
-            <VersionRow name="Web"    color="var(--lm-teal)"   version={webVersion}              uptime={null}                                                  updateTarget={isDebug ? "web" : null} />
-            <VersionRow name="OS"     color="var(--lm-amber)"  version={sys?.version ?? null}    uptime={sys?.serviceUptime ?? null}                            updateTarget={isDebug ? "os-server" : null} />
-            <VersionRow name="HAL"    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={isDebug ? "hal" : null} />
-            <VersionRow name="Agent"  color="var(--lm-purple)" version={oc?.version ?? null}     uptime={oc?.connected ? (oc?.agentUptime ?? null) : null}      updateTarget={null} />
-          </div>
-        </div>
-
-        {/* Autonomous Buddy pairing — rounds out the cluster as the third card on
-            a minimal device, so no card is ever left stretched alone in a row. */}
+        {/* Autonomous Buddy pairing — closes out the compact (left) column. */}
         <BuddyCard />
+        </div>
       </div>
 
       {/* Display Eyes — hidden via display:none, code kept for future re-enable */}
@@ -545,6 +554,55 @@ export function OverviewSection({
         ) : <span style={{ color: "var(--lm-text-muted)" }}>Loading…</span>}
       </div>
 
+    </div>
+  );
+}
+
+// PillCloud renders a de-cluttered, free-wrapping grid of selectable pills for
+// the Emotion / Servo cards. Both previously dumped every preset (20+ emotions,
+// 30+ poses) as tiny tags that buried the card and read as noise. Here the active
+// pill is hoisted to the front so the current state always reads first, and the
+// whole set wraps as a tidy cloud (no scroll). Pills keep their per-item accent
+// color.
+function PillCloud<T extends string>({ items, active, label, accent, onPick, title }: {
+  items: T[];
+  active: string;
+  label: (item: T) => ReactNode;
+  accent: (item: T) => string;
+  onPick: (item: T) => void;
+  title?: (item: T) => string;
+}) {
+  // Active item first so the current state always reads first.
+  const ordered = active && items.includes(active as T)
+    ? [active as T, ...items.filter((i) => i !== active)]
+    : items;
+  return (
+    <div className="lm-pillcloud">
+      {ordered.map((item) => {
+        const isActive = item === active;
+        const c = accent(item);
+        return (
+          <span
+            key={item}
+            role="button"
+            title={title?.(item)}
+            onClick={() => onPick(item)}
+            style={{
+              fontSize: 10, padding: "2px 8px", borderRadius: 999,
+              background: isActive ? `${c}22` : "var(--lm-surface)",
+              border: `1px solid ${isActive ? c + "88" : "var(--lm-border)"}`,
+              color: isActive ? c : "var(--lm-text-muted)",
+              fontWeight: isActive ? 700 : 400,
+              textTransform: "capitalize",
+              transition: "all 0.2s ease",
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {label(item)}
+          </span>
+        );
+      })}
     </div>
   );
 }
