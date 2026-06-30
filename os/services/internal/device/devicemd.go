@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -15,7 +16,14 @@ var (
 	reSoulRef         = regexp.MustCompile(`(?m)^soul_ref:[ \t]*(\S+)`)
 	reCapBlock        = regexp.MustCompile(`(?m)^capabilities:[ \t]*\n((?:[ \t]+.*\n?)+)`)
 	reCapKey          = regexp.MustCompile(`(?m)^[ \t]+(\w+):`)
+	reStartupVolume   = regexp.MustCompile(`(?m)^startup_volume:[ \t]*(\d+)`)
 )
+
+// DefaultStartupVolume is the speaker volume os-server sets at startup when a
+// device's DEVICE.md does not declare `startup_volume`. 100% keeps the legacy
+// behavior — software at max so the hardware/alsactl level is the effective
+// control — for any device that hasn't opted into a per-device level.
+const DefaultStartupVolume = 100
 
 // Capabilities returns the set of capability keys declared in the
 // `capabilities:` block of devices/<deviceType>/DEVICE.md (e.g. audio, vision,
@@ -128,6 +136,32 @@ func SoulRef(deviceType string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(m[1]))
+}
+
+// StartupVolume returns the `startup_volume` (0-100) declared in
+// devices/<deviceType>/DEVICE.md, or DefaultStartupVolume (100) when the field
+// is absent/unreadable/out of range. os-server applies this once at startup so
+// the boot speaker level is a per-device body property, not a hardcoded max —
+// e.g. a device with a loud speaker can boot quieter. Dependency-free
+// front-matter parse, mirroring SoulRef. Fail-safe to max, never to silent.
+func StartupVolume(deviceType string) int {
+	b, err := os.ReadFile(filepath.Join(DevicesDir(), deviceType, "DEVICE.md"))
+	if err != nil {
+		return DefaultStartupVolume
+	}
+	fm := reFrontMatter.FindSubmatch(b)
+	if fm == nil {
+		return DefaultStartupVolume
+	}
+	m := reStartupVolume.FindSubmatch(fm[1])
+	if m == nil {
+		return DefaultStartupVolume
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(string(m[1])))
+	if err != nil || v < 0 || v > 100 {
+		return DefaultStartupVolume
+	}
+	return v
 }
 
 // DevicesDir resolves the per-device profile root (devices/<type>/...).

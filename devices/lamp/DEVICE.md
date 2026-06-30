@@ -23,6 +23,7 @@ capabilities:
 soul_ref:   SOUL.md
 safety_ref: SAFETY.md
 memory:     { backend: local }
+startup_volume: 100
 ---
 
 # Autonomous Lamp

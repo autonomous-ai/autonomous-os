@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/internal/statusled"
 	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/lib/safego"
@@ -227,9 +228,13 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 				}
 			}
 
-			// Init speaker volume — set to max so hardware/alsactl level is the effective control.
-			if err := s.agentGateway.SetVolume(100); err != nil {
-				slog.Warn("init volume failed", "component", "server", "error", err)
+			// Init speaker volume from the device profile (DEVICE.md `startup_volume`,
+			// default 100). 100 keeps the legacy behavior — software at max so the
+			// hardware/alsactl level is the effective control — while a device with a
+			// loud speaker can declare a quieter boot level instead of hardcoding it.
+			startupVol := device.StartupVolume(s.config.DeviceTypeOrDefault())
+			if err := s.agentGateway.SetVolume(startupVol); err != nil {
+				slog.Warn("init volume failed", "component", "server", "error", err, "volume", startupVol)
 			}
 
 			// Greet user now that agent + voice pipeline are ready.

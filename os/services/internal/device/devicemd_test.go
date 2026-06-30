@@ -155,3 +155,46 @@ capabilities:
 		t.Fatalf("GatewayProtocol = %q, want empty", got)
 	}
 }
+
+func TestStartupVolume_Declared(t *testing.T) {
+	writeDeviceMD(t, "lamp", `---
+schema: autonomous.device.v1
+memory: { backend: local }
+startup_volume: 60
+---
+
+# Lamp
+`)
+	if v := StartupVolume("lamp"); v != 60 {
+		t.Fatalf("StartupVolume = %d, want 60", v)
+	}
+}
+
+func TestStartupVolume_DefaultsWhenAbsentOrInvalid(t *testing.T) {
+	// Absent → default (100).
+	writeDeviceMD(t, "intern", `---
+schema: autonomous.device.v1
+memory: { backend: local }
+---
+
+# Intern
+`)
+	if v := StartupVolume("intern"); v != DefaultStartupVolume {
+		t.Fatalf("absent: StartupVolume = %d, want %d", v, DefaultStartupVolume)
+	}
+	// Out of range → default (clamp guards a typo from muting/over-driving).
+	writeDeviceMD(t, "bad", `---
+schema: autonomous.device.v1
+startup_volume: 250
+---
+
+# Bad
+`)
+	if v := StartupVolume("bad"); v != DefaultStartupVolume {
+		t.Fatalf("out-of-range: StartupVolume = %d, want %d", v, DefaultStartupVolume)
+	}
+	// Unreadable device dir → default.
+	if v := StartupVolume("does-not-exist"); v != DefaultStartupVolume {
+		t.Fatalf("missing: StartupVolume = %d, want %d", v, DefaultStartupVolume)
+	}
+}

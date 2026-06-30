@@ -17,6 +17,7 @@ capabilities:
   connectivity: { routes: [bluetooth], required: true }
 safety_ref: SAFETY.md
 memory:     { backend: local }
+startup_volume: 100
 ---
 
 # Autonomous Intern
