@@ -207,6 +207,17 @@ Gồm các card:
 - Mỗi recording có thể phát qua `POST /hw/servo/play` (tên recording)
 - UI có nút `Upload CSV` để thêm/replace recording qua `POST /hw/servo/upload` (multipart: `file`, `recording_name`)
 
+> **Bố cục & pill cloud.** Cụm thiết bị (hàng 2) chia thành hai cột bằng nhau:
+> cột phải cho các card biểu cảm (Emotion, Servo Pose, Versions) và cột trái cho
+> các card trạng thái gọn (Hardware, Scene, Buddy); dưới ~860px hai cột gộp về
+> một. Versions nằm ở cột phải để hai cột cân chiều cao, tránh cột phải bị cụt
+> dưới Servo Pose. Danh sách preset Emotion và danh sách recording Servo render
+> dưới dạng **pill cloud** — pill đang active được đẩy lên đầu để trạng thái hiện
+> tại đọc trước tiên, toàn bộ wrap tự do (không cuộn). Cả card Emotion và Servo Pose chia
+> hai cột: phần tóm tắt trạng thái hiện tại (Emotion: emoji + tên; Servo: pose
+> hiện tại + nút Release) ở cột trái rộng cố định, còn pill cloud preset/recording
+> lấp phần còn lại bên phải. Dưới ~360px hai cột xếp chồng.
+
 **Display Eyes**
 - Expression đang hiển thị (mode)
 - Danh sách expressions available

@@ -1552,6 +1552,50 @@
   .lm-root .lm-grid-auto { grid-template-columns: 1fr; gap: 8px; }
 }
 
+/* ── Device-cluster two-column layout ─────────────────────────────────────────
+   Row 2 of the Overview used a single auto-fit grid that forced six cards of
+   very different content density (compact Hardware/Scene vs. tall Emotion/Servo
+   pill clouds vs. Versions/Buddy) into equal-height columns — leaving dead space
+   in the short cards and cramping the tall ones. Instead we split into two
+   masonry-style columns: cards flow top-to-bottom and pack by their natural
+   height, so a short card no longer stretches to match a tall neighbour. The
+   wide left column carries the expressive cards; the narrower right column
+   carries the compact status cards. Each column's cards are spaced by `gap`.
+   On a minimal device (Hardware + Versions + Buddy only) the same markup still
+   reads cleanly because cards simply pack into whatever columns remain. */
+.lm-root .lm-cluster {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  align-items: start;
+}
+.lm-root .lm-cluster-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+@media (max-width: 860px) {
+  .lm-root .lm-cluster { grid-template-columns: 1fr; }
+}
+@media (max-width: 480px) {
+  .lm-root .lm-cluster { gap: 8px; }
+  .lm-root .lm-cluster-col { gap: 8px; }
+}
+
+/* ── Pill cloud — de-cluttered tag grid ───────────────────────────────────────
+   Emotion presets and Servo recordings render as a uniform wrapped grid of
+   selectable pills. The active pill is hoisted to the front by the component so
+   the current state always reads first. A lamp's full set (~20 emotions / ~30
+   poses) fits in a few wrapped rows, so the cloud shows everything rather than
+   capping + scrolling — a half-cut fade on the last row read as a render bug.
+   Pills keep their existing inline colors (per-emotion / per-pose accent). */
+.lm-root .lm-pillcloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
 /* ── Skeleton loaders ─────────────────────────────────────────────────────────
    Placeholder bars that hold a card's height while data is in flight, replacing
    the "Loading…" text that caused a layout jump when the real rows arrived. A
