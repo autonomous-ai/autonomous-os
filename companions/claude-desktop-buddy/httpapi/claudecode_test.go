@@ -71,8 +71,19 @@ func (s *stubCode) set(id, d string) error {
 
 func (s *stubCode) Pending() []CodeApprovalRequest { return nil }
 
+// allowAuth admits every request — used by tests that exercise handler logic,
+// not the auth gate. tokenAuth admits only a fixed secret, used by the guard
+// test below.
+type allowAuth struct{}
+
+func (allowAuth) Authorize(string) bool { return true }
+
+type tokenAuth string
+
+func (t tokenAuth) Authorize(secret string) bool { return secret == string(t) }
+
 func newTestServer(code CodeApprovalService) *httptest.Server {
-	s := New(0, stubStatus{}, stubApproval{}, stubActivity{}, code)
+	s := New(0, allowAuth{}, stubStatus{}, stubApproval{}, stubActivity{}, code)
 	return httptest.NewServer(s.routes())
 }
 
@@ -155,7 +166,7 @@ func TestApprove_UnknownID_Conflict(t *testing.T) {
 }
 
 func TestApprove_NonLoopbackForbidden(t *testing.T) {
-	s := New(0, stubStatus{}, stubApproval{}, stubActivity{}, newStubCode())
+	s := New(0, allowAuth{}, stubStatus{}, stubApproval{}, stubActivity{}, newStubCode())
 	req := httptest.NewRequest("POST", "/claude-code/approve", strings.NewReader(`{"id":"abc"}`))
 	req.RemoteAddr = "203.0.113.7:5555" // non-loopback
 	rec := httptest.NewRecorder()
@@ -163,6 +174,57 @@ func TestApprove_NonLoopbackForbidden(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("non-loopback approve status=%d want 403", rec.Code)
 	}
+}
+
+// The LAN-facing endpoints must reject callers without the admin-password
+// Bearer token, and admit the one carrying it.
+func TestGuard_RequiresAdminToken(t *testing.T) {
+	s := New(0, tokenAuth("s3cret"), stubStatus{}, stubApproval{}, stubActivity{}, newStubCode())
+	ts := httptest.NewServer(s.routes())
+	defer ts.Close()
+
+	// No header → 401.
+	resp, _ := post(t, ts.URL+"/claude-code/notify", `{"title":"hi"}`)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("no-token notify status=%d want 401", resp.StatusCode)
+	}
+
+	// Wrong token → 401.
+	req, _ := http.NewRequest("POST", ts.URL+"/claude-code/notify", strings.NewReader(`{"title":"hi"}`))
+	req.Header.Set("Authorization", "Bearer nope")
+	resp, _ = mustDo(t, req)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("wrong-token notify status=%d want 401", resp.StatusCode)
+	}
+
+	// Correct token → not 401 (handler runs).
+	req, _ = http.NewRequest("POST", ts.URL+"/claude-code/notify", strings.NewReader(`{"title":"hi"}`))
+	req.Header.Set("Authorization", "Bearer s3cret")
+	resp, _ = mustDo(t, req)
+	if resp.StatusCode == http.StatusUnauthorized {
+		t.Fatalf("correct-token notify got 401, want it admitted")
+	}
+
+	// /health stays open (discovery) — no token needed.
+	hresp, err := http.Get(ts.URL + "/health")
+	if err != nil {
+		t.Fatalf("GET /health: %v", err)
+	}
+	hresp.Body.Close()
+	if hresp.StatusCode != http.StatusOK {
+		t.Fatalf("health status=%d want 200", hresp.StatusCode)
+	}
+}
+
+func mustDo(t *testing.T, req *http.Request) (*http.Response, string) {
+	t.Helper()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do %s: %v", req.URL, err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	return resp, string(b)
 }
 
 func TestIsLoopback(t *testing.T) {

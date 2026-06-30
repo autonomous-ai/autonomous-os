@@ -64,6 +64,17 @@ def device_addr(dev):
     return dev.get("last_known_ip") or dev.get("host")
 
 
+def auth_headers(dev):
+    """Authorization header for a device, or {} if no password is stored.
+
+    The device gates its LAN endpoints with the admin password (the same one
+    used to log into the web UI), presented as a Bearer token. Discovery
+    (/health) stays open, so only the activity/approval calls need this.
+    """
+    pw = (dev or {}).get("password")
+    return {"Authorization": f"Bearer {pw}"} if pw else {}
+
+
 # --- HTTP transport -------------------------------------------------------
 
 def health(addr, timeout=0.5):
@@ -93,7 +104,7 @@ def send(path, payload, dev=None):
         req = urllib.request.Request(
             f"http://{addr}:{BUDDY_PORT}{path}",
             data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", **auth_headers(dev)},
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=3) as resp:
@@ -121,7 +132,7 @@ def request_approval(payload, dev=None, timeout=55):
         req = urllib.request.Request(
             f"http://{addr}:{BUDDY_PORT}/claude-code/approval-request",
             data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", **auth_headers(dev)},
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
