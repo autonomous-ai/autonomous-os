@@ -36,6 +36,7 @@ func InitializeServer() (*Server, error) {
 	statusledService := statusled.ProvideService(configConfig)
 	agentGateway := agent.ProvideGateway(configConfig, bus, statusledService)
 	personaMigration := agent.ProvidePersonaMigration(configConfig)
+	configMigration := agent.ProvideConfigMigration(configConfig)
 	channelReconcile := agent.ProvideChannelReconcile(configConfig, agentGateway)
 	mcpReconcile := agent.ProvideMCPReconcile(configConfig, agentGateway)
 	healthHandler := http.ProvideHealthHandler(configConfig, service, agentGateway)
@@ -58,6 +59,6 @@ func InitializeServer() (*Server, error) {
 		return nil, err
 	}
 	buddyHandler := http7.ProvideBuddyHandler(configConfig, buddyService)
-	server := ProvideServer(configConfig, healthHandler, networkHandler, deviceHandler, deviceMQTTHandler, agentHandler, sensingHandler, buddyHandler, deviceService, agentGateway, personaMigration, channelReconcile, mcpReconcile, service, factory, ambientService, healthwatchService, statusledService)
+	server := ProvideServer(configConfig, healthHandler, networkHandler, deviceHandler, deviceMQTTHandler, agentHandler, sensingHandler, buddyHandler, deviceService, agentGateway, personaMigration, configMigration, channelReconcile, mcpReconcile, service, factory, ambientService, healthwatchService, statusledService)
 	return server, nil
 }

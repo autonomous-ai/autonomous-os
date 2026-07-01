@@ -171,6 +171,12 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 			// Migrate persona/memory if agent runtime switched; non-blocking.
 			s.personaMigration.Reconcile()
 
+			// Carry LLM config from the previous runtime's native files to the
+			// current one. Runs before EnsureOnboarding so ensureProviderConfig
+			// (the fallback) sees the already-migrated values and is a true no-op
+			// on a clean switch.
+			s.configMigration.Reconcile()
+
 			// Re-apply configured messaging channels to the (possibly new) runtime
 			// and record any the runtime can't run. No-op when the runtime is
 			// unchanged; gated by config.ChannelsAppliedRuntime. Non-blocking.
