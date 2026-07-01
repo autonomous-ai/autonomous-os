@@ -89,6 +89,14 @@ type Config struct {
 	// records a baseline. Mirrors ChannelsAppliedRuntime.
 	MCPAppliedRuntime string `json:"mcp_applied_runtime,omitempty" yaml:"mcpAppliedRuntime"`
 
+	// LLMConfigAppliedRuntime is the agent runtime ConfigMigration last successfully
+	// migrated LLM config (APIKey + BaseURL) for. When it differs from AgentRuntime
+	// on boot, ConfigMigration reads the previous runtime's native config files and
+	// carries the values to the new runtime (then updates this marker). Keeping a
+	// separate marker from agent_state.json ensures a failed migration is retried on
+	// the next boot — PersonaMigration advances agent_state independently.
+	LLMConfigAppliedRuntime string `json:"llm_config_applied_runtime,omitempty" yaml:"llmConfigAppliedRuntime"`
+
 	LLMAPIKey  string `json:"llm_api_key" yaml:"llmAPIKey" validate:"required"`
 	LLMModel   string `json:"llm_model" yaml:"llmModel" validate:"required"`
 	LLMBaseURL string `json:"llm_base_url" yaml:"llmBaseURL" validate:"required"`

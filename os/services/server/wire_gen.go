@@ -36,7 +36,7 @@ func InitializeServer() (*Server, error) {
 	statusledService := statusled.ProvideService(configConfig)
 	agentGateway := agent.ProvideGateway(configConfig, bus, statusledService)
 	personaMigration := agent.ProvidePersonaMigration(configConfig)
-	configMigration := agent.ProvideConfigMigration(configConfig)
+	configMigration := agent.ProvideConfigMigration(configConfig, agentGateway)
 	channelReconcile := agent.ProvideChannelReconcile(configConfig, agentGateway)
 	mcpReconcile := agent.ProvideMCPReconcile(configConfig, agentGateway)
 	healthHandler := http.ProvideHealthHandler(configConfig, service, agentGateway)
