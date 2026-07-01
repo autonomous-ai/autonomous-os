@@ -109,12 +109,10 @@ func (c *ConfigMigration) Reconcile() {
 		return
 	}
 
-	// Step 2: sync config.json FIRST — before writing to the target runtime's native
-	// files. This ensures ensureProviderConfig (the fallback in EnsureOnboarding) always
-	// sees consistent values: if step 3 (write to target) fails, ensureProviderConfig
-	// reads the already-updated config.json and correctly patches the target instead of
-	// overwriting it with stale config.json values (the s.config.LLMAPIKey = Y vs
-	// openclaw.json apiKey = X overwrite bug).
+	// Step 2: sync LLMAPIKey + LLMBaseURL to config.json — NOT the marker yet.
+	// Syncing first ensures ensureProviderConfig (fallback) always sees consistent
+	// values: if step 3 fails, ensureProviderConfig reads the updated config.json and
+	// correctly patches the target instead of overwriting with stale values.
 	if err := c.cfg.WithLockSave(func(cfg *config.Config) {
 		if migrated.APIKey != "" {
 			cfg.LLMAPIKey = migrated.APIKey
@@ -122,27 +120,33 @@ func (c *ConfigMigration) Reconcile() {
 		if migrated.BaseURL != "" {
 			cfg.LLMBaseURL = migrated.BaseURL
 		}
-		cfg.LLMConfigAppliedRuntime = current
 	}); err != nil {
 		slog.Warn("LLM config migration: failed to sync config.json; will retry next boot",
 			"component", "agent", "error", err)
 		return
 	}
 
-	// Step 3: write to the target runtime's native config files. If this fails,
-	// config.json is already updated (step 2), so ensureProviderConfig will correctly
-	// patch the target on the next EnsureOnboarding run — no stale overwrite possible.
+	// Step 3: write to the target runtime's native config files.
 	if err := migrateconfig.WriteConfig(to, migrated, c.opts); err != nil {
-		slog.Warn("LLM config migration: config.json synced but write to target runtime failed; ensureProviderConfig will patch on next turn",
+		slog.Warn("LLM config migration: config.json synced but write to target runtime failed; will retry next boot",
 			"component", "agent", "from", prev, "to", current, "error", err)
-		// Marker already advanced — ensureProviderConfig is the fallback from here.
 		return
 	}
 
 	// Step 4: restart so the target gateway reloads the newly-written config files.
 	if err := c.gw.RestartAgent(); err != nil {
-		slog.Warn("LLM config migration: config written but gateway restart failed",
+		slog.Warn("LLM config migration: config written but gateway restart failed; will retry next boot",
 			"component", "agent", "from", prev, "to", current, "error", err)
+		return
+	}
+
+	// Step 5: advance marker ONLY after all steps succeed. This ensures a failed
+	// write or restart is retried on the next boot.
+	if err := c.cfg.WithLockSave(func(cfg *config.Config) {
+		cfg.LLMConfigAppliedRuntime = current
+	}); err != nil {
+		slog.Warn("LLM config migration: complete but marker advance failed; will re-run next boot (idempotent)",
+			"component", "agent", "error", err)
 		return
 	}
 
