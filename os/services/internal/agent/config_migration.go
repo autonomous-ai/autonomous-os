@@ -16,11 +16,12 @@ import (
 // the next boot independently of PersonaMigration's agent_state.json advance.
 //
 // Startup order in config_watch.go:
-//   1. personaMigration.Reconcile()   — persona/memory files
-//   2. configMigration.Reconcile()    — LLM config files  ← this
-//   3. channelReconcile.Reconcile()   — channels
-//   4. mcpReconcile.Reconcile()       — MCP connectors
-//   5. agentGateway.EnsureOnboarding() — openclaw.json patches (ensureProviderConfig fallback)
+//
+//  1. personaMigration.Reconcile()   — persona/memory files
+//  2. configMigration.Reconcile()    — LLM config files  ← this
+//  3. channelReconcile.Reconcile()   — channels
+//  4. mcpReconcile.Reconcile()       — MCP connectors
+//  5. agentGateway.EnsureOnboarding() — openclaw.json patches (ensureProviderConfig fallback)
 //
 // Running before EnsureOnboarding ensures ensureProviderConfig sees already-migrated
 // values and is a no-op on a clean switch.
@@ -28,13 +29,17 @@ import (
 // Restart: the target gateway starts before this reconcile runs (switch-runtime
 // already launched it). After writing the migrated config to the target's files, we
 // call agentGateway.RestartAgent() so the gateway reloads the new values. The marker
-// is advanced only after write + config.json sync + restart all succeed — any failure
-// leaves the marker un-advanced so the next boot retries the full migration.
+// is advanced only after all steps succeed — any failure leaves it un-advanced so the
+// next boot retries the full migration.
+//
+// Grep: component=cfg-migration
 type ConfigMigration struct {
-	cfg *config.Config
-	gw  domain.AgentGateway
+	cfg  *config.Config
+	gw   domain.AgentGateway
 	opts migrateconfig.Options
 }
+
+const cfgMigComponent = "cfg-migration"
 
 // ProvideConfigMigration is the Wire provider.
 func ProvideConfigMigration(cfg *config.Config, gw domain.AgentGateway) *ConfigMigration {
@@ -54,21 +59,20 @@ func (c *ConfigMigration) Reconcile() {
 		current = domain.AgentRuntimeOpenClaw
 	}
 
-	// No switch detected — nothing to do.
 	if c.cfg.LLMConfigAppliedRuntime == current {
+		slog.Debug("[cfg-migration] no switch detected, skip", "component", cfgMigComponent, "runtime", current)
 		return
 	}
 
 	// First boot with this feature (marker never set): record baseline without
-	// migrating, same pattern as ChannelReconcile. Avoids a spurious restart on
-	// every device on the upgrade boot.
+	// migrating. Avoids a spurious migration on every device on the upgrade boot.
 	if c.cfg.LLMConfigAppliedRuntime == "" {
 		if err := c.cfg.WithLockSave(func(cfg *config.Config) {
 			cfg.LLMConfigAppliedRuntime = current
 		}); err != nil {
-			slog.Warn("LLM config migration: record baseline failed", "component", "agent", "error", err)
+			slog.Warn("[cfg-migration] baseline record failed", "component", cfgMigComponent, "runtime", current, "error", err)
 		} else {
-			slog.Info("LLM config migration: baseline recorded (no migrate)", "component", "agent", "runtime", current)
+			slog.Info("[cfg-migration] baseline recorded (first boot, no migrate)", "component", cfgMigComponent, "runtime", current)
 		}
 		return
 	}
@@ -78,41 +82,35 @@ func (c *ConfigMigration) Reconcile() {
 	to := migrateconfig.Runtime(current)
 
 	if !migrateconfig.CanMigrate(from) || !migrateconfig.CanMigrate(to) {
-		// One of the runtimes has no adapter — record baseline to avoid retry loop.
+		slog.Info("[cfg-migration] no adapter for runtime pair, skip", "component", cfgMigComponent, "from", prev, "to", current)
 		if err := c.cfg.WithLockSave(func(cfg *config.Config) {
 			cfg.LLMConfigAppliedRuntime = current
 		}); err != nil {
-			slog.Warn("LLM config migration: record no-adapter baseline failed", "component", "agent", "error", err)
+			slog.Warn("[cfg-migration] advance marker failed", "component", cfgMigComponent, "error", err)
 		}
 		return
 	}
 
-	slog.Info("agent runtime switched — migrating LLM config",
-		"component", "agent", "from", prev, "to", current)
+	slog.Info("[cfg-migration] switch detected, starting migration", "component", cfgMigComponent, "from", prev, "to", current)
 
-	// Step 1: read source runtime's actual on-disk config (may differ from config.json
-	// if the agent self-edited its native files via chat).
+	// Step 1: read source runtime's actual on-disk config.
 	migrated, err := migrateconfig.ReadConfig(from, c.opts)
 	if err != nil {
-		slog.Error("LLM config migration: read source failed; will retry next boot",
-			"component", "agent", "from", prev, "to", current, "error", err)
+		slog.Error("[cfg-migration] step1 read source failed, will retry next boot", "component", cfgMigComponent, "from", prev, "to", current, "error", err)
 		return
 	}
 	if migrated.Empty() {
-		slog.Info("LLM config migration: source had no config to carry; recording marker",
-			"component", "agent", "from", prev, "to", current)
+		slog.Info("[cfg-migration] step1 source empty, nothing to carry", "component", cfgMigComponent, "from", prev, "to", current)
 		if err := c.cfg.WithLockSave(func(cfg *config.Config) {
 			cfg.LLMConfigAppliedRuntime = current
 		}); err != nil {
-			slog.Warn("LLM config migration: advance marker failed", "component", "agent", "error", err)
+			slog.Warn("[cfg-migration] advance marker failed", "component", cfgMigComponent, "error", err)
 		}
 		return
 	}
+	slog.Info("[cfg-migration] step1 read OK", "component", cfgMigComponent, "from", prev, "has_key", migrated.APIKey != "", "has_url", migrated.BaseURL != "")
 
 	// Step 2: sync LLMAPIKey + LLMBaseURL to config.json — NOT the marker yet.
-	// Syncing first ensures ensureProviderConfig (fallback) always sees consistent
-	// values: if step 3 fails, ensureProviderConfig reads the updated config.json and
-	// correctly patches the target instead of overwriting with stale values.
 	if err := c.cfg.WithLockSave(func(cfg *config.Config) {
 		if migrated.APIKey != "" {
 			cfg.LLMAPIKey = migrated.APIKey
@@ -121,35 +119,31 @@ func (c *ConfigMigration) Reconcile() {
 			cfg.LLMBaseURL = migrated.BaseURL
 		}
 	}); err != nil {
-		slog.Warn("LLM config migration: failed to sync config.json; will retry next boot",
-			"component", "agent", "error", err)
+		slog.Warn("[cfg-migration] step2 config.json sync failed, will retry next boot", "component", cfgMigComponent, "error", err)
 		return
 	}
+	slog.Info("[cfg-migration] step2 config.json synced", "component", cfgMigComponent)
 
 	// Step 3: write to the target runtime's native config files.
 	if err := migrateconfig.WriteConfig(to, migrated, c.opts); err != nil {
-		slog.Warn("LLM config migration: config.json synced but write to target runtime failed; will retry next boot",
-			"component", "agent", "from", prev, "to", current, "error", err)
+		slog.Warn("[cfg-migration] step3 write target failed, will retry next boot", "component", cfgMigComponent, "from", prev, "to", current, "error", err)
 		return
 	}
+	slog.Info("[cfg-migration] step3 write target OK", "component", cfgMigComponent, "to", current)
 
-	// Step 4: restart so the target gateway reloads the newly-written config files.
+	// Step 4: restart target gateway to reload newly-written config.
 	if err := c.gw.RestartAgent(); err != nil {
-		slog.Warn("LLM config migration: config written but gateway restart failed; will retry next boot",
-			"component", "agent", "from", prev, "to", current, "error", err)
+		slog.Warn("[cfg-migration] step4 restart failed, will retry next boot", "component", cfgMigComponent, "from", prev, "to", current, "error", err)
 		return
 	}
+	slog.Info("[cfg-migration] step4 gateway restarted", "component", cfgMigComponent, "to", current)
 
-	// Step 5: advance marker ONLY after all steps succeed. This ensures a failed
-	// write or restart is retried on the next boot.
+	// Step 5: advance marker ONLY after all steps succeed.
 	if err := c.cfg.WithLockSave(func(cfg *config.Config) {
 		cfg.LLMConfigAppliedRuntime = current
 	}); err != nil {
-		slog.Warn("LLM config migration: complete but marker advance failed; will re-run next boot (idempotent)",
-			"component", "agent", "error", err)
+		slog.Warn("[cfg-migration] step5 marker advance failed, will re-run next boot (idempotent)", "component", cfgMigComponent, "error", err)
 		return
 	}
-
-	slog.Info("LLM config migration complete",
-		"component", "agent", "from", prev, "to", current)
+	slog.Info("[cfg-migration] done", "component", cfgMigComponent, "from", prev, "to", current)
 }
