@@ -83,30 +83,32 @@ func DefaultOptions(openclawConfigDir, hermesRoot string) Options {
 	}
 }
 
-// RunMigration reads LLM config from the source runtime and writes it to the
-// destination runtime. Returns the migrated config so the caller can sync
-// config.json. Returns an empty LLMConfig (and no error) when the source has
-// nothing to migrate.
-func RunMigration(from, to Runtime, opts Options) (LLMConfig, error) {
+// ReadConfig reads the LLM config from the source runtime's native on-disk files.
+// Returns an empty LLMConfig (and no error) when the source has no config to carry.
+func ReadConfig(from Runtime, opts Options) (LLMConfig, error) {
 	src, ok := adapters[from]
 	if !ok {
 		return LLMConfig{}, fmt.Errorf("migrateconfig: no adapter for source runtime %q", from)
 	}
-	dst, ok := adapters[to]
-	if !ok {
-		return LLMConfig{}, fmt.Errorf("migrateconfig: no adapter for destination runtime %q", to)
-	}
-
 	cfg, err := src.read(opts)
 	if err != nil {
 		return LLMConfig{}, fmt.Errorf("migrateconfig: read %s: %w", from, err)
 	}
-	if cfg.Empty() {
-		return LLMConfig{}, nil
-	}
-
-	if err := dst.write(cfg, opts); err != nil {
-		return LLMConfig{}, fmt.Errorf("migrateconfig: write %s: %w", to, err)
-	}
 	return cfg, nil
+}
+
+// WriteConfig writes the canonical LLM config to the destination runtime's native
+// on-disk files. The caller is responsible for syncing config.json BEFORE calling
+// this so that ensureProviderConfig (the fallback) always sees consistent values —
+// if this write fails, ensureProviderConfig reads config.json (already updated) and
+// correctly patches the destination rather than overwriting with stale values.
+func WriteConfig(to Runtime, cfg LLMConfig, opts Options) error {
+	dst, ok := adapters[to]
+	if !ok {
+		return fmt.Errorf("migrateconfig: no adapter for destination runtime %q", to)
+	}
+	if err := dst.write(cfg, opts); err != nil {
+		return fmt.Errorf("migrateconfig: write %s: %w", to, err)
+	}
+	return nil
 }

@@ -90,9 +90,11 @@ func (c *ConfigMigration) Reconcile() {
 	slog.Info("agent runtime switched — migrating LLM config",
 		"component", "agent", "from", prev, "to", current)
 
-	migrated, err := migrateconfig.RunMigration(from, to, c.opts)
+	// Step 1: read source runtime's actual on-disk config (may differ from config.json
+	// if the agent self-edited its native files via chat).
+	migrated, err := migrateconfig.ReadConfig(from, c.opts)
 	if err != nil {
-		slog.Error("LLM config migration failed; will retry next boot",
+		slog.Error("LLM config migration: read source failed; will retry next boot",
 			"component", "agent", "from", prev, "to", current, "error", err)
 		return
 	}
@@ -107,9 +109,12 @@ func (c *ConfigMigration) Reconcile() {
 		return
 	}
 
-	// Sync migrated values back to config.json BEFORE restarting so the gateway's
-	// EnsureOnboarding (ensureProviderConfig fallback) sees the updated values and
-	// does not overwrite the migrated config with stale config.json values.
+	// Step 2: sync config.json FIRST — before writing to the target runtime's native
+	// files. This ensures ensureProviderConfig (the fallback in EnsureOnboarding) always
+	// sees consistent values: if step 3 (write to target) fails, ensureProviderConfig
+	// reads the already-updated config.json and correctly patches the target instead of
+	// overwriting it with stale config.json values (the s.config.LLMAPIKey = Y vs
+	// openclaw.json apiKey = X overwrite bug).
 	if err := c.cfg.WithLockSave(func(cfg *config.Config) {
 		if migrated.APIKey != "" {
 			cfg.LLMAPIKey = migrated.APIKey
@@ -119,19 +124,25 @@ func (c *ConfigMigration) Reconcile() {
 		}
 		cfg.LLMConfigAppliedRuntime = current
 	}); err != nil {
-		slog.Warn("LLM config migration: synced to runtime but failed to update config.json; will retry next boot",
+		slog.Warn("LLM config migration: failed to sync config.json; will retry next boot",
 			"component", "agent", "error", err)
 		return
 	}
 
-	// Restart the gateway so it reloads the newly-written config. The target
-	// gateway was started by switch-runtime before this reconcile ran; without a
-	// restart it keeps the in-memory config from before our write.
-	if err := c.gw.RestartAgent(); err != nil {
-		slog.Warn("LLM config migration: config written + config.json synced but gateway restart failed",
+	// Step 3: write to the target runtime's native config files. If this fails,
+	// config.json is already updated (step 2), so ensureProviderConfig will correctly
+	// patch the target on the next EnsureOnboarding run — no stale overwrite possible.
+	if err := migrateconfig.WriteConfig(to, migrated, c.opts); err != nil {
+		slog.Warn("LLM config migration: config.json synced but write to target runtime failed; ensureProviderConfig will patch on next turn",
 			"component", "agent", "from", prev, "to", current, "error", err)
-		// Marker already advanced above — restart failure is non-fatal because
-		// EnsureOnboarding will patch any remaining gaps on the next turn.
+		// Marker already advanced — ensureProviderConfig is the fallback from here.
+		return
+	}
+
+	// Step 4: restart so the target gateway reloads the newly-written config files.
+	if err := c.gw.RestartAgent(); err != nil {
+		slog.Warn("LLM config migration: config written but gateway restart failed",
+			"component", "agent", "from", prev, "to", current, "error", err)
 		return
 	}
 
