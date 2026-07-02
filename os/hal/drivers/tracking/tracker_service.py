@@ -54,6 +54,16 @@ _LOCAL_MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "yolov8n.p
 # handled by the remote open-vocab detector than by a slower local imgsz.)
 _LOCAL_IMGSZ = 320
 
+# Vision-pipeline max width (px). The ViT tracker AND the detectors (YuNet /
+# local YOLO / remote YOLOWorld) run on a frame downscaled to at most this
+# width; every bbox they return is mapped back to ORIGINAL camera coordinates
+# before any servo/PID math, so no pixel-tuned constant (PID gains, area/center
+# gates, dead zones, feedforward thresholds) needs re-tuning. Camera runs
+# 1280x720, so 640 = 0.5x → ¼ the pixels for the ViT crop/resize and detector
+# input → faster fast-loop → smoother tracking. Set to 0/None to disable, or a
+# width ≥ the camera width for a no-op.
+VISION_MAX_WIDTH = 640
+
 # YuNet face detector (OpenCV built-in). Lighter than InsightFace, ~30ms/frame on
 # Pi, no extra dependency. Used for target='face' so we don't fall back to the
 # remote YOLOWorld (~1.3s) for what's a very common tracking target.
@@ -636,9 +646,14 @@ class TrackerService:
         """Detect an object by name. Tries local YOLOv8n first (fast, COCO classes),
         falls back to remote YOLOWorld API for open-vocab targets.
 
-        Returns (x, y, w, h) top-left bbox or None if not found.
+        Returns (x, y, w, h) top-left bbox in ORIGINAL camera coords, or None.
         """
         target_key = (target or "").lower().strip()
+
+        # Run every detector on the downscaled frame for speed; map any bbox back
+        # to original coords before returning so callers/servo math are unaware.
+        frame, _scale = self._downscale(frame)
+        _up = 1.0 / _scale if _scale else 1.0
 
         # --- Path 0: YuNet face detector (target = face) ---
         # COCO has no face class; this avoids the ~1.3s remote round-trip for what
@@ -646,7 +661,7 @@ class TrackerService:
         if _FACE_DETECTOR_ENABLED and target_key in _FACE_TARGET_ALIASES:
             face_bbox = _detect_face_yunet(frame)
             if face_bbox is not None:
-                return face_bbox
+                return self._scale_bbox(face_bbox, _up)
             # YuNet missed — fall through to remote YOLOWorld below.
 
         # --- Path 1: local YOLOv8n (if target maps to COCO class) ---
@@ -679,7 +694,7 @@ class TrackerService:
                         bbox, conf, area_ratio = best
                         logger.info("[tracking_yolo_local] target='%s' bbox=%s conf=%.3f area=%.1f%% latency=%.0fms",
                                     target, bbox, conf, area_ratio * 100, t_ms)
-                        return bbox
+                        return self._scale_bbox(bbox, _up)
                     logger.info("[tracking_yolo_local] target='%s' not found latency=%.0fms", target, t_ms)
                     # Local missed. Fall back to remote open-vocab YOLOWorld for
                     # small/far objects local can't see — but throttle it so a
@@ -780,7 +795,7 @@ class TrackerService:
             logger.info("YOLOWorld: '%s' found at bbox=%s conf=%.3f", target, bbox, best["confidence"])
             logger.info("[tracking_yolo_response] target='%s' found=True bbox=%s conf=%.3f latency=%.0fms",
                         target, bbox, best["confidence"], latency_ms)
-            return bbox
+            return self._scale_bbox(bbox, _up)
         except Exception as e:
             logger.error("YOLOWorld detect failed: %s", e)
             return None
@@ -872,7 +887,7 @@ class TrackerService:
 
         t_init0 = time.perf_counter()
         try:
-            ok = tracker.init(frame, bbox)
+            ok = self._vit_init(tracker, frame, bbox)
         except Exception as e:
             logger.error("tracker init exception for bbox %s: %s", bbox, e)
             animation_service.unfreeze()
@@ -1047,6 +1062,51 @@ class TrackerService:
             return float(self._state.tracker.getTrackingScore())
         except (AttributeError, Exception):
             return 1.0
+
+    @staticmethod
+    def _downscale(frame: npt.NDArray[np.uint8]) -> Tuple[npt.NDArray[np.uint8], float]:
+        """Return (small_frame, scale) with scale = small_w / orig_w (≤ 1.0).
+
+        No-op (returns the frame and scale 1.0) when downscale is disabled or the
+        frame is already within VISION_MAX_WIDTH. INTER_AREA is the correct
+        interpolation for shrinking (avoids aliasing that would jitter the bbox).
+        """
+        if not VISION_MAX_WIDTH:
+            return frame, 1.0
+        h, w = frame.shape[:2]
+        if w <= VISION_MAX_WIDTH:
+            return frame, 1.0
+        scale = VISION_MAX_WIDTH / float(w)
+        small = cv2.resize(frame, (VISION_MAX_WIDTH, max(1, int(round(h * scale)))),
+                           interpolation=cv2.INTER_AREA)
+        return small, scale
+
+    @staticmethod
+    def _scale_bbox(bbox: Tuple[int, int, int, int], factor: float) -> Tuple[int, int, int, int]:
+        """Scale a bbox by `factor` (use scale to go orig→small, 1/scale for small→orig)."""
+        if factor == 1.0:
+            return tuple(int(v) for v in bbox)
+        return (int(round(bbox[0] * factor)), int(round(bbox[1] * factor)),
+                max(1, int(round(bbox[2] * factor))), max(1, int(round(bbox[3] * factor))))
+
+    def _vit_init(self, tracker, frame: npt.NDArray[np.uint8],
+                  bbox_orig: Tuple[int, int, int, int]) -> bool:
+        """Init `tracker` on the downscaled frame with the bbox scaled to match.
+
+        bbox_orig is in original camera coords; the tracker lives in downscaled
+        space (paired with _vit_update). Returns tracker.init()'s result.
+        """
+        small, scale = self._downscale(frame)
+        return tracker.init(small, self._scale_bbox(bbox_orig, scale))
+
+    def _vit_update(self, tracker, frame: npt.NDArray[np.uint8]):
+        """Update `tracker` on the downscaled frame; return (ok, bbox_orig) with
+        the bbox mapped back to original camera coords."""
+        small, scale = self._downscale(frame)
+        ok, bbox_s = tracker.update(small)
+        if ok:
+            return ok, self._scale_bbox(bbox_s, 1.0 / scale if scale else 1.0)
+        return ok, bbox_s
 
     def _fire_pid(self, yaw_step: float, pitch_correction: float, animation_service) -> float:
         """Apply PID outputs. yaw → base_yaw. pitch → distributed across base/elbow/wrist.
@@ -1266,7 +1326,7 @@ class TrackerService:
                     _t = self._create_tracker()
                     if _t is not None:
                         try:
-                            if _t.init(_f, _bbox) is not False:
+                            if self._vit_init(_t, _f, _bbox) is not False:
                                 state.tracker = _t
                                 state.bbox = _bbox
                                 self._track_init_area = float(_bbox[2] * _bbox[3])
@@ -1313,7 +1373,7 @@ class TrackerService:
 
                 h_fr, w_fr = frame.shape[:2]
                 t_csrt0 = time.perf_counter()
-                ok, new_bbox = state.tracker.update(frame)
+                ok, new_bbox = self._vit_update(state.tracker, frame)
                 t_csrt_ms = (time.perf_counter() - t_csrt0) * 1000
                 t_csrt_acc += t_csrt_ms
 
@@ -1591,7 +1651,7 @@ class TrackerService:
                                 reinit_frame = camera_capture.last_frame
                                 if reinit_frame is not None:
                                     try:
-                                        ok_r = new_tracker.init(reinit_frame, yolo_bbox)
+                                        ok_r = self._vit_init(new_tracker, reinit_frame, yolo_bbox)
                                         if ok_r is not False:
                                             state.tracker = new_tracker
                                             state.bbox = yolo_bbox
