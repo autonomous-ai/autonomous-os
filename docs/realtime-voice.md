@@ -104,13 +104,24 @@ in-session instead of delegating. The orchestrator registers a `look` tool
    can't reach the model; zero added latency when the servos are already still
    or the device has none), downscaled to `HAL_GEMINI_VISION_MAX_WIDTH`
    (default 768px) to bound image tokens.
-2. Enqueue it as realtime **video input** (`ImageInput` → `send_realtime_input(video=…)`).
-3. Send the tool result with `trigger_response=True` so Gemini **continues the
-   same turn** and speaks the answer with the image now in context.
+2. Enqueue it as realtime **video input** (`ImageInput` → `send_realtime_input(video=…)`),
+   then **replay the turn**: the Live API queues a frame sent mid-turn for the
+   NEXT turn (device-proven: the tool-ack → continue-turn flow answered every
+   look from the *previous* look's image — a one-image lag no ack delay fixes),
+   so instead of acking the tool call, the orchestrator yields `LookReplaySignal`
+   and `run_realtime_turn` re-appends the turn's audio and commits again on the
+   SAME session. The queued frame joins the replayed turn.
+3. The replayed turn re-triggers `look`, which hits the reuse guard
+   (`VISION_MIN_INTERVAL_S`) and is acked with `trigger_response=True` — the
+   model answers from the frame that is now genuinely in context.
 
-Because both sends go through the agent's single FIFO send queue, the frame
-lands in context before generation resumes. Unlike `delegate_to_main`, `look`
-does **not** break the turn — the model looks, then talks.
+Replay support plumbing: `receive()` swallows ONE stale `turn_complete` (the
+cancelled turn's, which lands after the replay commit and would otherwise end
+the replayed turn empty — `skip_next_turn_done()`); a pending idle/turn-cap
+session recycle is deferred while a replay is pending (a rebuild would orphan
+the just-sent image); and any session rebuild resets the look reuse guard
+(images live in the session — a fresh session has none). Cost: the question's
+audio is billed twice on look turns; the image once.
 
 This replaces the slow path (delegate → main → skill lookup → `/camera/snapshot`
 → vision LLM, several seconds) with one in-session round-trip.
