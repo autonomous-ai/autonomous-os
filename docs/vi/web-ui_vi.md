@@ -340,7 +340,8 @@ Giao diện chat tương tác với agent. Layout: sidebar (danh sách hội tho
 **Xử lý response**
 - Theo dõi response qua `runId` correlation trên SSE events
 - HW control markers inline (`[HW:/emotion:...]`) được lọc bỏ khỏi text hiển thị
-- Timeout 30 giây: nếu đã nhận streaming text thì hiển thị phần đó; nếu không thì báo lỗi với nút retry
+- Timeout 120 giây: nếu đã nhận streaming text thì hiển thị phần đó; nếu không thì báo lỗi với nút retry
+- **Khôi phục turn đang chờ sau reload**: message lưu kèm epoch `ts`; bubble reply đang pending dưới 10 phút sẽ sống sót qua reload thay vì bị chốt thành lỗi. Ở lần render đầu khi tab Chat active, UI re-attach vào `runId` đã lưu và backfill câu trả lời từ flow JSONL replay (`/api/agent/flow-stream` gửi lại 500 event cuối trong ngày mỗi lần connect — `tts_send` / `tts_suppressed` / `no_reply`). Nếu sau 30 giây không resolve được thì chốt thành "no response" kèm nút retry.
 - Local intent fast path: response dưới 50ms bypass agent
 - Busy/dropped: hiển thị "busy — try again"
 - Markdown: bold, italic, inline code (tô màu amber), code block (monospace), URL, danh sách, và bảng (header có nền + hàng zebra)
