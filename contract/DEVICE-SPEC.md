@@ -46,6 +46,7 @@ tell "no servo by design" from "servo lib missing" from "servo broken."
 | `safety_ref` | no | The device's safety document: a path read relative to the device folder (e.g. `SAFETY.md`), or an `http(s)://` URL downloaded. Today it only feeds the per-capability anchor-consistency check (a warning); enforcement is a future engine. |
 | `memory` | no | Memory backend declaration (`{ backend: <name> }`). Informational — the brain owns memory today; surfaced via HAL `GET /device`, not gated. |
 | `startup_volume` | no | Speaker volume (0–100) os-server applies once at startup. Absent / out of range → `100` (software at max, so the hardware/alsactl level is the effective control). Lets a device with a loud speaker boot quieter instead of hardcoding the level. |
+| `voice` | no | Voice defaults for this body (`{ tts_provider: <openai\|elevenlabs> }`). `tts_provider` is the device's **default** TTS provider, seeded into `config.json` once at startup only when the user hasn't chosen one — so the Setup UI, HAL auto-start, and StartHALVoice all agree. The user can still override it in Setup/Settings; their saved choice always wins. Absent / unknown value → the legacy default (`openai`). |
 
 ### Capability declaration
 

@@ -273,6 +273,7 @@ HAL (Python): FastAPI standard JSON responses.
 
 1. OS Server starts Gin on :5000
 2. Reads `config/config.json`
+   - Seeds `tts_provider` from DEVICE.md `voice.tts_provider` when the user hasn't chosen one (persisted once; the user's saved choice always wins; absent/unknown → `openai`)
 3. If `SetUpCompleted`:
    - Connect OpenClaw WebSocket
    - Connect MQTT
