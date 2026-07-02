@@ -5,7 +5,11 @@ import re
 from typing import Iterator, Optional
 
 from hal.presets import LANG_EN, LANG_VI
-from hal.drivers.voice.tts.backend import TTSBackend, STREAM_CHUNK_SIZE
+from hal.drivers.voice.tts.backend import (
+    TTSBackend,
+    STREAM_CHUNK_SIZE,
+    TTSRateLimitError,
+)
 from hal.drivers.voice.tts.openai import _ensure_openai_v1
 
 logger = logging.getLogger("hal.voice.tts")
@@ -195,6 +199,19 @@ class ElevenLabsTTSBackend(TTSBackend):
                     "ElevenLabs TTS %d voice=%s model=%s speed=%s text=%r: %s",
                     response.status_code, voice_id, el_model, speed, text[:80], detail,
                 )
+                # Rate limit (429) or quota exhausted (401/402 with a quota body):
+                # raise a dedicated error so the service announces it to the user
+                # via a prerendered notice instead of retrying pointlessly and
+                # failing silently. 401 alone is usually a bad key, so only treat
+                # it as quota when the body says so.
+                if response.status_code == 429 or (
+                    response.status_code in (401, 402)
+                    and "quota" in detail.lower()
+                ):
+                    raise TTSRateLimitError(
+                        f"ElevenLabs rate limit / quota: {detail}",
+                        status_code=response.status_code,
+                    )
                 response.raise_for_status()
             for chunk in response.iter_bytes(STREAM_CHUNK_SIZE):
                 yield chunk

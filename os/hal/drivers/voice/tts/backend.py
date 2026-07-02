@@ -21,6 +21,18 @@ TTS_SAMPLE_RATE = 24000
 STREAM_CHUNK_SIZE = 4096
 
 
+class TTSRateLimitError(Exception):
+    """Raised by a backend when the provider rejects the request for rate-limit
+    or quota reasons (HTTP 429, or 401/402 quota-exhausted). Distinct from other
+    HTTP errors so the service can announce it to the user (prerendered notice)
+    instead of failing silently, and skip pointless retries. Carries
+    `status_code` so the retry loops can match on it like other HTTP errors."""
+
+    def __init__(self, message: str, status_code: Optional[int] = None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
 class TTSBackend(ABC):
     """Abstract TTS backend — streams raw PCM int16 bytes from text."""
 

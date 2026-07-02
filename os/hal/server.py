@@ -388,6 +388,16 @@ async def lifespan(app: FastAPI):
                 state.tts_service.speak_cached(phrase, prerender=True)
         except Exception as e:
             logger.warning("Music backchannel prerender failed: %s", e)
+        # Also warm the rate-limit notice so it can play from cache (no API call)
+        # when the TTS provider later returns 429 / quota-exhausted mid-turn.
+        try:
+            from hal.i18n import PHRASE_RATE_LIMIT, localized_phrase
+
+            notice = localized_phrase(PHRASE_RATE_LIMIT)
+            if notice:
+                state.tts_service.speak_cached(notice, prerender=True)
+        except Exception as e:
+            logger.warning("Rate-limit notice prerender failed: %s", e)
 
     threading.Thread(
         target=_prerender_music_backchannel,

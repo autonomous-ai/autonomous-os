@@ -20,7 +20,19 @@ from typing import Optional
 
 import numpy as np
 
-from hal.drivers.voice.tts.backend import TTSBackend, TTS_SAMPLE_RATE, create_backend
+from hal.drivers.voice.tts.backend import (
+    TTSBackend,
+    TTS_SAMPLE_RATE,
+    TTSRateLimitError,
+    create_backend,
+)
+
+# Minimum gap between spoken rate-limit notices. While the provider stays
+# rate-limited, every turn would otherwise replay the notice — debounce so the
+# user hears it once, then silence until the window elapses.
+_RATE_LIMIT_ANNOUNCE_INTERVAL_S = float(
+    os.environ.get("HAL_TTS_RATE_LIMIT_NOTICE_INTERVAL_S", "300")
+)
 
 # WAV cache for fixed-text TTS (fillers, intent confirms). Key includes
 # provider/voice/model/speed/text so config changes self-invalidate.
@@ -100,6 +112,13 @@ class TTSService:
         self._interruptible = False
         self._max_retries = max_retries
         self._stop_event = threading.Event()
+
+        # Set by the synth producers when the backend raises TTSRateLimitError so
+        # _speak_sync can announce it (prerendered notice) after playback ends.
+        # _last_rate_limit_announce debounces the notice across back-to-back
+        # rate-limited turns (see _announce_rate_limit).
+        self._rate_limit_hit = False
+        self._last_rate_limit_announce = 0.0
 
         # speak_queue() drops items here when the lock is held by another
         # speech. Background threads pre-synthesize each item's PCM frames
@@ -763,6 +782,12 @@ class TTSService:
                     attempt + 1,
                     self._max_retries + 1,
                 )
+                # Rate limit / quota — retrying won't help; flag it so _speak_sync
+                # announces the prerendered notice, and stop this chunk.
+                if isinstance(e, TTSRateLimitError):
+                    logger.warning("TTS rate-limited — skipping retries, will announce")
+                    self._rate_limit_hit = True
+                    break
                 # Server-side errors (404, 503) — no point retrying or probing device
                 status = getattr(e, "status_code", None)
                 if status in (404, 503):
@@ -802,6 +827,10 @@ class TTSService:
                         "TTS head chunk failed (attempt=%d/%d)",
                         attempt + 1, self._max_retries + 1,
                     )
+                    if isinstance(e, TTSRateLimitError):
+                        logger.warning("TTS rate-limited (head) — will announce")
+                        self._rate_limit_hit = True
+                        return
                     status = getattr(e, "status_code", None)
                     if status in (404, 503):
                         return
@@ -842,6 +871,10 @@ class TTSService:
                             attempt + 1,
                             self._max_retries + 1,
                         )
+                        if isinstance(e, TTSRateLimitError):
+                            logger.warning("TTS rate-limited (tail) — will announce")
+                            self._rate_limit_hit = True
+                            return
                         status = getattr(e, "status_code", None)
                         if status in (404, 503):
                             logger.warning("TTS server error %s — skipping retries", status)
@@ -874,6 +907,8 @@ class TTSService:
 
         # _on_speak_start fires on first audio frame, not here — see _stream_chunk_with_retry
         self._speak_start_fired = False
+        # Producers set this True on TTSRateLimitError; announced after playback.
+        self._rate_limit_hit = False
 
         head_text = chunks[0]
         tail_chunks = chunks[1:]
@@ -995,6 +1030,39 @@ class TTSService:
                 logger.exception("on_speak_end callback failed")
 
         self._lock.release()
+
+        # Lock is released before announcing so the notice can re-acquire it via
+        # the cached-play path. Announce is a no-op unless a rate limit was hit.
+        if self._rate_limit_hit:
+            self._announce_rate_limit()
+
+    def _announce_rate_limit(self) -> None:
+        """Play the prerendered rate-limit notice so the user hears WHY the reply
+        went silent, instead of nothing. Plays only from the WAV cache (never
+        renders on miss) so it makes no API call while the provider is still
+        rate-limited — and can't recurse into another rate-limit announce.
+        Debounced: at most one notice per _RATE_LIMIT_ANNOUNCE_INTERVAL_S."""
+        now = time.time()
+        if now - self._last_rate_limit_announce < _RATE_LIMIT_ANNOUNCE_INTERVAL_S:
+            logger.info("TTS rate-limit notice debounced")
+            return
+        try:
+            from hal.i18n import PHRASE_RATE_LIMIT, localized_phrase
+
+            phrase = localized_phrase(PHRASE_RATE_LIMIT)
+        except Exception:
+            logger.exception("Failed to resolve rate-limit phrase")
+            return
+        if not phrase:
+            return
+        if not self._tts_cache_path(phrase).exists():
+            # Not prerendered (boot render failed or provider was already
+            # rate-limited at boot) — stay silent rather than pay an API call.
+            logger.warning("TTS rate-limit notice not in cache — staying silent")
+            return
+        self._last_rate_limit_announce = now
+        logger.info("TTS announcing rate-limit notice")
+        self.speak_cached(phrase)
 
     # ──────────────────────────────────────────────────────────────────────
     # WAV cache for fixed-text speeches (fillers, intent confirms).

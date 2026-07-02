@@ -25,7 +25,7 @@ import logging
 import os
 from typing import Iterator, Optional
 
-from hal.drivers.voice.tts.backend import TTSBackend
+from hal.drivers.voice.tts.backend import TTSBackend, TTSRateLimitError
 from hal.drivers.voice.tts.elevenlabs import ElevenLabsTTSBackend
 from hal.drivers.voice.tts.openai import _ensure_openai_v1
 
@@ -94,12 +94,25 @@ class ElevenLabsWSTTSBackend(TTSBackend):
         if speed != 1.0:
             bos["voice_settings"] = {"speed": max(0.7, min(1.2, speed))}
 
-        ws = self._connect(
-            url,
-            additional_headers={"xi-api-key": self._api_key},
-            open_timeout=10,
-            close_timeout=5,
-        )
+        try:
+            ws = self._connect(
+                url,
+                additional_headers={"xi-api-key": self._api_key},
+                open_timeout=10,
+                close_timeout=5,
+            )
+        except Exception as e:
+            # websockets raises InvalidStatus(.response.status_code) on a non-101
+            # handshake; a 429 there = rate limit / quota. Surface it distinctly
+            # so the service can announce the prerendered notice.
+            status = getattr(getattr(e, "response", None), "status_code", None) or getattr(
+                e, "status_code", None
+            )
+            if status == 429:
+                raise TTSRateLimitError(
+                    f"ElevenLabs WS rate limit (handshake {status})", status_code=status
+                ) from e
+            raise
         try:
             ws.send(json.dumps(bos))
             ws.send(json.dumps({"text": text}))
@@ -109,6 +122,11 @@ class ElevenLabsWSTTSBackend(TTSBackend):
                     msg = json.loads(raw)
                 except (json.JSONDecodeError, TypeError):
                     continue
+                # Proxy relays quota/limit rejections as an error message rather
+                # than an HTTP status once the socket is open.
+                err = msg.get("error") or msg.get("message")
+                if err and any(k in str(err).lower() for k in ("quota", "rate limit", "too many")):
+                    raise TTSRateLimitError(f"ElevenLabs WS rate limit: {err}", status_code=429)
                 audio_b64 = msg.get("audio")
                 if audio_b64:
                     yield base64.b64decode(audio_b64)

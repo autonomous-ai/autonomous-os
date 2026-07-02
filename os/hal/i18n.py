@@ -43,6 +43,10 @@ PHRASE_SERVICE_RESTART = "service_restart"
 # Spoken when a music/audio play request is suppressed by the audio.quiet_hours
 # safety window, so the user hears WHY nothing played instead of silent failure.
 PHRASE_QUIET_HOURS = "quiet_hours"
+# Spoken when the TTS provider rejects a request for rate-limit / quota reasons
+# (e.g. ElevenLabs 429). Prerendered at boot so it plays from the WAV cache
+# without another API call, letting the user hear WHY the reply went silent.
+PHRASE_RATE_LIMIT = "rate_limit"
 
 # Localized action announcements. reboot/shutdown phrases stay literal
 # in every language ("rebooting", "shutting down") because the user just
@@ -86,6 +90,12 @@ PHRASES_BY_LANG = {
         LANG_VI:    "Giờ đang là giờ yên tĩnh nên mình chưa mở nhạc được. Lát nữa mình thử lại nha.",
         LANG_ZH_CN: "现在是安静时段，我先不放音乐啦，待会儿再试吧。",
         LANG_ZH_TW: "現在是安靜時段，我先不放音樂啦，待會兒再試吧。",
+    },
+    PHRASE_RATE_LIMIT: {
+        LANG_EN:    "I'm out of voice quota — check my plan.",
+        LANG_VI:    "Mình hết hạn mức giọng nói rồi, kiểm tra gói giúp mình nha.",
+        LANG_ZH_CN: "我的语音额度用完了，去看看套餐吧。",
+        LANG_ZH_TW: "我的語音額度用完了，去看看方案吧。",
     },
 }
 
