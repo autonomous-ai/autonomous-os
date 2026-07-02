@@ -404,13 +404,20 @@ def capture_still(
             pass
     cap.acquire_consumer()
     try:
-        deadline = time.monotonic() + max(timeout_s, 0.05)
+        entry = time.monotonic()
+        deadline = entry + max(timeout_s, 0.05)
+        # Freshness floor: with no consumers the capture loop idles at ~one
+        # frame per 2s, so last_frame can be up to 2s old — taken before the
+        # user raised the object they're asking about. Require a frame
+        # captured after WE started (costs at most one frame period now that
+        # acquire_consumer bumped the loop to full FPS).
+        min_fresh = entry - 0.15
         while True:
-            quiet_from = 0.0
+            quiet_from = min_fresh
             if animation_service is not None:
                 last_write = getattr(animation_service, "last_servo_write", 0.0)
                 if last_write:
-                    quiet_from = last_write + settle_s
+                    quiet_from = max(quiet_from, last_write + settle_s)
             frame_ts = getattr(cap, "last_frame_ts", 0.0)
             if frame_ts and frame_ts >= quiet_from:
                 frame = cap.last_frame

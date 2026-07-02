@@ -368,6 +368,7 @@ interface ChatMessage {
   role: "user" | "agent";
   text: string;
   time: string;
+  ts?: number;         // epoch ms — used to age-gate pending-run recovery after reload
   date?: string;       // YYYY-MM-DD for date separators
   imageUrl?: string;   // data: URL for attached images (not persisted to save space)
   fileName?: string;   // original filename for non-image files
@@ -418,12 +419,20 @@ function loadConvos(): Conversation[] {
   }
 }
 
+// How long after send a pending turn is still recoverable across a page
+// reload. Within this window the pending bubble is kept alive and the
+// mount-recovery effect re-attaches to the run (the reply is backfilled
+// from the flow JSONL replay); beyond it the turn is finalized as lost.
+const PENDING_RECOVERY_WINDOW_MS = 10 * 60 * 1000;
+
 function cleanPending(msgs: ChatMessage[]): ChatMessage[] {
-  return msgs.map((m) =>
-    m.pending
-      ? { ...m, pending: false, text: m.text || "…", error: !m.text }
-      : m,
-  );
+  return msgs.map((m) => {
+    if (!m.pending) return m;
+    // Recent pending turn with a runId → keep it pending so recovery can
+    // re-attach after reload instead of dropping the in-flight reply.
+    if (m.runId && m.ts && Date.now() - m.ts < PENDING_RECOVERY_WINDOW_MS) return m;
+    return { ...m, pending: false, text: m.text || "…", error: !m.text };
+  });
 }
 
 function titleFromMessages(msgs: ChatMessage[]): string {
@@ -1024,7 +1033,65 @@ export function ChatSection({ events, isActive }: Props) {
         return;
       }
     }
-  }, [events, updateMessages]);
+    // `sending` is here so the reload-recovery effect below (which attaches
+    // pendingRunIdRef and flips sending on) forces a re-scan of the already
+    // replayed events even when no new flow event arrives afterwards.
+  }, [events, updateMessages, sending]);
+
+  // Recover an in-flight turn after a page reload. The run-tracking refs
+  // (pendingRunIdRef & co.) live only in memory, so a reload while waiting
+  // used to orphan the turn: the reply never landed even though the device
+  // finished it and the flow JSONL replay (last 500 events, re-sent on every
+  // flow-stream connect) already carried the tts_send. cleanPending() keeps
+  // recent pending bubbles alive (see PENDING_RECOVERY_WINDOW_MS); here we
+  // re-attach the refs so the flow-events watcher above backfills the reply.
+  // Runs once, on the first render where the chat tab is actually active —
+  // before that no flow events reach this component anyway.
+  const recoveryDoneRef = useRef(false);
+  useEffect(() => {
+    if (!isActive || recoveryDoneRef.current) return;
+    recoveryDoneRef.current = true;
+    if (pendingRunIdRef.current) return; // a live send is already tracked
+    const convo = convos.find((c) => c.id === activeId);
+    if (!convo) return;
+    let idx = -1;
+    for (let i = convo.messages.length - 1; i >= 0; i--) {
+      const m = convo.messages[i];
+      if (m.pending && m.runId && m.role === "agent") { idx = i; break; }
+    }
+    if (idx < 0) return;
+    const runId = convo.messages[idx].runId!;
+    const prevUser = convo.messages.slice(0, idx).reverse().find((m) => m.role === "user");
+    pendingRunIdRef.current = runId;
+    pendingUserTextRef.current = prevUser?.text ?? null;
+    setSending(true);
+    // Same give-up guard as sendText: if neither the live bus nor the flow
+    // replay resolves the run, finalize as timed out instead of spinning
+    // forever. 30s is plenty — a completed turn backfills within ~2s.
+    const timer = setTimeout(() => {
+      if (pendingRunIdRef.current !== runId) return;
+      pendingRunIdRef.current = null;
+      pendingUserTextRef.current = null;
+      setSending(false);
+      setThinkingText(null);
+      setToolChips([]);
+      const streamed = deltaBufRef.current.get(runId);
+      deltaBufRef.current.delete(runId);
+      thinkingBufRef.current.delete(runId);
+      toolChipsRef.current.clear();
+      setConvos((prev) =>
+        prev.map((c) =>
+          c.id === convo.id
+            ? { ...c, messages: c.messages.map((m) => m.runId === runId && m.pending
+                ? { ...m, text: streamed || "⏱ no response", pending: false, error: !streamed }
+                : m) }
+            : c,
+        ),
+      );
+    }, 30_000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive]);
 
   // Scroll to bottom on conversation switch
   useEffect(() => {
@@ -1232,7 +1299,7 @@ export function ChatSection({ events, isActive }: Props) {
     const now = nowDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     const dateStr = nowDate.toISOString().slice(0, 10);
     const userMsg: ChatMessage = {
-      id: `u-${Date.now()}`, role: "user", text, time: now, date: dateStr,
+      id: `u-${Date.now()}`, role: "user", text, time: now, ts: nowDate.getTime(), date: dateStr,
       imageUrl: filePreview ?? undefined,
       fileName: (!fileIsImage && fileName) ? fileName : undefined,
       fileSize: (!fileIsImage && fileSize) ? fileSize : undefined,
@@ -1271,7 +1338,7 @@ export function ChatSection({ events, isActive }: Props) {
         setConvos((prev) =>
           prev.map((c) =>
             c.id === targetId
-              ? { ...c, messages: [...c.messages, { id: `l-${runId}`, role: "agent", text: "", time: replyTime, runId, pending: true }] }
+              ? { ...c, messages: [...c.messages, { id: `l-${runId}`, role: "agent", text: "", time: replyTime, ts: Date.now(), runId, pending: true }] }
               : c,
           ),
         );

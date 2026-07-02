@@ -15,7 +15,7 @@ from hal.clock import device_now
 from hal.drivers.realtime.config import gemini_needs_idle_workaround
 from hal.drivers.realtime.models import AudioOutput as RTAudioOutput
 from hal.drivers.realtime.models import TextOutput as RTTextOutput
-from hal.drivers.realtime.models.signal import DelegateSignal
+from hal.drivers.realtime.models.signal import DelegateSignal, LookReplaySignal
 
 logger = logging.getLogger("hal.voice")
 
@@ -158,6 +158,7 @@ def run_realtime_turn(
             sentence_buf: str = ""
             first_sentence_sent: bool = False
             attempt: int = 0
+            look_replayed: bool = False  # one look-replay per turn (loop guard)
             while True:
                 if attempt > 0:
                     logger.info(
@@ -181,7 +182,15 @@ def run_realtime_turn(
                 realtime.commit_audio()
                 logger.info("[realtime] Audio committed — streaming output")
 
+                look_replay: bool = False
                 for output in realtime.stream_output():
+                    if isinstance(output, LookReplaySignal):
+                        # Model called look and a fresh frame was sent. The Live
+                        # API queues mid-turn frames for the NEXT turn, so the
+                        # generator stopped this one — re-commit the same audio
+                        # below and the frame joins the replayed turn.
+                        look_replay = True
+                        continue
                     if isinstance(output, DelegateSignal):
                         delegated = True
                         delegate_msg = output.message
@@ -226,6 +235,27 @@ def run_realtime_turn(
                                     )
                                     tts.speak_queue(sentence)
                             sentence_buf = ""
+
+                # Look-replay: re-append this turn's audio to the SAME session
+                # (unlike the 1011 recovery below, which needs a fresh one) and
+                # loop — flush_output + commit_audio at the top open a new turn
+                # that picks up the queued camera frame. The new user activity
+                # cancels the pending tool-call turn server-side. Guarded to
+                # once per turn; a second signal (shouldn't happen — the replay
+                # turn's look hits the reuse path) falls through to the normal
+                # exit so it can't loop forever.
+                if look_replay and not look_replayed:
+                    look_replayed = True
+                    logger.info(
+                        "[realtime] look: re-committing turn audio so the fresh "
+                        "frame joins the replayed turn"
+                    )
+                    for _frame in rt_audio_buffer:
+                        realtime.append_audio(_frame)
+                    text_parts = []
+                    sentence_buf = ""
+                    first_sentence_sent = False
+                    continue
 
                 # A WS-1011 failure yields NOTHING (no audio spoken yet), so a
                 # retry is safe. Stop as soon as the turn produced real output.

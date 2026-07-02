@@ -3,7 +3,6 @@
 import asyncio
 import json
 import logging
-import os
 import queue
 import threading
 import time
@@ -133,21 +132,6 @@ class GeminiLiveAgent(VoiceAgentBase):
         # cleared when activityEnd is sent, set again on turn_complete.
         self._turn_done: threading.Event = threading.Event()
         self._turn_done.set()
-        # When the last look frame was sent (monotonic). A tool response sent
-        # within _IMAGE_INGEST_DELAY_S of it is held back so the frame is
-        # ingested into context before generation resumes (see _async_send_input).
-        self._image_sent_monotonic: float = 0.0
-
-    # Realtime video input carries no ordering guarantee vs send_tool_response;
-    # this is how long we hold the tool ack after sending a look frame so the
-    # image reaches the session context first. 0.5s was NOT enough behind the
-    # campaign-api proxy (model still answered from the previous frame /
-    # hallucinated on the first look); the quiet window while the model waits
-    # on the tool ack is when ingestion happens, so err large. Env-tunable to
-    # find the floor without redeploying.
-    _IMAGE_INGEST_DELAY_S: float = float(
-        os.environ.get("HAL_GEMINI_VISION_INGEST_DELAY_S", "2.0")
-    )
 
     @property
     @override
@@ -317,19 +301,17 @@ class GeminiLiveAgent(VoiceAgentBase):
             _: bool
             buf: npt.NDArray[np.uint8]
             _, buf = cv2.imencode(".jpg", input.image)
+            # NOTE (device-verified 2026-07-02): a frame sent here MID-TURN
+            # (look tool flow) is queued by the Live API for the NEXT turn —
+            # the model answers from the PREVIOUS look's image (one-image lag).
+            # Neither delaying the tool ack (0.5s/2s tried; 2s just pushed look
+            # turns over the 8s no-output timeout) nor send_client_content with
+            # inline_data (leaves a user turn open → model generates nothing)
+            # fixes it. The frame must be sent BEFORE the audio commit to
+            # belong to the current turn.
             await self._session.send_realtime_input(
                 video=types.Blob(data=buf.tobytes(), mime_type="image/jpeg")
             )
-            # Stamp for the tool-response ingestion delay below. Realtime input
-            # has NO ordering guarantee against send_tool_response, so without
-            # a pause the look frame lands in context AFTER the tool ack has
-            # resumed generation — the model answers from the PREVIOUS look's
-            # image (device-observed 2026-07-02: one-image lag every turn).
-            # send_client_content(inline_data, turn_complete=False) was tried
-            # instead and is WORSE: it leaves a user turn open, the model waits
-            # for it to close and generates nothing (empty turn → main-agent
-            # fallback). So: keep the realtime video path, delay the ack.
-            self._image_sent_monotonic = time.monotonic()
         elif isinstance(input, FunctionCallResultInput):
             # Fire-and-forget tools (trigger_response=False, e.g. express_emotion)
             # must NOT be acknowledged on Gemini Live: unlike OpenAI (where the
@@ -341,13 +323,6 @@ class GeminiLiveAgent(VoiceAgentBase):
             # the ack. delegate_to_main keeps trigger_response=True and is sent.
             if not input.trigger_response:
                 return
-            # Give a just-sent look frame time to be ingested into the session
-            # context before the tool response resumes generation (see the
-            # ImageInput branch above). Only delays when an image was sent
-            # within the window — normal tool acks are unaffected.
-            since_image: float = time.monotonic() - self._image_sent_monotonic
-            if since_image < self._IMAGE_INGEST_DELAY_S:
-                await asyncio.sleep(self._IMAGE_INGEST_DELAY_S - since_image)
             # input.output is normally a JSON object string, but send_function_result()
             # is public and may be handed arbitrary text — Gemini's response field
             # requires a dict, so coerce non-object/invalid payloads instead of

@@ -46,6 +46,9 @@ class VoiceAgentBase(ABC):
         self._stop_event = threading.Event()
         self._send_thread: threading.Thread | None = None
         self._recv_thread: threading.Thread | None = None
+        # Armed by skip_next_turn_done() (look replay): swallow ONE stale
+        # TurnDoneEvent that arrives before any real output. See receive().
+        self._skip_stale_turn_done: bool = False
 
     @property
     def available(self) -> bool:
@@ -139,6 +142,21 @@ class VoiceAgentBase(ABC):
         the following turn commits immediately.
         """
 
+    def skip_next_turn_done(self) -> None:
+        """Arm receive() to swallow ONE TurnDoneEvent that arrives before any
+        real output.
+
+        Look replay: the orchestrator cancels the model's tool-call turn by
+        re-committing the user's audio, but the server's turn_complete for the
+        CANCELLED turn lands on the recv queue a few hundred ms later — after
+        flush_output() already ran for the replay — and receive() would break
+        on it, ending the replayed turn empty (device-observed: replay died
+        ~340ms after commit). The flag disarms on the first real output, so a
+        turn_complete that follows actual content (the live turn's own) is
+        never swallowed.
+        """
+        self._skip_stale_turn_done = True
+
     def receive(self, *, stop_on_done: bool = True) -> Generator[OutputBase, None, None]:
         """Sync generator — yields OutputBase items from _recv_queue.
 
@@ -160,10 +178,17 @@ class VoiceAgentBase(ABC):
                 )
                 break
             if isinstance(event, TurnDoneEvent):
+                if self._skip_stale_turn_done:
+                    self._skip_stale_turn_done = False
+                    logger.info(
+                        "[realtime] swallowed stale turn_complete from a cancelled turn"
+                    )
+                    continue
                 if stop_on_done:
                     break
                 continue
             if isinstance(event, OutputEvent):
+                self._skip_stale_turn_done = False  # real output → next done is live
                 yield event.output
 
     # --- Abstract: provider-specific implementation ---

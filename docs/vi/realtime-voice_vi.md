@@ -100,13 +100,23 @@ thay vì delegate. Orchestrator đăng ký tool `look` (`orchestrator.py`,
    blur không lọt tới model; không thêm độ trễ khi servo vốn đang đứng yên
    hoặc thiết bị không có servo), downscale về `HAL_GEMINI_VISION_MAX_WIDTH`
    (mặc định 768px) để giới hạn token ảnh.
-2. Đẩy vào làm **video input** realtime (`ImageInput` → `send_realtime_input(video=…)`).
-3. Gửi tool result với `trigger_response=True` để Gemini **tiếp tục cùng turn** và
-   nói câu trả lời với ảnh đã có trong context.
+2. Đẩy vào làm **video input** realtime (`ImageInput` → `send_realtime_input(video=…)`),
+   rồi **replay turn**: Live API xếp frame gửi giữa-turn vào turn KẾ TIẾP
+   (device-proven: flow ack-tool → tiếp-turn cũ khiến mọi câu look trả lời bằng
+   ảnh của lần look *trước* — lệch 1 ảnh, delay ack bao nhiêu cũng không cứu),
+   nên thay vì ack tool call, orchestrator yield `LookReplaySignal` và
+   `run_realtime_turn` gửi lại audio của turn + commit lần nữa trên CÙNG
+   session. Frame đang xếp hàng vào đúng turn replay.
+3. Turn replay kích hoạt `look` lần nữa, rơi vào reuse guard
+   (`VISION_MIN_INTERVAL_S`) và được ack `trigger_response=True` — model trả
+   lời bằng frame lúc này đã thật sự nằm trong context.
 
-Vì cả hai lần gửi đi qua cùng một send queue FIFO của agent, ảnh vào context trước
-khi model sinh tiếp. Khác với `delegate_to_main`, `look` **không** ngắt turn — model
-nhìn rồi nói.
+Plumbing hỗ trợ replay: `receive()` nuốt đúng MỘT `turn_complete` cũ (của turn
+bị hủy, về sau replay commit và nếu không sẽ kết thúc rỗng turn replay —
+`skip_next_turn_done()`); recycle session idle/turn-cap đang chờ sẽ bị hoãn khi
+replay pending (rebuild lúc đó làm mồ côi ảnh vừa gửi); và mọi lần rebuild
+session đều reset look reuse guard (ảnh sống trong session — session mới không
+có ảnh nào). Chi phí: audio câu hỏi bị tính 2 lần ở turn look; ảnh 1 lần.
 
 Cái này thay cho đường chậm (delegate → main → tìm skill → `/camera/snapshot` →
 LLM vision, vài giây) bằng một round-trip ngay trong phiên.

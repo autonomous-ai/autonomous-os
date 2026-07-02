@@ -343,7 +343,8 @@ Interactive chat interface for communicating with the agent. Layout: sidebar (co
 **Response Handling**
 - Tracks response by `runId` correlation across SSE events
 - Inline HW control markers (`[HW:/emotion:...]`) stripped from displayed text
-- 30-second timeout: if streaming text received, shows partial text; otherwise shows error with retry button
+- 120-second timeout: if streaming text received, shows partial text; otherwise shows error with retry button
+- **Pending-turn recovery across reload**: messages persist an epoch `ts`; a pending reply bubble younger than 10 minutes survives a page reload instead of being finalized as an error. On the first render with the Chat tab active, the UI re-attaches to the stored `runId` and the reply is backfilled from the flow JSONL replay (`/api/agent/flow-stream` re-sends the last 500 events of the day on every connect — `tts_send` / `tts_suppressed` / `no_reply`). If nothing resolves the run within 30 s, it is finalized as "no response" with retry.
 - Local intent fast path: sub-50ms responses bypassing agent
 - Busy/dropped handling: shows "busy — try again"
 - Markdown rendering: bold, italic, inline code (amber-tinted), code blocks (monospace), URLs, ordered/unordered lists, and tables (styled header + zebra rows)

@@ -44,7 +44,7 @@ from hal.drivers.realtime.models import (
     OutputBase,
     TextInput,
 )
-from hal.drivers.realtime.models.signal import DelegateSignal
+from hal.drivers.realtime.models.signal import DelegateSignal, LookReplaySignal
 from hal.drivers.realtime.summarizer import RealtimeSummarizer
 from hal.drivers.realtime.voice_agent.base import VoiceAgentBase
 
@@ -132,9 +132,11 @@ LOOK_TOOL_DESCRIPTION: str = (
     "am I holding?', 'what's in front of you?', 'read this label', 'what color is "
     "this?'). Unlike delegate_to_main, this does NOT hand off — call it, the image "
     "is added to your context, then you immediately SPEAK your answer in this same "
-    "turn. Use it whenever the user asks about the visible world or refers to "
-    "something physical ('this', 'that', 'here') that you need to see. Do NOT use "
-    "it for non-visual requests."
+    "turn. The scene CHANGES constantly: the user may have swapped objects since "
+    "the last image, so for ANY present-tense visual question you MUST call this "
+    "again — never answer from a previous image, from memory, or from the "
+    "conversation, even if you are sure you already know; that is exactly how you "
+    "get it embarrassingly wrong. Do NOT use it for non-visual requests."
 )
 
 # No parameters: the model just signals intent to look; the device grabs the
@@ -327,6 +329,11 @@ class RealtimeOrchestrator:
             self._consecutive_silent = 0
             self._idle_reset_pending = False
             self._turns_since_recycle = 0
+            # Images live in the session context — a fresh session has none, so
+            # the look reuse-guard must not claim "recent frame still in context"
+            # (it would ack the model with no image there → silent turn).
+            self._looked_this_turn = False
+            self._last_look_sent_monotonic = 0.0
             logger.info("[realtime] Fresh session connected before turn (%s)", reason)
             return True
         except Exception:
@@ -394,6 +401,9 @@ class RealtimeOrchestrator:
                     return
                 new.connect()
                 self._agent = new
+                # Fresh session context has no images — see _rebuild_now.
+                self._looked_this_turn = False
+                self._last_look_sent_monotonic = 0.0
                 logger.info("[realtime] Zombie recovery: fresh session connected")
             except Exception:
                 logger.exception("[realtime] Zombie rebuild failed")
@@ -522,12 +532,17 @@ class RealtimeOrchestrator:
         if self._agent is not None:
             self._agent.flush_output()
 
-    def stream_output(self) -> Generator[OutputBase | DelegateSignal, None, None]:
+    def stream_output(
+        self,
+    ) -> Generator[OutputBase | DelegateSignal | LookReplaySignal, None, None]:
         """Yield outputs from the model one by one as they arrive.
 
         Yields:
           - AudioOutput / TextOutput / FunctionCallOutput as they stream in
           - DelegateSignal if model called delegate_to_main (then stops)
+          - LookReplaySignal if model called look and a fresh frame was sent —
+            the caller must re-append the turn's audio and commit again so the
+            frame joins the replayed turn (then stops)
 
         The generator returns (StopIteration) when the model's turn is done.
         """
@@ -536,16 +551,30 @@ class RealtimeOrchestrator:
 
         self._looked_this_turn = False  # reset the per-turn `look` image-send guard
         produced = False  # did this turn yield any real output (vs stay silent)?
+        replay_pending = False  # look-replay signalled — the turn continues
         for output in self._agent.receive(stop_on_done=True):
             if (
                 isinstance(output, FunctionCallOutput)
                 and output.name == LOOK_TOOL_NAME
             ):
-                # Inject the camera frame, then continue the SAME turn so the model
-                # describes it. No yield here: the spoken answer arrives as the
-                # turn resumes and is yielded by the branches below (which set
-                # produced=True). The recv loop keeps reading until turn_complete.
-                self._handle_look_call(output)
+                # Fresh frame sent → the turn must be REPLAYED so the frame
+                # (queued by the Live API for the next turn) joins the answer —
+                # see _handle_look_call. Mirror the delegate flow: end_turn so
+                # the replay's commit isn't gated on a turn_complete that never
+                # comes, signal the turn driver, stop this turn.
+                if self._handle_look_call(output):
+                    produced = True
+                    replay_pending = True
+                    # Unblock the replay's commit (no turn_complete follows a
+                    # tool-call-only turn) and arm receive() to swallow the
+                    # cancelled turn's LATE turn_complete, which otherwise ends
+                    # the replayed turn empty ~300ms in.
+                    self._agent.end_turn()
+                    self._agent.skip_next_turn_done()
+                    yield LookReplaySignal()
+                    break
+                # Reused/absent frame → the tool was acked; the turn continues
+                # and the spoken answer is yielded by the branches below.
                 continue
             if (
                 isinstance(output, FunctionCallOutput)
@@ -607,6 +636,16 @@ class RealtimeOrchestrator:
                 break
             produced = True
             yield output
+
+        # Look-replay pending: the logical turn CONTINUES (the caller is about
+        # to re-commit this turn's audio on the SAME session). Don't stamp,
+        # count, or recycle here — an idle/turn-cap recycle at this point swaps
+        # in a fresh session and orphans the image that was just sent to the
+        # old one (device-observed 2026-07-02: replay ran on a blank session,
+        # the model had no frame and stayed silent → main-agent fallback). Any
+        # armed recycle stays pending and fires after the replayed turn.
+        if replay_pending:
+            return
 
         # Track consecutive silent turns for the zombie guard: a turn that
         # committed audio but yielded nothing. A long-lived Gemini session can
@@ -745,24 +784,32 @@ class RealtimeOrchestrator:
                 "[realtime] emotion expression failed (emotion=%s): %s", emotion, e
             )
 
-    def _handle_look_call(self, output: FunctionCallOutput) -> None:
-        """Grab the current camera frame and feed it to the model, then continue
-        the turn so the model answers the visual question in-session.
+    def _handle_look_call(self, output: FunctionCallOutput) -> bool:
+        """Handle the model's `look` call. Returns True when a FRESH frame was
+        sent and the turn must be REPLAYED (see LookReplaySignal), False when
+        the turn should just continue (frame reused from context, or no camera).
 
-        Flow (Gemini Live): enqueue the frame as realtime video input, THEN send
-        the tool result with trigger_response=True. Both go through the agent's
-        single send queue (FIFO), so the image lands in the session context before
-        the tool response resumes generation — the model then speaks its answer in
-        the same turn. If the camera is unavailable we still send a result (with an
-        error) so the model can apologise instead of the turn hanging.
+        Why replay: the Live API queues a frame sent MID-TURN for the NEXT
+        turn — the tool-ack → continue-turn flow made the model answer every
+        look from the PREVIOUS look's image (device-proven 2026-07-02; neither
+        ack delays nor client_content injection fix it). So on a fresh frame we
+        send the image, do NOT ack the tool call (the replayed audio activity
+        cancels the pending turn), and let the turn driver re-commit the user's
+        audio — the new turn picks up the queued frame and the model answers
+        about the CURRENT scene.
+
+        Reuse path (already looked this turn / within VISION_MIN_INTERVAL_S of
+        the last send): the recent frame is genuinely in context — in the
+        replay turn this is exactly how the model reads the fresh frame — so
+        ack with trigger_response=True and let the turn continue.
         """
         if self._agent is None:
-            return
+            return False
         now: float = time.monotonic()
-        # Cost guard: skip sending a NEW image when the model is over-calling look —
-        # one image per turn, and none within VISION_MIN_INTERVAL_S of the last send.
-        # The recent frame is still in the session context, so just ack and let the
-        # model answer from it (trigger_response=True continues the turn).
+        # Cost guard: no NEW image within VISION_MIN_INTERVAL_S of the last send
+        # or twice in one turn. Doubles as the replay-turn path: the replayed
+        # turn re-triggers look, lands here, and the model answers from the
+        # frame that entered context with the replay.
         min_interval: float = config.REALTIME_GEMINI_VISION_MIN_INTERVAL_S
         since_last: float = now - self._last_look_sent_monotonic
         if self._looked_this_turn or (
@@ -787,31 +834,36 @@ class RealtimeOrchestrator:
                     )
                 ]
             )
-            return
+            return False
 
         frame = self._capture_frame()
-        if frame is not None:
-            self._agent.send([ImageInput(image=frame)])
-            self._looked_this_turn = True
-            self._last_look_sent_monotonic = now
-            # Persist the SAME frame so that if this turn later delegates / falls
-            # back to the main agent (e.g. Gemini times out mid-turn), the agent
-            # reuses it instead of taking a fresh snapshot. See turn_dispatch.
-            self._persist_look_frame(frame)
-            result: str = '{"result": "captured"}'
-            logger.info(
-                "[realtime] look: captured frame %s in %.0fms",
-                getattr(frame, "shape", "?"),
-                (time.monotonic() - now) * 1000,
-            )
-        else:
-            result = '{"error": "camera unavailable"}'
+        if frame is None:
             logger.warning("[realtime] look: no camera frame available")
-        # trigger_response defaults True → Gemini continues the turn and speaks the
-        # answer now that the image is in context.
-        self._agent.send(
-            [FunctionCallResultInput(call_id=output.call_id, output=result)]
+            self._agent.send(
+                [
+                    FunctionCallResultInput(
+                        call_id=output.call_id,
+                        output='{"error": "camera unavailable"}',
+                    )
+                ]
+            )
+            return False
+
+        self._agent.send([ImageInput(image=frame)])
+        self._looked_this_turn = True
+        self._last_look_sent_monotonic = now
+        # Persist the SAME frame so that if this turn later delegates / falls
+        # back to the main agent (e.g. Gemini times out mid-turn), the agent
+        # reuses it instead of taking a fresh snapshot. See turn_dispatch.
+        saved_path: str | None = self._persist_look_frame(frame)
+        logger.info(
+            "[realtime] look: captured frame %s in %.0fms → %s — replaying "
+            "turn so the frame joins it",
+            getattr(frame, "shape", "?"),
+            (time.monotonic() - now) * 1000,
+            saved_path or "(persist failed)",
         )
+        return True
 
     @staticmethod
     def _capture_frame() -> Any:
@@ -843,7 +895,9 @@ class RealtimeOrchestrator:
                     cap,
                     getattr(state, "animation_service", None),
                     settle_s=0.3,
-                    timeout_s=1.5,
+                    # 2.0s, not less: a camera woken from disabled (cap.start()
+                    # above) can take over a second to deliver its first frame.
+                    timeout_s=2.0,
                 )
             finally:
                 if was_disabled:
@@ -865,10 +919,12 @@ class RealtimeOrchestrator:
             return None
 
     @staticmethod
-    def _persist_look_frame(frame: Any) -> None:
+    def _persist_look_frame(frame: Any) -> str | None:
         """Save the look frame to disk and record it in app_state so a delegate /
         fallback turn can hand it to the main agent by path (see turn_dispatch).
-        Best-effort: a write failure just means the agent snapshots fresh."""
+        Best-effort: a write failure just means the agent snapshots fresh.
+        Returns the saved path (also logged per capture for debugging: pull the
+        file and compare it against the model's answer)."""
         try:
             import os
             import time as _time
@@ -882,7 +938,7 @@ class RealtimeOrchestrator:
                 state._SNAPSHOT_DIR, f"look_{int(_time.time() * 1000)}.jpg"
             )
             if not cv2.imwrite(path, frame):
-                return
+                return None
             # Drop the previous look frame so they don't pile up (the snapshot ring
             # only tracks /camera/snapshot saves, not these).
             prev = getattr(state, "realtime_look_frame_path", None)
@@ -893,8 +949,10 @@ class RealtimeOrchestrator:
                     pass
             state.realtime_look_frame_path = path
             state.realtime_look_frame_ts = time.monotonic()
+            return path
         except Exception:
             logger.exception("[realtime] look: persist frame failed")
+            return None
 
     def send_text(self, text: str) -> None:
         """Send a text message to the agent as context (non-blocking).
