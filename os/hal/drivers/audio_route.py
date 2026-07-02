@@ -68,6 +68,13 @@ def current_label() -> str:
     return _current_label
 
 
+def bt_active() -> bool:
+    """True while audio output routes to a Bluetooth headset (label 'bt:<MAC>').
+    Players that bypass PortAudio (e.g. music via aplay) check this to pick a
+    PulseAudio output instead, so they land on the same headset as TTS."""
+    return _current_label.startswith("bt:")
+
+
 def _swap_tts(output_idx: Optional[int]) -> None:
     tts = state.tts_service
     if tts is None:

@@ -71,20 +71,17 @@ else:
     logger.warning("No PulseAudio runtime dir found — pactl calls will fail")
 
 
-def _pactl(args: list[str], timeout: float = 10.0) -> subprocess.CompletedProcess:
-    """Run pactl with the right env + identity to reach the per-user PA.
-
-    Default timeout is generous (10s) because PulseAudio stalls noticeably
-    while a Bluetooth SCO link is being set up or torn down — short timeouts
-    here cause false 'no sink' errors during normal A2DP↔HFP transitions."""
+def pulse_popen_kwargs() -> dict:
+    """Env + privilege-drop kwargs so a root-spawned PulseAudio client
+    (pactl, paplay, …) reaches the per-user PA daemon: XDG_RUNTIME_DIR pointed
+    at the PA owner's runtime dir, and setuid into that owner before exec —
+    libpulse rejects root opening a user socket."""
     env = os.environ.copy()
     if _PULSE_RUNTIME_DIR:
         env["XDG_RUNTIME_DIR"] = _PULSE_RUNTIME_DIR
 
-    kwargs: dict = dict(capture_output=True, text=True, timeout=timeout, env=env)
+    kwargs: dict = {"env": env}
 
-    # libpulse rejects root opening a user socket. Drop into the PA owner's
-    # uid/gid before exec so the connection passes the ownership check.
     if (
         os.geteuid() == 0
         and _PULSE_UID is not None
@@ -103,6 +100,18 @@ def _pactl(args: list[str], timeout: float = 10.0) -> subprocess.CompletedProces
 
         kwargs["preexec_fn"] = _drop_priv
 
+    return kwargs
+
+
+def _pactl(args: list[str], timeout: float = 10.0) -> subprocess.CompletedProcess:
+    """Run pactl with the right env + identity to reach the per-user PA.
+
+    Default timeout is generous (10s) because PulseAudio stalls noticeably
+    while a Bluetooth SCO link is being set up or torn down — short timeouts
+    here cause false 'no sink' errors during normal A2DP↔HFP transitions."""
+    kwargs: dict = dict(
+        capture_output=True, text=True, timeout=timeout, **pulse_popen_kwargs()
+    )
     return subprocess.run(["pactl", *args], **kwargs)
 
 
