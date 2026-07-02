@@ -13,6 +13,8 @@ var (
 	reGatewayBlock    = regexp.MustCompile(`(?m)^gateway:[ \t]*\n((?:[ \t]+.*\n?)+)`)
 	reGatewayDefault  = regexp.MustCompile(`(?m)^[ \t]+default:[ \t]*(\S+)`)
 	reGatewayProtocol = regexp.MustCompile(`(?m)^[ \t]+protocol:[ \t]*(\S+)`)
+	reVoiceBlock      = regexp.MustCompile(`(?m)^voice:[ \t]*\n((?:[ \t]+.*\n?)+)`)
+	reVoiceProvider   = regexp.MustCompile(`(?m)^[ \t]+tts_provider:[ \t]*(\S+)`)
 	reSoulRef         = regexp.MustCompile(`(?m)^soul_ref:[ \t]*(\S+)`)
 	reCapBlock        = regexp.MustCompile(`(?m)^capabilities:[ \t]*\n((?:[ \t]+.*\n?)+)`)
 	reCapKey          = regexp.MustCompile(`(?m)^[ \t]+(\w+):`)
@@ -208,4 +210,33 @@ func GatewayDefault(deviceType string) string {
 // only as a consistency guard — see agent.ProvideGateway.
 func GatewayProtocol(deviceType string) string {
 	return gatewayField(deviceType, reGatewayProtocol)
+}
+
+// TTSProvider returns the `voice.tts_provider` declared in
+// devices/<deviceType>/DEVICE.md, or "" if absent/unreadable. It is the device's
+// DEFAULT TTS provider (openai | elevenlabs) — a body property, since some
+// devices ship with a voice that only sounds right on a particular provider.
+// os-server seeds config.json's tts_provider from this once at startup when the
+// user hasn't chosen one, so the Setup UI, HAL auto-start, and StartHALVoice all
+// see the same default; the user can still override it in Setup/Settings. No
+// declaration → "" → the legacy default (openai) is kept. Dependency-free
+// front-matter parse, mirroring GatewayDefault.
+func TTSProvider(deviceType string) string {
+	b, err := os.ReadFile(filepath.Join(DevicesDir(), deviceType, "DEVICE.md"))
+	if err != nil {
+		return ""
+	}
+	fm := reFrontMatter.FindSubmatch(b)
+	if fm == nil {
+		return ""
+	}
+	blk := reVoiceBlock.FindSubmatch(fm[1])
+	if blk == nil {
+		return ""
+	}
+	m := reVoiceProvider.FindSubmatch(blk[1])
+	if m == nil {
+		return ""
+	}
+	return strings.TrimSpace(string(m[1]))
 }
