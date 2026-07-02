@@ -176,21 +176,49 @@ func (s *Server) Serve(closeFn func()) error {
 	// English even when STTLanguage is "vi"/"zh-*".
 	i18n.SetConfig(s.config)
 
-	// Seed the default TTS provider from DEVICE.md (`voice.tts_provider`) when the
-	// user hasn't chosen one yet. Persisting it here means every downstream
+	// Seed the default TTS provider + voice from DEVICE.md (`voice:` block) when
+	// the user hasn't chosen them yet. Persisting here means every downstream
 	// consumer — HAL auto-start, StartHALVoice, and the Setup UI prefill — sees
-	// the same device default; the user can still override it in Setup/Settings
+	// the same device default; the user can still override in Setup/Settings
 	// (their saved value is non-empty, so this never clobbers it). No declaration
-	// → stays empty → HAL falls back to the legacy default (openai). Only seeds
-	// on the first boot that has an empty provider; the WithLockSave notify then
+	// → stays empty → HAL falls back to the legacy defaults (openai / "nova").
+	// Only seeds on a first boot with empty fields; the WithLockSave notify then
 	// costs at most one idempotent config reload, and never fires again.
+	//
+	// Voice must match the provider: an elevenlabs default with the openai voice
+	// "nova" would 400 at ElevenLabs (unknown voice id). So when the seeded
+	// provider is elevenlabs and no voice is set, pick a language-aware default
+	// (Rachel/Ngan/Amy) unless DEVICE.md pins one via voice.tts_voice.
+	seedProvider := ""
 	if s.config.TTSProvider == "" {
 		if p := device.TTSProvider(deviceType); domain.IsValidTTSProvider(p) {
-			if err := s.config.WithLockSave(func(c *config.Config) { c.TTSProvider = p }); err != nil {
-				slog.Warn("seed tts_provider from DEVICE.md failed", "component", "server", "provider", p, "error", err)
-			} else {
-				slog.Info("seeded tts_provider from DEVICE.md", "component", "server", "provider", p)
+			seedProvider = p
+		}
+	}
+	effectiveProvider := s.config.TTSProvider
+	if seedProvider != "" {
+		effectiveProvider = seedProvider
+	}
+	seedVoice := ""
+	if s.config.TTSVoice == "" {
+		if v := device.TTSVoice(deviceType); v != "" {
+			seedVoice = v
+		} else if effectiveProvider == domain.TTSProviderElevenLabs {
+			seedVoice = domain.DefaultElevenLabsVoiceForLang(s.config.STTLanguage)
+		}
+	}
+	if seedProvider != "" || seedVoice != "" {
+		if err := s.config.WithLockSave(func(c *config.Config) {
+			if seedProvider != "" {
+				c.TTSProvider = seedProvider
 			}
+			if seedVoice != "" {
+				c.TTSVoice = seedVoice
+			}
+		}); err != nil {
+			slog.Warn("seed tts defaults from DEVICE.md failed", "component", "server", "provider", seedProvider, "voice", seedVoice, "error", err)
+		} else {
+			slog.Info("seeded tts defaults from DEVICE.md", "component", "server", "provider", seedProvider, "voice", seedVoice)
 		}
 	}
 

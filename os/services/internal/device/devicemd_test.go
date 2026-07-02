@@ -195,6 +195,39 @@ func TestTTSProvider_Missing(t *testing.T) {
 	}
 }
 
+func TestTTSVoice_Present(t *testing.T) {
+	writeDeviceMD(t, "lamp", `---
+schema: autonomous.device.v1
+voice:
+  tts_provider: elevenlabs
+  tts_voice: Ngan
+capabilities:
+  audio: { required: true }
+---
+
+# Lamp
+`)
+	if got := TTSVoice("lamp"); got != "Ngan" {
+		t.Fatalf("TTSVoice = %q, want %q", got, "Ngan")
+	}
+}
+
+func TestTTSVoice_AbsentWhenOnlyProvider(t *testing.T) {
+	writeDeviceMD(t, "lamp", `---
+schema: autonomous.device.v1
+voice:
+  tts_provider: elevenlabs
+capabilities:
+  audio: { required: true }
+---
+
+# Lamp
+`)
+	if got := TTSVoice("lamp"); got != "" {
+		t.Fatalf("TTSVoice = %q, want empty", got)
+	}
+}
+
 func TestStartupVolume_Declared(t *testing.T) {
 	writeDeviceMD(t, "lamp", `---
 schema: autonomous.device.v1

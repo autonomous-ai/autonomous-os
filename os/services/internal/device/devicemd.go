@@ -15,6 +15,7 @@ var (
 	reGatewayProtocol = regexp.MustCompile(`(?m)^[ \t]+protocol:[ \t]*(\S+)`)
 	reVoiceBlock      = regexp.MustCompile(`(?m)^voice:[ \t]*\n((?:[ \t]+.*\n?)+)`)
 	reVoiceProvider   = regexp.MustCompile(`(?m)^[ \t]+tts_provider:[ \t]*(\S+)`)
+	reVoiceVoice      = regexp.MustCompile(`(?m)^[ \t]+tts_voice:[ \t]*(\S+)`)
 	reSoulRef         = regexp.MustCompile(`(?m)^soul_ref:[ \t]*(\S+)`)
 	reCapBlock        = regexp.MustCompile(`(?m)^capabilities:[ \t]*\n((?:[ \t]+.*\n?)+)`)
 	reCapKey          = regexp.MustCompile(`(?m)^[ \t]+(\w+):`)
@@ -212,16 +213,10 @@ func GatewayProtocol(deviceType string) string {
 	return gatewayField(deviceType, reGatewayProtocol)
 }
 
-// TTSProvider returns the `voice.tts_provider` declared in
-// devices/<deviceType>/DEVICE.md, or "" if absent/unreadable. It is the device's
-// DEFAULT TTS provider (openai | elevenlabs) — a body property, since some
-// devices ship with a voice that only sounds right on a particular provider.
-// os-server seeds config.json's tts_provider from this once at startup when the
-// user hasn't chosen one, so the Setup UI, HAL auto-start, and StartHALVoice all
-// see the same default; the user can still override it in Setup/Settings. No
-// declaration → "" → the legacy default (openai) is kept. Dependency-free
-// front-matter parse, mirroring GatewayDefault.
-func TTSProvider(deviceType string) string {
+// voiceField extracts one sub-field (matched by re) from the `voice:` block of
+// devices/<deviceType>/DEVICE.md, or "" if absent/unreadable. Dependency-free
+// front-matter parse (no YAML lib), mirroring gatewayField.
+func voiceField(deviceType string, re *regexp.Regexp) string {
 	b, err := os.ReadFile(filepath.Join(DevicesDir(), deviceType, "DEVICE.md"))
 	if err != nil {
 		return ""
@@ -234,9 +229,32 @@ func TTSProvider(deviceType string) string {
 	if blk == nil {
 		return ""
 	}
-	m := reVoiceProvider.FindSubmatch(blk[1])
+	m := re.FindSubmatch(blk[1])
 	if m == nil {
 		return ""
 	}
 	return strings.TrimSpace(string(m[1]))
+}
+
+// TTSProvider returns the `voice.tts_provider` declared in
+// devices/<deviceType>/DEVICE.md, or "" if absent/unreadable. It is the device's
+// DEFAULT TTS provider (openai | elevenlabs) — a body property, since some
+// devices ship with a voice that only sounds right on a particular provider.
+// os-server seeds config.json's tts_provider from this once at startup when the
+// user hasn't chosen one, so the Setup UI, HAL auto-start, and StartHALVoice all
+// see the same default; the user can still override it in Setup/Settings. No
+// declaration → "" → the legacy default (openai) is kept.
+func TTSProvider(deviceType string) string {
+	return voiceField(deviceType, reVoiceProvider)
+}
+
+// TTSVoice returns the `voice.tts_voice` declared in
+// devices/<deviceType>/DEVICE.md, or "" if absent/unreadable. Optional companion
+// to TTSProvider: pins the device's default voice explicitly (e.g. a provider
+// voice name like "Ngan", or a raw provider voice id). When absent, os-server
+// falls back to a language-aware default for the seeded provider (see
+// domain.DefaultElevenLabsVoiceForLang). Accepted verbatim — the device author
+// owns its validity, mirroring how startup_volume trusts its number.
+func TTSVoice(deviceType string) string {
+	return voiceField(deviceType, reVoiceVoice)
 }
