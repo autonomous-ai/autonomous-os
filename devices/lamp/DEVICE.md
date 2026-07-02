@@ -9,6 +9,7 @@ gateway:
   protocol: websocket
 voice:
   tts_provider: elevenlabs
+  #tts_voice: Rachel      # optional
 capabilities:
   audio:        { routes: [audio, speaker, voice], required: true }
   vision:       { routes: [camera], required: true }
