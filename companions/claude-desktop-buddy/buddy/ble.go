@@ -38,7 +38,7 @@ var (
 //   - A single processor goroutine drains msgCh and evtCh, calling onMessage
 //     and onConnect sequentially so the transfer state they touch is race-free.
 type BLEServer struct {
-	rxMu       sync.Mutex // also guards `connected` (shared with the D-Bus connect-handler dispatch)
+	rxMu       sync.Mutex // also guards connected/links/lastUp/clientAddr (shared with the D-Bus connect-handler dispatch)
 	sendMu     sync.Mutex
 	deviceName string
 	txChar     bluetooth.Characteristic
@@ -46,6 +46,9 @@ type BLEServer struct {
 	onConnect  func(connected bool)
 	rxBuf      bytes.Buffer
 	connected  bool
+	links      map[string]bool // transport-level connections by address (any BT device on the adapter)
+	lastUp     string          // address of the most recent transport connect
+	clientAddr string          // address attributed to the active NUS client (Claude Desktop)
 	msgCh      chan []byte
 	evtCh      chan bool
 }
@@ -55,6 +58,7 @@ func NewBLEServer(deviceName string, onMessage func([]byte), onConnect func(conn
 		deviceName: deviceName,
 		onMessage:  onMessage,
 		onConnect:  onConnect,
+		links:      make(map[string]bool),
 		msgCh:      make(chan []byte, 64),
 		evtCh:      make(chan bool, 4),
 	}
@@ -93,29 +97,40 @@ func (s *BLEServer) Start() error {
 	// adv.Start() so the registered advertisement uses faster timing.
 	tuneAdvIntervals()
 
-	// Reset the RX buffer on disconnect so a leftover partial line from the
-	// prior session doesn't corrupt the next. Dedup both edges — BlueZ can
-	// fire the handler redundantly (e.g. when the remote briefly re-subscribes)
-	// and each onConnect call has side effects (state transitions, xfer reset),
-	// so we only forward genuine edge changes to the processor goroutine.
+	// Transport-level connects fire for ANY device touching the adapter —
+	// including unrelated ones (e.g. a BT headset the OS pairs on the same
+	// radio) — so they must NOT drive the buddy connected state. We only
+	// track them here; "Claude Desktop connected" is declared when actual
+	// data arrives on the NUS RX characteristic (see handleRX), and
+	// "disconnected" when that attributed client (or the last remaining
+	// link) drops. BlueZ can also fire this handler redundantly, which the
+	// links-set naturally dedups.
 	adapter.SetConnectHandler(func(device bluetooth.Device, connected bool) {
+		addr := device.Address.String()
 		s.rxMu.Lock()
-		changed := s.connected != connected
-		s.connected = connected
-		if !connected {
-			s.rxBuf.Reset()
+		disconnect := false
+		if connected {
+			s.links[addr] = true
+			s.lastUp = addr
+			log.Printf("[ble] transport connected: %s (links=%d) — awaiting NUS data", addr, len(s.links))
+		} else {
+			delete(s.links, addr)
+			log.Printf("[ble] transport disconnected: %s (links=%d)", addr, len(s.links))
+			if s.connected && (addr == s.clientAddr || len(s.links) == 0) {
+				// Reset the RX buffer so a leftover partial line from the
+				// prior session doesn't corrupt the next.
+				s.connected = false
+				s.clientAddr = ""
+				s.rxBuf.Reset()
+				disconnect = true
+			}
 		}
 		s.rxMu.Unlock()
 
-		if !changed {
-			return
-		}
-		if connected {
-			log.Println("[ble] device connected")
-		} else {
+		if disconnect {
 			log.Println("[ble] device disconnected")
+			s.evtCh <- false
 		}
-		s.evtCh <- connected
 	})
 
 	// Hardware Buddy spec recommends LE Secure Connections bonding, but
@@ -174,6 +189,17 @@ func (s *BLEServer) Start() error {
 // concurrent WriteValue dispatches from racing on the buffer.
 func (s *BLEServer) handleRX(data []byte) {
 	s.rxMu.Lock()
+	justConnected := false
+	if !s.connected {
+		// Data on the NUS RX characteristic is the real "Claude Desktop is
+		// here" signal — only its client ever writes to our GATT service.
+		// Attribute the session to the most recent transport connect (the
+		// write follows the connect within milliseconds).
+		s.connected = true
+		s.clientAddr = s.lastUp
+		justConnected = true
+	}
+	clientAddr := s.clientAddr
 	s.rxBuf.Write(data)
 
 	var lines [][]byte
@@ -192,6 +218,10 @@ func (s *BLEServer) handleRX(data []byte) {
 	}
 	s.rxMu.Unlock()
 
+	if justConnected {
+		log.Printf("[ble] device connected (NUS client %s)", clientAddr)
+		s.evtCh <- true
+	}
 	for _, line := range lines {
 		s.msgCh <- line
 	}
