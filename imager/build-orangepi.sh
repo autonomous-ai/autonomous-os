@@ -246,7 +246,7 @@ apt-get install -y \\
   xvfb xauth chromium chromium-sandbox git \\
   openresolv \\
   fake-hwclock \\
-  libportaudio2 portaudio19-dev pulseaudio pulseaudio-utils ffmpeg \\
+  libportaudio2 portaudio19-dev pulseaudio pulseaudio-utils pulseaudio-module-bluetooth ffmpeg \\
   alsa-utils libasound2-dev \\
   libopenblas0 libgomp1 liblapack3 \\
   libgpiod2 \\

@@ -593,7 +593,7 @@ DEBIAN_FRONTEND=noninteractive TERM=xterm chroot ${MNT} apt-get install -y \
   systemd-sysv \
   xvfb xauth chromium chromium-sandbox git \
   fake-hwclock \
-  libportaudio2 portaudio19-dev pulseaudio pulseaudio-utils ffmpeg \
+  libportaudio2 portaudio19-dev pulseaudio pulseaudio-utils pulseaudio-module-bluetooth ffmpeg \
   alsa-utils libasound2-dev \
   libopenblas0 libgomp1 liblapack3 \
   libgpiod2 \
