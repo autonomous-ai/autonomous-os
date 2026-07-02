@@ -306,12 +306,72 @@ SERVO_COOLDOWN_S = 0.10
 SERVO_SUBSTEP_DEG   = 1.5   # bigger per-substep: fewer total writes → fewer audible clicks
 # Spaced wider so the motor has time between commands to glide smoothly to
 # each intermediate point, instead of getting retargeted before it settles
-# (which produced the click train).
+# (which produced the click train). This is ALSO the servo-worker tick period
+# (dt) used by the SmoothDamp follower below — one bus write per tick, so the
+# click cadence is unchanged from the old fixed-substep path.
 SERVO_SUBSTEP_SLEEP = 0.030
 # Minimum substeps per fire. Lowered from 4→2: ramping over 4 writes turned
 # the motor into a high-frequency clicker. 2 writes per fire is enough to
 # avoid the worst burst-then-idle gap without the audible buzz.
 SERVO_MIN_SUBSTEPS  = 2
+
+# --- SmoothDamp follower (cinematic ease-in/ease-out) ---
+# The servo worker used to step a FIXED SERVO_SUBSTEP_DEG toward the goal each
+# tick, then snap the last step. That makes the commanded velocity a square wave
+# (0 → ~50°/s instantly → 0 instantly) every time the goal changes at ~10 Hz —
+# the "jerky, not smooth like a film camera" feel. SmoothDamp (Game Programming
+# Gems 4 / Unity's Mathf.SmoothDamp) is a critically-damped follower: it carries
+# an internal per-joint velocity so every move accelerates smoothly and eases out
+# into the target, and when a fresh goal arrives mid-move the velocity carries
+# over (no restart jerk). Same one-write-per-tick cadence → no extra click/buzz.
+# SMOOTH_TIME = approximate seconds to reach the target: higher = smoother but
+# laggier; tune on-device. MAX_SPEED_DPS caps peak pan speed (deg/s) so a big
+# offset can't whip the camera and lose ViT lock (the hardware Goal_Velocity is
+# the real ceiling; this keeps the software setpoint tame too).
+SERVO_SMOOTH_TIME   = 0.18
+SERVO_MAX_SPEED_DPS = 60.0
+
+
+def _smooth_damp(current: float, target: float, velocity: float,
+                 smooth_time: float, dt: float, max_speed: float) -> Tuple[float, float]:
+    """Critically-damped follower. Returns (new_position, new_velocity).
+
+    Eases in and out toward `target`, carrying `velocity` across calls so
+    retargeting mid-move stays smooth. Overshoot-clamped so it settles cleanly.
+    """
+    smooth_time = max(1e-4, smooth_time)
+    omega = 2.0 / smooth_time
+    x = omega * dt
+    exp = 1.0 / (1.0 + x + 0.48 * x * x + 0.235 * x * x * x)
+    change = current - target
+    # Clamp the max distance closed per unit smooth_time → caps peak speed.
+    max_change = max_speed * smooth_time
+    change = max(-max_change, min(max_change, change))
+    new_target = current - change
+    temp = (velocity + omega * change) * dt
+    velocity = (velocity - omega * temp) * exp
+    new = new_target + (change + temp) * exp
+    # Prevent overshoot past the (clamped) target.
+    if (target - current > 0.0) == (new > target):
+        new = target
+        velocity = (new - target) / dt if dt > 0 else 0.0
+    return new, velocity
+
+
+def _soft_deadband(error: float, dz: float) -> float:
+    """Continuous dead zone: 0 inside ±dz, then ramps from 0 at the edge.
+
+    The old hard dead zone fed the controller the RAW error the instant the
+    target crossed the boundary — output jumped from 0 to a full dz-worth of
+    error, the "kick out of center" jerk. This shifts the error so it starts at
+    0 at the edge and grows from there (no value step), giving a smooth handoff
+    between holding and chasing. Sign-preserving.
+    """
+    if error > dz:
+        return error - dz
+    if error < -dz:
+        return error + dz
+    return 0.0
 
 # Pitch distribution across 3 joints.
 # Empirical: only wrist_pitch is pure rotation. base+elbow primarily translate
@@ -392,6 +452,21 @@ PID_YAW_KP, PID_YAW_KI, PID_YAW_KD = 0.025, 0.002, 0.002
 PID_PITCH_KP, PID_PITCH_KI, PID_PITCH_KD = 0.03, 0.002, 0.0025
 PID_OUTPUT_MAX_DEG = 5.0
 PID_INTEGRAL_MAX = 30.0
+
+# --- Velocity feedforward (constant-velocity cinematic pan) ---
+# The position PID only reacts to accumulated error, so a target moving at a
+# steady speed is always chased in catch-up bursts (the "follows in jerks, not a
+# smooth pan" feel). The alpha-beta filter already estimates the target's pixel
+# velocity (vx_f, vy_f); feed a fraction of it straight to the servo as a rate
+# command so the camera pans AT the target's speed even at zero position error.
+# The PID then only has to correct the residual. 0 = off (pure position PID).
+VFF_GAIN = 0.6
+# Cap on the per-fire dt used to turn the feedforward rate (deg/s) into a
+# per-fire step (deg) — a long gap between fires can't inject a huge lurch.
+VFF_MAX_DT_S = 0.20
+# Target pixel-speed above which a position-centered target is still "moving" →
+# keep panning on feedforward instead of freezing in the dead zone.
+VFF_MOVING_MIN_PXS = 40.0
 
 
 class AlphaBetaFilter2D:
@@ -1021,15 +1096,17 @@ class TrackerService:
         """Continuously glide servos toward the latest goal, decoupled from the
         vision loop.
 
-        One synchronized substep per iteration (the fastest joint moves
-        SERVO_SUBSTEP_DEG, the others scale proportionally so all arrive
-        together) with SERVO_SUBSTEP_SLEEP spacing — the same anti-click ramp as
-        the old blocking path, but it no longer stalls CSRT. When a fresh goal
-        arrives mid-ramp the worker simply retargets, producing continuous glide
-        instead of discrete fire-then-settle chunks. The worker owns the
-        self._track_* current-position state.
+        Each iteration advances every joint toward the latest goal with the
+        SmoothDamp critically-damped follower (ease-in/ease-out), one bus write
+        per SERVO_SUBSTEP_SLEEP tick — the same click cadence as the old
+        fixed-substep ramp, but with a smooth velocity profile instead of a
+        square wave. Each joint carries its own velocity, so when a fresh goal
+        arrives mid-move the follower retargets without a restart jerk. The
+        worker owns the self._track_* current-position state.
         """
         idle_sleep = 0.01
+        joints = ("base_yaw.pos", "base_pitch.pos", "elbow_pitch.pos", "wrist_pitch.pos")
+        vel = {k: 0.0 for k in joints}   # per-joint SmoothDamp velocity (deg/s)
         while state.running.is_set():
             with self._servo_lock:
                 goal = dict(self._servo_goal) if self._servo_goal is not None else None
@@ -1042,16 +1119,21 @@ class TrackerService:
             if goal is None:
                 time.sleep(idle_sleep)
                 continue
-            deltas = {k: goal[k] - cur[k] for k in cur}
-            max_delta = max(abs(v) for v in deltas.values())
-            if max_delta < 0.05:
+            max_delta = max(abs(goal[k] - cur[k]) for k in joints)
+            max_vel = max(abs(v) for v in vel.values())
+            # Settled AND stopped → idle. Keep ticking while residual velocity
+            # bleeds off so the ease-out completes instead of snapping.
+            if max_delta < 0.05 and max_vel < 0.5:
+                for k in joints:
+                    vel[k] = 0.0
                 time.sleep(idle_sleep)
                 continue
-            if max_delta <= SERVO_SUBSTEP_DEG:
-                step = dict(goal)
-            else:
-                frac = SERVO_SUBSTEP_DEG / max_delta
-                step = {k: cur[k] + deltas[k] * frac for k in cur}
+            step = {}
+            for k in joints:
+                step[k], vel[k] = _smooth_damp(
+                    cur[k], goal[k], vel[k],
+                    SERVO_SMOOTH_TIME, SERVO_SUBSTEP_SLEEP, SERVO_MAX_SPEED_DPS,
+                )
             try:
                 with animation_service.bus_lock:
                     animation_service.robot.send_action(step)
@@ -1351,9 +1433,17 @@ class TrackerService:
                             dx, dy, offset_mag, moving_str, direction, bbox_ratio * 100,
                             confidence, time.perf_counter() - last_yolo_confirm_t)
 
-                # --- PID continuous-fire with detector-gated trust ---
+                # --- PID + velocity-feedforward continuous-fire with detector-gated trust ---
                 now_t = time.perf_counter()
-                in_zone = abs(dx) <= w_fr * DEAD_ZONE_YAW_PCT and abs(dy) <= h_fr * DEAD_ZONE_PITCH_PCT
+                # Soft dead zone: continuous error (0 at the edge, ramps up) so
+                # there is no output step when the target leaves center.
+                err_dx = _soft_deadband(dx, w_fr * DEAD_ZONE_YAW_PCT)
+                err_dy = _soft_deadband(dy, h_fr * DEAD_ZONE_PITCH_PCT)
+                # Target pixel speed (alpha-beta velocity) — drives the feedforward
+                # and keeps a centered-but-moving target being panned.
+                speed_pxs = (vx_f ** 2 + vy_f ** 2) ** 0.5
+                moving_ff = speed_pxs > VFF_MOVING_MIN_PXS
+                centered = err_dx == 0.0 and err_dy == 0.0
                 yolo_age = now_t - last_yolo_confirm_t
                 # Bbox-trust guard: ViT bloated past its last trusted lock (or the
                 # absolute ceiling) → centroid is garbage. Hold the servo instead
@@ -1394,7 +1484,10 @@ class TrackerService:
                     logger.info("[bbox] untrusted (%s): area=%.0f%% cur_px=%.0f trust_px=%.0f — HOLD servo, await YOLO relock",
                                 "overflow" if bbox_ratio >= BBOX_FREEZE_RATIO else "bloat>%.1fx" % BLOAT_HOLD_MULT,
                                 bbox_ratio * 100, cur_area_px, self._track_init_area)
-                elif in_zone:
+                elif centered and not moving_ff:
+                    # Truly centered AND still — hold and let the integral clear.
+                    # (A centered but MOVING target falls through to keep panning
+                    # on feedforward so it never drifts out before the PID reacts.)
                     self._yaw_pid.reset()
                     self._pitch_pid.reset()
                     motion_state = "CENTERED"
@@ -1406,15 +1499,28 @@ class TrackerService:
                     motion_state = "WAIT-YOLO"
                 elif (now_t - last_servo_t) >= SERVO_COOLDOWN_S:
                     motion_state = "CHASING"
-                    # Yaw sign: dx>0 (object on right) → base_yaw must INCREASE
-                    # to chase right (verified empirically vs legacy _fire_gimbal,
-                    # log shows camera moving the wrong way when this was negated).
-                    yaw_step = self._yaw_pid.update(dx) if abs(dx) > w_fr * DEAD_ZONE_YAW_PCT else 0.0
-                    pitch_correction = self._pitch_pid.update(dy) if abs(dy) > h_fr * DEAD_ZONE_PITCH_PCT else 0.0
-                    logger.info("[pid-fire] offset=(%.0f,%.0f) → %.0f%%x/%.0f%%y yaw=%.2f pitch=%.2f target='%s'",
-                                dx, dy,
-                                abs(dx) / w_fr * 100, abs(dy) / h_fr * 100,
-                                yaw_step, pitch_correction, state.target_label)
+                    # Position PID on the soft-deadbanded error. Yaw sign: dx>0
+                    # (object on right) → base_yaw must INCREASE to chase right
+                    # (verified empirically vs legacy _fire_gimbal).
+                    yaw_pid = self._yaw_pid.update(err_dx)
+                    pitch_pid = self._pitch_pid.update(err_dy)
+                    # Velocity feedforward: convert target pixel velocity → a
+                    # per-fire angular step so the camera pans at the target's
+                    # speed with zero position error. deg_per_px is the same on
+                    # both axes for square pixels (vert FOV = horiz FOV·h/w).
+                    dt_fire = (min(VFF_MAX_DT_S, now_t - last_servo_t)
+                               if last_servo_t > 0 else 1.0 / FAST_LOOP_FPS)
+                    deg_per_px = CAMERA_FOV_DEG / w_fr
+                    yaw_ff = VFF_GAIN * vx_f * deg_per_px * dt_fire
+                    pitch_ff = VFF_GAIN * vy_f * deg_per_px * dt_fire
+                    # Combine and clamp to the PID output limit so ff + pid can't
+                    # exceed the per-fire travel cap.
+                    _lim = PID_OUTPUT_MAX_DEG
+                    yaw_step = max(-_lim, min(_lim, yaw_pid + yaw_ff))
+                    pitch_correction = max(-_lim, min(_lim, pitch_pid + pitch_ff))
+                    logger.info("[pid-fire] offset=(%.0f,%.0f) v=(%.0f,%.0f)px/s → yaw=%.2f(ff%.2f) pitch=%.2f(ff%.2f) target='%s'",
+                                dx, dy, vx_f, vy_f,
+                                yaw_step, yaw_ff, pitch_correction, pitch_ff, state.target_label)
                     t_servo_ms = self._fire_pid(yaw_step, pitch_correction, animation_service)
                     t_servo_acc += t_servo_ms
                     servo_count += 1
