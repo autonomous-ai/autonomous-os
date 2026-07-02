@@ -7,6 +7,8 @@ boards: [raspberry_pi_4, raspberry_pi_5, orangepi_sun60]
 gateway:
   default: openclaw
   protocol: websocket
+voice:
+  tts_provider: elevenlabs
 capabilities:
   audio:        { routes: [audio, speaker, voice], required: true }
   sensing:      { routes: [sensing], required: false }
