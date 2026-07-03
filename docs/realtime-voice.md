@@ -359,11 +359,17 @@ audio carries only the clean answer. With native audio off HAL speaks the
 transcription, so without a guard the leak is read aloud (burning TTS
 characters) and forwarded as `[REPLY]`, where it re-enters context and
 self-reinforces. `drivers/voice/_internal/cot_leak_filter.py` drops the leak at
-sentence granularity before TTS and before the transcript is forwarded/saved:
-third-person/planning markers always; once triggered, bare-English planning
-sentences (non-English devices only), quoted phrasing drafts, plan-fragment
-runts, and fuzzy near-duplicates of already-kept sentences. Every dropped
-sentence is logged as `CoT leak dropped`.
+sentence granularity before TTS and before the transcript is forwarded/saved,
+in three tiers: TRIGGER markers (verb-bound third-person "the user is/wants…",
+planning labels like "Phrasing draft:") always drop and switch the turn into
+CoT mode; SECONDARY markers ("persona", "system prompt", "emotion tool", …)
+drop only once CoT mode is on, so a legit reply about the device itself is
+safe; in CoT mode, English planning sentences (non-English devices only —
+non-Latin scripts like Vietnamese/Chinese/Japanese use an ASCII-ratio check,
+Latin scripts like French/Indonesian additionally require English function
+words so the real answer survives), quoted drafts, plan runts, and fuzzy
+near-duplicates (CJK tokenized per character) drop too. Every dropped sentence
+is logged as `CoT leak dropped`.
 
 ### Environment variables (`os/hal/config.py`)
 

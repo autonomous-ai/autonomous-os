@@ -347,10 +347,16 @@ trong khi audio của model chỉ chứa câu trả lời sạch. Vì native aud
 đọc transcription → không có guard thì leak bị đọc thành tiếng (tốn ký tự TTS)
 và forward vào `[REPLY]`, quay lại context và tự củng cố.
 `drivers/voice/_internal/cot_leak_filter.py` chặn leak ở mức câu, trước TTS và
-trước khi transcript được forward/lưu: marker ngôi-thứ-ba/planning luôn bị drop;
-sau khi kích hoạt thì drop thêm câu tiếng Anh trần (chỉ với device không nói
-tiếng Anh), draft trong ngoặc kép, mảnh plan vụn, và câu gần-trùng với câu đã
-giữ. Mỗi câu bị drop đều log `CoT leak dropped`.
+trước khi transcript được forward/lưu, theo 3 tầng: marker TRIGGER (ngôi thứ ba
+gắn động từ "the user is/wants…", nhãn planning như "Phrasing draft:") luôn drop
+và bật cot-mode cho turn; marker PHỤ ("persona", "system prompt", "emotion
+tool", …) chỉ drop khi cot-mode đã bật — câu trả lời hợp lệ nói về chính thiết
+bị vẫn an toàn; trong cot-mode drop thêm câu planning tiếng Anh (chỉ với device
+không nói tiếng Anh — chữ viết không-Latin như tiếng Việt/Trung/Nhật dùng check
+tỉ lệ ASCII, chữ Latin như Pháp/Indo yêu cầu thêm function word tiếng Anh để
+answer thật không bị nuốt), draft trong ngoặc kép, mảnh plan vụn, và câu
+gần-trùng câu đã giữ (CJK token theo từng ký tự). Mỗi câu bị drop đều log
+`CoT leak dropped`.
 
 ### Biến môi trường (`os/hal/config.py`)
 
