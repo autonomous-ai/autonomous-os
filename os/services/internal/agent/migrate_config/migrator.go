@@ -38,9 +38,10 @@ func (c LLMConfig) Empty() bool {
 type Runtime string
 
 const (
-	RuntimeOpenclaw Runtime = "openclaw"
-	RuntimeHermes   Runtime = "hermes"
-	RuntimePicoclaw Runtime = "picoclaw"
+	RuntimeOpenclaw   Runtime = "openclaw"
+	RuntimeHermes     Runtime = "hermes"
+	RuntimePicoclaw   Runtime = "picoclaw"
+	RuntimeClaudeCode Runtime = "claudecode"
 )
 
 // runtimeAdapter is the read/write surface every migratable runtime implements.
@@ -51,9 +52,10 @@ type runtimeAdapter interface {
 }
 
 var adapters = map[Runtime]runtimeAdapter{
-	RuntimeOpenclaw: openclawAdapter{},
-	RuntimeHermes:   hermesAdapter{},
-	RuntimePicoclaw: picoclawAdapter{},
+	RuntimeOpenclaw:   openclawAdapter{},
+	RuntimeHermes:     hermesAdapter{},
+	RuntimePicoclaw:   picoclawAdapter{},
+	RuntimeClaudeCode: claudecodeAdapter{},
 }
 
 // CanMigrate reports whether a runtime has a registered config adapter.
@@ -67,6 +69,7 @@ type Options struct {
 	OpenclawConfigDir string // e.g. /root/.openclaw
 	HermesRoot        string // e.g. /root/.hermes
 	PicoclawConfigDir string // e.g. /root/.picoclaw
+	ClaudecodeDir     string // e.g. /root/.claudecode
 }
 
 func DefaultOptions(openclawConfigDir, hermesRoot string) Options {
@@ -80,6 +83,7 @@ func DefaultOptions(openclawConfigDir, hermesRoot string) Options {
 		OpenclawConfigDir: openclawConfigDir,
 		HermesRoot:        hermesRoot,
 		PicoclawConfigDir: "/root/.picoclaw",
+		ClaudecodeDir:     "/root/.claudecode",
 	}
 }
 

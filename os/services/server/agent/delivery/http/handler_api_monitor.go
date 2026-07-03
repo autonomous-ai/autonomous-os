@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"go.autonomous.ai/os/internal/claudecode"
 	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/internal/hermes"
 	"go.autonomous.ai/os/internal/openclaw"
@@ -49,6 +50,15 @@ func GetPicoclawVersion() string {
 // populatePicoclawVersion populates the shared picoclaw version cache at startup.
 func populatePicoclawVersion() {
 	picoclaw.PopulatePicoclawVersion()
+}
+
+func GetClaudeCodeVersion() string {
+	return claudecode.GetClaudeCodeVersion()
+}
+
+// populateClaudeCodeVersion populates the shared claudecode version cache at startup.
+func populateClaudeCodeVersion() {
+	claudecode.PopulateClaudeCodeVersion()
 }
 
 // StopTTS interrupts active TTS playback on HAL.

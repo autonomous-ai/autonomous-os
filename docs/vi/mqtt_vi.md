@@ -35,7 +35,7 @@ OS server sử dụng MQTT để giao tiếp với backend server (báo cáo tr�
 
 ```json
 {
-  "cmd": "info|add_channel|slack_event|slack_command|whatsapp_pair|ota|data",
+  "cmd": "info|add_channel|slack_event|slack_command|whatsapp_pair|claudecode_login|claudecode_login_code|ota|data",
   ...payload fields
 }
 ```
@@ -132,6 +132,35 @@ Re-run QR-scan flow mà không re-bootstrap channel config. Dùng khi Baileys se
 **Nhận:** `{"cmd": "whatsapp_pair"}`
 
 **Phản hồi (streaming):** cùng shape với whatsapp `add_channel` stream phía trên, nhưng `type:"whatsapp_pair"`. Timeout 120s (vs. 10 phút cho `add_channel`) — đường này không cài plugin hoặc restart gateway.
+
+### `claudecode_login` / `claudecode_login_code` — claude.ai OAuth login (runtime claudecode)
+
+Chạy login subscription claude.ai (`claude setup-token`) trên thiết bị có runtime
+active là claudecode, để brain xác thực bằng tài khoản Claude của user thay vì
+`llm_api_key`. Chỉ runtime claudecode hỗ trợ — các runtime khác trả lời một
+failure one-shot `{"status":"failure","error":"claude login not supported on … backend"}`.
+Xem `docs/vi/agentic/claudecode_vi.md` §"Auth".
+
+**Nhận:** `{"cmd": "claudecode_login"}`
+
+**Phản hồi (streaming, `type:"claudecode_login"`):**
+
+1. `{"status":"pairing_starting"}`
+2. `{"status":"pairing_url","login_url":"https://claude.ai/oauth/authorize?..."}` —
+   user mở URL này trong browser, authorize, và copy code hiện ra.
+3. terminal: `{"status":"success"}` (token được persist vào config.json
+   `claude_code_oauth_token`; presync chuyển runtime sang subscription auth và
+   bridge restart) · `{"status":"timeout","error":"no login within 10m0s"}` ·
+   `{"status":"failure","error":"..."}`.
+
+**Nhận (chặng hai):** `{"cmd": "claudecode_login_code", "code": "<code đã dán>"}` —
+đưa code từ browser ngược lại flow đang chờ. Được ack bằng
+`{"status":"code_accepted"}` (hoặc `{"status":"failure","error":"no claude login in progress"}`);
+status terminal của chính flow vẫn về trên stream `claudecode_login`.
+
+Khác `whatsapp_pair`, handler login không block MQTT dispatch trong lúc flow chạy
+— code đến như một MQTT command thứ hai, thứ sẽ không bao giờ được dispatch nếu
+handler đầu tiên giữ loop.
 
 ### `slack_event` — Forward một Slack Events API delivery (HTTP mode)
 
@@ -425,6 +454,7 @@ Xử lý bởi bootstrap worker, không qua MQTT handler trực tiếp.
 | `os/services/internal/device/service.go` | `RefreshChannelConfig` (dựng request per-channel + capability gate) |
 | `os/services/internal/agent/channel_reconcile.go` | `ChannelReconcile`: áp dụng lại channel sau khi chuyển runtime, ghi `channels_unsupported` |
 | `os/services/server/device/delivery/mqtt/whatsapp_pair_handler.go` | Handle `whatsapp_pair` re-pair command |
+| `os/services/server/device/delivery/mqtt/claudecode_login_handler.go` | Handle `claudecode_login` / `claudecode_login_code` (claude.ai OAuth login) |
 | `os/services/internal/openclaw/pairing.go` | WhatsApp Baileys QR pairing subprocess driver |
 | `os/services/domain/device.go` | MQTTMessage, command constants |
 | `os/services/domain/pairing.go` | PairingEvent + status enum |

@@ -17,6 +17,8 @@ const FALLBACK = ["openclaw", "hermes"];
 const RUNTIME_BLURB: Record<string, string> = {
   openclaw: "OpenClaw — persistent WebSocket gateway (default).",
   hermes: "Hermes — local HTTP+SSE agent server (Nous Research).",
+  picoclaw: "PicoClaw — lightweight WebSocket gateway.",
+  claudecode: "Claude Code — Anthropic CLI agent behind a local bridge.",
 };
 
 const selectStyle = {

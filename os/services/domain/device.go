@@ -267,6 +267,22 @@ const (
 	CommandData         = "data"
 	CommandWhatsappPair = "whatsapp_pair"
 
+	// CommandClaudeCodeLogin starts the claude.ai OAuth login flow on the
+	// claudecode runtime (ClaudeLoginPairer — see domain/claudelogin.go). The
+	// device streams pairing events on fd_channel: pairing_starting →
+	// pairing_url (login_url field carries the URL the user must open) →
+	// success | timeout | failure. The authorization code the user copies from
+	// the browser comes back via CommandClaudeCodeLoginCode:
+	//
+	//	{"cmd":"claudecode_login"}
+	//	{"cmd":"claudecode_login_code","code":"<pasted code>"}
+	//
+	// On success the OAuth token is persisted to config.json
+	// (claude_code_oauth_token) and presync switches the runtime to
+	// subscription auth (no ANTHROPIC_* API-key env).
+	CommandClaudeCodeLogin     = "claudecode_login"
+	CommandClaudeCodeLoginCode = "claudecode_login_code"
+
 	// CommandSlackEvent is sent by the public Slack-events proxy (bff-campaign-service)
 	// when Slack delivers an Events API POST for a workspace this device owns. Payload
 	// is a verbatim forward of Slack's HTTP request body + signature headers; this
@@ -311,27 +327,30 @@ const (
 	KindRealtimeSet  = "realtime.set"  // persist realtime voice-agent config (provider/voice/reasoning…)
 	KindTimezoneSet  = "timezone.set"  // apply device IANA timezone (/etc/localtime + /etc/timezone)
 
-	// KindHermesSetup / KindPicoclawSetup / KindOpenclawSetup switch the active
-	// agentic backend. The kind itself names the target runtime — the worker
-	// (stand-to-earn-worker's steoauthkind.HermesSetup / PicoclawSetup /
+	// KindHermesSetup / KindPicoclawSetup / KindClaudecodeSetup / KindOpenclawSetup
+	// switch the active agentic backend. The kind itself names the target runtime —
+	// the worker (stand-to-earn-worker's steoauthkind.HermesSetup / PicoclawSetup /
 	// OpenclawSetup) publishes the backend-specific kind instead of a generic
 	// envelope carrying a runtime field. All funnel into
 	// device.Service.UpdateAgentRuntime, which persists config.agent_runtime then
 	// runs switch-runtime.sh (toggle systemd units + restart os-server so
 	// agent/factory.go re-resolves the gateway). The device acks each on
 	// fd_channel with the same kind. Replaces the former generic agent_runtime.set.
-	// openclaw.setup is the revert path (hermes/picoclaw → openclaw, the baked
-	// baseline).
-	KindHermesSetup   = "hermes.setup"
-	KindPicoclawSetup = "picoclaw.setup"
-	KindOpenclawSetup = "openclaw.setup"
+	// openclaw.setup is the revert path (hermes/picoclaw/claudecode → openclaw,
+	// the baked baseline).
+	KindHermesSetup     = "hermes.setup"
+	KindPicoclawSetup   = "picoclaw.setup"
+	KindClaudecodeSetup = "claudecode.setup"
+	KindOpenclawSetup   = "openclaw.setup"
 
-	// AgentRuntimeOpenClaw / AgentRuntimeHermes / AgentRuntimePicoclaw are the
-	// swappable agentic backends. Source of truth mirrored by
-	// internal/agent/factory.go's resolver and /usr/local/bin/switch-runtime.
-	AgentRuntimeOpenClaw = "openclaw"
-	AgentRuntimeHermes   = "hermes"
-	AgentRuntimePicoclaw = "picoclaw"
+	// AgentRuntimeOpenClaw / AgentRuntimeHermes / AgentRuntimePicoclaw /
+	// AgentRuntimeClaudeCode are the swappable agentic backends. Source of truth
+	// mirrored by internal/agent/factory.go's resolver and
+	// /usr/local/bin/switch-runtime.
+	AgentRuntimeOpenClaw   = "openclaw"
+	AgentRuntimeHermes     = "hermes"
+	AgentRuntimePicoclaw   = "picoclaw"
+	AgentRuntimeClaudeCode = "claudecode"
 
 	KindSystemInfo    = "system.info"    // aggregate: versions + network + host
 	KindSystemVersion = "system.version" // lamp + bootstrap + hal + openclaw versions
@@ -469,6 +488,24 @@ type MQTTWhatsappPairResponse struct {
 	PairingQRFormat  string `json:"pairing_qr_format,omitempty"`
 	PairingQRSeq     int    `json:"pairing_qr_seq,omitempty"`
 	PairingExpiresAt string `json:"pairing_expires_at,omitempty"`
+}
+
+// MQTTClaudeCodeLoginCodeCommand is the fa_channel payload for
+// cmd:"claudecode_login_code" — the OAuth authorization code the user copied
+// from the browser, fed back into the waiting login flow.
+type MQTTClaudeCodeLoginCodeCommand struct {
+	Code string `json:"code"`
+}
+
+// MQTTClaudeCodeLoginResponse mirrors MQTTWhatsappPairResponse for the
+// claude.ai OAuth login flow (CommandClaudeCodeLogin). Streaming shape:
+// pairing_starting → pairing_url (login_url set) → success | timeout | failure.
+// Also used to ack claudecode_login_code submissions.
+type MQTTClaudeCodeLoginResponse struct {
+	MQTTInfoResponse
+	Status   string `json:"status"`
+	Error    string `json:"error,omitempty"`
+	LoginURL string `json:"login_url,omitempty"`
 }
 
 type MQTTRemoveChannelRequest struct {
@@ -836,16 +873,17 @@ type MQTTRealtimeSetAck struct {
 // don't silently fall back here — an unknown value from the BFF is a contract
 // error, not a default).
 //
-//	{ "cmd": "data", "kind": "hermes.setup" }    // switch to hermes
-//	{ "cmd": "data", "kind": "picoclaw.setup" }  // switch to picoclaw
-//	{ "cmd": "data", "kind": "openclaw.setup" }  // revert to openclaw (baseline)
+//	{ "cmd": "data", "kind": "hermes.setup" }      // switch to hermes
+//	{ "cmd": "data", "kind": "picoclaw.setup" }    // switch to picoclaw
+//	{ "cmd": "data", "kind": "claudecode.setup" }  // switch to claude code
+//	{ "cmd": "data", "kind": "openclaw.setup" }    // revert to openclaw (baseline)
 type AgentRuntimeSetData struct {
-	Runtime string `json:"runtime"` // "openclaw" | "hermes" | "picoclaw"
+	Runtime string `json:"runtime"` // "openclaw" | "hermes" | "picoclaw" | "claudecode"
 }
 
 // AgentRuntimes is the valid set, surfaced to the web settings dropdown via
 // GET /api/device/agent-runtime so the UI never hardcodes the list.
-var AgentRuntimes = []string{AgentRuntimeOpenClaw, AgentRuntimeHermes, AgentRuntimePicoclaw}
+var AgentRuntimes = []string{AgentRuntimeOpenClaw, AgentRuntimeHermes, AgentRuntimePicoclaw, AgentRuntimeClaudeCode}
 
 // IsValidAgentRuntime reports whether r is a switchable backend (case-insensitive,
 // trimmed). Used to validate hermes.setup / picoclaw.setup and the HTTP runtime

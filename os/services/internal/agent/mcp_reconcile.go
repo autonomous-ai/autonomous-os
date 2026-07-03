@@ -10,6 +10,7 @@ import (
 	"github.com/goccy/go-yaml"
 
 	"go.autonomous.ai/os/domain"
+	"go.autonomous.ai/os/internal/claudecode"
 	"go.autonomous.ai/os/server/config"
 )
 
@@ -28,8 +29,8 @@ import (
 // now-active gateway's WriteMCPEntry (which translates to its own native shape and
 // restarts).
 //
-// Only the device-managed runtimes (openclaw, hermes) carry MCP config; a switch
-// to/from an external runtime (picoclaw) reads/clones nothing.
+// Only the device-managed runtimes (openclaw, hermes, claudecode) carry MCP
+// config; a switch to/from an external runtime (picoclaw) reads/clones nothing.
 type MCPReconcile struct {
 	cfg *config.Config
 	gw  domain.AgentGateway
@@ -119,6 +120,10 @@ func readMCPEntries(runtime string, cfg *config.Config) (map[string]map[string]a
 		return readOpenclawMCP(filepath.Join(cfg.OpenclawConfigDir, "openclaw.json"))
 	case domain.AgentRuntimeHermes:
 		return readHermesMCP(filepath.Join(hermesHome, "config.yaml"))
+	case domain.AgentRuntimeClaudeCode:
+		// workspace/.mcp.json `mcpServers` — entries already use the canonical
+		// {type,url,headers} / {command,args,env} shape, pass-through.
+		return claudecode.ReadMCPEntries()
 	default:
 		// External / non-device-managed runtimes (picoclaw): no MCP config to clone.
 		return nil, nil

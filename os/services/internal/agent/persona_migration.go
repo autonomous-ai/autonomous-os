@@ -80,10 +80,10 @@ func appendAgentRuntime(path, runtime string) error {
 // Persona migration coordination. A switch is migratable when BOTH runtimes have
 // a registered persona adapter (CanMigrate). This is hub-driven: adding a new
 // device-local runtime needs only its adapter — no new direction enum, no change
-// here. openclaw, hermes, and picoclaw all have adapters, so any pair migrates both
-// ways. (PicoClaw's INBOUND skills still come from presync's `picoclaw migrate
-// --workspace-only`; the Go reconciler only carries persona/memory.) A runtime with
-// no adapter is skipped, not migrated.
+// here. openclaw, hermes, picoclaw, and claudecode all have adapters, so any pair
+// migrates both ways. (PicoClaw's INBOUND skills still come from presync's
+// `picoclaw migrate --workspace-only`; the Go reconciler only carries
+// persona/memory.) A runtime with no adapter is skipped, not migrated.
 func migrationRuntimes(prev, current string) (from, to migratepersona.Runtime, ok bool) {
 	from, to = migratepersona.Runtime(prev), migratepersona.Runtime(current)
 	if migratepersona.CanMigrate(from) && migratepersona.CanMigrate(to) {
