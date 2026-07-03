@@ -247,12 +247,45 @@ class BluetoothManager:
 
     # --- Pair / connect / forget ---
 
+    def _le_toggle(self, enable: bool) -> None:
+        """Toggle the controller's LE side at runtime via btmgmt — the flag
+        only changes while the adapter is powered off, so power-cycle around
+        it. Best effort: a missing btmgmt just leaves the controller as-is."""
+        val = "on" if enable else "off"
+        for args in (["power", "off"], ["le", val], ["power", "on"]):
+            try:
+                _run(["btmgmt", *args], timeout=5)
+            except Exception as e:
+                logger.warning("btmgmt %s failed: %s", " ".join(args), e)
+        time.sleep(1.0)
+
     def pair(self, mac: str) -> bool:
         mac = mac.upper()
         try:
             _run(["bluetoothctl", "pair", mac], timeout=20)
         except Exception as e:
             logger.warning("pair %s failed: %s", mac, e)
+        if not _device_info(mac)["paired"]:
+            # Apple dual-mode headsets (AirPods) often reject SSP while the
+            # controller runs dual mode — the handshake strays onto the LE
+            # transport (AuthenticationRejected). Retry with LE temporarily
+            # disabled so pairing can only happen over BR/EDR; the stored
+            # link key works fine in dual mode afterwards. BLE (buddy
+            # advertising) blips for a few seconds and re-arms on power-on.
+            logger.info("pair %s failed in dual mode — retrying BR/EDR-only", mac)
+            self._le_toggle(False)
+            try:
+                _run(["bluetoothctl", "pair", mac], timeout=30)
+                if not _device_info(mac)["paired"]:
+                    # Bonding can complete just after bluetoothctl gives up
+                    # (seen as Canceled/InProgress/AlreadyExists) — settle and
+                    # re-ask once before declaring failure.
+                    time.sleep(2)
+                    _run(["bluetoothctl", "pair", mac], timeout=30)
+            except Exception as e:
+                logger.warning("BR/EDR pair %s failed: %s", mac, e)
+            finally:
+                self._le_toggle(True)
         try:
             _run(["bluetoothctl", "trust", mac], timeout=5)
         except Exception:

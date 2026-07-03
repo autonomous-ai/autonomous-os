@@ -348,6 +348,23 @@ The reasoning knobs (`thinking_level` / `reasoning_effort`) default to the
 explicitly for deeper reasoning. Knobs NOT in the block (turn detection, session
 resumption, memory, summarizer) stay env/default-only.
 
+**CoT-leak filter.** On `gemini-3.1-flash-live-preview` thinking cannot actually
+be disabled: `thinking_level=MINIMAL` and `thinking_budget=0` are both accepted
+but ignored (measured `thoughts_token_count` 125–168 on reasoning turns with
+every config). Normally the thoughts stay internal, but on grounding/vision/tool
+turns the server sometimes streams the model's whole text channel — English
+planning ("The user is insisting…", "Phrasing draft:", "Delivery guidance:")
+plus the real answer — into `output_audio_transcription`, while the model's own
+audio carries only the clean answer. With native audio off HAL speaks the
+transcription, so without a guard the leak is read aloud (burning TTS
+characters) and forwarded as `[REPLY]`, where it re-enters context and
+self-reinforces. `drivers/voice/_internal/cot_leak_filter.py` drops the leak at
+sentence granularity before TTS and before the transcript is forwarded/saved:
+third-person/planning markers always; once triggered, bare-English planning
+sentences (non-English devices only), quoted phrasing drafts, plan-fragment
+runts, and fuzzy near-duplicates of already-kept sentences. Every dropped
+sentence is logged as `CoT leak dropped`.
+
 ### Environment variables (`os/hal/config.py`)
 
 Each knob's `HAL_*` env var overrides the block (and is the dev-box path):

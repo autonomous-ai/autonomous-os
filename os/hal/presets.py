@@ -175,7 +175,7 @@ AIM_PRESETS = {
     AIM_RIGHT:  {"base_yaw.pos": 90.0,  "base_pitch.pos": -30.0, "elbow_pitch.pos": 57.0, "wrist_roll.pos": 0.0, "wrist_pitch.pos": 18.0},
     AIM_UP:     {"base_yaw.pos": 3.0,   "base_pitch.pos": 10.0,  "elbow_pitch.pos": 70.0,  "wrist_roll.pos": 0.0, "wrist_pitch.pos": 10.0},
     AIM_DOWN:   {"base_yaw.pos": 3.0,   "base_pitch.pos": -61.93, "elbow_pitch.pos": -71, "wrist_roll.pos": 0.0, "wrist_pitch.pos": -61},
-    AIM_USER:   {"base_yaw.pos": 0.0,   "base_pitch.pos": 0.0,   "elbow_pitch.pos": 0.0,  "wrist_roll.pos": 0.0, "wrist_pitch.pos": -45.0},
+    AIM_USER:   {"base_yaw.pos": 0.0,   "base_pitch.pos": 0.0,   "elbow_pitch.pos": 0.0,  "wrist_roll.pos": 0.0, "wrist_pitch.pos": -85.0},
 }
 
 # System status LED presets — the color/effect/speed the device shows for each

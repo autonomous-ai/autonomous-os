@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Bluetooth } from "lucide-react";
+import { Bluetooth, Loader2 } from "lucide-react";
 import { HW } from "./types";
 import { usePolling } from "../../hooks/usePolling";
 import { S } from "./styles";
@@ -258,7 +258,7 @@ export function BluetoothSection() {
                     : "Connect — route audio through this headset"}
                 >
                   {rowBusy
-                    ? (isActive ? "Disconnecting..." : "Connecting...")
+                    ? <><Loader2 size={13} className="lm-spin-ico" />{isActive ? "Disconnecting..." : "Connecting..."}</>
                     : (isActive ? "Disconnect" : "Connect")}
                 </button>
                 <button
@@ -394,6 +394,7 @@ const baseBtn: React.CSSProperties = {
 
 const toggleBtn: React.CSSProperties = {
   ...baseBtn,
+  display: "inline-flex", alignItems: "center", gap: 6,
   background: "transparent", color: "var(--lm-text)",
   border: "1px solid var(--lm-border)",
 };

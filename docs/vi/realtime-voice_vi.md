@@ -336,6 +336,22 @@ Knob reasoning (`thinking_level` / `reasoning_effort`) default về mức **rẻ
 thì set tường minh. Các knob KHÔNG có trong block (turn detection, session
 resumption, memory, summarizer) vẫn chỉ theo env/default.
 
+**Filter chống leak CoT.** Trên `gemini-3.1-flash-live-preview` KHÔNG tắt được
+thinking: `thinking_level=MINIMAL` lẫn `thinking_budget=0` đều được chấp nhận
+nhưng bị bỏ qua (đo `thoughts_token_count` 125–168 trên turn cần suy luận với mọi
+config). Bình thường thoughts nằm nội bộ, nhưng trên các turn có
+grounding/vision/tool, server thỉnh thoảng đổ nguyên text channel của model —
+đoạn lập kế hoạch tiếng Anh ("The user is insisting…", "Phrasing draft:",
+"Delivery guidance:") kèm câu trả lời thật — vào `output_audio_transcription`,
+trong khi audio của model chỉ chứa câu trả lời sạch. Vì native audio tắt, HAL
+đọc transcription → không có guard thì leak bị đọc thành tiếng (tốn ký tự TTS)
+và forward vào `[REPLY]`, quay lại context và tự củng cố.
+`drivers/voice/_internal/cot_leak_filter.py` chặn leak ở mức câu, trước TTS và
+trước khi transcript được forward/lưu: marker ngôi-thứ-ba/planning luôn bị drop;
+sau khi kích hoạt thì drop thêm câu tiếng Anh trần (chỉ với device không nói
+tiếng Anh), draft trong ngoặc kép, mảnh plan vụn, và câu gần-trùng với câu đã
+giữ. Mỗi câu bị drop đều log `CoT leak dropped`.
+
 ### Biến môi trường (`os/hal/config.py`)
 
 Mỗi knob có thể bị `HAL_*` env override (thắng block, và là đường cho dev-box):
