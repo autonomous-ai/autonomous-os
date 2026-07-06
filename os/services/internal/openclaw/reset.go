@@ -25,6 +25,7 @@ func (s *OpenclawService) ResetAgent() error {
 var openclawStatePaths = []string{
 	"/root/.openclaw/agents",                  // conversation sessions + history
 	"/root/.openclaw/workspace",               // agent memory (HEARTBEAT.md, SOUL.md, USER.md, memory/)
+	"/root/.openclaw/workspace-attestations", // workspace integrity proofs — must wipe with workspace or onboard re-entry fails
 	"/root/.openclaw/devices",                 // paired devices list
 	"/root/.openclaw/tasks",                   // background task runs
 	"/root/.openclaw/logs",                    // runtime logs
