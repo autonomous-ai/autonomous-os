@@ -17,11 +17,16 @@ original `feature/claude-code` branch history.
       IDENTITY.md only; no CLAUDE.md refresh needed (@imports re-read at session start).
 - [x] Channels honesty verified: telegram + discord native via Claude Code channel
       plugins (presync-owned token/allowlist sync, GetConfiguredChannel checks
-      DiscordBotToken); slack/whatsapp → `domain.ErrChannelNotSupported`; stale
+      DiscordBotToken); whatsapp → `domain.ErrChannelNotSupported`; stale
       stubs.go comment (claimed discord unsupported) fixed.
 - [x] Bridge ported to Go: bridge.py → `internal/claudecode/gatewayd` (`os-server
       claudecode-gatewayd` subcommand, codex-gatewayd file layout); presync no longer
       materializes bridge.py; install.sh drops the python3/websockets prereqs; unit
       ExecStart=/usr/local/bin/os-server claudecode-gatewayd (install.sh + gateway_unit.go).
-- [ ] TODO(claudecode-slack): mirror internal/codex/slack.go (SlackBridge) when slack
-      support is needed (see channels.go).
+- [x] Slack inbound (device-owned, HTTP mode): mirror of internal/codex/slack.go —
+      `domain.SlackBridge` on ClaudeCodeService (slack.go + slack_sender.go), bff-proxy
+      → MQTT slack_event path, allowlist `slack_user_id`, busy-wait inject (silent run,
+      eyes ack), reply via chat.postMessage on the `result` event (emitFinal →
+      finishSlackTurn, stripForChannel ported to hal.go); SlackSender proactive path;
+      slack AddChannel/Refresh = honest no-op (creds read live); no streaming. Tests
+      mirror codex slack_test.go. NOT device-verified.

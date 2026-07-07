@@ -12,6 +12,7 @@ protocol, layout và các quirk đặc thù claudecode.
 > native), watch/rename identity, MCP thật (`.mcp.json`), factory reset,
 > Telegram + Discord qua **channel plugin native** của Claude Code
 > ([code.claude.com/docs/en/channels](https://code.claude.com/docs/en/channels)),
+> **Slack inbound do device sở hữu** (HTTP mode, `domain.SlackBridge`),
 > và flow **claude.ai OAuth login** (§7b) thay thế cho API key trong
 > config.json. Các caveat đã biết được đánh dấu ⚠️ ở §11.
 
@@ -183,10 +184,10 @@ Claude sở hữu session: id được bắt từ bất kỳ event nào mang `se
 `domain.ErrNotSupportedByRuntime` — Claude Code tự auto-compact context của
 nó, nên một rotation do os-server điều khiển chỉ tổ vứt context đi.
 
-## 7. Kênh — Telegram + Discord qua channel plugin native
+## 7. Kênh — Telegram + Discord qua channel plugin native, Slack do device sở hữu
 
-`SupportedChannels() = [telegram, discord]`. Khác hermes/picoclaw (receive loop
-do device sở hữu), loop ở đây là **channel plugin của chính Claude Code**:
+`SupportedChannels() = [telegram, slack, discord]`. Khác hermes/picoclaw
+(receive loop do device sở hữu), loop telegram/discord ở đây là **channel plugin của chính Claude Code**:
 bridge khởi chạy `claude --channels
 plugin:telegram@claude-plugins-official plugin:discord@claude-plugins-official`
 (chỉ những kênh đã cấu hình), mỗi plugin poll Bot API của nó và trả lời qua
@@ -202,14 +203,33 @@ chính chat đó, hoàn toàn bên trong session Claude.
   ở lại pairing mode và drop người lạ.
 - `AddChannel`/`RefreshChannelConfig` (telegram/discord) → chạy lại presync +
   restart theo hash-diff (`syncChannels` → `EnsureOnboarding`, pattern của
-  hermes). Kênh khác → `domain.ErrChannelNotSupported`.
-- **Không có slack**: Claude Code không có slack channel plugin — "Claude in
-  Slack" là một tính năng cloud riêng, spawn web session từ mention `@Claude`,
-  không phải một kênh của thiết bị. Creds slack trong config.json được
-  `ChannelReconcile` surface thành `unsupported_channels` và được khôi phục khi
-  switch ngược về một runtime chạy được chúng.
+  hermes). Với slack cả hai là no-op success trung thực: bridge do device sở
+  hữu đọc `slack_user_id` theo từng event và `slack_bot_token` theo từng call
+  Web API — luôn tươi từ config.json — nên chỉ cần persist creds là đủ (không
+  presync, không restart bridge). whatsapp → `domain.ErrChannelNotSupported`.
+- **Slack do DEVICE SỞ HỮU** (`slack.go` + `slack_sender.go`, mirror của
+  `internal/codex/slack.go`): Claude Code không có slack channel plugin
+  ("Claude in Slack" là một tính năng cloud riêng, spawn web session từ mention
+  `@Claude`, không phải một kênh của thiết bị). Thay vào đó proxy public
+  bff-campaign-service nhận delivery từ Slack Events API và fan-out qua MQTT
+  tới handler `slack_event` của thiết bị
+  (`server/device/delivery/mqtt/slack_event_handler.go`), handler dedup theo
+  event_id và type-assert gateway đang active thành `domain.SlackBridge` —
+  `ClaudeCodeService` implement interface này, nên event chỉ route vào đây khi
+  claudecode đang active. Message được chấp nhận (gate allowlist
+  `slack_user_id`; event bot/subtype/user rỗng bị drop) chờ agent rảnh (poll
+  500 ms, cap 2 phút) rồi được inject thành một lượt thường với flow source
+  `slack`; run được track trong `slackRuns` và **đánh dấu silent** (không TTS),
+  đồng thời thêm reaction ack `eyes` lên message của user. Câu trả lời cuối
+  (event `result` → `emitFinal`, `translator.go`) được post ngược về đúng
+  channel/thread gốc qua `chat.postMessage` (`slack_bot_token`), marker
+  `[HW:/...]` + audio tag được strip (`stripForChannel`, `hal.go`); reaction
+  ack được xoá khi reply hoặc lỗi. **Không streaming từng phần**
+  (`StreamSlackDelta` là no-op — câu trả lời về nguyên khối). Reply thread theo
+  thread sẵn có, không có thì thread dưới message của user.
 - Outbound `Broadcast`/`SendToUser` (nudge chủ động) đi thẳng tới Telegram Bot
-  API (`telegram_sender.go`). Target store dùng chung
+  API (`telegram_sender.go`); `SlackSender` post message chủ động tới kênh
+  `slack_user_id` đã cấu hình khi đủ cả hai creds slack. Target store dùng chung
   (`/root/.lumi/telegram_targets.json`) không được plugin populate, nên
   `GetTelegramTargets` fallback về owner id đã cấu hình (`telegram.go`).
 

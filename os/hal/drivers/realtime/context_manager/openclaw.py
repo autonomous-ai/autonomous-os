@@ -34,6 +34,12 @@ class OpenClawContextManager(ContextManagerBase):
     NAME_RE: re.Pattern[str] = re.compile(r"^name:\s*(.+)$", re.MULTILINE)
     DESC_RE: re.Pattern[str] = re.compile(r"^description:\s*(.+)$", re.MULTILINE)
 
+    # Where SKILL.md folders live, relative to the workspace root. Claude Code
+    # keeps them under .claude/skills (the claude CLI auto-loads that dir), so
+    # its subclass overrides this; every other OpenClaw-layout runtime uses
+    # workspace/skills.
+    SKILLS_SUBDIR: tuple[str, ...] = ("skills",)
+
     @override
     def load_device_context(self) -> str:
         """Load SOUL.md, IDENTITY.md, and USER.md from the workspace."""
@@ -100,7 +106,7 @@ class OpenClawContextManager(ContextManagerBase):
     @override
     def load_skills_catalog(self) -> str:
         """Parse SKILL.md frontmatter from all skills, return a markdown table."""
-        skills_dir: Path = self._workspace / "skills"
+        skills_dir: Path = self._workspace.joinpath(*self.SKILLS_SUBDIR)
         if not skills_dir.is_dir():
             return ""
 

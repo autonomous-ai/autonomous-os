@@ -12,6 +12,7 @@ claudecode-specific protocol, layout, and quirks.
 > identity watch/rename, real MCP (`.mcp.json`), factory reset, Telegram +
 > Discord via Claude Code's **native channel plugins**
 > ([code.claude.com/docs/en/channels](https://code.claude.com/docs/en/channels)),
+> device-owned **Slack inbound** (HTTP mode, `domain.SlackBridge`),
 > and the **claude.ai OAuth login** flow (§7b) as an alternative to the
 > config.json API key. Known caveats are flagged ⚠️ in §11.
 
@@ -187,10 +188,10 @@ Claude owns the session: the id is captured from any event carrying
 `domain.ErrNotSupportedByRuntime` — Claude Code auto-compacts its own context,
 so an os-server-driven rotation would only throw context away.
 
-## 7. Channels — Telegram + Discord via the native channel plugins
+## 7. Channels — Telegram + Discord via the native channel plugins, Slack device-owned
 
-`SupportedChannels() = [telegram, discord]`. Unlike hermes/picoclaw
-(device-owned receive loop), the loops here are **Claude Code's own channel
+`SupportedChannels() = [telegram, slack, discord]`. Unlike hermes/picoclaw
+(device-owned receive loop), the telegram/discord loops here are **Claude Code's own channel
 plugins**: the bridge launches `claude --channels
 plugin:telegram@claude-plugins-official plugin:discord@claude-plugins-official`
 (only the configured ones), each plugin polls its Bot API and replies through
@@ -206,14 +207,34 @@ the same chat, entirely inside the Claude session.
   plugin stays in pairing mode and drops strangers.
 - `AddChannel`/`RefreshChannelConfig` (telegram/discord) → re-run presync +
   hash-diff restart (`syncChannels` → `EnsureOnboarding`, the hermes pattern).
-  Other channels → `domain.ErrChannelNotSupported`.
-- **No slack**: Claude Code has no slack channel plugin — "Claude in Slack" is
-  a separate cloud feature that spawns web sessions from `@Claude` mentions,
-  not a device channel. Slack creds in config.json are surfaced as
-  `unsupported_channels` by `ChannelReconcile` and restored when switching back
-  to a runtime that can run them.
+  For slack both are honest no-op successes: the device-owned bridge reads
+  `slack_user_id` per event and `slack_bot_token` per Web API call — fresh from
+  config.json — so persisting the creds is all that is needed (no presync, no
+  bridge restart). whatsapp → `domain.ErrChannelNotSupported`.
+- **Slack is DEVICE-OWNED** (`slack.go` + `slack_sender.go`, a mirror of
+  `internal/codex/slack.go`): Claude Code has no slack channel plugin ("Claude
+  in Slack" is a separate cloud feature that spawns web sessions from `@Claude`
+  mentions, not a device channel). Instead the public bff-campaign-service
+  proxy receives Slack Events API deliveries and fans them out over MQTT to the
+  device's `slack_event` handler
+  (`server/device/delivery/mqtt/slack_event_handler.go`), which dedups by
+  event_id and type-asserts the active gateway to `domain.SlackBridge` —
+  implemented by `ClaudeCodeService`, so events route here only while
+  claudecode is active. An accepted message (allowlist gate `slack_user_id`;
+  bot/subtype/empty-user events dropped) waits for the agent to go idle
+  (500 ms poll, 2 min cap) and is injected as a regular turn with flow source
+  `slack`; the run is tracked in `slackRuns` and **marked silent** (no TTS),
+  and an `eyes` ack reaction is added to the user's message. The final answer
+  (`result` event → `emitFinal`, `translator.go`) is posted back to the
+  originating channel/thread via `chat.postMessage` (`slack_bot_token`),
+  `[HW:/...]` markers + audio tags stripped (`stripForChannel`, `hal.go`); the
+  ack reaction is cleared on reply or error. **No progressive streaming**
+  (`StreamSlackDelta` is a no-op — the answer arrives whole). Replies thread
+  under the existing thread, else under the user's message.
 - Outbound `Broadcast`/`SendToUser` (proactive nudges) go straight to the
-  Telegram Bot API (`telegram_sender.go`). The shared target store
+  Telegram Bot API (`telegram_sender.go`); a `SlackSender` posts proactive
+  messages to the configured `slack_user_id` channel when both slack creds are
+  set. The shared target store
   (`/root/.lumi/telegram_targets.json`) is not populated by the plugin, so
   `GetTelegramTargets` falls back to the configured owner id (`telegram.go`).
 
