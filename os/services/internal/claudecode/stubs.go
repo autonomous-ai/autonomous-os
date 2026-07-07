@@ -42,10 +42,13 @@ func (s *ClaudeCodeService) RestartAgent() error {
 }
 
 // RefreshModelsConfig — the model is selected via ANTHROPIC_MODEL in
-// /root/.claudecode/.env, which presync owns (synced from config.json llm_model).
-// No-op here because EnsureOnboarding re-runs presync on every boot/config change.
+// /root/.claudecode/.env, which presync owns (synced from config.json
+// llm_model). Returns ErrNotSupportedByRuntime so the caller falls back to
+// EnsureOnboarding, whose embedded presync re-reads llm_* from config.json and
+// the hash gate restarts the bridge — i.e. the change is applied, just not by
+// this method.
 func (s *ClaudeCodeService) RefreshModelsConfig() error {
-	return nil
+	return domain.ErrNotSupportedByRuntime
 }
 
 // EnsureOnboarding lives in onboarding.go — it re-runs the embedded presync
@@ -91,8 +94,12 @@ func (s *ClaudeCodeService) StartModelSync(ctx context.Context) {
 	<-ctx.Done()
 }
 
+// UpdatePrimaryModel — the model is pinned in .env (ANTHROPIC_MODEL) by
+// presync (from config.json llm_model), not patched per-call. Same fallback
+// contract as RefreshModelsConfig: sentinel → EnsureOnboarding presync
+// applies it.
 func (s *ClaudeCodeService) UpdatePrimaryModel(_ string) error {
-	return nil
+	return domain.ErrNotSupportedByRuntime
 }
 
 // StartPrimaryModelWatch — no openclaw.json-style agent config file to watch.
@@ -112,11 +119,12 @@ func (s *ClaudeCodeService) GetConfiguredChannel() string {
 	return "channel"
 }
 
-// CompactSession — no-op because Claude Code auto-compacts its own context when
-// it approaches the window limit; there is no external compact RPC to call.
+// CompactSession — Claude Code auto-compacts its own context when it
+// approaches the window limit; there is no external compact RPC to call.
+// Returns ErrNotSupportedByRuntime so callers see nothing was done here.
 func (s *ClaudeCodeService) CompactSession(sessionKey string) error {
-	slog.Info("CompactSession: no-op (claudecode auto-compacts)", "component", "claudecode", "session", sessionKey)
-	return nil
+	slog.Info("CompactSession: not supported (claudecode auto-compacts)", "component", "claudecode", "session", sessionKey)
+	return domain.ErrNotSupportedByRuntime
 }
 
 // ShouldRotateSession — never rotate: Claude Code manages its own context window
