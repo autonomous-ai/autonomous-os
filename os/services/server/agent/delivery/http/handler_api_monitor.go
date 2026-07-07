@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"go.autonomous.ai/os/domain"
+	"go.autonomous.ai/os/internal/codex"
 	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/internal/hermes"
 	"go.autonomous.ai/os/internal/openclaw"
@@ -51,6 +52,15 @@ func GetPicoclawVersion() string {
 // populatePicoclawVersion populates the shared picoclaw version cache at startup.
 func populatePicoclawVersion() {
 	picoclaw.PopulatePicoclawVersion()
+}
+
+func GetCodexVersion() string {
+	return codex.GetCodexVersion()
+}
+
+// populateCodexVersion populates the shared codex version cache at startup.
+func populateCodexVersion() {
+	codex.PopulateCodexVersion()
 }
 
 // StopTTS interrupts active TTS playback on HAL.

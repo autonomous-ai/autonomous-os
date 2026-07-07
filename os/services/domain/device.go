@@ -334,12 +334,14 @@ const (
 	KindPicoclawSetup = "picoclaw.setup"
 	KindOpenclawSetup = "openclaw.setup"
 
-	// AgentRuntimeOpenClaw / AgentRuntimeHermes / AgentRuntimePicoclaw are the
-	// swappable agentic backends. Source of truth mirrored by
-	// internal/agent/factory.go's resolver and /usr/local/bin/switch-runtime.
+	// AgentRuntimeOpenClaw / AgentRuntimeHermes / AgentRuntimePicoclaw /
+	// AgentRuntimeCodex are the swappable agentic backends. Source of truth
+	// mirrored by internal/agent/factory.go's resolver and
+	// /usr/local/bin/switch-runtime.
 	AgentRuntimeOpenClaw = "openclaw"
 	AgentRuntimeHermes   = "hermes"
 	AgentRuntimePicoclaw = "picoclaw"
+	AgentRuntimeCodex    = "codex"
 
 	KindSystemInfo    = "system.info"    // aggregate: versions + network + host
 	KindSystemVersion = "system.version" // lamp + bootstrap + hal + openclaw versions
@@ -853,7 +855,7 @@ type AgentRuntimeSetData struct {
 
 // AgentRuntimes is the valid set, surfaced to the web settings dropdown via
 // GET /api/device/agent-runtime so the UI never hardcodes the list.
-var AgentRuntimes = []string{AgentRuntimeOpenClaw, AgentRuntimeHermes, AgentRuntimePicoclaw}
+var AgentRuntimes = []string{AgentRuntimeOpenClaw, AgentRuntimeHermes, AgentRuntimePicoclaw, AgentRuntimeCodex}
 
 // IsValidAgentRuntime reports whether r is a switchable backend (case-insensitive,
 // trimmed). Used to validate hermes.setup / picoclaw.setup and the HTTP runtime
