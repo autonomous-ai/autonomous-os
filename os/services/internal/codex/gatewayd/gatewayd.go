@@ -40,7 +40,7 @@ const (
 	scanBufSize   = 1024 * 1024     // initial bufio.Scanner buffer
 	stderrTailMax = 4000            // bounded stderr tail kept for diagnostics
 	attachMaxAge  = time.Hour       // best-effort cleanup of old attachments
-	turnQueueCap  = 32              // pending message.send frames
+	turnQueueCap  = 32              // pending worker ops (message.send / session.new)
 )
 
 // resumeErrHints are case-insensitive substrings in stderr/stdout meaning the

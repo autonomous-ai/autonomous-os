@@ -96,6 +96,8 @@ fi
 # systemd unit — the gatewayd drives `codex exec` per turn so switch-runtime
 # can enable/disable/verify it like any other backend. Unit name == runtime
 # name (codex.service), so no service-name declaration file is needed.
+# MUST stay in sync with internal/codex/gateway_unit.go codexUnitContent
+# (EnsureOnboarding self-heals the same unit on a hand-switched device).
 echo "[install-codex] write systemd unit codex.service"
 cat >/etc/systemd/system/codex.service <<UNIT
 [Unit]

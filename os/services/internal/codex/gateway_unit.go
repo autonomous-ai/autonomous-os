@@ -7,12 +7,13 @@ import (
 	"strings"
 )
 
-// Systemd self-heal for the codex bridge unit. A device that reached
+// Systemd self-heal for the codex gatewayd unit. A device that reached
 // codex WITHOUT switch-runtime (e.g. a hand-edited config.json
 // agent_runtime=codex) has no unit, so IsReady()'s WS connect — and the
 // setup WaitForAgentReady gate — would fail forever. EnsureOnboarding installs
-// it on demand (the bridge itself is presync-materialized, so unit + bridge is
-// all a hand-switched device needs). Mirrors hermes.ensureGatewayUnit.
+// it on demand (the gatewayd ships inside the os-server binary and presync
+// materializes config.toml/.env, so unit + presync is all a hand-switched
+// device needs). Mirrors hermes.ensureGatewayUnit.
 
 const codexUnitName = "codex"
 const codexUnitPath = "/etc/systemd/system/codex.service"
@@ -20,7 +21,7 @@ const codexUnitPath = "/etc/systemd/system/codex.service"
 // codexUnitContent MUST stay in sync with the unit install.sh writes —
 // two writers, one contract (cross-referenced in install.sh).
 const codexUnitContent = `[Unit]
-Description=Codex agent bridge
+Description=Codex agent gateway (os-server codex-gatewayd driving ` + "`codex exec`" + ` per turn)
 After=network-online.target
 Wants=network-online.target
 
@@ -28,8 +29,9 @@ Wants=network-online.target
 Type=simple
 User=root
 Environment=HOME=/root
+EnvironmentFile=-/root/.codex/.env
 WorkingDirectory=/root/.codex
-ExecStart=/usr/bin/python3 /root/.codex/bridge.py
+ExecStart=/usr/local/bin/os-server codex-gatewayd
 Restart=always
 RestartSec=3
 
@@ -72,7 +74,7 @@ func gatewayActive() bool {
 	return exec.Command("systemctl", "is-active", "--quiet", codexUnitName).Run() == nil
 }
 
-// enableCodexGateway re-enables the unit so the bridge survives a reboot —
+// enableCodexGateway re-enables the unit so the gatewayd survives a reboot —
 // factory reset disables it, and a freshly self-healed unit is not enabled.
 // Best-effort.
 func enableCodexGateway() {
