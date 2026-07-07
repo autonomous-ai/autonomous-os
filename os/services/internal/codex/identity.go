@@ -13,7 +13,7 @@ import (
 	"go.autonomous.ai/os/lib/i18n"
 )
 
-// Codex's IDENTITY.md is copied 1-for-1 from OpenClaw (presync.sh §0 carries it
+// Codex's IDENTITY.md is copied 1-for-1 from OpenClaw (presync.sh §1 carries it
 // over on migrate; the format is identical — a `- **Name:** <value>` card line), so
 // the identity handling here mirrors internal/openclaw/service_identity.go exactly.
 // Only the watched path (Codex's workspace) and the log component differ. Wake

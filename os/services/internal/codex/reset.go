@@ -12,10 +12,9 @@ import (
 
 // Paths + unit set up by install.sh (see install.sh).
 const (
-	codexDataDir       = "/root/.codex" // data dir (HOME=/root)
-	codexBin           = "/usr/local/bin/codex"
-	codexUnit          = "codex" // systemd unit name
-	picoStopVerifyTimeout = 5 * time.Second
+	codexDataDir           = "/root/.codex" // data dir (HOME=/root)
+	codexUnit              = "codex"        // systemd unit name
+	codexStopVerifyTimeout = 5 * time.Second
 )
 
 // ResetAgent is the Codex factory-reset wipe, called on the active gateway by
@@ -36,10 +35,10 @@ func wipeCodexState() {
 	if out, err := exec.Command("systemctl", "stop", codexUnit).CombinedOutput(); err != nil {
 		log.Printf("[factory-reset/codex] step 1/4 — stop error: %v — %s", err, strings.TrimSpace(string(out)))
 	}
-	if waitForCodexStop(codexUnit, picoStopVerifyTimeout) {
+	if waitForCodexStop(codexUnit, codexStopVerifyTimeout) {
 		log.Printf("[factory-reset/codex] step 1/4 — confirmed inactive")
 	} else {
-		log.Printf("[factory-reset/codex] step 1/4 — WARNING still active after %s", picoStopVerifyTimeout)
+		log.Printf("[factory-reset/codex] step 1/4 — WARNING still active after %s", codexStopVerifyTimeout)
 	}
 
 	// 2. Disable — reboot defaults to openclaw; switch-runtime re-enables on switch back.
@@ -48,7 +47,9 @@ func wipeCodexState() {
 		log.Printf("[factory-reset/codex] step 2/4 — disable error: %v — %s", err, strings.TrimSpace(string(out)))
 	}
 
-	// 3. Wipe everything: config, .security.yml, workspace, sessions, migrate marker.
+	// 3. Wipe everything under /root/.codex: config.toml, .env (gatewayd bridge
+	//    env), auth.json (CLI auth), sessions/, workspace/, attachments/,
+	//    install.log and the .openclaw-migrated marker.
 	log.Printf("[factory-reset/codex] step 3/4 — wiping %s", codexDataDir)
 	osreset.WipePath("[factory-reset/codex]", codexDataDir)
 
@@ -61,20 +62,6 @@ func wipeCodexState() {
 			log.Printf("[factory-reset/codex] step 4/4 — mkdir %s error: %v (non-fatal)", d, err)
 		}
 	}
-}
-
-// envWithoutHome returns the environment with HOME dropped, so the caller's appended
-// HOME is the single effective value (getenv returns the first match).
-func envWithoutHome() []string {
-	env := os.Environ()
-	out := env[:0]
-	for _, kv := range env {
-		if strings.HasPrefix(kv, "HOME=") {
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
 }
 
 // waitForCodexStop polls is-active until the unit is inactive or timeout elapses.

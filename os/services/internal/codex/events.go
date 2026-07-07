@@ -24,7 +24,7 @@ type pendingEvent struct {
 
 const busyTTL = 5 * time.Minute
 
-// IsBusy mirrors openclaw.CodexService.IsBusy: true while a turn is in flight OR a
+// IsBusy mirrors openclaw's OpenclawService.IsBusy: true while a turn is in flight OR a
 // chat.send is still waiting for its first inbound frame. Auto-clears after
 // busyTTL if the final frame got dropped so the sensing pipeline cannot wedge.
 func (s *CodexService) IsBusy() bool {

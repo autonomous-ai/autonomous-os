@@ -56,10 +56,12 @@ case "$(uname -m)" in
   *) echo "[install-codex] ERROR: unsupported arch $(uname -m) for codex"; exit 1 ;;
 esac
 # Idempotency: skip the download when the pinned version is already installed.
-# `codex --version` prints like "codex-cli 0.142.5" — compare against the tag
-# minus its "rust-v" prefix (tolerant substring match).
+# `codex --version` prints like "codex-cli 0.142.5" — compare the second token
+# EXACTLY against the tag minus its "rust-v" prefix. A substring grep would let
+# 0.142.5 match an installed 0.142.50; the token compare stays tolerant of any
+# trailing text after the version.
 WANT_VERSION="${CODEX_VERSION#rust-v}"
-if command -v codex >/dev/null 2>&1 && codex --version 2>/dev/null | grep -qF "$WANT_VERSION"; then
+if command -v codex >/dev/null 2>&1 && [ "$(codex --version 2>/dev/null | awk '{print $2}')" = "$WANT_VERSION" ]; then
   echo "[install-codex] codex ${WANT_VERSION} already installed — skipping download"
 else
   CODEX_URL="https://github.com/${CODEX_REPO}/releases/download/${CODEX_VERSION}/${CODEX_ASSET}"

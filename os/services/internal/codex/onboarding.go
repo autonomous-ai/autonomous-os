@@ -13,10 +13,11 @@ import (
 
 	"go.autonomous.ai/os/domain"
 	"go.autonomous.ai/os/internal/device"
+	"go.autonomous.ai/os/internal/skills"
 )
 
 // knowledgeFS holds the KNOWLEDGE.md skeleton, embedded so a fresh codex-only
-// device (one that never ran openclaw, so presync.sh §0 had nothing to copy) still
+// device (one that never ran openclaw, so presync.sh §1 had nothing to copy) still
 // gets the living-learnings doc the AGENTS.md block tells the agent to read.
 // Identical template to internal/openclaw/resources/KNOWLEDGE.md.
 //
@@ -26,16 +27,18 @@ var knowledgeFS embed.FS
 // Onboarding (Codex). Mirrors internal/openclaw/onboarding.go, but trimmed to
 // what Codex actually owns on-device:
 //
-//   - The Codex runtime is installed + provisioned out-of-process by
-//     internal/codex/install.sh + presync.sh (binary, `codex onboard`,
-//     `codex migrate`, model/channel config). Those run during the
-//     switch-runtime flow, NOT here.
+//   - The Codex CLI binary + systemd unit are installed out-of-process by
+//     internal/codex/install.sh; presync.sh migrates the workspace files
+//     (persona/memory/skills) from openclaw once (§1) and owns config.toml/.env
+//     (§2/§3). Those run during the switch-runtime flow (and presync again from
+//     EnsureOnboarding below), NOT here.
 //   - This file owns the OS-managed blocks in the workspace markdown — AGENTS.md
 //     (prompt rules), SOUL.md (per-device-type persona), HEARTBEAT.md (daily
 //     knowledge-synthesis) — plus the KNOWLEDGE.md seed, the same contract openclaw
-//     has, so a plain os-server OTA keeps them current. Codex reads AGENTS.md on
-//     the legacy path (presync deletes AGENT.md so that path is active and
-//     IDENTITY.md is read). When any block changes, the gateway is restarted.
+//     has, so a plain os-server OTA keeps them current. Codex natively reads
+//     AGENTS.md in the exec cwd: the gatewayd runs `codex exec --cd <workspace>`
+//     per turn, so markdown-only changes take effect on the next turn WITHOUT a
+//     gateway restart (only presync config/.env changes and unit self-heal restart).
 //
 // The block is OpenClaw-derived but stripped of OpenClaw-only bits (the
 // hooks/handler.ts paragraph and `openclaw --version`); everything else is
@@ -100,9 +103,10 @@ func (s *CodexService) SetupAgent(_ domain.SetupRequest) error {
 
 // EnsureOnboarding reconciles the device-side Codex workspace on boot/config-change
 // (server/config_watch.go, same path openclaw/hermes use): seed KNOWLEDGE.md if
-// absent, capability-gate skills, refresh the OS-managed SOUL/AGENTS/HEARTBEAT blocks,
-// and restart the gateway if any block changed. Runtime install + model/channel config
-// are owned by install.sh/presync.sh (see file header).
+// absent, capability-gate skills, and refresh the OS-managed SOUL/AGENTS/HEARTBEAT
+// blocks. The gateway is restarted only when presync changed config.toml/.env or the
+// unit needed self-heal — markdown changes are picked up per-turn by `codex exec`.
+// CLI install + config.toml/.env are owned by install.sh/presync.sh (see file header).
 func (s *CodexService) EnsureOnboarding() error {
 	// Re-sync config.toml/.env from config.json by running the embedded presync
 	// hook (hermes pattern): hash the presync-owned files around the run so the
@@ -124,38 +128,31 @@ func (s *CodexService) EnsureOnboarding() error {
 		filepath.Join(codexWorkspaceDir, "KNOWLEDGE.md"))
 
 	// Capability-gate skills: drop platform skills this device can't use (e.g.
-	// servo-control on a motionless device), keeping codex's built-ins. Skill dirs
-	// are read per-turn from disk, so no gateway reload is needed.
+	// servo-control on a motionless device). Skill dirs are read per-turn from
+	// disk, so no gateway reload is needed.
 	s.pruneUnsupportedSkills()
+
+	// OS-managed markdown blocks. Refreshing them never requires a gateway
+	// restart: the gatewayd spawns a fresh `codex exec --cd <workspace>` per
+	// turn, which re-reads AGENTS.md (and, via its instructions, SOUL.md /
+	// HEARTBEAT.md / KNOWLEDGE.md) from disk — the next turn sees the new blocks.
+	if _, err := s.ensureSoulMDBlock(); err != nil {
+		slog.Error("ensure SOUL.md block failed", "component", "codex-onboarding", "error", err)
+	}
+	if _, err := s.ensureAgentsMDBlock(); err != nil {
+		slog.Error("ensure AGENTS.md block failed", "component", "codex-onboarding", "error", err)
+	}
+	if _, err := s.ensureHeartbeatMDBlock(); err != nil {
+		slog.Error("ensure HEARTBEAT.md block failed", "component", "codex-onboarding", "error", err)
+	}
 
 	needRestart := false
 
-	// SOUL.md per-device-type core block (owner-editable content stays below it).
-	if modified, err := s.ensureSoulMDBlock(); err != nil {
-		slog.Error("ensure SOUL.md block failed", "component", "codex-onboarding", "error", err)
-	} else if modified {
-		needRestart = true
-	}
-
-	// AGENTS.md mandatory block (skills/memory/priority prompt rules).
-	if modified, err := s.ensureAgentsMDBlock(); err != nil {
-		slog.Error("ensure AGENTS.md block failed", "component", "codex-onboarding", "error", err)
-	} else if modified {
-		needRestart = true
-	}
-
-	// HEARTBEAT.md knowledge-synthesis block.
-	if modified, err := s.ensureHeartbeatMDBlock(); err != nil {
-		slog.Error("ensure HEARTBEAT.md block failed", "component", "codex-onboarding", "error", err)
-	} else if modified {
-		needRestart = true
-	}
-
-	// Presync rewrote config.toml/.env → the gatewayd env (WS token/port) and
-	// the CLI provider config are stale in the running unit; fold into the same
-	// restart decision. Workspace prompt files are read per-turn by codex exec,
-	// but the AGENTS/SOUL blocks also ride the restart for consistency with the
-	// sibling backends.
+	// Presync rewrote config.toml/.env → the running unit is stale: .env is a
+	// systemd EnvironmentFile (WS token/port, OPENAI_API_KEY) loaded only at
+	// unit start, so a restart is required for it to take effect. (config.toml
+	// alone is re-read by each `codex exec`, but both files hash into the same
+	// change signal.)
 	if presyncChanged {
 		slog.Info("codex presync changed config.toml/.env", "component", "codex-onboarding")
 		needRestart = true
@@ -177,10 +174,11 @@ func (s *CodexService) EnsureOnboarding() error {
 		needRestart = true
 	}
 
-	// Restart the gateway so it re-reads the changed workspace prompt files
-	// (systemctl restart — see service_gateway.go for why not /reload).
+	// Restart the gateway so the unit reloads .env (and a freshly healed unit
+	// actually starts). systemctl restart — see service_gateway.go for why not
+	// a reload.
 	if needRestart {
-		slog.Info("restarting codex gateway to pick up workspace changes", "component", "codex-onboarding")
+		slog.Info("restarting codex gateway (presync config change or unit self-heal)", "component", "codex-onboarding")
 		// Re-enable so codex survives a reboot — factory reset disabled the
 		// unit, and a freshly self-healed one is not enabled. Best-effort;
 		// restart still starts it for this session even if enable fails.
@@ -190,10 +188,11 @@ func (s *CodexService) EnsureOnboarding() error {
 		}
 	}
 
-	// TODO(codex-onboarding-parity): openclaw additionally pins messages.queue.mode
-	// (codex has its own steering_mode — verify before mirroring). (openclaw.json-
-	// specific steps — hooks/logging/controlUi — are N/A for codex's config.json;
-	// skill capability-gating is done above via pruneUnsupportedSkills.)
+	// (openclaw additionally pins messages.queue.mode — N/A for codex: the
+	// gatewayd strictly serializes turns through one `codex exec` at a time, so
+	// there is no queue mode to pin. openclaw.json-specific steps —
+	// hooks/logging/controlUi — are likewise N/A; skill capability-gating is
+	// done above via pruneUnsupportedSkills.)
 	return nil
 }
 
@@ -204,9 +203,10 @@ func (s *CodexService) ensureAgentsMDBlock() (bool, error) {
 
 	if _, err := os.Stat(agentsFile); os.IsNotExist(err) {
 		// TODO(codex-agents-template): openclaw regenerates a base AGENTS.md via
-		// `openclaw setup` when it is missing. Codex's AGENTS.md comes from
-		// `codex migrate` (presync.sh §0) instead, and there is no equivalent
-		// regenerate command, so skip injection rather than write to an empty file.
+		// `openclaw setup` when it is missing. Codex's AGENTS.md comes from the
+		// one-time openclaw workspace migration (presync.sh §1) instead — a
+		// codex-only device has none, and the CLI has no regenerate command, so
+		// skip injection rather than write the block into an empty file.
 		slog.Warn("AGENTS.md missing — skipping block injection (no codex regenerate)",
 			"component", "codex-onboarding", "path", agentsFile)
 		return false, nil
@@ -400,29 +400,14 @@ func (s *CodexService) ensureHeartbeatMDBlock() (bool, error) {
 	return true, nil
 }
 
-// codexBuiltinSkills are Codex's own bundled skills (created by `codex
-// onboard`). They have no platform capability mapping in skills.Capability, are
-// lightweight + generally useful, so they are ALWAYS kept regardless of device
-// capabilities. Only the capability-gated platform skills (the migrated openclaw
-// catalog) are pruned. Keep in sync with what `codex onboard` ships.
-var codexBuiltinSkills = map[string]bool{
-	"agent-browser": true,
-	"github":        true,
-	"hardware":      true,
-	"skill-creator": true,
-	"summarize":     true,
-	"tmux":          true,
-	"weather":       true,
-}
-
-// pruneUnsupportedSkills removes skill dirs the device can't use. A skill survives
-// when it is EITHER (a) supported by this device's capabilities (skills.Supported —
-// the same gate openclaw uses) OR (b) a codex built-in (codexBuiltinSkills).
-// Everything else under workspace/skills is removed. Fail-open: when DEVICE.md
-// declares no capabilities, skills.Supported returns the full catalog, so nothing
-// capability-gated is pruned. Mirrors openclaw's onboarding prune, but iterates the
-// on-disk dirs (codex has extra built-ins outside skills.Catalog) instead of the
-// catalog.
+// pruneUnsupportedSkills removes platform-catalog skill dirs the device can't use
+// (skills.Supported — the same capability gate openclaw uses). Codex ships NO
+// built-in skills (the CLI has no onboarding step that seeds any): workspace/skills
+// comes solely from the openclaw migration (presync.sh §1) plus the CDN skill
+// watcher, so only skills.Catalog names are OS-owned — unknown dirs (e.g.
+// user-created skills) are left alone, matching openclaw's prune semantics.
+// Fail-open: when DEVICE.md declares no capabilities, skills.Supported returns
+// the full catalog, so nothing is pruned.
 func (s *CodexService) pruneUnsupportedSkills() {
 	skillsDir := filepath.Join(codexWorkspaceDir, "skills")
 	entries, err := os.ReadDir(skillsDir)
@@ -436,19 +421,23 @@ func (s *CodexService) pruneUnsupportedSkills() {
 	for _, n := range s.supportedSkills() {
 		keep[n] = true
 	}
+	catalog := map[string]bool{}
+	for _, n := range skills.Catalog {
+		catalog[n] = true
+	}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
 		name := e.Name()
-		if keep[name] || codexBuiltinSkills[name] {
+		if !catalog[name] || keep[name] {
 			continue
 		}
 		if err := os.RemoveAll(filepath.Join(skillsDir, name)); err != nil {
 			slog.Warn("prune unsupported skill failed", "component", "codex-onboarding", "skill", name, "error", err)
 			continue
 		}
-		slog.Info("pruned unsupported skill (capability/built-in gate)", "component", "codex-onboarding", "skill", name)
+		slog.Info("pruned unsupported skill (capability gate)", "component", "codex-onboarding", "skill", name)
 	}
 }
 
