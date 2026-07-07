@@ -22,6 +22,31 @@ var (
 	reWhitespace = regexp.MustCompile(`\s+`)
 )
 
+// stripForChannel regexes — package-level, compiled once (ported from
+// internal/codex/hal.go).
+var (
+	// reHWMarker mirrors hwMarkerRe in server/agent/delivery/http/handler_hw.go
+	// (the downstream consumer that fires + strips [HW:/...] markers on the TTS
+	// path). The Slack reply routing in emitFinal reads the RAW final text
+	// (it bypasses that pipeline), so the same markers must be stripped here.
+	// Keep the two patterns in sync.
+	reHWMarker = regexp.MustCompile(`\[HW:((?:/[^{:\]]+(?::[^{:\]]+)*))(?::(\{[^}]*\}))?\]`)
+	// reAudioTag mirrors HAL's _strip_audio_tags whitelist
+	// (os/hal/drivers/voice/tts/openai.py): ElevenLabs-style delivery tags like
+	// [laugh] / [sigh] are TTS styling and meaningless in a chat bubble.
+	reAudioTag = regexp.MustCompile(`(?i)\[(?:laugh|sigh|whisper|gasp|gulp|nervous|excited|frustrated|sorrowful|calm)[^\]]*\]`)
+)
+
+// stripForChannel removes [HW:/...] hardware markers and TTS audio-style tags
+// so a channel reply (Slack post, see translator.go emitFinal) shows only the
+// conversational text. Unlike stripForTTS it keeps markdown and emoji — chat
+// clients render them fine.
+func stripForChannel(text string) string {
+	text = reHWMarker.ReplaceAllString(text, "")
+	text = reAudioTag.ReplaceAllString(text, "")
+	return strings.TrimSpace(text)
+}
+
 // StartHALVoice starts the HAL voice pipeline. Backend-agnostic — only talks to
 // the HAL daemon on the Pi.
 func (s *ClaudeCodeService) StartHALVoice(deepgramKey, llmKey, sttKey, ttsKey, llmBaseURL, sttBaseURL, ttsBaseURL, ttsVoice, ttsInstructions, ttsProvider string) error {
