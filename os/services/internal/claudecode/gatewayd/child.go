@@ -74,6 +74,9 @@ func (s *Server) childLoop(ctx context.Context) {
 			continue
 		}
 
+		// Publish the child and flush the pending queue under stdinMu so no
+		// message.send line can jump ahead of the queued ones.
+		s.stdinMu.Lock()
 		s.mu.Lock()
 		s.child = cmd
 		s.stdin = stdin
@@ -82,10 +85,11 @@ func (s *Server) childLoop(ctx context.Context) {
 		s.resumeNext = true
 		pending := s.pending
 		s.pending = nil
-		for _, line := range pending {
-			s.writeStdinLocked(line)
-		}
 		s.mu.Unlock()
+		for _, line := range pending {
+			s.writePipe(stdin, line)
+		}
+		s.stdinMu.Unlock()
 		s.sendStatus(nil)
 
 		res := &runResult{}
@@ -228,22 +232,42 @@ func (s *Server) sendUserMessage(payload turnPayload) {
 	}
 	s.mu.Lock()
 	s.inflight++
-	s.writeStdinLocked(line)
 	s.mu.Unlock()
+	s.writeStdin(line)
 }
 
-// writeStdinLocked writes one JSONL line to the child stdin; while the child
-// is down (or on a write error) the line goes to the pending queue instead.
-// Caller holds s.mu.
-func (s *Server) writeStdinLocked(line []byte) {
-	if s.stdin == nil {
-		s.pending = append(s.pending, line)
+// writeStdin writes one JSONL line to the child stdin; while the child is
+// down (or on a write error) the line goes to the pending queue instead,
+// flushed on the next spawn. The blocking pipe write happens under stdinMu
+// only — never under mu (see the lock-order note on Server).
+func (s *Server) writeStdin(line []byte) {
+	s.stdinMu.Lock()
+	defer s.stdinMu.Unlock()
+	s.mu.Lock()
+	w := s.stdin
+	s.mu.Unlock()
+	if w == nil {
+		s.queuePending(line)
 		return
 	}
-	if _, err := s.stdin.Write(append(line, '\n')); err != nil {
+	s.writePipe(w, line)
+}
+
+// writePipe performs the actual pipe write (caller holds stdinMu); a failed
+// write re-queues the line for the next spawn.
+func (s *Server) writePipe(w io.Writer, line []byte) {
+	buf := make([]byte, 0, len(line)+1)
+	buf = append(append(buf, line...), '\n')
+	if _, err := w.Write(buf); err != nil {
 		log.Printf("%s stdin write failed: %v", logPrefix, err)
-		s.pending = append(s.pending, line)
+		s.queuePending(line)
 	}
+}
+
+func (s *Server) queuePending(line []byte) {
+	s.mu.Lock()
+	s.pending = append(s.pending, line)
+	s.mu.Unlock()
 }
 
 // newSession clears the session id, disables resume for the NEXT spawn only,

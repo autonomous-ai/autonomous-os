@@ -98,10 +98,16 @@ type Server struct {
 	cfg Config
 	ln  net.Listener
 
-	mu         sync.Mutex // guards everything below
-	client     *wsClient  // single client; a new connection replaces the old
-	sessionID  string     // current claude session id ("" = none yet)
-	resumeNext bool       // pass --resume on the next spawn (cleared by session.new)
+	// stdinMu serializes writes to the child stdin pipe (pending flush on
+	// spawn + message.send lines). It is held ACROSS blocking pipe writes, so
+	// it must never be acquired while holding mu (lock order: stdinMu -> mu) —
+	// a full pipe would otherwise stall the stdout pump, which needs mu.
+	stdinMu sync.Mutex
+
+	mu         sync.Mutex     // guards everything below (never held across pipe writes)
+	client     *wsClient      // single client; a new connection replaces the old
+	sessionID  string         // current claude session id ("" = none yet)
+	resumeNext bool           // pass --resume on the next spawn (cleared by session.new)
 	child      *exec.Cmd      // running claude child (nil while down)
 	stdin      io.WriteCloser // child stdin pipe (nil while down)
 	pending    [][]byte       // stdin lines queued while the child is down
