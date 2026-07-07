@@ -102,10 +102,22 @@ stub convention). This file is the running history for whoever picks the task up
       until the backend adds an OpenAI Responses API passthrough. Interim options:
       point llm_base_url at api.openai.com (OpenAI key) to device-verify the pipeline,
       or wait for phase-2 ChatGPT-subscription auth (bypasses campaign-api entirely).
-- [ ] Device verify (switch flow, first turn, resume, rotation, MCP write) — blocked on
-      the /responses backend work above (or the interim OpenAI-direct fallback)
-- [ ] Phase 2: ChatGPT-subscription auth (`codex login --device-auth`) — deferred until the
-      claudecode branch's login pairer merges (generalize domain.ClaudeLoginPairer, share MQTT flow)
+- [x] DEVICE-VERIFIED 2026-07-07 on lamp-ac82: codex CLI installed manually, subscription
+      auth.json copied from operator Mac → **FIRST REAL TURN OK** (thread.started /
+      agent_message / turn.completed, usage fields verbatim as the translator expects) and
+      **RESUME OK** on the same thread with memory of the prior turn (validates the
+      --cd-before-resume fix on hardware). campaign-api /responses still 404 (api-key mode
+      remains blocked on backend).
+- [x] presync subscription-mode gate: auth.json present → config.toml head WITHOUT
+      model/model_provider/[model_providers.autonomous] (built-in provider) + OPENAI_API_KEY
+      omitted from .env (key outranks/conflicts with ChatGPT auth); absent → api-key mode
+      unchanged. Delete auth.json to fall back; presync re-runs every boot so the flip is
+      automatic.
+- [ ] Device verify remainder (switch flow, rotation, MCP write) — first turn + resume done
+      via subscription mode; api-key path still blocked on the /responses backend work above
+- [ ] Phase 2: ChatGPT-subscription auth **pairing flow** (`codex login --device-auth` UX) —
+      manual auth.json path works today (see gate above); deferred until the claudecode
+      branch's login pairer merges (generalize domain.ClaudeLoginPairer, share MQTT flow)
 
 ## Gotchas discovered
 
