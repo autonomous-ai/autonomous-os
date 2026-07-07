@@ -11,8 +11,9 @@ import (
 )
 
 // AddChannel + RefreshChannelConfig + SupportedChannels live in channels.go —
-// Claude Code runs telegram natively via its channels plugin (the token/allowlist
-// sync is presync-owned); slack/discord/whatsapp return domain.ErrChannelNotSupported.
+// Claude Code runs telegram + discord natively via its channel plugins (the
+// token/allowlist sync is presync-owned); slack/whatsapp return
+// domain.ErrChannelNotSupported.
 
 func (s *ClaudeCodeService) HasWhatsappSession(_ string) bool { return false }
 

@@ -20,6 +20,8 @@ import (
 // slack is NOT listed: Claude Code has no slack channel plugin — "Claude in
 // Slack" is a separate cloud feature that spawns web sessions from @Claude
 // mentions, not a device channel. whatsapp is OpenClaw-only (Baileys plugin).
+// TODO(claudecode-slack): mirror internal/codex/slack.go (SlackBridge over the
+// bff-proxy → MQTT slack_event path) when slack support is needed.
 func (s *ClaudeCodeService) SupportedChannels() []string {
 	return []string{domain.ChannelTelegram, domain.ChannelDiscord}
 }

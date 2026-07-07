@@ -681,9 +681,10 @@ REALTIME_QWEN_SAMPLE_RATE: int = 16000
 # --- Realtime: Context manager ---
 OPENCLAW_WORKSPACE_DIR: str = os.environ.get("HAL_OPENCLAW_WORKSPACE_DIR", "/root/.openclaw/workspace")
 HERMES_WORKSPACE_DIR: str = os.environ.get("HAL_HERMES_WORKSPACE_DIR", "/root/.hermes")
-# PicoClaw/Codex workspaces mirror OpenClaw's layout (see orchestrator.py maps).
+# PicoClaw/Codex/Claude Code workspaces mirror OpenClaw's layout (see orchestrator.py maps).
 PICOCLAW_WORKSPACE_DIR: str = os.environ.get("HAL_PICOCLAW_WORKSPACE_DIR", "/root/.picoclaw/workspace")
 CODEX_WORKSPACE_DIR: str = os.environ.get("HAL_CODEX_WORKSPACE_DIR", "/root/.codex/workspace")
+CLAUDECODE_WORKSPACE_DIR: str = os.environ.get("HAL_CLAUDECODE_WORKSPACE_DIR", "/root/.claudecode/workspace")
 
 # Camera snapshot dir. MUST sit under the ACTIVE agent runtime's media root — the
 # agent's image tool only reads files under its allow-list, else it returns "not
@@ -696,6 +697,7 @@ _AGENT_CONFIG_DIRS: dict[str, str] = {
     "hermes": "/root/.hermes",
     "picoclaw": "/root/.picoclaw",
     "codex": "/root/.codex",
+    "claudecode": "/root/.claudecode",
 }
 SNAPSHOT_DIR: str = os.environ.get("HAL_SNAPSHOT_DIR") or (
     _AGENT_CONFIG_DIRS.get(AGENT_GATEWAY, _AGENT_CONFIG_DIRS["openclaw"])

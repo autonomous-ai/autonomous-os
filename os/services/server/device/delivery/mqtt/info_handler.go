@@ -15,10 +15,12 @@ func (h *DeviceMQTTHandler) handleInfo(_ domain.MQTTMessage) error {
 		msg.HalVersion = v
 	}
 	msg.OpenClawVersion = agenthttp.GetOpenClawVersion()
-	// hermes_version / codex_version sit next to openclaw_version (all probed at
-	// startup); the active one is named by agent_runtime.
+	// hermes_version / codex_version / claudecode_version sit next to
+	// openclaw_version (all probed at startup); the active one is named by
+	// agent_runtime.
 	msg.HermesVersion = agenthttp.GetHermesVersion()
 	msg.CodexVersion = agenthttp.GetCodexVersion()
+	msg.ClaudeCodeVersion = agenthttp.GetClaudeCodeVersion()
 	msg.AgentRuntime = device.CurrentAgentRuntimeFromConfig(h.config)
 	// Channels configured here that the active runtime can't run (set by
 	// ChannelReconcile after a runtime switch, e.g. slack after switching to picoclaw).
@@ -36,6 +38,7 @@ func (h *DeviceMQTTHandler) handleInfo(_ domain.MQTTMessage) error {
 		"openclaw_version", msg.OpenClawVersion,
 		"hermes_version", msg.HermesVersion,
 		"codex_version", msg.CodexVersion,
+		"claudecode_version", msg.ClaudeCodeVersion,
 		"agent_runtime", msg.AgentRuntime,
 		"local_ip", msg.LocalIP,
 		"tts_provider", msg.TTSProvider,
