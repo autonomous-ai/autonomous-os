@@ -279,6 +279,70 @@ those channels become unsupported under PicoClaw. After the switch
 field (`domain.MQTTInfoResponse`), and their creds **stay in `config.json`** —
 switching back to openclaw restores them.
 
+## 7.1 Channel turns in Flow Monitor (observer hook)
+
+A Telegram turn is handled entirely inside the PicoClaw gateway (it owns the
+channel I/O) and never crosses the WebSocket, so — exactly like Hermes — os-server
+would be blind to it. Parity is restored with an **observer hook**, the direct
+analogue of the Hermes `os-server-observer` hook: os-server ships a small
+subprocess that the gateway runs on its shared agent pipeline, and that subprocess
+forwards each turn to the loopback `POST /api/agent/channel-turn` endpoint the
+shared `ChannelTurn` handler already serves (`handler_channel_turn.go`). No
+consumer/UI change — the inbound user text lights up the IN node, and any
+`[HW:/…]` markers in the reply drive the local hardware, same as Hermes.
+
+Two things differ from Hermes and are owned by `internal/picoclaw/hooks.go`:
+
+1. **Transport.** PicoClaw process hooks are a **subprocess speaking NDJSON
+   JSON-RPC over stdio** (`resources/hooks/os-server-observer/observer.py`), not an
+   in-process Python `handle()` discovered by directory scan. PicoClaw sends the
+   subprocess (verified on-device, picoclaw 0.2.9):
+   - `hook.hello` — a REQUEST (has JSON-RPC `id`); the script replies
+     `{"action":"continue"}`. Any request (has `id`) is answered immediately so the
+     turn is never blocked.
+   - `hook.runtime_event` — a NOTIFICATION whose `params` is the event envelope
+     `{kind, scope{channel,chat_id,sender_id,session_key,turn_id}, payload}`. The
+     script acts on two kinds and ignores the rest (`agent.tool.*`, `agent.llm.*`):
+     - `agent.turn.start` → `agent:start`, message = **`payload.UserMessage`**.
+     - `agent.turn.end`   → `agent:end`, response = **`payload.FinalContent`** (the
+       reply, WITH any `[HW:/…]` markers — `agent.turn.end` carries both the user
+       message and the final reply, so **observe alone suffices; no intercept**).
+   - filters on `scope.channel` (allow-list `telegram`) AND drops internal senders
+     (`sender_id == heartbeat`) — device-local `pico` turns are already logged by
+     `sendChat`; the analogue of the Hermes hook's `skipPlatform(api_server/cli)`.
+   - maps `scope` → the `ChannelTurn` payload (`platform=channel`, `chat_id`,
+     `sender_id`→`user_id`, `session_key`→`session_id`). PicoClaw pairs the two
+     forwards into one Flow turn by `session_key`.
+   - the POST fires on a daemon thread (audit log stays synchronous) so a slow
+     os-server never stalls the next event (`observer_timeout_ms` is 500ms).
+   - `OBSERVER_DEBUG=1` dumps every raw stdin line to stderr (surfaced in the
+     gateway log as `Process hook stderr hook=os-server-observer`) — used to verify
+     the field names above.
+
+2. **Registration.** PicoClaw does **not** scan a hooks dir; a hook is registered
+   by a `config.json` entry under `hooks.processes.<name>`, gated by BOTH the global
+   `hooks.enabled` AND the **per-process `enabled`** (both default false — same shape
+   as the `tools.mcp` global + per-server gate; without the per-process `enabled`
+   PicoClaw silently never spawns the subprocess). So `ensureObserverHook()` (called
+   from `EnsureOnboarding`) does two writes: materializes `observer.py` to
+   `/root/.picoclaw/hooks/os-server-observer/` with the `__OS_SERVER_TURN_URL__`
+   placeholder substituted, and upserts:
+
+   ```json
+   "hooks": { "enabled": true, "processes": { "os-server-observer": {
+     "enabled": true,
+     "transport": "stdio",
+     "command": ["python3", "/root/.picoclaw/hooks/os-server-observer/observer.py"],
+     "env": { "OS_SERVER_TURN_URL": "http://127.0.0.1:<HttpPort>/api/agent/channel-turn", "OBSERVER_DEBUG": "1" },
+     "observe": ["turn_start", "turn_end"]
+   } } }
+   ```
+
+   It is idempotent (script diff + config-marshal diff) and returns `changed`;
+   `EnsureOnboarding` restarts the gateway only when something changed, since the
+   gateway loads hooks only at start. The config write is serialized under the same
+   `mcpMu` that guards `config.json` (see `mcp.go`).
+
 ## 8. What is stubbed
 
 Everything not on the PicoClaw hot path is a no-op so the single

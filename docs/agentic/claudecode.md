@@ -76,18 +76,18 @@ without a switch):
   `workspace/.claude/settings.json` gets `enableAllProjectMcpServers: true`
   (trust `.mcp.json` entries written by os-server);
 - **§2 ENV** — `/root/.claudecode/.env`, in one of two **auth modes** (§7b):
-  - *subscription* (`claude_code_oauth_token` set in config.json, or
-    `~/.claude/.credentials.json` on disk): inject `CLAUDE_CODE_OAUTH_TOKEN` and
-    **omit every `ANTHROPIC_*` var** — API-key vars outrank OAuth in Claude
-    Code's credential precedence, so leaving them set would silently keep the
-    device on the API-key path;
-  - *api-key* (default): `ANTHROPIC_BASE_URL` ← `llm_base_url` (default
-    `https://campaign-api.autonomous.ai/api/v1/ai`, **no trailing `/v1`** —
-    Claude calls `{base}/v1/messages`, the same anthropic-messages endpoint
-    hermes uses), `ANTHROPIC_API_KEY` **and** `ANTHROPIC_AUTH_TOKEN` ←
-    `llm_api_key` (x-api-key and Bearer conventions both covered),
-    `ANTHROPIC_MODEL` / `ANTHROPIC_SMALL_FAST_MODEL` ← `llm_model` (default
-    `Auto-AI`).
+    - *subscription* (`claude_code_oauth_token` set in config.json, or
+      `~/.claude/.credentials.json` on disk): inject `CLAUDE_CODE_OAUTH_TOKEN` and
+      **omit every `ANTHROPIC_*` var** — API-key vars outrank OAuth in Claude
+      Code's credential precedence, so leaving them set would silently keep the
+      device on the API-key path;
+    - *api-key* (default): `ANTHROPIC_BASE_URL` ← `llm_base_url` (default
+      `https://campaign-api.autonomous.ai/api/v1/ai`, **no trailing `/v1`** —
+      Claude calls `{base}/v1/messages`, the same anthropic-messages endpoint
+      hermes uses), `ANTHROPIC_API_KEY` **and** `ANTHROPIC_AUTH_TOKEN` ←
+      `llm_api_key` (x-api-key and Bearer conventions both covered),
+      `ANTHROPIC_MODEL` / `ANTHROPIC_SMALL_FAST_MODEL` ← `llm_model` (default
+      `Auto-AI`).
 
   Both modes add `DISABLE_AUTOUPDATER=1`,
   `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, and the `CLAUDECODE_CHANNELS`

@@ -76,17 +76,17 @@ không cần switch):
   `workspace/.claude/settings.json` nhận `enableAllProjectMcpServers: true`
   (tin các entry `.mcp.json` do os-server ghi);
 - **§2 ENV** — `/root/.claudecode/.env`, theo một trong hai **auth mode** (§7b):
-  - *subscription* (`claude_code_oauth_token` đã set trong config.json, hoặc
-    `~/.claude/.credentials.json` có trên đĩa): inject `CLAUDE_CODE_OAUTH_TOKEN`
-    và **bỏ toàn bộ biến `ANTHROPIC_*`** — biến API-key đứng trên OAuth trong
-    thứ tự ưu tiên credential của Claude Code, nên để chúng lại sẽ âm thầm giữ
-    thiết bị trên đường API-key;
-  - *api-key* (mặc định): `ANTHROPIC_BASE_URL` ← `llm_base_url` (mặc định
-    `https://campaign-api.autonomous.ai/api/v1/ai`, **không có `/v1` ở cuối** —
-    Claude gọi `{base}/v1/messages`, cùng endpoint anthropic-messages mà hermes
-    dùng), `ANTHROPIC_API_KEY` **và** `ANTHROPIC_AUTH_TOKEN` ← `llm_api_key`
-    (phủ cả hai convention x-api-key và Bearer), `ANTHROPIC_MODEL` /
-    `ANTHROPIC_SMALL_FAST_MODEL` ← `llm_model` (mặc định `Auto-AI`).
+    - *subscription* (`claude_code_oauth_token` đã set trong config.json, hoặc
+      `~/.claude/.credentials.json` có trên đĩa): inject `CLAUDE_CODE_OAUTH_TOKEN`
+      và **bỏ toàn bộ biến `ANTHROPIC_*`** — biến API-key đứng trên OAuth trong
+      thứ tự ưu tiên credential của Claude Code, nên để chúng lại sẽ âm thầm giữ
+      thiết bị trên đường API-key;
+    - *api-key* (mặc định): `ANTHROPIC_BASE_URL` ← `llm_base_url` (mặc định
+      `https://campaign-api.autonomous.ai/api/v1/ai`, **không có `/v1` ở cuối** —
+      Claude gọi `{base}/v1/messages`, cùng endpoint anthropic-messages mà hermes
+      dùng), `ANTHROPIC_API_KEY` **và** `ANTHROPIC_AUTH_TOKEN` ← `llm_api_key`
+      (phủ cả hai convention x-api-key và Bearer), `ANTHROPIC_MODEL` /
+      `ANTHROPIC_SMALL_FAST_MODEL` ← `llm_model` (mặc định `Auto-AI`).
 
   Cả hai mode đều thêm `DISABLE_AUTOUPDATER=1`,
   `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, và các cờ khởi chạy
