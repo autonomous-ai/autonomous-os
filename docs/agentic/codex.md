@@ -101,7 +101,12 @@ restarts the gateway only on a real change. It owns everything stateful:
   migrate retries next run; a factory reset wiping `/root/.codex` clears it so
   migrate re-runs on the next switch.
 - **§2 CONFIG** — regenerates the head of `/root/.codex/config.toml` from
-  config.json: `model` from `llm_model` (fallback `Auto-AI`),
+  config.json. **Auth gate:** when `/root/.codex/auth.json` exists
+  (ChatGPT-subscription login, §9) the head is written WITHOUT `model` /
+  `model_provider` / `[model_providers.autonomous]` — codex uses its built-in
+  default provider + model (keeping only `approval_policy` + `sandbox_mode`,
+  and still preserving the `[mcp_servers` tail). Otherwise (api-key mode):
+  `model` from `llm_model` (fallback `Auto-AI`),
   `model_provider = "autonomous"` → `[model_providers.autonomous]` with
   `base_url` from `llm_base_url` normalized to end in `/v1` (Codex appends
   `/responses` itself), `env_key = "OPENAI_API_KEY"`, and
@@ -114,7 +119,8 @@ restarts the gateway only on a real change. It owns everything stateful:
 - **§3 ENV** — writes `/root/.codex/.env` (systemd EnvironmentFile, mode 0600):
   `CODEX_WS_TOKEN` (must equal `constants.go` `Token`), `CODEX_PORT=18792`,
   `CODEX_HOME=/root/.codex`, `CODEX_WORKSPACE=/root/.codex/workspace`, and
-  `OPENAI_API_KEY` from `llm_api_key`.
+  `OPENAI_API_KEY` from `llm_api_key` — **omitted in subscription mode** (an
+  API key outranks/conflicts with ChatGPT auth).
 
 On top of the presync run, `EnsureOnboarding` (`onboarding.go`) does the same
 workspace reconcile the other backends get: seeds `KNOWLEDGE.md` from the
@@ -252,3 +258,15 @@ Phase 1 (current) authenticates with an **API key via campaign-api**:
 `llm_base_url` (§1.2). ChatGPT-subscription auth (`codex login --device-auth`)
 is **deferred to phase 2** — it will share the login-pairing plumbing with the
 claudecode branch's `ClaudeLoginPairer` once that branch merges.
+
+### Subscription auth (manual)
+
+Available today without the phase-2 pairing flow: run
+`codex login --device-auth` on the device, or copy an existing
+`~/.codex/auth.json` from another machine to `/root/.codex/auth.json`
+(`chmod 600`). Presync auto-detects `auth.json` on every run (so on every
+boot): it omits the custom provider block from config.toml and drops
+`OPENAI_API_KEY` from `.env`, so codex talks to OpenAI directly with its
+built-in default provider + model — this **bypasses the campaign-api
+`/responses` 404 blocker** entirely. Delete `auth.json` to fall back to
+api-key mode; the flip is automatic on the next presync run.

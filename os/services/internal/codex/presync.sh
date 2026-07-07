@@ -11,8 +11,16 @@
 #      wipes /root/.codex clears it so migrate re-runs on the next switch).
 #   §2 CONFIG  — ~/.codex/config.toml model-provider wiring from config.json
 #      llm_* (guarded merge: os-server-owned [mcp_servers] tail preserved).
+#      AUTH GATE: when $CODEX_DIR/auth.json exists (ChatGPT-subscription login
+#      via `codex login --device-auth`, or copied from another machine) the
+#      custom provider head is OMITTED (no model / model_provider /
+#      [model_providers.autonomous]) so codex uses its BUILT-IN default
+#      provider + model — the custom block would route to campaign-api, which
+#      404s /responses. Delete auth.json to fall back to api-key mode; presync
+#      re-runs every boot so the flip is automatic.
 #   §3 ENV     — /root/.codex/.env (systemd EnvironmentFile): gatewayd
-#      token/port + OPENAI_API_KEY from llm_api_key.
+#      token/port + OPENAI_API_KEY from llm_api_key (OMITTED in subscription
+#      mode — an API key outranks/conflicts with ChatGPT auth).
 #
 # This file is EMBEDDED IN os-server (internal/codex/presync.sh) and
 # materialized to /usr/local/bin/runtime-codex-presync on every switch.
@@ -24,6 +32,7 @@ CODEX_DIR="${CODEX_DIR:-/root/.codex}"
 WS_DIR="$CODEX_DIR/workspace"
 ENV_FILE="$CODEX_DIR/.env"
 CODEX_CONFIG="$CODEX_DIR/config.toml"
+AUTH_JSON="$CODEX_DIR/auth.json"
 
 # Codex speaks the OpenAI Responses API only (the chat-completions wire was
 # removed upstream ~2/2026): it appends /responses to base_url, so the base
@@ -87,6 +96,20 @@ if [ ! -f "$MIGRATE_MARKER" ] && [ -d "$OC_WS" ]; then
   fi
 fi
 
+# ── AUTH MODE (subscription vs api-key) ─────────────────────────────────────────
+# auth.json present = ChatGPT-subscription login (`codex login --device-auth`
+# on the device, or copied from another machine) → codex must use its BUILT-IN
+# default provider + model, and OPENAI_API_KEY must be omitted from .env (an
+# API key outranks/conflicts with ChatGPT auth). Delete auth.json to fall back
+# to api-key mode; presync re-runs every boot so the flip is automatic.
+if [ -f "$AUTH_JSON" ]; then
+  SUBSCRIPTION_MODE=1
+  log "subscription mode (auth.json present) — omitting custom provider + OPENAI_API_KEY"
+else
+  SUBSCRIPTION_MODE=0
+  log "api-key mode"
+fi
+
 # ── §2 CONFIG (~/.codex/config.toml, guarded merge) ─────────────────────────────
 # The head (model + provider wiring) is regenerated from config.json every run.
 # The [mcp_servers.*] tables are preserved verbatim: os-server
@@ -107,8 +130,20 @@ case "$LLM_BASE_URL" in
 esac
 LLM_MODEL="$(dev llm_model)"; [ -n "$LLM_MODEL" ] || LLM_MODEL="$DEFAULT_MODEL"
 
-log "write $CODEX_CONFIG (model=$LLM_MODEL base_url=$LLM_BASE_URL)"
-cat >"$CODEX_CONFIG.tmp" <<TOML
+if [ "$SUBSCRIPTION_MODE" = 1 ]; then
+  log "write $CODEX_CONFIG (subscription mode — built-in provider/model)"
+  cat >"$CODEX_CONFIG.tmp" <<TOML
+# Managed by runtime-codex-presync — head regenerated from /root/config/config.json.
+# Subscription mode (auth.json present): no model / model_provider — codex uses
+# its BUILT-IN default provider + model with ChatGPT auth.
+# All [mcp_servers.*] tables are preserved wherever they appear
+# (os-server internal/codex/mcp.go owns those entries).
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+TOML
+else
+  log "write $CODEX_CONFIG (model=$LLM_MODEL base_url=$LLM_BASE_URL)"
+  cat >"$CODEX_CONFIG.tmp" <<TOML
 # Managed by runtime-codex-presync — head regenerated from /root/config/config.json.
 # All [mcp_servers.*] tables are preserved wherever they appear
 # (os-server internal/codex/mcp.go owns those entries).
@@ -126,6 +161,7 @@ base_url = "$LLM_BASE_URL"
 env_key = "OPENAI_API_KEY"
 wire_api = "responses"
 TOML
+fi
 # Re-append the preserved [mcp_servers.*] tables. Position-independent (see
 # comment above): capture starts at any ^[mcp_servers header (incl. nested
 # [mcp_servers.x.y] subtables) and stops at the next top-level table header
@@ -146,7 +182,11 @@ mv "$CODEX_CONFIG.tmp" "$CODEX_CONFIG"
 # ── §3 ENV (config.json wins) ───────────────────────────────────────────────────
 # systemd EnvironmentFile format: plain KEY=value lines, no quoting.
 LLM_API_KEY="$(dev llm_api_key)"
-log "write $ENV_FILE (key=$( [ -n "$LLM_API_KEY" ] && echo set || echo EMPTY ))"
+if [ "$SUBSCRIPTION_MODE" = 1 ]; then
+  log "write $ENV_FILE (OPENAI_API_KEY omitted — subscription mode)"
+else
+  log "write $ENV_FILE (key=$( [ -n "$LLM_API_KEY" ] && echo set || echo EMPTY ))"
+fi
 umask 077
 {
   echo "# Managed by runtime-codex-presync — do not edit (synced from /root/config/config.json)."
@@ -156,7 +196,9 @@ umask 077
   echo "CODEX_PORT=18792"
   echo "CODEX_HOME=$CODEX_DIR"
   echo "CODEX_WORKSPACE=$WS_DIR"
-  if [ -n "$LLM_API_KEY" ]; then
+  # Subscription mode: OPENAI_API_KEY omitted — it would outrank/conflict with
+  # ChatGPT auth (auth.json).
+  if [ "$SUBSCRIPTION_MODE" != 1 ] && [ -n "$LLM_API_KEY" ]; then
     echo "OPENAI_API_KEY=$LLM_API_KEY"
   fi
 } >"$ENV_FILE.tmp"
