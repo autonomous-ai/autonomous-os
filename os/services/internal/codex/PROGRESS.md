@@ -56,6 +56,24 @@ stub convention). This file is the running history for whoever picks the task up
       AgentRuntimeSection blurbs (+picoclaw blurb backfilled)
 - [x] Docs: docs/agentic/codex.md (243 lines) + docs/vi/agentic/codex_vi.md + CLAUDE.md table row
 - [x] go build ./... + full go test + `tsc -b` + GOOS=linux GOARCH=arm64 build — ALL GREEN
+- [x] Persona migration adapter `migrate_persona/runtime_codex.go` (OpenClaw-identical layout,
+      rebrandToCodex + reCodex added to the other 3 adapters) → any-pair codex↔openclaw/hermes/
+      picoclaw incl. reverse; presync §1 remains the skills carrier
+- [x] LLM config migration adapter `migrate_config/runtime_codex.go` (read/write base_url in
+      config.toml + OPENAI_API_KEY in .env; registered + CodexHome in DefaultOptions) —
+      key/baseURL carries across switches both directions, before presync even runs
+- [x] MQTT switch path: `codex.setup` kind (domain KindCodexSetup + dispatcher case →
+      handleRuntimeSetup) — web AND MQTT can now switch
+- [x] Deep verification vs REAL codex 0.142.5 binary + tag source (agent ran it):
+      * FIXED CRITICAL: `--cd` after `resume` = "unexpected argument" → every resume silently
+        fell back to fresh thread. Shared flags now go BEFORE the resume subcommand (turn.go).
+      * FIXED: added "no rollout found" (verbatim 0.142.5 missing-thread error) to resumeErrHints.
+      * CONFIRMED empirically: translator field names (item discriminator "type", usage names),
+        generated config.toml passes --strict-config, mcp http_headers correct, release asset
+        names + binary name, `codex --version` = "codex-cli 0.142.5", env_key=OPENAI_API_KEY
+        alone authenticates (no login needed).
+      * Known-flaky upstream: SIGKILL mid-turn can leave dangling rollout (issue #12382) —
+        fresh-retry fallback covers it. Never add --ephemeral (kills resume).
 - [ ] Device verify (switch flow, first turn, resume, rotation, MCP write, campaign-api
       /responses endpoint) — NOT started
 - [ ] Phase 2: ChatGPT-subscription auth (`codex login --device-auth`) — deferred until the
