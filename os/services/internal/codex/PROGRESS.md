@@ -17,7 +17,7 @@ stub convention). This file is the running history for whoever picks the task up
 | CLI install | Pinned GitHub release `rust-v0.142.5`, `codex-aarch64-unknown-linux-musl.tar.gz` → /usr/local/bin/codex | picoclaw's pinned-binary pattern; musl static, no runtime deps |
 | Permissions | `--dangerously-bypass-approvals-and-sandbox` + config `approval_policy="never"`, `sandbox_mode="danger-full-access"` | Appliance running as root; must never block on approval (user: "miễn là chạy không vấp") |
 | Instructions file | `AGENTS.md` in workspace — codex reads it natively; OS-managed block reused from picoclaw's (openclaw-derived) | Zero-translation persona slot |
-| Channels | Telegram only, device-owned (picoclaw model) | Codex has no channel delivery |
+| Channels | **None inbound** (SupportedChannels=[], all AddChannel → ErrChannelNotSupported). The original "telegram device-owned (picoclaw model)" copy was FALSE: picoclaw's inbound lives in the picoclaw binary itself (its presync enables channel_list.telegram), and os-server has no getUpdates loop — so codex had zero inbound and fake AddChannel success. Fixed 2026-07-07. Outbound TelegramSender kept (explicit-ID DMs + operator-seeded /root/.codex/telegram_targets.json broadcast). Inbound = TODO(codex-telegram) | Codex CLI has no channel layer |
 | Stubs | Return `domain.ErrNotSupportedByRuntime` (never bare nil) | Main's new convention (docs/agentic/adding-agent-runtime.md §4 "No fake success") |
 | MCP | `WriteMCPEntry` edits `/root/.codex/config.toml [mcp_servers.<name>]` via go-toml/v2; presync regenerates the config head but preserves the `[mcp_servers` tail | codex config.toml is the only MCP slot; supports streamable HTTP + headers |
 
@@ -50,7 +50,8 @@ stub convention). This file is the running history for whoever picks the task up
       onboarding (presync exec + hash-gated restart + AGENTS/SOUL/HEARTBEAT blocks), mcp.go
       (config.toml via go-toml/v2 + tests), stubs (ErrNotSupportedByRuntime convention;
       NewSession → session.new frame), reset (wipe /root/.codex), runtime (version probe),
-      emotion_ack (hermes parity, wired in chat.go), channels/telegram device-owned (picoclaw)
+      emotion_ack (hermes parity, wired in chat.go), channels: none inbound / outbound-only
+      telegram sender (see Channels row above — the picoclaw copy was corrected 2026-07-07)
 - [x] Glue: domain AgentRuntimeCodex + AgentRuntimes, factory case + transport map, version cache
       (handler_api_monitor + populate), logs.go journal:codex.service mapping, web
       AgentRuntimeSection blurbs (+picoclaw blurb backfilled)

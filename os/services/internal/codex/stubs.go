@@ -9,8 +9,8 @@ import (
 )
 
 // AddChannel + RefreshChannelConfig + SupportedChannels live in channels.go —
-// Codex runs telegram only (device-owned receive loop); slack/discord/whatsapp
-// return domain.ErrChannelNotSupported.
+// Codex supports NO inbound channel (no receive loop anywhere; see
+// TODO(codex-telegram) there); every channel returns domain.ErrChannelNotSupported.
 
 func (s *CodexService) HasWhatsappSession(_ string) bool { return false }
 

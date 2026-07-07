@@ -18,8 +18,9 @@
 # materialized to /usr/local/bin/runtime-codex-presync on every switch.
 set -euo pipefail
 
-CONFIG_JSON="/root/config/config.json"          # device/project config (source of truth)
-CODEX_DIR="/root/.codex"
+# Env-overridable (with production defaults) so tests can point at a temp dir.
+CONFIG_JSON="${CONFIG_JSON:-/root/config/config.json}"   # device/project config (source of truth)
+CODEX_DIR="${CODEX_DIR:-/root/.codex}"
 WS_DIR="$CODEX_DIR/workspace"
 ENV_FILE="$CODEX_DIR/.env"
 CODEX_CONFIG="$CODEX_DIR/config.toml"
@@ -88,9 +89,15 @@ fi
 
 # ── §2 CONFIG (~/.codex/config.toml, guarded merge) ─────────────────────────────
 # The head (model + provider wiring) is regenerated from config.json every run.
-# The TAIL from the first `[mcp_servers` line onward is preserved verbatim:
-# os-server (internal/codex/mcp.go) edits [mcp_servers] sections in place, so
-# presync must NOT clobber them.
+# The [mcp_servers.*] tables are preserved verbatim: os-server
+# (internal/codex/mcp.go) owns those entries. IMPORTANT: the Go writers
+# (mcp.go, migrate_config/runtime_codex.go) round-trip config.toml through
+# go-toml v2 maps, which SORTS tables alphabetically — [mcp_servers] can end up
+# BEFORE [model_providers]. A naive "tail from the first [mcp_servers line to
+# EOF" grab would then also swallow [model_providers.autonomous] and duplicate
+# it under the regenerated head (unparseable TOML). So the extraction below is
+# position-independent: it captures ONLY mcp_servers tables wherever they
+# appear, stopping at the next non-mcp top-level table header.
 LLM_BASE_URL="$(dev llm_base_url)"; [ -n "$LLM_BASE_URL" ] || LLM_BASE_URL="$DEFAULT_BASE_URL"
 # Normalize: strip trailing slash, append /v1 unless the base already ends in it.
 LLM_BASE_URL="${LLM_BASE_URL%/}"
@@ -103,7 +110,7 @@ LLM_MODEL="$(dev llm_model)"; [ -n "$LLM_MODEL" ] || LLM_MODEL="$DEFAULT_MODEL"
 log "write $CODEX_CONFIG (model=$LLM_MODEL base_url=$LLM_BASE_URL)"
 cat >"$CODEX_CONFIG.tmp" <<TOML
 # Managed by runtime-codex-presync — head regenerated from /root/config/config.json.
-# Everything from the first [mcp_servers...] section onward is preserved
+# All [mcp_servers.*] tables are preserved wherever they appear
 # (os-server internal/codex/mcp.go owns those entries).
 model = "$LLM_MODEL"
 model_provider = "autonomous"
@@ -119,13 +126,19 @@ base_url = "$LLM_BASE_URL"
 env_key = "OPENAI_API_KEY"
 wire_api = "responses"
 TOML
-# Re-append the preserved mcp tail (from the first ^[mcp_servers line to EOF).
+# Re-append the preserved [mcp_servers.*] tables. Position-independent (see
+# comment above): capture starts at any ^[mcp_servers header (incl. nested
+# [mcp_servers.x.y] subtables) and stops at the next top-level table header
+# that is NOT an mcp_servers table; supports multiple disjoint occurrences.
 if [ -f "$CODEX_CONFIG" ]; then
-  MCP_START="$(grep -n '^\[mcp_servers' "$CODEX_CONFIG" | head -n1 | cut -d: -f1 || true)"
-  if [ -n "$MCP_START" ]; then
-    log "preserving existing [mcp_servers] tail (from line $MCP_START)"
-    echo "" >>"$CODEX_CONFIG.tmp"
-    tail -n +"$MCP_START" "$CODEX_CONFIG" >>"$CODEX_CONFIG.tmp"
+  MCP_BLOCK="$(awk '
+    /^\[mcp_servers[].]/ { capture=1; print; next }
+    capture && /^\[/     { capture=0 }
+    capture              { print }
+  ' "$CODEX_CONFIG")"
+  if [ -n "$MCP_BLOCK" ]; then
+    log "preserving existing [mcp_servers] tables"
+    printf '\n%s\n' "$MCP_BLOCK" >>"$CODEX_CONFIG.tmp"
   fi
 fi
 mv "$CODEX_CONFIG.tmp" "$CODEX_CONFIG"
@@ -141,8 +154,8 @@ umask 077
   # `os-server codex-gatewayd` (gatewayd package).
   echo "CODEX_WS_TOKEN=autonomous_codex_token"
   echo "CODEX_PORT=18792"
-  echo "CODEX_HOME=/root/.codex"
-  echo "CODEX_WORKSPACE=/root/.codex/workspace"
+  echo "CODEX_HOME=$CODEX_DIR"
+  echo "CODEX_WORKSPACE=$WS_DIR"
   if [ -n "$LLM_API_KEY" ]; then
     echo "OPENAI_API_KEY=$LLM_API_KEY"
   fi
@@ -150,8 +163,11 @@ umask 077
 mv "$ENV_FILE.tmp" "$ENV_FILE"
 umask 022
 
-# Channels: telegram is device-owned under codex (os-server polls the bot API
-# itself) — nothing to write here.
-log "channels: telegram is device-owned under codex — nothing to sync"
+# Channels: codex has no inbound channel — the Codex CLI has no channel layer
+# (unlike picoclaw, whose own config gets telegram enabled by its presync) and
+# os-server runs no Telegram receive loop. Nothing to write here; outbound-only
+# alerts go through os-server's TelegramSender. See TODO(codex-telegram) in
+# internal/codex/channels.go.
+log "channels: none supported under codex — nothing to sync"
 
 log "done — codex config.toml + env synced"

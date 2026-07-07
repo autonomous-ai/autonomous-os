@@ -11,12 +11,18 @@ import (
 	"go.autonomous.ai/os/domain"
 )
 
-// telegramTargetsFile is the Device-owned store of known Telegram chats. Codex
-// has no plugin/channel layer of its own, so the receive loop populates this
-// file each time a new chat DMs the bot.
+// telegramTargetsFile is os-server's own list of Telegram chats to Broadcast
+// proactive alerts (sensing/guard) to. NOTHING populates it automatically:
+// Codex has no channel layer and os-server runs no Telegram receive loop (see
+// TODO(codex-telegram) in channels.go), so this file only exists if seeded by
+// an operator. Until then Broadcast finds zero targets and warns; SendToUser /
+// SendToUserWithMedia still work with an explicit chat ID whenever
+// config.TelegramBotToken is set. The path lives under Codex's own data dir
+// (/root/.codex, wiped by factory reset) — the previous /root/.lumi path was a
+// leftover copied from picoclaw, itself inherited from the pre-fork Lumi repo.
 //
 // Schema: {"targets":[{"chat_id":"...","type":"private|group"}, ...]}
-const telegramTargetsFile = "/root/.lumi/telegram_targets.json"
+const telegramTargetsFile = "/root/.codex/telegram_targets.json"
 
 type telegramTargetEntry struct {
 	ChatID string `json:"chat_id"`
@@ -36,9 +42,9 @@ func (s *CodexService) GetTelegramBotToken() string {
 	return s.config.TelegramBotToken
 }
 
-// GetTelegramTargets reads the Device-owned target store. Returns nil + nil (no
-// error) when the file doesn't exist yet — that's the steady state before any
-// user has messaged the bot.
+// GetTelegramTargets reads the operator-seeded target store. Returns nil + nil
+// (no error) when the file doesn't exist — the normal state, since no receive
+// loop writes it under Codex (see telegramTargetsFile).
 func (s *CodexService) GetTelegramTargets() ([]domain.TelegramTarget, error) {
 	targetsFileMu.Lock()
 	data, err := os.ReadFile(telegramTargetsFile)

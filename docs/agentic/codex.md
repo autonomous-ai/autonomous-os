@@ -193,13 +193,24 @@ by that method.
 
 ## 5. Channels
 
-Codex runs **telegram only**, device-owned — the same model as PicoClaw: the
-receive loop is driven by `config.TelegramBotToken`, so `AddChannel(telegram)`
-is an honest no-op success and `RefreshChannelConfig(telegram)` returns
-`("", nil)`. Slack / discord / whatsapp return `domain.ErrChannelNotSupported`;
-after a switch, `ChannelReconcile` reports them as `unsupported_channels` in
-the MQTT info uplink and their creds stay in config.json (switching back to
-openclaw restores them). See [`adding-agent-runtime.md`](adding-agent-runtime.md).
+Codex supports **no inbound channel**. The Codex CLI has no channel layer of
+its own (unlike PicoClaw, whose runtime binary polls the Telegram Bot API
+itself — its presync enables `channel_list.telegram` in PicoClaw's own config),
+and os-server runs no Telegram receive loop either. `SupportedChannels()`
+therefore returns an empty list, and `AddChannel` / `RefreshChannelConfig`
+return `domain.ErrChannelNotSupported` for **every** channel, telegram
+included — a no-op success would be fake (nothing would ever listen). After a
+switch, `ChannelReconcile` reports the configured channels as
+`unsupported_channels` in the MQTT info uplink and their creds stay in
+config.json (switching back to openclaw restores them).
+
+Outbound-only delivery still works: `TelegramSender` sends proactive alerts
+(sensing/guard) via the Bot API when `config.TelegramBotToken` is set.
+`SendToUser*` take an explicit chat ID; `Broadcast` fans out to
+`/root/.codex/telegram_targets.json`, an operator-seeded file nothing populates
+automatically. Inbound is an open TODO(codex-telegram) — see
+`internal/codex/channels.go`. See also
+[`adding-agent-runtime.md`](adding-agent-runtime.md).
 
 ## 6. Hooks
 

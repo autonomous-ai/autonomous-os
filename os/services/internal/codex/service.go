@@ -130,7 +130,8 @@ type CodexService struct {
 	poseBucketRunsMu sync.Mutex
 	poseBucketRuns   map[string]poseBucketInfo
 
-	// Channel senders (Telegram).
+	// Outbound-only channel senders (Telegram Bot API for proactive alerts).
+	// Codex has no inbound channel — see TODO(codex-telegram) in channels.go.
 	channels []domain.ChannelSender
 
 	// ackHookEnabled mirrors OpenClaw's emotion-acknowledge hook: when the device

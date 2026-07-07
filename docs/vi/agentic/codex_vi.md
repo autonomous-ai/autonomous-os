@@ -191,13 +191,24 @@ method đó.
 
 ## 5. Kênh
 
-Codex chạy **chỉ telegram**, device-owned — cùng mô hình PicoClaw: receive loop
-do `config.TelegramBotToken` điều khiển, nên `AddChannel(telegram)` là no-op
-success trung thực và `RefreshChannelConfig(telegram)` trả `("", nil)`. Slack /
-discord / whatsapp trả `domain.ErrChannelNotSupported`; sau khi switch,
-`ChannelReconcile` báo chúng trong `unsupported_channels` của MQTT info uplink
-và credential vẫn nằm trong config.json (switch về openclaw thì khôi phục).
-Xem [`adding-agent-runtime_vi.md`](adding-agent-runtime_vi.md).
+Codex **không hỗ trợ kênh inbound nào**. Codex CLI không có channel layer riêng
+(khác PicoClaw: binary runtime của PicoClaw tự poll Telegram Bot API — presync
+của nó bật `channel_list.telegram` trong config riêng của PicoClaw), và
+os-server cũng không chạy receive loop Telegram nào. Vì vậy
+`SupportedChannels()` trả danh sách rỗng, còn `AddChannel` /
+`RefreshChannelConfig` trả `domain.ErrChannelNotSupported` cho **mọi** kênh, kể
+cả telegram — no-op success sẽ là giả (không có gì lắng nghe cả). Sau khi
+switch, `ChannelReconcile` báo các kênh đã cấu hình trong `unsupported_channels`
+của MQTT info uplink và credential vẫn nằm trong config.json (switch về
+openclaw thì khôi phục).
+
+Chiều outbound vẫn hoạt động: `TelegramSender` gửi cảnh báo chủ động
+(sensing/guard) qua Bot API khi có `config.TelegramBotToken`. `SendToUser*`
+nhận chat ID tường minh; `Broadcast` fan-out theo
+`/root/.codex/telegram_targets.json` — file do operator tự seed, không có gì tự
+ghi vào. Inbound là TODO(codex-telegram) còn mở — xem
+`internal/codex/channels.go`. Xem thêm
+[`adding-agent-runtime_vi.md`](adding-agent-runtime_vi.md).
 
 ## 6. Hooks
 
