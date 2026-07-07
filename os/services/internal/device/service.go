@@ -3,6 +3,7 @@ package device
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os/exec"
@@ -875,14 +876,34 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 	// avoid a redundant gateway restart.
 	if modelChanged && !thinkingChanged && !baseURLChanged && s.agentGateway != nil {
 		if err := s.agentGateway.UpdatePrimaryModel(newModel); err != nil {
-			slog.Warn("update openclaw primary model failed", "component", "device", "error", err)
+			if errors.Is(err, domain.ErrNotSupportedByRuntime) {
+				// hermes/picoclaw: the device model is not what the runtime runs
+				// on, so there is nothing to apply — informational, not a failure.
+				slog.Info("primary model sync not supported by runtime", "component", "device", "backend", s.agentGateway.Name())
+			} else {
+				slog.Warn("update primary model failed", "component", "device", "error", err)
+			}
 		}
 	}
 	if (thinkingChanged || baseURLChanged) && s.agentGateway != nil {
 		// RefreshModelsConfig syncs agents.defaults.model.primary, per-model
 		// reasoning, and providers.autonomous.baseUrl in one write + restart.
 		if err := s.agentGateway.RefreshModelsConfig(); err != nil {
-			slog.Error("refresh models config failed", "component", "device", "error", err)
+			if errors.Is(err, domain.ErrNotSupportedByRuntime) {
+				// hermes/picoclaw can't be patched directly, but hermes's
+				// EnsureOnboarding presync re-reads llm_base_url/llm_api_key from
+				// the config.json we just saved — run it so a baseURL/key change
+				// applies now instead of at the next boot. Idempotent on both
+				// backends; restarts the gateway only when the config changed.
+				slog.Info("models config not device-patchable, running onboarding self-heal", "component", "device", "backend", s.agentGateway.Name())
+				go func() {
+					if err := s.agentGateway.EnsureOnboarding(); err != nil {
+						slog.Warn("onboarding self-heal after llm config change failed", "component", "device", "error", err)
+					}
+				}()
+			} else {
+				slog.Error("refresh models config failed", "component", "device", "error", err)
+			}
 		}
 	}
 	// When the operator switches stt_language explicitly, drop the in-session

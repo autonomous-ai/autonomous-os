@@ -243,7 +243,8 @@ TotalTokens: used_tokens }`.
 PicoClaw sở hữu session: `session_id` do server cấp được bắt từ frame đến bất kỳ
 và lưu lại (`SetSessionKey`) để `message.send` kế tiếp gửi kèm. `NewSession` chỉ
 xóa id cục bộ để lượt kế tiếp bắt đầu session server mới. Không có RPC compact nên
-`CompactSession` là no-op.
+`CompactSession` trả `domain.ErrNotSupportedByRuntime` (caller log lại và xoay
+session qua `NewSession` thay thế).
 
 ## 7. Khả năng kênh (channel capability)
 
@@ -277,7 +278,11 @@ Mọi thứ không nằm trên hot path của PicoClaw đều là no-op để th
 `domain.AgentGateway` mà không bịa ra tính năng backend không có: `SetupAgent`,
 pairing WhatsApp, `RefreshModelsConfig`, `FetchChatHistory`,
 `CompactSession`, watcher model
-(`StartModelSync`/`StartPrimaryModelWatch`), `UpdatePrimaryModel`. (`AddChannel` /
+(`StartModelSync`/`StartPrimaryModelWatch`), `UpdatePrimaryModel`.
+Các stub có trả error (`RefreshModelsConfig`, `UpdatePrimaryModel`,
+`CompactSession`) trả `domain.ErrNotSupportedByRuntime` — không bao giờ `nil` —
+để caller phân biệt "không có gì để áp dụng" với "đã áp dụng" (xem
+[`adding-agent-runtime_vi.md`](adding-agent-runtime_vi.md) §4 "Không thành công giả"). (`AddChannel` /
 `RefreshChannelConfig` KHÔNG phải stub — trả `domain.ErrChannelNotSupported` cho kênh
 không hỗ trợ, xem §7; `EnsureOnboarding` (§1.1) và `StartSkillWatcher` (auto-update
 skill, §1.1) là thật.) Các hàm sau cũng là **thật**, không phải stub: `RestartAgent`

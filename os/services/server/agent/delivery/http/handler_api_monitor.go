@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"go.autonomous.ai/os/domain"
 	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/internal/hermes"
 	"go.autonomous.ai/os/internal/openclaw"
@@ -142,10 +144,15 @@ func (h *AgentHandler) Events(c *gin.Context) {
 	})
 }
 
-// ConfigJSON returns the raw openclaw.json contents for the gw-config UI.
+// ConfigJSON returns the active runtime's raw config contents for the gw-config UI.
 func (h *AgentHandler) ConfigJSON(c *gin.Context) {
 	data, err := h.agentGateway.GetConfigJSON()
 	if err != nil {
+		if errors.Is(err, domain.ErrNotSupportedByRuntime) {
+			c.JSON(http.StatusOK, serializers.ResponseError(
+				h.agentGateway.Name()+" has no device-side config file"))
+			return
+		}
 		c.JSON(http.StatusOK, serializers.ResponseError(err.Error()))
 		return
 	}

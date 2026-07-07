@@ -1,9 +1,11 @@
 package http
 
 import (
+	"errors"
 	"log/slog"
 	"time"
 
+	"go.autonomous.ai/os/domain"
 	"go.autonomous.ai/os/lib/flow"
 	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/lib/i18n"
@@ -61,7 +63,12 @@ func (h *AgentHandler) maybeAutoCompact(sessionKey string, totalTokens int, flow
 			return
 		}
 		if err := h.agentGateway.CompactSession(sessionKey); err != nil {
-			slog.Error("auto-compact failed", "component", "agent", "error", err)
+			if errors.Is(err, domain.ErrNotSupportedByRuntime) {
+				slog.Info("auto-compact skipped: backend has no compact API",
+					"component", "agent", "backend", h.agentGateway.Name())
+			} else {
+				slog.Error("auto-compact failed", "component", "agent", "error", err)
+			}
 		}
 	}()
 }

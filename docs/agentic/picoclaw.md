@@ -249,7 +249,9 @@ TotalTokens: used_tokens }`.
 PicoClaw owns the session: the server-assigned `session_id` is captured from any
 inbound frame and stored (`SetSessionKey`) so the next `message.send` echoes it.
 `NewSession` just clears the local id so the next turn starts a fresh server
-session. There is no compact RPC, so `CompactSession` is a no-op.
+session. There is no compact RPC, so `CompactSession` returns
+`domain.ErrNotSupportedByRuntime` (the caller logs and rotates via `NewSession`
+instead).
 
 ## 7. Channel capability
 
@@ -284,6 +286,10 @@ Everything not on the PicoClaw hot path is a no-op so the single
 backend does not have: `SetupAgent`, WhatsApp pairing,
 `RefreshModelsConfig`, `FetchChatHistory`, `CompactSession`,
 the model watchers (`StartModelSync`/`StartPrimaryModelWatch`), `UpdatePrimaryModel`.
+The error-returning stubs (`RefreshModelsConfig`, `UpdatePrimaryModel`,
+`CompactSession`) return `domain.ErrNotSupportedByRuntime` — never `nil` — so
+callers can tell "nothing to apply" from "applied" (see
+[`adding-agent-runtime.md`](adding-agent-runtime.md) §4 "No fake success").
 (`AddChannel` / `RefreshChannelConfig` are NOT stubs — they return
 `domain.ErrChannelNotSupported` for unsupported channels, see §7; `EnsureOnboarding`
 (§1.1) and `StartSkillWatcher` (skill auto-update, §1.1) are real.) These are also

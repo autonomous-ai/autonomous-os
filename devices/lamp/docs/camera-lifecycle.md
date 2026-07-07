@@ -229,6 +229,13 @@ The defaults (`manual` / 500 / 255) give a bright image at ~20fps in a dim room 
 
 Frame rate vs brightness is a hard physical trade-off in a dark room: the max exposure that still holds 30fps is ~33ms (`HAL_CAMERA_EXPOSURE=330`); a brighter image needs a longer exposure (fewer fps) or more gain (noisier). The stream endpoint is separately capped at `HAL_CAMERA_STREAM_FPS` (default 10), so the monitor's live view does not reflect the capture rate.
 
+## Failure Recovery
+
+The capture loop (`devices/video_capture_device.py`) recovers from two distinct device failures, both by releasing and reopening the V4L2 device via `_reopen_with_backoff()` (retry with exponential backoff 1s→30s, never permanently exits the loop while HAL runs; MJPEG, resolution and exposure are re-applied on every reopen):
+
+- **`read()` failure** — USB autosuspend or a transient V4L2 error makes `read()` return `ret=False`. One 1s retry, then reopen.
+- **ISP freeze** — the camera keeps delivering the **same buffer** with `ret=True` (seen on the UVC cam with manual exposure/gain), so the `read()`-failure path never fires while every consumer (realtime look, sensing, tracking, snapshot) silently works on a stale scene. A watchdog compares a subsampled signature of each frame; byte-identical frames for 10s (`_FREEZE_REOPEN_S`) cannot come from a live sensor and trigger a reopen. Log line: `Camera frozen — identical frames for Ns, reopening device`.
+
 ## Edge Cases
 
 - **Guard mode + camera off**: ✅ Done — guard SKILL.md step 1: `[HW:/camera/enable:{}]` before enabling guard. Overrides manual disable.

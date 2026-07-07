@@ -3,7 +3,16 @@ package domain
 import (
 	"context"
 	"encoding/json"
+	"errors"
 )
+
+// ErrNotSupportedByRuntime is returned by AgentGateway methods that the active
+// backend genuinely does not implement (e.g. UpdatePrimaryModel on Hermes, whose
+// model registry is server-owned). It lets callers distinguish "backend did
+// nothing by design" from "backend tried and failed" — stubs must return this
+// instead of nil so a config change is never silently dropped. Mirrors the
+// ErrChannelNotSupported convention in channel.go.
+var ErrNotSupportedByRuntime = errors.New("not_supported_by_runtime")
 
 // TelegramTarget represents a Telegram chat the bot is connected to.
 type TelegramTarget struct {
@@ -145,6 +154,8 @@ type AgentGateway interface {
 
 	// RefreshModelsConfig patches the models reasoning fields in openclaw.json
 	// based on the current LLMDisableThinking config and restarts the agent.
+	// Backends whose model config is not device-patchable (hermes, picoclaw)
+	// return ErrNotSupportedByRuntime.
 	RefreshModelsConfig() error
 
 	// EnsureOnboarding seeds personality/identity files into the agent workspace.
@@ -154,7 +165,9 @@ type AgentGateway interface {
 	// Best-effort: returns nil on error or timeout without failing the caller.
 	FetchChatHistory(sessionKey string, limit int) (json.RawMessage, error)
 
-	// GetConfigJSON returns the raw openclaw.json bytes.
+	// GetConfigJSON returns the active runtime's raw config file bytes
+	// (openclaw.json / picoclaw config.json). Backends with no agent-side
+	// config file (hermes) return ErrNotSupportedByRuntime.
 	GetConfigJSON() (json.RawMessage, error)
 
 	// WriteMCPEntry upserts mcp.servers.<name> in openclaw.json (the server
@@ -300,7 +313,9 @@ type AgentGateway interface {
 
 	// UpdatePrimaryModel patches agents.defaults.model.primary in openclaw.json
 	// to "autonomous/{modelKey}" and restarts the gateway. No-op when modelKey
-	// is empty or when openclaw.json does not exist yet.
+	// is empty or when openclaw.json does not exist yet. Backends whose model
+	// is not device-selectable (hermes: fixed campaign-api alias; picoclaw:
+	// registry owned by the runtime) return ErrNotSupportedByRuntime.
 	UpdatePrimaryModel(modelKey string) error
 
 	// StartPrimaryModelWatch watches the openclaw config directory for external
@@ -316,6 +331,8 @@ type AgentGateway interface {
 
 	// CompactSession sends a sessions.compact RPC to the agent runtime
 	// to summarize and reduce conversation history for the given session.
+	// Backends without a compact API (hermes, picoclaw) return
+	// ErrNotSupportedByRuntime — rotate via NewSession instead.
 	CompactSession(sessionKey string) error
 
 	// NewSession sends a sessions.new RPC to start a fresh conversation
