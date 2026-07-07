@@ -317,6 +317,9 @@ theo agent gateway (`HAL_AGENT_GATEWAY`):
 |---------|-------|-----------|
 | `openclaw` | `context_manager/openclaw.py` `OpenClawContextManager` | `HAL_OPENCLAW_WORKSPACE_DIR` (`/root/.openclaw/workspace`) |
 | `hermes` | `context_manager/hermes.py` `HermesContextManager` | `HAL_HERMES_WORKSPACE_DIR` (`/root/.hermes`) |
+| `picoclaw` | `OpenClawContextManager` (layout giống hệt) | `HAL_PICOCLAW_WORKSPACE_DIR` (`/root/.picoclaw/workspace`) |
+| `codex` | `OpenClawContextManager` (layout giống hệt) | `HAL_CODEX_WORKSPACE_DIR` (`/root/.codex/workspace`) |
+| `claudecode` | `context_manager/claudecode.py` `ClaudeCodeContextManager` — layout OpenClaw trừ skills, đọc từ `.claude/skills/` (dir native của claude CLI) | `HAL_CLAUDECODE_WORKSPACE_DIR` (`/root/.claudecode/workspace`) |
 
 `ContextManagerBase` (`context_manager/base.py`) lo phần lắp ráp prompt
 (`build_instructions`), lưu lượt (`add_turn`), nạp/trim memory, và summarize;
