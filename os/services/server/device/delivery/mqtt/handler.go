@@ -222,6 +222,8 @@ func (h *DeviceMQTTHandler) dispatchData(env domain.MQTTDataCommand) error {
 		return h.handleRuntimeSetup(env, domain.AgentRuntimePicoclaw)
 	case domain.KindOpenclawSetup:
 		return h.handleRuntimeSetup(env, domain.AgentRuntimeOpenClaw)
+	case domain.KindCodexSetup:
+		return h.handleRuntimeSetup(env, domain.AgentRuntimeCodex)
 	case domain.KindTTSPreview:
 		return h.handleTTSPreview(env)
 	case domain.KindDeviceRename:

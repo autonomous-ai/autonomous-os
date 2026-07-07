@@ -109,13 +109,20 @@ func resumeFailed(res turnResult) bool {
 
 // buildArgv builds the codex exec command line. The prompt is always the
 // final positional argument; image paths ride repeated -i flags.
+//
+// Flag ordering is load-bearing at rust-v0.142.5: `--cd` (like other
+// non-global exec flags) is NOT accepted after the `resume` subcommand —
+// `codex exec resume <id> --cd …` dies with "unexpected argument" before the
+// turn starts, which would make every resume silently fall back to a fresh
+// thread. Shared flags therefore go BEFORE `resume`; only resume-safe pieces
+// (-i is a resume-own flag) plus the id + prompt follow it.
 func (s *Server) buildArgv(prompt string, images []string, resumeID string) []string {
-	argv := []string{s.cfg.CodexBin, "exec"}
+	argv := []string{s.cfg.CodexBin, "exec",
+		"--json", "--dangerously-bypass-approvals-and-sandbox",
+		"--cd", s.cfg.Workspace}
 	if resumeID != "" {
 		argv = append(argv, "resume", resumeID)
 	}
-	argv = append(argv, "--json", "--dangerously-bypass-approvals-and-sandbox",
-		"--cd", s.cfg.Workspace)
 	for _, img := range images {
 		argv = append(argv, "-i", img)
 	}

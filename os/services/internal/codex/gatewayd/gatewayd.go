@@ -44,7 +44,9 @@ const (
 
 // resumeErrHints are case-insensitive substrings in stderr/stdout meaning the
 // resumed thread/session no longer exists (so a fresh retry is warranted).
-var resumeErrHints = []string{"no conversation", "not found", "session"}
+// "no rollout found" is codex rust-v0.142.5's verbatim missing-thread error
+// ("thread/resume failed: no rollout found for thread id <id>").
+var resumeErrHints = []string{"no rollout found", "no conversation", "not found", "session"}
 
 // Config holds every tunable. Main() fills it from environment variables
 // (read once at start); tests construct it directly with temp paths.

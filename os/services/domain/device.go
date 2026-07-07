@@ -333,6 +333,7 @@ const (
 	KindHermesSetup   = "hermes.setup"
 	KindPicoclawSetup = "picoclaw.setup"
 	KindOpenclawSetup = "openclaw.setup"
+	KindCodexSetup    = "codex.setup"
 
 	// AgentRuntimeOpenClaw / AgentRuntimeHermes / AgentRuntimePicoclaw /
 	// AgentRuntimeCodex are the swappable agentic backends. Source of truth
