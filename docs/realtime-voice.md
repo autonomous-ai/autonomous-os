@@ -332,6 +332,9 @@ assembled per agent gateway (`HAL_AGENT_GATEWAY`):
 |---------|-------|-----------|
 | `openclaw` | `context_manager/openclaw.py` `OpenClawContextManager` | `HAL_OPENCLAW_WORKSPACE_DIR` (`/root/.openclaw/workspace`) |
 | `hermes` | `context_manager/hermes.py` `HermesContextManager` | `HAL_HERMES_WORKSPACE_DIR` (`/root/.hermes`) |
+| `picoclaw` | `OpenClawContextManager` (same layout) | `HAL_PICOCLAW_WORKSPACE_DIR` (`/root/.picoclaw/workspace`) |
+| `codex` | `OpenClawContextManager` (same layout) | `HAL_CODEX_WORKSPACE_DIR` (`/root/.codex/workspace`) |
+| `claudecode` | `context_manager/claudecode.py` `ClaudeCodeContextManager` — OpenClaw layout except skills, read from `.claude/skills/` (native claude CLI dir) | `HAL_CLAUDECODE_WORKSPACE_DIR` (`/root/.claudecode/workspace`) |
 
 `ContextManagerBase` (`context_manager/base.py`) handles prompt assembly
 (`build_instructions`), turn persistence (`add_turn`), memory loading/trimming,
@@ -378,6 +381,9 @@ turn ("hello") right after a restart would leak to the main agent.
    `commit_audio()` fires.
 5. **Consume.** `for output in stream_output()`:
    - `TextOutput` → sentences are flushed to TTS (`speak` / `speak_queue`).
+     If `speak` returns busy (another non-interruptible TTS holds the
+     speaker, e.g. an ambient nudge), the sentence falls back to
+     `speak_queue` so the reply plays after it instead of being lost.
    - `DelegateSignal` → stop; forward `[voice-instruction] …` + transcript to the
      OS server with the original `event_type`.
    - Otherwise the turn was handled locally → the OS server is told
@@ -477,8 +483,11 @@ safe; in CoT mode, English planning sentences (non-English devices only —
 non-Latin scripts like Vietnamese/Chinese/Japanese use an ASCII-ratio check,
 Latin scripts like French/Indonesian additionally require English function
 words so the real answer survives), quoted drafts, plan runts, and fuzzy
-near-duplicates (CJK tokenized per character) drop too. Every dropped sentence
-is logged as `CoT leak dropped`.
+near-duplicates (CJK tokenized per character) drop too. The language check
+ignores quoted spans, so an English planning sentence that embeds
+reply-language text in quotes ("The search query 'cách dùng…' didn't yield…")
+is still caught, while a reply-language sentence quoting English is not.
+Every dropped sentence is logged as `CoT leak dropped`.
 
 The main-agent path (openclaw/hermes replies spoken via os-server) has a Go
 port of this filter — `os/services/server/agent/delivery/http/cot_leak_filter.go`

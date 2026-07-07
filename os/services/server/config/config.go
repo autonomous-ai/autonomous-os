@@ -101,6 +101,15 @@ type Config struct {
 	LLMModel   string `json:"llm_model" yaml:"llmModel" validate:"required"`
 	LLMBaseURL string `json:"llm_base_url" yaml:"llmBaseURL" validate:"required"`
 
+	// ClaudeCodeOAuthToken is the long-lived claude.ai OAuth token produced by
+	// the claudecode login flow (`claude setup-token`, internal/claudecode/login.go).
+	// When set (or when ~/.claude/.credentials.json exists), the claudecode
+	// presync switches the runtime to subscription auth: it injects
+	// CLAUDE_CODE_OAUTH_TOKEN and OMITS the ANTHROPIC_* API-key vars — those
+	// take precedence over OAuth in Claude Code's credential chain, so leaving
+	// them set would silently keep the device on the llm_api_key path.
+	ClaudeCodeOAuthToken string `json:"claude_code_oauth_token,omitempty" yaml:"claudeCodeOAuthToken"`
+
 	// DefaultModelVersion is the upstream model-catalog version last applied by
 	// the set-default-model flow (setup + periodic sync). The sync only pushes
 	// default_model / default_image_model into openclaw.json when the freshly

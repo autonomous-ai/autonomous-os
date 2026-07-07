@@ -236,7 +236,12 @@ def run_realtime_turn(
                                         "[realtime] First sentence → speak: %r",
                                         sentence[:80],
                                     )
-                                    tts.speak(sentence)
+                                    # speak() returns False when another
+                                    # non-interruptible TTS holds the speaker
+                                    # (ambient nudge racing the turn) — queue
+                                    # the reply instead of losing it entirely.
+                                    if not tts.speak(sentence):
+                                        tts.speak_queue(sentence)
                                     first_sentence_sent = True
                                 else:
                                     logger.info(
@@ -306,7 +311,9 @@ def run_realtime_turn(
                         logger.info(
                             "[realtime] Final fragment → speak: %r", remaining[:80]
                         )
-                        tts.speak(remaining)
+                        # Same busy fallback as the first-sentence site above.
+                        if not tts.speak(remaining):
+                            tts.speak_queue(remaining)
                         first_sentence_sent = True
                     else:
                         logger.info(

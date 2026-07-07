@@ -17,7 +17,9 @@ install, migration, skills, hooks, reset.
 
 > **Nhóm docs agentic-backend:** file này (hợp đồng generic + cách thêm) ·
 > [`hermes_vi.md`](hermes_vi.md) (Hermes, backend đầy đủ) ·
-> [`picoclaw_vi.md`](picoclaw_vi.md) (PicoClaw, gateway chỉ-client kèm script install/presync). Protocol/quirk
+> [`picoclaw_vi.md`](picoclaw_vi.md) (PicoClaw, gateway chỉ-client kèm script install/presync) ·
+> [`claudecode_vi.md`](claudecode_vi.md) (Claude Code sau một bridge cục bộ,
+> channel plugin native cho Telegram/Discord, claude.ai OAuth login). Protocol/quirk
 > đặc thù từng backend nằm ở các file kia; cơ chế generic + checklist nằm ở đây.
 
 ---
@@ -36,8 +38,18 @@ install, migration, skills, hooks, reset.
   `gateway.default` trong DEVICE.md về sau KHÔNG còn ảnh hưởng device đã seed — phải
   sửa config.json hoặc switch runtime.
 - Switch lúc runtime đi qua một core — `device.Service.UpdateAgentRuntime` — kích
-  bởi 3 trigger (MQTT `agent_runtime.set`, HTTP `/api/device/agent-runtime`, web
+  bởi 3 trigger (MQTT `<runtime>.setup`, HTTP `/api/device/agent-runtime`, web
   Runtime section). Xem `docs/vi/agentic/hermes_vi.md` §10–§11.
+- **Báo hiệu hoàn tất:** MQTT ack 3 pha cho mỗi `<runtime>.setup` — `starting`
+  ngay lập tức, rồi `success` (publish *trước khi* os-server restart) hoặc
+  `failure` (+error, switch-runtime đã tự rollback); uplink `info` mang
+  `agent_runtime` + version từng runtime để confirm lại. HTTP
+  `POST /api/device/agent-runtime` trả 200 = *chỉ là accepted* (switch chạy
+  nền); nguồn truth là `GET /api/device/agent-runtime`, vì
+  `config.agent_runtime` chỉ được persist sau khi switch land. Web Runtime
+  section sau khi POST sẽ poll GET đó tới khi device báo đúng runtime đích
+  (success) hoặc quá deadline 5 phút (hiển thị runtime thực đang active thay
+  vì giá trị lạc quan).
 
 ---
 
@@ -163,8 +175,8 @@ adapter **write** (bundle → layout), trong
 write[to]` (`RunMigration(from, to, opts)`). Nên thêm runtime = **đúng 1 file
 adapter**, tự động chạy với mọi runtime sẵn có, cả 2 chiều — số file **tuyến tính
 (2/runtime)**, không phải N×(N-1) như per-pair. Đăng ký adapter vào map `adapters`
-trong `migrator.go`; không cần `Direction` enum mới. openclaw, hermes, và picoclaw
-đều có adapter, nên mọi cặp migrate được cả 2 chiều. Runtime không có adapter bị
+trong `migrator.go`; không cần `Direction` enum mới. openclaw, hermes, picoclaw,
+và claudecode đều có adapter, nên mọi cặp migrate được cả 2 chiều. Runtime không có adapter bị
 `CanMigrate` bỏ qua — bộ reconcile lúc boot không migrate tới/từ nó.
 
 Adapter của PicoClaw (`runtime_picoclaw.go`) mirror layout openclaw nhưng đọc/ghi
@@ -333,6 +345,10 @@ khi runtime đổi.
   - openclaw → `[telegram, slack, discord, whatsapp]` (`internal/openclaw/channels.go`)
   - hermes → `[telegram, slack, discord]` (`internal/hermes/channels.go`)
   - picoclaw → `[telegram]` (`internal/picoclaw/channels.go`)
+  - claudecode → `[telegram, discord]` (`internal/claudecode/channels.go` —
+    channel plugin native của Claude Code chạy các receive loop; presync đặt
+    từng token + allowlist dưới `~/.claude/channels/<ch>/`. Không có slack:
+    Claude Code không có slack channel plugin)
 - Helper `domain.ChannelSupported(gw, channel) bool` (`domain/channel.go`) — chỗ
   duy nhất caller kiểm tra thành viên.
 - Sentinel dùng chung trong package `domain` (`domain/channel.go`):
@@ -400,6 +416,10 @@ là no-op idempotent.
 - **Telegram do device sở hữu** trên hermes/picoclaw: receive loop được driven bởi
   `config.TelegramBotToken`, nên runtime không cần ghi gì — một success no-op
   trung thực trong `AddChannel`/`RefreshChannelConfig` (vẫn gate theo list).
+  Trên claudecode các loop do **runtime sở hữu** (channel plugin của Claude
+  Code): `AddChannel` chạy lại presync nhúng, presync ghi token + allowlist vào
+  `~/.claude/channels/<ch>/` và chỉ restart bridge khi có hash-diff
+  (xem `docs/vi/agentic/claudecode_vi.md` §7).
 
 ---
 
@@ -432,7 +452,8 @@ là no-op idempotent.
 - [ ] **Kênh (§9):** `SupportedChannels()` khai báo capability thật;
       `AddChannel`/`RefreshChannelConfig` trả `domain.ErrChannelNotSupported` cho
       kênh ngoài list (không no-op âm thầm). Telegram do device sở hữu trên
-      hermes/picoclaw (success no-op, không ghi runtime).
+      hermes/picoclaw (success no-op, không ghi runtime); do runtime sở hữu trên
+      claudecode (presync re-sync + restart theo hash-diff).
 - [ ] Notify agent khi skill đổi qua `SendSystemChatMessage`.
 - [ ] Docs: cập nhật backend doc kiểu `docs/agentic/hermes.md` + checklist này nếu hợp đồng đổi.
 

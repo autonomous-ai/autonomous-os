@@ -17,8 +17,10 @@ wire the switch, install, migration, skills, hooks, and reset.
 
 > **Agentic-backend docs:** this file (generic contract + how to add one) ·
 > [`hermes.md`](hermes.md) (Hermes, a full backend) · [`picoclaw.md`](picoclaw.md)
-> (PicoClaw, client-only gateway with install/presync scripts). Per-backend protocol/quirks live in those;
-> the generic mechanics + checklist live here.
+> (PicoClaw, client-only gateway with install/presync scripts) ·
+> [`claudecode.md`](claudecode.md) (Claude Code behind a local bridge, native
+> channel plugins for Telegram/Discord, claude.ai OAuth login). Per-backend
+> protocol/quirks live in those; the generic mechanics + checklist live here.
 
 ---
 
@@ -36,8 +38,18 @@ wire the switch, install, migration, skills, hooks, and reset.
   becomes a no-op. Corollary: changing `gateway.default` in DEVICE.md afterwards no
   longer affects an already-seeded device — edit config.json or switch the runtime.
 - Switching at runtime goes through one core — `device.Service.UpdateAgentRuntime`
-  — fired by 3 triggers (MQTT `agent_runtime.set`, HTTP `/api/device/agent-runtime`,
+  — fired by 3 triggers (MQTT `<runtime>.setup`, HTTP `/api/device/agent-runtime`,
   web Runtime section). See `docs/agentic/hermes.md` §10–§11.
+- **Completion signaling:** MQTT acks three phases per `<runtime>.setup` —
+  `starting` immediately, then `success` (published *before* the os-server
+  restart) or `failure` (+error, switch-runtime already rolled back); the `info`
+  uplink carries `agent_runtime` + per-runtime versions for re-confirmation.
+  HTTP `POST /api/device/agent-runtime` returns 200 = *accepted only* (the
+  switch runs in the background); the truth is `GET /api/device/agent-runtime`,
+  because `config.agent_runtime` is persisted only after the switch lands. The
+  web Runtime section polls that GET after the POST until the target runtime is
+  reported (success) or a 5-minute deadline passes (shows the actually-active
+  runtime instead of the optimistic one).
 
 ---
 
@@ -167,10 +179,10 @@ bundle) and ONE **write** adapter (bundle → its layout), in
 **one adapter file** that interoperates with every existing runtime in both
 directions — file count is **linear (2 per runtime)**, not the quadratic N×(N-1)
 a per-pair migrator needs. Register the adapter in the `adapters` map in
-`migrator.go`; nothing else changes (no new `Direction` enum). openclaw, hermes, and
-picoclaw all have adapters, so any pair migrates both ways. A runtime with no
-registered adapter is skipped by `CanMigrate` — the boot-time reconciler doesn't
-migrate to/from it.
+`migrator.go`; nothing else changes (no new `Direction` enum). openclaw, hermes,
+picoclaw, and claudecode all have adapters, so any pair migrates both ways. A
+runtime with no registered adapter is skipped by `CanMigrate` — the boot-time
+reconciler doesn't migrate to/from it.
 
 PicoClaw's adapter (`runtime_picoclaw.go`) mirrors openclaw's layout but reads/writes
 `memory/MEMORY.md` (picoclaw keeps it under `memory/`, not at the workspace root).
@@ -346,6 +358,10 @@ runtime changes.
   - openclaw → `[telegram, slack, discord, whatsapp]` (`internal/openclaw/channels.go`)
   - hermes → `[telegram, slack, discord]` (`internal/hermes/channels.go`)
   - picoclaw → `[telegram]` (`internal/picoclaw/channels.go`)
+  - claudecode → `[telegram, discord]` (`internal/claudecode/channels.go` —
+    Claude Code's native channel plugins run the receive loops; presync lands
+    each token + allowlist under `~/.claude/channels/<ch>/`. No slack: Claude
+    Code has no slack channel plugin)
 - Helper `domain.ChannelSupported(gw, channel) bool` (`domain/channel.go`) — the
   one place callers test membership.
 - Shared sentinels in package `domain` (`domain/channel.go`):
@@ -413,6 +429,10 @@ re-syncs `.env` before the gateway starts, so the re-apply is an idempotent no-o
 - **Telegram is device-owned** on hermes/picoclaw: the receive loop is driven by
   `config.TelegramBotToken`, so the runtime needs no write — an honest success
   no-op inside `AddChannel`/`RefreshChannelConfig` (still gated on the list).
+  On claudecode the loops are **runtime-owned** (Claude Code's channel
+  plugins): `AddChannel` re-runs the embedded presync, which writes the token +
+  allowlist into `~/.claude/channels/<ch>/` and restarts the bridge only on a
+  hash-diff (see `docs/agentic/claudecode.md` §7).
 
 ---
 
@@ -445,7 +465,8 @@ re-syncs `.env` before the gateway starts, so the re-apply is an idempotent no-o
 - [ ] **Channels (§9):** `SupportedChannels()` declares real capability;
       `AddChannel`/`RefreshChannelConfig` return `domain.ErrChannelNotSupported`
       for channels not on the list (no silent no-op). Telegram is device-owned on
-      hermes/picoclaw (success no-op, no runtime write).
+      hermes/picoclaw (success no-op, no runtime write); runtime-owned on
+      claudecode (presync re-sync + hash-diff restart).
 - [ ] Notify the agent on skill change via `SendSystemChatMessage`.
 - [ ] Docs: update `docs/agentic/hermes.md`-style backend doc + this checklist if the
       contract changed.

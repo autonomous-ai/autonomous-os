@@ -495,6 +495,32 @@ func (s *Service) PairWhatsapp(ctx context.Context) <-chan domain.PairingEvent {
 	return s.agentGateway.PairWhatsapp(ctx)
 }
 
+// StartClaudeLogin starts the claude.ai OAuth login flow when the active
+// gateway supports it (claudecode — domain.ClaudeLoginPairer is an optional
+// interface, like SlackBridge). Other runtimes get a one-shot failure event so
+// the MQTT drain loop exits cleanly. Used by the claudecode_login MQTT command.
+func (s *Service) StartClaudeLogin(ctx context.Context) <-chan domain.PairingEvent {
+	if p, ok := s.agentGateway.(domain.ClaudeLoginPairer); ok {
+		return p.StartClaudeLogin(ctx)
+	}
+	ch := make(chan domain.PairingEvent, 1)
+	ch <- domain.PairingEvent{
+		Status: domain.PairingStatusFailure,
+		Error:  "claude login not supported on " + s.agentGateway.Name() + " backend",
+	}
+	close(ch)
+	return ch
+}
+
+// SubmitClaudeLoginCode feeds the browser authorization code back into the
+// waiting login flow. Used by the claudecode_login_code MQTT command.
+func (s *Service) SubmitClaudeLoginCode(code string) error {
+	if p, ok := s.agentGateway.(domain.ClaudeLoginPairer); ok {
+		return p.SubmitClaudeLoginCode(code)
+	}
+	return fmt.Errorf("claude login not supported on %s backend", s.agentGateway.Name())
+}
+
 // StartStatusReporter periodically pings the autonomous backend.
 // Uses LLMAPIKey as Bearer token. Exits when ctx is cancelled.
 // If the backend response contains MQTT config, it saves to config (triggers config notify).

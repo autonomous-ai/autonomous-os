@@ -47,9 +47,14 @@ const picoclawAgentLog = "/root/.picoclaw/logs/gateway.log"
 // (Agent → main file log, Agent Service → systemd journal), the tabs serve, per runtime:
 //   - hermes:   "openclaw" → ~/.hermes/logs/agent.log,     "openclaw-service" → journal:hermes-gateway.service
 //   - picoclaw: "openclaw" → ~/.picoclaw/logs/gateway.log, "openclaw-service" → journal:picoclaw.service
+//   - codex:    "openclaw" → journal:codex.service,        "openclaw-service" → journal:codex.service
+//     (the codex gatewayd bridge has no file log — it logs to the journal only)
+//   - claudecode: "openclaw" → journal:claudecode.service, "openclaw-service" → journal:claudecode.service
+//     (the claudecode gatewayd bridge has no file log — it logs to the journal only)
 //
 // "openclaw" also bakes in resolveOpenclawLog()'s /tmp fallback so callers don't
-// special-case it. The explicit "hermes"/"picoclaw" ids always map to that backend's log.
+// special-case it. The explicit "hermes"/"picoclaw"/"codex"/"claudecode" ids
+// always map to that backend's log.
 func (s *Server) resolveLogSource(source string) (string, bool) {
 	runtime := device.CurrentAgentRuntimeFromConfig(s.config)
 	switch source {
@@ -57,12 +62,20 @@ func (s *Server) resolveLogSource(source string) (string, bool) {
 		return hermesAgentLog, true
 	case "picoclaw":
 		return picoclawAgentLog, true
+	case "codex":
+		return "journal:codex.service", true
+	case "claudecode":
+		return "journal:claudecode.service", true
 	case "openclaw":
 		switch runtime {
 		case domain.AgentRuntimeHermes:
 			return hermesAgentLog, true
 		case domain.AgentRuntimePicoclaw:
 			return picoclawAgentLog, true
+		case domain.AgentRuntimeCodex:
+			return "journal:codex.service", true
+		case domain.AgentRuntimeClaudeCode:
+			return "journal:claudecode.service", true
 		}
 		return resolveOpenclawLog(), true
 	case "openclaw-service":
@@ -71,6 +84,10 @@ func (s *Server) resolveLogSource(source string) (string, bool) {
 			return "journal:hermes-gateway.service", true
 		case domain.AgentRuntimePicoclaw:
 			return "journal:picoclaw.service", true
+		case domain.AgentRuntimeCodex:
+			return "journal:codex.service", true
+		case domain.AgentRuntimeClaudeCode:
+			return "journal:claudecode.service", true
 		}
 	}
 	p, ok := allowedLogs[source]

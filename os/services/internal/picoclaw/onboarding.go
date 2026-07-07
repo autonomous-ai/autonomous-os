@@ -139,6 +139,16 @@ func (s *PicoclawService) EnsureOnboarding() error {
 		needRestart = true
 	}
 
+	// Materialize + register the os-server-observer hook so channel (Telegram)
+	// turns surface in Flow Monitor and drive [HW:/…] markers — parity with the
+	// Hermes observer hook (internal/hermes/hooks.go). Best-effort: a hook failure
+	// must not block onboarding (workspace reconcile above already succeeded).
+	if hookChanged, err := s.ensureObserverHook(); err != nil {
+		slog.Error("ensure observer hook failed", "component", "picoclaw-onboarding", "error", err)
+	} else if hookChanged {
+		needRestart = true
+	}
+
 	// Restart the gateway so it re-reads the changed workspace prompt files
 	// (systemctl restart — see service_gateway.go for why not /reload).
 	if needRestart {

@@ -3,20 +3,24 @@ import { toast } from "sonner";
 import { C, SectionCard } from "@/components/setup/shared";
 import { getAgentRuntime, setAgentRuntime } from "@/lib/api";
 
-// Agent-runtime switch (openclaw ⇄ hermes). Unlike the rest of EditConfig this
-// is NOT part of the form's "Save Changes" flow: switching is a heavyweight
-// action that toggles systemd units and restarts os-server, so it has its own
-// Switch button hitting POST /api/device/agent-runtime directly. After a switch
-// the device restarts os-server, dropping this connection — we surface that as
-// "reconnecting" rather than an error.
+// Agent-runtime switch (openclaw / hermes / picoclaw / codex / claudecode).
+// Unlike the rest of EditConfig this is NOT part of the form's "Save Changes"
+// flow: switching is a heavyweight action that toggles systemd units and
+// restarts os-server, so it has its own Switch button hitting
+// POST /api/device/agent-runtime directly. The POST only means "accepted" —
+// after it, onSwitch polls GET /api/device/agent-runtime until the device
+// reports the target runtime (real confirmation) or times out.
 //
 // Options come from the API (single source = domain.AgentRuntimes); the fallback
 // list mirrors it only if the fetch fails.
-const FALLBACK = ["openclaw", "hermes"];
+const FALLBACK = ["openclaw", "hermes", "picoclaw", "codex", "claudecode"];
 
 const RUNTIME_BLURB: Record<string, string> = {
   openclaw: "OpenClaw — persistent WebSocket gateway (default).",
   hermes: "Hermes — local HTTP+SSE agent server (Nous Research).",
+  picoclaw: "PicoClaw — lightweight Go agent gateway (WebSocket).",
+  codex: "Codex — OpenAI Codex CLI behind the os-server bridge (WebSocket).",
+  claudecode: "Claude Code — Anthropic CLI agent behind a local bridge.",
 };
 
 const selectStyle = {
@@ -54,21 +58,49 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
     )) return;
 
     setSwitching(true);
+    const target = selected;
     try {
-      await setAgentRuntime(selected);
-      setCurrent(selected);
-      toast.success(`Switching to ${selected} — device is restarting, reconnecting…`);
-    } catch (err) {
+      // POST returns 200 = "accepted" immediately; the switch itself runs in the
+      // background (may run install.sh on a first switch — minutes, not seconds).
+      await setAgentRuntime(target);
+    } catch {
       // os-server may restart before the response lands; a dropped connection
-      // here usually means the switch WAS accepted. Surface it softly.
-      toast.message(
-        err instanceof Error && err.message
-          ? `Switch sent (${err.message}) — if the device restarts, it took effect.`
-          : "Switch sent — device may be restarting.",
-      );
-    } finally {
-      setSwitching(false);
+      // here usually means the switch WAS accepted — the poll below finds out.
     }
+    toast.message(`Switching to ${target} — waiting for the device to confirm…`);
+
+    // config.agent_runtime is only persisted AFTER switch-runtime lands (a failed
+    // switch rolls back and keeps the old value), so GET /device/agent-runtime is
+    // the source of truth. Poll it until it reports the target: GET errors are the
+    // os-server restart window, the old runtime means install still running (or
+    // rolled back — indistinguishable until timeout). First-time installs download
+    // from the CDN, hence the generous deadline.
+    const deadline = Date.now() + 5 * 60_000;
+    let landed = false;
+    let lastSeen = "";
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 3000));
+      try {
+        const r = await getAgentRuntime();
+        lastSeen = r.current;
+        if (r.current === target) { landed = true; break; }
+      } catch { /* os-server restarting — keep polling */ }
+    }
+
+    if (landed) {
+      setCurrent(target);
+      toast.success(`Switched to ${target} — backend is active.`);
+    } else {
+      // Timed out: reflect whatever the device actually reports instead of the
+      // optimistic value, so a rollback is visible without a page reload.
+      if (lastSeen) { setCurrent(lastSeen); setSelected(lastSeen); }
+      toast.error(
+        lastSeen && lastSeen !== target
+          ? `Switch to ${target} not confirmed — device still reports "${lastSeen}" (likely failed and rolled back; check journalctl -u os-runtime-switch).`
+          : `Switch to ${target} not confirmed within 5 minutes — reload this page to re-check.`,
+      );
+    }
+    setSwitching(false);
   }
 
   return (

@@ -335,6 +335,7 @@ Turn Pipeline grouping behavior:
   - openclaw: `Agent` → `/var/log/openclaw/agent.log` (falls back to newest `/tmp/openclaw/openclaw-*.log`), `Agent Service` → `journal:openclaw.service`
   - hermes: `Agent` → `/root/.hermes/logs/agent.log`, `Agent Service` → `journal:hermes-gateway.service`
   - picoclaw: `Agent` → `/root/.picoclaw/logs/gateway.log`, `Agent Service` → `journal:picoclaw.service`
+  - codex: `Agent` → `journal:codex.service`, `Agent Service` → `journal:codex.service` (the gatewayd bridge has no file log — journal only)
 - Each panel streams via SSE (`GET /api/logs/stream?source=<source>`) with fallback polling.
 - Supports level filtering (ALL/DEBUG/INFO/WARN/ERROR) and text/regex search.
 

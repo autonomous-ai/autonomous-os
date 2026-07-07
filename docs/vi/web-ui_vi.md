@@ -331,6 +331,7 @@ Hành vi gom nhóm Turn Pipeline:
   - openclaw: `Agent` → `/var/log/openclaw/agent.log` (fallback file `/tmp/openclaw/openclaw-*.log` mới nhất), `Agent Service` → `journal:openclaw.service`
   - hermes: `Agent` → `/root/.hermes/logs/agent.log`, `Agent Service` → `journal:hermes-gateway.service`
   - picoclaw: `Agent` → `/root/.picoclaw/logs/gateway.log`, `Agent Service` → `journal:picoclaw.service`
+  - codex: `Agent` → `journal:codex.service`, `Agent Service` → `journal:codex.service` (bridge gatewayd không có file log — chỉ journal)
 - Mỗi panel stream qua SSE (`GET /api/logs/stream?source=<source>`) với fallback polling.
 - Hỗ trợ filter theo level (ALL/DEBUG/INFO/WARN/ERROR) và tìm kiếm text/regex.
 

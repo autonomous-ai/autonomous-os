@@ -35,7 +35,7 @@ The OS server uses MQTT to communicate with the backend server (status reporting
 
 ```json
 {
-  "cmd": "info|add_channel|slack_event|slack_command|whatsapp_pair|ota|data",
+  "cmd": "info|add_channel|slack_event|slack_command|whatsapp_pair|claudecode_login|claudecode_login_code|ota|data",
   ...payload fields
 }
 ```
@@ -58,13 +58,13 @@ The OS server uses MQTT to communicate with the backend server (status reporting
 ```
 
 `agent_runtime` is the **effective** agentic backend currently running
-(`openclaw` | `hermes` | `picoclaw`) — resolved as `config.agent_runtime`, else
+(`openclaw` | `hermes` | `picoclaw` | `codex`) — resolved as `config.agent_runtime`, else
 the device's `DEVICE.md` `gateway.default`, else `openclaw`. The response also
 carries these optional fields when known: `hal_version`, `openclaw_version`,
-`hermes_version`, `local_ip`, `tts_provider`, `tts_voice`, `stt_language`,
+`hermes_version`, `codex_version`, `local_ip`, `tts_provider`, `tts_voice`, `stt_language`,
 `timezone`, `unsupported_channels`. `timezone` is the device's **live** IANA zone
 (e.g. `Asia/Ho_Chi_Minh`), read fresh from `/etc/timezone` (falling back to config),
-not just the config record. `openclaw_version` and `hermes_version` are both probed at
+not just the config record. `openclaw_version`, `hermes_version` and `codex_version` are all probed at
 startup (each from its own `--version`) and reported side by side; `agent_runtime`
 names the active one.
 
@@ -147,6 +147,35 @@ Re-runs the QR-scan flow without re-bootstrapping the channel config. Used when 
 **Receive:** `{"cmd": "whatsapp_pair"}`
 
 **Response (streamed):** same shape as the whatsapp `add_channel` stream above, but `type:"whatsapp_pair"`. Timeout 120 s (vs. 10 min for `add_channel`) — no plugin install or restart on this path.
+
+### `claudecode_login` / `claudecode_login_code` — claude.ai OAuth login (claudecode runtime)
+
+Runs the claude.ai subscription login (`claude setup-token`) on a device whose active
+runtime is claudecode, so the brain authenticates with the user's Claude account
+instead of `llm_api_key`. Only the claudecode runtime supports it — other runtimes
+answer a one-shot `{"status":"failure","error":"claude login not supported on … backend"}`.
+See `docs/agentic/claudecode.md` §"Auth".
+
+**Receive:** `{"cmd": "claudecode_login"}`
+
+**Response (streamed, `type:"claudecode_login"`):**
+
+1. `{"status":"pairing_starting"}`
+2. `{"status":"pairing_url","login_url":"https://claude.ai/oauth/authorize?..."}` — the
+   user opens this URL in a browser, authorizes, and copies the code it shows.
+3. terminal: `{"status":"success"}` (token persisted to config.json
+   `claude_code_oauth_token`; presync flips the runtime to subscription auth and the
+   bridge restarts) · `{"status":"timeout","error":"no login within 10m0s"}` ·
+   `{"status":"failure","error":"..."}`.
+
+**Receive (second leg):** `{"cmd": "claudecode_login_code", "code": "<pasted code>"}` —
+feeds the browser code back into the waiting flow. Acked with
+`{"status":"code_accepted"}` (or `{"status":"failure","error":"no claude login in progress"}`);
+the flow's own terminal status still arrives on the `claudecode_login` stream.
+
+Unlike `whatsapp_pair`, the login handler does not block MQTT dispatch while the flow
+runs — the code arrives as a second MQTT command, which could never be dispatched if
+the first handler held the loop.
 
 ### `slack_event` — Forward a Slack Events API delivery (HTTP mode)
 
@@ -449,6 +478,7 @@ Handled by bootstrap worker, not through MQTT handler directly.
 | `os/services/internal/device/service.go` | `RefreshChannelConfig` (generic per-channel request build + capability gate) |
 | `os/services/internal/agent/channel_reconcile.go` | `ChannelReconcile`: re-applies channels after a runtime switch, records `channels_unsupported` |
 | `os/services/server/device/delivery/mqtt/whatsapp_pair_handler.go` | Handle `whatsapp_pair` re-pair command |
+| `os/services/server/device/delivery/mqtt/claudecode_login_handler.go` | Handle `claudecode_login` / `claudecode_login_code` (claude.ai OAuth login) |
 | `os/services/internal/openclaw/pairing.go` | WhatsApp Baileys QR pairing subprocess driver |
 | `os/services/domain/device.go` | MQTTMessage, command constants |
 | `os/services/domain/pairing.go` | PairingEvent + status enum |

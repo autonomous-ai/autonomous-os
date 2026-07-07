@@ -1,0 +1,376 @@
+package codex
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/bwmarrin/discordgo"
+)
+
+// Device-owned Discord inbound for the Codex runtime.
+//
+// Discord requires a Gateway WebSocket bot session (there is no long-poll
+// receive API like Telegram's getUpdates), so os-server owns a discordgo
+// session. Like the telegram loop (telegram_poll.go), it is started from
+// StartWS and lives inside this service's lifecycle — it runs ONLY while
+// codex is the active runtime, so it can never fight another runtime's bot
+// session for the same token.
+//
+// Credentials are read fresh from Device config on every (re)connect attempt
+// (config.DiscordBotToken / DiscordUserID / DiscordGuildID), so saving them
+// needs no restart while disconnected. Accepted messages become regular chat
+// turns; replies are routed back to the originating channel by emitFinal via
+// the discordRuns tracker (translator.go); TTS is suppressed (MarkSilentRun).
+
+const (
+	// discordNoTokenWait is the idle recheck interval while no bot token is
+	// configured (the user may save one later — keep checking).
+	discordNoTokenWait = 30 * time.Second
+
+	// discordErrorWait is the backoff after a failed session open so a broken
+	// token or flaky network cannot hot-loop against the Discord gateway.
+	discordErrorWait = 15 * time.Second
+
+	// discordBusyPoll is how often an accepted message rechecks IsBusy()
+	// before injecting its turn (mirrors telegramBusyPoll).
+	discordBusyPoll = 500 * time.Millisecond
+
+	// discordTypingLifetime caps a typing keeper — matches the gatewayd turn
+	// timeout so a wedged turn cannot leave the channel "typing…" forever.
+	discordTypingLifetime = 10 * time.Minute
+
+	// discordTypingInterval is the keeper refire period. Discord's native
+	// typing indicator lasts ~10 s, so 8 s keeps it alive without gaps.
+	discordTypingInterval = 8 * time.Second
+
+	// discordMaxMessageLen is Discord's hard per-message character limit;
+	// longer replies are chunked (newline boundaries preferred).
+	discordMaxMessageLen = 2000
+)
+
+// discordInbound is the transport-independent view of one MessageCreate event
+// that the pure accept filter operates on (hermetic tests build it directly).
+type discordInbound struct {
+	authorID    string
+	authorBot   bool // author is a bot (includes our own messages — loop guard)
+	botUserID   string
+	guildID     string // empty for DMs
+	channelID   string
+	content     string
+	mentionsBot bool // the bot user appears in the message mentions
+}
+
+// discordMentionRE matches a mention of one user id (<@123> / <@!123> nickname
+// form), built per bot id by stripDiscordMention.
+func discordMentionRE(botUserID string) *regexp.Regexp {
+	return regexp.MustCompile(`<@!?` + regexp.QuoteMeta(botUserID) + `>`)
+}
+
+// stripDiscordMention removes every mention of the bot user from the text
+// (guild messages must @mention the bot to be accepted; the mention itself is
+// noise for the agent).
+func stripDiscordMention(content, botUserID string) string {
+	if botUserID == "" {
+		return strings.TrimSpace(content)
+	}
+	return strings.TrimSpace(discordMentionRE(botUserID).ReplaceAllString(content, ""))
+}
+
+// acceptDiscordMessage is the pure (no-I/O) accept filter. Accepted =
+//   - not from a bot (covers our own messages — loop guard),
+//   - sender id == allowedUser (empty allowlist = closed: Discord bots are
+//     joinable by anyone in the guild, so an explicit allowlist is required),
+//   - a DM (no guild id), OR a message in allowedGuild that mentions the bot
+//     (mirrors common openclaw plugin behavior: guild requires @mention, DM
+//     does not),
+//   - non-empty text once the bot mention is stripped.
+//
+// Returns the cleaned turn text and whether the message starts a turn.
+func acceptDiscordMessage(in discordInbound, allowedUser, allowedGuild string) (string, bool) {
+	if in.authorBot || in.authorID == in.botUserID {
+		return "", false // bot message (including our own) — loop guard
+	}
+	if allowedUser == "" || in.authorID != allowedUser {
+		return "", false // sender not allowlisted
+	}
+	isDM := in.guildID == ""
+	if !isDM {
+		if allowedGuild == "" || in.guildID != allowedGuild {
+			return "", false // wrong (or unconfigured) guild
+		}
+		if !in.mentionsBot {
+			return "", false // guild messages must @mention the bot
+		}
+	}
+	text := stripDiscordMention(in.content, in.botUserID)
+	if text == "" {
+		return "", false // nothing left to say (attachment-only, bare mention, …)
+	}
+	return text, true
+}
+
+// discordTurnText builds the sender-metadata prefix so the agent knows who is
+// talking and on which channel — same shape as the telegram/slack paths.
+func discordTurnText(username, userID, text string) string {
+	if username == "" {
+		username = "unknown"
+	}
+	return fmt.Sprintf("[discord] Message from %s [id:%s]:\n%s", username, userID, text)
+}
+
+// chunkDiscordMessage splits text into Discord-sendable chunks of at most
+// limit characters (runes — Discord counts characters, not bytes), preferring
+// to cut at the last newline inside the window so paragraphs stay whole.
+// Chunks that end up empty after trimming trailing newlines are dropped.
+func chunkDiscordMessage(text string, limit int) []string {
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return []string{text}
+	}
+	var out []string
+	for len(runes) > 0 {
+		if len(runes) <= limit {
+			if c := strings.TrimRight(string(runes), "\n"); c != "" {
+				out = append(out, c)
+			}
+			break
+		}
+		cut := limit
+		for i := limit; i >= 1; i-- {
+			if runes[i-1] == '\n' {
+				cut = i
+				break
+			}
+		}
+		if c := strings.TrimRight(string(runes[:cut]), "\n"); c != "" {
+			out = append(out, c)
+		}
+		runes = runes[cut:]
+		// The boundary newline(s) already separate the chunks — drop them from
+		// the head of the remainder.
+		for len(runes) > 0 && runes[0] == '\n' {
+			runes = runes[1:]
+		}
+	}
+	return out
+}
+
+// startDiscordBot runs the device-owned Discord gateway session until ctx is
+// cancelled. Started ONCE from StartWS (before its reconnect loop), so it
+// survives WS reconnects and dies with the gateway lifecycle. While no token
+// is configured it rechecks every discordNoTokenWait; a failed open backs off
+// discordErrorWait. Once open, discordgo handles gateway reconnects itself;
+// the session is closed when ctx ends.
+func (s *CodexService) startDiscordBot(ctx context.Context) {
+	slog.Info("discord bot loop started", "component", "codex")
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		// Read creds fresh every attempt: config may be saved at any time and
+		// the loop must pick that up without a restart.
+		token := s.config.DiscordBotToken
+		if token == "" {
+			if !sleepCtx(ctx, discordNoTokenWait) {
+				return
+			}
+			continue
+		}
+		sess, err := s.openDiscordSession(ctx, token)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			slog.Warn("discord session open failed", "component", "codex", "error", err)
+			if !sleepCtx(ctx, discordErrorWait) {
+				return
+			}
+			continue
+		}
+		// Session is up (discordgo auto-reconnects internally). Park until the
+		// gateway lifecycle ends, then close and exit.
+		<-ctx.Done()
+		s.setDiscordSession(nil)
+		if err := sess.Close(); err != nil {
+			slog.Debug("discord session close failed", "component", "codex", "error", err)
+		}
+		return
+	}
+}
+
+// openDiscordSession builds, wires and opens one discordgo session: DM +
+// guild-message + message-content intents, the MessageCreate handler, and the
+// service-held handle the reply/typing senders use.
+func (s *CodexService) openDiscordSession(ctx context.Context, token string) (*discordgo.Session, error) {
+	sess, err := discordgo.New("Bot " + token)
+	if err != nil {
+		return nil, fmt.Errorf("build discord session: %w", err)
+	}
+	sess.Identify.Intents = discordgo.IntentsDirectMessages |
+		discordgo.IntentsGuildMessages |
+		discordgo.IntentMessageContent
+	sess.AddHandler(func(_ *discordgo.Session, m *discordgo.MessageCreate) {
+		s.handleDiscordMessage(ctx, sess, m)
+	})
+	if err := sess.Open(); err != nil {
+		return nil, fmt.Errorf("open discord gateway: %w", err)
+	}
+	s.setDiscordSession(sess)
+	botID := ""
+	if sess.State != nil && sess.State.User != nil {
+		botID = sess.State.User.ID
+	}
+	slog.Info("discord session open", "component", "codex", "botUserId", botID)
+	return sess, nil
+}
+
+// setDiscordSession / getDiscordSession guard the session handle so the reply
+// sender (translator.go emitFinal, off the handler goroutine) sees a
+// consistent value.
+func (s *CodexService) setDiscordSession(sess *discordgo.Session) {
+	s.discordMu.Lock()
+	s.discordSession = sess
+	s.discordMu.Unlock()
+}
+
+func (s *CodexService) getDiscordSession() *discordgo.Session {
+	s.discordMu.Lock()
+	defer s.discordMu.Unlock()
+	return s.discordSession
+}
+
+// handleDiscordMessage filters one MessageCreate and injects the accepted
+// message as a chat turn. Rejects are logged at debug only.
+func (s *CodexService) handleDiscordMessage(ctx context.Context, sess *discordgo.Session, m *discordgo.MessageCreate) {
+	if m.Author == nil {
+		return
+	}
+	botUserID := ""
+	if sess.State != nil && sess.State.User != nil {
+		botUserID = sess.State.User.ID
+	}
+	mentionsBot := false
+	for _, u := range m.Mentions {
+		if u != nil && u.ID == botUserID {
+			mentionsBot = true
+			break
+		}
+	}
+	in := discordInbound{
+		authorID:    m.Author.ID,
+		authorBot:   m.Author.Bot,
+		botUserID:   botUserID,
+		guildID:     m.GuildID,
+		channelID:   m.ChannelID,
+		content:     m.Content,
+		mentionsBot: mentionsBot,
+	}
+	text, ok := acceptDiscordMessage(in, s.config.DiscordUserID, s.config.DiscordGuildID)
+	if !ok {
+		slog.Debug("discord message skipped",
+			"component", "codex", "authorId", m.Author.ID, "guildId", m.GuildID)
+		return
+	}
+	turnText := discordTurnText(m.Author.Username, m.Author.ID, text)
+	s.injectDiscordTurn(ctx, turnText, m.ChannelID)
+}
+
+// injectDiscordTurn waits for the agent to go idle, then sends the message as
+// a regular chat turn with flow source "discord" (chat_input / chat_send flow
+// events fire as usual, so Flow Monitor shows the origin). The runID is
+// tracked in discordRuns so emitFinal posts the reply back to channelID, and
+// marked silent so the reply is not spoken over TTS. Mirrors injectTelegramTurn.
+func (s *CodexService) injectDiscordTurn(ctx context.Context, text, channelID string) {
+	for s.IsBusy() {
+		if !sleepCtx(ctx, discordBusyPoll) {
+			return
+		}
+	}
+	reqID, runID := s.NextChatRunID()
+	s.markDiscordRun(runID, channelID)
+	s.MarkSilentRun(runID) // reply goes back to the Discord channel, not TTS
+	send := s.discordSendTurn
+	if send == nil {
+		send = func(text, reqID, runID string) error {
+			_, err := s.sendChat(text, "", reqID, runID, "discord")
+			return err
+		}
+	}
+	if err := send(text, reqID, runID); err != nil {
+		// Un-mark so the trackers don't leak. The message is dropped (Discord
+		// will not re-deliver a gateway event); the user sees no reply and can
+		// resend.
+		s.consumeDiscordRun(runID)
+		s.ConsumeSilentRun(runID)
+		slog.Error("discord turn injection failed",
+			"component", "codex", "runID", runID, "channelID", channelID, "error", err)
+		return
+	}
+	// Keep Discord's native "typing…" indicator alive while the turn runs.
+	// Stops when emitFinal/handleError consumes the run or after the cap.
+	go s.discordTypingKeeper(ctx, channelID, runID)
+}
+
+// discordTypingKeeper fires ChannelTyping immediately and then every
+// discordTypingInterval (the native indicator lasts ~10 s) until the run is
+// consumed by emitFinal or handleError. Best-effort: send errors are logged
+// at debug and ignored.
+func (s *CodexService) discordTypingKeeper(ctx context.Context, channelID, runID string) {
+	deadline := time.Now().Add(discordTypingLifetime)
+	for {
+		if !s.hasDiscordRun(runID) || time.Now().After(deadline) {
+			return
+		}
+		s.sendDiscordTyping(channelID)
+		if !sleepCtx(ctx, discordTypingInterval) {
+			return
+		}
+	}
+}
+
+// sendDiscordTyping triggers one native typing indicator on channelID.
+func (s *CodexService) sendDiscordTyping(channelID string) {
+	sess := s.getDiscordSession()
+	if sess == nil {
+		return
+	}
+	if err := sess.ChannelTyping(channelID); err != nil {
+		slog.Debug("discord ChannelTyping failed", "component", "codex", "error", err)
+	}
+}
+
+// finishDiscordTurn posts a reply to the originating channel, chunked at
+// Discord's 2000-character message limit. Called from emitFinal (goroutine —
+// the WS read loop must not block on the Discord API). Tests stub the
+// discordSendMessage seam; production sends via the live session (nil session
+// → log + drop, the gateway lifecycle already ended).
+func (s *CodexService) finishDiscordTurn(channelID, reply string) {
+	if reply == "" {
+		return
+	}
+	send := s.discordSendMessage
+	if send == nil {
+		send = func(channelID, text string) error {
+			sess := s.getDiscordSession()
+			if sess == nil {
+				return fmt.Errorf("discord session not open")
+			}
+			_, err := sess.ChannelMessageSend(channelID, text)
+			return err
+		}
+	}
+	for _, chunk := range chunkDiscordMessage(reply, discordMaxMessageLen) {
+		if err := send(channelID, chunk); err != nil {
+			slog.Error("discord reply send failed",
+				"component", "codex", "channelID", channelID, "error", err)
+			return
+		}
+	}
+	slog.Info("discord reply posted", "component", "codex", "channelID", channelID)
+}

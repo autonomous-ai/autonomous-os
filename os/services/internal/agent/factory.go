@@ -4,6 +4,8 @@ import (
 	"log/slog"
 
 	"go.autonomous.ai/os/domain"
+	"go.autonomous.ai/os/internal/codex"
+	"go.autonomous.ai/os/internal/claudecode"
 	"go.autonomous.ai/os/internal/device"
 	"go.autonomous.ai/os/internal/hermes"
 	"go.autonomous.ai/os/internal/monitor"
@@ -29,6 +31,8 @@ var gatewayTransport = map[string]string{
 	"openclaw": "websocket",
 	"hermes":   "sse",
 	"picoclaw": "websocket",
+	"codex":    "websocket",
+	"claudecode": "websocket",
 }
 
 func ProvideGateway(cfg *config.Config, bus *monitor.Bus, sled *statusled.Service) domain.AgentGateway {
@@ -65,6 +69,19 @@ func ProvideGateway(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 			"source":       source,
 		})
 		return picoclaw.ProvideService(cfg, bus, sled)
+	case "codex":
+		logBackendBanner("CODEX", map[string]string{
+			"ws_url":       codex.WSURL,
+			"conversation": codex.Conversation,
+			"source":       source,
+		})
+		return codex.ProvideService(cfg, bus, sled)
+	case "claudecode":
+    		logBackendBanner("CLAUDECODE", map[string]string{
+    			"ws_url": claudecode.WSURL,
+    			"source": source,
+    		})
+    		return claudecode.ProvideService(cfg, bus, sled)
 	default:
 		effective := raw_runtime
 		if effective == "" {
@@ -96,6 +113,10 @@ func resolveRuntime(cfg *config.Config) (effective, raw, source string) {
 		return "hermes", raw, source
 	case "picoclaw":
 		return "picoclaw", raw, source
+	case "codex":
+		return "codex", raw, source
+	case "claudecode":
+    		return "claudecode", raw, source
 	default:
 		return "openclaw", raw, source
 	}

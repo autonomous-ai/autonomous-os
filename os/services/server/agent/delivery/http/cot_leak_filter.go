@@ -57,6 +57,7 @@ var cotSecondaryRe = regexp.MustCompile(
 	`(?i)(?:\bpersonas?\b|\bsystem prompts?\b|language lock|\baudio tags?\b` +
 		`|\bemotion tool\b|via tool call` +
 		`|\bmy search results?\b|\bsearch results? (?:show|suggest|indicate)\b` +
+		`|\bsearch quer(?:y|ies)\b` +
 		`|\b\d+ (?:sentences?|words)\b)`,
 )
 
@@ -73,6 +74,26 @@ var cotOpenerRe = regexp.MustCompile(
 )
 
 const cotQuotes = "\"'“”‘’«»「」『』【】＂＇"
+
+// Quoted spans inside a sentence don't decide its language: the leak corpus
+// has English planning sentences that embed the reply language in quotes
+// ("The search query 'cách dùng select trong itron os' didn't yield...") —
+// with the quoted Vietnamese counted, the non-ASCII ratio calls the whole
+// sentence non-English and the CoT line survives. RE2 has no lookarounds, so
+// straight single-quote spans use boundary capture groups instead of the
+// Python filter's (?<!\w)'…'(?!\w) — contractions ("didn't") can't open one.
+var cotQuotedSpanRe = regexp.MustCompile(
+	`"[^"]*"|“[^”]*”|‘[^’]*’|«[^»]*»|「[^」]*」|『[^』]*』`,
+)
+
+var cotSingleQuotedSpanRe = regexp.MustCompile(
+	`(^|[^\pL\pN_])'[^']*'($|[^\pL\pN_])`,
+)
+
+func cotStripQuotedSpans(s string) string {
+	s = cotQuotedSpanRe.ReplaceAllString(s, " ")
+	return cotSingleQuotedSpanRe.ReplaceAllString(s, "$1 $2")
+}
 
 var cotNonASCIIRe = regexp.MustCompile(`[^\x00-\x7f]`)
 
@@ -207,6 +228,10 @@ func newCoTLeakFilter(langCode string) *cotLeakFilter {
 
 func (f *cotLeakFilter) looksEnglish(sentence string) bool {
 	s := strings.TrimSpace(cotLeadingTagsRe.ReplaceAllString(sentence, ""))
+	// Judge the sentence by its own voice, not by what it quotes: quoted
+	// reply-language text inside an English planning sentence must not
+	// rescue it.
+	s = cotStripQuotedSpans(s)
 	letters, nonASCII := 0, 0
 	for _, r := range s {
 		if unicode.IsLetter(r) {

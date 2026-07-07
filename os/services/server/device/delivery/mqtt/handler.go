@@ -220,8 +220,12 @@ func (h *DeviceMQTTHandler) dispatchData(env domain.MQTTDataCommand) error {
 		return h.handleRuntimeSetup(env, domain.AgentRuntimeHermes)
 	case domain.KindPicoclawSetup:
 		return h.handleRuntimeSetup(env, domain.AgentRuntimePicoclaw)
+	case domain.KindClaudecodeSetup:
+		return h.handleRuntimeSetup(env, domain.AgentRuntimeClaudeCode)
 	case domain.KindOpenclawSetup:
 		return h.handleRuntimeSetup(env, domain.AgentRuntimeOpenClaw)
+	case domain.KindCodexSetup:
+		return h.handleRuntimeSetup(env, domain.AgentRuntimeCodex)
 	case domain.KindTTSPreview:
 		return h.handleTTSPreview(env)
 	case domain.KindDeviceRename:
@@ -269,6 +273,10 @@ func (h *DeviceMQTTHandler) HandleMessage(topic string, payload []byte) error {
 		return h.handleSlackCommand(cmd)
 	case domain.CommandWhatsappPair:
 		return h.handleWhatsappPair(cmd)
+	case domain.CommandClaudeCodeLogin:
+		return h.handleClaudeCodeLogin(cmd)
+	case domain.CommandClaudeCodeLoginCode:
+		return h.handleClaudeCodeLoginCode(cmd)
 	case domain.CommandData:
 		return h.handleData(cmd)
 	default:

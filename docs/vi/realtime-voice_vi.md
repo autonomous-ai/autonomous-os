@@ -317,6 +317,9 @@ theo agent gateway (`HAL_AGENT_GATEWAY`):
 |---------|-------|-----------|
 | `openclaw` | `context_manager/openclaw.py` `OpenClawContextManager` | `HAL_OPENCLAW_WORKSPACE_DIR` (`/root/.openclaw/workspace`) |
 | `hermes` | `context_manager/hermes.py` `HermesContextManager` | `HAL_HERMES_WORKSPACE_DIR` (`/root/.hermes`) |
+| `picoclaw` | `OpenClawContextManager` (layout giống hệt) | `HAL_PICOCLAW_WORKSPACE_DIR` (`/root/.picoclaw/workspace`) |
+| `codex` | `OpenClawContextManager` (layout giống hệt) | `HAL_CODEX_WORKSPACE_DIR` (`/root/.codex/workspace`) |
+| `claudecode` | `context_manager/claudecode.py` `ClaudeCodeContextManager` — layout OpenClaw trừ skills, đọc từ `.claude/skills/` (dir native của claude CLI) | `HAL_CLAUDECODE_WORKSPACE_DIR` (`/root/.claudecode/workspace`) |
 
 `ContextManagerBase` (`context_manager/base.py`) lo phần lắp ráp prompt
 (`build_instructions`), lưu lượt (`add_turn`), nạp/trim memory, và summarize;
@@ -363,6 +366,9 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
    `commit_audio()`.
 5. **Tiêu thụ.** `for output in stream_output()`:
    - `TextOutput` → các câu được flush sang TTS (`speak` / `speak_queue`).
+     Nếu `speak` báo busy (TTS khác đang giữ loa non-interruptible, ví dụ
+     nudge ambient), câu sẽ fallback sang `speak_queue` để phát sau đó thay
+     vì bị mất luôn.
    - `DelegateSignal` → dừng; chuyển `[voice-instruction] …` + transcript tới OS
      server với `event_type` gốc.
    - Ngược lại lượt đã được xử lý cục bộ → báo OS server `voice_agent_handled`
@@ -457,7 +463,10 @@ bị vẫn an toàn; trong cot-mode drop thêm câu planning tiếng Anh (chỉ 
 không nói tiếng Anh — chữ viết không-Latin như tiếng Việt/Trung/Nhật dùng check
 tỉ lệ ASCII, chữ Latin như Pháp/Indo yêu cầu thêm function word tiếng Anh để
 answer thật không bị nuốt), draft trong ngoặc kép, mảnh plan vụn, và câu
-gần-trùng câu đã giữ (CJK token theo từng ký tự). Mỗi câu bị drop đều log
+gần-trùng câu đã giữ (CJK token theo từng ký tự). Check ngôn ngữ bỏ qua các
+đoạn nằm trong ngoặc, nên câu planning tiếng Anh nhúng text ngôn-ngữ-trả-lời
+trong ngoặc ("The search query 'cách dùng…' didn't yield…") vẫn bị bắt, còn
+câu ngôn-ngữ-trả-lời trích dẫn tiếng Anh thì không. Mỗi câu bị drop đều log
 `CoT leak dropped`.
 
 Đường agent chính (reply openclaw/hermes nói qua os-server) có bản port Go của

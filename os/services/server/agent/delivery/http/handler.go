@@ -188,6 +188,8 @@ func ProvideAgentHandler(gw domain.AgentGateway, bus *monitor.Bus, sled *statusl
 	go populateOpenClawVersion()
 	go populateHermesVersion()
 	go populatePicoclawVersion()
+	go populateCodexVersion()
+	go populateClaudeCodeVersion()
 	return AgentHandler{
 		agentGateway:         gw,
 		monitorBus:           bus,

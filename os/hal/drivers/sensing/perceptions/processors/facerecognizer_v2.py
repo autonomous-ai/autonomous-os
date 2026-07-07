@@ -98,8 +98,8 @@ _LANDMARK_MODEL_PATH: str = os.environ.get(
     "HAL_FACE_LANDMARK_MODEL_PATH", os.path.join(_FACE_MODEL_PATH, "MediaPipeFaceLandmarkDetector.onnx")
 )
 # Face-presence probability above which the ONNX landmarks are trusted for
-# alignment; below it we fall back to the SCRFD keypoints (reproduces the old
-# pip-MediaPipe succeed/fail split). See _OnnxLandmarkAligner.
+# alignment; below it the detection is dropped (no SCRFD keypoint fallback), so
+# this doubles as a false-alarm gate. See _OnnxLandmarkAligner.
 _LANDMARK_CONF_THRESHOLD: float = float(
     os.environ.get("HAL_FACE_LANDMARK_CONF_THRESHOLD", "0.6")
 )
@@ -230,12 +230,6 @@ def _v2_warp_and_crop_face(
     return cv2.warpAffine(src_img, tfm, crop_size)
 
 
-def _v2_align_from_kps(frame: np.ndarray, kps) -> np.ndarray:
-    """Align a face using 5 detector keypoints (SCRFD/ArcFace order)."""
-    src_pts = np.asarray(kps, dtype=np.float32).reshape(5, 2)
-    return _v2_warp_and_crop_face(frame, src_pts)
-
-
 def _v2_landmarks_out_of_bounds(pts5: np.ndarray, bbox, frame_shape) -> bool:
     """True if any of the 5 alignment points falls outside the bbox or image."""
     h, w = frame_shape[:2]
@@ -294,7 +288,8 @@ class _MediaPipeLandmarkONNX:
         conf_thresh: face-presence probability (sigmoid of the raw 'scores'
             output) above which the landmarks are trusted. ~0.6 mirrors the pip
             MediaPipe succeed/fail split — clear frontal faces use the dense
-            landmarks; hard/profile faces fall back to the SCRFD keypoints.
+            landmarks; hard/profile / non-face crops fall below it and are
+            dropped (no keypoint fallback).
         roi_scale: square ROI side as a multiple of the bbox's longer side. 1.4
             reproduces the old path (FaceMesh on bbox + 0.2 margin ≈ 1.4x).
         roll_align: if True and eye keypoints are given, rotate the ROI so the
@@ -383,45 +378,40 @@ class _MediaPipeLandmarkONNX:
 class _OnnxLandmarkAligner:
     """ONNX-landmark alignment (drop-in for the old MediaPipe FaceMesh aligner).
 
-    Control flow mirrors the old pip-MediaPipe path so the aligned crops line up:
+    Only confident, in-bounds dense landmarks are used to align:
         score >= conf_thresh -> align from the dense ONNX landmarks
-        score <  conf_thresh -> fall back to the SCRFD keypoints (old fallback)
-    The keypoint fallback (``_v2_align_from_kps``) is the identical ArcFace
-    transform the old code used, so those faces reproduce v1 almost exactly.
+        score <  conf_thresh -> drop the face (no embedding)
+    There is NO SCRFD keypoint fallback, so low-confidence / non-face detections
+    are gated out instead of being force-aligned and embedded.
     """
 
     def __init__(self, landmarker: _MediaPipeLandmarkONNX) -> None:
         self._landmarker = landmarker
 
-    def align_crop_from_bbox(self, frame: np.ndarray, bbox, kps=None,
-                             margin: float = 0.2):
+    def align_crop_from_bbox(self, frame: np.ndarray, bbox, kps=None):
         """Aligned 112x112 crop for one detection, or None if it cannot align.
 
-        ``margin`` is accepted for call-site compatibility with the old aligner;
-        the ROI padding is now controlled by the landmarker's ``roi_scale``.
+        Faces whose landmark confidence is below ``conf_thresh`` (or whose
+        landmarks fall outside the bbox/image) are dropped: there is NO SCRFD
+        keypoint fallback, so low-confidence / non-face detections never produce
+        an embedding. ``kps`` is still used by the landmarker for ROI roll
+        correction.
         """
         try:
             landmarks, score = self._landmarker.detect_in_frame(frame, bbox, kps=kps)
-        except Exception as e:  # noqa: BLE001 — mirror reference behaviour
+        except Exception as e:  # noqa: BLE001
             logger.debug("[face-v2] landmark inference error: %s", e)
-            landmarks, score = None, 0.0
+            return None
 
         if landmarks is not None and score >= self._landmarker.conf_thresh:
             pts5 = self._landmarker.to_5points(landmarks)
             if not _v2_landmarks_out_of_bounds(pts5, bbox, frame.shape):
                 try:
-                    return _v2_warp_and_crop_face(frame, pts5)
+                    return _v2_warp_and_crop_face(frame, pts5), pts5
                 except Exception as e:  # noqa: BLE001
                     logger.debug("[face-v2] landmark alignment error: %s", e)
 
-        # Low landmark confidence (or alignment failed) -> mirror old fallback.
-        if kps is not None:
-            try:
-                return _v2_align_from_kps(frame, kps)
-            except Exception as e:  # noqa: BLE001
-                logger.debug("[face-v2] keypoint alignment error: %s", e)
-
-        return None
+        return None, None
 
 
 # =============================================================================
@@ -738,7 +728,6 @@ class _EdgeFacePipeline:
         landmark_conf_thresh: float = _LANDMARK_CONF_THRESHOLD,
         roi_scale: float = 1.4,
         roll_align: bool = True,
-        align_margin: float = 0.2,
         l2_normalize: bool = False,
         session_options: ort.SessionOptions | None = None,
     ):
@@ -765,7 +754,6 @@ class _EdgeFacePipeline:
             l2_normalize=l2_normalize,
             session_options=session_options,
         )
-        self.align_margin = align_margin
 
     def get(self, frame: np.ndarray) -> list:
         detections = self.detector.infer(frame)
@@ -774,9 +762,7 @@ class _EdgeFacePipeline:
             bbox = det["bbox"]
             kps = det["kps"]
 
-            aligned = self.aligner.align_crop_from_bbox(
-                frame, bbox, kps=kps, margin=self.align_margin
-            )
+            aligned, kps = self.aligner.align_crop_from_bbox(frame, bbox, kps=kps)
             if aligned is None:
                 continue
 
@@ -801,10 +787,9 @@ class FaceRecognizer:
     def __init__(
         self,
         area_ratio_threshold: float = config.FACE_AREA_RATIO_THRESHOLD,
-        threshold: float = 0.4,
+        threshold: float = 0.3,
         negative_threshold: float | None = 0.2,
         max_strangers: int = 50,
-        model_name: str = "buffalo_sc",
         scrfd_model_path: str = _SCRFD_MODEL_PATH,
         edgeface_model_path: str = _EDGEFACE_MODEL_PATH,
         landmark_model_path: str = _LANDMARK_MODEL_PATH,
@@ -813,9 +798,6 @@ class FaceRecognizer:
         self._threshold: float = threshold
         self._negative_threshold: float | None = negative_threshold
         self._max_strangers: int = max_strangers
-        # model_name is retained for API compatibility with the old buffalo_sc
-        # recognizer; it is no longer used to select a model.
-        self._model_name: str = model_name
         self._scrfd_model_path: str = scrfd_model_path
         self._edgeface_model_path: str = edgeface_model_path
         self._landmark_model_path: str = landmark_model_path
@@ -1105,10 +1087,9 @@ class FacePerception(Perception[cv2.typing.MatLike]):
         perception_state: PerceptionStateObservers,
         send_event: SendEventCallable,
         presense_service: PresenseService | None = None,
-        threshold: float = 0.4,
+        threshold: float = 0.3,
         negative_threshold: float | None = 0.2,
         max_strangers: int = 50,
-        model_name: str = "buffalo_sc",
         area_ratio_threshold: float = config.FACE_AREA_RATIO_THRESHOLD,
         owners_forget_ts: float = config.FACE_OWNER_FORGET_S,
         strangers_forget_ts: float = config.FACE_STRANGER_FORGET_S,
@@ -1121,7 +1102,6 @@ class FacePerception(Perception[cv2.typing.MatLike]):
             threshold=threshold,
             negative_threshold=negative_threshold,
             max_strangers=max_strangers,
-            model_name=model_name,
         )
         self._face_recognizer.start()
         self._owners_forget_ts: float = owners_forget_ts

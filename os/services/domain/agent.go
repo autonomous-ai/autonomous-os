@@ -114,7 +114,10 @@ type AgentGateway interface {
 	// (e.g. "telegram", "slack"). Callers enforce supported-vs-not-supported before
 	// persisting credentials and decide what to re-apply on a runtime switch.
 	// openclaw: telegram/slack/discord/whatsapp; hermes: telegram/slack/discord
-	// (delivered by the Hermes server via ~/.hermes/.env); picoclaw: telegram.
+	// (delivered by the Hermes server via ~/.hermes/.env); picoclaw: telegram;
+	// claudecode: telegram/discord (Claude Code channel plugins, token/allowlist
+	// under ~/.claude/channels/<ch>/ — no slack: Claude Code has no slack
+	// channel plugin).
 	SupportedChannels() []string
 
 	// AddChannel adds a messaging channel to the agent runtime. ctx caps the

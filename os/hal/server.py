@@ -497,6 +497,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"TTP223 init failed: {e}")
 
+    # Dedicated mic-mute push button (OrangePi sun60 PE1 today). One press =
+    # one mute↔unmute flip via HAL voice routes. Silent skip on boards that
+    # don't declare `mic_button` in boards.json.
+    try:
+        from hal.drivers.mic_button import MicButtonHandler
+
+        _mic_button_handler = MicButtonHandler()
+        _mic_button_handler.start()
+    except Exception as e:
+        logger.warning(f"Mic button init failed: {e}")
+
     # Restore Bluetooth headset route if the user had one active before reboot.
     # Best effort — silent fallback to the device speaker/mic if anything goes wrong.
     try:
