@@ -168,9 +168,11 @@ func (s *CodexService) handleItemStarted(f codexFrame, dispatch func(domain.WSEv
 	s.ensureTurnStarted(dispatch)
 	switch f.Item.kind() {
 	case "command_execution":
-		s.emitToolStart(f.Item.ID, "shell", f.Item.Command, dispatch)
+		// ensureToolStart (not emitToolStart): item.updated re-delivers the same
+		// item id and must not duplicate the tool.start node.
+		s.ensureToolStart(f.Item.ID, "shell", f.Item.Command, dispatch)
 	case "mcp_tool_call":
-		s.emitToolStart(f.Item.ID, mcpToolName(f.Item), "", dispatch)
+		s.ensureToolStart(f.Item.ID, mcpToolName(f.Item), "", dispatch)
 	}
 }
 
@@ -338,8 +340,11 @@ func (s *CodexService) emitFinal(f codexFrame, dispatch func(domain.WSEvent)) {
 	}
 	slog.Info("codex <<< turn completed", logArgs...)
 
+	// Clear ONLY currentRunID: pendingRunID belongs to the NEXT turn (it was
+	// already consumed at ensureTurnStarted for this one) — a sendChat that
+	// queued while this turn streamed must keep its runID so silent/web-chat
+	// markers still match.
 	s.currentRunID.Store("")
-	s.pendingRunID.Store("")
 
 	if finalText != "" {
 		deltaPayload, _ := json.Marshal(map[string]any{
@@ -383,8 +388,11 @@ func (s *CodexService) handleError(msg string, dispatch func(domain.WSEvent)) {
 
 	// Reset turn ids before dispatch (see emitFinal) — the consumer clears busy
 	// on lifecycle.error, draining the next turn synchronously.
+	// Clear ONLY currentRunID: pendingRunID belongs to the NEXT turn (it was
+	// already consumed at ensureTurnStarted for this one) — a sendChat that
+	// queued while this turn streamed must keep its runID so silent/web-chat
+	// markers still match.
 	s.currentRunID.Store("")
-	s.pendingRunID.Store("")
 	s.turnMu.Lock()
 	s.assistantParts = nil
 	s.toolStartSeen = nil
@@ -426,8 +434,11 @@ func (s *CodexService) consumePendingRunID() string {
 // disconnect / busyTTL expiry / send failure. The normal end-of-turn path
 // clears the ids inline in emitFinal / handleError (before dispatch).
 func (s *CodexService) clearTurn() {
+	// Clear ONLY currentRunID: pendingRunID belongs to the NEXT turn (it was
+	// already consumed at ensureTurnStarted for this one) — a sendChat that
+	// queued while this turn streamed must keep its runID so silent/web-chat
+	// markers still match.
 	s.currentRunID.Store("")
-	s.pendingRunID.Store("")
 	s.turnMu.Lock()
 	s.assistantParts = nil
 	s.toolStartSeen = nil

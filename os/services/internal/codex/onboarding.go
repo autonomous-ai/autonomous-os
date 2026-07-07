@@ -161,10 +161,30 @@ func (s *CodexService) EnsureOnboarding() error {
 		needRestart = true
 	}
 
+	// Self-heal (hermes pattern): make sure the codex.service unit actually
+	// exists before we rely on (re)starting it. A device that reached codex
+	// WITHOUT switch-runtime (e.g. a hand-edited config.json agent_runtime=codex)
+	// has no unit, so IsReady()'s WS connect — and the setup WaitForAgentReady
+	// gate — would fail forever. Also (re)start when the unit exists but is not
+	// running: factory reset disables+stops it, and it can crash on a stale
+	// config that presync just fixed.
+	gatewayInstalled := s.ensureGatewayUnit()
+	gatewayDown := !gatewayActive()
+	if gatewayInstalled || gatewayDown {
+		slog.Info("codex gateway needs (re)start",
+			"component", "codex-onboarding",
+			"gateway_installed", gatewayInstalled, "gateway_down", gatewayDown)
+		needRestart = true
+	}
+
 	// Restart the gateway so it re-reads the changed workspace prompt files
 	// (systemctl restart — see service_gateway.go for why not /reload).
 	if needRestart {
 		slog.Info("restarting codex gateway to pick up workspace changes", "component", "codex-onboarding")
+		// Re-enable so codex survives a reboot — factory reset disabled the
+		// unit, and a freshly self-healed one is not enabled. Best-effort;
+		// restart still starts it for this session even if enable fails.
+		enableCodexGateway()
 		if err := restartCodexGateway(); err != nil {
 			return fmt.Errorf("restart codex after onboarding: %w", err)
 		}

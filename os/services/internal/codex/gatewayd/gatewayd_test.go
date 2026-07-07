@@ -51,6 +51,26 @@ EOF
 	return writeScript(t, dir, "fake-codex-resume-fails", script)
 }
 
+// writeFakeCodexResumeTurnFailed fails resume attempts with a terminal
+// turn.failed JSONL frame on stdout (codex's missing-thread shape) + exit 1,
+// and emits the canned success on fresh runs.
+func writeFakeCodexResumeTurnFailed(t *testing.T, dir, argvFile string) string {
+	t.Helper()
+	script := fmt.Sprintf(`#!/bin/bash
+echo "ARGV:$*" >> %q
+case "$*" in
+  *resume*)
+    echo '{"type":"turn.failed","error":{"message":"no rollout found for thread id x"}}'
+    exit 1
+    ;;
+esac
+cat <<'EOF'
+%s
+EOF
+`, argvFile, successJSONL)
+	return writeScript(t, dir, "fake-codex-resume-turn-failed", script)
+}
+
 func writeScript(t *testing.T, dir, name, content string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
@@ -247,22 +267,47 @@ func TestSessionNewClearsSession(t *testing.T) {
 	conn := dial(t, url, testToken)
 	readFrame(t, conn) // ready status
 
+	// session.new races an in-flight turn: it rides the same worker queue, so
+	// it must execute AFTER the turn — the turn's thread.started re-persist
+	// cannot undo the clear.
 	sendMessage(t, conn, "first")
-	readTurnFrames(t, conn)
-	if got := readSessionThreadID(t, cfg.SessionFile); got != "t123" {
-		t.Fatalf("expected persisted t123, got %q", got)
-	}
-
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"session.new"}`)); err != nil {
 		t.Fatalf("send session.new: %v", err)
 	}
-	status := readFrame(t, conn)
-	if status["type"] != "bridge.status" || status["state"] != "session_cleared" ||
-		status["thread_id"] != "" {
-		t.Fatalf("expected session_cleared status, got %v", status)
+
+	// Ordered stream: the full turn first (thread persisted from
+	// thread.started), THEN the session_cleared status.
+	sawCompleted := false
+	for {
+		frame := readFrame(t, conn)
+		switch typ, _ := frame["type"].(string); typ {
+		case "bridge.status":
+			if frame["state"] != "session_cleared" {
+				continue
+			}
+			if !sawCompleted {
+				t.Fatalf("session_cleared must arrive after turn.completed, got %v early", frame)
+			}
+			if frame["thread_id"] != "" {
+				t.Fatalf("expected empty thread_id in session_cleared, got %v", frame)
+			}
+		case "thread.started":
+			if frame["thread_id"] != "t123" {
+				t.Fatalf("expected thread.started t123, got %v", frame)
+			}
+			continue
+		case "turn.completed":
+			sawCompleted = true
+			continue
+		case "turn.failed", "bridge.error":
+			t.Fatalf("unexpected failure frame: %v", frame)
+		default:
+			continue
+		}
+		break
 	}
 	if _, err := os.Stat(cfg.SessionFile); !os.IsNotExist(err) {
-		t.Fatalf("session file should be deleted, stat err: %v", err)
+		t.Fatalf("session file should be deleted after session_cleared, stat err: %v", err)
 	}
 
 	sendMessage(t, conn, "after reset")
@@ -270,6 +315,9 @@ func TestSessionNewClearsSession(t *testing.T) {
 	lines := argvLines(t, argvFile)
 	if len(lines) != 2 {
 		t.Fatalf("expected 2 codex invocations, got %d: %v", len(lines), lines)
+	}
+	if strings.Contains(lines[0], "resume") {
+		t.Fatalf("first run must be fresh, got argv: %s", lines[0])
 	}
 	if strings.Contains(lines[1], "resume") {
 		t.Fatalf("run after session.new must be fresh, got argv: %s", lines[1])
@@ -336,5 +384,54 @@ func TestResumeRetryFresh(t *testing.T) {
 	}
 	if got := readSessionThreadID(t, cfg.SessionFile); got != "t123" {
 		t.Fatalf("session file after retry: expected t123, got %q", got)
+	}
+}
+
+func TestResumedFailureFramesHeldBack(t *testing.T) {
+	dir := t.TempDir()
+	argvFile := filepath.Join(dir, "argv.txt")
+	// Seed a stale session so the first run resumes and dies with turn.failed.
+	sessionFile := filepath.Join(dir, "session.json")
+	if err := os.WriteFile(sessionFile, []byte(`{"thread_id":"x"}`), 0o600); err != nil {
+		t.Fatalf("seed session file: %v", err)
+	}
+	url, _ := startServer(t, writeFakeCodexResumeTurnFailed(t, dir, argvFile), dir)
+	conn := dial(t, url, testToken)
+	readFrame(t, conn) // ready status
+
+	sendMessage(t, conn, "retry me")
+	frames := readTurnFrames(t, conn)
+	completed := 0
+	for _, f := range frames {
+		switch f["type"] {
+		case "turn.failed", "bridge.error":
+			// The resumed attempt's terminal failure must be held back — the
+			// fresh retry owns the turn on the client side.
+			t.Fatalf("client must not see the resumed attempt's failure: %v", f)
+		case "turn.completed":
+			completed++
+		}
+	}
+	if completed != 1 {
+		t.Fatalf("expected exactly one turn.completed, got %d: %v", completed, frames)
+	}
+
+	// Nothing stashed may trail the completed turn: a ping must be answered next.
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"ping","id":9}`)); err != nil {
+		t.Fatalf("send ping: %v", err)
+	}
+	if frame := readFrame(t, conn); frame["type"] != "pong" {
+		t.Fatalf("expected pong right after turn.completed, got %v", frame)
+	}
+
+	lines := argvLines(t, argvFile)
+	if len(lines) != 2 {
+		t.Fatalf("expected resume attempt + fresh retry, got %d: %v", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "resume x") {
+		t.Fatalf("first run must resume stale id, got argv: %s", lines[0])
+	}
+	if strings.Contains(lines[1], "resume") {
+		t.Fatalf("retry must be fresh, got argv: %s", lines[1])
 	}
 }
