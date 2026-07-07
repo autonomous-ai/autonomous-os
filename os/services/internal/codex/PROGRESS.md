@@ -75,8 +75,35 @@ stub convention). This file is the running history for whoever picks the task up
         alone authenticates (no login needed).
       * Known-flaky upstream: SIGKILL mid-turn can leave dangling rollout (issue #12382) —
         fresh-retry fallback covers it. Never add --ephemeral (kills resume).
-- [ ] Device verify (switch flow, first turn, resume, rotation, MCP write, campaign-api
-      /responses endpoint) — NOT started
+- [x] Round-2 adversarial review (independent agent) + ALL 6 findings fixed:
+      * HIGH: presync mcp_servers tail-grab broke after go-toml table reordering -> awk
+        state machine, position-independent extraction; idempotency-tested twice
+      * HIGH: telegram was dead (picoclaw /root/.lumi leftover; NO device-owned inbound
+        loop exists — picoclaw's lives inside its own binary) -> codex is now HONEST:
+        SupportedChannels=nil, ErrChannelNotSupported for all, outbound-only
+        TelegramSender kept (explicit-ID DMs), TODO(codex-telegram)
+      * MED: resume-attempt turn.failed held back until retry decision (gatewayd);
+        queue-full -> bridge.status (not bridge.error); session.new rides the worker
+        queue (ordering vs in-flight turn); gateway_unit.go wired into EnsureOnboarding
+        (self-heal unit, content matches install.sh)
+      * MED: translator no longer clobbers pendingRunID of a queued next turn
+      * LOW: item.updated dedupe (ensureToolStart), install.sh exact-version guard,
+        dead code removed (codexBin/envWithoutHome/picoStopVerifyTimeout), lying
+        sed-artifact comments rewritten (onboarding header, IsBusy, identity, reset)
+- [x] Behavioral audit of sed-adapted files: skills pipeline verified coherent —
+      presync copy, skill_watcher CDN install, pruneUnsupportedSkills and the AGENTS.md
+      hint ALL resolve to /root/.codex/workspace/skills (= codex exec --cd); markdown
+      block changes no longer restart the gateway (codex reads workspace per-turn)
+- [x] FINAL GATE: go build + full go test + go vet + tsc -b + GOOS=linux GOARCH=arm64
+      — ALL GREEN (2026-07-07)
+- [x] campaign-api /responses probe (2026-07-07, from lamp-ac82 with the device key):
+      ALL variants 404 "Cannot POST" (/api/v1/ai/v1/responses, /api/v1/ai/responses,
+      /api/v1/responses) → **BLOCKER CONFIRMED**: codex cannot chat through campaign-api
+      until the backend adds an OpenAI Responses API passthrough. Interim options:
+      point llm_base_url at api.openai.com (OpenAI key) to device-verify the pipeline,
+      or wait for phase-2 ChatGPT-subscription auth (bypasses campaign-api entirely).
+- [ ] Device verify (switch flow, first turn, resume, rotation, MCP write) — blocked on
+      the /responses backend work above (or the interim OpenAI-direct fallback)
 - [ ] Phase 2: ChatGPT-subscription auth (`codex login --device-auth`) — deferred until the
       claudecode branch's login pairer merges (generalize domain.ClaudeLoginPairer, share MQTT flow)
 
