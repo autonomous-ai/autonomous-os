@@ -33,6 +33,7 @@ from hal.drivers.realtime.config import (
     gemini_needs_idle_workaround,
 )
 from hal.drivers.realtime.context_manager import (
+    ClaudeCodeContextManager,
     ContextManagerBase,
     HermesContextManager,
     OpenClawContextManager,
@@ -174,15 +175,17 @@ class RealtimeOrchestrator:
     flow (device → OpenClaw).
     """
 
-    # PicoClaw, Codex and Claude Code reuse OpenClawContextManager: their
-    # workspaces are verbatim copies of OpenClaw's layout (SOUL.md /
-    # IDENTITY.md / MEMORY.md / memory/), only the root dir differs.
+    # PicoClaw and Codex reuse OpenClawContextManager: their workspaces are
+    # verbatim copies of OpenClaw's layout (SOUL.md / IDENTITY.md / MEMORY.md /
+    # memory/ / skills/), only the root dir differs. Claude Code matches that
+    # layout except skills, which live in .claude/skills (native claude CLI
+    # convention) — its subclass only changes the skills path.
     CONTEXT_MANAGERS: dict[str, type[ContextManagerBase]] = {
         AgentGateway.OPENCLAW: OpenClawContextManager,
         AgentGateway.HERMES: HermesContextManager,
         AgentGateway.PICOCLAW: OpenClawContextManager,
         AgentGateway.CODEX: OpenClawContextManager,
-        AgentGateway.CLAUDECODE: OpenClawContextManager,
+        AgentGateway.CLAUDECODE: ClaudeCodeContextManager,
     }
 
     WORKSPACE_DIRS: dict[str, str] = {
