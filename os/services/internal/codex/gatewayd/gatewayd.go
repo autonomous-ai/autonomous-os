@@ -7,7 +7,8 @@
 //
 //	client -> gatewayd: {"type":"message.send","id":..,"payload":{"content":..,
 //	                     "attachments":[{"type":"image","url":"data:<mt>;base64,<b64>"}]}}
-//	                    {"type":"session.new"}  -> forget thread, next turn is fresh
+//	                    {"type":"session.new"}  -> forget thread (runs after queued
+//	                     turns), next turn is fresh
 //	                    {"type":"ping","id":X}  -> {"type":"pong","id":X}
 //	gatewayd -> client: codex `--json` JSONL events forwarded VERBATIM
 //	                    (thread.started/item.*/turn.completed/turn.failed/..),
