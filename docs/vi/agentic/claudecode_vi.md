@@ -170,9 +170,9 @@ Các gotcha vòng đời turn:
 Claude sở hữu session: id được bắt từ bất kỳ event nào mang `session_id` và
 được bridge persist (`session.json`) cho `--resume`.
 `NewSession` gửi `{"type":"session.new"}` (session mới, không resume).
-`ShouldRotateSession` **luôn false** và `CompactSession` là no-op — Claude Code
-tự auto-compact context của nó, nên một rotation do os-server điều khiển chỉ
-tổ vứt context đi.
+`ShouldRotateSession` **luôn false** và `CompactSession` trả
+`domain.ErrNotSupportedByRuntime` — Claude Code tự auto-compact context của
+nó, nên một rotation do os-server điều khiển chỉ tổ vứt context đi.
 
 ## 7. Kênh — Telegram + Discord qua channel plugin native
 
@@ -272,11 +272,13 @@ secret), `Version` (probe `claude --version`), và surface
 `domain.ClaudeLoginPairer` (`StartClaudeLogin`/`SubmitClaudeLoginCode` — §7b).
 
 No-op kèm lý do: `HasWhatsappSession`/`PairWhatsapp` (Baileys chỉ có ở
-OpenClaw), `RefreshModelsConfig` (model = `ANTHROPIC_MODEL`, do presync sở
-hữu), `FetchChatHistory` (`TODO(claudecode-history)` — JSONL session không có
-API đọc ổn định), `StartModelSync`/`UpdatePrimaryModel`/
-`StartPrimaryModelWatch` (model cố định qua env), `CompactSession` +
-`ShouldRotateSession=false` (auto-compaction, §6).
+OpenClaw), `FetchChatHistory` (`TODO(claudecode-history)` — JSONL session
+không có API đọc ổn định), `StartModelSync`/`StartPrimaryModelWatch` (model
+cố định qua env). `RefreshModelsConfig`/`UpdatePrimaryModel` (model =
+`ANTHROPIC_MODEL`, do presync sở hữu) và `CompactSession` (auto-compaction,
+§6) trả `domain.ErrNotSupportedByRuntime` để caller fallback sang
+`EnsureOnboarding` — presync của nó áp dụng thay đổi model;
+`ShouldRotateSession=false`.
 
 ## 10. Factory reset (`reset.go`)
 

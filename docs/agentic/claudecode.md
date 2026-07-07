@@ -173,9 +173,9 @@ Turn-lifecycle gotchas:
 Claude owns the session: the id is captured from any event carrying
 `session_id` and persisted by the bridge (`session.json`) for `--resume`.
 `NewSession` sends `{"type":"session.new"}` (fresh session, no resume).
-`ShouldRotateSession` is **always false** and `CompactSession` is a no-op —
-Claude Code auto-compacts its own context, so an os-server-driven rotation
-would only throw context away.
+`ShouldRotateSession` is **always false** and `CompactSession` returns
+`domain.ErrNotSupportedByRuntime` — Claude Code auto-compacts its own context,
+so an os-server-driven rotation would only throw context away.
 
 ## 7. Channels — Telegram + Discord via the native channel plugins
 
@@ -276,11 +276,13 @@ workspace blocks + skills restore + unit self-heal, hash-diff restart),
 surface (`StartClaudeLogin`/`SubmitClaudeLoginCode` — §7b).
 
 No-op with reasons: `HasWhatsappSession`/`PairWhatsapp` (Baileys is
-OpenClaw-only), `RefreshModelsConfig` (model = `ANTHROPIC_MODEL`,
-presync-owned), `FetchChatHistory` (`TODO(claudecode-history)` — session JSONL
-has no stable read API), `StartModelSync`/`UpdatePrimaryModel`/
-`StartPrimaryModelWatch` (fixed model via env), `CompactSession` +
-`ShouldRotateSession=false` (auto-compaction, §6).
+OpenClaw-only), `FetchChatHistory` (`TODO(claudecode-history)` — session JSONL
+has no stable read API), `StartModelSync`/`StartPrimaryModelWatch` (fixed
+model via env). `RefreshModelsConfig`/`UpdatePrimaryModel` (model =
+`ANTHROPIC_MODEL`, presync-owned) and `CompactSession` (auto-compaction, §6)
+return `domain.ErrNotSupportedByRuntime` so the caller falls back to
+`EnsureOnboarding`, whose presync applies model changes;
+`ShouldRotateSession=false`.
 
 ## 10. Factory reset (`reset.go`)
 
