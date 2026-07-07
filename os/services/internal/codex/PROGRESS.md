@@ -115,6 +115,11 @@ stub convention). This file is the running history for whoever picks the task up
       automatic.
 - [ ] Device verify remainder (switch flow, rotation, MCP write) — first turn + resume done
       via subscription mode; api-key path still blocked on the /responses backend work above
+- [x] Device prepped for full switch test (2026-07-07): manual codex binary REMOVED
+      (install.sh must install it), auth.json KEPT (root:root). ⚠️ USER DECISION:
+      auth.json is TEST-ONLY — production mode is api-key via campaign-api once the
+      backend ships /responses; at that point DELETE /root/.codex/auth.json and presync
+      auto-flips back to api-key mode on the next boot.
 - [ ] Phase 2: ChatGPT-subscription auth **pairing flow** (`codex login --device-auth` UX) —
       manual auth.json path works today (see gate above); deferred until the claudecode
       branch's login pairer merges (generalize domain.ClaudeLoginPairer, share MQTT flow)
