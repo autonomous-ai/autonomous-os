@@ -66,6 +66,21 @@ type turnPayload struct {
 	} `json:"attachments"`
 }
 
+// op kinds processed by the single worker (strict FIFO). session.new rides the
+// same queue as turns so a mid-turn reset executes AFTER the in-flight/queued
+// turns — clearing the thread id immediately would be undone by the in-flight
+// turn's thread.started re-persisting the old id.
+const (
+	opTurn       = "turn"
+	opSessionNew = "session.new"
+)
+
+// op is one unit of work for the worker queue.
+type op struct {
+	kind    string // opTurn | opSessionNew
+	payload turnPayload
+}
+
 // handleWS upgrades the connection, enforces bearer auth (close 4401 on
 // failure) and runs the read loop. A new client replaces the previous one.
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
@@ -142,18 +157,31 @@ func (s *Server) handleFrame(data []byte) {
 				return
 			}
 		}
-		select {
-		case s.turns <- payload:
-		default:
-			log.Printf("%s turn queue full — dropping message.send", logPrefix)
-			s.sendError("turn queue full")
-		}
+		s.enqueue(op{kind: opTurn, payload: payload})
 	case "session.new":
-		log.Printf("%s session.new — clearing thread id, next turn starts fresh", logPrefix)
-		s.clearSession()
-		s.sendStatus("session_cleared", "")
+		// Queued behind in-flight/queued turns (see op) — session_cleared is
+		// sent when it actually executes.
+		log.Printf("%s session.new queued — clears after in-flight/queued turns", logPrefix)
+		s.enqueue(op{kind: opSessionNew})
 	default:
 		log.Printf("%s ignoring unknown frame type %q", logPrefix, frame.Type)
+	}
+}
+
+// enqueue hands an op to the worker without blocking the read loop. A full
+// queue must NOT surface as bridge.error: the translator maps that to
+// lifecycle.error and would kill the CURRENT in-flight turn — the wrong turn.
+// Instead log + send a harmless bridge.status; the dropped turn recovers via
+// the device-side busyTTL.
+func (s *Server) enqueue(o op) {
+	select {
+	case s.ops <- o:
+	default:
+		s.mu.Lock()
+		threadID := s.threadID
+		s.mu.Unlock()
+		log.Printf("%s worker queue full — dropping %s frame", logPrefix, o.kind)
+		s.sendStatus("queue_full", threadID)
 	}
 }
 

@@ -24,18 +24,27 @@ type turnResult struct {
 	turnEnded     bool // saw turn.completed or turn.failed
 	timedOut      bool
 	spawnFailed   bool
-	stderrTail    string // bounded tail of stderr
-	stdoutTail    string // bounded tail of non-JSON stdout (resume heuristics)
+	stderrTail    string   // bounded tail of stderr
+	stdoutTail    string   // bounded tail of non-JSON stdout (resume heuristics)
+	heldFrames    [][]byte // terminal failure frames held back during a resumed attempt
 }
 
-// turnWorker drains the queue one turn at a time (strict serialization).
+// turnWorker drains the op queue one entry at a time (strict serialization).
+// session.new rides the same queue so it executes AFTER earlier turns.
 func (s *Server) turnWorker(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case payload := <-s.turns:
-			s.runTurn(ctx, payload)
+		case o := <-s.ops:
+			switch o.kind {
+			case opTurn:
+				s.runTurn(ctx, o.payload)
+			case opSessionNew:
+				log.Printf("%s session.new — clearing thread id, next turn starts fresh", logPrefix)
+				s.clearSession()
+				s.sendStatus("session_cleared", "")
+			}
 		}
 	}
 }
@@ -43,6 +52,8 @@ func (s *Server) turnWorker(ctx context.Context) {
 // runTurn executes one message.send: decode attachments, spawn codex exec
 // (resuming the stored thread when present), retry once fresh if the resume
 // target is gone, and surface terminal failures as bridge.error frames.
+// During a resumed attempt, terminal failure frames are held back (see
+// pumpStdout) so a fresh retry does not leave the client's turn already ended.
 func (s *Server) runTurn(ctx context.Context, payload turnPayload) {
 	images := s.decodeAttachments(payload)
 	s.pruneAttachments()
@@ -56,11 +67,21 @@ func (s *Server) runTurn(ctx context.Context, payload turnPayload) {
 		logPrefix, resumeID, resumeID != "", len(images))
 
 	res := s.execTurn(ctx, payload.Content, images, resumeID)
-	if resumeID != "" && resumeFailed(res) {
-		log.Printf("%s resume of thread %s failed (rc=%d) — retrying fresh",
-			logPrefix, resumeID, res.rc)
-		s.clearSession()
-		res = s.execTurn(ctx, payload.Content, images, "")
+	if resumeID != "" {
+		if resumeFailed(res) {
+			// Drop the held terminal failure frames: forwarding them would end the
+			// device turn early and the fresh retry's events would re-open an
+			// uncorrelated turn on the translator side.
+			log.Printf("%s resume of thread %s failed (rc=%d) — retrying fresh (%d failure frames dropped)",
+				logPrefix, resumeID, res.rc, len(res.heldFrames))
+			s.clearSession()
+			res = s.execTurn(ctx, payload.Content, images, "")
+		} else {
+			// Resumed attempt is terminal (no fresh retry) — release what was held.
+			for _, frame := range res.heldFrames {
+				s.send(frame)
+			}
+		}
 	}
 
 	switch {
@@ -189,7 +210,7 @@ func (s *Server) execTurn(ctx context.Context, prompt string, images []string, r
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); s.pumpStdout(stdout, &res) }()
+	go func() { defer wg.Done(); s.pumpStdout(stdout, &res, resumeID != "") }()
 	go func() { defer wg.Done(); pumpStderr(stderr, &res) }()
 	wg.Wait()
 	err = cmd.Wait()
@@ -209,7 +230,13 @@ func (s *Server) execTurn(ctx context.Context, prompt string, images []string, r
 
 // pumpStdout forwards each JSON stdout line verbatim to the client while
 // watching for thread.started (persist session) and terminal turn events.
-func (s *Server) pumpStdout(r io.Reader, res *turnResult) {
+//
+// When holdFailures is set (resumed attempt), terminal failure frames
+// (turn.failed and the top-level error event) are stashed in res.heldFrames
+// instead of forwarded: the caller drops them when it retries fresh, or
+// forwards them when the resumed attempt is terminal. thread.started/item.*
+// frames still flow normally.
+func (s *Server) pumpStdout(r io.Reader, res *turnResult, holdFailures bool) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, scanBufSize), streamLimit)
 	for scanner.Scan() {
@@ -226,6 +253,7 @@ func (s *Server) pumpStdout(r io.Reader, res *turnResult) {
 			Type     string `json:"type"`
 			ThreadID string `json:"thread_id"`
 		}
+		hold := false
 		if json.Unmarshal([]byte(line), &evt) == nil {
 			switch evt.Type {
 			case "thread.started":
@@ -233,9 +261,18 @@ func (s *Server) pumpStdout(r io.Reader, res *turnResult) {
 				if evt.ThreadID != "" {
 					s.storeThreadID(evt.ThreadID)
 				}
-			case "turn.completed", "turn.failed":
+			case "turn.completed":
 				res.turnEnded = true
+			case "turn.failed":
+				res.turnEnded = true
+				hold = holdFailures
+			case "error":
+				hold = holdFailures
 			}
+		}
+		if hold {
+			res.heldFrames = append(res.heldFrames, []byte(line))
+			continue
 		}
 		s.send([]byte(line))
 	}

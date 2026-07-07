@@ -96,15 +96,15 @@ type Server struct {
 	client   *wsClient  // single client; a new connection replaces the old
 	threadID string     // current codex thread id ("" = fresh next turn)
 
-	turns chan turnPayload // strictly serialized by the single worker
+	ops chan op // turns + session.new, strictly serialized by the single worker
 }
 
 // New builds a Server with explicit config and listener (tests use port 0).
 func New(cfg Config, ln net.Listener) *Server {
 	return &Server{
-		cfg:   cfg,
-		ln:    ln,
-		turns: make(chan turnPayload, turnQueueCap),
+		cfg: cfg,
+		ln:  ln,
+		ops: make(chan op, turnQueueCap),
 	}
 }
 
