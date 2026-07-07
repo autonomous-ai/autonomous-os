@@ -1,11 +1,12 @@
 package codex
 
 // Wire constants for the Codex backend. The OpenAI Codex CLI has no server
-// mode of its own, so the device runs a thin local bridge (materialized by
-// presync.sh to /root/.codex/bridge.py, systemd unit codex.service). The
-// bridge spawns one `codex exec --json --dangerously-bypass-approvals-and-
-// sandbox` subprocess per turn (resuming the persisted thread id) and exposes
-// this WebSocket — os-server only acts as a client.
+// mode of its own, so the device runs a thin local bridge — compiled into the
+// os-server binary (internal/codex/gatewayd, systemd unit codex.service runs
+// `os-server codex-gatewayd`). The bridge spawns one `codex exec --json
+// --dangerously-bypass-approvals-and-sandbox` subprocess per turn (resuming
+// the persisted thread id) and exposes this WebSocket — the main os-server
+// process only acts as a client.
 //
 // Frame protocol over the socket:
 //

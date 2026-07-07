@@ -10,7 +10,7 @@ stub convention). This file is the running history for whoever picks the task up
 | Decision | Choice | Why |
 |---|---|---|
 | Transport | WS bridge on `ws://127.0.0.1:18792/codex/ws/`, token `autonomous_codex_token` | Mirror `feature/claude-code` (bridge.py + WS, picoclaw-shaped Go client) — team-established pattern |
-| Bridge | Python (`bridge.py`, materialized by presync §0 heredoc, canonical source kept as `internal/codex/bridge.py`, spliced into the registered presync by `install.go` at Go init) | Same as claudecode branch; per-turn `codex exec --json` subprocess (codex exec is the stable automation surface — the official SDK wraps it; `codex app-server` is experimental/version-coupled) |
+| Bridge | **Go** (`internal/codex/gatewayd`, compiled into os-server; unit runs `os-server codex-gatewayd`) — user decision 2026-07-07 after weighing vs the claudecode branch's Python bridge: same-language repo, `go test` in CI, zero device deps (no python3/websockets), OTA rides os-server. Per-turn `codex exec --json` subprocess (exec is the stable automation surface; `codex app-server` is experimental/version-coupled). An earlier Python bridge.py existed briefly and was deleted. | |
 | Session | `thread_id` from `thread.started`, persisted `/root/.codex/session.json`, `codex exec resume <id>`; `session.new` frame → fresh | History lives on disk under `$CODEX_HOME/sessions/` — process exit ≠ session loss |
 | Auth (phase 1) | `OPENAI_API_KEY` = config.json `llm_api_key`, provider base_url = `llm_base_url` (campaign-api) | User decision: "qua campaign-api". ChatGPT-subscription `codex login --device-auth` deferred to phase 2 (share pairing plumbing with claudecode's `ClaudeLoginPairer` after that branch merges) |
 | Wire API | `wire_api = "responses"` — Codex removed chat-completions (~2/2026) | ⚠️ VERIFY ON DEVICE: campaign-api must serve `{base}/responses` |
@@ -38,19 +38,28 @@ stub convention). This file is the running history for whoever picks the task up
 
 - [x] Research + fact-check Codex CLI (agent report in session; summary above)
 - [x] `feat/codex` branch from main; stale local claudecode files removed
-- [x] `bridge.py` (374 lines) — WS server, per-turn exec, session persistence, resume-retry,
-      attachments via `-i`, verbatim event forwarding; py_compile + live fake-codex test PASS
-- [x] `install.sh` — pinned binary download, prereqs, codex.service unit, verify hook; bash -n clean
-- [x] `presync.sh` — §0 bridge heredoc (placeholder `#__BRIDGE_PY_SPLICED_AT_BUILD__`, spliced by
-      install.go), §1 openclaw persona migrate (marker-gated), §2 config.toml (head-regen, preserve
-      mcp_servers tail), §3 .env; bash -n clean
-- [ ] Go package `internal/codex/` — adapt from `origin/feature/claude-code:os/services/internal/claudecode/`
-      (sed-rename mechanical files; hand-rewrite: constants, translator, onboarding, mcp, reset,
-      runtime, stubs, install)
-- [ ] Glue: domain consts, factory case, version cache, logs.go, web AgentRuntimeSection
-- [ ] Docs: docs/agentic/codex.md EN+VI, CLAUDE.md doc-table row
-- [ ] go build / go test / tsc -b green
-- [ ] Device verify (switch flow, first turn, resume, rotation, MCP write) — NOT started
+- [x] **Bridge (Go)** `internal/codex/gatewayd/` — WS server (gorilla), auth 4401, single-client
+      replace, per-turn `codex exec` (Setpgid group-kill, timeout), verbatim JSONL forwarding,
+      session.json persistence, resume-retry-fresh, attachments via `-i`; 5 tests incl. `-race` PASS.
+      Entry: `os-server codex-gatewayd` subcommand (cmd/os-server/main.go)
+- [x] `install.sh` — pinned binary download (rust-v0.142.5 musl), jq/curl only, codex.service unit
+      (`ExecStart=os-server codex-gatewayd`), verify hook; bash -n clean
+- [x] `presync.sh` — §1 openclaw persona migrate (marker-gated, incl. AGENTS.md), §2 config.toml
+      (head-regen, preserve [mcp_servers] tail, wire_api=responses), §3 .env; bash -n clean
+- [x] Go package `internal/codex/` — full AgentGateway: translator.go (codex exec JSONL → WSEvent),
+      onboarding (presync exec + hash-gated restart + AGENTS/SOUL/HEARTBEAT blocks), mcp.go
+      (config.toml via go-toml/v2 + tests), stubs (ErrNotSupportedByRuntime convention;
+      NewSession → session.new frame), reset (wipe /root/.codex), runtime (version probe),
+      emotion_ack (hermes parity, wired in chat.go), channels/telegram device-owned (picoclaw)
+- [x] Glue: domain AgentRuntimeCodex + AgentRuntimes, factory case + transport map, version cache
+      (handler_api_monitor + populate), logs.go journal:codex.service mapping, web
+      AgentRuntimeSection blurbs (+picoclaw blurb backfilled)
+- [x] Docs: docs/agentic/codex.md (243 lines) + docs/vi/agentic/codex_vi.md + CLAUDE.md table row
+- [x] go build ./... + full go test + `tsc -b` + GOOS=linux GOARCH=arm64 build — ALL GREEN
+- [ ] Device verify (switch flow, first turn, resume, rotation, MCP write, campaign-api
+      /responses endpoint) — NOT started
+- [ ] Phase 2: ChatGPT-subscription auth (`codex login --device-auth`) — deferred until the
+      claudecode branch's login pairer merges (generalize domain.ClaudeLoginPairer, share MQTT flow)
 
 ## Gotchas discovered
 
