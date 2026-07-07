@@ -153,6 +153,48 @@ func (s *ClaudeCodeService) ConsumeSilentRun(runID string) bool {
 	return ok
 }
 
+// markSlackRun records a Slack-originated turn (slack.go) so emitFinal can
+// post the reply back to the originating channel/thread. Mirrors codex'
+// markSlackRun; entries with no channel are unroutable and skipped.
+func (s *ClaudeCodeService) markSlackRun(runID string, origin slackRun) {
+	if runID == "" || origin.channel == "" {
+		return
+	}
+	s.slackRunsMu.Lock()
+	if s.slackRuns == nil {
+		s.slackRuns = make(map[string]slackRun)
+	}
+	s.slackRuns[runID] = origin
+	s.slackRunsMu.Unlock()
+	slog.Info("slack run marked — reply will be posted to slack",
+		"component", "claudecode", "runID", runID, "channel", origin.channel)
+}
+
+// hasSlackRun reports (non-consuming) whether a Slack-originated run is still
+// awaiting its reply — backs IsSlackOriginRun (domain.SlackBridge peek).
+func (s *ClaudeCodeService) hasSlackRun(runID string) bool {
+	if runID == "" {
+		return false
+	}
+	s.slackRunsMu.Lock()
+	_, ok := s.slackRuns[runID]
+	s.slackRunsMu.Unlock()
+	return ok
+}
+
+// consumeSlackRun is one-shot: returns the origin for a Slack-originated run
+// and removes the entry. Called by emitFinal (reply routing), handleError
+// (leak prevention) and DeliverSlackReply (safety net).
+func (s *ClaudeCodeService) consumeSlackRun(runID string) (slackRun, bool) {
+	s.slackRunsMu.Lock()
+	o, ok := s.slackRuns[runID]
+	if ok {
+		delete(s.slackRuns, runID)
+	}
+	s.slackRunsMu.Unlock()
+	return o, ok
+}
+
 const pendingChatTTL = 2 * time.Minute
 const pendingSendBusyWindow = 30 * time.Second
 

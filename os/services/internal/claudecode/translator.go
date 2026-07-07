@@ -318,6 +318,17 @@ func (s *ClaudeCodeService) emitFinal(f claudeEvent, dispatch func(domain.WSEven
 	s.pendingRunID.Store("")
 	s.lastAssistantText.Store("")
 
+	// Slack-originated turn (slack.go): post the reply back to the originating
+	// channel/thread (chat.postMessage) and clear the eyes ack reaction. TTS
+	// was suppressed at injection (MarkSilentRun); [HW:/...] markers and audio
+	// tags are stripped (stripForChannel, hal.go). Consumed here —
+	// synchronously, before dispatch — so the shared handler's
+	// DeliverSlackReply safety net stays a no-op. Best-effort in a goroutine:
+	// the read loop must not block on the Web API.
+	if o, ok := s.consumeSlackRun(runID); ok {
+		go s.finishSlackTurn(o, stripForChannel(finalText))
+	}
+
 	chatMsg, _ := json.Marshal(map[string]any{
 		"runId":      runID,
 		"sessionKey": s.GetSessionKey(),
@@ -352,6 +363,14 @@ func (s *ClaudeCodeService) handleError(msg string, dispatch func(domain.WSEvent
 	s.currentRunID.Store("")
 	s.pendingRunID.Store("")
 	s.lastAssistantText.Store("")
+
+	// Slack-originated turn: consume the tracker (no reply for a failed turn)
+	// and clear the eyes ack reaction so the message isn't left marked.
+	if o, ok := s.consumeSlackRun(runID); ok {
+		slog.Warn("slack-originated turn failed — reply dropped",
+			"component", "claudecode", "runID", runID, "channel", o.channel)
+		go s.finishSlackTurn(o, "")
+	}
 
 	payload, _ := json.Marshal(map[string]any{
 		"runId":      runID,

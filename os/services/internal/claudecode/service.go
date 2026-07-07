@@ -124,7 +124,17 @@ type ClaudeCodeService struct {
 	poseBucketRunsMu sync.Mutex
 	poseBucketRuns   map[string]poseBucketInfo
 
-	// Channel senders (Telegram).
+	// slackRuns maps a Slack-originated runID → its origin channel/thread so
+	// emitFinal posts the reply back (see slack.go / translator.go).
+	slackRunsMu sync.Mutex
+	slackRuns   map[string]slackRun
+
+	// Slack inbound test seams (slack.go / slack_sender.go). Zero values select
+	// the production defaults: slack.com/api and the real sendChat-backed send step.
+	slackAPIBase  string
+	slackSendTurn func(text, reqID, runID string) error
+
+	// Channel senders (Telegram, Slack).
 	channels []domain.ChannelSender
 
 	// Pending chat traces (idempotencyKey ↔ message text for MatchPendingByMessage).
@@ -168,9 +178,11 @@ func ProvideService(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 		webChatRuns:    make(map[string]bool),
 		silentRuns:     make(map[string]bool),
 		poseBucketRuns: make(map[string]poseBucketInfo),
+		slackRuns:      make(map[string]slackRun),
 	}
 	s.channels = []domain.ChannelSender{
 		&TelegramSender{svc: s},
+		&SlackSender{svc: s},
 	}
 	return s
 }
