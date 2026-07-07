@@ -11,8 +11,10 @@ import (
 // claudecode WITHOUT switch-runtime (e.g. a hand-edited config.json
 // agent_runtime=claudecode) has no unit, so IsReady()'s WS connect — and the
 // setup WaitForAgentReady gate — would fail forever. EnsureOnboarding installs
-// it on demand (the bridge itself is presync-materialized, so unit + bridge is
-// all a hand-switched device needs). Mirrors hermes.ensureGatewayUnit.
+// it on demand (the bridge ships inside the os-server binary as the
+// claudecode-gatewayd subcommand and presync materializes .env/channels, so
+// unit + presync is all a hand-switched device needs). Mirrors
+// hermes.ensureGatewayUnit.
 
 const claudecodeUnitName = "claudecode"
 const claudecodeUnitPath = "/etc/systemd/system/claudecode.service"
@@ -20,7 +22,7 @@ const claudecodeUnitPath = "/etc/systemd/system/claudecode.service"
 // claudecodeUnitContent MUST stay in sync with the unit install.sh writes —
 // two writers, one contract (cross-referenced in install.sh).
 const claudecodeUnitContent = `[Unit]
-Description=Claude Code agent bridge
+Description=Claude Code agent bridge (os-server claudecode-gatewayd holding one headless claude)
 After=network-online.target
 Wants=network-online.target
 
@@ -28,8 +30,9 @@ Wants=network-online.target
 Type=simple
 User=root
 Environment=HOME=/root
+EnvironmentFile=-/root/.claudecode/.env
 WorkingDirectory=/root/.claudecode
-ExecStart=/usr/bin/python3 /root/.claudecode/bridge.py
+ExecStart=/usr/local/bin/os-server claudecode-gatewayd
 Restart=always
 RestartSec=3
 

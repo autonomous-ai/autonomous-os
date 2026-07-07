@@ -9,6 +9,7 @@ import (
 
 	"github.com/joho/godotenv"
 
+	ccgatewayd "go.autonomous.ai/os/internal/claudecode/gatewayd"
 	"go.autonomous.ai/os/internal/codex/gatewayd"
 	"go.autonomous.ai/os/lib/logger"
 	"go.autonomous.ai/os/server"
@@ -16,11 +17,15 @@ import (
 )
 
 func main() {
-	// Subcommand dispatch before flag parsing: `os-server codex-gatewayd` runs
-	// the Codex WS bridge (systemd unit codex.service) instead of the API
-	// server — the bridge ships inside this binary so it OTA-updates with it.
+	// Subcommand dispatch before flag parsing: `os-server codex-gatewayd` /
+	// `os-server claudecode-gatewayd` run the backend WS bridges (systemd units
+	// codex.service / claudecode.service) instead of the API server — the
+	// bridges ship inside this binary so they OTA-update with it.
 	if len(os.Args) > 1 && os.Args[1] == "codex-gatewayd" {
 		os.Exit(gatewayd.Main())
+	}
+	if len(os.Args) > 1 && os.Args[1] == "claudecode-gatewayd" {
+		os.Exit(ccgatewayd.Main())
 	}
 
 	var showVersion bool
