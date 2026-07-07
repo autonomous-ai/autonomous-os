@@ -30,9 +30,10 @@ import (
 type Runtime string
 
 const (
-	RuntimeOpenclaw   Runtime = "openclaw"
-	RuntimeHermes     Runtime = "hermes"
-	RuntimePicoclaw   Runtime = "picoclaw"
+	RuntimeOpenclaw Runtime = "openclaw"
+	RuntimeHermes   Runtime = "hermes"
+	RuntimePicoclaw Runtime = "picoclaw"
+	RuntimeCodex    Runtime = "codex"
 	RuntimeClaudeCode Runtime = "claudecode"
 )
 
@@ -46,9 +47,10 @@ type runtimeAdapter interface {
 // adapters is the registry. To make a new runtime migratable, implement
 // runtimeAdapter in runtime_<name>.go and add it here — nothing else changes.
 var adapters = map[Runtime]runtimeAdapter{
-	RuntimeOpenclaw:   openclawAdapter{},
-	RuntimeHermes:     hermesAdapter{},
-	RuntimePicoclaw:   picoclawAdapter{},
+	RuntimeOpenclaw: openclawAdapter{},
+	RuntimeHermes:   hermesAdapter{},
+	RuntimePicoclaw: picoclawAdapter{},
+	RuntimeCodex:    codexAdapter{},
 	RuntimeClaudeCode: claudecodeAdapter{},
 }
 
@@ -96,10 +98,14 @@ type Options struct {
 	// /root/.picoclaw/workspace). Layout matches OpenClaw — SOUL.md / IDENTITY.md /
 	// USER.md / KNOWLEDGE.md / memory/ — EXCEPT MEMORY.md lives under memory/.
 	PicoclawWorkspace string
+	// CodexWorkspace is the Codex workspace dir (e.g. /root/.codex/workspace).
+	// Layout matches OpenClaw exactly (presync seeds it as a verbatim copy):
+	// SOUL.md / IDENTITY.md / MEMORY.md / USER.md / KNOWLEDGE.md / memory/.
+	CodexWorkspace string
 	// ClaudecodeWorkspace is the Claude Code workspace dir (e.g.
-	// /root/.claudecode/workspace). Layout is identical to OpenClaw's
-	// (SOUL.md / IDENTITY.md / USER.md / MEMORY.md / KNOWLEDGE.md / memory/).
-	ClaudecodeWorkspace string
+    // /root/.claudecode/workspace). Layout is identical to OpenClaw's
+    // (SOUL.md / IDENTITY.md / USER.md / MEMORY.md / KNOWLEDGE.md / memory/).
+    ClaudecodeWorkspace string
 
 	// Execute writes changes; false performs a dry-run (records intended actions,
 	// touches nothing).
@@ -123,13 +129,14 @@ func DefaultOptions(openclawConfigDir, hermesRoot string) Options {
 		hermesRoot = "/root/.hermes"
 	}
 	return Options{
-		OpenclawWorkspace:   filepath.Join(openclawConfigDir, "workspace"),
-		HermesRoot:          hermesRoot,
-		PicoclawWorkspace:   "/root/.picoclaw/workspace",
+		OpenclawWorkspace:  filepath.Join(openclawConfigDir, "workspace"),
+		HermesRoot:         hermesRoot,
+		PicoclawWorkspace:  "/root/.picoclaw/workspace",
+		CodexWorkspace:     "/root/.codex/workspace",
 		ClaudecodeWorkspace: "/root/.claudecode/workspace",
-		IncludeDailyMemory:  true,
-		MemoryCharLimit:     DefaultMemoryCharLimit,
-		UserCharLimit:       DefaultUserCharLimit,
+		IncludeDailyMemory: true,
+		MemoryCharLimit:    DefaultMemoryCharLimit,
+		UserCharLimit:      DefaultUserCharLimit,
 	}
 }
 

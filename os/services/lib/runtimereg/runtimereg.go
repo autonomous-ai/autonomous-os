@@ -8,11 +8,12 @@
 // dependencies of its own, runtimereg can be imported from either side.
 package runtimereg
 
-// installers + presyncs are populated at init() time, before any runtime switch
-// can fire, so no locking is needed for the read path.
+// installers + presyncs + versions are populated at init() time, before any
+// runtime switch can fire, so no locking is needed for the read path.
 var (
 	installers = map[string][]byte{}
 	presyncs   = map[string][]byte{}
+	versions   = map[string]func() string{}
 )
 
 // Register records a backend's embedded installer. Called from a backend
@@ -43,4 +44,23 @@ func RegisterPresync(name string, script []byte) {
 func GetPresync(name string) ([]byte, bool) {
 	s, ok := presyncs[name]
 	return s, ok
+}
+
+// RegisterVersion records a backend's cached-version getter (e.g.
+// openclaw.GetOpenClawVersion). Registered from the backend package's init();
+// the getter itself reads a cache populated at startup, so calling it is cheap.
+// Exists for the same cycle-breaking reason as Register: internal/device wants
+// to report backend versions (backend ping) but cannot import the backend
+// packages directly.
+func RegisterVersion(name string, fn func() string) {
+	versions[name] = fn
+}
+
+// Version returns the backend's installed version, or "" when the backend is
+// not compiled into this binary or its version hasn't been probed yet.
+func Version(name string) string {
+	if fn, ok := versions[name]; ok {
+		return fn()
+	}
+	return ""
 }

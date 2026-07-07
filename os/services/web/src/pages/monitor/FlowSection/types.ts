@@ -286,7 +286,7 @@ import {
 } from "lucide-react";
 
 export const TYPE_LUCIDE: Record<string, LucideIcon> = {
-  voice: Mic, voice_command: Mic2, sound: Volume2,
+  voice: Mic, voice_command: Mic2, voice_agent_handled: Mic, sound: Volume2,
   motion: Eye, "motion.activity": Activity,
   "presence.enter": Smile, "presence.leave": Hand, "presence.away": Moon,
   "light.level": Sun, "emotion.detected": Smile,
@@ -310,7 +310,7 @@ export const TYPE_LUCIDE: Record<string, LucideIcon> = {
 
 // Short display label per turn sub-type, used by the filter sub-type chips.
 export const TYPE_LABEL: Record<string, string> = {
-  voice: "voice", voice_command: "cmd", sound: "sound",
+  voice: "voice", voice_command: "cmd", voice_agent_handled: "handled", sound: "sound",
   motion: "motion", "motion.activity": "activity", "emotion.detected": "emotion",
   "speech_emotion": "voice_emo", "speech_emotion.detected": "voice_emo",
   "pose.ergo_risk": "posture", "presence.enter": "enter", "presence.leave": "leave",

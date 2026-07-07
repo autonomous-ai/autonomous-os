@@ -106,6 +106,7 @@ func rebrandToPicoclaw(text string) string {
 	text = reHermes.ReplaceAllStringFunc(text, repl)
 	text = reClawdBot.ReplaceAllStringFunc(text, repl)
 	text = reMoltBot.ReplaceAllStringFunc(text, repl)
+	text = reCodex.ReplaceAllStringFunc(text, repl)
 	text = reClaudeCode.ReplaceAllStringFunc(text, repl)
 	return text
 }

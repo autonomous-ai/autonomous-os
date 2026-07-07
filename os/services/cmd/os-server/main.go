@@ -5,15 +5,24 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"os"
 
 	"github.com/joho/godotenv"
 
+	"go.autonomous.ai/os/internal/codex/gatewayd"
 	"go.autonomous.ai/os/lib/logger"
 	"go.autonomous.ai/os/server"
 	"go.autonomous.ai/os/server/config"
 )
 
 func main() {
+	// Subcommand dispatch before flag parsing: `os-server codex-gatewayd` runs
+	// the Codex WS bridge (systemd unit codex.service) instead of the API
+	// server — the bridge ships inside this binary so it OTA-updates with it.
+	if len(os.Args) > 1 && os.Args[1] == "codex-gatewayd" {
+		os.Exit(gatewayd.Main())
+	}
+
 	var showVersion bool
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.Parse()

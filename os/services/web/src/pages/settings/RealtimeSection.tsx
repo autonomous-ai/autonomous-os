@@ -7,15 +7,18 @@ import type { LlmLoadedState } from "@/hooks/setup/types";
 // the config.json `realtime` block (HAL reads it; os-server restarts HAL on save).
 // Voice + reasoning are provider-specific — keep these lists in sync with
 // os/services/server/config/realtime.go (ValidateRealtimeKnobs) and the HAL enums.
-const PROVIDERS = ["gemini", "openai", "none"];
+const PROVIDERS = ["gemini", "openai", "qwen", "none"];
 const VOICES: Record<string, string[]> = {
   gemini: ["Puck", "Charon", "Kore", "Fenrir", "Aoede"],
   openai: ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"],
+  qwen: ["Cherry", "Serena", "Ethan", "Chelsie"],
 };
 // Reasoning depth = cost knob. First entry (cheapest) is the default.
+// qwen realtime has no reasoning knob → empty list hides the selector.
 const REASONING: Record<string, string[]> = {
   gemini: ["MINIMAL", "LOW", "MEDIUM", "HIGH"],
   openai: ["minimal", "low", "medium", "high", "xhigh"],
+  qwen: [],
 };
 
 export interface RealtimeLoadedState {
@@ -64,15 +67,15 @@ export function RealtimeSection({
   function onProviderChange(p: string) {
     setProvider(p);
     if (p === "none") return;
-    if (!(VOICES[p] ?? []).includes(voice)) setVoice((VOICES[p] ?? [""])[0]);
-    if (!(REASONING[p] ?? []).includes(reasoning)) setReasoning((REASONING[p] ?? [""])[0]);
+    if (!(VOICES[p] ?? []).includes(voice)) setVoice((VOICES[p] ?? [])[0] ?? "");
+    if (!(REASONING[p] ?? []).includes(reasoning)) setReasoning((REASONING[p] ?? [])[0] ?? "");
   }
 
   return (
     <SectionCard id="realtime" title="Realtime" active={active}>
       <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, cursor: "pointer", fontSize: 12.5, color: C.text }}>
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-        Enabled (audio-native brain — Gemini Live / OpenAI Realtime)
+        Enabled (audio-native brain — Gemini Live / OpenAI Realtime / Qwen Omni Realtime)
       </label>
 
       <div style={{ marginBottom: 12 }}>
@@ -93,12 +96,14 @@ export function RealtimeSection({
             </select>
           </div>
 
-          <div style={{ marginBottom: 12 }}>
-            <label htmlFor="realtime_reasoning" style={labelStyle}>Reasoning (cost — cheapest first)</label>
-            <select id="realtime_reasoning" value={reasoning} onChange={(e) => setReasoning(e.target.value)} style={selectStyle}>
-              {reasonings.map((r) => <option key={r} value={r}>{r}</option>)}
-            </select>
-          </div>
+          {reasonings.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <label htmlFor="realtime_reasoning" style={labelStyle}>Reasoning (cost — cheapest first)</label>
+              <select id="realtime_reasoning" value={reasoning} onChange={(e) => setReasoning(e.target.value)} style={selectStyle}>
+                {reasonings.map((r) => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </div>
+          )}
 
           <LockedPasswordField lockedInitially={realtimeLoaded.apiKey || llmLoaded.apiKey} label="API Key (optional — leave blank to reuse AI brain key)" id="realtime_api_key" value={apiKey} onChange={setApiKey} placeholder="sk-... / AIza..." />
           <LockedField lockedInitially={llmLoaded.baseUrl} label="Base URL (optional — leave blank to derive from AI brain base URL)" id="realtime_base_url" value={baseUrl} onChange={setBaseUrl} placeholder="wss://… /ws/gemini" />

@@ -49,6 +49,12 @@ class VoiceAgentBase(ABC):
         # Armed by skip_next_turn_done() (look replay): swallow ONE stale
         # TurnDoneEvent that arrives before any real output. See receive().
         self._skip_stale_turn_done: bool = False
+        # Per-turn override of the receive() silent-turn watchdog. Set by the
+        # orchestrator on `look` turns: Gemini's forced thinking over a
+        # text-dense image can stay silent >8s right before the answer
+        # (device-observed 2026-07-06 — watchdog killed the turn seconds
+        # after express_emotion fired). Cleared when receive() exits.
+        self._recv_timeout_override_s: float | None = None
 
     @property
     def available(self) -> bool:
@@ -157,39 +163,65 @@ class VoiceAgentBase(ABC):
         """
         self._skip_stale_turn_done = True
 
+    def extend_recv_timeout(self, seconds: float) -> None:
+        """Raise the silent-turn watchdog for the CURRENT turn only.
+
+        Look turns: the model may think silently well past the default gap
+        window while reading a text-dense image; the orchestrator calls this
+        when a `look` fires so receive() waits longer before declaring the
+        model silent. Reset automatically when receive() exits.
+        """
+        self._recv_timeout_override_s = seconds
+
     def receive(self, *, stop_on_done: bool = True) -> Generator[OutputBase, None, None]:
         """Sync generator — yields OutputBase items from _recv_queue.
 
         When stop_on_done=True (default), stops at the first TurnDoneEvent.
         When stop_on_done=False, skips TurnDoneEvents and keeps yielding across turns.
         """
-        while True:
-            try:
-                event = self._recv_queue.get(
-                    timeout=app_config.REALTIME_RECV_QUEUE_TIMEOUT_S
+        # Tracks whether this generator ran to a NORMAL end (turn done or
+        # silence timeout). A look replay abandons the generator mid-turn
+        # (GeneratorExit) — the extended watchdog must survive into the
+        # replayed turn, so only a normal end clears the override.
+        turn_ended = False
+        try:
+            while True:
+                recv_timeout: float = (
+                    self._recv_timeout_override_s
+                    or app_config.REALTIME_RECV_QUEUE_TIMEOUT_S
                 )
-            except queue.Empty:
-                # No output within the gap window — almost always the model
-                # staying silent on a noise / non-directed turn (correct), not an
-                # error. End the turn quietly so it can fall back to the main agent.
-                logger.info(
-                    "receive() got no output within %.1fs — ending turn (model stayed silent)",
-                    app_config.REALTIME_RECV_QUEUE_TIMEOUT_S,
-                )
-                break
-            if isinstance(event, TurnDoneEvent):
-                if self._skip_stale_turn_done:
-                    self._skip_stale_turn_done = False
+                try:
+                    event = self._recv_queue.get(timeout=recv_timeout)
+                except queue.Empty:
+                    # No output within the gap window — almost always the model
+                    # staying silent on a noise / non-directed turn (correct), not an
+                    # error. End the turn quietly so it can fall back to the main agent.
                     logger.info(
-                        "[realtime] swallowed stale turn_complete from a cancelled turn"
+                        "receive() got no output within %.1fs — ending turn (model stayed silent)",
+                        recv_timeout,
                     )
-                    continue
-                if stop_on_done:
+                    turn_ended = True
                     break
-                continue
-            if isinstance(event, OutputEvent):
-                self._skip_stale_turn_done = False  # real output → next done is live
-                yield event.output
+                if isinstance(event, TurnDoneEvent):
+                    if self._skip_stale_turn_done:
+                        self._skip_stale_turn_done = False
+                        logger.info(
+                            "[realtime] swallowed stale turn_complete from a cancelled turn"
+                        )
+                        continue
+                    if stop_on_done:
+                        turn_ended = True
+                        break
+                    continue
+                if isinstance(event, OutputEvent):
+                    self._skip_stale_turn_done = False  # real output → next done is live
+                    yield event.output
+        finally:
+            # Clear the per-turn watchdog override only on a NORMAL turn end;
+            # an abandoned generator (look replay re-commit) keeps it for the
+            # replayed turn.
+            if turn_ended:
+                self._recv_timeout_override_s = None
 
     # --- Abstract: provider-specific implementation ---
 

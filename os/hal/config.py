@@ -44,6 +44,9 @@ CAMERA_BRIGHTNESS = int(os.environ["HAL_CAMERA_BRIGHTNESS"]) if os.environ.get("
 # e.g. HAL_AUDIO_INPUT_ALSA=plughw:1,0  HAL_AUDIO_OUTPUT_ALSA=plughw:2,0
 AUDIO_INPUT_ALSA: Optional[str] = os.environ.get("HAL_AUDIO_INPUT_ALSA") or None
 AUDIO_OUTPUT_ALSA: Optional[str] = os.environ.get("HAL_AUDIO_OUTPUT_ALSA") or None
+# Bluetooth headset profile for "use headset" mode. HFP gives the headset mic
+# (mono 16kHz both ways over SCO); off = A2DP stereo playback + built-in mic.
+BT_PREFER_HFP: bool = os.environ.get("HAL_BT_PREFER_HFP", "0") == "1"
 # Separate mic device for SoundPerception (noise sensing).
 # Accepts int (sounddevice index) or string (ALSA device name like "plughw:6,0").
 _sensing_device_env = os.environ.get("HAL_AUDIO_SENSING_DEVICE")
@@ -391,6 +394,7 @@ def _os_cfg_realtime() -> dict:
 _RT: dict = _os_cfg_realtime()
 _RT_GEMINI: dict = _RT.get("gemini") if isinstance(_RT.get("gemini"), dict) else {}
 _RT_OPENAI: dict = _RT.get("openai") if isinstance(_RT.get("openai"), dict) else {}
+_RT_QWEN: dict = _RT.get("qwen") if isinstance(_RT.get("qwen"), dict) else {}
 
 
 def _rt_str(env_key: str, cfg_val, default: str) -> str:
@@ -413,7 +417,7 @@ def _rt_enabled() -> bool:
 
 
 REALTIME_ENABLED: bool = _rt_enabled()
-REALTIME_PROVIDER: str = _rt_str("HAL_REALTIME_PROVIDER", _RT.get("provider"), "gemini")  # none | gemini | openai
+REALTIME_PROVIDER: str = _rt_str("HAL_REALTIME_PROVIDER", _RT.get("provider"), "gemini")  # none | gemini | openai | qwen
 # Max seconds receive() waits for the NEXT output event from the agent's recv
 # queue before giving up on the turn. This is the gap between events, not the
 # whole turn: a streaming reply puts events on the queue sub-second apart and
@@ -423,6 +427,14 @@ REALTIME_PROVIDER: str = _rt_str("HAL_REALTIME_PROVIDER", _RT.get("provider"), "
 # agent — keep it just above realtime first-token latency (~1-2s), not minutes.
 REALTIME_RECV_QUEUE_TIMEOUT_S: float = float(
     os.environ.get("HAL_REALTIME_RECV_QUEUE_TIMEOUT_S", "8.0")
+)
+# Silent-turn watchdog for turns where a `look` fired. Gemini 3.1's forced
+# thinking over a text-dense frame ("read this label") stays silent >8s with
+# zero output events — the default watchdog killed such turns seconds before
+# the answer (device-observed 2026-07-06). Applies per-turn via
+# agent.extend_recv_timeout(); normal turns keep the tight default above.
+REALTIME_LOOK_RECV_TIMEOUT_S: float = float(
+    os.environ.get("HAL_REALTIME_LOOK_RECV_TIMEOUT_S", "20.0")
 )
 # Zombie-session guard. A long-lived Gemini Live session can stop responding
 # (the campaign-api proxy doesn't always relay Gemini's go_away/close, so the
@@ -626,9 +638,52 @@ REALTIME_OPENAI_VOICE: str = _rt_str("HAL_OPENAI_REALTIME_VOICE", _RT_OPENAI.get
 REALTIME_OPENAI_SAMPLE_RATE: int = 24000
 REALTIME_OPENAI_REASONING_EFFORT: str = _rt_str("HAL_OPENAI_REASONING_EFFORT", _RT_OPENAI.get("reasoning_effort"), "minimal")
 
+# --- Realtime: Qwen Omni Realtime (DashScope / Model Studio intl) ---
+# Unlike gemini/openai there is NO llm_base_url-derived fallback: Qwen realtime
+# talks straight to the Alibaba MaaS host, not through the campaign-api proxy.
+# NOTE: deliberately NO fallback to the shared realtime.api_key/base_url — on
+# devices those hold the campaign-api credentials (gemini/openai path) and
+# would produce a baffling 401 against the Alibaba host. Both values must come
+# from env (device /opt/hal/.env: DASHSCOPE_API_KEY, HAL_QWEN_REALTIME_BASE_URL
+# = wss://<workspace>.ap-southeast-1.maas.aliyuncs.com/api-ws/v1) or from
+# config.json realtime.qwen.{api_key,base_url}; empty → the WS handshake fails
+# loudly in the hal log.
+REALTIME_QWEN_API_KEY: str = (
+    os.environ.get("DASHSCOPE_API_KEY", "")
+    or _RT_QWEN.get("api_key", "")
+)
+REALTIME_QWEN_BASE_URL: str = (
+    os.environ.get("HAL_QWEN_REALTIME_BASE_URL", "")
+    or _RT_QWEN.get("base_url", "")
+)
+# Default 3.5-plus: turbo (legacy) NEVER fires function calls and ignores
+# [TURN CONTEXT] (device-tested 2026-07-06 — no delegate, no time answers),
+# which breaks the whole delegate flow; 3.5-plus delegates cleanly, reads turn
+# context, and has built-in web search. Voice: 3.5-plus accepts only
+# Serena/Ethan of the QwenVoice set (Cherry/Chelsie are turbo-only, rejected
+# with InvalidParameter at first response).
+REALTIME_QWEN_MODEL: str = _rt_str("HAL_QWEN_REALTIME_MODEL", _RT_QWEN.get("model"), "qwen3.5-omni-plus-realtime")
+REALTIME_QWEN_VOICE: str = _rt_str("HAL_QWEN_REALTIME_VOICE", _RT_QWEN.get("voice"), "Ethan")
+# Built-in web search (3.5 models): session.update `enable_search: true`. The
+# qwen twin of Gemini's Google Search grounding — public live-data questions
+# (news, scores, weather) get answered IN-SESSION with fresh facts instead of
+# delegating. Without the flag the model answers from stale knowledge
+# (probed 2026-07-06: "no match today" vs the real 2-1 result with it on).
+REALTIME_QWEN_SEARCH: bool = (
+    os.environ.get(
+        "HAL_QWEN_SEARCH",
+        str(_RT_QWEN.get("search", True)),
+    ).lower()
+    in ("1", "true", "yes")
+)
+REALTIME_QWEN_SAMPLE_RATE: int = 16000
+
 # --- Realtime: Context manager ---
 OPENCLAW_WORKSPACE_DIR: str = os.environ.get("HAL_OPENCLAW_WORKSPACE_DIR", "/root/.openclaw/workspace")
 HERMES_WORKSPACE_DIR: str = os.environ.get("HAL_HERMES_WORKSPACE_DIR", "/root/.hermes")
+# PicoClaw/Codex workspaces mirror OpenClaw's layout (see orchestrator.py maps).
+PICOCLAW_WORKSPACE_DIR: str = os.environ.get("HAL_PICOCLAW_WORKSPACE_DIR", "/root/.picoclaw/workspace")
+CODEX_WORKSPACE_DIR: str = os.environ.get("HAL_CODEX_WORKSPACE_DIR", "/root/.codex/workspace")
 
 # Camera snapshot dir. MUST sit under the ACTIVE agent runtime's media root — the
 # agent's image tool only reads files under its allow-list, else it returns "not
@@ -639,6 +694,8 @@ HERMES_WORKSPACE_DIR: str = os.environ.get("HAL_HERMES_WORKSPACE_DIR", "/root/.h
 _AGENT_CONFIG_DIRS: dict[str, str] = {
     "openclaw": "/root/.openclaw",
     "hermes": "/root/.hermes",
+    "picoclaw": "/root/.picoclaw",
+    "codex": "/root/.codex",
 }
 SNAPSHOT_DIR: str = os.environ.get("HAL_SNAPSHOT_DIR") or (
     _AGENT_CONFIG_DIRS.get(AGENT_GATEWAY, _AGENT_CONFIG_DIRS["openclaw"])

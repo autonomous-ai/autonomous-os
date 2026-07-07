@@ -195,7 +195,12 @@ class PerceptionOrchestrator:
                     self._processors.fire_hazard_processor.check
                 )
 
-        if sd is not None and np is not None and self._sound_device_id is not None:
+        if (
+            self._config.enable_sound
+            and sd is not None
+            and np is not None
+            and self._sound_device_id is not None
+        ):
             self._processors.sound_recognizer = SoundPerception(
                 sd=sd,
                 np_module=np,
@@ -207,6 +212,16 @@ class PerceptionOrchestrator:
             # TODO: change this to correct data type
             self._perception_state.frame.register(
                 self._processors.sound_recognizer.check
+            )
+        elif self._config.enable_sound:
+            # Loud-noise detection was requested but can't run — say why
+            # instead of failing silently (a silently-None sound_device_id
+            # kept SoundPerception dead for a long time).
+            self._logger.warning(
+                "SoundPerception disabled: sd=%s np=%s sound_device_id=%s",
+                sd is not None,
+                np is not None,
+                self._sound_device_id,
             )
 
     def start(self):

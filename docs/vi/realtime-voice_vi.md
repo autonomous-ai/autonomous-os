@@ -78,7 +78,9 @@ thiết bị smart-home của họ, tin nhắn của họ) cho `delegate_to_main
 Đánh đổi:
 
 - **Chỉ Gemini.** OpenAI Realtime không có tool built-in tương đương, nên prompt
-  của nó (`system_prompt_openai.md`) vẫn delegate mọi lookup bên ngoài.
+  của nó (`system_prompt_openai.md`) vẫn delegate mọi lookup bên ngoài. Qwen Omni
+  Realtime cũng vậy — không có search grounding, prompt của nó
+  (`system_prompt_qwen.md`) delegate mọi câu dữ liệu thời gian thực.
 - **Chi phí.** Grounding tính phí theo mỗi grounded request (cộng thêm token),
   nhưng chỉ phát sinh khi Gemini thực sự quyết định search. Prompt dặn nó *chỉ*
   ground cho dữ kiện công khai/mới thật sự, không ground cho kiến thức chung đã có
@@ -100,13 +102,23 @@ thay vì delegate. Orchestrator đăng ký tool `look` (`orchestrator.py`,
    blur không lọt tới model; không thêm độ trễ khi servo vốn đang đứng yên
    hoặc thiết bị không có servo), downscale về `HAL_GEMINI_VISION_MAX_WIDTH`
    (mặc định 768px) để giới hạn token ảnh.
-2. Đẩy vào làm **video input** realtime (`ImageInput` → `send_realtime_input(video=…)`).
-3. Gửi tool result với `trigger_response=True` để Gemini **tiếp tục cùng turn** và
-   nói câu trả lời với ảnh đã có trong context.
+2. Đẩy vào làm **video input** realtime (`ImageInput` → `send_realtime_input(video=…)`),
+   rồi **replay turn**: Live API xếp frame gửi giữa-turn vào turn KẾ TIẾP
+   (device-proven: flow ack-tool → tiếp-turn cũ khiến mọi câu look trả lời bằng
+   ảnh của lần look *trước* — lệch 1 ảnh, delay ack bao nhiêu cũng không cứu),
+   nên thay vì ack tool call, orchestrator yield `LookReplaySignal` và
+   `run_realtime_turn` gửi lại audio của turn + commit lần nữa trên CÙNG
+   session. Frame đang xếp hàng vào đúng turn replay.
+3. Turn replay kích hoạt `look` lần nữa, rơi vào reuse guard
+   (`VISION_MIN_INTERVAL_S`) và được ack `trigger_response=True` — model trả
+   lời bằng frame lúc này đã thật sự nằm trong context.
 
-Vì cả hai lần gửi đi qua cùng một send queue FIFO của agent, ảnh vào context trước
-khi model sinh tiếp. Khác với `delegate_to_main`, `look` **không** ngắt turn — model
-nhìn rồi nói.
+Plumbing hỗ trợ replay: `receive()` nuốt đúng MỘT `turn_complete` cũ (của turn
+bị hủy, về sau replay commit và nếu không sẽ kết thúc rỗng turn replay —
+`skip_next_turn_done()`); recycle session idle/turn-cap đang chờ sẽ bị hoãn khi
+replay pending (rebuild lúc đó làm mồ côi ảnh vừa gửi); và mọi lần rebuild
+session đều reset look reuse guard (ảnh sống trong session — session mới không
+có ảnh nào). Chi phí: audio câu hỏi bị tính 2 lần ở turn look; ảnh 1 lần.
 
 Cái này thay cho đường chậm (delegate → main → tìm skill → `/camera/snapshot` →
 LLM vision, vài giây) bằng một round-trip ngay trong phiên.
@@ -119,7 +131,8 @@ LLM vision, vài giây) bằng một round-trip ngay trong phiên.
   (`_camera_present()`), nên đúng cho mọi đường khởi tạo.
 - **Flag:** `HAL_GEMINI_VISION` / `realtime.gemini.vision` (mặc định **bật**).
 - **Provider:** chỉ Gemini (luồng inject ảnh → tiếp tục turn đã làm + test cho
-  Gemini Live; OpenAI vẫn delegate). System prompt Gemini
+  Gemini Live; OpenAI và Qwen vẫn delegate — Qwen Omni qua đường realtime này
+  chỉ có text+audio, không có vision trong phiên). System prompt Gemini
   (`system_prompt_gemini.md`) mô tả khi nào gọi `look`.
 
 Chi phí: một frame mỗi lần gọi (kích bằng tool, **không** stream video), nên token
@@ -131,27 +144,49 @@ thêm vào là không đáng kể so với audio của turn. Frame 768px ≈ và
 
 **Bàn giao frame khi delegate / timeout.** Khi một turn `look` rốt cuộc delegate
 hoặc rớt xuống main agent (quan trọng nhất là khi Gemini timeout *giữa* lúc look),
-frame mà `look` đã chụp được bàn giao cho main agent **bằng đường dẫn file** để nó
-trả lời từ đúng ảnh đó thay vì chụp lại (nhanh hơn, và trả lời đúng khoảnh khắc
-user chỉ vào). `_handle_look_call` lưu frame vào `_SNAPSHOT_DIR` và ghi vào
-`app_state.realtime_look_frame_path`; `turn_dispatch._take_vision_handoff()` tiêu thụ
-nó **một lần mỗi turn** (turn đã handled dùng rồi thì clear luôn để delegate sau
-không nhặt phải ảnh cũ) và, khi còn tươi (`HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S`,
-mặc định 20s), chèn dòng `[vision-image] <path>` vào message gửi cho agent. Skill
-`camera` đọc đúng path đó và bỏ qua `/camera/snapshot`. Handoff mang theo **path**,
-không phải bytes ảnh — HAL và agent chung filesystem nên dùng path để khỏi phình
-kênh turn. Nếu timeout xảy ra *trước khi* kịp chụp thì không có gì để bàn giao,
-agent chụp như bình thường.
+frame mà `look` đã chụp được bàn giao cho main agent để nó trả lời từ đúng ảnh
+đó thay vì chụp lại (nhanh hơn, và trả lời đúng khoảnh khắc user chỉ vào).
+`_handle_look_call` lưu frame vào `_SNAPSHOT_DIR` và ghi vào
+`app_state.realtime_look_frame_path`; `turn_dispatch._take_vision_handoff()`
+tiêu thụ nó **một lần mỗi turn** (turn đã handled dùng rồi thì clear luôn để
+delegate sau không nhặt phải ảnh cũ) và, khi còn tươi
+(`HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S`, mặc định 20s), chèn dòng hint
+`[vision-image] <path>` vào message VÀ gửi frame dạng base64 trong field
+`image` của sensing POST.
+os-server xử lý ảnh theo **gate describe-first** trong `internal/vision` (xem
+`server/sensing/delivery/http/handler.go`): khi main model đang active KHÔNG
+khai image input trong catalog model (trường hợp Auto-AI — attachment thô sẽ
+404 tại smart-agent-router: "No endpoints found that support image input"),
+frame được `default_image_model` của catalog (qwen — cùng model mà `imageModel`
+của openclaw dùng cho ảnh Telegram) tả thành chữ và agent nhận dòng
+`[image description] …` — đồng thời hint `[vision-image]` được viết lại để
+**bỏ path file**, và **file snapshot cũng bị xoá luôn** (best-effort). Cả
+path lẫn file đều không được sống chung với description: snapshot nằm trong
+media allow-list của agent nên bất kỳ path nào agent vớ được — hint, hint cũ
+trong session history, `ls` thư mục — đều có thể bị `read` thành image block
+nằm lì trong session history, làm 404 mọi turn sau mà router rơi vào model
+text-only (kể cả turn thuần chữ). Describe được thử 2 lần (20s + 15s, tổng
+35s — request treo được retry trên kết nối mới); fail cả hai thì ảnh bị
+**bỏ luôn**, file snapshot vẫn bị xoá, và hint được viết lại để agent nói
+với user là lần này không nhìn được — tuyệt đối không gửi raw attachment,
+vì khi router rơi vào model text-only thì attachment đó đầu độc cả session,
+đắt hơn nhiều so với hỏng một turn. Còn khi catalog nói model nhận ảnh,
+attachment thô được forward thẳng và hint giữ nguyên path. Gate đọc lại catalog mỗi 30 phút, nên BE flip catalog là
+fleet tự chuyển. Gate này cũng cover luôn ảnh upload từ web monitor chat — cả
+hai nguồn ảnh hội tụ về một handler. Skill `camera` dặn agent trả lời từ mô
+tả/attachment và bỏ qua `/camera/snapshot`. Nếu timeout xảy ra *trước khi* kịp
+chụp thì không có gì để bàn giao, agent chụp như bình thường.
 
 ## Các provider
 
-Hai backend thay thế cho nhau, chọn bằng `HAL_REALTIME_PROVIDER`
-(`none` | `gemini` | `openai`):
+Ba backend thay thế cho nhau, chọn bằng `HAL_REALTIME_PROVIDER`
+(`none` | `gemini` | `openai` | `qwen`):
 
 | Provider | Class | Mô hình threading | Model mặc định | Sample rate |
 |----------|-------|-------------------|----------------|-------------|
 | Gemini Live | `voice_agent/gemini_live.py` `GeminiLiveAgent` | event loop asyncio riêng trên thread `gemini-io`; thread send/recv submit coroutine qua `run_coroutine_threadsafe` | `gemini-2.5-flash-native-audio-preview-12-2025` | 16000 Hz |
 | OpenAI Realtime | `voice_agent/openai_realtime.py` `OpenAIRealtimeAgent` | thuần đồng bộ; 1 `RealtimeConnection` dùng chung bởi thread send/recv, serialize bằng reentrant lock | `gpt-realtime-2` | 24000 Hz |
+| Qwen Omni Realtime | `voice_agent/qwen_realtime.py` `QwenRealtimeAgent` | thuần đồng bộ; client `websockets.sync.client` thô | `qwen3.5-omni-plus-realtime` | 16000 Hz |
 
 Gemini Live dùng `google-genai`, nhưng tắt keepalive websocket của SDK
 (`ping_interval=None`, `ping_timeout=None`) để Python client giống browser raw-WS
@@ -161,7 +196,43 @@ recycle Gemini đồng bộ trước khi stream audio nếu lượt trước đ�
 `HAL_GEMINI_PRE_TURN_RECYCLE_S` giây, để câu nói sau khoảng nghỉ không rơi vào
 socket đã chết vì idle ở proxy.
 
-Cả hai kế thừa `voice_agent/base.py` `VoiceAgentBase`, định nghĩa contract dựa
+**Qwen Omni Realtime** (Alibaba DashScope / Model Studio) nói **schema event BETA
+của OpenAI Realtime** (`session.update`, `input_audio_buffer.append/commit`,
+`response.create`, `response.audio.delta`, `response.audio_transcript.delta`,
+`response.done`) qua đường WS của DashScope
+`wss://<workspace-host>/api-ws/v1/realtime?model=...` với header
+`Authorization: Bearer <key>`. Không tái dùng được OpenAI python SDK (SDK nói
+schema GA), nên `qwen_realtime.py` là client `websockets.sync.client` thô. Audio
+input 16 kHz mono pcm16 base64, output 24 kHz mono pcm16. Luồng turn thủ công
+(HAL local VAD): append → commit → `response.create`; `response.create` **bắt
+buộc** kèm `response.modalities ["text","audio"]` tường minh, nếu không server
+trả lời text-only (verify live 2026-07-06). Model mặc định
+`qwen3.5-omni-plus-realtime`: bản legacy `qwen-omni-turbo-realtime` KHÔNG bao
+giờ gọi function call và lờ `[TURN CONTEXT]` (device-test 2026-07-06) → hỏng
+toàn bộ luồng delegate. Voice: Ethan (mặc định) và Serena trên 3.5-plus;
+Cherry/Chelsie chỉ dùng được với turbo (ghép sai → `InvalidParameter` ngay
+response đầu); **không** có knob reasoning/thinking (web ẩn selector Reasoning).
+Web search built-in (model 3.5) bật qua session `enable_search: true` (knob
+`realtime.qwen.search` / `HAL_QWEN_SEARCH`, mặc định bật) — bản qwen của Google
+Search grounding bên Gemini. Ràng buộc DashScope: search ("agent mode") KHÔNG
+cho đăng ký function tools cùng session, nên khi search bật, delegate chạy qua
+giao thức text-marker: agent nối suffix `[TOOL PROTOCOL]` vào instructions,
+model trả lời đúng `[DELEGATE] <message>`, recv loop nuốt transcript đó và tổng
+hợp FunctionCallOutput `delegate_to_main` y hệt tool call thật (orchestrator
+không phân biệt được; `express_emotion` không dùng được ở mode này). Khi search
+tắt, function tool (`delegate_to_main`, `express_emotion`) được truyền trong
+`session.update` (format beta phẳng) và
+`response.function_call_arguments.done` được xử lý. Mỗi turn, dòng token/cost
+ghi vào file log riêng `qwen_usage.log` (logger `hal.realtime.usage.qwen`, sinh
+đôi với `gemini_usage.log`); bảng giá `_QWEN_RATES` trong `qwen_realtime.py`
+($0.27/1M input, $1.07/1M output — Model Studio quốc tế công bố một mức giá
+blended duy nhất, chưa công bố tách theo modality; bảng vẫn giữ key theo
+modality để drop số tách console-verified vào sau). Audio ≈ 25 token/giây cả
+hai chiều (verify: 5.1s audio out = 128 token); usage payload gồm
+`input_tokens`/`output_tokens` + `input_tokens_details`/`output_tokens_details`
+`{text_tokens, audio_tokens}` + `cached_tokens` top-level.
+
+Cả ba kế thừa `voice_agent/base.py` `VoiceAgentBase`, định nghĩa contract dựa
 trên queue:
 
 - **2 thread mỗi agent**: `_send_loop` rút `_send_queue` → API; `_recv_loop` đọc
@@ -193,6 +264,34 @@ Reconnect là idempotent (re-check `_connected` trong lock) và `_drop_connectio
 chỉ null connection nếu nó vẫn là connection hiện tại — nên 2 thread không thể
 tear down / dựng lại connection của nhau.
 
+## Pricing & log usage
+
+Mỗi turn ghi một dòng token/cost vào log riêng theo provider dưới
+`/var/log/hal/` (rotating, 5 MB × 3): `gemini_usage.log` (logger
+`hal.realtime.usage`) và `qwen_usage.log` (logger `hal.realtime.usage.qwen`).
+OpenAI chỉ log dòng usage thường vào `server.log` (`[realtime] OpenAI usage`),
+không ước tính cost. Dòng log mang đủ số token theo từng modality **và** cost
+USD ước tính, nên rate có sai thì sau này vẫn tính lại được từ số token đã ghi.
+
+Bảng rate nằm trong code, key `(direction, modality)` tính USD trên 1M token —
+`_GEMINI_RATES` trong `voice_agent/gemini_live.py`, `_QWEN_RATES` trong
+`voice_agent/qwen_realtime.py`. Model lạ rơi về bảng đắt nhất (cost là trần,
+không bao giờ báo thiếu).
+
+| Model | text in | audio in | text out | audio out | audio↔token | Nguồn |
+|---|---|---|---|---|---|---|
+| `gemini-2.5-flash-native-audio` | $0.50 | $3.00 | $2.00 | $12.00 | 25 tok/s | ai.google.dev pricing (verify 2026-06-29) |
+| `gemini-3.1-flash-live` | $0.75 | $3.00 | $4.50 | $12.00 | 25 tok/s | ai.google.dev pricing (verify 2026-06-29) |
+| `qwen-omni-turbo-realtime` | $0.27 | $4.44 | $8.89* | $8.89* | 25 tok/s in+out | bill CSV consume-detail (verify 2026-07-06); *output turn có audio bill gộp text+audio (`multi_output_token`); response text-only bill $1.07 (`purein_text_output`) |
+| `qwen3.5-omni-flash-realtime` | $0.27 | $4.44 | $8.89* | $8.89* | ~7 tok/s in, ~12.5 tok/s out | bill CSV (verify 2026-07-06): flash bill CÙNG line item rẻ như turbo, kể cả phiên bật search — text-in (phần nặng nhất) rẻ hơn Gemini 3.1 ~2.8x. Search +$0.01/request |
+| `qwen3.5-omni-plus-realtime` | $2.10 | $16.50 | $62.00* | $62.00* | ~7 tok/s in, ~12.5 tok/s out | bill CSV consume-detail (verify 2026-07-06); *một line item `omni_audio_output_token` bao cả text+audio của response. Web search tính thêm $0.01/lần search |
+
+Cơ cấu chi phí giống nhau ở mọi provider: `in_text` chiếm áp đảo (system
+prompt ~7-10k token + context session tích lũy bị re-bill mỗi turn, phình dần
+tới khi session recycle — xem `HAL_REALTIME_SESSION_IDLE_RESET_S` /
+`HAL_REALTIME_SESSION_MAX_TURNS`); token audio chỉ là phần lẻ. Gemini tính
+thêm phí Google Search theo từng request grounded, ngoài token.
+
 ## Orchestrator
 
 `orchestrator.py` `RealtimeOrchestrator` bọc một session agent và là bề mặt duy
@@ -223,7 +322,9 @@ theo agent gateway (`HAL_AGENT_GATEWAY`):
 (`build_instructions`), lưu lượt (`add_turn`), nạp/trim memory, và summarize;
 subclass cài `load_device_context`, `load_device_memory`, `load_skills_catalog`,
 `summarize_device_memory`. Prompt nền nằm ở `resources/` (`system_prompt.md` +
-bản theo provider `system_prompt_openai.md` / `system_prompt_gemini.md`).
+bản theo provider `system_prompt_openai.md` / `system_prompt_gemini.md` /
+`system_prompt_qwen.md`, đăng ký trong `PROVIDER_PROMPT_PATHS` của
+context_manager).
 
 ### Memory & summarization
 
@@ -262,6 +363,9 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
    `commit_audio()`.
 5. **Tiêu thụ.** `for output in stream_output()`:
    - `TextOutput` → các câu được flush sang TTS (`speak` / `speak_queue`).
+     Nếu `speak` báo busy (TTS khác đang giữ loa non-interruptible, ví dụ
+     nudge ambient), câu sẽ fallback sang `speak_queue` để phát sau đó thay
+     vì bị mất luôn.
    - `DelegateSignal` → dừng; chuyển `[voice-instruction] …` + transcript tới OS
      server với `event_type` gốc.
    - Ngược lại lượt đã được xử lý cục bộ → báo OS server `voice_agent_handled`
@@ -301,8 +405,15 @@ chỉ-thuộc-os-server.
 
 Model ở Go tại `os/services/server/config/realtime.go`; đọc ở HAL tại
 `os/hal/config.py`. Field chung ở trên; knob theo provider nằm trong sub-object
-`gemini` / `openai`, `provider` chọn cái đang active (`none` hoặc vắng → tắt
-realtime). `api_key` / `base_url` rỗng → fallback `llm_api_key` / `llm_base_url`.
+`gemini` / `openai` / `qwen`, `provider` chọn cái đang active (`none` hoặc vắng →
+tắt realtime). `api_key` / `base_url` rỗng → fallback `llm_api_key` /
+`llm_base_url` — **trừ qwen**: credential của qwen là của riêng nó
+(`realtime.qwen.api_key` / `realtime.qwen.base_url`, Go struct `QwenRealtime`
+còn có `model`/`voice`), **cố tình không** fallback về `realtime.api_key`/
+`base_url` chung hay credential `llm_*` — qwen nói thẳng với host Alibaba MaaS,
+không đi qua proxy `campaign-api`. Set qua `realtime.qwen.*` trong config.json
+hoặc qua env trên device (`DASHSCOPE_API_KEY`, `HAL_QWEN_REALTIME_BASE_URL`
+trong `/opt/hal/.env`); thiếu cả hai thì WS handshake fail rõ ràng trong log hal.
 
 > **Để `base_url` trống trừ khi có endpoint riêng (không qua proxy).** Khi trống,
 > HAL tự suy ra `<llm_base_url>/ws/gemini` (hoặc `/ws/openai`) — đúng suffix WS mà
@@ -310,21 +421,56 @@ realtime). `api_key` / `base_url` rỗng → fallback `llm_api_key` / `llm_base_
 > `/ws/...`), giá trị đó được đưa thẳng vào SDK provider và **404 ngay ở Live
 > handshake**. Vì vậy ô "Base URL" trong web Settings chỉ hiển thị *override tường
 > minh* (`RealtimeBaseURLOverride`, không phải giá trị đã resolve), để "để trống là
-> tự suy ra" luôn trống và mỗi lần Save không vô tình ghi đè URL trần.
+> tự suy ra" luôn trống và mỗi lần Save không vô tình ghi đè URL trần. Quy tắc
+> này KHÔNG áp cho qwen: qwen giữ `base_url` riêng trong sub-object của nó và
+> không bao giờ suy ra từ `llm_base_url`.
 
 ```json
 "realtime": {
   "enabled": true,
   "provider": "gemini",
   "gemini": { "model": "gemini-3.1-flash-live-preview", "voice": "Kore", "thinking_level": "MINIMAL" },
-  "openai": { "model": "gpt-realtime-2", "voice": "alloy", "reasoning_effort": "minimal" }
+  "openai": { "model": "gpt-realtime-2", "voice": "alloy", "reasoning_effort": "minimal" },
+  "qwen": { "api_key": "sk-…", "base_url": "wss://…", "model": "qwen3.5-omni-plus-realtime", "voice": "Ethan" }
 }
 ```
 
 Knob reasoning (`thinking_level` / `reasoning_effort`) default về mức **rẻ nhất**
 (`MINIMAL` / `minimal`), không phải mức max của provider — muốn reasoning sâu hơn
-thì set tường minh. Các knob KHÔNG có trong block (turn detection, session
-resumption, memory, summarizer) vẫn chỉ theo env/default.
+thì set tường minh. Qwen **không có** knob reasoning/thinking, nên web ẩn
+selector Reasoning khi provider là qwen. Các knob KHÔNG có trong block (turn
+detection, session resumption, memory, summarizer) vẫn chỉ theo env/default.
+
+**Filter chống leak CoT.** Trên `gemini-3.1-flash-live-preview` KHÔNG tắt được
+thinking: `thinking_level=MINIMAL` lẫn `thinking_budget=0` đều được chấp nhận
+nhưng bị bỏ qua (đo `thoughts_token_count` 125–168 trên turn cần suy luận với mọi
+config). Bình thường thoughts nằm nội bộ, nhưng trên các turn có
+grounding/vision/tool, server thỉnh thoảng đổ nguyên text channel của model —
+đoạn lập kế hoạch tiếng Anh ("The user is insisting…", "Phrasing draft:",
+"Delivery guidance:") kèm câu trả lời thật — vào `output_audio_transcription`,
+trong khi audio của model chỉ chứa câu trả lời sạch. Vì native audio tắt, HAL
+đọc transcription → không có guard thì leak bị đọc thành tiếng (tốn ký tự TTS)
+và forward vào `[REPLY]`, quay lại context và tự củng cố.
+`drivers/voice/_internal/cot_leak_filter.py` chặn leak ở mức câu, trước TTS và
+trước khi transcript được forward/lưu, theo 3 tầng: marker TRIGGER (ngôi thứ ba
+gắn động từ "the user is/wants…", nhãn planning như "Phrasing draft:") luôn drop
+và bật cot-mode cho turn; marker PHỤ ("persona", "system prompt", "emotion
+tool", …) chỉ drop khi cot-mode đã bật — câu trả lời hợp lệ nói về chính thiết
+bị vẫn an toàn; trong cot-mode drop thêm câu planning tiếng Anh (chỉ với device
+không nói tiếng Anh — chữ viết không-Latin như tiếng Việt/Trung/Nhật dùng check
+tỉ lệ ASCII, chữ Latin như Pháp/Indo yêu cầu thêm function word tiếng Anh để
+answer thật không bị nuốt), draft trong ngoặc kép, mảnh plan vụn, và câu
+gần-trùng câu đã giữ (CJK token theo từng ký tự). Check ngôn ngữ bỏ qua các
+đoạn nằm trong ngoặc, nên câu planning tiếng Anh nhúng text ngôn-ngữ-trả-lời
+trong ngoặc ("The search query 'cách dùng…' didn't yield…") vẫn bị bắt, còn
+câu ngôn-ngữ-trả-lời trích dẫn tiếng Anh thì không. Mỗi câu bị drop đều log
+`CoT leak dropped`.
+
+Đường agent chính (reply openclaw/hermes nói qua os-server) có bản port Go của
+filter này — `os/services/server/agent/delivery/http/cot_leak_filter.go` (thêm
+TRIGGER identifier snake_case cho corpus leak DeepSeek); xem
+`docs/vi/flow-monitor_vi.md` § "CoT-leak filter (đường agent)". Harden bên nào
+thì nhớ sync bên kia.
 
 ### Biến môi trường (`os/hal/config.py`)
 
@@ -333,9 +479,10 @@ Mỗi knob có thể bị `HAL_*` env override (thắng block, và là đường
 | Biến | Mặc định | Ghi chú |
 |------|----------|---------|
 | `HAL_REALTIME_ENABLED` | `true` | Cổng tổng cho pipeline realtime |
-| `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` |
+| `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `qwen` |
 | `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = activity detection thủ công) |
 | `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Số giây tối đa `receive()` chờ output event kế tiếp trước khi kết thúc lượt im lặng (fallback sang main agent) |
+| `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` | `20.0` | Watchdog im-lặng dùng thay mặc định cho turn có `look` (theo từng turn, qua `extend_recv_timeout()`). Gemini bị ép thinking trên frame dày chữ có thể im >8 s ngay trước khi trả lời — watchdog mặc định giết nhầm mấy turn đó |
 | `HAL_REALTIME_REQUIRE_TRANSCRIPT` | `true` | Không bao giờ commit turn empty-STT lên model. Giọng thật mà nova-3 miss (câu ngắn) vẫn là voiced nên qua hết guard VAD/Silero, commit audio thô khiến model bịa câu trả lời cho khoảng im lặng (lời chào chung chung, thường kèm tên không ai nói). Khi `true`, mọi turn empty-STT bị bỏ bất kể duration/voicing — im còn hơn trả lời sai. Đặt `false` để quay về đường audio-only gated bằng Silero bên dưới. |
 | `HAL_REALTIME_MIN_COMMIT_DURATION_S` | `0.8` | Session ngắn hơn ngưỡng này mà không có STT transcript bị coi là nhiễu VAD, không commit lên model. Chỉ xét khi `HAL_REALTIME_REQUIRE_TRANSCRIPT=false`. |
 | `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Kiểm soát chi phí: khi một turn đến sau ngần này giây im lặng, recycle (rebuild) session **sau** turn đó để turn kế tiếp bỏ phần context mỗi-turn mà provider re-bill trên session sống lâu. Turn sau khoảng nghỉ dài coi như cuộc hội thoại mới; trí nhớ dài hạn vẫn còn nhờ nạp lại `summary.md`. `0` = tắt. Dùng lại đường rebuild của zombie-recovery. |
@@ -357,6 +504,10 @@ Mỗi knob có thể bị `HAL_*` env override (thắng block, và là đường
 | `HAL_OPENAI_REALTIME_VOICE` | `alloy` | |
 | `HAL_OPENAI_REALTIME_BASE_URL` | `<llm_base_url>/ws/openai` | |
 | `HAL_OPENAI_REASONING_EFFORT` | `minimal` | `minimal` \| `low` \| `medium` \| `high` \| `xhigh` — default rẻ (trước là `xhigh`) |
+| `DASHSCOPE_API_KEY` | — | Key Qwen (DashScope); **không** fallback về `llm_api_key` — chỉ đọc `realtime.qwen.api_key` khi env trống |
+| `HAL_QWEN_REALTIME_BASE_URL` | — | WS host DashScope (`wss://<workspace-host>/api-ws/v1/realtime`); **không** fallback về `llm_base_url` — chỉ đọc `realtime.qwen.base_url` khi env trống |
+| `HAL_QWEN_REALTIME_MODEL` | `qwen3.5-omni-plus-realtime` | turbo legacy: không gọi function call, lờ turn context |
+| `HAL_QWEN_REALTIME_VOICE` | `Ethan` | 3.5-plus: thêm Serena; chỉ-turbo: Cherry \| Chelsie |
 | `HAL_REALTIME_MEMORY_PATH` | `<workspace>/realtime/memory.jsonl` | |
 | `HAL_REALTIME_MAX_MEMORY_ENTRIES` / `_TRIM_KEEP` | `1000` / `500` | |
 | `HAL_REALTIME_SUMMARIZER_ENABLED` | `true` | |
@@ -370,6 +521,7 @@ Mỗi knob có thể bị `HAL_*` env override (thắng block, và là đường
 | `voice_agent/base.py` | Agent trừu tượng: contract 2-thread/queue, `receive()` |
 | `voice_agent/gemini_live.py` | Provider Gemini Live (IO loop asyncio) |
 | `voice_agent/openai_realtime.py` | Provider OpenAI Realtime (sync, connection serialize bằng lock) |
+| `voice_agent/qwen_realtime.py` | Provider Qwen Omni Realtime (sync, `websockets.sync.client` thô, schema beta OpenAI qua DashScope; bảng giá `_QWEN_RATES` + log `qwen_usage.log`) |
 | `context_manager/{base,openclaw,hermes}.py` | Lắp ráp prompt + memory + skills theo gateway |
 | `summarizer.py` | Summarizer memory dựa trên Anthropic |
 | `config.py` | Model config provider (`GeminiConfig`, `OpenAIConfig`) |

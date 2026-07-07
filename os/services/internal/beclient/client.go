@@ -165,7 +165,10 @@ func (c *Client) Ping(token string, payload PingPayload) (*PingResponse, error) 
 	return c.postWithAuth(pingURL, token, payload)
 }
 
-// PingPayload is the ping body.
+// PingPayload is the ping body. Beyond the original status fields it mirrors
+// the device-state fields of the MQTT `info` uplink (MQTTInfoResponse) — same
+// JSON names — so the backend can read them from either channel without a
+// second schema. All optional; a backend that ignores them loses nothing.
 type PingPayload struct {
 	Status         string `json:"status,omitempty"`
 	SetupCompleted bool   `json:"setup_completed,omitempty"`
@@ -178,6 +181,27 @@ type PingPayload struct {
 	// inbound Slack events back to this device's MQTT topic. Empty when the
 	// slack channel isn't configured on this device.
 	SlackTeamID string `json:"slack_team_id,omitempty"`
+	// LocalIP is the device's LAN address (STA side). The prime consumer is the
+	// post-setup rescue path: the web page that opened the Setup popup polls
+	// the backend for this IP and redirects the popup to http://<ip>/setup when
+	// both the AP window and mDNS failed (see docs/setup-flow.md).
+	LocalIP  string `json:"local_ip,omitempty"`
+	Device   string `json:"device,omitempty"`    // Device type (lamp, intern, …)
+	DeviceID string `json:"device_id,omitempty"` // Backend-issued device id from config
+	Timezone string `json:"timezone,omitempty"`  // Live IANA zone (/etc/timezone)
+	// Active agentic runtime + its version (unlike the MQTT `info` uplink,
+	// which reports every installed backend's version side by side, the ping
+	// carries only the one that is actually running).
+	AgentRuntime        string `json:"agent_runtime,omitempty"`
+	AgentRuntimeVersion string `json:"agent_runtime_version,omitempty"`
+	HalVersion          string `json:"hal_version,omitempty"`
+	// Voice/STT config, mirroring the MQTT `info` fields.
+	TTSProvider string `json:"tts_provider,omitempty"`
+	TTSVoice    string `json:"tts_voice,omitempty"`
+	STTLanguage string `json:"stt_language,omitempty"`
+	// UnsupportedChannels lists configured channels the active runtime cannot
+	// run (populated by ChannelReconcile after a runtime switch).
+	UnsupportedChannels []string `json:"unsupported_channels,omitempty"`
 }
 
 // MQTTConfig holds MQTT broker configuration from the backend.

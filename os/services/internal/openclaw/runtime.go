@@ -9,8 +9,16 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.autonomous.ai/os/domain"
 	"go.autonomous.ai/os/lib/core/system"
+	"go.autonomous.ai/os/lib/runtimereg"
 )
+
+// Expose the cached version to internal/device (backend ping payload) through
+// the neutral registry — a direct import would cycle via statusled → device.
+func init() {
+	runtimereg.RegisterVersion(domain.AgentRuntimeOpenClaw, GetOpenClawVersion)
+}
 
 // openclawVersionProbeTimeout caps the one-shot `openclaw --version` probe so a
 // wedged CLI can't stall startup.

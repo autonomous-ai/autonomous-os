@@ -37,28 +37,49 @@ var allowedLogs = map[string]string{
 // openclaw's agent.log file.
 const hermesAgentLog = "/root/.hermes/logs/agent.log"
 
+// picoclawAgentLog is PicoClaw's own gateway log under /root/.picoclaw/logs
+const picoclawAgentLog = "/root/.picoclaw/logs/gateway.log"
+
 // resolveLogSource maps a web log-source id to its file/journal pattern, with one
 // runtime-aware twist: the generic "Agent"/"Agent Service" tabs follow whichever
-// agentic backend is ACTIVE. When agent_runtime=hermes, openclaw isn't running so
-// its file/journal is empty/stale — so, exactly mirroring the openclaw mapping
-// (Agent → main file log, Agent Service → systemd journal), the tabs serve:
-//   - "openclaw"         (Agent)         → ~/.hermes/logs/agent.log
-//   - "openclaw-service" (Agent Service) → journal:hermes-gateway.service
+// agentic backend is ACTIVE. When agent_runtime != openclaw, openclaw isn't running
+// so its file/journal is empty/stale — so, exactly mirroring the openclaw mapping
+// (Agent → main file log, Agent Service → systemd journal), the tabs serve, per runtime:
+//   - hermes:   "openclaw" → ~/.hermes/logs/agent.log,     "openclaw-service" → journal:hermes-gateway.service
+//   - picoclaw: "openclaw" → ~/.picoclaw/logs/gateway.log, "openclaw-service" → journal:picoclaw.service
+//   - codex:    "openclaw" → journal:codex.service,        "openclaw-service" → journal:codex.service
+//     (the codex gatewayd bridge has no file log — it logs to the journal only)
+//
 // "openclaw" also bakes in resolveOpenclawLog()'s /tmp fallback so callers don't
-// special-case it. The explicit "hermes" id always maps to the hermes agent log.
+// special-case it. The explicit "hermes"/"picoclaw"/"codex" ids always map to that
+// backend's log.
 func (s *Server) resolveLogSource(source string) (string, bool) {
-	hermesActive := device.CurrentAgentRuntimeFromConfig(s.config) == domain.AgentRuntimeHermes
+	runtime := device.CurrentAgentRuntimeFromConfig(s.config)
 	switch source {
 	case "hermes":
 		return hermesAgentLog, true
+	case "picoclaw":
+		return picoclawAgentLog, true
+	case "codex":
+		return "journal:codex.service", true
 	case "openclaw":
-		if hermesActive {
+		switch runtime {
+		case domain.AgentRuntimeHermes:
 			return hermesAgentLog, true
+		case domain.AgentRuntimePicoclaw:
+			return picoclawAgentLog, true
+		case domain.AgentRuntimeCodex:
+			return "journal:codex.service", true
 		}
 		return resolveOpenclawLog(), true
 	case "openclaw-service":
-		if hermesActive {
+		switch runtime {
+		case domain.AgentRuntimeHermes:
 			return "journal:hermes-gateway.service", true
+		case domain.AgentRuntimePicoclaw:
+			return "journal:picoclaw.service", true
+		case domain.AgentRuntimeCodex:
+			return "journal:codex.service", true
 		}
 	}
 	p, ok := allowedLogs[source]

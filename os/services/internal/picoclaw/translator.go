@@ -49,10 +49,12 @@ type picoToolCall struct {
 
 // picoUsage is PicoClaw's context_usage block (only present on the final frame).
 type picoUsage struct {
-	UsedTokens    int `json:"used_tokens"`
-	TotalTokens   int `json:"total_tokens"`
-	HistoryTokens int `json:"history_tokens"`
-	UsedPercent   int `json:"used_percent"`
+	UsedTokens        int `json:"used_tokens"`
+	TotalTokens       int `json:"total_tokens"`
+	HistoryTokens     int `json:"history_tokens"`
+	CompressAtTokens  int `json:"compress_at_tokens"`
+	SummarizeAtTokens int `json:"summarize_at_tokens"`
+	UsedPercent       int `json:"used_percent"`
 }
 
 func (u *picoUsage) toDomain() *domain.TokenUsage {
@@ -66,8 +68,10 @@ func (u *picoUsage) toDomain() *domain.TokenUsage {
 	// the running context size onto TotalTokens and the carried history onto
 	// InputTokens so the monitor's token gauge has meaningful numbers.
 	return &domain.TokenUsage{
-		InputTokens: u.HistoryTokens,
-		TotalTokens: u.UsedTokens,
+		InputTokens:       u.HistoryTokens,
+		TotalTokens:       u.UsedTokens,
+		CompressAtTokens:  u.CompressAtTokens,
+		SummarizeAtTokens: u.SummarizeAtTokens,
 	}
 }
 
@@ -223,9 +227,14 @@ func (s *PicoclawService) emitToolCalls(f picoFrame, dispatch func(domain.WSEven
 	}
 }
 
-// emitFinal emits (a) the final chat message and (b) lifecycle.end with usage,
-// then closes the turn. Order matches OpenClaw/Hermes so handler_events.go sees
-// chat.final before lifecycle.end → idle.
+// emitFinal emits, in order: (a) the whole reply as a single assistant delta,
+// (b) the final chat message, (c) lifecycle.end with usage — then closes the
+// turn. Order matches OpenClaw/Hermes (assistant deltas → chat.final →
+// lifecycle.end → idle). PicoClaw does not stream tokens, so (a) is the N=1
+// case of that streaming contract: it is what lets the shared consumer flush
+// TTS + [HW:/…] hardware markers (and light the Flow Monitor tts_speak / hw_*
+// nodes) at lifecycle.end exactly as it does for the streaming backends —
+// without it the reply renders in web chat but never reaches the speaker or HW.
 //
 // The turn ids are reset BEFORE dispatch: the consumer (handler_event_chat.go /
 // handler_event_agent.go) calls SetBusy(false) on chat.final and lifecycle.end,
@@ -244,12 +253,31 @@ func (s *PicoclawService) emitFinal(f picoFrame, dispatch func(domain.WSEvent)) 
 		"final", truncRunes(finalText, 500),
 	}
 	if f.Payload.Usage != nil {
-		logArgs = append(logArgs, "usedTokens", f.Payload.Usage.UsedTokens, "usedPercent", f.Payload.Usage.UsedPercent)
+		logArgs = append(logArgs,
+			"usedTokens", f.Payload.Usage.UsedTokens,
+			"compressAt", f.Payload.Usage.CompressAtTokens,
+			"summarizeAt", f.Payload.Usage.SummarizeAtTokens,
+			"usedPercent", f.Payload.Usage.UsedPercent)
+		s.lastCompressAt.Store(int64(f.Payload.Usage.CompressAtTokens))
 	}
 	slog.Info("picoclaw <<< final answer", logArgs...)
 
 	s.currentRunID.Store("")
 	s.pendingRunID.Store("")
+
+	// Surface the full reply as a single assistant delta BEFORE chat.final /
+	// lifecycle.end so the consumer's assistant buffer (accumulateAssistantDelta)
+	// is populated before it flushes at lifecycle.end — see this func's doc.
+	// finalText carries the raw [HW:/…] markers so extractHWCalls can parse them.
+	if finalText != "" {
+		deltaPayload, _ := json.Marshal(map[string]any{
+			"runId":      runID,
+			"sessionKey": s.GetSessionKey(),
+			"stream":     "assistant",
+			"data":       map[string]any{"delta": finalText},
+		})
+		dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: deltaPayload})
+	}
 
 	chatMsg, _ := json.Marshal(map[string]any{
 		"runId":      runID,

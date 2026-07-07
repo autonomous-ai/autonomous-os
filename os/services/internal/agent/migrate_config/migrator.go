@@ -38,9 +38,10 @@ func (c LLMConfig) Empty() bool {
 type Runtime string
 
 const (
-	RuntimeOpenclaw   Runtime = "openclaw"
-	RuntimeHermes     Runtime = "hermes"
-	RuntimePicoclaw   Runtime = "picoclaw"
+	RuntimeOpenclaw Runtime = "openclaw"
+	RuntimeHermes   Runtime = "hermes"
+	RuntimePicoclaw Runtime = "picoclaw"
+	RuntimeCodex    Runtime = "codex"
 	RuntimeClaudeCode Runtime = "claudecode"
 )
 
@@ -52,9 +53,10 @@ type runtimeAdapter interface {
 }
 
 var adapters = map[Runtime]runtimeAdapter{
-	RuntimeOpenclaw:   openclawAdapter{},
-	RuntimeHermes:     hermesAdapter{},
-	RuntimePicoclaw:   picoclawAdapter{},
+	RuntimeOpenclaw: openclawAdapter{},
+	RuntimeHermes:   hermesAdapter{},
+	RuntimePicoclaw: picoclawAdapter{},
+	RuntimeCodex:    codexAdapter{},
 	RuntimeClaudeCode: claudecodeAdapter{},
 }
 
@@ -69,6 +71,7 @@ type Options struct {
 	OpenclawConfigDir string // e.g. /root/.openclaw
 	HermesRoot        string // e.g. /root/.hermes
 	PicoclawConfigDir string // e.g. /root/.picoclaw
+	CodexHome         string // e.g. /root/.codex (config.toml + .env)
 	ClaudecodeDir     string // e.g. /root/.claudecode
 }
 
@@ -83,6 +86,7 @@ func DefaultOptions(openclawConfigDir, hermesRoot string) Options {
 		OpenclawConfigDir: openclawConfigDir,
 		HermesRoot:        hermesRoot,
 		PicoclawConfigDir: "/root/.picoclaw",
+		CodexHome:         "/root/.codex",
 		ClaudecodeDir:     "/root/.claudecode",
 	}
 }

@@ -16,7 +16,7 @@ If the incoming turn contains a line like:
 [vision-image] <absolute-path-to-a.jpg> (a photo was JUST captured ...)
 ```
 
-a photo was **already taken** for this exact request by the realtime voice layer (it captured the frame, then handed the turn to you — e.g. it timed out mid-answer). **Read that file directly to answer the visual question. Do NOT call `/camera/snapshot`** — re-snapshotting wastes time and may capture a different moment than what the user asked about. Use the path **exactly as given in the message** — read it verbatim, never assume or rewrite the directory (it's an absolute path on the device, readable regardless of which agent runtime you are).
+a photo was **already taken** for this exact request by the realtime voice layer (it captured the frame, then handed the turn to you — e.g. it timed out mid-answer), and the OS layer delivers it **with this very message** — either as an `[image description]` line (when the main model is text-only, a vision model has already analyzed the photo for you) or as an attached image. **Answer the visual question from that description/attachment. Do NOT call `/camera/snapshot`** — re-snapshotting wastes time and may capture a different moment than what the user asked about. Do NOT read the path with a file tool — it is there for traceability only, and on text-only models a file-read image is silently dropped.
 
 Only fall back to the snapshot endpoint below when there is no `[vision-image]` line.
 

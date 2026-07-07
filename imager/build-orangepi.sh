@@ -34,7 +34,7 @@ OTA_METADATA_URL="${OTA_METADATA_URL:?OTA_METADATA_URL is required — build via
 AP_BAND="${AP_BAND:-2.4}"
 AP_CHANNEL="${AP_CHANNEL:-}"
 COUNTRY_CODE="${COUNTRY_CODE:-US}"
-OPENCLAW_VERSION="${OPENCLAW_VERSION:-2026.5.27}"
+OPENCLAW_VERSION="${OPENCLAW_VERSION:-2026.6.10}"
 # Device class this golden image is for — bakes devices/<type>/{DEVICE,SOUL}.md
 # so one DEVICE_TYPE = one golden image. Forwarded by the Makefile via docker -e.
 # REQUIRED, no default — a golden image must declare which device class it is.
@@ -246,7 +246,7 @@ apt-get install -y \\
   xvfb xauth chromium chromium-sandbox git \\
   openresolv \\
   fake-hwclock \\
-  libportaudio2 portaudio19-dev pulseaudio pulseaudio-utils ffmpeg \\
+  libportaudio2 portaudio19-dev pulseaudio pulseaudio-utils pulseaudio-module-bluetooth ffmpeg \\
   alsa-utils libasound2-dev \\
   libopenblas0 libgomp1 liblapack3 \\
   libgpiod2 \\
@@ -283,6 +283,7 @@ if ! command -v node &>/dev/null || ! node -v 2>/dev/null | grep -qE '^v(2[2-9]|
 fi
 retry "npm install -g openclaw@\${OPENCLAW_VERSION} --omit=optional" 5
 openclaw --version || true
+openclaw --version 2>/dev/null | tr -d '[:space:]' > /tmp/baked-openclaw-version || echo "unknown" > /tmp/baked-openclaw-version
 
 # OpenClaw state dir. MUST be /root/.openclaw (with dot) — see openclaw memory
 # note: any /root/openclaw mismatch causes WS close 1008 / token_mismatch.
@@ -328,6 +329,7 @@ done
 rm -f "\$HERMES_INSTALLER"
 echo "git" >/usr/local/lib/hermes-agent/.install_method 2>/dev/null || true
 hermes --version || true
+hermes --version 2>/dev/null | tr -d '[:space:]' > /tmp/baked-hermes-version || echo "unknown" > /tmp/baked-hermes-version
 
 # ── Hermes gateway unit pre-bake (A — created, left DISABLED) ────────────────
 # Pre-baking the binary above is not enough: IsReady()/device setup wait on the
@@ -349,7 +351,7 @@ if command -v hermes >/dev/null 2>&1; then
   # and os-server's Bearer auth fails (401 on every turn).
   HERMES_DIR="/root/.hermes"
   ENV_FILE="\$HERMES_DIR/.env"
-  HERMES_API_SERVER_KEY="hermes-api-key"
+  HERMES_API_SERVER_KEY="hermes-local-api-key"
   mkdir -p "\$HERMES_DIR"
   touch "\$ENV_FILE"
   for k in API_SERVER_ENABLED API_SERVER_KEY API_SERVER_CORS_ORIGINS; do
@@ -1045,6 +1047,10 @@ fi
 echo "[stage] chroot Phase 2 complete"
 CHROOT_STAGES
 
+# Read runtime versions captured inside chroot (shell vars don't propagate out).
+BAKED_OPENCLAW_VERSION=$(cat "${MNT}/tmp/baked-openclaw-version" 2>/dev/null | tr -d '[:space:]' || echo "unknown")
+BAKED_HERMES_VERSION=$(cat "${MNT}/tmp/baked-hermes-version" 2>/dev/null | tr -d '[:space:]' || echo "unknown")
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 3 — OTA bake: backend binaries + hal + web UI + buddy
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1300,12 +1306,15 @@ if [ -f "${METADATA_FOR_SNAPSHOT}" ]; then
   jq -n \
     --arg build_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg git_commit "${BUILD_GIT_SHA:-unknown}" \
+    --arg hermes_version "${BAKED_HERMES_VERSION:-unknown}" \
+    --arg openclaw_version "${BAKED_OPENCLAW_VERSION:-unknown}" \
     --argjson hw_manifest "${HW_MANIFEST_JSON}" \
     --slurpfile ota_metadata "${METADATA_FOR_SNAPSHOT}" \
     '{
       build_date: $build_date,
       git_commit: $git_commit,
       hardware_manifest: $hw_manifest,
+      baked_runtimes: { hermes: $hermes_version, openclaw: $openclaw_version },
       ota_metadata: $ota_metadata[0]
     }' > "${MNT}/etc/autonomous-build.json"
   rm -f "${METADATA_FOR_SNAPSHOT}"

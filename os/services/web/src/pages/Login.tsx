@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { login, safeSearch } from "@/lib/api";
 import { useTheme } from "@/lib/useTheme";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
-import { C, Field } from "@/components/setup/shared";
+import { C, PasswordField } from "@/components/setup/shared";
 
 // Login page — single password field that POSTs /api/login. On success the
 // server sets the os_session cookie (httpOnly + SameSite=Strict), and we
@@ -85,14 +85,12 @@ export default function Login() {
         )}
 
         <form onSubmit={submit}>
-          <Field
+          <PasswordField
             label="Admin Password"
             id="login-password"
-            type="password"
             value={password}
             onChange={setPassword}
             placeholder="••••••••"
-            required
           />
           <button
             type="submit"

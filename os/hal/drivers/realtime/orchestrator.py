@@ -28,6 +28,7 @@ import hal.presets as presets
 from hal.drivers.realtime.config import (
     GeminiConfig,
     OpenAIConfig,
+    QwenConfig,
     _load_language,
     gemini_needs_idle_workaround,
 )
@@ -173,14 +174,21 @@ class RealtimeOrchestrator:
     flow (device → OpenClaw).
     """
 
+    # PicoClaw and Codex reuse OpenClawContextManager: their workspaces are
+    # verbatim copies of OpenClaw's layout (SOUL.md / IDENTITY.md / MEMORY.md /
+    # memory/), only the root dir differs.
     CONTEXT_MANAGERS: dict[str, type[ContextManagerBase]] = {
         AgentGateway.OPENCLAW: OpenClawContextManager,
         AgentGateway.HERMES: HermesContextManager,
+        AgentGateway.PICOCLAW: OpenClawContextManager,
+        AgentGateway.CODEX: OpenClawContextManager,
     }
 
     WORKSPACE_DIRS: dict[str, str] = {
         AgentGateway.OPENCLAW: config.OPENCLAW_WORKSPACE_DIR,
         AgentGateway.HERMES: config.HERMES_WORKSPACE_DIR,
+        AgentGateway.PICOCLAW: config.PICOCLAW_WORKSPACE_DIR,
+        AgentGateway.CODEX: config.CODEX_WORKSPACE_DIR,
     }
 
     def __init__(
@@ -305,6 +313,14 @@ class RealtimeOrchestrator:
 
             return OpenAIRealtimeAgent(
                 config=OpenAIConfig(instructions=instructions), tools=self._tools,
+            )
+        if provider == "qwen":
+            from hal.drivers.realtime.voice_agent.qwen_realtime import (
+                QwenRealtimeAgent,
+            )
+
+            return QwenRealtimeAgent(
+                config=QwenConfig(instructions=instructions), tools=self._tools,
             )
         return None
 
@@ -826,6 +842,10 @@ class RealtimeOrchestrator:
                 "[realtime] look: reusing recent frame (%s) — no new image sent (cost)",
                 reason,
             )
+            # Reading a frame (esp. text) can keep Gemini thinking silently
+            # past the default watchdog — give THIS turn a longer window so
+            # the answer isn't cut off seconds before it arrives.
+            self._agent.extend_recv_timeout(config.REALTIME_LOOK_RECV_TIMEOUT_S)
             self._agent.send(
                 [
                     FunctionCallResultInput(
@@ -852,6 +872,10 @@ class RealtimeOrchestrator:
         self._agent.send([ImageInput(image=frame)])
         self._looked_this_turn = True
         self._last_look_sent_monotonic = now
+        # The replayed turn (frame + re-committed audio) inherits the same
+        # risk of a long silent think over the frame; extend its watchdog too.
+        # receive() clears the override when the replayed turn ends.
+        self._agent.extend_recv_timeout(config.REALTIME_LOOK_RECV_TIMEOUT_S)
         # Persist the SAME frame so that if this turn later delegates / falls
         # back to the main agent (e.g. Gemini times out mid-turn), the agent
         # reuses it instead of taking a fresh snapshot. See turn_dispatch.

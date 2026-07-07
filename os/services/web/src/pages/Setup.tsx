@@ -16,8 +16,12 @@ import { LLMSection } from "@/components/setup/LLMSection";
 import { ChannelSection } from "@/components/setup/ChannelSection";
 import { LanguageSection } from "@/components/setup/LanguageSection";
 import { TTSSection } from "@/components/setup/TTSSection";
-import { VoiceSection } from "@/components/setup/VoiceSection";
-import { FaceSection } from "@/components/setup/FaceSection";
+// Voice/Face enrollment UI is shared with the Settings page (setting#voice /
+// setting#face) so both entry points stay consistent — one implementation with
+// the richer dropzone/camera/audio-player UX. Setup only supplies the shared
+// faceOwners list + reload fn; these components own their own enroll state.
+import { VoiceSection } from "@/pages/settings/VoiceSection";
+import { FaceSection } from "@/pages/settings/FaceSection";
 import type { ChannelType, NetworkItem } from "@/types";
 import { Wifi, Brain, Volume2, MessageSquare, UserCircle, Mic, Globe, Check, XCircle, CheckCircle2 } from "lucide-react";
 
@@ -401,19 +405,11 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
   const [faChannel, setFaChannel] = useState("");
   const [fdChannel, setFdChannel] = useState("");
 
-  // Face enroll — same flow as EditConfig.Face. Uses /api/hardware/face endpoints
-  // directly; only relevant in continue mode (device online).
-  const {
-    faceName, setFaceName,
-    faceFiles, setFaceFiles,
-    faceUploading,
-    faceMsg,
-    faceInputRef,
-    faceOwners,
-    loadFaceOwners,
-    removeFaceOwner,
-    handleFaceEnroll,
-  } = useFaceEnroll();
+  // Enrolled owners list (faces + voice samples), shared by the Voice and Face
+  // sections. Enroll/upload/remove logic now lives inside those shared Settings
+  // components; Setup only needs the list + a reload fn to drive sectionDone and
+  // feed both sections. Only meaningful in continue mode (device online).
+  const { faceOwners, loadFaceOwners } = useFaceEnroll();
 
   // Voice enroll state + handlers live inside VoiceSection (continue mode
   // only) — nothing outside reads them. After each enroll the section calls
@@ -532,6 +528,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
 
   useSetupStatusPolling({
     setupWorking, setupLanIP,
+    mdnsHost: deviceMdnsHost,
     setSetupPhase, setSetupLanIP, setSetupErrorMsg,
   });
 
@@ -544,6 +541,25 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
   // Wizard mounted and ready.
   useEffect(() => {
     setupBridge.opened({ mode, deviceId, mac });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Deep-link: open the step named by the URL hash (#wifi / #voice / #face / …)
+  // on load. Only honor a hash that maps to a currently-visible section so a
+  // stale/hidden id can't strand the operator on a blank step; `#force` is a
+  // test flag, not a step, so it's skipped. Runs once on mount.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const fromHash = window.location.hash.replace(/^#/, "");
+    // Keep the `#force` test flag as-is — it's a mode toggle, not a step hash.
+    if (fromHash === "force") return;
+    if (fromHash && visibleSections.some((s) => s.id === fromHash)) {
+      scrollTo(fromHash as SectionId); // deep-link into the named step
+    } else {
+      // No (or unusable) hash: seed one for the default first step so the URL
+      // reflects the visible tab from the very first render, not just after a
+      // click. scrollTo re-selects the current section — a harmless no-op here.
+      scrollTo(visibleSections[0]?.id ?? "wifi");
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   // Operator moved to a new step.
@@ -580,6 +596,15 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
   const scrollTo = (id: SectionId) => {
     setActiveSection(id);
     setStepError(null); // moving to any section clears a stale per-step hint
+    // Mirror the active step into the URL hash (#wifi / #voice / #face / …) so
+    // the address bar tracks the tab and the step is deep-linkable/shareable.
+    // Preserve the `#force` test flag — never clobber it with a step hash, since
+    // isContinue keys off it (see forceHash above).
+    if (typeof window !== "undefined" && window.location.hash !== "#force") {
+      // replaceState (not location.hash =) avoids piling up history entries so
+      // the browser Back button still exits Setup instead of walking tabs.
+      history.replaceState(null, "", `${window.location.pathname}${window.location.search}#${id}`);
+    }
     // Pop the content area back to the top so a Back/Next click never lands
     // the operator mid-scroll of the previous section.
     contentRef.current?.scrollTo({ top: 0 });
@@ -645,14 +670,14 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
   }, [setupWorking, setupPhase]);
 
   // Join-progress heartbeat → parent window. Fire setupBridge.joinProgress once
-  // when the join has been running ~10s without flipping to connected/failed, so
+  // when the join has been running ~4s without flipping to connected/failed, so
   // the opener (autonomous.ai) learns the join is taking a moment but is still
   // alive. joinPingedRef guards single-fire; it resets whenever we (re)enter the
   // connecting phase so a retry pings again.
   const joinPingedRef = useRef(false);
   useEffect(() => {
     if (setupPhase === "connecting" && setupWorking) {
-      if (elapsed >= 10 && !joinPingedRef.current) {
+      if (elapsed >= 4 && !joinPingedRef.current) {
         joinPingedRef.current = true;
         setupBridge.joinProgress(elapsed);
       }
@@ -1222,14 +1247,8 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                   {isContinue && (
                     <FaceSection
                       active={activeSection === "face"}
-                      faceName={faceName} setFaceName={setFaceName}
-                      faceFiles={faceFiles} setFaceFiles={setFaceFiles}
-                      faceUploading={faceUploading}
-                      faceMsg={faceMsg}
-                      faceInputRef={faceInputRef}
                       faceOwners={faceOwners}
-                      removeFaceOwner={removeFaceOwner}
-                      handleFaceEnroll={handleFaceEnroll}
+                      loadFaceOwners={loadFaceOwners}
                     />
                   )}
 
@@ -1266,7 +1285,14 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                         <button
                           key="done"
                           type="button"
-                          onClick={() => { setupBridge.monitorClicked(); navigate("/monitor"); }}
+                          onClick={() => {
+                            // "Skip & finish" on an optional enrollment step
+                            // (Voice/Face) also signals the wizard is complete;
+                            // "Go to monitor" on a non-skippable last step does not.
+                            if (isSkippableStep) setupBridge.setupDone();
+                            setupBridge.monitorClicked();
+                            navigate("/monitor");
+                          }}
                           className="lm-btn lm-btn-primary"
                           style={{ padding: "9px 22px" }}
                         >

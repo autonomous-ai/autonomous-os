@@ -1,0 +1,361 @@
+package codex
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// Device-owned Telegram inbound for the Codex runtime.
+//
+// The Codex CLI has no channel layer of its own (unlike PicoClaw, whose
+// runtime binary polls the Telegram Bot API itself), so os-server owns the
+// receive loop: one goroutine long-polls getUpdates and injects each accepted
+// DM as a regular chat turn. The loop is started from StartWS, i.e. it runs
+// inside this service's lifecycle and therefore ONLY while codex is the
+// active runtime — the openclaw/hermes gateway pollers can never compete for
+// getUpdates (Telegram 409s concurrent pollers; the hermes lesson).
+//
+// Credentials are read fresh from Device config on every iteration
+// (config.TelegramBotToken / TelegramUserID), so saving or rotating them
+// needs no restart. Replies are routed back to the originating chat by
+// emitFinal via the telegramRuns tracker (translator.go); TTS is suppressed
+// for these turns (MarkSilentRun).
+
+const (
+	// telegramOffsetFile persists the next getUpdates offset across restarts so
+	// already-processed updates are not re-injected. Lives under Codex's own
+	// data dir (wiped by factory reset, like telegram_targets.json).
+	telegramOffsetFile = "/root/.codex/telegram_offset.json"
+
+	// telegramAPIBaseDefault is the production Bot API host. Tests override the
+	// service field telegramAPIBase with an httptest URL.
+	telegramAPIBaseDefault = "https://api.telegram.org"
+
+	// telegramPollTimeoutS is the getUpdates long-poll window in seconds (the
+	// server holds the request until an update arrives or the window expires).
+	telegramPollTimeoutS = 50
+
+	// telegramNoTokenWait is the idle recheck interval while no bot token is
+	// configured (the user may save one later — keep checking).
+	telegramNoTokenWait = 30 * time.Second
+
+	// telegramErrorWait is the backoff after an HTTP/network error so a broken
+	// token or flaky network cannot hot-loop against the Bot API.
+	telegramErrorWait = 5 * time.Second
+
+	// telegramBusyPoll is how often an accepted message rechecks IsBusy()
+	// before injecting its turn.
+	telegramBusyPoll = 500 * time.Millisecond
+)
+
+// tgUpdate / tgMessage / tgChat / tgUser are the minimal Bot API getUpdates
+// shapes this loop consumes.
+type tgUpdate struct {
+	UpdateID int64      `json:"update_id"`
+	Message  *tgMessage `json:"message"`
+}
+
+type tgMessage struct {
+	Text string  `json:"text"`
+	Chat tgChat  `json:"chat"`
+	From *tgUser `json:"from"`
+}
+
+type tgChat struct {
+	ID   int64  `json:"id"`
+	Type string `json:"type"`
+}
+
+type tgUser struct {
+	ID        int64  `json:"id"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Username  string `json:"username"`
+}
+
+// label renders the sender for the turn header, mirroring how openclaw's
+// telegram plugin surfaces who is talking (name + @username + numeric id).
+func (u *tgUser) label() string {
+	if u == nil {
+		return "unknown"
+	}
+	name := strings.TrimSpace(u.FirstName + " " + u.LastName)
+	if name == "" {
+		name = "unknown"
+	}
+	if u.Username != "" {
+		name += " (@" + u.Username + ")"
+	}
+	return fmt.Sprintf("%s [id:%d]", name, u.ID)
+}
+
+type tgGetUpdatesResp struct {
+	OK          bool       `json:"ok"`
+	Description string     `json:"description"`
+	Result      []tgUpdate `json:"result"`
+}
+
+// telegramOffsetState is the schema of telegramOffsetFile.
+type telegramOffsetState struct {
+	Offset int64 `json:"offset"`
+}
+
+// startTelegramPoll runs the device-owned Telegram receive loop until ctx is
+// cancelled. Started ONCE from StartWS (before its reconnect loop), so it
+// survives WS reconnects and dies with the gateway lifecycle.
+func (s *CodexService) startTelegramPoll(ctx context.Context) {
+	offset := s.loadTelegramOffset()
+	// Client timeout must exceed the long-poll window or every healthy idle
+	// poll would abort client-side at telegramPollTimeoutS.
+	client := &http.Client{Timeout: 70 * time.Second}
+	slog.Info("telegram poll loop started", "component", "codex", "offset", offset)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		// Read creds fresh every iteration: config may be saved or rotated at
+		// any time and the loop must pick that up without a restart.
+		token := s.config.TelegramBotToken
+		if token == "" {
+			if !sleepCtx(ctx, telegramNoTokenWait) {
+				return
+			}
+			continue
+		}
+		updates, err := s.fetchTelegramUpdates(ctx, client, token, offset)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			slog.Warn("telegram getUpdates failed", "component", "codex", "error", err)
+			if !sleepCtx(ctx, telegramErrorWait) {
+				return
+			}
+			continue
+		}
+		if len(updates) == 0 {
+			continue // long-poll window expired with nothing new
+		}
+		allowedUser := s.config.TelegramUserID
+		for _, u := range updates {
+			if u.UpdateID >= offset {
+				offset = u.UpdateID + 1
+			}
+			if ctx.Err() != nil {
+				// Persist what was consumed before bailing out.
+				s.saveTelegramOffset(offset)
+				return
+			}
+			s.handleTelegramUpdate(ctx, u, allowedUser)
+		}
+		s.saveTelegramOffset(offset)
+	}
+}
+
+// handleTelegramUpdate filters one update and injects the accepted message as
+// a chat turn. Accepted = non-empty text message, private chat, sender id ==
+// config.TelegramUserID. Everything else is skipped at debug level — the
+// offset was already advanced by the caller, so rejects are never re-delivered.
+func (s *CodexService) handleTelegramUpdate(ctx context.Context, u tgUpdate, allowedUser string) {
+	msg := u.Message
+	if msg == nil || strings.TrimSpace(msg.Text) == "" {
+		slog.Debug("telegram update skipped (no text message)", "component", "codex", "updateId", u.UpdateID)
+		return
+	}
+	if msg.Chat.Type != "private" {
+		slog.Debug("telegram update skipped (not a private chat)",
+			"component", "codex", "updateId", u.UpdateID, "chatType", msg.Chat.Type)
+		return
+	}
+	fromID := ""
+	if msg.From != nil {
+		fromID = strconv.FormatInt(msg.From.ID, 10)
+	}
+	if allowedUser == "" || fromID != allowedUser {
+		slog.Debug("telegram update skipped (sender not allowlisted)",
+			"component", "codex", "updateId", u.UpdateID, "fromId", fromID)
+		return
+	}
+	chatID := strconv.FormatInt(msg.Chat.ID, 10)
+	// Remember the chat so outbound Broadcast (proactive alerts) reaches it.
+	s.upsertTelegramTarget(chatID, msg.Chat.Type)
+	// Prefix sender metadata so the agent knows who is talking and on which
+	// channel (openclaw's telegram plugin does the same) — the persona can
+	// address the sender by name and keep the reply channel-appropriate.
+	turnText := fmt.Sprintf("[telegram] Message from %s:\n%s", msg.From.label(), msg.Text)
+	s.injectTelegramTurn(ctx, turnText, chatID)
+}
+
+// injectTelegramTurn waits for the agent to go idle, then sends the message as
+// a regular chat turn with flow source "telegram" (chat_input / chat_send flow
+// events fire as usual, so Flow Monitor shows the origin). The runID is
+// tracked in telegramRuns so emitFinal DMs the reply back to chatID, and
+// marked silent so the reply is not spoken over TTS.
+func (s *CodexService) injectTelegramTurn(ctx context.Context, text, chatID string) {
+	for s.IsBusy() {
+		if !sleepCtx(ctx, telegramBusyPoll) {
+			return
+		}
+	}
+	reqID, runID := s.NextChatRunID()
+	s.markTelegramRun(runID, chatID)
+	s.MarkSilentRun(runID) // reply goes back to the Telegram chat, not TTS
+	send := s.telegramSendTurn
+	if send == nil {
+		send = func(text, reqID, runID string) error {
+			_, err := s.sendChat(text, "", reqID, runID, "telegram")
+			return err
+		}
+	}
+	if err := send(text, reqID, runID); err != nil {
+		// Un-mark so the trackers don't leak. The message is dropped (Telegram
+		// will not re-deliver past the advanced offset); the user sees no reply
+		// and can resend.
+		s.consumeTelegramRun(runID)
+		s.ConsumeSilentRun(runID)
+		slog.Error("telegram turn injection failed",
+			"component", "codex", "runID", runID, "chatID", chatID, "error", err)
+		return
+	}
+	// Keep Telegram's "typing…" indicator alive while the turn runs (openclaw/
+	// hermes channel plugins do the same). Stops when emitFinal/handleError
+	// consumes the run (reply sent) or after the safety cap.
+	go s.telegramTypingKeeper(ctx, chatID, runID)
+}
+
+// telegramTypingLifetime caps a typing keeper — matches the gatewayd turn
+// timeout so a wedged turn cannot leave the chat "typing…" forever.
+const telegramTypingLifetime = 10 * time.Minute
+
+// telegramTypingKeeper fires sendChatAction(typing) immediately and then every
+// 4s (the indicator expires after ~5s) until the run is consumed by emitFinal
+// or handleError. Best-effort: send errors are logged at debug and ignored.
+func (s *CodexService) telegramTypingKeeper(ctx context.Context, chatID, runID string) {
+	deadline := time.Now().Add(telegramTypingLifetime)
+	for {
+		if !s.hasTelegramRun(runID) || time.Now().After(deadline) {
+			return
+		}
+		s.sendTelegramTyping(ctx, chatID)
+		if !sleepCtx(ctx, 4*time.Second) {
+			return
+		}
+	}
+}
+
+// sendTelegramTyping posts one sendChatAction "typing" for chatID.
+func (s *CodexService) sendTelegramTyping(ctx context.Context, chatID string) {
+	token := s.config.TelegramBotToken
+	if token == "" {
+		return
+	}
+	base := s.telegramAPIBase
+	if base == "" {
+		base = telegramAPIBaseDefault
+	}
+	url := fmt.Sprintf("%s/bot%s/sendChatAction?chat_id=%s&action=typing", base, token, chatID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		slog.Debug("telegram sendChatAction failed", "component", "codex", "error", err)
+		return
+	}
+	_ = resp.Body.Close()
+}
+
+// fetchTelegramUpdates performs one getUpdates long-poll.
+func (s *CodexService) fetchTelegramUpdates(ctx context.Context, client *http.Client, token string, offset int64) ([]tgUpdate, error) {
+	base := s.telegramAPIBase
+	if base == "" {
+		base = telegramAPIBaseDefault
+	}
+	url := fmt.Sprintf("%s/bot%s/getUpdates?timeout=%d&offset=%d", base, token, telegramPollTimeoutS, offset)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build getUpdates request: %w", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("getUpdates: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read getUpdates response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("getUpdates status %d: %s", resp.StatusCode, truncRunes(string(body), 200))
+	}
+	var parsed tgGetUpdatesResp
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("parse getUpdates response: %w", err)
+	}
+	if !parsed.OK {
+		return nil, fmt.Errorf("getUpdates not ok: %s", parsed.Description)
+	}
+	return parsed.Result, nil
+}
+
+// telegramOffsetFilePath returns the offset state path (test override).
+func (s *CodexService) telegramOffsetFilePath() string {
+	if s.telegramOffsetPath != "" {
+		return s.telegramOffsetPath
+	}
+	return telegramOffsetFile
+}
+
+// loadTelegramOffset reads the persisted next-update offset. Returns 0
+// (deliver everything pending) on first run or unreadable state.
+func (s *CodexService) loadTelegramOffset() int64 {
+	data, err := os.ReadFile(s.telegramOffsetFilePath())
+	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Warn("telegram offset read failed", "component", "codex", "error", err)
+		}
+		return 0
+	}
+	var st telegramOffsetState
+	if err := json.Unmarshal(data, &st); err != nil {
+		slog.Warn("telegram offset parse failed", "component", "codex", "error", err)
+		return 0
+	}
+	return st.Offset
+}
+
+// saveTelegramOffset atomically persists the next-update offset (temp +
+// rename) so a crash between polls cannot corrupt the state file.
+func (s *CodexService) saveTelegramOffset(offset int64) {
+	path := s.telegramOffsetFilePath()
+	data, err := json.Marshal(telegramOffsetState{Offset: offset})
+	if err != nil {
+		slog.Warn("telegram offset marshal failed", "component", "codex", "error", err)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		slog.Warn("telegram offset dir create failed", "component", "codex", "error", err)
+		return
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		slog.Warn("telegram offset write failed", "component", "codex", "error", err)
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		slog.Warn("telegram offset rename failed", "component", "codex", "error", err)
+	}
+}

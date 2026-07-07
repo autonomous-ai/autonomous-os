@@ -39,9 +39,11 @@ func (s *HermesService) PairWhatsapp(_ context.Context) <-chan domain.PairingEve
 // via restartHermesGateway, mirroring openclaw's RestartAgent.
 
 // RefreshModelsConfig — Hermes config (~/.hermes/...) is owned externally; we
-// don't patch it from Device. No-op.
+// don't patch it from Device. Returns ErrNotSupportedByRuntime so the caller
+// knows nothing was applied (it falls back to EnsureOnboarding, whose presync
+// re-syncs llm_base_url/llm_api_key from config.json).
 func (s *HermesService) RefreshModelsConfig() error {
-	return nil
+	return domain.ErrNotSupportedByRuntime
 }
 
 // EnsureOnboarding for Hermes lives in onboarding.go — it runs the embedded
@@ -55,9 +57,11 @@ func (s *HermesService) FetchChatHistory(_ string, _ int) (json.RawMessage, erro
 	return nil, nil
 }
 
-// GetConfigJSON — no agent-side config file under Hermes. Returns empty.
+// GetConfigJSON — no agent-side config file under Hermes (config.yaml is owned
+// by presync, secrets live in .env). Returns ErrNotSupportedByRuntime so the
+// gw-config UI shows "no local config" instead of a misleading empty object.
 func (s *HermesService) GetConfigJSON() (json.RawMessage, error) {
-	return json.RawMessage(`{}`), nil
+	return nil, domain.ErrNotSupportedByRuntime
 }
 
 // WatchIdentity for Hermes lives in identity.go — it polls SOUL.md (no IDENTITY.md
@@ -73,8 +77,11 @@ func (s *HermesService) StartModelSync(ctx context.Context) {
 	<-ctx.Done()
 }
 
+// UpdatePrimaryModel — Hermes ignores the device's primary model: os-server
+// sends a fixed request model (constants.go Model) and presync pins
+// .model.default to the campaign-api alias, so there is nothing to patch.
 func (s *HermesService) UpdatePrimaryModel(_ string) error {
-	return nil
+	return domain.ErrNotSupportedByRuntime
 }
 
 // StartPrimaryModelWatch — no openclaw.json to watch.
@@ -95,8 +102,8 @@ func (s *HermesService) GetConfiguredChannel() string {
 // (hermes.md §7 decided to no-op). Workaround: rotate the conversation name
 // via NewSession when context grows too large.
 func (s *HermesService) CompactSession(sessionKey string) error {
-	slog.Info("CompactSession: no-op (hermes backend)", "component", "hermes", "session", sessionKey)
-	return nil
+	slog.Info("CompactSession: not supported (hermes backend)", "component", "hermes", "session", sessionKey)
+	return domain.ErrNotSupportedByRuntime
 }
 
 // NewSession lives in rotation.go (it rotates the conversation name).

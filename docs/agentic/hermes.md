@@ -437,6 +437,16 @@ during install) and does three things, in order:
    normal switch is a no-op (no re-import churn). `claw migrate` also touches
    SOUL/MEMORY, but harmlessly: the Go persona migration (§12) runs afterwards and
    rewrites those cleanly, so only the skills persist.
+
+   A migrate that runs while canonical copies are already on disk (install-time
+   race with the skill watcher, manual runs) uses `--skill-conflict rename` and
+   leaves `<name>-imported` **duplicates** — two candidates for one name make
+   Hermes' `skill_view` refuse to load the skill at all ("Ambiguous skill name"),
+   so the agent improvises without it. `EnsureOnboarding` therefore prunes them
+   every boot (`pruneImportedSkillDuplicates`): the `-imported` copy is dropped
+   when `<name>` exists (the CDN copy is canonical), or renamed to `<name>` when
+   it is the only copy — and the gateway is restarted when anything changed (the
+   session skill index is built at gateway start).
 2. **Ensures the `config.yaml` model structure** (idempotent — self-heals after a
    factory reset's `hermes setup --reset` blanks it). It coerces a reset-left
    `model: ''` back to a map, then asserts:
@@ -450,9 +460,16 @@ during install) and does three things, in order:
      `model: qwen/qwen3.6-plus`, `timeout: 120`, `download_timeout: 30`, `extra_body: {}`
      — the image-understanding model, routed through the same autonomous provider.
    - `.agent.image_input_mode = "auto"` — lets the agent decide when to attach images.
-   - Only `.auxiliary.vision` and `.agent.image_input_mode` are written; **other keys
-     under `.auxiliary`/`.agent` are preserved** (both are coerced from a reset-left
-     scalar to a map first, same as `.model`).
+   - `.approvals.mode = "off"` — disables Hermes' command-approval prompts (tirith /
+     dangerous-command cards) entirely. The device runs unattended on voice + chat
+     channels, where an approval card is a dead end that stalls the turn (product
+     decision). Hermes' hardline blocklist still applies. Written force-quoted
+     (`style="double"`): yq v4 (YAML 1.2) emits a bare `off`, but Hermes parses
+     config.yaml with PyYAML (YAML 1.1) where bare `off` is boolean `False` — the
+     mode never matches and prompts silently stay on.
+   - Only `.auxiliary.vision`, `.agent.image_input_mode`, and `.approvals.mode` are
+     written; **other keys under `.auxiliary`/`.agent`/`.approvals` are preserved**
+     (each is coerced from a reset-left scalar to a map first, same as `.model`).
 3. **Syncs per-device values** from `config.json` (only non-empty fields, so
    unconfigured channels are untouched):
 
@@ -472,6 +489,34 @@ every turn 401s. Hermes must listen on `127.0.0.1:8642` to match `BaseURL`.
 To target a different Hermes endpoint / key / model today, edit
 `internal/hermes/constants.go` and rebuild (making these per-unit configurable is
 future work).
+
+### SOUL.md skill-priority block (device skills beat Hermes bundled skills)
+
+Hermes ships its own bundled skill catalog, and left alone it weighs those as
+equals of the device's platform skills — so any request both catalogs can serve
+may get routed to a bundled skill instead of the device one. Example: asked to
+"send an email", it can pick a bundled email skill and start installing CLI
+tools (himalaya) while the `connectors` skill already has the device's Gmail
+credentials on disk. OpenClaw and PicoClaw carry their skill-selection rules in
+an OS-managed **AGENTS.md** block, but Hermes loads no AGENTS.md — **SOUL.md is
+the one prompt file it reads every session** — so the rule rides there instead:
+
+- `EnsureOnboarding` calls `ensureSoulSkillPriorityBlock()`
+  (`internal/hermes/onboarding.go`) right **after** presync (whose §0
+  `claw migrate` can rewrite the soul). It strips any previous
+  `<!-- OS DO NOT REMOVE -->`…`---` block and re-appends the embedded
+  `soulSkillPriorityBlock` at the end of `~/.hermes/SOUL.md` — so an os-server
+  OTA refreshes the wording, and a factory reset / migrate that drops it
+  self-heals on the next boot.
+- The block instructs: skills under `skills/openclaw-imports/` are the device's
+  built-in platform skills and **take priority over any Hermes bundled skill**
+  with an overlapping purpose; anything on a connected third-party service
+  (Gmail/Calendar/Drive/Notion/Figma/Asana/Linear/GitHub, …) goes through the
+  `connectors` skill; never install an alternative client/CLI (himalaya, mutt,
+  gcalcli, …) for a service a connector covers.
+- Atomic tmp+rename (same as `UpdateIdentityName`), owner/persona content and the
+  inlined identity card are untouched, and **no gateway restart is needed** —
+  Hermes re-reads SOUL.md at the next session.
 
 ### Channel capability & live add/refresh
 
@@ -575,7 +620,10 @@ Switching openclaw→hermes runs a Go persona migration
   the custom name (e.g. "Ngân") survives. `UpdateIdentityName` (device rename) edits
   that block; `WatchIdentity` (`internal/hermes/identity.go`) polls SOUL.md and, on
   a name change, pushes the new wake words to HAL + `i18n.SetDeviceName` — mirroring
-  OpenClaw's `WatchIdentity`, just watching SOUL.md instead of IDENTITY.md.
+  OpenClaw's `WatchIdentity`, just watching SOUL.md instead of IDENTITY.md. The
+  migration overwrite also drops the OS-managed **skill-priority block**, but
+  `EnsureOnboarding` (which runs after the migration in the startup sequence)
+  re-appends it (see *SOUL.md skill-priority block* above).
 - **MEMORY.md + daily `memory/*.md` + KNOWLEDGE.md** → merged into
   `memories/MEMORY.md`. Hermes loads only `MEMORY.md` + `USER.md` **by name** (no
   `memories/*.md` glob), so KNOWLEDGE is folded in rather than kept as a separate,

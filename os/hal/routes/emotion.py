@@ -126,8 +126,13 @@ def express_emotion(req: EmotionRequest):
 
     # Two levels of suppression:
     #   - hold_mode: /servo/hold or focus/reading scene. Suppress most
-    #     emotion servo animations, but let scene-change emotions through
-    #     (greeting/sleepy/stretching may legitimately transition scene).
+    #     emotion servo animations. Scene-preset holds let scene-change
+    #     emotions through (greeting/sleepy/stretching may legitimately
+    #     transition scene) — but an EXPLICIT /servo/hold (_hold_explicit,
+    #     agent command like "face the wall and stay there") blocks those
+    #     too: a trailing [HW:/emotion:greeting] in the same reply used to
+    #     ride the exemption and park the arm at the greeting pose instead
+    #     of the commanded one.
     #   - tracking_active: vision tracker owns the servo. Suppress ALL
     #     emotion servo including scene-change — otherwise a loud-noise
     #     shock reaction would yank the device off the tracked object.
@@ -136,8 +141,9 @@ def express_emotion(req: EmotionRequest):
     svc = state.animation_service
     tracking_active = svc and getattr(svc, "_tracking_active", False)
     servo_held = svc and getattr(svc, "_hold_mode", False)
+    hold_explicit = svc and getattr(svc, "_hold_explicit", False)
     scene_change = req.emotion in {EMO_GREETING, EMO_SLEEPY, EMO_STRETCHING}
-    servo_blocked = tracking_active or (servo_held and not scene_change)
+    servo_blocked = tracking_active or (servo_held and (hold_explicit or not scene_change))
 
     servo_played = None
 

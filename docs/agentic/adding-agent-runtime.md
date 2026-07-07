@@ -70,6 +70,17 @@ skills went stale / rename did nothing / config broke after a reset. Audit every
 stub: write `// no-op because <reason>` or `// TODO(<backend>-<feature>)`, never a
 bare empty body.
 
+**No fake success.** A legitimately-N/A method that returns an error **must
+return `domain.ErrNotSupportedByRuntime`** (domain/agent.go), never `nil` —
+`nil` tells the caller the change was applied when nothing happened. Callers
+branch on `errors.Is`: the LLM model/baseURL save path
+(`internal/device/service.go`) logs it as informational and falls back to
+`EnsureOnboarding` (whose presync re-reads `llm_*` from config.json), and the
+gw-config endpoint reports "no device-side config file" instead of `{}`.
+Current sentinel-returning stubs: `UpdatePrimaryModel`, `RefreshModelsConfig`,
+`CompactSession` (hermes + picoclaw), `GetConfigJSON` (hermes only — picoclaw
+has a real config.json). Mirrors the `ErrChannelNotSupported` rule in §9.
+
 ---
 
 ## 2. Register + wire the switch
@@ -419,6 +430,8 @@ re-syncs `.env` before the gateway starts, so the re-apply is an idempotent no-o
 
 - [ ] `internal/<name>/` package; `*Service` implements **all** of `AgentGateway`.
 - [ ] Every stub is `// no-op because …` or `// TODO(<name>-…)` — no bare bodies.
+- [ ] N/A stubs that return an error return `domain.ErrNotSupportedByRuntime`,
+      never `nil` (§4 "No fake success").
 - [ ] `domain.AgentRuntime<Name>` + `AgentRuntimes` entry; `factory.go` case.
 - [ ] `install.sh` + `install.go` (`//go:embed` + `runtimereg.Register`).
 - [ ] **Stateful setup → `presync.sh`** (`//go:embed` + `runtimereg.RegisterPresync`),
@@ -464,4 +477,6 @@ sources (deferred YAGNI — §6), `CompactSession`,
 `FetchChatHistory`, and the model-sync group (`StartModelSync`,
 `UpdatePrimaryModel`, `StartPrimaryModelWatch`, `RefreshModelsConfig` — largely
 N/A because os-server sends a fixed request model to the campaign-api custom
-provider).
+provider). The error-returning ones (`CompactSession`, `UpdatePrimaryModel`,
+`RefreshModelsConfig`, `GetConfigJSON`) return
+`domain.ErrNotSupportedByRuntime` rather than fake success (§4).

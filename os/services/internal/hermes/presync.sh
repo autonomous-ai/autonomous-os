@@ -104,6 +104,20 @@ yq -i '
   | .agent.image_input_mode = "auto"
 ' "$CONFIG_YAML"
 
+# ── 1c. APPROVALS OFF (always overwrite) ───────────────────────────────────────
+# The device runs unattended (voice + chat channels) — a "Command Approval
+# Required" card is a dead end for a voice user and stalls the turn, so command
+# approval prompts are disabled entirely (product decision). Hermes' hardline
+# blocklist still applies; approvals.mode is the documented master switch for
+# the tirith/dangerous-command prompt flow. style="double" is REQUIRED: yq v4
+# (YAML 1.2) writes a bare `off`, but Hermes reads config.yaml with PyYAML
+# (YAML 1.1) where unquoted off parses as boolean False — the mode string is
+# never matched and prompts silently stay ON. Verified on-device: bare off →
+# parsed False; "off" → parsed 'off'.
+[ "$(yq '.approvals | tag' "$CONFIG_YAML" 2>/dev/null)" = "!!map" ] || yq -i '.approvals = {}' "$CONFIG_YAML"
+log "ensure config.yaml approvals.mode=off (no command-approval prompts)"
+yq -i '.approvals.mode = "off" | .approvals.mode style="double"' "$CONFIG_YAML"
+
 # ── 2. DYNAMIC (config.json wins) ──────────────────────────────────────────────
 # NOTE: .model.default is NOT synced from llm_model — that is the OpenClaw primary
 # model (e.g. claude-opus-4-6), which is irrelevant to Hermes: os-server sends a
@@ -141,3 +155,14 @@ sync_env discord_bot_token  DISCORD_BOT_TOKEN
 sync_env discord_guild_id   DISCORD_GUILD_ID
 sync_env discord_user_id    DISCORD_ALLOWED_USERS
 sync_env whatsapp_user_id   WHATSAPP_ALLOWED_USERS
+
+# ── 3. API SERVER KEY (must match constants.go APIKey) ────────────────────────
+# Enforce on every presync so a key bump in os-server self-heals on the next
+# switch — install.sh only runs on first-install and cannot fix devices that
+# already have hermes installed with an older key.
+# API_SERVER_KEY MUST equal internal/hermes/constants.go APIKey.
+EXPECTED_API_KEY="hermes-local-api-key"
+sed -i "/^API_SERVER_KEY=/d" "$ENV_FILE"
+[ -s "$ENV_FILE" ] && [ -n "$(tail -c1 "$ENV_FILE")" ] && printf '\n' >>"$ENV_FILE"
+echo "API_SERVER_KEY=${EXPECTED_API_KEY}" >>"$ENV_FILE"
+log "API_SERVER_KEY enforced (${EXPECTED_API_KEY})"

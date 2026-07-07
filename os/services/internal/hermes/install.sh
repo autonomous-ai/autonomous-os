@@ -49,7 +49,7 @@ ENV_FILE="$HERMES_DIR/.env"
 
 # API_SERVER_KEY MUST equal internal/hermes/constants.go APIKey — os-server sends
 # it as the Bearer on every /v1/responses call. Mismatch ⇒ 401 on every turn.
-HERMES_API_SERVER_KEY="hermes-api-key"
+HERMES_API_SERVER_KEY="hermes-local-api-key"
 
 echo "[install-hermes] prerequisites (jq, yq, curl)"
 apt-get update || true

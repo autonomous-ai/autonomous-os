@@ -420,6 +420,16 @@ làm 3 việc theo thứ tự:
    không transform). Guard theo thư mục rỗng để switch thường là no-op (không
    re-import churn). `claw migrate` cũng đụng SOUL/MEMORY, nhưng vô hại: migrate
    persona Go (§12) chạy sau ghi đè sạch, chỉ skills trụ lại.
+
+   Một migrate chạy khi bản canonical đã có trên đĩa (race lúc install với skill
+   watcher, chạy tay) dùng `--skill-conflict rename` và để lại **bản trùng**
+   `<name>-imported` — hai ứng viên cho một tên làm `skill_view` của Hermes từ
+   chối load skill luôn ("Ambiguous skill name"), agent sẽ tự bịa mà không có
+   skill. Vì vậy `EnsureOnboarding` prune chúng mỗi boot
+   (`pruneImportedSkillDuplicates`): bản `-imported` bị xoá khi `<name>` tồn tại
+   (bản CDN là canonical), hoặc rename thành `<name>` khi nó là bản duy nhất — và
+   gateway được restart khi có thay đổi (skill index của session được build lúc
+   gateway start).
 2. **Đảm bảo structure `config.yaml`** (idempotent — tự lành sau khi
    `hermes setup --reset` xoá trắng). Coerce `model: ''` bị reset về map, rồi khẳng định:
    - `.model.provider = custom:autonomous`
@@ -432,9 +442,16 @@ làm 3 việc theo thứ tự:
      `model: qwen/qwen3.6-plus`, `timeout: 120`, `download_timeout: 30`, `extra_body: {}`
      — model hiểu ảnh, định tuyến qua cùng custom provider autonomous.
    - `.agent.image_input_mode = "auto"` — để agent tự quyết khi nào đính kèm ảnh.
-   - Chỉ ghi `.auxiliary.vision` và `.agent.image_input_mode`; **các key khác dưới
-     `.auxiliary`/`.agent` được giữ nguyên** (cả hai được coerce từ scalar bị reset về
-     map trước, giống `.model`).
+   - `.approvals.mode = "off"` — tắt hoàn toàn prompt duyệt lệnh của Hermes (card
+     tirith / dangerous-command). Thiết bị chạy không giám sát trên kênh voice +
+     chat, nơi card duyệt lệnh là ngõ cụt làm kẹt lượt (quyết định sản phẩm).
+     Hardline blocklist của Hermes vẫn áp dụng. Ghi ép-nháy (`style="double"`):
+     yq v4 (YAML 1.2) xuất `off` trần, nhưng Hermes parse config.yaml bằng PyYAML
+     (YAML 1.1) — `off` trần là boolean `False`, mode không bao giờ khớp và prompt
+     âm thầm vẫn bật.
+   - Chỉ ghi `.auxiliary.vision`, `.agent.image_input_mode` và `.approvals.mode`;
+     **các key khác dưới `.auxiliary`/`.agent`/`.approvals` được giữ nguyên** (mỗi
+     node được coerce từ scalar bị reset về map trước, giống `.model`).
 3. **Sync giá trị theo máy** từ `config.json` (chỉ field khác rỗng, nên kênh chưa
    cấu hình giữ nguyên):
 
@@ -454,6 +471,34 @@ không mọi lượt sẽ 401. Hermes phải listen tại `127.0.0.1:8642` để
 Để trỏ tới Hermes endpoint / key / model khác ở hiện tại, sửa
 `internal/hermes/constants.go` rồi build lại (việc cho phép cấu hình theo từng máy
 là phần làm sau).
+
+### Block ưu-tiên-skill trong SOUL.md (skill của máy thắng skill bundled của Hermes)
+
+Hermes có catalog skill bundled riêng, và nếu để mặc định nó coi các skill đó
+ngang hàng với skill nền tảng của máy — nên request nào cả hai catalog cùng làm
+được có thể bị route sang skill bundled thay vì skill của máy. Ví dụ: được nhờ
+"gửi email", nó có thể chọn skill email bundled rồi bắt đầu cài CLI (himalaya)
+trong khi skill `connectors` đã có sẵn credential Gmail của máy trên đĩa.
+OpenClaw và PicoClaw mang quy tắc chọn skill trong block **AGENTS.md** do OS
+quản lý, nhưng Hermes không load AGENTS.md — **SOUL.md là file prompt duy nhất
+nó đọc mỗi session** — nên quy tắc đi theo đó:
+
+- `EnsureOnboarding` gọi `ensureSoulSkillPriorityBlock()`
+  (`internal/hermes/onboarding.go`) ngay **sau** presync (§0 của presync có thể
+  chạy `claw migrate` ghi đè soul). Nó strip block
+  `<!-- OS DO NOT REMOVE -->`…`---` cũ (nếu có) rồi append lại
+  `soulSkillPriorityBlock` nhúng sẵn vào cuối `~/.hermes/SOUL.md` — nên một OTA
+  os-server làm mới nội dung, và factory reset / migrate làm mất block sẽ tự-vá
+  ở boot kế tiếp.
+- Block chỉ dẫn: các skill dưới `skills/openclaw-imports/` là skill nền tảng
+  built-in của máy và **ưu tiên hơn mọi skill bundled của Hermes** có mục đích
+  trùng lặp; mọi việc trên dịch vụ bên-thứ-ba đã kết nối
+  (Gmail/Calendar/Drive/Notion/Figma/Asana/Linear/GitHub, …) đi qua skill
+  `connectors`; không bao giờ cài client/CLI thay thế (himalaya, mutt, gcalcli,
+  …) cho dịch vụ mà connector đã cover.
+- Ghi atomic tmp+rename (giống `UpdateIdentityName`), nội dung persona của chủ
+  máy và identity card inline không bị đụng, và **không cần restart gateway** —
+  Hermes đọc lại SOUL.md ở session kế tiếp.
 
 ### Capability kênh & add/refresh live
 
@@ -551,7 +596,10 @@ Switch openclaw→hermes chạy một migration persona Go
   chỉnh (vd "Ngân") sống sót. `UpdateIdentityName` (đổi tên thiết bị) sửa block đó;
   `WatchIdentity` (`internal/hermes/identity.go`) poll SOUL.md và khi tên đổi thì
   đẩy wake words mới sang HAL + `i18n.SetDeviceName` — mirror `WatchIdentity` của
-  OpenClaw, chỉ khác là watch SOUL.md thay vì IDENTITY.md.
+  OpenClaw, chỉ khác là watch SOUL.md thay vì IDENTITY.md. Việc migration ghi đè
+  cũng làm mất **block ưu-tiên-skill** do OS quản lý, nhưng `EnsureOnboarding`
+  (chạy sau migration trong startup sequence) append lại nó (xem *Block
+  ưu-tiên-skill trong SOUL.md* phía trên).
 - **MEMORY.md + daily `memory/*.md` + KNOWLEDGE.md** → merge vào `memories/MEMORY.md`.
   Hermes chỉ load `MEMORY.md` + `USER.md` **theo tên** (không glob `memories/*.md`),
   nên KNOWLEDGE được fold vào thay vì giữ thành file riêng bị bỏ qua.

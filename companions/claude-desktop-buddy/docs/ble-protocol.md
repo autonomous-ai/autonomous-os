@@ -17,6 +17,18 @@ The device is the **peripheral**: it advertises the NUS service UUID and its loc
 name (e.g. `Claude-lamp-a1b2`). Claude Desktop is the **central** that scans,
 connects, and subscribes to TX notifications.
 
+### Connection detection
+
+BlueZ's connect handler fires for **any** Bluetooth device touching the shared
+adapter — including unrelated ones (e.g. a headset the OS pairs on the same
+radio) — so raw transport connects do **not** drive the buddy state. The device
+declares "Claude Desktop connected" only when data arrives on the NUS RX
+characteristic (only the Desktop client ever writes there), attributing the
+session to the most recent transport connect. "Disconnected" fires when that
+attributed client drops (or the last remaining link does). Other devices'
+connect/disconnect events are logged as `transport connected/disconnected` and
+otherwise ignored.
+
 ### Advertising timing
 
 tinygo's Linux backend leaves advertising at BlueZ's 1.28 s default, which is too

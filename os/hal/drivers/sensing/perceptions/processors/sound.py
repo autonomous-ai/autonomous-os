@@ -19,6 +19,11 @@ _DEDUPE_INTERVAL_S = 15.0
 _WINDOW_DURATION_S = 120.0
 _PERSISTENT_AFTER = 3
 _SUPPRESS_DURATION_S = 180.0
+# Conversation guard window: skip loud-noise events this long after STT last
+# produced transcript text. On the saturating sensing mic, nearby talk
+# (~740 RMS) reads the same as thunder (~755) — but talk transcribes and
+# thunder comes back empty, so a recent transcript means "people talking".
+_CONVERSATION_HOLDOFF_S = 15.0
 
 
 class SoundPerception(Perception[Any]):
@@ -81,6 +86,20 @@ class SoundPerception(Perception[Any]):
         self._window_start: float = 0.0
         self._last_passed: float = 0.0
         self._suppress_until: float = 0.0
+        # Latest sampled RMS + timestamp — published every check (even below
+        # threshold) so the web VU meter can show the sensing mic's ambient
+        # level. Sampled once per sensing poll, NOT a continuous stream.
+        self._last_rms: float = 0.0
+        self._last_rms_ts: float = 0.0
+
+    @property
+    def last_level(self) -> tuple[float, float]:
+        """(last sampled RMS on int16 scale, unix ts of that sample).
+
+        ts stays 0.0 until the first sample; readers use it to age the value
+        (samples arrive once per sensing poll, and pause during/after TTS).
+        """
+        return self._last_rms, self._last_rms_ts
 
     def set_tts_service(self, tts_service) -> None:
         self._tts = tts_service
@@ -140,6 +159,32 @@ class SoundPerception(Perception[Any]):
         ):
             return
 
+        # Music guard — the speaker's own playback reaches the sensing mic just
+        # like TTS does. Read late from app_state (music service starts after
+        # sensing); `streaming` is True only while audio actually plays.
+        # Movement guard — REAL arm movement (tracking / non-idle animation)
+        # is audible on the sensing mic (500+ RMS); idle breathing is not
+        # (~11 RMS) and is excluded by is_actively_moving, so detection stays
+        # live while the lamp just sits and breathes.
+        # Conversation guard — recent STT transcript = the loud audio is
+        # people talking, not noise (see _CONVERSATION_HOLDOFF_S above).
+        try:
+            import hal.app_state as app_state
+
+            music = app_state.music_service
+            if music is not None and music.streaming:
+                return
+            anim = app_state.animation_service
+            if anim is not None and anim.is_actively_moving:
+                return
+            voice = app_state.voice_service
+            if voice is not None and (
+                time.time() - getattr(voice, "last_transcript_ts", 0.0)
+            ) < _CONVERSATION_HOLDOFF_S:
+                return
+        except Exception:
+            pass
+
         try:
             sample_rate = 44100
             frames = int(sample_rate * config.SOUND_SAMPLE_DURATION_S)
@@ -154,6 +199,8 @@ class SoundPerception(Perception[Any]):
             rms = float(
                 self._np.sqrt(self._np.mean(recording.astype(self._np.float64) ** 2))
             )
+            self._last_rms = rms
+            self._last_rms_ts = time.time()
             if rms < config.SOUND_RMS_THRESHOLD:
                 return
 
@@ -194,4 +241,5 @@ class SoundPerception(Perception[Any]):
             "echo_suppression": self._tts is not None,
             "occurrence_count": self._count,
             "suppressed": time.time() < self._suppress_until,
+            "last_rms": int(self._last_rms),
         }

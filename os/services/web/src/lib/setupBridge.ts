@@ -57,7 +57,8 @@ export type SetupBridgeEvent =
   | "setup_failed"      // WiFi join failed
   | "retry_clicked"     // operator clicked "Back to Wi-Fi" after a failure
   | "continue_clicked"  // operator clicked "Continue setup →"
-  | "monitor_clicked";  // operator clicked "Go to monitor →"
+  | "monitor_clicked"   // operator clicked "Go to monitor →"
+  | "setup_done";       // operator finished the wizard (e.g. Skip & finish)
 
 // Resolve the parent origin ONCE at module load. Priority:
 //   1) ?parent_origin=… passed by whoever opened the popup (explicit, safest).
@@ -141,4 +142,8 @@ export const setupBridge = {
   continueClicked: (info: { mdns_host?: string }) =>
     emit("continue_clicked", info),
   monitorClicked: () => emit("monitor_clicked", {}),
+  // Operator finished the wizard (e.g. clicked "Skip & finish" on the last
+  // optional step). No payload — the parent just needs the signal that setup
+  // is complete.
+  setupDone: () => emit("setup_done", {}),
 };

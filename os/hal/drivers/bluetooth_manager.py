@@ -71,20 +71,17 @@ else:
     logger.warning("No PulseAudio runtime dir found — pactl calls will fail")
 
 
-def _pactl(args: list[str], timeout: float = 10.0) -> subprocess.CompletedProcess:
-    """Run pactl with the right env + identity to reach the per-user PA.
-
-    Default timeout is generous (10s) because PulseAudio stalls noticeably
-    while a Bluetooth SCO link is being set up or torn down — short timeouts
-    here cause false 'no sink' errors during normal A2DP↔HFP transitions."""
+def pulse_popen_kwargs() -> dict:
+    """Env + privilege-drop kwargs so a root-spawned PulseAudio client
+    (pactl, paplay, …) reaches the per-user PA daemon: XDG_RUNTIME_DIR pointed
+    at the PA owner's runtime dir, and setuid into that owner before exec —
+    libpulse rejects root opening a user socket."""
     env = os.environ.copy()
     if _PULSE_RUNTIME_DIR:
         env["XDG_RUNTIME_DIR"] = _PULSE_RUNTIME_DIR
 
-    kwargs: dict = dict(capture_output=True, text=True, timeout=timeout, env=env)
+    kwargs: dict = {"env": env}
 
-    # libpulse rejects root opening a user socket. Drop into the PA owner's
-    # uid/gid before exec so the connection passes the ownership check.
     if (
         os.geteuid() == 0
         and _PULSE_UID is not None
@@ -103,6 +100,18 @@ def _pactl(args: list[str], timeout: float = 10.0) -> subprocess.CompletedProces
 
         kwargs["preexec_fn"] = _drop_priv
 
+    return kwargs
+
+
+def _pactl(args: list[str], timeout: float = 10.0) -> subprocess.CompletedProcess:
+    """Run pactl with the right env + identity to reach the per-user PA.
+
+    Default timeout is generous (10s) because PulseAudio stalls noticeably
+    while a Bluetooth SCO link is being set up or torn down — short timeouts
+    here cause false 'no sink' errors during normal A2DP↔HFP transitions."""
+    kwargs: dict = dict(
+        capture_output=True, text=True, timeout=timeout, **pulse_popen_kwargs()
+    )
     return subprocess.run(["pactl", *args], **kwargs)
 
 
@@ -238,25 +247,59 @@ class BluetoothManager:
 
     # --- Pair / connect / forget ---
 
+    def _le_toggle(self, enable: bool) -> None:
+        """Toggle the controller's LE side at runtime via btmgmt — the flag
+        only changes while the adapter is powered off, so power-cycle around
+        it. Best effort: a missing btmgmt just leaves the controller as-is."""
+        val = "on" if enable else "off"
+        for args in (["power", "off"], ["le", val], ["power", "on"]):
+            try:
+                _run(["btmgmt", *args], timeout=5)
+            except Exception as e:
+                logger.warning("btmgmt %s failed: %s", " ".join(args), e)
+        time.sleep(1.0)
+
     def pair(self, mac: str) -> bool:
         mac = mac.upper()
         try:
             _run(["bluetoothctl", "pair", mac], timeout=20)
         except Exception as e:
             logger.warning("pair %s failed: %s", mac, e)
+        if not _device_info(mac)["paired"]:
+            # Apple dual-mode headsets (AirPods) often reject SSP while the
+            # controller runs dual mode — the handshake strays onto the LE
+            # transport (AuthenticationRejected). Retry with LE temporarily
+            # disabled so pairing can only happen over BR/EDR; the stored
+            # link key works fine in dual mode afterwards. BLE (buddy
+            # advertising) blips for a few seconds and re-arms on power-on.
+            logger.info("pair %s failed in dual mode — retrying BR/EDR-only", mac)
+            self._le_toggle(False)
+            try:
+                _run(["bluetoothctl", "pair", mac], timeout=30)
+                if not _device_info(mac)["paired"]:
+                    # Bonding can complete just after bluetoothctl gives up
+                    # (seen as Canceled/InProgress/AlreadyExists) — settle and
+                    # re-ask once before declaring failure.
+                    time.sleep(2)
+                    _run(["bluetoothctl", "pair", mac], timeout=30)
+            except Exception as e:
+                logger.warning("BR/EDR pair %s failed: %s", mac, e)
+            finally:
+                self._le_toggle(True)
         try:
             _run(["bluetoothctl", "trust", mac], timeout=5)
         except Exception:
             pass
         try:
-            _run(["bluetoothctl", "connect", mac], timeout=15)
+            _run(["bluetoothctl", "connect", mac], timeout=30)
         except Exception as e:
             logger.warning("connect after pair %s failed: %s", mac, e)
         return _device_info(mac)["paired"]
 
     def connect(self, mac: str) -> bool:
+        # 30s: sleepy headsets (AirPods) can take >16s to answer paging.
         try:
-            _run(["bluetoothctl", "connect", mac.upper()], timeout=15)
+            _run(["bluetoothctl", "connect", mac.upper()], timeout=30)
         except Exception as e:
             logger.warning("connect %s failed: %s", mac, e)
         # PulseAudio takes a beat to expose the new sink after BlueZ reports connected.
@@ -330,6 +373,45 @@ class BluetoothManager:
         except Exception as e:
             logger.warning("set-default-source %s failed: %s", source_name, e)
             return False
+
+    def first_alsa_sink(self) -> Optional[str]:
+        """First non-bluez hardware sink — the safe 'built-in speaker' default
+        when the captured snapshot is unusable (e.g. hal booted while a BT
+        sink was still PulseAudio's default)."""
+        try:
+            r = _pactl(["list", "short", "sinks"], timeout=5)
+            if r.returncode != 0:
+                return None
+            for line in r.stdout.splitlines():
+                cols = line.split("\t")
+                if len(cols) >= 2 and cols[1].startswith("alsa_output."):
+                    return cols[1]
+        except Exception as e:
+            logger.warning("first_alsa_sink failed: %s", e)
+        return None
+
+    def set_pa_sink_volume(self, sink_name: str, pct: int) -> bool:
+        """Set the sink volume (0-100%). On A2DP sinks PulseAudio forwards it
+        to the headset via AVRCP absolute volume, so this is the volume knob
+        while a BT headset is the active output."""
+        pct = max(0, min(100, pct))
+        try:
+            r = _pactl(["set-sink-volume", sink_name, f"{pct}%"], timeout=5)
+            return r.returncode == 0
+        except Exception as e:
+            logger.warning("set-sink-volume %s %s%% failed: %s", sink_name, pct, e)
+            return False
+
+    def pa_sink_volume(self, sink_name: str) -> Optional[int]:
+        """Current sink volume in percent, or None if unreadable."""
+        try:
+            r = _pactl(["get-sink-volume", sink_name], timeout=5)
+            if r.returncode != 0:
+                return None
+            m = re.search(r"(\d+)%", r.stdout)
+            return int(m.group(1)) if m else None
+        except Exception:
+            return None
 
     def pa_sink_for_mac(self, mac: str) -> Optional[str]:
         """Return the PulseAudio sink name exposing this BT device, or None."""
@@ -426,14 +508,43 @@ class BluetoothManager:
         return None
 
     def pulse_sd_index(self, sd_module) -> Optional[int]:
-        """Find the PortAudio index of the generic `pulse` device, forcing
-        re-enumeration first so a freshly-started PulseAudio server is seen."""
+        """Find the PortAudio index of the generic `pulse` device.
+
+        Enumerates FIRST and only falls back to a Pa_Terminate()+Pa_Initialize()
+        re-enumeration when `pulse` is missing (PortAudio snapshotted its device
+        list before PulseAudio came up). The re-init is the dangerous part: any
+        sounddevice stream alive at Pa_Terminate() aborts the process (SIGABRT,
+        killed hal.service twice on 2026-07-06), so it runs inside the
+        audio_route re-init window — openers are refused, a fresh quiesce closes
+        anything that slipped in after the caller's quiesce, and the lock
+        excludes in-flight opens. PA outlives hal restarts, so in practice the
+        first enumeration hits and the re-init never runs."""
+
+        def _find() -> Optional[int]:
+            for i, dev in enumerate(sd_module.query_devices()):
+                if dev.get("name", "").lower() == "pulse":
+                    return i
+            return None
+
+        idx = _find()
+        if idx is not None:
+            return idx
+
+        from hal.drivers import audio_route
+
+        audio_route.pa_reinit_event.set()
         try:
-            sd_module._terminate()
-            sd_module._initialize()
-        except Exception:
-            logger.exception("PortAudio reinit failed during pulse lookup")
-        for i, dev in enumerate(sd_module.query_devices()):
-            if dev.get("name", "").lower() == "pulse":
-                return i
-        return None
+            # Close streams opened since the caller's quiesce (TTS speak can
+            # fire from an agent turn at any moment). Must run BEFORE taking
+            # pa_reinit_lock: it grabs the openers' own locks and an opener
+            # blocked on pa_reinit_lock while holding its lock would deadlock.
+            audio_route.quiesce_portaudio_users()
+            with audio_route.pa_reinit_lock:
+                try:
+                    sd_module._terminate()
+                    sd_module._initialize()
+                except Exception:
+                    logger.exception("PortAudio reinit failed during pulse lookup")
+        finally:
+            audio_route.pa_reinit_event.clear()
+        return _find()

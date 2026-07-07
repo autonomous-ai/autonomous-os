@@ -23,6 +23,7 @@ import (
 	"go.autonomous.ai/os/internal/intent"
 	"go.autonomous.ai/os/internal/monitor"
 	"go.autonomous.ai/os/internal/statusled"
+	"go.autonomous.ai/os/internal/vision"
 	"go.autonomous.ai/os/lib/flow"
 	"go.autonomous.ai/os/lib/hal"
 	"go.autonomous.ai/os/lib/i18n"
@@ -226,6 +227,65 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		}()
 	}
 
+	// Web chat with image: save to temp file so agent can reference the path
+	// (e.g. for face enrollment — tools read the file directly, no LLM vision
+	// needed). Tag uses [image:] not [snapshot:] to avoid the strip below.
+	// Done here, BEFORE the busy fork, so a queued turn carries the tag too.
+	if req.Type == "web_chat" && req.Image != "" {
+		if imgData, derr := base64.StdEncoding.DecodeString(req.Image); derr == nil {
+			tmpPath := fmt.Sprintf("/tmp/web-chat-%d.jpg", time.Now().UnixMilli())
+			if werr := os.WriteFile(tmpPath, imgData, 0644); werr == nil {
+				req.Message += "\n[image: " + tmpPath + "]"
+			}
+		}
+	}
+
+	// Describe-first gate — must also run BEFORE the busy fork: a queued event
+	// replays through the runtime drain paths (openclaw service_events.go and
+	// friends), which send raw attachments with no gate of their own. A raw
+	// attachment 404s at the smart-agent-router when the text-only main model
+	// (Auto-AI) is active ("No endpoints found that support image input"), so
+	// convert image→text here once and every downstream path — queued or
+	// direct, any runtime — forwards text the model can use. Vision-capable
+	// main models (per the catalog) skip this and get the raw attachment.
+	// On describe failure (after retry) the image is DROPPED, not attached:
+	// a raw attachment sometimes works (router lands on a vision model) but
+	// when it doesn't, the image block sticks in the session history and 404s
+	// every later turn routed to a text-only model — one bad turn is cheaper
+	// than a poisoned conversation. Slash commands keep the raw attachment;
+	// motion.activity images never reach the agent at all.
+	if req.Image != "" && req.Type != "motion.activity" &&
+		!(req.Type == "web_chat" && strings.HasPrefix(strings.TrimSpace(req.Message), "/")) &&
+		!vision.ModelSupportsVision(h.config) {
+		desc, derr := vision.DescribeWithRetry(h.config, req.Image, req.Message)
+		// Either way the snapshot file must go: it sits inside the agent's
+		// media allow-list, so any path the agent digs up later (old hints in
+		// session history, an exec `ls` of the dir) could still be `read`
+		// into an image block. Described → nothing needs it; describe failed
+		// → it must never reach the LLM. Best-effort; the hint rewrite is
+		// the primary guard.
+		removeVisionSnapshot(req.Message)
+		if derr != nil {
+			slog.Warn("vision describe failed after retry — dropping image (text-only main model)",
+				"component", "sensing", "type", req.Type, "error", derr)
+			if reVisionImageHint.MatchString(req.Message) {
+				req.Message = reVisionImageHint.ReplaceAllString(req.Message,
+					"[vision-image] (a photo was captured but could not be processed — tell the user you couldn't see it this time; do NOT guess what was in it, do NOT take a new snapshot, do NOT read any image file)")
+			} else {
+				req.Message += "\n[image unavailable] the attached photo could not be processed — tell the user you couldn't see it this time; do NOT guess what was in it"
+			}
+		} else {
+			// Drop the snapshot path from the [vision-image] hint — with a
+			// description below, the agent must not read the image file (an
+			// image tool result poisons the session history for text-only
+			// routed models; see reVisionImageHint).
+			req.Message = reVisionImageHint.ReplaceAllString(req.Message,
+				"[vision-image] (a photo was just captured for this request; answer the visual question from the [image description] below — do NOT take a new snapshot, do NOT read any image file)")
+			req.Message += "\n[image description] " + desc
+		}
+		req.Image = "" // text-only from here on; nothing downstream gets the blob
+	}
+
 	// When agent is busy:
 	// - voice_command (wake word confirmed) always passes through immediately.
 	// - voice (ambient STT), presence.enter/leave are queued and replayed when agent becomes idle.
@@ -382,17 +442,6 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	msg = strings.ReplaceAll(msg, "\n\n\n", "\n\n")
 	msg = strings.TrimSpace(msg)
 
-	// Web chat with image: save to temp file so agent can reference the path
-	// (e.g. for face enrollment). Tag uses [image:] not [snapshot:] to avoid strip.
-	if isWebChat && req.Image != "" {
-		if imgData, err := base64.StdEncoding.DecodeString(req.Image); err == nil {
-			tmpPath := fmt.Sprintf("/tmp/web-chat-%d.jpg", time.Now().UnixMilli())
-			if err := os.WriteFile(tmpPath, imgData, 0644); err == nil {
-				msg += "\n[image: " + tmpPath + "]"
-			}
-		}
-	}
-
 	// Mark voice turns so the SSE handler can re-arm a Continuation filler
 	// at each tool.end. Done before forwarding so the lifecycle.start
 	// event can never race ahead of the mark.
@@ -443,6 +492,11 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		"msgLen", len(msg),
 		"message", msg)
 
+	// Note: when the describe-first gate above converted the image to an
+	// [image description] line, req.Image is empty and this turn goes down
+	// the plain-text path. An image here means either a vision-capable main
+	// model (raw attachment is correct) or a describe failure (degraded
+	// fallback).
 	if hasImage {
 		if isSlashCommand {
 			_, err = h.agentGateway.SendSlashCommandWithImageAndRun(msg, req.Image, reqID, runID)
@@ -849,6 +903,30 @@ var reSnapshotPath = regexp.MustCompile(`\[snapshot:\s*([^\]]+)\]\n?`)
 // payload, so they're cheap to keep in the JSONL.
 var rePoseBucketMarker = regexp.MustCompile(`\[pose_bucket:\s*([^\]]+)\]\n?`)
 var rePoseWorstMarker = regexp.MustCompile(`\[pose_worst:\s*([^\]]+)\]\n?`)
+
+// Vision handoff hint from HAL turn_dispatch: `[vision-image] <path> (a photo
+// was JUST captured ...)`. The path points inside the agent's media allow-list
+// on purpose (image-tool access when the main model has vision). Once the
+// describe gate converts the image to text, that path must NOT survive: the
+// agent will happily `read` it, injecting an image block into the session
+// history that 404s every later turn on a text-only routed model.
+var reVisionImageHint = regexp.MustCompile(`\[vision-image\][^\n]*`)
+var reVisionImagePath = regexp.MustCompile(`\[vision-image\]\s+(/[^\s)]+)`)
+
+// removeVisionSnapshot deletes the snapshot file referenced by the message's
+// [vision-image] hint, if any. Prefix-gated to the HAL snapshot dir so a
+// crafted message can't make the server delete arbitrary files. Best-effort:
+// failure is logged, never fails the turn.
+func removeVisionSnapshot(message string) {
+	m := reVisionImagePath.FindStringSubmatch(message)
+	if m == nil || !strings.Contains(m[1], "/media/hal-snapshots/") {
+		return
+	}
+	if err := os.Remove(m[1]); err != nil && !os.IsNotExist(err) {
+		slog.Warn("vision snapshot cleanup failed",
+			"component", "sensing", "path", m[1], "error", err)
+	}
+}
 
 // extractSnapshotPath extracts the snapshot file path from a sensing message.
 func extractSnapshotPath(message string) string {

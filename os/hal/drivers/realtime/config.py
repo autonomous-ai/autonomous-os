@@ -13,6 +13,7 @@ from hal.drivers.realtime.enums import (
     OpenAITruncationType,
     OpenAITurnDetectionType,
     OpenAIVoice,
+    QwenVoice,
 )
 
 
@@ -70,6 +71,19 @@ class OpenAIConfig(BaseModel):
     )
     truncation_type: OpenAITruncationType = OpenAITruncationType.RETENTION_RATIO
     truncation_retention_ratio: float = 0.5
+    max_retries: int = 3
+    reconnect_delay_s: float = 2.0
+
+
+class QwenConfig(BaseModel):
+    api_key: str = app_config.REALTIME_QWEN_API_KEY
+    base_url: str = app_config.REALTIME_QWEN_BASE_URL
+    model: str = app_config.REALTIME_QWEN_MODEL
+    voice: QwenVoice = QwenVoice(app_config.REALTIME_QWEN_VOICE)
+    instructions: str = ""
+    sample_rate: int = app_config.REALTIME_QWEN_SAMPLE_RATE
+    language: str | None = _load_language()
+    search_enabled: bool = app_config.REALTIME_QWEN_SEARCH
     max_retries: int = 3
     reconnect_delay_s: float = 2.0
 

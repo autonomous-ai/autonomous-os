@@ -58,20 +58,33 @@ OS server sử dụng MQTT để giao tiếp với backend server (báo cáo tr�
 ```
 
 `agent_runtime` là backend agentic **đang thực sự chạy** (`openclaw` | `hermes` |
-`picoclaw`) — resolve theo thứ tự `config.agent_runtime`, rồi `gateway.default`
+`picoclaw` | `codex`) — resolve theo thứ tự `config.agent_runtime`, rồi `gateway.default`
 trong `DEVICE.md` của device, cuối cùng mặc định `openclaw`. Phản hồi còn kèm các
-field tùy chọn khi có: `hal_version`, `openclaw_version`, `hermes_version`,
+field tùy chọn khi có: `hal_version`, `openclaw_version`, `hermes_version`, `codex_version`,
 `local_ip`, `tts_provider`, `tts_voice`, `stt_language`, `timezone`,
 `unsupported_channels`. `timezone` là múi giờ IANA **trực tiếp** của device (ví dụ
 `Asia/Ho_Chi_Minh`), đọc tươi từ `/etc/timezone` (fallback về config), không chỉ là
-bản ghi trong config. `openclaw_version` và `hermes_version` đều được probe lúc startup (mỗi cái từ
-`--version` riêng) và bắn cạnh nhau; `agent_runtime` cho biết cái nào đang active.
+bản ghi trong config. `openclaw_version`, `hermes_version` và `codex_version` đều được probe lúc startup (mỗi cái
+từ `--version` riêng) và bắn cạnh nhau; `agent_runtime` cho biết cái nào đang active.
 
 `unsupported_channels` (bỏ qua khi rỗng) liệt kê các channel đã cấu hình trên thiết bị
 mà runtime **đang active** không chạy được. Nó được `ChannelReconcile` điền sau khi
 chuyển runtime — vd chuyển `openclaw` → `picoclaw` (chỉ telegram) khiến mọi `slack`/
 `discord` đã cấu hình thành không hỗ trợ. Danh sách lấy từ
 `config.channels_unsupported`, được `ChannelReconcile` ghi lại mỗi lần chuyển runtime.
+
+**HTTP backend ping mirror các field này.** Cú ping do device chủ động gửi
+(`POST {llm_base}/ping`, build bởi `internal/device.buildPingPayload`, gửi qua
+`internal/beclient`) mang cùng bộ field trạng thái thiết bị như uplink `info`
+này — `local_ip`, `device`, `device_id`, `timezone`, `tts_provider`,
+`tts_voice`, `stt_language`, `hal_version`, `unsupported_channels` — cộng thêm
+`agent_runtime` và `agent_runtime_version`. Khác với `info` (báo version của
+mọi backend đã cài cạnh nhau), ping chỉ gửi **version của runtime đang
+active**. Ping bắn ở: (1) ngay sau khi join WiFi lúc setup (status
+`setting_up`, fire-and-forget — publish `local_ip` trước bước setup agent tốn
+tới ~2 phút, để đường cứu popup Setup mô tả trong `docs/setup-flow.md` hoạt
+động được), (2) một lần khi setup xong (status `working`), và (3) định kỳ từ
+status reporter. Field nào backend không xài thì đơn giản là bị bỏ qua.
 
 ### `add_channel` — Thêm messaging channel
 
@@ -292,7 +305,7 @@ probe lỗi sẽ rơi về zero value của nó.
       "os-server": "0.0.35",
       "bootstrap": "0.0.10",
       "hal": "1.2.3",
-      "openclaw": "2026.5.27",
+      "openclaw": "2026.6.10",
       "openclaw_detected": true
     },
     "network": {
@@ -412,7 +425,7 @@ và publish trạng thái kết thúc:
   "kind": "channel.refresh_config",
   "status": "configuring | success | failure",
   "error": "<code>",
-  "data": { "channel": "slack", "runtime": "2026.5.27" }
+  "data": { "channel": "slack", "runtime": "2026.6.10" }
 }
 ```
 

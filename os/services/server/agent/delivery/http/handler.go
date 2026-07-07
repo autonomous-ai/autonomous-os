@@ -4,6 +4,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"go.autonomous.ai/os/domain"
 	"go.autonomous.ai/os/internal/monitor"
@@ -118,6 +119,13 @@ type AgentHandler struct {
 	streamStatsMu sync.Mutex
 	streamStats   map[string]*runStreamStats
 
+	// errorRecoveredRuns tracks runs whose reply was salvaged by
+	// tryRecoverIncompleteTurn (see handler_error_recovery.go) so chat-stream
+	// error banners — including the gateway's ~15s-later retry error — are
+	// suppressed instead of overwriting the recovered reply. TTL-pruned.
+	errorRecoveredMu   sync.Mutex
+	errorRecoveredRuns map[string]time.Time
+
 	// compacting prevents duplicate /compact sends while one is in progress.
 	compacting atomic.Bool
 
@@ -180,6 +188,7 @@ func ProvideAgentHandler(gw domain.AgentGateway, bus *monitor.Bus, sled *statusl
 	go populateOpenClawVersion()
 	go populateHermesVersion()
 	go populatePicoclawVersion()
+	go populateCodexVersion()
 	go populateClaudeCodeVersion()
 	return AgentHandler{
 		agentGateway:         gw,
@@ -198,6 +207,7 @@ func ProvideAgentHandler(gw domain.AgentGateway, bus *monitor.Bus, sled *statusl
 		channelTurns:         make(map[string]*channelTurnState),
 		agentLifecycleAt:     make(map[string]int64),
 		activeRunIDBySession: make(map[string]string),
+		errorRecoveredRuns:   make(map[string]time.Time),
 	}
 }
 

@@ -92,7 +92,9 @@ When a scene activates, `POST /scene` applies in order:
 When servo is in hold mode (reading/focus), **emotion animations are suppressed** to avoid distraction:
 
 - `happy`, `thinking`, `curious`, `sad`, etc. → servo + LED skipped
-- `greeting`, `sleepy`, `stretching` → **allowed** (these signal state changes: wake, sleep, scene transition)
+- `greeting`, `sleepy`, `stretching` → **allowed** (these signal state changes: wake, sleep, scene transition) — **scene-preset holds only**
+
+An **explicit `/servo/hold`** (agent command like "face the wall and stay there") sets `_hold_explicit` and suppresses the servo for **all** emotions, scene-change set included — a trailing `[HW:/emotion:greeting]` in the same reply used to ride the exemption and park the arm at the greeting pose instead of the commanded one. `/servo/resume` and scene transitions clear the flag.
 
 This means during focus, sensing events (face emotion, motion) still reach OpenClaw but Lamp stays physically still and visually stable.
 

@@ -24,6 +24,7 @@ This repo is developed in both **Cursor** and **Claude Code**. The following rul
    | DL backend, load balancer, encryption, models | `docs/dlbackend.md` | `docs/vi/dlbackend_vi.md` |
    | Hermes agent backend (`agent_runtime`, internal/hermes) | `docs/agentic/hermes.md` | `docs/vi/agentic/hermes_vi.md` |
    | PicoClaw agent backend (`agent_runtime`, internal/picoclaw, WebSocket) | `docs/agentic/picoclaw.md` | `docs/vi/agentic/picoclaw_vi.md` |
+   | Codex agent backend (`agent_runtime`, internal/codex, WS bridge) | `docs/agentic/codex.md` | `docs/vi/agentic/codex_vi.md` |
    | Claude Code agent backend (`agent_runtime`, internal/claudecode, bridge WebSocket, native Telegram channel plugin) | `docs/agentic/claudecode.md` | `docs/vi/agentic/claudecode_vi.md` |
    | Adding/changing an agentic backend (AgentGateway contract, switch, install/presync, migration, skills, hooks, reset) | `docs/agentic/adding-agent-runtime.md` | `docs/vi/agentic/adding-agent-runtime_vi.md` |
    | Safety engine (SAFETY.md bounds, deterministic enforcement gate) | `docs/safety.md` | `docs/vi/safety_vi.md` |

@@ -16,6 +16,7 @@ from hal.drivers.realtime.config import gemini_needs_idle_workaround
 from hal.drivers.realtime.models import AudioOutput as RTAudioOutput
 from hal.drivers.realtime.models import TextOutput as RTTextOutput
 from hal.drivers.realtime.models.signal import DelegateSignal, LookReplaySignal
+from hal.drivers.voice._internal.cot_leak_filter import CoTLeakFilter, clean_transcript
 
 logger = logging.getLogger("hal.voice")
 
@@ -159,6 +160,12 @@ def run_realtime_turn(
             first_sentence_sent: bool = False
             attempt: int = 0
             look_replayed: bool = False  # one look-replay per turn (loop guard)
+            # Gemini 3.1 sometimes leaks its chain of thought into the reply text
+            # (thinking can't be disabled on that model) — filter it out of both
+            # the spoken sentences and the forwarded transcript. See
+            # cot_leak_filter.py for the mechanism and evidence.
+            reply_lang: str = _reply_language_name()
+            leak_filter = CoTLeakFilter(reply_lang)
             while True:
                 if attempt > 0:
                     logger.info(
@@ -174,6 +181,7 @@ def run_realtime_turn(
                     text_parts = []
                     sentence_buf = ""
                     first_sentence_sent = False
+                    leak_filter = CoTLeakFilter(reply_lang)
 
                 # Drop any output still queued from a previous turn so this turn
                 # only reads its OWN response (stale async replies desync onto a
@@ -219,14 +227,21 @@ def run_realtime_turn(
                         sentence_buf += output.text
                         # Flush complete sentences to TTS as they arrive
                         if tts is not None and sentence_buf.rstrip().endswith(SENTENCE_ENDS):
-                            sentence: str = strip_markers(sentence_buf)
+                            sentence: str = leak_filter.filter_text(
+                                strip_markers(sentence_buf)
+                            )
                             if sentence:
                                 if not first_sentence_sent:
                                     logger.info(
                                         "[realtime] First sentence → speak: %r",
                                         sentence[:80],
                                     )
-                                    tts.speak(sentence)
+                                    # speak() returns False when another
+                                    # non-interruptible TTS holds the speaker
+                                    # (ambient nudge racing the turn) — queue
+                                    # the reply instead of losing it entirely.
+                                    if not tts.speak(sentence):
+                                        tts.speak_queue(sentence)
                                     first_sentence_sent = True
                                 else:
                                     logger.info(
@@ -255,6 +270,7 @@ def run_realtime_turn(
                     text_parts = []
                     sentence_buf = ""
                     first_sentence_sent = False
+                    leak_filter = CoTLeakFilter(reply_lang)
                     continue
 
                 # A WS-1011 failure yields NOTHING (no audio spoken yet), so a
@@ -269,7 +285,11 @@ def run_realtime_turn(
                     break
                 attempt += 1
 
-            transcript = strip_markers("".join(text_parts))
+            # Clean the transcript with FRESH filter state (it re-reads the whole
+            # turn from the top): this is what gets forwarded as [REPLY], saved to
+            # realtime memory, and shown in web chat — a leak here re-enters the
+            # model's context next turn and self-reinforces.
+            transcript = clean_transcript(strip_markers("".join(text_parts)), reply_lang)
 
             # Native playback owns the speaker for the whole turn — release it
             # once all frames are in (records transcript for STT echo cancel).
@@ -285,13 +305,15 @@ def run_realtime_turn(
             else:
                 # Flush any remaining text that didn't end with a sentence boundary
                 # (ElevenLabs path only — native mode never fills sentence_buf).
-                remaining: str = strip_markers(sentence_buf)
+                remaining: str = leak_filter.filter_text(strip_markers(sentence_buf))
                 if not native and remaining and tts is not None:
                     if not first_sentence_sent:
                         logger.info(
                             "[realtime] Final fragment → speak: %r", remaining[:80]
                         )
-                        tts.speak(remaining)
+                        # Same busy fallback as the first-sentence site above.
+                        if not tts.speak(remaining):
+                            tts.speak_queue(remaining)
                         first_sentence_sent = True
                     else:
                         logger.info(

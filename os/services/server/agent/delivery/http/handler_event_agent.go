@@ -328,6 +328,9 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 						"total_tokens":       fmt.Sprintf("%d", u.TotalTokens),
 					},
 				})
+
+				// Auto-new-session parity with the chat.history branch below.
+				h.maybeAutoNewSession(h.agentGateway.GetSessionKey(), u.TotalTokens, flowRunID)
 			} else {
 				// OpenClaw lifecycle_end does not include usage. Fetch from chat.history instead.
 				capturedFlowRunID := flowRunID
@@ -442,8 +445,31 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			}
 		}
 
+		// OpenClaw 2026.6.x "incomplete turn" misfire: the gateway surfaces
+		// "couldn't generate a response" even though the model replied
+		// (streamed deltas or session history; payloads=0 counting bug,
+		// openclaw#68076/#67855 family). Salvage the reply BEFORE emitting
+		// the lifecycle event so the turn renders as recovered, not failed.
+		// Runs sync on the WS worker — the chat-stream error for the same
+		// run arrives after this returns, so wasErrorRecovered is reliable.
+		errorRecovered := false
+		if payload.Data.Phase == "error" {
+			errorRecovered = h.tryRecoverIncompleteTurn(payload.RunID, flowRunID, payload.SessionKey)
+			if errorRecovered {
+				h.markErrorRecovered(flowRunID)
+			}
+		}
 		shortErr := shortError(payload.Data.Error)
-		flow.Log("lifecycle_"+payload.Data.Phase, map[string]any{"run_id": flowRunID, "error": payload.Data.Error}, flowRunID)
+		lcData := map[string]any{"run_id": flowRunID, "error": payload.Data.Error}
+		if errorRecovered {
+			// Blank the error field so the flow monitor doesn't render an
+			// error node over the recovered reply; keep the original for
+			// observability.
+			lcData["error"] = ""
+			lcData["recovered"] = true
+			lcData["original_error"] = payload.Data.Error
+		}
+		flow.Log("lifecycle_"+payload.Data.Phase, lcData, flowRunID)
 		monEvt := domain.MonitorEvent{
 			Type:    "lifecycle",
 			Summary: fmt.Sprintf("Agent %s", payload.Data.Phase),
@@ -452,7 +478,12 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			Error:   shortErr,
 		}
 		if payload.Data.Phase == "error" && shortErr != "" {
-			monEvt.Summary = "❌ " + shortErr
+			if errorRecovered {
+				monEvt.Error = ""
+				monEvt.Summary = "Agent error — reply recovered"
+			} else {
+				monEvt.Summary = "❌ " + shortErr
+			}
 		}
 		if payload.Data.Phase == "end" && payload.Data.Usage != nil {
 			u := payload.Data.Usage
@@ -850,6 +881,32 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 				streamedLen = len(text)
 			}
 			remainderText := strings.TrimSpace(text[streamedLen:])
+			// CoT-leak filter (see cot_leak_filter.go): drop DeepSeek-style
+			// planning monologue from the reply before it reaches TTS, the web
+			// chat (full_text), and channel fan-out (DM/broadcast/Slack). The
+			// remainder is filtered with state seeded from the already-streamed
+			// prefix (CoT-mode + fuzzy-dedup continuity); `text` is replaced by
+			// the fresh full-text pass only when something was dropped, so
+			// clean turns keep their original whitespace/newlines.
+			cotLang := h.replyLanguageCode()
+			fullFilter := newCoTLeakFilter(cotLang)
+			if filteredFull := fullFilter.filterText(text); len(fullFilter.dropped) > 0 {
+				rf := newCoTLeakFilter(cotLang)
+				rf.filterText(text[:streamedLen]) // seed only; drops already handled at stream time
+				rf.dropped = nil
+				remainderText = strings.TrimSpace(rf.filterText(remainderText))
+				slog.Warn("CoT leak dropped from agent reply",
+					"component", "agent", "run_id", flowRunID,
+					"dropped", len(fullFilter.dropped),
+					"before_len", len(text), "after_len", len(filteredFull),
+					"preview", cotDroppedPreview(fullFilter.dropped, 200))
+				flow.Log("cot_leak_filtered", map[string]any{
+					"run_id":  flowRunID,
+					"dropped": len(fullFilter.dropped),
+					"preview": cotDroppedPreview(fullFilter.dropped, 500),
+				}, flowRunID)
+				text = filteredFull
+			}
 			if isAgentNoReply(text) {
 				// NO_REPLY in remainder. If streamed > 0 the agent
 				// already spoke sentence 1; can't unspeak it. Log a

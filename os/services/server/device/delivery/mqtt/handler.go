@@ -224,10 +224,14 @@ func (h *DeviceMQTTHandler) dispatchData(env domain.MQTTDataCommand) error {
 		return h.handleRuntimeSetup(env, domain.AgentRuntimeClaudeCode)
 	case domain.KindOpenclawSetup:
 		return h.handleRuntimeSetup(env, domain.AgentRuntimeOpenClaw)
+	case domain.KindCodexSetup:
+		return h.handleRuntimeSetup(env, domain.AgentRuntimeCodex)
 	case domain.KindTTSPreview:
 		return h.handleTTSPreview(env)
 	case domain.KindDeviceRename:
 		return h.handleDeviceRename(env)
+	case domain.KindDeviceSoftReset:
+		return h.handleDeviceSoftReset(env)
 	case domain.KindOAuthSet:
 		return h.handleOAuthSet(env)
 	case domain.KindOAuthRemove:

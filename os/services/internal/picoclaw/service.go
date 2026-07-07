@@ -93,6 +93,9 @@ type PicoclawService struct {
 	// any inbound frame.
 	sessionUUID atomic.Value // string
 
+	// lastCompressAt is PicoClaw's most recent compress_at_tokens
+	lastCompressAt atomic.Int64
+
 	// Pending sensing events buffered while busy.
 	pendingEventsMu sync.Mutex
 	pendingEvents   []pendingEvent
@@ -123,6 +126,11 @@ type PicoclawService struct {
 	// Recent outbound texts (echo-suppression for session.message handler).
 	recentOutboundMu    sync.Mutex
 	recentOutboundTexts []recentOutbound
+
+	// Serializes read-modify-write of config.json (MCP entry writes). PicoClaw's
+	// presync hook only edits channel_list/model_list via jq, so the two owners do
+	// not collide, but concurrent connector.set writes must not interleave.
+	mcpMu sync.Mutex
 }
 
 type recentOutbound struct {

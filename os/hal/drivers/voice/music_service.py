@@ -239,6 +239,27 @@ class MusicService:
     def available(self) -> bool:
         return True
 
+    def _output_pipeline(self) -> tuple[list[str], list[str], dict]:
+        """(ffmpeg_format_args, output_cmd, popen_kwargs) for the current route.
+
+        Music normally writes straight to ALSA via aplay — which bypasses
+        PulseAudio, so with a Bluetooth headset active it would keep playing
+        on the built-in speaker while TTS goes to the headset. In that case
+        route through paplay instead (PA default sink = the bluez sink), as
+        raw PCM since paplay doesn't parse a WAV header from a pipe."""
+        try:
+            from hal.drivers import audio_route
+            from hal.drivers.bluetooth_manager import pulse_popen_kwargs
+            if audio_route.bt_active():
+                return (
+                    ["-f", "s16le"],
+                    ["paplay", "--raw", "--format=s16le", "--rate=44100", "--channels=2"],
+                    pulse_popen_kwargs(),
+                )
+        except Exception as e:
+            logger.warning("BT route check failed, using ALSA: %s", e)
+        return (["-f", "wav"], ["aplay", "-D", self._alsa_device, "-q"], {})
+
     @property
     def playing(self) -> bool:
         if not self._playing:
@@ -379,6 +400,7 @@ class MusicService:
                 time.sleep(0.1)
 
             logger.info("Playing local file: '%s'", path)
+            out_fmt, out_cmd, out_kwargs = self._output_pipeline()
             self._ffmpeg_proc = subprocess.Popen(
                 [
                     "ffmpeg",
@@ -386,17 +408,18 @@ class MusicService:
                     "-i", path,
                     "-ac", "2",
                     "-ar", "44100",
-                    "-f", "wav",
+                    *out_fmt,
                     "pipe:1",
                 ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
             self._aplay_proc = subprocess.Popen(
-                ["aplay", "-D", self._alsa_device, "-q"],
+                out_cmd,
                 stdin=self._ffmpeg_proc.stdout,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
+                **out_kwargs,
             )
             self._ffmpeg_proc.stdout.close()
 
@@ -639,8 +662,9 @@ class MusicService:
             stdout=subprocess.PIPE,
             stderr=self._ytdlp_stderr,
         )
-        # ffmpeg decodes to raw PCM, aplay handles ALSA output.
+        # ffmpeg decodes to raw PCM, aplay/paplay handles the output.
         # Direct ffmpeg -f alsa causes distorted audio on some wm8960 boards.
+        out_fmt, out_cmd, out_kwargs = self._output_pipeline()
         self._ffmpeg_proc = subprocess.Popen(
             [
                 "ffmpeg",
@@ -649,7 +673,7 @@ class MusicService:
                 "-i", "pipe:0",
                 "-ac", "2",
                 "-ar", "44100",
-                "-f", "wav",
+                *out_fmt,
                 "pipe:1",
             ],
             stdin=self._ytdlp_proc.stdout,
@@ -658,10 +682,11 @@ class MusicService:
         )
         self._aplay_stderr = tempfile.TemporaryFile()
         self._aplay_proc = subprocess.Popen(
-            ["aplay", "-D", self._alsa_device, "-q"],
+            out_cmd,
             stdin=self._ffmpeg_proc.stdout,
             stdout=subprocess.DEVNULL,
             stderr=self._aplay_stderr,
+            **out_kwargs,
         )
         self._ffmpeg_proc.stdout.close()
         self._ytdlp_proc.stdout.close()

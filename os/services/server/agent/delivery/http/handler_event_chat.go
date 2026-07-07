@@ -55,22 +55,30 @@ func (h *AgentHandler) handleChatEvent(evt domain.WSEvent) error {
 	// (OpenClaw gateway never broadcasts role:"user" on the chat stream.
 	// User messages are captured via lifecycle_start + chat.history above.)
 
-	// Chat error: OpenClaw reports agent processing failure
+	// Chat error: OpenClaw reports agent processing failure. Skip the banner
+	// when the reply was already salvaged from this run's deltas/history
+	// (see handler_error_recovery.go) — covers both the initial incomplete-
+	// turn error and the gateway's ~15s-later retry error.
 	if payload.State == "error" {
 		errMsg := payload.ErrorMessage
 		if errMsg == "" {
 			errMsg = "unknown error"
 		}
-		slog.Error("OpenClaw chat error", "component", "agent", "run_id", flowRunID, "error", errMsg)
-		flow.Log("agent_error", map[string]any{"run_id": flowRunID, "error": errMsg}, flowRunID)
-		h.monitorBus.Push(domain.MonitorEvent{
-			Type:    "chat_response",
-			Summary: "❌ " + shortError(errMsg),
-			RunID:   flowRunID,
-			State:   "error",
-			Error:   shortError(errMsg),
-			Detail:  map[string]string{"error": shortError(errMsg)},
-		})
+		if h.wasErrorRecovered(flowRunID) {
+			slog.Info("OpenClaw chat error suppressed — reply already recovered",
+				"component", "agent", "run_id", flowRunID, "error", errMsg)
+		} else {
+			slog.Error("OpenClaw chat error", "component", "agent", "run_id", flowRunID, "error", errMsg)
+			flow.Log("agent_error", map[string]any{"run_id": flowRunID, "error": errMsg}, flowRunID)
+			h.monitorBus.Push(domain.MonitorEvent{
+				Type:    "chat_response",
+				Summary: "❌ " + shortError(errMsg),
+				RunID:   flowRunID,
+				State:   "error",
+				Error:   shortError(errMsg),
+				Detail:  map[string]string{"error": shortError(errMsg)},
+			})
+		}
 	}
 
 	// Factual detection: OpenClaw sent a `state:"final"` chat event with

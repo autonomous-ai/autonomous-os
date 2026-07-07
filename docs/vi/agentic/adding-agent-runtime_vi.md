@@ -69,6 +69,17 @@ ship dạng no-op và chỉ phát hiện khi skills bị cũ / đổi tên vô t
 gãy sau reset. Soát mọi stub: ghi `// no-op because <lý do>` hoặc
 `// TODO(<backend>-<feature>)`, đừng để thân hàm rỗng trơ.
 
+**Không "thành công giả".** Method đúng-là-N/A mà có trả error thì **phải trả
+`domain.ErrNotSupportedByRuntime`** (domain/agent.go), không bao giờ `nil` —
+`nil` khiến caller tưởng thay đổi đã được áp dụng trong khi không có gì xảy ra.
+Caller phân nhánh bằng `errors.Is`: đường save model/baseURL LLM
+(`internal/device/service.go`) log dạng informational rồi fallback
+`EnsureOnboarding` (presync đọc lại `llm_*` từ config.json), còn endpoint
+gw-config báo "no device-side config file" thay vì `{}`. Các stub hiện trả
+sentinel: `UpdatePrimaryModel`, `RefreshModelsConfig`, `CompactSession`
+(hermes + picoclaw), `GetConfigJSON` (chỉ hermes — picoclaw có config.json
+thật). Cùng khuôn với rule `ErrChannelNotSupported` ở §9.
+
 ---
 
 ## 2. Đăng ký + nối switch
@@ -406,6 +417,8 @@ là no-op idempotent.
 
 - [ ] Package `internal/<name>/`; `*Service` implement **toàn bộ** `AgentGateway`.
 - [ ] Mọi stub đều `// no-op because …` hoặc `// TODO(<name>-…)` — không thân rỗng.
+- [ ] Stub N/A có trả error thì trả `domain.ErrNotSupportedByRuntime`,
+      không bao giờ `nil` (§4 "Không thành công giả").
 - [ ] `domain.AgentRuntime<Name>` + entry `AgentRuntimes`; `factory.go` case.
 - [ ] `install.sh` + `install.go` (`//go:embed` + `runtimereg.Register`).
 - [ ] **Setup có-state → `presync.sh`** (`//go:embed` + `runtimereg.RegisterPresync`),
@@ -448,4 +461,6 @@ khi-switch (`MCPReconcile`).
 **Còn mở / no-op:** hook native (Python) cho nguồn turn nội-bộ-backend (hoãn YAGNI
 — §6), `CompactSession`, `FetchChatHistory`, và nhóm model-sync (`StartModelSync`,
 `UpdatePrimaryModel`, `StartPrimaryModelWatch`, `RefreshModelsConfig` — phần lớn N/A
-vì os-server gửi model cố định tới custom provider campaign-api).
+vì os-server gửi model cố định tới custom provider campaign-api). Các stub có trả
+error (`CompactSession`, `UpdatePrimaryModel`, `RefreshModelsConfig`,
+`GetConfigJSON`) trả `domain.ErrNotSupportedByRuntime` thay vì thành công giả (§4).

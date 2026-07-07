@@ -196,6 +196,13 @@ State zoom nằm trên instance device (`LocalVideoCaptureDevice.zoom`). Không 
 
 Monitor → Camera tab → card Live Stream có slider Zoom (1.0×–5.0×, step 0.1, debounce 200 ms POST) kèm nút Reset. Giá trị slider chuyển màu vàng khi đang zoom để cảnh báo FOV bị thu hẹp.
 
+## Khôi phục lỗi (Failure Recovery)
+
+Capture loop (`devices/video_capture_device.py`) tự khôi phục 2 dạng lỗi thiết bị, đều bằng cách release rồi mở lại device V4L2 qua `_reopen_with_backoff()` (retry backoff lũy tiến 1s→30s, không bao giờ thoát loop vĩnh viễn khi HAL còn chạy; MJPEG, độ phân giải và exposure được áp lại sau mỗi lần reopen):
+
+- **`read()` fail** — USB autosuspend hoặc lỗi V4L2 thoáng qua làm `read()` trả `ret=False`. Retry 1 lần sau 1s, rồi reopen.
+- **ISP đóng băng** — camera cứ nhả lại **cùng một buffer** với `ret=True` (đã gặp trên UVC cam khi dùng manual exposure/gain), nên nhánh recovery `read()`-fail không bao giờ kích hoạt trong khi mọi consumer (realtime look, sensing, tracking, snapshot) âm thầm xử lý cảnh cũ. Watchdog so sánh chữ ký frame đã subsample; frame byte-identical liên tục 10s (`_FREEZE_REOPEN_S`) không thể đến từ sensor thật → reopen. Log: `Camera frozen — identical frames for Ns, reopening device`.
+
 ## Edge Cases
 
 - **Guard mode + camera off**: ✅ Done — guard SKILL.md bước 1: `[HW:/camera/enable:{}]` trước khi enable guard. Override manual disable.

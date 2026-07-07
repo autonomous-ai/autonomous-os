@@ -93,8 +93,31 @@ func (h *AgentHandler) tryFirstSentenceFlush(runID string) string {
 	if sentence == "" {
 		return ""
 	}
+	// CoT-leak gate (see cot_leak_filter.go): DeepSeek-style models emit
+	// their English planning monologue BEFORE the real reply, so the first
+	// flushable "sentence" is often pure CoT. Filter the candidate with
+	// fresh state each attempt; when everything so far is CoT, defer
+	// WITHOUT marking streamed so a later clean sentence still streams
+	// (keeps the first-audio latency win for the real answer).
+	f := newCoTLeakFilter(h.replyLanguageCode())
+	filtered := strings.TrimSpace(f.filterText(sentence))
+	if len(f.dropped) > 0 {
+		slog.Warn("CoT leak dropped from first-sentence stream (not spoken)",
+			"component", "agent", "run_id", runID,
+			"dropped", len(f.dropped),
+			"preview", cotDroppedPreview(f.dropped, 200))
+	}
+	if filtered == "" {
+		return ""
+	}
 	h.streamedCleanLen[runID] = boundary + 1
-	return sentence
+	return filtered
+}
+
+// replyLanguageCode returns the configured device language code ("vi", "en",
+// ...) used by the CoT-leak filter to decide its language heuristics.
+func (h *AgentHandler) replyLanguageCode() string {
+	return h.config.STTLanguage
 }
 
 // cleanedSlackStreamText returns the cleaned cumulative reply text for runID, safe

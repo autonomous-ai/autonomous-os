@@ -40,6 +40,12 @@ class VideoCaptureDeviceBase(
 class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
     runable: bool = True
 
+    # ISP-freeze watchdog: reopen the device when it has delivered
+    # byte-identical frames for this long. A live sensor never produces
+    # identical frames (photon noise); a wedged ISP does, with ret=True,
+    # so the read()-failure recovery never fires.
+    _FREEZE_REOPEN_S: float = 10.0
+
     def __init__(
         self,
         device_info: VideoCaptureDeviceInfo,
@@ -185,6 +191,43 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
                 "Camera exposure control failed — continuing with camera defaults"
             )
 
+    def _reopen_with_backoff(self, video_capture, device_id, reason: str):
+        """Release and reopen the capture device, retrying with backoff.
+
+        Never gives up while the loop is alive: a USB camera that wedged or
+        dropped off the bus can come back seconds later (autosuspend, ISP
+        freeze, replug), and exiting the loop would leave HAL camera-less for
+        the rest of the process lifetime. Re-applies MJPEG, resolution and
+        exposure — a fresh open resets the device to defaults. Returns the
+        opened capture, or None only when stop() was requested mid-retry.
+        """
+        try:
+            video_capture.release()
+        except Exception:
+            self._logger.exception("Camera release failed during recovery")
+        delay: float = 1.0
+        while not self._stopped.is_set():
+            cap = self._try_open(device_id)
+            if cap.isOpened():
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                if self._max_width:
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._max_width)
+                if self._max_height:
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._max_height)
+                self._apply_camera_controls(cap)
+                self._logger.info("Camera reopened (%s) — resuming loop", reason)
+                return cap
+            try:
+                cap.release()
+            except Exception:
+                pass
+            self._logger.warning(
+                "Camera reopen failed (%s) — retrying in %.0fs", reason, delay
+            )
+            self._stopped.wait(delay)
+            delay = min(delay * 2, 30.0)
+        return None
+
     def _video_capture_loop(self):
 
         device_id = self.device_info.device_id
@@ -252,6 +295,10 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
         # Idle capture interval — only grab a frame every 2s when no streaming clients
         idle_interval = 2.0
 
+        # ISP-freeze watchdog state (see _FREEZE_REOPEN_S).
+        freeze_sig: bytes | None = None
+        freeze_since: float = 0.0
+
         self._logger.info("Starting video capture device loop")
         try:
             while not self._stopped.is_set():
@@ -282,26 +329,38 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
                     ret, frame = video_capture.read()
                     if not ret:
                         self._logger.warning("Camera read still failing — reopening device")
-                        try:
-                            video_capture.release()
-                        except Exception:
-                            self._logger.exception("Camera release failed during recovery")
-                        video_capture = self._try_open(device_id)
-                        if not video_capture.isOpened():
-                            self._logger.error("Camera reopen failed, exiting loop")
+                        video_capture = self._reopen_with_backoff(
+                            video_capture, device_id, "read failure"
+                        )
+                        if video_capture is None:
                             break
-                        video_capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-                        # Re-apply resolution + exposure: a fresh open resets the
-                        # device to its defaults, which would silently drop manual
-                        # exposure (re-introducing the FPS throttle) and snap back
-                        # to the default capture mode.
-                        if self._max_width:
-                            video_capture.set(cv2.CAP_PROP_FRAME_WIDTH, self._max_width)
-                        if self._max_height:
-                            video_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self._max_height)
-                        self._apply_camera_controls(video_capture)
-                        self._logger.info("Camera reopened, resuming loop")
                         continue
+
+                # ISP-freeze watchdog: a wedged camera (seen with manual
+                # exposure/gain on the UVC cam) keeps redelivering the SAME
+                # buffer with ret=True, so every consumer (look, sensing,
+                # tracking, snapshot) silently works on a stale scene while
+                # last_frame_ts stays fresh. Byte-identical subsampled frames
+                # over _FREEZE_REOPEN_S can't come from a live sensor — reopen.
+                sig: bytes = frame[::32, ::32].tobytes()
+                now_mono = time.monotonic()
+                if sig == freeze_sig:
+                    if now_mono - freeze_since >= self._FREEZE_REOPEN_S:
+                        self._logger.warning(
+                            "Camera frozen — identical frames for %.0fs, reopening device",
+                            now_mono - freeze_since,
+                        )
+                        video_capture = self._reopen_with_backoff(
+                            video_capture, device_id, "ISP freeze"
+                        )
+                        if video_capture is None:
+                            break
+                        freeze_sig = None
+                        freeze_since = 0.0
+                        continue
+                else:
+                    freeze_sig = sig
+                    freeze_since = now_mono
 
                 frame_ts = time.time()
 

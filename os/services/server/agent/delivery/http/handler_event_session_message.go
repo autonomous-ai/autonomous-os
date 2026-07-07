@@ -269,6 +269,17 @@ func (h *AgentHandler) handleSessionMessageEvent(evt domain.WSEvent) error {
 	hwCalls, cleanText := extractHWCalls(fullText)
 	cleanText = extractSayTag(cleanText)
 	cleanText = sanitizeAgentText(cleanText)
+	// CoT-leak filter (see cot_leak_filter.go): channel turns never TTS, but
+	// their text reaches the web chat / Flow Monitor via chat_response and
+	// tts_suppressed — strip leaked planning monologue there too.
+	chFilter := newCoTLeakFilter(h.replyLanguageCode())
+	if filtered := chFilter.filterText(cleanText); len(chFilter.dropped) > 0 {
+		slog.Warn("CoT leak dropped from channel turn reply",
+			"component", "agent", "run_id", runID,
+			"dropped", len(chFilter.dropped),
+			"preview", cotDroppedPreview(chFilter.dropped, 200))
+		cleanText = filtered
+	}
 
 	// ADDED 2026-05-26: drain any leftover firedHWCount for this runID so
 	// the per-runID map doesn't leak. Channel turns don't stream-fire

@@ -12,12 +12,13 @@ import { getAgentRuntime, setAgentRuntime } from "@/lib/api";
 //
 // Options come from the API (single source = domain.AgentRuntimes); the fallback
 // list mirrors it only if the fetch fails.
-const FALLBACK = ["openclaw", "hermes"];
+const FALLBACK = ["openclaw", "hermes", "picoclaw", "codex"];
 
 const RUNTIME_BLURB: Record<string, string> = {
   openclaw: "OpenClaw — persistent WebSocket gateway (default).",
   hermes: "Hermes — local HTTP+SSE agent server (Nous Research).",
-  picoclaw: "PicoClaw — lightweight WebSocket gateway.",
+  picoclaw: "PicoClaw — lightweight Go agent gateway (WebSocket).",
+  codex: "Codex — OpenAI Codex CLI behind the os-server bridge (WebSocket).",
   claudecode: "Claude Code — Anthropic CLI agent behind a local bridge.",
 };
 

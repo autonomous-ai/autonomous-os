@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Bluetooth } from "lucide-react";
+import { Bluetooth, Loader2 } from "lucide-react";
 import { HW } from "./types";
 import { usePolling } from "../../hooks/usePolling";
 import { S } from "./styles";
@@ -233,9 +233,12 @@ export function BluetoothSection() {
           )}
           {(status?.paired || []).map((d) => {
             const isActive = active === d.mac;
-            const rowBusy = busyMac === d.mac;
+            // Disconnect posts with busyMac="__device__" (routing back to the
+            // device), but the click came from the ACTIVE row — that row must
+            // show the "Disconnecting..." spinner too, not sit inert.
+            const rowBusy = busyMac === d.mac || (busyMac === "__device__" && isActive);
             return (
-              <div key={d.mac} style={deviceRow}>
+              <div key={d.mac} className="lm-bt-row" style={deviceRow}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {deviceLabel(d)}
@@ -243,19 +246,23 @@ export function BluetoothSection() {
                   <div style={{ fontSize: 11, color: "var(--lm-text-muted)", marginTop: 2 }}>
                     {d.mac} · {rowBusy
                       ? (isActive ? "Switching back to device..." : "Routing audio...")
-                      : (isActive ? "Active" : d.connected ? "Ready" : "Offline")}
+                      : isActive
+                        ? <span style={{ color: "var(--lm-green)", fontWeight: 600 }}>Connected</span>
+                        : (d.connected ? "Ready" : "Offline")}
                   </div>
                 </div>
                 <button
                   onClick={() => setActive(isActive ? null : d.mac)}
                   disabled={rowBusy || busyMac === "__device__"}
-                  className={isActive ? "lm-u-btn lm-u-btn-primary" : "lm-u-btn"}
-                  style={isActive ? toggleBtnOn : toggleBtnOff}
-                  title={isActive ? "Turn off private mode" : "Turn on private mode"}
+                  className={`lm-u-btn${!isActive && !rowBusy ? " lm-bt-hover-reveal" : ""}`}
+                  style={toggleBtn}
+                  title={isActive
+                    ? "Disconnect — route audio back to the device speaker/mic"
+                    : "Connect — route audio through this headset"}
                 >
                   {rowBusy
-                    ? (isActive ? "Disconnecting..." : "Connecting...")
-                    : (isActive ? "In use" : "Use headset")}
+                    ? <><Loader2 size={13} className="lm-spin-ico" />{isActive ? "Disconnecting..." : "Connecting..."}</>
+                    : (isActive ? "Disconnect" : "Connect")}
                 </button>
                 <button
                   onClick={() => setForgetConfirm(d.mac)}
@@ -388,14 +395,9 @@ const baseBtn: React.CSSProperties = {
   transition: "all 0.15s",
 };
 
-const toggleBtnOn: React.CSSProperties = {
+const toggleBtn: React.CSSProperties = {
   ...baseBtn,
-  background: "var(--lm-amber)", color: "var(--lm-bg)",
-  border: "1px solid var(--lm-amber)",
-};
-
-const toggleBtnOff: React.CSSProperties = {
-  ...baseBtn,
+  display: "inline-flex", alignItems: "center", gap: 6,
   background: "transparent", color: "var(--lm-text)",
   border: "1px solid var(--lm-border)",
 };

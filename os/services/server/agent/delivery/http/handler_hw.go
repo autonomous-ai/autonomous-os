@@ -263,23 +263,41 @@ func (h *AgentHandler) fireHWCalls(calls []hwCall, flowRunID string) {
 	}()
 }
 
-// ADDED 2026-05-26: fireHWCallsSync fires markers SYNCHRONOUSLY with a tight
-// per-call timeout. Used at stream-time when subsequent TTS depends on HAL
-// state mutations (e.g. /scene/off must unmute speaker before /voice/speak).
-// On per-call failure/timeout, kicks an async fallback for that one call so
-// it still fires eventually — caller proceeds to TTS regardless, so worst
-// case degrades to legacy "marker fires async after TTS" behavior (no new
-// failure mode introduced).
+// ADDED 2026-05-26, REWORKED 2026-07-06: fireHWCallsSync fires the markers
+// sequentially in ONE goroutine (5s per call) and only WAITS for completion
+// up to 100ms — the stream-time budget. Used when subsequent TTS depends on
+// HAL state mutations (e.g. /scene/off must unmute speaker before
+// /voice/speak): fast markers complete inside the wait, slow ones keep
+// running in order behind the TTS.
+//
+// Two hard-won invariants:
+//   - ORDER. The old per-call 100ms client timeout re-fired a slow call
+//     async and let the sync loop keep going, so later markers OVERTOOK it:
+//     [/servo/resume][/servo/nudge][/servo/hold][/emotion] had nudge (~2s in
+//     HAL) land AFTER hold and emotion — the emotion's servo animation
+//     slipped in before the hold flag was set, played over the late nudge
+//     and parked the arm at ITS final pose ("turn right 45° and crouch"
+//     visibly turned, snapped back, never crouched). Markers encode intent
+//     in their emitted order; never let one leapfrog.
+//   - NO ABORT/RETRY. Cutting a request at 100ms and re-firing it risks
+//     double execution if HAL processed the aborted one anyway — fatal for
+//     relative commands (/servo/nudge +45 twice = +90). Letting the original
+//     request run to completion needs no retry at all.
 func (h *AgentHandler) fireHWCallsSync(calls []hwCall, flowRunID string) {
 	if len(calls) == 0 {
 		return
 	}
-	client := &http.Client{Timeout: 100 * time.Millisecond}
-	for _, c := range calls {
-		if !h.fireHWCall(c, flowRunID, client) {
-			// HTTP error or timeout — kick async fallback so the marker still
-			// fires (legacy behavior). Caller proceeds to TTS without waiting.
-			h.fireHWCalls([]hwCall{c}, flowRunID)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		client := &http.Client{Timeout: 5 * time.Second}
+		for _, c := range calls {
+			h.fireHWCall(c, flowRunID, client)
 		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		// Budget spent — TTS proceeds; the goroutine finishes the tail in order.
 	}
 }

@@ -326,6 +326,14 @@ const (
 	KindOAuthRemove  = "oauth.remove"  // delete OAuth token for a provider
 	KindRealtimeSet  = "realtime.set"  // persist realtime voice-agent config (provider/voice/reasoning…)
 	KindTimezoneSet  = "timezone.set"  // apply device IANA timezone (/etc/localtime + /etc/timezone)
+	// KindDeviceSoftReset wipes the device's config.json and restarts os-server so
+	// the device drops back into AP setup mode WITHOUT rebooting or rolling back
+	// the firmware. Faster and safer than the hard factory-reset button on the
+	// device: keeps the current firmware and skips the reboot delay. Payload is
+	// empty; the handler acks then triggers the wipe/restart asynchronously so
+	// the ack has time to fly before os-server tears down. Used by the
+	// "Soft reset" action on autonomous.ai/internpro/me (and Lamp equivalent).
+	KindDeviceSoftReset = "device.soft_reset"
 
 	// KindHermesSetup / KindPicoclawSetup / KindClaudecodeSetup / KindOpenclawSetup
 	// switch the active agentic backend. The kind itself names the target runtime —
@@ -342,14 +350,17 @@ const (
 	KindPicoclawSetup   = "picoclaw.setup"
 	KindClaudecodeSetup = "claudecode.setup"
 	KindOpenclawSetup   = "openclaw.setup"
+	KindCodexSetup    = "codex.setup"
 
 	// AgentRuntimeOpenClaw / AgentRuntimeHermes / AgentRuntimePicoclaw /
+	// AgentRuntimeCodex are the swappable agentic backends. Source of truth
 	// AgentRuntimeClaudeCode are the swappable agentic backends. Source of truth
 	// mirrored by internal/agent/factory.go's resolver and
 	// /usr/local/bin/switch-runtime.
-	AgentRuntimeOpenClaw   = "openclaw"
-	AgentRuntimeHermes     = "hermes"
-	AgentRuntimePicoclaw   = "picoclaw"
+	AgentRuntimeOpenClaw = "openclaw"
+	AgentRuntimeHermes   = "hermes"
+	AgentRuntimePicoclaw = "picoclaw"
+	AgentRuntimeCodex    = "codex"
 	AgentRuntimeClaudeCode = "claudecode"
 
 	KindSystemInfo    = "system.info"    // aggregate: versions + network + host
@@ -538,7 +549,10 @@ type MQTTInfoResponse struct {
 	// (e.g. "0.17.0"), empty when hermes isn't installed. agent_runtime says which
 	// one is actually active.
 	HermesVersion string `json:"hermes_version,omitempty"`
-	AgentRuntime  string `json:"agent_runtime,omitempty"`
+	// CodexVersion mirrors hermes_version for the Codex backend: the installed
+	// Codex CLI version (e.g. "0.142.5"), empty when codex isn't installed.
+	CodexVersion string `json:"codex_version,omitempty"`
+	AgentRuntime string `json:"agent_runtime,omitempty"`
 	LocalIP       string `json:"local_ip,omitempty"`
 	// UnsupportedChannels lists channels configured in config.json that the active
 	// runtime cannot run (populated by ChannelReconcile after a runtime switch — e.g.
@@ -883,7 +897,7 @@ type AgentRuntimeSetData struct {
 
 // AgentRuntimes is the valid set, surfaced to the web settings dropdown via
 // GET /api/device/agent-runtime so the UI never hardcodes the list.
-var AgentRuntimes = []string{AgentRuntimeOpenClaw, AgentRuntimeHermes, AgentRuntimePicoclaw, AgentRuntimeClaudeCode}
+var AgentRuntimes = []string{AgentRuntimeOpenClaw, AgentRuntimeHermes, AgentRuntimePicoclaw, AgentRuntimeCodex, AgentRuntimeClaudeCode}
 
 // IsValidAgentRuntime reports whether r is a switchable backend (case-insensitive,
 // trimmed). Used to validate hermes.setup / picoclaw.setup and the HTTP runtime

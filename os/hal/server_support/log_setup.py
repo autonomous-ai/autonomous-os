@@ -75,6 +75,20 @@ def setup_logging() -> logging.Logger:
     _usage.addHandler(_usage_file)
     _usage.propagate = False
 
+    # Qwen twin of the gemini usage log: "hal.realtime.usage.qwen" is a CHILD
+    # of the logger above, so propagate=False here keeps qwen lines out of
+    # gemini_usage.log — one file per provider, comparable line-for-line.
+    _usage_qwen = logging.getLogger("hal.realtime.usage.qwen")
+    _usage_qwen.setLevel(logging.DEBUG)
+    _usage_qwen_file = logging.handlers.RotatingFileHandler(
+        log_dir / "qwen_usage.log",
+        maxBytes=5 * 1024 * 1024,
+        backupCount=3,
+    )
+    _usage_qwen_file.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    _usage_qwen.addHandler(_usage_qwen_file)
+    _usage_qwen.propagate = False
+
     # GELF handler: send INFO+ logs to centralized Graylog
     try:
         from hal.drivers.gelf_handler import GELFHandler

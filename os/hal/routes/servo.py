@@ -204,6 +204,7 @@ def resume_servos():
         raise HTTPException(503, "Servo not available")
     state.animation_service._zero_mode = False
     state.animation_service._hold_mode = False
+    state.animation_service._hold_explicit = False
     # Stop the event loop before raw bus moves to prevent bus contention
     state.animation_service._running.clear()
     if state.animation_service._event_thread and state.animation_service._event_thread.is_alive():
@@ -240,7 +241,11 @@ def hold_servos():
     if not state.animation_service:
         raise HTTPException(503, "Servo not available")
     state.animation_service._hold_mode = True
-    state.logger.info("Servo hold mode activated -- idle suppressed, emotions still allowed")
+    # Explicit agent hold: suppress ALL emotion servo animations, including the
+    # scene-change set (greeting/sleepy/stretching) that scene-preset holds let
+    # through — see routes/emotion.py.
+    state.animation_service._hold_explicit = True
+    state.logger.info("Servo hold mode activated -- idle suppressed, emotion servo fully suppressed")
     return {"status": "ok"}
 
 

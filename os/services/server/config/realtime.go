@@ -26,11 +26,12 @@ type RealtimeConfig struct {
 	// Enabled toggles the realtime brain. Unset → true (mirrors HAL's
 	// HAL_REALTIME_ENABLED default); set false to disable.
 	Enabled  *bool           `json:"enabled,omitempty" yaml:"enabled"`
-	Provider string          `json:"provider,omitempty" yaml:"provider"` // none|gemini|openai ("" == none)
+	Provider string          `json:"provider,omitempty" yaml:"provider"` // none|gemini|openai|qwen ("" == none)
 	APIKey   string          `json:"api_key,omitempty" yaml:"apiKey"`    // empty → falls back to LLMAPIKey
 	BaseURL  string          `json:"base_url,omitempty" yaml:"baseURL"`  // empty → falls back to LLMBaseURL
 	Gemini   *GeminiRealtime `json:"gemini,omitempty" yaml:"gemini"`
 	OpenAI   *OpenAIRealtime `json:"openai,omitempty" yaml:"openai"`
+	Qwen     *QwenRealtime   `json:"qwen,omitempty" yaml:"qwen"`
 }
 
 // GeminiRealtime holds Gemini Live's provider-specific knobs. Empty fields → HAL
@@ -58,6 +59,23 @@ type OpenAIRealtime struct {
 	ReasoningEffort string `json:"reasoning_effort,omitempty" yaml:"reasoningEffort"` // OpenAI-only reasoning knob (e.g. xhigh)
 }
 
+// QwenRealtime holds Qwen Omni Realtime's (DashScope / Model Studio) knobs.
+// Unlike gemini/openai, api_key/base_url here do NOT fall back to the LLM
+// credentials — Qwen talks straight to the Alibaba MaaS host, not through the
+// campaign-api proxy — so HAL reads realtime.qwen.api_key/base_url only (env
+// DASHSCOPE_API_KEY / HAL_QWEN_REALTIME_BASE_URL override). No reasoning knob:
+// the realtime models expose none.
+type QwenRealtime struct {
+	APIKey  string `json:"api_key,omitempty" yaml:"apiKey"`
+	BaseURL string `json:"base_url,omitempty" yaml:"baseURL"` // e.g. wss://<workspace>.ap-southeast-1.maas.aliyuncs.com/api-ws/v1
+	Model   string `json:"model,omitempty" yaml:"model"`
+	Voice   string `json:"voice,omitempty" yaml:"voice"` // Qwen voice set (3.5-plus: Ethan|Serena)
+	// Search toggles built-in web search (3.5 models; session `enable_search`) —
+	// the qwen twin of Gemini's GoogleSearch. nil → HAL default (on). Kept here
+	// so an operator's explicit override survives config re-saves.
+	Search *bool `json:"search,omitempty" yaml:"search"`
+}
+
 // Realtime per-provider defaults — what os-server resolves (and pushes) when the
 // operator hasn't overridden a knob. Model/voice match HAL's defaults
 // (os/hal/config.py): the Gemini model is the flash (cheapest) live variant. The
@@ -77,6 +95,11 @@ const (
 	defaultRealtimeOpenAIModel     = "gpt-realtime-2"
 	defaultRealtimeOpenAIVoice     = "alloy"
 	defaultRealtimeOpenAIReasoning = "minimal"
+	// 3.5-plus over turbo: turbo (legacy) never fires function calls and
+	// ignores turn context (device-tested), breaking the delegate flow.
+	// Voice: 3.5-plus accepts only Serena/Ethan of the qwen voice set.
+	defaultRealtimeQwenModel       = "qwen3.5-omni-plus-realtime"
+	defaultRealtimeQwenVoice       = "Ethan"
 )
 
 // DefaultRealtimeConfig returns the realtime block os-server seeds into
@@ -99,6 +122,10 @@ func DefaultRealtimeConfig() *RealtimeConfig {
 			Voice:           defaultRealtimeOpenAIVoice,
 			ReasoningEffort: defaultRealtimeOpenAIReasoning,
 		},
+		Qwen: &QwenRealtime{
+			Model: defaultRealtimeQwenModel,
+			Voice: defaultRealtimeQwenVoice,
+		},
 	}
 }
 
@@ -117,7 +144,7 @@ func (c *Config) RealtimeEnabled() bool {
 	return true
 }
 
-// RealtimeProvider returns the normalized provider ("gemini"/"openai"), defaulting
+// RealtimeProvider returns the normalized provider ("gemini"/"openai"/"qwen"), defaulting
 // to "gemini" (mirrors HAL's HAL_REALTIME_PROVIDER default). An explicit
 // none/off/disabled returns "" — realtime off. Matches the HAL orchestrator's
 // provider vocabulary so the value can be pushed through verbatim.
@@ -166,10 +193,29 @@ func (c *Config) RealtimeBaseURL() string {
 // override is actually set — see RealtimeBaseURL for why the resolved value must
 // not leak into the editable form.
 func (c *Config) RealtimeBaseURLOverride() string {
-	if c.Realtime != nil {
-		return c.Realtime.BaseURL
+	if c.Realtime == nil {
+		return ""
 	}
-	return ""
+	// qwen keeps its own base_url in the sub-object (never the shared field).
+	if c.RealtimeProvider() == "qwen" {
+		if c.Realtime.Qwen != nil {
+			return c.Realtime.Qwen.BaseURL
+		}
+		return ""
+	}
+	return c.Realtime.BaseURL
+}
+
+// RealtimeHasAPIKey reports whether the ACTIVE provider has an explicit realtime
+// API key set (qwen: its sub-object key; others: the shared realtime.api_key).
+func (c *Config) RealtimeHasAPIKey() bool {
+	if c.Realtime == nil {
+		return false
+	}
+	if c.RealtimeProvider() == "qwen" {
+		return c.Realtime.Qwen != nil && c.Realtime.Qwen.APIKey != ""
+	}
+	return c.Realtime.APIKey != ""
 }
 
 // RealtimeModel returns the active provider's model — the operator override when
@@ -186,6 +232,11 @@ func (c *Config) RealtimeModel() string {
 			return c.Realtime.OpenAI.Model
 		}
 		return defaultRealtimeOpenAIModel
+	case "qwen":
+		if c.Realtime != nil && c.Realtime.Qwen != nil && c.Realtime.Qwen.Model != "" {
+			return c.Realtime.Qwen.Model
+		}
+		return defaultRealtimeQwenModel
 	}
 	return ""
 }
@@ -203,6 +254,11 @@ func (c *Config) RealtimeVoice() string {
 			return c.Realtime.OpenAI.Voice
 		}
 		return defaultRealtimeOpenAIVoice
+	case "qwen":
+		if c.Realtime != nil && c.Realtime.Qwen != nil && c.Realtime.Qwen.Voice != "" {
+			return c.Realtime.Qwen.Voice
+		}
+		return defaultRealtimeQwenVoice
 	}
 	return ""
 }
@@ -223,6 +279,7 @@ func (c *Config) RealtimeReasoning() string {
 		}
 		return defaultRealtimeOpenAIReasoning
 	}
+	// qwen: no reasoning knob on the realtime models.
 	return ""
 }
 
@@ -234,6 +291,7 @@ func (c *Config) RealtimeReasoning() string {
 var (
 	realtimeGeminiVoices    = map[string]bool{"Puck": true, "Charon": true, "Kore": true, "Fenrir": true, "Aoede": true}
 	realtimeOpenAIVoices    = map[string]bool{"alloy": true, "ash": true, "coral": true, "echo": true, "fable": true, "onyx": true, "nova": true, "sage": true, "shimmer": true}
+	realtimeQwenVoices      = map[string]bool{"Cherry": true, "Serena": true, "Ethan": true, "Chelsie": true}
 	realtimeGeminiThinking  = map[string]bool{"MINIMAL": true, "LOW": true, "MEDIUM": true, "HIGH": true}
 	realtimeOpenAIReasoning = map[string]bool{"minimal": true, "low": true, "medium": true, "high": true, "xhigh": true}
 )
@@ -243,9 +301,10 @@ var (
 // cheapest (the default). Voices match the maps below; KEEP IN SYNC with the HAL
 // enums (os/hal/drivers/realtime/enums).
 var (
-	RealtimeProviders           = []string{"gemini", "openai", "none"}
+	RealtimeProviders           = []string{"gemini", "openai", "qwen", "none"}
 	RealtimeGeminiVoiceList     = []string{"Puck", "Charon", "Kore", "Fenrir", "Aoede"}
 	RealtimeOpenAIVoiceList     = []string{"alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"}
+	RealtimeQwenVoiceList       = []string{"Cherry", "Serena", "Ethan", "Chelsie"}
 	RealtimeGeminiThinkingList  = []string{"MINIMAL", "LOW", "MEDIUM", "HIGH"}
 	RealtimeOpenAIReasoningList = []string{"minimal", "low", "medium", "high", "xhigh"}
 )
@@ -262,8 +321,8 @@ type RealtimeOptions struct {
 func GetRealtimeOptions() RealtimeOptions {
 	return RealtimeOptions{
 		Providers: RealtimeProviders,
-		Voices:    map[string][]string{"gemini": RealtimeGeminiVoiceList, "openai": RealtimeOpenAIVoiceList},
-		Reasoning: map[string][]string{"gemini": RealtimeGeminiThinkingList, "openai": RealtimeOpenAIReasoningList},
+		Voices:    map[string][]string{"gemini": RealtimeGeminiVoiceList, "openai": RealtimeOpenAIVoiceList, "qwen": RealtimeQwenVoiceList},
+		Reasoning: map[string][]string{"gemini": RealtimeGeminiThinkingList, "openai": RealtimeOpenAIReasoningList, "qwen": {}},
 	}
 }
 
@@ -271,10 +330,10 @@ func GetRealtimeOptions() RealtimeOptions {
 // the off-synonyms / empty). Anything else is rejected.
 func ValidateRealtimeProvider(provider string) error {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "gemini", "openai", "none", "off", "disabled", "":
+	case "gemini", "openai", "qwen", "none", "off", "disabled", "":
 		return nil
 	default:
-		return fmt.Errorf("invalid realtime provider %q (want gemini|openai|none)", provider)
+		return fmt.Errorf("invalid realtime provider %q (want gemini|openai|qwen|none)", provider)
 	}
 }
 
@@ -298,8 +357,15 @@ func ValidateRealtimeKnobs(provider, voice, reasoning string) error {
 		if reasoning != "" && !realtimeOpenAIReasoning[reasoning] {
 			return fmt.Errorf("invalid openai reasoning_effort %q (minimal|low|medium|high|xhigh)", reasoning)
 		}
+	case "qwen":
+		if voice != "" && !realtimeQwenVoices[voice] {
+			return fmt.Errorf("invalid qwen voice %q (Cherry|Serena|Ethan|Chelsie)", voice)
+		}
+		if reasoning != "" {
+			return fmt.Errorf("qwen realtime has no reasoning knob, got %q", reasoning)
+		}
 	default:
-		return fmt.Errorf("realtime model/voice/reasoning require a concrete provider (gemini|openai), got %q", provider)
+		return fmt.Errorf("realtime model/voice/reasoning require a concrete provider (gemini|openai|qwen), got %q", provider)
 	}
 	return nil
 }

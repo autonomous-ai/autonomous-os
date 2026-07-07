@@ -156,6 +156,7 @@ Monitor polls system/HW APIs every **3 seconds**. Flow uses file-backed hybrid m
 | `POST /hw/servo/upload` | Upload a new servo recording CSV (`timestamp` + `<joint>.pos` columns) |
 | `GET /hw/display` | mode, hardware, available_expressions |
 | `GET /hw/audio/volume` | control, volume (0-100) |
+| `GET /hw/voice/mic-level` | SSE stream (~10Hz): level (voice-mic RMS, int16 scale), threshold (VAD), active, muted, sensing_level / sensing_age_s / sensing_threshold (noise mic — last SoundPerception sample, null when sensing is down) |
 | `GET /hw/led/color` | led_count, color [R,G,B], hex (#rrggbb) |
 
 ---
@@ -192,6 +193,23 @@ Cards included:
 - Mic available + listening (LIVE badge)
 - TTS available + speaking (SPEAKING badge)
 - Current volume
+- **Mic level VU meters** (under the volume slider), fed by the `GET
+  /hw/voice/mic-level` SSE stream (~10Hz, via the `/api/hardware` proxy);
+  raw RMS is mapped to percent on a dBFS scale (-60dBFS → 0%, 0dBFS → 100%)
+  and each bar carries an amber tick at its trigger threshold plus a numeric
+  `live RMS / threshold` readout on the right of its label:
+  - **Mic level** — the voice-pipeline (STT) mic; pumps live as the user
+    talks into the device. Tick = VAD wake threshold (speech must peak past
+    it for the device to start listening). Drops to 0 while TTS/music plays
+    (mic is draining); dimmed with a "muted" hint while the mic is muted.
+  - **Noise mic** — the sensing mic (SoundPerception): one 0.5s RMS sample
+    per sensing poll, so this bar steps every few seconds instead of
+    pumping (samples also pause during/after TTS). Tick = loud-noise
+    threshold. Hidden when the device has no sound perception running;
+    shows 0 when the last sample is older than 60s.
+  The stream stays open while the voice mic is muted (the sensing mic is
+  independent of the mute switch) and closes while the browser tab is
+  hidden.
 
 **Hardware** (horizontal card)
 - 8 badges: Servo / LED / Camera / Audio / Sensing / Voice / TTS / Display
@@ -312,7 +330,12 @@ Turn Pipeline grouping behavior:
 
 ### 5.5 Logs Section
 
-- Dedicated runtime log panels for HAL, OS (os-server), and OpenClaw service logs.
+- Dedicated runtime log panels: HAL, OS (os-server), Buddy, plus **Agent** and **Agent Service** (source ids `openclaw` / `openclaw-service`).
+- The **Agent**/**Agent Service** tabs are runtime-aware — the backend (`resolveLogSource` in `server/logs.go`) points them at whichever agentic backend is active:
+  - openclaw: `Agent` → `/var/log/openclaw/agent.log` (falls back to newest `/tmp/openclaw/openclaw-*.log`), `Agent Service` → `journal:openclaw.service`
+  - hermes: `Agent` → `/root/.hermes/logs/agent.log`, `Agent Service` → `journal:hermes-gateway.service`
+  - picoclaw: `Agent` → `/root/.picoclaw/logs/gateway.log`, `Agent Service` → `journal:picoclaw.service`
+  - codex: `Agent` → `journal:codex.service`, `Agent Service` → `journal:codex.service` (the gatewayd bridge has no file log — journal only)
 - Each panel streams via SSE (`GET /api/logs/stream?source=<source>`) with fallback polling.
 - Supports level filtering (ALL/DEBUG/INFO/WARN/ERROR) and text/regex search.
 
@@ -323,7 +346,13 @@ Turn Pipeline grouping behavior:
 Interactive chat interface for communicating with the agent. Layout: sidebar (conversation list) + main chat area.
 
 **Conversations**
-- Multiple conversations stored in localStorage (max 50, 200 messages each)
+- Multiple conversations stored in localStorage (max 50, 200 messages each).
+  Image attachments are too large for the localStorage quota, so their
+  data-URLs are stripped on save and persisted separately in **IndexedDB**
+  (`lib/chatImageStore.ts`, keyed by message id); a mount effect re-attaches
+  them after reload and prunes entries whose message no longer exists.
+  Deleting a conversation (or Clear/history-TTL) also deletes its stored
+  images.
 - Sidebar with search, pin, rename (double-click), delete (double-click confirm), export as TXT
 - Grouped by date: Today / Yesterday / This week / Older, pinned at top. Each group header shows a hairline divider and an item count.
 - Each row shows a deterministic on-palette avatar dot (hashed from the conversation id), the title, a localized relative timestamp (`now` / `5m` / `2h` / `yesterday` / `3d`, hidden on hover), and a last-message preview. The active conversation is marked with an amber left rail.
@@ -333,7 +362,7 @@ Interactive chat interface for communicating with the agent. Layout: sidebar (co
 **Message Input**
 - Textarea with Shift+Enter for multi-line, Enter to send
 - File/image attachment (max 10 MB): button, drag-drop, clipboard paste
-- Messages sent via `POST /api/sensing/event` with `type: "web_chat"`. The handler tags the run via `MarkWebChatRun(runID)` so the agent reply is suppressed at TTS (rendered in this UI only) and skips the physical wake greeting / opening filler. Web chat with image attachment is saved to `/tmp/web-chat-*.jpg` and surfaced to the agent via `[image: <path>]`.
+- Messages sent via `POST /api/sensing/event` with `type: "web_chat"`. The handler tags the run via `MarkWebChatRun(runID)` so the agent reply is suppressed at TTS (rendered in this UI only) and skips the physical wake greeting / opening filler. An image attachment rides the payload's `image` field (raw base64); the handler (1) saves it to `/tmp/web-chat-*.jpg` and appends an `[image: <path>]` tag so tools can read the file directly (e.g. face enrollment), and (2) runs the describe-first gate in `internal/vision` (see `docs/realtime-voice.md`, "Frame handoff"): a text-only main model gets an `[image description]` line produced by the catalog's vision model, a vision-capable one gets the raw attachment. Both steps run BEFORE the agent-busy queue fork, so a queued turn replays with the description already inlined.
 
 **Real-time Streaming**
 - **Thinking indicator**: collapsible purple block showing LLM reasoning tokens as they stream in (`thinking` events). Click to expand full text (max-height 200px scrollable). Auto-hides on response completion.
@@ -343,7 +372,8 @@ Interactive chat interface for communicating with the agent. Layout: sidebar (co
 **Response Handling**
 - Tracks response by `runId` correlation across SSE events
 - Inline HW control markers (`[HW:/emotion:...]`) stripped from displayed text
-- 30-second timeout: if streaming text received, shows partial text; otherwise shows error with retry button
+- 120-second timeout: if streaming text received, shows partial text; otherwise shows error with retry button
+- **Pending-turn recovery across reload**: messages persist an epoch `ts`; a pending reply bubble younger than 10 minutes survives a page reload instead of being finalized as an error. On the first render with the Chat tab active, the UI re-attaches to the stored `runId` and the reply is backfilled from the flow JSONL replay (`/api/agent/flow-stream` re-sends the last 500 events of the day on every connect — `tts_send` / `tts_suppressed` / `no_reply`). If nothing resolves the run within 30 s, it is finalized as "no response" with retry.
 - Local intent fast path: sub-50ms responses bypassing agent
 - Busy/dropped handling: shows "busy — try again"
 - Markdown rendering: bold, italic, inline code (amber-tinted), code blocks (monospace), URLs, ordered/unordered lists, and tables (styled header + zebra rows)

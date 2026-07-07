@@ -13,8 +13,12 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 import hal.app_state as state
+from hal import config
 from hal.drivers.audio_route import (
     current_label,
+    quiesce_portaudio_users,
+    resume_capture,
+    route_op_lock,
     route_to_bluetooth_pa,
     route_to_builtin,
 )
@@ -75,8 +79,12 @@ def bt_devices():
     mgr = _mgr()
     paired = mgr.paired_devices()
     active = mgr.active_mac
+    # "active" = audio is actually routed there right now (live label), not
+    # just the persisted preference — after a failed boot-restore active_mac
+    # stays set while routing is builtin, and the UI must show the truth.
+    routed = bool(active) and current_label() == f"bt:{active}"
     for d in paired:
-        d["active"] = d["mac"] == active
+        d["active"] = routed and d["mac"] == active
     return {"active_mac": active, "label": current_label(), "devices": paired}
 
 
@@ -100,7 +108,8 @@ def bt_forget(req: MacRequest):
     if mgr.active_mac and mgr.active_mac == target:
         # Bring TTS/STT back to the device before it disappears,
         # otherwise the persistent OutputStream is left pointed at a gone sink.
-        route_to_builtin()
+        with route_op_lock:
+            route_to_builtin()
     if not mgr.forget(target):
         raise HTTPException(500, "Forget failed")
     return {"status": "ok"}
@@ -124,50 +133,65 @@ def bt_active_set(req: ActiveRequest):
     mgr = _mgr()
     target = (req.mac or "").strip().upper() or None
 
+    # route_op_lock serializes whole route flows (this handler, boot restore,
+    # concurrent clicks): two interleaved quiesce→PortAudio-re-init→swap
+    # sequences abort the process from the C layer.
     if target is None:
-        route_to_builtin()
-        mgr.set_active_mac(None)
+        with route_op_lock:
+            route_to_builtin()
+            mgr.set_active_mac(None)
         return {"status": "ok", "active_mac": None, "label": current_label()}
 
     if sd is None:
         raise HTTPException(503, "sounddevice not available on host")
 
-    if not mgr.info(target)["connected"] and not mgr.connect(target):
-        raise HTTPException(503, f"Could not connect to {target}")
+    with route_op_lock:
+        if not mgr.info(target)["connected"] and not mgr.connect(target):
+            raise HTTPException(503, f"Could not connect to {target}")
 
-    # Auto-switch to HFP whenever available — single-device mic+speaker is
-    # the whole point of "use headset" mode. Falls back to whatever profile
-    # is active if HFP isn't offered (e.g. BT speakers).
-    card = mgr.pa_card_for_mac(target)
-    if card:
-        profiles = mgr.pa_card_profiles(card)
-        if profiles.get("handsfree_head_unit", False):
-            mgr.set_pa_card_profile(card, "handsfree_head_unit")
+        # Profile choice (config.BT_PREFER_HFP): HFP routes the headset mic too
+        # (mono 16kHz both ways over SCO); default A2DP = stereo playback with
+        # the STT mic falling back to the device's built-in mic.
+        card = mgr.pa_card_for_mac(target)
+        if card:
+            profiles = mgr.pa_card_profiles(card)
+            profile = None
+            if config.BT_PREFER_HFP and profiles.get("handsfree_head_unit", False):
+                profile = "handsfree_head_unit"
+            elif profiles.get("a2dp_sink", False):
+                profile = "a2dp_sink"
+            if profile:
+                mgr.set_pa_card_profile(card, profile)
 
-    # Poll for the sink to appear instead of a fixed sleep — PA exposes the
-    # bluez sink asynchronously after a profile switch / reconnect, and on
-    # a flaky BT chip it can take a few seconds. Up to ~8s.
-    pa_sink: Optional[str] = None
-    for _ in range(8):
-        pa_sink = mgr.pa_sink_for_mac(target)
-        if pa_sink:
-            break
-        time.sleep(1.0)
-    if not pa_sink:
-        raise HTTPException(
-            503,
-            f"PulseAudio has no sink for {target} — check pulseaudio-module-bluetooth",
-        )
-    pulse_idx = mgr.pulse_sd_index(sd)
-    if pulse_idx is None:
-        raise HTTPException(
-            503,
-            "PortAudio cannot see PulseAudio — sounddevice/portaudio not built with pulse support",
-        )
-    pa_source = mgr.pa_source_for_mac(target)
+        # Poll for the sink to appear instead of a fixed sleep — PA exposes the
+        # bluez sink asynchronously after a profile switch / reconnect, and on
+        # a flaky BT chip it can take a few seconds. Up to ~8s.
+        pa_sink: Optional[str] = None
+        for _ in range(8):
+            pa_sink = mgr.pa_sink_for_mac(target)
+            if pa_sink:
+                break
+            time.sleep(1.0)
+        if not pa_sink:
+            raise HTTPException(
+                503,
+                f"PulseAudio has no sink for {target} — check pulseaudio-module-bluetooth",
+            )
+        # PortAudio re-init aborts the process if other sounddevice streams are
+        # live (TTS persistent stream, mic capture) — quiesce them first; the
+        # route swap below reopens everything.
+        quiesce_portaudio_users()
+        pulse_idx = mgr.pulse_sd_index(sd)
+        if pulse_idx is None:
+            resume_capture()
+            raise HTTPException(
+                503,
+                "PortAudio cannot see PulseAudio — sounddevice/portaudio not built with pulse support",
+            )
+        pa_source = mgr.pa_source_for_mac(target)
 
-    route_to_bluetooth_pa(pulse_idx, pa_sink, pa_source, target)
-    mgr.set_active_mac(target)
+        route_to_bluetooth_pa(pulse_idx, pa_sink, pa_source, target)
+        mgr.set_active_mac(target)
     return {
         "status": "ok",
         "active_mac": target,

@@ -18,14 +18,19 @@ Khi OS server chưa được cấu hình (`SetUpCompleted = false`), thiết b�
       IP (trước cả khi có internet), để Web UI đọc được lúc AP còn sống
       trong giây lát (xem "Tự Động Chuyển Hướng AP→STA")
    b. Chờ internet (poll 60s)
-   c. Setup agent gateway
-   d. Lưu config
-   e. Chờ agent ready (poll 120s)
-   f. Báo cáo backend (MQTT)
+   c. Lưu config
+   d. Ping backend sớm (fire-and-forget HTTP POST {llm_base}/ping, status
+      "setting_up") — publish IP LAN mới (local_ip) lên backend mà KHÔNG chờ
+      bước setup agent bên dưới, để trang đã mở popup Setup có thể tra IP và
+      cứu cú redirect
+   e. Setup agent gateway
+   f. Chờ agent ready (poll 120s)
    g. SetUpCompleted = true
+   h. Ping backend (status "working", setup_completed=true)
 7. Nếu thất bại → quay lại AP mode
 8. Web UI tự chuyển hướng browser sang http://<lan_ip>/setup ngay khi
-   operator đã về Wi-Fi nhà (chỉ IP — không phụ thuộc mDNS .local)
+   operator đã về Wi-Fi nhà (IP-first; mDNS .local là fallback discovery
+   cuối cùng khi AP chết trước lúc đọc được lan_ip)
 ```
 
 ## API
@@ -102,27 +107,47 @@ hoặc qua mDNS **sau** khi operator đã về Wi-Fi nhà.
 
 ### Các kênh chuyển hướng (`useSetupStatusPolling.ts`)
 
-Chuyển hướng **chỉ dùng IP, theo thiết kế.** Tên mDNS `.local` của thiết bị
-**cố ý KHÔNG** dùng làm đích redirect: nhiều router gia đình/văn phòng chặn mDNS
-multicast (và Android Chrome không có mDNS gốc), nên `.local` im lặng không
-resolve được và làm operator kẹt. IP LAN thô resolve trên mọi mạng, nên là
-nguồn chân lý duy nhất cho "thiết bị giờ ở đâu."
+Chuyển hướng **ưu tiên IP (IP-first), theo thiết kế.** Tên mDNS `.local` của
+thiết bị không phải đích redirect chính: nhiều router gia đình/văn phòng chặn
+mDNS multicast (và Android Chrome không có mDNS gốc), nên `.local` im lặng
+không resolve được. IP LAN thô resolve trên mọi mạng, nên là nguồn chân lý
+ưu tiên cho "thiết bị giờ ở đâu." mDNS chỉ tồn tại như **fallback discovery
+cuối cùng** cho trường hợp kênh IP chắc chắn không bao giờ có IP (xem kênh 3).
 
 1. **Phase poll** — poll `GET /api/device/setup/status` qua AP IP khi AP còn
    sống. Đọc `phase` + `lan_ip`. Chết ngay khi AP tắt. (Backend capture IP STA
    sớm để poll này trả được `lan_ip` trong khoảng AP còn sống ngắn ngủi — xem
-   `internal/device/service.go`.)
+   `internal/device/service.go`.) Một watchdog theo wall-clock bật cờ `apLost`
+   khi poll không được trả lời >5s trong lúc setup đang chạy — dùng wall-clock
+   chứ không đếm số lần fail liên tiếp, vì fetch tới AP đã biến mất có thể
+   treo nhiều giây trong vòng TCP retry của browser.
 2. **LAN-IP probe** — khi đã biết `lan_ip`, probe `http://<lan_ip>/api/health`
    từ browser; khi thành công (operator đã về Wi-Fi nhà và thiết bị online) thì
-   chuyển hướng sang `http://<lan_ip>/setup?<params>`. **Đây là kênh redirect
-   duy nhất** — không có fallback `.local`.
+   chuyển hướng sang `http://<lan_ip>/setup?<params>`. Đây là kênh redirect
+   **chính** và luôn giữ quyền quyết định khi nó có đích.
+3. **mDNS `.local` fallback probe (chỉ để discovery)** — cứu race của lần setup
+   đầu: khi join lần đầu, AP thường tắt **trước khi** wlan0 có DHCP lease, nên
+   phase poll không bao giờ đọc được `lan_ip`, máy của operator tự nhảy về
+   Wi-Fi nhà/văn phòng, và kênh 2 không có đích — trước đây trang bị kẹt vĩnh
+   viễn trên AP IP đã chết. Khi `setupWorking && apLost && !lan_ip` và đã biết
+   hostname (`<type>-<xxxx>`, từ trường `mac` của endpoint setup-status mở),
+   FE probe `http://<host>.local/api/health` mỗi 2s; thành công thì chuyển
+   hướng sang `http://<host>.local/setup?<params>`. Gate theo `apLost` vì lúc
+   AP còn sống, avahi có thể trả lời mDNS **qua chính link AP** và một cú
+   redirect sớm sẽ reload trang giữa lúc join, mất trạng thái "Setting up…".
+4. **`.local` landing seed** — khi trang được phục vụ từ host `.local` (tức
+   ngay sau khi kênh 3 bắn), nó fetch `lan_ip` một lần từ endpoint setup-status
+   mở, để kênh 2 canonical-upgrade URL về IP thô. `.local` chỉ là cầu
+   discovery; IP thô mới là nhà bền vững, vì mDNS có thể ngừng resolve bất kỳ
+   lúc nào. Một guard từ chối IP AP `192.168.100.1` để không bao giờ
+   "upgrade" nhầm về địa chỉ AP.
 
 **Pre-submit canonical-URL upgrade.** LAN-IP probe ở trên cũng chạy *trước*
 submit: khi trang đang ở AP IP (`http://192.168.100.1`) và đã biết `lan_ip`, nó
 bật browser khỏi AP IP sắp chết sang `http://<lan_ip>/setup`, địa chỉ sống sót
 qua AP→STA. **Trước submit, lúc wlan0 vẫn phục vụ AP và chưa có IP STA, `lan_ip`
-rỗng nên trang đơn giản ở lại `192.168.100.1`** — không có cú nhảy `.local` tự
-động nào.
+rỗng nên trang đơn giản ở lại `192.168.100.1`** — mDNS fallback (kênh 3) gate
+theo `setupWorking` nên cũng không bao giờ bắn trước submit.
 
 ### Nguyên nhân gốc của bug "kẹt mãi mãi"
 
@@ -152,7 +177,7 @@ Nên trên router chặn mDNS multicast (đúng case thực tế), trang kẹt v
 |------|----------|---------|
 | **CSP** (`imager/build*.sh`, `scripts/provision/setup.sh`, `scripts/maintenance/patch-security.sh`) | `connect-src 'self' ws: wss:` → `connect-src 'self' ws: wss: http:` | Cho browser `fetch` probe cross-origin LAN-IP. Phải dùng `http:` (không phải `http://*.local`) vì **CSP không biểu diễn được dải IP** — một token `http:` là cách duy nhất cho phép `http://<bất-kỳ-ip-lan>/…`, nên fix độc lập với subnet của khách (`172.x`, `192.168.x`, `10.x`). |
 | **Backend** (`internal/device/service.go`) | Một goroutine poll `GetCurrentIP()` mỗi giây **song song với** `SetupNetwork()` và publish IP STA vào setup state ngay khi xuất hiện (bỏ qua IP AP `192.168.100.1`), trước khi vòng chờ internet 60s xong. | Cho FE **cửa sổ lớn nhất có thể** để đọc `lan_ip` trong khoảng overlap ngắn lúc nó còn poll AP — để kênh LAN-IP thực sự có IP mà chuyển hướng tới. Một guard giữ IP đã capture khỏi bị ghi đè thành chuỗi rỗng bởi lần đọc sau lúc AP đang teardown. |
-| **Frontend** (`useSetupStatusPolling.ts`) | Bỏ hẳn kênh redirect mDNS `.local`. Kênh redirect duy nhất còn lại là LAN-IP probe, carry `pathname + search` và nhắm tới `http://<lan_ip>/setup?<params>`; nó cũng đóng vai trò pre-submit canonical-URL upgrade. | `.local` không đáng tin trên mạng chặn mDNS nên không thể làm đích redirect. IP đọc động từ backend — **không hardcode subnet, không phụ thuộc mDNS**. |
+| **Frontend** (`useSetupStatusPolling.ts`) | Bỏ kênh redirect mDNS `.local` khỏi vai trò *chính*. Kênh redirect chính là LAN-IP probe, carry `pathname + search` và nhắm tới `http://<lan_ip>/setup?<params>`; nó cũng đóng vai trò pre-submit canonical-URL upgrade. (Sau này một fallback `.local` chỉ-để-discovery được thêm lại cho race AP-chết-trước-lan_ip — xem kênh 3–4 ở trên.) | `.local` không đáng tin trên mạng chặn mDNS nên không thể làm đích redirect chính. IP đọc động từ backend — **không hardcode subnet, happy path không phụ thuộc mDNS**. |
 | **Frontend** (`Setup.tsx`) | Ô copy "save this address" và link "Continue setup" giờ dùng **URL IP thô** (`http://<lan_ip>/setup`); cả hai màn gating theo `setupLanIP` thay vì mDNS host, fallback về gợi ý router-admin khi chưa biết IP. | IP-only từ đầu đến cuối — operator không bao giờ bị đưa địa chỉ `.local` không resolve được trên mạng của họ. |
 | **Frontend** (`Setup.tsx`) | Nút Copy thêm fallback `document.execCommand("copy")` (textarea ẩn) cho khi `navigator.clipboard` không có. | Trang Setup phục vụ qua HTTP thuần (`http://192.168.100.1`), nơi `navigator.clipboard` là `undefined` (cần secure context) — nên API mới im lặng không làm gì và nút không hoạt động. Đường legacy chạy được trên origin `http://`. |
 
@@ -169,10 +194,19 @@ early-poll lấy được `lan_ip`, link copy thủ công fallback về
   mạng chặn mDNS — đúng lỗi thực tế đã báo. Giải pháp **không phụ thuộc subnet**
   — không giả định dải IP private cụ thể nào.
 - **Vẫn phụ thuộc gì:** auto-redirect qua kênh LAN-IP chỉ chạy nếu FE kịp
-  capture `lan_ip` trong khoảng ~2s lúc AP còn sống. Goroutine early-capture
-  tối đa hóa cửa sổ này nhưng không đảm bảo 100% nếu DHCP cấp IP chậm. **Link
-  copy IP thủ công là fallback chắc chắn** — luôn hiện và luôn dùng IP thô, nên
-  operator không bao giờ bị kẹt.
+  capture `lan_ip` trong khoảng ~2s lúc AP còn sống — với lần setup đầu, cửa
+  sổ này thường đóng trước khi DHCP xong. mDNS fallback (kênh 3) cover case
+  đó trên các mạng resolve được `.local`; trên mạng chặn mDNS mà không capture
+  được `lan_ip` thì không kênh tự động nào bắn được, và **nhập IP thủ công là
+  fallback chắc chắn** — operator tra IP thiết bị trong router rồi gõ vào, nên
+  không bao giờ bị kẹt.
+- **Backend rendezvous (phía device đã sẵn sàng):** cú ping backend sớm (bước
+  6d) publish `local_ip` ngay khi WiFi lên, nên trang đã mở popup Setup (vd
+  autonomous.ai) có thể poll backend theo `mac` rồi navigate popup sang
+  `http://<ip>/setup?<params>` — opener được phép *navigate* popup
+  cross-origin dù không đọc được. Cách này tự động cover cả mạng chặn mDNS,
+  nhưng cần backend lưu/expose IP và parent page chịu poll; cả hai đều nằm
+  ngoài repo này.
 - **Đánh đổi bảo mật của `http:` trong CSP:** `connect-src http:` cho phép trang
   Setup `fetch` mọi origin HTTP thuần, không chỉ thiết bị. Chấp nhận được vì
   bundle Setup chỉ phục vụ trên LAN/AP, không gửi secret trong các health probe

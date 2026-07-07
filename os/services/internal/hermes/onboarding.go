@@ -18,6 +18,25 @@ const (
 	hermesConfigYAML  = "/root/.hermes/config.yaml"
 	hermesEnvFile     = "/root/.hermes/.env"
 	hermesGatewayUnit = "hermes-gateway"
+
+	// soulOSMarker delimits the OS-managed block in SOUL.md so it can be stripped +
+	// re-injected cleanly on update. Same marker text as the openclaw/picoclaw
+	// AGENTS.md blocks (osMandatoryMarker there).
+	soulOSMarker = "<!-- OS DO NOT REMOVE -->"
+
+	// soulSkillPriorityBlock is the OS-managed skill-priority block kept at the end
+	// of ~/.hermes/SOUL.md. OpenClaw/PicoClaw carry their skill rules in an
+	// OS-managed AGENTS.md block, but Hermes has no AGENTS.md slot — SOUL.md is the
+	// one prompt file it loads every session — so the rule rides in the soul.
+	// Without it Hermes weighs its own bundled skills as equals of the device's
+	// platform skills and can pick e.g. a bundled email skill (installing himalaya)
+	// for "send an email" while the connectors skill already has the device's Gmail
+	// credentials on disk. Marker-delimited so ensureSoulSkillPriorityBlock can
+	// strip + re-append it: an os-server OTA refreshes the wording, and a
+	// `claw migrate` that rewrites SOUL.md (presync §0) self-heals next boot.
+	soulSkillPriorityBlock = soulOSMarker + `
+**Skill priority (MANDATORY):** The skills under ` + "`skills/openclaw-imports/`" + ` are this device's built-in platform skills. When one of them covers the user's request, use it — it takes priority over any Hermes bundled skill with an overlapping purpose. In particular, anything on a connected third-party service (Gmail, Google Calendar, Google Drive, Notion, Figma, Asana, Linear, GitHub, …) — reading, sending, or acting — goes through the ` + "`connectors`" + ` skill: the device's credentials are already on disk there. Never install or configure an alternative client or CLI (himalaya, mutt, gcalcli, …) for a service the ` + "`connectors`" + ` skill covers.
+---`
 )
 
 // SetupAgent materializes the Hermes device config from config.json by running the
@@ -64,6 +83,20 @@ func (s *HermesService) EnsureOnboarding() error {
 	if err := s.runPresync(); err != nil {
 		slog.Warn("hermes presync failed, continuing with gateway start", "component", "hermes", "error", err)
 	}
+
+	// Keep the OS-managed skill-priority block in SOUL.md current. Runs AFTER
+	// presync because its §0 claw-migrate can rewrite the soul. Best-effort and
+	// not part of the restart decision below — SOUL.md is read per session, not
+	// at gateway start (same rule UpdateIdentityName relies on).
+	if _, err := s.ensureSoulSkillPriorityBlock(); err != nil {
+		slog.Warn("hermes soul skill-priority block failed", "component", "hermes", "error", err)
+	}
+
+	// De-dupe "<name>-imported" skill dirs a claw migrate may have left behind
+	// (also runs AFTER presync, whose §0 can run claw migrate). Two candidates
+	// for one skill name make Hermes refuse to load the skill entirely.
+	skillsDeduped := s.pruneImportedSkillDuplicates()
+
 	// config "changed" covers config.yaml AND .env: presync writes channel tokens to
 	// .env, so a channel-only change (e.g. adding Slack) leaves config.yaml untouched
 	// and must still restart the gateway for the Hermes server to pick the channel up.
@@ -92,7 +125,7 @@ func (s *HermesService) EnsureOnboarding() error {
 	gatewayInstalled := s.ensureGatewayUnit()
 	gatewayDown := !gatewayActive()
 
-	if !configChanged && !hookChanged && !skillsRestored && !gatewayInstalled && !gatewayDown {
+	if !configChanged && !hookChanged && !skillsRestored && !skillsDeduped && !gatewayInstalled && !gatewayDown {
 		slog.Info("hermes onboarding: config + hooks + skills unchanged, gateway up — no restart", "component", "hermes")
 		return nil
 	}
@@ -100,7 +133,7 @@ func (s *HermesService) EnsureOnboarding() error {
 	slog.Info("hermes onboarding: (re)starting gateway",
 		"component", "hermes", "unit", hermesGatewayUnit,
 		"config_changed", configChanged, "hook_changed", hookChanged, "skills_restored", skillsRestored,
-		"gateway_installed", gatewayInstalled, "gateway_down", gatewayDown)
+		"skills_deduped", skillsDeduped, "gateway_installed", gatewayInstalled, "gateway_down", gatewayDown)
 	// Re-enable so hermes survives a reboot — factory reset disabled the unit, and a
 	// freshly installed one is not enabled for boot. Best-effort; restart still starts
 	// it for this session even if enable fails.
@@ -198,6 +231,139 @@ func (s *HermesService) ensureSkills() bool {
 	changed := s.downloadSkillsByName(names)
 	slog.Info("hermes onboarding: skills restored", "component", "hermes", "restored", len(changed))
 	return len(changed) > 0
+}
+
+// pruneImportedSkillDuplicates removes the "<name>-imported" duplicates that
+// `hermes claw migrate --skill-conflict rename` leaves in skills/openclaw-imports
+// when it runs while the canonical copies are already on disk (install-time race
+// with the skill watcher, manual migrate runs, …). Two candidates for one skill
+// name make Hermes' skill_view refuse to load the skill at all ("Ambiguous skill
+// name") — the agent then improvises without it, which is how a device with a
+// valid Gmail token ended up trying to install CLI email clients. The copy under
+// <name> is canonical (the skill watcher keeps it fresh from the CDN), so the
+// -imported duplicate is dropped; when only the -imported copy exists it is
+// renamed to <name> instead. Returns true when anything changed so
+// EnsureOnboarding restarts the gateway (the session skill index is built at
+// gateway start).
+func (s *HermesService) pruneImportedSkillDuplicates() bool {
+	return pruneImportedDuplicatesIn(filepath.Join(hermesHome, "skills", "openclaw-imports")) > 0
+}
+
+// pruneImportedDuplicatesIn is the path-parameterized worker (split out for
+// tests). Returns the number of entries it removed or renamed.
+func pruneImportedDuplicatesIn(dir string) int {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0 // absent dir: nothing to prune
+	}
+	changed := 0
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasSuffix(e.Name(), "-imported") {
+			continue
+		}
+		base := strings.TrimSuffix(e.Name(), "-imported")
+		if base == "" {
+			continue
+		}
+		dupPath := filepath.Join(dir, e.Name())
+		basePath := filepath.Join(dir, base)
+		if _, err := os.Stat(basePath); err == nil {
+			if err := os.RemoveAll(dupPath); err != nil {
+				slog.Warn("prune imported skill duplicate failed", "component", "hermes", "skill", e.Name(), "error", err)
+				continue
+			}
+			slog.Info("pruned imported skill duplicate", "component", "hermes", "removed", e.Name(), "kept", base)
+		} else {
+			// Only copy on disk — reclaim the canonical name instead of deleting.
+			if err := os.Rename(dupPath, basePath); err != nil {
+				slog.Warn("rename imported skill failed", "component", "hermes", "skill", e.Name(), "error", err)
+				continue
+			}
+			slog.Info("renamed imported skill to canonical name", "component", "hermes", "from", e.Name(), "to", base)
+		}
+		changed++
+	}
+	return changed
+}
+
+// ensureSoulSkillPriorityBlock reconciles the OS-managed skill-priority block in
+// ~/.hermes/SOUL.md (see soulSkillPriorityBlock). Returns true when the file
+// changed. Atomic tmp+rename like UpdateIdentityName so a mid-write crash can't
+// truncate the soul; no gateway restart is needed — Hermes re-reads SOUL.md at
+// the next session.
+func (s *HermesService) ensureSoulSkillPriorityBlock() (bool, error) {
+	soulPath := filepath.Join(hermesHome, "SOUL.md")
+	raw, err := os.ReadFile(soulPath)
+	if err != nil && !os.IsNotExist(err) {
+		return false, fmt.Errorf("read %s: %w", soulPath, err)
+	}
+	updated := upsertSoulSkillPriorityBlock(string(raw))
+	if updated == string(raw) {
+		return false, nil
+	}
+	if err := os.MkdirAll(hermesHome, 0o755); err != nil {
+		return false, fmt.Errorf("mkdir %s: %w", hermesHome, err)
+	}
+	tmp, err := os.CreateTemp(hermesHome, ".SOUL.*.tmp")
+	if err != nil {
+		return false, fmt.Errorf("create tmp: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.WriteString(updated); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return false, fmt.Errorf("write tmp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return false, fmt.Errorf("close tmp: %w", err)
+	}
+	if err := os.Rename(tmpPath, soulPath); err != nil {
+		os.Remove(tmpPath)
+		return false, fmt.Errorf("rename: %w", err)
+	}
+	slog.Info("soul skill-priority block injected", "component", "hermes", "path", soulPath)
+	return true, nil
+}
+
+// upsertSoulSkillPriorityBlock returns soul with exactly one current copy of the
+// skill-priority block at the end: any previous marker block is stripped (so
+// stale wording from an older os-server never lingers), then the embedded block
+// is re-appended below the persona/identity content.
+func upsertSoulSkillPriorityBlock(soul string) string {
+	if strings.Contains(soul, soulOSMarker) {
+		soul = stripSoulMarkedBlock(soul)
+	}
+	soul = strings.TrimRight(soul, " \t\r\n")
+	if soul == "" {
+		return soulSkillPriorityBlock + "\n"
+	}
+	return soul + "\n\n" + soulSkillPriorityBlock + "\n"
+}
+
+// stripSoulMarkedBlock removes the block between soulOSMarker and the next ---
+// separator line. Copied from internal/openclaw/onboarding.go stripMarkedBlock
+// (package-private there).
+func stripSoulMarkedBlock(text string) string {
+	lines := strings.Split(text, "\n")
+	var cleaned []string
+	skip := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == soulOSMarker {
+			skip = true
+			continue
+		}
+		if skip && trimmed == "---" {
+			skip = false
+			continue
+		}
+		if skip {
+			continue
+		}
+		cleaned = append(cleaned, line)
+	}
+	return strings.Join(cleaned, "\n")
 }
 
 // restartHermesGateway bounces the hermes daemon so it reloads config.yaml. The

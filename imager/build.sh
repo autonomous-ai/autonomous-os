@@ -593,7 +593,7 @@ DEBIAN_FRONTEND=noninteractive TERM=xterm chroot ${MNT} apt-get install -y \
   systemd-sysv \
   xvfb xauth chromium chromium-sandbox git \
   fake-hwclock \
-  libportaudio2 portaudio19-dev pulseaudio pulseaudio-utils ffmpeg \
+  libportaudio2 portaudio19-dev pulseaudio pulseaudio-utils pulseaudio-module-bluetooth ffmpeg \
   alsa-utils libasound2-dev \
   libopenblas0 libgomp1 liblapack3 \
   libgpiod2 \
@@ -1448,7 +1448,7 @@ fi
 echo "node=\$(node -v) npm=\$(npm -v)"
 
 echo "[stage] Install OpenClaw"
-OPENCLAW_VERSION="\${OPENCLAW_VERSION:-2026.5.27}"
+OPENCLAW_VERSION="\${OPENCLAW_VERSION:-2026.6.10}"
 retry "npm install -g openclaw@\${OPENCLAW_VERSION} --omit=optional" 5
 openclaw --version || true
 

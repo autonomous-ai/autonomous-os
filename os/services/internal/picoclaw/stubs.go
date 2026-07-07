@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 
 	"go.autonomous.ai/os/domain"
 )
@@ -30,10 +29,8 @@ func (s *PicoclawService) PairWhatsapp(_ context.Context) <-chan domain.PairingE
 	return ch
 }
 
-func (s *PicoclawService) ResetAgent() error {
-	slog.Info("ResetAgent: no-op (picoclaw backend)", "component", "picoclaw")
-	return nil
-}
+// ResetAgent lives in reset.go — PicoClaw's factory-reset wipe (stop+disable
+// gateway → rm -rf /root/.picoclaw → picoclaw onboard), so it does real work.
 
 // RestartAgent restarts the picoclaw gateway via systemctl so callers that need a
 // full gateway reload (config/workspace re-read) get it. Delegates to
@@ -44,9 +41,10 @@ func (s *PicoclawService) RestartAgent() error {
 	return restartPicoclawGateway()
 }
 
-// RefreshModelsConfig — PicoClaw config is owned externally; we don't patch it.
+// RefreshModelsConfig — PicoClaw model config is owned by install.sh/presync.sh
+// (switch-runtime flow); we don't patch it from Device.
 func (s *PicoclawService) RefreshModelsConfig() error {
-	return nil
+	return domain.ErrNotSupportedByRuntime
 }
 
 // EnsureOnboarding lives in onboarding.go — it keeps the OS-managed block in the
@@ -61,12 +59,11 @@ func (s *PicoclawService) FetchChatHistory(_ string, _ int) (json.RawMessage, er
 }
 
 // GetConfigJSON returns the raw bytes of PicoClaw's config.json (the structure
-// file: agents/model_list/gateway/channel_list — secrets live in .security.yml,
-// which we never expose). Read-only; feeds the gw-config debug UI. The config dir
-// is the parent of the workspace (HOME=/root → /root/.picoclaw).
+// file: agents/model_list/gateway/channel_list/tools — secrets live in .security.yml,
+// which we never expose). Read-only; feeds the gw-config debug UI. Path helper +
+// MCP writers live in mcp.go.
 func (s *PicoclawService) GetConfigJSON() (json.RawMessage, error) {
-	path := filepath.Join(filepath.Dir(picoclawWorkspaceDir), "config.json")
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(picoclawConfigPath())
 	if err != nil {
 		return nil, fmt.Errorf("read picoclaw config.json: %w", err)
 	}
@@ -85,8 +82,10 @@ func (s *PicoclawService) StartModelSync(ctx context.Context) {
 	<-ctx.Done()
 }
 
+// UpdatePrimaryModel — the PicoClaw model registry (config.json model_list) is
+// owned by the runtime's own provisioning, not device-selectable.
 func (s *PicoclawService) UpdatePrimaryModel(_ string) error {
-	return nil
+	return domain.ErrNotSupportedByRuntime
 }
 
 // StartPrimaryModelWatch — no agent-side config file to watch.
@@ -103,17 +102,22 @@ func (s *PicoclawService) GetConfiguredChannel() string {
 	return "channel"
 }
 
-// CompactSession — PicoClaw does not expose a compact API. No-op.
+// CompactSession — PicoClaw does not expose a compact API; rotate via
+// NewSession instead.
 func (s *PicoclawService) CompactSession(sessionKey string) error {
-	slog.Info("CompactSession: no-op (picoclaw backend)", "component", "picoclaw", "session", sessionKey)
-	return nil
+	slog.Info("CompactSession: not supported (picoclaw backend)", "component", "picoclaw", "session", sessionKey)
+	return domain.ErrNotSupportedByRuntime
 }
 
-// ShouldRotateSession rotates on real session token count (see
-// domain.AgentGateway). PicoClaw reports the true session size, so the turn
-// count is unused. Mirrors the legacy 150k generic threshold.
+const rotateCompressRatioPercent = 75
+const picoclawFallbackTokenThreshold = 150_000
+
+// ShouldRotateSession rotates on real session token count (see domain.AgentGateway).
 func (s *PicoclawService) ShouldRotateSession(totalTokens, _ int) bool {
-	return totalTokens > 150_000
+	if compressAt := int(s.lastCompressAt.Load()); compressAt > 0 {
+		return totalTokens >= compressAt*rotateCompressRatioPercent/100
+	}
+	return totalTokens > picoclawFallbackTokenThreshold
 }
 
 // NewSession — PicoClaw has no sessions.new RPC. Dropping the local session id
@@ -124,16 +128,5 @@ func (s *PicoclawService) NewSession(sessionKey string) error {
 	return nil
 }
 
-// WriteMCPEntry — MCP connector writes are an OpenClaw-only feature today.
-// No-op so the AgentGateway interface is satisfied.
-func (s *PicoclawService) WriteMCPEntry(_ string, _ map[string]any) error {
-	slog.Info("WriteMCPEntry: no-op (picoclaw backend)", "component", "picoclaw")
-	return nil
-}
-
-// RemoveMCPEntry — pairs with WriteMCPEntry. Returns removed=false so callers
-// treat it as "entry already absent" — idempotent no-op, no restart triggered.
-func (s *PicoclawService) RemoveMCPEntry(_ string) (bool, error) {
-	slog.Info("RemoveMCPEntry: no-op (picoclaw backend)", "component", "picoclaw")
-	return false, nil
-}
+// WriteMCPEntry + RemoveMCPEntry live in mcp.go — PicoClaw writes tools.mcp.servers
+// in config.json (nested, gated by tools.mcp.enabled), so they do real work.

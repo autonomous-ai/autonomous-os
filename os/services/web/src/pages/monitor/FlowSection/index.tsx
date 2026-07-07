@@ -20,7 +20,7 @@ import { UserAvatar } from "./UserAvatar";
 
 // Category → turn types mapping
 const CAT_TYPES: Record<string, string[]> = {
-  mic: ["voice", "voice_command", "sound", "speech_emotion", "speech_emotion.detected"],
+  mic: ["voice", "voice_command", "voice_agent_handled", "sound", "speech_emotion", "speech_emotion.detected"],
   cam: ["motion", "motion.activity", "emotion.detected", "pose.ergo_risk", "presence.enter", "presence.leave", "presence.away", "light.level", "environment"],
   channel: ["telegram", "discord", "slack", "wechat", "channel"],
   web: ["web_chat"],

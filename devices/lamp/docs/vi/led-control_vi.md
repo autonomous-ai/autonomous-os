@@ -90,7 +90,9 @@ Khi kích hoạt scene, `POST /scene` thực hiện theo thứ tự:
 Khi servo đang hold (reading/focus), **animation cảm xúc bị chặn** để tránh phân tâm:
 
 - `happy`, `thinking`, `curious`, `sad`, v.v. → servo + LED bị bỏ qua
-- `greeting`, `sleepy`, `stretching` → **cho qua** (đây là emotion thay đổi trạng thái: chào, ngủ, thức dậy)
+- `greeting`, `sleepy`, `stretching` → **cho qua** (đây là emotion thay đổi trạng thái: chào, ngủ, thức dậy) — **chỉ áp dụng cho hold do scene preset**
+
+**`/servo/hold` tường minh** (lệnh agent kiểu "nhìn lên tường giữ đó") set `_hold_explicit` và chặn servo với **mọi** emotion, kể cả nhóm scene-change — trước đây `[HW:/emotion:greeting]` đứng cuối reply lợi dụng miễn trừ này, đè pose đã lệnh bằng pose cuối của animation greeting. `/servo/resume` và chuyển scene sẽ xoá cờ.
 
 Nghĩa là khi focus, sensing event vẫn tới OpenClaw nhưng Lamp giữ nguyên trạng thái vật lý — không cử động, LED ổn định.
 

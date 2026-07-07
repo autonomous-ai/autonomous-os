@@ -98,6 +98,22 @@ def _db_to_pct(db: float) -> int:
     return max(0, min(100, pct))
 
 
+def _bt_sink() -> Optional[str]:
+    """The bluez sink name while a BT headset route is active, else None.
+    Volume must then go through PulseAudio — amixer would silently adjust
+    the idle built-in speaker card instead of the headset."""
+    try:
+        from hal.drivers import audio_route
+        if not audio_route.bt_active():
+            return None
+        from hal.drivers.bluetooth_manager import BluetoothManager
+        mgr = BluetoothManager()
+        mac = mgr.active_mac
+        return mgr.pa_sink_for_mac(mac) if mac else None
+    except Exception:
+        return None
+
+
 def _persist_volume(pct: int) -> None:
     """Persist the last-set volume so os-server restores it at next boot
     instead of resetting to the DEVICE.md startup_volume. Best-effort — a
@@ -112,12 +128,20 @@ def _persist_volume(pct: int) -> None:
 
 @router.post("/audio/volume", response_model=StatusResponse)
 def set_volume(req: VolumeRequest):
-    """Set system speaker volume (0-100%)."""
+    """Set system speaker volume (0-100%). Routes to the BT headset sink
+    (PulseAudio) when one is active, else to the built-in speaker (amixer)."""
+    pct = max(0, min(100, req.volume))
+    sink = _bt_sink()
+    if sink:
+        from hal.drivers.bluetooth_manager import BluetoothManager
+        if not BluetoothManager().set_pa_sink_volume(sink, pct):
+            raise HTTPException(503, "Bluetooth sink volume change failed")
+        _persist_volume(pct)
+        return {"status": "ok"}
     controls, dev = _detect_playback_controls()
     if not controls:
         raise HTTPException(503, "No audio mixer controls found")
     cmd_prefix = ["amixer", "-D", dev] if dev else ["amixer"]
-    pct = max(0, min(100, req.volume))
     dac_db = _pct_to_db(pct)
     for ctrl in controls:
         value = f"{dac_db:.1f}dB" if ctrl.upper() in _DAC_CONTROLS else f"{pct}%"
@@ -145,6 +169,12 @@ def get_volume():
     DAC controls are tried first so round-trip is stable on codecs whose raw%
     range differs from our [-60dB, +2dB] envelope (e.g. WM8960, Rockchip).
     """
+    sink = _bt_sink()
+    if sink:
+        from hal.drivers.bluetooth_manager import BluetoothManager
+        vol = BluetoothManager().pa_sink_volume(sink)
+        if vol is not None:
+            return {"control": "bluetooth", "volume": vol}
     controls, dev = _detect_playback_controls()
     cmd_prefix = ["amixer", "-D", dev] if dev else ["amixer"]
     sorted_controls = sorted(

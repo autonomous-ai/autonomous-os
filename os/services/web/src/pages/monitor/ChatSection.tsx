@@ -6,6 +6,9 @@ import {
 } from "lucide-react";
 import { API } from "./types";
 import { getDeviceConfig } from "@/lib/api";
+import {
+  putChatImage, getAllChatImages, deleteChatImages, pruneChatImages, clearChatImages,
+} from "@/lib/chatImageStore";
 import { useT, setLanguage } from "@/lib/i18n";
 import type { DisplayEvent, MonitorEvent } from "./types";
 
@@ -368,8 +371,11 @@ interface ChatMessage {
   role: "user" | "agent";
   text: string;
   time: string;
+  ts?: number;         // epoch ms — used to age-gate pending-run recovery after reload
   date?: string;       // YYYY-MM-DD for date separators
-  imageUrl?: string;   // data: URL for attached images (not persisted to save space)
+  imageUrl?: string;   // data: URL for attached images — stripped from localStorage
+                       // (quota), persisted separately in IndexedDB (chatImageStore)
+                       // and re-attached by the mount rehydrate effect
   fileName?: string;   // original filename for non-image files
   fileSize?: number;   // bytes
   runId?: string;
@@ -418,12 +424,20 @@ function loadConvos(): Conversation[] {
   }
 }
 
+// How long after send a pending turn is still recoverable across a page
+// reload. Within this window the pending bubble is kept alive and the
+// mount-recovery effect re-attaches to the run (the reply is backfilled
+// from the flow JSONL replay); beyond it the turn is finalized as lost.
+const PENDING_RECOVERY_WINDOW_MS = 10 * 60 * 1000;
+
 function cleanPending(msgs: ChatMessage[]): ChatMessage[] {
-  return msgs.map((m) =>
-    m.pending
-      ? { ...m, pending: false, text: m.text || "…", error: !m.text }
-      : m,
-  );
+  return msgs.map((m) => {
+    if (!m.pending) return m;
+    // Recent pending turn with a runId → keep it pending so recovery can
+    // re-attach after reload instead of dropping the in-flight reply.
+    if (m.runId && m.ts && Date.now() - m.ts < PENDING_RECOVERY_WINDOW_MS) return m;
+    return { ...m, pending: false, text: m.text || "…", error: !m.text };
+  });
 }
 
 function titleFromMessages(msgs: ChatMessage[]): string {
@@ -443,7 +457,9 @@ function saveConvos(convos: Conversation[]) {
   try {
     const trimmed = convos.slice(0, MAX_CONVOS).map((c) => ({
       ...c,
-      // Strip large data from localStorage (imageUrl data: URLs are too large)
+      // Strip large data from localStorage (imageUrl data: URLs are too large).
+      // The images themselves live in IndexedDB (chatImageStore) keyed by
+      // message id and are re-attached on mount.
       messages: c.messages.slice(-MAX_MESSAGES).map(({ imageUrl: _, ...m }) => m),
       // fileName/fileSize are kept — they're small strings/numbers
     }));
@@ -460,6 +476,7 @@ function clearLocalChatHistory() {
     localStorage.removeItem(CONVOS_KEY);
     localStorage.removeItem(ACTIVE_KEY);
   } catch {}
+  void clearChatImages();
 }
 
 function loadActiveId(): string | null {
@@ -515,6 +532,32 @@ export function ChatSection({ events, isActive }: Props) {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+
+  // Rehydrate image attachments from IndexedDB — saveConvos() strips
+  // `imageUrl` from localStorage (quota), so after a reload the thumbnails
+  // are gone until this re-attaches them by message id. Also prunes stored
+  // images whose message no longer exists in any conversation (trimmed by
+  // MAX_MESSAGES/MAX_CONVOS, deleted convos, or TTL-dropped history) —
+  // fresh entries are age-guarded inside pruneChatImages, so an image
+  // written moments ago for a not-yet-saved message survives.
+  useEffect(() => {
+    let cancelled = false;
+    getAllChatImages().then((stored) => {
+      if (cancelled) return;
+      // Keep-set from the persisted snapshot (same source the state was
+      // initialized from) — computed outside the updater to keep it pure.
+      const keepIds = new Set(loadConvos().flatMap((c) => c.messages.map((m) => m.id)));
+      void pruneChatImages(keepIds);
+      if (stored.size === 0) return;
+      setConvos((prev) => prev.map((c) => ({
+        ...c,
+        messages: c.messages.map((m) =>
+          !m.imageUrl && stored.has(m.id) ? { ...m, imageUrl: stored.get(m.id) } : m,
+        ),
+      })));
+    });
+    return () => { cancelled = true; };
+  }, []);
   const [editTitle, setEditTitle] = useState("");
   const [search, setSearch] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -1024,7 +1067,65 @@ export function ChatSection({ events, isActive }: Props) {
         return;
       }
     }
-  }, [events, updateMessages]);
+    // `sending` is here so the reload-recovery effect below (which attaches
+    // pendingRunIdRef and flips sending on) forces a re-scan of the already
+    // replayed events even when no new flow event arrives afterwards.
+  }, [events, updateMessages, sending]);
+
+  // Recover an in-flight turn after a page reload. The run-tracking refs
+  // (pendingRunIdRef & co.) live only in memory, so a reload while waiting
+  // used to orphan the turn: the reply never landed even though the device
+  // finished it and the flow JSONL replay (last 500 events, re-sent on every
+  // flow-stream connect) already carried the tts_send. cleanPending() keeps
+  // recent pending bubbles alive (see PENDING_RECOVERY_WINDOW_MS); here we
+  // re-attach the refs so the flow-events watcher above backfills the reply.
+  // Runs once, on the first render where the chat tab is actually active —
+  // before that no flow events reach this component anyway.
+  const recoveryDoneRef = useRef(false);
+  useEffect(() => {
+    if (!isActive || recoveryDoneRef.current) return;
+    recoveryDoneRef.current = true;
+    if (pendingRunIdRef.current) return; // a live send is already tracked
+    const convo = convos.find((c) => c.id === activeId);
+    if (!convo) return;
+    let idx = -1;
+    for (let i = convo.messages.length - 1; i >= 0; i--) {
+      const m = convo.messages[i];
+      if (m.pending && m.runId && m.role === "agent") { idx = i; break; }
+    }
+    if (idx < 0) return;
+    const runId = convo.messages[idx].runId!;
+    const prevUser = convo.messages.slice(0, idx).reverse().find((m) => m.role === "user");
+    pendingRunIdRef.current = runId;
+    pendingUserTextRef.current = prevUser?.text ?? null;
+    setSending(true);
+    // Same give-up guard as sendText: if neither the live bus nor the flow
+    // replay resolves the run, finalize as timed out instead of spinning
+    // forever. 30s is plenty — a completed turn backfills within ~2s.
+    const timer = setTimeout(() => {
+      if (pendingRunIdRef.current !== runId) return;
+      pendingRunIdRef.current = null;
+      pendingUserTextRef.current = null;
+      setSending(false);
+      setThinkingText(null);
+      setToolChips([]);
+      const streamed = deltaBufRef.current.get(runId);
+      deltaBufRef.current.delete(runId);
+      thinkingBufRef.current.delete(runId);
+      toolChipsRef.current.clear();
+      setConvos((prev) =>
+        prev.map((c) =>
+          c.id === convo.id
+            ? { ...c, messages: c.messages.map((m) => m.runId === runId && m.pending
+                ? { ...m, text: streamed || "⏱ no response", pending: false, error: !streamed }
+                : m) }
+            : c,
+        ),
+      );
+    }, 30_000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive]);
 
   // Scroll to bottom on conversation switch
   useEffect(() => {
@@ -1083,7 +1184,11 @@ export function ChatSection({ events, isActive }: Props) {
       setTimeout(() => setConfirmDeleteId((prev) => prev === id ? null : prev), 3000);
       return;
     }
-    setConvos((prev) => prev.filter((c) => c.id !== id));
+    setConvos((prev) => {
+      const gone = prev.find((c) => c.id === id);
+      if (gone) void deleteChatImages(gone.messages.map((m) => m.id));
+      return prev.filter((c) => c.id !== id);
+    });
     if (activeId === id) setActiveId(null);
     setConfirmDeleteId(null);
   };
@@ -1232,11 +1337,14 @@ export function ChatSection({ events, isActive }: Props) {
     const now = nowDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     const dateStr = nowDate.toISOString().slice(0, 10);
     const userMsg: ChatMessage = {
-      id: `u-${Date.now()}`, role: "user", text, time: now, date: dateStr,
+      id: `u-${Date.now()}`, role: "user", text, time: now, ts: nowDate.getTime(), date: dateStr,
       imageUrl: filePreview ?? undefined,
       fileName: (!fileIsImage && fileName) ? fileName : undefined,
       fileSize: (!fileIsImage && fileSize) ? fileSize : undefined,
     };
+    // Persist the attachment out-of-band: localStorage strips imageUrl on
+    // save, IndexedDB keeps it so the thumbnail survives a reload.
+    if (filePreview) void putChatImage(userMsg.id, filePreview);
 
     setConvos((prev) =>
       prev.map((c) => {
@@ -1271,7 +1379,7 @@ export function ChatSection({ events, isActive }: Props) {
         setConvos((prev) =>
           prev.map((c) =>
             c.id === targetId
-              ? { ...c, messages: [...c.messages, { id: `l-${runId}`, role: "agent", text: "", time: replyTime, runId, pending: true }] }
+              ? { ...c, messages: [...c.messages, { id: `l-${runId}`, role: "agent", text: "", time: replyTime, ts: Date.now(), runId, pending: true }] }
               : c,
           ),
         );
@@ -1589,7 +1697,13 @@ export function ChatSection({ events, isActive }: Props) {
             <button
               onClick={() => {
                 if (confirm(`Delete all ${convos.filter((c) => !c.pinned).length} unpinned conversations?`)) {
-                  setConvos((prev) => prev.filter((c) => c.pinned));
+                  setConvos((prev) => {
+                    const goneIds = prev
+                      .filter((c) => !c.pinned)
+                      .flatMap((c) => c.messages.map((m) => m.id));
+                    void deleteChatImages(goneIds);
+                    return prev.filter((c) => c.pinned);
+                  });
                   setActiveId(null);
                 }
               }}

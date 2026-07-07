@@ -56,6 +56,7 @@ def activate_scene(req: SceneRequest):
         # Release hold before aiming so the move isn't blocked
         if state.animation_service._hold_mode:
             state.animation_service._hold_mode = False
+            state.animation_service._hold_explicit = False
 
         def _aim_then_hold():
             aim_servo(ServoAimRequest(direction=aim_dir))
@@ -69,6 +70,7 @@ def activate_scene(req: SceneRequest):
         state.logger.info("Scene %s: servo hold", req.scene)
     elif servo_mode != "hold" and state.animation_service and state.animation_service._hold_mode:
         state.animation_service._hold_mode = False
+        state.animation_service._hold_explicit = False
         state.logger.info("Scene %s: servo released", req.scene)
 
     cam = preset.get("camera")
@@ -127,6 +129,7 @@ def deactivate_scene():
     # Release servo hold
     if state.animation_service and state.animation_service._hold_mode:
         state.animation_service._hold_mode = False
+        state.animation_service._hold_explicit = False
         state.logger.info("Scene off: servo released")
 
     # Re-enable camera

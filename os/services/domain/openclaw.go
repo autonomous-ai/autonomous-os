@@ -27,12 +27,12 @@ type AgentPayload struct {
 		Error     string `json:"error,omitempty"`
 		// Tool stream fields
 		// OpenClaw uses "name" for tool name; "tool" is a device alias kept for backwards compat.
-		Tool          string          `json:"tool,omitempty"`
-		Name          string          `json:"name,omitempty"`
-		ToolCallID    string          `json:"toolCallId,omitempty"`
-		ToolArgs      string          `json:"toolArgs,omitempty"`
-		Args          json.RawMessage `json:"args,omitempty"`    // OpenClaw sends args as object e.g. {"command":"curl ..."}
-		Arguments     string          `json:"arguments,omitempty"`
+		Tool       string          `json:"tool,omitempty"`
+		Name       string          `json:"name,omitempty"`
+		ToolCallID string          `json:"toolCallId,omitempty"`
+		ToolArgs   string          `json:"toolArgs,omitempty"`
+		Args       json.RawMessage `json:"args,omitempty"` // OpenClaw sends args as object e.g. {"command":"curl ..."}
+		Arguments  string          `json:"arguments,omitempty"`
 		// Result/PartialResult: legacy OpenClaw versions sent strings; 5.4+ with
 		// openai-codex/gpt-5.5 sends structured tool results (objects with
 		// `content: [{type:"text", text:"..."}]`). Keep as RawMessage and use
@@ -123,6 +123,8 @@ type TokenUsage struct {
 	CacheReadTokens   int `json:"cacheReadTokens,omitempty"`
 	CacheWriteTokens  int `json:"cacheWriteTokens,omitempty"`
 	TotalTokens       int `json:"totalTokens,omitempty"`
+	CompressAtTokens  int `json:"compressAtTokens,omitempty"`
+	SummarizeAtTokens int `json:"summarizeAtTokens,omitempty"`
 }
 
 // ChatPayload represents a chat stream event from the gateway.
@@ -131,7 +133,7 @@ type ChatPayload struct {
 	SessionKey   string          `json:"sessionKey"`
 	State        string          `json:"state"` // "partial", "final", "error"
 	RawMessage   json.RawMessage `json:"message"`
-	Message      string          `json:"-"` // resolved from RawMessage
+	Message      string          `json:"-"`    // resolved from RawMessage
 	Role         string          `json:"role"` // "assistant", "user"
 	ErrorMessage string          `json:"errorMessage,omitempty"`
 }

@@ -7,3 +7,7 @@ class OpenAIRealtimeError(Exception):
 
 class GeminiLiveError(Exception):
     """Raised on Gemini Live API errors (e.g. go_away)."""
+
+
+class QwenRealtimeError(Exception):
+    """Raised on Qwen Omni Realtime API errors."""

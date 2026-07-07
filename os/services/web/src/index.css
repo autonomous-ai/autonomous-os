@@ -340,6 +340,23 @@
   cursor: not-allowed;
 }
 
+/* Bluetooth device row: the Connect button stays hidden until the row is
+ * hovered (or reached by keyboard), macOS-settings style. Touch devices have
+ * no hover, so the button is always visible there. */
+.lm-root .lm-bt-row .lm-bt-hover-reveal {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.lm-root .lm-bt-row:hover .lm-bt-hover-reveal,
+.lm-root .lm-bt-row:focus-within .lm-bt-hover-reveal {
+  opacity: 1;
+}
+@media (hover: none) {
+  .lm-root .lm-bt-row .lm-bt-hover-reveal {
+    opacity: 1;
+  }
+}
+
 /* Hoverable card / list row */
 .lm-root .lm-u-interactive {
   cursor: pointer;

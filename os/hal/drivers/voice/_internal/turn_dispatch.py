@@ -12,16 +12,23 @@ from hal.drivers.voice.speech_emotion.constants import UNKNOWN_USER_LABEL
 logger = logging.getLogger("hal.voice")
 
 
-def _take_vision_handoff() -> str:
-    """Consume the frame the realtime `look` tool just captured and return a
-    one-line hint pointing the main agent at it (so it reuses the image instead
-    of snapshotting again), or "" if none is fresh.
+def _take_vision_handoff() -> tuple[str, str]:
+    """Consume the frame the realtime `look` tool just captured and return
+    ``(hint, image_b64)`` — a one-line hint for the main agent plus the frame
+    itself as base64 — or ``("", "")`` if none is fresh.
+
+    The frame rides the sensing POST's ``image`` field; os-server describes it
+    with a vision model and forwards the description as text (describe-first —
+    see internal/vision in os/services). The path stays in the hint for
+    traceability/monitoring only: telling the agent to *read* it does not work
+    on a text-only main model (tool-read image blocks are silently dropped).
 
     Always clears the app_state slot — the frame belongs to exactly ONE turn
     (look runs in run_realtime_turn, this runs right after in the same turn), so a
     later unrelated delegate never picks up a stale image. A freshness guard is a
     belt-and-suspenders backstop in case dispatch didn't run on the prior turn.
     """
+    import base64
     import os
     import time
 
@@ -33,16 +40,21 @@ def _take_vision_handoff() -> str:
     state.realtime_look_frame_path = None
     state.realtime_look_frame_ts = 0.0
     if not path:
-        return ""
+        return "", ""
     max_age = getattr(cfg, "REALTIME_GEMINI_VISION_HANDOFF_MAX_AGE_S", 20.0)
     if max_age > 0 and (time.monotonic() - ts) > max_age:
-        return ""
-    if not os.path.exists(path):
-        return ""
-    return (
-        f"[vision-image] {path} (a photo was JUST captured for this request — "
-        "read this file to answer the visual question; do NOT take a new snapshot)"
+        return "", ""
+    try:
+        with open(path, "rb") as f:
+            image_b64 = base64.b64encode(f.read()).decode("ascii")
+    except OSError:
+        return "", ""
+    hint = (
+        f"[vision-image] {path} (a photo was JUST captured for this request; the "
+        "image or its description accompanies this message — answer the visual "
+        "question from it; do NOT take a new snapshot)"
     )
+    return hint, image_b64
 
 
 def dispatch_turn(decorator, sensing_sender, combined, audio_buffer, ser_audio_buffer, rt):
@@ -59,7 +71,7 @@ def dispatch_turn(decorator, sensing_sender, combined, audio_buffer, ser_audio_b
     """
     # Consume the realtime `look` frame once per turn, regardless of branch below
     # (so a handled turn that already used it doesn't leak it to a later delegate).
-    vision_hint = _take_vision_handoff()
+    vision_hint, vision_image = _take_vision_handoff()
 
     final_text, event_type = decorator.resolve_wake_word_split(combined)
     user = UNKNOWN_USER_LABEL
@@ -92,7 +104,11 @@ def dispatch_turn(decorator, sensing_sender, combined, audio_buffer, ser_audio_b
                 " (+vision-image)" if vision_hint else "",
             )
             if sensing_msg:
-                sensing_sender.send(sensing_msg, event_type=event_type)
+                sensing_sender.send(
+                    sensing_msg,
+                    event_type=event_type,
+                    image_b64=vision_image if vision_hint else "",
+                )
         else:
             # Realtime not active, OR it was active but produced no output
             # (e.g. receive() timed out) — send to the OS server normally so the
@@ -100,7 +116,11 @@ def dispatch_turn(decorator, sensing_sender, combined, audio_buffer, ser_audio_b
             # frame was captured this turn (Gemini died mid-vision), hand it off so
             # the agent answers from it instead of snapshotting again.
             fallback_msg = f"{vision_hint}\n{final_msg}" if vision_hint else final_msg
-            sensing_sender.send(fallback_msg, event_type=event_type)
+            sensing_sender.send(
+                fallback_msg,
+                event_type=event_type,
+                image_b64=vision_image if vision_hint else "",
+            )
 
     # Submit SER — uses the UNTRIMMED snapshot so laughter / sighs survive.
     decorator.submit_speech_emotion_from_session(ser_audio_buffer, user=user)

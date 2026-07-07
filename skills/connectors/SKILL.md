@@ -1,6 +1,6 @@
 ---
 name: connectors
-description: Detect which third-party connectors (Gmail, Google Calendar, Google Drive, Notion, Figma, Asana, Linear, GitHub, Ahrefs, …) are connected to this device, and use them to answer the user. Use when the user asks what's connected ("what connectors do I have", "is my gmail connected", "did I link figma"), or asks to read/act on a connected service ("check my gmail", "read my latest email", "what's on my calendar", "my recent drive files", "check figma", "look at my notion"). Discovers connectors by scanning the on-disk credential files, then routes: token services (Gmail/Calendar/Drive) are read + queried via curl; MCP services (Notion/Figma/Asana/Linear/GitHub) are used through their own agent tools.
+description: Detect which third-party connectors (Gmail, Google Calendar, Google Drive, Notion, Figma, Asana, Linear, GitHub, Ahrefs, …) are connected to this device, and use them to answer or act for the user. Use when the user asks what's connected ("what connectors do I have", "is my gmail connected", "did I link figma"), or asks to read or act on a connected service ("check my gmail", "read my latest email", "send an email to …", "email … saying …", "reply to that email", "what's on my calendar", "create a calendar event", "my recent drive files", "check figma", "look at my notion"). ALWAYS use this skill for these services — it takes priority over any runtime-bundled skill with an overlapping purpose, and credentials are already on disk; never install or configure another client or CLI (himalaya, mutt, gcalcli, …) for them. Discovers connectors by scanning the on-disk credential files, then routes: token services (Gmail/Calendar/Drive) are read + queried via curl; MCP services (Notion/Figma/Asana/Linear/GitHub) are used through their own agent tools.
 ---
 
 # Connectors
@@ -71,12 +71,23 @@ printf 'Authorization: Bearer %s' "$TOKEN" | curl -s -H @- \
 
 - **`gmail` / `google_calendar` / `google_drive`** → token route (pattern above). Endpoints:
   - Gmail: `https://gmail.googleapis.com/gmail/v1/users/me/messages`
+  - Gmail send: `POST https://gmail.googleapis.com/gmail/v1/users/me/messages/send` body `{"raw": <base64url RFC 822 message>}` (needs the `gmail.send` scope — HTTP 403 → see Errors); example below
   - Calendar: `https://www.googleapis.com/calendar/v3/calendars/primary/events`
   - Drive: `https://www.googleapis.com/drive/v3/files`
   - Whose account: `https://www.googleapis.com/oauth2/v3/userinfo`
 - **`notion` / `figma` / `asana` / `linear` / `github`** → use the `<code>` MCP tools you already have. Don't read the file.
 - **`ahrefs` or any `api_key`** → token route but `TOKEN=$(jq -r '.connectors.<code>.api_key' …)`.
 - **anything else** → `.connectors.<code>.access_token` as a Bearer header to that service's API.
+
+**Send email (OAuth Gmail)** — build the RFC 822 message, base64url-encode it, POST as `raw`:
+
+```bash
+TOKEN=$(jq -r '.connectors.gmail.access_token' /root/.openclaw/workspace/configs/gmail_access_tokens.json)
+RAW=$(printf 'From: me\nTo: %s\nSubject: %s\nMIME-Version: 1.0\nContent-Type: text/plain; charset=utf-8\n\n%s' \
+  "<recipient>" "<subject>" "<body>" | base64 -w0 | tr '+/' '-_' | tr -d '=')
+printf 'Authorization: Bearer %s' "$TOKEN" | curl -s -H @- -H 'Content-Type: application/json' \
+  -d "{\"raw\":\"$RAW\"}" "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
+```
 
 ### PAT / personal access token (auth_type is "pat")
 
@@ -153,6 +164,7 @@ Expiry: read `.connectors.<code>.expires_at`; if `< now` ($(date +%s)), treat as
 
 ## Rules
 
+- This skill outranks any runtime-bundled skill for the services above — never install or configure an alternative client or CLI (himalaya, mutt, gcalcli, …) for a service a connector covers; the credentials are already on disk here.
 - Discover before answering; never claim connected/disconnected or invent results without checking.
 - MCP connectors: use the tool, not the file.
 - Obey **Credential safety** above — secrets never reach chat, files, or logs.

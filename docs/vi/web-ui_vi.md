@@ -156,6 +156,7 @@ Monitor poll API system/HW mỗi **3 giây**. Flow dùng hybrid theo file: REST 
 | `POST /hw/servo/upload` | Upload recording CSV (`timestamp` + cột `<joint>.pos`) để thêm/replace animation |
 | `GET /hw/display` | mode, hardware, available_expressions |
 | `GET /hw/audio/volume` | control, volume (0–100) |
+| `GET /hw/voice/mic-level` | SSE stream (~10Hz): level (RMS mic nói, thang int16), threshold (VAD), active, muted, sensing_level / sensing_age_s / sensing_threshold (mic tiếng ồn — mẫu SoundPerception gần nhất, null khi sensing tắt) |
 | `GET /hw/led/color` | led_count, color [R,G,B], hex (#rrggbb) |
 
 ---
@@ -191,6 +192,22 @@ Gồm các card:
 - Mic available + đang listening (badge LIVE)
 - TTS available + đang speaking (badge SPEAKING)
 - Volume hiện tại
+- **Thanh VU mic level** (ngay dưới slider volume), lấy từ SSE stream `GET
+  /hw/voice/mic-level` (~10Hz, qua proxy `/api/hardware`); RMS thô được map
+  sang phần trăm theo thang dBFS (-60dBFS → 0%, 0dBFS → 100%), mỗi bar có
+  vạch amber đánh dấu ngưỡng trigger tương ứng kèm số `RMS hiện tại /
+  ngưỡng` bên phải label:
+  - **Mic level** — mic của voice pipeline (STT); nhảy realtime khi user nói
+    vào device. Vạch = ngưỡng VAD (giọng phải vượt vạch thì device mới bắt
+    đầu nghe). Rơi về 0 khi TTS/nhạc đang phát (mic đang drain); mờ đi kèm
+    chữ "muted" khi mic bị mute.
+  - **Noise mic** — mic sensing (SoundPerception): mỗi vòng sensing poll chỉ
+    lấy 1 mẫu RMS 0.5s, nên bar này nhảy nấc vài giây/lần chứ không mượt
+    (mẫu cũng tạm dừng trong lúc/sau khi TTS nói). Vạch = ngưỡng tiếng ồn
+    lớn. Ẩn hoàn toàn khi device không chạy sound perception; về 0 khi mẫu
+    cuối cũ hơn 60s.
+  Stream vẫn mở khi mic nói bị mute (mic sensing độc lập với nút mute), và
+  đóng khi tab trình duyệt bị ẩn.
 
 **Hardware** (card ngang)
 - 8 badge: Servo / LED / Camera / Audio / Sensing / Voice / TTS / Display
@@ -309,7 +326,12 @@ Hành vi gom nhóm Turn Pipeline:
 
 ### 5.5 Logs Section
 
-- Tab log runtime cho HAL, OS (os-server), và OpenClaw service logs.
+- Tab log runtime: HAL, OS (os-server), Buddy, cùng **Agent** và **Agent Service** (source id `openclaw` / `openclaw-service`).
+- Tab **Agent**/**Agent Service** là runtime-aware — backend (`resolveLogSource` trong `server/logs.go`) trỏ chúng tới backend agentic nào đang chạy:
+  - openclaw: `Agent` → `/var/log/openclaw/agent.log` (fallback file `/tmp/openclaw/openclaw-*.log` mới nhất), `Agent Service` → `journal:openclaw.service`
+  - hermes: `Agent` → `/root/.hermes/logs/agent.log`, `Agent Service` → `journal:hermes-gateway.service`
+  - picoclaw: `Agent` → `/root/.picoclaw/logs/gateway.log`, `Agent Service` → `journal:picoclaw.service`
+  - codex: `Agent` → `journal:codex.service`, `Agent Service` → `journal:codex.service` (bridge gatewayd không có file log — chỉ journal)
 - Mỗi panel stream qua SSE (`GET /api/logs/stream?source=<source>`) với fallback polling.
 - Hỗ trợ filter theo level (ALL/DEBUG/INFO/WARN/ERROR) và tìm kiếm text/regex.
 
@@ -320,7 +342,12 @@ Hành vi gom nhóm Turn Pipeline:
 Giao diện chat tương tác với agent. Layout: sidebar (danh sách hội thoại) + vùng chat chính.
 
 **Hội thoại**
-- Nhiều hội thoại lưu trong localStorage (tối đa 50, mỗi cái 200 tin nhắn)
+- Nhiều hội thoại lưu trong localStorage (tối đa 50, mỗi cái 200 tin nhắn).
+  Ảnh đính kèm quá lớn so với quota localStorage nên data-URL bị strip lúc
+  save và được lưu riêng trong **IndexedDB** (`lib/chatImageStore.ts`, key
+  theo message id); một effect lúc mount gắn lại ảnh sau reload và prune các
+  entry mà message không còn tồn tại. Xóa hội thoại (hoặc Clear/history-TTL)
+  cũng xóa luôn ảnh đã lưu.
 - Sidebar: tìm kiếm, ghim, đổi tên (double-click), xóa (xác nhận 2 lần), xuất TXT
 - Nhóm theo ngày: Today / Yesterday / This week / Older, ghim lên đầu. Mỗi header nhóm có đường kẻ mảnh và số lượng item.
 - Mỗi dòng hiển thị một chấm avatar màu (hash từ id hội thoại, theo palette), tiêu đề, nhãn thời gian tương đối đã bản địa hóa (`vừa xong` / `5 phút` / `2 giờ` / `hôm qua` / `3 ngày`, ẩn khi hover), và preview tin nhắn cuối. Hội thoại đang mở được đánh dấu bằng thanh dọc amber bên trái.
@@ -330,7 +357,7 @@ Giao diện chat tương tác với agent. Layout: sidebar (danh sách hội tho
 **Nhập tin nhắn**
 - Textarea, Shift+Enter xuống dòng, Enter gửi
 - Đính kèm file/ảnh (tối đa 10 MB): nút, kéo thả, dán từ clipboard
-- Gửi qua `POST /api/sensing/event` với `type: "web_chat"`. Handler mark run qua `MarkWebChatRun(runID)` để reply của agent bị suppress TTS (chỉ hiện trong UI này) và bỏ qua wake greeting / opening filler. Web chat có image attach: lưu vào `/tmp/web-chat-*.jpg` và gắn vào tin nhắn agent qua `[image: <path>]`.
+- Gửi qua `POST /api/sensing/event` với `type: "web_chat"`. Handler mark run qua `MarkWebChatRun(runID)` để reply của agent bị suppress TTS (chỉ hiện trong UI này) và bỏ qua wake greeting / opening filler. Ảnh đính kèm đi trong field `image` của payload (raw base64); handler (1) lưu vào `/tmp/web-chat-*.jpg` và chèn tag `[image: <path>]` để tool đọc file trực tiếp (vd face enrollment), và (2) chạy gate describe-first trong `internal/vision` (xem `docs/realtime-voice.md`, phần "Bàn giao frame"): main model text-only nhận dòng `[image description]` do vision model của catalog tả, model có vision nhận attachment thô. Cả hai bước chạy TRƯỚC fork queue lúc agent bận, nên turn bị queue replay với description đã nằm sẵn trong message.
 
 **Streaming real-time**
 - **Thinking indicator**: khối tím thu gọn được, hiển thị reasoning tokens của LLM khi stream (`thinking` events). Click mở rộng toàn bộ (max-height 200px, scroll). Tự ẩn khi response hoàn tất.
@@ -340,7 +367,8 @@ Giao diện chat tương tác với agent. Layout: sidebar (danh sách hội tho
 **Xử lý response**
 - Theo dõi response qua `runId` correlation trên SSE events
 - HW control markers inline (`[HW:/emotion:...]`) được lọc bỏ khỏi text hiển thị
-- Timeout 30 giây: nếu đã nhận streaming text thì hiển thị phần đó; nếu không thì báo lỗi với nút retry
+- Timeout 120 giây: nếu đã nhận streaming text thì hiển thị phần đó; nếu không thì báo lỗi với nút retry
+- **Khôi phục turn đang chờ sau reload**: message lưu kèm epoch `ts`; bubble reply đang pending dưới 10 phút sẽ sống sót qua reload thay vì bị chốt thành lỗi. Ở lần render đầu khi tab Chat active, UI re-attach vào `runId` đã lưu và backfill câu trả lời từ flow JSONL replay (`/api/agent/flow-stream` gửi lại 500 event cuối trong ngày mỗi lần connect — `tts_send` / `tts_suppressed` / `no_reply`). Nếu sau 30 giây không resolve được thì chốt thành "no response" kèm nút retry.
 - Local intent fast path: response dưới 50ms bypass agent
 - Busy/dropped: hiển thị "busy — try again"
 - Markdown: bold, italic, inline code (tô màu amber), code block (monospace), URL, danh sách, và bảng (header có nền + hàng zebra)

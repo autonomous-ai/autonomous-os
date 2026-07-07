@@ -284,7 +284,7 @@ def face_status():
 def face_owners_detail():
     """List enrolled persons with photo filenames."""
     fr = _require_face_recognizer()
-    from hal.drivers.sensing.perceptions.processors.facerecognizer import USERS_DIR
+    from hal.drivers.sensing.perceptions.processors.facerecognizer_v2 import USERS_DIR
 
     persons: list[FacePersonDetail] = []
     if USERS_DIR.is_dir():
@@ -333,7 +333,7 @@ def face_owners_detail():
 @router.get("/face/photo/{label}/{filename}", tags=["Face"])
 def face_photo(label: str, filename: str):
     """Serve an owner photo as JPEG."""
-    from hal.drivers.sensing.perceptions.processors.facerecognizer import USERS_DIR
+    from hal.drivers.sensing.perceptions.processors.facerecognizer_v2 import USERS_DIR
 
     norm = FacePerception.normalize_label(label)
     path = (USERS_DIR / norm / filename).resolve()
@@ -347,7 +347,7 @@ def face_photo(label: str, filename: str):
 @router.get("/face/file/{label}/{filepath:path}", tags=["Face"])
 def face_file(label: str, filepath: str):
     """Serve any text file from a user's directory."""
-    from hal.drivers.sensing.perceptions.processors.facerecognizer import USERS_DIR
+    from hal.drivers.sensing.perceptions.processors.facerecognizer_v2 import USERS_DIR
     from hal.drivers.voice.music_service import canonicalize_person
 
     norm = canonicalize_person(label)
@@ -402,7 +402,7 @@ def user_rename(req: UserRenameRequest):
     - new_label must not collide with an existing folder.
     - old folder must exist.
     """
-    from hal.drivers.sensing.perceptions.processors.facerecognizer import (
+    from hal.drivers.sensing.perceptions.processors.facerecognizer_v2 import (
         FacePerception,
         USERS_DIR,
     )
@@ -523,7 +523,7 @@ def face_cooldowns_reset():
 
 def _resolve_user_dir(name: str) -> tuple[str, Path]:
     """Resolve user name and directory."""
-    from hal.drivers.sensing.perceptions.processors.facerecognizer import USERS_DIR, FacePerception as FR
+    from hal.drivers.sensing.perceptions.processors.facerecognizer_v2 import USERS_DIR, FacePerception as FR
 
     norm = FR.normalize_label(name) if name else state.DEFAULT_USER
     user_dir = USERS_DIR / norm
@@ -534,7 +534,7 @@ def _resolve_user_dir(name: str) -> tuple[str, Path]:
 @router.get("/user/info", response_model=UserInfoResponse, tags=["User"])
 def user_info(name: str = ""):
     """Get basic user info: name, is_friend, telegram identity."""
-    from hal.drivers.sensing.perceptions.processors.facerecognizer import FacePerception as FR
+    from hal.drivers.sensing.perceptions.processors.facerecognizer_v2 import FacePerception as FR
 
     actual_name = name or state.DEFAULT_USER
     norm, user_dir = _resolve_user_dir(actual_name)

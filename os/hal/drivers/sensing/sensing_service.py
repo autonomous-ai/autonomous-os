@@ -101,6 +101,10 @@ class SensingService:
         self._perception_orchestrator: PerceptionOrchestrator = PerceptionOrchestrator(
             poll_interval_ts=self._poll_interval,
             send_event=self._send_event,
+            # Sensing mic for SoundPerception (HAL_AUDIO_SENSING_DEVICE, falls
+            # back to the voice mic upstream). Without this the orchestrator's
+            # sound_device_id stays None and loud-noise detection never runs.
+            sound_device_id=self._input_device,
             perception_config=PerceptionConfig(
                 # People perception (face identity + facial emotion) is the
                 # `presence` capability — ML over the camera via dlbackend. Gated
@@ -318,9 +322,14 @@ class SensingService:
             self._perception_orchestrator.reset_dedup()
 
         cur_ts = time.time()
-        # motion.activity, emotion.detected, and fire_hazard.detected have their
-        # own dedup logic — skip the global cooldown so events are never silently dropped.
-        if event_type not in ("motion.activity", "emotion.detected", "fire_hazard.detected"):
+        # motion.activity, emotion.detected, fire_hazard.detected, and sound
+        # have their own dedup logic — skip the global cooldown so events are
+        # never silently dropped. sound especially: its escalation needs
+        # occurrences ~15s apart inside a 120s window, so the 60s global
+        # cooldown made "persistent → speak" mathematically unreachable
+        # (occurrence 2/3 were always swallowed here while the tracker kept
+        # counting them).
+        if event_type not in ("motion.activity", "emotion.detected", "fire_hazard.detected", "sound"):
             cd = cooldown if cooldown is not None else config.EVENT_COOLDOWN_S
             last = self._last_event_time.get(event_type, 0)
             if cur_ts - last < cd:
