@@ -104,11 +104,10 @@ func (s *ClaudeCodeService) SetupAgent(_ domain.SetupRequest) error {
 }
 
 // presyncStateFiles are the files presync owns whose content decides whether the
-// bridge must restart after a presync run: the bridge itself, the launch env
-// (ANTHROPIC_* + channel flags), and the telegram channel config. All are loaded
-// at bridge/Claude start only.
+// bridge must restart after a presync run: the launch env (ANTHROPIC_* + channel
+// flags) and the channel config. All are loaded at bridge/Claude start only
+// (the bridge itself ships inside the os-server binary — nothing to hash).
 var presyncStateFiles = []string{
-	claudecodeHome + "/bridge.py",
 	claudecodeHome + "/.env",
 	"/root/.claude/channels/telegram/.env",
 	"/root/.claude/channels/telegram/access.json",
@@ -120,7 +119,7 @@ var presyncStateFiles = []string{
 // os-server boot / config change (server/config_watch.go — same path
 // openclaw/hermes use):
 //
-//  1. re-run the embedded presync hook (bridge.py + .env + channel sync — the
+//  1. re-run the embedded presync hook (.env + channel sync — the
 //     SAME script switch-runtime runs before the backend starts), hermes-style,
 //     so a device that boots straight into claudecode or changes llm_*/telegram
 //     while active self-heals without a runtime switch;

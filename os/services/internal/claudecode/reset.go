@@ -25,8 +25,8 @@ import (
 //
 //	KEPT — installed software (install.sh only re-runs on a failed verify):
 //	  the claude CLI, bun, /root/.claude/plugins (telegram channel plugin),
-//	  /root/.claude.json + global settings, /root/.claudecode/bridge.py
-//	  (presync re-materializes it anyway).
+//	  /root/.claude.json + global settings (the bridge itself ships inside
+//	  the os-server binary — nothing on disk to wipe or keep).
 //
 // Everything wiped has a restore path that runs after the reset: presync +
 // EnsureOnboarding rebuild .env/channels from the (re-entered) config.json, and

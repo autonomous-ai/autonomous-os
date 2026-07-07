@@ -4,7 +4,8 @@
 // runtime boundaries with OpenClaw / Hermes / PicoClaw.
 //
 // Claude Code has no server mode, so the claudecode systemd unit runs a bridge
-// (presync-materialized /root/.claudecode/bridge.py) that holds ONE headless
+// (the Go gatewayd in internal/claudecode/gatewayd, launched as
+// `os-server claudecode-gatewayd`) that holds ONE headless
 // Claude process (`claude --print --input-format stream-json --output-format
 // stream-json`, plus `--channels plugin:telegram@...` when configured) and
 // exposes the socket at WSURL. os-server only acts as a client: it sends user

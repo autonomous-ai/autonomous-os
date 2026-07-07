@@ -19,5 +19,9 @@ original `feature/claude-code` branch history.
       plugins (presync-owned token/allowlist sync, GetConfiguredChannel checks
       DiscordBotToken); slack/whatsapp → `domain.ErrChannelNotSupported`; stale
       stubs.go comment (claimed discord unsupported) fixed.
+- [x] Bridge ported to Go: bridge.py → `internal/claudecode/gatewayd` (`os-server
+      claudecode-gatewayd` subcommand, codex-gatewayd file layout); presync no longer
+      materializes bridge.py; install.sh drops the python3/websockets prereqs; unit
+      ExecStart=/usr/local/bin/os-server claudecode-gatewayd (install.sh + gateway_unit.go).
 - [ ] TODO(claudecode-slack): mirror internal/codex/slack.go (SlackBridge) when slack
       support is needed (see channels.go).

@@ -50,7 +50,7 @@ const picoclawAgentLog = "/root/.picoclaw/logs/gateway.log"
 //   - codex:    "openclaw" → journal:codex.service,        "openclaw-service" → journal:codex.service
 //     (the codex gatewayd bridge has no file log — it logs to the journal only)
 //   - claudecode: "openclaw" → journal:claudecode.service, "openclaw-service" → journal:claudecode.service
-//     (the claudecode bridge.py has no file log — it logs to the journal only)
+//     (the claudecode gatewayd bridge has no file log — it logs to the journal only)
 //
 // "openclaw" also bakes in resolveOpenclawLog()'s /tmp fallback so callers don't
 // special-case it. The explicit "hermes"/"picoclaw"/"codex"/"claudecode" ids

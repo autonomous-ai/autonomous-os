@@ -11,7 +11,7 @@ import (
 // os-server so it ships + OTA-updates with the binary (no CDN round-trip needed).
 // os-server materializes it to disk and switch-runtime runs it the first time a
 // device switches to claudecode. See install.sh for the contract (installs the
-// claude CLI + bun + telegram channel plugin + the python websockets dep, writes +
+// claude CLI + bun + telegram channel plugin, writes +
 // starts claudecode.service, drops the verify hook, runs
 // runtime-claudecode-presync) and docs/agentic/claudecode.md.
 //
@@ -22,8 +22,8 @@ var InstallScript []byte
 // materializes it to /usr/local/bin/runtime-claudecode-presync on every switch,
 // switch-runtime runs it right before claudecode starts, and EnsureOnboarding
 // re-runs it on every os-server boot / config change (hermes-style). It OWNS the
-// bridge (bridge.py heredoc), the launch env (/root/.claudecode/.env —
-// ANTHROPIC_* from config.json llm_*), the headless flags (~/.claude.json,
+// launch env (/root/.claudecode/.env — ANTHROPIC_* from config.json llm_*,
+// read by the claudecode-gatewayd bridge inside os-server), the headless flags (~/.claude.json,
 // workspace settings.json), and the telegram channel config
 // (~/.claude/channels/telegram/.env + access.json + the --channels launch flag)
 // — so the config self-heals on every switch/boot, including after a factory
