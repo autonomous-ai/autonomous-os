@@ -486,14 +486,25 @@ func (s *Service) SetupNetwork(ssid string, password string) (bool, error) {
 		slog.Error("save config failed", "component", "network", "error", err)
 	}
 	slog.Info("network setup success", "component", "network")
-	// Force NTP step now that internet is up. Devices without an RTC battery
-	// boot with a stale clock (base-image build date); chrony can't sync in AP
-	// mode (no internet). Without this, the first LLM call after setup fails
-	// with CERT_NOT_YET_VALID because the TLS cert predates the device clock.
-	if out, err := exec.Command("chronyc", "makestep").CombinedOutput(); err != nil {
-		slog.Warn("chronyc makestep failed", "component", "network", "error", err, "output", strings.TrimSpace(string(out)))
-	} else {
-		slog.Info("NTP stepped after WiFi connect", "component", "network")
+	// Kick systemd-timesyncd now that internet is up. Devices without an RTC
+	// battery boot with a stale clock (base-image build date); timesyncd can't
+	// sync in AP mode (no internet). Without this, the first LLM call after
+	// setup fails with CERT_NOT_YET_VALID because the TLS cert predates the
+	// device clock.
+	if out, err := exec.Command("systemctl", "restart", "systemd-timesyncd").CombinedOutput(); err != nil {
+		slog.Warn("systemd-timesyncd restart failed", "component", "network", "error", err, "output", strings.TrimSpace(string(out)))
+	}
+	// Poll until NTPSynchronized=yes (max ~10 s); non-fatal if it times out.
+	for i := range 10 {
+		time.Sleep(time.Second)
+		out, err := exec.Command("timedatectl", "show", "-p", "NTPSynchronized", "--value").Output()
+		if err == nil && strings.TrimSpace(string(out)) == "yes" {
+			slog.Info("NTP synchronized after WiFi connect", "component", "network", "attempts", i+1)
+			break
+		}
+		if i == 9 {
+			slog.Warn("NTP not yet synchronized after WiFi connect", "component", "network")
+		}
 	}
 	return true, nil
 }
