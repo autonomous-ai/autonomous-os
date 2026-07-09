@@ -486,6 +486,15 @@ func (s *Service) SetupNetwork(ssid string, password string) (bool, error) {
 		slog.Error("save config failed", "component", "network", "error", err)
 	}
 	slog.Info("network setup success", "component", "network")
+	// Force NTP step now that internet is up. Devices without an RTC battery
+	// boot with a stale clock (base-image build date); chrony can't sync in AP
+	// mode (no internet). Without this, the first LLM call after setup fails
+	// with CERT_NOT_YET_VALID because the TLS cert predates the device clock.
+	if out, err := exec.Command("chronyc", "makestep").CombinedOutput(); err != nil {
+		slog.Warn("chronyc makestep failed", "component", "network", "error", err, "output", strings.TrimSpace(string(out)))
+	} else {
+		slog.Info("NTP stepped after WiFi connect", "component", "network")
+	}
 	return true, nil
 }
 
