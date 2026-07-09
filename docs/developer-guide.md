@@ -530,7 +530,7 @@ copy patterns from):
 | Go HAL client (helpers you'd call from an os-server service) | `os/services/lib/hal/client.go:76-131` — `StartEffect`, `StopEffect`, `SetLEDStatus`, `RestoreLED`, `GetColor` | Fire-and-forget wrappers around the endpoints above. New Go services should use these instead of hand-rolling HTTP. |
 
 Full LED preset catalogue and rendering rules (colours, priorities, per-preset
-behaviour): `docs/led-control.md`. Vietnamese counterpart: `docs/vi/led-control_vi.md`.
+behaviour): `docs/led-control.md`.
 
 ### 6.6 Other useful HAL surfaces
 
@@ -632,8 +632,7 @@ module load and stripped from the URL for privacy (see `hooks/setup/useSetupUrlP
 | `devices/` | Per-device declarations (`intern-v2/`, `lamp/`, `unitree-go2w/`) with `DEVICE.md` + `SOUL.md` + `SAFETY.md` |
 | `scripts/provision/` | Image build + on-device setup scripts |
 | `scripts/release/` | OTA upload scripts (`upload-os-server.sh`, `upload-hal.sh`, `upload-web.sh`) |
-| `docs/` | English docs (this file lives here) |
-| `docs/vi/` | Vietnamese mirror |
+| `docs/` | Docs (this file lives here) |
 
 ---
 
@@ -647,10 +646,20 @@ module load and stripped from the URL for privacy (see `hooks/setup/useSetupUrlP
 - [`docs/bootstrap-ota.md`](bootstrap-ota.md) — OTA metadata format + promotion model
 - [`docs/agentic/hermes.md`](agentic/hermes.md), [`docs/agentic/picoclaw.md`](agentic/picoclaw.md), [`docs/agentic/codex.md`](agentic/codex.md) — per-runtime protocol
 
-Each doc has a Vietnamese counterpart under `docs/vi/`.
-
 ---
 
-## 11. Getting help
+## 11. Getting help & buying a Developer Edition device
+
+**Where to buy.** The Developer Edition (black case, SSH open, on-device
+toolchain pre-installed — the unit this whole guide targets) is sold on
+the official store:
+
+- https://www.autonomous.ai/intern?product_url_sequence_code=7496_8
+
+Make sure you pick the **Developer Edition** SKU at checkout — the yellow
+OpenClaw and blue Hermes editions on the same product page ship with SSH
+closed and cannot be turned into a developer unit later.
+
+**Support:**
 
 - **GitHub**: [`autonomous-ai/autonomous-os`](https://github.com/autonomous-ai/autonomous-os) — issues + discussions
