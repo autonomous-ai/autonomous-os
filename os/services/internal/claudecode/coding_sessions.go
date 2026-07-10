@@ -29,8 +29,13 @@ const (
 	claudeProjectsDirDefault = "/root/.claude/projects"
 
 	// transcriptScanLimit bounds how many bytes of a transcript are read while
-	// recovering its cwd + summary (both live in the first records).
-	transcriptScanLimit = 256 * 1024
+	// recovering its cwd + recent prompts. Generous so the tail (recent prompts)
+	// is reached for normal-sized transcripts.
+	transcriptScanLimit = 4 * 1024 * 1024
+
+	// recentPromptsMax is how many recent user prompts a listing shows per
+	// session (most-recent first).
+	recentPromptsMax = 3
 )
 
 // codingSession is one resumable claude session discovered on disk.
@@ -38,7 +43,15 @@ type codingSession struct {
 	Folder    string    // real cwd — the dir `claude --resume` must run in
 	SessionID string    // session uuid
 	Modified  time.Time // transcript mtime — recency for listing / newest-per-folder
-	Summary   string    // short human label (session summary or first user line)
+	Recent    []string  // up to recentPromptsMax real user prompts, most-recent first
+}
+
+// label is the single-line description for a session (its most recent prompt).
+func (c codingSession) label() string {
+	if len(c.Recent) > 0 {
+		return c.Recent[0]
+	}
+	return "(no description)"
 }
 
 // claudeProjectsDir returns the session store path (test seam or default).
@@ -76,7 +89,7 @@ func (s *ClaudeCodeService) allCodingSessions() []codingSession {
 			if err != nil {
 				continue
 			}
-			folder, summary := readTranscriptMeta(filepath.Join(projDir, f.Name()))
+			folder, recent := readTranscriptMeta(filepath.Join(projDir, f.Name()))
 			if folder == "" {
 				continue
 			}
@@ -84,7 +97,7 @@ func (s *ClaudeCodeService) allCodingSessions() []codingSession {
 				Folder:    folder,
 				SessionID: strings.TrimSuffix(f.Name(), ".jsonl"),
 				Modified:  info.ModTime(),
-				Summary:   summary,
+				Recent:    recent,
 			})
 		}
 	}
@@ -129,25 +142,24 @@ func (s *ClaudeCodeService) latestSessionForFolder(folder string) (codingSession
 	return sessions[0], true
 }
 
-// readTranscriptMeta recovers a transcript's cwd and a short summary. cwd is
-// taken from the first record that carries one; summary prefers an explicit
-// {"type":"summary"} record, else the first user message text. Reads at most
+// readTranscriptMeta recovers a transcript's cwd and the recent user prompts.
+// cwd is taken from the first record that carries one; the prompts are the last
+// recentPromptsMax real user messages (synthetic <environment_context>/
+// <system-reminder> blocks skipped), most-recent first. Reads at most
 // transcriptScanLimit bytes.
-func readTranscriptMeta(path string) (folder, summary string) {
+func readTranscriptMeta(path string) (folder string, recent []string) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", ""
+		return "", nil
 	}
 	defer f.Close()
 
 	sc := bufio.NewScanner(io.LimitReader(f, transcriptScanLimit))
-	sc.Buffer(make([]byte, 0, 64*1024), transcriptScanLimit)
-	var firstUser string
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for sc.Scan() {
 		var rec struct {
 			Type    string          `json:"type"`
 			Cwd     string          `json:"cwd"`
-			Summary string          `json:"summary"`
 			Message json.RawMessage `json:"message"`
 		}
 		if json.Unmarshal(sc.Bytes(), &rec) != nil {
@@ -156,25 +168,35 @@ func readTranscriptMeta(path string) (folder, summary string) {
 		if folder == "" && rec.Cwd != "" {
 			folder = rec.Cwd
 		}
-		if summary == "" && rec.Type == "summary" && rec.Summary != "" {
-			summary = rec.Summary
-		}
-		if firstUser == "" && rec.Type == "user" {
-			// Skip the synthetic <environment_context>/<system-reminder> blocks
-			// the CLI injects as the first "user" message — the real prompt is the
-			// first non-injected user text.
+		if rec.Type == "user" {
 			if txt := userRecordText(rec.Message); txt != "" && !isInjectedContext(txt) {
-				firstUser = txt
+				recent = appendRecent(recent, txt)
 			}
 		}
-		if folder != "" && summary != "" {
-			break
-		}
 	}
-	if summary == "" {
-		summary = firstUser
+	return folder, mostRecentFirst(recent)
+}
+
+// appendRecent adds one compact prompt to the rolling window, keeping only the
+// last recentPromptsMax (chronological order).
+func appendRecent(recent []string, s string) []string {
+	recent = append(recent, truncRunes(oneLine(s), 90))
+	if len(recent) > recentPromptsMax {
+		recent = recent[len(recent)-recentPromptsMax:]
 	}
-	return folder, truncRunes(oneLine(summary), 90)
+	return recent
+}
+
+// mostRecentFirst reverses a chronological prompt window (returns a fresh slice).
+func mostRecentFirst(recent []string) []string {
+	if len(recent) == 0 {
+		return nil
+	}
+	out := make([]string, len(recent))
+	for i, s := range recent {
+		out[len(recent)-1-i] = s
+	}
+	return out
 }
 
 // userRecordText pulls plain text out of a transcript user record's message,

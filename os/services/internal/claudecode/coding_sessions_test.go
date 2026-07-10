@@ -54,8 +54,8 @@ func TestAllCodingSessionsAndFolders(t *testing.T) {
 	if all[0].SessionID != "cccc3333-0000-0000-0000-000000000003" {
 		t.Errorf("newest session = %s, want cccc3333…", all[0].SessionID)
 	}
-	if all[0].Folder != "/root" || all[0].Summary != "new" {
-		t.Errorf("meta wrong: folder=%q summary=%q", all[0].Folder, all[0].Summary)
+	if all[0].Folder != "/root" || all[0].label() != "new work" {
+		t.Errorf("meta wrong: folder=%q summary=%q", all[0].Folder, all[0].label())
 	}
 
 	// codingFolders collapses to newest-per-folder: /root (cccc) + /root/test.
@@ -91,8 +91,8 @@ func TestReadTranscriptMetaFallbackToFirstUser(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("want 1 session, got %d", len(sessions))
 	}
-	if sessions[0].Summary != "fix login bug many lines" { // oneLine collapses the newline
-		t.Errorf("summary = %q, want collapsed first-user text", sessions[0].Summary)
+	if sessions[0].label() != "fix login bug many lines" { // oneLine collapses the newline
+		t.Errorf("summary = %q, want collapsed first-user text", sessions[0].label())
 	}
 }
 
@@ -115,8 +115,43 @@ func TestReadTranscriptMetaSkipsInjectedContext(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("want 1 session, got %d", len(sessions))
 	}
-	if sessions[0].Summary != "build a snake game" {
-		t.Errorf("summary = %q, want real prompt (env-context skipped)", sessions[0].Summary)
+	if sessions[0].label() != "build a snake game" {
+		t.Errorf("summary = %q, want real prompt (env-context skipped)", sessions[0].label())
+	}
+}
+
+func TestRecentPromptsLast3MostRecentFirst(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "-root-many")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Four user prompts (+ an injected block); expect the last 3 real ones,
+	// most-recent first.
+	var body string
+	body += `{"type":"user","cwd":"/root/many","message":{"role":"user","content":"<environment_context>x</environment_context>"}}` + "\n"
+	for _, p := range []string{"first", "second", "third", "fourth"} {
+		body += `{"type":"user","cwd":"/root/many","message":{"role":"user","content":` + jsonStr(p) + `}}` + "\n"
+	}
+	if err := os.WriteFile(filepath.Join(sub, "ffff6666-0000-0000-0000-000000000006.jsonl"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &ClaudeCodeService{claudeProjectsDirPath: dir}
+	got := s.folderSessions("/root/many")
+	if len(got) != 1 {
+		t.Fatalf("want 1 session, got %d", len(got))
+	}
+	want := []string{"fourth", "third", "second"} // most-recent first, injected skipped
+	if len(got[0].Recent) != 3 {
+		t.Fatalf("Recent = %v, want 3 entries", got[0].Recent)
+	}
+	for i, w := range want {
+		if got[0].Recent[i] != w {
+			t.Errorf("Recent[%d] = %q, want %q", i, got[0].Recent[i], w)
+		}
+	}
+	if got[0].label() != "fourth" {
+		t.Errorf("label() = %q, want most recent 'fourth'", got[0].label())
 	}
 }
 

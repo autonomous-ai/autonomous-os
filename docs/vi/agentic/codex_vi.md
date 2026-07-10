@@ -371,8 +371,9 @@ nhiều folder mỗi folder một thread. Tách biệt với lượt persona dev
 - **Khám phá** (`coding_sessions.go`): codex lưu mỗi thread thành "rollout" JSONL
   ở `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`
   (`/root/.codex/sessions`). `allCodingSessions` quét cây đó; **thread id
-  (`payload.id`) và cwd (`payload.cwd`) lấy từ record `session_meta` đầu tiên**,
-  mô tả từ tin user đầu tiên. Dedupe theo thread id (rollout mới nhất thắng).
+  (`payload.id`) và cwd (`payload.cwd`) lấy từ record `session_meta` đầu tiên**;
+  danh sách hiện **3 prompt người dùng gần nhất** (mới nhất trước, bỏ khối
+  `<environment_context>` tổng hợp). Dedupe theo thread id (rollout mới nhất thắng).
   Khác claude, codex resume **theo thread-id toàn cục**: `codex exec --cd <dir>
   resume <id>` đặt cwd độc lập, không cần khớp cwd gốc (đã verify device —
   resume thread cũ echo lại id; lỗi 404 trong test đó là do endpoint

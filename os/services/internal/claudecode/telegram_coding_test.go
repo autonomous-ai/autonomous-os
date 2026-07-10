@@ -82,7 +82,7 @@ func TestCodingCommandsFlow(t *testing.T) {
 	if !s.handleTelegramCoding(ctx, "/sessions", chat) {
 		t.Fatal("/sessions should be handled")
 	}
-	if dm := rig.waitDM(t); !strings.Contains(dm, "/root/test") || !strings.Contains(dm, "Caro game") {
+	if dm := rig.waitDM(t); !strings.Contains(dm, "/root/test") || !strings.Contains(dm, "make caro game") {
 		t.Fatalf("/sessions DM missing folder/summary: %q", dm)
 	}
 

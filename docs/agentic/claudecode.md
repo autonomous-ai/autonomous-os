@@ -304,10 +304,12 @@ Telegram, across multiple folders each with its own session.
   `/root/.claude/projects`). `allCodingSessions` walks that tree; each session's
   **real cwd is read from the transcript content** (a `cwd` field on its
   records), NOT decoded from the directory name — the `/`→`-` encoding is lossy
-  for folders containing `-`. A short summary comes from the `{"type":"summary"}`
-  record or the first user message. Sessions are **cwd-scoped**: `claude
-  --resume <uuid>` only finds a session when run from its folder (device-proven:
-  resuming from the wrong cwd returns `No conversation found`).
+  for folders containing `-`. The listing shows the **3 most recent user
+  prompts** (most-recent first) as the description — synthetic
+  `<environment_context>`/`<system-reminder>` blocks the CLI injects as "user"
+  messages are skipped (`isInjectedContext`). Sessions are **cwd-scoped**:
+  `claude --resume <uuid>` only finds a session when run from its folder
+  (device-proven: resuming from the wrong cwd returns `No conversation found`).
 - **Commands** (intercepted in `handleTelegramUpdate` before the device-main
   injection): `/resume` (mirrors the claude CLI — no arg lists folders, `/resume
   <n>` picks by number, `/resume <folder>` picks the folder's newest) · aliases

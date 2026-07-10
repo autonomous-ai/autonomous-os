@@ -46,7 +46,7 @@ func TestAllCodingSessionsAndFolders(t *testing.T) {
 	if len(all) != 3 {
 		t.Fatalf("allCodingSessions = %d, want 3", len(all))
 	}
-	if all[0].SessionID != "cccc3333" || all[0].Folder != "/root" || all[0].Summary != "new work" {
+	if all[0].SessionID != "cccc3333" || all[0].Folder != "/root" || all[0].label() != "new work" {
 		t.Errorf("newest = %+v, want cccc3333 /root 'new work'", all[0])
 	}
 
@@ -92,8 +92,8 @@ func TestReadRolloutMetaSkipsNonUser(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("want 1 session, got %d", len(sessions))
 	}
-	if sessions[0].Summary != "fix login bug" {
-		t.Errorf("summary = %q, want user text (developer line skipped)", sessions[0].Summary)
+	if sessions[0].label() != "fix login bug" {
+		t.Errorf("summary = %q, want user text (developer line skipped)", sessions[0].label())
 	}
 }
 
@@ -117,8 +117,8 @@ func TestReadRolloutMetaSkipsInjectedContext(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("want 1 session, got %d", len(sessions))
 	}
-	if sessions[0].Summary != "build a snake game" {
-		t.Errorf("summary = %q, want real prompt (env-context skipped)", sessions[0].Summary)
+	if sessions[0].label() != "build a snake game" {
+		t.Errorf("summary = %q, want real prompt (env-context skipped)", sessions[0].label())
 	}
 }
 

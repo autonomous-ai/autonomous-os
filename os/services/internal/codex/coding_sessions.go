@@ -30,8 +30,13 @@ const (
 	codexSessionsDirDefault = "/root/.codex/sessions"
 
 	// rolloutMetaScanLimit bounds how many bytes of a rollout are read while
-	// recovering its thread id / cwd / summary (all live in the first records).
-	rolloutMetaScanLimit = 256 * 1024
+	// recovering its thread id / cwd / recent prompts. Generous so the tail
+	// (recent prompts) is reached for normal-sized rollouts.
+	rolloutMetaScanLimit = 4 * 1024 * 1024
+
+	// recentPromptsMax is how many recent user prompts a listing shows per
+	// session (most-recent first).
+	recentPromptsMax = 3
 )
 
 // codingSession is one resumable codex thread discovered on disk.
@@ -39,7 +44,15 @@ type codingSession struct {
 	Folder    string    // cwd recorded in the rollout — passed to `codex exec --cd`
 	SessionID string    // codex thread id (`codex exec resume <id>`)
 	Modified  time.Time // rollout mtime — recency for listing / newest-per-folder
-	Summary   string    // short human label (first user message)
+	Recent    []string  // up to recentPromptsMax real user prompts, most-recent first
+}
+
+// label is the single-line description for a session (its most recent prompt).
+func (c codingSession) label() string {
+	if len(c.Recent) > 0 {
+		return c.Recent[0]
+	}
+	return "(no description)"
 }
 
 // codexSessionsDir returns the rollout store path (test seam or default).
@@ -68,7 +81,7 @@ func (s *CodexService) allCodingSessions() []codingSession {
 		if err != nil {
 			return nil
 		}
-		threadID, folder, summary := readRolloutMeta(path)
+		threadID, folder, recent := readRolloutMeta(path)
 		if threadID == "" || folder == "" {
 			return nil
 		}
@@ -78,7 +91,7 @@ func (s *CodexService) allCodingSessions() []codingSession {
 				Folder:    folder,
 				SessionID: threadID,
 				Modified:  info.ModTime(),
-				Summary:   summary,
+				Recent:    recent,
 			}
 		}
 		return nil
@@ -128,18 +141,20 @@ func (s *CodexService) latestSessionForFolder(folder string) (codingSession, boo
 	return sessions[0], true
 }
 
-// readRolloutMeta recovers a rollout's thread id, cwd and a short summary. The
-// thread id + cwd come from the first `session_meta` record; the summary is the
-// first user message text. Reads at most rolloutMetaScanLimit bytes.
-func readRolloutMeta(path string) (threadID, folder, summary string) {
+// readRolloutMeta recovers a rollout's thread id, cwd and the recent user
+// prompts. The thread id + cwd come from the first `session_meta` record; the
+// prompts are the last recentPromptsMax real user messages (synthetic
+// <environment_context> blocks skipped), most-recent first. Reads at most
+// rolloutMetaScanLimit bytes.
+func readRolloutMeta(path string) (threadID, folder string, recent []string) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", "", ""
+		return "", "", nil
 	}
 	defer f.Close()
 
 	sc := bufio.NewScanner(io.LimitReader(f, rolloutMetaScanLimit))
-	sc.Buffer(make([]byte, 0, 64*1024), rolloutMetaScanLimit)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for sc.Scan() {
 		var rec struct {
 			Type    string          `json:"type"`
@@ -158,19 +173,12 @@ func readRolloutMeta(path string) (threadID, folder, summary string) {
 				threadID, folder = m.ID, m.Cwd
 			}
 		case "response_item":
-			// Skip the synthetic <environment_context> block codex injects as the
-			// first "user" message — the real prompt is the first non-injected one.
-			if summary == "" {
-				if txt := rolloutUserText(rec.Payload); txt != "" && !isInjectedContext(txt) {
-					summary = txt
-				}
+			if txt := rolloutUserText(rec.Payload); txt != "" && !isInjectedContext(txt) {
+				recent = appendRecent(recent, txt)
 			}
 		}
-		if threadID != "" && folder != "" && summary != "" {
-			break
-		}
 	}
-	return threadID, folder, truncRunes(oneLine(summary), 90)
+	return threadID, folder, mostRecentFirst(recent)
 }
 
 // rolloutUserText returns the text of a response_item ONLY when it is a user
@@ -195,6 +203,28 @@ func rolloutUserText(raw json.RawMessage) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+// appendRecent adds one compact prompt to the rolling window, keeping only the
+// last recentPromptsMax (chronological order).
+func appendRecent(recent []string, s string) []string {
+	recent = append(recent, truncRunes(oneLine(s), 90))
+	if len(recent) > recentPromptsMax {
+		recent = recent[len(recent)-recentPromptsMax:]
+	}
+	return recent
+}
+
+// mostRecentFirst reverses a chronological prompt window (returns a fresh slice).
+func mostRecentFirst(recent []string) []string {
+	if len(recent) == 0 {
+		return nil
+	}
+	out := make([]string, len(recent))
+	for i, s := range recent {
+		out[len(recent)-1-i] = s
+	}
+	return out
 }
 
 // normalizeFolder cleans a user-supplied path: trims quotes/space, expands a

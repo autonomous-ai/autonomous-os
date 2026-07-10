@@ -298,9 +298,10 @@ folder một phiên riêng.
   JSONL ở `~/.claude/projects/<cwd-mã-hoá>/<uuid>.jsonl` (root ⇒
   `/root/.claude/projects`). `allCodingSessions` quét cây đó; **cwd thật của mỗi
   phiên được đọc từ NỘI DUNG transcript** (trường `cwd` trong các record), KHÔNG
-  giải mã từ tên thư mục — cách mã hoá `/`→`-` mất mát với folder có dấu `-`. Mô
-  tả ngắn lấy từ record `{"type":"summary"}` hoặc tin user đầu tiên. Phiên **gắn
-  theo cwd**: `claude --resume <uuid>` chỉ tìm thấy phiên khi chạy đúng folder của
+  giải mã từ tên thư mục — cách mã hoá `/`→`-` mất mát với folder có dấu `-`.
+  Danh sách hiện **3 prompt người dùng gần nhất** (mới nhất trước, bỏ khối
+  `<environment_context>`/`<system-reminder>` tổng hợp qua `isInjectedContext`).
+  Phiên **gắn theo cwd**: `claude --resume <uuid>` chỉ tìm thấy phiên khi chạy đúng folder của
   nó (đã kiểm chứng trên device: resume sai cwd trả `No conversation found`).
 - **Lệnh** (chặn trong `handleTelegramUpdate` TRƯỚC khi inject device-main):
   `/resume` (giống CLI claude — không tham số thì liệt kê folder, `/resume <số>`

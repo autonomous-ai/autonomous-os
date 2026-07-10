@@ -379,8 +379,9 @@ device-main persona turn.
   JSONL under `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`
   (`/root/.codex/sessions`). `allCodingSessions` walks that tree; each rollout's
   **thread id (`payload.id`) and cwd (`payload.cwd`) come from its first
-  `session_meta` record**, the summary from the first user message. Entries are
-  deduped by thread id (newest rollout wins). Unlike claude, codex resume is
+  `session_meta` record**; the listing shows the **3 most recent user prompts**
+  (most-recent first, synthetic `<environment_context>` blocks skipped). Entries
+  are deduped by thread id (newest rollout wins). Unlike claude, codex resume is
   **thread-id-global**: `codex exec --cd <dir> resume <id>` sets the cwd
   independently and does not require it to match the original (device-verified —
   resuming an old thread echoes its id back; a 404 in that test was the separate

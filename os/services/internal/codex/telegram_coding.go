@@ -145,14 +145,21 @@ func (s *CodexService) cmdListSessions(ctx context.Context, chatID, arg string) 
 	b.WriteString(header)
 	b.WriteString("\n\n")
 	for i, cs := range sessions {
-		summary := cs.Summary
-		if summary == "" {
-			summary = "(no description)"
+		// number → what you type; folder + recent prompts + age → how you know it.
+		fmt.Fprintf(&b, "%d.  📂 %s\n     🕐 %s\n", i+1, cs.Folder, humanizeAgo(cs.Modified))
+		if len(cs.Recent) == 0 {
+			b.WriteString("     📝 (no description)\n")
 		}
-		// number → what you type; folder + summary + age → how you recognise it.
-		fmt.Fprintf(&b, "%d.  📂 %s\n     📝 %s\n     🕐 %s\n\n", i+1, cs.Folder, summary, humanizeAgo(cs.Modified))
+		for j, p := range cs.Recent {
+			marker := "📝"
+			if j > 0 {
+				marker = "  ↳"
+			}
+			fmt.Fprintf(&b, "     %s %s\n", marker, p)
+		}
+		b.WriteString("\n")
 	}
-	b.WriteString("👉 Reply /use <number> (e.g. /use 1) to pick one, /device for the assistant.")
+	b.WriteString("👉 Reply /resume <number> (e.g. /resume 1) to pick one, /device for the assistant.")
 	s.dmCoding(ctx, chatID, b.String())
 }
 
@@ -161,13 +168,13 @@ func (s *CodexService) cmdListSessions(ctx context.Context, chatID, arg string) 
 func (s *CodexService) cmdUseSession(ctx context.Context, chatID, arg string) {
 	arg = strings.TrimSpace(arg)
 	if arg == "" {
-		s.dmCoding(ctx, chatID, "Usage: /use <n>  or  /use <folder>. /sessions to list them.")
+		s.dmCoding(ctx, chatID, "Usage: /resume <n>  or  /resume <folder>. /resume to list them.")
 		return
 	}
 	if n, err := strconv.Atoi(arg); err == nil {
 		list := s.getCodingList(chatID)
 		if n < 1 || n > len(list) {
-			s.dmCoding(ctx, chatID, "Invalid number. /sessions to see the list again.")
+			s.dmCoding(ctx, chatID, "Invalid number. /resume to see the list again.")
 			return
 		}
 		s.selectCoding(ctx, chatID, list[n-1])
@@ -185,11 +192,7 @@ func (s *CodexService) cmdUseSession(ctx context.Context, chatID, arg string) {
 // selectCoding stores a resolved thread selection and confirms it.
 func (s *CodexService) selectCoding(ctx context.Context, chatID string, cs codingSession) {
 	s.setCodingTarget(chatID, codingTarget{Folder: cs.Folder, SessionID: cs.SessionID})
-	summary := cs.Summary
-	if summary == "" {
-		summary = "(no description)"
-	}
-	s.dmCoding(ctx, chatID, fmt.Sprintf("✅ In thread:\n📂 %s\n📝 %s\n\nSend a message to continue coding. /device to exit.", cs.Folder, summary))
+	s.dmCoding(ctx, chatID, fmt.Sprintf("✅ In thread:\n📂 %s\n📝 %s\n\nSend a message to continue coding. /device to exit.", cs.Folder, cs.label()))
 }
 
 // cmdNewSession selects a folder for a brand-new thread (no resume). The folder
