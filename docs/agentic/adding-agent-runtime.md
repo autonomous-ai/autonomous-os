@@ -180,7 +180,7 @@ bundle) and ONE **write** adapter (bundle → its layout), in
 directions — file count is **linear (2 per runtime)**, not the quadratic N×(N-1)
 a per-pair migrator needs. Register the adapter in the `adapters` map in
 `migrator.go`; nothing else changes (no new `Direction` enum). openclaw, hermes,
-picoclaw, and claudecode all have adapters, so any pair migrates both ways. A
+picoclaw, codex, and claudecode all have adapters, so any pair migrates both ways. A
 runtime with no registered adapter is skipped by `CanMigrate` — the boot-time
 reconciler doesn't migrate to/from it.
 

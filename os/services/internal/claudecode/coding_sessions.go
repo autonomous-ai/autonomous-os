@@ -160,7 +160,12 @@ func readTranscriptMeta(path string) (folder, summary string) {
 			summary = rec.Summary
 		}
 		if firstUser == "" && rec.Type == "user" {
-			firstUser = userRecordText(rec.Message)
+			// Skip the synthetic <environment_context>/<system-reminder> blocks
+			// the CLI injects as the first "user" message — the real prompt is the
+			// first non-injected user text.
+			if txt := userRecordText(rec.Message); txt != "" && !isInjectedContext(txt) {
+				firstUser = txt
+			}
 		}
 		if folder != "" && summary != "" {
 			break
@@ -227,6 +232,29 @@ func normalizeFolder(p string) string {
 // oneLine collapses whitespace/newlines into single spaces for a compact label.
 func oneLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
+}
+
+// isInjectedContext reports whether a "user" message is actually a synthetic
+// context block the CLI prepends before the real prompt (environment info,
+// system reminders, IDE/command wrappers) — not something the human typed. Used
+// to skip it when picking a session summary.
+func isInjectedContext(s string) bool {
+	t := strings.TrimSpace(s)
+	if t == "" {
+		return true
+	}
+	if !strings.HasPrefix(t, "<") {
+		return false
+	}
+	for _, tag := range []string{
+		"<environment_context", "<system-reminder", "<user_instructions",
+		"<command-name", "<local-command", "<ide_", "<system>",
+	} {
+		if strings.HasPrefix(t, tag) {
+			return true
+		}
+	}
+	return false
 }
 
 // humanizeAgo renders how long ago t was, for session listings.

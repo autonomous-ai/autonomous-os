@@ -176,7 +176,7 @@ write[to]` (`RunMigration(from, to, opts)`). Nên thêm runtime = **đúng 1 fil
 adapter**, tự động chạy với mọi runtime sẵn có, cả 2 chiều — số file **tuyến tính
 (2/runtime)**, không phải N×(N-1) như per-pair. Đăng ký adapter vào map `adapters`
 trong `migrator.go`; không cần `Direction` enum mới. openclaw, hermes, picoclaw,
-và claudecode đều có adapter, nên mọi cặp migrate được cả 2 chiều. Runtime không có adapter bị
+codex, và claudecode đều có adapter, nên mọi cặp migrate được cả 2 chiều. Runtime không có adapter bị
 `CanMigrate` bỏ qua — bộ reconcile lúc boot không migrate tới/từ nó.
 
 Adapter của PicoClaw (`runtime_picoclaw.go`) mirror layout openclaw nhưng đọc/ghi

@@ -97,6 +97,51 @@ func TestReadRolloutMetaSkipsNonUser(t *testing.T) {
 	}
 }
 
+func TestReadRolloutMetaSkipsInjectedContext(t *testing.T) {
+	dir := t.TempDir()
+	subdir := filepath.Join(dir, "2026", "07", "08")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(subdir, "rollout-2026-07-08T00-00-00-eeee5555.jsonl")
+	// First user message is codex's injected environment_context; the real
+	// prompt follows and must be the summary.
+	body := `{"type":"session_meta","payload":{"id":"eeee5555","cwd":"/root/test_codex"}}` + "\n" +
+		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n<cwd>/root/test_codex</cwd>\n<shell>bash</shell>\n</environment_context>"}]}}` + "\n" +
+		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"build a snake game"}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &CodexService{codexSessionsDirPath: dir}
+	sessions := s.folderSessions("/root/test_codex")
+	if len(sessions) != 1 {
+		t.Fatalf("want 1 session, got %d", len(sessions))
+	}
+	if sessions[0].Summary != "build a snake game" {
+		t.Errorf("summary = %q, want real prompt (env-context skipped)", sessions[0].Summary)
+	}
+}
+
+func TestIsInjectedContext(t *testing.T) {
+	injected := []string{
+		"<environment_context>\n<cwd>/x</cwd>",
+		"  <system-reminder>hi</system-reminder>",
+		"<user_instructions>do x</user_instructions>",
+		"",
+	}
+	for _, s := range injected {
+		if !isInjectedContext(s) {
+			t.Errorf("isInjectedContext(%q) = false, want true", s)
+		}
+	}
+	real := []string{"build a snake game", "fix the <div> tag in index.html", "add /health route"}
+	for _, s := range real {
+		if isInjectedContext(s) {
+			t.Errorf("isInjectedContext(%q) = true, want false", s)
+		}
+	}
+}
+
 func TestNormalizeFolder(t *testing.T) {
 	cases := map[string]string{
 		"/root/test":     "/root/test",

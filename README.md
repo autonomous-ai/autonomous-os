@@ -9,7 +9,7 @@ updates itself — locally first.
 build a third.
 
 > The brain is a swappable **agentic runtime** (OpenClaw, Hermes, PicoClaw, OpenAI Codex,
-> or any LLM + skills + memory). Autonomous OS is everything else — the body, the skills, and the bounds.
+> Claude Code, or any LLM + skills + memory). Autonomous OS is everything else — the body, the skills, and the bounds.
 
 ## Reference devices
 
@@ -52,10 +52,11 @@ The always-on Go daemon: `intent` (fast local commands), `network`, `OTA`, `sens
 
 ### Agentic Runtime
 
-**OpenClaw**, **Hermes**, **PicoClaw**, **OpenAI Codex**, or a custom runtime. Runs the
-skills, embodies the device's `SOUL.md`, and decides what to act on. Swappable at runtime
-(web Settings or MQTT) — and where Autonomous OS's differentiated value (the default brain,
-memory, character) lives. *(`os/services/internal/{openclaw,hermes,picoclaw,codex}`; adding
+**OpenClaw**, **Hermes**, **PicoClaw**, **OpenAI Codex**, **Claude Code**, or a custom
+runtime. Runs the skills, embodies the device's `SOUL.md`, and decides what to act on.
+Swappable at runtime (web Settings or MQTT) — and where Autonomous OS's differentiated value
+(the default brain, memory, character) lives.
+*(`os/services/internal/{openclaw,hermes,picoclaw,codex,claudecode}`; adding
 your own: `docs/agentic/adding-agent-runtime.md`)*
 
 ### Hardware Abstraction Layer (HAL)

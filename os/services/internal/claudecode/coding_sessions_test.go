@@ -96,6 +96,43 @@ func TestReadTranscriptMetaFallbackToFirstUser(t *testing.T) {
 	}
 }
 
+func TestReadTranscriptMetaSkipsInjectedContext(t *testing.T) {
+	dir := t.TempDir()
+	// First user message is an injected env/system block; the real prompt
+	// follows and must be the summary.
+	subdir := filepath.Join(dir, "-root-app2")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(subdir, "eeee5555-0000-0000-0000-000000000005.jsonl")
+	body := `{"type":"user","cwd":"/root/app2","message":{"role":"user","content":"<environment_context>\n<cwd>/root/app2</cwd>\n</environment_context>"}}` + "\n" +
+		`{"type":"user","cwd":"/root/app2","message":{"role":"user","content":"build a snake game"}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &ClaudeCodeService{claudeProjectsDirPath: dir}
+	sessions := s.folderSessions("/root/app2")
+	if len(sessions) != 1 {
+		t.Fatalf("want 1 session, got %d", len(sessions))
+	}
+	if sessions[0].Summary != "build a snake game" {
+		t.Errorf("summary = %q, want real prompt (env-context skipped)", sessions[0].Summary)
+	}
+}
+
+func TestIsInjectedContext(t *testing.T) {
+	for _, s := range []string{"<environment_context>\n<cwd>/x</cwd>", "  <system-reminder>hi</system-reminder>", ""} {
+		if !isInjectedContext(s) {
+			t.Errorf("isInjectedContext(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{"build a snake game", "fix the <div> tag"} {
+		if isInjectedContext(s) {
+			t.Errorf("isInjectedContext(%q) = true, want false", s)
+		}
+	}
+}
+
 func TestNormalizeFolder(t *testing.T) {
 	cases := map[string]string{
 		"/root/test":     "/root/test",
