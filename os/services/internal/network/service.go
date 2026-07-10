@@ -486,13 +486,16 @@ func (s *Service) SetupNetwork(ssid string, password string) (bool, error) {
 		slog.Error("save config failed", "component", "network", "error", err)
 	}
 	slog.Info("network setup success", "component", "network")
-	// Kick systemd-timesyncd now that internet is up. Devices without an RTC
-	// battery boot with a stale clock (base-image build date); timesyncd can't
-	// sync in AP mode (no internet). Without this, the first LLM call after
-	// setup fails with CERT_NOT_YET_VALID because the TLS cert predates the
-	// device clock.
-	if out, err := exec.Command("systemctl", "restart", "systemd-timesyncd").CombinedOutput(); err != nil {
-		slog.Warn("systemd-timesyncd restart failed", "component", "network", "error", err, "output", strings.TrimSpace(string(out)))
+	// Kick the NTP daemon now that internet is up. Devices without an RTC
+	// battery boot with a stale clock (base-image build date); NTP can't sync
+	// in AP mode (no internet). Without this, the first LLM call after setup
+	// fails with CERT_NOT_YET_VALID because the TLS cert predates the clock.
+	// Images may ship chrony OR systemd-timesyncd — try both, non-fatal.
+	if out, err := exec.Command("chronyc", "makestep").CombinedOutput(); err != nil {
+		slog.Warn("chronyc makestep failed, trying systemd-timesyncd", "component", "network", "error", err, "output", strings.TrimSpace(string(out)))
+		if out2, err2 := exec.Command("systemctl", "restart", "systemd-timesyncd").CombinedOutput(); err2 != nil {
+			slog.Warn("systemd-timesyncd restart failed", "component", "network", "error", err2, "output", strings.TrimSpace(string(out2)))
+		}
 	}
 	// Poll until NTPSynchronized=yes (max ~10 s); non-fatal if it times out.
 	for i := range 10 {
