@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"time"
 
+	"go.autonomous.ai/os/internal/skills"
 	"go.autonomous.ai/os/lib/osreset"
 )
 
@@ -50,8 +51,13 @@ var claudecodeWipePaths = []string{
 	claudecodeHome + "/session.json",
 	// Skills + the user-level OS block live outside the workspace (user scope, so
 	// coding sessions in any cwd see them) — wipe them explicitly or a factory
-	// reset would leave stale skills behind. ensureSkills/ensureUserClaudeMDBlock
+	// reset would leave stale skills behind. ensureSkills/ensureClaudeMDBlock
 	// rebuild both on the next onboarding pass.
+	//
+	// The SHARED store is what actually holds the skills; claudecodeSkillsDir is only
+	// a symlink into it (ensureSkillsLink). Wipe both, or the reset would leave every
+	// skill on disk behind a dangling link.
+	skills.StoreDir,
 	claudecodeSkillsDir,
 	claudeUserDir + "/CLAUDE.md",
 	"/root/.claude/projects",

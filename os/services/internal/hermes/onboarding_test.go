@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"go.autonomous.ai/os/internal/skills"
 )
 
 func TestUpsertSoulSkillPriorityBlock_AppendsBelowPersona(t *testing.T) {
@@ -123,5 +125,50 @@ func TestPruneImportedDuplicates_NoopCases(t *testing.T) {
 	}
 	if got := pruneImportedDuplicatesIn(filepath.Join(dir, "absent")); got != 0 {
 		t.Fatalf("absent dir: changed = %d, want 0", got)
+	}
+}
+
+// TestEnsureSkillsLink_LinksOpenclawImportsNotSkillsRoot pins the ONE thing that
+// would silently break hermes: the link must land on skills/openclaw-imports, never
+// on skills/ itself. audio_cache/ and image_cache/ are siblings under skills/ — a
+// symlink at skills/ would swallow them (see reset.go's wipe list).
+func TestEnsureSkillsLink_LinksOpenclawImportsNotSkillsRoot(t *testing.T) {
+	home := t.TempDir()
+	oldHome := hermesHome
+	hermesHome = home
+	t.Cleanup(func() { hermesHome = oldHome })
+
+	// A sibling of openclaw-imports that must survive the link.
+	audioCache := filepath.Join(home, "skills", "audio_cache")
+	if err := os.MkdirAll(audioCache, 0o755); err != nil {
+		t.Fatalf("seed audio_cache: %v", err)
+	}
+
+	store := skills.SetDirForTest(t, filepath.Join(t.TempDir(), "store"))
+
+	if !ensureSkillsLink() {
+		t.Fatal("ensureSkillsLink() = false, want true (it had to create the link)")
+	}
+
+	link := filepath.Join(home, "skills", "openclaw-imports")
+	target, err := os.Readlink(link)
+	if err != nil {
+		t.Fatalf("readlink %s: %v", link, err)
+	}
+	if target != store {
+		t.Fatalf("link target = %q, want store %q", target, store)
+	}
+
+	// skills/ itself must still be a real dir, not the symlink.
+	if _, err := os.Readlink(filepath.Join(home, "skills")); err == nil {
+		t.Fatal("skills/ is a symlink — it must stay a real dir or it swallows audio_cache/image_cache")
+	}
+	if info, err := os.Stat(audioCache); err != nil || !info.IsDir() {
+		t.Fatalf("audio_cache sibling was clobbered by the link: err=%v", err)
+	}
+
+	// Idempotent: a second boot must not report a change (it would restart the gateway).
+	if ensureSkillsLink() {
+		t.Fatal("ensureSkillsLink() = true on second call, want false (already linked)")
 	}
 }

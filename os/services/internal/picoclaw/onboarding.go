@@ -13,6 +13,7 @@ import (
 
 	"go.autonomous.ai/os/domain"
 	"go.autonomous.ai/os/internal/device"
+	"go.autonomous.ai/os/internal/skills"
 )
 
 // knowledgeFS holds the KNOWLEDGE.md skeleton, embedded so a fresh picoclaw-only
@@ -41,16 +42,18 @@ var knowledgeFS embed.FS
 // hooks/handler.ts paragraph and `openclaw --version`); everything else is
 // backend-agnostic prompt discipline (skills selection, memory rules, priority).
 
+// picoclawWorkspaceDir is PicoClaw's workspace (HOME=/root → ~/.picoclaw).
+// A var, not a const, purely as a test seam: the skills-link tests must redirect the
+// workspace away from /root, which is not writable in a test run.
+// TODO(picoclaw-config-dir): there is no PicoclawConfigDir in server/config yet
+// (openclaw uses cfg.OpenclawConfigDir). Hardcoded for now; promote to config if
+// the data dir ever needs to be overridable.
+var picoclawWorkspaceDir = "/root/.picoclaw/workspace"
+
 const (
 	// osMandatoryMarker delimits the OS-managed block so it can be stripped +
 	// re-injected cleanly on update. MUST match the marker used in the block below.
 	osMandatoryMarker = "<!-- OS DO NOT REMOVE -->"
-
-	// picoclawWorkspaceDir is PicoClaw's workspace (HOME=/root → ~/.picoclaw).
-	// TODO(picoclaw-config-dir): there is no PicoclawConfigDir in server/config yet
-	// (openclaw uses cfg.OpenclawConfigDir). Hardcoded for now; promote to config if
-	// the data dir ever needs to be overridable.
-	picoclawWorkspaceDir = "/root/.picoclaw/workspace"
 
 	// agentsMDBlock is the OS-managed block injected into workspace/AGENTS.md.
 	// Derived from internal/openclaw/onboarding.go agentsMDBlock with OpenClaw-only
@@ -111,12 +114,21 @@ func (s *PicoclawService) EnsureOnboarding() error {
 	seedFileIfAbsent(knowledgeFS, "resources/KNOWLEDGE.md",
 		filepath.Join(picoclawWorkspaceDir, "KNOWLEDGE.md"))
 
+	needRestart := false
+
+	// Point the workspace skills dir at the shared store BEFORE any prune/download
+	// below touches it — those now operate on the store, so a device still holding a
+	// real dir would otherwise have its skills pruned in the wrong place and keep a
+	// stale second copy of every skill (the drift/duplicate bug this store exists to
+	// end).
+	if ensureSkillsLink() {
+		needRestart = true
+	}
+
 	// Capability-gate skills: drop platform skills this device can't use (e.g.
 	// servo-control on a motionless device), keeping picoclaw's built-ins. Skill dirs
 	// are read per-turn from disk, so no gateway reload is needed.
 	s.pruneUnsupportedSkills()
-
-	needRestart := false
 
 	// SOUL.md per-device-type core block (owner-editable content stays below it).
 	if modified, err := s.ensureSoulMDBlock(); err != nil {
@@ -383,41 +395,36 @@ var picoclawBuiltinSkills = map[string]bool{
 	"weather":       true,
 }
 
+// ensureSkillsLink points picoclaw's workspace skills dir at the shared store. On a
+// device installed by an older os-server the real dir's skills are migrated into the
+// store and the dir becomes a symlink. Returns true when anything changed, so
+// EnsureOnboarding restarts the gateway.
+func ensureSkillsLink() bool {
+	changed, err := skills.LinkRuntimeDir(filepath.Join(picoclawWorkspaceDir, "skills"))
+	if err != nil {
+		slog.Error("link skills dir to shared store failed", "component", "picoclaw", "error", err)
+		return false
+	}
+	return changed
+}
+
 // pruneUnsupportedSkills removes skill dirs the device can't use. A skill survives
 // when it is EITHER (a) supported by this device's capabilities (skills.Supported —
 // the same gate openclaw uses) OR (b) a picoclaw built-in (picoclawBuiltinSkills).
-// Everything else under workspace/skills is removed. Fail-open: when DEVICE.md
-// declares no capabilities, skills.Supported returns the full catalog, so nothing
-// capability-gated is pruned. Mirrors openclaw's onboarding prune, but iterates the
-// on-disk dirs (picoclaw has extra built-ins outside skills.Catalog) instead of the
-// catalog.
+// Fail-open: when DEVICE.md declares no capabilities, skills.Supported returns the
+// full catalog, so nothing capability-gated is pruned. The removal itself runs against
+// the shared store, which the workspace skills dir now resolves to — pruning the
+// runtime path directly would only hide skills from picoclaw while the store (and thus
+// every other runtime) kept serving them.
 func (s *PicoclawService) pruneUnsupportedSkills() {
-	skillsDir := filepath.Join(picoclawWorkspaceDir, "skills")
-	entries, err := os.ReadDir(skillsDir)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			slog.Warn("prune skills: read dir failed", "component", "picoclaw-onboarding", "error", err)
-		}
-		return
-	}
 	keep := map[string]bool{}
 	for _, n := range s.supportedSkills() {
 		keep[n] = true
 	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if keep[name] || picoclawBuiltinSkills[name] {
-			continue
-		}
-		if err := os.RemoveAll(filepath.Join(skillsDir, name)); err != nil {
-			slog.Warn("prune unsupported skill failed", "component", "picoclaw-onboarding", "skill", name, "error", err)
-			continue
-		}
-		slog.Info("pruned unsupported skill (capability/built-in gate)", "component", "picoclaw-onboarding", "skill", name)
+	for n := range picoclawBuiltinSkills {
+		keep[n] = true
 	}
+	skills.PruneUnsupported(keep)
 }
 
 // seedFileIfAbsent writes an embedded file to dst only when dst does not already

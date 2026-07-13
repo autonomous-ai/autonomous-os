@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -96,44 +94,13 @@ func (s *CodexService) skillsBaseURL() string {
 	return ""
 }
 
-// downloadSkillsByName downloads specific skill zips from the CDN, extracts each
-// atomically into workspace/skills/<name>, and returns the names that actually
-// changed on disk (version pre-filter + content hash). Mirrors openclaw.
+// downloadSkillsByName downloads the named skill zips and returns the names that
+// actually changed on disk (version pre-filter + content hash). It writes into the
+// shared store, not a codex-private dir: every runtime downloading the same zips into
+// its own copy is what let those copies drift apart between devices. codex reads them
+// through the workspace/skills symlink ensureSkillsLink installs.
 func (s *CodexService) downloadSkillsByName(names []string) []string {
-	base := s.skillsBaseURL()
-	if base == "" {
-		slog.Info("skill download skipped: no ota_metadata_url configured", "component", "skill-watcher")
-		return nil
-	}
-	skillsDir := filepath.Join(codexWorkspaceDir, "skills")
-	var changed []string
-	for _, name := range names {
-		url := fmt.Sprintf("%s/%s.zip", base, name)
-		tmpZip, err := skills.DownloadToTempFile(url, "skill-*.zip")
-		if err != nil {
-			slog.Warn("skill zip download failed", "component", "skill-watcher", "skill", name, "error", err)
-			continue
-		}
-
-		targetDir := filepath.Join(skillsDir, name)
-		oldHash, _ := skills.FolderHash(targetDir)
-
-		if err := skills.ExtractSkillZip(tmpZip, targetDir); err != nil {
-			slog.Warn("skill extract failed", "component", "skill-watcher", "skill", name, "error", err)
-			os.Remove(tmpZip)
-			continue
-		}
-		os.Remove(tmpZip)
-
-		newHash, _ := skills.FolderHash(targetDir)
-		if oldHash != "" && oldHash == newHash {
-			slog.Info("skill content unchanged after extract, skipping notify",
-				"component", "skill-watcher", "skill", name)
-			continue
-		}
-		changed = append(changed, name)
-	}
-	return changed
+	return skills.InstallByName(s.skillsBaseURL(), names)
 }
 
 // notifySkillChanges tells the agent to re-read the changed skills. Mirrors openclaw.

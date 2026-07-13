@@ -16,6 +16,7 @@ import (
 
 	"go.autonomous.ai/os/domain"
 	"go.autonomous.ai/os/internal/device"
+	"go.autonomous.ai/os/internal/skills"
 )
 
 // knowledgeFS holds the KNOWLEDGE.md skeleton, embedded so a fresh
@@ -183,14 +184,14 @@ func (s *ClaudeCodeService) EnsureOnboarding() error {
 
 	// Lift any project-scoped skills left by an older os-server to user scope
 	// FIRST, so the prune/restore below see the real (post-migration) dir.
-	skillsMigrated := migrateSkillsToUserScope()
+	skillsLinked := ensureSkillsLink()
 
 	// Capability-gate skills; restore the supported set from the CDN when the
 	// skills dir is empty (factory reset wiped it / first boot).
 	s.pruneUnsupportedSkills()
 	skillsRestored := s.ensureSkills()
 
-	needRestart := presyncChanged || personaSeeded || skillsRestored || skillsMigrated
+	needRestart := presyncChanged || personaSeeded || skillsRestored || skillsLinked
 
 	if modified, err := s.ensureSoulMDBlock(); err != nil {
 		slog.Error("ensure SOUL.md block failed", "component", "claudecode-onboarding", "error", err)
@@ -499,48 +500,29 @@ func isDefaultSoulHeading(trimmed string) bool {
 // keep-list is empty. Kept as a map for symmetry with picoclawBuiltinSkills.
 var claudecodeBuiltinSkills = map[string]bool{}
 
-// pruneUnsupportedSkills removes skill dirs the device can't use from
-// claudecodeSkillsDir. A skill survives when it is EITHER (a) supported by
-// this device's capabilities (skills.Supported — the same gate openclaw uses) OR
-// (b) a claudecode built-in. Fail-open: when DEVICE.md declares no capabilities,
+// pruneUnsupportedSkills removes skill dirs the device can't use from the SHARED
+// store. A skill survives when it is EITHER (a) supported by this device's
+// capabilities (skills.Supported — the same gate every runtime uses) OR (b) a
+// claudecode built-in. Fail-open: when DEVICE.md declares no capabilities,
 // skills.Supported returns the full catalog, so nothing is pruned.
 func (s *ClaudeCodeService) pruneUnsupportedSkills() {
-	skillsDir := claudecodeSkillsDir
-	entries, err := os.ReadDir(skillsDir)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			slog.Warn("prune skills: read dir failed", "component", "claudecode-onboarding", "error", err)
-		}
-		return
-	}
 	keep := map[string]bool{}
 	for _, n := range s.supportedSkills() {
 		keep[n] = true
 	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if keep[name] || claudecodeBuiltinSkills[name] {
-			continue
-		}
-		if err := os.RemoveAll(filepath.Join(skillsDir, name)); err != nil {
-			slog.Warn("prune unsupported skill failed", "component", "claudecode-onboarding", "skill", name, "error", err)
-			continue
-		}
-		slog.Info("pruned unsupported skill (capability gate)", "component", "claudecode-onboarding", "skill", name)
+	for n := range claudecodeBuiltinSkills {
+		keep[n] = true
 	}
+	skills.PruneUnsupported(keep)
 }
 
-// ensureSkills downloads all supported skills from the CDN into
-// claudecodeSkillsDir when the directory is absent or empty. Covers factory
-// reset (which wipes it) and first boot. Steady-state updates are
-// handled by StartSkillWatcher (version-gated CDN polling). Returns true when
-// skills were restored so EnsureOnboarding includes a bridge restart. Mirrors
-// hermes.ensureSkills.
+// ensureSkills downloads all supported skills from the CDN into the SHARED store
+// when it is absent or empty. Covers factory reset (which wipes it) and first
+// boot. Steady-state updates are handled by StartSkillWatcher (version-gated CDN
+// polling). Returns true when skills were restored so EnsureOnboarding includes a
+// bridge restart. Mirrors hermes.ensureSkills.
 func (s *ClaudeCodeService) ensureSkills() bool {
-	skillsDir := claudecodeSkillsDir
+	skillsDir := skills.Dir()
 	entries, err := os.ReadDir(skillsDir)
 	if err == nil && len(entries) > 0 {
 		return false // skills present — watcher handles updates
@@ -556,49 +538,43 @@ func (s *ClaudeCodeService) ensureSkills() bool {
 	return len(changed) > 0
 }
 
-// migrateSkillsToUserScope moves skills installed by an older os-server under
-// workspace/.claude/skills into the user-level claudecodeSkillsDir, then drops
-// the workspace copy. Without the move, devices already in the field would keep
-// project-scoped-only skills (invisible to coding sessions); without the drop,
-// Claude Code would register every skill twice (project + user) in the device
-// chat. Idempotent: a no-op once the legacy dir is gone. Returns true when
-// anything moved, so EnsureOnboarding restarts the bridge.
-func migrateSkillsToUserScope() bool {
-	legacyDir := filepath.Join(claudecodeWorkspaceDir, ".claude", "skills")
-	entries, err := os.ReadDir(legacyDir)
+// ensureSkillsLink points Claude Code's user-level skills dir at the SHARED store
+// (internal/skills.StoreDir), so every runtime reads the same copy of every skill.
+// Replaces the old per-runtime download: the copies drifted (two devices on one
+// release ran different connectors/SKILL.md) and a duplicate of one skill name can
+// stop a runtime loading it at all.
+//
+// Also folds in the PROJECT-scoped copy that devices from before the user-scope
+// move still carry at workspace/.claude/skills. That one must end up deleted, not
+// symlinked: Claude Code loads project AND user skills in the device chat, so
+// leaving it would register every skill twice.
+//
+// Returns true when anything changed on disk, so EnsureOnboarding restarts the bridge.
+func ensureSkillsLink() bool {
+	changed := false
+
+	legacy := filepath.Join(claudecodeWorkspaceDir, ".claude", "skills")
+	if _, err := os.Lstat(legacy); err == nil {
+		// LinkRuntimeDir migrates the dir's skills into the store (store copy wins)
+		// and leaves a symlink behind; drop that symlink so no project-scoped skills
+		// dir survives.
+		if _, err := skills.LinkRuntimeDir(legacy); err != nil {
+			slog.Warn("fold legacy project skills into store failed", "component", "claudecode-onboarding", "error", err)
+		} else if err := os.Remove(legacy); err != nil {
+			slog.Warn("remove legacy project skills dir failed", "component", "claudecode-onboarding", "error", err)
+		} else {
+			slog.Info("folded legacy project-scoped skills into the shared store",
+				"component", "claudecode-onboarding", "from", legacy, "store", skills.Dir())
+			changed = true
+		}
+	}
+
+	linked, err := skills.LinkRuntimeDir(claudecodeSkillsDir)
 	if err != nil {
-		return false // absent (already migrated / fresh device) — nothing to do
+		slog.Error("link skills dir to shared store failed", "component", "claudecode-onboarding", "error", err)
+		return changed
 	}
-
-	if err := os.MkdirAll(claudecodeSkillsDir, 0o755); err != nil {
-		slog.Warn("migrate skills: mkdir user skills dir failed", "component", "claudecode-onboarding", "error", err)
-		return false
-	}
-
-	var moved int
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		dst := filepath.Join(claudecodeSkillsDir, e.Name())
-		if _, err := os.Stat(dst); err == nil {
-			continue // already at user scope — the legacy copy is redundant
-		}
-		if err := os.Rename(filepath.Join(legacyDir, e.Name()), dst); err != nil {
-			slog.Warn("migrate skills: move failed", "component", "claudecode-onboarding", "skill", e.Name(), "error", err)
-			continue
-		}
-		moved++
-	}
-
-	// Drop the legacy dir even when nothing moved (every skill already existed at
-	// user scope) — leaving it would double-register each skill.
-	if err := os.RemoveAll(legacyDir); err != nil {
-		slog.Warn("migrate skills: remove legacy dir failed", "component", "claudecode-onboarding", "error", err)
-	}
-	slog.Info("migrated skills to user scope", "component", "claudecode-onboarding",
-		"moved", moved, "from", legacyDir, "to", claudecodeSkillsDir)
-	return true
+	return changed || linked
 }
 
 // seedFileIfAbsent writes an embedded file to dst only when dst does not already

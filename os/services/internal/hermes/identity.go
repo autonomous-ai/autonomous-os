@@ -16,7 +16,10 @@ import (
 // hermesHome is the Hermes data dir (matches internal/hermes/install.sh HERMES_DIR
 // and the persona-migration target). SOUL.md — the file Hermes loads as its
 // identity prompt — lives at its root.
-const hermesHome = "/root/.hermes"
+//
+// A var, not a const, purely as a test seam: the skills-link test must redirect the
+// home away from /root so it can create and inspect real dirs under it.
+var hermesHome = "/root/.hermes"
 
 // identitySoulHeading marks the identity block the openclaw→hermes migration
 // inlines into SOUL.md (see internal/agent/migrate_persona). UpdateIdentityName

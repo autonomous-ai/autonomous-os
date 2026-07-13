@@ -27,7 +27,7 @@ const (
 
 	// mcpSkillsBaseURL is the GCS prefix holding one <name>.zip per MCP connector
 	// skill. Unlike role zips, these contain a top-level `<name>/` tree (no
-	// `skills/` prefix), extracted verbatim into workspace/skills.
+	// `skills/` prefix), extracted verbatim into the shared skill store.
 	mcpSkillsBaseURL = "https://storage.googleapis.com/s3-autonomous-upgrade-3/plugins-skills/skills_for_MCP"
 )
 
@@ -42,12 +42,17 @@ var ErrInvalidRole = errors.New("invalid role")
 var roleNamePattern = regexp.MustCompile(`^[a-z0-9_-]+$`)
 
 // InstallRoleSkills downloads <role>/skills.zip from GCS and extracts its
-// `skills/` tree into {configDir}/workspace/skills, returning the number of
-// files written. Existing skills (other roles, OTA-pushed skills) are left
-// untouched — only files present in the zip are (over)written, so installs are
-// cumulative. The gateway is NOT restarted: skills.load.watch (set at setup,
+// `skills/` tree into the shared skill store, returning the number of files
+// written. Existing skills (other roles, OTA-pushed skills) are left untouched —
+// only files present in the zip are (over)written, so installs are cumulative.
+// The gateway is NOT restarted: skills.load.watch (set at setup,
 // service_setup.go) picks new files up per session.
+//
+// configDir is retained for API compatibility with existing callers; the target
+// is no longer derived from it, because a role installed under one runtime's
+// workspace was invisible to every other runtime.
 func InstallRoleSkills(configDir, role string) (int, error) {
+	_ = configDir
 	if !roleNamePattern.MatchString(role) {
 		return 0, fmt.Errorf("%w: %q", ErrInvalidRole, role)
 	}
@@ -75,7 +80,7 @@ func InstallRoleSkills(configDir, role string) (int, error) {
 	}
 	defer os.Remove(tmpZip)
 
-	skillsDir := filepath.Join(configDir, "workspace", "skills")
+	skillsDir := skills.Dir()
 	count, err := extractDirFromZip(tmpZip, roleSkillsZipPrefix, skillsDir)
 	if err != nil {
 		return count, fmt.Errorf("extract %s skills: %w", role, err)
@@ -85,18 +90,24 @@ func InstallRoleSkills(configDir, role string) (int, error) {
 }
 
 // EnsureMCPSkill makes sure the MCP connector skill <name> is present under
-// {configDir}/workspace/skills/<name>. Idempotent: if <name>/SKILL.md already
-// exists it is a no-op, so the connector refresh loop (which re-runs the
-// writer's Write on every token rotation) doesn't re-download the zip each
-// time. Otherwise it downloads skills_for_MCP/<name>.zip from GCS and extracts
-// it verbatim (the zip already carries a top-level <name>/ dir). The gateway is
-// NOT restarted — skills.load.watch picks new files up per session.
+// <store>/<name>. Idempotent: if <name>/SKILL.md already exists it is a no-op,
+// so the connector refresh loop (which re-runs the writer's Write on every token
+// rotation) doesn't re-download the zip each time. Otherwise it downloads
+// skills_for_MCP/<name>.zip from GCS and extracts it verbatim (the zip already
+// carries a top-level <name>/ dir). The gateway is NOT restarted —
+// skills.load.watch picks new files up per session.
+//
+// The target is the shared store, not the OpenClaw workspace: connectors are set
+// up for whichever runtime is active, so a figma-api skill dropped into the
+// OpenClaw workspace while Claude Code was the live runtime was never read by
+// anyone. configDir is retained for API compatibility with existing callers.
 func EnsureMCPSkill(configDir, name string) error {
+	_ = configDir
 	if !roleNamePattern.MatchString(name) {
 		return fmt.Errorf("%w: %q", ErrInvalidRole, name)
 	}
 
-	skillsDir := filepath.Join(configDir, "workspace", "skills")
+	skillsDir := skills.Dir()
 	if _, err := os.Stat(filepath.Join(skillsDir, name, "SKILL.md")); err == nil {
 		return nil // already installed
 	}
@@ -125,7 +136,7 @@ func EnsureMCPSkill(configDir, name string) error {
 	defer os.Remove(tmpZip)
 
 	// Extract verbatim (srcPrefix "") so "<name>/SKILL.md" lands at
-	// workspace/skills/<name>/SKILL.md.
+	// <store>/<name>/SKILL.md.
 	count, err := extractDirFromZip(tmpZip, "", skillsDir)
 	if err != nil {
 		return fmt.Errorf("extract %s mcp skill: %w", name, err)

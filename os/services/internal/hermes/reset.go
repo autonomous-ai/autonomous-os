@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.autonomous.ai/os/internal/device"
+	"go.autonomous.ai/os/internal/skills"
 	"go.autonomous.ai/os/lib/osreset"
 	"go.autonomous.ai/os/server/config"
 )
@@ -54,18 +55,22 @@ func waitForServiceStop(unit string, timeout time.Duration) bool {
 // directory sweep (see hermesKeepFiles) — anything NOT in this list and NOT in
 // hermesKeepFiles stays untouched (skills/, bin/, audio_cache/, pairing/, …).
 var hermesWipeDirs = []string{
-	hermesHome + "/sessions",                // conversation session state
-	hermesHome + "/memories",                // semantic memory store
-	hermesHome + "/tasks",                   // background task runs
-	hermesHome + "/subagents",               // subagent history
-	hermesHome + "/checkpoints",             // run checkpoints
-	hermesHome + "/logs",                    // runtime logs
-	hermesHome + "/.cache",                  // cache dir (dotted)
-	hermesHome + "/cron",                    // scheduled jobs
-	hermesHome + "/cache",                   // runtime cache (non-dotted, see tree)
-	hermesHome + "/gateway",                 // gateway runtime state dir
-	hermesHome + "/migration",               // migration history
-	hermesHome + "/skills/openclaw-imports", // CDN-downloaded user-defined skills
+	hermesHome + "/sessions",    // conversation session state
+	hermesHome + "/memories",    // semantic memory store
+	hermesHome + "/tasks",       // background task runs
+	hermesHome + "/subagents",   // subagent history
+	hermesHome + "/checkpoints", // run checkpoints
+	hermesHome + "/logs",        // runtime logs
+	hermesHome + "/.cache",      // cache dir (dotted)
+	hermesHome + "/cron",        // scheduled jobs
+	hermesHome + "/cache",       // runtime cache (non-dotted, see tree)
+	hermesHome + "/gateway",     // gateway runtime state dir
+	hermesHome + "/migration",   // migration history
+	// The shared store is where the skills actually live now; openclaw-imports is
+	// only a symlink into it. Wipe BOTH: the store so a reset really drops the
+	// skills, the link so no dangling symlink survives for the next boot to trip on.
+	skills.StoreDir,
+	hermesHome + "/skills/openclaw-imports", // symlink to the shared skill store
 	hermesHome + "/skills/audio_cache",      // audio cache
 	hermesHome + "/skills/image_cache",      // image cache
 }

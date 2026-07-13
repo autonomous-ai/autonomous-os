@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"go.autonomous.ai/os/domain"
+	"go.autonomous.ai/os/internal/skills"
 )
 
 const (
@@ -112,6 +113,10 @@ func (s *HermesService) EnsureOnboarding() error {
 
 	// Restart the gateway only when config.yaml/.env OR the hook actually changed —
 	// all are loaded only at gateway start, so an unchanged boot is a no-op.
+	//
+	// Link BEFORE ensureSkills so the restore guard below inspects (and fills) the one
+	// canonical store rather than a per-runtime copy that can drift out of sync.
+	skillsLinked := ensureSkillsLink()
 	skillsRestored := s.ensureSkills()
 
 	// B (self-heal): make sure the hermes-gateway.service unit actually exists before
@@ -125,14 +130,15 @@ func (s *HermesService) EnsureOnboarding() error {
 	gatewayInstalled := s.ensureGatewayUnit()
 	gatewayDown := !gatewayActive()
 
-	if !configChanged && !hookChanged && !skillsRestored && !skillsDeduped && !gatewayInstalled && !gatewayDown {
+	if !configChanged && !hookChanged && !skillsLinked && !skillsRestored && !skillsDeduped && !gatewayInstalled && !gatewayDown {
 		slog.Info("hermes onboarding: config + hooks + skills unchanged, gateway up — no restart", "component", "hermes")
 		return nil
 	}
 
 	slog.Info("hermes onboarding: (re)starting gateway",
 		"component", "hermes", "unit", hermesGatewayUnit,
-		"config_changed", configChanged, "hook_changed", hookChanged, "skills_restored", skillsRestored,
+		"config_changed", configChanged, "hook_changed", hookChanged, "skills_linked", skillsLinked,
+		"skills_restored", skillsRestored,
 		"skills_deduped", skillsDeduped, "gateway_installed", gatewayInstalled, "gateway_down", gatewayDown)
 	// Re-enable so hermes survives a reboot — factory reset disabled the unit, and a
 	// freshly installed one is not enabled for boot. Best-effort; restart still starts
@@ -203,22 +209,42 @@ func (s *HermesService) RestartAgent() error {
 	return nil
 }
 
-// ensureSkills downloads all supported skills from CDN into
-// ~/.hermes/skills/openclaw-imports/ when the directory is absent or empty.
-// This covers two cases where skills are missing without a CDN version bump:
-//   - factory reset (wipes openclaw-imports/) with Hermes as the active runtime
+// ensureSkillsLink points hermes' skills/openclaw-imports at the shared store. The
+// link is at openclaw-imports, NOT at skills/ — audio_cache/ and image_cache/ are
+// siblings under skills/ and must not be swallowed by it.
+//
+// Why link at all: every runtime used to download the same CDN zips into its own
+// dir, so the copies drifted, and two candidates for one skill name make Hermes'
+// skill_view refuse to load the skill entirely ("Ambiguous skill name") — see
+// pruneImportedSkillDuplicates. One store means one copy of each name.
+//
+// Returns true when the link changed on disk so the caller restarts the gateway;
+// false (with the error logged) on failure, leaving the existing dir in place
+// rather than aborting onboarding.
+func ensureSkillsLink() bool {
+	changed, err := skills.LinkRuntimeDir(filepath.Join(hermesHome, "skills", "openclaw-imports"))
+	if err != nil {
+		slog.Error("link skills dir to shared store failed", "component", "hermes", "error", err)
+		return false
+	}
+	return changed
+}
+
+// ensureSkills downloads all supported skills from CDN into the shared skill store
+// (which skills/openclaw-imports symlinks to) when it is absent or empty. This
+// covers two cases where skills are missing without a CDN version bump:
+//   - factory reset (wipes the store) with Hermes as the active runtime
 //   - first boot as Hermes when claw migrate had nothing to copy from
 //
 // Steady-state updates are handled by StartSkillWatcher (version-gated CDN
 // polling). This is intentionally a restore guard, not a full sync — we only
-// act when the dir is empty so we don't double-download on every boot.
+// act when the store is empty so we don't double-download on every boot.
 //
 // Returns true when skills were restored so EnsureOnboarding includes a gateway
 // restart — the running Hermes instance would otherwise not load skills that
 // landed on disk after it started.
 func (s *HermesService) ensureSkills() bool {
-	skillsDir := filepath.Join(hermesHome, "skills", "openclaw-imports")
-	entries, err := os.ReadDir(skillsDir)
+	entries, err := os.ReadDir(skills.Dir())
 	if err == nil && len(entries) > 0 {
 		return false // skills present — watcher handles updates
 	}
@@ -226,9 +252,9 @@ func (s *HermesService) ensureSkills() bool {
 	if len(names) == 0 {
 		return false
 	}
-	slog.Info("hermes onboarding: skills dir empty — restoring from CDN",
+	slog.Info("hermes onboarding: skill store empty — restoring from CDN",
 		"component", "hermes", "count", len(names))
-	changed := s.downloadSkillsByName(names)
+	changed := skills.InstallByName(s.skillsBaseURL(), names)
 	slog.Info("hermes onboarding: skills restored", "component", "hermes", "restored", len(changed))
 	return len(changed) > 0
 }

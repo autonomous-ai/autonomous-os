@@ -98,6 +98,21 @@ func (s *OpenclawService) hooksBaseURL() string {
 	return ""
 }
 
+// ensureSkillsLink makes OpenClaw's native workspace/skills dir resolve to the
+// shared skill store. Runtimes used to each keep their own copy of the same CDN
+// zips, which drifted apart between devices and left duplicate copies of a skill
+// name behind after a runtime switch. Returns true when the link changed on disk
+// so the caller restarts the gateway; false (with the error logged) on failure,
+// leaving the old on-disk dir in place rather than aborting onboarding.
+func (s *OpenclawService) ensureSkillsLink(workspace string) bool {
+	changed, err := skills.LinkRuntimeDir(filepath.Join(workspace, "skills"))
+	if err != nil {
+		slog.Error("link skills dir to shared store failed", "component", "openclaw", "error", err)
+		return false
+	}
+	return changed
+}
+
 func (s *OpenclawService) EnsureOnboarding() error {
 	workspace := filepath.Join(s.config.OpenclawConfigDir, "workspace")
 	if err := os.MkdirAll(workspace, 0755); err != nil {
@@ -113,11 +128,14 @@ func (s *OpenclawService) EnsureOnboarding() error {
 		needRestart = true
 	}
 
-	// Download skills from CDN
-	skillsDir := filepath.Join(workspace, "skills")
-	if err := os.MkdirAll(skillsDir, 0755); err != nil {
-		return fmt.Errorf("create skills dir: %w", err)
+	// Point workspace/skills at the shared store BEFORE any prune/seed below, so
+	// every path in this function operates on the one canonical copy.
+	if linked := s.ensureSkillsLink(workspace); linked {
+		needRestart = true
 	}
+
+	// Download skills from CDN
+	skillsDir := skills.Dir()
 	// Capability gate: this device runs only the skills its DEVICE.md capabilities
 	// support (plus platform skills). Create dirs for supported skills; remove any
 	// unsupported skill dir so a re-provisioned device (or one whose DEVICE.md

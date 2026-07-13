@@ -61,12 +61,6 @@ const (
 	// auto-loads, and it truncates past that limit).
 	personaInlineSoulCap = 20_000
 
-	// codexWorkspaceDir is Codex's workspace (HOME=/root → ~/.codex).
-	// TODO(codex-config-dir): there is no CodexConfigDir in server/config yet
-	// (openclaw uses cfg.OpenclawConfigDir). Hardcoded for now; promote to config if
-	// the data dir ever needs to be overridable.
-	codexWorkspaceDir = "/root/.codex/workspace"
-
 	// agentsMDBlock is the OS-managed block injected into workspace/AGENTS.md.
 	// Derived from internal/openclaw/onboarding.go agentsMDBlock with OpenClaw-only
 	// content removed (hooks/handler.ts; `openclaw --version`; the injected
@@ -106,6 +100,32 @@ Follow the instructions in whichever file you read.
 ---`
 )
 
+// codexWorkspaceDir is Codex's workspace (HOME=/root → ~/.codex).
+// TODO(codex-config-dir): there is no CodexConfigDir in server/config yet
+// (openclaw uses cfg.OpenclawConfigDir). Hardcoded for now; promote to config if
+// the data dir ever needs to be overridable.
+//
+// A var rather than a const only as a test seam: the skills-link path creates and
+// symlinks real directories, which a test cannot do under /root.
+var codexWorkspaceDir = "/root/.codex/workspace"
+
+// ensureSkillsLink points codex's workspace skills dir at the shared store. Runtimes
+// used to each download the same CDN zips into their own dir, so the copies drifted
+// between devices and a runtime switch left duplicate copies of one skill name behind
+// (which makes the agent refuse to load that skill at all). On a device installed by
+// an older os-server the real dir's skills are migrated into the store and the dir
+// becomes a symlink. Returns true when anything changed, so EnsureOnboarding restarts
+// the gateway; false (with the error logged) on failure, leaving the old on-disk dir
+// in place rather than aborting onboarding.
+func ensureSkillsLink() bool {
+	changed, err := skills.LinkRuntimeDir(filepath.Join(codexWorkspaceDir, "skills"))
+	if err != nil {
+		slog.Error("link skills dir to shared store failed", "component", "codex", "error", err)
+		return false
+	}
+	return changed
+}
+
 // SetupAgent runs onboarding. The runtime itself is
 // installed + provisioned out-of-process by install.sh/presync.sh; what os-server
 // owns at setup time is the workspace reconciliation EnsureOnboarding does.
@@ -132,12 +152,24 @@ func (s *CodexService) EnsureOnboarding() error {
 	}
 	presyncChanged := fileHash(codexConfigTOML)+fileHash(codexEnvFile) != configBefore
 
+	needRestart := false
+
 	// Seed KNOWLEDGE.md from the embedded template only if absent. presync.sh §1
 	// copies openclaw's living KNOWLEDGE.md (with accumulated learnings) when
 	// migrating; this fallback covers the fresh codex-only device where there was
 	// no openclaw copy. Never overwrites an existing file.
 	seedFileIfAbsent(knowledgeFS, "resources/KNOWLEDGE.md",
 		filepath.Join(codexWorkspaceDir, "KNOWLEDGE.md"))
+
+	// Point workspace/skills at the shared store BEFORE the prune below, so the
+	// prune (and the CDN skill watcher) operate on the one canonical copy rather
+	// than a per-runtime duplicate that drifts away from it.
+	if linked := ensureSkillsLink(); linked {
+		// Only on the one migration boot: the dir a running `codex exec` was
+		// handed has just been replaced by a symlink, so restart rather than let
+		// an in-flight turn keep resolving the deleted directory.
+		needRestart = true
+	}
 
 	// Capability-gate skills: drop platform skills this device can't use (e.g.
 	// servo-control on a motionless device). Skill dirs are read per-turn from
@@ -165,8 +197,6 @@ func (s *CodexService) EnsureOnboarding() error {
 	if _, err := s.ensureHeartbeatMDBlock(); err != nil {
 		slog.Error("ensure HEARTBEAT.md block failed", "component", "codex-onboarding", "error", err)
 	}
-
-	needRestart := false
 
 	// Presync rewrote config.toml/.env → the running unit is stale: .env is a
 	// systemd EnvironmentFile (WS token/port, OPENAI_API_KEY) loaded only at
@@ -566,45 +596,27 @@ func (s *CodexService) ensureHeartbeatMDBlock() (bool, error) {
 	return true, nil
 }
 
-// pruneUnsupportedSkills removes platform-catalog skill dirs the device can't use
-// (skills.Supported — the same capability gate openclaw uses). Codex ships NO
-// built-in skills (the CLI has no onboarding step that seeds any): workspace/skills
-// comes solely from the openclaw migration (presync.sh §1) plus the CDN skill
-// watcher, so only skills.Catalog names are OS-owned — unknown dirs (e.g.
-// user-created skills) are left alone, matching openclaw's prune semantics.
-// Fail-open: when DEVICE.md declares no capabilities, skills.Supported returns
-// the full catalog, so nothing is pruned.
+// pruneUnsupportedSkills removes skill dirs the device can't use (skills.Supported —
+// the same capability gate openclaw uses) from the shared store. Codex ships NO
+// built-in skills (the CLI has no onboarding step that seeds any): the store comes
+// solely from the openclaw migration (presync.sh §1) plus the CDN skill watcher.
+// Fail-open: when DEVICE.md declares no capabilities, skills.Supported returns the
+// full catalog, so nothing is pruned.
+//
+// Names outside skills.Catalog are folded into keep on purpose. skills.PruneUnsupported
+// deletes everything not kept, but a non-catalog dir is a skill the OS never published
+// — a user-created one, or one owned by another runtime — and the store is now SHARED,
+// so deleting it here would destroy data on behalf of every other runtime. The dir-based
+// prune this replaced kept those dirs for the same reason.
 func (s *CodexService) pruneUnsupportedSkills() {
-	skillsDir := filepath.Join(codexWorkspaceDir, "skills")
-	entries, err := os.ReadDir(skillsDir)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			slog.Warn("prune skills: read dir failed", "component", "codex-onboarding", "error", err)
-		}
-		return
-	}
 	keep := map[string]bool{}
 	for _, n := range s.supportedSkills() {
 		keep[n] = true
 	}
-	catalog := map[string]bool{}
-	for _, n := range skills.Catalog {
-		catalog[n] = true
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if !catalog[name] || keep[name] {
-			continue
-		}
-		if err := os.RemoveAll(filepath.Join(skillsDir, name)); err != nil {
-			slog.Warn("prune unsupported skill failed", "component", "codex-onboarding", "skill", name, "error", err)
-			continue
-		}
-		slog.Info("pruned unsupported skill (capability gate)", "component", "codex-onboarding", "skill", name)
-	}
+	// Only platform-catalog skills are pruned; PruneUnsupported leaves anything it
+	// doesn't own (runtime-bundled skills, MCP connector skills) alone, which is what
+	// keeps codex from deleting another runtime's skills out of the shared store.
+	skills.PruneUnsupported(keep)
 }
 
 // seedFileIfAbsent writes an embedded file to dst only when dst does not already

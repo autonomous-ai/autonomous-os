@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -105,48 +103,13 @@ func (s *HermesService) skillsBaseURL() string {
 	return ""
 }
 
-// downloadSkillsByName downloads specific skill zips from CDN and extracts each
-// atomically into ~/.hermes/skills/openclaw-imports/<name> (where `claw migrate`
-// puts OpenClaw-imported skills). Returns names of skills that actually changed on
-// disk. Parallel to OpenClaw's downloadSkillsByName — only the target dir differs.
+// downloadSkillsByName installs the named skill zips into the shared store, which
+// skills/openclaw-imports symlinks to (ensureSkillsLink). It no longer downloads
+// into a hermes-private dir: that is exactly how the same CDN zip ended up as two
+// drifting copies with duplicate names, which makes Hermes refuse to load the skill
+// at all. Returns the names whose content actually changed on disk.
 func (s *HermesService) downloadSkillsByName(names []string) []string {
-	base := s.skillsBaseURL()
-	if base == "" {
-		slog.Info("skill download skipped: no ota_metadata_url configured", "component", "skill-watcher")
-		return nil
-	}
-	skillsDir := filepath.Join(hermesHome, "skills", "openclaw-imports")
-	var changed []string
-	for _, name := range names {
-		url := fmt.Sprintf("%s/%s.zip", base, name)
-		tmpZip, err := skills.DownloadToTempFile(url, "skill-*.zip")
-		if err != nil {
-			slog.Warn("skill zip download failed", "component", "skill-watcher", "skill", name, "error", err)
-			continue
-		}
-
-		targetDir := filepath.Join(skillsDir, name)
-
-		// Hash existing content before extract so we can detect a no-op update —
-		// metadata version bumped but actual files would land identical.
-		oldHash, _ := skills.FolderHash(targetDir)
-
-		if err := skills.ExtractSkillZip(tmpZip, targetDir); err != nil {
-			slog.Warn("skill extract failed", "component", "skill-watcher", "skill", name, "error", err)
-			os.Remove(tmpZip)
-			continue
-		}
-		os.Remove(tmpZip)
-
-		newHash, _ := skills.FolderHash(targetDir)
-		if oldHash != "" && oldHash == newHash {
-			slog.Info("skill content unchanged after extract, skipping notify",
-				"component", "skill-watcher", "skill", name)
-			continue
-		}
-		changed = append(changed, name)
-	}
-	return changed
+	return skills.InstallByName(s.skillsBaseURL(), names)
 }
 
 // notifySkillChanges tells the Hermes agent to re-read the changed skills.

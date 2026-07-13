@@ -139,26 +139,47 @@ func InstallByName(baseURL string, names []string) []string {
 	return changed
 }
 
-// PruneUnsupported removes store entries whose name is not in keep (the device's
-// capability-gated set) and returns what it removed. Fail-open by contract: callers
-// pass the full catalog when the device declares no capabilities, so nothing is
-// pruned.
+// PruneUnsupported removes PLATFORM skills the device can't use (a catalog entry
+// absent from keep, the caller's capability-gated set) and returns what it removed.
+// Fail-open by contract: callers pass the full catalog when the device declares no
+// capabilities, so nothing is pruned.
+//
+// It only ever prunes names it OWNS — entries in Catalog. A store entry that is not
+// a platform skill is left alone, because the store is shared and the caller is only
+// one of its users:
+//
+//   - runtime-BUNDLED skills (picoclaw/codex ship agent-browser, tmux, …) belong to
+//     that runtime, not to the platform catalog;
+//   - MCP connector skills (figma-api, …) are installed by openclaw.EnsureMCPSkill.
+//
+// Pruning by "not in keep" alone would make whichever runtime booted last delete the
+// others' skills — claudecode's keep-list would wipe picoclaw's bundled skills, and
+// every runtime would wipe figma-api.
 func PruneUnsupported(keep map[string]bool) []string {
 	entries, err := os.ReadDir(storeDir)
 	if err != nil {
 		return nil
 	}
+	catalog := make(map[string]bool, len(Catalog))
+	for _, n := range Catalog {
+		catalog[n] = true
+	}
+
 	var removed []string
 	for _, e := range entries {
-		if !e.IsDir() || keep[e.Name()] {
+		name := e.Name()
+		if !e.IsDir() || keep[name] {
 			continue
 		}
-		if err := os.RemoveAll(filepath.Join(storeDir, e.Name())); err != nil {
-			slog.Warn("prune unsupported skill failed", "component", "skills", "skill", e.Name(), "error", err)
+		if !catalog[name] {
+			continue // not a platform skill — another runtime or a connector owns it
+		}
+		if err := os.RemoveAll(filepath.Join(storeDir, name)); err != nil {
+			slog.Warn("prune unsupported skill failed", "component", "skills", "skill", name, "error", err)
 			continue
 		}
-		removed = append(removed, e.Name())
-		slog.Info("pruned unsupported skill (capability gate)", "component", "skills", "skill", e.Name())
+		removed = append(removed, name)
+		slog.Info("pruned unsupported skill (capability gate)", "component", "skills", "skill", name)
 	}
 	return removed
 }

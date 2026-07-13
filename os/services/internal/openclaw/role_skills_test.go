@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"go.autonomous.ai/os/internal/skills"
 )
 
 func TestInstallRoleSkillsInvalidRole(t *testing.T) {
@@ -14,6 +16,25 @@ func TestInstallRoleSkillsInvalidRole(t *testing.T) {
 		if _, err := InstallRoleSkills(t.TempDir(), role); !errors.Is(err, ErrInvalidRole) {
 			t.Errorf("role %q: want ErrInvalidRole, got %v", role, err)
 		}
+	}
+}
+
+func TestEnsureMCPSkillResolvesAgainstSharedStore(t *testing.T) {
+	// A connector skill seeded in the shared store must satisfy the
+	// already-installed check no matter which configDir the caller passes: an MCP
+	// skill set up while another runtime was active used to land in OpenClaw's
+	// workspace, where the live runtime never looked for it. A hit here means no
+	// network call — the download path would fail this test offline.
+	store := skills.SetDirForTest(t, filepath.Join(t.TempDir(), "store"))
+	if err := os.MkdirAll(filepath.Join(store, "figma-api"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store, "figma-api", "SKILL.md"), []byte("# figma"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := EnsureMCPSkill(t.TempDir(), "figma-api"); err != nil {
+		t.Fatalf("EnsureMCPSkill: %v", err)
 	}
 }
 

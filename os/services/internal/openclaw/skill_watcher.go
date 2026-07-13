@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"time"
 
 	"go.autonomous.ai/os/internal/skills"
@@ -82,49 +80,13 @@ func (s *OpenclawService) downloadSkills() []string {
 	return s.downloadSkillsByName(s.supportedSkills())
 }
 
-// downloadSkillsByName downloads specific skill zips from CDN, extracts each
-// atomically into workspace/skills/<name>, returns names of skills that actually
-// changed on disk. Each skill is published as <name>.zip containing the whole
-// skill folder; the version pre-filter + content hash mean a returned name had
-// real content changes.
+// downloadSkillsByName installs specific skill zips into the shared store and
+// returns the names whose content actually changed. The download/extract/hash
+// work is no longer OpenClaw's: every runtime downloading the same zips into its
+// own dir is what let two devices on one release end up with different
+// connectors/SKILL.md. One store, one copy, one version.
 func (s *OpenclawService) downloadSkillsByName(names []string) []string {
-	base := s.skillsBaseURL()
-	if base == "" {
-		slog.Info("skill download skipped: no ota_metadata_url configured", "component", "skill-watcher")
-		return nil
-	}
-	skillsDir := filepath.Join(s.config.OpenclawConfigDir, "workspace", "skills")
-	var changed []string
-	for _, name := range names {
-		url := fmt.Sprintf("%s/%s.zip", base, name)
-		tmpZip, err := skills.DownloadToTempFile(url, "skill-*.zip")
-		if err != nil {
-			slog.Warn("skill zip download failed", "component", "skill-watcher", "skill", name, "error", err)
-			continue
-		}
-
-		targetDir := filepath.Join(skillsDir, name)
-
-		// Hash existing content before extract so we can detect a no-op update —
-		// metadata version bumped but actual files would land identical.
-		oldHash, _ := skills.FolderHash(targetDir)
-
-		if err := skills.ExtractSkillZip(tmpZip, targetDir); err != nil {
-			slog.Warn("skill extract failed", "component", "skill-watcher", "skill", name, "error", err)
-			os.Remove(tmpZip)
-			continue
-		}
-		os.Remove(tmpZip)
-
-		newHash, _ := skills.FolderHash(targetDir)
-		if oldHash != "" && oldHash == newHash {
-			slog.Info("skill content unchanged after extract, skipping notify",
-				"component", "skill-watcher", "skill", name)
-			continue
-		}
-		changed = append(changed, name)
-	}
-	return changed
+	return skills.InstallByName(s.skillsBaseURL(), names)
 }
 
 // notifySkillChanges sends a single message to the agent listing all changed skills.

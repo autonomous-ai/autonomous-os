@@ -139,6 +139,28 @@ func TestPruneUnsupported_RemovesOnlyUnlisted(t *testing.T) {
 	}
 }
 
+// The store is SHARED, so a prune must never delete a skill it doesn't own.
+// Runtime-bundled skills (picoclaw's tmux, agent-browser, …) and MCP connector
+// skills (figma-api) are not platform-catalog entries; pruning by "not in keep"
+// alone would make whichever runtime booted last wipe the others' skills.
+func TestPruneUnsupported_LeavesNonCatalogSkillsAlone(t *testing.T) {
+	store := withTempStore(t)
+	writeSkill(t, store, "led-control", "x") // catalog, unsupported -> pruned
+	writeSkill(t, store, "figma-api", "x")   // MCP connector skill -> must survive
+	writeSkill(t, store, "tmux", "x")        // picoclaw bundled skill -> must survive
+
+	removed := PruneUnsupported(map[string]bool{"connectors": true})
+
+	if len(removed) != 1 || removed[0] != "led-control" {
+		t.Fatalf("removed = %v, want only [led-control]", removed)
+	}
+	for _, name := range []string{"figma-api", "tmux"} {
+		if _, err := os.Stat(filepath.Join(store, name)); err != nil {
+			t.Fatalf("non-catalog skill %q was pruned from the shared store: %v", name, err)
+		}
+	}
+}
+
 func TestInstallByName_NoBaseURLIsANoOp(t *testing.T) {
 	withTempStore(t)
 	if got := InstallByName("", []string{"connectors"}); got != nil {
