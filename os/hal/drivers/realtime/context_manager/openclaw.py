@@ -103,10 +103,19 @@ class OpenClawContextManager(ContextManagerBase):
                 logger.warning("[realtime] Failed to read memory %s: %s", md_file, e)
         return entries
 
+    def skills_dir(self) -> Path:
+        """Where this runtime's skills live.
+
+        Workspace-relative by default. A runtime whose skills sit outside the
+        workspace (Claude Code: user-scoped ~/.claude/skills) overrides this — the
+        dir must be resolved as an absolute path, not derived from the workspace.
+        """
+        return self._workspace.joinpath(*self.SKILLS_SUBDIR)
+
     @override
     def load_skills_catalog(self) -> str:
         """Parse SKILL.md frontmatter from all skills, return a markdown table."""
-        skills_dir: Path = self._workspace.joinpath(*self.SKILLS_SUBDIR)
+        skills_dir: Path = self.skills_dir()
         if not skills_dir.is_dir():
             return ""
 
