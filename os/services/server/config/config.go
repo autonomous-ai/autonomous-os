@@ -336,6 +336,12 @@ func ProvideConfig() *Config {
 	// does not persist it (field is json:"-"). Empty when not yet provisioned.
 	cfg.OTAMetadataURL = otaMetadataURLFromBootstrap()
 
+	// Heal a runtime switch that crashed between switch-runtime landing and
+	// AgentRuntime being persisted (e.g. os-server killed by a concurrent
+	// bootstrap OTA restart mid-switch). Must run here, before any other
+	// provider resolves the agent gateway from cfg.AgentRuntime.
+	cfg.reconcileRuntimeSwitchOnBoot(systemdUnitActive)
+
 	return &cfg
 }
 

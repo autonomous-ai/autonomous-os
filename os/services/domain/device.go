@@ -340,9 +340,9 @@ const (
 	// the worker (stand-to-earn-worker's steoauthkind.HermesSetup / PicoclawSetup /
 	// OpenclawSetup) publishes the backend-specific kind instead of a generic
 	// envelope carrying a runtime field. All funnel into
-	// device.Service.UpdateAgentRuntime, which persists config.agent_runtime then
-	// runs switch-runtime.sh (toggle systemd units + restart os-server so
-	// agent/factory.go re-resolves the gateway). The device acks each on
+	// device.Service.UpdateAgentRuntime, which runs switch-runtime.sh (toggle
+	// systemd units) and only THEN persists config.agent_runtime, then restarts
+	// os-server so agent/factory.go re-resolves the gateway. The device acks each on
 	// fd_channel with the same kind. Replaces the former generic agent_runtime.set.
 	// openclaw.setup is the revert path (hermes/picoclaw/claudecode → openclaw,
 	// the baked baseline).
@@ -350,17 +350,17 @@ const (
 	KindPicoclawSetup   = "picoclaw.setup"
 	KindClaudecodeSetup = "claudecode.setup"
 	KindOpenclawSetup   = "openclaw.setup"
-	KindCodexSetup    = "codex.setup"
+	KindCodexSetup      = "codex.setup"
 
 	// AgentRuntimeOpenClaw / AgentRuntimeHermes / AgentRuntimePicoclaw /
 	// AgentRuntimeCodex are the swappable agentic backends. Source of truth
 	// AgentRuntimeClaudeCode are the swappable agentic backends. Source of truth
 	// mirrored by internal/agent/factory.go's resolver and
 	// /usr/local/bin/switch-runtime.
-	AgentRuntimeOpenClaw = "openclaw"
-	AgentRuntimeHermes   = "hermes"
-	AgentRuntimePicoclaw = "picoclaw"
-	AgentRuntimeCodex    = "codex"
+	AgentRuntimeOpenClaw   = "openclaw"
+	AgentRuntimeHermes     = "hermes"
+	AgentRuntimePicoclaw   = "picoclaw"
+	AgentRuntimeCodex      = "codex"
 	AgentRuntimeClaudeCode = "claudecode"
 
 	KindSystemInfo    = "system.info"    // aggregate: versions + network + host
@@ -559,7 +559,7 @@ type MQTTInfoResponse struct {
 	// installed Claude Code CLI version (e.g. "2.1.83"), empty when not installed.
 	ClaudeCodeVersion string `json:"claudecode_version,omitempty"`
 	AgentRuntime      string `json:"agent_runtime,omitempty"`
-	LocalIP       string `json:"local_ip,omitempty"`
+	LocalIP           string `json:"local_ip,omitempty"`
 	// UnsupportedChannels lists channels configured in config.json that the active
 	// runtime cannot run (populated by ChannelReconcile after a runtime switch — e.g.
 	// slack/discord become unsupported after switching to picoclaw). Empty/omitted

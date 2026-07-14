@@ -136,6 +136,22 @@ revert. `switch-runtime <new> <old>` (generic, `internal/device/switch_runtime.s
 So `switch-runtime` is fully backend-agnostic — **no imager / setup.sh / switcher
 change is ever needed to add a backend.**
 
+**Crash recovery (the OTA race):** there's a gap between the switcher exiting 0
+(new unit active, old stopped) and `UpdateAgentRuntime` persisting
+`config.agent_runtime` — a multi-second window since it spans a `systemd-run
+--wait` call. If os-server is killed inside it (e.g. a concurrent bootstrap OTA
+restart), the switch lands but `config.json` never updates, and the next boot's
+`factory.go` resolves the stale (now-stopped) runtime forever. `UpdateAgentRuntime`
+guards this with a marker file (`config.WriteRuntimeSwitchMarker`,
+`/var/lib/os-server/runtime_switch.json`, `{from, to}`) written **before** the
+switcher runs and cleared only once the switch's outcome is fully settled
+(persisted, or failed/rolled back). `config.ProvideConfig` — the first Wire
+provider, so this runs before `factory.go` resolves the gateway — calls
+`reconcileRuntimeSwitchOnBoot` on every boot: if the marker exists and the
+target's systemd unit is actually active, it heals `config.agent_runtime` to
+match reality; if the target isn't active (switch never landed), it leaves
+config untouched and just clears the stale marker.
+
 ---
 
 ## 3. The golden rule: install-once vs every-switch (the *activation gap*)

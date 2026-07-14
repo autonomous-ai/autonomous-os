@@ -133,6 +133,21 @@ chừng resolve về `old` vẫn đang cài, không có gì để revert. `switc
 Nên `switch-runtime` hoàn toàn không-biết-backend — **không cần đụng
 imager/setup.sh/switcher khi thêm backend.**
 
+**Crash recovery (race với OTA):** có một khe hở giữa lúc switcher thoát 0 (unit
+mới active, unit cũ đã stop) và lúc `UpdateAgentRuntime` ghi
+`config.agent_runtime` xuống đĩa — khe hở này kéo dài nhiều giây vì nó bao trọn
+một lệnh `systemd-run --wait`. Nếu os-server bị kill đúng lúc đó (ví dụ bootstrap
+OTA restart chạy song song), switch vẫn land nhưng `config.json` không bao giờ
+được cập nhật, và boot sau đó `factory.go` sẽ mãi resolve về runtime cũ (đã bị
+stop). `UpdateAgentRuntime` chặn race này bằng một marker file
+(`config.WriteRuntimeSwitchMarker`, `/var/lib/os-server/runtime_switch.json`,
+`{from, to}`) ghi **trước khi** chạy switcher và chỉ xoá khi kết quả switch đã
+ngã ngũ hẳn (đã persist xong, hoặc fail/rollback). `config.ProvideConfig` — Wire
+provider đầu tiên, nên chạy trước khi `factory.go` resolve gateway — gọi
+`reconcileRuntimeSwitchOnBoot` ở mỗi lần boot: nếu marker còn đó và unit đích
+đang thực sự active, nó tự heal `config.agent_runtime` cho khớp thực tế; nếu unit
+đích không active (switch chưa land), nó giữ nguyên config và chỉ dọn marker cũ.
+
 ---
 
 ## 3. Quy tắc vàng: install-một-lần vs mỗi-switch (*activation gap*)

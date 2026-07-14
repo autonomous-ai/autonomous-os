@@ -33,9 +33,15 @@
 # os-server (it used to); os-server restarts itself AFTER acking, which is also
 # what makes factory.go re-resolve the gateway.
 #
-# config.agent_runtime itself is persisted by os-server BEFORE this runs; this
-# script only owns the systemd + backend-install side effects (and, on failure,
-# rolling those + config.agent_runtime back).
+# config.agent_runtime itself is persisted by os-server ONLY AFTER this script
+# exits 0 (see device.Service.UpdateAgentRuntime) — this script owns only the
+# systemd + backend-install side effects, and rolls those back on failure so
+# config never needs reverting. os-server writes a crash-recovery marker
+# (config.WriteRuntimeSwitchMarker) before invoking this script, so a crash
+# between this script landing and that persist (e.g. a concurrent OTA restart
+# killing os-server) is healed on the next boot from the marker + actual
+# systemd state, instead of leaving config pointed at a backend that isn't
+# actually running.
 set -euo pipefail
 
 NEW="${1:-}"

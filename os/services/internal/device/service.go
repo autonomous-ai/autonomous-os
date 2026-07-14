@@ -1214,6 +1214,17 @@ func (s *Service) UpdateAgentRuntime(d domain.AgentRuntimeSetData) (bool, error)
 		slog.Warn("materialize presync hook failed (non-fatal)", "component", "device", "runtime", runtime, "error", err)
 	}
 
+	// Record the in-flight switch BEFORE running switch-runtime, so a crash
+	// anywhere between here and the persist below (e.g. os-server killed by a
+	// concurrent bootstrap OTA restart) can be healed on the next boot by
+	// config.ProvideConfig's reconcile, which checks this marker against the
+	// systemd unit that is actually active. Non-fatal: if the write fails we
+	// still attempt the switch, just without crash protection for this run.
+	if err := config.WriteRuntimeSwitchMarker(old, runtime); err != nil {
+		slog.Warn("write runtime switch marker failed (switch proceeds without crash protection)",
+			"component", "device", "error", err)
+	}
+
 	slog.Info("running switch-runtime", "component", "device", "from", old, "to", runtime)
 
 	// Run the switcher and WAIT for its exit code. We deliberately do NOT persist
@@ -1223,17 +1234,25 @@ func (s *Service) UpdateAgentRuntime(d domain.AgentRuntimeSetData) (bool, error)
 	// switch-runtime has already rolled the systemd units back to `old`, and since we
 	// never touched config (memory or disk) there is nothing to revert.
 	if err := s.runSwitchRuntime(runtime, old); err != nil {
+		if clearErr := config.ClearRuntimeSwitchMarker(); clearErr != nil {
+			slog.Warn("clear runtime switch marker after failed switch failed", "component", "device", "error", clearErr)
+		}
 		return false, fmt.Errorf("switch to %s failed, rolled back to %s: %w", runtime, old, err)
 	}
 
 	// Switch landed (NEW up, OLD stopped) — only NOW persist the new runtime, so the
 	// imminent RestartForAgentRuntime (and every future boot) resolves it. If this
 	// save fails the units are already on NEW while disk still says `old`; surface the
-	// error so the caller skips the restart and an operator can re-trigger.
+	// error so the caller skips the restart and an operator can re-trigger. The marker
+	// stays on disk in that case (deliberately NOT cleared) so the next boot's
+	// reconcile heals it from the actually-active systemd unit.
 	if err := s.config.WithLockSave(func(c *config.Config) {
 		c.AgentRuntime = runtime
 	}); err != nil {
 		return false, fmt.Errorf("switch to %s landed but persisting agent_runtime failed: %w", runtime, err)
+	}
+	if err := config.ClearRuntimeSwitchMarker(); err != nil {
+		slog.Warn("clear runtime switch marker after successful switch failed", "component", "device", "error", err)
 	}
 
 	slog.Info("agent runtime switch landed", "component", "device", "from", old, "to", runtime)
