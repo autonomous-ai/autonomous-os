@@ -109,12 +109,18 @@ self-heals after a factory reset, mirroring hermes' presync):
     skills/memory/priority rules), and `HEARTBEAT.md` (`ensureHeartbeatMDBlock`,
     daily knowledge-synthesis) — mirroring openclaw but stripped of OpenClaw-only
     content, so the blocks stay current on a plain os-server OTA;
-  - **capability-gates skills** (`pruneUnsupportedSkills`): removes skill dirs the
-    device can't use — a skill survives if it is supported by `skills.Supported(caps)`
-    (the same gate openclaw uses) **or** is a picoclaw built-in
+  - **links `workspace/skills` to the shared skill store** (`ensureSkillsLink`) —
+    **before** the prune below, since the prune now operates on the store (see *Skills
+    live in the shared store*); a `true` return restarts the gateway;
+  - **capability-gates skills** (`pruneUnsupportedSkills` → `skills.PruneUnsupported`):
+    removes skill dirs the device can't use — a skill survives if it is supported by
+    `skills.Supported(caps)` (the same gate openclaw uses) **or** is a picoclaw built-in
     (`picoclawBuiltinSkills`: `agent-browser`, `github`, `hardware`, `skill-creator`,
-    `summarize`, `tmux`, `weather`); everything else under `workspace/skills` is
-    deleted. Fail-open when DEVICE.md declares no caps. No reload (skills read per-turn);
+    `summarize`, `tmux`, `weather`). The prune runs against the **shared store** and only
+    ever deletes **platform-catalog** skills: anything it doesn't own — another runtime's
+    bundled skills, MCP connector skills like `figma-api` — is left alone, or whichever
+    runtime booted last would wipe the others' skills out of the shared store.
+    Fail-open when DEVICE.md declares no caps. No reload (skills read per-turn);
   - when any block changed, **restarts the gateway** (`restartPicoclawGateway` →
     `systemctl restart picoclaw`) so it re-reads the workspace files (log+skip when
     systemctl is unavailable). Not the gateway `/reload` endpoint — it needs an admin
@@ -124,9 +130,30 @@ self-heals after a factory reset, mirroring hermes' presync):
     picoclaw's `config.json`; queue/steer pinning is TODO.
 
 A separate **skill watcher** (`skill_watcher.go`, started at boot like openclaw)
-polls OTA metadata every 5 min and auto-updates `workspace/skills/<name>` from the
+polls OTA metadata every 5 min and auto-updates `<store>/<name>` from the
 CDN when a supported skill's version bumps (capability-gated via
-`skills.Supported`), then notifies the agent with `SendSystemChatMessage`.
+`skills.Supported`, download delegated to `skills.InstallByName`), then notifies the
+agent with `SendSystemChatMessage`.
+
+### Skills live in the shared store
+
+`/root/.picoclaw/workspace/skills` is a **symlink to `/root/.autonomous/skills`**
+(`skills.StoreDir`) — the single real copy of every skill on the device, shared by every
+runtime. `ensureSkillsLink()` (`onboarding.go`) maintains it: on a device installed by an
+older os-server the real dir's skills (including picoclaw's built-ins) are migrated into
+the store — a skill already in the store **wins**, since that copy is the one the watcher
+keeps fresh — and the dir is replaced by the link. PicoClaw's skill-loading code is
+unchanged; it reads through the link.
+
+Why: per-runtime copies of the same CDN zips drifted (two devices on one os-server release
+ran different `connectors/SKILL.md`), and a duplicate copy of one skill name can stop a
+runtime loading that skill at all. One store means one copy per name, and a runtime switch
+syncs nothing. See [`adding-agent-runtime.md` §5](adding-agent-runtime.md#5-skills).
+
+Factory reset wipes `/root/.picoclaw` wholesale (`reset.go`), which removes the **symlink**
+— not the store it points at (`os.RemoveAll` deletes the link, not its target). The next
+boot re-creates the link via `ensureSkillsLink()`, so the store's skills are immediately
+available again. (Only the hermes and claudecode resets wipe `skills.StoreDir` itself.)
 - **§1 structure** (`jq` on `config.json`) — `agents.defaults` (provider
   `anthropic-messages`, `model_name "autonomous"`, `image_model "autonomous_vision"`,
   `restrict_to_workspace:false`, `allow_read_outside_workspace:true`), the `autonomous`

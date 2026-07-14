@@ -163,9 +163,11 @@ The fix pattern (use it for everything stateful):
 Hermes's presync (`internal/hermes/presync.sh`) now owns **both** the
 `config.yaml` model wiring (idempotent — coerces a reset-blanked `model: ''` back
 to a map, asserts `provider`/`custom_providers` structure, syncs `llm_*`/secrets)
-**and** the skill restore (re-runs `claw migrate` when `skills/openclaw-imports`
-is empty). Keep `verify` CLI-only (`command -v <bin>`) — a structure-check in
-`verify` would force a heavy full reinstall when presync alone heals it.
+**and** the skill restore (re-runs `claw migrate` when `skills/openclaw-imports` is
+empty — that path is a **symlink to the shared skill store**, §5, so the restore lands
+in the store like every other write). Keep `verify` CLI-only (`command -v <bin>`) — a
+structure-check in `verify` would force a heavy full reinstall when presync alone heals
+it.
 
 ---
 
@@ -186,10 +188,11 @@ reconciler doesn't migrate to/from it.
 
 PicoClaw's adapter (`runtime_picoclaw.go`) mirrors openclaw's layout but reads/writes
 `memory/MEMORY.md` (picoclaw keeps it under `memory/`, not at the workspace root).
-Note its INBOUND skills still come from presync's `picoclaw migrate --workspace-only`
-(`picoclaw.md` §1.1) — the Go reconciler only carries persona/memory, not skills — so
-on a switch INTO picoclaw the two overlap on persona (same source, harmless) while
-presync remains the only skills path.
+Note the Go reconciler carries persona/memory only, never skills — and it no longer
+needs to: **skills do not travel with a switch at all**, because every runtime reads the
+same shared store through a symlink (§5). Presync's `picoclaw migrate --workspace-only`
+(`picoclaw.md` §1.1) still runs for persona, where it harmlessly overlaps with the
+adapter (same source).
 
 > **Copy-me template:** `internal/agent/migrate_persona/runtime_example.go` is a
 > build-ignored, fully-annotated skeleton — copy it to `runtime_<name>.go`, delete
@@ -249,17 +252,68 @@ in its backend doc (e.g. `docs/agentic/hermes.md`), not a blanket guarantee here
 
 ## 5. Skills
 
-- Skills reach the backend by being **copied** (verify: copy vs convert! Hermes's
-  `claw migrate` is `shutil.copytree`, no transform) into the backend's skill dir.
-- **Restore-after-reset** belongs in **presync**, guarded on the dir being empty
-  (so a normal switch is a no-op — no churn). See §3.
-- **Skill watcher** (auto-update from CDN, capability-gated): the generic
-  fetch/extract/hash plumbing is shared in `internal/skills/skillzip.go`
-  (`FetchSkillVersions`/`DownloadToTempFile`/`FolderHash`/`ExtractSkillZip`). Add a
-  thin `internal/<name>/skill_watcher.go` parallel to `internal/openclaw/skill_watcher.go`
-  — only the **target dir** and the **notify path** differ. Gate with
-  `skills.Supported(device.Capabilities(...))`. Notify the agent with
-  `SendSystemChatMessage`.
+> **One store, one copy — a new runtime must NOT download or store skills itself.**
+
+Every runtime shares a single on-disk skill store: **`/root/.autonomous/skills`**
+(`skills.StoreDir`, read via `skills.Dir()` — `internal/skills/store.go`). It is the
+only real copy of any skill on the device. Each runtime keeps its **native** skills
+path, but that path is a **symlink** to the store — so no runtime's skill-loading code
+changes; it just reads through the link. A runtime switch therefore syncs **nothing**.
+
+**Why (both are field failures, not theory).** When each runtime downloaded the same
+CDN zips into its own dir:
+- **Drift** — two devices on the *same* os-server release ran different
+  `connectors/SKILL.md`, because their copies were fetched at different times.
+- **Duplicates break loading** — two candidates for one skill name make Hermes'
+  `skill_view` refuse to load that skill *at all* ("Ambiguous skill name", see
+  `hermes.pruneImportedSkillDuplicates`), so a device with a valid Gmail token ended up
+  trying to install a CLI email client because the `connectors` skill never loaded.
+
+What a new runtime owes the contract:
+
+- **Link, don't copy.** Call `skills.LinkRuntimeDir(<its native skills dir>)` from
+  `EnsureOnboarding` — **before** any prune/restore/seed step, since those all operate
+  on the store — and fold the returned `bool` into the restart gate (a running gateway
+  was handed a directory that has just become a symlink):
+  ```go
+  func ensureSkillsLink() bool {
+      changed, err := skills.LinkRuntimeDir(filepath.Join(myWorkspaceDir, "skills"))
+      if err != nil {
+          slog.Error("link skills dir to shared store failed", "component", "<name>", "error", err)
+          return false // leave the existing dir in place — never abort onboarding
+      }
+      return changed
+  }
+  // ...
+  if linked := ensureSkillsLink(); linked { needRestart = true }
+  ```
+  On a device installed by an **older os-server** the native dir is still a real
+  directory: `LinkRuntimeDir` migrates its skills into the store, then replaces the dir
+  with the symlink. A skill already in the store **wins** — the store copy is the one
+  the watcher keeps fresh, so the runtime's is the potentially stale duplicate.
+- **Delegate every install to `skills.InstallByName(baseURL, names)`.** It downloads
+  into the store and returns only the names whose content actually **changed**
+  (content-hash gated), so you restart/notify only when something moved. A runtime's
+  `downloadSkillsByName` is a one-line delegation — do not write a second downloader.
+- **Skill watcher** (auto-update from CDN, capability-gated): a thin
+  `internal/<name>/skill_watcher.go` parallel to `internal/openclaw/skill_watcher.go`.
+  Only the **notify path** differs now — not the target dir. The shared fetch/extract/hash
+  plumbing lives in `internal/skills/skillzip.go`
+  (`FetchSkillVersions`/`DownloadToTempFile`/`FolderHash`/`ExtractSkillZip`). Gate with
+  `skills.Supported(device.Capabilities(...))`; notify with `SendSystemChatMessage`.
+- **Prune only via `skills.PruneUnsupported(keep)`.** It removes **platform-catalog**
+  skills absent from `keep` and deliberately leaves alone anything it does not own —
+  runtime-**bundled** skills (picoclaw/codex ship `agent-browser`, `tmux`, …) and MCP
+  **connector** skills (`figma-api`). On a shared store, a blind "not in `keep` → delete"
+  would make whichever runtime booted last wipe every other runtime's skills.
+- **Factory reset wipes `skills.StoreDir` *and* the runtime's symlink** (see hermes /
+  claudecode `reset.go`). Wiping only the link leaves every skill on disk; wiping only
+  the store leaves a dangling link for the next boot to trip on.
+- **Restore-after-reset** stays guarded on the store being **empty** (so a normal switch
+  is a no-op — no churn), whether it lives in presync (§3) or in a Go `ensureSkills`.
+
+MCP connector skills install into the store too (`openclaw.EnsureMCPSkill`), so a
+connector set up while *any* runtime is active is visible to *every* runtime.
 
 ---
 
@@ -453,8 +507,11 @@ re-syncs `.env` before the gateway starts, so the re-apply is an idempotent no-o
       fields, MEMORY/USER, and any KNOWLEDGE/daily slots; `write` restores each to
       its native slot (identity → its own file, or inline if no slot) and folds
       slots the backend lacks. `Overwrite=true` for SOUL. No new `Direction` enum.
-- [ ] Skills: copy-import + **restore-in-presync** (guarded) + `skill_watcher.go`
-      (parallel to openclaw, shared `internal/skills/skillzip.go`).
+- [ ] Skills (§5): **no per-runtime copy** — `skills.LinkRuntimeDir(<native skills dir>)`
+      from `EnsureOnboarding` (return value folded into the restart gate), installs
+      delegated to `skills.InstallByName`, prune via `skills.PruneUnsupported`, restore
+      guarded on the store being empty, + `skill_watcher.go` (parallel to openclaw,
+      shared `internal/skills/skillzip.go`). Reset wipes the store **and** the symlink.
 - [ ] Hooks: backend-native or OS-side — decided & documented (not silently absent).
       If reimplemented OS-side in Go (no compile-time link to the TS hook), add
       cross-reference comments in both files so a change to one flags the other.

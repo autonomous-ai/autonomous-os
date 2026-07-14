@@ -442,6 +442,12 @@ during install) and does three things, in order:
    SOUL/MEMORY, but harmlessly: the Go persona migration (§12) runs afterwards and
    rewrites those cleanly, so only the skills persist.
 
+   Note `openclaw-imports` is now a **symlink to the shared skill store** (below), so
+   this restore — like every other skill write — lands in the store. `EnsureOnboarding`
+   also has a Go-side restore guard (`ensureSkills`) that repopulates the store from the
+   CDN (`skills.InstallByName`) when it is empty, covering the first boot as Hermes where
+   `claw migrate` had nothing to copy from.
+
    A migrate that runs while canonical copies are already on disk (install-time
    race with the skill watcher, manual runs) uses `--skill-conflict rename` and
    leaves `<name>-imported` **duplicates** — two candidates for one name make
@@ -512,7 +518,8 @@ the one prompt file it reads every session** — so the rule rides there instead
   `soulSkillPriorityBlock` at the end of `~/.hermes/SOUL.md` — so an os-server
   OTA refreshes the wording, and a factory reset / migrate that drops it
   self-heals on the next boot.
-- The block instructs: skills under `skills/openclaw-imports/` are the device's
+- The block instructs: skills under `skills/openclaw-imports/` (the symlink into the
+  shared skill store) are the device's
   built-in platform skills and **take priority over any Hermes bundled skill**
   with an overlapping purpose; anything on a connected third-party service
   (Gmail/Calendar/Drive/Notion/Figma/Asana/Linear/GitHub, …) goes through the
@@ -638,10 +645,39 @@ The soul copy uses `Overwrite=true` (a switch adopts the source runtime's person
 backed up first). The reverse hermes→openclaw **strips the identity card from the
 SOUL and restores its fields back into OpenClaw's `IDENTITY.md`** (`restoreIdentityCard`,
 the inverse of the inline) — so the name set under Hermes survives the trip back,
-not just the trip out. **Skills** stay fresh under Hermes via
-`internal/hermes/skill_watcher.go` — CDN auto-update into `skills/openclaw-imports`,
-capability-gated, mirroring the OpenClaw watcher (shared engine in
-`internal/skills/skillzip.go`).
+not just the trip out. **Skills** are not carried by a switch at all — every runtime
+reads the **one shared store**, `/root/.autonomous/skills` (see below). They stay fresh
+under Hermes via `internal/hermes/skill_watcher.go` — CDN auto-update into that store
+(`skills.InstallByName`), capability-gated, mirroring the OpenClaw watcher (shared
+engine in `internal/skills/skillzip.go`).
+
+### Skills live in the shared store, not under `~/.hermes`
+
+`~/.hermes/skills/openclaw-imports` is a **symlink to `/root/.autonomous/skills`**
+(`skills.StoreDir`), the single real copy of every skill on the device, which every
+runtime reads. `ensureSkillsLink()` (`onboarding.go`) maintains it on each boot: on a
+device from an older os-server the real dir's skills are migrated into the store (a skill
+already in the store **wins** — it is the copy the watcher keeps fresh) and the dir is
+replaced by the link; the returned "changed" flag feeds the gateway-restart gate. Hermes'
+skill-loading code is untouched — it just reads through the link.
+
+**The link is at `openclaw-imports`, never at `skills/`.** `audio_cache/` and
+`image_cache/` are *siblings* of `openclaw-imports` under `~/.hermes/skills/`; linking
+`skills/` itself would swallow them.
+
+Why a shared store at all: Hermes is the runtime that proved the cost of per-runtime
+copies. Two candidates for one skill name make its `skill_view` refuse to load the skill
+*at all* ("Ambiguous skill name" — the same failure `pruneImportedSkillDuplicates`
+guards), and a device with a valid Gmail token consequently tried to install a CLI email
+client because the `connectors` skill never loaded. Separately, copies downloaded at
+different times drifted: two devices on the same os-server release ran different
+`connectors/SKILL.md`. One store means one copy of each name, and a runtime switch syncs
+nothing. See [`adding-agent-runtime.md` §5](adding-agent-runtime.md#5-skills).
+
+**Factory reset wipes the store *and* the symlink** (`reset.go`: `skills.StoreDir` +
+`~/.hermes/skills/openclaw-imports`) — wiping only the link would leave every skill on
+disk, wiping only the store would leave a dangling link. `audio_cache/` and `image_cache/`
+are wiped separately as the siblings they are.
 
 **MCP connectors are carried across too** — the configured remote-MCP servers are
 cloned config→config by `MCPReconcile` on the same switch boot (see §10, *MCP

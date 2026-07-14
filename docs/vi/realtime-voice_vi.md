@@ -319,7 +319,22 @@ theo agent gateway (`HAL_AGENT_GATEWAY`):
 | `hermes` | `context_manager/hermes.py` `HermesContextManager` | `HAL_HERMES_WORKSPACE_DIR` (`/root/.hermes`) |
 | `picoclaw` | `OpenClawContextManager` (layout giống hệt) | `HAL_PICOCLAW_WORKSPACE_DIR` (`/root/.picoclaw/workspace`) |
 | `codex` | `OpenClawContextManager` (layout giống hệt) | `HAL_CODEX_WORKSPACE_DIR` (`/root/.codex/workspace`) |
-| `claudecode` | `context_manager/claudecode.py` `ClaudeCodeContextManager` — layout OpenClaw trừ skills, đọc từ `.claude/skills/` (dir native của claude CLI) | `HAL_CLAUDECODE_WORKSPACE_DIR` (`/root/.claudecode/workspace`) |
+| `claudecode` | `context_manager/claudecode.py` `ClaudeCodeContextManager` — layout OpenClaw trừ skills, đọc từ `/root/.claude/skills` (user-scoped) | `HAL_CLAUDECODE_WORKSPACE_DIR` (`/root/.claudecode/workspace`) |
+
+Skills được phân giải qua `ContextManagerBase.skills_dir()`, mặc định tính theo
+workspace (`<workspace>/<SKILLS_SUBDIR>`). Với openclaw/picoclaw/codex đó là
+`<workspace>/skills`, mà os-server đã biến thành **symlink tới shared skill store**
+`/root/.autonomous/skills` (xem [`adding-agent-runtime_vi.md` §5](agentic/adding-agent-runtime_vi.md#5-skills)),
+nên catalog vẫn nạp bình thường xuyên qua link.
+
+`ClaudeCodeContextManager` **override `skills_dir()`** thành đường dẫn tuyệt đối
+`/root/.claude/skills` (bản thân nó cũng là symlink tới store). Không được suy ra từ
+workspace: Claude Code phân giải skill *project* theo cwd của session, nên skill thiết bị
+được cài ở phạm vi **user**, và `ensureSkillsLink`
+(`internal/claudecode/onboarding.go`) *xoá* mọi bản project-scoped. Nếu tra cứu theo
+workspace thì sẽ không thấy gì và realtime voice agent nhận một skills catalog **rỗng**
+trong khi chat vẫn chạy bình thường — được bảo vệ bởi
+`os/hal/test/test_realtime_context_manager.py`.
 
 `ContextManagerBase` (`context_manager/base.py`) lo phần lắp ráp prompt
 (`build_instructions`), lưu lượt (`add_turn`), nạp/trim memory, và summarize;

@@ -334,7 +334,22 @@ assembled per agent gateway (`HAL_AGENT_GATEWAY`):
 | `hermes` | `context_manager/hermes.py` `HermesContextManager` | `HAL_HERMES_WORKSPACE_DIR` (`/root/.hermes`) |
 | `picoclaw` | `OpenClawContextManager` (same layout) | `HAL_PICOCLAW_WORKSPACE_DIR` (`/root/.picoclaw/workspace`) |
 | `codex` | `OpenClawContextManager` (same layout) | `HAL_CODEX_WORKSPACE_DIR` (`/root/.codex/workspace`) |
-| `claudecode` | `context_manager/claudecode.py` `ClaudeCodeContextManager` — OpenClaw layout except skills, read from `.claude/skills/` (native claude CLI dir) | `HAL_CLAUDECODE_WORKSPACE_DIR` (`/root/.claudecode/workspace`) |
+| `claudecode` | `context_manager/claudecode.py` `ClaudeCodeContextManager` — OpenClaw layout except skills, read from the user-scoped `/root/.claude/skills` | `HAL_CLAUDECODE_WORKSPACE_DIR` (`/root/.claudecode/workspace`) |
+
+Skills resolve through `ContextManagerBase.skills_dir()`, which is workspace-relative
+(`<workspace>/<SKILLS_SUBDIR>`) by default. For openclaw/picoclaw/codex that is
+`<workspace>/skills`, which os-server has made a **symlink to the shared skill store**
+`/root/.autonomous/skills` (see [`adding-agent-runtime.md` §5](agentic/adding-agent-runtime.md#5-skills)),
+so the catalog loads through the link unchanged.
+
+`ClaudeCodeContextManager` **overrides `skills_dir()`** to the absolute
+`/root/.claude/skills` (itself a symlink to the store). It must not be derived from the
+workspace: Claude Code resolves *project* skills relative to the session cwd, so device
+skills are installed **user-scoped**, and `ensureSkillsLink`
+(`internal/claudecode/onboarding.go`) *deletes* any project-scoped copy. A
+workspace-relative lookup would therefore find nothing and hand the realtime voice agent
+an empty skills catalog while chat kept working — guarded by
+`os/hal/test/test_realtime_context_manager.py`.
 
 `ContextManagerBase` (`context_manager/base.py`) handles prompt assembly
 (`build_instructions`), turn persistence (`add_turn`), memory loading/trimming,

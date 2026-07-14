@@ -146,6 +146,33 @@ lần `EnsureOnboarding` và ngay sau khi đổi tên (`UpdateIdentityName`), n�
 turn kế tiếp thấy tên mới luôn; `SOUL.md` biến mất thì khối bị gỡ. Ghi atomic
 (tmp+rename), và chỉ ghi khi byte thực sự khác.
 
+### Skills nằm trong shared store
+
+`/root/.codex/workspace/skills` là một **symlink tới `/root/.autonomous/skills`**
+(`skills.StoreDir`) — bản sao thật duy nhất của mọi skill trên thiết bị, dùng chung
+cho mọi runtime. `ensureSkillsLink()` duy trì link này: trên thiết bị cài bằng
+os-server cũ, skills trong thư mục thật được chuyển vào store (skill đã có sẵn trong
+store **thắng** — đó là bản mà watcher giữ mới) rồi thư mục được thay bằng symlink.
+Cách codex nạp skill không đổi; nó đọc xuyên qua link.
+
+Codex **không** có skill built-in riêng — store được lấp đầy bởi bước migrate từ
+openclaw (§1) cộng với CDN skill watcher (`skill_watcher.go` → `skills.InstallByName`,
+có capability gate, thông báo qua `SendSystemChatMessage`). Bước prune theo capability
+(`skills.PruneUnsupported`) chỉ xoá skill **thuộc platform catalog**, và cố ý bỏ qua
+những gì nó không sở hữu — skill bundled của runtime khác, skill connector MCP như
+`figma-api` — nếu không codex sẽ xoá mất skill của các runtime khác khỏi shared store.
+
+Vì sao cần store: trước đây mỗi runtime giữ một bản sao riêng của cùng bộ zip trên CDN,
+và các bản sao lệch nhau giữa các thiết bị (hai máy cùng một bản os-server chạy hai
+`connectors/SKILL.md` khác nhau); ngoài ra hai bản trùng tên một skill có thể khiến
+runtime từ chối nạp skill đó hoàn toàn. Một store, một bản cho mỗi tên, và việc đổi
+runtime không phải sync gì cả. Xem
+[`adding-agent-runtime_vi.md` §5](adding-agent-runtime_vi.md#5-skills).
+
+Factory reset xoá sạch `/root/.codex` (`reset.go`), tức là xoá **symlink** chứ không
+xoá store mà nó trỏ tới (`os.RemoveAll` xoá link, không xoá target); lần boot kế tiếp
+`ensureSkillsLink()` tạo lại link và store vẫn còn nguyên.
+
 ## 2. Transport & gửi một turn
 
 `client.go` giữ một WebSocket bền tới bridge (khuôn picoclaw: bearer token,

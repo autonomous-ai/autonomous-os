@@ -8,8 +8,9 @@ protocol, layout và các quirk đặc thù claudecode.
 
 > **Trạng thái:** đạt parity đầy đủ với checklist — install nhúng + presync,
 > transport bridge WebSocket, adapter migrate persona/memory bằng Go (lossless
-> với layout OpenClaw), skills (restore từ CDN + watcher, `.claude/skills`
-> native), watch/rename identity, MCP thật (`.mcp.json`), factory reset,
+> với layout OpenClaw), skills (restore từ CDN + watcher; `.claude/skills` native
+> là symlink tới store dùng chung `/root/.autonomous/skills`),
+> watch/rename identity, MCP thật (`.mcp.json`), factory reset,
 > Telegram + Discord do device sở hữu (loop getUpdates `telegram_poll.go` /
 > session discordgo `discord.go` — channel plugin native cố ý không dùng),
 > **Slack inbound do device sở hữu** (HTTP mode, `domain.SlackBridge`),
@@ -25,7 +26,7 @@ Code: `os/services/internal/claudecode/`.
 | Env khởi chạy (`ANTHROPIC_*`, cờ channel) | `/root/.claudecode/.env` (presync sở hữu) |
 | Workspace (cwd của Claude) | `/root/.claudecode/workspace/` |
 | Persona / memory | `workspace/{CLAUDE,SOUL,IDENTITY,USER,MEMORY,KNOWLEDGE}.md`, `workspace/memory/*.md` |
-| Skills | `workspace/.claude/skills/<name>/` (skill Claude Code native) |
+| Skills | `/root/.claude/skills` — **symlink** tới store dùng chung `/root/.autonomous/skills` (`skills.StoreDir`); skill thật nằm trong store |
 | MCP connector | `workspace/.mcp.json` |
 | State resume session | `/root/.claudecode/session.json` |
 | Offset poll Telegram (loop device sở hữu) | `/root/.claudecode/telegram_offset.json` |
@@ -355,7 +356,7 @@ folder một phiên riêng.
   @KNOWLEDGE.md` — CLAUDE.md là file duy nhất Claude nạp theo tên) và prompt
   discipline (rule whitelist skills, rule connectors, rule memory, ưu tiên
   user), phỏng theo khối AGENTS.md của picoclaw.
-- **Skills nằm ở phạm vi USER** (`/root/.claude/skills/`, `claudecodeSkillsDir`),
+- **Skills nằm ở phạm vi USER** (`/root/.claude/skills`, `claudecodeSkillsDir`),
   không phải phạm vi project. Claude Code phân giải skill *project* theo
   `<cwd>/.claude/skills`, nên nếu chỉ cài trong workspace thì mọi session có cwd
   khác workspace sẽ không thấy — điển hình là **coding session** mà thiết bị tạo
@@ -363,9 +364,25 @@ folder một phiên riêng.
   coding session báo Gmail/Calendar "không kết nối" và tự viết `send_email.py`,
   trong khi chat thiết bị (cwd = workspace) vẫn trả lời đúng từ cùng bộ token.
   Skill ở phạm vi user được nạp trong MỌI session, bất kể cwd.
-  `migrateSkillsToUserScope()` chuyển các skill mà os-server cũ để lại trong
-  workspace sang phạm vi user rồi xoá thư mục cũ (nếu giữ lại, mỗi skill sẽ bị
-  đăng ký hai lần). Factory reset xoá hẳn `/root/.claude/skills`.
+- **Bản thân `/root/.claude/skills` chỉ là một symlink** tới store dùng chung
+  `/root/.autonomous/skills` (`skills.StoreDir`, `internal/skills/store.go`) —
+  store là bản copy THẬT duy nhất của mọi skill trên máy, dùng chung cho cả năm
+  runtime. `ensureSkillsLink()` (`onboarding.go`, gọi từ `EnsureOnboarding`) dựng
+  link qua `skills.LinkRuntimeDir(claudecodeSkillsDir)`; trên máy cài bằng
+  os-server đời cũ, skill trong thư mục thật được move vào store rồi thư mục bị
+  thay bằng symlink (**bản đã có trong store thắng** — đó là bản watcher giữ tươi).
+  Nó cũng **fold nốt bản project-scoped cũ** ở `workspace/.claude/skills`: bản đó
+  phải bị **xoá hẳn**, không phải symlink, vì chat thiết bị nạp cả skill project lẫn
+  skill user — để lại thì mỗi skill bị đăng ký hai lần. `ensureSkillsLink` trả
+  `true` khi có thay đổi trên đĩa → `EnsureOnboarding` restart bridge.
+  **Vì sao dùng chung:** hồi mỗi runtime giữ một bản copy riêng của cùng bộ zip
+  CDN, hai máy cùng một bản os-server chạy hai `connectors/SKILL.md` khác nhau
+  (md5 `3ed7f78b…` vs `ba1f8a8e…`), và một skill bị trùng tên có thể khiến runtime
+  không load nó nữa. Store cũng khiến skill connector MCP (`figma-api`) do
+  `openclaw.EnsureMCPSkill` cài trở nên nhìn thấy được từ MỌI runtime — trước đây
+  nó rơi vào workspace của OpenClaw, nơi Claude Code không bao giờ đọc tới.
+  Factory reset xoá **cả `skills.StoreDir` lẫn `/root/.claude/skills`** (reset.go) —
+  chỉ xoá symlink thì skill vẫn còn nguyên trong store.
 - **Memory phạm vi user** (`/root/.claude/CLAUDE.md`, `userClaudeMDBlock`):
   `CLAUDE.md` trong workspace chỉ đến được session chat thiết bị, nên các rule
   connector ở mức thiết bị cũng được inject vào đây — Claude Code nạp file này ở
@@ -390,11 +407,14 @@ folder một phiên riêng.
   đặc thù runtime và không bao giờ được mang theo.
 - **Không có HEARTBEAT.md** — Claude Code không có heartbeat loop nào sẽ đọc
   nó; một quyết định bỏ có ý thức, không phải bỏ sót.
-- **Skills** nằm trong `workspace/.claude/skills/` (native, tự-discover). Được
-  capability-prune lúc onboarding; **restore từ CDN khi rỗng**
-  (`ensureSkills` — bao case factory reset); cập nhật steady-state qua
-  `skill_watcher.go` (poll metadata OTA 5 phút, notify qua
-  `SendSystemChatMessage`).
+- **Skills** được Claude Code tự-discover qua `/root/.claude/skills` (symlink →
+  store dùng chung, xem bullet phía trên). Được capability-prune lúc onboarding
+  (`pruneUnsupportedSkills` → `skills.PruneUnsupported`, chỉ prune skill nền tảng
+  trong `skills.Catalog` — skill bundled của runtime khác và skill connector MCP
+  trong store được để yên); **restore từ CDN khi store rỗng** (`ensureSkills` — bao
+  case factory reset); cập nhật steady-state qua `skill_watcher.go` (poll metadata
+  OTA 5 phút, `downloadSkillsByName` chỉ delegate sang `skills.InstallByName` để ghi
+  vào store, notify qua `SendSystemChatMessage`).
 - **MCP là thật** (`mcp.go`): `WriteMCPEntry`/`RemoveMCPEntry` upsert
   `mcpServers` trong `workspace/.mcp.json` (entry canonical `{command,args,env}` /
   `{type,url,headers}` pass through nguyên văn) + restart bridge;
@@ -425,7 +445,10 @@ cố định qua env). `RefreshModelsConfig`/`UpdatePrimaryModel` (model =
 ## 10. Factory reset (`reset.go`)
 
 Stop + verify `claudecode.service`, disable nó, rồi wipe **dữ liệu user +
-creds**: `workspace/`, `.env`, `session.json`, `~/.claude/projects`,
+creds**: `workspace/`, `.env`, `session.json`, **`/root/.autonomous/skills`
+(`skills.StoreDir`) + `/root/.claude/skills`** (store dùng chung mới là nơi skill
+thật nằm; symlink phải xoá cùng, không thì reset để lại một dangling link),
+`/root/.claude/CLAUDE.md` (khối OS phạm vi user), `~/.claude/projects`,
 `~/.claude/channels`, `~/.claude/todos`, `~/.claude/history.jsonl`, và
 `~/.claude/.credentials.json` (phần login claude.ai — nửa nằm trong
 config.json, `claude_code_oauth_token`, bị wipe cùng config). **Giữ lại**

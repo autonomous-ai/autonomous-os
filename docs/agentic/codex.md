@@ -124,12 +124,42 @@ restarts the gateway only on a real change. It owns everything stateful:
 
 On top of the presync run, `EnsureOnboarding` (`onboarding.go`) does the same
 workspace reconcile the other backends get: seeds `KNOWLEDGE.md` from the
-embedded template only if absent, injects the OS-managed
+embedded template only if absent, **links `workspace/skills` to the shared skill
+store** (`ensureSkillsLink`, before anything else touches skills — see *Skills live
+in the shared store*), injects the OS-managed
 `<!-- OS DO NOT REMOVE -->` blocks into `SOUL.md` / `AGENTS.md` /
 `HEARTBEAT.md` (OpenClaw-derived, stripped of OpenClaw-only bits), and
 capability-gates skills. Markdown-only changes never restart the gateway —
-each `codex exec` re-reads the workspace; only a presync config change or a
-unit self-heal restarts it.
+each `codex exec` re-reads the workspace; only a presync config change, a
+unit self-heal, or the one-time skills-link migration restarts it (an in-flight
+`codex exec` was handed a directory that just became a symlink).
+
+### Skills live in the shared store
+
+`/root/.codex/workspace/skills` is a **symlink to `/root/.autonomous/skills`**
+(`skills.StoreDir`) — the one real copy of every skill on the device, shared by every
+runtime. `ensureSkillsLink()` maintains it: on a device installed by an older os-server
+the real dir's skills are migrated into the store (a skill already in the store **wins**
+— it is the copy the watcher keeps fresh) and the dir is replaced by the link. Codex's
+skill loading is unchanged; it reads through the link.
+
+Codex ships **no** built-in skills of its own — the store is filled by the openclaw
+migration (§1) plus the CDN skill watcher (`skill_watcher.go` → `skills.InstallByName`,
+capability-gated, notify via `SendSystemChatMessage`). The capability prune
+(`skills.PruneUnsupported`) deletes **platform-catalog** skills only, leaving anything it
+doesn't own — another runtime's bundled skills, MCP connector skills like `figma-api` —
+untouched, or codex would destroy other runtimes' skills out of the shared store.
+
+Why the store exists: per-runtime copies of the same CDN zips drifted between devices (two
+on one os-server release ran different `connectors/SKILL.md`), and a duplicate copy of one
+skill name can make a runtime refuse to load that skill at all. One store, one copy per
+name, and a runtime switch syncs nothing. See
+[`adding-agent-runtime.md` §5](adding-agent-runtime.md#5-skills).
+
+Factory reset wipes `/root/.codex` wholesale (`reset.go`), which removes the **symlink**,
+not the store it points at (`os.RemoveAll` deletes the link, not its target); the next boot
+re-creates it via `ensureSkillsLink()`. (Only the hermes and claudecode resets wipe
+`skills.StoreDir` itself.)
 
 **Persona inline block (AGENTS.md).** Codex auto-loads ONLY `AGENTS.md` into
 context; the "Session Startup" instruction to read `SOUL.md`/`IDENTITY.md` is

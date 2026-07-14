@@ -107,12 +107,20 @@ tự-heal sau factory reset, giống presync của hermes):
     skills/memory/priority), và `HEARTBEAT.md` (`ensureHeartbeatMDBlock`, synthesis
     hằng ngày) — mirror openclaw nhưng lược nội dung chỉ-openclaw, giữ các block cập
     nhật qua OTA os-server thường;
-  - **capability-gate skills** (`pruneUnsupportedSkills`): xoá thư mục skill device
-    không dùng được — skill được giữ nếu được `skills.Supported(caps)` hỗ trợ (gate y
-    như openclaw) **hoặc** là built-in của picoclaw (`picoclawBuiltinSkills`:
-    `agent-browser`, `github`, `hardware`, `skill-creator`, `summarize`, `tmux`,
-    `weather`); còn lại trong `workspace/skills` thì xoá. Fail-open khi DEVICE.md không
-    khai cap. Không reload (skill đọc per-turn);
+  - **link thư mục skill vào store dùng chung** (`ensureSkillsLink` →
+    `skills.LinkRuntimeDir(<picoclawWorkspaceDir>/skills)`), chạy **trước** mọi bước
+    prune/download bên dưới — xem *Store skill dùng chung* cuối mục này. Trả `true`
+    khi có thay đổi trên đĩa → restart gateway;
+  - **capability-gate skills** (`pruneUnsupportedSkills` → `skills.PruneUnsupported`):
+    xoá thư mục skill device không dùng được — skill được giữ nếu được
+    `skills.Supported(caps)` hỗ trợ (gate y như openclaw) **hoặc** là built-in của
+    picoclaw (`picoclawBuiltinSkills`: `agent-browser`, `github`, `hardware`,
+    `skill-creator`, `summarize`, `tmux`, `weather`). Prune chạy **trên store**, và chỉ
+    đụng skill nền tảng có trong `skills.Catalog`: skill bundled của runtime khác và
+    skill connector MCP (`figma-api`) trong store được để yên — store là của chung, nếu
+    prune theo "không có trong keep" thì runtime nào boot sau cùng sẽ xoá skill của các
+    runtime khác. Fail-open khi DEVICE.md không khai cap. Không reload (skill đọc
+    per-turn);
   - khi có block đổi, **restart gateway** (`restartPicoclawGateway` → `systemctl
     restart picoclaw`) để nạp lại file workspace (log+skip nếu không có systemctl).
     Không dùng endpoint `/reload` của gateway — nó cần auth admin mình không có (token
@@ -120,10 +128,21 @@ tự-heal sau factory reset, giống presync của hermes):
   - các bước đặc thù `openclaw.json` (đăng ký hooks/logging/controlUi) là N/A với
     `config.json` của picoclaw; pin queue/steer là TODO.
 
+**Store skill dùng chung.** `workspace/skills` của PicoClaw **không còn là bản copy
+riêng** — nó là **symlink** tới `/root/.autonomous/skills` (`skills.StoreDir`,
+`internal/skills/store.go`), store thật duy nhất mà cả năm runtime cùng đọc. Trên máy
+cài bằng os-server đời cũ, `skills.LinkRuntimeDir` move skill trong thư mục thật vào
+store rồi thay thư mục bằng symlink (**bản đã có trong store thắng** — đó là bản
+watcher giữ tươi). Lý do: hồi mỗi runtime giữ một bản copy, hai máy cùng một bản
+os-server chạy hai `connectors/SKILL.md` khác nhau (md5 `3ed7f78b…` vs `ba1f8a8e…`),
+và một skill trùng tên có thể khiến runtime từ chối load nó luôn ("Ambiguous skill
+name" ở Hermes). Skill bundled của PicoClaw nằm chung trong store nhưng không ai prune
+mất (xem bullet capability-gate).
+
 Một **skill watcher** riêng (`skill_watcher.go`, chạy lúc boot như openclaw) poll OTA
-metadata mỗi 5 phút và tự cập nhật `workspace/skills/<name>` từ CDN khi version của
-skill được hỗ trợ thay đổi (gate qua `skills.Supported`), rồi báo agent qua
-`SendSystemChatMessage`.
+metadata mỗi 5 phút và tự cập nhật skill từ CDN khi version của skill được hỗ trợ thay
+đổi (gate qua `skills.Supported`); `downloadSkillsByName` chỉ delegate sang
+`skills.InstallByName`, ghi thẳng vào store, rồi báo agent qua `SendSystemChatMessage`.
 - **§1 cấu trúc** (`jq` trên `config.json`) — `agents.defaults` (provider
   `anthropic-messages`, `model_name "autonomous"`, `image_model "autonomous_vision"`,
   `restrict_to_workspace:false`, `allow_read_outside_workspace:true`), hai entry

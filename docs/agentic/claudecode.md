@@ -8,7 +8,8 @@ claudecode-specific protocol, layout, and quirks.
 
 > **Status:** full parity with the checklist — embedded install + presync,
 > WebSocket bridge transport, persona/memory Go migration adapter (lossless with
-> the OpenClaw layout), skills (CDN restore + watcher, native `.claude/skills`),
+> the OpenClaw layout), skills (CDN restore + watcher into the **shared store**, read
+> through the native user-scoped `.claude/skills` symlink),
 > identity watch/rename, real MCP (`.mcp.json`), factory reset, Telegram +
 > Discord device-owned (os-server getUpdates loop `telegram_poll.go` /
 > discordgo session `discord.go` — the native channel plugins are deliberately
@@ -26,7 +27,7 @@ Code: `os/services/internal/claudecode/`.
 | Launch env (`ANTHROPIC_*`, channel flags) | `/root/.claudecode/.env` (presync-owned) |
 | Workspace (Claude's cwd) | `/root/.claudecode/workspace/` |
 | Persona / memory | `workspace/{CLAUDE,SOUL,IDENTITY,USER,MEMORY,KNOWLEDGE}.md`, `workspace/memory/*.md` |
-| Skills | `workspace/.claude/skills/<name>/` (native Claude Code skills) |
+| Skills | `/root/.claude/skills` — **symlink → `/root/.autonomous/skills`**, the shared store every runtime reads (§8) |
 | MCP connectors | `workspace/.mcp.json` |
 | Session-resume state | `/root/.claudecode/session.json` |
 | Telegram poll offset (device-owned loop) | `/root/.claudecode/telegram_offset.json` |
@@ -370,9 +371,21 @@ Telegram, across multiple folders each with its own session.
   reported Gmail/Calendar "not connected" and wrote its own `send_email.py`,
   while the device chat (workspace cwd) answered correctly from the same tokens.
   User-level skills load in every session regardless of cwd.
-  `migrateSkillsToUserScope()` lifts skills left in the workspace by an older
-  os-server and deletes the legacy dir (leaving it would double-register every
-  skill). A factory reset wipes `/root/.claude/skills` explicitly.
+- **That user-scoped dir is a symlink, not a copy.** `/root/.claude/skills` points at
+  the **shared skill store** `/root/.autonomous/skills` (`skills.StoreDir`), the one
+  real copy of every skill on the device, which every runtime reads. `ensureSkillsLink()`
+  maintains it on each onboarding pass: on a device from an older os-server the real dir
+  is migrated into the store (a skill already in the store **wins** — it is the copy the
+  watcher keeps fresh) and replaced by the link; the returned "changed" flag feeds the
+  bridge-restart gate. It also folds in the **project-scoped** `workspace/.claude/skills`
+  left by pre-user-scope devices and **deletes** it — Claude Code loads project *and*
+  user skills in the device chat, so leaving it would register every skill twice.
+  See [`adding-agent-runtime.md` §5](adding-agent-runtime.md#5-skills) for why the store
+  exists (per-runtime copies drifted across devices, and a duplicate of one skill name
+  can stop a runtime loading it at all).
+- **Factory reset wipes the store *and* the symlink** (`reset.go`: `skills.StoreDir` +
+  `claudecodeSkillsDir`) — wiping only the link would leave every skill on disk, wiping
+  only the store would leave a dangling link.
 - **User-level memory** (`/root/.claude/CLAUDE.md`, `userClaudeMDBlock`): the
   workspace `CLAUDE.md` only reaches the device-chat session, so the device-wide
   connector rules are also injected here — Claude Code loads this file in every
@@ -396,11 +409,14 @@ Telegram, across multiple folders each with its own session.
   `CLAUDE.md` itself is runtime-specific and never carried.
 - **No HEARTBEAT.md** — Claude Code has no heartbeat loop that would read it; a
   conscious skip, not an oversight.
-- **Skills** live in `workspace/.claude/skills/` (native, auto-discovered).
-  Capability-pruned on onboarding; **restored from the CDN when empty**
-  (`ensureSkills` — covers factory reset); steady-state updates via
-  `skill_watcher.go` (5-min OTA metadata poll, notify via
-  `SendSystemChatMessage`).
+- **Skills** are auto-discovered natively through `/root/.claude/skills`, which is a
+  symlink to the shared store `/root/.autonomous/skills` (above). Everything that writes
+  skills writes the **store**: the capability prune on onboarding
+  (`skills.PruneUnsupported` — platform-catalog names only, so it never deletes another
+  runtime's bundled skills or an MCP connector skill out of the shared store), the CDN
+  **restore when the store is empty** (`ensureSkills` — covers factory reset), and
+  steady-state updates via `skill_watcher.go` (5-min OTA metadata poll →
+  `skills.InstallByName`, notify via `SendSystemChatMessage`).
 - **MCP is real** (`mcp.go`): `WriteMCPEntry`/`RemoveMCPEntry` upsert
   `workspace/.mcp.json` `mcpServers` (canonical `{command,args,env}` /
   `{type,url,headers}` entries pass through verbatim) + bridge restart;

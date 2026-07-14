@@ -423,7 +423,10 @@ làm 3 việc theo thứ tự:
    sau factory-reset wipe), chạy `hermes claw migrate` (nó **copy** skills openclaw,
    không transform). Guard theo thư mục rỗng để switch thường là no-op (không
    re-import churn). `claw migrate` cũng đụng SOUL/MEMORY, nhưng vô hại: migrate
-   persona Go (§12) chạy sau ghi đè sạch, chỉ skills trụ lại.
+   persona Go (§12) chạy sau ghi đè sạch, chỉ skills trụ lại. Lưu ý
+   `openclaw-imports` nay là **symlink** tới store skill dùng chung (xem *Store skill
+   dùng chung* bên dưới), nên "thư mục rỗng" thực chất là "store rỗng", và mọi thứ
+   `claw migrate` copy vào đó rơi thẳng vào store.
 
    Một migrate chạy khi bản canonical đã có trên đĩa (race lúc install với skill
    watcher, chạy tay) dùng `--skill-conflict rename` và để lại **bản trùng**
@@ -476,6 +479,44 @@ không mọi lượt sẽ 401. Hermes phải listen tại `127.0.0.1:8642` để
 `internal/hermes/constants.go` rồi build lại (việc cho phép cấu hình theo từng máy
 là phần làm sau).
 
+### Store skill dùng chung (`skills/openclaw-imports` là symlink)
+
+Skill của Hermes **không còn là bản copy riêng**. Trên máy chỉ có MỘT store thật:
+`/root/.autonomous/skills` (`skills.StoreDir`, `internal/skills/store.go`), dùng
+chung cho cả năm runtime. `ensureSkillsLink()` (`internal/hermes/onboarding.go`,
+gọi từ `EnsureOnboarding` **trước** `ensureSkills`) dựng symlink qua
+`skills.LinkRuntimeDir(<hermesHome>/skills/openclaw-imports)`; trên máy cài bằng
+os-server đời cũ, skill trong thư mục thật được move vào store rồi thư mục bị thay
+bằng symlink — **bản đã có trong store thắng** (đó là bản skill watcher giữ tươi;
+bản của runtime mới là bản có nguy cơ cũ). Hàm trả `true` khi có thay đổi trên đĩa
+→ `EnsureOnboarding` restart gateway.
+
+> ⚠️ **Link phải nằm ở `skills/openclaw-imports`, KHÔNG BAO GIỜ ở `skills/`.**
+> `audio_cache/` và `image_cache/` là **anh em cùng cấp** dưới `~/.hermes/skills/`
+> (xem `internal/hermes/reset.go`); trỏ symlink vào `skills/` sẽ nuốt luôn chúng.
+
+**Vì sao dùng chung.** Kiểu cũ — mỗi runtime tải cùng bộ zip CDN vào thư mục của
+riêng nó — gây đúng hai lỗi thật:
+
+1. **Drift**: hai máy chạy **cùng một bản os-server** lại chạy hai
+   `connectors/SKILL.md` khác nhau (md5 `3ed7f78b…` vs `ba1f8a8e…`), chỉ vì hai bản
+   copy được tải ở hai thời điểm khác nhau.
+2. **Trùng tên**: hai ứng viên cho một tên skill khiến `skill_view` của Hermes từ
+   chối load skill **luôn** ("Ambiguous skill name" — chính là cơ chế
+   `pruneImportedSkillDuplicates` phía trên chống lại), và agent tự bịa: một máy có
+   Gmail token hợp lệ quay ra đi cài CLI email client. Một store = một bản duy nhất
+   cho mỗi tên.
+
+Ngoài ra, switch runtime từng cần một bước sync skill chưa bao giờ tồn tại; với một
+store thì switch **không phải sync gì**. Skill connector MCP (`figma-api`, do
+`openclaw.EnsureMCPSkill` cài) cũng vào store nên Hermes thấy được, kể cả khi
+connector được set up lúc runtime khác đang chạy.
+
+**Factory reset** (`reset.go`) wipe **cả** `skills.StoreDir` **lẫn**
+`~/.hermes/skills/openclaw-imports`: store để reset thật sự xoá skill, symlink để
+không còn dangling link cho boot sau vấp phải (`audio_cache/` + `image_cache/` bị
+wipe riêng, như cũ).
+
 ### Block ưu-tiên-skill trong SOUL.md (skill của máy thắng skill bundled của Hermes)
 
 Hermes có catalog skill bundled riêng, và nếu để mặc định nó coi các skill đó
@@ -494,7 +535,8 @@ nó đọc mỗi session** — nên quy tắc đi theo đó:
   `soulSkillPriorityBlock` nhúng sẵn vào cuối `~/.hermes/SOUL.md` — nên một OTA
   os-server làm mới nội dung, và factory reset / migrate làm mất block sẽ tự-vá
   ở boot kế tiếp.
-- Block chỉ dẫn: các skill dưới `skills/openclaw-imports/` là skill nền tảng
+- Block chỉ dẫn: các skill dưới `skills/openclaw-imports/` (đường Hermes nhìn thấy —
+  thực chất là symlink tới store dùng chung) là skill nền tảng
   built-in của máy và **ưu tiên hơn mọi skill bundled của Hermes** có mục đích
   trùng lặp; mọi việc trên dịch vụ bên-thứ-ba đã kết nối
   (Gmail/Calendar/Drive/Notion/Figma/Asana/Linear/GitHub, …) đi qua skill
@@ -613,9 +655,12 @@ Copy soul dùng `Overwrite=true` (switch lấy persona của runtime nguồn; ba
 trước). Chiều ngược hermes→openclaw **strip identity card khỏi SOUL VÀ restore các
 field của nó về `IDENTITY.md` của OpenClaw** (`restoreIdentityCard`, nghịch đảo của
 inline) — nên tên đặt dưới Hermes sống sót cả chiều về, không chỉ chiều đi.
-**Skills** được giữ tươi dưới Hermes nhờ
-`internal/hermes/skill_watcher.go` — auto-update từ CDN vào `skills/openclaw-imports`,
-gate theo capability, mirror watcher OpenClaw (engine chung ở
+**Skills** không phải "mang qua" nữa: mọi runtime đọc chung một store
+`/root/.autonomous/skills` mà `skills/openclaw-imports` symlink tới (xem *Store skill
+dùng chung* ở §10), nên switch backend **không sync skill gì cả**. Chúng được giữ
+tươi nhờ `internal/hermes/skill_watcher.go` — auto-update từ CDN, gate theo
+capability, mirror watcher OpenClaw; `downloadSkillsByName` giờ chỉ delegate sang
+`skills.InstallByName` (ghi thẳng vào store; engine chung ở
 `internal/skills/skillzip.go`).
 
 **MCP connector cũng được mang qua** — các remote-MCP server đã cấu hình được clone

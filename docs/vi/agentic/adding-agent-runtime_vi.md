@@ -160,7 +160,8 @@ Mẫu fix (dùng cho mọi thứ có state):
 Presync của Hermes (`internal/hermes/presync.sh`) giờ làm chủ **cả** model wiring
 trong `config.yaml` (idempotent — coerce `model: ''` bị reset về map, khẳng định
 structure `provider`/`custom_providers`, sync `llm_*`/secrets) **lẫn** restore
-skills (chạy lại `claw migrate` khi `skills/openclaw-imports` rỗng). Giữ `verify`
+skills (chạy lại `claw migrate` khi `skills/openclaw-imports` rỗng — thư mục đó nay
+là symlink tới store dùng chung, nên "rỗng" nghĩa là store rỗng; xem §5). Giữ `verify`
 chỉ-CLI (`command -v <bin>`) — structure-check trong `verify` sẽ ép full reinstall
 nặng trong khi presync tự lành đủ rồi.
 
@@ -239,19 +240,62 @@ trong doc backend (vd `docs/agentic/hermes.md`), không phải đảm bảo chun
 
 ---
 
-## 5. Skills
+## 5. Skills — một store dùng chung, runtime KHÔNG tự giữ bản copy
 
-- Skills tới backend bằng cách **copy** (kiểm tra: copy hay convert! `claw migrate`
-  của Hermes là `shutil.copytree`, không transform) vào thư mục skill của backend.
-- **Restore-sau-reset** thuộc **presync**, guard theo thư mục rỗng (để switch
-  thường là no-op — không churn). Xem §3.
+**Luật cứng: runtime mới KHÔNG tự tải và KHÔNG tự lưu skill.** Trên đĩa chỉ có
+**MỘT** store thật: `/root/.autonomous/skills` (`skills.StoreDir`,
+`internal/skills/store.go`). Thư mục skill native của mỗi runtime chỉ là một
+**symlink** trỏ vào store đó — nên code load skill của runtime không phải sửa gì,
+nó cứ đọc xuyên qua link.
+
+Việc phải làm khi thêm runtime:
+
+- Viết `ensureSkillsLink()` trong `internal/<name>/onboarding.go`, gọi
+  `skills.LinkRuntimeDir(<thư mục skills gốc của runtime>)` từ `EnsureOnboarding`,
+  và **fold bool trả về vào gate restart** — `LinkRuntimeDir` trả `true` khi có
+  thay đổi thật trên đĩa (thư mục thật vừa bị thay bằng symlink), và tiến trình
+  đang chạy vẫn giữ thư mục cũ nên phải restart mới nhìn đúng. Gọi nó **TRƯỚC**
+  mọi bước prune/download bên dưới, nếu không prune sẽ chạy nhầm trên bản copy cũ.
+- Mọi lệnh cài skill đi qua `skills.InstallByName(baseURL, names)` — nó ghi thẳng
+  vào store và trả về những skill **thật sự đổi nội dung** (gate theo content-hash)
+  để caller restart gateway / notify agent đúng lúc. `downloadSkillsByName` trong
+  `skill_watcher.go` của runtime giờ chỉ còn một dòng delegate.
+- **Đừng tự viết prune.** `skills.PruneUnsupported(keep)` chỉ prune skill nền tảng
+  (có trong `skills.Catalog`); nó cố ý **không đụng** thứ nó không sở hữu — skill
+  **bundled** của runtime (picoclaw/codex ship sẵn `agent-browser`, `tmux`, …) và
+  skill connector MCP (`figma-api`). Store là của chung: prune theo kiểu "không có
+  trong `keep` thì xoá" sẽ khiến runtime nào boot sau cùng xoá sạch skill của các
+  runtime khác.
+
+**Vì sao phải như vậy.** Kiểu cũ (mỗi runtime một bản copy của cùng bộ zip CDN) đã
+gây hai lỗi thật ngoài thực địa:
+
+1. **Drift** — hai thiết bị chạy **cùng một bản os-server** lại chạy hai
+   `connectors/SKILL.md` khác nhau (md5 `3ed7f78b…` vs `ba1f8a8e…`), chỉ vì bản
+   copy của chúng được tải ở hai thời điểm khác nhau.
+2. **Trùng tên làm skill không load được** — hai ứng viên cho một tên skill khiến
+   `skill_view` của Hermes từ chối load skill **luôn** ("Ambiguous skill name", xem
+   `hermes.pruneImportedSkillDuplicates`), và một thiết bị có Gmail token hợp lệ
+   lại quay ra đi cài CLI email client.
+
+Ngoài ra switch runtime từng cần một bước sync skill **chưa bao giờ tồn tại**; với
+một store thì switch không phải sync gì.
+
+**Migrate thiết bị cũ (miễn phí, tự động).** Gặp thư mục **thật** (máy cài bằng
+os-server đời trước), `LinkRuntimeDir` move skill trong đó vào store rồi thay thư
+mục bằng symlink — **bản đã có trong store THẮNG** (đó là bản watcher giữ tươi;
+bản của runtime mới là bản có nguy cơ cũ).
+
+- **Restore-sau-reset** vẫn thuộc **presync** / `ensureSkills`, guard theo store
+  rỗng (để switch thường là no-op — không churn). Xem §3.
 - **Skill watcher** (auto-update từ CDN, gate theo capability): plumbing generic
   fetch/extract/hash share ở `internal/skills/skillzip.go`
   (`FetchSkillVersions`/`DownloadToTempFile`/`FolderHash`/`ExtractSkillZip`). Thêm
   `internal/<name>/skill_watcher.go` mỏng song song với
-  `internal/openclaw/skill_watcher.go` — chỉ khác **thư mục đích** và **đường
-  notify**. Gate bằng `skills.Supported(device.Capabilities(...))`. Notify agent
-  bằng `SendSystemChatMessage`.
+  `internal/openclaw/skill_watcher.go` — **thư mục đích không còn là biến thể nữa**
+  (luôn là store, qua `skills.InstallByName`), chỉ khác **đường notify**. Gate bằng
+  `skills.Supported(device.Capabilities(...))`. Notify agent bằng
+  `SendSystemChatMessage`.
 
 ---
 
@@ -316,6 +360,10 @@ parity. Chỉ làm khi xuất hiện nguồn turn như vậy.
   `config.json` reset làm `prev` cũ lệch với `current` bị reset → kích **migration
   persona giả** lan state đã-wipe/stub.
 - Giữ thứ phải sống (`bootstrap.json` = state OTA).
+- **Reset skill phải wipe `skills.StoreDir` VÀ symlink của runtime** (xem
+  `internal/hermes/reset.go`, `internal/claudecode/reset.go`). Chỉ xoá thư mục
+  skill của runtime là vô nghĩa — đó chỉ là symlink, mọi skill vẫn nằm nguyên trong
+  store, và ta còn để lại một dangling link cho boot sau vấp phải.
 - Một wipe path xoá nội dung đã migrate (skills, config) phải có **restore path
   chạy SAU reset** (presync, §3/§5) — không thì nội dung mất luôn khi `install.sh`
   ngừng re-run.
@@ -440,8 +488,12 @@ là no-op idempotent.
       MEMORY/USER, và slot KNOWLEDGE/daily nếu có; `write` restore từng cái về slot
       gốc (identity → file riêng, hoặc inline nếu không có slot) và fold slot mà
       backend thiếu. `Overwrite=true` cho SOUL. Không cần `Direction` enum mới.
-- [ ] Skills: copy-import + **restore-trong-presync** (guard) + `skill_watcher.go`
-      (song song openclaw, share `internal/skills/skillzip.go`).
+- [ ] Skills (§5): **KHÔNG** tự tải/tự giữ skill — `ensureSkillsLink()` gọi
+      `skills.LinkRuntimeDir(<thư mục skills gốc>)` từ `EnsureOnboarding` (bool trả
+      về fold vào gate restart), cài qua `skills.InstallByName`, prune qua
+      `skills.PruneUnsupported`. Cộng **restore-trong-presync** (guard theo store
+      rỗng) + `skill_watcher.go` (song song openclaw, share
+      `internal/skills/skillzip.go`).
 - [ ] Hooks: native-backend hoặc OS-side — đã quyết & ghi (không thiếu âm thầm).
       Nếu reimplement OS-side bằng Go (không liên kết compile-time với hook TS),
       thêm comment chéo trong cả hai file để sửa cái này cảnh báo cái kia.
