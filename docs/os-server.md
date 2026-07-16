@@ -298,8 +298,11 @@ When receiving a `voice_command` or `voice` event, the OS server checks local in
 | "brighter" | scene:energize |
 | "happy" | emotion:happy |
 | "sad" | emotion:sad |
-| "volume up" | volume 80 |
+| "volume up" | volume 100 |
 | "volume down" | volume 30 |
-| "mute" | volume 0 |
+| "mute speaker" | `POST /speaker/mute` (silent — no TTS confirm) |
+| "unmute speaker" | `POST /speaker/unmute` + "Speaker on!" |
+
+Keyword matching is whole-phrase with ASCII word boundaries — "unmute speaker" does not trigger the "mute speaker" rule.
 
 No match → forward to OpenClaw.

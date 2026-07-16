@@ -76,6 +76,14 @@ def express_emotion(req: EmotionRequest):
         # Callers are AI agents that sometimes invent emotion names — a 400
         # wastes their turn and nothing shows on the device. Fall back to
         # curious (a neutral, always-safe expression) instead of rejecting.
+        # While sleeping, ignore instead: curious is a wake emotion, so the
+        # fallback would let an invented name bypass the sleep gate and wake
+        # the device (servo curious → idle, never returns to sleepy).
+        if state._sleeping:
+            state.logger.info(
+                "POST /emotion: ignored unknown '%s' while sleeping", req.emotion
+            )
+            return {"status": "ignored", "emotion": req.emotion, "servo": None, "led": None}
         state.logger.warning(
             "POST /emotion: unknown '%s' — falling back to %s", req.emotion, EMO_CURIOUS
         )

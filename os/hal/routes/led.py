@@ -88,6 +88,8 @@ def set_led_solid(req: LEDSolidRequest):
     if req.transient:
         state._cancel_pending_restore()
     else:
+        # Explicit user look — wins over the mic-muted resting indicator.
+        state._dismiss_mic_muted_led("led/solid")
         state._save_user_led_state({"type": LST_SOLID, "color": list(color)})
     return {"status": "ok"}
 
@@ -97,6 +99,7 @@ def set_led_paint(req: LEDPaintRequest):
     """Set individual pixel colors."""
     if not state.rgb_service:
         raise HTTPException(503, "LED not available")
+    state._dismiss_mic_muted_led("led/paint")
     colors = [tuple(c) if isinstance(c, list) else c for c in req.colors]
     state.rgb_service.dispatch(RGB_CMD_PAINT, colors)
     return {"status": "ok"}
@@ -117,6 +120,7 @@ def turn_off_leds(req: Optional[LEDOffRequest] = Body(default=None)):
     if transient:
         state._cancel_pending_restore()
     else:
+        state._dismiss_mic_muted_led("led/off")
         state._save_user_led_state({"type": LST_OFF})
     return {"status": "ok"}
 
@@ -174,6 +178,7 @@ def start_led_effect(req: LEDEffectRequest):
     if req.transient:
         state._cancel_pending_restore()
     else:
+        state._dismiss_mic_muted_led("led/effect")
         state._save_user_led_state(
             {
                 "type": LST_EFFECT,
@@ -221,6 +226,12 @@ def restore_led():
         raise HTTPException(503, "LED not available")
     if state._tts_speaking:
         state.logger.info("LED restore skipped -- TTS speaking_wave active")
+        return {"status": "ok"}
+    if state._mic_muted_led_owns_strip():
+        # A transient driver releasing the strip while muted settles on the
+        # privacy indicator (the no-user-state branch below would clear it).
+        state._start_mic_muted_effect()
+        state.logger.info("LED restore: mic muted -- settling on privacy indicator")
         return {"status": "ok"}
     user_state = state._user_led_state
     if user_state is None or user_state.get("type") == LST_OFF:

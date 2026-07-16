@@ -13,7 +13,7 @@ var audioRules = []rule{
 		match:      anyOf("volume up", "louder"),
 		exec: func(string) *Result {
 			post("/audio/volume", `{"volume":100}`)
-			return &Result{TTSText: "Volume up!", Actions: []string{`POST /audio/volume {"volume":80}`}}
+			return &Result{TTSText: "Volume up!", Actions: []string{`POST /audio/volume {"volume":100}`}}
 		},
 	},
 	{
@@ -23,6 +23,18 @@ var audioRules = []rule{
 		exec: func(string) *Result {
 			post("/audio/volume", `{"volume":30}`)
 			return &Result{TTSText: "Volume down!", Actions: []string{`POST /audio/volume {"volume":30}`}}
+		},
+	},
+	// unmute before mute: belt-and-braces ordering on top of the
+	// word-boundary match (containsPhrase) that already keeps "unmute
+	// speaker" from hitting the mute keywords.
+	{
+		name:       "unmute_speaker",
+		capability: device.CapMedia,
+		match:      anyOf("unmute speaker", "unmute the speaker"),
+		exec: func(string) *Result {
+			post("/speaker/unmute", "")
+			return &Result{TTSText: "Speaker on!", Actions: []string{`POST /speaker/unmute`}}
 		},
 	},
 	{

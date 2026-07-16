@@ -298,8 +298,11 @@ Khi nhận `voice_command` hoặc `voice` event, OS server check local intent tr
 | "sáng lên", "brighter" | scene:energize |
 | "vui lên", "happy" | emotion:happy |
 | "buồn", "sad" | emotion:sad |
-| "tăng âm", "volume up" | volume 80 |
+| "tăng âm", "volume up" | volume 100 |
 | "giảm âm", "volume down" | volume 30 |
-| "im", "mute" | volume 0 |
+| "mute speaker" | `POST /speaker/mute` (im lặng — không TTS xác nhận) |
+| "unmute speaker" | `POST /speaker/unmute` + "Speaker on!" |
+
+Keyword match theo nguyên cụm với word boundary ASCII — "unmute speaker" không kích rule "mute speaker".
 
 Không match → forward OpenClaw.

@@ -134,6 +134,25 @@ from `STATUS_LED_PRESETS`, overridable per device via `presets.json`'s `status_l
 (see [DEVICE-SPEC.md § Per-device presets](../../../contract/DEVICE-SPEC.md#per-device-presets-presetsjson)).
 `setup` is a persistent solid (saved as the displayed state); the rest are transient overlays.
 
+### Mic-muted idle indicator
+
+`STATUS_LED_PRESETS["mic_muted"]` — dark red `(140, 0, 0)` breathing at speed 0.8. HAL-local
+key (no Go statusled state): applied by `POST /voice/mute`, cleared by `POST /voice/unmute`
+(`app_state._mic_muted_led`). It is the strip's **resting look** while the mic is muted —
+nothing is blocked:
+
+- Emotions, effects, TTS/music waves, and transient overlays all run normally on top.
+  When they finish, every LED restore (`_restore_user_led`, `POST /led/restore`) settles
+  back on the red instead of the user state — "nothing happening + red breathing" means
+  the mic is muted.
+- An explicit user LED command (non-transient `/led/solid|off|effect`, `/led/paint`)
+  dismisses the indicator — the user's ask wins the strip; the mic stays muted.
+- Yields to deliberate lighting choices: user LED-off stays dark, an active scene keeps
+  its functional lighting (the flag persists, so leaving the scene while still muted
+  brings the red back on the next restore). Scene mic-unmute paths (`/scene` with
+  `mic:"on"`, `/scene/off`) also clear it.
+- `_user_led_state` is never touched — unmute restores the user's saved look.
+
 ### Setup-needed solid (lamp)
 
 When lamp starts and `config.SetUpCompleted == false` (device in AP/provisioning mode), `server/server.go` spawns a background goroutine that polls HAL `GET /health` once per second up to 30s, and once `health.led == true` fires `lelamp.SetSolid(255, 255, 255)` — paints the strip solid white as a "device ready, connect to my hotspot" cue. Polling (not a single call) handles the cold-boot race where os-server's :5000 is up before HAL's :5001. No status LED state is used. Booting blue-breathing still shows during init. See [setup-flow.md](setup-flow.md#ap-mode).
@@ -151,7 +170,7 @@ See [emotion-led-mapping.md](emotion-led-mapping.md) for the full emotion → LE
 
 ### Unknown emotion names
 
-`POST /emotion` (`os/hal/routes/emotion.py`) never rejects a non-empty emotion name. Names are lowercased/trimmed; anything not in `EMOTION_PRESETS` falls back to `curious` (a neutral, always-safe expression) with a warning logged — callers are AI agents that sometimes invent emotion names, and a 400 would waste their turn with nothing showing on the device. Everything downstream (sleep gate, servo, LED) uses the resolved emotion.
+`POST /emotion` (`os/hal/routes/emotion.py`) never rejects a non-empty emotion name. Names are lowercased/trimmed; anything not in `EMOTION_PRESETS` falls back to `curious` (a neutral, always-safe expression) with a warning logged — callers are AI agents that sometimes invent emotion names, and a 400 would waste their turn with nothing showing on the device. Exception: while the device is sleeping, an unknown name is **ignored** (`status: ignored`) instead of falling back — `curious` is a wake emotion, so the fallback would let an invented name bypass the sleep gate and wake the device. Otherwise everything downstream (servo, LED) uses the resolved emotion.
 
 ## Per-device preset overrides
 

@@ -133,6 +133,24 @@ màu/effect/speed từ `STATUS_LED_PRESETS`, override per-device qua section `st
 `presets.json` (xem [DEVICE-SPEC.md § Per-device presets](../../../../contract/DEVICE-SPEC.md#per-device-presets-presetsjson)).
 `setup` là solid bền (lưu thành trạng thái hiển thị); còn lại là overlay transient.
 
+### Đèn báo mic đang mute (idle indicator)
+
+`STATUS_LED_PRESETS["mic_muted"]` — đỏ sẫm `(140, 0, 0)` breathing speed 0.8. Key HAL-local
+(không có state Go statusled tương ứng): bật bởi `POST /voice/mute`, tắt bởi `POST /voice/unmute`
+(`app_state._mic_muted_led`). Đây là **trạng thái nghỉ** của strip khi mic đang mute —
+không chặn gì cả:
+
+- Emotion, effect, TTS/music wave, transient overlay vẫn chạy bình thường đè lên. Chạy
+  xong thì mọi LED restore (`_restore_user_led`, `POST /led/restore`) lắng về màu đỏ
+  thay vì user state — "không có gì xảy ra + đỏ breathing" nghĩa là mic đang mute.
+- Lệnh LED explicit của user (non-transient `/led/solid|off|effect`, `/led/paint`)
+  dismiss indicator — ý user thắng strip; mic vẫn mute.
+- Nhường các lựa chọn ánh sáng chủ đích: user tắt đèn thì strip vẫn tối, scene active
+  giữ nguyên ánh sáng chức năng (flag vẫn giữ, thoát scene mà còn mute thì đỏ quay lại
+  ở lần restore kế). Các đường scene unmute mic (`/scene` với `mic:"on"`, `/scene/off`)
+  cũng clear indicator.
+- `_user_led_state` không bao giờ bị đụng — unmute là về lại đúng state user đã lưu.
+
 ### Setup-needed solid (lamp)
 
 Khi lamp start và `config.SetUpCompleted == false` (device đang ở AP/provisioning mode), `server/server.go` spawn goroutine background poll `GET /health` của HAL mỗi giây tối đa 30s, khi `health.led == true` thì fire `lelamp.SetSolid(255, 255, 255)` — paint strip trắng solid báo "device ready, vào hotspot đi". Phải poll (không phải call 1 lần) vì cold boot os-server bind :5000 trước HAL :5001. Không dùng status LED state. Blue-breathing booting vẫn show trong lúc init. Xem [setup-flow_vi.md](setup-flow_vi.md#ap-mode).
@@ -161,7 +179,7 @@ Mỗi emotion preset có LED color riêng:
 
 ### Tên emotion không nhận diện được
 
-`POST /emotion` (`os/hal/routes/emotion.py`) không bao giờ từ chối tên emotion khác rỗng. Tên được lowercase/trim; tên nào không có trong `EMOTION_PRESETS` sẽ fallback về `curious` (biểu cảm trung tính, luôn an toàn) kèm log warning — caller là AI agent đôi khi bịa tên emotion, trả 400 sẽ phí lượt mà thiết bị không hiển thị gì. Toàn bộ downstream (sleep gate, servo, LED) dùng emotion đã resolve.
+`POST /emotion` (`os/hal/routes/emotion.py`) không bao giờ từ chối tên emotion khác rỗng. Tên được lowercase/trim; tên nào không có trong `EMOTION_PRESETS` sẽ fallback về `curious` (biểu cảm trung tính, luôn an toàn) kèm log warning — caller là AI agent đôi khi bịa tên emotion, trả 400 sẽ phí lượt mà thiết bị không hiển thị gì. Ngoại lệ: khi thiết bị đang ngủ, tên lạ bị **ignore** (`status: ignored`) thay vì fallback — `curious` là wake emotion, nên fallback sẽ cho tên bịa vượt sleep gate và đánh thức thiết bị. Ngoài trường hợp đó, downstream (servo, LED) dùng emotion đã resolve.
 
 ## Override preset theo từng thiết bị
 

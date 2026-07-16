@@ -140,6 +140,9 @@ def activate_scene(req: SceneRequest):
         state._mic_manual_override = False
         if state.voice_service:
             state.voice_service.start()
+        # Mic is live again — drop a lingering privacy indicator flag (the
+        # scene paint already owns the strip look).
+        state._clear_mic_muted_led()
         state.logger.info("Scene %s: mic unmuted", req.scene)
 
     # Speaker control
@@ -192,6 +195,7 @@ def deactivate_scene():
         state._mic_manual_override = False
         if state.voice_service:
             state.voice_service.start()
+        state._clear_mic_muted_led()
         state.logger.info("Scene off: mic unmuted")
 
     # Unmute speaker

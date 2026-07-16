@@ -114,6 +114,7 @@ var CacheableReplies = func() []string {
 	out := []string{
 		"Light on!", "Light off!", "Back to normal!", "Goodnight!",
 		"Volume up!", "Volume down!", "Music stopped.", "Dimmed.", "Max brightness!",
+		"Speaker on!",
 	}
 	// Pull every chitchat reply variant from i18n so the WAV cache covers
 	// them after reboot — first call is then ~50ms playback instead of 1.5s
@@ -133,12 +134,37 @@ func normalize(s string) string {
 func anyOf(keywords ...string) func(string) bool {
 	return func(t string) bool {
 		for _, kw := range keywords {
-			if strings.Contains(t, kw) {
+			if containsPhrase(t, kw) {
 				return true
 			}
 		}
 		return false
 	}
+}
+
+// containsPhrase reports whether kw occurs in t as a whole phrase: the
+// occurrence must not sit inside a larger word, so "unmute speaker" does
+// NOT match keyword "mute speaker". Boundaries are non-alphanumeric ASCII;
+// multibyte (Vietnamese/Chinese) neighbors count as boundaries, which is
+// correct since keywords are English-only.
+func containsPhrase(t, kw string) bool {
+	for i := 0; ; {
+		j := strings.Index(t[i:], kw)
+		if j < 0 {
+			return false
+		}
+		start := i + j
+		end := start + len(kw)
+		if (start == 0 || !isASCIIWordChar(t[start-1])) &&
+			(end == len(t) || !isASCIIWordChar(t[end])) {
+			return true
+		}
+		i = start + 1
+	}
+}
+
+func isASCIIWordChar(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9'
 }
 
 // pickRandom returns a pseudo-random pick using the current time. Avoids

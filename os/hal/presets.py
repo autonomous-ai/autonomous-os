@@ -202,4 +202,10 @@ STATUS_LED_PRESETS = {
     # Setup/provisioning "device ready, join the AP" cue. effect "solid" = a
     # persistent fill (saved as the displayed state), not a transient overlay.
     "setup":        {"effect": "solid",               "color": [255, 255, 255], "speed": 1.0},  # white solid — AP/setup ready
+    # Mic-muted idle indicator — HAL-local key (no Go statusled state). The
+    # strip's RESTING look while the mic is muted: emotions/effects/waves run
+    # normally on top, and every LED restore lands back on this instead of the
+    # user state, so "nothing happening + red breathing" = mic is muted.
+    # Applied by /voice/mute, cleared by /voice/unmute (app_state._mic_muted_led).
+    "mic_muted":    {"effect": FX_BREATHING,          "color": [140, 0, 0],     "speed": 0.8},  # dark red — mic muted
 }

@@ -342,6 +342,7 @@ def mute_mic():
     state._mic_manual_override = True
     if state.voice_service and state.voice_service.available:
         state.voice_service.stop()
+    state._apply_mic_muted_led()
     state.logger.info("Mic muted by user")
     return {"status": "ok"}
 
@@ -355,6 +356,7 @@ def unmute_mic():
     state._mic_manual_override = False
     if state.voice_service:
         state.voice_service.start()
+    state._clear_mic_muted_led()
     state.logger.info("Mic unmuted")
     return {"status": "ok"}
 

@@ -44,6 +44,28 @@ func TestSceneActivationStillMatches(t *testing.T) {
 	}
 }
 
+// Regression: "unmute speaker" used to match the mute_speaker rule because
+// anyOf did a bare substring search ("unmute speaker" contains "mute
+// speaker") and no unmute rule existed — the device muted on an unmute ask.
+func TestMuteUnmuteSpeaker(t *testing.T) {
+	cases := map[string]string{
+		"unmute speaker":            "unmute_speaker",
+		"unmute the speaker please": "unmute_speaker",
+		"mute speaker":              "mute_speaker",
+		"please mute the speaker":   "mute_speaker",
+	}
+	for text, want := range cases {
+		r := Match(text)
+		if r == nil || r.Rule != want {
+			got := "<nil>"
+			if r != nil {
+				got = r.Rule
+			}
+			t.Errorf("Match(%q) rule = %s, want %s", text, got, want)
+		}
+	}
+}
+
 // Off-phrasings scene_off doesn't recognize must NOT activate a scene —
 // falling through to the agent (nil) is the correct behavior.
 func TestSceneOffNeverActivates(t *testing.T) {

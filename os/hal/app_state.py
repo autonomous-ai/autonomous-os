@@ -24,6 +24,7 @@ from hal.presets import (
     LST_SOLID,
     RGB_CMD_SOLID,
     SCENE_PRESETS,
+    STATUS_LED_PRESETS,
 )
 
 # Background emotions don't override user's saved LED state. They still
@@ -110,6 +111,15 @@ _music_playing: bool = False
 _mic_muted = False
 _mic_manual_override = False
 _speaker_muted = False
+
+# Mic-muted idle LED indicator (STATUS_LED_PRESETS["mic_muted"], dark red
+# breathing). Set by /voice/mute, cleared by /voice/unmute. It is the strip's
+# RESTING look while muted: emotions/effects/waves still run normally on top,
+# but every _restore_user_led lands back on the red instead of the user state
+# — "nothing happening + red breathing" tells the user the mic is muted.
+# An explicit user LED command (/led/solid|off|effect|paint) dismisses it
+# (the user's ask wins; mic stays muted). Yields to LST_OFF and active scenes.
+_mic_muted_led = False
 
 # True only while a live voice enrollment is recording. record-enroll sets
 # _speaker_muted as a transient guard (keep TTS out of the captured WAV), which
@@ -301,6 +311,85 @@ def _get_user_base_color() -> tuple:
     return (0, 0, 0)
 
 
+def _mic_muted_led_owns_strip() -> bool:
+    """True when the mic-muted indicator is the strip's current resting look.
+
+    Yields to two deliberate user lighting choices: LST_OFF (a dark strip
+    stays dark) and an active scene (reading/focus lighting is functional).
+    The flag stays set in both cases, so leaving the scene while still
+    muted brings the red back on the next restore."""
+    if not _mic_muted_led:
+        return False
+    if _led_off_by_user():
+        return False
+    if _active_scene or (_user_led_state and _user_led_state.get("type") == LST_SCENE):
+        return False
+    return True
+
+
+def _start_mic_muted_effect():
+    """Paint the mic-muted indicator (dark red breathing). Display-only:
+    never touches _user_led_state, so unmute restores the saved user look."""
+    if not rgb_service or not _mic_muted_led_owns_strip():
+        return
+    preset = STATUS_LED_PRESETS["mic_muted"]
+    global _restore_timer, _effect_thread, _effect_name, _effect_base_color
+    if _restore_timer is not None and _restore_timer.is_alive():
+        _restore_timer.cancel()
+        _restore_timer = None
+    _stop_current_effect()
+    color = tuple(preset["color"])
+    _effect_stop.clear()
+    _effect_name = preset["effect"]
+    _effect_base_color = color
+    _effect_thread = threading.Thread(
+        target=_run_effect,
+        args=(preset["effect"], color, preset.get("speed", 1.0), None, _effect_stop, rgb_service),
+        daemon=True,
+        name="led-mic-muted",
+    )
+    _effect_thread.start()
+
+
+def _apply_mic_muted_led():
+    """Turn on the mic-muted resting indicator (called by POST /voice/mute).
+
+    Paints immediately unless a TTS/music wave owns the strip — then the
+    wave-end restore lands on the red (see _restore_user_led)."""
+    global _mic_muted_led
+    if _mic_muted_led:
+        return
+    _mic_muted_led = True
+    logger.info("Mic-muted LED indicator ON")
+    if _tts_speaking or _music_playing:
+        return
+    _start_mic_muted_effect()
+
+
+def _clear_mic_muted_led():
+    """Drop the mic-muted indicator and restore the user's saved LED state
+    (called by POST /voice/unmute and scene mic-unmute paths)."""
+    global _mic_muted_led
+    if not _mic_muted_led:
+        return
+    _mic_muted_led = False
+    logger.info("Mic-muted LED indicator OFF -- restoring user state")
+    if _tts_speaking or _music_playing:
+        return
+    _restore_user_led()
+
+
+def _dismiss_mic_muted_led(source: str):
+    """Explicit user LED command while muted: the user's ask wins the strip
+    and restores stop re-asserting the red. The mic itself STAYS muted.
+    Caller paints right after, so no restore here."""
+    global _mic_muted_led
+    if not _mic_muted_led:
+        return
+    _mic_muted_led = False
+    logger.info("Mic-muted LED indicator dismissed by %s (mic stays muted)", source)
+
+
 def _restore_user_led():
     """Restore LED to user state after emotion animation completes."""
     global _restore_timer
@@ -315,6 +404,13 @@ def _restore_user_led():
         return
 
     if not rgb_service:
+        return
+
+    # Mic muted → the resting look is the privacy red, not the user state:
+    # whatever just finished (emotion, wave, transient) settles back onto it.
+    if _mic_muted_led_owns_strip():
+        logger.info("LED restore: mic muted -- settling on privacy indicator")
+        _start_mic_muted_effect()
         return
 
     state = _user_led_state
