@@ -363,7 +363,13 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
    provider và gửi qua `append_audio()` (song song, non-blocking), đồng thời buffer
    vào `rt_audio_buffer`.
 4. **Commit.** Cuối session, nếu enabled + `available` + có audio buffer, gọi
-   `commit_audio()`.
+   `commit_audio()`. Cue emotion `thinking` fire cùng lúc commit (mặt + servo +
+   LED pulse tím ÉP HIỆN — `thinking` vốn là background emotion có LED nhường
+   màu user đã set; cue realtime bypass đúng guard đó, còn user tắt đèn thì vẫn
+   tắt) và được clear về `idle` khi có output đầu tiên (câu TTS đầu hoặc frame
+   audio native đầu) hoặc khi turn chết không output — trừ khi model đã tự
+   express emotion riêng. Lấp khoảng 1-3s latency của model mà trước đây device
+   nhìn như đứng hình.
 5. **Tiêu thụ.** `for output in stream_output()`:
    - `TextOutput` → các câu được flush sang TTS (`speak` / `speak_queue`).
      Nếu `speak` báo busy (TTS khác đang giữ loa non-interruptible, ví dụ

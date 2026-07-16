@@ -19,6 +19,11 @@ const (
 	PhraseBrainRestart  Phrase = "sensing.brain_restart"
 	PhraseCompactNotice Phrase = "openclaw.compact_notice"
 	PhraseTrackFailFmt  Phrase = "tracking.track_fail_fmt"
+	// Spoken when the backend replaces the agent reply with its plan-limit
+	// banner. Delivered via hal.SpeakCached so the WAV self-caches on the
+	// first successful render and replays from hal's persistent cache when
+	// the TTS provider is itself rate-limited (both ride the same quota).
+	PhraseLLMLimit Phrase = "agent.llm_limit"
 
 	// Chitchat replies — consumed via PickIn(phrase, inputLang) from the
 	// local intent matcher. The reply lang follows the matched input phrase
@@ -174,6 +179,12 @@ var phrases = map[Phrase]map[string][]string{
 		LangVI:    {"Đợi xíu, mình đang dọn dẹp tí."},
 		LangZhCN: {"稍等一下，我在整理一下。"},
 		LangZhTW: {"稍等一下，我在整理一下。"},
+	},
+	PhraseLLMLimit: {
+		LangEN:   {"[sigh] I've hit my usage limit."},
+		LangVI:   {"[sigh] Mình hết hạn mức rồi."},
+		LangZhCN: {"[sigh] 我的额度用完了。"},
+		LangZhTW: {"[sigh] 我的額度用完了。"},
 	},
 	PhraseTrackFailFmt: {
 		LangEN:    {"[sigh] I can't quite see %s — point me that way, or call it something else?"},

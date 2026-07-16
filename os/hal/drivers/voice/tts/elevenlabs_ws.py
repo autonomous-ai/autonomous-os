@@ -125,7 +125,7 @@ class ElevenLabsWSTTSBackend(TTSBackend):
                 # Proxy relays quota/limit rejections as an error message rather
                 # than an HTTP status once the socket is open.
                 err = msg.get("error") or msg.get("message")
-                if err and any(k in str(err).lower() for k in ("quota", "rate limit", "too many")):
+                if err and any(k in str(err).lower() for k in ("quota", "rate limit", "too many", "usage limit")):
                     raise TTSRateLimitError(f"ElevenLabs WS rate limit: {err}", status_code=429)
                 audio_b64 = msg.get("audio")
                 if audio_b64:

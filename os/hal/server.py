@@ -487,6 +487,8 @@ async def lifespan(app: FastAPI):
             logger.warning("Music backchannel prerender failed: %s", e)
         # Also warm the rate-limit notice so it can play from cache (no API call)
         # when the TTS provider later returns 429 / quota-exhausted mid-turn.
+        # (Go-owned notices — e.g. the LLM-limit phrase — warm themselves via
+        # /voice/speak prerender=true from the os-server side.)
         try:
             from hal.i18n import PHRASE_RATE_LIMIT, localized_phrase
 

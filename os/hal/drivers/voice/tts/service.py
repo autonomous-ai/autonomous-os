@@ -521,6 +521,17 @@ class TTSService:
             logger.info("TTS suppressed -- speaker muted: %s", text[:50])
             return False
 
+        # Cache-first: an exact-text WAV in the prerender cache plays with NO
+        # API call. This is what keeps OS notices (rate-limit, LLM-limit)
+        # audible while the TTS provider itself is rate-limited. Dynamic
+        # agent replies never match — the cache only ever holds warm-listed
+        # fixed phrases. speak_cached mirrors this method's lock semantics.
+        if self._tts_cache_path(text).exists():
+            logger.info("TTS cache-first hit: %s", text[:50])
+            return self.speak_cached(
+                text, interruptible=interruptible, realtime_feedback=realtime_feedback
+            )
+
         if not self._lock.acquire(blocking=False):
             # Busy — but if current speech is interruptible, stop it and retry
             if self._interruptible:
@@ -575,6 +586,16 @@ class TTSService:
         if self._speaker_muted():
             logger.info("TTS suppressed (queue) -- speaker muted: %s", text[:50])
             return False
+
+        # Cache-first — same rationale as speak(): exact-match warm phrases
+        # (OS notices) must play without an API call, or a rate-limited
+        # provider silences the very notice explaining the rate limit. Only
+        # taken while idle; a busy strip queues normally below.
+        if not self._speaking and self._tts_cache_path(text).exists():
+            logger.info("TTS cache-first hit (queue): %s", text[:50])
+            return self.speak_cached(
+                text, interruptible=interruptible, realtime_feedback=realtime_feedback
+            )
 
         if self._lock.acquire(blocking=False):
             # Idle — start a normal speech (same as speak()).

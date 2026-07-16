@@ -472,6 +472,20 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
             logger.debug("[motion] frame is None, skipping")
             return
 
+        # Presence gate for the remote stream: while AWAY (nobody seen for
+        # AWAY_TIMEOUT_S) don't send frames to the action-recognition backend
+        # — an empty room used to stream ~40k frames/day (~1GB) overnight for
+        # nothing. Local face detection keeps running every frame and its
+        # on_motion() flips presence back to PRESENT the moment someone shows
+        # up, which re-opens this stream on the next tick. IDLE still streams
+        # (a still reader is present, just not moving). fire_hazard is NOT
+        # gated like this on purpose — an empty room is when it matters most.
+        if (
+            self._presense_service is not None
+            and self._presense_service.state == PresenceState.AWAY
+        ):
+            return
+
         try:
             detections = self._checker.update(frame)
         except Exception:
@@ -483,6 +497,14 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
         else:
             logger.debug("[motion] no detections")
 
+        # Annotate + JPEG-encode + disk write BEFORE taking the state lock —
+        # this is 50-200ms of CPU/disk on the A523 and used to run inside the
+        # lock, blocking every other perception's state access for the
+        # duration. It only needs the local frame + detections.
+        snapshot_path: str | None = None
+        if detections:
+            snapshot_path = self._save_annotated(frame, detections)
+
         with self._state_lock:
             if detections:
                 self._last_motion_time = time.time()
@@ -491,9 +513,6 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
 
                 self._snapshots_buffer.append(frame)
                 self._actions_buffer.extend([d.class_name for d in detections])
-
-                # Save annotated snapshot
-                snapshot_path = self._save_annotated(frame, detections)
                 if snapshot_path:
                     self._snapshot_paths.append(snapshot_path)
 

@@ -47,6 +47,11 @@ PHRASE_QUIET_HOURS = "quiet_hours"
 # (e.g. ElevenLabs 429). Prerendered at boot so it plays from the WAV cache
 # without another API call, letting the user hear WHY the reply went silent.
 PHRASE_RATE_LIMIT = "rate_limit"
+# NOTE: the LLM-usage-limit notice deliberately does NOT live here — its
+# caller is the os-server (Go), so its wording lives in lib/i18n/phrases.go
+# (PhraseLLMLimit) and arrives via /voice/speak with cached=true. Phrases in
+# THIS table are the ones spoken by hal's own Python code (rule: wording
+# lives where its caller lives).
 
 # Localized action announcements. reboot/shutdown phrases stay literal
 # in every language ("rebooting", "shutting down") because the user just

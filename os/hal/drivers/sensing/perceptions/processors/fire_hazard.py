@@ -32,6 +32,11 @@ from .utils import bbox_area, bbox_intersection, img2b64, xywh_to_xyxy
 
 logger = logging.getLogger(__name__)
 
+# How long to stop calling the detection API after a 429 (plan quota
+# exhausted). Every call inside the window is a guaranteed failure anyway;
+# safety is unchanged — the backend can't detect anything while limited.
+_RATE_LIMIT_BACKOFF_S = 300.0
+
 RESOURCES_DIR = Path(__file__).parent / "resources"
 
 class RemoteFireHazardDetector:
@@ -56,6 +61,11 @@ class RemoteFireHazardDetector:
         self._api_key: str = api_key
         self._timeout: float = timeout
         self._crypto: CryptoSession | None = None
+        # Rate-limit backoff: when the backend answers 429 (plan quota
+        # exhausted), every further call is a guaranteed failure — stop
+        # hammering (and stop the one-WARNING-per-tick log spam) until the
+        # window passes.
+        self._backoff_until: float = 0.0
 
         self._fire_classes: list[str] = self._load_classes(self.DEFAULT_FIRE_CLASSES_PATH)
         self._smoke_classes: list[str] = self._load_classes(self.DEFAULT_SMOKE_CLASSES_PATH)
@@ -130,6 +140,8 @@ class RemoteFireHazardDetector:
 
     def _call_api(self, frame: cv2t.MatLike) -> list[dict[str, Any]]:
         """POST frame to the object detection endpoint."""
+        if time.time() < self._backoff_until:
+            return []
         try:
             plain_body = json.dumps({
                 "image_b64": img2b64(frame),
@@ -155,6 +167,13 @@ class RemoteFireHazardDetector:
                     timeout=self._timeout,
                 )
 
+            if resp.status_code == 429:
+                self._backoff_until = time.time() + _RATE_LIMIT_BACKOFF_S
+                logger.warning(
+                    "[fire_hazard] HTTP 429 (quota) — pausing detection for %.0fs: %s",
+                    _RATE_LIMIT_BACKOFF_S, resp.text[:120],
+                )
+                return []
             if resp.status_code != 200:
                 logger.warning("[fire_hazard] HTTP %d: %s", resp.status_code, resp.text[:200])
                 return []

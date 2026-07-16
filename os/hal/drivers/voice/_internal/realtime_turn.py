@@ -11,6 +11,7 @@ from typing import Callable, NamedTuple
 
 from hal import app_state as hal_app_state
 from hal import config as hal_config
+from hal import presets
 from hal.clock import device_now
 from hal.drivers.realtime.config import gemini_needs_idle_workaround
 from hal.drivers.realtime.models import AudioOutput as RTAudioOutput
@@ -38,6 +39,44 @@ def _reply_language_name() -> str:
     if not code:
         return ""
     return ContextManagerBase.LANGUAGE_NAMES.get(code, code)
+
+
+def _thinking_cue_start() -> None:
+    """Show `thinking` while the realtime model works on the committed turn.
+
+    In-session turns (no delegate) had NO visual state between the listening
+    cue and the first reply audio — 1-3s of a lamp that looks frozen. Full
+    in-process emotion call, same path the agents use.
+    """
+    try:
+        from hal.models import EmotionRequest
+        from hal.routes.emotion import express_emotion
+
+        express_emotion(EmotionRequest(emotion=presets.EMO_THINKING))
+        # thinking is a background emotion, so the route's LED path skips it
+        # whenever the user has a saved color (guard against per-message hook
+        # spam). This cue is deliberate and always cleared — force the purple
+        # pulse so the wait is visible. User-LED-off still wins inside.
+        hal_app_state._apply_emotion_led_display(
+            presets.EMO_THINKING, 0.7, force_led=True
+        )
+    except Exception as e:
+        logger.warning("[realtime] thinking cue failed: %s", e)
+
+
+def _thinking_cue_clear() -> None:
+    """Return to idle when the reply starts (or the turn produced nothing) —
+    ONLY if the face still shows our `thinking`, so an emotion the model
+    expressed via the express_emotion tool is never stomped."""
+    try:
+        if hal_app_state._current_emotion != presets.EMO_THINKING:
+            return
+        from hal.models import EmotionRequest
+        from hal.routes.emotion import express_emotion
+
+        express_emotion(EmotionRequest(emotion=presets.EMO_IDLE))
+    except Exception as e:
+        logger.warning("[realtime] thinking cue clear failed: %s", e)
 
 
 def build_turn_context() -> str:
@@ -137,6 +176,9 @@ def run_realtime_turn(
             "[realtime] Entering realtime flow — committing audio (stt=%r)",
             combined[:100] if combined else "(empty)",
         )
+        # Fill the Gemini wait with `thinking` (cleared at first output).
+        # Delegated turns keep it — the main agent's wait is even longer.
+        _thinking_cue_start()
         try:
             # 1011 recovery (idle-death): the campaign-api proxy drops idle
             # 2.5-native-audio sessions, so a turn that follows a pause lands on a
@@ -213,6 +255,7 @@ def run_realtime_turn(
                             )
                             if native_started:
                                 logger.info("[realtime] Native audio → playing model voice")
+                                _thinking_cue_clear()
                         if native_started:
                             tts.native_play_frame(output.audio)
                         if output.transcript:
@@ -243,6 +286,7 @@ def run_realtime_turn(
                                     if not tts.speak(sentence):
                                         tts.speak_queue(sentence)
                                     first_sentence_sent = True
+                                    _thinking_cue_clear()
                                 else:
                                     logger.info(
                                         "[realtime] Next sentence → speak_queue: %r",
@@ -315,6 +359,7 @@ def run_realtime_turn(
                         if not tts.speak(remaining):
                             tts.speak_queue(remaining)
                         first_sentence_sent = True
+                        _thinking_cue_clear()
                     else:
                         logger.info(
                             "[realtime] Final fragment → speak_queue: %r", remaining[:80]
@@ -353,6 +398,18 @@ def run_realtime_turn(
                         "[realtime] No realtime output (empty / timeout) — "
                         "turn falls back to OS server only if STT produced a transcript"
                     )
+                    # Dead turn — don't leave the thinking face hanging, and
+                    # return the strip to the user's color (idle is a
+                    # background emotion, so the clear alone leaves the forced
+                    # purple pulse running). restore_led is TTS-guarded, so a
+                    # reply that somehow started speaking keeps its wave.
+                    _thinking_cue_clear()
+                    try:
+                        from hal.routes.led import restore_led
+
+                        restore_led()
+                    except Exception:
+                        pass
         except Exception as e:
             logger.warning(
                 "[realtime] Processing failed: %s — will forward to OS server", e

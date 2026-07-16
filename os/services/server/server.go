@@ -443,6 +443,23 @@ func (s *Server) Serve(closeFn func()) error {
 		safego.Go("setup-needed-paint", s.waitAndPaintSetupReady)
 	}
 
+	// Warm the Go-owned spoken notices into hal's persistent WAV cache so
+	// they still play when the TTS provider is rate-limited — the LLM-limit
+	// notice fires exactly when TTS shares the exhausted quota, so it can't
+	// be rendered on demand. Retries cover hal booting slower than os-server
+	// and a quota-exhausted boot (next attempts after the provider recovers).
+	safego.Go("notice-prerender", func() {
+		phrase := i18n.One(i18n.PhraseLLMLimit)
+		for attempt := 0; attempt < 5; attempt++ {
+			time.Sleep(time.Duration(30+attempt*60) * time.Second)
+			if err := hal.PrerenderCached(phrase); err == nil {
+				slog.Info("notice prerender warmed", "component", "server", "text", phrase)
+				return
+			}
+		}
+		slog.Warn("notice prerender never succeeded — notice will self-warm on first successful fire", "component", "server")
+	})
+
 	go func() {
 		if err := srv.ListenAndServe(); err != nil {
 			errChan <- err

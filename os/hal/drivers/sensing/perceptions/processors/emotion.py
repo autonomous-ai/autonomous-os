@@ -34,6 +34,10 @@ logger = logging.getLogger(__name__)
 # device reboot starts fresh on purpose.
 _EMOTION_STATE_PATH = "/tmp/hal-emotion-state.json"
 
+# How long to stop calling the recognize API after a 429 (plan quota
+# exhausted) — every call inside the window is a guaranteed failure.
+_RATE_LIMIT_BACKOFF_S = 300.0
+
 EMOTIONS = [
     "Neutral",
     "Happy",
@@ -81,6 +85,10 @@ class RemoteEmotionRecognizer:
         self._threshold: float = threshold
         self._timeout: float = timeout
         self._crypto: CryptoSession | None = None
+        # Rate-limit backoff — same shape as fire_hazard: a 429 means the
+        # plan quota is exhausted, every further call (one per face per
+        # sensing tick) is a guaranteed failure + a WARNING log. Pause.
+        self._backoff_until: float = 0.0
 
         if config.DL_ENCRYPTION_ENABLED:
             self._setup_crypto()
@@ -108,6 +116,8 @@ class RemoteEmotionRecognizer:
         """
         if not self._url:
             return None
+        if time.time() < self._backoff_until:
+            return None
 
         try:
             plain_body = json.dumps({
@@ -130,6 +140,13 @@ class RemoteEmotionRecognizer:
                     timeout=self._timeout,
                 )
 
+            if resp.status_code == 429:
+                self._backoff_until = time.time() + _RATE_LIMIT_BACKOFF_S
+                logger.warning(
+                    "[activity.emotion] HTTP 429 (quota) — pausing recognition for %.0fs",
+                    _RATE_LIMIT_BACKOFF_S,
+                )
+                return None
             if resp.status_code != 200:
                 logger.warning(
                     "[activity.emotion] HTTP %d: %s", resp.status_code, resp.text

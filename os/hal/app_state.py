@@ -524,8 +524,16 @@ def _on_music_play_end():
     _restore_user_led()
 
 
-def _apply_emotion_led_display(emotion: str, intensity: float = 1.0) -> Optional[list]:
-    """Apply LED effect + display expression for an emotion. Returns scaled LED color or None."""
+def _apply_emotion_led_display(
+    emotion: str, intensity: float = 1.0, force_led: bool = False
+) -> Optional[list]:
+    """Apply LED effect + display expression for an emotion. Returns scaled LED color or None.
+
+    force_led bypasses ONLY the background-emotion guard below (user saved
+    color wins over idle/thinking). The realtime voice turn uses it for its
+    thinking cue: a deliberate, once-per-turn, always-cleared overlay — unlike
+    the per-message agent-hook thinking spam the guard was built against.
+    The user-LED-off and TTS-speaking guards still apply."""
     preset = EMOTION_PRESETS.get(emotion)
     if not preset:
         return None
@@ -555,7 +563,7 @@ def _apply_emotion_led_display(emotion: str, intensity: float = 1.0) -> Optional
     # color every turn. Original idle-only check kept its behavior unchanged
     # (idle is in _BACKGROUND_EMOTIONS). Re-narrow this set if a background
     # emotion needs LED feedback again.
-    if emotion in _BACKGROUND_EMOTIONS and _user_led_state is not None:
+    if not force_led and emotion in _BACKGROUND_EMOTIONS and _user_led_state is not None:
         logger.info("Emotion LED skipped (%s) -- respecting user saved state", emotion)
         if display_service:
             try:

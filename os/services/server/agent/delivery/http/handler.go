@@ -24,6 +24,12 @@ type AgentHandler struct {
 	statusLED    *statusled.Service
 	config       *config.Config // device type → capability gate for agent HW markers
 
+	// lastLLMLimitTTS debounces the spoken LLM-usage-limit notice (unix ms).
+	// The backend's limit banner streams as several sentences and recurs on
+	// every turn while the plan is exhausted — only the first chunk within
+	// the window speaks; the rest are dropped. See deliverTTS.
+	lastLLMLimitTTS atomic.Int64
+
 	// assistantBuf accumulates assistant deltas per runId so we can send the
 	// full text to TTS when the agent turn ends (lifecycle "end").
 	//

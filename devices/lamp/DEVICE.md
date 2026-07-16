@@ -17,7 +17,10 @@ capabilities:
   presence:     { required: true }
   motion:       { routes: [servo], driver: feetech, required: true, safety: SAFETY.md#motion }
   light:        { routes: [led, scene], driver: ws2812, required: true, safety: SAFETY.md#light }
-  display:      { routes: [display], driver: gc9a01, required: true }
+  # display: lamp has NO screen — do not re-declare. Declaring it (even
+  # required:false) makes HAL mount /display and run DisplayService in
+  # framebuffer-only mode: a render loop drawing eyes nobody sees, plus an
+  # "Unknown expression" warning on every emotion.
   expression:   { routes: [emotion], required: true }
   media:        { routes: [music], required: true }
   connectivity: { routes: [bluetooth], required: true }
@@ -38,7 +41,7 @@ a capability works on Lamp, it works.
 ## Body
 
 A weighted base, a 5-servo articulated arm (Feetech bus servos over `/dev/ttyACM0`), a
-warm LED ring head (WS2812), a round GC9A01 display, a camera, a microphone, and a
+warm LED ring head (WS2812), a camera, a microphone, and a
 speaker. Compute is a Raspberry Pi 4/5 or OrangePi (sun60). The body is wired per
 `os/hal/board/board.py`; the agent never addresses hardware directly.
 

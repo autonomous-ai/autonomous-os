@@ -1276,16 +1276,16 @@ func (s *Service) RestartForAgentRuntime() error {
 
 // sttModelForLanguage maps a BCP-47 language code to the Deepgram SKU exposed
 // by the Autonomous STT proxy. Empty input → empty model so hal falls back
-// to its built-in default (flux-general-en). Vietnamese rides on Nova-3 (added
-// Jan 2026); Chinese still requires Nova-2 because Nova-3 hasn't shipped zh.
+// to its built-in default (flux-general-en). English stays on Flux (Deepgram's
+// conversational EN model — EN-only). Everything else rides on Nova-3:
+// Vietnamese since Jan 2026, Mandarin (zh/zh-CN/zh-Hans/zh-TW/zh-Hant) since
+// Deepgram's 2026-03-31 release — zh was pinned to Nova-2 before that.
 func sttModelForLanguage(lang string) string {
 	switch lang {
 	case "":
 		return ""
 	case i18n.LangEN:
 		return "flux-general-en"
-	case i18n.LangZh, i18n.LangZhCN, i18n.LangZhHans, i18n.LangZhTW, i18n.LangZhHant:
-		return "nova-2-general"
 	default:
 		return "nova-3-general"
 	}

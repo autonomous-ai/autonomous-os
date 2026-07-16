@@ -378,7 +378,14 @@ turn ("hello") right after a restart would leak to the main agent.
    the provider rate and sent via `append_audio()` (parallel, non-blocking), and
    buffered in `rt_audio_buffer`.
 4. **Commit.** At session end, if enabled + `available` + audio buffered,
-   `commit_audio()` fires.
+   `commit_audio()` fires. A `thinking` emotion cue fires with the commit
+   (face + servo + a FORCED purple LED pulse — `thinking` is normally a
+   background emotion whose LED yields to the user's saved color; the
+   realtime cue bypasses only that guard, user-LED-off still wins) and is
+   cleared back to `idle` at the first output (first TTS sentence or first
+   native audio frame) or when the turn dies with no output — unless the
+   model already expressed its own emotion. This fills the 1-3s
+   model-latency gap where the device otherwise looked frozen.
 5. **Consume.** `for output in stream_output()`:
    - `TextOutput` → sentences are flushed to TTS (`speak` / `speak_queue`).
      If `speak` returns busy (another non-interruptible TTS holds the
