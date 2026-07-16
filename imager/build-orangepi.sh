@@ -435,8 +435,12 @@ if [ "\${DEVICE_TYPE}" = "intern-v2" ] || [ "\${DEVICE_TYPE}" = "lamp" ]; then
   retry "curl -fsSL 'https://github.com/autonomous-ai/picoclaw/releases/download/\${PICO_VERSION}/\${PICO_ASSET}' -o '\$PICO_TMP'" 5
   install -m 0755 "\$PICO_TMP" /usr/local/bin/picoclaw
   rm -f "\$PICO_TMP"
-  picoclaw --version || true
-  picoclaw --version 2>/dev/null | tr -d '[:space:]' > /tmp/baked-picoclaw-version || echo "unknown" > /tmp/baked-picoclaw-version
+  # picoclaw has no --version flag (errors "unknown flag") — version is a
+  # subcommand that also prints an ANSI banner, so extract just the
+  # "picoclaw <version>" token instead of capturing the whole thing.
+  picoclaw --no-color version || true
+  picoclaw --no-color version 2>/dev/null | sed -n 's/.*picoclaw \([^ ]*\).*/\1/p' | head -1 > /tmp/baked-picoclaw-version
+  [ -s /tmp/baked-picoclaw-version ] || echo "unknown" > /tmp/baked-picoclaw-version
 else
   echo "unbaked" > /tmp/baked-codex-version
   echo "unbaked" > /tmp/baked-claudecode-version
