@@ -128,12 +128,13 @@ func (s *CodexService) runWSConn(ctx context.Context, handler domain.AgentEventH
 	slog.Info("Codex connected", "component", "codex", "url", WSURL)
 
 	// On reconnect (not first boot), announce via TTS so the user knows the agent
-	// is back. hal.Speak (not SendToHALTTS): hardcoded system filler, must NOT be
-	// fed to the realtime voice agent as history.
+	// is back. SpeakCached (not SendToHALTTS): hardcoded system filler, must NOT
+	// be fed to the realtime voice agent as history; fixed pool self-caches into
+	// hal's WAV cache so replays skip the provider.
 	if s.wsHasConnected.Swap(true) {
 		go func() {
 			phrase := i18n.Pick(i18n.PhraseReconnect)
-			if err := hal.Speak(phrase); err != nil {
+			if err := hal.SpeakCached(phrase); err != nil {
 				slog.Warn("reconnect TTS failed", "component", "codex", "error", err)
 			}
 		}()

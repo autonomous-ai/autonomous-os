@@ -55,7 +55,9 @@ func (h *AgentHandler) maybeAutoCompact(sessionKey string, totalTokens int, flow
 		defer time.AfterFunc(autoCompactCooldown, func() {
 			h.compacting.Store(false)
 		})
-		if err := hal.SpeakInterruptible(i18n.One(i18n.PhraseCompactNotice)); err != nil {
+		// Cached variant: fixed phrase, self-caches into hal's WAV cache on
+		// first render so replays skip the TTS provider.
+		if err := hal.SpeakCachedInterruptible(i18n.One(i18n.PhraseCompactNotice)); err != nil {
 			slog.Warn("compaction notice TTS failed", "component", "agent", "backend", h.agentGateway.Name(), "error", err)
 		}
 		if sessionKey == "" {

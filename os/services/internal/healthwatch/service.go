@@ -213,8 +213,10 @@ func (s *Service) Start(ctx context.Context) {
 // speakRecovery announces over TTS that the device is back after a HAL
 // downtime. Phrase pool lives in lib/i18n (PhraseRecovery).
 func (s *Service) speakRecovery() {
+	// SpeakCached: fixed pool, self-caches into hal's WAV cache on first
+	// render so replays skip the TTS provider.
 	phrase := i18n.Pick(i18n.PhraseRecovery)
-	if err := hal.Speak(phrase); err != nil {
+	if err := hal.SpeakCached(phrase); err != nil {
 		slog.Warn("recovery TTS failed", "component", "healthwatch", "error", err)
 		return
 	}

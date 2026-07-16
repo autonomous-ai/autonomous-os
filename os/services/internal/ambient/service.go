@@ -261,8 +261,10 @@ func (s *Service) mumbleLoop(ctx context.Context) {
 			continue
 		}
 
+		// SpeakCached: fixed pool, self-caches into hal's WAV cache on first
+		// render so replays skip the TTS provider.
 		mumble := i18n.Pick(i18n.PhraseMumble)
-		if err := hal.Speak(mumble); err != nil {
+		if err := hal.SpeakCached(mumble); err != nil {
 			slog.Debug("mumble TTS failed", "component", "ambient", "error", err)
 		}
 		slog.Debug("mumble", "component", "ambient", "text", mumble)

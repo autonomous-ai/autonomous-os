@@ -46,6 +46,7 @@ PD1 wiring:
 import logging
 import os
 import threading
+import time
 
 import hal.app_state as state
 
@@ -55,10 +56,23 @@ logger = logging.getLogger(__name__)
 # sun60iw2. Only wired on Intern v2 Pro; see the module docstring.
 _MIC_BTN_CHIP = 0
 _MIC_BTN_LINE = 97
-_MIC_BTN_DEBOUNCE_NS = 200_000_000
+# Settle time after the LAST edge before we re-read the pin. Slide switch
+# contacts bounce for a few ms during the throw; 60 ms covers the bounce
+# tail without introducing a noticeable delay for the operator. This is
+# the settle window, NOT a "drop-if-within" filter — see _on_edge for the
+# timer-restart pattern that makes rapid flips reliable.
+_MIC_BTN_SETTLE_SEC = 0.06
 
 # GPIO level that means "muted". Flip if the physical wiring inverts.
 _LEVEL_MUTED = 0
+
+# Watchdog reconcile period. lgpio's edge-callback thread has been observed
+# to stall silently under sustained edge storms (the HAL process stays up,
+# routes still respond, but no more edges fire). Reading the pin every
+# _WATCHDOG_SEC and driving state to match the level guarantees the mic
+# state converges to the switch's physical position even if we miss every
+# edge for a while — cheap safety net, not a replacement for the callback.
+_WATCHDOG_SEC = 30.0
 
 # Device types that ship with a mic-mute switch physically wired to PD1.
 # Add here when a new device model gets the switch — the driver stays the
@@ -93,9 +107,14 @@ class MicButtonHandler:
         self._lgpio = None
         self._handle = None
         self._callback = None
-        # Per-edge debounce ticks. Slide switches bounce for a few ms during
-        # the throw; same 200 ms window the primary wake button uses.
-        self._last_edge_tick = 0
+        # Debounce is done via "restart timer on each edge, read pin when it
+        # fires" — see _on_edge. Guards a single settle Timer at a time so
+        # rapid flips don't stack N pending reconciles.
+        self._settle_timer: threading.Timer | None = None
+        self._timer_lock = threading.Lock()
+        # Serializes _apply_state against itself so overlapping timers /
+        # watchdog ticks can't check-then-write race on state._mic_muted.
+        self._apply_lock = threading.Lock()
 
     def start(self):
         dev = _resolve_device_type()
@@ -140,11 +159,12 @@ class MicButtonHandler:
             initial_level = 1  # default to unmuted if read fails
 
         logger.info(
-            "Mic mute switch ready on gpiochip%d line %d (PD1, initial level=%d, debounce %d ms)",
+            "Mic mute switch ready on gpiochip%d line %d (PD1, initial level=%d, settle %d ms, watchdog %ds)",
             _MIC_BTN_CHIP,
             _MIC_BTN_LINE,
             initial_level,
-            _MIC_BTN_DEBOUNCE_NS // 1_000_000,
+            int(_MIC_BTN_SETTLE_SEC * 1000),
+            int(_WATCHDOG_SEC),
         )
 
         # Boot-time sync runs SYNCHRONOUSLY (unlike the edge handler which
@@ -154,31 +174,63 @@ class MicButtonHandler:
         # a ~hundreds-of-ms window where the mic is hot despite the hardware
         # kill switch being off. The route call is idempotent and cheap
         # (~tens of ms at most) so blocking start() here is worth it.
-        self._apply_state(initial_level == _LEVEL_MUTED)
+        with self._apply_lock:
+            self._apply_state_locked(initial_level == _LEVEL_MUTED)
 
-    def _on_edge(self, chip, gpio, level, tick):
-        # Debounce: any edge within the window of the previous edge is a
-        # contact-bounce artefact. One combined tick works here (unlike the
-        # push button's press/release split) because the switch's two states
-        # are symmetric — either can be the "leading" edge.
-        if tick - self._last_edge_tick < _MIC_BTN_DEBOUNCE_NS:
-            return
-        self._last_edge_tick = tick
-
-        # Snap mic state to the new switch position. Off-thread so the lgpio
-        # callback returns promptly; route handlers can take tens of ms.
+        # Watchdog: periodic pin re-read + reconcile. Self-heals if the
+        # lgpio edge-callback thread stalls silently. Daemon so it dies with
+        # the process; no explicit stop needed.
         threading.Thread(
-            target=self._apply_state,
-            args=(level == _LEVEL_MUTED,),
-            daemon=True,
-            name="mic-switch-apply",
+            target=self._watchdog_loop, daemon=True, name="mic-switch-watchdog"
         ).start()
 
-    def _apply_state(self, muted: bool):
+    def _on_edge(self, chip, gpio, level, tick):
+        # Restart the settle timer on every edge. The `level` param from
+        # lgpio is deliberately IGNORED here — bouncing contacts can call
+        # this several times with alternating levels within a few ms and
+        # the last one is not always the terminal position. Instead we
+        # re-read the pin in _reconcile after the bounce settles, so the
+        # applied state matches the switch's real end position.
+        with self._timer_lock:
+            if self._settle_timer is not None:
+                self._settle_timer.cancel()
+            t = threading.Timer(_MIC_BTN_SETTLE_SEC, self._reconcile)
+            t.daemon = True
+            t.name = "mic-switch-settle"
+            self._settle_timer = t
+            t.start()
+
+    def _reconcile(self):
+        """Read the pin now and drive HAL state to match. Called from the
+        settle Timer (after an edge storm quiets) and from the watchdog.
+        Runs under _apply_lock so concurrent triggers can't race the
+        underlying mute_mic() / unmute_mic() routes."""
+        try:
+            current_level = self._lgpio.gpio_read(self._handle, _MIC_BTN_LINE)
+        except Exception as e:
+            logger.warning("Mic switch reconcile read failed: %s", e)
+            return
+        with self._apply_lock:
+            self._apply_state_locked(current_level == _LEVEL_MUTED)
+
+    def _watchdog_loop(self):
+        while True:
+            time.sleep(_WATCHDOG_SEC)
+            try:
+                self._reconcile()
+            except Exception as e:
+                logger.warning("Mic switch watchdog tick failed: %s", e)
+
+    def _apply_state_locked(self, muted: bool):
         """Push mic state to match the switch position. Idempotent — if HAL
         state already matches (web admin just set it, or start-up sync
         found the correct value), skip the route call to avoid log spam
-        and needless voice-service restarts."""
+        and needless voice-service restarts.
+
+        MUST be called with _apply_lock held (or from single-threaded
+        contexts like boot init) so the check-then-write on state._mic_muted
+        isn't racy against another edge/watchdog reconcile.
+        """
         if state._mic_muted == muted:
             return
 

@@ -276,12 +276,14 @@ func (s *OpenclawService) runWSConn(ctx context.Context, handler domain.AgentEve
 	flow.Log("ws_ready", map[string]any{"session": s.GetSessionKey() != ""})
 
 	// On reconnect (not first boot), announce via TTS so user knows agent is back.
-	// hal.Speak (not SendToHALTTS): this is a hardcoded system filler, so it
-	// must NOT be fed to the realtime voice agent as history.
+	// SpeakCached (not SendToHALTTS): this is a hardcoded system filler, so it
+	// must NOT be fed to the realtime voice agent as history. Cached: fixed pool,
+	// self-caches into hal's WAV cache on first render so replays skip the
+	// provider — reconnects often coincide with provider trouble.
 	if s.wsHasConnected.Swap(true) {
 		go func() {
 			phrase := i18n.Pick(i18n.PhraseReconnect)
-			if err := hal.Speak(phrase); err != nil {
+			if err := hal.SpeakCached(phrase); err != nil {
 				slog.Warn("reconnect TTS failed", "component", "openclaw", "error", err)
 			}
 		}()

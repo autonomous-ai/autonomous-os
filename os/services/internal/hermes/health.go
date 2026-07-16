@@ -111,9 +111,10 @@ func (s *HermesService) transitionReady(now bool) {
 		if s.hasConnected.Swap(true) {
 			go func() {
 				phrase := i18n.Pick(i18n.PhraseReconnect)
-				// hal.Speak (not SendToHALTTS): hardcoded system filler, must NOT
-				// be fed to the realtime voice agent as history.
-				if err := hal.Speak(phrase); err != nil {
+				// SpeakCached (not SendToHALTTS): hardcoded system filler, must NOT
+				// be fed to the realtime voice agent as history; fixed pool
+				// self-caches into hal's WAV cache so replays skip the provider.
+				if err := hal.SpeakCached(phrase); err != nil {
 					slog.Warn("reconnect TTS failed", "component", "hermes", "error", err)
 				}
 			}()

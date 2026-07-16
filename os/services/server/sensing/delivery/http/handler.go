@@ -386,7 +386,10 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			if last := h.lastNotReadyTTS.Load(); now-last > 60_000 {
 				if h.lastNotReadyTTS.CompareAndSwap(last, now) {
 					go func() {
-						if err := hal.Speak(i18n.One(i18n.PhraseBrainRestart)); err != nil {
+						// SpeakCached: fixed phrase, self-caches into hal's WAV
+						// cache — fires while the brain restarts, when a live
+						// provider render is least reliable.
+						if err := hal.SpeakCached(i18n.One(i18n.PhraseBrainRestart)); err != nil {
 							slog.Warn("not-ready TTS failed", "component", "sensing", "error", err)
 						}
 					}()
