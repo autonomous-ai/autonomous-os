@@ -382,6 +382,65 @@ VERIFY
   fi
 fi
 
+# ── Codex + Claude Code + PicoClaw CLI binary pre-bake (intern-v2 only) ─────
+# Same fast-path trick as the Hermes binary pre-bake above: bake ONLY the raw
+# CLI binaries here — no systemd unit, no presync/onboard, no enable/start.
+# Those stay owned entirely by each backend's own install.sh (internal/codex,
+# internal/claudecode, internal/picoclaw — embedded in os-server, fetched by
+# switch-runtime on the first real switch to that runtime); each detects the
+# binary already present and skips its own download, same as hermes above.
+# Versions are pinned here just like CODEX_VERSION/PICO_VERSION in their
+# respective install.sh — bump both places together when upgrading. Gated to
+# intern-v2 (the Developer Edition, docs/developer-guide.md) so lamp/consumer
+# images don't carry hundreds of MB of CLIs they never run.
+#
+# Checklist — "Select frameworks" web UI tiles vs. what's baked/available here:
+#   [x] OpenClaw  — baked above (npm install -g openclaw), always (all devices)
+#   [x] Hermes    — baked above (git-clone + uv-sync fast-path), always
+#   [x] Claude Code — baked here, intern-v2 only
+#   [x] Codex       — baked here, intern-v2 only
+#   [x] PicoClaw    — baked here, intern-v2 only (backend exists —
+#                      internal/picoclaw + AgentGateway registered — UI badge
+#                      is "coming soon" only pending product flip, not a
+#                      missing backend)
+#   [ ] OpenCode  — NOT baked: no internal/opencode package, no AgentGateway
+#                    case, no install.sh, not in adding-agent-runtime.md's
+#                    adapter list. The UI tile is a placeholder for a backend
+#                    that doesn't exist server-side yet — nothing to pull
+#                    until that lands. Revisit this block once it does.
+if [ "\${DEVICE_TYPE}" = "intern-v2" ]; then
+  echo "[stage] codex CLI binary pre-bake (intern-v2 dev toolchain)"
+  CODEX_VERSION="\${CODEX_VERSION:-rust-v0.142.5}"
+  CODEX_ASSET="codex-aarch64-unknown-linux-musl.tar.gz"
+  CODEX_TMP=\$(mktemp -d)
+  retry "curl -fsSL 'https://github.com/openai/codex/releases/download/\${CODEX_VERSION}/\${CODEX_ASSET}' -o '\$CODEX_TMP/\$CODEX_ASSET'" 5
+  tar -xzf "\$CODEX_TMP/\$CODEX_ASSET" -C "\$CODEX_TMP"
+  install -m 0755 "\$CODEX_TMP/\${CODEX_ASSET%.tar.gz}" /usr/local/bin/codex
+  rm -rf "\$CODEX_TMP"
+  codex --version || true
+  codex --version 2>/dev/null | tr -d '[:space:]' > /tmp/baked-codex-version || echo "unknown" > /tmp/baked-codex-version
+
+  echo "[stage] Claude Code CLI binary pre-bake (intern-v2 dev toolchain)"
+  retry "curl -fsSL https://claude.ai/install.sh | bash" 3 10
+  [ -x /root/.local/bin/claude ] && ln -sf /root/.local/bin/claude /usr/local/bin/claude
+  claude --version || true
+  claude --version 2>/dev/null | tr -d '[:space:]' > /tmp/baked-claudecode-version || echo "unknown" > /tmp/baked-claudecode-version
+
+  echo "[stage] picoclaw CLI binary pre-bake (intern-v2 dev toolchain)"
+  PICO_VERSION="\${PICO_VERSION:-v0.3.1-fixvision}"
+  PICO_ASSET="picoclaw-linux-arm64"
+  PICO_TMP=\$(mktemp)
+  retry "curl -fsSL 'https://github.com/autonomous-ai/picoclaw/releases/download/\${PICO_VERSION}/\${PICO_ASSET}' -o '\$PICO_TMP'" 5
+  install -m 0755 "\$PICO_TMP" /usr/local/bin/picoclaw
+  rm -f "\$PICO_TMP"
+  picoclaw --version || true
+  picoclaw --version 2>/dev/null | tr -d '[:space:]' > /tmp/baked-picoclaw-version || echo "unknown" > /tmp/baked-picoclaw-version
+else
+  echo "unbaked" > /tmp/baked-codex-version
+  echo "unbaked" > /tmp/baked-claudecode-version
+  echo "unbaked" > /tmp/baked-picoclaw-version
+fi
+
 # ── uv (Python pkg mgr for HAL) ───────────────────────────────────────────
 echo "[stage] uv"
 if ! command -v uv &>/dev/null; then
@@ -1053,6 +1112,9 @@ CHROOT_STAGES
 # Read runtime versions captured inside chroot (shell vars don't propagate out).
 BAKED_OPENCLAW_VERSION=$(cat "${MNT}/tmp/baked-openclaw-version" 2>/dev/null | tr -d '[:space:]' || echo "unknown")
 BAKED_HERMES_VERSION=$(cat "${MNT}/tmp/baked-hermes-version" 2>/dev/null | tr -d '[:space:]' || echo "unknown")
+BAKED_CODEX_VERSION=$(cat "${MNT}/tmp/baked-codex-version" 2>/dev/null | tr -d '[:space:]' || echo "unbaked")
+BAKED_CLAUDECODE_VERSION=$(cat "${MNT}/tmp/baked-claudecode-version" 2>/dev/null | tr -d '[:space:]' || echo "unbaked")
+BAKED_PICOCLAW_VERSION=$(cat "${MNT}/tmp/baked-picoclaw-version" 2>/dev/null | tr -d '[:space:]' || echo "unbaked")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 3 — OTA bake: backend binaries + hal + web UI + buddy
@@ -1311,13 +1373,16 @@ if [ -f "${METADATA_FOR_SNAPSHOT}" ]; then
     --arg git_commit "${BUILD_GIT_SHA:-unknown}" \
     --arg hermes_version "${BAKED_HERMES_VERSION:-unknown}" \
     --arg openclaw_version "${BAKED_OPENCLAW_VERSION:-unknown}" \
+    --arg codex_version "${BAKED_CODEX_VERSION:-unbaked}" \
+    --arg claudecode_version "${BAKED_CLAUDECODE_VERSION:-unbaked}" \
+    --arg picoclaw_version "${BAKED_PICOCLAW_VERSION:-unbaked}" \
     --argjson hw_manifest "${HW_MANIFEST_JSON}" \
     --slurpfile ota_metadata "${METADATA_FOR_SNAPSHOT}" \
     '{
       build_date: $build_date,
       git_commit: $git_commit,
       hardware_manifest: $hw_manifest,
-      baked_runtimes: { hermes: $hermes_version, openclaw: $openclaw_version },
+      baked_runtimes: { hermes: $hermes_version, openclaw: $openclaw_version, codex: $codex_version, claudecode: $claudecode_version, picoclaw: $picoclaw_version },
       ota_metadata: $ota_metadata[0]
     }' > "${MNT}/etc/autonomous-build.json"
   rm -f "${METADATA_FOR_SNAPSHOT}"
