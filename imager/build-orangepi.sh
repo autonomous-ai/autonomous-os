@@ -382,7 +382,7 @@ VERIFY
   fi
 fi
 
-# ── Codex + Claude Code + PicoClaw CLI binary pre-bake (intern-v2 only) ─────
+# ── Codex + Claude Code + PicoClaw CLI binary pre-bake (lamp + intern-v2) ───
 # Same fast-path trick as the Hermes binary pre-bake above: bake ONLY the raw
 # CLI binaries here — no systemd unit, no presync/onboard, no enable/start.
 # Those stay owned entirely by each backend's own install.sh (internal/codex,
@@ -391,15 +391,17 @@ fi
 # binary already present and skips its own download, same as hermes above.
 # Versions are pinned here just like CODEX_VERSION/PICO_VERSION in their
 # respective install.sh — bump both places together when upgrading. Gated to
-# intern-v2 (the Developer Edition, docs/developer-guide.md) so lamp/consumer
-# images don't carry hundreds of MB of CLIs they never run.
+# lamp + intern-v2 — the two device types whose "Select frameworks" web UI
+# actually offers these as switchable runtimes (see the Lamp screenshot in the
+# PR — the picker is per-device, not intern-v2-only as first assumed). Other
+# future DEVICE_TYPEs stay unbaked until their own UI exposes the picker.
 #
 # Checklist — "Select frameworks" web UI tiles vs. what's baked/available here:
 #   [x] OpenClaw  — baked above (npm install -g openclaw), always (all devices)
 #   [x] Hermes    — baked above (git-clone + uv-sync fast-path), always
-#   [x] Claude Code — baked here, intern-v2 only
-#   [x] Codex       — baked here, intern-v2 only
-#   [x] PicoClaw    — baked here, intern-v2 only (backend exists —
+#   [x] Claude Code — baked here, lamp + intern-v2
+#   [x] Codex       — baked here, lamp + intern-v2
+#   [x] PicoClaw    — baked here, lamp + intern-v2 (backend exists —
 #                      internal/picoclaw + AgentGateway registered — UI badge
 #                      is "coming soon" only pending product flip, not a
 #                      missing backend)
@@ -408,8 +410,8 @@ fi
 #                    adapter list. The UI tile is a placeholder for a backend
 #                    that doesn't exist server-side yet — nothing to pull
 #                    until that lands. Revisit this block once it does.
-if [ "\${DEVICE_TYPE}" = "intern-v2" ]; then
-  echo "[stage] codex CLI binary pre-bake (intern-v2 dev toolchain)"
+if [ "\${DEVICE_TYPE}" = "intern-v2" ] || [ "\${DEVICE_TYPE}" = "lamp" ]; then
+  echo "[stage] codex CLI binary pre-bake (\${DEVICE_TYPE})"
   CODEX_VERSION="\${CODEX_VERSION:-rust-v0.142.5}"
   CODEX_ASSET="codex-aarch64-unknown-linux-musl.tar.gz"
   CODEX_TMP=\$(mktemp -d)
@@ -420,13 +422,13 @@ if [ "\${DEVICE_TYPE}" = "intern-v2" ]; then
   codex --version || true
   codex --version 2>/dev/null | tr -d '[:space:]' > /tmp/baked-codex-version || echo "unknown" > /tmp/baked-codex-version
 
-  echo "[stage] Claude Code CLI binary pre-bake (intern-v2 dev toolchain)"
+  echo "[stage] Claude Code CLI binary pre-bake (\${DEVICE_TYPE})"
   retry "curl -fsSL https://claude.ai/install.sh | bash" 3 10
   [ -x /root/.local/bin/claude ] && ln -sf /root/.local/bin/claude /usr/local/bin/claude
   claude --version || true
   claude --version 2>/dev/null | tr -d '[:space:]' > /tmp/baked-claudecode-version || echo "unknown" > /tmp/baked-claudecode-version
 
-  echo "[stage] picoclaw CLI binary pre-bake (intern-v2 dev toolchain)"
+  echo "[stage] picoclaw CLI binary pre-bake (\${DEVICE_TYPE})"
   PICO_VERSION="\${PICO_VERSION:-v0.3.1-fixvision}"
   PICO_ASSET="picoclaw-linux-arm64"
   PICO_TMP=\$(mktemp)
