@@ -371,7 +371,7 @@ Giao diện chat tương tác với agent. Layout: sidebar (danh sách hội tho
 - **Khôi phục turn đang chờ sau reload**: message lưu kèm epoch `ts`; bubble reply đang pending dưới 10 phút sẽ sống sót qua reload thay vì bị chốt thành lỗi. Ở lần render đầu khi tab Chat active, UI re-attach vào `runId` đã lưu và backfill câu trả lời từ flow JSONL replay (`/api/agent/flow-stream` gửi lại 500 event cuối trong ngày mỗi lần connect — `tts_send` / `tts_suppressed` / `no_reply`). Nếu sau 30 giây không resolve được thì chốt thành "no response" kèm nút retry.
 - Local intent fast path: response dưới 50ms bypass agent
 - Busy/dropped: hiển thị "busy — try again"
-- Markdown: bold, italic, inline code (tô màu amber), code block (monospace), URL, danh sách, và bảng (header có nền + hàng zebra)
+- Markdown: bold, italic, inline code (tô màu amber), code block (monospace), link `[label](url)`, URL trần (scheme http/https bị gõ lỗi như `hthtps://` từ banner giới hạn quota upstream được sửa lại trước khi linkify; scheme lạ giữ nguyên plain text), danh sách, và bảng (header có nền + hàng zebra). Bubble agent render đủ markdown; bubble user giữ nguyên văn bản, riêng URL được linkify với cùng cơ chế sửa scheme
 
 **Empty State & Gợi ý**
 - Khi cuộc trò chuyện chưa có tin nhắn, khu vực chat hiển thị một quả cầu assistant lớn đang "thở", tiêu đề/phụ đề đã bản địa hóa, và bốn **chip gợi ý** bấm được. Bấm một chip sẽ điền sẵn vào ô nhập (không tự gửi) để người dùng chỉnh trước.

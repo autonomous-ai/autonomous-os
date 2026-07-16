@@ -14,10 +14,52 @@ import type { DisplayEvent, MonitorEvent } from "./types";
 
 // ─── Markdown ───────────────────────────────────────────────────────────────
 
-// Inline: **bold**, *italic*, ~~strikethrough~~, `code`, URLs
+// normalizeHref accepts http/https URLs as-is and repairs mangled schemes
+// (e.g. "hthtps://" seen in upstream usage-limit banners): a scheme built only
+// from the letters {h,t,p,s} with a "tp" core is treated as http(s), keeping
+// the trailing-s distinction. Returns null for any other scheme so it stays
+// plain text.
+function normalizeHref(raw: string): string | null {
+  const m = raw.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/(.*)$/);
+  if (!m) return null;
+  const scheme = m[1].toLowerCase();
+  if (scheme === "http" || scheme === "https") return raw;
+  if (/^[htps]{2,8}$/.test(scheme) && scheme.includes("tp")) {
+    return (scheme.endsWith("s") ? "https://" : "http://") + m[2];
+  }
+  return null;
+}
+
+const linkStyle: React.CSSProperties = { color: "var(--lm-teal)", textDecoration: "underline" };
+
+// linkifyPlain makes URLs clickable in user-authored bubbles WITHOUT any other
+// markdown transformation — what the user typed must stay verbatim (asterisks,
+// backticks, brackets), only recognizable http(s) URLs become anchors.
+function linkifyPlain(text: string, keyPrefix: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  const re = /[a-zA-Z]{2,10}:\/\/[^\s<>)"]+/g;
+  let last = 0;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text)) !== null) {
+    const href = normalizeHref(match[0]);
+    if (!href) continue; // unrecognized scheme — leave in the surrounding text
+    if (match.index > last) parts.push(text.slice(last, match.index));
+    parts.push(
+      <a key={`${keyPrefix}-${match.index}`} href={href} target="_blank" rel="noopener noreferrer" style={linkStyle}>
+        {match[0].length > 50 ? match[0].slice(0, 50) + "…" : match[0]}
+      </a>,
+    );
+    last = match.index + match[0].length;
+  }
+  if (parts.length === 0) return [text]; // fast path: no links
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
+}
+
+// Inline: **bold**, *italic*, ~~strikethrough~~, `code`, [links](url), URLs
 function renderInline(line: string, keyPrefix: string): ReactNode[] {
   const parts: ReactNode[] = [];
-  const re = /(\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|`(.+?)`|(https?:\/\/[^\s<>)"]+))/g;
+  const re = /(\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|`(.+?)`|\[([^\]]+)\]\(([a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s)]+)\)|([a-zA-Z]{2,10}:\/\/[^\s<>)"]+))/g;
   let last = 0;
   let match: RegExpExecArray | null;
   while ((match = re.exec(line)) !== null) {
@@ -27,7 +69,13 @@ function renderInline(line: string, keyPrefix: string): ReactNode[] {
     else if (match[3]) parts.push(<em key={k}>{match[3]}</em>);
     else if (match[4]) parts.push(<del key={k} style={{ opacity: 0.6 }}>{match[4]}</del>);
     else if (match[5]) parts.push(<code key={k} style={{ background: "color-mix(in srgb, var(--lm-amber) 12%, var(--lm-surface))", color: "var(--lm-amber)", padding: "1.5px 5px", borderRadius: 4, fontSize: "0.86em", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", border: "1px solid color-mix(in srgb, var(--lm-amber) 18%, transparent)" }}>{match[5]}</code>);
-    else if (match[6]) parts.push(<a key={k} href={match[6]} target="_blank" rel="noopener noreferrer" style={{ color: "var(--lm-teal)", textDecoration: "underline" }}>{match[6].length > 50 ? match[6].slice(0, 50) + "…" : match[6]}</a>);
+    else if (match[6] && match[7]) {
+      parts.push(<a key={k} href={normalizeHref(match[7]) ?? match[7]} target="_blank" rel="noopener noreferrer" style={linkStyle}>{match[6]}</a>);
+    } else if (match[8]) {
+      const href = normalizeHref(match[8]);
+      if (href) parts.push(<a key={k} href={href} target="_blank" rel="noopener noreferrer" style={linkStyle}>{match[8].length > 50 ? match[8].slice(0, 50) + "…" : match[8]}</a>);
+      else parts.push(match[8]); // unrecognized scheme — leave as plain text
+    }
     last = match.index + match[0].length;
   }
   if (last < line.length) parts.push(line.slice(last));
@@ -1981,14 +2029,14 @@ export function ChatSection({ events, isActive }: Props) {
                     </span>
                   ) : msg.pending && msg.text ? (
                     <>
-                      {msg.role === "agent" ? renderMarkdown(msg.text) : msg.text}
+                      {msg.role === "agent" ? renderMarkdown(msg.text) : linkifyPlain(msg.text, msg.id)}
                       <span className="lm-cursor" style={{
                         display: "inline-block", width: 2, height: "1em",
                         background: "var(--lm-amber)", marginLeft: 2,
                         verticalAlign: "text-bottom", borderRadius: 1,
                       }} />
                     </>
-                  ) : msg.role === "agent" ? renderMarkdown(msg.text) : msg.text}
+                  ) : msg.role === "agent" ? renderMarkdown(msg.text) : linkifyPlain(msg.text, msg.id)}
                 </div>
                 {/* Action bar: time + copy + retry */}
                 <div style={{ display: "flex", alignItems: "center", gap: 6, paddingInline: 4 }}>

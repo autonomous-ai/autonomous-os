@@ -376,7 +376,7 @@ Interactive chat interface for communicating with the agent. Layout: sidebar (co
 - **Pending-turn recovery across reload**: messages persist an epoch `ts`; a pending reply bubble younger than 10 minutes survives a page reload instead of being finalized as an error. On the first render with the Chat tab active, the UI re-attaches to the stored `runId` and the reply is backfilled from the flow JSONL replay (`/api/agent/flow-stream` re-sends the last 500 events of the day on every connect — `tts_send` / `tts_suppressed` / `no_reply`). If nothing resolves the run within 30 s, it is finalized as "no response" with retry.
 - Local intent fast path: sub-50ms responses bypassing agent
 - Busy/dropped handling: shows "busy — try again"
-- Markdown rendering: bold, italic, inline code (amber-tinted), code blocks (monospace), URLs, ordered/unordered lists, and tables (styled header + zebra rows)
+- Markdown rendering: bold, italic, inline code (amber-tinted), code blocks (monospace), `[label](url)` links, bare URLs (mangled http/https schemes like `hthtps://` from upstream limit banners are repaired before linkifying; unknown schemes stay plain text), ordered/unordered lists, and tables (styled header + zebra rows). Agent bubbles get full markdown; user bubbles stay verbatim except URLs, which are linkified with the same scheme repair
 
 **Empty State & Suggestions**
 - When a conversation has no messages, the chat area shows a large breathing assistant orb, a localized title/subtitle, and four clickable **suggestion chips**. Clicking a chip fills the composer (does not auto-send) so the user can edit first.
