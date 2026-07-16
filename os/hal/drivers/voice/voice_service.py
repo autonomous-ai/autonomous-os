@@ -997,8 +997,20 @@ class VoiceService:
             try:
                 from hal import app_state
 
-                app_state._apply_emotion_led_display(presets.EMO_LISTENING, 0.7)
-                led_cue_fired[0] = True
+                # Suppression window (set by /voice/unmute) hides the "processing"
+                # spin at session-open right after the operator flips the mic
+                # switch back on. Without this, ambient VAD trips and the
+                # realtime session-open cue paint the ring blue immediately,
+                # even though the operator has done nothing to warrant it —
+                # they read that as "device is still processing / not idle".
+                # Note: `led_cue_fired` stays False during suppression, so the
+                # stage-2 upgrade path is a no-op too (nothing to upgrade).
+                _suppress = getattr(app_state, "_suppress_listening_cue_until", 0.0)
+                if time.time() < _suppress:
+                    logger.debug("listening LED cue suppressed (unmute settle window)")
+                else:
+                    app_state._apply_emotion_led_display(presets.EMO_LISTENING, 0.7)
+                    led_cue_fired[0] = True
             except Exception as e:
                 logger.debug("listening LED cue failed: %s", e)
             # Signal the OS server to show listening LED as soon as mic session opens (before transcript arrives)

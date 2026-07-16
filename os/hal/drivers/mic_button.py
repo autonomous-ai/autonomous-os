@@ -218,6 +218,26 @@ class MicButtonHandler:
             time.sleep(_WATCHDOG_SEC)
             try:
                 self._reconcile()
+                # Re-assert the mic-muted LED overlay if we're still muted.
+                # /led/status is a transient effect the way speaking_wave
+                # (TTS) or any other overlay is, so an in-progress TTS
+                # announcement or a manual /led/effect call will paint over
+                # our red cue and then /led/restore back to "no user state"
+                # → strip clears. Without this re-assert the operator would
+                # see the mic-muted cue vanish after the first TTS speak.
+                # apply_state's None-safe: if the switch is None (no PD1
+                # switch on this device) we never get here — start() only
+                # spawns this loop for whitelisted devices.
+                if state._hw_mic_switch_muted is True and state._mic_muted:
+                    try:
+                        from hal.routes.led import set_led_status
+                        from hal.models import LEDStatusRequest
+
+                        set_led_status(LEDStatusRequest(state="mic_muted"))
+                    except Exception as e:
+                        logger.warning(
+                            "Mic switch watchdog LED re-assert failed: %s", e
+                        )
             except Exception as e:
                 logger.warning("Mic switch watchdog tick failed: %s", e)
 
@@ -231,17 +251,50 @@ class MicButtonHandler:
         contexts like boot init) so the check-then-write on state._mic_muted
         isn't racy against another edge/watchdog reconcile.
         """
+        # Publish the hardware switch's current position for UI/backend
+        # kill-switch enforcement (voice_status + /voice/unmute reject).
+        # Write BEFORE the route call so /voice/unmute's own guard sees the
+        # updated value if it fires racily on the same tick — otherwise a
+        # web unmute could sneak in during the ~tens of ms between our
+        # decision and voice_service restart.
+        state._hw_mic_switch_muted = muted
+
         if state._mic_muted == muted:
             return
 
-        from hal.routes.voice import mute_mic, unmute_mic
+        if muted:
+            # Straight mute: log, red LED overlay fires inside mute_mic, and
+            # a short (~120ms) ack chime plays through the still-open speaker
+            # so the operator gets an audible confirmation of the gesture.
+            # Chime is fired BEFORE mute_mic so it starts while voice_service
+            # is still winding down — it hits the speaker at gesture time
+            # instead of after the STT teardown latency. Chime alone (no
+            # spoken cue) matches the "kill switch" feel; the shutter clunk,
+            # not an announcement.
+            from hal.routes.voice import mute_mic
+            from hal.drivers.button_actions import play_ack_chime
 
-        try:
-            if muted:
+            try:
                 logger.info("mic switch → muting")
+                play_ack_chime(source="mic-switch")
                 mute_mic()
-            else:
-                logger.info("mic switch → unmuting")
-                unmute_mic()
+            except Exception as e:
+                logger.warning("Mic switch mute failed: %s", e)
+            return
+
+        # Coming back ON — silent unmute. No chime, no spoken cue.
+        # Rationale learned the hard way: any audio out of the speaker at
+        # this instant (chime OR TTS phrase) bleeds into the mic which is
+        # opening THIS SAME TICK. VAD trips on the echo, an STT session
+        # opens, EMO_LISTENING pulses ("processing" spin on the 8-LED ring),
+        # and if the agent replies to the echo transcript we're in a self-
+        # talk loop. Feedback ONE-WAY: audible cue on the way OUT (mute), no
+        # audible cue on the way IN (unmute). Vision fills the gap: red LED
+        # clears in unmute_mic → whatever the voice pipeline paints next.
+        logger.info("mic switch → unmuting (silent)")
+        try:
+            from hal.routes.voice import unmute_mic
+
+            unmute_mic()
         except Exception as e:
-            logger.warning("Mic switch apply failed: %s", e)
+            logger.warning("Mic switch unmute failed: %s", e)

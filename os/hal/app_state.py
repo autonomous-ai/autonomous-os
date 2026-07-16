@@ -111,6 +111,29 @@ _mic_muted = False
 _mic_manual_override = False
 _speaker_muted = False
 
+# Hardware kill-switch state, published by drivers/mic_button.py on every
+# reconcile. Three values:
+#   None  → this device has no wired mic switch (e.g. Lamp) — UI hides the
+#           "locked by switch" indicator entirely.
+#   False → wired switch is present and currently in the UNMUTED position;
+#           software mute/unmute both allowed.
+#   True  → wired switch is present and currently in the MUTED position;
+#           /voice/unmute rejects with 409 and the UI greys its unmute button
+#           so operators can't create a physical-vs-software mismatch.
+# Rule of the kill switch: hardware may only *tighten*, never loosen. Software
+# mute is fine when hardware allows the mic; software unmute is blocked when
+# hardware has cut it. Same asymmetry a laptop's physical webcam shutter or
+# an XLR mic mute switch enforces.
+_hw_mic_switch_muted: "bool | None" = None
+
+# time.time() timestamp until which the voice pipeline should NOT fire the
+# EMO_LISTENING "processing" pulse at session-open. Set to now+N by the
+# mic-switch driver's unmute path so the operator sees a calm return to
+# idle instead of the ring immediately spinning on ambient VAD / realtime
+# session-open cues right after they flip the switch. 0.0 = no suppression
+# active. Checked in drivers/voice/voice_service.py right before the cue.
+_suppress_listening_cue_until: float = 0.0
+
 # True only while a live voice enrollment is recording. record-enroll sets
 # _speaker_muted as a transient guard (keep TTS out of the captured WAV), which
 # is NOT a user preference — this flag lets the single-click "unmute speaker"

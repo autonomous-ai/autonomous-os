@@ -434,6 +434,12 @@ class VoiceStatusResponse(BaseModel):
     tts_speaking: bool
     tts_detail: Optional[dict] = None
     mic_muted: bool = False
+    # Hardware kill-switch state. See app_state._hw_mic_switch_muted:
+    # None → no switch wired on this device; True → switch currently blocks
+    # the mic; False → switch is open and software is free to mute/unmute.
+    # UI uses this to disable the Unmute button (with a "locked by hardware
+    # switch" hint) so operators don't create a physical-vs-software mismatch.
+    hw_mic_switch_muted: Optional[bool] = None
 
 
 class HealthResponse(BaseModel):

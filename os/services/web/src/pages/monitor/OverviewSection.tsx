@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Satellite, Globe, Eye, Volume2, Cpu, Drama, Clapperboard, Bot, Tag, Wifi, LayoutDashboard } from "lucide-react";
+import { Satellite, Globe, Eye, Volume2, Cpu, Drama, Clapperboard, Bot, Tag, Wifi, LayoutDashboard, Lock } from "lucide-react";
 import { S } from "./styles";
 import { API, HW } from "./types";
 
@@ -231,20 +231,38 @@ export function OverviewSection({
           <div style={{ marginBottom: 12 }}><CardLabel icon={<Volume2 size={13} />} text="Audio" /></div>
           {voice ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {/* Mic row */}
+              {/* Mic row — hardware kill switch has priority. When the wired
+                  slide switch is in the muted position (hw_mic_switch_muted =
+                  true), the badge reads LOCKED and the Unmute button is
+                  disabled with a title hint; the backend also 409's the
+                  /voice/unmute call, so a click here would just error anyway. */}
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <StatusDot ok={voice.voice_available && !voice.mic_muted} />
                   <span style={{ fontSize: 13, fontWeight: 600 }}>Mic</span>
-                  {voice.mic_muted ? (
+                  {voice.hw_mic_switch_muted ? (
+                    <span title="Hardware kill switch is off — flip the physical mic switch to unlock"
+                      style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, padding: "3px 8px", borderRadius: 4, background: "rgba(239,68,68,0.12)", color: "#f87171" }}>
+                      <Lock size={10} />LOCKED
+                    </span>
+                  ) : voice.mic_muted ? (
                     <span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 4, background: "rgba(239,68,68,0.12)", color: "#f87171" }}>MUTED</span>
                   ) : voice.voice_listening ? (
                     <span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 4, background: "var(--lm-amber-dim)", color: "var(--lm-amber)" }}>LIVE</span>
                   ) : null}
                 </div>
-                <ToggleButton active={!voice.mic_muted} label={voice.mic_muted ? "Unmute" : "Mute"}
+                <ToggleButton active={!voice.mic_muted}
+                  label={voice.mic_muted ? "Unmute" : "Mute"}
+                  disabled={voice.mic_muted === true && voice.hw_mic_switch_muted === true}
+                  title={voice.hw_mic_switch_muted ? "Locked by hardware switch — flip physical switch to unlock" : undefined}
                   onClick={() => fetch(`${HW}/voice/${voice.mic_muted ? "unmute" : "mute"}`, { method: "POST" }).catch(() => {})} />
               </div>
+              {voice.hw_mic_switch_muted ? (
+                <div style={{ fontSize: 11, color: "var(--lm-text-muted)", marginTop: -4, paddingLeft: 18, display: "flex", alignItems: "center", gap: 4 }}>
+                  <Lock size={10} />
+                  Locked by hardware switch — flip the physical switch to unlock.
+                </div>
+              ) : null}
 
               {/* TTS row */}
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -812,16 +830,25 @@ function AudioSkeleton() {
 // `active` (e.g. mic live) it shows a destructive red tone; when inactive
 // (already muted) it offers a green "Unmute". Tones come from STATUS_TONE so
 // they stay theme-aware (the old code hardcoded #f87171 which broke on light).
-function ToggleButton({ active, label, onClick }: {
+// `disabled` greys the tones and blocks onClick — used when a hardware
+// kill-switch (mic slide switch on PD1) has taken control, so the operator
+// sees why the Unmute button is inert instead of clicking and getting a 409.
+function ToggleButton({ active, label, onClick, disabled, title }: {
   active: boolean;
   label: string;
   onClick: () => void;
+  disabled?: boolean;
+  title?: string;
 }) {
   const tone = active ? STATUS_TONE.error : STATUS_TONE.ok;
   return (
-    <button className="lm-u-btn" onClick={onClick} style={{
-      fontSize: 11, padding: "5px 14px", borderRadius: 6, fontWeight: 600,
-      background: tone.bg, border: `1px solid ${tone.border}`, color: tone.color,
+    <button className="lm-u-btn" onClick={disabled ? undefined : onClick}
+      disabled={disabled} title={title}
+      style={{
+        fontSize: 11, padding: "5px 14px", borderRadius: 6, fontWeight: 600,
+        background: tone.bg, border: `1px solid ${tone.border}`, color: tone.color,
+        opacity: disabled ? 0.45 : 1,
+        cursor: disabled ? "not-allowed" : "pointer",
     }}>
       {label}
     </button>

@@ -195,6 +195,15 @@ STATUS_LED_PRESETS = {
     "agent_down":   {"effect": FX_BREATHING,          "color": [0, 200, 200],   "speed": 3.0},  # cyan — agent disconnected
     "hardware":     {"effect": FX_BREATHING,          "color": [255, 255, 0],   "speed": 3.0},  # yellow — hardware fault
     "ready_flash":  {"effect": FX_NOTIFICATION_FLASH, "color": [255, 255, 255], "speed": 1.0},  # white — agent ready/listening
+    # Informational overlay applied by /voice/mute — HAL side, no os-server
+    # coordination. Middle ground between "urgent error" (255 red at speed
+    # 3.0) and "invisible" (60 red at speed 0.3): 140 red is clearly visible
+    # but doesn't scream, and speed 0.8 gives a ~4s cycle — slow enough to
+    # feel calm, fast enough that you're never staring at a dead LED. If a
+    # future operator finds it too bright, drop color down to [100, 0, 0]
+    # before touching speed — brightness matters more than tempo here.
+    # Cleared via /led/restore when /voice/unmute runs.
+    "mic_muted":    {"effect": FX_BREATHING,          "color": [140, 0, 0],     "speed": 0.8},  # calm red slow breathing — mic muted
     # OTA progress (driven by the bootstrap worker, not the statusled state machine)
     "ota_progress": {"effect": FX_BREATHING,          "color": [255, 140, 0],   "speed": 0.4},  # orange — updating
     "ota_error":    {"effect": FX_PULSE,              "color": [255, 30, 30],   "speed": 1.5},  # red pulse — update failed

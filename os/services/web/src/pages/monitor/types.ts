@@ -84,6 +84,13 @@ export interface VoiceStatus {
   tts_available: boolean;
   tts_speaking: boolean;
   mic_muted?: boolean;
+  /** Hardware kill-switch position (Intern v2 Pro has a wired slide switch
+   *  on PD1). `null`/`undefined` → device has no switch, hide the UI hint.
+   *  `true` → switch currently blocks the mic — the software Unmute button
+   *  must be disabled with a "locked by hardware" hint, and the backend
+   *  will 409 the /voice/unmute call anyway. `false` → switch is open and
+   *  software mute/unmute both allowed. */
+  hw_mic_switch_muted?: boolean | null;
 }
 export interface ServoState {
   available_recordings: string[];

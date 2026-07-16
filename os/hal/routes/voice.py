@@ -340,6 +340,18 @@ def mute_mic():
         return {"status": "already_muted"}
     state._mic_muted = True
     state._mic_manual_override = True
+    # Fire the red-LED cue FIRST, before voice_service.stop() which can
+    # take a beat to tear down arecord + VAD. Otherwise the operator flips
+    # the switch and stares at the old idle LED for a moment while the
+    # audio pipeline unwinds — the red should feel simultaneous with the
+    # click. LED is non-fatal so a broken strip can't block the mute.
+    try:
+        from hal.routes.led import set_led_status
+        from hal.models import LEDStatusRequest
+
+        set_led_status(LEDStatusRequest(state="mic_muted"))
+    except Exception as e:
+        state.logger.warning("mic-muted LED cue failed (non-fatal): %s", e)
     if state.voice_service and state.voice_service.available:
         state.voice_service.stop()
     state.logger.info("Mic muted by user")
@@ -348,14 +360,49 @@ def mute_mic():
 
 @router.post("/voice/unmute", response_model=StatusResponse)
 def unmute_mic():
-    """Unmute mic -- restart voice pipeline."""
+    """Unmute mic -- restart voice pipeline.
+
+    Hardware kill-switch enforcement: when the wired mic switch (drivers/
+    mic_button.py) is currently in the MUTED position, refuse the software
+    unmute with 409 Conflict. The switch is meant to be a hard "mic off"
+    the way a laptop's webcam shutter is — software must not be able to
+    quietly re-enable it while the physical control still says off. The
+    driver itself calls this route on switch transitions, at which point
+    _hw_mic_switch_muted has already been set False so this guard passes.
+    """
+    if state._hw_mic_switch_muted is True:
+        raise HTTPException(
+            status_code=409,
+            detail="hardware mic switch is off — flip it to unlock",
+        )
     if not state._mic_muted:
         return {"status": "already_unmuted"}
     state._mic_muted = False
     state._mic_manual_override = False
+    # Suppress the voice pipeline's EMO_LISTENING pulse at session-open for
+    # a short window after unmute. Without this the operator flips the switch
+    # to unmute and the ring immediately spins blue (from the realtime
+    # session-open cue at ~1s and again on the first VAD trip — see
+    # drivers/voice/voice_service.py) instead of settling into the emotion /
+    # idle color. The check is on the fire path, so this ONLY hides the
+    # visual cue — the STT / realtime pipeline still opens normally.
+    state._suppress_listening_cue_until = time.time() + 3.0
     if state.voice_service:
         state.voice_service.start()
     state.logger.info("Mic unmuted")
+    # Clear the mic-muted LED overlay set by mute_mic(). Use the internal
+    # _restore_user_led() (not the HTTP restore_led): the HTTP route clears
+    # the strip to (0,0,0) when no explicit user state was saved, which on
+    # Intern v2 Pro is the common case — so unmute would leave the strip
+    # dead until the next EMO_LISTENING pulse. _restore_user_led() takes the
+    # "no user state → keeping emotion color" branch, letting whatever the
+    # emotion / voice pipeline paints next (session-open pulse, ambient,
+    # speaking_wave) show through immediately after we stop the red effect.
+    try:
+        state._stop_current_effect()
+        state._restore_user_led()
+    except Exception as e:
+        state.logger.warning("mic-muted LED clear failed (non-fatal): %s", e)
     return {"status": "ok"}
 
 
@@ -461,4 +508,5 @@ def voice_status():
         "tts_speaking": state.tts_service.speaking if state.tts_service else False,
         "tts_detail": tts_detail,
         "mic_muted": state._mic_muted,
+        "hw_mic_switch_muted": state._hw_mic_switch_muted,
     }
