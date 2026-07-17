@@ -41,7 +41,8 @@ FX_BLINK = "blink"
 FX_SPEAKING_WAVE = "speaking_wave"
 FX_SPEAKING_WAVE_RAINBOW = "speaking_wave_rainbow"
 
-VALID_LED_EFFECTS = [FX_BREATHING, FX_CANDLE, FX_RAINBOW, FX_NOTIFICATION_FLASH, FX_PULSE, FX_BLINK, FX_SPEAKING_WAVE, FX_SPEAKING_WAVE_RAINBOW]
+VALID_LED_EFFECTS = [FX_BREATHING, FX_CANDLE, FX_RAINBOW, FX_NOTIFICATION_FLASH, FX_PULSE, FX_BLINK, FX_SPEAKING_WAVE,
+                     FX_SPEAKING_WAVE_RAINBOW]
 
 # --- Scene name constants ---
 SCENE_READING = "reading"
@@ -125,28 +126,33 @@ EMO_HEADSHAKE = "headshake"
 # "camera": "on"  = auto-enable camera if off (active interaction, need vision)
 # omitted         = no camera change
 EMOTION_PRESETS = {
-    EMO_CURIOUS:       {"servo": SERVO_CURIOUS,       "color": [255, 191, 0],   "effect": FX_BREATHING,          "speed": 1.0, "camera": "on"},
-    EMO_HAPPY:         {"servo": SERVO_HAPPY_WIGGLE,  "color": [255, 220, 0],   "effect": FX_CANDLE,             "speed": 1.0, "camera": "on"},
-    EMO_SAD:           {"servo": SERVO_SAD,           "color": [80, 80, 200],   "effect": FX_BREATHING,          "speed": 0.8, "camera": "on"},
-    EMO_THINKING:      {"servo": SERVO_THINKING_DEEP, "color": [180, 100, 255], "effect": FX_PULSE,              "speed": 1.5, "camera": "on"},
-    EMO_IDLE:          {"servo": SERVO_IDLE,          "color": [183, 235, 234], "effect": FX_BREATHING,          "speed": 0.8},
-    EMO_EXCITED:       {"servo": SERVO_EXCITED,       "color": [230, 51, 230],  "effect": FX_BLINK,              "speed": 2.5, "camera": "on"},
-    EMO_SHY:           {"servo": SERVO_SHY,           "color": [255, 150, 180], "effect": FX_BLINK,              "speed": 0.5, "camera": "on"},
-    EMO_SHOCK:         {"servo": SERVO_SHOCK,         "color": [255, 255, 255], "effect": FX_NOTIFICATION_FLASH, "speed": 2.0, "camera": "on"},
-    EMO_LISTENING:     {"servo": SERVO_LISTENING,     "color": [51, 121, 230],  "effect": FX_PULSE,              "speed": 1.5, "camera": "on"},
-    EMO_LAUGH:         {"servo": SERVO_LAUGH,         "color": [230, 191, 51],  "effect": FX_BLINK,              "speed": 1.2, "camera": "on"},
-    EMO_CONFUSED:      {"servo": SERVO_CONFUSED,      "color": [224, 71, 25],   "effect": FX_CANDLE,             "speed": 0.6, "camera": "on"},
-    EMO_SLEEPY:        {"servo": SERVO_SLEEPY,        "color": [60, 40, 120],   "effect": FX_BREATHING,          "speed": 0.5, "camera": "off"},
-    EMO_GREETING:      {"servo": SERVO_GREETING,      "color": [255, 180, 100], "effect": FX_BLINK,              "speed": 0.8, "camera": "on"},
-    EMO_GOODBYE:       {"servo": SERVO_GOODBYE,       "color": [255, 180, 100], "effect": FX_BREATHING,          "speed": 0.5},
-    EMO_CARING:        {"servo": SERVO_NOD,           "color": [255, 160, 120], "effect": FX_BREATHING,          "speed": 0.4, "camera": "on"},
-    EMO_ACKNOWLEDGE:   {"servo": SERVO_ACKNOWLEDGE,   "color": [51, 230, 141],  "effect": FX_BLINK,              "speed": 1.0, "camera": "on"},
-    EMO_STRETCHING:    {"servo": SERVO_STRETCHING,    "color": [245, 240, 230], "effect": FX_BREATHING,          "speed": 0.6, "camera": "on"},
-    EMO_MUSIC_STRONG:  {"servo": SERVO_MUSIC_ROCK,    "color": [155, 221, 155], "effect": FX_RAINBOW,            "speed": 1.5},
-    EMO_MUSIC_CHILL:   {"servo": SERVO_MUSIC_ROCK,    "color": [252, 136, 3],   "effect": FX_BREATHING,          "speed": 0.5},
-    EMO_SCAN:          {"servo": SERVO_SCANNING,      "color": [36, 184, 224],  "effect": FX_PULSE,              "speed": 2.0, "camera": "on"},
-    EMO_NOD:           {"servo": SERVO_NOD,           "color": [51, 230, 141],  "effect": FX_BLINK,              "speed": 1.0, "camera": "on"},
-    EMO_HEADSHAKE:     {"servo": SERVO_HEADSHAKE,     "color": [230, 51, 51],   "effect": FX_BLINK,              "speed": 1.0, "camera": "on"},
+    EMO_CURIOUS: {"servo": SERVO_CURIOUS, "color": [255, 191, 0], "effect": FX_BREATHING, "speed": 1.0, "camera": "on"},
+    EMO_HAPPY: {"servo": SERVO_HAPPY_WIGGLE, "color": [255, 220, 0], "effect": FX_CANDLE, "speed": 1.0, "camera": "on"},
+    EMO_SAD: {"servo": SERVO_SAD, "color": [80, 80, 200], "effect": FX_BREATHING, "speed": 0.8, "camera": "on"},
+    EMO_THINKING: {"servo": SERVO_THINKING_DEEP, "color": [180, 100, 255], "effect": FX_PULSE, "speed": 1.5,
+                   "camera": "on"},
+    EMO_IDLE: {"servo": SERVO_IDLE, "color": [183, 235, 234], "effect": FX_BREATHING, "speed": 0.8},
+    EMO_EXCITED: {"servo": SERVO_EXCITED, "color": [230, 51, 230], "effect": FX_BLINK, "speed": 2.5, "camera": "on"},
+    EMO_SHY: {"servo": SERVO_SHY, "color": [255, 150, 180], "effect": FX_BLINK, "speed": 0.5, "camera": "on"},
+    EMO_SHOCK: {"servo": SERVO_SHOCK, "color": [255, 255, 255], "effect": FX_NOTIFICATION_FLASH, "speed": 2.0,
+                "camera": "on"},
+    EMO_LISTENING: {"servo": SERVO_LISTENING, "color": [51, 121, 230], "effect": FX_PULSE, "speed": 1.5,
+                    "camera": "on"},
+    EMO_LAUGH: {"servo": SERVO_LAUGH, "color": [230, 191, 51], "effect": FX_BLINK, "speed": 1.2, "camera": "on"},
+    EMO_CONFUSED: {"servo": SERVO_CONFUSED, "color": [224, 71, 25], "effect": FX_CANDLE, "speed": 0.6, "camera": "on"},
+    EMO_SLEEPY: {"servo": SERVO_SLEEPY, "color": [60, 40, 120], "effect": FX_BREATHING, "speed": 0.5, "camera": "off"},
+    EMO_GREETING: {"servo": SERVO_GREETING, "color": [255, 180, 100], "effect": FX_BLINK, "speed": 0.8, "camera": "on"},
+    EMO_GOODBYE: {"servo": SERVO_GOODBYE, "color": [255, 180, 100], "effect": FX_BREATHING, "speed": 0.5},
+    EMO_CARING: {"servo": SERVO_NOD, "color": [255, 160, 120], "effect": FX_BREATHING, "speed": 0.4, "camera": "on"},
+    EMO_ACKNOWLEDGE: {"servo": SERVO_ACKNOWLEDGE, "color": [51, 230, 141], "effect": FX_BLINK, "speed": 1.0,
+                      "camera": "on"},
+    EMO_STRETCHING: {"servo": SERVO_STRETCHING, "color": [245, 240, 230], "effect": FX_BREATHING, "speed": 0.6,
+                     "camera": "on"},
+    EMO_MUSIC_STRONG: {"servo": SERVO_MUSIC_ROCK, "color": [155, 221, 155], "effect": FX_RAINBOW, "speed": 1.5},
+    EMO_MUSIC_CHILL: {"servo": SERVO_MUSIC_ROCK, "color": [252, 136, 3], "effect": FX_BREATHING, "speed": 0.5},
+    EMO_SCAN: {"servo": SERVO_SCANNING, "color": [36, 184, 224], "effect": FX_PULSE, "speed": 2.0, "camera": "on"},
+    EMO_NOD: {"servo": SERVO_NOD, "color": [51, 230, 141], "effect": FX_BLINK, "speed": 1.0, "camera": "on"},
+    EMO_HEADSHAKE: {"servo": SERVO_HEADSHAKE, "color": [230, 51, 51], "effect": FX_BLINK, "speed": 1.0, "camera": "on"},
 }
 
 # Lighting scene presets — simulated color temperature via RGB mixing.
@@ -157,25 +163,39 @@ EMOTION_PRESETS = {
 # "servo": "hold"       = freeze servo (no idle/emotion animations)
 # omitted               = no change for that peripheral
 SCENE_PRESETS = {
-    SCENE_READING:  {"brightness": 0.80, "color": [255, 209, 163], "aim": AIM_DESK, "camera": "off", "mic": "on",  "speaker": "off", "servo": "hold"},  # ~4000K neutral; mic on for voice wake
-    SCENE_FOCUS:    {"brightness": 0.70, "color": [255, 214, 170], "aim": AIM_DESK, "camera": "off", "mic": "on",  "speaker": "off", "servo": "hold"},  # ~4200K warm-neutral; mic on for voice wake
-    SCENE_RELAX:    {"brightness": 0.40, "color": [255, 166, 87],  "aim": AIM_WALL, "camera": "on",  "mic": "on",  "speaker": "on"},                    # ~2700K warm
-    SCENE_MOVIE:    {"brightness": 0.15, "color": [255, 147, 51],  "aim": AIM_WALL, "camera": "off", "mic": "on",  "speaker": "off"},                   # ~2400K dim amber
-    SCENE_NIGHT:    {"brightness": 0.05, "color": [255, 105, 0],   "aim": AIM_DOWN, "camera": "off", "mic": "on",  "speaker": "off"},                   # ~1800K deep amber, blue-free; mic stays on for voice wake
-    SCENE_ENERGIZE: {"brightness": 1.00, "color": [255, 228, 206], "aim": AIM_UP,   "camera": "on",  "mic": "on",  "speaker": "on"},                    # ~5000K daylight
+    SCENE_READING: {"brightness": 0.80, "color": [255, 209, 163], "aim": AIM_DESK, "camera": "off", "mic": "on",
+                    "speaker": "off", "servo": "hold"},  # ~4000K neutral; mic on for voice wake
+    SCENE_FOCUS: {"brightness": 0.70, "color": [255, 214, 170], "aim": AIM_DESK, "camera": "off", "mic": "on",
+                  "speaker": "off", "servo": "hold"},  # ~4200K warm-neutral; mic on for voice wake
+    SCENE_RELAX: {"brightness": 0.40, "color": [255, 166, 87], "aim": AIM_WALL, "camera": "on", "mic": "on",
+                  "speaker": "on"},  # ~2700K warm
+    SCENE_MOVIE: {"brightness": 0.15, "color": [255, 147, 51], "aim": AIM_WALL, "camera": "off", "mic": "on",
+                  "speaker": "off"},  # ~2400K dim amber
+    SCENE_NIGHT: {"brightness": 0.05, "color": [255, 105, 0], "aim": AIM_DOWN, "camera": "off", "mic": "on",
+                  "speaker": "off"},  # ~1800K deep amber, blue-free; mic stays on for voice wake
+    SCENE_ENERGIZE: {"brightness": 1.00, "color": [255, 228, 206], "aim": AIM_UP, "camera": "on", "mic": "on",
+                     "speaker": "on"},  # ~5000K daylight
 }
 
 # Servo aim presets — named device-head directions mapped to joint positions (normalized -100..100).
 # Neutral: base_yaw=3, base_pitch=-30, elbow_pitch=57, wrist_roll=0, wrist_pitch=18
 AIM_PRESETS = {
-    AIM_CENTER: {"base_yaw.pos": 3.0,   "base_pitch.pos": -20.0, "elbow_pitch.pos": 32.0, "wrist_roll.pos": 0.0, "wrist_pitch.pos": 0.0},
-    AIM_DESK:   {"base_yaw.pos": 3.0,   "base_pitch.pos": 5.0,   "elbow_pitch.pos": 20.0, "wrist_roll.pos": 0.0, "wrist_pitch.pos": 40.0},
-    AIM_WALL:   {"base_yaw.pos": 3.0,   "base_pitch.pos": 5.0,   "elbow_pitch.pos": -10.0, "wrist_roll.pos": 0.0, "wrist_pitch.pos": -89},
-    AIM_LEFT:   {"base_yaw.pos": -90.0, "base_pitch.pos": -30.0, "elbow_pitch.pos": 57.0, "wrist_roll.pos": 0.0, "wrist_pitch.pos": 18.0},
-    AIM_RIGHT:  {"base_yaw.pos": 90.0,  "base_pitch.pos": -30.0, "elbow_pitch.pos": 57.0, "wrist_roll.pos": 0.0, "wrist_pitch.pos": 18.0},
-    AIM_UP:     {"base_yaw.pos": 3.0,   "base_pitch.pos": 10.0,  "elbow_pitch.pos": 70.0,  "wrist_roll.pos": 0.0, "wrist_pitch.pos": 10.0},
-    AIM_DOWN:   {"base_yaw.pos": 3.0,   "base_pitch.pos": -61.93, "elbow_pitch.pos": -71, "wrist_roll.pos": 0.0, "wrist_pitch.pos": -61},
-    AIM_USER:   {"base_yaw.pos": 0.0,   "base_pitch.pos": 0.0,   "elbow_pitch.pos": 0.0,  "wrist_roll.pos": 0.0, "wrist_pitch.pos": -85.0},
+    AIM_CENTER: {"base_yaw.pos": 3.0, "base_pitch.pos": -20.0, "elbow_pitch.pos": 32.0, "wrist_roll.pos": 0.0,
+                 "wrist_pitch.pos": 0.0},
+    AIM_DESK: {"base_yaw.pos": 3.0, "base_pitch.pos": 5.0, "elbow_pitch.pos": 20.0, "wrist_roll.pos": 0.0,
+               "wrist_pitch.pos": 40.0},
+    AIM_WALL: {"base_yaw.pos": 3.0, "base_pitch.pos": 5.0, "elbow_pitch.pos": -10.0, "wrist_roll.pos": 0.0,
+               "wrist_pitch.pos": -89},
+    AIM_LEFT: {"base_yaw.pos": -90.0, "base_pitch.pos": -30.0, "elbow_pitch.pos": 57.0, "wrist_roll.pos": 0.0,
+               "wrist_pitch.pos": 18.0},
+    AIM_RIGHT: {"base_yaw.pos": 90.0, "base_pitch.pos": -30.0, "elbow_pitch.pos": 57.0, "wrist_roll.pos": 0.0,
+                "wrist_pitch.pos": 18.0},
+    AIM_UP: {"base_yaw.pos": 3.0, "base_pitch.pos": 10.0, "elbow_pitch.pos": 70.0, "wrist_roll.pos": 0.0,
+             "wrist_pitch.pos": 10.0},
+    AIM_DOWN: {"base_yaw.pos": 3.0, "base_pitch.pos": -61.93, "elbow_pitch.pos": -71, "wrist_roll.pos": 0.0,
+               "wrist_pitch.pos": -61},
+    AIM_USER: {"base_yaw.pos": 0.0, "base_pitch.pos": 0.0, "elbow_pitch.pos": 0.0, "wrist_roll.pos": 0.0,
+               "wrist_pitch.pos": -85.0},
 }
 
 # System status LED presets — the color/effect/speed the device shows for each
@@ -186,26 +206,35 @@ AIM_PRESETS = {
 # Keys MUST stay in sync with internal/statusled State constants (Go) + the
 # "ready_flash" agent-ready cue. Effects are from VALID_LED_EFFECTS.
 STATUS_LED_PRESETS = {
-    "ota":          {"effect": FX_BREATHING,          "color": [0, 255, 0],     "speed": 3.0},  # green — firmware updating
-    "error":        {"effect": FX_BREATHING,          "color": [255, 0, 0],     "speed": 3.0},  # red — system error
-    "booting":      {"effect": FX_BREATHING,          "color": [0, 80, 255],    "speed": 3.0},  # blue — starting up
-    "connectivity": {"effect": FX_BREATHING,          "color": [255, 80, 0],    "speed": 3.0},  # orange — no internet
-    "wifi_connecting": {"effect": FX_BLINK,           "color": [0, 135, 255],   "speed": 0.5},  # blue blink — associating with Wi-Fi during POST /api/device/setup
-    "hal_down":     {"effect": FX_BREATHING,          "color": [180, 0, 255],   "speed": 3.0},  # purple — HAL unreachable
-    "agent_down":   {"effect": FX_BREATHING,          "color": [0, 200, 200],   "speed": 3.0},  # cyan — agent disconnected
-    "hardware":     {"effect": FX_BREATHING,          "color": [255, 255, 0],   "speed": 3.0},  # yellow — hardware fault
-    "ready_flash":  {"effect": FX_NOTIFICATION_FLASH, "color": [255, 255, 255], "speed": 1.0},  # white — agent ready/listening
+    "ota": {"effect": FX_BREATHING, "color": [0, 255, 0], "speed": 3.0},  # green — firmware updating
+    "error": {"effect": FX_BREATHING, "color": [255, 0, 0], "speed": 3.0},  # red — system error
+    "booting": {"effect": FX_BREATHING, "color": [0, 80, 255], "speed": 3.0},  # blue — starting up
+    "connectivity": {"effect": FX_BREATHING, "color": [255, 80, 0], "speed": 3.0},  # orange — no internet
+    "wifi_connecting": {"effect": FX_BLINK, "color": [0, 135, 255], "speed": 0.5},
+    # blue blink — associating with Wi-Fi during POST /api/device/setup
+    "hal_down": {"effect": FX_BREATHING, "color": [180, 0, 255], "speed": 3.0},  # purple — HAL unreachable
+    "agent_down": {"effect": FX_BREATHING, "color": [0, 200, 200], "speed": 3.0},  # cyan — agent disconnected
+    "hardware": {"effect": FX_BREATHING, "color": [255, 255, 0], "speed": 3.0},  # yellow — hardware fault
+    "ready_flash": {"effect": FX_NOTIFICATION_FLASH, "color": [255, 255, 255], "speed": 1.0},
+    # white — agent ready/listening
     # OTA progress (driven by the bootstrap worker, not the statusled state machine)
-    "ota_progress": {"effect": FX_BREATHING,          "color": [255, 140, 0],   "speed": 0.4},  # orange — updating
-    "ota_error":    {"effect": FX_PULSE,              "color": [255, 30, 30],   "speed": 1.5},  # red pulse — update failed
-    "ota_success":  {"effect": FX_NOTIFICATION_FLASH, "color": [0, 255, 80],    "speed": 1.0},  # green flash — update ok
+    "ota_progress": {"effect": FX_BREATHING, "color": [255, 140, 0], "speed": 0.4},  # orange — updating
+    "ota_error": {"effect": FX_PULSE, "color": [255, 30, 30], "speed": 1.5},  # red pulse — update failed
+    "ota_success": {"effect": FX_NOTIFICATION_FLASH, "color": [0, 255, 80], "speed": 1.0},  # green flash — update ok
     # Setup/provisioning "device ready, join the AP" cue. effect "solid" = a
     # persistent fill (saved as the displayed state), not a transient overlay.
-    "setup":        {"effect": "solid",               "color": [255, 255, 255], "speed": 1.0},  # white solid — AP/setup ready
+    "setup": {"effect": "solid", "color": [255, 255, 255], "speed": 1.0},  # white solid — AP/setup ready
     # Mic-muted idle indicator — HAL-local key (no Go statusled state). The
     # strip's RESTING look while the mic is muted: emotions/effects/waves run
     # normally on top, and every LED restore lands back on this instead of the
     # user state, so "nothing happening + red breathing" = mic is muted.
     # Applied by /voice/mute, cleared by /voice/unmute (app_state._mic_muted_led).
-    "mic_muted":    {"effect": FX_BREATHING,          "color": [140, 0, 0],     "speed": 0.8},  # dark red — mic muted
+    "mic_muted": {"effect": FX_BREATHING, "color": [140, 0, 0], "speed": 0.8},  # dark red — mic muted
 }
+
+# Ambient resting look — the warm-white breathing the strip settles into when
+# no user LED state exists. MUST mirror the Go ambient fallback
+# (os/services/internal/ambient/service.go breathingLoop: (255,200,140) @ 0.3)
+# so a HAL-side settle (e.g. mic unmute with no saved state) is visually
+# identical to what ambient paints on idle.
+AMBIENT_RESTING_LED = {"effect": FX_BREATHING, "color": [255, 200, 140], "speed": 0.3}

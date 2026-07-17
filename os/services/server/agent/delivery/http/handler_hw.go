@@ -221,6 +221,20 @@ func (h *AgentHandler) fireHWCall(c hwCall, flowRunID string, client *http.Clien
 	case strings.Contains(c.path, "/scene"), strings.Contains(c.path, "/led"):
 		flow.Log("hw_led", map[string]any{"path": c.path, "args": c.body, "run_id": flowRunID}, flowRunID)
 		h.monitorBus.Push(domain.MonitorEvent{Type: "hw_led", Summary: c.path + " " + c.body, RunID: flowRunID})
+		// Lock/unlock ambient breathing, mirroring the session-tool path
+		// (handler_event_session_tool.go). Without this, an agent reply
+		// marker like [HW:/led/effect:{"effect":"rainbow"}] never sets
+		// ambient's ledLocked, and ~60s after the turn ambient's breathing
+		// resumes and tramples the agent-set color/effect.
+		switch {
+		case strings.Contains(c.path, "/led/off"), strings.Contains(c.path, "/scene/off"):
+			h.monitorBus.Push(domain.MonitorEvent{Type: "led_off", Summary: "agent hw: " + c.path})
+		case strings.Contains(c.path, "/led/effect/stop"), strings.Contains(c.path, "/led/restore"):
+			// stop/restore release the strip — neither a deliberate look
+			// (no lock) nor a turn-off (no unlock).
+		default:
+			h.monitorBus.Push(domain.MonitorEvent{Type: "led_set", Summary: "agent hw: " + c.path})
+		}
 	case strings.Contains(c.path, "/servo"):
 		flow.Log("hw_servo", map[string]any{"path": c.path, "args": c.body, "run_id": flowRunID}, flowRunID)
 		h.monitorBus.Push(domain.MonitorEvent{Type: "hw_servo", Summary: c.path + " " + c.body, RunID: flowRunID})

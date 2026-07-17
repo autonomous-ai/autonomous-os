@@ -13,6 +13,7 @@ import threading
 from typing import Optional
 
 from hal.presets import (
+    AMBIENT_RESTING_LED,
     EMO_IDLE,
     EMO_THINKING,
     EMOTION_PRESETS,
@@ -327,13 +328,14 @@ def _mic_muted_led_owns_strip() -> bool:
     return True
 
 
-def _start_mic_muted_effect():
-    """Paint the mic-muted indicator (dark red breathing). Display-only:
-    never touches _user_led_state, so unmute restores the saved user look."""
-    if not rgb_service or not _mic_muted_led_owns_strip():
-        return
-    preset = STATUS_LED_PRESETS["mic_muted"]
+def _start_preset_effect(preset: dict, thread_name: str):
+    """Start a preset-described background effect ({"effect","color","speed"}).
+
+    Display-only: never touches _user_led_state. Cancels any pending
+    restore timer and running effect first."""
     global _restore_timer, _effect_thread, _effect_name, _effect_base_color
+    if not rgb_service:
+        return
     if _restore_timer is not None and _restore_timer.is_alive():
         _restore_timer.cancel()
         _restore_timer = None
@@ -346,9 +348,17 @@ def _start_mic_muted_effect():
         target=_run_effect,
         args=(preset["effect"], color, preset.get("speed", 1.0), None, _effect_stop, rgb_service),
         daemon=True,
-        name="led-mic-muted",
+        name=thread_name,
     )
     _effect_thread.start()
+
+
+def _start_mic_muted_effect():
+    """Paint the mic-muted indicator (dark red breathing). Display-only:
+    never touches _user_led_state, so unmute restores the saved user look."""
+    if not _mic_muted_led_owns_strip():
+        return
+    _start_preset_effect(STATUS_LED_PRESETS["mic_muted"], "led-mic-muted")
 
 
 def _apply_mic_muted_led():
@@ -369,13 +379,24 @@ def _apply_mic_muted_led():
 def _clear_mic_muted_led():
     """Drop the mic-muted indicator and restore the user's saved LED state
     (called by POST /voice/unmute and scene mic-unmute paths)."""
-    global _mic_muted_led
+    global _mic_muted_led, _effect_thread, _effect_name, _effect_base_color
     if not _mic_muted_led:
         return
     _mic_muted_led = False
     logger.info("Mic-muted LED indicator OFF -- restoring user state")
     if _tts_speaking or _music_playing:
         return
+    # With no saved user state (fresh boot, user never picked a color)
+    # _restore_user_led is a no-op ("keeping emotion color") and would
+    # leave the red breathing running. If the active effect is ours, stop
+    # it and settle on the ambient resting look ourselves — the Go ambient
+    # loop thinks its effect is still running and won't re-light the strip
+    # until its next pause/resume cycle.
+    if _effect_thread is not None and _effect_thread.name == "led-mic-muted":
+        _stop_current_effect()
+        if _user_led_state is None and rgb_service:
+            _start_preset_effect(AMBIENT_RESTING_LED, "led-ambient-fallback")
+            return
     _restore_user_led()
 
 

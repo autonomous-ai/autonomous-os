@@ -409,7 +409,7 @@ func (s *Server) Serve(closeFn func()) error {
 	// bearer token; Go gates the request then forwards to HAL on loopback.
 	// Replaces direct browser /hw/* access (audit web F5) so nginx /hw/
 	// allow 127.0.0.1; deny all; can stay locked down (audit local F2).
-	api.Any("/hardware/*path", adminAuthMiddleware(s.config), gin.WrapH(hardwareProxy))
+	api.Any("/hardware/*path", adminAuthMiddleware(s.config), s.ambientLEDGate(), gin.WrapH(hardwareProxy))
 
 	// Top-level /openapi.json so the in-iframe HAL Swagger UI (loaded at
 	// /api/hardware/docs) can fetch its spec — FastAPI hardcodes the spec

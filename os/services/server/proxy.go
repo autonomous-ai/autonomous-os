@@ -1,10 +1,15 @@
 package server
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strings"
+
+	"github.com/gin-gonic/gin"
 )
 
 // hardwareProxy is a wildcard reverse proxy from /api/hardware/* to HAL on
@@ -30,6 +35,54 @@ var openapiProxy = func() http.Handler {
 	}
 	return proxy
 }()
+
+// ambientLEDGate mirrors the intent/agent paths' led_set/led_off ambient
+// signals for LED writes that arrive through the hardware proxy (web UI →
+// /api/hardware/* → HAL). Those writes never pass through the intent matcher
+// or agent tool events, so without this ambient's ledLocked stays false and
+// its breathing loop resumes ~60s after the last interaction, trampling the
+// web-set color/effect. Transient writes (ambient itself, Buddy, status
+// overlays) don't lock — same rule as HAL's user-state save.
+func (s *Server) ambientLEDGate() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if s.ambientService != nil && c.Request.Method == http.MethodPost {
+			switch c.Param("path") {
+			case "/led/solid", "/led/effect", "/scene":
+				if !transientBody(c) {
+					s.ambientService.LockLED()
+				}
+			case "/led/paint":
+				s.ambientService.LockLED()
+			case "/led/off":
+				if !transientBody(c) {
+					s.ambientService.UnlockLED()
+				}
+			case "/scene/off":
+				s.ambientService.UnlockLED()
+			}
+		}
+		c.Next()
+	}
+}
+
+// transientBody peeks at the JSON body for `"transient": true`, restoring the
+// body for the proxy. A missing/unreadable body counts as non-transient.
+func transientBody(c *gin.Context) bool {
+	if c.Request.Body == nil {
+		return false
+	}
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 1<<20))
+	if err != nil {
+		c.Request.Body = io.NopCloser(bytes.NewReader(nil))
+		return false
+	}
+	c.Request.Body = io.NopCloser(bytes.NewReader(body))
+	var probe struct {
+		Transient bool `json:"transient"`
+	}
+	_ = json.Unmarshal(body, &probe)
+	return probe.Transient
+}
 
 var hardwareProxy = func() http.Handler {
 	target, _ := url.Parse("http://127.0.0.1:5001")
