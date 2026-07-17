@@ -160,13 +160,17 @@ class TestStatusLedPresetKeys(unittest.TestCase):
     def test_keys_match_go_status_states(self):
         # These MUST equal every status name the Go side sends to HAL POST
         # /led/status; a missing key → that status would 400 and show nothing:
-        #   - internal/statusled State constants + the "ready_flash" ready cue
+        #   - internal/statusled State constants (incl. wifi_connecting during
+        #     POST /api/device/setup) + the "ready_flash" ready cue
         #   - bootstrap OTA progress: ota_progress / ota_error / ota_success
         #   - server.go setup-ready: setup
+        # Plus HAL-internal consumers: mic_muted is applied by /voice/mute
+        # (app_state), not by the Go side, but lives in the same preset table.
         expected = {
-            "ota", "error", "booting", "connectivity",
+            "ota", "error", "booting", "connectivity", "wifi_connecting",
             "hal_down", "agent_down", "hardware", "ready_flash",
             "ota_progress", "ota_error", "ota_success", "setup",
+            "mic_muted",
         }
         self.assertEqual(set(presets.STATUS_LED_PRESETS), expected)
         # Every preset must name a real effect (or the "solid" persistent fill)

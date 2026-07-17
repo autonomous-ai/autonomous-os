@@ -291,7 +291,13 @@ async def lifespan(app: FastAPI):
                     brightness=CAMERA_BRIGHTNESS,
                 )
             )
-            cap.start()
+            if state._camera_disabled:
+                # Disabled state restored from the camera sidecar: keep the
+                # capture object (so /camera/enable can start it) but don't
+                # open the sensor.
+                logger.info("Camera capture created but not started -- disabled (restored)")
+            else:
+                cap.start()
             state.camera_capture = cap
             logger.info(
                 f"Camera opened (index={CAMERA_INDEX}, {CAMERA_WIDTH}x{CAMERA_HEIGHT})"
@@ -652,6 +658,16 @@ async def lifespan(app: FastAPI):
         ).start()
     except Exception as e:
         logger.warning(f"Scene restore scheduling failed: {e}")
+
+    # Mic mute restored from the sidecar (or already applied by the physical
+    # switch during driver init): paint the mic-muted LED indicator now that
+    # the RGB service is up. _start_mic_muted_effect (not _apply_): the flag
+    # is already set, and it self-guards on scene/LED-off via owns_strip.
+    if state._mic_muted:
+        try:
+            state._start_mic_muted_effect()
+        except Exception as e:
+            logger.warning(f"Mic-muted LED repaint failed: {e}")
 
     # Thermal fail-safe monitor (only when `thermal` bounds are declared).
     if _safety and _safety.thermal:

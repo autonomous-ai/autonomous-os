@@ -287,6 +287,7 @@ def mute_speaker():
         state.tts_service.stop()
     if state.music_service and state.music_service.playing:
         state.music_service.stop()
+    state._persist_speaker_state()
     state.logger.info("Speaker muted")
     return {"status": "ok"}
 
@@ -297,6 +298,7 @@ def unmute_speaker():
     if not state._speaker_muted:
         return {"status": "already_unmuted"}
     state._speaker_muted = False
+    state._persist_speaker_state()
     state.logger.info("Speaker unmuted")
     return {"status": "ok"}
 

@@ -132,7 +132,13 @@ def start_voice(req: VoiceStartRequest):
             wake_words=wake_words,
             alsa_device=AUDIO_INPUT_ALSA,
         )
-        state.voice_service.start()
+        if state._mic_muted:
+            # Mute restored from the sidecar (or applied by the physical
+            # switch) before the pipeline was built: create the service but
+            # don't open the mic. /voice/unmute (or the switch) starts it.
+            state.logger.info("Voice pipeline created but not started -- mic muted")
+        else:
+            state.voice_service.start()
         return {"status": "ok"}
     except Exception as e:
         state.voice_service = None
@@ -343,6 +349,7 @@ def mute_mic():
     if state.voice_service and state.voice_service.available:
         state.voice_service.stop()
     state._apply_mic_muted_led()
+    state._persist_mic_state()
     state.logger.info("Mic muted by user")
     return {"status": "ok"}
 
@@ -357,6 +364,7 @@ def unmute_mic():
     if state.voice_service:
         state.voice_service.start()
     state._clear_mic_muted_led()
+    state._persist_mic_state()
     state.logger.info("Mic unmuted")
     return {"status": "ok"}
 

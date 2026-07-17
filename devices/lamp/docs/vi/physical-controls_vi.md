@@ -133,6 +133,21 @@ Các action sống ở một chỗ để nút GPIO, TTP223, và mọi input tư�
 
 Reset là **single-flight** + cooldown 5 phút (`FactoryResetMinInterval`) dùng chung cho mọi trigger (giữ GPIO, HTTP, MQTT) — circuit breaker chống caller chạy loạn và lặp do vô tình.
 
+## Persist mute/disable qua HAL restart
+
+Mic mute, speaker mute và camera disable mỗi cái persist vào một sidecar
+boot-scoped riêng — `/tmp/hal-mic-state.json`, `/tmp/hal-speaker-state.json`,
+`/tmp/hal-camera-state.json` (cùng pattern `boot_id` với sidecar LED/scene) —
+nên HAL restart (OTA, deploy, đổi config) không còn âm thầm unmute mic, mở lại
+speaker hay bật lại camera. Mọi route flip switch đều persist (`/voice/mute|unmute`,
+`/speaker/mute|unmute`, `/camera/disable|enable`, scene đổi mic/speaker,
+`_auto_camera_on/off`); gesture nút/touchpad đi qua đúng các route đó. Khi
+restore: `start_voice` tạo voice pipeline nhưng không mở mic, lifespan trong
+`server.py` không start camera capture và vẽ lại đèn báo mic-muted, còn cờ
+speaker không cần bước apply (TTS check lúc speak). Reboot nguyên máy thì bắt
+đầu fresh (Intern v2 Pro có công tắc gạt tự apply lại). Mute speaker transient
+của record-enroll chủ đích KHÔNG persist.
+
 ## Phrase local
 
 Thông báo của các action đều local theo `stt_language` từ `config.json` của Lamp. Hằng số ngôn ngữ ở `os/hal/presets.py` (`LANG_EN`, `LANG_VI`, `LANG_ZH_CN`, `LANG_ZH_TW`, `DEFAULT_LANG`). Fallback về `DEFAULT_LANG` (English) khi ngôn ngữ hiện tại chưa có bản dịch.

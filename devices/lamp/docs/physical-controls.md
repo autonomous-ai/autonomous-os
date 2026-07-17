@@ -133,6 +133,22 @@ The actions live in one place so the GPIO button, TTP223, and any future input (
 
 The reset is **single-flight** with a 5-minute cooldown (`FactoryResetMinInterval`) shared across all trigger surfaces (GPIO hold, HTTP, MQTT) — a circuit breaker against runaway callers and accidental repeats.
 
+## Mute/disable persistence across HAL restarts
+
+Mic mute, speaker mute, and camera disable each persist to their own boot-scoped
+sidecar — `/tmp/hal-mic-state.json`, `/tmp/hal-speaker-state.json`,
+`/tmp/hal-camera-state.json` (same `boot_id` pattern as the LED/scene sidecars) —
+so a HAL service restart (OTA, deploy, config change) no longer silently unmutes
+the mic, re-enables the speaker, or turns the camera back on. Every route that
+flips a switch persists it (`/voice/mute|unmute`, `/speaker/mute|unmute`,
+`/camera/disable|enable`, scene mic/speaker changes, `_auto_camera_on/off`); the
+button/touchpad gestures go through the same routes. On restore: `start_voice`
+builds the voice pipeline but doesn't open the mic, `server.py` lifespan skips
+starting the camera capture and re-paints the mic-muted LED indicator, and the
+speaker flag needs no apply step (TTS checks it at speak time). A full device
+reboot starts fresh (on Intern v2 Pro the physical mic switch re-applies itself
+anyway). Record-enroll's transient speaker mute is deliberately NOT persisted.
+
 ## Localized phrases
 
 The action announcements are localized per `stt_language` from Lamp's `config.json`. Language constants live in `os/hal/presets.py` (`LANG_EN`, `LANG_VI`, `LANG_ZH_CN`, `LANG_ZH_TW`, `DEFAULT_LANG`). Falls back to `DEFAULT_LANG` (English) when the active language has no translation.

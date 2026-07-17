@@ -216,6 +216,97 @@ def _load_user_led_state() -> Optional[dict]:
 _user_led_state = _load_user_led_state()
 
 
+# --- Peripheral switch sidecars (boot-scoped, one file per peripheral) ---
+# Mic/speaker mute and camera disable are user-facing switches that must
+# survive a HAL service restart (OTA, deploy, config change) — without these
+# every restart silently unmutes the mic, re-enables the speaker and turns
+# the camera back on. One sidecar per peripheral so each switch is written,
+# inspected and cleared independently. Same boot_id rule as the LED sidecar:
+# a full device reboot starts fresh (and on switch-equipped devices the
+# physical mic switch re-applies itself at boot regardless).
+# NOT persisted: record-enroll's transient speaker mute (routes/speaker.py
+# writes the flag directly and never calls the persist helpers — by design).
+_MIC_STATE_PATH = "/tmp/hal-mic-state.json"
+_SPEAKER_STATE_PATH = "/tmp/hal-speaker-state.json"
+_CAMERA_STATE_PATH = "/tmp/hal-camera-state.json"
+
+
+def _save_boot_sidecar(path: str, payload: dict):
+    import json
+
+    try:
+        with open(path, "w") as f:
+            json.dump({"boot_id": _boot_id(), **payload}, f)
+    except Exception as e:
+        logger.warning("Sidecar save failed (%s): %s", path, e)
+
+
+def _load_boot_sidecar(path: str) -> Optional[dict]:
+    import json
+
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        if data.get("boot_id") != _boot_id():
+            os.unlink(path)
+            return None
+        return data
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        logger.warning("Sidecar load failed (%s): %s", path, e)
+        return None
+
+
+def _persist_mic_state():
+    _save_boot_sidecar(
+        _MIC_STATE_PATH,
+        {"muted": _mic_muted, "manual_override": _mic_manual_override},
+    )
+
+
+def _persist_speaker_state():
+    _save_boot_sidecar(_SPEAKER_STATE_PATH, {"muted": _speaker_muted})
+
+
+def _persist_camera_state():
+    _save_boot_sidecar(
+        _CAMERA_STATE_PATH,
+        {"disabled": _camera_disabled, "manual_override": _camera_manual_override},
+    )
+
+
+def _load_peripheral_sidecars():
+    """Restore the switches at import. APPLYING them happens where each
+    peripheral boots: routes/voice.py start_voice skips opening the mic,
+    server.py lifespan skips starting the camera and re-paints the mic-muted
+    LED indicator. The speaker flag needs no apply step — TTS checks it at
+    speak time."""
+    global _mic_muted, _mic_manual_override, _speaker_muted
+    global _camera_disabled, _camera_manual_override, _mic_muted_led
+    if d := _load_boot_sidecar(_MIC_STATE_PATH):
+        _mic_muted = bool(d.get("muted"))
+        _mic_manual_override = bool(d.get("manual_override"))
+        # Indicator follows the restored mute; painted at the end of
+        # lifespan startup once the RGB service is up.
+        _mic_muted_led = _mic_muted
+    if d := _load_boot_sidecar(_SPEAKER_STATE_PATH):
+        _speaker_muted = bool(d.get("muted"))
+    if d := _load_boot_sidecar(_CAMERA_STATE_PATH):
+        _camera_disabled = bool(d.get("disabled"))
+        _camera_manual_override = bool(d.get("manual_override"))
+    if _mic_muted or _speaker_muted or _camera_disabled:
+        logger.info(
+            "Peripheral switches restored: mic_muted=%s speaker_muted=%s camera_disabled=%s",
+            _mic_muted,
+            _speaker_muted,
+            _camera_disabled,
+        )
+
+
+_load_peripheral_sidecars()
+
+
 def _save_user_led_state(state: dict):
     """Save the user-set LED state and cancel any pending emotion restore."""
     global _user_led_state
@@ -749,6 +840,7 @@ def _auto_camera_off(reason: str) -> bool:
         return False
     _camera_disabled = True
     camera_capture.stop()
+    _persist_camera_state()
     logger.info("Camera auto-disabled (reason: %s)", reason)
     return True
 
@@ -765,6 +857,7 @@ def _auto_camera_on(reason: str) -> bool:
         return False
     _camera_disabled = False
     camera_capture.start()
+    _persist_camera_state()
     logger.info("Camera auto-enabled (reason: %s)", reason)
     return True
 

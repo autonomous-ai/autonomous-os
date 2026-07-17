@@ -134,6 +134,7 @@ def activate_scene(req: SceneRequest):
         state._mic_muted = True
         if state.voice_service and state.voice_service.available:
             state.voice_service.stop()
+        state._persist_mic_state()
         state.logger.info("Scene %s: mic muted", req.scene)
     elif mic == "on" and state._mic_muted:
         state._mic_muted = False
@@ -143,6 +144,7 @@ def activate_scene(req: SceneRequest):
         # Mic is live again — drop a lingering privacy indicator flag (the
         # scene paint already owns the strip look).
         state._clear_mic_muted_led()
+        state._persist_mic_state()
         state.logger.info("Scene %s: mic unmuted", req.scene)
 
     # Speaker control
@@ -153,9 +155,11 @@ def activate_scene(req: SceneRequest):
             state.tts_service.stop()
         if state.music_service and state.music_service.playing:
             state.music_service.stop()
+        state._persist_speaker_state()
         state.logger.info("Scene %s: speaker muted", req.scene)
     elif spk == "on" and state._speaker_muted:
         state._speaker_muted = False
+        state._persist_speaker_state()
         state.logger.info("Scene %s: speaker unmuted", req.scene)
 
     return {
@@ -196,11 +200,13 @@ def deactivate_scene():
         if state.voice_service:
             state.voice_service.start()
         state._clear_mic_muted_led()
+        state._persist_mic_state()
         state.logger.info("Scene off: mic unmuted")
 
     # Unmute speaker
     if state._speaker_muted:
         state._speaker_muted = False
+        state._persist_speaker_state()
         state.logger.info("Scene off: speaker unmuted")
 
     # Restore idle LED

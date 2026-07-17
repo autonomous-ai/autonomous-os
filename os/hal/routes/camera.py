@@ -71,6 +71,7 @@ def disable_camera():
     state._camera_disabled = True
     state._camera_manual_override = True
     state.camera_capture.stop()
+    state._persist_camera_state()
     state.logger.info("Camera disabled by user (manual override set)")
     return {"status": "ok"}
 
@@ -85,6 +86,7 @@ def enable_camera():
     state._camera_disabled = False
     state._camera_manual_override = False
     state.camera_capture.start()
+    state._persist_camera_state()
     state.logger.info("Camera re-enabled by user (manual override cleared)")
     return {"status": "ok"}
 
