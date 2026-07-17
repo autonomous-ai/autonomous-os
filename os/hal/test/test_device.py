@@ -61,7 +61,9 @@ class TestParsing(unittest.TestCase):
         caps = load_device("lamp", DEVICES_DIR).capabilities
         self.assertEqual(caps["motion"].driver, "feetech")
         self.assertEqual(caps["light"].driver, "ws2812")
-        self.assertEqual(caps["display"].driver, "gc9a01")
+        # Lamp has no screen — declaring display would make HAL run a
+        # framebuffer-only render loop nobody sees (see DEVICE.md).
+        self.assertNotIn("display", caps)
 
     def test_safety_ref_parsed(self):
         # SAMPLE declares no top-level safety_ref; lamp declares SAFETY.md.
@@ -141,9 +143,11 @@ class TestRealDeviceFiles(unittest.TestCase):
     def test_lamp_is_maximal(self):
         lamp = load_device("lamp", DEVICES_DIR)
         groups = set(lamp.capabilities)
-        # Lamp is the maximal device: it has motion AND display.
+        # Lamp is the maximal device: it has motion and vision — but no
+        # display (no screen; expression goes through /emotion instead).
         self.assertIn("motion", groups)
-        self.assertIn("display", groups)
+        self.assertIn("vision", groups)
+        self.assertNotIn("display", groups)
         self.assertTrue(lamp.capabilities["audio"].required)
 
     def test_intern_v2_capabilities(self):
@@ -227,10 +231,11 @@ class TestInternBootProof(unittest.TestCase):
         declared = set(load_device(device_type, DEVICES_DIR).declared_routes())
         return self.ALL_ROUTERS & declared
 
-    def test_lamp_mounts_servo_and_display(self):
+    def test_lamp_mounts_servo_but_not_display(self):
         m = self._mounted("lamp")
         self.assertIn("servo", m)
-        self.assertIn("display", m)
+        # No display declared -> HAL never mounts /display on lamp.
+        self.assertNotIn("display", m)
 
     def test_intern_mounts_neither_servo_nor_display(self):
         m = self._mounted("intern-v2")
