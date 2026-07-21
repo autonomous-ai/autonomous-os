@@ -265,15 +265,20 @@ async def lifespan(app: FastAPI):
             logger.info("AnimationService skipped — device does not declare 'motion' (servo route not mounted)")
             return
         try:
-            svc = AnimationService(
-                port=SERVO_PORT, lamp_id=DEVICE_ID, fps=SERVO_FPS,
-                duration=SERVO_PLAY_RAMP_S, hold_s=SERVO_HOLD_S,
-            )
+            # Per-driver construction: the feetech backend needs the serial-bus
+            # kwargs; SDK-backed drivers own their transport config (env-tunable).
+            if (_motion_driver or "feetech") == "feetech":
+                svc = AnimationService(
+                    port=SERVO_PORT, lamp_id=DEVICE_ID, fps=SERVO_FPS,
+                    duration=SERVO_PLAY_RAMP_S, hold_s=SERVO_HOLD_S,
+                )
+            else:
+                svc = AnimationService()
             svc.start()
             state.animation_service = svc
-            logger.info("AnimationService started")
+            logger.info("Motion service started (%s)", type(svc).__name__)
         except Exception as e:
-            logger.warning(f"AnimationService failed to start: {e}")
+            logger.warning(f"Motion service failed to start: {e}")
 
     def _init_led():
         if not RGBService:

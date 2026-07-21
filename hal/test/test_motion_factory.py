@@ -1,8 +1,11 @@
 """Tests for the motion driver factory (hal/drivers/motors/factory.py).
 
 Pure logic, no hardware. Also parses the REAL committed devices/reachy-mini
-DEVICE.md to guard the declared driver name against drift.
+DEVICE.md to guard the declared driver name against drift, and AST-checks
+ReachyMotionService against the MotionService protocol (the reachy_mini SDK
+is not installed on dev machines, so the module can't be imported here).
 """
+import ast
 import os
 import unittest
 
@@ -55,14 +58,59 @@ class TestReachyMiniDeclaration(unittest.TestCase):
         self.assertEqual(caps["motion"].driver, "reachy_sdk")
         self.assertTrue(caps["motion"].required)
 
-    def test_unregistered_reachy_sdk_fails_loud_today(self):
-        # Until ReachyMotionService lands, booting reachy-mini must fail loud,
-        # not silently fall back to another backend.
-        caps = self._load_caps()
-        if caps["motion"].driver in MOTION_DRIVERS:
-            self.skipTest("reachy_sdk driver is now registered")
-        with self.assertRaises(RuntimeError):
-            resolve_motion_class(caps["motion"].driver, caps["motion"].required)
+    def test_reachy_sdk_is_registered(self):
+        self.assertIn("reachy_sdk", MOTION_DRIVERS)
+        module_path, class_name = MOTION_DRIVERS["reachy_sdk"]
+        self.assertEqual(class_name, "ReachyMotionService")
+
+    def test_reachy_sdk_resolves_or_degrades(self):
+        # On dev machines the reachy-mini package is absent → registered driver
+        # import fails → None (plan_mounts handles required); on-device it
+        # resolves to the class. Either way it must not raise.
+        cls = resolve_motion_class("reachy_sdk", required=True)
+        if cls is not None:
+            self.assertEqual(cls.__name__, "ReachyMotionService")
+
+
+# Method/property surface of the MotionService protocol (hal/drivers/motors/base.py).
+_PROTOCOL_MEMBERS = {
+    "start", "stop", "is_connected",
+    "dispatch", "get_available_recordings", "add_recording", "ensure_running",
+    "is_suppressed",
+    "freeze", "unfreeze", "is_frozen",
+    "move_to", "move_and_hold", "get_joint_names", "get_positions",
+    "send_positions",
+    "zero_pose", "release", "resume", "hold", "joint_status",
+    "aim", "nudge",
+}
+
+
+class TestReachyServiceConformance(unittest.TestCase):
+    """AST-level protocol conformance — no reachy_mini import needed."""
+
+    def test_reachy_service_implements_protocol_surface(self):
+        path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "..", "drivers", "motors", "reachy_service.py",
+        )
+        with open(path, encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+
+        cls = next(
+            (n for n in ast.walk(tree)
+             if isinstance(n, ast.ClassDef) and n.name == "ReachyMotionService"),
+            None,
+        )
+        self.assertIsNotNone(cls, "ReachyMotionService class not found")
+
+        defined = {
+            n.name for n in cls.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        missing = _PROTOCOL_MEMBERS - defined
+        self.assertFalse(
+            missing, f"ReachyMotionService missing protocol members: {sorted(missing)}"
+        )
 
 
 if __name__ == "__main__":

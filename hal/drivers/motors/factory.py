@@ -22,6 +22,7 @@ logger = logging.getLogger("hal.motion.factory")
 # Add new motion backends here as they are implemented.
 MOTION_DRIVERS: dict[str, Tuple[str, str]] = {
     "feetech": ("hal.drivers.motors.animation_service", "AnimationService"),
+    "reachy_sdk": ("hal.drivers.motors.reachy_service", "ReachyMotionService"),
 }
 
 

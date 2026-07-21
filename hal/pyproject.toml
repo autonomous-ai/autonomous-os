@@ -58,6 +58,22 @@ required-environments = [
 [tool.uv.sources]
 lerobot = { git = "https://github.com/huggingface/lerobot", rev = "55198de096f46a8e0447a8795129dd9ee84c088c" }
 
+# Static metadata for sdist-only deps of the `reachy` extra. Without this,
+# resolving the lock (on ANY machine, even when the extra is not installed)
+# builds pygobject/pycairo from source just to read their metadata — which
+# fails wherever cairo/gobject dev libs are absent (lamp images, dev Macs).
+# With static metadata uv skips the build at resolve time; the real build
+# only happens at install time on a device that selects --extra reachy.
+[[tool.uv.dependency-metadata]]
+name = "pygobject"
+version = "3.46.0"
+requires-dist = ["pycairo>=1.16.0"]
+requires-python = ">=3.8"
+
+[[tool.uv.dependency-metadata]]
+name = "pycairo"
+requires-python = ">=3.9"
+
 [project.optional-dependencies]
 dev = [
     "pyflakes>=3.0",
@@ -69,4 +85,14 @@ hardware = [
     "lgpio",
     "rpi-ws281x",
     "spidev",
+]
+# Reachy Mini body only (devices/reachy-mini) — Pollen's SDK client.
+# NOT merged into `hardware`: reachy-mini pulls pygobject/pycairo which build
+# from source and need cairo/gobject system libs (present on Pollen's OS,
+# absent on lamp images — merging would break lamp OTA).
+# Install on-device with: uv sync --extra reachy
+reachy = [
+    # linux-only marker: the SDK pins onnxruntime==1.27.0 which has no
+    # darwin-x86_64 wheels; the extra only ever installs on the robot's Pi.
+    "reachy-mini>=1.9; sys_platform == 'linux'",
 ]
