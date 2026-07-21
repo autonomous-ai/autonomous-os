@@ -31,6 +31,16 @@ OTA_METADATA_URL ?=
 # class. E.g. make build TARGET=opi DEVICE_TYPE=intern.
 DEVICE_TYPE ?=
 
+# Per-image default agent runtime, baked into f_r_default_agent so it survives
+# a Factory Reset (see build-orangepi.sh). OPTIONAL — unset behaves exactly
+# like before this existed. Also used below to name the output file so
+# multiple case-color builds of the SAME DEVICE_TYPE don't clobber each other.
+DEFAULT_AGENT ?=
+
+# Physical case color — SSH-gate only, and only consulted for
+# DEVICE_TYPE=intern-v2 (see build-orangepi.sh). OPTIONAL.
+CASE_COLOR ?=
+
 ifndef BUILD_SCRIPT
 $(error Unknown TARGET=$(TARGET). Supported: rpi, opi)
 endif
@@ -39,11 +49,16 @@ endif
 # builds clobber each other. The build script always writes BUILT_IMG; the build
 # target renames it to the device-typed IMG_FILE (3 device types = 3 images).
 # OPi build produces .img.xz (compressed); RPi build produces raw .img.
+# DEFAULT_AGENT (when set) is folded into IMG_FILE too — named by agent, not by
+# CASE_COLOR, since the agent name is what you actually remember later — so
+# multiple case-color builds of the SAME DEVICE_TYPE (e.g. intern-v2 blue vs.
+# black) land as separate files instead of clobbering one another. Unset
+# DEFAULT_AGENT (every build before this feature existed) → filename unchanged.
 BUILT_IMG_rpi := golden.img
 BUILT_IMG_opi := $(DEVICE_TYPE)/golden-opi.img.xz
 BUILT_IMG := $(BUILT_IMG_$(TARGET))
-IMG_FILE_rpi := golden-$(DEVICE_TYPE).img
-IMG_FILE_opi := $(DEVICE_TYPE)/golden-opi-$(DEVICE_TYPE).img.xz
+IMG_FILE_rpi := golden-$(DEVICE_TYPE)$(if $(DEFAULT_AGENT),-$(DEFAULT_AGENT),).img
+IMG_FILE_opi := $(DEVICE_TYPE)/golden-opi-$(DEVICE_TYPE)$(if $(DEFAULT_AGENT),-$(DEFAULT_AGENT),).img.xz
 IMG_FILE := $(IMG_FILE_$(TARGET))
 
 # Preflight — check Docker resources + clean dangling layers before a long
@@ -93,6 +108,8 @@ build: build-preflight
 	-e RPI_MODEL=$(RPI_MODEL) \
 	-e OTA_METADATA_URL=$(OTA_METADATA_URL) \
 	-e DEVICE_TYPE=$(DEVICE_TYPE) \
+	-e DEFAULT_AGENT=$(DEFAULT_AGENT) \
+	-e CASE_COLOR=$(CASE_COLOR) \
 	-e BUILD_GIT_SHA=$(shell git -C .. rev-parse HEAD 2>/dev/null || echo unknown) \
 	pi-builder /work/$(BUILD_SCRIPT)
 	@# Name the output per device type so lamp/intern/dog images don't clobber.
