@@ -231,12 +231,37 @@ In `auto` mode the control is actively set to 3 (aperture-priority) on every ope
 
 Frame rate vs brightness is a hard physical trade-off in a dark room: the max exposure that still holds 30fps is ~33ms (`HAL_CAMERA_EXPOSURE=330`); a brighter image needs a longer exposure (fewer fps) or more gain (noisier). The stream endpoint is separately capped at `HAL_CAMERA_STREAM_FPS` (default 10), so the monitor's live view does not reflect the capture rate.
 
+## Device Selection
+
+By default the camera is opened by index: `HAL_CAMERA_INDEX` (default `0`) → `/dev/video0`, with a fallback scan (`/dev/cam` udev symlink, then indexes 0–5). A bare index is fragile — plugging another USB device or a changed boot enumeration order can shuffle `/dev/video<N>`.
+
+`HAL_CAMERA_NAME` (optional) selects the camera by hardware name instead, mirroring how audio devices are picked (`resolve_camera_device_id()` in `drivers/camera/video_capture_device.py`). It is a case-insensitive substring of the v4l2 device name (e.g. `OPENAICAM`). Resolution order:
+
+1. **`/dev/v4l/by-id` capture symlink** (`...-video-index0`) whose name contains the needle — returned as the symlink path, so reopens keep following it even when the kernel renumbers `/dev/video<N>` after a replug or USB power-cycle.
+2. **sysfs name scan** — `/sys/class/video4linux/video<N>/name` match (lowest N first), skipping UVC metadata sibling nodes (same name, non-zero `index` attribute, cannot capture).
+3. **Legacy index fallback** with a warning when nothing matches (camera absent or renamed).
+
+Unset `HAL_CAMERA_NAME` keeps the exact legacy index behavior.
+
 ## Failure Recovery
 
 The capture loop (`drivers/camera/video_capture_device.py`) recovers from two distinct device failures, both by releasing and reopening the V4L2 device via `_reopen_with_backoff()` (retry with exponential backoff 1s→30s, never permanently exits the loop while HAL runs; MJPEG, resolution and exposure are re-applied on every reopen):
 
 - **`read()` failure** — USB autosuspend or a transient V4L2 error makes `read()` return `ret=False`. One 1s retry, then reopen.
 - **ISP freeze** — the camera keeps delivering the **same buffer** with `ret=True` (seen on the UVC cam with manual exposure/gain), so the `read()`-failure path never fires while every consumer (realtime look, sensing, tracking, snapshot) silently works on a stale scene. A watchdog compares a subsampled signature of each frame; byte-identical frames for 10s (`_FREEZE_REOPEN_S`) cannot come from a live sensor and trigger a reopen. Log line: `Camera frozen — identical frames for Ns, reopening device`.
+- **ISP color corruption** — the same wedged ISP can instead keep delivering **changing** frames whose chroma is garbage: posterized oversaturated green regions plus complementary magenta/pink patches, with every v4l2 control correct (seen live on the SunplusIT cam right after a close/open cycle). The freeze watchdog cannot see this, so a second watchdog checks the subsampled frame in HSV (throttled to ~1 check/s): a frame is corrupt when extreme-saturation green covers ≥10% (`_COLOR_GREEN_FRAC`) **and** magenta ≥0.8% (`_COLOR_MAGENTA_FRAC`) at saturation ≥100 (`_COLOR_SAT_MIN`, value ≥60). Requiring both complementary hue families at once is the false-positive guard — a green wall, foliage, or the lamp's own LED spill are single-hue. Corruption must be uninterrupted for 30s (`_COLOR_CORRUPT_REOPEN_S`; one clean frame resets) before triggering the same recovery as a freeze. Thresholds were calibrated against a live corrupt capture (green 0.19 / magenta 0.012) vs clean scenes (0.000 / 0.000). Log line: `Camera color corruption — posterized green/magenta frames for Ns, reopening device`.
+
+### ISP deep-stuck → USB power-cycle escalation
+
+Sometimes the ISP wedges **deeper** than a V4L2 reopen can fix: frames come back posterized green/pink or freeze again right after the reopen, even though every v4l2 control is correct (auto_exposure=3, sane gain). Observed on the SunplusIT UVC cam (`1bcf:28cc`); the only verified fix short of a reboot is power-cycling the USB port.
+
+Both ISP watchdogs (freeze and color corruption) share one escalation ladder via `_recover_isp_fault()`:
+
+- **Trigger** — ≥3 ISP-fault reopens (`_ISP_FAULT_ESCALATE_COUNT`) within a 10-minute sliding window (`_ISP_FAULT_WINDOW_S`, 600s). `read()`-failure reopens do **not** count.
+- **USB path resolution** — dynamic, never hardcoded: walk up the sysfs parent chain from `/sys/class/video4linux/video<N>/device` until the node carrying `idVendor` (the USB device), take its basename (e.g. `1-1`). If the camera is not USB-backed (e.g. a CSI sensor), escalation is skipped with a log line and the plain reopen path is kept.
+- **Power-cycle** — write the bus path to `/sys/bus/usb/drivers/usb/unbind`, wait ~3s (`_USB_REBIND_DELAY_S`), write it to `.../bind` (HAL runs as root), then wait up to 15s (`_USB_DEVNODE_TIMEOUT_S`) for `/dev/video<N>` to re-enumerate before handing control back to `_reopen_with_backoff()`. Best-effort: any sysfs failure logs and falls back to the plain reopen.
+- **Cooldown** — at most one power-cycle per 10 minutes (`_USB_POWER_CYCLE_COOLDOWN_S`); a physically dead camera must not loop unbind/bind forever. While in cooldown, faults keep taking the plain reopen path.
+- **Log line** — `Camera USB power-cycle (ISP deep-stuck: N ISP-fault reopens in Ws)`.
 
 ## Edge Cases
 

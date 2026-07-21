@@ -176,8 +176,10 @@ func (h *AgentHandler) Analytics(c *gin.Context) {
 				m.TokensTotal += td.tokens
 				m.TokensInput += td.tokensIn
 				m.TokensOutput += td.tokensOut
-				// Billed: cache read costs 10% of input price
-				m.TokensBilled += td.tokensIn + td.cacheWrite + td.cacheRead/10 + td.tokensOut
+				// Billed: the Autonomous backend charges cached reads at FULL
+				// price — billed must match the token count users see in billing,
+				// so no 0.1x cache discount here.
+				m.TokensBilled += td.tokensIn + td.cacheWrite + td.cacheRead + td.tokensOut
 				if td.toolCalls > m.InnerMax {
 					m.InnerMax = td.toolCalls
 				}

@@ -221,12 +221,37 @@ Default áp dụng kể cả khi `.env` không có entry nào. Muốn ghim frame
 
 Frame rate vs độ sáng là trade-off vật lý cứng trong phòng tối: exposure tối đa vẫn giữ được 30fps là ~33ms (`HAL_CAMERA_EXPOSURE=330`); ảnh sáng hơn cần exposure dài hơn (ít fps) hoặc gain cao hơn (nhiễu hơn, và trên ~144 rủi ro loạn màu). Stream endpoint bị cap riêng bởi `HAL_CAMERA_STREAM_FPS` (default 10), nên live view trên monitor không phản ánh tốc độ capture thật.
 
+## Chọn thiết bị (Device Selection)
+
+Mặc định camera mở theo index: `HAL_CAMERA_INDEX` (default `0`) → `/dev/video0`, kèm fallback scan (symlink udev `/dev/cam`, rồi quét index 0–5). Index trần dễ vỡ — cắm thêm USB device khác hoặc thứ tự enumerate lúc boot đổi là `/dev/video<N>` xáo trộn.
+
+`HAL_CAMERA_NAME` (tuỳ chọn) chọn camera theo **tên phần cứng**, giống cách audio chọn device (`resolve_camera_device_id()` trong `drivers/camera/video_capture_device.py`). Giá trị là substring không phân biệt hoa thường của tên thiết bị v4l2 (ví dụ `OPENAICAM`). Thứ tự resolve:
+
+1. **Symlink capture `/dev/v4l/by-id`** (`...-video-index0`) có tên chứa needle — trả về chính đường symlink, nên các lần reopen sau vẫn bám đúng thiết bị kể cả khi kernel đánh số lại `/dev/video<N>` sau replug hay USB power-cycle.
+2. **Scan tên sysfs** — match `/sys/class/video4linux/video<N>/name` (N nhỏ nhất trước), bỏ qua node metadata anh em của UVC (cùng tên, thuộc tính `index` khác 0, không capture được).
+3. **Fallback về index cũ** kèm warning khi không match gì (camera rớt hoặc đổi tên).
+
+Không set `HAL_CAMERA_NAME` thì hành vi index cũ giữ nguyên 100%.
+
 ## Khôi phục lỗi (Failure Recovery)
 
 Capture loop (`drivers/camera/video_capture_device.py`) tự khôi phục 2 dạng lỗi thiết bị, đều bằng cách release rồi mở lại device V4L2 qua `_reopen_with_backoff()` (retry backoff lũy tiến 1s→30s, không bao giờ thoát loop vĩnh viễn khi HAL còn chạy; MJPEG, độ phân giải và exposure được áp lại sau mỗi lần reopen):
 
 - **`read()` fail** — USB autosuspend hoặc lỗi V4L2 thoáng qua làm `read()` trả `ret=False`. Retry 1 lần sau 1s, rồi reopen.
 - **ISP đóng băng** — camera cứ nhả lại **cùng một buffer** với `ret=True` (đã gặp trên UVC cam khi dùng manual exposure/gain), nên nhánh recovery `read()`-fail không bao giờ kích hoạt trong khi mọi consumer (realtime look, sensing, tracking, snapshot) âm thầm xử lý cảnh cũ. Watchdog so sánh chữ ký frame đã subsample; frame byte-identical liên tục 10s (`_FREEZE_REOPEN_S`) không thể đến từ sensor thật → reopen. Log: `Camera frozen — identical frames for Ns, reopening device`.
+- **ISP loạn màu (color corruption)** — cùng bệnh ISP kẹt nhưng frame vẫn **thay đổi**, chỉ có chroma là rác: vùng xanh lá bão hoà cực đại posterize + mảng magenta/hồng bổ túc, trong khi mọi v4l2 control đều đúng (đã bắt được mẫu sống trên cam SunplusIT ngay sau một chu kỳ close/open). Freeze watchdog mù với mode này, nên có watchdog thứ hai check frame subsample trong HSV (throttle ~1 lần/giây): frame bị coi là corrupt khi xanh lá bão hoà cao phủ ≥10% (`_COLOR_GREEN_FRAC`) **và** magenta ≥0.8% (`_COLOR_MAGENTA_FRAC`) ở saturation ≥100 (`_COLOR_SAT_MIN`, value ≥60). Đòi cả hai họ hue bổ túc xuất hiện cùng lúc chính là chốt chặn false-positive — tường xanh, cây cối, hay LED của chính lamp hắt màu chỉ có 1 hue. Corruption phải liên tục 30s (`_COLOR_CORRUPT_REOPEN_S`; 1 frame sạch là reset) mới kích recovery như freeze. Ngưỡng calibrate từ ảnh corrupt thật (green 0.19 / magenta 0.012) vs cảnh sạch (0.000 / 0.000). Log: `Camera color corruption — posterized green/magenta frames for Ns, reopening device`.
+
+### ISP kẹt sâu → leo thang USB power-cycle
+
+Đôi khi ISP kẹt **sâu** hơn mức reopen V4L2 chữa được: frame trở lại vẫn posterize xanh/hồng hoặc freeze lại ngay sau reopen, dù mọi v4l2 control đều đúng (auto_exposure=3, gain hợp lý). Đã quan sát trên UVC cam SunplusIT (`1bcf:28cc`); cách chữa duy nhất đã verify (không cần reboot) là power-cycle cổng USB.
+
+Cả hai watchdog ISP (freeze và loạn màu) dùng chung một thang leo qua `_recover_isp_fault()`:
+
+- **Trigger** — ≥3 lần reopen do ISP fault (`_ISP_FAULT_ESCALATE_COUNT`) trong cửa sổ trượt 10 phút (`_ISP_FAULT_WINDOW_S`, 600s). Reopen do `read()`-fail **không** được tính.
+- **Resolve USB path** — động, không hardcode: đi ngược chuỗi parent sysfs từ `/sys/class/video4linux/video<N>/device` tới node có `idVendor` (chính là USB device), lấy basename (ví dụ `1-1`). Nếu camera không phải USB (ví dụ sensor CSI) → bỏ qua leo thang, log lý do và giữ nguyên đường reopen thường.
+- **Power-cycle** — ghi bus path vào `/sys/bus/usb/drivers/usb/unbind`, đợi ~3s (`_USB_REBIND_DELAY_S`), ghi vào `.../bind` (HAL chạy root), rồi đợi tối đa 15s (`_USB_DEVNODE_TIMEOUT_S`) cho `/dev/video<N>` enumerate lại trước khi trả quyền cho `_reopen_with_backoff()`. Best-effort: lỗi sysfs nào cũng chỉ log rồi fallback về reopen thường.
+- **Cooldown** — tối đa 1 lần power-cycle mỗi 10 phút (`_USB_POWER_CYCLE_COOLDOWN_S`); camera chết hẳn không được kéo loop unbind/bind vô hạn. Trong thời gian cooldown, fault vẫn đi đường reopen thường.
+- **Log** — `Camera USB power-cycle (ISP deep-stuck: N ISP-fault reopens in Ws)`.
 
 ## Edge Cases
 

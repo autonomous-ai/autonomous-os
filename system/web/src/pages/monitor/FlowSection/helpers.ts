@@ -313,6 +313,18 @@ export function refineTurnTypeFromSensingInputs(turn: Turn): void {
     return;
   }
 
+  // OpenClaw heartbeat runs (reply = HEARTBEAT_OK, tagged by the OS server via
+  // the heartbeat_run flow event). Classify FIRST: their chat_input can carry a
+  // stale copy of the previous turn's message (history-fetch race on old
+  // events), which would otherwise mislabel them as sensing/channel and render
+  // a doppelganger of the real turn.
+  for (const ev of turn.events) {
+    if (ev.type === "heartbeat_run" || (ev.type === "flow_event" && ev.detail?.node === "heartbeat_run")) {
+      turn.type = "heartbeat";
+      return;
+    }
+  }
+
   // Reclassify channel turns that are actually sensing events routed via OpenClaw channel.
   // node-host is the device's own WebSocket identity in OpenClaw — it sends sensing events AND
   // voice commands via chat.send, so sender=node-host alone doesn't mean "system".
@@ -982,9 +994,10 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
       if (inTok || outTok) pushLLMTokens(`tokens: ${fmtToken(inTok)} in / ${fmtToken(outTok)} out`);
       if (cacheRead || cacheWrite) pushLLMTokens(`cache: ${fmtToken(cacheRead)} read / ${fmtToken(cacheWrite)} write`);
       if (total) pushLLMTokens(`total: ${fmtToken(total)}`);
-      // Effective (billed) tokens: cache read costs 10% of input price
-      const billed = inTok + cacheWrite + Math.round(cacheRead * 0.1) + outTok;
-      if (billed) pushLLMTokens(`billed: ~${fmtToken(billed)}`);
+      // Billed tokens: the Autonomous backend charges cached reads at FULL
+      // price, so billed == total (no 0.1x discount math).
+      const billed = inTok + cacheWrite + cacheRead + outTok;
+      if (billed) pushLLMTokens(`billed: ${fmtToken(billed)}`);
     }
     if (ev.type === "flow_event" && ev.detail?.node === "lifecycle_end") {
       const d = ev.detail as Record<string, any> | undefined;
@@ -1258,7 +1271,9 @@ export function turnDurationMs(turn: Turn): number {
 }
 
 // Extract billed tokens from a turn's token_usage event.
-// Billed = input + cache_write + ceil(cache_read * 0.1) + output.
+// Billed = input + cache_write + cache_read + output: the Autonomous backend
+// bills cached reads at FULL price, so no Anthropic-style 0.1x discount here —
+// a discounted number would not match the token count users see in billing.
 export function turnBilledTokens(turn: Turn): number {
   for (const ev of turn.events) {
     if (ev.type === "flow_event" && ev.detail?.node === "token_usage") {
@@ -1267,7 +1282,7 @@ export function turnBilledTokens(turn: Turn): number {
       const outTok = Number(u?.output_tokens ?? 0);
       const cacheRead = Number(u?.cache_read_tokens ?? 0);
       const cacheWrite = Number(u?.cache_write_tokens ?? 0);
-      return inTok + cacheWrite + Math.round(cacheRead * 0.1) + outTok;
+      return inTok + cacheWrite + cacheRead + outTok;
     }
   }
   return 0;

@@ -285,6 +285,7 @@ import {
   Mic, Mic2, Volume2, Eye, Activity, Smile, Hand, Armchair, Speech,
   Thermometer, Settings, Music, Monitor, Clock, CircleHelp,
   Wind, Bot, MessagesSquare, Moon, Droplet, Radio, Sun, UserPlus, UserMinus,
+  HeartPulse,
 } from "lucide-react";
 
 export const TYPE_LUCIDE: Record<string, LucideIcon> = {
@@ -303,6 +304,7 @@ export const TYPE_LUCIDE: Record<string, LucideIcon> = {
   emotion: Smile, activity: Activity, wellbeing: Droplet, music: Music,
   sensing: Radio, posture: Armchair,
   cron: Clock, "cron:music": Music,
+  heartbeat: HeartPulse,
   "ambient:breathing": Wind, "ambient:movement": Bot, "ambient:mumble": Speech,
   "ambient:idle": Moon,
   "music.mood": Music,
@@ -320,7 +322,7 @@ export const TYPE_LABEL: Record<string, string> = {
   "light.level": "light", environment: "env", system: "sys",
   "music.mood": "mood", web_chat: "web", telegram: "channel", discord: "channel",
   slack: "channel", wechat: "channel", channel: "channel", schedule: "sched",
-  cron: "cron", "cron:music": "music",
+  cron: "cron", "cron:music": "music", heartbeat: "heartbeat",
 };
 
 export const CHANNEL_FALLBACK_MESSAGE = "Message from channel";

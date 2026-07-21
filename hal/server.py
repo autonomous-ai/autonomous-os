@@ -32,6 +32,7 @@ from hal.config import (
     CAMERA_GAIN,
     CAMERA_HEIGHT,
     CAMERA_INDEX,
+    CAMERA_NAME,
     CAMERA_WIDTH,
     DL_API_KEY,
     HTTP_HOST,
@@ -112,33 +113,43 @@ _declared = _profile.declared_routes()
 
 # Warm the heaviest driver chain (lerobot → torch, ~4s of the ~7.5s total import
 # time on an A523) in parallel with the rest of the module imports below.
-# Python's per-module import locks make the gated
-# `from hal.drivers.motors.animation_service import ...` further down wait on —
-# not duplicate — this import, so it acts as a join point.
+# Python's per-module import locks make the gated factory import further down
+# wait on — not duplicate — this import, so it acts as a join point.
 if "servo" in _declared:
     import importlib
+    from hal.drivers.motors.factory import MOTION_DRIVERS
+
+    _motion_cap = _profile.capabilities.get("motion")
+    _motion_driver = _motion_cap.driver if _motion_cap else None
+    _motion_entry = MOTION_DRIVERS.get(_motion_driver or "feetech")
 
     def _warm_import_servo():
-        try:
-            importlib.import_module("hal.drivers.motors.animation_service")
-        except Exception:
-            pass  # the gated import below reports the real error
+        if _motion_entry:
+            try:
+                importlib.import_module(_motion_entry[0])
+            except Exception:
+                pass  # the factory import below reports the real error
 
     threading.Thread(target=_warm_import_servo, daemon=True, name="warm-import-servo").start()
 
 # --- Lazy imports for hardware drivers (may not be available on dev machines),
 # gated on the declared routes so undeclared hardware costs zero import time ---
 
-AnimationService = None
+AnimationService = None  # resolved motion service class (may be any MotionService impl)
 RGBService = None
 sd = None
 np = None
 
 if "servo" in _declared:
-    try:
-        from hal.drivers.motors.animation_service import AnimationService
-    except ImportError as e:
-        logger.warning(f"Servo drivers not available: {e}")
+    from hal.drivers.motors.factory import resolve_motion_class
+    _motion_cap = _profile.capabilities.get("motion")
+    AnimationService = resolve_motion_class(
+        _motion_cap.driver if _motion_cap else None,
+        _motion_cap.required if _motion_cap else False,
+    )
+    if AnimationService is None:
+        logger.warning("Servo motion service not available (driver: %s)",
+                       _motion_cap.driver if _motion_cap else None)
 else:
     logger.info("Servo drivers skipped — 'servo' not declared in DEVICE.md")
 
@@ -159,6 +170,7 @@ except ImportError as e:
 cv2 = None
 LocalVideoCaptureDevice = None
 VideoCaptureDeviceInfo = None
+resolve_camera_device_id = None
 if "camera" in _declared:
     try:
         import cv2
@@ -167,7 +179,10 @@ if "camera" in _declared:
 
     try:
         from hal.drivers.camera.models import VideoCaptureDeviceInfo
-        from hal.drivers.camera.video_capture_device import LocalVideoCaptureDevice
+        from hal.drivers.camera.video_capture_device import (
+            LocalVideoCaptureDevice,
+            resolve_camera_device_id,
+        )
     except ImportError as e:
         logger.warning(f"Video capture device not available: {e}")
 else:
@@ -282,9 +297,10 @@ async def lifespan(app: FastAPI):
             logger.info("Camera skipped — device does not declare 'vision' (camera route not mounted)")
             return
         try:
+            camera_device_id = resolve_camera_device_id(CAMERA_NAME, CAMERA_INDEX)
             cap = LocalVideoCaptureDevice(
                 VideoCaptureDeviceInfo(
-                    device_id=CAMERA_INDEX,
+                    device_id=camera_device_id,
                     max_width=CAMERA_WIDTH,
                     max_height=CAMERA_HEIGHT,
                     auto_exposure=CAMERA_AUTO_EXPOSURE,
@@ -302,7 +318,7 @@ async def lifespan(app: FastAPI):
                 cap.start()
             state.camera_capture = cap
             logger.info(
-                f"Camera opened (index={CAMERA_INDEX}, {CAMERA_WIDTH}x{CAMERA_HEIGHT})"
+                f"Camera opened (device={camera_device_id}, {CAMERA_WIDTH}x{CAMERA_HEIGHT})"
             )
         except Exception as e:
             logger.warning(f"Camera failed to start: {e}")
@@ -1055,7 +1071,7 @@ def health():
     """Check which hardware drivers are available."""
     return {
         "status": "ok",
-        "servo": state.animation_service is not None and state.animation_service.robot is not None and state.animation_service.robot.is_connected,
+        "servo": state.animation_service is not None and state.animation_service.is_connected,
         "led": state.rgb_service is not None and state.rgb_service._driver is not None,
         "camera": state.camera_capture is not None and state.camera_capture.last_frame is not None,
         "audio": state.audio_output_device is not None or state.audio_input_device is not None,

@@ -31,6 +31,11 @@ motion.move   capability   devices/contract/capabilities.md      frozen
 The same capability appears at each level with a different job: `DEVICE.md` declares it,
 the route exposes it, the driver implements it, the board wires it.
 
+For motion, the driver level is pluggable: `DEVICE.md`'s `driver:` field selects the
+motion backend via a small factory (`hal/drivers/motors/factory.py`), and every backend
+conforms to the `MotionService` protocol (`hal/drivers/motors/base.py`) — so the servo
+routes never know which hardware is underneath.
+
 ## Declaration-driven mounting
 
 A device's `DEVICE.md` declares which capabilities its body has. At boot the runtime mounts
