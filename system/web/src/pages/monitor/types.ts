@@ -279,7 +279,9 @@ export const NAV: NavEntry[] = [
       { id: "face-owners", label: "Users",     icon: "☺", cap: Cap.Vision }, // user roster needs the camera
       { id: "camera",      label: "Camera",    icon: "◎", cap: Cap.Vision },
       { id: "sensing",     label: "Sensing",   icon: "◉", cap: Cap.Sensing },
-      { id: "analytics",   label: "Analytics", icon: "⊟" },
+      // Analytics hidden from the menu for now (section code kept; re-enable
+      // by uncommenting).
+      // { id: "analytics",   label: "Analytics", icon: "⊟" },
       { id: "servo",       label: "Servo",     icon: "⎈", cap: Cap.Motion },
       { id: "bluetooth",   label: "Bluetooth", icon: "✦", cap: Cap.Connectivity },
       { id: "logs",        label: "Logs",      icon: "☰" },

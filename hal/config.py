@@ -27,6 +27,13 @@ _mode = os.environ.get("HAL_MODE", "production").strip().lower()
 MODE: str = "developer" if _mode == "developer" else "production"
 HTTP_HOST: str = "0.0.0.0" if MODE == "developer" else "127.0.0.1"
 CAMERA_INDEX = int(os.environ.get("HAL_CAMERA_INDEX", "0"))
+# Optional camera selection by device NAME instead of a bare index (mirrors how
+# audio picks devices by hardware name). Case-insensitive substring matched
+# against the v4l2 device name (e.g. "OPENAICAM"); resolution prefers the
+# stable /dev/v4l/by-id capture symlink so the pick survives index shuffles
+# from replug/boot-order. Unset = legacy index behavior. On no match HAL logs
+# a warning and falls back to HAL_CAMERA_INDEX.
+CAMERA_NAME = os.environ.get("HAL_CAMERA_NAME", "").strip() or None
 CAMERA_WIDTH = int(os.environ.get("HAL_CAMERA_WIDTH", "640"))
 CAMERA_HEIGHT = int(os.environ.get("HAL_CAMERA_HEIGHT", "480"))
 # Camera exposure. Defaults to AUTO: manual exposure with high gain drives the

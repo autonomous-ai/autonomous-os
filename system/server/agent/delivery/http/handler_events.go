@@ -89,30 +89,59 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 	return nil
 }
 
+// parseHistoryTimestamp accepts both shapes OpenClaw uses for message
+// timestamps: RFC3339 strings (session store) and unix milliseconds (chat
+// events / some chat.history responses). Returns the zero time when the field
+// is absent or unparseable — callers treat zero as "fresh" to keep the old
+// behavior on gateways that omit timestamps.
+func parseHistoryTimestamp(raw json.RawMessage) time.Time {
+	if len(raw) == 0 {
+		return time.Time{}
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		if ts, err := time.Parse(time.RFC3339Nano, s); err == nil {
+			return ts
+		}
+		return time.Time{}
+	}
+	var ms int64
+	if json.Unmarshal(raw, &ms) == nil && ms > 0 {
+		return time.UnixMilli(ms)
+	}
+	return time.Time{}
+}
+
 // extractLastUserMessageFromHistory parses a chat.history payload and returns
-// the most recent role:"user" message text plus its senderLabel (empty if
-// absent). Content can be a plain string or an array of {type,text} blocks;
-// both shapes are handled. Returns ("","") if the payload is malformed or has
-// no user messages.
-func extractLastUserMessageFromHistory(payload json.RawMessage) (text string, senderLabel string) {
+// the most recent role:"user" message text, its senderLabel (empty if absent)
+// and its timestamp (zero when missing/unparseable — older gateways). Content
+// can be a plain string or an array of {type,text} blocks; both shapes are
+// handled. Returns ("","",zero) if the payload is malformed or has no user
+// messages. Callers use the timestamp to reject STALE messages: a fetch fired
+// at lifecycle_start can race OpenClaw persisting the new message and see only
+// the previous turn's input (heartbeat runs used to clone the prior turn's
+// [activity] text in the Flow monitor this way).
+func extractLastUserMessageFromHistory(payload json.RawMessage) (text string, senderLabel string, msgTime time.Time) {
 	var hist struct {
 		Messages []struct {
 			Role        string          `json:"role"`
+			Timestamp   json.RawMessage `json:"timestamp"`
 			Content     json.RawMessage `json:"content"`
 			SenderLabel string          `json:"senderLabel"`
 		} `json:"messages"`
 	}
 	if json.Unmarshal(payload, &hist) != nil {
-		return "", ""
+		return "", "", time.Time{}
 	}
 	for i := len(hist.Messages) - 1; i >= 0; i-- {
 		if hist.Messages[i].Role != "user" {
 			continue
 		}
 		senderLabel = hist.Messages[i].SenderLabel
+		msgTime = parseHistoryTimestamp(hist.Messages[i].Timestamp)
 		var s string
 		if json.Unmarshal(hist.Messages[i].Content, &s) == nil {
-			return s, senderLabel
+			return s, senderLabel, msgTime
 		}
 		var blocks []struct {
 			Type string `json:"type"`
@@ -125,9 +154,9 @@ func extractLastUserMessageFromHistory(payload json.RawMessage) (text string, se
 					parts = append(parts, b.Text)
 				}
 			}
-			return strings.Join(parts, " "), senderLabel
+			return strings.Join(parts, " "), senderLabel, msgTime
 		}
-		return "", senderLabel
+		return "", senderLabel, msgTime
 	}
-	return "", ""
+	return "", "", time.Time{}
 }

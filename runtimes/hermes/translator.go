@@ -36,6 +36,16 @@ type hermesUsage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
+	// OpenAI-style usage nests the cached portion under details — and its
+	// semantics differ from Anthropic: input_tokens is the TOTAL input
+	// INCLUDING the cached subset, while domain.TokenUsage follows Anthropic
+	// semantics (InputTokens = uncached only, cache read separate; the Flow
+	// monitor renders ↓in R<cache> from those). toDomain converts. Today the
+	// campaign-api path reports no cached_tokens (no caching) so this decodes
+	// to zero — mapped anyway so R appears the moment the backend supports it.
+	InputTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"input_tokens_details"`
 }
 
 func (u *hermesUsage) toDomain() *domain.TokenUsage {
@@ -45,10 +55,18 @@ func (u *hermesUsage) toDomain() *domain.TokenUsage {
 	if u.InputTokens == 0 && u.OutputTokens == 0 && u.TotalTokens == 0 {
 		return nil
 	}
+	in := u.InputTokens
+	cached := u.InputTokensDetails.CachedTokens
+	if cached > 0 && cached <= in {
+		in -= cached
+	} else {
+		cached = 0
+	}
 	return &domain.TokenUsage{
-		InputTokens:  u.InputTokens,
-		OutputTokens: u.OutputTokens,
-		TotalTokens:  u.TotalTokens,
+		InputTokens:     in,
+		OutputTokens:    u.OutputTokens,
+		TotalTokens:     u.TotalTokens,
+		CacheReadTokens: cached,
 	}
 }
 

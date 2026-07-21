@@ -3,7 +3,7 @@ import csv
 import time
 import logging
 import threading
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set
 from hal.follower import LeLampFollowerConfig, LeLampFollower
 from hal.presets import EMO_SLEEPY, SERVO_CMD_PLAY, SERVO_CMD_MUSIC_START, SERVO_CMD_MUSIC_STOP, SERVO_IDLE, SERVO_MUSIC_GROOVE
 
@@ -734,3 +734,234 @@ class AnimationService:
                 self._current_state = pos
         except Exception as e:
             logger.warning("move_to_raw: could not read state after move: %s", e)
+
+    # -----------------------------------------------------------------------
+    # Public accessors — MotionService contract (hal/drivers/motors/base.py)
+    #
+    # Routes call these instead of reaching into .robot / .bus / .bus_lock.
+    # Keeps all lerobot/scservo internals inside this class.
+    # -----------------------------------------------------------------------
+
+    @property
+    def is_connected(self) -> bool:
+        return self.robot is not None and getattr(self.robot, "is_connected", False)
+
+    def get_joint_names(self) -> Set[str]:
+        """Valid joint keys, e.g. {"base_yaw.pos", "base_pitch.pos", ...}."""
+        if not self.robot or not self.robot.bus or not self.robot.bus.motors:
+            return set()
+        return {f"{m}.pos" for m in self.robot.bus.motors}
+
+    def get_positions(self) -> Dict[str, float]:
+        """Read current positions from hardware (bus-only, no camera)."""
+        if not self.robot:
+            raise RuntimeError("Robot not connected")
+        with self.bus_lock:
+            obs = self.robot.get_observation()
+        return {k: v for k, v in obs.items() if k.endswith(".pos")}
+
+    def send_positions(self, positions: Dict[str, float]) -> None:
+        """Write joint positions directly (one-shot, no interpolation)."""
+        if not self.robot:
+            raise RuntimeError("Robot not connected")
+        with self.bus_lock:
+            self.robot.send_action(positions)
+
+    @property
+    def is_suppressed(self) -> bool:
+        """True when zero_pose or explicit hold is active."""
+        return getattr(self, "_zero_mode", False) or self._hold_mode
+
+    def ensure_running(self) -> None:
+        """Restart the event loop if it stopped (e.g. after zero/hold)."""
+        if not self._running.is_set():
+            self._running.set()
+            self._event_thread = threading.Thread(
+                target=self._event_loop, daemon=True,
+            )
+            self._event_thread.start()
+            logger.info("Animation event loop restarted")
+
+    def add_recording(self, name: str, actions: List[Dict[str, float]]) -> None:
+        """Cache a recording by name (used after upload)."""
+        self._recording_cache[name] = actions
+
+    def hold(self, explicit: bool = False) -> None:
+        """Suppress idle/ambient animations, torque stays ON."""
+        self._hold_mode = True
+        if explicit:
+            self._hold_explicit = True
+        logger.info(
+            "Hold mode activated (explicit=%s) — idle suppressed%s",
+            explicit, ", emotion servo fully suppressed" if explicit else "",
+        )
+
+    def zero_pose(self) -> None:
+        """Move to zero/park pose and hold (torque ON). Stops event loop."""
+        self._zero_mode = True
+        self._running.clear()
+        if self._event_thread and self._event_thread.is_alive():
+            self._event_thread.join(timeout=3.0)
+        try:
+            self._configure_servos_raw()
+        except Exception as e:
+            logger.warning("zero: raw configure failed: %s", e)
+        try:
+            self.move_to_raw(ZERO_RAW, duration=2.0)
+        except Exception as e:
+            logger.warning("Could not move to zero: %s", e)
+        self._sync_state_from_hardware()
+
+    def release(self) -> Dict[str, str]:
+        """Move to gravity-rest, then disable torque. Returns per-motor errors."""
+        self._running.clear()
+        if self._event_thread and self._event_thread.is_alive():
+            self._event_thread.join(timeout=3.0)
+        # Gravity-rest pose in raw encoder units.
+        rest_raw = {
+            "base_yaw":    2063,
+            "base_pitch":  1645,
+            "elbow_pitch": 1748,
+            "wrist_roll":  2067,
+            "wrist_pitch": 2125,
+        }
+        try:
+            self.move_to_raw(rest_raw, duration=2.0)
+        except Exception as e:
+            logger.warning("Could not move to rest before release: %s", e)
+        time.sleep(0.4)
+        errors: Dict[str, str] = {}
+        if not self.robot or not self.robot.bus:
+            return errors
+        bus = self.robot.bus
+        with self.bus_lock:
+            for motor_name in bus.motors:
+                try:
+                    bus.write("Torque_Enable", motor_name, 0)
+                except Exception as e:
+                    errors[motor_name] = str(e)
+        if errors:
+            logger.warning("Servo release errors (offline?): %s", errors)
+        else:
+            logger.info("release: torque disabled on all servos (arm limp)")
+        return errors
+
+    def resume(self) -> None:
+        """Exit zero/hold, re-enable torque, restart idle animation."""
+        self._zero_mode = False
+        self._hold_mode = False
+        self._hold_explicit = False
+        self._running.clear()
+        if self._event_thread and self._event_thread.is_alive():
+            self._event_thread.join(timeout=3.0)
+        try:
+            self._configure_servos_raw()
+        except Exception as e:
+            logger.warning("resume: raw configure failed: %s", e)
+        self._sync_state_from_hardware()
+        self._resume_duration = self.duration
+        self._running.set()
+        self.dispatch(SERVO_CMD_PLAY, self.idle_recording)
+        self._event_thread = threading.Thread(
+            target=self._event_loop, daemon=True,
+        )
+        self._event_thread.start()
+        logger.info("Servo resumed from zero-hold mode")
+
+    def joint_status(self) -> Dict[str, dict]:
+        """Per-joint online/offline status with angle and servo ID."""
+        if not self.robot or not self.robot.bus:
+            return {}
+        bus = self.robot.bus
+        ph = bus.port_handler
+        pk = bus.packet_handler
+        from scservo_sdk import COMM_SUCCESS
+
+        servos: Dict[str, dict] = {}
+        with self.bus_lock:
+            for motor_name, motor_obj in bus.motors.items():
+                key = f"{motor_name}.pos"
+                sid = motor_obj.id
+                detail = {"id": sid, "angle": None, "online": False, "error": None}
+                try:
+                    _, result, _ = pk.ping(ph, sid)
+                    if result != COMM_SUCCESS:
+                        detail["error"] = "no status packet"
+                    else:
+                        detail["online"] = True
+                        try:
+                            pos = bus.read("Present_Position", motor_name)
+                            detail["angle"] = float(pos)
+                        except Exception as e:
+                            detail["error"] = f"read failed: {e}"
+                except Exception as e:
+                    detail["error"] = str(e)
+                servos[key] = detail
+        return servos
+
+    def aim(self, direction: str, duration: float,
+            current_positions: Dict[str, float],
+            safety_policy: object) -> Dict[str, float]:
+        """Aim to a named direction. Returns the final joint positions."""
+        from hal.presets import AIM_PRESETS, AIM_LEFT, AIM_RIGHT
+        from hal.safety.policy import min_move_duration
+
+        preset = AIM_PRESETS.get(direction)
+        if preset is None:
+            raise ValueError(
+                f"Unknown direction '{direction}'. Available: {list(AIM_PRESETS.keys())}"
+            )
+
+        # Left/right only change yaw; other directions set all joints but
+        # keep current yaw. This is the lamp's 5-DOF kinematic convention.
+        if direction in (AIM_LEFT, AIM_RIGHT):
+            positions = {**current_positions, "base_yaw.pos": preset["base_yaw.pos"]}
+        else:
+            positions = {**preset, "base_yaw.pos": current_positions.get("base_yaw.pos", preset["base_yaw.pos"])}
+
+        eff_duration = min_move_duration(safety_policy, positions, current_positions, duration)
+
+        was_running = self._running.is_set()
+        if was_running:
+            self._running.clear()
+            if self._event_thread and self._event_thread.is_alive():
+                self._event_thread.join(timeout=2.0)
+
+        try:
+            if eff_duration > 0:
+                self.move_to(positions, duration=eff_duration)
+            else:
+                self.send_positions(positions)
+        finally:
+            if was_running and not self._running.is_set():
+                hold_pos = self._current_state
+                if hold_pos:
+                    self._current_recording = "__aim_hold__"
+                    self._current_actions = [hold_pos]
+                    self._current_frame_index = 0
+                    self._hold_until = time.time() + 5.0
+                self._running.set()
+                self._event_thread = threading.Thread(
+                    target=self._event_loop, daemon=True,
+                )
+                self._event_thread.start()
+                if not hold_pos:
+                    self.dispatch(SERVO_CMD_PLAY, self.idle_recording)
+
+        return positions
+
+    def nudge(self, yaw: float, pitch: float, duration: float,
+              current_positions: Dict[str, float],
+              safety_policy: object) -> Dict[str, float]:
+        """Relative nudge from current position. Returns final positions."""
+        from hal.safety.policy import min_move_duration
+
+        positions = dict(current_positions)
+        if yaw != 0:
+            positions["base_yaw.pos"] = current_positions.get("base_yaw.pos", 0) + yaw
+        if pitch != 0:
+            positions["base_pitch.pos"] = current_positions.get("base_pitch.pos", 0) + pitch
+
+        eff_duration = min_move_duration(safety_policy, positions, current_positions, duration)
+        self.move_and_hold(positions, duration=eff_duration)
+        return positions

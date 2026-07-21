@@ -55,7 +55,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 		} else {
 			hist, err := h.agentGateway.FetchChatHistory(payload.SessionKey, 5)
 			if err == nil && hist != nil {
-				if userMsg, _ := extractLastUserMessageFromHistory(hist); userMsg != "" {
+				if userMsg, _, _ := extractLastUserMessageFromHistory(hist); userMsg != "" {
 					if deviceTrace := h.agentGateway.MatchPendingByMessage(userMsg); deviceTrace != "" {
 						h.mapRunID(payload.RunID, deviceTrace)
 						slog.Info("mapped OpenClaw runId to device trace via chat.history",
@@ -187,7 +187,20 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 					slog.Info("chat.history raw payload", "component", "agent", "run_id", capturedRunID, "payload", string(historyPayload))
 				}
 
-				userMsg, senderLabel := extractLastUserMessageFromHistory(historyPayload)
+				userMsg, senderLabel, msgTime := extractLastUserMessageFromHistory(historyPayload)
+				// Staleness gate: this fetch races OpenClaw persisting the run's
+				// input. A self-fired run (heartbeat) has NO fresh user message, so
+				// the fetch lands on the PREVIOUS turn's — emitting it here made the
+				// heartbeat render as a doppelgänger of the last real turn (same
+				// [activity] text). A genuinely fresh channel message is persisted
+				// seconds before lifecycle_start, so a 120s window keeps every real
+				// case (steer-merges included) while rejecting minutes-old leftovers.
+				// Zero msgTime (no timestamp field) is treated as fresh.
+				if !msgTime.IsZero() && time.Since(msgTime) > 120*time.Second {
+					slog.Info("chat.history last user message is stale — not attributing to this run",
+						"component", "agent", "run_id", capturedRunID, "msg_age_s", int(time.Since(msgTime).Seconds()))
+					return
+				}
 				// Mark as confirmed channel run if a real sender is present.
 				// Guards against race: Telegram UUID mapped to sensing trace
 				// makes flowRunID = device-sensing-* → isChannelRun wrongly false.
@@ -336,14 +349,6 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 				capturedFlowRunID := flowRunID
 				capturedSessionKey := payload.SessionKey
 				go func() {
-					histPayload, err := h.agentGateway.FetchChatHistory(capturedSessionKey, 5)
-					if err != nil {
-						slog.Warn("chat.history usage fetch failed", "component", "agent", "run_id", capturedFlowRunID, "err", err)
-						return
-					}
-					if histPayload == nil {
-						return
-					}
 					type histUsage struct {
 						Input       int `json:"input"`
 						Output      int `json:"output"`
@@ -356,40 +361,97 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 						Text     string `json:"text,omitempty"`
 						Thinking string `json:"thinking,omitempty"`
 					}
-					var hist struct {
-						Messages []struct {
-							Role    string        `json:"role"`
-							Usage   *histUsage    `json:"usage,omitempty"`
-							Content []histContent `json:"content,omitempty"`
-						} `json:"messages"`
-					}
-					if json.Unmarshal(histPayload, &hist) != nil {
-						return
-					}
-					// Extract thinking from last assistant message and emit to monitor
-					for i := len(hist.Messages) - 1; i >= 0; i-- {
-						if hist.Messages[i].Role == "assistant" {
-							for _, c := range hist.Messages[i].Content {
-								if c.Type == "thinking" && c.Thinking != "" {
-									flow.Log("agent_thinking", map[string]any{
-										"run_id": capturedFlowRunID,
-										"source": "chat_history",
-										"text":   c.Thinking,
-									}, capturedFlowRunID)
-									h.monitorBus.Push(domain.MonitorEvent{
-										Type:    "thinking",
-										Summary: c.Thinking,
-										RunID:   capturedFlowRunID,
-									})
-								}
-							}
-							break
+					// This run's reply is persisted by OpenClaw around the same
+					// moment lifecycle end reaches us, so the first fetch can race
+					// persistence and see only the PREVIOUS turn's assistant
+					// message. Without the freshness check below that stale
+					// message's usage (and thinking) were attributed to this run —
+					// heartbeat runs cloned the prior turn's token numbers in the
+					// Flow monitor. Messages without a parseable timestamp (older
+					// gateways) are treated as fresh to keep the old behavior.
+					const staleAfter = 30 * time.Second
+					// Every non-success path logs and RETRIES (3 attempts, 2s
+					// apart): the silent returns this loop replaces were the
+					// long-standing "some turns never show tokens" hole — a WS
+					// hiccup at boot or a race with reply persistence dropped
+					// the attribution with no trace in the journal.
+					for attempt := 0; attempt < 3; attempt++ {
+						if attempt > 0 {
+							time.Sleep(2 * time.Second)
 						}
-					}
-					// Find last assistant message with usage.
-					for i := len(hist.Messages) - 1; i >= 0; i-- {
-						if hist.Messages[i].Role == "assistant" && hist.Messages[i].Usage != nil {
-							u := hist.Messages[i].Usage
+						histPayload, err := h.agentGateway.FetchChatHistory(capturedSessionKey, 5)
+						if err != nil {
+							slog.Warn("chat.history usage fetch failed — retrying", "component", "agent", "run_id", capturedFlowRunID, "attempt", attempt, "err", err)
+							continue
+						}
+						if histPayload == nil {
+							// nil-with-no-error is the deliberate stub signal from
+							// runtimes without walkable history (codex, claudecode):
+							// no usage to attribute — bail quietly, don't retry.
+							slog.Debug("chat.history not supported by this runtime — skipping usage attribution", "component", "agent", "run_id", capturedFlowRunID)
+							return
+						}
+						// Content is RawMessage, NOT []histContent: chat.history mixes
+						// shapes per message (plain string for system/user texts,
+						// block array for assistant replies). Typing it as a slice
+						// made ONE string-content message anywhere in the window fail
+						// the WHOLE unmarshal — the long-standing reason some turns
+						// never showed tokens (e.g. every turn right after the
+						// "[system] wake" message).
+						var hist struct {
+							Messages []struct {
+								Role      string          `json:"role"`
+								Timestamp json.RawMessage `json:"timestamp,omitempty"`
+								Usage     *histUsage      `json:"usage,omitempty"`
+								Content   json.RawMessage `json:"content,omitempty"`
+							} `json:"messages"`
+						}
+						if uerr := json.Unmarshal(histPayload, &hist); uerr != nil {
+							slog.Warn("chat.history usage payload unmarshal failed — retrying", "component", "agent", "run_id", capturedFlowRunID, "attempt", attempt, "err", uerr)
+							continue
+						}
+						// The NEWEST assistant message is the only candidate for this
+						// run's reply — walking further back is exactly how a stale
+						// turn's usage used to get stolen.
+						idx := -1
+						for i := len(hist.Messages) - 1; i >= 0; i-- {
+							if hist.Messages[i].Role == "assistant" {
+								idx = i
+								break
+							}
+						}
+						if idx < 0 {
+							continue
+						}
+						if ts := parseHistoryTimestamp(hist.Messages[idx].Timestamp); !ts.IsZero() && time.Since(ts) > staleAfter {
+							slog.Info("chat.history last assistant message is stale — retrying",
+								"component", "agent", "run_id", capturedFlowRunID, "attempt", attempt)
+							continue
+						}
+						if hist.Messages[idx].Usage == nil {
+							continue
+						}
+						// Thinking is emitted only off the accepted (fresh) message so a
+						// stale reply's monologue never replays under this run either.
+						// String-content messages simply have no thinking blocks.
+						var contentBlocks []histContent
+						_ = json.Unmarshal(hist.Messages[idx].Content, &contentBlocks)
+						for _, c := range contentBlocks {
+							if c.Type == "thinking" && c.Thinking != "" {
+								flow.Log("agent_thinking", map[string]any{
+									"run_id": capturedFlowRunID,
+									"source": "chat_history",
+									"text":   c.Thinking,
+								}, capturedFlowRunID)
+								h.monitorBus.Push(domain.MonitorEvent{
+									Type:    "thinking",
+									Summary: c.Thinking,
+									RunID:   capturedFlowRunID,
+								})
+							}
+						}
+						{
+							u := hist.Messages[idx].Usage
 							slog.Info("token usage (from chat.history)", "component", "agent",
 								"run_id", capturedFlowRunID,
 								"input", u.Input, "output", u.Output,
@@ -438,9 +500,11 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 							// Auto-new-session — instant, drops in-session conversation
 							// history but keeps device external memory (mood/habit/owner).
 							h.maybeAutoNewSession(h.agentGateway.GetSessionKey(), u.TotalTokens, capturedFlowRunID)
-							break
+							return
 						}
 					}
+					slog.Warn("chat.history usage: no fresh assistant message with usage — skipping attribution",
+						"component", "agent", "run_id", capturedFlowRunID)
 				}()
 			}
 		}
@@ -861,6 +925,16 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 
 			// Detect heartbeat before sanitizing strips the sentinel.
 			isHeartbeatRun := strings.Contains(strings.ToUpper(text), "HEARTBEAT_OK")
+			if isHeartbeatRun {
+				// Tag the turn so the Flow monitor can label it "heartbeat"
+				// instead of rendering an anonymous doppelgänger turn card.
+				flow.Log("heartbeat_run", map[string]any{"run_id": flowRunID}, flowRunID)
+				h.monitorBus.Push(domain.MonitorEvent{
+					Type:    "heartbeat_run",
+					Summary: "OpenClaw heartbeat",
+					RunID:   flowRunID,
+				})
+			}
 			// Extract <say>...</say> wrapper if the skill uses it (wellbeing).
 			// Non-tagged replies pass through unchanged.
 			text = extractSayTag(text)

@@ -56,12 +56,26 @@ Each entry under `capabilities` is a group from `devices/contract/capabilities.m
 capabilities:
   motion:
     routes: [servo]           # HAL routes this group mounts
-    driver: feetech           # implementation family — informational, surfaced
-                              # via GET /device; NOT gated (the route is the
-                              # contract, the driver behind it churns freely)
+    driver: feetech           # implementation family. On motion this is a
+                              # SELECTOR: HAL boot resolves it to a service
+                              # class via hal/drivers/motors/factory.py.
+                              # On every other capability it stays
+                              # informational (surfaced via GET /device).
     required: false           # if true, a missing driver is a boot failure
     safety: SAFETY.md#motion  # bounds that govern this capability
 ```
+
+**Motion `driver:` selector semantics** (`hal/drivers/motors/factory.py`):
+
+- absent → defaults to `feetech` with a warning (v1 back-compat; an explicit
+  driver will be required in schema v2)
+- registered name → the mapped motion service class is used
+- unknown name + `required: true` → **boot fails loud** naming the driver and
+  the registered set (a deploy fault, not a silent fallback)
+- unknown name + optional → warning, the motion routes stay unmounted
+
+A new motion backend is one class conforming to the `MotionService` protocol
+(`hal/drivers/motors/base.py`) plus one registry line in the factory.
 
 `required: true` means "this device is not itself without this capability." Audio is
 `required` on both Lamp and Intern; motion is `required` on neither.

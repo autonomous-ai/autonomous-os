@@ -52,7 +52,7 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
     : /telegram|discord|slack|wechat|channel/.test(turn.type) ? "var(--lm-cyan)"          // channel
     : /web_chat/.test(turn.type) ? "var(--lm-teal)"                          // web
     : /cron/.test(turn.type) ? "var(--lm-amber)"                            // cron
-    : /system|schedule|music/.test(turn.type) ? "var(--lm-text-dim)"        // system
+    : /system|schedule|music|heartbeat/.test(turn.type) ? "var(--lm-text-dim)"   // system
     : /touch|head_pat/.test(turn.type) ? "var(--lm-green)"                  // button
     : "var(--lm-teal)";
   const { input, output, hwOutput, snapshotUrls, audioUrls, poseBucket } = turnIO(turn);
@@ -213,7 +213,18 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
           background: "color-mix(in srgb, var(--lm-teal) 15%, transparent)",
           verticalAlign: "1px",
         }}>IN</span>
-        {input || TURN_INPUT_FALLBACK}
+        {/* Heartbeat turns have no user input of their own — the chat_input
+            logged under them is the freshest user message BORROWED from the
+            conversation (often the previous real turn's, e.g. the "[system]
+            wake" text), which read as a duplicate turn. Show what the run
+            actually is instead. */}
+        {turn.type === "heartbeat" ? (
+          <span style={{ color: "var(--lm-text-dim)", fontStyle: "italic" }}>
+            Periodic HEARTBEAT.md self-check (every 30m) — no user input
+          </span>
+        ) : (
+          input || TURN_INPUT_FALLBACK
+        )}
       </div>
       {stripUrls.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 4 }}>
@@ -414,12 +425,11 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
       }}>
         <span style={{ fontWeight: 600 }}>{turn.events.length} events</span>
         {tokenStats && (() => {
-          const billed = tokenStats.inTok + tokenStats.cacheWrite
-            + Math.round(tokenStats.cacheRead * 0.1) + tokenStats.outTok;
-          const title = `Tokens — in ${fmtToken(tokenStats.inTok)} / out ${fmtToken(tokenStats.outTok)} · total ${fmtToken(tokenStats.total)}`
+          const title = `LLM tokens — in ${fmtToken(tokenStats.inTok)} / out ${fmtToken(tokenStats.outTok)} · total ${fmtToken(tokenStats.total)}`
             + ((tokenStats.cacheRead || tokenStats.cacheWrite)
-              ? `\nCache read ${fmtToken(tokenStats.cacheRead)} / write ${fmtToken(tokenStats.cacheWrite)} · billed ~${fmtToken(billed)}`
-              : "");
+              ? `\nCache read ${fmtToken(tokenStats.cacheRead)} / write ${fmtToken(tokenStats.cacheWrite)} (billed at full price)`
+              : "")
+            + "\nText-agent LLM only — realtime voice (Gemini) and TTS are billed separately";
           return (
             <span title={title} style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
               <span style={{ opacity: 0.4 }}>·</span>
@@ -427,8 +437,26 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
                 <span style={{ color: "var(--lm-teal)", fontWeight: 700 }}>↓{fmtToken(tokenStats.inTok)}</span>
                 {" "}
                 <span style={{ color: "var(--lm-amber)", fontWeight: 700 }}>↑{fmtToken(tokenStats.outTok)}</span>
+                {/* Cache read shown inline (not tooltip-only): it IS the bulk of
+                    the context the LLM ingested each turn — hiding it made a
+                    ~55k-context turn read as "2k tokens" and confused users
+                    comparing against billing. R = cache read; Σ = total
+                    (in + out + cache), which matches the Autonomous backend's
+                    billed count — it charges cached reads at full price, so no
+                    0.1× discount math here. */}
+                {(tokenStats.cacheRead > 0 || tokenStats.cacheWrite > 0) && (
+                  <>
+                    {" "}
+                    <span style={{ color: "var(--lm-text-muted)", fontWeight: 600 }}>R{fmtToken(tokenStats.cacheRead)}</span>
+                    {" "}
+                    <span style={{ color: "var(--lm-text-muted)" }}>Σ{fmtToken(tokenStats.total)}</span>
+                  </>
+                )}
                 {" "}
-                <span style={{ color: "var(--lm-text-muted)" }}>tokens</span>
+                {/* "LLM tokens", not just "tokens": the Autonomous billing UI
+                    counts realtime voice (Gemini) + TTS tokens in the same
+                    bucket — this footer covers the text-agent LLM only. */}
+                <span style={{ color: "var(--lm-text-muted)" }}>LLM tokens</span>
               </span>
             </span>
           );

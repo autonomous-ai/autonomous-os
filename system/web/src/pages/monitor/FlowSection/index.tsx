@@ -25,7 +25,7 @@ const CAT_TYPES: Record<string, string[]> = {
   channel: ["telegram", "discord", "slack", "wechat", "channel"],
   web: ["web_chat"],
   cron: ["cron", "cron:music"],
-  system: ["system", "schedule", "music.mood"],
+  system: ["system", "schedule", "music.mood", "heartbeat"],
   // Physical input from GPIO button / TTP223 touchpad / future remotes
   // (button_actions.py). Currently only head_pat fires an agent event;
   // single/triple/long press are local-only (listen cue / reboot /
@@ -827,6 +827,10 @@ export function FlowSection({
                       display: "flex", alignItems: "center", gap: 8, padding: "6px 4px", margin: "2px 0",
                     }}>
                       <div className="lm-flow-session-rule" />
+                      {/* Idle-gap divider (>60s between turns). Labelled with the
+                          actual gap — the old "session" wording read as an
+                          OpenClaw session boundary, which it is not. List is
+                          newest-first, so the gap is prev(newer).start − curr.end. */}
                       <span style={{
                         fontSize: 8, fontWeight: 700, letterSpacing: "0.1em",
                         textTransform: "uppercase" as const,
@@ -834,7 +838,17 @@ export function FlowSection({
                         padding: "1px 7px", borderRadius: 999,
                         border: "1px solid var(--lm-border)",
                         background: "color-mix(in srgb, var(--lm-text) 4%, transparent)",
-                      }}>session</span>
+                      }}>{(() => {
+                        const prev = filteredTurns[i - 1];
+                        const gapMs = new Date(prev.startTime).getTime()
+                          - new Date(turn.endTime || turn.startTime).getTime();
+                        if (!Number.isFinite(gapMs) || gapMs <= 0) return "idle gap";
+                        const min = Math.round(gapMs / 60_000);
+                        const label = min < 60
+                          ? `${Math.max(min, 1)}m`
+                          : `${Math.floor(min / 60)}h ${min % 60}m`;
+                        return `idle ${label}`;
+                      })()}</span>
                       <div className="lm-flow-session-rule is-right" />
                     </div>
                   )}

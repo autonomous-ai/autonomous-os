@@ -41,7 +41,7 @@ class Capability:
     group: str
     routes: List[str]
     required: bool
-    driver: Optional[str] = None   # implementation family (informational); NOT gated
+    driver: Optional[str] = None   # implementation family; motion selector (factory.py), others informational
     safety: Optional[str] = None
 
 
@@ -69,8 +69,9 @@ def _parse_safety(body: str) -> Optional[str]:
 
 
 def _parse_driver(body: str) -> Optional[str]:
-    """The capability's `driver:` implementation family, or None. Informational
-    only — the route, not the driver, is the stable contract (drivers churn)."""
+    """The capability's `driver:` implementation family, or None. For motion,
+    this selects the service class (hal/drivers/motors/factory.py); for other
+    capabilities it remains informational."""
     m = re.search(r"driver:\s*([^\s,}]+)", body)
     return m.group(1) if m else None
 
