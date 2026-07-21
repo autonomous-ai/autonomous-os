@@ -37,19 +37,46 @@ func ensureSwitchRuntime() error {
 	return nil
 }
 
-// SeedAgentRuntimeFromGateway materializes DEVICE.md gateway.default into
-// config.agent_runtime when the field is still empty, then persists it. Once a
-// concrete value is on disk the device "owns" its runtime: a dev who set it
-// (via switch or by hand) is left untouched, and the resolve-fallback in
-// CurrentAgentRuntimeFromConfig becomes a no-op. Idempotent — only the first
-// boot of a fresh/legacy config.json writes. When gateway.default is itself
-// absent there is nothing to seed, so the field stays empty and the runtime
-// keeps resolving to openclaw at boot.
+// frDefaultAgentPath is a build-time-baked, per-image default runtime — e.g.
+// the intern-v2 case-color images (blue=hermes, orange=openclaw, black=claudecode,
+// scripts/imager/build-orangepi.sh DEFAULT_AGENT). It deliberately lives outside
+// /root/config/config.json so it survives Factory Reset untouched (it is NOT
+// in factoryreset.go's deviceWipePaths — verified device-side: siblings like
+// bootstrap.json/buddy.json in the same dir already survive F_R the same way).
+// Most builds never write this file, so it is absent and this is a no-op.
+// var, not const, so tests can point it at a temp file.
+var frDefaultAgentPath = "/root/config/f_r_default_agent"
+
+// readFRDefaultAgent returns the baked per-image default runtime, or "" if
+// the file is absent (the common case — falls back to DEVICE.md gateway.default).
+func readFRDefaultAgent() string {
+	b, err := os.ReadFile(frDefaultAgentPath)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// SeedAgentRuntimeFromGateway materializes the device's default runtime into
+// config.agent_runtime when the field is still empty, then persists it. The
+// default is resolved with priority: (1) the build-baked f_r_default_agent
+// file — a per-image/per-color default that survives Factory Reset, so a
+// reset device re-seeds to the SAME default it shipped with, not a
+// device-type-wide value shared across every color variant; (2) DEVICE.md
+// gateway.default, as before. Once a concrete value is on disk the device
+// "owns" its runtime: a dev who set it (via switch or by hand) is left
+// untouched, and the resolve-fallback in CurrentAgentRuntimeFromConfig becomes
+// a no-op. Idempotent — only the first boot of a fresh/legacy config.json
+// writes. When neither source names a valid runtime there is nothing to seed,
+// so the field stays empty and the runtime keeps resolving to openclaw at boot.
 func SeedAgentRuntimeFromGateway(cfg *config.Config) {
 	if cfg == nil || strings.TrimSpace(cfg.AgentRuntime) != "" {
 		return
 	}
-	g := strings.ToLower(strings.TrimSpace(GatewayDefault(cfg.DeviceTypeOrDefault())))
+	g := strings.ToLower(readFRDefaultAgent())
+	if g == "" || !domain.IsValidAgentRuntime(g) {
+		g = strings.ToLower(strings.TrimSpace(GatewayDefault(cfg.DeviceTypeOrDefault())))
+	}
 	if g == "" || !domain.IsValidAgentRuntime(g) {
 		return
 	}

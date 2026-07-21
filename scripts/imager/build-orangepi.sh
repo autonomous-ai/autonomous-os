@@ -41,6 +41,26 @@ OPENCLAW_VERSION="${OPENCLAW_VERSION:-2026.6.10}"
 DEVICE_TYPE="${DEVICE_TYPE:?DEVICE_TYPE is required — build via 'make build DEVICE_TYPE=...'}"
 DEVICES_DIR="${DEVICES_DIR:-/opt/devices}"
 
+# Per-image default agent runtime — bakes /root/config/f_r_default_agent, read
+# by SeedAgentRuntimeFromGateway (system/device/runtime.go) with PRIORITY over
+# DEVICE.md gateway.default, and — unlike gateway.default — it survives Factory
+# Reset (not in factoryreset.go's deviceWipePaths). So a color/image whose
+# DEFAULT_AGENT was set here re-seeds to the SAME default after an F_R, instead
+# of falling back to the device-type-wide DEVICE.md value shared by every
+# color. OPTIONAL — unset (the default) bakes nothing, and behavior is 100%
+# unchanged: seeding falls through to DEVICE.md gateway.default exactly as
+# before. Intended use: intern-v2 case-color builds (blue=hermes,
+# orange=openclaw, black=claudecode) — see CASE_COLOR below.
+DEFAULT_AGENT="${DEFAULT_AGENT:-}"
+
+# Physical case color for intern-v2 Developer Edition builds — gates SSH only
+# (see the "enable services" stage below). blue/orange = consumer (SSH
+# closed), black = Developer Edition (SSH open), per docs/developer-guide.md.
+# OPTIONAL and, as of now, CONSULTED ONLY for DEVICE_TYPE=intern-v2 — every
+# other device type (lamp included) ignores it entirely and keeps today's
+# behavior (SSH always enabled). Unset here too → unchanged behavior.
+CASE_COLOR="${CASE_COLOR:-}"
+
 # Google Drive file ID for the bookworm server image. Override via env var when
 # the dev team rotates the .7z (new Orange Pi release).
 OPI_FILE_ID="${OPI_FILE_ID:-1CYfOaY6f5DozJBNvPJ0Gx1jBIFlGe8fn}"
@@ -82,6 +102,19 @@ trap cleanup EXIT
 
 log() { echo "==> $*"; }
 err() { echo "ERROR: $*" >&2; exit 1; }
+
+if [ -n "${DEFAULT_AGENT}" ]; then
+  case "${DEFAULT_AGENT}" in
+    openclaw|hermes|picoclaw|codex|claudecode) ;;
+    *) err "invalid DEFAULT_AGENT=${DEFAULT_AGENT} — must be one of: openclaw hermes picoclaw codex claudecode" ;;
+  esac
+fi
+if [ -n "${CASE_COLOR}" ]; then
+  case "${CASE_COLOR}" in
+    blue|orange|black) ;;
+    *) err "invalid CASE_COLOR=${CASE_COLOR} — must be one of: blue orange black" ;;
+  esac
+fi
 
 retry() {
   local cmd="$1" max="${2:-5}" delay="${3:-3}" n=0
@@ -219,6 +252,8 @@ export COUNTRY_CODE="${COUNTRY_CODE}"
 export OPENCLAW_VERSION="${OPENCLAW_VERSION}"
 export DEVICE_TYPE="${DEVICE_TYPE}"
 export DEVICES_DIR="${DEVICES_DIR}"
+export DEFAULT_AGENT="${DEFAULT_AGENT}"
+export CASE_COLOR="${CASE_COLOR}"
 
 retry() {
   local cmd="\$1" max="\${2:-5}" delay="\${3:-3}" n=0
@@ -513,6 +548,17 @@ cat > /root/config/bootstrap.json <<BSJSON
   "state_file": "/root/bootstrap/state.json"
 }
 BSJSON
+
+# Per-image default agent runtime (see DEFAULT_AGENT at the top of this
+# script). Lives next to bootstrap.json — same directory, same "survives
+# Factory Reset" property (neither is in factoryreset.go's deviceWipePaths).
+# Read by SeedAgentRuntimeFromGateway (system/device/runtime.go) with priority
+# over DEVICE.md gateway.default. Unset DEFAULT_AGENT (most builds) → no file
+# written → seeding behavior is unchanged from before this feature.
+if [ -n "\${DEFAULT_AGENT}" ]; then
+  echo "\${DEFAULT_AGENT}" > /root/config/f_r_default_agent
+  echo "[stage] f_r_default_agent baked: \${DEFAULT_AGENT}"
+fi
 
 cat > /etc/systemd/system/hal.service <<'UNIT'
 [Unit]
@@ -1100,9 +1146,23 @@ systemctl mask orangepi-firstrun-config.service 2>/dev/null || true
 
 # ── enable services (symlink, since chroot has no running systemd) ──────
 echo "[stage] enable services"
-for unit in os-server bootstrap hal openclaw avahi-daemon bluetooth ssh; do
+for unit in os-server bootstrap hal openclaw avahi-daemon bluetooth; do
   systemctl enable "\$unit" 2>/dev/null || true
 done
+
+# SSH: gated by CASE_COLOR, but ONLY for intern-v2 — every other DEVICE_TYPE
+# (lamp included) keeps today's behavior (SSH always enabled), regardless of
+# CASE_COLOR. Per docs/developer-guide.md: black case (Developer Edition) ships
+# SSH open; blue/orange (consumer editions) ship SSH closed. Unset CASE_COLOR
+# (most builds, and every non-intern-v2 build) → unchanged: SSH enabled.
+if [ "\${DEVICE_TYPE}" = "intern-v2" ] && [ -n "\${CASE_COLOR}" ] && [ "\${CASE_COLOR}" != "black" ]; then
+  echo "[stage] CASE_COLOR=\${CASE_COLOR} (intern-v2 consumer edition) — SSH stays closed"
+  systemctl disable ssh 2>/dev/null || true
+  systemctl mask ssh 2>/dev/null || true
+else
+  echo "[stage] SSH enabled (DEVICE_TYPE=\${DEVICE_TYPE} CASE_COLOR=\${CASE_COLOR:-<unset>})"
+  systemctl enable ssh 2>/dev/null || true
+fi
 
 # ── SPI3 overlay for WS2812 RGB LED ring (OrangePi 4 Pro A733) ───────────────
 echo "[stage] enable SPI3 overlay for LED ring"
