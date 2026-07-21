@@ -56,22 +56,60 @@ JOINT_KEYS: Set[str] = {*_HEAD_KEYS, *_ANTENNA_KEYS, _BODY_KEY}
 # are documented here for reference): head pitch/roll ±40°, head yaw ±180°,
 # body yaw ±160°, head-vs-body yaw delta ≤ 65°.
 
+# Default HF move library preloaded by the daemon.
+_EMOTES_DATASET = "pollen-robotics/reachy-mini-emotions-library"
+
+# HAL recording name (CSV stem on lamp) → Pollen HF move name.
+# Keys use preset constants from hal.presets; unmatched names are tried verbatim
+# (in case the caller already uses HF names).
+import hal.presets as P
+
 # Aim table — same direction vocabulary as hal/presets AIM_PRESETS, values are
 # Reachy head kinematics. Convention: +yaw = left, +pitch = up (ROS-style).
 # TODO(spike): verify sign convention and tune angles on the real robot.
 _AIM_TARGETS: Dict[str, Dict[str, float]] = {
-    "center": {"head_yaw.pos": 0.0, "head_pitch.pos": 0.0, "head_z.pos": 0.0},
-    "desk":   {"head_yaw.pos": 0.0, "head_pitch.pos": -30.0, "head_z.pos": 0.0},
-    "wall":   {"head_yaw.pos": 0.0, "head_pitch.pos": 20.0, "head_z.pos": 0.0},
-    "left":   {"head_yaw.pos": 40.0},
-    "right":  {"head_yaw.pos": -40.0},
-    "up":     {"head_pitch.pos": 30.0},
-    "down":   {"head_pitch.pos": -35.0},
-    "user":   {"head_yaw.pos": 0.0, "head_pitch.pos": 15.0},
+    P.AIM_CENTER: {"head_yaw.pos": 0.0, "head_pitch.pos": 0.0, "head_z.pos": 0.0},
+    P.AIM_DESK:   {"head_yaw.pos": 0.0, "head_pitch.pos": -30.0, "head_z.pos": 0.0},
+    P.AIM_WALL:   {"head_yaw.pos": 0.0, "head_pitch.pos": 20.0, "head_z.pos": 0.0},
+    P.AIM_LEFT:   {"head_yaw.pos": 40.0},
+    P.AIM_RIGHT:  {"head_yaw.pos": -40.0},
+    P.AIM_UP:     {"head_pitch.pos": 30.0},
+    P.AIM_DOWN:   {"head_pitch.pos": -35.0},
+    P.AIM_USER:   {"head_yaw.pos": 0.0, "head_pitch.pos": 15.0},
 }
 
-# Default HF move library preloaded by the daemon.
-_EMOTES_DATASET = "pollen-robotics/reachy-mini-emotions-library"
+_MOVE_MAP: Dict[str, str] = {
+    # emotions
+    P.SERVO_CURIOUS:       "curious1",
+    P.SERVO_HAPPY_WIGGLE:  "cheerful1",
+    P.SERVO_SAD:           "sad1",
+    P.SERVO_THINKING_DEEP: "thoughtful1",
+    P.SERVO_IDLE:          "serenity1",
+    P.SERVO_EXCITED:       "enthusiastic1",
+    P.SERVO_SHY:           "shy1",
+    P.SERVO_SHOCK:         "surprised1",
+    P.SERVO_LISTENING:     "attentive1",
+    P.SERVO_LAUGH:         "laughing1",
+    P.SERVO_CONFUSED:      "confused1",
+    P.SERVO_SLEEPY:        "tired1",
+    P.SERVO_GREETING:      "welcoming1",
+    P.SERVO_GOODBYE:       "resigned1",
+    P.SERVO_NOD:           "yes1",
+    P.SERVO_ACKNOWLEDGE:   "understanding1",
+    P.SERVO_STRETCHING:    "relief1",
+    P.SERVO_SCANNING:      "inquiring1",
+    P.SERVO_HEADSHAKE:     "no1",
+    P.SERVO_WAKE_UP:       "enthusiastic2",
+    # music grooves — Pollen has 3 dance moves, rotate through them
+    P.SERVO_MUSIC_GROOVE:    "dance1",
+    P.SERVO_MUSIC_JAZZ:      "dance2",
+    P.SERVO_MUSIC_CLASSICAL: "dance3",
+    P.SERVO_MUSIC_HIPHOP:    "dance1",
+    P.SERVO_MUSIC_ROCK:      "dance2",
+    P.SERVO_MUSIC_WALTZ:     "dance3",
+    P.SERVO_MUSIC_CHILL:     "dance1",
+    P.SERVO_MUSIC_HYPE:      "dance2",
+}
 
 _MIN_MOVE_DURATION_S = 0.1
 
@@ -135,9 +173,7 @@ class ReachyMotionService:
     # --- Animation / event dispatch ---
 
     def dispatch(self, event_type: str, payload: Any) -> None:
-        from hal.presets import SERVO_CMD_PLAY
-
-        if event_type == SERVO_CMD_PLAY and payload:
+        if event_type == P.SERVO_CMD_PLAY and payload:
             self._play_recording(str(payload))
         else:
             # No client-side animation loop — idle/music grooves are a
@@ -381,13 +417,17 @@ class ReachyMotionService:
         if self._play_thread and self._play_thread.is_alive():
             self._cancel_move()
 
+        hf_name = _MOVE_MAP.get(name, name)
+        if hf_name != name:
+            logger.debug("[reachy] mapped recording '%s' → HF move '%s'", name, hf_name)
+
         def _run():
             moves = self._recorded_moves()
             if moves is None:
                 logger.warning("[reachy] play '%s' skipped — no move library", name)
                 return
             try:
-                move = moves.get(name)
+                move = moves.get(hf_name)
                 self._current_recording = name
                 with self._lock:
                     mini = self._require_mini()
@@ -395,7 +435,7 @@ class ReachyMotionService:
                 # so state reads stay responsive; SDK serializes via the daemon.
                 mini.play_move(move)
             except Exception as e:
-                logger.warning("[reachy] play '%s' failed: %s", name, e)
+                logger.warning("[reachy] play '%s' (HF: '%s') failed: %s", name, hf_name, e)
             finally:
                 self._current_recording = None
 

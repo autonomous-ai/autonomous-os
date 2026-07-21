@@ -113,5 +113,78 @@ class TestReachyServiceConformance(unittest.TestCase):
         )
 
 
+class TestReachyMoveMap(unittest.TestCase):
+    """Verify _MOVE_MAP covers every SERVO_* preset and targets valid HF moves."""
+
+    # All 81 moves in pollen-robotics/reachy-mini-emotions-library (fetched from HF).
+    _HF_MOVES = {
+        "amazed1", "anxiety1", "attentive1", "attentive2", "boredom1", "boredom2",
+        "calming1", "cheerful1", "come1", "confused1", "contempt1", "curious1",
+        "dance1", "dance2", "dance3", "disgusted1", "displeased1", "displeased2",
+        "downcast1", "dying1", "electric1", "enthusiastic1", "enthusiastic2",
+        "exhausted1", "fear1", "frustrated1", "furious1", "go_away1", "grateful1",
+        "helpful1", "helpful2", "impatient1", "impatient2", "incomprehensible2",
+        "indifferent1", "inquiring1", "inquiring2", "inquiring3", "irritated1",
+        "irritated2", "laughing1", "laughing2", "lonely1", "lost1", "loving1",
+        "no1", "no_excited1", "no_sad1", "oops1", "oops2", "proud1", "proud2",
+        "proud3", "rage1", "relief1", "relief2", "reprimand1", "reprimand2",
+        "reprimand3", "resigned1", "sad1", "sad2", "scared1", "serenity1", "shy1",
+        "sleep1", "success1", "success2", "surprised1", "surprised2", "thoughtful1",
+        "thoughtful2", "tired1", "uncertain1", "uncomfortable1", "understanding1",
+        "understanding2", "welcoming1", "welcoming2", "yes1", "yes_sad1",
+    }
+
+    def _get_move_map(self):
+        """Load _MOVE_MAP via AST to avoid importing reachy_mini SDK."""
+        import importlib
+        # hal.presets is importable on dev machines (no hardware deps).
+        presets = importlib.import_module("hal.presets")
+        path = os.path.join(HERE, "..", "drivers", "motors", "reachy_service.py")
+        with open(path, encoding="utf-8") as f:
+            source = f.read()
+        # Evaluate _MOVE_MAP with hal.presets constants available.
+        tree = ast.parse(source)
+        for node in ast.iter_child_nodes(tree):
+            # _MOVE_MAP uses a type annotation → AnnAssign, not Assign.
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                if node.target.id == "_MOVE_MAP" and node.value:
+                    code = compile(ast.Expression(body=node.value), path, "eval")
+                    return eval(code, {"P": presets})
+        self.fail("_MOVE_MAP not found in reachy_service.py")
+
+    def test_all_servo_presets_mapped(self):
+        """Every SERVO_* recording constant in presets.py has a _MOVE_MAP entry."""
+        import hal.presets as P
+        move_map = self._get_move_map()
+        servo_names = {
+            v for k, v in vars(P).items()
+            if k.startswith("SERVO_") and not k.startswith("SERVO_CMD_")
+            and isinstance(v, str)
+        }
+        unmapped = servo_names - set(move_map.keys())
+        # Allow recordings that are purely feetech concepts (tracking, test,
+        # fear, playful) to remain unmapped — they have no Reachy equivalent
+        # or are not dispatched via the emotion system.
+        acceptable_unmapped = {"tracking", "test"}
+        real_missing = unmapped - acceptable_unmapped
+        self.assertFalse(
+            real_missing,
+            f"SERVO_* presets missing from _MOVE_MAP: {sorted(real_missing)}"
+        )
+
+    def test_all_map_values_are_valid_hf_moves(self):
+        """Every _MOVE_MAP value must be a real HF move name."""
+        move_map = self._get_move_map()
+        invalid = {v for v in move_map.values() if v not in self._HF_MOVES}
+        self.assertFalse(
+            invalid,
+            f"_MOVE_MAP targets not in HF emotions library: {sorted(invalid)}"
+        )
+
+    def test_map_is_not_empty(self):
+        move_map = self._get_move_map()
+        self.assertGreaterEqual(len(move_map), 20)
+
+
 if __name__ == "__main__":
     unittest.main()
