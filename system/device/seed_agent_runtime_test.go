@@ -81,6 +81,85 @@ gateway:
 	}
 }
 
+// Direct tests of ResolveDefaultAgent itself — the shared resolver both
+// SeedAgentRuntimeFromGateway and agent.resolveRuntime call through. Added per
+// review: the TestSeedAgentRuntimeFromGateway_* tests above only exercise this
+// indirectly, and agent.resolveRuntime can't set frDefaultAgentPath itself
+// (unexported, different package) to cover the f_r_default_agent-wins case
+// there directly — so this is the one place that actually proves the priority
+// order for both callers.
+
+func TestResolveDefaultAgent_PrefersFRDefaultOverDeviceMD(t *testing.T) {
+	t.Setenv("DEVICE_TYPE", "intern-v2")
+	writeDeviceMD(t, "intern-v2", `---
+schema: autonomous.device.v1
+gateway:
+  default: openclaw
+---
+`)
+	setFRDefaultAgentPath(t, "hermes\n")
+
+	value, source := ResolveDefaultAgent(&config.Config{})
+
+	if value != "hermes" || source != "f_r_default_agent" {
+		t.Fatalf("ResolveDefaultAgent = (%q, %q), want (hermes, f_r_default_agent)", value, source)
+	}
+}
+
+func TestResolveDefaultAgent_FallsBackToDeviceMDWhenFRDefaultAbsent(t *testing.T) {
+	t.Setenv("DEVICE_TYPE", "intern-v2")
+	writeDeviceMD(t, "intern-v2", `---
+schema: autonomous.device.v1
+gateway:
+  default: hermes
+---
+`)
+	setFRDefaultAgentPath(t, "")
+
+	value, source := ResolveDefaultAgent(&config.Config{})
+
+	if value != "hermes" || source != "DEVICE.md gateway.default" {
+		t.Fatalf("ResolveDefaultAgent = (%q, %q), want (hermes, DEVICE.md gateway.default)", value, source)
+	}
+}
+
+func TestResolveDefaultAgent_EmptyWhenNeitherResolves(t *testing.T) {
+	t.Setenv("DEVICE_TYPE", "intern-v2")
+	writeDeviceMD(t, "intern-v2", `---
+schema: autonomous.device.v1
+---
+`)
+	setFRDefaultAgentPath(t, "")
+
+	value, source := ResolveDefaultAgent(&config.Config{})
+
+	if value != "" || source != "" {
+		t.Fatalf("ResolveDefaultAgent = (%q, %q), want (\"\", \"\")", value, source)
+	}
+}
+
+// CurrentAgentRuntimeFromConfig is a third caller of the same resolution (used
+// by logs.go, the MQTT info handler, status_reporter.go, and server.go's
+// web-CLI env-file check) — review flagged it as still having its own
+// independent copy of the fallback chain before this fix.
+
+func TestCurrentAgentRuntimeFromConfig_PrefersFRDefaultOverDeviceMD(t *testing.T) {
+	t.Setenv("DEVICE_TYPE", "intern-v2")
+	writeDeviceMD(t, "intern-v2", `---
+schema: autonomous.device.v1
+gateway:
+  default: openclaw
+---
+`)
+	setFRDefaultAgentPath(t, "claudecode\n")
+
+	got := CurrentAgentRuntimeFromConfig(&config.Config{})
+
+	if got != "claudecode" {
+		t.Fatalf("CurrentAgentRuntimeFromConfig = %q, want %q", got, "claudecode")
+	}
+}
+
 func TestSeedAgentRuntimeFromGateway_NoopWhenAlreadySet(t *testing.T) {
 	t.Chdir(t.TempDir())
 	t.Setenv("DEVICE_TYPE", "intern-v2")

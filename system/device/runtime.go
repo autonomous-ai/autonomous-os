@@ -120,14 +120,17 @@ func (s *Service) CurrentAgentRuntime() string {
 
 // CurrentAgentRuntimeFromConfig resolves the effective agentic backend without a
 // Service receiver, so callers holding only a *config.Config (e.g. the MQTT info
-// handler) can report what is actually running. Same precedence as factory.go:
-// config.agent_runtime, else DEVICE.md gateway.default, else openclaw.
+// handler, the web-CLI env-file check in server.go) can report what is actually
+// running. Same precedence as agent.resolveRuntime: config.agent_runtime, else
+// ResolveDefaultAgent (f_r_default_agent, then DEVICE.md gateway.default), else
+// openclaw — routed through the same shared resolver so this can't become a
+// third place that drifts from what actually gets seeded/constructed.
 func CurrentAgentRuntimeFromConfig(cfg *config.Config) string {
 	if r := strings.ToLower(strings.TrimSpace(cfg.AgentRuntime)); r != "" {
 		return r
 	}
-	if g := GatewayDefault(cfg.DeviceTypeOrDefault()); g != "" {
-		return strings.ToLower(strings.TrimSpace(g))
+	if g, _ := ResolveDefaultAgent(cfg); g != "" {
+		return g
 	}
 	return domain.AgentRuntimeOpenClaw
 }
