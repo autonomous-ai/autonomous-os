@@ -99,13 +99,18 @@ func ProvideGateway(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 }
 
 // resolveRuntime returns the effective agent runtime ("openclaw" or "hermes"), the raw value, and the source.
-// Prefers config.agent_runtime > DEVICE.md gateway.default > "openclaw" (default).
+// Prefers config.agent_runtime > f_r_default_agent > DEVICE.md gateway.default
+// > "openclaw" (default). The last two are resolved by device.ResolveDefaultAgent
+// — the SAME function device.SeedAgentRuntimeFromGateway uses — so this can never
+// disagree with what gets persisted to config.json a moment later at boot
+// (system/server/wire_gen.go constructs the gateway via this function before
+// device.ProvideService runs the seed; see ResolveDefaultAgent's doc comment).
 func resolveRuntime(cfg *config.Config) (effective, raw, source string) {
 	raw = cfg.AgentRuntime
 	source = "config.agent_runtime"
 	if raw == "" {
-		if g := device.GatewayDefault(cfg.DeviceTypeOrDefault()); g != "" {
-			raw, source = g, "DEVICE.md gateway.default"
+		if g, src := device.ResolveDefaultAgent(cfg); g != "" {
+			raw, source = g, src
 		}
 	}
 	switch raw {
