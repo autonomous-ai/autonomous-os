@@ -111,6 +111,15 @@ if [ -n "${DEFAULT_AGENT}" ]; then
   esac
 fi
 
+# CASE_COLOR was removed (see the DEFAULT_AGENT comment above) — fail fast
+# instead of silently ignoring it. Without this guard, an old invocation like
+# `CASE_COLOR=blue` with no DEFAULT_AGENT would previously close SSH; today it
+# would silently do nothing and SSH would ship OPEN instead — the opposite of
+# what the caller asked for, with no error to catch it.
+if [ -n "${CASE_COLOR:-}" ]; then
+  err "CASE_COLOR is removed — set DEFAULT_AGENT=hermes|openclaw|claudecode instead (SSH now follows DEFAULT_AGENT directly)"
+fi
+
 retry() {
   local cmd="$1" max="${2:-5}" delay="${3:-3}" n=0
   until [ "$n" -ge "$max" ]; do

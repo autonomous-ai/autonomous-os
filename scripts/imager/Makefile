@@ -42,6 +42,14 @@ DEVICE_TYPE ?=
 # runtime and the SSH policy so the two can't disagree.
 DEFAULT_AGENT ?=
 
+# CASE_COLOR was removed (see DEFAULT_AGENT above) — fail fast at the Makefile
+# level too, so a stale `make build CASE_COLOR=blue` (old muscle memory / an
+# un-updated CI script) errors immediately instead of silently building with
+# SSH open when the caller expected it closed.
+ifneq ($(origin CASE_COLOR),undefined)
+$(error CASE_COLOR is removed — set DEFAULT_AGENT=hermes|openclaw|claudecode instead (SSH now follows DEFAULT_AGENT directly))
+endif
+
 ifndef BUILD_SCRIPT
 $(error Unknown TARGET=$(TARGET). Supported: rpi, opi)
 endif
