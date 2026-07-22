@@ -44,22 +44,23 @@ DEVICES_DIR="${DEVICES_DIR:-/opt/devices}"
 # Per-image default agent runtime — bakes /root/config/f_r_default_agent, read
 # by SeedAgentRuntimeFromGateway (system/device/runtime.go) with PRIORITY over
 # DEVICE.md gateway.default, and — unlike gateway.default — it survives Factory
-# Reset (not in factoryreset.go's deviceWipePaths). So a color/image whose
+# Reset (not in factoryreset.go's deviceWipePaths). So an image whose
 # DEFAULT_AGENT was set here re-seeds to the SAME default after an F_R, instead
 # of falling back to the device-type-wide DEVICE.md value shared by every
-# color. OPTIONAL — unset (the default) bakes nothing, and behavior is 100%
+# build. OPTIONAL — unset (the default) bakes nothing, and behavior is 100%
 # unchanged: seeding falls through to DEVICE.md gateway.default exactly as
-# before. Intended use: intern-v2 case-color builds (blue=hermes,
-# orange=openclaw, black=claudecode) — see CASE_COLOR below.
+# before. Also gates SSH for intern-v2 — see the "enable services" stage below.
+#
+# intern-v2 ships in 3 physical case colors, each defaulting to one agent —
+# blue=hermes, orange=openclaw, black=claudecode (Developer Edition). The case
+# color itself is COSMETIC and carries no logic of its own (there used to be a
+# separate CASE_COLOR var here — removed: color and SSH policy were two
+# different knobs an operator had to remember to keep in sync, and a
+# blue-cased build with the wrong CASE_COLOR would silently ship with the
+# wrong SSH state). DEFAULT_AGENT alone now drives both the seeded runtime AND
+# the SSH policy, so there is exactly one thing to set per case color and no
+# way for the two to disagree.
 DEFAULT_AGENT="${DEFAULT_AGENT:-}"
-
-# Physical case color for intern-v2 Developer Edition builds — gates SSH only
-# (see the "enable services" stage below). blue/orange = consumer (SSH
-# closed), black = Developer Edition (SSH open), per docs/developer-guide.md.
-# OPTIONAL and, as of now, CONSULTED ONLY for DEVICE_TYPE=intern-v2 — every
-# other device type (lamp included) ignores it entirely and keeps today's
-# behavior (SSH always enabled). Unset here too → unchanged behavior.
-CASE_COLOR="${CASE_COLOR:-}"
 
 # Google Drive file ID for the bookworm server image. Override via env var when
 # the dev team rotates the .7z (new Orange Pi release).
@@ -107,12 +108,6 @@ if [ -n "${DEFAULT_AGENT}" ]; then
   case "${DEFAULT_AGENT}" in
     openclaw|hermes|picoclaw|codex|claudecode) ;;
     *) err "invalid DEFAULT_AGENT=${DEFAULT_AGENT} — must be one of: openclaw hermes picoclaw codex claudecode" ;;
-  esac
-fi
-if [ -n "${CASE_COLOR}" ]; then
-  case "${CASE_COLOR}" in
-    blue|orange|black) ;;
-    *) err "invalid CASE_COLOR=${CASE_COLOR} — must be one of: blue orange black" ;;
   esac
 fi
 
@@ -253,7 +248,6 @@ export OPENCLAW_VERSION="${OPENCLAW_VERSION}"
 export DEVICE_TYPE="${DEVICE_TYPE}"
 export DEVICES_DIR="${DEVICES_DIR}"
 export DEFAULT_AGENT="${DEFAULT_AGENT}"
-export CASE_COLOR="${CASE_COLOR}"
 
 retry() {
   local cmd="\$1" max="\${2:-5}" delay="\${3:-3}" n=0
@@ -1150,17 +1144,21 @@ for unit in os-server bootstrap hal openclaw avahi-daemon bluetooth; do
   systemctl enable "\$unit" 2>/dev/null || true
 done
 
-# SSH: gated by CASE_COLOR, but ONLY for intern-v2 — every other DEVICE_TYPE
+# SSH: gated by DEFAULT_AGENT, but ONLY for intern-v2 — every other DEVICE_TYPE
 # (lamp included) keeps today's behavior (SSH always enabled), regardless of
-# CASE_COLOR. Per docs/developer-guide.md: black case (Developer Edition) ships
-# SSH open; blue/orange (consumer editions) ship SSH closed. Unset CASE_COLOR
-# (most builds, and every non-intern-v2 build) → unchanged: SSH enabled.
-if [ "\${DEVICE_TYPE}" = "intern-v2" ] && [ -n "\${CASE_COLOR}" ] && [ "\${CASE_COLOR}" != "black" ]; then
-  echo "[stage] CASE_COLOR=\${CASE_COLOR} (intern-v2 consumer edition) — SSH stays closed"
+# DEFAULT_AGENT. Per docs/developer-guide.md + the case-color ticket: claudecode
+# (black case, Developer Edition) ships SSH open; every other default agent
+# (hermes=blue, openclaw=orange, and codex/picoclaw) ships SSH closed. Unset
+# DEFAULT_AGENT (most builds, and every non-intern-v2 build) → unchanged: SSH
+# enabled. NOTE: codex/picoclaw closing SSH here is a judgment call (the
+# ticket only named hermes/openclaw/claudecode) — revisit if codex should also
+# open SSH as a second "dev" runtime.
+if [ "\${DEVICE_TYPE}" = "intern-v2" ] && [ -n "\${DEFAULT_AGENT}" ] && [ "\${DEFAULT_AGENT}" != "claudecode" ]; then
+  echo "[stage] DEFAULT_AGENT=\${DEFAULT_AGENT} (intern-v2 consumer edition) — SSH stays closed"
   systemctl disable ssh 2>/dev/null || true
   systemctl mask ssh 2>/dev/null || true
 else
-  echo "[stage] SSH enabled (DEVICE_TYPE=\${DEVICE_TYPE} CASE_COLOR=\${CASE_COLOR:-<unset>})"
+  echo "[stage] SSH enabled (DEVICE_TYPE=\${DEVICE_TYPE} DEFAULT_AGENT=\${DEFAULT_AGENT:-<unset>})"
   systemctl enable ssh 2>/dev/null || true
 fi
 

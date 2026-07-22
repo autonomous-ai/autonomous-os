@@ -32,14 +32,15 @@ OTA_METADATA_URL ?=
 DEVICE_TYPE ?=
 
 # Per-image default agent runtime, baked into f_r_default_agent so it survives
-# a Factory Reset (see build-orangepi.sh). OPTIONAL — unset behaves exactly
-# like before this existed. Also used below to name the output file so
-# multiple case-color builds of the SAME DEVICE_TYPE don't clobber each other.
+# a Factory Reset, AND (for DEVICE_TYPE=intern-v2 only) gates SSH — claudecode
+# opens it (Developer Edition / black case), every other value closes it (see
+# build-orangepi.sh). OPTIONAL — unset behaves exactly like before this
+# existed. Also used below to name the output file so multiple builds of the
+# SAME DEVICE_TYPE (e.g. intern-v2's blue/orange/black case variants) don't
+# clobber each other. There is no separate CASE_COLOR var — the case color is
+# purely cosmetic packaging, DEFAULT_AGENT alone drives both the seeded
+# runtime and the SSH policy so the two can't disagree.
 DEFAULT_AGENT ?=
-
-# Physical case color — SSH-gate only, and only consulted for
-# DEVICE_TYPE=intern-v2 (see build-orangepi.sh). OPTIONAL.
-CASE_COLOR ?=
 
 ifndef BUILD_SCRIPT
 $(error Unknown TARGET=$(TARGET). Supported: rpi, opi)
@@ -49,11 +50,11 @@ endif
 # builds clobber each other. The build script always writes BUILT_IMG; the build
 # target renames it to the device-typed IMG_FILE (3 device types = 3 images).
 # OPi build produces .img.xz (compressed); RPi build produces raw .img.
-# DEFAULT_AGENT (when set) is folded into IMG_FILE too — named by agent, not by
-# CASE_COLOR, since the agent name is what you actually remember later — so
-# multiple case-color builds of the SAME DEVICE_TYPE (e.g. intern-v2 blue vs.
-# black) land as separate files instead of clobbering one another. Unset
-# DEFAULT_AGENT (every build before this feature existed) → filename unchanged.
+# DEFAULT_AGENT (when set) is folded into IMG_FILE too — named by agent, since
+# that's what you actually remember later — so multiple case-color builds of
+# the SAME DEVICE_TYPE (e.g. intern-v2 hermes vs. claudecode) land as separate
+# files instead of clobbering one another. Unset DEFAULT_AGENT (every build
+# before this feature existed) → filename unchanged.
 BUILT_IMG_rpi := golden.img
 BUILT_IMG_opi := $(DEVICE_TYPE)/golden-opi.img.xz
 BUILT_IMG := $(BUILT_IMG_$(TARGET))
@@ -109,7 +110,6 @@ build: build-preflight
 	-e OTA_METADATA_URL=$(OTA_METADATA_URL) \
 	-e DEVICE_TYPE=$(DEVICE_TYPE) \
 	-e DEFAULT_AGENT=$(DEFAULT_AGENT) \
-	-e CASE_COLOR=$(CASE_COLOR) \
 	-e BUILD_GIT_SHA=$(shell git -C .. rev-parse HEAD 2>/dev/null || echo unknown) \
 	pi-builder /work/$(BUILD_SCRIPT)
 	@# Name the output per device type so lamp/intern/dog images don't clobber.
