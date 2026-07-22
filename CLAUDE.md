@@ -42,6 +42,14 @@ This repo is developed in both **Cursor** and **Claude Code**. The following rul
    | Autonomous Buddy (Mac companion app) | `integrations/companions/autonomous-buddy/docs/autonomous-buddy.md`, `integrations/companions/autonomous-buddy/docs/autonomous-buddy-mvp.md`, `integrations/companions/autonomous-buddy/docs/release-signing.md` | `integrations/companions/autonomous-buddy/docs/vi/autonomous-buddy_vi.md`, `integrations/companions/autonomous-buddy/docs/vi/autonomous-buddy-mvp_vi.md`, `integrations/companions/autonomous-buddy/docs/vi/release-signing_vi.md` |
    | Security test checklist | `devices/lamp/docs/security-test.md` | _(no vi version)_ |
 
+   **Reachy Mini docs** (`devices/reachy-mini/docs/` + `devices/reachy-mini/docs/vi/`):
+
+   | Code area | English doc | Vietnamese doc |
+   |-----------|-------------|----------------|
+   | Bring-up, motion driver, deploy, safety delta | `devices/reachy-mini/docs/runtime.md` | `devices/reachy-mini/docs/vi/runtime_vi.md` |
+   | Recovery (Pollen OS), SSH, WiFi impact | `devices/reachy-mini/docs/recovery.md` | `devices/reachy-mini/docs/vi/recovery_vi.md` |
+   | First-boot recon plan, setup.sh design, smoke tests | `devices/reachy-mini/docs/first-boot-plan.md` | `devices/reachy-mini/docs/vi/first-boot-plan_vi.md` |
+
 2. **Comments in English** — Project standard.
 3. **Code is the single source of truth** — Docs reflect code, not the other way around.
 4. **Do not commit binary artifacts** — Version is injected via ldflags at build time.

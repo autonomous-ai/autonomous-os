@@ -218,15 +218,41 @@ profile is measured.
    curl -s -X POST http://localhost:5001/servo/release
    ```
 
+## Device .env and ALSA Config
+
+The production `.env` lives at `devices/reachy-mini/rootfs/opt/hal/.env` (rootfs
+overlay pattern — same as Lamp). It sets `DEVICE_TYPE=reachy-mini` and tuning
+defaults. `spike.sh` copies it on first deploy; OTA/setup.sh copies the rootfs
+overlay onto `/`.
+
+Audio device names are `TODO(spike)`. After first boot, run on the Pi:
+
+```bash
+arecord -l   # find mic array card
+aplay -l     # find speaker card
+```
+
+Then create `devices/reachy-mini/rootfs/etc/asound.conf` with ALSA aliases
+(same pattern as Lamp's `plug:device_micro` / `plug:device_speaker`), and
+update `.env` to reference them:
+
+```bash
+HAL_AUDIO_INPUT_ALSA=plug:device_mic
+HAL_AUDIO_OUTPUT_ALSA=plug:device_speaker
+```
+
+Camera: run `v4l2-ctl --list-devices` and update `HAL_CAMERA_INDEX` in `.env`.
+
 ## Hardware Spike TODOs
 
 Update this doc after the first real-device session:
 
+- ALSA device names → create `rootfs/etc/asound.conf` + update `.env`
+- camera device index and resolution → update `.env`
 - actual HAL board id for the Wireless model (`DEVICE.md` currently allows
   `raspberry_pi_4` and `raspberry_pi_5`)
-- camera device id/name and usable default resolution
-- microphone ALSA device name and echo-cancellation behavior
 - sign convention for `head_yaw.pos`, `head_pitch.pos`, and antenna order
 - whether `wake_up` / `goto_sleep` produce sound with `media_backend="no_media"`
 - first-run behavior of `pollen-robotics/reachy-mini-emotions-library`
+- verify emotion→HF move mapping looks/feels right on the robot
 - thermal limits before enabling `SAFETY.md` `thermal`

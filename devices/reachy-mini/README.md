@@ -12,7 +12,11 @@ OS image and runtime contract as the other devices, with the body selected by
 | `SAFETY.md` | Deterministic safety bounds for motion and fail-safe behavior |
 | `SOUL.md` | Reachy's default persona, adapted from Lamp but mapped to head/body/antenna expression |
 | `docs/runtime.md` | English bring-up and runtime notes |
+| `docs/recovery.md` | English recovery, SSH access, and WiFi impact notes |
+| `docs/first-boot-plan.md` | English first-boot recon plan, setup.sh design, smoke tests |
 | `docs/vi/runtime_vi.md` | Vietnamese bring-up and runtime notes |
+| `docs/vi/recovery_vi.md` | Vietnamese recovery, SSH access, and WiFi impact notes |
+| `docs/vi/first-boot-plan_vi.md` | Vietnamese first-boot recon plan |
 
 ## Shared References
 
