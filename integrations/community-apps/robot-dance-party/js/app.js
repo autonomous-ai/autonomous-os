@@ -118,6 +118,62 @@ function loadAudioFile(file) {
   toast('Playing: ' + file.name);
 }
 
+// YouTube
+$('btn-yt-play').addEventListener('click', loadYouTube);
+$('inp-yt-url').addEventListener('keydown', e => { if (e.key === 'Enter') loadYouTube(); });
+
+function extractYouTubeId(input) {
+  input = input.trim();
+  try {
+    const url = new URL(input);
+    const h = url.hostname.replace('www.', '');
+    if (h === 'youtube.com' || h === 'music.youtube.com') {
+      if (url.pathname === '/watch') return url.searchParams.get('v');
+      if (url.pathname.startsWith('/embed/')) return url.pathname.split('/')[2];
+      if (url.pathname.startsWith('/shorts/')) return url.pathname.split('/')[2];
+    }
+    if (h === 'youtu.be') return url.pathname.slice(1).split('/')[0];
+  } catch (_) {}
+  // Bare video ID
+  if (/^[a-zA-Z0-9_-]{11}$/.test(input)) return input;
+  return null;
+}
+
+async function loadYouTube() {
+  const url = $('inp-yt-url').value.trim();
+  if (!url) { toast('Paste a YouTube URL', true); return; }
+
+  const btn = $('btn-yt-play');
+  btn.disabled = true;
+  btn.textContent = 'Downloading...';
+  $('yt-hint').textContent = 'Downloading audio via yt-dlp...';
+
+  try {
+    const res = await fetch('/api/yt/download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Download failed');
+
+    stopDance();
+    audio.loadUrl(data.audio_url, data.title);
+    $('track-name').textContent = data.title;
+    $('now-playing').classList.add('active');
+    $('btn-play').innerHTML = '&#10074;&#10074;';
+    startDance();
+    $('yt-hint').textContent = 'Playing: ' + data.title;
+    toast('Playing: ' + data.title);
+  } catch (e) {
+    $('yt-hint').textContent = e.message;
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Play';
+  }
+}
+
 // Mic
 $('btn-mic').addEventListener('click', async () => {
   stopDance();
@@ -222,6 +278,8 @@ function stopDance() {
   $('btn-mic').textContent = 'Start Listening';
   $('btn-mic').disabled = false;
   $('bpm-val').textContent = '--';
+  const hint = $('yt-hint');
+  if (hint) hint.textContent = 'Downloads audio via yt-dlp, plays locally.';
 }
 
 // ============================
@@ -294,3 +352,18 @@ function showError(el, msg) {
   el.textContent = msg;
   el.style.display = 'block';
 }
+
+// ============================
+// Auto-reconnect on page load
+// ============================
+(async () => {
+  if (await robot.tryReconnect()) {
+    const host = robot.osBase.replace('http://', '');
+    $('screen-connect').style.display = 'none';
+    $('screen-dance').style.display = 'block';
+    $('lbl-host').textContent = host;
+    $('inp-host').value = host;
+    visualizer = new Visualizer($('visualizer'));
+    toast('Reconnected to ' + host);
+  }
+})();

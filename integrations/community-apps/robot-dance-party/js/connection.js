@@ -15,6 +15,8 @@ export class RobotConnection extends EventTarget {
     this.token = '';     // Bearer token for auth
     this.connected = false;
     this._healthInterval = null;
+    // Restore saved session
+    this._loadSession();
   }
 
   // Login to os-server, then verify HAL reachability via proxy
@@ -33,6 +35,7 @@ export class RobotConnection extends EventTarget {
       if (!loginRes.ok) throw new Error('Wrong password');
       const loginData = await loginRes.json();
       this.token = loginData?.data?.token || '';
+      this._saveSession(host);
     }
 
     // Verify HAL is reachable through proxy
@@ -59,7 +62,30 @@ export class RobotConnection extends EventTarget {
       clearInterval(this._healthInterval);
       this._healthInterval = null;
     }
+    this._clearSession();
     this._emit('disconnected');
+  }
+
+  // Restore saved session and try reconnecting (no password needed)
+  async tryReconnect() {
+    if (!this.token || !this.osBase) return false;
+    this.base = `${this.osBase}/api/hardware`;
+    try {
+      const res = await fetch(`${this.base}/health`, {
+        signal: AbortSignal.timeout(5000),
+        headers: this._authHeaders(),
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      this.connected = true;
+      this._startHealthPoll();
+      const host = this.osBase.replace('http://', '');
+      this._emit('connected', { host, health: data });
+      return true;
+    } catch {
+      this._clearSession();
+      return false;
+    }
   }
 
   // --- LED ---
@@ -167,6 +193,27 @@ export class RobotConnection extends EventTarget {
 
   _authHeaders() {
     return this.token ? { Authorization: `Bearer ${this.token}` } : {};
+  }
+
+  _saveSession(host) {
+    try {
+      localStorage.setItem('rdp_session', JSON.stringify({ host, token: this.token }));
+    } catch (_) {}
+  }
+
+  _loadSession() {
+    try {
+      const s = JSON.parse(localStorage.getItem('rdp_session') || '{}');
+      if (s.token) {
+        this.token = s.token;
+        this.osBase = `http://${s.host}`;
+      }
+    } catch (_) {}
+  }
+
+  _clearSession() {
+    this.token = '';
+    try { localStorage.removeItem('rdp_session'); } catch (_) {}
   }
 
   _emit(type, detail = {}) {

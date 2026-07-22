@@ -45,6 +45,7 @@
       <h3>Music</h3>
       <div class="source-tabs">
         <button class="source-tab active">Audio File</button>
+        <button class="source-tab">YouTube</button>
         <button class="source-tab">Microphone</button>
       </div>
 
@@ -55,6 +56,15 @@
           <p>Drop an audio file here or click to browse</p>
           <p style="font-size:12px; margin-top:8px; color:var(--muted)">MP3, WAV, OGG, FLAC</p>
         </div>
+      </div>
+
+      <!-- YouTube source -->
+      <div class="source-panel" id="panel-youtube">
+        <div class="yt-input-row">
+          <input type="text" id="inp-yt-url" placeholder="Paste YouTube URL" />
+          <button class="btn btn-primary" id="btn-yt-play">Play</button>
+        </div>
+        <p class="yt-hint" id="yt-hint">Downloads audio via yt-dlp, plays locally.</p>
       </div>
 
       <!-- Mic source -->

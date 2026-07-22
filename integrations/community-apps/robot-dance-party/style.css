@@ -201,6 +201,21 @@ body {
 }
 .btn-transport:hover { border-color: var(--accent); }
 
+/* ==================== YOUTUBE ==================== */
+.yt-input-row { display: flex; gap: 8px; margin-bottom: 12px; }
+.yt-input-row input {
+  flex: 1;
+  padding: 10px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+}
+.yt-input-row input:focus { border-color: var(--accent); }
+.yt-hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+
 /* ==================== VISUALIZER ==================== */
 .visualizer-wrap {
   position: relative;

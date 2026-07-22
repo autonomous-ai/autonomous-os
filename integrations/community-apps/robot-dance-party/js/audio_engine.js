@@ -40,8 +40,12 @@ export class AudioEngine extends EventTarget {
   }
 
   _initContext() {
-    if (this.ctx) return;
+    if (this.ctx) {
+      if (this.ctx.state === 'suspended') this.ctx.resume();
+      return;
+    }
     this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    this.ctx.resume(); // Chrome requires user gesture — caller is always from click
     this.analyser = this.ctx.createAnalyser();
     this.analyser.fftSize = 1024;
     this.analyser.smoothingTimeConstant = 0.75;
@@ -83,6 +87,36 @@ export class AudioEngine extends EventTarget {
     }, { once: true });
   }
 
+  // Load audio from URL (downloaded YouTube audio served by start_server.py)
+  loadUrl(url, title) {
+    this.stop();
+    this._initContext();
+    this.isMicMode = false;
+
+    // Must create a fresh <audio> element each time —
+    // createMediaElementSource can only bind once per element.
+    this.audioEl = document.createElement('audio');
+    this.audioEl.crossOrigin = 'anonymous';
+    this.audioEl.addEventListener('ended', () => {
+      this.isPlaying = false;
+      this._emit('ended');
+    });
+
+    this.audioEl.src = url;
+    this.source = this.ctx.createMediaElementSource(this.audioEl);
+    this.source.connect(this.analyser);
+    this.analyser.connect(this.ctx.destination);
+
+    this.audioEl.play();
+    this.isPlaying = true;
+    this._resetBeatState();
+    this._emit('playing', { name: title || 'YouTube', duration: 0 });
+
+    this.audioEl.addEventListener('loadedmetadata', () => {
+      this._emit('duration', { duration: this.audioEl.duration });
+    }, { once: true });
+  }
+
   // Connect microphone (like duo's live_groove WebRTC audio source)
   async loadMic() {
     this.stop();
@@ -104,6 +138,41 @@ export class AudioEngine extends EventTarget {
     this.isPlaying = true;
     this._resetBeatState();
     this._emit('playing', { name: 'Microphone', duration: Infinity });
+  }
+
+  // Capture system/tab audio via getDisplayMedia (Chrome).
+  // Works with YouTube or any tab audio — no physical mic needed.
+  async loadTabAudio() {
+    this.stop();
+    this._initContext();
+    this.isMicMode = true; // reuse mic flow for lifecycle
+
+    // Chrome: "Share tab audio" dialog
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: true,  // required by spec, we discard the video track
+      audio: true,
+    });
+    // Drop the video track — we only want audio
+    stream.getVideoTracks().forEach(t => t.stop());
+
+    if (!stream.getAudioTracks().length) {
+      throw new Error('No audio track — make sure you checked "Share tab audio"');
+    }
+
+    if (this.source) { try { this.source.disconnect(); } catch (_) {} }
+    this.source = this.ctx.createMediaStreamSource(stream);
+    this.source.connect(this.analyser);
+    // Don't connect to destination (prevent echo)
+
+    this.isPlaying = true;
+    this._resetBeatState();
+    this._emit('playing', { name: 'Tab Audio', duration: Infinity });
+
+    // Detect when user stops sharing
+    stream.getAudioTracks()[0].addEventListener('ended', () => {
+      this.isPlaying = false;
+      this._emit('ended');
+    });
   }
 
   // Transport controls
