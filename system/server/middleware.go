@@ -102,6 +102,15 @@ func isAllowedOrigin(origin, requestHost string) bool {
 	if siblingDeviceHost.MatchString(h) {
 		return true
 	}
+	// HuggingFace Spaces (community apps deployed as static JS apps).
+	if h == "huggingface.co" || strings.HasSuffix(h, ".huggingface.co") ||
+		strings.HasSuffix(h, ".hf.space") {
+		return true
+	}
+	// Localhost (dev / local community apps served via python -m http.server).
+	if h == "localhost" || h == "127.0.0.1" {
+		return true
+	}
 	return false
 }
 
@@ -207,6 +216,12 @@ func adminAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 		// Session cookie path (browser, post-login). Cookies auto-attach so
 		// this covers <img>, <a>, EventSource and any same-site fetch.
 		if session.HasValid(c, cfg) {
+			c.Next()
+			return
+		}
+		// Bearer as session token (cross-origin apps that got token from login).
+		bearer := strings.TrimSpace(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
+		if bearer != "" && session.VerifyToken(bearer, cfg) {
 			c.Next()
 			return
 		}

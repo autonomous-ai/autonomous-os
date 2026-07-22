@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Robot Dance Party</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ==================== CONNECT SCREEN ==================== -->
+<div id="screen-connect">
+  <div class="connect-card">
+    <h1>Robot Dance Party</h1>
+    <p class="subtitle">Drop a song, your robot dances to the beat.</p>
+    <div class="field">
+      <label for="inp-host">Robot IP or hostname</label>
+      <input type="text" id="inp-host" placeholder="192.168.1.100 or lamp-a1b2.local" />
+    </div>
+    <div class="field">
+      <label for="inp-pass">Password (optional)</label>
+      <input type="password" id="inp-pass" placeholder="Admin password" />
+    </div>
+    <button class="btn btn-primary" id="btn-connect">Connect</button>
+    <div class="error-msg" id="connect-error"></div>
+  </div>
+</div>
+
+<!-- ==================== DANCE SCREEN ==================== -->
+<div id="screen-dance">
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="status-dot" id="status-dot"></div>
+      <div>
+        <h2>Robot Dance Party</h2>
+        <span class="host-label" id="lbl-host"></span>
+      </div>
+    </div>
+    <button class="btn btn-outline btn-danger" id="btn-disconnect">Disconnect</button>
+  </div>
+
+  <div class="main-content">
+    <!-- Music Source -->
+    <div class="card music-section">
+      <h3>Music</h3>
+      <div class="source-tabs">
+        <button class="source-tab active">Audio File</button>
+        <button class="source-tab">Microphone</button>
+      </div>
+
+      <!-- File source -->
+      <div class="source-panel active" id="panel-file">
+        <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
+          <input type="file" id="file-input" accept="audio/*" />
+          <p>Drop an audio file here or click to browse</p>
+          <p style="font-size:12px; margin-top:8px; color:var(--muted)">MP3, WAV, OGG, FLAC</p>
+        </div>
+      </div>
+
+      <!-- Mic source -->
+      <div class="source-panel" id="panel-mic">
+        <p style="font-size:14px; color:var(--muted); margin-bottom:12px">
+          Play music on your phone or speakers. The mic picks up the audio and your robot dances along.
+        </p>
+        <button class="btn btn-primary" id="btn-mic">Start Listening</button>
+      </div>
+
+      <!-- Now playing -->
+      <div class="now-playing" id="now-playing">
+        <div class="track-name" id="track-name">-</div>
+        <div class="track-time" id="track-time"></div>
+        <div class="transport-btns">
+          <button class="btn-transport" id="btn-play">&#9654;</button>
+          <button class="btn-transport" id="btn-stop">&#9632;</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Visualizer -->
+    <div class="visualizer-wrap">
+      <canvas id="visualizer"></canvas>
+      <div class="bpm-display"><span id="bpm-val">--</span> BPM</div>
+      <div class="beat-indicator" id="beat-dot">BEAT</div>
+    </div>
+
+    <!-- Controls -->
+    <div class="controls-grid">
+      <!-- Dance Mapping -->
+      <div class="card">
+        <h3>Dance Mapping</h3>
+        <div class="dance-toggle">
+          <div>
+            <div class="toggle-label">LED Sync</div>
+            <div class="toggle-sub">Color follows spectrum, flash on beat</div>
+          </div>
+          <button class="switch on" id="sw-led"></button>
+        </div>
+        <div class="dance-toggle">
+          <div>
+            <div class="toggle-label">Servo Sync</div>
+            <div class="toggle-sub">Head moves to choreographed 8-beat sequences</div>
+          </div>
+          <button class="switch on" id="sw-servo"></button>
+        </div>
+        <div class="dance-toggle">
+          <div>
+            <div class="toggle-label">Emotion Sync</div>
+            <div class="toggle-sub">Trigger emotions on energy changes</div>
+          </div>
+          <button class="switch" id="sw-emotion"></button>
+        </div>
+      </div>
+
+      <!-- Rate Tuning -->
+      <div class="card">
+        <h3>Rate Tuning</h3>
+        <div class="slider-row">
+          <label for="sl-led-rate">LED rate</label>
+          <input type="range" min="2" max="20" value="12" id="sl-led-rate" />
+          <span class="val" id="val-led-rate">12</span>
+        </div>
+        <div class="slider-row">
+          <label for="sl-servo-rate">Servo rate</label>
+          <input type="range" min="1" max="8" value="4" id="sl-servo-rate" />
+          <span class="val" id="val-servo-rate">4</span>
+        </div>
+        <div class="slider-row">
+          <label for="sl-sensitivity">Sensitivity</label>
+          <input type="range" min="20" max="90" value="55" id="sl-sensitivity" />
+          <span class="val" id="val-sensitivity">55</span>
+        </div>
+      </div>
+
+      <!-- Activity Log -->
+      <div class="card">
+        <h3>Activity</h3>
+        <div class="robot-log" id="robot-log"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

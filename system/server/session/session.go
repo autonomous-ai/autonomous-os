@@ -100,6 +100,7 @@ func Issue(c *gin.Context, cfg *config.Config) error {
 	}
 	expiresAt := time.Now().Add(TTL)
 	token := sign(secret, expiresAt)
+	c.Set("_sess_tok", token)
 	maxAge := int(TTL / time.Second)
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     CookieName,
@@ -124,6 +125,26 @@ func Clear(c *gin.Context) {
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
 	})
+}
+
+// LatestToken returns the token issued by Issue in this request.
+func LatestToken(c *gin.Context) string {
+	v, _ := c.Get("_sess_tok")
+	s, _ := v.(string)
+	return s
+}
+
+// VerifyToken checks a raw token string (from Bearer header) against the
+// current session secret. Same validation as the cookie path.
+func VerifyToken(token string, cfg *config.Config) bool {
+	if token == "" || cfg.SessionSecret == "" {
+		return false
+	}
+	secret, err := hex.DecodeString(cfg.SessionSecret)
+	if err != nil {
+		return false
+	}
+	return verify(secret, token, time.Now()) == nil
 }
 
 // HasValid returns true if the request carries a os_session cookie that

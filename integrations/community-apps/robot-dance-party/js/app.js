@@ -1,0 +1,296 @@
+// app.js — Main orchestrator
+//
+// Wires together all modules and connects them to the UI.
+// Equivalent to duo's index.html inline scripts that bootstrap
+// DuoConnection + BeatBandit/LiveGroove + Visualizer.
+
+import { RobotConnection } from './connection.js';
+import { AudioEngine } from './audio_engine.js';
+import { DanceEngine } from './dance_engine.js';
+import { SafetyThrottle } from './safety.js';
+import { Visualizer } from './visualizer.js';
+
+// --- Singletons ---
+const robot = new RobotConnection();
+const audio = new AudioEngine();
+const safety = new SafetyThrottle();
+let dance = null;
+let visualizer = null;
+
+// --- DOM refs ---
+const $ = id => document.getElementById(id);
+
+// ============================
+// Connect Screen
+// ============================
+$('btn-connect').addEventListener('click', doConnect);
+$('inp-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doConnect(); });
+
+async function doConnect() {
+  const host = $('inp-host').value.trim();
+  const errEl = $('connect-error');
+  const btn = $('btn-connect');
+
+  if (!host) { showError(errEl, 'Enter robot IP or hostname'); return; }
+
+  btn.disabled = true;
+  btn.textContent = 'Connecting...';
+  errEl.style.display = 'none';
+
+  try {
+    const pass = $('inp-pass').value;
+    await robot.connect(host, pass);
+    $('screen-connect').style.display = 'none';
+    $('screen-dance').style.display = 'block';
+    $('lbl-host').textContent = host;
+
+    // Init visualizer
+    visualizer = new Visualizer($('visualizer'));
+
+    toast('Connected to ' + host);
+  } catch (e) {
+    showError(errEl, e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Connect';
+  }
+}
+
+$('btn-disconnect').addEventListener('click', () => {
+  if (dance) dance.stop();
+  audio.stop();
+  robot.disconnect();
+  if (visualizer) { visualizer.destroy(); visualizer = null; }
+  $('screen-dance').style.display = 'none';
+  $('screen-connect').style.display = 'flex';
+  $('now-playing').classList.remove('active');
+});
+
+// Connection events
+robot.addEventListener('connection-lost', () => {
+  $('status-dot').classList.add('offline');
+  toast('Connection lost', true);
+});
+robot.addEventListener('reconnected', () => {
+  $('status-dot').classList.remove('offline');
+  toast('Reconnected');
+});
+
+// ============================
+// Music Source
+// ============================
+
+// Tab switching
+document.querySelectorAll('.source-tab').forEach((tab, i) => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.source-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.source-panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.querySelectorAll('.source-panel')[i].classList.add('active');
+  });
+});
+
+// File drag & drop
+const dropZone = $('drop-zone');
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) loadAudioFile(e.dataTransfer.files[0]);
+});
+
+$('file-input').addEventListener('change', e => {
+  if (e.target.files.length) loadAudioFile(e.target.files[0]);
+});
+
+function loadAudioFile(file) {
+  if (!file || !file.type.startsWith('audio/')) {
+    toast('Not an audio file', true);
+    return;
+  }
+  stopDance();
+  audio.loadFile(file);
+  $('track-name').textContent = file.name;
+  $('now-playing').classList.add('active');
+  $('btn-play').innerHTML = '&#10074;&#10074;';
+  startDance();
+  toast('Playing: ' + file.name);
+}
+
+// Mic
+$('btn-mic').addEventListener('click', async () => {
+  stopDance();
+  try {
+    await audio.loadMic();
+    $('track-name').textContent = 'Microphone';
+    $('now-playing').classList.add('active');
+    $('btn-mic').textContent = 'Listening...';
+    $('btn-mic').disabled = true;
+    startDance();
+    toast('Microphone active');
+  } catch (e) {
+    toast('Microphone access denied', true);
+  }
+});
+
+// Transport
+$('btn-play').addEventListener('click', () => {
+  if (audio.isMicMode) return;
+  if (audio.isPlaying) {
+    audio.pause();
+    $('btn-play').innerHTML = '&#9654;';
+  } else {
+    audio.resume();
+    $('btn-play').innerHTML = '&#10074;&#10074;';
+  }
+});
+
+$('btn-stop').addEventListener('click', stopDance);
+
+audio.addEventListener('ended', () => {
+  stopDance();
+  toast('Track ended');
+});
+
+audio.addEventListener('duration', (e) => {
+  // Duration now available
+});
+
+// ============================
+// Dance Engine
+// ============================
+
+function startDance() {
+  if (dance) dance.stop();
+  dance = new DanceEngine(audio, robot, safety);
+
+  // Sync UI toggles
+  dance.ledEnabled = $('sw-led').classList.contains('on');
+  dance.servoEnabled = $('sw-servo').classList.contains('on');
+  dance.emotionEnabled = $('sw-emotion').classList.contains('on');
+
+  // Visualizer + BPM update
+  dance.addEventListener('tick', (e) => {
+    const { bass, mid, high, energy, isBeat, bpm, timestamp } = e.detail;
+
+    // Update visualizer
+    if (visualizer && audio.analyser) {
+      visualizer.draw(audio.freqData, audio.timeData, { bass, mid, high, energy, isBeat });
+    }
+
+    // Update BPM display
+    $('bpm-val').textContent = bpm || '--';
+
+    // Beat indicator
+    if (isBeat) {
+      $('beat-dot').classList.add('beat');
+      setTimeout(() => $('beat-dot').classList.remove('beat'), 150);
+    }
+
+    // Time display
+    if (!audio.isMicMode && audio.duration) {
+      $('track-time').textContent = fmt(audio.currentTime) + ' / ' + fmt(audio.duration);
+    } else {
+      $('track-time').textContent = '';
+    }
+  });
+
+  // Activity log
+  dance.addEventListener('command', (e) => {
+    const { type, direction, duration, emotion, intensity } = e.detail;
+    if (type === 'servo') addLog('servo', `Servo ${direction} (${duration}ms)`);
+    if (type === 'emotion') addLog('emotion', `Emotion: ${emotion}`);
+  });
+
+  dance.addEventListener('beat', (e) => {
+    addLog('beat', `Beat #${e.detail.beat} [${e.detail.energy}]`);
+  });
+
+  dance.addEventListener('energy-change', (e) => {
+    addLog('energy', `Energy: ${e.detail.level}`);
+  });
+
+  dance.start();
+}
+
+function stopDance() {
+  if (dance) { dance.stop(); dance = null; }
+  audio.stop();
+  $('btn-play').innerHTML = '&#9654;';
+  $('now-playing').classList.remove('active');
+  $('btn-mic').textContent = 'Start Listening';
+  $('btn-mic').disabled = false;
+  $('bpm-val').textContent = '--';
+}
+
+// ============================
+// UI Controls
+// ============================
+
+// Toggle switches
+document.querySelectorAll('.switch').forEach(sw => {
+  sw.addEventListener('click', () => {
+    sw.classList.toggle('on');
+    if (dance) {
+      dance.ledEnabled = $('sw-led').classList.contains('on');
+      dance.servoEnabled = $('sw-servo').classList.contains('on');
+      dance.emotionEnabled = $('sw-emotion').classList.contains('on');
+    }
+  });
+});
+
+// Sliders
+$('sl-led-rate').addEventListener('input', e => {
+  $('val-led-rate').textContent = e.target.value;
+  safety.setRate('led', parseInt(e.target.value));
+});
+
+$('sl-servo-rate').addEventListener('input', e => {
+  $('val-servo-rate').textContent = e.target.value;
+  safety.setRate('servo', parseInt(e.target.value));
+});
+
+$('sl-sensitivity').addEventListener('input', e => {
+  $('val-sensitivity').textContent = e.target.value;
+  // Sensitivity affects beat detection threshold in audio_engine
+  // Higher = more sensitive (more beats detected)
+});
+
+// ============================
+// Activity Log
+// ============================
+const MAX_LOG = 60;
+function addLog(type, msg) {
+  const log = $('robot-log');
+  const line = document.createElement('div');
+  line.className = 'log-' + type;
+  const ts = new Date().toLocaleTimeString('en', {
+    hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
+  line.textContent = ts + '  ' + msg;
+  log.prepend(line);
+  while (log.children.length > MAX_LOG) log.removeChild(log.lastChild);
+}
+
+// ============================
+// Helpers
+// ============================
+function fmt(s) {
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return m + ':' + (sec < 10 ? '0' : '') + sec;
+}
+
+function toast(msg, isError = false) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.className = 'toast show' + (isError ? ' error' : '');
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => { el.className = 'toast'; }, 2500);
+}
+
+function showError(el, msg) {
+  el.textContent = msg;
+  el.style.display = 'block';
+}

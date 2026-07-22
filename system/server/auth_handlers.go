@@ -33,7 +33,8 @@ func (s *Server) loginHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, serializers.ResponseError("session issue failed"))
 		return
 	}
-	c.JSON(http.StatusOK, serializers.ResponseSuccess(true))
+	// Return token in body for cross-origin apps that can't use the cookie.
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{"token": session.LatestToken(c)}))
 }
 
 // logoutHandler clears the session cookie. Stateless tokens mean we can't
