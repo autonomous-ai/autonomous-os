@@ -106,12 +106,15 @@ export class DanceEngine extends EventTarget {
 
   // Execute a single move from the sequence
   _executeMove(move, analysis, timestamp) {
-    // Servo
-    if (this.servoEnabled && move.direction) {
-      if (this.safety.shouldSend('servo', timestamp, move.direction)) {
-        this.robot.servoAim(move.direction, move.duration).catch(() => {});
-        this.safety.markSent('servo', timestamp, move.direction);
-        this._emit('command', { type: 'servo', direction: move.direction, duration: move.duration });
+    // Servo: absolute joint positions via /servo/move
+    if (this.servoEnabled && move.positions) {
+      const moveKey = JSON.stringify(move.positions);
+      if (this.safety.shouldSend('servo', timestamp, moveKey)) {
+        this.robot.servoMove(move.positions, move.duration).catch(() => {});
+        this.safety.markSent('servo', timestamp, moveKey);
+        const yaw = move.positions['base_yaw.pos'];
+        const pitch = move.positions['base_pitch.pos'];
+        this._emit('command', { type: 'servo', yaw, pitch, duration: move.duration });
       }
     }
 

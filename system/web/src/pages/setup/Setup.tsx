@@ -52,7 +52,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
     ssid, setSsid, password, setPassword,
     hasAdminPassword, hasNetworkPassword,
     adminPassword, setAdminPassword,
-    uniqueNetworks, wifiConnected, currentSsid, wifiChecking,
+    uniqueNetworks, refreshNetworks, wifiConnected, currentSsid, wifiChecking,
     llmLoaded, llmApiKey, setLlmApiKey, llmUrl, setLlmUrl, llmModel, setLlmModel,
     channel, setChannel, channelLoaded,
     teleToken, setTeleToken, teleUserId, setTeleUserId,
@@ -257,6 +257,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                     checkingConnection={wifiChecking}
                     loadingList={loadingList}
                     uniqueNetworks={uniqueNetworks}
+                    refreshNetworks={refreshNetworks}
                     {...(!hasAdminPassword ? {
                       adminPassword: adminPassword,
                       setAdminPassword: setAdminPassword,

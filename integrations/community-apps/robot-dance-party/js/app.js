@@ -104,13 +104,13 @@ $('file-input').addEventListener('change', e => {
   if (e.target.files.length) loadAudioFile(e.target.files[0]);
 });
 
-function loadAudioFile(file) {
+async function loadAudioFile(file) {
   if (!file || !file.type.startsWith('audio/')) {
     toast('Not an audio file', true);
     return;
   }
   stopDance();
-  audio.loadFile(file);
+  await audio.loadFile(file);
   $('track-name').textContent = file.name;
   $('now-playing').classList.add('active');
   $('btn-play').innerHTML = '&#10074;&#10074;';
@@ -158,7 +158,7 @@ async function loadYouTube() {
     if (!res.ok) throw new Error(data.error || 'Download failed');
 
     stopDance();
-    audio.loadUrl(data.audio_url, data.title);
+    await audio.loadUrl(data.audio_url, data.title);
     $('track-name').textContent = data.title;
     $('now-playing').classList.add('active');
     $('btn-play').innerHTML = '&#10074;&#10074;';
@@ -254,8 +254,8 @@ function startDance() {
 
   // Activity log
   dance.addEventListener('command', (e) => {
-    const { type, direction, duration, emotion, intensity } = e.detail;
-    if (type === 'servo') addLog('servo', `Servo ${direction} (${duration}ms)`);
+    const { type, yaw, pitch, duration, emotion, intensity } = e.detail;
+    if (type === 'servo') addLog('servo', `Nudge yaw:${yaw} pitch:${pitch} (${duration}ms)`);
     if (type === 'emotion') addLog('emotion', `Emotion: ${emotion}`);
   });
 
@@ -311,8 +311,9 @@ $('sl-servo-rate').addEventListener('input', e => {
 
 $('sl-sensitivity').addEventListener('input', e => {
   $('val-sensitivity').textContent = e.target.value;
-  // Sensitivity affects beat detection threshold in audio_engine
-  // Higher = more sensitive (more beats detected)
+  // Map slider [20..90] → threshold [0.20..0.02] (higher slider = lower threshold = more beats)
+  const v = parseInt(e.target.value);
+  audio.sensitivity = 0.20 - (v - 20) * (0.18 / 70);
 });
 
 // ============================

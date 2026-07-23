@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Wifi, Eye, EyeOff, Settings, Check } from "lucide-react";
+import { Wifi, Eye, EyeOff, Settings, Check, RefreshCw } from "lucide-react";
 import { C, ConfiguredHint, PasswordField, SectionCard, SkeletonBlock, LABEL_STYLE, INPUT_STYLE, INPUT_PAD_ONE_ICON, FIELD_GAP, ADMIN_PASSWORD_MIN } from "./shared";
 import type { NetworkItem } from "@/types";
 
@@ -41,6 +41,7 @@ const SKELETON_FIELD: React.CSSProperties = {
 
 export function WifiSection({
   active, ssid, setSsid, password, setPassword, loadingList, uniqueNetworks,
+  refreshNetworks,
   passwordConfigured = false,
   connectedSsid = "",
   checkingConnection = false,
@@ -53,6 +54,13 @@ export function WifiSection({
   setPassword: (v: string) => void;
   loadingList: boolean;
   uniqueNetworks: NetworkItem[];
+  /** Re-run `iw scan` on the device. Wired to the "Refresh list" button next
+   *  to the picker: right after a soft reset, wlan0 comes up in AP mode with
+   *  no cached scan results, so the FIRST scan often returns empty. Letting
+   *  the operator retry manually is simpler than backend warmup + timing
+   *  guesses. Also useful for a weak-signal SSID (e.g. "Glinks 1") that a
+   *  single scan window missed — a second scan often catches it. */
+  refreshNetworks?: () => void;
   /** True while useWifiConnected's first probe is still deciding whether the
    *  device is already on home Wi-Fi. We show a skeleton for the whole Wi-Fi
    *  group during this window so the step doesn't flash the empty "Choose your
@@ -200,35 +208,65 @@ export function WifiSection({
                 Wi-Fi network
               </label>
             )}
-            {loadingList ? (
-              <SkeletonBlock />
-            ) : uniqueNetworks.length > 0 ? (
-              <select
-                id="ssid"
-                value={ssid}
-                onChange={(e) => setSsid(e.target.value)}
-                style={{
-                  ...INPUT_STYLE,
-                  border: `1px solid ${overLimit ? C.red : C.border}`,
-                  cursor: "pointer",
-                }}
-              >
-                <option value="">Choose your Wi-Fi</option>
-                {uniqueNetworks.map((n) => (
-                  <option key={n.bssid} value={n.ssid}>{n.ssid}</option>
-                ))}
-              </select>
-            ) : (
-              <input
-                id="ssid" type="text" value={ssid}
-                onChange={(e) => setSsid(e.target.value)}
-                placeholder="Enter Wi-Fi name" autoComplete="off"
-                style={{
-                  ...INPUT_STYLE,
-                  border: `1px solid ${overLimit ? C.red : C.border}`,
-                }}
-              />
-            )}
+            {/* Flex row: input/select fills, Refresh button sits inline on the
+                right. Kept as sibling of the input (not overlaid absolute like
+                the password eye) so it's discoverable in both branches — the
+                dropdown case AND the empty-list "Enter Wi-Fi name" fallback,
+                where scan usually just needs one more shot to catch the
+                target SSID. Rendered regardless of showAdminPassword so the
+                first-time-setup form still has it. */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                {loadingList ? (
+                  <SkeletonBlock />
+                ) : uniqueNetworks.length > 0 ? (
+                  <select
+                    id="ssid"
+                    value={ssid}
+                    onChange={(e) => setSsid(e.target.value)}
+                    style={{
+                      ...INPUT_STYLE,
+                      border: `1px solid ${overLimit ? C.red : C.border}`,
+                      cursor: "pointer",
+                    }}
+                  >
+                    <option value="">Choose your Wi-Fi</option>
+                    {uniqueNetworks.map((n) => (
+                      <option key={n.bssid} value={n.ssid}>{n.ssid}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    id="ssid" type="text" value={ssid}
+                    onChange={(e) => setSsid(e.target.value)}
+                    placeholder="Enter Wi-Fi name" autoComplete="off"
+                    style={{
+                      ...INPUT_STYLE,
+                      border: `1px solid ${overLimit ? C.red : C.border}`,
+                    }}
+                  />
+                )}
+              </div>
+              {refreshNetworks && (
+                <button
+                  type="button"
+                  onClick={refreshNetworks}
+                  disabled={loadingList}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 4,
+                    background: "none", border: `1px solid ${C.border}`,
+                    padding: "0 10px", height: 40, borderRadius: 10,
+                    color: loadingList ? C.textMuted : C.amber,
+                    fontSize: 12, cursor: loadingList ? "not-allowed" : "pointer",
+                    whiteSpace: "nowrap", flexShrink: 0,
+                  }}
+                  title="Re-scan Wi-Fi networks (useful right after a soft reset when the first scan came up empty)"
+                >
+                  <RefreshCw size={12} />
+                  <span>{loadingList ? "Scanning…" : "Refresh"}</span>
+                </button>
+              )}
+            </div>
             {showCounter && (
               <div style={{
                 marginTop: 6, fontSize: 12,

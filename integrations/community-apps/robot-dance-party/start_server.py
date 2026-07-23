@@ -20,19 +20,26 @@ except ImportError:
     ])
     import yt_dlp
 
-import tempfile
-DOWNLOADS = Path(tempfile.gettempdir()) / "robot-dance-party"
+DOWNLOADS = Path(__file__).resolve().parent / "downloads"
 DOWNLOADS.mkdir(exist_ok=True)
 
 
-def download_audio(url):
-    """Download YouTube audio as mp3, return (filepath, title)."""
-    info = {"title": "Unknown"}
+def extract_video_id(url):
+    """Extract YouTube video ID from URL without downloading."""
+    with yt_dlp.YoutubeDL({"quiet": True, "skip_download": True}) as ydl:
+        info = ydl.extract_info(url, download=False)
+        return info.get("id"), info.get("title", "Unknown")
 
-    def _progress(d):
-        nonlocal info
-        if d.get("info_dict"):
-            info = d["info_dict"]
+
+def download_audio(url):
+    """Download YouTube audio as mp3, return (filepath, title). Reuses cached files."""
+    video_id, title = extract_video_id(url)
+
+    # Reuse cached file if already downloaded
+    mp3 = DOWNLOADS / f"{video_id}.mp3"
+    if mp3.exists():
+        print(f"Cache hit: {mp3.name}")
+        return mp3, title
 
     opts = {
         "format": "bestaudio/best",
@@ -40,14 +47,10 @@ def download_audio(url):
         "outtmpl": str(DOWNLOADS / "%(id)s.%(ext)s"),
         "noplaylist": True,
         "quiet": True,
-        "progress_hooks": [_progress],
     }
     with yt_dlp.YoutubeDL(opts) as ydl:
-        result = ydl.extract_info(url, download=True)
-        video_id = result.get("id", "unknown")
-        title = result.get("title", "Unknown")
+        ydl.download([url])
 
-    mp3 = DOWNLOADS / f"{video_id}.mp3"
     if not mp3.exists():
         for f in DOWNLOADS.glob(f"{video_id}.*"):
             mp3 = f

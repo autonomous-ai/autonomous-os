@@ -316,7 +316,12 @@ export function useSetupController(mode: SetupMode) {
   }, [isContinue, llmApiKey, sectionDone, navigate]);
 
   // Wi-Fi scan with retry — kept inline since it's specific to this page.
-  useEffect(() => {
+  // Runs once on mount; the operator can re-fire via the picker's "Refresh"
+  // button (see refreshNetworks below) — critical right after a soft reset,
+  // where wlan0 comes up in AP mode with no cached scan results and the first
+  // scan often returns empty.
+  const runScan = useCallback(() => {
+    setLoadingList(true);
     const maxAttempts = 4;
     let attempt = 0;
     function fetchNetworks(): Promise<void> {
@@ -325,8 +330,19 @@ export function useSetupController(mode: SetupMode) {
         .then((nets) => setNetworks((nets ?? []).filter((n) => n.ssid !== "")))
         .catch(() => { if (attempt < maxAttempts) return fetchNetworks(); setNetworks([]); });
     }
-    fetchNetworks().finally(() => setLoadingList(false));
+    return fetchNetworks().finally(() => setLoadingList(false));
   }, []);
+
+  useEffect(() => {
+    runScan();
+  }, [runScan]);
+
+  // Exposed to WifiSection. Silently no-ops while a scan is in flight to
+  // avoid stacking parallel `iw scan` calls that fight for the radio.
+  const refreshNetworks = useCallback(() => {
+    if (loadingList) return;
+    runScan();
+  }, [loadingList, runScan]);
 
   useConfigPrefill({
     urlParams, channelParam,
@@ -687,7 +703,7 @@ export function useSetupController(mode: SetupMode) {
     ssid, setSsid, password, setPassword,
     hasAdminPassword, hasNetworkPassword,
     adminPassword, setAdminPassword,
-    uniqueNetworks, wifiConnected, currentSsid, wifiChecking,
+    uniqueNetworks, refreshNetworks, wifiConnected, currentSsid, wifiChecking,
     // LLM
     llmLoaded, llmApiKey, setLlmApiKey, llmUrl, setLlmUrl, llmModel, setLlmModel,
     // channel

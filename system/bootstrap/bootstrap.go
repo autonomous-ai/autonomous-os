@@ -82,6 +82,11 @@ type Bootstrap struct {
 	cfg    *config.Config
 	client *http.Client
 	state  *state.State
+	// announcedThisCycle prevents the "device is updating" TTS cue from firing
+	// once per component when a single check-cycle needs to update multiple
+	// (e.g. HAL + web + os-server all behind min_version). Reset at the top of
+	// every checkOnce so a later cycle that finds new updates re-announces.
+	announcedThisCycle bool
 }
 
 // configRetryInterval is how often Serve reloads bootstrap.json while waiting for
@@ -240,6 +245,12 @@ func (b *Bootstrap) checkOnce(ctx context.Context) error {
 		return nil
 	}
 
+	// Reset per-cycle so a later cycle that finds new updates can announce
+	// again. Without this reset the operator would only hear the cue once per
+	// bootstrap-process lifetime, and long-running boxes would go silent even
+	// on real updates.
+	b.announcedThisCycle = false
+
 	changed := false
 	// Driven by metadata.openclaw.version — bumped via scripts/release/upload-openclaw.sh.
 	// detectVersion / applyUpdate already handle OTAKeyOpenClaw (npm install +
@@ -274,6 +285,66 @@ func (b *Bootstrap) checkOnce(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// resolveSTTLanguage returns the device's configured `stt_language` code (e.g.
+// "vi", "en", "zh") so announceUpdateStart can pick the right phrase. Returns
+// "" when config is missing / empty; callers fall back to English.
+func resolveSTTLanguage() string {
+	data, err := os.ReadFile("/root/config/config.json")
+	if err != nil {
+		return ""
+	}
+	var c struct {
+		STTLanguage string `json:"stt_language"`
+	}
+	if json.Unmarshal(data, &c) != nil {
+		return ""
+	}
+	return strings.TrimSpace(c.STTLanguage)
+}
+
+// otaUpdateStartPhrase returns the localized "device is updating, please wait"
+// announcement text. Mirrors the language branches in HAL's
+// _factory_reset_phrase — same fixed 3-lang set (vi / zh / en default) so both
+// destructive-ish flows sound consistent. Text is hardcoded here rather than
+// pushed through HAL i18n because bootstrap runs as its own binary and does not
+// import the HAL Python module; adding a new i18n key for one phrase would
+// mean touching both sides for every language change. Keep the phrases short
+// (~2-3s each) so the announce + settle window fits inside the LED "orange
+// breathing" cue before the actual update work drowns out further speech.
+func otaUpdateStartPhrase(lang string) string {
+	switch {
+	case strings.HasPrefix(lang, "vi"):
+		return "Thiết bị đang cập nhật, sẽ mất một chút thời gian, vui lòng chờ trong khi cập nhật."
+	case strings.HasPrefix(lang, "zh"):
+		return "设备正在更新，需要一点时间,请稍候。"
+	default:
+		return "Device is updating. This will take a moment, please wait."
+	}
+}
+
+// announceUpdateStart speaks the "device is updating" cue via HAL's cached TTS
+// path. Idempotent per check-cycle via b.announcedThisCycle so batched updates
+// (HAL + web + os-server all behind min_version) only trigger one cue.
+// Fire-and-forget: any error is logged but does not block the OTA (HAL could
+// be restarting during a HAL-component update, or the device may have no
+// speaker at all — audio out is a nice-to-have, not a hard requirement).
+// Skipped on devices without the `audio` capability so silent-body devices
+// don't waste render/network cycles on TTS that would go nowhere.
+func (b *Bootstrap) announceUpdateStart() {
+	if b.announcedThisCycle {
+		return
+	}
+	b.announcedThisCycle = true
+	if !device.Has(resolveDeviceType(), device.CapAudio) {
+		return
+	}
+	phrase := otaUpdateStartPhrase(resolveSTTLanguage())
+	slog.Info("OTA update cue", "component", "bootstrap", "phrase", phrase)
+	if err := hal.SpeakCached(phrase); err != nil {
+		slog.Warn("OTA update cue speak failed", "component", "bootstrap", "error", err)
+	}
 }
 
 // progressLED shows an OTA-progress status by name (ota_progress/ota_error/
@@ -390,6 +461,13 @@ func (b *Bootstrap) reconcile(ctx context.Context, key string, target domain.OTA
 	}
 
 	slog.Info("update available", "component", "bootstrap", "key", key, "current", current, "min", minVersion, "target", targetVersion)
+
+	// Voice cue BEFORE the LED + apply so the user hears "device is updating"
+	// while the strip is still on the current color and speech isn't fighting
+	// a HAL restart that a HAL-component update would trigger seconds later.
+	// Idempotent per cycle (b.announcedThisCycle) — a batched OS-server+HAL+web
+	// update speaks once, not thrice.
+	b.announceUpdateStart()
 
 	// Status LED: orange breathing while updating
 	b.progressLED("ota_progress")

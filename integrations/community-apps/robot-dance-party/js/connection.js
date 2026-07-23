@@ -108,12 +108,14 @@ export class RobotConnection extends EventTarget {
 
   // --- Servo ---
 
-  async servoAim(direction, duration = 400) {
-    return this._post('/servo/aim', { direction, duration });
+  async servoAim(direction, durationMs = 400) {
+    // HAL expects duration in seconds (0.0–10.0)
+    return this._post('/servo/aim', { direction, duration: durationMs / 1000 });
   }
 
-  async servoMove(positions, duration = 400) {
-    return this._post('/servo/move', { positions, duration });
+  async servoMove(positions, durationMs = 400) {
+    // HAL expects duration in seconds (0.0–10.0)
+    return this._post('/servo/move', { positions, duration: durationMs / 1000 });
   }
 
   // --- Emotion ---
