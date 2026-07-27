@@ -273,4 +273,65 @@ so they persist across container restarts. First start downloads from CDN.
   note the four weights currently missing from the bucket.
 - Put models on a persistent RunPod volume (point `MODEL_CACHE_DIR` at it) to avoid
   re-downloading on every pod restart.
+
+### Autostart after a container recreate
+
+RunPod recreates pod containers without notice (host maintenance, migration).
+That kills the whole process tree — **including the watchdog**, so nothing
+restarts the stack. The stock `runpod/pytorch` template only starts nginx, SSH
+and Jupyter, so the pod comes back looking healthy (`RUNNING`, SSH answers,
+nginx answers on `:8899`) while dlserver and lbserver are simply absent. Left
+alone, this is a silent outage that lasts until someone notices 502s.
+
+Two layers cover two different failures:
+
+| Layer | Handles | Mechanism |
+|-------|---------|-----------|
+| Watchdog | dlserver/lbserver **crashes** | [run-with-restart.sh](../scripts/run-with-restart.sh) restarts the process in 5s |
+| Autostart | **container recreates** | [runpod-autostart.sh](../scripts/runpod-autostart.sh), triggered on boot |
+
+The watchdog cannot cover a recreate — it dies with the process it watches.
+
+**Install (once per pod).** RunPod's `/start.sh` already runs `/post_start.sh`
+on every container start, so no template change is needed:
+
+```bash
+cat > /post_start.sh <<'EOF'
+#!/usr/bin/env bash
+# /start.sh runs under `set -e` and calls this synchronously before its final
+# `sleep infinity`. A non-zero exit would abort it and kill PID 1; a blocking
+# call would stall pod startup. So: detach, and always return 0.
+setsid nohup bash \
+    /workspace/autonomous-os/integrations/perception-service/scripts/runpod-autostart.sh \
+    </dev/null >/dev/null 2>&1 &
+exit 0
+EOF
+chmod +x /post_start.sh
+```
+
+On each container start the script then waits for the `/workspace` MooseFS mount
+and the GPU, exits early if dlserver is already up (safe to re-run by hand),
+`cd`s to the repo root, runs `make start-runpod-master`, and polls
+`/hal/api/dl/health` until it returns 200 — so the log records whether models
+actually loaded, not just that `make` returned.
+
+```bash
+tail -f /workspace/logs/autostart/autostart.log
+```
+
+**Two things that must not change.** `/post_start.sh` has to exit 0 immediately,
+for the reason in its comment. And `runpod-autostart.sh` has to `cd` to the repo
+root before running `make`, because `config.py` declares `env_file=".env"` as a
+*relative* path — started elsewhere, every setting silently falls back to its
+default and the stack comes up misconfigured rather than failing.
+
+**Limitation.** `/post_start.sh` lives on the container overlay `/`, which
+survives a recreate on the same host but not a migration to a different machine
+(the overlay is rebuilt from the image). `runpod-autostart.sh` is on `/workspace`
+and always survives. If the pod is ever migrated, re-run the `cat` above. For
+full durability, set the same command as the pod template's **Container Start
+Command** in the RunPod console, which lives in RunPod's control plane.
+
+For diagnosing an outage after the fact, see
+[troubleshooting.md](troubleshooting.md).
 </content>

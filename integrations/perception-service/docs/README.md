@@ -18,6 +18,8 @@ over WebSocket and HTTP behind an optional encrypting load balancer.
 | [perceptions.md](perceptions.md) | The 8 perception subsystems, models, enums, output types, batching |
 | [crypto-and-loadbalancer.md](crypto-and-loadbalancer.md) | `lbserver` round-robin proxy + RSA/AES encryption + nginx |
 | [deployment.md](deployment.md) | Install, Makefile targets, watchdog, single-node + master/slave GPU scaling, RunPod, Docker, TLS |
+| [deployment.md#autostart-after-a-container-recreate](deployment.md#autostart-after-a-container-recreate) | Bringing the stack back automatically after RunPod recreates the container |
+| [troubleshooting.md](troubleshooting.md) | Diagnosing an outage: crash vs container recreate vs OOM, reading multilog, disk and GPU checks |
 | [configuration.md](configuration.md) | All environment variables with defaults |
 | [configuration.md#batching](configuration.md#batching) | Batch size / timeout tuning per model (GPU VRAM guide) |
 | [configuration.md#input-limits](configuration.md#input-limits) | Input size guards (image, audio) |
@@ -57,7 +59,7 @@ For a single-node dev setup you can talk to `dlserver` directly and skip
 | Speech emotion (SER) | HTTP | emotion2vec | 9-class emotion + confidence |
 | Pose estimation | WS | RTMPose (2D) + TCPFormer (3D) | 2D/3D keypoints + RULA ergonomics |
 | Object detection | WS + HTTP | per-detector (opt-in) | Open-vocabulary boxes |
-| Audio embedder | HTTP | WeSpeaker ResNet293 | Speaker embedding vector |
+| Audio embedder | HTTP | WeSpeaker ECAPA-TDNN-1024 | Speaker embedding vector |
 | Face detection | internal | YuNet | Face boxes (feeds emotion/pose) |
 | Person detection | internal | YOLO | Person crop (feeds action) |
 
