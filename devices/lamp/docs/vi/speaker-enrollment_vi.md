@@ -120,8 +120,8 @@ Mọi giọng lạ được gom cụm local để server biết "đây là cùng
 
 | Tham số | Mặc định | Biến môi trường | Mô tả |
 |---------|----------|-----------------|-------|
-| Ngưỡng khớp | 0.75 | `SPEAKER_MATCH_THRESHOLD` | Confidence tối thiểu để khớp |
-| Ngưỡng consistency khi đăng ký | 0.75 | `SPEAKER_ENROLL_CONSISTENCY_THRESHOLD` | Cosine similarity tối thiểu giữa các mẫu |
+| Ngưỡng khớp | 0.7 | `SPEAKER_MATCH_THRESHOLD` | Confidence tối thiểu để khớp |
+| Ngưỡng consistency khi đăng ký | 0.7 | `SPEAKER_ENROLL_CONSISTENCY_THRESHOLD` | Cosine similarity tối thiểu giữa các mẫu |
 | Timeout API | 15s | `SPEAKER_EMBEDDING_API_TIMEOUT_S` | Timeout HTTP cho embedding API |
 | Audio tối thiểu cho nhận diện | 0.8s | `HAL_SPEAKER_MIN_AUDIO_S` | Bỏ qua nhận diện dưới ngưỡng này |
 | Số từ tối thiểu cho nudge đăng ký | 15 | Hardcoded trong `_should_request_enroll()` | Cổng số từ transcript |

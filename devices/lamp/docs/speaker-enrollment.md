@@ -119,8 +119,8 @@ Every unknown voice is locally clustered so the server can say "this is the same
 
 | Parameter | Default | Env var | Description |
 |-----------|---------|---------|-------------|
-| Match threshold | 0.75 | `SPEAKER_MATCH_THRESHOLD` | Min confidence for speaker match |
-| Enroll consistency | 0.75 | `SPEAKER_ENROLL_CONSISTENCY_THRESHOLD` | Min cosine similarity between enrollment samples |
+| Match threshold | 0.7 | `SPEAKER_MATCH_THRESHOLD` | Min confidence for speaker match |
+| Enroll consistency | 0.7 | `SPEAKER_ENROLL_CONSISTENCY_THRESHOLD` | Min cosine similarity between enrollment samples |
 | API timeout | 15s | `SPEAKER_EMBEDDING_API_TIMEOUT_S` | HTTP timeout for embedding API |
 | Min audio for recognition | 0.8s | `HAL_SPEAKER_MIN_AUDIO_S` | Skip recognition below this |
 | Min words for enroll nudge | 15 | Hardcoded in `_should_request_enroll()` | Transcript word count gate |

@@ -356,9 +356,9 @@ SPEAKER_RECOGNITION_ENABLED: bool = (
     os.environ.get("HAL_SPEAKER_RECOGNITION_ENABLED", "true").lower() == "true"
 )
 SPEAKER_MIN_AUDIO_S: float = float(os.environ.get("HAL_SPEAKER_MIN_AUDIO_S", "0.8")) # seconds
-SPEAKER_MATCH_THRESHOLD: float = float(os.environ.get("SPEAKER_MATCH_THRESHOLD", "0.75")) # 0.0 - 1.0
+SPEAKER_MATCH_THRESHOLD: float = float(os.environ.get("SPEAKER_MATCH_THRESHOLD", "0.7")) # 0.0 - 1.0
 SPEAKER_ENROLL_CONSISTENCY_THRESHOLD: float = float(
-    os.environ.get("SPEAKER_ENROLL_CONSISTENCY_THRESHOLD", "0.75")
+    os.environ.get("SPEAKER_ENROLL_CONSISTENCY_THRESHOLD", "0.7")
 )
 SPEAKER_EMBEDDING_API_TIMEOUT_S: float = float(
     os.environ.get("SPEAKER_EMBEDDING_API_TIMEOUT_S", "15")
