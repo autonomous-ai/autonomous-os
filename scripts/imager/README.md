@@ -125,15 +125,19 @@ Phase 2  OVERLAY — always runs (~1 min)
            then its rootfs/ overlay copied onto / (this is where /opt/hal/.env lands)
          - f_r_default_agent + SSH policy (both follow DEFAULT_AGENT)
          - web UI, Claude Desktop Buddy
+         - build manifest → output/<type>/manifest-rpi.json, build snapshot →
+           /etc/autonomous-build.json (baked runtime versions + OTA metadata)
          - @factory Btrfs snapshot + QC checks → /output/golden-<type>.img
 ```
 
 **base.img is cached but not generic.** Phase 1 bakes both device-type-specific content
 (nginx conf name, hostapd SSID, dnsmasq drop-in, `Environment=DEVICE_TYPE`, the pre-baked
 runtime CLIs) and board-specific content (Debian release, Pi-5-only stages). The builder
-stamps `/output/base.img.built-for` with `<device_type>/rpi<model>` and **aborts** if a
-later build asks for a different combination — delete `base.img` (and the stamp) to
-rebuild. Anything that must follow `DEFAULT_AGENT` lives in Phase 2 for this reason.
+stamps `/output/base.img.built-for` with `<device_type>/rpi<model>/v<N>` (the `/v<N>`
+suffix is the Phase-1 schema version, bumped whenever a Phase-1 stage changes) and
+**aborts** if a later build asks for a different combination — delete `base.img` (and
+the stamp) to rebuild. Anything that must follow `DEFAULT_AGENT` lives in Phase 2 for
+this reason.
 
 ### First boot on the device
 
@@ -268,6 +272,23 @@ xz -dc output/lamp/golden-opi-lamp.img.xz | head -c 16M | hexdump -C | head -20
 Expected: non-zero bytes near offsets `0x2000` (SPL) and `0x20000` (U-Boot).
 
 ## Recent changes
+
+**2026-07-27 (2)** — `build.sh` (Pi) parity round 2 — remaining gaps closed:
+- Build manifest (`output/<type>/manifest-rpi.json`, the path the Makefile's release
+  note reads) + `/etc/autonomous-build.json` build snapshot with baked runtime versions
+- OpenClaw state pinned under `/root/.openclaw` (onboard env + service unit env block —
+  a path mismatch causes WS close 1008 / token_mismatch), `yq` baked
+- `hal.service` gets `EnvironmentFile=/opt/hal/.env` + `PULSE_SERVER`, PulseAudio
+  anonymous socket module for BT routing
+- Wired-setup dhcpcd logic (`denyinterfaces wlan0` in AP mode instead of stopping
+  dhcpcd, so ethernet keeps working) ported from `build-orangepi.sh`
+- `software-update`: openclaw plugin re-install on update; `web` wipes stale assets +
+  writes `VERSION`
+- `DEFAULT_AGENT` validated against the known runtime list; stale `CASE_COLOR` aborts
+- Top-level `OPENCLAW_VERSION` (fixes a latent `set -u` unbound-variable abort in the
+  plugin-install lines); `location = /gw` exact-match nginx block
+- base.img stamp now carries a Phase-1 schema version (`/v2`) so pre-change caches are
+  refused with a clear message
 
 **2026-07-27** — `build.sh` (Pi) brought to parity with `build-orangepi.sh`:
 - Device `rootfs/` overlay is now copied onto `/` — both at build time and in

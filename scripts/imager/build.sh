@@ -150,10 +150,34 @@ DEVICES_DIR="${DEVICES_DIR:-/opt/devices}"
 # seeding falls through to DEVICE.md gateway.default exactly as before.
 # Mirrors build-orangepi.sh; forwarded by the Makefile (-e) for both targets.
 DEFAULT_AGENT="${DEFAULT_AGENT:-}"
+# OpenClaw CLI version baked into the image. Defined at the TOP level (not just
+# inside the chroot heredoc) because the plugin-install lines expand
+# ${OPENCLAW_VERSION} at heredoc-build time — with set -u an undefined outer
+# variable would abort the build. Mirrors build-orangepi.sh.
+OPENCLAW_VERSION="${OPENCLAW_VERSION:-2026.6.10}"
 AP_BAND="${AP_BAND:-2.4}"   # 2.4 or 5 (5 GHz needs supported regulatory domain + chip)
 AP_CHANNEL="${AP_CHANNEL:-}" # default: 6 for 2.4 GHz, 36 for 5 GHz
 COUNTRY_CODE="US"           # Regulatory country code for hostapd
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Fail fast on a DEFAULT_AGENT typo — a misspelled value would silently seed a
+# runtime the AgentGateway factory doesn't know. Same list as build-orangepi.sh.
+if [ -n "${DEFAULT_AGENT}" ]; then
+  case "${DEFAULT_AGENT}" in
+    openclaw|hermes|picoclaw|codex|claudecode|opencode) ;;
+    *) echo "ERROR: invalid DEFAULT_AGENT=${DEFAULT_AGENT} — must be one of: openclaw hermes picoclaw codex claudecode opencode" >&2; exit 1 ;;
+  esac
+fi
+
+# CASE_COLOR was removed (DEFAULT_AGENT alone drives the seeded runtime AND the
+# SSH policy) — fail fast instead of silently ignoring it. Without this guard an
+# old invocation like `CASE_COLOR=blue` with no DEFAULT_AGENT would ship SSH
+# OPEN instead of closed, with no error to catch it. Same guard as
+# build-orangepi.sh and the imager Makefile.
+if [ -n "${CASE_COLOR:-}" ]; then
+  echo "ERROR: CASE_COLOR is removed — set DEFAULT_AGENT=hermes|openclaw|claudecode instead (SSH now follows DEFAULT_AGENT directly)" >&2
+  exit 1
+fi
 
 MNT="/mnt/pi"
 # Pi 5 uses Trixie (Debian 13); Pi 4 uses Bookworm (Debian 12) for broader compatibility.
@@ -224,7 +248,13 @@ mkdir -p ${MNT} ${ORIG_ROOT} ${ORIG_BOOT} /output /work
 # built for a different device type or board silently ships a wrong image, so
 # stamp what it was built for and refuse a mismatched reuse.
 BASE_STAMP="${BASE_IMG}.built-for"
-BASE_STAMP_WANT="${DEVICE_TYPE}/rpi${RPI_MODEL}"
+# The trailing /vN is the Phase-1 schema version — bump it whenever a Phase-1
+# stage changes (new baked tool, new unit content), so cached base.img files
+# built before the change are refused with a clear message instead of failing
+# QC (or worse, shipping) with the old content.
+# v2: openclaw env/state under /root/.openclaw, yq, baked-*-version capture,
+#     PulseAudio anon socket, hal.service EnvironmentFile, wired-setup dhcpcd.
+BASE_STAMP_WANT="${DEVICE_TYPE}/rpi${RPI_MODEL}/v2"
 if [[ -f "${BASE_IMG}" ]]; then
   BASE_STAMP_HAVE="$(cat "${BASE_STAMP}" 2>/dev/null || echo unknown)"
   if [[ "${BASE_STAMP_HAVE}" != "${BASE_STAMP_WANT}" ]]; then
@@ -776,6 +806,9 @@ export OTA_METADATA_URL="${OTA_METADATA_URL}"
 export AP_BAND="${AP_BAND}"
 export AP_CHANNEL="${AP_CHANNEL}"
 export COUNTRY_CODE="${COUNTRY_CODE}"
+export OPENCLAW_VERSION="${OPENCLAW_VERSION}"
+export DEVICE_TYPE="${DEVICE_TYPE}"
+export DEVICES_DIR="${DEVICES_DIR}"
 
 # retry(cmd, max_attempts, delay_seconds) — retries a command on failure
 retry() {
@@ -859,7 +892,7 @@ fi
 cat > /etc/systemd/system/bootstrap.service <<'EOF'
 [Unit]
 Description=Bootstrap Backend
-After=network.target
+After=network-online.target
 
 [Service]
 User=root
@@ -877,7 +910,7 @@ EOF
 cat > /etc/systemd/system/os-server.service <<EOF
 [Unit]
 Description=Autonomous OS Server
-After=network.target
+After=network-online.target
 
 [Service]
 User=root
@@ -901,10 +934,14 @@ Description=HAL Hardware Runtime
 After=network.target
 
 [Service]
+EnvironmentFile=/opt/hal/.env
 Type=simple
 User=root
 WorkingDirectory=/opt/hal
 Environment="PYTHONPATH=/opt"
+# Anonymous PulseAudio socket (see the default.pa drop-in in the PulseAudio
+# stage) so root-owned hal can reach PulseAudio for Bluetooth headset routing.
+Environment="PULSE_SERVER=unix:/tmp/pulse-anon-${DEVICE_TYPE}"
 # --timeout-graceful-shutdown: without it uvicorn waits forever for open
 # connections (an SSE/MJPEG stream holds SIGTERM until systemd's 90s SIGKILL).
 ExecStart=/opt/hal/.venv/bin/uvicorn hal.server:app --host 127.0.0.1 --port 5001 --timeout-graceful-shutdown 5
@@ -986,9 +1023,15 @@ rm -f "\$META"
 [ -z "\$URL" ] && [ "\$KIND" != "openclaw" ] && { echo "ERROR: no url for \$KIND"; exit 1; }
 echo "Installing \$KIND \$VER..."
 if [ "\$KIND" = "web" ]; then
-  mkdir -p /usr/share/nginx/html/setup
+  WEB_ROOT="/usr/share/nginx/html/setup"
+  mkdir -p "\$WEB_ROOT"
   curl -fsSL -o /tmp/web.zip "\$URL"
-  unzip -o -q /tmp/web.zip -d /usr/share/nginx/html/setup
+  # Wipe stale assets before unzip — hashed bundle filenames change every
+  # release, and unzip-over would accumulate old ones forever. Download first
+  # so a failed fetch never leaves the web root empty. Mirrors build-orangepi.sh.
+  rm -rf "\${WEB_ROOT:?}"/*
+  unzip -o -q /tmp/web.zip -d "\$WEB_ROOT"
+  echo "\$VER" > "\$WEB_ROOT/VERSION"
   rm -f /tmp/web.zip
   systemctl reload nginx 2>/dev/null || systemctl restart nginx 2>/dev/null || true
 elif [ "\$KIND" = "os-server" ]; then
@@ -1019,6 +1062,11 @@ elif [ "\$KIND" = "hal" ]; then
 elif [ "\$KIND" = "openclaw" ]; then
   V="\${VER:-latest}"
   npm install -g "openclaw@\${V}" || { echo "npm install openclaw failed"; exit 1; }
+  # Re-install external plugins pinned to the same version — npm install -g of
+  # the core package does not upgrade them, and a version skew between core and
+  # plugins breaks the plugin ABI. Mirrors build-orangepi.sh.
+  openclaw plugins install @openclaw/discord@\${V} --force 2>&1 || echo "[software-update] WARN: discord plugin install failed (non-fatal)"
+  openclaw plugins install @openclaw/slack@\${V} --force 2>&1 || echo "[software-update] WARN: slack plugin install failed (non-fatal)"
   systemctl restart openclaw 2>/dev/null || true
 elif [ "\$KIND" = "claude-desktop-buddy" ]; then
   BUDDY_DIR="/opt/claude-desktop-buddy"; D="\$(mktemp -d)"
@@ -1163,6 +1211,19 @@ server {
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Prefix /hw;
   }
+  # Exact /gw (no trailing slash) — the gateway WebSocket connects here; the
+  # prefix block below only matches /gw/. Mirrors build-orangepi.sh.
+  location = /gw {
+    allow 127.0.0.1;
+    allow ::1;
+    deny all;
+
+    proxy_pass http://openclaw/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade \$http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host \$host;
+  }
   location /gw/ {
     allow 127.0.0.1;
     allow ::1;
@@ -1306,7 +1367,31 @@ systemctl stop wpa_supplicant@wlan0 2>/dev/null || true
 systemctl disable wpa_supplicant@wlan0 2>/dev/null || true
 systemctl mask wpa_supplicant@wlan0 2>/dev/null || true
 killall wpa_supplicant 2>/dev/null || true
-systemctl stop dhcpcd 2>/dev/null || true
+# AP mode owns wlan0 — and ONLY wlan0. Do not stop/disable dhcpcd: this image
+# purges NetworkManager at build time, so dhcpcd is the DHCP client for EVERY
+# interface, and disabling it also kills the wired link. A device in AP mode
+# (fresh out of the box, after a factory reset, or after "change WiFi") would
+# then have no ethernet at all until someone supplies WiFi credentials — which
+# is exactly what a wired user is trying to avoid. Instead tell dhcpcd to
+# ignore wlan0 and keep serving eth0/end0; wlan0's AP address is assigned by
+# hand further below. Mirrors build-orangepi.sh.
+touch /etc/dhcpcd.conf
+if ! grep -q '^denyinterfaces wlan0\$' /etc/dhcpcd.conf; then
+  # Prepend, never append: in dhcpcd.conf every option after an "interface X"
+  # line belongs to that interface's block, and the base image's file may well
+  # end inside one — appending there would scope this global option to a single
+  # interface and silently do nothing.
+  if [ -s /etc/dhcpcd.conf ]; then
+    sed -i '1i denyinterfaces wlan0' /etc/dhcpcd.conf
+  else
+    echo 'denyinterfaces wlan0' > /etc/dhcpcd.conf
+  fi
+fi
+systemctl enable dhcpcd 2>/dev/null || true
+systemctl restart dhcpcd 2>/dev/null || true
+# Drop any stale wlan0 lease so a later sta-mode starts clean.
+rm -f /var/lib/dhcpcd5/dhcpcd-wlan0 2>/dev/null || true
+rm -f /var/lib/dhcpcd/dhcpcd-wlan0 2>/dev/null || true
 # Pi 5: device-tree serial; Pi 4: cpuinfo Serial.
 # Non-Pi boards (OrangePi 4 Pro etc.) lack both — fall back to the ethernet
 # MAC so the AP SSID still gets a stable per-device suffix.
@@ -1385,8 +1470,10 @@ ip link set wlan0 down 2>/dev/null || true; sleep 1
 iw dev wlan0 set type managed
 ip link set wlan0 up; sleep 1
 ip addr flush dev wlan0
-# Remove AP static IP config from dhcpcd
-sed -i '/static ip_address=192.168.100.1\/24/d;/nohook wpa_supplicant/d' /etc/dhcpcd.conf
+# Remove AP static IP config from dhcpcd, and hand wlan0 back to dhcpcd —
+# device-ap-mode denied it so the AP could own the interface while the wired
+# link kept its lease. Mirrors build-orangepi.sh.
+sed -i '/static ip_address=192.168.100.1\/24/d;/nohook wpa_supplicant/d;/^denyinterfaces wlan0\$/d' /etc/dhcpcd.conf
 # Start STA services
 systemctl unmask wpa_supplicant@wlan0 2>/dev/null || true
 systemctl enable wpa_supplicant@wlan0
@@ -1459,6 +1546,7 @@ if [ -f "\$PULSE_CONF" ] && ! grep -q "module-echo-cancel" "\$PULSE_CONF"; then
 load-module module-echo-cancel source_name=aec_source sink_name=aec_sink aec_method=webrtc aec_args="analog_gain_control=0 digital_gain_control=0" channels=1
 set-default-source aec_source
 set-default-sink aec_sink
+load-module module-native-protocol-unix auth-anonymous=1 socket=/tmp/pulse-anon-${DEVICE_TYPE}
 PULSE_EOF
 fi
 
@@ -1496,14 +1584,32 @@ if ! command -v node &>/dev/null || ! node -v 2>/dev/null | grep -qE '^v(2[2-9]|
 fi
 echo "node=\$(node -v) npm=\$(npm -v)"
 
-echo "[stage] Install OpenClaw"
-OPENCLAW_VERSION="\${OPENCLAW_VERSION:-2026.6.10}"
+echo "[stage] Install OpenClaw \${OPENCLAW_VERSION}"
 retry "npm install -g openclaw@\${OPENCLAW_VERSION} --omit=optional" 5
 openclaw --version || true
+openclaw --version 2>/dev/null | tr -d '[:space:]' > /tmp/baked-openclaw-version || echo "unknown" > /tmp/baked-openclaw-version
+
+# OpenClaw state dir. MUST be /root/.openclaw (with dot) — any /root/openclaw
+# mismatch causes WS close 1008 / token_mismatch. Mirrors build-orangepi.sh.
+mkdir -p \\
+  /root/.openclaw \\
+  /root/.openclaw/agents/main/agent \\
+  /root/.openclaw/workspace \\
+  /root/.openclaw/.cache \\
+  /root/.openclaw/.config \\
+  /root/.openclaw/.local/share
 
 # Onboard as root to create default config/state files before first service start.
 # --skip-health: gateway cannot run inside chroot (no systemd, no network).
 # Timeout: chroot has no systemd/network/udev — command may hang despite --skip-health.
+# Env pins every state/cache path under /root/.openclaw so onboard writes to the
+# exact tree the service unit below reads from.
+HOME=/root \\
+OPENCLAW_HOME=/root/.openclaw \\
+OPENCLAW_STATE_DIR=/root/.openclaw \\
+XDG_CACHE_HOME=/root/.openclaw/.cache \\
+XDG_CONFIG_HOME=/root/.openclaw/.config \\
+XDG_DATA_HOME=/root/.openclaw/.local/share \\
 timeout 60 openclaw onboard --non-interactive --accept-risk --skip-health || {
   echo "WARNING: openclaw onboard timed out or failed (non-fatal in chroot)"
   echo "Gateway will complete onboarding on first boot with network access."
@@ -1513,11 +1619,16 @@ timeout 60 openclaw onboard --non-interactive --accept-risk --skip-health || {
 openclaw plugins install @openclaw/discord@${OPENCLAW_VERSION} --force 2>&1 || echo "WARN: discord plugin install failed (non-fatal)"
 openclaw plugins install @openclaw/slack@${OPENCLAW_VERSION} --force 2>&1 || echo "WARN: slack plugin install failed (non-fatal)"
 
+# yq — used by os-server config migration + runtime install scripts.
+curl -fsSL "https://github.com/mikefarah/yq/releases/download/v4.46.1/yq_linux_arm64" -o /usr/local/bin/yq
+chmod +x /usr/local/bin/yq
+
 # Resolve chromium path for headless browser support
 CHROME_PATH=\$(command -v chromium 2>/dev/null || command -v chromium-browser 2>/dev/null || echo /usr/bin/chromium)
 OPENCLAW_BIN=\$(command -v openclaw)
 
-# Write openclaw.service systemd unit
+# Write openclaw.service systemd unit — env block matches build-orangepi.sh /
+# production so gateway state lives under /root/.openclaw.
 cat > /etc/systemd/system/openclaw.service <<OCUNIT
 [Unit]
 Description=OpenClaw Gateway
@@ -1526,7 +1637,13 @@ After=network.target
 [Service]
 Type=simple
 User=root
+WorkingDirectory=/root/.openclaw
+Environment="OPENCLAW_HOME=/root/.openclaw"
+Environment="OPENCLAW_STATE_DIR=/root/.openclaw"
 Environment="HOME=/root"
+Environment="XDG_CACHE_HOME=/root/.openclaw/.cache"
+Environment="XDG_CONFIG_HOME=/root/.openclaw/.config"
+Environment="XDG_DATA_HOME=/root/.openclaw/.local/share"
 Environment="PUPPETEER_EXECUTABLE_PATH=\$CHROME_PATH"
 Environment="PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
 Environment="CHROME_BIN=\$CHROME_PATH"
@@ -1560,6 +1677,7 @@ done
 rm -f "\$HERMES_INSTALLER"
 echo "git" >/usr/local/lib/hermes-agent/.install_method 2>/dev/null || true
 hermes --version || true
+hermes --version 2>/dev/null | tr -d '[:space:]' > /tmp/baked-hermes-version || echo "unknown" > /tmp/baked-hermes-version
 
 # ── stage: Hermes gateway unit pre-bake (created, left DISABLED) ─────────────
 # Pre-baking the binary above is not enough: IsReady()/device setup wait on the
@@ -1634,11 +1752,13 @@ if [ "${DEVICE_TYPE}" = "intern-v2" ] || [ "${DEVICE_TYPE}" = "lamp" ]; then
   install -m 0755 "\$CODEX_TMP/\${CODEX_ASSET%.tar.gz}" /usr/local/bin/codex
   rm -rf "\$CODEX_TMP"
   codex --version || true
+  codex --version 2>/dev/null | tr -d '[:space:]' > /tmp/baked-codex-version || echo "unknown" > /tmp/baked-codex-version
 
   echo "[stage] Claude Code CLI binary pre-bake (${DEVICE_TYPE})"
   retry "curl -fsSL https://claude.ai/install.sh | bash" 3 10
   [ -x /root/.local/bin/claude ] && ln -sf /root/.local/bin/claude /usr/local/bin/claude
   claude --version || true
+  claude --version 2>/dev/null | tr -d '[:space:]' > /tmp/baked-claudecode-version || echo "unknown" > /tmp/baked-claudecode-version
 
   echo "[stage] picoclaw CLI binary pre-bake (${DEVICE_TYPE})"
   PICO_VERSION="\${PICO_VERSION:-v0.3.1-fixvision}"
@@ -1648,8 +1768,11 @@ if [ "${DEVICE_TYPE}" = "intern-v2" ] || [ "${DEVICE_TYPE}" = "lamp" ]; then
   install -m 0755 "\$PICO_TMP" /usr/local/bin/picoclaw
   rm -f "\$PICO_TMP"
   # picoclaw has no --version flag (errors "unknown flag") — version is a
-  # subcommand that also prints an ANSI banner.
+  # subcommand that also prints an ANSI banner, so extract just the
+  # "picoclaw <version>" token instead of capturing the whole thing.
   picoclaw --no-color version || true
+  picoclaw --no-color version 2>/dev/null | sed -n 's/.*picoclaw \([^ ]*\).*/\1/p' | head -1 > /tmp/baked-picoclaw-version
+  [ -s /tmp/baked-picoclaw-version ] || echo "unknown" > /tmp/baked-picoclaw-version
 
   echo "[stage] opencode CLI binary pre-bake (${DEVICE_TYPE})"
   # Mirrors runtimes/opencode/install.sh exactly (same pinned version, same
@@ -1674,8 +1797,14 @@ if [ "${DEVICE_TYPE}" = "intern-v2" ] || [ "${DEVICE_TYPE}" = "lamp" ]; then
     fi
   fi
   "\$OPENCODE_BIN" --version || true
+  "\$OPENCODE_BIN" --version 2>/dev/null | tr -d '[:space:]' > /tmp/baked-opencode-version
+  [ -s /tmp/baked-opencode-version ] || echo "unknown" > /tmp/baked-opencode-version
 else
   echo "[stage] DEVICE_TYPE=${DEVICE_TYPE} — skipping codex/claudecode/picoclaw/opencode pre-bake (no runtime picker in its web UI)"
+  echo "unbaked" > /tmp/baked-codex-version
+  echo "unbaked" > /tmp/baked-claudecode-version
+  echo "unbaked" > /tmp/baked-picoclaw-version
+  echo "unbaked" > /tmp/baked-opencode-version
 fi
 
 systemctl daemon-reload
@@ -2090,6 +2219,9 @@ OS_SERVER_VER=\$(jq -r '."os-server".version // empty'   "\$META")
 BOOTSTRAP_VER=\$(jq -r '.bootstrap.version // empty' "\$META")
 HAL_VER=\$(jq -r '.hal.version // empty' "\$META")
 BUDDY_VER=\$(jq -r '."claude-desktop-buddy".version // empty' "\$META")
+# Save snapshot before removing — host reads it back after chroot exits to bake
+# into /etc/autonomous-build.json. Must happen before rm -f below.
+cp "\$META" /tmp/metadata-baked.json 2>/dev/null || true
 rm -f "\$META"
 [ -z "\$WEB_URL" ] || [ -z "\$OS_SERVER_URL" ] || [ -z "\$BOOTSTRAP_URL" ] && {
   echo "ERROR: OTA metadata missing web.url, os-server.url or bootstrap.url"; exit 1
@@ -2284,6 +2416,9 @@ fi
 # ── stage: web UI ────────────────────────────────────────────────────────────
 echo "[overlay] Download web UI"
 retry "curl -fsSL -H 'Cache-Control: no-cache' -o /tmp/web.zip '\$WEB_URL'" 5
+# Wipe stale assets before unzip — a rebuilt overlay on a cached base would
+# otherwise keep old hashed bundles forever. Mirrors build-orangepi.sh.
+rm -rf /usr/share/nginx/html/setup/*
 unzip -o -q /tmp/web.zip -d /usr/share/nginx/html/setup
 rm -f /tmp/web.zip
 
@@ -2334,6 +2469,17 @@ else
 fi
 
 echo "[overlay] All overlay stages complete"
+
+# Persist OTA versions to a file inside the image; host script reads it back
+# out after chroot exits to build the manifest. Key=value format so a shell
+# 'source' on the host pulls them into variables. Mirrors build-orangepi.sh.
+cat > /tmp/ota-versions.env <<MANIFEST
+WEB_VER=\${WEB_VER}
+OS_SERVER_VER=\${OS_SERVER_VER}
+BOOTSTRAP_VER=\${BOOTSTRAP_VER}
+HAL_VER=\${HAL_VER}
+BUDDY_VER=\${BUDDY_VER}
+MANIFEST
 OVERLAY_STAGES
 
 # Clean up overlay chroot
@@ -2342,6 +2488,87 @@ umount ${MNT}/dev
 umount ${MNT}/sys
 umount ${MNT}/proc
 rm -f ${MNT}/usr/bin/qemu-aarch64-static
+
+# ── build manifest + in-image build snapshot (mirrors build-orangepi.sh) ─────
+# Runs BEFORE the @factory snapshot so /etc/autonomous-build.json survives a
+# factory reset. Baked runtime versions were captured into /tmp/baked-* during
+# Phase 1 (they persist in base.img; a stale pre-capture base falls back to
+# "unknown" until it is rebuilt).
+echo "==> Writing build manifest + /etc/autonomous-build.json..."
+BAKED_WEB_VER=""; BAKED_OS_SERVER_VER=""; BAKED_BOOTSTRAP_VER=""; BAKED_HAL_VER=""; BAKED_BUDDY_VER=""
+if [ -f "${MNT}/tmp/ota-versions.env" ]; then
+  # shellcheck disable=SC1090
+  . "${MNT}/tmp/ota-versions.env" || true
+  BAKED_WEB_VER="${WEB_VER:-}"
+  BAKED_OS_SERVER_VER="${OS_SERVER_VER:-}"
+  BAKED_BOOTSTRAP_VER="${BOOTSTRAP_VER:-}"
+  BAKED_HAL_VER="${HAL_VER:-}"
+  BAKED_BUDDY_VER="${BUDDY_VER:-}"
+  rm -f "${MNT}/tmp/ota-versions.env"
+fi
+BAKED_OPENCLAW_VERSION=$(cat "${MNT}/tmp/baked-openclaw-version" 2>/dev/null | tr -d '[:space:]' || echo "unknown")
+BAKED_HERMES_VERSION=$(cat "${MNT}/tmp/baked-hermes-version" 2>/dev/null | tr -d '[:space:]' || echo "unknown")
+BAKED_CODEX_VERSION=$(cat "${MNT}/tmp/baked-codex-version" 2>/dev/null | tr -d '[:space:]' || echo "unbaked")
+BAKED_CLAUDECODE_VERSION=$(cat "${MNT}/tmp/baked-claudecode-version" 2>/dev/null | tr -d '[:space:]' || echo "unbaked")
+BAKED_PICOCLAW_VERSION=$(cat "${MNT}/tmp/baked-picoclaw-version" 2>/dev/null | tr -d '[:space:]' || echo "unbaked")
+BAKED_OPENCODE_VERSION=$(cat "${MNT}/tmp/baked-opencode-version" 2>/dev/null | tr -d '[:space:]' || echo "unbaked")
+
+# Manifest path matches the Makefile's MANIFEST_FILE (output/<type>/manifest-rpi.json)
+# so `make upload TARGET=rpi` can fold OTA versions into the release note.
+SRC_XZ_SHA=$(sha256sum "${RPI_IMG_XZ}" 2>/dev/null | cut -d' ' -f1 || echo unknown)
+mkdir -p "/output/${DEVICE_TYPE}"
+cat > "/output/${DEVICE_TYPE}/manifest-rpi.json" <<MANIFEST_JSON
+{
+  "build_timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "target": "rpi",
+  "rpi_model": "${RPI_MODEL}",
+  "openclaw_version": "${OPENCLAW_VERSION}",
+  "out_img_size": "${OUT_IMG_SIZE}",
+  "ota_metadata_url": "${OTA_METADATA_URL}",
+  "ota_versions": {
+    "web": "${BAKED_WEB_VER}",
+    "os-server": "${BAKED_OS_SERVER_VER}",
+    "bootstrap": "${BAKED_BOOTSTRAP_VER}",
+    "hal": "${BAKED_HAL_VER}",
+    "claude-desktop-buddy": "${BAKED_BUDDY_VER}"
+  },
+  "source_image": {
+    "file_id": "",
+    "name": "$(basename "${RPI_IMG_URL}")",
+    "sha256": "${SRC_XZ_SHA}"
+  }
+}
+MANIFEST_JSON
+echo "==> Manifest: /output/${DEVICE_TYPE}/manifest-rpi.json"
+
+# Bake a build snapshot into the image so anyone SSH-ing in can see exactly
+# what was flashed: when, from which git commit, and what OTA metadata was
+# live at build time. Check with: cat /etc/autonomous-build.json | jq .
+# hardware_manifest is null on rpi — there is no hardware-team base image here.
+METADATA_FOR_SNAPSHOT="${MNT}/tmp/metadata-baked.json"
+if [ -f "${METADATA_FOR_SNAPSHOT}" ]; then
+  jq -n \
+    --arg build_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg git_commit "${BUILD_GIT_SHA:-unknown}" \
+    --arg hermes_version "${BAKED_HERMES_VERSION:-unknown}" \
+    --arg openclaw_version "${BAKED_OPENCLAW_VERSION:-unknown}" \
+    --arg codex_version "${BAKED_CODEX_VERSION:-unbaked}" \
+    --arg claudecode_version "${BAKED_CLAUDECODE_VERSION:-unbaked}" \
+    --arg picoclaw_version "${BAKED_PICOCLAW_VERSION:-unbaked}" \
+    --arg opencode_version "${BAKED_OPENCODE_VERSION:-unbaked}" \
+    --slurpfile ota_metadata "${METADATA_FOR_SNAPSHOT}" \
+    '{
+      build_date: $build_date,
+      git_commit: $git_commit,
+      hardware_manifest: null,
+      baked_runtimes: { hermes: $hermes_version, openclaw: $openclaw_version, codex: $codex_version, claudecode: $claudecode_version, picoclaw: $picoclaw_version, opencode: $opencode_version },
+      ota_metadata: $ota_metadata[0]
+    }' > "${MNT}/etc/autonomous-build.json"
+  rm -f "${METADATA_FOR_SNAPSHOT}"
+  echo "==> Build snapshot: /etc/autonomous-build.json"
+else
+  echo "WARN: skipping build snapshot — metadata missing"
+fi
 
 # ── 22. take initial @factory snapshot ───────────────────────────────────────
 # Take the factory snapshot at build time (not on first boot).
@@ -2437,6 +2664,18 @@ if [ -f "${MNT}/usr/share/nginx/html/setup/index.html" ]; then
   echo "  [OK] web UI installed"
 else
   echo "  [FAIL] web UI missing"; QC_FAIL=1
+fi
+
+# Verify the build snapshot + yq landed (both mirrored from build-orangepi.sh)
+if [ -f "${MNT}/etc/autonomous-build.json" ]; then
+  echo "  [OK] /etc/autonomous-build.json"
+else
+  echo "  [FAIL] /etc/autonomous-build.json missing"; QC_FAIL=1
+fi
+if [ -x "${MNT}/usr/local/bin/yq" ]; then
+  echo "  [OK] yq"
+else
+  echo "  [FAIL] /usr/local/bin/yq missing"; QC_FAIL=1
 fi
 
 # Verify the device rootfs overlay actually landed on / — this is where the
