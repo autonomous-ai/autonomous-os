@@ -324,15 +324,18 @@ def pcm16_bytes_to_wav(pcm_bytes: bytes, sample_rate: int = _TARGET_SR) -> bytes
 #
 # Env knobs (all optional):
 #   HAL_SPEAKER_DEBUG            "true" to enable (default off)
-#   HAL_SPEAKER_DEBUG_DIR        output root (default <tmp>/hal-speaker-debug)
+#   HAL_SPEAKER_DEBUG_DIR        output root (default: ./speaker_logs next to this file)
 #   HAL_SPEAKER_DEBUG_MAX_ENTRIES  per-kind dir cap, oldest pruned (default 1000; 0=unbounded)
 #
-# Layout (per call, named like the facial-emotion logs):
-#   <root>/recognize/<ts>_<class>_<confidence>/       (class = enrolled name | voice_<N> | unknown)
+# Layout (per call, named like the facial-emotion logs); <root> defaults to the
+# `speaker_logs/` folder beside this file for fast inspection:
+#   <root>/recognize/<ts>_<class>_<confidence>/       (class = enrolled name | stranger-<N> | unknown)
 #   <root>/recognize/<ts>_FAIL-<reason>/              (too-short | too-silent | server-error | ...)
 #   <root>/enroll/<ts>_<norm>_<cohesion>/             (cohesion = mean sim of kept samples to centroid)
 #   <root>/enroll/<ts>_FAIL-<reason>/
 # each dir holds: input.wav / sample_NN.wav, *.npy embeddings, result.json.
+# NOTE: speaker_logs/ lands inside the source tree — don't commit it (the whole
+# SPEAKER-DEBUG block is meant to be removed before deploy anyway).
 def _debug_audio_stats(wav_bytes: bytes) -> tuple[Optional[float], Optional[float]]:
     """Best-effort (duration_s, rms) from WAV bytes for the trace. Never raises."""
     try:
@@ -359,15 +362,11 @@ class _SpeakerDebugTracer:
     """SPEAKER-DEBUG: writes per-call trace dirs. Fully self-contained; never raises."""
 
     def __init__(self) -> None:
-        import tempfile  # local so removing this block leaves no dangling import
-
         self.enabled = os.environ.get("HAL_SPEAKER_DEBUG", "false").lower() == "true"
-        self._base = Path(
-            os.environ.get(
-                "HAL_SPEAKER_DEBUG_DIR",
-                os.path.join(tempfile.gettempdir(), "hal-speaker-debug"),
-            )
-        )
+        # Default: a `speaker_logs/` dir right next to this file, so traces are
+        # trivial to inspect. Override with HAL_SPEAKER_DEBUG_DIR.
+        _default_dir = Path(__file__).resolve().parent / "speaker_logs"
+        self._base = Path(os.environ.get("HAL_SPEAKER_DEBUG_DIR", str(_default_dir)))
         try:
             self._max = int(os.environ.get("HAL_SPEAKER_DEBUG_MAX_ENTRIES", "1000"))
         except ValueError:
