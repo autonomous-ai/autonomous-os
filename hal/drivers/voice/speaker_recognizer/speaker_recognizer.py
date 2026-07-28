@@ -1367,6 +1367,49 @@ class SpeakerRecognizer:
 
     # ------------------------------------------------------ public: recognize
 
+    def _debug_safe_assign_hash(  # SPEAKER-DEBUG (remove before deploy)
+        self,
+        query_chunks: np.ndarray,
+        wav_bytes: bytes,
+        *,
+        resolved_name: str,
+        is_match: bool,
+        num_enrolled: int,
+        source_type: str,
+        saved_path: str,
+    ) -> Optional[str]:
+        """SPEAKER-DEBUG wrapper around _assign_voiceprint_hash.
+
+        Stranger clustering can raise on an embedding-dimension mismatch between
+        the stored voice_strangers store and the current backend (e.g. the
+        192-vs-256 concatenate error when the embedding model changed). That
+        raise happens BEFORE recognize()'s trace hook, so the failure otherwise
+        never lands in the logs. This wrapper captures it as a FAIL trace with
+        the input audio + dims + error, and degrades to no-cluster so recognize
+        returns 'unknown' instead of crashing. Original call was just
+        `self._assign_voiceprint_hash(query_chunks)`.
+        """
+        try:
+            return self._assign_voiceprint_hash(query_chunks) or None
+        except Exception as e:
+            logger.warning("Recognize: voiceprint hash assignment failed — %s", e)
+            if self._debug.enabled:
+                dur, rms = _debug_audio_stats(wav_bytes)
+                self._debug.record(
+                    "recognize", reason="stranger-assign-error",
+                    wavs={"input.wav": wav_bytes},
+                    arrays={"input_chunks.npy": query_chunks},
+                    result={
+                        "error": repr(e), "name": resolved_name, "match": is_match,
+                        "num_enrolled": num_enrolled,
+                        "num_query_chunks": int(query_chunks.shape[0]),
+                        "embedding_dim": int(query_chunks.shape[1]),
+                        "duration_s": dur, "rms": rms, "source_type": source_type,
+                        "unknown_audio_path": saved_path,
+                    },
+                )
+            return None
+
     def recognize(
         self,
         wav_source: str,
@@ -1476,7 +1519,10 @@ class SpeakerRecognizer:
             # stable cluster hash so repeat speakers can be tracked before
             # anyone is enrolled.
             logger.info("Recognize: no enrolled users — unknown + cluster-only path")
-            vp_hash = self._assign_voiceprint_hash(query_chunks)
+            vp_hash = self._debug_safe_assign_hash(  # SPEAKER-DEBUG (was: _assign_voiceprint_hash)
+                query_chunks, wav_bytes, resolved_name="unknown", is_match=False,
+                num_enrolled=0, source_type=source_type, saved_path=saved_path,
+            )
             saved_path = self._move_to_cluster(saved_path, vp_hash)
             logger.info(
                 "Recognize result: name=unknown confidence=0.00 cluster=%s path=%s",
@@ -1569,7 +1615,10 @@ class SpeakerRecognizer:
 
         # Only assign a stranger cluster hash for unknowns — known speakers
         # already have a stable identity (their name).
-        vp_hash = None if is_match else (self._assign_voiceprint_hash(query_chunks) or None)
+        vp_hash = None if is_match else self._debug_safe_assign_hash(  # SPEAKER-DEBUG (was: _assign_voiceprint_hash)
+            query_chunks, wav_bytes, resolved_name=resolved_name, is_match=is_match,
+            num_enrolled=len(known), source_type=source_type, saved_path=saved_path,
+        )
         # Move WAV into per-cluster sub-dir so later inspection can group
         # samples by cluster. Known-speaker WAVs stay in the flat dir.
         if vp_hash:
