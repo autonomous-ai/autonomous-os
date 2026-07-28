@@ -130,6 +130,39 @@ knowing:
   same way (no Wi-Fi needed, AP torn down), which is why the copy says "online without
   Wi-Fi" rather than asserting a cable.
 
+**A wired device belongs in the *initial* wizard.** `SetupGate` (`App.tsx`)
+picks initial vs continue from `set_up_completed` on the open
+`GET /api/device/setup/status`. It used to infer it from `check-internet`: the
+provisioning AP has no uplink, so "the device has internet" meant it had already
+left AP mode and been set up. **Ethernet breaks that invariant** — a brand-new
+device with a cable in it has internet from first boot, so it opened the
+*continue* wizard, whose Wi-Fi step is a read-only "you're online" row and whose
+forward button is a plain Next. There was no Setup button anywhere on the page,
+so nothing ever POSTed `/api/device/setup` and the device could not be
+provisioned over ethernet at all. With the flag, the wired device gets the same
+initial wizard as a Wi-Fi one; the only difference is that its Wi-Fi step arrives
+already satisfied (`wiredUplink`), so the operator goes straight to **Setup**.
+The connectivity check remains as a second condition, so this only tightens the
+continue path; an older os-server that doesn't publish the flag falls back to the
+old inference.
+
+**Same wizard, same events.** Past the network step the wired path is the Wi-Fi
+path — one `device.Setup`, one set of phases, one bridge event sequence
+(`setup_submitted` → `setup_connecting` → `setup_connected` → … →
+`setup_done`). A parent window needs no wired-specific handling. Two things make
+that true rather than merely intended: the `run` counter (see *Stale-verdict
+guard*), without which the wired `connected` verdict resolves too fast for the
+poll to accept, and the continue-mode gates below, without which the reopened
+popup lands back on the Wi-Fi step and reports a failure instead.
+
+The **post-submit screen** does swap its copy when the submit carried no SSID
+(`wiredRun`, latched at submit so the screen keeps describing the run it is
+reporting on): a cable icon, *"Finishing setup on your wired connection"* and a
+note that the device is turning off its setup hotspot, since there is no Wi-Fi
+join to narrate. The failure branch likewise drops the password/2.4GHz/distance
+checklist — the only way this path fails is the uplink check — for cable, router
+port, and "or pick a Wi-Fi network instead".
+
 **Re-setup caveat.** `mergeMissingFromConfig` refills an empty `ssid` from
 `config.NetworkSSID`, so re-running setup on a device already provisioned over Wi-Fi
 takes the Wi-Fi path even if the operator leaves the field blank. Only devices with no
@@ -186,7 +219,7 @@ discovery fallback** for the case where the IP channel provably never got an
 IP (see channel 3).
 
 1. **Phase poll** — polls `GET /api/device/setup/status` against the AP IP while
-   the AP is alive. Reads `phase` + `lan_ip`. Goes dark the instant the AP tears
+   the AP is alive. Reads `phase` + `lan_ip` + `run`. Goes dark the instant the AP tears
    down. (The backend captures the STA IP early so this poll can return a
    `lan_ip` during the brief window the AP is still alive — see
    `system/device/setup.go`.) A wall-clock watchdog flips an `apLost` flag
@@ -361,13 +394,40 @@ Three mechanisms now cover it:
    `showProgressScreen = setupWorking || adoptedFailure`; the retry action
    clears both.
 
+   **Adoption is skipped in continue mode.** Continue mode means `SetupGate`
+   already proved the device is online and serving the page from its LAN
+   address, so a `failed` verdict still sitting in `setupState` cannot be
+   describing it — nothing ever resets the phase to `idle`, so an old failure
+   survives until the next run or a reboot. Adopting it there wiped the form,
+   dropped the operator back on the Wi-Fi step of a device whose network is
+   demonstrably fine, and emitted `setup_failed` to the parent for a setup that
+   had already succeeded (on `intern-v2`, where the failure *screen* is skipped,
+   that was the whole visible symptom: the popup silently bounced to Wi-Fi). The
+   adoption path exists for the offline case — a failed join leaves the device
+   back on its AP with no internet, which resolves to **initial** mode, where it
+   still runs.
+
    **Stale-verdict guard in the poll.** `handler.Setup` answers `200`
    immediately but defers `device.Setup` by 2s, and nothing sets `setupState`
    back to `idle` in between — so for ~2s after a resubmit the backend still
    reports the *previous* attempt's `phase="failed"`. The poll therefore ignores
-   terminal verdicts until it has seen `phase="connecting"` confirming the
-   current run started; without that guard the first poll after a retry would
-   throw the operator straight back to the failure screen.
+   terminal verdicts until it has confirmed the current run started; without
+   that guard the first poll after a retry would throw the operator straight
+   back to the failure screen.
+
+   That confirmation is the **`run` counter** in the status payload:
+   `setupState.begin()` bumps it on every `device.Setup` call, the poll records
+   the value it sees on its first tick (≈2s before the run starts) and treats
+   any higher value as "this is our run". `phase === "connecting"` still latches
+   it too, as a fallback for a device on an older os-server build that omits
+   `run`. The counter is what makes the **wired** path work: its network step is
+   a single `CheckInternet()` ping, so `connecting` can begin and end between two
+   600ms polls. Latching only on that phase meant the wired `connected` verdict
+   was discarded as stale — the parent never received `setup_connected`, the
+   `lan_ip` published alongside it was dropped, and the screen sat on
+   "connecting" until the 80s timeout declared a *successful* setup failed. (The
+   page still recovered via the mDNS fallback, which is why the wired flow
+   appeared to work while emitting the wrong events.)
 
 3. **Retry that actually validates.** `mergeMissingFromConfig` is no longer
    gated on `SetUpCompleted`. A Wi-Fi failure bails before `device.Setup` writes
@@ -489,6 +549,36 @@ the step never flashes "Choose your Wi-Fi" for a beat before resolving into the
 connected state. Later background retries (covering the DHCP-lease race) don't
 re-raise the skeleton, so the picker stays interactive once shown.
 
+**The continue-mode auto-scroll waits for that probe too** (`if (wifiChecking)
+return;`). It jumps the operator to the first incomplete step and then spends
+`autoScrolledRef` so it can't fight them afterwards — but its first run happens
+*before* the probe answers, when `sectionDone.wifi` is still false. It therefore
+parked every reopened popup on the Wi-Fi step and burned the one-shot ref, so
+the answer arriving a moment later could no longer move it. A wired device felt
+this worst: the step it was pinned to is one it has nothing to enter on, and
+being stuck short of the last step also meant the wizard never reached the
+button that emits `setup_done`.
+
+### Enrollment steps are capability-gated
+
+"My Voice" and "Face" are hardware, not preference: one records the operator
+through the mic, the other photographs them through the camera. Each is offered
+only when the device declares the capability that makes it possible —
+`Cap.Audio` for Voice, `Cap.Vision` for Face — read from
+`GET /api/system/info` (`useCapabilities`), which is os-server's parse of
+`devices/<type>/DEVICE.md` and the same contract Monitor gates its tabs on. The
+gate covers the sidebar entry, the mounted section (so a section that can't work
+never issues its hardware requests), **and** the `required` / `order` lists that
+drive completion, since an enrollment the device can't perform is not a pending
+step — leaving `face` in `required` on a camera-less device made "everything is
+done" unreachable, which is the branch that emits `setup_done` and bounces to
+`/monitor`.
+
+Concretely: `intern-v2` declares `audio`, `sensing`, `companion`, `system`,
+`light`, `media`, `connectivity` — no `vision` — so it shows **My Voice** and
+never **Face**. Fail-open while `/api/system/info` is in flight (an unknown
+capability set answers `true`), matching every other capability gate in the web.
+
 ### Deep-linking into a step via the URL hash
 
 A URL like `http://<lan_ip>/setup?<params>#voice` opens the **Voice** tab
@@ -604,6 +694,17 @@ Every message is a flat JSON envelope:
 | `start_over_clicked` | **Never emitted** — the "Start over" button was removed. The event and `resetSetupSession()` are still defined; a caller would hard-reload the popup and **drop every param it was opened with** | — |
 | `continue_clicked` | "Continue setup →" clicked | `mdns_host` |
 | `monitor_clicked` | "Go to monitor →" clicked | — |
+| `setup_done` | Wizard finished — the terminal event a parent waits on to close the popup | — |
+
+`setup_done` fires on **every** route out of a finished wizard: the last-step
+button whichever label it carries ("Skip & finish" when the operator declined
+the final optional enrollment, "Go to monitor →" when they completed it), and
+the continue-mode auto-bounce to `/monitor` when nothing was left to do. It is
+ref-guarded, so at most one is emitted per page. It used to fire only for the
+skip variant, which meant an operator who actually *finished* the last step — or
+a popup that reopened with every step already satisfied, the normal shape after
+a wired setup — left the parent with no terminal event at all and the popup
+stayed open.
 
 Emits are best-effort: with no opener/parent they're a no-op, and postMessage
 failures are swallowed, so the bridge never affects the setup flow itself. A

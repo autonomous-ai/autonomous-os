@@ -183,7 +183,7 @@ func (h *DeviceHandler) GetConfig(c *gin.Context) {
 //	@Success		200	{object}	serializers.ResponseSuccess
 //	@Router			/device/setup/status [get]
 func (h *DeviceHandler) SetupStatus(c *gin.Context) {
-	phase, lanIP, errMsg := h.service.SetupStatus()
+	phase, lanIP, errMsg, run := h.service.SetupStatus()
 	// `mac` (hardware-derived "<device_type>-XXXX") is exposed here intentionally — the
 	// device already broadcasts `<device_type>-xxxx.local` via avahi-daemon on the LAN,
 	// so the suffix isn't sensitive. The web client uses it to auto-redirect
@@ -195,6 +195,18 @@ func (h *DeviceHandler) SetupStatus(c *gin.Context) {
 		"lan_ip": lanIP,
 		"error":  errMsg,
 		"mac":    device.GetDeviceMac(),
+		// Setup runs since boot. The web client compares it against the value it
+		// read before submitting to tell its own run's verdict from a leftover —
+		// phase alone is not enough when a run resolves inside one poll interval.
+		"run": run,
+		// Whether this device has ever completed setup. `SetupGate` needs it to
+		// choose the initial wizard vs the continue wizard, and it used to infer
+		// that from "does the device have internet" — sound only while the
+		// provisioning AP was the device's only network, which ethernet is not.
+		// A boolean, not a secret: it says nothing beyond what the wizard is
+		// about to show, and the endpoint must stay open because a device that
+		// hasn't finished setup has no admin password to authenticate against.
+		"set_up_completed": h.config.SetUpCompleted,
 	}))
 }
 

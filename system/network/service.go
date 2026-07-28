@@ -427,10 +427,15 @@ func (s *Service) runNetworkMonitorTick() {
 	// Auto-reconnect: restart wlan0 after sustained outage — but only when WiFi
 	// is actually the link in question (see wifiReconnectSkipReason).
 	if n >= networkMonitorReconnectAt && time.Since(s.lastReconnectAttempt) >= networkMonitorReconnectCooldown {
+		// Stamp before deciding, so a SKIP is rate-limited exactly like a real
+		// attempt. Leaving the timestamp untouched on the skip path would make
+		// this branch re-enter on every 5s tick for the whole outage — one
+		// `ip route` subprocess and one log line each tick, on an embedded
+		// device whose journal lives in zram.
+		s.lastReconnectAttempt = time.Now()
 		if reason := wifiReconnectSkipReason(s.config.NetworkSSID, PrimaryInterface()); reason != "" {
 			slog.Info("skipping WiFi reconnect escalation", "component", "network-monitor", "reason", reason, "fails", n)
 		} else {
-			s.lastReconnectAttempt = time.Now()
 			go s.reconnectWiFi()
 		}
 	}

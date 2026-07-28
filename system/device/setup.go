@@ -34,12 +34,31 @@ type setupState struct {
 	phase string
 	lanIP string
 	error string
+	// run counts Setup() invocations since boot and is published alongside the
+	// phase. The web client can't rely on catching phase="connecting" to know
+	// its own run started: on the wired path the network step is a single ping,
+	// so "connecting" can come and go between two 600ms polls, and the client
+	// would then discard the "connected" verdict as a leftover from an earlier
+	// attempt. A counter it can compare against the value it saw before
+	// submitting identifies the run regardless of how briefly any phase lasted.
+	run int
 }
 
-func (st *setupState) snapshot() (phase, ip, errMsg string) {
+func (st *setupState) snapshot() (phase, ip, errMsg string, run int) {
 	st.mu.RLock()
 	defer st.mu.RUnlock()
-	return st.phase, st.lanIP, st.error
+	return st.phase, st.lanIP, st.error, st.run
+}
+
+// begin opens a new run: bumps the counter and parks the state at connecting
+// with no IP and no error, so nothing from the previous attempt leaks into it.
+func (st *setupState) begin() {
+	st.mu.Lock()
+	st.run++
+	st.phase = SetupPhaseConnecting
+	st.lanIP = ""
+	st.error = ""
+	st.mu.Unlock()
 }
 
 func (st *setupState) set(phase, ip, errMsg string) {
@@ -57,14 +76,14 @@ func (st *setupState) set(phase, ip, errMsg string) {
 // interface (wlan0 on WiFi, eth0/end0 when wired) so the web
 // client can still detect "you're at the AP IP but the device lives at X"
 // and redirect.
-func (s *Service) SetupStatus() (phase, lanIP, errMsg string) {
-	phase, lanIP, errMsg = s.setupState.snapshot()
+func (s *Service) SetupStatus() (phase, lanIP, errMsg string, run int) {
+	phase, lanIP, errMsg, run = s.setupState.snapshot()
 	if lanIP == "" {
 		if ip, err := s.networkService.GetCurrentIP(); err == nil {
 			lanIP = ip
 		}
 	}
-	return phase, lanIP, errMsg
+	return phase, lanIP, errMsg, run
 }
 
 // setupWired completes the network phase for a device that already reaches the
@@ -138,7 +157,7 @@ func (s *Service) setupWiFi(data domain.SetupRequest) error {
 				// Ignore the AP's own static IP — we want the STA-side
 				// address handed out by the home router's DHCP.
 				if ipErr == nil && ip != "" && ip != apSetupIP {
-					if _, prevIP, _ := s.setupState.snapshot(); prevIP != ip {
+					if _, prevIP, _, _ := s.setupState.snapshot(); prevIP != ip {
 						s.setupState.set(SetupPhaseConnecting, ip, "")
 						slog.Info("setup: early LAN IP captured", "component", "device", "lan_ip", ip)
 					}
@@ -164,7 +183,7 @@ func (s *Service) setupWiFi(data domain.SetupRequest) error {
 	// than clobbering a good IP with an empty string.
 	ip, ipErr := s.networkService.GetCurrentIP()
 	if ipErr != nil || ip == "" || ip == apSetupIP {
-		_, prevIP, _ := s.setupState.snapshot()
+		_, prevIP, _, _ := s.setupState.snapshot()
 		ip = prevIP
 	}
 	if ip != "" {
@@ -182,7 +201,7 @@ func (s *Service) Setup(data domain.SetupRequest) error {
 	data.LLMBaseURL = urlnorm.NormalizeBaseURL(data.LLMBaseURL)
 	data.STTBaseURL = urlnorm.NormalizeBaseURL(data.STTBaseURL)
 	data.TTSBaseURL = urlnorm.NormalizeBaseURL(data.TTSBaseURL)
-	s.setupState.set(SetupPhaseConnecting, "", "")
+	s.setupState.begin()
 
 	// Cleared on every return path below so a re-run after a failed setup starts
 	// from the neutral status instead of a stuck blinking strip. Safe to call

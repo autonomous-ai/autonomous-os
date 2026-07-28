@@ -127,6 +127,35 @@ không bao giờ hiện và bước Wi-Fi vẫn chặn y như cũ. Hai điểm c
   (không cần Wi-Fi, vẫn tắt AP) — nên câu chữ ghi "online mà không cần Wi-Fi" chứ không
   khẳng định là dây.
 
+**Máy cắm dây thuộc về wizard *initial*.** `SetupGate` (`App.tsx`) chọn initial hay
+continue dựa trên `set_up_completed` của endpoint mở `GET /api/device/setup/status`.
+Trước đây nó suy ra từ `check-internet`: AP provisioning không có uplink, nên "máy có
+internet" đồng nghĩa máy đã rời AP mode và đã được setup. **Cắm dây phá vỡ đúng bất
+biến đó** — máy mới tinh cắm sẵn dây là có internet ngay từ lần boot đầu, nên nó mở
+wizard *continue*, nơi bước Wi-Fi chỉ là dòng "bạn đang online" chỉ-đọc và nút tiến là
+Next thường. Cả trang không có nút Setup nào, nên không bao giờ có ai POST
+`/api/device/setup`, và máy **không thể** provision qua ethernet. Có cờ này rồi thì máy
+dây vào đúng wizard initial như máy Wi-Fi; khác biệt duy nhất là bước Wi-Fi của nó đến
+đã thoả sẵn (`wiredUplink`), nên operator đi thẳng tới nút **Setup**. Điều kiện internet
+vẫn giữ như một kiểm tra thứ hai, nên thay đổi này chỉ siết chặt đường continue chứ
+không nới ra; os-server bản cũ chưa trả cờ thì rơi về suy luận cũ.
+
+**Cùng một wizard, cùng một bộ event.** Qua khỏi bước mạng thì nhánh dây chính là
+nhánh Wi-Fi — một `device.Setup`, một bộ phase, một chuỗi event bridge
+(`setup_submitted` → `setup_connecting` → `setup_connected` → … →
+`setup_done`). Parent window không cần xử lý riêng cho dây. Hai thứ khiến điều đó
+thành sự thật chứ không chỉ là ý định: bộ đếm `run` (xem *Chốt verdict cũ*) — thiếu
+nó thì verdict `connected` của nhánh dây tới quá nhanh, poll không nhận — và các
+guard ở continue mode bên dưới — thiếu chúng thì popup mở lại rơi về bước Wi-Fi và
+báo failed.
+
+Riêng **màn hình sau submit** có đổi câu chữ khi submit không kèm SSID (`wiredRun`,
+chốt ngay lúc submit để màn hình luôn mô tả đúng run mà nó đang báo cáo): icon dây,
+*"Finishing setup on your wired connection"*, và ghi chú thiết bị đang tắt hotspot
+setup — vì làm gì có cú join Wi-Fi nào để kể. Nhánh failed cũng bỏ checklist
+password/2.4GHz/khoảng cách — đường này chỉ fail đúng ở bước kiểm uplink — thay bằng
+dây cắm, cổng router, và "hoặc chọn Wi-Fi rồi setup theo cách đó".
+
 **Lưu ý khi re-setup.** `mergeMissingFromConfig` sẽ điền lại `ssid` rỗng từ
 `config.NetworkSSID`, nên chạy lại setup trên máy đã provision bằng Wi-Fi vẫn đi nhánh
 Wi-Fi dù operator để trống ô đó. Chỉ máy chưa có SSID lưu sẵn (máy mới, hoặc trước đó
@@ -180,7 +209,7 @@ không resolve được. IP LAN thô resolve trên mọi mạng, nên là nguồ
 cuối cùng** cho trường hợp kênh IP chắc chắn không bao giờ có IP (xem kênh 3).
 
 1. **Phase poll** — poll `GET /api/device/setup/status` qua AP IP khi AP còn
-   sống. Đọc `phase` + `lan_ip`. Chết ngay khi AP tắt. (Backend capture IP STA
+   sống. Đọc `phase` + `lan_ip` + `run`. Chết ngay khi AP tắt. (Backend capture IP STA
    sớm để poll này trả được `lan_ip` trong khoảng AP còn sống ngắn ngủi — xem
    `system/device/setup.go`.) Một watchdog theo wall-clock bật cờ `apLost`
    khi poll không được trả lời >5s trong lúc setup đang chạy — dùng wall-clock
@@ -346,12 +375,37 @@ Ba cơ chế hiện xử lý việc này:
    `showProgressScreen = setupWorking || adoptedFailure`; hành động retry clear
    cả hai.
 
+   **Không nhận trạng thái lỗi ở continue mode.** Continue mode nghĩa là
+   `SetupGate` đã chứng minh thiết bị đang online và đang phục vụ trang này từ
+   địa chỉ LAN của nó, nên một verdict `failed` còn nằm trong `setupState` không
+   thể đang nói về nó — không có gì reset phase về `idle`, nên lỗi cũ sống dai
+   tới lần chạy sau hoặc tới khi reboot. Nhận nó ở đây sẽ xoá sạch form, đẩy
+   operator về bước Wi-Fi của một thiết bị mà mạng rõ ràng đang ngon, và bắn
+   `setup_failed` cho parent về một lần setup đã thành công (trên `intern-v2` —
+   nơi màn hình lỗi bị bỏ qua — đó chính là toàn bộ triệu chứng thấy được: popup
+   lặng lẽ nhảy về Wi-Fi). Đường nhận trạng thái này sinh ra cho trường hợp
+   offline — join lỗi thì thiết bị về lại AP, không có internet, tức là mode
+   **initial**, và ở đó nó vẫn chạy.
+
    **Chốt chặn verdict cũ trong poll.** `handler.Setup` trả `200` ngay nhưng
    hoãn `device.Setup` 2s, và không có gì đưa `setupState` về `idle` trong
    khoảng đó — nên trong ~2s sau khi submit lại, backend vẫn báo `phase="failed"`
-   của lần **trước**. Vì vậy poll bỏ qua mọi verdict cuối cho tới khi thấy
-   `phase="connecting"` xác nhận lần chạy hiện tại đã bắt đầu; không có chốt
-   này, lần poll đầu tiên sau khi retry sẽ ném operator thẳng về màn hình lỗi.
+   của lần **trước**. Vì vậy poll bỏ qua mọi verdict cuối cho tới khi xác nhận
+   được lần chạy hiện tại đã bắt đầu; không có chốt này, lần poll đầu tiên sau
+   khi retry sẽ ném operator thẳng về màn hình lỗi.
+
+   Cái xác nhận đó là **bộ đếm `run`** trong payload status: `setupState.begin()`
+   tăng nó ở mỗi lần gọi `device.Setup`, poll ghi lại giá trị thấy ở tick đầu
+   tiên (≈2s trước khi run bắt đầu) và coi mọi giá trị lớn hơn là "đây là run của
+   mình". `phase === "connecting"` vẫn chốt được như cũ, làm fallback cho thiết bị
+   chạy os-server bản cũ chưa trả `run`. Bộ đếm này chính là thứ làm nhánh **dây**
+   chạy đúng: bước mạng của nó chỉ là một cú ping `CheckInternet()`, nên
+   `connecting` có thể bắt đầu và kết thúc gọn giữa hai lần poll 600ms. Chỉ chốt
+   theo phase đó nghĩa là verdict `connected` của nhánh dây bị vứt đi vì tưởng là
+   đồ cũ — parent không bao giờ nhận `setup_connected`, `lan_ip` publish kèm theo
+   cũng mất, và màn hình treo ở "connecting" tới khi timeout 80s tuyên bố một lần
+   setup **thành công** là thất bại. (Trang vẫn cứu được nhờ fallback mDNS — nên
+   nhánh dây trông như chạy được trong khi bắn sai event.)
 
 3. **Retry thật sự validate được.** `mergeMissingFromConfig` không còn bị gate
    bởi `SetUpCompleted`. Lỗi Wi-Fi bail trước khi `device.Setup` ghi bất kỳ
@@ -465,6 +519,33 @@ Trong lúc probe đầu tiên còn đang chạy (`checking`), `WifiSection` rend
 flash "Choose your Wi-Fi" một nhịp trước khi resolve sang trạng thái connected.
 Các retry nền về sau (xử lý race DHCP-lease) không raise lại skeleton, nên picker
 giữ nguyên tương tác được sau khi đã hiện.
+
+**Auto-scroll ở continue mode cũng phải chờ probe đó** (`if (wifiChecking)
+return;`). Nó nhảy operator tới bước chưa xong đầu tiên rồi tiêu luôn
+`autoScrolledRef` để về sau không giành tay lái với operator — nhưng lần chạy đầu
+của nó xảy ra *trước* khi probe trả lời, lúc `sectionDone.wifi` vẫn còn false. Vì
+vậy mọi popup mở lại đều bị ghim vào bước Wi-Fi và đốt luôn cái ref một-lần, nên
+câu trả lời đến sau đó một nhịp không còn kéo đi được nữa. Máy cắm dây dính nặng
+nhất: bước bị ghim là bước nó chẳng có gì để nhập, và vì kẹt trước bước cuối nên
+wizard không bao giờ tới được nút bắn `setup_done`.
+
+### Bước enroll bị gate theo capability
+
+"My Voice" và "Face" là phần cứng chứ không phải sở thích: một cái thu operator qua
+mic, một cái chụp họ qua camera. Mỗi bước chỉ hiện khi thiết bị khai báo capability
+làm nó khả thi — `Cap.Audio` cho Voice, `Cap.Vision` cho Face — đọc từ
+`GET /api/system/info` (`useCapabilities`), tức là bản parse `devices/<type>/DEVICE.md`
+của os-server, đúng contract mà Monitor đang gate tab. Gate này phủ cả entry ở
+sidebar, cả section được mount (để section không chạy được thì cũng không bắn request
+phần cứng lúc mount), **và** hai danh sách `required` / `order` quyết định "đã xong
+chưa" — vì một bước enroll thiết bị không làm được thì không phải bước còn treo: để
+`face` trong `required` trên máy không camera khiến nhánh "mọi thứ đã xong" không bao
+giờ chạm tới được, mà đó chính là nhánh bắn `setup_done` và bounce sang `/monitor`.
+
+Cụ thể: `intern-v2` khai báo `audio`, `sensing`, `companion`, `system`, `light`,
+`media`, `connectivity` — không có `vision` — nên nó hiện **My Voice** và không bao giờ
+hiện **Face**. Fail-open trong lúc `/api/system/info` chưa về (tập capability chưa biết
+thì trả `true`), giống mọi capability gate khác trong web.
 
 ### Deep-link vào một bước qua URL hash
 
@@ -590,6 +671,15 @@ Mỗi message là một JSON envelope phẳng:
 | `start_over_clicked` | **Không còn được bắn** — nút "Start over" đã bị bỏ. Event và `resetSetupSession()` vẫn còn định nghĩa; nếu có caller thì popup sẽ hard-reload và **bỏ toàn bộ param nó được mở kèm** | — |
 | `continue_clicked` | Bấm "Continue setup →" | `mdns_host` |
 | `monitor_clicked` | Bấm "Go to monitor →" | — |
+| `setup_done` | Wizard đã xong — event cuối mà parent chờ để đóng popup | — |
+
+`setup_done` bắn ở **mọi** đường ra khỏi một wizard đã xong: nút ở bước cuối dù
+nhãn là gì ("Skip & finish" khi operator bỏ qua bước enroll tuỳ chọn cuối, "Go to
+monitor →" khi họ làm xong), và cú auto-bounce sang `/monitor` ở continue mode khi
+không còn gì để làm. Có ref chặn nên mỗi trang bắn tối đa một lần. Trước đây nó chỉ
+bắn cho nhánh skip, nghĩa là operator *làm xong* bước cuối — hoặc popup mở lại mà
+mọi bước đã thoả, đúng dáng của lần setup bằng dây — để parent không nhận được event
+cuối nào và popup cứ mở mãi.
 
 Các emit đều best-effort: không có opener/parent thì là no-op, và lỗi
 postMessage bị nuốt, nên bridge không bao giờ ảnh hưởng tới luồng setup. Ví dụ

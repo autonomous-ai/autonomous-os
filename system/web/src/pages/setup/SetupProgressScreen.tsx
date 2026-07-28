@@ -1,4 +1,4 @@
-import { Wifi, XCircle, CheckCircle2 } from "lucide-react";
+import { Wifi, Cable, XCircle, CheckCircle2 } from "lucide-react";
 import { C } from "@/components/setup/shared";
 import { getInitialSearch } from "@/hooks/setup/useSetupUrlParams";
 import { setupBridge } from "@/lib/setupBridge";
@@ -11,7 +11,7 @@ import { CopyAddress } from "./CopyAddress";
 // (connecting / connected / failed).
 export function SetupProgressScreen({
   setupPhase, setupLanIP, setupErrorMsg, elapsed,
-  deviceMdnsHost, deviceTypePrefix,
+  deviceMdnsHost, deviceTypePrefix, wired = false,
   onRetry,
 }: {
   setupPhase: "connecting" | "connected" | "failed";
@@ -20,6 +20,12 @@ export function SetupProgressScreen({
   elapsed: number;
   deviceMdnsHost: string;
   deviceTypePrefix: string;
+  // Submitted with no SSID because the device already has an uplink — an
+  // ethernet cable in practice. There is no Wi-Fi join on this path (the
+  // backend verifies the existing uplink and tears down the provisioning AP,
+  // see system/device/setup.go setupWired), so every line of Wi-Fi copy on this
+  // screen would be describing something that never happens.
+  wired?: boolean;
   // Resets the wizard back to the Wi-Fi step after a failed join.
   onRetry: () => void;
 }) {
@@ -35,16 +41,18 @@ export function SetupProgressScreen({
               <span className="lm-wifi-ring lm-r2" />
               <span className="lm-wifi-ring lm-r3" />
               <span className="lm-wifi-icon">
-                <Wifi size={26} strokeWidth={2} />
+                {wired ? <Cable size={26} strokeWidth={2} /> : <Wifi size={26} strokeWidth={2} />}
               </span>
             </span>
           </div>
           <div style={{ fontSize: 14.5, fontWeight: 600, color: C.amber, marginBottom: 8 }}>
-            Your device is joining Wi-Fi
+            {wired ? "Finishing setup on your wired connection" : "Your device is joining Wi-Fi"}
             <span className="lm-blink">.</span><span>.</span><span>.</span>
           </div>
           <div style={{ fontSize: 13, color: C.textDim, marginBottom: 14, lineHeight: 1.5 }}>
-            Please be patient while your device connects to Wi-Fi. Stay on this network.
+            {wired
+              ? "Your device is already online over its cable, so there is no Wi-Fi to join. It's turning off its setup hotspot now."
+              : "Please be patient while your device connects to Wi-Fi. Stay on this network."}
           </div>
           {/* Indeterminate progress + elapsed counter: the join has no
               knowable %, so a sweeping bar signals "working" while the
@@ -142,17 +150,21 @@ export function SetupProgressScreen({
             <XCircle size={34} color={C.red} strokeWidth={1.75} aria-hidden />
           </div>
           <div style={{ fontSize: 14.5, fontWeight: 600, color: C.red, marginBottom: 8 }}>
-            Wi-Fi setup failed
+            {wired ? "Setup failed" : "Wi-Fi setup failed"}
           </div>
           <div style={{ fontSize: 13, color: C.textDim, marginBottom: 16, lineHeight: 1.5 }}>
-            {setupErrorMsg || "Couldn't connect to the network you chose."}
+            {setupErrorMsg || (wired
+              ? "The device couldn't reach the internet over its cable."
+              : "Couldn't connect to the network you chose.")}
           </div>
 
           {/* Actionable checklist. Wi-Fi join failures on these
               devices are overwhelmingly one of these three causes, so
               we spell them out instead of a generic "try again" —
               the 2.4GHz one in particular is non-obvious to most
-              people and the single most common cause. */}
+              people and the single most common cause. The wired list is
+              the same idea for the only way that path fails: the uplink
+              check (ping) didn't pass. */}
           <div style={{
             textAlign: "left", background: C.surface,
             border: `1px solid ${C.border}`, borderRadius: 8,
@@ -162,9 +174,19 @@ export function SetupProgressScreen({
             <div style={{ fontWeight: 600, color: C.text, marginBottom: 6 }}>
               Things to check:
             </div>
-            <div>• Double-check the Wi-Fi password (it's case-sensitive).</div>
-            <div>• Use a <strong style={{ color: C.text }}>2.4GHz</strong> Wi-Fi network — most devices can't join 5GHz.</div>
-            <div>• Keep the device close to your router during setup.</div>
+            {wired ? (
+              <>
+                <div>• Make sure the ethernet cable is seated at both ends.</div>
+                <div>• Check that the port on your router is live (link light on).</div>
+                <div>• Or pick a Wi-Fi network instead and set the device up that way.</div>
+              </>
+            ) : (
+              <>
+                <div>• Double-check the Wi-Fi password (it's case-sensitive).</div>
+                <div>• Use a <strong style={{ color: C.text }}>2.4GHz</strong> Wi-Fi network — most devices can't join 5GHz.</div>
+                <div>• Keep the device close to your router during setup.</div>
+              </>
+            )}
           </div>
 
           <div style={{
@@ -177,7 +199,7 @@ export function SetupProgressScreen({
               onClick={onRetry}
               style={{ padding: "9px 18px" }}
             >
-              Back to Wi-Fi
+              {wired ? "Back to setup" : "Back to Wi-Fi"}
             </button>
           </div>
         </>

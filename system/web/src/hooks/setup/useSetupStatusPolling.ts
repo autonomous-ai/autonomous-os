@@ -104,16 +104,31 @@ export function useSetupStatusPolling({
     // nothing resets setupState to idle in between (see system/device/setup.go)
     // — so for ~2s after a resubmit the backend still reports the old
     // phase="failed". Without this, the very first poll would bounce a retrying
-    // operator straight back to the failure screen. We ignore terminal verdicts
-    // until the backend has confirmed THIS run started (phase="connecting");
-    // from then on every verdict is genuinely ours.
+    // operator straight back to the failure screen.
+    //
+    // Two signals promote the backend's state to "this is our run":
+    //   - the run counter moved past what we saw before the run began. This is
+    //     the reliable one. `baselineRun` is read on the first tick, which
+    //     happens ~2s before device.Setup bumps it, so any higher value is ours.
+    //   - phase === "connecting", kept as the fallback for a device still on an
+    //     os-server build that doesn't publish `run`.
+    // The counter matters most on the wired path: its network step is a single
+    // ping, so "connecting" can begin and end between two 600ms polls. Latching
+    // only on that phase meant the wired "connected" verdict was thrown away as
+    // stale, the parent window never got setup_connected, and the join sat on
+    // the progress screen until the 80s timeout called it failed.
     let runStarted = false;
+    let baselineRun: number | null = null;
     const tick = async () => {
       try {
         const s = await getSetupStatus();
         if (cancelled) return;
         lastPollOkRef.current = performance.now();
         setApLost(false);
+        if (typeof s.run === "number") {
+          if (baselineRun === null) baselineRun = s.run;
+          else if (s.run > baselineRun) runStarted = true;
+        }
         if (s.phase === "connecting") {
           runStarted = true;
           if (s.lan_ip) setSetupLanIP(s.lan_ip);

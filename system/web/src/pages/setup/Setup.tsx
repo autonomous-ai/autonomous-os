@@ -45,8 +45,8 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
     currentStepIndex, isFirstStep, isLastStep, isSkippableStep,
     doneCount, progressPct, sectionDone, goPrev, goNext,
     isContinue, devicePushedConfig, awaitingDeepLink,
-    showProgressScreen, setupPhase, setupLanIP, setupErrorMsg, elapsed,
-    deviceMdnsHost, deviceTypePrefix, retryFromFailure,
+    showProgressScreen, setupPhase, setupLanIP, setupErrorMsg, elapsed, wiredRun,
+    deviceMdnsHost, deviceTypePrefix, retryFromFailure, finishWizard,
     error, stepError, loading, loadingList,
     handleSubmit, navigate,
     ssid, setSsid, password, setPassword,
@@ -60,7 +60,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
     discordBotToken, setDiscordBotToken, discordGuildId, setDiscordGuildId, discordUserId, setDiscordUserId,
     sttLanguage, setSttLanguage,
     ttsProvider, setTtsProvider, ttsProviders, ttsVoice, setTtsVoice, ttsVoices,
-    faceOwners, loadFaceOwners,
+    faceOwners, loadFaceOwners, canEnrollVoice, canEnrollFace,
   } = useSetupController(mode);
 
   // The URL deep-links to a step that isn't visible yet (mode still resolving).
@@ -229,6 +229,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                 elapsed={elapsed}
                 deviceMdnsHost={deviceMdnsHost}
                 deviceTypePrefix={deviceTypePrefix}
+                wired={wiredRun}
                 onRetry={retryFromFailure}
               />
             ) : (
@@ -309,7 +310,12 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                     />
                   </div>
 
-                  {isContinue && (
+                  {/* Mounted only when the device declares the hardware each
+                      one drives — a mic for voice enrollment, a camera for
+                      face. Matches the sidebar gate in the controller, and
+                      keeps a section that can't work from issuing its
+                      hardware requests on mount. */}
+                  {isContinue && canEnrollVoice && (
                     <VoiceSection
                       active={activeSection === "voice"}
                       sttLanguage={sttLanguage}
@@ -318,7 +324,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                     />
                   )}
 
-                  {isContinue && (
+                  {isContinue && canEnrollFace && (
                     <FaceSection
                       active={activeSection === "face"}
                       faceOwners={faceOwners}
@@ -360,10 +366,15 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                           key="done"
                           type="button"
                           onClick={() => {
-                            // "Skip & finish" on an optional enrollment step
-                            // (Voice/Face) also signals the wizard is complete;
-                            // "Go to monitor" on a non-skippable last step does not.
-                            if (isSkippableStep) setupBridge.setupDone();
+                            // Both labels end the wizard — "Skip & finish"
+                            // because the operator declined the last optional
+                            // step, "Go to monitor" because they completed it.
+                            // Emit setup_done for either: the parent closes the
+                            // popup on that event, and gating it on the skip
+                            // variant meant finishing the wizard properly left
+                            // the popup open. monitor_clicked still follows as
+                            // the navigation detail.
+                            finishWizard();
                             setupBridge.monitorClicked();
                             navigate("/monitor");
                           }}

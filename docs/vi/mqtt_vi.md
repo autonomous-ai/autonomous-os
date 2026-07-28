@@ -87,6 +87,17 @@ tới ~2 phút, để đường cứu popup Setup mô tả trong `docs/setup-flo
 động được), (2) một lần khi setup xong (status `working`), và (3) định kỳ từ
 status reporter. Field nào backend không xài thì đơn giản là bị bỏ qua.
 
+**Ping sống sót qua việc đổi địa chỉ LAN.** Địa chỉ của thiết bị không cố định —
+chuyển dây ethernet sang mạng khác, hoặc DHCP cấp lại lease, là đổi, trong khi
+os-server vẫn đang chạy. `beclient` giữ các kết nối keep-alive gắn với địa chỉ
+nguồn **cũ**, và chúng không fail nhanh: đường cũ đơn giản là biến mất nên không
+có RST nào để quan sát, cú ping kế tiếp ghi vào hư không cho tới khi hết timeout
+15s của client, log `ping failed` một lần cho mỗi kết nối chết. Vì vậy status
+reporter so `local_ip` với tick trước và gọi `beclient.CloseIdleConnections()` khi
+nó đổi, để cú ping ngay sau đó mở kết nối mới. Client cũng tự giữ transport riêng
+(clone, `IdleConnTimeout` 30s) thay vì dùng `http.DefaultTransport`, nên việc xả
+pool không đụng tới các HTTP user khác trong process.
+
 ### `add_channel` — Thêm messaging channel
 
 **Nhận:**

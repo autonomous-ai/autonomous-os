@@ -1042,6 +1042,33 @@ no-resolv
 EOF
 [ -f /etc/dnsmasq.conf ] && sed -i 's/^interface=wlan0/#&/' /etc/dnsmasq.conf || true
 
+# Keep the captive portal pointed at AP clients ONLY — never at ourselves.
+#
+# Debian's dnsmasq package registers itself with resolvconf as the system
+# nameserver on start, which rewrites /etc/resolv.conf to "nameserver 127.0.0.1".
+# Combined with the address=/#/ wildcard above, that means every hostname the
+# DEVICE looks up resolves to 192.168.100.1 — itself. The symptom is brutal to
+# read: `ping cdn.autonomous.ai` succeeds (it is pinging its own AP address) while
+# `curl https://cdn.autonomous.ai` fails to connect, because nginx only listens on
+# port 80. Everything that travels by name is dead: OTA / software-update, the LLM
+# API, the MQTT broker, agent onboarding, the backend ping.
+#
+# It stayed invisible for as long as AP mode had no uplink at all, and the WiFi
+# path never trips it because connect-wifi runs device-sta-mode — stopping
+# dnsmasq — before the rest of setup needs a name. A device provisioned over
+# ethernet keeps the AP (and dnsmasq) up while setup runs, so for it this is a
+# hard blocker.
+#
+# DNSMASQ_EXCEPT="lo" is Debian's documented switch for exactly this: dnsmasq
+# stops claiming loopback and stops registering as the system resolver, so the
+# device resolves through its real upstream (the DHCP-supplied DNS, or the
+# 1.1.1.1/8.8.8.8 fallback in resolvconf.conf). AP clients still get the full
+# captive-portal wildcard on wlan0 — unchanged.
+if [ -f /etc/default/dnsmasq ]; then
+  sed -i '/^[[:space:]]*#*[[:space:]]*DNSMASQ_EXCEPT=/d' /etc/default/dnsmasq
+fi
+echo 'DNSMASQ_EXCEPT="lo"' >> /etc/default/dnsmasq
+
 systemctl mask wpa_supplicant.service 2>/dev/null || true
 
 # Advertise _autonomous._tcp via mDNS so the Autonomous Buddy (macOS) auto-finds
@@ -1080,6 +1107,24 @@ server {
   add_header Referrer-Policy "no-referrer" always;
   add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
   add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' ws: wss: http:; frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'" always;
+
+  # SPA cache policy. Vite fingerprints every asset (index-<hash>.js), so those
+  # are safe to cache forever — the name changes whenever the content does. But
+  # index.html is the pointer TO those names and must never be cached: a browser
+  # holding a stale index.html asks for a bundle filename that the last web
+  # deploy already deleted, gets a 404, and renders a blank page until the
+  # operator hard-reloads. That is exactly what the setup popup hit.
+  #
+  # Uses `expires` rather than `add_header Cache-Control`: an add_header inside a
+  # location cancels inheritance of ALL server-level add_header directives, which
+  # would silently drop the CSP and the security headers above for these very
+  # requests. `expires` sets Cache-Control without touching that inheritance.
+  #
+  # try_files below internal-redirects to /index.html, which re-runs location
+  # matching, so the exact-match block covers the SPA-route case too — not just a
+  # direct request for /index.html.
+  location = /index.html { expires -1; }
+  location /assets/      { expires 1y; }
 
   location / { try_files \$uri /index.html; }
 

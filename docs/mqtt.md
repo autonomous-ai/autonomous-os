@@ -88,6 +88,18 @@ the Setup-popup rescue described in `docs/setup-flow.md` can work), (2) once
 when setup completes (status `working`), and (3) periodically from the status
 reporter. Fields the backend doesn't consume are simply ignored.
 
+**The ping survives a LAN address change.** A device's address is not stable —
+moving the ethernet cable to another network, or a DHCP re-lease, changes it
+while os-server keeps running. `beclient` holds keep-alive connections bound to
+the *old* source address, and those don't fail fast: the old path is simply gone,
+so there is no RST to observe and the next ping writes into a blackhole until the
+15s client timeout, logging `ping failed` once per stale connection. The status
+reporter therefore compares `local_ip` against the previous tick's and calls
+`beclient.CloseIdleConnections()` when it moved, so the next ping dials fresh.
+The client also owns its transport (cloned, `IdleConnTimeout` 30s) rather than
+using `http.DefaultTransport`, so dropping the pool can't disturb other HTTP
+users in the process.
+
 ### `add_channel` — Add messaging channel
 
 **Receive:**

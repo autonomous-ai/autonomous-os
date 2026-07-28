@@ -253,6 +253,15 @@ export interface SetupStatus {
   // Exposed on this open endpoint because /api/device/config is admin-gated
   // and fresh devices have no admin yet.
   mac: string;
+  // Setup runs since the device booted, bumped when a run starts. Lets the
+  // poller recognise its own run's verdict without having to catch the
+  // "connecting" phase live — see useSetupStatusPolling. Optional: a device on
+  // an older os-server build simply omits it.
+  run?: number;
+  // Whether the device has ever completed setup — what decides the initial
+  // wizard vs the continue wizard (`SetupGate`). Optional for the same
+  // older-build reason; absent falls back to the internet heuristic.
+  set_up_completed?: boolean;
 }
 
 /** Polled by Setup.tsx during the AP→STA transition. Returns the device's

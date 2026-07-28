@@ -36,14 +36,39 @@ type Client struct {
 
 // New creates a new BE client. Base URL is read from cfg.LLMBaseURL on each request.
 func New(cfg *config.Config) *Client {
+	// Own transport rather than http.DefaultTransport: this client needs to be
+	// able to drop its pooled connections when the device's LAN address changes
+	// (see CloseIdleConnections), and doing that on the shared default would
+	// reach into every other HTTP user in the process.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// Bound how long a pooled connection may sit idle. The default 90s means a
+	// connection established on a network the device has since left can still be
+	// picked for a later ping; 30s keeps reuse across the 15s ping cadence while
+	// shortening that window.
+	transport.IdleConnTimeout = 30 * time.Second
 	c := &Client{
 		config: cfg,
 		httpClient: &http.Client{
-			Timeout: DefaultTimeout,
+			Timeout:   DefaultTimeout,
+			Transport: transport,
 		},
 	}
 	c.cachedSlackTeamID.Store("")
 	return c
+}
+
+// CloseIdleConnections drops every pooled keep-alive connection.
+//
+// Call it when the device's LAN address changes — a cable moved to another
+// network, a new DHCP lease. Pooled connections are bound to the OLD source
+// address: after the change they are dead, but nothing tells the client that.
+// There is no RST to observe (the old path is simply gone), so the next request
+// writes into a blackhole and only fails at the 15s client timeout — and with
+// pings every 15s the loop can spend several cycles doing that, each one logged
+// as a ping failure, before the pool drains itself. Dropping the pool at the
+// moment the address changes makes the very next ping dial fresh.
+func (c *Client) CloseIdleConnections() {
+	c.httpClient.CloseIdleConnections()
 }
 
 // SetSlackTeamID records the Slack workspace ID resolved for the device's

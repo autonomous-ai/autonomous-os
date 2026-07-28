@@ -22,12 +22,30 @@ function isTailscaleHost(host: string): boolean {
   return a === 100 && b >= 64 && b <= 127;
 }
 
-// Setup gate: provisioned (online) → continue mode (Voice/Face enroll, TTS
-// preview), else initial mode (offline form for AP setup). When the user
+// Setup gate: provisioned → continue mode (Voice/Face enroll, TTS preview),
+// else initial mode (the form that actually submits setup). When the user
 // lands on the AP IP (192.168.4.1) but the device already has a real LAN IP
 // (e.g. they bookmarked the AP URL after first setup), bounce them to the
 // LAN address so the rest of the page works. `#force` in the URL hash
 // forces initial mode for testing.
+//
+// "Provisioned" is read from the device (`set_up_completed` on the open
+// setup-status endpoint), NOT inferred from connectivity. It used to be
+// inferred: the provisioning AP has no uplink, so "the device has internet"
+// implied it had already left AP mode and been set up. Ethernet breaks that
+// invariant — a brand-new device with a cable in it has internet from first
+// boot, so it opened the CONTINUE wizard, whose Wi-Fi step is a read-only
+// "you're online" row and whose forward button is a plain Next. There was no
+// Setup button anywhere on the page, so nothing ever POSTed
+// /api/device/setup and the device could not be provisioned over ethernet at
+// all. The wired device belongs in the *initial* wizard exactly like a Wi-Fi
+// one; the only difference is that its Wi-Fi step arrives already satisfied
+// (`wiredUplink`), so the operator goes straight to the Setup button.
+//
+// The connectivity check stays as a second condition — a provisioned device
+// that can't reach the internet still gets the initial form — so this only
+// ever tightens the continue path, never widens it. An older os-server that
+// doesn't publish the flag falls back to the old inference.
 function SetupGate() {
   const force = typeof window !== "undefined" && window.location.hash === "#force";
   const [provisioned, setProvisioned] = useState<boolean | null>(force ? false : null);
@@ -35,6 +53,9 @@ function SetupGate() {
     if (force) return;
     let cancelled = false;
     (async () => {
+      const status = await getSetupStatus().catch(() => null);
+      if (cancelled) return;
+      if (status?.set_up_completed === false) { setProvisioned(false); return; }
       const ok = await checkInternet().catch(() => false);
       if (cancelled) return;
       if (!ok) { setProvisioned(false); return; }
@@ -43,7 +64,7 @@ function SetupGate() {
       // Tailscale IP (CGNAT 100.64.0.0/10) — that's a deliberate remote-access
       // path, not the AP-IP-after-setup case we're trying to fix.
       try {
-        const s = await getSetupStatus();
+        const s = status ?? await getSetupStatus();
         if (cancelled) return;
         const here = window.location.hostname;
         // IP-only: we deliberately do NOT special-case the `.local` mDNS host.

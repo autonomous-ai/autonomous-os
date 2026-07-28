@@ -9,6 +9,8 @@ import { useConfigPrefill } from "@/hooks/setup/useConfigPrefill";
 import { useSetupStatusPolling } from "@/hooks/setup/useSetupStatusPolling";
 import { useFaceEnroll } from "@/hooks/setup/useFaceEnroll";
 import { useWifiConnected } from "@/hooks/setup/useWifiConnected";
+import { useCapabilities } from "@/hooks/useCapabilities";
+import { Cap } from "@/pages/monitor/types";
 import { setupBridge } from "@/lib/setupBridge";
 import type { SectionId, LlmLoadedState, ChannelLoadedState } from "@/hooks/setup/types";
 import type { ChannelType, NetworkItem } from "@/types";
@@ -68,6 +70,11 @@ export function useSetupController(mode: SetupMode) {
   // don't clobber each other. Cleared on any successful navigation.
   const [stepError, setStepError] = useState<string | null>(null);
   const [setupWorking, setSetupWorking] = useState(false);
+  // The run this tab submitted carried no SSID, so the backend took the wired
+  // branch: verify the existing uplink, tear down the AP, no Wi-Fi join. Latched
+  // at submit rather than read live off the form so the progress screen keeps
+  // describing the run it is actually reporting on.
+  const [wiredRun, setWiredRun] = useState(false);
   // True when this tab adopted a `failed` verdict left behind by a PREVIOUS
   // attempt (see the mount effect below). Kept separate from setupWorking on
   // purpose: setupWorking drives the live pollers/ticker/bridge emits for a
@@ -232,6 +239,18 @@ export function useSetupController(mode: SetupMode) {
   // of re-prompting "choose your Wi-Fi + password". See useWifiConnected.
   const { wifiConnected, wiredUplink, currentSsid, checking: wifiChecking } = useWifiConnected();
 
+  // The enrollment steps are hardware, not preference: "My Voice" records the
+  // operator through the mic, "Face" photographs them through the camera. A
+  // device that doesn't declare the capability has no way to complete either,
+  // so the wizard must not offer it — an Intern (audio + sensing + light, no
+  // `vision`) was still being asked to enroll a face it cannot see. Same
+  // contract Monitor gates its tabs on: os-server parses DEVICE.md and serves
+  // the declared list on /api/system/info. Fail-open while it loads (hasCap
+  // returns true for an unknown set), matching every other gate in the web.
+  const { hasCap } = useCapabilities();
+  const canEnrollVoice = hasCap(Cap.Audio);
+  const canEnrollFace = hasCap(Cap.Vision);
+
   // Per-section "done" detection drives the ✓ checkmark in the sidebar and
   // the auto-scroll-to-next-pending behavior in continue mode. We treat a
   // section as done when its config has the value the user came here to set.
@@ -307,6 +326,21 @@ export function useSetupController(mode: SetupMode) {
   // post-completion to view/edit, the flag stays false, so we stay on the
   // page with checks visible instead of bouncing them to /monitor.
   const autoScrolledRef = useRef(false);
+  // `setup_done` — the wizard's terminal event, and the one a parent window
+  // waits on to close the popup. It fires on every route out of a finished
+  // wizard: the operator pressing the last-step button (whether that button
+  // says "Skip & finish" or "Go to monitor"), and the auto-bounce to /monitor
+  // when nothing was left to do. Previously only the skip variant emitted it,
+  // so an operator who actually COMPLETED the last optional step — or a device
+  // that arrived with every step satisfied, which is the normal shape of a
+  // re-opened popup after a wired setup — left the parent with no signal.
+  // Ref-guarded: several of those routes can run in the same tick.
+  const setupDoneRef = useRef(false);
+  const finishWizard = useCallback(() => {
+    if (setupDoneRef.current) return;
+    setupDoneRef.current = true;
+    setupBridge.setupDone();
+  }, []);
   // Set by the deep-link effect when the URL hash (#voice / #face / …) named a
   // valid, visible step on load. When true, the auto-scroll below must NOT hijack
   // activeSection to the first-incomplete step — the operator asked for a
@@ -327,7 +361,22 @@ export function useSetupController(mode: SetupMode) {
   useEffect(() => {
     if (!isContinue) return;
     if (!llmApiKey) return; // wait until config has loaded
-    const required: SectionId[] = ["wifi", "llm", "channel", "tts", "voice", "face"];
+    // Wait for the live network probe before judging any step. `sectionDone.wifi`
+    // is false until useWifiConnected answers, and its first probe lands AFTER
+    // this effect's first run — so without this gate the search below always saw
+    // Wi-Fi as incomplete, parked the operator there, and spent autoScrolledRef,
+    // which then blocked the correction when the probe came back a moment later.
+    // A wired device felt this hardest: it has nothing to enter on that step, yet
+    // the wizard pinned it to the Wi-Fi picker and never moved on.
+    if (wifiChecking) return;
+    // An enrollment the device can't perform is not a pending step. Leaving
+    // `face` in here on a camera-less device meant `required` could never be
+    // fully satisfied, so the "everything is done" branch — the one that emits
+    // setup_done and bounces to /monitor — was unreachable for that device.
+    const required: SectionId[] = ["wifi", "llm", "channel", "tts",
+      ...(canEnrollVoice ? ["voice" as SectionId] : []),
+      ...(canEnrollFace ? ["face" as SectionId] : []),
+    ];
     // Redirect any time all required sections become done — including later
     // ticks when async data (e.g. faceOwners) arrives after first paint. This
     // path is NOT gated by autoScrolledRef on purpose; otherwise the first
@@ -337,7 +386,14 @@ export function useSetupController(mode: SetupMode) {
       // Skip auto-bounce when user is on #force testing the UI on a
       // provisioned device, or when running on a local dev host pointed at a
       // remote device — they want to see the page, not jump away.
-      if (autoScrolledRef.current && !forceHash && !isLocalDev) navigate("/monitor", { replace: true });
+      if (autoScrolledRef.current && !forceHash && !isLocalDev) {
+        // Leaving the wizard with everything satisfied IS the end of setup —
+        // tell the opener before navigating, or a popup that completes this way
+        // (nothing left to enroll) would never emit a terminal event and the
+        // parent would keep it open forever.
+        finishWizard();
+        navigate("/monitor", { replace: true });
+      }
       return;
     }
     if (autoScrolledRef.current) return;
@@ -345,11 +401,14 @@ export function useSetupController(mode: SetupMode) {
     // don't override it by jumping to the first incomplete step. Mark the
     // auto-scroll as spent so the all-done redirect above can still fire later.
     if (deepLinkedRef.current) { autoScrolledRef.current = true; return; }
-    const order: SectionId[] = ["wifi", "llm", "channel", "language", "tts", "voice", "face"];
+    const order: SectionId[] = ["wifi", "llm", "channel", "language", "tts",
+      ...(canEnrollVoice ? ["voice" as SectionId] : []),
+      ...(canEnrollFace ? ["face" as SectionId] : []),
+    ];
     const next = order.find((id) => !sectionDone[id]) ?? "tts";
     setActiveSection(next);
     autoScrolledRef.current = true;
-  }, [isContinue, llmApiKey, sectionDone, navigate]);
+  }, [isContinue, llmApiKey, wifiChecking, canEnrollVoice, canEnrollFace, sectionDone, navigate, finishWizard]);
 
   // Wi-Fi scan with retry — kept inline since it's specific to this page.
   // Runs once on mount; the operator can re-fire via the picker's "Refresh"
@@ -428,6 +487,17 @@ export function useSetupController(mode: SetupMode) {
     if (failureAdoptedRef.current) return;
     // A submit from THIS tab owns the screen — its own poller is authoritative.
     if (setupWorking) return;
+    // Continue mode means SetupGate already proved the device is online and
+    // serving this page from its LAN address. A `failed` verdict left in the
+    // backend's in-memory setupState by some earlier attempt cannot describe
+    // that device — nothing ever resets the phase to idle (see
+    // system/device/setup.go), so it survives indefinitely. Adopting it here
+    // wiped the form and dropped the operator back on the Wi-Fi step of a
+    // device whose network is demonstrably fine, and emitted `setup_failed` to
+    // the parent for a setup that had already succeeded. The adoption path
+    // exists for the offline case — a failed join leaves the device back on its
+    // AP with no internet, which resolves to initial mode, where this still runs.
+    if (isContinue) return;
     let cancelled = false;
     getSetupStatus().then((s) => {
       if (cancelled || s.phase !== "failed") return;
@@ -584,9 +654,12 @@ export function useSetupController(mode: SetupMode) {
     ] : []),
     // Voice / Face appear in continue mode only — they need the device's
     // hardware + backend, both unavailable while we're still on the AP. Both
-    // are optional enrollments the operator can skip.
-    ...(isContinue ? [
+    // are optional enrollments the operator can skip, and each is further gated
+    // on the capability that makes it possible at all (mic / camera).
+    ...(isContinue && canEnrollVoice ? [
       { id: "voice" as SectionId, label: "My Voice", optional: true },
+    ] : []),
+    ...(isContinue && canEnrollFace ? [
       { id: "face" as SectionId, label: "Face", optional: true },
     ] : []),
   ];
@@ -910,6 +983,7 @@ export function useSetupController(mode: SetupMode) {
       // POST to resolve first, the AP would be dead and every poll would fail,
       // stranding the user on "joining Wi-Fi…" forever (the bug we're fixing).
       setSetupWorking(true);
+      setWiredRun(!ssid.trim());
       setSetupPhase("connecting");
       try {
         await setupDevice(body);
@@ -946,9 +1020,9 @@ export function useSetupController(mode: SetupMode) {
     // mode flags
     isContinue, devicePushedConfig, awaitingDeepLink,
     // post-submit screen
-    setupWorking, showProgressScreen, setupPhase, setupLanIP, setupErrorMsg, elapsed,
+    setupWorking, showProgressScreen, setupPhase, setupLanIP, setupErrorMsg, elapsed, wiredRun,
     setSetupWorking, setSetupPhase, setActiveSection,
-    deviceMdnsHost, deviceTypePrefix, retryFromFailure,
+    deviceMdnsHost, deviceTypePrefix, retryFromFailure, finishWizard,
     // form-level status
     error, stepError, loading, loadingList,
     handleSubmit, navigate,
@@ -968,6 +1042,6 @@ export function useSetupController(mode: SetupMode) {
     sttLanguage, setSttLanguage,
     ttsProvider, setTtsProvider, ttsProviders, ttsVoice, setTtsVoice, ttsVoices,
     // enrollment
-    faceOwners, loadFaceOwners,
+    faceOwners, loadFaceOwners, canEnrollVoice, canEnrollFace,
   };
 }

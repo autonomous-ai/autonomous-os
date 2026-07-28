@@ -58,6 +58,10 @@ func (s *Service) StartStatusReporter(ctx context.Context) {
 	}
 	ticker := time.NewTicker(beclient.StatusReportInterval)
 	defer ticker.Stop()
+	// Last LAN address we pinged from. The device's address is not stable: moving
+	// the ethernet cable to another network, or a DHCP re-lease, changes it while
+	// os-server keeps running.
+	var lastLocalIP string
 	for {
 		select {
 		case <-ctx.Done():
@@ -70,7 +74,22 @@ func (s *Service) StartStatusReporter(ctx context.Context) {
 			// is a no-op when team_id is already cached OR when slack isn't configured,
 			// so it's safe to call on every tick — the auth.test call only fires once.
 			s.beClient.ResolveSlackTeamIDFromConfig(s.config.OpenclawConfigDir)
-			resp := s.beClient.PingSafe(s.config.LLMAPIKey, s.buildPingPayload("working"))
+			payload := s.buildPingPayload("working")
+			// Address changed under us → every pooled connection to the backend is
+			// bound to an address the device no longer holds. They don't fail fast:
+			// the old path is gone, so there's no RST, and the next ping writes into
+			// a blackhole until the 15s timeout. Drop them before pinging so this
+			// tick dials fresh instead of burning a cycle (and logging a failure)
+			// per stale connection.
+			if payload.LocalIP != "" && lastLocalIP != "" && payload.LocalIP != lastLocalIP {
+				slog.Info("local IP changed, dropping pooled backend connections",
+					"component", "status-reporter", "from", lastLocalIP, "to", payload.LocalIP)
+				s.beClient.CloseIdleConnections()
+			}
+			if payload.LocalIP != "" {
+				lastLocalIP = payload.LocalIP
+			}
+			resp := s.beClient.PingSafe(s.config.LLMAPIKey, payload)
 			dump, _ := json.Marshal(resp)
 			slog.Debug("received response from backend", "component", "status-reporter", "response", string(dump))
 			if resp == nil {
