@@ -320,10 +320,11 @@ def pcm16_bytes_to_wav(pcm_bytes: bytes, sample_rate: int = _TARGET_SR) -> bytes
 # TO REMOVE FOR PRODUCTION: delete this block and every line/call marked
 # `SPEAKER-DEBUG` (grep -n "SPEAKER-DEBUG" this file — the __init__ line and the
 # self._debug.* calls in recognize()/enroll()). It is self-contained: no other
-# module or config file is touched, and it is OFF unless HAL_SPEAKER_DEBUG=true.
+# module or config file is touched. It is FORCED ON by default in code (so it
+# works without editing .env); set HAL_SPEAKER_DEBUG=false to turn it off.
 #
 # Env knobs (all optional):
-#   HAL_SPEAKER_DEBUG            "true" to enable (default off)
+#   HAL_SPEAKER_DEBUG            "false" to disable (FORCED ON by default in code)
 #   HAL_SPEAKER_DEBUG_DIR        output root (default: ./speaker_logs next to this file)
 #   HAL_SPEAKER_DEBUG_MAX_ENTRIES  per-kind dir cap, oldest pruned (default 1000; 0=unbounded)
 #
@@ -362,7 +363,11 @@ class _SpeakerDebugTracer:
     """SPEAKER-DEBUG: writes per-call trace dirs. Fully self-contained; never raises."""
 
     def __init__(self) -> None:
-        self.enabled = os.environ.get("HAL_SPEAKER_DEBUG", "false").lower() == "true"
+        # SPEAKER-DEBUG: FORCED ON in code (default "true") so tracing works
+        # WITHOUT editing .env. Flip the default below to "false" — or set
+        # HAL_SPEAKER_DEBUG=false — to turn it off. Read once at construction,
+        # so restart HAL after changing it.
+        self.enabled = os.environ.get("HAL_SPEAKER_DEBUG", "true").lower() == "true"
         # Default: a `speaker_logs/` dir right next to this file, so traces are
         # trivial to inspect. Override with HAL_SPEAKER_DEBUG_DIR.
         _default_dir = Path(__file__).resolve().parent / "speaker_logs"
@@ -372,12 +377,30 @@ class _SpeakerDebugTracer:
         except ValueError:
             self._max = 1000
         if self.enabled:
-            try:
-                self._base.mkdir(parents=True, exist_ok=True)
+            # Prefer the source-tree dir; if it's read-only (device deploy),
+            # fall back to a writable temp dir instead of silently disabling.
+            if not self._try_mkdir(self._base):
+                import tempfile
+                fallback = Path(tempfile.gettempdir()) / "hal-speaker-debug"
+                if self._try_mkdir(fallback):
+                    logger.warning(
+                        "SPEAKER-DEBUG: %s not writable — using %s",
+                        self._base, fallback,
+                    )
+                    self._base = fallback
+                else:
+                    logger.warning("SPEAKER-DEBUG disabled (no writable dir)")
+                    self.enabled = False
+            if self.enabled:
                 logger.info("SPEAKER-DEBUG tracing ON -> %s", self._base)
-            except OSError as e:
-                logger.warning("SPEAKER-DEBUG disabled (mkdir failed): %s", e)
-                self.enabled = False
+
+    @staticmethod
+    def _try_mkdir(p: Path) -> bool:
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+            return True
+        except OSError:
+            return False
 
     @staticmethod
     def _stamp() -> str:
