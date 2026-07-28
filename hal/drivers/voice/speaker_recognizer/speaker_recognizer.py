@@ -83,20 +83,16 @@ _VOICE_STRANGERS_DIR = Path(
     os.environ.get("HAL_VOICE_STRANGERS_DIR", "/root/local/voice_strangers")
 )
 # All thresholds in this file use SCALED cosine in [0, 1] (`(raw + 1) / 2`).
-# That includes MATCH / CONSISTENCY plus the stranger thresholds below — call
-# sites convert the raw `embeds @ query` dot-product to scaled before
-# comparing. Ordering: CLUSTER_MERGE < STRANGER_MATCH < MATCH = CONSISTENCY,
-# i.e. the merge gate (used at enroll time to pull fragmented clusters back
-# together) is the loosest, stranger-grouping sits between, and the
+# That includes MATCH / CONSISTENCY plus CLUSTER_MERGE — call sites convert the
+# raw `embeds @ query` dot-product to scaled before comparing. Ordering:
+# CLUSTER_MERGE < MATCH = CONSISTENCY, i.e. the merge gate (used at enroll time
+# to pull fragmented clusters back together) is the loosest, and the
 # recognize/match decision is strictest.
 #
-# ECAPA-TDNN same-speaker raw cosine on VoxCeleb clusters around 0.3–0.5
-# (EER ≈ 0.3–0.4) → scaled ~0.65–0.75. Stranger defaults sit just below the
-# EER band on purpose — false grouping at loose thresholds is bounded by the
-# Step 5 consistency filter in enroll() and the MATCH gate in recognize().
-_VOICE_STRANGER_MATCH_THRESHOLD = float(
-    os.environ.get("HAL_VOICE_STRANGER_MATCH_THRESHOLD", "0.675")
-)
+# Stranger re-appearance matching uses the SAME threshold as enrolled-user
+# matching (SPEAKER_MATCH_THRESHOLD, i.e. self._match_threshold) — a returning
+# unknown voice must clear the same bar as a known one, so there is NO separate
+# stranger threshold.
 # Cap cluster count so disk doesn't grow unbounded. Oldest evicted first.
 _MAX_VOICE_STRANGERS = int(
     os.environ.get("HAL_MAX_VOICE_STRANGERS", "50")
@@ -967,10 +963,10 @@ class SpeakerRecognizer:
         # _drop_consumed_clusters at the tail cleans up every consumed
         # cluster regardless of how many samples survived.
         if source_type == "filepath" and new_embeddings:
-            # SCALED cosine in [0, 1] — same unit as STRANGER_MATCH and
-            # MATCH. 0.625 sits below the EER band so same-person-
-            # different-distance gets absorbed; the Step 5 consistency
-            # filter below catches false merges from loose matches.
+            # SCALED cosine in [0, 1] — same unit as the MATCH threshold.
+            # 0.625 sits below the EER band so same-person-different-distance
+            # gets absorbed; the Step 5 consistency filter below catches false
+            # merges from loose matches.
             merge_threshold = float(
                 os.environ.get("HAL_CLUSTER_MERGE_THRESHOLD", "0.625")
             )
@@ -1948,8 +1944,9 @@ class SpeakerRecognizer:
 
         Aggregates the per-chunk query embeddings into one L2-normalized
         vector, then compares against saved stranger centroids. A match
-        (cosine >= _VOICE_STRANGER_MATCH_THRESHOLD) reuses the existing
-        label; otherwise a new label is allocated and persisted.
+        (cosine >= self._match_threshold — the SAME bar as enrolled-user
+        matching) reuses the existing label; otherwise a new label is
+        allocated and persisted.
 
         Consumers don't call this directly — recognize() stamps the hash
         into its response when the speaker is unknown.
@@ -1983,12 +1980,12 @@ class SpeakerRecognizer:
                 )
                 best_sim_pre = best_sim
                 best_label_pre = str(self._stranger_labels[best_idx])
-                if best_sim >= _VOICE_STRANGER_MATCH_THRESHOLD:
+                if best_sim >= self._match_threshold:
                     logger.info(
                         "Voiceprint hash: %s (matched existing cluster, "
                         "sim=%.3f, threshold=%.3f) | scores=[%s]",
                         best_label_pre, best_sim,
-                        _VOICE_STRANGER_MATCH_THRESHOLD, breakdown_pre,
+                        self._match_threshold, breakdown_pre,
                     )
                     if self._debug.enabled:  # SPEAKER-DEBUG
                         self._debug_stranger = {
@@ -2025,13 +2022,13 @@ class SpeakerRecognizer:
             if best_sim_pre is not None:
                 # Hit the "no existing cluster matched" branch — surface the
                 # closest miss so operators can spot threshold edge cases
-                # (e.g. same speaker scoring 0.66 vs threshold 0.675).
+                # (e.g. same speaker scoring 0.73 vs threshold 0.75).
                 logger.info(
                     "Voiceprint hash: %s (new cluster, total=%d) | "
                     "closest=%s sim=%.3f below threshold=%.3f | scores=[%s]",
                     label, len(self._stranger_embeds),
                     best_label_pre, best_sim_pre,
-                    _VOICE_STRANGER_MATCH_THRESHOLD, breakdown_pre,
+                    self._match_threshold, breakdown_pre,
                 )
             else:
                 logger.info(
@@ -2054,13 +2051,13 @@ class SpeakerRecognizer:
 
         Used by enroll() to auto-include clusters that belong to the same
         speaker but fragmented (e.g. distance / volume drift pushed centroids
-        below STRANGER_MATCH so they landed in different clusters even though
-        it's one person). Pass a looser threshold than STRANGER_MATCH so the
-        fragmented siblings get pulled back together; the consistency filter
-        downstream in enroll() handles any false positive.
+        below the match threshold so they landed in different clusters even
+        though it's one person). Pass a looser threshold than the match
+        threshold so the fragmented siblings get pulled back together; the
+        consistency filter downstream in enroll() handles any false positive.
 
         ``threshold`` is SCALED cosine in [0, 1] — same unit as MATCH /
-        CONSISTENCY / STRANGER_MATCH.
+        CONSISTENCY.
         """
         q = _l2(query_embedding)
         if float(np.linalg.norm(q)) == 0.0:

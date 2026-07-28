@@ -105,7 +105,7 @@ Every unknown voice is locally clustered so the server can say "this is the same
 
 1. After embedding the query audio, the recognizer aggregates per-chunk embeddings into a single L2-normalized vector.
 2. Compare against stored stranger-cluster centroids (cosine similarity).
-3. Match ≥ `HAL_VOICE_STRANGER_MATCH_THRESHOLD` (default `0.65`, lower than the 0.7 known-speaker threshold so same voice clusters instead of fragmenting) → reuse existing label `voice_N`.
+3. Match ≥ `SPEAKER_MATCH_THRESHOLD` (default `0.75` — the **same** threshold as known-speaker matching; there is no separate stranger threshold) → reuse existing label `voice_N`.
 4. No match → allocate new label `voice_{counter}`, append centroid to on-disk state.
 5. Cap at `HAL_MAX_VOICE_STRANGERS` (default `50`) — oldest evicted when exceeded.
 6. The assigned hash is:
@@ -127,7 +127,7 @@ Every unknown voice is locally clustered so the server can say "this is the same
 | Min duration for enroll nudge | 2.0s | Hardcoded in `_should_request_enroll()` | Audio duration gate |
 | Lamp nudge cooldown | 5 min | Hardcoded in `domain/voice.go` | Don't re-inject SKILL instruction globally |
 | Per-voiceprint nudge cooldown | 30 min | `HAL_ENROLL_NUDGE_COOLDOWN_S` | Don't re-ask name for same voiceprint cluster |
-| Voice stranger match threshold | 0.65 | `HAL_VOICE_STRANGER_MATCH_THRESHOLD` | Cosine similarity to cluster unknown voice into existing `voice_N` |
+| Voice stranger match threshold | _(shared)_ | `SPEAKER_MATCH_THRESHOLD` | Reuses the known-speaker match threshold to cluster an unknown voice into an existing `voice_N` — no separate knob |
 | Max voice strangers | 50 | `HAL_MAX_VOICE_STRANGERS` | Cluster cap; oldest evicted when exceeded |
 | Voice strangers dir | `/root/local/voice_strangers` | `HAL_VOICE_STRANGERS_DIR` | Persist cluster embeddings (survives reboot) |
 | Speaker recognition enabled | true | `HAL_SPEAKER_RECOGNITION_ENABLED` | Master toggle (default on; gated on the `audio` capability) |
