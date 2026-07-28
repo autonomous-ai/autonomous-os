@@ -1646,6 +1646,28 @@ class SpeakerRecognizer:
             )
         if self._debug.enabled:  # SPEAKER-DEBUG
             dur, rms = _debug_audio_stats(wav_bytes)
+            # Full per-chunk comparison across EVERY enrolled speaker. Voting keeps
+            # only each chunk's argmax winner, so a speaker that never wins a chunk
+            # gets 0 votes and vanishes from `candidates` — even though it WAS
+            # compared on every chunk. Capture the whole [chunk x speaker] matrix
+            # so you can see the losers and why each chunk voted the way it did.
+            _confs = confs.tolist()  # [M chunks][K speakers], scaled cosine [0, 1]
+            per_chunk_scores = [
+                {
+                    "chunk": ci,
+                    "winner": names[int(best_idx[ci])],
+                    "scores": {names[k]: round(_confs[ci][k], 4) for k in range(len(names))},
+                }
+                for ci in range(len(_confs))
+            ]
+            speaker_summary = {
+                names[k]: {
+                    "votes": int((best_idx == k).sum()),
+                    "mean_conf": round(float(confs[:, k].mean()), 4),
+                    "max_conf": round(float(confs[:, k].max()), 4),
+                }
+                for k in range(len(names))
+            }
             dbg_result = {
                 "name": resolved_name, "match": is_match,
                 # nearest-enrolled similarity (the winning vote), regardless of match
@@ -1655,7 +1677,12 @@ class SpeakerRecognizer:
                 "num_enrolled": len(known),
                 "num_query_chunks": int(query_chunks.shape[0]),
                 "embedding_dim": int(query_chunks.shape[1]),
-                # Full per-speaker vote breakdown (not just the top-3 returned).
+                "enrolled_speakers": names,
+                # EVERY enrolled speaker (incl. 0-vote losers): votes + mean/max sim.
+                "speaker_summary": speaker_summary,
+                # Each chunk vs every speaker + which one that chunk voted for.
+                "per_chunk_scores": per_chunk_scores,
+                # Vote-winners only — the actual decision breakdown.
                 "candidates": [
                     {"name": n, "confidence": round(c, 4), "votes": v}
                     for n, c, v in scores
@@ -1686,6 +1713,8 @@ class SpeakerRecognizer:
                 arrays={
                     "input_chunks.npy": query_chunks,
                     "input_embedding.npy": _l2(query_chunks.mean(axis=0)),
+                    # [chunks x speakers] scaled cosine; columns = enrolled_speakers order.
+                    "chunk_scores.npy": confs,
                 },
                 result=dbg_result,
             )
