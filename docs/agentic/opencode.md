@@ -251,6 +251,17 @@ cleanup, typing keepers, reply fan-out at `session.idle`) mirrors
 `AddChannel` / `RefreshChannelConfig` are honest no-op successes for the supported
 channels and return `domain.ErrChannelNotSupported` for anything else (whatsapp).
 
+**Managed Discord (shared-bot, `discord_managed`)** works exactly as on codex:
+`OpenCodeService` implements `domain.DiscordBridge`, so Discord can run with **no
+on-device token and no session** — the bff-campaign-service relay owns the shared
+bot. When `discord_managed`, `startDiscordBot` skips the discordgo session; inbound
+arrives over MQTT (`discord_event` → `HandleInboundDiscord`), and the reply stays
+**internal** (`emitFinal` posts it; `finishDiscordTurn` / `sendDiscordTyping` route to
+the `ChannelRelay` → `discord_reply` / `discord_typing` on fd_channel). OpenCode does
+**not** implement `DiscordReplyDeliverer`, so os-server never double-delivers. See
+[`codex.md` §5](codex.md), [`adding-agent-runtime.md`](adding-agent-runtime.md) §9,
+and [`mqtt.md`](../mqtt.md).
+
 ### Telegram remote coding-sessions (`telegram_coding.go`, `coding_sessions.go`)
 
 A Telegram chat can start a folder-scoped `opencode` coding turn and continue it

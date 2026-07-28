@@ -178,6 +178,11 @@ func (h *AgentHandler) canStreamSentenceTTS(runID, flowRunID string) bool {
 	if sb, ok := h.agentGateway.(domain.SlackBridge); ok && (sb.IsSlackOriginRun(runID) || sb.IsSlackOriginRun(flowRunID)) {
 		return false
 	}
+	// Managed-Discord (hermes): a Discord turn replies in Discord via the relay,
+	// never on the speaker — suppress the mid-turn first-sentence stream too.
+	if dd, ok := h.agentGateway.(domain.DiscordReplyDeliverer); ok && (dd.IsDiscordOriginRun(runID) || dd.IsDiscordOriginRun(flowRunID)) {
+		return false
+	}
 	h.channelRunsMu.Lock()
 	if h.channelRuns[runID] || h.channelRuns[flowRunID] {
 		h.channelRunsMu.Unlock()

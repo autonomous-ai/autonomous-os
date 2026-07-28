@@ -317,6 +317,36 @@ MQTT broker path is device-authenticated and the proxy already verified the
 signature) and defers slash commands (`slack_command`). The reply itself is
 text-only and image attachments are dropped on the proactive path.
 
+### Discord — managed shared-bot bridge (os-server-driven)
+
+Hermes normally runs Discord **natively inside its own gateway** when
+`DISCORD_BOT_TOKEN` is present in `~/.hermes/.env` (the §10 presync mapping). In
+**managed** mode (`discord_managed`, selected by `managed:true` on `add_channel`),
+the device stores **no** token and Hermes opens **no** Gateway session — the shared
+Autonomous bot lives only in the bff-campaign-service **Discord relay** (sibling of
+the Slack proxy). This is the exact Discord analogue of the Slack HTTP-mode bridge
+above, and hermes drives it **os-server-side**:
+
+- `HermesService` implements **`domain.DiscordBridge`** (`SetChannelRelay` +
+  `HandleInboundDiscord`) **and** **`domain.DiscordReplyDeliverer`**
+  (`IsDiscordOriginRun` + `DeliverDiscordReply`) — `runtimes/hermes/discord.go`.
+- **Inbound** — Discord → relay → MQTT `discord_event` → device. The handler
+  type-asserts the gateway to `DiscordBridge` and calls `HandleInboundDiscord`, which
+  applies the allowlist gate (`discord_user_id`, guild `@mention`) using the relay-
+  supplied `bot_user_id` / `mentions_bot`, records the origin channel per runID, and
+  starts a turn.
+- **Reply / TTS suppression** — finalized by os-server's agent-event handler exactly
+  like Slack: `IsDiscordOriginRun` (non-consuming peek) suppresses speaker TTS, and
+  `DeliverDiscordReply` sends the final text to the `ChannelRelay`
+  (`discord_reply` on fd_channel; the relay chunks to Discord's 2000-char limit and
+  sends as the bot). Because hermes is os-server-finalized, it implements
+  `DiscordReplyDeliverer` (unlike claudecode/codex/opencode, which finalize internally).
+- **`.env`** — managed mode **omits** `DISCORD_BOT_TOKEN` (config.json clears the
+  on-device token, and presync's `sync_env` skips the empty value), so the native
+  Hermes Discord path stays dark and only the relay path is live.
+
+See [`adding-agent-runtime.md`](adding-agent-runtime.md) §9 and [`mqtt.md`](../mqtt.md).
+
 ## 9. Voice
 
 `hal.go` wires Hermes turns into the HAL voice path (TTS on speak-end, the same

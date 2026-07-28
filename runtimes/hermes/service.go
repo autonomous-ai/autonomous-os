@@ -158,6 +158,15 @@ type HermesService struct {
 	slackRunOriginMu sync.Mutex
 	slackRunOrigin   map[string]slackOrigin
 
+	// discordRunOrigin maps a managed-Discord runID → the channel it came from so
+	// os-server's agent event handler can deliver the reply to the relay and
+	// suppress TTS. Populated by HandleInboundDiscord, consumed by DeliverDiscordReply.
+	// See runtimes/hermes/discord.go. discordRelay is the reply/typing sink installed
+	// by os-server via SetChannelRelay (nil until then).
+	discordRunOriginMu sync.Mutex
+	discordRunOrigin   map[string]discordOrigin
+	discordRelay       domain.ChannelRelay
+
 	// slackStreams maps a runID → its live Slack streaming message (chat.startStream)
 	// so the reply renders progressively under the native typing indicator. See
 	// runtimes/hermes/slack_stream.go.
@@ -202,8 +211,9 @@ func ProvideService(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 		webChatRuns:    make(map[string]bool),
 		silentRuns:     make(map[string]bool),
 		poseBucketRuns: make(map[string]poseBucketInfo),
-		slackRunOrigin: make(map[string]slackOrigin),
-		slackStreams:   make(map[string]*slackStream),
+		slackRunOrigin:   make(map[string]slackOrigin),
+		slackStreams:     make(map[string]*slackStream),
+		discordRunOrigin: make(map[string]discordOrigin),
 	}
 	s.channels = []domain.ChannelSender{
 		&TelegramSender{svc: s},

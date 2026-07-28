@@ -35,7 +35,7 @@ OS server sử dụng MQTT để giao tiếp với backend server (báo cáo tr�
 
 ```json
 {
-  "cmd": "info|add_channel|slack_event|slack_command|whatsapp_pair|claudecode_login|claudecode_login_code|ota|data",
+  "cmd": "info|add_channel|slack_event|slack_command|discord_event|discord_reply|discord_typing|whatsapp_pair|claudecode_login|claudecode_login_code|ota|data",
   ...payload fields
 }
 ```
@@ -98,7 +98,8 @@ status reporter. Field nào backend không xài thì đơn giản là bị bỏ 
     // telegram: bot_token + chat_id
     // slack:    bot_token + app_token + channel_id        (socket mode, mặc định)
     // slack:    bot_token + mode:"http" + signing_secret  (+ webhook_path tùy chọn, mặc định /slack/events)
-    // discord:  bot_token + guild_id  + user_id
+    // discord:  bot_token + guild_id  + user_id            (bring-your-own-bot)
+    // discord:  managed:true + guild_id + user_id          (managed shared-bot — không có bot_token trên thiết bị)
     // whatsapp: user_id (số điện thoại E.164 — chỉ field này; bot tự login qua Baileys)
   }
 }
@@ -108,6 +109,18 @@ status reporter. Field nào backend không xài thì đơn giản là bị bỏ 
 
 - **`socket`** (mặc định khi không có `mode`) — OpenClaw mở WebSocket outbound tới Slack; cần `app_token`. Các install hiện tại không bị ảnh hưởng.
 - **`http`** — OpenClaw lắng nghe Slack Events API POST tại `webhook_path` (mặc định `/slack/events`) và re-verify chữ ký Slack bằng `signing_secret`; không dùng `app_token`. Một proxy public (bff-campaign-service) nhận HTTP event từ Slack rồi fan-out tới đúng thiết bị qua MQTT dưới dạng `slack_event` (xem bên dưới). HTTP mode là đường chịu được mất message vì Slack retry ~3 lần trong 5 phút khi delivery fail.
+
+**Managed Discord (shared-bot).** Khi `config` của discord mang `managed:true`, thiết bị
+**không** lưu `discord_bot_token`: token của con bot Autonomous dùng chung chỉ nằm ở
+Discord relay trên cloud (bff-campaign-service, cùng họ với Slack proxy), không bao giờ
+trên thiết bị. Thiết bị chỉ giữ `llm_api_key` per-device (lobster key) của nó, và relay
+tái sử dụng key này để route. Message inbound tới qua MQTT dưới dạng `discord_event`, còn
+reply đi ngược lại qua `discord_reply` / `discord_typing` (xem bên dưới), y hệt cách
+fan-out của Slack HTTP. Lớp device capability-gate managed Discord dựa trên việc runtime
+đang chạy có implement `domain.DiscordBridge` hay không, và xóa token trên thiết bị khi
+`managed` được đặt (`system/device/channels.go` `AddChannel`). Discord bring-your-own-bot
+kiểu cũ (token trên thiết bị + Gateway session local) không đổi khi `managed` vắng
+mặt/false.
 
 **Phản hồi (một message — telegram/slack/discord):**
 ```json
@@ -269,6 +282,66 @@ hoãn slash command ở giai đoạn này (v1) — chỉ `slack_event` mới run
 thiết bị hermes, `slack_command` vẫn đi theo đường local-webhook của OpenClaw mô tả ở trên.
 
 **Phản hồi (publish fd_channel):** cùng dạng với `slack_event` nhưng `type:"slack_command"`.
+
+### `discord_event` — Forward một message Discord đã relay (managed shared-bot)
+
+Gửi bởi **Discord relay** của bff-campaign-service khi con bot Autonomous dùng chung nhận
+một DM hoặc guild message thuộc thiết bị. Khác `slack_event` (forward HTTP nguyên văn tới
+webhook local), ở managed mode thiết bị **không** giữ token Discord và **không** mở Gateway
+session, nên relay cấp sẵn các field **đã resolve đầy đủ** — gồm cả `bot_user_id` và
+`mentions_bot`, những thứ một thiết bị có live session sẽ tự suy ra. Handler
+(`system/server/device/delivery/mqtt/discord_event_handler.go`, `handleDiscordEvent`)
+dedup theo Discord message id (tái dùng chung LRU `event_id` với `slack_event`),
+type-assert gateway đang chạy sang `domain.DiscordBridge`, và inject message thành một chat
+turn qua `HandleInboundDiscord`. Reply được giao bất đồng bộ qua uplink `discord_reply` /
+`discord_typing` (bên dưới). Runtime không implement `DiscordBridge` sẽ ack `failure` với
+`error:"channel_not_supported"`, để relay ngừng route.
+
+**Nhận:**
+```json
+{
+  "cmd": "discord_event",
+  "event_id": "<discord message id>",
+  "discord_user_id": "<author id — allowlist principal>",
+  "guild_id": "<guild id; rỗng nếu là DM>",
+  "discord_channel_id": "<channel để reply>",
+  "author_username": "<tên hiển thị>",
+  "bot_user_id": "<relay cấp>",
+  "mentions_bot": true,
+  "text": "<nội dung thô>"
+}
+```
+
+**Phản hồi (publish fd_channel):** dùng chung vocabulary ack với `slack_event`
+(`publishDiscordResult` ↔ `publishSlackResult`):
+```json
+{
+  "channel": "discord",
+  "type": "discord_event",
+  "event_id": "<discord message id>",
+  "status": "success|failure|skipped_duplicate",
+  "error": "...",
+  "info": { /* cùng metadata device/version như các ack khác */ }
+}
+```
+
+### `discord_reply` / `discord_typing` — Uplink managed-Discord (device → relay)
+
+Publish bởi thiết bị trên **fd_channel** — phía outbound của managed Discord. Runtime
+managed-Discord route reply/typing của nó tới `ChannelRelay` của os-server
+(`system/server/device/delivery/mqtt/channel_relay.go`, `mqttChannelRelay`), nơi publish
+các envelope này; Discord relay của bff-campaign-service tiêu thụ chúng và gọi Discord REST
+**với tư cách con bot dùng chung**. `discord_reply` mang **toàn bộ** text reply — relay tự
+chunk theo giới hạn **2000 ký tự** của Discord; `discord_typing` kích một native typing
+indicator.
+
+```json
+{"cmd": "discord_reply",  "discord_channel_id": "...", "text": "..."}
+{"cmd": "discord_typing", "discord_channel_id": "..."}
+```
+
+Relay được cài lên gateway đang chạy lúc startup qua `DiscordBridge.SetChannelRelay` (chỉ
+khi runtime implement `DiscordBridge`), trong `ProvideDeviceMQTTHandler`.
 
 ### `data` — Envelope dữ liệu chung
 
@@ -455,6 +528,9 @@ Xử lý bởi bootstrap worker, không qua MQTT handler trực tiếp.
 | `system/server/device/delivery/mqtt/info_handler.go` | Handle `info` command |
 | `system/server/device/delivery/mqtt/add_channel_hander.go` | Handle `add_channel` command (stream pairing events cho WhatsApp) |
 | `system/server/device/delivery/mqtt/slack_event_handler.go` | Handle `slack_event` / `slack_command` (runtime-aware: forward Slack HTTP-mode events tới gateway OpenClaw local, hoặc drive hermes turn nếu runtime là `SlackBridge`) |
+| `system/server/device/delivery/mqtt/discord_event_handler.go` | Handle `discord_event` (managed shared-bot: dedup, type-assert `domain.DiscordBridge`, inject turn; ack theo `publishSlackResult`) |
+| `system/server/device/delivery/mqtt/channel_relay.go` | `mqttChannelRelay` — `domain.ChannelRelay` của os-server: publish `discord_reply` / `discord_typing` trên fd_channel; cài lên gateway qua `DiscordBridge.SetChannelRelay` |
+| `system/domain/discord_bridge.go` | Contract managed-Discord: `DiscordInbound`, `ChannelRelay`, `DiscordBridge`, `DiscordReplyDeliverer` |
 | `system/server/device/delivery/mqtt/data_handler.go` | Handle `data` command kinds `oauth.set`/`oauth.remove` (+ access-token store) |
 | `system/server/device/delivery/mqtt/connector_handler.go` | Handle `connector.set.<code>`/`connector.remove.<code>` (bất đồng bộ, dispatch writer qua `connectorWriterFor`) |
 | `system/server/device/delivery/mqtt/connector_writer.go` | Interface `ConnectorWriter` + file helpers `<code>_access_tokens.json` dùng chung |

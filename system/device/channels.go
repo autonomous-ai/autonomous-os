@@ -38,6 +38,14 @@ func (s *Service) AddChannel(ctx context.Context, data domain.AddChannelRequest)
 	if !domain.ChannelSupported(s.agentGateway, channel) {
 		return nil, fmt.Errorf("%s on runtime %s: %w", channel, s.agentGateway.Name(), domain.ErrChannelNotSupported)
 	}
+	// Managed Discord needs the active runtime to be its own bridge frontend (it
+	// receives relayed events over MQTT and replies via ChannelRelay). Gate on the
+	// DiscordBridge capability before persisting, mirroring the ChannelSupported gate.
+	if channel == domain.ChannelDiscord && data.DiscordManaged {
+		if _, ok := s.agentGateway.(domain.DiscordBridge); !ok {
+			return nil, fmt.Errorf("managed discord on runtime %s: %w", s.agentGateway.Name(), domain.ErrChannelNotSupported)
+		}
+	}
 
 	// 2. Persist creds FIRST: a config-reading runtime apply (hermes presync re-reads
 	// config.json to rebuild ~/.hermes/.env) must see the new tokens. A transient
@@ -53,9 +61,16 @@ func (s *Service) AddChannel(ctx context.Context, data domain.AddChannelRequest)
 			c.SlackAppToken = data.SlackAppToken
 			c.SlackUserID = data.SlackUserID
 		case domain.ChannelDiscord:
-			c.DiscordBotToken = data.DiscordBotToken
+			c.DiscordManaged = data.DiscordManaged
 			c.DiscordGuildID = data.DiscordGuildID
 			c.DiscordUserID = data.DiscordUserID
+			if data.DiscordManaged {
+				// Managed: the shared bot token lives only in the relay. Never
+				// persist a token on the device (clears any legacy BYO token).
+				c.DiscordBotToken = ""
+			} else {
+				c.DiscordBotToken = data.DiscordBotToken
+			}
 		case domain.ChannelWhatsapp:
 			c.WhatsappUserID = data.WhatsappUserID
 		default:

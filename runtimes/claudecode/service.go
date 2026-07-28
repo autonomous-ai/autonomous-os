@@ -147,6 +147,12 @@ type ClaudeCodeService struct {
 	discordSendTurn    func(text, reqID, runID string) error
 	discordSendMessage func(channelID, text string) error
 
+	// discordRelay is the managed shared-bot reply/typing sink (domain.ChannelRelay),
+	// installed by os-server via SetChannelRelay. Used in place of the discordgo
+	// session when config.DiscordManaged is set; the token then lives only in the
+	// bff-campaign-service relay. Nil in the legacy bring-your-own-bot path.
+	discordRelay domain.ChannelRelay
+
 	// Telegram inbound test seams (telegram_poll.go). Zero values select the
 	// production defaults: api.telegram.org, the on-disk offset file and the
 	// real sendChat-backed send step.

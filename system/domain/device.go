@@ -155,6 +155,12 @@ type AddChannelRequest struct {
 	DiscordBotToken string `json:"discord_bot_token"`
 	DiscordGuildID  string `json:"discord_guild_id"`
 	DiscordUserID   string `json:"discord_user_id"`
+	// DiscordManaged selects the managed shared-bot path: no bot token is stored
+	// on the device; the bff-campaign-service Discord relay holds the token, routes
+	// inbound events over MQTT (cmd:"discord_event"), and sends replies as the bot.
+	// When false, Discord uses the legacy bring-your-own-bot path (device-held
+	// token + a local Gateway session). See domain.DiscordBridge.
+	DiscordManaged bool `json:"discord_managed"`
 
 	// whatsapp — bot login is handled interactively by the Baileys CLI; only
 	// the operator's E.164 phone number (the permitted DM caller) ships here.
@@ -315,6 +321,31 @@ const (
 	//
 	// Like slack_event, only relevant for devices in slack_mode="http".
 	CommandSlackCommand = "slack_command"
+
+	// CommandDiscordEvent is sent by the bff-campaign-service Discord relay when the
+	// shared Autonomous bot receives a DM or guild message this device owns. Unlike
+	// slack_event (a verbatim HTTP forward to a local webhook), in managed mode the
+	// device holds no Discord token and no Gateway session, so the relay supplies the
+	// fully-resolved fields — including bot_user_id and mentions_bot, which a device
+	// with a live session would derive itself. The active gateway must implement
+	// domain.DiscordBridge; handleDiscordEvent injects the message as a chat turn and
+	// the reply is published back on fd_channel as cmd:"discord_reply".
+	//
+	// Wire format: {"cmd":"discord_event","event_id":"<msg id>","discord_user_id":"...",
+	//   "guild_id":"...","discord_channel_id":"...","author_username":"...",
+	//   "bot_user_id":"...","mentions_bot":true,"text":"<raw content>"}
+	CommandDiscordEvent = "discord_event"
+
+	// CommandDiscordReply / CommandDiscordTyping are the device→relay uplink
+	// envelopes (published on fd_channel) a managed-Discord runtime emits via
+	// domain.ChannelRelay: the bff-campaign-service Discord relay consumes them and
+	// calls Discord REST as the bot. Reply carries the FULL text (the relay chunks
+	// to Discord's 2000-char limit); typing triggers one native indicator.
+	//
+	// Wire format: {"cmd":"discord_reply","discord_channel_id":"...","text":"..."}
+	//              {"cmd":"discord_typing","discord_channel_id":"..."}
+	CommandDiscordReply  = "discord_reply"
+	CommandDiscordTyping = "discord_typing"
 )
 
 // Data kinds carried inside CommandData envelope.
@@ -451,6 +482,7 @@ func (r *MQTTAddChannelCommand) ToRequest() AddChannelRequest {
 		req.DiscordBotToken, _ = cfg["bot_token"].(string)
 		req.DiscordGuildID, _ = cfg["guild_id"].(string)
 		req.DiscordUserID, _ = cfg["user_id"].(string)
+		req.DiscordManaged, _ = cfg["managed"].(bool)
 	case ChannelSlack:
 		req.SlackBotToken, _ = cfg["bot_token"].(string)
 		req.SlackAppToken, _ = cfg["app_token"].(string)
@@ -466,6 +498,35 @@ func (r *MQTTAddChannelCommand) ToRequest() AddChannelRequest {
 		req.TelegramUserID, _ = cfg["chat_id"].(string)
 	}
 	return req
+}
+
+// MQTTDiscordEventCommand is the fa_channel payload for cmd:"discord_event" —
+// one relayed Discord message from the bff-campaign-service Discord relay. See
+// CommandDiscordEvent for the wire format and the managed-Discord rationale.
+type MQTTDiscordEventCommand struct {
+	Cmd            string `json:"cmd"`
+	EventID        string `json:"event_id"`
+	DiscordUserID  string `json:"discord_user_id"`
+	GuildID        string `json:"guild_id"`
+	ChannelID      string `json:"discord_channel_id"`
+	AuthorUsername string `json:"author_username"`
+	BotUserID      string `json:"bot_user_id"`
+	MentionsBot    bool   `json:"mentions_bot"`
+	Text           string `json:"text"`
+}
+
+// ToInbound converts the wire command to the DiscordBridge inbound shape.
+func (c *MQTTDiscordEventCommand) ToInbound() DiscordInbound {
+	return DiscordInbound{
+		EventID:        c.EventID,
+		DiscordUserID:  c.DiscordUserID,
+		GuildID:        c.GuildID,
+		ChannelID:      c.ChannelID,
+		AuthorUsername: c.AuthorUsername,
+		BotUserID:      c.BotUserID,
+		MentionsBot:    c.MentionsBot,
+		Text:           c.Text,
+	}
 }
 
 // MQTTAddChannelResponse extends MQTTInfoResponse with channel-specific fields for fd_channel.
@@ -1019,6 +1080,7 @@ type ConfigPublicResponse struct {
 	SlackUserID        string `json:"slack_user_id"`
 	DiscordGuildID     string `json:"discord_guild_id"`
 	DiscordUserID      string `json:"discord_user_id"`
+	DiscordManaged     bool   `json:"discord_managed"`
 	WhatsappUserID     string `json:"whatsapp_user_id"`
 	LLMModel           string `json:"llm_model"`
 	LLMBaseURL         string `json:"llm_base_url"`

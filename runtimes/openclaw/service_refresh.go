@@ -67,7 +67,11 @@ func (s *OpenclawService) RefreshChannelConfig(ctx context.Context, req domain.R
 		slackEntryMap["enabled"] = true
 	case domain.ChannelDiscord:
 		discordMap := ensureMap(channelsMap, domain.ChannelDiscord)
-		applyDiscordChannelConfig(discordMap, req.DiscordBotToken, req.DiscordUserID, req.DiscordGuildID)
+		// RefreshChannelRequest carries no managed flag (refresh never ships a token
+		// over MQTT); the persisted config is authoritative for managed state, so a
+		// managed device re-applies enabled=false + no token instead of re-enabling
+		// the native block with an empty token.
+		applyDiscordChannelConfig(discordMap, req.DiscordBotToken, req.DiscordUserID, req.DiscordGuildID, s.config.DiscordManaged)
 		channelsMap[domain.ChannelDiscord] = discordMap
 		ensureMap(entriesMap, domain.ChannelDiscord)["enabled"] = true
 	case domain.ChannelTelegram:

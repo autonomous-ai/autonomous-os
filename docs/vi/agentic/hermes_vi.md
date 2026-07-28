@@ -310,6 +310,35 @@ qua MQTT broker đã được device xác thực và proxy đã verify chữ ký
 slash command (`slack_command`). Bản thân phản hồi chỉ là văn bản và ảnh đính kèm
 bị bỏ trên path proactive.
 
+### Discord — managed shared-bot bridge (os-server drive)
+
+Hermes bình thường chạy Discord **native bên trong gateway của nó** khi
+`DISCORD_BOT_TOKEN` có mặt trong `~/.hermes/.env` (bảng mapping presync §10). Ở
+**managed** mode (`discord_managed`, chọn bằng `managed:true` trên `add_channel`),
+thiết bị **không** lưu token và Hermes **không** mở Gateway session — con bot
+Autonomous dùng chung chỉ nằm ở **Discord relay** bff-campaign-service (cùng họ với
+Slack proxy). Đây đúng là bản Discord tương ứng của Slack HTTP-mode bridge phía trên,
+và hermes drive nó **phía os-server**:
+
+- `HermesService` implement **`domain.DiscordBridge`** (`SetChannelRelay` +
+  `HandleInboundDiscord`) **lẫn** **`domain.DiscordReplyDeliverer`**
+  (`IsDiscordOriginRun` + `DeliverDiscordReply`) — `runtimes/hermes/discord.go`.
+- **Inbound** — Discord → relay → MQTT `discord_event` → thiết bị. Handler type-assert
+  gateway sang `DiscordBridge` và gọi `HandleInboundDiscord`, nơi áp allowlist gate
+  (`discord_user_id`, `@mention` trong guild) dùng `bot_user_id` / `mentions_bot` do
+  relay cấp, ghi origin channel theo runID, và khởi động một turn.
+- **Reply / suppress TTS** — finalize bởi agent-event handler của os-server y hệt
+  Slack: `IsDiscordOriginRun` (peek không tiêu thụ) suppress TTS loa, còn
+  `DeliverDiscordReply` gửi text cuối tới `ChannelRelay` (`discord_reply` trên
+  fd_channel; relay chunk theo giới hạn 2000 ký tự của Discord và gửi với tư cách con
+  bot). Vì hermes finalize phía os-server, nó implement `DiscordReplyDeliverer` (khác
+  claudecode/codex/opencode vốn finalize nội bộ).
+- **`.env`** — managed mode **bỏ** `DISCORD_BOT_TOKEN` (config.json xóa token trên
+  thiết bị, và `sync_env` của presync skip giá trị rỗng), nên đường Discord native của
+  Hermes tắt và chỉ đường relay hoạt động.
+
+Xem [`adding-agent-runtime_vi.md`](adding-agent-runtime_vi.md) §9 và [`mqtt_vi.md`](../mqtt_vi.md).
+
 ## 9. Voice
 
 `hal.go` nối lượt Hermes vào path voice của HAL (TTS lúc speak-end, cùng entry

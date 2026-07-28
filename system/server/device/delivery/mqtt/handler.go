@@ -148,6 +148,13 @@ func (h *DeviceMQTTHandler) refreshableConnectorWriters() []ConnectorWriter {
 // ProvideDeviceMQTTHandler creates DeviceMQTTHandler with all command handlers.
 func ProvideDeviceMQTTHandler(cfg *config.Config, mqttFactory *mqtt.Factory, ds *device.Service, ns *network.Service, gw domain.AgentGateway) DeviceMQTTHandler {
 	configsDir := filepath.Join(cfg.OpenclawConfigDir, "workspace", "configs")
+	// Managed Discord: install the MQTT-backed reply/typing sink on the active
+	// gateway so a DiscordBridge turn can publish its reply back to the relay on
+	// fd_channel. Harmless for runtimes that don't implement DiscordBridge (skipped)
+	// and unused by the legacy bring-your-own-bot path.
+	if db, ok := gw.(domain.DiscordBridge); ok {
+		db.SetChannelRelay(newMQTTChannelRelay(cfg, mqttFactory))
+	}
 	return DeviceMQTTHandler{
 		config:         cfg,
 		mqttFactory:    mqttFactory,
@@ -279,6 +286,8 @@ func (h *DeviceMQTTHandler) HandleMessage(topic string, payload []byte) error {
 		return h.handleSlackEvent(cmd)
 	case domain.CommandSlackCommand:
 		return h.handleSlackCommand(cmd)
+	case domain.CommandDiscordEvent:
+		return h.handleDiscordEvent(cmd)
 	case domain.CommandWhatsappPair:
 		return h.handleWhatsappPair(cmd)
 	case domain.CommandClaudeCodeLogin:

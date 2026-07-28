@@ -118,6 +118,9 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const [discordBotToken, setDiscordBotToken] = useState("");
   const [discordGuildId, setDiscordGuildId] = useState("");
   const [discordUserId, setDiscordUserId] = useState("");
+  // discordManaged reflects the cloud-provisioned shared-bot state (read-only on
+  // the device): when true, no bot token is stored here and the token field is hidden.
+  const [discordManaged, setDiscordManaged] = useState(false);
   const [mqttEndpoint, setMqttEndpoint] = useState("");
   const [mqttPort, setMqttPort] = useState("");
   const [mqttUsername, setMqttUsername] = useState("");
@@ -205,6 +208,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         setSlackUserId(cfg.slack_user_id ?? "");
         setDiscordGuildId(cfg.discord_guild_id ?? "");
         setDiscordUserId(cfg.discord_user_id ?? "");
+        setDiscordManaged(!!cfg.discord_managed);
         setMqttEndpoint(cfg.mqtt_endpoint ?? "");
         setMqttPort(cfg.mqtt_port ? String(cfg.mqtt_port) : "");
         setMqttUsername(cfg.mqtt_username ?? "");
@@ -585,6 +589,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
               discordBotToken={discordBotToken} setDiscordBotToken={setDiscordBotToken}
               discordGuildId={discordGuildId} setDiscordGuildId={setDiscordGuildId}
               discordUserId={discordUserId} setDiscordUserId={setDiscordUserId}
+              discordManaged={discordManaged}
             />
 
             <MCPToolsSection active={activeSection === "mcp"} />

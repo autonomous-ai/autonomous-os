@@ -310,6 +310,15 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 						}
 					}()
 				}
+				// Managed-Discord (hermes): mirror the Slack cleanup so the
+				// origin map can't leak when the end-phase finalize is skipped.
+				if dd, ok := h.agentGateway.(domain.DiscordReplyDeliverer); ok {
+					go func() {
+						if err := dd.DeliverDiscordReply(flowRunID, ""); err != nil {
+							slog.Error("discord cleanup on error failed", "component", "agent", "err", err)
+						}
+					}()
+				}
 			}
 		}
 
@@ -889,6 +898,13 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			slackBridge, _ := h.agentGateway.(domain.SlackBridge)
 			isSlackRun := slackBridge != nil && slackBridge.IsSlackOriginRun(flowRunID)
 
+			// Managed-Discord (hermes): parallel to Slack. Peek (don't consume) so the
+			// mid-turn TTS gate can see it; DeliverDiscordReply consumes at reply time.
+			// nil for non-hermes runtimes (claudecode/codex/opencode finalize their own
+			// Discord replies internally, so os-server must not double-deliver).
+			discordDeliverer, _ := h.agentGateway.(domain.DiscordReplyDeliverer)
+			isDiscordRun := discordDeliverer != nil && discordDeliverer.IsDiscordOriginRun(flowRunID)
+
 			// [HW:/broadcast] marker: fan-out reply text to all Telegram chats (guard-only).
 			// [HW:/speak] marker: force TTS on the speaker without any channel fan-out —
 			// used by proactive triggers (e.g. music suggestions) that run inside a
@@ -1068,6 +1084,10 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 				if isSlackRun {
 					isChannelRun = true
 				}
+				// A managed-Discord turn replies in Discord (via the relay), never on the speaker.
+				if isDiscordRun {
+					isChannelRun = true
+				}
 				if isChannelRun {
 					// TTS would be gated by channel_run — log suppression so the
 					// monitor doesn't misleadingly show a "tts_send" event when the
@@ -1154,6 +1174,21 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 						slog.Error("slack reply failed", "component", "agent", "err", err)
 					}
 				}(slackText)
+			}
+
+			// Managed-Discord (hermes): finalize the turn for every end-phase outcome,
+			// mirroring the Slack finalize above. DeliverDiscordReply consumes the origin
+			// and sends nothing when text is empty (NO_REPLY → deliver "" for cleanup).
+			if isDiscordRun && discordDeliverer != nil {
+				discordText := text
+				if isAgentNoReply(text) {
+					discordText = ""
+				}
+				go func(t string) {
+					if err := discordDeliverer.DeliverDiscordReply(flowRunID, t); err != nil {
+						slog.Error("discord reply failed", "component", "agent", "err", err)
+					}
+				}(discordText)
 			}
 		}
 	}

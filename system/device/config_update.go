@@ -33,6 +33,7 @@ func (s *Service) GetPublicConfig() domain.ConfigPublicResponse {
 		SlackUserID:        s.config.SlackUserID,
 		DiscordGuildID:     s.config.DiscordGuildID,
 		DiscordUserID:      s.config.DiscordUserID,
+		DiscordManaged:     s.config.DiscordManaged,
 		WhatsappUserID:     s.config.WhatsappUserID,
 		LLMModel:           s.config.LLMModel,
 		LLMBaseURL:         s.config.LLMBaseURL,

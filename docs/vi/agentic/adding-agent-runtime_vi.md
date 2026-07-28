@@ -424,6 +424,55 @@ là no-op idempotent.
   `~/.claude/channels/<ch>/` và chỉ restart bridge khi có hash-diff
   (xem `docs/vi/agentic/claudecode_vi.md` §7).
 
+### Managed Discord (shared-bot relay) — một contract channel tùy chọn
+
+**Managed Discord** là mode Discord thứ hai mà runtime *có thể* hỗ trợ: token con bot
+Autonomous dùng chung chỉ nằm ở relay trên cloud (bff-campaign-service, cùng họ với
+`slack_proxy.go`), không bao giờ trên thiết bị. Thiết bị chỉ giữ `llm_api_key`
+per-device (relay tái dùng để route). Đây đúng là bản Discord tương ứng của Slack
+HTTP-mode bridge — inbound qua MQTT, reply qua MQTT — **không** token trên thiết bị và
+**không** Gateway session trên thiết bị. Discord bring-your-own-bot kiểu cũ (token +
+session local) không bị ảnh hưởng; hai mode được chọn theo từng channel bằng cờ bool
+`managed` trên `add_channel` (xem `docs/vi/mqtt_vi.md`).
+
+Contract ở `system/domain/discord_bridge.go` (soi gương `slack_bridge.go`):
+
+- **`DiscordBridge`** — capability marker. Runtime chạy được managed Discord sẽ
+  implement nó: `SetChannelRelay(ChannelRelay)` (os-server cài sink outbound một lần lúc
+  startup, trong `ProvideDeviceMQTTHandler`) và `HandleInboundDiscord(DiscordInbound)
+  (handled, err)` (drive một message relay thành turn). Handler MQTT `discord_event`
+  type-assert gateway đang chạy sang interface này; runtime không implement bị từ chối
+  bằng `domain.ErrChannelNotSupported`, y hệt gate `SlackBridge` / `ChannelSupported`.
+  Lớp device (`system/device/channels.go` `AddChannel`) enforce cùng gate **trước** khi
+  persist và **xóa** token trên thiết bị khi `managed`.
+- **`ChannelRelay`** — sink outbound (`SendDiscordReply` / `SendDiscordTyping`).
+  os-server cấp bản MQTT (`mqttChannelRelay`, `channel_relay.go`) publish `discord_reply`
+  / `discord_typing` trên fd_channel; relay gửi với tư cách con bot và chunk reply theo
+  giới hạn 2000 ký tự của Discord.
+- **`DiscordReplyDeliverer`** — **chỉ** implement bởi runtime mà reply được finalize bởi
+  **agent-event handler của os-server** (`handler_event_agent.go`) chứ không phải bởi
+  translator nội bộ: `IsDiscordOriginRun` (peek không tiêu thụ, để SSE handler suppress
+  TTS loa) + `DeliverDiscordReply` (gửi text cuối tới relay ở cuối turn). Cùng shape với
+  cặp Slack `IsSlackOriginRun` / `DeliverSlackReply`.
+
+**Runtime chọn stance nào** — cách chia khớp với cách runtime finalize reply channel:
+
+- **Finalize nội bộ** (claudecode, codex, opencode): `emitFinal` của translator vốn đã
+  post reply channel, nên nó gọi relay trực tiếp. Chúng implement `DiscordBridge` nhưng
+  **cố ý KHÔNG** implement `DiscordReplyDeliverer`, để os-server không giao đôi. Loop
+  discordgo do thiết bị sở hữu `startDiscordBot` **bỏ qua** mở session khi
+  `discord_managed`, còn `sendDiscordTyping` / `finishDiscordTurn` rẽ nhánh managed để
+  route tới relay.
+- **os-server drive** (hermes, openclaw): reply channel do agent-event handler của
+  os-server giao, nên chúng implement **cả** `DiscordBridge` **lẫn**
+  `DiscordReplyDeliverer`. Ở managed mode đường Discord native bị tắt — hermes bỏ
+  `DISCORD_BOT_TOKEN` khỏi `~/.hermes/.env` (presync skip token rỗng); openclaw ghi block
+  `channels.discord` với `enabled=false` và bỏ token (`applyDiscordChannelConfig`) — và
+  os-server sở hữu turn + reply.
+
+`SupportedChannels()` không đổi (discord là một entry bất kể mode); managed là cờ
+provisioning theo từng channel, không phải capability riêng.
+
 ---
 
 ## Checklist cho backend mới

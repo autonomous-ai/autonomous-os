@@ -202,6 +202,12 @@ type OpenCodeService struct {
 	discordSendTurn    func(text, reqID, runID string) error
 	discordSendMessage func(channelID, text string) error
 
+	// discordRelay is the managed shared-bot reply/typing sink (domain.ChannelRelay),
+	// installed by os-server via SetChannelRelay. Used in place of the discordgo
+	// session when config.DiscordManaged is set; the token then lives only in the
+	// bff-campaign-service relay. Nil in the legacy bring-your-own-bot path.
+	discordRelay domain.ChannelRelay
+
 	// ackHookEnabled mirrors OpenClaw's emotion-acknowledge hook: when the device
 	// declares the `expression` capability, every visible turn flashes a "thinking"
 	// face before the reply lands. Resolved once at construction from the shared

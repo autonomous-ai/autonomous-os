@@ -255,6 +255,17 @@ typing keeper, fan-out reply tại `session.idle`) mirror
 `RefreshChannelConfig` là no-op success trung thực cho các kênh được hỗ trợ và
 trả `domain.ErrChannelNotSupported` cho mọi thứ khác (whatsapp).
 
+**Managed Discord (shared-bot, `discord_managed`)** hoạt động y hệt codex:
+`OpenCodeService` implement `domain.DiscordBridge`, nên Discord có thể chạy với
+**không token trên thiết bị và không session** — relay bff-campaign-service sở hữu
+con bot dùng chung. Khi `discord_managed`, `startDiscordBot` bỏ qua session discordgo;
+inbound tới qua MQTT (`discord_event` → `HandleInboundDiscord`), và reply vẫn **nội
+bộ** (`emitFinal` post nó; `finishDiscordTurn` / `sendDiscordTyping` route tới
+`ChannelRelay` → `discord_reply` / `discord_typing` trên fd_channel). OpenCode
+**không** implement `DiscordReplyDeliverer`, để os-server không giao đôi. Xem
+[`codex_vi.md` §5](codex_vi.md), [`adding-agent-runtime_vi.md`](adding-agent-runtime_vi.md)
+§9, và [`mqtt_vi.md`](../mqtt_vi.md).
+
 ### Coding từ xa qua Telegram (`telegram_coding.go`, `coding_sessions.go`)
 
 Một chat Telegram có thể khởi động một turn coding `opencode` phạm-vi-folder và

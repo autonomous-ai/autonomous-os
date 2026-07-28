@@ -387,6 +387,18 @@ Yêu cầu (config.json): `discord_bot_token`, `discord_user_id` (allowlist), v�
 `discord_guild_id` khi cần mention trong guild hoạt động (setup chỉ dùng DM
 có thể để trống).
 
+**Managed Discord (shared-bot, `discord_managed`).** `CodexService` implement
+`domain.DiscordBridge`, nên Discord cũng có thể chạy với **không token trên thiết bị
+và không session** — relay bff-campaign-service sở hữu con bot dùng chung. Khi
+`discord_managed`, `startDiscordBot` bỏ qua mở session discordgo; message inbound tới
+qua MQTT (`discord_event` → `HandleInboundDiscord`, relay cấp `bot_user_id` /
+`mentions_bot`). Reply vẫn **nội bộ** — `emitFinal` post nó, còn `finishDiscordTurn` /
+`sendDiscordTyping` rẽ nhánh managed để route tới `ChannelRelay` (`discord_reply` /
+`discord_typing` trên fd_channel) thay cho `ChannelMessageSend`. Codex **không**
+implement `DiscordReplyDeliverer` (dành cho runtime finalize bởi os-server như
+hermes/openclaw), để os-server không giao đôi. Xem
+[`adding-agent-runtime_vi.md`](adding-agent-runtime_vi.md) §9 và [`mqtt_vi.md`](../mqtt_vi.md).
+
 ### Channel API
 
 `SupportedChannels()` trả `["telegram", "slack", "discord"]`. `AddChannel` /

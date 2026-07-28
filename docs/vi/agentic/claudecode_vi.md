@@ -234,6 +234,17 @@ nào.
   `emitFinal` post reply ngược về **chunk theo giới hạn 2000 ký tự của
   Discord**. Token đọc tươi mỗi lần (re)connect; khi session đang mở,
   discordgo tự xử lý reconnect gateway.
+- **Managed Discord (shared-bot, `discord_managed`):** `ClaudeCodeService`
+  implement `domain.DiscordBridge`, nên có thể chạy Discord với **không token
+  trên thiết bị và không session** — relay bff-campaign-service sở hữu con bot
+  dùng chung. Khi `discord_managed`, `startDiscordBot` bỏ qua mở session discordgo;
+  message inbound tới qua MQTT (`discord_event` → `HandleInboundDiscord`) với relay
+  cấp `bot_user_id` / `mentions_bot`. Reply vẫn **nội bộ** — `emitFinal`
+  (translator) post nó, còn `finishDiscordTurn` / `sendDiscordTyping` rẽ nhánh
+  managed để route tới `ChannelRelay` (`discord_reply` / `discord_typing` trên
+  fd_channel) thay cho session. Vì vậy nó **không** implement `DiscordReplyDeliverer`
+  (dành cho runtime finalize bởi os-server), để os-server không giao đôi. Xem
+  [`adding-agent-runtime_vi.md`](adding-agent-runtime_vi.md) §9 và [`mqtt_vi.md`](../mqtt_vi.md).
 - `AddChannel`/`RefreshChannelConfig` là no-op success trung thực cho cả ba
   kênh: các loop device sở hữu đọc creds tươi từ config.json mỗi lần dùng,
   nên chỉ cần persist creds là đủ (không presync, không restart bridge).

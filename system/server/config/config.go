@@ -82,6 +82,10 @@ type Config struct {
 	DiscordBotToken string `json:"discord_bot_token" yaml:"discordBotToken"`
 	DiscordGuildID  string `json:"discord_guild_id" yaml:"discordGuildID"`
 	DiscordUserID   string `json:"discord_user_id" yaml:"discordUserID"`
+	// DiscordManaged: true when Discord runs via the shared Autonomous bot behind
+	// the bff-campaign-service relay (no bot token stored here). False = legacy
+	// bring-your-own-bot (DiscordBotToken held on-device). See domain.DiscordBridge.
+	DiscordManaged bool `json:"discord_managed" yaml:"discordManaged"`
 
 	// WhatsappUserID is the E.164 phone number permitted to DM the device's
 	// WhatsApp account. The Baileys session itself lives on disk at

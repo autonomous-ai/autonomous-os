@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+
+	"go.autonomous.ai/os/system/domain"
 )
 
 // Device-owned Discord inbound for the OpenCode runtime.
@@ -173,6 +175,16 @@ func (s *OpenCodeService) startDiscordBot(ctx context.Context) {
 			return
 		default:
 		}
+		// Managed shared-bot mode: the bff-campaign-service relay owns the token and
+		// the Gateway connection; the device opens no session and receives messages
+		// over MQTT (cmd:"discord_event" → HandleInboundDiscord). Checked each loop
+		// (like the token) so an add_channel flip is picked up without a restart.
+		if s.config.DiscordManaged {
+			if !sleepCtx(ctx, discordNoTokenWait) {
+				return
+			}
+			continue
+		}
 		// Read creds fresh every attempt: config may be saved at any time and
 		// the loop must pick that up without a restart.
 		token := s.config.DiscordBotToken
@@ -334,8 +346,17 @@ func (s *OpenCodeService) discordTypingKeeper(ctx context.Context, channelID, ru
 	}
 }
 
-// sendDiscordTyping triggers one native typing indicator on channelID.
+// sendDiscordTyping triggers one native typing indicator on channelID. In
+// managed mode the device has no session, so the signal is published to the relay.
 func (s *OpenCodeService) sendDiscordTyping(channelID string) {
+	if s.config.DiscordManaged {
+		if s.discordRelay != nil {
+			if err := s.discordRelay.SendDiscordTyping(channelID); err != nil {
+				slog.Debug("discord managed typing failed", "component", "opencode", "error", err)
+			}
+		}
+		return
+	}
 	sess := s.getDiscordSession()
 	if sess == nil {
 		return
@@ -352,6 +373,21 @@ func (s *OpenCodeService) sendDiscordTyping(channelID string) {
 // → log + drop, the gateway lifecycle already ended).
 func (s *OpenCodeService) finishDiscordTurn(channelID, reply string) {
 	if reply == "" {
+		return
+	}
+	// Managed mode: hand the FULL reply to the relay (which chunks to 2000 and
+	// sends as the shared bot). The device holds no token, so the discordgo path
+	// below is never taken.
+	if s.config.DiscordManaged {
+		if s.discordRelay == nil {
+			slog.Error("discord managed reply dropped: no relay installed", "component", "opencode", "channelID", channelID)
+			return
+		}
+		if err := s.discordRelay.SendDiscordReply(channelID, reply); err != nil {
+			slog.Error("discord managed reply send failed", "component", "opencode", "channelID", channelID, "error", err)
+			return
+		}
+		slog.Info("discord managed reply posted", "component", "opencode", "channelID", channelID)
 		return
 	}
 	send := s.discordSendMessage
@@ -373,4 +409,37 @@ func (s *OpenCodeService) finishDiscordTurn(channelID, reply string) {
 		}
 	}
 	slog.Info("discord reply posted", "component", "opencode", "channelID", channelID)
+}
+
+// SetChannelRelay implements domain.DiscordBridge — installs the managed shared-bot
+// reply/typing sink. os-server calls this once at startup with the MQTT-backed relay.
+func (s *OpenCodeService) SetChannelRelay(relay domain.ChannelRelay) {
+	s.discordRelay = relay
+}
+
+// HandleInboundDiscord implements domain.DiscordBridge — drives one relayed Discord
+// message (managed shared-bot mode) as a chat turn. The relay supplies bot_user_id
+// and mentions_bot because the device has no Gateway session to derive them; the
+// same acceptDiscordMessage allowlist gate and injectDiscordTurn path as the
+// device-owned handleDiscordMessage apply, but reply + typing route to the relay
+// (see finishDiscordTurn / sendDiscordTyping managed branches).
+func (s *OpenCodeService) HandleInboundDiscord(in domain.DiscordInbound) (bool, error) {
+	msg := discordInbound{
+		authorID:    in.DiscordUserID,
+		authorBot:   false, // the relay forwards only real user messages
+		botUserID:   in.BotUserID,
+		guildID:     in.GuildID,
+		channelID:   in.ChannelID,
+		content:     in.Text,
+		mentionsBot: in.MentionsBot,
+	}
+	text, ok := acceptDiscordMessage(msg, s.config.DiscordUserID, s.config.DiscordGuildID)
+	if !ok {
+		slog.Debug("discord managed message skipped",
+			"component", "opencode", "authorId", in.DiscordUserID, "guildId", in.GuildID)
+		return false, nil
+	}
+	turnText := discordTurnText(in.AuthorUsername, in.DiscordUserID, text)
+	s.injectDiscordTurn(context.Background(), turnText, in.ChannelID)
+	return true, nil
 }

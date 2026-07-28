@@ -237,6 +237,18 @@ plugin.
   `emitFinal` posts the reply back **chunked at Discord's 2000-char limit**.
   Token is read fresh on every (re)connect attempt; while a session is open,
   discordgo handles gateway reconnects itself.
+- **Managed Discord (shared-bot, `discord_managed`):** `ClaudeCodeService`
+  implements `domain.DiscordBridge`, so it can run Discord with **no on-device
+  token and no session** — the bff-campaign-service relay owns the shared bot.
+  When `discord_managed`, `startDiscordBot` skips opening the discordgo session;
+  inbound messages arrive over MQTT (`discord_event` → `HandleInboundDiscord`)
+  with the relay supplying `bot_user_id` / `mentions_bot`. The reply stays
+  **internal** — `emitFinal` (translator) posts it, and `finishDiscordTurn` /
+  `sendDiscordTyping` take a managed branch that routes to the `ChannelRelay`
+  (`discord_reply` / `discord_typing` on fd_channel) instead of the session. It
+  therefore does **not** implement `DiscordReplyDeliverer` (that is for
+  os-server-finalized runtimes), so os-server never double-delivers. See
+  [`adding-agent-runtime.md`](adding-agent-runtime.md) §9 and [`mqtt.md`](../mqtt.md).
 - `AddChannel`/`RefreshChannelConfig` are honest no-op successes for all three
   channels: the device-owned loops read creds fresh from config.json on each
   use, so persisting the creds is all that is needed (no presync, no bridge

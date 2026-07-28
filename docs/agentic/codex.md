@@ -394,6 +394,19 @@ Requirements (config.json): `discord_bot_token`, `discord_user_id`
 (allowlist), and `discord_guild_id` when guild mentions should work (DM-only
 setups can leave it empty).
 
+**Managed Discord (shared-bot, `discord_managed`).** `CodexService` implements
+`domain.DiscordBridge`, so Discord can also run with **no on-device token and no
+session** — the bff-campaign-service relay owns the shared bot. When
+`discord_managed`, `startDiscordBot` skips opening the discordgo session; inbound
+messages arrive over MQTT (`discord_event` → `HandleInboundDiscord`, the relay
+supplying `bot_user_id` / `mentions_bot`). The reply stays **internal** — `emitFinal`
+posts it, and `finishDiscordTurn` / `sendDiscordTyping` take a managed branch that
+routes to the `ChannelRelay` (`discord_reply` / `discord_typing` on fd_channel)
+instead of `ChannelMessageSend`. Codex does **not** implement `DiscordReplyDeliverer`
+(that is for os-server-finalized runtimes like hermes/openclaw), so os-server never
+double-delivers. See [`adding-agent-runtime.md`](adding-agent-runtime.md) §9 and
+[`mqtt.md`](../mqtt.md).
+
 ### Channel API
 
 `SupportedChannels()` returns `["telegram", "slack", "discord"]`.

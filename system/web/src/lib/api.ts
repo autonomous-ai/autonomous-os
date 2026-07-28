@@ -280,6 +280,9 @@ export interface DeviceConfig {
   slack_user_id: string;
   discord_guild_id: string;
   discord_user_id: string;
+  // discord_managed: Discord runs via the shared Autonomous bot behind the cloud
+  // relay — no bot token is stored on the device. Set by the cloud add_channel flow.
+  discord_managed: boolean;
   llm_model: string;
   llm_base_url: string;
   llm_disable_thinking: boolean;

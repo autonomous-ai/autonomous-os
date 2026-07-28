@@ -207,7 +207,9 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 			return fmt.Errorf("ensure discord plugin: %w", err)
 		}
 		discordMap := ensureMap(channelsMap, "discord")
-		applyDiscordChannelConfig(discordMap, data.DiscordBotToken, data.DiscordUserID, data.DiscordGuildID)
+		// Initial setup provisions the native bring-your-own-bot path only; managed
+		// (shared-bot relay) mode is enabled later via AddChannel.
+		applyDiscordChannelConfig(discordMap, data.DiscordBotToken, data.DiscordUserID, data.DiscordGuildID, false)
 		channelsMap["discord"] = discordMap
 		discordEntryMap := ensureMap(entriesMap, "discord")
 		discordEntryMap["enabled"] = true
@@ -406,7 +408,10 @@ func (s *OpenclawService) AddChannel(ctx context.Context, data domain.AddChannel
 			return fmt.Errorf("ensure discord plugin: %w", err)
 		}
 		discordMap := ensureMap(channelsMap, domain.ChannelDiscord)
-		applyDiscordChannelConfig(discordMap, data.DiscordBotToken, data.DiscordUserID, data.DiscordGuildID)
+		// Managed mode omits the token + disables the native block so the shared
+		// Autonomous bot (cloud relay) drives Discord over MQTT instead of a
+		// device-held Gateway session. See domain.DiscordBridge / discord.go.
+		applyDiscordChannelConfig(discordMap, data.DiscordBotToken, data.DiscordUserID, data.DiscordGuildID, data.DiscordManaged)
 		channelsMap[domain.ChannelDiscord] = discordMap
 		discordEntryMap := ensureMap(entriesMap, domain.ChannelDiscord)
 		discordEntryMap["enabled"] = true

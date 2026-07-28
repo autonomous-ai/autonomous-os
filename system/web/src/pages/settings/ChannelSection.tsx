@@ -11,6 +11,7 @@ export function ChannelSection({
   teleToken, setTeleToken, teleUserId, setTeleUserId,
   slackBotToken, setSlackBotToken, slackAppToken, setSlackAppToken, slackUserId, setSlackUserId,
   discordBotToken, setDiscordBotToken, discordGuildId, setDiscordGuildId, discordUserId, setDiscordUserId,
+  discordManaged,
 }: {
   active: boolean;
   channel: ChannelType;
@@ -24,6 +25,9 @@ export function ChannelSection({
   discordBotToken: string; setDiscordBotToken: (v: string) => void;
   discordGuildId: string; setDiscordGuildId: (v: string) => void;
   discordUserId: string; setDiscordUserId: (v: string) => void;
+  // discordManaged: true when the device uses the shared Autonomous bot behind the
+  // cloud relay (no token stored on-device). Read-only here — provisioned by cloud.
+  discordManaged: boolean;
 }) {
   return (
     <SectionCard id="channel" title="Messaging Channels" active={active}>
@@ -59,7 +63,19 @@ export function ChannelSection({
       )}
       {channel === "discord" && (
         <>
-          <SecretUpdateField configured={channelLoaded.discordBotToken} label="Bot Token" id="discord_bot_token" value={discordBotToken} onChange={setDiscordBotToken} placeholder="Bot token" />
+          {discordManaged ? (
+            <div style={{
+              marginBottom: 12, padding: "9px 11px", borderRadius: 7,
+              background: C.surface, border: `1px solid ${C.border}`,
+              fontSize: 12, color: C.textDim, lineHeight: 1.5,
+            }}>
+              <strong style={{ color: C.text }}>Managed by Autonomous</strong> — this device uses the
+              shared Autonomous Discord bot. No bot token is stored on the device; messages route
+              through the Autonomous relay.
+            </div>
+          ) : (
+            <SecretUpdateField configured={channelLoaded.discordBotToken} label="Bot Token" id="discord_bot_token" value={discordBotToken} onChange={setDiscordBotToken} placeholder="Bot token" />
+          )}
           <LockedField lockedInitially={channelLoaded.discordGuildId} label="Guild ID" id="discord_guild_id" value={discordGuildId} onChange={setDiscordGuildId} placeholder="123456789" />
           <LockedField lockedInitially={channelLoaded.discordUserId} label="User ID" id="discord_user_id" value={discordUserId} onChange={setDiscordUserId} placeholder="123456789" />
         </>

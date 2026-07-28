@@ -160,6 +160,17 @@ type OpenclawService struct {
 	// is indistinguishable from real channel input on shape alone.
 	recentOutboundMu    sync.Mutex
 	recentOutboundTexts []recentOutbound
+
+	// discordRunOrigin maps a managed-Discord runID → the channel it came from so
+	// os-server's agent event handler can deliver the reply to the relay and
+	// suppress TTS. Populated by HandleInboundDiscord, consumed by DeliverDiscordReply.
+	// See runtimes/openclaw/discord.go. discordRelay is the reply/typing sink installed
+	// by os-server via SetChannelRelay (nil until then). Managed mode routes the turn
+	// through os-server exactly like hermes — openclaw's native @openclaw/discord plugin
+	// is disabled (no token) so the node gateway owns no Discord session.
+	discordRunOriginMu sync.Mutex
+	discordRunOrigin   map[string]discordOrigin
+	discordRelay       domain.ChannelRelay
 }
 
 type recentOutbound struct {
@@ -193,15 +204,16 @@ type poseBucketInfo struct {
 // ProvideService constructs the openclaw service.
 func ProvideService(cfg *config.Config, bus *monitor.Bus, sled *statusled.Service) *OpenclawService {
 	s := &OpenclawService{
-		config:         cfg,
-		monitorBus:     bus,
-		statusLED:      sled,
-		pendingRPC:     make(map[string]chan json.RawMessage),
-		guardRuns:      make(map[string]string),
-		broadcastRuns:  make(map[string]bool),
-		webChatRuns:    make(map[string]bool),
-		silentRuns:     make(map[string]bool),
-		poseBucketRuns: make(map[string]poseBucketInfo),
+		config:           cfg,
+		monitorBus:       bus,
+		statusLED:        sled,
+		pendingRPC:       make(map[string]chan json.RawMessage),
+		guardRuns:        make(map[string]string),
+		broadcastRuns:    make(map[string]bool),
+		webChatRuns:      make(map[string]bool),
+		silentRuns:       make(map[string]bool),
+		poseBucketRuns:   make(map[string]poseBucketInfo),
+		discordRunOrigin: make(map[string]discordOrigin),
 	}
 	// Register channel senders.
 	s.channels = []domain.ChannelSender{

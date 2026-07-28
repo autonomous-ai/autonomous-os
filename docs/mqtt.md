@@ -35,7 +35,7 @@ The OS server uses MQTT to communicate with the backend server (status reporting
 
 ```json
 {
-  "cmd": "info|add_channel|slack_event|slack_command|whatsapp_pair|claudecode_login|claudecode_login_code|ota|data",
+  "cmd": "info|add_channel|slack_event|slack_command|discord_event|discord_reply|discord_typing|whatsapp_pair|claudecode_login|claudecode_login_code|ota|data",
   ...payload fields
 }
 ```
@@ -99,7 +99,8 @@ reporter. Fields the backend doesn't consume are simply ignored.
     // telegram: bot_token + chat_id
     // slack:    bot_token + app_token + channel_id        (socket mode, default)
     // slack:    bot_token + mode:"http" + signing_secret  (+ optional webhook_path, default /slack/events)
-    // discord:  bot_token + guild_id  + user_id
+    // discord:  bot_token + guild_id  + user_id            (bring-your-own-bot)
+    // discord:  managed:true + guild_id + user_id          (managed shared-bot — no bot_token on device)
     // whatsapp: user_id (E.164 phone — only field; the bot logs in via Baileys)
   }
 }
@@ -109,6 +110,18 @@ reporter. Fields the backend doesn't consume are simply ignored.
 
 - **`socket`** (default when `mode` is omitted) — OpenClaw opens an outbound WebSocket to Slack; requires `app_token`. Existing installs are unaffected.
 - **`http`** — OpenClaw listens for Slack Events API POSTs at `webhook_path` (default `/slack/events`) and re-verifies the Slack signature with `signing_secret`; `app_token` is not used. A public proxy (bff-campaign-service) receives Slack's HTTP events and fans them out to the owning device over MQTT as `slack_event` (below). HTTP mode is the message-loss-tolerant path because Slack retries failed deliveries ~3× over 5 min.
+
+**Managed Discord (shared-bot).** When the discord `config` carries `managed:true`,
+the device stores **no** `discord_bot_token`: the shared Autonomous bot's token lives
+only in the cloud Discord relay (bff-campaign-service, sibling of the Slack proxy). The
+device holds just its per-device `llm_api_key` (lobster key), which the relay reuses to
+route. Inbound messages arrive over MQTT as `discord_event` and replies go back as
+`discord_reply` / `discord_typing` (below), mirroring the Slack HTTP fan-out. The device
+layer capability-gates managed Discord on the active runtime implementing
+`domain.DiscordBridge` and clears any on-device token when `managed` is set
+(`system/device/channels.go` `AddChannel`). Legacy bring-your-own-bot Discord
+(device-held `bot_token` + a local Gateway session) is unchanged when `managed` is
+absent/false.
 
 **Response (single — telegram/slack/discord):**
 ```json
@@ -275,6 +288,69 @@ defers slash commands for now (v1) — only `slack_event` is runtime-aware — s
 device `slack_command` still follows the OpenClaw local-webhook path described above.
 
 **Response (publish fd_channel):** same shape as `slack_event` but `type:"slack_command"`.
+
+### `discord_event` — Forward a relayed Discord message (managed shared-bot)
+
+Sent by the bff-campaign-service **Discord relay** when the shared Autonomous bot
+receives a DM or guild message a device owns. Unlike `slack_event` (a verbatim HTTP
+forward to a local webhook), in managed mode the device holds **no** Discord token and
+opens **no** Gateway session, so the relay supplies the **fully-resolved** fields —
+including `bot_user_id` and `mentions_bot`, which a device with a live session would
+otherwise derive itself. The handler
+(`system/server/device/delivery/mqtt/discord_event_handler.go`, `handleDiscordEvent`)
+dedups on the Discord message id (reusing the shared `event_id` LRU that backs
+`slack_event`), type-asserts the active gateway to `domain.DiscordBridge`, and injects
+the message as a chat turn via `HandleInboundDiscord`. The reply is delivered
+asynchronously via the `discord_reply` / `discord_typing` uplink (below). A runtime that
+doesn't implement `DiscordBridge` acks `failure` with `error:"channel_not_supported"`, so
+the relay stops routing.
+
+**Receive:**
+```json
+{
+  "cmd": "discord_event",
+  "event_id": "<discord message id>",
+  "discord_user_id": "<author id — the allowlist principal>",
+  "guild_id": "<guild id; empty for a DM>",
+  "discord_channel_id": "<channel to reply to>",
+  "author_username": "<display name>",
+  "bot_user_id": "<relay-supplied>",
+  "mentions_bot": true,
+  "text": "<raw content>"
+}
+```
+
+**Response (publish fd_channel):** mirrors the `slack_event` ack vocabulary
+(`publishDiscordResult` ↔ `publishSlackResult`):
+```json
+{
+  "channel": "discord",
+  "type": "discord_event",
+  "event_id": "<discord message id>",
+  "status": "success|failure|skipped_duplicate",
+  "error": "...",
+  "info": { /* same device/version metadata as other acks */ }
+}
+```
+
+### `discord_reply` / `discord_typing` — Managed-Discord uplink (device → relay)
+
+Published by the device on **fd_channel** — the outbound side of managed Discord. A
+managed-Discord runtime routes its reply/typing to os-server's `ChannelRelay`
+(`system/server/device/delivery/mqtt/channel_relay.go`, `mqttChannelRelay`), which
+publishes these envelopes; the bff-campaign-service Discord relay consumes them and calls
+Discord REST **as the shared bot**. `discord_reply` carries the **full** reply text — the
+relay chunks it to Discord's **2000-character** limit; `discord_typing` triggers one
+native typing indicator.
+
+```json
+{"cmd": "discord_reply",  "discord_channel_id": "...", "text": "..."}
+{"cmd": "discord_typing", "discord_channel_id": "..."}
+```
+
+The relay is installed on the active gateway at startup via
+`DiscordBridge.SetChannelRelay` (only when the runtime implements `DiscordBridge`), in
+`ProvideDeviceMQTTHandler`.
 
 ### `data` — Generic data envelope
 
@@ -466,6 +542,9 @@ Handled by bootstrap worker, not through MQTT handler directly.
 | `system/server/device/delivery/mqtt/info_handler.go` | Handle `info` command |
 | `system/server/device/delivery/mqtt/add_channel_hander.go` | Handle `add_channel` command (streams pairing events for WhatsApp) |
 | `system/server/device/delivery/mqtt/slack_event_handler.go` | Handle `slack_event` / `slack_command` (runtime-aware: forwards Slack HTTP-mode events/slash commands to the local OpenClaw gateway, or drives a hermes turn when the runtime is a `SlackBridge`) |
+| `system/server/device/delivery/mqtt/discord_event_handler.go` | Handle `discord_event` (managed shared-bot: dedup, type-assert `domain.DiscordBridge`, inject turn; ack mirrors `publishSlackResult`) |
+| `system/server/device/delivery/mqtt/channel_relay.go` | `mqttChannelRelay` — os-server `domain.ChannelRelay`: publishes `discord_reply` / `discord_typing` on fd_channel; installed on the gateway via `DiscordBridge.SetChannelRelay` |
+| `system/domain/discord_bridge.go` | Managed-Discord contract: `DiscordInbound`, `ChannelRelay`, `DiscordBridge`, `DiscordReplyDeliverer` |
 | `system/server/device/delivery/mqtt/data_handler.go` | Handle `data` command kinds `oauth.set`/`oauth.remove` (+ access-token store) |
 | `system/server/device/delivery/mqtt/connector_handler.go` | Handle `connector.set.<code>`/`connector.remove.<code>` (async, writer dispatch via `connectorWriterFor`) |
 | `system/server/device/delivery/mqtt/connector_writer.go` | `ConnectorWriter` interface + shared `<code>_access_tokens.json` file helpers |

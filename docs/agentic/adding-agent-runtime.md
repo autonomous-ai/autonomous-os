@@ -437,6 +437,59 @@ re-syncs `.env` before the gateway starts, so the re-apply is an idempotent no-o
   allowlist into `~/.claude/channels/<ch>/` and restarts the bridge only on a
   hash-diff (see `docs/agentic/claudecode.md` §7).
 
+### Managed Discord (shared-bot relay) — an optional channel contract
+
+**Managed Discord** is a second Discord mode a runtime *may* support: the shared
+Autonomous bot token lives **only** in the cloud relay (bff-campaign-service,
+sibling of `slack_proxy.go`), never on the device. The device holds just its
+per-device `llm_api_key` (which the relay reuses to route). It is the exact analogue
+of the Slack HTTP-mode bridge, but for Discord — inbound over MQTT, replies over
+MQTT — with **no** device-held token and **no** device Gateway session. Legacy
+bring-your-own-bot Discord (device token + local session) is unaffected; the two
+modes are selected per-channel by the `managed` bool on `add_channel` (see
+`docs/mqtt.md`).
+
+Contract in `system/domain/discord_bridge.go` (mirrors `slack_bridge.go`):
+
+- **`DiscordBridge`** — the capability marker. A runtime that can run managed
+  Discord implements it: `SetChannelRelay(ChannelRelay)` (os-server installs the
+  outbound sink once at startup, in `ProvideDeviceMQTTHandler`) and
+  `HandleInboundDiscord(DiscordInbound) (handled, err)` (drives one relayed message
+  as a turn). The `discord_event` MQTT handler type-asserts the active gateway to
+  this interface; a runtime that doesn't implement it is rejected with
+  `domain.ErrChannelNotSupported`, exactly like the `SlackBridge` / `ChannelSupported`
+  gate. The device layer (`system/device/channels.go` `AddChannel`) enforces the same
+  gate **before** persisting and **clears** the on-device token when `managed`.
+- **`ChannelRelay`** — the outbound sink (`SendDiscordReply` / `SendDiscordTyping`).
+  os-server provides the MQTT-backed implementation (`mqttChannelRelay`,
+  `channel_relay.go`) that publishes `discord_reply` / `discord_typing` on fd_channel;
+  the relay sends as the bot and chunks replies to Discord's 2000-char limit.
+- **`DiscordReplyDeliverer`** — implemented **only** by runtimes whose reply is
+  finalized by **os-server's agent-event handler** (`handler_event_agent.go`) rather
+  than by an internal translator: `IsDiscordOriginRun` (non-consuming peek, so the SSE
+  handler suppresses speaker TTS) + `DeliverDiscordReply` (sends the final text to the
+  relay at turn end). This is the same shape as the Slack `IsSlackOriginRun` /
+  `DeliverSlackReply` pair.
+
+**Which stance a runtime takes** — the split matches how the runtime finalizes any
+channel reply:
+
+- **Internal-finalize** (claudecode, codex, opencode): their translator's `emitFinal`
+  already posts channel replies, so it just calls the relay directly. They implement
+  `DiscordBridge` but **deliberately NOT** `DiscordReplyDeliverer`, so os-server never
+  double-delivers. Their device-owned discordgo loop `startDiscordBot` **skips** opening
+  a session when `discord_managed`, and `sendDiscordTyping` / `finishDiscordTurn` take a
+  managed branch that routes to the relay.
+- **os-server-driven** (hermes, openclaw): their channel reply is delivered by
+  os-server's agent-event handler, so they implement **both** `DiscordBridge` **and**
+  `DiscordReplyDeliverer`. In managed mode the native Discord path is disabled — hermes
+  omits `DISCORD_BOT_TOKEN` from `~/.hermes/.env` (presync skips the empty token);
+  openclaw writes the `channels.discord` block with `enabled=false` and omits the token
+  (`applyDiscordChannelConfig`) — and os-server owns the turn + reply.
+
+`SupportedChannels()` is unchanged (discord is one entry regardless of mode); managed is
+a per-channel provisioning flag, not a separate capability.
+
 ---
 
 ## Checklist for a new backend
