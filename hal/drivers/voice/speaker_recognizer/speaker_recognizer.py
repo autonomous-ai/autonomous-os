@@ -309,6 +309,167 @@ def pcm16_bytes_to_wav(pcm_bytes: bytes, sample_rate: int = _TARGET_SR) -> bytes
     return buf.getvalue()
 
 
+# ==========================================================================
+# ==  SPEAKER-DEBUG  —  TEMPORARY DIAGNOSTIC TRACER  —  REMOVE BEFORE DEPLOY ==
+# ==========================================================================
+# Everything tagged `SPEAKER-DEBUG` in this file is a throwaway diagnostic aid
+# for tuning speaker recognition. It traces every recognize()/enroll() call to
+# disk (input audio, query/enroll embeddings, full cosine-similarity breakdown,
+# reject reason, or server error), mirroring the facial-emotion debug logs.
+#
+# TO REMOVE FOR PRODUCTION: delete this block and every line/call marked
+# `SPEAKER-DEBUG` (grep -n "SPEAKER-DEBUG" this file — the __init__ line and the
+# self._debug.* calls in recognize()/enroll()). It is self-contained: no other
+# module or config file is touched, and it is OFF unless HAL_SPEAKER_DEBUG=true.
+#
+# Env knobs (all optional):
+#   HAL_SPEAKER_DEBUG            "true" to enable (default off)
+#   HAL_SPEAKER_DEBUG_DIR        output root (default <tmp>/hal-speaker-debug)
+#   HAL_SPEAKER_DEBUG_MAX_ENTRIES  per-kind dir cap, oldest pruned (default 1000; 0=unbounded)
+#
+# Layout (per call, named like the facial-emotion logs):
+#   <root>/recognize/<ts>_<class>_<confidence>/       (class = enrolled name | voice_<N> | unknown)
+#   <root>/recognize/<ts>_FAIL-<reason>/              (too-short | too-silent | server-error | ...)
+#   <root>/enroll/<ts>_<norm>_<cohesion>/             (cohesion = mean sim of kept samples to centroid)
+#   <root>/enroll/<ts>_FAIL-<reason>/
+# each dir holds: input.wav / sample_NN.wav, *.npy embeddings, result.json.
+def _debug_audio_stats(wav_bytes: bytes) -> tuple[Optional[float], Optional[float]]:
+    """Best-effort (duration_s, rms) from WAV bytes for the trace. Never raises."""
+    try:
+        wf = _wav_bytes_to_float32_16k_mono(wav_bytes)
+        dur = round(float(wf.shape[0]) / _TARGET_SR, 3)
+        rms = round(float(np.sqrt(np.mean(wf.astype(np.float64) ** 2))), 6)
+        return dur, rms
+    except Exception:
+        return None, None
+
+
+def _debug_stranger_label(vp_hash: Optional[str]) -> str:
+    """SPEAKER-DEBUG: 'voice_3' -> 'stranger-3' for readable trace-dir names.
+
+    The internal id stays 'voice_<N>' everywhere (cluster folders, result.json
+    voiceprint_hash); only the human-facing debug dir token is rewritten.
+    """
+    if not vp_hash:
+        return "unknown"
+    return vp_hash.replace(_VOICE_STRANGER_PREFIX, "stranger-", 1)
+
+
+class _SpeakerDebugTracer:
+    """SPEAKER-DEBUG: writes per-call trace dirs. Fully self-contained; never raises."""
+
+    def __init__(self) -> None:
+        import tempfile  # local so removing this block leaves no dangling import
+
+        self.enabled = os.environ.get("HAL_SPEAKER_DEBUG", "false").lower() == "true"
+        self._base = Path(
+            os.environ.get(
+                "HAL_SPEAKER_DEBUG_DIR",
+                os.path.join(tempfile.gettempdir(), "hal-speaker-debug"),
+            )
+        )
+        try:
+            self._max = int(os.environ.get("HAL_SPEAKER_DEBUG_MAX_ENTRIES", "1000"))
+        except ValueError:
+            self._max = 1000
+        if self.enabled:
+            try:
+                self._base.mkdir(parents=True, exist_ok=True)
+                logger.info("SPEAKER-DEBUG tracing ON -> %s", self._base)
+            except OSError as e:
+                logger.warning("SPEAKER-DEBUG disabled (mkdir failed): %s", e)
+                self.enabled = False
+
+    @staticmethod
+    def _stamp() -> str:
+        now = time.time()
+        return time.strftime("%Y%m%d-%H%M%S", time.localtime(now)) + f"-{int((now % 1.0) * 1e6):06d}"
+
+    @staticmethod
+    def _san(value: Any) -> str:
+        s = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value)).strip("_")
+        return s[:48] or "na"
+
+    def record(
+        self,
+        kind: str,
+        *,
+        cls: Any = None,
+        confidence: Optional[float] = None,
+        reason: Optional[str] = None,
+        result: Optional[dict[str, Any]] = None,
+        wavs: Optional[dict[str, bytes]] = None,
+        arrays: Optional[dict[str, Any]] = None,
+    ) -> None:
+        if not self.enabled:
+            return
+        try:
+            stamp = self._stamp()
+            if reason:
+                dname = f"{stamp}_FAIL-{self._san(reason)}"
+            else:
+                conf = f"{float(confidence):.2f}" if confidence is not None else "na"
+                dname = f"{stamp}_{self._san(cls)}_{conf}"
+            out = self._base / kind / dname
+            out.mkdir(parents=True, exist_ok=True)
+
+            payload: dict[str, Any] = {
+                "timestamp": stamp,
+                "ts": time.time(),
+                "service": f"speaker.{kind}",
+                "status": "failure" if reason else "prediction",
+            }
+            if reason:
+                payload["reason"] = reason
+            if result:
+                payload.update(result)
+            (out / "result.json").write_text(json.dumps(payload, indent=2, default=str))
+
+            for fn, wb in (wavs or {}).items():
+                if wb:
+                    try:
+                        (out / fn).write_bytes(wb)
+                    except OSError:
+                        pass
+            for fn, arr in (arrays or {}).items():
+                if arr is not None:
+                    try:
+                        np.save(out / fn, np.asarray(arr))
+                    except Exception:
+                        pass
+            self._prune(kind)
+        except Exception as e:  # a debug tracer must never break the service
+            logger.debug("SPEAKER-DEBUG trace failed: %s", e)
+
+    def _prune(self, kind: str) -> None:
+        if self._max <= 0:
+            return
+        try:
+            kd = self._base / kind
+            dirs = sorted((p for p in kd.iterdir() if p.is_dir()), key=lambda p: p.name)
+            for old in dirs[: max(0, len(dirs) - self._max)]:
+                shutil.rmtree(old, ignore_errors=True)
+        except OSError:
+            pass
+
+    @staticmethod
+    def classify_reason(err: Exception) -> str:
+        """SPEAKER-DEBUG: map a recognize/enroll exception to a short FAIL slug."""
+        if isinstance(err, EmbeddingAPIUnavailableError):
+            return "server-error"
+        msg = str(err).lower()
+        if "too short" in msg:
+            return "too-short"
+        if "too silent" in msg:
+            return "too-silent"
+        if "not configured" in msg:
+            return "api-not-configured"
+        if "invalid base64" in msg or "cannot decode" in msg or "empty audio" in msg:
+            return "bad-audio"
+        return "embed-error"
+# ===================  end SPEAKER-DEBUG tracer block  =====================
+
+
 class SpeakerRecognizer:
     """Per-user voice embedding store with external-API embedding computation."""
 
@@ -326,6 +487,13 @@ class SpeakerRecognizer:
             match_threshold if match_threshold is not None else _MATCH_THRESHOLD
         )
         self._mu = threading.Lock()
+
+        self._debug = _SpeakerDebugTracer()  # SPEAKER-DEBUG (remove before deploy)
+        # SPEAKER-DEBUG: last stranger-cluster match info, stashed by
+        # _assign_voiceprint_hash so the recognize() trace can record the
+        # cluster match score / re-appearance without changing that method's
+        # return signature. Only ever written when self._debug.enabled.
+        self._debug_stranger: Optional[dict[str, Any]] = None
 
         self._crypto: CryptoSession | None = None
         if config.DL_ENCRYPTION_ENABLED:
@@ -741,6 +909,16 @@ class SpeakerRecognizer:
         if not new_embeddings:
             # Surface the actual reason from perception-service (VAD reject text, etc.)
             # or from local gates (too short / silent) — no hardcoded summary.
+            if self._debug.enabled:  # SPEAKER-DEBUG
+                self._debug.record(
+                    "enroll", reason="no-valid-samples",
+                    result={
+                        "name": norm, "origin": origin, "num_new": len(new_wavs),
+                        "per_sample_errors": [
+                            {"index": i, "error": m} for i, m in per_sample_errors
+                        ],
+                    },
+                )
             if len(per_sample_errors) == 1:
                 raise SpeakerRecognizerError(per_sample_errors[0][1])
             details = "; ".join(
@@ -1000,6 +1178,41 @@ class SpeakerRecognizer:
             meta["num_samples"],
             meta["embedding_dim"],
         )
+        if self._debug.enabled:  # SPEAKER-DEBUG
+            # cohesion = mean scaled-cosine of every kept sample to the final
+            # aggregated vector — a single "how tight is this enrollment" number.
+            try:
+                cohesion = round(
+                    float(np.mean([_cosine_similarity(e, embedding) for e in kept_embeddings])), 4
+                )
+            except Exception:
+                cohesion = None
+            self._debug.record(
+                "enroll", cls=norm, confidence=cohesion,
+                wavs={
+                    f"sample_new_{i:02d}.wav": wb
+                    for i, (wb, _e) in enumerate(kept_new)
+                },
+                arrays={
+                    "embedding.npy": embedding,
+                    "kept_embeddings.npy": np.stack([_l2(e) for e in kept_embeddings], axis=0),
+                },
+                result={
+                    "name": norm, "cohesion": cohesion, "origin": origin,
+                    "consistency_threshold": _ENROLL_CONSISTENCY_THRESHOLD,
+                    "num_new": len(new_wavs),
+                    "num_kept_new": len(kept_new),
+                    "num_new_rejected_by_server": len(per_sample_errors),
+                    "num_new_dropped_consistency": dropped_new,
+                    "num_existing_kept": len(kept_existing),
+                    "num_existing_dropped": len(dropped_existing),
+                    "num_samples_total": meta["num_samples"],
+                    "embedding_dim": meta["embedding_dim"],
+                    "per_sample_errors": [
+                        {"index": i, "error": m} for i, m in per_sample_errors
+                    ],
+                },
+            )
         return meta
 
     def drop_stranger_cluster(self, label: str) -> bool:
@@ -1180,6 +1393,12 @@ class SpeakerRecognizer:
 
         if not self.available:
             logger.warning("Embedding server not configured — set SPEAKER_EMBEDDING_API_URL or DL_BACKEND_URL")
+            if self._debug.enabled:  # SPEAKER-DEBUG
+                self._debug.record(
+                    "recognize", reason="api-not-configured",
+                    wavs={"input.wav": wav_bytes},
+                    result={"source_type": source_type, "error": "embedding API not configured"},
+                )
             return {
                 "name": "unknown",
                 "confidence": 0.0,
@@ -1202,6 +1421,18 @@ class SpeakerRecognizer:
             logger.warning(
                 "Recognize: embedding failed for %s — %s", saved_path, e,
             )
+            if self._debug.enabled:  # SPEAKER-DEBUG
+                dur, rms = _debug_audio_stats(wav_bytes)
+                self._debug.record(
+                    "recognize", reason=self._debug.classify_reason(e),
+                    wavs={"input.wav": wav_bytes},
+                    result={
+                        "source_type": source_type, "error": str(e),
+                        "duration_s": dur, "rms": rms,
+                        "min_audio_s": 0.5, "chunk_seconds": _CHUNK_SECONDS,
+                        "unknown_audio_path": saved_path,
+                    },
+                )
             return {
                 "name": "unknown",
                 "confidence": 0.0,
@@ -1229,6 +1460,37 @@ class SpeakerRecognizer:
                 "Recognize result: name=unknown confidence=0.00 cluster=%s path=%s",
                 vp_hash or "(none)", saved_path,
             )
+            if self._debug.enabled:  # SPEAKER-DEBUG
+                dur, rms = _debug_audio_stats(wav_bytes)
+                st = self._debug_stranger or {}
+                st_score = st.get("score")
+                self._debug.record(
+                    # No enrolled users → dir named by the stranger cluster and
+                    # its match score (how sure this is the same returning voice).
+                    "recognize",
+                    cls=_debug_stranger_label(vp_hash),
+                    confidence=(st_score if st_score is not None else 0.0),
+                    wavs={"input.wav": wav_bytes},
+                    arrays={
+                        "input_chunks.npy": query_chunks,
+                        "input_embedding.npy": _l2(query_chunks.mean(axis=0)),
+                    },
+                    result={
+                        "name": "unknown", "match": False,
+                        "threshold": self._match_threshold,
+                        "voiceprint_hash": vp_hash or None,
+                        "stranger_match_score": (round(st_score, 4) if st_score is not None else None),
+                        "stranger_reappeared": st.get("reappeared"),
+                        "closest_cluster": st.get("closest_label"),
+                        "num_stranger_clusters": st.get("num_clusters"),
+                        "num_enrolled": 0,
+                        "num_query_chunks": int(query_chunks.shape[0]),
+                        "embedding_dim": int(query_chunks.shape[1]),
+                        "candidates": [], "source_type": source_type,
+                        "duration_s": dur, "rms": rms, "chunk_seconds": _CHUNK_SECONDS,
+                        "unknown_audio_path": saved_path,
+                    },
+                )
             return {
                 "name": "unknown",
                 "confidence": 0.0,
@@ -1314,6 +1576,51 @@ class SpeakerRecognizer:
             result["telegram_id"] = shared.get("telegram_id", "")
             result["has_telegram_identity"] = bool(
                 shared.get("telegram_id") or shared.get("telegram_username")
+            )
+        if self._debug.enabled:  # SPEAKER-DEBUG
+            dur, rms = _debug_audio_stats(wav_bytes)
+            dbg_result = {
+                "name": resolved_name, "match": is_match,
+                # nearest-enrolled similarity (the winning vote), regardless of match
+                "confidence": round(best_conf, 4),
+                "threshold": self._match_threshold,
+                "voiceprint_hash": vp_hash,
+                "num_enrolled": len(known),
+                "num_query_chunks": int(query_chunks.shape[0]),
+                "embedding_dim": int(query_chunks.shape[1]),
+                # Full per-speaker vote breakdown (not just the top-3 returned).
+                "candidates": [
+                    {"name": n, "confidence": round(c, 4), "votes": v}
+                    for n, c, v in scores
+                ],
+                "source_type": source_type,
+                "duration_s": dur, "rms": rms, "chunk_seconds": _CHUNK_SECONDS,
+                "unknown_audio_path": saved_path,
+            }
+            if is_match:
+                # Enrolled → dir = <name>_<nearest-enrolled score>.
+                dbg_cls, dbg_conf = resolved_name, best_conf
+            else:
+                # Stranger → dir = stranger-<N>_<cluster match score>, and record
+                # the re-appearance detail alongside the nearest-enrolled miss.
+                st = self._debug_stranger or {}
+                st_score = st.get("score")
+                dbg_cls = _debug_stranger_label(vp_hash)
+                dbg_conf = st_score if st_score is not None else 0.0
+                dbg_result.update({
+                    "stranger_match_score": (round(st_score, 4) if st_score is not None else None),
+                    "stranger_reappeared": st.get("reappeared"),
+                    "closest_cluster": st.get("closest_label"),
+                    "num_stranger_clusters": st.get("num_clusters"),
+                })
+            self._debug.record(
+                "recognize", cls=dbg_cls, confidence=dbg_conf,
+                wavs={"input.wav": wav_bytes},
+                arrays={
+                    "input_chunks.npy": query_chunks,
+                    "input_embedding.npy": _l2(query_chunks.mean(axis=0)),
+                },
+                result=dbg_result,
             )
         return result
 
@@ -1612,6 +1919,12 @@ class SpeakerRecognizer:
                         best_label_pre, best_sim,
                         _VOICE_STRANGER_MATCH_THRESHOLD, breakdown_pre,
                     )
+                    if self._debug.enabled:  # SPEAKER-DEBUG
+                        self._debug_stranger = {
+                            "reappeared": True, "score": best_sim,
+                            "closest_label": best_label_pre,
+                            "num_clusters": int(len(self._stranger_embeds)),
+                        }
                     return best_label_pre
 
             # No match — allocate a new cluster.
@@ -1655,6 +1968,12 @@ class SpeakerRecognizer:
                     "no prior clusters",
                 label, len(self._stranger_embeds),
             )
+            if self._debug.enabled:  # SPEAKER-DEBUG
+                self._debug_stranger = {
+                    "reappeared": False, "score": best_sim_pre,
+                    "closest_label": best_label_pre,
+                    "num_clusters": int(len(self._stranger_embeds)),
+                }
             return label
 
     def _match_stranger_clusters(
