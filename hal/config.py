@@ -371,6 +371,42 @@ DL_SPEAKER_ENDPOINT = os.environ.get("DL_SPEAKER_ENDPOINT", "/hal/api/dl/audio-r
 SPEAKER_EMBEDDING_API_URL: str = DL_BACKEND_URL.rstrip("/") + "/" + DL_SPEAKER_ENDPOINT.strip("/") if DL_BACKEND_URL else ""
 SPEAKER_EMBEDDING_API_KEY: str = DL_API_KEY
 
+# --- Sensing: Speaker recognition — on-device audio preprocessing ---
+SPEAKER_PROC_TARGET_SR: int = int(os.environ.get("HAL_SPEAKER_PROC_TARGET_SR", "16000"))
+SPEAKER_PROC_ENABLE_MONO: bool = (
+    os.environ.get("HAL_SPEAKER_PROC_ENABLE_MONO", "true").lower() == "true"
+)
+SPEAKER_PROC_ENABLE_RESAMPLE: bool = (
+    os.environ.get("HAL_SPEAKER_PROC_ENABLE_RESAMPLE", "true").lower() == "true"
+)
+SPEAKER_PROC_ENABLE_HIGH_PASS: bool = (
+    os.environ.get("HAL_SPEAKER_PROC_ENABLE_HIGH_PASS", "false").lower() == "true"
+)
+SPEAKER_PROC_HIGH_PASS_CUTOFF_HZ: float = float(
+    os.environ.get("HAL_SPEAKER_PROC_HIGH_PASS_CUTOFF_HZ", "80.0")
+)
+SPEAKER_PROC_ENABLE_NOISE_REDUCE: bool = (
+    os.environ.get("HAL_SPEAKER_PROC_ENABLE_NOISE_REDUCE", "false").lower() == "true"
+)
+SPEAKER_PROC_NOISE_STATIONARY: bool = (
+    os.environ.get("HAL_SPEAKER_PROC_NOISE_STATIONARY", "false").lower() == "true"
+)
+SPEAKER_PROC_ENABLE_VAD: bool = (
+    os.environ.get("HAL_SPEAKER_PROC_ENABLE_VAD", "true").lower() == "true"
+)
+SPEAKER_PROC_VAD_MIN_DURATION_SEC: float = float(
+    os.environ.get("HAL_SPEAKER_PROC_VAD_MIN_DURATION_SEC", "0.5")
+)
+SPEAKER_PROC_VAD_MIN_VOICE_RATIO: float = float(
+    os.environ.get("HAL_SPEAKER_PROC_VAD_MIN_VOICE_RATIO", "0.4")
+)
+SPEAKER_PROC_ENABLE_RMS_NORMALIZE: bool = (
+    os.environ.get("HAL_SPEAKER_PROC_ENABLE_RMS_NORMALIZE", "true").lower() == "true"
+)
+SPEAKER_PROC_RMS_TARGET: float = float(
+    os.environ.get("HAL_SPEAKER_PROC_RMS_TARGET", "0.1")
+)
+
 # --- Sensing: Speech emotion recognition (SER via perception-service) ---
 SPEECH_EMOTION_ENABLED: bool = (
     os.environ.get("HAL_SPEECH_EMOTION_ENABLED", "true").lower() == "true"

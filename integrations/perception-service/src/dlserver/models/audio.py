@@ -12,6 +12,7 @@ class EmbedAudioRequest(BaseModel):
 
     audios_b64: list[str] = Field(min_length=1, max_length=16)
     return_chunks: bool = False
+    preprocess: bool = False
 
 
 class EmbedAudioResponse(BaseModel):

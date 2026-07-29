@@ -133,13 +133,21 @@ caller (HAL). Disabled by default (`AUDIO_EMBEDDER__ENABLED=false`).
 
 ```json
 // request  (EmbedAudioRequest)
-{"audios_b64": ["<base64 WAV>", "..."], "return_chunks": false}
+{"audios_b64": ["<base64 WAV>", "..."], "return_chunks": false, "preprocess": false}
 // response (EmbedAudioResponse)
 {"embedding": [0.01, -0.02, ...], "embedding_dim": 256, "chunk_embeddings": null}
 ```
 
 `embedding` is L2-normalized. When `return_chunks` is true, `chunk_embeddings`
 holds the per-window vectors before aggregation.
+
+`preprocess` **defaults to `false`** — this endpoint is embed-only. HAL (the only
+caller) runs the audio processor (Mono/Resample/HighPass/NoiseReduce/VAD/RMS)
+**on-device** and uploads already-cleaned audio (VAD gating happens on the
+device; a rejected clip never reaches this endpoint). Even with
+`preprocess=false` the server still windows/chunks the waveform and extracts
+embeddings — it only skips filtering/VAD/normalize. Pass `preprocess=true` only
+if you upload raw, un-preprocessed audio and want the server to clean it.
 
 ---
 

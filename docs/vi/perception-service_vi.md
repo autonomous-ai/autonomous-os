@@ -57,7 +57,11 @@ Lựa chọn model và output:
 HAL là client chính. Trỏ nó tới backend bằng `DL_BACKEND_URL` và `DL_API_KEY` dùng
 chung (gửi qua `X-API-Key`), và tùy chọn bật mã hóa phía client. Sensing stream khung
 hình camera tới các endpoint hành động/tư thế/cảm xúc; voice POST âm thanh cuối câu
-nói tới endpoint cảm xúc giọng nói. Endpoint và payload chính xác nằm trong
+nói tới endpoint cảm xúc giọng nói. Với đường embedding người nói, HAL chạy pipeline
+lọc/VAD/chuẩn hoá audio **tại thiết bị** và gọi `/audio-recognizer/embed` với
+`preprocess=false`, nên server chỉ tính embedding (endpoint chỉ để embed và mặc
+định `preprocess=false`; chỉ truyền `true` nếu upload audio thô để server tự làm
+sạch). Endpoint và payload chính xác nằm trong
 [`integrations/perception-service/docs/api.md`](../../integrations/perception-service/docs/api.md); mọi tham số cấu hình nằm trong
 [`integrations/perception-service/docs/configuration.md`](../../integrations/perception-service/docs/configuration.md).
 

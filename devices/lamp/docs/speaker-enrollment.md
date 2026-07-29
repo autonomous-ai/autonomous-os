@@ -15,9 +15,10 @@ Lamp identifies who is speaking via **WeSpeaker ResNet34** (256-dim embedding, O
 │  VoiceService._stream_session()                                     │
 │    ├─ STT transcript ready                                          │
 │    ├─ _identify_and_decorate(transcript)                            │
-│    │   ├─ audio_buffer → WAV bytes → base64                        │
-│    │   ├─ POST /audio-recognizer/embed → perception-service (RunPod)        │
-│    │   │   └─ WeSpeaker ResNet34 ONNX → 256-dim L2-normalized      │
+│    │   ├─ audio_buffer → WAV → on-device preprocess (VAD gate)     │
+│    │   │   └─ Mono→Resample→[HPF]→[NR]→VAD→RMS; reject if no voice  │
+│    │   ├─ POST /audio-recognizer/embed  (preprocess=false)         │
+│    │   │   └─ WeSpeaker ONNX → 256-dim L2-normalized (embed only)  │
 │    │   ├─ Per-chunk voting vs enrolled embeddings                   │
 │    │   ├─ Match ≥ 0.7 → "Speaker - Name: transcript"               │
 │    │   └─ No match → _format_unknown_speaker()                     │
@@ -85,16 +86,25 @@ Four layers prevent the agent from repeatedly asking "who are you?":
 
 ### Recognition Algorithm
 
-1. Audio → preprocess (noise reduce, VAD, HPF, RMS normalize)
-2. Extract per-chunk embeddings `[M, 256]`
+1. Audio → **on-device** preprocess on HAL (`Mono → Resample → [HighPass] → [NoiseReduce] → VAD → RMS`). Clips that fail the VAD/quality gate are rejected locally (treated as "unknown") and **never uploaded**.
+2. Cleaned WAV → `POST /audio-recognizer/embed` with `preprocess=false`; the server skips its own preprocessing and only extracts per-chunk embeddings `[M, 256]` (it still windows/chunks the waveform itself)
 3. Cosine similarity against all enrolled speaker embeddings
 4. Per-chunk voting: each chunk votes for its closest match
 5. Winner = most votes (tiebreak by average confidence)
 6. `confidence ≥ 0.7` → match; else unknown
 
+### Audio preprocessing (on-device)
+
+The filter/VAD/normalize pipeline that used to run inside perception-service now runs on HAL, next to the mic — the same processors, in the same order, with the same defaults, ported to `hal/drivers/voice/speaker_recognizer/audio_processors/` (mirrors `AudioProcessorFactory` in perception-service). This keeps rejected audio off the network and puts the gate decision on the device.
+
+- **Default chain**: `MonoConverter → Resampler(16k) → VoiceActivityFilter(silero) → RMSNormalizer(0.1)`. `HighPassFilter` and `NoiseReducer` exist but are **off by default** (same as perception).
+- **VAD gate** (silero-vad): trims leading/trailing non-voice and rejects a clip when it removes all speech, the remaining audio is `< 0.5s`, or the voice ratio is `< 0.4`. A rejected clip raises `PreprocessRejected` → HAL returns "unknown" for recognize and skips the sample for enroll — exactly the behavior it had when perception returned HTTP 400.
+- **Server flag**: HAL sends `preprocess=false`; perception's `/embed` is embed-only and now defaults to `preprocess=false` too (HAL is the only caller). A caller that uploads raw audio can pass `preprocess=true` to have the server clean it.
+- **Consistency**: enroll and recognize share this one pipeline, so enrollments made after the move stay self-consistent. Voices enrolled under the **old server-side** pipeline should be re-enrolled if match quality drops.
+
 ### Enrollment Quality
 
-1. Each WAV sample → embedding via perception-service
+1. Each WAV sample → on-device preprocess (as above) → embedding via perception-service (`preprocess=false`)
 2. Filter by consistency threshold `0.7` (cosine similarity between samples)
 3. Aggregate remaining embeddings via weighted average
 4. Store L2-normalized vector at `/root/local/users/{name}/voice/embedding.npy`
@@ -105,7 +115,7 @@ Every unknown voice is locally clustered so the server can say "this is the same
 
 1. After embedding the query audio, the recognizer aggregates per-chunk embeddings into a single L2-normalized vector.
 2. Compare against stored stranger-cluster centroids (cosine similarity).
-3. Match ≥ `SPEAKER_MATCH_THRESHOLD` (default `0.75` — the **same** threshold as known-speaker matching; there is no separate stranger threshold) → reuse existing label `voice_N`.
+3. Match ≥ `SPEAKER_MATCH_THRESHOLD` (default `0.7` — the **same** threshold as known-speaker matching; there is no separate stranger threshold) → reuse existing label `voice_N`.
 4. No match → allocate new label `voice_{counter}`, append centroid to on-disk state.
 5. Cap at `HAL_MAX_VOICE_STRANGERS` (default `50`) — oldest evicted when exceeded.
 6. The assigned hash is:
@@ -131,6 +141,22 @@ Every unknown voice is locally clustered so the server can say "this is the same
 | Max voice strangers | 50 | `HAL_MAX_VOICE_STRANGERS` | Cluster cap; oldest evicted when exceeded |
 | Voice strangers dir | `/root/local/voice_strangers` | `HAL_VOICE_STRANGERS_DIR` | Persist cluster embeddings (survives reboot) |
 | Speaker recognition enabled | true | `HAL_SPEAKER_RECOGNITION_ENABLED` | Master toggle (default on; gated on the `audio` capability) |
+
+### On-device preprocessing knobs
+
+Mirror perception's `AudioProcessorSetting` defaults; override via env (all prefixed `HAL_SPEAKER_PROC_`).
+
+| Parameter | Default | Env var | Description |
+|-----------|---------|---------|-------------|
+| Target sample rate | 16000 | `HAL_SPEAKER_PROC_TARGET_SR` | Resampler target |
+| Mono | on | `HAL_SPEAKER_PROC_ENABLE_MONO` | Downmix to mono |
+| Resample | on | `HAL_SPEAKER_PROC_ENABLE_RESAMPLE` | Resample to target SR |
+| High-pass | off | `HAL_SPEAKER_PROC_ENABLE_HIGH_PASS` / `..._HIGH_PASS_CUTOFF_HZ` (80.0) | Butterworth HPF |
+| Noise reduce | off | `HAL_SPEAKER_PROC_ENABLE_NOISE_REDUCE` / `..._NOISE_STATIONARY` | `noisereduce` (lazy import) |
+| VAD | on | `HAL_SPEAKER_PROC_ENABLE_VAD` | silero-vad gate |
+| VAD min duration | 0.5s | `HAL_SPEAKER_PROC_VAD_MIN_DURATION_SEC` | Reject if stripped audio shorter |
+| VAD min voice ratio | 0.4 | `HAL_SPEAKER_PROC_VAD_MIN_VOICE_RATIO` | Reject if voice fraction lower |
+| RMS normalize | on | `HAL_SPEAKER_PROC_ENABLE_RMS_NORMALIZE` / `..._RMS_TARGET` (0.1) | Fixed-loudness normalize |
 
 ## Storage
 

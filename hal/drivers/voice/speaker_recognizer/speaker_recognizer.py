@@ -4,10 +4,15 @@ Stores per-user voice embeddings under ``/root/local/users/<name>/voice/`` and
 recognizes speakers via cosine similarity. Embeddings are computed by a
 configurable external API (see ``SPEAKER_EMBEDDING_API_URL``).
 
+Audio preprocessing (Mono → Resample → [HighPass] → [NoiseReduce] → VAD → RMS)
+runs ON THIS DEVICE (see ``audio_processors/``), next to the mic. Only audio that
+passes the VAD/quality gate is uploaded; the server is told to skip its own
+preprocessing (``preprocess=false``) and just compute the embedding.
+
 External API contract:
     POST {SPEAKER_EMBEDDING_API_URL}
     Headers: X-API-Key: {SPEAKER_EMBEDDING_API_KEY} (optional)
-    Body:    {"audios_b64": ["<base64 WAV>", ...]}
+    Body:    {"audios_b64": ["<base64 WAV>", ...], "preprocess": false}
     Response: {"embedding": [float, float, ...]}  (single 1-D vector
               aggregated from all inputs, any dimension)
 
@@ -103,15 +108,6 @@ _VOICE_STRANGER_DIR_RE = re.compile(r"^voice_\d+$")
 # Target sample rate for stored/enrolled audio (matches STT pipeline).
 _TARGET_SR = 16000
 
-# Chunk window the /embed endpoint slices the waveform with before per-chunk
-# embedding extraction. Bumped from the perception-service default (0.5s) because
-# device audio is overwhelmingly single-speaker per turn — longer chunks
-# yield smoother per-chunk embeddings, at the cost of fewer votes in
-# recognize() and reduced ability to detect a speaker switch mid-turn.
-# Audio shorter than this collapses to a single chunk (voting degenerates to
-# plain 1-vs-1 cosine match).
-_CHUNK_SECONDS = float(os.environ.get("HAL_SPEAKER_CHUNK_SECONDS", "3.0"))
-
 
 class SpeakerRecognizerError(Exception):
     """Raised on invalid input or external API failure."""
@@ -125,6 +121,18 @@ class EmbeddingAPIUnavailableError(SpeakerRecognizerError):
     Callers that batch over multiple samples MUST abort on this error
     instead of skipping the sample, to avoid misattributing an outage to
     bad audio and to avoid destructive cleanup of valid on-disk samples.
+    """
+
+
+class AudioGateRejectedError(SpeakerRecognizerError):
+    """Raised when the on-device preprocessing gate (VAD/quality) rejects audio.
+
+    Still a ``SpeakerRecognizerError`` so recognize() degrades to "unknown" and
+    the enroll new-sample loop skips the clip — same as when perception used to
+    return HTTP 400. Kept DISTINCT from a plain decode/corrupt failure so the
+    enroll path does NOT delete a previously-accepted on-disk sample just
+    because the gate got stricter (the gate is a moving target; a stored WAV is
+    not "corrupt" merely because today's VAD trims it below threshold).
     """
 
 
@@ -148,7 +156,8 @@ def _cosine_similarity(e1: np.ndarray, e2: np.ndarray) -> float:
     pre-normalized vectors). The ``+ 1e-12`` guards against zero-norm inputs.
     Returns the confidence in range [0, 1].
     """
-    raw_cos = float(np.dot(e1, e2) / (np.linalg.norm(e1) * np.linalg.norm(e2) + 1e-12))
+    raw_cos = float(np.dot(e1, e2) / (np.linalg.norm(e1)
+                    * np.linalg.norm(e2) + 1e-12))
     return (raw_cos + 1.0) / 2.0
 
 
@@ -186,11 +195,13 @@ def _weighted_aggregate(
     weights = sims01.astype(np.float32) ** float(power)
     total = float(weights.sum())
     if total < 1e-9:
-        weights = np.full(stack.shape[0], 1.0 / stack.shape[0], dtype=np.float32)
+        weights = np.full(stack.shape[0], 1.0 /
+                          stack.shape[0], dtype=np.float32)
     else:
         weights = (weights / total).astype(np.float32)
     agg = (stack * weights[:, None]).sum(axis=0)
     return _l2(agg)
+
 
 def _sample_origin(filename: str) -> str:
     """Parse the origin tag encoded in ``sample_<origin>_<ts>_<uuid>.wav``.
@@ -272,7 +283,8 @@ def _wav_bytes_to_float32_16k_mono(raw: bytes) -> np.ndarray:
                 "scipy is required for resampling"
             ) from e
         g = gcd(_TARGET_SR, int(sr))
-        arr = resample_poly(arr, _TARGET_SR // g, int(sr) // g).astype(np.float32)
+        arr = resample_poly(arr, _TARGET_SR // g,
+                            int(sr) // g).astype(np.float32)
     return arr
 
 
@@ -285,7 +297,8 @@ def _float32_waveform_to_wav_bytes(waveform: np.ndarray) -> bytes:
             "soundfile is required for WAV processing"
         ) from e
     buf = io.BytesIO()
-    sf.write(buf, np.asarray(waveform, dtype=np.float32), _TARGET_SR, format="WAV", subtype="PCM_16")
+    sf.write(buf, np.asarray(waveform, dtype=np.float32),
+             _TARGET_SR, format="WAV", subtype="PCM_16")
     return buf.getvalue()
 
 
@@ -303,6 +316,71 @@ def pcm16_bytes_to_wav(pcm_bytes: bytes, sample_rate: int = _TARGET_SR) -> bytes
         w.setframerate(sample_rate)
         w.writeframes(pcm_bytes)
     return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# On-device audio preprocessing (moved from perception-service).
+#
+# The filter/VAD/normalize chain (Mono -> Resample -> [HighPass] ->
+# [NoiseReduce] -> VAD -> RMS) now runs HERE, next to the mic. Only audio that
+# passes the VAD/quality gate is uploaded; the embedding server is then told to
+# skip its own preprocessing (preprocess=false) and just compute the embedding.
+# The composite processor is a lazily-built singleton because the silero VAD
+# model loads once and is reused across every enroll/recognize call.
+# ---------------------------------------------------------------------------
+_audio_processor: Optional[Any] = None
+_audio_processor_lock = threading.Lock()
+
+
+def _get_audio_processor() -> Any:
+    """Lazily build + start the composite preprocessor (silero VAD loads once)."""
+    global _audio_processor
+    if _audio_processor is not None:
+        return _audio_processor
+    with _audio_processor_lock:
+        if _audio_processor is None:
+            # Heavy imports (torch / silero-vad) are deferred to first use so
+            # module import stays light and lint doesn't require the VAD deps.
+            from hal.drivers.voice.speaker_recognizer.audio_processors.factory import (
+                AudioProcessorFactory,
+            )
+
+            factory = AudioProcessorFactory(
+                target_sample_rate=config.SPEAKER_PROC_TARGET_SR,
+                enable_mono=config.SPEAKER_PROC_ENABLE_MONO,
+                enable_resample=config.SPEAKER_PROC_ENABLE_RESAMPLE,
+                enable_high_pass=config.SPEAKER_PROC_ENABLE_HIGH_PASS,
+                high_pass_cutoff_hz=config.SPEAKER_PROC_HIGH_PASS_CUTOFF_HZ,
+                enable_noise_reduce=config.SPEAKER_PROC_ENABLE_NOISE_REDUCE,
+                noise_reduce_stationary=config.SPEAKER_PROC_NOISE_STATIONARY,
+                enable_vad=config.SPEAKER_PROC_ENABLE_VAD,
+                vad_min_duration_sec=config.SPEAKER_PROC_VAD_MIN_DURATION_SEC,
+                vad_min_voice_ratio=config.SPEAKER_PROC_VAD_MIN_VOICE_RATIO,
+                enable_rms_normalize=config.SPEAKER_PROC_ENABLE_RMS_NORMALIZE,
+                rms_target=config.SPEAKER_PROC_RMS_TARGET,
+            )
+            try:
+                proc = factory.create()
+                proc.start()  # loads the silero VAD model
+            except Exception as e:
+                # Missing dep / model-load failure is systemic, not audio-level.
+                # Raise EmbeddingAPIUnavailableError so enroll aborts cleanly
+                # (never deletes on-disk samples) and recognize degrades to
+                # "unknown" instead of crashing every turn with a 500.
+                logger.error(
+                    "Failed to init on-device audio preprocessor: %s", e)
+                raise EmbeddingAPIUnavailableError(
+                    f"audio preprocessor unavailable: {e}"
+                ) from e
+            _audio_processor = proc
+            logger.info(
+                "On-device audio preprocessor ready "
+                "(mono=%s resample=%s highpass=%s noise=%s vad=%s rms=%s)",
+                config.SPEAKER_PROC_ENABLE_MONO, config.SPEAKER_PROC_ENABLE_RESAMPLE,
+                config.SPEAKER_PROC_ENABLE_HIGH_PASS, config.SPEAKER_PROC_ENABLE_NOISE_REDUCE,
+                config.SPEAKER_PROC_ENABLE_VAD, config.SPEAKER_PROC_ENABLE_RMS_NORMALIZE,
+            )
+    return _audio_processor
 
 
 # ==========================================================================
@@ -363,13 +441,16 @@ class _SpeakerDebugTracer:
         # WITHOUT editing .env. Flip the default below to "false" — or set
         # HAL_SPEAKER_DEBUG=false — to turn it off. Read once at construction,
         # so restart HAL after changing it.
-        self.enabled = os.environ.get("HAL_SPEAKER_DEBUG", "true").lower() == "true"
+        self.enabled = os.environ.get(
+            "HAL_SPEAKER_DEBUG", "true").lower() == "true"
         # Default: a `speaker_logs/` dir right next to this file, so traces are
         # trivial to inspect. Override with HAL_SPEAKER_DEBUG_DIR.
         _default_dir = Path(__file__).resolve().parent / "speaker_logs"
-        self._base = Path(os.environ.get("HAL_SPEAKER_DEBUG_DIR", str(_default_dir)))
+        self._base = Path(os.environ.get(
+            "HAL_SPEAKER_DEBUG_DIR", str(_default_dir)))
         try:
-            self._max = int(os.environ.get("HAL_SPEAKER_DEBUG_MAX_ENTRIES", "1000"))
+            self._max = int(os.environ.get(
+                "HAL_SPEAKER_DEBUG_MAX_ENTRIES", "1000"))
         except ValueError:
             self._max = 1000
         if self.enabled:
@@ -464,7 +545,8 @@ class _SpeakerDebugTracer:
             return
         try:
             kd = self._base / kind
-            dirs = sorted((p for p in kd.iterdir() if p.is_dir()), key=lambda p: p.name)
+            dirs = sorted((p for p in kd.iterdir() if p.is_dir()),
+                          key=lambda p: p.name)
             for old in dirs[: max(0, len(dirs) - self._max)]:
                 shutil.rmtree(old, ignore_errors=True)
         except OSError:
@@ -476,7 +558,13 @@ class _SpeakerDebugTracer:
         if isinstance(err, EmbeddingAPIUnavailableError):
             return "server-error"
         msg = str(err).lower()
-        if "too short" in msg:
+        # On-device preprocessing gate rejections (PreprocessRejected reason codes
+        # are embedded in the message as "[<reason>]").
+        if "vad_removed_all" in msg:
+            return "no-voice"
+        if "low_voice_ratio" in msg:
+            return "low-voice"
+        if "too_short" in msg or "too short" in msg:
             return "too-short"
         if "too silent" in msg:
             return "too-silent"
@@ -515,12 +603,14 @@ class SpeakerRecognizer:
 
         self._crypto: CryptoSession | None = None
         if config.DL_ENCRYPTION_ENABLED:
-            public_key = resolve_public_key(config.DL_PUBLIC_KEY_URL, config.DL_API_KEY, config.DL_PUBLIC_KEY_FILE)
+            public_key = resolve_public_key(
+                config.DL_PUBLIC_KEY_URL, config.DL_API_KEY, config.DL_PUBLIC_KEY_FILE)
             if public_key is not None:
                 self._crypto = CryptoSession(public_key)
                 logger.info("Speaker recognizer: encryption enabled")
             elif config.DL_ENCRYPTION_REQUIRED:
-                raise RuntimeError("Encryption required but no public key available")
+                raise RuntimeError(
+                    "Encryption required but no public key available")
 
         self._users_dir.mkdir(parents=True, exist_ok=True)
         _UNKNOWN_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
@@ -529,7 +619,8 @@ class SpeakerRecognizer:
         # tracking. Persists to _VOICE_STRANGERS_DIR so reboots don't lose
         # the "same voice seen again" grouping.
         self._stranger_lock = threading.Lock()
-        self._stranger_embeds: Optional[np.ndarray] = None  # [N, D] L2-normalized
+        # [N, D] L2-normalized
+        self._stranger_embeds: Optional[np.ndarray] = None
         self._stranger_labels: Optional[np.ndarray] = None  # [N] str labels
         self._stranger_counter: int = 0
         _VOICE_STRANGERS_DIR.mkdir(parents=True, exist_ok=True)
@@ -628,7 +719,7 @@ class SpeakerRecognizer:
 
         body: dict[str, Any] = {
             "audios_b64": audios_b64,
-            "chunk_seconds": _CHUNK_SECONDS,
+            "preprocess": False,
         }
         if return_chunks:
             body["return_chunks"] = True
@@ -637,7 +728,8 @@ class SpeakerRecognizer:
             if self._crypto is not None:
                 resp = requests.post(
                     self._api_url,
-                    data=self._crypto.wrap_http_request(json.dumps(body).encode()),
+                    data=self._crypto.wrap_http_request(
+                        json.dumps(body).encode()),
                     headers=headers,
                     timeout=_API_TIMEOUT_S,
                 )
@@ -649,7 +741,8 @@ class SpeakerRecognizer:
                     timeout=_API_TIMEOUT_S,
                 )
         except requests.RequestException as e:
-            logger.warning("Embedding server unreachable at %s: %s", self._api_url, e)
+            logger.warning(
+                "Embedding server unreachable at %s: %s", self._api_url, e)
             raise EmbeddingAPIUnavailableError(
                 f"embedding API unreachable: {e}"
             ) from e
@@ -672,7 +765,8 @@ class SpeakerRecognizer:
 
         try:
             if self._crypto is not None:
-                payload = json.loads(self._crypto.unwrap_http_response(resp.content))
+                payload = json.loads(
+                    self._crypto.unwrap_http_response(resp.content))
             else:
                 payload = resp.json()
         except ValueError as e:
@@ -713,41 +807,54 @@ class SpeakerRecognizer:
         return vec / norm
 
     def _prepare_wav_for_embedding(self, wav_bytes: bytes) -> list[str]:
-        """Validate + wrap a single WAV as a one-element base64 list.
+        """Run the on-device preprocessing pipeline and wrap the cleaned WAV.
 
-        The ``/embed`` endpoint accepts a list of audios but concatenates
-        them into one waveform before preprocessing/VAD/chunking, so
-        pre-splitting long audio client-side would only add a lossy
-        float32 → PCM_16 round-trip per slice. Pass the whole WAV through
-        and let the server window it with its own chunk_with_stride.
+        HAL now runs the full filter/VAD/normalize chain locally (Mono →
+        Resample → [HighPass] → [NoiseReduce] → VAD → RMS) — the pipeline that
+        used to run inside perception-service. Only audio that PASSES the gate
+        is returned for upload; ``_call_embedding_api`` then asks the server to
+        skip its own preprocessing (``preprocess=false``) and just compute the
+        embedding on this cleaned waveform.
 
-        Two gates before we hit the network:
+        The ``/embed`` endpoint still windows/chunks the waveform itself, so we
+        pass the whole cleaned WAV as a single element and let the server slice
+        it (client-side splitting would only add a lossy float32 → PCM_16
+        round-trip per slice).
 
-        * **Duration ≥ 0.5s.** The server's windowing uses
-          ``min_chunk_sec ≈ 0.4s`` *after* VAD trims silence, so leaving a
-          100 ms headroom on the raw audio prevents the server from
-          silently returning "no embeddings produced".
-        * **RMS ≥ 1e-4 (~−80 dBFS).** A silent file would also pass 0.5s;
-          we check loudness on the raw signal to reject it early, even
-          though VAD might have caught it server-side. This also dodges
-          ONNX crashes (``Invalid input shape: {80, 0}``) when kaldi fbank
-          produces an empty feature tensor.
+        Raises ``SpeakerRecognizerError`` (audio-level) when the pipeline
+        rejects the clip — recognize() maps that to "unknown" and enroll()
+        skips the sample, exactly as when the server returned HTTP 400. Note
+        this is deliberately NOT ``EmbeddingAPIUnavailableError``: a rejected
+        clip is a bad recording, not a server outage.
         """
+        # Light submodule imports (Audio / PreprocessRejected) avoid pulling in
+        # torch/silero at module import time — those load in _get_audio_processor.
+        from hal.drivers.voice.speaker_recognizer.audio_processors.base import Audio
+        from hal.drivers.voice.speaker_recognizer.audio_processors.exceptions import (
+            PreprocessRejected,
+        )
+
         waveform = _wav_bytes_to_float32_16k_mono(wav_bytes)
+        if waveform.shape[0] == 0:
+            raise SpeakerRecognizerError("empty audio for embedding")
 
-        min_samples = int(0.5 * _TARGET_SR)
-        if waveform.shape[0] < min_samples:
-            raise SpeakerRecognizerError(
-                f"audio too short for embedding: {waveform.shape[0]/_TARGET_SR:.2f}s < 0.5s"
-            )
+        processor = _get_audio_processor()
+        try:
+            cleaned = processor.process(
+                Audio(waveform=waveform, sample_rate=_TARGET_SR))
+        except PreprocessRejected as e:
+            # AudioGateRejectedError (not a plain SpeakerRecognizerError) so the
+            # enroll path keeps previously-accepted on-disk samples instead of
+            # deleting them when the gate gets stricter.
+            raise AudioGateRejectedError(
+                f"audio rejected by preprocessing gate [{e.reason}]: {e}"
+            ) from e
 
-        rms = float(np.sqrt(np.mean(waveform.astype(np.float64) ** 2)))
-        if rms < 1e-4:
-            raise SpeakerRecognizerError(
-                f"audio too silent for embedding: rms={rms:.6f} < 1e-4"
-            )
+        out = np.asarray(cleaned.waveform, dtype=np.float32)
+        if out.shape[0] == 0:
+            raise SpeakerRecognizerError("preprocessing produced empty audio")
 
-        return [base64.b64encode(_float32_waveform_to_wav_bytes(waveform)).decode("ascii")]
+        return [base64.b64encode(_float32_waveform_to_wav_bytes(out)).decode("ascii")]
 
     # ------------------------------------------------------------- metadata
 
@@ -800,7 +907,8 @@ class SpeakerRecognizer:
                     continue
                 out[entry.name] = (vec / n).astype(np.float32)
             except Exception as e:
-                logger.warning("failed to load embedding for %s: %s", entry.name, e)
+                logger.warning(
+                    "failed to load embedding for %s: %s", entry.name, e)
         return out
 
     # --------------------------------------------------------- public: enroll
@@ -1058,7 +1166,20 @@ class SpeakerRecognizer:
         for p in existing_on_disk:
             try:
                 payload = self._prepare_wav_for_embedding(p.read_bytes())
+            except EmbeddingAPIUnavailableError:
+                # Preprocessor unavailable (systemic) — abort, never delete.
+                raise
+            except AudioGateRejectedError as e:
+                # The gate (VAD/quality) rejected a previously-accepted sample.
+                # The gate is a moving target, so KEEP the file — deleting it
+                # would silently shrink an enrollment as thresholds change.
+                logger.warning(
+                    "Enroll: skipping existing sample %s — gate rejected (%s), file kept",
+                    p.name, e,
+                )
+                continue
             except SpeakerRecognizerError as e:
+                # Genuine decode/corrupt failure — safe to delete.
                 logger.warning(
                     "Enroll: removing broken existing sample %s — %s",
                     p.name, e,
@@ -1163,9 +1284,9 @@ class SpeakerRecognizer:
         meta: dict[str, Any] = {
             "name": norm,
             "display_name": shared_identity.get("display_name")
-                or existing.get("display_name")
-                or name.strip()
-                or norm,
+            or existing.get("display_name")
+            or name.strip()
+            or norm,
             "telegram_username": shared_identity.get("telegram_username", ""),
             "telegram_id": shared_identity.get("telegram_id", ""),
             "has_telegram_identity": bool(
@@ -1201,7 +1322,8 @@ class SpeakerRecognizer:
             # aggregated vector — a single "how tight is this enrollment" number.
             try:
                 cohesion = round(
-                    float(np.mean([_cosine_similarity(e, embedding) for e in kept_embeddings])), 4
+                    float(np.mean([_cosine_similarity(e, embedding)
+                          for e in kept_embeddings])), 4
                 )
             except Exception:
                 cohesion = None
@@ -1388,7 +1510,8 @@ class SpeakerRecognizer:
         try:
             return self._assign_voiceprint_hash(query_chunks) or None
         except Exception as e:
-            logger.warning("Recognize: voiceprint hash assignment failed — %s", e)
+            logger.warning(
+                "Recognize: voiceprint hash assignment failed — %s", e)
             if self._debug.enabled:
                 dur, rms = _debug_audio_stats(wav_bytes)
                 self._debug.record(
@@ -1453,12 +1576,14 @@ class SpeakerRecognizer:
         saved_path = self._save_incoming_audio(wav_bytes)
 
         if not self.available:
-            logger.warning("Embedding server not configured — set SPEAKER_EMBEDDING_API_URL or DL_BACKEND_URL")
+            logger.warning(
+                "Embedding server not configured — set SPEAKER_EMBEDDING_API_URL or DL_BACKEND_URL")
             if self._debug.enabled:  # SPEAKER-DEBUG
                 self._debug.record(
                     "recognize", reason="api-not-configured",
                     wavs={"input.wav": wav_bytes},
-                    result={"source_type": source_type, "error": "embedding API not configured"},
+                    result={"source_type": source_type,
+                            "error": "embedding API not configured"},
                 )
             return {
                 "name": "unknown",
@@ -1490,7 +1615,7 @@ class SpeakerRecognizer:
                     result={
                         "source_type": source_type, "error": str(e),
                         "duration_s": dur, "rms": rms,
-                        "min_audio_s": 0.5, "chunk_seconds": _CHUNK_SECONDS,
+                        "min_audio_s": 0.5,
                         "unknown_audio_path": saved_path,
                     },
                 )
@@ -1514,7 +1639,8 @@ class SpeakerRecognizer:
             # No enrolled users — every voice is unknown. Still assign a
             # stable cluster hash so repeat speakers can be tracked before
             # anyone is enrolled.
-            logger.info("Recognize: no enrolled users — unknown + cluster-only path")
+            logger.info(
+                "Recognize: no enrolled users — unknown + cluster-only path")
             vp_hash = self._debug_safe_assign_hash(  # SPEAKER-DEBUG (was: _assign_voiceprint_hash)
                 query_chunks, wav_bytes, resolved_name="unknown", is_match=False,
                 num_enrolled=0, source_type=source_type, saved_path=saved_path,
@@ -1551,7 +1677,7 @@ class SpeakerRecognizer:
                         "num_query_chunks": int(query_chunks.shape[0]),
                         "embedding_dim": int(query_chunks.shape[1]),
                         "candidates": [], "source_type": source_type,
-                        "duration_s": dur, "rms": rms, "chunk_seconds": _CHUNK_SECONDS,
+                        "duration_s": dur, "rms": rms,
                         "unknown_audio_path": saved_path,
                     },
                 )
@@ -1570,8 +1696,10 @@ class SpeakerRecognizer:
         # by avg confidence. Returned confidence = avg of winner's votes.
         names = list(known.keys())
         ref_matrix = np.stack([known[n] for n in names], axis=0)  # [K, D]
-        sims = query_chunks @ ref_matrix.T                         # [M, K] raw cos
-        confs = (sims + 1.0) / 2.0                                  # mapped [0, 1]
+        # [M, K] raw cos
+        sims = query_chunks @ ref_matrix.T
+        # mapped [0, 1]
+        confs = (sims + 1.0) / 2.0
         best_idx = confs.argmax(axis=1)                             # [M]
         best_conf_per_chunk = confs[np.arange(confs.shape[0]), best_idx]
 
@@ -1651,7 +1779,8 @@ class SpeakerRecognizer:
             # gets 0 votes and vanishes from `candidates` — even though it WAS
             # compared on every chunk. Capture the whole [chunk x speaker] matrix
             # so you can see the losers and why each chunk voted the way it did.
-            _confs = confs.tolist()  # [M chunks][K speakers], scaled cosine [0, 1]
+            # [M chunks][K speakers], scaled cosine [0, 1]
+            _confs = confs.tolist()
             per_chunk_scores = [
                 {
                     "chunk": ci,
@@ -1688,7 +1817,7 @@ class SpeakerRecognizer:
                     for n, c, v in scores
                 ],
                 "source_type": source_type,
-                "duration_s": dur, "rms": rms, "chunk_seconds": _CHUNK_SECONDS,
+                "duration_s": dur, "rms": rms,
                 "unknown_audio_path": saved_path,
             }
             if is_match:
@@ -1914,7 +2043,8 @@ class SpeakerRecognizer:
                         shutil.rmtree(voice_dir)
                         count += 1
                     except OSError as e:
-                        logger.warning("reset_all: failed to drop %s: %s", voice_dir, e)
+                        logger.warning(
+                            "reset_all: failed to drop %s: %s", voice_dir, e)
         # Clear registry file.
         with self._mu:
             self._save_registry({})
@@ -2063,8 +2193,8 @@ class SpeakerRecognizer:
                 logger.info(
                     "Voiceprint hash: %s (new cluster, total=%d) | "
                     "no prior clusters",
-                label, len(self._stranger_embeds),
-            )
+                    label, len(self._stranger_embeds),
+                )
             if self._debug.enabled:  # SPEAKER-DEBUG
                 self._debug_stranger = {
                     "reappeared": False, "score": best_sim_pre,
@@ -2090,7 +2220,8 @@ class SpeakerRecognizer:
         """
         q = _l2(query_embedding)
         if float(np.linalg.norm(q)) == 0.0:
-            logger.info("Auto-merge scan: query embedding has zero norm — skip")
+            logger.info(
+                "Auto-merge scan: query embedding has zero norm — skip")
             return []
         with self._stranger_lock:
             if (
@@ -2098,7 +2229,8 @@ class SpeakerRecognizer:
                 or self._stranger_labels is None
                 or len(self._stranger_embeds) == 0
             ):
-                logger.info("Auto-merge scan: no stranger centroids to compare")
+                logger.info(
+                    "Auto-merge scan: no stranger centroids to compare")
                 return []
             # Both sides L2-normalized → dot product is raw cosine [-1, 1].
             # Convert to scaled [0, 1] so the threshold lives in one unit

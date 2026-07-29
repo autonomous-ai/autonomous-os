@@ -15,9 +15,10 @@ Lamp nhận diện người nói qua **WeSpeaker ResNet34** (vector nhúng 256 c
 │  VoiceService._stream_session()                                     │
 │    ├─ STT chuyển giọng nói → văn bản                                │
 │    ├─ _identify_and_decorate(transcript)                            │
-│    │   ├─ audio_buffer → WAV bytes → base64                        │
-│    │   ├─ POST /audio-recognizer/embed → perception-service (RunPod)        │
-│    │   │   └─ WeSpeaker ResNet34 ONNX → vector 256 chiều           │
+│    │   ├─ audio_buffer → WAV → tiền xử lý tại thiết bị (cổng VAD)   │
+│    │   │   └─ Mono→Resample→[HPF]→[NR]→VAD→RMS; loại nếu không có tiếng│
+│    │   ├─ POST /audio-recognizer/embed  (preprocess=false)         │
+│    │   │   └─ WeSpeaker ONNX → vector 256 chiều (chỉ lấy embedding) │
 │    │   ├─ Bình chọn theo từng chunk so với embedding đã đăng ký     │
 │    │   ├─ Khớp ≥ 0.7 → "Speaker - Tên: transcript"                 │
 │    │   └─ Không khớp → _format_unknown_speaker()                   │
@@ -86,16 +87,25 @@ Bốn lớp ngăn agent hỏi "bạn là ai?" liên tục:
 
 ### Thuật toán nhận diện
 
-1. Audio → tiền xử lý (giảm nhiễu, VAD, lọc cao tần, chuẩn hoá RMS)
-2. Trích xuất embedding theo từng chunk `[M, 256]`
+1. Audio → tiền xử lý **tại thiết bị** trên HAL (`Mono → Resample → [HighPass] → [NoiseReduce] → VAD → RMS`). Clip không qua được cổng VAD/chất lượng sẽ bị loại ngay tại chỗ (coi như "không xác định") và **không gửi lên server**.
+2. WAV đã làm sạch → `POST /audio-recognizer/embed` với `preprocess=false`; server bỏ qua tiền xử lý của nó và chỉ trích xuất embedding theo từng chunk `[M, 256]` (server vẫn tự chia cửa sổ/chunk waveform)
 3. Cosine similarity với tất cả embedding người nói đã đăng ký
 4. Bình chọn theo chunk: mỗi chunk vote cho người khớp nhất
 5. Người thắng = nhiều vote nhất (hoà thì so trung bình confidence)
 6. `confidence ≥ 0.7` → khớp; ngược lại → không xác định
 
+### Tiền xử lý audio (tại thiết bị)
+
+Pipeline lọc/VAD/chuẩn hoá trước đây chạy trong perception-service nay chạy trên HAL, ngay cạnh mic — cùng bộ processor, cùng thứ tự, cùng giá trị mặc định, được port sang `hal/drivers/voice/speaker_recognizer/audio_processors/` (khớp `AudioProcessorFactory` bên perception-service). Nhờ vậy audio bị loại không tốn băng thông và quyết định cổng nằm ngay tại thiết bị.
+
+- **Chuỗi mặc định**: `MonoConverter → Resampler(16k) → VoiceActivityFilter(silero) → RMSNormalizer(0.1)`. `HighPassFilter` và `NoiseReducer` có sẵn nhưng **tắt mặc định** (giống perception).
+- **Cổng VAD** (silero-vad): cắt phần không có tiếng ở đầu/cuối và loại clip khi VAD xoá hết speech, phần còn lại `< 0.5s`, hoặc tỉ lệ tiếng nói `< 0.4`. Clip bị loại sẽ raise `PreprocessRejected` → HAL trả "không xác định" khi recognize và bỏ qua mẫu khi enroll — đúng như hành vi khi perception trả HTTP 400 trước đây.
+- **Cờ server**: HAL gửi `preprocess=false`; `/embed` của perception chỉ để embed và nay cũng mặc định `preprocess=false` (HAL là caller duy nhất). Caller nào upload audio thô có thể truyền `preprocess=true` để server tự làm sạch.
+- **Nhất quán**: enroll và recognize dùng chung một pipeline này, nên các đăng ký sau khi chuyển vẫn tự nhất quán. Giọng đã đăng ký dưới pipeline **server cũ** nên đăng ký lại nếu chất lượng khớp giảm.
+
 ### Chất lượng đăng ký
 
-1. Mỗi file WAV → embedding qua perception-service
+1. Mỗi file WAV → tiền xử lý tại thiết bị (như trên) → embedding qua perception-service (`preprocess=false`)
 2. Lọc theo ngưỡng consistency `0.7` (cosine similarity giữa các mẫu)
 3. Tổng hợp embedding còn lại qua trung bình có trọng số
 4. Lưu vector chuẩn hoá L2 tại `/root/local/users/{tên}/voice/embedding.npy`
@@ -106,7 +116,7 @@ Mọi giọng lạ được gom cụm local để server biết "đây là cùng
 
 1. Sau khi embedding audio, recognizer tổng hợp embedding theo chunk thành 1 vector chuẩn hoá L2.
 2. So với các centroid cụm stranger đã lưu (cosine similarity).
-3. Match ≥ `SPEAKER_MATCH_THRESHOLD` (mặc định `0.75` — **cùng** ngưỡng với khớp known-speaker; không có ngưỡng riêng cho người lạ) → dùng lại label `voice_N`.
+3. Match ≥ `SPEAKER_MATCH_THRESHOLD` (mặc định `0.7` — **cùng** ngưỡng với khớp known-speaker; không có ngưỡng riêng cho người lạ) → dùng lại label `voice_N`.
 4. Không match → tạo label mới `voice_{counter}`, thêm centroid vào state trên đĩa.
 5. Giới hạn `HAL_MAX_VOICE_STRANGERS` (mặc định `50`) — evict oldest khi vượt.
 6. Hash được:
@@ -132,6 +142,22 @@ Mọi giọng lạ được gom cụm local để server biết "đây là cùng
 | Số voice stranger tối đa | 50 | `HAL_MAX_VOICE_STRANGERS` | Giới hạn cluster; evict oldest khi vượt |
 | Thư mục voice strangers | `/root/local/voice_strangers` | `HAL_VOICE_STRANGERS_DIR` | Persist embedding cluster (tồn tại qua reboot) |
 | Bật/tắt nhận diện giọng nói | true | `HAL_SPEAKER_RECOGNITION_ENABLED` | Công tắc tổng (mặc định bật; gate theo capability `audio`) |
+
+### Cấu hình tiền xử lý tại thiết bị
+
+Khớp giá trị mặc định của `AudioProcessorSetting` bên perception; override qua env (đều có tiền tố `HAL_SPEAKER_PROC_`).
+
+| Tham số | Mặc định | Env var | Mô tả |
+|---------|----------|---------|-------|
+| Sample rate đích | 16000 | `HAL_SPEAKER_PROC_TARGET_SR` | Đích của Resampler |
+| Mono | bật | `HAL_SPEAKER_PROC_ENABLE_MONO` | Trộn về mono |
+| Resample | bật | `HAL_SPEAKER_PROC_ENABLE_RESAMPLE` | Resample về SR đích |
+| High-pass | tắt | `HAL_SPEAKER_PROC_ENABLE_HIGH_PASS` / `..._HIGH_PASS_CUTOFF_HZ` (80.0) | Lọc cao tần Butterworth |
+| Noise reduce | tắt | `HAL_SPEAKER_PROC_ENABLE_NOISE_REDUCE` / `..._NOISE_STATIONARY` | `noisereduce` (import lazy) |
+| VAD | bật | `HAL_SPEAKER_PROC_ENABLE_VAD` | Cổng silero-vad |
+| VAD min duration | 0.5s | `HAL_SPEAKER_PROC_VAD_MIN_DURATION_SEC` | Loại nếu audio sau strip ngắn hơn |
+| VAD min voice ratio | 0.4 | `HAL_SPEAKER_PROC_VAD_MIN_VOICE_RATIO` | Loại nếu tỉ lệ tiếng nói thấp hơn |
+| RMS normalize | bật | `HAL_SPEAKER_PROC_ENABLE_RMS_NORMALIZE` / `..._RMS_TARGET` (0.1) | Chuẩn hoá độ lớn cố định |
 
 ## Lưu trữ
 

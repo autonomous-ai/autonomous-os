@@ -29,6 +29,8 @@ dependencies = [
     "ultralytics>=8.4,<9",
     "soundfile>=0.12",
     "scipy>=1.8",
+    "silero-vad",
+    "noisereduce",
     "sounddevice",
     "insightface>=0.7.3; sys_platform != 'darwin' or platform_machine != 'x86_64'",
     "onnxruntime>=1.23.2",

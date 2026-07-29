@@ -46,7 +46,9 @@ async def embed_audio(req: EmbedAudioRequest):
     audio_durations_s = [round(a.waveform.shape[0] / a.sample_rate, 2) for a in audios]
 
     try:
-        results = await asyncio.to_thread(embedder.predict, audios)
+        results = await asyncio.to_thread(
+            embedder.predict, audios, preprocess=req.preprocess
+        )
     except PreprocessRejected as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as exc:

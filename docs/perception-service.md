@@ -55,7 +55,12 @@ tune `BATCH_SIZE` and `BATCH_TIMEOUT` per model. Model choices and outputs:
 HAL is the main client. Point it at the backend with `DL_BACKEND_URL` and the
 shared `DL_API_KEY` (sent as `X-API-Key`), and optionally enable client-side
 encryption. Sensing streams camera frames to the action/pose/emotion endpoints;
-voice posts end-of-utterance audio to the speech-emotion endpoint. Exact endpoints
+voice posts end-of-utterance audio to the speech-emotion endpoint. For the
+speaker-embedding path, HAL runs the audio filter/VAD/normalize pipeline
+**on-device** and calls `/audio-recognizer/embed` with `preprocess=false`, so
+the server only computes the embedding (the endpoint is embed-only and defaults
+to `preprocess=false`; pass `true` only to upload raw audio for server-side
+cleaning). Exact endpoints
 and payloads are in [`integrations/perception-service/docs/api.md`](../integrations/perception-service/docs/api.md); every
 config knob is in
 [`integrations/perception-service/docs/configuration.md`](../integrations/perception-service/docs/configuration.md).

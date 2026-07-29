@@ -1,0 +1,64 @@
+"""Factory for building composite audio processors from config.
+
+Mirrors perception-service's AudioProcessorFactory (same order + defaults) so the
+on-device pipeline is identical to what the server used to run.
+"""
+
+from .composite import CompositeAudioProcessor
+from .high_pass_filter import HighPassFilter
+from .mono_converter import MonoConverter
+from .noise_reducer import NoiseReducer
+from .resampler import Resampler
+from .rms_normalizer import RMSNormalizer
+from .voice_activity_filter import VoiceActivityFilter
+
+
+class AudioProcessorFactory:
+    """Factory that creates a CompositeAudioProcessor from config."""
+
+    def __init__(
+        self,
+        target_sample_rate: int = 16000,
+        enable_mono: bool = True,
+        enable_resample: bool = True,
+        enable_high_pass: bool = False,
+        high_pass_cutoff_hz: float = 80.0,
+        enable_noise_reduce: bool = False,
+        noise_reduce_stationary: bool = False,
+        enable_vad: bool = True,
+        vad_min_duration_sec: float = 0.5,
+        vad_min_voice_ratio: float = 0.4,
+        enable_rms_normalize: bool = True,
+        rms_target: float = 0.1,
+    ) -> None:
+        self._target_sample_rate = target_sample_rate
+        self._enable_mono = enable_mono
+        self._enable_resample = enable_resample
+        self._enable_high_pass = enable_high_pass
+        self._high_pass_cutoff_hz = high_pass_cutoff_hz
+        self._enable_noise_reduce = enable_noise_reduce
+        self._noise_reduce_stationary = noise_reduce_stationary
+        self._enable_vad = enable_vad
+        self._vad_min_duration_sec = vad_min_duration_sec
+        self._vad_min_voice_ratio = vad_min_voice_ratio
+        self._enable_rms_normalize = enable_rms_normalize
+        self._rms_target = rms_target
+
+    def create(self) -> CompositeAudioProcessor:
+        processors = []
+        if self._enable_mono:
+            processors.append(MonoConverter())
+        if self._enable_resample:
+            processors.append(Resampler(target_sample_rate=self._target_sample_rate))
+        if self._enable_high_pass:
+            processors.append(HighPassFilter(cutoff_hz=self._high_pass_cutoff_hz))
+        if self._enable_noise_reduce:
+            processors.append(NoiseReducer(stationary=self._noise_reduce_stationary))
+        if self._enable_vad:
+            processors.append(VoiceActivityFilter(
+                min_duration_sec=self._vad_min_duration_sec,
+                min_voice_ratio=self._vad_min_voice_ratio,
+            ))
+        if self._enable_rms_normalize:
+            processors.append(RMSNormalizer(target_rms=self._rms_target))
+        return CompositeAudioProcessor(processors)
