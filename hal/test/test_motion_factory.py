@@ -188,3 +188,39 @@ class TestReachyMoveMap(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestShutdownTorquePolicy(unittest.TestCase):
+    """The shutdown path calls MotionService.stop(); that must not go limp.
+
+    server.py used to clear AnimationService's internals inline, which left
+    torque on. Switching to the contract's stop() brought robot.disconnect()
+    into the shutdown path for the first time, and lerobot's default there is
+    to cut torque — which on a lamp means the arm falls for the ~20s a HAL
+    restart takes. Dropping torque is release()'s job, on request.
+    """
+
+    def test_feetech_config_keeps_torque_on_disconnect(self):
+        import ast
+        import os
+
+        path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "..", "drivers", "motors", "animation_service.py",
+        )
+        tree = ast.parse(open(path).read(), path)
+        found = [
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.Call)
+            and getattr(n.func, "id", None) == "LeLampFollowerConfig"
+        ]
+        self.assertEqual(len(found), 1, "expected one LeLampFollowerConfig(...)")
+        kwargs = {k.arg: k.value for k in found[0].keywords}
+        self.assertIn(
+            "disable_torque_on_disconnect", kwargs,
+            "must be explicit — the lerobot default cuts torque on every restart",
+        )
+        self.assertFalse(
+            kwargs["disable_torque_on_disconnect"].value,
+            "shutdown must keep torque; going limp is release()'s job",
+        )

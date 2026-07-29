@@ -70,7 +70,16 @@ class AnimationService:
         self.hold_s = hold_s
         self._hold_until: float = 0.0  # timestamp until which to hold pose before returning to idle
         self._no_idle_recordings = NO_IDLE_RECORDINGS
-        self.robot_config = LeLampFollowerConfig(port=port, id=lamp_id)
+        # disable_torque_on_disconnect=False: dropping torque is what `release()`
+        # does, deliberately and on request ("arm limp"). A shutdown is not that
+        # — it happens on every HAL restart, and cutting torque there would let
+        # the arm fall under its own weight for the ~20s until HAL is back.
+        # The flag never mattered while nothing called stop(); the shutdown path
+        # does now, so make the intent explicit rather than inherit a default
+        # that would turn each restart into a release.
+        self.robot_config = LeLampFollowerConfig(
+            port=port, id=lamp_id, disable_torque_on_disconnect=False
+        )
         self.robot: LeLampFollower = None
         self.recordings_dir = os.path.join(os.path.dirname(__file__), "..", "..", "recordings")
 

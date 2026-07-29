@@ -63,6 +63,8 @@ capabilities:
                               # informational (surfaced via GET /device).
     required: false           # if true, a missing driver is a boot failure
     safety: SAFETY.md#motion  # bounds that govern this capability
+    owner: pollen_daemon      # optional: another process on the device holds
+                              # this hardware and hands it over on request
 ```
 
 **`driver:` selector semantics.** Two capabilities resolve a backend class from
@@ -86,6 +88,33 @@ probing its way to the right backend.
 
 A new motion backend is one class conforming to the `MotionService` protocol
 (`hal/drivers/motors/base.py`) plus one registry line in the factory.
+
+**`owner:` semantics.** Declare it when a process shipped with the body already
+holds this hardware and only yields it on request — a vendor runtime that boots
+before HAL and keeps running alongside it. `driver:` answers *which
+implementation opens the hardware*; `owner:` answers *who has to let go of it
+first*. It resolves through `hal/drivers/media_owner/factory.py` to a class
+implementing the `MediaOwner` protocol (`hal/drivers/media_owner/base.py`):
+
+- absent → HAL opens the hardware directly. The normal case; nothing runs.
+- registered name → HAL calls `release()` at the very top of startup, before any
+  capture device is opened or ALSA is probed, and `acquire()` on shutdown once
+  its own handles are closed
+- unknown name → **boot fails loud**, with no required/optional split: a
+  capability naming an owner that does not exist cannot be honoured, and
+  carrying on means opening hardware someone else still holds — which surfaces
+  as a "device busy" far from its cause
+
+Ordering is the reason this belongs to HAL and not to a launcher script. On
+Reachy Mini the Pollen daemon holds `/dev/video*` and both ALSA PCMs; with the
+release left to run late, PortAudio cannot probe a sample rate, the configured
+ALSA output never enumerates, and TTS silently settles on output device -1 while
+every status endpoint still reports healthy.
+
+Registered owners: `pollen_daemon` (Pollen Robotics' `reachy_mini` daemon, via
+its `/api/media/{release,acquire}` endpoints). One owner usually holds several
+capabilities — on Reachy both `audio` and `vision` — and HAL releases once per
+distinct owner, not once per capability.
 
 `required: true` means "this device is not itself without this capability." Audio is
 `required` on both Lamp and Intern; motion is `required` on neither.

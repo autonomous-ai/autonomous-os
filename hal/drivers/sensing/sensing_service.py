@@ -101,9 +101,11 @@ class SensingService:
         self._perception_orchestrator: PerceptionOrchestrator = PerceptionOrchestrator(
             poll_interval_ts=self._poll_interval,
             send_event=self._send_event,
-            # Sensing mic for SoundPerception (HAL_AUDIO_SENSING_DEVICE, falls
-            # back to the voice mic upstream). Without this the orchestrator's
-            # sound_device_id stays None and loud-noise detection never runs.
+            # Sensing mic for SoundPerception, straight from
+            # HAL_AUDIO_SENSING_DEVICE — None when the device does not declare
+            # one, and the orchestrator then skips loud-noise detection and logs
+            # why. No fallback to the voice mic: see the note at the call site
+            # in server.py for what that cost.
             sound_device_id=self._input_device,
             perception_config=PerceptionConfig(
                 # People perception (face identity + facial emotion) is the

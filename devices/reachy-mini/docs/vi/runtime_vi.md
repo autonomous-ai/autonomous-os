@@ -97,9 +97,31 @@ khung 1280×720; sau `acquire`, media status trở lại
 `{"available":true,"released":false}`. Daemon vẫn `active` và trả HTTP suốt quá
 trình — nhả media **không** ảnh hưởng điều khiển motion.
 
-**Hợp đồng cho HAL**: gọi `POST /api/media/release` trước khi mở bất kỳ thiết bị
-audio/camera nào, và `POST /api/media/acquire` khi shutdown. Chừng nào chưa nối
-vào startup của HAL, route audio/camera sẽ fail "device busy" trên máy vừa boot.
+**HAL tự làm việc bàn giao này** — không phải script, không phải launcher.
+`DEVICE.md` khai `owner: pollen_daemon` trên capability `audio` và `vision`;
+`hal/drivers/media_owner/factory.py` map tên đó tới `PollenDaemonMediaOwner`,
+gọi `release` ở đầu startup và `acquire` khi shutdown. `release` retry 5 lần cách
+nhau 2 s vì daemon là systemd service khởi động song song với HAL và có thể chưa
+listen lúc cold boot; `acquire` chỉ thử một lần vì lúc đó systemd đang đếm ngược
+tới SIGKILL, và lượt `release` sau sẽ tự sửa nếu lỡ.
+
+Lý do phải nằm trong tiến trình HAL là **thứ tự**: release phải xong trước khi
+HAL probe audio. Thua cuộc đua đó thì hỏng âm thầm và hỏng toàn bộ — card còn bị
+daemon giữ nên PortAudio không probe nổi sample rate nào, output ALSA đã cấu hình
+không enumerate, TTS chốt ở device -1 và raise mọi lần nói, trong khi mọi endpoint
+status vẫn báo healthy.
+
+Không script spike nào gọi `/api/media/*` nữa. Ngoại lệ duy nhất là một lệnh
+`acquire` best-effort trong `spike-hal.sh --stop`, dành cho HAL bị kill đủ gắt để
+bỏ qua bước trả media — thiếu nó thì daemon nằm im, câm và mù, kéo theo cả app
+stack của Pollen.
+
+Một tác dụng phụ đã đo: handler `release` của daemon reset luôn mixer của card về
+mức của nó (90% trước khi gọi, 62% sau). Driver đọc lại mức đã persist và ghi
+xuống qua route `/audio/volume` ngay sau release, nếu không một lần restart HAL
+đơn thuần sẽ để loa ở mức của Pollen trong khi slider, file state và agent đều
+vẫn báo mức của người dùng.
+
 Việc này đi kèm — chứ không thay thế — `media_backend="no_media"` của SDK, vì
 tham số đó chỉ ngăn *SDK client* giành media.
 
@@ -158,22 +180,94 @@ Reachy Mini ship kèm **OS Pollen** trên Pi, chứa daemon own serial bus, cont
 loop, inverse kinematics và safety clamp. **Flash golden image = xoá daemon =
 cục gạch.** Autonomous luôn được cài chồng lên.
 
-- **Spike đầu tiên**: `bash devices/reachy-mini/spike-hal.sh` — chỉ HAL. Rsync
-  HAL, cài `.env` của device và `/etc/asound.conf`, mượn camera/audio từ daemon,
-  chạy uvicorn trong tmux. `--stop` trả media lại.
-- **Spike thứ hai**: `bash devices/reachy-mini/spike-os.sh` — chỉ os-server.
-  Cross-compile linux/arm64, seed `/root/config/config.json` tối thiểu, chạy API
-  trong tmux **dưới root với cwd=/root**: `config.Load` đọc đường tương đối
-  `config/config.json`, nên chạy từ thư mục khác sẽ khiến os-server và HAL đọc
-  hai file config khác nhau mà không báo lỗi.
-- **Spike thứ ba**: `bash devices/reachy-mini/spike-web.sh` — build bundle Vite,
-  cài nginx, viết vhost spike serve bundle và proxy `/api/` sang os-server.
-  `/hw/` **chỉ loopback** (`allow 127.0.0.1; deny all`), giống vhost production:
-  trình duyệt chạm phần cứng qua proxy có auth `/api/hardware/*` của os-server,
-  không bao giờ gọi thẳng HAL.
-- **Spike đầy đủ (cũ)**: `REACHY_HOST=pollen@reachy-mini.local bash devices/reachy-mini/spike.sh`
-  — build HAL + os-server + web một lượt, nhưng không cài nginx lẫn alias ALSA,
-  nên audio và UI đều chết. Ưu tiên ba script tách riêng.
+Bộ script spike **chạy trên chính robot**, không chạy từ máy dev. Copy nguyên thư
+mục sang rồi gọi một lệnh:
+
+```bash
+scp -r devices/reachy-mini pollen@reachy-mini.local:~/
+ssh pollen@reachy-mini.local 'sudo bash ~/reachy-mini/spike.sh'
+```
+
+Không có gì được build ở máy dev. Mọi artifact tải từ **OTA metadata**
+(`https://cdn.autonomous.ai/os/ota/metadata.json`) — đúng nguồn mà
+`scripts/imager/build-orangepi.sh` và `scripts/provision/setup.sh` đọc, nên robot
+spike chạy đúng build cả fleet đang chạy, và bug tái hiện ở đây mới nói được điều
+gì đó về máy người khác. Đổi feed bằng `OTA_METADATA_URL=…` hoặc field
+`metadata_url` trong `/root/config/bootstrap.json`.
+
+Layout là **layout production**, không phải cây riêng cho spike:
+
+| Thành phần | Đường dẫn |
+|------------|-----------|
+| HAL | `/opt/hal` (venv `/opt/hal/.venv`, `.env` do device package ship) |
+| Device profile | `/opt/devices/reachy-mini` |
+| Binary Go | `/usr/local/bin/os-server`, `/usr/local/bin/bootstrap-server` |
+| Config | `/root/config/config.json`, `/root/config/bootstrap.json` |
+| Web bundle | `/usr/share/nginx/html/setup` |
+
+`spike.sh` cố ý chỉ là **orchestrator mỏng**: nó gọi lần lượt sáu script con và
+không làm lại việc của script nào. Bản trước đó chép lại logic của chúng, lệch
+nhau trong vòng một tuần, và kết cục là chạy os-server trên sai thư mục config
+trong khi mọi service vẫn báo healthy.
+
+| Bước | Script | Làm gì |
+|------|--------|--------|
+| 1 | `spike-device.sh` | Tải `devices.reachy-mini` từ OTA về `/opt/devices/reachy-mini` **và** đắp `rootfs/` của gói đó lên `/` — đây là nguồn của `/etc/asound.conf` và `/opt/hal/.env`. Thiếu `DEVICE.md` thì HAL không boot |
+| 2 | `spike-hal.sh` | Tải component `hal` về `/opt/hal`, `uv sync --python 3.12 --extra hardware --extra reachy`, chạy uvicorn ở `127.0.0.1:5001` |
+| 3 | `spike-os.sh` | Tải binary `os-server` về `/usr/local/bin`, seed `/root/config/config.json` tối thiểu, chạy **dưới root với `WorkingDirectory=/root`** |
+| 4 | `spike-web.sh` | Cài nginx, tải bundle `web` về `/usr/share/nginx/html/setup`, viết vhost `reachy-spike` |
+| 5 | `spike-agent.sh` | Cài Node.js 22 (NodeSource) + `openclaw` đúng version OTA pin, seed `/root/.openclaw`, chạy gateway ở loopback `18789` |
+| 6 | `spike-bootstrap.sh` | Worker OTA: seed `/root/config/bootstrap.json`, poll feed mỗi `5m` |
+
+Thứ tự có lý do. `device` phải chạy trước vì mọi thứ khác đọc file nó cài.
+`bootstrap` để **cuối cùng**: nó có thể restart os-server và hal ngay khi thấy
+build mới hơn, làm việc đó giữa lúc đang cài dở biến một lượt bring-up sạch thành
+race.
+
+Mỗi bước cài một **systemd unit** (`hal`, `os-server`, `openclaw`, `bootstrap`),
+nên cả stack sống qua reboot. Không còn tmux.
+
+```bash
+sudo bash spike.sh                  # bring-up đầy đủ
+sudo bash spike.sh --no-deps        # bỏ `uv sync` của HAL (chạy lại nhanh)
+sudo bash spike.sh --skip agent     # bỏ một hoặc nhiều bước (lặp lại được)
+sudo bash spike.sh --stop           # dừng tất cả, thứ tự ngược
+sudo bash spike.sh --uninstall      # dừng + gỡ unit và artifact
+```
+
+Mọi script con đều nhận `--stop` và `--uninstall`. Cờ riêng: `spike-hal.sh
+--no-deps`, `spike-device.sh --keep-env` (giữ nguyên `/opt/hal/.env` đang có),
+`spike-bootstrap.sh --no-start` (cài và enable, không start).
+
+`spike-lib.sh` là thư viện dùng chung mà mọi script source vào — fetch metadata,
+`ota_unpack` / `ota_install_binary`, `write_unit` / `start_unit`, `wait_http`.
+Snapshot metadata cache ở `/tmp/.spike-ota-metadata.json`; `spike.sh` xoá nó ở
+đầu mỗi lượt rồi để sáu bước dùng chung **một** snapshot, nên một bản publish rơi
+vào giữa lượt không thể đẩy os-server và hal sang hai build lệch nhau. Chạy lại
+một script con lẻ thì cache không tự xoá — xoá tay hoặc mở shell mới.
+
+Hai guard đáng nhớ:
+
+- `spike-os.sh` **từ chối cài** nếu `set_up_completed` chưa `true` **và**
+  `/usr/local/bin/device-ap-mode` tồn tại: bật os-server lúc boot khi đó sẽ gọi
+  `SwitchToAPMode()`, phá WiFi station và mất robot qua SSH.
+- `spike-hal.sh` đòi tối thiểu **4 GB** trống trên `/` trước khi `uv sync` (venv
+  ~2 GB, cache uv chừng đó nữa, trên eMMC 14 GB đã đầy ~60%). Với `--no-deps` thì
+  bỏ qua kiểm tra này.
+
+Vhost spike **không phải** vhost production — bản thật do
+`scripts/provision/setup.sh` viết vào `/etc/nginx/conf.d/<type>.conf`, bản spike
+nằm ở `/etc/nginx/sites-available/reachy-spike`. `/hw/` trong đó **chỉ loopback**
+(`allow 127.0.0.1; deny all`), giống production: trình duyệt chạm phần cứng qua
+proxy có auth `/api/hardware/*` của os-server, không bao giờ gọi thẳng HAL.
+
+`spike-agent.sh` cố tình lệch bản cài của Lamp hai chỗ: không chromium/xvfb (chỉ
+phục vụ skill computer-use — tiết kiệm ~600 MB trên eMMC 14 GB), và không seed
+skills (os-server tự sync + prune lúc boot). Version openclaw lấy từ
+`ota_field openclaw version` — component duy nhất trong feed không có `url` vì nó
+là package npm — rồi bỏ số 0 đệm (`2026.06.10` → `2026.6.10`) trước khi
+`npm install`, nếu không npm đọc spec như dist-tag và chết với "No matching
+version found". `OPENCLAW_VERSION=…` override được pin đó.
 
 ## Motion Driver
 
@@ -249,21 +343,28 @@ trên bản Wireless thật.
    python3 -m unittest devices.contract.cts.test_compatibility
    ```
 
-2. Cài dependency Reachy chỉ trên robot:
+2. Cài dependency Reachy — chỉ trên robot, và `spike-hal.sh` đã làm sẵn bước này:
 
    ```bash
-   cd hal
-   uv sync --extra reachy
+   cd /opt/hal
+   uv sync --python 3.12 --extra hardware --extra reachy
    ```
 
    Giữ `reachy` tách khỏi extra `hardware` chung. Reachy SDK kéo các dependency
    Linux GUI/media như pygobject/pycairo, không nên ép vào image Lamp.
 
-3. Boot HAL với profile Reachy:
+3. Boot HAL với profile Reachy. Unit `hal` chạy đúng lệnh này với `DEVICE_TYPE`
+   và `DEVICES_DIR` lấy từ `EnvironmentFile=/opt/hal/.env`; chạy tay để debug thì:
 
    ```bash
-   DEVICE_TYPE=reachy-mini DEVICES_DIR=/opt/devices uv run uvicorn hal.server:app --host 0.0.0.0 --port 5001
+   systemctl status hal          # đường bình thường
+   # hoặc chạy tay:
+   cd /opt/hal && DEVICE_TYPE=reachy-mini DEVICES_DIR=/opt/devices \
+     .venv/bin/uvicorn hal.server:app --host 127.0.0.1 --port 5001 --timeout-graceful-shutdown 5
    ```
+
+   Bind `127.0.0.1`, không phải `0.0.0.0`: trình duyệt vào HAL qua proxy
+   `/api/hardware/*` của os-server, giống production.
 
 4. Xác nhận mounted routes:
 
@@ -311,6 +412,15 @@ HAL_AUDIO_OUTPUT_ALSA=plug:device_speaker
 File đó cố ý không set `pcm.!default` — daemon Pollen dùng chung phần cứng và
 phải giữ nguyên default mà nó cần.
 
+Hai file này lên robot qua **device package**, không phải copy tay:
+`spike-device.sh` tải `devices.reachy-mini` từ OTA rồi `cp -a rootfs/. /`, nên
+`/etc/asound.conf` và `/opt/hal/.env` là bản đúng version của gói. Script backup
+một lần bất kỳ file nào của Pollen mà nó ghi đè (`<file>.pre-autonomous`), và
+`--keep-env` giữ nguyên `.env` mà người vận hành đã chỉnh trên máy. Thiếu
+`/etc/asound.conf` thì PortAudio không có output device nào và mọi lần TTS chết ở
+"device -1", trong khi `aplay` từ shell vẫn chạy — nên đây là bước 1, không phải
+bước phụ.
+
 Một khác biệt hành vi so với Lamp: vì thu và phát là cùng một thiết bị USB, chúng
 dùng chung clock domain. Mic và loa của Lamp nằm trên hai bus USB khác nhau nên
 trôi clock — đó là lý do barge-in bị tắt ở Lamp. Reachy không có kiểu trôi đó,
@@ -336,18 +446,19 @@ trước khi đấu hai peripheral đó trên CM4.
 ## TODO Khi Spike Hardware
 
 Recon ngày 2026-07-29 đã chốt xong: tên ALSA, loại phần cứng camera, board id,
-network stack, port/API của daemon. Còn lại:
+network stack, port/API của daemon. Bàn giao media và đường camera cũng đã đóng —
+HAL tự release/acquire qua `owner: pollen_daemon`, camera đi backend `rpicam`.
+Còn lại:
 
-- nối `POST /api/media/release` / `acquire` vào startup/shutdown của HAL
-- chọn đường camera (picamera2 vs qua daemon vs subprocess `rpicam-vid`)
 - sign convention cho `head_yaw.pos`, `head_pitch.pos`, và thứ tự antenna
 - `wake_up` / `goto_sleep` có phát âm thanh không khi dùng `media_backend="no_media"`
 - first-run behavior của `pollen-robotics/reachy-mini-emotions-library`
 - verify bảng map emotion→HF move chạy đúng cảm giác trên robot
 - test lại echo cancellation / barge-in (chung clock USB, khác Lamp)
 - thermal limits trước khi bật `SAFETY.md` `thermal`
-- Pollen OS chưa cài `uv`; cả hai script spike đều tự cài, nhưng `setup.sh`
-  production cũng phải cài
-- cả hai script spike đều không phải production: không systemd, không nginx, không OTA
+- Pollen OS chưa cài `uv`; `spike-hal.sh` tự cài vào `/usr/local/bin`, nhưng
+  `setup.sh` production cũng phải cài
+- bộ spike đã có systemd, nginx và OTA bootstrap; phần còn thiếu so với production
+  là vhost captive portal và nhánh mạng của `setup.sh`
 - `setup.sh` phải đi nhánh NetworkManager (`nmcli`), và có thể tái dùng profile
   `Hotspot` sẵn có (`reachy-mini-ap`, `ipv4=shared`) thay vì cài hostapd/dnsmasq

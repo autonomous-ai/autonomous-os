@@ -1,84 +1,87 @@
 #!/usr/bin/env bash
-# spike-web.sh — Serve the web UI on a Reachy Mini via nginx.
+# spike-web.sh — serve the web UI on a Reachy Mini via nginx.
 #
-# Runs FROM YOUR MAC. Third and last spike script: spike-hal.sh brings up the
-# body, spike-os.sh brings up the API, this one puts a browser in front of them.
-# Builds the Vite bundle, installs nginx, writes a spike vhost, and reloads.
+# RUNS ON THE ROBOT. Pulls the `web` component from OTA metadata, installs
+# nginx, writes a spike vhost, and reloads.
 #
 # Why nginx at all: os-server binds 127.0.0.1:5000 and serves no static files
-# (no StaticFS/embed.FS anywhere in system/). nginx is what serves the dist and
-# proxies /api to os-server — without it the bundle is dead weight on disk.
+# (there is no StaticFS/embed.FS anywhere in system/). nginx is what serves the
+# bundle and proxies /api to os-server — without it the bundle is dead weight.
+#
+# This used to run `make web-build` on a Mac and rsync system/web/dist. That
+# needed node and the repo on the developer's machine and shipped whatever was
+# checked out there, which is not what the fleet serves.
 #
 # This is NOT the production nginx config. scripts/provision/setup.sh writes the
-# real one (security headers, CSP, captive portal, /gw OpenClaw upgrade, admin
-# shell routes). This vhost is the minimum that makes the UI usable during a
-# spike, so the two must not be confused: the production file lands in
-# /etc/nginx/conf.d/<device_type>.conf, this one in sites-available/reachy-spike.
+# real one (captive portal, /gw OpenClaw upgrade, admin shell routes). This
+# vhost is the minimum that makes the UI usable during a spike, so the two must
+# not be confused: the production file lands in /etc/nginx/conf.d/<type>.conf,
+# this one in sites-available/reachy-spike.
 #
 # Usage:
-#   bash devices/reachy-mini/spike-web.sh              # build + install + serve
-#   bash devices/reachy-mini/spike-web.sh --no-build   # reuse system/web/dist
-#   bash devices/reachy-mini/spike-web.sh --stop       # disable the vhost (nginx stays installed)
+#   sudo bash spike-web.sh              # install + serve
+#   sudo bash spike-web.sh --stop       # disable the vhost (nginx stays installed)
+#   sudo bash spike-web.sh --uninstall  # disable + drop the bundle
 set -euo pipefail
 
-REACHY_HOST="${REACHY_HOST:-pollen@reachy-mini.local}"
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-REMOTE_BASE="/opt/autonomous"
-WEB_DIR="$REMOTE_BASE/web"
-VHOST="reachy-spike"
+SPIKE_TAG="spike-web"
+# shellcheck source=spike-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/spike-lib.sh"
 
-SKIP_BUILD=0
+VHOST="reachy-spike"
 STOP_ONLY=0
+UNINSTALL=0
 for arg in "$@"; do
   case "$arg" in
-    --no-build) SKIP_BUILD=1 ;;
-    --stop)     STOP_ONLY=1 ;;
-    *) echo "unknown flag: $arg" >&2; exit 2 ;;
+    --stop)      STOP_ONLY=1 ;;
+    --uninstall) UNINSTALL=1 ;;
+    *) die "unknown flag: $arg" ;;
   esac
 done
 
-say() { printf '\n========== %s ==========\n' "$1"; }
+ensure_root "$@"
 
-if [ "$STOP_ONLY" = "1" ]; then
+if [ "$STOP_ONLY" = "1" ] || [ "$UNINSTALL" = "1" ]; then
   say "Disabling the spike vhost"
-  ssh "$REACHY_HOST" "sudo rm -f /etc/nginx/sites-enabled/$VHOST && sudo systemctl reload nginx 2>/dev/null || true; echo 'vhost disabled (nginx still installed)'"
+  rm -f "/etc/nginx/sites-enabled/$VHOST"
+  systemctl reload nginx 2>/dev/null || true
+  if [ "$UNINSTALL" = "1" ]; then
+    rm -f "/etc/nginx/sites-available/$VHOST"
+    rm -rf "${WEB_ROOT:?}"
+    info "removed the vhost and $WEB_ROOT (nginx package left installed)"
+  else
+    info "vhost disabled; nginx and the bundle are still installed"
+  fi
   exit 0
 fi
 
-echo "target: $REACHY_HOST"
-
-if [ "$SKIP_BUILD" = "0" ]; then
-  say "1/4  Build web UI"
-  cd "$ROOT_DIR"
-  make web-build
-else
-  say "1/4  Build skipped (--no-build)"
+say "1/4  Install nginx"
+if ! [ -x /usr/sbin/nginx ] && ! command -v nginx >/dev/null; then
+  info "installing nginx"
+  apt-get update -qq
+  apt-get install -y --no-install-recommends nginx || die "nginx install failed"
 fi
-[ -d "$ROOT_DIR/system/web/dist" ] || { echo "no bundle at system/web/dist — run without --no-build"; exit 1; }
+# Debian's default vhost also claims :80 default_server, and two default_servers
+# is a config error. Kept out of --stop's undo on purpose: restoring a default
+# page nobody wants is not cleanup.
+rm -f /etc/nginx/sites-enabled/default
 
-say "2/4  Copy bundle to $WEB_DIR"
-ssh "$REACHY_HOST" "sudo mkdir -p $WEB_DIR && sudo chown -R \$(id -u):\$(id -g) $WEB_DIR"
-rsync -az --delete "$ROOT_DIR/system/web/dist/" "$REACHY_HOST:$WEB_DIR/"
-# nginx runs as www-data and must traverse every parent directory.
-ssh "$REACHY_HOST" "sudo chmod 755 /opt $REMOTE_BASE $WEB_DIR"
+say "2/4  Install the bundle from OTA"
+rm -rf "${WEB_ROOT:?}"
+mkdir -p "$WEB_ROOT"
+ota_unpack web "$WEB_ROOT"
+[ -f "$WEB_ROOT/index.html" ] || die "no index.html in the web package — wrong artifact?"
+# nginx runs as www-data and must be able to traverse every parent directory.
+chmod 755 /usr/share/nginx /usr/share/nginx/html "$WEB_ROOT" 2>/dev/null || true
 
-say "3/4  Install nginx + spike vhost"
-ssh "$REACHY_HOST" bash <<REMOTE_NGINX
-set -e
-command -v nginx >/dev/null || { echo "[spike-web] installing nginx..."; sudo apt-get update -qq && sudo apt-get install -y nginx; }
-
-# Debian's default vhost also claims :80 default_server — two default_servers is
-# a config error, so drop it. Kept out of --stop's undo on purpose: restoring a
-# default page nobody wants is not cleanup.
-sudo rm -f /etc/nginx/sites-enabled/default
-
-sudo tee /etc/nginx/sites-available/$VHOST >/dev/null <<'NGINX'
+say "3/4  Write the spike vhost"
+cat >"/etc/nginx/sites-available/$VHOST" <<NGINX
 upstream spike_backend { server 127.0.0.1:5000; }
 upstream spike_hal     { server 127.0.0.1:5001; }
 
 server {
   listen 80 default_server;
-  root $WEB_DIR;
+  root $WEB_ROOT;
   index index.html;
 
   # Monitor chat attaches base64 payloads; nginx's 1 MB default 413s them.
@@ -92,7 +95,7 @@ server {
   add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
   add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' ws: wss: http:; frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'" always;
 
-  # Cache policy uses `expires`, NOT `add_header Cache-Control`: an add_header
+  # Cache policy uses \`expires\`, NOT \`add_header Cache-Control\`: an add_header
   # inside a location cancels inheritance of every server-level add_header,
   # which would silently drop the CSP and security headers above.
   # index.html must never be cached — it is the pointer to fingerprinted asset
@@ -153,32 +156,28 @@ server {
 }
 NGINX
 
-sudo ln -sfn /etc/nginx/sites-available/$VHOST /etc/nginx/sites-enabled/$VHOST
-sudo nginx -t
-sudo systemctl reload nginx || sudo systemctl restart nginx
-echo "[spike-web] nginx reloaded"
-REMOTE_NGINX
+ln -sfn "/etc/nginx/sites-available/$VHOST" "/etc/nginx/sites-enabled/$VHOST"
+nginx -t || die "nginx config test failed"
+systemctl reload nginx 2>/dev/null || systemctl restart nginx
+info "nginx reloaded"
 
-say "4/4  Verify from the Pi"
-ssh "$REACHY_HOST" bash <<'REMOTE_CHECK'
-set -e
+say "4/4  Verify"
 code() { curl -s -o /dev/null -w "%{http_code}" -m 10 "$1"; }
-echo "[spike-web] GET /              -> $(code http://localhost/)"
-echo "[spike-web] GET /api/health/live -> $(code http://localhost/api/health/live)"
-echo "[spike-web] GET /hw/health       -> $(code http://localhost/hw/health)"
-REMOTE_CHECK
+info "GET /                 -> $(code http://localhost/)"
+info "GET /api/health/live  -> $(code http://localhost/api/health/live)"
+info "GET /hw/health        -> $(code http://localhost/hw/health)"
 
 cat <<EOF
 
 ========================================
-  Web UI served on $REACHY_HOST
-    browser : http://${REACHY_HOST#*@}/
-    vhost   : /etc/nginx/sites-available/$VHOST  (spike-only, NOT the production config)
-    bundle  : $WEB_DIR
-    stop    : bash devices/reachy-mini/spike-web.sh --stop
+  Web UI served by nginx
+    version : $(ota_field web version)
+    browser : http://<robot-ip>/   (or http://reachy-mini.local/)
+    vhost   : /etc/nginx/sites-available/$VHOST  (spike-only, NOT production)
+    bundle  : $WEB_ROOT
+    stop    : sudo bash spike-web.sh --stop
 ========================================
 
-Footprint: the nginx package, /etc/nginx/sites-{available,enabled}/$VHOST, and
-the removed Debian default vhost. Uninstall: --stop, then
-  sudo apt remove --purge nginx && sudo rm -f /etc/nginx/sites-available/$VHOST
+A 502 on /api means os-server is not up — run spike-os.sh.
+A 502 on /hw means HAL is not up — run spike-hal.sh.
 EOF

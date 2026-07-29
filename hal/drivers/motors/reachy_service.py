@@ -160,11 +160,40 @@ class ReachyMotionService:
             self._mini = ReachyMini(
                 host=self._host, port=self._port, media_backend="no_media"
             )
+            self._enable_motors()
             try:
                 self._mini.wake_up()
             except Exception as e:
                 logger.warning("[reachy] wake_up failed (continuing): %s", e)
         logger.info("[reachy] connected to daemon at %s:%s", self._host, self._port)
+
+    def _enable_motors(self) -> None:
+        """Put torque on the motors (caller holds _lock).
+
+        The robot boots unpowered so its head can be posed by hand, and
+        connecting does not change that: `wake_up()` is a goto plus a sound, and
+        `goto_target` against a torque-off robot is accepted and does nothing.
+        Nothing else in the connect path sets torque — before this, the only
+        caller of enable_motors was resume(), which nothing invokes at startup.
+
+        The failure it caused is invisible from every status surface: start()
+        logs "connected", /health reports servo true, /servo/status shows all
+        nine joints online, /servo/play returns 200, and the robot sits still.
+        It looked like the robot only obeyed once Pollen's own app had been
+        opened — because connecting there is what enabled the motors.
+        Measured on a Wireless unit, same `yes1` move: max joint delta 0.014 rad
+        (sensor noise) with torque off, 0.934 rad with it on.
+
+        Unconditional on purpose: there is no persisted "released" state to
+        honour (release() is a live call, with no sidecar), and it matches the
+        feetech backend, where connecting the bus powers the servos.
+        """
+        if self._mini is None:
+            return
+        try:
+            self._mini.enable_motors()
+        except Exception as e:
+            logger.warning("[reachy] enable_motors failed — robot will not move: %s", e)
 
     def stop(self, timeout: float = 5.0) -> None:
         self._cancel_move()
@@ -384,6 +413,11 @@ class ReachyMotionService:
         except Exception:
             pass
         self._mini = ReachyMini(host=self._host, port=self._port, media_backend="no_media")
+        # Torque again: whatever killed the connection (a daemon restart, an
+        # update) dropped the motors back to their unpowered boot state too, so
+        # a reconnect without this hands back a client that reports healthy and
+        # moves nothing.
+        self._enable_motors()
         logger.info("[reachy] reconnected to daemon at %s:%s", self._host, self._port)
 
     def _call(self, what: str, fn):

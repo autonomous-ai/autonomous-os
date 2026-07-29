@@ -233,7 +233,10 @@ curl -s -X POST http://localhost:8000/api/media/acquire   # trả lại
       `rpicam-jpeg`)
 - [x] Daemon sống sót qua release/acquire: **có** — vẫn `active`, HTTP 200, motion
       không bị ảnh hưởng
-- [ ] Đã nối vào startup/shutdown của HAL: **chưa** — xem TODO trong runtime_vi.md
+- [x] Đã nối vào startup/shutdown của HAL: **rồi** — `DEVICE.md` khai
+      `owner: pollen_daemon` trên `audio` và `vision`, `PollenDaemonMediaOwner`
+      gọi `release` lúc startup (retry 5 lần cách 2 s) và `acquire` lúc shutdown.
+      Không script spike nào gọi `/api/media/*` nữa
 
 ## Giai Đoạn 2: Viết Config Dựa Trên Kết Quả
 
@@ -398,43 +401,67 @@ Sau Giai đoạn 1, giải quyết các `TODO(spike)` trong `reachy_service.py`:
 
 ### 3.1 Spike Deploy
 
-Bắt đầu bằng script chỉ-HAL — đây là thứ nhỏ nhất đủ để validate phần thân máy,
-và nó cài đúng hai mảnh config mà script đầy đủ bỏ qua:
+Bộ script spike **chạy trên robot**, không chạy từ máy dev. Copy nguyên thư mục
+sang rồi gọi một lệnh:
 
 ```bash
-bash devices/reachy-mini/spike-hal.sh          # deploy + chạy HAL
-bash devices/reachy-mini/spike-hal.sh --stop   # dừng và trả media lại cho daemon
+scp -r devices/reachy-mini pollen@reachy-mini.local:~/
+ssh pollen@reachy-mini.local 'sudo bash ~/reachy-mini/spike.sh'
 ```
 
-Nó rsync HAL, cài `.env` **và** `/etc/asound.conf` từ rootfs overlay, gọi
-`POST /api/media/release` để mở được ALSA, rồi chạy uvicorn trong tmux.
+Không build gì ở máy dev: mọi artifact tải từ **OTA metadata**
+(`https://cdn.autonomous.ai/os/ota/metadata.json`), đúng nguồn mà
+`scripts/imager/build-orangepi.sh` và `scripts/provision/setup.sh` đọc. Đổi feed
+bằng `OTA_METADATA_URL=…` hoặc `metadata_url` trong `/root/config/bootstrap.json`.
+Cài vào **layout production** — `/opt/hal`, `/opt/devices`,
+`/usr/local/bin/{os-server,bootstrap-server}`, `/usr/share/nginx/html/setup` —
+chứ không phải một cây riêng cho spike.
 
-Hai tầng còn lại đi sau, mỗi tầng một script:
+`spike.sh` là orchestrator mỏng, gọi lần lượt sáu script con:
+
+| Bước | Script | Làm gì |
+|------|--------|--------|
+| 1 | `spike-device.sh` | `devices.reachy-mini` từ OTA → `/opt/devices/reachy-mini`, rồi đắp `rootfs/` của gói lên `/` (nguồn của `/etc/asound.conf` và `/opt/hal/.env`) |
+| 2 | `spike-hal.sh` | component `hal` → `/opt/hal`, `uv sync --python 3.12 --extra hardware --extra reachy`, uvicorn ở `127.0.0.1:5001` |
+| 3 | `spike-os.sh` | binary `os-server` → `/usr/local/bin`, seed `/root/config/config.json`, chạy root với `WorkingDirectory=/root` |
+| 4 | `spike-web.sh` | nginx + bundle `web` → `/usr/share/nginx/html/setup`, vhost `reachy-spike` |
+| 5 | `spike-agent.sh` | Node.js 22 + `openclaw` theo pin OTA, seed `/root/.openclaw`, gateway ở loopback `18789` |
+| 6 | `spike-bootstrap.sh` | worker OTA: seed `/root/config/bootstrap.json`, poll `5m` |
+
+Chạy lẻ từng bước cũng được, cùng thứ tự đó — `device` **phải** trước vì HAL
+không boot khi thiếu `DEVICE.md`, và `bootstrap` cố ý ở cuối vì nó có thể restart
+os-server/hal ngay khi thấy build mới hơn:
 
 ```bash
-bash devices/reachy-mini/spike-os.sh    # API os-server trên 127.0.0.1:5000
-bash devices/reachy-mini/spike-web.sh   # nginx + web UI trên :80
+sudo bash ~/reachy-mini/spike-device.sh
+sudo bash ~/reachy-mini/spike-hal.sh
+sudo bash ~/reachy-mini/spike-hal.sh --stop   # dừng HAL, trả media cho daemon
 ```
 
-`spike-web.sh` mới là thứ làm cho trình duyệt truy cập được — os-server bind
-loopback và không serve static. Vhost của nó giữ `/hw/` chỉ loopback, giống
-production: phần cứng được chạm qua proxy có auth `/api/hardware/*` của
-os-server, không gọi thẳng HAL.
+Cờ của orchestrator: `--no-deps` (bỏ `uv sync` của HAL), `--skip <bước>` (tên
+bước: `device hal os web agent bootstrap`, lặp lại được), `--stop`,
+`--uninstall`. Script con đều có `--stop` / `--uninstall`, thêm
+`spike-hal.sh --no-deps`, `spike-device.sh --keep-env`,
+`spike-bootstrap.sh --no-start`.
 
-Script cũ `spike.sh` gộp tất cả vẫn còn, nhưng không cài nginx lẫn alias ALSA
-nên audio và UI đều chết:
+Mỗi bước cài một **systemd unit** (`hal`, `os-server`, `openclaw`, `bootstrap`),
+nên cả stack sống qua reboot — không còn tmux. Xem log chung:
 
 ```bash
-REACHY_HOST=pollen@reachy-mini.local bash devices/reachy-mini/spike.sh
+journalctl -u hal -u os-server -u openclaw -u bootstrap -f
 ```
 
-Hai thứ phát hiện ngày 2026-07-29 và đã sửa: `spike.sh` tạo `/opt/autonomous` và
-chạy `apt-get install` mà không có `sudo` (fail khi đăng nhập bằng `pollen`), và
-docs ghi nhầm os-server ở `:8080`. Probe `:5000` của script mới đúng còn docs sai
-— os-server bind `127.0.0.1:5000` (`system/server/config/config.go`,
-`system/server/server.go`), nên chỉ truy cập được từ chính con Pi cho tới khi có
-nginx đứng trước. Pollen OS chưa có `uv`; cả hai script spike đều tự cài, nhưng
-`setup.sh` production cũng phải cài.
+`spike-web.sh` mới là thứ làm cho trình duyệt truy cập được: os-server bind
+`127.0.0.1:5000` (`system/server/config/config.go`, `system/server/server.go`) và
+không serve static, nên trước khi có nginx chỉ chạm được từ chính con Pi (hoặc
+qua `ssh -L 5000:localhost:5000`). Vhost của nó giữ `/hw/` chỉ loopback, giống
+production: phần cứng được chạm qua proxy có auth `/api/hardware/*` của os-server,
+không gọi thẳng HAL.
+
+`spike-os.sh` **từ chối cài** nếu `set_up_completed` chưa `true` **và**
+`/usr/local/bin/device-ap-mode` tồn tại — bật os-server lúc boot khi đó sẽ đẩy
+robot vào AP mode và mất WiFi. Pollen OS chưa có `uv`; `spike-hal.sh` tự cài vào
+`/usr/local/bin`, nhưng `setup.sh` production cũng phải cài.
 
 Board gate cũng phải được dạy phần cứng này: máy báo
 `Raspberry Pi Compute Module 4 Rev 1.1`, không khớp entry nào trong `boards.json`
@@ -443,28 +470,36 @@ nên HAL từ chối boot. Đã sửa bằng cách thêm `raspberry_pi_cm4` và 
 
 ### 3.2 Smoke Test
 
+Chạy **trên robot**: HAL bind `127.0.0.1:5001`, không nghe trên LAN. Từ máy dev
+thì `ssh pollen@reachy-mini.local` trước, hoặc mở web UI ở `http://<IP>/`.
+
 ```bash
 # Health
-curl -s http://<IP>:5001/health
-curl -s http://<IP>:5001/device
+curl -s localhost:5001/health
+curl -s localhost:5001/device
 
 # Motion (thứ tự an toàn)
-curl -s http://<IP>:5001/servo/position
-curl -s -X POST http://<IP>:5001/servo/aim \
+curl -s localhost:5001/servo/position
+curl -s -X POST localhost:5001/servo/aim \
   -H 'content-type: application/json' \
   -d '{"direction":"center","duration":1.0}'
-curl -s -X POST http://<IP>:5001/servo/zero
-curl -s -X POST http://<IP>:5001/servo/release
+curl -s -X POST localhost:5001/servo/zero
+curl -s -X POST localhost:5001/servo/release
 
 # Âm thanh
-curl -s -X POST http://<IP>:5001/speaker/play \
+curl -s -X POST localhost:5001/speaker/play \
   -H 'content-type: application/json' \
   -d '{"text":"Hello, I am Reachy"}'
 
 # Camera
-curl -s http://<IP>:5001/camera/snapshot -o /tmp/snap.jpg
-open /tmp/snap.jpg
+curl -s localhost:5001/camera/snapshot -o /tmp/snap.jpg
+
+# os-server + web (cũng loopback cho tới khi nginx đứng trước)
+curl -s localhost:5000/api/health/live
+curl -s -o /dev/null -w '%{http_code}\n' localhost/
 ```
+
+Xem ảnh trên máy dev: `scp pollen@reachy-mini.local:/tmp/snap.jpg .`
 
 ### 3.3 Test Production Setup
 

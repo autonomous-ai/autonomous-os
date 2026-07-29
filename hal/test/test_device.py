@@ -37,6 +37,23 @@ soul_ref: autonomous://souls/sample
 # body text ignored
 """
 
+# A body whose hardware is held by a vendor process — `owner:` alongside
+# `driver:` on the same capability, which is how Reachy Mini declares it.
+SAMPLE_OWNED = """---
+schema: autonomous.device.v1
+id: sample-owned
+name: Sample Owned Device
+type: test_device
+capabilities:
+  audio:  { routes: [audio, speaker, voice], required: true, owner: pollen_daemon }
+  vision: { routes: [camera], driver: rpicam, required: true, owner: pollen_daemon }
+  system: { routes: [system], required: true }
+soul_ref: autonomous://souls/sample
+---
+
+# body text ignored
+"""
+
 
 class TestParsing(unittest.TestCase):
     def test_extract_front_matter(self):
@@ -56,6 +73,33 @@ class TestParsing(unittest.TestCase):
         caps = parse_capabilities(extract_front_matter(SAMPLE))
         self.assertEqual(caps["motion"].driver, "feetech")  # informational family
         self.assertIsNone(caps["audio"].driver)             # none declared
+
+    def test_parse_capability_owner(self):
+        # `owner:` is optional and absent on a device HAL owns outright, which
+        # is what makes the media handover a no-op everywhere but Reachy.
+        caps = parse_capabilities(extract_front_matter(SAMPLE))
+        self.assertIsNone(caps["audio"].owner)
+        self.assertIsNone(caps["motion"].owner)
+
+        owned = parse_capabilities(extract_front_matter(SAMPLE_OWNED))
+        self.assertEqual(owned["audio"].owner, "pollen_daemon")
+        self.assertEqual(owned["vision"].owner, "pollen_daemon")
+        # Parsed alongside driver on the same line, not instead of it.
+        self.assertEqual(owned["vision"].driver, "rpicam")
+        self.assertIsNone(owned["system"].owner)
+
+    def test_lamp_declares_no_media_owner(self):
+        # Lamp opens its own hardware; an owner here would make HAL wait on a
+        # handover that never answers.
+        for cap in load_device("lamp", DEVICES_DIR).capabilities.values():
+            self.assertIsNone(cap.owner, f"lamp {cap.group} should have no owner")
+
+    def test_reachy_declares_pollen_daemon_owner(self):
+        # The Pollen daemon holds the camera and both ALSA PCMs until asked to
+        # let go. Undeclared, HAL opens them "busy" and TTS lands on device -1.
+        caps = load_device("reachy-mini", DEVICES_DIR).capabilities
+        self.assertEqual(caps["audio"].owner, "pollen_daemon")
+        self.assertEqual(caps["vision"].owner, "pollen_daemon")
 
     def test_lamp_real_drivers(self):
         caps = load_device("lamp", DEVICES_DIR).capabilities

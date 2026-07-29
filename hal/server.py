@@ -197,6 +197,26 @@ if "camera" in _declared:
 else:
     logger.info("Camera drivers skipped — 'camera' not declared in DEVICE.md")
 
+# --- Media owners: processes that hold this device's hardware ---------------
+# A body that ships its own vendor runtime has that runtime holding the camera
+# and the audio PCMs before HAL exists, and HAL cannot open what it does not
+# own. Capabilities in that position declare `owner:` in DEVICE.md and this
+# resolves each declared name to a handover class — same selector shape as
+# `driver:` on motion and vision, so nothing here knows which body is running.
+# One owner typically holds several capabilities (audio and vision both), so
+# resolve by distinct name and release once each rather than once per
+# capability.
+_media_owners = []
+for _owner_name in dict.fromkeys(
+    c.owner for c in _profile.capabilities.values() if c.owner
+):
+    from hal.drivers.media_owner.factory import resolve_media_owner
+
+    _owner_cls = resolve_media_owner(_owner_name)
+    if _owner_cls is not None:
+        _media_owners.append(_owner_cls())
+        logger.info("Media owner '%s' declared — HAL will borrow the hardware", _owner_name)
+
 SensingService = None
 FacePerception = None
 if "sensing" in _declared:
@@ -259,6 +279,17 @@ _lifespan_stopping = threading.Event()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _gpio_button_handler, _ttp223_handler
+
+    # --- Phase 0: Borrow the hardware from whoever owns it ---
+    # Empty unless DEVICE.md declares an `owner:`. Where one exists it holds
+    # /dev/video* and both ALSA PCMs, and nothing below can succeed until it
+    # lets go — the camera opens "busy", and PortAudio cannot probe a sample
+    # rate, which resurfaces much later as TTS on output device -1 while every
+    # status endpoint still reads healthy. Blocking, and first: a vendor SDK may
+    # release as a side effect of connecting, but that runs in the motion-init
+    # thread and races the audio detection in Phase 2.
+    for _owner in _media_owners:
+        _owner.release()
 
     # --- Phase 1: Fire slow hardware init in background threads ---
 
@@ -609,7 +640,19 @@ async def lifespan(app: FastAPI):
                 return
             svc = SensingService(
                 camera_capture=state.camera_capture,
-                input_device=AUDIO_SENSING_DEVICE if AUDIO_SENSING_DEVICE is not None else state.audio_input_device,
+                # Declared or absent, never guessed. This used to fall back to
+                # the voice mic, which is only ever right by luck: on a device
+                # whose speaker and mic are one card, sound sensing then opened
+                # the raw PortAudio index for a card the 16 kHz capture already
+                # held, exclusively and at 44100 Hz. It failed several times a
+                # minute, filled the journal with pa_linux_alsa "AlsaOpen
+                # failed", and reported no sound the whole time — a feature that
+                # looks configured and does nothing. Passing None instead lets
+                # the orchestrator's existing gate skip SoundPerception and say
+                # so, matching DEVICE-SPEC.md: undeclared is not a default, it
+                # is an absence. Every shipping device declares
+                # HAL_AUDIO_SENSING_DEVICE, so none of them loses the feature.
+                input_device=AUDIO_SENSING_DEVICE,
                 poll_interval=float(os.environ.get("HAL_SENSING_INTERVAL", "2.0")),
                 rgb_service=state.rgb_service,
                 tts_service=state.tts_service,
@@ -763,16 +806,30 @@ async def lifespan(app: FastAPI):
         t.join(timeout=3)
 
     if state.animation_service:
-        state.animation_service._running.clear()
-        if (
-                state.animation_service._event_thread
-                and state.animation_service._event_thread.is_alive()
-        ):
-            state.animation_service._event_thread.join(timeout=3.0)
+        # MotionService.stop(), not the AnimationService internals this used to
+        # clear by hand: `_running` and `_event_thread` belong to the feetech
+        # backend, so on any other one the teardown died here with
+        # AttributeError and uvicorn logged "Application shutdown failed.
+        # Exiting." — abandoning every line below it. On a Reachy that cost the
+        # SDK its goto_sleep and client.disconnect, left the daemon holding a
+        # dead client socket, and skipped the media handover entirely, so
+        # Pollen's stack stayed deaf and blind after every HAL restart.
+        # Wrapped because shutdown must not raise: whatever a driver does here,
+        # the LEDs, the camera and the handover below still have to run.
+        try:
+            state.animation_service.stop(timeout=3.0)
+        except Exception as e:
+            logger.warning(f"Motion service stop failed: {e}")
     if state.rgb_service:
         state.rgb_service.stop()
     if state.camera_capture:
         state.camera_capture.stop()
+
+    # Give the hardware back last — after voice, sensing and the camera have all
+    # closed their handles, so the owner can actually reopen them. Restarting
+    # HAL without this leaves the vendor runtime deaf and blind.
+    for _owner in _media_owners:
+        _owner.acquire()
 
 
 app = FastAPI(

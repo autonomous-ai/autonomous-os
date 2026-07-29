@@ -43,6 +43,11 @@ class Capability:
     required: bool
     driver: Optional[str] = None   # implementation family; motion selector (factory.py), others informational
     safety: Optional[str] = None
+    # Another process on the device holds this hardware and hands it over on
+    # request. Selects a handover implementation (media_owner/factory.py); None
+    # means HAL opens the hardware directly, which is the case everywhere except
+    # a body that ships a vendor runtime of its own.
+    owner: Optional[str] = None
 
 
 def extract_front_matter(text: str) -> str:
@@ -73,6 +78,17 @@ def _parse_driver(body: str) -> Optional[str]:
     this selects the service class (hal/drivers/motors/factory.py); for other
     capabilities it remains informational."""
     m = re.search(r"driver:\s*([^\s,}]+)", body)
+    return m.group(1) if m else None
+
+
+def _parse_owner(body: str) -> Optional[str]:
+    """The capability's `owner:` name, or None when HAL owns the hardware.
+
+    Set it when another process on the device holds this hardware and only
+    yields it on request — a vendor runtime shipped with the body. The name
+    selects a handover implementation in hal/drivers/media_owner/factory.py, the
+    same way `driver:` selects a motion or camera class."""
+    m = re.search(r"owner:\s*([^\s,}]+)", body)
     return m.group(1) if m else None
 
 
@@ -159,6 +175,7 @@ def parse_capabilities(front_matter: str) -> Dict[str, Capability]:
             required=_parse_required(body),
             driver=_parse_driver(body),
             safety=_parse_safety(body),
+            owner=_parse_owner(body),
         )
     return caps
 

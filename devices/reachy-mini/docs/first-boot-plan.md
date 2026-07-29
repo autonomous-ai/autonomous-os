@@ -183,6 +183,11 @@ systemctl list-units --type=service --state=running
 Occupied by the daemon (pid of `python` from `/venvs/mini_daemon`): `8000` and
 `8443`, plus ephemeral high ports per interface. `22` is sshd.
 
+The stack has since grown two more listeners, both loopback and neither in the
+daemon's range: the OpenClaw gateway on `18789` (`spike-agent.sh`) and the OTA
+bootstrap worker on `8080` (`httpPort` in the `/root/config/bootstrap.json` seed
+written by `spike-bootstrap.sh`). Re-check those two on any new unit.
+
 ### 1.7 System Dependencies
 
 ```bash
@@ -233,11 +238,21 @@ curl -s -X POST http://localhost:8000/api/media/acquire   # give it back
       `rpicam-jpeg`)
 - [x] Daemon survives release/acquire: **yes** — stays `active`, HTTP 200, motion
       control unaffected
-- [ ] Wired into HAL startup/shutdown: **not yet** — see runtime.md Spike TODOs
+- [x] Wired into HAL startup/shutdown: **yes** — `DEVICE.md` declares
+      `owner: pollen_daemon` on `audio` and `vision`, and `hal/server.py` releases
+      in Phase 0 of lifespan startup and acquires on shutdown
+      (`hal/drivers/media_owner/pollen.py`). No spike script calls `/api/media/*`;
+      the one exception is a best-effort `acquire` in `spike-hal.sh --stop`, for a
+      HAL killed too hard to run its own shutdown hook.
 
 ## Phase 2: Write Configs Based on Findings
 
-After Phase 1, update these files **on the dev machine** (not on the Pi):
+After Phase 1, update these files **on the dev machine** (not on the Pi). They
+reach the robot only by being published: `make upload-device reachy-mini` puts a
+new `devices.reachy-mini` package on the OTA feed, and `spike-device.sh` (or the
+bootstrap worker, or `setup.sh`) installs it and applies its `rootfs/` overlay.
+Hand-editing `/opt/hal/.env` on the robot is a debugging move, not a change —
+keep it with `spike-device.sh --keep-env`, then fold it back into the repo.
 
 ### 2.1 ALSA Config — DONE
 
@@ -270,8 +285,9 @@ HAL_AUDIO_OUTPUT_ALSA=plug:device_speaker   # from 1.4
 HAL_CAMERA_INDEX=0                          # inert — see 1.5, libcamera not V4L2
 ```
 
-Audio only opens after the daemon releases media (1.9). Camera needs a driver
-change, not a config value.
+Audio only opens after the daemon releases media, which HAL now does for itself
+(1.9). The camera needed a driver change rather than a config value: `DEVICE.md`
+declares `driver: rpicam` and `HAL_CAMERA_INDEX` stays inert.
 
 ### 2.3 setup.sh (New, Reachy-Specific)
 
@@ -299,10 +315,12 @@ Regardless of network stack, setup.sh must:
 
 ### 2.4 HAL .env Production Plan
 
-Current `.env` at `devices/reachy-mini/rootfs/opt/hal/.env` has several
-`TODO(spike)` placeholders. After Phase 1 recon, fill in the actual values.
+The `TODO(spike)` placeholders that once sat in
+`devices/reachy-mini/rootfs/opt/hal/.env` are gone — Phase 1 filled them in, and
+`spike-device.sh` is what carries the file to `/opt/hal/.env` as part of the
+device package's rootfs overlay.
 
-**Full .env field plan** (fields marked `?` need real-device data):
+**Full .env field plan** (fields marked `?` still need real-device tuning):
 
 ```bash
 # --- Core ---
@@ -399,44 +417,61 @@ After Phase 1, resolve `TODO(spike)` items in `reachy_service.py`:
 
 ### 3.1 Spike Deploy
 
-Start with the HAL-only script — it is the smallest thing that validates the
-body, and it installs the two pieces of device config the full script skips:
+The spike scripts **run on the robot**. Copy the folder over and run it there —
+nothing is built on the dev machine:
 
 ```bash
-bash devices/reachy-mini/spike-hal.sh          # deploy + run HAL
-bash devices/reachy-mini/spike-hal.sh --stop   # stop and return media to the daemon
+scp -r devices/reachy-mini pollen@reachy-mini.local:~/
+ssh pollen@reachy-mini.local 'sudo bash ~/reachy-mini/spike.sh'
 ```
 
-It rsyncs HAL, installs `.env` **and** `/etc/asound.conf` from the rootfs
-overlay, calls `POST /api/media/release` so ALSA is openable, then runs uvicorn
-in tmux.
+Every component comes from the OTA metadata feed
+(`https://cdn.autonomous.ai/os/ota/metadata.json`, or `OTA_METADATA_URL=…`, or
+`metadata_url` in `/root/config/bootstrap.json`) — the same source the imager and
+`scripts/provision/setup.sh` read, so the spike robot runs what the fleet runs.
 
-The other two layers follow, each its own script:
+`spike.sh` is only an orchestrator; it runs six component scripts in a fixed
+order, each of which also runs standalone:
 
 ```bash
-bash devices/reachy-mini/spike-os.sh    # os-server API on 127.0.0.1:5000
-bash devices/reachy-mini/spike-web.sh   # nginx + web UI on :80
+sudo bash ~/reachy-mini/spike-device.sh     # /opt/devices + rootfs overlay onto /
+sudo bash ~/reachy-mini/spike-hal.sh        # HAL on 127.0.0.1:5001
+sudo bash ~/reachy-mini/spike-os.sh         # os-server API on 127.0.0.1:5000
+sudo bash ~/reachy-mini/spike-web.sh        # nginx + web UI on :80
+sudo bash ~/reachy-mini/spike-agent.sh      # OpenClaw gateway on 127.0.0.1:18789
+sudo bash ~/reachy-mini/spike-bootstrap.sh  # OTA worker — keeps the robot current
 ```
+
+Start with **device then hal**: that is the smallest pair that validates the body.
+`spike-device.sh` is what puts `DEVICE.md`, `/etc/asound.conf` and `/opt/hal/.env`
+on the robot, and `spike-hal.sh` refuses to start without them. Nothing here
+calls `POST /api/media/release` any more — `DEVICE.md` declares
+`owner: pollen_daemon` on the audio and vision capabilities, so HAL borrows the
+camera and both ALSA PCMs itself at startup and hands them back on shutdown
+(see 1.9).
 
 `spike-web.sh` is what makes anything reachable from a browser — os-server binds
 loopback and serves no static files. Its vhost keeps `/hw/` loopback-only, like
 production: hardware is reached through os-server's authenticated
 `/api/hardware/*` proxy, never HAL directly.
 
-The older all-in-one `spike.sh` still exists but installs neither nginx nor the
-ALSA aliases, so audio and the UI stay dead:
+`spike-bootstrap.sh` is deliberately last. It can restart os-server and HAL the
+moment it finds a newer build, and doing that mid-install turns a clean bring-up
+into a race. It is also what makes `/root/config/bootstrap.json` authoritative:
+every other spike script reads `metadata_url` from that file.
 
-```bash
-REACHY_HOST=pollen@reachy-mini.local bash devices/reachy-mini/spike.sh
-```
+Everything lands under systemd (`hal`, `os-server`, `openclaw`, `bootstrap`) and
+survives a reboot. Teardown is `sudo bash ~/reachy-mini/spike.sh --stop` (or
+`--uninstall`), which walks the steps in reverse so the OTA worker cannot
+reinstall what a later step is still removing.
 
-Two things found on 2026-07-29 and already fixed: `spike.sh` created
-`/opt/autonomous` and ran `apt-get install` without `sudo` (fails as `pollen`),
-and the docs claimed os-server listens on `:8080`. The script's `:5000` probe was
-right and the docs were wrong — os-server binds `127.0.0.1:5000`
-(`system/server/config/config.go`, `system/server/server.go`), so it is reachable
-only from the Pi until nginx fronts it. `uv` is absent on Pollen OS; both spike
-scripts install it, but production `setup.sh` must too.
+Found on 2026-07-29 and already fixed: the docs claimed os-server listens on
+`:8080` (that port belongs to the bootstrap worker, see 1.6). The script's
+`:5000` probe was right and the docs were wrong — os-server
+binds `127.0.0.1:5000` (`system/server/config/config.go`,
+`system/server/server.go`), so it is reachable only from the Pi until nginx fronts
+it. `uv` is absent on Pollen OS; `spike-hal.sh` installs it to `/usr/local/bin`,
+but production `setup.sh` must too.
 
 The board gate also had to be taught this hardware: the unit reports
 `Raspberry Pi Compute Module 4 Rev 1.1`, which matched no `boards.json` entry, so
@@ -445,27 +480,34 @@ HAL refused to boot. Fixed by adding `raspberry_pi_cm4` and declaring it in
 
 ### 3.2 Smoke Test
 
+Run these **on the robot**: HAL binds `127.0.0.1:5001`, so there is no `<IP>` to
+aim at. From a browser it is reached through os-server's `/api/hardware/*` proxy,
+and `spike-web.sh`'s `/hw/` location is loopback-only for the same reason.
+
 ```bash
 # Health
-curl -s http://<IP>:5001/health
-curl -s http://<IP>:5001/device
+curl -s localhost:5001/health
+curl -s localhost:5001/device
 
 # Motion (safe order)
-curl -s http://<IP>:5001/servo/position
-curl -s -X POST http://<IP>:5001/servo/aim \
+curl -s localhost:5001/servo/position
+curl -s -X POST localhost:5001/servo/aim \
   -H 'content-type: application/json' \
   -d '{"direction":"center","duration":1.0}'
-curl -s -X POST http://<IP>:5001/servo/zero
-curl -s -X POST http://<IP>:5001/servo/release
+curl -s -X POST localhost:5001/servo/zero
+curl -s -X POST localhost:5001/servo/release
 
 # Audio
-curl -s -X POST http://<IP>:5001/speaker/play \
+curl -s -X POST localhost:5001/speaker/play \
   -H 'content-type: application/json' \
   -d '{"text":"Hello, I am Reachy"}'
 
 # Camera
-curl -s http://<IP>:5001/camera/snapshot -o /tmp/snap.jpg
-open /tmp/snap.jpg
+curl -s localhost:5001/camera/snapshot -o /tmp/snap.jpg
+
+# The rest of the stack
+curl -s localhost:5000/api/health/live      # os-server
+curl -s -o /dev/null -w '%{http_code}\n' localhost/   # nginx + web bundle
 ```
 
 ### 3.3 Production Setup Test

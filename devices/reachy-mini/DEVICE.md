@@ -10,8 +10,8 @@ gateway:
   default: openclaw
   protocol: websocket
 capabilities:
-  audio:      { routes: [audio, speaker, voice], required: true }
-  vision:     { routes: [camera], driver: rpicam, required: true }
+  audio:      { routes: [audio, speaker, voice], required: true, owner: pollen_daemon }
+  vision:     { routes: [camera], driver: rpicam, required: true, owner: pollen_daemon }
   sensing:    { routes: [sensing], required: false }
   presence:   { required: false }
   motion:     { routes: [servo], driver: reachy_sdk, required: true, safety: SAFETY.md#motion }
