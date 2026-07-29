@@ -358,8 +358,68 @@ Giao diện chat tương tác với agent. Layout: sidebar (danh sách hội tho
 
 **Nhập tin nhắn**
 - Textarea, Shift+Enter xuống dòng, Enter gửi
-- Đính kèm file/ảnh (tối đa 10 MB): nút, kéo thả, dán từ clipboard
+- **Menu "+"** (`chat/PlusMenu.tsx`) ở mép trái ô nhập. Mở hướng lên trên (ô nhập ghim đáy); đóng khi click ra ngoài / Escape, và luôn ở trạng thái đóng khi đang gửi turn. Các mục:
+  - **Attach file** — nút paperclip cũ, nay nằm trong menu. Kéo thả và dán clipboard vẫn đính kèm trực tiếp, không cần qua menu.
+  - **Skills** ▸ — sub-menu bay ra, chứa 3 màn hình bên dưới. Mỗi cái mở một modal portal (`chat/ModalShell.tsx` shell dùng chung + `chat/styles.ts` style field).
+- Đính kèm file/ảnh (tối đa 10 MB): "+" → Attach file, kéo thả, dán từ clipboard
 - Gửi qua `POST /api/sensing/event` với `type: "web_chat"`. Handler mark run qua `MarkWebChatRun(runID)` để reply của agent bị suppress TTS (chỉ hiện trong UI này) và bỏ qua wake greeting / opening filler. Ảnh đính kèm đi trong field `image` của payload (raw base64); handler (1) lưu vào `/tmp/web-chat-*.jpg` và chèn tag `[image: <path>]` để tool đọc file trực tiếp (vd face enrollment), và (2) chạy gate describe-first trong `system/vision` (xem `docs/realtime-voice.md`, phần "Bàn giao frame"): main model text-only nhận dòng `[image description]` do vision model của catalog tả, model có vision nhận attachment thô. Cả hai bước chạy TRƯỚC fork queue lúc agent bận, nên turn bị queue replay với description đã nằm sẵn trong message.
+
+**Menu Skills (ô nhập "+" → Skills)**
+
+| Mục | File | Trạng thái hiện tại |
+|-----|------|---------------------|
+| **Write skill** | `chat/WriteSkillModal.tsx` | Form 3 field — Skill name / Description / Instructions — đúng cấu trúc một `SKILL.md` (name + description → front-matter, instructions → body). Lưu qua `POST /api/agent/skills`; thành công thì modal hiện đường dẫn đã ghi. Xem "Viết + cài skill" bên dưới. |
+| **Browse skills** | `chat/BrowseSkillsModal.tsx` | Chạy thật với catalog Autonomous Agent Skills — xem "Catalog skill" bên dưới. |
+| **Manage skills** | `chat/ManageSkillsModal.tsx` | Skills đang có trong thư mục skill của runtime đang chạy (`GET /api/agent/skills`), **bố cục 2 view giống hệt Browse skills**: lưới card 2 cột (`/music`, `/voice`, … kèm description + số file), click vào mở view detail dùng đúng trình duyệt file 2 pane đó. Mọi skill runtime đang có đều hiện, bất kể từ đâu ra — soạn tay, cài từ store, role bundle, OTA push đều chung một cây. Có nút reload; list rỗng ghi "chưa cài skill nào", khác với 501 khi runtime không list được. |
+
+**Catalog skill (Browse skills)**
+
+Catalog là public read API của `bff-web-service` (`agent-skills-public-api.md`), được bọc phía device bởi `system/server/agent/delivery/http/handler_skills.go`. Cả hai chặng đều đi qua os-server, không bao giờ từ browser — cùng lý do với `GET /api/plugin/browse`: khỏi CORS và host catalog nằm phía server. Base URL mặc định `https://apiv2.autonomous.ai`, override bằng `SKILL_STORE_BASE_URL`; mọi call upstream đều kèm header `location: en-US` mà middleware của catalog bắt buộc.
+
+| Endpoint device | Upstream | Ghi chú |
+|-----------------|----------|---------|
+| `GET /api/agent/skills/browse` | `GET /api/v1/agent-skills` | Forward `keyword` / `category_id` / `plan` / `page` / `limit`. `status` **cố ý không** forward — upstream không phân biệt được "chưa set" với `0`, gửi lên là lọc mất listing. Trả `{data: [Skill], total}` (`domain.StoreSkillList`). |
+| `GET /api/agent/skills/bundle?id=<id>` | `GET /api/v1/agent-skills/:id/download` | Tải file `.skill` về thư mục temp, unzip tại đó, rồi trả `domain.SkillBundle` — danh sách file kèm nội dung UTF-8 inline. Thư mục temp bị xoá trước khi ghi response: đây là **preview**, không cài gì cả. |
+
+Catalog trả lỗi nghiệp vụ dưới dạng **HTTP 200 với `status` khác 1**, nên proxy kiểm tra status trong envelope chứ không chỉ nhìn HTTP code, và đẩy message upstream ra thành `502`. Id đi bằng query param thay vì path segment để route không đụng route tĩnh anh em `skills/browse`.
+
+Phần giải nén được siết: chặn zip-slip (bất kỳ entry `..` hoặc absolute nào cũng làm hỏng cả bundle), lọc `.DS_Store` / `__MACOSX/`, và giới hạn 16 MB mỗi archive, 2 MB mỗi file, 512 KB inline text (file dài hơn bị đánh dấu `truncated`), 500 file. Entry không phải UTF-8 trả về với cờ `binary`, chỉ có metadata.
+
+UI: modal có 2 view. View **list** search phía server (debounce 300 ms trên param `keyword`, 50 item/trang), xếp kết quả thành lưới co giãn — 2 card mỗi hàng, tự rớt về 1 khi cột hẹp dưới ~250 px — mỗi card hiện name / version / chip plan / description / author / compatibility. Click một card mở view **detail** — shell rộng hơn, bên trái là danh sách file trong archive, bên phải là nội dung file đang chọn, mặc định chọn `SKILL.md`, và nút **Install** ở footer. Nút back ở header (và Escape) quay lại list chứ không đóng modal.
+
+**Đọc, viết + cài skill (theo từng runtime, qua AgentGateway)**
+
+Cả ba đường đều đi qua abstraction của agent — tầng device không bao giờ hardcode thư mục skill, vì mỗi agentic runtime giữ thư mục riêng:
+
+| Endpoint device | Method gateway | Hành vi |
+|-----------------|----------------|---------|
+| `GET /api/agent/skills` | `ListSkills() ([]InstalledSkill, error)` | Duyệt thư mục skill của runtime: mỗi thư mục skill là một entry kèm cây file, sort theo tên, thư mục trước file. Description đọc từ front-matter của SKILL.md. Thư mục skill **không tồn tại** (runtime chưa provision) trả list rỗng, không phải lỗi. |
+| `GET /api/agent/skills/files?name=<skill>` | `ReadSkillFiles(name) ([]SkillBundleFile, error)` | File của một skill đã cài, dạng phẳng, nội dung UTF-8 inline. Trả **cùng envelope `domain.SkillBundle`** với preview từ store để hai view detail render bằng chung một component. Skill không còn (list cũ) trả 404. |
+| `POST /api/agent/skills` | `SaveSkill(domain.SkillDraft) (path, error)` | Ghi `<name>/SKILL.md` do người dùng soạn. **Từ chối ghi đè** skill đã tồn tại (`skills.ErrSkillExists` → 400) để một lỗi soạn thảo không phá skill cài từ store/OTA. |
+| `POST /api/agent/skills/install` | `InstallSkillArchive(archivePath, fallbackName) (dir, error)` | Device tải file `.skill` từ catalog về temp, rồi runtime giải nén vào thư mục skill của nó. **Cố ý thay thế** skill trùng tên — cài là hành động chủ động của người dùng. |
+
+Cả hai view detail — preview từ store và skill đã cài — đều là cùng một component, `chat/SkillFilesView.tsx`: danh sách file bên trái (thư mục cha hiện mờ phía trên basename), nội dung file đang chọn bên phải, mặc định mở `SKILL.md`, file nhị phân báo "no preview". Backend làm được vậy vì trả cùng một shape cho cả hai nguồn; `skills.BuildFilePreview` là nơi duy nhất quyết định text-hay-binary và cắt bớt, bất kể byte đến từ entry zip hay từ đĩa.
+
+Phần dùng chung nằm ở `system/skills`: `list.go` duyệt thư mục skill, `read.go` đọc file của một skill, `authored.go` render + ghi SKILL.md, `install.go` giải nén archive. Chỉ **thư mục đích** là khác nhau giữa các backend, đúng lý do khiến skill watcher của từng runtime gần như là bản sao của nhau — nên `save_skill.go` của mỗi backend chỉ là 3 hàm một dòng trỏ vào path của nó:
+
+| Runtime | Thư mục skill |
+|---------|---------------|
+| openclaw | `{OpenclawConfigDir}/workspace/skills` — dùng chung với `InstallRoleSkills` / `EnsureMCPSkill` |
+| picoclaw | `{picoclawWorkspaceDir}/skills` |
+| codex | `codexSkillsDir` (`~/.codex/skills`) |
+| claudecode | `claudecodeSkillsDir` (`~/.claude/skills`) |
+| opencode | `opencodeSkillsDir` (`$XDG_CONFIG_HOME/opencode/skills`) |
+| hermes | **ghi** → `~/.hermes/skills/authored`; **list** → thư mục đó cộng `~/.hermes/skills/openclaw-imports` |
+
+Hermes là backend duy nhất namespace thư mục skill, nên cũng là cái duy nhất cần nhiều hơn một path. Device cố ý ghi **ra ngoài `openclaw-imports`**: `presync.sh` §0 khôi phục skill nền tảng đã import bằng cách chạy `claw migrate` *chỉ khi thư mục đó rỗng*, nên một skill soạn tay nằm trong đó sẽ khiến guard mãi mãi thấy thư mục có nội dung và factory reset sẽ âm thầm không bao giờ khôi phục lại. `ListSkills` merge cả hai root qua `skills.ListInstalledFrom`, root của device đứng trước để skill người dùng không bị skill import trùng tên che mất. Hermes tìm skill ở bất kỳ đâu dưới `~/.hermes/skills` nên root mới không cần đổi config.
+
+Listing bỏ qua `<name>.new` / `<name>.old` (thư mục staging + backup của InstallSkillArchive) và thư mục bắt đầu bằng dấu chấm: đó là chi tiết cài đặt, không phải skill. Cây file giới hạn độ sâu 6 và 200 entry mỗi thư mục để một cây bất thường không tạo response vô hạn, và một skill đọc lỗi chỉ trả cây rỗng thay vì làm trắng cả list.
+
+`ErrNotSupportedByRuntime` → **HTTP 501** kèm tên runtime đang chạy vẫn là contract cho backend không làm được một trong ba việc này, UI hiển thị inline — nhưng tính đến giờ mọi runtime đang ship đều implement đủ cả ba, nên 501 chỉ còn khả dĩ với backend mới trong tương lai.
+
+Xử lý archive trong `skills.InstallSkillArchive`: nếu archive có đúng một thư mục top-level chung thì đó là tên skill và bị strip (bundle `.skill` của catalog có dạng `<name>/SKILL.md`); nếu file nằm ngay gốc archive thì dùng fallback name của caller (zip kiểu OTA). Giải nén được stage ở `<skill>.new` và chỉ swap vào khi thành công trọn vẹn, bản cũ dời sang `<skill>.old` và được khôi phục nếu swap lỗi — một bản tải hỏng không bao giờ để lại skill cài dở hay phá skill đang chạy. Chặn zip-slip, lọc `.DS_Store` / `__MACOSX/`, giới hạn 500 file và 4 MB mỗi entry (ép bằng `LimitReader` nên `UncompressedSize64` khai gian cũng không làm đầy đĩa).
+
+Cả hai đường đều KHÔNG restart runtime: backend nào có thư mục skill thì nhặt file mới theo từng session, đúng contract mà `InstallRoleSkills` dựa vào.
 
 **Streaming real-time**
 - **Thinking indicator**: khối tím thu gọn được, hiển thị reasoning tokens của LLM khi stream (`thinking` events). Click mở rộng toàn bộ (max-height 200px, scroll). Tự ẩn khi response hoàn tất.

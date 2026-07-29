@@ -5,11 +5,19 @@ unit arrives, then update `runtime.md`, `.env`, and `setup.sh` with the findings
 
 ## Phase 1: SSH Recon (Read-Only)
 
+> **DONE — 2026-07-29** on the first Wireless unit (`hardware_id e4a0ef5f04fafb94`).
+> Every `Record` block below is filled with measured values, and the full result
+> table lives in [`runtime.md`](runtime.md#first-boot-recon-measured-2026-07-29).
+> Re-run this phase per new unit; the values are per-unit only where noted.
+
 SSH in and collect system info. **Do not change anything yet.**
 
 ```bash
 ssh pollen@reachy-mini.local   # password: root
 ```
+
+`root` cannot SSH in directly (`Permission denied (publickey,password)`) — log in
+as `pollen` and `sudo` from there.
 
 **Shortcut:** [`../recon.sh`](../recon.sh) runs every command in this phase in one
 shot and prints a fill-in summary. Prefer it over typing the sections by hand:
@@ -64,6 +72,15 @@ NetworkManager active?
     └── NO → systemd-networkd? custom? → investigate
 ```
 
+**Result (2026-07-29)**: NetworkManager **active**, `wpa_supplicant` active,
+`dhcpcd` inactive → take the **nmcli branch**. Pollen already ships two NM
+profiles, so setup.sh should extend them rather than install hostapd/dnsmasq:
+
+| Profile | Role |
+|---------|------|
+| `Glinks` | STA — the WiFi the unit was provisioned onto |
+| `Hotspot` | AP — `mode=ap`, ssid `reachy-mini-ap`, `ipv4=shared`, `autoconnect=false`, driven by `reachy-mini-daemon.service` (the "AP Launcher") |
+
 ### 1.3 Pollen Daemon
 
 ```bash
@@ -81,12 +98,22 @@ cat /etc/systemd/system/reachy* 2>/dev/null
 **Why**: need to know the exact service name, port, API surface, and venv
 layout so our HAL driver and setup.sh don't collide.
 
-**Record**:
-- [ ] Daemon service name: `_______________`
-- [ ] Daemon port: `_______________`
-- [ ] Daemon API base path: `_______________`
-- [ ] Python version in `/venvs/`: `_______________`
-- [ ] `/restore/venvs/` exists: yes / no
+**Record** (2026-07-29):
+- [x] Daemon service name: `reachy-mini-daemon.service` (plus
+      `reachy-mini-bluetooth.service`, `gpio-shutdown-daemon.service`)
+- [x] Daemon port: `8000` (REST + WS); also listens on `8443`
+- [x] Daemon API base path: `/api/...`, WS at `/ws/sdk` (also `/ws/daemon`,
+      `/ws/full`, `/ws/raw`, `/ws/set_target`, `/ws/apps`, `/ws/logs`, `/ws/updates`)
+- [x] Python version in `/venvs/`: `3.12` (`/venvs/mini_daemon`, `reachy_mini` 1.9.0);
+      system Python is `3.13.5`
+- [x] `/restore/venvs/` exists: **yes**
+
+`GET /` serves a "dashboard deprecated" page — the API is under `/api/`, and
+`GET /openapi.json` enumerates it. Useful endpoints found: `/api/daemon/status`
+(control-loop stats, wlan ip, hardware id), `/api/camera/specs` (resolutions +
+K/D intrinsics), `/api/motors/status`, `/api/move/*`, `/api/state/*`,
+`/api/volume/*`, `/wifi/*`, `/update/*`, `/api/apps/*`, and the media handover
+described in 1.9.
 
 ### 1.4 Audio
 
@@ -100,11 +127,19 @@ arecord -D plughw:0,0 -f S16_LE -r 16000 -c 1 -d 3 /tmp/test.wav
 aplay -D plughw:1,0 /tmp/test.wav
 ```
 
-**Record**:
-- [ ] Mic ALSA name: `_______________` (e.g. `plughw:2,0`)
-- [ ] Speaker ALSA name: `_______________` (e.g. `plughw:0,0`)
-- [ ] Mic channels: `_______________`
-- [ ] Sample rate works at 16 kHz: yes / no
+**Record** (2026-07-29):
+- [x] Mic ALSA name: `plughw:0,0` → aliased to `plug:device_mic`
+- [x] Speaker ALSA name: `plughw:0,0` → aliased to `plug:device_speaker`
+      (**same card and device as the mic** — one USB audio interface)
+- [x] Mic channels: mono capture verified at 1 ch; the array is exposed as a
+      single USB Audio capture device, not per-mic channels
+- [x] Sample rate works at 16 kHz: **yes** (`arecord -f S16_LE -r 16000 -c 1`)
+
+Cards seen: `0: Audio [Reachy Mini Audio]` (USB, capture + playback),
+`1: vc4hdmi0`, `2: vc4hdmi1`. No `/etc/asound.conf` shipped by Pollen, so ours
+adds one without touching `pcm.!default`.
+
+**Caveat**: these commands only succeed after the daemon releases media — see 1.9.
 
 ### 1.5 Camera
 
@@ -117,10 +152,19 @@ v4l2-ctl -d /dev/video0 --all 2>/dev/null | head -30
 libcamera-hello --list-cameras 2>/dev/null
 ```
 
-**Record**:
-- [ ] Camera device index: `_______________`
-- [ ] V4L2 or libcamera: `_______________`
-- [ ] Max resolution: `_______________`
+**Record** (2026-07-29):
+- [x] Camera device index: `/dev/video0` is the **unicam raw Bayer** node —
+      unusable as an OpenCV index. `HAL_CAMERA_INDEX` is inert on this body.
+- [x] V4L2 or libcamera: **libcamera** (`imx708_wide` on CSI, `rpicam-apps` +
+      `gstreamer1.0-libcamera` installed, `python3-picamera2` **not** installed)
+- [x] Max resolution: sensor `4608x2592` 10-bit RGGB; daemon-exposed modes top
+      out at `3840x2592@10fps`, default `1280x720@30fps`
+
+Measured failure of the OpenCV path: `cv2.VideoCapture(0)` opens but `read()`
+returns `False` (`select() timeout`), and the wheel-built `opencv-python` reports
+`GStreamer: NO`, so a `libcamerasrc` pipeline is not available either. Camera
+strategy options are compared in
+[`runtime.md`](runtime.md#camera-stack-libcamera-not-uvc).
 
 ### 1.6 Existing Services & Ports
 
@@ -128,13 +172,16 @@ libcamera-hello --list-cameras 2>/dev/null
 ss -tlnp                        # all listening TCP ports
 systemctl list-units --type=service --state=running
 # Check for port conflicts with our services
-# HAL: 5001, os-server: 8080, nginx: 80
+# HAL: 5001, os-server: 5000 (binds 127.0.0.1 only), nginx: 80
 ```
 
-**Record**:
-- [ ] Port 5001 free: yes / no
-- [ ] Port 8080 free: yes / no
-- [ ] Port 80 free: yes / no (nginx?)
+**Record** (2026-07-29):
+- [x] Port 5001 free: **yes**
+- [x] Port 5000 free: **yes** (os-server, loopback-only)
+- [x] Port 80 free: **yes** — Pollen ships no nginx
+
+Occupied by the daemon (pid of `python` from `/venvs/mini_daemon`): `8000` and
+`8443`, plus ephemeral high ports per interface. `22` is sshd.
 
 ### 1.7 System Dependencies
 
@@ -154,41 +201,84 @@ systemctl status bluetooth
 hciconfig -a 2>/dev/null
 ```
 
+**Record** (2026-07-29): `bluetoothd` running, adapter `hci0` UP, name
+`reachy-mini`, BD `88:A2:9E:8C:DC:B7` → the BLE recovery path in
+[recovery.md](recovery.md) Level B is available on this unit.
+
+### 1.9 Media Ownership (who holds camera and audio)
+
+The single most consequential probe, and the one this plan originally missed.
+The Pollen daemon holds the camera and both ALSA PCMs while it is running:
+
+```bash
+sudo fuser -v /dev/video0 /dev/video1     # daemon python + pipewire + wireplumber
+sudo fuser -v /dev/snd/*                  # daemon python on pcmC0D0c and pcmC0D0p
+arecord -D plughw:0,0 -f S16_LE -r 16000 -c 1 -d 1 /tmp/t.wav
+#   -> audio open error: Device or resource busy
+curl -s http://localhost:8000/api/media/status
+```
+
+The daemon supports an explicit handover, which is what makes the "HAL owns
+audio/camera" design viable:
+
+```bash
+curl -s -X POST http://localhost:8000/api/media/release   # frees camera + audio
+# ... verify: arecord records, rpicam-jpeg captures ...
+curl -s -X POST http://localhost:8000/api/media/acquire   # give it back
+```
+
+**Record** (2026-07-29):
+- [x] Daemon holds camera + both audio PCMs by default: **yes**
+- [x] `POST /api/media/release` frees them: **yes** (verified with `arecord` and
+      `rpicam-jpeg`)
+- [x] Daemon survives release/acquire: **yes** — stays `active`, HTTP 200, motion
+      control unaffected
+- [ ] Wired into HAL startup/shutdown: **not yet** — see runtime.md Spike TODOs
+
 ## Phase 2: Write Configs Based on Findings
 
 After Phase 1, update these files **on the dev machine** (not on the Pi):
 
-### 2.1 ALSA Config
+### 2.1 ALSA Config — DONE
 
-Create `devices/reachy-mini/rootfs/etc/asound.conf` with actual device names:
+`devices/reachy-mini/rootfs/etc/asound.conf` now exists with the measured
+device. Mic and speaker are the same USB card, addressed by name so the HDMI
+cards cannot shift the index:
 
 ```
-# Template — fill after arecord -l / aplay -l
 pcm.device_mic {
     type plug
-    slave.pcm "hw:<CARD>,<DEV>"
+    slave.pcm "hw:CARD=Audio,DEV=0"
 }
 
 pcm.device_speaker {
     type plug
-    slave.pcm "hw:<CARD>,<DEV>"
+    slave.pcm "hw:CARD=Audio,DEV=0"
 }
 ```
 
-### 2.2 HAL .env
+It deliberately omits `pcm.!default`: the daemon shares this hardware and must
+keep the default it expects.
 
-Update `devices/reachy-mini/rootfs/opt/hal/.env` with actual values:
+### 2.2 HAL .env — audio DONE, camera BLOCKED
+
+`devices/reachy-mini/rootfs/opt/hal/.env` now carries the measured values:
 
 ```bash
-HAL_AUDIO_INPUT_ALSA=plug:device_mic       # from 1.4
+HAL_AUDIO_INPUT_ALSA=plug:device_mic        # from 1.4
 HAL_AUDIO_OUTPUT_ALSA=plug:device_speaker   # from 1.4
-HAL_CAMERA_INDEX=0                          # from 1.5
+HAL_CAMERA_INDEX=0                          # inert — see 1.5, libcamera not V4L2
 ```
+
+Audio only opens after the daemon releases media (1.9). Camera needs a driver
+change, not a config value.
 
 ### 2.3 setup.sh (New, Reachy-Specific)
 
 Write `devices/reachy-mini/setup.sh` (or modify shared `scripts/provision/setup.sh`
-with `DEVICE_TYPE` branching). Key design decisions from recon:
+with `DEVICE_TYPE` branching). Recon settled the branch: **NetworkManager** —
+take the "If NM" column, and reuse Pollen's existing `Hotspot` profile instead of
+creating a parallel AP stack.
 
 | Decision | If NM | If dhcpcd |
 |----------|-------|-----------|
@@ -202,7 +292,7 @@ Regardless of network stack, setup.sh must:
 1. **Never stop or restart the Pollen daemon** during install
 2. **Install into a separate venv** (`/opt/hal/.venv/`, not `/venvs/`)
 3. **Install system deps**: `libcairo2-dev`, `libgirepository1.0-dev`, `pkg-config`
-4. **Not conflict on ports**: verify 5001, 8080, 80 are free before binding
+4. **Not conflict on ports**: verify 5001, 5000, 80 are free before binding
 5. **Set hostname** to `reachy-mini-<suffix>` without breaking Pollen's mDNS
 6. **Create systemd units** for `hal.service` and `os-server.service`
 7. **Install nginx** with captive portal config (or skip if Pollen already runs nginx)
@@ -309,9 +399,49 @@ After Phase 1, resolve `TODO(spike)` items in `reachy_service.py`:
 
 ### 3.1 Spike Deploy
 
+Start with the HAL-only script — it is the smallest thing that validates the
+body, and it installs the two pieces of device config the full script skips:
+
 ```bash
-REACHY_HOST=pollen@<IP> bash devices/reachy-mini/spike.sh
+bash devices/reachy-mini/spike-hal.sh          # deploy + run HAL
+bash devices/reachy-mini/spike-hal.sh --stop   # stop and return media to the daemon
 ```
+
+It rsyncs HAL, installs `.env` **and** `/etc/asound.conf` from the rootfs
+overlay, calls `POST /api/media/release` so ALSA is openable, then runs uvicorn
+in tmux.
+
+The other two layers follow, each its own script:
+
+```bash
+bash devices/reachy-mini/spike-os.sh    # os-server API on 127.0.0.1:5000
+bash devices/reachy-mini/spike-web.sh   # nginx + web UI on :80
+```
+
+`spike-web.sh` is what makes anything reachable from a browser — os-server binds
+loopback and serves no static files. Its vhost keeps `/hw/` loopback-only, like
+production: hardware is reached through os-server's authenticated
+`/api/hardware/*` proxy, never HAL directly.
+
+The older all-in-one `spike.sh` still exists but installs neither nginx nor the
+ALSA aliases, so audio and the UI stay dead:
+
+```bash
+REACHY_HOST=pollen@reachy-mini.local bash devices/reachy-mini/spike.sh
+```
+
+Two things found on 2026-07-29 and already fixed: `spike.sh` created
+`/opt/autonomous` and ran `apt-get install` without `sudo` (fails as `pollen`),
+and the docs claimed os-server listens on `:8080`. The script's `:5000` probe was
+right and the docs were wrong — os-server binds `127.0.0.1:5000`
+(`system/server/config/config.go`, `system/server/server.go`), so it is reachable
+only from the Pi until nginx fronts it. `uv` is absent on Pollen OS; both spike
+scripts install it, but production `setup.sh` must too.
+
+The board gate also had to be taught this hardware: the unit reports
+`Raspberry Pi Compute Module 4 Rev 1.1`, which matched no `boards.json` entry, so
+HAL refused to boot. Fixed by adding `raspberry_pi_cm4` and declaring it in
+`DEVICE.md`.
 
 ### 3.2 Smoke Test
 

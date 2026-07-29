@@ -416,6 +416,17 @@ func (s *Server) Serve(closeFn func()) error {
 	// channel (Telegram/Slack/…) turns surface in Flow Monitor. Loopback-only.
 	agent.POST("channel-turn", localOnlyMiddleware(), s.agentHandler.ChannelTurn)
 	agent.GET("compaction-latest", adminAuthMiddleware(s.config), s.agentHandler.CompactionLatest)
+	// Skill store discovery for the chat composer's "+" → Skills → Browse.
+	// Proxied server-side (no CORS, store host stays off the browser). `bundle`
+	// takes the skill id as a query param so it can't collide with `browse`.
+	agent.GET("skills/browse", adminAuthMiddleware(s.config), s.agentHandler.BrowseSkills)
+	agent.GET("skills/bundle", adminAuthMiddleware(s.config), s.agentHandler.SkillBundle)
+	// Authoring: writes into the ACTIVE runtime's skills dir via the gateway;
+	// backends that haven't implemented it answer 501 and store nothing.
+	agent.GET("skills", adminAuthMiddleware(s.config), s.agentHandler.ListSkills)
+	agent.GET("skills/files", adminAuthMiddleware(s.config), s.agentHandler.ReadSkillFiles)
+	agent.POST("skills", adminAuthMiddleware(s.config), s.agentHandler.SaveSkill)
+	agent.POST("skills/install", adminAuthMiddleware(s.config), s.agentHandler.InstallSkill)
 
 	logs := api.Group("logs")
 	logs.GET("tail", adminAuthMiddleware(s.config), s.logTail)

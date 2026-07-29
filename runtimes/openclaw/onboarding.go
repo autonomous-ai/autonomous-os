@@ -33,6 +33,10 @@ const (
   - If multiple skills plausibly match, choose the most specific one. If none clearly match, do not read any SKILL.md and answer normally.
   - Never fall back to reading every skill directory. Broad scans are slow and usually reduce quality.
 
+**Connectors (MANDATORY):** The user links third-party services (Gmail, Google Calendar, Google Drive, Notion, Figma, Asana, Linear, GitHub, Ahrefs, …) in the app, and the OS writes their credentials to this device at ` + "`/root/.openclaw/workspace/configs/<code>_access_tokens.json`" + `. ALWAYS use the ` + "`connectors`" + ` skill (` + "`skills/connectors/SKILL.md`" + `) to answer or act on ANY of them — "is my gmail connected?", "what's on my calendar", "list my events", "check my email", "send an email to …", "reply to that email". A question ABOUT a linked service is NOT ordinary chat: it needs this skill even when phrased as a simple question, so read ` + "`skills/connectors/SKILL.md`" + ` and follow it — the credentials are already on disk.
+  - Gmail/Calendar/Drive are token-based and have NO MCP server, so NEVER conclude a service is unconnected because it has no MCP tool — check the credential files via the ` + "`connectors`" + ` skill.
+  - Never write your own script (` + "`send_email.py`" + `, gcalcli, …) or install another client (mutt, msmtp, himalaya, sendmail, …) to reach a service a connector already covers, and never tell the user to set up an MCP server / OAuth app for these services.
+
 Follow the instructions in whichever file you read.
 
 **Version check:** ` + "`os-server --version`" + ` (OS), ` + "`openclaw --version`" + ` (OpenClaw), ` + "`curl -s http://127.0.0.1:5001/version`" + ` (HAL).

@@ -65,14 +65,24 @@ capabilities:
     safety: SAFETY.md#motion  # bounds that govern this capability
 ```
 
-**Motion `driver:` selector semantics** (`hal/drivers/motors/factory.py`):
+**`driver:` selector semantics.** Two capabilities resolve a backend class from
+this field — `motion` (`hal/drivers/motors/factory.py`) and `vision`
+(`hal/drivers/camera/factory.py`). Both follow the same rules; the vision
+default is `opencv` (UVC webcam over V4L2), the motion default is `feetech`:
 
-- absent → defaults to `feetech` with a warning (v1 back-compat; an explicit
-  driver will be required in schema v2)
+- absent → falls back to the capability default (`feetech` for motion, with a
+  warning; `opencv` for vision, silently — every pre-selector device is a UVC
+  webcam, so saying so each boot would be noise)
 - registered name → the mapped motion service class is used
 - unknown name + `required: true` → **boot fails loud** naming the driver and
   the registered set (a deploy fault, not a silent fallback)
-- unknown name + optional → warning, the motion routes stay unmounted
+- unknown name + optional → warning, the capability's routes stay unmounted
+
+Registered vision drivers: `opencv` (UVC/V4L2 through OpenCV) and `rpicam`
+(Raspberry Pi CSI sensors behind libcamera, read as MJPEG from `rpicam-vid`).
+A CSI sensor cannot be opened by the OpenCV path at all — its `/dev/video*`
+node is raw Bayer — which is why the selector exists rather than one driver
+probing its way to the right backend.
 
 A new motion backend is one class conforming to the `MotionService` protocol
 (`hal/drivers/motors/base.py`) plus one registry line in the factory.

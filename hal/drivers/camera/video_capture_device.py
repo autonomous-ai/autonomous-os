@@ -96,6 +96,12 @@ def resolve_camera_device_id(
 class VideoCaptureDeviceBase(
     IDevice[VideoCaptureDeviceInfo, VideoCaptureDeviceResponse]
 ):
+    # True when device_id must be resolved to a V4L2 node index before
+    # construction (UVC webcams). Backends that address the sensor another way
+    # — libcamera picks it by pipeline, not by /dev/video number — set this
+    # False so boot does not probe V4L2 for a node that will never be opened.
+    requires_v4l2_index: bool = True
+
     def __init__(
         self,
         device_info: VideoCaptureDeviceInfo,

@@ -363,8 +363,68 @@ Interactive chat interface for communicating with the agent. Layout: sidebar (co
 
 **Message Input**
 - Textarea with Shift+Enter for multi-line, Enter to send
-- File/image attachment (max 10 MB): button, drag-drop, clipboard paste
+- **"+" menu** (`chat/PlusMenu.tsx`) at the composer's left edge. Opens upward (the composer is pinned to the bottom); closes on outside click / Escape, and is derived closed while a turn is sending. Entries:
+  - **Attach file** — the former paperclip button, now folded into the menu. Drag-drop and clipboard paste still attach directly without going through the menu.
+  - **Skills** ▸ — fly-out sub-menu with the three surfaces below. Each opens a portalled modal (`chat/ModalShell.tsx`, shared shell + `chat/styles.ts` field styles).
+- File/image attachment (max 10 MB): "+" → Attach file, drag-drop, clipboard paste
 - Messages sent via `POST /api/sensing/event` with `type: "web_chat"`. The handler tags the run via `MarkWebChatRun(runID)` so the agent reply is suppressed at TTS (rendered in this UI only) and skips the physical wake greeting / opening filler. An image attachment rides the payload's `image` field (raw base64); the handler (1) saves it to `/tmp/web-chat-*.jpg` and appends an `[image: <path>]` tag so tools can read the file directly (e.g. face enrollment), and (2) runs the describe-first gate in `system/vision` (see `docs/realtime-voice.md`, "Frame handoff"): a text-only main model gets an `[image description]` line produced by the catalog's vision model, a vision-capable one gets the raw attachment. Both steps run BEFORE the agent-busy queue fork, so a queued turn replays with the description already inlined.
+
+**Skills menu (composer "+" → Skills)**
+
+| Item | File | State today |
+|------|------|-------------|
+| **Write skill** | `chat/WriteSkillModal.tsx` | Three-field form — Skill name / Description / Instructions — matching a `SKILL.md` (name + description → front-matter, instructions → body). Saves via `POST /api/agent/skills`; on success the modal shows the path it wrote. See "Writing + installing skills" below. |
+| **Browse skills** | `chat/BrowseSkillsModal.tsx` | Live against the Autonomous Agent Skills catalog — see "Skill catalog" below. |
+| **Manage skills** | `chat/ManageSkillsModal.tsx` | Skills present in the active agentic runtime's skills dir (`GET /api/agent/skills`), in the **same two-view layout as Browse skills**: a two-per-row card grid (`/music`, `/voice`, … with description + file count), then a detail view rendering the same two-pane file browser. Everything the runtime has appears regardless of origin — authored, store-installed, role-bundled and OTA-pushed skills share one tree. Reload button; an empty list reads "no skills installed yet", distinct from the 501 a runtime that can't list returns. |
+
+**Skill catalog (Browse skills)**
+
+The catalog is the public read API of `bff-web-service` (`agent-skills-public-api.md`), wrapped device-side by `system/server/agent/delivery/http/handler_skills.go`. Both hops go through os-server, never the browser — same rationale as `GET /api/plugin/browse`: no CORS round-trip and the catalog host stays server-side. Base URL defaults to `https://apiv2.autonomous.ai`, overridable with `SKILL_STORE_BASE_URL`; every upstream call carries the `location: en-US` header the catalog's middleware requires.
+
+| Device endpoint | Upstream | Notes |
+|-----------------|----------|-------|
+| `GET /api/agent/skills/browse` | `GET /api/v1/agent-skills` | Forwards `keyword` / `category_id` / `plan` / `page` / `limit`. `status` is deliberately **not** forwarded — upstream can't tell "unset" from `0`, so sending it would silently filter the listing. Returns `{data: [Skill], total}` (`domain.StoreSkillList`). |
+| `GET /api/agent/skills/bundle?id=<id>` | `GET /api/v1/agent-skills/:id/download` | Downloads the `.skill` archive to a temp dir, unzips it there, and returns `domain.SkillBundle` — the file list with UTF-8 contents inlined. The temp dir is removed before the response is written: this is a **preview**, nothing is installed. |
+
+The catalog returns business failures as **HTTP 200 with a non-1 `status`**, so the proxy checks the envelope status, not just the HTTP code, and surfaces the upstream message as a `502`. The id rides a query param rather than a path segment so the route can't collide with the sibling static `skills/browse`.
+
+Extraction is hardened: zip-slip guarded (any `..` or absolute entry fails the whole bundle), `.DS_Store` / `__MACOSX/` filtered, and capped at 16 MB per archive, 2 MB per file, 512 KB inlined as text (longer files are marked `truncated`), 500 files. Non-UTF-8 entries come back flagged `binary` with metadata only.
+
+UI: the modal is two views. The **list** searches server-side (300 ms debounce on the `keyword` param, 50 per page) and lays results out as a responsive grid — two cards per row, collapsing to one below ~250 px per column — each showing name / version / plan chip / description / author / compatibility. Clicking a card opens the **detail** view — a wider shell with the archive's files on the left and the selected file's content on the right, `SKILL.md` selected by default, and an **Install** button in the footer. The header's back arrow (and Escape) returns to the list instead of closing the modal.
+
+**Reading, writing + installing skills (per-runtime, via the AgentGateway)**
+
+All three paths go through the agent abstraction — the device layer never hardcodes a skills directory, because each agentic runtime keeps its own:
+
+| Device endpoint | Gateway method | Behaviour |
+|-----------------|----------------|-----------|
+| `GET /api/agent/skills` | `ListSkills() ([]InstalledSkill, error)` | Walks the runtime's skills dir: one entry per skill directory with its file tree, sorted by name, dirs before files. Description is read from the SKILL.md front-matter. A **missing** skills dir (un-provisioned runtime) is an empty list, not an error. |
+| `GET /api/agent/skills/files?name=<skill>` | `ReadSkillFiles(name) ([]SkillBundleFile, error)` | One installed skill's files, flat, with UTF-8 text inlined. Returns the **same `domain.SkillBundle` envelope** as the store preview so both detail views render through one component. A skill that's gone (stale listing) is a 404. |
+| `POST /api/agent/skills` | `SaveSkill(domain.SkillDraft) (path, error)` | Writes an authored `<name>/SKILL.md`. **Refuses to overwrite** an existing skill (`skills.ErrSkillExists` → 400) so a store- or OTA-installed skill can't be destroyed by an authoring mistake. |
+| `POST /api/agent/skills/install` | `InstallSkillArchive(archivePath, fallbackName) (dir, error)` | Device downloads the catalog `.skill` archive to a temp dir, then the runtime extracts it into its skills dir. **Deliberately replaces** an existing skill of that name — installing is an explicit user action. |
+
+Both detail views — store preview and installed skill — are the same component, `chat/SkillFilesView.tsx`: files on the left (containing dir dimmed above the basename), the selected file's content on the right, `SKILL.md` open by default, binary entries shown as "no preview". The backend makes that possible by returning one shape for both sources; `skills.BuildFilePreview` is the single place that decides text-vs-binary and truncation, whether the bytes came from a zip entry or off disk.
+
+The shared work lives in `system/skills`: `list.go` walks a skills dir, `read.go` reads one skill's files, `authored.go` renders + writes the SKILL.md, `install.go` extracts an archive. Only the **target directory** differs per backend, the same reason the per-runtime skill watchers are near-copies — so each backend's `save_skill.go` is three one-liners over its own path:
+
+| Runtime | Skills directory |
+|---------|------------------|
+| openclaw | `{OpenclawConfigDir}/workspace/skills` — shared with `InstallRoleSkills` / `EnsureMCPSkill` |
+| picoclaw | `{picoclawWorkspaceDir}/skills` |
+| codex | `codexSkillsDir` (`~/.codex/skills`) |
+| claudecode | `claudecodeSkillsDir` (`~/.claude/skills`) |
+| opencode | `opencodeSkillsDir` (`$XDG_CONFIG_HOME/opencode/skills`) |
+| hermes | **writes** → `~/.hermes/skills/authored`; **lists** → that plus `~/.hermes/skills/openclaw-imports` |
+
+Hermes is the only backend that namespaces its skills dir, so it is the only one that needs more than one path. Device writes deliberately stay **out of `openclaw-imports`**: `presync.sh` §0 restores the imported platform skills by running `claw migrate` *only when that dir is empty*, so an authored skill dropped in there would make the guard permanently see a populated dir and a factory reset would silently never restore them. `ListSkills` merges both roots via `skills.ListInstalledFrom`, device-owned root first so a user's skill isn't masked by an import of the same name. Hermes discovers skills anywhere under `~/.hermes/skills`, so the new root needs no config change.
+
+The listing skips `<name>.new` / `<name>.old` (InstallSkillArchive staging + backup) and dot-directories: implementation detail, not skills. The tree walk is bounded at depth 6 and 200 entries per directory so a pathological tree can't produce an unbounded response, and one unreadable skill degrades to an empty tree instead of blanking the whole list.
+
+`ErrNotSupportedByRuntime` → **HTTP 501** naming the active runtime remains the contract for a backend that can't do one of these, and the UI renders it inline — but as of now every shipped runtime implements all three, so 501 is only reachable by a future backend.
+
+Archive handling in `skills.InstallSkillArchive`: a single common top-level directory in the archive names the skill and is stripped (the catalog's `.skill` bundles are shaped `<name>/SKILL.md`); files at the archive root instead use the caller's fallback name (OTA-style zips). The extract is staged in `<skill>.new` and swapped in only on full success, with the previous version moved to `<skill>.old` and restored if the swap fails — a corrupt download can never leave a half-installed skill or destroy a working one. Zip-slip guarded, `.DS_Store` / `__MACOSX/` filtered, capped at 500 files and 4 MB per entry (enforced with a `LimitReader`, so a lying `UncompressedSize64` can't fill the disk).
+
+Neither path restarts the runtime: backends with a skills dir pick new files up per session, the same contract `InstallRoleSkills` relies on.
 
 **Real-time Streaming**
 - **Thinking indicator**: collapsible purple block showing LLM reasoning tokens as they stream in (`thinking` events). Click to expand full text (max-height 200px scrollable). Auto-hides on response completion.

@@ -178,11 +178,20 @@ if "camera" in _declared:
         logger.warning(f"Camera drivers (opencv) not available: {e}")
 
     try:
+        from hal.drivers.camera.factory import resolve_camera_class
         from hal.drivers.camera.models import VideoCaptureDeviceInfo
-        from hal.drivers.camera.video_capture_device import (
-            LocalVideoCaptureDevice,
-            resolve_camera_device_id,
+        from hal.drivers.camera.video_capture_device import resolve_camera_device_id
+
+        # Same selector shape as motion: DEVICE.md picks the backend, because a
+        # CSI sensor behind libcamera and a UVC webcam share no open path.
+        _vision_cap = _profile.capabilities.get("vision")
+        LocalVideoCaptureDevice = resolve_camera_class(
+            _vision_cap.driver if _vision_cap else None,
+            _vision_cap.required if _vision_cap else False,
         )
+        if LocalVideoCaptureDevice is None:
+            logger.warning("Camera capture device not available (driver: %s)",
+                           _vision_cap.driver if _vision_cap else None)
     except ImportError as e:
         logger.warning(f"Video capture device not available: {e}")
 else:
@@ -302,7 +311,13 @@ async def lifespan(app: FastAPI):
             logger.info("Camera skipped — device does not declare 'vision' (camera route not mounted)")
             return
         try:
-            camera_device_id = resolve_camera_device_id(CAMERA_NAME, CAMERA_INDEX)
+            # V4L2 index resolution is a UVC concern; a libcamera backend has no
+            # node to look up, and probing would log a misleading failure.
+            camera_device_id = (
+                resolve_camera_device_id(CAMERA_NAME, CAMERA_INDEX)
+                if LocalVideoCaptureDevice.requires_v4l2_index
+                else CAMERA_INDEX
+            )
             cap = LocalVideoCaptureDevice(
                 VideoCaptureDeviceInfo(
                     device_id=camera_device_id,

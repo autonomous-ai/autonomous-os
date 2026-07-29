@@ -55,16 +55,44 @@ def _amixer_ctl_device() -> Optional[str]:
 
 
 def _detect_playback_controls() -> tuple[list[str], Optional[str]]:
-    """Return (playback_control_names, amixer_ctl_device) from amixer."""
+    """Return (playback_control_names, amixer_ctl_device) from amixer.
+
+    Selection is by ALSA capability, not by control name. Names are vendor
+    prose: the Reachy Mini USB codec calls its CAPTURE control 'Headset', which
+    no keyword blocklist would catch, so a name-based filter fed it to
+    `amixer sset Headset <pct>%` and quietly dropped the microphone gain every
+    time someone changed speaker volume. `scontents` reports the authoritative
+    capability line per control, so one call tells us who actually plays back.
+    """
     dev = _amixer_ctl_device()
-    cmd = ["amixer", "-D", dev, "scontrols"] if dev else ["amixer", "scontrols"]
-    _CAPTURE_KEYWORDS = {"capture", "mic", "gain control", "agc", "auto gain"}
+    cmd = ["amixer", "-D", dev, "scontents"] if dev else ["amixer", "scontents"]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-        if result.returncode == 0:
-            all_controls = re.findall(r"Simple mixer control '([^']+)'", result.stdout)
-            playback = [c for c in all_controls if not any(k in c.lower() for k in _CAPTURE_KEYWORDS)]
-            return playback, dev
+        if result.returncode != 0:
+            return [], dev
+        playback: list[str] = []
+        current: Optional[str] = None
+        for line in result.stdout.splitlines():
+            m = re.search(r"Simple mixer control '([^']+)'", line)
+            if m:
+                current = m.group(1)
+                continue
+            if current and "Capabilities:" in line:
+                caps = line.split("Capabilities:", 1)[1].split()
+                # Playback-only: has pvolume and does NOT also carry capture
+                # volume. The `cvolume` exclusion is the whole point — Lamp's
+                # speaker card exposes a 'Mic' control with BOTH pvolume and
+                # cvolume (mic monitor), so "anything with pvolume" would write
+                # speaker volume straight into microphone gain there, which is
+                # the exact bug this function exists to avoid on Reachy.
+                # Rather than guess, a codec whose only playback control is also
+                # a capture control yields no match: the API then answers
+                # "No audio mixer controls found" instead of silently deafening
+                # the device.
+                if "pvolume" in caps and "cvolume" not in caps:
+                    playback.append(current)
+                current = None
+        return playback, dev
     except Exception:
         pass
     return [], dev

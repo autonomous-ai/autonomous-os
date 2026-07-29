@@ -643,6 +643,25 @@ not just the trip out. **Skills** stay fresh under Hermes via
 capability-gated, mirroring the OpenClaw watcher (shared engine in
 `system/skills/skillzip.go`).
 
+**Two skill roots.** `~/.hermes/skills/` is namespaced, and os-server writes to a
+second root of its own (`runtimes/hermes/save_skill.go`):
+
+| Root | Owner | Written by |
+|------|-------|------------|
+| `skills/openclaw-imports/` | `hermes claw migrate` + the skill watcher | presync §0, CDN updates |
+| `skills/authored/` | the device | `AgentGateway.SaveSkill` / `InstallSkillArchive` (web UI "Write skill" / "Install") |
+
+The split is load-bearing, not cosmetic: presync §0 restores the imported
+platform skills **only when `openclaw-imports` is empty**, so an authored skill
+written in there would keep that guard permanently satisfied and a factory reset
+would silently never restore the real imports. `ListSkills` merges both roots
+(`skills.ListInstalledFrom`, device root first on a name clash). Hermes
+discovers skills anywhere under `~/.hermes/skills`, so no config change is
+needed, and no gateway restart either — skills are re-read per session.
+
+Note that `wipeHermesState` (reset.go) clears `skills/openclaw-imports` but
+**not** `skills/authored`, so user-authored skills survive a factory reset.
+
 **MCP connectors are carried across too** — the configured remote-MCP servers are
 cloned config→config by `MCPReconcile` on the same switch boot (see §10, *MCP
 connectors*), so a device that had Notion/Linear wired under OpenClaw keeps them

@@ -5,18 +5,21 @@ name: Reachy Mini
 type: desk_robot
 manufacturer: Pollen Robotics
 extends: _base
-boards: [raspberry_pi_4, raspberry_pi_5]
+boards: [raspberry_pi_4, raspberry_pi_5, raspberry_pi_cm4]
 gateway:
   default: openclaw
   protocol: websocket
 capabilities:
   audio:      { routes: [audio, speaker, voice], required: true }
-  vision:     { routes: [camera], required: true }
+  vision:     { routes: [camera], driver: rpicam, required: true }
   sensing:    { routes: [sensing], required: false }
   presence:   { required: false }
   motion:     { routes: [servo], driver: reachy_sdk, required: true, safety: SAFETY.md#motion }
   expression: { routes: [emotion], required: true }
   system:     { routes: [system], required: true }
+  lifelike:     { required: false }
+  media:        { routes: [music], required: true }
+  companion:    { routes: [buddy], required: false }
 soul_ref:   SOUL.md
 safety_ref: SAFETY.md
 memory:     { backend: local }
@@ -45,7 +48,9 @@ wrapping Pollen's Python SDK, and a SAFETY.md — not a fork.
 
 A 28 cm desk robot: a Stewart-platform head (6-DOF parallel kinematics), a 360°
 rotating body, two antenna ears (expression), an HD wide-angle camera, a 4-mic
-array, and a 5W speaker. Compute is a Raspberry Pi 4/5 onboard. The body is
+array, and a 5W speaker. Compute is a Raspberry Pi Compute Module 4 onboard
+(measured on the Wireless unit: `Raspberry Pi Compute Module 4 Rev 1.1`, 4 GB).
+The body is
 controlled via Pollen's Python SDK (`reachy_sdk`); the agent never addresses
 hardware directly.
 

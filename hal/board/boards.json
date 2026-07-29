@@ -12,6 +12,12 @@
       "led": { "transport": "pwm", "pwm_pin": 12 },
       "button": { "chip": 0, "line": 17, "debounce_ns": 200000000 }
     },
+    "raspberry_pi_cm4": {
+      "_comment": "Compute Module 4 — the device-tree model is 'Raspberry Pi Compute Module 4 Rev 1.1', which contains no 'pi 4' substring, so it needs its own matcher. Reachy Mini Wireless ships on this board. led/button values are inherited from raspberry_pi_4 (same BCM2711 pinout) and are UNVERIFIED: no CM4 device declares `light` or a GPIO button yet. Verify before wiring either on this board.",
+      "match": ["compute module 4"],
+      "led": { "transport": "pwm", "pwm_pin": 12 },
+      "button": { "chip": 0, "line": 17, "debounce_ns": 200000000 }
+    },
     "orangepi_sun60": {
       "match": ["sun60iw2"],
       "led": { "transport": "spi", "spi_bus": 3, "spi_device": 0 },

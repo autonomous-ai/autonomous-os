@@ -104,7 +104,10 @@ tự-heal sau factory reset, giống presync của hermes):
   - inject khối managed `<!-- OS DO NOT REMOVE -->` vào `SOUL.md`
     (`ensureSoulMDBlock`, soul theo device-type từ `soul_ref` của DEVICE.md; giữ nội
     dung owner dưới `---`), `AGENTS.md` (`ensureAgentsMDBlock`, quy tắc
-    skills/memory/priority), và `HEARTBEAT.md` (`ensureHeartbeatMDBlock`, synthesis
+    skills/connectors/memory/priority — khối **Connectors (MANDATORY)** định tuyến mọi
+    yêu cầu Gmail/Calendar/Drive/… qua skill `connectors` (credentials nằm trên đĩa tại
+    `/root/.openclaw/workspace/configs/<code>_access_tokens.json`) để agent không tự cài
+    mail client riêng), và `HEARTBEAT.md` (`ensureHeartbeatMDBlock`, synthesis
     hằng ngày) — mirror openclaw nhưng lược nội dung chỉ-openclaw, giữ các block cập
     nhật qua OTA os-server thường;
   - **capability-gate skills** (`pruneUnsupportedSkills`): xoá thư mục skill device

@@ -6,11 +6,19 @@ kết quả.
 
 ## Giai Đoạn 1: SSH Trinh Sát (Chỉ Đọc)
 
+> **ĐÃ XONG — 2026-07-29** trên con Wireless đầu tiên (`hardware_id
+> e4a0ef5f04fafb94`). Mọi mục `Ghi lại` bên dưới đã điền số đo thật, bảng kết quả
+> đầy đủ nằm ở [`runtime_vi.md`](runtime_vi.md#recon-máy-thật-đo-ngày-2026-07-29).
+> Máy mới thì chạy lại giai đoạn này; giá trị chỉ khác nhau ở những chỗ có ghi chú.
+
 SSH vào và thu thập thông tin hệ thống. **Chưa thay đổi gì.**
 
 ```bash
 ssh pollen@reachy-mini.local   # mật khẩu: root
 ```
+
+`root` không SSH thẳng vào được (`Permission denied (publickey,password)`) — đăng
+nhập bằng `pollen` rồi `sudo`.
 
 **Lối tắt:** [`../recon.sh`](../recon.sh) chạy toàn bộ lệnh trong giai đoạn này
 một phát và in ra bảng tóm tắt để điền. Ưu tiên dùng nó thay vì gõ tay từng mục:
@@ -65,6 +73,15 @@ NetworkManager đang chạy?
     └── KHÔNG → systemd-networkd? custom? → điều tra
 ```
 
+**Kết quả (2026-07-29)**: NetworkManager **đang chạy**, `wpa_supplicant` chạy,
+`dhcpcd` tắt → đi **nhánh nmcli**. Pollen đã có sẵn hai profile NM, nên setup.sh
+nên mở rộng chúng thay vì cài hostapd/dnsmasq:
+
+| Profile | Vai trò |
+|---------|---------|
+| `Glinks` | STA — mạng WiFi máy đã được provision vào |
+| `Hotspot` | AP — `mode=ap`, ssid `reachy-mini-ap`, `ipv4=shared`, `autoconnect=false`, do `reachy-mini-daemon.service` ("AP Launcher") điều khiển |
+
 ### 1.3 Pollen Daemon
 
 ```bash
@@ -82,12 +99,22 @@ cat /etc/systemd/system/reachy* 2>/dev/null
 **Tại sao**: cần biết chính xác tên service, port, API surface, và layout venv
 để HAL driver và setup.sh không va chạm.
 
-**Ghi lại**:
-- [ ] Tên service daemon: `_______________`
-- [ ] Port daemon: `_______________`
-- [ ] Đường dẫn API gốc: `_______________`
-- [ ] Phiên bản Python trong `/venvs/`: `_______________`
-- [ ] `/restore/venvs/` tồn tại: có / không
+**Ghi lại** (2026-07-29):
+- [x] Tên service daemon: `reachy-mini-daemon.service` (thêm
+      `reachy-mini-bluetooth.service`, `gpio-shutdown-daemon.service`)
+- [x] Port daemon: `8000` (REST + WS); còn listen cả `8443`
+- [x] Đường dẫn API gốc: `/api/...`, WS ở `/ws/sdk` (còn `/ws/daemon`, `/ws/full`,
+      `/ws/raw`, `/ws/set_target`, `/ws/apps`, `/ws/logs`, `/ws/updates`)
+- [x] Phiên bản Python trong `/venvs/`: `3.12` (`/venvs/mini_daemon`,
+      `reachy_mini` 1.9.0); Python hệ thống là `3.13.5`
+- [x] `/restore/venvs/` tồn tại: **có**
+
+`GET /` trả trang "dashboard deprecated" — API nằm dưới `/api/`, và
+`GET /openapi.json` liệt kê hết. Endpoint đáng chú ý: `/api/daemon/status`
+(thống kê control loop, wlan ip, hardware id), `/api/camera/specs` (độ phân giải +
+intrinsics K/D), `/api/motors/status`, `/api/move/*`, `/api/state/*`,
+`/api/volume/*`, `/wifi/*`, `/update/*`, `/api/apps/*`, và phần bàn giao media
+mô tả ở 1.9.
 
 ### 1.4 Âm Thanh
 
@@ -101,11 +128,19 @@ arecord -D plughw:0,0 -f S16_LE -r 16000 -c 1 -d 3 /tmp/test.wav
 aplay -D plughw:1,0 /tmp/test.wav
 ```
 
-**Ghi lại**:
-- [ ] Tên ALSA mic: `_______________` (vd: `plughw:2,0`)
-- [ ] Tên ALSA loa: `_______________` (vd: `plughw:0,0`)
-- [ ] Số kênh mic: `_______________`
-- [ ] Sample rate 16 kHz hoạt động: có / không
+**Ghi lại** (2026-07-29):
+- [x] Tên ALSA mic: `plughw:0,0` → alias thành `plug:device_mic`
+- [x] Tên ALSA loa: `plughw:0,0` → alias thành `plug:device_speaker`
+      (**cùng card, cùng device với mic** — chung một interface USB audio)
+- [x] Số kênh mic: verify được mono 1 kênh; mảng mic lộ ra như một thiết bị
+      capture USB Audio duy nhất, không tách kênh từng mic
+- [x] Sample rate 16 kHz hoạt động: **có** (`arecord -f S16_LE -r 16000 -c 1`)
+
+Card thấy được: `0: Audio [Reachy Mini Audio]` (USB, thu + phát), `1: vc4hdmi0`,
+`2: vc4hdmi1`. Pollen không ship `/etc/asound.conf` nào, nên file của mình thêm
+vào mà không đụng `pcm.!default`.
+
+**Lưu ý**: các lệnh này chỉ chạy được sau khi daemon nhả media — xem 1.9.
 
 ### 1.5 Camera
 
@@ -118,10 +153,18 @@ v4l2-ctl -d /dev/video0 --all 2>/dev/null | head -30
 libcamera-hello --list-cameras 2>/dev/null
 ```
 
-**Ghi lại**:
-- [ ] Camera device index: `_______________`
-- [ ] V4L2 hay libcamera: `_______________`
-- [ ] Độ phân giải tối đa: `_______________`
+**Ghi lại** (2026-07-29):
+- [x] Camera device index: `/dev/video0` là node **unicam Bayer thô** — không
+      dùng được như index của OpenCV. `HAL_CAMERA_INDEX` vô tác dụng trên body này.
+- [x] V4L2 hay libcamera: **libcamera** (`imx708_wide` trên CSI, có `rpicam-apps` +
+      `gstreamer1.0-libcamera`, **chưa** cài `python3-picamera2`)
+- [x] Độ phân giải tối đa: sensor `4608x2592` 10-bit RGGB; mode daemon công bố cao
+      nhất là `3840x2592@10fps`, mặc định `1280x720@30fps`
+
+Đường OpenCV đã đo là hỏng: `cv2.VideoCapture(0)` mở được nhưng `read()` trả
+`False` (`select() timeout`), và bản `opencv-python` từ wheel báo `GStreamer: NO`
+nên pipeline `libcamerasrc` cũng không dùng được. Các hướng chọn camera so sánh ở
+[`runtime_vi.md`](runtime_vi.md#camera-stack-libcamera-không-phải-uvc).
 
 ### 1.6 Dịch Vụ & Cổng Đang Dùng
 
@@ -129,13 +172,16 @@ libcamera-hello --list-cameras 2>/dev/null
 ss -tlnp                        # tất cả cổng TCP đang lắng nghe
 systemctl list-units --type=service --state=running
 # Kiểm tra xung đột cổng với dịch vụ của mình
-# HAL: 5001, os-server: 8080, nginx: 80
+# HAL: 5001, os-server: 5000 (chỉ bind 127.0.0.1), nginx: 80
 ```
 
-**Ghi lại**:
-- [ ] Cổng 5001 trống: có / không
-- [ ] Cổng 8080 trống: có / không
-- [ ] Cổng 80 trống: có / không (nginx?)
+**Ghi lại** (2026-07-29):
+- [x] Cổng 5001 trống: **có**
+- [x] Cổng 5000 trống: **có** (os-server, chỉ loopback)
+- [x] Cổng 80 trống: **có** — Pollen không ship nginx
+
+Daemon (tiến trình `python` của `/venvs/mini_daemon`) chiếm `8000` và `8443`, cộng
+vài port ephemeral theo từng interface. `22` là sshd.
 
 ### 1.7 Dependency Hệ Thống
 
@@ -155,41 +201,83 @@ systemctl status bluetooth
 hciconfig -a 2>/dev/null
 ```
 
+**Ghi lại** (2026-07-29): `bluetoothd` đang chạy, adapter `hci0` UP, tên
+`reachy-mini`, BD `88:A2:9E:8C:DC:B7` → đường recovery BLE Level B trong
+[recovery_vi.md](recovery_vi.md) dùng được trên con này.
+
+### 1.9 Quyền Sở Hữu Media (ai đang giữ camera và audio)
+
+Probe quan trọng nhất, và cũng là thứ plan ban đầu bỏ sót. Daemon Pollen giữ
+camera và cả hai PCM ALSA trong lúc nó chạy:
+
+```bash
+sudo fuser -v /dev/video0 /dev/video1     # python của daemon + pipewire + wireplumber
+sudo fuser -v /dev/snd/*                  # python của daemon giữ pcmC0D0c và pcmC0D0p
+arecord -D plughw:0,0 -f S16_LE -r 16000 -c 1 -d 1 /tmp/t.wav
+#   -> audio open error: Device or resource busy
+curl -s http://localhost:8000/api/media/status
+```
+
+Daemon có API bàn giao rõ ràng — chính nó làm cho thiết kế "HAL sở hữu
+audio/camera" khả thi:
+
+```bash
+curl -s -X POST http://localhost:8000/api/media/release   # nhả camera + audio
+# ... verify: arecord thu được, rpicam-jpeg chụp được ...
+curl -s -X POST http://localhost:8000/api/media/acquire   # trả lại
+```
+
+**Ghi lại** (2026-07-29):
+- [x] Daemon giữ camera + cả hai PCM audio mặc định: **có**
+- [x] `POST /api/media/release` nhả ra được: **có** (verify bằng `arecord` và
+      `rpicam-jpeg`)
+- [x] Daemon sống sót qua release/acquire: **có** — vẫn `active`, HTTP 200, motion
+      không bị ảnh hưởng
+- [ ] Đã nối vào startup/shutdown của HAL: **chưa** — xem TODO trong runtime_vi.md
+
 ## Giai Đoạn 2: Viết Config Dựa Trên Kết Quả
 
 Sau Giai đoạn 1, cập nhật các file này **trên máy dev** (không phải trên Pi):
 
-### 2.1 ALSA Config
+### 2.1 ALSA Config — XONG
 
-Tạo `devices/reachy-mini/rootfs/etc/asound.conf` với tên thiết bị thật:
+`devices/reachy-mini/rootfs/etc/asound.conf` đã có, dùng thiết bị đo được. Mic và
+loa là cùng một card USB, địa chỉ theo tên để hai card HDMI không làm lệch index:
 
 ```
-# Template — điền sau khi chạy arecord -l / aplay -l
 pcm.device_mic {
     type plug
-    slave.pcm "hw:<CARD>,<DEV>"
+    slave.pcm "hw:CARD=Audio,DEV=0"
 }
 
 pcm.device_speaker {
     type plug
-    slave.pcm "hw:<CARD>,<DEV>"
+    slave.pcm "hw:CARD=Audio,DEV=0"
 }
 ```
 
-### 2.2 HAL .env
+File này cố ý không có `pcm.!default`: daemon dùng chung phần cứng và phải giữ
+nguyên default mà nó cần.
 
-Cập nhật `devices/reachy-mini/rootfs/opt/hal/.env` với giá trị thật:
+### 2.2 HAL .env — audio XONG, camera BỊ CHẶN
+
+`devices/reachy-mini/rootfs/opt/hal/.env` đã mang giá trị đo được:
 
 ```bash
-HAL_AUDIO_INPUT_ALSA=plug:device_mic       # từ 1.4
+HAL_AUDIO_INPUT_ALSA=plug:device_mic        # từ 1.4
 HAL_AUDIO_OUTPUT_ALSA=plug:device_speaker   # từ 1.4
-HAL_CAMERA_INDEX=0                          # từ 1.5
+HAL_CAMERA_INDEX=0                          # vô tác dụng — xem 1.5, libcamera chứ không phải V4L2
 ```
+
+Audio chỉ mở được sau khi daemon nhả media (1.9). Camera cần đổi driver, không
+phải đổi giá trị config.
 
 ### 2.3 setup.sh (Mới, Riêng Cho Reachy)
 
 Viết `devices/reachy-mini/setup.sh` (hoặc sửa `scripts/provision/setup.sh`
-chung với phân nhánh `DEVICE_TYPE`). Quyết định thiết kế chính từ trinh sát:
+chung với phân nhánh `DEVICE_TYPE`). Trinh sát đã chốt nhánh: **NetworkManager** —
+dùng cột "Nếu NM", và tái sử dụng profile `Hotspot` sẵn có của Pollen thay vì
+dựng một AP stack song song.
 
 | Quyết định | Nếu NM | Nếu dhcpcd |
 |------------|--------|------------|
@@ -203,7 +291,7 @@ Bất kể network stack nào, setup.sh phải:
 1. **Không bao giờ dừng hoặc restart Pollen daemon** trong quá trình cài
 2. **Cài vào venv riêng** (`/opt/hal/.venv/`, không phải `/venvs/`)
 3. **Cài system deps**: `libcairo2-dev`, `libgirepository1.0-dev`, `pkg-config`
-4. **Không xung đột cổng**: kiểm tra 5001, 8080, 80 trống trước khi bind
+4. **Không xung đột cổng**: kiểm tra 5001, 5000, 80 trống trước khi bind
 5. **Đặt hostname** thành `reachy-mini-<suffix>` không phá mDNS của Pollen
 6. **Tạo systemd units** cho `hal.service` và `os-server.service`
 7. **Cài nginx** với config captive portal (hoặc bỏ qua nếu Pollen đã chạy nginx)
@@ -310,9 +398,48 @@ Sau Giai đoạn 1, giải quyết các `TODO(spike)` trong `reachy_service.py`:
 
 ### 3.1 Spike Deploy
 
+Bắt đầu bằng script chỉ-HAL — đây là thứ nhỏ nhất đủ để validate phần thân máy,
+và nó cài đúng hai mảnh config mà script đầy đủ bỏ qua:
+
 ```bash
-REACHY_HOST=pollen@<IP> bash devices/reachy-mini/spike.sh
+bash devices/reachy-mini/spike-hal.sh          # deploy + chạy HAL
+bash devices/reachy-mini/spike-hal.sh --stop   # dừng và trả media lại cho daemon
 ```
+
+Nó rsync HAL, cài `.env` **và** `/etc/asound.conf` từ rootfs overlay, gọi
+`POST /api/media/release` để mở được ALSA, rồi chạy uvicorn trong tmux.
+
+Hai tầng còn lại đi sau, mỗi tầng một script:
+
+```bash
+bash devices/reachy-mini/spike-os.sh    # API os-server trên 127.0.0.1:5000
+bash devices/reachy-mini/spike-web.sh   # nginx + web UI trên :80
+```
+
+`spike-web.sh` mới là thứ làm cho trình duyệt truy cập được — os-server bind
+loopback và không serve static. Vhost của nó giữ `/hw/` chỉ loopback, giống
+production: phần cứng được chạm qua proxy có auth `/api/hardware/*` của
+os-server, không gọi thẳng HAL.
+
+Script cũ `spike.sh` gộp tất cả vẫn còn, nhưng không cài nginx lẫn alias ALSA
+nên audio và UI đều chết:
+
+```bash
+REACHY_HOST=pollen@reachy-mini.local bash devices/reachy-mini/spike.sh
+```
+
+Hai thứ phát hiện ngày 2026-07-29 và đã sửa: `spike.sh` tạo `/opt/autonomous` và
+chạy `apt-get install` mà không có `sudo` (fail khi đăng nhập bằng `pollen`), và
+docs ghi nhầm os-server ở `:8080`. Probe `:5000` của script mới đúng còn docs sai
+— os-server bind `127.0.0.1:5000` (`system/server/config/config.go`,
+`system/server/server.go`), nên chỉ truy cập được từ chính con Pi cho tới khi có
+nginx đứng trước. Pollen OS chưa có `uv`; cả hai script spike đều tự cài, nhưng
+`setup.sh` production cũng phải cài.
+
+Board gate cũng phải được dạy phần cứng này: máy báo
+`Raspberry Pi Compute Module 4 Rev 1.1`, không khớp entry nào trong `boards.json`
+nên HAL từ chối boot. Đã sửa bằng cách thêm `raspberry_pi_cm4` và khai trong
+`DEVICE.md`.
 
 ### 3.2 Smoke Test
 

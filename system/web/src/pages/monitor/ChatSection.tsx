@@ -11,6 +11,10 @@ import {
 } from "@/lib/chatImageStore";
 import { useT, setLanguage } from "@/lib/i18n";
 import type { DisplayEvent, MonitorEvent } from "./types";
+import { PlusMenu, type SkillsAction } from "./chat/PlusMenu";
+import { WriteSkillModal } from "./chat/WriteSkillModal";
+import { BrowseSkillsModal } from "./chat/BrowseSkillsModal";
+import { ManageSkillsModal } from "./chat/ManageSkillsModal";
 
 // ─── Markdown ───────────────────────────────────────────────────────────────
 
@@ -687,6 +691,8 @@ export function ChatSection({ events, isActive }: Props) {
     () => typeof window !== "undefined" && window.innerWidth >= 768,
   );
   const [dragging, setDragging] = useState(false);
+  // Which Skills surface the composer's "+" menu opened, if any.
+  const [skillsView, setSkillsView] = useState<SkillsAction | null>(null);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -2179,22 +2185,11 @@ export function ChatSection({ events, isActive }: Props) {
               <div style={{
                 display: "flex", alignItems: "flex-end", gap: 6,
               }}>
-              <button
-                onClick={() => fileInputRef.current?.click()}
+              <PlusMenu
                 disabled={sending}
-                style={{
-                  background: "transparent", border: "none",
-                  borderRadius: "50%", width: 34, height: 34,
-                  cursor: sending ? "default" : "pointer",
-                  color: "var(--lm-text-muted)", flexShrink: 0,
-                  opacity: sending ? 0.5 : 0.85, transition: "opacity 0.15s, background 0.15s",
-                  display: "inline-flex", alignItems: "center", justifyContent: "center",
-                }}
-                onMouseEnter={(e) => { if (!sending) { e.currentTarget.style.opacity = "1"; e.currentTarget.style.background = "color-mix(in srgb, var(--lm-text) 8%, transparent)"; } }}
-                onMouseLeave={(e) => { e.currentTarget.style.opacity = sending ? "0.5" : "0.85"; e.currentTarget.style.background = "transparent"; }}
-                title="Attach file (max 10 MB)"
-                aria-label="Attach file"
-              ><Paperclip size={17} /></button>
+                onAttachFile={() => fileInputRef.current?.click()}
+                onSkillsAction={setSkillsView}
+              />
               <textarea
                 id="CHAT_TEXTAREA"
                 ref={textareaRef}
@@ -2248,6 +2243,12 @@ export function ChatSection({ events, isActive }: Props) {
           </div>
         </div>
       </div>
+
+      {/* Skills surfaces opened from the composer's "+" menu. Portalled from
+          inside each modal, so mounting them here doesn't affect chat layout. */}
+      {skillsView === "write" && <WriteSkillModal onClose={() => setSkillsView(null)} />}
+      {skillsView === "browse" && <BrowseSkillsModal onClose={() => setSkillsView(null)} />}
+      {skillsView === "manage" && <ManageSkillsModal onClose={() => setSkillsView(null)} />}
     </div>
   );
 }

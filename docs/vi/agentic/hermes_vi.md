@@ -618,6 +618,25 @@ inline) — nên tên đặt dưới Hermes sống sót cả chiều về, khôn
 gate theo capability, mirror watcher OpenClaw (engine chung ở
 `system/skills/skillzip.go`).
 
+**Hai root skill.** `~/.hermes/skills/` có namespace, và os-server ghi vào một
+root riêng của nó (`runtimes/hermes/save_skill.go`):
+
+| Root | Chủ sở hữu | Ai ghi |
+|------|------------|--------|
+| `skills/openclaw-imports/` | `hermes claw migrate` + skill watcher | presync §0, cập nhật CDN |
+| `skills/authored/` | device | `AgentGateway.SaveSkill` / `InstallSkillArchive` (web UI "Write skill" / "Install") |
+
+Việc tách đôi này là bắt buộc chứ không phải cho đẹp: presync §0 khôi phục skill
+nền tảng đã import **chỉ khi `openclaw-imports` rỗng**, nên một skill soạn tay
+nằm trong đó sẽ khiến guard mãi mãi thấy thoả điều kiện và factory reset sẽ âm
+thầm không bao giờ khôi phục lại import thật. `ListSkills` merge cả hai root
+(`skills.ListInstalledFrom`, root của device thắng khi trùng tên). Hermes tìm
+skill ở bất kỳ đâu dưới `~/.hermes/skills` nên không cần đổi config, cũng không
+cần restart gateway — skill được đọc lại theo từng session.
+
+Lưu ý `wipeHermesState` (reset.go) xoá `skills/openclaw-imports` nhưng **không**
+xoá `skills/authored`, nên skill người dùng tự soạn sống sót qua factory reset.
+
 **MCP connector cũng được mang qua** — các remote-MCP server đã cấu hình được clone
 config→config bởi `MCPReconcile` ở cùng boot switch đó (xem §10, *MCP connectors*),
 nên một thiết bị đã nối Notion/Linear dưới OpenClaw vẫn giữ chúng dưới Hermes (và

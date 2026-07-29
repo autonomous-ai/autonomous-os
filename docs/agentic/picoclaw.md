@@ -106,7 +106,10 @@ self-heals after a factory reset, mirroring hermes' presync):
   - injects the OS-managed `<!-- OS DO NOT REMOVE -->` blocks into `SOUL.md`
     (`ensureSoulMDBlock`, per-device-type soul from DEVICE.md `soul_ref`; owner
     content below `---` preserved), `AGENTS.md` (`ensureAgentsMDBlock`,
-    skills/memory/priority rules), and `HEARTBEAT.md` (`ensureHeartbeatMDBlock`,
+    skills/connectors/memory/priority rules — the **Connectors (MANDATORY)** block
+    routes any Gmail/Calendar/Drive/… request through the `connectors` skill
+    (credentials on disk at `/root/.openclaw/workspace/configs/<code>_access_tokens.json`)
+    so the agent never installs its own mail client), and `HEARTBEAT.md` (`ensureHeartbeatMDBlock`,
     daily knowledge-synthesis) — mirroring openclaw but stripped of OpenClaw-only
     content, so the blocks stay current on a plain os-server OTA;
   - **capability-gates skills** (`pruneUnsupportedSkills`): removes skill dirs the

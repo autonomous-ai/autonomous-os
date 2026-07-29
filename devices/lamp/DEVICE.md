@@ -12,7 +12,7 @@ voice:
   #tts_voice: Rachel      # optional
 capabilities:
   audio:        { routes: [audio, speaker, voice], required: true }
-  vision:       { routes: [camera], required: true }
+  vision:       { routes: [camera], driver: opencv, required: true }
   sensing:      { routes: [sensing], required: true }
   presence:     { required: true }
   motion:       { routes: [servo], driver: feetech, required: true, safety: SAFETY.md#motion }

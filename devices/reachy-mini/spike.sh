@@ -6,11 +6,13 @@
 #
 # Prerequisites:
 #   - SSH access to the Reachy Mini's Pi (key-based or password)
+#   - the login must have passwordless sudo (Pollen's `pollen` user does; root
+#     cannot SSH in directly on the shipped OS)
 #   - Pollen daemon running on the Pi (localhost:8000)
 #   - tmux installed on the Pi (apt install tmux)
 #
 # Usage:
-#   REACHY_HOST=pi@192.168.1.42 bash scripts/provision/spike-reachy.sh
+#   REACHY_HOST=pollen@reachy-mini.local bash devices/reachy-mini/spike.sh
 #
 # To tear down:
 #   ssh $REACHY_HOST "tmux kill-session -t autonomous"
@@ -28,7 +30,10 @@ echo "========== 2/5  Build web UI =========="
 make web-build
 
 echo "========== 3/5  Copy files to $REACHY_HOST =========="
-ssh "$REACHY_HOST" "mkdir -p $REMOTE_BASE/{hal,devices,web,config}"
+# /opt is root-owned on Pollen OS, and the SSH login is an unprivileged user
+# (`pollen`). Create the tree with sudo, then hand it to the login user so the
+# scp/rsync steps below — and `uv sync` later — do not need sudo at all.
+ssh "$REACHY_HOST" "sudo mkdir -p $REMOTE_BASE/{hal,devices,web,config} && sudo chown -R \$(id -u):\$(id -g) $REMOTE_BASE"
 
 # os-server binary
 scp system/os-server "$REACHY_HOST:$REMOTE_BASE/os-server"
@@ -63,11 +68,12 @@ if ! command -v uv &>/dev/null; then
 fi
 
 # tmux
-command -v tmux &>/dev/null || { echo "[spike] Installing tmux..."; apt-get update && apt-get install -y tmux; }
+command -v tmux &>/dev/null || { echo "[spike] Installing tmux..."; sudo apt-get update && sudo apt-get install -y tmux; }
 
 # System libs for pygobject/pycairo (reachy SDK transitive deps).
-# Safe to run even if already installed.
-apt-get install -y --no-install-recommends \
+# Safe to run even if already installed — Pollen OS ships them, but a fresh
+# image or a different unit may not.
+sudo apt-get install -y --no-install-recommends \
   libcairo2-dev libgirepository1.0-dev pkg-config 2>/dev/null || \
   echo "[spike] WARN: apt install failed — pygobject may fail to build"
 
@@ -101,6 +107,8 @@ tmux send-keys -t autonomous:services.1 \
 tmux split-window -t autonomous:services -v
 
 # Pane 2: status
+# os-server binds 127.0.0.1:5000 (see system/server/server.go) — it is reachable
+# only from the Pi itself until nginx fronts it, so this probe must run here.
 tmux send-keys -t autonomous:services.2 \
   "echo 'Waiting for services...'; sleep 3; echo '--- HAL ---'; curl -s localhost:5001/health || echo 'HAL not ready'; echo '--- OS ---'; curl -s localhost:5000/api/health || echo 'os-server not ready'; echo; echo 'tmux attach -t autonomous'" Enter
 
@@ -108,7 +116,8 @@ echo ""
 echo "========================================"
 echo "  Services started in tmux session."
 echo "  SSH in and run: tmux attach -t autonomous"
-echo "  Verify: curl <IP>:5001/health"
+echo "  Verify HAL from anywhere: curl <IP>:5001/health"
+echo "  Verify os-server ON THE PI:  curl localhost:5000/api/health"
 echo "========================================"
 REMOTE_START
 

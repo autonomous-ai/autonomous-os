@@ -113,6 +113,24 @@ _MOVE_MAP: Dict[str, str] = {
 
 _MIN_MOVE_DURATION_S = 0.1
 
+# The SDK client holds one long-lived connection to the daemon. Anything that
+# restarts the daemon — an OS reboot, `systemctl restart reachy-mini-daemon`, an
+# update — leaves this side holding a dead socket that only reports itself when
+# the next command is issued ("Lost connection with the server"). Without a
+# reconnect the first command after every such event is lost and surfaces as a
+# 500, which reads like the robot refusing to move.
+_RECONNECT_MARKERS = (
+    "lost connection",
+    "connection closed",
+    "not connected",
+    "broken pipe",
+    "connection reset",
+)
+
+
+def _is_disconnect(err: Exception) -> bool:
+    return any(m in str(err).lower() for m in _RECONNECT_MARKERS)
+
 
 class ReachyMotionService:
     """MotionService implementation backed by the Pollen reachy_mini daemon."""
@@ -262,8 +280,10 @@ class ReachyMotionService:
     def send_positions(self, positions: Dict[str, float]) -> None:
         merged = {**self._current_or_target(), **positions}
         head, antennas, body_yaw = self._compose(merged)
-        with self._lock:
-            self._require_mini().set_target(head=head, antennas=antennas, body_yaw=body_yaw)
+        self._call(
+            "set_target",
+            lambda m: m.set_target(head=head, antennas=antennas, body_yaw=body_yaw),
+        )
         self._target = merged
 
     # --- Postures & modes ---
@@ -356,6 +376,33 @@ class ReachyMotionService:
 
     # --- Internals ---
 
+    def _reconnect(self) -> None:
+        """Drop the dead client and dial the daemon again (caller holds _lock)."""
+        try:
+            if self._mini is not None:
+                self._mini.client.disconnect()
+        except Exception:
+            pass
+        self._mini = ReachyMini(host=self._host, port=self._port, media_backend="no_media")
+        logger.info("[reachy] reconnected to daemon at %s:%s", self._host, self._port)
+
+    def _call(self, what: str, fn):
+        """Run a daemon call, reconnecting once if the connection went stale.
+
+        Retries only on disconnect markers: a clamp rejection or a bad pose is a
+        real error and must not be replayed against a fresh connection.
+        """
+        with self._lock:
+            self._require_mini()
+            try:
+                return fn(self._mini)
+            except Exception as e:
+                if not _is_disconnect(e):
+                    raise
+                logger.warning("[reachy] %s: connection lost (%s) — reconnecting", what, e)
+                self._reconnect()
+                return fn(self._mini)
+
     def _require_mini(self) -> ReachyMini:
         if self._mini is None:
             raise RuntimeError("Reachy daemon not connected")
@@ -385,10 +432,12 @@ class ReachyMotionService:
 
     def _goto(self, positions: Dict[str, float], duration: float) -> None:
         head, antennas, body_yaw = self._compose(positions)
-        with self._lock:
-            self._require_mini().goto_target(
+        self._call(
+            "goto_target",
+            lambda m: m.goto_target(
                 head=head, antennas=antennas, body_yaw=body_yaw, duration=duration
-            )
+            ),
+        )
         self._target = dict(positions)
 
     def _cancel_move(self) -> None:
@@ -434,7 +483,19 @@ class ReachyMotionService:
                     mini = self._require_mini()
                 # play_move blocks for the move duration — keep it out of _lock
                 # so state reads stay responsive; SDK serializes via the daemon.
-                mini.play_move(move)
+                try:
+                    mini.play_move(move)
+                except Exception as e:
+                    # Same stale-connection case as _call, but the retry cannot
+                    # run under _lock: a move blocks for its whole duration and
+                    # would stall every state read behind it.
+                    if not _is_disconnect(e):
+                        raise
+                    logger.warning("[reachy] play '%s': connection lost — reconnecting", name)
+                    with self._lock:
+                        self._reconnect()
+                        mini = self._mini
+                    mini.play_move(move)
             except Exception as e:
                 logger.warning("[reachy] play '%s' (HF: '%s') failed: %s", name, hf_name, e)
             finally:

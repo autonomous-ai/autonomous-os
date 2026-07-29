@@ -165,16 +165,12 @@ def express_emotion(req: EmotionRequest):
         try:
             # Sleepy auto-release stops the event loop and disables torque.
             # Restart the loop here so the wake animation actually plays —
-            # mirrors the same restart in /servo/play.
-            if not svc._running.is_set():
-                svc._running.set()
-                svc._event_thread = threading.Thread(
-                    target=svc._event_loop, daemon=True
-                )
-                svc._event_thread.start()
-                state.logger.info(
-                    "Animation event loop restarted via /emotion (post-release wake)"
-                )
+            # mirrors the same restart in /servo/play. Goes through the
+            # MotionService contract: the feetech backend restarts its event
+            # thread, backends whose control loop lives elsewhere (Reachy's
+            # daemon) no-op. Reaching for _running/_event_thread directly threw
+            # AttributeError on any non-feetech body.
+            svc.ensure_running()
             svc.dispatch(SERVO_CMD_PLAY, preset["servo"])
             servo_played = preset["servo"]
         except Exception as e:
