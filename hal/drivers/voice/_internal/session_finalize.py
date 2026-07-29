@@ -12,16 +12,16 @@ from hal.drivers.voice._internal import config as voice_cfg
 logger = logging.getLogger("hal.voice")
 
 
-def finalize_session(audio_buffer, longest_partial, final_segments, last_speech_idx):
+def finalize_session(audio_buffer, last_partial, final_segments, last_speech_idx):
     """Return ``(combined_transcript, ser_audio_buffer, buf_duration_s)``.
 
     Mutates ``audio_buffer`` in place (trims trailing silence) — the caller's
     reference sees the trimmed buffer, used for speaker recognition. The returned
     ``ser_audio_buffer`` is an untrimmed snapshot kept for SER (laughter/sighs).
     """
-    # Combine all final segments + any trailing partial into one transcript.
-    if longest_partial[0]:
-        final_segments.append(longest_partial[0])
+    # Combine all final segments
+    if last_partial[0]:
+        final_segments.append(last_partial[0])
     combined = " ".join(final_segments).strip()
 
     # Snapshot the FULL (untrimmed) buffer for SER before trimming.

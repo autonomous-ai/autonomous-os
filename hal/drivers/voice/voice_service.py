@@ -20,6 +20,7 @@ import subprocess
 import threading
 import time
 from collections import deque
+from difflib import SequenceMatcher
 from typing import Optional
 
 import requests
@@ -42,6 +43,12 @@ from hal.drivers.voice.backchannel import Backchannel
 from hal.drivers.voice.stt import STTProvider
 
 logger = logging.getLogger("hal.voice")
+
+# Below this string-similarity ratio (difflib), a SHORTER final transcript is
+# treated as a new turn rather than a correction of the previous turn's text.
+# Measured ~0.05–0.10 for unrelated text vs ~0.74–0.88 for a real
+# self-correction, so 0.5 separates the two cleanly.
+_TRANSCRIPT_MIN_SIMILARITY = 0.5
 
 
 class VoiceService:
@@ -886,7 +893,7 @@ class VoiceService:
 
         stt_session = preconnected_session or self._stt.create_session()
 
-        longest_partial = [""]
+        last_partial = [""]
         final_segments = []
         final_sent = [False]
         # Two-stage listening cue. Stage 1 at SESSION OPEN: LED-only blue
@@ -920,8 +927,7 @@ class VoiceService:
                 self._last_transcript_ts = time.time()
             if not is_final:
                 logger.info("STT partial: '%s'", text)
-                if len(text) > len(longest_partial[0]):
-                    longest_partial[0] = text
+                last_partial[0] = text
                 self._backchannel.on_partial(text)
                 if not listening_emotion_sent[0]:
                     listening_emotion_sent[0] = True
@@ -931,12 +937,36 @@ class VoiceService:
             # Flux model fires multiple EndOfTurn events for natural pauses within
             # one utterance, so sending immediately would split a single sentence.
             logger.info("STT final segment: '%s'", text)
-            # Store final text + any partial accumulated before this final.
-            # After final, STT resets partials to empty, so save longest_partial now.
-            best = longest_partial[0] if len(longest_partial[0]) > len(text) else text
-            if best:
-                final_segments.append(best)
-            longest_partial[0] = ""
+            # A turn's text is the LATEST sentence. Default: take the final as
+            # this turn's text, even when it is shorter than the partial — STT
+            # self-corrects to a shorter-but-right phrase (e.g. "…your furnace
+            # start" → "…a funny story."); the old "keep whichever is longer"
+            # heuristic wrongly kept the stale longer partial. Two signals that
+            # the final has moved on to a NEW turn (so keep the previous turn's
+            # text as its own segment instead of replacing it):
+            #   (1) empty final.
+            #   (2) final that is BOTH shorter AND too dissimilar from the
+            #       previous text (string similarity below
+            #       _TRANSCRIPT_MIN_SIMILARITY) — not a correction, a new turn.
+            prev = last_partial[0]
+            if not text.strip():
+                segments = [prev] if prev else []
+            elif (
+                prev
+                and len(text) < len(prev)
+                and SequenceMatcher(None, prev, text).ratio()
+                < _TRANSCRIPT_MIN_SIMILARITY
+            ):
+                # (2) new turn
+                segments = [prev, text]
+            else:
+                # Same turn: a correction (shorter but similar) or a longer/first
+                # final → this final IS the turn's latest text.
+                segments = [text]
+            for seg in segments:
+                if seg:
+                    final_segments.append(seg)
+            last_partial[0] = ""
             final_sent[0] = True
 
         rt_audio_buffer: list = []
@@ -1101,7 +1131,7 @@ class VoiceService:
             self._listening = False
             stt_session.close()
             combined, ser_audio_buffer, buf_duration = finalize_session(
-                audio_buffer, longest_partial, final_segments, last_speech_idx
+                audio_buffer, last_partial, final_segments, last_speech_idx
             )
 
             # Noise guard for empty-STT turns: a session can open on a noise blip
