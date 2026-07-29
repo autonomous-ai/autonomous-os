@@ -27,9 +27,9 @@ FRAME_DURATION_MS = 64       # Frame duration in ms
 # ---------------------------------------------------------------------------
 # Local VAD — RMS energy gate
 # ---------------------------------------------------------------------------
-RMS_THRESHOLD = int(os.environ.get("HAL_VAD_THRESHOLD", "3500"))
+RMS_THRESHOLD = int(os.environ.get("HAL_VAD_THRESHOLD", "1500"))
 SILENCE_TIMEOUT_S = float(os.environ.get("HAL_SILENCE_TIMEOUT", "2.5"))
-SPEECH_HOLDOFF_S = float(os.environ.get("HAL_SPEECH_HOLDOFF", "0.2"))
+SPEECH_HOLDOFF_S = float(os.environ.get("HAL_SPEECH_HOLDOFF", "0.1"))
 # Pre-roll lookback — 8 × 64ms = 512ms of audio history before VAD trigger so
 # quiet first syllables ("b", "k", "t", "p") reach STT instead of getting clipped.
 PRE_ROLL_FRAMES = int(os.environ.get("HAL_PRE_ROLL_FRAMES", "8"))
@@ -40,7 +40,7 @@ SESSION_COOLDOWN_S = float(os.environ.get("HAL_SESSION_COOLDOWN_S", "0.3"))
 # Silero VAD (semantic, ONNX) — rejects TV/music/non-speech audio
 # ---------------------------------------------------------------------------
 SILERO_VAD_ENABLED = os.environ.get("HAL_SILERO_ENABLED", "false").lower() == "true"
-SILERO_VAD_THRESHOLD = float(os.environ.get("HAL_SILERO_THRESHOLD", "0.3"))
+SILERO_VAD_THRESHOLD = float(os.environ.get("HAL_SILERO_THRESHOLD", "0.25"))
 SILERO_CHUNK_SIZE = int(os.environ.get("HAL_SILERO_CHUNK_SIZE", "512"))
 SILERO_MODEL_PATH = Path(__file__).resolve().parent.parent / "resources" / "silero_vad.onnx"
 
@@ -49,7 +49,7 @@ SILERO_MODEL_PATH = Path(__file__).resolve().parent.parent / "resources" / "sile
 # WebRTC VAD — fast C-based pre-filter (~0.1ms vs Silero ~20ms)
 # ---------------------------------------------------------------------------
 WEBRTCVAD_ENABLED = os.environ.get("HAL_WEBRTCVAD_ENABLED", "false").lower() == "true"
-WEBRTCVAD_AGGRESSIVENESS = int(os.environ.get("HAL_WEBRTCVAD_AGGRESSIVENESS", "2"))
+WEBRTCVAD_AGGRESSIVENESS = int(os.environ.get("HAL_WEBRTCVAD_AGGRESSIVENESS", "1"))
 WEBRTCVAD_FRAME_MS = int(os.environ.get("HAL_WEBRTCVAD_FRAME_MS", "30"))
 
 

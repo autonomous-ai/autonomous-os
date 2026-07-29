@@ -31,6 +31,12 @@ dependencies = [
     "scipy>=1.8",
     "silero-vad",
     "noisereduce",
+    # Pin torchaudio to the torch version resolved per-platform (silero-vad pulls
+    # it transitively). Left unconstrained, uv grabs the latest torchaudio, whose
+    # aarch64 wheel is CUDA-linked (needs libcudart.so.13) and fails to import on
+    # the GPU-less device Pi, breaking the on-device VAD. Markers mirror torch.
+    "torchaudio==2.7.1; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    "torchaudio==2.2.2; sys_platform == 'darwin' and platform_machine == 'x86_64'",
     "sounddevice",
     "insightface>=0.7.3; sys_platform != 'darwin' or platform_machine != 'x86_64'",
     "onnxruntime>=1.23.2",
