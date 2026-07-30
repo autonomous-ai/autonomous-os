@@ -14,10 +14,13 @@ import (
 // mqttMaxFileTextBytes caps the inlined text of a single file on this uplink.
 //
 // The HTTP twin inlines up to 512 KB per file, which is fine over a LAN socket
-// but not over MQTT. Keep the test payload at 5 KiB so it is small enough for
-// constrained brokers while still allowing a useful section of a SKILL.md.
-// Anything longer comes back flagged `truncated`.
-const mqttMaxFileTextBytes = 5 << 10
+// but not over MQTT. This was previously set to 5 KiB on an assumption that the
+// broker couldn't reliably carry more — disproved by a direct test against the
+// production broker (sds-mqtt.autonomous.ai), which delivered payloads up to
+// 256 KB intact with no drops. 30 KiB covers a full real-world SKILL.md (the
+// wellbeing skill is 27,267 bytes) with headroom, well under the broker's
+// actual ceiling. Anything longer still comes back flagged `truncated`.
+const mqttMaxFileTextBytes = 30 << 10
 
 // handleSkillsFiles handles kind="skills.files" — the MQTT twin of
 // GET /api/agent/skills/files. That endpoint is LAN-only and admin-gated, so the

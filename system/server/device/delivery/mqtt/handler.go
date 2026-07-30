@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"go.autonomous.ai/os/runtimes/openclaw"
 	"go.autonomous.ai/os/system/device"
@@ -15,6 +16,11 @@ import (
 	"go.autonomous.ai/os/system/network"
 	"go.autonomous.ai/os/system/server/config"
 )
+
+// publishTimeout bounds the fd_channel reply publish. Only matters at QoS 1+
+// (below), where conn.Publish blocks until the broker PUBACKs — a dead/slow
+// connection must not hang this forever.
+const publishTimeout = 15 * time.Second
 
 // DeviceMQTTHandler handles incoming MQTT messages and dispatches to command handlers.
 type DeviceMQTTHandler struct {
@@ -163,7 +169,8 @@ func ProvideDeviceMQTTHandler(cfg *config.Config, mqttFactory *mqtt.Factory, ds 
 }
 
 func (h *DeviceMQTTHandler) publish(data interface{}) error {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), publishTimeout)
+	defer cancel()
 	mqttClient := h.mqttFactory.GetClient("device-" + h.config.DeviceID)
 	if err := mqttClient.Connect(ctx); err != nil {
 		return err
@@ -173,7 +180,14 @@ func (h *DeviceMQTTHandler) publish(data interface{}) error {
 	if err != nil {
 		return err
 	}
-	if err := mqttClient.Publish(ctx, h.config.FDChannel, byte(0), payload); err != nil {
+	// QoS 1 (was 0): a QoS-0 publish is fire-and-forget with zero delivery
+	// guarantee, and larger replies (e.g. a full SKILL.md via skills.files) were
+	// observed being silently lost on real device network conditions — the
+	// broker itself carries far larger payloads fine, so this is loss on the
+	// device's own uplink, not a broker limit. At QoS 1 the paho client blocks
+	// this call until the broker PUBACKs (or ctx above times out), so a lost ack
+	// is retried by the client's session rather than silently dropped.
+	if err := mqttClient.Publish(ctx, h.config.FDChannel, byte(1), payload); err != nil {
 		slog.Error("PublishToFD failed", "component", "mqtt", "channel", h.config.FDChannel, "error", err)
 		return err
 	}
