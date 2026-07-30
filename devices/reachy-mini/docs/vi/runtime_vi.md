@@ -33,16 +33,32 @@ Nguồn hardware đã kiểm tra ngày 2026-07-21:
 | `vision` | `camera` | yes | Camera góc rộng nằm trong đầu |
 | `motion` | `servo` | yes | `driver: reachy_sdk`; đầu Stewart-platform, body yaw, antenna |
 | `expression` | `emotion` | yes | Biểu cảm bằng chuyển động, antenna và giọng nói |
+| `media` | `music` | yes | Phát nhạc dùng chung card USB duy nhất với TTS |
 | `sensing` | `sensing` | no | Perception stack optional; gate giống các device khác |
 | `presence` | none | no | Chỉ là behavior gate |
+| `lifelike` | none | no | Chỉ là behavior gate; idle suite routeless nằm ở os-server |
+| `companion` | `buddy` | no | `buddy` là route của **os-server**, nên HAL không có driver cho nó |
 | `system` | `system` | yes | HAL system route chung |
 
-Profile này cố ý **không** khai `light`, `display`, `scene`, hoặc `music`.
+Profile này cố ý **không** khai `light`, `display`, hoặc `scene`.
 Các nguồn Pollen/Hugging Face/Seeed hiện liệt kê motion, camera, mảng mic, loa,
 compute, IMU, Wi-Fi, pin và antenna có animation, nhưng không liệt kê LED ring
 hay màn hình có thể điều khiển như một capability của device. Nếu revision sau
 có LED/screen addressable, chỉ thêm capability khi đã có HAL driver và hành vi
 safety tương ứng.
+
+**Khai không đồng nghĩa với mounted.** Lúc boot HAL giao nhau phần khai với
+việc driver có nạp được hay không (`plan_mounts` trong `hal/board/device.py`):
+khai + có driver thì mount, khai + *required* + thiếu thì fail loud, khai +
+*optional* + thiếu thì skip. Vì vậy trên con Wireless `GET /device` trả về:
+
+```
+routes:  [audio, camera, emotion, music, sensing, servo, speaker, system, voice]
+skipped: [buddy]
+```
+
+— `companion` được khai nhưng optional, và HAL không có driver `buddy` nào, nên
+route đó bị skip chứ không làm sập boot.
 
 ## Recon Máy Thật (đo ngày 2026-07-29)
 
@@ -374,8 +390,9 @@ trên bản Wireless thật.
    ```
 
    Khi các driver required đều sẵn sàng, expected routes là `audio`, `camera`,
-   `emotion`, `servo`, `speaker`, `system`, `voice`. `led` và `display` phải
-   vắng mặt.
+   `emotion`, `music`, `sensing`, `servo`, `speaker`, `system`, `voice`, còn
+   `buddy` nằm trong `skipped` (khai optional, HAL không có driver). `led` và
+   `display` phải vắng mặt hoàn toàn — chúng không được khai.
 
 5. Verify motion theo thứ tự an toàn:
 

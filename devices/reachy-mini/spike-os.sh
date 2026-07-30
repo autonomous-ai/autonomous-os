@@ -63,7 +63,13 @@ if [ "$STOP_ONLY" = "1" ] || [ "$UNINSTALL" = "1" ]; then
   exit 0
 fi
 
-say "1/4  Seed $CONFIG_DIR/config.json"
+say "1/4  Seed $CONFIG_DIR (config.json + bootstrap.json)"
+# bootstrap.json before os-server starts, not at the bootstrap step: os-server
+# reads OTAMetadataURL from that file and nowhere else, and the agent runtimes'
+# skill watchers take the URL from it to fetch skills. Start os-server without
+# it and skills stay empty — silently, since an unset URL is treated as "not
+# provisioned yet" rather than an error. See ensure_bootstrap_config.
+ensure_bootstrap_config
 # Minimal config: the only fail-loud startup guard is device_type (server.go:
 # "device_type unresolved … refusing to assume 'lamp'"). Everything else
 # defaults and the web setup flow fills it in. Never overwrite an existing

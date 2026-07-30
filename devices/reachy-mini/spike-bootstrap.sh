@@ -61,31 +61,13 @@ if [ "$STOP_ONLY" = "1" ] || [ "$UNINSTALL" = "1" ]; then
 fi
 
 say "1/3  Seed $CONFIG_DIR/bootstrap.json"
-ensure_tools
-mkdir -p "$CONFIG_DIR"
+# Shared with spike-os.sh, which already seeds this before starting os-server —
+# the file is os-server's only source of OTAMetadataURL, and the skill watchers
+# read the URL from there. Idempotent, so calling it again here costs nothing and
+# keeps this script standalone.
+ensure_bootstrap_config
 BS_JSON="$CONFIG_DIR/bootstrap.json"
-URL="$(metadata_url)"
-
-if [ -f "$BS_JSON" ]; then
-  # Merge-if-empty, never clobber: an operator who pointed this robot at a
-  # staging feed must not be silently moved back to production by a re-run.
-  TMP="$(mktemp)"
-  if jq --arg url "$URL" \
-      'if (.metadata_url // "") == "" then .metadata_url = $url else . end' \
-      "$BS_JSON" >"$TMP" 2>/dev/null; then
-    mv "$TMP" "$BS_JSON"
-    info "kept the existing config; metadata_url=$(jq -r '.metadata_url' "$BS_JSON")"
-  else
-    rm -f "$TMP"
-    info "WARN: $BS_JSON is not valid JSON — leaving it untouched"
-  fi
-else
-  jq -n --arg url "$URL" \
-    '{httpPort: 8080, metadata_url: $url, poll_interval: "5m", state_file: "/root/bootstrap/state.json"}' \
-    >"$BS_JSON"
-  info "seeded $BS_JSON with metadata_url=$URL"
-fi
-mkdir -p /root/bootstrap
+URL="$(jq -r '.metadata_url // empty' "$BS_JSON" 2>/dev/null || true)"
 
 say "2/3  Install the binary from OTA"
 # Stop first: replacing a running binary in place gives ETXTBSY.

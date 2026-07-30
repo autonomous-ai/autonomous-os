@@ -33,15 +33,32 @@ Hardware references checked on 2026-07-21:
 | `vision` | `camera` | yes | Wide-angle head camera |
 | `motion` | `servo` | yes | `driver: reachy_sdk`; Stewart-platform head, body yaw, antennas |
 | `expression` | `emotion` | yes | Expression maps to movement/antenna posture/voice |
+| `media` | `music` | yes | Playback shares the one USB card with TTS |
 | `sensing` | `sensing` | no | Optional perception stack; same gating as other devices |
 | `presence` | none | no | Behavior gate only |
+| `lifelike` | none | no | Behavior gate only; routeless idle suite in the os-server |
+| `companion` | `buddy` | no | `buddy` is an **os-server** route, so HAL has no driver for it |
 | `system` | `system` | yes | Shared HAL system route |
 
-The profile intentionally does **not** declare `light`, `display`, `scene`, or
-`music`. Current Pollen/Hugging Face/Seeed references list motion, camera, mic
+The profile intentionally does **not** declare `light`, `display`, or `scene`.
+Current Pollen/Hugging Face/Seeed references list motion, camera, mic
 array, speaker, compute, IMU, Wi-Fi, battery, and animated antennas, but not a
 device-addressable LED ring or screen. If a future hardware revision exposes
 those, add the capability only with a matching HAL driver and safety behavior.
+
+**Declared is not mounted.** HAL crosses the declarations with driver
+availability at boot (`plan_mounts` in `hal/board/device.py`): declared +
+available mounts, declared + *required* + missing fails loud, declared +
+*optional* + missing is skipped. On the Wireless unit `GET /device` therefore
+reports
+
+```
+routes:  [audio, camera, emotion, music, sensing, servo, speaker, system, voice]
+skipped: [buddy]
+```
+
+— `companion` is declared but optional, and no HAL `buddy` driver exists, so the
+route is skipped instead of aborting the boot.
 
 ## Deployment: Install On Top, Never Flash
 
@@ -430,8 +447,9 @@ profile is measured.
    ```
 
    Expected when all required drivers are available: `audio`, `camera`,
-   `emotion`, `servo`, `speaker`, `system`, `voice`. `led` and `display` should
-   be absent.
+   `emotion`, `music`, `sensing`, `servo`, `speaker`, `system`, `voice`, with
+   `buddy` under `skipped` (declared optional, no HAL driver). `led` and
+   `display` should be absent entirely — they are not declared.
 
 6. Verify motion in safe order:
 

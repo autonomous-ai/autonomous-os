@@ -275,7 +275,7 @@ pcm.device_speaker {
 It deliberately omits `pcm.!default`: the daemon shares this hardware and must
 keep the default it expects.
 
-### 2.2 HAL .env — audio DONE, camera BLOCKED
+### 2.2 HAL .env — audio DONE, camera DONE via the `rpicam` driver
 
 `devices/reachy-mini/rootfs/opt/hal/.env` now carries the measured values:
 
@@ -286,8 +286,18 @@ HAL_CAMERA_INDEX=0                          # inert — see 1.5, libcamera not V
 ```
 
 Audio only opens after the daemon releases media, which HAL now does for itself
-(1.9). The camera needed a driver change rather than a config value: `DEVICE.md`
-declares `driver: rpicam` and `HAL_CAMERA_INDEX` stays inert.
+(1.9).
+
+The camera was never a config value, so no `.env` field could fix it: `/dev/video0`
+is the raw Bayer unicam node, and the wheel-built `opencv-python` reports
+`GStreamer: NO`, so neither `cv2.VideoCapture(0)` nor a `libcamerasrc` pipeline
+can produce frames (1.5). Resolved with a second HAL camera backend instead:
+`DEVICE.md` declares `driver: rpicam`, which `hal/drivers/camera/factory.py`
+maps to `RpicamVideoCaptureDevice`
+(`hal/drivers/camera/rpicam_capture_device.py`) — it reads MJPEG from an
+`rpicam-vid` child process and decodes the newest frame with `cv2.imdecode`.
+`HAL_CAMERA_INDEX` stays inert on this body. Details in
+[`runtime.md`](runtime.md#camera-stack-libcamera-not-uvc).
 
 ### 2.3 setup.sh (New, Reachy-Specific)
 
@@ -382,7 +392,8 @@ HAL_ECHO_RMS_FLOOR=300                # ? tune: Reachy's speaker is 5W,
                                       #   may need different floor vs Lamp's 3W
 
 # --- CPU tuning ---
-# RPi CM4: 4 cores shared with Pollen daemon (100 Hz control loop).
+# RPi CM4: 4 cores shared with Pollen daemon (control loop measured at
+# ~49 Hz on this unit, not the 100 Hz quoted by Pollen's docs).
 # Keep thread count low to avoid starving the daemon.
 OMP_NUM_THREADS=1
 OPENBLAS_NUM_THREADS=1
@@ -398,7 +409,8 @@ OPENBLAS_NUM_THREADS=1
    raising to avoid self-triggering during TTS playback.
 3. **Camera**: if Pi Camera v3 uses libcamera, OpenCV `VideoCapture(index)` may
    not work. Need gstreamer pipeline or `picamera2` integration.
-4. **CPU budget**: Pollen daemon runs a 100 Hz control loop. Our sensing
+4. **CPU budget**: the Pollen daemon's control loop measured **~49 Hz** on this
+   unit (`/api/daemon/status`); 100 Hz is what Pollen's docs claim. Our sensing
    (emotion + motion detection) adds CPU load. Monitor with `htop` during
    concurrent motion + inference. If CPU > 80%, disable `HAL_POSE_MOTION_ENABLED`
    and reduce camera resolution.
@@ -609,12 +621,14 @@ Would mirror `build-orangepi.sh` phases, adapted:
 | build-orangepi.sh | build-reachy.sh delta |
 |---|---|
 | Phase 0 base: `gdown` stock `.7z` | decompress `input/reachy-mini/golden-reachy-dev.img.xz` (captured in 5.1) |
-| Phase 2 chroot apt: hostapd/dnsmasq/dhcpcd | **gated on recon 1.2** — NetworkManager vs dhcpcd decides the network packages |
+| Phase 2 chroot apt: hostapd/dnsmasq/dhcpcd | **settled by recon 1.2** — NetworkManager, `dhcpcd` inactive, so no hostapd/dnsmasq/dhcpcd; reuse the existing `Hotspot` NM profile for AP mode |
 | Phase 2: bake full OS stack | **install on top — never wipe the Pollen daemon** |
 | Flash: SD card via Imager | **rpiboot + bmaptool to eMMC** — no SD slot |
 | Phase 3 OTA bake | same: os-server, bootstrap, HAL, device profile overlay |
 
-Blocked on: recon 1.2 (network stack) and the per-unit-state question (5.3). Only
+Blocked on: the per-unit-state question (5.3) only. Recon 1.2 is answered —
+NetworkManager is active and `dhcpcd` is off, with `Glinks` (STA) and `Hotspot`
+(`reachy-mini-ap`, `ipv4=shared`) already on the unit. Only
 worth building when shipping multiple Reachy units; for a single dev unit,
 `spike.sh` + `setup.sh`-on-top is enough.
 

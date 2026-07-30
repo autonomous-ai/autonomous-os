@@ -262,7 +262,7 @@ pcm.device_speaker {
 File này cố ý không có `pcm.!default`: daemon dùng chung phần cứng và phải giữ
 nguyên default mà nó cần.
 
-### 2.2 HAL .env — audio XONG, camera BỊ CHẶN
+### 2.2 HAL .env — audio XONG, camera XONG bằng driver `rpicam`
 
 `devices/reachy-mini/rootfs/opt/hal/.env` đã mang giá trị đo được:
 
@@ -272,8 +272,17 @@ HAL_AUDIO_OUTPUT_ALSA=plug:device_speaker   # từ 1.4
 HAL_CAMERA_INDEX=0                          # vô tác dụng — xem 1.5, libcamera chứ không phải V4L2
 ```
 
-Audio chỉ mở được sau khi daemon nhả media (1.9). Camera cần đổi driver, không
-phải đổi giá trị config.
+Audio chỉ mở được sau khi daemon nhả media (1.9).
+
+Camera chưa bao giờ là chuyện của một giá trị config, nên không field `.env` nào
+sửa được: `/dev/video0` là node unicam Bayer thô, và bản `opencv-python` từ wheel
+báo `GStreamer: NO`, nên cả `cv2.VideoCapture(0)` lẫn pipeline `libcamerasrc` đều
+không ra frame (1.5). Đã giải quyết bằng một camera backend thứ hai của HAL:
+`DEVICE.md` khai `driver: rpicam`, và `hal/drivers/camera/factory.py` map tên đó
+tới `RpicamVideoCaptureDevice` (`hal/drivers/camera/rpicam_capture_device.py`) —
+driver này đọc MJPEG từ tiến trình con `rpicam-vid` rồi decode frame mới nhất
+bằng `cv2.imdecode`. `HAL_CAMERA_INDEX` vô tác dụng trên body này. Chi tiết ở
+[`runtime_vi.md`](runtime_vi.md#camera-stack-libcamera-không-phải-uvc).
 
 ### 2.3 setup.sh (Mới, Riêng Cho Reachy)
 
@@ -366,7 +375,8 @@ HAL_ECHO_RMS_FLOOR=300                # ? chỉnh: loa Reachy 5W,
                                       #   có thể cần floor khác so với Lamp 3W
 
 # --- CPU tuning ---
-# RPi CM4: 4 nhân chia sẻ với Pollen daemon (vòng lặp 100 Hz).
+# RPi CM4: 4 nhân chia sẻ với Pollen daemon (control loop đo được
+# ~49 Hz trên con này, không phải 100 Hz như docs của Pollen ghi).
 # Giữ số thread thấp để không bỏ đói daemon.
 OMP_NUM_THREADS=1
 OPENBLAS_NUM_THREADS=1
@@ -382,8 +392,9 @@ OPENBLAS_NUM_THREADS=1
    tăng để tránh tự kích hoạt khi phát TTS.
 3. **Camera**: nếu Pi Camera v3 dùng libcamera, `VideoCapture(index)` của OpenCV
    có thể không hoạt động. Cần pipeline gstreamer hoặc tích hợp `picamera2`.
-4. **Ngân sách CPU**: Pollen daemon chạy vòng lặp 100 Hz. Sensing của chúng ta
-   (phát hiện cảm xúc + chuyển động) tăng tải CPU. Theo dõi bằng `htop` khi
+4. **Ngân sách CPU**: control loop của Pollen daemon đo được **~49 Hz** trên con
+   này (`/api/daemon/status`); 100 Hz là con số docs của Pollen ghi. Sensing của
+   chúng ta (phát hiện cảm xúc + chuyển động) tăng tải CPU. Theo dõi bằng `htop` khi
    chạy motion + inference đồng thời. Nếu CPU > 80%, tắt
    `HAL_POSE_MOTION_ENABLED` và giảm độ phân giải camera.
 
@@ -598,12 +609,14 @@ Sẽ mirror các phase của `build-orangepi.sh`, chỉnh lại:
 | build-orangepi.sh | build-reachy.sh khác biệt |
 |---|---|
 | Phase 0 base: `gdown` stock `.7z` | giải nén `input/reachy-mini/golden-reachy-dev.img.xz` (chụp ở 5.1) |
-| Phase 2 chroot apt: hostapd/dnsmasq/dhcpcd | **gated vào recon 1.2** — NetworkManager vs dhcpcd quyết package mạng |
+| Phase 2 chroot apt: hostapd/dnsmasq/dhcpcd | **recon 1.2 đã chốt** — NetworkManager, `dhcpcd` tắt, nên không cần hostapd/dnsmasq/dhcpcd; tái dùng profile NM `Hotspot` sẵn có cho AP mode |
 | Phase 2: bake nguyên stack OS | **cài chồng — không bao giờ xoá Pollen daemon** |
 | Flash: SD card qua Imager | **rpiboot + bmaptool vào eMMC** — không có khe SD |
 | Phase 3 OTA bake | như cũ: os-server, bootstrap, HAL, device profile overlay |
 
-Chờ: recon 1.2 (network stack) + câu hỏi per-unit-state (5.3). Chỉ đáng build khi
+Chờ: chỉ còn câu hỏi per-unit-state (5.3). Recon 1.2 đã có đáp án —
+NetworkManager đang chạy, `dhcpcd` tắt, và máy đã có sẵn `Glinks` (STA) cùng
+`Hotspot` (`reachy-mini-ap`, `ipv4=shared`). Chỉ đáng build khi
 ship NHIỀU con Reachy; với 1 con dev, `spike.sh` + `setup.sh`-cài-chồng là đủ.
 
 ## Tài Liệu Tham Khảo

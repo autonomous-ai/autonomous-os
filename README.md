@@ -15,15 +15,22 @@ build a third.
 
 | | Device | What it is | Declares |
 |---|--------|-----------|----------|
-| <img src="devices/lamp/images/lamp.webp" width="210"> | [**Autonomous Lamp**](devices/lamp) | 5-DOF expressive desk robot | the maximal set — audio, vision, motion, light, display, sensing |
+| <img src="devices/lamp/images/lamp_icon_2.webp" width="210"> | [**Autonomous Lamp**](devices/lamp) | 5-DOF expressive desk robot | the maximal set — audio, vision, motion, light, display, sensing |
 | <img src="devices/intern-v2/images/intern.webp" width="210"> | [**Autonomous Intern**](devices/intern-v2) | always-on desk agent | audio, sensing, light — **no** camera, motion, or display |
+| <img src="devices/reachy-mini/images/reachy-icon.svg" width="210"> | [**Reachy Mini**](devices/reachy-mini) | Pollen Robotics' desk robot, running Autonomous | audio, vision, motion (6-DOF head + 360° body), expression, sensing — **no** light or display |
 | <img src="devices/unitree-go2w/images/go2-w.webp" width="210"> | [**Unitree Go2-W**](devices/unitree-go2w) | a *different manufacturer's* mobile robot, running Autonomous | audio, vision (+ depth), motion (locomotion), sensing |
 
-Lamp and Intern are **Autonomous's own** devices; the **Unitree Go2-W is a different
-manufacturer's** robot running the identical OS — the Android playbook (Android on Samsung,
-Pixel, …). All three run the **same OS image**; only their `DEVICE.md` differs. The Go2-W makes
-it vivid: its `motion` is **locomotion** driven by the Unitree SDK, yet a "come here" skill
-calling `motion.move` runs on it and on Lamp alike — skills address capabilities, not hardware.
+Lamp and Intern are **Autonomous's own** devices; **Reachy Mini and the Unitree Go2-W belong to
+other manufacturers** and run the identical OS — the Android playbook (Android on Samsung,
+Pixel, …). They all run the **same OS image**; only their `DEVICE.md` differs.
+
+**Reachy Mini is where that stops being a claim.** It is someone else's hardware, shipped with
+its own vendor OS and daemon, and Autonomous installs *alongside* it —
+[one command on the robot](devices/reachy-mini). Onboarding it was writing a `DEVICE.md`, a
+motion driver wrapping Pollen's Python SDK, and a `SAFETY.md`. No fork. Its `motion` is a
+**Stewart platform** — 6-DOF parallel kinematics, nothing like Lamp's serial bus servos or the
+Go2-W's legs — yet a skill calling `motion.aim` runs on all of them, because skills address
+capabilities, never hardware.
 
 ## Architecture
 
@@ -116,7 +123,7 @@ runtimes/         Agentic Runtime — one folder per swappable brain (openclaw, 
 hal/              HAL (Python) — the package; capability host + routes
   drivers/        Drivers — by subsystem (motion, audio, vision, light, display, sensing)
   board/          Board Support — per-board profiles + declaration-driven mounting
-devices/          reference devices: lamp/, intern-v2/ (DEVICE · SOUL · SAFETY · README · hardware/)
+devices/          reference devices: lamp/, intern-v2/, reachy-mini/, unitree-go2w/ (DEVICE · SOUL · SAFETY · README)
   contract/       HAL capability ABI — frozen, versioned (what skills build against)
     cts/          compliance test suite — validates devices against the contract
 

@@ -5,7 +5,9 @@ to live on a desk — the first reference device for [Autonomous](../../README.m
 
 🔗 **Product page:** https://www.autonomous.ai/lamp
 
-![Autonomous Lamp](images/lamp.webp)
+<p align="center">
+  <img src="images/lamp_icon_2.webp" alt="Autonomous Lamp" width="480">
+</p>
 
 ## What it is
 
@@ -13,7 +15,9 @@ An always-on AI desk robot. Unlike a chat window you open on demand, Lamp is *pr
 sees your workspace, tracks faces and motion, remembers your work, and speaks up when
 something is relevant. The articulated arm physically turns to look at you.
 
-![Lamp tracking a person](images/lamp-tracking.webp)
+<p align="center">
+  <img src="images/lamp-tracking.webp" alt="Lamp tracking a person" width="640">
+</p>
 
 ## Hardware
 

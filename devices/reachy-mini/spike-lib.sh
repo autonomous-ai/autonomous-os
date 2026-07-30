@@ -119,6 +119,47 @@ fetch_metadata() {
 # after a publish still needs the cache cleared by hand (or a new shell).
 clear_metadata_cache() { rm -f "$META_CACHE"; }
 
+# Seed $CONFIG_DIR/bootstrap.json if it is missing or carries no metadata_url.
+#
+# Called by BOTH spike-os.sh and spike-bootstrap.sh, and that is the point: the
+# file is not only the OTA worker's config, it is where os-server reads
+# OTAMetadataURL from (system/server/config/config.go — config.json deliberately
+# does not persist it), and the agent runtimes' skill watchers take the URL from
+# there to fetch skills (runtimes/*/skill_watcher.go → skills.FetchSkillVersions).
+# With no metadata_url that fetch returns early and the device comes up with
+# empty skill folders — nothing errors, the agent simply has no abilities.
+#
+# So it cannot wait for the bootstrap step, which runs last on purpose. Seeding
+# is idempotent, so the step that owns the worker calls it too.
+ensure_bootstrap_config() {
+  ensure_tools
+  local url bs tmp
+  url="$(metadata_url)"
+  bs="$CONFIG_DIR/bootstrap.json"
+  mkdir -p "$CONFIG_DIR" /root/bootstrap
+
+  if [ -f "$bs" ]; then
+    # Merge-if-empty, never clobber: an operator who pointed this robot at a
+    # staging feed must not be moved back to production by a re-run.
+    tmp="$(mktemp)"
+    if jq --arg url "$url" \
+        'if (.metadata_url // "") == "" then .metadata_url = $url else . end' \
+        "$bs" >"$tmp" 2>/dev/null; then
+      mv "$tmp" "$bs"
+      info "bootstrap.json: metadata_url=$(jq -r '.metadata_url // "(none)"' "$bs")"
+    else
+      rm -f "$tmp"
+      info "WARN: $bs is not valid JSON — leaving it untouched"
+    fi
+    return 0
+  fi
+
+  jq -n --arg url "$url" \
+    '{httpPort: 8080, metadata_url: $url, poll_interval: "5m", state_file: "/root/bootstrap/state.json"}' \
+    >"$bs"
+  info "seeded $bs with metadata_url=$url"
+}
+
 # ota_field <component> <field>
 # Components are top-level keys ("hal", "os-server", "web", "bootstrap",
 # "openclaw"); the device profile is nested under devices.<type>.

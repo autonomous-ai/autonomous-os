@@ -83,17 +83,31 @@ fi
   || die "no $DEVICES_DIR/$DEVICE_TYPE/DEVICE.md — run: sudo bash spike-device.sh"
 
 say "1/4  Preflight: disk space"
-# The venv is ~2 GB (torch, opencv, polars, pyarrow) and uv's wheel cache can
-# add as much again. The robot ships a 14 GB eMMC that is already ~60% full, and
+# The venv is ~2 GB (torch, opencv, polars, pyarrow) and uv's wheel cache can add
+# as much again. The robot ships a 14 GB eMMC that is already ~60% full, and
 # filling it hurts the Pollen daemon (journal, state writes) far more than
 # anything else this script does. Refuse rather than wedge the robot.
-# Only gate the path that downloads: with --no-deps the venv exists already.
+#
+# The threshold depends on whether the venv already exists, and getting that
+# wrong locks out the update path: a built venv leaves ~1.8 GB free on this eMMC,
+# so a flat 4 GB gate means the FIRST install passes and every re-run after it
+# dies here — while install.sh is exactly how updates are applied. With a venv
+# in place uv only fetches what changed, so the requirement is far smaller.
 AVAIL_KB="$(df -Pk / | awk 'NR==2 {print $4}')"
 info "free space on /: $(awk -v k="$AVAIL_KB" 'BEGIN {printf "%.1f GB", k/1048576}')"
-if [ "$SKIP_DEPS" = "0" ] && [ "$AVAIL_KB" -lt 4194304 ]; then
-  die "need at least 4 GB free for the venv + uv cache.
-Free space first (uv cache clean, journalctl --vacuum-size=100M), or re-run
-with --no-deps if the venv already exists."
+if [ "$SKIP_DEPS" = "0" ]; then
+  if [ -x "$HAL_DIR/.venv/bin/uvicorn" ]; then
+    NEED_KB=1048576   # 1 GB — incremental sync over an existing venv
+    NEED_LABEL="1 GB (updating an existing venv)"
+  else
+    NEED_KB=4194304   # 4 GB — download + build from nothing
+    NEED_LABEL="4 GB (building the venv from scratch)"
+  fi
+  if [ "$AVAIL_KB" -lt "$NEED_KB" ]; then
+    die "need at least $NEED_LABEL.
+Free space first (journalctl --vacuum-size=100M, uv cache clean), or re-run
+with --no-deps to skip the sync entirely."
+  fi
 fi
 
 say "2/4  Install HAL from OTA"

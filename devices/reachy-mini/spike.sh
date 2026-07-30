@@ -126,16 +126,25 @@ for step in "${STEPS[@]}"; do
 done
 
 say "Bring-up complete in $(( (SECONDS - START_TS) / 60 ))m $(( (SECONDS - START_TS) % 60 ))s"
-printf 'hal       : '; curl -sf -m 5 localhost:5001/health >/dev/null 2>&1 && echo up || echo DOWN
-printf 'os-server : '; curl -sf -m 5 localhost:5000/api/health/live >/dev/null 2>&1 && echo up || echo DOWN
-printf 'web       : '; curl -sf -m 5 localhost/ >/dev/null 2>&1 && echo up || echo DOWN
-printf 'media     : '; curl -s -m 5 "$DAEMON_URL/api/media/status" 2>/dev/null || echo '?'; echo
-printf 'motors    : '; curl -s -m 5 "$DAEMON_URL/api/motors/status" 2>/dev/null || echo '?'; echo
+# To stderr, like say/info. Mixing the two streams is not cosmetic here: when
+# the run is piped to a file or a log, stderr is unbuffered while stdout is
+# block-buffered, so the labels and their values arrive out of order and the
+# summary comes out shuffled — "hal : " on one line and "up" three lines later.
+{
+  printf 'hal       : '; curl -sf -m 5 localhost:5001/health >/dev/null 2>&1 && echo up || echo DOWN
+  printf 'os-server : '; curl -sf -m 5 localhost:5000/api/health/live >/dev/null 2>&1 && echo up || echo DOWN
+  printf 'web       : '; curl -sf -m 5 localhost/ >/dev/null 2>&1 && echo up || echo DOWN
+  printf 'media     : '; curl -s -m 5 "$DAEMON_URL/api/media/status" 2>/dev/null || echo '?'; echo
+  printf 'motors    : '; curl -s -m 5 "$DAEMON_URL/api/motors/status" 2>/dev/null || echo '?'; echo
+} >&2
 
-cat <<EOF
+# Resolved here, not left as an escaped $( ) inside the heredoc — that printed
+# the command text at the operator instead of the address they need to open.
+IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+cat >&2 <<EOF
 
 ========================================
-  Open http://\$(hostname -I | awk '{print \$1}')/ in a browser to finish setup.
+  Open http://${IP:-<robot-ip>}/ in a browser to finish setup.
 
   logs   : journalctl -u hal -u os-server -u openclaw -u bootstrap -f
   stop   : sudo bash spike.sh --stop

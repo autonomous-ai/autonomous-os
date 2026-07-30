@@ -18,7 +18,7 @@
 #
 # Usage:
 #   sudo bash spike-device.sh              # install / update the profile
-#   sudo bash spike-device.sh --keep-env   # do not touch an existing /opt/hal/.env
+#   sudo bash spike-device.sh --force-env  # replace /opt/hal/.env from the package
 #   sudo bash spike-device.sh --uninstall  # remove the profile (leaves rootfs files)
 set -euo pipefail
 
@@ -26,11 +26,14 @@ SPIKE_TAG="spike-device"
 # shellcheck source=spike-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/spike-lib.sh"
 
-KEEP_ENV=0
+FORCE_ENV=0
 UNINSTALL=0
 for arg in "$@"; do
   case "$arg" in
-    --keep-env)  KEEP_ENV=1 ;;
+    --force-env) FORCE_ENV=1 ;;
+    # Kept as an accepted no-op: keeping .env is now the default, and silently
+    # rejecting the old flag would break anyone's existing command line.
+    --keep-env)  info "--keep-env is the default now (use --force-env to replace .env)" ;;
     --uninstall) UNINSTALL=1 ;;
     # Accepted and ignored: the profile is files on disk, not a service, so
     # there is nothing to stop. spike.sh passes --stop to every step, and
@@ -94,13 +97,21 @@ while IFS= read -r rel; do
   fi
 done < <(cd "$OVERLAY" && find . -type f -printf '%P\n')
 
-# .env carries values an operator may have tuned on the robot. Keep theirs
-# unless asked, but still install it when absent — HAL will not start without
-# DEVICE_TYPE.
+# .env is the one overlay file an operator edits on the robot — VAD thresholds,
+# sensing floors, camera tuning. An existing one is KEPT by default, and
+# --force-env is what replaces it.
+#
+# It used to be the other way round, which was wrong in a way that only shows up
+# later: install.sh is also the update path, so every re-run silently reset
+# whatever had been tuned, and install.sh cannot pass --keep-env down anyway
+# (spike.sh does not forward unknown flags). Losing tuning quietly, on the
+# routine action, is worse than making an intentional reset ask for it.
+#
+# When absent it is always installed — HAL will not start without DEVICE_TYPE.
 ENV_SRC="$OVERLAY/opt/hal/.env"
 ENV_DST="$HAL_DIR/.env"
 PRESERVE_ENV=0
-if [ -f "$ENV_DST" ] && [ "$KEEP_ENV" = "1" ]; then
+if [ -f "$ENV_DST" ] && [ "$FORCE_ENV" = "0" ]; then
   PRESERVE_ENV=1
   ENV_BACKUP="$(mktemp)"
   cp -a "$ENV_DST" "$ENV_BACKUP"
@@ -112,9 +123,17 @@ cp -a "$OVERLAY/." /
 if [ "$PRESERVE_ENV" = "1" ]; then
   cp -a "$ENV_BACKUP" "$ENV_DST"
   rm -f "$ENV_BACKUP"
-  info "--keep-env: kept the existing $ENV_DST"
+  # Say when it differs from what shipped, so a stale local override is visible
+  # rather than something to discover while debugging why a setting has no effect.
+  if [ -f "$ENV_SRC" ] && ! cmp -s "$ENV_DST" "$ENV_SRC"; then
+    info "kept the existing $ENV_DST — it differs from the package's"
+    info "  (diff: $(diff <(sort "$ENV_SRC") <(sort "$ENV_DST") | grep -c '^[<>]') lines; --force-env to replace it)"
+  else
+    info "kept the existing $ENV_DST"
+  fi
 elif [ -f "$ENV_SRC" ]; then
-  info "installed $ENV_DST from the package"
+  [ "$FORCE_ENV" = "1" ] && info "--force-env: replaced $ENV_DST from the package" \
+                         || info "installed $ENV_DST from the package"
 fi
 
 info "overlay applied:"

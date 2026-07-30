@@ -1,11 +1,13 @@
 # Unitree Go2-W
 
-![Unitree Go2-W](images/go2-w.webp)
-
 **Autonomous on someone else's robot.** The Go2-W is Unitree's wheeled quadruped — a
 third-party manufacturer's hardware — running the Autonomous OS. We fitted it with a camera,
 microphone, speaker, and a 3D depth camera; it hears you, sees the room in 3D, drives through
 the space, and acts. A true mobile agent, not a remote-controlled toy.
+
+<p align="center">
+  <img src="images/go2-w.webp" alt="Unitree Go2-W" width="480">
+</p>
 
 ## Why it matters — the Android playbook
 

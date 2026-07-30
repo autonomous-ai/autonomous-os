@@ -5,7 +5,9 @@ your laptop sleeps — the second reference device for [Autonomous](../../README
 
 🔗 **Product page:** https://www.autonomous.ai/ai-gadgets/intern
 
-![Autonomous Intern](images/intern.webp)
+<p align="center">
+  <img src="images/intern.webp" alt="Autonomous Intern" width="480">
+</p>
 
 ## What it is
 
@@ -25,7 +27,9 @@ laptop. Email triage, GitHub monitoring, scheduling, web scraping, booking, bill
 | Models | ships with Sonnet 4.6 + Opus 4.6; any OpenAI-compatible model |
 | Warranty | 1 year · 30-day returns |
 
-![Intern specs](images/intern-specs.webp)
+<p align="center">
+  <img src="images/intern-specs.webp" alt="Intern specs" width="640">
+</p>
 
 ## Capabilities
 

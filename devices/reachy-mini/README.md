@@ -1,13 +1,67 @@
 # Reachy Mini
 
-Reachy Mini is the third-party desk robot profile for Autonomous. It is the same
-OS image and runtime contract as the other devices, with the body selected by
-`devices/reachy-mini/DEVICE.md`.
+Run Autonomous on a [Reachy Mini](https://huggingface.co/blog/reachy-mini) —
+Pollen Robotics' desk robot. Autonomous gives it a voice pipeline, vision,
+sensing, a web UI, an agent runtime and over-the-air updates, driving the body
+through Pollen's own SDK.
+
+<p align="center">
+  <img src="images/reachy-icon.svg" alt="Reachy Mini" width="480">
+</p>
+
+## Install
+
+SSH into your robot and run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/autonomous-ai/autonomous-os/main/devices/reachy-mini/install.sh | sudo bash
+```
+
+That is the whole thing. No repo to clone, no Go or Node toolchain, no build
+step, nothing copied from your laptop — the installer pulls every component from
+the released OTA feed and puts each one behind a systemd unit, so the stack
+comes back on its own after a reboot.
+
+Takes ~10–15 minutes on a first run, most of it building HAL's Python
+environment. When it finishes, open `http://<robot-ip>/` in a browser to
+complete setup.
+
+**It installs alongside Pollen's software — it does not replace it.** Never
+flash a golden image onto a Reachy Mini: that would wipe the Pollen daemon that
+owns the hardware. The daemon keeps running and keeps driving the motors; HAL
+borrows the camera and microphone from it and hands them back on shutdown.
+
+Afterwards the scripts live on the robot, so you can undo it:
+
+```bash
+sudo bash /opt/devices/reachy-mini/spike.sh --stop        # stop everything
+sudo bash /opt/devices/reachy-mini/spike.sh --uninstall   # remove it
+```
+
+### Requirements
+
+- A Reachy Mini (Wireless verified; the Lite's Pi should work but is untested)
+  that is already set up and on your network
+- SSH access to it — on the shipped Pollen OS that is the `pollen` user, which
+  has passwordless sudo. Root cannot SSH in directly.
+- ~4 GB free on the eMMC. The installer checks and refuses rather than wedging
+  the robot, since a full disk hurts the Pollen daemon more than it hurts us.
+
+### Options
+
+```bash
+# install from another feed (staging, a fork)
+curl -fsSL …/install.sh | sudo OTA_METADATA_URL=https://…/metadata.json bash
+
+# skip a step, e.g. bring the body up without the agent runtime
+curl -fsSL …/install.sh | sudo bash -s -- --skip agent
+```
 
 ## Files
 
 | File | Purpose |
 |------|---------|
+| `install.sh` | The one-command entry point above. Fetches the released device package from OTA and hands over to `spike.sh` — the only file pulled from git, deliberately small enough to read before piping it to a shell |
 | `recon.sh` | Read-only first-boot probe — runs all of `first-boot-plan.md` Phase 1 in one shot |
 | `DEVICE.md` | Runtime contract: identity, board gate, gateway default, and declared capabilities |
 | `SAFETY.md` | Deterministic safety bounds for motion and fail-safe behavior |
@@ -61,12 +115,13 @@ expression is therefore movement, antenna posture, gaze, and voice.
 
 ## Deployment
 
-Reachy Mini ships with Pollen's OS on its Pi. **Never flash a golden image** —
-it would wipe the Pollen daemon that owns the hardware. Autonomous is always
-installed on top.
+This section is what `install.sh` does underneath, and how to drive the steps
+individually while developing the port. For just installing, use the one-liner
+at the top of this file.
 
-The spike scripts **run on the robot**, not from a Mac. Copy the folder over and
-run it there:
+The scripts **run on the robot**, not from a Mac. `install.sh` fetches them as
+part of the OTA device package; to run a work-in-progress copy instead, put the
+folder there yourself:
 
 ```bash
 scp -r devices/reachy-mini pollen@reachy-mini.local:~/
@@ -93,7 +148,15 @@ something about everyone else's build. Point it elsewhere with
 | `bash spike-web.sh` | nginx + web UI — makes the stack reachable from a browser |
 | `bash spike-agent.sh` | OpenClaw gateway only |
 | `bash spike-bootstrap.sh` | OTA bootstrap worker only |
-| `DEVICE_TYPE=reachy-mini install.sh` | Production: full setup.sh with systemd, nginx, WiFi AP, OTA |
+
+Each component script also takes `--stop` and `--uninstall`; `spike-hal.sh` takes
+`--no-deps`, `spike-device.sh` takes `--keep-env`, `spike-bootstrap.sh` takes
+`--no-start`.
+
+What this is **not**: `scripts/provision/setup.sh`, the production provisioning
+path used by the imager, which additionally sets up the WiFi AP fallback and the
+captive-portal vhost. Reachy has no provisioning path of its own yet — it keeps
+Pollen's NetworkManager setup and is configured over the LAN.
 
 Order matters, and `spike.sh` enforces it. `spike-device.sh` runs first because
 everything else reads what it installs — HAL refuses to boot without `DEVICE.md`,
