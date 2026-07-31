@@ -16,7 +16,7 @@ Lamp identifies who is speaking via **WeSpeaker ResNet34** (256-dim embedding, O
 │    ├─ STT transcript ready                                          │
 │    ├─ _identify_and_decorate(transcript)                            │
 │    │   ├─ audio_buffer → WAV → on-device preprocess (VAD gate)     │
-│    │   │   └─ Mono→Resample→[HPF]→[NR]→VAD→RMS; reject if no voice  │
+│    │   │   └─ Mono→Resample→[HPF]→[NR]→VAD→[STOI]→RMS; reject clip  │
 │    │   ├─ POST /audio-recognizer/embed  (preprocess=false)         │
 │    │   │   └─ WeSpeaker ONNX → 256-dim L2-normalized (embed only)  │
 │    │   ├─ Per-chunk voting vs enrolled embeddings                   │
@@ -86,7 +86,7 @@ Four layers prevent the agent from repeatedly asking "who are you?":
 
 ### Recognition Algorithm
 
-1. Audio → **on-device** preprocess on HAL (`Mono → Resample → [HighPass] → [NoiseReduce] → VAD → RMS`). Clips that fail the VAD/quality gate are rejected locally (treated as "unknown") and **never uploaded**.
+1. Audio → **on-device** preprocess on HAL (`Mono → Resample → [HighPass] → [NoiseReduce] → VAD → [STOI] → RMS`). Clips that fail the VAD/STOI/quality gate are rejected locally (treated as "unknown") and **never uploaded**.
 2. Cleaned WAV → `POST /audio-recognizer/embed` with `preprocess=false`; the server skips its own preprocessing and only extracts per-chunk embeddings `[M, 256]` (it still windows/chunks the waveform itself)
 3. Cosine similarity against all enrolled speaker embeddings
 4. Per-chunk voting: each chunk votes for its closest match
@@ -97,8 +97,9 @@ Four layers prevent the agent from repeatedly asking "who are you?":
 
 The filter/VAD/normalize pipeline that used to run inside perception-service now runs on HAL, next to the mic — the same processors, in the same order, with the same defaults, ported to `hal/drivers/voice/speaker_recognizer/audio_processors/` (mirrors `AudioProcessorFactory` in perception-service). This keeps rejected audio off the network and puts the gate decision on the device.
 
-- **Default chain**: `MonoConverter → Resampler(16k) → VoiceActivityFilter(silero) → RMSNormalizer(0.1)`. `HighPassFilter` and `NoiseReducer` exist but are **off by default** (same as perception).
+- **Default chain**: `MonoConverter → Resampler(16k) → VoiceActivityFilter(silero) → SpeechIntelligibilityFilter(0.75) → RMSNormalizer(0.1)`. `HighPassFilter` and `NoiseReducer` exist but are **off by default** (same as perception).
 - **VAD gate** (silero-vad): trims leading/trailing non-voice and rejects a clip when it removes all speech, the remaining audio is `< 0.5s`, or the voice ratio is `< 0.4`. A rejected clip raises `PreprocessRejected` → HAL returns "unknown" for recognize and skips the sample for enroll — exactly the behavior it had when perception returned HTTP 400.
+- **STOI gate** (`SpeechIntelligibilityFilter`, reference-free SQUIM-OBJECTIVE STOI): runs **after VAD, before RMS**. Scores the trimmed clip in 5 s chunks and **mean**-aggregates, then rejects when the mean STOI is `< 0.75` (a NaN chunk from silence also rejects), raising `PreprocessRejected(reason="low_intelligibility")` → the same audio-level reject path as VAD (recognize → "unknown", enroll → skip the sample, keeping existing on-disk samples). The ONNX estimator (~20 MB at `hal/drivers/voice/resources/squimm_stoi.onnx`, onnxruntime CPU with the mem-arena off) loads once as a lazy singleton alongside silero VAD and only runs after VAD passes — at most once per utterance. If the model file is absent the gate is skipped with a warning (no crash).
 - **Server flag**: HAL sends `preprocess=false`; perception's `/embed` is embed-only and now defaults to `preprocess=false` too (HAL is the only caller). A caller that uploads raw audio can pass `preprocess=true` to have the server clean it.
 - **Consistency**: enroll and recognize share this one pipeline, so enrollments made after the move stay self-consistent. Voices enrolled under the **old server-side** pipeline should be re-enrolled if match quality drops.
 
@@ -156,6 +157,10 @@ Mirror perception's `AudioProcessorSetting` defaults; override via env (all pref
 | VAD | on | `HAL_SPEAKER_PROC_ENABLE_VAD` | silero-vad gate |
 | VAD min duration | 0.5s | `HAL_SPEAKER_PROC_VAD_MIN_DURATION_SEC` | Reject if stripped audio shorter |
 | VAD min voice ratio | 0.4 | `HAL_SPEAKER_PROC_VAD_MIN_VOICE_RATIO` | Reject if voice fraction lower |
+| STOI gate | on | `HAL_SPEAKER_PROC_ENABLE_STOI` | SQUIM-OBJECTIVE intelligibility gate (after VAD, before RMS) |
+| STOI model path | `hal/drivers/voice/resources/squimm_stoi.onnx` | `HAL_SPEAKER_PROC_STOI_MODEL_PATH` | ONNX estimator (~20 MB); gate skipped if absent |
+| STOI threshold | 0.75 | `HAL_SPEAKER_PROC_STOI_THRESHOLD` | Reject if mean STOI below this |
+| STOI chunk | 5.0s | `HAL_SPEAKER_PROC_STOI_CHUNK_SEC` | Chunk length scored, then mean-aggregated |
 | RMS normalize | on | `HAL_SPEAKER_PROC_ENABLE_RMS_NORMALIZE` / `..._RMS_TARGET` (0.1) | Fixed-loudness normalize |
 
 ## Storage
@@ -196,7 +201,7 @@ Mirror perception's `AudioProcessorSetting` defaults; override via env (all pref
 
 | HTTP | When | Skill behavior |
 |------|------|----------------|
-| `400` | Audio-level reject (too short, silent, VAD found no speech, perception-service returned 4xx) | Ask user to re-record / speak more clearly |
+| `400` | Audio-level reject (too short, silent, VAD found no speech, mean STOI below threshold → `low_intelligibility`, perception-service returned 4xx) | Ask user to re-record / speak more clearly |
 | `503` | Embedding service unreachable (network, 5xx, malformed response) | Tell user to try again shortly — nothing on disk was modified |
 
 `/speaker/recognize` never fails with 5xx for embedding outages — it returns `200` with `{name: "unknown", error: "<reason>"}` so the skill can gracefully degrade. Only input-level problems (missing WAV, bad base64) return `400`.

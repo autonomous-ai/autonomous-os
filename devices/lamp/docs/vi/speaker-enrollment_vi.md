@@ -16,7 +16,7 @@ Lamp nhận diện người nói qua **WeSpeaker ResNet34** (vector nhúng 256 c
 │    ├─ STT chuyển giọng nói → văn bản                                │
 │    ├─ _identify_and_decorate(transcript)                            │
 │    │   ├─ audio_buffer → WAV → tiền xử lý tại thiết bị (cổng VAD)   │
-│    │   │   └─ Mono→Resample→[HPF]→[NR]→VAD→RMS; loại nếu không có tiếng│
+│    │   │   └─ Mono→Resample→[HPF]→[NR]→VAD→[STOI]→RMS; loại clip kém rõ│
 │    │   ├─ POST /audio-recognizer/embed  (preprocess=false)         │
 │    │   │   └─ WeSpeaker ONNX → vector 256 chiều (chỉ lấy embedding) │
 │    │   ├─ Bình chọn theo từng chunk so với embedding đã đăng ký     │
@@ -87,7 +87,7 @@ Bốn lớp ngăn agent hỏi "bạn là ai?" liên tục:
 
 ### Thuật toán nhận diện
 
-1. Audio → tiền xử lý **tại thiết bị** trên HAL (`Mono → Resample → [HighPass] → [NoiseReduce] → VAD → RMS`). Clip không qua được cổng VAD/chất lượng sẽ bị loại ngay tại chỗ (coi như "không xác định") và **không gửi lên server**.
+1. Audio → tiền xử lý **tại thiết bị** trên HAL (`Mono → Resample → [HighPass] → [NoiseReduce] → VAD → [STOI] → RMS`). Clip không qua được cổng VAD/STOI/chất lượng sẽ bị loại ngay tại chỗ (coi như "không xác định") và **không gửi lên server**.
 2. WAV đã làm sạch → `POST /audio-recognizer/embed` với `preprocess=false`; server bỏ qua tiền xử lý của nó và chỉ trích xuất embedding theo từng chunk `[M, 256]` (server vẫn tự chia cửa sổ/chunk waveform)
 3. Cosine similarity với tất cả embedding người nói đã đăng ký
 4. Bình chọn theo chunk: mỗi chunk vote cho người khớp nhất
@@ -98,8 +98,9 @@ Bốn lớp ngăn agent hỏi "bạn là ai?" liên tục:
 
 Pipeline lọc/VAD/chuẩn hoá trước đây chạy trong perception-service nay chạy trên HAL, ngay cạnh mic — cùng bộ processor, cùng thứ tự, cùng giá trị mặc định, được port sang `hal/drivers/voice/speaker_recognizer/audio_processors/` (khớp `AudioProcessorFactory` bên perception-service). Nhờ vậy audio bị loại không tốn băng thông và quyết định cổng nằm ngay tại thiết bị.
 
-- **Chuỗi mặc định**: `MonoConverter → Resampler(16k) → VoiceActivityFilter(silero) → RMSNormalizer(0.1)`. `HighPassFilter` và `NoiseReducer` có sẵn nhưng **tắt mặc định** (giống perception).
+- **Chuỗi mặc định**: `MonoConverter → Resampler(16k) → VoiceActivityFilter(silero) → SpeechIntelligibilityFilter(0.75) → RMSNormalizer(0.1)`. `HighPassFilter` và `NoiseReducer` có sẵn nhưng **tắt mặc định** (giống perception).
 - **Cổng VAD** (silero-vad): cắt phần không có tiếng ở đầu/cuối và loại clip khi VAD xoá hết speech, phần còn lại `< 0.5s`, hoặc tỉ lệ tiếng nói `< 0.4`. Clip bị loại sẽ raise `PreprocessRejected` → HAL trả "không xác định" khi recognize và bỏ qua mẫu khi enroll — đúng như hành vi khi perception trả HTTP 400 trước đây.
+- **Cổng STOI** (`SpeechIntelligibilityFilter`, STOI SQUIM-OBJECTIVE không cần tham chiếu): chạy **sau VAD, trước RMS**. Chấm điểm clip đã cắt theo từng chunk 5 giây rồi lấy **trung bình**, sau đó loại khi STOI trung bình `< 0.75` (chunk NaN do im lặng cũng bị loại), raise `PreprocessRejected(reason="low_intelligibility")` → cùng đường audio-level reject như VAD (recognize → "không xác định", enroll → bỏ qua mẫu, giữ nguyên các mẫu đã có trên đĩa). Bộ ước lượng ONNX (~20 MB tại `hal/drivers/voice/resources/squimm_stoi.onnx`, onnxruntime CPU với mem-arena tắt) nạp một lần dạng lazy singleton cùng silero VAD và chỉ chạy sau khi VAD đạt — tối đa một lần mỗi phát ngôn. Nếu thiếu file model thì bỏ qua cổng kèm cảnh báo (không crash).
 - **Cờ server**: HAL gửi `preprocess=false`; `/embed` của perception chỉ để embed và nay cũng mặc định `preprocess=false` (HAL là caller duy nhất). Caller nào upload audio thô có thể truyền `preprocess=true` để server tự làm sạch.
 - **Nhất quán**: enroll và recognize dùng chung một pipeline này, nên các đăng ký sau khi chuyển vẫn tự nhất quán. Giọng đã đăng ký dưới pipeline **server cũ** nên đăng ký lại nếu chất lượng khớp giảm.
 
@@ -157,6 +158,10 @@ Khớp giá trị mặc định của `AudioProcessorSetting` bên perception; o
 | VAD | bật | `HAL_SPEAKER_PROC_ENABLE_VAD` | Cổng silero-vad |
 | VAD min duration | 0.5s | `HAL_SPEAKER_PROC_VAD_MIN_DURATION_SEC` | Loại nếu audio sau strip ngắn hơn |
 | VAD min voice ratio | 0.4 | `HAL_SPEAKER_PROC_VAD_MIN_VOICE_RATIO` | Loại nếu tỉ lệ tiếng nói thấp hơn |
+| Cổng STOI | bật | `HAL_SPEAKER_PROC_ENABLE_STOI` | Cổng chất lượng SQUIM-OBJECTIVE (sau VAD, trước RMS) |
+| Đường dẫn model STOI | `hal/drivers/voice/resources/squimm_stoi.onnx` | `HAL_SPEAKER_PROC_STOI_MODEL_PATH` | Bộ ước lượng ONNX (~20 MB); bỏ qua cổng nếu thiếu |
+| Ngưỡng STOI | 0.75 | `HAL_SPEAKER_PROC_STOI_THRESHOLD` | Loại nếu STOI trung bình dưới ngưỡng này |
+| Chunk STOI | 5.0s | `HAL_SPEAKER_PROC_STOI_CHUNK_SEC` | Độ dài chunk chấm điểm, rồi lấy trung bình |
 | RMS normalize | bật | `HAL_SPEAKER_PROC_ENABLE_RMS_NORMALIZE` / `..._RMS_TARGET` (0.1) | Chuẩn hoá độ lớn cố định |
 
 ## Lưu trữ
@@ -197,7 +202,7 @@ Khớp giá trị mặc định của `AudioProcessorSetting` bên perception; o
 
 | HTTP | Khi nào | Hành vi skill |
 |------|---------|---------------|
-| `400` | Audio bị reject (quá ngắn, im lặng, VAD không tìm thấy speech, perception-service trả 4xx) | Yêu cầu user thu lại / nói rõ hơn |
+| `400` | Audio bị reject (quá ngắn, im lặng, VAD không tìm thấy speech, STOI trung bình dưới ngưỡng → `low_intelligibility`, perception-service trả 4xx) | Yêu cầu user thu lại / nói rõ hơn |
 | `503` | Embedding service không reachable (network, 5xx, response malformed) | Báo user thử lại sau — disk không bị thay đổi gì |
 
 `/speaker/recognize` **không bao giờ** trả 5xx khi embedding API chết — nó trả `200` với `{name: "unknown", error: "<lý do>"}` để skill tự xử graceful. Chỉ lỗi input (thiếu WAV, base64 sai) mới trả `400`.
