@@ -15,7 +15,10 @@ Design notes (why this placement is cheap):
   cheap-rejected by VAD and never reach the (heavier) STOI model.
 - The ~20 MB ONNX session is loaded **once** in ``_start_impl`` — the whole
   composite processor is a lazily-built singleton (see
-  ``speaker_recognizer._get_audio_processor``), so the model isn't reloaded.
+  ``speaker_recognizer._get_audio_processor``), so the model isn't reloaded. The
+  weight is not committed: the factory downloads it on first use into
+  ``/root/local/models`` via ``model_store.ensure_stoi_model`` before building
+  this stage.
 
 Memory: the model is a transformer over encoder frames and self-attention grows
 steeply with clip length (~4.4 GB at 30 s). Audio is therefore scored in fixed

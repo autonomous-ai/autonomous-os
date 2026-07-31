@@ -7,7 +7,6 @@ perception-service has no equivalent.
 """
 
 import logging
-import os
 
 from .composite import CompositeAudioProcessor
 from .high_pass_filter import HighPassFilter
@@ -77,20 +76,24 @@ class AudioProcessorFactory:
             ))
         # STOI intelligibility gate — AFTER VAD (only scores clips that already
         # contain speech), BEFORE RMS (score the raw-level signal the model was
-        # calibrated on). Skipped (with a warning) when the model file is absent,
-        # so a missing 20 MB weight degrades gracefully instead of crashing.
+        # calibrated on). The ~20 MB weight is downloaded on first use from the
+        # CDN into /root/local/models (see model_store). If it can't be resolved
+        # (unreachable CDN / unknown filename) the gate is skipped with a warning,
+        # so recognition still works — it just loses the quality gate.
         if self._enable_stoi:
-            if self._stoi_model_path and os.path.isfile(self._stoi_model_path):
+            try:
+                from .model_store import ensure_stoi_model
+                model_path = ensure_stoi_model(self._stoi_model_path)
                 processors.append(SpeechIntelligibilityFilter(
-                    model_path=self._stoi_model_path,
+                    model_path=model_path,
                     threshold=self._stoi_threshold,
                     chunk_sec=self._stoi_chunk_sec,
                     expected_sample_rate=self._target_sample_rate,
                 ))
-            else:
+            except Exception as e:
                 _logger.warning(
-                    "STOI gate enabled but model missing at %r — skipping the gate",
-                    self._stoi_model_path,
+                    "STOI gate unavailable (model resolve/download failed: %s) — "
+                    "skipping the gate", e,
                 )
         if self._enable_rms_normalize:
             processors.append(RMSNormalizer(target_rms=self._rms_target))
