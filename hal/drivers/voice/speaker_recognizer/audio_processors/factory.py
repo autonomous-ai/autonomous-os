@@ -1,8 +1,12 @@
 """Factory for building composite audio processors from config.
 
 Mirrors perception-service's AudioProcessorFactory (same order + defaults) so the
-on-device pipeline is identical to what the server used to run.
+on-device pipeline is identical to what the server used to run. The one HAL-only
+addition is the optional STOI intelligibility gate (after VAD, before RMS) —
+perception-service has no equivalent.
 """
+
+import logging
 
 from .composite import CompositeAudioProcessor
 from .high_pass_filter import HighPassFilter
@@ -10,7 +14,10 @@ from .mono_converter import MonoConverter
 from .noise_reducer import NoiseReducer
 from .resampler import Resampler
 from .rms_normalizer import RMSNormalizer
+from .stoi_filter import SpeechIntelligibilityFilter
 from .voice_activity_filter import VoiceActivityFilter
+
+_logger = logging.getLogger(__name__)
 
 
 class AudioProcessorFactory:
@@ -30,6 +37,10 @@ class AudioProcessorFactory:
         vad_min_voice_ratio: float = 0.4,
         enable_rms_normalize: bool = True,
         rms_target: float = 0.1,
+        enable_stoi: bool = False,
+        stoi_model_path: str = "",
+        stoi_threshold: float = 0.75,
+        stoi_chunk_sec: float = 5.0,
     ) -> None:
         self._target_sample_rate = target_sample_rate
         self._enable_mono = enable_mono
@@ -43,6 +54,10 @@ class AudioProcessorFactory:
         self._vad_min_voice_ratio = vad_min_voice_ratio
         self._enable_rms_normalize = enable_rms_normalize
         self._rms_target = rms_target
+        self._enable_stoi = enable_stoi
+        self._stoi_model_path = stoi_model_path
+        self._stoi_threshold = stoi_threshold
+        self._stoi_chunk_sec = stoi_chunk_sec
 
     def create(self) -> CompositeAudioProcessor:
         processors = []
@@ -59,6 +74,27 @@ class AudioProcessorFactory:
                 min_duration_sec=self._vad_min_duration_sec,
                 min_voice_ratio=self._vad_min_voice_ratio,
             ))
+        # STOI intelligibility gate — AFTER VAD (only scores clips that already
+        # contain speech), BEFORE RMS (score the raw-level signal the model was
+        # calibrated on). The ~20 MB weight is downloaded on first use from the
+        # CDN into /root/local/models (see model_store). If it can't be resolved
+        # (unreachable CDN / unknown filename) the gate is skipped with a warning,
+        # so recognition still works — it just loses the quality gate.
+        if self._enable_stoi:
+            try:
+                from .model_store import ensure_stoi_model
+                model_path = ensure_stoi_model(self._stoi_model_path)
+                processors.append(SpeechIntelligibilityFilter(
+                    model_path=model_path,
+                    threshold=self._stoi_threshold,
+                    chunk_sec=self._stoi_chunk_sec,
+                    expected_sample_rate=self._target_sample_rate,
+                ))
+            except Exception as e:
+                _logger.warning(
+                    "STOI gate unavailable (model resolve/download failed: %s) — "
+                    "skipping the gate", e,
+                )
         if self._enable_rms_normalize:
             processors.append(RMSNormalizer(target_rms=self._rms_target))
         return CompositeAudioProcessor(processors)

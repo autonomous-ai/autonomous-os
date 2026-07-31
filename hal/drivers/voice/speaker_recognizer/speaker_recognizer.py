@@ -4,10 +4,11 @@ Stores per-user voice embeddings under ``/root/local/users/<name>/voice/`` and
 recognizes speakers via cosine similarity. Embeddings are computed by a
 configurable external API (see ``SPEAKER_EMBEDDING_API_URL``).
 
-Audio preprocessing (Mono → Resample → [HighPass] → [NoiseReduce] → VAD → RMS)
-runs ON THIS DEVICE (see ``audio_processors/``), next to the mic. Only audio that
-passes the VAD/quality gate is uploaded; the server is told to skip its own
-preprocessing (``preprocess=false``) and just compute the embedding.
+Audio preprocessing (Mono → Resample → [HighPass] → [NoiseReduce] → VAD →
+[STOI gate] → RMS) runs ON THIS DEVICE (see ``audio_processors/``), next to the
+mic. Only audio that passes the VAD + STOI intelligibility gate is uploaded; the
+server is told to skip its own preprocessing (``preprocess=false``) and just
+compute the embedding.
 
 External API contract:
     POST {SPEAKER_EMBEDDING_API_URL}
@@ -322,11 +323,12 @@ def pcm16_bytes_to_wav(pcm_bytes: bytes, sample_rate: int = _TARGET_SR) -> bytes
 # On-device audio preprocessing (moved from perception-service).
 #
 # The filter/VAD/normalize chain (Mono -> Resample -> [HighPass] ->
-# [NoiseReduce] -> VAD -> RMS) now runs HERE, next to the mic. Only audio that
-# passes the VAD/quality gate is uploaded; the embedding server is then told to
-# skip its own preprocessing (preprocess=false) and just compute the embedding.
-# The composite processor is a lazily-built singleton because the silero VAD
-# model loads once and is reused across every enroll/recognize call.
+# [NoiseReduce] -> VAD -> [STOI gate] -> RMS) now runs HERE, next to the mic.
+# Only audio that passes the VAD + STOI intelligibility gate is uploaded; the
+# embedding server is then told to skip its own preprocessing (preprocess=false)
+# and just compute the embedding. The composite processor is a lazily-built
+# singleton because the silero VAD + STOI models load once and are reused across
+# every enroll/recognize call.
 # ---------------------------------------------------------------------------
 _audio_processor: Optional[Any] = None
 _audio_processor_lock = threading.Lock()
@@ -358,6 +360,10 @@ def _get_audio_processor() -> Any:
                 vad_min_voice_ratio=config.SPEAKER_PROC_VAD_MIN_VOICE_RATIO,
                 enable_rms_normalize=config.SPEAKER_PROC_ENABLE_RMS_NORMALIZE,
                 rms_target=config.SPEAKER_PROC_RMS_TARGET,
+                enable_stoi=config.SPEAKER_PROC_ENABLE_STOI,
+                stoi_model_path=config.SPEAKER_PROC_STOI_MODEL_PATH,
+                stoi_threshold=config.SPEAKER_PROC_STOI_THRESHOLD,
+                stoi_chunk_sec=config.SPEAKER_PROC_STOI_CHUNK_SEC,
             )
             try:
                 proc = factory.create()
@@ -375,10 +381,11 @@ def _get_audio_processor() -> Any:
             _audio_processor = proc
             logger.info(
                 "On-device audio preprocessor ready "
-                "(mono=%s resample=%s highpass=%s noise=%s vad=%s rms=%s)",
+                "(mono=%s resample=%s highpass=%s noise=%s vad=%s stoi=%s rms=%s)",
                 config.SPEAKER_PROC_ENABLE_MONO, config.SPEAKER_PROC_ENABLE_RESAMPLE,
                 config.SPEAKER_PROC_ENABLE_HIGH_PASS, config.SPEAKER_PROC_ENABLE_NOISE_REDUCE,
-                config.SPEAKER_PROC_ENABLE_VAD, config.SPEAKER_PROC_ENABLE_RMS_NORMALIZE,
+                config.SPEAKER_PROC_ENABLE_VAD, config.SPEAKER_PROC_ENABLE_STOI,
+                config.SPEAKER_PROC_ENABLE_RMS_NORMALIZE,
             )
     return _audio_processor
 
@@ -408,7 +415,9 @@ def _get_audio_processor() -> Any:
 #   <root>/recognize/<ts>_FAIL-<reason>/              (too-short | too-silent | server-error | ...)
 #   <root>/enroll/<ts>_<norm>_<cohesion>/             (cohesion = mean sim of kept samples to centroid)
 #   <root>/enroll/<ts>_FAIL-<reason>/
-# each dir holds: input.wav / sample_NN.wav, *.npy embeddings, result.json.
+# each dir holds: input.wav (raw) + preprocessed.wav (post VAD/STOI/RMS, what was
+# uploaded) / sample_NN.wav, *.npy embeddings, result.json (result.json carries the
+# preprocessing metrics — incl. STOI score — and, on a gate reject, the reason).
 # NOTE: speaker_logs/ lands inside the source tree — don't commit it (the whole
 # SPEAKER-DEBUG block is meant to be removed before deploy anyway).
 def _debug_audio_stats(wav_bytes: bytes) -> tuple[Optional[float], Optional[float]]:
@@ -564,6 +573,8 @@ class _SpeakerDebugTracer:
             return "no-voice"
         if "low_voice_ratio" in msg:
             return "low-voice"
+        if "low_intelligibility" in msg:
+            return "low-stoi"
         if "too_short" in msg or "too short" in msg:
             return "too-short"
         if "too silent" in msg:
@@ -600,6 +611,10 @@ class SpeakerRecognizer:
         # cluster match score / re-appearance without changing that method's
         # return signature. Only ever written when self._debug.enabled.
         self._debug_stranger: Optional[dict[str, Any]] = None
+        # SPEAKER-DEBUG: last on-device preprocessing snapshot (cleaned WAV +
+        # VAD/STOI metrics), stashed by _prepare_wav_for_embedding so the
+        # recognize() trace can log what the gate produced. Reset per recognize.
+        self._debug_preproc: Optional[dict[str, Any]] = None
 
         self._crypto: CryptoSession | None = None
         if config.DL_ENCRYPTION_ENABLED:
@@ -846,15 +861,58 @@ class SpeakerRecognizer:
             # AudioGateRejectedError (not a plain SpeakerRecognizerError) so the
             # enroll path keeps previously-accepted on-disk samples instead of
             # deleting them when the gate gets stricter.
-            raise AudioGateRejectedError(
+            err = AudioGateRejectedError(
                 f"audio rejected by preprocessing gate [{e.reason}]: {e}"
-            ) from e
+            )
+            err.gate_detail = e.to_dict()  # SPEAKER-DEBUG: reason + VAD/STOI metrics
+            raise err from e
 
         out = np.asarray(cleaned.waveform, dtype=np.float32)
         if out.shape[0] == 0:
             raise SpeakerRecognizerError("preprocessing produced empty audio")
 
-        return [base64.b64encode(_float32_waveform_to_wav_bytes(out)).decode("ascii")]
+        cleaned_wav = _float32_waveform_to_wav_bytes(out)
+        if self._debug.enabled:  # SPEAKER-DEBUG
+            self._debug_preproc = self._debug_preproc_snapshot(out, cleaned_wav, processor)
+        return [base64.b64encode(cleaned_wav).decode("ascii")]
+
+    def _debug_preproc_snapshot(  # SPEAKER-DEBUG (remove before deploy)
+        self, cleaned: np.ndarray, cleaned_wav: bytes, processor: Any
+    ) -> dict[str, Any]:
+        """Snapshot the on-device preprocessing result for the recognize trace.
+
+        Captures the cleaned/uploaded WAV plus its duration/RMS and the STOI
+        gate's pass score (pulled off the SpeechIntelligibilityFilter stage, if
+        present). Only called when debug is enabled.
+        """
+        dur = round(float(cleaned.shape[0]) / _TARGET_SR, 3)
+        rms = (round(float(np.sqrt(np.mean(cleaned.astype(np.float64) ** 2))), 6)
+               if cleaned.size else 0.0)
+        stoi_score: Optional[float] = None
+        stoi_threshold: Optional[float] = None
+        for p in getattr(processor, "_processors", []):
+            if type(p).__name__ == "SpeechIntelligibilityFilter":
+                s = getattr(p, "last_score", float("nan"))
+                stoi_score = None if (s is None or np.isnan(s)) else round(float(s), 4)
+                stoi_threshold = getattr(p, "_threshold", None)
+                break
+        return {
+            "cleaned_wav": cleaned_wav,          # popped into the trace's wavs
+            "cleaned_duration_s": dur,
+            "cleaned_rms": rms,
+            "stoi_score": stoi_score,
+            "stoi_threshold": stoi_threshold,
+        }
+
+    def _debug_preproc_parts(self) -> tuple[dict[str, bytes], Optional[dict[str, Any]]]:
+        """SPEAKER-DEBUG: split the last preprocessing snapshot into
+        (wav-attachments, json-safe metrics) for a recognize trace."""
+        pp = self._debug_preproc or {}
+        wavs: dict[str, bytes] = {}
+        if pp.get("cleaned_wav"):
+            wavs["preprocessed.wav"] = pp["cleaned_wav"]
+        metrics = {k: v for k, v in pp.items() if k != "cleaned_wav"} or None
+        return wavs, metrics
 
     # ------------------------------------------------------------- metadata
 
@@ -1572,6 +1630,7 @@ class SpeakerRecognizer:
             raise SpeakerRecognizerError("empty audio")
 
         wav_bytes = _ensure_wav_16k_mono(raw)
+        self._debug_preproc = None  # SPEAKER-DEBUG: reset per-call preprocessing snapshot
 
         saved_path = self._save_incoming_audio(wav_bytes)
 
@@ -1609,15 +1668,21 @@ class SpeakerRecognizer:
             )
             if self._debug.enabled:  # SPEAKER-DEBUG
                 dur, rms = _debug_audio_stats(wav_bytes)
+                fail_result = {
+                    "source_type": source_type, "error": str(e),
+                    "duration_s": dur, "rms": rms,
+                    "min_audio_s": 0.5,
+                    "unknown_audio_path": saved_path,
+                }
+                # On-device preprocessing-gate rejection (VAD / STOI / quality):
+                # attach the structured reason + metrics (incl. stoi_score).
+                gate_detail = getattr(e, "gate_detail", None)
+                if gate_detail is not None:
+                    fail_result["preprocessing_reject"] = gate_detail
                 self._debug.record(
                     "recognize", reason=self._debug.classify_reason(e),
                     wavs={"input.wav": wav_bytes},
-                    result={
-                        "source_type": source_type, "error": str(e),
-                        "duration_s": dur, "rms": rms,
-                        "min_audio_s": 0.5,
-                        "unknown_audio_path": saved_path,
-                    },
+                    result=fail_result,
                 )
             return {
                 "name": "unknown",
@@ -1654,13 +1719,14 @@ class SpeakerRecognizer:
                 dur, rms = _debug_audio_stats(wav_bytes)
                 st = self._debug_stranger or {}
                 st_score = st.get("score")
+                pp_wavs, pp_metrics = self._debug_preproc_parts()
                 self._debug.record(
                     # No enrolled users → dir named by the stranger cluster and
                     # its match score (how sure this is the same returning voice).
                     "recognize",
                     cls=_debug_stranger_label(vp_hash),
                     confidence=(st_score if st_score is not None else 0.0),
-                    wavs={"input.wav": wav_bytes},
+                    wavs={"input.wav": wav_bytes, **pp_wavs},
                     arrays={
                         "input_chunks.npy": query_chunks,
                         "input_embedding.npy": _l2(query_chunks.mean(axis=0)),
@@ -1678,6 +1744,7 @@ class SpeakerRecognizer:
                         "embedding_dim": int(query_chunks.shape[1]),
                         "candidates": [], "source_type": source_type,
                         "duration_s": dur, "rms": rms,
+                        "preprocessing": pp_metrics,
                         "unknown_audio_path": saved_path,
                     },
                 )
@@ -1818,6 +1885,7 @@ class SpeakerRecognizer:
                 ],
                 "source_type": source_type,
                 "duration_s": dur, "rms": rms,
+                "preprocessing": self._debug_preproc_parts()[1],
                 "unknown_audio_path": saved_path,
             }
             if is_match:
@@ -1838,7 +1906,7 @@ class SpeakerRecognizer:
                 })
             self._debug.record(
                 "recognize", cls=dbg_cls, confidence=dbg_conf,
-                wavs={"input.wav": wav_bytes},
+                wavs={"input.wav": wav_bytes, **self._debug_preproc_parts()[0]},
                 arrays={
                     "input_chunks.npy": query_chunks,
                     "input_embedding.npy": _l2(query_chunks.mean(axis=0)),
