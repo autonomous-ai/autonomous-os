@@ -6,6 +6,7 @@ REJECT_EMPTY_INPUT = "empty_input"
 REJECT_VAD_REMOVED_ALL = "vad_removed_all"
 REJECT_TOO_SHORT = "too_short"
 REJECT_LOW_VOICE_RATIO = "low_voice_ratio"
+REJECT_LOW_INTELLIGIBILITY = "low_intelligibility"
 
 
 class PreprocessRejected(ValueError):
@@ -23,6 +24,8 @@ class PreprocessRejected(ValueError):
         voice_ratio: float = 0.0,
         min_duration_sec: float = 0.0,
         min_voice_ratio: float = 0.0,
+        stoi_score: float = float("nan"),
+        stoi_threshold: float = float("nan"),
     ) -> None:
         self.reason: str = reason
         self.input_duration_sec: float = float(input_duration_sec)
@@ -30,6 +33,9 @@ class PreprocessRejected(ValueError):
         self.voice_ratio: float = float(voice_ratio)
         self.min_duration_sec: float = float(min_duration_sec)
         self.min_voice_ratio: float = float(min_voice_ratio)
+        # STOI intelligibility gate (REJECT_LOW_INTELLIGIBILITY only)
+        self.stoi_score: float = float(stoi_score)
+        self.stoi_threshold: float = float(stoi_threshold)
         super().__init__(self._format_message())
 
     def _format_message(self) -> str:
@@ -54,6 +60,13 @@ class PreprocessRejected(ValueError):
                 f"(stripped_duration={self.stripped_duration_sec:.2f}s, "
                 f"input_duration={self.input_duration_sec:.2f}s)."
             )
+        if self.reason == REJECT_LOW_INTELLIGIBILITY:
+            return (
+                f"mean STOI={self.stoi_score:.3f} below minimum "
+                f"{self.stoi_threshold:.3f} "
+                f"(input_duration={self.input_duration_sec:.2f}s) — "
+                f"noisy or unintelligible audio."
+            )
         return f"Preprocess rejected: {self.reason}."
 
     def to_dict(self) -> Dict[str, Any]:
@@ -66,4 +79,6 @@ class PreprocessRejected(ValueError):
             "voice_ratio": round(self.voice_ratio, 3),
             "min_duration_sec": round(self.min_duration_sec, 3),
             "min_voice_ratio": round(self.min_voice_ratio, 3),
+            "stoi_score": round(self.stoi_score, 3),
+            "stoi_threshold": round(self.stoi_threshold, 3),
         }

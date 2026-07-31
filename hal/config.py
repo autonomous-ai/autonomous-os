@@ -406,6 +406,26 @@ SPEAKER_PROC_ENABLE_RMS_NORMALIZE: bool = (
 SPEAKER_PROC_RMS_TARGET: float = float(
     os.environ.get("HAL_SPEAKER_PROC_RMS_TARGET", "0.1")
 )
+# STOI intelligibility gate (SQUIM-STOI ONNX) — rejects noisy / broken-voice
+# audio before it reaches the embedding server. Runs after VAD, once per
+# utterance; ~20 MB model loaded once. Chunked by CHUNK_SEC + mean-aggregated to
+# bound memory on long clips. Gate is ON only if the model file is present.
+SPEAKER_PROC_ENABLE_STOI: bool = (
+    os.environ.get("HAL_SPEAKER_PROC_ENABLE_STOI", "true").lower() == "true"
+)
+SPEAKER_PROC_STOI_MODEL_PATH: str = os.environ.get(
+    "HAL_SPEAKER_PROC_STOI_MODEL_PATH",
+    os.path.join(
+        os.path.dirname(__file__),
+        "drivers", "voice", "resources", "squimm_stoi.onnx",
+    ),
+)
+SPEAKER_PROC_STOI_THRESHOLD: float = float(
+    os.environ.get("HAL_SPEAKER_PROC_STOI_THRESHOLD", "0.75")
+)
+SPEAKER_PROC_STOI_CHUNK_SEC: float = float(
+    os.environ.get("HAL_SPEAKER_PROC_STOI_CHUNK_SEC", "5.0")
+)
 
 # --- Sensing: Speech emotion recognition (SER via perception-service) ---
 SPEECH_EMOTION_ENABLED: bool = (
