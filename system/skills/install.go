@@ -92,6 +92,14 @@ func InstallSkillArchive(archivePath, skillsDir, fallbackName string) (string, i
 		return "", 0, ErrEmptyArchive
 	}
 
+	// A skill without SKILL.md at its root is not a skill: the agent has nothing
+	// to load, so it would install as dead weight. Checked on the STAGING copy so
+	// a rejected archive never reaches the live tree.
+	if _, err := os.Stat(filepath.Join(staging, SkillMarkdownFile)); err != nil {
+		_ = os.RemoveAll(staging)
+		return "", 0, ErrMissingSkillMD
+	}
+
 	// Swap in. The old dir is moved aside first so a failed rename can be undone.
 	backup := target + ".old"
 	_ = os.RemoveAll(backup)

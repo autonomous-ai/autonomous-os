@@ -63,7 +63,7 @@ The OS server uses MQTT to communicate with the backend server (status reporting
 `openclaw`. The response also carries these optional fields when known:
 `hal_version`, `openclaw_version`, `hermes_version`, `picoclaw_version`,
 `codex_version`, `claudecode_version`, `opencode_version`, `local_ip`, `tts_provider`, `tts_voice`,
-`stt_language`, `timezone`, `unsupported_channels`. `timezone` is the device's
+`stt_language`, `timezone`, `unsupported_channels`, `skills`. `timezone` is the device's
 **live** IANA zone (e.g. `Asia/Ho_Chi_Minh`), read fresh from `/etc/timezone`
 (falling back to config), not just the config record. The six per-runtime
 versions are all probed at startup (each from its own `--version`) and
@@ -74,6 +74,17 @@ device that the **active** runtime cannot run. It is populated by `ChannelReconc
 after a runtime switch — e.g. switching `openclaw` → `picoclaw` (telegram-only) leaves
 any configured `slack`/`discord` as unsupported. The list is sourced from
 `config.channels_unsupported`, which `ChannelReconcile` rewrites on each switch.
+
+`skills` (omitted when empty) is what the **active** runtime currently has
+installed — the same set the web UI's Manage-skills panel shows
+(`AgentGateway.ListSkills`). Shape is
+`[{"name":"music","description":"Play music."}]`: name + description only, never
+the per-skill file trees that `GET /api/agent/skills` also returns. The HTTP ping
+carries the identical array (same `domain.SkillSummary` type, so the two uplinks
+cannot drift). Best-effort — a runtime that can't list skills or an unreadable
+skills dir omits the field instead of failing the uplink. The field lives on
+`MQTTInfoResponse`, which the `data` replies embed, but only `handleInfo`
+populates it, so `data` results never carry it.
 
 **HTTP backend ping mirrors these fields.** The device-initiated ping
 (`POST {llm_base}/ping`, built by `system/device.buildPingPayload`, sent via
@@ -87,6 +98,18 @@ fire-and-forget — publishes `local_ip` before the up-to-2-min agent setup, so
 the Setup-popup rescue described in `docs/setup-flow.md` can work), (2) once
 when setup completes (status `working`), and (3) periodically from the status
 reporter. Fields the backend doesn't consume are simply ignored.
+
+The ping also carries **`skills`** — what the active runtime currently has
+installed, the same set the web UI's Manage-skills panel shows
+(`AgentGateway.ListSkills`, also served by `GET /api/agent/skills`). Sent on
+every ping so the backend's per-device skill index self-heals, the same rationale
+as `slack_team_id`. Shape is `[{"name":"music","description":"Play music."}]` —
+**name + description only**, deliberately not the per-skill file trees that
+endpoint also returns: the ping fires every 15s, so shipping full trees that
+often would be pure waste (the web detail pane fetches them on demand from
+`GET /api/agent/skills/files` instead). Best-effort — a runtime that cannot list
+skills, an unreadable skills dir, or a device with none simply omits the field
+rather than failing a ping that also carries the setup-critical `local_ip`.
 
 **The ping survives a LAN address change.** A device's address is not stable —
 moving the ethernet cable to another network, or a DHCP re-lease, changes it
@@ -301,12 +324,19 @@ optional `error`, and an optional `data` payload.
 |------|---------|---------------|
 | `tts.set` | Persist TTS voice/provider/language config | `provider`, `voice`, `language` |
 | `tts.preview` | One-shot TTS preview (no config write) | `text` (required), optional `provider`/`voice`/`language` |
+| `wakeword.gate` | Set the top-level wake-word gate (async; acks `starting`) | `enabled` (required boolean) |
 | `timezone.set` | Apply the device's IANA timezone (async; acks `starting`) | `timezone` (required, e.g. `Asia/Ho_Chi_Minh`) |
 | `oauth.set` | Store/replace an OAuth token for a provider | `provider`, `access_token`, optional `refresh_token`/`token_type`/`expires_at`/`scopes`/`user_email`/`client_id` |
 | `oauth.remove` | Delete the stored OAuth token for a provider | `provider` |
 | `connector.set.<code>` | Store/replace credentials for a connector (async; acks `starting`) | `connector`, `auth_type`, optional `access_token`/`refresh_token`/`api_key`/`expires_in`/`expires_at`/`scopes`/`credentials`/`refresh` |
 | `connector.remove.<code>` | Delete a connector's credentials (async; acks `starting`) | `connector` |
 | `channel.refresh_config` | Re-apply a channel's canonical config block (async; acks `configuring`) | `channel` |
+| `skills.install_store` | Install ONE catalog skill on the active runtime (async; acks `starting`) | `id`, optional `name` |
+| `skills.files` | Read one installed skill's files — list, or one file's contents (synchronous) | `name`, optional `path` |
+| `skills.uninstall` | Remove one installed skill from the active runtime (synchronous) | `name` |
+| `skills.save` | Write one authored skill into the active runtime's skills dir (synchronous) | `name`, `description`, `instructions` |
+| `chat.file.get` | Fetch one device-local file a turn named (synchronous) | `path` (required), optional `session_id`/`run_id` |
+| `chat.send` | Start an agent turn from the backend and stream it back (acks a run id, then emits `chat.event`) | `message` (required), optional `image`/`file`/`session_id`/`speak` |
 | `system.info` | Aggregate snapshot: versions + network + host | _(none)_ |
 | `system.version` | Component versions only (cheaper than `system.info`) | _(none)_ |
 | `system.network` | network facts of the default-route interface only | _(none)_ |
@@ -363,6 +393,20 @@ local HAL `/version` endpoint, `openclaw` from the agent monitor's cached probe
 (`openclaw_detected` distinguishes "not installed" from "installed but unparseable").
 
 An unrecognized `kind` replies with `status:"failure"` and `error:"unknown kind: <kind>"`.
+
+#### `wakeword.gate`
+
+Turns the top-level `wakeword` flag on or off. It uses the same asynchronous
+acknowledgement pattern as `realtime.set`: the device acknowledges receipt,
+persists the flag to `config.json`, restarts HAL when the value changes, then
+publishes the outcome.
+
+**Receive:** `{"cmd":"data","kind":"wakeword.gate","data":{"enabled":true}}`
+
+The terminal success acknowledgement echoes `{"enabled":true}`. Omitting
+`enabled` or supplying invalid JSON returns `status:"failure"`. `success`
+means the flag was saved and HAL is restarting; it does not wait for HAL to be
+ready.
 
 #### `timezone.set`
 
@@ -470,6 +514,379 @@ so the backend can correlate refresh outcomes with runtime upgrades. Error codes
 | `slack_credentials_missing` | config.json has no credentials for the channel being refreshed (kept for wire back-compat; applies to any channel, not just slack) |
 | `channel_not_supported` | the active runtime can't run this channel |
 
+#### `skills.install_store`
+
+The MQTT twin of `POST /api/agent/skills/install` (the web UI's Install button).
+The device downloads the catalog's `.skill` archive and the **active** runtime
+extracts it into its own skills dir via `AgentGateway.InstallSkillArchive`, so
+this works on every backend, not just openclaw.
+
+> The `_store` suffix is only because the bare `skills.install` kind is already
+> taken by the older, different feature: a whole ROLE bundle written straight
+> into `OpenclawConfigDir`.
+
+**Receive:** `{"cmd": "data", "kind": "skills.install_store", "data": {"id": "6a195e59e438b1a9f06299d0"}}`
+
+`id` is the catalog skill id. Optional `name` is a fallback used **only** when the
+archive has no single wrapping directory to take the skill name from (catalog
+`.skill` bundles normally do, shaped `<name>/SKILL.md`).
+
+**Async** — the download crosses the network, so the device acks `starting` and
+publishes a terminal status when done.
+
+```json
+{
+  "device": "lamp", "type": "data", "kind": "skills.install_store",
+  "status": "starting | success | failure",
+  "error": "<step>: <message>",
+  "data": { "id": "6a19\u2026", "name": "design-critique", "runtime": "OpenClaw",
+            "path": "/root/.openclaw/workspace/skills/design-critique" }
+}
+```
+
+`data.name` is read back from the directory that was actually created, so the
+device never has to be told the name. `data.runtime` + `data.path` say which
+runtime stored it and where — both differ per backend.
+
+| `failed_step` | Meaning |
+|---------------|---------|
+| `validate_id` | id empty or contains a path separator (`/ \\ ? #`) |
+| `temp_dir` | could not create the staging dir |
+| `download` | catalog unreachable, non-200, or the id doesn't exist |
+| `archive` | the downloaded file isn't a usable zip / is empty |
+| `validate_name` | the skill name derived from the archive isn't a legal slug |
+| `unsupported_runtime` | the active runtime has no device-writable skills dir; **nothing was installed** |
+| `install` | extract/swap failure |
+
+Installing **replaces** an existing skill of the same name — unlike
+`skills.save`, which refuses to overwrite: installing is an explicit instruction,
+authoring is not. The extract is staged in `<skill>.new` and swapped in only on
+full success (previous version kept at `<skill>.old` until then), so a corrupt
+download can never leave a half-installed skill or destroy a working one.
+
+Concurrency: shares one mutex with `skills.install` and `skills.save` — all three
+write into the same skills dir. A second one arriving mid-flight fails fast with
+`"another skills install is already in progress; try again later"`.
+
+No gateway restart: every backend with a skills dir picks new files up per
+session.
+
+#### `skills.files`
+
+The MQTT twin of `GET /api/agent/skills/files`. That endpoint is LAN-only and
+admin-gated, so the backend — and through it a mobile app — has no way to inspect
+a skill the `skills` uplink advertised. This is that way in.
+
+**Two modes**, because MQTT is not a bulk transport and a whole skill can be
+megabytes:
+
+| Receive | Returns |
+|---------|---------|
+| `{"name":"music"}` | the file **list** — `path` / `size` / `binary` per entry, **no contents** |
+| `{"name":"music","path":"music/SKILL.md"}` | that **one file**, contents inlined |
+
+`path` must be the entry path exactly as the list reported it (relative to the
+skills root, so it includes the skill dir). A basename or a `..` attempt does not
+resolve — lookup is an exact match against the listing, never a filesystem join.
+When `path` is supplied, the device reads only that file; a reference-heavy skill
+does not delay the reply by loading all of its other files first.
+
+**Synchronous** — reading a skill dir is local disk, so there is no `starting` ack.
+
+List mode:
+```json
+{
+  "device": "lamp", "type": "data", "kind": "skills.files",
+  "status": "success",
+  "data": { "name": "music", "runtime": "OpenClaw", "files": [
+    {"path": "music/SKILL.md", "size": 1204},
+    {"path": "music/reference/tempo.md", "size": 380},
+    {"path": "music/assets/icon.png", "size": 9001, "binary": true}
+  ]}
+}
+```
+
+Single-file mode returns `data.file` instead: the same entry plus `text`, and
+`truncated: true` when the body was cut.
+
+**Size budget.** This uplink returns up to the first **5 KiB** of a requested
+text file and flags `truncated: true` when it cut content. The cut never splits a
+multi-byte rune, so text stays valid UTF-8. Binary entries carry metadata only,
+never bytes.
+
+| `failed_step` | Meaning |
+|---------------|---------|
+| `validate_name` | skill name isn't a legal slug |
+| `not_found` | the requested `path` isn't in that skill |
+| `unsupported_runtime` | the active runtime has no device-readable skills dir |
+| `read` | skill missing (stale listing) or unreadable |
+
+#### `skills.uninstall`
+
+The MQTT twin of `DELETE /api/agent/skills`. Removes the skill from whichever
+skills dir the **active** runtime owns, via `AgentGateway.DeleteSkill`.
+
+**Receive:** `{"cmd": "data", "kind": "skills.uninstall", "data": {"name": "music"}}`
+
+**Synchronous** — removing a directory is local disk, so there is no `starting` ack.
+
+```json
+{
+  "device": "lamp", "type": "data", "kind": "skills.uninstall",
+  "status": "success | failure",
+  "error": "<step>: <message>",
+  "data": { "name": "music", "runtime": "OpenClaw",
+            "path": "/root/.openclaw/workspace/skills/music" }
+}
+```
+
+**Not idempotent on purpose:** a skill that isn't installed comes back
+`failed_step: "not_found"`, not success — so a stale backend view or a
+double-send is visible instead of being reported as a deletion that never
+happened.
+
+| `failed_step` | Meaning |
+|---------------|---------|
+| `validate_name` | name isn't a legal slug — a `..` or `/` can never reach outside the skills dir |
+| `not_found` | no such skill (or the path isn't a skill directory) |
+| `unsupported_runtime` | the active runtime has no device-writable skills dir |
+| `remove` | filesystem failure |
+
+Concurrency: shares one mutex with the install/save kinds, so an uninstall can't
+interleave with an extract into the same tree.
+
+On Hermes the roots are tried device-owned first, matching the listing's
+precedence — so an uninstall removes the skill the `skills` uplink actually
+advertised.
+
+#### `skills.save`
+
+Writes ONE authored skill into whichever skills dir the **active** agentic runtime
+owns. The MQTT twin of `POST /api/agent/skills`: both call
+`AgentGateway.SaveSkill`, so a backend-pushed skill lands in exactly the same
+place as one written in the web UI's "Write skill" form and honours the same
+no-overwrite rule.
+
+**Receive:**
+```json
+{"cmd": "data", "kind": "skills.save", "data": {
+  "name": "weekly-status-report",
+  "description": "Summarise the week's activity into a short status report.",
+  "instructions": "When the user asks for a weekly status report:\n1. …"
+}}
+```
+
+`name` + `description` become the SKILL.md YAML front-matter, `instructions` the
+markdown body (`skills.RenderSkillMarkdown`). All three are required; each is
+trimmed first, so a padded value is accepted rather than rejected.
+
+**Synchronous** — unlike `skills.install` there is no `starting` ack: writing one
+file takes milliseconds, so the device publishes a single terminal status.
+
+```json
+{
+  "device": "lamp",
+  "type": "data",
+  "kind": "skills.save",
+  "status": "success | failure",
+  "error": "<step>: <message>",
+  "data": { "name": "weekly-status-report", "runtime": "OpenClaw",
+            "path": "/root/.openclaw/workspace/skills/weekly-status-report/SKILL.md" }
+}
+```
+
+`data.runtime` names the runtime that stored it and `data.path` is where it
+landed — both differ per backend, so the backend can tell which tree received the
+skill. On failure `data.failed_step` carries the same label as the `error` prefix:
+
+| `failed_step` | Meaning |
+|---------------|---------|
+| `validate_name` | name isn't a `^[a-z0-9_-]+$` slug, or is over 64 chars |
+| `already_exists` | a skill of that name is already installed — authoring never overwrites |
+| `unsupported_runtime` | the active runtime has no device-writable skills dir; **nothing was stored** |
+| `write` | filesystem failure |
+
+The name shape is validated inside `SaveSkill` (via `skills.ValidateSkillName`),
+not at the MQTT layer, so this path and the HTTP one can never disagree on what a
+legal skill name is.
+
+Concurrency: `skills.save` shares its mutex with `skills.install` — both write
+into the same skills dir. A save arriving mid-install fails fast with
+`"a skills install is in progress; try again later"` rather than stalling the MQTT
+dispatch loop for the length of a CDN download.
+
+No gateway restart: every backend with a skills dir picks new files up per
+session.
+
+#### `chat.send` + `chat.event`
+
+Lets the backend (and through it a phone app) hold the **same conversation the
+web monitor's chat holds**. The web chat is two halves — `POST
+/api/sensing/event` with `type:"web_chat"` to start a turn, and the SSE stream
+`GET /api/agent/events` to render it — and both are device-local behind admin
+auth, so a phone on mobile data can reach neither. fa/fd is already a
+per-device path that survives NAT, so the pair rides here.
+
+```
+mobile ──HTTP──▶ backend ──fa: chat.send──▶ device
+mobile ◀── SSE ── backend ◀── fd: chat.event × N ── device
+```
+
+**Receive:**
+```json
+{"cmd": "data", "kind": "chat.send", "data": {
+  "message": "what do you see?",
+  "image": "<base64 jpeg, optional>",
+  "file": {"name": "report.pdf", "mime": "application/pdf", "content": "<base64>"},
+  "session_id": "abc123",
+  "speak": false
+}}
+```
+
+`message` is required. `image` is the same base64 the web chat puts in the
+sensing event, so a phone attaches a photo the same way.
+
+`file` is for anything that is NOT a photo — a PDF, a CSV. Deliberately its own
+field rather than more traffic through `image`: an image goes through the
+device's describe-first vision gate, and a document must not (it would fail
+there). It lands in `/tmp` with its **real** extension and the turn carries a
+`[file: <path> (<name>)]` tag so the agent can open it; `name` is used only for
+that extension and the display label, never as the path, so a hostile filename
+cannot steer the write. Capped at 10 MB decoded (`agentfile.InboundMaxBytes`),
+matching the web composer's own check. `mime` is advisory — the device decides
+nothing from it. Both fields may be sent together. `session_id` is opaque
+to the device — echoed on the ack and on every event so the backend can fan the
+stream to the right client; the device does **not** partition conversation state
+by it, since there is one agent and one history, exactly as if two people stood
+next to the box. `speak` (default false) makes the device say the reply out loud
+too; off by default because a user chatting from another room does not expect it
+to start talking — the same reason the web chat suppresses TTS.
+
+**Ack** (immediate, carries only the correlation id — not the reply):
+```json
+{
+  "device": "<device_type>", "type": "data", "kind": "chat.send",
+  "status": "success | failure",
+  "data": { "run_id": "run-…", "session_id": "abc123" }
+}
+```
+
+**Then a stream** of `chat.event`, device-initiated, one per monitor event of
+that run:
+```json
+{
+  "device": "<device_type>", "type": "data", "kind": "chat.event", "status": "success",
+  "data": { "run_id": "run-…", "session_id": "abc123",
+            "event": { "id": "evt-42", "time": "…", "type": "assistant_delta",
+                       "summary": "Taking a photo", "runId": "run-…" } }
+}
+```
+
+`event` is `domain.MonitorEvent` **verbatim** — the same struct the web SSE
+stream delivers (`assistant_delta`, `thinking`, `tool_call`, `hw_*`,
+`token_usage`, `chat_response`). That is deliberate: a client reuses the web
+chat's reducer instead of a second vocabulary that would drift the first time an
+event type is added.
+
+Implementation notes that matter to a backend author:
+
+- **Only backend-started runs are mirrored.** The bus carries every turn on the
+  device, including spoken ones; a run is tracked when its `chat.send` is
+  accepted and untracked at its terminal event, with a 10-minute TTL for turns
+  that die without one.
+- **A turn emits MANY `chat_response` events, and only the last one ends it.**
+  The runtime pushes `chat_response` repeatedly as a reply streams in — the
+  earlier ones carry `state` `"delta"`/`"partial"`, each with a longer prefix of
+  the same reply. The run ends only at `state` `"complete"`, `"final"` or
+  `"error"` (or at a `no_reply` event, which fires once by nature). A client that
+  treats the first `chat_response` as the end shows every reply truncated to its
+  first chunk — the exact bug this shipped with. The web monitor's reducer
+  applies the same rule (`ChatSection.tsx`), which is the point of sharing one
+  event vocabulary.
+- **`assistant_delta` is coalesced** into ~250 ms batches. The bus emits one
+  delta per model chunk and every fd publish is QoS 1 (a round-trip), so
+  forwarding them 1:1 would cost more than generating them. A coalesced event
+  carries the whole accumulated run of text, `detail.coalesced: true`, and an
+  **empty `id`** so it can't be mistaken for a replay of the chunk it was built
+  from. Pending text is always flushed *before* any other event, so a tool chip
+  never overtakes the sentence it followed.
+- **The turn re-enters the device's own sensing endpoint over loopback** rather
+  than calling the AgentGateway directly, so the describe-first vision gate, the
+  agent-busy queue fork, the web-chat run marking and the flow logging are the
+  same code the web chat exercises. Same reasoning as the Hermes gateway hook
+  POSTing to `/api/agent/channel-turn`.
+- **A dedicated broker client** (`device-<id>-chat`) is held open for the stream.
+  The shared `publish` helper opens and closes a connection per message, which is
+  right for a one-shot command result and ruinous for dozens of events a turn.
+  A distinct client id matters: two connections sharing one id make the broker
+  evict the first.
+**Files the turn produced — `chat.file.get`**
+
+A turn can only NAME a file it made: "take a photo" ends with an absolute path
+like `/root/.openclaw/media/hal-snapshots/snap_*.jpg`. The client spots that path
+in the message it is rendering and asks for the file — the MQTT twin of the web
+chat fetching `GET /api/agent/file`.
+
+**Client-driven pull, not a device push.** Same shape as the web deliberately:
+it works on messages the client ALREADY has (a conversation scrolled back weeks
+still resolves its images, which a push covering only the live turn never
+would), files nobody opens cost nothing on the device's uplink, and a phone
+reuses the web client's path regex and its "on failure just leave the path as
+text" behaviour instead of a second implementation.
+
+**Receive:**
+```json
+{"cmd": "data", "kind": "chat.file.get", "data": {
+  "path": "/root/.openclaw/media/hal-snapshots/snap_1785393455291.jpg",
+  "session_id": "abc123",
+  "run_id": "run-…"
+}}
+```
+
+`path` is required. `session_id` / `run_id` are opaque to the device and echoed
+back untouched so the backend can route the reply to the client that asked; both
+are optional, since a file can be requested long after its run ended.
+
+**Reply:**
+```json
+{
+  "device": "<device_type>", "type": "data", "kind": "chat.file.get",
+  "status": "success",
+  "data": {
+    "run_id": "run-…", "session_id": "abc123",
+    "name": "snap_1785393455291.jpg",
+    "path": "/root/.openclaw/media/hal-snapshots/snap_1785393455291.jpg",
+    "mime": "image/jpeg", "size": 43165,
+    "content": "<base64>"
+  }
+}
+```
+
+- **`path` is client-supplied, so it is hostile input.** What may leave the
+  device is decided by `system/agentfile` — the same allow-list
+  `GET /api/agent/file` enforces, deliberately one implementation: an allow-list
+  with two copies is two chances to widen one by accident. Roots are `media/` +
+  `workspace/` per runtime plus `/tmp`; `.json` and `.log` are not served (a
+  runtime's config JSON holds gateway tokens); the path must resolve
+  (`EvalSymlinks`) inside a root, so `..` and symlink escapes both fail.
+- **Every refusal is the same message**, `"file not available"`. Which of wrong
+  type / outside the roots / absent it was would tell a prober about the
+  device's filesystem; the real reason is logged on the device.
+- **`content` is base64**, mirroring how a `chat.send` carries an inbound image,
+  so the backend handles one encoding in both directions.
+- **Over 2 MB the bytes are dropped, the record is not**: `too_large: true` with
+  `content` empty and the real `size`, so a client can say "a 12 MB video"
+  instead of showing nothing. That cap is the MQTT inline budget, much tighter
+  than the 32 MB `agentfile.MaxBytes` governing a same-network HTTP fetch — this
+  is a device uplink shared with every other command, and base64 adds a third on
+  top.
+- **Cache the bytes backend-side.** Every request re-reads and re-encodes on the
+  device, and `/tmp` files do not survive a reboot.
+
+Superseded: `integrations/chat-bridges/autonomous-chat-hook/` forwards backend
+chat one-way as `type:"voice"`, so the device speaks the reply and nothing comes
+back. It cannot back a chat UI; this pair replaces it for that purpose.
+
 ### `ota` — Trigger OTA update
 
 Handled by bootstrap worker, not through MQTT handler directly.
@@ -487,6 +904,14 @@ Handled by bootstrap worker, not through MQTT handler directly.
 | `system/server/device/delivery/mqtt/add_channel_hander.go` | Handle `add_channel` command (streams pairing events for WhatsApp) |
 | `system/server/device/delivery/mqtt/slack_event_handler.go` | Handle `slack_event` / `slack_command` (runtime-aware: forwards Slack HTTP-mode events/slash commands to the local OpenClaw gateway, or drives a hermes turn when the runtime is a `SlackBridge`) |
 | `system/server/device/delivery/mqtt/data_handler.go` | Handle `data` command kinds `oauth.set`/`oauth.remove` (+ access-token store) |
+| `system/server/device/delivery/mqtt/skills_install_store_handler.go` | Handle `skills.install_store` (async catalog download → `AgentGateway.InstallSkillArchive`) |
+| `system/server/device/delivery/mqtt/skills_files_handler.go` | Handle `skills.files` (read one installed skill's files: list, or one file's contents) |
+| `system/server/device/delivery/mqtt/skills_uninstall_handler.go` | Handle `skills.uninstall` |
+| `system/server/device/delivery/mqtt/chat_send_handler.go` | Handle `chat.send` — forwards the turn over loopback to the sensing endpoint |
+| `system/server/device/delivery/mqtt/chat_stream.go` | Mirror a chat run's monitor events back as `chat.event` |
+| `system/server/device/delivery/mqtt/chat_file_handler.go` | Handle `chat.file.get` — validate a requested path and return the file |
+| `system/agentfile/agentfile.go` | Package deciding which device files an agent turn may hand out, plus the path scanner clients use to find them (shared by `chat.file.get` and `GET /api/agent/file`) |
+| `system/server/device/delivery/mqtt/skills_save_handler.go` | Handle `skills.save` (synchronous authored-skill write via `AgentGateway.SaveSkill`) |
 | `system/server/device/delivery/mqtt/connector_handler.go` | Handle `connector.set.<code>`/`connector.remove.<code>` (async, writer dispatch via `connectorWriterFor`) |
 | `system/server/device/delivery/mqtt/connector_writer.go` | `ConnectorWriter` interface + shared `<code>_access_tokens.json` file helpers |
 | `system/server/device/delivery/mqtt/connector_writer_generic.go` | Data-driven `connectorWriter`: payload-driven MCP routing, fallback table, path-traversal guard, per-connector token files |

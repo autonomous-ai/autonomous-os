@@ -1,13 +1,13 @@
 package skills
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"go.autonomous.ai/os/system/domain"
 )
@@ -55,17 +55,29 @@ func ListInstalled(skillsDir string) ([]domain.InstalledSkill, error) {
 		}
 
 		dir := filepath.Join(skillsDir, name)
-		files, err := walkSkillTree(dir, name, 0)
+		files, newest, err := walkSkillTree(dir, name, 0)
 		if err != nil {
 			// One unreadable skill must not blank the whole list — report it
 			// with an empty tree and move on.
-			files = nil
+			files, newest = nil, time.Time{}
 		}
-		out = append(out, domain.InstalledSkill{
+		// Fall back to the directory's own mtime when the tree yielded nothing
+		// to stat, so an empty skill dir still reports when it appeared.
+		if newest.IsZero() {
+			if info, err := e.Info(); err == nil {
+				newest = info.ModTime()
+			}
+		}
+
+		skill := domain.InstalledSkill{
 			Name:        name,
 			Description: readSkillDescription(filepath.Join(dir, "SKILL.md")),
 			Files:       files,
-		})
+		}
+		if !newest.IsZero() {
+			skill.UpdatedAt = newest.Unix()
+		}
+		out = append(out, skill)
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -103,21 +115,32 @@ func ListInstalledFrom(dirs ...string) ([]domain.InstalledSkill, error) {
 	return out, nil
 }
 
-// walkSkillTree builds the node list for dir. relBase is the path prefix used
-// for each node's Path (relative to the skills root, so "music/SKILL.md").
-// Directories sort before files, each group alphabetically — the order a file
-// browser is expected to show.
-func walkSkillTree(dir, relBase string, depth int) ([]domain.SkillNode, error) {
+// walkSkillTree builds the node list for dir, and alongside it the NEWEST
+// modification time seen anywhere in that subtree (zero when nothing could be
+// stat'd). relBase is the path prefix used for each node's Path (relative to the
+// skills root, so "music/SKILL.md"). Directories sort before files, each group
+// alphabetically — the order a file browser is expected to show.
+//
+// The mtime rides along with the walk rather than getting its own pass: the
+// listing is on the chat modal's open path and the files have just been read.
+func walkSkillTree(dir, relBase string, depth int) ([]domain.SkillNode, time.Time, error) {
 	if depth >= listMaxDepth {
-		return nil, nil
+		return nil, time.Time{}, nil
 	}
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	if len(entries) > listMaxEntriesPerDir {
 		entries = entries[:listMaxEntriesPerDir]
+	}
+
+	var newest time.Time
+	bump := func(t time.Time) {
+		if t.After(newest) {
+			newest = t
+		}
 	}
 
 	nodes := make([]domain.SkillNode, 0, len(entries))
@@ -129,10 +152,11 @@ func walkSkillTree(dir, relBase string, depth int) ([]domain.SkillNode, error) {
 		rel := path.Join(relBase, name)
 
 		if e.IsDir() {
-			children, err := walkSkillTree(filepath.Join(dir, name), rel, depth+1)
+			children, childNewest, err := walkSkillTree(filepath.Join(dir, name), rel, depth+1)
 			if err != nil {
 				continue
 			}
+			bump(childNewest)
 			nodes = append(nodes, domain.SkillNode{
 				Name: name, Path: rel, Dir: true, Children: children,
 			})
@@ -142,6 +166,7 @@ func walkSkillTree(dir, relBase string, depth int) ([]domain.SkillNode, error) {
 		node := domain.SkillNode{Name: name, Path: rel}
 		if info, err := e.Info(); err == nil {
 			node.Size = info.Size()
+			bump(info.ModTime())
 		}
 		nodes = append(nodes, node)
 	}
@@ -152,42 +177,21 @@ func walkSkillTree(dir, relBase string, depth int) ([]domain.SkillNode, error) {
 		}
 		return nodes[i].Name < nodes[j].Name
 	})
-	return nodes, nil
+	return nodes, newest, nil
 }
 
-// readSkillDescription pulls `description:` out of a SKILL.md's YAML
-// front-matter. Deliberately a line scan rather than a YAML parse: the
-// front-matter this reads is the one RenderSkillMarkdown writes (a flat
-// name/description pair), and a malformed or absent header must degrade to ""
-// rather than fail the listing.
+// readSkillDescription pulls `description:` out of a SKILL.md's front-matter,
+// degrading to "" when the file is absent or the header malformed — a listing
+// must never fail over one bad skill. Shares ParseSkillFrontMatter so the
+// listing and the upload validator share one scanner (differing only in how
+// strict they are about completeness).
 func readSkillDescription(skillMD string) string {
-	f, err := os.Open(skillMD)
+	content, err := os.ReadFile(skillMD)
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
-
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
-
-	inFrontMatter := false
-	for sc.Scan() {
-		line := strings.TrimRight(sc.Text(), "\r")
-		trimmed := strings.TrimSpace(line)
-
-		if trimmed == "---" {
-			if !inFrontMatter {
-				inFrontMatter = true
-				continue
-			}
-			return "" // closing delimiter reached with no description
-		}
-		if !inFrontMatter {
-			return "" // no front-matter block at the top of the file
-		}
-		if rest, ok := strings.CutPrefix(trimmed, "description:"); ok {
-			return strings.Trim(strings.TrimSpace(rest), `"'`)
-		}
-	}
-	return ""
+	// Lenient on purpose: the directory already supplies the name, so a SKILL.md
+	// carrying only a description must still show it.
+	_, description, _ := scanFrontMatter(content)
+	return description
 }

@@ -475,6 +475,8 @@ class QwenRealtimeAgent(VoiceAgentBase):
     # --- Reconnect (identical discipline to openai_realtime) ---
 
     def _ensure_connected(self) -> None:
+        if self._stop_event.is_set():
+            return
         if self._connected.is_set():
             return
         now: float = time.monotonic()
@@ -484,7 +486,11 @@ class QwenRealtimeAgent(VoiceAgentBase):
         self._reconnect()
 
     def _reconnect(self) -> None:
+        if self._stop_event.is_set():
+            return
         with self._conn_lock:
+            if self._stop_event.is_set():
+                return
             if self._connected.is_set():
                 return
             self._turn_done.set()  # unblock any waiting commit
@@ -541,6 +547,8 @@ class QwenRealtimeAgent(VoiceAgentBase):
 
             for attempt in range(self._max_retries):
                 self._ensure_connected()
+                if self._stop_event.is_set():
+                    break
                 if not self._connected.is_set():
                     logger.debug(
                         "[realtime] Not connected, skipping attempt %d/%d",
@@ -555,6 +563,8 @@ class QwenRealtimeAgent(VoiceAgentBase):
                         self._sync_send_input(event.input)
                     break  # Success
                 except Exception as e:
+                    if self._stop_event.is_set():
+                        break
                     logger.exception(
                         "[realtime] Send failed (attempt %d/%d): %s",
                         attempt + 1, self._max_retries, e,
@@ -572,6 +582,8 @@ class QwenRealtimeAgent(VoiceAgentBase):
 
             for attempt in range(self._max_retries):
                 self._ensure_connected()
+                if self._stop_event.is_set():
+                    break
                 with self._conn_lock:
                     conn: ClientConnection | None = (
                         self._connection if self._connected.is_set() else None
@@ -584,11 +596,15 @@ class QwenRealtimeAgent(VoiceAgentBase):
                     continue
                 try:
                     completed: bool = self._sync_receive_turn(conn)
+                    if self._stop_event.is_set():
+                        break
                     if not completed:
                         self._fail_fast_turn("connection closed mid-turn")
                         self._drop_connection(conn)
                     break  # Success
                 except QwenRealtimeError as e:
+                    if self._stop_event.is_set():
+                        break
                     logger.warning(
                         "[realtime] Recv failed (attempt %d/%d): %s",
                         attempt + 1, self._max_retries, e,
@@ -596,6 +612,8 @@ class QwenRealtimeAgent(VoiceAgentBase):
                     self._fail_fast_turn("api error")
                     self._drop_connection(conn)
                 except Exception as e:
+                    if self._stop_event.is_set():
+                        break
                     logger.exception(
                         "[realtime] Unexpected recv error (attempt %d/%d): %s",
                         attempt + 1, self._max_retries, e,

@@ -144,7 +144,11 @@ màu/effect/speed từ `STATUS_LED_PRESETS`, override per-device qua section `st
 
 ### Đèn báo mic đang mute (idle indicator)
 
-`STATUS_LED_PRESETS["mic_muted"]` — đỏ sẫm `(140, 0, 0)` breathing speed 0.8. Key HAL-local
+`STATUS_LED_PRESETS["mic_muted"]` — đỏ sẫm `(10, 0, 0)` breathing speed 0.8, dịu hơn hẳn mức mà
+trần `light.max_brightness` ép xuống (riêng gate đã clamp về 120): đây là resting look sáng liên
+tục suốt thời gian mic bị mute, lại thường chiếu về phía user, nên chỉnh theo tiêu chí "liếc là
+thấy" chứ không phải "sáng". Màu đỏ cũng có lợi — ở cùng giá trị nó chỉ mang khoảng một phần tư
+độ chói so với trắng. Key HAL-local
 (không có state Go statusled tương ứng): bật bởi `POST /voice/mute`, tắt bởi `POST /voice/unmute`
 (`app_state._mic_muted_led`). Đây là **trạng thái nghỉ** của strip khi mic đang mute —
 không chặn gì cả:
@@ -158,6 +162,9 @@ không chặn gì cả:
   giữ nguyên ánh sáng chức năng (flag vẫn giữ, thoát scene mà còn mute thì đỏ quay lại
   ở lần restore kế). Các đường scene unmute mic (`/scene` với `mic:"on"`, `/scene/off`)
   cũng clear indicator.
+- **Sleep được ưu tiên:** khi emotion `sleepy` đang hoạt động, strip luôn tắt. Flag mute
+  vẫn được giữ, nhưng restore đến muộn từ emotion/TTS/music không thể vẽ lại indicator đỏ;
+  nó chỉ có thể hoạt động lại sau khi một wake emotion thoát sleep.
 - `_user_led_state` không bao giờ bị đụng — unmute là về lại đúng state user đã lưu.
 - Khi indicator đang giữ strip, transient overlay bị skip (`POST /led/effect` với
   `transient:true`) và **mọi** `POST /led/effect/stop` cũng bị skip: không thể có transient
@@ -174,9 +181,63 @@ Khi lamp start và `config.SetUpCompleted == false` (device đang ở AP/provisi
 ## Ambient Idle Behaviors
 
 Khi Lamp idle (không có interaction):
-- **Breathing LED** — sine-wave brightness. Thở theo màu LED hiện tại; khi chưa có màu nào (vd vừa boot xong), fallback về **trắng ấm dịu `(255, 200, 140)`** (~2700K) speed 0.3, để đèn lúc nghỉ trông như một cái đèn ấm cúng đang bật, không phải màu xanh "thiết bị" lạnh. Nếu user/agent đã đặt màu thì tôn trọng màu đó (breathing dùng màu đó; ambient không đè lên màu đã khóa).
+- **Breathing LED** — sine-wave brightness. Thở theo màu LED hiện tại; khi chưa có màu nào (vd vừa boot xong), fallback về **resting look**, hiện là `(0, 0, 0)` — tối. Nếu user/agent đã đặt màu thì tôn trọng màu đó (breathing dùng màu đó; ambient không đè lên màu đã khóa).
 
 Tự pause khi có interaction, resume sau 60s im lặng.
+
+### Resting look (mặc định: tắt)
+
+Khi chưa có user LED state, strip settle về *resting look*, được định nghĩa ở **hai chỗ và
+phải đổi cùng lúc**:
+
+| Phía | Knob | Nơi tiêu thụ |
+|---|---|---|
+| HAL | `AMBIENT_RESTING_LED` (`hal/presets.py`) | `POST /led/restore` khi không có user state; settle sau khi bỏ mic-mute |
+| os-server | `ambientRestingColor` (`system/ambient/service.go`) | fallback của `breathingLoop` khi `/led/color` đọc ra đen |
+
+Cả hai hiện là **`(0, 0, 0)` — trạng thái nghỉ là tối**. Màu resting đen được xử lý đặc biệt:
+các đường settle sẽ *clear* strip thay vì start effect (một thread effect thở màu đen sẽ đốt
+25 fps ghi SPI và làm `GET /led/color` báo `on: true` trong khi đèn tối thui), còn vòng lặp
+bên Go thì skip nguyên tick thay vì paint. Nhờ vậy đèn thành opt-in — chỉ sáng khi có *action*
+(emotion, status cue, màu do user/agent set, scene) và trở về đen khi action đó nhả strip.
+
+Hai hệ quả cần biết:
+
+- Device lúc idle trông như **đã tắt**, không phải "đang nghỉ". Đây là chủ ý — status cue
+  (`booting`, `connectivity`, …) mới là thứ báo cho user biết có gì đang diễn ra.
+- Sau reboot strip ở yên trong bóng tối cho tới khi có thứ gì cần đèn: sidecar LED là
+  boot-scoped nên mỗi lần boot đều bắt đầu với no user state và rơi vào resting look.
+
+Đổi cả hai knob về `(255, 200, 140)` (trắng ấm ~2700K @ speed 0.3) là khôi phục hành vi cũ:
+đèn idle trông như một cái đèn ấm cúng đang bật thay vì màu xanh "thiết bị" lạnh, và tông ấm
+đó tránh trùng với mọi màu status. Chính look này là thứ bật lại đèn ~60s sau khi user tắt,
+và làm mỗi lần boot lên là đèn sáng.
+
+### "Off" không phải một chế độ
+
+`POST /led/off` **xoá user LED state** (`_save_user_led_state(None)`) chứ không lưu cờ off.
+Vì resting look vốn đã tối, không-có-state chính là off. Chỉ còn hai trạng thái:
+
+| Trạng thái | `_user_led_state` | Lúc nghỉ | Khi có action |
+|---|---|---|---|
+| **Mặc định** | `None` | tối | sáng lên (emotion, status cue, chỉ báo mic-muted) |
+| **Màu user** | solid / paint / effect / scene | đúng màu đó | effect chạy đè lên rồi settle về màu cũ |
+
+`led_should_stay_dark()` (`hal/app_state.py`) là predicate duy nhất cho "để yên cái đèn", và
+mọi thứ vẽ mà không do user yêu cầu đều phải hỏi nó: TTS/music wave, settle sau effect,
+`POST /led/restore`, `POST /led/effect/stop` (clear frame cuối của effect vừa dừng thay vì
+để nó đông cứng trên strip), presence restore/dim, và bên os-server là vòng breathing của
+ambient.
+
+Cố tình **không** gate: lệnh tường minh của user/agent (đó chính là user đang yêu cầu, và
+lệnh đó ghi đè state), cùng với các cue mang thông tin user cần biết — status overlay
+(`POST /led/status`: cam mất mạng, đỏ lỗi, xanh OTA) và chỉ báo mic-muted. Mấy thứ đó xứng
+đáng được sáng kể cả trên strip đang nghỉ.
+
+Trước đây off là một trạng thái sticky riêng, và như vậy tệ hơn: nó nhìn giống hệt trạng thái
+mặc định (đều tối) nhưng hành xử khác, không có cách nào đưa máy về lại mặc định — lối ra duy
+nhất là đặt một màu cụ thể — và reboot thì âm thầm mất nó, vì sidecar là boot-scoped. Sidecar
+cũ còn giữ `{"type": "off"}` sẽ được quy về "không có state" ngay lúc load.
 
 ## LED Trong Emotion
 

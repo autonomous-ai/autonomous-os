@@ -1,7 +1,7 @@
 ---
 schema: autonomous.safety.v1
 light:
-  max_brightness: 180        # 0–255 ceiling; the LED route clamps any higher request
+  max_brightness: 120        # 0–255 ceiling; the LED route clamps any higher request
   # Quiet hours lower the ceiling on real wall-clock time (the device runs all day;
   # this is not a nightlight). 22:00–07:00 → ring dims to 40, agent-independent.
   quiet_hours: { start: "22:00", end: "07:00", max_brightness: 40 }

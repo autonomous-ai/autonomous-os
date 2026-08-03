@@ -1,0 +1,140 @@
+package mqtthandler
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
+
+	"go.autonomous.ai/os/system/domain"
+)
+
+// kind:"chat.send" — start an agent turn from the backend, so a phone app can
+// hold the same conversation the web monitor's chat holds.
+//
+// Deliberately re-enters the device's OWN sensing endpoint over loopback rather
+// than calling the AgentGateway directly. That endpoint is where the describe-
+// first vision gate, the agent-busy queue fork, the web-chat run marking and the
+// flow logging all live (see system/server/sensing/delivery/http/handler.go);
+// reaching past it would mean a second copy of that logic, drifting from the
+// web chat this is supposed to mirror. Same reason the Hermes gateway hook POSTs
+// to /api/agent/channel-turn instead of reaching in.
+
+// chatSendTimeout bounds the loopback call. The endpoint returns as soon as the
+// turn is FORWARDED (it answers with a run id, not with the reply), so this only
+// has to cover the describe-first gate on an attached image.
+const chatSendTimeout = 60 * time.Second
+
+var chatSendClient = &http.Client{Timeout: chatSendTimeout}
+
+// handleChatSend forwards the message and acks with the run id. The reply itself
+// arrives later as a stream of kind chat.event — see chat_stream.go.
+func (h *DeviceMQTTHandler) handleChatSend(env domain.MQTTDataCommand) error {
+	var data domain.MQTTChatSendData
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		slog.Error("chat.send: bad payload", "component", "mqtt-chat", "error", err)
+		return h.publishDataResult(env.Kind, "failure", "invalid data: "+err.Error(), nil)
+	}
+	if strings.TrimSpace(data.Message) == "" {
+		return h.publishDataResult(env.Kind, "failure", "message is required", nil)
+	}
+
+	runID, err := h.forwardChatToSensing(data)
+	if err != nil {
+		slog.Error("chat.send: forward failed", "component", "mqtt-chat", "error", err)
+		return h.publishDataResult(env.Kind, "failure", err.Error(), nil)
+	}
+
+	// Track BEFORE acking: the agent can start emitting deltas the moment the
+	// endpoint returns, and an untracked run's events are dropped on the floor.
+	if h.chatStream != nil {
+		h.chatStream.Track(runID, data.SessionID)
+	}
+
+	slog.Info("chat.send accepted", "component", "mqtt-chat",
+		"run_id", runID, "session_id", data.SessionID,
+		"speak", data.Speak, "has_image", data.Image != "",
+		"has_file", data.File != nil, "msg_len", len(data.Message))
+
+	return h.publishDataResult(env.Kind, "success", "", domain.MQTTChatSendResult{
+		RunID:     runID,
+		SessionID: data.SessionID,
+	})
+}
+
+// sensingRequest is the subset of the sensing endpoint's body this needs. Not
+// the endpoint's own struct: that lives in a package which would import back
+// into this one.
+type sensingRequest struct {
+	Type    string              `json:"type"`
+	Message string              `json:"message"`
+	Image   string              `json:"image,omitempty"`
+	File    *domain.InboundFile `json:"file,omitempty"`
+}
+
+// sensingReply is the standard envelope: {"status":1,"data":{"runId":"..."}}.
+type sensingReply struct {
+	Status  int    `json:"status"`
+	Message string `json:"message"`
+	Data    struct {
+		RunID string `json:"runId"`
+	} `json:"data"`
+}
+
+func (h *DeviceMQTTHandler) forwardChatToSensing(data domain.MQTTChatSendData) (string, error) {
+	// "web_chat" is what suppresses TTS and skips the wake greeting / opening
+	// filler. `speak` opts back into a spoken reply by sending the turn down the
+	// voice path instead — the same distinction the one-way chat hook bridge
+	// hardcodes to "voice".
+	evtType := "web_chat"
+	if data.Speak {
+		evtType = "voice"
+	}
+
+	body, err := json.Marshal(sensingRequest{
+		Type:    evtType,
+		Message: data.Message,
+		Image:   data.Image,
+		File:    data.File,
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshal sensing event: %w", err)
+	}
+
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/sensing/event", h.config.HttpPort)
+	ctx, cancel := context.WithTimeout(context.Background(), chatSendTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("build sensing request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := chatSendClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("post sensing event: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var reply sensingReply
+	if err := json.NewDecoder(resp.Body).Decode(&reply); err != nil {
+		return "", fmt.Errorf("decode sensing reply (http %d): %w", resp.StatusCode, err)
+	}
+	if resp.StatusCode >= 400 || reply.Status != 1 {
+		if reply.Message != "" {
+			return "", fmt.Errorf("sensing rejected the turn: %s", reply.Message)
+		}
+		return "", fmt.Errorf("sensing rejected the turn: http %d", resp.StatusCode)
+	}
+	if reply.Data.RunID == "" {
+		// Without a run id nothing can be correlated, so this is a failure even
+		// though the turn may well be running.
+		return "", fmt.Errorf("sensing returned no run id")
+	}
+	return reply.Data.RunID, nil
+}

@@ -65,20 +65,35 @@ func defaultClientID() string {
 	return "os-mqtt-" + hex.EncodeToString(b)
 }
 
-// Connect establishes the connection and starts auto-reconnect. It returns when the context
-// is cancelled or after an initial connection failure. Run in a goroutine for long-lived use.
+// Connect establishes the connection and starts auto-reconnect, then returns
+// once the initial handshake completes (or ctx gives up waiting / the
+// handshake fails). Run in a goroutine for long-lived use.
 func (c *MQTT) Connect(ctx context.Context) error {
 	c.mu.Lock()
 	if c.conn != nil {
 		c.mu.Unlock()
 		return nil // already connected
 	}
-	c.connCtx, c.connCancel = context.WithCancel(ctx)
+	// The connection's lifetime is deliberately decoupled from ctx: callers
+	// commonly bound ctx only to cap how long they wait for the initial
+	// handshake (context.WithTimeout + defer cancel()) and then keep this
+	// client around for reuse afterward — e.g. chat_stream.go's long-lived
+	// fd_channel publisher. Deriving the connection's own context from ctx
+	// meant that deferred cancel tore the freshly-established connection
+	// back down the instant Connect returned, so every publish after the
+	// first failed with "context deadline exceeded" and never recovered
+	// (closeClient()'s reconnect hit the exact same bug). Close() (via
+	// c.connCancel) is the only intended way to end a connection's life now;
+	// on a failed/timed-out handshake below we cancel it ourselves so the
+	// connection manager's goroutines don't leak.
+	c.connCtx, c.connCancel = context.WithCancel(context.Background())
 	connCtx := c.connCtx
+	connCancel := c.connCancel
 	c.mu.Unlock()
 
 	serverURL, err := c.opts.ServerURL()
 	if err != nil {
+		connCancel()
 		return err
 	}
 
@@ -129,6 +144,7 @@ func (c *MQTT) Connect(ctx context.Context) error {
 
 	conn, err := autopaho.NewConnection(connCtx, cfg)
 	if err != nil {
+		connCancel()
 		return err
 	}
 
@@ -136,7 +152,17 @@ func (c *MQTT) Connect(ctx context.Context) error {
 	c.conn = conn
 	c.mu.Unlock()
 
-	return conn.AwaitConnection(connCtx)
+	// ctx (the caller's, possibly short-lived) bounds only this wait for the
+	// handshake — connCtx (the connection's own, decoupled lifetime) is
+	// untouched by it either way.
+	if err := conn.AwaitConnection(ctx); err != nil {
+		c.mu.Lock()
+		c.conn = nil
+		c.mu.Unlock()
+		connCancel()
+		return err
+	}
+	return nil
 }
 
 func (c *MQTT) copySubscriptions() []subEntry {

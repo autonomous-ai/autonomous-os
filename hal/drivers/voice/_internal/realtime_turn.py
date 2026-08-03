@@ -133,6 +133,34 @@ class RealtimeTurnResult(NamedTuple):
     delegate_msg: str = ""
 
 
+def should_dispatch_to_main(
+    wakeword_enabled: bool,
+    wake_word_confirmed: bool,
+) -> bool:
+    """Return whether the finalized STT turn must reach the main agent.
+
+    Wake-word mode suppresses ambient speech until STT has armed the turn. Once
+    confirmed, every turn reaches dispatch: a realtime-handled turn becomes a
+    `voice_agent_handled` synchronization event, while unavailable, silent,
+    failed, and delegated turns take the normal main-agent path. This keeps
+    memory and one-turn vision handoff behavior identical to always-listening.
+    """
+    if not wakeword_enabled:
+        return True
+    return wake_word_confirmed
+
+
+def is_noise_turn(
+    combined: str, buf_duration: float, audio_is_speech: bool = True
+) -> bool:
+    """Return whether this capture must not be committed to the realtime model."""
+    if hal_config.REALTIME_REQUIRE_TRANSCRIPT:
+        return not combined
+    return not combined and (
+        buf_duration < hal_config.REALTIME_MIN_COMMIT_DURATION_S or not audio_is_speech
+    )
+
+
 def run_realtime_turn(
     realtime,
     tts,
@@ -171,13 +199,7 @@ def run_realtime_turn(
     # the VAD pre-roll, below the duration floor), or (2) Silero VAD judged the
     # FULL buffer non-speech (`audio_is_speech` computed by the caller, default
     # True so a missing check never drops a turn).
-    if hal_config.REALTIME_REQUIRE_TRANSCRIPT:
-        noise_turn = not combined
-    else:
-        noise_turn = not combined and (
-            buf_duration < hal_config.REALTIME_MIN_COMMIT_DURATION_S
-            or not audio_is_speech
-        )
+    noise_turn = is_noise_turn(combined, buf_duration, audio_is_speech)
     if (
         hal_config.REALTIME_ENABLED
         and realtime.available

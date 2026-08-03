@@ -33,6 +33,14 @@ func (h *DeviceMQTTHandler) handleInfo(_ domain.MQTTMessage) error {
 	// Override the config-seeded value with the live system zone (/etc/timezone),
 	// so the uplink reflects an out-of-band `timedatectl` change too.
 	msg.Timezone = h.deviceService.CurrentTimezone()
+	// Skills installed on the ACTIVE runtime, same set the HTTP ping carries.
+	// Best-effort: a runtime that can't list them (or an unreadable skills dir)
+	// omits the field rather than failing the whole info uplink.
+	if list, err := h.agentGateway.ListSkills(); err != nil {
+		slog.Debug("info: skills list unavailable", "component", "mqtt", "error", err)
+	} else {
+		msg.Skills = domain.SummarizeSkills(list)
+	}
 	slog.Info("mqtt_handler_info",
 		"id", msg.ID,
 		"version", msg.Version,
@@ -49,6 +57,7 @@ func (h *DeviceMQTTHandler) handleInfo(_ domain.MQTTMessage) error {
 		"tts_voice", msg.TTSVoice,
 		"stt_language", msg.STTLanguage,
 		"timezone", msg.Timezone,
+		"skills", len(msg.Skills),
 	)
 	return h.publish(msg)
 }

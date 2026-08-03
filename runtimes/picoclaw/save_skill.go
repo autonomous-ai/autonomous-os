@@ -52,3 +52,27 @@ func picoclawSkillsDir() string {
 func (s *PicoclawService) ReadSkillFiles(name string) ([]domain.SkillBundleFile, error) {
 	return skills.ReadSkillFiles(picoclawSkillsDir(), name)
 }
+
+func (s *PicoclawService) ReadSkillFile(name, filePath string) (domain.SkillBundleFile, error) {
+	return skills.ReadSkillFile(picoclawSkillsDir(), name, filePath)
+}
+
+// DeleteSkill removes an installed skill and returns the directory it deleted.
+func (s *PicoclawService) DeleteSkill(name string) (string, error) {
+	path, err := skills.DeleteSkill(picoclawSkillsDir(), name)
+	if err != nil {
+		return "", err
+	}
+	slog.Info("[skills] uninstalled", "component", "picoclaw", "skill", name, "path", path)
+	return path, nil
+}
+
+// InstallSkillMarkdown installs a bare SKILL.md; its front-matter names the skill.
+func (s *PicoclawService) InstallSkillMarkdown(content []byte) (string, error) {
+	dir, err := skills.InstallSkillMarkdown(picoclawSkillsDir(), content)
+	if err != nil {
+		return "", err
+	}
+	slog.Info("[skills] markdown installed", "component", "picoclaw", "dir", dir)
+	return dir, nil
+}

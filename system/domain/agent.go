@@ -182,6 +182,13 @@ type AgentGateway interface {
 	// device-writable skills dir return ErrNotSupportedByRuntime.
 	InstallSkillArchive(archivePath, fallbackName string) (dir string, err error)
 
+	// InstallSkillMarkdown installs a BARE SKILL.md into this runtime's skills
+	// dir and returns the directory it wrote. The file's YAML front-matter `name`
+	// decides the directory, so content without valid front-matter is refused
+	// (skills.ErrInvalidFrontMatter) rather than landing under a guessed name.
+	// Same per-backend split as InstallSkillArchive.
+	InstallSkillMarkdown(content []byte) (dir string, err error)
+
 	// ListSkills returns the skills currently present in this runtime's skills
 	// dir, each with its file tree. Same per-backend split as SaveSkill: only
 	// the directory differs (skills.ListInstalled does the walk). Backends with
@@ -194,6 +201,18 @@ type AgentGateway interface {
 	// same two-pane browser as the store preview. Same per-backend split as
 	// ListSkills (skills.ReadSkillFiles does the walk).
 	ReadSkillFiles(name string) ([]SkillBundleFile, error)
+
+	// ReadSkillFile returns one installed skill file addressed by the exact path
+	// emitted by ReadSkillFiles (for example "music/SKILL.md"). Callers that
+	// need one document should use this instead of loading the entire skill.
+	ReadSkillFile(name, filePath string) (SkillBundleFile, error)
+
+	// DeleteSkill removes an installed skill from this runtime's skills dir and
+	// returns the directory it deleted. Same per-backend split as ListSkills:
+	// only the target dir differs (skills.DeleteSkill does the work). A skill
+	// that isn't there returns skills.ErrSkillNotFound, not success, so a stale
+	// caller sees the mismatch.
+	DeleteSkill(name string) (path string, err error)
 
 	// FetchChatHistory sends a chat.history RPC and returns the raw messages array.
 	// Best-effort: returns nil on error or timeout without failing the caller.

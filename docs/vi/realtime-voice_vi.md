@@ -33,6 +33,26 @@ cộng thêm ngần ấy giây trễ trước khi agent chính nhìn thấy yêu
 result đã được gửi lại model trước khi break; turn còn mở dang dở sẽ được
 `flush_output()` của turn kế dọn.
 
+Gemini cũng có thể gửi `generation_complete` trước `turn_complete`: cờ sau bị
+trì hoãn trong lúc Gemini giả định client đang phát audio theo thời gian thực.
+HAL tự phát câu trả lời đã nhận nên kết thúc consumer turn ngay ở
+`generation_complete`, đồng thời nhả commit manual-VAD kế tiếp. Nhờ đó không
+còn chờ silent-watchdog vô ích sau khi đã trả lời; `turn_complete` đến muộn sẽ
+được bỏ trước lượt sau.
+
+Mọi lượt wake-word đã được STT final xác nhận đều đi qua dispatch. Nếu realtime
+đã nói, dispatch gửi event đồng bộ `voice_agent_handled` để agent chính ghi nhớ
+nhưng im lặng; realtime unavailable, lỗi, timeout hoặc delegate đi theo đường
+agent chính bình thường. Dispatch cũng tiêu thụ vision handoff một-lượt, nên
+Gemini lỗi tạm thời không thể làm rơi voice command hoặc làm frame rò sang lượt sau.
+
+Nếu kết nối provider **ban đầu** lỗi ngay khi HAL khởi động, orchestrator tạo
+session mới bằng retry loop nền (thử lại một lần ngay, rồi backoff luỹ thừa từ 2s,
+tối đa 60s). Nó tách biệt
+với reconnect send/receive của provider, vì các loop đó chưa tồn tại trước khi
+`connect()` thành công. Không cần restart HAL hay chờ audio mới; các lượt voice
+vẫn fallback xuống agent chính cho tới khi kết nối hồi phục.
+
 ## Biểu cảm cảm xúc (fire-and-forget)
 
 Nếu thiết bị khai báo capability `expression`
@@ -188,13 +208,19 @@ Ba backend thay thế cho nhau, chọn bằng `HAL_REALTIME_PROVIDER`
 | OpenAI Realtime | `voice_agent/openai_realtime.py` `OpenAIRealtimeAgent` | thuần đồng bộ; 1 `RealtimeConnection` dùng chung bởi thread send/recv, serialize bằng reentrant lock | `gpt-realtime-2` | 24000 Hz |
 | Qwen Omni Realtime | `voice_agent/qwen_realtime.py` `QwenRealtimeAgent` | thuần đồng bộ; client `websockets.sync.client` thô | `qwen3.5-omni-plus-realtime` | 16000 Hz |
 
-Gemini Live dùng `google-genai`, nhưng tắt keepalive websocket của SDK
-(`ping_interval=None`, `ping_timeout=None`) để Python client giống browser raw-WS
-probe hơn khi đi qua proxy `campaign-api`. Vòng ping mặc định 20 giây của Python
-`websockets` có thể đóng session idle và làm lượt kế tiếp fail WS 1011. HAL cũng
+Gemini Live dùng `google-genai` và private asyncio loop của nó do thread
+`gemini-io` sở hữu. Teardown đóng/hủy provider receive task trước, rồi mới join
+worker; handshake thất bại rollback loop/thread ngay. Nhờ vậy một receive bị
+kẹt không sống sót qua session rebuild. Với họ native-audio, HAL gửi websocket
+ping mỗi 20 giây nhưng không đặt ping timeout: traffic đi ra giữ đường proxy
+sống mà pong bị thiếu không bị hiểu là lỗi client. HAL cũng
 recycle Gemini đồng bộ trước khi stream audio nếu lượt trước đã kết thúc quá
 `HAL_GEMINI_PRE_TURN_RECYCLE_S` giây, để câu nói sau khoảng nghỉ không rơi vào
 socket đã chết vì idle ở proxy.
+
+Mọi provider coi teardown là trạng thái kết thúc: sau khi `disconnect()` đặt
+stop signal, worker send/receive không reconnect và cũng không ghi log lỗi
+transport trong lúc socket đã đóng đang unwind.
 
 **Qwen Omni Realtime** (Alibaba DashScope / Model Studio) nói **schema event BETA
 của OpenAI Realtime** (`session.update`, `input_audio_buffer.append/commit`,
@@ -307,6 +333,7 @@ nhất mà `voice_service` giao tiếp:
 | `send_function_result(call_id, output)` | Trả kết quả tool về model |
 | `save_turn(user, agent)` | Lưu một lượt vào realtime memory |
 | `available` / `sample_rate` | Trạng thái sẵn sàng + sample rate của provider |
+| `rebuilding` / `wait_until_available()` | Quan sát và chờ ngắn session thay thế vốn đang kết nối, không tự khởi động thêm rebuild |
 
 ## Context manager
 
@@ -443,12 +470,15 @@ trong `/opt/hal/.env`); thiếu cả hai thì WS handshake fail rõ ràng trong 
 > không bao giờ suy ra từ `llm_base_url`.
 
 ```json
-"realtime": {
-  "enabled": true,
-  "provider": "gemini",
-  "gemini": { "model": "gemini-3.1-flash-live-preview", "voice": "Kore", "thinking_level": "MINIMAL" },
-  "openai": { "model": "gpt-realtime-2", "voice": "alloy", "reasoning_effort": "minimal" },
-  "qwen": { "api_key": "sk-…", "base_url": "wss://…", "model": "qwen3.5-omni-plus-realtime", "voice": "Ethan" }
+{
+  "wakeword": false,
+  "realtime": {
+    "enabled": true,
+    "provider": "gemini",
+    "gemini": { "model": "gemini-3.1-flash-live-preview", "voice": "Kore", "thinking_level": "MINIMAL" },
+    "openai": { "model": "gpt-realtime-2", "voice": "alloy", "reasoning_effort": "minimal" },
+    "qwen": { "api_key": "sk-…", "base_url": "wss://…", "model": "qwen3.5-omni-plus-realtime", "voice": "Ethan" }
+  }
 }
 ```
 
@@ -489,22 +519,24 @@ TRIGGER identifier snake_case cho corpus leak DeepSeek); xem
 `docs/vi/flow-monitor_vi.md` § "CoT-leak filter (đường agent)". Harden bên nào
 thì nhớ sync bên kia.
 
-### Biến môi trường (`hal/config.py`)
+### Cấu hình runtime (`hal/config.py` + `config.json`)
 
-Mỗi knob có thể bị `HAL_*` env override (thắng block, và là đường cho dev-box):
+Mỗi biến môi trường `HAL_*` ghi đè setting tương ứng; `wakeword` là cờ top-level
+trong `config.json`:
 
 | Biến | Mặc định | Ghi chú |
 |------|----------|---------|
 | `HAL_REALTIME_ENABLED` | `true` | Cổng tổng cho pipeline realtime |
+| `wakeword` | `false` | Cổng wake word top-level trong config file. Khi bật, partial khớp chỉ là tín hiệu tạm: HAL chỉ commit audio buffer sang realtime hoặc forward command sau khi STT **final** xác nhận wake phrase ở đầu câu. Các prefix hỗ trợ là `hello`, `hey`, `hi`, `alo`, `okay`, `ok`, `wake up`, áp dụng cho alias chung cố định (`hey autonomous`), device type (`hey lamp`) và tên agent hiện tại (`hey Luna`). Runtime rename chỉ cập nhật alias theo tên agent. Bare name và các prefix khác không mở gate. Mọi lượt đã xác nhận đều dispatch sang os-server: câu realtime đã nói thành event đồng bộ im lặng `voice_agent_handled`; realtime unavailable, im lặng, lỗi hoặc delegate đi theo đường thường. Nếu realtime tắt, final transcript đã xác nhận đi theo đường os-server thường. Thiếu/`false` giữ nguyên luồng luôn lắng nghe trước gate. HAL restart sau khi lưu ở local Settings hoặc MQTT `wakeword.gate`. |
 | `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `qwen` |
 | `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = activity detection thủ công) |
 | `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Số giây tối đa `receive()` chờ output event kế tiếp trước khi kết thúc lượt im lặng (fallback sang main agent) |
 | `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` | `20.0` | Watchdog im-lặng dùng thay mặc định cho turn có `look` (theo từng turn, qua `extend_recv_timeout()`). Gemini bị ép thinking trên frame dày chữ có thể im >8 s ngay trước khi trả lời — watchdog mặc định giết nhầm mấy turn đó |
 | `HAL_REALTIME_REQUIRE_TRANSCRIPT` | `true` | Không bao giờ commit turn empty-STT lên model. Giọng thật mà nova-3 miss (câu ngắn) vẫn là voiced nên qua hết guard VAD/Silero, commit audio thô khiến model bịa câu trả lời cho khoảng im lặng (lời chào chung chung, thường kèm tên không ai nói). Khi `true`, mọi turn empty-STT bị bỏ bất kể duration/voicing — im còn hơn trả lời sai. Đặt `false` để quay về đường audio-only gated bằng Silero bên dưới. |
 | `HAL_REALTIME_MIN_COMMIT_DURATION_S` | `0.8` | Session ngắn hơn ngưỡng này mà không có STT transcript bị coi là nhiễu VAD, không commit lên model. Chỉ xét khi `HAL_REALTIME_REQUIRE_TRANSCRIPT=false`. |
-| `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Kiểm soát chi phí: khi một turn đến sau ngần này giây im lặng, recycle (rebuild) session **sau** turn đó để turn kế tiếp bỏ phần context mỗi-turn mà provider re-bill trên session sống lâu. Turn sau khoảng nghỉ dài coi như cuộc hội thoại mới; trí nhớ dài hạn vẫn còn nhờ nạp lại `summary.md`. `0` = tắt. Dùng lại đường rebuild của zombie-recovery. |
+| `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Kiểm soát chi phí: khi một turn đến sau ngần này giây im lặng, recycle (rebuild) session **sau** turn đó để turn kế tiếp bỏ phần context mỗi-turn mà provider re-bill trên session sống lâu. Turn sau khoảng nghỉ dài coi như cuộc hội thoại mới; trí nhớ dài hạn vẫn còn nhờ nạp lại `summary.md`. Với Gemini native-audio, bước này bị bỏ qua nếu pre-turn recycle thành công đã làm mới session cho chính idle gap đó. `0` = tắt. Dùng lại đường rebuild của zombie-recovery. |
 | `HAL_GEMINI_SESSION_RESUMPTION` | `false` | Resume cùng session Gemini qua reconnect. Mặc định OFF — proxy `campaign-api` không forward đúng resumption handshake nên resume qua nó tạo session zombie (cold reconnect thì chạy được). Chỉ bật khi endpoint hỗ trợ. |
-| `HAL_GEMINI_PRE_TURN_RECYCLE_S` | `15` | Guard transport cho Gemini: khi lượt nói mới bắt đầu sau ngần này giây idle, rebuild session Gemini **trước khi** stream pre-roll/audio để turn không đụng socket chết vì idle ở proxy/SDK. `0` = tắt. |
+| `HAL_GEMINI_PRE_TURN_RECYCLE_S` | `120` | Guard transport cho Gemini: khi lượt nói mới bắt đầu sau ngần này giây idle, rebuild session Gemini **trước khi** stream pre-roll/audio để turn không đụng socket chết vì idle ở proxy/SDK. `0` = tắt. Pre-turn recycle thành công sẽ chặn idle recycle generic sau chính turn đó, nên một idle gap chỉ tạo tối đa một rebuild phục vụ transport/chi phí. |
 | `HAL_AGENT_GATEWAY` | `openclaw` | Chọn context manager (cũng đọc từ `agent_runtime` trong config.json) |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | Key Gemini; fallback về `llm_api_key` |
 | `HAL_GEMINI_LIVE_MODEL` | `gemini-2.5-flash-native-audio-preview-12-2025` | |

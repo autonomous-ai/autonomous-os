@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Store, Search, Loader2, RefreshCw, AlertCircle, FileText, ChevronRight, Download, Check,
+  Store, Search, Loader2, RefreshCw, AlertCircle, FileText, Download, Check,
 } from "lucide-react";
 import { browseStoreSkills, fetchSkillBundle, installStoreSkill } from "@/lib/api";
 import type { StoreSkill, SkillBundle } from "@/lib/api";
 import { ModalShell } from "./ModalShell";
 import { SkillFilesView } from "./SkillFilesView";
-import { inputStyle, btnStyle } from "./styles";
+import { inputStyle, btnStyle, applyCardHover } from "./styles";
 
 // "Browse skills" — the Autonomous Agent Skills catalog, two views in one modal:
 //
@@ -136,31 +136,38 @@ function StoreRow({ skill, onOpen }: { skill: StoreSkill; onOpen: () => void }) 
         background: "var(--lm-card)", border: "1px solid var(--lm-border)",
         color: "var(--lm-text)", transition: "background 0.12s, border-color 0.12s",
       }}
-      onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--lm-border-hi)"; }}
-      onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--lm-border)"; }}
+      onMouseEnter={(e) => applyCardHover(e.currentTarget, true)}
+      onMouseLeave={(e) => applyCardHover(e.currentTarget, false)}
     >
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 13, fontWeight: 600 }}>{skill.name}</span>
-          {skill.version && (
-            <span style={{ fontSize: 10, color: "var(--lm-text-muted)", fontFamily: "monospace" }}>v{skill.version}</span>
-          )}
+          {/* Slash-prefixed like the installed listing — same skill, and that is
+              how the agent is addressed once it's on the device. */}
+          <span style={{ fontSize: 13, fontWeight: 600 }}>/{skill.name}</span>
+          {/* Version is deliberately NOT on the card — it means nothing until you
+              open the skill, and it crowded the name row. The detail header
+              still carries it. */}
           {skill.plan_required && skill.plan_required !== "free" && (
             <Chip tone="amber">{skill.plan_required.toUpperCase()}</Chip>
           )}
         </div>
+        {/* Author sits directly under the name — it qualifies WHO wrote the
+            skill, so it belongs with the title, not down among the chips. */}
+        {skill.author && (
+          <div style={{ fontSize: 10.5, color: "var(--lm-text-dim)", marginTop: 2 }}>{skill.author}</div>
+        )}
         {skill.description && (
           <div style={{
-            fontSize: 11.5, color: "var(--lm-text-dim)", marginTop: 3, lineHeight: 1.45,
+            fontSize: 11.5, color: "var(--lm-text-dim)", marginTop: 4, lineHeight: 1.45,
             display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden",
           }}>{skill.description}</div>
         )}
-        <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
-          {skill.author && <span style={{ fontSize: 10, color: "var(--lm-text-muted)" }}>by {skill.author}</span>}
-          {(skill.compatibility ?? []).map((t) => <Chip key={t}>{t}</Chip>)}
-        </div>
+        {(skill.compatibility ?? []).length > 0 && (
+          <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
+            {(skill.compatibility ?? []).map((t) => <Chip key={t}>{t}</Chip>)}
+          </div>
+        )}
       </div>
-      <ChevronRight size={15} style={{ color: "var(--lm-text-muted)", flexShrink: 0 }} />
     </button>
   );
 }
@@ -274,8 +281,8 @@ function SkillDetail({
 function Chip({ children, tone }: { children: React.ReactNode; tone?: "amber" }) {
   return (
     <span style={{
-      fontSize: 9.5, padding: "2px 6px", borderRadius: 999,
-      color: tone === "amber" ? "var(--lm-amber)" : "var(--lm-text-muted)",
+      fontSize: 10, padding: "2px 6px", borderRadius: 999,
+      color: tone === "amber" ? "var(--lm-amber)" : "var(--lm-text-dim)",
       background: tone === "amber" ? "color-mix(in srgb, var(--lm-amber) 12%, transparent)" : "var(--lm-bg)",
       border: `1px solid ${tone === "amber" ? "transparent" : "var(--lm-border)"}`,
       fontWeight: tone === "amber" ? 600 : 400,

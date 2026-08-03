@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func seedSkill(t *testing.T, skillsDir, name string, files map[string]string) {
@@ -76,6 +77,60 @@ func TestListInstalled(t *testing.T) {
 	}
 	if files[2].Size == 0 {
 		t.Error("file size not populated")
+	}
+}
+
+// UpdatedAt is the newest mtime ANYWHERE in the tree, not the skill dir's own:
+// editing a nested file in place leaves the directory's mtime untouched, and a
+// listing that reported that would call an edited skill unchanged.
+func TestListInstalledUpdatedAt(t *testing.T) {
+	dir := t.TempDir()
+	seedSkill(t, dir, "music", map[string]string{
+		"SKILL.md":           "---\nname: music\ndescription: Play music.\n---\n",
+		"reference/tempo.md": "x",
+	})
+
+	old := time.Now().Add(-72 * time.Hour)
+	recent := time.Now().Add(-30 * time.Minute)
+	skillDir := filepath.Join(dir, "music")
+	for _, rel := range []string{"SKILL.md", "reference"} {
+		if err := os.Chtimes(filepath.Join(skillDir, rel), old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The nested file is the only recent thing, and it is two levels down.
+	if err := os.Chtimes(filepath.Join(skillDir, "reference", "tempo.md"), recent, recent); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(skillDir, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := ListInstalled(dir)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("want 1 skill, got %d", len(list))
+	}
+	if got := list[0].UpdatedAt; got != recent.Unix() {
+		t.Errorf("UpdatedAt = %d, want %d (newest file in the tree)", got, recent.Unix())
+	}
+}
+
+// A skill dir with nothing in it still reports when it appeared, rather than 0.
+func TestListInstalledUpdatedAtEmptySkill(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "blank"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := ListInstalled(dir)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 1 || list[0].UpdatedAt == 0 {
+		t.Fatalf("want the dir's own mtime as a fallback, got %+v", list)
 	}
 }
 

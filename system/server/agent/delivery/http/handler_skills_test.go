@@ -2,8 +2,10 @@ package http
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"errors"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -282,6 +284,12 @@ type fakeGateway struct {
 	readFiles   []domain.SkillBundleFile
 	readErr     error
 	gotReadName string
+	deleteErr   error
+	deletePath  string
+	gotDelName  string
+	mdDir       string
+	mdErr       error
+	gotMD       []byte
 }
 
 func (f *fakeGateway) Name() string { return f.name }
@@ -557,5 +565,249 @@ func TestReadSkillFilesHandlerInvalidNameIs400(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func (f *fakeGateway) DeleteSkill(name string) (string, error) {
+	f.gotDelName = name
+	return f.deletePath, f.deleteErr
+}
+
+func TestDeleteSkillHandler(t *testing.T) {
+	gw := &fakeGateway{name: "OpenClaw", deletePath: "/root/.openclaw/workspace/skills/music"}
+	rec, c := getReq(t, "/api/agent/skills?name=music")
+
+	(&AgentHandler{agentGateway: gw}).DeleteSkill(c)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if gw.gotDelName != "music" {
+		t.Errorf("name = %q", gw.gotDelName)
+	}
+	if !strings.Contains(rec.Body.String(), gw.deletePath) {
+		t.Errorf("deleted path not echoed: %s", rec.Body.String())
+	}
+}
+
+// A stale list pointing at an already-removed skill is a 404, not a silent 200 —
+// the caller has to learn its view was out of date.
+func TestDeleteSkillHandlerMissingIs404(t *testing.T) {
+	gw := &fakeGateway{name: "OpenClaw", deleteErr: skills.ErrSkillNotFound}
+	rec, c := getReq(t, "/api/agent/skills?name=gone")
+
+	(&AgentHandler{agentGateway: gw}).DeleteSkill(c)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeleteSkillHandlerGuards(t *testing.T) {
+	// No name at all → 400, and the gateway is never called.
+	gw := &fakeGateway{name: "OpenClaw"}
+	rec, c := getReq(t, "/api/agent/skills")
+	(&AgentHandler{agentGateway: gw}).DeleteSkill(c)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("missing name: want 400, got %d", rec.Code)
+	}
+	if gw.gotDelName != "" {
+		t.Error("gateway must not be called without a name")
+	}
+
+	// Bad shape → 400.
+	gw = &fakeGateway{name: "OpenClaw", deleteErr: skills.ErrInvalidSkillName}
+	rec, c = getReq(t, "/api/agent/skills?name=..%2Fetc")
+	(&AgentHandler{agentGateway: gw}).DeleteSkill(c)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("bad name: want 400, got %d", rec.Code)
+	}
+
+	// Runtime can't uninstall → 501 naming it.
+	gw = &fakeGateway{name: "PicoClaw", deleteErr: domain.ErrNotSupportedByRuntime}
+	rec, c = getReq(t, "/api/agent/skills?name=music")
+	(&AgentHandler{agentGateway: gw}).DeleteSkill(c)
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("unsupported: want 501, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "PicoClaw") {
+		t.Errorf("runtime name not surfaced: %s", rec.Body.String())
+	}
+}
+
+// ─── Upload ─────────────────────────────────────────────────────────────────
+
+// postMultipart builds a multipart request with one `file` part.
+func postMultipart(t *testing.T, path, filename string, content []byte) (*httptest.ResponseRecorder, *gin.Context) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	part, err := w.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatalf("create part: %v", err)
+	}
+	if _, err := part.Write(content); err != nil {
+		t.Fatalf("write part: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, path, &body)
+	c.Request.Header.Set("Content-Type", w.FormDataContentType())
+	return rec, c
+}
+
+func TestUploadSkill(t *testing.T) {
+	dir := t.TempDir()
+	zipPath := filepath.Join(dir, "skill.zip")
+	writeZip(t, zipPath, map[string]string{"design-critique/SKILL.md": "body"})
+	archive, err := os.ReadFile(zipPath)
+	if err != nil {
+		t.Fatalf("read zip: %v", err)
+	}
+
+	gw := &fakeGateway{name: "OpenClaw", installDir: "/root/.openclaw/workspace/skills/design-critique"}
+	rec, c := postMultipart(t, "/api/agent/skills/upload", "My Skill.zip", archive)
+
+	(&AgentHandler{agentGateway: gw}).UploadSkill(c)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	// The runtime gets a real on-disk archive, not the raw bytes.
+	if gw.gotArchive == "" {
+		t.Fatal("gateway did not receive an archive path")
+	}
+	// Filename stem is slugified for the fallback, so a spaced filename can't
+	// fail name validation on a flat archive.
+	if gw.gotFallback != "my-skill" {
+		t.Errorf("fallback = %q, want my-skill", gw.gotFallback)
+	}
+	// Installed name is read back from the dir, not the upload's filename.
+	if !strings.Contains(rec.Body.String(), "design-critique") {
+		t.Errorf("installed name not echoed: %s", rec.Body.String())
+	}
+	// Temp dir is cleaned up once the response is built.
+	if _, err := os.Stat(gw.gotArchive); !os.IsNotExist(err) {
+		t.Error("temp archive was not removed after the response")
+	}
+}
+
+func TestUploadSkillGuards(t *testing.T) {
+	gw := &fakeGateway{name: "OpenClaw", installDir: "/skills/x"}
+
+	// No file part at all.
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/agent/skills/upload", nil)
+	c.Request.Header.Set("Content-Type", "multipart/form-data; boundary=nope")
+	(&AgentHandler{agentGateway: gw}).UploadSkill(c)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("missing file: want 400, got %d", rec.Code)
+	}
+
+	// Empty file.
+	rec, c = postMultipart(t, "/api/agent/skills/upload", "empty.zip", nil)
+	(&AgentHandler{agentGateway: gw}).UploadSkill(c)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("empty file: want 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if gw.gotArchive != "" {
+		t.Error("gateway must not be called for an empty upload")
+	}
+}
+
+// A file that isn't a zip must fail as a bad request, not a 500 — the operator
+// picked the wrong file.
+func TestUploadSkillRejectsNonArchive(t *testing.T) {
+	gw := &fakeGateway{name: "OpenClaw", installErr: skills.ErrEmptyArchive}
+	rec, c := postMultipart(t, "/api/agent/skills/upload", "notes.txt", []byte("just text"))
+
+	(&AgentHandler{agentGateway: gw}).UploadSkill(c)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUploadSkillNotSupported(t *testing.T) {
+	gw := &fakeGateway{name: "Hermes", installErr: domain.ErrNotSupportedByRuntime}
+	rec, c := postMultipart(t, "/api/agent/skills/upload", "x.zip", []byte("PK\x03\x04"))
+
+	(&AgentHandler{agentGateway: gw}).UploadSkill(c)
+
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("want 501, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Hermes") {
+		t.Errorf("runtime name not surfaced: %s", rec.Body.String())
+	}
+}
+
+func (f *fakeGateway) InstallSkillMarkdown(content []byte) (string, error) {
+	f.gotMD = content
+	return f.mdDir, f.mdErr
+}
+
+// A bare .md upload takes the markdown path: the file's front-matter names the
+// skill, so the archive path (and its filename-derived fallback) is not involved.
+func TestUploadSkillMarkdown(t *testing.T) {
+	md := []byte("---\nname: weekly-report\ndescription: Sums up the week.\n---\nbody")
+	gw := &fakeGateway{name: "OpenClaw", mdDir: "/skills/weekly-report"}
+	rec, c := postMultipart(t, "/api/agent/skills/upload", "anything.md", md)
+
+	(&AgentHandler{agentGateway: gw}).UploadSkill(c)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if string(gw.gotMD) != string(md) {
+		t.Errorf("content not passed verbatim: %q", gw.gotMD)
+	}
+	// The archive path must NOT have been used for a .md.
+	if gw.gotArchive != "" {
+		t.Error("a .md upload must not go through InstallSkillArchive")
+	}
+	// Name comes from the installed dir, not the uploaded filename.
+	if !strings.Contains(rec.Body.String(), "weekly-report") {
+		t.Errorf("installed name not echoed: %s", rec.Body.String())
+	}
+}
+
+// The two documented file requirements both surface as 400, not 500.
+func TestUploadSkillRequirementFailuresAre400(t *testing.T) {
+	// .md without valid front-matter.
+	gw := &fakeGateway{name: "OpenClaw", mdErr: skills.ErrInvalidFrontMatter}
+	rec, c := postMultipart(t, "/api/agent/skills/upload", "x.md", []byte("# no front-matter"))
+	(&AgentHandler{agentGateway: gw}).UploadSkill(c)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("bad front-matter: want 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Archive with no SKILL.md.
+	gw = &fakeGateway{name: "OpenClaw", installErr: skills.ErrMissingSkillMD}
+	rec, c = postMultipart(t, "/api/agent/skills/upload", "x.zip", []byte("PK"))
+	(&AgentHandler{agentGateway: gw}).UploadSkill(c)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("missing SKILL.md: want 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUploadSkillRejectsUnsupportedExtension(t *testing.T) {
+	gw := &fakeGateway{name: "OpenClaw"}
+	rec, c := postMultipart(t, "/api/agent/skills/upload", "notes.txt", []byte("text"))
+
+	(&AgentHandler{agentGateway: gw}).UploadSkill(c)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if gw.gotArchive != "" || gw.gotMD != nil {
+		t.Error("gateway must not be called for an unsupported extension")
 	}
 }

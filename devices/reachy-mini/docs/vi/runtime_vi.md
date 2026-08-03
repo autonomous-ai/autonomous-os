@@ -233,7 +233,7 @@ trong khi mọi service vẫn báo healthy.
 | 3 | `spike-os.sh` | Tải binary `os-server` về `/usr/local/bin`, seed `/root/config/config.json` tối thiểu, chạy **dưới root với `WorkingDirectory=/root`** |
 | 4 | `spike-web.sh` | Cài nginx, tải bundle `web` về `/usr/share/nginx/html/setup`, viết vhost `reachy-spike` |
 | 5 | `spike-agent.sh` | Cài Node.js 22 (NodeSource) + `openclaw` đúng version OTA pin, seed `/root/.openclaw`, chạy gateway ở loopback `18789` |
-| 6 | `spike-bootstrap.sh` | Worker OTA: seed `/root/config/bootstrap.json`, poll feed mỗi `5m` |
+| 6 | `spike-bootstrap.sh` | Worker OTA: seed `/root/config/bootstrap.json`, cài `devices/reachy-mini/software-update` → `/usr/local/bin/software-update` (worker exec script này để áp update; thiếu nó thì mọi lần apply đều fail `executable file not found in $PATH` trong khi mọi unit vẫn báo healthy), poll feed mỗi `5m` |
 
 Thứ tự có lý do. `device` phải chạy trước vì mọi thứ khác đọc file nó cài.
 `bootstrap` để **cuối cùng**: nó có thể restart os-server và hal ngay khi thấy
@@ -324,13 +324,34 @@ Joint keys của Reachy trong HAL dùng độ/mm, dù SDK dùng radian/mét:
 - recovery/mode: `/servo/zero`, `/servo/hold`, `/servo/release`, `/servo/resume`
 - expression moves: `/servo/play` khi recorded-move library của Reachy sẵn sàng
 
+`GET /servo` trả `available_recordings` cùng vốn từ với field `current`: move đã
+map thì liệt kê theo tên HAL (`music_groove`, không phải `dance1`), phần còn lại
+của thư viện giữ nguyên tên HF. Trước đây list toàn tên HF nên hai field lệch
+nhau — web monitor highlight mục trùng `current`, thành ra không bao giờ
+highlight khi đang chạy move đã map.
+
+### Vòng lặp groove theo nhạc
+
+`POST /audio/play` phát `music_start` (kèm style đã detect) lúc bắt đầu và
+`music_stop` lúc kết thúc — `hal/routes/music.py`. Emotion tương ứng trên cùng
+đường đó chỉ áp LED/display (`_apply_emotion_led_display`), nên phần servo
+hoàn toàn đến từ hai event này.
+
+Driver xử lý cả hai: `music_start` set groove và thread play lặp lại move đó cho
+tới khi `music_stop`, giống backend Feetech
+(`animation_service._continue_playback`). Một dance move chỉ dài vài giây, nên
+nếu không lặp thì robot nhảy một lần rồi đứng im hết bài. Emotion phát giữa bài
+chạy one-shot xong trả servo lại cho groove; `hold`, `zero`, `release` và
+shutdown thì dừng hẳn. Mọi thứ còn lại vẫn one-shot — `/servo/play` thường
+không bao giờ lặp.
+
 Khác biệt đã biết so với Lamp:
 
 - Upload CSV servo recording là concept của Feetech/Lamp; `add_recording` của
   Reachy hiện no-op cho tới khi quyết định uploaded moves có cần cho body này
   hay không.
 - Idle/ambient motion do daemon hoặc recorded-move library quản lý, không phải
-  event loop Feetech.
+  event loop Feetech — groove theo nhạc là vòng lặp client-side duy nhất.
 - `/servo/track` chưa production-ready cho Reachy. `tracker_service` chung vẫn
   chạm vào internals kiểu Lamp/Feetech và cần chuyển sang accessor của
   `MotionService` trước.

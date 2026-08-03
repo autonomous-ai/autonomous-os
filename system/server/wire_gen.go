@@ -48,7 +48,8 @@ func InitializeServer() (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	deviceMQTTHandler := mqtthandler.ProvideDeviceMQTTHandler(configConfig, factory, deviceService, service, agentGateway)
+	chatStream := mqtthandler.ProvideChatStream(configConfig, factory, bus)
+	deviceMQTTHandler := mqtthandler.ProvideDeviceMQTTHandler(configConfig, factory, deviceService, service, agentGateway, chatStream)
 	agentHandler := http4.ProvideAgentHandler(agentGateway, bus, statusledService, configConfig)
 	v := provideAgentIsSleeping(agentHandler)
 	sensingHandler := http5.ProvideSensingHandler(agentGateway, bus, configConfig, statusledService, v)
@@ -65,6 +66,6 @@ func InitializeServer() (*Server, error) {
 	mcpReconcile := agent.ProvideMCPReconcile(configConfig, agentGateway)
 	ambientService := ambient.ProvideService(bus, configConfig)
 	healthwatchService := healthwatch.ProvideService(bus, configConfig, statusledService)
-	server := ProvideServer(configConfig, healthHandler, networkHandler, deviceHandler, deviceMQTTHandler, agentHandler, sensingHandler, buddyHandler, pluginHandler, deviceService, agentGateway, personaMigration, configMigration, channelReconcile, mcpReconcile, service, factory, ambientService, healthwatchService, statusledService)
+	server := ProvideServer(configConfig, healthHandler, networkHandler, deviceHandler, deviceMQTTHandler, agentHandler, sensingHandler, buddyHandler, pluginHandler, deviceService, agentGateway, personaMigration, configMigration, channelReconcile, mcpReconcile, service, factory, ambientService, healthwatchService, statusledService, chatStream)
 	return server, nil
 }

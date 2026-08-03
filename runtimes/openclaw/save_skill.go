@@ -56,3 +56,27 @@ func (s *OpenclawService) skillsDir() string {
 func (s *OpenclawService) ReadSkillFiles(name string) ([]domain.SkillBundleFile, error) {
 	return skills.ReadSkillFiles(s.skillsDir(), name)
 }
+
+func (s *OpenclawService) ReadSkillFile(name, filePath string) (domain.SkillBundleFile, error) {
+	return skills.ReadSkillFile(s.skillsDir(), name, filePath)
+}
+
+// DeleteSkill removes an installed skill and returns the directory it deleted.
+func (s *OpenclawService) DeleteSkill(name string) (string, error) {
+	path, err := skills.DeleteSkill(s.skillsDir(), name)
+	if err != nil {
+		return "", err
+	}
+	slog.Info("[skills] uninstalled", "component", "openclaw", "skill", name, "path", path)
+	return path, nil
+}
+
+// InstallSkillMarkdown installs a bare SKILL.md; its front-matter names the skill.
+func (s *OpenclawService) InstallSkillMarkdown(content []byte) (string, error) {
+	dir, err := skills.InstallSkillMarkdown(s.skillsDir(), content)
+	if err != nil {
+		return "", err
+	}
+	slog.Info("[skills] markdown installed", "component", "openclaw", "dir", dir)
+	return dir, nil
+}

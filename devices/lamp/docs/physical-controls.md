@@ -26,17 +26,18 @@ Board detection in both handlers reads `/proc/device-tree/model`:
 
 | Gesture | GPIO button | TTP223 touchpad |
 |---|---|---|
-| **1 tap** | Stop speaker / unmute mic + speaker + ack chime (~120 ms ping) — all fire immediately on release (no click-window wait); the "I'm listening" cue plays once the 0.4 s click window resolves | Same, split the same way — in-flight TTS is cut and the ack chime plays ~0.2 s after the finger lifts (first session end); unmute + cue wait for the 1.2 s decision window (tap-vs-pet cost, see below) |
+| **1 tap** | Stop speaker / unmute mic + speaker + ack chime (~120 ms ping) — all fire immediately on release (no click-window wait); the "Listening" cue plays once the 0.4 s click window resolves | Same, split the same way — in-flight TTS is cut and the ack chime plays ~0.2 s after the finger lifts (first session end); unmute + cue wait for the 1.2 s decision window (tap-vs-pet cost, see below) |
 | **2 taps** (≤ 0.4 s apart, button) / (≤ 1.2 s apart, TTP223) | Nothing beyond the single-click already fired on tap 1 (panic-click guard) | Pet response — TTS picks a random phrase from the language pool |
 | **3 taps** (≤ 0.4 s apart, button) | Reboot OS (TTS announce → `sudo reboot`) | n/a — TTP223 stops at 2 (any further taps absorbed by cooldown) |
-| **Hold 5–10 s, then release** | Shutdown OS (TTS announce → release servos → `sudo shutdown -h now`). LED blinks red while armed. | n/a — TTP223 hardware cannot reliably hold (see "FastMode" below) |
-| **Hold 10 s+, then release** | Factory-reset: wipe device state + reboot into AP setup (TTS announce → release servos → POST `/api/system/factory-reset` on the OS server). LED goes solid red while armed. | n/a |
+| **Hold 3–10 s, then release** | Speak the localized sleep announcement, then enter `sleepy`: LED off, camera/mic/speaker off; servo releases after 2 s. LED blinks sleepy purple while held. | n/a — TTP223 hardware cannot reliably hold (see "FastMode" below) |
+| **Hold 10–20 s, then release** | Shutdown OS (TTS announce → release servos → `sudo shutdown -h now`). LED blinks red while armed. | n/a — TTP223 hardware cannot reliably hold (see "FastMode" below) |
+| **Hold 20 s+, then release** | Factory-reset: wipe device state + reboot into AP setup (TTS announce → release servos → POST `/api/system/factory-reset` on the OS server). LED goes solid red while armed. | n/a |
 
-Destructive gestures (reboot, shutdown, factory-reset) are intentionally only on the GPIO button. Hard actions need a deliberate gesture, and the mechanical button gives unambiguous evidence of intent. The two hold tiers **commit on release, not on a timer firing while held** — so the user can cancel by releasing before crossing a threshold, or keep holding past 10 s to escalate from shutdown to factory-reset (see "GPIO button detection" below).
+Hold gestures are intentionally only on the GPIO button because the mechanical button gives unambiguous evidence of intent. The sleep and destructive hold tiers **commit on release, not on a timer firing while held**. The destructive tiers escalate from shutdown to factory-reset after 20 s (see "GPIO button detection" below).
 
 ## Interrupting Lamp while it speaks (barge-in)
 
-The 1-tap gesture is Lamp's primary **barge-in mechanism**: tap top of Lamp (touchpad) or press the GPIO button once during an in-flight TTS to cancel the current utterance mid-word, stop any music, and unmute the mic so Lamp listens for the next thing the user says. A user/scene speaker mute is also relaxed (unless a voice enrollment is recording) so the cue and the reply are audible again. A localized "I'm listening" cue plays after the cancel.
+The 1-tap gesture is Lamp's primary **barge-in mechanism**: tap top of Lamp (touchpad) or press the GPIO button once during an in-flight TTS to cancel the current utterance mid-word, stop any music, and unmute the mic so Lamp listens for the next thing the user says. A user/scene speaker mute is also relaxed (unless a voice enrollment is recording) so the cue and the reply are audible again. A localized "Listening" cue plays after the cancel.
 
 End-to-end chain:
 1. `gpio_button.py` / `ttp223.py` detect single click → call `single_click_action(source)` in `button_actions.py`
@@ -53,16 +54,17 @@ When enabled, tail the log for `Barge-in monitor session end: max_rms_seen=N` (p
 
 ## GPIO button detection (`hal/drivers/gpio_button.py`)
 
-Edge-counting driver where **all destructive actions commit on the release edge based on hold duration** — no timer fires while the button is held. This is what lets the user cancel mid-hold (release before a threshold) or escalate (keep holding past 10 s).
+Edge-counting driver where **all destructive actions commit on the release edge based on hold duration** — no timer fires while the button is held. This is what lets the user cancel mid-hold (release before a threshold) or escalate (keep holding past 20 s).
 
 1. **Falling edge (press):** record `press_start` (monotonic clock) and spawn a hold-LED watcher thread (one per press, with its own stop `Event`). No action timer is armed.
 2. **Rising edge (release):** stop the LED watcher, then compute `held = now − press_start` and branch:
-   - `held >= 10 s` (`FACTORY_RESET_DURATION`) → scrub any pending clicks, lock LED solid red, run `factory_reset_action` off-thread.
-   - `held >= 5 s` (`LONG_PRESS_DURATION`) → scrub pending clicks, freeze LED red, run `long_press_action` (shutdown) off-thread.
+   - `held >= 20 s` (`FACTORY_RESET_DURATION`) → scrub any pending clicks, lock LED solid red, run `factory_reset_action` off-thread.
+   - `held >= 10 s` (`LONG_PRESS_DURATION`) → scrub pending clicks, freeze LED red, run `long_press_action` (shutdown) off-thread.
+   - `held >= 3 s` (`SLEEP_HOLD_DURATION`) → scrub any pending clicks, run `sleep_action` off-thread; it invokes the standard `sleepy` emotion pipeline.
    - else (short tap) → increment `click_count` and (re)start a 0.4 s click-window timer. On the **first** tap of a burst, the silent part of `single_click_action` (`announce=False`) fires immediately off-thread — it's non-destructive ("give me the floor"), so it doesn't wait for the window. The audible cue is deferred so it never talks over a triple-click in progress.
 3. When the click window expires:
    - `count == 3` → `triple_click_action` (no listening cue — only the reboot announce)
-   - any other count → `announce_listening_cue` speaks the deferred "I'm listening" confirmation once per burst; `count == 2` / `>= 4` additionally log as ignored (panic-click guard — the floor-grab already happened on tap 1, nothing destructive fires)
+   - any other count → `announce_listening_cue` speaks the deferred "Listening" confirmation once per burst; `count == 2` / `>= 4` additionally log as ignored (panic-click guard — the floor-grab already happened on tap 1, nothing destructive fires)
 
 A release edge with no matching press (the press was debounce-dropped) is ignored — `press_start` could be stale, so acting on it could fire a destructive action against a minutes-old timestamp. Destructive actions run on their own daemon threads because the `lgpio` callback must return promptly or subsequent edges queue up.
 
@@ -72,11 +74,12 @@ The watcher thread polls the hold duration and drives the RGB LED at HIGH priori
 
 | Hold elapsed | LED | Meaning |
 |---|---|---|
-| < 5 s | unchanged | below shutdown threshold — releasing is a tap |
-| 5–10 s | red, blinking 2 Hz | shutdown armed — releasing now shuts down |
-| 10 s+ | red, solid | factory-reset armed — releasing now wipes + reboots |
+| < 3 s | unchanged | a short tap |
+| 3–10 s | sleepy purple, blinking 2 Hz | sleepy is armed; releasing enters sleep (LED then turns off) |
+| 10–20 s | red, blinking 2 Hz | shutdown armed — releasing now shuts down |
+| 20 s+ | red, solid | factory-reset armed — releasing now wipes + reboots |
 
-Same red colour for both armed tiers; blink vs solid is the differentiator. The LED is a silent no-op when the RGB service is unavailable (dev machines) — the button still works.
+Purple identifies the sleep tier; red blink vs red solid differentiates shutdown from factory-reset. The LED is a silent no-op when the RGB service is unavailable (dev machines) — the button still works.
 
 Per-edge debounce is 200 ms (press and release ticks tracked independently so a quick tap isn't dropped while bouncy repeats of the same edge are filtered).
 
@@ -117,15 +120,16 @@ The actions live in one place so the GPIO button, TTP223, and any future input (
 
 | Function | What it does | Interrupts in-flight TTS? |
 |---|---|---|
-| `single_click_action(source)` | Relax a user/scene speaker mute (skipped while `_enrolling`). If mic is muted: unmute. Else stop TTS + stop music. Then speak the localized "I'm listening" cue with retry-on-busy. | Yes — calls `stop_tts()` and the cue itself preempts. |
+| `single_click_action(source)` | Relax a user/scene speaker mute (skipped while `_enrolling`). If mic is muted: unmute. Else stop TTS + stop music. Then speak the localized "Listening" cue with retry-on-busy. | Yes — calls `stop_tts()` and the cue itself preempts. |
 | `triple_click_action(source)` | Speak "Rebooting now" → wait 5 s for the cached clip → `sudo reboot`. | Yes |
+| `sleep_action(source)` | Speak the localized sleep announcement, then invoke `sleepy`: LED off, camera/mic/speaker off, then servo release after 2 s. | Yes — the sleepy pipeline stops active TTS/music after the announcement. |
 | `long_press_action(source)` | Speak "Shutting down now" → wait 5 s → `release_servos()` (so the lamp doesn't slam down mid-pose) → `sudo shutdown -h now`. | Yes |
 | `factory_reset_action(source)` | Speak "Factory reset starting. Rebooting now" → `release_servos()` → POST `/api/system/factory-reset` on the OS server (the server owns the wipe + reboot, see below). | Yes |
 | `head_pat_action(source)` | Pick a random localized pet phrase, speak it via `speak_cached` on a daemon thread. **Non-interrupting**: if TTS is still busy the phrase is dropped silently. In practice on TTP223 the first touch session already cut any in-flight speech (`_grab_floor_if_speaking`), so by pet time TTS is usually free and the giggle plays. | No |
 
 ### Factory-reset: what gets wiped
 
-`factory_reset_action` only **announces + delegates** — the actual reset lives in the OS server (`system/server/system/factoryreset.go`), reachable from the device over loopback without a Bearer token (authoritative because of physical presence: a deliberate 10 s hold). `POST /api/system/factory-reset` is a **soft** reset (state wipe, not a reflash — kernel / OS packages / binaries / HAL `.venv` are untouched):
+`factory_reset_action` only **announces + delegates** — the actual reset lives in the OS server (`system/server/system/factoryreset.go`), reachable from the device over loopback without a Bearer token (authoritative because of physical presence: a deliberate 20 s hold). `POST /api/system/factory-reset` is a **soft** reset (state wipe, not a reflash — kernel / OS packages / binaries / HAL `.venv` are untouched):
 
 1. Wipe the active agent backend's state (OpenClaw or Hermes, auto-detected from `config.json` `agent_runtime`).
 2. Wipe the device state paths: `/root/config` (config.json — API keys, channel tokens, MQTT creds), `/root/local/users` + `/root/local/strangers` (face/voice enrollments), `/var/lib/hal/snapshots` (camera snapshots), and `/etc/wpa_supplicant/wpa_supplicant-wlan0.conf` (home WiFi creds → forces AP mode on next boot).

@@ -48,3 +48,27 @@ func (s *CodexService) ListSkills() ([]domain.InstalledSkill, error) {
 func (s *CodexService) ReadSkillFiles(name string) ([]domain.SkillBundleFile, error) {
 	return skills.ReadSkillFiles(codexSkillsDir, name)
 }
+
+func (s *CodexService) ReadSkillFile(name, filePath string) (domain.SkillBundleFile, error) {
+	return skills.ReadSkillFile(codexSkillsDir, name, filePath)
+}
+
+// DeleteSkill removes an installed skill and returns the directory it deleted.
+func (s *CodexService) DeleteSkill(name string) (string, error) {
+	path, err := skills.DeleteSkill(codexSkillsDir, name)
+	if err != nil {
+		return "", err
+	}
+	slog.Info("[skills] uninstalled", "component", "codex", "skill", name, "path", path)
+	return path, nil
+}
+
+// InstallSkillMarkdown installs a bare SKILL.md; its front-matter names the skill.
+func (s *CodexService) InstallSkillMarkdown(content []byte) (string, error) {
+	dir, err := skills.InstallSkillMarkdown(codexSkillsDir, content)
+	if err != nil {
+		return "", err
+	}
+	slog.Info("[skills] markdown installed", "component", "codex", "dir", dir)
+	return dir, nil
+}

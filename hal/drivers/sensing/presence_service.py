@@ -132,16 +132,34 @@ class PresenseService:
             self._turn_off_light()
             self._notify_away(int(elapsed))
 
+    @staticmethod
+    def _light_is_off() -> bool:
+        """True when the strip must be left dark — the user turned the light
+        off, or nothing has asked for light and the resting look is dark.
+        Presence reacts to a body walking past, which is NOT the user asking
+        for light: without this, walking past a lamp that was turned off lights
+        it back up at full brightness. Fails open (paints) if app_state can't
+        be read, matching the pre-existing behaviour."""
+        try:
+            from hal.app_state import led_should_stay_dark
+
+            return led_should_stay_dark()
+        except Exception:
+            return False
+
     def _restore_light(self):
         """Restore last known color at full brightness, and re-aim the device to active scene direction."""
         if not self._rgb_service:
             logger.warning("Presence: cannot restore light — rgb_service not available")
             return
-        try:
-            logger.info("Presence: restoring light color=%s", self._last_color)
-            self._rgb_service.dispatch(RGB_CMD_SOLID, self._last_color)
-        except Exception as e:
-            logger.warning("Presence: failed to restore light: %s", e)
+        if self._light_is_off():
+            logger.info("Presence: light restore skipped — strip is off/resting dark")
+        else:
+            try:
+                logger.info("Presence: restoring light color=%s", self._last_color)
+                self._rgb_service.dispatch(RGB_CMD_SOLID, self._last_color)
+            except Exception as e:
+                logger.warning("Presence: failed to restore light: %s", e)
         if self._on_restore_aim:
             logger.info("Presence: triggering scene aim restore")
             try:
@@ -154,6 +172,8 @@ class PresenseService:
     def _dim_light(self):
         """Dim to config.IDLE_BRIGHTNESS of last color."""
         if not self._rgb_service:
+            return
+        if self._light_is_off():
             return
         try:
             dimmed = tuple(int(c * config.IDLE_BRIGHTNESS) for c in self._last_color)

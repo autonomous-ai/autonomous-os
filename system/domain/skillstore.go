@@ -32,6 +32,40 @@ type InstalledSkill struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description,omitempty"`
 	Files       []SkillNode `json:"files"`
+	// UpdatedAt is the NEWEST modification time in the skill's tree, as Unix
+	// seconds — the skill directory's own mtime only moves when files are added
+	// or removed, so it would call an edited SKILL.md unchanged. 0 when nothing
+	// in the tree could be stat'd, which the UI renders as unknown rather than
+	// as the epoch.
+	UpdatedAt int64 `json:"updated_at,omitempty"`
+}
+
+// SkillSummary is one installed skill flattened for the device's status
+// uplinks — the MQTT `info` response and the HTTP backend ping both carry a
+// `skills` array of these.
+//
+// Deliberately name+description only, NOT the file tree InstalledSkill also
+// holds: both uplinks are periodic (the ping every 15s), so shipping full
+// per-skill trees that often would be pure waste. Consumers that want the tree
+// ask for it on demand (GET /api/agent/skills/files).
+//
+// One type for both uplinks so their wire shape can never drift apart.
+type SkillSummary struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// SummarizeSkills flattens a ListSkills result for the status uplinks. Returns
+// nil for an empty list so the `skills` field is omitted rather than sent as [].
+func SummarizeSkills(list []InstalledSkill) []SkillSummary {
+	if len(list) == 0 {
+		return nil
+	}
+	out := make([]SkillSummary, 0, len(list))
+	for _, s := range list {
+		out = append(out, SkillSummary{Name: s.Name, Description: s.Description})
+	}
+	return out
 }
 
 // StoreSkillChangelog is one released version's entry in a skill's changelog.

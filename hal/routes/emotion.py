@@ -36,10 +36,9 @@ _WAKE_EMOTIONS = {
     EMO_SAD, EMO_SHY, EMO_SHOCK, EMO_CONFUSED,
 }
 
-# Auto-release the servo after this many seconds of *continuous* sleepy.
-# The device is presumed unattended at that point; releasing prevents servo
-# heat / wear during long idle periods.
-SLEEPY_AUTO_RELEASE_SECONDS = 15 * 60
+# Auto-release the servo shortly after *continuous* sleepy so the animation
+# can settle before torque is disabled.
+SLEEPY_AUTO_RELEASE_SECONDS = 2
 
 router = APIRouter(tags=["Emotion"])
 
@@ -103,6 +102,8 @@ def express_emotion(req: EmotionRequest):
     was_sleeping = state._sleeping
     state._sleeping = req.emotion == EMO_SLEEPY
     state._current_emotion = req.emotion
+    if was_sleeping and not state._sleeping:
+        state._wake_sleepy_peripherals()
 
     # Sleepy auto-release: fires only if sleepy stays continuous for the
     # full window. Any other emotion (including a wake) cancels the timer.
@@ -118,11 +119,16 @@ def express_emotion(req: EmotionRequest):
             try:
                 from hal.routes.servo import release_servos
 
-                state.logger.info(
-                    "Auto-release: sleepy held >= %ds, releasing servo",
-                    SLEEPY_AUTO_RELEASE_SECONDS,
-                )
-                release_servos()
+                # release() ramps to a gravity-rest pose before torque-off.
+                # Serialize it with wake/resume so a wake cannot re-enable
+                # torque halfway through the release sequence.
+                with state._sleep_servo_lock:
+                    state._sleep_servo_released = True
+                    state.logger.info(
+                        "Auto-release: sleepy held >= %ds, releasing servo",
+                        SLEEPY_AUTO_RELEASE_SECONDS,
+                    )
+                    release_servos()
             except Exception as e:
                 state.logger.warning(f"Sleepy auto-release failed: {e}")
 
@@ -170,7 +176,12 @@ def express_emotion(req: EmotionRequest):
             # thread, backends whose control loop lives elsewhere (Reachy's
             # daemon) no-op. Reaching for _running/_event_thread directly threw
             # AttributeError on any non-feetech body.
-            svc.ensure_running()
+            if was_sleeping and state._sleep_servo_released:
+                with state._sleep_servo_lock:
+                    svc.resume()
+                    state._sleep_servo_released = False
+            else:
+                svc.ensure_running()
             svc.dispatch(SERVO_CMD_PLAY, preset["servo"])
             servo_played = preset["servo"]
         except Exception as e:
@@ -210,6 +221,12 @@ def express_emotion(req: EmotionRequest):
         state._auto_camera_off(f"emotion:{req.emotion}")
     elif cam == "on" and state._camera_disabled:
         state._auto_camera_on(f"emotion:{req.emotion}")
+
+    if req.emotion == EMO_SLEEPY:
+        state._finalize_sleepy_peripherals(
+            mute_mic=preset.get("mic") == "off",
+            mute_speaker=preset.get("speaker") == "off",
+        )
 
     return {
         "status": "ok",

@@ -518,6 +518,10 @@ def _rt_enabled() -> bool:
 
 REALTIME_ENABLED: bool = _rt_enabled()
 REALTIME_PROVIDER: str = _rt_str("HAL_REALTIME_PROVIDER", _RT.get("provider"), "gemini")  # none | gemini | openai | qwen
+# When enabled, do not send a voice turn to the realtime agent until an STT
+# interim transcript starts with one of the configured wake phrases. This is a
+# top-level config.json setting because it also gates the non-realtime Go path.
+WAKEWORD_ENABLED: bool = _os_cfg_get("wakeword", False) is True
 # Max seconds receive() waits for the NEXT output event from the agent's recv
 # queue before giving up on the turn. This is the gap between events, not the
 # whole turn: a streaming reply puts events on the queue sub-second apart and
@@ -551,14 +555,15 @@ REALTIME_ZOMBIE_RECONNECT_AFTER: int = int(
 # after this many seconds of silence. A long-lived session accumulates per-turn
 # context the provider (Gemini Live / OpenAI Realtime) re-bills every turn; a turn
 # that follows a long pause is effectively a new conversation, so starting a fresh
-# session then drops that accumulation. Long-term continuity survives — the rebuild
-# reloads the persisted summary.md. 0 disables. Default 240s (4 min). See
-# RealtimeOrchestrator._mark_turn_start.
+# session then drops that accumulation. Native-audio Gemini skips this POST-turn
+# policy when its pre-turn transport recycle already made the session fresh for the
+# same idle gap. Long-term continuity survives — the rebuild reloads the persisted
+# summary.md. 0 disables. Default 240s (4 min). See RealtimeOrchestrator._mark_turn_start.
 REALTIME_SESSION_IDLE_RESET_S: float = float(
     os.environ.get("HAL_REALTIME_SESSION_IDLE_RESET_S", "240")
 )
 REALTIME_GEMINI_PRE_TURN_RECYCLE_S: float = float(
-    os.environ.get("HAL_GEMINI_PRE_TURN_RECYCLE_S", "60")
+    os.environ.get("HAL_GEMINI_PRE_TURN_RECYCLE_S", "120")
 )
 # Gemini 1011 recovery: how many times to reconnect a FRESH session and replay
 # the just-captured turn audio when a turn produced no output (the campaign-api

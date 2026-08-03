@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -28,6 +29,11 @@ const (
 	// binarySniffSize is how many leading bytes decide text-vs-binary.
 	binarySniffSize = 8000
 )
+
+// ErrSkillFileNotFound is returned when an entry path is not a readable file in
+// a skill. It is separate from ErrSkillNotFound so callers can report an exact
+// path mismatch without treating the whole skill as absent.
+var ErrSkillFileNotFound = errors.New("skill file not found")
 
 // ReadSkillFiles returns every file in <skillsDir>/<name> as a flat list with
 // UTF-8 contents inlined, sorted by path. Deliberately flat (not a tree) so the
@@ -71,6 +77,81 @@ func ReadSkillFilesFrom(name string, dirs ...string) ([]domain.SkillBundleFile, 
 		lastErr = fmt.Errorf("skill %q not found", name)
 	}
 	return nil, lastErr
+}
+
+// ReadSkillFile reads one file from an installed skill. filePath must be the
+// exact relative path reported by ReadSkillFiles, including the skill name.
+// Keeping this separate from ReadSkillFiles avoids loading every reference and
+// asset before an MQTT caller can receive one requested document.
+func ReadSkillFile(skillsDir, name, filePath string) (domain.SkillBundleFile, error) {
+	if err := ValidateSkillName(name); err != nil {
+		return domain.SkillBundleFile{}, err
+	}
+	if skillsDir == "" {
+		return domain.SkillBundleFile{}, fmt.Errorf("skills dir is not configured")
+	}
+
+	rel, err := skillFileRelativePath(name, filePath)
+	if err != nil {
+		return domain.SkillBundleFile{}, err
+	}
+	root := filepath.Join(skillsDir, name)
+	info, err := os.Stat(root)
+	if err != nil || !info.IsDir() {
+		return domain.SkillBundleFile{}, fmt.Errorf("%w: skill %q", ErrSkillNotFound, name)
+	}
+
+	full := filepath.Join(root, filepath.FromSlash(rel))
+	info, err = os.Stat(full)
+	if err != nil || info.IsDir() {
+		return domain.SkillBundleFile{}, fmt.Errorf("%w: %s", ErrSkillFileNotFound, filePath)
+	}
+	content, err := readCapped(full)
+	if err != nil {
+		return domain.SkillBundleFile{}, fmt.Errorf("read %s: %w", filePath, err)
+	}
+	return BuildFilePreview(filePath, content, info.Size()), nil
+}
+
+// ReadSkillFileFrom mirrors ReadSkillFilesFrom's root precedence. A skill in
+// the first root wins even if the requested entry is absent there.
+func ReadSkillFileFrom(name, filePath string, dirs ...string) (domain.SkillBundleFile, error) {
+	var lastErr error
+	for _, dir := range dirs {
+		file, err := ReadSkillFile(dir, name, filePath)
+		if err == nil {
+			return file, nil
+		}
+		if !errors.Is(err, ErrSkillNotFound) {
+			return domain.SkillBundleFile{}, err
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("%w: %s", ErrSkillNotFound, name)
+	}
+	return domain.SkillBundleFile{}, lastErr
+}
+
+func skillFileRelativePath(name, filePath string) (string, error) {
+	prefix := name + "/"
+	if !strings.HasPrefix(filePath, prefix) || path.Clean(filePath) != filePath {
+		return "", fmt.Errorf("%w: %s", ErrSkillFileNotFound, filePath)
+	}
+	rel := strings.TrimPrefix(filePath, prefix)
+	if rel == "" {
+		return "", fmt.Errorf("%w: %s", ErrSkillFileNotFound, filePath)
+	}
+	parts := strings.Split(rel, "/")
+	if len(parts) > readMaxDepth || strings.HasPrefix(parts[len(parts)-1], ".") {
+		return "", fmt.Errorf("%w: %s", ErrSkillFileNotFound, filePath)
+	}
+	for _, part := range parts {
+		if part == "" || strings.HasPrefix(part, ".") {
+			return "", fmt.Errorf("%w: %s", ErrSkillFileNotFound, filePath)
+		}
+	}
+	return rel, nil
 }
 
 // collectSkillFiles walks dir, appending each file with its content. relBase is

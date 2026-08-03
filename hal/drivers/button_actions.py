@@ -24,6 +24,7 @@ from hal.i18n import (
     HEAD_PAT_PHRASES_BY_LANG,
     PHRASE_LISTENING,
     PHRASE_REBOOT,
+    PHRASE_SLEEP,
     PHRASE_SHUTDOWN,
     PHRASES_BY_LANG,
 )
@@ -32,8 +33,9 @@ from hal.presets import DEFAULT_LANG
 logger = logging.getLogger(__name__)
 
 DOUBLE_CLICK_WINDOW = 0.4  # seconds to wait for second click
-LONG_PRESS_DURATION = 5.0  # seconds held → shutdown on release
-FACTORY_RESET_DURATION = 10.0  # seconds held → factory-reset on release (supersedes shutdown)
+SLEEP_HOLD_DURATION = 3.0  # seconds held → sleepy emotion on release
+LONG_PRESS_DURATION = 10.0  # seconds held → shutdown on release
+FACTORY_RESET_DURATION = 20.0  # seconds held → factory-reset on release (supersedes shutdown)
 
 # OS server sensing endpoint. Head-pat notify is fire-and-forget — the
 # OS server appends a NO_REPLY hint so the agent records the event in
@@ -294,6 +296,30 @@ def head_pat_action(source: str = "touch"):
     ).start()
 
 
+def sleep_action(source: str = "button"):
+    """Announce sleep, then enter sleepy mode through the normal pipeline."""
+    if state._sleeping:
+        logger.info("%s sleep hold -- already sleeping", source)
+        return
+
+    logger.info("%s sleep hold -- announcing sleepy emotion", source)
+    if _tts_available():
+        state.tts_service.speak_cached(_phrase(PHRASE_SLEEP))
+        # Like reboot/shutdown, allow the cached announcement to play before
+        # sleepy mutes the speaker and stops any active TTS.
+        time.sleep(5)
+
+    try:
+        from hal.models import EmotionRequest
+        from hal.routes.emotion import express_emotion
+
+        # Reuse /emotion so sleep keeps one authoritative implementation for
+        # servo animation/release, LED off, camera off, and audio mute.
+        express_emotion(EmotionRequest(emotion="sleepy"))
+    except Exception as e:
+        logger.warning("%s sleep hold failed: %s", source, e)
+
+
 def long_press_action(source: str = "button"):
     """Announce, park servos, then shutdown OS."""
     logger.info("%s long press -- shutting down OS", source)
@@ -344,10 +370,10 @@ def factory_reset_action(source: str = "button"):
     into AP setup mode. HAL does NOT touch state itself — single source of
     truth for what gets wiped lives in the OS server's deviceWipePaths.
 
-    Authoritative because of physical presence: 10s deliberate hold + the
+    Authoritative because of physical presence: 20s deliberate hold + the
     /api/system/factory-reset endpoint allows loopback origin without Bearer
     (see os-server server.go adminOrLoopbackAuth)."""
-    logger.info("%s factory-reset hold (10s+) -- triggering soft reset", source)
+    logger.info("%s factory-reset hold (20s+) -- triggering soft reset", source)
     logger.info("%s LED: red solid (factory-reset armed)", source)
 
     # Suppress the lifespan-shutdown re-announce — same reason as

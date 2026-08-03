@@ -1,0 +1,219 @@
+#!/bin/bash
+# software-update — apply one OTA component on this robot.
+#
+#   software-update <os-server|openclaw|bootstrap|web|hal|claude-desktop-buddy|device>
+#
+# The bootstrap worker holds no install logic: it decides WHAT to update and then
+# execs this script (system/bootstrap/bootstrap.go → applyUpdate). Without it the
+# worker detects updates correctly and fails every apply with
+#   exec: "software-update": executable file not found in $PATH
+# — five units active, health green, and nothing on the robot able to update
+# itself. That is what the first Reachy Mini shipped with, because the spike
+# scripts never created it.
+#
+# On lamp/OrangePi this file is written by the imager and by
+# scripts/provision/setup.sh, each from its own ~130-line heredoc. Reachy has
+# neither: it installs on top of Pollen's OS, so nothing here ever ran them.
+# This is that script as a real file, taken from the build-orangepi.sh copy (the
+# most complete of the three). It lives in the device profile, so it ships inside
+# the reachy-mini OTA package automatically, and spike-bootstrap.sh installs it
+# to /usr/local/bin.
+#
+# NOT yet the single source for the whole fleet — the three heredocs still exist.
+# When they are unified, this moves to scripts/provision/ and the imagers point
+# at it; until then, only edit it together with build-orangepi.sh:855.
+set -e
+# Metadata URL comes from the bootstrap worker config (single source of truth,
+# baked at image build). An explicit OTA_METADATA_URL env var still overrides it
+# for manual/debug runs. No compiled-in default — abort if neither is set.
+BOOTSTRAP_JSON="/root/config/bootstrap.json"
+if [ -z "${OTA_METADATA_URL:-}" ]; then
+  OTA_METADATA_URL="$(jq -r '.metadata_url // empty' "$BOOTSTRAP_JSON" 2>/dev/null || true)"
+fi
+if [ -z "$OTA_METADATA_URL" ]; then
+  echo "[software-update] ERROR: no metadata_url in $BOOTSTRAP_JSON and OTA_METADATA_URL unset"
+  exit 1
+fi
+echo "[software-update] OTA metadata: $OTA_METADATA_URL"
+[ "$(id -u)" -ne 0 ] && { echo "Run as root."; exit 1; }
+[ $# -ne 1 ] && { echo "Usage: software-update <os-server|openclaw|bootstrap|web|hal|claude-desktop-buddy|device>"; exit 1; }
+APP="$1"
+case "$APP" in
+  os-server|openclaw|bootstrap|web|hal|claude-desktop-buddy|device) ;;
+  *) echo "Unknown app: $APP. Use os-server, openclaw, bootstrap, web, hal, claude-desktop-buddy, or device."; exit 1 ;;
+esac
+
+METADATA_TMP=$(mktemp)
+ZIP_TMP=""
+DIR_TMP=""
+trap 'rm -f "$METADATA_TMP" "$ZIP_TMP"; rm -rf "$DIR_TMP"' EXIT
+curl -fsSL -H "Cache-Control: no-cache" -H "Pragma: no-cache" -o "$METADATA_TMP" "$OTA_METADATA_URL" || { echo "Failed to fetch metadata from $OTA_METADATA_URL"; exit 1; }
+if [ "$APP" = "device" ]; then
+  # Device profile lives nested under devices.<type>; resolve THIS device's type.
+  DEVICE_TYPE="$(grep -E '^DEVICE_TYPE=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
+  [ -z "$DEVICE_TYPE" ] && DEVICE_TYPE="$(jq -r '.device_type // empty' /root/config/config.json 2>/dev/null)"
+  # No lamp fallback: pulling the lamp profile onto a device whose class can't be
+  # resolved would overwrite its persona with the wrong one — refuse instead.
+  [ -z "$DEVICE_TYPE" ] && { echo "ERROR: device_type not found in /opt/hal/.env or /root/config/config.json — cannot resolve device profile"; exit 1; }
+  VERSION=$(jq -r --arg t "$DEVICE_TYPE" '.devices[$t].version // empty' "$METADATA_TMP")
+  URL=$(jq -r --arg t "$DEVICE_TYPE" '.devices[$t].url // empty' "$METADATA_TMP")
+else
+  META_KEY="$APP"
+  VERSION=$(jq -r --arg a "$META_KEY" '.[$a].version // empty' "$METADATA_TMP")
+  URL=$(jq -r --arg a "$META_KEY" '.[$a].url // empty' "$METADATA_TMP")
+fi
+[ -z "$VERSION" ] && { echo "Metadata has no version for $APP"; exit 1; }
+
+if [ "$APP" = "os-server" ]; then
+  [ -z "$URL" ] && { echo "Metadata has no url for os-server"; exit 1; }
+  ZIP_TMP=$(mktemp)
+  DIR_TMP=$(mktemp -d)
+  curl -fsSL -H "Cache-Control: no-cache" -o "$ZIP_TMP" "$URL" || { echo "Failed to download os-server"; exit 1; }
+  unzip -o -q "$ZIP_TMP" -d "$DIR_TMP"
+  BIN=$(find "$DIR_TMP" -type f -executable 2>/dev/null | head -1)
+  [ -z "$BIN" ] && BIN=$(find "$DIR_TMP" -type f 2>/dev/null | head -1)
+  [ -z "$BIN" ] || [ ! -f "$BIN" ] && { echo "No binary in os-server zip"; exit 1; }
+  cp -f "$BIN" /usr/local/bin/os-server
+  chmod +x /usr/local/bin/os-server
+  systemctl restart os-server
+  echo "os-server updated to $VERSION"
+elif [ "$APP" = "bootstrap" ]; then
+  [ -z "$URL" ] && { echo "Metadata has no url for bootstrap"; exit 1; }
+  ZIP_TMP=$(mktemp)
+  DIR_TMP=$(mktemp -d)
+  curl -fsSL -H "Cache-Control: no-cache" -o "$ZIP_TMP" "$URL" || { echo "Failed to download bootstrap"; exit 1; }
+  unzip -o -q "$ZIP_TMP" -d "$DIR_TMP"
+  BIN=$(find "$DIR_TMP" -type f -executable 2>/dev/null | head -1)
+  [ -z "$BIN" ] && BIN=$(find "$DIR_TMP" -type f 2>/dev/null | head -1)
+  [ -z "$BIN" ] || [ ! -f "$BIN" ] && { echo "No binary in bootstrap zip"; exit 1; }
+  cp -f "$BIN" /usr/local/bin/bootstrap-server
+  chmod +x /usr/local/bin/bootstrap-server
+  systemctl restart bootstrap
+  echo "bootstrap updated to $VERSION"
+elif [ "$APP" = "openclaw" ]; then
+  # Only deviation from the build-orangepi.sh copy: strip zero-padded parts.
+  # The feed publishes "2026.06.10", npm publishes "2026.6.10". A leading zero
+  # makes the spec an invalid semver range, npm then reads it as a dist-tag and
+  # reports "No matching version found". spike-agent.sh already does this; without
+  # it `software-update openclaw` cannot work on this robot at all.
+  VER="$(echo "${VERSION:-latest}" | sed -E 's/(^|\.)0+([0-9])/\1\2/g')"
+  # Same flags spike-agent.sh installs with. Without the browser opt-outs npm
+  # pulls a Chromium build (~400 MB) for a capability this device does not
+  # declare, onto a disk with ~1.8 GB free — a half-written global install then
+  # leaves an openclaw on PATH that cannot start. --omit=optional skips arm64
+  # prebuilds that fall back to source builds and cost minutes.
+  env PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 PUPPETEER_SKIP_DOWNLOAD=1 \
+    npm install -g --no-fund --no-audit --omit=optional "openclaw@${VER}" \
+    || { echo "npm install openclaw failed"; exit 1; }
+  openclaw plugins install @openclaw/discord@${VER} --force 2>&1 || echo "[software-update] WARN: discord plugin install failed (non-fatal)"
+  openclaw plugins install @openclaw/slack@${VER} --force 2>&1 || echo "[software-update] WARN: slack plugin install failed (non-fatal)"
+  systemctl restart openclaw
+  echo "openclaw updated to $VER"
+elif [ "$APP" = "web" ]; then
+  [ -z "$URL" ] && { echo "Metadata has no url for web"; exit 1; }
+  ZIP_TMP=$(mktemp)
+  DIR_TMP=$(mktemp -d)
+  curl -fsSL -H "Cache-Control: no-cache" -o "$ZIP_TMP" "$URL" || { echo "Failed to download web"; exit 1; }
+  unzip -o -q "$ZIP_TMP" -d "$DIR_TMP"
+  echo "$VERSION" > "$DIR_TMP/VERSION"
+  WEB_ROOT="/usr/share/nginx/html/setup"
+  rm -rf "${WEB_ROOT:?}"/*
+  cp -a "$DIR_TMP"/* "$WEB_ROOT"
+  systemctl restart nginx
+  echo "web updated to $VERSION"
+elif [ "$APP" = "hal" ]; then
+  [ -z "$URL" ] && { echo "Metadata has no url for hal"; exit 1; }
+  ZIP_TMP=$(mktemp)
+  curl -fsSL -H "Cache-Control: no-cache" -o "$ZIP_TMP" "$URL" || { echo "Failed to download hal"; exit 1; }
+  HAL_DIR="/opt/hal"
+  unzip -o -q "$ZIP_TMP" -d "$HAL_DIR"
+  # uv is a per-user install and this runs under sudo, whose secure_path does not
+  # include /home/pollen/.local/bin — so `command -v uv` misses the copy Pollen
+  # ships. The lamp-derived fallback (/root/.local/bin/uv) does not exist here at
+  # all, which is why this branch died with "No such file or directory" before
+  # reaching uv. Same search order spike-hal.sh uses, plus a loud failure.
+  UV_BIN="$(command -v uv || true)"
+  for c in /usr/local/bin/uv /home/pollen/.local/bin/uv /root/.local/bin/uv; do
+    [ -n "$UV_BIN" ] && break
+    [ -x "$c" ] && UV_BIN="$c"
+  done
+  [ -n "$UV_BIN" ] || { echo "uv not found (looked on PATH, /usr/local/bin, /home/pollen/.local/bin, /root/.local/bin) — run spike-hal.sh once, it installs uv"; exit 1; }
+  echo "[software-update] uv: $UV_BIN"
+  # Cache INSIDE /opt/hal, exactly as spike-hal.sh installed it. uv reuses the
+  # cache it finds; pointing at root's default instead re-downloads several GB
+  # (torch and friends) onto a disk with ~1.8 GB free.
+  export UV_CACHE_DIR="$HAL_DIR/.uv-cache"
+  # 30s is uv's default per-request timeout — too tight for a 300 MB wheel.
+  export UV_HTTP_TIMEOUT=180
+  find "$UV_CACHE_DIR" -name "lerobot.egg-info" -type d 2>/dev/null | xargs rm -rf
+  # --extra reachy is NOT optional here. `uv sync` is authoritative: it removes
+  # anything outside the resolved extras, so syncing with `--extra hardware`
+  # alone UNINSTALLS the Reachy SDK and leaves HAL with no motion or camera
+  # driver. spike-hal.sh:146 installs with both extras; these must stay in step.
+  cd "$HAL_DIR" && "$UV_BIN" sync --python 3.12 --extra hardware --extra reachy || { echo "uv sync failed"; exit 1; }
+  "$UV_BIN" cache prune >/dev/null 2>&1 || true
+  cd /
+  systemctl restart hal
+  echo "hal updated to $VERSION"
+elif [ "$APP" = "claude-desktop-buddy" ]; then
+  [ -z "$URL" ] && { echo "Metadata has no url for claude-desktop-buddy"; exit 1; }
+  ZIP_TMP=$(mktemp)
+  DIR_TMP=$(mktemp -d)
+  curl -fsSL -H "Cache-Control: no-cache" -o "$ZIP_TMP" "$URL" || { echo "Failed to download claude-desktop-buddy"; exit 1; }
+  BUDDY_DIR="/opt/claude-desktop-buddy"
+  mkdir -p "$BUDDY_DIR"
+  unzip -o -q "$ZIP_TMP" -d "$DIR_TMP"
+  [ -f "$DIR_TMP/buddy-plugin" ] && cp -f "$DIR_TMP/buddy-plugin" "$BUDDY_DIR/buddy-plugin" && chmod +x "$BUDDY_DIR/buddy-plugin"
+  [ ! -f "/root/config/buddy.json" ] && [ -f "$DIR_TMP/config/buddy.json" ] && mkdir -p /root/config && cp -f "$DIR_TMP/config/buddy.json" /root/config/buddy.json
+  echo "$VERSION" > "$BUDDY_DIR/VERSION_BUDDY"
+  systemctl restart claude-desktop-buddy
+  echo "claude-desktop-buddy updated to $VERSION"
+elif [ "$APP" = "device" ]; then
+  [ -z "$URL" ] && { echo "Metadata has no url for devices.$DEVICE_TYPE"; exit 1; }
+  DEVICES_DIR="$(grep -E '^DEVICES_DIR=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
+  [ -z "$DEVICES_DIR" ] && DEVICES_DIR="/opt/devices"
+  DEST="$DEVICES_DIR/$DEVICE_TYPE"
+  ZIP_TMP=$(mktemp)
+  curl -fsSL -H "Cache-Control: no-cache" -o "$ZIP_TMP" "$URL" || { echo "Failed to download device profile"; exit 1; }
+  # Mirror, not merge — same as spike-device.sh: a capability or rootfs file
+  # removed upstream must actually disappear, and unzipping over the old tree
+  # would keep it forever.
+  rm -rf "${DEST:?}"
+  mkdir -p "$DEST"
+  unzip -o -q "$ZIP_TMP" -d "$DEST"
+  rm -f "$ZIP_TMP"
+  # Re-apply the device rootfs overlay onto / before services restart — the
+  # profile's /etc/asound.conf and /opt/hal/.env live there, so an OTA that only
+  # unzipped into $DEST would leave HAL on the old tuning.
+  #
+  # But KEEP an existing /opt/hal/.env. It is the one overlay file an operator
+  # edits on the robot (VAD thresholds, sensing floors, camera tuning), and this
+  # branch runs UNATTENDED from the bootstrap worker — silently resetting tuning
+  # on a routine update is exactly how it was lost before (spike-device.sh keeps
+  # it too, and only --force-env replaces it). Absent → installed, because HAL
+  # will not start without DEVICE_TYPE.
+  if [ -d "$DEST/rootfs" ]; then
+    ENV_DST="/opt/hal/.env"
+    ENV_BACKUP=""
+    if [ -f "$ENV_DST" ]; then
+      ENV_BACKUP="$(mktemp)"
+      cp -a "$ENV_DST" "$ENV_BACKUP"
+    fi
+    cp -a "$DEST/rootfs/." /
+    if [ -n "$ENV_BACKUP" ]; then
+      cp -a "$ENV_BACKUP" "$ENV_DST"
+      rm -f "$ENV_BACKUP"
+    fi
+  fi
+  # Refresh this script from the package just installed, so a fix in the updater
+  # reaches the robot over OTA instead of needing a hand-copy. Syntax-checked
+  # first: a broken updater is the one thing nothing else on the robot can repair.
+  if [ -f "$DEST/software-update" ] && bash -n "$DEST/software-update" 2>/dev/null; then
+    install -m 0755 "$DEST/software-update" /usr/local/bin/software-update.new
+    mv -f /usr/local/bin/software-update.new /usr/local/bin/software-update
+    echo "[software-update] refreshed /usr/local/bin/software-update from $DEST"
+  fi
+  systemctl restart os-server 2>/dev/null || true
+  systemctl restart hal 2>/dev/null || true
+  echo "device profile ($DEVICE_TYPE) updated to $VERSION"
+fi

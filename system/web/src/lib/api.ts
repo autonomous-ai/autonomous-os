@@ -52,6 +52,15 @@ export function hwUrl(path: string): string {
   return withApiToken(`/api/hardware${path}`);
 }
 
+/** Build a `GET /api/agent/file` URL for a DEVICE-LOCAL path the agent named in
+ *  a reply (a camera snapshot, a generated report). The path is validated
+ *  server-side against an allow-list of roots and served types — this helper
+ *  only builds the URL, it makes no claim that the file is servable, so callers
+ *  must handle 403/404 (an <img> onError, a link that just fails). */
+export function agentFileUrl(devicePath: string): string {
+  return withApiToken(`${API_BASE}/api/agent/file?path=${encodeURIComponent(devicePath)}`);
+}
+
 /** Base64-encode a File for JSON bodies (e.g. face enroll). Uses FileReader
  *  instead of `btoa(String.fromCharCode(...new Uint8Array(buf)))`: spreading a
  *  full-resolution JPEG's bytes into a function call blows the call stack
@@ -298,6 +307,7 @@ export interface DeviceConfig {
   stt_model: string;
   tts_provider: string;
   tts_voice: string;
+  wakeword: boolean;
   realtime?: {
     enabled?: boolean;
     provider?: string;
@@ -619,6 +629,9 @@ export interface InstalledSkill {
   name: string;
   description?: string;
   files: SkillNode[];
+  /** Newest mtime anywhere in the skill's tree, Unix SECONDS. Omitted when
+   *  nothing in the tree could be stat'd. */
+  updated_at?: number;
 }
 
 /** GET /api/agent/skills — what the ACTIVE runtime currently has installed.
@@ -634,6 +647,25 @@ export async function listInstalledSkills(): Promise<InstalledSkill[]> {
 export async function readSkillFiles(name: string): Promise<SkillBundle> {
   return apiRequest<SkillBundle>(
     `${API_BASE}/api/agent/skills/files?name=${encodeURIComponent(name)}`);
+}
+
+/** POST /api/agent/skills/upload — installs a `.skill`/`.zip` the operator picked
+ *  from their machine. Multipart (not base64) so a multi-MB archive isn't
+ *  inflated a third on the wire. */
+export async function uploadSkill(file: File): Promise<{ name: string; path: string }> {
+  const body = new FormData();
+  body.append("file", file);
+  // No Content-Type header: the browser must set the multipart boundary itself.
+  return apiRequest<{ name: string; path: string }>(
+    `${API_BASE}/api/agent/skills/upload`, { method: "POST", body });
+}
+
+/** DELETE /api/agent/skills — removes the skill from the ACTIVE runtime's skills
+ *  dir. Rejects with the backend's message when it isn't installed (HTTP 404) or
+ *  the runtime can't uninstall (HTTP 501). */
+export async function deleteSkill(name: string): Promise<{ name: string; path: string }> {
+  return apiRequest<{ name: string; path: string }>(
+    `${API_BASE}/api/agent/skills?name=${encodeURIComponent(name)}`, { method: "DELETE" });
 }
 
 /** POST /api/agent/skills/install — device downloads the catalog's `.skill`

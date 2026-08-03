@@ -121,7 +121,10 @@ function FileRow({
       onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = "color-mix(in srgb, var(--lm-text) 6%, transparent)"; }}
       onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}
     >
-      <FileText size={13} style={{ color: active ? "var(--lm-amber)" : "var(--lm-text-muted)", flexShrink: 0 }} />
+      <FileText size={13} style={{
+        color: active ? "var(--lm-amber)" : "var(--lm-text-muted)",
+        flexShrink: 0, alignSelf: "flex-start", marginTop: 2,
+      }} />
       <span style={{ minWidth: 0, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 11 }}>
         {dir && (
           <span style={{

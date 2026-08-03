@@ -253,14 +253,8 @@ func parseIdentityName(content string) string {
 	return ""
 }
 
-// buildWakeWords generates wake word variants from an agent name.
+// buildWakeWords keeps OpenClaw's runtime update aligned with every other
+// runtime and HAL's English-prefix voice wake-word aliases.
 func buildWakeWords(name string) []string {
-	n := strings.ToLower(name)
-	return []string{
-		"hey " + n,
-		n,
-		"này " + n,
-		"ê " + n,
-		n + " ơi",
-	}
+	return i18n.BuildVoiceWakeWords(name)
 }

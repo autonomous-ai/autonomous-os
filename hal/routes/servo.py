@@ -39,6 +39,11 @@ from hal.presets import (
 
 router = APIRouter(tags=["Servo"])
 
+
+def _sleep_servo_locked() -> bool:
+    """True once sleepy released torque, until a wake emotion resumes it."""
+    return state._sleeping and state._sleep_servo_released
+
 # --- Constants ---
 
 _SERVO_JOINT_FIELD_RE = re.compile(r"^[A-Za-z0-9_]+\.pos$")
@@ -184,6 +189,9 @@ async def upload_servo_recording(
 def play_recording(req: ServoRequest):
     """Play a pre-recorded servo animation by name."""
     state.logger.debug("POST /servo/play recording=%s", req.recording)
+    if _sleep_servo_locked():
+        state.logger.info("servo/play blocked -- sleepy torque release owns servo")
+        return {"status": "ok"}
     svc = _svc()
     if svc.is_suppressed:
         state.logger.debug("servo/play blocked: suppressed mode active")
@@ -198,6 +206,9 @@ def play_recording(req: ServoRequest):
 @router.post("/servo/resume", response_model=StatusResponse)
 def resume_servos():
     """Exit zero-hold mode and resume normal animation loop (plays idle)."""
+    if _sleep_servo_locked():
+        state.logger.info("servo/resume blocked -- sleepy torque release owns servo")
+        return {"status": "ok"}
     svc = _svc()
     svc.resume()
     return {"status": "ok"}
@@ -214,6 +225,9 @@ def hold_servos():
 @router.post("/servo/move", response_model=ServoMoveResponse)
 def move_servo(req: ServoMoveRequest):
     """Send joint positions to servo motors with smooth interpolation."""
+    if _sleep_servo_locked():
+        state.logger.info("servo/move blocked -- sleepy torque release owns servo")
+        return {"status": "ok", "requested": req.positions, "clamped": req.positions, "duration": req.duration}
     svc = _svc_connected()
     valid_joints = svc.get_joint_names()
     unknown = [j for j in req.positions if j not in valid_joints]
@@ -319,6 +333,8 @@ def list_aim_directions():
 @router.post("/servo/aim", response_model=ServoAimResponse)
 def aim_servo(req: ServoAimRequest):
     """Aim the device head to a named direction."""
+    if _sleep_servo_locked():
+        return {"status": "ok", "direction": req.direction, "positions": {}}
     svc = _svc_connected()
     try:
         current = svc.get_positions()
@@ -336,6 +352,8 @@ def aim_servo(req: ServoAimRequest):
 @router.post("/servo/nudge", response_model=ServoAimResponse)
 def nudge_servo(req: ServoNudgeRequest):
     """Move servo by relative degrees from current position."""
+    if _sleep_servo_locked():
+        return {"status": "ok", "direction": f"nudge yaw={req.yaw} pitch={req.pitch}", "positions": {}}
     svc = _svc_connected()
     try:
         current = svc.get_positions()
@@ -348,6 +366,9 @@ def nudge_servo(req: ServoNudgeRequest):
 @router.post("/servo/track", response_model=ServoTrackResponse)
 def start_tracking(req: ServoTrackRequest):
     """Start tracking an object by bounding box. Servo follows the object in real-time."""
+    if _sleep_servo_locked():
+        state.logger.info("servo/track blocked -- sleepy torque release owns servo")
+        return {"status": "ok", "tracking": False, "target": None, "bbox": None, "confidence": None}
     if not state.tracker_service:
         raise HTTPException(503, "Tracker service not available")
     if not state.animation_service:

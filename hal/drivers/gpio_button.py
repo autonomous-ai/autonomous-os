@@ -1,14 +1,15 @@
 """GPIO button handler for pin 17.
 
-Supports four actions on a single button:
+Supports five actions on a single button:
 - Single click: stop speaker / unmute mic (fires immediately on release)
 - Triple click: reboot OS (resolved after the click window)
-- Hold + release (5–10s):  shutdown OS
-- Hold + release (10s+):   factory-reset (wipe state, reboot to AP setup)
+- Hold + release (3–10s):  sleepy emotion
+- Hold + release (10–20s): shutdown OS
+- Hold + release (20s+):   factory-reset (wipe state, reboot to AP setup)
 
 Destructive actions commit ON RELEASE, not on a timer firing while held,
 so the user can cancel mid-hold by releasing before crossing a threshold
-(or keep holding past 10s to escalate from shutdown → factory-reset).
+(or keep holding past 20s to escalate from shutdown → factory-reset).
 
 The silent part of the single-click action (stop speaker / unmute mic)
 fires on the FIRST tap of a burst without waiting for the click window —
@@ -35,9 +36,11 @@ from hal.drivers.button_actions import (
     DOUBLE_CLICK_WINDOW,
     FACTORY_RESET_DURATION,
     LONG_PRESS_DURATION,
+    SLEEP_HOLD_DURATION,
     announce_listening_cue,
     factory_reset_action,
     long_press_action,
+    sleep_action,
     single_click_action,
     triple_click_action,
 )
@@ -45,10 +48,11 @@ from hal.drivers.button_actions import (
 logger = logging.getLogger(__name__)
 
 # LED feedback during hold (Tier B design from the factory-reset discussion).
-# Red blink at 5–10s tells the user "shutdown is armed — releasing now
-# commits". Red solid at 10s+ tells them they've escalated to factory-reset.
+# Purple blink at 3–10s tells the user sleepy is armed. Red blink at 10–20s
+# tells them shutdown is armed. Red solid at 20s+ means factory-reset.
 # Both dispatch at HIGH priority so they preempt the current emotion LED.
-# Same red colour for both stages — blink vs solid is the differentiator.
+# The purple comes from sleepy's previous display preset.
+LED_SLEEP_WARN = (60, 40, 120)      # sleepy purple (blinking)
 LED_SHUTDOWN_WARN = (255, 0, 0)     # red (blinking)
 LED_FACTORY_RESET = (255, 0, 0)     # red (solid)
 LED_OFF = (0, 0, 0)
@@ -111,22 +115,25 @@ class GPIOButtonHandler:
         while not stop_event.is_set():
             held = time.monotonic() - self._press_start
             if held >= FACTORY_RESET_DURATION:
-                stage = 2  # red solid — armed for factory-reset
+                stage = 3  # red solid — armed for factory-reset
             elif held >= LONG_PRESS_DURATION:
-                stage = 1  # red blink 2 Hz — armed for shutdown
+                stage = 2  # red blink 2 Hz — armed for shutdown
+            elif held >= SLEEP_HOLD_DURATION:
+                stage = 1  # purple blink 2 Hz — armed for sleepy
             else:
-                stage = 0  # quiet — under shutdown threshold
+                stage = 0  # quiet — short tap
 
-            # Stage 2 entry: set red solid once (no blink). Subsequent loops
+            # Stage 3 entry: set red solid once (no blink). Subsequent loops
             # leave it alone so the LED doesn't flicker.
-            if stage != last_stage and stage == 2:
+            if stage != last_stage and stage == 3:
                 self._dispatch_led(LED_FACTORY_RESET)
             last_stage = stage
 
-            if stage == 1:
+            if stage in (1, 2):
                 # Half-period toggle gives a 2 Hz blink (0.25 s on, 0.25 s off).
                 blink_on = not blink_on
-                self._dispatch_led(LED_SHUTDOWN_WARN if blink_on else LED_OFF)
+                color = LED_SLEEP_WARN if stage == 1 else LED_SHUTDOWN_WARN
+                self._dispatch_led(color if blink_on else LED_OFF)
                 wait = LED_BLINK_HALF_PERIOD_S
             else:
                 wait = 0.1
@@ -172,7 +179,7 @@ class GPIOButtonHandler:
             # on release based on hold duration — no timer fires while held,
             # so the user can always cancel by releasing before the next
             # threshold (or escalate from shutdown → factory-reset by
-            # holding past 10s). LED feedback runs in a watcher thread.
+            # holding past 20s). LED feedback runs in a watcher thread.
             self._press_start = time.monotonic()
             self._pressed = True
             # Signal any leftover watcher (shouldn't exist due to release
@@ -242,6 +249,20 @@ class GPIOButtonHandler:
                 kwargs={"source": "GPIO button"},
                 daemon=True,
                 name="gpio-button-long-press",
+            ).start()
+            return
+
+        if held >= SLEEP_HOLD_DURATION:
+            logger.info("GPIO button hold %.1fs -- sleepy", held)
+            self._click_count = 0
+            if self._click_timer:
+                self._click_timer.cancel()
+                self._click_timer = None
+            threading.Thread(
+                target=sleep_action,
+                kwargs={"source": "GPIO button"},
+                daemon=True,
+                name="gpio-button-sleep",
             ).start()
             return
 

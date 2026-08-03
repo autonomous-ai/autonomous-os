@@ -263,11 +263,60 @@ class GeminiLiveAgent(VoiceAgentBase):
         logger.info("[realtime] Gemini Live session open (voice=%s)", self._config.voice)
 
     async def _async_disconnect(self) -> None:
-        if self._exit_stack is not None:
+        exit_stack = self._exit_stack
+        # Clear shared state before awaiting provider cleanup. A close can stall
+        # on a bad proxy, but no sender/receiver should see its stale session.
+        self._exit_stack = None
+        self._session = None
+        if exit_stack is not None:
             logger.info("[realtime] Disconnecting from Gemini Live API")
-            await self._exit_stack.aclose()
-            self._exit_stack = None
-            self._session = None
+            await exit_stack.aclose()
+
+    @staticmethod
+    def _run_io_loop(loop: asyncio.AbstractEventLoop) -> None:
+        """Run and own a Gemini IO loop until teardown cancels its tasks.
+
+        The owning thread closes the loop only after all pending coroutines have
+        been cancelled. Closing it from the rebuild thread while a receive()
+        coroutine is still pending leaves a live ``gemini-io`` thread behind.
+        """
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_forever()
+        finally:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    def _stop_io_loop(self) -> None:
+        """Cancel the IO loop's tasks and wait briefly for its owner to exit."""
+        loop = self._loop
+        io_thread = self._io_thread
+        self._loop = None
+        self._io_thread = None
+        if loop is None:
+            return
+
+        def _cancel_tasks_and_stop() -> None:
+            for task in asyncio.all_tasks(loop):
+                task.cancel()
+            loop.stop()
+
+        try:
+            loop.call_soon_threadsafe(_cancel_tasks_and_stop)
+        except RuntimeError:
+            # The loop already stopped/closed; its owner is already unwinding.
+            pass
+        if io_thread is not None and io_thread is not threading.current_thread():
+            io_thread.join(timeout=self._join_timeout_s)
+            if io_thread.is_alive():
+                logger.warning("[realtime] Gemini IO thread did not stop within %.1fs", self._join_timeout_s)
 
     async def _async_send_input(self, input: InputBase | None) -> None:
         if self._session is None or input is None:
@@ -479,6 +528,22 @@ class GeminiLiveAgent(VoiceAgentBase):
                     self._recv_queue.put(TurnDoneEvent())
                     return
 
+                if getattr(content, "generation_complete", False):
+                    # Gemini Live can defer turn_complete until its assumed
+                    # real-time audio playback ends. HAL plays the received
+                    # response itself, so waiting for that acknowledgement
+                    # makes an already-spoken turn block until the consumer's
+                    # silent-output watchdog expires. generation_complete
+                    # guarantees that no more model content will arrive for
+                    # this turn, so release the next manual-VAD commit and
+                    # finish the consumer turn now. A late turn_complete is
+                    # harmless: flush_output() drops it before the next turn.
+                    logger.debug("[realtime] Generation complete")
+                    self._first_audio_received = False
+                    self._turn_done.set()
+                    self._recv_queue.put(TurnDoneEvent())
+                    return
+
             elif message.tool_call and message.tool_call.function_calls:
                 for fc in message.tool_call.function_calls:
                     logger.debug("[realtime] Function call: %s (call_id=%s)", fc.name, fc.id)
@@ -508,6 +573,8 @@ class GeminiLiveAgent(VoiceAgentBase):
     def _ensure_connected(self) -> None:
         """Reconnect if not connected. Throttled by an exponential backoff that grows
         on consecutive failures (reset to base on success)."""
+        if self._stop_event.is_set():
+            return
         if self._connected.is_set():
             return
         now: float = time.monotonic()
@@ -546,6 +613,11 @@ class GeminiLiveAgent(VoiceAgentBase):
         # The recv/send loops' _ensure_connected now rebuilds a fresh session.
 
     def _reconnect(self) -> None:
+        # A worker can observe a transport-close exception during teardown. It
+        # belongs to the old agent and must never revive it after its loop has
+        # been released.
+        if self._stop_event.is_set():
+            return
         self._connected.clear()
         self._activity_started = False
         self._turn_done.set()  # unblock any waiting commit
@@ -608,26 +680,39 @@ class GeminiLiveAgent(VoiceAgentBase):
         """Spawn IO thread with event loop, connect on it. Blocks until ready."""
         self._loop = asyncio.new_event_loop()
         self._io_thread = threading.Thread(
-            target=self._loop.run_forever,
+            target=self._run_io_loop,
+            args=(self._loop,),
             daemon=True,
             name="gemini-io",
         )
         self._io_thread.start()
-        self._submit_and_wait(self._async_connect())
+        try:
+            self._submit_and_wait(self._async_connect())
+        except Exception:
+            # Connection setup happens after the loop/thread are already live.
+            # Roll both back on a failed handshake (e.g. proxy WS 1011) instead
+            # of leaking an idle gemini-io thread and event loop.
+            logger.warning("[realtime] Gemini connect failed — cleaning up IO loop")
+            self._do_disconnect()
+            raise
 
     @override
     def _do_disconnect(self) -> None:
-        if self._loop is not None:
-            try:
-                self._submit_and_wait(self._async_disconnect())
-            except Exception:
-                pass
-            self._loop.call_soon_threadsafe(self._loop.stop)
-            if self._io_thread is not None:
-                self._io_thread.join(timeout=self._join_timeout_s)
-                self._io_thread = None
-            self._loop.close()
-            self._loop = None
+        if self._loop is None:
+            return
+        try:
+            # A bounded graceful close normally wakes receive() immediately.
+            # If a proxy/SDK close stalls, finally cancels every loop task and
+            # stops the owner thread rather than waiting for recv_timeout_s.
+            self._submit_and_wait(
+                self._async_disconnect(), timeout=self._join_timeout_s
+            )
+        except Exception as e:
+            logger.warning("[realtime] Gemini graceful disconnect failed: %s", e)
+        finally:
+            self._session = None
+            self._exit_stack = None
+            self._stop_io_loop()
 
     @override
     def _send_loop(self) -> None:
@@ -660,9 +745,13 @@ class GeminiLiveAgent(VoiceAgentBase):
                         )
                     break  # Success
                 except (ConnectionClosed, genai_errors.APIError) as e:
+                    if self._stop_event.is_set():
+                        break
                     logger.exception("[realtime] Send failed (attempt %d/%d): %s", attempt + 1, self._max_retries, e)
                     self._reconnect()
                 except Exception as e:
+                    if self._stop_event.is_set():
+                        break
                     logger.exception("[realtime] Send error (attempt %d/%d): %s", attempt + 1, self._max_retries, e)
                     self._reconnect()
 
@@ -694,6 +783,8 @@ class GeminiLiveAgent(VoiceAgentBase):
                     )
                     break  # Success — turn received
                 except ConnectionClosed as e:
+                    if self._stop_event.is_set():
+                        break
                     code: int | None = getattr(getattr(e, "rcvd", None), "code", None)
                     if code == 1000:
                         logger.info("[realtime] Session closed normally (idle) — reconnecting")
@@ -708,6 +799,8 @@ class GeminiLiveAgent(VoiceAgentBase):
                     self._connected.clear()
                     self._session = None
                 except genai_errors.APIError as e:
+                    if self._stop_event.is_set():
+                        break
                     # The genai SDK surfaces a normal WS close (code 1000 — idle /
                     # session-duration timeout) as an APIError whose str is
                     # "1000 None", not as ConnectionClosed. Mirror the 1000 special
@@ -724,6 +817,8 @@ class GeminiLiveAgent(VoiceAgentBase):
                     self._connected.clear()
                     self._session = None
                 except Exception as e:
+                    if self._stop_event.is_set():
+                        break
                     logger.exception("[realtime] Unexpected recv error (attempt %d/%d): %s", attempt + 1, self._max_retries, e)
                     self._fail_fast_turn("unexpected")
                     self._connected.clear()

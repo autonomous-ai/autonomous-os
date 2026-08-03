@@ -5,6 +5,8 @@ with cameras, microphones, speakers, displays, motors, lights, and sensors, and 
 an AI agent a body: it sees, hears, speaks, moves, senses, remembers, runs skills, and
 updates itself — locally first.
 
+https://github.com/user-attachments/assets/08a8f109-a165-4604-be5f-39e5ec9e8d11
+
 **Autonomous Lamp** is the first reference device. **Intern** is the second. Anyone can
 build a third.
 

@@ -181,33 +181,38 @@ def _on_music_complete():
     # from explicit /audio/stop + thread finally).
     state._on_music_play_end()
 
-    user_state = state._user_led_state
-    state.logger.info("Music stop: restoring state type=%s", user_state.get("type") if user_state else None)
-    if user_state is not None and user_state.get("type") != "off":
-        state._restore_user_led()
-    elif state.rgb_service:
-        state.logger.info("Music stop: no active user state -- falling back to idle breathing")
-        idle_preset = EMOTION_PRESETS[EMO_IDLE]
-        try:
-            state._stop_current_effect()
-            state._effect_stop.clear()
-            state._effect_name = idle_preset["effect"]
-            state._effect_thread = threading.Thread(
-                target=_run_effect,
-                args=(
-                    idle_preset["effect"],
-                    tuple(idle_preset["color"]),
-                    idle_preset.get("speed", 0.3),
-                    None,
-                    state._effect_stop,
-                    state.rgb_service,
-                ),
-                daemon=True,
-                name="led-music-idle",
-            )
-            state._effect_thread.start()
-        except Exception as e:
-            state.logger.warning("Music stop LED failed: %s", e)
+    # Sleep is the terminal LED state. A late music completion must not take
+    # the no-user-state fallback below and start the idle breathing effect.
+    if state._sleeping:
+        state.logger.info("Music stop: LED restore skipped -- sleepy owns the strip")
+    else:
+        user_state = state._user_led_state
+        state.logger.info("Music stop: restoring state type=%s", user_state.get("type") if user_state else None)
+        if user_state is not None and user_state.get("type") != "off":
+            state._restore_user_led()
+        elif state.rgb_service:
+            state.logger.info("Music stop: no active user state -- falling back to idle breathing")
+            idle_preset = EMOTION_PRESETS[EMO_IDLE]
+            try:
+                state._stop_current_effect()
+                state._effect_stop.clear()
+                state._effect_name = idle_preset["effect"]
+                state._effect_thread = threading.Thread(
+                    target=_run_effect,
+                    args=(
+                        idle_preset["effect"],
+                        tuple(idle_preset["color"]),
+                        idle_preset.get("speed", 0.3),
+                        None,
+                        state._effect_stop,
+                        state.rgb_service,
+                    ),
+                    daemon=True,
+                    name="led-music-idle",
+                )
+                state._effect_thread.start()
+            except Exception as e:
+                state.logger.warning("Music stop LED failed: %s", e)
 
     if state.display_service:
         try:

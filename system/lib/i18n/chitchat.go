@@ -14,15 +14,9 @@ import (
 // matchers + entry in phrases.go for reply variants + entry in
 // ChitchatPhrases() so the intent matcher iterates it.
 var chitchatInputs = map[Phrase]map[string][]string{
-	/* PhraseChitchatGreeting: {
-		LangVI:   {"chào", "chào {name}", "xin chào", "{name} ơi", "hey {name}"},
-		LangEN:   {"hi", "hello", "hi {name}", "hello {name}", "hey", "hey {name}"},
-		LangZhCN: {"你好", "你好啊", "嗨", "嘿"},
-		LangZhTW: {"你好", "嗨"},
-	}, */
 	PhraseChitchatGreeting: {
-		LangVI:   {"chào", "chào {name}", "{name} ơi", "hey {name}"},
-		LangEN:   {"hi", "hi {name}", "hello {name}", "hey", "hey {name}"},
+		LangVI:   {"chào", "chào {name}", "{name} ơi"},
+		LangEN:   {"hi", "hi {name}", "hello {name}"},
 		LangZhCN: {"你好", "你好啊", "嗨", "嘿"},
 		LangZhTW: {"你好", "嗨"},
 	},
@@ -138,9 +132,10 @@ var (
 	chitchatWakeWords []string
 )
 
-// BuildChitchatWakeWords derives the strip tokens from a device/agent name
-// (e.g. its device_type), longest forms first so the caller strips the maximal
-// leading match. "" → no tokens (stripping is then a no-op).
+// BuildChitchatWakeWords derives local-intent attention tokens from a
+// device/agent name. This list is independent of the HAL voice wake-word
+// aliases: local chitchat has always accepted Vietnamese attention forms and a
+// bare name, regardless of whether the optional voice gate is enabled.
 func BuildChitchatWakeWords(name string) []string {
 	n := strings.ToLower(strings.TrimSpace(name))
 	if n == "" {
@@ -148,9 +143,23 @@ func BuildChitchatWakeWords(name string) []string {
 	}
 	return []string{
 		// Compound attention-call forms first (longest).
-		"hey " + n, "này " + n, "ê " + n, n + " ơi",
+		"hello " + n, "hey " + n, "này " + n, "ê " + n, n + " ơi",
 		// Bare name last.
 		n,
+	}
+}
+
+// BuildVoiceWakeWords derives the English-prefix aliases understood by HAL's
+// STT wake-word gate. Keep it separate from BuildChitchatWakeWords so enabling
+// or changing voice wake words cannot alter local-intent matching.
+func BuildVoiceWakeWords(name string) []string {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if n == "" {
+		return nil
+	}
+	return []string{
+		"wake up " + n, "hello " + n, "okay " + n, "hey " + n,
+		"hi " + n, "alo " + n, "ok " + n,
 	}
 }
 

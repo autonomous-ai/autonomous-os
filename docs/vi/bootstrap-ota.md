@@ -287,9 +287,10 @@ checkOnce():
 
 reconcile(key, target):
   1. Phát hiện version hiện tại đã cài
-  2. floor = target.min_version (mặc định target.version nếu rỗng)
-  3. Nếu current >= floor → đồng bộ state, return (đã ở/trên sàn duyệt)
-  4. Nếu current < floor →
+  2. Nếu current == "" VÀ component không được cài → bỏ qua im lặng
+  3. floor = target.min_version (mặc định target.version nếu rỗng)
+  4. Nếu current >= floor → đồng bộ state, return (đã ở/trên sàn duyệt)
+  5. Nếu current < floor →
      a. Bật LED cam breathing (đang update)
      b. applyUpdate(key, target)   # cài target.version qua software-update
      c. Thành công → flash xanh lá | Thất bại → đỏ pulse
@@ -297,6 +298,29 @@ reconcile(key, target):
 
 > `software-update <key>` thủ công qua SSH KHÔNG đi qua `reconcile` — nó cài
 > thẳng `target.version`, bỏ qua sàn `min_version`.
+
+#### Bước 2 — component thiết bị này không có
+
+Metadata liệt kê mọi component đã publish; không thiết bị nào chạy đủ hết. Reachy
+Mini không có `claude-desktop-buddy`; thiết bị chạy runtime khác OpenClaw thì
+không có `openclaw`. Với mấy cái đó `detectVersion` trả `""`, mà `""` xếp dưới
+mọi sàn — nên nếu không chặn, worker sẽ báo "update available", phát câu thông
+báo qua loa, bật LED cam rồi cài thất bại **mỗi lần poll, vĩnh viễn**.
+
+`componentInstalled(key)` hỏi câu thô hơn `detectVersion`: *artifact có tồn tại
+không*, chứ không phải *version nào*. Component có mặt nhưng đọc không được vẫn
+tính là đã cài, nên OTA vẫn tự chữa được (binary `os-server` hỏng `--version` vẫn
+được update); chỉ cái thực sự vắng mặt mới bị bỏ qua.
+
+| Component | Tính là đã cài khi |
+|---|---|
+| `bootstrap` | luôn luôn (chính là worker đang chạy, để nó tự update được) |
+| `os-server` | `os-server` có trong `$PATH` |
+| `openclaw` | `openclaw` có trong `$PATH` |
+| `web` | tồn tại `/usr/share/nginx/html/setup/` |
+| `hal` | tồn tại `/opt/hal/` |
+| `claude-desktop-buddy` | tồn tại `/opt/claude-desktop-buddy/` |
+| `device` | tồn tại `$DEVICES_DIR/<type>/` (mặc định `/opt/devices`) |
 
 ### OTA LED Feedback
 

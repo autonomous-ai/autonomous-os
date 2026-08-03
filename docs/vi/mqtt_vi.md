@@ -63,7 +63,7 @@ rồi `gateway.default` trong `DEVICE.md` của device, cuối cùng mặc đị
 Phản hồi còn kèm các field tùy chọn khi có: `hal_version`, `openclaw_version`,
 `hermes_version`, `picoclaw_version`, `codex_version`, `claudecode_version`,
 `opencode_version`, `local_ip`, `tts_provider`, `tts_voice`, `stt_language`, `timezone`,
-`unsupported_channels`. `timezone` là múi giờ IANA **trực tiếp** của device (ví dụ
+`unsupported_channels`, `skills`. `timezone` là múi giờ IANA **trực tiếp** của device (ví dụ
 `Asia/Ho_Chi_Minh`), đọc tươi từ `/etc/timezone` (fallback về config), không chỉ là
 bản ghi trong config. Cả sáu version per-runtime đều được probe lúc startup (mỗi cái
 từ `--version` riêng) và bắn cạnh nhau; `agent_runtime` cho biết cái nào đang active.
@@ -73,6 +73,15 @@ mà runtime **đang active** không chạy được. Nó được `ChannelReconc
 chuyển runtime — vd chuyển `openclaw` → `picoclaw` (chỉ telegram) khiến mọi `slack`/
 `discord` đã cấu hình thành không hỗ trợ. Danh sách lấy từ
 `config.channels_unsupported`, được `ChannelReconcile` ghi lại mỗi lần chuyển runtime.
+
+`skills` (bỏ qua khi rỗng) là những skill runtime **đang active** hiện có — đúng bộ
+mà panel Manage skills trên web hiển thị (`AgentGateway.ListSkills`). Shape là
+`[{"name":"music","description":"Play music."}]`: chỉ name + description, không bao
+giờ kèm cây file mà `GET /api/agent/skills` cũng trả. Cú ping HTTP mang y hệt mảng
+này (cùng type `domain.SkillSummary` nên hai uplink không thể lệch nhau).
+Best-effort — runtime không list được hoặc thư mục skill đọc lỗi thì bỏ field chứ
+không làm fail uplink. Field nằm trên `MQTTInfoResponse` mà các reply `data` embed,
+nhưng chỉ `handleInfo` set nó, nên reply `data` không bao giờ mang theo.
 
 **HTTP backend ping mirror các field này.** Cú ping do device chủ động gửi
 (`POST {llm_base}/ping`, build bởi `system/device.buildPingPayload`, gửi qua
@@ -86,6 +95,17 @@ active**. Ping bắn ở: (1) ngay sau khi join WiFi lúc setup (status
 tới ~2 phút, để đường cứu popup Setup mô tả trong `docs/setup-flow.md` hoạt
 động được), (2) một lần khi setup xong (status `working`), và (3) định kỳ từ
 status reporter. Field nào backend không xài thì đơn giản là bị bỏ qua.
+
+Ping còn mang thêm **`skills`** — những skill runtime đang chạy hiện có, đúng bộ
+mà panel Manage skills trên web hiển thị (`AgentGateway.ListSkills`, cũng là thứ
+`GET /api/agent/skills` trả về). Gửi ở mọi lần ping để index skill theo device
+phía backend tự chữa, cùng lý do với `slack_team_id`. Shape là
+`[{"name":"music","description":"Play music."}]` — **chỉ name + description**,
+cố ý không kèm cây file mà endpoint đó cũng trả: ping bắn mỗi 15s nên gửi cả
+tree thường xuyên như vậy là vô ích (pane detail trên web lấy riêng qua
+`GET /api/agent/skills/files` khi cần). Best-effort — runtime không list được,
+thư mục skill đọc lỗi, hoặc device chưa có skill nào thì field bị bỏ qua chứ
+không làm fail cú ping vốn còn mang `local_ip` tối quan trọng cho setup.
 
 **Ping sống sót qua việc đổi địa chỉ LAN.** Địa chỉ của thiết bị không cố định —
 chuyển dây ethernet sang mạng khác, hoặc DHCP cấp lại lease, là đổi, trong khi
@@ -294,12 +314,19 @@ metadata device/version chuẩn cộng với `kind`, `status` (`success|failure`
 |------|----------|--------------------|
 | `tts.set` | Lưu cấu hình TTS voice/provider/language | `provider`, `voice`, `language` |
 | `tts.preview` | Preview TTS một lần (không ghi config) | `text` (bắt buộc), tùy chọn `provider`/`voice`/`language` |
+| `wakeword.gate` | Bật/tắt wake-word gate top-level (bất đồng bộ; ack `starting`) | `enabled` (boolean bắt buộc) |
 | `timezone.set` | Áp dụng múi giờ IANA của device (bất đồng bộ; ack `starting`) | `timezone` (bắt buộc, ví dụ `Asia/Ho_Chi_Minh`) |
 | `oauth.set` | Lưu/thay token OAuth cho một provider | `provider`, `access_token`, tùy chọn `refresh_token`/`token_type`/`expires_at`/`scopes`/`user_email`/`client_id` |
 | `oauth.remove` | Xóa token OAuth đã lưu của provider | `provider` |
 | `connector.set.<code>` | Lưu/thay credentials cho một connector (bất đồng bộ; ack `starting`) | `connector`, `auth_type`, tùy chọn `access_token`/`refresh_token`/`api_key`/`expires_in`/`expires_at`/`scopes`/`credentials`/`refresh` |
 | `connector.remove.<code>` | Xóa credentials của một connector (bất đồng bộ; ack `starting`) | `connector` |
 | `channel.refresh_config` | Áp dụng lại block config chuẩn của một channel (bất đồng bộ; ack `configuring`) | `channel` |
+| `skills.install_store` | Cài MỘT skill từ catalog lên runtime đang chạy (bất đồng bộ; ack `starting`) | `id`, `name` tuỳ chọn |
+| `skills.files` | Đọc file của một skill đã cài — danh sách, hoặc nội dung một file (đồng bộ) | `name`, `path` tuỳ chọn |
+| `skills.uninstall` | Xoá một skill đã cài khỏi runtime đang chạy (đồng bộ) | `name` |
+| `chat.file.get` | Lấy một file trên device mà turn đã gọi tên (đồng bộ) | `path` (bắt buộc), tuỳ chọn `session_id`/`run_id` |
+| `chat.send` | Mở một turn của agent từ backend rồi stream ngược về (ack một run id, sau đó bắn `chat.event`) | `message` (bắt buộc), tuỳ chọn `image`/`file`/`session_id`/`speak` |
+| `skills.save` | Ghi một skill soạn sẵn vào thư mục skill của runtime đang chạy (đồng bộ) | `name`, `description`, `instructions` |
 | `system.info` | Snapshot tổng hợp: versions + network + host | _(không)_ |
 | `system.version` | Chỉ versions các thành phần (rẻ hơn `system.info`) | _(không)_ |
 | `system.network` | Chỉ thông tin mạng của interface đang giữ default route | _(không)_ |
@@ -355,6 +382,18 @@ local, `openclaw` từ probe cache của agent monitor (`openclaw_detected` phâ
 "chưa cài" với "đã cài nhưng không parse được").
 
 `kind` không hợp lệ sẽ phản hồi `status:"failure"` kèm `error:"unknown kind: <kind>"`.
+
+#### `wakeword.gate`
+
+Bật hoặc tắt cờ `wakeword` top-level. Lệnh dùng cùng kiểu ack bất đồng bộ như
+`realtime.set`: device ack đã nhận, lưu cờ vào `config.json`, restart HAL khi
+giá trị thay đổi, rồi publish kết quả.
+
+**Nhận:** `{"cmd":"data","kind":"wakeword.gate","data":{"enabled":true}}`
+
+Ack `success` cuối cùng echo lại `{"enabled":true}`. Thiếu `enabled` hoặc JSON
+không hợp lệ trả `status:"failure"`. `success` nghĩa là cờ đã được lưu và HAL
+đang restart; không đợi HAL sẵn sàng.
 
 #### `timezone.set`
 
@@ -457,6 +496,368 @@ và publish trạng thái kết thúc:
 | `slack_credentials_missing` | config.json không có credentials cho channel đang refresh (giữ lại để tương thích wire; áp dụng cho mọi channel, không chỉ slack) |
 | `channel_not_supported` | runtime đang active không chạy được channel này |
 
+#### `skills.install_store`
+
+Bản MQTT của `POST /api/agent/skills/install` (nút Install trên web). Device tải
+file `.skill` từ catalog và runtime **đang chạy** giải nén vào thư mục skill của
+nó qua `AgentGateway.InstallSkillArchive`, nên chạy được trên mọi backend chứ
+không riêng openclaw.
+
+> Hậu tố `_store` chỉ vì kind `skills.install` trơn đã bị chiếm bởi chức năng cũ
+> và khác hẳn: cả một ROLE bundle ghi thẳng vào `OpenclawConfigDir`.
+
+**Nhận:** `{"cmd": "data", "kind": "skills.install_store", "data": {"id": "6a195e59e438b1a9f06299d0"}}`
+
+`id` là id skill trong catalog. `name` là tuỳ chọn, **chỉ** dùng làm fallback khi
+archive không có thư mục bọc duy nhất để lấy tên skill (bundle `.skill` của
+catalog thường có, dạng `<name>/SKILL.md`).
+
+**Bất đồng bộ** — phải tải qua mạng, nên device ack `starting` rồi publish status
+cuối khi xong.
+
+```json
+{
+  "device": "lamp", "type": "data", "kind": "skills.install_store",
+  "status": "starting | success | failure",
+  "error": "<step>: <message>",
+  "data": { "id": "6a19\u2026", "name": "design-critique", "runtime": "OpenClaw",
+            "path": "/root/.openclaw/workspace/skills/design-critique" }
+}
+```
+
+`data.name` được đọc lại từ thư mục thực sự được tạo, nên không cần ai nói tên cho
+device. `data.runtime` + `data.path` cho biết runtime nào lưu và lưu ở đâu — cả
+hai khác nhau theo backend.
+
+| `failed_step` | Nghĩa |
+|---------------|-------|
+| `validate_id` | id rỗng hoặc chứa ký tự phân cách đường dẫn (`/ \\ ? #`) |
+| `temp_dir` | không tạo được thư mục staging |
+| `download` | không tới được catalog, trả non-200, hoặc id không tồn tại |
+| `archive` | file tải về không phải zip dùng được / rỗng |
+| `validate_name` | tên skill suy ra từ archive không phải slug hợp lệ |
+| `unsupported_runtime` | runtime đang chạy không có thư mục skill ghi được; **không cài gì cả** |
+| `install` | lỗi giải nén / swap |
+
+Install **thay thế** skill trùng tên — khác `skills.save` là từ chối ghi đè: cài
+là chỉ thị chủ động, soạn thảo thì không. Giải nén được stage ở `<skill>.new` và
+chỉ swap khi thành công trọn vẹn (bản cũ giữ ở `<skill>.old` cho tới lúc đó), nên
+bản tải hỏng không bao giờ để lại skill cài dở hay phá skill đang chạy.
+
+Đồng thời: dùng chung một mutex với `skills.install` và `skills.save` — cả ba ghi
+vào cùng thư mục skill. Cái thứ hai đến giữa lúc đang chạy sẽ fail ngay với
+`"another skills install is already in progress; try again later"`.
+
+Không restart gateway: mọi backend có thư mục skill đều nhặt file mới theo từng
+session.
+
+#### `skills.files`
+
+Bản MQTT của `GET /api/agent/skills/files`. Endpoint đó chỉ trong LAN và sau
+admin-auth, nên backend — và qua đó là app mobile — không có cách nào xem một skill
+mà uplink `skills` đã báo có. Đây là đường vào đó.
+
+**Hai chế độ**, vì MQTT không phải kênh truyền khối lớn và cả một skill có thể nặng
+vài MB:
+
+| Nhận | Trả về |
+|------|--------|
+| `{"name":"music"}` | **danh sách** file — `path` / `size` / `binary` mỗi entry, **không có nội dung** |
+| `{"name":"music","path":"music/SKILL.md"}` | **một file** đó, nội dung inline |
+
+`path` phải đúng y như danh sách đã báo (tương đối so với gốc thư mục skill, nên có
+kèm tên thư mục skill). Truyền basename hay thử `..` đều không khớp — tra cứu là so
+khớp chính xác với listing, không bao giờ join đường dẫn trên filesystem.
+Khi có `path`, device chỉ đọc file đó; skill có nhiều reference/asset sẽ không
+làm chậm phản hồi vì phải nạp mọi file còn lại trước.
+
+**Đồng bộ** — đọc thư mục skill là đọc đĩa local, nên không có ack `starting`.
+
+Chế độ danh sách:
+```json
+{
+  "device": "lamp", "type": "data", "kind": "skills.files",
+  "status": "success",
+  "data": { "name": "music", "runtime": "OpenClaw", "files": [
+    {"path": "music/SKILL.md", "size": 1204},
+    {"path": "music/reference/tempo.md", "size": 380},
+    {"path": "music/assets/icon.png", "size": 9001, "binary": true}
+  ]}
+}
+```
+
+Chế độ một file trả `data.file` thay vì `files`: cùng entry đó cộng `text`, và
+`truncated: true` khi nội dung bị cắt.
+
+**Ngân sách kích thước.** Uplink này trả tối đa **5 KiB** đầu tiên của text file
+được yêu cầu; nếu bị cắt sẽ có `truncated: true`. Điểm cắt không bao giờ chẻ đôi
+một rune nhiều byte nên text vẫn là UTF-8 hợp lệ. Entry binary chỉ có metadata,
+không bao giờ có bytes.
+
+| `failed_step` | Nghĩa |
+|---------------|-------|
+| `validate_name` | tên skill không phải slug hợp lệ |
+| `not_found` | `path` yêu cầu không có trong skill đó |
+| `unsupported_runtime` | runtime đang chạy không có thư mục skill đọc được |
+| `read` | skill không còn (list cũ) hoặc đọc lỗi |
+
+#### `skills.uninstall`
+
+Bản MQTT của `DELETE /api/agent/skills`. Xoá skill khỏi thư mục skill mà runtime
+**đang chạy** sở hữu, qua `AgentGateway.DeleteSkill`.
+
+**Nhận:** `{"cmd": "data", "kind": "skills.uninstall", "data": {"name": "music"}}`
+
+**Đồng bộ** — xoá một thư mục là đọc/ghi đĩa local, nên không có ack `starting`.
+
+```json
+{
+  "device": "lamp", "type": "data", "kind": "skills.uninstall",
+  "status": "success | failure",
+  "error": "<step>: <message>",
+  "data": { "name": "music", "runtime": "OpenClaw",
+            "path": "/root/.openclaw/workspace/skills/music" }
+}
+```
+
+**Cố ý không idempotent:** skill chưa cài sẽ trả `failed_step: "not_found"` chứ
+không phải success — để view cũ phía backend hoặc lệnh gửi trùng lộ ra, thay vì
+được báo là đã xoá thành công một thứ chưa từng bị xoá.
+
+| `failed_step` | Nghĩa |
+|---------------|-------|
+| `validate_name` | tên không phải slug hợp lệ — `..` hay `/` không bao giờ ra được ngoài thư mục skill |
+| `not_found` | không có skill đó (hoặc path đó không phải thư mục skill) |
+| `unsupported_runtime` | runtime đang chạy không có thư mục skill ghi được |
+| `remove` | lỗi filesystem |
+
+Đồng thời: dùng chung một mutex với các kind install/save, nên uninstall không xen
+vào giữa lúc đang giải nén vào cùng cây thư mục.
+
+Trên Hermes, các root được thử theo thứ tự device-owned trước, khớp với thứ tự của
+listing — nên uninstall xoá đúng skill mà uplink `skills` đã báo có.
+
+#### `skills.save`
+
+Ghi MỘT skill soạn sẵn vào thư mục skill mà agentic runtime **đang chạy** sở hữu.
+Đây là bản MQTT của `POST /api/agent/skills`: cả hai đều gọi
+`AgentGateway.SaveSkill`, nên skill do backend push vào nằm đúng chỗ với skill
+viết từ form "Write skill" trên web, và tuân cùng quy tắc không ghi đè.
+
+**Nhận:**
+```json
+{"cmd": "data", "kind": "skills.save", "data": {
+  "name": "weekly-status-report",
+  "description": "Summarise the week's activity into a short status report.",
+  "instructions": "When the user asks for a weekly status report:\n1. …"
+}}
+```
+
+`name` + `description` thành YAML front-matter của SKILL.md, `instructions` thành
+phần body markdown (`skills.RenderSkillMarkdown`). Cả ba đều bắt buộc; mỗi cái
+được trim trước, nên giá trị có khoảng trắng dư vẫn được nhận chứ không bị loại.
+
+**Đồng bộ** — khác `skills.install`, không có ack `starting`: ghi một file chỉ mất
+vài millisecond nên thiết bị publish luôn một status cuối.
+
+```json
+{
+  "device": "lamp",
+  "type": "data",
+  "kind": "skills.save",
+  "status": "success | failure",
+  "error": "<step>: <message>",
+  "data": { "name": "weekly-status-report", "runtime": "OpenClaw",
+            "path": "/root/.openclaw/workspace/skills/weekly-status-report/SKILL.md" }
+}
+```
+
+`data.runtime` cho biết runtime nào đã lưu và `data.path` là nơi nó nằm — cả hai
+khác nhau theo backend, nên backend biết được cây nào đã nhận skill. Khi lỗi,
+`data.failed_step` mang cùng nhãn với tiền tố trong `error`:
+
+| `failed_step` | Nghĩa |
+|---------------|-------|
+| `validate_name` | tên không phải slug `^[a-z0-9_-]+$`, hoặc dài quá 64 ký tự |
+| `already_exists` | đã có skill trùng tên — soạn thảo không bao giờ ghi đè |
+| `unsupported_runtime` | runtime đang chạy không có thư mục skill ghi được; **không lưu gì cả** |
+| `write` | lỗi filesystem |
+
+Hình dạng tên được validate bên trong `SaveSkill` (qua `skills.ValidateSkillName`)
+chứ không ở tầng MQTT, nên đường này và đường HTTP không bao giờ lệch nhau về
+việc tên nào là hợp lệ.
+
+Đồng thời: `skills.save` dùng chung mutex với `skills.install` — cả hai ghi vào
+cùng thư mục skill. Một lệnh save đến giữa lúc đang install sẽ fail ngay với
+`"a skills install is in progress; try again later"` thay vì chặn vòng dispatch
+MQTT suốt thời gian tải từ CDN.
+
+Không restart gateway: mọi backend có thư mục skill đều nhặt file mới theo từng
+session.
+
+#### `chat.send` + `chat.event`
+
+Cho phép backend (và qua đó là app mobile) giữ **đúng cuộc hội thoại mà chat trên
+web monitor đang giữ**. Chat web gồm 2 nửa — `POST /api/sensing/event` với
+`type:"web_chat"` để mở turn, và SSE `GET /api/agent/events` để render — cả hai
+đều nằm local trên device sau admin auth, nên điện thoại chạy 4G không với tới
+cái nào. fa/fd sẵn là đường theo từng device và xuyên được NAT, nên cặp này đi
+qua đó.
+
+```
+mobile ──HTTP──▶ backend ──fa: chat.send──▶ device
+mobile ◀── SSE ── backend ◀── fd: chat.event × N ── device
+```
+
+**Nhận:**
+```json
+{"cmd": "data", "kind": "chat.send", "data": {
+  "message": "cậu thấy gì?",
+  "image": "<base64 jpeg, tuỳ chọn>",
+  "file": {"name": "report.pdf", "mime": "application/pdf", "content": "<base64>"},
+  "session_id": "abc123",
+  "speak": false
+}}
+```
+
+`message` bắt buộc. `image` chính là base64 mà chat web bỏ vào sensing event, nên
+điện thoại đính ảnh y hệt cách đó.
+
+`file` dành cho thứ **không phải ảnh** — PDF, CSV. Cố ý tách riêng field chứ
+không nhét thêm vào `image`: ảnh phải đi qua gate describe-first của device, còn
+tài liệu thì không được (đi qua là fail). File rơi vào `/tmp` với **đúng đuôi
+thật**, và turn mang tag `[file: <path> (<name>)]` để agent mở được; `name` chỉ
+dùng để lấy đuôi và làm nhãn hiển thị, không bao giờ là path, nên tên file độc
+hại không lái được chỗ ghi. Giới hạn 10 MB sau khi decode
+(`agentfile.InboundMaxBytes`), khớp với check phía composer web. `mime` chỉ mang
+tính tham khảo — device không quyết định gì từ nó. Gửi cả hai field cùng lúc
+cũng được. `session_id` device **không hiểu** gì về nó —
+chỉ echo lại trên ack và trên mọi event để backend fan-out đúng client; device
+**không** tách state hội thoại theo nó, vì chỉ có một agent và một history, y như
+hai người cùng đứng cạnh cái máy. `speak` (mặc định false) cho device đọc to câu
+trả lời; mặc định tắt vì người chat từ phòng khác không mong cái máy tự nhiên nói
+— cũng chính là lý do chat web suppress TTS.
+
+**Ack** (ngay lập tức, chỉ mang id để correlate — không mang câu trả lời):
+```json
+{
+  "device": "<device_type>", "type": "data", "kind": "chat.send",
+  "status": "success | failure",
+  "data": { "run_id": "run-…", "session_id": "abc123" }
+}
+```
+
+**Rồi tới một stream** `chat.event` do device tự bắn, mỗi monitor event của run
+đó một message:
+```json
+{
+  "device": "<device_type>", "type": "data", "kind": "chat.event", "status": "success",
+  "data": { "run_id": "run-…", "session_id": "abc123",
+            "event": { "id": "evt-42", "time": "…", "type": "assistant_delta",
+                       "summary": "Đang chụp ảnh", "runId": "run-…" } }
+}
+```
+
+`event` là `domain.MonitorEvent` **nguyên si** — đúng struct mà SSE của web đẩy
+(`assistant_delta`, `thinking`, `tool_call`, `hw_*`, `token_usage`,
+`chat_response`). Cố ý như vậy: client dùng lại luôn reducer của chat web, thay
+vì một bộ vocabulary thứ hai mà chỉ cần thêm một event type là lệch nhau.
+
+Vài điểm triển khai mà người viết backend cần biết:
+
+- **Chỉ mirror run do backend mở.** Bus mang mọi turn trên device, kể cả turn nói
+  bằng miệng; một run được track khi `chat.send` của nó được nhận và bỏ track ở
+  event kết thúc, kèm TTL 10 phút cho turn chết giữa chừng không có event kết
+  thúc.
+- **Một turn bắn RẤT NHIỀU event `chat_response`, chỉ cái cuối mới là hết.**
+  Runtime đẩy `chat_response` liên tục trong lúc câu trả lời đang stream — những
+  cái trước mang `state` `"delta"`/`"partial"`, mỗi cái là một đoạn đầu dài dần
+  của cùng câu trả lời. Run chỉ kết thúc ở `state` `"complete"`, `"final"` hoặc
+  `"error"` (hoặc ở event `no_reply`, vốn bản chất chỉ bắn một lần). Client nào
+  coi `chat_response` đầu tiên là hết thì mọi câu trả lời đều bị cắt còn mẩu đầu
+  — đúng con bug bản đầu tiên mắc phải. Reducer của web monitor áp dụng đúng luật
+  này (`ChatSection.tsx`), và đó chính là lý do dùng chung một bộ event.
+- **`assistant_delta` được gộp** thành lô ~250 ms. Bus bắn một delta mỗi chunk của
+  model, mà mỗi publish lên fd đều QoS 1 (một round-trip), nên forward 1:1 tốn
+  hơn cả việc sinh ra chúng. Event đã gộp mang toàn bộ đoạn text tích luỹ,
+  `detail.coalesced: true`, và `id` **rỗng** để không bị nhầm là replay của chunk
+  cuối dùng để dựng nó. Text đang chờ luôn được flush **trước** mọi event khác,
+  nên chip công cụ không bao giờ vượt lên trước câu văn đứng trước nó.
+- **Turn đi ngược vào chính sensing endpoint của device qua loopback** thay vì gọi
+  thẳng AgentGateway, để gate describe-first cho ảnh, nhánh queue lúc agent bận,
+  việc mark run web-chat và flow logging đều là đúng code mà chat web đang chạy.
+  Cùng lý do với hook gateway của Hermes POST vào `/api/agent/channel-turn`.
+- **Một client broker riêng** (`device-<id>-chat`) được giữ mở cho stream. Helper
+  `publish` dùng chung mở rồi đóng kết nối cho từng message — hợp lý với kết quả
+  một-lần của command, nhưng thảm hoạ với hàng chục event mỗi turn. Client id
+  phải khác: hai kết nối trùng id thì broker đá cái nối trước.
+**File turn tạo ra — `chat.file.get`**
+
+Một turn chỉ có thể GỌI TÊN file nó tạo: "chụp hình" thì kết thúc bằng path tuyệt
+đối kiểu `/root/.openclaw/media/hal-snapshots/snap_*.jpg`. Client thấy path đó
+trong message mình đang render rồi đi xin file — bản MQTT của việc chat web gọi
+`GET /api/agent/file`.
+
+**Client chủ động kéo, device không tự đẩy.** Cố ý giống hệt web: cách này chạy
+được với cả message client **đã có sẵn** (hội thoại cuộn lại từ mấy tuần trước
+vẫn hiện được ảnh — đẩy thì chỉ phủ đúng turn đang chạy), file không ai mở thì
+không tốn gì trên uplink của device, và điện thoại dùng lại luôn regex path cùng
+hành vi "hỏng thì để nguyên path dạng text" của client web thay vì viết bản thứ
+hai.
+
+**Nhận:**
+```json
+{"cmd": "data", "kind": "chat.file.get", "data": {
+  "path": "/root/.openclaw/media/hal-snapshots/snap_1785393455291.jpg",
+  "session_id": "abc123",
+  "run_id": "run-…"
+}}
+```
+
+`path` bắt buộc. `session_id` / `run_id` device không hiểu gì, chỉ echo lại
+nguyên vẹn để backend trả đúng client đã hỏi; cả hai tuỳ chọn, vì file có thể
+được xin rất lâu sau khi run kết thúc.
+
+**Trả về:**
+```json
+{
+  "device": "<device_type>", "type": "data", "kind": "chat.file.get",
+  "status": "success",
+  "data": {
+    "run_id": "run-…", "session_id": "abc123",
+    "name": "snap_1785393455291.jpg",
+    "path": "/root/.openclaw/media/hal-snapshots/snap_1785393455291.jpg",
+    "mime": "image/jpeg", "size": 43165,
+    "content": "<base64>"
+  }
+}
+```
+
+- **`path` do client gửi lên nên là input thù địch.** Thứ được phép rời device do
+  `system/agentfile` quyết — đúng allow-list mà `GET /api/agent/file` đang
+  enforce, cố ý chỉ một bản: allow-list có hai bản là hai cơ hội nới lỏng nhầm
+  một bên. Root gồm `media/` + `workspace/` của từng runtime cộng `/tmp`; `.json`
+  và `.log` không được serve (config JSON của runtime chứa gateway token); path
+  phải resolve (`EvalSymlinks`) vào trong root, nên `..` lẫn symlink thoát ra đều
+  chết.
+- **Mọi trường hợp từ chối đều trả cùng một message**, `"file not available"`.
+  Nói rõ là sai đuôi / ngoài root / không tồn tại thì kẻ dò biết được cấu trúc
+  filesystem của device; lý do thật ghi vào log trên device.
+- **`content` là base64**, đối xứng với cách `chat.send` mang ảnh vào, nên backend
+  chỉ phải xử lý một kiểu encode cho cả hai chiều.
+- **Quá 2 MB thì bỏ bytes, không bỏ record**: `too_large: true`, `content` rỗng,
+  `size` vẫn thật, để client nói được "có file video 12 MB" thay vì không hiện
+  gì. Ngưỡng đó là budget inline của MQTT, chặt hơn hẳn 32 MB của
+  `agentfile.MaxBytes` (dành cho fetch HTTP cùng mạng) — đây là uplink của device
+  dùng chung với mọi command khác, mà base64 còn cộng thêm 1/3.
+- **Backend nên cache bytes.** Mỗi request là device đọc lại và encode lại từ
+  đầu, mà file trong `/tmp` thì reboot là mất.
+
+Thay thế: `integrations/chat-bridges/autonomous-chat-hook/` forward chat từ
+backend một chiều dưới dạng `type:"voice"`, nên device đọc to câu trả lời và
+không có gì quay về. Nó không thể làm nền cho một UI chat; cặp kind này thay nó ở
+mục đích đó.
+
 ### `ota` — Trigger OTA update
 
 Xử lý bởi bootstrap worker, không qua MQTT handler trực tiếp.
@@ -474,6 +875,14 @@ Xử lý bởi bootstrap worker, không qua MQTT handler trực tiếp.
 | `system/server/device/delivery/mqtt/add_channel_hander.go` | Handle `add_channel` command (stream pairing events cho WhatsApp) |
 | `system/server/device/delivery/mqtt/slack_event_handler.go` | Handle `slack_event` / `slack_command` (runtime-aware: forward Slack HTTP-mode events tới gateway OpenClaw local, hoặc drive hermes turn nếu runtime là `SlackBridge`) |
 | `system/server/device/delivery/mqtt/data_handler.go` | Handle `data` command kinds `oauth.set`/`oauth.remove` (+ access-token store) |
+| `system/server/device/delivery/mqtt/skills_install_store_handler.go` | Handle `skills.install_store` (async catalog download → `AgentGateway.InstallSkillArchive`) |
+| `system/server/device/delivery/mqtt/skills_files_handler.go` | Handle `skills.files` (đọc file của một skill đã cài: danh sách, hoặc nội dung một file) |
+| `system/server/device/delivery/mqtt/skills_uninstall_handler.go` | Handle `skills.uninstall` |
+| `system/server/device/delivery/mqtt/chat_send_handler.go` | Handle `chat.send` — forward turn qua loopback tới sensing endpoint |
+| `system/server/device/delivery/mqtt/chat_stream.go` | Mirror monitor event của một chat run về dưới dạng `chat.event` |
+| `system/server/device/delivery/mqtt/chat_file_handler.go` | Handle `chat.file.get` — validate path được yêu cầu rồi trả file về |
+| `system/agentfile/agentfile.go` | Package quyết định file nào của device được phép đưa ra, kèm scanner tìm path cho client (dùng chung cho `chat.file.get` và `GET /api/agent/file`) |
+| `system/server/device/delivery/mqtt/skills_save_handler.go` | Handle `skills.save` (ghi skill soạn sẵn, đồng bộ, qua `AgentGateway.SaveSkill`) |
 | `system/server/device/delivery/mqtt/connector_handler.go` | Handle `connector.set.<code>`/`connector.remove.<code>` (bất đồng bộ, dispatch writer qua `connectorWriterFor`) |
 | `system/server/device/delivery/mqtt/connector_writer.go` | Interface `ConnectorWriter` + file helpers `<code>_access_tokens.json` dùng chung |
 | `system/server/device/delivery/mqtt/connector_writer_generic.go` | `connectorWriter` data-driven: routing MCP theo payload, bảng fallback, chặn path-traversal, token file per-connector |

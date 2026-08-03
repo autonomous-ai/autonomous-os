@@ -77,7 +77,6 @@ export function RealtimeSection({
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
         Enabled (audio-native brain — Gemini Live / OpenAI Realtime / Qwen Omni Realtime)
       </label>
-
       <div style={{ marginBottom: 12 }}>
         <label htmlFor="realtime_provider" style={labelStyle}>Provider</label>
         <select id="realtime_provider" value={provider} onChange={(e) => onProviderChange(e.target.value)} style={selectStyle}>

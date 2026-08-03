@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { X, ArrowLeft } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -10,8 +10,14 @@ import { useTheme } from "@/lib/useTheme";
 // <body> with the `lm-root ${themeClass}` re-scope so --lm-* tokens resolve).
 // Pulled out here so the three Skills surfaces stay one screen of JSX each.
 
+// Mount order of the shells currently on screen, innermost last. Module-level
+// because the shells are portalled siblings that never see each other through
+// React context.
+const shellStack: symbol[] = [];
+
 export function ModalShell({
   icon: Icon, title, subtitle, width = 480, onClose, onBack, children, footer, bodyPadding = 18,
+  headerActions,
 }: {
   icon: LucideIcon;
   title: string;
@@ -26,13 +32,38 @@ export function ModalShell({
   footer?: ReactNode;
   /** 0 lets the body own its own padding (e.g. a full-bleed split pane). */
   bodyPadding?: number;
+  /** Rendered in the header immediately LEFT of the close button. Anything
+   *  anchored here must open DOWNWARD: the dialog clips to its own rounded box
+   *  (overflow: hidden), so a menu opening upward would be cut off. */
+  headerActions?: ReactNode;
 }) {
   const [, , themeClass] = useTheme();
 
-  // Escape closes (or steps back). Bound on the document so it works regardless
-  // of what inside the modal has focus.
+  // Register in the shell stack for the whole mounted lifetime. Deliberately
+  // separate from the key handler below and keyed on nothing: re-running it when
+  // an onClose identity changes would re-push this shell above a child that is
+  // actually on top.
+  const idRef = useRef<symbol | null>(null);
+  if (idRef.current === null) idRef.current = Symbol("modal-shell");
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") (onBack ?? onClose)(); };
+    const id = idRef.current as symbol;
+    shellStack.push(id);
+    return () => {
+      const i = shellStack.indexOf(id);
+      if (i >= 0) shellStack.splice(i, 1);
+    };
+  }, []);
+
+  // Escape closes (or steps back). Bound on the document so it works regardless
+  // of what inside the modal has focus — but only for the TOP-MOST shell, or one
+  // keypress would dismiss a stack (Manage skills hosts Write/Upload on top of
+  // itself) instead of just its front layer.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (shellStack[shellStack.length - 1] !== idRef.current) return;
+      (onBack ?? onClose)();
+    };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose, onBack]);
@@ -81,25 +112,30 @@ export function ModalShell({
                 }}
               ><ArrowLeft size={14} /></button>
             )}
-            <Icon size={16} style={{ color: "var(--lm-amber)", flexShrink: 0 }} />
+            {/* alignSelf, not alignItems on the row: the back button beside it
+                should stay vertically centred. */}
+            <Icon size={16} style={{ color: "var(--lm-amber)", flexShrink: 0, alignSelf: "flex-start", marginTop: 3 }} />
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 14.5, fontWeight: 600, color: "var(--lm-text)" }}>{title}</div>
               {subtitle && (
-                <div style={{ fontSize: 10.5, color: "var(--lm-text-muted)", marginTop: 1 }}>{subtitle}</div>
+                <div style={{ fontSize: 11, color: "var(--lm-text-dim)", marginTop: 1 }}>{subtitle}</div>
               )}
             </div>
           </div>
-          <button
-            type="button" onClick={onClose} aria-label="Close"
-            className="lm-u-btn"
-            style={{
-              width: 30, height: 30, borderRadius: 8, background: "var(--lm-bg)",
-              border: "1px solid var(--lm-border)", color: "var(--lm-text-dim)", cursor: "pointer",
-              display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-            }}
-          >
-            <X size={15} />
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+            {headerActions}
+            <button
+              type="button" onClick={onClose} aria-label="Close"
+              className="lm-u-btn"
+              style={{
+                width: 30, height: 30, borderRadius: 8, background: "var(--lm-bg)",
+                border: "1px solid var(--lm-border)", color: "var(--lm-text-dim)", cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+              }}
+            >
+              <X size={15} />
+            </button>
+          </div>
         </div>
 
         <div style={{

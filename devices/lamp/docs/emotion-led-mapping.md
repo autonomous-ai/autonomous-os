@@ -4,26 +4,26 @@ Source: `hal/presets.py` — `EMOTION_PRESETS`
 
 | Emotion | Color (RGB) | Hex | Effect | Speed | Servo Animation |
 |---|---|---|---|---|---|
-| `curious` | 255, 191, 0 | `#FFBF00` vàng ấm | breathing | 1.0 | curious |
-| `happy` | 255, 220, 0 | `#FFDC00` vàng | candle | 1.0 | happy_wiggle |
-| `sad` | 80, 80, 200 | `#5050C8` xanh tím | breathing | 0.8 | sad |
-| `thinking` | 180, 100, 255 | `#B464FF` tím | pulse | 1.5 | thinking_deep |
-| `idle` | 183, 235, 234 | `#B7EBEA` xanh nhẹ | breathing | 0.8 | idle |
-| `excited` | 230, 51, 230 | `#E633E6` hồng tím | blink | 2.5 | excited |
-| `shy` | 255, 150, 180 | `#FF96B4` hồng | blink | 0.5 | shy |
-| `shock` | 255, 255, 255 | `#FFFFFF` trắng | notification_flash | 2.0 | shock |
-| `listening` | 51, 121, 230 | `#3379E6` xanh dương | pulse | 1.5 | listening |
-| `laugh` | 230, 191, 51 | `#E6BF33` vàng sáng | blink | 1.2 | laugh |
-| `confused` | 224, 71, 25 | `#E04719` cam đậm | candle | 0.6 | confused |
-| `sleepy` | 60, 40, 120 | `#3C2878` tím đậm | breathing | 0.5 | sleepy |
-| `greeting` | 255, 180, 100 | `#FFB464` vàng nhạt | blink | 0.8 | greeting | wake_up | goodbye |
-| `acknowledge` | 51, 230, 141 | `#33E68D` xanh lá | blink | 1.0 | acknowledge |
-| `stretching` | 245, 240, 230 | `#F5F0E6` xanh lá nhạt | breathing | 0.6 | stretching |
-| `music_strong` | 155, 221, 155 | `#9BDD9B` xanh lá nhạt | rainbow | 1.5 | music_rock |
-| `music_chill` | 252, 136, 3 | `#FC8803` cam | breathing | 0.5 | music_rock | music_groove | music_jazz | music_waltz |
-| `scan` | 36, 184, 224 | `#24B8E0` xanh nhạt | pulse | 2.0 | scanning |
-| `nod` | 51, 230, 141 | `#33E68D` xanh lá | blink | 1.0 | nod |
-| `headshake` | 230, 51, 51 | `#E63333` đỏ | blink | 1.0 | headshake |
+| `curious` | 125, 81, 0 | `#7d5100` vàng ấm | candle | 0.3 | curious |
+| `happy` | 105, 80, 10 | `#69500a` vàng | candle | 0.2 | happy_wiggle |
+| `sad` | 20, 10, 10 | `#140a0a` đỏ thẫm | breathing | 0.4 | sad |
+| `thinking` | 50, 100, 35 | `#326423` xanh chìm | pulse | 0.1 | thinking_deep |
+| `idle` | 90, 60, 5 | `#5a3c05` vàng dim | breathing | 0.2 | idle |
+| `excited` | 30, 21, 30 | `#1e151e` hồng tím | candle | 0.5 | excited |
+| `shy` | 155, 70, 20 | `#9b4614` hồng | breathing | 0.3 | shy |
+| `shock` | 255, 255, 255 | `#FFFFFF` trắng | notification_flash | 1.0 | shock |
+| `listening` | 51, 121, 230 | `#3379E6` xanh dương | pulse | 0.1 | listening |
+| `laugh` | 130, 91, 11 | `#825a0b` vàng sẫm | candle | 0.2 | laugh |
+| `confused` | 124, 71, 25 | `#7c4719` cam đậm | candle | 0.2 | confused |
+| `sleepy` | 0, 0, 0 | `#000000` đen (tắt) | solid | — | sleepy |
+| `greeting` | 255, 180, 100 | `#FFB464` vàng nhạt | breathing | 0.3 | greeting | wake_up | goodbye |
+| `acknowledge` | 51, 230, 70 | `#33e645` xanh lá | breathing | 0.5 | acknowledge |
+| `stretching` | 145, 140, 30 | `#918b1e` xanh lá nhạt | breathing | 0.6 | stretching |
+| `music_strong` | 155, 221, 155 | `#9BDD9B` xanh lá nhạt | rainbow | 1.0 | music_rock |
+| `music_chill` | 252, 136, 3 | `#FC8803` cam | breathing | 0.3 | music_rock | music_groove | music_jazz | music_waltz |
+| `scan` | 36, 84, 24 | `#245419` xanh nhạt | pulse | 0.3 | scanning |
+| `nod` | 107, 73, 13 | `#6b490d` cam đất | breathing | 0.5 | nod |
+| `headshake` | 206, 77, 14 | `#ce4e0e` amber | breathing | 0.5 | headshake |
 
 ## LED Restore Behavior
 

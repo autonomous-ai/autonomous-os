@@ -90,13 +90,19 @@ class VoiceAgentBase(ABC):
         """Stop loops and disconnect."""
         self._stop_event.set()
         self._connected.clear()
-        if self._send_thread is not None:
-            self._send_thread.join(timeout=5)
-            self._send_thread = None
-        if self._recv_thread is not None:
-            self._recv_thread.join(timeout=5)
-            self._recv_thread = None
-        self._do_disconnect()
+        # Close the provider transport before joining worker threads. A receive
+        # worker may be blocked in a long provider read; waiting for it first
+        # delays the very close that would wake it up and can leave it behind
+        # during an agent rebuild.
+        try:
+            self._do_disconnect()
+        finally:
+            if self._send_thread is not None:
+                self._send_thread.join(timeout=5)
+                self._send_thread = None
+            if self._recv_thread is not None:
+                self._recv_thread.join(timeout=5)
+                self._recv_thread = None
 
     def append_audio(self, audio: npt.NDArray[np.float32]) -> None:
         """Queue a single audio frame for sending (non-blocking)."""

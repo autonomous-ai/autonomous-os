@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
@@ -445,6 +446,23 @@ func (b *Bootstrap) reconcile(ctx context.Context, key string, target domain.OTA
 		current = b.state.Components[key]
 	}
 
+	// A component this device does not have is not "out of date" — it is simply
+	// not part of this device. Metadata lists everything published; no device
+	// runs all of it (a Reachy Mini has no claude-desktop-buddy, a device on a
+	// non-OpenClaw runtime has no openclaw). For those, detectVersion returns ""
+	// which sorts below every floor, so without this gate the worker announces
+	// "device is updating" over the speaker, turns the strip orange, fails to
+	// install something the device was never meant to run — and repeats every
+	// poll, forever.
+	//
+	// Gated on componentInstalled rather than on the empty version alone so
+	// self-repair still works: an os-server binary that is present but whose
+	// --version is broken reports "" too, and that one must still be updated.
+	if current == "" && !b.componentInstalled(key) {
+		slog.Debug("component not installed on this device — skipping", "component", "bootstrap", "key", key)
+		return false, nil
+	}
+
 	// At or above the approved floor → nothing to auto-apply. Keep persisted
 	// state in sync with what's actually installed.
 	if compareVersions(current, minVersion) >= 0 {
@@ -559,6 +577,60 @@ func (b *Bootstrap) detectVersion(ctx context.Context, key string) string {
 	default:
 		return ""
 	}
+}
+
+// componentInstalled reports whether this component exists on the device at all.
+//
+// Deliberately coarser than detectVersion: it asks "is the artifact here", not
+// "which version is here". A present-but-unreadable install therefore still
+// counts as installed and can be repaired by an OTA; only a component that is
+// genuinely absent — the metadata offers it, this device never had it — is
+// skipped.
+//
+// The lookups mirror detectVersion and the on-device updater
+// (devices/<type>/software-update); keep the three in step. os-server/openclaw
+// use the same PATH resolution detectVersion runs them with, so the two can
+// never disagree about whether the binary exists.
+func (b *Bootstrap) componentInstalled(key string) bool {
+	switch key {
+	case domain.OTAKeyBootstrap:
+		// This process. Always — otherwise the worker could never self-update.
+		return true
+	case domain.OTAKeyOSServer:
+		return inPath("os-server")
+	case domain.OTAKeyOpenClaw:
+		// Absent on devices running another agent runtime (hermes, codex,
+		// claudecode, …). Those must not be dragged onto OpenClaw by the OTA.
+		return inPath("openclaw")
+	case domain.OTAKeyWeb:
+		return dirExists("/usr/share/nginx/html/setup")
+	case domain.OTAKeyHal:
+		return dirExists("/opt/hal")
+	case domain.OTAKeyBuddy:
+		return dirExists("/opt/claude-desktop-buddy")
+	case domain.OTAKeyDevice:
+		dir := os.Getenv("DEVICES_DIR")
+		if dir == "" {
+			dir = "/opt/devices"
+		}
+		deviceType := resolveDeviceType()
+		if deviceType == "" {
+			return false
+		}
+		return dirExists(filepath.Join(dir, deviceType))
+	default:
+		return false
+	}
+}
+
+func inPath(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
+}
+
+func dirExists(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.IsDir()
 }
 
 // applyUpdate runs the appropriate update command for the given component.

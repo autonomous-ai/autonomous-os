@@ -186,6 +186,7 @@ export function DeviceSection({
   adminPassword, setAdminPassword,
   adminPasswordConfirm, setAdminPasswordConfirm,
   rotateAdminPassword, setRotateAdminPassword,
+  wakeWord, setWakeWord,
 }: {
   active: boolean;
   deviceId: string;
@@ -202,6 +203,10 @@ export function DeviceSection({
   // something here. Server bcrypts + replaces; live sessions keep working.
   rotateAdminPassword?: string;
   setRotateAdminPassword?: (v: string) => void;
+  // Edit Settings only: top-level voice gate, deliberately independent of the
+  // debug-only realtime configuration.
+  wakeWord?: boolean;
+  setWakeWord?: (v: boolean) => void;
 }) {
   const showAdminPasswordFields = setAdminPassword !== undefined;
   const showRotateField = setRotateAdminPassword !== undefined;
@@ -257,6 +262,18 @@ export function DeviceSection({
               current password" state) renders nothing. */}
           <PasswordStrength value={rotateAdminPassword ?? ""} />
         </>
+      )}
+
+      {setWakeWord && (
+        <div style={{ marginTop: 18, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, color: C.text }}>
+            <input type="checkbox" checked={wakeWord ?? false} onChange={(e) => setWakeWord(e.target.checked)} />
+            Require a wake word before handling speech
+          </label>
+          <div style={{ marginTop: 5, marginLeft: 23, fontSize: 11.5, lineHeight: 1.45, color: C.textMuted }}>
+            When off, your device keeps its existing always-listening behavior.
+          </div>
+        </div>
       )}
 
       {/* Read-only identity metadata. Edit mode (Settings → General) groups

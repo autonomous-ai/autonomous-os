@@ -126,33 +126,33 @@ EMO_HEADSHAKE = "headshake"
 # "camera": "on"  = auto-enable camera if off (active interaction, need vision)
 # omitted         = no camera change
 EMOTION_PRESETS = {
-    EMO_CURIOUS: {"servo": SERVO_CURIOUS, "color": [255, 191, 0], "effect": FX_BREATHING, "speed": 1.0, "camera": "on"},
-    EMO_HAPPY: {"servo": SERVO_HAPPY_WIGGLE, "color": [255, 220, 0], "effect": FX_CANDLE, "speed": 1.0, "camera": "on"},
-    EMO_SAD: {"servo": SERVO_SAD, "color": [80, 80, 200], "effect": FX_BREATHING, "speed": 0.8, "camera": "on"},
-    EMO_THINKING: {"servo": SERVO_THINKING_DEEP, "color": [180, 100, 255], "effect": FX_PULSE, "speed": 1.5,
+    EMO_CURIOUS: {"servo": SERVO_CURIOUS, "color": [125, 81, 0], "effect": FX_CANDLE, "speed": 0.3, "camera": "on"},
+    EMO_HAPPY: {"servo": SERVO_HAPPY_WIGGLE, "color": [105, 80, 10], "effect": FX_CANDLE, "speed": 0.2, "camera": "on"},
+    EMO_SAD: {"servo": SERVO_SAD, "color": [20, 10, 10], "effect": FX_BREATHING, "speed": 0.4, "camera": "on"},
+    EMO_THINKING: {"servo": SERVO_THINKING_DEEP, "color": [50, 100, 35], "effect": FX_PULSE, "speed": 0.3,
                    "camera": "on"},
-    EMO_IDLE: {"servo": SERVO_IDLE, "color": [183, 235, 234], "effect": FX_BREATHING, "speed": 0.8},
-    EMO_EXCITED: {"servo": SERVO_EXCITED, "color": [230, 51, 230], "effect": FX_BLINK, "speed": 2.5, "camera": "on"},
-    EMO_SHY: {"servo": SERVO_SHY, "color": [255, 150, 180], "effect": FX_BLINK, "speed": 0.5, "camera": "on"},
-    EMO_SHOCK: {"servo": SERVO_SHOCK, "color": [255, 255, 255], "effect": FX_NOTIFICATION_FLASH, "speed": 2.0,
+    EMO_IDLE: {"servo": SERVO_IDLE, "color": [90, 60, 5], "effect": FX_BREATHING, "speed": 0.2},
+    EMO_EXCITED: {"servo": SERVO_EXCITED, "color": [30, 21, 30], "effect": FX_CANDLE, "speed": 0.5, "camera": "on"},
+    EMO_SHY: {"servo": SERVO_SHY, "color": [155, 70, 20], "effect": FX_BREATHING, "speed": 0.3, "camera": "on"},
+    EMO_SHOCK: {"servo": SERVO_SHOCK, "color": [255, 255, 255], "effect": FX_NOTIFICATION_FLASH, "speed": 1.0,
                 "camera": "on"},
-    EMO_LISTENING: {"servo": SERVO_LISTENING, "color": [51, 121, 230], "effect": FX_PULSE, "speed": 1.5,
+    EMO_LISTENING: {"servo": SERVO_LISTENING, "color": [51, 121, 230], "effect": FX_PULSE, "speed": 0.3,
                     "camera": "on"},
-    EMO_LAUGH: {"servo": SERVO_LAUGH, "color": [230, 191, 51], "effect": FX_BLINK, "speed": 1.2, "camera": "on"},
-    EMO_CONFUSED: {"servo": SERVO_CONFUSED, "color": [224, 71, 25], "effect": FX_CANDLE, "speed": 0.6, "camera": "on"},
-    EMO_SLEEPY: {"servo": SERVO_SLEEPY, "color": [60, 40, 120], "effect": FX_BREATHING, "speed": 0.5, "camera": "off"},
-    EMO_GREETING: {"servo": SERVO_GREETING, "color": [255, 180, 100], "effect": FX_BLINK, "speed": 0.8, "camera": "on"},
+    EMO_LAUGH: {"servo": SERVO_LAUGH, "color": [130, 91, 11], "effect": FX_CANDLE, "speed": 0.2, "camera": "on"},
+    EMO_CONFUSED: {"servo": SERVO_CONFUSED, "color": [124, 71, 25], "effect": FX_CANDLE, "speed": 0.2, "camera": "on"},
+    EMO_SLEEPY: {"servo": SERVO_SLEEPY, "color": [0, 0, 0], "camera": "off", "mic": "off", "speaker": "off"},
+    EMO_GREETING: {"servo": SERVO_GREETING, "color": [255, 180, 100], "effect": FX_BREATHING, "speed": 0.3, "camera": "on"},
     EMO_GOODBYE: {"servo": SERVO_GOODBYE, "color": [255, 180, 100], "effect": FX_BREATHING, "speed": 0.5},
     EMO_CARING: {"servo": SERVO_NOD, "color": [255, 160, 120], "effect": FX_BREATHING, "speed": 0.4, "camera": "on"},
-    EMO_ACKNOWLEDGE: {"servo": SERVO_ACKNOWLEDGE, "color": [51, 230, 141], "effect": FX_BLINK, "speed": 1.0,
+    EMO_ACKNOWLEDGE: {"servo": SERVO_ACKNOWLEDGE, "color": [51, 230, 70], "effect": FX_BREATHING, "speed": 0.5,
                       "camera": "on"},
-    EMO_STRETCHING: {"servo": SERVO_STRETCHING, "color": [245, 240, 230], "effect": FX_BREATHING, "speed": 0.6,
+    EMO_STRETCHING: {"servo": SERVO_STRETCHING, "color": [145, 140, 30], "effect": FX_BREATHING, "speed": 0.6,
                      "camera": "on"},
-    EMO_MUSIC_STRONG: {"servo": SERVO_MUSIC_ROCK, "color": [155, 221, 155], "effect": FX_RAINBOW, "speed": 1.5},
-    EMO_MUSIC_CHILL: {"servo": SERVO_MUSIC_ROCK, "color": [252, 136, 3], "effect": FX_BREATHING, "speed": 0.5},
-    EMO_SCAN: {"servo": SERVO_SCANNING, "color": [36, 184, 224], "effect": FX_PULSE, "speed": 2.0, "camera": "on"},
-    EMO_NOD: {"servo": SERVO_NOD, "color": [51, 230, 141], "effect": FX_BLINK, "speed": 1.0, "camera": "on"},
-    EMO_HEADSHAKE: {"servo": SERVO_HEADSHAKE, "color": [230, 51, 51], "effect": FX_BLINK, "speed": 1.0, "camera": "on"},
+    EMO_MUSIC_STRONG: {"servo": SERVO_MUSIC_ROCK, "color": [155, 221, 155], "effect": FX_RAINBOW, "speed": 1.0},
+    EMO_MUSIC_CHILL: {"servo": SERVO_MUSIC_ROCK, "color": [252, 136, 3], "effect": FX_BREATHING, "speed": 0.3},
+    EMO_SCAN: {"servo": SERVO_SCANNING, "color": [36, 84, 24], "effect": FX_PULSE, "speed": 0.3, "camera": "on"},
+    EMO_NOD: {"servo": SERVO_NOD, "color": [107, 73, 13], "effect": FX_BREATHING, "speed": 0.5, "camera": "on"},
+    EMO_HEADSHAKE: {"servo": SERVO_HEADSHAKE, "color": [206, 77, 14], "effect": FX_BREATHING, "speed": 0.5, "camera": "on"},
 }
 
 # Lighting scene presets — simulated color temperature via RGB mixing.
@@ -229,12 +229,36 @@ STATUS_LED_PRESETS = {
     # normally on top, and every LED restore lands back on this instead of the
     # user state, so "nothing happening + red breathing" = mic is muted.
     # Applied by /voice/mute, cleared by /voice/unmute (app_state._mic_muted_led).
-    "mic_muted": {"effect": FX_BREATHING, "color": [140, 0, 0], "speed": 0.8},  # dark red — mic muted
+    # Deliberately dimmer than the light.max_brightness ceiling would force
+    # (the gate alone would clamp 140 -> 120): this is a RESTING look that
+    # stays lit for as long as the mic is muted, often pointed at the user, so
+    # it is tuned for "glanceable", not "bright". Red-only helps — at the same
+    # value it carries ~1/4 the luminance of white. Don't go much lower or the
+    # privacy indicator stops reading in a daylit room.
+    "mic_muted": {"effect": FX_BREATHING, "color": [10, 0, 0], "speed": 0.8},  # dark red — mic muted
 }
 
-# Ambient resting look — the warm-white breathing the strip settles into when
-# no user LED state exists. MUST mirror the Go ambient fallback
-# (system/ambient/service.go breathingLoop: (255,200,140) @ 0.3)
-# so a HAL-side settle (e.g. mic unmute with no saved state) is visually
-# identical to what ambient paints on idle.
-AMBIENT_RESTING_LED = {"effect": FX_BREATHING, "color": [255, 200, 140], "speed": 0.3}
+# Ambient resting look — what the strip settles into when no user LED state
+# exists. MUST mirror the Go ambient fallback (system/ambient/service.go
+# `ambientRestingColor`) so a HAL-side settle (e.g. mic unmute with no saved
+# state) is visually identical to what ambient paints on idle. Flip the two
+# together or the device shows one look on idle and another on restore.
+#
+# A BLACK color means "resting state is dark": the settle paths clear the strip
+# instead of starting an effect (an effect thread breathing black would burn
+# 25 fps of SPI writes and make GET /led/color report on=true over a dark
+# strip). Light then becomes opt-in — it comes on for an action (emotion,
+# status cue, explicit user/agent color) and goes back to black when that
+# action releases the strip.
+#
+# Currently [0, 0, 0] — default off, per the 30/07/2026 product call: the lamp
+# was lighting itself up unasked and shining into users' faces. Restore
+# [255, 200, 140] (warm white ~2700K @ speed 0.3) to bring back the previous
+# "a lamp at rest reads as a cozy lamp turned on" behavior.
+AMBIENT_RESTING_LED = {"effect": FX_BREATHING, "color": [0, 0, 0], "speed": 0.3}
+
+
+def ambient_resting_is_dark() -> bool:
+    """True when the resting look is black, i.e. the strip's idle state is OFF.
+    Settle paths use this to clear the strip instead of running an effect."""
+    return not any(AMBIENT_RESTING_LED.get("color") or [0, 0, 0])

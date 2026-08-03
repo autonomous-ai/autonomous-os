@@ -48,3 +48,27 @@ func (s *ClaudeCodeService) ListSkills() ([]domain.InstalledSkill, error) {
 func (s *ClaudeCodeService) ReadSkillFiles(name string) ([]domain.SkillBundleFile, error) {
 	return skills.ReadSkillFiles(claudecodeSkillsDir, name)
 }
+
+func (s *ClaudeCodeService) ReadSkillFile(name, filePath string) (domain.SkillBundleFile, error) {
+	return skills.ReadSkillFile(claudecodeSkillsDir, name, filePath)
+}
+
+// DeleteSkill removes an installed skill and returns the directory it deleted.
+func (s *ClaudeCodeService) DeleteSkill(name string) (string, error) {
+	path, err := skills.DeleteSkill(claudecodeSkillsDir, name)
+	if err != nil {
+		return "", err
+	}
+	slog.Info("[skills] uninstalled", "component", "claudecode", "skill", name, "path", path)
+	return path, nil
+}
+
+// InstallSkillMarkdown installs a bare SKILL.md; its front-matter names the skill.
+func (s *ClaudeCodeService) InstallSkillMarkdown(content []byte) (string, error) {
+	dir, err := skills.InstallSkillMarkdown(claudecodeSkillsDir, content)
+	if err != nil {
+		return "", err
+	}
+	slog.Info("[skills] markdown installed", "component", "claudecode", "dir", dir)
+	return dir, nil
+}

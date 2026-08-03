@@ -28,8 +28,12 @@
 set -euo pipefail
 
 SPIKE_TAG="spike-bootstrap"
+# Where this package was unpacked. install.sh runs the scripts out of a staging
+# dir, spike-device.sh later copies the same package to /opt/devices — so resolve
+# it from THIS file rather than assuming either location.
+SPIKE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=spike-lib.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/spike-lib.sh"
+. "$SPIKE_DIR/spike-lib.sh"
 
 SERVICE="bootstrap"
 NO_START=0
@@ -51,8 +55,8 @@ if [ "$STOP_ONLY" = "1" ] || [ "$UNINSTALL" = "1" ]; then
   stop_unit "$SERVICE"
   if [ "$UNINSTALL" = "1" ]; then
     remove_unit "$SERVICE"
-    rm -f "$BIN_DIR/bootstrap-server"
-    info "removed the unit and $BIN_DIR/bootstrap-server"
+    rm -f "$BIN_DIR/bootstrap-server" "$BIN_DIR/software-update"
+    info "removed the unit, $BIN_DIR/bootstrap-server and $BIN_DIR/software-update"
     info "kept $CONFIG_DIR/bootstrap.json — the other spike scripts read metadata_url from it"
   else
     info "stopped; still enabled, so it returns on the next boot (--uninstall to prevent that)"
@@ -60,7 +64,7 @@ if [ "$STOP_ONLY" = "1" ] || [ "$UNINSTALL" = "1" ]; then
   exit 0
 fi
 
-say "1/3  Seed $CONFIG_DIR/bootstrap.json"
+say "1/4  Seed $CONFIG_DIR/bootstrap.json"
 # Shared with spike-os.sh, which already seeds this before starting os-server —
 # the file is os-server's only source of OTAMetadataURL, and the skill watchers
 # read the URL from there. Idempotent, so calling it again here costs nothing and
@@ -69,12 +73,30 @@ ensure_bootstrap_config
 BS_JSON="$CONFIG_DIR/bootstrap.json"
 URL="$(jq -r '.metadata_url // empty' "$BS_JSON" 2>/dev/null || true)"
 
-say "2/3  Install the binary from OTA"
+say "2/4  Install the binary from OTA"
 # Stop first: replacing a running binary in place gives ETXTBSY.
 stop_unit "$SERVICE"
 ota_install_binary bootstrap "$BIN_DIR/bootstrap-server"
 
-say "3/3  Install the unit"
+say "3/4  Install the software-update helper"
+# The worker is only half of the OTA path: it decides WHAT to update, then execs
+# $BIN_DIR/software-update to do it. Installing the binary alone is what left the
+# first robot detecting updates it could never apply, five minutes apart, forever
+# — with every unit reporting healthy.
+#
+# The script ships in this device package (devices/reachy-mini/software-update),
+# so it sits next to this file. Fatal when missing: continuing would reproduce
+# exactly that failure, and nothing on the robot can repair it afterwards.
+SU_SRC="$SPIKE_DIR/software-update"
+[ -f "$SU_SRC" ] || SU_SRC="$DEVICES_DIR/$DEVICE_TYPE/software-update"
+[ -f "$SU_SRC" ] || die "software-update is not in this device package.
+Publish a current one:  make upload-device $DEVICE_TYPE"
+bash -n "$SU_SRC" >/dev/null 2>&1 || die "$SU_SRC is not valid bash — refusing to install a broken updater"
+install -m 0755 "$SU_SRC" "$BIN_DIR/software-update.new"
+mv -f "$BIN_DIR/software-update.new" "$BIN_DIR/software-update"
+info "installed $BIN_DIR/software-update (from $SU_SRC)"
+
+say "4/4  Install the unit"
 write_unit "$SERVICE" <<UNIT
 [Unit]
 Description=Autonomous OTA Bootstrap Worker

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"go.autonomous.ai/os/system/beclient"
+	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/lib/runtimereg"
 	"go.autonomous.ai/os/system/server/config"
@@ -46,7 +47,30 @@ func (s *Service) buildPingPayload(status string) beclient.PingPayload {
 	if s.beClient != nil {
 		p.SlackTeamID = s.beClient.SlackTeamID()
 	}
+	p.Skills = s.installedSkillsForPing()
 	return p
+}
+
+// installedSkillsForPing lists what the active runtime has installed, flattened
+// to name+description for the ping. Best-effort: a runtime that can't list
+// skills (ErrNotSupportedByRuntime) or an unreadable skills dir simply omits the
+// field rather than failing the ping, which carries the setup-critical LocalIP.
+//
+// Only name+description ride along — the file trees ListSkills also returns are
+// a UI concern (the Manage-skills detail pane reads them from
+// GET /api/agent/skills/files on demand), and the ping fires every 15s.
+func (s *Service) installedSkillsForPing() []domain.SkillSummary {
+	if s.agentGateway == nil {
+		return nil
+	}
+	list, err := s.agentGateway.ListSkills()
+	if err != nil {
+		// Debug, not warn: on a backend without a device-readable skills dir this
+		// would otherwise log on every single ping.
+		slog.Debug("[ping] skills list unavailable", "component", "device", "error", err)
+		return nil
+	}
+	return domain.SummarizeSkills(list)
 }
 
 // StartStatusReporter periodically pings the autonomous backend.

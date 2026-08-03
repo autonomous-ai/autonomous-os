@@ -80,6 +80,30 @@ func TestReadSkillFilesMissing(t *testing.T) {
 	}
 }
 
+func TestReadSkillFile(t *testing.T) {
+	dir := t.TempDir()
+	seedSkill(t, dir, "music", map[string]string{
+		"SKILL.md":           "skill instructions",
+		"reference/tempo.md": "tempo notes",
+	})
+
+	file, err := ReadSkillFile(dir, "music", "music/reference/tempo.md")
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if file.Path != "music/reference/tempo.md" || file.Text != "tempo notes" {
+		t.Errorf("file = %+v", file)
+	}
+
+	// MQTT paths are exact entries from the list, never basenames, cleaned
+	// variants, or dotfiles that the list mode does not expose.
+	for _, bad := range []string{"tempo.md", "music/../music/SKILL.md", "music/.secret", "music/missing.md"} {
+		if _, err := ReadSkillFile(dir, "music", bad); !errors.Is(err, ErrSkillFileNotFound) {
+			t.Errorf("path %q: err = %v, want ErrSkillFileNotFound", bad, err)
+		}
+	}
+}
+
 // Hermes namespaces its skills dir, so the reader tries roots in order and the
 // first match wins — same precedence as ListInstalledFrom.
 func TestReadSkillFilesFrom(t *testing.T) {

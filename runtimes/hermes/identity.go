@@ -97,7 +97,7 @@ func rewriteSoulName(content, name string) string {
 // yourself Noah"). Mirrors runtimes/openclaw/service_identity.go WatchIdentity —
 // the only differences are the watched file (SOUL.md, since Hermes has no
 // IDENTITY.md slot — the name is inlined as a `**Name:**` card line) and the
-// log component. Wake words come from the shared i18n.BuildChitchatWakeWords
+// log component. Voice wake words come from the shared i18n.BuildVoiceWakeWords
 // (OpenClaw's private buildWakeWords is the same 5 variants); i18n.SetDeviceName
 // then refreshes the {name}/{Name} placeholders + chitchat strip list itself.
 func (s *HermesService) WatchIdentity(ctx context.Context) {
@@ -118,7 +118,7 @@ func (s *HermesService) WatchIdentity(ctx context.Context) {
 			continue
 		}
 		lastName = name
-		words := i18n.BuildChitchatWakeWords(name)
+		words := i18n.BuildVoiceWakeWords(name)
 		slog.Info("agent renamed, updating wake words", "component", "hermes", "name", name, "words", words)
 		hal.SetVoiceConfig(words)
 		i18n.SetDeviceName(name) // {name}/{Name} + chitchat strip follow the agent name too

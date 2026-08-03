@@ -43,6 +43,7 @@ func (s *Service) GetPublicConfig() domain.ConfigPublicResponse {
 		STTModel:           s.config.STTModel,
 		TTSProvider:        s.config.TTSProvider,
 		TTSVoice:           s.config.TTSVoice,
+		WakeWord:           s.config.WakeWordEnabled(),
 		DeviceID:           deviceID,
 		Mac:                GetDeviceMac(),
 		NetworkSSID:        s.config.NetworkSSID,
@@ -178,6 +179,7 @@ func channelFields(c *config.Config) channelSnapshot {
 func applyUpdate(c *config.Config, data domain.UpdateConfigRequest, adminHash string) updateChanges {
 	var ch updateChanges
 	prevVoice := voiceFields(c)
+	prevWakeWord := c.WakeWordEnabled()
 	prevChannel := channelFields(c)
 	ch.prevLang = c.STTLanguage
 
@@ -198,7 +200,7 @@ func applyUpdate(c *config.Config, data domain.UpdateConfigRequest, adminHash st
 		c.AdminPasswordHash = adminHash
 	}
 
-	ch.voice = voiceFields(c) != prevVoice
+	ch.voice = voiceFields(c) != prevVoice || c.WakeWordEnabled() != prevWakeWord
 	ch.channel = channelFields(c) != prevChannel
 	// Build the request from the post-save config (full current values, since
 	// PATCH semantics mean a token the operator didn't touch keeps its value).
@@ -238,6 +240,9 @@ func applyLLMFields(c *config.Config, data domain.UpdateConfigRequest, ch *updat
 // (which ships its full form body even when the operator only edited one tab)
 // from wiping STT/TTS/Deepgram fields it never showed.
 func applyVoicePipelineFields(c *config.Config, data domain.UpdateConfigRequest, ch *updateChanges) {
+	if data.WakeWord != nil {
+		c.WakeWord = data.WakeWord
+	}
 	if data.DeepgramAPIKey != "" {
 		c.DeepgramAPIKey = data.DeepgramAPIKey
 	}

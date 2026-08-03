@@ -113,7 +113,7 @@ Agent calls `/emotion idle` (0.4), fires `/servo/track/stop` to release any acti
 
 Sent automatically by HAL's `PresenceService` when **no motion is detected for 15 minutes** (after already dimming at 5 min). By this point the lights are already off — the agent's job is to **announce going to sleep** via TTS and Telegram.
 
-Agent calls `/emotion sleepy` (0.8), fires `/servo/track/stop` so any stale follow from earlier in the session is released, and speaks a cozy sleepy farewell (e.g. "No one's around… I'm going to sleep now. Goodnight!"). This is the last action before Lamp goes fully idle.
+Agent calls `/emotion sleepy` (0.8), fires `/servo/track/stop` so any stale follow from earlier in the session is released. HAL immediately turns the LED black, mutes the mic and speaker, and stops active TTS or music; after 2 seconds of continuous `sleepy`, it releases servo torque and locks motion commands. A wake emotion is the only action that resumes servo motion, and it restores only the mic/speaker states that sleepy auto-muted. Sleepy-owned audio mutes are runtime-only and do not survive a HAL restart; manual user mutes still persist. This is the last action before Lamp goes fully idle.
 
 The full presence auto-control timeline:
 1. **5 min no motion** → light dims to 20% (automatic, no agent involvement)
@@ -762,7 +762,7 @@ The whole suite is opt-in per device: the routeless `lifelike` capability (decla
 
 | Loop | Capability | Cadence | What it does |
 |------|-----------|---------|--------------|
-| Breathing LED | `light` | continuous (2 s tick) | Starts HAL's built-in `/led/effect` `breathing` (speed 0.3) using the current LED color read from HAL; falls back to warm white `(255, 200, 140)` when the LED is black. Stops the effect while paused or LED-locked. |
+| Breathing LED | `light` | continuous (2 s tick) | Starts HAL's built-in `/led/effect` `breathing` (speed 0.3) using the current LED color read from HAL; falls back to the resting look (`ambientRestingColor`, currently `(0, 0, 0)`) when the LED is black — a dark resting look means the tick is skipped and the strip stays unlit. See [led-control.md § The resting look](led-control.md#the-resting-look-default-off). Stops the effect while paused or LED-locked. |
 | Micro-movements | `motion` | random 45–120 s | Plays one safe servo recording from `idle`, `curious`, `nod`. Servo only — never touches the LED. |
 | Mumble (self-talk) | `audio` | random 5–15 min | Speaks one random phrase from the `PhraseMumble` pool (`system/lib/i18n/phrases.go`, EN/VI/zh-CN/zh-TW, audio tags like `[sigh]`/`[whisper]`/`[chuckle]`). Uses `hal.SpeakCached` — the first render of each phrase hits the TTS provider, replays come from HAL's WAV cache, so idle mumbling costs no API calls. |
 

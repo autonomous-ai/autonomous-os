@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CSSProperties } from "react";
 import {
-  Plus, Paperclip, Sparkles, ChevronRight, PenLine, Store, FolderTree,
+  Plus, Paperclip, Sparkles, ChevronRight, PenLine, Store, FolderTree, Upload,
 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import { MenuDivider, MenuItem } from "./MenuPanel";
+import { menuPanel } from "./styles";
 
 // The composer's "+" button. Replaces the bare paperclip: attaching a file is
 // now one entry in a menu that also hosts the Skills sub-menu.
@@ -13,7 +13,7 @@ import type { LucideIcon } from "lucide-react";
 // composer column is 760px wide and the trigger is at its left edge, so there
 // is always room for the fly-out.
 
-export type SkillsAction = "write" | "browse" | "manage";
+export type SkillsAction = "write" | "upload" | "browse" | "manage";
 
 export function PlusMenu({
   disabled, onAttachFile, onSkillsAction,
@@ -94,6 +94,10 @@ export function PlusMenu({
             {skillsOpen && (
               <div role="menu" className="lm-pop" style={{ ...menuPanel, bottom: -6, left: "calc(100% + 6px)", minWidth: 208 }}>
                 <MenuItem icon={PenLine} label="Write skill" hint="author a new SKILL.md" onClick={() => run(() => onSkillsAction("write"))} />
+                <MenuItem icon={Upload} label="Upload a skill" hint=".skill / .zip / .md from this computer" onClick={() => run(() => onSkillsAction("upload"))} />
+                {/* Splits "add one of your own" from "work with what's out there
+                    / already installed". */}
+                <MenuDivider />
                 <MenuItem icon={Store} label="Browse skills" hint="Autonomous skill store" onClick={() => run(() => onSkillsAction("browse"))} />
                 <MenuItem icon={FolderTree} label="Manage skills" hint="installed on this runtime" onClick={() => run(() => onSkillsAction("manage"))} />
               </div>
@@ -105,46 +109,3 @@ export function PlusMenu({
   );
 }
 
-const menuPanel: CSSProperties = {
-  position: "absolute",
-  background: "var(--lm-surface)",
-  border: "1px solid var(--lm-border-hi)",
-  borderRadius: 12,
-  padding: 5,
-  boxShadow: "0 18px 44px -18px rgba(0,0,0,0.7), 0 2px 8px rgba(0,0,0,0.35)",
-  zIndex: 50,
-};
-
-function MenuItem({
-  icon: Icon, label, hint, trailing, active, onClick,
-}: {
-  icon: LucideIcon;
-  label: string;
-  hint?: string;
-  trailing?: React.ReactNode;
-  active?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      role="menuitem"
-      onClick={onClick}
-      style={{
-        display: "flex", alignItems: "center", gap: 9, width: "100%",
-        padding: "7px 9px", borderRadius: 8,
-        background: active ? "color-mix(in srgb, var(--lm-text) 7%, transparent)" : "transparent",
-        border: "none", cursor: "pointer", textAlign: "left",
-        color: "var(--lm-text)", transition: "background 0.12s",
-      }}
-      onMouseEnter={(e) => { e.currentTarget.style.background = "color-mix(in srgb, var(--lm-text) 9%, transparent)"; }}
-      onMouseLeave={(e) => { e.currentTarget.style.background = active ? "color-mix(in srgb, var(--lm-text) 7%, transparent)" : "transparent"; }}
-    >
-      <Icon size={15} style={{ color: "var(--lm-amber)", flexShrink: 0 }} />
-      <span style={{ flex: 1, minWidth: 0 }}>
-        <span style={{ display: "block", fontSize: 12.5, lineHeight: 1.3 }}>{label}</span>
-        {hint && <span style={{ display: "block", fontSize: 10, color: "var(--lm-text-muted)", marginTop: 1 }}>{hint}</span>}
-      </span>
-      {trailing}
-    </button>
-  );
-}

@@ -33,10 +33,20 @@ from hal.realtime.utils import pcm16_bytes_to_float32, resample_float32
 from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
 from hal.drivers.voice._internal.audio_recorder import ArecordStream
-from hal.drivers.voice._internal.realtime_turn import build_turn_context, run_realtime_turn
+from hal.drivers.voice._internal.realtime_turn import (
+    RealtimeTurnResult,
+    build_turn_context,
+    is_noise_turn,
+    run_realtime_turn,
+    should_dispatch_to_main,
+)
 from hal.drivers.voice._internal.sensing_sender import SensingSender
 from hal.drivers.voice._internal.session_finalize import finalize_session
-from hal.drivers.voice._internal.speaker_decorate import SpeakerDecorator
+from hal.drivers.voice._internal.speaker_decorate import (
+    SpeakerDecorator,
+    merge_stt_hypothesis,
+    merge_wake_words,
+)
 from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
 from hal.drivers.voice._internal.vad_filters import SileroVADFilter, WebRTCVADFilter
 from hal.drivers.voice.backchannel import Backchannel
@@ -49,6 +59,15 @@ logger = logging.getLogger("hal.voice")
 # Measured ~0.05–0.10 for unrelated text vs ~0.74–0.88 for a real
 # self-correction, so 0.5 separates the two cleanly.
 _TRANSCRIPT_MIN_SIMILARITY = 0.5
+
+
+def _is_normal_ws_close(error: Exception) -> bool:
+    """Whether an STT exception represents a peer's normal WS close (1000)."""
+    code = getattr(error, "code", None)
+    received = getattr(error, "rcvd", None)
+    if code is None and received is not None:
+        code = getattr(received, "code", None)
+    return code == 1000 or "received 1000 (OK)" in str(error)
 
 
 class VoiceService:
@@ -175,8 +194,13 @@ class VoiceService:
         # Speaker decoration (wake-word + speaker recognizer + SER). Speaker-ID and
         # SER (speech emotion) are voice people-perception — gated on the `audio`
         # capability (the mic), passed in via enable_people_perception.
+        # "Autonomous" and device type are permanent spoken aliases ("hey
+        # autonomous", "hey lamp"); the runtime's current agent name is an
+        # additional alias ("hey Luna"). Runtime rename updates must never
+        # replace the permanent aliases.
+        self._device_wake_words = list(voice_cfg.DEFAULT_WAKE_WORDS)
         self._decorator = SpeakerDecorator(
-            wake_words=list(wake_words) if wake_words else list(voice_cfg.DEFAULT_WAKE_WORDS),
+            wake_words=merge_wake_words(self._device_wake_words, wake_words or []),
             nudge_cooldown_s=voice_cfg.ENROLL_NUDGE_COOLDOWN_S,
             enable_people_perception=enable_people_perception,
         )
@@ -228,7 +252,9 @@ class VoiceService:
 
     def set_wake_words(self, words: list) -> None:
         """Update wake word list at runtime (called when agent is renamed)."""
-        self._decorator.set_wake_words(words)
+        self._decorator.set_wake_words(
+            merge_wake_words(self._device_wake_words, words)
+        )
 
     @staticmethod
     def _set_emotion_local(emotion: str) -> None:
@@ -893,18 +919,20 @@ class VoiceService:
 
         stt_session = preconnected_session or self._stt.create_session()
 
-        last_partial = [""]
+        longest_partial = [""]
         final_segments = []
         final_sent = [False]
-        # Two-stage listening cue. Stage 1 at SESSION OPEN: LED-only blue
-        # pulse — instant feedback (~0.3s after the first word), cheap to be
-        # wrong. Stage 2 on the FIRST STT PARTIAL: full emotion=listening
-        # (servo lean + face). The entry VAD alone is NOT enough for stage 2:
-        # loud transients pass it and open sessions that end with an empty
-        # transcript (~half of all sessions in a noisy room, measured
-        # 2026-07-16), and leaning on every bang reads as mis-triggering.
+        # The listening cue fires on the FIRST STT PARTIAL — never at session
+        # open. A partial is proof a human said words; the entry VAD is not.
+        # That VAD is tuned wide open on purpose so quiet speech is never
+        # missed, and the price is that most sessions it opens are noise
+        # (measured on a lamp 2026-07-30: 28 of 31 ended with an empty
+        # transcript). There used to be an earlier LED-only stage at session
+        # open, justified as "instant feedback, cheap to be wrong" — it was
+        # wrong ~90% of the time, and once the strip's resting look went dark
+        # a wrong cue stopped being cheap: it became the most visible thing on
+        # the device. Cost of waiting for the partial: 1.5-2.5s (measured).
         listening_emotion_sent = [False]
-        led_cue_fired = [False]
         # Collect every resampled 16kHz int16 PCM chunk so we can identify the
         # speaker at session end. This list is LOCAL to _stream_session — a
         # fresh empty list every call, no cross-session carry-over.
@@ -921,13 +949,68 @@ class VoiceService:
             pre_frames_from_vad,
             device_rate,
         )
+        # A partial match is provisional: STT can correct a name in its final
+        # result ("Moon" → "Mom"). It improves observability while the user is
+        # speaking, but a turn is not dispatched or committed to realtime until
+        # a final result confirms the wake phrase.
+        wake_word_detected = threading.Event()
+        wake_word_confirmed = threading.Event()
+        capture_complete = threading.Event()
+        # STT providers disagree on interim updates: some re-send the entire
+        # hypothesis ("Hello" → "Hello Luna"), while others emit only the new
+        # token ("Hello" → "Luna"). Retain a leading transcript hypothesis so
+        # either shape can arm the gate as soon as the alias is complete.
+        wake_partial_hypothesis = [""]
+        wake_final_hypothesis = [""]
+
+        def wake_partial_candidate(text: str) -> str:
+            wake_partial_hypothesis[0] = merge_stt_hypothesis(
+                wake_partial_hypothesis[0], text
+            )
+            return wake_partial_hypothesis[0]
+
+        def wake_final_candidate(text: str) -> str:
+            # Do not merge an interim hypothesis into the final one. That would
+            # preserve a corrected false-positive wake word indefinitely.
+            wake_final_hypothesis[0] = merge_stt_hypothesis(
+                wake_final_hypothesis[0], text
+            )
+            wake_partial_hypothesis[0] = ""
+            return wake_final_hypothesis[0]
+
+        def open_wake_word_gate(candidate: str, source: str) -> None:
+            if (
+                hal_config.WAKEWORD_ENABLED
+                and candidate
+                and self._decorator.starts_with_wake_word(candidate)
+                and not wake_word_detected.is_set()
+            ):
+                wake_word_detected.set()
+                logger.info(
+                    "Wake-word gate opened by STT %s: '%s'", source, candidate
+                )
+
+        def confirm_wake_word_gate(candidate: str) -> None:
+            if (
+                hal_config.WAKEWORD_ENABLED
+                and candidate
+                and self._decorator.starts_with_wake_word(candidate)
+            ):
+                wake_word_confirmed.set()
+                open_wake_word_gate(candidate, "final")
+                logger.info("Wake-word gate confirmed by STT final: '%s'", candidate)
 
         def on_transcript(text: str, is_final: bool):
             if text.strip():
                 self._last_transcript_ts = time.time()
             if not is_final:
                 logger.info("STT partial: '%s'", text)
-                last_partial[0] = text
+                candidate = wake_partial_candidate(text)
+                if hal_config.WAKEWORD_ENABLED:
+                    logger.debug("Wake-word partial candidate: '%s'", candidate)
+                    open_wake_word_gate(candidate, "partial")
+                if len(text) > len(longest_partial[0]):
+                    longest_partial[0] = text
                 self._backchannel.on_partial(text)
                 if not listening_emotion_sent[0]:
                     listening_emotion_sent[0] = True
@@ -937,39 +1020,90 @@ class VoiceService:
             # Flux model fires multiple EndOfTurn events for natural pauses within
             # one utterance, so sending immediately would split a single sentence.
             logger.info("STT final segment: '%s'", text)
-            # A turn's text is the LATEST sentence. Default: take the final as
-            # this turn's text, even when it is shorter than the partial — STT
-            # self-corrects to a shorter-but-right phrase (e.g. "…your furnace
-            # start" → "…a funny story."); the old "keep whichever is longer"
-            # heuristic wrongly kept the stale longer partial. Two signals that
-            # the final has moved on to a NEW turn (so keep the previous turn's
-            # text as its own segment instead of replacing it):
-            #   (1) empty final.
-            #   (2) final that is BOTH shorter AND too dissimilar from the
-            #       previous text (string similarity below
-            #       _TRANSCRIPT_MIN_SIMILARITY) — not a correction, a new turn.
-            prev = last_partial[0]
-            if not text.strip():
-                segments = [prev] if prev else []
-            elif (
-                prev
-                and len(text) < len(prev)
-                and SequenceMatcher(None, prev, text).ratio()
-                < _TRANSCRIPT_MIN_SIMILARITY
-            ):
-                # (2) new turn
-                segments = [prev, text]
-            else:
-                # Same turn: a correction (shorter but similar) or a longer/first
-                # final → this final IS the turn's latest text.
-                segments = [text]
-            for seg in segments:
-                if seg:
-                    final_segments.append(seg)
-            last_partial[0] = ""
+            if hal_config.WAKEWORD_ENABLED:
+                confirm_wake_word_gate(wake_final_candidate(text))
+            # Store final text + any partial accumulated before this final.
+            # After final, STT resets partials to empty, so save longest_partial now.
+            best = longest_partial[0] if len(longest_partial[0]) > len(text) else text
+            if best:
+                final_segments.append(best)
+            longest_partial[0] = ""
             final_sent[0] = True
 
         rt_audio_buffer: list = []
+        # A noise-drop can be rebuilding a clean Gemini session in the
+        # background. Keep this entire capture local in that narrow window so
+        # no frame is sent to the old, about-to-be-discarded activity.
+        realtime_deferred = False
+        realtime_turn_started = False
+        realtime_start_failed = False
+
+        def start_realtime_turn() -> bool:
+            """Open realtime as soon as the wake-word partial is available.
+
+            Only this capture thread touches the realtime session. When it sees
+            the Event set by the STT callback, it flushes all retained audio
+            once, including the opening wake phrase, then later frames stream
+            straight through as in always-listening mode.
+            """
+            nonlocal realtime_deferred, realtime_turn_started, realtime_start_failed
+            if realtime_turn_started or realtime_start_failed:
+                return False
+
+            if hal_config.WAKEWORD_ENABLED:
+                # Preserve the always-listening path below exactly. Wake-word
+                # turns defer all realtime I/O until capture is complete and a
+                # FINAL STT result confirms the phrase, so a rebuild cannot split
+                # one utterance across old/new sessions.
+                if (
+                    not capture_complete.is_set()
+                    or not wake_word_confirmed.is_set()
+                    or not hal_config.REALTIME_ENABLED
+                ):
+                    return False
+                if self._realtime.rebuilding or not self._realtime.available:
+                    logger.info(
+                        "[realtime] Wake-word turn falls back — session unavailable after final confirmation"
+                    )
+                    return False
+                try:
+                    self._realtime.send_text(build_turn_context())
+                    for audio_f32 in rt_audio_buffer:
+                        self._realtime.append_audio(audio_f32)
+                    realtime_turn_started = True
+                    logger.info(
+                        "[realtime] Wake-word confirmed; flushed %d buffered frame(s)",
+                        len(rt_audio_buffer),
+                    )
+                    return True
+                except Exception as e:
+                    realtime_start_failed = True
+                    logger.warning(
+                        "[realtime] Wake-word start failed; forwarding final STT to main agent: %s",
+                        e,
+                    )
+                    return False
+
+            realtime_turn_started = True
+            if not hal_config.REALTIME_ENABLED:
+                return True
+
+            self._realtime.prepare_turn()
+            realtime_deferred = self._realtime.rebuilding
+            if not realtime_deferred and self._realtime.available:
+                try:
+                    self._realtime.send_text(build_turn_context())
+                    for audio_f32 in rt_audio_buffer:
+                        self._realtime.append_audio(audio_f32)
+                    if hal_config.WAKEWORD_ENABLED:
+                        logger.info(
+                            "[realtime] Wake-word gate opened; flushed %d buffered frame(s)",
+                            len(rt_audio_buffer),
+                        )
+                except Exception as e:
+                    logger.warning("[realtime] start turn failed: %s", e)
+                    rt_audio_buffer.clear()
+            return True
         try:
             if preconnected_session:
                 # Already connected — swap in the real transcript callback.
@@ -1005,21 +1139,9 @@ class VoiceService:
             if not connect_ok[0]:
                 return
 
-            # Long-idle recovery: keepalive holds the WS open across SHORT idle, but
-            # past ~the proxy/Cloudflare WS-idle + auth-TTL window (~100s) the held
-            # connection's session expires — committing a turn onto it returns WS
-            # 1008 (auth) / 1011. So for a turn that follows a LONG idle gap
-            # (>= REALTIME_GEMINI_PRE_TURN_RECYCLE_S) rebuild a FRESH session (fresh
-            # auth) BEFORE streaming audio. Viable now that keepalive keeps the fresh
-            # session alive through the speak window (it died here before keepalive).
-            if hal_config.REALTIME_ENABLED:
-                self._realtime.prepare_turn()
-
-            # NOTE: per-turn context is NO LONGER sent here. It is sent in the
-            # finalize block below, AFTER the speaker-ID prepass, so the context can
-            # name the actual VOICE speaker (not the face current_user). The speaker
-            # can only be known once the utterance has been captured, which is why
-            # this moved past the capture loop. See the "Speaker-ID prepass" block.
+            # Always-listening mode starts now. In wake-word mode this returns
+            # immediately until an STT partial callback sets the Event.
+            start_realtime_turn()
 
             # Flush holdoff audio (frames captured before STT connect, both paths)
             all_pre = (speech_pre_buffer or []) + pre_buffer
@@ -1029,17 +1151,64 @@ class VoiceService:
                     len(all_pre),
                     len(all_pre) * voice_cfg.FRAME_DURATION_MS,
                 )
+                # A keepalive socket can pass the earlier is_closed() check then
+                # receive a peer close just as speech starts. Retry the COMPLETE
+                # pre-roll on a fresh session before recording/forwarding it so
+                # the user does not lose the opening words (or get duplicate
+                # frames in realtime) because the old socket accepted only a
+                # prefix before its close.
+                used_preconnected = preconnected_session is not None
+
+                def _send_pre_roll():
+                    if stt_session.is_closed():
+                        raise RuntimeError("pre-connected STT session is closed")
+                    for pre_frame in all_pre:
+                        stt_session.send_audio(pre_frame)
+
+                try:
+                    _send_pre_roll()
+                except Exception as e:
+                    if not used_preconnected:
+                        raise
+                    logger.warning(
+                        "STT keepalive closed at speech start (%s) — reconnecting "
+                        "and replaying %d pre-roll frame(s)",
+                        "normal 1000 close" if _is_normal_ws_close(e) else str(e),
+                        len(all_pre),
+                    )
+                    try:
+                        stt_session.close()
+                    except Exception:
+                        pass
+                    stt_session = self._stt.create_session()
+                    if not stt_session.start(on_transcript):
+                        raise RuntimeError("fresh STT session failed to connect") from e
+                    _send_pre_roll()
+
+                # The full pre-roll reached one live STT session. Only now make
+                # it part of local/realtime buffers, so a failed keepalive retry
+                # cannot duplicate or retain audio sent to a dead socket.
                 for frame in all_pre:
-                    stt_session.send_audio(frame)
                     audio_buffer.append(frame)
-                    # Also send pre-buffer to realtime model (non-blocking queue put)
-                    if hal_config.REALTIME_ENABLED and self._realtime.available:
+                    # Keep the full realtime copy even while a noise-drop rebuild
+                    # is warming. It is flushed once to the replacement session
+                    # at turn end, preserving the opening words.
+                    if hal_config.REALTIME_ENABLED:
                         audio_f32 = pcm16_bytes_to_float32(frame)
                         audio_f32 = resample_float32(
                             audio_f32, voice_cfg.STT_RATE, self._realtime.sample_rate
                         )
-                        self._realtime.append_audio(audio_f32)
                         rt_audio_buffer.append(audio_f32)
+                        if (
+                            realtime_turn_started
+                            and not realtime_deferred
+                            and self._realtime.available
+                        ):
+                            self._realtime.append_audio(audio_f32)
+
+                # A partial can arrive while the STT pre-roll is sent. Open the
+                # gate now and flush that complete pre-roll exactly once.
+                start_realtime_turn()
 
             self._listening = True
             last_speech_time = time.time()
@@ -1050,21 +1219,15 @@ class VoiceService:
             # the user stops, so without this the voiceprint ends up 30-50%
             # silence and the embedding degrades. (Pre-initialized to -1 above.)
             last_speech_idx = len(audio_buffer) - 1
-            # Stage-1 listening cue (see two-stage note above): the SAME LED
-            # render the listening emotion uses — black base + blue pulse, so
-            # it reads clearly over any user color and stage 2 is a seamless
-            # upgrade. NOT the /led/effect transient path: transient overlays
-            # the pulse on the user's saved color (a blue ripple inside white
-            # is barely visible). LED only — no servo lean, no face,
-            # no _current_emotion commit.
-            try:
-                from hal import app_state
-
-                app_state._apply_emotion_led_display(presets.EMO_LISTENING, 0.7)
-                led_cue_fired[0] = True
-            except Exception as e:
-                logger.debug("listening LED cue failed: %s", e)
-            # Signal the OS server to show listening LED as soon as mic session opens (before transcript arrives)
+            # No LED here: the cue waits for the first STT partial (see the
+            # listening-cue note above). Opening a session is cheap to be wrong
+            # about; lighting the strip is not.
+            #
+            # Tell the OS server a mic session is open. NOT an LED signal
+            # despite the event name — the handler only extends a window that
+            # suppresses passive sensing (motion/presence) so it can't steal
+            # the turn while the user is speaking. Firing it on a noise session
+            # is harmless, so it stays ungated.
             try:
                 requests.post(
                     "http://127.0.0.1:5000/api/sensing/event",
@@ -1075,6 +1238,9 @@ class VoiceService:
                 pass
 
             while self._running and not stt_session.is_closed():
+                # Only the capture thread opens and flushes the realtime activity;
+                # The STT callback merely latches wake_word_detected.
+                start_realtime_turn()
                 # If TTS or music starts mid-session, stop streaming immediately
                 if self._tts_is_speaking():
                     logger.info("TTS started mid-session, closing STT to avoid echo")
@@ -1103,14 +1269,23 @@ class VoiceService:
                     break
                 audio_buffer.append(resampled)
 
-                # Parallel: stream to realtime model (non-blocking queue put)
-                if hal_config.REALTIME_ENABLED and self._realtime.available:
+                # Parallel: stream to realtime model (non-blocking queue put).
+                # During a pending noise-drop rebuild retain frames locally and
+                # flush them once to the clean replacement session below.
+                if hal_config.REALTIME_ENABLED:
                     audio_f32 = pcm16_bytes_to_float32(resampled)
                     audio_f32 = resample_float32(
                         audio_f32, voice_cfg.STT_RATE, self._realtime.sample_rate
                     )
-                    self._realtime.append_audio(audio_f32)
                     rt_audio_buffer.append(audio_f32)
+                    opened_now = start_realtime_turn()
+                    if (
+                        realtime_turn_started
+                        and not opened_now
+                        and not realtime_deferred
+                        and self._realtime.available
+                    ):
+                        self._realtime.append_audio(audio_f32)
 
                 energy = rms(data, self._np)
                 self._mic_level = energy
@@ -1122,14 +1297,29 @@ class VoiceService:
                     logger.info("Silence detected, disconnecting STT")
                     break
         except Exception as e:
-            logger.error("STT stream error: %s", e)
+            if _is_normal_ws_close(e):
+                logger.warning(
+                    "STT session closed normally (1000) before turn completion; "
+                    "audio for this turn was discarded"
+                )
+            else:
+                logger.error("STT stream error: %s", e)
         finally:
             self._backchannel.reset()
             self._listening = False
             stt_session.close()
             combined, ser_audio_buffer, buf_duration = finalize_session(
-                audio_buffer, last_partial, final_segments, last_speech_idx
+                audio_buffer, longest_partial, final_segments, last_speech_idx
             )
+            capture_complete.set()
+            if (
+                hal_config.WAKEWORD_ENABLED
+                and wake_word_detected.is_set()
+                and not wake_word_confirmed.is_set()
+            ):
+                logger.info(
+                    "Wake-word partial rejected — no matching final STT result; dropping turn"
+                )
 
             # Noise guard for empty-STT turns: a session can open on a noise blip
             # that fools the entry VAD, then STT finds no words. Re-check the FULL
@@ -1155,60 +1345,94 @@ class VoiceService:
                 except Exception as e:
                     logger.warning("Realtime noise-guard buffer decode failed: %s", e)
 
-            # --- Speaker-ID prepass -------------------------------------------
-            # Identify the VOICE speaker ONCE, before the realtime reply, so the
-            # turn context can name the correct person and override the
-            # face-derived current_user. The result is reused by dispatch_turn
-            # below — recognition never runs a second time. Gated on a transcript
-            # (the same condition dispatch_turn identifies under). Unknown /
-            # STOI-reject / server-error → display is None → the context falls back
-            # to the face identity, so a failed ID never blocks or misnames the
-            # reply. Wrapped defensively: this now runs on the reply path, so a
-            # recognizer error must not kill the turn.
-            speaker_identity = None  # (final_msg, se_user, display) or None
-            if combined:
-                _final_text, _ = self._decorator.resolve_wake_word_split(combined)
-                try:
-                    speaker_identity = self._decorator.identify_and_decorate(
-                        _final_text, audio_buffer
+            # Capture can end just after the STT callback. One final check
+            # avoids dropping a matched partial that raced the loop exit.
+            start_realtime_turn()
+
+            # `discard_open_activity()` starts its replacement session in the
+            # background. A user can begin the next utterance before that
+            # handshake completes; in that case we retained every frame above.
+            # Wait only after capture has ended, then inject context and flush
+            # the complete ordered audio once. A slow/failed reconnect leaves
+            # the realtime buffer uncommitted so the normal OS-server fallback
+            # still receives the STT transcript without a missing opening word.
+            if (
+                realtime_turn_started
+                and realtime_deferred
+                and rt_audio_buffer
+                and not is_noise_turn(combined, buf_duration, rt_audio_is_speech)
+            ):
+                if self._realtime.wait_until_available():
+                    try:
+                        self._realtime.send_text(build_turn_context())
+                        for audio_f32 in rt_audio_buffer:
+                            self._realtime.append_audio(audio_f32)
+                        logger.info(
+                            "[realtime] Flushed %d buffered frame(s) after noise-drop rebuild",
+                            len(rt_audio_buffer),
+                        )
+                    except Exception as e:
+                        # Do not commit a partial deferred turn. No audio was
+                        # intended for the old activity; falling back preserves
+                        # the transcript and avoids contaminating the new session.
+                        logger.warning(
+                            "[realtime] deferred audio flush failed; falling back: %s", e
+                        )
+                        rt_audio_buffer.clear()
+                else:
+                    logger.warning(
+                        "[realtime] noise-drop rebuild not ready after capture; "
+                        "falling back to main agent"
                     )
-                except Exception as e:
-                    logger.warning("[realtime] speaker-ID prepass failed: %s", e)
 
-            # Send per-turn context NOW (moved from before the audio stream) so it
-            # carries the voice speaker. On providers where send_text is a no-op
-            # (Gemini native-audio) this is harmless; elsewhere it names the speaker.
-            if hal_config.REALTIME_ENABLED and self._realtime.available:
-                _speaker = speaker_identity[2] if speaker_identity else None
-                try:
-                    self._realtime.send_text(build_turn_context(_speaker))
-                except Exception as e:
-                    logger.warning("[realtime] send turn context failed: %s", e)
+            # --- Realtime voice agent (runs first, before speaker ID / OS server) ---
+            # Wake-word mode only commits a turn that STT explicitly armed.
+            if realtime_turn_started:
+                rt = run_realtime_turn(
+                    self._realtime,
+                    self._tts,
+                    self.strip_rt_markers,
+                    combined,
+                    rt_audio_buffer,
+                    buf_duration,
+                    rt_audio_is_speech,
+                )
+            else:
+                rt = RealtimeTurnResult()
 
-            # --- Realtime voice agent (speaks the reply for this turn) ---------
-            # Runs even if STT transcript is empty — the model has the raw audio.
-            rt = run_realtime_turn(
-                self._realtime,
-                self._tts,
-                self.strip_rt_markers,
-                combined,
-                rt_audio_buffer,
-                buf_duration,
-                rt_audio_is_speech,
-            )
+            # --- Speaker recognition + OS server send + SER ---
+            if should_dispatch_to_main(
+                hal_config.WAKEWORD_ENABLED,
+                wake_word_confirmed.is_set(),
+            ):
+                # A realtime connection failure or silent timeout is not a
+                # handled turn. Preserve the STT fallback so a wake-word command
+                # never disappears just because Gemini is temporarily down.
+                dispatch_turn(
+                    self._decorator,
+                    self._sensing_sender,
+                    combined,
+                    audio_buffer,
+                    ser_audio_buffer,
+                    rt,
+                )
+            else:
+                self._decorator.submit_speech_emotion_from_session(ser_audio_buffer)
+                # A rejected utterance deliberately has no downstream agent to
+                # replace the listening cue with thinking/TTS/idle. Clear it
+                # immediately instead of leaving the blue pulse up for the
+                # generic 8-second safety timer below. Do not do this for an
+                # armed realtime turn: that path may already be expressing an
+                # emotion while speaking its direct reply.
+                if (
+                    hal_config.WAKEWORD_ENABLED
+                    and not wake_word_confirmed.is_set()
+                    and listening_emotion_sent[0]
+                ):
+                    self._set_emotion_local(presets.EMO_IDLE)
 
-            # --- OS server send + SER (reuses the prepass speaker-ID) ----------
-            dispatch_turn(
-                self._decorator,
-                self._sensing_sender,
-                combined,
-                audio_buffer,
-                ser_audio_buffer,
-                rt,
-                identity=speaker_identity,
-            )
-
-            # Clear listening LED
+            # Close the sensing-suppression window (see the matching
+            # voice_listening post above — neither event drives an LED).
             try:
                 requests.post(
                     "http://127.0.0.1:5000/api/sensing/event",
@@ -1218,18 +1442,9 @@ class VoiceService:
             except Exception:
                 pass
 
-            # Stage-1 cue cleanup: a noise session (LED cue fired, but no STT
-            # partial → no emotion) must not leave the blue pulse hanging.
-            # restore_led() is TTS-guarded internally, so an agent reply that
-            # already started speaking keeps its speaking wave.
-            if led_cue_fired[0] and not listening_emotion_sent[0]:
-                try:
-                    from hal.routes.led import restore_led
-
-                    restore_led()
-                    logger.info("listening LED cue restored (noise session, no transcript)")
-                except Exception as e:
-                    logger.debug("listening LED cue restore failed: %s", e)
+            # No cue cleanup for a noise session: nothing was painted, because
+            # the cue only fires once a partial proves someone spoke. A session
+            # that ends with an empty transcript leaves the strip untouched.
 
             # Safety net: if we fired emotion=listening but no follow-up
             # emotion arrives (LLM error, silence-only after first partial,

@@ -54,6 +54,7 @@ type Server struct {
 	pluginHandler     _pluginHttpDeliver.PluginHandler
 
 	agentGateway     domain.AgentGateway
+	chatStream       *_deviceMQTTDeliver.ChatStream
 	personaMigration *agent.PersonaMigration
 	configMigration  *agent.ConfigMigration
 	channelReconcile *agent.ChannelReconcile
@@ -137,6 +138,7 @@ func ProvideServer(
 	ambientSvc *ambient.Service,
 	hw *healthwatch.Service,
 	sled *statusled.Service,
+	chatStream *_deviceMQTTDeliver.ChatStream,
 ) *Server {
 	return &Server{
 		config:            cfg,
@@ -159,6 +161,7 @@ func ProvideServer(
 		ambientService:    ambientSvc,
 		healthWatch:       hw,
 		statusLED:         sled,
+		chatStream:        chatStream,
 	}
 }
 
@@ -252,6 +255,10 @@ func (s *Server) Serve(closeFn func()) error {
 	go s.agentGateway.StartWS(eventCtx, s.agentHandler.HandleEvent)
 	go s.agentGateway.WatchIdentity(eventCtx)
 	go s.agentGateway.StartSkillWatcher(eventCtx)
+	// Mirrors chat.send runs back to the backend over fd_channel, so a phone app
+	// sees the same turn the web monitor's SSE stream shows. Costs nothing until
+	// a chat.send arrives — no run is tracked, so every bus event is dropped.
+	s.chatStream.Start(eventCtx)
 	// StartModelSync is launched from the startup-sequence goroutine AFTER
 	// EnsureOnboarding completes, so the two writers to openclaw.json don't
 	// race on first boot (sync's atomic write vs ensureAgentDefaults' plain
@@ -427,6 +434,13 @@ func (s *Server) Serve(closeFn func()) error {
 	agent.GET("skills/files", adminAuthMiddleware(s.config), s.agentHandler.ReadSkillFiles)
 	agent.POST("skills", adminAuthMiddleware(s.config), s.agentHandler.SaveSkill)
 	agent.POST("skills/install", adminAuthMiddleware(s.config), s.agentHandler.InstallSkill)
+	agent.POST("skills/upload", adminAuthMiddleware(s.config), s.agentHandler.UploadSkill)
+	agent.DELETE("skills", adminAuthMiddleware(s.config), s.agentHandler.DeleteSkill)
+	// Device-local file the agent produced, so a reply that names a path (a
+	// camera snapshot, a generated report) can be SHOWN in the chat instead of
+	// read as an unusable string. `path` is client-supplied and validated
+	// against an allow-list of roots + served types — see handler_file.go.
+	agent.GET("file", adminAuthMiddleware(s.config), s.agentHandler.ServeFile)
 
 	logs := api.Group("logs")
 	logs.GET("tail", adminAuthMiddleware(s.config), s.logTail)

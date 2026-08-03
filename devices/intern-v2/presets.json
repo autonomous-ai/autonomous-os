@@ -1,4 +1,44 @@
 {
-  "_comment": "Per-device preset overrides for intern-v2. See devices/contract/DEVICE-SPEC.md § Per-device presets. Intern-v2's LED ring has 8 pixels (vs the platform default of 64).",
-  "led_count": 8
+  "_comment": "Intern-v2 emotion and status LED presets, initially copied from hal/presets.py for device-specific tuning. See devices/contract/DEVICE-SPEC.md § Per-device presets.",
+  "led_count": 16,
+  "emotion": {
+    "curious": { "servo": "curious", "color": [125, 81, 0], "effect": "candle", "speed": 0.3, "camera": "on" },
+    "happy": { "servo": "happy_wiggle", "color": [105, 80, 10], "effect": "candle", "speed": 0.2, "camera": "on" },
+    "sad": { "servo": "sad", "color": [20, 10, 10], "effect": "breathing", "speed": 0.4, "camera": "on" },
+    "thinking": { "servo": "thinking_deep", "color": [50, 100, 35], "effect": "pulse", "speed": 0.3, "camera": "on" },
+    "idle": { "servo": "idle", "color": [90, 60, 5], "effect": "breathing", "speed": 0.2 },
+    "excited": { "servo": "excited", "color": [30, 21, 30], "effect": "candle", "speed": 0.5, "camera": "on" },
+    "shy": { "servo": "shy", "color": [155, 70, 20], "effect": "breathing", "speed": 0.3, "camera": "on" },
+    "shock": { "servo": "shock", "color": [255, 255, 255], "effect": "notification_flash", "speed": 1.0, "camera": "on" },
+    "listening": { "servo": "listening", "color": [51, 121, 230], "effect": "pulse", "speed": 0.3, "camera": "on" },
+    "laugh": { "servo": "laugh", "color": [130, 91, 11], "effect": "candle", "speed": 0.2, "camera": "on" },
+    "confused": { "servo": "confused", "color": [124, 71, 25], "effect": "candle", "speed": 0.2, "camera": "on" },
+    "sleepy": { "servo": "sleepy", "color": [0, 0, 0], "camera": "off", "mic": "off", "speaker": "off" },
+    "greeting": { "servo": "greeting", "color": [255, 180, 100], "effect": "breathing", "speed": 0.3, "camera": "on" },
+    "goodbye": { "servo": "goodbye", "color": [255, 180, 100], "effect": "breathing", "speed": 0.5 },
+    "caring": { "servo": "nod", "color": [255, 160, 120], "effect": "breathing", "speed": 0.4, "camera": "on" },
+    "acknowledge": { "servo": "acknowledge", "color": [51, 230, 70], "effect": "breathing", "speed": 0.5, "camera": "on" },
+    "stretching": { "servo": "stretching", "color": [145, 140, 30], "effect": "breathing", "speed": 0.6, "camera": "on" },
+    "music_strong": { "servo": "music_rock", "color": [155, 221, 155], "effect": "rainbow", "speed": 1.0 },
+    "music_chill": { "servo": "music_rock", "color": [252, 136, 3], "effect": "breathing", "speed": 0.3 },
+    "scan": { "servo": "scanning", "color": [36, 84, 24], "effect": "pulse", "speed": 0.3, "camera": "on" },
+    "nod": { "servo": "nod", "color": [107, 73, 13], "effect": "breathing", "speed": 0.5, "camera": "on" },
+    "headshake": { "servo": "headshake", "color": [206, 77, 14], "effect": "breathing", "speed": 0.5, "camera": "on" }
+  },
+  "status_led": {
+    "ota": { "effect": "breathing", "color": [0, 255, 0], "speed": 3.0 },
+    "error": { "effect": "breathing", "color": [255, 0, 0], "speed": 3.0 },
+    "booting": { "effect": "breathing", "color": [0, 80, 255], "speed": 3.0 },
+    "connectivity": { "effect": "breathing", "color": [255, 80, 0], "speed": 3.0 },
+    "wifi_connecting": { "effect": "blink", "color": [0, 135, 255], "speed": 0.5 },
+    "hal_down": { "effect": "breathing", "color": [180, 0, 255], "speed": 3.0 },
+    "agent_down": { "effect": "breathing", "color": [0, 200, 200], "speed": 3.0 },
+    "hardware": { "effect": "breathing", "color": [255, 255, 0], "speed": 3.0 },
+    "ready_flash": { "effect": "notification_flash", "color": [255, 255, 255], "speed": 1.0 },
+    "ota_progress": { "effect": "breathing", "color": [255, 140, 0], "speed": 0.4 },
+    "ota_error": { "effect": "pulse", "color": [255, 30, 30], "speed": 1.5 },
+    "ota_success": { "effect": "notification_flash", "color": [0, 255, 80], "speed": 1.0 },
+    "setup": { "effect": "solid", "color": [255, 255, 255], "speed": 1.0 },
+    "mic_muted": { "effect": "breathing", "color": [10, 0, 0], "speed": 0.8 }
+  }
 }

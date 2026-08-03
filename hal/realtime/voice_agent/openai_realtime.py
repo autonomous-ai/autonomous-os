@@ -298,6 +298,8 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
 
     def _ensure_connected(self) -> None:
         """Reconnect if not connected. Throttled to at most once per reconnect_delay_s."""
+        if self._stop_event.is_set():
+            return
         if self._connected.is_set():
             return
         now: float = time.monotonic()
@@ -307,7 +309,11 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
         self._reconnect()
 
     def _reconnect(self) -> None:
+        if self._stop_event.is_set():
+            return
         with self._conn_lock:
+            if self._stop_event.is_set():
+                return
             # Another thread may have reconnected while we waited for the lock —
             # don't tear a healthy connection back down.
             if self._connected.is_set():
@@ -383,6 +389,8 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
 
             for attempt in range(self._max_retries):
                 self._ensure_connected()
+                if self._stop_event.is_set():
+                    break
                 if not self._connected.is_set():
                     logger.debug("[realtime] Not connected, skipping attempt %d/%d", attempt + 1, self._max_retries)
                     continue
@@ -394,6 +402,8 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                         self._sync_send_input(event.input)
                     break  # Success
                 except Exception as e:
+                    if self._stop_event.is_set():
+                        break
                     logger.exception("[realtime] Send failed (attempt %d/%d): %s", attempt + 1, self._max_retries, e)
                     self._drop_connection(conn)
 
@@ -412,6 +422,8 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
 
             for attempt in range(self._max_retries):
                 self._ensure_connected()
+                if self._stop_event.is_set():
+                    break
                 with self._conn_lock:
                     conn: RealtimeConnection | None = (
                         self._connection if self._connected.is_set() else None
@@ -421,6 +433,8 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                     continue
                 try:
                     completed: bool = self._sync_receive_turn(conn)
+                    if self._stop_event.is_set():
+                        break
                     # `completed` is False when the event iteration ended WITHOUT a
                     # response.done (a clean connection close / session recycle). If
                     # that lands mid-turn the committed turn is lost, so end it now
@@ -431,10 +445,14 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                         self._fail_fast_turn("connection closed mid-turn")
                     break  # Success
                 except OpenAIRealtimeError as e:
+                    if self._stop_event.is_set():
+                        break
                     logger.warning("[realtime] Recv failed (attempt %d/%d): %s", attempt + 1, self._max_retries, e)
                     self._fail_fast_turn("api error")
                     self._drop_connection(conn)
                 except Exception as e:
+                    if self._stop_event.is_set():
+                        break
                     logger.exception("[realtime] Unexpected recv error (attempt %d/%d): %s", attempt + 1, self._max_retries, e)
                     self._fail_fast_turn("unexpected")
                     self._drop_connection(conn)

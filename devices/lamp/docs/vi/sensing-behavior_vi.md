@@ -113,7 +113,7 @@ Agent gọi `/emotion idle` (0.4), fire `/servo/track/stop` để thả follow n
 
 Được gửi tự động bởi `PresenceService` của HAL khi **không phát hiện chuyển động trong 15 phút** (sau khi đã dim đèn ở phút thứ 5). Lúc này đèn đã tắt — agent chỉ cần **thông báo đi ngủ** qua TTS và Telegram.
 
-Agent gọi `/emotion sleepy` (0.8), fire `/servo/track/stop` để thả follow cũ còn sót, và nói lời chúc ngủ ngon ấm áp (ví dụ "Không có ai xung quanh… Lamp đi ngủ đây. Chúc ngủ ngon!"). Đây là hành động cuối cùng trước khi Lamp hoàn toàn idle.
+Agent gọi `/emotion sleepy` (0.8), fire `/servo/track/stop` để thả follow cũ còn sót. HAL lập tức chuyển LED sang đen, mute mic lẫn speaker, đồng thời dừng TTS hoặc nhạc đang phát; sau 2 giây `sleepy` liên tục, HAL release torque của servo và lock mọi lệnh motion. Chỉ wake emotion mới resume motion servo, đồng thời chỉ unmute các trạng thái mic/speaker mà sleepy đã tự mute. Mute audio do sleepy chỉ là runtime-only, không còn sau khi HAL restart; mute thủ công của user vẫn được persist. Đây là hành động cuối cùng trước khi Lamp hoàn toàn idle.
 
 Timeline tự động điều khiển presence:
 1. **5 phút không chuyển động** → đèn dim xuống 20% (tự động, không cần agent)
@@ -719,7 +719,7 @@ Toàn bộ suite là opt-in theo từng device: capability routeless `lifelike` 
 
 | Loop | Capability | Nhịp | Hoạt động |
 |------|-----------|------|-----------|
-| Breathing LED | `light` | liên tục (tick 2 giây) | Bật effect `breathing` có sẵn của HAL qua `/led/effect` (speed 0.3) với màu LED hiện tại đọc từ HAL; fallback trắng ấm `(255, 200, 140)` khi LED đang tắt (đen). Dừng effect khi paused hoặc LED đang bị lock. |
+| Breathing LED | `light` | liên tục (tick 2 giây) | Bật effect `breathing` có sẵn của HAL qua `/led/effect` (speed 0.3) với màu LED hiện tại đọc từ HAL; fallback về resting look (`ambientRestingColor`, hiện là `(0, 0, 0)`) khi LED đang tắt (đen) — resting look tối nghĩa là skip tick và strip ở yên không sáng. Xem [led-control_vi.md § Resting look](led-control_vi.md#resting-look-mặc-định-tắt). Dừng effect khi paused hoặc LED đang bị lock. |
 | Micro-movements | `motion` | ngẫu nhiên 45–120 giây | Phát một servo recording an toàn trong bộ `idle`, `curious`, `nod`. Chỉ servo — không đụng vào LED. |
 | Mumble (tự lẩm bẩm) | `audio` | ngẫu nhiên 5–15 phút | Nói một câu ngẫu nhiên từ pool `PhraseMumble` (`system/lib/i18n/phrases.go`, EN/VI/zh-CN/zh-TW, có audio tag như `[sigh]`/`[whisper]`/`[chuckle]`). Dùng `hal.SpeakCached` — lần render đầu của mỗi câu mới gọi TTS provider, các lần sau phát lại từ WAV cache của HAL, nên lẩm bẩm lúc idle không tốn API. |
 

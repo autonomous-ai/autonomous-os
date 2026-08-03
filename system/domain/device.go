@@ -329,6 +329,7 @@ const (
 	KindOAuthSet     = "oauth.set"     // store/replace OAuth token for a provider
 	KindOAuthRemove  = "oauth.remove"  // delete OAuth token for a provider
 	KindRealtimeSet  = "realtime.set"  // persist realtime voice-agent config (provider/voice/reasoning…)
+	KindWakeWordGate = "wakeword.gate" // persist the top-level wake-word gate
 	KindTimezoneSet  = "timezone.set"  // apply device IANA timezone (/etc/localtime + /etc/timezone)
 	// KindDeviceSoftReset wipes the device's config.json and restarts os-server so
 	// the device drops back into AP setup mode WITHOUT rebooting or rolling back
@@ -376,6 +377,36 @@ const (
 	// KindSkillsInstall installs a role's skill bundle. Data: {"role":"<role>"}.
 	KindSkillsInstall = "skills.install"
 
+	// KindSkillsSave writes ONE authored skill into the active runtime's skills
+	// dir. Data: MQTTSkillsSaveData. The MQTT twin of POST /api/agent/skills —
+	// same AgentGateway.SaveSkill call, so both paths land in the same place and
+	// honour the same no-overwrite rule.
+	KindSkillsSave = "skills.save"
+
+	// KindSkillsInstallStore installs ONE skill from the Autonomous skill catalog by
+	// id. Data: MQTTSkillsInstallStoreData. The MQTT twin of
+	// POST /api/agent/skills/install — the device downloads the `.skill` archive
+	// and the ACTIVE runtime extracts it (AgentGateway.InstallSkillArchive), so it
+	// works on every backend.
+	//
+	// Named "install" to match the device API it mirrors, with the _store suffix
+	// only because the bare skills.install kind is already taken by the older,
+	// different feature: a whole ROLE bundle, openclaw-only.
+	KindSkillsInstallStore = "skills.install_store"
+
+	// KindSkillsFiles reads ONE installed skill's files. Data:
+	// MQTTSkillsFilesData. The MQTT twin of GET /api/agent/skills/files, which is
+	// a LAN-only admin endpoint — this is how the backend (and through it a mobile
+	// app) inspects a skill the `skills` uplink advertised.
+	//
+	// Two modes, because MQTT is not a bulk transport: without `path` it returns
+	// the file LIST with no contents; with `path` it returns that one file's text.
+	KindSkillsFiles = "skills.files"
+
+	// KindSkillsUninstall removes ONE installed skill. Data:
+	// MQTTSkillsUninstallData. The MQTT twin of DELETE /api/agent/skills.
+	KindSkillsUninstall = "skills.uninstall"
+
 	// KindChannelRefreshConfig re-applies the canonical channels.<channel> block on
 	// an already-onboarded device. Targets older customers whose openclaw.json
 	// predates schema additions (e.g. the socketMode block, object-form streaming,
@@ -393,6 +424,49 @@ const (
 	//   device → server : status=configuring → status=success data={channel, runtime}
 	//                                        | status=failure error=<code>
 	KindChannelRefreshConfig = "channel.refresh_config"
+
+	// KindChatSend starts an agent turn from the backend — the MQTT twin of the
+	// web monitor's POST /api/sensing/event with type "web_chat". Data:
+	// MQTTChatSendData. This is what lets a phone app hold the SAME conversation
+	// the web chat holds: the device is on a LAN behind NAT, so MQTT is the only
+	// standing path in, and fa/fd are already per-device.
+	//
+	// Flow:
+	//   server → device : kind=chat.send data={message, image?, session_id?, speak?}
+	//   device → server : status=success data={run_id, session_id}
+	//                     then a STREAM of kind=chat.event carrying that run's
+	//                     monitor events. chat_response fires REPEATEDLY as the
+	//                     reply streams; only the one whose State is
+	//                     complete/final/error ends the run.
+	//
+	// Deliberately NOT the same as the one-way autonomous-chat-hook bridge, which
+	// forwards as type "voice": that makes the device SPEAK the reply and returns
+	// nothing to the backend, so it can never back a chat UI.
+	KindChatSend = "chat.send"
+
+	// KindChatEvent is DEVICE-INITIATED (no request carries it): one monitor
+	// event belonging to a chat.send run. Data: MQTTChatEventData.
+	//
+	// The payload is domain.MonitorEvent verbatim — the same struct the web
+	// monitor's SSE stream (GET /api/agent/events) delivers — so a phone client
+	// can reuse the web chat's reducer as-is instead of a parallel vocabulary
+	// that would drift the first time an event type is added.
+	KindChatEvent = "chat.event"
+
+	// KindChatFileGet fetches ONE device-local file a turn named. Data:
+	// MQTTChatFileGetData; the reply's Data is MQTTChatFileData.
+	//
+	// PULL, not push, and deliberately so: it is the MQTT twin of
+	// GET /api/agent/file, which is exactly how the web chat works — the client
+	// spots a device path in the message it is rendering and asks for that file.
+	// Keeping the two the same means a phone bytes-for-bytes reuses the web
+	// client's logic, files nobody opens cost nothing on the uplink, and a
+	// conversation scrolled back weeks still resolves its images.
+	//
+	// What may leave the device is decided by system/agentfile — the same
+	// allow-list the HTTP endpoint enforces, so `path` being client-supplied is
+	// safe the same way it is safe there.
+	KindChatFileGet = "chat.file.get"
 )
 
 // Connector (MCP) data-kind prefixes. The connector code is the suffix, e.g.
@@ -574,6 +648,12 @@ type MQTTInfoResponse struct {
 	// slack/discord become unsupported after switching to picoclaw). Empty/omitted
 	// when every configured channel is supported.
 	UnsupportedChannels []string `json:"unsupported_channels,omitempty"`
+	// Skills is what the ACTIVE runtime currently has installed — the same set
+	// the web UI's Manage-skills panel shows, and the same `skills` array the
+	// HTTP backend ping carries (both use SkillSummary, so the two uplinks can't
+	// drift). Populated only by handleInfo; omitempty keeps it out of the `data`
+	// replies that embed this struct.
+	Skills []SkillSummary `json:"skills,omitempty"`
 }
 
 // NewDeviceMessage creates a base message with required fields populated from config.
@@ -785,6 +865,126 @@ type MQTTSkillsInstallData struct {
 	Role string `json:"role"`
 }
 
+// MQTTSkillsSaveData is the Data payload for kind:"skills.save" — an authored
+// skill pushed from the backend instead of the web UI's form. Same three fields
+// as SkillDraft (which this maps onto); Name must be a slug matching
+// ^[a-z0-9_-]+$, enforced device-side by skills.ValidateSkillName.
+type MQTTSkillsSaveData struct {
+	Name         string `json:"name"`
+	Description  string `json:"description"`
+	Instructions string `json:"instructions"`
+}
+
+// MQTTSkillsFilesData is the Data payload for kind:"skills.files".
+//
+//	{"name":"music"}                        → file list, no contents
+//	{"name":"music","path":"music/SKILL.md"} → that one file, contents inlined
+//
+// Path is the entry path exactly as the list reported it (relative to the skills
+// root, so it includes the skill dir).
+type MQTTSkillsFilesData struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+// InboundFile is a file the USER attached to a turn, carried inbound so the
+// agent's tools can open it. Separate from the `image` field, which stays for
+// photos: an image goes through the describe-first vision gate, a document must
+// not (a PDF fed to a vision model fails, and used to land as `.jpg` besides).
+type InboundFile struct {
+	// Name is the client's filename. Used ONLY for its extension — the path
+	// written on disk is generated, so a hostile name can't steer the write.
+	Name string `json:"name"`
+	// MIME is advisory, for a client that wants to label the attachment. The
+	// device does not trust it to decide anything.
+	MIME string `json:"mime,omitempty"`
+	// Content is the file base64-encoded, capped at agentfile.InboundMaxBytes.
+	Content string `json:"content"`
+}
+
+// MQTTChatSendData is the Data payload for kind:"chat.send".
+type MQTTChatSendData struct {
+	Message string `json:"message"`
+	// File is an optional non-image attachment (PDF, CSV, …). Use Image for
+	// photos — that path runs the vision gate, this one does not.
+	File *InboundFile `json:"file,omitempty"`
+	// Image is an optional base64 JPEG, exactly what the web chat puts in the
+	// sensing event's `image` field — so a phone can attach a photo the same way.
+	Image string `json:"image,omitempty"`
+	// SessionID is opaque to the device: it is echoed on the ack and on every
+	// chat.event of this run so the backend can fan the stream back out to the
+	// right client. The device does NOT partition conversation state by it —
+	// there is one agent and one history, the same as standing next to the box.
+	SessionID string `json:"session_id,omitempty"`
+	// Speak makes the device say the reply out loud as well. Off by default: a
+	// phone user chatting from another room does not expect the device to start
+	// talking, which is also why the web chat suppresses TTS.
+	Speak bool `json:"speak,omitempty"`
+}
+
+// MQTTChatSendResult is the Data block of the chat.send ack. The stream of
+// chat.event messages that follows carries the same RunID.
+type MQTTChatSendResult struct {
+	RunID     string `json:"run_id"`
+	SessionID string `json:"session_id,omitempty"`
+}
+
+// MQTTChatEventData is the Data payload for kind:"chat.event" — one monitor
+// event of an in-flight chat.send run.
+type MQTTChatEventData struct {
+	RunID     string       `json:"run_id"`
+	SessionID string       `json:"session_id,omitempty"`
+	Event     MonitorEvent `json:"event"`
+}
+
+// MQTTChatFileGetData is the Data payload for kind:"chat.file.get" — a request
+// for ONE device-local file the client found named in a message it is rendering.
+type MQTTChatFileGetData struct {
+	// Path is the device path, exactly as it appeared in the turn. Treated as
+	// hostile input and validated against the agentfile allow-list.
+	Path string `json:"path"`
+	// SessionID and RunID are opaque to the device and echoed back untouched, so
+	// the backend can route the reply to the client that asked. Both optional:
+	// a file can be requested long after its run is over.
+	SessionID string `json:"session_id,omitempty"`
+	RunID     string `json:"run_id,omitempty"`
+}
+
+// MQTTChatFileData is the Data block of a chat.file.get reply — one file's
+// metadata plus, when it fits, its bytes.
+type MQTTChatFileData struct {
+	RunID     string `json:"run_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	// Name is the basename; Path echoes what was asked for, so a reply can be
+	// matched to its request without relying on ordering.
+	Name string `json:"name"`
+	Path string `json:"path"`
+	MIME string `json:"mime"`
+	Size int64  `json:"size"`
+	// Content is the file base64-encoded — the mirror image of how a chat.send
+	// carries an inbound image, so the backend handles one encoding in both
+	// directions. Empty when TooLarge is set.
+	Content string `json:"content,omitempty"`
+	// TooLarge marks a file past the MQTT inline budget: the metadata still
+	// comes back so a client can say "a 12 MB video" instead of showing nothing,
+	// but the bytes are not on the wire.
+	TooLarge bool `json:"too_large,omitempty"`
+}
+
+// MQTTSkillsUninstallData is the Data payload for kind:"skills.uninstall".
+type MQTTSkillsUninstallData struct {
+	Name string `json:"name"`
+}
+
+// MQTTSkillsInstallStoreData is the Data payload for kind:"skills.install_store" — ONE skill
+// from the Autonomous skill catalog, identified by its catalog id.
+type MQTTSkillsInstallStoreData struct {
+	ID string `json:"id"`
+	// Name is an optional fallback, used only when the archive has no single
+	// wrapping directory to take the skill name from.
+	Name string `json:"name"`
+}
+
 // MQTTTTSSetData is the nested data payload for cmd:"data", kind:"tts.set" downlinks.
 // BFF sends: {"cmd":"data","kind":"tts.set","data":{"provider":"elevenlabs","voice":"Linh","language":"vi"}}
 type MQTTTTSSetData struct {
@@ -893,6 +1093,25 @@ type MQTTRealtimeSetAck struct {
 	Status string           `json:"status"`
 	Error  string           `json:"error,omitempty"`
 	Data   *RealtimeSetData `json:"data,omitempty"`
+}
+
+// WakeWordGateData controls the top-level wakeword config flag. Enabled is a
+// pointer so an omitted field can be rejected instead of silently disabling the
+// gate.
+//
+//	{ "cmd": "data", "kind": "wakeword.gate", "data": { "enabled": true } }
+type WakeWordGateData struct {
+	Enabled *bool `json:"enabled" validate:"required"`
+}
+
+// MQTTWakeWordGateAck is published to fd_channel after applying (or failing) a
+// wakeword.gate downlink. status: "starting" | "success" | "failure".
+type MQTTWakeWordGateAck struct {
+	MQTTInfoResponse
+	Kind   string            `json:"kind"`
+	Status string            `json:"status"`
+	Error  string            `json:"error,omitempty"`
+	Data   *WakeWordGateData `json:"data,omitempty"`
 }
 
 // AgentRuntimeSetData carries the target backend for a runtime switch. The MQTT
@@ -1034,6 +1253,7 @@ type ConfigPublicResponse struct {
 	STTModel           string `json:"stt_model"`
 	TTSProvider        string `json:"tts_provider"`
 	TTSVoice           string `json:"tts_voice"`
+	WakeWord           bool   `json:"wakeword"`
 	DeviceID           string `json:"device_id"`
 	Mac                string `json:"mac"`
 	NetworkSSID        string `json:"network_ssid"`
@@ -1106,6 +1326,7 @@ type UpdateConfigRequest struct {
 
 	TTSProvider string `json:"tts_provider"`
 	TTSVoice    string `json:"tts_voice"`
+	WakeWord    *bool  `json:"wakeword,omitempty"`
 
 	// Realtime voice-agent config (Gemini Live / OpenAI Realtime). Same payload
 	// as the MQTT realtime.set downlink; omit to leave the realtime block alone.

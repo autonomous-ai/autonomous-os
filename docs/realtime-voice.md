@@ -34,6 +34,27 @@ window, adding that many seconds of latency before the main agent even sees the
 request. The function result is already sent back to the model before the break;
 the dangling open turn is cleared by the next turn's `flush_output()`.
 
+Gemini can similarly emit `generation_complete` before `turn_complete`: the
+latter is delayed while Gemini assumes the client is playing its audio in real
+time. HAL plays the generated response itself, so it ends the consumer turn on
+`generation_complete` and releases the next manual-VAD commit immediately.
+This avoids an otherwise unnecessary silent-watchdog delay after the reply;
+any late `turn_complete` is discarded before the next turn.
+
+Every STT-final-confirmed wake-word turn reaches dispatch. When realtime already
+spoke, dispatch sends a `voice_agent_handled` synchronization event so the main
+agent records the exchange but stays silent; unavailable, failed, timed-out, or
+delegated realtime takes the normal main-agent path. This also consumes a
+one-turn vision handoff, so a temporary Gemini failure cannot drop a voice
+command or leak a frame into the next turn.
+
+If the **initial** provider connection fails during HAL startup, the
+orchestrator creates fresh sessions in a background retry loop (an immediate
+fresh attempt, then 2s exponential backoff capped at 60s). This is separate from provider send/receive reconnects,
+which do not exist until the first `connect()` succeeds. No HAL restart or new
+audio is required; voice turns keep using the main-agent fallback until the
+connection recovers.
+
 ## Emotion expression (fire-and-forget)
 
 If the device declares the `expression` capability
@@ -197,13 +218,19 @@ Three interchangeable backends, selected by `HAL_REALTIME_PROVIDER` /
 | OpenAI Realtime | `voice_agent/openai_realtime.py` `OpenAIRealtimeAgent` | fully synchronous; one `RealtimeConnection` shared by send/recv threads, serialized by a reentrant lock | `gpt-realtime-2` | 24000 Hz |
 | Qwen Omni Realtime | `voice_agent/qwen_realtime.py` `QwenRealtimeAgent` | fully synchronous; raw `websockets.sync.client` socket shared by send/recv threads, reusing the openai_realtime thread/queue skeleton | `qwen3.5-omni-plus-realtime` | 16000 Hz in / 24000 Hz out |
 
-Gemini Live uses `google-genai`, but the SDK websocket keepalive is disabled
-(`ping_interval=None`, `ping_timeout=None`) so the Python client behaves like the
-browser raw-WS probe through the `campaign-api` proxy. The default Python
-`websockets` 20 s ping loop can close idle sessions and make the next turn fail
-with WS 1011. HAL also recycles Gemini synchronously before streaming audio when
+Gemini Live uses `google-genai` and keeps its private asyncio loop owned by its
+`gemini-io` thread. Teardown first closes/cancels the provider receive task,
+then joins workers; a failed handshake rolls back that loop/thread immediately.
+This prevents a stalled receive from surviving a session rebuild. For the
+native-audio family, HAL sends a 20 s websocket ping but sets no ping timeout:
+outbound traffic keeps the proxy path alive without treating its missing pong as
+a client-side failure. HAL also recycles Gemini synchronously before streaming audio when
 the previous turn ended more than `HAL_GEMINI_PRE_TURN_RECYCLE_S` seconds ago, so
 post-idle speech does not land on a proxy-dropped session.
+
+All providers treat teardown as terminal: once `disconnect()` sets the stop
+signal, send/receive workers neither reconnect nor emit transport-failure logs
+while their closed socket unwinds.
 
 Qwen Omni Realtime (Alibaba DashScope / Model Studio) speaks the **OpenAI
 Realtime beta event schema** (`session.update`, `input_audio_buffer.append` /
@@ -322,6 +349,7 @@ only surface `voice_service` talks to:
 | `send_function_result(call_id, output)` | Return a tool result to the model |
 | `save_turn(user, agent)` | Persist a turn to realtime memory |
 | `available` / `sample_rate` | Readiness + provider audio rate |
+| `rebuilding` / `wait_until_available()` | Observe and briefly wait for an already-running replacement session without starting another rebuild |
 
 ## Context managers
 
@@ -372,19 +400,6 @@ turn ("hello") right after a restart would leak to the main agent.
 2. **Stream.** While the STT session is open, each mic frame is also resampled to
    the provider rate and sent via `append_audio()` (parallel, non-blocking), and
    buffered in `rt_audio_buffer`.
-3. **Speaker-ID prepass + prime context.** At session end (after capture), HAL runs
-   the speaker-ID prepass **once** (`identify_and_decorate`), then offers
-   `[TURN CONTEXT]` (time, reply-language reminder, current user) as non-response
-   text. The **current user is the VOICE speaker** identified this turn — it
-   overrides the face-derived `current_user`, and falls back to the face identity
-   when there is no voice ID (unknown / STOI-reject / no transcript). It is sent
-   **after** the audio has streamed so the context can name who actually spoke (the
-   speaker cannot be known before the utterance exists). Gemini native-audio
-   intentionally drops the injection (`send_text` no-op) because repeated SDK
-   `clientContent(turn_complete=False)` messages can collide with audio turns and
-   close with WS 1011, so on that model the name does not reach the reply; Gemini
-   3.x / OpenAI / Qwen accept it. The prepass result is reused downstream — speaker
-   recognition never runs twice.
 4. **Commit.** At session end, if enabled + `available` + audio buffered,
    `commit_audio()` fires. A `thinking` emotion cue fires with the commit
    (face + servo + a FORCED purple LED pulse — `thinking` is normally a
@@ -462,12 +477,15 @@ or via env on the device (`DASHSCOPE_API_KEY`, `HAL_QWEN_REALTIME_BASE_URL` in
 > "leave blank to derive" stays blank and a save never re-persists the bare URL.
 
 ```json
-"realtime": {
-  "enabled": true,
-  "provider": "gemini",
-  "gemini": { "model": "gemini-3.1-flash-live-preview", "voice": "Kore", "thinking_level": "MINIMAL" },
-  "openai": { "model": "gpt-realtime-2", "voice": "alloy", "reasoning_effort": "minimal" },
-  "qwen": { "model": "qwen3.5-omni-plus-realtime", "voice": "Ethan", "api_key": "sk-…", "base_url": "wss://…" }
+{
+  "wakeword": false,
+  "realtime": {
+    "enabled": true,
+    "provider": "gemini",
+    "gemini": { "model": "gemini-3.1-flash-live-preview", "voice": "Kore", "thinking_level": "MINIMAL" },
+    "openai": { "model": "gpt-realtime-2", "voice": "alloy", "reasoning_effort": "minimal" },
+    "qwen": { "model": "qwen3.5-omni-plus-realtime", "voice": "Ethan", "api_key": "sk-…", "base_url": "wss://…" }
+  }
 }
 ```
 
@@ -510,22 +528,24 @@ port of this filter — `system/server/agent/delivery/http/cot_leak_filter.go`
 `docs/flow-monitor.md` § "CoT-leak filter (agent path)". Keep the two in sync
 when hardening either side.
 
-### Environment variables (`hal/config.py`)
+### Runtime configuration (`hal/config.py` + `config.json`)
 
-Each knob's `HAL_*` env var overrides the block (and is the dev-box path):
+Each `HAL_*` environment variable overrides its corresponding setting; `wakeword`
+is a top-level `config.json` flag:
 
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `HAL_REALTIME_ENABLED` | `true` | Master gate for the realtime pipeline |
+| `wakeword` | `false` | Top-level config-file wake-word gate. When true, a matching interim transcript is provisional only: HAL commits buffered audio to realtime or forwards a command only after an STT **final** result confirms the configured leading wake phrase. The supported prefixes are `hello`, `hey`, `hi`, `alo`, `okay`, `ok`, and `wake up`, applied to the permanent common alias (`hey autonomous`), device type (`hey lamp`), and current agent name (`hey Luna`). A runtime rename updates only the agent-name aliases. Bare names and other prefixes do not arm the gate. Every confirmed turn dispatches to os-server: a spoken realtime reply becomes a silent `voice_agent_handled` sync event; unavailable, silent, failed, or delegated realtime follows the normal path. If realtime is disabled, the confirmed final transcript follows the normal os-server path. Missing/false preserves the pre-gate always-listening flow unchanged. HAL restarts after a local Settings save or MQTT `wakeword.gate`. |
 | `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `qwen` |
 | `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = manual activity detection) |
 | `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Max seconds `receive()` waits for the next output event before ending a silent turn (fallback to main agent) |
 | `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` | `20.0` | Silent-turn watchdog used instead of the default for turns where a `look` fired (per-turn, via `extend_recv_timeout()`). Gemini's forced thinking over a text-dense frame can stay silent >8 s right before the answer — the default watchdog was killing those turns |
 | `HAL_REALTIME_REQUIRE_TRANSCRIPT` | `true` | Never commit an empty-STT turn to the model. Real speech that nova-3 missed (short utterances) is voiced and passes the VAD/Silero guards, so committing its raw audio makes the model invent a reply to silence (a generic greeting, often with a name nobody said). When `true`, any empty-STT turn is dropped regardless of duration/voicing — silence beats a wrong reply. Set `false` to fall back to the Silero-gated audio-only path below. |
 | `HAL_REALTIME_MIN_COMMIT_DURATION_S` | `0.8` | Sessions shorter than this with no STT transcript are treated as VAD noise and not committed to the model. Only consulted when `HAL_REALTIME_REQUIRE_TRANSCRIPT=false`. |
-| `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Cost control: when a turn arrives after this many seconds of silence, recycle (rebuild) the session **after** that turn so the next turn drops the per-turn context the provider re-bills on a long-lived session. A post-pause turn is effectively a new conversation; long-term continuity survives via the reloaded `summary.md`. `0` disables. Reuses the zombie-recovery rebuild path. |
+| `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Cost control: when a turn arrives after this many seconds of silence, recycle (rebuild) the session **after** that turn so the next turn drops the per-turn context the provider re-bills on a long-lived session. A post-pause turn is effectively a new conversation; long-term continuity survives via the reloaded `summary.md`. For native-audio Gemini, this is skipped when a successful pre-turn recycle already made the same idle gap fresh. `0` disables. Reuses the zombie-recovery rebuild path. |
 | `HAL_GEMINI_SESSION_RESUMPTION` | `false` | Resume the same Gemini session across reconnects. OFF by default — the `campaign-api` proxy doesn't forward the resumption handshake, so resuming through it yields a zombie session (cold reconnects work). Enable only against an endpoint that supports it. |
-| `HAL_GEMINI_PRE_TURN_RECYCLE_S` | `15` | Gemini transport guard: when a new spoken turn starts after this much idle time, rebuild the Gemini session **before** streaming pre-roll/audio so the turn does not hit a proxy/SDK idle-dead socket. `0` disables. |
+| `HAL_GEMINI_PRE_TURN_RECYCLE_S` | `120` | Gemini transport guard: when a new spoken turn starts after this much idle time, rebuild the Gemini session **before** streaming pre-roll/audio so the turn does not hit a proxy/SDK idle-dead socket. `0` disables. A successful pre-turn recycle suppresses the generic post-turn idle recycle for that same turn, so one idle gap creates at most one cost/transport rebuild. |
 | `HAL_AGENT_GATEWAY` | `openclaw` | Selects the context manager (also from `agent_runtime` in config.json) |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | Gemini key; falls back to `llm_api_key` |
 | `HAL_GEMINI_LIVE_MODEL` | `gemini-2.5-flash-native-audio-preview-12-2025` | |

@@ -1,6 +1,10 @@
 package intent
 
-import "testing"
+import (
+	"testing"
+
+	"go.autonomous.ai/os/system/lib/i18n"
+)
 
 // Regression: "Deactivate focus mode" used to fall through scene_off (which
 // only knew "turn off"/"disable") into scene_focus, re-activating the scene
@@ -75,6 +79,26 @@ func TestSceneOffNeverActivates(t *testing.T) {
 	} {
 		if r := Match(text); r != nil && r.Rule != "scene_off" {
 			t.Errorf("Match(%q) rule = %s, must not be a scene activation", text, r.Rule)
+		}
+	}
+}
+
+func TestLocalChitchatAttentionAliasesDoNotDependOnVoiceWakeWordGate(t *testing.T) {
+	i18n.SetDeviceName("Moon")
+	t.Cleanup(func() { i18n.SetDeviceName("autonomous") })
+
+	cases := map[string]string{
+		"moon ơi":            "chitchat_attention",
+		"này moon, xin chào": "chitchat_greeting",
+	}
+	for text, want := range cases {
+		r := Match(text)
+		if r == nil || r.Rule != want {
+			got := "<nil>"
+			if r != nil {
+				got = r.Rule
+			}
+			t.Errorf("Match(%q) rule = %s, want %s", text, got, want)
 		}
 	}
 }

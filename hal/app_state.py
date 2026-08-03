@@ -14,7 +14,9 @@ from typing import Optional
 
 from hal.presets import (
     AMBIENT_RESTING_LED,
+    ambient_resting_is_dark,
     EMO_IDLE,
+    EMO_SLEEPY,
     EMO_THINKING,
     EMOTION_PRESETS,
     FX_SPEAKING_WAVE,
@@ -100,6 +102,14 @@ _current_emotion: Optional[str] = None
 # Fires release_servos after sleepy stays active continuously. Cancelled
 # the moment the emotion changes away from sleepy (see routes/emotion.py).
 _sleepy_release_timer: Optional[threading.Timer] = None
+# Set once sleepy has released torque. Servo routes honor this lock until a
+# wake emotion explicitly resumes the motion service.
+_sleep_servo_released = False
+_sleep_servo_lock = threading.RLock()
+# These flags track only mutes owned by sleepy; a wake must never undo a
+# manual user mute.
+_sleepy_auto_muted_mic = False
+_sleepy_auto_muted_speaker = False
 
 # --- TTS speaking LED state ---
 
@@ -129,7 +139,7 @@ _hw_mic_switch_muted: "bool | None" = None
 # but every _restore_user_led lands back on the red instead of the user state
 # — "nothing happening + red breathing" tells the user the mic is muted.
 # An explicit user LED command (/led/solid|off|effect|paint) dismisses it
-# (the user's ask wins; mic stays muted). Yields to LST_OFF and active scenes.
+# (the user's ask wins; mic stays muted). Yields to active scenes only.
 _mic_muted_led = False
 
 # True only while a live voice enrollment is recording. record-enroll sets
@@ -212,6 +222,12 @@ def _load_user_led_state() -> Optional[dict]:
             os.unlink(_LED_STATE_PATH)
             return None
         saved = data.get("state")
+        # Legacy sidecar written before "off" stopped being its own state:
+        # {"type": "off"} now means the same thing as no state at all, so
+        # normalise it away instead of carrying a type nothing understands.
+        if saved and saved.get("type") == LST_OFF:
+            logger.info("User LED state sidecar held legacy 'off' -- treating as no state")
+            return None
         if saved:
             logger.info("User LED state restored from sidecar: %s", saved)
         return saved or None
@@ -277,6 +293,55 @@ def _persist_mic_state():
 
 def _persist_speaker_state():
     _save_boot_sidecar(_SPEAKER_STATE_PATH, {"muted": _speaker_muted})
+
+
+def _finalize_sleepy_peripherals(mute_mic: bool, mute_speaker: bool):
+    """Enter silent sleep immediately without changing manual user mutes.
+
+    Sleep owns the resting LED state. Teardown callbacks from an emotion, TTS,
+    or music session can arrive after this function returns, so they must not
+    revive the mic-muted indicator or a previous user/effect state.
+    """
+    global _sleepy_auto_muted_mic, _sleepy_auto_muted_speaker
+    global _mic_muted, _speaker_muted
+    if _current_emotion != EMO_SLEEPY:
+        return
+
+    _cancel_pending_restore()
+    if rgb_service:
+        _stop_current_effect()
+        rgb_service.clear()
+
+    if mute_mic and not _mic_muted:
+        _mic_muted = True
+        _sleepy_auto_muted_mic = True
+        if voice_service and voice_service.available:
+            threading.Thread(target=voice_service.stop, daemon=True, name="sleepy-mic-stop").start()
+
+    if mute_speaker and not _speaker_muted:
+        _speaker_muted = True
+        _sleepy_auto_muted_speaker = True
+        if tts_service and tts_service.speaking:
+            tts_service.stop()
+        if music_service and music_service.playing:
+            music_service.stop()
+
+    logger.info("Sleepy finalized: LED off, mic muted, speaker muted")
+
+
+def _wake_sleepy_peripherals():
+    """Restore only mic/speaker states that sleepy itself muted."""
+    global _sleepy_auto_muted_mic, _sleepy_auto_muted_speaker, _mic_muted, _speaker_muted
+    if _sleepy_auto_muted_speaker:
+        _speaker_muted = False
+        _sleepy_auto_muted_speaker = False
+    if _sleepy_auto_muted_mic:
+        _sleepy_auto_muted_mic = False
+        if _hw_mic_switch_muted is not True:
+            _mic_muted = False
+            if voice_service:
+                voice_service.start()
+    logger.info("Sleepy wake: restored sleepy-owned audio state")
 
 
 def _persist_camera_state():
@@ -378,22 +443,29 @@ def _avg_paint_color(colors) -> Optional[tuple]:
     return tuple(sum(ch) // len(rgb) for ch in zip(*rgb))
 
 
-def _led_off_by_user() -> bool:
-    """True when the user explicitly turned the LED off (LST_OFF).
+def led_should_stay_dark() -> bool:
+    """True when nothing may light the strip of its own accord.
 
-    Emotions, TTS/music speaking waves, and the post-emotion restore all honor
-    this so the strip stays DARK until the user turns it back on. Any explicit
-    on command (solid / effect / scene) overwrites the saved state via
-    _save_user_led_state, so off is sticky only until then — not forever.
+    THE single source of truth for "leave the lamp alone": no user colour, and
+    a dark resting look (see AMBIENT_RESTING_LED). This is the state the device
+    boots into — the user LED sidecar is boot-scoped — and the state
+    POST /led/off returns it to.
+
+    Anything that paints the strip WITHOUT the user asking right now — the
+    speaking waves, the resting settle, presence, ambient breathing — must
+    check this. An explicit user/agent command must NOT: that IS the user
+    asking, and it overwrites the saved state. Neither must a cue that carries
+    information the user needs (a status LED, the mic-muted indicator): those
+    earn their light.
     """
-    return bool(_user_led_state and _user_led_state.get("type") == LST_OFF)
+    return _user_led_state is None and ambient_resting_is_dark()
 
 
 def _get_current_led_color() -> tuple:
     """Return the current LED color for the speaking wave effect."""
-    # User turned the LED off → the wave must render on black (invisible), not
-    # the warm fallback below, so speaking/music never re-lights a dark strip.
-    if _led_off_by_user():
+    # Nothing may self-light a dark strip → the wave renders on black
+    # (inaudible-equivalent: invisible) instead of the warm fallback below.
+    if led_should_stay_dark():
         return (0, 0, 0)
     if _user_led_state:
         stype = _user_led_state.get("type")
@@ -411,6 +483,9 @@ def _get_current_led_color() -> tuple:
                 return tuple(int(c * preset["brightness"]) for c in preset["color"])
     if _is_nonblack(_effect_base_color):
         return _effect_base_color
+    # Last-resort warm white. Only reachable when the resting look is LIT (a
+    # dark resting look returns black at the top of this function), i.e. the
+    # device is configured to glow at rest and the wave should match it.
     return (255, 180, 100)
 
 
@@ -423,8 +498,6 @@ def _get_user_base_color() -> tuple:
     if not _user_led_state:
         return (0, 0, 0)
     stype = _user_led_state.get("type")
-    if stype == LST_OFF:
-        return (0, 0, 0)
     if stype in (LST_SOLID, LST_EFFECT):
         color = _user_led_state.get("color")
         return tuple(color) if color else (0, 0, 0)
@@ -440,13 +513,11 @@ def _get_user_base_color() -> tuple:
 def _mic_muted_led_owns_strip() -> bool:
     """True when the mic-muted indicator is the strip's current resting look.
 
-    Yields to two deliberate user lighting choices: LST_OFF (a dark strip
-    stays dark) and an active scene (reading/focus lighting is functional).
-    The flag stays set in both cases, so leaving the scene while still
-    muted brings the red back on the next restore."""
+    Yields to an active scene (reading/focus lighting is functional). The flag
+    stays set, so leaving the scene while still muted brings the red back on
+    the next restore. It does NOT yield to a dark strip: the indicator is the
+    only signal that the mic is off, so it outranks "the lamp is resting"."""
     if not _mic_muted_led:
-        return False
-    if _led_off_by_user():
         return False
     if _active_scene or (_user_led_state and _user_led_state.get("type") == LST_SCENE):
         return False
@@ -481,6 +552,9 @@ def _start_preset_effect(preset: dict, thread_name: str):
 def _start_mic_muted_effect():
     """Paint the mic-muted indicator (dark red breathing). Display-only:
     never touches _user_led_state, so unmute restores the saved user look."""
+    if _sleeping:
+        logger.info("Mic-muted LED skipped -- sleepy owns the strip")
+        return
     if not _mic_muted_led_owns_strip():
         return
     _start_preset_effect(STATUS_LED_PRESETS["mic_muted"], "led-mic-muted")
@@ -533,9 +607,14 @@ def _clear_mic_muted_led(force: bool = False):
     # it and settle on the ambient resting look ourselves — the Go ambient
     # loop thinks its effect is still running and won't re-light the strip
     # until its next pause/resume cycle.
+    # A dark resting look means the strip stays cleared — see AMBIENT_RESTING_LED.
     if _effect_thread is not None and _effect_thread.name == "led-mic-muted":
         _stop_current_effect()
         if _user_led_state is None and rgb_service:
+            if ambient_resting_is_dark():
+                rgb_service.dispatch(RGB_CMD_SOLID, (0, 0, 0))
+                logger.info("Mic-muted LED cleared -- no user state, resting dark")
+                return
             _start_preset_effect(AMBIENT_RESTING_LED, "led-ambient-fallback")
             return
     _restore_user_led()
@@ -635,6 +714,16 @@ def _restore_user_led():
     global _restore_timer
     _restore_timer = None
 
+    # Sleep is a terminal visual state. TTS/music teardown and previously
+    # scheduled emotion restores may arrive after sleepy cleared the strip;
+    # do not let any of them repaint the mic-muted indicator or user state.
+    if _sleeping:
+        if rgb_service:
+            _stop_current_effect()
+            rgb_service.clear()
+        logger.info("LED restore skipped -- sleepy owns the strip")
+        return
+
     if _tts_speaking:
         logger.info("LED restore: skipped -- TTS speaking_wave active")
         return
@@ -654,15 +743,17 @@ def _restore_user_led():
         return
 
     state = _user_led_state
-    if state is not None and state.get("type") == LST_OFF:
-        # User explicitly turned the LED off — restore to BLACK, not the
-        # lingering emotion color. Otherwise an emotion that briefly lit the
-        # strip would "stick" and the device never goes dark after "turn off".
-        _stop_current_effect()
-        rgb_service.clear()
-        logger.info("LED restore: user state OFF -- cleared to black")
-        return
     if state is None:
+        # A dark resting look means "no user state" settles to black, exactly
+        # like an explicit off — otherwise whatever just ran (speaking wave,
+        # emotion) freezes on its last frame and the strip stays lit with a
+        # colour nobody asked for. Keeping the emotion colour only makes sense
+        # when the device is configured to glow at rest.
+        if ambient_resting_is_dark():
+            _stop_current_effect()
+            rgb_service.clear()
+            logger.info("LED restore: no user state -- resting dark, cleared")
+            return
         logger.info("LED restore: no active user state -- keeping emotion color")
         return
 
@@ -748,6 +839,9 @@ def _on_tts_speak_start():
     global _restore_timer
     if not rgb_service:
         return
+    if _sleeping:
+        logger.info("TTS speaking LED skipped -- sleepy owns the strip")
+        return
 
     color = _get_current_led_color()
     logger.info("TTS speaking LED start: color=%s", color)
@@ -801,6 +895,9 @@ def _on_music_play_start():
     global _restore_timer
     if not rgb_service:
         return
+    if _sleeping:
+        logger.info("Music wave skipped -- sleepy owns the strip")
+        return
     if _tts_speaking:
         # TTS wave owns the strip; don't overwrite it.
         logger.info("Music wave skipped -- TTS speaking_wave active")
@@ -809,8 +906,7 @@ def _on_music_play_start():
         return
 
     state = _user_led_state
-    led_off = state is None or state.get("type") == LST_OFF
-    if led_off:
+    if state is None:
         effect = FX_SPEAKING_WAVE_RAINBOW
         color = (0, 0, 0)  # ignored; each segment computes its own hue
         name = "led-music-speaking_wave_rainbow"
@@ -881,19 +977,11 @@ def _apply_emotion_led_display(
     preset = EMOTION_PRESETS.get(emotion)
     if not preset:
         return None
+    if _sleeping and emotion != EMO_SLEEPY:
+        logger.info("Emotion LED skipped (%s) -- sleepy owns the strip", emotion)
+        return None
     if _tts_speaking:
         logger.info("Emotion LED skipped (%s) -- TTS speaking_wave active", emotion)
-        if display_service:
-            try:
-                display_service.set_expression(emotion)
-            except Exception as e:
-                logger.warning("Emotion display failed: %s", e)
-        return None
-    if _led_off_by_user():
-        # User turned the LED off — no emotion (background OR expressed) may
-        # re-light it. The face/display expression still updates; only the
-        # strip stays dark until an explicit on command.
-        logger.info("Emotion LED skipped (%s) -- LED off by user", emotion)
         if display_service:
             try:
                 display_service.set_expression(emotion)
@@ -1038,7 +1126,10 @@ def _read_agent_name() -> str:
 def _build_wake_words(name: str) -> list[str]:
     """Generate wake word variants from agent name."""
     n = name.lower()
-    return [f"hey {n}", n, f"n\u00e0y {n}", f"\u00ea {n}", f"{n} \u01a1i"]
+    return [
+        f"{prefix} {n}"
+        for prefix in ("hello", "hey", "hi", "alo", "okay", "ok", "wake up")
+    ]
 
 
 def _find_audio_device(output: bool = True) -> Optional[int]:

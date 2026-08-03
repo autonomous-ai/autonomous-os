@@ -290,9 +290,10 @@ checkOnce():
 
 reconcile(key, target):
   1. Detect current installed version
-  2. floor = target.min_version (default target.version if empty)
-  3. If current >= floor → sync state, return (at/above approved floor)
-  4. If current < floor →
+  2. If current == "" AND the component is not installed → skip silently
+  3. floor = target.min_version (default target.version if empty)
+  4. If current >= floor → sync state, return (at/above approved floor)
+  5. If current < floor →
      a. Set LED orange breathing (OTA in progress)
      b. applyUpdate(key, target)   # installs target.version via software-update
      c. Success → green flash | Failure → red pulse
@@ -300,6 +301,30 @@ reconcile(key, target):
 
 > Manual `software-update <key>` over SSH does NOT pass through `reconcile` — it
 > installs `target.version` directly, bypassing the `min_version` floor.
+
+#### Step 2 — components this device does not have
+
+Metadata lists every published component; no device runs all of them. A Reachy
+Mini has no `claude-desktop-buddy`; a device on a non-OpenClaw runtime has no
+`openclaw`. For those `detectVersion` returns `""`, which sorts below every
+floor — so without this gate the worker reports "update available", speaks the
+update cue, lights the OTA LED and fails the install **every poll, forever**.
+
+`componentInstalled(key)` asks a coarser question than `detectVersion`: *is the
+artifact here at all*, not *which version*. A component that is present but
+unreadable still counts as installed, so OTA self-repair keeps working (an
+`os-server` whose `--version` is broken is still updated); only a genuinely
+absent one is skipped.
+
+| Component | Counts as installed when |
+|---|---|
+| `bootstrap` | always (it is the running worker, so it can self-update) |
+| `os-server` | `os-server` is on `$PATH` |
+| `openclaw` | `openclaw` is on `$PATH` |
+| `web` | `/usr/share/nginx/html/setup/` exists |
+| `hal` | `/opt/hal/` exists |
+| `claude-desktop-buddy` | `/opt/claude-desktop-buddy/` exists |
+| `device` | `$DEVICES_DIR/<type>/` exists (default `/opt/devices`) |
 
 ### OTA LED Feedback
 

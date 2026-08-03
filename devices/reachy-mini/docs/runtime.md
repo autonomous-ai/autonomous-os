@@ -96,7 +96,7 @@ component scripts in order. Each of those also runs standalone:
 | 3 | `spike-os.sh` | `os-server` → `/usr/local/bin/os-server`, seeds `/root/config/config.json`, runs it **as root with `WorkingDirectory=/root`** |
 | 4 | `spike-web.sh` | `web` → `/usr/share/nginx/html/setup`, installs nginx, writes the spike vhost |
 | 5 | `spike-agent.sh` | Node.js 22 (NodeSource) + `openclaw` at the OTA-pinned version, seeds `/root/.openclaw`, runs `openclaw gateway run` on loopback `18789` |
-| 6 | `spike-bootstrap.sh` | `bootstrap` → `/usr/local/bin/bootstrap-server`, seeds `/root/config/bootstrap.json` |
+| 6 | `spike-bootstrap.sh` | `bootstrap` → `/usr/local/bin/bootstrap-server`, seeds `/root/config/bootstrap.json`, installs `devices/reachy-mini/software-update` → `/usr/local/bin/software-update` (the helper the worker execs; without it every apply fails with `executable file not found in $PATH` while all units report healthy) |
 
 Why that order, specifically:
 
@@ -348,15 +348,37 @@ HAL emotion names (CSV stems on Lamp) are mapped to Pollen's HF moves in
 | `music_groove` | `dance1` |
 
 Unmapped names are tried verbatim (callers can send HF names directly).
-Music grooves rotate through `dance1`/`dance2`/`dance3`. Tests guard full
+The 8 music styles are spread across Pollen's 3 dance moves. Tests guard full
 preset coverage and validate all map values against the HF library.
+
+`GET /servo` reports `available_recordings` in the same vocabulary as its
+`current` field: a mapped move is listed under its HAL name (`music_groove`,
+not `dance1`), the rest of the library verbatim. Listing raw HF names split the
+two fields — the web monitor highlights the entry equal to `current`, so
+nothing ever highlighted while a mapped move played.
+
+### Music Groove Loop
+
+`POST /audio/play` dispatches `music_start` (with the detected style) when
+playback begins and `music_stop` when it ends — `hal/routes/music.py`. The
+matching emotion applied on the same path is LED/display only
+(`_apply_emotion_led_display`), so the servo side comes entirely from these two
+events.
+
+The driver handles both: `music_start` sets the groove and the play thread
+repeats that move until `music_stop`, matching the Feetech backend
+(`animation_service._continue_playback`). One dance move is a few seconds long,
+so without the repeat the robot danced once and then sat still for the rest of
+the track. An emotion played mid-track runs its one-shot and then hands the
+servo back to the groove; `hold`, `zero`, `release`, and shutdown end it.
+Everything else stays one-shot — a plain `/servo/play` never repeats.
 
 Known deltas from Lamp:
 
 - CSV upload is a Feetech/Lamp animation concept; Reachy's `add_recording` is a
   no-op until we decide whether uploaded moves matter.
 - Idle/ambient motion is daemon-owned or recorded-move-library-owned, not the
-  Feetech event loop.
+  Feetech event loop — the music groove is the one client-side repeat.
 - `/servo/track` is not production-ready for Reachy yet. The shared
   `tracker_service` still reaches into Lamp/Feetech internals and must be moved
   to `MotionService` accessors first.

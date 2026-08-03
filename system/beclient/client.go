@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/server/config"
 )
 
@@ -227,6 +228,18 @@ type PingPayload struct {
 	// UnsupportedChannels lists configured channels the active runtime cannot
 	// run (populated by ChannelReconcile after a runtime switch).
 	UnsupportedChannels []string `json:"unsupported_channels,omitempty"`
+	// Skills is what the ACTIVE runtime currently has installed — the same set
+	// the web UI's Manage-skills panel shows (GET /api/agent/skills). Sent on
+	// every ping so the backend's per-device skill index self-heals, the same
+	// rationale as SlackTeamID above. Omitted when the device has none, or when
+	// the active runtime can't list them.
+	//
+	// Deliberately name+description only, NOT the file trees that endpoint also
+	// returns: the ping fires every StatusReportInterval, so shipping a full
+	// per-skill file tree that often would be pure waste.
+	//
+	// Same type the MQTT `info` uplink uses, so the two can't drift apart.
+	Skills []domain.SkillSummary `json:"skills,omitempty"`
 }
 
 // MQTTConfig holds MQTT broker configuration from the backend.

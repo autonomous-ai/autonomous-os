@@ -26,6 +26,24 @@ import (
 // resumeDelay is how long after the last interaction before ambient resumes.
 const resumeDelay = 60 * time.Second
 
+// ambientRestingColor is what the breathing loop falls back to when HAL reports
+// a dark strip (just booted, nothing has set a color, or the user turned the
+// light off). MUST mirror the HAL-side AMBIENT_RESTING_LED (hal/presets.py) so
+// idle and restore show the same look — flip the two together.
+//
+// BLACK means "resting state is dark": the loop skips the tick entirely instead
+// of painting, so ambient never lights an unlit strip. Light becomes opt-in —
+// it comes on for an action (emotion, status cue, explicit user/agent color)
+// and goes back to black when that action releases the strip.
+//
+// Currently {0, 0, 0} — default off, per the 30/07/2026 product call: the lamp
+// was lighting itself up unasked and shining into users' faces. Restore
+// {255, 200, 140} (warm white ~2700K) to bring back the previous behavior,
+// where a lamp at rest read as a cozy lamp turned on rather than a cold
+// "device booting" blue, and the warm tone stayed clear of every status color
+// (orange = no-internet, blue = booting, …).
+var ambientRestingColor = [3]int{0, 0, 0}
+
 // Service orchestrates ambient idle behaviors.
 type Service struct {
 	bus *monitor.Bus
@@ -245,14 +263,16 @@ func (s *Service) breathingLoop(ctx context.Context) {
 				continue
 			}
 			if !running {
-				// Read the current LED color from HAL and start breathing with it.
-				// Fall back to a soft warm white if HAL returns black (just started,
-				// no color set) — a lamp at rest should read as a cozy lamp turned on,
-				// not a cold "device booting" blue, and warm white stays clear of every
-				// status color (orange = no-internet, blue = booting, etc.).
-				color := [3]int{255, 200, 140} // fallback: warm white (~2700K)
+				// Read the current LED color from HAL and start breathing with
+				// it; fall back to the resting look when HAL returns black
+				// (just started, no color set, or the light is off).
+				color := ambientRestingColor
 				if c, err := hal.GetColor(); err == nil && (c[0]+c[1]+c[2]) > 0 {
 					color = c
+				}
+				if (color[0] + color[1] + color[2]) == 0 {
+					// Nothing lit and the resting look is dark — stay dark.
+					continue
 				}
 				hal.SetEffect("breathing", color[0], color[1], color[2], 0.3)
 				running = true

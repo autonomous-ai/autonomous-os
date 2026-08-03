@@ -145,7 +145,11 @@ from `STATUS_LED_PRESETS`, overridable per device via `presets.json`'s `status_l
 
 ### Mic-muted idle indicator
 
-`STATUS_LED_PRESETS["mic_muted"]` — dark red `(140, 0, 0)` breathing at speed 0.8. HAL-local
+`STATUS_LED_PRESETS["mic_muted"]` — dark red `(10, 0, 0)` breathing at speed 0.8, far dimmer
+than the `light.max_brightness` ceiling would force (the gate alone clamps to 120): it is a
+resting look that stays lit for as long as the mic is muted, often pointed at the user, so it
+is tuned to be glanceable rather than bright. Red helps — at the same value it carries about
+a quarter the luminance of white. HAL-local
 key (no Go statusled state): applied by `POST /voice/mute`, cleared by `POST /voice/unmute`
 (`app_state._mic_muted_led`). It is the strip's **resting look** while the mic is muted —
 nothing is blocked:
@@ -156,10 +160,14 @@ nothing is blocked:
   the mic is muted.
 - An explicit user LED command (non-transient `/led/solid|off|effect`, `/led/paint`)
   dismisses the indicator — the user's ask wins the strip; the mic stays muted.
-- Yields to deliberate lighting choices: user LED-off stays dark, an active scene keeps
-  its functional lighting (the flag persists, so leaving the scene while still muted
-  brings the red back on the next restore). Scene mic-unmute paths (`/scene` with
-  `mic:"on"`, `/scene/off`) also clear it.
+- Yields to an active scene, which keeps its functional lighting (the flag persists, so
+  leaving the scene while still muted brings the red back on the next restore). Scene
+  mic-unmute paths (`/scene` with `mic:"on"`, `/scene/off`) also clear it. It does NOT
+  yield to a resting (dark) strip: the indicator is the only signal that the mic is off,
+  so it outranks "the lamp is idle".
+- **Sleep wins:** while the `sleepy` emotion is active, the strip stays off. The muted
+  flag still persists, but a late emotion/TTS/music restore cannot repaint the red
+  indicator; it may resume only after a wake emotion clears sleep.
 - `_user_led_state` is never touched — unmute restores the user's saved look.
 - While the indicator owns the strip, transient overlay writes are skipped (`POST /led/effect`
   with `transient:true`) and so is **every** `POST /led/effect/stop`: no transient overlay can
@@ -177,9 +185,68 @@ When lamp starts and `config.SetUpCompleted == false` (device in AP/provisioning
 ## Ambient Idle Behaviors
 
 When Lamp is idle (no interaction):
-- **Breathing LED** — sine-wave brightness. Breathes the current LED color; when none is set (e.g. just after boot), it falls back to a soft warm white `(255, 200, 140)` (~2700K) at speed 0.3, so a lamp at rest reads as a cozy lamp turned on rather than a cold "device" blue. A user/agent-set color is respected (breathing uses it; ambient never overrides a locked color).
+- **Breathing LED** — sine-wave brightness. Breathes the current LED color; when none is set (e.g. just after boot), it falls back to the **resting look**, which is `(0, 0, 0)` — dark. A user/agent-set color is respected (breathing uses it; ambient never overrides a locked color).
 
 Auto-pauses on interaction, resumes after 60s of silence.
+
+### The resting look (default: off)
+
+When no user LED state exists, the strip settles on the *resting look*, defined in **two
+places that must be flipped together**:
+
+| Side | Knob | Consumers |
+|---|---|---|
+| HAL | `AMBIENT_RESTING_LED` (`hal/presets.py`) | `POST /led/restore` with no user state; the settle after mic-unmute |
+| os-server | `ambientRestingColor` (`system/ambient/service.go`) | `breathingLoop` fallback when `/led/color` reads black |
+
+Both are currently **`(0, 0, 0)` — the resting state is dark**. A black resting color is
+treated specially: the settle paths *clear* the strip instead of starting an effect (an
+effect thread breathing black would burn 25 fps of SPI writes and make `GET /led/color`
+report `on: true` over a dark strip), and the Go loop skips its tick entirely rather than
+painting. Light is therefore opt-in — it comes on for an *action* (emotion, status cue,
+explicit user/agent color, scene) and goes back to black when that action releases the
+strip.
+
+Two consequences worth knowing:
+
+- An idle device looks **off**, not "resting". That is intended — status cues (`booting`,
+  `connectivity`, …) are what tell the user something is happening.
+- After a reboot the strip stays dark until something asks for light: the LED sidecar is
+  boot-scoped, so every boot starts with no user state and lands on the resting look.
+
+Setting both knobs back to `(255, 200, 140)` (warm white ~2700K @ speed 0.3) restores the
+previous behavior, where an idle lamp read as a cozy lamp turned on rather than a cold
+"device booting" blue, and the warm tone stayed clear of every status color. That look is
+what re-lit the strip ~60s after the user turned the light off, and what made every fresh
+boot come up lit.
+
+### "Off" is not a mode
+
+`POST /led/off` **clears the user LED state** (`_save_user_led_state(None)`) rather than
+saving an off flag. Since the resting look is already dark, no state IS off. There are only
+two states:
+
+| State | `_user_led_state` | At rest | On an action |
+|---|---|---|---|
+| **Default** | `None` | dark | lights up (emotion, status cue, mic-muted indicator) |
+| **User colour** | solid / paint / effect / scene | that colour | effect runs over it, then settles back |
+
+`led_should_stay_dark()` (`hal/app_state.py`) is the single predicate for "leave the lamp
+alone", and everything that paints without the user asking checks it: the TTS/music waves,
+the post-effect settle, `POST /led/restore`, `POST /led/effect/stop` (it clears the stopped
+effect's last frame instead of leaving it frozen), presence restore/dim, and — on the
+os-server side — ambient's breathing loop.
+
+What is deliberately NOT gated: an explicit user/agent command (that IS the user asking, and
+it overwrites the state), and cues that carry information the user needs — status overlays
+(`POST /led/status`: connectivity orange, error red, OTA green) and the mic-muted indicator.
+Those earn their light even on a resting strip.
+
+Off used to be its own sticky state, and it was worse: it looked identical to the default
+(both dark) but behaved differently, nothing could return the device to the default — an
+explicit colour was the only way out — and a reboot silently dropped it, because the sidecar
+is boot-scoped. A legacy sidecar holding `{"type": "off"}` is normalised to "no state" on
+load.
 
 ## LED in Emotion
 

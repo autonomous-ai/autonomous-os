@@ -18,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
 
+	"go.autonomous.ai/os/system/agentfile"
 	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/intent"
@@ -60,6 +61,12 @@ type SensingEventRequest struct {
 	// field is not part of Message and is never concatenated into the outgoing
 	// chat text). Served back to the UI via GetAudio.
 	Audio string `json:"audio,omitempty"`
+	// File is an optional NON-IMAGE attachment from a chat client (a PDF, a
+	// CSV). Kept separate from Image because the two need opposite handling: an
+	// image goes through the describe-first vision gate, a document must not —
+	// it would fail there, and before this field existed every attachment rode
+	// the Image field and was written as `.jpg` regardless of what it was.
+	File *domain.InboundFile `json:"file,omitempty"`
 }
 
 // SensingHandler handles incoming sensing events from HAL and forwards them to the agent.
@@ -270,6 +277,33 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		}
 	}
 
+	// Non-image attachment: land it with its REAL extension and tag it as a
+	// file, not an image. Deliberately its own branch rather than more work in
+	// the block above — a document must skip the describe-first gate below,
+	// which keys off req.Image. Same placement, BEFORE the busy fork, so a
+	// queued turn replays carrying the tag.
+	//
+	// This is the one place both chat paths converge: the web composer POSTs
+	// here directly, and the MQTT chat.send handler re-enters over loopback, so
+	// a phone and a browser attach files through identical code.
+	if req.File != nil && req.File.Content != "" {
+		path, ferr := agentfile.SaveInbound("/tmp", req.File.Name, req.File.Content, time.Now().UnixMilli())
+		if ferr != nil {
+			// Best-effort: the turn still runs, just without the attachment. The
+			// user's question usually stands on its own.
+			slog.Warn("chat attachment not saved", "component", "sensing",
+				"name", req.File.Name, "error", ferr)
+		} else {
+			name := strings.TrimSpace(req.File.Name)
+			if name == "" {
+				name = filepath.Base(path)
+			}
+			// Both the display name and the path: the agent needs the path to
+			// open the file, and the name is what the user will call it.
+			req.Message += fmt.Sprintf("\n[file: %s (%s)]", path, name)
+		}
+	}
+
 	// Describe-first gate — must also run BEFORE the busy fork: a queued event
 	// replays through the runtime drain paths (openclaw service_events.go and
 	// friends), which send raw attachments with no gate of their own. A raw
@@ -335,8 +369,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			var queuedRunID string
 			if isWebChat {
 				_, queuedRunID = h.agentGateway.NextChatRunID()
-				// TEMP: TTS suppression disabled to test speaker remotely from web chat.
-				// h.agentGateway.MarkWebChatRun(queuedRunID)
+				h.agentGateway.MarkWebChatRun(queuedRunID)
 			}
 			slog.Info("INBOUND from HAL → QUEUED (agent busy, will replay on idle)",
 				"component", "sensing",
@@ -440,10 +473,13 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		}
 	}
 	// Web monitor chat: suppress TTS — response displayed in web UI only.
-	// TEMP: disabled to test TTS remotely from web chat.
-	// if isWebChat {
-	// 	h.agentGateway.MarkWebChatRun(runID)
-	// }
+	// Covers the MQTT chat.send path too: it forwards as type "web_chat" unless
+	// the caller asked to be spoken to (`speak: true`, which forwards as
+	// "voice"), so a phone chatting from another room doesn't make the device
+	// talk — and doesn't spend TTS on a reply nobody is in the room to hear.
+	if isWebChat {
+		h.agentGateway.MarkWebChatRun(runID)
+	}
 	// Important: pass explicit runID to flow.Start to avoid global trace race (another goroutine may interleave
 	// between SetTrace() and Start()).
 	turnStart := flow.Start("sensing_input", startPayload, runID)
@@ -490,10 +526,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// to synthesize and play out before the real reply arrives — avoiding
 	// the hal-side speak() lock-timeout=2s race that the timer-based
 	// fire-at-lifecycle.start+FillerDelay path triggers.
-	// TEMP: include isWebChat so remote TTS test gets the same opening filler
-	// + dead-air filler experience as voice. Revert with the MarkWebChatRun
-	// suppression toggle above when done — search "TEMP: disabled to test TTS".
-	if isVoice || isWebChat {
+	if isVoice {
 		DefaultFillerManager.MarkVoiceRun(runID)
 		go PlayOpeningFillerNow()
 	}

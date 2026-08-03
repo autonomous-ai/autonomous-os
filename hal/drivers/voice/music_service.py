@@ -200,12 +200,17 @@ ALSA_DEVICE = _detect_alsa_output_device()
 # a dead video — a retry usually clears it. These bound the retries so a genuinely
 # unavailable video still fails fast.
 MUSIC_RESOLVE_TRIES = 2       # yt-dlp search/resolve attempts
-MUSIC_STREAM_TRIES = 2        # stream-start attempts (re-resolves URL between tries)
+MUSIC_STREAM_TRIES = 2        # stream attempts (re-resolves URL between tries)
 MUSIC_RETRY_BACKOFF_S = 1.5   # wait between attempts
-# A stream that dies within this window of starting is a startup failure (bad/empty
-# yt-dlp output -> ffmpeg "Invalid data") worth retrying; a stream that ran longer
-# and then errored is treated as a real end (network drop mid-song), not retried.
+# A stream that dies within this window of starting never produced audio at all —
+# fail fast without waiting on the playback watch loop.
 MUSIC_STREAM_PROBE_S = 1.5
+# ...but the probe alone isn't enough: when the media URL 403s mid-download, ffmpeg
+# limps along on the partial buffer, survives the probe, then dies a second or two
+# later. Anything that dies within this much of *playback* never really got going
+# and is retried. Dying later is treated as a real end (network drop mid-song) —
+# restarting a song from the top minutes in is worse than just stopping.
+MUSIC_STREAM_FAIL_S = 15.0
 
 
 class MusicService:
@@ -512,10 +517,13 @@ class MusicService:
                 time.sleep(0.1)
 
             # Stream: yt-dlp stdout -> ffmpeg stdin -> ALSA (no temp file).
-            # Retry stream start on early failure (transient YouTube throttling) —
-            # re-resolve the URL each retry since the stream URL can be stale.
+            # An attempt covers the start AND the first seconds of playback: a
+            # stream that 403s on the media URL can survive the start probe on a
+            # half-filled pipe and only die afterwards, which is still a startup
+            # failure (transient YouTube throttling). Re-resolve the URL each
+            # retry since the stream URL can be stale.
             logger.info("Starting playback: '%s'", title[:80] if title else query[:80])
-            started = False
+            outcome = None
             for stream_try in range(MUSIC_STREAM_TRIES):
                 if self._stop_event.is_set():
                     return
@@ -527,50 +535,41 @@ class MusicService:
                     if not audio_url:
                         continue
                     self._current_title = title
+
                 if self._start_stream(audio_url):
-                    started = True
-                    break
-                # Tear down the failed attempt's procs before retrying.
+                    # Notify caller that audio is actually playing. Fires once —
+                    # a retry keeps the feedback (LED effect) already running.
+                    if self._on_started:
+                        try:
+                            self._on_started()
+                        except Exception as e:
+                            logger.warning("on_started callback failed: %s", e)
+                        self._on_started = None
+                    outcome = self._await_stream_end(time.time())
+                    if outcome != "retry":
+                        break
+
+                # Tear down the failed attempt's procs and stderr captures before
+                # retrying — the next attempt opens its own.
                 for proc in [self._aplay_proc, self._ffmpeg_proc, self._ytdlp_proc]:
                     self._terminate_proc(proc)
                 self._aplay_proc = self._ffmpeg_proc = self._ytdlp_proc = None
+                for _f in (self._ytdlp_stderr, self._aplay_stderr):
+                    if _f is not None:
+                        try:
+                            _f.close()
+                        except Exception:
+                            pass
+                self._ytdlp_stderr = self._aplay_stderr = None
+                outcome = None
 
-            if not started:
-                logger.error("Music stream failed to start after %d tries: '%s'",
+            if outcome is None:
+                logger.error("Music stream failed after %d tries: '%s'",
                              MUSIC_STREAM_TRIES, query[:60])
                 _stopped_by = "error"
                 return
 
-            # Notify caller that audio is actually playing (stream confirmed healthy).
-            if self._on_started:
-                try:
-                    self._on_started()
-                except Exception as e:
-                    logger.warning("on_started callback failed: %s", e)
-                self._on_started = None
-
-            # Wait for ffmpeg to finish or stop signal
-            while not self._stop_event.is_set():
-                ret = self._ffmpeg_proc.poll()
-                if ret is not None:
-                    if ret != 0:
-                        stderr = self._ffmpeg_proc.stderr.read().decode(errors="replace")
-                        # Pair ffmpeg's error with yt-dlp's real stderr (B): without
-                        # it a stream failure only shows as "Invalid data".
-                        yt_err = self._read_ytdlp_stderr()
-                        logger.error("ffmpeg exited with code %d: %s | yt-dlp: %s | aplay: %s",
-                                     ret, stderr[-400:], yt_err[-300:],
-                                     self._read_aplay_stderr()[-300:])
-                        _stopped_by = "error"
-                    break
-                # Pause playback while TTS is speaking
-                if self._tts_service and self._tts_service.speaking:
-                    logger.debug("Pausing music for TTS")
-                    self._ffmpeg_proc.terminate()
-                    _stopped_by = "tts"
-                    break
-                time.sleep(0.2)
-
+            _stopped_by = outcome
             if self._stop_event.is_set():
                 _stopped_by = "user"
 
@@ -609,6 +608,44 @@ class MusicService:
                     self._tts_service.speak_cached("Sorry, I can't play that right now.")
                 except Exception as e:
                     logger.warning("failure apology speak failed: %s", e)
+
+    def _await_stream_end(self, started_at: float) -> str:
+        """Watch a live stream until it stops. Returns how it stopped:
+
+        "end"   — ffmpeg finished the track cleanly
+        "user"  — stop requested
+        "tts"   — paused so TTS can speak
+        "error" — died mid-song, not worth restarting from the top
+        "retry" — died within MUSIC_STREAM_FAIL_S of playback, i.e. it never
+                  really got going (a 403 on the media URL lets ffmpeg survive
+                  the start probe on a half-filled pipe and die right after).
+        """
+        while not self._stop_event.is_set():
+            ret = self._ffmpeg_proc.poll()
+            if ret is not None:
+                if ret == 0:
+                    return "end"
+                stderr = self._ffmpeg_proc.stderr.read().decode(errors="replace")
+                # Pair ffmpeg's error with yt-dlp's real stderr (B): without
+                # it a stream failure only shows as "Invalid data". yt-dlp's exit
+                # code tells a dead download apart from a dead decoder.
+                yt_err = self._read_ytdlp_stderr()
+                yt_rc = self._ytdlp_proc.poll() if self._ytdlp_proc else None
+                played = time.time() - started_at
+                early = played < MUSIC_STREAM_FAIL_S
+                logger.error(
+                    "ffmpeg exited with code %d after %.1fs of playback "
+                    "(yt-dlp rc=%s)%s: %s | yt-dlp: %s | aplay: %s",
+                    ret, played, yt_rc, " — retrying" if early else "",
+                    stderr[-400:], yt_err[-300:], self._read_aplay_stderr()[-300:])
+                return "retry" if early else "error"
+            # Pause playback while TTS is speaking
+            if self._tts_service and self._tts_service.speaking:
+                logger.debug("Pausing music for TTS")
+                self._ffmpeg_proc.terminate()
+                return "tts"
+            time.sleep(0.2)
+        return "user"
 
     def _read_ytdlp_stderr(self) -> str:
         """Tail of the stream yt-dlp's captured stderr, or "" if none. The real

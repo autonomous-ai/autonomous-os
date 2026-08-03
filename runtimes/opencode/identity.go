@@ -17,7 +17,7 @@ import (
 // over on migrate; the format is identical — a `- **Name:** <value>` card line), so
 // the identity handling here mirrors runtimes/openclaw/service_identity.go exactly.
 // Only the watched path (OpenCode's workspace) and the log component differ. Wake
-// words come from the shared i18n.BuildChitchatWakeWords (same 5 variants OpenClaw's
+// words come from the shared i18n.BuildVoiceWakeWords (same variants OpenClaw's
 // private buildWakeWords produced). OpenCode runs as root (HOME=/root), so unlike
 // OpenClaw there is no runtime-user chown step.
 
@@ -47,7 +47,7 @@ func (s *OpenCodeService) WatchIdentity(ctx context.Context) {
 			continue
 		}
 		lastName = name
-		words := i18n.BuildChitchatWakeWords(name)
+		words := i18n.BuildVoiceWakeWords(name)
 		slog.Info("agent renamed, updating wake words", "component", "opencode", "name", name, "words", words)
 		hal.SetVoiceConfig(words)
 		i18n.SetDeviceName(name) // {name}/{Name} + chitchat strip follow the agent name too

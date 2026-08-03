@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -28,15 +29,6 @@ import (
 // round-trip, and the catalog host stays a server-side concern.
 
 const (
-	// skillStoreBaseURL is the catalog host. Overridable via SKILL_STORE_BASE_URL
-	// so a device can be pointed at a local/staging BFF without a rebuild.
-	skillStoreBaseURL = "https://apiv2.autonomous.ai"
-
-	// skillStoreLocation fills the `location` header the catalog's
-	// LocationHandler middleware requires on every /api/v1 route. en-US is the
-	// documented default/fallback.
-	skillStoreLocation = "en-US"
-
 	// skillStoreTimeout bounds a listing fetch, skillDownloadTimeout an archive
 	// download (bigger body, so a longer budget).
 	skillStoreTimeout    = 10 * time.Second
@@ -62,43 +54,11 @@ type storeEnvelope struct {
 	Data    json.RawMessage `json:"data"`
 }
 
-// storeBaseURL returns the configured catalog host without a trailing slash.
-func storeBaseURL() string {
-	if env := strings.TrimSpace(os.Getenv("SKILL_STORE_BASE_URL")); env != "" {
-		return strings.TrimRight(env, "/")
-	}
-	return skillStoreBaseURL
-}
-
-// storeGet performs a GET against the catalog with the required location
-// header and returns the raw body. Non-200 responses are an error — the caller
-// still has to inspect the envelope's status for HTTP-200 business failures.
+// storeGet delegates to the shared catalog client in system/skills — the MQTT
+// downlink needs the same transport, and one copy means the two paths can't
+// drift on host, header or limits.
 func storeGet(path string, query url.Values, timeout time.Duration, maxBytes int64) ([]byte, error) {
-	u := storeBaseURL() + path
-	if len(query) > 0 {
-		u += "?" + query.Encode()
-	}
-	req, err := http.NewRequest(http.MethodGet, u, nil)
-	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("location", skillStoreLocation)
-
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request %s: %w", path, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("skill store returned %s", resp.Status)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-	return body, nil
+	return skills.StoreGet(path, query, timeout, maxBytes)
 }
 
 // ListSkills handles GET /api/agent/skills. Returns the skills present in the
@@ -153,6 +113,166 @@ func (h *AgentHandler) ReadSkillFiles(c *gin.Context) {
 		files = []domain.SkillBundleFile{}
 	}
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(domain.SkillBundle{ID: name, Files: files}))
+}
+
+// UploadSkill handles POST /api/agent/skills/upload — a skill supplied from the
+// operator's machine, installed into the ACTIVE runtime's skills dir. Same
+// destination and same replace semantics as installing from the catalog; only the
+// source of the bytes differs.
+//
+// Accepted inputs mirror the upstream skill format (anthropics/skills):
+//
+//	.zip / .skill  an archive that MUST contain SKILL.md at the skill root
+//	.md            a bare SKILL.md whose YAML front-matter MUST carry name +
+//	               description — that name is what the skill is installed as
+//
+// Both requirements are enforced device-side, so a malformed upload is rejected
+// with a 400 instead of installing something the agent can never load.
+//
+// Multipart (field `file`) rather than the base64-in-JSON this repo uses for face
+// enrollment: that carries a small JPEG, whereas a skill archive can run to
+// megabytes, and base64 would inflate it by a third for no gain.
+func (h *AgentHandler) UploadSkill(c *gin.Context) {
+	header, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, serializers.ResponseError("file is required (multipart field \"file\")"))
+		return
+	}
+	if header.Size == 0 {
+		c.JSON(http.StatusBadRequest, serializers.ResponseError("the uploaded file is empty"))
+		return
+	}
+	if header.Size > skills.StoreMaxBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, serializers.ResponseError(
+			fmt.Sprintf("archive is %d bytes, max %d", header.Size, int64(skills.StoreMaxBytes))))
+		return
+	}
+
+	base := filepath.Base(header.Filename)
+	ext := strings.ToLower(filepath.Ext(base))
+
+	var dir string
+	switch ext {
+	case ".md":
+		dir, err = h.installUploadedMarkdown(header)
+	case ".zip", ".skill":
+		dir, err = h.installUploadedArchive(header, base)
+	default:
+		c.JSON(http.StatusBadRequest, serializers.ResponseError(
+			"unsupported file type "+ext+" — upload a .skill, .zip or .md"))
+		return
+	}
+
+	switch {
+	case errors.Is(err, domain.ErrNotSupportedByRuntime):
+		c.JSON(http.StatusNotImplemented, serializers.ResponseError(
+			"the active agent runtime ("+h.agentGateway.Name()+") cannot install skills yet"))
+		return
+	case errors.Is(err, skills.ErrEmptyArchive),
+		errors.Is(err, skills.ErrMissingSkillMD),
+		errors.Is(err, skills.ErrInvalidFrontMatter),
+		errors.Is(err, skills.ErrInvalidSkillName):
+		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
+		return
+	case err != nil:
+		slog.Error("[skills] upload install failed", "component", "agent-http",
+			"file", header.Filename, "error", err)
+		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
+		return
+	}
+
+	name := filepath.Base(dir)
+	slog.Info("[skills] uploaded", "component", "agent-http",
+		"file", header.Filename, "skill", name, "runtime", h.agentGateway.Name(), "path", dir)
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{"name": name, "path": dir}))
+}
+
+// installUploadedMarkdown handles a bare SKILL.md upload: the file's own YAML
+// front-matter names the skill, so nothing has to be inferred from the filename.
+func (h *AgentHandler) installUploadedMarkdown(header *multipart.FileHeader) (string, error) {
+	f, err := header.Open()
+	if err != nil {
+		return "", fmt.Errorf("open upload: %w", err)
+	}
+	defer f.Close()
+
+	content, err := io.ReadAll(io.LimitReader(f, skills.StoreMaxBytes))
+	if err != nil {
+		return "", fmt.Errorf("read upload: %w", err)
+	}
+	return h.agentGateway.InstallSkillMarkdown(content)
+}
+
+// installUploadedArchive stages a `.skill`/`.zip` upload in a temp dir and hands
+// it to the runtime. The fallback name is only consulted for a flat archive; a
+// normal bundle's wrapping directory names the skill.
+func (h *AgentHandler) installUploadedArchive(header *multipart.FileHeader, base string) (string, error) {
+	tmpDir, err := os.MkdirTemp("", "skill-upload-*")
+	if err != nil {
+		return "", fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	zipPath := filepath.Join(tmpDir, "skill.zip")
+	if err := saveMultipartFile(header, zipPath); err != nil {
+		return "", err
+	}
+
+	fallback := skills.SlugifySkillName(strings.TrimSuffix(base, filepath.Ext(base)))
+	return h.agentGateway.InstallSkillArchive(zipPath, fallback)
+}
+
+// saveMultipartFile writes an uploaded part to dst. Hand-rolled rather than
+// gin's SaveUploadedFile so the copy is byte-capped.
+func saveMultipartFile(header *multipart.FileHeader, dst string) error {
+	src, err := header.Open()
+	if err != nil {
+		return fmt.Errorf("open upload: %w", err)
+	}
+	defer src.Close()
+
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	if _, err := io.Copy(out, io.LimitReader(src, skills.StoreMaxBytes)); err != nil {
+		out.Close()
+		return fmt.Errorf("store upload: %w", err)
+	}
+	return out.Close()
+}
+
+// DeleteSkill handles DELETE /api/agent/skills?name=<skill>. Removes the skill
+// from the ACTIVE runtime's skills dir via the AgentGateway. A skill that isn't
+// installed is a 404, not a silent success — the caller's list was stale.
+func (h *AgentHandler) DeleteSkill(c *gin.Context) {
+	name := strings.TrimSpace(c.Query("name"))
+	if name == "" {
+		c.JSON(http.StatusBadRequest, serializers.ResponseError("name is required"))
+		return
+	}
+
+	path, err := h.agentGateway.DeleteSkill(name)
+	switch {
+	case errors.Is(err, domain.ErrNotSupportedByRuntime):
+		c.JSON(http.StatusNotImplemented, serializers.ResponseError(
+			"the active agent runtime ("+h.agentGateway.Name()+") cannot uninstall skills yet"))
+		return
+	case errors.Is(err, skills.ErrSkillNotFound):
+		c.JSON(http.StatusNotFound, serializers.ResponseError(err.Error()))
+		return
+	case errors.Is(err, skills.ErrInvalidSkillName):
+		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
+		return
+	case err != nil:
+		slog.Error("[skills] uninstall failed", "component", "agent-http", "skill", name, "error", err)
+		c.JSON(http.StatusInternalServerError, serializers.ResponseError(err.Error()))
+		return
+	}
+
+	slog.Info("[skills] uninstalled", "component", "agent-http",
+		"skill", name, "runtime", h.agentGateway.Name(), "path", path)
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{"name": name, "path": path}))
 }
 
 // SaveSkill handles POST /api/agent/skills. Writes a user-authored skill (the
