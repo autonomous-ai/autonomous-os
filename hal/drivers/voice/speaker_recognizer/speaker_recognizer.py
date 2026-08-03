@@ -402,11 +402,11 @@ def _get_audio_processor() -> Any:
 # TO REMOVE FOR PRODUCTION: delete this block and every line/call marked
 # `SPEAKER-DEBUG` (grep -n "SPEAKER-DEBUG" this file — the __init__ line and the
 # self._debug.* calls in recognize()/enroll()). It is self-contained: no other
-# module or config file is touched. It is FORCED ON by default in code (so it
-# works without editing .env); set HAL_SPEAKER_DEBUG=false to turn it off.
+# module or config file is touched. It is OFF by default (production-safe); set
+# HAL_SPEAKER_DEBUG=true to enable it during development.
 #
 # Env knobs (all optional):
-#   HAL_SPEAKER_DEBUG            "false" to disable (FORCED ON by default in code)
+#   HAL_SPEAKER_DEBUG            "true" to enable (OFF by default)
 #   HAL_SPEAKER_DEBUG_DIR        output root (default: ./speaker_logs next to this file)
 #   HAL_SPEAKER_DEBUG_MAX_ENTRIES  per-kind dir cap, oldest pruned (default 1000; 0=unbounded)
 #
@@ -447,12 +447,12 @@ class _SpeakerDebugTracer:
     """SPEAKER-DEBUG: writes per-call trace dirs. Fully self-contained; never raises."""
 
     def __init__(self) -> None:
-        # SPEAKER-DEBUG: FORCED ON in code (default "true") so tracing works
-        # WITHOUT editing .env. Flip the default below to "false" — or set
-        # HAL_SPEAKER_DEBUG=false — to turn it off. Read once at construction,
-        # so restart HAL after changing it.
+        # SPEAKER-DEBUG: OFF by default (production-safe). Set HAL_SPEAKER_DEBUG=true
+        # to enable during development — no .env edit needed, any env source works
+        # (shell `export`, systemd `Environment=`, docker `-e`, the launch script).
+        # Read once at construction, so restart HAL after changing it.
         self.enabled = os.environ.get(
-            "HAL_SPEAKER_DEBUG", "true").lower() == "true"
+            "HAL_SPEAKER_DEBUG", "false").lower() == "true"
         # Default: a `speaker_logs/` dir right next to this file, so traces are
         # trivial to inspect. Override with HAL_SPEAKER_DEBUG_DIR.
         _default_dir = Path(__file__).resolve().parent / "speaker_logs"
