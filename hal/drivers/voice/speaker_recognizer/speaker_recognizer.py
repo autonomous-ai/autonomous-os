@@ -358,6 +358,7 @@ def _get_audio_processor() -> Any:
                 enable_vad=config.SPEAKER_PROC_ENABLE_VAD,
                 vad_min_duration_sec=config.SPEAKER_PROC_VAD_MIN_DURATION_SEC,
                 vad_min_voice_ratio=config.SPEAKER_PROC_VAD_MIN_VOICE_RATIO,
+                vad_speech_prob_threshold=config.SPEAKER_PROC_VAD_SPEECH_PROB_THRESHOLD,
                 enable_rms_normalize=config.SPEAKER_PROC_ENABLE_RMS_NORMALIZE,
                 rms_target=config.SPEAKER_PROC_RMS_TARGET,
                 enable_stoi=config.SPEAKER_PROC_ENABLE_STOI,

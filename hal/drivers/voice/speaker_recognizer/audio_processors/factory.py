@@ -35,6 +35,7 @@ class AudioProcessorFactory:
         enable_vad: bool = True,
         vad_min_duration_sec: float = 0.5,
         vad_min_voice_ratio: float = 0.4,
+        vad_speech_prob_threshold: float = 0.5,
         enable_rms_normalize: bool = True,
         rms_target: float = 0.1,
         enable_stoi: bool = False,
@@ -52,6 +53,7 @@ class AudioProcessorFactory:
         self._enable_vad = enable_vad
         self._vad_min_duration_sec = vad_min_duration_sec
         self._vad_min_voice_ratio = vad_min_voice_ratio
+        self._vad_speech_prob_threshold = vad_speech_prob_threshold
         self._enable_rms_normalize = enable_rms_normalize
         self._rms_target = rms_target
         self._enable_stoi = enable_stoi
@@ -73,6 +75,7 @@ class AudioProcessorFactory:
             processors.append(VoiceActivityFilter(
                 min_duration_sec=self._vad_min_duration_sec,
                 min_voice_ratio=self._vad_min_voice_ratio,
+                speech_prob_threshold=self._vad_speech_prob_threshold,
             ))
         # STOI intelligibility gate — AFTER VAD (only scores clips that already
         # contain speech), BEFORE RMS (score the raw-level signal the model was

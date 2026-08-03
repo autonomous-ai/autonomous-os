@@ -28,6 +28,11 @@ DEFAULT_MIN_VOICE_RATIO: float = 0.4
 DEFAULT_MIN_SPEECH_SEC: float = 0.2
 DEFAULT_MIN_SILENCE_SEC: float = 0.3
 DEFAULT_SPEECH_PAD_SEC: float = 0.1
+# Silero speech-probability threshold. Segment onset triggers at this value and
+# offset at (threshold - 0.15); a higher value closes segments sooner, so soft
+# trailing sounds (breath, room tone) are trimmed instead of kept. Silero's own
+# library default is 0.5 — we tighten slightly to cut trailing silence.
+DEFAULT_SPEECH_PROB_THRESHOLD: float = 0.5
 
 
 class VoiceActivityFilter(AudioProcessorBase):
@@ -49,6 +54,7 @@ class VoiceActivityFilter(AudioProcessorBase):
         min_speech_sec: float = DEFAULT_MIN_SPEECH_SEC,
         min_silence_sec: float = DEFAULT_MIN_SILENCE_SEC,
         speech_pad_sec: float = DEFAULT_SPEECH_PAD_SEC,
+        speech_prob_threshold: float = DEFAULT_SPEECH_PROB_THRESHOLD,
     ) -> None:
         super().__init__()
         self._min_duration_sec: float = min_duration_sec
@@ -56,6 +62,7 @@ class VoiceActivityFilter(AudioProcessorBase):
         self._min_speech_sec: float = min_speech_sec
         self._min_silence_sec: float = min_silence_sec
         self._speech_pad_sec: float = speech_pad_sec
+        self._speech_prob_threshold: float = float(speech_prob_threshold)
 
         self._model: Any = None
 
@@ -89,6 +96,7 @@ class VoiceActivityFilter(AudioProcessorBase):
                     torch.from_numpy(waveform),
                     self._model,
                     sampling_rate=sample_rate,
+                    threshold=self._speech_prob_threshold,
                     min_speech_duration_ms=int(self._min_speech_sec * 1000),
                     min_silence_duration_ms=int(self._min_silence_sec * 1000),
                     speech_pad_ms=int(self._speech_pad_sec * 1000),

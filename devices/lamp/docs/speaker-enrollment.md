@@ -157,6 +157,7 @@ Mirror perception's `AudioProcessorSetting` defaults; override via env (all pref
 | VAD | on | `HAL_SPEAKER_PROC_ENABLE_VAD` | silero-vad gate |
 | VAD min duration | 0.5s | `HAL_SPEAKER_PROC_VAD_MIN_DURATION_SEC` | Reject if stripped audio shorter |
 | VAD min voice ratio | 0.4 | `HAL_SPEAKER_PROC_VAD_MIN_VOICE_RATIO` | Reject if voice fraction lower |
+| VAD speech-prob threshold | 0.6 | `HAL_SPEAKER_PROC_VAD_SPEECH_PROB_THRESHOLD` | Silero onset threshold (offset = −0.15); higher trims trailing/leading silence more (silero default 0.5) |
 | STOI gate | on | `HAL_SPEAKER_PROC_ENABLE_STOI` | SQUIM-OBJECTIVE intelligibility gate (after VAD, before RMS) |
 | STOI model path | `/root/local/models/squimm_stoi.onnx` | `HAL_SPEAKER_PROC_STOI_MODEL_PATH` | ONNX estimator (~20 MB), downloaded from CDN on first use; gate skipped if unresolvable |
 | STOI threshold | 0.75 | `HAL_SPEAKER_PROC_STOI_THRESHOLD` | Reject if mean STOI below this |

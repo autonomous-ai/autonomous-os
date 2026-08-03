@@ -158,6 +158,7 @@ Khớp giá trị mặc định của `AudioProcessorSetting` bên perception; o
 | VAD | bật | `HAL_SPEAKER_PROC_ENABLE_VAD` | Cổng silero-vad |
 | VAD min duration | 0.5s | `HAL_SPEAKER_PROC_VAD_MIN_DURATION_SEC` | Loại nếu audio sau strip ngắn hơn |
 | VAD min voice ratio | 0.4 | `HAL_SPEAKER_PROC_VAD_MIN_VOICE_RATIO` | Loại nếu tỉ lệ tiếng nói thấp hơn |
+| VAD ngưỡng xác suất tiếng nói | 0.6 | `HAL_SPEAKER_PROC_VAD_SPEECH_PROB_THRESHOLD` | Ngưỡng onset Silero (offset = −0.15); cao hơn thì cắt khoảng lặng đầu/cuối mạnh hơn (mặc định silero 0.5) |
 | Cổng STOI | bật | `HAL_SPEAKER_PROC_ENABLE_STOI` | Cổng chất lượng SQUIM-OBJECTIVE (sau VAD, trước RMS) |
 | Đường dẫn model STOI | `/root/local/models/squimm_stoi.onnx` | `HAL_SPEAKER_PROC_STOI_MODEL_PATH` | Bộ ước lượng ONNX (~20 MB), tải từ CDN khi dùng lần đầu; bỏ qua cổng nếu không phân giải được |
 | Ngưỡng STOI | 0.75 | `HAL_SPEAKER_PROC_STOI_THRESHOLD` | Loại nếu STOI trung bình dưới ngưỡng này |

@@ -400,6 +400,15 @@ SPEAKER_PROC_VAD_MIN_DURATION_SEC: float = float(
 SPEAKER_PROC_VAD_MIN_VOICE_RATIO: float = float(
     os.environ.get("HAL_SPEAKER_PROC_VAD_MIN_VOICE_RATIO", "0.4")
 )
+# Silero speech-probability threshold used to detect (and trim to) speech. Onset
+# triggers at this value, offset at (threshold - 0.15). Higher = segments close
+# sooner = more aggressive trailing/leading silence trimming. Silero's own
+# default is 0.5; we default to 0.6 to cut soft trailing tails (breath, room
+# tone) that a 0.5/0.35-offset would otherwise keep. Raise toward 0.7 for very
+# noisy rooms; lower to 0.5 if quiet talkers get clipped.
+SPEAKER_PROC_VAD_SPEECH_PROB_THRESHOLD: float = float(
+    os.environ.get("HAL_SPEAKER_PROC_VAD_SPEECH_PROB_THRESHOLD", "0.6")
+)
 SPEAKER_PROC_ENABLE_RMS_NORMALIZE: bool = (
     os.environ.get("HAL_SPEAKER_PROC_ENABLE_RMS_NORMALIZE", "true").lower() == "true"
 )
