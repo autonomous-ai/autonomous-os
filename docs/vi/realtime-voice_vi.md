@@ -354,15 +354,22 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
    filler, ambient mumble, backchannel, thông báo reconnect/health, chitchat
    local) đi qua `hal.Speak` thường và **không bao giờ** được feed lại — nếu không
    model sẽ lặp lại (echo) những câu nó chưa từng sinh ra.
-2. **Bơm context trước.** Sau khi STT connect nhưng trước khi gửi bất kỳ frame mic
-   đã buffer nào sang realtime, HAL thử bơm `[TURN CONTEXT]` (thời gian, nhắc ngôn
-   ngữ trả lời, user hiện tại) dạng text không tạo response. Gemini Live chủ động
-   bỏ qua injection này vì các message SDK `clientContent(turn_complete=False)` lặp
-   lại có thể va với lượt audio sau đó và đóng WS 1011; browser probe không gửi
-   loại context message này.
-3. **Stream.** Khi session STT đang mở, mỗi frame mic được resample về rate của
-   provider và gửi qua `append_audio()` (song song, non-blocking), đồng thời buffer
-   vào `rt_audio_buffer`.
+2. **Stream.** Khi session STT đang mở, mỗi frame mic đồng thời được resample về
+   rate của provider và gửi qua `append_audio()` (song song, non-blocking), đồng
+   thời buffer vào `rt_audio_buffer`.
+3. **Prepass speaker-ID + bơm context.** Cuối session (sau khi capture xong), HAL
+   chạy prepass speaker-ID **một lần** (`identify_and_decorate`), rồi mới bơm
+   `[TURN CONTEXT]` (thời gian, nhắc ngôn ngữ trả lời, user hiện tại) dạng text
+   không tạo response. **User hiện tại chính là người nói (VOICE speaker)** được
+   nhận dạng trong lượt này — nó **ghi đè** `current_user` suy ra từ khuôn mặt, và
+   rơi về định danh khuôn mặt khi không có voice ID (unknown / STOI-reject / không
+   có transcript). Context được gửi **sau khi** audio đã stream để có thể nêu đích
+   danh ai vừa nói (không thể biết người nói trước khi câu nói tồn tại). Gemini
+   native-audio chủ động bỏ qua injection này (`send_text` no-op) vì các message
+   SDK `clientContent(turn_complete=False)` lặp lại có thể va với lượt audio và đóng
+   WS 1011 — nên trên model đó cái tên không tới được câu trả lời; Gemini 3.x /
+   OpenAI / Qwen thì nhận. Kết quả prepass được xài lại ở hạ nguồn — speaker
+   recognition không bao giờ chạy hai lần.
 4. **Commit.** Cuối session, nếu enabled + `available` + có audio buffer, gọi
    `commit_audio()`. Cue emotion `thinking` fire cùng lúc commit (mặt + servo +
    LED pulse tím ÉP HIỆN — `thinking` vốn là background emotion có LED nhường

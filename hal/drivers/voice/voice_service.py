@@ -1015,14 +1015,11 @@ class VoiceService:
             if hal_config.REALTIME_ENABLED:
                 self._realtime.prepare_turn()
 
-            # Send per-turn context before any audio is streamed to Gemini. Do not
-            # inject clientContent after audio has opened an activity window: Gemini
-            # 2.5 native-audio can close the websocket with 1011 on that ordering.
-            if hal_config.REALTIME_ENABLED and self._realtime.available:
-                try:
-                    self._realtime.send_text(build_turn_context())
-                except Exception as e:
-                    logger.warning("[realtime] send turn context failed: %s", e)
+            # NOTE: per-turn context is NO LONGER sent here. It is sent in the
+            # finalize block below, AFTER the speaker-ID prepass, so the context can
+            # name the actual VOICE speaker (not the face current_user). The speaker
+            # can only be known once the utterance has been captured, which is why
+            # this moved past the capture loop. See the "Speaker-ID prepass" block.
 
             # Flush holdoff audio (frames captured before STT connect, both paths)
             all_pre = (speech_pre_buffer or []) + pre_buffer
@@ -1158,7 +1155,37 @@ class VoiceService:
                 except Exception as e:
                     logger.warning("Realtime noise-guard buffer decode failed: %s", e)
 
-            # --- Realtime voice agent (runs first, before speaker ID / OS server) ---
+            # --- Speaker-ID prepass -------------------------------------------
+            # Identify the VOICE speaker ONCE, before the realtime reply, so the
+            # turn context can name the correct person and override the
+            # face-derived current_user. The result is reused by dispatch_turn
+            # below — recognition never runs a second time. Gated on a transcript
+            # (the same condition dispatch_turn identifies under). Unknown /
+            # STOI-reject / server-error → display is None → the context falls back
+            # to the face identity, so a failed ID never blocks or misnames the
+            # reply. Wrapped defensively: this now runs on the reply path, so a
+            # recognizer error must not kill the turn.
+            speaker_identity = None  # (final_msg, se_user, display) or None
+            if combined:
+                _final_text, _ = self._decorator.resolve_wake_word_split(combined)
+                try:
+                    speaker_identity = self._decorator.identify_and_decorate(
+                        _final_text, audio_buffer
+                    )
+                except Exception as e:
+                    logger.warning("[realtime] speaker-ID prepass failed: %s", e)
+
+            # Send per-turn context NOW (moved from before the audio stream) so it
+            # carries the voice speaker. On providers where send_text is a no-op
+            # (Gemini native-audio) this is harmless; elsewhere it names the speaker.
+            if hal_config.REALTIME_ENABLED and self._realtime.available:
+                _speaker = speaker_identity[2] if speaker_identity else None
+                try:
+                    self._realtime.send_text(build_turn_context(_speaker))
+                except Exception as e:
+                    logger.warning("[realtime] send turn context failed: %s", e)
+
+            # --- Realtime voice agent (speaks the reply for this turn) ---------
             # Runs even if STT transcript is empty — the model has the raw audio.
             rt = run_realtime_turn(
                 self._realtime,
@@ -1170,7 +1197,7 @@ class VoiceService:
                 rt_audio_is_speech,
             )
 
-            # --- Speaker recognition + OS server send + SER ---
+            # --- OS server send + SER (reuses the prepass speaker-ID) ----------
             dispatch_turn(
                 self._decorator,
                 self._sensing_sender,
@@ -1178,6 +1205,7 @@ class VoiceService:
                 audio_buffer,
                 ser_audio_buffer,
                 rt,
+                identity=speaker_identity,
             )
 
             # Clear listening LED

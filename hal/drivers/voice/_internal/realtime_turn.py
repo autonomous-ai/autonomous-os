@@ -7,7 +7,7 @@ orchestrator / TTS handles and the marker-stripper passed in.
 """
 
 import logging
-from typing import Callable, NamedTuple
+from typing import Callable, NamedTuple, Optional
 
 from hal import app_state as hal_app_state
 from hal import config as hal_config
@@ -79,12 +79,15 @@ def _thinking_cue_clear() -> None:
         logger.warning("[realtime] thinking cue clear failed: %s", e)
 
 
-def build_turn_context() -> str:
+def build_turn_context(speaker: Optional[str] = None) -> str:
     """Build per-turn context for the realtime model.
 
-    The caller must send this before streaming audio for the turn. Gemini 2.5
-    native-audio can close the websocket with 1011 when clientContent is
-    interleaved inside an open audio activity window.
+    ``speaker`` is the VOICE speaker-ID display name (e.g. "Darren") for this
+    turn, resolved just before this call. When present it is authoritative for
+    who the model should address and OVERRIDES the face-derived ``current_user``
+    (the two identities are separate: voice = who is speaking, face = who is
+    seen). When None (no voice ID this turn — unknown / STOI-reject / no
+    transcript) we fall back to the face ``current_user`` as before.
     """
     turn_ctx: list[str] = [
         f"Time: {device_now().strftime('%Y-%m-%d %H:%M:%S %A')}",
@@ -99,16 +102,25 @@ def build_turn_context() -> str:
             f"Reply language: {lang_name} (answer ONLY in {lang_name}, "
             "even if a search result or any context is in another language)"
         )
-    try:
-        if hal_app_state.sensing_service:
-            cu: str = (
-                hal_app_state.sensing_service._perception_orchestrator.current_user
-                or ""
-            )
-            if cu:
-                turn_ctx.append(f"Current user: {cu}")
-    except Exception:
-        pass
+    if speaker:
+        # Voice speaker-ID wins: reuse the same "Current user:" slot the model
+        # already acts on, and phrase it so it overrides any stale identity in
+        # session memory (e.g. the previously-seen face).
+        turn_ctx.append(
+            f"Current user: {speaker} (identified by voice — address this "
+            f"person, not anyone else)"
+        )
+    else:
+        try:
+            if hal_app_state.sensing_service:
+                cu: str = (
+                    hal_app_state.sensing_service._perception_orchestrator.current_user
+                    or ""
+                )
+                if cu:
+                    turn_ctx.append(f"Current user: {cu}")
+        except Exception:
+            pass
     return "[TURN CONTEXT] " + " | ".join(turn_ctx)
 
 

@@ -369,15 +369,22 @@ turn ("hello") right after a restart would leak to the main agent.
    Hardcoded TTS (dead-air fillers, ambient mumble, backchannel, reconnect /
    health notices, local chitchat) goes through plain `hal.Speak` and is **never**
    fed back — otherwise the model would echo lines it never generated.
-2. **Prime context.** After STT connects but before any buffered mic frame is sent
-   to realtime, `[TURN CONTEXT]` (time, reply-language reminder, current user) is
-   offered as non-response text. Gemini Live intentionally drops this injection
-   because repeated SDK `clientContent(turn_complete=False)` messages can collide
-   with later audio turns and close with WS 1011; the browser probe sends no such
-   context messages.
-3. **Stream.** While the STT session is open, each mic frame is also resampled to
+2. **Stream.** While the STT session is open, each mic frame is also resampled to
    the provider rate and sent via `append_audio()` (parallel, non-blocking), and
    buffered in `rt_audio_buffer`.
+3. **Speaker-ID prepass + prime context.** At session end (after capture), HAL runs
+   the speaker-ID prepass **once** (`identify_and_decorate`), then offers
+   `[TURN CONTEXT]` (time, reply-language reminder, current user) as non-response
+   text. The **current user is the VOICE speaker** identified this turn — it
+   overrides the face-derived `current_user`, and falls back to the face identity
+   when there is no voice ID (unknown / STOI-reject / no transcript). It is sent
+   **after** the audio has streamed so the context can name who actually spoke (the
+   speaker cannot be known before the utterance exists). Gemini native-audio
+   intentionally drops the injection (`send_text` no-op) because repeated SDK
+   `clientContent(turn_complete=False)` messages can collide with audio turns and
+   close with WS 1011, so on that model the name does not reach the reply; Gemini
+   3.x / OpenAI / Qwen accept it. The prepass result is reused downstream — speaker
+   recognition never runs twice.
 4. **Commit.** At session end, if enabled + `available` + audio buffered,
    `commit_audio()` fires. A `thinking` emotion cue fires with the commit
    (face + servo + a FORCED purple LED pulse — `thinking` is normally a
