@@ -54,9 +54,12 @@ class TestCompatibility(unittest.TestCase):
                               f"{dev}: DEVICE.md must declare schema autonomous.device.v1")
                 # MUST 2 — system capability
                 self.assertIn("system", groups, f"{dev}: must declare the 'system' capability")
-                # MUST 3 — a primary sense or output
-                self.assertTrue({"audio", "vision"} & groups,
-                                f"{dev}: must declare a primary sense/output (audio or vision)")
+                # MUST 3 — a primary sense or output. Exempt: type: mock_body,
+                # a test fixture with no hardware to sense with (COMPATIBILITY.md
+                # rule 3). Everything else about it is still checked.
+                if "type: mock_body" not in raw:
+                    self.assertTrue({"audio", "vision"} & groups,
+                                    f"{dev}: must declare a primary sense/output (audio or vision)")
                 # MUST 4 — known capability vocabulary only
                 unknown = groups - KNOWN_CAPABILITIES
                 self.assertFalse(unknown, f"{dev}: declares unknown capabilities {unknown}")

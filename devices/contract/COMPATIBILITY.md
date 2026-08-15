@@ -14,7 +14,10 @@ A compliant device:
 1. ships a [`DEVICE.md`](DEVICE-SPEC.md) with `schema: autonomous.device.v1`, a stable `id`,
    a `type`, and its `boards`;
 2. declares the **`system`** capability (health, network, setup, OTA hooks);
-3. declares **at least one primary sense or output** — `audio` or `vision`;
+3. declares **at least one primary sense or output** — `audio` or `vision`. The one
+   exemption is `type: mock_body`: a body made of variables (`devices/sim`) has no
+   sensors to declare. It is a test fixture, never a shippable device — it may not
+   claim compatibility, appear in the installer, or be sold as an Autonomous device;
 4. declares only capability groups defined in [`capabilities.md`](capabilities.md);
 5. for every **declared `required` capability**, brings the driver up at boot or **fails loud**
    (no silent half-boot);

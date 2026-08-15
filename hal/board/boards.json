@@ -18,6 +18,12 @@
       "led": { "transport": "pwm", "pwm_pin": 12 },
       "button": { "chip": 0, "line": 17, "debounce_ns": 200000000 }
     },
+    "sim": {
+      "_comment": "Not hardware. The mock body (devices/sim) runs HAL on a laptop with no board under it: there is no /proc/device-tree/model, so this entry is selected by HAL_BOARD=sim and never by detection — its match string cannot occur on a real device. led/button values are placeholders the loader requires; nothing drives them.",
+      "match": ["autonomous mock body (no hardware)"],
+      "led": { "transport": "spi", "spi_bus": 0, "spi_device": 0 },
+      "button": { "chip": 0, "line": 17, "debounce_ns": 200000000 }
+    },
     "orangepi_sun60": {
       "match": ["sun60iw2"],
       "led": { "transport": "spi", "spi_bus": 3, "spi_device": 0 },

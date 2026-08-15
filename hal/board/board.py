@@ -16,6 +16,7 @@ classification can be unit-tested with no hardware and no /proc.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from functools import lru_cache
@@ -23,6 +24,8 @@ from typing import Dict, List, Optional, Tuple
 
 DEVICE_TREE_MODEL_PATH = "/proc/device-tree/model"
 BOARDS_DATA_PATH = os.path.join(os.path.dirname(__file__), "boards.json")
+
+logger = logging.getLogger("hal.board")
 
 
 def read_device_tree_model(path: str = DEVICE_TREE_MODEL_PATH) -> str:
@@ -100,6 +103,26 @@ except (OSError, ValueError, KeyError, TypeError) as e:
     ) from e
 
 
+# HAL_BOARD forces a board id instead of reading /proc/device-tree/model. It
+# exists for the mock body (devices/sim): a laptop has no device tree, so no
+# board can be detected and HAL refuses to boot. It is opt-in, must name a real
+# boards.json entry, and is logged loudly — a robot never sets it.
+BOARD_ENV_VAR = "HAL_BOARD"
+
+
+def board_override() -> Optional[str]:
+    """The board id forced by HAL_BOARD, or None. Unknown ids are refused."""
+    forced = os.environ.get(BOARD_ENV_VAR, "").strip()
+    if not forced:
+        return None
+    if forced not in PROFILES:
+        raise RuntimeError(
+            f"{BOARD_ENV_VAR}={forced!r} is not a board in boards.json "
+            f"(known: {sorted(PROFILES)}). Refusing to boot on an invented board."
+        )
+    return forced
+
+
 def matched_board_id(model: Optional[str] = None) -> Optional[str]:
     """The board whose `match` substrings appear in the device-tree model, or
     None if the model matches no known board. Pure; testable.
@@ -108,6 +131,9 @@ def matched_board_id(model: Optional[str] = None) -> Optional[str]:
     board-support gate must tell a genuine hardware match from a blind default,
     so it needs to see the None.
     """
+    if model is None:
+        if forced := board_override():
+            return forced
     m = model if model is not None else read_device_tree_model()
     for substrings, bid in _MATCHERS:
         if any(s in m for s in substrings):
@@ -136,6 +162,16 @@ def assert_board_supported(declared: List[str], model: Optional[str] = None) -> 
         wiring profile can be trusted;
       - it matches a real board the device does not declare → unsupported.
     """
+    if model is None:
+        if forced := board_override():
+            if declared and forced not in declared:
+                raise RuntimeError(
+                    f"{BOARD_ENV_VAR}={forced!r} but this device declares boards "
+                    f"{declared}. Refusing to boot — declare the board or drop the override."
+                )
+            logger.warning("[board] %s=%s — board detection skipped (mock body / off-device run)",
+                           BOARD_ENV_VAR, forced)
+            return forced
     m = model if model is not None else read_device_tree_model()
     matched = matched_board_id(m)
     if matched is None:
