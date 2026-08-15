@@ -1,0 +1,7 @@
+{
+  "name": "claude-buddy",
+  "capabilities": [
+    "audio"
+  ],
+  "note": "Needs a mic and speaker to ask out loud; harmless on audio devices with no companion daemon."
+}

@@ -1,0 +1,6 @@
+{
+  "name": "music",
+  "capabilities": [
+    "media"
+  ]
+}

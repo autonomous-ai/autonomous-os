@@ -1,0 +1,6 @@
+{
+  "name": "voice",
+  "capabilities": [
+    "audio"
+  ]
+}

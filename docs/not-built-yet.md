@@ -2,7 +2,7 @@
 
 The full list behind the README's [Not built yet](../README.md#contribute). Each is a real gap in the tree; open an issue titled with the bullet and say you're on it.
 
-- A skill catalog that reads `skills/` instead of a Go map (`system/skills/skills.go` `Catalog` + `Capability`) — small Go PR, and it makes "one folder per skill" literally true. Bonus: CI publishing the skill feed on merge.
+- CI publishing the skill feed on merge. The catalog itself now reads the `skills/` tree (`scripts/skills/gen_catalog.py` → `system/skills/catalog_gen.go` + `setup.sh`, guarded by `make skills-catalog-check` and `go test ./system/skills/`), so the only manual step left is a maintainer running `make upload-skills` with GCS credentials.
 - A mock body so the full stack runs on a laptop: `devices/sim/`. Shortest path we see: Pollen's own simulator — `reachy-mini-daemon --sim` serves the same `:8000` API our `reachy_sdk` driver already speaks (and it is how a Reachy Mini Lite runs, daemon on your laptop) — plus a `sim` board entry so HAL boots off-Pi. Untried. The one we want most.
 - An out-of-process motion driver: a `MotionService` that forwards its 23 methods to a local HTTP endpoint, so a vendor SDK under any license can drive a body without living in GPL `hal/` — the driver boundary this repo doesn't have yet; `MediaOwner` → `pollen_daemon` is the precedent.
 - Bring-your-own LLM endpoint for the OpenClaw brain (`runtimes/openclaw/service_setup.go` takes the model list from the Autonomous gateway) — and a self-serve gateway key for people who built their own body.

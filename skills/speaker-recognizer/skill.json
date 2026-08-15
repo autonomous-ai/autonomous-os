@@ -1,0 +1,7 @@
+{
+  "name": "speaker-recognizer",
+  "capabilities": [
+    "audio"
+  ],
+  "note": "Voice people-perception: a mic is all speaker-ID needs \u2014 no camera, no presence layer."
+}

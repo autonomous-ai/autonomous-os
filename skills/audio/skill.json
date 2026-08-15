@@ -1,0 +1,6 @@
+{
+  "name": "audio",
+  "capabilities": [
+    "audio"
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "name": "servo-control",
+  "capabilities": [
+    "motion"
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "name": "face-enroll",
+  "capabilities": [
+    "presence"
+  ],
+  "note": "Camera people-perception: the ML people-layer over the camera, not the raw vision sensor \u2014 a camera that only streams must not load it."
+}

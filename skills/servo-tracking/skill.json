@@ -1,0 +1,6 @@
+{
+  "name": "servo-tracking",
+  "capabilities": [
+    "motion"
+  ]
+}

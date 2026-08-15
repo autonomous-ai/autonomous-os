@@ -30,11 +30,11 @@ Or type what you want in the app, or tap one in the Skill Store. On the robot, s
 
 ## Shipping one to every robot
 
-1. `python skills/skill-creator/scripts/quick_validate.py skills/<name>` checks the format.
-2. One line in `Catalog` in [`system/skills/skills.go`](../system/skills/skills.go), plus one in `Capability` if it touches hardware; `go test ./system/skills/`.
-3. Open the PR. After merge we push the skill feed (`make upload-skills` — a maintainer step for now, not CI); every body's skill watcher pulls it within 5 min and tells the agent to re-read.
+1. Drop the folder in `skills/<name>/`. If it needs hardware, add `skill.json`: `{"capabilities": ["motion"]}` — any of the 13 [capability names](../devices/contract/capabilities.md), ANY-OF.
+2. `python skills/skill-creator/scripts/quick_validate.py skills/<name>` checks the format; `make skills-catalog` regenerates the catalog from the tree and `go test ./system/skills/` fails if you forget.
+3. Open the PR. After merge we push the skill feed (`make upload-skills` — a maintainer step, not CI yet); every body's skill watcher pulls it within 5 min and tells the agent to re-read.
 
-That Go line and the maintainer step are the gap between this and "one folder, one PR, every robot" — [#199](https://github.com/autonomous-ai/autonomous-os/issues/199). [`skill-creator`](skill-creator/) also ships an eval loop — with-skill vs baseline runs, a grader, a description optimizer — so you can measure a skill before you publish it.
+That maintainer push is the last step between this and "one folder, one PR, every robot" — [#199](https://github.com/autonomous-ai/autonomous-os/issues/199). [`skill-creator`](skill-creator/) also ships an eval loop — with-skill vs baseline runs, a grader, a description optimizer — so you can measure a skill before you publish it.
 
 
 ## Catalog
@@ -73,6 +73,25 @@ System-only skills may be hidden from the default storefront or shown with a
 | `claude-buddy` | Productivity | claude-code, approvals, companion, agent | Lamp, Intern v2, Reachy Mini |
 | `connectors` | Productivity | gmail, calendar, drive, notion, github | Lamp, Intern v2, Reachy Mini |
 | `input-branching` | Not published | routing, realtime, internal | Lamp, Intern v2, Reachy Mini |
+
+## Adding a skill
+
+A skill is one folder: `skills/<name>/SKILL.md`. If it needs hardware, add a
+sidecar next to it —
+
+```json
+{ "name": "guard", "capabilities": ["presence"] }
+```
+
+`capabilities` is ANY-OF: the skill installs on any body whose `DEVICE.md`
+declares at least one of them (the 13 names are in
+`devices/contract/capabilities.md`). No sidecar means a platform skill with no
+hardware dependency — it installs everywhere.
+
+The tree is the catalog. `make skills-catalog` regenerates
+`system/skills/catalog_gen.go` and the `skill_caps()` block in
+`scripts/provision/setup.sh` from these folders; `go test ./system/skills/` and
+`make skills-catalog-check` fail if the generated files drift from the tree.
 
 Compatibility is the automatic built-in installation gate from
 `system/skills.Capability`: a skill with no entry is platform logic and runs on

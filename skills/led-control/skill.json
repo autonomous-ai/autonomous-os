@@ -1,0 +1,6 @@
+{
+  "name": "led-control",
+  "capabilities": [
+    "light"
+  ]
+}

@@ -74,7 +74,7 @@ hal-clean:
 # CTS — Compatibility Test Suite (devices/contract/cts)
 # ============================================================================
 
-.PHONY: new-device push-skill cts cts-runtime
+.PHONY: new-device push-skill skills-catalog skills-catalog-check cts cts-runtime
 
 # Scaffold a new body from devices/_template/ — DEVICE.md + SOUL.md, no SAFETY.md
 # on purpose: `make cts` fails until you write the bounds for what you declared.
@@ -85,6 +85,15 @@ new-device:
 	@cp -r devices/_template devices/$(NAME)
 	@sed -i.bak 's/my-robot/$(NAME)/g; s/My Robot/$(NAME)/g' devices/$(NAME)/DEVICE.md devices/$(NAME)/SOUL.md && rm -f devices/$(NAME)/*.bak
 	@echo "devices/$(NAME)/ — edit DEVICE.md, then: make cts"
+
+# Regenerate the skill catalog from the skills/ tree (one folder per skill,
+# capabilities in skills/<name>/skill.json) into system/skills/catalog_gen.go
+# and scripts/provision/setup.sh. `make skills-catalog-check` fails if stale.
+skills-catalog:
+	python3 scripts/skills/gen_catalog.py
+
+skills-catalog-check:
+	python3 scripts/skills/gen_catalog.py --check
 
 # Copy a skill folder onto a running body. Live on the next conversation, no
 # reboot. Root SSH is off, so it lands in /tmp and moves with sudo.

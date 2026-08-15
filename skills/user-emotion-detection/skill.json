@@ -1,0 +1,8 @@
+{
+  "name": "user-emotion-detection",
+  "capabilities": [
+    "audio",
+    "presence"
+  ],
+  "note": "One skill, two triggers: facial emotion (camera, gated on presence) and speech emotion (mic, gated on audio). Loads when the device has either."
+}

@@ -1,0 +1,6 @@
+{
+  "name": "camera",
+  "capabilities": [
+    "vision"
+  ]
+}

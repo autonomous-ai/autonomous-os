@@ -1,0 +1,6 @@
+{
+  "name": "sensing-track",
+  "capabilities": [
+    "sensing"
+  ]
+}
