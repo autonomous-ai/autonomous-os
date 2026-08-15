@@ -1,6 +1,7 @@
 package openclaw
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -966,10 +967,10 @@ func (s *OpenclawService) ensureProviderConfig() (bool, error) {
 	// Try full catalog refresh; fall back to hardcoded defaultModels (same as
 	// SetupAgent) so the provider entry is always complete even when offline.
 	// A partial entry (apiKey only, no models) would still fail on the next turn.
-	modelsResp, err := FetchModelsFromAPI()
+	modelsResp, byo, err := resolveModels(context.Background(), s.config.LLMBaseURL, s.config.LLMAPIKey)
 	if err != nil {
-		slog.Warn("ensureProviderConfig: model API fetch failed, using hardcoded fallback",
-			"component", "onboarding", "error", err)
+		slog.Warn("ensureProviderConfig: model fetch failed, using hardcoded fallback",
+			"component", "onboarding", "byo", byo, "error", err)
 		modelsResp = &domain.LLMModelsListResponse{Models: defaultModels}
 	}
 	entries := make([]any, 0, len(modelsResp.Models))
@@ -1064,8 +1065,8 @@ func (s *OpenclawService) ensureAgentDefaults() (bool, error) {
 	// autonomous portion this boot, preserve existing on-disk tuning, retry
 	// next boot.
 	var knownModels []string
-	if resp, err := FetchModelsFromAPI(); err != nil {
-		slog.Warn("ensureAgentDefaults: fetch autonomous models failed, skipping",
+	if resp, _, err := resolveModels(context.Background(), s.config.LLMBaseURL, s.config.LLMAPIKey); err != nil {
+		slog.Warn("ensureAgentDefaults: fetch models failed, skipping",
 			"component", "onboarding", "err", err)
 	} else {
 		for _, m := range resp.Models {
