@@ -57,7 +57,7 @@ from hal.server_support.log_setup import setup_logging
 logger = setup_logging()
 
 
-# --- Device declaration first: DEVICE.md decides which drivers we even import ---
+# --- Device declaration first: ROBOT.md decides which drivers we even import ---
 # Driver imports are the expensive part of boot (cv2, onnx/torch model stacks —
 # several seconds on an A523). Resolving the profile before them lets every
 # import below be gated on the declared routes, so a device without the hardware
@@ -93,7 +93,7 @@ def _devices_dir() -> str:
 
 
 def _device_profile():
-    """This device's DeviceProfile. DEVICE.md is REQUIRED — a missing/unparseable
+    """This device's DeviceProfile. ROBOT.md is REQUIRED — a missing/unparseable
     one is a deploy fault, so fail loudly (no legacy "mount everything" fallback)."""
     from hal.board.device import load_device
     devices_dir = _devices_dir()
@@ -101,12 +101,12 @@ def _device_profile():
         return load_device(_resolve_device_type(), devices_dir)
     except Exception as e:
         raise RuntimeError(
-            f"DEVICE.md required but not loaded for device '{_resolve_device_type()}' "
+            f"ROBOT.md required but not loaded for device '{_resolve_device_type()}' "
             f"(devices_dir={devices_dir}): {e}"
         ) from e
 
 
-# DEVICE.md is required — _device_profile() fail-louds if it's missing/unparseable.
+# ROBOT.md is required — _device_profile() fail-louds if it's missing/unparseable.
 _profile = _device_profile()
 # Full declared route surface (incl. `speaker`), keys usable with `in`.
 _declared = _profile.declared_routes()
@@ -151,7 +151,7 @@ if "servo" in _declared:
         logger.warning("Servo motion service not available (driver: %s)",
                        _motion_cap.driver if _motion_cap else None)
 else:
-    logger.info("Servo drivers skipped — 'servo' not declared in DEVICE.md")
+    logger.info("Servo drivers skipped — 'servo' not declared in ROBOT.md")
 
 if "led" in _declared:
     try:
@@ -159,7 +159,7 @@ if "led" in _declared:
     except ImportError as e:
         logger.warning(f"LED drivers not available: {e}")
 else:
-    logger.info("LED drivers skipped — 'led' not declared in DEVICE.md")
+    logger.info("LED drivers skipped — 'led' not declared in ROBOT.md")
 
 try:
     import numpy as np
@@ -182,7 +182,7 @@ if "camera" in _declared:
         from hal.drivers.camera.models import VideoCaptureDeviceInfo
         from hal.drivers.camera.video_capture_device import resolve_camera_device_id
 
-        # Same selector shape as motion: DEVICE.md picks the backend, because a
+        # Same selector shape as motion: ROBOT.md picks the backend, because a
         # CSI sensor behind libcamera and a UVC webcam share no open path.
         _vision_cap = _profile.capabilities.get("vision")
         LocalVideoCaptureDevice = resolve_camera_class(
@@ -195,12 +195,12 @@ if "camera" in _declared:
     except ImportError as e:
         logger.warning(f"Video capture device not available: {e}")
 else:
-    logger.info("Camera drivers skipped — 'camera' not declared in DEVICE.md")
+    logger.info("Camera drivers skipped — 'camera' not declared in ROBOT.md")
 
 # --- Media owners: processes that hold this device's hardware ---------------
 # A body that ships its own vendor runtime has that runtime holding the camera
 # and the audio PCMs before HAL exists, and HAL cannot open what it does not
-# own. Capabilities in that position declare `owner:` in DEVICE.md and this
+# own. Capabilities in that position declare `owner:` in ROBOT.md and this
 # resolves each declared name to a handover class — same selector shape as
 # `driver:` on motion and vision, so nothing here knows which body is running.
 # One owner typically holds several capabilities (audio and vision both), so
@@ -228,7 +228,7 @@ if "sensing" in _declared:
         SensingService = None
         FacePerception = None
 else:
-    logger.info("Sensing service skipped — 'sensing' not declared in DEVICE.md")
+    logger.info("Sensing service skipped — 'sensing' not declared in ROBOT.md")
 
 VoiceService = None
 DeepgramSTT = None
@@ -243,7 +243,7 @@ if "voice" in _declared:
     except ImportError as e:
         logger.warning(f"Voice service not available: {e}")
 else:
-    logger.info("Voice service skipped — 'voice' not declared in DEVICE.md")
+    logger.info("Voice service skipped — 'voice' not declared in ROBOT.md")
 
 # TTS serves more than the voice route (music backchannel, sensing announcements,
 # shutdown cue), so any declared audio-producing route pulls it in.
@@ -281,7 +281,7 @@ async def lifespan(app: FastAPI):
     global _gpio_button_handler, _ttp223_handler
 
     # --- Phase 0: Borrow the hardware from whoever owns it ---
-    # Empty unless DEVICE.md declares an `owner:`. Where one exists it holds
+    # Empty unless ROBOT.md declares an `owner:`. Where one exists it holds
     # /dev/video* and both ALSA PCMs, and nothing below can succeed until it
     # lets go — the camera opens "busy", and PortAudio cannot probe a sample
     # rate, which resurfaces much later as TTS on output device -1 while every
@@ -297,7 +297,7 @@ async def lifespan(app: FastAPI):
         if not AnimationService:
             return
         # Declaration-driven: the servo route is mounted only when the device
-        # declares the `motion` capability (DEVICE.md → motion: { routes: [servo] }).
+        # declares the `motion` capability (ROBOT.md → motion: { routes: [servo] }).
         # Without it, starting AnimationService connects to a servo bus that isn't
         # there and every animation playback throws DeviceNotConnectedError. Gate on
         # the mount plan so a device that has no servo (e.g. intern-v2) never starts it.
@@ -652,7 +652,7 @@ async def lifespan(app: FastAPI):
                 # failed", and reported no sound the whole time — a feature that
                 # looks configured and does nothing. Passing None instead lets
                 # the orchestrator's existing gate skip SoundPerception and say
-                # so, matching DEVICE-SPEC.md: undeclared is not a default, it
+                # so, matching ROBOT-SPEC.md: undeclared is not a default, it
                 # is an absence. Every shipping device declares
                 # HAL_AUDIO_SENSING_DEVICE, so none of them loses the feature.
                 input_device=AUDIO_SENSING_DEVICE,
@@ -860,17 +860,17 @@ app = FastAPI(
     openapi_tags=OPENAPI_TAGS,
 )
 
-# --- Include route modules (declaration-driven via DEVICE.md) ---
-# Mount routes by crossing what this device's DEVICE.md *declares* with which
+# --- Include route modules (declaration-driven via ROBOT.md) ---
+# Mount routes by crossing what this device's ROBOT.md *declares* with which
 # drivers are actually *available* (importable), via hal.board.device.plan_mounts.
 # A device is "the device minus motion+display" by declaring fewer capabilities — not by
-# forking. Per devices/contract/DEVICE-SPEC.md the boot rule is:
+# forking. Per devices/contract/ROBOT-SPEC.md the boot rule is:
 #   declared + available            -> mount
 #   declared + required + missing    -> FAIL LOUD in production (a hardware fault)
 #   declared + optional  + missing    -> skip (graceful degradation)
 #   undeclared                       -> skip (a different device, by design)
-# Falls back to mounting everything when no DEVICE.md is found, so existing
-# deployments are unaffected. See devices/contract/DEVICE-SPEC.md and hal/board/device.py.
+# Falls back to mounting everything when no ROBOT.md is found, so existing
+# deployments are unaffected. See devices/contract/ROBOT-SPEC.md and hal/board/device.py.
 
 # Route modules import their own driver stacks, so importing all 12
 # unconditionally would defeat the declaration-gated driver imports above.
@@ -887,13 +887,13 @@ for _rname in (
     "display", "voice", "music", "system", "bluetooth",
 ):
     if _rname not in _declared and _rname not in _ALWAYS_ROUTES:
-        logger.info("Route module '%s' skipped — not declared in DEVICE.md", _rname)
+        logger.info("Route module '%s' skipped — not declared in ROBOT.md", _rname)
         continue
     _ROUTERS_BY_NAME[_rname] = importlib.import_module(f"hal.routes.{_rname}").router
 
 # Speaker recognition imports separately — its deps (face/speaker embedding
 # models) are heavy and may be absent. It's a declared `speaker` route under the
-# audio capability (devices/*/DEVICE.md), so it joins the SAME declaration gate
+# audio capability (devices/*/ROBOT.md), so it joins the SAME declaration gate
 # below: import success == availability, no separate bypass mount.
 if "speaker" in _declared:
     try:
@@ -925,7 +925,7 @@ _route_available = {
 
 # Safety bounds (SAFETY.md front matter) resolved once at boot, below the brain.
 # Pass-through when absent (light fail-safe); a present-but-malformed schema
-# fail-louds inside load_safety, like DEVICE.md. Slice 1 = light.max_brightness.
+# fail-louds inside load_safety, like ROBOT.md. Slice 1 = light.max_brightness.
 from hal.safety.policy import load_safety
 _safety = load_safety(os.path.join(_devices_dir(), _resolve_device_type()), _profile.safety_ref)
 state.safety_policy = _safety  # route-level gates (e.g. music quiet hours) read it here
@@ -1027,7 +1027,7 @@ def _thermal_view():
     }
 
 # Board gate: refuse to boot on hardware this device doesn't declare in
-# DEVICE.md `boards`. Wrong/unknown board → wrong pin maps → fail loud before we
+# ROBOT.md `boards`. Wrong/unknown board → wrong pin maps → fail loud before we
 # mount any actuating route (raw match, so the default_board fallback can't mask
 # an unsupported board).
 from hal.board.board import assert_board_supported
@@ -1053,7 +1053,7 @@ if not _plan.ok:
     raise RuntimeError(
         f"Device '{_resolve_device_type()}' requires routes whose drivers are "
         f"unavailable: {_plan.failed_required}. Fix the driver/hardware, or mark "
-        f"the capability optional in devices/{_resolve_device_type()}/DEVICE.md."
+        f"the capability optional in devices/{_resolve_device_type()}/ROBOT.md."
     )
 for _name in _plan.mounted:
     app.include_router(_ROUTERS_BY_NAME[_name])
@@ -1125,7 +1125,7 @@ def version():
 
 @app.get("/device", tags=["System"])
 def device():
-    """This device's identity from DEVICE.md (id/name/type/schema) plus the
+    """This device's identity from ROBOT.md (id/name/type/schema) plus the
     board the runtime resolved and the capability routes it mounted."""
     return {
         "id": _profile.id,

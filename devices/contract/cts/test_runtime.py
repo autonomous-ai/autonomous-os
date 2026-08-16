@@ -1,10 +1,10 @@
 """Runtime CTS — the COMPATIBILITY.md rules only a live device can answer.
 
-`test_compatibility.py` reads `DEVICE.md` and proves a device is *described*
+`test_compatibility.py` reads `ROBOT.md` and proves a device is *described*
 correctly. It cannot prove the running device matches that description: a
 declaration passes the static suite whether or not any hardware ever booted it.
 This module closes that gap — it points at a provisioned device and compares
-what the device REPORTS MOUNTED against what its `DEVICE.md` DECLARES.
+what the device REPORTS MOUNTED against what its `ROBOT.md` DECLARES.
 
 Opt-in, so CI (which has no hardware) stays green:
 
@@ -57,7 +57,7 @@ ALLOW_MOTION = os.environ.get("CTS_ALLOW_MOTION") == "1"
 
 # Routes the HAL mounts regardless of declaration — they import cheaply and
 # other code calls into them in-process (hal/server.py `_ALWAYS_ROUTES`).
-# MUST NOT 16 ("mount a capability its DEVICE.md does not declare") is checked
+# MUST NOT 16 ("mount a capability its ROBOT.md does not declare") is checked
 # against declared ∪ these, or every device would fail on `system`.
 ALWAYS_ROUTES = {"audio", "emotion", "scene", "system", "bluetooth"}
 
@@ -118,7 +118,7 @@ class TestRuntimeConformance(unittest.TestCase):
         cls.mounted = set(cls.device.get("routes") or [])
         cls.profile = None
         dev_id = cls.device.get("id")
-        if dev_id and os.path.isfile(os.path.join(DEVICES_DIR, str(dev_id), "DEVICE.md")):
+        if dev_id and os.path.isfile(os.path.join(DEVICES_DIR, str(dev_id), "ROBOT.md")):
             cls.profile = load_device(str(dev_id), DEVICES_DIR)
 
     def setUp(self):
@@ -141,11 +141,11 @@ class TestRuntimeConformance(unittest.TestCase):
         the runtime rules still hold, but this checkout cannot verify them."""
         if self.profile is None:
             self.skipTest(
-                f"device reports id={self.device.get('id')!r}, which has no devices/<id>/DEVICE.md "
+                f"device reports id={self.device.get('id')!r}, which has no devices/<id>/ROBOT.md "
                 f"in this checkout — cannot compare running device against its declaration")
         return self.profile
 
-    # ── MUST 1 — ships a DEVICE.md with schema, a stable id, a type, its boards ──
+    # ── MUST 1 — ships a ROBOT.md with schema, a stable id, a type, its boards ──
 
     def test_must1_identity_is_served(self):
         for field in ("id", "name", "type", "schema", "board"):
@@ -158,13 +158,13 @@ class TestRuntimeConformance(unittest.TestCase):
         profile = self._profile()
         board = self.device.get("board")
         self.assertIn(board, profile.boards,
-                      f"MUST 1: device booted on board {board!r}, which DEVICE.md does not list "
+                      f"MUST 1: device booted on board {board!r}, which ROBOT.md does not list "
                       f"({profile.boards}) — the declaration does not describe this hardware")
 
     def test_must1_reported_id_matches_declaration(self):
         profile = self._profile()
         self.assertEqual(self.device.get("id"), profile.id,
-                         "MUST 1: the id the device serves differs from the one its DEVICE.md declares")
+                         "MUST 1: the id the device serves differs from the one its ROBOT.md declares")
 
     # ── MUST 5 — every declared `required` capability is up, or the boot failed loud ──
 
@@ -206,14 +206,14 @@ class TestRuntimeConformance(unittest.TestCase):
         self.assertTrue(routes & self.mounted,
                         f"MUST 3: declares {sorted(primary)} but mounted none of its routes {sorted(routes)}")
 
-    # ── MUST NOT 16 — mount a capability its DEVICE.md does not declare ──
+    # ── MUST NOT 16 — mount a capability its ROBOT.md does not declare ──
 
     def test_mustnot16_no_undeclared_route_is_mounted(self):
         profile = self._profile()
         declared = set(profile.declared_routes()) | ALWAYS_ROUTES
         undeclared = sorted(self.mounted - declared)
         self.assertFalse(undeclared,
-                         f"MUST NOT 16: {undeclared} are mounted but not declared in DEVICE.md — "
+                         f"MUST NOT 16: {undeclared} are mounted but not declared in ROBOT.md — "
                          f"a skill could reach hardware the device never advertised")
 
     # ── MUST NOT 15 / MUST 6 — a motion device ships a deterministic stop ──

@@ -25,14 +25,14 @@ which brain is active.
 
 | `agent_runtime` | Backend |
 |---|---|
-| unset | falls back to `gateway.default` in `devices/<type>/DEVICE.md`, then OpenClaw if that is empty too |
+| unset | falls back to `gateway.default` in `devices/<type>/ROBOT.md`, then OpenClaw if that is empty too |
 | `"openclaw"` | OpenClaw (default) |
 | `"hermes"` | Hermes (`hermes.ProvideService`) |
 | `"picoclaw"` | PicoClaw (`picoclaw.ProvideService`) — persistent WebSocket client; assumes the PicoClaw service is already running. See `docs/agentic/picoclaw.md` + `runtimes/picoclaw`. |
 | anything else | OpenClaw (logged as `FALLBACK — unknown runtime=…`) |
 
 When `agent_runtime` is unset in `config.json`, the backend is taken from the
-device's declared `gateway.default` (`devices/<type>/DEVICE.md`); OpenClaw is used
+device's declared `gateway.default` (`devices/<type>/ROBOT.md`); OpenClaw is used
 only if that is also empty. The banner logs `source` so you can tell which won.
 
 On startup `ProvideGateway` prints an `AGENT BACKEND ACTIVE → HERMES` banner with
@@ -414,7 +414,7 @@ e.g. adding Slack live) also restarts the gateway — letting the Hermes server 
 the new channel up:
 
 - **Boot:** the startup sequence calls `EnsureOnboarding`. Closes the gap where a
-  device that **boots straight into Hermes** (`DEVICE.md gateway.default: hermes`,
+  device that **boots straight into Hermes** (`ROBOT.md gateway.default: hermes`,
   or imaged with it) without ever switching from OpenClaw, or whose `llm_*` changed
   while Hermes was already active, would keep a stale `config.yaml` that never
   picked up `config.json`'s real `llm_api_key`/`base_url`.

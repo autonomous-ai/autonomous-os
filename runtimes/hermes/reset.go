@@ -218,7 +218,7 @@ func resolveSoulContent(cfg *config.Config) []byte {
 		return b
 	}
 	// Reject unsupported schemes (e.g. ftp://, s3://) — mirrors openclaw's
-	// "unsupported soul_ref scheme" error so a mis-configured DEVICE.md is
+	// "unsupported soul_ref scheme" error so a mis-configured ROBOT.md is
 	// visible in logs rather than silently treated as a local path.
 	if strings.Contains(ref, "://") {
 		log.Printf("[factory-reset/hermes] WARN soul_ref %q has unsupported scheme — using fallback", ref)

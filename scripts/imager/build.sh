@@ -134,20 +134,20 @@ OUT_IMG_SIZE="8G"           # Output image size (expands to full SD on first boo
 # image's /root/config/bootstrap.json below.
 OTA_METADATA_URL="${OTA_METADATA_URL:?OTA_METADATA_URL is required — build via 'make build OTA_METADATA_URL=...'}"
 # Device profile baked into this golden image: 1 device type = 1 image. The
-# matching devices.<type> artifact (DEVICE.md + SOUL.md) is fetched from OTA
+# matching devices.<type> artifact (ROBOT.md + SOUL.md) is fetched from OTA
 # metadata and staged into DEVICES_DIR/<type>. Forwarded by the Makefile (-e).
 # REQUIRED, no default — a golden image must declare which device class it is.
 DEVICE_TYPE="${DEVICE_TYPE:?DEVICE_TYPE is required — build via 'make build DEVICE_TYPE=...'}"
 DEVICES_DIR="${DEVICES_DIR:-/opt/devices}"
 # Per-image default agent runtime — bakes /root/config/f_r_default_agent, read
 # by SeedAgentRuntimeFromGateway (system/device/runtime.go) with PRIORITY over
-# DEVICE.md gateway.default, and — unlike gateway.default — it survives a
+# ROBOT.md gateway.default, and — unlike gateway.default — it survives a
 # Factory Reset (not in factoryreset.go's deviceWipePaths). So an image built
 # with DEFAULT_AGENT re-seeds to the SAME runtime after an F_R instead of
-# falling back to the device-type-wide DEVICE.md value shared by every build.
+# falling back to the device-type-wide ROBOT.md value shared by every build.
 # Also gates SSH for intern-v2 — see the SSH stage in the overlay phase.
 # OPTIONAL — unset (the default) bakes nothing and behavior is unchanged:
-# seeding falls through to DEVICE.md gateway.default exactly as before.
+# seeding falls through to ROBOT.md gateway.default exactly as before.
 # Mirrors build-orangepi.sh; forwarded by the Makefile (-e) for both targets.
 DEFAULT_AGENT="${DEFAULT_AGENT:-}"
 AP_BAND="${AP_BAND:-2.4}"   # 2.4 or 5 (5 GHz needs supported regulatory domain + chip)
@@ -2253,7 +2253,7 @@ if [ -n "\${DEFAULT_AGENT:-}" ]; then
   echo "\${DEFAULT_AGENT}" > /root/config/f_r_default_agent
   echo "[overlay] f_r_default_agent baked: \${DEFAULT_AGENT}"
 else
-  echo "[overlay] DEFAULT_AGENT unset — no f_r_default_agent baked (runtime seeding falls through to DEVICE.md gateway.default)"
+  echo "[overlay] DEFAULT_AGENT unset — no f_r_default_agent baked (runtime seeding falls through to ROBOT.md gateway.default)"
 fi
 
 # SSH: gated by DEFAULT_AGENT, but ONLY for intern-v2 — every other DEVICE_TYPE

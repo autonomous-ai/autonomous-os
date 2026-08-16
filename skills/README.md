@@ -82,7 +82,7 @@ every current device. It does not describe optional integrations; for example,
 ## Per-body notes
 
 Why some cells in the README's capability table are blank or ○ (declared in
-`DEVICE.md`, driver not landed):
+`ROBOT.md`, driver not landed):
 
 - **Intern** — no camera, so Sense is sound-only, Mood is voice-only, and
   Look-after-you is breaks and habits, not posture. Glow is colors and effects,

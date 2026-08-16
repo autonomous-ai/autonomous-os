@@ -158,7 +158,7 @@ owns the state machine (WHEN a state shows) and sends the state *name* to HAL
 (`POST /led/status`: booting/error/ota/connectivity/hal_down/agent_down/hardware/
 ready_flash/ota_progress/ota_error/ota_success/setup); HAL resolves the color/effect/speed
 from `STATUS_LED_PRESETS`, overridable per device via `presets.json`'s `status_led` section
-(see [DEVICE-SPEC.md § Per-device presets](../../../devices/contract/DEVICE-SPEC.md#per-device-presets-presetsjson)).
+(see [ROBOT-SPEC.md § Per-device presets](../../../devices/contract/ROBOT-SPEC.md#per-device-presets-presetsjson)).
 `setup` is a persistent solid when sent through `POST /led/status`; the rest are transient
 overlays. It supplies the AP/pre-setup white cue described below, and successful setup clears
 that saved state rather than retaining it as a user LED preference.
@@ -280,4 +280,4 @@ See [emotion-led-mapping.md](emotion-led-mapping.md) for the full emotion → LE
 
 A device can override these emotion/scene/aim values (and the LED ring size) without
 changing the shared defaults, via a `devices/<type>/presets.json` file. This is a
-platform mechanism — see [DEVICE-SPEC.md § Per-device presets](../../../devices/contract/DEVICE-SPEC.md#per-device-presets-presetsjson).
+platform mechanism — see [ROBOT-SPEC.md § Per-device presets](../../../devices/contract/ROBOT-SPEC.md#per-device-presets-presetsjson).

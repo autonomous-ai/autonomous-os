@@ -1,7 +1,7 @@
 // Package device owns the device-level service: setup/provisioning (setup.go),
 // messaging channels (channels.go), config updates (config_update.go), realtime
 // voice config (realtime.go), agent-runtime switching (runtime.go), the backend
-// status reporter (status_reporter.go), DEVICE.md parsing (devicemd.go),
+// status reporter (status_reporter.go), ROBOT.md parsing (devicemd.go),
 // hardware identity (hardware.go), and timezone (timezone.go).
 package device
 

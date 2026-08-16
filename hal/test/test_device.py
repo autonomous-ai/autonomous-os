@@ -1,9 +1,11 @@
-"""Tests for the device-profile layer: DEVICE.md parsing + mount planning.
+"""Tests for the device-profile layer: ROBOT.md parsing + mount planning.
 
 Pure logic, no hardware. Also parses the REAL committed devices/lamp and
-devices/intern-v2 DEVICE.md files to guard the contract against drift.
+devices/intern-v2 ROBOT.md files to guard the contract against drift.
 """
 import os
+import shutil
+import tempfile
 import unittest
 
 from hal.board.device import (
@@ -14,6 +16,7 @@ from hal.board.device import (
     parse_capabilities,
     parse_device,
     plan_mounts,
+    profile_path,
     validate_safety_refs,
     validate_schema,
 )
@@ -106,7 +109,7 @@ class TestParsing(unittest.TestCase):
         self.assertEqual(caps["motion"].driver, "feetech")
         self.assertEqual(caps["light"].driver, "ws2812")
         # Lamp has no screen — declaring display would make HAL run a
-        # framebuffer-only render loop nobody sees (see DEVICE.md).
+        # framebuffer-only render loop nobody sees (see ROBOT.md).
         self.assertNotIn("display", caps)
 
     def test_safety_ref_parsed(self):
@@ -264,7 +267,7 @@ class TestMountPlanning(unittest.TestCase):
 
 class TestInternBootProof(unittest.TestCase):
     """Batch C boot-proof (no hardware): the same router set, gated by each
-    device's DEVICE.md, yields different mounts — Intern is Lamp-minus, not a fork."""
+    device's ROBOT.md, yields different mounts — Intern is Lamp-minus, not a fork."""
 
     ALL_ROUTERS = {
         "servo", "led", "camera", "audio", "emotion", "scene",
@@ -298,3 +301,60 @@ class TestInternBootProof(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestProfileFilename(unittest.TestCase):
+    """ROBOT.md is canonical; DEVICE.md still loads.
+
+    Robots in the field have DEVICE.md on disk and OTA device profiles carry
+    it, so dropping the old name would brick an update, not just rename a file.
+    """
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.body = (
+            "---\n"
+            "schema: autonomous.device.v1\n"
+            "id: bot\n"
+            "name: Bot\n"
+            "type: desk_robot\n"
+            "boards: [raspberry_pi_5]\n"
+            "gateway: { default: openclaw }\n"
+            "capabilities:\n"
+            "  audio: { routes: [audio], required: true }\n"
+            "  system: { routes: [system], required: true }\n"
+            "---\n"
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def _write(self, filename):
+        d = os.path.join(self.root, "bot")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, filename), "w") as fh:
+            fh.write(self.body)
+        return d
+
+    def test_canonical_name(self):
+        d = self._write("ROBOT.md")
+        self.assertEqual(os.path.basename(profile_path(d)), "ROBOT.md")
+        self.assertEqual(set(load_device("bot", self.root).capabilities), {"audio", "system"})
+
+    def test_legacy_name_still_loads(self):
+        d = self._write("DEVICE.md")
+        self.assertEqual(os.path.basename(profile_path(d)), "DEVICE.md")
+        self.assertEqual(set(load_device("bot", self.root).capabilities), {"audio", "system"})
+
+    def test_canonical_wins_when_both_exist(self):
+        d = self._write("DEVICE.md")
+        with open(os.path.join(d, "ROBOT.md"), "w") as fh:
+            fh.write(self.body.replace("audio: { routes: [audio], required: true }",
+                                       "vision: { routes: [camera], required: true }"))
+        self.assertEqual(os.path.basename(profile_path(d)), "ROBOT.md")
+        self.assertEqual(set(load_device("bot", self.root).capabilities), {"vision", "system"})
+
+    def test_missing_both_names_reports_the_canonical_one(self):
+        d = os.path.join(self.root, "bot")
+        os.makedirs(d, exist_ok=True)
+        self.assertTrue(profile_path(d).endswith("ROBOT.md"))

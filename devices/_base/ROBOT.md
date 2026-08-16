@@ -20,7 +20,7 @@ The minimum every Autonomous device inherits — the floor of
 [`devices/contract/COMPATIBILITY.md`](../../devices/contract/COMPATIBILITY.md). It is `abstract: true`: it is
 not a shippable device, it is the base a real device extends.
 
-A concrete device's `DEVICE.md` adds the capabilities its body has (`vision`, `motion`,
+A concrete device's `ROBOT.md` adds the capabilities its body has (`vision`, `motion`,
 `light`, `display`, `sensing`, …) on top of this base. The two reference devices show the range:
 
 - **[Lamp](../lamp/)** — adds everything (the maximal device).

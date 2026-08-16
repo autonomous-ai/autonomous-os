@@ -47,7 +47,7 @@ var ackSkipPrefixes = []string{
 
 // ackEmotionEnabled reports whether this device installs the emotion-acknowledge
 // hook (capability-gated identically to OpenClaw onboarding). Computed once at
-// service construction — DEVICE.md does not change at runtime. Fail-open on a
+// service construction — ROBOT.md does not change at runtime. Fail-open on a
 // device that declares no capabilities, matching SupportedHooks.
 func ackEmotionEnabled(deviceType string) bool {
 	for _, h := range skills.SupportedHooks(device.Capabilities(deviceType)) {

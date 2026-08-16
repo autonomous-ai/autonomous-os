@@ -126,7 +126,7 @@ characters of the Pi's serial (`grep Serial /proc/cpuinfo | tail -c 5`).
 |------|---------|
 | `install.sh` | The one-command entry point above. Fetches the released device package from OTA and hands over to `spike.sh` — the only file pulled from git, deliberately small enough to read before piping it to a shell |
 | `recon.sh` | Read-only first-boot probe — runs all of `first-boot-plan.md` Phase 1 in one shot |
-| `DEVICE.md` | Runtime contract: identity, board gate, gateway default, and declared capabilities |
+| `ROBOT.md` | Runtime contract: identity, board gate, gateway default, and declared capabilities |
 | `SAFETY.md` | Deterministic safety bounds for motion and fail-safe behavior |
 | `SOUL.md` | Reachy's default persona, adapted from Lamp but mapped to head/body/antenna expression |
 | `spike.sh` | Thin orchestrator: runs the six component scripts below in order (device → hal → os → web → agent → bootstrap) |
@@ -155,7 +155,7 @@ the common references:
 
 | Topic | Reference |
 |-------|-----------|
-| Device contract | [`devices/contract/DEVICE-SPEC.md`](../contract/DEVICE-SPEC.md) |
+| Device contract | [`devices/contract/ROBOT-SPEC.md`](../contract/ROBOT-SPEC.md) |
 | Capability vocabulary | [`devices/contract/capabilities.md`](../contract/capabilities.md) |
 | Compatibility rules | [`devices/contract/COMPATIBILITY.md`](../contract/COMPATIBILITY.md) |
 | Safety engine | [`docs/safety.md`](../../docs/safety.md) |
@@ -222,7 +222,7 @@ captive-portal vhost. Reachy has no provisioning path of its own yet — it keep
 Pollen's NetworkManager setup and is configured over the LAN.
 
 Order matters, and `spike.sh` enforces it. `spike-device.sh` runs first because
-everything else reads what it installs — HAL refuses to boot without `DEVICE.md`,
+everything else reads what it installs — HAL refuses to boot without `ROBOT.md`,
 and without `/etc/asound.conf` there is no ALSA default, so every TTS call dies on
 PortAudio device -1. `spike-bootstrap.sh` runs **last**: it can restart os-server
 and HAL the moment it sees a newer build, and doing that mid-install turns a clean
@@ -262,10 +262,10 @@ Recon done on the first Wireless unit (2026-07-29) — results and consequences 
 - audio device names resolved → `rootfs/etc/asound.conf` + `.env` filled in
 - board gate taught the CM4 (`raspberry_pi_cm4`) — HAL refused to boot before this
 - network stack is NetworkManager → setup.sh takes the `nmcli` branch
-- **the daemon owns camera + audio** → `DEVICE.md` declares `owner: pollen_daemon`
+- **the daemon owns camera + audio** → `ROBOT.md` declares `owner: pollen_daemon`
   on `audio` and `vision`, and HAL performs the handover itself at startup and
   shutdown (`hal/drivers/media_owner/`). No script calls `/api/media/*`.
-- **camera is CSI/libcamera, not UVC** → `DEVICE.md` declares `driver: rpicam`,
+- **camera is CSI/libcamera, not UVC** → `ROBOT.md` declares `driver: rpicam`,
   which reads MJPEG from an `rpicam-vid` child process instead of OpenCV
 
 Still needs a real-device spike:

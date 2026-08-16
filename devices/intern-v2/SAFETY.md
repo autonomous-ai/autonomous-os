@@ -9,7 +9,7 @@ light:
 
 # SAFETY.md — Autonomous Intern
 
-The bounds contract: `DEVICE.md` says what the body *can* do; `SAFETY.md` says what it
+The bounds contract: `ROBOT.md` says what the body *can* do; `SAFETY.md` says what it
 *must never* do, enforced deterministically by the OS — not by prompting the agent
 (see `devices/contract/SAFETY-SPEC.md`, and `devices/lamp/SAFETY.md` for the fuller reference).
 

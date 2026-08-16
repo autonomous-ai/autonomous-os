@@ -127,7 +127,7 @@ def detect_board_id(model: Optional[str] = None) -> str:
 
 def assert_board_supported(declared: List[str], model: Optional[str] = None) -> str:
     """Fail loud unless the physical board is one this device declares in
-    DEVICE.md `boards`. Returns the resolved board id.
+    ROBOT.md `boards`. Returns the resolved board id.
 
     Wrong hardware means wrong pin maps; actuating servos/LEDs against an
     unverified board is a hardware fault, not graceful degradation
@@ -146,7 +146,7 @@ def assert_board_supported(declared: List[str], model: Optional[str] = None) -> 
         )
     if declared and matched not in declared:
         raise RuntimeError(
-            f"Board '{matched}' is not supported by this device (DEVICE.md boards: "
+            f"Board '{matched}' is not supported by this device (ROBOT.md boards: "
             f"{declared}). Refusing to boot — pin maps would be wrong."
         )
     return matched

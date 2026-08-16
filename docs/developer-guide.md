@@ -627,9 +627,9 @@ module load and stripped from the URL for privacy (see `hooks/setup/useSetupUrlP
 | `hal/` | Python HAL — drivers, routes, board profiles |
 | `hal/drivers/` | Hardware drivers (rgb, motors, voice, sensing, gpio_button, mic_button, …) |
 | `hal/routes/` | FastAPI routes (voice, led, camera, emotion, scene, music, servo, …) |
-| `devices/contract/` | Frozen HAL capability ABI (`capabilities.md`, `DEVICE-SPEC.md`) |
+| `devices/contract/` | Frozen HAL capability ABI (`capabilities.md`, `ROBOT-SPEC.md`) |
 | `skills/` | 25 built-in skills — agents auto-discover these, including `skill-creator` for authoring and evaluating new skills |
-| `devices/` | Per-device declarations (`intern-v2/`, `lamp/`, `unitree-go2w/`) with `DEVICE.md` + `SOUL.md` + `SAFETY.md` |
+| `devices/` | Per-device declarations (`intern-v2/`, `lamp/`, `unitree-go2w/`) with `ROBOT.md` + `SOUL.md` + `SAFETY.md` |
 | `scripts/provision/` | Image build + on-device setup scripts |
 | `scripts/release/` | OTA upload scripts (`upload-os-server.sh`, `upload-hal.sh`, `upload-web.sh`) |
 | `docs/` | Docs (this file lives here) |

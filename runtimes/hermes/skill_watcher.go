@@ -80,7 +80,7 @@ func (s *HermesService) StartSkillWatcher(ctx context.Context) {
 	}
 }
 
-// supportedSkills resolves this device's capabilities from DEVICE.md and filters
+// supportedSkills resolves this device's capabilities from ROBOT.md and filters
 // the platform skill catalog — identical gating to OpenClaw (skills.Supported is
 // runtime-agnostic platform metadata; the backend is just another consumer).
 func (s *HermesService) supportedSkills() []string {

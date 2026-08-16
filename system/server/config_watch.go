@@ -247,7 +247,7 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 			// capability; a device with no speaker has no volume to set. A volume the
 			// user last set (persisted by HAL on every /audio/volume change) wins, so
 			// the boot level follows their last choice instead of resetting every
-			// reboot. Falls back to the device profile (DEVICE.md `startup_volume`,
+			// reboot. Falls back to the device profile (ROBOT.md `startup_volume`,
 			// default 100) on first boot — 100 keeps the legacy behavior (software at
 			// max, hardware/alsactl is the effective control) while a loud-speaker
 			// device can declare a quieter boot level instead of hardcoding it.

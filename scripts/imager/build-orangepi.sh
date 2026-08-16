@@ -43,12 +43,12 @@ DEVICES_DIR="${DEVICES_DIR:-/opt/devices}"
 
 # Per-image default agent runtime — bakes /root/config/f_r_default_agent, read
 # by SeedAgentRuntimeFromGateway (system/device/runtime.go) with PRIORITY over
-# DEVICE.md gateway.default, and — unlike gateway.default — it survives Factory
+# ROBOT.md gateway.default, and — unlike gateway.default — it survives Factory
 # Reset (not in factoryreset.go's deviceWipePaths). So an image whose
 # DEFAULT_AGENT was set here re-seeds to the SAME default after an F_R, instead
-# of falling back to the device-type-wide DEVICE.md value shared by every
+# of falling back to the device-type-wide ROBOT.md value shared by every
 # build. OPTIONAL — unset (the default) bakes nothing, and behavior is 100%
-# unchanged: seeding falls through to DEVICE.md gateway.default exactly as
+# unchanged: seeding falls through to ROBOT.md gateway.default exactly as
 # before. Also gates SSH for intern-v2 — see the "enable services" stage below.
 #
 # intern-v2 ships in 3 physical case colors, each defaulting to one agent —
@@ -586,7 +586,7 @@ BSJSON
 # script). Lives next to bootstrap.json — same directory, same "survives
 # Factory Reset" property (neither is in factoryreset.go's deviceWipePaths).
 # Read by SeedAgentRuntimeFromGateway (system/device/runtime.go) with priority
-# over DEVICE.md gateway.default. Unset DEFAULT_AGENT (most builds) → no file
+# over ROBOT.md gateway.default. Unset DEFAULT_AGENT (most builds) → no file
 # written → seeding behavior is unchanged from before this feature.
 if [ -n "\${DEFAULT_AGENT}" ]; then
   echo "\${DEFAULT_AGENT}" > /root/config/f_r_default_agent

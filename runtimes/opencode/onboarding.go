@@ -473,7 +473,7 @@ func atomicWriteFile(path string, data []byte) error {
 // ensureSoulMDBlock wraps this device's soul as a marker-delimited core block at the
 // top of workspace/SOUL.md; owner content below the closing `---` is preserved.
 // Mirrors openclaw's ensureSoulMDBlock. The soul is resolved per device_type from
-// DEVICE.md `soul_ref` (path or URL). A device that declares no soul injects nothing.
+// ROBOT.md `soul_ref` (path or URL). A device that declares no soul injects nothing.
 func (s *OpenCodeService) ensureSoulMDBlock() (bool, error) {
 	soulFile := filepath.Join(opencodeWorkspaceDir, "SOUL.md")
 
@@ -538,7 +538,7 @@ func (s *OpenCodeService) ensureSoulMDBlock() (bool, error) {
 }
 
 // deviceSoulCore resolves the soul text for this device from the `soul_ref` in
-// devices/<type>/DEVICE.md. Mirrors openclaw's deviceSoulCore: absent → no override;
+// devices/<type>/ROBOT.md. Mirrors openclaw's deviceSoulCore: absent → no override;
 // http(s) → download; otherwise a path relative to devices/<type>/.
 func (s *OpenCodeService) deviceSoulCore() (content []byte, hasSoul bool, err error) {
 	devType := s.config.DeviceTypeOrDefault()
@@ -716,7 +716,7 @@ func migrateSkillsToOpenCodeHome() bool {
 // migration (presync.sh §1) plus the CDN skill watcher, so only skills.Catalog
 // names are OS-owned — unknown dirs (e.g. user-created skills, or opencode's own
 // bundled skills) are left alone, matching openclaw's prune semantics. Fail-open:
-// when DEVICE.md declares no capabilities, skills.Supported returns the full
+// when ROBOT.md declares no capabilities, skills.Supported returns the full
 // catalog, so nothing is pruned.
 func (s *OpenCodeService) pruneUnsupportedSkills() {
 	skillsDir := opencodeSkillsDir

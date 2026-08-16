@@ -35,7 +35,7 @@ var ackSkipPrefixes = []string{
 }
 
 // ackEmotionEnabled gates on the `expression` capability, same as OpenClaw/Hermes.
-// Computed once at construction — DEVICE.md does not change at runtime.
+// Computed once at construction — ROBOT.md does not change at runtime.
 func ackEmotionEnabled(deviceType string) bool {
 	for _, h := range skills.SupportedHooks(device.Capabilities(deviceType)) {
 		if h == "emotion-acknowledge" {

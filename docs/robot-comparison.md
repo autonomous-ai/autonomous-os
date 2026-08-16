@@ -2,7 +2,7 @@
 
 Every skill runs on every robot whose hardware declares what it needs — so a skill written for Lamp works on a Reachy Mini, and a skill you write today works on the robot you port tomorrow.
 
-Skills install by capability: a robot's [`DEVICE.md`](../devices/lamp/DEVICE.md) declares the hardware it has, and every skill that needs only that hardware lands on it. Nothing is per-model, so the grid fills itself in as bodies arrive.
+Skills install by capability: a robot's [`ROBOT.md`](../devices/lamp/ROBOT.md) declares the hardware it has, and every skill that needs only that hardware lands on it. Nothing is per-model, so the grid fills itself in as bodies arrive.
 
 | PHYSICAL SKILLS | <a href="../devices/lamp"><img src="../devices/lamp/images/lamp-white.webp" width="150" alt="Lamp"><br>Lamp</a> | <a href="../devices/intern-v2"><img src="../devices/intern-v2/images/intern-tile.webp" width="150" alt="Intern"><br>Intern</a> | <a href="../devices/reachy-mini"><img src="../devices/reachy-mini/images/reachy-mini.webp" width="150" alt="Reachy Mini"><br>Reachy Mini</a> | <a href="../devices/unitree-go2w"><img src="../devices/unitree-go2w/images/go2-w-tile.webp" width="150" alt="Go2-W"><br>Go2-W</a> |
 |---|:---:|:---:|:---:|:---:|

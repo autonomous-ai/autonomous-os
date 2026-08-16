@@ -716,7 +716,7 @@ Khi không có gì diễn ra, `system/ambient/` (Go, thuộc os-server) làm thi
 
 ### Các behavior loop (gate theo capability)
 
-Toàn bộ suite là opt-in theo từng device: capability routeless `lifelike` (khai trong block `capabilities:` của `devices/<type>/DEVICE.md`, xem `devices/contract/capabilities.md`) là công tắc tổng — device có khai capabilities nhưng không khai `lifelike` thì không chạy hành vi idle nào cả (ví dụ intern-v2 là công cụ im lặng). Mỗi loop còn điều khiển một peripheral và chỉ chạy khi device khai capability phần cứng tương ứng. Device không khai capability nào hết thì chạy tất cả (fail-open, giữ hành vi Lamp cũ).
+Toàn bộ suite là opt-in theo từng device: capability routeless `lifelike` (khai trong block `capabilities:` của `devices/<type>/ROBOT.md`, xem `devices/contract/capabilities.md`) là công tắc tổng — device có khai capabilities nhưng không khai `lifelike` thì không chạy hành vi idle nào cả (ví dụ intern-v2 là công cụ im lặng). Mỗi loop còn điều khiển một peripheral và chỉ chạy khi device khai capability phần cứng tương ứng. Device không khai capability nào hết thì chạy tất cả (fail-open, giữ hành vi Lamp cũ).
 
 | Loop | Capability | Nhịp | Hoạt động |
 |------|-----------|------|-----------|

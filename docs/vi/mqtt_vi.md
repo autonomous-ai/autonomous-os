@@ -60,7 +60,7 @@ OS server sử dụng MQTT để giao tiếp với backend server (báo cáo tr�
 
 `agent_runtime` là backend agentic **đang thực sự chạy** (`openclaw` | `hermes` |
 `picoclaw` | `codex` | `claudecode` | `opencode`) — resolve theo thứ tự `config.agent_runtime`,
-rồi `gateway.default` trong `DEVICE.md` của device, cuối cùng mặc định `openclaw`.
+rồi `gateway.default` trong `ROBOT.md` của device, cuối cùng mặc định `openclaw`.
 Phản hồi còn kèm các field tùy chọn khi có: `hal_version`, `openclaw_version`,
 `hermes_version`, `picoclaw_version`, `codex_version`, `claudecode_version`,
 `opencode_version`, `local_ip`, `tts_provider`, `tts_voice`, `stt_language`, `timezone`,

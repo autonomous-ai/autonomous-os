@@ -22,7 +22,7 @@
 # a step is wrong, it is wrong in that step's own script, for everyone.
 #
 # Order matters:
-#   device     DEVICE.md, /etc/asound.conf and /opt/hal/.env — everything else
+#   device     ROBOT.md, /etc/asound.conf and /opt/hal/.env — everything else
 #              reads them, and HAL will not boot without the first
 #   hal         the body: motion, camera, audio, sensing
 #   os-server   the API and agent gateway (reads the same /root/config)

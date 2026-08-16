@@ -1,4 +1,4 @@
-"""Tests for the media-owner selector: DEVICE.md `owner:` → handover class.
+"""Tests for the media-owner selector: ROBOT.md `owner:` → handover class.
 
 Pure logic, no hardware and no daemon. Mirrors test_motion_factory.py: the
 registry contract, the resolve rules, and a conformance check that the Pollen

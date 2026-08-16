@@ -12,7 +12,7 @@ var Hooks = []string{
 	"turn-gate",
 }
 
-// HookCapability maps a hook to the DEVICE.md capability it requires. A hook
+// HookCapability maps a hook to the ROBOT.md capability it requires. A hook
 // absent from this map has no hardware dependency and is always installed.
 // emotion-acknowledge fires an expression every turn, so it needs `expression`
 // (the body can show emotion): a device without it (e.g. a sensor-only box) must

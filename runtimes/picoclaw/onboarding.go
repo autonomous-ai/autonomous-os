@@ -225,7 +225,7 @@ func (s *PicoclawService) ensureAgentsMDBlock() (bool, error) {
 // ensureSoulMDBlock wraps this device's soul as a marker-delimited core block at the
 // top of workspace/SOUL.md; owner content below the closing `---` is preserved.
 // Mirrors openclaw's ensureSoulMDBlock. The soul is resolved per device_type from
-// DEVICE.md `soul_ref` (path or URL). A device that declares no soul injects nothing.
+// ROBOT.md `soul_ref` (path or URL). A device that declares no soul injects nothing.
 func (s *PicoclawService) ensureSoulMDBlock() (bool, error) {
 	soulFile := filepath.Join(picoclawWorkspaceDir, "SOUL.md")
 
@@ -290,7 +290,7 @@ func (s *PicoclawService) ensureSoulMDBlock() (bool, error) {
 }
 
 // deviceSoulCore resolves the soul text for this device from the `soul_ref` in
-// devices/<type>/DEVICE.md. Mirrors openclaw's deviceSoulCore: absent → no override;
+// devices/<type>/ROBOT.md. Mirrors openclaw's deviceSoulCore: absent → no override;
 // http(s) → download; otherwise a path relative to devices/<type>/.
 func (s *PicoclawService) deviceSoulCore() (content []byte, hasSoul bool, err error) {
 	devType := s.config.DeviceTypeOrDefault()
@@ -390,7 +390,7 @@ var picoclawBuiltinSkills = map[string]bool{
 // pruneUnsupportedSkills removes skill dirs the device can't use. A skill survives
 // when it is EITHER (a) supported by this device's capabilities (skills.Supported —
 // the same gate openclaw uses) OR (b) a picoclaw built-in (picoclawBuiltinSkills).
-// Everything else under workspace/skills is removed. Fail-open: when DEVICE.md
+// Everything else under workspace/skills is removed. Fail-open: when ROBOT.md
 // declares no capabilities, skills.Supported returns the full catalog, so nothing
 // capability-gated is pruned. Mirrors openclaw's onboarding prune, but iterates the
 // on-disk dirs (picoclaw has extra built-ins outside skills.Catalog) instead of the

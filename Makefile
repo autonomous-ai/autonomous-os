@@ -76,15 +76,15 @@ hal-clean:
 
 .PHONY: new-device push-skill cts cts-runtime
 
-# Scaffold a new body from devices/_template/ — DEVICE.md + SOUL.md, no SAFETY.md
+# Scaffold a new body from devices/_template/ — ROBOT.md + SOUL.md, no SAFETY.md
 # on purpose: `make cts` fails until you write the bounds for what you declared.
 new-device:
 	@test -n "$(NAME)" || { echo "usage: make new-device NAME=my-robot" >&2; exit 2; }
 	@test -d devices/_template || { echo "devices/_template missing — is this a full clone?" >&2; exit 2; }
 	@test ! -d devices/$(NAME) || { echo "devices/$(NAME) already exists" >&2; exit 2; }
 	@cp -r devices/_template devices/$(NAME)
-	@sed -i.bak 's/my-robot/$(NAME)/g; s/My Robot/$(NAME)/g' devices/$(NAME)/DEVICE.md devices/$(NAME)/SOUL.md && rm -f devices/$(NAME)/*.bak
-	@echo "devices/$(NAME)/ — edit DEVICE.md, then: make cts"
+	@sed -i.bak 's/my-robot/$(NAME)/g; s/My Robot/$(NAME)/g' devices/$(NAME)/ROBOT.md devices/$(NAME)/SOUL.md && rm -f devices/$(NAME)/*.bak
+	@echo "devices/$(NAME)/ — edit ROBOT.md, then: make cts"
 
 # Copy a skill folder onto a running body. Live on the next conversation, no
 # reboot. Root SSH is off, so it lands in /tmp and moves with sudo.
@@ -94,7 +94,7 @@ push-skill:
 	@ssh $(TARGET) 'sudo mv /tmp/$(notdir $(SKILL)) /root/.openclaw/workspace/skills/'
 	@echo "$(notdir $(SKILL)) → $(TARGET) — live on the next conversation"
 
-# Static half: validates every devices/<id>/DEVICE.md against COMPATIBILITY.md.
+# Static half: validates every devices/<id>/ROBOT.md against COMPATIBILITY.md.
 # No hardware, no deps — this is what CI runs.
 cts:
 	python3 -m unittest discover -s devices/contract/cts -v

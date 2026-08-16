@@ -9,7 +9,7 @@ Phần nào giống thì tham chiếu, không chép lại:
 
 | Chủ đề | Tài liệu |
 |--------|----------|
-| Schema `DEVICE.md`, capability mounting, ngữ nghĩa `driver:` | [`devices/contract/DEVICE-SPEC.md`](../../../contract/DEVICE-SPEC.md) |
+| Schema `ROBOT.md`, capability mounting, ngữ nghĩa `driver:` | [`devices/contract/ROBOT-SPEC.md`](../../../contract/ROBOT-SPEC.md) |
 | Từ vựng capability | [`devices/contract/capabilities.md`](../../../contract/capabilities.md) |
 | Layer capability/route/driver của HAL | [`docs/architecture/hal.md`](../../../../docs/architecture/hal.md) |
 | Safety engine | [`docs/vi/safety_vi.md`](../../../../docs/vi/safety_vi.md) |
@@ -25,7 +25,7 @@ Nguồn hardware đã kiểm tra ngày 2026-07-21:
 
 ## Profile Này Khai Gì
 
-`DEVICE.md` khai route surface sau:
+`ROBOT.md` khai route surface sau:
 
 | Capability | Routes | Required | Ghi chú riêng cho Reachy |
 |------------|--------|----------|--------------------------|
@@ -114,7 +114,7 @@ khung 1280×720; sau `acquire`, media status trở lại
 trình — nhả media **không** ảnh hưởng điều khiển motion.
 
 **HAL tự làm việc bàn giao này** — không phải script, không phải launcher.
-`DEVICE.md` khai `owner: pollen_daemon` trên capability `audio` và `vision`;
+`ROBOT.md` khai `owner: pollen_daemon` trên capability `audio` và `vision`;
 `hal/drivers/media_owner/factory.py` map tên đó tới `PollenDaemonMediaOwner`,
 gọi `release` ở đầu startup và `acquire` khi shutdown. `release` retry 5 lần cách
 nhau 2 s vì daemon là systemd service khởi động song song với HAL và có thể chưa
@@ -155,7 +155,7 @@ phải luồng YUV đọc thẳng được:
 | `python3-picamera2` | chưa cài; apt có candidate `0.3.33-1` |
 
 **Đã giải quyết (2026-07-29)** bằng một camera backend thứ hai, không phải bằng
-giá trị config. `DEVICE.md` chọn backend giống hệt cách motion chọn driver:
+giá trị config. `ROBOT.md` chọn backend giống hệt cách motion chọn driver:
 
 ```yaml
 vision:
@@ -228,7 +228,7 @@ trong khi mọi service vẫn báo healthy.
 
 | Bước | Script | Làm gì |
 |------|--------|--------|
-| 1 | `spike-device.sh` | Tải `devices.reachy-mini` từ OTA về `/opt/devices/reachy-mini` **và** đắp `rootfs/` của gói đó lên `/` — đây là nguồn của `/etc/asound.conf` và `/opt/hal/.env`. Thiếu `DEVICE.md` thì HAL không boot |
+| 1 | `spike-device.sh` | Tải `devices.reachy-mini` từ OTA về `/opt/devices/reachy-mini` **và** đắp `rootfs/` của gói đó lên `/` — đây là nguồn của `/etc/asound.conf` và `/opt/hal/.env`. Thiếu `ROBOT.md` thì HAL không boot |
 | 2 | `spike-hal.sh` | Tải component `hal` về `/opt/hal`, `uv sync --python 3.12 --extra hardware --extra reachy`, chạy uvicorn ở `127.0.0.1:5001` |
 | 3 | `spike-os.sh` | Tải binary `os-server` về `/usr/local/bin`, seed `/root/config/config.json` tối thiểu, chạy **dưới root với `WorkingDirectory=/root`** |
 | 4 | `spike-web.sh` | Cài nginx, tải bundle `web` về `/usr/share/nginx/html/setup`, viết vhost `reachy-spike` |
@@ -532,7 +532,7 @@ matches no entry in boards.json ... Refusing to boot on unidentified hardware
 ```
 
 Đã sửa bằng cách thêm entry `raspberry_pi_cm4` (`match: ["compute module 4"]`) vào
-`hal/board/boards.json` và khai nó trong `boards` của `DEVICE.md`. Phần wiring
+`hal/board/boards.json` và khai nó trong `boards` của `ROBOT.md`. Phần wiring
 `led`/`button` của entry này kế thừa từ `raspberry_pi_4` và **chưa được verify** —
 Reachy không khai `light` lẫn GPIO button nên hiện chưa ai đọc tới. Phải verify
 trước khi đấu hai peripheral đó trên CM4.

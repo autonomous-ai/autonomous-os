@@ -27,7 +27,7 @@ The declaration demonstrates the extension point; it does not implement the port
 
 ## Capabilities
 
-audio, vision (+ depth), motion (locomotion), sensing. Declared in [`DEVICE.md`](DEVICE.md);
+audio, vision (+ depth), motion (locomotion), sensing. Declared in [`ROBOT.md`](ROBOT.md);
 bounds in [`SAFETY.md`](SAFETY.md) — mobile safety is non-negotiable.
 
 ## Status
@@ -36,5 +36,5 @@ Reference declaration only — no hardware validation or production support.
 
 ## For developers
 
-- [`DEVICE.md`](DEVICE.md) · [`SAFETY.md`](SAFETY.md) · [`SOUL.md`](SOUL.md)
+- [`ROBOT.md`](ROBOT.md) · [`SAFETY.md`](SAFETY.md) · [`SOUL.md`](SOUL.md)
 - [Architecture](../../docs/architecture/overview.md)

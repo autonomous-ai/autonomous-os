@@ -655,16 +655,16 @@ EOF
   # <base> is the metadata URL minus "/ota/metadata.json". No hardcoded URL.
   #
   # Capability gate: a skill that needs a hardware capability (servo/light/...)
-  # is only seeded when this device's DEVICE.md declares that capability. Skills
+  # is only seeded when this device's ROBOT.md declares that capability. Skills
   # with no capability (platform/logic skills) are always seeded. This mirrors
   # the authoritative gate in os-server (system/skills.Supported); both read
-  # DEVICE.md so a reduced device never ships skills it can't run. Fail-open:
-  # if DEVICE.md declares no capabilities, everything is seeded (legacy behavior).
+  # ROBOT.md so a reduced device never ships skills it can't run. Fail-open:
+  # if ROBOT.md declares no capabilities, everything is seeded (legacy behavior).
   # os-server re-syncs + prunes on boot, so this is only the first-boot seed.
   SKILLS_GCS_PREFIX="${OTA_METADATA_URL%/ota/metadata.json}/skills"
   # Full catalog (keep in sync with system/skills.Catalog).
   SKILLS_CATALOG="audio camera computer-use connectors display emotion face-enroll guard led-control music music-suggestion scene sensing sensing-track skill-creator servo-control servo-tracking voice wellbeing mood speaker-recognizer user-emotion-detection habit input-branching claude-buddy"
-  # skill -> required DEVICE.md capability (keep in sync with skills.Capability in
+  # skill -> required ROBOT.md capability (keep in sync with skills.Capability in
   # system/skills/skills.go). Empty = platform skill, always seeded.
   # Echo the capabilities a skill requires (space-separated, ANY-OF: the skill is
   # kept when the device declares at least one). Empty = platform skill, always
@@ -692,8 +692,11 @@ EOF
       *)                              echo "" ;;
     esac
   }
-  # Capability keys declared in this device's DEVICE.md (one per line).
-  DEVICE_MD="$DEVICES_DIR/$DEVICE_TYPE/DEVICE.md"
+  # Capability keys declared in this device's ROBOT.md (one per line).
+  # ROBOT.md is canonical; DEVICE.md is the name it shipped under, still read
+  # because device profiles already on disk carry it.
+  DEVICE_MD="$DEVICES_DIR/$DEVICE_TYPE/ROBOT.md"
+  [ -f "$DEVICE_MD" ] || DEVICE_MD="$DEVICES_DIR/$DEVICE_TYPE/DEVICE.md"
   DEVICE_CAPS="$(awk '
     /^capabilities:/ {f=1; next}
     f && /^[A-Za-z]/ {exit}
@@ -708,7 +711,7 @@ EOF
         if echo "$DEVICE_CAPS" | grep -qx "$c"; then cap_matched=1; break; fi
       done
       if [ -z "$cap_matched" ]; then
-        echo "[stage] skill $skill_name needs one of '$caps_required' not declared in DEVICE.md — skipping"
+        echo "[stage] skill $skill_name needs one of '$caps_required' not declared in ROBOT.md — skipping"
         continue
       fi
     fi
@@ -1484,7 +1487,7 @@ SOFTWAREUPDATE
 # ----------------------------------------------------------
 ensure_root
 
-# Install this device's profile (DEVICE.md + SOUL.md) into DEVICES_DIR/<type>.
+# Install this device's profile (ROBOT.md + SOUL.md) into DEVICES_DIR/<type>.
 # Per-device: downloads ONLY this device_type's artifact (devices.<type> in OTA
 # metadata). Absent → skip (agent keeps the gateway's default soul; HAL mounts
 # all routes). Read by os-server (soul) and HAL (capability mounting).
@@ -1493,7 +1496,7 @@ stage_devices() {
   local dest="$DEVICES_DIR/$DEVICE_TYPE"
   mkdir -p "$dest"
   # Device profile is required — one install = one device type, and the device
-  # is useless without its DEVICE.md/SOUL.md/SAFETY.md. set -e is suspended
+  # is useless without its ROBOT.md/SOUL.md/SAFETY.md. set -e is suspended
   # inside run_stage's `if stage_devices`, so guard each step explicitly and
   # return non-zero so the stage is recorded as FAILED (not silently OK).
   if [ -z "${DEVICES_URL:-}" ]; then

@@ -244,7 +244,7 @@ export function useSetupController(mode: SetupMode) {
   // device that doesn't declare the capability has no way to complete either,
   // so the wizard must not offer it — an Intern (audio + sensing + light, no
   // `vision`) was still being asked to enroll a face it cannot see. Same
-  // contract Monitor gates its tabs on: os-server parses DEVICE.md and serves
+  // contract Monitor gates its tabs on: os-server parses ROBOT.md and serves
   // the declared list on /api/system/info. Fail-open while it loads (hasCap
   // returns true for an unknown set), matching every other gate in the web.
   const { hasCap } = useCapabilities();

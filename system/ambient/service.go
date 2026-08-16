@@ -1,7 +1,7 @@
 // Package ambient provides idle "living creature" behaviors: when no
 // interaction is happening, it drives a breathing LED, servo micro-movements,
 // and occasional self-talk via TTS. The whole suite is opt-in via the
-// `lifelike` capability in DEVICE.md; each loop is additionally gated by the
+// `lifelike` capability in ROBOT.md; each loop is additionally gated by the
 // matching hardware capability. All hardware control goes through HAL HTTP
 // API (port 5001).
 package ambient

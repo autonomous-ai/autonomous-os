@@ -10,14 +10,14 @@
 # build. Everything now comes from the OTA feed, like the imager and
 # scripts/provision/setup.sh.
 #
-# Run spike-device.sh FIRST. It installs DEVICE.md (HAL refuses to boot without
+# Run spike-device.sh FIRST. It installs ROBOT.md (HAL refuses to boot without
 # one, and its board list is what lets HAL accept a CM4), /opt/hal/.env, and
 # /etc/asound.conf — which defines the shared ALSA PCMs and the default device.
 # Without that file PortAudio has no output device at all and every TTS call
 # fails with "Error querying device -1", while aplay from a shell still works.
 #
 # Media: HAL borrows the camera and both ALSA PCMs from the Pollen daemon by
-# itself, because DEVICE.md declares `owner: pollen_daemon` on audio and vision.
+# itself, because ROBOT.md declares `owner: pollen_daemon` on audio and vision.
 # It releases at the top of startup and hands them back on shutdown. Nothing
 # here has to call /api/media/* — and nothing should: the release has to be
 # ordered against HAL's own audio probe, which only code inside the process can
@@ -79,8 +79,8 @@ if [ "$STOP_ONLY" = "1" ] || [ "$UNINSTALL" = "1" ]; then
   exit 0
 fi
 
-[ -f "$DEVICES_DIR/$DEVICE_TYPE/DEVICE.md" ] \
-  || die "no $DEVICES_DIR/$DEVICE_TYPE/DEVICE.md — run: sudo bash spike-device.sh"
+[ -f "$DEVICES_DIR/$DEVICE_TYPE/ROBOT.md" ] \
+  || die "no $DEVICES_DIR/$DEVICE_TYPE/ROBOT.md — run: sudo bash spike-device.sh"
 
 say "1/4  Preflight: disk space"
 # The venv is ~2 GB (torch, opencv, polars, pyarrow) and uv's wheel cache can add

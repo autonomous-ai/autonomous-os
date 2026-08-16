@@ -37,7 +37,7 @@ var Catalog = []string{
 	"claude-buddy",
 }
 
-// Capability maps a skill to the DEVICE.md capabilities it requires, with
+// Capability maps a skill to the ROBOT.md capabilities it requires, with
 // ANY-OF semantics: a skill is kept when the device declares AT LEAST ONE of the
 // listed capabilities. Most skills list a single capability; a skill that can be
 // driven by more than one sensor lists each (e.g. user-emotion-detection works

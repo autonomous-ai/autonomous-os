@@ -1,4 +1,4 @@
-"""Media owner factory — resolve a DEVICE.md `owner:` name to a handover class.
+"""Media owner factory — resolve a ROBOT.md `owner:` name to a handover class.
 
 Mirrors hal/drivers/motors/factory.py and hal/drivers/camera/factory.py. Those
 answer "which implementation opens this hardware"; this one answers "who has to
@@ -38,7 +38,7 @@ def resolve_media_owner(owner: Optional[str]) -> Optional[type]:
     """Resolve an `owner:` name to its handover class.
 
     Args:
-        owner: the `owner:` value from a DEVICE.md capability, or None.
+        owner: the `owner:` value from a ROBOT.md capability, or None.
 
     Returns:
         The handover class, or None when no owner is declared or its module
@@ -51,7 +51,7 @@ def resolve_media_owner(owner: Optional[str]) -> Optional[type]:
     if entry is None:
         registered = sorted(MEDIA_OWNERS.keys())
         raise RuntimeError(
-            f"DEVICE.md declares media owner '{owner}' but no handover is "
+            f"ROBOT.md declares media owner '{owner}' but no handover is "
             f"registered for it (registered: {registered}). Implement it and "
             f"register in hal/drivers/media_owner/factory.py, or fix the name."
         )
