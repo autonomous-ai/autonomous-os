@@ -1,38 +1,18 @@
-<h1 align="center">Autonomous OS — the "Android" for robots</h1>
+<img src="docs/media/hero.gif" alt="Reachy Mini and Autonomous Lamp on one OS — antennas rise, the ring lights, both turn to look" width="720">
 
-<p align="center">Install it on a robot and the robot gets a brain: it thinks, it does real work, and it grows with you.</p>
+## Autonomous OS: The "Android" for Robots
 
-<p align="center">
-  <a href="#license"><img src="https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square" alt="Apache-2.0, GPL-3.0 inside hal/"></a>
-  <a href="https://github.com/autonomous-ai/autonomous-os/releases"><img src="https://img.shields.io/github/v/release/autonomous-ai/autonomous-os?style=flat-square" alt="release"></a>
-  <a href="skills/"><img src="https://img.shields.io/badge/skills-25-blue?style=flat-square" alt="25 skills"></a>
-  <a href="runtimes/"><img src="https://img.shields.io/badge/brains-6-blue?style=flat-square" alt="6 agent runtimes"></a>
-  <a href="devices/"><img src="https://img.shields.io/badge/bodies-4-blue?style=flat-square" alt="4 bodies"></a>
-</p>
+Robots have had bodies for years but no brain. They've done almost nothing and stopped at gimmick demos.
 
-<p align="center">
-  <a href="#robots-that-really-do-things">Why</a> ·
-  <a href="#meet-the-first-robots-running-autonomous-os">Robots</a> ·
-  <a href="#get-started">Get started</a> ·
-  <a href="#skills-are-how-it-grows">Skills</a> ·
-  <a href="#port-a-robot-three-files-and-one-driver">Port a robot</a> ·
-  <a href="#contribute">Contribute</a> ·
-  <a href="docs/architecture/overview.md">Docs</a>
-</p>
+Autonomous OS makes it easy to bring AI to your robot. Install it on your robot and your robot gets a brain.
 
-<p align="center"><img src="docs/media/hero.gif" alt="Reachy Mini and Autonomous Lamp on one OS — antennas rise, the ring lights, both turn to look" width="720"><br><sub>One OS, one skill file, two bodies: Pollen's Reachy Mini and Autonomous Lamp both hear you and turn to look.</sub></p>
+**Your robot thinks.** All your robot sensors send data to an LLM reasoning agent.
 
-## Robots that really do things
+**Your robot acts.** Say "watch the house" and a Lamp — or Pollen's Reachy Mini — turns to the door, watches it while you are out, and messages you when someone walks in. Nothing is scripted: the brain decides, and the words are spoken while the arm is already moving.
 
-Robots have had bodies for years and done almost nothing with them. Install Autonomous OS and the body goes to work.
+**Your robot grows.** A new job is one page of markdown — tap it in the store, type it in the app, or drop a folder on the robot. Live on the next conversation. It remembers faces, voices and last week, and that memory belongs to the body, not the brain.
 
-**It acts.** Say "watch the house" and a Lamp — or Pollen's Reachy Mini — turns to the door, watches it while you are out, and messages you when someone walks in. Nothing is scripted: the brain decides, and the words are spoken while the arm is already moving.
-
-**It grows.** A new job is one page of markdown — tap it in the store, type it in the app, or drop a folder on the robot. Live on the next conversation. It remembers faces, voices and last week, and that memory belongs to the body, not the brain.
-
-**It comes apart.** Engine, model, voice, skills, board — every piece swaps, live. Your robot declares what it has in a `DEVICE.md`, and the OS mounts exactly that.
-
-When a smarter brain ships, every robot on this OS gets smarter the same day.
+The best part? Autonomous OS is fully customizable. Engine, model, voice, skills, board — every piece swaps, live. Your robot declares what it has in a `DEVICE.md`, and the OS mounts exactly that. When a smarter brain ships, every robot on this OS gets smarter the same day.
 
 ## Meet the first robots running Autonomous OS
 
