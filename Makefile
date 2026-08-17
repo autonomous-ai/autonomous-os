@@ -74,7 +74,7 @@ hal-clean:
 # CTS — Compatibility Test Suite (devices/contract/cts)
 # ============================================================================
 
-.PHONY: new-device push-skill skills-catalog skills-catalog-check cts cts-runtime
+.PHONY: new-device push-skill skills-catalog skills-catalog-check latency cts cts-runtime
 
 # Scaffold a new body from devices/_template/ — DEVICE.md + SOUL.md, no SAFETY.md
 # on purpose: `make cts` fails until you write the bounds for what you declared.
@@ -94,6 +94,13 @@ skills-catalog:
 
 skills-catalog-check:
 	python3 scripts/skills/gen_catalog.py --check
+
+# Measure what a turn costs on a running robot: reads its flow log and prints
+# p50/p95 per stage. PASSWORD is the 4 characters in the robot's Wi-Fi name.
+#   make latency TARGET=lamp-ac82.local PASSWORD=ac82 [DATE=2026-08-16]
+latency:
+	@test -n "$(TARGET)" || { echo "usage: make latency TARGET=lamp-xxxx.local PASSWORD=xxxx" >&2; exit 2; }
+	python3 scripts/bench/latency.py --target $(TARGET) $(if $(PASSWORD),--password $(PASSWORD),) $(if $(TOKEN),--token $(TOKEN),) $(if $(DATE),--date $(DATE),)
 
 # Copy a skill folder onto a running body. Live on the next conversation, no
 # reboot. Root SSH is off, so it lands in /tmp and moves with sudo.
