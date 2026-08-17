@@ -14,7 +14,7 @@ func writeDeviceMD(t *testing.T, deviceType, body string) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "DEVICE.md"), []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "ROBOT.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 }

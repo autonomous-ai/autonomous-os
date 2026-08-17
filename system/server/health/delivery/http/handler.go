@@ -95,9 +95,9 @@ func (h *HealthHandler) SystemInfo(c *gin.Context) {
 }
 
 // deviceCapabilities returns this device's DECLARED capabilities (sorted), read
-// from devices/<type>/DEVICE.md via device.Capabilities. This is the OS contract
+// from devices/<type>/ROBOT.md via device.Capabilities. This is the OS contract
 // surface the web gates tabs on ("address capabilities, not routes"): Go is the
-// capability owner — it already parses the same DEVICE.md and gates intent,
+// capability owner — it already parses the same ROBOT.md and gates intent,
 // skills, ambient, etc. on it — so the web asks the OS here rather than reaching
 // through to the HAL runtime for a declaration-level fact. Empty slice (never
 // null) when the device declares none, so the client always gets an array.

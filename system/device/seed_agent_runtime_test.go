@@ -39,7 +39,7 @@ gateway:
 	SeedAgentRuntimeFromGateway(cfg)
 
 	if cfg.AgentRuntime != "hermes" {
-		t.Fatalf("AgentRuntime = %q, want %q (f_r_default_agent should win over DEVICE.md gateway.default)", cfg.AgentRuntime, "hermes")
+		t.Fatalf("AgentRuntime = %q, want %q (f_r_default_agent should win over ROBOT.md gateway.default)", cfg.AgentRuntime, "hermes")
 	}
 }
 
@@ -58,7 +58,7 @@ gateway:
 	SeedAgentRuntimeFromGateway(cfg)
 
 	if cfg.AgentRuntime != "openclaw" {
-		t.Fatalf("AgentRuntime = %q, want %q (fallback to DEVICE.md gateway.default)", cfg.AgentRuntime, "openclaw")
+		t.Fatalf("AgentRuntime = %q, want %q (fallback to ROBOT.md gateway.default)", cfg.AgentRuntime, "openclaw")
 	}
 }
 
@@ -118,8 +118,8 @@ gateway:
 
 	value, source := ResolveDefaultAgent(&config.Config{})
 
-	if value != "hermes" || source != "DEVICE.md gateway.default" {
-		t.Fatalf("ResolveDefaultAgent = (%q, %q), want (hermes, DEVICE.md gateway.default)", value, source)
+	if value != "hermes" || source != "ROBOT.md gateway.default" {
+		t.Fatalf("ResolveDefaultAgent = (%q, %q), want (hermes, ROBOT.md gateway.default)", value, source)
 	}
 }
 

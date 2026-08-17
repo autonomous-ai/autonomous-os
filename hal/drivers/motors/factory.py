@@ -1,4 +1,4 @@
-"""Motion driver factory — resolve a DEVICE.md `driver:` name to a service class.
+"""Motion driver factory — resolve a ROBOT.md `driver:` name to a service class.
 
 The selector covers motion only (light/ws2812 stays informational — YAGNI).
 When a new motion backend is implemented, register it here.
@@ -32,7 +32,7 @@ def resolve_motion_class(driver: Optional[str], required: bool) -> Optional[type
     """Resolve a motion driver name to its service class.
 
     Args:
-        driver: the `driver:` value from DEVICE.md motion capability, or None.
+        driver: the `driver:` value from ROBOT.md motion capability, or None.
         required: whether the motion capability is declared required.
 
     Returns:
@@ -41,7 +41,7 @@ def resolve_motion_class(driver: Optional[str], required: bool) -> Optional[type
     """
     if driver is None:
         logger.warning(
-            "[motion] no driver: declared in DEVICE.md motion capability, "
+            "[motion] no driver: declared in ROBOT.md motion capability, "
             "defaulting to 'feetech' (explicit driver will be required in schema v2)"
         )
         driver = "feetech"
@@ -51,7 +51,7 @@ def resolve_motion_class(driver: Optional[str], required: bool) -> Optional[type
         registered = sorted(MOTION_DRIVERS.keys())
         if required:
             raise RuntimeError(
-                f"DEVICE.md declares motion driver '{driver}' but no motion "
+                f"ROBOT.md declares motion driver '{driver}' but no motion "
                 f"service is registered for it (registered: {registered}). "
                 f"Implement it and register in hal/drivers/motors/factory.py, "
                 f"or fix the driver name."

@@ -57,7 +57,7 @@ func (s *HermesService) SetupAgent(_ domain.SetupRequest) error {
 // is provisioned" assumption): presync was ONLY ever triggered by an explicit
 // runtime SWITCH (UpdateAgentRuntime, old != new). So two paths kept a stale
 // config.yaml that never picked up config.json's real llm_api_key/base_url:
-//  1. a device that boots straight into hermes (DEVICE.md gateway.default: hermes,
+//  1. a device that boots straight into hermes (ROBOT.md gateway.default: hermes,
 //     or imaged with it) WITHOUT ever switching from openclaw;
 //  2. an llm_* change while hermes was already active (the config-change listener
 //     only refreshes HAL, not config.yaml).

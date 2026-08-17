@@ -568,7 +568,7 @@ through the mic, the other photographs them through the camera. Each is offered
 only when the device declares the capability that makes it possible —
 `Cap.Audio` for Voice, `Cap.Vision` for Face — read from
 `GET /api/system/info` (`useCapabilities`), which is os-server's parse of
-`devices/<type>/DEVICE.md` and the same contract Monitor gates its tabs on. The
+`devices/<type>/ROBOT.md` and the same contract Monitor gates its tabs on. The
 gate covers the sidebar entry, the mounted section (so a section that can't work
 never issues its hardware requests), **and** the `required` / `order` lists that
 drive completion, since an enrollment the device can't perform is not a pending

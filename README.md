@@ -6,7 +6,7 @@ Robots have been around for years but have never been autonomous — someone has
 - **Your robot acts.** It [guards the house](skills/guard/), [knows your face](skills/face-enroll/), [follows you as you move](skills/servo-tracking/), [reads the mood on your face](skills/user-emotion-detection/), [sets the light](skills/scene/) — and does the desk work too: [Gmail, GitHub](skills/connectors/), [your Mac](skills/computer-use/). Each one is a [skill](skills/) — install more from the Skill Store, or write your own.
 - **Your robot grows.** It has a built-in learning loop. It creates skills from experience, sharpens them as it uses them, keeps what it learns, searches its own past conversations, and builds a deeper picture of you with every session.
 
-Autonomous OS is a fully customizable operating system for robots. Every component is swappable — [engine](runtimes/), [model](docs/hosted.md), [voice](hal/drivers/voice/), [skills](skills/), [board](hal/board/boards.json). Your robot declares what it has in a `DEVICE.md`, and the OS mounts exactly that. When a better one ships, your robot gets it the same day — and gets better without new hardware.
+Autonomous OS is a fully customizable operating system for robots. Every component is swappable — [engine](runtimes/), [model](docs/hosted.md), [voice](hal/drivers/voice/), [skills](skills/), [board](hal/board/boards.json). Your robot declares what it has in a `ROBOT.md`, and the OS mounts exactly that. When a better one ships, your robot gets it the same day — and gets better without new hardware.
 
 ## Quick start
 
@@ -59,7 +59,7 @@ The simplest way in is a robot we have already tested it on. What each of them c
 
 Autonomous OS runs on any robot you can describe in four markdown files.
 
-- **`DEVICE.md`** — the body: the board and the hardware it has.
+- **`ROBOT.md`** — the body: the board and the hardware it has.
 - **`SOUL.md`** — the self: who it is and how it talks.
 - **`SAFETY.md`** — the bounds: how fast, how bright, how late.
 - **`SKILL.md`** — the hands: one thing it can do.
@@ -94,7 +94,7 @@ Gemini Live, OpenAI Realtime or Qwen, hosted inside HAL and running beside the m
 
 ### [Capabilities](devices/contract/capabilities.md)
 
-The 13 names a robot may declare — audio, vision, sensing, presence, motion, light, display, expression, lifelike, media, connectivity, companion, system. Ten mount [HTTP routes](hal/routes/) on :5001 (111 endpoints, live Swagger at `/api/hardware/docs`); `presence` and `lifelike` are loops with no route, `companion` lives in os-server. HAL mounts only what `DEVICE.md` declares and fails loud on a missing required driver.
+The 13 names a robot may declare — audio, vision, sensing, presence, motion, light, display, expression, lifelike, media, connectivity, companion, system. Ten mount [HTTP routes](hal/routes/) on :5001 (111 endpoints, live Swagger at `/api/hardware/docs`); `presence` and `lifelike` are loops with no route, `companion` lives in os-server. HAL mounts only what `ROBOT.md` declares and fails loud on a missing required driver.
 
 ### [Safety gate](hal/safety/)
 
@@ -116,7 +116,7 @@ The vendor kernel — Raspberry Pi OS, OrangePi Debian, or the robot's own image
 
 Four markdown files and a driver per robot. Declarations, not forks — a body is a PR.
 
-Long form: [architecture](docs/architecture/overview.md) · [HAL](docs/architecture/hal.md) · [device spec](devices/contract/DEVICE-SPEC.md) · [capabilities](devices/contract/capabilities.md) · [safety](docs/safety.md) · [developer guide](docs/developer-guide.md).
+Long form: [architecture](docs/architecture/overview.md) · [HAL](docs/architecture/hal.md) · [device spec](devices/contract/ROBOT-SPEC.md) · [capabilities](devices/contract/capabilities.md) · [safety](docs/safety.md) · [developer guide](docs/developer-guide.md).
 
 ## Contribute
 
@@ -125,7 +125,7 @@ The easiest way in is a skill: one markdown file, no Go, no hardware, and it lan
 | You want to… | You write… | Start from |
 |---|---|---|
 | Teach every robot something new | `skills/<name>/SKILL.md` (+ `skill.json` if it needs hardware) | [`skills/guard/`](skills/guard/) · [`skill-creator`](skills/skill-creator/) |
-| Run Autonomous on your robot | `devices/<id>/DEVICE.md` + `SAFETY.md` + `SOUL.md` | [`devices/reachy-mini/`](devices/reachy-mini/) — a third-party port, end to end |
+| Run Autonomous on your robot | `devices/<id>/ROBOT.md` + `SAFETY.md` + `SOUL.md` | [`devices/reachy-mini/`](devices/reachy-mini/) — a third-party port, end to end |
 | Support new hardware | a class in `hal/drivers/<subsystem>/` + one factory line | [`reachy_service.py`](hal/drivers/motors/reachy_service.py) |
 | Support a new board | one entry in `hal/board/boards.json` | [`boards.json`](hal/board/boards.json) |
 | Add a brain | an `AgentGateway` implementation in `runtimes/<name>/` | [`adding-agent-runtime.md`](docs/agentic/adding-agent-runtime.md) |

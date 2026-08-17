@@ -61,7 +61,7 @@ connection recovers.
 ## Emotion expression (fire-and-forget)
 
 If the device declares the `expression` capability
-(`DEVICE.md` → `expression: { routes: [emotion] }`), the orchestrator also
+(`ROBOT.md` → `expression: { routes: [emotion] }`), the orchestrator also
 registers an `express_emotion` tool (`orchestrator.py`, `EMOTION_TOOL`).
 Devices with no face (e.g. mic + speaker only) never get the tool, so the
 realtime model can't set an emotion — the registration is gated end-to-end:
@@ -156,7 +156,7 @@ Gating (all three required, else visual questions fall back to delegation):
 
 - **Capability:** a camera is present (`app_state.camera_capture` is set). This is
   the device's `vision` capability at runtime — `server.py` only creates
-  `camera_capture` when DEVICE.md declares `vision`. The orchestrator reads that
+  `camera_capture` when ROBOT.md declares `vision`. The orchestrator reads that
   one signal (`_camera_present()`), so it's correct for every construction path.
 - **Flag:** `HAL_GEMINI_VISION` / `realtime.gemini.vision` (default **on**).
 - **Provider:** Gemini only (the image-inject → continue-turn flow is

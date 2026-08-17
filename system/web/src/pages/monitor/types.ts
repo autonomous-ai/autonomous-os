@@ -35,7 +35,7 @@ export interface SystemInfo {
   version: string;
   deviceId: string;
   // Device's DECLARED capabilities (see Cap), from os-server's parse of
-  // DEVICE.md. The web gates tabs/controls on these. Absent until /system/info
+  // ROBOT.md. The web gates tabs/controls on these. Absent until /system/info
   // loads → treat as "all present" (fail-open).
   capabilities?: string[];
   diskTotal: number;

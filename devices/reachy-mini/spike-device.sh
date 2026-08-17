@@ -5,7 +5,7 @@
 # /opt/devices/<type> and applies that package's rootfs/ overlay onto /.
 #
 # Run this FIRST. Everything else depends on it:
-#   DEVICE.md          HAL refuses to boot without it, and the board list is
+#   ROBOT.md          HAL refuses to boot without it, and the board list is
 #                      what lets it accept a CM4 at all
 #   rootfs/etc/asound.conf   defines the shared dmix/dsnoop PCMs and the ALSA
 #                      default; without it HAL has no output device and every
@@ -58,7 +58,7 @@ STAGING="$(mktemp -d)"
 trap 'rm -rf "$STAGING"' EXIT
 ota_unpack device "$STAGING"
 
-[ -f "$STAGING/DEVICE.md" ] || die "the $DEVICE_TYPE package has no DEVICE.md"
+[ -f "$STAGING/ROBOT.md" ] || die "the $DEVICE_TYPE package has no ROBOT.md"
 
 say "2/3  Install to $DEVICES_DIR/$DEVICE_TYPE"
 mkdir -p "$DEVICES_DIR/$DEVICE_TYPE"
@@ -144,7 +144,7 @@ cat <<EOF
 ========================================
   Device profile installed
     profile : $DEVICES_DIR/$DEVICE_TYPE
-    board   : $(grep -oE 'boards:.*' "$DEVICES_DIR/$DEVICE_TYPE/DEVICE.md" 2>/dev/null || echo '?')
+    board   : $(grep -oE 'boards:.*' "$DEVICES_DIR/$DEVICE_TYPE/ROBOT.md" 2>/dev/null || echo '?')
     next    : sudo bash spike-hal.sh
 ========================================
 EOF

@@ -47,7 +47,7 @@ não nào đang chạy.
 
 | `agent_runtime` | Backend |
 |---|---|
-| `"openclaw"` / để trống | OpenClaw (mặc định; hoặc `gateway.default` từ `DEVICE.md`) |
+| `"openclaw"` / để trống | OpenClaw (mặc định; hoặc `gateway.default` từ `ROBOT.md`) |
 | `"hermes"` | Hermes (`hermes.ProvideService`) |
 | `"picoclaw"` | PicoClaw (`picoclaw.ProvideService`) |
 | giá trị khác | OpenClaw (log là `FALLBACK — unknown runtime=…`) |
@@ -102,7 +102,7 @@ tự-heal sau factory reset, giống presync của hermes):
     có** — bao case fresh device chỉ-picoclaw mà presync §0 không có bản openclaw để
     copy; không bao giờ overwrite;
   - inject khối managed `<!-- OS DO NOT REMOVE -->` vào `SOUL.md`
-    (`ensureSoulMDBlock`, soul theo device-type từ `soul_ref` của DEVICE.md; giữ nội
+    (`ensureSoulMDBlock`, soul theo device-type từ `soul_ref` của ROBOT.md; giữ nội
     dung owner dưới `---`), `AGENTS.md` (`ensureAgentsMDBlock`, quy tắc
     skills/connectors/memory/priority — khối **Connectors (MANDATORY)** định tuyến mọi
     yêu cầu Gmail/Calendar/Drive/… qua skill `connectors` (credentials nằm trên đĩa tại
@@ -114,7 +114,7 @@ tự-heal sau factory reset, giống presync của hermes):
     không dùng được — skill được giữ nếu được `skills.Supported(caps)` hỗ trợ (gate y
     như openclaw) **hoặc** là built-in của picoclaw (`picoclawBuiltinSkills`:
     `agent-browser`, `github`, `hardware`, `skill-creator`, `summarize`, `tmux`,
-    `weather`); còn lại trong `workspace/skills` thì xoá. Fail-open khi DEVICE.md không
+    `weather`); còn lại trong `workspace/skills` thì xoá. Fail-open khi ROBOT.md không
     khai cap. Không reload (skill đọc per-turn);
   - khi có block đổi, **restart gateway** (`restartPicoclawGateway` → `systemctl
     restart picoclaw`) để nạp lại file workspace (log+skip nếu không có systemctl).

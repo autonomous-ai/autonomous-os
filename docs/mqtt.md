@@ -60,7 +60,7 @@ The OS server uses MQTT to communicate with the backend server (status reporting
 
 `agent_runtime` is the **effective** agentic backend currently running
 (`openclaw` | `hermes` | `picoclaw` | `codex` | `claudecode` | `opencode`) — resolved as
-`config.agent_runtime`, else the device's `DEVICE.md` `gateway.default`, else
+`config.agent_runtime`, else the device's `ROBOT.md` `gateway.default`, else
 `openclaw`. The response also carries these optional fields when known:
 `hal_version`, `openclaw_version`, `hermes_version`, `picoclaw_version`,
 `codex_version`, `claudecode_version`, `opencode_version`, `local_ip`, `tts_provider`, `tts_voice`,

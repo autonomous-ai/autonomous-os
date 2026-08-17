@@ -29,7 +29,7 @@ func TestSupportedHooks_FailOpen(t *testing.T) {
 	}
 }
 
-// Every capability the hook map references must be a real DEVICE.md capability.
+// Every capability the hook map references must be a real ROBOT.md capability.
 func TestHookCapability_KnownCapabilities(t *testing.T) {
 	known := map[string]bool{
 		"audio": true, "vision": true, "sensing": true, "presence": true,

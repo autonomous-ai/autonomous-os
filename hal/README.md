@@ -1,7 +1,7 @@
 # HAL — the hardware runtime
 
 The Python FastAPI service that gives a body its API. It boots from the device's
-`DEVICE.md`, mounts only the routes that body declares, enforces `SAFETY.md` bounds
+`ROBOT.md`, mounts only the routes that body declares, enforces `SAFETY.md` bounds
 in the request path, and hosts the realtime voice agent. Port 5001, loopback in
 production; os-server (:5000) proxies it under `/api/hardware/*`.
 

@@ -8,7 +8,7 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// writeDeviceMD writes a minimal DEVICE.md under a temp DEVICES_DIR, mirroring
+// writeDeviceMD writes a minimal ROBOT.md under a temp DEVICES_DIR, mirroring
 // system/device's own test helper (unexported there, so duplicated here).
 func writeDeviceMD(t *testing.T, deviceType, body string) {
 	t.Helper()
@@ -18,7 +18,7 @@ func writeDeviceMD(t *testing.T, deviceType, body string) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "DEVICE.md"), []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "ROBOT.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 }
@@ -29,7 +29,7 @@ func writeDeviceMD(t *testing.T, deviceType, body string) {
 // device.SeedAgentRuntimeFromGateway. If resolveRuntime resolved the
 // empty-config.agent_runtime fallback independently of the seed function, a
 // fresh boot (or post-Factory-Reset boot) on an image with a baked
-// f_r_default_agent would construct its in-memory gateway from DEVICE.md
+// f_r_default_agent would construct its in-memory gateway from ROBOT.md
 // gateway.default while config.json simultaneously got seeded to a DIFFERENT
 // value — config and the actually-running backend would disagree until the
 // next restart. The fix routes both resolveRuntime and
@@ -65,8 +65,8 @@ gateway:
 
 	effective, raw, source := resolveRuntime(cfg)
 
-	if effective != "hermes" || raw != "hermes" || source != "DEVICE.md gateway.default" {
-		t.Fatalf("resolveRuntime = (%q, %q, %q), want (hermes, hermes, DEVICE.md gateway.default)", effective, raw, source)
+	if effective != "hermes" || raw != "hermes" || source != "ROBOT.md gateway.default" {
+		t.Fatalf("resolveRuntime = (%q, %q, %q), want (hermes, hermes, ROBOT.md gateway.default)", effective, raw, source)
 	}
 }
 

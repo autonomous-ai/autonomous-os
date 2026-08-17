@@ -536,7 +536,7 @@ wizard không bao giờ tới được nút bắn `setup_done`.
 "My Voice" và "Face" là phần cứng chứ không phải sở thích: một cái thu operator qua
 mic, một cái chụp họ qua camera. Mỗi bước chỉ hiện khi thiết bị khai báo capability
 làm nó khả thi — `Cap.Audio` cho Voice, `Cap.Vision` cho Face — đọc từ
-`GET /api/system/info` (`useCapabilities`), tức là bản parse `devices/<type>/DEVICE.md`
+`GET /api/system/info` (`useCapabilities`), tức là bản parse `devices/<type>/ROBOT.md`
 của os-server, đúng contract mà Monitor đang gate tab. Gate này phủ cả entry ở
 sidebar, cả section được mount (để section không chạy được thì cũng không bắn request
 phần cứng lúc mount), **và** hai danh sách `required` / `order` quyết định "đã xong

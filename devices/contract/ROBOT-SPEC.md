@@ -1,12 +1,12 @@
-# DEVICE.md Specification — `autonomous.device.v1`
+# ROBOT.md Specification — `autonomous.device.v1`
 
-`DEVICE.md` is the contract that describes a physical body to the Autonomous OS, the
+`ROBOT.md` is the contract that describes a physical body to the Autonomous OS, the
 agentic gateway, and skills. It is the device-side equivalent of `SKILL.md`: the YAML
 front matter is the machine contract the runtime parses at boot; the prose below is
 guidance the gateway and contributors read.
 
-One file per device at `devices/<id>/DEVICE.md`. **Adding a device is writing a
-`DEVICE.md`** (plus any missing drivers) — never a fork.
+One file per device at `devices/<id>/ROBOT.md`. **Adding a device is writing a
+`ROBOT.md`** (plus any missing drivers) — never a fork.
 
 ## How the OS consumes it
 
@@ -126,7 +126,7 @@ distinct owner, not once per capability.
 The emotion / scene / aim preset *values* and the LED ring size live in
 `hal/presets.py` as the **platform default** every device inherits. A device
 overrides only the values it wants different by shipping an optional
-`devices/<id>/presets.json` — a sibling of `DEVICE.md`, discovered by convention
+`devices/<id>/presets.json` — a sibling of `ROBOT.md`, discovered by convention
 (no front-matter field declares it). At boot HAL (`board/presets_overlay.py`)
 deep-merges it onto the base tables in place, before any route or driver reads
 them; a device with no file keeps the defaults verbatim. This is the same
@@ -151,7 +151,7 @@ them; a device with no file keeps the defaults verbatim. This is the same
 - Each entry patches the matching base entry **field-by-field** — only the named
   fields change; the rest stay at the default.
 - Naming a preset absent from the base table (a typo), a malformed file, or a
-  non-positive `led_count` **fails loud at boot**, like an invalid `DEVICE.md`.
+  non-positive `led_count` **fails loud at boot**, like an invalid `ROBOT.md`.
 - **HAL-only:** presets are LED/servo look-and-feel; the OS core (Go) never reads
   them — unlike capabilities there is no second parser to keep in sync. An override
   only takes effect for routes the device mounts: `emotion` needs the `expression`
@@ -162,7 +162,7 @@ them; a device with no file keeps the defaults verbatim. This is the same
 ## Versioning — the frozen contract
 
 `schema` is an ABI. Within a major version fields are only **added**, never removed or
-repurposed — a `v1` `DEVICE.md` must keep booting on every later `v1` runtime. Breaking
+repurposed — a `v1` `ROBOT.md` must keep booting on every later `v1` runtime. Breaking
 changes bump to `autonomous.device.v2`, and the runtime supports both across a
 deprecation window. The capability vocabulary in `devices/contract/capabilities.md` follows the
 same rule: **names are forever.**

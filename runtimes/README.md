@@ -19,7 +19,7 @@ of which runtime is active — that is the point.
 
 `system/agent/factory.go` (`ProvideGateway`) picks the backend at boot:
 `config.agent_runtime` → the device's declared `gateway.default` in
-`devices/<type>/DEVICE.md` → OpenClaw. Switching at runtime is a first-class flow — web
+`devices/<type>/ROBOT.md` → OpenClaw. Switching at runtime is a first-class flow — web
 Settings, MQTT `agent_runtime.set`, or `POST /api/device/agent-runtime` — and `system/agent/`
 also owns everything that must migrate on a switch: persona (`migrate_persona`, canonical
 `PersonaBundle` with one adapter per runtime), LLM config, channels, and MCP connectors, each

@@ -1,4 +1,4 @@
-"""Camera driver factory — resolve a DEVICE.md `driver:` name to a device class.
+"""Camera driver factory — resolve a ROBOT.md `driver:` name to a device class.
 
 Mirrors hal/drivers/motors/factory.py. The camera is the second capability where
 one contract has genuinely different hardware paths behind it: Lamp's UVC webcam
@@ -37,7 +37,7 @@ def resolve_camera_class(driver: Optional[str], required: bool) -> Optional[type
     """Resolve a camera driver name to its capture device class.
 
     Args:
-        driver: the `driver:` value from DEVICE.md vision capability, or None.
+        driver: the `driver:` value from ROBOT.md vision capability, or None.
         required: whether the vision capability is declared required.
 
     Returns:
@@ -54,7 +54,7 @@ def resolve_camera_class(driver: Optional[str], required: bool) -> Optional[type
         registered = sorted(CAMERA_DRIVERS.keys())
         if required:
             raise RuntimeError(
-                f"DEVICE.md declares camera driver '{driver}' but no capture "
+                f"ROBOT.md declares camera driver '{driver}' but no capture "
                 f"device is registered for it (registered: {registered}). "
                 f"Implement it and register in hal/drivers/camera/factory.py, "
                 f"or fix the driver name."

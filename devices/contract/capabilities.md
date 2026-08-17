@@ -1,9 +1,9 @@
 # Capability Vocabulary — `autonomous.capabilities.v1`
 
 The frozen namespace of device capabilities — mostly physical hardware groups, plus a
-few platform features a body opts into. A `DEVICE.md` declares which groups a body has;
+few platform features a body opts into. A `ROBOT.md` declares which groups a body has;
 a `SKILL.md` declares which it needs. Names here are an ABI — once published, a name is
-never removed or repurposed (see `DEVICE-SPEC.md` § Versioning).
+never removed or repurposed (see `ROBOT-SPEC.md` § Versioning).
 
 A capability group maps to one or more routes — HAL hardware routes under `hal/`, or
 (for platform features like `companion`) os-server routes. The route is the typed HTTP

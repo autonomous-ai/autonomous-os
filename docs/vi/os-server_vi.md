@@ -350,12 +350,12 @@ HAL (Python): FastAPI standard JSON responses.
 
 1. OS Server khởi động Gin trên :5000
 2. Đọc `config/config.json`
-   - Seed `tts_provider` + `tts_voice` từ block `voice:` trong DEVICE.md khi user chưa chọn (ghi một lần; lựa chọn đã lưu của user luôn thắng; provider vắng/không hợp lệ → `openai`). Khi provider seed là `elevenlabs` mà không khai báo voice, chọn default theo ngôn ngữ (`vi`→Ngan, `zh`→Amy, còn lại Rachel)
+   - Seed `tts_provider` + `tts_voice` từ block `voice:` trong ROBOT.md khi user chưa chọn (ghi một lần; lựa chọn đã lưu của user luôn thắng; provider vắng/không hợp lệ → `openai`). Khi provider seed là `elevenlabs` mà không khai báo voice, chọn default theo ngôn ngữ (`vi`→Ngan, `zh`→Amy, còn lại Rachel)
 3. Nếu `SetUpCompleted`:
    - Kết nối OpenClaw WebSocket
    - Kết nối MQTT
    - Start ambient behaviors
-   - Đặt volume loa theo `startup_volume` của thiết bị (front matter DEVICE.md, mặc định 100)
+   - Đặt volume loa theo `startup_volume` của thiết bị (front matter ROBOT.md, mặc định 100)
 4. Nếu chưa setup: chờ `POST /api/device/setup`
 
 ## Logging

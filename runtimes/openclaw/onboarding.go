@@ -64,7 +64,7 @@ Follow the instructions in whichever file you read.
 ---`
 )
 
-// supportedSkills resolves this device's capabilities from DEVICE.md and filters
+// supportedSkills resolves this device's capabilities from ROBOT.md and filters
 // the platform skill catalog (skills.Catalog) to what this device can run. The
 // catalog and skill→capability map are runtime-agnostic platform metadata in
 // system/skills — OpenClaw is only one consumer (Hermes or any other runtime
@@ -123,9 +123,9 @@ func (s *OpenclawService) EnsureOnboarding() error {
 	if err := os.MkdirAll(skillsDir, 0755); err != nil {
 		return fmt.Errorf("create skills dir: %w", err)
 	}
-	// Capability gate: this device runs only the skills its DEVICE.md capabilities
+	// Capability gate: this device runs only the skills its ROBOT.md capabilities
 	// support (plus platform skills). Create dirs for supported skills; remove any
-	// unsupported skill dir so a re-provisioned device (or one whose DEVICE.md
+	// unsupported skill dir so a re-provisioned device (or one whose ROBOT.md
 	// changed) self-heals and a provision-time over-seed is cleaned up. Fail-open
 	// for a device that declares no capabilities → full catalog (see supportedSkills).
 	deviceCaps := device.Capabilities(s.config.DeviceTypeOrDefault())
@@ -415,7 +415,7 @@ func devicesDir() string {
 }
 
 // deviceSoulCore returns the soul text to inject for this device, resolved from
-// the `soul_ref` declared in devices/<type>/DEVICE.md (config.device_type):
+// the `soul_ref` declared in devices/<type>/ROBOT.md (config.device_type):
 //   - absent  → hasSoul=false: inject nothing, leaving the agentic runtime
 //     (OpenClaw) to use its own default soul. We never override a soulless body.
 //   - http(s) URL → download the soul artifact.
@@ -480,7 +480,7 @@ func isDefaultSoulHeading(trimmed string) bool {
 
 // ensureSoulMDBlock wraps this device's soul as a marker-delimited core block
 // at the top of workspace/SOUL.md. The soul is resolved per device_type from
-// the DEVICE.md `soul_ref` (path or URL) — see deviceSoulCore. Anything the
+// the ROBOT.md `soul_ref` (path or URL) — see deviceSoulCore. Anything the
 // owner writes below the closing `---` is preserved on subsequent onboarding
 // runs, mirroring the AGENTS.md / HEARTBEAT.md pattern. Returns true if the file
 // was modified. A device that declares no soul injects no block.

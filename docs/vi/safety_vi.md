@@ -21,11 +21,11 @@ không phải gateway, là điểm duy nhất clamp/chặn/dừng.
 
 ## Kiến trúc
 
-Ba tầng, soi gương tầng thiết bị (`DEVICE.md` → capability → route → driver):
+Ba tầng, soi gương tầng thiết bị (`ROBOT.md` → capability → route → driver):
 
 ```
 SAFETY.md front matter        các giới hạn đã khai (contract máy đọc; theo capability group)
-        │  resolve qua DEVICE.md safety_ref (path hoặc http), parse lúc boot
+        │  resolve qua ROBOT.md safety_ref (path hoặc http), parse lúc boot
         ▼
 hal/safety/policy.py        SafetyPolicy thuần + gate functions (không IO, unit-testable)
         │  clamp_brightness(requested) -> min(requested, ceiling)   [slice 1]
@@ -58,7 +58,7 @@ Theo mức tới hạn của từng capability (quy tắc đầy đủ ở `devi
 |------------|------------------------------|-------|
 | light, audio, motion | pass-through (chỉ log) | enforcement theo sự hiện diện và đồng nhất: bound có khai thì thực thi, vắng thì thôi — engine không bao giờ bịa ra giới hạn không ai khai |
 
-`SAFETY.md` là tùy chọn. Tag `schema` được validate như của `DEVICE.md` — `schema`
+`SAFETY.md` là tùy chọn. Tag `schema` được validate như của `ROBOT.md` — `schema`
 thiếu hoặc major lạ sẽ abort boot thay vì thực thi một ABI không đọc được.
 
 Không có kill-switch riêng: vì enforcement theo sự hiện diện, **xóa một section (hoặc cả

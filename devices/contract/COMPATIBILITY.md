@@ -11,7 +11,7 @@ Keywords MUST / SHOULD / MAY per RFC 2119.
 
 A compliant device:
 
-1. ships a [`DEVICE.md`](DEVICE-SPEC.md) with `schema: autonomous.device.v1`, a stable `id`,
+1. ships a [`ROBOT.md`](ROBOT-SPEC.md) with `schema: autonomous.device.v1`, a stable `id`,
    a `type`, and its `boards`;
 2. declares the **`system`** capability (health, network, setup, OTA hooks);
 3. declares **at least one primary sense or output** — `audio` or `vision`. The one
@@ -44,7 +44,7 @@ A compliant device:
 
 14. route a safety-critical stop, motion limit, or thermal cutoff through the LLM/runtime;
 15. ship a `motion` capability without a deterministic e-stop;
-16. mount a capability its `DEVICE.md` does not declare.
+16. mount a capability its `ROBOT.md` does not declare.
 
 ## Versioning
 

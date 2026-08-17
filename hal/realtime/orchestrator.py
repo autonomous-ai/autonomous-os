@@ -158,7 +158,7 @@ LOOK_TOOL: dict[str, Any] = {
 
 def _camera_present() -> bool:
     """True when a camera is wired up — the device's `vision` capability at
-    runtime. app_state.camera_capture is only set by server.py when DEVICE.md
+    runtime. app_state.camera_capture is only set by server.py when ROBOT.md
     declares `vision`, so this is the single source of truth for "can look".
     Lazy import keeps app_state out of this module's import graph."""
     try:
@@ -210,7 +210,7 @@ class RealtimeOrchestrator:
         enable_expression: bool = False,
     ) -> None:
         # express_emotion is registered ONLY when the device declares the
-        # `expression` capability (DEVICE.md → expression: { routes: [emotion] }).
+        # `expression` capability (ROBOT.md → expression: { routes: [emotion] }).
         # A device with no face (e.g. mic+speaker only) never sees the tool, so
         # the model can't call it and nothing fires.
         self._expression_enabled: bool = enable_expression
@@ -224,7 +224,7 @@ class RealtimeOrchestrator:
         # questions fall back to delegate_to_main.
         #
         # Camera presence IS the device's `vision` capability at runtime: server.py
-        # only creates app_state.camera_capture when DEVICE.md declares `vision`
+        # only creates app_state.camera_capture when ROBOT.md declares `vision`
         # (the `camera` route mounts). Reusing that one signal — the same one
         # /health and _capture_frame read — means no extra capability plumbing and
         # it's correct for EVERY construction path (auto-start and /voice/start).

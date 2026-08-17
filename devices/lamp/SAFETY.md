@@ -29,7 +29,7 @@ thermal:
 
 # SAFETY.md — Autonomous Lamp
 
-The bounds contract. `DEVICE.md` declares what the body *can* do; `SAFETY.md` declares
+The bounds contract. `ROBOT.md` declares what the body *can* do; `SAFETY.md` declares
 what it *must never* do, and which actions are governed by deterministic policy rather
 than the language model.
 

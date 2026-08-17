@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 // Device's DECLARED capabilities — the broad groups (audio, vision, motion, …)
-// that os-server parses from devices/<type>/DEVICE.md and serves on
+// that os-server parses from devices/<type>/ROBOT.md and serves on
 // /api/system/info. Go owns the contract; the web asks the OS rather than
 // reaching through to the HAL runtime.
 //

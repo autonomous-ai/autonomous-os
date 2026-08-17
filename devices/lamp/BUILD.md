@@ -4,7 +4,7 @@ The builder's path. A bought Lamp ships with Autonomous OS installed and skips a
 
 ## Parts
 
-- **Compute:** Raspberry Pi 5 or OrangePi 4 Pro (our board). Pi 4 is declared in `DEVICE.md` but untested.
+- **Compute:** Raspberry Pi 5 or OrangePi 4 Pro (our board). Pi 4 is declared in `ROBOT.md` but untested.
 - **Motion:** five Feetech STS3215 bus servos on a Waveshare USB bus servo adapter.
 - **Senses:** any UVC webcam, a USB mic, a speaker on a USB DAC, a 64-LED WS2812 ring on SPI. That is the minimum for a lamp that sees, talks and moves; everything else in the [BOM](hardware/components.md) is optional or decorative.
 - **Power:** a single 12 V / 5 A adaptor into the chassis, one buck to 5 V for the board and ring — see [`hardware/power.md`](hardware/power.md). The servo bus rail is the one line the hardware docs still disagree on (`wiring.md` says external 5 V, the README steps assume the 12 V adaptor); check the STS3215 datasheet against your adapter before you power the bus, and open an issue with what you measured.
@@ -48,7 +48,7 @@ Homing lives in the servos' own EEPROM, so it survives reflashes. Full notes: [`
 
 ## 4. Check the body before you talk to it
 
-Run the runtime CTS: HAL and the daemon listen on the board's loopback only, so tunnel first — `ssh -N -L 5001:127.0.0.1:5001 -L 5000:127.0.0.1:5000 <user>@lamp-xxxx.local`, then `make cts-runtime TARGET=127.0.0.1` from a clone. It proves the live body matches its own `DEVICE.md` (every declared route mounted and answering, nothing undeclared, `/servo/track/stop` replying) and names the first thing that fails.
+Run the runtime CTS: HAL and the daemon listen on the board's loopback only, so tunnel first — `ssh -N -L 5001:127.0.0.1:5001 -L 5000:127.0.0.1:5000 <user>@lamp-xxxx.local`, then `make cts-runtime TARGET=127.0.0.1` from a clone. It proves the live body matches its own `ROBOT.md` (every declared route mounted and answering, nothing undeclared, `/servo/track/stop` replying) and names the first thing that fails.
 
 Silent or deaf? A self-built board has no `/etc/asound.conf`, so HAL takes the first mic and speaker it finds. If it guessed wrong: `arecord -l` / `aplay -l`, then in `/opt/hal/.env` set `HAL_AUDIO_INPUT_ALSA=plughw:<card>,0` and `HAL_AUDIO_OUTPUT_ALSA=plughw:<card>,0` (servo adapter not on `/dev/ttyACM0`? `HAL_SERVO_PORT=/dev/ttyUSB0`), then `sudo systemctl restart hal`. Logs: `journalctl -u hal -f`; the body's API: `http://lamp-xxxx.local/api/hardware/docs`.
 

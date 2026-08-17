@@ -69,7 +69,7 @@ class BoardProfile:
 # --- per-board wiring: loaded from boards.json (data, not code) -------------
 # A new board is a JSON entry; this module never hardcodes board values. The
 # data file ships inside the HAL package, so a missing/invalid one is a
-# packaging fault — fail loudly rather than guess wiring (see DEVICE-SPEC rule #3).
+# packaging fault — fail loudly rather than guess wiring (see ROBOT-SPEC rule #3).
 
 
 def _load_boards(
@@ -153,11 +153,11 @@ def detect_board_id(model: Optional[str] = None) -> str:
 
 def assert_board_supported(declared: List[str], model: Optional[str] = None) -> str:
     """Fail loud unless the physical board is one this device declares in
-    DEVICE.md `boards`. Returns the resolved board id.
+    ROBOT.md `boards`. Returns the resolved board id.
 
     Wrong hardware means wrong pin maps; actuating servos/LEDs against an
     unverified board is a hardware fault, not graceful degradation
-    (DEVICE-SPEC rule #3). Two ways to abort:
+    (ROBOT-SPEC rule #3). Two ways to abort:
       - the model matches no boards.json entry → unidentifiable hardware, no
         wiring profile can be trusted;
       - it matches a real board the device does not declare → unsupported.
@@ -182,7 +182,7 @@ def assert_board_supported(declared: List[str], model: Optional[str] = None) -> 
         )
     if declared and matched not in declared:
         raise RuntimeError(
-            f"Board '{matched}' is not supported by this device (DEVICE.md boards: "
+            f"Board '{matched}' is not supported by this device (ROBOT.md boards: "
             f"{declared}). Refusing to boot — pin maps would be wrong."
         )
     return matched

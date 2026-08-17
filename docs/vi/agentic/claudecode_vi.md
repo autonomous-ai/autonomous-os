@@ -36,7 +36,7 @@ Code: `runtimes/claudecode/`.
 
 ## 1. Chọn + cài đặt
 
-`config.agent_runtime: "claudecode"` (hoặc `gateway.default` trong DEVICE.md)
+`config.agent_runtime: "claudecode"` (hoặc `gateway.default` trong ROBOT.md)
 resolve backend trong `system/agent/factory.go`. Switch vào/ra đi qua flow
 `switch-runtime` generic — không có gì đặc thù claudecode trong switcher.
 

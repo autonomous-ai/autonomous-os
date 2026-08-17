@@ -9,7 +9,7 @@
 # build step, nothing copied from your laptop.
 #
 # What it does: fetches the released reachy-mini device package from the OTA
-# feed — which ships the spike scripts along with DEVICE.md and the rootfs
+# feed — which ships the spike scripts along with ROBOT.md and the rootfs
 # overlay — and hands over to spike.sh, which installs HAL, os-server, the web
 # UI, the agent gateway and the OTA worker, each behind a systemd unit.
 #

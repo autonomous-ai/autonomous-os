@@ -238,7 +238,7 @@ curl -s -X POST http://localhost:8000/api/media/acquire   # give it back
       `rpicam-jpeg`)
 - [x] Daemon survives release/acquire: **yes** — stays `active`, HTTP 200, motion
       control unaffected
-- [x] Wired into HAL startup/shutdown: **yes** — `DEVICE.md` declares
+- [x] Wired into HAL startup/shutdown: **yes** — `ROBOT.md` declares
       `owner: pollen_daemon` on `audio` and `vision`, and `hal/server.py` releases
       in Phase 0 of lifespan startup and acquires on shutdown
       (`hal/drivers/media_owner/pollen.py`). No spike script calls `/api/media/*`;
@@ -292,7 +292,7 @@ The camera was never a config value, so no `.env` field could fix it: `/dev/vide
 is the raw Bayer unicam node, and the wheel-built `opencv-python` reports
 `GStreamer: NO`, so neither `cv2.VideoCapture(0)` nor a `libcamerasrc` pipeline
 can produce frames (1.5). Resolved with a second HAL camera backend instead:
-`DEVICE.md` declares `driver: rpicam`, which `hal/drivers/camera/factory.py`
+`ROBOT.md` declares `driver: rpicam`, which `hal/drivers/camera/factory.py`
 maps to `RpicamVideoCaptureDevice`
 (`hal/drivers/camera/rpicam_capture_device.py`) — it reads MJPEG from an
 `rpicam-vid` child process and decodes the newest frame with `cv2.imdecode`.
@@ -455,9 +455,9 @@ sudo bash ~/reachy-mini/spike-bootstrap.sh  # OTA worker — keeps the robot cur
 ```
 
 Start with **device then hal**: that is the smallest pair that validates the body.
-`spike-device.sh` is what puts `DEVICE.md`, `/etc/asound.conf` and `/opt/hal/.env`
+`spike-device.sh` is what puts `ROBOT.md`, `/etc/asound.conf` and `/opt/hal/.env`
 on the robot, and `spike-hal.sh` refuses to start without them. Nothing here
-calls `POST /api/media/release` any more — `DEVICE.md` declares
+calls `POST /api/media/release` any more — `ROBOT.md` declares
 `owner: pollen_daemon` on the audio and vision capabilities, so HAL borrows the
 camera and both ALSA PCMs itself at startup and hands them back on shutdown
 (see 1.9).
@@ -488,7 +488,7 @@ but production `setup.sh` must too.
 The board gate also had to be taught this hardware: the unit reports
 `Raspberry Pi Compute Module 4 Rev 1.1`, which matched no `boards.json` entry, so
 HAL refused to boot. Fixed by adding `raspberry_pi_cm4` and declaring it in
-`DEVICE.md`.
+`ROBOT.md`.
 
 ### 3.2 Smoke Test
 

@@ -22,11 +22,11 @@ runtime, not the gateway, is the single point that clamps, blocks, or stops.
 
 ## Architecture
 
-Three layers, mirroring the device layer (`DEVICE.md` → capability → route → driver):
+Three layers, mirroring the device layer (`ROBOT.md` → capability → route → driver):
 
 ```
 SAFETY.md front matter        the declared bounds (machine contract; per capability group)
-        │  resolved via DEVICE.md safety_ref (path or http), parsed at boot
+        │  resolved via ROBOT.md safety_ref (path or http), parsed at boot
         ▼
 hal/safety/policy.py        pure SafetyPolicy + gate functions (no IO, unit-testable)
         │  clamp_brightness(requested) -> min(requested, ceiling)   [slice 1]
@@ -60,7 +60,7 @@ Per-capability criticality (full rule in `devices/contract/SAFETY-SPEC.md`):
 |------------|---------------------------|-----------|
 | light, audio, motion | pass-through (log only) | enforcement is presence-driven and uniform: a declared bound is enforced, an absent one is not — the engine never invents a limit nobody wrote |
 
-`SAFETY.md` is optional. The schema tag is validated like `DEVICE.md`'s — a missing or
+`SAFETY.md` is optional. The schema tag is validated like `ROBOT.md`'s — a missing or
 unknown-major `schema` aborts boot rather than enforce an ABI it cannot read.
 
 There is no separate kill switch: because enforcement is presence-driven, removing a

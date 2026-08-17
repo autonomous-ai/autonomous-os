@@ -22,8 +22,8 @@ if [[ ! -d "$DEVICE_DIR" ]]; then
   echo "Error: device profile not found at $DEVICE_DIR" >&2
   exit 1
 fi
-if [[ ! -f "$DEVICE_DIR/DEVICE.md" ]]; then
-  echo "Error: $DEVICE_DIR has no DEVICE.md — not a valid device profile" >&2
+if [[ ! -f "$DEVICE_DIR/ROBOT.md" ]]; then
+  echo "Error: $DEVICE_DIR has no ROBOT.md — not a valid device profile" >&2
   exit 1
 fi
 VERSION_FILE="${DEVICE_DIR}/VERSION"
@@ -46,7 +46,7 @@ ZIP_NAME="${DEVICE_TYPE}-${new_version}.zip"
 ZIP_PATH="${ROOT_DIR}/${ZIP_NAME}"
 GCS_PATH="${GCS_PATH:-${BUCKET_PREFIX}/ota/devices/${DEVICE_TYPE}/${new_version}.zip}"
 
-# Ship the runtime contract (DEVICE.md / SOUL.md / SAFETY.md / VERSION) plus the
+# Ship the runtime contract (ROBOT.md / SOUL.md / SAFETY.md / VERSION) plus the
 # device rootfs overlay (rootfs/ — system config like etc/asound.conf installed
 # onto / at build/OTA). Exclude docs/, hardware/ (CAD!), images/ — never read.
 echo "========== Zipping devices/${DEVICE_TYPE} (contract + rootfs) to ${ZIP_NAME} =========="

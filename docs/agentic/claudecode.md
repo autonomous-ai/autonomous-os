@@ -38,7 +38,7 @@ Code: `runtimes/claudecode/`.
 
 ## 1. Selection + install
 
-`config.agent_runtime: "claudecode"` (or DEVICE.md `gateway.default`) resolves the
+`config.agent_runtime: "claudecode"` (or ROBOT.md `gateway.default`) resolves the
 backend in `system/agent/factory.go`. Switching in/out goes through the generic
 `switch-runtime` flow — nothing claudecode-specific in the switcher.
 

@@ -25,7 +25,7 @@ Override file shape (every section optional)::
 Each entry patches the matching base entry field-by-field: only the fields named
 in the override change; everything else stays at the base value. An override that
 names a preset absent from the base table is a typo (or a preset that does not
-exist) → fail loud, mirroring DEVICE.md / SAFETY.md strictness. Field names within
+exist) → fail loud, mirroring ROBOT.md / SAFETY.md strictness. Field names within
 an entry are intentionally permissive (the base entries themselves vary, e.g. some
 emotions carry a "camera" key and some do not), so a device may add a field.
 """
@@ -80,7 +80,7 @@ def apply_device_presets(device_type: str, devices_dir: str) -> int:
     in place and return the device's LED count (``DEFAULT_LED_COUNT`` if unset).
 
     Missing file → base tables unchanged, default LED count. A malformed file or an
-    override of a non-existent preset → fail loud (a deploy fault, like DEVICE.md).
+    override of a non-existent preset → fail loud (a deploy fault, like ROBOT.md).
     """
     path = os.path.join(devices_dir, device_type, "presets.json")
     if not os.path.exists(path):

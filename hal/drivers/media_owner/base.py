@@ -6,7 +6,7 @@ and it must not kill the vendor process either, because on those bodies the same
 process also owns motion. What it can do is ask for the hardware, use it, and
 give it back.
 
-A device declares that situation in DEVICE.md rather than HAL guessing it:
+A device declares that situation in ROBOT.md rather than HAL guessing it:
 
     audio:  { routes: [audio, speaker, voice], required: true, owner: pollen_daemon }
 

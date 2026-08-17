@@ -482,7 +482,7 @@ export default function Monitor() {
   }, []);
 
   // Device's DECLARED capabilities, served by os-server on /api/system/info
-  // (sys.capabilities) — Go owns the contract and parses DEVICE.md, so the web
+  // (sys.capabilities) — Go owns the contract and parses ROBOT.md, so the web
   // asks the OS rather than reaching through to the HAL runtime. Used to gate
   // tabs + controls. null (not yet loaded) → show everything (fail-open).
   const caps = sys?.capabilities ? new Set(sys.capabilities) : null;

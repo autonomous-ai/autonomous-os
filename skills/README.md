@@ -83,7 +83,7 @@ sidecar next to it —
 { "name": "guard", "capabilities": ["presence"] }
 ```
 
-`capabilities` is ANY-OF: the skill installs on any body whose `DEVICE.md`
+`capabilities` is ANY-OF: the skill installs on any body whose `ROBOT.md`
 declares at least one of them (the 13 names are in
 `devices/contract/capabilities.md`). No sidecar means a platform skill with no
 hardware dependency — it installs everywhere.
@@ -101,7 +101,7 @@ every current device. It does not describe optional integrations; for example,
 ## Per-body notes
 
 Why some cells in the README's capability table are blank or ○ (declared in
-`DEVICE.md`, driver not landed):
+`ROBOT.md`, driver not landed):
 
 - **Intern** — no camera, so Sense is sound-only, Mood is voice-only, and
   Look-after-you is breaks and habits, not posture. Glow is colors and effects,

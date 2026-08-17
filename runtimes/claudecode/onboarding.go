@@ -382,7 +382,7 @@ func dropWorkspaceClaudeMDBlock() bool {
 // ensureSoulMDBlock wraps this device's soul as a marker-delimited core block at
 // the top of workspace/SOUL.md; owner content below the closing `---` is
 // preserved. Mirrors picoclaw/openclaw's ensureSoulMDBlock. The soul is resolved
-// per device_type from DEVICE.md `soul_ref` (path or URL). A device that
+// per device_type from ROBOT.md `soul_ref` (path or URL). A device that
 // declares no soul injects nothing.
 func (s *ClaudeCodeService) ensureSoulMDBlock() (bool, error) {
 	soulFile := filepath.Join(claudecodeWorkspaceDir, "SOUL.md")
@@ -448,7 +448,7 @@ func (s *ClaudeCodeService) ensureSoulMDBlock() (bool, error) {
 }
 
 // deviceSoulCore resolves the soul text for this device from the `soul_ref` in
-// devices/<type>/DEVICE.md. Mirrors openclaw/picoclaw's deviceSoulCore.
+// devices/<type>/ROBOT.md. Mirrors openclaw/picoclaw's deviceSoulCore.
 func (s *ClaudeCodeService) deviceSoulCore() (content []byte, hasSoul bool, err error) {
 	devType := s.config.DeviceTypeOrDefault()
 	ref := device.SoulRef(devType)
@@ -502,7 +502,7 @@ var claudecodeBuiltinSkills = map[string]bool{}
 // pruneUnsupportedSkills removes skill dirs the device can't use from
 // claudecodeSkillsDir. A skill survives when it is EITHER (a) supported by
 // this device's capabilities (skills.Supported — the same gate openclaw uses) OR
-// (b) a claudecode built-in. Fail-open: when DEVICE.md declares no capabilities,
+// (b) a claudecode built-in. Fail-open: when ROBOT.md declares no capabilities,
 // skills.Supported returns the full catalog, so nothing is pruned.
 func (s *ClaudeCodeService) pruneUnsupportedSkills() {
 	skillsDir := claudecodeSkillsDir
