@@ -1,4 +1,4 @@
-"""Device profile layer — read a device's DEVICE.md and turn its declared
+"""Device profile layer — read a device's ROBOT.md and turn its declared
 capabilities into a mount plan for the HAL runtime.
 
 This replaces the implicit `try/except ImportError` route-skip in server.py,
@@ -10,9 +10,9 @@ them explicit:
   - declared + optional + missing   -> skip (graceful degradation)
   - undeclared                      -> skip (a different device, by design)
 
-Dependency-free: a focused parser for the DEVICE.md front-matter capability
+Dependency-free: a focused parser for the ROBOT.md front-matter capability
 block (no pyyaml in the runtime). Pure functions so the logic is unit-testable
-off-hardware. See devices/contract/DEVICE-SPEC.md and devices/contract/capabilities.md.
+off-hardware. See devices/contract/ROBOT-SPEC.md and devices/contract/capabilities.md.
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger("hal.device")
 
-# The DEVICE.md `schema:` is an ABI tag (DEVICE-SPEC.md §Versioning): within a
+# The ROBOT.md `schema:` is an ABI tag (ROBOT-SPEC.md §Versioning): within a
 # major version fields are only added, so a v1 file must keep booting on every
 # later v1 runtime. The runtime declares which majors it understands; a file
 # whose major is unknown can't be parsed safely, so boot fails loud.
@@ -123,26 +123,26 @@ def validate_schema(front_matter: str) -> str:
     m = _RE_SCHEMA.search(front_matter)
     if not m:
         raise ValueError(
-            f"DEVICE.md is missing the required 'schema:' field "
+            f"ROBOT.md is missing the required 'schema:' field "
             f"(expected '{SCHEMA_NAMESPACE}.v<major>')"
         )
     schema = m.group(1)
     v = _RE_SCHEMA_VERSION.match(schema)
     if not v:
         raise ValueError(
-            f"DEVICE.md schema '{schema}' is not a valid '{SCHEMA_NAMESPACE}.v<major>' tag"
+            f"ROBOT.md schema '{schema}' is not a valid '{SCHEMA_NAMESPACE}.v<major>' tag"
         )
     major = int(v.group(1))
     if major not in SUPPORTED_SCHEMA_MAJORS:
         raise ValueError(
-            f"DEVICE.md schema '{schema}' has major v{major}; this runtime supports "
+            f"ROBOT.md schema '{schema}' has major v{major}; this runtime supports "
             f"majors {sorted(SUPPORTED_SCHEMA_MAJORS)}"
         )
     return schema
 
 
 def parse_capabilities(front_matter: str) -> Dict[str, Capability]:
-    """Parse the `capabilities:` block of a DEVICE.md front matter.
+    """Parse the `capabilities:` block of a ROBOT.md front matter.
 
     Supports the flow-style entries this repo uses, e.g.:
         capabilities:
@@ -185,7 +185,7 @@ class DeviceProfile:
     # NOTE two distinct concepts, deliberately not merged:
     #   device_type — the class/folder id this profile mounts from (lamp, intern,
     #                 unitree-go2w); == `id`; what Go's config.DeviceType selects.
-    #   type        — the DEVICE.md `type:` form-factor category (desk_robot,
+    #   type        — the ROBOT.md `type:` form-factor category (desk_robot,
     #                 desk_agent, mobile_robot); a coarse grouping, display-only.
     device_type: str
     id: str
@@ -212,11 +212,11 @@ def parse_device(device_type: str, text: str) -> DeviceProfile:
     schema = validate_schema(front_matter)  # fail loud on missing/unknown ABI
     dev_id = _parse_scalar(front_matter, "id")
     # `id` is the device's stable identity; it must equal the folder it is
-    # mounted from (device_type). A mismatch means a DEVICE.md copied into the
+    # mounted from (device_type). A mismatch means a ROBOT.md copied into the
     # wrong folder or a typo'd id — a deploy fault, so fail loud (DEVICE-SPEC #3).
     if dev_id != device_type:
         raise ValueError(
-            f"DEVICE.md id '{dev_id}' does not match its folder '{device_type}' — "
+            f"ROBOT.md id '{dev_id}' does not match its folder '{device_type}' — "
             f"id must equal the device folder name"
         )
     capabilities = parse_capabilities(front_matter)
@@ -231,7 +231,7 @@ def parse_device(device_type: str, text: str) -> DeviceProfile:
     presence = capabilities.get("presence")
     if presence and presence.required and "vision" not in capabilities and "audio" not in capabilities:
         raise ValueError(
-            f"DEVICE.md for '{device_type}' declares 'presence: required: true' but no "
+            f"ROBOT.md for '{device_type}' declares 'presence: required: true' but no "
             f"people sensor — perceiving a user's identity/emotion needs 'vision' (face) "
             f"or 'audio' (voice). Add one, or drop presence to required: false."
         )
@@ -287,10 +287,29 @@ def _read_ref(device_dir: str, ref: str) -> str:
         return f.read()
 
 
+# The declaration filename. ROBOT.md is canonical; DEVICE.md is the name it
+# shipped under and is still read, because robots in the field have it on disk
+# and OTA device profiles carry it. Write ROBOT.md, accept either.
+PROFILE_NAMES = ("ROBOT.md", "DEVICE.md")
+
+
+def profile_path(device_dir: str) -> str:
+    """The declaration file inside a device folder — ROBOT.md, else DEVICE.md.
+
+    Returns the ROBOT.md path when neither exists so the caller's open() raises
+    with the name we want people to use.
+    """
+    for name in PROFILE_NAMES:
+        candidate = os.path.join(device_dir, name)
+        if os.path.isfile(candidate):
+            return candidate
+    return os.path.join(device_dir, PROFILE_NAMES[0])
+
+
 def load_device(device_type: str, devices_dir: str) -> DeviceProfile:
-    """Load devices/<device_type>/DEVICE.md from a devices directory."""
+    """Load devices/<device_type>/ROBOT.md (or ROBOT.md) from a devices directory."""
     device_dir = os.path.join(devices_dir, device_type)
-    with open(os.path.join(device_dir, "DEVICE.md"), "r") as f:
+    with open(profile_path(device_dir), "r") as f:
         profile = parse_device(device_type, f.read())
 
     # Resolve the safety document from the top-level `safety_ref` (path or URL),
@@ -332,7 +351,7 @@ class MountPlan:
 def plan_mounts(declared: Dict[str, bool], available: Dict[str, bool]) -> MountPlan:
     """Pure mount planner — the heart of declaration-driven mounting.
 
-    declared:  route -> required   (from DEVICE.md)
+    declared:  route -> required   (from ROBOT.md)
     available: route -> driver importable/initialized
     """
     mounted: List[str] = []

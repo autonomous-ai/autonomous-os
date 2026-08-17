@@ -17,7 +17,7 @@ The full list behind the README's [Not built yet](../README.md#contribute). Each
 - A body with a screen, so the `display` skill has a home.
 - A Pi 4B image test (`make -C scripts/imager TARGET=rpi RPI_MODEL=4 build` is code-complete, untested on hardware).
 - x86 boards: a DMI (`/sys/class/dmi/id/*`) matcher beside the device-tree one in `hal/board/board.py`, so a NUC-carrying robot can be a `boards.json` entry.
-- A policy behind the marker — `PolicyService` in `hal/`: `[HW:/policy/run:{"policy":"lerobot/smolvla_base","task":"pick up the mug"}]` starts a LeRobot policy (local `lerobot` inference or its async server) on an arm capability, the safety gate clamps its joint targets, `POST /servo/stop` halts it. First body: an SO-101 declared in `devices/so101/DEVICE.md`. Open the interface as an issue before code.
+- A policy behind the marker — `PolicyService` in `hal/`: `[HW:/policy/run:{"policy":"lerobot/smolvla_base","task":"pick up the mug"}]` starts a LeRobot policy (local `lerobot` inference or its async server) on an arm capability, the safety gate clamps its joint targets, `POST /servo/stop` halts it. First body: an SO-101 declared in `devices/so101/ROBOT.md`. Open the interface as an issue before code.
 - A `ReachyMiniApp` wrapper published as a Space tagged `reachy_mini`, so Autonomous OS installs from Pollen's own dashboard app list and stops from there too.
 - Lamp's 23 teleop moves exported by `hal/record.py` as a Hub dataset in Pollen's emotion-library format (`autonomous-os/lamp-emotions-library`), so a move recorded on either body plays on both.
 - Reachy Mini Lite: the daemon runs on your laptop, so the mock body (`devices/sim/` on `reachy-mini-daemon --sim`) is also the Lite path.

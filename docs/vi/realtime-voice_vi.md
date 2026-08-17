@@ -60,7 +60,7 @@ vẫn fallback xuống agent chính cho tới khi kết nối hồi phục.
 ## Biểu cảm cảm xúc (fire-and-forget)
 
 Nếu thiết bị khai báo capability `expression`
-(`DEVICE.md` → `expression: { routes: [emotion] }`), orchestrator còn đăng ký
+(`ROBOT.md` → `expression: { routes: [emotion] }`), orchestrator còn đăng ký
 thêm tool `express_emotion` (`orchestrator.py`, `EMOTION_TOOL`). Thiết bị không
 có "mặt" (vd: chỉ mic + loa) sẽ không có tool này, nên model realtime không thể
 set cảm xúc — gating chạy xuyên suốt: `server.py`
@@ -151,7 +151,7 @@ LLM vision, vài giây) bằng một round-trip ngay trong phiên.
 
 - **Capability:** có camera (`app_state.camera_capture` được set). Đây chính là
   capability `vision` ở runtime — `server.py` chỉ tạo `camera_capture` khi
-  DEVICE.md khai báo `vision`. Orchestrator đọc đúng một tín hiệu này
+  ROBOT.md khai báo `vision`. Orchestrator đọc đúng một tín hiệu này
   (`_camera_present()`), nên đúng cho mọi đường khởi tạo.
 - **Flag:** `HAL_GEMINI_VISION` / `realtime.gemini.vision` (mặc định **bật**).
 - **Provider:** chỉ Gemini (luồng inject ảnh → tiếp tục turn đã làm + test cho

@@ -23,7 +23,7 @@ func TestSupported_MaximalDeviceKeepsAll(t *testing.T) {
 	}
 }
 
-// Empty capabilities (DEVICE.md declares none) fails open to the full catalog.
+// Empty capabilities (ROBOT.md declares none) fails open to the full catalog.
 func TestSupported_FailOpen(t *testing.T) {
 	if got := Supported(nil); len(got) != len(Catalog) {
 		t.Fatalf("nil caps: got %d, want full catalog %d (fail-open)", len(got), len(Catalog))
@@ -61,7 +61,7 @@ func TestSupported_ReducedDevicePrunesHardware(t *testing.T) {
 	}
 }
 
-// Every capability referenced by the map must be a real DEVICE.md capability key
+// Every capability referenced by the map must be a real ROBOT.md capability key
 // (guards against typos drifting the map out of sync with the schema), and every
 // mapped skill must exist in the catalog.
 func TestCapability_Consistency(t *testing.T) {

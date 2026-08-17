@@ -25,14 +25,14 @@ nào đang chạy.
 
 | `agent_runtime` | Backend |
 |---|---|
-| không set | fallback về `gateway.default` trong `devices/<type>/DEVICE.md`, rồi OpenClaw nếu cái đó cũng trống |
+| không set | fallback về `gateway.default` trong `devices/<type>/ROBOT.md`, rồi OpenClaw nếu cái đó cũng trống |
 | `"openclaw"` | OpenClaw (mặc định) |
 | `"hermes"` | Hermes (`hermes.ProvideService`) |
 | `"picoclaw"` | PicoClaw (`picoclaw.ProvideService`) — client WebSocket bền; giả định service PicoClaw đã chạy sẵn. Xem `docs/agentic/picoclaw.md` + `runtimes/picoclaw`. |
 | giá trị khác | OpenClaw (log là `FALLBACK — unknown runtime=…`) |
 
 Khi `agent_runtime` không được set trong `config.json`, backend lấy từ
-`gateway.default` của thiết bị (`devices/<type>/DEVICE.md`); chỉ dùng OpenClaw nếu
+`gateway.default` của thiết bị (`devices/<type>/ROBOT.md`); chỉ dùng OpenClaw nếu
 giá trị đó cũng trống. Banner log thêm `source` để biết nguồn nào thắng.
 
 Lúc khởi động, `ProvideGateway` in banner `AGENT BACKEND ACTIVE → HERMES` kèm
@@ -400,7 +400,7 @@ embed và restart `hermes-gateway` **chỉ khi** config thật sự đổi (guar
 mới:
 
 - **Boot:** startup-sequence gọi `EnsureOnboarding`. Khắc ngách: device **boot thẳng
-  vào Hermes** (`DEVICE.md gateway.default: hermes`, hoặc imager pre-install) chưa
+  vào Hermes** (`ROBOT.md gateway.default: hermes`, hoặc imager pre-install) chưa
   từng switch từ OpenClaw, hoặc `llm_*` đổi khi Hermes đang chạy, sẽ giữ `config.yaml`
   cũ không lấy `llm_api_key`/`base_url` thật từ `config.json`.
 - **Setup:** `SetupAgent` (cũng trong `onboarding.go`) chỉ gọi `EnsureOnboarding`.

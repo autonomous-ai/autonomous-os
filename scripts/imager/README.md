@@ -160,7 +160,7 @@ rebuild. Anything that must follow `DEFAULT_AGENT` lives in Phase 2 for this rea
 | `TARGET` | `opi` | `opi`, `rpi` — picks builder script |
 | `RPI_MODEL` | `5` | `rpi` only — `5` = Trixie source image, `4` = Bookworm |
 | `DEVICE_TYPE` | **(required)** | `lamp`, `intern-v2`, … — one image per device class |
-| `DEFAULT_AGENT` | *(unset)* | Bakes `/root/config/f_r_default_agent` (survives factory reset, wins over `DEVICE.md` `gateway.default`) and gates SSH for `intern-v2`. Unset = unchanged behavior |
+| `DEFAULT_AGENT` | *(unset)* | Bakes `/root/config/f_r_default_agent` (survives factory reset, wins over `ROBOT.md` `gateway.default`) and gates SSH for `intern-v2`. Unset = unchanged behavior |
 | `OTA_METADATA_URL` | **(required)** | Baked into `/root/config/bootstrap.json` |
 | `OUT_IMG_SIZE` | `14G` | OPi partition size after expansion |
 | `OPI_FILE_ID` | `1CYfOaY6f5DozJBNvPJ0Gx1jBIFlGe8fn` | Google Drive ID for stock OPi .7z |

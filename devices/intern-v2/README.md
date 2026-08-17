@@ -34,7 +34,7 @@ laptop. Email triage, GitHub monitoring, scheduling, web scraping, booking, bill
 ## Capabilities
 
 **Lamp minus the body** — audio, vision, sensing. No motion, no display. The same OS image
-as Lamp, declaring fewer capabilities — not a fork. Declared in [`DEVICE.md`](DEVICE.md).
+as Lamp, declaring fewer capabilities — not a fork. Declared in [`ROBOT.md`](ROBOT.md).
 
 ## Memory & privacy
 
@@ -47,5 +47,5 @@ From **$199** (bulk from $186 at 30+ units). In stock.
 
 ## For developers
 
-- [`DEVICE.md`](DEVICE.md) — the capability declaration the OS boots from
+- [`ROBOT.md`](ROBOT.md) — the capability declaration the OS boots from
 - [Architecture](../../docs/architecture/overview.md)

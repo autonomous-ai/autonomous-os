@@ -144,7 +144,7 @@ def _bt_sink() -> Optional[str]:
 
 def _persist_volume(pct: int) -> None:
     """Persist the last-set volume so os-server restores it at next boot
-    instead of resetting to the DEVICE.md startup_volume. Best-effort — a
+    instead of resetting to the ROBOT.md startup_volume. Best-effort — a
     write failure must not fail the volume change itself."""
     try:
         os.makedirs(os.path.dirname(VOLUME_STATE_PATH), exist_ok=True)

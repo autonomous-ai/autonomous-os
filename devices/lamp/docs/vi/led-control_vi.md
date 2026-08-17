@@ -157,7 +157,7 @@ của bootstrap, và màu trắng setup-needed đều đi qua HAL. OS giữ máy
 và gửi *tên trạng thái* xuống HAL (`POST /led/status`: booting/error/ota/connectivity/
 hal_down/agent_down/hardware/ready_flash/ota_progress/ota_error/ota_success/setup); HAL tra
 màu/effect/speed từ `STATUS_LED_PRESETS`, override per-device qua section `status_led` trong
-`presets.json` (xem [DEVICE-SPEC.md § Per-device presets](../../../../devices/contract/DEVICE-SPEC.md#per-device-presets-presetsjson)).
+`presets.json` (xem [ROBOT-SPEC.md § Per-device presets](../../../../devices/contract/ROBOT-SPEC.md#per-device-presets-presetsjson)).
 `setup` là solid bền khi được gửi qua `POST /led/status`; các trạng thái còn lại là overlay
 transient. Nó tạo cue trắng AP/pre-setup mô tả bên dưới, và setup thành công sẽ xoá saved state
 này thay vì giữ thành user LED preference.
@@ -282,4 +282,4 @@ Mỗi emotion preset có LED color riêng:
 
 Một thiết bị có thể ghi đè các giá trị emotion/scene/aim này (và kích thước vòng LED) mà
 không đổi bảng mặc định dùng chung, qua file `devices/<type>/presets.json`. Đây là cơ chế
-nền tảng — xem [DEVICE-SPEC.md § Per-device presets](../../../../devices/contract/DEVICE-SPEC.md#per-device-presets-presetsjson).
+nền tảng — xem [ROBOT-SPEC.md § Per-device presets](../../../../devices/contract/ROBOT-SPEC.md#per-device-presets-presetsjson).

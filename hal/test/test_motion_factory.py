@@ -1,7 +1,7 @@
 """Tests for the motion driver factory (hal/drivers/motors/factory.py).
 
 Pure logic, no hardware. Also parses the REAL committed devices/reachy-mini
-DEVICE.md to guard the declared driver name against drift, and AST-checks
+ROBOT.md to guard the declared driver name against drift, and AST-checks
 ReachyMotionService against the MotionService protocol (the reachy_mini SDK
 is not installed on dev machines, so the module can't be imported here).
 """
@@ -45,10 +45,10 @@ class TestResolveMotionClass(unittest.TestCase):
 
 
 class TestReachyMiniDeclaration(unittest.TestCase):
-    """Guard the committed reachy-mini DEVICE.md: motion declares reachy_sdk."""
+    """Guard the committed reachy-mini ROBOT.md: motion declares reachy_sdk."""
 
     def _load_caps(self):
-        path = os.path.join(DEVICES_DIR, "reachy-mini", "DEVICE.md")
+        path = os.path.join(DEVICES_DIR, "reachy-mini", "ROBOT.md")
         with open(path, encoding="utf-8") as f:
             return parse_capabilities(extract_front_matter(f.read()))
 

@@ -2,7 +2,7 @@
 
 <img src="media/build-your-own.webp" alt="Printed robot parts laid out on a bench" width="720">
 
-Skills, brains and the app are shared, so a new robot brings only three markdown files and one driver: **DEVICE.md** the body, **SOUL.md** the self, **SAFETY.md** the bounds. Seven steps, laptop to merged. [`devices/reachy-mini/`](../devices/reachy-mini/) is the worked example; read [`DEVICE-SPEC.md`](../devices/contract/DEVICE-SPEC.md) and [`COMPATIBILITY.md`](../devices/contract/COMPATIBILITY.md) alongside this.
+Skills, brains and the app are shared, so a new robot brings only three markdown files and one driver: **ROBOT.md** the body, **SOUL.md** the self, **SAFETY.md** the bounds. Seven steps, laptop to merged. [`devices/reachy-mini/`](../devices/reachy-mini/) is the worked example; read [`ROBOT-SPEC.md`](../devices/contract/ROBOT-SPEC.md) and [`COMPATIBILITY.md`](../devices/contract/COMPATIBILITY.md) alongside this.
 
 **First check the compute.** 64-bit arm64 Linux with systemd, ~4 GB free (the installer brings its own Python 3.12 via uv), and a `/proc/device-tree/model` string that matches an entry in [`boards.json`](../hal/board/boards.json) — a new board is one JSON entry, not a code change.
 
@@ -16,7 +16,7 @@ make new-device NAME=my-robot     # copies devices/_template/ into devices/my-ro
 
 The template declares audio, vision, motion and system, and ships a `SOUL.md` stub. `make cts` fails until you add the `SAFETY.md` your `motion` declaration requires.
 
-## 2. Declare the body in `DEVICE.md`
+## 2. Declare the body in `ROBOT.md`
 
 List the board and the [capabilities](../devices/contract/capabilities.md) the robot has. The OS mounts exactly this and nothing else, and refuses to boot on a board you didn't name.
 
@@ -57,11 +57,11 @@ One class satisfying the 23-method `MotionService` protocol in [`hal/drivers/mot
 The one-line installer only ships bodies in our release feed. Until yours is merged: install with `DEVICE_TYPE=lamp` (or `intern-v2` for a mic-and-speaker body), copy `devices/<id>/` to `/opt/devices/<id>`, set `DEVICE_TYPE=<id>` in `/opt/hal/.env` and in `/etc/systemd/system/os-server.service`, then restart `hal` and `os-server`. [`spike-device.sh`](../devices/reachy-mini/spike-device.sh) and [`spike-os.sh`](../devices/reachy-mini/spike-os.sh) are exactly these steps, scripted.
 
 ```bash
-make cts                          # on your laptop: DEVICE.md against the contract
+make cts                          # on your laptop: ROBOT.md against the contract
 make cts-runtime TARGET=<ip>      # against the robot: every declared route answering
 ```
 
-CTS is [`devices/contract/cts/`](../devices/contract/cts/), Android-style. The static half proves your `DEVICE.md` obeys the [contract](../devices/contract/COMPATIBILITY.md). The runtime half proves the running body matches its own declaration — every declared route mounted and answering, nothing undeclared, `/servo/track/stop` replying (add `ALLOW_MOTION=1` to also prove `/servo/release`; it drops a raised arm). HAL and the daemon listen on the board's loopback only, so tunnel first:
+CTS is [`devices/contract/cts/`](../devices/contract/cts/), Android-style. The static half proves your `ROBOT.md` obeys the [contract](../devices/contract/COMPATIBILITY.md). The runtime half proves the running body matches its own declaration — every declared route mounted and answering, nothing undeclared, `/servo/track/stop` replying (add `ALLOW_MOTION=1` to also prove `/servo/release`; it drops a raised arm). HAL and the daemon listen on the board's loopback only, so tunnel first:
 
 ```bash
 ssh -N -L 5001:127.0.0.1:5001 -L 5000:127.0.0.1:5000 <user>@<body>.local
@@ -106,7 +106,7 @@ The day it merges your robot is a product: a one-line installer for your custome
 
 ## What is frozen, what still moves
 
-**Frozen:** the `autonomous.device.v1` schema (fields are only added) and the capability names in [`capabilities.md`](../devices/contract/capabilities.md) (never removed). A v1 `DEVICE.md` boots on every later v1 runtime. **Not frozen yet:** the driver protocols (`MotionService`, `MediaOwner`) and the HAL route paths skills call (`/servo/aim`, `/emotion`) — both can move between releases, which is why ports live in-tree, where a protocol change carries every driver with it; port against a tag (`v0.1.4`, 2026-08-12).
+**Frozen:** the `autonomous.device.v1` schema (fields are only added) and the capability names in [`capabilities.md`](../devices/contract/capabilities.md) (never removed). A v1 `ROBOT.md` boots on every later v1 runtime. **Not frozen yet:** the driver protocols (`MotionService`, `MediaOwner`) and the HAL route paths skills call (`/servo/aim`, `/emotion`) — both can move between releases, which is why ports live in-tree, where a protocol change carries every driver with it; port against a tag (`v0.1.4`, 2026-08-12).
 
 `hal/` is GPL-3.0 — wrapping a permissive vendor SDK is fine (`reachy_service.py` imports Pollen's Apache-2.0 `reachy_mini`, and that is the whole driver); a closed SDK goes out of process ([#204](https://github.com/autonomous-ai/autonomous-os/issues/204)).
 

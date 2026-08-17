@@ -23,17 +23,23 @@ var (
 )
 
 // DefaultStartupVolume is the speaker volume os-server sets at startup when a
-// device's DEVICE.md does not declare `startup_volume`. 100% keeps the legacy
+// device's ROBOT.md does not declare `startup_volume`. 100% keeps the legacy
 // behavior — software at max so the hardware/alsactl level is the effective
 // control — for any device that hasn't opted into a per-device level.
 const DefaultStartupVolume = 100
 
 // readFrontMatter returns the front-matter block of
-// devices/<deviceType>/DEVICE.md, or nil when the file or the block is
+// devices/<deviceType>/ROBOT.md, or nil when the file or the block is
 // absent/unreadable. Dependency-free parse (no YAML lib), mirroring
-// hal/board/device.py — every DEVICE.md field accessor below goes through it.
+// hal/board/device.py — every ROBOT.md field accessor below goes through it.
 func readFrontMatter(deviceType string) []byte {
-	b, err := os.ReadFile(filepath.Join(DevicesDir(), deviceType, "DEVICE.md"))
+	// ROBOT.md is canonical; DEVICE.md is the name it shipped under and stays
+	// readable, because robots in the field have it on disk.
+	dir := filepath.Join(DevicesDir(), deviceType)
+	b, err := os.ReadFile(filepath.Join(dir, "ROBOT.md"))
+	if err != nil {
+		b, err = os.ReadFile(filepath.Join(dir, "DEVICE.md"))
+	}
 	if err != nil {
 		return nil
 	}
@@ -45,11 +51,11 @@ func readFrontMatter(deviceType string) []byte {
 }
 
 // Capabilities returns the set of capability keys declared in the
-// `capabilities:` block of devices/<deviceType>/DEVICE.md (e.g. audio, vision,
+// `capabilities:` block of devices/<deviceType>/ROBOT.md (e.g. audio, vision,
 // motion, light, display, …), or nil if absent/unreadable. The capability keys are
 // what gate which hardware/body skills a device loads (see openclaw onboarding):
 // a skill that declares `capability: motion` is only shipped to a device whose
-// DEVICE.md declares `motion`.
+// ROBOT.md declares `motion`.
 func Capabilities(deviceType string) map[string]bool {
 	fm := readFrontMatter(deviceType)
 	if fm == nil {
@@ -68,7 +74,7 @@ func Capabilities(deviceType string) map[string]bool {
 
 // Capability names — the frozen capability vocabulary (capabilities.v1) from
 // devices/contract/capabilities.md. This is the platform-wide feature taxonomy every
-// DEVICE.md declares against and every OS-core gate asks about; it is NOT a
+// ROBOT.md declares against and every OS-core gate asks about; it is NOT a
 // device-specific value. Defined once here (the package that parses the
 // capabilities block) so the strings have a single source of truth: a typo is a
 // compile error, not a silent fail-open. Keep in sync with devices/contract/
@@ -104,7 +110,7 @@ const (
 // /broadcast, /wellbeing, or always-present audio paths). It lets the os-server
 // drop an agent's [HW:/path:...] marker for hardware the body doesn't have —
 // the OS, not the swappable brain, is the deterministic gate over the body. Keep
-// the route→capability mapping aligned with the DEVICE.md route declarations and
+// the route→capability mapping aligned with the ROBOT.md route declarations and
 // skills.Capability. Conservative: unmapped paths fail open (the POST proceeds,
 // HAL handles it), so only the clearly expressive/motor routes are gated here.
 func RouteCapability(path string) string {
@@ -124,7 +130,7 @@ func RouteCapability(path string) string {
 	}
 }
 
-// Has reports whether deviceType declares the given capability in its DEVICE.md.
+// Has reports whether deviceType declares the given capability in its ROBOT.md.
 // Fail-open: a device whose capabilities block is absent/unreadable → true,
 // preserving legacy single-device behavior (the maximal reference device, Lamp,
 // declares every capability anyway). Use it to gate OS-core calls to OPTIONAL
@@ -139,7 +145,7 @@ func Has(deviceType, capability string) bool {
 	return caps[capability]
 }
 
-// SoulRef returns the `soul_ref` declared in devices/<deviceType>/DEVICE.md, or
+// SoulRef returns the `soul_ref` declared in devices/<deviceType>/ROBOT.md, or
 // "" if absent/unreadable. The value is either a path (read relative to the
 // device dir) or an http(s) URL (downloaded) — see openclaw.deviceSoulCore.
 func SoulRef(deviceType string) string {
@@ -155,7 +161,7 @@ func SoulRef(deviceType string) string {
 }
 
 // StartupVolume returns the `startup_volume` (0-100) declared in
-// devices/<deviceType>/DEVICE.md, or DefaultStartupVolume (100) when the field
+// devices/<deviceType>/ROBOT.md, or DefaultStartupVolume (100) when the field
 // is absent/unreadable/out of range. os-server applies this once at startup so
 // the boot speaker level is a per-device body property, not a hardcoded max —
 // e.g. a device with a loud speaker can boot quieter. Fail-safe to max, never
@@ -186,13 +192,13 @@ func DevicesDir() string {
 }
 
 // gatewayField extracts one sub-field (matched by re) from the `gateway:` block
-// of devices/<deviceType>/DEVICE.md, or "" if absent/unreadable.
+// of devices/<deviceType>/ROBOT.md, or "" if absent/unreadable.
 func gatewayField(deviceType string, re *regexp.Regexp) string {
 	return blockField(deviceType, reGatewayBlock, re)
 }
 
 // blockField extracts one sub-field (matched by fieldRe) from a top-level
-// front-matter block (matched by blockRe) of devices/<deviceType>/DEVICE.md,
+// front-matter block (matched by blockRe) of devices/<deviceType>/ROBOT.md,
 // or "" if absent/unreadable. Shared by the gateway: and voice: accessors.
 func blockField(deviceType string, blockRe, fieldRe *regexp.Regexp) string {
 	fm := readFrontMatter(deviceType)
@@ -211,13 +217,13 @@ func blockField(deviceType string, blockRe, fieldRe *regexp.Regexp) string {
 }
 
 // GatewayDefault returns the `gateway.default` (agentic runtime) declared in
-// devices/<deviceType>/DEVICE.md, or "" if absent.
+// devices/<deviceType>/ROBOT.md, or "" if absent.
 func GatewayDefault(deviceType string) string {
 	return gatewayField(deviceType, reGatewayDefault)
 }
 
 // GatewayProtocol returns the `gateway.protocol` (wire transport) declared in
-// devices/<deviceType>/DEVICE.md, or "" if absent. The transport is actually a
+// devices/<deviceType>/ROBOT.md, or "" if absent. The transport is actually a
 // property of the runtime (openclaw→websocket, hermes→sse), so this is consumed
 // only as a consistency guard — see agent.ProvideGateway.
 func GatewayProtocol(deviceType string) string {
@@ -225,13 +231,13 @@ func GatewayProtocol(deviceType string) string {
 }
 
 // voiceField extracts one sub-field (matched by re) from the `voice:` block of
-// devices/<deviceType>/DEVICE.md, or "" if absent/unreadable.
+// devices/<deviceType>/ROBOT.md, or "" if absent/unreadable.
 func voiceField(deviceType string, re *regexp.Regexp) string {
 	return blockField(deviceType, reVoiceBlock, re)
 }
 
 // TTSProvider returns the `voice.tts_provider` declared in
-// devices/<deviceType>/DEVICE.md, or "" if absent/unreadable. It is the device's
+// devices/<deviceType>/ROBOT.md, or "" if absent/unreadable. It is the device's
 // DEFAULT TTS provider (openai | elevenlabs) — a body property, since some
 // devices ship with a voice that only sounds right on a particular provider.
 // os-server seeds config.json's tts_provider from this once at startup when the
@@ -243,7 +249,7 @@ func TTSProvider(deviceType string) string {
 }
 
 // TTSVoice returns the `voice.tts_voice` declared in
-// devices/<deviceType>/DEVICE.md, or "" if absent/unreadable. Optional companion
+// devices/<deviceType>/ROBOT.md, or "" if absent/unreadable. Optional companion
 // to TTSProvider: pins the device's default voice explicitly (e.g. a provider
 // voice name like "Ngan", or a raw provider voice id). When absent, os-server
 // falls back to a language-aware default for the seeded provider (see

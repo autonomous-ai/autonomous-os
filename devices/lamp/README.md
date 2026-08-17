@@ -35,7 +35,7 @@ something is relevant. The articulated arm physically turns to look at you.
 ## Capabilities
 
 The **maximal** device — audio, vision, motion, light, display, sensing, presence. If a
-capability works on Lamp, it works. Declared in [`DEVICE.md`](DEVICE.md).
+capability works on Lamp, it works. Declared in [`ROBOT.md`](ROBOT.md).
 
 ## Privacy
 
@@ -89,7 +89,7 @@ Shipping — [$499 at autonomous.ai/lamp](https://www.autonomous.ai/lamp). Build
 
 ## For developers
 
-- [`DEVICE.md`](DEVICE.md) — the capability declaration the OS boots from
+- [`ROBOT.md`](ROBOT.md) — the capability declaration the OS boots from
 - [`SOUL.md`](SOUL.md) — the default character (`lamp-companion`)
 - [`SAFETY.md`](SAFETY.md) — the deterministic bounds (e-stop, motion limits)
 - [Architecture](../../docs/architecture/overview.md)

@@ -43,7 +43,7 @@ type rule struct {
 	name  string
 	match func(string) bool
 	exec  func(string) *Result
-	// capability gates the rule to devices that declare it in DEVICE.md (e.g.
+	// capability gates the rule to devices that declare it in ROBOT.md (e.g.
 	// "motion" for servo tracking). Empty = no hardware dependency, always on.
 	capability string
 }
@@ -85,7 +85,7 @@ func Match(text string) *Result {
 	return nil
 }
 
-// deviceCaps is the device's declared capability set (DEVICE.md), set once at
+// deviceCaps is the device's declared capability set (ROBOT.md), set once at
 // startup via Configure and read-only after. It gates which command rules run
 // and which HAL peripherals local intents drive. nil = fail-open (all rules),
 // matching legacy single-device behavior.

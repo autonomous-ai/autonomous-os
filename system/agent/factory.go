@@ -18,7 +18,7 @@ import (
 
 // ProvideGateway returns the AgentGateway implementation. The backend is chosen
 // by config.AgentRuntime; when that is unset it falls back to the device's
-// declared gateway.default (devices/<type>/DEVICE.md), then OpenClaw.
+// declared gateway.default (devices/<type>/ROBOT.md), then OpenClaw.
 //
 // "openclaw" (default): persistent WebSocket to the OpenClaw daemon at
 // 127.0.0.1:18789. See runtimes/openclaw and docs/os-server.md.
@@ -26,7 +26,7 @@ import (
 // "hermes": HTTP+SSE client against the Hermes API server (default
 // 127.0.0.1:8642). See runtimes/hermes and docs/agentic/hermes.md.
 // gatewayTransport is the wire transport each runtime uses. The transport is a
-// property of the runtime, not an independent knob, so DEVICE.md
+// property of the runtime, not an independent knob, so ROBOT.md
 // `gateway.protocol` is only validated against this (a consistency guard).
 var gatewayTransport = map[string]string{
 	"openclaw":   "websocket",
@@ -41,12 +41,12 @@ func ProvideGateway(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 	// Consistency guard: a device that declares gateway.protocol should match the
 	// transport its gateway.default runtime actually speaks. Warn (don't fail) on
 	// a contradiction — it can't drive anything, but it flags a misleading
-	// DEVICE.md (e.g. default: hermes with protocol: websocket).
+	// ROBOT.md (e.g. default: hermes with protocol: websocket).
 	devType := cfg.DeviceTypeOrDefault()
 	if proto := device.GatewayProtocol(devType); proto != "" {
 		if def := device.GatewayDefault(devType); def != "" {
 			if want, ok := gatewayTransport[def]; ok && want != proto {
-				slog.Warn("DEVICE.md gateway.protocol contradicts gateway.default's transport",
+				slog.Warn("ROBOT.md gateway.protocol contradicts gateway.default's transport",
 					"component", "agent", "device_type", devType,
 					"gateway.default", def, "gateway.protocol", proto, "expected", want)
 			}
@@ -108,7 +108,7 @@ func ProvideGateway(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 }
 
 // resolveRuntime returns the effective agent runtime ("openclaw" or "hermes"), the raw value, and the source.
-// Prefers config.agent_runtime > f_r_default_agent > DEVICE.md gateway.default
+// Prefers config.agent_runtime > f_r_default_agent > ROBOT.md gateway.default
 // > "openclaw" (default). The last two are resolved by device.ResolveDefaultAgent
 // — the SAME function device.SeedAgentRuntimeFromGateway uses — so this can never
 // disagree with what gets persisted to config.json a moment later at boot

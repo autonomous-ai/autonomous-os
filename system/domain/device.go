@@ -1371,7 +1371,7 @@ const (
 var TTSProviders = []string{TTSProviderOpenAI, TTSProviderElevenLabs}
 
 // IsValidTTSProvider reports whether p is a supported TTS provider. Used to
-// reject a bad DEVICE.md `voice.tts_provider` before seeding it into config.
+// reject a bad ROBOT.md `voice.tts_provider` before seeding it into config.
 func IsValidTTSProvider(p string) bool {
 	for _, v := range TTSProviders {
 		if v == p {
@@ -1382,7 +1382,7 @@ func IsValidTTSProvider(p string) bool {
 }
 
 // DefaultElevenLabsVoiceForLang returns the ElevenLabs voice os-server seeds when
-// a device defaults to the elevenlabs provider (via DEVICE.md voice.tts_provider)
+// a device defaults to the elevenlabs provider (via ROBOT.md voice.tts_provider)
 // but declares no explicit voice. Language-aware so a VN/CN owner boots with a
 // voice trained on their language instead of an American one. The names must
 // stay in sync with the top picks (*) in HAL's elevenlabs.py VOICE_IDS_BY_LANG:

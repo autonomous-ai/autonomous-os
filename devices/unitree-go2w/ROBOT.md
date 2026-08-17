@@ -34,7 +34,7 @@ and 3D depth camera so it can hear, see the room in 3D, and drive through space.
 
 This is the Android playbook. Lamp and Intern are Autonomous's own devices; the Go2-W is
 **someone else's hardware** running the same OS — the way Android runs on Samsung, Pixel, and
-the rest. Onboarding it was writing this `DEVICE.md` plus a driver, not a fork:
+the rest. Onboarding it was writing this `ROBOT.md` plus a driver, not a fork:
 
 - **`motion` would be locomotion**, with a Unitree SDK driver rather than Feetech
   servos. A port can then map capability-level motion skills to the body.

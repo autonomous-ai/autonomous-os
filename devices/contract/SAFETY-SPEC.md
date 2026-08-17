@@ -1,18 +1,18 @@
 # SAFETY.md Specification — `autonomous.safety.v1`
 
-`SAFETY.md` is the bounds contract for a device. `DEVICE.md` declares what a body
+`SAFETY.md` is the bounds contract for a device. `ROBOT.md` declares what a body
 *can* do; `SAFETY.md` declares what it *must never* do, and which actions are
 governed by deterministic OS policy rather than the language model.
 
-Like `DEVICE.md`, it is two layers in one file:
+Like `ROBOT.md`, it is two layers in one file:
 
 - **YAML front matter** — the machine contract the **safety engine** parses at boot
   and enforces deterministically in the runtime (HAL).
 - **Prose below** — the human-readable rationale the gateway and contributors read.
-  The per-capability `safety: SAFETY.md#<anchor>` references in `DEVICE.md` point at
+  The per-capability `safety: SAFETY.md#<anchor>` references in `ROBOT.md` point at
   these prose headings; the bounds that back them live in the front matter.
 
-One file per device at `devices/<id>/SAFETY.md`, referenced by `DEVICE.md`'s
+One file per device at `devices/<id>/SAFETY.md`, referenced by `ROBOT.md`'s
 top-level `safety_ref`. It is **optional** — a device that declares no safety bounds
 ships no `SAFETY.md`.
 
@@ -28,9 +28,9 @@ the agent's request and the hardware and is the single point that decides.
 
 At boot the HAL runtime:
 
-1. Resolves `safety_ref` from `DEVICE.md` to the `SAFETY.md` text (path or URL).
+1. Resolves `safety_ref` from `ROBOT.md` to the `SAFETY.md` text (path or URL).
 2. **Validates `schema`** — a missing/malformed/unknown-major tag aborts boot, like
-   `DEVICE.md` (the runtime will not enforce a bounds ABI it cannot read).
+   `ROBOT.md` (the runtime will not enforce a bounds ABI it cannot read).
 3. Parses the front matter into a typed `SafetyPolicy`.
 4. Exposes deterministic **gate** functions (e.g. `clamp_brightness`) that the
    capability routes call before actuating. The gate is pure, in-process, and runs
@@ -73,9 +73,9 @@ request, so the bound changes with the time of day without a restart.
 | `thermal.max_temp_c` | no | **enforced (v1)** | SoC °C ceiling. A background monitor reads `/sys/class/thermal`; at/above this it raises a health event (`/health`) and stops discretionary motion (tracking), clearing on cool-down. Threshold is SoC-specific — read the board's own critical trip, not a generic guess. (Slice 4.) |
 | `thermal.resume_temp_c` | no | **enforced (v1)** | Cooled to/below this clears the over state (hysteresis). Defaults to `max_temp_c − 10`. (Slice 4.) |
 
-Sections are keyed by **capability group** (the same vocabulary as `DEVICE.md`
+Sections are keyed by **capability group** (the same vocabulary as `ROBOT.md`
 `capabilities` and `devices/contract/capabilities.md`) so each `## <group>` prose heading,
-its `DEVICE.md` `safety:` anchor, and its machine bounds line up.
+its `ROBOT.md` `safety:` anchor, and its machine bounds line up.
 
 ## Fail-safe — what happens when a bound is absent or unloadable
 

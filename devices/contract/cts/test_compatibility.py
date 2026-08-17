@@ -1,7 +1,7 @@
 """Compatibility Test Suite — enforces devices/contract/COMPATIBILITY.md against every device.
 
-Static, no hardware: validates each devices/<id>/DEVICE.md against the MUST rules.
-Reuses the HAL's DEVICE.md parser so the test and the runtime read the contract the same way.
+Static, no hardware: validates each devices/<id>/ROBOT.md against the MUST rules.
+Reuses the HAL's declaration parser so the test and the runtime read the contract the same way.
 """
 import os
 import sys
@@ -11,7 +11,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))  # devices/contract/cts → repo root
 sys.path.insert(0, ROOT)  # the hal package lives at the repo root
 
-from hal.board.device import load_device  # noqa: E402  (path set above)
+from hal.board.device import load_device, profile_path  # noqa: E402  (path set above)
 from hal.safety.policy import parse_safety  # noqa: E402  (path set above)
 
 DEVICES_DIR = os.path.join(ROOT, "devices")
@@ -33,7 +33,7 @@ def real_devices():
     for name in sorted(os.listdir(DEVICES_DIR)):
         if name in NOT_DEVICES or name.startswith("_"):
             continue
-        if os.path.isfile(os.path.join(DEVICES_DIR, name, "DEVICE.md")):
+        if os.path.isfile(profile_path(os.path.join(DEVICES_DIR, name))):
             yield name
 
 
@@ -46,12 +46,12 @@ class TestCompatibility(unittest.TestCase):
             with self.subTest(device=dev):
                 profile = load_device(dev, DEVICES_DIR)
                 groups = set(profile.capabilities)
-                with open(os.path.join(DEVICES_DIR, dev, "DEVICE.md")) as fh:
+                with open(profile_path(os.path.join(DEVICES_DIR, dev))) as fh:
                     raw = fh.read()
 
                 # MUST 1 — schema v1
                 self.assertIn("schema: autonomous.device.v1", raw,
-                              f"{dev}: DEVICE.md must declare schema autonomous.device.v1")
+                              f"{dev}: ROBOT.md must declare schema autonomous.device.v1")
                 # MUST 2 — system capability
                 self.assertIn("system", groups, f"{dev}: must declare the 'system' capability")
                 # MUST 3 — a primary sense or output

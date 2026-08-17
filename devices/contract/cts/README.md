@@ -15,7 +15,7 @@ passes the static half whether or not any hardware ever booted it.
 make cts          # or: python3 -m unittest discover -s devices/contract/cts -v
 ```
 
-Validates every device under `devices/` against the MUST rules it can read off `DEVICE.md`:
+Validates every device under `devices/` against the MUST rules it can read off `ROBOT.md`:
 schema, the `system` capability, a primary sense/output, a known capability vocabulary, and a
 `SAFETY.md` for any safety-class capability. No hardware, no dependencies — this is what CI
 runs on every push.
@@ -27,14 +27,14 @@ make cts-runtime TARGET=lamp-ac82.local
 ```
 
 Points at a provisioned device and compares **what it reports mounted** against **what its
-`DEVICE.md` declares**. Every test skips unless `CTS_HAL` is set, so CI (no hardware) stays
+`ROBOT.md` declares**. Every test skips unless `CTS_HAL` is set, so CI (no hardware) stays
 green and the same `unittest discover` command runs both halves.
 
 | Environment | Meaning |
 |-------------|---------|
 | `CTS_HAL` | HAL base URL (`http://<device>:5001`). Unset → the whole runtime half skips. |
 | `CTS_OS` | os-server base URL (`http://<device>:5000`). Unset → the envelope rule skips. |
-| `CTS_DEVICES_DIR` | where `devices/<id>/DEVICE.md` lives (default: this checkout). Set it to `/opt/devices` to run on the device itself. |
+| `CTS_DEVICES_DIR` | where `devices/<id>/ROBOT.md` lives (default: this checkout). Set it to `/opt/devices` to run on the device itself. |
 | `CTS_TIMEOUT` | per-request timeout in seconds (default 5). |
 | `CTS_STOP_BUDGET_MS` | assert the deterministic stop answers within N ms. Unset → measured and printed, not asserted. |
 | `CTS_ALLOW_MOTION=1` | also exercise stops that MOVE hardware. **Off by default: `/servo/release` cuts torque, which drops a raised arm.** |
@@ -63,16 +63,16 @@ What it enforces:
 
 | Rule | Check |
 |------|-------|
-| MUST 1 | `GET /device` serves id/name/type/schema/board; the booted board is one the `DEVICE.md` lists; the served id matches the declaration |
+| MUST 1 | `GET /device` serves id/name/type/schema/board; the booted board is one the `ROBOT.md` lists; the served id matches the declaration |
 | MUST 2 | the `system` capability answers (`GET /health`) |
 | MUST 3 | a declared primary sense (`audio`/`vision`) actually has a mounted route |
 | MUST 5 | every `required` route is mounted — a device serving requests with a required route missing is the silent half-boot the rule forbids — and mounted routes answer a read-only probe |
 | MUST 7 | the success envelope is exactly `{"status":1,"data":…,"message":null}` |
 | MUST NOT 15 / MUST 6 | a device declaring `motion` answers a deterministic stop; its latency is reported |
-| MUST NOT 16 | nothing is mounted that `DEVICE.md` does not declare (modulo HAL's always-on routes) |
+| MUST NOT 16 | nothing is mounted that `ROBOT.md` does not declare (modulo HAL's always-on routes) |
 
 When to run it: after bringing up a **new device** (before claiming it works — this is what
-would have caught a `DEVICE.md` that describes hardware nobody booted), when a third party
+would have caught a `ROBOT.md` that describes hardware nobody booted), when a third party
 wants the compatible mark on their own hardware, and as a regression pass over the lab devices
 after a HAL change. It needs a device, so it is not a CI gate.
 

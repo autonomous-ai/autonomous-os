@@ -61,5 +61,5 @@ speaker. Compute is a Raspberry Pi 4/5 or OrangePi (sun60). The body is wired pe
 `soul_ref` points at the character that inhabits this body. It resolves to a soul
 artifact — a path read relative to this device folder (here, `SOUL.md`), or an
 `http(s)://` URL the runtime downloads. A body with no `soul_ref` (e.g. Intern) keeps
-the gateway's default soul. `memory` names the continuity layer by backend. `DEVICE.md`
+the gateway's default soul. `memory` names the continuity layer by backend. `ROBOT.md`
 describes the body; the soul is referenced here, not embedded in the front matter.

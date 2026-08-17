@@ -34,7 +34,7 @@ manufacturer to run live (Go2-W was declaration-only).
 ## The point: Android playbook, proven
 
 Lamp is Autonomous's own desk robot. Reachy Mini is **someone else's hardware**
-running the same OS. Onboarding it was writing this `DEVICE.md`, a motion driver
+running the same OS. Onboarding it was writing this `ROBOT.md`, a motion driver
 wrapping Pollen's Python SDK, and a SAFETY.md — not a fork.
 
 - **`motion` is a Stewart platform** (6-DOF head + 360° body + 2 antennas), not

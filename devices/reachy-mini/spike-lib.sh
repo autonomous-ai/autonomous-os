@@ -29,7 +29,7 @@ BIN_DIR="${BIN_DIR:-/usr/local/bin}"
 WEB_ROOT="${WEB_ROOT:-/usr/share/nginx/html/setup}"
 
 # The Pollen daemon: owns motion, and owns the camera and ALSA PCMs until HAL
-# asks for them (DEVICE.md `owner: pollen_daemon`).
+# asks for them (ROBOT.md `owner: pollen_daemon`).
 DAEMON_URL="${DAEMON_URL:-http://localhost:8000}"
 
 # Default OTA feed. Overridden by an existing bootstrap.json, or by exporting

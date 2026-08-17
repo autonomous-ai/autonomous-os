@@ -35,7 +35,7 @@ var Catalog = []string{
 	"wellbeing",
 }
 
-// Capability maps a skill to the DEVICE.md capabilities it requires,
+// Capability maps a skill to the ROBOT.md capabilities it requires,
 // ANY-OF: the skill is kept when the device declares at least one. A skill
 // absent from this map has no hardware dependency and installs everywhere.
 var Capability = map[string][]string{

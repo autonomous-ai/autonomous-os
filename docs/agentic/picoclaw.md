@@ -48,7 +48,7 @@ which brain is active.
 
 | `agent_runtime` | Backend |
 |---|---|
-| `"openclaw"` / unset | OpenClaw (default; or `gateway.default` from `DEVICE.md`) |
+| `"openclaw"` / unset | OpenClaw (default; or `gateway.default` from `ROBOT.md`) |
 | `"hermes"` | Hermes (`hermes.ProvideService`) |
 | `"picoclaw"` | PicoClaw (`picoclaw.ProvideService`) |
 | anything else | OpenClaw (logged as `FALLBACK — unknown runtime=…`) |
@@ -104,7 +104,7 @@ self-heals after a factory reset, mirroring hermes' presync):
     if absent** — covers the fresh picoclaw-only device where presync §0 had no
     openclaw copy; never overwrites;
   - injects the OS-managed `<!-- OS DO NOT REMOVE -->` blocks into `SOUL.md`
-    (`ensureSoulMDBlock`, per-device-type soul from DEVICE.md `soul_ref`; owner
+    (`ensureSoulMDBlock`, per-device-type soul from ROBOT.md `soul_ref`; owner
     content below `---` preserved), `AGENTS.md` (`ensureAgentsMDBlock`,
     skills/connectors/memory/priority rules — the **Connectors (MANDATORY)** block
     routes any Gmail/Calendar/Drive/… request through the `connectors` skill
@@ -117,7 +117,7 @@ self-heals after a factory reset, mirroring hermes' presync):
     (the same gate openclaw uses) **or** is a picoclaw built-in
     (`picoclawBuiltinSkills`: `agent-browser`, `github`, `hardware`, `skill-creator`,
     `summarize`, `tmux`, `weather`); everything else under `workspace/skills` is
-    deleted. Fail-open when DEVICE.md declares no caps. No reload (skills read per-turn);
+    deleted. Fail-open when ROBOT.md declares no caps. No reload (skills read per-turn);
   - when any block changed, **restarts the gateway** (`restartPicoclawGateway` →
     `systemctl restart picoclaw`) so it re-reads the workspace files (log+skip when
     systemctl is unavailable). Not the gateway `/reload` endpoint — it needs an admin

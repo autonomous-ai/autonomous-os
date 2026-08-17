@@ -200,7 +200,7 @@ type Config struct {
 	Timezone string `json:"timezone,omitempty" yaml:"timezone"`
 
 	// DeviceType is the device class/profile id — the folder name under devices/
-	// (e.g. "lamp", "intern-v2", "unitree-go2w"). Selects which DEVICE.md/SOUL.md the
+	// (e.g. "lamp", "intern-v2", "unitree-go2w"). Selects which ROBOT.md/SOUL.md the
 	// runtime loads. Empty resolves to "" — no "lamp" fallback (see DeviceTypeOrDefault;
 	// the Serve startup guard fail-louds). HAL reads the same key from config.json via
 	// _os_cfg_get("device_type").
@@ -509,7 +509,7 @@ func SnapshotHALConfig() error {
 // volumeStatePath persists the last speaker volume (0-100) set through HAL's
 // /audio/volume endpoint. HAL writes it on every volume change (web slider,
 // agent, intent), so os-server can restore the user's last choice at the next
-// boot instead of resetting to the DEVICE.md startup_volume each reboot. Lives
+// boot instead of resetting to the ROBOT.md startup_volume each reboot. Lives
 // next to config.json — the dir HAL already shares via OS_CONFIG_PATH.
 const volumeStatePath = "config/.volume"
 

@@ -71,7 +71,7 @@ func (s *CodexService) StartSkillWatcher(ctx context.Context) {
 	}
 }
 
-// supportedSkills resolves this device's capabilities from DEVICE.md and filters the
+// supportedSkills resolves this device's capabilities from ROBOT.md and filters the
 // platform skill catalog to what it can run (shared metadata in system/skills, the
 // same gate OpenClaw uses).
 func (s *CodexService) supportedSkills() []string {

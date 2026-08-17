@@ -9,7 +9,7 @@ Shared behavior is referenced, not copied:
 
 | Topic | Reference |
 |-------|-----------|
-| `DEVICE.md` schema, capability mounting, `driver:` semantics | [`devices/contract/DEVICE-SPEC.md`](../../contract/DEVICE-SPEC.md) |
+| `ROBOT.md` schema, capability mounting, `driver:` semantics | [`devices/contract/ROBOT-SPEC.md`](../../contract/ROBOT-SPEC.md) |
 | Capability vocabulary | [`devices/contract/capabilities.md`](../../contract/capabilities.md) |
 | HAL capability/route/driver layering | [`docs/architecture/hal.md`](../../../docs/architecture/hal.md) |
 | Safety engine behavior | [`docs/safety.md`](../../../docs/safety.md) |
@@ -25,7 +25,7 @@ Hardware references checked on 2026-07-21:
 
 ## What This Profile Declares
 
-`DEVICE.md` declares this route surface:
+`ROBOT.md` declares this route surface:
 
 | Capability | Routes | Required | Reachy-specific note |
 |------------|--------|----------|----------------------|
@@ -100,7 +100,7 @@ component scripts in order. Each of those also runs standalone:
 
 Why that order, specifically:
 
-- **device first** — HAL refuses to boot without `DEVICE.md`, and its `boards`
+- **device first** — HAL refuses to boot without `ROBOT.md`, and its `boards`
   list is what lets HAL accept a CM4 at all. Without `/etc/asound.conf` there is
   no ALSA default, and PortAudio then has no output device: every TTS call fails
   with "Error querying device -1" while `aplay` from a shell still works.
@@ -214,7 +214,7 @@ captures a 1280×720 frame; after `acquire`, media status returns to
 `{"available":true,"released":false}`. The daemon stays `active` and answers HTTP
 throughout — releasing media does **not** disturb motion control.
 
-**Wired into HAL, not into a script.** `DEVICE.md` declares `owner: pollen_daemon`
+**Wired into HAL, not into a script.** `ROBOT.md` declares `owner: pollen_daemon`
 on the `audio` and `vision` capabilities; `hal/server.py` resolves each distinct
 owner name through `hal/drivers/media_owner/factory.py` and calls `release()` as
 Phase 0 of lifespan startup, `acquire()` on shutdown. Same selector shape as
@@ -253,7 +253,7 @@ node, not a ready-to-read YUV stream:
 | `python3-picamera2` | not installed; apt candidate `0.3.33-1` |
 
 **Resolved (2026-07-29)** by a second camera backend rather than a config value.
-`DEVICE.md` selects it the same way motion picks its driver:
+`ROBOT.md` selects it the same way motion picks its driver:
 
 ```yaml
 vision:
@@ -479,7 +479,7 @@ profile is measured.
    that order, because HAL will not boot without the device profile:
 
    ```bash
-   sudo bash ~/reachy-mini/spike-device.sh           # DEVICE.md, asound.conf, .env
+   sudo bash ~/reachy-mini/spike-device.sh           # ROBOT.md, asound.conf, .env
    sudo bash ~/reachy-mini/spike-hal.sh              # HAL under systemd
    sudo bash ~/reachy-mini/spike-hal.sh --no-deps    # redeploy without uv sync
    sudo bash ~/reachy-mini/spike-hal.sh --stop       # stop + hand media back
@@ -603,7 +603,7 @@ matches no entry in boards.json ... Refusing to boot on unidentified hardware
 ```
 
 Fixed by adding a `raspberry_pi_cm4` entry (`match: ["compute module 4"]`) to
-`hal/board/boards.json` and listing it in this device's `DEVICE.md` `boards`. Its
+`hal/board/boards.json` and listing it in this device's `ROBOT.md` `boards`. Its
 `led`/`button` wiring is inherited from `raspberry_pi_4` and is **unverified** —
 Reachy declares neither `light` nor a GPIO button, so nothing reads it yet.
 Verify before wiring either peripheral on a CM4.

@@ -2,7 +2,7 @@
 """Generate the skill catalog from the `skills/` tree.
 
 The tree is the source of truth. Each `skills/<name>/` folder is a skill; the
-optional `skills/<name>/skill.json` sidecar declares which DEVICE.md
+optional `skills/<name>/skill.json` sidecar declares which ROBOT.md
 capabilities it needs (ANY-OF — the skill installs when the device declares at
 least one). No sidecar, or no `capabilities` key, means a platform skill with
 no hardware dependency: it installs everywhere.
@@ -86,7 +86,7 @@ def render_go(skills):
     lines += [
         "}",
         "",
-        "// Capability maps a skill to the DEVICE.md capabilities it requires,",
+        "// Capability maps a skill to the ROBOT.md capabilities it requires,",
         "// ANY-OF: the skill is kept when the device declares at least one. A skill",
         "// absent from this map has no hardware dependency and installs everywhere.",
         "var Capability = map[string][]string{",

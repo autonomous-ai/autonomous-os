@@ -233,7 +233,7 @@ curl -s -X POST http://localhost:8000/api/media/acquire   # trả lại
       `rpicam-jpeg`)
 - [x] Daemon sống sót qua release/acquire: **có** — vẫn `active`, HTTP 200, motion
       không bị ảnh hưởng
-- [x] Đã nối vào startup/shutdown của HAL: **rồi** — `DEVICE.md` khai
+- [x] Đã nối vào startup/shutdown của HAL: **rồi** — `ROBOT.md` khai
       `owner: pollen_daemon` trên `audio` và `vision`, `PollenDaemonMediaOwner`
       gọi `release` lúc startup (retry 5 lần cách 2 s) và `acquire` lúc shutdown.
       Không script spike nào gọi `/api/media/*` nữa
@@ -278,7 +278,7 @@ Camera chưa bao giờ là chuyện của một giá trị config, nên không f
 sửa được: `/dev/video0` là node unicam Bayer thô, và bản `opencv-python` từ wheel
 báo `GStreamer: NO`, nên cả `cv2.VideoCapture(0)` lẫn pipeline `libcamerasrc` đều
 không ra frame (1.5). Đã giải quyết bằng một camera backend thứ hai của HAL:
-`DEVICE.md` khai `driver: rpicam`, và `hal/drivers/camera/factory.py` map tên đó
+`ROBOT.md` khai `driver: rpicam`, và `hal/drivers/camera/factory.py` map tên đó
 tới `RpicamVideoCaptureDevice` (`hal/drivers/camera/rpicam_capture_device.py`) —
 driver này đọc MJPEG từ tiến trình con `rpicam-vid` rồi decode frame mới nhất
 bằng `cv2.imdecode`. `HAL_CAMERA_INDEX` vô tác dụng trên body này. Chi tiết ở
@@ -440,7 +440,7 @@ chứ không phải một cây riêng cho spike.
 | 6 | `spike-bootstrap.sh` | worker OTA: seed `/root/config/bootstrap.json`, poll `5m` |
 
 Chạy lẻ từng bước cũng được, cùng thứ tự đó — `device` **phải** trước vì HAL
-không boot khi thiếu `DEVICE.md`, và `bootstrap` cố ý ở cuối vì nó có thể restart
+không boot khi thiếu `ROBOT.md`, và `bootstrap` cố ý ở cuối vì nó có thể restart
 os-server/hal ngay khi thấy build mới hơn:
 
 ```bash
@@ -477,7 +477,7 @@ robot vào AP mode và mất WiFi. Pollen OS chưa có `uv`; `spike-hal.sh` tự
 Board gate cũng phải được dạy phần cứng này: máy báo
 `Raspberry Pi Compute Module 4 Rev 1.1`, không khớp entry nào trong `boards.json`
 nên HAL từ chối boot. Đã sửa bằng cách thêm `raspberry_pi_cm4` và khai trong
-`DEVICE.md`.
+`ROBOT.md`.
 
 ### 3.2 Smoke Test
 
