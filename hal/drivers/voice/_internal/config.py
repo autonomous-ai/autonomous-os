@@ -28,7 +28,30 @@ FRAME_DURATION_MS = 64       # Frame duration in ms
 # Local VAD — RMS energy gate
 # ---------------------------------------------------------------------------
 RMS_THRESHOLD = int(os.environ.get("HAL_VAD_THRESHOLD", "3500"))
-SILENCE_TIMEOUT_S = float(os.environ.get("HAL_SILENCE_TIMEOUT", "2.5"))
+# Silence, in seconds, before the capture loop closes the STT session and the
+# turn is committed to the realtime model. This sits ENTIRELY IN FRONT of the
+# model's own response time, so it is added to every turn the user waits through:
+#
+#     user stops talking → SILENCE_TIMEOUT_S → activityEnd → ~1.4s → first audio
+#
+# Was 2.5s, which made a ~1.4s model response feel like ~3.9s — 64% of the wait
+# was this timer. Measured on intern-v2-893f 2026-08-17: dropping it to 1.2s cut
+# perceived latency ~33% with no loss of transcript quality over the turns tested
+# (every utterance still arrived as ONE final segment, including a sub-second
+# reply and a disfluent restart — "what do you think that, uh, what do you think
+# about…"). Model-side latency was unchanged at 1437/1541ms, confirming this is
+# pure dead-wait removal rather than a trade.
+#
+# It cannot be tuned by the logs alone: `[realtime] Response latency` stamps
+# _speech_ended_at on each audio send, so its anchor lands AFTER this timer
+# expires and the figure never moves when this value changes. Judge it by feel.
+#
+# The floor is set by Deepgram Flux, which fires EndOfTurn on natural
+# mid-sentence pauses; HAL deliberately ignores those and waits for this timer
+# instead (see voice_service.on_transcript) so one sentence is not split across
+# turns. Too low and a thinking pause gets answered mid-thought; raise it if
+# users report being cut off.
+SILENCE_TIMEOUT_S = float(os.environ.get("HAL_SILENCE_TIMEOUT", "1.2"))
 SPEECH_HOLDOFF_S = float(os.environ.get("HAL_SPEECH_HOLDOFF", "0.2"))
 # Pre-roll lookback — 8 × 64ms = 512ms of audio history before VAD trigger so
 # quiet first syllables ("b", "k", "t", "p") reach STT instead of getting clipped.
