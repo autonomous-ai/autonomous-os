@@ -49,6 +49,31 @@ func TestNormalizeBaseURL(t *testing.T) {
 			input: "https://campaign-api.autonomous.ai/api/v1/ai/v1/extra",
 			want:  "https://campaign-api.autonomous.ai/api/v1/ai/v1/extra",
 		},
+		{
+			// Regression: matching on the production hostname meant staging
+			// devices never got /v1, so {base}/chat/completions and HAL's
+			// {base}/ws/gemini both 404'd. Observed on intern-v2-893f.
+			name:  "staging host ending in /ai gets /v1 appended",
+			input: "https://campaign-api.staging.autonomousdev.xyz/api/v1/ai",
+			want:  "https://campaign-api.staging.autonomousdev.xyz/api/v1/ai/v1",
+		},
+		{
+			name:  "already normalized staging url is left untouched",
+			input: "https://campaign-api.staging.autonomousdev.xyz/api/v1/ai/v1",
+			want:  "https://campaign-api.staging.autonomousdev.xyz/api/v1/ai/v1",
+		},
+		{
+			name:  "local dev host ending in /ai gets /v1 appended",
+			input: "http://localhost:8080/api/v1/ai",
+			want:  "http://localhost:8080/api/v1/ai/v1",
+		},
+		{
+			// The path is the marker, so a third-party host that merely ends in
+			// "/ai" (without the full /api/v1/ai base) must NOT be rewritten.
+			name:  "third-party url ending in /ai is left untouched",
+			input: "https://example.com/ai",
+			want:  "https://example.com/ai",
+		},
 	}
 
 	for _, tc := range tests {
