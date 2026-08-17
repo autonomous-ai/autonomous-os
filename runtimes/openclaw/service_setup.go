@@ -72,13 +72,16 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 		slog.Debug("no existing config, starting fresh", "component", "openclaw")
 	}
 
-	// Fetch the live model catalog. On any failure fall back to the hardcoded
-	// defaultModels so setup still completes when campaign-api is unreachable.
-	slog.Debug("fetching models from API", "component", "openclaw")
-	modelsResp, err := FetchModelsFromAPI()
+	// Fetch the live model catalog: our hosted one, or — when llm_base_url is
+	// not an Autonomous host — the BYO endpoint's own `GET {base}/models`
+	// (byo_models.go). On any failure fall back to the hardcoded defaultModels
+	// so setup still completes when the catalog is unreachable.
+	slog.Debug("fetching models", "component", "openclaw")
+	modelsResp, byo, err := resolveModels(context.Background(), llmBaseURL, llmAPIKey)
 	usedFallback := false
 	if err != nil {
-		slog.Warn("setup: model API fetch failed, using hardcoded fallback", "component", "openclaw", "err", err)
+		slog.Warn("setup: model fetch failed, using hardcoded fallback",
+			"component", "openclaw", "byo", byo, "err", err)
 		modelsResp = &domain.LLMModelsListResponse{Count: len(defaultModels), Models: defaultModels}
 		usedFallback = true
 	}
@@ -120,8 +123,10 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 	providersMap[customProviderName] = map[string]any{
 		"baseUrl": llmBaseURL,
 		"api":     resolveAutonomousAPI(modelsResp.API),
-		"apiKey":  llmAPIKey,
-		"models":  modelsEntries,
+		// resolveAutonomousAPI keeps anthropic-messages for our gateway and
+		// takes openai-completions from a BYO catalog.
+		"apiKey": llmAPIKey,
+		"models": modelsEntries,
 	}
 	configData["models"] = modelsMap
 

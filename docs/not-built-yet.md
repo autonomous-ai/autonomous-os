@@ -21,7 +21,7 @@ The full list behind the README's [Not built yet](../README.md#contribute). Each
 - A `ReachyMiniApp` wrapper published as a Space tagged `reachy_mini`, so Autonomous OS installs from Pollen's own dashboard app list and stops from there too.
 - Lamp's 23 teleop moves exported by `hal/record.py` as a Hub dataset in Pollen's emotion-library format (`autonomous-os/lamp-emotions-library`), so a move recorded on either body plays on both.
 - Reachy Mini Lite: the daemon runs on your laptop, so the mock body (`devices/sim/` on `reachy-mini-daemon --sim`) is also the Lite path.
-- A measured turn latency — `make latency`: end of speech → first spoken word and → first `[HW:]` POST, p50/p95 over ~20 turns on Lamp with the default brain. Today the code comments say 3–5 s in one place and 8 s time-to-first-token in another.
+- Measured numbers on hardware. `make latency` now exists (`scripts/bench/latency.py` reads a robot's flow log and reports p50/p95 per stage) but nobody has run it on a robot — see `docs/benchmarks.md`, which also lists what it does not cover: time to first spoken word at the speaker, watts idle and moving, RSS and CPU during a turn, and the longest unattended run.
 - A hosted-model table (model, task, open weights yes/no, local swap path) for the voice, face and mood models the gateway serves.
 - The contract's reference parsers (`hal/board/device.py`, `hal/safety/policy.py`) sit inside GPL `hal/`, so the Apache-licensed CTS imports GPL code; moving them under `devices/contract/` is a wanted PR.
 - A plain setup page for browser setup without the phone app (today `/setup?debug=true&device_id=…`).

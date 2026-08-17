@@ -24,6 +24,32 @@ Autonomous OS phones home to three things and nothing else.
   releases are on the list. There is no fleet view yet — one robot per **Add
   robot**, and every robot pulls the same skill feed and OTA floor.
 
+## Bring your own LLM endpoint
+
+Point the robot at any OpenAI-compatible server — Ollama, vLLM, LM Studio,
+llama.cpp, OpenRouter — and it lists models from *that* endpoint instead of our
+catalog:
+
+1. Set `llm_base_url` (and `llm_api_key`, if your server wants one) — in the
+   browser setup wizard's AI-brain step, or directly in the robot's
+   `config.json`.
+2. Restart `os-server`. On boot it calls `GET {llm_base_url}/models` and writes
+   the models it finds into `openclaw.json`, so the brain only ever advertises
+   models that endpoint actually serves.
+
+Any base URL that is not an `autonomous.ai` / `autonomousdev.xyz` host takes
+this path (`runtimes/openclaw/byo_models.go`); ours keeps the hosted catalog. If
+the endpoint cannot list models the robot logs which URL failed and falls back
+to the built-in list rather than advertising models nothing can serve.
+
+Speech and perception have their own overrides — `stt_base_url`, `tts_base_url`,
+and `DL_BACKEND_URL` for the perception service — so a robot with all four set
+talks to nothing of ours.
+
+**Verified in unit tests, not yet on a robot against a local Ollama.** If you
+run one, say what happened in
+[Discussions](https://github.com/autonomous-ai/autonomous-os/discussions).
+
 ## Offline
 
 Local intents (~50 ms), recorded moves and the safety gate keep working;
