@@ -195,6 +195,28 @@ run-with-restart.sh [OPTIONS] -- COMMAND [ARGS...]
 
 Sending `SIGTERM` to the wrapper gracefully stops the inner process and exits.
 
+### Timeout ladder
+
+Deadlines shrink as you go inward, so the innermost layer gives up first and every
+layer above it reports an attributable failure rather than inventing its own:
+
+| Layer | Setting | Value |
+|-------|---------|-------|
+| HAL (device) | client read timeout | 10-15s |
+| nginx | `proxy_read_timeout` (`nginx.conf`) | 45s |
+| nginx | `proxy_connect_timeout` | 5s |
+| lbserver | `lb.http_timeout` (`config.py`) | 30s |
+| lbserver | `lb.ws_open_timeout` | 30s |
+
+**Never set two adjacent layers to the same value.** nginx and lbserver were both
+120s, which made the winner nondeterministic: a hung backend surfaced as `504`
+sometimes and `500` other times. lbserver must expire first so it can log which
+backend timed out and return `504`.
+
+HAL's 10-15s sits *inside* the whole chain, so the device still gives up before
+nginx does. Raising it above 45s would make failures attributable end to end, but
+costs realtime responsiveness -- that is a device-side decision, deployed by OTA.
+
 ### PID files and logs
 
 | File | Purpose |

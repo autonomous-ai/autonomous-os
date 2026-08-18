@@ -47,6 +47,10 @@ from dlserver.utils.state import (
     set_object_models,
     set_pose_model,
 )
+from core.request_context import (
+    install_request_id_logging,
+    request_id_middleware,
+)
 from factory import (
     build_action_perception,
     build_audio_embedder,
@@ -56,7 +60,10 @@ from factory import (
     build_pose_perception,
 )
 
-LOG_FORMAT = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+LOG_FORMAT = "%(asctime)s [%(name)s] [%(request_id)s] %(levelname)s: %(message)s"
+
+# Must run before any record is emitted: LOG_FORMAT references %(request_id)s.
+install_request_id_logging()
 logger = logging.getLogger(__name__)
 
 # --- Auth ---
@@ -177,6 +184,7 @@ async def lifespan(app: FastAPI):
 # --- App + Routers ---
 
 app = FastAPI(title="DL Backend", lifespan=lifespan)
+app.middleware("http")(request_id_middleware)
 
 # Existing perceptions — /hal/api/dl/ prefix
 app.include_router(action_ws_router, prefix="/hal/api/dl")

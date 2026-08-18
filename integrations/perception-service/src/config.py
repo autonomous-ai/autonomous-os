@@ -143,8 +143,15 @@ class LBSetting(BaseModel):
     host: str = "0.0.0.0"
     port: int = 7999
     internal_prefix: str = ""
-    http_timeout: float = 120.0  # seconds, httpx client timeout for backend requests
-    ws_open_timeout: float = 120.0  # seconds, websocket handshake timeout to backend
+    # Deadlines must shrink as you go inward, so the innermost layer gives up first
+    # and the outer layers report an attributable failure. nginx sits in front at
+    # proxy_read_timeout 45s; HAL clients on the device use 10-15s. Measured owlv2
+    # service time is well under 5s, so 30s is ~6x headroom while still failing long
+    # before nginx does. Equal timeouts (both were 120s) are a race with a
+    # nondeterministic winner and were why a hung backend surfaced as 504 sometimes
+    # and 500 other times.
+    http_timeout: float = 30.0  # seconds, httpx client timeout for backend requests
+    ws_open_timeout: float = 30.0  # seconds, websocket handshake timeout to backend
 
 
 class Settings(BaseSettings):

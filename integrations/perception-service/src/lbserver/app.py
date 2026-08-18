@@ -34,9 +34,16 @@ from lbserver.models import WSCipherMessage, WSKeyExchangeRequest
 from lbserver.routes.crypto import router as crypto_router
 from lbserver.utils import RoundRobin
 from lbserver.utils.crypto import encrypt_http_response, try_decrypt_http_body
+from core.request_context import (
+    install_request_id_logging,
+    request_id_middleware,
+)
 from lbserver.utils.state import get_crypto, set_crypto
 
-LOG_FORMAT = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+LOG_FORMAT = "%(asctime)s [%(name)s] [%(request_id)s] %(levelname)s: %(message)s"
+
+# Must run before any record is emitted: LOG_FORMAT references %(request_id)s.
+install_request_id_logging()
 logger = logging.getLogger("lbserver")
 
 
@@ -75,6 +82,7 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(title="DL Backend Load Balancer", lifespan=_lifespan)
+app.middleware("http")(request_id_middleware)
 app.include_router(crypto_router, prefix="/api/crypto")
 
 
@@ -116,8 +124,18 @@ async def proxy_http(request: Request, path: str) -> Response:
                 params=dict(request.query_params),
                 content=body,
             )
-    except httpx.ConnectError:
-        logger.error("[HTTP] Backend unreachable: %s", backend)
+    # Order matters: TimeoutException is a subclass of RequestError, so it must be
+    # caught first. A hung-but-listening backend completes the TCP handshake (the
+    # kernel does it, into the accept queue), so ConnectError never fires and the
+    # read times out instead -- previously that escaped uncaught and Starlette
+    # rendered a generic 500, hiding the fact that the backend was the problem.
+    except httpx.TimeoutException:
+        logger.error(
+            "[HTTP] Backend timed out after %ss: %s", settings.lb.http_timeout, backend
+        )
+        raise HTTPException(status_code=504, detail=f"Backend timed out: {backend}")
+    except httpx.RequestError as e:
+        logger.error("[HTTP] Backend unreachable: %s -- %s", backend, e)
         raise HTTPException(status_code=502, detail=f"Backend unreachable: {backend}")
 
     content = resp.content
@@ -300,6 +318,10 @@ async def proxy_ws(client_ws: WebSocket, path: str) -> None:
                     t.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
 
+    except TimeoutError as e:
+        # websockets raises this on open_timeout; it is what a hung backend produces.
+        logger.error("[WS] Backend handshake timed out: %s — %s", backend, e)
+        await client_ws.close(code=1011, reason=f"Backend timed out: {backend}")
     except (websockets.exceptions.InvalidStatus, OSError) as e:
         logger.error("[WS] Backend connection failed: %s — %s", backend, e)
         await client_ws.close(code=1011, reason=f"Backend unreachable: {backend}")

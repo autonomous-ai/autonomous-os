@@ -53,6 +53,24 @@ curl -s -H "X-API-Key: $API_KEY" http://127.0.0.1:8899/hal/api/dl/health
 A 401 is a liveness signal, not a failure. Only the `200` body confirms models
 are actually loaded, which is why the autostart probe checks for it.
 
+## 1b. Triaging a reported 5xx
+
+Start from the request id in the report. One command decides which layer to look at:
+
+```bash
+grep -r "$REQUEST_ID" /var/log/nginx/ /workspace/logs/ || echo "NEVER REACHED THIS HOST"
+```
+
+| nginx access line | Meaning | Next step |
+|---|---|---|
+| *(no match anywhere)* | Never arrived -- died at the caller, Cloudflare or the ingress | Nothing to do here. Check the caller's own logs. |
+| `client=504 upstream=-` | Backend **hung**: accepted the connection, never replied | `cat /proc/$(cat /tmp/dlserver.pid)/wchan` -- `pipe_write` means a frozen event loop |
+| `client=502 upstream=-` | Backend **down**: connect refused | Did it restart? Check `watchdog.log` |
+| `client=200 upstream=200` | Healthy here | Failure is downstream -- client timeout or transport |
+
+`urt=` is the upstream response time; compare it against the ladder in
+[deployment.md](deployment.md#timeout-ladder).
+
 ## 2. Reading the logs
 
 Logs are plain text files. No decoding is needed:
