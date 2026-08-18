@@ -264,8 +264,31 @@ layer above it reports an attributable failure rather than inventing its own:
 | HAL (device) | client read timeout | 10-15s |
 | nginx | `proxy_read_timeout` (`nginx.conf`) | 45s |
 | nginx | `proxy_connect_timeout` | 5s |
-| lbserver | `lb.http_timeout` (`config.py`) | 30s |
+| lbserver | `lb.http_timeout` (`config.py`) — read/write/pool | 30s |
+| lbserver | `lb.connect_timeout` | 5s |
 | lbserver | `lb.ws_open_timeout` | 30s |
+
+### Backend connection pool
+
+lbserver keeps **one** `httpx.AsyncClient` for the whole process, created in
+`lifespan` and closed on shutdown.
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `lb.max_connections` | 100 | concurrent connections to all backends |
+| `lb.max_keepalive` | 20 | idle connections kept warm |
+
+It previously built a client **per request**, which re-parsed the CA bundle every
+time — about 11 ms of CPU for a plaintext localhost call, capping the LB at
+roughly 90 req/s on its single event loop, and opening a fresh TCP connection
+that was never reused. Measured: 68 req/s per-request vs 554 req/s pooled, and
+1 connection instead of 50 for 50 requests.
+
+`max_connections` also bounds the damage from a hung backend: once that many
+requests are stuck, further ones raise `httpx.PoolTimeout`. That is a
+`TimeoutException`, so it surfaces as **504** with the backend named in the log —
+the same path as any other backend timeout. Raise it if you see spurious 504s
+under healthy load; lower it to fail faster when a backend is sick.
 
 **Never set two adjacent layers to the same value.** nginx and lbserver were both
 120s, which made the winner nondeterministic: a hung backend surfaced as `504`

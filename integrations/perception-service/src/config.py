@@ -150,8 +150,22 @@ class LBSetting(BaseModel):
     # before nginx does. Equal timeouts (both were 120s) are a race with a
     # nondeterministic winner and were why a hung backend surfaced as 504 sometimes
     # and 500 other times.
-    http_timeout: float = 30.0  # seconds, httpx client timeout for backend requests
+    http_timeout: float = 30.0  # seconds, httpx read/write/pool timeout for backend requests
+    # Connecting to a backend is either instant (localhost) or hopeless. Sharing the
+    # 30s read budget would make a dead backend take 30s to report instead of ms.
+    # Mirrors proxy_connect_timeout 5s on nginx.
+    connect_timeout: float = 5.0  # seconds, httpx connect timeout
     ws_open_timeout: float = 30.0  # seconds, websocket handshake timeout to backend
+
+    # One pooled AsyncClient is shared by every proxied request. Building a client
+    # per request re-parses the CA bundle each time -- ~11ms of CPU for a plaintext
+    # localhost call -- which caps the LB at roughly 90 req/s on its single event
+    # loop. Pooling also stops a failing backend accumulating CLOSE-WAIT sockets
+    # (433 of them during the 2026-08-17 incident).
+    # max_connections bounds how many requests a hung backend can tie up; past that
+    # httpx raises PoolTimeout, which is a TimeoutException and so surfaces as 504.
+    max_connections: int = 100
+    max_keepalive: int = 20
 
 
 class Settings(BaseSettings):

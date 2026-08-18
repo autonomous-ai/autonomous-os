@@ -85,8 +85,31 @@ async def _lifespan(app: FastAPI):
         )
         set_crypto(crypto)
         logger.info("Encryption enabled (key_dir=%s)", settings.crypto.key_dir)
-    yield
-    set_crypto(None)
+
+    # One client for the whole process. Created last so an earlier startup failure
+    # cannot leak it, and closed first on shutdown.
+    app.state.http_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(
+            settings.lb.http_timeout, connect=settings.lb.connect_timeout
+        ),
+        limits=httpx.Limits(
+            max_connections=settings.lb.max_connections,
+            max_keepalive_connections=settings.lb.max_keepalive,
+        ),
+    )
+    logger.info(
+        "HTTP client pool ready (max_connections=%s keepalive=%s timeout=%ss connect=%ss)",
+        settings.lb.max_connections,
+        settings.lb.max_keepalive,
+        settings.lb.http_timeout,
+        settings.lb.connect_timeout,
+    )
+    try:
+        yield
+    finally:
+        await app.state.http_client.aclose()
+        app.state.http_client = None
+        set_crypto(None)
 
 
 app = FastAPI(title="DL Backend Load Balancer", lifespan=_lifespan)
@@ -127,15 +150,22 @@ async def proxy_http(request: Request, path: str) -> Response:
     if request.method in ("POST", "PUT", "PATCH") and body:
         body, encrypted_key = try_decrypt_http_body(body)
 
+    # Reuse the process-wide pooled client. Constructing one per request re-parsed
+    # the CA bundle every time (~11ms of CPU even for a plaintext localhost call)
+    # and opened a fresh TCP connection that was never reused.
+    client: httpx.AsyncClient | None = getattr(request.app.state, "http_client", None)
+    if client is None:  # pragma: no cover - only if lifespan did not run
+        logger.error("[HTTP] No pooled client; lifespan did not run")
+        raise HTTPException(status_code=503, detail="Proxy not ready")
+
     try:
-        async with httpx.AsyncClient(timeout=settings.lb.http_timeout) as client:
-            resp = await client.request(
-                method=request.method,
-                url=url,
-                headers=headers,
-                params=dict(request.query_params),
-                content=body,
-            )
+        resp = await client.request(
+            method=request.method,
+            url=url,
+            headers=headers,
+            params=dict(request.query_params),
+            content=body,
+        )
     # Order matters: TimeoutException is a subclass of RequestError, so it must be
     # caught first. A hung-but-listening backend completes the TCP handshake (the
     # kernel does it, into the accept queue), so ConnectError never fires and the
