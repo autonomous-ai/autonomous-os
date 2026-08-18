@@ -50,6 +50,9 @@ Controls the device's servo motors for directional aiming and physical animation
 **Input:** "Stop moving" / "Hold still" / "Freeze" / "Stand still"
 **Output:** `[HW:/servo/hold:{}]` OK, holding still.
 
+**Input:** "I moved you" / "You're in a new place" / "I put you somewhere else" / "Forget where I sit"
+**Output:** `[HW:/servo/bearing/reset:{}]` Got it — I'll forget where you usually are and learn it again.
+
 **Input:** "Resume" / "Move again" / "You can move now" / "Start moving"
 **Output:** `[HW:/servo/resume:{}]` Alright, back to normal!
 

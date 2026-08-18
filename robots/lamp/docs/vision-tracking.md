@@ -394,3 +394,61 @@ cat /var/lib/hal/user_bearing.json
 `bearing_deg` should settle near where the user actually sits. An estimate sitting **mirrored about
 zero** means the yaw sign is inverted — the failure this file is most exposed to, because it is
 open-loop and nothing corrects it.
+
+### Noticing that the lamp has been moved
+
+The bearing is stored in **lamp-relative** coordinates, so picking the lamp up or rotating it on the
+desk invalidates it instantly — while the file still looks perfectly valid.
+
+Nothing on this device can observe that directly:
+
+| Approach | Why not |
+|---|---|
+| IMU / accelerometer | none fitted — absent from the BOM and from HAL |
+| Servo feedback | `base_yaw` measures the head against the **base**. Rotating the whole lamp moves the world, not the joint. |
+| Reboot as a hint | weak both ways — lamps reboot without moving, and move without rebooting |
+
+So it is **inferred from failed predictions**: when aim priority 3 turns to the remembered bearing
+and finds nobody, that is a miss. `PREDICTION_MISS_LIMIT` misses drops the estimate, and it rebuilds
+from live sightings.
+
+Three guards keep ordinary life from looking like a relocation:
+
+- **A single miss is not enough** — the user may simply be out of the room.
+- **A hit resets the streak**, so occasional absences never accumulate.
+- **Misses must be clustered** (`MISS_STREAK_WINDOW_S`). A moved lamp fails every attempt from the
+  moment it moved; a user who is sometimes in another room produces isolated misses spread over
+  weeks. Without the window those become indistinguishable once enough time passes.
+
+And a miss is only ever counted when the lamp **actually looked and found nothing**. Camera disabled,
+no frame, deadline, button abort, and the occlusion hold all return without scoring — privacy mode in
+particular must never erase where the user sits.
+
+This self-heals for **any** cause (lamp moved, furniture rearranged, user changed desk) without ever
+needing to know which one happened.
+
+#### How big a move has to be before anything needs to detect it
+
+Most moves never reach the miss-counting above, because the estimate corrects itself:
+
+| Lamp rotated by | What corrects it |
+|---|---|
+| **< half the camera FOV** (~30°) | the user is **still in frame** at the stale bearing, so the aim finds and centres them anyway — and that sighting records the new correct yaw. Plain EMA pulls the estimate over. **Nothing detects the move; nothing needs to.** |
+| up to `OUTLIER_DEG` (45°) | not visible from the stale bearing, but found while stepping toward it. The sighting is still under the outlier threshold, so it is folded in at full weight. |
+| beyond `OUTLIER_DEG` | sightings look like outliers, so `OUTLIER_STREAK` consecutive ones are accepted as a relocation. |
+| far enough that the user is never found | the miss streak drops the estimate and it rebuilds from scratch. |
+
+So the machinery above is only for the **last** case. A lamp nudged on the desk is handled by the
+estimate's own update rule, which is why the small case is also the quietest — the lamp never learns
+it moved, and does not need to.
+
+**Inspect and reset:**
+
+```bash
+curl 127.0.0.1:5001/servo/bearing              # {"known":true,"bearing_deg":-18.5,...}
+curl -X POST 127.0.0.1:5001/servo/bearing/reset
+```
+
+The reset is also wired to speech via `skills/servo-control` — *"I moved you"*, *"you're in a new
+place"*. Automatic detection needs several failures before acting, which is right for avoiding false
+positives but slow when the user already knows the lamp moved.

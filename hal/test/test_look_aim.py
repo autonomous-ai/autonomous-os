@@ -225,3 +225,12 @@ def test_no_bearing_recorded_yet_does_not_move():
 def test_bearing_steps_are_bounded():
     res, svc = _run_no_subject(_bearing(135.0, 0.9))
     assert res.bearing_steps <= aim.MAX_BEARING_STEPS
+
+
+def test_camera_disabled_never_scores_a_failed_prediction():
+    # Privacy mode is not evidence that the bearing is wrong. Counting it would
+    # let "don't look at me" slowly erase where the user sits.
+    with mock.patch("hal.drivers.tracking.user_bearing.record_prediction") as scored:
+        res, _svc = _run(box=(500, 100, 80, 200), disabled=True)
+    assert res.reason == "camera disabled"
+    assert not scored.called

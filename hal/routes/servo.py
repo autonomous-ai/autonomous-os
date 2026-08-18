@@ -391,6 +391,45 @@ def aim_servo(req: ServoAimRequest):
         raise HTTPException(500, f"Servo aim failed: {e}")
 
 
+@router.get("/servo/bearing")
+def get_user_bearing():
+    """Inspect the remembered user bearing.
+
+    Exists so the estimate can be checked without SSH-ing to the device. The
+    thing to look for is `bearing_deg` settling near where the user actually
+    sits — an estimate mirrored about zero means the yaw sign is inverted, which
+    is silent otherwise because this value is open-loop.
+    """
+    from hal.drivers.tracking import user_bearing
+
+    est = user_bearing.read_estimate()
+    if est is None:
+        # None, not 0.0 — dead ahead is a real bearing, "unknown" must differ.
+        return {"status": "ok", "known": False}
+    return {
+        "status": "ok",
+        "known": True,
+        "bearing_deg": est.bearing_deg,
+        "confidence": est.confidence,
+        "samples": est.samples,
+        "age_s": round(est.age_s, 1),
+    }
+
+
+@router.post("/servo/bearing/reset", response_model=StatusResponse)
+def reset_user_bearing():
+    """Forget where the user usually is — "I moved you".
+
+    The escape hatch for a relocated lamp. Automatic detection needs several
+    failed predictions before it acts, which is right for avoiding false
+    positives but slow when the user already KNOWS the lamp moved.
+    """
+    from hal.drivers.tracking import user_bearing
+
+    user_bearing.clear()
+    return {"status": "ok", "message": "user bearing cleared"}
+
+
 @router.post("/servo/nudge", response_model=ServoAimResponse)
 def nudge_servo(req: ServoNudgeRequest):
     """Move servo by relative degrees from current position."""

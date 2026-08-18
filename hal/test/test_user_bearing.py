@@ -127,3 +127,91 @@ def test_early_sightings_are_not_treated_as_outliers():
         ub.record_sighting(0.0, now=t)
         ub.record_sighting(90.0, now=t + 60.0)
         assert ub.read_estimate(now=t + 120.0).bearing_deg > 10.0
+
+
+# --- prediction-failure detection (how a moved lamp is noticed) -----------
+
+def test_repeated_failed_predictions_drop_the_estimate():
+    # No IMU can see the lamp move, so a bearing that stops finding anyone is
+    # the only available evidence that it no longer describes reality.
+    with tempfile.TemporaryDirectory() as d, _with_path(d):
+        ub.record_sighting(30.0)
+        for _ in range(ub.PREDICTION_MISS_LIMIT - 1):
+            assert ub.record_prediction(hit=False) is False
+            assert ub.read_estimate() is not None
+        assert ub.record_prediction(hit=False) is True
+        assert ub.read_estimate() is None, "estimate should be dropped"
+
+
+def test_a_single_miss_does_not_drop_the_estimate():
+    # The user simply being out of the room must not wipe a good estimate.
+    with tempfile.TemporaryDirectory() as d, _with_path(d):
+        ub.record_sighting(30.0)
+        ub.record_prediction(hit=False)
+        assert ub.read_estimate() is not None
+
+
+def test_a_hit_clears_the_miss_streak():
+    with tempfile.TemporaryDirectory() as d, _with_path(d):
+        ub.record_sighting(30.0)
+        for _ in range(ub.PREDICTION_MISS_LIMIT - 1):
+            ub.record_prediction(hit=False)
+        ub.record_prediction(hit=True)
+        # Streak reset, so the limit must start over rather than trip immediately.
+        for _ in range(ub.PREDICTION_MISS_LIMIT - 1):
+            assert ub.record_prediction(hit=False) is False
+        assert ub.read_estimate() is not None
+
+
+def test_scoring_with_no_estimate_is_harmless():
+    with tempfile.TemporaryDirectory() as d, _with_path(d):
+        assert ub.record_prediction(hit=False) is False
+        assert ub.record_prediction(hit=True) is False
+
+
+def test_misses_spread_far_apart_do_not_accumulate():
+    # A user occasionally in another room must not look like a moved lamp.
+    # A moved lamp fails every attempt from the moment it moved; scattered
+    # absences are a different signal and must not add up across weeks.
+    with tempfile.TemporaryDirectory() as d, _with_path(d):
+        t = 1_000_000.0
+        ub.record_sighting(30.0, now=t)
+        for i in range(6):
+            far_apart = t + (i + 1) * (ub.MISS_STREAK_WINDOW_S + 60.0)
+            assert ub.record_prediction(hit=False, now=far_apart) is False
+        assert ub.read_estimate(now=t) is not None, "scattered misses must not drop it"
+
+
+def test_clustered_misses_still_drop_the_estimate():
+    with tempfile.TemporaryDirectory() as d, _with_path(d):
+        t = 1_000_000.0
+        ub.record_sighting(30.0, now=t)
+        dropped = False
+        for i in range(ub.PREDICTION_MISS_LIMIT):
+            dropped = ub.record_prediction(hit=False, now=t + i * 300.0)
+        assert dropped is True
+        assert ub.read_estimate(now=t) is None
+
+
+def test_a_small_lamp_move_self_corrects_without_being_detected():
+    # If the lamp is nudged a little on the desk, the user is still inside the
+    # camera FOV at the stale bearing — so every centred sighting records the
+    # NEW correct servo yaw and the estimate simply follows. Nothing has to
+    # notice the move; only large moves need the miss-streak machinery.
+    with tempfile.TemporaryDirectory() as d, _with_path(d):
+        t = 1_000_000.0
+        for i in range(10):
+            ub.record_sighting(30.0, now=t + i * 60.0)
+        assert abs(ub.read_estimate(now=t).bearing_deg - 30.0) < 1.0
+
+        # Lamp rotated ~20 deg: same user, new servo yaw. Under OUTLIER_DEG, so
+        # it is folded in at full weight rather than being damped as a stray.
+        shifted = 50.0
+        assert abs(shifted - 30.0) < ub.OUTLIER_DEG
+        for i in range(10, 22):
+            ub.record_sighting(shifted, now=t + i * 60.0)
+
+        est = ub.read_estimate(now=t + 22 * 60.0)
+        assert abs(est.bearing_deg - shifted) < 2.0, (
+            f"estimate should have followed the lamp to {shifted}, got {est.bearing_deg}"
+        )

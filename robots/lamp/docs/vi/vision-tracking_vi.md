@@ -397,3 +397,62 @@ cat /var/lib/hal/user_bearing.json
 `bearing_deg` phải hội tụ về gần nơi người dùng thực sự ngồi. Một ước lượng nằm **đối xứng gương qua
 0** nghĩa là dấu yaw bị đảo — đây là kiểu hỏng mà file này dễ dính nhất, vì nó chạy vòng hở và không
 có gì sửa sai cho nó.
+
+### Phát hiện lamp đã bị dời chỗ
+
+Bearing được lưu theo hệ quy chiếu **gắn với lamp**, nên nhấc lamp lên hay xoay nó trên bàn là nó sai
+ngay lập tức — trong khi file vẫn trông hoàn toàn hợp lệ.
+
+Không có gì trên thiết bị này quan sát được điều đó một cách trực tiếp:
+
+| Cách tiếp cận | Vì sao không được |
+|---|---|
+| IMU / cảm biến gia tốc | không được lắp — không có trong BOM lẫn trong HAL |
+| Phản hồi servo | `base_yaw` đo vị trí đầu so với **đế**. Xoay cả chiếc lamp làm thay đổi thế giới chứ không làm thay đổi khớp. |
+| Dựa vào lần khởi động lại | yếu ở cả hai chiều — lamp reboot mà không bị dời, và bị dời mà không reboot |
+
+Nên nó được **suy ra từ các dự đoán sai**: khi ưu tiên 3 của pha ngắm quay tới bearing đã ghi nhớ mà
+không thấy ai, đó là một lần trượt. `PREDICTION_MISS_LIMIT` lần trượt sẽ hủy ước lượng, và nó tự dựng
+lại từ các lần nhìn thấy mới.
+
+Ba lớp bảo vệ giúp sinh hoạt bình thường không bị hiểu nhầm thành dời chỗ:
+
+- **Một lần trượt là chưa đủ** — người dùng có thể chỉ đang ra ngoài.
+- **Một lần trúng xóa sạch chuỗi trượt**, nên những lần vắng mặt lẻ tẻ không bao giờ cộng dồn.
+- **Các lần trượt phải xảy ra gần nhau** (`MISS_STREAK_WINDOW_S`). Lamp bị dời sẽ trượt ở mọi lần thử
+  kể từ lúc bị dời; còn người dùng thỉnh thoảng ở phòng khác thì tạo ra các lần trượt rời rạc trải dài
+  hàng tuần. Không có cửa sổ thời gian thì sau đủ lâu hai thứ đó trông y hệt nhau.
+
+Và một lần trượt chỉ được tính khi lamp **thực sự đã nhìn và không thấy gì**. Camera đang tắt, không
+lấy được khung hình, hết hạn chót, bị nút bấm hủy, và cả trường hợp giữ nguyên vì bị che khuất — tất cả
+đều thoát ra mà không chấm điểm; đặc biệt chế độ riêng tư tuyệt đối không được phép xóa dần nơi người
+dùng hay ngồi.
+
+Cách này tự chữa lành cho **mọi** nguyên nhân (lamp bị dời, đồ đạc sắp xếp lại, người dùng đổi bàn) mà
+không bao giờ cần biết nguyên nhân nào đã xảy ra.
+
+#### Phải dời bao nhiêu thì mới cần tới cơ chế phát hiện
+
+Phần lớn các lần dời chỗ không bao giờ chạm tới cơ chế đếm trượt ở trên, vì ước lượng tự sửa lấy:
+
+| Lamp bị xoay | Cái gì sửa nó |
+|---|---|
+| **nhỏ hơn nửa FOV camera** (~30°) | người dùng **vẫn nằm trong khung hình** ở bearing cũ, nên pha ngắm vẫn tìm thấy và căn giữa được — và chính lần nhìn thấy đó ghi lại góc yaw mới đúng. EMA thông thường kéo ước lượng theo. **Không có gì phát hiện ra việc dời chỗ; và cũng không cần.** |
+| tới `OUTLIER_DEG` (45°) | không thấy được từ bearing cũ, nhưng tìm thấy trong lúc bước dần về phía đó. Lần nhìn thấy vẫn dưới ngưỡng outlier nên được nhận với trọng số đầy đủ. |
+| vượt `OUTLIER_DEG` | các lần nhìn thấy trông như outlier, nên `OUTLIER_STREAK` lần liên tiếp sẽ được nhận là một lần dời chỗ. |
+| xa tới mức không bao giờ tìm thấy người dùng | chuỗi trượt sẽ hủy ước lượng và nó dựng lại từ đầu. |
+
+Nên toàn bộ cơ chế ở trên chỉ dành cho trường hợp **cuối cùng**. Một chiếc lamp bị xê dịch nhẹ trên bàn
+được xử lý bởi chính quy tắc cập nhật của ước lượng — đó cũng là lý do trường hợp nhỏ lại là trường hợp
+êm nhất: lamp không bao giờ biết là nó đã bị dời, và cũng không cần biết.
+
+**Xem và đặt lại:**
+
+```bash
+curl 127.0.0.1:5001/servo/bearing              # {"known":true,"bearing_deg":-18.5,...}
+curl -X POST 127.0.0.1:5001/servo/bearing/reset
+```
+
+Lệnh đặt lại cũng được nối với giọng nói qua `skills/servo-control` — *"tôi đã dời bạn đi"*, *"bạn
+đang ở chỗ mới"*. Việc phát hiện tự động cần vài lần thất bại mới hành động, điều đó đúng để tránh báo
+động giả nhưng chậm khi người dùng vốn đã BIẾT là lamp bị dời.

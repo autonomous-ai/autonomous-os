@@ -59,6 +59,25 @@ OUTLIER_STREAK: int = 3
 # Below this confidence the estimate is not settled enough to call anything an
 # outlier — early sightings must be free to move it.
 OUTLIER_MIN_CONFIDENCE: float = 0.4
+# Prediction-failure detection — how a MOVED LAMP is noticed.
+#
+# The bearing is stored in lamp-relative coordinates, so picking the lamp up or
+# rotating it on the desk invalidates every stored bearing at once — while the
+# file still looks perfectly valid. Nothing on this device can observe that
+# directly: there is no IMU, and base_yaw measures the head against the BASE, so
+# rotating the whole lamp moves the world and not the joint.
+#
+# So it is inferred: when the aim turns to the remembered bearing and finds
+# nobody, that is a failed prediction. A few in a row means the bearing no
+# longer describes reality — lamp moved, furniture rearranged, or the user
+# changed desk. The cause does not matter; the response is the same, and it
+# self-heals because the estimate rebuilds from live sightings.
+PREDICTION_MISS_LIMIT: int = 3
+# ...and they must be CLUSTERED. A moved lamp fails every attempt from the moment
+# it moved; a user who is occasionally in another room produces isolated misses
+# spread over weeks. Without a window those look identical after enough time, and
+# a perfectly good bearing gets dropped for three unrelated absences months apart.
+MISS_STREAK_WINDOW_S: float = 24 * 3600.0
 # Confidence reaches ~1.0 after this many sightings...
 CONFIDENCE_FULL_SAMPLES: int = 8
 # ...and decays with this time constant once they stop, so a stale estimate
@@ -184,6 +203,46 @@ def read_estimate(now: Optional[float] = None) -> Optional[BearingEstimate]:
         updated=updated,
         age_s=age,
     )
+
+
+def record_prediction(hit: bool, now: Optional[float] = None) -> bool:
+    """Score one use of the bearing. Returns True if the estimate was dropped.
+
+    `hit` = the aim turned to the remembered bearing and found a subject there.
+    A miss is not conclusive on its own — the user may simply be out of the room —
+    which is why it takes PREDICTION_MISS_LIMIT in a row before acting.
+    """
+    d = _load_raw()
+    if not d:
+        return False
+    if hit:
+        if d.get("misses"):
+            d["misses"] = 0
+            d["last_miss"] = 0.0
+            _write_raw(d)
+        return False
+
+    t = time.time() if now is None else now
+    last_miss = float(d.get("last_miss", 0.0))
+    if last_miss > 0.0 and (t - last_miss) > MISS_STREAK_WINDOW_S:
+        # Too long since the previous failure to be the same cause — start over.
+        misses = 1
+    else:
+        misses = int(d.get("misses", 0)) + 1
+    d["last_miss"] = t
+
+    if misses >= PREDICTION_MISS_LIMIT:
+        logger.info(
+            "[user-bearing] %d failed predictions in a row — dropping estimate "
+            "(lamp moved, or the user is no longer where they were)", misses,
+        )
+        clear()
+        return True
+
+    d["misses"] = misses
+    _write_raw(d)
+    logger.debug("[user-bearing] failed prediction %d/%d", misses, PREDICTION_MISS_LIMIT)
+    return False
 
 
 def clear() -> bool:

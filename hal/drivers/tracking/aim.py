@@ -180,6 +180,22 @@ def _step_toward_bearing(svc: Any) -> bool:
         return False
 
 
+def _score_prediction(bearing_steps: int, found: bool) -> None:
+    """Tell the estimate whether turning to it actually found anyone.
+
+    Only meaningful when we actually turned to the bearing — an aim that never
+    consulted it says nothing about whether it is still right.
+    """
+    if bearing_steps <= 0:
+        return
+    try:
+        from hal.drivers.tracking import user_bearing
+
+        user_bearing.record_prediction(found)
+    except Exception as e:
+        logger.debug("[look-aim] prediction scoring skipped: %s", e)
+
+
 def _record_bearing_if_centred(svc: Any, dx_frac: float) -> None:
     """Fold this sighting into the remembered bearing, if it is centred enough.
 
@@ -251,9 +267,11 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
                 bearing_steps += 1
                 iterations += 1
                 continue
+            _score_prediction(bearing_steps, found=False)
             return AimResult(False, "subject not found", iterations, yaw_total,
                              last_dx_frac, bearing_steps)
 
+        _score_prediction(bearing_steps, found=True)
         _note_sighting(svc)
         x, _y, w, _h = box
         w_fr = float(frame.shape[1])
