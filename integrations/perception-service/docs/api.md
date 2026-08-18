@@ -286,6 +286,15 @@ public key as `text/plain`, or `404` if encryption is disabled. See
 
 ## Error responses
 
+### `GET /livez` (both servers)
+
+Liveness only: returns `200 {"status":"alive"}` if a coroutine can still be
+scheduled. No auth, no model checks, no downstream calls. Restricted to localhost
+at the nginx layer -- it exists for the watchdog, not for callers.
+
+Do not confuse it with `GET /hal/api/dl/health`, which is *readiness*: it needs an
+API key and reports which models finished loading.
+
 | Code | When |
 |------|------|
 | `400` | Bad/undecodable body, image, or audio; decryption auth-tag failure (lbserver) |

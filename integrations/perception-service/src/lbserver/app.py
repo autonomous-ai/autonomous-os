@@ -16,6 +16,7 @@ import logging
 import logging.handlers
 import os
 import signal
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -34,7 +35,10 @@ from lbserver.models import WSCipherMessage, WSKeyExchangeRequest
 from lbserver.routes.crypto import router as crypto_router
 from lbserver.utils import RoundRobin
 from lbserver.utils.crypto import encrypt_http_response, try_decrypt_http_body
+from core.livez import router as livez_router
 from core.request_context import (
+    InstanceAlreadyRunning,
+    acquire_instance_lock,
     install_request_id_logging,
     request_id_middleware,
 )
@@ -44,6 +48,9 @@ LOG_FORMAT = "%(asctime)s [%(name)s] [%(request_id)s] %(levelname)s: %(message)s
 
 # Must run before any record is emitted: LOG_FORMAT references %(request_id)s.
 install_request_id_logging()
+
+# Holds the single-instance flock for the process lifetime; closing it releases.
+_instance_lock: object | None = None
 logger = logging.getLogger("lbserver")
 
 
@@ -84,6 +91,10 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(title="DL Backend Load Balancer", lifespan=_lifespan)
 app.middleware("http")(request_id_middleware)
 app.include_router(crypto_router, prefix="/api/crypto")
+# Liveness: no prefix, no auth. MUST be registered before the catch-all
+# proxy route below, or /livez would be forwarded to a backend instead of
+# answering locally -- which would make lbserver look dead whenever dlserver is.
+app.include_router(livez_router)
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +362,10 @@ def _setup_logging(log_dir: str | None) -> dict[str, Any] | None:
 
     try:
         Path(log_dir).mkdir(parents=True, exist_ok=True)
+        # Hold this for the process lifetime -- see acquire_instance_lock. It must
+        # be taken BEFORE the rotation below, which renames/unlinks unconditionally.
+        global _instance_lock
+        _instance_lock = acquire_instance_lock(log_dir)
         log_path = Path(log_dir) / "lbserver.log"
         uvicorn_log_path = Path(log_dir) / "uvicorn.log"
         # Rotate old logs
@@ -390,6 +405,10 @@ def _setup_logging(log_dir: str | None) -> dict[str, Any] | None:
                 "uvicorn.access": {"handlers": ["file"], "level": "INFO", "propagate": False},
             },
         }
+    except InstanceAlreadyRunning:
+        # Never fall back to console here: continuing would run a second instance
+        # that clobbers the live one's log files. Propagate and let main() exit.
+        raise
     except Exception as e:
         logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
         logging.getLogger(__name__).warning("File logging setup failed, using console: %s", e)
@@ -398,7 +417,11 @@ def _setup_logging(log_dir: str | None) -> dict[str, Any] | None:
 
 def main() -> None:
     args = parse_args()
-    uvicorn_log_config = _setup_logging(args.log_dir)
+    try:
+        uvicorn_log_config = _setup_logging(args.log_dir)
+    except InstanceAlreadyRunning as e:
+        print(f"refusing to start: {e}", file=sys.stderr)
+        raise SystemExit(3) from None
 
     def _handle_sigterm(signum, frame):
         logger.critical("SIGTERM received — shutting down (pid=%d)", os.getpid())

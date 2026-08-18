@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
+import os
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
@@ -64,3 +65,47 @@ async def request_id_middleware(
         return response
     finally:
         request_id_var.reset(token)
+
+
+# ---------------------------------------------------------------------------
+# Single-instance guard
+# ---------------------------------------------------------------------------
+
+
+class InstanceAlreadyRunning(RuntimeError):
+    """Another process already holds the log-directory lock."""
+
+
+def acquire_instance_lock(log_dir: str) -> "object":
+    """Take an exclusive, non-blocking lock on <log_dir>/.instance.lock.
+
+    Must be called BEFORE the startup log rotation. That rotation renames and
+    unlinks every matching log file with no liveness check, so starting a second
+    instance used to yank the log files out from under the first and orphan its
+    open handles -- which is what made the 2026-08-10 outage unrecoverable.
+
+    flock is used rather than a PID file because it is race-free (no TOCTOU
+    window between "is that PID alive?" and "claim it") and self-cleaning: the
+    kernel releases it when the holder dies, however it dies -- including
+    SIGKILL, which is how a wedged server has to be stopped.
+
+    Returns the open file object; the caller must keep a reference to it for the
+    process lifetime, since closing it releases the lock.
+    """
+    import fcntl
+    from pathlib import Path
+
+    Path(log_dir).mkdir(parents=True, exist_ok=True)
+    lock_path = Path(log_dir) / ".instance.lock"
+    handle = lock_path.open("w")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        handle.close()
+        raise InstanceAlreadyRunning(
+            f"another instance already holds {lock_path}; refusing to start "
+            f"(starting a second instance would clobber the running one's logs)"
+        ) from exc
+    handle.write(f"{os.getpid()}\n")
+    handle.flush()
+    return handle

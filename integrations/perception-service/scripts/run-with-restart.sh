@@ -5,6 +5,11 @@
 # --pid-file PATH:         the inner process PID is written here on each start.
 # --wrapper-pid-file PATH: this wrapper's own PID is written here once at startup.
 # --cooldown SECONDS:      wait between restarts (default: 5).
+# --probe-url URL:         if set, poll this every PROBE_INTERVAL seconds. After
+#                          PROBE_FAILURES consecutive failures the child is killed
+#                          with -9 and the restart loop takes over. Use a liveness
+#                          endpoint (/livez): it must not check models, auth or any
+#                          downstream service, or a slow start becomes a restart loop.
 # --log-dir PATH:          if set, stdout → log-dir/stdout.log, stderr → log-dir/stderr.log
 #                          and watchdog messages → log-dir/watchdog.log.
 #                          Plain files on purpose: a pipe to multilog can block the
@@ -16,6 +21,7 @@
 set -euo pipefail
 
 COOLDOWN=5
+PROBE_URL=""
 PID_FILE=""
 WRAPPER_PID_FILE=""
 LOG_DIR=""
@@ -23,6 +29,7 @@ LOG_DIR=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --cooldown) COOLDOWN="$2"; shift 2 ;;
+        --probe-url) PROBE_URL="$2"; shift 2 ;;
         --pid-file) PID_FILE="$2"; shift 2 ;;
         --wrapper-pid-file) WRAPPER_PID_FILE="$2"; shift 2 ;;
         --log-dir) LOG_DIR="$2"; shift 2 ;;
@@ -43,6 +50,14 @@ fi
 MAX_LOG_BYTES=${MAX_LOG_BYTES:-8388608}   # 8 MiB
 LOG_BACKUPS=3
 GUARD_INTERVAL=${GUARD_INTERVAL:-60}     # seconds between size checks
+
+# Liveness probe. Deliberately conservative: a probe that is too eager turns a slow
+# start into an endless restart loop.
+PROBE_INTERVAL=${PROBE_INTERVAL:-10}     # seconds between probes
+PROBE_TIMEOUT=${PROBE_TIMEOUT:-5}        # per-probe curl timeout
+PROBE_FAILURES=${PROBE_FAILURES:-6}      # consecutive failures before acting (~60s)
+PROBE_GRACE=${PROBE_GRACE:-180}          # seconds after start before probing at all;
+                                         # dlserver needs ~2-3 min to load its models
 
 # Rename FILE aside on startup, keeping LOG_BACKUPS generations. Safe here because
 # no process holds these files open yet.
@@ -85,6 +100,7 @@ fi
 
 CHILD_PID=""
 GUARD_PID=""
+PROBE_PID=""
 RUNNING=true
 
 # Background size guard: caps the log files while the child runs. Runs in its own
@@ -102,6 +118,45 @@ start_size_guard() {
     GUARD_PID=$!
 }
 
+# Watches liveness while the child runs. `wait` alone only fires when the child
+# EXITS -- a frozen child never exits, so the wrapper sat in do_wait for 3.5h on
+# 2026-08-10 and ~50min on 2026-08-17 while the port stayed bound and green.
+#
+# kill -9 is mandatory: a hung uvicorn absorbs SIGTERM. Its handler only sets
+# should_exit, and the only thing that can act on that flag is the event loop --
+# which is the thing that is stuck.
+start_liveness_probe() {
+    [[ -n "$PROBE_URL" ]] || return 0
+    local target=$1
+    (
+        sleep "$PROBE_GRACE"
+        local fails=0
+        while :; do
+            if curl -fsS -m "$PROBE_TIMEOUT" -o /dev/null "$PROBE_URL" 2>/dev/null; then
+                if (( fails > 0 )); then
+                    echo "[watchdog] probe recovered after $fails failure(s)"
+                fi
+                fails=0
+            else
+                fails=$(( fails + 1 ))
+                echo "[watchdog] probe failed ($fails/$PROBE_FAILURES): $PROBE_URL"
+                if (( fails >= PROBE_FAILURES )); then
+                    echo "[watchdog] unresponsive after $fails probes; SIGKILL $target"
+                    kill -9 "$target" 2>/dev/null || true
+                    return 0
+                fi
+            fi
+            sleep "$PROBE_INTERVAL"
+        done
+    ) &
+    PROBE_PID=$!
+}
+
+stop_liveness_probe() {
+    [[ -n "$PROBE_PID" ]] && kill "$PROBE_PID" 2>/dev/null || true
+    PROBE_PID=""
+}
+
 stop_size_guard() {
     [[ -n "$GUARD_PID" ]] && kill "$GUARD_PID" 2>/dev/null || true
     GUARD_PID=""
@@ -109,6 +164,7 @@ stop_size_guard() {
 
 cleanup() {
     RUNNING=false
+    stop_liveness_probe
     stop_size_guard
     if [[ -n "$CHILD_PID" ]] && kill -0 "$CHILD_PID" 2>/dev/null; then
         kill "$CHILD_PID" 2>/dev/null || true
@@ -129,9 +185,11 @@ while $RUNNING; do
     CHILD_PID=$!
     [[ -n "$PID_FILE" ]] && echo "$CHILD_PID" > "$PID_FILE"
     start_size_guard
+    start_liveness_probe "$CHILD_PID"
     EXIT_CODE=0
     wait "$CHILD_PID" || EXIT_CODE=$?
     CHILD_PID=""
+    stop_liveness_probe
     stop_size_guard
 
     if ! $RUNNING; then

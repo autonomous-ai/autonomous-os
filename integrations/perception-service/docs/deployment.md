@@ -183,6 +183,8 @@ run-with-restart.sh [OPTIONS] -- COMMAND [ARGS...]
   --pid-file PATH           inner process PID (for stop targets)
   --wrapper-pid-file PATH   watchdog's own PID
   --cooldown SECONDS        wait between restarts (default: 5)
+  --probe-url URL           liveness probe; after PROBE_FAILURES consecutive
+                            failures the child is SIGKILLed and restarted
   --log-dir PATH            plain-file logging (never a pipe -- a blocked pipe
                             can freeze the server):
                               log-dir/stdout.log    server stdout
@@ -194,6 +196,63 @@ run-with-restart.sh [OPTIONS] -- COMMAND [ARGS...]
 ```
 
 Sending `SIGTERM` to the wrapper gracefully stops the inner process and exits.
+
+### Liveness watchdog
+
+`wait` alone only fires when the child **exits**. A frozen child never exits, so
+the wrapper waited 3.5h on 2026-08-10 and ~50min on 2026-08-17 while the port
+stayed bound and every port-based check reported green.
+
+The wrapper now polls `--probe-url` alongside `wait`:
+
+| Env var | Default | Meaning |
+|---------|---------|---------|
+| `PROBE_INTERVAL` | 10s | between probes |
+| `PROBE_TIMEOUT` | 5s | per-probe curl timeout |
+| `PROBE_FAILURES` | 6 | consecutive failures before acting (~60s) |
+| `PROBE_GRACE` | 180s | no probing for this long after start |
+
+`PROBE_GRACE` is not optional padding: dlserver takes ~2-3 minutes to load models
+(08:51 -> 08:53 on the real box). Probing during that window would kill it before
+it ever served a request, and it would never finish booting.
+
+On `PROBE_FAILURES` consecutive failures the wrapper sends **SIGKILL**, not
+SIGTERM. A hung uvicorn absorbs SIGTERM: its handler only sets `should_exit`, and
+the only thing that can act on that flag is the event loop -- the thing that is
+stuck.
+
+**Probe `/livez`, never `/health`.** `/livez` takes no auth and checks nothing but
+the event loop. `/hal/api/dl/health` is a *readiness* check -- it reports whether
+the models loaded, needs an API key, and would restart-loop the server during a
+slow start or after a key rotation. Readiness failing means "route traffic
+elsewhere"; liveness failing means "restart this process".
+
+### Stopping
+
+`make stop-runpod-*` runs `scripts/stop-tree.sh`, which:
+
+1. resolves the real holder from the **listening socket**, not just `/tmp/*.pid`
+   (a failed start overwrites those with its own dead PIDs)
+2. escalates **SIGTERM -> SIGTERM -> SIGKILL**, polling up to 10s per round
+3. kills whole **process groups** -- start targets use `setsid` so each wrapper
+   owns its group, covering the child, size guard and liveness probe
+4. **exits non-zero if anything survives**, so `start` refuses to run on a dirty
+   slate rather than dying later on `EADDRINUSE`
+
+A process sharing the caller's own group (an instance from a build predating
+`setsid`) is killed individually -- killing that group would take down `make`
+itself mid-stop.
+
+### Single instance per log directory
+
+Each server takes an exclusive `flock` on `<log-dir>/.instance.lock` before it
+rotates anything, and exits **3** if another instance holds it. The startup
+rotation renames and unlinks every matching log file unconditionally, so without
+this a second start yanked the log files out from under a running instance --
+which is what made the 2026-08-10 outage unrecoverable.
+
+`flock` rather than a PID file: it is race-free, and the kernel releases it
+however the holder dies, including SIGKILL.
 
 ### Timeout ladder
 
