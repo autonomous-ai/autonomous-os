@@ -71,6 +71,45 @@ grep -r "$REQUEST_ID" /var/log/nginx/ /workspace/logs/ || echo "NEVER REACHED TH
 `urt=` is the upstream response time; compare it against the ladder in
 [deployment.md](deployment.md#timeout-ladder).
 
+## 1c. A log file stopped growing
+
+Both servers use `ResilientRotatingFileHandler` (`src/core/logging_ext.py`). The
+stock handler never reopens a dead stream, so one failed write silenced a log
+until the next restart -- `lbserver.log` stopped at 07:59:35 on 2026-08-17 and
+stayed dead for the rest of the day while its mtime kept advancing.
+
+On a write failure the handler now closes and reopens; if the file itself is
+unwritable it rolls over **once** to a fresh inode; if that still fails it mutes
+for `retry_after` (30s) and tries again. Failure notices on stderr are
+rate-limited to one per window instead of a ~40-line traceback per record.
+
+So a log that is *permanently* frozen now means the fault outlasted every retry.
+Check:
+
+```bash
+# is it really frozen, or just quiet?
+stat -c '%s %y' /workspace/logs/lbserver/lbserver.log     # sample twice
+
+# NUL bytes at the tail = the storage lost that region (reads return zeros)
+S=$(stat -c %s FILE); N=$(tr -d '\000' < FILE | wc -c); echo "NUL=$((S-N))"
+
+# read what survives -- less/editors call it binary and garble it
+tr -d '\000' < FILE | less
+
+# is the fd still on a live inode, or a deleted one?
+ls -l /proc/$(cat /tmp/lbserver.pid)/fd | grep -a workspace
+```
+
+| Symptom | Meaning |
+|---|---|
+| fd shows `(deleted)` | An unlinked-but-open file. Should not happen since the handlers were merged -- if it does, the double-handler bug is back |
+| fd on a live inode, NUL tail, size frozen | Storage-side fault on that file's backing chunks. Not preventable from the app; the handler should have rolled over |
+| `[logging] write failed` on stderr | The handler is retrying. One line per 30s is normal during a fault |
+
+> `/workspace` is MooseFS. The client tools that would identify a bad chunk
+> (`mfsfileinfo`, `mfscheckfile`) are **not installed** -- worth adding, since
+> without them a storage fault can only be inferred from symptoms.
+
 ## 2. Reading the logs
 
 Logs are plain text files. No decoding is needed:

@@ -49,6 +49,7 @@ from dlserver.utils.state import (
     set_pose_model,
 )
 from core.livez import router as livez_router
+from core.logging_ext import ResilientRotatingFileHandler
 from core.request_context import (
     InstanceAlreadyRunning,
     acquire_instance_lock,
@@ -244,7 +245,7 @@ def _setup_logging(log_dir: str | None) -> dict[str, Any] | None:
                 bak.unlink()
             for old in Path(log_dir).glob(f"{prefix}*"):
                 old.rename(Path(str(old) + ".bak"))
-        handler = logging.handlers.RotatingFileHandler(str(log_path), maxBytes=1_048_576, backupCount=3)
+        handler = ResilientRotatingFileHandler(str(log_path), maxBytes=1_048_576, backupCount=3)
         handler.setFormatter(logging.Formatter(LOG_FORMAT))
         logging.basicConfig(level=logging.INFO, handlers=[handler])
 
@@ -263,7 +264,7 @@ def _setup_logging(log_dir: str | None) -> dict[str, Any] | None:
             "handlers": {
                 "file": {
                     "formatter": "default",
-                    "class": "logging.handlers.RotatingFileHandler",
+                    "class": "core.logging_ext.ResilientRotatingFileHandler",
                     "filename": str(uvicorn_log_path),
                     "maxBytes": 1_048_576,
                     "backupCount": 3,
