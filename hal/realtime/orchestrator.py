@@ -1067,6 +1067,15 @@ class RealtimeOrchestrator:
         # back to the main agent (e.g. Gemini times out mid-turn), the agent
         # reuses it instead of taking a fresh snapshot. See turn_dispatch.
         saved_path: str | None = self._persist_look_frame(frame)
+        # Surface the frame in the Flow Monitor. This is the image the model
+        # actually saw, so it is the one artefact worth comparing against the
+        # model's answer — monitor-only, never forwarded to the agent.
+        try:
+            from hal.realtime.look_monitor import publish_look_frame
+
+            publish_look_frame(saved_path)
+        except Exception as e:
+            logger.debug("[realtime] look: monitor publish skipped: %s", e)
         logger.info(
             "[realtime] look: captured frame %s in %.0fms → %s — replaying "
             "turn so the frame joins it",

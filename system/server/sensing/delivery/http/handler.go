@@ -139,6 +139,20 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 
 	startPayload := map[string]any{"type": req.Type, "message": req.Message}
 
+	// look.capture is MONITOR-ONLY. The realtime `look` tool already sent the
+	// frame straight to the model, so forwarding text here would inject a
+	// phantom turn the user never asked for. Log the flow event — the monitor
+	// derives the thumbnail from the frame path in the message — then stop.
+	// Unlike motion.activity (snapshot shown but stripped before the LLM), this
+	// frame IS the model's input, which is what makes it worth surfacing.
+	if req.Type == "look.capture" {
+		lookRunID := fmt.Sprintf("look-%d", time.Now().UnixMilli())
+		lookStart := flow.Start("sensing_input", startPayload, lookRunID)
+		flow.End("sensing_input", lookStart, map[string]any{"type": req.Type}, lookRunID)
+		c.JSON(http.StatusOK, serializers.ResponseSuccess(nil))
+		return
+	}
+
 	// Push sensing input to monitor.
 	monitorDetail := map[string]any{"type": req.Type}
 	// Surface the debug audio clip (speech_emotion) to the Flow Monitor UI only
