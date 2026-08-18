@@ -350,8 +350,18 @@ something.
 distributes pitch across base/elbow/wrist — so the pitch sign is **not** validated on this path, and
 an inverted pitch is a bug this codebase has already hit once (see `servo_follow.command_pid`).
 
-**Priority order:** person box (face as fallback — a held object often hides the face but rarely the
-whole body) → centre it → capture. Nothing found means *don't move*, never turn away.
+**Priority order:**
+
+1. **Person visible** → centre it. Person box preferred over the face box: a held-up object often
+   hides the face but rarely the whole body, and framing the person includes whatever they hold.
+2. **Nothing visible, but a subject was confirmed at this pose seconds ago** → **hold and capture.**
+   Treat the disappearance as *occlusion, not absence* — that is what a held-up object looks like to
+   a detector, and turning away would abandon the very thing the user asked about.
+3. **Nothing visible and nothing seen recently** → step toward the remembered bearing, re-detecting
+   after **every** step. Steps are capped at `BEARING_STEP_DEG` well under the camera FOV because
+   `nudge()` blocks: one large blind move could pass straight over someone standing en route and
+   arrive at an empty spot with high confidence.
+4. **Deadline** → capture from wherever the head reached. It never sweeps here.
 
 Every move goes through `nudge()`, so `SAFETY.md`'s `max_speed` stretches the move rather than being
 bypassed to meet the deadline. A physical-button single click aborts it (`button_actions.py`), since
@@ -374,7 +384,8 @@ not wrap, so a circular mean would be wrong at the extremes.
 Outliers are damped rather than accepted — someone crossing the room must not flip the estimate — but
 `OUTLIER_STREAK` consecutive far sightings are treated as a genuine relocation and accepted wholesale.
 
-**Currently passive: nothing reads it yet.** Inspect it after a day to check the maths and the sign:
+**Consumed by aim priority 3** (above) once confidence passes `MIN_BEARING_CONFIDENCE`. Inspect it
+to check the maths and the sign:
 
 ```bash
 cat /var/lib/hal/user_bearing.json

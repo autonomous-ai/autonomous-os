@@ -42,13 +42,31 @@ AIM_GAIN: float = 0.85
 # exceed SAFETY.md max_speed, so this is a floor, not a promise.
 MOVE_DURATION_S: float = 0.25
 # Hard cap on correction rounds; the deadline usually bites first.
-MAX_ITERATIONS: int = 4
+MAX_ITERATIONS: int = 6
 # Recording a bearing needs a TIGHTER centre than framing does. The aim stops at
 # CENTRE_DEADBAND_FRAC because that frames the subject well enough, but at that
 # offset the servo position is not the bearing — it is the bearing plus up to
 # 0.06 x FOV of uncorrected error. Only a near-exact centre lets us store
 # `bearing = base_yaw` and stay independent of the disputed FOV constant.
 RECORD_DEADBAND_FRAC: float = 0.02
+# Priority 2 — occlusion hysteresis. A subject that vanishes seconds after being
+# seen at this pose is almost certainly OCCLUDED (a held-up object covering
+# them), not absent. Turning away then would abandon the very thing we were
+# asked to look at.
+RECENT_SIGHTING_S: float = 4.0
+RECENT_SIGHTING_YAW_TOL_DEG: float = 25.0
+# Priority 3 — remembered-bearing fallback, taken in STEPS. nudge() blocks until
+# the move completes, so a single large move travels blind and can pass straight
+# over someone standing between here and there. Keep each step well under the
+# camera FOV so detection runs at least once per FOV of travel.
+BEARING_STEP_DEG: float = 20.0
+MAX_BEARING_STEPS: int = 3
+# Below this the estimate is too green or too stale to be worth turning for.
+MIN_BEARING_CONFIDENCE: float = 0.2
+
+# Last confirmed sighting: monotonic timestamp and the yaw it was seen at.
+_last_seen_mono: float = 0.0
+_last_seen_yaw: float = 0.0
 
 _abort_evt = threading.Event()
 
@@ -72,6 +90,9 @@ class AimResult:
     iterations: int = 0
     yaw_moved_deg: float = 0.0
     final_dx_frac: Optional[float] = None
+    # How many remembered-bearing steps were taken. Task E reads this to judge
+    # whether the estimate is still predicting well.
+    bearing_steps: int = 0
 
 
 def _grab_frame(cap: Any) -> Optional[Any]:
@@ -105,6 +126,58 @@ def _detect_subject(detector: Any, frame: Any) -> Tuple[Optional[Tuple[int, int,
         if box is not None:
             return box, target
     return None, ""
+
+
+def _note_sighting(svc: Any) -> None:
+    """Remember that a subject was confirmed at the current pose."""
+    global _last_seen_mono, _last_seen_yaw
+    try:
+        _last_seen_yaw = float(svc.get_positions().get("base_yaw.pos", 0.0))
+    except Exception:
+        return
+    _last_seen_mono = time.monotonic()
+
+
+def _recently_seen_here(svc: Any) -> bool:
+    """True when a subject was confirmed at roughly this pose moments ago.
+
+    Then a sudden disappearance means OCCLUSION, not absence — hold and capture
+    rather than turning away from whatever is being held up to the camera.
+    """
+    if _last_seen_mono <= 0.0:
+        return False
+    if time.monotonic() - _last_seen_mono > RECENT_SIGHTING_S:
+        return False
+    try:
+        yaw = float(svc.get_positions().get("base_yaw.pos", 0.0))
+    except Exception:
+        return False
+    return abs(yaw - _last_seen_yaw) <= RECENT_SIGHTING_YAW_TOL_DEG
+
+
+def _step_toward_bearing(svc: Any) -> bool:
+    """Take ONE bounded step toward the remembered bearing. True if it moved."""
+    try:
+        from hal.drivers.tracking import user_bearing
+        import hal.app_state as state
+
+        est = user_bearing.read_estimate()
+        if est is None or est.confidence < MIN_BEARING_CONFIDENCE:
+            return False
+        current = svc.get_positions()
+        delta = est.bearing_deg - float(current.get("base_yaw.pos", 0.0))
+        if abs(delta) < 1.0:
+            return False  # already pointing there; nothing left to try
+        step = max(-BEARING_STEP_DEG, min(BEARING_STEP_DEG, delta))
+        svc.nudge(step, 0.0, MOVE_DURATION_S, current, state.safety_policy)
+        logger.info(
+            "[look-aim] no subject — stepping %+.1f deg toward remembered bearing "
+            "%+.1f (conf=%.2f)", step, est.bearing_deg, est.confidence,
+        )
+        return True
+    except Exception as e:
+        logger.debug("[look-aim] bearing step skipped: %s", e)
+        return False
 
 
 def _record_bearing_if_centred(svc: Any, dx_frac: float) -> None:
@@ -151,24 +224,37 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
 
     iterations = 0
     yaw_total = 0.0
+    bearing_steps = 0
     last_dx_frac: Optional[float] = None
 
     while iterations < MAX_ITERATIONS:
         if _abort_evt.is_set():
-            return AimResult(False, "aborted", iterations, yaw_total, last_dx_frac)
+            return AimResult(False, "aborted", iterations, yaw_total, last_dx_frac, bearing_steps)
         if time.monotonic() >= t_end:
-            return AimResult(False, "deadline", iterations, yaw_total, last_dx_frac)
+            return AimResult(False, "deadline", iterations, yaw_total, last_dx_frac, bearing_steps)
 
         frame = _grab_frame(cap)
         if frame is None:
-            return AimResult(False, "no frame", iterations, yaw_total, last_dx_frac)
+            return AimResult(False, "no frame", iterations, yaw_total, last_dx_frac, bearing_steps)
 
         box, kind = _detect_subject(detector, frame)
         if box is None:
-            # v1 stops here. Priorities 2-3 (recency hysteresis, remembered
-            # bearing) need Task A and land separately.
-            return AimResult(False, "subject not found", iterations, yaw_total, last_dx_frac)
+            # Priority 2 — occlusion, not absence. Never turn away from a scene
+            # that just changed dramatically: a large object filling the frame is
+            # evidence the subject is right there.
+            if _recently_seen_here(svc):
+                return AimResult(False, "holding: seen here moments ago (likely occluded)",
+                                 iterations, yaw_total, last_dx_frac, bearing_steps)
+            # Priority 3 — step toward the remembered bearing, re-detecting after
+            # every step so we cannot sail past someone en route.
+            if bearing_steps < MAX_BEARING_STEPS and _step_toward_bearing(svc):
+                bearing_steps += 1
+                iterations += 1
+                continue
+            return AimResult(False, "subject not found", iterations, yaw_total,
+                             last_dx_frac, bearing_steps)
 
+        _note_sighting(svc)
         x, _y, w, _h = box
         w_fr = float(frame.shape[1])
         dx = (x + w / 2.0) - (w_fr / 2.0)
@@ -176,7 +262,7 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
 
         if abs(last_dx_frac) <= CENTRE_DEADBAND_FRAC:
             _record_bearing_if_centred(svc, last_dx_frac)
-            return AimResult(True, f"centred on {kind}", iterations, yaw_total, last_dx_frac)
+            return AimResult(True, f"centred on {kind}", iterations, yaw_total, last_dx_frac, bearing_steps)
 
         # Yaw sign per the tracker's verified convention: dx>0 (subject right of
         # centre) -> base_yaw INCREASES. Do not flip this without device evidence.
@@ -187,7 +273,7 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
             svc.nudge(yaw_deg, 0.0, MOVE_DURATION_S, current, state.safety_policy)
         except Exception as e:
             logger.warning("[look-aim] nudge failed: %s", e)
-            return AimResult(False, f"nudge failed: {e}", iterations, yaw_total, last_dx_frac)
+            return AimResult(False, f"nudge failed: {e}", iterations, yaw_total, last_dx_frac, bearing_steps)
 
         yaw_total += yaw_deg
         iterations += 1
@@ -202,4 +288,5 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
         iterations,
         yaw_total,
         last_dx_frac,
+        bearing_steps,
     )

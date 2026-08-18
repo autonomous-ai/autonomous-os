@@ -352,8 +352,18 @@ là hãy nhìn vào một vật.
 bổ pitch trên base/elbow/wrist — nên dấu của pitch **chưa** được kiểm chứng trên đường này, và pitch
 đảo dấu là lỗi codebase này đã từng mắc một lần (xem `servo_follow.command_pid`).
 
-**Thứ tự ưu tiên:** khung bao người (khuôn mặt là phương án lùi — vật cầm trên tay hay che mặt nhưng
-hiếm khi che cả người) → căn giữa → chụp. Không tìm thấy gì nghĩa là *đứng yên*, không bao giờ quay đi.
+**Thứ tự ưu tiên:**
+
+1. **Thấy người** → căn giữa. Ưu tiên khung bao người hơn khung bao mặt: vật giơ lên hay che mất mặt
+   nhưng hiếm khi che cả người, và lấy khung cả người thì bao gồm luôn thứ họ đang cầm.
+2. **Không thấy gì, nhưng vài giây trước vừa xác nhận có người ở đúng tư thế này** → **giữ nguyên và
+   chụp.** Coi việc biến mất là *bị che khuất, không phải vắng mặt* — đó đúng là hình ảnh của một vật
+   giơ lên dưới góc nhìn của bộ phát hiện, và quay đi lúc đó là bỏ rơi đúng thứ người dùng vừa hỏi.
+3. **Không thấy gì và gần đây cũng không thấy** → bước dần về phía bearing đã ghi nhớ, và phát hiện
+   lại sau **mỗi** bước. Mỗi bước bị giới hạn bởi `BEARING_STEP_DEG`, nhỏ hơn hẳn FOV của camera, vì
+   `nudge()` chặn luồng: một cú quay mù lớn có thể đi thẳng qua người đang đứng giữa đường rồi tới một
+   chỗ trống với đầy tự tin.
+4. **Hết hạn chót** → chụp từ đúng chỗ đầu tới được. Ở đây không bao giờ quét.
 
 Mọi chuyển động đều đi qua `nudge()`, nên `max_speed` trong `SAFETY.md` sẽ kéo dãn thời gian di chuyển
 chứ không bị bỏ qua để kịp hạn chót. Một cú click đơn trên nút vật lý sẽ hủy nó
@@ -377,7 +387,8 @@ Giá trị lệch (outlier) bị làm giảm ảnh hưởng chứ không bị nh
 không được phép lật ngược ước lượng — nhưng `OUTLIER_STREAK` lần lệch liên tiếp sẽ được coi là dời chỗ
 thật và được nhận nguyên vẹn.
 
-**Hiện tại hoàn toàn thụ động: chưa có gì đọc nó.** Sau một ngày hãy mở ra kiểm tra phép tính và dấu:
+**Được tiêu thụ bởi ưu tiên 3 của pha ngắm** (ở trên) khi độ tin cậy vượt `MIN_BEARING_CONFIDENCE`.
+Hãy mở ra kiểm tra phép tính và dấu:
 
 ```bash
 cat /var/lib/hal/user_bearing.json
