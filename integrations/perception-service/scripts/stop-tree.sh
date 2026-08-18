@@ -26,9 +26,25 @@ PID_FILE=${4:?}
 # group covers anything the wrapper spawned (child, size guard, liveness probe);
 # the port and pid files catch instances started by an older build that predates
 # setsid.
+# A PID found only because it holds PORT must still look like this service.
+# On a slave node dlserver binds LBSERVER_PORT, so `stop-runpod-lbserver` would
+# otherwise resolve :7999 to dlserver and kill it -- a cross-service kill in the
+# one tool people reach for when things are already broken.
+owns_port_but_wrong_service() {
+    local pid=$1 args
+    args=$(ps -o args= -p "$pid" 2>/dev/null) || return 1
+    case "$args" in *"$NAME"*) return 1 ;; esac
+    echo "[$NAME] pid $pid holds port $PORT but is not $NAME; leaving it alone:" \
+         "${args:0:80}" >&2
+    return 0
+}
+
 collect() {
     {
-        ss -lntpH "sport = :$PORT" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2
+        for _p in $(ss -lntpH "sport = :$PORT" 2>/dev/null \
+                    | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -un); do
+            owns_port_but_wrong_service "$_p" || echo "$_p"
+        done
         [[ -r "$WPID_FILE" ]] && cat "$WPID_FILE"
         [[ -r "$PID_FILE"  ]] && cat "$PID_FILE"
         pgrep -f "run-with-restart.sh .*--log-dir /workspace/logs/$NAME" 2>/dev/null
@@ -88,9 +104,19 @@ rm -f "$WPID_FILE" "$PID_FILE"
 
 # Verify. Never claim success we have not proven.
 leftover=$(collect | tr '\n' ' ')
-if [[ -n "${leftover// /}" ]] || ss -lntH "sport = :$PORT" 2>/dev/null | grep -q .; then
-    echo "[$NAME] FAILED to stop cleanly." >&2
-    echo "[$NAME]   survivors: ${leftover:-none}" >&2
+port_held=$(ss -lntH "sport = :$PORT" 2>/dev/null | grep -c . || true)
+
+# Two distinct failures, reported differently. Either way exit non-zero: `start`
+# is a prerequisite of nothing useful if the port is occupied, whoever holds it.
+if [[ -n "${leftover// /}" ]]; then
+    echo "[$NAME] FAILED to stop cleanly -- our processes survived." >&2
+    echo "[$NAME]   survivors: $leftover" >&2
+    ss -lntp "sport = :$PORT" >&2 2>/dev/null || true
+    exit 1
+fi
+if (( port_held > 0 )); then
+    echo "[$NAME] stopped, but port $PORT is still held by another process." >&2
+    echo "[$NAME]   not killed: it is not $NAME. Starting $NAME will fail." >&2
     ss -lntp "sport = :$PORT" >&2 2>/dev/null || true
     exit 1
 fi

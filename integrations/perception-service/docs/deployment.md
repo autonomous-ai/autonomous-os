@@ -239,6 +239,17 @@ elsewhere"; liveness failing means "restart this process".
 4. **exits non-zero if anything survives**, so `start` refuses to run on a dirty
    slate rather than dying later on `EADDRINUSE`
 
+It distinguishes two failures, both non-zero:
+
+| Message | Meaning |
+|---------|---------|
+| `FAILED to stop cleanly -- our processes survived` | escalation did not work; investigate before retrying |
+| `stopped, but port N is still held by another process` | we stopped, but something else owns the port |
+
+A PID found *only* because it holds the port is checked against the service name
+before being killed. On a slave node dlserver binds `LBSERVER_PORT`, so
+`stop-runpod-lbserver` would otherwise resolve `:7999` to dlserver and kill it.
+
 A process sharing the caller's own group (an instance from a build predating
 `setsid`) is killed individually -- killing that group would take down `make`
 itself mid-stop.
