@@ -843,6 +843,20 @@ REALTIME_GEMINI_VISION: bool = (
 REALTIME_GEMINI_VISION_MAX_WIDTH: int = int(
     os.environ.get("HAL_GEMINI_VISION_MAX_WIDTH", "768")
 )
+# Aim the head at the subject BEFORE the `look` tool captures. `look` takes no
+# parameters and grabs whatever the camera currently sees, so without this the
+# model can answer confidently about a wall. Bounded by LOOK_AIM_DEADLINE_S so a
+# live turn never stalls: on expiry the capture proceeds from wherever the head
+# reached. Yaw only — see hal/drivers/tracking/aim.py for why pitch is excluded.
+# Set HAL_LOOK_AIM=false to disable without a rollout if it misbehaves in the field.
+LOOK_AIM_ENABLED: bool = (
+    os.environ.get("HAL_LOOK_AIM", "true").lower() in ("1", "true", "yes")
+)
+# Soft budget for the aim. Kept under REALTIME_FILLER_DELAY_S (1.5s) so a normal
+# aim finishes before the dead-air filler would fire; a slow one is covered by it.
+LOOK_AIM_DEADLINE_S: float = float(
+    os.environ.get("HAL_LOOK_AIM_DEADLINE_S", "0.8")
+)
 # Cost guard for `look`: minimum seconds between two image SENDS. A model can call
 # look several times in a row (same turn, or back-to-back turns); each new image
 # costs vision tokens. Within this window we DON'T capture/send a fresh frame —

@@ -1023,6 +1023,26 @@ class RealtimeOrchestrator:
             )
             return False
 
+        # Aim BEFORE capturing. `look` has no parameters, so without this the
+        # frame is whatever the head happened to face — the model then answers
+        # confidently about the wrong scene. Bounded by LOOK_AIM_DEADLINE_S and
+        # never fatal: a failed aim still captures, because dead air in a live
+        # turn is worse than an imperfectly framed frame.
+        if config.LOOK_AIM_ENABLED:
+            try:
+                from hal.drivers.tracking.aim import aim_for_look
+
+                t_aim = time.monotonic()
+                res = aim_for_look(config.LOOK_AIM_DEADLINE_S)
+                logger.info(
+                    "[realtime] look: aim %s (%s) iters=%d yaw=%+.1f in %.0fms",
+                    "OK" if res.aimed else "skipped",
+                    res.reason, res.iterations, res.yaw_moved_deg,
+                    (time.monotonic() - t_aim) * 1000,
+                )
+            except Exception as e:
+                logger.warning("[realtime] look: aim raised, capturing anyway: %s", e)
+
         frame = self._capture_frame()
         if frame is None:
             logger.warning("[realtime] look: no camera frame available")
