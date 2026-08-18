@@ -391,6 +391,30 @@ def aim_servo(req: ServoAimRequest):
         raise HTTPException(500, f"Servo aim failed: {e}")
 
 
+@router.post("/servo/search", response_model=StatusResponse)
+def search_for_user():
+    """Sweep for the user and stop on the first one seen.
+
+    Deliberately NOT what the look-aim does. The aim runs inside a live turn
+    under a deadline; this takes seconds, so it is only entered when the user
+    asked for it ("where are you?") or accepted an offer after a failed look.
+
+    Seeded from the remembered bearing and expanding outward, so the likely
+    place is checked first.
+    """
+    from hal.drivers.tracking.search import search_for_subject
+
+    res = search_for_subject()
+    return {
+        "status": "ok",
+        "message": (
+            f"{res.reason} at yaw {res.found_at_yaw:+.0f} after {res.stops_visited} stop(s)"
+            if res.found and res.found_at_yaw is not None
+            else f"{res.reason} after {res.stops_visited} stop(s)"
+        ),
+    }
+
+
 @router.get("/servo/bearing")
 def get_user_bearing():
     """Inspect the remembered user bearing.

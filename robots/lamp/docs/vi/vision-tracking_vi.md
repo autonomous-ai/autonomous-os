@@ -369,6 +369,34 @@ Mọi chuyển động đều đi qua `nudge()`, nên `max_speed` trong `SAFETY.
 chứ không bị bỏ qua để kịp hạn chót. Một cú click đơn trên nút vật lý sẽ hủy nó
 (`button_actions.py`), vì cử chỉ đó nghĩa là "dừng lại và chú ý vào tôi".
 
+### Quét tìm kiếm — chỉ khi được yêu cầu, không bao giờ nội tuyến
+
+Khác với look-aim, và cố ý nằm ngoài đường chụp. Pha ngắm chạy trong một lượt hội thoại đang diễn ra
+với hạn chót; một pha quét mất vài giây, đúng là khoảng lặng chết mà thiết kế đó sinh ra để tránh. Nên
+pha quét chỉ được vào ở nơi có thể thong thả:
+
+- người dùng yêu cầu thẳng — *"bạn đang ở đâu?"*, *"tìm tôi được không?"* (`skills/servo-control`)
+- họ đồng ý với đề nghị sau một lần nhìn thất bại — *"Tôi không thấy nó. Bạn có muốn tôi quay quanh tìm thử không?"*
+
+`POST /servo/search` — quét và dừng ngay ở đối tượng đầu tiên nhìn thấy.
+
+**Thứ tự mới là mấu chốt.** Các điểm dừng được gieo mầm từ bearing đã ghi nhớ rồi lan dần ra hai bên
+(`seed`, `seed±45°`, `seed±90°`, …) thay vì quét từ trái sang phải, để nơi khả dĩ nhất được kiểm tra
+trước. Đó chính là thứ thường biến một pha quét vài giây thành chỉ một điểm dừng.
+
+Mỗi bước là `STEP_DEG` (45°), cố ý **nhỏ hơn FOV của camera** để các ô chồng lấn — bước bằng đúng cả
+FOV sẽ để lại khe hở, nơi một người đứng vắt giữa hai ô bị cả hai ô bỏ sót. Các điểm dừng bị kẹp trong
+tầm cơ khí ±135°, và đầu được cho `SETTLE_S` để hết rung trước mỗi lần đọc khung hình, vì đầu đang
+chuyển động cho ảnh nhòe và bộ phát hiện sẽ bỏ sót thứ đang nằm ngay trong tầm nhìn.
+
+Bị hủy bởi nút bấm vật lý giống như pha ngắm, và không bao giờ quét khi camera đang tắt — một pha quét
+là rất nhiều chuyển động lộ liễu để thực hiện khi người dùng vừa yêu cầu thiết bị đừng nhìn.
+
+> Chưa làm: tín hiệu LED trong lúc quét. Trạng thái LED transient nằm sau các request model của route,
+> nên điều khiển nó từ đây sẽ phải đi vòng qua HTTP loopback (điều codebase này tránh) hoặc nhân bản
+> phần bookkeeping khôi phục — và một tín hiệu không khôi phục được sẽ làm kẹt LED của lamp. Đáng làm
+> cho tử tế thay vì làm nửa vời.
+
 ### Nói trong lúc đang tìm
 
 Một chiếc lamp lặng lẽ xoay đi giữa câu hỏi trông như bị hỏng. Một chiếc vừa xoay vừa nói *"bạn đang ở

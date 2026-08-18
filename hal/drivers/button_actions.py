@@ -205,11 +205,13 @@ def _stop_active_tracking(source: str):
     # is_tracking guard below would miss it — the user would press the button to
     # stop the lamp moving and it would keep turning. Abort it unconditionally.
     try:
-        from hal.drivers.tracking.aim import request_abort
+        from hal.drivers.tracking.aim import request_abort as _abort_aim
+        from hal.drivers.tracking.search import request_abort as _abort_search
 
-        request_abort()
+        _abort_aim()
+        _abort_search()
     except Exception as e:
-        logger.debug("%s single click -- look-aim abort unavailable: %s", source, e)
+        logger.debug("%s single click -- aim/search abort unavailable: %s", source, e)
 
     tracker = state.tracker_service
     if not tracker or not tracker.is_tracking:

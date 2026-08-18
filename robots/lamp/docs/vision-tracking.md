@@ -367,6 +367,34 @@ Every move goes through `nudge()`, so `SAFETY.md`'s `max_speed` stretches the mo
 bypassed to meet the deadline. A physical-button single click aborts it (`button_actions.py`), since
 that gesture means "stop moving and pay attention to me".
 
+### Search sweep — asked for, never inline
+
+Distinct from the look-aim, and deliberately kept off the capture path. The aim runs inside a live
+turn under a deadline; a sweep takes seconds, which is exactly the dead air that design avoids. So a
+sweep is only entered where the time is affordable:
+
+- the user asks outright — *"where are you?"*, *"can you find me?"* (`skills/servo-control`)
+- they accept an offer after a failed look — *"I can't see it. Want me to look around?"*
+
+`POST /servo/search` — sweeps and stops on the first subject seen.
+
+**Ordering is the whole trick.** Stops are seeded from the remembered bearing and expand outward
+(`seed`, `seed±45°`, `seed±90°`, …) rather than sweeping left-to-right, so the likely place is checked
+first. That is what usually turns a multi-second sweep into a single stop.
+
+Steps are `STEP_DEG` (45°), deliberately **smaller than the camera FOV** so tiles overlap — stepping
+by a full FOV would leave seams where someone straddling two tiles is missed by both. Stops are
+clamped to the ±135° mechanical range, and the head is given `SETTLE_S` to stop ringing before each
+frame is read, since a moving head yields a blurred frame and a detector that misses what is in view.
+
+Aborted by the physical button like the aim, and it never sweeps while the camera is disabled — a
+search is a lot of conspicuous movement to perform when the user has asked the device not to look.
+
+> Not built: an LED cue while sweeping. Transient LED state lives behind the route request models, so
+> driving it from here would mean HTTP loopback (which this codebase avoids) or duplicating the
+> restore bookkeeping — and a cue that fails to restore would strand the lamp's LED. Worth doing
+> properly rather than partially.
+
 ### Speaking while it searches
 
 A lamp that silently swivels away mid-question looks broken. One that says *"where are you?"* while
