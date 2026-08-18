@@ -98,6 +98,10 @@ make start-runpod-slave        # nginx :8899 → dlserver :7999   (no LB on this
 make start-runpod-slave-ssl    # same, HTTPS
 ```
 
+Slave nodes run under the same `run-with-restart.sh` watchdog as the master, so
+they auto-restart on exit and get the same log rotation and size cap. `make
+stop-runpod-dlserver` stops a slave node too.
+
 On the **master**, point the LB at the local dlserver plus every slave's public
 endpoint, then start the master stack:
 
@@ -133,7 +137,7 @@ Override with `DLSERVER_PORT`, `LBSERVER_PORT`, `JUPYTER_PORT` make variables.
 | `make start-lbserver` | Foreground lbserver on `:7999` |
 | `make start-runpod-master` | Background: nginx + dlserver + lbserver (HTTP) |
 | `make start-runpod-master-ssl` | Same with self-signed TLS |
-| `make start-runpod-slave` | Background: nginx + dlserver only (no LB) |
+| `make start-runpod-slave` | Background: nginx + dlserver only (no LB), with auto-restart watchdog |
 | `make start-runpod-slave-ssl` | Same with TLS |
 | `make start-runpod-dlserver` | Background dlserver with auto-restart watchdog |
 | `make start-runpod-lbserver` | Background lbserver with auto-restart watchdog |
@@ -179,10 +183,14 @@ run-with-restart.sh [OPTIONS] -- COMMAND [ARGS...]
   --pid-file PATH           inner process PID (for stop targets)
   --wrapper-pid-file PATH   watchdog's own PID
   --cooldown SECONDS        wait between restarts (default: 5)
-  --log-dir PATH            structured logging via multilog:
-                              log-dir/stdout/   server stdout
-                              log-dir/stderr/   server stderr
-                              log-dir/watchdog/ restart events
+  --log-dir PATH            plain-file logging (never a pipe -- a blocked pipe
+                            can freeze the server):
+                              log-dir/stdout.log    server stdout
+                              log-dir/stderr.log    server stderr
+                              log-dir/watchdog.log  restart events
+                            Rotated to .1/.2/.3 at startup and whenever a file
+                            exceeds MAX_LOG_BYTES (default 8 MiB, checked every
+                            GUARD_INTERVAL seconds, default 60).
 ```
 
 Sending `SIGTERM` to the wrapper gracefully stops the inner process and exits.

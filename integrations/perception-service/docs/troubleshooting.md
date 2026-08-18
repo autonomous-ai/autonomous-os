@@ -55,30 +55,44 @@ are actually loaded, which is why the autostart probe checks for it.
 
 ## 2. Reading the logs
 
-Logs are [multilog](https://cr.yp.to/daemontools/multilog.html) directories, not
-files. The live file is always `current`, and every line is prefixed with a
-TAI64N timestamp that must be decoded:
+Logs are plain text files. No decoding is needed:
 
 ```bash
-tail -100 /workspace/logs/dlserver/watchdog/current | tai64nlocal
-tail -200 /workspace/logs/dlserver/stderr/current   | tai64nlocal
-tail -100 /workspace/logs/lbserver/watchdog/current | tai64nlocal
-tail -50  /workspace/logs/autostart/autostart.log   # plain text, no decoding
+tail -100 /workspace/logs/dlserver/watchdog.log
+tail -200 /workspace/logs/dlserver/stderr.log
+tail -100 /workspace/logs/lbserver/watchdog.log
+tail -50  /workspace/logs/autostart/autostart.log
 ```
 
-Without `tai64nlocal` every line starts with `@400000006a5db23a…` and you cannot
-correlate anything with wall-clock time.
+| File | Contents |
+|------|----------|
+| `<svc>/stdout.log` | server stdout |
+| `<svc>/stderr.log` | server stderr (library warnings, tracebacks) |
+| `<svc>/watchdog.log` | restart events from `run-with-restart.sh` |
+| `<svc>/<svc>.log` | application log (`RotatingFileHandler`, 1 MB × 3) |
+| `<svc>/uvicorn.log` | uvicorn error **and** access log (one shared handler) |
 
-Rotated segments live in the same directory, and **the suffix tells you how the
-previous run ended**:
+Rotation keeps 3 generations as `.1`, `.2`, `.3`:
 
-| Suffix | Meaning |
-|--------|---------|
-| `@…​.s` | Normal rotation (hit the 1 MB size limit). Says nothing about health |
-| `@…​.u` | multilog was killed before it could finalise the file — **abrupt termination of the whole process group** |
+- `stdout/stderr/watchdog.log` are rotated by `run-with-restart.sh` — once at
+  startup, and whenever a file exceeds `MAX_LOG_BYTES` (default 8 MiB, checked
+  every `GUARD_INTERVAL` seconds, default 60). The size guard **copies then
+  truncates in place**; it must never rename, because the server holds an
+  `O_APPEND` fd and would keep writing to the renamed inode.
+- `<svc>.log` and `uvicorn.log` are rotated by Python's `RotatingFileHandler`.
 
-A `.u` file's mtime is the last moment anything was written, which is your best
-estimate of when the process died.
+> **Historical note.** Before 2026-08-18 these were
+> [multilog](https://cr.yp.to/daemontools/multilog.html) *directories* (`stdout/`,
+> `stderr/`, `watchdog/`) whose live file was `current`, TAI64N-prefixed and read
+> via `tai64nlocal`. Those directories may still exist with old data — decode them
+> with `tai64nlocal` as before. They are no longer written to.
+>
+> multilog was removed because its documented reaction to a write error is to
+> *pause and retry forever*, which stops it draining its input pipe. The server on
+> the other end then blocks in `pipe_write` with no timeout and no way to run signal
+> handlers — and that writer is the asyncio event loop. This froze lbserver on
+> 2026-08-10 and dlserver on 2026-08-17. A plain file redirect cannot block the
+> writer: a failed write returns an error instead.
 
 ## 3. Crash, or group kill?
 
@@ -216,9 +230,14 @@ make start-runpod-master
 make info
 ```
 
-Always stop before starting. The stop targets also clear the stale
-`/workspace/logs/*/stderr/lock` files that would otherwise block multilog on the
-next start.
+Always stop before starting.
+
+> The stop targets still `rm -f /workspace/logs/*/stderr/lock`. That is now a
+> no-op left over from multilog and will be removed — the lock files are not
+> recreated. Note the stop targets only kill the PIDs recorded in `/tmp/*.pid`,
+> so multilogs or other tree members started by an older build can survive as
+> orphans; check with
+> `ps -eo pid,ppid,args | grep -aE 'multilog|run-with-restart'` before starting.
 
 Two things that silently produce a *misconfigured* server rather than a failure:
 

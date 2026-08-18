@@ -341,23 +341,21 @@ def _setup_logging(log_dir: str | None) -> dict[str, Any] | None:
         handler.setFormatter(logging.Formatter(LOG_FORMAT))
         logging.basicConfig(level=logging.INFO, handlers=[handler])
 
+        # Route uvicorn/fastapi logs to a separate file.
+        # NOTE: "uvicorn" and "uvicorn.access" MUST share a single handler instance.
+        # Two RotatingFileHandlers on the same path keep independent byte counters and
+        # roll over independently, so one eventually unlinks the inode the other still
+        # holds open. On MooseFS (/workspace) writing to a deleted-but-open file returns
+        # EIO, which floods stderr with logging tracebacks and can wedge the process.
         return {
             "version": 1,
             "disable_existing_loggers": False,
             "formatters": {
                 "default": {"format": LOG_FORMAT},
-                "access": {"format": LOG_FORMAT},
             },
             "handlers": {
-                "default": {
+                "file": {
                     "formatter": "default",
-                    "class": "logging.handlers.RotatingFileHandler",
-                    "filename": str(uvicorn_log_path),
-                    "maxBytes": 1_048_576,
-                    "backupCount": 3,
-                },
-                "access": {
-                    "formatter": "access",
                     "class": "logging.handlers.RotatingFileHandler",
                     "filename": str(uvicorn_log_path),
                     "maxBytes": 1_048_576,
@@ -365,9 +363,9 @@ def _setup_logging(log_dir: str | None) -> dict[str, Any] | None:
                 },
             },
             "loggers": {
-                "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
+                "uvicorn": {"handlers": ["file"], "level": "INFO", "propagate": False},
                 "uvicorn.error": {"level": "INFO"},
-                "uvicorn.access": {"handlers": ["access"], "level": "INFO", "propagate": False},
+                "uvicorn.access": {"handlers": ["file"], "level": "INFO", "propagate": False},
             },
         }
     except Exception as e:
