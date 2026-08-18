@@ -131,9 +131,12 @@ thiết bị smart-home của họ, tin nhắn của họ) cho `delegate_to_main
 
 ## Thị giác trong phiên — tool `look` (chỉ Gemini)
 
-Khi người dùng hỏi về thứ thiết bị **nhìn thấy** ("cái này là gì?", "tôi đang cầm
-gì?", "đọc cái nhãn này", "màu gì đây?"), model realtime trả lời ngay trong phiên
-thay vì delegate. Orchestrator đăng ký tool `look` (`orchestrator.py`,
+Khi người dùng hỏi về thứ thiết bị **nhìn thấy** ("cái này là gì?", "nhìn cái này
+nè", "nhìn thứ tôi đang cầm", "tôi đang cầm gì?", "đọc cái nhãn này", "màu gì đây?"),
+model realtime trả lời ngay trong phiên thay vì delegate. Lưu ý "nhìn cái này" đi vào
+đường này, **không phải** đường bật/tắt camera riêng tư — `skills/camera/SKILL.md`
+phân biệt động từ theo thứ đứng sau nó, vì "nhìn tôi này" nghĩa là "bật camera lên"
+còn "nhìn cái này" là một câu hỏi về một vật. Orchestrator đăng ký tool `look` (`orchestrator.py`,
 `LOOK_TOOL`) và xử lý trong `_handle_look_call`:
 
 1. Lấy frame camera **nét** **in-process** (`_capture_frame` gọi

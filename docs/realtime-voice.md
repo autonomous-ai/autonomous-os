@@ -137,9 +137,12 @@ Trade-offs:
 
 ## In-session vision — the `look` tool (Gemini only)
 
-When the user asks about what the device **sees** ("what is this?", "what am I
-holding?", "read this label", "what colour is this?"), the realtime model answers
-in-session instead of delegating. The orchestrator registers a `look` tool
+When the user asks about what the device **sees** ("what is this?", "look at this",
+"look at what I'm holding", "what am I holding?", "read this label", "what colour is
+this?"), the realtime model answers in-session instead of delegating. Note "look at
+this" routes here, **not** to the camera privacy toggle — `skills/camera/SKILL.md`
+disambiguates the verb by what follows it, since "look at me" means "turn the camera
+on" while "look at this" is a question about an object. The orchestrator registers a `look` tool
 (`orchestrator.py`, `LOOK_TOOL`) and handles the call in `_handle_look_call`:
 
 1. Grab a **sharp** camera frame **in-process** (`_capture_frame` calls
