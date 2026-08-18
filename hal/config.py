@@ -100,6 +100,8 @@ TRACKING_FACE_DETECTOR_ENABLED: bool = os.environ.get(
 
 # --- Sensing: os-server integration ---
 OS_SENSING_URL = "http://127.0.0.1:5000/api/sensing/event"
+# Named-pool filler (os-server owns phrases + language + WAV cache).
+OS_SENSING_FILLER_URL = "http://127.0.0.1:5000/api/sensing/filler"
 OS_WELLBEING_LOG_URL = "http://127.0.0.1:5000/api/wellbeing/log"
 GUARD_STATUS_URL = "http://127.0.0.1:5000/api/guard"
 GUARD_CHECK_INTERVAL_S = float(os.environ.get("HAL_GUARD_CHECK_INTERVAL_S", "10.0"))
@@ -861,6 +863,20 @@ LOOK_AIM_DEADLINE_S: float = float(
 # reboots, unlike the mic/speaker/camera state in app_state.
 USER_BEARING_PATH: str = os.environ.get(
     "HAL_USER_BEARING_PATH", "/var/lib/hal/user_bearing.json"
+)
+# Speak while the aim searches for the user. ON by default: the lamp physically
+# turning away mid-question is confusing unless it says why, and that is the one
+# aim state that genuinely needs a voice.
+LOOK_AIM_SPEAK: bool = (
+    os.environ.get("HAL_LOOK_AIM_SPEAK", "true").lower() in ("1", "true", "yes")
+)
+# Announce the capture itself ("let me see"). ON, but narrow: it fires only when
+# the aim actually had to move, so the common case — subject already centred,
+# shutter in a few hundred ms — stays silent. That makes it cover the waits
+# without narrating every visual question. Set HAL_LOOK_AIM_SPEAK_CAPTURE=false
+# to silence it if it turns out to stack awkwardly after a search.
+LOOK_AIM_SPEAK_CAPTURE: bool = (
+    os.environ.get("HAL_LOOK_AIM_SPEAK_CAPTURE", "true").lower() in ("1", "true", "yes")
 )
 # Cost guard for `look`: minimum seconds between two image SENDS. A model can call
 # look several times in a row (same turn, or back-to-back turns); each new image

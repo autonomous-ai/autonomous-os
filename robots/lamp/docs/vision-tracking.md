@@ -367,6 +367,30 @@ Every move goes through `nudge()`, so `SAFETY.md`'s `max_speed` stretches the mo
 bypassed to meet the deadline. A physical-button single click aborts it (`button_actions.py`), since
 that gesture means "stop moving and pay attention to me".
 
+### Speaking while it searches
+
+A lamp that silently swivels away mid-question looks broken. One that says *"where are you?"* while
+doing it reads as trying to help.
+
+os-server owns the phrases, the language resolution and the WAV cache
+(`system/lib/i18n/fillers.go`, pools `look_searching` / `look_found` / `look_capturing`); HAL only
+decides **when**, via `POST /api/sensing/filler` with `{"pool": "..."}`.
+
+| State | When | Default |
+|---|---|---|
+| `look_searching` | the first step toward the remembered bearing | **on** (`HAL_LOOK_AIM_SPEAK`) |
+| `look_found` | a subject appears **after** a search was announced | on (same flag) |
+| `look_capturing` | the aim had work to do before the shutter | on (`HAL_LOOK_AIM_SPEAK_CAPTURE`) |
+
+The gating matters more than the phrases. **Nothing is said when the subject is already centred** —
+that capture completes in a few hundred milliseconds, so every phrase here is conditional on the aim
+having actually moved. *"There you are"* only fires as the resolution of an announced search, never
+on its own. Searching announces **once**, not per step. And the capture line fires only when the aim
+had work to do, which is what keeps it from prefixing every visual question.
+
+A fast, silent, correct capture is already the good outcome — speech is reserved for the moments the
+user is genuinely left waiting.
+
 ### Remembered user bearing
 
 `hal/drivers/tracking/user_bearing.py` folds **centred** sightings into one decaying estimate at

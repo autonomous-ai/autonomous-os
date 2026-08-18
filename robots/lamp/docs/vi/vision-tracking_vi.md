@@ -369,6 +369,30 @@ Mọi chuyển động đều đi qua `nudge()`, nên `max_speed` trong `SAFETY.
 chứ không bị bỏ qua để kịp hạn chót. Một cú click đơn trên nút vật lý sẽ hủy nó
 (`button_actions.py`), vì cử chỉ đó nghĩa là "dừng lại và chú ý vào tôi".
 
+### Nói trong lúc đang tìm
+
+Một chiếc lamp lặng lẽ xoay đi giữa câu hỏi trông như bị hỏng. Một chiếc vừa xoay vừa nói *"bạn đang ở
+đâu?"* thì đọc ra là đang cố giúp.
+
+os-server sở hữu các câu, phần phân giải ngôn ngữ và cache WAV (`system/lib/i18n/fillers.go`, các pool
+`look_searching` / `look_found` / `look_capturing`); HAL chỉ quyết định **khi nào**, qua
+`POST /api/sensing/filler` với `{"pool": "..."}`.
+
+| Trạng thái | Khi nào | Mặc định |
+|---|---|---|
+| `look_searching` | bước đầu tiên về phía bearing đã ghi nhớ | **bật** (`HAL_LOOK_AIM_SPEAK`) |
+| `look_found` | có người xuất hiện **sau khi** đã thông báo đang tìm | bật (cùng cờ) |
+| `look_capturing` | pha ngắm có việc phải làm trước khi bấm máy | bật (`HAL_LOOK_AIM_SPEAK_CAPTURE`) |
+
+Phần chặn quan trọng hơn bản thân các câu nói. **Không nói gì khi đối tượng đã nằm giữa sẵn** — lần chụp
+đó xong trong vài trăm mili giây, nên mọi câu ở đây đều có điều kiện là pha ngắm thực sự đã phải di
+chuyển. *"Bạn đây rồi"* chỉ phát ra như phần kết của một lần tìm đã được thông báo, không bao giờ đứng
+một mình. Trạng thái đang tìm chỉ thông báo **một lần**, không phải mỗi bước. Còn câu lúc chụp chỉ phát
+khi pha ngắm có việc phải làm — đó là thứ giữ cho nó không mở đầu mọi câu hỏi thị giác.
+
+Một lần chụp nhanh, im lặng và đúng vốn đã là kết quả tốt — lời nói chỉ dành cho những khoảnh khắc người
+dùng thực sự phải chờ.
+
 ### Bearing người dùng đã ghi nhớ
 
 `hal/drivers/tracking/user_bearing.py` gộp các lần nhìn thấy **ở vùng giữa** thành một ước lượng suy

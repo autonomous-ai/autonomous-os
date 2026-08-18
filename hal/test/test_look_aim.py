@@ -234,3 +234,37 @@ def test_camera_disabled_never_scores_a_failed_prediction():
         res, _svc = _run(box=(500, 100, 80, 200), disabled=True)
     assert res.reason == "camera disabled"
     assert not scored.called
+
+
+# --- Task F: speaking while searching -------------------------------------
+
+def test_searching_is_announced_once_when_the_lamp_turns_away():
+    # The lamp physically turning away mid-question reads as broken unless it
+    # says why. This is the one aim state that genuinely needs a voice.
+    with mock.patch.object(aim, "_say") as say:
+        res, svc = _run_no_subject(_bearing(120.0, 0.9))
+    assert res.bearing_steps > 1, "need multiple steps to prove it speaks only once"
+    searching = [c for c in say.call_args_list if c[0][0] == "look_searching"]
+    assert len(searching) == 1, f"expected one announcement, got {len(searching)}"
+
+
+def test_nothing_is_said_when_the_subject_is_already_centred():
+    # A fast, silent, correct capture is the good outcome — narrating it is noise.
+    with mock.patch.object(aim, "_say") as say:
+        _run(box=(300, 100, 40, 200))
+    assert not say.called
+
+
+def test_found_is_only_announced_after_a_search():
+    # "There you are" makes sense as the resolution of an announced search, and
+    # is noise on a visual question that never had to look.
+    with mock.patch.object(aim, "_say") as say:
+        _run(box=(500, 100, 80, 200))
+    assert not any(c[0][0] == "look_found" for c in say.call_args_list)
+
+
+def test_speech_can_be_disabled():
+    with mock.patch.object(aim.config, "LOOK_AIM_SPEAK", False), \
+         mock.patch.object(aim, "_say") as say:
+        _run_no_subject(_bearing(120.0, 0.9))
+    assert not say.called

@@ -1040,6 +1040,14 @@ class RealtimeOrchestrator:
                     res.reason, res.iterations, res.yaw_moved_deg,
                     (time.monotonic() - t_aim) * 1000,
                 )
+                # Announce the capture only when the aim actually had work to do.
+                # Off by default: when the subject is already centred the shutter
+                # fires in a few hundred ms, and prefixing every visual question
+                # with "let me see" gets old within a day.
+                if config.LOOK_AIM_SPEAK_CAPTURE and res.iterations > 0:
+                    from hal.drivers.tracking.aim import _say
+
+                    _say("look_capturing")
             except Exception as e:
                 logger.warning("[realtime] look: aim raised, capturing anyway: %s", e)
 

@@ -29,6 +29,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Optional, Tuple
 
+import hal.config as config
+
 logger = logging.getLogger(__name__)
 
 # How close to frame centre counts as "aimed", as a fraction of frame width.
@@ -126,6 +128,21 @@ def _detect_subject(detector: Any, frame: Any) -> Tuple[Optional[Tuple[int, int,
         if box is not None:
             return box, target
     return None, ""
+
+
+def _say(pool: str) -> None:
+    """Speak one phrase from a named filler pool, best-effort.
+
+    os-server owns the phrases, the language and the WAV cache; HAL only decides
+    WHEN. Fire-and-forget: the aim must never wait on speech, and a muted speaker
+    is handled downstream by the speak path.
+    """
+    try:
+        import requests
+
+        requests.post(config.OS_SENSING_FILLER_URL, json={"pool": pool}, timeout=1.0)
+    except Exception as e:
+        logger.debug("[look-aim] filler '%s' skipped: %s", pool, e)
 
 
 def _note_sighting(svc: Any) -> None:
@@ -264,6 +281,10 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
             # Priority 3 — step toward the remembered bearing, re-detecting after
             # every step so we cannot sail past someone en route.
             if bearing_steps < MAX_BEARING_STEPS and _step_toward_bearing(svc):
+                if bearing_steps == 0 and config.LOOK_AIM_SPEAK:
+                    # Only on the FIRST step: the lamp is about to turn away from
+                    # the user mid-question, which reads as broken unless explained.
+                    _say("look_searching")
                 bearing_steps += 1
                 iterations += 1
                 continue
@@ -271,6 +292,10 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
             return AimResult(False, "subject not found", iterations, yaw_total,
                              last_dx_frac, bearing_steps)
 
+        if bearing_steps > 0 and config.LOOK_AIM_SPEAK:
+            # Only after a search was announced — otherwise "there you are" fires
+            # on every visual question, which is noise.
+            _say("look_found")
         _score_prediction(bearing_steps, found=True)
         _note_sighting(svc)
         x, _y, w, _h = box

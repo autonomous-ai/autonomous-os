@@ -57,6 +57,12 @@ var fillerContinuation = map[string][]string{
 // entries — others fall back to fillerContinuation via FillerForTool.
 var toolFillers = map[string]map[string][]string{
 	LangEN: {
+		// Look-aim states (hal/drivers/tracking/aim.py). Spoken only when the
+		// aim actually has to search or takes long enough that the user is
+		// already waiting — narrating every visual question gets old fast.
+		"look_searching": {"Where are you?", "Let me find you", "Hold on, looking for you", "One sec, finding you"},
+		"look_found":     {"There you are", "Got you", "Found you"},
+		"look_capturing": {"Let me see", "Having a look", "Taking a look"},
 		"web_search":     {"Let me look that up", "Quick search", "Checking around", "Hunting that down"},
 		"x_search":       {"Peeking at X", "Quick look on X", "Checking X"},
 		"web_fetch":      {"Taking a peek", "Pulling that up", "Let me see", "Loading it up"},
@@ -78,6 +84,9 @@ var toolFillers = map[string]map[string][]string{
 		"image":          {"Taking a look", "Peeking at it"},
 	},
 	LangVI: {
+		"look_searching": {"Bạn đang ở đâu?", "Để tôi tìm bạn", "Chờ chút, tôi đang tìm bạn"},
+		"look_found":     {"Bạn đây rồi", "Thấy bạn rồi"},
+		"look_capturing": {"Để tôi xem nào", "Tôi nhìn thử"},
 		"web_search":     {"Để {Name} tìm chút", "Để xem có gì hay", "Lùng chút nha", "Tra cho bạn nha"},
 		"x_search":       {"Ngó X tí", "Xem trên X chút", "Lùng X coi"},
 		"web_fetch":      {"Để mình xem chút", "Mở ra xem nha", "Để {Name} ngó qua", "Coi thử nha"},
