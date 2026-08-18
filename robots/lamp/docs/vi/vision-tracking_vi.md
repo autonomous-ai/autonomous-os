@@ -324,3 +324,65 @@ Camera section hiển thị:
 - Vật thể nhỏ/xa (ví dụ một cái ly ở đầu phòng) có thể vượt độ phân giải của cả detector local lẫn remote — đây là giới hạn perception, không phải bug điều khiển.
 </content>
 </invoke>
+
+---
+
+## Look-aim — ngắm đầu trước khi một câu hỏi thị giác chụp ảnh
+
+Tách biệt với phần theo dõi vật thể ở trên, và do một trigger khác kích hoạt.
+
+Tool `look` của realtime **không có tham số**: nó chụp đúng thứ đầu đang hướng tới
+(`orchestrator.py` — *"the model just signals intent to look; the device grabs the current frame"*).
+Nên một câu hỏi thị giác — *"tôi đang cầm gì đây?"* — có thể được trả lời rất tự tin từ một tấm ảnh
+bức tường. `hal/drivers/tracking/aim.py` căn giữa đối tượng trước.
+
+| | |
+|---|---|
+| **Trigger** | tool `look` được gọi — **không phải** hội thoại thông thường |
+| **Phạm vi** | chỉ yaw |
+| **Ngân sách** | `HAL_LOOK_AIM_DEADLINE_S` (0.8 s); hết hạn thì chụp từ đúng chỗ nó tới được |
+| **Tắt** | `HAL_LOOK_AIM=false` |
+
+Hội thoại thông thường không đổi: thân máy vẫn đứng yên suốt pha lắng nghe và suy nghĩ như trước.
+Chỉ một lời gọi `look` mới giải phóng nó, vì đó đúng là khoảnh khắc thiết bị được yêu cầu tường minh
+là hãy nhìn vào một vật.
+
+**Vì sao chỉ yaw.** Quy ước dấu của yaw được chép từ quy ước đã kiểm chứng thực nghiệm của tracker
+(`dx>0` → `base_yaw` tăng). `AnimationService.nudge()` điều khiển `base_pitch`, trong khi tracker phân
+bổ pitch trên base/elbow/wrist — nên dấu của pitch **chưa** được kiểm chứng trên đường này, và pitch
+đảo dấu là lỗi codebase này đã từng mắc một lần (xem `servo_follow.command_pid`).
+
+**Thứ tự ưu tiên:** khung bao người (khuôn mặt là phương án lùi — vật cầm trên tay hay che mặt nhưng
+hiếm khi che cả người) → căn giữa → chụp. Không tìm thấy gì nghĩa là *đứng yên*, không bao giờ quay đi.
+
+Mọi chuyển động đều đi qua `nudge()`, nên `max_speed` trong `SAFETY.md` sẽ kéo dãn thời gian di chuyển
+chứ không bị bỏ qua để kịp hạn chót. Một cú click đơn trên nút vật lý sẽ hủy nó
+(`button_actions.py`), vì cử chỉ đó nghĩa là "dừng lại và chú ý vào tôi".
+
+### Bearing người dùng đã ghi nhớ
+
+`hal/drivers/tracking/user_bearing.py` gộp các lần nhìn thấy **ở vùng giữa** thành một ước lượng suy
+giảm duy nhất tại `/var/lib/hal/user_bearing.json` (`HAL_USER_BEARING_PATH`). Một góc duy nhất, không
+phải histogram — lamp chỉ bao giờ cần một hướng để quay tới.
+
+Chỉ những lần nhìn thấy trong phạm vi **2%** quanh tâm khung hình mới được ghi, chặt hơn cả dung sai
+căn khung của chính pha ngắm. Đó là cố ý: ở tâm khung hình thì vị trí servo **chính là** bearing, nên
+không có phép quy đổi pixel→góc nào, và do đó không phụ thuộc vào hằng số FOV của camera (đang mâu
+thuẫn — 60° trong `constants.py` so với 78° trong BOM phần cứng) hay vào mô hình chiếu của ống kính.
+
+Các góc được lấy trung bình **tuyến tính, không phải theo vòng tròn**: `base_yaw` là dải servo bị chặn
+±135° và không quấn vòng, nên trung bình theo vòng tròn sẽ sai ở hai đầu dải.
+
+Giá trị lệch (outlier) bị làm giảm ảnh hưởng chứ không bị nhận thẳng — một người đi ngang qua phòng
+không được phép lật ngược ước lượng — nhưng `OUTLIER_STREAK` lần lệch liên tiếp sẽ được coi là dời chỗ
+thật và được nhận nguyên vẹn.
+
+**Hiện tại hoàn toàn thụ động: chưa có gì đọc nó.** Sau một ngày hãy mở ra kiểm tra phép tính và dấu:
+
+```bash
+cat /var/lib/hal/user_bearing.json
+```
+
+`bearing_deg` phải hội tụ về gần nơi người dùng thực sự ngồi. Một ước lượng nằm **đối xứng gương qua
+0** nghĩa là dấu yaw bị đảo — đây là kiểu hỏng mà file này dễ dính nhất, vì nó chạy vòng hở và không
+có gì sửa sai cho nó.

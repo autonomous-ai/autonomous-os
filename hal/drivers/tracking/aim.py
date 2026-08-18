@@ -43,6 +43,12 @@ AIM_GAIN: float = 0.85
 MOVE_DURATION_S: float = 0.25
 # Hard cap on correction rounds; the deadline usually bites first.
 MAX_ITERATIONS: int = 4
+# Recording a bearing needs a TIGHTER centre than framing does. The aim stops at
+# CENTRE_DEADBAND_FRAC because that frames the subject well enough, but at that
+# offset the servo position is not the bearing — it is the bearing plus up to
+# 0.06 x FOV of uncorrected error. Only a near-exact centre lets us store
+# `bearing = base_yaw` and stay independent of the disputed FOV constant.
+RECORD_DEADBAND_FRAC: float = 0.02
 
 _abort_evt = threading.Event()
 
@@ -101,6 +107,23 @@ def _detect_subject(detector: Any, frame: Any) -> Tuple[Optional[Tuple[int, int,
     return None, ""
 
 
+def _record_bearing_if_centred(svc: Any, dx_frac: float) -> None:
+    """Fold this sighting into the remembered bearing, if it is centred enough.
+
+    Passive by design: nothing reads the estimate yet. Failures are swallowed —
+    losing a sample must never cost the user their answer.
+    """
+    if abs(dx_frac) > RECORD_DEADBAND_FRAC:
+        return
+    try:
+        from hal.drivers.tracking import user_bearing
+
+        yaw = float(svc.get_positions().get("base_yaw.pos", 0.0))
+        user_bearing.record_sighting(yaw)
+    except Exception as e:
+        logger.debug("[look-aim] bearing record skipped: %s", e)
+
+
 def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
     """Centre the subject in yaw, then return so the caller can capture.
 
@@ -152,6 +175,7 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
         last_dx_frac = dx / w_fr
 
         if abs(last_dx_frac) <= CENTRE_DEADBAND_FRAC:
+            _record_bearing_if_centred(svc, last_dx_frac)
             return AimResult(True, f"centred on {kind}", iterations, yaw_total, last_dx_frac)
 
         # Yaw sign per the tracker's verified convention: dx>0 (subject right of

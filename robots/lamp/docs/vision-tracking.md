@@ -322,3 +322,64 @@ Camera section shows:
 - Fast-loop CPU floor on the Allwinner A523 is ViT inference + detector cost; the frame downscale (`VISION_MAX_WIDTH`) and local imgsz=320 are the main levers.
 - Motion smoothness comes from the decoupled servo worker + SmoothDamp + velocity feedforward; the alpha-beta filter + reinit gating keep the goal itself stable so the follower isn't chasing noise.
 - Small/far objects (e.g. a cup across the room) can exceed both local and remote detector resolution — a perception limit, not a control bug.
+
+---
+
+## Look-aim — pointing the head before a visual question captures
+
+Separate from object tracking above, and driven by a different trigger.
+
+The realtime `look` tool takes **no parameters**: it captures whatever the head currently faces
+(`orchestrator.py` — *"the model just signals intent to look; the device grabs the current frame"*).
+So a visual question — *"what am I holding?"* — could be answered confidently from a picture of a
+wall. `hal/drivers/tracking/aim.py` centres the subject first.
+
+| | |
+|---|---|
+| **Trigger** | the `look` tool firing — **not** ordinary conversation |
+| **Scope** | yaw only |
+| **Budget** | `HAL_LOOK_AIM_DEADLINE_S` (0.8 s); on expiry it captures from wherever it reached |
+| **Disable** | `HAL_LOOK_AIM=false` |
+
+Ordinary chat is untouched: the body stays still through listening and thinking as before. Only a
+`look` call releases it, because that is the moment the device was explicitly asked to look at
+something.
+
+**Why yaw only.** The yaw sign is copied from the tracker's empirically verified convention
+(`dx>0` → `base_yaw` increases). `AnimationService.nudge()` drives `base_pitch`, whereas the tracker
+distributes pitch across base/elbow/wrist — so the pitch sign is **not** validated on this path, and
+an inverted pitch is a bug this codebase has already hit once (see `servo_follow.command_pid`).
+
+**Priority order:** person box (face as fallback — a held object often hides the face but rarely the
+whole body) → centre it → capture. Nothing found means *don't move*, never turn away.
+
+Every move goes through `nudge()`, so `SAFETY.md`'s `max_speed` stretches the move rather than being
+bypassed to meet the deadline. A physical-button single click aborts it (`button_actions.py`), since
+that gesture means "stop moving and pay attention to me".
+
+### Remembered user bearing
+
+`hal/drivers/tracking/user_bearing.py` folds **centred** sightings into one decaying estimate at
+`/var/lib/hal/user_bearing.json` (`HAL_USER_BEARING_PATH`). One angle, not a histogram — the lamp
+only ever needs one direction to turn to.
+
+Only sightings within **2%** of frame centre are recorded, which is tighter than the aim's own
+framing tolerance. That is deliberate: at frame centre the servo position **is** the bearing, so
+there is no pixel→angle conversion, and therefore no dependency on the camera FOV constant (disputed
+— 60° in `constants.py` vs 78° in the hardware BOM) or on the lens projection model.
+
+Angles are averaged **linearly, not circularly**: `base_yaw` is a bounded ±135° servo range that does
+not wrap, so a circular mean would be wrong at the extremes.
+
+Outliers are damped rather than accepted — someone crossing the room must not flip the estimate — but
+`OUTLIER_STREAK` consecutive far sightings are treated as a genuine relocation and accepted wholesale.
+
+**Currently passive: nothing reads it yet.** Inspect it after a day to check the maths and the sign:
+
+```bash
+cat /var/lib/hal/user_bearing.json
+```
+
+`bearing_deg` should settle near where the user actually sits. An estimate sitting **mirrored about
+zero** means the yaw sign is inverted — the failure this file is most exposed to, because it is
+open-loop and nothing corrects it.

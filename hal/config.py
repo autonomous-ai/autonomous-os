@@ -857,6 +857,11 @@ LOOK_AIM_ENABLED: bool = (
 LOOK_AIM_DEADLINE_S: float = float(
     os.environ.get("HAL_LOOK_AIM_DEADLINE_S", "0.8")
 )
+# Where the remembered user bearing lives. NOT a boot sidecar: this must survive
+# reboots, unlike the mic/speaker/camera state in app_state.
+USER_BEARING_PATH: str = os.environ.get(
+    "HAL_USER_BEARING_PATH", "/var/lib/hal/user_bearing.json"
+)
 # Cost guard for `look`: minimum seconds between two image SENDS. A model can call
 # look several times in a row (same turn, or back-to-back turns); each new image
 # costs vision tokens. Within this window we DON'T capture/send a fresh frame —
