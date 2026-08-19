@@ -754,7 +754,9 @@ class RealtimeOrchestrator:
                 isinstance(output, FunctionCallOutput)
                 and output.name == EMOTION_TOOL_NAME
             ):
-                self._handle_emotion_call(output)
+                # `produced` decides whether the ack is safe to send — see
+                # _handle_emotion_call.
+                self._handle_emotion_call(output, spoken=produced)
                 continue
             if (
                 isinstance(output, FunctionCallOutput)
@@ -883,7 +885,7 @@ class RealtimeOrchestrator:
             self._turns_since_recycle = 0
             self._force_rebuild()
 
-    def _handle_emotion_call(self, output: FunctionCallOutput) -> None:
+    def _handle_emotion_call(self, output: FunctionCallOutput, *, spoken: bool) -> None:
         """Fire the device's emotion expression without blocking the spoken turn.
 
         Fire-and-forget: the HAL /emotion call runs in a daemon thread (parallel
@@ -919,14 +921,27 @@ class RealtimeOrchestrator:
                 "[realtime] express_emotion called with empty emotion — ignoring"
             )
 
-        # Acknowledge the call in history but do NOT trigger a new response.
+        # Whether to ack depends on whether the model has spoken yet THIS turn.
+        #
+        # spoken=True — the reply is already out and the emotion was a side
+        #   effect. Acking here makes Gemini continue the turn and re-speak the
+        #   whole reply, double-billing TTS (device-observed 2026-06-29). Stay
+        #   silent; the side effect has already run. This is the common path and
+        #   its behaviour is unchanged.
+        #
+        # spoken=False — the tool call IS the model's entire generation so far.
+        #   Gemini pauses generation until it gets a tool response, so skipping
+        #   the ack deadlocks the turn: the model never speaks, the watchdog
+        #   fires (8s, or 20s on a look turn) and the turn falls back to the main
+        #   agent. Device-observed 2026-08-19 — every express_emotion turn that
+        #   day died this way, look or not. Ack so generation resumes.
         if self._agent is not None:
             self._agent.send(
                 [
                     FunctionCallResultInput(
                         call_id=output.call_id,
                         output='{"result": "expressed"}',
-                        trigger_response=False,
+                        trigger_response=not spoken,
                     )
                 ]
             )
