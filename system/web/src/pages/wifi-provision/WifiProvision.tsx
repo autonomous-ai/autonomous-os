@@ -579,18 +579,20 @@ export default function WifiProvision() {
 // screen mid-teardown can still find their device without hunting the router
 // admin panel.
 function LastKnownBanner() {
-  const [last, setLast] = useState<LastDevice | null>(null);
-  useEffect(() => {
+  // Age is computed in the effect, not during render: Date.now() is impure and
+  // would make this component re-render to a different value on every pass.
+  const [last] = useState<(LastDevice & { ageMin: number }) | null>(() => {
     const d = readLastDevice();
     // Suppress the banner when the stored IP is the AP static — an older
     // build wrote it there before the leak was closed, and showing it as
     // "your device was last at 192.168.100.1" is misleading (that address
     // only ever means "AP mode is up right now").
-    if (d && isRealLanIp(d.lanIp)) setLast(d);
-  }, []);
+    if (!d || !isRealLanIp(d.lanIp)) return null;
+    return { ...d, ageMin: Math.round((Date.now() - d.savedAt) / 60000) };
+  });
   if (!last) return null;
   const mdns = last.mac ? `${last.mac}.local` : "";
-  const ageMin = Math.round((Date.now() - last.savedAt) / 60000);
+  const { ageMin } = last;
   const ageLabel = ageMin < 60 ? `${ageMin}m ago`
     : ageMin < 60 * 24 ? `${Math.round(ageMin / 60)}h ago`
     : `${Math.round(ageMin / (60 * 24))}d ago`;
