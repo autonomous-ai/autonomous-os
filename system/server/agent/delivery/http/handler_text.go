@@ -48,6 +48,34 @@ func isAgentNoReply(text string) bool {
 	return false
 }
 
+// metaNonReplyRe matches the prose an LLM emits when it narrates its decision
+// to stay silent instead of returning the NO_REPLY sentinel, e.g.
+// "Sound event, no user message. Nothing to say". isAgentNoReply() only knows
+// the sentinel forms, so without this gate the narration reaches TTS and the
+// device reads its own bookkeeping out loud.
+var metaNonReplyRe = regexp.MustCompile(`(?i)\b(nothing to (say|add|report)|no (user )?(message|reply|response|comment)( needed| required| necessary)?|no need to (reply|respond|speak|say)|staying silent|remaining silent|no action needed)\b`)
+
+// metaNonReplyMaxLen bounds the gate to short bookkeeping lines. A real reply
+// that happens to contain one of these phrases is normally part of a longer
+// sentence, so the length cap keeps false positives off the speaker.
+const metaNonReplyMaxLen = 100
+
+// isMetaNonReply reports whether text is a silent-decision narration rather
+// than a real reply. Conservative by design: short text only, and never a
+// question (a question is always a real reply).
+func isMetaNonReply(text string) bool {
+	t := strings.TrimSpace(text)
+	if t == "" || len(t) > metaNonReplyMaxLen || strings.Contains(t, "?") {
+		return false
+	}
+	if !metaNonReplyRe.MatchString(t) {
+		return false
+	}
+	slog.Warn("agent narrated its silence instead of NO_REPLY — suppressing TTS",
+		"component", "agent", "raw", t)
+	return true
+}
+
 // sanitizeAgentText strips internal sentinels the LLM sometimes appends to real replies.
 // e.g. "Hello! NO_REPLY" → "Hello!", "...done! HEARTBEAT_OK" → "...done!"
 func sanitizeAgentText(text string) string {
