@@ -17,6 +17,12 @@ from hal.presets import (
 )
 from hal.board.presets_overlay import DEFAULT_LED_COUNT
 
+# Dimmest a candle pixel gets, as a fraction of the base color. The old code
+# used 0.4 as well; kept so the flame keeps its familiar depth. Raising it
+# flattens the flicker, lowering it makes pixels drop to black — visible as
+# holes in the strip once the base color is already dim.
+CANDLE_FLICKER_MIN = 0.4
+
 
 def is_done(deadline: Optional[float], stop_event: threading.Event) -> bool:
     """Return True if the effect should stop."""
@@ -122,18 +128,35 @@ def candle(
     stop_event: threading.Event,
     svc,
 ):
-    """Warm flicker effect with randomized warm tones."""
+    """Flicker effect: per-pixel brightness varies, hue does NOT.
+
+    Every pixel is the SAME color scaled by its own flicker factor, so the
+    strip reads as one color breathing unevenly — a flame — instead of a
+    handful of different colors.
+
+    It used to shape each channel separately (``+ randint(0, 20)`` on red, a
+    ``x0.6-0.9`` squeeze on green, ``x0.3`` on blue). That was written when
+    presets ran near full scale, where a 20-count nudge is a faint warm
+    shimmer. Emotion presets now peak at 12-16 (they are indicators, not
+    illumination — see EMOTION_PRESETS), and at that scale the additive term
+    is LARGER than the color itself: happy [12, 9, 1] came out anywhere from
+    (9, 5, 0) to (26, 4, 0), i.e. red at 2.2x its own value while green was
+    squeezed. Hue swung from the declared 44 deg (yellow) down to 5-20 deg,
+    so the lamp showed a scatter of orange pixels and never the color the
+    preset asked for (observed on a lamp, 19/08/2026). excited [12, 8, 12]
+    fared worst: blue crushed, red inflated, its pink-purple read as orange.
+
+    Scaling all three channels by one factor keeps the ratio — and therefore
+    the hue — identical at any brightness, which is the same rule the presets
+    themselves follow ("dim by scaling, never by picking a new color").
+    """
     step_delay = 0.05 / speed
     led_count = getattr(svc, "led_count", DEFAULT_LED_COUNT)
     while not is_done(deadline, stop_event):
         pixels = []
         for _ in range(led_count):
-            flicker = random.uniform(0.4, 1.0)
-            # Warm tone bias: keep red high, vary green, minimal blue
-            r = int(min(255, color[0] * flicker + random.randint(0, 20)))
-            g = int(min(255, color[1] * flicker * random.uniform(0.6, 0.9)))
-            b = int(min(255, color[2] * flicker * 0.3))
-            pixels.append((r, g, b))
+            flicker = random.uniform(CANDLE_FLICKER_MIN, 1.0)
+            pixels.append(tuple(min(255, int(c * flicker)) for c in color))
         svc.dispatch(RGB_CMD_PAINT, pixels)
         stop_event.wait(step_delay)
 
