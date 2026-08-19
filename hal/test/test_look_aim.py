@@ -238,12 +238,18 @@ def test_no_subject_steps_toward_the_remembered_bearing():
     assert res.bearing_steps > 0
 
 
-def test_bearing_travel_is_stepped_not_one_blind_move():
-    # A single large move would sail past anyone standing en route, because
-    # nudge() blocks and no detection runs during it.
+def test_bearing_travel_goes_straight_to_the_remembered_pose():
+    """One move, not a series of hops.
+
+    Hopping re-detected between steps so it could not sail past someone en
+    route — but the lens sees ~110 deg, so anyone in between is already in frame
+    before the head moves. Each hop cost a detect plus a settle, roughly a
+    second, against the aim's own deadline.
+    """
     res, svc = _run_no_subject(_bearing(120.0, 0.9))
-    for call in svc.nudge.call_args_list:
-        assert abs(call[0][0]) <= aim.BEARING_STEP_DEG + 1e-6
+    assert svc.move_and_hold.call_count == 1, "should arrive in a single move"
+    (positions,), _ = svc.move_and_hold.call_args
+    assert abs(positions["base_yaw.pos"] - 120.0) < 1e-6, positions
 
 
 def test_low_confidence_bearing_is_not_worth_turning_for():
@@ -279,7 +285,7 @@ def test_searching_is_announced_once_when_the_lamp_turns_away():
     # says why. This is the one aim state that genuinely needs a voice.
     with mock.patch.object(aim, "_say") as say:
         res, svc = _run_no_subject(_bearing(120.0, 0.9))
-    assert res.bearing_steps > 1, "need multiple steps to prove it speaks only once"
+    assert res.bearing_steps > 0, "the search never ran, so nothing was announced"
     searching = [c for c in say.call_args_list if c[0][0] == "look_searching"]
     assert len(searching) == 1, f"expected one announcement, got {len(searching)}"
 

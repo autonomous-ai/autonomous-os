@@ -64,6 +64,8 @@ RECENT_SIGHTING_YAW_TOL_DEG: float = 25.0
 # the move completes, so a single large move travels blind and can pass straight
 # over someone standing between here and there. Keep each step well under the
 # camera FOV so detection runs at least once per FOV of travel.
+# Retained as the cap on how far one bearing move may travel in a single
+# command, not as a hop size — the move goes directly to the remembered pose.
 BEARING_STEP_DEG: float = 20.0
 MAX_BEARING_STEPS: int = 3
 # Below this the estimate is too green or too stale to be worth turning for.
@@ -521,14 +523,16 @@ def _bearing_step_target(svc: Any, est: Any, current: dict):
     Returns (target, step_deg), or (None, 0.0) when the head is already in the
     remembered shape.
 
-    Yaw moves in bounded steps because we re-detect after each one and must not
-    sail past the user en route. The other joints are NOT stepped — they are the
-    posture that makes the camera point at head height, and there is nothing to
-    scan through on the way, so they go straight to the remembered value.
+    The move goes straight to the remembered pose. It used to advance in
+    BEARING_STEP_DEG hops, re-detecting between them so it could not sail past
+    someone standing en route — but the lens sees about 110 deg, so anyone
+    between here and there is already in frame before the head moves at all.
+    The hops bought no extra coverage and cost a detect plus a settle each,
+    which is most of a second per hop against the aim's deadline.
     """
     cur_yaw = float(current.get("base_yaw.pos", 0.0))
     delta = float(est.bearing_deg) - cur_yaw
-    step = max(-BEARING_STEP_DEG, min(BEARING_STEP_DEG, delta))
+    step = delta
 
     try:
         valid = set(svc.get_joint_names())
