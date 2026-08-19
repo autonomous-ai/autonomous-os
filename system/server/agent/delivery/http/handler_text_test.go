@@ -11,6 +11,9 @@ func TestIsMetaNonReply(t *testing.T) {
 		"No need to respond here.",
 		"Staying silent.",
 		"  no user message  ",
+		"Presence enter — nothing worth saying",
+		"Nothing worth mentioning.",
+		"Not worth a reply.",
 	}
 	for _, s := range suppressed {
 		if !isMetaNonReply(s) {

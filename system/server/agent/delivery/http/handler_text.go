@@ -53,7 +53,7 @@ func isAgentNoReply(text string) bool {
 // "Sound event, no user message. Nothing to say". isAgentNoReply() only knows
 // the sentinel forms, so without this gate the narration reaches TTS and the
 // device reads its own bookkeeping out loud.
-var metaNonReplyRe = regexp.MustCompile(`(?i)\b(nothing to (say|add|report)|no (user )?(message|reply|response|comment)( needed| required| necessary)?|no need to (reply|respond|speak|say)|staying silent|remaining silent|no action needed)\b`)
+var metaNonReplyRe = regexp.MustCompile(`(?i)\b(nothing (to|worth) (say|saying|add|adding|mention|mentioning|report|reporting|note|noting|comment|commenting)|no (user )?(message|reply|response|comment)( needed| required| necessary)?|no need to (reply|respond|speak|say)|not worth (saying|mentioning|a reply|a response)|staying silent|remaining silent|no action needed)\b`)
 
 // metaNonReplyMaxLen bounds the gate to short bookkeeping lines. A real reply
 // that happens to contain one of these phrases is normally part of a longer
