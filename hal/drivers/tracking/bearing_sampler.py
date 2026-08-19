@@ -24,6 +24,7 @@ Two accuracy rules, both about not teaching the lamp something false:
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from typing import Any, Optional
@@ -34,6 +35,57 @@ logger = logging.getLogger(__name__)
 
 _stop = threading.Event()
 _thread: Optional[threading.Thread] = None
+
+
+# Must begin with "sensing_" to be servable by the monitor snapshot route.
+SNAPSHOT_CATEGORY: str = "sensing_bearing"
+
+
+def _snapshot_dir() -> str:
+    root = getattr(config, "SNAPSHOT_PERSIST_DIR", "/var/lib/hal/snapshots")
+    return os.path.join(root, SNAPSHOT_CATEGORY)
+
+
+def _prune(directory: str) -> None:
+    """Keep the newest N. Names are timestamped, so lexical order is time order."""
+    keep = int(getattr(config, "BEARING_SNAPSHOT_KEEP", 30) or 0)
+    if keep <= 0:
+        return
+    try:
+        files = sorted(
+            (f for f in os.listdir(directory) if f.endswith(".jpg")), reverse=True
+        )
+        for stale in files[keep:]:
+            try:
+                os.unlink(os.path.join(directory, stale))
+            except OSError:
+                pass
+    except Exception as e:
+        logger.debug("[bearing-sample] prune skipped: %s", e)
+
+
+def _save_snapshot(frame: Any, box: Any, label: str) -> Optional[str]:
+    """Write what this sample saw, annotated. Never raises."""
+    if not getattr(config, "BEARING_SNAPSHOT_ENABLED", True) or frame is None:
+        return None
+    try:
+        from hal.drivers.tracking.look_debug import encode_annotated
+
+        jpg = encode_annotated(frame, box, label)
+        if jpg is None:
+            return None
+        directory = _snapshot_dir()
+        os.makedirs(directory, exist_ok=True)
+        # Sorts chronologically, which is what _prune relies on.
+        name = time.strftime("%Y%m%d-%H%M%S") + ".jpg"
+        path = os.path.join(directory, name)
+        with open(path, "wb") as f:
+            f.write(jpg)
+        _prune(directory)
+        return path
+    except Exception as e:
+        logger.debug("[bearing-sample] snapshot skipped: %s", e)
+        return None
 
 
 def _sample_once() -> bool:
@@ -67,25 +119,38 @@ def _sample_once() -> bool:
             return False
         box = None
         kind = ""
+        rejected = None  # kept only so the snapshot can show what was dismissed
         for target in ("person", "face"):
             try:
                 found = detector.detect(frame, target, strict=False)
             except Exception:
                 continue
-            if found is not None and aim._is_near_enough(found, frame, target):
+            if found is None:
+                continue
+            if aim._is_near_enough(found, frame, target):
                 box, kind = found, target
                 break
+            if rejected is None:
+                rejected = (found, target)
     finally:
         aim._detector_lock_use.release()
 
+    frame_h, frame_w = float(frame.shape[0]), float(frame.shape[1])
+
     if box is None:
+        if rejected is not None:
+            far_box, far_kind = rejected
+            _save_snapshot(
+                frame, far_box,
+                f"ignored: far {far_kind} h={far_box[3] / frame_h * 100:.1f}%",
+            )
         return False
 
     x, y, w, h = box
-    frame_h, frame_w = float(frame.shape[0]), float(frame.shape[1])
     dx_frac = ((x + w / 2.0) - frame_w / 2.0) / frame_w
     dy_frac = ((y + h / 2.0) - frame_h / 2.0) / frame_h
     if abs(dx_frac) > config.BEARING_SAMPLE_MAX_DX_FRAC:
+        _save_snapshot(frame, box, f"skipped: dx={dx_frac * 100:+.1f}% too far off centre")
         return False
 
     try:
@@ -101,13 +166,20 @@ def _sample_once() -> bool:
         pose = dict(pose)
         pose["base_yaw.pos"] = bearing
 
-    if user_bearing.record_sighting(bearing, pose=pose):
+    recorded = user_bearing.record_sighting(bearing, pose=pose)
+    note = "" if pose is not None else " (bearing only, not vertically centred)"
+    if recorded:
+        _save_snapshot(
+            frame, box,
+            f"recorded {kind} dx={dx_frac * 100:+.1f}% -> bearing {bearing:+.1f}{note}",
+        )
         logger.info(
             "[bearing-sample] near %s at dx=%+.1f%% dy=%+.1f%% -> bearing %+.1f%s",
-            kind, dx_frac * 100.0, dy_frac * 100.0, bearing,
-            "" if pose is not None else " (bearing only, not vertically centred)",
+            kind, dx_frac * 100.0, dy_frac * 100.0, bearing, note,
         )
         return True
+    # Rejected by the estimate's own rate limit — still worth a picture.
+    _save_snapshot(frame, box, f"not folded in (too soon) {kind} dx={dx_frac * 100:+.1f}%")
     return False
 
 

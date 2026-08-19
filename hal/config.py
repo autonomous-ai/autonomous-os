@@ -922,6 +922,18 @@ BEARING_SAMPLE_MAX_DX_FRAC: float = float(
 BEARING_SAMPLE_MAX_DY_FRAC: float = float(
     os.environ.get("HAL_BEARING_SAMPLE_MAX_DY_FRAC", "0.15")
 )
+# Save what each bearing sample saw, box drawn on, under
+# SNAPSHOT_PERSIST_DIR/sensing_bearing/. Servable by
+# GET /api/sensing/snapshot/sensing_bearing/<name>, so the samples can be
+# reviewed without SSH.
+BEARING_SNAPSHOT_ENABLED: bool = (
+    os.environ.get("HAL_BEARING_SNAPSHOT", "true").lower() in ("1", "true", "yes")
+)
+# Oldest are evicted past this. One frame per sample interval accumulates
+# quietly forever otherwise.
+BEARING_SNAPSHOT_KEEP: int = int(
+    os.environ.get("HAL_BEARING_SNAPSHOT_KEEP", "30")
+)
 # Where the remembered user bearing lives. NOT a boot sidecar: this must survive
 # reboots, unlike the mic/speaker/camera state in app_state.
 USER_BEARING_PATH: str = os.environ.get(

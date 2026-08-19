@@ -161,6 +161,36 @@ def note_event(msg: str) -> None:
             )
 
 
+def encode_annotated(frame: Any, box: Any = None, label: str = "") -> Optional[bytes]:
+    """JPEG of `frame` with the detection drawn on. Shared with the bearing
+    sampler so both debug views read identically.
+
+    Green box and green centre line mark the detection; the red line is frame
+    centre. The gap between them IS dx, the quantity the aim servos on.
+    """
+    if frame is None:
+        return None
+    try:
+        import cv2
+
+        img = frame.copy()
+        if box is not None:
+            x, y, w, h = (int(v) for v in box)
+            cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cx = x + w // 2
+            cv2.line(img, (cx, 0), (cx, img.shape[0]), (0, 255, 0), 1)
+        fw = img.shape[1]
+        cv2.line(img, (fw // 2, 0), (fw // 2, img.shape[0]), (0, 0, 255), 1)
+        if label:
+            cv2.putText(img, label, (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                        (0, 255, 255), 2, cv2.LINE_AA)
+        ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+        return buf.tobytes() if ok else None
+    except Exception as e:
+        logger.debug("LOOK-DEBUG annotate failed: %s", e)
+        return None
+
+
 def _frames_enabled() -> bool:
     return os.environ.get("HAL_LOOK_DEBUG_FRAMES", "true").lower() in ("1", "true", "yes")
 
@@ -179,27 +209,12 @@ def note_step_frame(n: int, frame: Any, box: Any = None, label: str = "") -> Non
     if not _init() or not _frames_enabled() or frame is None:
         return
     try:
-        import cv2
-
-        img = frame.copy()
-        if box is not None:
-            x, y, w, h = (int(v) for v in box)
-            cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            cx = x + w // 2
-            # Vertical line at the box centre and at frame centre: the gap
-            # between them IS dx, the quantity the whole aim is servoing on.
-            cv2.line(img, (cx, 0), (cx, img.shape[0]), (0, 255, 0), 1)
-        fw = img.shape[1]
-        cv2.line(img, (fw // 2, 0), (fw // 2, img.shape[0]), (0, 0, 255), 1)
-        if label:
-            cv2.putText(img, label, (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                        (0, 255, 255), 2, cv2.LINE_AA)
-        ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
-        if not ok:
+        jpg = encode_annotated(frame, box, label)
+        if jpg is None:
             return
         with _lock:
             if _current is not None:
-                _current.setdefault("_step_frames", []).append((n, label, buf.tobytes()))
+                _current.setdefault("_step_frames", []).append((n, label, jpg))
     except Exception as e:  # a debug aid must never break the look
         logger.debug("LOOK-DEBUG step frame failed: %s", e)
 
