@@ -210,6 +210,53 @@ func setupOrAdminMiddleware(cfg *config.Config) gin.HandlerFunc {
 	}
 }
 
+// apOnlyMiddleware admits requests whose source IP sits inside the AP's own
+// DHCP subnet AND whose Host header matches the AP's static IP. Both checks
+// are required:
+//
+//   - Source-IP check is the security gate — a LAN attacker sending
+//     `-H "Host: 192.168.100.1"` still carries their real LAN IP (nginx
+//     strips inbound X-Real-IP and sets its own from the real client), and
+//     that IP is outside the AP subnet, so the bypass is refused.
+//   - Host check makes the intent explicit and rejects accidental
+//     cross-interface calls that might land here via a misconfigured proxy.
+//
+// Used only for POST /api/device/wifi-provision — the fast-path re-Wi-Fi
+// endpoint served from the provisioning AP portal. Physical presence on the
+// hotspot is the trust signal; without a valid home Wi-Fi the operator has
+// no way to auth via the LAN IP, and asking them to know llm_api_key on the
+// setup screen is a UX dead-end.
+func apOnlyMiddleware() gin.HandlerFunc {
+	_, apSubnet, _ := net.ParseCIDR("192.168.100.0/24")
+	const apStaticHost = "192.168.100.1"
+	return func(c *gin.Context) {
+		host := c.Request.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if host != apStaticHost {
+			c.JSON(http.StatusForbidden, serializers.ResponseError("AP portal only"))
+			c.Abort()
+			return
+		}
+		clientIP := strings.TrimSpace(c.GetHeader("X-Real-IP"))
+		if clientIP == "" {
+			clientIP = strings.TrimSpace(strings.SplitN(c.GetHeader("X-Forwarded-For"), ",", 2)[0])
+		}
+		if clientIP == "" {
+			remoteHost, _, _ := net.SplitHostPort(c.Request.RemoteAddr)
+			clientIP = remoteHost
+		}
+		ip := net.ParseIP(clientIP)
+		if ip == nil || !apSubnet.Contains(ip) {
+			c.JSON(http.StatusForbidden, serializers.ResponseError("AP portal only"))
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
 func adminAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Session cookie path (browser, post-login). Cookies auto-attach so

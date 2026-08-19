@@ -88,6 +88,70 @@ type SetupRequest struct {
 	LLMDisableThinking *bool `json:"llm_disable_thinking,omitempty"`
 }
 
+// WifiProvisionRequest is the payload for POST /api/device/wifi-provision — the
+// AP-portal fast path that runs when the operator is standing next to the
+// device on its own hotspot. Purpose:
+//
+//   - Re-point the device at a different home Wi-Fi (moved offices, changed
+//     router, mistyped the password on original setup).
+//   - Or bring a device online end-to-end when autonomous.ai (the URL-push
+//     origin) is unreachable — the operator types their own LLM credentials
+//     into the same screen and the device sets itself up with those.
+//
+// All fields EXCEPT `SSID` are optional. Empty fields are read as "leave the
+// existing on-disk value alone" (mergeMissingFromConfig applies for the sub-
+// set that overlaps SetupRequest). Deliberately NOT a SetupRequest with
+// optional fields: SetupRequest.LLMAPIKey / LLMBaseURL / DeviceID carry
+// `validate:"required"` because a full first-time setup legitimately needs
+// them, and loosening those tags would silently let a fresh provision go
+// through with no LLM at all. Separate endpoint + separate type keeps both
+// semantics honest.
+//
+// A completely fresh device (no LLM on disk yet) still needs the operator to
+// type LLM creds here — service.ReprovisionWifi only runs agent setup when
+// creds are present, and the device just sits in "Wi-Fi connected but not
+// finished" until they are.
+type WifiProvisionRequest struct {
+	SSID     string `json:"ssid" validate:"required"`
+	Password string `json:"password"` // empty = open network
+
+	// Optional overrides. Empty = leave the on-disk value alone.
+	LLMAPIKey  string `json:"llm_api_key"`
+	LLMBaseURL string `json:"llm_base_url"`
+	LLMModel   string `json:"llm_model"`
+
+	// Voice pipeline (all optional; empty = keep existing).
+	DeepgramAPIKey string `json:"deepgram_api_key"`
+	STTAPIKey      string `json:"stt_api_key"`
+	STTBaseURL     string `json:"stt_base_url"`
+	STTLanguage    string `json:"stt_language"`
+	TTSAPIKey      string `json:"tts_api_key"`
+	TTSBaseURL     string `json:"tts_base_url"`
+	TTSProvider    string `json:"tts_provider"`
+	TTSVoice       string `json:"tts_voice"`
+
+	// AdminPassword: plaintext operator-picked password. bcrypted into
+	// config.AdminPasswordHash. Empty on a re-provision = keep current
+	// hash; empty on a fresh device = handler defaults to the hardware
+	// suffix (same policy as SetupRequest / handler.Setup).
+	AdminPassword string `json:"admin_password"`
+
+	// Messaging channel (optional). Empty Channel = keep on-disk value.
+	// Per-channel token fields are only written when Channel matches; this
+	// prevents an operator switching from telegram→slack from leaving the
+	// old telegram tokens sitting alongside the new slack credentials in
+	// config.json.
+	Channel          string `json:"channel"`
+	TelegramBotToken string `json:"telegram_bot_token"`
+	TelegramUserID   string `json:"telegram_user_id"`
+	SlackBotToken    string `json:"slack_bot_token"`
+	SlackAppToken    string `json:"slack_app_token"`
+	SlackUserID      string `json:"slack_user_id"`
+	DiscordBotToken  string `json:"discord_bot_token"`
+	DiscordGuildID   string `json:"discord_guild_id"`
+	DiscordUserID    string `json:"discord_user_id"`
+}
+
 // EffectiveChannel returns the resolved channel type, defaulting to "telegram".
 // ChannelWhatsapp is intentionally NOT handled here — setup falls back to
 // telegram if whatsapp is somehow requested via this path.

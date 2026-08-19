@@ -4,6 +4,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { SourceFooter } from "@/components/SourceFooter";
 import Setup from "@/pages/setup";
 import { SetupSkeleton } from "@/pages/setup/SetupSkeleton";
+import WifiProvision from "@/pages/wifi-provision/WifiProvision";
 import Login from "@/pages/Login";
 import Monitor from "@/pages/monitor";
 import GwConfig from "@/pages/GwConfig";
@@ -227,6 +228,12 @@ function App() {
       <Routes>
         <Route path="/" element={<RootRedirect />} />
         <Route path="/setup" element={<SetupGate />} />
+        {/* Standalone Wi-Fi re-provision page for the AP portal. Deliberately
+            separate from /setup so it doesn't carry the wizard's LLM/channel
+            state or validation — just SSID + password, hits the AP-gated
+            POST /api/device/wifi-provision. Served at http://192.168.100.1/wifi
+            during hotspot mode. */}
+        <Route path="/wifi" element={<WifiProvision />} />
         <Route path="/login" element={<Login />} />
         {/* Monitor + Settings share ONE shell instance. Both paths are child
             routes of a single layout route whose element renders <Monitor/>.
