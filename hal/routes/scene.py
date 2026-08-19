@@ -207,11 +207,17 @@ def deactivate_scene():
         state._persist_speaker_state()
         state.logger.info("Scene off: speaker unmuted")
 
-    # Restore idle LED
-    from hal.presets import EMOTION_PRESETS, EMO_IDLE
-    idle = EMOTION_PRESETS[EMO_IDLE]
+    # Settle the strip the same way every other release path does. This used to
+    # paint the `idle` preset color unconditionally, from back when the resting
+    # look was a warm white — with AMBIENT_RESTING_LED black (default off, see
+    # hal/presets.py), that left scene-off glowing dim orange until some
+    # unrelated restore later cleared it, instead of turning the light off.
+    # restore_led() reads the resting look, and honors mic-muted / TTS / music
+    # ownership, which the raw dispatch did not.
     if state.rgb_service:
-        state.rgb_service.dispatch(RGB_CMD_SOLID, tuple(idle["color"]))
+        from hal.routes.led import restore_led
 
-    state.logger.info("Scene off: deactivated %s, restored idle", prev)
+        restore_led()
+
+    state.logger.info("Scene off: deactivated %s, LED settled", prev)
     return {"status": "ok"}
