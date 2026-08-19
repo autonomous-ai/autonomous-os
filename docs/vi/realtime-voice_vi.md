@@ -478,6 +478,15 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
    | Wake-word / follow-up | sau khi capture xong, khi final xác nhận wake phrase | Có |
    | Deferred (rebuild sau noise-drop) | sau khi capture xong, trên session thay thế | Có |
 
+   Cả hai dòng chạy sau capture còn bị chặn thêm một điều kiện: lượt đó **không**
+   phải noise. Chúng chạy sau khi noise guard đã phân loại xong capture, nên một
+   lượt STT rỗng mà không phải tiếng nói sẽ không mở gì cả: không `[TURN CONTEXT]`,
+   không audio, không session thay thế. Chính việc không gửi mới làm cho đường
+   skip-commit trở nên miễn phí — nếu không, toàn bộ buffer của lượt đó đã vào (và
+   bị tính tiền trong) một activity đang mở mà ngay bước sau lại vứt đi. Session
+   được mở *sớm hơn* trong lúc capture (always-listening) thì đã stream audio rồi
+   nên vẫn bị discard như cũ.
+
    Ở mode always-listening, prepass speaker-ID (`identify_and_decorate`, chạy **một
    lần** cuối session) chỉ giải được người nói *sau khi* context đã gửi đi kèm tên
    từ khuôn mặt. HAL gửi tiếp một correction `[TURN CONTEXT UPDATE]` nêu đúng người

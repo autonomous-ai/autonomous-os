@@ -1549,7 +1549,25 @@ class VoiceService:
 
             # Capture can end just after the STT callback. One final check
             # avoids dropping a matched partial that raced the loop exit.
-            start_realtime_turn()
+            #
+            # Guarded by the same noise check as the deferred flush below: this
+            # call site runs AFTER the noise guard, so an empty non-speech turn
+            # is already known to be uncommittable here. Opening the turn anyway
+            # sent [TURN CONTEXT] plus the whole audio buffer into the model's
+            # open activity — billed, then thrown away one line later by the
+            # skip-commit path, which also had to swap in a fresh session.
+            # Sessions opened earlier in the capture (always-listening path) have
+            # already streamed audio, so they still run and still get discarded.
+            if is_noise_turn(combined, buf_duration, rt_audio_is_speech):
+                if not realtime_turn_started:
+                    logger.info(
+                        "[realtime] Noise turn — not opening realtime turn after capture "
+                        "(empty STT, silero_speech=%s, dur=%.2fs); nothing sent to model",
+                        rt_audio_is_speech,
+                        buf_duration,
+                    )
+            else:
+                start_realtime_turn()
 
             # `discard_open_activity()` starts its replacement session in the
             # background. A user can begin the next utterance before that

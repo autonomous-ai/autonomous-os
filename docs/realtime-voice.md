@@ -499,6 +499,14 @@ turn ("hello") right after a restart would leak to the main agent.
    | Wake-word / follow-up | after capture, once a final wake phrase confirms | Yes |
    | Deferred (noise-drop rebuild) | after capture, on the replacement session | Yes |
 
+   Both post-capture rows are additionally gated on the turn **not** being noise.
+   They run after the noise guard has already classified the capture, so an
+   empty-STT non-speech turn opens nothing: no `[TURN CONTEXT]`, no audio, and no
+   replacement session. Skipping the send is what makes the skip-commit path free
+   — otherwise the turn's whole buffer entered (and was billed by) an open
+   activity that the very next step discarded. Sessions opened *earlier* in the
+   capture (always-listening) have already streamed audio and are still discarded.
+
    In always-listening mode the speaker-ID prepass (`identify_and_decorate`, run
    **once** at session end) resolves the voice speaker *after* the context already
    went out with the face name. HAL then sends a `[TURN CONTEXT UPDATE]` correction
