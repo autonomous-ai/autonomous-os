@@ -99,16 +99,42 @@ def _prune() -> None:
         pass
 
 
+# One visual question calls `look` TWICE by design: the first captures and
+# replays the turn, the replayed turn re-triggers it and lands on the reuse
+# path. Both are the same look, so the second must not open a new trace — doing
+# so discarded the aim data and the captured frame and wrote the result out as
+# "reused_frame".
+#
+# A trace older than this was orphaned by a turn that never completed; only then
+# is it safe to replace.
+STALE_TRACE_S: float = 120.0
+
+
 def start(trigger: str = "look tool") -> None:
-    """Open a trace at the moment the `look` tool fires."""
+    """Open a trace at the moment the `look` tool fires.
+
+    Re-entrant: the turn replay calls this again for the SAME look, and that
+    must extend the open trace rather than replace it.
+    """
     global _current
     if not _init():
         return
     with _lock:
+        if _current is not None:
+            if (time.monotonic() - _current["_t0"]) < STALE_TRACE_S:
+                _current["look_calls"] = _current.get("look_calls", 1) + 1
+                _current["events"].append({
+                    "t_ms": round((time.monotonic() - _current["_t0"]) * 1000),
+                    "msg": "look re-entered (turn replay)",
+                })
+                return
+            # Orphaned by a turn that never closed — safe to start over.
+            _current["events"].append({"t_ms": 0, "msg": "abandoned: superseded"})
         _current = {
             "trigger": trigger,
             "started": time.strftime("%Y-%m-%d %H:%M:%S"),
             "_t0": time.monotonic(),
+            "look_calls": 1,
             "events": [],
         }
 

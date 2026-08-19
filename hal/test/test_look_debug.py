@@ -92,3 +92,43 @@ def test_old_traces_are_pruned():
                 ld.start()
                 ld.finish(f"OK_{i}")
         assert len(os.listdir(tmp)) <= 3
+
+
+def test_the_turn_replay_extends_the_trace_instead_of_replacing_it():
+    # One visual question calls look() twice by design — capture, then the
+    # replayed turn reads the frame. The second call previously clobbered the
+    # trace, so the capture and aim data were lost and the whole look was
+    # filed as "reused_frame".
+    with tempfile.TemporaryDirectory() as tmp, _fresh(tmp):
+        ld.start()                       # call 1 — captures
+        ld.note_aim(_Aim())
+        src = os.path.join(tmp, "f.jpg")
+        with open(src, "wb") as f:
+            f.write(b"jpegbytes")
+        ld.note_capture(src)
+
+        ld.start()                       # call 2 — the replay
+        ld.note_event("reused recent frame (already looked this turn)")
+
+        ld.finish("OK_realtime_handled", question="what is this?", answer="a mug")
+
+        dirs = [d for d in os.listdir(tmp) if os.path.isdir(os.path.join(tmp, d))]
+        assert len(dirs) == 1, f"one look must write one trace, got {dirs}"
+        assert dirs[0].endswith("OK_realtime_handled")
+        d = os.path.join(tmp, dirs[0])
+        assert os.path.exists(os.path.join(d, "capture.jpg")), "capture was lost"
+        with open(os.path.join(d, "result.json"), encoding="utf-8") as f:
+            r = json.load(f)
+    assert r["look_calls"] == 2
+    assert r["aim"]["reason"] == "centred on person"
+    assert r["answer"] == "a mug"
+    assert any("replay" in e["msg"] for e in r["events"])
+
+
+def test_an_orphaned_trace_is_eventually_replaced():
+    # A turn that never completes must not block tracing forever.
+    with tempfile.TemporaryDirectory() as tmp, _fresh(tmp):
+        ld.start()
+        ld._current["_t0"] -= ld.STALE_TRACE_S + 1
+        ld.start()
+        assert ld._current["look_calls"] == 1, "stale trace should have been replaced"

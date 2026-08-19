@@ -1012,7 +1012,10 @@ class RealtimeOrchestrator:
                 "[realtime] look: reusing recent frame (%s) — no new image sent (cost)",
                 reason,
             )
-            look_debug.abandon(f"reused_frame ({reason})")
+            # NOT a failure and NOT a separate look: this is the replayed turn
+            # reading the frame captured moments ago. Closing the trace here
+            # would throw away the aim data and the capture from the first call.
+            look_debug.note_event(f"reused recent frame ({reason})")
             # Reading a frame (esp. text) can keep Gemini thinking silently
             # past the default watchdog — give THIS turn a longer window so
             # the answer isn't cut off seconds before it arrives.
