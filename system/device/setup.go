@@ -1,6 +1,7 @@
 package device
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -79,9 +80,17 @@ func (st *setupState) set(phase, ip, errMsg string) {
 // and redirect.
 func (s *Service) SetupStatus() (phase, lanIP, errMsg string, run int) {
 	phase, lanIP, errMsg, run = s.setupState.snapshot()
-	if lanIP == "" {
-		if ip, err := s.networkService.GetCurrentIP(); err == nil {
+	// Fallback: infer from the current wlan0 lease. Deliberately excludes
+	// apSetupIP (the AP's own static address) — leaking that as "lan_ip"
+	// misleads the /wifi success screen into promoting 192.168.100.1 as the
+	// reconnect target, which is dead the moment the AP tears down. Return
+	// "" instead so the client falls back to the mDNS name / router-admin
+	// guidance until a real STA lease shows up.
+	if lanIP == "" || lanIP == apSetupIP {
+		if ip, err := s.networkService.GetCurrentIP(); err == nil && ip != apSetupIP {
 			lanIP = ip
+		} else {
+			lanIP = ""
 		}
 	}
 	return phase, lanIP, errMsg, run
@@ -194,6 +203,250 @@ func (s *Service) setupWiFi(data domain.SetupRequest) error {
 		s.setupState.set(SetupPhaseConnected, "", "")
 		slog.Warn("setup: WiFi associated but no IP detected", "component", "device", "error", ipErr)
 	}
+	return nil
+}
+
+// ReprovisionWifi runs the AP-portal fast path — Wi-Fi (re)provisioning plus
+// optional in-place config edits (LLM/STT/TTS/admin password). Called from
+// POST /api/device/wifi-provision, gated by apOnlyMiddleware (physical
+// presence on the hotspot).
+//
+// Semantics:
+//   - Wi-Fi: SSID is required (validator). Always runs SetupNetwork →
+//     connect-wifi → AP teardown.
+//   - Config fields: applied ONLY when non-empty. Empty = leave the on-disk
+//     value alone (parallels mergeMissingFromConfig on the SetupRequest path).
+//     Lets the operator change just Wi-Fi, just LLM, or any combination in
+//     one shot without needing autonomous.ai to push a URL.
+//   - Admin password: bcrypt-hashed when non-empty, on both fresh and
+//     re-provision. On a fresh device with no password supplied AND no hash
+//     on file, the caller (handler) defaults it to the hardware suffix — same
+//     policy as the SetupRequest path.
+//   - Agent setup: only fired when the device now has an LLM key (either
+//     newly supplied or already on disk from a prior full setup). Without an
+//     LLM key the device joins Wi-Fi but SetupCompleted stays whatever it
+//     was — a subsequent /wifi call carrying the key finishes provisioning.
+//
+// AP teardown is the last step of connect-wifi; nothing extra needed here.
+func (s *Service) ReprovisionWifi(data domain.WifiProvisionRequest) error {
+	slog.Info("starting wifi reprovision", "component", "device", "ssid", data.SSID)
+	s.setupState.begin()
+	defer s.statusLED.Clear(statusled.StateWifiConnecting)
+
+	if strings.TrimSpace(data.SSID) == "" {
+		err := fmt.Errorf("ssid is required")
+		s.setupState.set(SetupPhaseFailed, "", err.Error())
+		return err
+	}
+
+	// Blue-blink cue while wlan0 associates — mirrors setupWiFi.
+	s.statusLED.Set(statusled.StateWifiConnecting)
+
+	// Reuse setupWiFi's early-LAN-IP poller by calling the same primitives it
+	// wraps. Direct SetupNetwork gives us the same connect-wifi + AP-teardown
+	// behavior without the config-side effects of full Setup(). See setupWiFi
+	// for the reasoning behind the ipPollDone goroutine.
+	ipPollDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ipPollDone:
+				return
+			case <-ticker.C:
+				ip, ipErr := s.networkService.GetCurrentIP()
+				if ipErr == nil && ip != "" && ip != apSetupIP {
+					if _, prevIP, _, _ := s.setupState.snapshot(); prevIP != ip {
+						s.setupState.set(SetupPhaseConnecting, ip, "")
+						slog.Info("wifi reprovision: early LAN IP captured",
+							"component", "device", "lan_ip", ip)
+					}
+				}
+			}
+		}
+	}()
+
+	ok, err := s.networkService.SetupNetwork(data.SSID, data.Password)
+	close(ipPollDone)
+	if err != nil {
+		s.setupState.set(SetupPhaseFailed, "", err.Error())
+		return fmt.Errorf("reprovision wifi: %w", err)
+	}
+	if !ok {
+		s.setupState.set(SetupPhaseFailed, "", "network setup failed")
+		return fmt.Errorf("reprovision wifi: network setup failed")
+	}
+
+	// Capture the final LAN IP (fall back to the poller's last snapshot if the
+	// AP-teardown window ate the read).
+	ip, ipErr := s.networkService.GetCurrentIP()
+	if ipErr != nil || ip == "" || ip == apSetupIP {
+		_, prevIP, _, _ := s.setupState.snapshot()
+		ip = prevIP
+	}
+	s.setupState.set(SetupPhaseConnected, ip, "")
+	slog.Info("wifi reprovision: joined home wifi", "component", "device", "lan_ip", ip)
+
+	// Optional config edits. Empty = leave the on-disk value alone (matches
+	// the mergeMissingFromConfig semantics on the SetupRequest path). Base
+	// URLs get the same normaliser as full Setup so trailing-slash / scheme
+	// variations don't drift.
+	if v := strings.TrimSpace(data.LLMAPIKey); v != "" {
+		s.config.LLMAPIKey = v
+	}
+	if v := strings.TrimSpace(data.LLMBaseURL); v != "" {
+		s.config.LLMBaseURL = urlnorm.NormalizeBaseURL(v)
+	}
+	if v := strings.TrimSpace(data.LLMModel); v != "" {
+		s.config.LLMModel = v
+	}
+	if v := strings.TrimSpace(data.DeepgramAPIKey); v != "" {
+		s.config.DeepgramAPIKey = v
+	}
+	if v := strings.TrimSpace(data.STTAPIKey); v != "" {
+		s.config.STTAPIKey = v
+	}
+	if v := strings.TrimSpace(data.STTBaseURL); v != "" {
+		s.config.STTBaseURL = urlnorm.NormalizeBaseURL(v)
+	}
+	if v := strings.TrimSpace(data.STTLanguage); v != "" {
+		s.config.STTLanguage = v
+		s.config.STTModel = sttModelForLanguage(v)
+	}
+	if v := strings.TrimSpace(data.TTSAPIKey); v != "" {
+		s.config.TTSAPIKey = v
+	}
+	if v := strings.TrimSpace(data.TTSBaseURL); v != "" {
+		s.config.TTSBaseURL = urlnorm.NormalizeBaseURL(v)
+	}
+	if v := strings.TrimSpace(data.TTSProvider); v != "" {
+		s.config.TTSProvider = v
+	}
+	if v := strings.TrimSpace(data.TTSVoice); v != "" {
+		s.config.TTSVoice = v
+	}
+	if data.AdminPassword != "" {
+		hash, hashErr := bcrypt.GenerateFromPassword([]byte(data.AdminPassword), bcrypt.DefaultCost)
+		if hashErr != nil {
+			return fmt.Errorf("hash admin password: %w", hashErr)
+		}
+		s.config.AdminPasswordHash = string(hash)
+	}
+
+	// Messaging channel (optional). Channel is applied first so the sub-token
+	// switch below reads the intended target channel — not the on-disk one.
+	// Sub-tokens are ONLY written when they match the (new) channel so an
+	// operator flipping from telegram→discord doesn't leak the old telegram
+	// bot token beside the new discord one.
+	if v := strings.TrimSpace(data.Channel); v != "" {
+		s.config.Channel = v
+	}
+	switch s.config.Channel {
+	case domain.ChannelTelegram, "":
+		if v := strings.TrimSpace(data.TelegramBotToken); v != "" {
+			s.config.TelegramBotToken = v
+		}
+		if v := strings.TrimSpace(data.TelegramUserID); v != "" {
+			s.config.TelegramUserID = v
+		}
+	case domain.ChannelSlack:
+		if v := strings.TrimSpace(data.SlackBotToken); v != "" {
+			s.config.SlackBotToken = v
+		}
+		if v := strings.TrimSpace(data.SlackAppToken); v != "" {
+			s.config.SlackAppToken = v
+		}
+		if v := strings.TrimSpace(data.SlackUserID); v != "" {
+			s.config.SlackUserID = v
+		}
+	case domain.ChannelDiscord:
+		if v := strings.TrimSpace(data.DiscordBotToken); v != "" {
+			s.config.DiscordBotToken = v
+		}
+		if v := strings.TrimSpace(data.DiscordUserID); v != "" {
+			s.config.DiscordUserID = v
+		}
+	}
+
+	if err := s.config.Save(); err != nil {
+		slog.Error("wifi reprovision: save config failed", "component", "device", "error", err)
+	}
+
+	// Agent setup: only when the device now has an LLM key (either newly
+	// supplied above or already on disk from a prior full setup). Without a
+	// key the gateway can't run — leave the device Wi-Fi-connected but
+	// SetupCompleted unchanged; a subsequent /wifi call carrying the key
+	// finishes the job. Mirrors the SetupAgent + WaitForAgentReady + flip
+	// sequence from Setup so a first-time provision via this endpoint lands
+	// in the same "fully ready" state.
+	if s.config.LLMAPIKey != "" {
+		// Snapshot the operator's explicit model choice BEFORE SetupAgent —
+		// openclaw's SetupAgent (runtimes/openclaw/service_setup.go:337)
+		// overwrites config.LLMModel with the upstream `/models`
+		// `default_model` on a successful fetch. That's correct for
+		// URL-pushed setups (autonomous.ai's default aligns with what it
+		// pushed) but wrong for manual /wifi entry against a BYO provider —
+		// the operator typing "DeepSeek-V4-Flash-0731" would silently end
+		// up on the upstream's "Auto-AI" default and chat would fail.
+		operatorModel := strings.TrimSpace(data.LLMModel)
+
+		setupData := domain.SetupRequest{
+			LLMAPIKey:  s.config.LLMAPIKey,
+			LLMBaseURL: s.config.LLMBaseURL,
+			LLMModel:   s.config.LLMModel,
+			DeviceID:   s.config.DeviceID,
+			// Carry channel identity + tokens through so the openclaw
+			// runtime materializes the right plugin (@openclaw/slack etc.)
+			// on the first SetupAgent after a /wifi channel change.
+			Channel:          s.config.Channel,
+			TelegramBotToken: s.config.TelegramBotToken,
+			TelegramUserID:   s.config.TelegramUserID,
+			SlackBotToken:    s.config.SlackBotToken,
+			SlackAppToken:    s.config.SlackAppToken,
+			SlackUserID:      s.config.SlackUserID,
+			DiscordBotToken:  s.config.DiscordBotToken,
+			DiscordUserID:    s.config.DiscordUserID,
+		}
+		if err := s.agentGateway.SetupAgent(setupData); err != nil {
+			slog.Warn("wifi reprovision: agent setup failed", "component", "device", "error", err)
+			return nil // Wi-Fi is up; surface the agent failure via /monitor
+		}
+
+		// Re-assert the operator's explicit model after SetupAgent. Only
+		// when they actually typed one — leave alone when they didn't touch
+		// the field, since then the upstream default is the right pick.
+		// UpdatePrimaryModel pushes the change into openclaw.json's
+		// agents.defaults.model.primary so the runtime sees it too, and
+		// config.Save persists the config.json side.
+		if operatorModel != "" && s.config.LLMModel != operatorModel {
+			slog.Info("wifi reprovision: restoring operator's model over upstream default",
+				"component", "device",
+				"operator_model", operatorModel,
+				"upstream_default", s.config.LLMModel)
+			s.config.LLMModel = operatorModel
+			if err := s.config.Save(); err != nil {
+				slog.Error("wifi reprovision: save operator model failed", "component", "device", "error", err)
+			}
+			if err := s.agentGateway.UpdatePrimaryModel(operatorModel); err != nil {
+				if !errors.Is(err, domain.ErrNotSupportedByRuntime) {
+					slog.Warn("wifi reprovision: push operator model to gateway failed",
+						"component", "device", "error", err)
+				}
+			}
+		}
+
+		if ok := s.WaitForAgentReady(120 * time.Second); !ok {
+			slog.Warn("wifi reprovision: agent ready timeout", "component", "device")
+			return nil
+		}
+		s.config.SetUpCompleted = true
+		if err := s.config.Save(); err != nil {
+			slog.Error("wifi reprovision: save SetUpCompleted failed", "component", "device", "error", err)
+		}
+		slog.Info("wifi reprovision: agent ready + SetUpCompleted", "component", "device")
+	}
+
 	return nil
 }
 

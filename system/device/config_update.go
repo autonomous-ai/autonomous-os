@@ -102,6 +102,7 @@ type updateChanges struct {
 	model    bool // llm_model changed → sync primary into the gateway
 	thinking bool // llm_disable_thinking sent → RefreshModelsConfig
 	baseURL  bool // llm_base_url changed → RefreshModelsConfig
+	apiKey   bool // llm_api_key rotated → RefreshModelsConfig (openclaw.json holds its OWN apiKey copy)
 	wifi     bool // ssid changed → reconnect WiFi
 	lang     bool // stt_language changed → new agent session + hal restart
 	voice    bool // a field hal reads at boot changed → hal restart
@@ -220,6 +221,7 @@ func applyUpdate(c *config.Config, data domain.UpdateConfigRequest, adminHash st
 func applyLLMFields(c *config.Config, data domain.UpdateConfigRequest, ch *updateChanges) {
 	prevModel := c.LLMModel
 	prevBaseURL := c.LLMBaseURL
+	prevAPIKey := c.LLMAPIKey
 	if data.LLMAPIKey != "" {
 		c.LLMAPIKey = data.LLMAPIKey
 	}
@@ -231,6 +233,13 @@ func applyLLMFields(c *config.Config, data domain.UpdateConfigRequest, ch *updat
 	}
 	ch.model = data.LLMModel != "" && data.LLMModel != prevModel
 	ch.baseURL = data.LLMBaseURL != "" && c.LLMBaseURL != prevBaseURL
+	// PATCH semantics: an empty request field means "leave it alone", so a
+	// re-save that only touched (say) llm_model must NOT count as an apiKey
+	// change. Only flag a rotation when the request explicitly carried a new
+	// key AND that key differs from what was on disk. Missing this flag was
+	// the whole reason openclaw.json's apiKey drifted from config.json's after
+	// a rotation — RefreshModelsConfig never fired.
+	ch.apiKey = data.LLMAPIKey != "" && c.LLMAPIKey != prevAPIKey
 	ch.newModel = c.LLMModel
 
 	ch.thinking = data.LLMDisableThinking != nil
@@ -456,7 +465,7 @@ func (s *Service) syncLLMToGateway(ch updateChanges) {
 	if s.agentGateway == nil {
 		return
 	}
-	if ch.model && !ch.thinking && !ch.baseURL {
+	if ch.model && !ch.thinking && !ch.baseURL && !ch.apiKey {
 		if err := s.agentGateway.UpdatePrimaryModel(ch.newModel); err != nil {
 			if errors.Is(err, domain.ErrNotSupportedByRuntime) {
 				// hermes/picoclaw: the device model is not what the runtime runs
@@ -467,7 +476,7 @@ func (s *Service) syncLLMToGateway(ch updateChanges) {
 			}
 		}
 	}
-	if ch.thinking || ch.baseURL {
+	if ch.thinking || ch.baseURL || ch.apiKey {
 		// RefreshModelsConfig syncs agents.defaults.model.primary, per-model
 		// reasoning, and providers.autonomous.baseUrl in one write + restart.
 		if err := s.agentGateway.RefreshModelsConfig(); err != nil {

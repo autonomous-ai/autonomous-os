@@ -336,6 +336,10 @@ func (s *Server) Serve(closeFn func()) error {
 	device := api.Group("device")
 	device.POST("setup", setupOrAdminMiddleware(s.config), s.deviceHandler.Setup)
 	device.GET("setup/status", s.deviceHandler.SetupStatus)
+	// AP-portal fast path: re-provision only the Wi-Fi association on an
+	// already-configured device. Auth is physical presence on the hotspot
+	// (client IP in the AP subnet); see middleware.apOnlyMiddleware.
+	device.POST("wifi-provision", apOnlyMiddleware(), s.deviceHandler.WifiProvision)
 	device.POST("channel", adminAuthMiddleware(s.config), s.deviceHandler.ChangeChannel)
 	// GET config is admin-gated now. Pre-login web can no longer bootstrap
 	// the bearer from here — browser must POST /api/login first (cookie),
