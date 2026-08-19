@@ -347,6 +347,21 @@ Hội thoại thông thường không đổi: thân máy vẫn đứng yên su�
 Chỉ một lời gọi `look` mới giải phóng nó, vì đó đúng là khoảnh khắc thiết bị được yêu cầu tường minh
 là hãy nhìn vào một vật.
 
+**Thân máy được sở hữu trong suốt cả lượt look.** Từ lúc pha ngắm bắt đầu cho tới khi màn trập đóng,
+`servo_ownership()` bật đúng cái khóa `_tracking_active` mà vision tracker vẫn dùng, khóa này chặn
+**toàn bộ** animation servo của emotion (`routes/emotion.py`) và khiến vòng animation bỏ luôn bản ghi
+đang phát dở.
+
+Đây không phải phần đánh bóng cho đẹp. Các preset emotion phát những tư thế **đã ghi sẵn**, tuyệt đối
+trên mọi khớp — kể cả `wrist_roll` — nên chỉ cần một cái rơi vào giữa pha ngắm và lần chụp là đầu bị
+đặt lại hoàn toàn, và khung hình cho ra đúng chỗ animation đã đỗ lại chứ không phải người dùng. Một
+phản ứng "tò mò" rơi vào giữa câu hỏi là đủ để chụp lên trần nhà. `nudge()` chiếm quyền được một
+animation *đang* phát, nhưng không chặn được cái được gọi *sau đó* — mà đó lại đúng là khoảng thời gian
+lần chụp nằm trong.
+
+Giá trị khóa trước đó được khôi phục chứ không bị xóa, nên một lượt look không bao giờ kết thúc một
+phiên bám vật thể đang chạy thật.
+
 **Vì sao chỉ yaw.** Quy ước dấu của yaw được chép từ quy ước đã kiểm chứng thực nghiệm của tracker
 (`dx>0` → `base_yaw` tăng). `AnimationService.nudge()` điều khiển `base_pitch`, trong khi tracker phân
 bổ pitch trên base/elbow/wrist — nên dấu của pitch **chưa** được kiểm chứng trên đường này, và pitch

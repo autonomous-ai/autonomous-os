@@ -104,13 +104,13 @@ OS_SENSING_URL = "http://127.0.0.1:5000/api/sensing/event"
 OS_SENSING_FILLER_URL = "http://127.0.0.1:5000/api/sensing/filler"
 # Publish the captured `look` frame to the Flow Monitor.
 #
-# DEFAULT OFF, and it must stay off until os-server carries the matching
-# `look.capture` handler. That handler is what makes the event monitor-only —
-# without it the sensing endpoint has no type whitelist, so the event falls
-# through to the agent-forward path and injects a phantom turn containing the
-# frame path. Flip to true in the same release that ships the os-server change.
+# Requires the matching `look.capture` handler in os-server — that handler is
+# what makes the event monitor-only. Without it the sensing endpoint has no type
+# whitelist, so the event falls through to the agent-forward path and injects a
+# phantom turn containing the frame path. Set HAL_LOOK_MONITOR=false if HAL is
+# ever deployed ahead of os-server.
 LOOK_MONITOR_ENABLED: bool = (
-    os.environ.get("HAL_LOOK_MONITOR", "false").lower() in ("1", "true", "yes")
+    os.environ.get("HAL_LOOK_MONITOR", "true").lower() in ("1", "true", "yes")
 )
 OS_WELLBEING_LOG_URL = "http://127.0.0.1:5000/api/wellbeing/log"
 GUARD_STATUS_URL = "http://127.0.0.1:5000/api/guard"

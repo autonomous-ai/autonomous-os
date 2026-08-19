@@ -345,6 +345,20 @@ Ordinary chat is untouched: the body stays still through listening and thinking 
 `look` call releases it, because that is the moment the device was explicitly asked to look at
 something.
 
+**The body is owned for the whole look.** From the moment the aim starts until the shutter closes,
+`servo_ownership()` sets the same `_tracking_active` lock the vision tracker uses, which suppresses
+**all** emotion servo animation (`routes/emotion.py`) and makes the animation loop drop any recording
+in progress.
+
+This is not optional polish. Emotion presets play **recorded** poses that are absolute on every
+joint — including `wrist_roll` — so one arriving between the aim and the capture re-poses the head
+entirely, and the frame shows wherever the animation parked it rather than the user. A "curious"
+reaction landing mid-question is enough to capture the ceiling. `nudge()` preempts an animation that
+is already playing, but not one dispatched afterwards, which is exactly the window the capture sits in.
+
+The previous lock value is restored rather than cleared, so a look never ends a genuine
+object-tracking session that was already running.
+
 **Why yaw only.** The yaw sign is copied from the tracker's empirically verified convention
 (`dx>0` → `base_yaw` increases). `AnimationService.nudge()` drives `base_pitch`, whereas the tracker
 distributes pitch across base/elbow/wrist — so the pitch sign is **not** validated on this path, and

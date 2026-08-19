@@ -23,6 +23,7 @@ stretches the move rather than being bypassed to hit the deadline.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 import time
@@ -128,6 +129,49 @@ def _detect_subject(detector: Any, frame: Any) -> Tuple[Optional[Tuple[int, int,
         if box is not None:
             return box, target
     return None, ""
+
+
+@contextlib.contextmanager
+def servo_ownership():
+    """Own the body for one aim + capture, so nothing else can move the head.
+
+    Without this the sequence "hear the question -> aim -> capture" can be
+    broken by an emotion animation landing in the middle: emotion presets play
+    RECORDED poses that are absolute on every joint, including wrist_roll, so
+    one arriving between the aim and the shutter re-poses the head entirely and
+    the frame shows wherever the animation parked it.
+
+    `nudge()` already preempts an animation that is ALREADY playing, but not one
+    dispatched afterwards — which is exactly the window the capture sits in.
+
+    `_tracking_active` is the existing lock for this: routes/emotion.py
+    suppresses ALL emotion servo while it is set, and the animation loop drops
+    any in-progress recording rather than fighting for the joints. The vision
+    tracker uses the same flag.
+
+    The previous value is restored rather than cleared, so this never releases a
+    genuine tracking session that was already running.
+    """
+    svc = None
+    prev = False
+    try:
+        import hal.app_state as state
+
+        svc = getattr(state, "animation_service", None)
+        if svc is not None:
+            prev = getattr(svc, "_tracking_active", False)
+            svc._tracking_active = True
+    except Exception as e:  # never block a capture over the lock
+        logger.debug("[look-aim] servo ownership unavailable: %s", e)
+        svc = None
+    try:
+        yield
+    finally:
+        if svc is not None:
+            try:
+                svc._tracking_active = prev
+            except Exception as e:
+                logger.warning("[look-aim] failed to release servo ownership: %s", e)
 
 
 def _say(pool: str) -> None:

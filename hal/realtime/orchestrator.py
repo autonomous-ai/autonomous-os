@@ -1028,30 +1028,36 @@ class RealtimeOrchestrator:
         # confidently about the wrong scene. Bounded by LOOK_AIM_DEADLINE_S and
         # never fatal: a failed aim still captures, because dead air in a live
         # turn is worse than an imperfectly framed frame.
-        if config.LOOK_AIM_ENABLED:
-            try:
-                from hal.drivers.tracking.aim import aim_for_look
+        # Own the body for aim AND capture. An emotion animation landing between
+        # them re-poses the head on every joint (recordings are absolute, roll
+        # included), which is how a "curious" reaction ends up pointing the
+        # camera at the ceiling for a visual question.
+        from hal.drivers.tracking.aim import servo_ownership
 
-                t_aim = time.monotonic()
-                res = aim_for_look(config.LOOK_AIM_DEADLINE_S)
-                logger.info(
-                    "[realtime] look: aim %s (%s) iters=%d yaw=%+.1f in %.0fms",
-                    "OK" if res.aimed else "skipped",
-                    res.reason, res.iterations, res.yaw_moved_deg,
-                    (time.monotonic() - t_aim) * 1000,
-                )
-                # Announce the capture only when the aim actually had work to do.
-                # Off by default: when the subject is already centred the shutter
-                # fires in a few hundred ms, and prefixing every visual question
-                # with "let me see" gets old within a day.
-                if config.LOOK_AIM_SPEAK_CAPTURE and res.iterations > 0:
-                    from hal.drivers.tracking.aim import _say
+        with servo_ownership():
+            if config.LOOK_AIM_ENABLED:
+                try:
+                    from hal.drivers.tracking.aim import aim_for_look
 
-                    _say("look_capturing")
-            except Exception as e:
-                logger.warning("[realtime] look: aim raised, capturing anyway: %s", e)
+                    t_aim = time.monotonic()
+                    res = aim_for_look(config.LOOK_AIM_DEADLINE_S)
+                    logger.info(
+                        "[realtime] look: aim %s (%s) iters=%d yaw=%+.1f in %.0fms",
+                        "OK" if res.aimed else "skipped",
+                        res.reason, res.iterations, res.yaw_moved_deg,
+                        (time.monotonic() - t_aim) * 1000,
+                    )
+                    # Announce the capture only when the aim actually had work to
+                    # do — an already-centred shutter fires in a few hundred ms
+                    # and needs no narration.
+                    if config.LOOK_AIM_SPEAK_CAPTURE and res.iterations > 0:
+                        from hal.drivers.tracking.aim import _say
 
-        frame = self._capture_frame()
+                        _say("look_capturing")
+                except Exception as e:
+                    logger.warning("[realtime] look: aim raised, capturing anyway: %s", e)
+
+            frame = self._capture_frame()
         if frame is None:
             logger.warning("[realtime] look: no camera frame available")
             self._agent.send(

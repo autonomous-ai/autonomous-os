@@ -268,3 +268,49 @@ def test_speech_can_be_disabled():
          mock.patch.object(aim, "_say") as say:
         _run_no_subject(_bearing(120.0, 0.9))
     assert not say.called
+
+
+# --- servo ownership: nothing else may move the head mid-look --------------
+
+class _FakeAnim:
+    def __init__(self, tracking=False):
+        self._tracking_active = tracking
+
+
+def test_ownership_is_claimed_for_the_whole_look():
+    # An emotion animation landing between the aim and the shutter re-poses the
+    # head on every joint (recordings are absolute, roll included) — which is
+    # how a "curious" reaction ends up capturing the ceiling.
+    anim = _FakeAnim()
+    with mock.patch.object(state, "animation_service", anim):
+        with aim.servo_ownership():
+            assert anim._tracking_active is True, "emotion servo must be suppressed"
+    assert anim._tracking_active is False, "ownership must be released"
+
+
+def test_ownership_does_not_release_a_real_tracking_session():
+    # If the vision tracker already owns the servo, a look must hand it back
+    # rather than clearing it — otherwise a visual question would silently end
+    # an object-follow session.
+    anim = _FakeAnim(tracking=True)
+    with mock.patch.object(state, "animation_service", anim):
+        with aim.servo_ownership():
+            assert anim._tracking_active is True
+    assert anim._tracking_active is True, "pre-existing tracking must survive"
+
+
+def test_ownership_is_released_even_when_the_body_raises():
+    anim = _FakeAnim()
+    with mock.patch.object(state, "animation_service", anim):
+        try:
+            with aim.servo_ownership():
+                raise RuntimeError("capture blew up")
+        except RuntimeError:
+            pass
+    assert anim._tracking_active is False, "a failed capture must not leave the body locked"
+
+
+def test_ownership_is_harmless_with_no_animation_service():
+    with mock.patch.object(state, "animation_service", None):
+        with aim.servo_ownership():
+            pass  # must not raise
