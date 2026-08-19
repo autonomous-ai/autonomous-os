@@ -27,6 +27,44 @@ Source: `hal/presets.py` — `EMOTION_PRESETS`
 | `nod` | 12, 8, 1 | `#0c0801` earth orange | breathing | 0.5 | nod |
 | `headshake` | 16, 6, 1 | `#100601` amber | breathing | 0.5 | headshake |
 
+## Six hue groups
+
+The table above is the base palette from `hal/presets.py`. On the lamp it is overridden, because at indicator brightness that palette has no usable color space left.
+
+Measured on lamp-0c89 (19/08/2026): 22 emotions are packed into three hue clusters, and **12 of them sit between hue 20° and 44°** — caring 20, headshake 20, shy 21, greeting 26, goodbye 26, confused 28, music_chill 34, idle 38, laugh 38, nod 38, curious 40, happy 44. Some are not merely close but byte-identical: `idle` = `laugh` = `nod` = `[12, 8, 1]`, and `greeting` = `goodbye` = `[12, 8, 5]`. At a peak of 12–16 each channel has only 12–16 levels instead of 255, so a 1–4° hue difference is simply not resolvable by eye.
+
+This is fallout from the dimming pass. Before 18/08 the presets ran at high peaks — greeting/goodbye `[255, 180, 100]`, caring `[255, 160, 120]`, music_chill `[252, 136, 3]`, acknowledge `[51, 230, 70]`, listening `[51, 121, 230]` — and at that amplitude 22 distinct colors read fine. Users complained about glare ("like a camera flash in your face": greeting ran full 255 across all 64 pixels exactly as someone walked up to the lamp), so everything was pulled down to 12–16. That cured the glare and collapsed the color space.
+
+**Turning the brightness back up is not the fix.** With gamma 2.2, dropping peak from 255 to 90 costs only ~40% of *perceived* brightness while keeping 90 color levels; dropping 90 → 12 costs another ~40% of perceived brightness but throws away 7.5× the color resolution. Almost all of the anti-glare benefit is already won in the first step; the second step is nearly pure cost.
+
+So the lamp keeps the peak exactly where it is (12/16 — **no increase in total light at all**) and spends the remaining headroom on hue instead: six groups, 60° apart.
+
+| Group | Hue | RGB | Emotions |
+|---|---|---|---|
+| negative | 0° red | `[16, 0, 0]` | `sad`, `shy`, `confused`, `headshake` |
+| joy | 60° yellow | `[12, 12, 0]` | `happy`, `laugh`, `excited` |
+| processing | 120° green | `[0, 12, 0]` | `curious`, `thinking`, `scan`, `acknowledge` |
+| music | 180° cyan | `[0, 12, 12]` | `music_chill` |
+| listening | 240° blue | `[0, 0, 16]` | `listening` |
+| social | 300° purple | `[16, 0, 16]` | `greeting`, `goodbye`, `caring` |
+| background | 30° amber, peak 8 | `[8, 4, 0]` | `idle`, `nod`, `stretching` |
+| alarm | white | `[12, 12, 12]` | `shock` (unchanged) |
+| sleep | off | `[0, 0, 0]` | `sleepy` (unchanged) |
+
+Three things are deliberate:
+
+1. **Every color has at least one channel at 0** — maximum saturation. At a peak of 12–16 this is mandatory: a diluted color like `[12, 8, 1]` loses whatever made it itself, while `[0, 12, 0]` still reads unmistakably green no matter how faint it gets.
+2. **`idle` / `nod` / `stretching` drop to peak 8**, one step below every other emotion. `idle` is the state the lamp spends the most time in, so it deserves to recede — and this *lowers* total light output rather than raising it. Confirmed on the real lamp by the user as less glaring.
+3. **Within a group, emotions are told apart by effect + speed, not by color** — e.g. the joy group: `happy` candle 0.2, `laugh` candle 0.2, `excited` candle 0.5. The eye discriminates rhythm far better than it discriminates 4° of hue.
+
+The trade-off, stated plainly: 22 emotions now share 6 colors. From the color alone you can read the **group**, not the specific emotion. That is accepted because the situation it replaced let you read nothing at all.
+
+Two technical notes:
+
+- **`music_strong` is intentionally absent** from the override table. It uses the `rainbow` effect, and `rainbow()` in `hal/drivers/rgb/effects.py` ignores the `color` argument entirely — it sweeps the whole hue circle itself. Assigning it a color would mean nothing.
+- **This table lives in `robots/lamp/presets.json`**, the per-device overlay merged field by field at boot via `hal/board/presets_overlay.py` — `hal/presets.py` is *not* edited. Other robots (reachy, intern) therefore keep the base palette, and reverting the lamp to the base palette is just deleting the `emotion` section from that JSON file.
+- **Do not confuse `EMO_IDLE` with `AMBIENT_RESTING_LED`.** The latter is `[0, 0, 0]` (product call 30/07/2026: a resting strip is fully off); `EMO_IDLE` is an emotion the agent actively emits and still has a color.
+
 ## `listening` has no servo
 
 It is the only preset that sets `"servo": None` — LED only, the lamp holds still. `listening` runs while the user is actually speaking; servo noise plus chassis vibration goes straight into the mic and dirties STT.

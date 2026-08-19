@@ -1,4 +1,31 @@
 {
-  "_comment": "Per-device preset overrides for lamp. See robots/contract/ROBOT-SPEC.md § Per-device presets. Lamp's LED ring has 64 pixels (vs the platform default of 64).",
-  "led_count": 64
+  "_comment": "Per-device preset overrides for lamp. See robots/contract/ROBOT-SPEC.md § Per-device presets. Lamp's LED ring has 64 pixels (vs the platform default of 64). Emotion colors below regroup the base palette into 6 hues 60 deg apart — see robots/lamp/docs/emotion-led-mapping.md § Six hue groups for why.",
+  "led_count": 64,
+  "emotion": {
+    "sad":          { "color": [16, 0, 0] },
+    "shy":          { "color": [16, 0, 0] },
+    "confused":     { "color": [16, 0, 0] },
+    "headshake":    { "color": [16, 0, 0] },
+
+    "happy":        { "color": [12, 12, 0] },
+    "laugh":        { "color": [12, 12, 0] },
+    "excited":      { "color": [12, 12, 0] },
+
+    "curious":      { "color": [0, 12, 0] },
+    "thinking":     { "color": [0, 12, 0] },
+    "scan":         { "color": [0, 12, 0] },
+    "acknowledge":  { "color": [0, 12, 0] },
+
+    "music_chill":  { "color": [0, 12, 12] },
+
+    "listening":    { "color": [0, 0, 16] },
+
+    "greeting":     { "color": [16, 0, 16] },
+    "goodbye":      { "color": [16, 0, 16] },
+    "caring":       { "color": [16, 0, 16] },
+
+    "idle":         { "color": [8, 4, 0] },
+    "nod":          { "color": [8, 4, 0] },
+    "stretching":   { "color": [8, 4, 0] }
+  }
 }
