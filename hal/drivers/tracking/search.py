@@ -150,7 +150,7 @@ def search_for_subject(target: str = "person", detector: Any = None) -> SearchRe
         frame = _grab_frame(cap)
         if frame is None:
             continue
-        box, kind = _detect_subject(detector, frame)
+        box, kind, _conf = _detect_subject(detector, frame)
         if box is not None:
             logger.info("[search] found %s at yaw %+.0f after %d stop(s)", kind, yaw, visited)
             return SearchResult(True, f"found {kind}", visited, yaw)

@@ -41,6 +41,10 @@ _thread: Optional[threading.Thread] = None
 SNAPSHOT_CATEGORY: str = "sensing_bearing"
 
 
+def _conf_txt(conf: Any) -> str:
+    return f" conf={conf:.2f}" if isinstance(conf, (int, float)) else ""
+
+
 def _snapshot_dir() -> str:
     root = getattr(config, "SNAPSHOT_PERSIST_DIR", "/var/lib/hal/snapshots")
     return os.path.join(root, SNAPSHOT_CATEGORY)
@@ -119,9 +123,15 @@ def _sample_once() -> bool:
             return False
         box = None
         kind = ""
+        conf = None
         rejected = None  # kept only so the snapshot can show what was dismissed
         for target in ("person", "face"):
             try:
+                found = detector.detect(
+                    frame, target, strict=False,
+                    min_conf=config.LOOK_AIM_MIN_CONFIDENCE,
+                )
+            except TypeError:
                 found = detector.detect(frame, target, strict=False)
             except Exception:
                 continue
@@ -129,6 +139,7 @@ def _sample_once() -> bool:
                 continue
             if aim._is_near_enough(found, frame, target):
                 box, kind = found, target
+                conf = getattr(detector, "last_confidence", None)
                 break
             if rejected is None:
                 rejected = (found, target)
@@ -171,7 +182,8 @@ def _sample_once() -> bool:
     if recorded:
         _save_snapshot(
             frame, box,
-            f"recorded {kind} dx={dx_frac * 100:+.1f}% -> bearing {bearing:+.1f}{note}",
+            f"recorded {kind}{_conf_txt(conf)} dx={dx_frac * 100:+.1f}% "
+            f"-> bearing {bearing:+.1f}{note}",
         )
         logger.info(
             "[bearing-sample] near %s at dx=%+.1f%% dy=%+.1f%% -> bearing %+.1f%s",

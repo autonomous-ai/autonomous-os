@@ -42,7 +42,10 @@ def _run(box, svc=None, tracking=False, disabled=False):
     svc = svc or _Svc()
     svc._tracking_active = tracking
     det = mock.Mock()
-    det.detect = mock.Mock(side_effect=lambda f, t, strict=True: box if t == "person" else None)
+    det.detect = mock.Mock(
+        side_effect=lambda f, t, strict=True, min_conf=None: box if t == "person" else None
+    )
+    det.last_confidence = 0.9
     recorded = {}
 
     def _record(bearing, pose=None, now=None):

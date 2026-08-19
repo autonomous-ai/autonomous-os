@@ -883,6 +883,18 @@ LOOK_AIM_DEADLINE_S: float = float(
 LOOK_AIM_FOV_DEG: float = float(
     os.environ.get("HAL_LOOK_AIM_FOV_DEG", "100.0")
 )
+# Confidence floor for the aim's own person/face lookup. The detector's global
+# DETECT_MIN_CONFIDENCE is 0.15 — deliberately loose, tuned so the TRACKER keeps
+# its lock on a phone at an odd angle, where a miss costs more than a false
+# positive. Aiming wants the opposite trade: a false positive turns the lamp at
+# a wall (device 2026-08-19 — a person rendered inside a laptop screen was
+# accepted and aimed at). Raised here only, leaving the tracker's floor alone.
+#
+# Applies to detections that report a confidence; the YuNet face path enforces
+# its own threshold instead.
+LOOK_AIM_MIN_CONFIDENCE: float = float(
+    os.environ.get("HAL_LOOK_AIM_MIN_CONFIDENCE", "0.5")
+)
 # Minimum apparent size for a detection to count as "the person talking to us".
 # Expressed as a fraction of FRAME HEIGHT: a close subject is often clipped
 # left/right, but their height still scales with distance. Device-measured on

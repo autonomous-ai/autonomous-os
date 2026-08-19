@@ -62,7 +62,10 @@ class _FakeSvc:
 def _detector(box, target_hit="person"):
     """Detector returning `box` for target_hit, None otherwise."""
     d = mock.Mock()
-    d.detect = mock.Mock(side_effect=lambda f, t, strict=True: box if t == target_hit else None)
+    d.detect = mock.Mock(
+        side_effect=lambda f, t, strict=True, min_conf=None: box if t == target_hit else None
+    )
+    d.last_confidence = 0.9
     return d
 
 
@@ -508,7 +511,7 @@ class _FreshCap(_FakeCap):
 def _sim_detector(svc, subject_bearing_deg, width=640):
     """Detector that reports where the subject falls given the CURRENT head yaw."""
 
-    def _detect(frame, target, strict=True):
+    def _detect(frame, target, strict=True, min_conf=None):
         if target != "person":
             return None
         rel = subject_bearing_deg - svc.yaw  # degrees off the optical axis
@@ -520,6 +523,7 @@ def _sim_detector(svc, subject_bearing_deg, width=640):
 
     d = mock.Mock()
     d.detect = mock.Mock(side_effect=_detect)
+    d.last_confidence = 0.9
     return d
 
 
@@ -680,3 +684,77 @@ def test_the_gate_uses_height_not_width():
     frame = _frame(width=640, height=480)
     narrow_but_tall = (10, 0, 12, 300)
     assert aim._is_near_enough(narrow_but_tall, frame, "person")
+
+
+# --- Confidence floor --------------------------------------------------------
+
+def test_the_aim_asks_for_a_higher_confidence_than_the_tracker():
+    """DETECT_MIN_CONFIDENCE is 0.15, tuned so the TRACKER keeps its lock on a
+    phone at an odd angle. Aiming wants the opposite trade — a false positive
+    turns the lamp at a wall (device 2026-08-19: a person rendered inside a
+    laptop screen was accepted and aimed at)."""
+    import hal.config as hal_cfg
+
+    det = _detector((520, 200, 100, 165))
+    aim._detect_subject(det, _frame())
+    _args, kwargs = det.detect.call_args
+    assert kwargs.get("min_conf") == hal_cfg.LOOK_AIM_MIN_CONFIDENCE
+    assert hal_cfg.LOOK_AIM_MIN_CONFIDENCE > 0.15, "must be stricter than the global floor"
+
+
+def test_the_chosen_box_reports_its_confidence():
+    """Without this a bad box cannot be told from a 0.17 fluke when debugging."""
+    det = _detector((520, 200, 100, 165))
+    det.last_confidence = 0.63
+    _box, _kind, conf = aim._detect_subject(det, _frame())
+    assert conf == 0.63
+
+
+def test_an_older_detector_without_min_conf_still_works():
+    """The size gate must keep protecting a detector that predates the kwarg."""
+    det = mock.Mock()
+    det.detect = mock.Mock(
+        side_effect=lambda f, t, strict=True: (520, 200, 100, 165) if t == "person" else None
+    )
+    box, kind, _conf = aim._detect_subject(det, _frame())
+    assert box is not None and kind == "person"
+
+
+def test_found_is_announced_once_however_many_iterations_follow():
+    """`bearing_steps` stays above zero for the rest of the aim, so an
+    unlatched announcement fires on every centring iteration after a search —
+    device 2026-08-19 said "bạn đây rồi" four times in three seconds."""
+    svc = _FakeSvc()
+    # Seen only after a bearing step: no detection first, then a close person.
+    seen = {"n": 0}
+
+    def _detect(frame, target, strict=True, min_conf=None):
+        if target != "person":
+            return None
+        seen["n"] += 1
+        return None if seen["n"] == 1 else (330, 100, 60, 300)
+
+    det = mock.Mock()
+    det.detect = mock.Mock(side_effect=_detect)
+    det.last_confidence = 0.9
+    with (
+        mock.patch.object(state, "camera_capture", _FakeCap(_frame())),
+        mock.patch.object(state, "animation_service", svc),
+        mock.patch.object(state, "safety_policy", None),
+        mock.patch.object(state, "_camera_disabled", False, create=True),
+        mock.patch("hal.drivers.tracking.user_bearing.read_estimate",
+                   return_value=_bearing(60.0, 0.9)),
+        mock.patch.object(aim, "_say") as say,
+    ):
+        res = aim.aim_for_look(5.0, detector=det)
+    found = [c for c in say.call_args_list if c[0][0] == "look_found"]
+    assert res.bearing_steps > 0, "the search never ran, so nothing was announced"
+    assert len(found) == 1, f"announced {len(found)} times"
+
+
+def test_the_measured_scale_is_biased_low_not_high():
+    """Overshoot oscillates; undershoot just costs a step. The scale is measured
+    at the current eccentricity and spent at a smaller one, where a fisheye's
+    true scale is lower — so it must be damped, never amplified."""
+    assert 0.0 < aim.SCALE_SAFETY < 1.0
+    assert aim.MAX_SCALE_DEG <= 250.0, "400 asked for corrections that got clamped"

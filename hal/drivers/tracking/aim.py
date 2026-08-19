@@ -274,7 +274,7 @@ def _is_near_enough(box: Tuple[int, int, int, int], frame: Any, target: str) -> 
         return True  # never let the filter itself lose a subject
 
 
-def _detect_subject(detector: Any, frame: Any) -> Tuple[Optional[Tuple[int, int, int, int]], str]:
+def _detect_subject(detector: Any, frame: Any):
     """Nearest plausible person box preferred, face as fallback.
 
     Person first because a hand-held object often occludes the face but rarely
@@ -285,10 +285,20 @@ def _detect_subject(detector: Any, frame: Any) -> Tuple[Optional[Tuple[int, int,
     caller treats "no subject" as a reason to hold or consult the remembered
     bearing, which is a far better answer than turning to a stranger at the
     other end of the room.
+
+    Returns (box, target, confidence); confidence is None for detectors that do
+    not report one.
     """
     with _detector_lock_use:
         for target in ("person", "face"):
             try:
+                box = detector.detect(
+                    frame, target, strict=False,
+                    min_conf=config.LOOK_AIM_MIN_CONFIDENCE,
+                )
+            except TypeError:
+                # Detector predates the min_conf parameter — the size gate below
+                # still applies, so degrade rather than lose the subject.
                 box = detector.detect(frame, target, strict=False)
             except Exception as e:
                 logger.debug("[look-aim] detect(%s) failed: %s", target, e)
@@ -301,8 +311,8 @@ def _detect_subject(detector: Any, frame: Any) -> Tuple[Optional[Tuple[int, int,
                     target, box[3], frame.shape[0],
                 )
                 continue
-            return box, target
-    return None, ""
+            return box, target, getattr(detector, "last_confidence", None)
+    return None, "", None
 
 
 @contextlib.contextmanager
@@ -457,7 +467,15 @@ def _step_toward_bearing(svc: Any, out: Optional[dict] = None) -> bool:
 # the window is deliberately wide — it exists only to reject nonsense from a
 # noisy or mis-detected step, not to encode a value.
 MIN_SCALE_DEG: float = 40.0
-MAX_SCALE_DEG: float = 400.0
+# 400 was too permissive: the device measured 302 at the frame edge, which asked
+# for a 70 deg correction, got clamped to 45, and overshot the subject.
+MAX_SCALE_DEG: float = 250.0
+# The measured scale is taken at the CURRENT eccentricity but spent on the NEXT,
+# smaller one — and on a fisheye the scale shrinks toward the centre, so the
+# measurement is systematically too big for the correction it is used for.
+# Biasing low costs an extra step at worst; biasing high oscillates, which is
+# what dx=+27% -> -10% -> +11% looked like on device.
+SCALE_SAFETY: float = 0.7
 # Below these, a step tells us nothing: dividing a tiny shift by a tiny move
 # amplifies detector jitter into a wild scale.
 CALIB_MIN_MOVE_DEG: float = 3.0
@@ -613,6 +631,7 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
     # measurement can tell what that move actually achieved.
     pending_calib: Optional[Tuple[float, float]] = None
     last_move_deg = 0.0
+    announced_found = False
     start_yaw = _yaw_of(svc)
     steps: list = []
     bearing_consulted: Optional[dict] = None
@@ -643,7 +662,7 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
                 return _result(False, "no frame")
 
             with look_debug.stage("aim.detect"):
-                box, kind = _detect_subject(detector, frame)
+                box, kind, conf = _detect_subject(detector, frame)
             if box is None:
                 # Log the empty frame too — "what did it see when it saw nothing"
                 # is exactly the question a hold/search step raises.
@@ -680,9 +699,12 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
                               "yaw": _yaw_of(svc)})
                 return _result(False, "subject not found")
 
-            if bearing_steps > 0 and config.LOOK_AIM_SPEAK:
-                # Only after a search was announced — otherwise "there you are" fires
-                # on every visual question, which is noise.
+            if bearing_steps > 0 and not announced_found and config.LOOK_AIM_SPEAK:
+                # Once, and only after a search was announced. `bearing_steps`
+                # stays above zero for the REST of the aim, so without this latch
+                # every subsequent centring iteration re-announced it — device
+                # 2026-08-19 said "bạn đây rồi" four times in three seconds.
+                announced_found = True
                 _say("look_found")
             _score_prediction(bearing_steps, found=True)
             _note_sighting(svc)
@@ -690,9 +712,10 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
             w_fr = float(frame.shape[1])
             dx = (x + w / 2.0) - (w_fr / 2.0)
             last_dx_frac = dx / w_fr
+            conf_txt = f" conf={conf:.2f}" if isinstance(conf, (int, float)) else ""
             look_debug.note_step_frame(
                 iterations + 1, frame, box,
-                f"iter {iterations + 1}: {kind} dx={last_dx_frac * 100:+.1f}%",
+                f"iter {iterations + 1}: {kind}{conf_txt} dx={last_dx_frac * 100:+.1f}%",
             )
 
             # Learn the local scale from what the previous step actually did,
@@ -717,7 +740,10 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
             # centre) -> base_yaw INCREASES. Do not flip this without device evidence.
             # Magnitude comes from the MEASURED scale once we have one; the config
             # FOV is only the first-step guess.
-            scale = scale_deg if scale_deg is not None else config.LOOK_AIM_FOV_DEG
+            scale = (
+                scale_deg * SCALE_SAFETY if scale_deg is not None
+                else config.LOOK_AIM_FOV_DEG
+            )
             yaw_deg = AIM_GAIN * last_dx_frac * scale
             yaw_deg = max(-MAX_STEP_DEG, min(MAX_STEP_DEG, yaw_deg))
             pending_calib = (_yaw_of(svc), last_dx_frac)
@@ -734,6 +760,7 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
             last_move_deg = yaw_deg
             iterations += 1
             steps.append({"n": iterations, "saw": kind, "dx_frac": round(last_dx_frac, 3),
+                          "conf": round(conf, 3) if isinstance(conf, (int, float)) else None,
                           "action": f"centre: yaw {yaw_deg:+.1f}", "yaw": _yaw_of(svc),
                           "scale": round(scale, 1)})
             logger.info(

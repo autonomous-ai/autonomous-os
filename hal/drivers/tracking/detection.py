@@ -242,6 +242,9 @@ class ObjectDetector:
 
     def __init__(self, on_confidence: Optional[Callable[[float], None]] = None):
         self._on_confidence = on_confidence
+        # Confidence of the most recent accepted box, or None. Read under the
+        # caller's own lock — a single shared detector serves several callers.
+        self.last_confidence: Optional[float] = None
         # perf_counter of the last remote-YOLOWorld fallback attempt (throttle).
         self._last_remote_attempt_t: float = 0.0
         self._crypto: CryptoSession | None = None
@@ -254,7 +257,8 @@ class ObjectDetector:
                 logger.error("Tracker: encryption required but no public key available")
 
     def detect(self, frame: npt.NDArray[np.uint8], target: str,
-               strict: bool = True) -> Optional[Tuple[int, int, int, int]]:
+               strict: bool = True,
+               min_conf: Optional[float] = None) -> Optional[Tuple[int, int, int, int]]:
         """Detect an object by name. Tries local YOLOv8n first (fast, COCO classes),
         falls back to remote YOLOWorld API for open-vocab targets.
 
@@ -265,9 +269,19 @@ class ObjectDetector:
         reinit gates (area median, IoU, center distance) already protect the
         lock; cross-class disambiguation stays on in both modes.
 
+        min_conf raises the floor for THIS call only. The global
+        DETECT_MIN_CONFIDENCE is 0.15, deliberately loose so the tracker keeps
+        its lock on a phone at an odd angle — but a caller asking "is this the
+        person talking to me" wants the opposite trade, where a false positive
+        turns the lamp at a wall.
+
+        The confidence of whatever is returned is left on `last_confidence`, so
+        a caller can log why it accepted a box.
+
         Returns (x, y, w, h) top-left bbox in ORIGINAL camera coords, or None.
         """
         target_key = (target or "").lower().strip()
+        self.last_confidence = None
 
         # Run every detector on the downscaled frame for speed; map any bbox back
         # to original coords before returning so callers/servo math are unaware.
@@ -301,6 +315,8 @@ class ObjectDetector:
                     h_fr, w_fr = frame.shape[:2]
                     frame_area = float(h_fr * w_fr)
                     conf_floor = C.DETECT_MIN_CONFIDENCE
+                    if min_conf is not None:
+                        conf_floor = max(conf_floor, float(min_conf))
                     if strict:
                         conf_floor = max(conf_floor, _CONFUSABLE_CONF_FLOOR.get(coco_idx, 0.0))
                     boxes = []  # (cls, conf, x1, y1, x2, y2)
@@ -339,6 +355,7 @@ class ObjectDetector:
                                 break
                     if best is not None:
                         bbox, conf, area_ratio, _ = best
+                        self.last_confidence = conf
                         logger.info("[tracking_yolo_local] target='%s' bbox=%s conf=%.3f area=%.1f%% latency=%.0fms",
                                     target, bbox, conf, area_ratio * 100, t_ms)
                         return scale_bbox(bbox, _up)
@@ -466,6 +483,7 @@ class ObjectDetector:
             latency_ms = (time.perf_counter() - t_req) * 1000
             if self._on_confidence is not None:
                 self._on_confidence(round(best["confidence"], 3))
+            self.last_confidence = best.get("confidence")
             logger.info("YOLOWorld: '%s' found at bbox=%s conf=%.3f", target, bbox, best["confidence"])
             logger.info("[tracking_yolo_response] target='%s' found=True bbox=%s conf=%.3f latency=%.0fms",
                         target, bbox, best["confidence"], latency_ms)
