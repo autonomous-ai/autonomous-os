@@ -486,6 +486,11 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
             with look_debug.stage("aim.detect"):
                 box, kind = _detect_subject(detector, frame)
             if box is None:
+                # Log the empty frame too — "what did it see when it saw nothing"
+                # is exactly the question a hold/search step raises.
+                look_debug.note_step_frame(
+                    iterations + 1, frame, None, f"iter {iterations + 1}: no detection"
+                )
                 # Priority 2 — occlusion, not absence. Never turn away from a scene
                 # that just changed dramatically: a large object filling the frame is
                 # evidence the subject is right there.
@@ -526,6 +531,10 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
             w_fr = float(frame.shape[1])
             dx = (x + w / 2.0) - (w_fr / 2.0)
             last_dx_frac = dx / w_fr
+            look_debug.note_step_frame(
+                iterations + 1, frame, box,
+                f"iter {iterations + 1}: {kind} dx={last_dx_frac * 100:+.1f}%",
+            )
 
             if abs(last_dx_frac) <= CENTRE_DEADBAND_FRAC:
                 _record_bearing_if_centred(svc, last_dx_frac)

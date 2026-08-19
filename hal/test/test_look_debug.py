@@ -169,3 +169,36 @@ def test_profile_written_as_its_own_file(tmp_path):
     profile = json.loads((dirs[0] / "profile.json").read_text())
     assert "capture" in profile["stages"]
     assert profile["waiting_on_model_ms"] >= 0
+
+
+def test_step_frames_written_and_annotated(tmp_path):
+    """Per-step frames are what tell you the detector locked onto the WRONG
+    person — a confident wrong lock is invisible in the numbers alone."""
+    import numpy as np
+
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    with mock.patch.object(ld, "_enabled", True), mock.patch.object(ld, "_base", tmp_path):
+        ld.start()
+        ld.note_step_frame(1, frame, (100, 200, 40, 200), "iter 1: person dx=+20.0%")
+        ld.note_step_frame(2, frame, None, "iter 2: no detection")
+        ld.finish("OK_test")
+    written = sorted(p.name for p in next(tmp_path.iterdir()).iterdir())
+    assert any(n.startswith("step_01") for n in written), written
+    assert any(n.startswith("step_02") for n in written), written
+    # bytes must not leak into result.json
+    result = json.loads((next(tmp_path.iterdir()) / "result.json").read_text())
+    assert "_step_frames" not in result
+
+
+def test_step_frames_can_be_disabled(tmp_path, monkeypatch):
+    """Frames cost disk on a long soak; the knob must actually gate them."""
+    import numpy as np
+
+    monkeypatch.setenv("HAL_LOOK_DEBUG_FRAMES", "false")
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    with mock.patch.object(ld, "_enabled", True), mock.patch.object(ld, "_base", tmp_path):
+        ld.start()
+        ld.note_step_frame(1, frame, (100, 200, 40, 200), "iter 1")
+        ld.finish("OK_test")
+    written = [p.name for p in next(tmp_path.iterdir()).iterdir()]
+    assert not any(n.startswith("step_") for n in written), written

@@ -15,6 +15,7 @@ Env knobs (all optional):
   HAL_LOOK_DEBUG              "true" to enable (OFF by default)
   HAL_LOOK_DEBUG_DIR          output root (default: ./look_logs next to this file)
   HAL_LOOK_DEBUG_MAX_ENTRIES  dir cap, oldest pruned (default 200; 0 = unbounded)
+  HAL_LOOK_DEBUG_FRAMES       "false" to skip the per-step step_NN.jpg frames
 
 Layout — one dir per look, named so failures are greppable at a glance:
   <root>/<ts>_OK_centred/            aim reached centre
@@ -158,6 +159,49 @@ def note_event(msg: str) -> None:
             _current["events"].append(
                 {"t_ms": round((time.monotonic() - _current["_t0"]) * 1000), "msg": msg}
             )
+
+
+def _frames_enabled() -> bool:
+    return os.environ.get("HAL_LOOK_DEBUG_FRAMES", "true").lower() in ("1", "true", "yes")
+
+
+def note_step_frame(n: int, frame: Any, box: Any = None, label: str = "") -> None:
+    """Buffer a JPEG of what the detector actually saw on this step.
+
+    Encoded immediately rather than holding the raw arrays: a look can run six
+    iterations and each 1280x432 BGR frame is ~1.6MB, so buffering raw would
+    cost ~10MB per look for something written once at the end. JPEG is ~80KB.
+
+    `box` is the detector's (x, y, w, h) and is drawn on, because the useful
+    question is not "was something detected" but "was it the right something" —
+    a confident lock on the wrong person looks identical in the numbers.
+    """
+    if not _init() or not _frames_enabled() or frame is None:
+        return
+    try:
+        import cv2
+
+        img = frame.copy()
+        if box is not None:
+            x, y, w, h = (int(v) for v in box)
+            cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cx = x + w // 2
+            # Vertical line at the box centre and at frame centre: the gap
+            # between them IS dx, the quantity the whole aim is servoing on.
+            cv2.line(img, (cx, 0), (cx, img.shape[0]), (0, 255, 0), 1)
+        fw = img.shape[1]
+        cv2.line(img, (fw // 2, 0), (fw // 2, img.shape[0]), (0, 0, 255), 1)
+        if label:
+            cv2.putText(img, label, (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                        (0, 255, 255), 2, cv2.LINE_AA)
+        ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+        if not ok:
+            return
+        with _lock:
+            if _current is not None:
+                _current.setdefault("_step_frames", []).append((n, label, buf.tobytes()))
+    except Exception as e:  # a debug aid must never break the look
+        logger.debug("LOOK-DEBUG step frame failed: %s", e)
 
 
 def stage_ms(name: str, ms: float) -> None:
@@ -318,6 +362,15 @@ def finish(status: str, question: str = "", answer: str = "", error: str = "") -
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in status)[:40]
         outdir = _base / f"{stamp}_{safe}"
         outdir.mkdir(parents=True, exist_ok=True)
+        for idx, (n, label, jpg) in enumerate(trace.pop("_step_frames", []) or [], 1):
+            safe_label = "".join(
+                c if c.isalnum() or c in "-_" else "_" for c in label
+            )[:32]
+            name = f"step_{n:02d}_{safe_label}.jpg" if safe_label else f"step_{n:02d}.jpg"
+            try:
+                (outdir / name).write_bytes(jpg)
+            except OSError:
+                pass
         src = trace.get("capture_path")
         if src and os.path.exists(src):
             try:
