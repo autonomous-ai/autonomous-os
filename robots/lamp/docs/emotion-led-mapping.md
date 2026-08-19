@@ -7,7 +7,7 @@ Source: `hal/presets.py` — `EMOTION_PRESETS`
 | `curious` | 12, 8, 0 | `#0c0800` warm yellow | candle | 0.3 | curious |
 | `happy` | 12, 9, 1 | `#0c0901` yellow | candle | 0.2 | happy_wiggle |
 | `sad` | 16, 8, 8 | `#100808` deep red | breathing | 0.4 | sad |
-| `thinking` | 6, 12, 4 | `#060c04` muted green | pulse | 0.3 | — (see note) |
+| `thinking` | 6, 12, 4 | `#060c04` muted green | pulse | 0.3 | thinking_deep |
 | `idle` | 12, 8, 1 | `#0c0801` dim yellow | breathing | 0.2 | idle |
 | `excited` | 12, 8, 12 | `#0c080c` pink-purple | candle | 0.5 | excited |
 | `shy` | 16, 7, 2 | `#100702` pink | breathing | 0.3 | shy |
@@ -27,22 +27,21 @@ Source: `hal/presets.py` — `EMOTION_PRESETS`
 | `nod` | 12, 8, 1 | `#0c0801` earth orange | breathing | 0.5 | nod |
 | `headshake` | 16, 6, 1 | `#100601` amber | breathing | 0.5 | headshake |
 
-## `thinking` and `listening` have no servo
+## `listening` has no servo
 
-Both set `"servo": None` — LED only, the lamp holds still:
+It is the only preset that sets `"servo": None` — LED only, the lamp holds still. `listening` runs while the user is actually speaking; servo noise plus chassis vibration goes straight into the mic and dirties STT.
 
-- `listening` runs while the user is actually speaking; servo noise plus chassis vibration goes straight into the mic and dirties STT.
-- `thinking` is fired by the emotion-ack hook on **every** preprocessed message, so a servo here would twitch continuously throughout a conversation (the same reason its LED sits behind the `_BACKGROUND_EMOTIONS` guard in `hal/app_state.py`).
+`thinking` does have a servo (`thinking_deep`), but it is still a special case on the LED side: the emotion-ack hook fires it on **every** preprocessed message, so its LED sits behind the `_BACKGROUND_EMOTIONS` guard in `hal/app_state.py` to keep a whole conversation from being repainted green.
 
-The `listening.csv` and `thinking_deep.csv` recordings stay in `hal/recordings/`: `/servo/play` can still call them by hand, and Reachy still maps them (`hal/drivers/motors/reachy_service.py`).
+`listening.csv` stays in `hal/recordings/` even though no emotion maps to it: `/servo/play` can still call it by hand, and Reachy still maps it (`hal/drivers/motors/reachy_service.py`).
 
-The code path handles `servo: None` natively — `hal/routes/emotion.py` skips the play branch and `POST /emotion` returns `"servo": null`. The only difference: `thinking` uses the default 3.5s LED restore instead of one computed from recording length (`listening` schedules no restore at all).
+The code path handles `servo: None` natively — `hal/routes/emotion.py` skips the play branch and `POST /emotion` returns `"servo": null`, and `listening` schedules no LED restore at all.
 
 ### `servo: None` alone does NOT hold the lamp still
 
 Not starting a new recording does not mean the lamp is quiet. The idle loop has been running since boot and repeats forever (`_continue_playback` in `hal/drivers/motors/animation_service.py`), and `idle.csv` is not gentle — each 10s cycle sweeps wrist_roll ~32°, wrist_pitch ~26°, base_pitch ~17°. Worse, an emotion that just finished **interpolates back to idle** over a few seconds, so the widest swing lands exactly while the user is talking.
 
-So for a `servo: None` emotion the route calls `svc.halt()`: drop the running recording, pin the current pose, keep torque ON. No explicit un-halt is needed — the next emotion or `/servo/play` calls `_begin_motion()`, which clears the flag itself.
+So for a `servo: None` emotion (today only `listening`) the route calls `svc.halt()`: drop the running recording, pin the current pose, keep torque ON. No explicit un-halt is needed — the next emotion or `/servo/play` calls `_begin_motion()`, which clears the flag itself.
 
 Two guards go with it:
 
@@ -65,6 +64,16 @@ The `light.max_brightness` gate (lamp: 120) only scales peak **UP** toward the c
 `listening` uses breathing rather than pulse: it is lit while the user speaks, and pulse's dark gaps between beats read as a warning when sustained.
 
 If `blink` is ever used: `blink()` maps speed 1.0 → **~3 Hz** (`hal/drivers/rgb/effects.py`), fast enough to hurt the eyes. Keep it ≤ 0.5 (~1.5 Hz or slower).
+
+## `candle` varies brightness, never hue
+
+`candle()` (`hal/drivers/rgb/effects.py`) gives each pixel its own flicker factor in `[CANDLE_FLICKER_MIN, 1.0]` (`CANDLE_FLICKER_MIN = 0.4`) and scales **all three channels by that one factor**: `tuple(min(255, int(c * flicker)) for c in color)`. Every pixel is the same color, only at a different brightness — the strip reads as one flame breathing unevenly instead of a handful of different colors.
+
+This is the same rule as the presets themselves: dim by scaling, never by picking a new color. The hue is what the agent is trying to say.
+
+It used to break that rule. The old implementation treated the channels separately — `r = color[0]*flicker + random.randint(0, 20)`, `g = color[1]*flicker*random.uniform(0.6, 0.9)`, `b = color[2]*flicker*0.3` — which was survivable when emotion colors were bright, but not after they were dimmed to indicator levels where peaks are only 12–16. A `+20` added to red is then **larger than the color itself**. Measured on the lamp (19/08/2026): `happy`, declared `[12, 9, 1]` at hue 44° yellow, painted pixels ranging from `(9, 5, 0)` to `(26, 4, 0)` — red up to 2.2× its own declared value, hue collapsed to 5–20°, so the eye saw a scatter of oranges instead of an even yellow. `excited` `[12, 8, 12]` (pink-purple, hue 300°) was worst: blue crushed ×0.3 while red was inflated, and it came out orange. After the fix, measured hue held: happy 36–48°, curious 36–43°, excited exactly 300°.
+
+Emotions affected: `curious`, `happy`, `excited`, `laugh`, `confused` — the five that use candle. `breathing` and `pulse` never had this bug because they only ever scale proportionally (`int(c * brightness)`).
 
 ## LED Restore Behavior
 
