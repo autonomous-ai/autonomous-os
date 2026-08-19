@@ -1,0 +1,215 @@
+"""LOOK-DEBUG: per-look trace dirs for the aim -> capture -> answer flow.
+
+Modelled on the SPEAKER-DEBUG tracer in
+`hal/drivers/voice/speaker_recognizer/speaker_recognizer.py` — same shape, same
+guarantees: OFF by default, self-contained, and it never raises. A tracing bug
+must not cost the user an answer.
+
+Why it exists: the flow spans three modules and two services, so when a visual
+question goes wrong ("it captured the ceiling", "it said it couldn't see") there
+is no single place that shows what actually happened. This puts the trigger, the
+aim decision, the exact frame that was sent, the question and the spoken answer
+in one directory per look.
+
+Env knobs (all optional):
+  HAL_LOOK_DEBUG              "true" to enable (OFF by default)
+  HAL_LOOK_DEBUG_DIR          output root (default: ./look_logs next to this file)
+  HAL_LOOK_DEBUG_MAX_ENTRIES  dir cap, oldest pruned (default 200; 0 = unbounded)
+
+Layout — one dir per look, named so failures are greppable at a glance:
+  <root>/<ts>_OK_centred/            aim reached centre
+  <root>/<ts>_OK_deadline/           captured, but the aim ran out of time
+  <root>/<ts>_FAIL-no_subject/       nothing found to aim at
+  <root>/<ts>_FAIL-no_camera/        ...
+each holding:
+  capture.jpg   the exact frame handed to the model (absent if capture failed)
+  result.json   trigger, aim metrics, question, answer, and any error
+
+The trace spans two modules because the answer is not known when the frame is
+taken: the orchestrator opens it at the `look` call, turn_dispatch closes it once
+the turn has an answer. State is module-level for the same reason
+`realtime_look_frame_path` is — one look is in flight at a time.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import shutil
+import threading
+import time
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
+
+_lock = threading.Lock()
+_current: Optional[Dict[str, Any]] = None
+_enabled: Optional[bool] = None
+_base: Optional[Path] = None
+
+
+def _init() -> bool:
+    """Resolve config once. Returns whether tracing is on."""
+    global _enabled, _base
+    if _enabled is not None:
+        return _enabled
+    _enabled = os.environ.get("HAL_LOOK_DEBUG", "false").lower() in ("1", "true", "yes")
+    if not _enabled:
+        return False
+    default_dir = Path(__file__).resolve().parent / "look_logs"
+    base = Path(os.environ.get("HAL_LOOK_DEBUG_DIR", str(default_dir)))
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # Source tree read-only on a device deploy — fall back rather than
+        # silently disabling, which would look like the feature was never on.
+        import tempfile
+
+        base = Path(tempfile.gettempdir()) / "hal-look-debug"
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            logger.warning("LOOK-DEBUG disabled (no writable dir)")
+            _enabled = False
+            return False
+        logger.warning("LOOK-DEBUG: falling back to %s", base)
+    _base = base
+    logger.info("LOOK-DEBUG tracing ON -> %s", base)
+    return True
+
+
+def _max_entries() -> int:
+    try:
+        return int(os.environ.get("HAL_LOOK_DEBUG_MAX_ENTRIES", "200"))
+    except ValueError:
+        return 200
+
+
+def _prune() -> None:
+    cap = _max_entries()
+    if cap <= 0 or _base is None:
+        return
+    try:
+        dirs = sorted((d for d in _base.iterdir() if d.is_dir()), reverse=True)
+        for stale in dirs[cap:]:
+            shutil.rmtree(stale, ignore_errors=True)
+    except Exception:
+        pass
+
+
+def start(trigger: str = "look tool") -> None:
+    """Open a trace at the moment the `look` tool fires."""
+    global _current
+    if not _init():
+        return
+    with _lock:
+        _current = {
+            "trigger": trigger,
+            "started": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "_t0": time.monotonic(),
+            "events": [],
+        }
+
+
+def note(key: str, value: Any) -> None:
+    """Record one field on the in-flight trace."""
+    if not _init():
+        return
+    with _lock:
+        if _current is not None:
+            _current[key] = value
+
+
+def note_event(msg: str) -> None:
+    """Append a timeline entry — cheap breadcrumbs for ordering questions."""
+    if not _init():
+        return
+    with _lock:
+        if _current is not None:
+            _current["events"].append(
+                {"t_ms": round((time.monotonic() - _current["_t0"]) * 1000), "msg": msg}
+            )
+
+
+def note_aim(result: Any) -> None:
+    """Record the aim outcome — the usual culprit when a frame looks wrong."""
+    if not _init():
+        return
+    try:
+        start = getattr(result, "start_yaw", None)
+        end = getattr(result, "end_yaw", None)
+        note("aim", {
+            "aimed": getattr(result, "aimed", None),
+            "reason": getattr(result, "reason", None),
+            "iterations": getattr(result, "iterations", None),
+            # Did the head actually MOVE? start/end are absolute servo yaw, so
+            # this distinguishes "decided to move" from "moved".
+            "start_yaw": start,
+            "end_yaw": end,
+            "actually_moved_deg": (None if start is None or end is None
+                                   else round(end - start, 2)),
+            "yaw_commanded_deg": getattr(result, "yaw_moved_deg", None),
+            "final_dx_frac": getattr(result, "final_dx_frac", None),
+            # Did it go looking where it remembered the user? None here means
+            # nothing was ever stored — a different failure from "looked and missed".
+            "bearing_steps": getattr(result, "bearing_steps", None),
+            "bearing_consulted": getattr(result, "bearing_consulted", None),
+            # Blow-by-blow: what it saw, where, and what it commanded.
+            "steps": getattr(result, "steps", None),
+        })
+        note_event(f"aim: {getattr(result, 'reason', '?')}")
+    except Exception:
+        pass
+
+
+def note_capture(frame_path: Optional[str]) -> None:
+    """Record the exact frame handed to the model."""
+    if not _init():
+        return
+    note("capture_path", frame_path)
+    note_event("captured" if frame_path else "capture FAILED")
+
+
+def finish(status: str, question: str = "", answer: str = "", error: str = "") -> None:
+    """Close the trace once the turn has an answer, and write it to disk.
+
+    `status` becomes part of the directory name so a failure is visible from
+    `ls` alone.
+    """
+    global _current
+    if not _init():
+        return
+    with _lock:
+        trace = _current
+        _current = None
+    if trace is None or _base is None:
+        return
+    try:
+        trace["question"] = question
+        trace["answer"] = answer
+        if error:
+            trace["error"] = error
+        trace["total_ms"] = round((time.monotonic() - trace.pop("_t0")) * 1000)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in status)[:40]
+        outdir = _base / f"{stamp}_{safe}"
+        outdir.mkdir(parents=True, exist_ok=True)
+        src = trace.get("capture_path")
+        if src and os.path.exists(src):
+            try:
+                shutil.copyfile(src, outdir / "capture.jpg")
+            except OSError:
+                pass
+        with open(outdir / "result.json", "w", encoding="utf-8") as f:
+            json.dump(trace, f, indent=2, ensure_ascii=False)
+        _prune()
+        logger.info("LOOK-DEBUG wrote %s", outdir)
+    except Exception as e:
+        logger.debug("LOOK-DEBUG write failed: %s", e)
+
+
+def abandon(reason: str) -> None:
+    """Close a trace that never reached a turn (reused frame, no camera)."""
+    finish(f"FAIL-{reason}", error=reason)

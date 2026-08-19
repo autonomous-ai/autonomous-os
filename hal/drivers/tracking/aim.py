@@ -27,7 +27,7 @@ import contextlib
 import logging
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional, Tuple
 
 import hal.config as config
@@ -96,6 +96,16 @@ class AimResult:
     # How many remembered-bearing steps were taken. Task E reads this to judge
     # whether the estimate is still predicting well.
     bearing_steps: int = 0
+    # Absolute servo yaw before and after — the only way to tell from a trace
+    # whether the head actually MOVED, as opposed to deciding it should have.
+    start_yaw: Optional[float] = None
+    end_yaw: Optional[float] = None
+    # The remembered bearing as consulted this look: its value and confidence,
+    # or None when nothing was stored yet. Answers "did it look where it
+    # remembered, or did it have nothing to go on?"
+    bearing_consulted: Optional[dict] = None
+    # One entry per decision, in order. What was seen, where, what was commanded.
+    steps: list = field(default_factory=list)
 
 
 def _grab_frame(cap: Any) -> Optional[Any]:
@@ -189,6 +199,13 @@ def _say(pool: str) -> None:
         logger.debug("[look-aim] filler '%s' skipped: %s", pool, e)
 
 
+def _yaw_of(svc: Any) -> Optional[float]:
+    try:
+        return round(float(svc.get_positions().get("base_yaw.pos", 0.0)), 2)
+    except Exception:
+        return None
+
+
 def _note_sighting(svc: Any) -> None:
     """Remember that a subject was confirmed at the current pose."""
     global _last_seen_mono, _last_seen_yaw
@@ -216,14 +233,36 @@ def _recently_seen_here(svc: Any) -> bool:
     return abs(yaw - _last_seen_yaw) <= RECENT_SIGHTING_YAW_TOL_DEG
 
 
-def _step_toward_bearing(svc: Any) -> bool:
-    """Take ONE bounded step toward the remembered bearing. True if it moved."""
+def _step_toward_bearing(svc: Any, out: Optional[dict] = None) -> bool:
+    """Take ONE bounded step toward the remembered bearing. True if it moved.
+
+    `out` collects what the estimate said, so a trace can distinguish "there was
+    no bearing to use" from "there was one and it was wrong".
+    """
     try:
         from hal.drivers.tracking import user_bearing
         import hal.app_state as state
 
         est = user_bearing.read_estimate()
-        if est is None or est.confidence < MIN_BEARING_CONFIDENCE:
+        if out is not None:
+            # Built defensively and separately: describing the estimate must
+            # never be able to stop the lamp from USING it.
+            try:
+                out["bearing"] = None if est is None else {
+                    "bearing_deg": getattr(est, "bearing_deg", None),
+                    "confidence": getattr(est, "confidence", None),
+                    "samples": getattr(est, "samples", None),
+                    "age_s": getattr(est, "age_s", None),
+                }
+            except Exception:
+                out["bearing"] = None
+        if est is None:
+            if out is not None:
+                out["skipped"] = "no bearing recorded yet"
+            return False
+        if est.confidence < MIN_BEARING_CONFIDENCE:
+            if out is not None:
+                out["skipped"] = f"confidence {est.confidence:.2f} < {MIN_BEARING_CONFIDENCE}"
             return False
         current = svc.get_positions()
         delta = est.bearing_deg - float(current.get("base_yaw.pos", 0.0))
@@ -303,16 +342,27 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
     yaw_total = 0.0
     bearing_steps = 0
     last_dx_frac: Optional[float] = None
+    start_yaw = _yaw_of(svc)
+    steps: list = []
+    bearing_consulted: Optional[dict] = None
+
+    def _result(aimed: bool, reason: str) -> AimResult:
+        """Build the outcome with the pose actually reached, so a trace shows
+        whether the head moved rather than just what was decided."""
+        return AimResult(
+            aimed, reason, iterations, yaw_total, last_dx_frac, bearing_steps,
+            start_yaw, _yaw_of(svc), bearing_consulted, steps,
+        )
 
     while iterations < MAX_ITERATIONS:
         if _abort_evt.is_set():
-            return AimResult(False, "aborted", iterations, yaw_total, last_dx_frac, bearing_steps)
+            return _result(False, "aborted")
         if time.monotonic() >= t_end:
-            return AimResult(False, "deadline", iterations, yaw_total, last_dx_frac, bearing_steps)
+            return _result(False, "deadline")
 
         frame = _grab_frame(cap)
         if frame is None:
-            return AimResult(False, "no frame", iterations, yaw_total, last_dx_frac, bearing_steps)
+            return _result(False, "no frame")
 
         box, kind = _detect_subject(detector, frame)
         if box is None:
@@ -320,11 +370,18 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
             # that just changed dramatically: a large object filling the frame is
             # evidence the subject is right there.
             if _recently_seen_here(svc):
-                return AimResult(False, "holding: seen here moments ago (likely occluded)",
-                                 iterations, yaw_total, last_dx_frac, bearing_steps)
+                steps.append({"n": iterations + 1, "saw": None,
+                              "action": "hold (recent sighting — likely occluded)",
+                              "yaw": _yaw_of(svc)})
+                return _result(False, "holding: seen here moments ago (likely occluded)")
             # Priority 3 — step toward the remembered bearing, re-detecting after
             # every step so we cannot sail past someone en route.
-            if bearing_steps < MAX_BEARING_STEPS and _step_toward_bearing(svc):
+            probe: dict = {}
+            if bearing_steps < MAX_BEARING_STEPS and _step_toward_bearing(svc, probe):
+                bearing_consulted = probe.get("bearing")
+                steps.append({"n": iterations + 1, "saw": None,
+                              "action": "step toward remembered bearing",
+                              "bearing": probe.get("bearing"), "yaw": _yaw_of(svc)})
                 if bearing_steps == 0 and config.LOOK_AIM_SPEAK:
                     # Only on the FIRST step: the lamp is about to turn away from
                     # the user mid-question, which reads as broken unless explained.
@@ -333,8 +390,11 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
                 iterations += 1
                 continue
             _score_prediction(bearing_steps, found=False)
-            return AimResult(False, "subject not found", iterations, yaw_total,
-                             last_dx_frac, bearing_steps)
+            bearing_consulted = probe.get("bearing", bearing_consulted)
+            steps.append({"n": iterations + 1, "saw": None,
+                          "action": probe.get("skipped", "give up — nothing found"),
+                          "yaw": _yaw_of(svc)})
+            return _result(False, "subject not found")
 
         if bearing_steps > 0 and config.LOOK_AIM_SPEAK:
             # Only after a search was announced — otherwise "there you are" fires
@@ -349,7 +409,7 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
 
         if abs(last_dx_frac) <= CENTRE_DEADBAND_FRAC:
             _record_bearing_if_centred(svc, last_dx_frac)
-            return AimResult(True, f"centred on {kind}", iterations, yaw_total, last_dx_frac, bearing_steps)
+            return _result(True, f"centred on {kind}")
 
         # Yaw sign per the tracker's verified convention: dx>0 (subject right of
         # centre) -> base_yaw INCREASES. Do not flip this without device evidence.
@@ -360,20 +420,15 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
             svc.nudge(yaw_deg, 0.0, MOVE_DURATION_S, current, state.safety_policy)
         except Exception as e:
             logger.warning("[look-aim] nudge failed: %s", e)
-            return AimResult(False, f"nudge failed: {e}", iterations, yaw_total, last_dx_frac, bearing_steps)
+            return _result(False, f"nudge failed: {e}")
 
         yaw_total += yaw_deg
         iterations += 1
+        steps.append({"n": iterations, "saw": kind, "dx_frac": round(last_dx_frac, 3),
+                      "action": f"centre: yaw {yaw_deg:+.1f}", "yaw": _yaw_of(svc)})
         logger.info(
             "[look-aim] iter=%d %s dx=%.0fpx (%.1f%%) -> yaw %+.1f deg",
             iterations, kind, dx, last_dx_frac * 100.0, yaw_deg,
         )
 
-    return AimResult(
-        abs(last_dx_frac or 1.0) <= CENTRE_DEADBAND_FRAC,
-        "max iterations",
-        iterations,
-        yaw_total,
-        last_dx_frac,
-        bearing_steps,
-    )
+    return _result(abs(last_dx_frac or 1.0) <= CENTRE_DEADBAND_FRAC, "max iterations")

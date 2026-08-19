@@ -29,9 +29,17 @@ class _FakeCap:
 
 
 class _FakeSvc:
+    """Tracks yaw across nudges. A fake that ignored commands could not tell
+    "decided to move" from "moved", which is exactly what the trace asserts."""
+
     def __init__(self):
-        self.nudge = mock.Mock(return_value={})
-        self.get_positions = mock.Mock(return_value={"base_yaw.pos": 0.0})
+        self.yaw = 0.0
+        self.nudge = mock.Mock(side_effect=self._nudge)
+        self.get_positions = mock.Mock(side_effect=lambda: {"base_yaw.pos": self.yaw})
+
+    def _nudge(self, yaw, pitch, duration, current, policy):
+        self.yaw += yaw
+        return {"base_yaw.pos": self.yaw}
 
 
 def _detector(box, target_hit="person"):
@@ -176,7 +184,9 @@ def test_stale_sighting_does_not_hold():
 # --- priority 3: remembered-bearing fallback ------------------------------
 
 def _bearing(deg, conf):
-    return mock.Mock(bearing_deg=deg, confidence=conf)
+    # Realistic shape — read_estimate() returns a BearingEstimate, and a bare
+    # Mock's auto-attributes previously made the aim silently skip the step.
+    return mock.Mock(bearing_deg=deg, confidence=conf, samples=12, age_s=30.0)
 
 
 def _run_no_subject(estimate, seen_mono=0.0):
@@ -314,3 +324,38 @@ def test_ownership_is_harmless_with_no_animation_service():
     with mock.patch.object(state, "animation_service", None):
         with aim.servo_ownership():
             pass  # must not raise
+
+
+def test_trace_shows_whether_the_head_actually_moved():
+    # "yaw commanded" and "yaw actually reached" are different questions — a
+    # trace has to answer the second one.
+    res, svc = _run(box=(500, 100, 80, 200))
+    assert res.start_yaw is not None and res.end_yaw is not None
+    assert res.end_yaw != res.start_yaw, "head should have moved toward the subject"
+    assert any("centre" in st["action"] for st in res.steps)
+
+
+def test_trace_distinguishes_no_bearing_from_a_bearing_that_missed():
+    # These look identical in a summary but need different fixes.
+    res_none, _ = _run_no_subject(None)
+    assert res_none.bearing_consulted is None
+    assert any("no bearing recorded yet" in st["action"] for st in res_none.steps)
+
+    res_used, _ = _run_no_subject(_bearing(60.0, 0.9))
+    assert res_used.bearing_consulted is not None
+    assert res_used.bearing_consulted["bearing_deg"] == 60.0
+
+
+def test_trace_records_the_occlusion_hold():
+    frame = _frame()
+    svc = _FakeSvc()
+    with (
+        mock.patch.object(state, "camera_capture", _FakeCap(frame)),
+        mock.patch.object(state, "animation_service", svc),
+        mock.patch.object(state, "safety_policy", None),
+        mock.patch.object(state, "_camera_disabled", False, create=True),
+        mock.patch.object(aim, "_last_seen_mono", aim.time.monotonic()),
+        mock.patch.object(aim, "_last_seen_yaw", 0.0),
+    ):
+        res = aim.aim_for_look(5.0, detector=_detector(None))
+    assert any("hold" in st["action"] for st in res.steps)

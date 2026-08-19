@@ -111,6 +111,16 @@ def dispatch_turn(
     vision_hint, vision_image = _take_vision_handoff()
     look_snap = _take_look_snapshot_marker()
 
+    def _close_look_trace(status: str, answer: str = "", error: str = "") -> None:
+        """Close the LOOK-DEBUG trace once the turn has an answer. No-op when a
+        look did not happen this turn, or when tracing is off."""
+        try:
+            from hal.drivers.tracking import look_debug
+
+            look_debug.finish(status, question=final_msg, answer=answer, error=error)
+        except Exception:
+            pass
+
     final_text, event_type = decorator.classify_wake_word(combined)
     if event_type_override is not None:
         event_type = event_type_override
@@ -146,6 +156,7 @@ def dispatch_turn(
                 event_type="voice_agent_handled",
                 skip_echo=True,
             )
+            _close_look_trace("OK_realtime_handled", answer=reply)
         elif rt.delegated:
             # Delegated — send voice agent's summary + STT transcript to the OS server
             if rt.delegate_msg:
@@ -157,6 +168,7 @@ def dispatch_turn(
                 sensing_msg = f"{vision_hint}\n{sensing_msg}"
             if look_snap and sensing_msg:
                 sensing_msg = f"{sensing_msg}\n{look_snap}"
+            _close_look_trace("OK_delegated")
             logger.info(
                 "[realtime] Delegated with message: %r%s",
                 sensing_msg[:100] if sensing_msg else "",
@@ -177,6 +189,7 @@ def dispatch_turn(
             fallback_msg = f"{vision_hint}\n{final_msg}" if vision_hint else final_msg
             if look_snap:
                 fallback_msg = f"{fallback_msg}\n{look_snap}"
+            _close_look_trace("OK_fallback")
             sensing_sender.send(
                 fallback_msg,
                 event_type=event_type,

@@ -988,6 +988,9 @@ class RealtimeOrchestrator:
         """
         if self._agent is None:
             return False
+        from hal.drivers.tracking import look_debug
+
+        look_debug.start()
         now: float = time.monotonic()
         # Cost guard: no NEW image within VISION_MIN_INTERVAL_S of the last send
         # or twice in one turn. Doubles as the replay-turn path: the replayed
@@ -1009,6 +1012,7 @@ class RealtimeOrchestrator:
                 "[realtime] look: reusing recent frame (%s) — no new image sent (cost)",
                 reason,
             )
+            look_debug.abandon(f"reused_frame ({reason})")
             # Reading a frame (esp. text) can keep Gemini thinking silently
             # past the default watchdog — give THIS turn a longer window so
             # the answer isn't cut off seconds before it arrives.
@@ -1047,6 +1051,7 @@ class RealtimeOrchestrator:
                         res.reason, res.iterations, res.yaw_moved_deg,
                         (time.monotonic() - t_aim) * 1000,
                     )
+                    look_debug.note_aim(res)
                     # Announce the capture only when the aim actually had work to
                     # do — an already-centred shutter fires in a few hundred ms
                     # and needs no narration.
@@ -1060,6 +1065,7 @@ class RealtimeOrchestrator:
             frame = self._capture_frame()
         if frame is None:
             logger.warning("[realtime] look: no camera frame available")
+            look_debug.abandon("no_camera_frame")
             self._agent.send(
                 [
                     FunctionCallResultInput(
@@ -1083,6 +1089,7 @@ class RealtimeOrchestrator:
         import hal.app_state as state
 
         saved_path: str | None = self._persist_look_frame(frame)
+        look_debug.note_capture(saved_path)
         # Stash a servable copy so the frame can appear in the turn the user
         # actually sees. It is attached to that turn's message as a
         # [snapshot: ...] marker by turn_dispatch — NOT posted as an event of
