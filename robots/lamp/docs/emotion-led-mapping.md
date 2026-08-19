@@ -107,13 +107,26 @@ If `blink` is ever used: `blink()` maps speed 1.0 → **~3 Hz** (`hal/drivers/rg
 
 ## `candle` varies brightness, never hue
 
-`candle()` (`hal/drivers/rgb/effects.py`) gives each pixel its own flicker factor in `[CANDLE_FLICKER_MIN, 1.0]` (`CANDLE_FLICKER_MIN = 0.4`) and scales **all three channels by that one factor**: `tuple(min(255, int(c * flicker)) for c in color)`. Every pixel is the same color, only at a different brightness — the strip reads as one flame breathing unevenly instead of a handful of different colors.
+`candle()` (`hal/drivers/rgb/effects.py`) gives each pixel its own flicker level in `[CANDLE_FLICKER_MIN, 1.0]` (`CANDLE_FLICKER_MIN = 0.8`) and scales **all three channels by that one level**: `tuple(min(255, int(c * level)) for c in color)`. Every pixel is the same color, only at a different brightness — the strip reads as one flame breathing unevenly instead of a handful of different colors.
 
 This is the same rule as the presets themselves: dim by scaling, never by picking a new color. The hue is what the agent is trying to say.
 
 It used to break that rule. The old implementation treated the channels separately — `r = color[0]*flicker + random.randint(0, 20)`, `g = color[1]*flicker*random.uniform(0.6, 0.9)`, `b = color[2]*flicker*0.3` — which was survivable when emotion colors were bright, but not after they were dimmed to indicator levels where peaks are only 12–16. A `+20` added to red is then **larger than the color itself**. Measured on the lamp (19/08/2026): `happy`, declared `[12, 9, 1]` at hue 44° yellow, painted pixels ranging from `(9, 5, 0)` to `(26, 4, 0)` — red up to 2.2× its own declared value, hue collapsed to 5–20°, so the eye saw a scatter of oranges instead of an even yellow. `excited` `[12, 8, 12]` (pink-purple, hue 300°) was worst: blue crushed ×0.3 while red was inflated, and it came out orange. After the fix, measured hue held: happy 36–48°, curious 36–43°, excited exactly 300°.
 
 Emotions affected: `curious`, `happy`, `excited`, `laugh`, `confused` — the five that use candle. `breathing` and `pulse` never had this bug because they only ever scale proportionally (`int(c * brightness)`).
+
+### …and it no longer strobes
+
+The same pass fixed a second, independent problem in `candle`: it used to pick a fresh random level per pixel **every frame**, at `0.05/speed` — 4 Hz for `happy`/`laugh`/`confused`, 10 Hz for `excited` — stepping anywhere between 0.4 and 1.0 of the base color. That is a 60% modulation depth at 4–10 Hz, and IEEE 1789-2015 places **any** flicker below 90 Hz in its high-risk band (at 100 Hz the limit is already 1.6%). The 3–70 Hz range is the one linked to headaches and visual discomfort, and on a desk lamp pointed at a face it was reported as dizzying.
+
+Two changes bring it inside the guidance without changing what the effect is:
+
+- **Fixed 30 Hz refresh with interpolation** (`CANDLE_REFRESH_HZ = 30`). Each pixel now travels toward its target level instead of jumping to it — `speed` sets how fast it travels rather than how often it teleports. Steps are what the eye locks onto; a smooth ramp of the same period reads as motion, not flicker.
+- **Floor raised 0.4 → 0.8**, cutting modulation depth from 60% to 20%.
+
+Measured on the lamp afterwards: `happy` 29.2 Hz refresh at 9.1% modulation, `excited` 29.1 Hz at 18.2%, and the perceived flicker rate lands between 0.85 Hz (speed 0.2) and 2.25 Hz (`excited`, speed 0.5) — under the 3 Hz start of the uncomfortable band. The `speed * 0.6` factor in the approach term is what keeps `excited` there; raising it puts the liveliest preset back into the band.
+
+`CANDLE_FLICKER_MIN` and `CANDLE_REFRESH_HZ` are comfort bounds, not taste settings. Do not lower either without re-reading the standard.
 
 ## LED Restore Behavior
 
