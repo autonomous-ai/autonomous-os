@@ -1,31 +1,33 @@
 # Emotion → LED + Animation Mapping
 
-Source: `hal/presets.py` — `EMOTION_PRESETS`
+Source: colors are what the **lamp** actually shows — `robots/lamp/presets.json` (the per-device overlay) merged over `hal/presets.py` `EMOTION_PRESETS`. The overlay only replaces `color`; effect, speed and servo always come from the base presets. The `Color source` column says whether a row's color comes from the lamp `overlay` or is still the untouched `base` value.
 
-| Emotion | Color (RGB) | Hex | Effect | Speed | Servo Animation |
-|---|---|---|---|---|---|
-| `curious` | 12, 8, 0 | `#0c0800` warm yellow | candle | 0.3 | curious |
-| `happy` | 12, 9, 1 | `#0c0901` yellow | candle | 0.2 | happy_wiggle |
-| `sad` | 16, 8, 8 | `#100808` deep red | breathing | 0.4 | sad |
-| `thinking` | 6, 12, 4 | `#060c04` muted green | pulse | 0.3 | thinking_deep |
-| `idle` | 12, 8, 1 | `#0c0801` dim yellow | breathing | 0.2 | idle |
-| `excited` | 12, 8, 12 | `#0c080c` pink-purple | candle | 0.5 | excited |
-| `shy` | 16, 7, 2 | `#100702` pink | breathing | 0.3 | shy |
-| `shock` | 12, 12, 12 | `#0c0c0c` soft white | notification_flash | 1.0 | shock |
-| `listening` | 4, 8, 16 | `#040810` blue | breathing | 1.2 | — (see note) |
-| `laugh` | 12, 8, 1 | `#0c0801` deep yellow | candle | 0.2 | laugh |
-| `confused` | 16, 9, 3 | `#100903` dark orange | candle | 0.2 | confused |
-| `sleepy` | 0, 0, 0 | `#000000` black (off) | solid | — | sleepy |
-| `greeting` | 12, 8, 5 | `#0c0805` pale yellow | breathing | 0.3 | greeting \| wake_up |
-| `goodbye` | 12, 8, 5 | `#0c0805` pale yellow | breathing | 0.5 | goodbye |
-| `caring` | 12, 8, 6 | `#0c0806` orange-pink | breathing | 0.4 | nod |
-| `acknowledge` | 3, 12, 4 | `#030c04` green | breathing | 0.5 | acknowledge |
-| `stretching` | 12, 12, 2 | `#0c0c02` pale green | breathing | 0.6 | stretching |
-| `music_strong` | 8, 12, 8 | `#080c08` pale green | rainbow | 1.0 | music_rock |
-| `music_chill` | 16, 9, 0 | `#100900` orange | breathing | 0.3 | music_rock \| music_groove \| music_jazz \| music_waltz |
-| `scan` | 5, 12, 3 | `#050c03` light green | pulse | 0.3 | scanning |
-| `nod` | 12, 8, 1 | `#0c0801` earth orange | breathing | 0.5 | nod |
-| `headshake` | 16, 6, 1 | `#100601` amber | breathing | 0.5 | headshake |
+| Emotion | Color (RGB) | Hex | Color source | Effect | Speed | Servo Animation |
+|---|---|---|---|---|---|---|
+| `curious` | 0, 12, 0 | `#000c00` green | overlay | candle | 0.3 | curious |
+| `happy` | 12, 12, 0 | `#0c0c00` yellow | overlay | candle | 0.2 | happy_wiggle |
+| `sad` | 16, 0, 0 | `#100000` red | overlay | breathing | 0.4 | sad |
+| `thinking` | 0, 12, 0 | `#000c00` green | overlay | pulse | 0.3 | thinking_deep |
+| `idle` | 8, 4, 0 | `#080400` dim amber | overlay | breathing | 0.2 | idle |
+| `excited` | 12, 12, 0 | `#0c0c00` yellow | overlay | candle | 0.5 | excited |
+| `shy` | 16, 0, 0 | `#100000` red | overlay | breathing | 0.3 | shy |
+| `shock` | 12, 12, 12 | `#0c0c0c` soft white | base | notification_flash | 1.0 | shock |
+| `listening` | 0, 0, 16 | `#000010` blue | overlay | breathing | 1.2 | — (see note) |
+| `laugh` | 12, 12, 0 | `#0c0c00` yellow | overlay | candle | 0.2 | laugh |
+| `confused` | 16, 0, 0 | `#100000` red | overlay | candle | 0.2 | confused |
+| `sleepy` | 0, 0, 0 | `#000000` black (off) | base | solid | — | sleepy |
+| `greeting` | 16, 0, 16 | `#100010` purple | overlay | breathing | 0.3 | greeting \| wake_up |
+| `goodbye` | 16, 0, 16 | `#100010` purple | overlay | breathing | 0.5 | goodbye |
+| `caring` | 16, 0, 16 | `#100010` purple | overlay | breathing | 0.4 | nod |
+| `acknowledge` | 0, 12, 0 | `#000c00` green | overlay | breathing | 0.5 | acknowledge |
+| `stretching` | 8, 4, 0 | `#080400` dim amber | overlay | breathing | 0.6 | stretching |
+| `music_strong` | 8, 12, 8 | `#080c08` pale green (no effect — see below) | base | rainbow | 1.0 | music_rock |
+| `music_chill` | 0, 12, 12 | `#000c0c` cyan | overlay | breathing | 0.3 | music_rock \| music_groove \| music_jazz \| music_waltz |
+| `scan` | 0, 12, 0 | `#000c00` green | overlay | pulse | 0.3 | scanning |
+| `nod` | 8, 4, 0 | `#080400` dim amber | overlay | breathing | 0.5 | nod |
+| `headshake` | 16, 0, 0 | `#100000` red | overlay | breathing | 0.5 | headshake |
+
+`music_strong`'s color is inert: it runs the `rainbow` effect, and `rainbow()` in `hal/drivers/rgb/effects.py` ignores the `color` argument and sweeps the whole hue circle itself — which is why the overlay does not bother to set it.
 
 ## Six hue groups
 
