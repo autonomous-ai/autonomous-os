@@ -118,9 +118,11 @@ def search_for_subject(target: str = "person", detector: Any = None) -> SearchRe
         return SearchResult(False, "camera disabled")
 
     if detector is None:
-        from hal.drivers.tracking.detection import ObjectDetector
+        from hal.drivers.tracking.aim import get_detector
 
-        detector = ObjectDetector()
+        detector = get_detector()
+        if detector is None:
+            return SearchResult(False, "no detector")
 
     stops = _stop_list(_seed_yaw(svc))
     logger.info("[search] sweeping %d stops for '%s': %s",

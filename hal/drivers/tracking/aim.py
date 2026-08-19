@@ -71,6 +71,35 @@ MIN_BEARING_CONFIDENCE: float = 0.2
 _last_seen_mono: float = 0.0
 _last_seen_yaw: float = 0.0
 
+# ONE detector for the process. Building an ObjectDetector is not cheap: with
+# DL encryption on, its constructor fetches the public key over the network. A
+# per-call detector made a single aim iteration take ~7s on device, which blew
+# the realtime turn's budget — Gemini timed out, the turn fell back to the main
+# agent, and the user got "I couldn't see it" for a frame that was captured
+# perfectly. TrackerService builds its detector once for the same reason.
+_detector_lock = threading.Lock()
+_shared_detector: Any = None
+
+
+def get_detector() -> Any:
+    """Process-wide detector, built once. None if it cannot be constructed."""
+    global _shared_detector
+    with _detector_lock:
+        if _shared_detector is None:
+            try:
+                from hal.drivers.tracking.detection import ObjectDetector
+
+                t0 = time.monotonic()
+                _shared_detector = ObjectDetector()
+                logger.info(
+                    "[look-aim] detector built in %.0fms (reused from now on)",
+                    (time.monotonic() - t0) * 1000,
+                )
+            except Exception as e:
+                logger.warning("[look-aim] detector unavailable: %s", e)
+                return None
+        return _shared_detector
+
 _abort_evt = threading.Event()
 
 
@@ -334,9 +363,9 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
         return AimResult(False, "camera disabled")
 
     if detector is None:
-        from hal.drivers.tracking.detection import ObjectDetector
-
-        detector = ObjectDetector()
+        detector = get_detector()
+        if detector is None:
+            return AimResult(False, "no detector")
 
     iterations = 0
     yaw_total = 0.0

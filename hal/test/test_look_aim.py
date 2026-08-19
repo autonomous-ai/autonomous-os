@@ -359,3 +359,27 @@ def test_trace_records_the_occlusion_hold():
     ):
         res = aim.aim_for_look(5.0, detector=_detector(None))
     assert any("hold" in st["action"] for st in res.steps)
+
+
+def test_the_detector_is_built_once_not_per_look():
+    # A per-look ObjectDetector cost ~7s on device (its constructor fetches the
+    # DL public key over the network), which blew the realtime turn budget and
+    # made Gemini time out — the user then got "I couldn't see it" for a frame
+    # that had been captured perfectly.
+    aim._shared_detector = None
+    with mock.patch("hal.drivers.tracking.detection.ObjectDetector") as ctor:
+        ctor.return_value = mock.Mock()
+        first = aim.get_detector()
+        second = aim.get_detector()
+        third = aim.get_detector()
+    assert ctor.call_count == 1, f"detector rebuilt {ctor.call_count} times"
+    assert first is second is third
+    aim._shared_detector = None
+
+
+def test_a_failing_detector_does_not_wedge_the_aim():
+    aim._shared_detector = None
+    with mock.patch("hal.drivers.tracking.detection.ObjectDetector",
+                    side_effect=RuntimeError("model missing")):
+        assert aim.get_detector() is None
+    aim._shared_detector = None
