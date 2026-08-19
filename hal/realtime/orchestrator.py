@@ -1047,7 +1047,8 @@ class RealtimeOrchestrator:
                     from hal.drivers.tracking.aim import aim_for_look
 
                     t_aim = time.monotonic()
-                    res = aim_for_look(config.LOOK_AIM_DEADLINE_S)
+                    with look_debug.stage("aim.total"):
+                        res = aim_for_look(config.LOOK_AIM_DEADLINE_S)
                     logger.info(
                         "[realtime] look: aim %s (%s) iters=%d yaw=%+.1f in %.0fms",
                         "OK" if res.aimed else "skipped",
@@ -1061,11 +1062,13 @@ class RealtimeOrchestrator:
                     if config.LOOK_AIM_SPEAK_CAPTURE and res.iterations > 0:
                         from hal.drivers.tracking.aim import _say
 
-                        _say("look_capturing")
+                        with look_debug.stage("speak_filler"):
+                            _say("look_capturing")
                 except Exception as e:
                     logger.warning("[realtime] look: aim raised, capturing anyway: %s", e)
 
-            frame = self._capture_frame()
+            with look_debug.stage("capture"):
+                frame = self._capture_frame()
         if frame is None:
             logger.warning("[realtime] look: no camera frame available")
             look_debug.abandon("no_camera_frame")
@@ -1079,7 +1082,8 @@ class RealtimeOrchestrator:
             )
             return False
 
-        self._agent.send([ImageInput(image=frame)])
+        with look_debug.stage("send_image"):
+            self._agent.send([ImageInput(image=frame)])
         self._looked_this_turn = True
         self._last_look_sent_monotonic = now
         # The replayed turn (frame + re-committed audio) inherits the same
@@ -1091,7 +1095,8 @@ class RealtimeOrchestrator:
         # reuses it instead of taking a fresh snapshot. See turn_dispatch.
         import hal.app_state as state
 
-        saved_path: str | None = self._persist_look_frame(frame)
+        with look_debug.stage("persist"):
+            saved_path: str | None = self._persist_look_frame(frame)
         look_debug.note_capture(saved_path)
         # Stash a servable copy so the frame can appear in the turn the user
         # actually sees. It is attached to that turn's message as a

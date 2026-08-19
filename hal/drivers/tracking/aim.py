@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Tuple
 
 import hal.config as config
+from hal.drivers.tracking import look_debug
 
 logger = logging.getLogger(__name__)
 
@@ -470,7 +471,8 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
             if time.monotonic() >= t_end:
                 return _result(False, "deadline")
 
-            frame = _grab_frame(cap, svc, require_fresh=iterations > 0)
+            with look_debug.stage("aim.frame_wait"):
+                frame = _grab_frame(cap, svc, require_fresh=iterations > 0)
             if frame is None:
                 if iterations > 0:
                     # Aim on what we have rather than steering blind.
@@ -479,7 +481,8 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
                     )
                 return _result(False, "no frame")
 
-            box, kind = _detect_subject(detector, frame)
+            with look_debug.stage("aim.detect"):
+                box, kind = _detect_subject(detector, frame)
             if box is None:
                 # Priority 2 — occlusion, not absence. Never turn away from a scene
                 # that just changed dramatically: a large object filling the frame is
@@ -531,8 +534,9 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
             yaw_deg = AIM_GAIN * dx * (C.CAMERA_FOV_DEG / w_fr)
 
             try:
-                current = svc.get_positions()
-                svc.nudge(yaw_deg, 0.0, MOVE_DURATION_S, current, state.safety_policy)
+                with look_debug.stage("aim.move"):
+                    current = svc.get_positions()
+                    svc.nudge(yaw_deg, 0.0, MOVE_DURATION_S, current, state.safety_policy)
             except Exception as e:
                 logger.warning("[look-aim] nudge failed: %s", e)
                 return _result(False, f"nudge failed: {e}")

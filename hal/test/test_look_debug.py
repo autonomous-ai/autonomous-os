@@ -132,3 +132,18 @@ def test_an_orphaned_trace_is_eventually_replaced():
         ld._current["_t0"] -= ld.STALE_TRACE_S + 1
         ld.start()
         assert ld._current["look_calls"] == 1, "stale trace should have been replaced"
+
+
+def test_profile_does_not_double_charge_nested_stages():
+    """`aim.detect` lives inside `aim.total`; charging both would make the
+    device look slower than the turn and push waiting_on_model negative."""
+    stages = {
+        "aim.total": {"ms": 2000.0, "n": 1},
+        "aim.detect": {"ms": 1500.0, "n": 3},
+        "aim.move": {"ms": 400.0, "n": 3},
+        "capture": {"ms": 300.0, "n": 1},
+    }
+    trace = {"stages": stages, "total_ms": 25000}
+    ld._log_profile(trace)
+    # device = aim.total + capture only
+    assert trace["waiting_on_model_ms"] == 25000 - (2000.0 + 300.0)

@@ -33,6 +33,7 @@ the turn has an answer. State is module-level for the same reason
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -159,6 +160,36 @@ def note_event(msg: str) -> None:
             )
 
 
+def stage_ms(name: str, ms: float) -> None:
+    """Accumulate elapsed time under a named stage.
+
+    Additive rather than set-once: per-iteration stages (detect, move) run
+    several times in one look, and the useful number is the total spent there
+    plus how many times it ran.
+    """
+    if not _init():
+        return
+    with _lock:
+        if _current is None:
+            return
+        stages = _current.setdefault("stages", {})
+        entry = stages.setdefault(name, {"ms": 0.0, "n": 0})
+        entry["ms"] = round(entry["ms"] + ms, 1)
+        entry["n"] += 1
+
+
+@contextlib.contextmanager
+def stage(name: str):
+    """Time one stage of the look. Never swallows the exception, and still
+    records the time when the stage raises — a stage that failed slowly is
+    exactly the one worth seeing."""
+    t0 = time.monotonic()
+    try:
+        yield
+    finally:
+        stage_ms(name, (time.monotonic() - t0) * 1000.0)
+
+
 def note_aim(result: Any) -> None:
     """Record the aim outcome — the usual culprit when a frame looks wrong."""
     if not _init():
@@ -198,6 +229,39 @@ def note_capture(frame_path: Optional[str]) -> None:
     note_event("captured" if frame_path else "capture FAILED")
 
 
+def _log_profile(trace: Dict[str, Any]) -> None:
+    """One line accounting for the whole look, biggest stage first.
+
+    `waiting_on_model` is the residual: total minus everything the device did
+    itself. It is the number that separates "the lamp is slow" from "the lamp
+    was done in 3s and then sat waiting for Gemini".
+    """
+    stages: Dict[str, Any] = trace.get("stages") or {}
+    total: float = float(trace.get("total_ms") or 0)
+    if not stages:
+        return
+    # Sub-stages are nested inside their roll-up ("aim.detect" inside
+    # "aim.total"), so counting both would double-charge the device and drive
+    # the residual negative. Charge the roll-up; keep the children as breakdown.
+    def _is_child(name: str) -> bool:
+        prefix, _, leaf = name.rpartition(".")
+        return bool(prefix) and leaf != "total" and f"{prefix}.total" in stages
+
+    device_ms = sum(
+        float(v.get("ms") or 0) for k, v in stages.items() if not _is_child(k)
+    )
+    residual = round(total - device_ms, 1)
+    trace["waiting_on_model_ms"] = residual
+    parts = " ".join(
+        f"{k}={v['ms']:.0f}ms" + (f"(x{v['n']})" if v.get("n", 1) > 1 else "")
+        for k, v in sorted(stages.items(), key=lambda kv: -float(kv[1].get("ms") or 0))
+    )
+    logger.info(
+        "LOOK-PROFILE total=%.0fms device=%.0fms waiting_on_model=%.0fms | %s",
+        total, device_ms, residual, parts,
+    )
+
+
 def finish(status: str, question: str = "", answer: str = "", error: str = "") -> None:
     """Close the trace once the turn has an answer, and write it to disk.
 
@@ -218,6 +282,7 @@ def finish(status: str, question: str = "", answer: str = "", error: str = "") -
         if error:
             trace["error"] = error
         trace["total_ms"] = round((time.monotonic() - trace.pop("_t0")) * 1000)
+        _log_profile(trace)
         stamp = time.strftime("%Y%m%d-%H%M%S")
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in status)[:40]
         outdir = _base / f"{stamp}_{safe}"
