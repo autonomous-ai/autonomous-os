@@ -5,6 +5,7 @@ import threading
 from fastapi import APIRouter
 
 import hal.app_state as state
+from hal import config
 from hal.models import EmotionRequest, EmotionResponse
 from hal.presets import (
     EMOTION_PRESETS,
@@ -15,6 +16,7 @@ from hal.presets import (
     EMO_SHOCK,
     EMO_SLEEPY,
     EMO_STRETCHING,
+    EMO_THINKING,
     LST_OFF,
     SERVO_CMD_PLAY,
     SERVO_IDLE,
@@ -111,6 +113,10 @@ def express_emotion(req: EmotionRequest):
     was_sleeping = state._sleeping
     state._sleeping = req.emotion == EMO_SLEEPY
     state._current_emotion = req.emotion
+    # Any other emotion supersedes the realtime thinking cue — drop its claim
+    # so an LED restore never repaints thinking over what was just expressed.
+    if req.emotion != EMO_THINKING:
+        state._thinking_cue_active = False
     if was_sleeping and not state._sleeping:
         state._wake_sleepy_peripherals()
 
@@ -120,6 +126,45 @@ def express_emotion(req: EmotionRequest):
     if state._still_idle_timer is not None:
         state._still_idle_timer.cancel()
         state._still_idle_timer = None
+
+    # Stuck-thinking net: `thinking` is set at the start of a wait and is only
+    # ever cleared by the emotion the reply expresses. A turn that dies before
+    # producing one (realtime exception, delegate that never answers, forward
+    # that never happens) leaves the face — and, via _thinking_cue_active, every
+    # later LED restore — on thinking with no user input to break it out. Fall
+    # back to idle after a continuous hold. Any other emotion cancels; a fresh
+    # thinking re-arms, so a slow-but-alive turn is unaffected as long as it
+    # keeps the same face for less than the window.
+    if state._thinking_reset_timer is not None:
+        state._thinking_reset_timer.cancel()
+        state._thinking_reset_timer = None
+    if req.emotion == EMO_THINKING and config.EMOTION_THINKING_RESET_S > 0:
+        def _reset_after_stuck_thinking():
+            if state._current_emotion != EMO_THINKING:
+                return
+            state.logger.warning(
+                "Thinking held >= %.1fs with no follow-up emotion -- reverting to idle",
+                config.EMOTION_THINKING_RESET_S,
+            )
+            try:
+                # Drop the cue's claim first: idle is a background emotion, so
+                # without this the restore path would repaint thinking again.
+                state._thinking_cue_active = False
+                express_emotion(EmotionRequest(emotion=EMO_IDLE))
+                # idle is a background emotion, so the call above may leave the
+                # forced thinking pulse running — settle the strip back on the
+                # user's state explicitly (restore is TTS/music-guarded).
+                from hal.routes.led import restore_led
+
+                restore_led()
+            except Exception as e:
+                state.logger.warning("Thinking reset failed: %s", e)
+
+        state._thinking_reset_timer = threading.Timer(
+            config.EMOTION_THINKING_RESET_S, _reset_after_stuck_thinking
+        )
+        state._thinking_reset_timer.daemon = True
+        state._thinking_reset_timer.start()
 
     # Sleepy auto-release: fires only if sleepy stays continuous for the
     # full window. Any other emotion (including a wake) cancels the timer.

@@ -144,6 +144,8 @@ Khi có câu bị drop, lifecycle:end emit event `cot_leak_filtered` (`data.drop
 
 OpenClaw agent trả `NO_REPLY` (hoặc dạng cắt ngắn `NO`, `NO_RE`, `NO_...`) khi quyết định không cần trả lời — thường cho passive sensing events (sound, motion). `isAgentNoReply()` trong `handler.go` suppress: không phát TTS, không hiện output. Match: `"NO"` chính xác, hoặc bắt đầu bằng `"NO_"` / `"NO_RE"` (case-insensitive).
 
+**Chặn "kể lại việc im lặng".** Model đôi khi tả quyết định im lặng bằng văn xuôi thay vì trả sentinel (vd `Sound event, no user message. Nothing to say`). Đoạn đó lọt `isAgentNoReply()` nên `isMetaNonReply()` trong `handler_text.go` chặn thêm: text ≤ 100 byte, không có `?`, khớp một trong các cụm meta (`nothing to say/add/report`, `no (user) message/reply/response/comment (needed)`, `no need to reply/respond/speak/say`, `staying|remaining silent`, `no action needed`). Áp ở cuối lượt (`handler_event_agent.go`) và trong `tryFirstSentenceFlush()` (`handler_state.go`) — chỗ này defer mà KHÔNG đánh dấu đã stream, để câu thật sau đó vẫn giữ được lợi thế first-audio. Cả hai đều log `WARN` và lượt được báo là `no_reply`.
+
 ### Output text & first-sentence streaming
 
 Web (chat + flow Output) đọc text reply từ event `tts_send`, ưu tiên `data.full_text` (toàn bộ reply) rồi fallback `data.text`. Khi câu đầu được stream sớm tới TTS giữa turn (event `tts_stream_send`, gửi trước để giảm latency), `data.text` chỉ chứa **phần còn lại** (câu 1 đã bị cắt để không phát 2 lần), còn `data.full_text` mới giữ câu 1 + phần còn lại. Web không đọc `tts_stream_send`, nên thiếu `full_text` thì câu 1 sẽ không hiện. `data.streamed_len` là byte offset nơi phần còn lại bắt đầu.

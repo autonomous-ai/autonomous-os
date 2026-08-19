@@ -257,6 +257,49 @@ export async function setupDevice(body: SetupRequest): Promise<boolean> {
   });
 }
 
+/** POST /api/device/wifi-provision — AP-portal setup path. `ssid` is
+ *  required; every other field is optional and, when omitted or empty, tells
+ *  the backend to leave the current on-disk value alone. Backend gates this
+ *  to callers on the AP subnet (192.168.100.0/24), so it only works when the
+ *  browser is joined to the device's own hotspot. Used by the standalone
+ *  /wifi page (not the full /setup wizard). */
+export interface WifiProvisionBody {
+  ssid: string;
+  password?: string;
+  // LLM
+  llm_api_key?: string;
+  llm_base_url?: string;
+  llm_model?: string;
+  // Voice pipeline
+  stt_api_key?: string;
+  stt_base_url?: string;
+  stt_language?: string;
+  tts_api_key?: string;
+  tts_base_url?: string;
+  tts_provider?: string;
+  tts_voice?: string;
+  // Admin auth
+  admin_password?: string;
+  // Messaging channel (optional). channel = telegram | slack | discord.
+  // Only the sub-tokens matching `channel` are honored by the backend.
+  channel?: string;
+  telegram_bot_token?: string;
+  telegram_user_id?: string;
+  slack_bot_token?: string;
+  slack_app_token?: string;
+  slack_user_id?: string;
+  discord_bot_token?: string;
+  discord_guild_id?: string;
+  discord_user_id?: string;
+}
+export async function wifiProvision(body: WifiProvisionBody): Promise<boolean> {
+  return apiRequest<boolean>(`${API_BASE}/api/device/wifi-provision`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 export interface SetupStatus {
   phase: "idle" | "connecting" | "connected" | "failed";
   lan_ip: string;

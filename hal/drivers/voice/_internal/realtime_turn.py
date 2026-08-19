@@ -61,6 +61,7 @@ def _thinking_cue_start() -> None:
         # whenever the user has a saved color (guard against per-message hook
         # spam). This cue is deliberate and always cleared — force the pulse so
         # the wait is visible. User-LED-off still wins inside.
+        hal_app_state._thinking_cue_active = True
         hal_app_state._apply_emotion_led_display(
             presets.EMO_THINKING, 0.7, force_led=True
         )
@@ -124,6 +125,10 @@ def _thinking_cue_clear() -> None:
     ONLY if the face still shows our `thinking`, so an emotion the model
     expressed via the express_emotion tool is never stomped."""
     try:
+        # Drop the cue's claim on the strip first: every exit path calls this,
+        # so the flag can never outlive the turn even when the guard below
+        # returns early (model expressed its own emotion mid-turn).
+        hal_app_state._thinking_cue_active = False
         if hal_app_state._current_emotion != presets.EMO_THINKING:
             return
         from hal.models import EmotionRequest
@@ -555,6 +560,13 @@ def run_realtime_turn(
                 except Exception:
                     pass
                 native_started = False
+            # The cue is normally handed over to the delegate path (the main
+            # agent's wait is longer, and its own hook re-fires thinking on the
+            # forwarded turn). A crashed turn is not that handover: nothing in
+            # this process is still driving the face, so hand it back to the
+            # user's state instead of leaving the pulse claimed. If the forward
+            # below does reach the agent, the hook paints thinking again.
+            _thinking_cue_clear()
             delegated = True  # fall through to OS server on error
         finally:
             # Covers every exit — reply spoken, delegate, empty turn, exception.

@@ -55,6 +55,20 @@ def _parse_turn_detection(value: str) -> OpenAITurnDetectionType | None:
         return OpenAITurnDetectionType.SERVER_VAD
 
 
+# max_retries bounds the send/recv attempt loop in every provider — it counts the
+# FIRST attempt, so 1 means "try once", and 0 would disable sending and receiving
+# outright rather than disabling retries (use realtime.enabled for that).
+#
+# 1 is not a behaviour change from the old 3: a failed attempt clears _connected
+# and drops the session, and the next iteration's _ensure_connected is throttled
+# by the reconnect backoff, so attempts 2 and 3 could never do work — they logged
+# "Not connected, skipping attempt" and fell through in microseconds. Recovery
+# lives elsewhere and is unaffected: _fail_fast_turn ends the turn immediately so
+# it falls back to the main agent, and the background reconnect keeps retrying on
+# a 2s → 60s backoff so a session dead from a quota close heals once the limit
+# lifts.
+
+
 class OpenAIConfig(BaseModel):
     api_key: str = app_config.REALTIME_OPENAI_API_KEY
     base_url: str | None = app_config.REALTIME_OPENAI_BASE_URL or None
@@ -71,7 +85,7 @@ class OpenAIConfig(BaseModel):
     )
     truncation_type: OpenAITruncationType = OpenAITruncationType.RETENTION_RATIO
     truncation_retention_ratio: float = 0.5
-    max_retries: int = 3
+    max_retries: int = 1
     reconnect_delay_s: float = 2.0
 
 
@@ -84,7 +98,7 @@ class QwenConfig(BaseModel):
     sample_rate: int = app_config.REALTIME_QWEN_SAMPLE_RATE
     language: str | None = _load_language()
     search_enabled: bool = app_config.REALTIME_QWEN_SEARCH
-    max_retries: int = 3
+    max_retries: int = 1
     reconnect_delay_s: float = 2.0
 
 
@@ -107,7 +121,7 @@ class GeminiConfig(BaseModel):
         "none",
         "",
     )
-    max_retries: int = 3
+    max_retries: int = 1
     reconnect_delay_s: float = 2.0
     send_timeout_s: float = 10.0
     recv_timeout_s: float = 300.0

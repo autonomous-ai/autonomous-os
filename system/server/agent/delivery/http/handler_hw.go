@@ -192,6 +192,22 @@ func (h *AgentHandler) fireHWCall(c hwCall, flowRunID string, client *http.Clien
 	if c.path == "/broadcast" || c.path == "/speak" || c.path == "/dm" {
 		return true
 	}
+	// A cancelled turn keeps its remote delivery but loses the body. The click
+	// means "stop talking to ME", so it must not swallow a reply addressed to a
+	// Telegram user — which is why this gate sits AFTER the /dm and /broadcast
+	// markers above and only covers real hardware. Without it the device goes
+	// quiet but keeps moving: servos finishing a gesture and LEDs changing colour
+	// after the user asked it to stop reads as "it ignored me".
+	if h.isSpeechCancelled(flowRunID) {
+		slog.Info("HW marker dropped -- turn cancelled by physical gesture",
+			"component", "agent", "run_id", flowRunID, "path", c.path)
+		// Flow event, not just a log line: a turn can be affected by the click
+		// through its body alone — web-chat turns never speak, so tts_cancelled
+		// never fires for them and the monitor would show nothing at all while
+		// their servo/LED markers were silently dropped.
+		flow.Log("hw_cancelled", map[string]any{"run_id": flowRunID, "path": c.path}, flowRunID)
+		return true
+	}
 	// The OS — not the brain — is the deterministic gate over the body. Drop a
 	// HW marker the agent emitted for hardware this device doesn't declare, so a
 	// swappable/hallucinating brain (or an over-eager SOUL) can never drive a
@@ -249,7 +265,10 @@ func (h *AgentHandler) fireHWCall(c hwCall, flowRunID string, client *http.Clien
 			slog.Info("HW marker → buddy OK", "component", "openclaw", "path", c.path, "response", string(okBody))
 		} else {
 			resp.Body.Close()
-			slog.Info("HW marker fired", "component", "openclaw", "path", c.path)
+			// run_id included so a fired marker can be attributed to its turn:
+			// without it, "speech muted but the body still moved" is invisible in
+			// the log — the drop line names a run and the fire line named none.
+			slog.Info("HW marker fired", "component", "openclaw", "path", c.path, "run_id", flowRunID)
 		}
 	}
 	switch {

@@ -52,6 +52,7 @@ Every event emits at least one `[HW:/emotion:...]` marker, even on `NO_REPLY`. N
 - **HW markers first**, then text or `NO_REPLY`. Text = ONE short sentence max, spoken verbatim.
 - **Tool-call scope** — only `motion.activity` (→ wellbeing) and `emotion.detected` / `speech_emotion.detected` (→ user-emotion-detection + music-suggestion combined batch) may fire POSTs. On `presence.*`, `sound`, `light.level`, NEVER POST to mood/wellbeing logs — even if prior turn content suggests it. Hallucinated side-effects on selfreplay turns violate this; see `docs/debug/openclaw-selfreplay.md`.
 - **Never dump reasoning into the reply.** No log deltas, no "Looking at context…", no "No nudge needed". Scratch stays in `thinking`.
+- **Silent = the literal token `NO_REPLY`, nothing else.** Never narrate the decision to stay quiet ("Sound event, no user message. Nothing to say", "No response needed"). That prose is not a sentinel — the backend treats it as speech and the device reads it out loud.
 - **Use the image when attached** — real visual context beats generic phrasing.
 - **Night-aware** — lower intensity emotions and shorter speech after ~22:00.
 - **Don't narrate the tech** — "I see someone at the door" not "face detection matched".

@@ -273,6 +273,23 @@ EMOTION_CONFIDENCE_THRESHOLD = float(
 )
 EMOTION_FLUSH_S = float(os.environ.get("HAL_EMOTION_FLUSH_S", "10.0"))
 EMOTION_DEDUP_WINDOW_S = float(os.environ.get("HAL_EMOTION_DEDUP_WINDOW_S", "300.0"))
+# How long `thinking` may stay on continuously before the device falls back to
+# idle. `thinking` is the only face nothing clears on its own: it is set at the
+# start of a wait and overwritten by whatever the reply expresses, so a turn
+# that dies mid-flight (realtime exception, delegate that never answers) leaves
+# it burning forever with no user input to break it out. 0 disables the net.
+#
+# 25s comes from device logs (lamp-0c89, 2026-08-19), not from feel. Two kinds
+# of turn hold `thinking` legitimately: a realtime in-session reply clears it in
+# 0.4-8.6s (n=15, p50 6.5), and a delegated turn runs until the main agent
+# answers — event-forwarded → assistant-turn-done measured 6-22s over 5 days
+# (n=21, p95 21). So the window has to clear 22s or it would blink idle in the
+# middle of a live delegate; 25 is that ceiling plus a small margin. Cutting
+# early is cheap (the real emotion re-sets on arrival), so the margin stays thin
+# rather than doubling the stuck time when the net actually fires.
+EMOTION_THINKING_RESET_S = float(
+    os.environ.get("HAL_EMOTION_THINKING_RESET_S", "25.0")
+)
 EMOTION_SNAPSHOT_DIR = os.environ.get(
     "HAL_EMOTION_SNAPSHOT_DIR",
     os.path.join(tempfile.gettempdir(), "hal-emotion-snapshots"),

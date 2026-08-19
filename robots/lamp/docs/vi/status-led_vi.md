@@ -156,7 +156,7 @@ Tất cả gọi fire-and-forget, timeout 5s. Nếu hardware không có thì b�
 
 Khi không có status state nào active, LED được điều khiển bởi:
 
-1. **Emotion preset** — màu theo cảm xúc của AI agent (xem [emotion-led-mapping.md](../emotion-led-mapping.md))
+1. **Emotion preset** — màu theo cảm xúc của AI agent (xem [emotion-led-mapping_vi.md](emotion-led-mapping_vi.md))
 2. **Scene preset** — scene chiếu sáng do user chọn (reading, focus, relax, v.v.)
 3. **Ambient breathing** — breathing nhẹ màu ấm khi idle
 

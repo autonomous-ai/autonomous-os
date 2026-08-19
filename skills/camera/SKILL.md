@@ -35,6 +35,23 @@ Returns JSON: `{"path": ".../media/hal-snapshots/snap_1712567890123.jpg"}`.
 
 No need to aim servo or sleep before snapshot — the server freezes servos automatically for a stable frame.
 
+## Never describe the view without an image
+
+If you are about to say what you see, this turn MUST contain either a
+`[vision-image]` line or a `/camera/snapshot` call whose image you actually
+looked at. Describing the room from memory, from an earlier turn's photo, or
+from a plausible guess ("same view — the desk, your screen…") is a fabrication,
+even when the guess happens to be close. No image → say you'll take a look and
+take one; never invent.
+
+## Move first, then snapshot
+
+When the request combines a movement and a visual question ("turn right, hold
+it there, and tell me what you see"), fire the servo calls **with curl during
+the turn** (`POST /servo/aim`, `POST /servo/hold`), *then* snapshot. `[HW:...]`
+markers are executed only after your reply is composed, so a marker-based aim
+would move the device *after* the photo — you would describe the old view.
+
 ## Workflow
 1. Call `GET /camera/snapshot?save=true&width=768&quality=75` — **always call directly, never check /camera first**. The endpoint auto-enables camera if disabled.
 2. Analyze the image and describe what you see.

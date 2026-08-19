@@ -111,6 +111,13 @@ func (h *AgentHandler) tryFirstSentenceFlush(runID string) string {
 	if filtered == "" {
 		return ""
 	}
+	// Silent-decision narration ("Nothing to say", "no user message") must
+	// never be spoken. Defer WITHOUT marking streamed: if a real sentence
+	// follows it still gets the first-audio latency win, and if nothing
+	// follows the end-of-turn gate suppresses the whole reply.
+	if isMetaNonReply(filtered) {
+		return ""
+	}
 	h.streamedCleanLen[runID] = boundary + 1
 	return filtered
 }

@@ -161,6 +161,109 @@ func (h *DeviceHandler) Setup(c *gin.Context) {
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(true))
 }
 
+// WifiProvision godoc
+//
+//	@Summary	provision Wi-Fi only (AP-portal fast path)
+//	@Description	Dedicated re-provisioning endpoint for a device that is already
+//	@Description	fully configured but has been moved to a new Wi-Fi network.
+//	@Description	Body is minimal ({ssid, password}); no LLM/channel/device_id
+//	@Description	fields are touched. Runs the connect-wifi script + AP teardown.
+//	@Description	Gated by apOnlyMiddleware (source IP must be in the AP subnet).
+//	@Tags			device
+//	@Accept			json
+//	@Param			body	body		domain.WifiProvisionRequest	true	"wifi credentials"
+//	@Success		200		{object}	serializers.ResponseSuccess
+//	@Router			/device/wifi-provision [post]
+func (h *DeviceHandler) WifiProvision(c *gin.Context) {
+	var req domain.WifiProvisionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		slog.Warn("wifi-provision bind json failed", "component", "device", "error", err)
+		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
+		return
+	}
+	if err := validator.New().Struct(req); err != nil {
+		slog.Warn("wifi-provision validator failed", "component", "device", "error", err.Error())
+		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
+		return
+	}
+	slog.Info("wifi-provision request", "component", "device",
+		"ssid_len", len(req.SSID),
+		"password_len", len(req.Password),
+		"llm_api_key_supplied", req.LLMAPIKey != "",
+		"llm_api_key_len", len(req.LLMAPIKey),
+		"llm_base_url_supplied", req.LLMBaseURL != "",
+		"llm_base_url", req.LLMBaseURL, // safe to log — not a secret
+		"llm_model", req.LLMModel,
+		"admin_password_supplied", req.AdminPassword != "",
+		"set_up_completed", h.config.SetUpCompleted,
+	)
+
+	// Fresh device (never set up) MUST supply an LLM triplet — otherwise the
+	// device joins Wi-Fi but has no brain, and the operator ends up in the
+	// admin page seeing "Auto-AI / campaign-api.autonomous.ai" defaults that
+	// won't actually resolve to a working chat. Once the device is provisioned,
+	// missing fields keep their on-disk values (mergeMissingFromConfig
+	// semantics) — the operator changing Wi-Fi shouldn't have to retype the
+	// API key.
+	if !h.config.SetUpCompleted {
+		var missing []string
+		if req.LLMAPIKey == "" {
+			missing = append(missing, "llm_api_key")
+		}
+		if req.LLMBaseURL == "" {
+			missing = append(missing, "llm_base_url")
+		}
+		if req.LLMModel == "" {
+			missing = append(missing, "llm_model")
+		}
+		if len(missing) > 0 {
+			slog.Warn("wifi-provision: fresh device missing required LLM fields",
+				"component", "device", "missing", missing)
+			c.JSON(http.StatusBadRequest, serializers.ResponseError(
+				"fresh device requires: "+strings.Join(missing, ", ")))
+			return
+		}
+	}
+
+	// Fresh device with no admin password on file gets the same hardware-suffix
+	// default as handler.Setup. Once a hash is on file, the operator's PATCH
+	// leaves it alone (empty admin_password = "keep current"). Failing here
+	// rather than silently defaulting to a hardcoded value avoids handing every
+	// unidentified device the same well-known password.
+	if req.AdminPassword == "" && !h.config.SetUpCompleted && h.config.AdminPasswordHash == "" {
+		mac := device.GetDeviceMac()
+		dash := strings.LastIndex(mac, "-")
+		if mac == "" || dash < 0 || dash == len(mac)-1 {
+			slog.Warn("wifi-provision: admin_password default failed", "component", "device", "mac", mac)
+			c.JSON(http.StatusBadRequest, serializers.ResponseError(
+				"device hardware ID unreadable — cannot default admin_password (set it manually)"))
+			return
+		}
+		req.AdminPassword = mac[dash+1:]
+	}
+	// Set session cookie now so the browser is logged in when it redirects to
+	// the new LAN IP post-AP-teardown.
+	if req.AdminPassword != "" {
+		if err := session.Issue(c, h.config); err != nil {
+			slog.Warn("wifi-provision: issue session failed", "component", "device", "error", err)
+		}
+	}
+
+	// Same 2s pre-delay as Setup so the HTTP response has time to reach the
+	// client before the AP tears down mid-request. See handler.Setup.
+	go func() {
+		time.Sleep(2 * time.Second)
+		if err := h.service.ReprovisionWifi(req); err != nil {
+			slog.Error("wifi-provision failed", "component", "device", "error", err)
+			h.networkService.SwitchToAPMode()
+			return
+		}
+		slog.Info("wifi-provision success", "component", "device")
+	}()
+
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(true))
+}
+
 // GetConfig godoc
 //
 //	@Summary	get current device config (sanitized)

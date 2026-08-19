@@ -54,6 +54,29 @@ device type (`lamp`), or the agent name from IDENTITY.md — HAL resolves the
 device type from the `DEVICE_TYPE` env first, then `config.json`, so the
 runtime list matches the one Settings advertises.
 
+A mic session is a continuous stretch of speech, not a single sentence, so the
+match is **per sentence**: `starts_with_wake_word()`
+(`hal/drivers/voice/_internal/speaker_decorate.py`) splits the transcript on
+`.` `!` `?` and accepts a wake phrase at the **start or the end of any
+sentence**. Mid-sentence occurrences are still rejected — a device name in the
+middle of a sentence is people talking *about* the device ("this lamp is
+nice"), and opening the gate there would make it barge into someone else's
+conversation. The end-of-sentence position is accepted because calling the name
+last is a natural vocative ("what time is it, hey lamp?"). Without the
+per-sentence rule a turn like "What was the score of the Vietnam versus
+Malaysia match? Hi lamp, can you hear me?" was dropped whole and the user just
+heard silence. The function keeps its `starts_with_wake_word` name because
+every caller reads it as "was this turn addressed to me?".
+
+The final-result confirmation runs on the **assembled** transcript, which still
+carries its punctuation. `merge_stt_hypothesis()` keeps only `\w+` tokens and
+therefore strips sentence boundaries, which would collapse the whole turn into
+one sentence and retract a gate that a partial had correctly opened. So before
+dropping a turn whose partial armed the gate, the capture loop re-checks
+`starts_with_wake_word(combined)` on the real transcript: a match sets
+`wake_word_confirmed` and logs `Wake-word confirmed on assembled transcript`,
+and only a genuine mismatch drops the turn.
+
 All three names are sent to STT as boost terms (`_stt_boost_terms`), because a
 mis-heard name silently drops the whole turn — "hi lamp" transcribed as "hi
 lance" never arms the gate. Flux takes them as repeated `keyterm` parameters
@@ -69,6 +92,53 @@ synchronization event so the main agent records the exchange but stays silent;
 unavailable, failed, timed-out, or delegated realtime takes the normal
 main-agent path. This also consumes a one-turn vision handoff, so a temporary
 Gemini failure cannot drop a voice command or leak a frame into the next turn.
+
+### Silero guards the silence clock (end of turn)
+
+A mic session ends when the audio stays below the RMS threshold for
+`SILENCE_TIMEOUT_S`. RMS alone is not enough in a noisy room: room noise sits
+above `RMS_THRESHOLD`, so every frame refreshed the clock, the turn ran to
+`MAX_SESSION_DURATION_S`, and mostly-noise audio went to STT — the 18/08/2026
+observation was 8–25 second sessions coming back with `transcript='(empty)'`.
+Energy VAD misses roughly half of the real speech frames in that environment,
+and production voice stacks (Pipecat, LiveKit, Deepgram) all put a neural VAD
+on this decision.
+
+RMS stays as the cheap first gate, but the silence clock is only refreshed once
+Silero also confirms speech. Silero runs per **window**
+(`SILENCE_VAD_WINDOW_FRAMES`), not per frame: it costs ~20 ms/frame on ARM and
+its LSTM needs more than one 64 ms frame to settle. It uses its **own** Silero
+instance — a third one, alongside the entry gate and the realtime noise guard —
+so the other paths' LSTM state stays clean, and it resets that state at the
+start of every session. It fails open: a model error counts as speech, so the
+device never cuts anyone off.
+
+### The mic ignores our own backchannel cue
+
+Backchannel listening cues ("Ok", "Mm", "Oh") are played on purpose **without**
+setting the TTS `speaking` flag, because that flag ends the running STT session —
+the one the cue exists to keep alive. But `speaking` is also the only thing that
+normally keeps the mic off while the device talks, so the cue reached the mic
+unfiltered and the entry VAD opened a **new** session on it about a second later.
+Device-observed 19/08/2026: `'Ok'` came back as `transcript='Okay.'` and `'Oh'` as
+`transcript='no'`, each running as a real turn that no user spoke.
+
+`Backchannel.self_audio_active` closes this without touching `speaking`. `_play()`
+arms a deadline (clip length + `HAL_BACKCHANNEL_ECHO_TAIL_S`) *before* the first
+sample leaves, then re-anchors the tail to when playback actually ended. While it
+holds, the VAD loop drops those frames from the speech test **and** from the
+pre-roll lookback — keeping them in lookback would just replay the cue as the next
+session's opening audio — and resets Silero's LSTM on resume, the same cleanup the
+warm-mic drain does. Only session *opening* is suppressed; a session already
+streaming is untouched, which is the whole point of the feature.
+
+`robots/lamp/rootfs/opt/hal/.env` lowers `HAL_MAX_SESSION_DURATION_S` to `20`
+(the code default stays `30`); that ceiling is only reached when the silence
+clock never expires, and a real speaker always pauses longer than
+`SILENCE_TIMEOUT` within 20 seconds. The same file previously wrote
+`WAKEWORD_FOLLOWUP_TIMEOUT_S=60` without the `HAL_` prefix, so it did nothing
+and the device ran the 20 s default; the key is now
+`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S=60`.
 
 If the **initial** provider connection fails during HAL startup, the
 orchestrator creates fresh sessions in a background retry loop (an immediate
@@ -142,7 +212,11 @@ When the user asks about what the device **sees** ("what is this?", "look at thi
 this?"), the realtime model answers in-session instead of delegating. Note "look at
 this" routes here, **not** to the camera privacy toggle — `skills/camera/SKILL.md`
 disambiguates the verb by what follows it, since "look at me" means "turn the camera
-on" while "look at this" is a question about an object. The orchestrator registers a `look` tool
+on" while "look at this" is a question about an object. This only applies to turns
+that are **purely** a question about what it sees: if the same turn also contains an
+action ("turn to the right, hold it there, and tell me what you see"), the prompt
+requires a single `delegate_to_main` covering both halves — no `look` — so the
+movement is never silently dropped. The orchestrator registers a `look` tool
 (`orchestrator.py`, `LOOK_TOOL`) and handles the call in `_handle_look_call`:
 
 1. Grab a **sharp** camera frame **in-process** (`_capture_frame` calls
@@ -451,6 +525,14 @@ turn ("hello") right after a restart would leak to the main agent.
    | Wake-word / follow-up | after capture, once a final wake phrase confirms | Yes |
    | Deferred (noise-drop rebuild) | after capture, on the replacement session | Yes |
 
+   Both post-capture rows are additionally gated on the turn **not** being noise.
+   They run after the noise guard has already classified the capture, so an
+   empty-STT non-speech turn opens nothing: no `[TURN CONTEXT]`, no audio, and no
+   replacement session. Skipping the send is what makes the skip-commit path free
+   — otherwise the turn's whole buffer entered (and was billed by) an open
+   activity that the very next step discarded. Sessions opened *earlier* in the
+   capture (always-listening) have already streamed audio and are still discarded.
+
    In always-listening mode the speaker-ID prepass (`identify_and_decorate`, run
    **once** at session end) resolves the voice speaker *after* the context already
    went out with the face name. HAL then sends a `[TURN CONTEXT UPDATE]` correction
@@ -492,6 +574,44 @@ turn ("hello") right after a restart would leak to the main agent.
    cuts it off; every exit path (reply, delegate, empty turn, exception)
    cancels the timer, and delegate cancels explicitly because the main-agent
    hop that follows fires its own filler. `0` disables.
+
+   Speaking the filler is TTS, so it stops the thinking pulse and runs the
+   speaking wave. To keep the rest of the wait visible, the cue marks the
+   strip as its own (`app_state._thinking_cue_active`): the LED restore that
+   follows TTS repaints the thinking pulse instead of settling on the user
+   state. The flag is dropped when the cue clears and by any other emotion
+   coming through `POST /emotion`, so an expressed emotion is never stomped.
+
+   A **delegated** turn keeps the cue on purpose — the main-agent hop that
+   follows is the longer wait, and its own hook re-fires `thinking` anyway. A
+   turn that raises does *not* count as that handover (nothing in HAL is still
+   driving the face), so the exception path clears the cue before falling
+   through to the OS server.
+
+   Because `thinking` is only ever ended by the emotion the reply expresses, a
+   turn that produces none — a delegate the agent answers without an emotion
+   marker, a forward that never happens — used to leave the face and, through
+   `_thinking_cue_active`, every later LED restore stuck on the pulse until the
+   user spoke again. Two things end it now.
+
+   **The reply finishing is the end of the wait.** `_on_tts_speak_end`
+   (`hal/app_state.py`) clears `thinking` when TTS ends, gated on
+   `tts_service.realtime_feedback` — the flag only the agentic runtime's own
+   reply sets. Dead-air fillers, mumble and system notices leave it False, so
+   the TTS that plays *during* a wait (exactly what the cue flag exists to
+   survive) does not end the cue. This covers the common case at the right
+   moment: the face is correct the instant the device stops talking, whether or
+   not the agent bothered with an emotion marker.
+
+   **The watchdog is the net for turns that never speak.** `POST /emotion` arms
+   a last-resort timer whenever
+   the emotion is `thinking`: after `HAL_EMOTION_THINKING_RESET_S` (default
+   25 s, `0` disables) of *continuous* thinking it drops the cue flag, expresses
+   `idle`, and restores the user's LED state. Any other emotion cancels the
+   timer; a fresh `thinking` re-arms it. The window clears the longest real hold
+   measured on device (realtime replies clear in 0.4-8.6 s; a delegated
+   event-forwarded → assistant-turn-done runs 6-22 s), so it cannot blink idle
+   in the middle of a live turn.
 5. **Consume.** `for output in stream_output()`:
    - `TextOutput` → sentences are flushed to TTS (`speak` / `speak_queue`).
      If `speak` returns busy (another non-interruptible TTS holds the
@@ -619,8 +739,10 @@ is a top-level `config.json` flag:
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `HAL_REALTIME_ENABLED` | `true` | Master gate for the realtime pipeline |
-| `wakeword` | ROBOT.md `voice.wakeword` on a fresh config, else `false` | Top-level config-file wake-word gate. When true, a matching interim transcript is provisional only: HAL commits buffered audio to realtime or forwards a command only after an STT **final** result confirms the configured leading wake phrase. The supported prefixes are `hello`, `hey`, `hi`, `alo`, `okay`, `ok`, and `wake up`, applied to the permanent common alias (`hey autonomous`), device type (`hey lamp`), and current agent name (`hey Luna`). A runtime rename updates only the agent-name aliases. Bare names and other prefixes do not arm the gate. A rejected utterance is discarded and its transient listening LED restores to the normal resting state; it never leaves the persistent idle effect active. A confirmed turn opens the follow-up focus window; turns in that window are forwarded as `voice_followup` without another phrase. Every authorized turn dispatches to os-server: a spoken realtime reply becomes a silent `voice_agent_handled` sync event; unavailable, silent, failed, or delegated realtime follows the normal path. If realtime is disabled, the confirmed final transcript follows the normal os-server path. Missing/false preserves the pre-gate always-listening flow unchanged. On a config.json os-server creates, the initial value comes from the body's `voice.wakeword` (see Wake-word gate above); a config loaded without the key stays `false`. HAL restarts after a local Settings save or MQTT `wakeword.gate`. |
+| `wakeword` | ROBOT.md `voice.wakeword` on a fresh config, else `false` | Top-level config-file wake-word gate. When true, a matching interim transcript is provisional only: HAL commits buffered audio to realtime or forwards a command only after an STT **final** result confirms a configured wake phrase. The transcript is split into sentences (`.` `!` `?`) and the phrase is accepted at the start **or the end** of any sentence; mid-sentence occurrences are rejected. The confirmation re-checks the assembled, still-punctuated transcript so the `\w+`-only merge step cannot retract a gate a partial opened. The supported prefixes are `hello`, `hey`, `hi`, `alo`, `okay`, `ok`, and `wake up`, applied to the permanent common alias (`hey autonomous`), device type (`hey lamp`), and current agent name (`hey Luna`). A runtime rename updates only the agent-name aliases. Bare names and other prefixes do not arm the gate. A rejected utterance is discarded and its transient listening LED restores to the normal resting state; it never leaves the persistent idle effect active. A confirmed turn opens the follow-up focus window; turns in that window are forwarded as `voice_followup` without another phrase. Every authorized turn dispatches to os-server: a spoken realtime reply becomes a silent `voice_agent_handled` sync event; unavailable, silent, failed, or delegated realtime follows the normal path. If realtime is disabled, the confirmed final transcript follows the normal os-server path. Missing/false preserves the pre-gate always-listening flow unchanged. On a config.json os-server creates, the initial value comes from the body's `voice.wakeword` (see Wake-word gate above); a config loaded without the key stays `false`. HAL restarts after a local Settings save or MQTT `wakeword.gate`. |
 | `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `20` | Idle seconds for the short post-command focus window. Each accepted `voice_command` or `voice_followup` refreshes it. `0` disables follow-ups and requires a wake phrase for every mic session. Ignored when `wakeword` is false. |
+| `HAL_SILENCE_VAD_ENABLED` | `true` | Require Silero to confirm speech before the end-of-turn silence clock is refreshed. RMS remains the cheap pre-gate; set `false` to fall back to pure-RMS silence detection. |
+| `HAL_SILENCE_VAD_WINDOW_FRAMES` | `3` | Number of frames batched per Silero run for that check — Silero costs ~20 ms/frame on ARM and its LSTM needs more than one 64 ms frame to settle. |
 | `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `qwen` |
 | `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = manual activity detection) |
 | `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Max seconds `receive()` waits for the next output event before ending a silent turn (fallback to main agent) |

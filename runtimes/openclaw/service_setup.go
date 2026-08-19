@@ -523,13 +523,21 @@ func (s *OpenclawService) RefreshModelsConfig() error {
 	// here briefly) — consistent with syncPrimaryFromFile's order.
 	currentModel := s.config.LLMModelKey()
 
-	// Patch models.providers.autonomous — baseUrl + per-model reasoning.
+	// Patch models.providers.autonomous — apiKey + baseUrl + per-model reasoning.
+	// apiKey is patched because openclaw.json holds its OWN copy (separate from
+	// config.json's llm_api_key) — without this, a key rotation via the web UI
+	// would only land in config.json and openclaw would keep sending the OLD
+	// key to grid.autonomous.ai, getting 401 authentication_error on every turn.
 	currentBaseURL := s.config.LLMBaseURL
+	currentAPIKey := s.config.LLMAPIKey
 	if modelsMap, ok := configData["models"].(map[string]any); ok {
 		if providersMap, ok := modelsMap["providers"].(map[string]any); ok {
 			if providerEntry, ok := providersMap[customProviderName].(map[string]any); ok {
 				if currentBaseURL != "" {
 					providerEntry["baseUrl"] = currentBaseURL
+				}
+				if currentAPIKey != "" {
+					providerEntry["apiKey"] = currentAPIKey
 				}
 				if modelsList, ok := providerEntry["models"].([]any); ok {
 					for _, entry := range modelsList {

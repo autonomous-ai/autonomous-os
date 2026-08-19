@@ -24,6 +24,22 @@ const RUNTIME_BLURB: Record<string, string> = {
   opencode: "OpenCode — open-source coding agent behind the os-server bridge (WebSocket).",
 };
 
+// Display labels for the runtime dropdown / status pill. Values on the wire
+// stay lowercase (systemctl unit names / domain.AgentRuntime* constants); only
+// the human-facing string is title-cased. Unknown runtimes (any future addition
+// the API returns before this table is updated) fall back to capitalising the
+// first letter so the UI never shows raw lowercase.
+const RUNTIME_LABEL: Record<string, string> = {
+  openclaw: "OpenClaw",
+  hermes: "Hermes",
+  picoclaw: "PicoClaw",
+  codex: "Codex",
+  claudecode: "Claude Code",
+  opencode: "OpenCode",
+};
+const displayRuntime = (v: string): string =>
+  RUNTIME_LABEL[v] ?? (v ? v[0].toUpperCase() + v.slice(1) : v);
+
 const selectStyle = {
   width: "100%", boxSizing: "border-box" as const,
   background: C.surface, border: `1px solid ${C.border}`,
@@ -53,7 +69,7 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
   async function onSwitch() {
     if (selected === current || switching) return;
     if (!window.confirm(
-      `Switch agentic backend to "${selected}"?\n\n` +
+      `Switch agentic backend to "${displayRuntime(selected)}"?\n\n` +
       `This stops the other backend and restarts os-server — the device will ` +
       `be briefly unavailable while it reconnects.`,
     )) return;
@@ -75,7 +91,7 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
       // os-server may restart before the response lands; a dropped connection
       // here usually means the switch WAS accepted — the poll below finds out.
     }
-    toast.message(`Switching to ${target} — waiting for the device to confirm…`);
+    toast.message(`Switching to ${displayRuntime(target)} — waiting for the device to confirm…`);
 
     // config.agent_runtime is only persisted AFTER switch-runtime lands (a failed
     // switch rolls back and keeps the old value), so GET /device/agent-runtime is
@@ -97,15 +113,15 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
 
     if (landed) {
       setCurrent(target);
-      toast.success(`Switched to ${target} — backend is active.`);
+      toast.success(`Switched to ${displayRuntime(target)} — backend is active.`);
     } else {
       // Timed out: reflect whatever the device actually reports instead of the
       // optimistic value, so a rollback is visible without a page reload.
       if (lastSeen) { setCurrent(lastSeen); setSelected(lastSeen); }
       toast.error(
         lastSeen && lastSeen !== target
-          ? `Switch to ${target} not confirmed — device still reports "${lastSeen}" (likely failed and rolled back; check journalctl -u os-runtime-switch).`
-          : `Switch to ${target} not confirmed within 5 minutes — reload this page to re-check.`,
+          ? `Switch to ${displayRuntime(target)} not confirmed — device still reports "${displayRuntime(lastSeen)}" (likely failed and rolled back; check journalctl -u os-runtime-switch).`
+          : `Switch to ${displayRuntime(target)} not confirmed within 5 minutes — reload this page to re-check.`,
       );
     }
     setSwitching(false);
@@ -124,7 +140,7 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
 
           <div style={{ marginBottom: 6 }}>
             <label htmlFor="agent_runtime" style={labelStyle}>
-              Backend (active: <span style={{ color: C.amber }}>{current || "?"}</span>)
+              Backend (active: <span style={{ color: C.amber }}>{current ? displayRuntime(current) : "?"}</span>)
             </label>
             <select
               id="agent_runtime"
@@ -133,7 +149,7 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
               disabled={switching}
               style={selectStyle}
             >
-              {options.map((o) => <option key={o} value={o}>{o}</option>)}
+              {options.map((o) => <option key={o} value={o}>{displayRuntime(o)}</option>)}
             </select>
           </div>
 
@@ -157,7 +173,7 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
               transition: "all 0.15s",
             }}
           >
-            {switching ? "Switching…" : selected === current ? "Active" : `Switch to ${selected}`}
+            {switching ? "Switching…" : selected === current ? "Active" : `Switch to ${displayRuntime(selected)}`}
           </button>
         </>
       )}

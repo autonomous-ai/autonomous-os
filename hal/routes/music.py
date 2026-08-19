@@ -2,7 +2,6 @@
 
 import os
 import random
-import threading
 
 from fastapi import APIRouter, HTTPException
 
@@ -20,9 +19,8 @@ from hal.presets import (
     EMO_CURIOUS,
     EMO_EXCITED,
     EMO_HAPPY,
-    EMO_IDLE,
     EMO_SLEEPY,
-    EMOTION_PRESETS,
+    RGB_CMD_SOLID,
     SERVO_CMD_MUSIC_START,
     SERVO_CMD_MUSIC_STOP,
     SERVO_MUSIC_CHILL,
@@ -34,7 +32,6 @@ from hal.presets import (
     SERVO_MUSIC_ROCK,
     SERVO_MUSIC_WALTZ,
 )
-from hal.drivers.rgb.effects import run_effect as _run_effect
 
 router = APIRouter()
 
@@ -191,26 +188,21 @@ def _on_music_complete():
         if user_state is not None and user_state.get("type") != "off":
             state._restore_user_led()
         elif state.rgb_service:
-            state.logger.info("Music stop: no active user state -- falling back to idle breathing")
-            idle_preset = EMOTION_PRESETS[EMO_IDLE]
+            # No user state — settle on the ambient resting look, not on the
+            # `idle` preset: with AMBIENT_RESTING_LED black (default off) the
+            # end of a song must leave the strip dark, and starting a breathing
+            # thread on black would burn SPI writes for nothing. Same rule the
+            # other release paths follow (led.restore_led, _restore_user_led).
+            from hal.presets import AMBIENT_RESTING_LED, ambient_resting_is_dark
+
             try:
                 state._stop_current_effect()
-                state._effect_stop.clear()
-                state._effect_name = idle_preset["effect"]
-                state._effect_thread = threading.Thread(
-                    target=_run_effect,
-                    args=(
-                        idle_preset["effect"],
-                        tuple(idle_preset["color"]),
-                        idle_preset.get("speed", 0.3),
-                        None,
-                        state._effect_stop,
-                        state.rgb_service,
-                    ),
-                    daemon=True,
-                    name="led-music-idle",
-                )
-                state._effect_thread.start()
+                if ambient_resting_is_dark():
+                    state.rgb_service.dispatch(RGB_CMD_SOLID, (0, 0, 0))
+                    state.logger.info("Music stop: no user state -- resting dark, cleared")
+                else:
+                    state._start_preset_effect(AMBIENT_RESTING_LED, "led-music-idle")
+                    state.logger.info("Music stop: no user state -- ambient resting")
             except Exception as e:
                 state.logger.warning("Music stop LED failed: %s", e)
 

@@ -30,6 +30,32 @@ type AgentHandler struct {
 	// the window speaks; the rest are dropped. See deliverTTS.
 	lastLLMLimitTTS atomic.Int64
 
+	// speechWatermarkMs is the unix-ms mark left by the physical cancel
+	// gesture (single click → POST /api/agent/speech/cancel). Every reply
+	// belonging to a turn that was CREATED at or before this mark is dropped
+	// in deliverTTS instead of reaching the speaker — the turns themselves
+	// keep running (tools still fire, web chat and history still receive the
+	// text), they just lose the speaker. Turns created after the mark speak
+	// normally, which is what makes "click, then say something new" work
+	// while a backlog of older turns is still draining.
+	//
+	// A monotone watermark needs no clearing: a later click only moves it
+	// forward, and every new turn is on the far side of it. That is why this
+	// is a timestamp and not an is-suppressed flag — a flag cannot tell the
+	// backlog apart from the sentence the user just asked for.
+	speechWatermarkMs atomic.Int64
+
+	// runFirstSeenMs records when a runID was first observed by deliverTTS,
+	// for runIDs whose creation time cannot be read off the id itself.
+	// Device-issued ids carry it ("device-chat-7-1755600000000"); channel ids
+	// do not ("tg-<messageID>"). For those, first-speech time is the best
+	// available proxy for turn age: a Telegram turn already talking when the
+	// user clicked is backlog and gets muted, one whose first sentence lands
+	// after the click is genuinely new and speaks. Pruned by age in
+	// runCreatedAtMs so it cannot grow without bound.
+	runFirstSeenMu sync.Mutex
+	runFirstSeenMs map[string]int64
+
 	// assistantBuf accumulates assistant deltas per runId so we can send the
 	// full text to TTS when the agent turn ends (lifecycle "end").
 	//
@@ -213,6 +239,7 @@ func ProvideAgentHandler(gw domain.AgentGateway, bus *monitor.Bus, sled *statusl
 		agentLifecycleAt:     make(map[string]int64),
 		activeRunIDBySession: make(map[string]string),
 		errorRecoveredRuns:   make(map[string]time.Time),
+		runFirstSeenMs:       make(map[string]int64),
 	}
 }
 
