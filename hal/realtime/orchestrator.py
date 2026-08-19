@@ -1085,7 +1085,11 @@ class RealtimeOrchestrator:
         with look_debug.stage("send_image"):
             self._agent.send([ImageInput(image=frame)])
         self._looked_this_turn = True
-        self._last_look_sent_monotonic = now
+        # Stamp the SEND, not the call entry. `now` is taken before the aim, so
+        # a 3s aim made the guard below expire 3s early — the replay landed at
+        # 12.6s against a 10s window and re-aimed from scratch instead of
+        # reusing the frame (device trace 2026-08-19).
+        self._last_look_sent_monotonic = time.monotonic()
         # The replayed turn (frame + re-committed audio) inherits the same
         # risk of a long silent think over the frame; extend its watchdog too.
         # receive() clears the override when the replayed turn ends.

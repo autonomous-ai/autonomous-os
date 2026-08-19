@@ -869,6 +869,20 @@ LOOK_AIM_ENABLED: bool = (
 LOOK_AIM_DEADLINE_S: float = float(
     os.environ.get("HAL_LOOK_AIM_DEADLINE_S", "0.8")
 )
+# Horizontal field of view used ONLY to convert the subject's pixel offset into
+# degrees of yaw for the look-aim. Deliberately separate from
+# tracking/constants.py CAMERA_FOV_DEG (60.0), which the object tracker is tuned
+# around — correcting the shared constant would silently re-tune tracking too.
+#
+# 60 was a guess and it is roughly half the truth, which made every aim step
+# remove only ~46% of the error: device traces put the real lens at 107-123 deg
+# (2026-08-19, measured as head-degrees-moved per frame-fraction the subject
+# shifted). 100 is set slightly BELOW the measurement on purpose — the lens is a
+# fisheye, so the mapping is non-linear and compressed at the edges, and
+# undershooting converges monotonically while overshooting oscillates.
+LOOK_AIM_FOV_DEG: float = float(
+    os.environ.get("HAL_LOOK_AIM_FOV_DEG", "100.0")
+)
 # Where the remembered user bearing lives. NOT a boot sidecar: this must survive
 # reboots, unlike the mic/speaker/camera state in app_state.
 USER_BEARING_PATH: str = os.environ.get(

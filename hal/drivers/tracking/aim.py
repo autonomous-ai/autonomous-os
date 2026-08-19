@@ -139,8 +139,11 @@ class AimResult:
 
 
 # How long after a servo write a frame is trusted to show the new pose.
-# Mirrors capture_still's settle: the arm is still ringing before this.
-FRAME_SETTLE_S: float = 0.25
+# Mirrors capture_still's settle: the arm is still ringing before this. 0.25 was
+# too short — a trace showed a +15.3 deg command reading back as +9.78 deg
+# because the pose was sampled mid-flight, and the next step then corrected from
+# an offset the head was still travelling through.
+FRAME_SETTLE_S: float = 0.35
 # Cap on waiting for that fresh frame — better a slightly stale measurement
 # than a stalled aim.
 FRAME_WAIT_S: float = 0.6
@@ -430,7 +433,6 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
     because dead air is worse than an imperfectly framed frame.
     """
     import hal.app_state as state
-    from hal.drivers.tracking import constants as C
 
     _abort_evt.clear()
     t_end = time.monotonic() + max(0.0, deadline_s)
@@ -531,7 +533,7 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
 
             # Yaw sign per the tracker's verified convention: dx>0 (subject right of
             # centre) -> base_yaw INCREASES. Do not flip this without device evidence.
-            yaw_deg = AIM_GAIN * dx * (C.CAMERA_FOV_DEG / w_fr)
+            yaw_deg = AIM_GAIN * dx * (config.LOOK_AIM_FOV_DEG / w_fr)
 
             try:
                 with look_debug.stage("aim.move"):

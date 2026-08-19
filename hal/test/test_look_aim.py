@@ -461,3 +461,81 @@ def test_camera_consumer_held_once_for_the_whole_aim():
     _, _, cap = _run_stale((520, 200, 600, 400))
     assert cap.max_consumers == 1, "consumer should be held once, not per grab"
     assert cap.consumers == 0, "consumer leaked"
+
+
+# --- Closed-loop convergence -------------------------------------------------
+# The fakes above hold the subject still, so they measure the decision but not
+# whether the loop actually lands. These simulate a camera and servo that agree:
+# the subject's pixel offset responds to the head's real yaw, which is what makes
+# the FOV calibration observable.
+
+_REAL_FOV_DEG = 110.0  # device-measured (107-123); the aim's constant is a guess
+
+
+class _FreshCap(_FakeCap):
+    """Always offers a frame newer than any servo write."""
+
+    @property
+    def last_frame_ts(self):
+        import time as _t
+
+        return _t.monotonic() + 1000.0
+
+
+def _sim_detector(svc, subject_bearing_deg, width=640):
+    """Detector that reports where the subject falls given the CURRENT head yaw."""
+
+    def _detect(frame, target, strict=True):
+        if target != "person":
+            return None
+        rel = subject_bearing_deg - svc.yaw  # degrees off the optical axis
+        px = width / 2.0 + rel * (width / _REAL_FOV_DEG)
+        if not (0 <= px < width):
+            return None  # subject left the frame
+        # (x, y, w, h) top-left, matching ObjectDetector — NOT corners.
+        return (int(px) - 20, 200, 40, 200)
+
+    d = mock.Mock()
+    d.detect = mock.Mock(side_effect=_detect)
+    return d
+
+
+def _run_closed_loop(subject_bearing_deg, fov_setting):
+    import hal.config as hal_cfg
+
+    svc = _FakeSvc()
+    with (
+        mock.patch.object(state, "camera_capture", _FreshCap(_frame())),
+        mock.patch.object(state, "animation_service", svc),
+        mock.patch.object(state, "safety_policy", None),
+        mock.patch.object(state, "_camera_disabled", False, create=True),
+        mock.patch.object(hal_cfg, "LOOK_AIM_FOV_DEG", fov_setting),
+        mock.patch("hal.drivers.tracking.user_bearing.read_estimate", return_value=None),
+        mock.patch("hal.drivers.tracking.aim._record_bearing_if_centred"),
+    ):
+        res = aim.aim_for_look(30.0, detector=_sim_detector(svc, subject_bearing_deg))
+    return res, svc
+
+
+def test_calibrated_fov_centres_within_two_iterations():
+    """With the FOV close to the truth the aim lands almost immediately —
+    this is what keeps it inside LOOK_AIM_DEADLINE_S on device."""
+    res, svc = _run_closed_loop(30.0, 100.0)
+    assert res.aimed, f"did not centre: {res.reason}"
+    assert res.iterations <= 2, f"took {res.iterations} iterations"
+    assert abs(svc.yaw - 30.0) < 8.0, f"settled at {svc.yaw:+.1f} deg, subject at +30"
+
+
+def test_undercalibrated_fov_is_what_made_it_slow():
+    """The 60 deg guess needs far more steps for the same subject — the
+    regression this constant exists to prevent. Undershoot, never overshoot."""
+    res_bad, _ = _run_closed_loop(30.0, 60.0)
+    res_good, _ = _run_closed_loop(30.0, 100.0)
+    assert res_bad.iterations > res_good.iterations
+
+
+def test_aim_never_overshoots_past_the_subject():
+    """Overshoot oscillates and never settles; undershoot always converges.
+    Every step must move toward the subject and stop short of crossing it."""
+    _, svc = _run_closed_loop(30.0, 100.0)
+    assert svc.yaw <= 30.0 + 1e-6, f"crossed the subject: {svc.yaw:+.1f} > +30"
