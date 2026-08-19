@@ -244,6 +244,13 @@ _user_led_state: Optional[dict] = None
 _restore_timer: Optional[threading.Timer] = None
 _sleeping: bool = False
 _current_emotion: Optional[str] = None
+# True while the realtime turn is showing its `thinking` cue. A dead-air
+# filler is TTS, so it stops the pulse and _restore_user_led would settle on
+# the user state — leaving the rest of the wait (often the longest part, the
+# reason the filler fired at all) with no visual at all. While this is set,
+# restore repaints the cue instead. Cleared by the same code that clears the
+# cue (hal/drivers/voice/_internal/realtime_turn.py).
+_thinking_cue_active: bool = False
 # Fires release_servos after sleepy stays active continuously. Cancelled
 # the moment the emotion changes away from sleepy (see routes/emotion.py).
 _sleepy_release_timer: Optional[threading.Timer] = None
@@ -909,6 +916,13 @@ def _restore_user_led():
     if _mic_muted_led_owns_strip():
         logger.info("LED restore: mic muted -- settling on privacy indicator")
         _start_mic_muted_effect()
+        return
+
+    # A realtime turn still waiting on the model owns the strip: repaint the
+    # thinking cue the filler's speaking_wave just overwrote.
+    if _thinking_cue_active:
+        logger.info("LED restore: realtime thinking cue still active -- repainting")
+        _apply_emotion_led_display(EMO_THINKING, 0.7, force_led=True)
         return
 
     state = _user_led_state

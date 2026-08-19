@@ -15,6 +15,7 @@ from hal.presets import (
     EMO_SHOCK,
     EMO_SLEEPY,
     EMO_STRETCHING,
+    EMO_THINKING,
     LST_OFF,
     SERVO_CMD_PLAY,
     SERVO_IDLE,
@@ -111,6 +112,10 @@ def express_emotion(req: EmotionRequest):
     was_sleeping = state._sleeping
     state._sleeping = req.emotion == EMO_SLEEPY
     state._current_emotion = req.emotion
+    # Any other emotion supersedes the realtime thinking cue — drop its claim
+    # so an LED restore never repaints thinking over what was just expressed.
+    if req.emotion != EMO_THINKING:
+        state._thinking_cue_active = False
     if was_sleeping and not state._sleeping:
         state._wake_sleepy_peripherals()
 

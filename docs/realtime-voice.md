@@ -540,6 +540,13 @@ turn ("hello") right after a restart would leak to the main agent.
    cuts it off; every exit path (reply, delegate, empty turn, exception)
    cancels the timer, and delegate cancels explicitly because the main-agent
    hop that follows fires its own filler. `0` disables.
+
+   Speaking the filler is TTS, so it stops the thinking pulse and runs the
+   speaking wave. To keep the rest of the wait visible, the cue marks the
+   strip as its own (`app_state._thinking_cue_active`): the LED restore that
+   follows TTS repaints the thinking pulse instead of settling on the user
+   state. The flag is dropped when the cue clears and by any other emotion
+   coming through `POST /emotion`, so an expressed emotion is never stomped.
 5. **Consume.** `for output in stream_output()`:
    - `TextOutput` → sentences are flushed to TTS (`speak` / `speak_queue`).
      If `speak` returns busy (another non-interruptible TTS holds the

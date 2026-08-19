@@ -517,6 +517,13 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
    (trả lời, delegate, turn rỗng, exception) đều cancel timer, riêng delegate
    cancel tường minh vì chặng main agent ngay sau đó tự bắn filler của nó. `0`
    để tắt.
+
+   Phát filler là TTS, nên nó dừng pulse thinking và chạy speaking wave. Để
+   phần chờ còn lại vẫn có tín hiệu, cue đánh dấu strip là của mình
+   (`app_state._thinking_cue_active`): lần restore LED sau TTS vẽ lại pulse
+   thinking thay vì rơi về user state. Cờ được bỏ khi cue clear và khi có bất
+   kỳ emotion nào khác vào qua `POST /emotion`, nên emotion model tự express
+   không bị đè.
 5. **Tiêu thụ.** `for output in stream_output()`:
    - `TextOutput` → các câu được flush sang TTS (`speak` / `speak_queue`).
      Nếu `speak` báo busy (TTS khác đang giữ loa non-interruptible, ví dụ

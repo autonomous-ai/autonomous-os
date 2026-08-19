@@ -61,6 +61,7 @@ def _thinking_cue_start() -> None:
         # whenever the user has a saved color (guard against per-message hook
         # spam). This cue is deliberate and always cleared — force the pulse so
         # the wait is visible. User-LED-off still wins inside.
+        hal_app_state._thinking_cue_active = True
         hal_app_state._apply_emotion_led_display(
             presets.EMO_THINKING, 0.7, force_led=True
         )
@@ -124,6 +125,10 @@ def _thinking_cue_clear() -> None:
     ONLY if the face still shows our `thinking`, so an emotion the model
     expressed via the express_emotion tool is never stomped."""
     try:
+        # Drop the cue's claim on the strip first: every exit path calls this,
+        # so the flag can never outlive the turn even when the guard below
+        # returns early (model expressed its own emotion mid-turn).
+        hal_app_state._thinking_cue_active = False
         if hal_app_state._current_emotion != presets.EMO_THINKING:
             return
         from hal.models import EmotionRequest
