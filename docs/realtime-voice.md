@@ -209,7 +209,11 @@ Trade-offs:
 
 When the user asks about what the device **sees** ("what is this?", "what am I
 holding?", "read this label", "what colour is this?"), the realtime model answers
-in-session instead of delegating. The orchestrator registers a `look` tool
+in-session instead of delegating. This only applies to turns that are **purely**
+a question about what it sees: if the same turn also contains an action ("turn
+to the right, hold it there, and tell me what you see"), the prompt requires a
+single `delegate_to_main` covering both halves — no `look` — so the movement is
+never silently dropped. The orchestrator registers a `look` tool
 (`orchestrator.py`, `LOOK_TOOL`) and handles the call in `_handle_look_call`:
 
 1. Grab a **sharp** camera frame **in-process** (`_capture_frame` calls
