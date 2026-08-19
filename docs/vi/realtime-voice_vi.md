@@ -552,6 +552,23 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
    thinking thay vì rơi về user state. Cờ được bỏ khi cue clear và khi có bất
    kỳ emotion nào khác vào qua `POST /emotion`, nên emotion model tự express
    không bị đè.
+
+   Turn **delegate** cố ý giữ cue — chặng main-agent phía sau mới là phần chờ
+   dài, và hook của nó cũng tự bắn `thinking` lại. Turn ném exception thì KHÔNG
+   phải bàn giao đó (không còn gì trong HAL đang lái mặt), nên nhánh exception
+   clear cue trước khi rơi xuống forward sang OS server.
+
+   Vì `thinking` chỉ bị kết thúc bởi chính emotion mà câu trả lời express, một
+   turn không sinh ra emotion nào — delegate mà agent trả lời không kèm marker,
+   forward không bao giờ xảy ra — từng để mặt (và qua `_thinking_cue_active`,
+   mọi lần restore LED sau đó) kẹt ở pulse cho tới khi user nói tiếp. Vì vậy
+   `POST /emotion` arm một timer chặn cuối mỗi khi emotion là `thinking`: sau
+   `HAL_EMOTION_THINKING_RESET_S` (mặc định 25s, `0` = tắt) thinking LIÊN TỤC,
+   nó bỏ cờ cue, express `idle` và restore LED user state. Bất kỳ emotion nào
+   khác huỷ timer; một `thinking` mới arm lại. Cửa sổ này lớn hơn khoảng giữ
+   thật dài nhất đo trên máy (realtime clear trong 0.4-8.6s; delegate
+   event-forwarded → assistant-turn-done chạy 6-22s), nên không thể nháy idle
+   giữa lúc turn còn sống.
 5. **Tiêu thụ.** `for output in stream_output()`:
    - `TextOutput` → các câu được flush sang TTS (`speak` / `speak_queue`).
      Nếu `speak` báo busy (TTS khác đang giữ loa non-interruptible, ví dụ

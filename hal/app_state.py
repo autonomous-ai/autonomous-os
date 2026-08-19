@@ -258,6 +258,10 @@ _sleepy_release_timer: Optional[threading.Timer] = None
 # animation loop, so the body never stays frozen once the moment has passed.
 # Cancelled on every /emotion (see routes/emotion.py).
 _still_idle_timer: Optional[threading.Timer] = None
+# Fires idle after `thinking` has been held continuously for too long — the
+# last-resort net for a turn that never produced the emotion that would have
+# replaced it. Cancelled/re-armed on every /emotion (see routes/emotion.py).
+_thinking_reset_timer: Optional[threading.Timer] = None
 # Set once sleepy has released torque. Servo routes honor this lock until a
 # wake emotion explicitly resumes the motion service.
 _sleep_servo_released = False

@@ -574,6 +574,25 @@ turn ("hello") right after a restart would leak to the main agent.
    follows TTS repaints the thinking pulse instead of settling on the user
    state. The flag is dropped when the cue clears and by any other emotion
    coming through `POST /emotion`, so an expressed emotion is never stomped.
+
+   A **delegated** turn keeps the cue on purpose — the main-agent hop that
+   follows is the longer wait, and its own hook re-fires `thinking` anyway. A
+   turn that raises does *not* count as that handover (nothing in HAL is still
+   driving the face), so the exception path clears the cue before falling
+   through to the OS server.
+
+   Because `thinking` is only ever ended by the emotion the reply expresses, a
+   turn that produces none — a delegate the agent answers without an emotion
+   marker, a forward that never happens — used to leave the face and, through
+   `_thinking_cue_active`, every later LED restore stuck on the pulse until the
+   user spoke again. `POST /emotion` therefore arms a last-resort timer whenever
+   the emotion is `thinking`: after `HAL_EMOTION_THINKING_RESET_S` (default
+   25 s, `0` disables) of *continuous* thinking it drops the cue flag, expresses
+   `idle`, and restores the user's LED state. Any other emotion cancels the
+   timer; a fresh `thinking` re-arms it. The window clears the longest real hold
+   measured on device (realtime replies clear in 0.4-8.6 s; a delegated
+   event-forwarded → assistant-turn-done runs 6-22 s), so it cannot blink idle
+   in the middle of a live turn.
 5. **Consume.** `for output in stream_output()`:
    - `TextOutput` → sentences are flushed to TTS (`speak` / `speak_queue`).
      If `speak` returns busy (another non-interruptible TTS holds the

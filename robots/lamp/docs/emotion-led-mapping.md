@@ -90,6 +90,7 @@ Two guards go with it:
 
 - **Music is exempt**: while music plays the groove matters more, and a listening cue must not stop the dancing.
 - **Auto-resume idle after 10s** (`STILL_IDLE_RESUME_SECONDS` in `hal/routes/emotion.py`): if the turn produces no emotion at all (LLM error, silence after the first partial), the body returns to idle instead of freezing mid-pose. Any `POST /emotion` cancels this timer. The 8s safety net in `voice_service` only clears the LED and never touches the servo — so this timer is the only thing looking after the body.
+- **Auto-reset thinking after 25s** (`HAL_EMOTION_THINKING_RESET_S`, `0` disables): `thinking` is the one face nothing clears on its own — it is set at the start of a wait and replaced by whatever the reply expresses, so a turn that dies before expressing one (realtime exception, a delegate the agent answers without an emotion marker) leaves it burning with no user input to break it out. After that many seconds of *continuous* thinking the route drops `_thinking_cue_active`, expresses `idle` and restores the user's LED state. Any other emotion cancels; a fresh `thinking` re-arms. The window is measured, not guessed: on device, realtime replies clear the cue in 0.4-8.6s and a delegated turn runs 6-22s end to end.
 
 Measured on lamp-0c89: after `listening`, all 5 servo angles held at T+2s / T+5s / T+8s, and idle resumed around T+13s; a `happy` sent mid-halt played normally.
 

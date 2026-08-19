@@ -560,6 +560,13 @@ def run_realtime_turn(
                 except Exception:
                     pass
                 native_started = False
+            # The cue is normally handed over to the delegate path (the main
+            # agent's wait is longer, and its own hook re-fires thinking on the
+            # forwarded turn). A crashed turn is not that handover: nothing in
+            # this process is still driving the face, so hand it back to the
+            # user's state instead of leaving the pulse claimed. If the forward
+            # below does reach the agent, the hook paints thinking again.
+            _thinking_cue_clear()
             delegated = True  # fall through to OS server on error
         finally:
             # Covers every exit — reply spoken, delegate, empty turn, exception.
