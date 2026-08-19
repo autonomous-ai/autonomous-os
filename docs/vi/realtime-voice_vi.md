@@ -561,8 +561,19 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
    Vì `thinking` chỉ bị kết thúc bởi chính emotion mà câu trả lời express, một
    turn không sinh ra emotion nào — delegate mà agent trả lời không kèm marker,
    forward không bao giờ xảy ra — từng để mặt (và qua `_thinking_cue_active`,
-   mọi lần restore LED sau đó) kẹt ở pulse cho tới khi user nói tiếp. Vì vậy
-   `POST /emotion` arm một timer chặn cuối mỗi khi emotion là `thinking`: sau
+   mọi lần restore LED sau đó) kẹt ở pulse cho tới khi user nói tiếp. Giờ có hai
+   thứ kết thúc nó.
+
+   **Câu trả lời nói xong = hết chờ.** `_on_tts_speak_end` (`hal/app_state.py`)
+   clear `thinking` khi TTS kết thúc, có gate `tts_service.realtime_feedback` —
+   cờ chỉ do chính reply của agentic runtime set. Dead-air filler, mumble,
+   system notice để False, nên TTS phát *trong lúc* chờ (đúng thứ mà cờ cue sinh
+   ra để sống sót qua) không kết thúc cue. Đây là ca phổ biến và được xử đúng
+   thời điểm: mặt đúng ngay khi máy ngừng nói, bất kể agent có nhả marker hay
+   không.
+
+   **Watchdog là lưới cho turn không hề nói.** `POST /emotion` arm một timer
+   chặn cuối mỗi khi emotion là `thinking`: sau
    `HAL_EMOTION_THINKING_RESET_S` (mặc định 25s, `0` = tắt) thinking LIÊN TỤC,
    nó bỏ cờ cue, express `idle` và restore LED user state. Bất kỳ emotion nào
    khác huỷ timer; một `thinking` mới arm lại. Cửa sổ này lớn hơn khoảng giữ

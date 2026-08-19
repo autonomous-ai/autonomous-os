@@ -1072,6 +1072,41 @@ def _on_tts_speak_start():
     _effect_thread.start()
 
 
+def _clear_thinking_after_reply():
+    """End the `thinking` face when the reply that answered it finishes speaking.
+
+    `thinking` is set at the start of a wait and has no natural end: only the
+    emotion the reply expresses replaces it. A turn whose reply carries no
+    emotion marker — common for delegated turns answered by the main agent —
+    therefore leaves the face (and, through `_thinking_cue_active`, every later
+    LED restore) on the pulse long after the device finished talking. Speaking
+    the reply IS the end of the wait, so use it as the signal.
+
+    Only genuine agent replies count: `realtime_feedback` is set exclusively by
+    the runtime's own output, so dead-air fillers, mumble and system notices —
+    the TTS that plays *during* the wait, which the cue exists to survive — are
+    skipped. The caller restores the user LED state right after, and dropping
+    the flag first is what lets that restore settle instead of repainting the
+    pulse.
+    """
+    global _thinking_cue_active
+
+    if _current_emotion != EMO_THINKING:
+        return
+    if not (tts_service and getattr(tts_service, "realtime_feedback", False)):
+        return
+
+    logger.info("TTS end: agent reply finished -- clearing thinking face")
+    _thinking_cue_active = False
+    try:
+        from hal.models import EmotionRequest
+        from hal.routes.emotion import express_emotion
+
+        express_emotion(EmotionRequest(emotion=EMO_IDLE))
+    except Exception as e:
+        logger.warning("Thinking clear after reply failed: %s", e)
+
+
 def _on_tts_speak_end():
     """Called by TTSService when TTS playback finishes or is interrupted."""
     global _tts_speaking
@@ -1080,6 +1115,8 @@ def _on_tts_speak_end():
 
     _tts_speaking = False
     logger.info("TTS speaking LED end: stopping effect and restoring")
+
+    _clear_thinking_after_reply()
 
     _stop_current_effect()
 

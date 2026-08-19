@@ -585,7 +585,19 @@ turn ("hello") right after a restart would leak to the main agent.
    turn that produces none — a delegate the agent answers without an emotion
    marker, a forward that never happens — used to leave the face and, through
    `_thinking_cue_active`, every later LED restore stuck on the pulse until the
-   user spoke again. `POST /emotion` therefore arms a last-resort timer whenever
+   user spoke again. Two things end it now.
+
+   **The reply finishing is the end of the wait.** `_on_tts_speak_end`
+   (`hal/app_state.py`) clears `thinking` when TTS ends, gated on
+   `tts_service.realtime_feedback` — the flag only the agentic runtime's own
+   reply sets. Dead-air fillers, mumble and system notices leave it False, so
+   the TTS that plays *during* a wait (exactly what the cue flag exists to
+   survive) does not end the cue. This covers the common case at the right
+   moment: the face is correct the instant the device stops talking, whether or
+   not the agent bothered with an emotion marker.
+
+   **The watchdog is the net for turns that never speak.** `POST /emotion` arms
+   a last-resort timer whenever
    the emotion is `thinking`: after `HAL_EMOTION_THINKING_RESET_S` (default
    25 s, `0` disables) of *continuous* thinking it drops the cue flag, expresses
    `idle`, and restores the user's LED state. Any other emotion cancels the
