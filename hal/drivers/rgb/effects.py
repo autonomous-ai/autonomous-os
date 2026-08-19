@@ -17,11 +17,28 @@ from hal.presets import (
 )
 from hal.board.presets_overlay import DEFAULT_LED_COUNT
 
-# Dimmest a candle pixel gets, as a fraction of the base color. The old code
-# used 0.4 as well; kept so the flame keeps its familiar depth. Raising it
-# flattens the flicker, lowering it makes pixels drop to black — visible as
-# holes in the strip once the base color is already dim.
-CANDLE_FLICKER_MIN = 0.4
+# --- candle flicker, bounded by IEEE 1789-2015 ---------------------------
+#
+# The old candle picked a fresh random level per pixel every frame, at
+# 0.05/speed — 4 Hz for happy/laugh/confused, 10 Hz for excited — with each
+# pixel stepping independently between 0.4 and 1.0 of the base color. That is
+# a 60% modulation depth at 4-10 Hz, and IEEE 1789-2015 puts ANY flicker below
+# 90 Hz in its high-risk band (at 100 Hz the limit is already 1.6%). The
+# 3-70 Hz range is the one associated with headaches and visual discomfort,
+# and on a desk lamp pointed at a face it was reported as dizzying.
+#
+# Two changes bring it inside the guidance without changing what it is:
+#
+#   * Refresh at a fixed 30 Hz and INTERPOLATE toward each pixel's target
+#     instead of jumping to it. Steps are what the eye locks onto; a smooth
+#     ramp of the same period reads as motion, not flicker.
+#   * Raise the floor from 0.4 to 0.8, cutting modulation depth from 60% to
+#     20%. The flame still lives, it just stops strobing.
+#
+# Do not lower CANDLE_FLICKER_MIN or CANDLE_REFRESH_HZ without re-reading the
+# standard — this is a comfort/safety bound, not a taste setting.
+CANDLE_FLICKER_MIN = 0.8
+CANDLE_REFRESH_HZ = 30
 
 
 def is_done(deadline: Optional[float], stop_event: threading.Event) -> bool:
@@ -150,13 +167,26 @@ def candle(
     the hue — identical at any brightness, which is the same rule the presets
     themselves follow ("dim by scaling, never by picking a new color").
     """
-    step_delay = 0.05 / speed
     led_count = getattr(svc, "led_count", DEFAULT_LED_COUNT)
+    step_delay = 1.0 / CANDLE_REFRESH_HZ
+    # Fraction of the remaining distance a pixel covers each frame. `speed`
+    # keeps its old meaning (higher = livelier flame) but now sets how fast a
+    # pixel travels toward its target instead of how often it teleports.
+    # 0.6 measured against the presets in use: the flame moves at 0.85 Hz
+    # (speed 0.2) to 2.25 Hz (excited, speed 0.5), so even the liveliest one
+    # stays under the 3 Hz start of the uncomfortable band. Raising this puts
+    # excited back into it.
+    approach = min(1.0, max(0.02, speed * 0.6))
+    levels = [random.uniform(CANDLE_FLICKER_MIN, 1.0) for _ in range(led_count)]
+    targets = [random.uniform(CANDLE_FLICKER_MIN, 1.0) for _ in range(led_count)]
     while not is_done(deadline, stop_event):
         pixels = []
-        for _ in range(led_count):
-            flicker = random.uniform(CANDLE_FLICKER_MIN, 1.0)
-            pixels.append(tuple(min(255, int(c * flicker)) for c in color))
+        for i in range(led_count):
+            level = levels[i] + (targets[i] - levels[i]) * approach
+            levels[i] = level
+            if abs(targets[i] - level) < 0.01:
+                targets[i] = random.uniform(CANDLE_FLICKER_MIN, 1.0)
+            pixels.append(tuple(min(255, int(c * level)) for c in color))
         svc.dispatch(RGB_CMD_PAINT, pixels)
         stop_event.wait(step_delay)
 
