@@ -383,3 +383,81 @@ def test_a_failing_detector_does_not_wedge_the_aim():
                     side_effect=RuntimeError("model missing")):
         assert aim.get_detector() is None
     aim._shared_detector = None
+
+
+class _StaleCap(_FakeCap):
+    """A camera whose frame timestamp does not advance after a servo write.
+
+    This is the device failure, reproduced: `last_frame` kept returning the
+    pre-move image, so every iteration measured the same offset and re-issued
+    the same correction. On green-lamp that marched the head 61 deg across six
+    steps with dx frozen at 0.241, and the lamp ended up aimed at a wall.
+    """
+
+    def __init__(self, frame):
+        super().__init__(frame)
+        self.last_frame_ts = 100.0  # frozen: never advances
+        self.consumers = 0
+        self.max_consumers = 0
+
+    def acquire_consumer(self):
+        self.consumers += 1
+        self.max_consumers = max(self.max_consumers, self.consumers)
+
+    def release_consumer(self):
+        self.consumers -= 1
+
+
+class _StampingSvc(_FakeSvc):
+    """Servo that stamps `last_servo_write`, as the real AnimationService does."""
+
+    def __init__(self):
+        super().__init__()
+        self.last_servo_write = 100.0
+
+    def _nudge(self, yaw, pitch, duration, current, policy):
+        self.last_servo_write += 1.0  # every write is newer than any held frame
+        return super()._nudge(yaw, pitch, duration, current, policy)
+
+
+def _run_stale(box, deadline=1.0):
+    frame = _frame()
+    cap = _StaleCap(frame)
+    svc = _StampingSvc()
+    with (
+        mock.patch.object(state, "camera_capture", cap),
+        mock.patch.object(state, "animation_service", svc),
+        mock.patch.object(state, "safety_policy", None),
+        mock.patch.object(state, "_camera_disabled", False, create=True),
+        mock.patch("hal.drivers.tracking.user_bearing.read_estimate", return_value=None),
+        mock.patch.object(aim, "FRAME_WAIT_S", 0.05),  # keep the test fast
+    ):
+        res = aim.aim_for_look(deadline, detector=_detector(box))
+    return res, svc, cap
+
+
+def test_stale_frames_do_not_march_the_head():
+    """With feedback frozen, the aim must not keep issuing the same correction.
+
+    Bounding total travel is the assertion that matters: the old loop moved
+    ~12 deg per iteration forever because it never saw the result of its own
+    move.
+    """
+    # One command per fresh measurement is the invariant; total travel depends
+    # on how far off-centre the subject is, so counting corrections is the
+    # assertion that actually encodes the rule.
+    res, svc, _ = _run_stale((520, 200, 600, 400))
+    assert svc.nudge.call_count == 1, (
+        f"issued {svc.nudge.call_count} corrections from one measurement "
+        f"(head travelled {svc.yaw:+.1f} deg)"
+    )
+    assert res.reason == "no fresh frame"
+
+
+def test_camera_consumer_held_once_for_the_whole_aim():
+    """Acquire/release per frame let the device drop below full FPS between
+    iterations — which is why a fresh frame never arrived."""
+    _run_stale((520, 200, 600, 400))
+    _, _, cap = _run_stale((520, 200, 600, 400))
+    assert cap.max_consumers == 1, "consumer should be held once, not per grab"
+    assert cap.consumers == 0, "consumer leaked"

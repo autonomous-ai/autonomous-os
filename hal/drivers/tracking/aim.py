@@ -137,19 +137,99 @@ class AimResult:
     steps: list = field(default_factory=list)
 
 
-def _grab_frame(cap: Any) -> Optional[Any]:
-    """Latest camera frame, cheaply. NOT capture_still: that freezes the servos
-    and waits for the arm to settle, which is right for the shutter but wrong
-    inside a control loop that is deliberately moving the arm."""
+# How long after a servo write a frame is trusted to show the new pose.
+# Mirrors capture_still's settle: the arm is still ringing before this.
+FRAME_SETTLE_S: float = 0.25
+# Cap on waiting for that fresh frame — better a slightly stale measurement
+# than a stalled aim.
+FRAME_WAIT_S: float = 0.6
+
+
+def _grab_frame(cap: Any, svc: Any = None, require_fresh: bool = False) -> Optional[Any]:
+    """A frame captured AFTER the last servo write, not just the newest one held.
+
+    This must wait. Reading `last_frame` immediately after commanding a move
+    returns the PRE-move image, so the next correction is computed from a pose
+    the head has already left — the loop then re-issues the same correction and
+    marches the head across the room while `dx` never changes (observed on
+    device: six identical +12.3 deg steps, dx frozen at 0.241, 61 deg travelled).
+
+    Caller must hold the consumer (see `_camera_consumer`) — without one the
+    device does not capture at full FPS and a fresh frame may never arrive.
+    """
     try:
-        cap.acquire_consumer()
-        try:
-            return cap.last_frame
-        finally:
-            cap.release_consumer()
+        # isinstance guards, not truthiness: a test double's attribute is a Mock,
+        # which is truthy but not a number, and the arithmetic below would then
+        # raise into the except and silently report "no frame".
+        quiet_from = 0.0
+        last_write = getattr(svc, "last_servo_write", 0.0) if svc is not None else 0.0
+        if isinstance(last_write, (int, float)) and last_write > 0:
+            quiet_from = float(last_write) + FRAME_SETTLE_S
+        deadline = time.monotonic() + FRAME_WAIT_S
+        while time.monotonic() < deadline:
+            ts = getattr(cap, "last_frame_ts", 0.0)
+            if not isinstance(ts, (int, float)):
+                ts = 0.0
+            if ts >= quiet_from:
+                frame = cap.last_frame
+                if frame is not None:
+                    return frame
+            time.sleep(0.03)
+        if require_fresh:
+            # Deliberately no best-effort fallback here. Correcting again from a
+            # frame the head has already moved past is what marched it across
+            # the room; with no new evidence the right move is no move.
+            return None
+        return cap.last_frame  # first measurement: nothing has moved yet
     except Exception as e:  # camera races are not worth failing the capture over
         logger.debug("[look-aim] frame grab failed: %s", e)
         return None
+
+
+def prewarm() -> None:
+    """Build the detector AND run one throwaway inference, off the critical path.
+
+    Constructing the detector is cheap (~400ms); the FIRST detect() is not — the
+    model loads and compiles lazily inside it. On device that cost a 6.0s first
+    aim that blew its own 2.5s deadline and captured uncentred, while every
+    later iteration ran ~0.4s. Paying it once at startup makes the first real
+    look as fast as the rest.
+    """
+    try:
+        import numpy as np
+
+        t0 = time.monotonic()
+        det = get_detector()
+        blank = np.zeros((480, 640, 3), dtype=np.uint8)
+        det.detect(blank, "person", strict=False)
+        logger.info("[look-aim] detector prewarmed in %.0fms", (time.monotonic() - t0) * 1000.0)
+    except Exception as e:
+        # Never fatal: a cold detector only costs latency on the first look.
+        logger.debug("[look-aim] prewarm skipped: %s", e)
+
+
+@contextlib.contextmanager
+def _camera_consumer(cap: Any):
+    """Hold the camera at full FPS for the whole aim.
+
+    Acquiring and releasing per frame let the device drop back to reduced
+    capture between iterations, so `last_frame` went stale exactly when the loop
+    needed it fresh.
+    """
+    held = False
+    try:
+        cap.acquire_consumer()
+        held = True
+    except Exception as e:
+        logger.debug("[look-aim] consumer acquire failed: %s", e)
+    try:
+        yield
+    finally:
+        if held:
+            try:
+                cap.release_consumer()
+            except Exception:
+                pass
 
 
 def _detect_subject(detector: Any, frame: Any) -> Tuple[Optional[Tuple[int, int, int, int]], str]:
@@ -383,81 +463,87 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
             start_yaw, _yaw_of(svc), bearing_consulted, steps,
         )
 
-    while iterations < MAX_ITERATIONS:
-        if _abort_evt.is_set():
-            return _result(False, "aborted")
-        if time.monotonic() >= t_end:
-            return _result(False, "deadline")
+    with _camera_consumer(cap):
+        while iterations < MAX_ITERATIONS:
+            if _abort_evt.is_set():
+                return _result(False, "aborted")
+            if time.monotonic() >= t_end:
+                return _result(False, "deadline")
 
-        frame = _grab_frame(cap)
-        if frame is None:
-            return _result(False, "no frame")
+            frame = _grab_frame(cap, svc, require_fresh=iterations > 0)
+            if frame is None:
+                if iterations > 0:
+                    # Aim on what we have rather than steering blind.
+                    return _result(
+                        abs(last_dx_frac or 1.0) <= CENTRE_DEADBAND_FRAC, "no fresh frame"
+                    )
+                return _result(False, "no frame")
 
-        box, kind = _detect_subject(detector, frame)
-        if box is None:
-            # Priority 2 — occlusion, not absence. Never turn away from a scene
-            # that just changed dramatically: a large object filling the frame is
-            # evidence the subject is right there.
-            if _recently_seen_here(svc):
+            box, kind = _detect_subject(detector, frame)
+            if box is None:
+                # Priority 2 — occlusion, not absence. Never turn away from a scene
+                # that just changed dramatically: a large object filling the frame is
+                # evidence the subject is right there.
+                if _recently_seen_here(svc):
+                    steps.append({"n": iterations + 1, "saw": None,
+                                  "action": "hold (recent sighting — likely occluded)",
+                                  "yaw": _yaw_of(svc)})
+                    return _result(False, "holding: seen here moments ago (likely occluded)")
+                # Priority 3 — step toward the remembered bearing, re-detecting after
+                # every step so we cannot sail past someone en route.
+                probe: dict = {}
+                if bearing_steps < MAX_BEARING_STEPS and _step_toward_bearing(svc, probe):
+                    bearing_consulted = probe.get("bearing")
+                    steps.append({"n": iterations + 1, "saw": None,
+                                  "action": "step toward remembered bearing",
+                                  "bearing": probe.get("bearing"), "yaw": _yaw_of(svc)})
+                    if bearing_steps == 0 and config.LOOK_AIM_SPEAK:
+                        # Only on the FIRST step: the lamp is about to turn away from
+                        # the user mid-question, which reads as broken unless explained.
+                        _say("look_searching")
+                    bearing_steps += 1
+                    iterations += 1
+                    continue
+                _score_prediction(bearing_steps, found=False)
+                bearing_consulted = probe.get("bearing", bearing_consulted)
                 steps.append({"n": iterations + 1, "saw": None,
-                              "action": "hold (recent sighting — likely occluded)",
+                              "action": probe.get("skipped", "give up — nothing found"),
                               "yaw": _yaw_of(svc)})
-                return _result(False, "holding: seen here moments ago (likely occluded)")
-            # Priority 3 — step toward the remembered bearing, re-detecting after
-            # every step so we cannot sail past someone en route.
-            probe: dict = {}
-            if bearing_steps < MAX_BEARING_STEPS and _step_toward_bearing(svc, probe):
-                bearing_consulted = probe.get("bearing")
-                steps.append({"n": iterations + 1, "saw": None,
-                              "action": "step toward remembered bearing",
-                              "bearing": probe.get("bearing"), "yaw": _yaw_of(svc)})
-                if bearing_steps == 0 and config.LOOK_AIM_SPEAK:
-                    # Only on the FIRST step: the lamp is about to turn away from
-                    # the user mid-question, which reads as broken unless explained.
-                    _say("look_searching")
-                bearing_steps += 1
-                iterations += 1
-                continue
-            _score_prediction(bearing_steps, found=False)
-            bearing_consulted = probe.get("bearing", bearing_consulted)
-            steps.append({"n": iterations + 1, "saw": None,
-                          "action": probe.get("skipped", "give up — nothing found"),
-                          "yaw": _yaw_of(svc)})
-            return _result(False, "subject not found")
+                return _result(False, "subject not found")
 
-        if bearing_steps > 0 and config.LOOK_AIM_SPEAK:
-            # Only after a search was announced — otherwise "there you are" fires
-            # on every visual question, which is noise.
-            _say("look_found")
-        _score_prediction(bearing_steps, found=True)
-        _note_sighting(svc)
-        x, _y, w, _h = box
-        w_fr = float(frame.shape[1])
-        dx = (x + w / 2.0) - (w_fr / 2.0)
-        last_dx_frac = dx / w_fr
+            if bearing_steps > 0 and config.LOOK_AIM_SPEAK:
+                # Only after a search was announced — otherwise "there you are" fires
+                # on every visual question, which is noise.
+                _say("look_found")
+            _score_prediction(bearing_steps, found=True)
+            _note_sighting(svc)
+            x, _y, w, _h = box
+            w_fr = float(frame.shape[1])
+            dx = (x + w / 2.0) - (w_fr / 2.0)
+            last_dx_frac = dx / w_fr
 
-        if abs(last_dx_frac) <= CENTRE_DEADBAND_FRAC:
-            _record_bearing_if_centred(svc, last_dx_frac)
-            return _result(True, f"centred on {kind}")
+            if abs(last_dx_frac) <= CENTRE_DEADBAND_FRAC:
+                _record_bearing_if_centred(svc, last_dx_frac)
+                return _result(True, f"centred on {kind}")
 
-        # Yaw sign per the tracker's verified convention: dx>0 (subject right of
-        # centre) -> base_yaw INCREASES. Do not flip this without device evidence.
-        yaw_deg = AIM_GAIN * dx * (C.CAMERA_FOV_DEG / w_fr)
+            # Yaw sign per the tracker's verified convention: dx>0 (subject right of
+            # centre) -> base_yaw INCREASES. Do not flip this without device evidence.
+            yaw_deg = AIM_GAIN * dx * (C.CAMERA_FOV_DEG / w_fr)
 
-        try:
-            current = svc.get_positions()
-            svc.nudge(yaw_deg, 0.0, MOVE_DURATION_S, current, state.safety_policy)
-        except Exception as e:
-            logger.warning("[look-aim] nudge failed: %s", e)
-            return _result(False, f"nudge failed: {e}")
+            try:
+                current = svc.get_positions()
+                svc.nudge(yaw_deg, 0.0, MOVE_DURATION_S, current, state.safety_policy)
+            except Exception as e:
+                logger.warning("[look-aim] nudge failed: %s", e)
+                return _result(False, f"nudge failed: {e}")
 
-        yaw_total += yaw_deg
-        iterations += 1
-        steps.append({"n": iterations, "saw": kind, "dx_frac": round(last_dx_frac, 3),
-                      "action": f"centre: yaw {yaw_deg:+.1f}", "yaw": _yaw_of(svc)})
-        logger.info(
-            "[look-aim] iter=%d %s dx=%.0fpx (%.1f%%) -> yaw %+.1f deg",
-            iterations, kind, dx, last_dx_frac * 100.0, yaw_deg,
-        )
+            yaw_total += yaw_deg
+            iterations += 1
+            steps.append({"n": iterations, "saw": kind, "dx_frac": round(last_dx_frac, 3),
+                          "action": f"centre: yaw {yaw_deg:+.1f}", "yaw": _yaw_of(svc)})
+            logger.info(
+                "[look-aim] iter=%d %s dx=%.0fpx (%.1f%%) -> yaw %+.1f deg",
+                iterations, kind, dx, last_dx_frac * 100.0, yaw_deg,
+            )
 
     return _result(abs(last_dx_frac or 1.0) <= CENTRE_DEADBAND_FRAC, "max iterations")
