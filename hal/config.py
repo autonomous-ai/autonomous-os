@@ -102,6 +102,16 @@ TRACKING_FACE_DETECTOR_ENABLED: bool = os.environ.get(
 OS_SENSING_URL = "http://127.0.0.1:5000/api/sensing/event"
 # Named-pool filler (os-server owns phrases + language + WAV cache).
 OS_SENSING_FILLER_URL = "http://127.0.0.1:5000/api/sensing/filler"
+# Publish the captured `look` frame to the Flow Monitor.
+#
+# DEFAULT OFF, and it must stay off until os-server carries the matching
+# `look.capture` handler. That handler is what makes the event monitor-only —
+# without it the sensing endpoint has no type whitelist, so the event falls
+# through to the agent-forward path and injects a phantom turn containing the
+# frame path. Flip to true in the same release that ships the os-server change.
+LOOK_MONITOR_ENABLED: bool = (
+    os.environ.get("HAL_LOOK_MONITOR", "false").lower() in ("1", "true", "yes")
+)
 OS_WELLBEING_LOG_URL = "http://127.0.0.1:5000/api/wellbeing/log"
 GUARD_STATUS_URL = "http://127.0.0.1:5000/api/guard"
 GUARD_CHECK_INTERVAL_S = float(os.environ.get("HAL_GUARD_CHECK_INTERVAL_S", "10.0"))
