@@ -32,14 +32,16 @@ import math
 import os
 import tempfile
 import time
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Dict, Optional
 
 import hal.config as config
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION: int = 1
+SCHEMA_VERSION: int = 2
+# Which component of the pose IS the bearing direction.
+BASE_YAW_JOINT: str = "base_yaw.pos"
 
 # Weight of each new sighting in the running mean. Low enough that one stray
 # sample cannot move the estimate far, high enough to follow a real move within
@@ -92,6 +94,15 @@ class BearingEstimate:
     samples: int
     updated: float          # epoch seconds
     age_s: float
+    # Full remembered posture, {joint: degrees}. `bearing_deg` is the base_yaw
+    # component of this and is kept only so callers that just want a direction
+    # need not know the joint names.
+    #
+    # Yaw alone is not enough to look at someone: pitch is spread across
+    # base/elbow/wrist, so a head left pointing at the floor sweeps the floor in
+    # a circle no matter how right the yaw is (device-observed 2026-08-19 —
+    # bearing stepped -45 to -13 correctly and still saw nothing).
+    pose: Dict[str, float] = field(default_factory=dict)
 
 
 def _path() -> str:
@@ -104,7 +115,17 @@ def _load_raw() -> Optional[dict]:
             d = json.load(f)
     except Exception:
         return None
-    if not isinstance(d, dict) or d.get("version") != SCHEMA_VERSION:
+    if not isinstance(d, dict):
+        return None
+    version = d.get("version")
+    if version == 1:
+        # v1 knew only base_yaw. Keep the learned direction — it took hours of
+        # sightings — and let the pose fill in on the next centred sighting.
+        d = dict(d)
+        d["version"] = SCHEMA_VERSION
+        d.setdefault("pose", {})
+        return d
+    if version != SCHEMA_VERSION:
         return None
     return d
 
@@ -138,7 +159,29 @@ def _confidence(samples: int, age_s: float) -> float:
     return round(grown * decay, 4)
 
 
-def record_sighting(yaw_deg: float, now: Optional[float] = None) -> bool:
+def _blend_pose(
+    prev_pose: Dict[str, float], new_pose: Dict[str, float], alpha: float
+) -> Dict[str, float]:
+    """EMA each joint independently, at the same rate the yaw is smoothed.
+
+    A joint present in only one side is taken as-is rather than dropped: the
+    servo set can differ between reads (a joint that failed to report once must
+    not erase what we already knew about it).
+    """
+    out: Dict[str, float] = dict(prev_pose)
+    for joint, value in new_pose.items():
+        if joint in prev_pose:
+            out[joint] = round((1.0 - alpha) * float(prev_pose[joint]) + alpha * float(value), 3)
+        else:
+            out[joint] = round(float(value), 3)
+    return out
+
+
+def record_sighting(
+    yaw_deg: float,
+    pose: Optional[Dict[str, float]] = None,
+    now: Optional[float] = None,
+) -> bool:
     """Fold one CENTRED sighting into the estimate.
 
     Callers must only pass a yaw whose frame had the subject centred — this
@@ -147,6 +190,13 @@ def record_sighting(yaw_deg: float, now: Optional[float] = None) -> bool:
     """
     t = time.time() if now is None else now
     prev = _load_raw()
+
+    new_pose: Dict[str, float] = {
+        str(k): float(v) for k, v in (pose or {}).items() if isinstance(v, (int, float))
+    }
+    prev_pose: Dict[str, float] = (
+        {str(k): float(v) for k, v in (prev.get("pose") or {}).items()} if prev else {}
+    )
 
     streak = 0
     if prev:
@@ -160,20 +210,35 @@ def record_sighting(yaw_deg: float, now: Optional[float] = None) -> bool:
         if settled and abs(yaw_deg - prev_bearing) > OUTLIER_DEG:
             streak = int(prev.get("outlier_streak", 0)) + 1
             if streak >= OUTLIER_STREAK:
-                # Not a passer-by — the user really is somewhere else now.
+                # Not a passer-by — the user really is somewhere else now. The
+                # old posture describes the old place, so replace it outright
+                # rather than averaging toward the new one.
                 bearing, samples, streak = yaw_deg, 1, 0
+                blended = new_pose
             else:
                 # Damp hard: one person crossing the room must not flip the estimate.
                 bearing = (1.0 - OUTLIER_ALPHA) * prev_bearing + OUTLIER_ALPHA * yaw_deg
+                blended = _blend_pose(prev_pose, new_pose, OUTLIER_ALPHA)
         else:
             bearing = (1.0 - EMA_ALPHA) * prev_bearing + EMA_ALPHA * yaw_deg
+            blended = _blend_pose(prev_pose, new_pose, EMA_ALPHA)
     else:
         bearing = yaw_deg
         samples = 1
+        blended = new_pose
+
+    # One source of truth: when the pose carries a yaw, the scalar bearing IS
+    # that component. Letting them drift apart would mean the direction and the
+    # posture disagree about where the user is.
+    if BASE_YAW_JOINT in blended:
+        bearing = blended[BASE_YAW_JOINT]
+    elif blended:
+        blended[BASE_YAW_JOINT] = round(bearing, 3)
 
     ok = _write_raw({
         "version": SCHEMA_VERSION,
         "bearing_deg": round(bearing, 3),
+        "pose": blended,
         "confidence": _confidence(samples, 0.0),
         "samples": samples,
         "outlier_streak": streak,
@@ -181,8 +246,8 @@ def record_sighting(yaw_deg: float, now: Optional[float] = None) -> bool:
     })
     if ok:
         logger.info(
-            "[user-bearing] sighting yaw=%+.1f -> estimate %+.1f (n=%d)",
-            yaw_deg, bearing, samples,
+            "[user-bearing] sighting yaw=%+.1f -> estimate %+.1f (n=%d, joints=%d)",
+            yaw_deg, bearing, samples, len(blended),
         )
     return ok
 
@@ -202,6 +267,7 @@ def read_estimate(now: Optional[float] = None) -> Optional[BearingEstimate]:
         samples=samples,
         updated=updated,
         age_s=age,
+        pose={str(k): float(v) for k, v in (d.get("pose") or {}).items()},
     )
 
 

@@ -437,6 +437,10 @@ def get_user_bearing():
         "confidence": est.confidence,
         "samples": est.samples,
         "age_s": round(est.age_s, 1),
+        # The full remembered posture. An empty pose on a known bearing means
+        # the estimate predates the pose schema and has not been re-sighted yet,
+        # so a search will restore direction but not head height.
+        "pose": est.pose,
     }
 
 

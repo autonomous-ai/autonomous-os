@@ -215,3 +215,72 @@ def test_a_small_lamp_move_self_corrects_without_being_detected():
         assert abs(est.bearing_deg - shifted) < 2.0, (
             f"estimate should have followed the lamp to {shifted}, got {est.bearing_deg}"
         )
+
+
+# --- Full-posture memory (schema v2) ----------------------------------------
+
+def test_sighting_stores_the_whole_posture(tmp_path, monkeypatch):
+    """The bearing must describe a SHAPE, not just a direction — pitch lives
+    across base/elbow/wrist and yaw alone cannot aim the camera."""
+    monkeypatch.setattr(ub.config, "USER_BEARING_PATH", str(tmp_path / "b.json"), raising=False)
+    pose = {"base_yaw.pos": 20.0, "base_pitch.pos": 5.0, "elbow_pitch.pos": 10.0}
+    assert ub.record_sighting(20.0, pose=pose) is True
+    est = ub.read_estimate()
+    assert est.pose["base_pitch.pos"] == 5.0
+    assert est.pose["elbow_pitch.pos"] == 10.0
+
+
+def test_bearing_stays_consistent_with_the_pose_yaw(tmp_path, monkeypatch):
+    """One source of truth: a scalar bearing that disagreed with the posture
+    would point the base one way and the head another."""
+    monkeypatch.setattr(ub.config, "USER_BEARING_PATH", str(tmp_path / "b.json"), raising=False)
+    ub.record_sighting(20.0, pose={"base_yaw.pos": 20.0, "base_pitch.pos": 5.0})
+    ub.record_sighting(30.0, pose={"base_yaw.pos": 30.0, "base_pitch.pos": 9.0},
+                       now=__import__("time").time() + 60.0)
+    est = ub.read_estimate()
+    assert est.bearing_deg == est.pose["base_yaw.pos"]
+
+
+def test_pose_joints_are_smoothed_like_the_bearing(tmp_path, monkeypatch):
+    """Each joint gets its own EMA — a single odd posture must not snap the
+    remembered shape to it."""
+    import time as _t
+
+    monkeypatch.setattr(ub.config, "USER_BEARING_PATH", str(tmp_path / "b.json"), raising=False)
+    ub.record_sighting(20.0, pose={"base_yaw.pos": 20.0, "base_pitch.pos": 0.0})
+    ub.record_sighting(20.0, pose={"base_yaw.pos": 20.0, "base_pitch.pos": 20.0},
+                       now=_t.time() + 60.0)
+    pitch = ub.read_estimate().pose["base_pitch.pos"]
+    assert 0.0 < pitch < 20.0, f"expected a smoothed pitch, got {pitch}"
+
+
+def test_v1_file_keeps_its_learned_bearing(tmp_path, monkeypatch):
+    """A schema bump must not throw away hours of sightings — v1 had no pose,
+    so it migrates with an empty one and refills on the next sighting."""
+    path = tmp_path / "b.json"
+    path.write_text(json.dumps({
+        "version": 1, "bearing_deg": 25.709, "confidence": 0.25,
+        "samples": 2, "outlier_streak": 0, "updated": __import__("time").time(),
+    }))
+    monkeypatch.setattr(ub.config, "USER_BEARING_PATH", str(path), raising=False)
+    est = ub.read_estimate()
+    assert est is not None, "v1 estimate was discarded"
+    assert est.bearing_deg == 25.709
+    assert est.pose == {}
+
+
+def test_relocation_replaces_the_posture_rather_than_averaging_it(tmp_path, monkeypatch):
+    """The old shape describes the old place; blending them would aim between."""
+    import time as _t
+
+    monkeypatch.setattr(ub.config, "USER_BEARING_PATH", str(tmp_path / "b.json"), raising=False)
+    t = _t.time()
+    for i in range(6):  # settle a confident estimate
+        ub.record_sighting(0.0, pose={"base_yaw.pos": 0.0, "base_pitch.pos": 0.0},
+                           now=t + i * 60.0)
+    t2 = t + 600.0
+    for i in range(ub.OUTLIER_STREAK):  # sustained move to a new spot
+        ub.record_sighting(80.0, pose={"base_yaw.pos": 80.0, "base_pitch.pos": 30.0},
+                           now=t2 + i * 60.0)
+    est = ub.read_estimate()
+    assert est.pose["base_pitch.pos"] == 30.0, est.pose

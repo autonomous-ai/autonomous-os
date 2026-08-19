@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Tuple
 
 import hal.config as config
+from hal.safety.policy import min_move_duration
 from hal.drivers.tracking import look_debug
 
 logger = logging.getLogger(__name__)
@@ -378,19 +379,76 @@ def _step_toward_bearing(svc: Any, out: Optional[dict] = None) -> bool:
                 out["skipped"] = f"confidence {est.confidence:.2f} < {MIN_BEARING_CONFIDENCE}"
             return False
         current = svc.get_positions()
-        delta = est.bearing_deg - float(current.get("base_yaw.pos", 0.0))
-        if abs(delta) < 1.0:
-            return False  # already pointing there; nothing left to try
-        step = max(-BEARING_STEP_DEG, min(BEARING_STEP_DEG, delta))
-        svc.nudge(step, 0.0, MOVE_DURATION_S, current, state.safety_policy)
+        target, step = _bearing_step_target(svc, est, current)
+        if target is None:
+            return False  # already in the remembered shape; nothing left to try
+        # Absolute move, not a relative nudge. The pitch SIGN was never validated
+        # for the nudge path (see this module's docstring), which is why the aim
+        # has only ever driven yaw. An absolute target has no sign to get wrong,
+        # so restoring the remembered posture is safe here where correcting it
+        # incrementally would not be.
+        duration = min_move_duration(
+            state.safety_policy, target, current, MOVE_DURATION_S
+        )
+        svc.move_and_hold(target, duration=duration)
         logger.info(
             "[look-aim] no subject — stepping %+.1f deg toward remembered bearing "
-            "%+.1f (conf=%.2f)", step, est.bearing_deg, est.confidence,
+            "%+.1f (conf=%.2f, restoring %d joints)",
+            step, est.bearing_deg, est.confidence, len(target),
         )
         return True
     except Exception as e:
         logger.debug("[look-aim] bearing step skipped: %s", e)
         return False
+
+
+# A joint is "already there" within this much, so a search does not re-issue a
+# move for rounding noise on every step.
+POSE_TOLERANCE_DEG: float = 2.0
+
+
+def _bearing_step_target(svc: Any, est: Any, current: dict):
+    """Absolute pose for one bearing step: yaw stepped, the rest restored.
+
+    Returns (target, step_deg), or (None, 0.0) when the head is already in the
+    remembered shape.
+
+    Yaw moves in bounded steps because we re-detect after each one and must not
+    sail past the user en route. The other joints are NOT stepped — they are the
+    posture that makes the camera point at head height, and there is nothing to
+    scan through on the way, so they go straight to the remembered value.
+    """
+    cur_yaw = float(current.get("base_yaw.pos", 0.0))
+    delta = float(est.bearing_deg) - cur_yaw
+    step = max(-BEARING_STEP_DEG, min(BEARING_STEP_DEG, delta))
+
+    try:
+        valid = set(svc.get_joint_names())
+    except Exception:
+        valid = set(current.keys())
+
+    # isinstance, not truthiness: a malformed estimate (or a test double) can
+    # carry a non-dict here, and iterating it would raise inside the caller's
+    # except and silently disable the whole bearing step.
+    pose = getattr(est, "pose", None)
+    if not isinstance(pose, dict):
+        pose = {}
+
+    target: dict = {}
+    for joint, value in pose.items():
+        if joint == "base_yaw.pos" or joint not in valid:
+            continue
+        if abs(float(value) - float(current.get(joint, value))) > POSE_TOLERANCE_DEG:
+            target[joint] = float(value)
+
+    # Yaw still to travel, or only the posture is wrong (head left pointing at
+    # the floor at the right bearing — the case that made a correct search
+    # sweep the ground and find nobody).
+    if abs(delta) >= 1.0:
+        target["base_yaw.pos"] = cur_yaw + step
+    elif not target:
+        return None, 0.0
+    return target, step
 
 
 def _score_prediction(bearing_steps: int, found: bool) -> None:
@@ -420,8 +478,11 @@ def _record_bearing_if_centred(svc: Any, dx_frac: float) -> None:
     try:
         from hal.drivers.tracking import user_bearing
 
-        yaw = float(svc.get_positions().get("base_yaw.pos", 0.0))
-        user_bearing.record_sighting(yaw)
+        positions = svc.get_positions()
+        yaw = float(positions.get("base_yaw.pos", 0.0))
+        # The whole shape, not just the base: pitch lives across base/elbow/wrist,
+        # so yaw alone cannot describe "looking at the user".
+        user_bearing.record_sighting(yaw, pose=positions)
     except Exception as e:
         logger.debug("[look-aim] bearing record skipped: %s", e)
 

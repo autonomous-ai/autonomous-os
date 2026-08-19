@@ -32,14 +32,31 @@ class _FakeSvc:
     """Tracks yaw across nudges. A fake that ignored commands could not tell
     "decided to move" from "moved", which is exactly what the trace asserts."""
 
+    JOINTS = ["base_yaw.pos", "base_pitch.pos", "elbow_pitch.pos", "wrist_pitch.pos"]
+
     def __init__(self):
         self.yaw = 0.0
+        # Non-yaw joints start away from any remembered posture so a restore is
+        # observable — this is the head-pointing-at-the-floor case.
+        self.pose = {j: -40.0 for j in self.JOINTS if j != "base_yaw.pos"}
         self.nudge = mock.Mock(side_effect=self._nudge)
-        self.get_positions = mock.Mock(side_effect=lambda: {"base_yaw.pos": self.yaw})
+        self.move_and_hold = mock.Mock(side_effect=self._move_and_hold)
+        self.get_joint_names = mock.Mock(return_value=list(self.JOINTS))
+        self.get_positions = mock.Mock(
+            side_effect=lambda: {**self.pose, "base_yaw.pos": self.yaw}
+        )
 
     def _nudge(self, yaw, pitch, duration, current, policy):
         self.yaw += yaw
         return {"base_yaw.pos": self.yaw}
+
+    def _move_and_hold(self, positions, duration=None):
+        for joint, value in positions.items():
+            if joint == "base_yaw.pos":
+                self.yaw = float(value)
+            else:
+                self.pose[joint] = float(value)
+        return {**self.pose, "base_yaw.pos": self.yaw}
 
 
 def _detector(box, target_hit="person"):
@@ -183,10 +200,16 @@ def test_stale_sighting_does_not_hold():
 
 # --- priority 3: remembered-bearing fallback ------------------------------
 
-def _bearing(deg, conf):
+def _bearing(deg, conf, pose=None):
     # Realistic shape — read_estimate() returns a BearingEstimate, and a bare
     # Mock's auto-attributes previously made the aim silently skip the step.
-    return mock.Mock(bearing_deg=deg, confidence=conf, samples=12, age_s=30.0)
+    # `pose` must be a real dict: the remembered posture is iterated.
+    if pose is None:
+        pose = {"base_yaw.pos": deg, "base_pitch.pos": 5.0,
+                "elbow_pitch.pos": 10.0, "wrist_pitch.pos": 0.0}
+    return mock.Mock(
+        bearing_deg=deg, confidence=conf, samples=12, age_s=30.0, pose=pose
+    )
 
 
 def _run_no_subject(estimate, seen_mono=0.0):
@@ -208,7 +231,7 @@ def _run_no_subject(estimate, seen_mono=0.0):
 
 def test_no_subject_steps_toward_the_remembered_bearing():
     res, svc = _run_no_subject(_bearing(60.0, 0.9))
-    assert svc.nudge.called
+    assert svc.move_and_hold.called
     assert res.bearing_steps > 0
 
 
@@ -539,3 +562,62 @@ def test_aim_never_overshoots_past_the_subject():
     Every step must move toward the subject and stop short of crossing it."""
     _, svc = _run_closed_loop(30.0, 100.0)
     assert svc.yaw <= 30.0 + 1e-6, f"crossed the subject: {svc.yaw:+.1f} > +30"
+
+
+# --- Remembered posture, not just direction ---------------------------------
+
+def test_bearing_step_restores_the_remembered_pitch_joints():
+    """Yaw alone cannot describe "looking at the user".
+
+    With the head left pointing at the floor, sweeping yaw searches the floor in
+    a circle: device trace 20260819-143407 stepped -45 -> -13 toward a correct
+    bearing and still saw nothing, because pitch was never restored.
+    """
+    res, svc = _run_no_subject(_bearing(60.0, 0.9))
+    assert res.bearing_steps > 0
+    assert svc.pose["base_pitch.pos"] == 5.0, svc.pose
+    assert svc.pose["elbow_pitch.pos"] == 10.0, svc.pose
+
+
+def test_posture_is_restored_even_when_the_yaw_is_already_right():
+    """The head can be pointed at the exact bearing and still be aimed at the
+    ground — "already pointing there" must mean the whole shape, not the base."""
+    svc = _FakeSvc()
+    svc.yaw = 60.0  # already on the bearing
+    est = _bearing(60.0, 0.9)
+    with (
+        mock.patch.object(state, "safety_policy", None, create=True),
+        mock.patch("hal.drivers.tracking.user_bearing.read_estimate", return_value=est),
+    ):
+        moved = aim._step_toward_bearing(svc, {})
+    assert moved, "a wrong posture at the right yaw must still move"
+    assert svc.pose["base_pitch.pos"] == 5.0
+
+
+def test_no_move_when_already_in_the_remembered_shape():
+    """Otherwise every search step re-issues a move for rounding noise."""
+    svc = _FakeSvc()
+    svc.yaw = 60.0
+    svc.pose = {"base_pitch.pos": 5.0, "elbow_pitch.pos": 10.0, "wrist_pitch.pos": 0.0}
+    with (
+        mock.patch.object(state, "safety_policy", None, create=True),
+        mock.patch("hal.drivers.tracking.user_bearing.read_estimate",
+                   return_value=_bearing(60.0, 0.9)),
+    ):
+        moved = aim._step_toward_bearing(svc, {})
+    assert not moved
+    assert not svc.move_and_hold.called
+
+
+def test_unknown_joints_are_not_commanded():
+    """A remembered pose from another robot (or an older servo set) must not be
+    sent to joints this device does not have."""
+    svc = _FakeSvc()
+    est = _bearing(60.0, 0.9, pose={"base_yaw.pos": 60.0, "tentacle.pos": 12.0})
+    with (
+        mock.patch.object(state, "safety_policy", None, create=True),
+        mock.patch("hal.drivers.tracking.user_bearing.read_estimate", return_value=est),
+    ):
+        aim._step_toward_bearing(svc, {})
+    (positions,), _ = svc.move_and_hold.call_args
+    assert "tentacle.pos" not in positions, positions
