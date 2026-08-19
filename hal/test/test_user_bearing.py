@@ -284,3 +284,17 @@ def test_relocation_replaces_the_posture_rather_than_averaging_it(tmp_path, monk
                            now=t2 + i * 60.0)
     est = ub.read_estimate()
     assert est.pose["base_pitch.pos"] == 30.0, est.pose
+
+
+def test_a_sighting_without_a_pose_still_moves_the_bearing(tmp_path, monkeypatch):
+    """A passive sampler may know the direction but not a trustworthy posture.
+    Reading the yaw back out of an unchanged pose would discard the sighting."""
+    import time as _t
+
+    monkeypatch.setattr(ub.config, "USER_BEARING_PATH", str(tmp_path / "b.json"), raising=False)
+    ub.record_sighting(0.0, pose={"base_yaw.pos": 0.0, "base_pitch.pos": 5.0})
+    ub.record_sighting(40.0, now=_t.time() + 60.0)  # no pose at all
+    est = ub.read_estimate()
+    assert est.bearing_deg > 0.0, "the pose-less sighting was ignored"
+    assert est.pose["base_pitch.pos"] == 5.0, "the known posture was lost"
+    assert est.pose["base_yaw.pos"] == est.bearing_deg

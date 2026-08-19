@@ -80,6 +80,10 @@ _last_seen_yaw: float = 0.0
 # agent, and the user got "I couldn't see it" for a frame that was captured
 # perfectly. TrackerService builds its detector once for the same reason.
 _detector_lock = threading.Lock()
+# Held around inference. The detector is a single shared model and concurrent
+# detect() calls on it are not safe; the background bearing sampler takes this
+# non-blocking and simply skips a cycle rather than making a look wait.
+_detector_lock_use = threading.Lock()
 _shared_detector: Any = None
 
 
@@ -241,20 +245,62 @@ def _camera_consumer(cap: Any):
                 pass
 
 
+def _is_near_enough(box: Tuple[int, int, int, int], frame: Any, target: str) -> bool:
+    """Is this box a person close enough to be the one talking to us?
+
+    Apparent size is the only distance cue a single camera has, and the person
+    who asked "look at what I'm holding" is by definition within arm's reach of
+    the thing they are holding. Device frames (2026-08-19, 1280x720):
+
+      ~22px  face  — someone across the office; the lamp chased this
+      ~65px  person — a real colleague, far away, also not the asker
+      ~165px person — the actual user, close, clipped by the frame edge
+
+    Height, not area or width: a close subject is routinely clipped left/right
+    (the good frame above is half out of shot) but their apparent height still
+    scales with distance.
+    """
+    try:
+        _x, _y, _w, h = box
+        frame_h = float(frame.shape[0])
+        if frame_h <= 0:
+            return True
+        floor = (
+            config.LOOK_AIM_MIN_FACE_HEIGHT_FRAC if target == "face"
+            else config.LOOK_AIM_MIN_PERSON_HEIGHT_FRAC
+        )
+        return (float(h) / frame_h) >= floor
+    except Exception:
+        return True  # never let the filter itself lose a subject
+
+
 def _detect_subject(detector: Any, frame: Any) -> Tuple[Optional[Tuple[int, int, int, int]], str]:
-    """Person box preferred, face as fallback.
+    """Nearest plausible person box preferred, face as fallback.
 
     Person first because a hand-held object often occludes the face but rarely
     the whole body — and because framing the person includes whatever they are
     holding, which a tightly centred face does not.
+
+    Detections too small to be the asker are rejected rather than returned: the
+    caller treats "no subject" as a reason to hold or consult the remembered
+    bearing, which is a far better answer than turning to a stranger at the
+    other end of the room.
     """
-    for target in ("person", "face"):
-        try:
-            box = detector.detect(frame, target, strict=False)
-        except Exception as e:
-            logger.debug("[look-aim] detect(%s) failed: %s", target, e)
-            continue
-        if box is not None:
+    with _detector_lock_use:
+        for target in ("person", "face"):
+            try:
+                box = detector.detect(frame, target, strict=False)
+            except Exception as e:
+                logger.debug("[look-aim] detect(%s) failed: %s", target, e)
+                continue
+            if box is None:
+                continue
+            if not _is_near_enough(box, frame, target):
+                logger.debug(
+                    "[look-aim] ignoring far %s: box height %dpx of %dpx",
+                    target, box[3], frame.shape[0],
+                )
+                continue
             return box, target
     return None, ""
 

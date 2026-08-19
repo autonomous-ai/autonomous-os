@@ -653,3 +653,30 @@ def test_unknown_joints_are_not_commanded():
         aim._step_toward_bearing(svc, {})
     (positions,), _ = svc.move_and_hold.call_args
     assert "tentacle.pos" not in positions, positions
+
+
+# --- Near-subject gate -------------------------------------------------------
+
+def test_a_far_person_is_not_treated_as_a_subject():
+    """Device frame 20260819-142823: a ~22px "face" clear across the office,
+    and the lamp turned to it. Too small to be someone holding something up to
+    the camera, so the aim must fall through to hold/bearing instead."""
+    res, svc = _run((600, 300, 60, 25))
+    assert not res.aimed
+    assert res.reason != "centred on person"
+    assert not svc.nudge.called, "turned toward a stranger across the room"
+
+
+def test_a_close_person_still_passes_the_gate():
+    """Device frame 20260819-143218: ~165px of a person clipped by the frame
+    edge — the real asker. The gate must not cost us this one."""
+    res, svc = _run((520, 200, 100, 165))
+    assert svc.nudge.called or res.aimed
+
+
+def test_the_gate_uses_height_not_width():
+    """A close subject is routinely clipped left/right — the good device frame
+    is half out of shot — so width says nothing about distance."""
+    frame = _frame(width=640, height=480)
+    narrow_but_tall = (10, 0, 12, 300)
+    assert aim._is_near_enough(narrow_but_tall, frame, "person")

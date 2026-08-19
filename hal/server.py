@@ -717,6 +717,16 @@ async def lifespan(app: FastAPI):
 
         threading.Thread(target=_warm_look_aim, daemon=True, name="warm-look-aim").start()
 
+        # Learn where the user usually sits, passively. Without this the bearing
+        # only learns from perfectly-centred look questions and decays faster
+        # than it accumulates.
+        try:
+            from hal.drivers.tracking import bearing_sampler
+
+            bearing_sampler.start()
+        except Exception as e:
+            logger.debug("bearing sampler unavailable: %s", e)
+
     # Start display (GC9A01 eyes)
     if DisplayService:
         try:

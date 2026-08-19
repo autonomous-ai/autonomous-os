@@ -227,13 +227,10 @@ def record_sighting(
         samples = 1
         blended = new_pose
 
-    # One source of truth: when the pose carries a yaw, the scalar bearing IS
-    # that component. Letting them drift apart would mean the direction and the
-    # posture disagree about where the user is.
-    if BASE_YAW_JOINT in blended:
-        bearing = blended[BASE_YAW_JOINT]
-    elif blended:
-        blended[BASE_YAW_JOINT] = round(bearing, 3)
+    # One source of truth, and the yaw ALWAYS wins: a caller may record a
+    # bearing with a partial pose (or none), and reading the yaw back out of the
+    # blend would then silently keep the old direction and discard the sighting.
+    blended[BASE_YAW_JOINT] = round(bearing, 3)
 
     ok = _write_raw({
         "version": SCHEMA_VERSION,

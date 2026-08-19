@@ -883,6 +883,45 @@ LOOK_AIM_DEADLINE_S: float = float(
 LOOK_AIM_FOV_DEG: float = float(
     os.environ.get("HAL_LOOK_AIM_FOV_DEG", "100.0")
 )
+# Minimum apparent size for a detection to count as "the person talking to us".
+# Expressed as a fraction of FRAME HEIGHT: a close subject is often clipped
+# left/right, but their height still scales with distance. Device-measured on
+# 1280x720 — a far colleague reads ~0.10 and a spurious far face ~0.035, while
+# the actual asker reads ~0.23.
+LOOK_AIM_MIN_PERSON_HEIGHT_FRAC: float = float(
+    os.environ.get("HAL_LOOK_AIM_MIN_PERSON_HEIGHT_FRAC", "0.15")
+)
+# Faces are a much smaller box than a whole person at the same distance, so
+# they get their own, lower floor.
+LOOK_AIM_MIN_FACE_HEIGHT_FRAC: float = float(
+    os.environ.get("HAL_LOOK_AIM_MIN_FACE_HEIGHT_FRAC", "0.08")
+)
+# Passive bearing sampling. Without it the estimate only learns from visual
+# questions that happen to end near-perfectly centred — 2 samples in a full day
+# of device testing, against a 6h confidence half-life, so it decayed faster
+# than it learned. This watches for a NEARBY person on a slow cadence and folds
+# in what it sees, so the lamp knows where its user usually is without being
+# asked anything.
+BEARING_SAMPLE_ENABLED: bool = (
+    os.environ.get("HAL_BEARING_SAMPLE", "true").lower() in ("1", "true", "yes")
+)
+# 5 minutes: eight samples reaches full confidence inside an hour of presence,
+# and one detector inference per 5 min is a rounding error on the CPU.
+BEARING_SAMPLE_INTERVAL_S: float = float(
+    os.environ.get("HAL_BEARING_SAMPLE_INTERVAL_S", "300")
+)
+# The subject may be off-centre horizontally — their bearing is recovered as
+# yaw + dx x scale — but only so far, because that correction leans on the FOV
+# constant the aim exists to avoid trusting.
+BEARING_SAMPLE_MAX_DX_FRAC: float = float(
+    os.environ.get("HAL_BEARING_SAMPLE_MAX_DX_FRAC", "0.25")
+)
+# The POSTURE is only recorded when the subject is also vertically centred:
+# pitch cannot be corrected arithmetically, so an off-centre pitch would teach
+# the lamp a posture that does not look at anyone.
+BEARING_SAMPLE_MAX_DY_FRAC: float = float(
+    os.environ.get("HAL_BEARING_SAMPLE_MAX_DY_FRAC", "0.15")
+)
 # Where the remembered user bearing lives. NOT a boot sidecar: this must survive
 # reboots, unlike the mic/speaker/camera state in app_state.
 USER_BEARING_PATH: str = os.environ.get(
