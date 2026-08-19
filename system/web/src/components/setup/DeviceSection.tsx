@@ -2,6 +2,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Eye, EyeOff, Copy, Check, Cpu, Fingerprint, Network } from "lucide-react";
 import { SecretUpdateField } from "@/components/SecretUpdateField";
+import { copyText } from "@/lib/clipboard";
 import { C, Field, PasswordField, SectionCard, LABEL_STYLE, INPUT_STYLE, INPUT_READONLY_STYLE, INPUT_PAD_ONE_ICON, FIELD_GAP, ADMIN_PASSWORD_MIN } from "./shared";
 
 // Read-only MAC field masked behind ••••, with an eye toggle to reveal. The
@@ -124,12 +125,19 @@ function MetaRow({ icon, label, children }: { icon: React.ReactNode; label: stri
 function DeviceMetaCard({ deviceId, mac }: { deviceId: string; mac?: string }) {
   const [copied, setCopied] = useState(false);
   const [showMac, setShowMac] = useState(false);
-  const copyId = () => {
-    navigator.clipboard?.writeText(deviceId).then(() => {
+  const copyId = async () => {
+    // The old code went straight to navigator.clipboard, which is undefined on
+    // the plain-HTTP device UI (http://<pi-ip>) — the button silently no-oped.
+    // copyText() falls back to document.execCommand("copy") when the Async
+    // Clipboard API isn't available. See lib/clipboard.ts.
+    const ok = await copyText(deviceId);
+    if (ok) {
       setCopied(true);
       toast.success("Device ID copied");
       setTimeout(() => setCopied(false), 1400);
-    }).catch(() => {});
+    } else {
+      toast.error("Copy failed — please copy the Device ID manually");
+    }
   };
   const maskedMac = showMac ? mac : "•".repeat(Math.min(14, (mac?.length ?? 0) || 8));
   const valueText: React.CSSProperties = {
