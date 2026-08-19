@@ -864,10 +864,18 @@ REALTIME_GEMINI_VISION_MAX_WIDTH: int = int(
 LOOK_AIM_ENABLED: bool = (
     os.environ.get("HAL_LOOK_AIM", "true").lower() in ("1", "true", "yes")
 )
-# Soft budget for the aim. Kept under REALTIME_FILLER_DELAY_S (1.5s) so a normal
-# aim finishes before the dead-air filler would fire; a slow one is covered by it.
+# Ceiling for the aim, not a cost: it returns the moment the subject is centred,
+# so a converged aim never spends this. It only bounds the failure case — the
+# head starting far off the subject, where each iteration costs ~1s (detect +
+# settle + move) and cutting it short means capturing a frame the subject is not
+# in. Device-tuned 2026-08-19: 0.8s allowed a single iteration and every look
+# that began off-centre timed out mid-correction, capturing a blurred, uncentred
+# frame. Long enough to converge beats short enough to fail fast.
+#
+# The dead-air filler (REALTIME_FILLER_DELAY_S, 1.5s) covers the wait when it
+# does run long.
 LOOK_AIM_DEADLINE_S: float = float(
-    os.environ.get("HAL_LOOK_AIM_DEADLINE_S", "0.8")
+    os.environ.get("HAL_LOOK_AIM_DEADLINE_S", "8")
 )
 # Horizontal field of view used ONLY to convert the subject's pixel offset into
 # degrees of yaw for the look-aim. Deliberately separate from
