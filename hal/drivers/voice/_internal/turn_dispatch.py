@@ -13,6 +13,28 @@ from hal.drivers.voice.speech_emotion.constants import UNKNOWN_USER_LABEL
 logger = logging.getLogger("hal.voice")
 
 
+def _take_look_snapshot_marker() -> str:
+    """Marker for the look frame captured this turn, or "" if there was none.
+
+    Attached to the turn message so the Flow Monitor shows the picture in the
+    SAME turn as the question and the spoken reply — the way emotion.detected
+    does — instead of a bare path in a turn of its own.
+
+    os-server strips `[snapshot: ...]` before the message reaches the model, so
+    this is display-only and costs no tokens.
+    """
+    from hal import app_state as state
+
+    try:
+        from hal.realtime.look_monitor import snapshot_marker
+
+        path = getattr(state, "realtime_look_monitor_path", None)
+        state.realtime_look_monitor_path = None
+        return snapshot_marker(path)
+    except Exception:
+        return ""
+
+
 def _take_vision_handoff() -> tuple[str, str]:
     """Consume the frame the realtime `look` tool just captured and return
     ``(hint, image_b64)`` — a one-line hint for the main agent plus the frame
@@ -87,6 +109,7 @@ def dispatch_turn(
     # Consume the realtime `look` frame once per turn, regardless of branch below
     # (so a handled turn that already used it doesn't leak it to a later delegate).
     vision_hint, vision_image = _take_vision_handoff()
+    look_snap = _take_look_snapshot_marker()
 
     final_text, event_type = decorator.classify_wake_word(combined)
     if event_type_override is not None:
@@ -115,8 +138,11 @@ def dispatch_turn(
             max_reply = hal_config.REALTIME_REPLY_SYNC_MAX_CHARS
             if len(reply) > max_reply:
                 reply = reply[:max_reply] + " …[truncated]"
+            handled_msg = f"[skills: input-branching]\n[HANDLED] {final_msg}\n[REPLY] {reply}"
+            if look_snap:
+                handled_msg = f"{handled_msg}\n{look_snap}"
             sensing_sender.send(
-                f"[skills: input-branching]\n[HANDLED] {final_msg}\n[REPLY] {reply}",
+                handled_msg,
                 event_type="voice_agent_handled",
                 skip_echo=True,
             )
@@ -129,6 +155,8 @@ def dispatch_turn(
             # Hand off the just-captured frame (if any) so the agent reuses it.
             if vision_hint and sensing_msg:
                 sensing_msg = f"{vision_hint}\n{sensing_msg}"
+            if look_snap and sensing_msg:
+                sensing_msg = f"{sensing_msg}\n{look_snap}"
             logger.info(
                 "[realtime] Delegated with message: %r%s",
                 sensing_msg[:100] if sensing_msg else "",
@@ -147,6 +175,8 @@ def dispatch_turn(
             # frame was captured this turn (Gemini died mid-vision), hand it off so
             # the agent answers from it instead of snapshotting again.
             fallback_msg = f"{vision_hint}\n{final_msg}" if vision_hint else final_msg
+            if look_snap:
+                fallback_msg = f"{fallback_msg}\n{look_snap}"
             sensing_sender.send(
                 fallback_msg,
                 event_type=event_type,

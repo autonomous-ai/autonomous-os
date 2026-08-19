@@ -1,52 +1,75 @@
-"""Focused tests for publishing the look frame to the Flow Monitor.
+"""Focused tests for surfacing the look frame in the Flow Monitor.
 
-The important guarantees: the frame path reaches the event (the monitor derives
-the thumbnail URL from it), and a publish failure never propagates — a missing
-thumbnail must not cost the user an answer.
+Two contracts have to hold or the picture silently never renders:
+  * the file must sit under /var/lib/hal/snapshots/<category>/<name>, which is
+    what GET /api/sensing/snapshot/:category/:name serves;
+  * the category must start with "sensing_", because that is all the monitor's
+    marker regex recognises when building thumbnails.
 """
 
+import os
+import re
+import tempfile
 from unittest import mock
 
-from hal.realtime import look_monitor
+import hal.config as config
+from hal.realtime import look_monitor as lm
+
+# The regex the Flow Monitor uses to turn a marker into a thumbnail URL.
+UI_MARKER_RE = re.compile(
+    r"\[snapshot:\s*(?:/tmp/(?:lamp|hal)-(?:sensing|emotion|motion)-snapshots"
+    r"|/var/lib/hal/snapshots)/((?:sensing|emotion|motion)_[^\]]+\.jpg)\]"
+)
 
 
-def _resp(status=200):
-    r = mock.Mock()
-    r.status_code = status
-    return r
+def _src(tmp):
+    p = os.path.join(tmp, "look_1.jpg")
+    with open(p, "wb") as f:
+        f.write(b"\xff\xd8\xff\xe0jpegbytes")
+    return p
 
 
-def test_publishes_the_frame_path_in_the_event():
-    with mock.patch.object(look_monitor.requests, "post", return_value=_resp()) as post:
-        ok = look_monitor.publish_look_frame(
-            "/root/.openclaw/media/hal-snapshots/look_1712345678901.jpg"
-        )
-    assert ok is True
-    payload = post.call_args.kwargs["json"]
-    assert payload["type"] == "look.capture"
-    # The monitor's URL builder matches the raw path out of the message.
-    assert "/root/.openclaw/media/hal-snapshots/look_1712345678901.jpg" in payload["message"]
+def test_marker_matches_what_the_monitor_actually_parses():
+    # The whole feature is invisible if this regex does not match.
+    with tempfile.TemporaryDirectory() as tmp:
+        with mock.patch.object(config, "SNAPSHOT_PERSIST_DIR", tmp, create=True):
+            dst = lm.persist_for_monitor(_src(tmp))
+            marker = lm.snapshot_marker(dst)
+    assert dst is not None
+    m = UI_MARKER_RE.search(marker.replace(tmp, "/var/lib/hal/snapshots"))
+    assert m, f"monitor would not render this marker: {marker}"
+    # The captured group becomes /api/sensing/snapshot/<category>/<name>.
+    assert m.group(1).startswith("sensing_look/")
 
 
-def test_no_path_does_not_post():
-    with mock.patch.object(look_monitor.requests, "post") as post:
-        assert look_monitor.publish_look_frame(None) is False
-        assert look_monitor.publish_look_frame("") is False
-    assert not post.called
+def test_category_is_sensing_prefixed():
+    # Any other prefix and the UI ignores the marker entirely.
+    assert lm.MONITOR_CATEGORY.startswith("sensing_")
 
 
-def test_http_error_is_reported_not_raised():
-    with mock.patch.object(look_monitor.requests, "post", return_value=_resp(500)):
-        assert look_monitor.publish_look_frame("/root/.openclaw/media/hal-snapshots/look_1.jpg") is False
+def test_frame_lands_where_the_snapshot_route_serves_from():
+    with tempfile.TemporaryDirectory() as tmp:
+        with mock.patch.object(config, "SNAPSHOT_PERSIST_DIR", tmp, create=True):
+            dst = lm.persist_for_monitor(_src(tmp))
+    assert os.path.dirname(dst).endswith(lm.MONITOR_CATEGORY)
+    assert dst.endswith(".jpg")
 
 
-def test_transport_failure_never_raises():
-    # os-server down mid-turn must not take the answer down with it.
-    with mock.patch.object(look_monitor.requests, "post", side_effect=OSError("connection refused")):
-        assert look_monitor.publish_look_frame("/root/.openclaw/media/hal-snapshots/look_1.jpg") is False
+def test_missing_source_is_not_fatal():
+    assert lm.persist_for_monitor(None) is None
+    assert lm.persist_for_monitor("/nope/missing.jpg") is None
 
 
-def test_post_is_time_bounded():
-    with mock.patch.object(look_monitor.requests, "post", return_value=_resp()) as post:
-        look_monitor.publish_look_frame("/root/.openclaw/media/hal-snapshots/look_1.jpg")
-    assert post.call_args.kwargs["timeout"] <= 2.0
+def test_no_frame_yields_no_marker():
+    # An ordinary turn must not carry a stray empty marker.
+    assert lm.snapshot_marker(None) == ""
+
+
+def test_old_frames_are_pruned():
+    with tempfile.TemporaryDirectory() as tmp:
+        with mock.patch.object(config, "SNAPSHOT_PERSIST_DIR", tmp, create=True):
+            src = _src(tmp)
+            for _ in range(lm.KEEP_LAST + 8):
+                lm.persist_for_monitor(src)
+            kept = os.listdir(os.path.join(tmp, lm.MONITOR_CATEGORY))
+    assert len(kept) <= lm.KEEP_LAST, f"pruning failed, {len(kept)} files kept"

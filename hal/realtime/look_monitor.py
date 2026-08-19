@@ -1,64 +1,82 @@
-"""Publish the captured `look` frame to the Flow Monitor.
+"""Make the captured `look` frame visible in the Flow Monitor.
 
-The realtime `look` tool already saves its frame (see
-`RealtimeOrchestrator._persist_look_frame`) so a delegate turn can hand it to
-the main agent by path — but nothing announced it, so the frame never reached
-the monitor. Operators debugging an aim had to SSH to the device to see what
-the camera actually captured, which the orchestrator's own comment asks for:
-"pull the file and compare it against the model's answer".
+The realtime `look` tool saves its frame into the agent workspace so a delegate
+turn can hand it over by path. That location is not servable by the monitor, and
+nothing referenced the frame in the turn the user actually sees — so a visual
+question showed text and no picture.
 
-Nothing else is needed to render it. The frame already lives under the agent
-workspace (`/root/.<runtime>/media/hal-snapshots/look_<ms>.jpg`), which the
-monitor frontend already recognises and serves via
-`/api/sensing/agent-snapshot/...`. So this only has to get the path into a flow
-event; the existing URL builder and endpoint do the rest.
+This copies the frame somewhere the monitor can serve it and hands back a
+`[snapshot: ...]` marker for the turn message. Two contracts have to line up:
 
-Unlike a `motion.activity` snapshot — surfaced in the UI but stripped before
-the LLM — this frame IS what was sent to the model. The thumbnail is the
-literal input, not a debug approximation of it.
+  * the file must live under /var/lib/hal/snapshots/<category>/<name> — that is
+    what `GET /api/sensing/snapshot/:category/:name` serves;
+  * the category must start with `sensing_`, because the UI only recognises
+    markers matching sensing_/emotion_/motion_ when building thumbnails.
+
+The marker itself never reaches the model: os-server strips `[snapshot: ...]`
+from the outgoing message but keeps it in the flow JSONL, which is exactly how
+motion.activity surfaces its snapshots.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import shutil
+import time
 from typing import Optional
-
-import requests
 
 import hal.config as config
 
 logger = logging.getLogger(__name__)
 
-# Monitor-only sensing type. The os-server handler logs the flow event and
-# stops: forwarding text to the agent would inject a phantom turn, because the
-# frame already went straight to the realtime model.
-LOOK_CAPTURE_EVENT: str = "look.capture"
+# Must begin with "sensing_" or the monitor will not build a thumbnail for it.
+MONITOR_CATEGORY: str = "sensing_look"
+# Keep only the most recent few — one frame per visual question adds up, and
+# nothing reads the older ones.
+KEEP_LAST: int = 20
 
-_POST_TIMEOUT_S: float = 1.0
+
+def _monitor_dir() -> str:
+    root = getattr(config, "SNAPSHOT_PERSIST_DIR", "/var/lib/hal/snapshots")
+    return os.path.join(root, MONITOR_CATEGORY)
 
 
-def publish_look_frame(path: Optional[str]) -> bool:
-    """Announce a captured look frame. Best-effort: never raises, never blocks
-    the turn for long — a missing thumbnail must not cost the user an answer."""
-    if not path:
-        return False
+def _prune(directory: str) -> None:
     try:
-        resp = requests.post(
-            config.OS_SENSING_URL,
-            json={
-                "type": LOOK_CAPTURE_EVENT,
-                # The raw path is what the monitor's URL builder matches on.
-                # It never reaches the agent: the handler drops this type after
-                # logging, and the browser only ever sees the derived
-                # /api/sensing/agent-snapshot/ URL, not the device path.
-                "message": f"realtime look captured {path}",
-            },
-            timeout=_POST_TIMEOUT_S,
+        files = sorted(
+            (f for f in os.listdir(directory) if f.endswith(".jpg")),
+            reverse=True,
         )
-        if resp.status_code >= 400:
-            logger.debug("[look-monitor] publish returned %s", resp.status_code)
-            return False
-        return True
+        for stale in files[KEEP_LAST:]:
+            try:
+                os.unlink(os.path.join(directory, stale))
+            except OSError:
+                pass
     except Exception as e:
-        logger.debug("[look-monitor] publish failed: %s", e)
-        return False
+        logger.debug("[look-monitor] prune skipped: %s", e)
+
+
+def persist_for_monitor(src_path: Optional[str]) -> Optional[str]:
+    """Copy the look frame somewhere the monitor can serve it.
+
+    Returns the servable path, or None. Best-effort throughout: a missing
+    thumbnail must never cost the user their answer.
+    """
+    if not src_path or not os.path.exists(src_path):
+        return None
+    try:
+        directory = _monitor_dir()
+        os.makedirs(directory, exist_ok=True)
+        dst = os.path.join(directory, f"{int(time.time() * 1000)}.jpg")
+        shutil.copyfile(src_path, dst)
+        _prune(directory)
+        return dst
+    except Exception as e:
+        logger.debug("[look-monitor] persist failed: %s", e)
+        return None
+
+
+def snapshot_marker(monitor_path: Optional[str]) -> str:
+    """The marker to append to a turn message, or "" when there is no frame."""
+    return f"[snapshot: {monitor_path}]" if monitor_path else ""

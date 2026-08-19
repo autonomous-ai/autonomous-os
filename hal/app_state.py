@@ -98,6 +98,9 @@ _camera_manual_override = False
 # orchestrator's look handler; consumed + cleared once in turn_dispatch (strictly
 # per-turn). Path is a file in _SNAPSHOT_DIR; ts is time.monotonic() of capture.
 realtime_look_frame_path: Optional[str] = None
+# Servable copy of the same frame (under /var/lib/hal/snapshots/sensing_look/)
+# so the turn the user sees can show it as a thumbnail. Consumed by turn_dispatch.
+realtime_look_monitor_path: Optional[str] = None
 realtime_look_frame_ts: float = 0.0
 
 # --- Voice identity (speaker-ID as a presence signal) ---
