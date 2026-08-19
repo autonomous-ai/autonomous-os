@@ -87,8 +87,12 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
   // reached the speaker. Without its own marker the header is identical to a
   // turn the user actually heard, which is exactly the question you ask when
   // scanning the timeline for "why did it go quiet there?".
+  // Either signal counts: a turn can lose only its voice (the usual case) or
+  // only its body (web-chat turns never speak, so the click shows up purely as
+  // dropped HW markers).
   const wasCancelled = turn.events.some((ev) =>
-    ev.type === "flow_event" && ev.detail?.node === "tts_cancelled"
+    ev.type === "flow_event" &&
+    (ev.detail?.node === "tts_cancelled" || ev.detail?.node === "hw_cancelled")
   );
   const fmtToken = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
   const statusLabel = turn.status === "done"

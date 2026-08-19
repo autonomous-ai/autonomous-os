@@ -163,6 +163,7 @@ export const FLOW_NODES: FlowNodeDef[] = [
       "flow_event:tts_suppressed",
       "flow_event:tts_muted",
       "flow_event:tts_cancelled",
+      "flow_event:hw_cancelled",
       "hw_emotion", "flow_event:hw_emotion",
       "hw_led", "flow_event:hw_led",
       "hw_servo", "flow_event:hw_servo",

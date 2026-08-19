@@ -1159,6 +1159,9 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
     if (ev.type === "flow_event" && ev.detail?.node === "tts_cancelled") {
       pushUnique(info.os_gate, "✋ → TTS cancelled (click)");
     }
+    if (ev.type === "flow_event" && ev.detail?.node === "hw_cancelled") {
+      pushUnique(info.os_gate, "✋ → HW marker cancelled (click)");
+    }
     if (ev.type === "flow_event" && ev.detail?.node === "no_reply") {
       pushUnique(info.os_gate, "🚫 → no reply");
     }
