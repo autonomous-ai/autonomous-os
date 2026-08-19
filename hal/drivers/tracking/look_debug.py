@@ -229,17 +229,22 @@ def note_capture(frame_path: Optional[str]) -> None:
     note_event("captured" if frame_path else "capture FAILED")
 
 
-def _log_profile(trace: Dict[str, Any]) -> None:
-    """One line accounting for the whole look, biggest stage first.
+def _take_profile(trace: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Build the timing breakdown and REMOVE the raw stages from the trace.
 
-    `waiting_on_model` is the residual: total minus everything the device did
-    itself. It is the number that separates "the lamp is slow" from "the lamp
-    was done in 3s and then sat waiting for Gemini".
+    Kept in its own profile.json rather than result.json, matching the
+    speaker_logs convention — result.json is already dense with the look's
+    decision, and neither file should bury the other.
+
+    `waiting_on_model_ms` is the residual: total minus everything the device
+    did itself. It is the number that separates "the lamp is slow" from "the
+    lamp finished in 3s and then sat waiting for Gemini".
     """
-    stages: Dict[str, Any] = trace.get("stages") or {}
+    stages: Dict[str, Any] = trace.pop("stages", None) or {}
     total: float = float(trace.get("total_ms") or 0)
     if not stages:
-        return
+        return None
+
     # Sub-stages are nested inside their roll-up ("aim.detect" inside
     # "aim.total"), so counting both would double-charge the device and drive
     # the residual negative. Charge the roll-up; keep the children as breakdown.
@@ -247,18 +252,42 @@ def _log_profile(trace: Dict[str, Any]) -> None:
         prefix, _, leaf = name.rpartition(".")
         return bool(prefix) and leaf != "total" and f"{prefix}.total" in stages
 
+    def _pct(ms: float) -> Optional[float]:
+        return round(ms / total * 100.0, 1) if total > 0 else None
+
     device_ms = sum(
         float(v.get("ms") or 0) for k, v in stages.items() if not _is_child(k)
     )
-    residual = round(total - device_ms, 1)
-    trace["waiting_on_model_ms"] = residual
+    out: Dict[str, Any] = {}
+    for name, v in sorted(stages.items(), key=lambda kv: -float(kv[1].get("ms") or 0)):
+        ms = float(v.get("ms") or 0)
+        n = int(v.get("n") or 1)
+        entry: Dict[str, Any] = {"ms": round(ms, 1), "n": n, "pct": _pct(ms)}
+        if n > 1:
+            entry["avg_ms"] = round(ms / n, 1)
+        if _is_child(name):
+            entry["nested_in"] = f"{name.rpartition('.')[0]}.total"
+        out[name] = entry
+
+    return {
+        "total_ms": round(total, 1),
+        "device_ms": round(device_ms, 1),
+        "device_pct": _pct(device_ms),
+        "waiting_on_model_ms": round(total - device_ms, 1),
+        "stages": out,
+    }
+
+
+def _log_profile(profile: Dict[str, Any]) -> None:
+    """One line accounting for the whole look, biggest stage first."""
     parts = " ".join(
         f"{k}={v['ms']:.0f}ms" + (f"(x{v['n']})" if v.get("n", 1) > 1 else "")
-        for k, v in sorted(stages.items(), key=lambda kv: -float(kv[1].get("ms") or 0))
+        for k, v in profile["stages"].items()
     )
     logger.info(
         "LOOK-PROFILE total=%.0fms device=%.0fms waiting_on_model=%.0fms | %s",
-        total, device_ms, residual, parts,
+        profile["total_ms"], profile["device_ms"],
+        profile["waiting_on_model_ms"], parts,
     )
 
 
@@ -282,7 +311,9 @@ def finish(status: str, question: str = "", answer: str = "", error: str = "") -
         if error:
             trace["error"] = error
         trace["total_ms"] = round((time.monotonic() - trace.pop("_t0")) * 1000)
-        _log_profile(trace)
+        profile = _take_profile(trace)
+        if profile:
+            _log_profile(profile)
         stamp = time.strftime("%Y%m%d-%H%M%S")
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in status)[:40]
         outdir = _base / f"{stamp}_{safe}"
@@ -295,6 +326,9 @@ def finish(status: str, question: str = "", answer: str = "", error: str = "") -
                 pass
         with open(outdir / "result.json", "w", encoding="utf-8") as f:
             json.dump(trace, f, indent=2, ensure_ascii=False)
+        if profile:
+            with open(outdir / "profile.json", "w", encoding="utf-8") as f:
+                json.dump(profile, f, indent=2, ensure_ascii=False)
         _prune()
         logger.info("LOOK-DEBUG wrote %s", outdir)
     except Exception as e:

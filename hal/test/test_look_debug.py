@@ -137,13 +137,35 @@ def test_an_orphaned_trace_is_eventually_replaced():
 def test_profile_does_not_double_charge_nested_stages():
     """`aim.detect` lives inside `aim.total`; charging both would make the
     device look slower than the turn and push waiting_on_model negative."""
-    stages = {
-        "aim.total": {"ms": 2000.0, "n": 1},
-        "aim.detect": {"ms": 1500.0, "n": 3},
-        "aim.move": {"ms": 400.0, "n": 3},
-        "capture": {"ms": 300.0, "n": 1},
+    trace = {
+        "stages": {
+            "aim.total": {"ms": 2000.0, "n": 1},
+            "aim.detect": {"ms": 1500.0, "n": 3},
+            "aim.move": {"ms": 400.0, "n": 3},
+            "capture": {"ms": 300.0, "n": 1},
+        },
+        "total_ms": 25000,
     }
-    trace = {"stages": stages, "total_ms": 25000}
-    ld._log_profile(trace)
-    # device = aim.total + capture only
-    assert trace["waiting_on_model_ms"] == 25000 - (2000.0 + 300.0)
+    profile = ld._take_profile(trace)
+    assert profile["device_ms"] == 2300.0  # aim.total + capture only
+    assert profile["waiting_on_model_ms"] == 22700.0
+    assert profile["stages"]["aim.detect"]["nested_in"] == "aim.total"
+    assert profile["stages"]["aim.detect"]["avg_ms"] == 500.0
+    # stages move OUT of the trace so result.json is not buried by timings
+    assert "stages" not in trace
+
+
+def test_profile_written_as_its_own_file(tmp_path):
+    """profile.json sits beside result.json, per the speaker_logs convention."""
+    with mock.patch.object(ld, "_enabled", True), mock.patch.object(ld, "_base", tmp_path):
+        ld.start()
+        with ld.stage("capture"):
+            pass
+        ld.finish("OK_test")
+    dirs = list(tmp_path.iterdir())
+    assert len(dirs) == 1
+    written = {p.name for p in dirs[0].iterdir()}
+    assert "profile.json" in written and "result.json" in written
+    profile = json.loads((dirs[0] / "profile.json").read_text())
+    assert "capture" in profile["stages"]
+    assert profile["waiting_on_model_ms"] >= 0
