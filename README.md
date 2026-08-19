@@ -16,7 +16,7 @@ The simplest way in is a robot we have already tested it on. What each of them c
 
 [Lamp](https://www.autonomous.ai/lamp) is the robot that shows the whole OS — it sees, hears, speaks, moves, and ships with Autonomous OS on it.
 
-<img src="robots/lamp/images/lamp-hero.webp" alt="Autonomous Lamp on a desk, ring lit" width="720">
+<img src="robots/lamp/images/lamp-hero.webp" alt="Autonomous Lamp on a desk, ring lit">
 
 1. **Add it.** In the Autonomous app ([iOS](https://apps.apple.com/app/id6744885683) | [Android](https://play.google.com/store/apps/details?id=ai.autonomous.connect.wifi)), tap **Add robot → Lamp**.
 2. **Set up Wi-Fi.** Pick your network in the app; it joins the robot's hotspot and hands over the keys and pairing.
@@ -29,7 +29,7 @@ The simplest way in is a robot we have already tested it on. What each of them c
 
 [Reachy Mini](https://huggingface.co/docs/reachy_mini) is Hugging Face's desk robot, running our OS beside its own stack.
 
-<img src="robots/reachy-mini/images/reachy-lamp-hero.webp" alt="Reachy Mini and Autonomous Lamp side by side on a desk" width="720">
+https://github.com/user-attachments/assets/2f0aaafb-287c-488e-a3b1-a82f0ad9e776
 
 1. **SSH in** — `ssh pollen@reachy-mini.local`.
 2. **Run one command.** Nothing is flashed; the Reachy daemon keeps the motors.
@@ -46,7 +46,7 @@ The simplest way in is a robot we have already tested it on. What each of them c
 
 [Intern](https://www.autonomous.ai/intern) is the always-on desk agent: mic, speaker, LED ring.
 
-<img src="robots/intern-v2/images/intern-hero.webp" alt="Autonomous Intern on a desk beside a laptop, tip glowing blue" width="720">
+<img src="robots/intern-v2/images/intern-hero.webp" alt="Autonomous Intern on a desk beside a laptop, tip glowing blue">
 
 1. **Add it.** In the app, tap **Add robot → Intern**.
 2. **Set up Wi-Fi.** Same flow as Lamp: pick your network and it handles the keys and pairing.

@@ -26,22 +26,22 @@ Cả hai handler đều detect board qua `/proc/device-tree/model`:
 
 | Cử chỉ | Nút GPIO | Touchpad TTP223 |
 |---|---|---|
-| **1 chạm** | Stop loa / unmute mic + speaker + chime ack (~120 ms ping) — tất cả fire ngay khi nhả nút (không đợi click window); cue "Nghe đây" phát sau khi click window 0.4 s phân giải xong | Tách y hệt — TTS đang nói bị cắt và chime ack kêu ~0.2 s sau khi nhấc tay (session đầu kết thúc); unmute + cue đợi decision window 1.2 s (chi phí tap-vs-pet, xem dưới) |
+| **1 chạm** | Dừng object tracking đang chạy, rồi stop loa / unmute mic + speaker + chime ack (~120 ms ping) — tất cả fire ngay khi nhả nút (không đợi click window); cue "Nghe đây" phát sau khi click window 0.4 s phân giải xong | Tương tự sau khi quyết định tap-vs-pet 1.2 s xong — tracking đang chạy dừng, rồi action mic/loa và cue chạy. Chạm đầu tiên vẫn cắt TTS đang phát và kêu chime ack ngay. |
 | **2 chạm** (≤ 0.4 s, nút) / (≤ 1.2 s, TTP223) | Không thêm gì ngoài single-click đã fire ở chạm 1 (panic-click guard) | Pet response — TTS chọn ngẫu nhiên 1 câu từ pool theo ngôn ngữ |
 | **3 chạm** (≤ 0.4 s, nút) | Reboot OS (TTS báo → `sudo reboot`) | n/a — TTP223 dừng ở 2 (chạm thêm bị cooldown nuốt) |
-| **Giữ 3–10 s rồi nhả** | Phát thông báo sleep theo ngôn ngữ, rồi vào `sleepy`: LED tắt, camera/mic/speaker tắt; servo release sau 2 s. Khi đang giữ LED nháy tím sleepy. | n/a — phần cứng TTP223 không hold đáng tin được (xem "FastMode" dưới) |
-| **Giữ 10–20 s rồi nhả** | Shutdown OS (TTS báo → release servo → `sudo shutdown -h now`). LED nháy đỏ khi đã arm. | n/a — phần cứng TTP223 không hold đáng tin được (xem "FastMode" dưới) |
-| **Giữ 20 s+ rồi nhả** | Factory-reset: wipe state thiết bị + reboot vào AP setup (TTS báo → release servo → POST `/api/system/factory-reset` trên OS server). LED đỏ đứng khi đã arm. | n/a |
+| **Giữ 2–5 s rồi nhả** | Phát thông báo sleep theo ngôn ngữ, rồi vào `sleepy`: LED tắt, camera/mic/speaker tắt; servo release sau 1 s. Khi đang giữ LED nháy tím sleepy. | n/a — phần cứng TTP223 không hold đáng tin được (xem "FastMode" dưới) |
+| **Giữ 5–10 s rồi nhả** | Shutdown OS (TTS báo → release servo → `sudo shutdown -h now`). LED nháy đỏ khi đã arm. | n/a — phần cứng TTP223 không hold đáng tin được (xem "FastMode" dưới) |
+| **Giữ 10 s+ rồi nhả** | Factory-reset: wipe state thiết bị + reboot vào AP setup (TTS báo → release servo → POST `/api/system/factory-reset` trên OS server). LED đỏ đứng khi đã arm. | n/a |
 
-Gesture giữ chỉ có trên nút GPIO vì nút cơ học cho bằng chứng intent rõ ràng. Mức sleep và các mức destructive **commit khi nhả, không phải khi timer fire lúc đang giữ**. Các mức destructive escalate từ shutdown sang factory-reset sau 20 s (xem "Detect nút GPIO" dưới).
+Gesture giữ chỉ có trên nút GPIO vì nút cơ học cho bằng chứng intent rõ ràng. Mức sleep và các mức destructive **commit khi nhả, không phải khi timer fire lúc đang giữ**. Các mức destructive escalate từ shutdown sang factory-reset sau 10 s (xem "Detect nút GPIO" dưới).
 
 ## Cắt Lamp giữa câu (barge-in)
 
-Cử chỉ 1 chạm là **cơ chế barge-in chính** của Lamp: chạm đỉnh Lamp (touchpad) hoặc nhấn nút GPIO một lần khi Lamp đang nói → cắt câu TTS đang phát giữa chừng, dừng nhạc, unmute mic để Lamp lắng nghe câu kế. Nếu loa đang bị mute bởi user/scene thì cũng được gỡ (trừ khi đang ghi âm enroll giọng) để cue và câu trả lời nghe lại được. Sau khi cắt, một câu cue "Nghe đây" (theo ngôn ngữ) được phát.
+Cử chỉ 1 chạm là **cơ chế barge-in và huỷ attention chính** của Lamp: trước hết nó dừng mọi session object tracking đang chạy; sau đó chạm đỉnh Lamp (touchpad) hoặc nhấn nút GPIO một lần khi Lamp đang nói → cắt câu TTS đang phát giữa chừng, dừng nhạc, unmute mic để Lamp lắng nghe câu kế. Nếu loa đang bị mute bởi user/scene thì cũng được gỡ (trừ khi đang ghi âm enroll giọng) để cue và câu trả lời nghe lại được. Dừng tracking vẫn hoạt động khi hardware mic kill switch đang tắt; nó không wake hoặc unmute mic. Cue "Nghe đây" (theo ngôn ngữ) chỉ phát khi switch cho phép action voice.
 
 Chuỗi end-to-end:
 1. `gpio_button.py` / `ttp223.py` detect single click → gọi `single_click_action(source)` trong `button_actions.py`
-2. `single_click_action` → `stop_tts()` (routes/voice.py) + `audio_stop()` (routes/music.py) + thread deferred `_announce_listening()`
+2. `single_click_action` → `tracker_service.stop()` nếu đang tracking + `stop_tts()` (routes/voice.py) + `audio_stop()` (routes/music.py) + thread deferred `_announce_listening()`
 3. `stop_tts()` → `tts_service.stop()` set `_stop_event`; mọi blocking loop trong TTS stream (synth, render, playback) check event và abort sạch, không để loa kẹt
 
 ### Voice barge-in (tuỳ chọn, mặc định tắt)
@@ -54,13 +54,13 @@ Khi bật, tail log để xem `Barge-in monitor session end: max_rms_seen=N` (pe
 
 ## Detect nút GPIO (`hal/drivers/gpio_button.py`)
 
-Driver đếm edge nơi **mọi destructive action commit ở rising edge (nhả) dựa trên thời lượng giữ** — không timer nào fire lúc đang giữ. Đây chính là cái cho phép user huỷ giữa chừng (nhả trước ngưỡng) hoặc escalate (giữ tiếp quá 20 s).
+Driver đếm edge nơi **mọi destructive action commit ở rising edge (nhả) dựa trên thời lượng giữ** — không timer nào fire lúc đang giữ. Đây chính là cái cho phép user huỷ giữa chừng (nhả trước ngưỡng) hoặc escalate (giữ tiếp quá 10 s).
 
 1. **Falling edge (nhấn):** ghi `press_start` (đồng hồ monotonic) và spawn thread hold-LED watcher (mỗi lần nhấn 1 thread, có stop `Event` riêng). Không arm timer action nào.
 2. **Rising edge (nhả):** dừng LED watcher, tính `held = now − press_start` rồi rẽ nhánh:
-   - `held >= 20 s` (`FACTORY_RESET_DURATION`) → scrub mọi click đang chờ, khoá LED đỏ đứng, chạy `factory_reset_action` off-thread.
-   - `held >= 10 s` (`LONG_PRESS_DURATION`) → scrub click đang chờ, freeze LED đỏ, chạy `long_press_action` (shutdown) off-thread.
-   - `held >= 3 s` (`SLEEP_HOLD_DURATION`) → scrub click đang chờ, chạy `sleep_action` off-thread; nó gọi pipeline emotion `sleepy` chuẩn.
+   - `held >= 10 s` (`FACTORY_RESET_DURATION`) → scrub mọi click đang chờ, khoá LED đỏ đứng, chạy `factory_reset_action` off-thread.
+   - `held >= 5 s` (`LONG_PRESS_DURATION`) → scrub click đang chờ, freeze LED đỏ, chạy `long_press_action` (shutdown) off-thread.
+   - `held >= 2 s` (`SLEEP_HOLD_DURATION`) → scrub click đang chờ, chạy `sleep_action` off-thread; nó gọi pipeline emotion `sleepy` chuẩn.
    - khác (tap ngắn) → `click_count += 1` và (re)start click-window timer 0.4 s. Ở tap **đầu tiên** của chuỗi, phần im lặng của `single_click_action` (`announce=False`) fire ngay off-thread — nó không phá huỷ ("cho tôi nói"), nên không cần đợi window. Cue nói được hoãn lại để không nói đè lên chuỗi triple-click đang bấm dở.
 3. Khi click window hết:
    - `count == 3` → `triple_click_action` (không cue — chỉ announce reboot)
@@ -74,10 +74,10 @@ Thread watcher poll thời lượng giữ và đẩy LED RGB ở priority HIGH (
 
 | Thời gian giữ | LED | Ý nghĩa |
 |---|---|---|
-| < 3 s | giữ nguyên | một tap ngắn |
-| 3–10 s | tím sleepy, nháy 2 Hz | đã arm sleepy; nhả ra sẽ vào sleep (LED sau đó tắt) |
-| 10–20 s | đỏ, nháy 2 Hz | đã arm shutdown — nhả bây giờ là tắt máy |
-| 20 s+ | đỏ, đứng | đã arm factory-reset — nhả bây giờ là wipe + reboot |
+| < 2 s | giữ nguyên | một tap ngắn |
+| 2–5 s | tím sleepy, nháy 2 Hz | đã arm sleepy; nhả ra sẽ vào sleep (LED sau đó tắt) |
+| 5–10 s | đỏ, nháy 2 Hz | đã arm shutdown — nhả bây giờ là tắt máy |
+| 10 s+ | đỏ, đứng | đã arm factory-reset — nhả bây giờ là wipe + reboot |
 
 Màu tím nhận diện mức sleep; đỏ nháy vs đỏ đứng phân biệt shutdown với factory-reset. LED là no-op im lặng khi RGB service không có (máy dev) — nút vẫn hoạt động.
 
@@ -120,16 +120,16 @@ Các action sống ở một chỗ để nút GPIO, TTP223, và mọi input tư�
 
 | Hàm | Làm gì | Cắt TTS đang phát? |
 |---|---|---|
-| `single_click_action(source)` | Gỡ mute loa do user/scene (bỏ qua khi `_enrolling`). Mic bị mute → unmute. Khác thì stop TTS + stop music. Rồi nói câu "Nghe đây" local với retry-on-busy. | Có — gọi `stop_tts()` và bản thân câu cue cũng preempt. |
+| `single_click_action(source)` | Dừng object tracking đang chạy. Sau đó gỡ mute loa do user/scene (bỏ qua khi `_enrolling`). Mic bị mute → unmute. Khác thì stop TTS + stop music. Rồi nói câu "Nghe đây" local với retry-on-busy. Tracking vẫn dừng khi hardware mic kill switch đang tắt; action voice vẫn bị chặn. | Có — gọi `stop_tts()` và bản thân câu cue cũng preempt. |
 | `triple_click_action(source)` | Nói "Đang khởi động lại" → đợi 5 s cho clip cached → `sudo reboot`. | Có |
-| `sleep_action(source)` | Phát thông báo sleep theo ngôn ngữ, rồi gọi `sleepy`: LED tắt, camera/mic/speaker tắt, rồi release servo sau 2 s. | Có — pipeline sleepy dừng TTS/nhạc đang phát sau thông báo. |
+| `sleep_action(source)` | Phát thông báo sleep theo ngôn ngữ, rồi gọi `sleepy`: LED tắt, camera/mic/speaker tắt, rồi release servo sau 1 s. | Có — pipeline sleepy dừng TTS/nhạc đang phát sau thông báo. |
 | `long_press_action(source)` | Nói "Đang tắt máy" → đợi 5 s → `release_servos()` (để đèn không slam xuống giữa pose) → `sudo shutdown -h now`. | Có |
 | `factory_reset_action(source)` | Nói "Đang khôi phục cài đặt gốc. Đang khởi động lại" → `release_servos()` → POST `/api/system/factory-reset` trên OS server (server lo phần wipe + reboot, xem dưới). | Có |
 | `head_pat_action(source)` | Chọn ngẫu nhiên 1 câu pet local, nói qua `speak_cached` trên daemon thread. **Không cắt**: nếu TTS vẫn busy thì câu pet bị drop im lặng. Thực tế trên TTP223, session chạm đầu tiên đã cắt lời đang nói (`_grab_floor_if_speaking`) nên tới lúc pet fire thì TTS thường rảnh và câu giggle phát được. | Không |
 
 ### Factory-reset: wipe những gì
 
-`factory_reset_action` chỉ **báo + uỷ quyền** — phần reset thật nằm ở OS server (`system/server/system/factoryreset.go`), gọi được từ thiết bị qua loopback không cần Bearer token (authoritative nhờ hiện diện vật lý: giữ 20 s có chủ ý). `POST /api/system/factory-reset` là reset **mềm** (wipe state, không reflash — kernel / package OS / binary / `.venv` HAL không bị đụng):
+`factory_reset_action` chỉ **báo + uỷ quyền** — phần reset thật nằm ở OS server (`system/server/system/factoryreset.go`), gọi được từ thiết bị qua loopback không cần Bearer token (authoritative nhờ hiện diện vật lý: giữ 10 s có chủ ý). `POST /api/system/factory-reset` là reset **mềm** (wipe state, không reflash — kernel / package OS / binary / `.venv` HAL không bị đụng):
 
 1. Wipe state của agent backend đang chạy (OpenClaw hoặc Hermes, auto-detect từ `config.json` `agent_runtime`).
 2. Wipe các path state của thiết bị: `/root/config` (config.json — API key, channel token, MQTT creds), `/root/local/users` + `/root/local/strangers` (enrollment khuôn mặt/giọng), `/var/lib/hal/snapshots` (snapshot camera), và `/etc/wpa_supplicant/wpa_supplicant-wlan0.conf` (WiFi nhà → ép vào AP mode lần boot kế).

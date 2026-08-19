@@ -32,6 +32,24 @@ from hal.drivers.rgb.effects import run_effect as _run_effect
 router = APIRouter(tags=["LED"])
 
 
+def _sleep_led_locked(route: str) -> bool:
+    """True while the device is asleep — sleepy owns the strip.
+
+    app_state already gates every *internal* repaint (emotion, TTS wave, music
+    wave, mic-muted, restore timer) on `_sleeping`, but the HTTP routes were
+    open: an agent finishing a stale task and POSTing /led/effect or
+    /led/status would light the strip on a sleeping device. Writes are dropped
+    here rather than queued — sleep is a state, not a pause, so a cue that
+    arrives during it is stale by the time the device wakes.
+
+    Clearing routes (/led/off, /led/effect/stop) are deliberately NOT gated:
+    they drive the strip toward dark, which is what sleep already wants."""
+    if not state._sleeping:
+        return False
+    state.logger.info("%s skipped -- sleepy owns the strip", route)
+    return True
+
+
 @router.get("/led", response_model=LEDStateResponse)
 def get_led_state():
     """Get LED strip info."""
@@ -73,6 +91,8 @@ def get_led_color():
 @router.post("/led/solid", response_model=StatusResponse)
 def set_led_solid(req: LEDSolidRequest):
     """Fill entire LED strip with a single color."""
+    if _sleep_led_locked("led/solid"):
+        return {"status": "ok"}
     if not state.rgb_service:
         raise HTTPException(503, "LED not available")
     color = tuple(req.color) if isinstance(req.color, list) else req.color
@@ -120,6 +140,8 @@ def _expand_gradient(stops, n: int) -> list:
 @router.post("/led/paint", response_model=StatusResponse)
 def set_led_paint(req: LEDPaintRequest):
     """Set individual pixel colors (multi-color fills, gradients)."""
+    if _sleep_led_locked("led/paint"):
+        return {"status": "ok"}
     if not state.rgb_service:
         raise HTTPException(503, "LED not available")
     if req.gradient:
@@ -188,6 +210,8 @@ def turn_off_leds(req: Optional[LEDOffRequest] = Body(default=None)):
 @router.post("/led/effect", response_model=LEDEffectResponse)
 def start_led_effect(req: LEDEffectRequest):
     """Start a LED effect (breathing, candle, rainbow, notification_flash, pulse)."""
+    if _sleep_led_locked(f"LED effect '{req.effect}'"):
+        return {"status": "ok", "effect": req.effect, "speed": req.speed}
     if not state.rgb_service:
         raise HTTPException(503, "LED not available")
     if req.effect not in VALID_LED_EFFECTS:
@@ -302,6 +326,8 @@ def restore_led():
     strip. If no user state exists, the strip is cleared to off so the
     transient color/effect doesn't linger.
     """
+    if _sleep_led_locked("led/restore"):
+        return {"status": "ok"}
     if not state.rgb_service:
         raise HTTPException(503, "LED not available")
     if state._tts_speaking:

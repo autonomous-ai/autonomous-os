@@ -85,6 +85,13 @@ type SensingHandler struct {
 func ProvideSensingHandler(gw domain.AgentGateway, bus *monitor.Bus, cfg *config.Config, sled *statusled.Service, isSleeping func() bool) *SensingHandler {
 	// Gate local intent rules to what this device's body can do — set once here.
 	intent.Configure(device.Capabilities(cfg.DeviceTypeOrDefault()))
+	// Social talk belongs to whoever answers first. With the realtime agent on,
+	// it takes every voice turn before os-server sees one and replies in
+	// character — so local chitchat would only ever fire on turns it stayed
+	// silent for, barging in with a canned line in another voice. Command
+	// intents (lights, volume, time) stay on regardless: those genuinely beat
+	// the model. Re-evaluated on every config change (see runConfigChangeListener).
+	intent.SetChitchatEnabled(!cfg.RealtimeEnabled())
 	return &SensingHandler{
 		agentGateway: gw,
 		monitorBus:   bus,

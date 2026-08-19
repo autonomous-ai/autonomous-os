@@ -8,37 +8,46 @@ import hal.app_state as state
 from hal.models import EmotionRequest, EmotionResponse
 from hal.presets import (
     EMOTION_PRESETS,
-    EMO_CARING,
-    EMO_CONFUSED,
     EMO_CURIOUS,
-    EMO_EXCITED,
     EMO_GREETING,
-    EMO_HAPPY,
     EMO_IDLE,
-    EMO_LAUGH,
     EMO_LISTENING,
-    EMO_SAD,
     EMO_SHOCK,
-    EMO_SHY,
     EMO_SLEEPY,
     EMO_STRETCHING,
+    EMO_THINKING,
     LST_OFF,
     SERVO_CMD_PLAY,
+    SERVO_IDLE,
 )
 
-# Emotions that can wake the device from sleep.
-# greeting/stretching/sleepy = direct wake triggers.
-# happy/excited/caring/laugh/curious/sad/shy/shock/confused = agent responding to user interaction.
-# thinking/idle/acknowledge/nod/headshake/scan/music_* do NOT wake (background processing).
-_WAKE_EMOTIONS = {
+# Emotions allowed through the sleep gate. Not all of them wake: greeting and
+# stretching flip `_sleeping` back to False, while sleepy passes so a repeat
+# (night scene, presence.away) can re-arm the auto-release timer and re-apply
+# the sleepy peripheral state on an already-sleeping device.
+#
+# The expressive set (happy/excited/caring/laugh/curious/sad/shy/shock/
+# confused) used to wake too, on the theory that an emotional reply means the
+# agent is responding to a live user. It does not: an emotion name carries no
+# evidence of who caused it, so an agent finishing a stale background task
+# would light the strip and move the body on a sleeping device. Sleep is a
+# do-not-disturb state — the way back out is a physical tap on the button, or
+# presence.enter → greeting when the user walks back in.
+_SLEEP_GATE_ALLOWED = {
     EMO_GREETING, EMO_STRETCHING, EMO_SLEEPY,
-    EMO_HAPPY, EMO_EXCITED, EMO_CARING, EMO_LAUGH, EMO_CURIOUS,
-    EMO_SAD, EMO_SHY, EMO_SHOCK, EMO_CONFUSED,
 }
 
 # Auto-release the servo shortly after *continuous* sleepy so the animation
 # can settle before torque is disabled.
-SLEEPY_AUTO_RELEASE_SECONDS = 2
+SLEEPY_AUTO_RELEASE_SECONDS = 1.0
+
+# How long a still emotion (preset with servo=None) keeps the body frozen
+# before idle breathing resumes. A following emotion clears the halt on its
+# own (_handle_play calls _begin_motion), so this only covers the turn that
+# never produces one: an LLM error, or silence after the first partial.
+# Roughly matches the voice-service listening safety net (8s) with headroom
+# for the reply to arrive first.
+STILL_IDLE_RESUME_SECONDS = 10.0
 
 router = APIRouter(tags=["Emotion"])
 
@@ -75,9 +84,10 @@ def express_emotion(req: EmotionRequest):
         # Callers are AI agents that sometimes invent emotion names — a 400
         # wastes their turn and nothing shows on the device. Fall back to
         # curious (a neutral, always-safe expression) instead of rejecting.
-        # While sleeping, ignore instead: curious is a wake emotion, so the
-        # fallback would let an invented name bypass the sleep gate and wake
-        # the device (servo curious → idle, never returns to sleepy).
+        # While sleeping, ignore instead. `curious` no longer wakes, so the
+        # fallback would not lift the sleep gate — but it would still resolve
+        # to a servo/LED-bearing emotion that the gate below then drops, and
+        # logging it as "curious" hides which invented name the agent sent.
         if state._sleeping:
             state.logger.info(
                 "POST /emotion: ignored unknown '%s' while sleeping", req.emotion
@@ -95,15 +105,26 @@ def express_emotion(req: EmotionRequest):
                        state._user_led_state.get("type") if state._user_led_state else None,
                        state._sleeping)
 
-    if state._sleeping and req.emotion not in _WAKE_EMOTIONS:
+    if state._sleeping and req.emotion not in _SLEEP_GATE_ALLOWED:
         state.logger.info("POST /emotion: ignored %s while sleeping", req.emotion)
         return {"status": "ignored", "emotion": req.emotion, "servo": None, "led": None}
 
     was_sleeping = state._sleeping
     state._sleeping = req.emotion == EMO_SLEEPY
     state._current_emotion = req.emotion
+    # Any other emotion supersedes the realtime thinking cue — drop its claim
+    # so an LED restore never repaints thinking over what was just expressed.
+    if req.emotion != EMO_THINKING:
+        state._thinking_cue_active = False
     if was_sleeping and not state._sleeping:
         state._wake_sleepy_peripherals()
+
+    # Any emotion cancels a pending still-emotion idle resume: either it plays
+    # a recording (which clears the halt itself) or it is another still
+    # emotion that re-arms the timer below.
+    if state._still_idle_timer is not None:
+        state._still_idle_timer.cancel()
+        state._still_idle_timer = None
 
     # Sleepy auto-release: fires only if sleepy stays continuous for the
     # full window. Any other emotion (including a wake) cancels the timer.
@@ -125,7 +146,7 @@ def express_emotion(req: EmotionRequest):
                 with state._sleep_servo_lock:
                     state._sleep_servo_released = True
                     state.logger.info(
-                        "Auto-release: sleepy held >= %ds, releasing servo",
+                        "Auto-release: sleepy held >= %.1fs, releasing servo",
                         SLEEPY_AUTO_RELEASE_SECONDS,
                     )
                     release_servos()
@@ -189,6 +210,47 @@ def express_emotion(req: EmotionRequest):
     elif servo_blocked:
         reason = "tracking active" if tracking_active else "hold mode"
         state.logger.info("POST /emotion: servo suppressed (%s) -- %s", req.emotion, reason)
+    elif svc and preset.get("servo") is None:
+        # Still emotion (listening, thinking): the point is a body that does
+        # not move, and leaving the servo alone does NOT achieve that. The
+        # idle recording loops forever once it settles (animation_service
+        # _continue_playback), and idle is not a subtle breath — it swings
+        # wrist_roll ~32 deg and base_pitch ~17 deg per cycle. Worse, an
+        # emotion that just finished interpolates BACK to idle over several
+        # seconds, so the biggest movement of all lands exactly while the
+        # user is talking. halt() drops whatever is playing and pins the
+        # current pose with torque on; the next play clears it via
+        # _begin_motion, so nothing has to un-halt explicitly.
+        # Music is exempt: the groove is the point of that moment, and a
+        # listening cue must not stop the dance.
+        if getattr(svc, "_music_playing", False):
+            state.logger.info("POST /emotion: still emotion (%s) -- music playing, body keeps moving", req.emotion)
+        else:
+            try:
+                svc.halt()
+                state.logger.info("POST /emotion: still emotion (%s) -- body halted, idle in %.1fs",
+                                  req.emotion, STILL_IDLE_RESUME_SECONDS)
+
+                def _resume_idle_after_still(held=req.emotion):
+                    # Only resume if the device is still in the same still
+                    # emotion: any newer emotion already owns the body.
+                    if state._current_emotion != held:
+                        return
+                    try:
+                        svc.ensure_running()
+                        svc.dispatch(SERVO_CMD_PLAY, SERVO_IDLE)
+                        state.logger.info("Still emotion %s held >= %.1fs -- idle resumed",
+                                          held, STILL_IDLE_RESUME_SECONDS)
+                    except Exception as e:
+                        state.logger.warning("Still-emotion idle resume failed: %s", e)
+
+                state._still_idle_timer = threading.Timer(
+                    STILL_IDLE_RESUME_SECONDS, _resume_idle_after_still
+                )
+                state._still_idle_timer.daemon = True
+                state._still_idle_timer.start()
+            except Exception as e:
+                state.logger.warning("Still-emotion halt failed: %s", e)
 
     # LED behavior:
     #   - tracking_active: LED still updates so the user sees emotion

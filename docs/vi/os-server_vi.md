@@ -351,6 +351,7 @@ HAL (Python): FastAPI standard JSON responses.
 
 1. OS Server khởi động Gin trên :5000
 2. Đọc `config/config.json`
+   - Seed `device_type` từ device class đã resolve (env `DEVICE_TYPE`, không có thì lấy key sẵn có) để config.json mang giá trị này cho các bên đọc không có env — wake word của HAL và `software-update`. Provisioning chỉ ghi env, nên không có seed này thì key không bao giờ tồn tại trên máy đã provision. Chỉ ghi khi giá trị đang lưu khác giá trị resolve
    - Seed `tts_provider` + `tts_voice` từ block `voice:` trong ROBOT.md khi user chưa chọn (ghi một lần; lựa chọn đã lưu của user luôn thắng; provider vắng/không hợp lệ → `openai`). Khi provider seed là `elevenlabs` mà không khai báo voice, chọn default theo ngôn ngữ (`vi`→Ngan, `zh`→Amy, còn lại Rachel)
 3. Nếu `SetUpCompleted`:
    - Kết nối OpenClaw WebSocket
@@ -389,6 +390,8 @@ Khi nhận event `voice_command`, `voice_followup` hoặc `voice`, OS server che
 | "mute speaker" | `POST /speaker/mute` (im lặng — không TTS xác nhận) |
 | "unmute speaker" | `POST /speaker/unmute` + "Speaker on!" |
 
-Keyword match theo nguyên cụm với word boundary ASCII — "unmute speaker" không kích rule "mute speaker".
+Keyword match theo nguyên cụm với word boundary ASCII — "unmute speaker" không kích rule "mute speaker". Các rule chitchat (chào / tạm biệt / cảm ơn, match theo từng ngôn ngữ) dùng chung phép kiểm tra boundary đó: trước đây match chuỗi con thô khiến phrase 2 ký tự "hi" khớp nằm trong "this", "his", "machine", nên câu bình thường như "What is this?" bị trả lời tại chỗ bằng "Hi there!" và không bao giờ tới agent.
+
+Chitchat **tắt khi realtime voice agent đang bật** — model nhận mọi lượt voice trước os-server và tự trả lời phần xã giao, đúng nhân cách của nó. Bật cả hai nghĩa là một câu canned với giọng khác chen ngang đúng những lượt model tình cờ im. Các rule lệnh phía trên vẫn chạy trong mọi trường hợp vì chúng thật sự nhanh hơn một vòng model. Cổng này bám theo `realtime.enabled` ngay lúc chạy, đổi trong Settings không cần restart.
 
 Không match → forward OpenClaw.

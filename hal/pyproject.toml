@@ -24,7 +24,15 @@ dependencies = [
     "requests>=2.31.0",
     "sounddevice>=0.5.2",
     "webrtcvad>=2.0.10",
-    "yt-dlp>=2025.3.0",
+    # Nightly, deliberately. YouTube breaks extraction every few weeks and the
+    # yt-dlp maintainers ship the fix within days — but only to the nightly
+    # channel, so a stable release goes stale while music is dead on every
+    # device. 2026.7.4 (the newest stable as of this pin) 403s on all protected
+    # content: metadata resolves, every format URL is refused. The 2026.8.17
+    # nightly restores it via the visionos client + HLS path. Requires
+    # prerelease = "if-necessary-or-explicit" below to resolve at all.
+    # Expect to bump this again — treat it as routine upkeep, not an incident.
+    "yt-dlp>=2026.8.17.73947.dev0",
     "Pillow>=10.0.0",
     "opencv-python>=4.8.0",
     "ultralytics>=8.4,<9",
@@ -60,6 +68,11 @@ where = [".."]
 include = ["hal"]
 
 [tool.uv]
+# Needed for the yt-dlp nightly pin above (see the comment there). Scoped
+# deliberately: "explicit" only honours a prerelease a requirement names
+# outright, "if-necessary" only when no stable satisfies it — so every other
+# dependency keeps resolving to stable as before.
+prerelease = "if-necessary-or-explicit"
 required-environments = [
     "sys_platform == 'linux' and platform_machine == 'aarch64'",
     "sys_platform == 'darwin' and platform_machine == 'x86_64'",

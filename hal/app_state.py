@@ -24,6 +24,7 @@ from hal.presets import (
     EMOTION_PRESETS,
     FX_SPEAKING_WAVE,
     FX_SPEAKING_WAVE_RAINBOW,
+    LED_BACKEND_ERROR_FLASH,
     LST_EFFECT,
     LST_OFF,
     LST_PAINT,
@@ -243,9 +244,20 @@ _user_led_state: Optional[dict] = None
 _restore_timer: Optional[threading.Timer] = None
 _sleeping: bool = False
 _current_emotion: Optional[str] = None
+# True while the realtime turn is showing its `thinking` cue. A dead-air
+# filler is TTS, so it stops the pulse and _restore_user_led would settle on
+# the user state — leaving the rest of the wait (often the longest part, the
+# reason the filler fired at all) with no visual at all. While this is set,
+# restore repaints the cue instead. Cleared by the same code that clears the
+# cue (hal/drivers/voice/_internal/realtime_turn.py).
+_thinking_cue_active: bool = False
 # Fires release_servos after sleepy stays active continuously. Cancelled
 # the moment the emotion changes away from sleepy (see routes/emotion.py).
 _sleepy_release_timer: Optional[threading.Timer] = None
+# Fires idle again after a still emotion (a preset with servo=None) halted the
+# animation loop, so the body never stays frozen once the moment has passed.
+# Cancelled on every /emotion (see routes/emotion.py).
+_still_idle_timer: Optional[threading.Timer] = None
 # Set once sleepy has released torque. Servo routes honor this lock until a
 # wake emotion explicitly resumes the motion service.
 _sleep_servo_released = False
@@ -848,7 +860,7 @@ def _flash_backend_error():
     def _run_then_settle():
         from hal.drivers.rgb.effects import notification_flash
 
-        color = (255, 191, 0)  # amber-yellow, distinct from statusled hardware fault
+        color = LED_BACKEND_ERROR_FLASH
         local_stop = threading.Event()
         try:
             notification_flash(color, 1.0, local_stop, rgb_service)
@@ -904,6 +916,13 @@ def _restore_user_led():
     if _mic_muted_led_owns_strip():
         logger.info("LED restore: mic muted -- settling on privacy indicator")
         _start_mic_muted_effect()
+        return
+
+    # A realtime turn still waiting on the model owns the strip: repaint the
+    # thinking cue the filler's speaking_wave just overwrote.
+    if _thinking_cue_active:
+        logger.info("LED restore: realtime thinking cue still active -- repainting")
+        _apply_emotion_led_display(EMO_THINKING, 0.7, force_led=True)
         return
 
     state = _user_led_state
@@ -1293,8 +1312,8 @@ def _read_agent_name() -> str:
     # No IDENTITY.md name → use the device type (lamp/dog/intern) so an unnamed
     # device is addressed by its class instead of a hardcoded "lamp".
     try:
-        from hal.config import _os_cfg_get
-        device_type = (_os_cfg_get("device_type") or "").strip().lower()
+        from hal.config import resolve_device_type
+        device_type = resolve_device_type()
         if device_type:
             return device_type
     except Exception:
@@ -1309,6 +1328,34 @@ def _build_wake_words(name: str) -> list[str]:
         f"{prefix} {n}"
         for prefix in ("hello", "hey", "hi", "alo", "okay", "ok", "wake up")
     ]
+
+
+def _stt_boost_terms() -> list[str]:
+    """Names STT must not mangle: everything that can open the wake-word gate.
+
+    STT decides whether a turn is heard at all, and it mis-hears proper nouns it
+    has no reason to expect — "hi lamp" came back as "hi lance", "hello rachel"
+    as "hello risa", and each miss silently drops the whole turn. Boosting only
+    the agent name is not enough: the device type and the permanent "autonomous"
+    alias arm the same gate (see _build_wake_words and the DEFAULT_WAKE_WORDS
+    the voice service merges in).
+
+    Returned in Deepgram's `keyword:intensifier` form. The Flux and nova-3 paths
+    strip the weight — their `keyterm` parameter takes plain terms. Duplicates
+    are dropped so an unnamed device, whose agent name falls back to the device
+    type, does not boost the same word twice.
+    """
+    from hal.config import resolve_device_type
+
+    seen: set[str] = set()
+    terms: list[str] = []
+    for name in (_read_agent_name(), resolve_device_type(), "autonomous"):
+        name = (name or "").strip().lower()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        terms.append(f"{name}:3")
+    return terms
 
 
 def _find_audio_device(output: bool = True) -> Optional[int]:

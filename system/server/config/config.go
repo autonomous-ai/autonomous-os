@@ -202,8 +202,11 @@ type Config struct {
 	// DeviceType is the device class/profile id — the folder name under robots/
 	// (e.g. "lamp", "intern-v2", "unitree-go2w"). Selects which ROBOT.md/SOUL.md the
 	// runtime loads. Empty resolves to "" — no "lamp" fallback (see DeviceTypeOrDefault;
-	// the Serve startup guard fail-louds). HAL reads the same key from config.json via
-	// _os_cfg_get("device_type").
+	// the Serve startup guard fail-louds). Provisioning supplies the class via the
+	// DEVICE_TYPE env, not this key — Serve seeds the resolved value back here on
+	// startup so config.json readers that have no env (HAL's wake words,
+	// software-update) find it. Those readers must still prefer the env: see
+	// hal/config.py resolve_device_type.
 	DeviceType string `json:"device_type,omitempty" yaml:"deviceType"`
 
 	// MQTT (optional): empty broker URL means MQTT disabled
@@ -291,7 +294,6 @@ func Load() (*Config, error) {
 }
 
 func Default() Config {
-	wakeWord := false
 	return Config{
 		HttpPort: 5000,
 
@@ -318,7 +320,7 @@ func Default() Config {
 		// Seed the realtime block so a fresh config.json always carries an editable
 		// realtime config (HAL reads it from there). See DefaultRealtimeConfig.
 		Realtime: DefaultRealtimeConfig(),
-		WakeWord: &wakeWord,
+		// WakeWord stays nil — Serve seeds it from ROBOT.md voice.wakeword.
 
 		notify: make(chan bool, 1),
 	}
@@ -399,15 +401,6 @@ func ProvideConfig() *Config {
 	cfg.OTAMetadataURL = otaMetadataURLFromBootstrap()
 
 	return &cfg
-}
-
-// ResetToDefault resets all config fields to default values (keeps notify channel) and saves.
-// Used e.g. by the physical reset button (press-and-hold >= 10s).
-func (c *Config) ResetToDefault() error {
-	notify := c.notify
-	*c = Default()
-	c.notify = notify
-	return c.Save()
 }
 
 // WithLockSave is the canonical way to mutate config fields and persist them.

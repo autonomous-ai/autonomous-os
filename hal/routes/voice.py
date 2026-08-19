@@ -125,12 +125,19 @@ def start_voice(req: VoiceStartRequest):
         raise HTTPException(503, "Voice service not available (missing deps)")
     try:
         stt_provider = None
+        # Boost every name the wake-word gate will listen for. STT decides
+        # whether a turn is even heard, and it mis-hears proper nouns it has no
+        # reason to expect — "hi lamp" came back as "hi lance", "hello rachel"
+        # as "hello risa", and each miss silently drops the whole turn. The
+        # agent name alone is not enough: the device type and the permanent
+        # "autonomous" alias arm the same gate (see _build_wake_words and
+        # voice/_internal/config.py DEFAULT_WAKE_WORDS).
+        stt_keywords = state._stt_boost_terms()
         if req.deepgram_api_key and DeepgramSTT:
-            agent_name = state._read_agent_name()
-            stt_provider = DeepgramSTT(api_key=req.deepgram_api_key, keywords=[f"{agent_name}:3"])
+            stt_provider = DeepgramSTT(api_key=req.deepgram_api_key, keywords=stt_keywords)
         elif AutonomousSTT:
             stt_provider = AutonomousSTT(
-                api_key=stt_api_key, base_url=stt_base_url
+                api_key=stt_api_key, base_url=stt_base_url, keywords=stt_keywords
             )
         if not stt_provider:
             raise HTTPException(503, "No STT provider available")

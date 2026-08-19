@@ -57,14 +57,24 @@ def _build_flux_query_params(
     keywords: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Flux (`flux-*`): model + PCM + channels only (Listen v2 style).
-    Keywords are passed through for proxies that support them."""
-    params = dict(
+
+    Boosting goes on the `keyterm` parameter, repeated once per term — Flux
+    speaks Listen v2, where `keywords` (the v1 name) does not exist and a
+    comma-joined list is not a separator. Weights are dropped: Flux does not
+    reject `keyterm=rachel:3`, it silently treats the whole string as one
+    literal term, so a weighted value boosts nothing. An earlier attempt sent
+    `keywords=rachel:3,lamp:3` and was reverted the next day for having no
+    effect — that is why; the feature works, the encoding was wrong.
+    """
+    params: Dict[str, Any] = dict(
         model=model,
         encoding=encoding,
         sample_rate=sample_rate,
     )
-    # if keywords:
-    #     params["keywords"] = ",".join(keywords)
+    terms = _keyword_boost_to_terms(keywords or [])
+    if terms:
+        params["keyterm"] = terms
+        logger.info("Autonomous STT: flux — keyterm=%s", terms)
     return params
 
 

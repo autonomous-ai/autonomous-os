@@ -41,8 +41,17 @@ router = APIRouter(tags=["Servo"])
 
 
 def _sleep_servo_locked() -> bool:
-    """True once sleepy released torque, until a wake emotion resumes it."""
-    return state._sleeping and state._sleep_servo_released
+    """True for the whole sleep, not just after torque-off.
+
+    Gating on `_sleep_servo_released` alone left the window between the sleepy
+    emotion arriving and the auto-release timer firing wide open: a late
+    /servo/play from the agent would drive the bus while release() was ramping
+    to gravity-rest, so torque got cut mid-pose and the body slammed. Sleep is
+    a terminal state — nothing external touches the servos until a wake
+    emotion clears `_sleeping`. The wake path itself resumes the motion
+    service in-process (see routes/emotion.py), not through these routes, so
+    widening the gate cannot lock the device out of waking."""
+    return state._sleeping
 
 # --- Constants ---
 
@@ -190,7 +199,7 @@ def play_recording(req: ServoRequest):
     """Play a pre-recorded servo animation by name."""
     state.logger.debug("POST /servo/play recording=%s", req.recording)
     if _sleep_servo_locked():
-        state.logger.info("servo/play blocked -- sleepy torque release owns servo")
+        state.logger.info("servo/play blocked -- device is sleeping")
         return {"status": "ok"}
     svc = _svc()
     if svc.is_suppressed:
@@ -207,7 +216,7 @@ def play_recording(req: ServoRequest):
 def resume_servos():
     """Exit zero-hold mode and resume normal animation loop (plays idle)."""
     if _sleep_servo_locked():
-        state.logger.info("servo/resume blocked -- sleepy torque release owns servo")
+        state.logger.info("servo/resume blocked -- device is sleeping")
         return {"status": "ok"}
     svc = _svc()
     svc.resume()
@@ -226,7 +235,7 @@ def hold_servos():
 def move_servo(req: ServoMoveRequest):
     """Send joint positions to servo motors with smooth interpolation."""
     if _sleep_servo_locked():
-        state.logger.info("servo/move blocked -- sleepy torque release owns servo")
+        state.logger.info("servo/move blocked -- device is sleeping")
         return {"status": "ok", "requested": req.positions, "clamped": req.positions, "duration": req.duration}
     svc = _svc_connected()
     valid_joints = svc.get_joint_names()
@@ -400,7 +409,7 @@ def nudge_servo(req: ServoNudgeRequest):
 def start_tracking(req: ServoTrackRequest):
     """Start tracking an object by bounding box. Servo follows the object in real-time."""
     if _sleep_servo_locked():
-        state.logger.info("servo/track blocked -- sleepy torque release owns servo")
+        state.logger.info("servo/track blocked -- device is sleeping")
         return {"status": "ok", "tracking": False, "target": None, "bbox": None, "confidence": None}
     if not state.tracker_service:
         raise HTTPException(503, "Tracker service not available")

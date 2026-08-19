@@ -37,6 +37,8 @@
         box-shadow: 0 22px 65px #0008;
       }
       canvas {
+        position: relative;
+        z-index: 0;
         display: block;
         width: 100%;
         aspect-ratio: 4/3;
@@ -46,7 +48,23 @@
       canvas:active {
         cursor: grabbing;
       }
+      .lamp-ring {
+        position: absolute;
+        z-index: 1;
+        width: 100px;
+        height: 100px;
+        border: 9px solid transparent;
+        border-radius: 50%;
+        pointer-events: none;
+        opacity: 0;
+        transform: translate(-50%, -50%);
+        transition:
+          opacity 160ms ease,
+          left 120ms linear,
+          top 120ms linear;
+      }
       .caption {
+        z-index: 2;
         position: absolute;
         left: 20px;
         right: 20px;
@@ -62,6 +80,7 @@
         font-size: 11px;
       }
       .view-toggle {
+        z-index: 2;
         position: absolute;
         right: 18px;
         bottom: 17px;
@@ -278,6 +297,7 @@
           height="720"
           aria-label="Autonomous Lamp 3D motion preview"
         ></canvas>
+        <div class="lamp-ring" id="lamp-ring" aria-hidden="true"></div>
         <div class="caption">
           <span id="view-title">Lamp motion preview</span
           ><small id="view-detail"
@@ -366,6 +386,7 @@
         action = document.querySelector("#action"),
         ledPreview = document.querySelector("#led-preview"),
         ledLabel = document.querySelector("#led-label"),
+        lampRing = document.querySelector("#lamp-ring"),
         viewTitle = document.querySelector("#view-title"),
         viewDetail = document.querySelector("#view-detail"),
         viewToggle = document.querySelector("#view-toggle"),
@@ -485,7 +506,7 @@
       const vs =
         "attribute vec3 p,n;uniform mat4 view,proj;varying vec3 vN,vP;void main(){vN=n;vP=p;gl_Position=proj*view*vec4(p,1.);}";
       const fs =
-        "precision mediump float;varying vec3 vN,vP;uniform vec3 color,emit;void main(){vec3 l=normalize(vec3(-.4,.85,.65));float d=max(dot(normalize(vN),l),0.);float rim=pow(1.-max(dot(normalize(vN),normalize(-vP)),0.),2.);gl_FragColor=vec4(color*(.18+.82*d)+emit+rim*.10,1.);}";
+        "precision mediump float;varying vec3 vN,vP;uniform vec3 color,emit,ledColor;uniform float ledLevel;void main(){vec3 l=normalize(vec3(-.4,.85,.65));float d=max(dot(normalize(vN),l),0.);float rim=pow(1.-max(dot(normalize(vN),normalize(-vP)),0.),2.);float shade=smoothstep(220.,285.,vP.y);vec3 lamp=ledColor*ledLevel*shade*(.45+.55*d);gl_FragColor=vec4(color*(.18+.82*d)+emit+rim*.10+lamp,1.);}";
       function shader(t, s) {
         const o = gl.createShader(t);
         gl.shaderSource(o, s);
@@ -504,6 +525,8 @@
         proj: gl.getUniformLocation(program, "proj"),
         color: gl.getUniformLocation(program, "color"),
         emit: gl.getUniformLocation(program, "emit"),
+        ledColor: gl.getUniformLocation(program, "ledColor"),
+        ledLevel: gl.getUniformLocation(program, "ledLevel"),
       };
       function mesh(v, n, i) {
         const o = { i: gl.createBuffer(), count: i.length };
@@ -763,11 +786,7 @@
           })) {
             cadMesh[k] = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, cadMesh[k]);
-            gl.bufferData(
-              gl.ARRAY_BUFFER,
-              data,
-              gl.STATIC_DRAW,
-            );
+            gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
           }
           loading.hidden = true;
           viewDetail.textContent = `${Math.round(cadMesh.count / 3).toLocaleString()} CAD triangles · live HAL joint state.`;
@@ -787,13 +806,15 @@
         gl.enableVertexAttribArray(L.n);
         gl.uniform3fv(L.color, [0.89, 0.84, 0.74]);
         gl.uniform3fv(L.emit, [0, 0, 0]);
+        gl.uniform3fv(L.ledColor, led.map((value) => Math.min(1, value / 120)));
+        gl.uniform1f(L.ledLevel, Math.max(...led) > 0 ? 1 : 0);
         gl.drawArrays(gl.TRIANGLES, 0, cadMesh.count);
       }
       function render() {
         for (const j of joints) pose[j] += (target[j] - pose[j]) * 0.11;
         gl.viewport(0, 0, canvas.width, canvas.height);
         gl.enable(gl.DEPTH_TEST);
-        gl.clearColor(0.045, 0.052, 0.05, 1);
+        gl.clearColor(0.045, 0.052, 0.05, 0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
         const livePitch = rawCAD
             ? 0
@@ -818,6 +839,17 @@
             t[1] + r * Math.sin(previewEl),
             r * Math.cos(previewAz) * Math.cos(previewEl),
           ];
+        const lit = Math.max(...led) > 0;
+        const ringColor = led.map((value) =>
+          Math.min(255, Math.round(value * 2.1)),
+        );
+        lampRing.style.left = "52%";
+        lampRing.style.top = "23%";
+        lampRing.style.opacity = lit ? "1" : "0";
+        lampRing.style.borderColor = `rgb(${ringColor.join(",")})`;
+        lampRing.style.boxShadow = lit
+          ? `0 0 14px rgb(${ringColor.join(",")}), 0 0 54px rgb(${ringColor.join(",")})`
+          : "none";
         gl.uniformMatrix4fv(L.view, false, M.look(eye, t));
         gl.uniformMatrix4fv(
           L.proj,

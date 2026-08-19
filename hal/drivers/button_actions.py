@@ -1,7 +1,7 @@
 """Shared button/touch actions.
 
 Reused by any input device that maps to the same three gestures:
-- single_click_action(): stop speaker / unmute mic + speaker + announce listening
+- single_click_action(): stop object tracking and speaker / unmute mic + speaker + announce listening
 - triple_click_action(): reboot OS
 - long_press_action():  shutdown OS
 
@@ -33,9 +33,9 @@ from hal.presets import DEFAULT_LANG
 logger = logging.getLogger(__name__)
 
 DOUBLE_CLICK_WINDOW = 0.4  # seconds to wait for second click
-SLEEP_HOLD_DURATION = 3.0  # seconds held → sleepy emotion on release
-LONG_PRESS_DURATION = 10.0  # seconds held → shutdown on release
-FACTORY_RESET_DURATION = 20.0  # seconds held → factory-reset on release (supersedes shutdown)
+SLEEP_HOLD_DURATION = 2.0  # seconds held → sleepy emotion on release
+LONG_PRESS_DURATION = 5.0  # seconds held → shutdown on release
+FACTORY_RESET_DURATION = 10.0  # seconds held → factory-reset on release (supersedes shutdown)
 
 # OS server sensing endpoint. Head-pat notify is fire-and-forget — the
 # OS server appends a NO_REPLY hint so the agent records the event in
@@ -199,10 +199,29 @@ def announce_listening_cue(source: str = "button"):
         ).start()
 
 
+def _stop_active_tracking(source: str):
+    """Stop object tracking when a single click asks the device for attention."""
+    tracker = state.tracker_service
+    if not tracker or not tracker.is_tracking:
+        return
+    try:
+        logger.info("%s single click -- stopping object tracking", source)
+        tracker.stop()
+    except Exception as e:
+        # A tracker failure must not block the click's microphone/speaker action.
+        logger.warning("%s single click -- failed to stop object tracking: %s", source, e)
+
+
 def single_click_action(source: str = "button", announce: bool = True, chime: bool = True):
-    """Stop in-flight speech / unmute mic + speaker, then announce listening cue.
+    """Stop active tracking and in-flight speech / unmute mic + speaker.
+
+    Then announce the listening cue.
     announce=False skips the cue (caller fires announce_listening_cue later).
     chime=False skips the ack ping (caller already chimed at gesture start)."""
+    # Stopping movement is safe even with the hardware mic kill switch off: it
+    # does not wake or unmute the microphone, but still lets the user cancel an
+    # active follow session with the same direct-attention gesture.
+    _stop_active_tracking(source)
     # Hardware mic-mute switch is the authority: while it is physically off,
     # taps on the GPIO button / TTP223 touchpad must NOT wake, unmute, or
     # announce — the whole gesture flow would violate the kill-switch promise.
@@ -370,10 +389,10 @@ def factory_reset_action(source: str = "button"):
     into AP setup mode. HAL does NOT touch state itself — single source of
     truth for what gets wiped lives in the OS server's deviceWipePaths.
 
-    Authoritative because of physical presence: 20s deliberate hold + the
+    Authoritative because of physical presence: 10s deliberate hold + the
     /api/system/factory-reset endpoint allows loopback origin without Bearer
     (see os-server server.go adminOrLoopbackAuth)."""
-    logger.info("%s factory-reset hold (20s+) -- triggering soft reset", source)
+    logger.info("%s factory-reset hold (10s+) -- triggering soft reset", source)
     logger.info("%s LED: red solid (factory-reset armed)", source)
 
     # Suppress the lifespan-shutdown re-announce — same reason as

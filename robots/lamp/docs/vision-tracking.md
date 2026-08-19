@@ -188,6 +188,7 @@ All knobs live in `hal/drivers/tracking/constants.py`. (The old dead `GIMBAL_*` 
 | No detector confirm for `STOP_NO_YOLO_S` (20 s) | Stop — ghost tracking |
 | CSRT misses `YOLO_MAX_MISS` (30) after `MAX_TRACKING_RETRIES` (4) | Stop — object gone |
 | Tracking duration > 5 minutes | Stop — timeout to save motor/CPU |
+| GPIO-button or TTP223 single-click | Stop — explicit user attention-cancel |
 
 Note: a large bbox (e.g. a person filling the frame) is **not** a stop condition — PID drives off the centroid, not bbox size, so a close object still tracks. When tracking ends the arm glides back to zero at tracking speed (no snap).
 

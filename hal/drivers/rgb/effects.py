@@ -17,6 +17,29 @@ from hal.presets import (
 )
 from hal.board.presets_overlay import DEFAULT_LED_COUNT
 
+# --- candle flicker, bounded by IEEE 1789-2015 ---------------------------
+#
+# The old candle picked a fresh random level per pixel every frame, at
+# 0.05/speed — 4 Hz for happy/laugh/confused, 10 Hz for excited — with each
+# pixel stepping independently between 0.4 and 1.0 of the base color. That is
+# a 60% modulation depth at 4-10 Hz, and IEEE 1789-2015 puts ANY flicker below
+# 90 Hz in its high-risk band (at 100 Hz the limit is already 1.6%). The
+# 3-70 Hz range is the one associated with headaches and visual discomfort,
+# and on a desk lamp pointed at a face it was reported as dizzying.
+#
+# Two changes bring it inside the guidance without changing what it is:
+#
+#   * Refresh at a fixed 30 Hz and INTERPOLATE toward each pixel's target
+#     instead of jumping to it. Steps are what the eye locks onto; a smooth
+#     ramp of the same period reads as motion, not flicker.
+#   * Raise the floor from 0.4 to 0.8, cutting modulation depth from 60% to
+#     20%. The flame still lives, it just stops strobing.
+#
+# Do not lower CANDLE_FLICKER_MIN or CANDLE_REFRESH_HZ without re-reading the
+# standard — this is a comfort/safety bound, not a taste setting.
+CANDLE_FLICKER_MIN = 0.8
+CANDLE_REFRESH_HZ = 30
+
 
 def is_done(deadline: Optional[float], stop_event: threading.Event) -> bool:
     """Return True if the effect should stop."""
@@ -122,18 +145,48 @@ def candle(
     stop_event: threading.Event,
     svc,
 ):
-    """Warm flicker effect with randomized warm tones."""
-    step_delay = 0.05 / speed
+    """Flicker effect: per-pixel brightness varies, hue does NOT.
+
+    Every pixel is the SAME color scaled by its own flicker factor, so the
+    strip reads as one color breathing unevenly — a flame — instead of a
+    handful of different colors.
+
+    It used to shape each channel separately (``+ randint(0, 20)`` on red, a
+    ``x0.6-0.9`` squeeze on green, ``x0.3`` on blue). That was written when
+    presets ran near full scale, where a 20-count nudge is a faint warm
+    shimmer. Emotion presets now peak at 12-16 (they are indicators, not
+    illumination — see EMOTION_PRESETS), and at that scale the additive term
+    is LARGER than the color itself: happy [12, 9, 1] came out anywhere from
+    (9, 5, 0) to (26, 4, 0), i.e. red at 2.2x its own value while green was
+    squeezed. Hue swung from the declared 44 deg (yellow) down to 5-20 deg,
+    so the lamp showed a scatter of orange pixels and never the color the
+    preset asked for (observed on a lamp, 19/08/2026). excited [12, 8, 12]
+    fared worst: blue crushed, red inflated, its pink-purple read as orange.
+
+    Scaling all three channels by one factor keeps the ratio — and therefore
+    the hue — identical at any brightness, which is the same rule the presets
+    themselves follow ("dim by scaling, never by picking a new color").
+    """
     led_count = getattr(svc, "led_count", DEFAULT_LED_COUNT)
+    step_delay = 1.0 / CANDLE_REFRESH_HZ
+    # Fraction of the remaining distance a pixel covers each frame. `speed`
+    # keeps its old meaning (higher = livelier flame) but now sets how fast a
+    # pixel travels toward its target instead of how often it teleports.
+    # 0.6 measured against the presets in use: the flame moves at 0.85 Hz
+    # (speed 0.2) to 2.25 Hz (excited, speed 0.5), so even the liveliest one
+    # stays under the 3 Hz start of the uncomfortable band. Raising this puts
+    # excited back into it.
+    approach = min(1.0, max(0.02, speed * 0.6))
+    levels = [random.uniform(CANDLE_FLICKER_MIN, 1.0) for _ in range(led_count)]
+    targets = [random.uniform(CANDLE_FLICKER_MIN, 1.0) for _ in range(led_count)]
     while not is_done(deadline, stop_event):
         pixels = []
-        for _ in range(led_count):
-            flicker = random.uniform(0.4, 1.0)
-            # Warm tone bias: keep red high, vary green, minimal blue
-            r = int(min(255, color[0] * flicker + random.randint(0, 20)))
-            g = int(min(255, color[1] * flicker * random.uniform(0.6, 0.9)))
-            b = int(min(255, color[2] * flicker * 0.3))
-            pixels.append((r, g, b))
+        for i in range(led_count):
+            level = levels[i] + (targets[i] - levels[i]) * approach
+            levels[i] = level
+            if abs(targets[i] - level) < 0.01:
+                targets[i] = random.uniform(CANDLE_FLICKER_MIN, 1.0)
+            pixels.append(tuple(min(255, int(c * level)) for c in color))
         svc.dispatch(RGB_CMD_PAINT, pixels)
         stop_event.wait(step_delay)
 

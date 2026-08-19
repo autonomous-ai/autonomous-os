@@ -194,6 +194,22 @@ không chặn gì cả:
   lúc emotion effect đang giữ strip (vd pulse tím của thinking) và giết nó sau ~1 vòng,
   strip đứng hình ở frame ripple cuối. Emotion effect tự lắng về đỏ qua restore đã hẹn giờ.
 
+### Sleep sở hữu strip (HTTP routes)
+
+Khi `_sleeping` đang bật, các route **ghi** LED bị chặn ngay ở tầng HTTP chứ không chỉ ở
+các đường repaint nội bộ: `POST /led/solid`, `/led/paint`, `/led/effect` và `/led/restore`
+log `... skipped -- sleepy owns the strip` rồi trả `200` mà không đụng phần cứng.
+`POST /led/status` được che gián tiếp (nó delegate xuống solid/effect). Không có guard này,
+agent chạy xong một task cũ sẽ bật sáng strip trên thiết bị đang ngủ.
+
+Lệnh ghi bị **bỏ luôn, không xếp hàng**: sleep nghĩa là "đừng làm phiền", không phải "tạm
+dừng rồi báo bù" — cue tới lúc đang ngủ thì đến khi thức đã lạc hậu. Hệ quả: các status cue
+của os-server (booting / error / OTA) không hiển thị khi đang ngủ — phần việc bên dưới vẫn
+chạy bình thường, chỉ có phần báo hiệu bị nén lại, và không replay lúc thức dậy.
+
+Các route dọn dẹp (`/led/off`, `/led/effect/stop`) cố ý **không** bị chặn: chúng đẩy strip
+về tối, đúng cái sleep đang muốn.
+
 ### Setup-needed solid (lamp)
 
 Khi lamp start và `config.SetUpCompleted == false` (device đang ở AP/provisioning mode), `server/server.go` spawn goroutine background poll `GET /health` của HAL mỗi giây tối đa 30s, khi `health.led == true` thì gửi `POST /led/status` với state `setup` — HAL paint strip trắng solid báo "device ready, vào hotspot đi". Phải poll (không phải call 1 lần) vì cold boot os-server bind :5000 trước HAL :5001. Không dùng state machine `statusled`. Trắng chỉ là tạm thời: `POST /api/device/setup` thành công sẽ xoá saved setup state này thay vì giữ nó thành user LED preference, rồi restore settle về ambient resting look (hiện đang tối/tắt). Blue-breathing booting vẫn show trong lúc init. Xem [setup-flow_vi.md](../../../../docs/vi/setup-flow_vi.md#ap-mode).
@@ -276,7 +292,7 @@ Mỗi emotion preset có LED color riêng:
 
 ### Tên emotion không nhận diện được
 
-`POST /emotion` (`hal/routes/emotion.py`) không bao giờ từ chối tên emotion khác rỗng. Tên được lowercase/trim; tên nào không có trong `EMOTION_PRESETS` sẽ fallback về `curious` (biểu cảm trung tính, luôn an toàn) kèm log warning — caller là AI agent đôi khi bịa tên emotion, trả 400 sẽ phí lượt mà thiết bị không hiển thị gì. Ngoại lệ: khi thiết bị đang ngủ, tên lạ bị **ignore** (`status: ignored`) thay vì fallback — `curious` là wake emotion, nên fallback sẽ cho tên bịa vượt sleep gate và đánh thức thiết bị. Ngoài trường hợp đó, downstream (servo, LED) dùng emotion đã resolve.
+`POST /emotion` (`hal/routes/emotion.py`) không bao giờ từ chối tên emotion khác rỗng. Tên được lowercase/trim; tên nào không có trong `EMOTION_PRESETS` sẽ fallback về `curious` (biểu cảm trung tính, luôn an toàn) kèm log warning — caller là AI agent đôi khi bịa tên emotion, trả 400 sẽ phí lượt mà thiết bị không hiển thị gì. Ngoại lệ: khi thiết bị đang ngủ, tên lạ bị **ignore** (`status: ignored`) thay vì fallback. `curious` không còn đánh thức (xem `_SLEEP_GATE_ALLOWED`), nên fallback cũng không vượt được sleep gate — nhưng nó vẫn resolve thành một emotion có servo/LED để rồi bị gate chặn, và log ra `curious` sẽ che mất tên bịa mà agent thực sự gửi. Ngoài trường hợp đó, downstream (servo, LED) dùng emotion đã resolve.
 
 ## Override preset theo từng thiết bị
 

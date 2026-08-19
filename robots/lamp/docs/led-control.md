@@ -188,6 +188,7 @@ nothing is blocked:
 - **Sleep wins:** while the `sleepy` emotion is active, the strip stays off. The muted
   flag still persists, but a late emotion/TTS/music restore cannot repaint the red
   indicator; it may resume only after a wake emotion clears sleep.
+
 - `_user_led_state` is never touched — unmute restores the user's saved look.
 - While the indicator owns the strip, transient overlay writes are skipped (`POST /led/effect`
   with `transient:true`) and so is **every** `POST /led/effect/stop`: no transient overlay can
@@ -197,6 +198,22 @@ nothing is blocked:
   stop passed while an emotion effect held the strip (e.g. thinking's purple pulse) and killed
   it after ~one cycle, freezing the strip on the last ripple frame. Emotion effects settle
   back onto the red via their scheduled restore.
+### Sleep owns the strip (HTTP routes)
+
+While `_sleeping` is set, the LED **write** routes are gated at the HTTP layer too, not
+just the internal repaint paths: `POST /led/solid`, `/led/paint`, `/led/effect` and
+`/led/restore` log `... skipped -- sleepy owns the strip` and return `200` without
+touching the hardware. `POST /led/status` is covered transitively (it delegates to
+solid/effect). Without this, an agent finishing a stale task would light the strip on a
+sleeping device.
+
+Writes are **dropped, not queued**: sleep means "do not disturb", not "pause and report later",
+so a cue that arrives during sleep is stale by the time the device wakes. Consequence:
+os-server status cues (booting / error / OTA) are invisible while asleep — the underlying
+work still runs normally, only its indicator is suppressed, and it is not replayed on wake.
+
+Clearing routes (`/led/off`, `/led/effect/stop`) are deliberately **not** gated: they drive
+the strip toward dark, which is what sleep already wants.
 
 ### Setup-needed solid (lamp)
 
@@ -274,7 +291,7 @@ See [emotion-led-mapping.md](emotion-led-mapping.md) for the full emotion → LE
 
 ### Unknown emotion names
 
-`POST /emotion` (`hal/routes/emotion.py`) never rejects a non-empty emotion name. Names are lowercased/trimmed; anything not in `EMOTION_PRESETS` falls back to `curious` (a neutral, always-safe expression) with a warning logged — callers are AI agents that sometimes invent emotion names, and a 400 would waste their turn with nothing showing on the device. Exception: while the device is sleeping, an unknown name is **ignored** (`status: ignored`) instead of falling back — `curious` is a wake emotion, so the fallback would let an invented name bypass the sleep gate and wake the device. Otherwise everything downstream (servo, LED) uses the resolved emotion.
+`POST /emotion` (`hal/routes/emotion.py`) never rejects a non-empty emotion name. Names are lowercased/trimmed; anything not in `EMOTION_PRESETS` falls back to `curious` (a neutral, always-safe expression) with a warning logged — callers are AI agents that sometimes invent emotion names, and a 400 would waste their turn with nothing showing on the device. Exception: while the device is sleeping, an unknown name is **ignored** (`status: ignored`) instead of falling back. `curious` no longer wakes (see `_SLEEP_GATE_ALLOWED` below), so the fallback could not lift the sleep gate anyway — but it would still resolve to a servo/LED-bearing emotion that the gate then drops, and logging it as `curious` would hide which invented name the agent actually sent. Otherwise everything downstream (servo, LED) uses the resolved emotion.
 
 ## Per-device preset overrides
 

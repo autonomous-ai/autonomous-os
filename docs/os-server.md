@@ -354,6 +354,7 @@ HAL (Python): FastAPI standard JSON responses.
 
 1. OS Server starts Gin on :5000
 2. Reads `config/config.json`
+   - Seeds `device_type` from the resolved device class (`DEVICE_TYPE` env, else the existing key) so config.json carries it for readers that have no env — HAL's wake words and `software-update`. Provisioning only writes the env, so without this seed the key never exists on a provisioned device. Written once, when the stored value differs
    - Seeds `tts_provider` + `tts_voice` from ROBOT.md `voice:` block when the user hasn't chosen them (persisted once; the user's saved choice always wins; provider absent/unknown → `openai`). When the seeded provider is `elevenlabs` and no voice is declared, picks a language-aware default (`vi`→Ngan, `zh`→Amy, else Rachel)
 3. If `SetUpCompleted`:
    - Connect OpenClaw WebSocket
@@ -393,6 +394,8 @@ When receiving a `voice_command`, `voice_followup`, or `voice` event, the OS ser
 | "mute speaker" | `POST /speaker/mute` (silent — no TTS confirm) |
 | "unmute speaker" | `POST /speaker/unmute` + "Speaker on!" |
 
-Keyword matching is whole-phrase with ASCII word boundaries — "unmute speaker" does not trigger the "mute speaker" rule.
+Keyword matching is whole-phrase with ASCII word boundaries — "unmute speaker" does not trigger the "mute speaker" rule. The chitchat rules (greeting / farewell / thanks, matched per language) use the same boundary test: a plain substring match let the two-letter phrase "hi" fire inside "this", "his" and "machine", so ordinary sentences like "What is this?" were answered locally with "Hi there!" and never reached the agent.
+
+Chitchat is **off while the realtime voice agent is enabled** — the model receives every voice turn before os-server does and answers social talk itself, in character. Leaving both on meant a canned reply in a different voice barging in on the turns the model happened to stay silent for. Command rules above stay on either way; they genuinely beat a model round-trip. The gate follows `realtime.enabled` live, so toggling it in Settings needs no restart.
 
 No match → forward to OpenClaw.

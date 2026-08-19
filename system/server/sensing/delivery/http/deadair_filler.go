@@ -3,13 +3,17 @@ package http
 import (
 	"log/slog"
 	"math/rand"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"go.autonomous.ai/os/system/intent"
 	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/lib/i18n"
+	"go.autonomous.ai/os/system/server/serializers"
 )
 
 // Dead air filler — short TTS cues spoken by HAL while OpenClaw is busy,
@@ -306,6 +310,24 @@ func PlayOpeningFillerNow() {
 	if err := hal.SpeakCachedInterruptible(filler); err != nil {
 		slog.Warn("opening filler failed", "component", "sensing", "error", err)
 	}
+}
+
+// PlayFiller speaks one opening filler on demand. It exists for the realtime
+// voice path, which owns a dead-air pocket os-server cannot see: HAL commits
+// the captured audio to the realtime model and only forwards the turn here
+// AFTER that model is done, so the seconds spent waiting for Gemini have no
+// turn to hang a filler on. HAL times that wait itself and calls this when it
+// runs long (see hal/drivers/voice/_internal/realtime_turn.py).
+//
+// Kept as an endpoint rather than a phrase list in HAL so the pools, the
+// language resolution, and the WAV cache stay in one place — a second copy in
+// Python would drift the moment either side edits a phrase.
+//
+// Fire-and-forget: returns 200 as soon as the filler is queued. The caller is
+// racing the model's first sentence, so waiting on TTS would be pointless.
+func (h *SensingHandler) PlayFiller(c *gin.Context) {
+	go PlayOpeningFillerNow()
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(nil))
 }
 
 // FillerManager schedules and cancels dead-air fillers driven by OpenClaw

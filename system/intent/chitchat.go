@@ -19,8 +19,9 @@ type chitchatRule struct {
 	emotion string      // emotion fired alongside reply
 }
 
-// Order matters — Contains is greedy so specific phrases (presence_check,
-// apology, compliment) must run before broad ones (greeting/farewell).
+// Order matters — a longer utterance can contain a short phrase, so specific
+// intents (presence_check, apology, compliment) must run before broad ones
+// (greeting/farewell).
 // Nevermind goes last because its trigger words (e.g. "thôi") are short and
 // would shadow other intents that include the same token in their pool.
 var chitchatRules = []chitchatRule{
@@ -72,12 +73,11 @@ func matchChitchat(text string) *Result {
 	for _, r := range chitchatRules {
 		for lang, phrases := range i18n.InputPhrases(r.reply) {
 			for _, p := range phrases {
-				// Substring match — exact / prefix / suffix all hit. The
-				// length gate above (≤5 words) and command-verb reject
-				// already bound false positives, so Contains is safe and
-				// catches real speech variation: "chào nha", "<name> chào
-				// em", "cảm ơn rất nhiều", "thanks man", etc.
-				if !strings.Contains(t, p) {
+				// Whole-phrase match, NOT a substring: "hi" sits inside
+				// "this", "his", "machine", so a plain Contains answered
+				// "What is this?" and "Body of his arm." as greetings and
+				// swallowed the turn before the agent ever saw it.
+				if !containsPhrase(t, p) {
 					continue
 				}
 				reply := i18n.PickIn(r.reply, lang)

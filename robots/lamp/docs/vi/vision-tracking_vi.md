@@ -188,6 +188,7 @@ Mọi knob nằm trong `hal/drivers/tracking/constants.py`. (Đường proportio
 | Không detector confirm trong `STOP_NO_YOLO_S` (20 s) | Dừng — ghost tracking |
 | CSRT miss `YOLO_MAX_MISS` (30) sau `MAX_TRACKING_RETRIES` (4) | Dừng — vật thể biến mất |
 | Thời lượng tracking > 5 phút | Dừng — timeout để tiết kiệm motor/CPU |
+| Single-click từ nút GPIO hoặc TTP223 | Dừng — user chủ động huỷ attention |
 
 Lưu ý: một bbox lớn (ví dụ một người lấp đầy frame) **không** phải điều kiện dừng — PID chạy theo centroid, không phải kích thước bbox, nên một vật thể ở gần vẫn track. Khi tracking kết thúc, cánh tay trượt về zero ở tốc độ tracking (không snap).
 

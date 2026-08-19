@@ -48,6 +48,33 @@ Tham chiếu: `hal/drivers/sensing/perceptions/motion.py:414-425` (sau khi flush
 
 → Đèn thoát sleep **chỉ nhờ service restart**, không phải wake logic. Không có `emotion=greeting/stretching` nào được gửi. Wake path chưa bao giờ hoạt động trong thực tế.
 
+## Trạng thái hiện tại (2026-08-18) — set đã quay lại 3 phần tử, CÓ CHỦ ĐÍCH
+
+Sau sự cố trên, commit `bc12f890` mở rộng set lên 12 (thêm
+happy/excited/caring/laugh/curious/sad/shy/shock/confused) để agent trả lời là đèn thức.
+Ngày 2026-08-18 việc đó bị **đảo lại**: set thu về đúng 3 và đổi tên thành
+`_SLEEP_GATE_ALLOWED` (`hal/routes/emotion.py`) — tên cũ sai bản chất, vì `sleepy` nằm
+trong set nhưng không đánh thức, nó chỉ đi qua cổng để re-arm timer auto-release.
+
+Lý do đảo: suy ra "có người vừa tương tác" từ **tên emotion** là sai. Agent chạy xong một
+task nền cũ rồi bắn `curious`/`happy` cũng lật được cờ sleep, nên đèn tự bừng dậy giữa lúc
+user đã chủ động cho ngủ. Cùng đợt này, các route ghi LED và servo cũng được gate theo
+`_sleeping` (xem [led-control.md](../led-control.md) mục "Sleep owns the strip").
+
+Điều kiện đã khác tháng 4 nên rủi ro kẹt không còn như cũ:
+
+| Đường thoát | Tháng 4/2026 | Hiện tại |
+|---|---|---|
+| Nút GPIO tap 1 cái | chưa có | có — `_wake_if_sleepy()` bắn `stretching` (`hal/drivers/button_actions.py`) |
+| `presence.enter` (friend) | — | agent gửi `greeting` → thức (`skills/sensing/SKILL.md`) |
+| Restart service | cách duy nhất | vẫn còn, nhưng không còn là cách duy nhất |
+
+**Lỗ đã biết, chấp nhận:** `presence.enter` của **người lạ** map sang `curious`
+(`skills/sensing/SKILL.md`), mà `curious` không còn đánh thức → người lạ bước vào thì đèn
+nằm im. Đúng ý đồ "ngủ là do-not-disturb", nhưng nếu sau này muốn người lạ cũng đánh thức
+thì sửa ở phía skill (đổi sang `greeting`) chứ đừng nới lại `_SLEEP_GATE_ALLOWED` — nới ra
+là quay về đúng lỗi 2026-04-22.
+
 ## Fix ideas (chọn sau)
 
 1. **Wake từ voice wake-phrase.** Nhận diện "wake up"/"dậy đi" ở lelamp (trước khi bọc sleep gate) và flip `state._sleeping = False` + gọi `greeting` anim. Không chờ Lamp.

@@ -125,15 +125,42 @@ EMO_HEADSHAKE = "headshake"
 # "camera": "off" = auto-disable camera (e.g. sleepy — device going to sleep)
 # "camera": "on"  = auto-enable camera if off (active interaction, need vision)
 # omitted         = no camera change
+# Brightness: emotions are INDICATORS, not illumination. They follow the SAME
+# peak budget as STATUS_LED_PRESETS — read the long note above that dict before
+# changing a color here, it explains why the numbers look absurdly low:
+#
+#   green-dominant hue (green, yellow, cyan, white) -> peak channel 12
+#   little or no green (red, purple, orange, blue)   -> peak channel 16
+#
+# The light.max_brightness gate (lamp: 120) does NOT dim these — it only scales
+# a color's PEAK up to the ceiling — so dimming has to happen here.
+#
+# An earlier pass ran these at peak 25 (roughly 2x the status cues) on the
+# theory that emotions are transient and can afford to be brighter. Tested by
+# eye on a lamp (18/08/2026) that was wrong: curious and acknowledge were
+# called glaring, and being an emotion rather than a status does not change how
+# the strip meets the eye. Keep both dicts on one budget.
+#
+# Each color was dimmed by scaling its ORIGINAL channel ratios down to the tier
+# above, so every emotion keeps the hue it has always had. Dim these by scaling,
+# never by picking a new color — the hue is what the agent means, the level is
+# only how loudly it says it.
+#
+# If you ever put a cue on FX_BLINK: blink() maps speed 1.0 to ~3 Hz
+# (drivers/rgb/effects.py), fast enough to be actively unpleasant on a strip in
+# the user's eyeline. Keep blink at 0.5 or below (~1.5 Hz and slower).
 EMOTION_PRESETS = {
-    EMO_CURIOUS: {"servo": SERVO_CURIOUS, "color": [125, 81, 0], "effect": FX_CANDLE, "speed": 0.3, "camera": "on"},
-    EMO_HAPPY: {"servo": SERVO_HAPPY_WIGGLE, "color": [105, 80, 10], "effect": FX_CANDLE, "speed": 0.2, "camera": "on"},
-    EMO_SAD: {"servo": SERVO_SAD, "color": [20, 10, 10], "effect": FX_BREATHING, "speed": 0.4, "camera": "on"},
-    EMO_THINKING: {"servo": SERVO_THINKING_DEEP, "color": [50, 100, 35], "effect": FX_PULSE, "speed": 0.3,
+    EMO_CURIOUS: {"servo": SERVO_CURIOUS, "color": [12, 8, 0], "effect": FX_CANDLE, "speed": 0.3, "camera": "on"},
+    EMO_HAPPY: {"servo": SERVO_HAPPY_WIGGLE, "color": [12, 9, 1], "effect": FX_CANDLE, "speed": 0.2, "camera": "on"},
+    EMO_SAD: {"servo": SERVO_SAD, "color": [16, 8, 8], "effect": FX_BREATHING, "speed": 0.4, "camera": "on"},
+    EMO_THINKING: {"servo": SERVO_THINKING_DEEP,
+                   "color": [6, 12, 4],
+                   "effect": FX_PULSE,
+                   "speed": 0.3,
                    "camera": "on"},
-    EMO_IDLE: {"servo": SERVO_IDLE, "color": [90, 60, 5], "effect": FX_BREATHING, "speed": 0.2},
-    EMO_EXCITED: {"servo": SERVO_EXCITED, "color": [30, 21, 30], "effect": FX_CANDLE, "speed": 0.5, "camera": "on"},
-    EMO_SHY: {"servo": SERVO_SHY, "color": [155, 70, 20], "effect": FX_BREATHING, "speed": 0.3, "camera": "on"},
+    EMO_IDLE: {"servo": SERVO_IDLE, "color": [12, 8, 1], "effect": FX_BREATHING, "speed": 0.2},
+    EMO_EXCITED: {"servo": SERVO_EXCITED, "color": [12, 8, 12], "effect": FX_CANDLE, "speed": 0.5, "camera": "on"},
+    EMO_SHY: {"servo": SERVO_SHY, "color": [16, 7, 2], "effect": FX_BREATHING, "speed": 0.3, "camera": "on"},
     # White flash held at the same peak as STATUS_LED_PRESETS["ready_flash"]:
     # full-value white is the harshest thing the strip can do, and being a brief
     # flash does not soften it (tested by eye on a lamp). White is
@@ -141,23 +168,30 @@ EMOTION_PRESETS = {
     # STATUS_LED_PRESETS. Keep these two in step — same visual cue.
     EMO_SHOCK: {"servo": SERVO_SHOCK, "color": [12, 12, 12], "effect": FX_NOTIFICATION_FLASH, "speed": 1.0,
                 "camera": "on"},
-    EMO_LISTENING: {"servo": SERVO_LISTENING, "color": [51, 121, 230], "effect": FX_PULSE, "speed": 0.3,
+    # Breathing, not pulse: listening stays lit for as long as the user is
+    # talking, and pulse's dark gap between beats reads as an alert on a cue
+    # that long. A smooth breath says "open, waiting for you".
+    EMO_LISTENING: {"servo": None,  # SERVO_LISTENING,
+                    "color": [4, 8, 16],
+                    "effect": FX_BREATHING,
+                    "speed": 1.2,
                     "camera": "on"},
-    EMO_LAUGH: {"servo": SERVO_LAUGH, "color": [130, 91, 11], "effect": FX_CANDLE, "speed": 0.2, "camera": "on"},
-    EMO_CONFUSED: {"servo": SERVO_CONFUSED, "color": [124, 71, 25], "effect": FX_CANDLE, "speed": 0.2, "camera": "on"},
+    EMO_LAUGH: {"servo": SERVO_LAUGH, "color": [12, 8, 1], "effect": FX_CANDLE, "speed": 0.2, "camera": "on"},
+    EMO_CONFUSED: {"servo": SERVO_CONFUSED, "color": [16, 9, 3], "effect": FX_CANDLE, "speed": 0.2, "camera": "on"},
     EMO_SLEEPY: {"servo": SERVO_SLEEPY, "color": [0, 0, 0], "camera": "off", "mic": "off", "speaker": "off"},
-    EMO_GREETING: {"servo": SERVO_GREETING, "color": [255, 180, 100], "effect": FX_BREATHING, "speed": 0.3, "camera": "on"},
-    EMO_GOODBYE: {"servo": SERVO_GOODBYE, "color": [255, 180, 100], "effect": FX_BREATHING, "speed": 0.5},
-    EMO_CARING: {"servo": SERVO_NOD, "color": [255, 160, 120], "effect": FX_BREATHING, "speed": 0.4, "camera": "on"},
-    EMO_ACKNOWLEDGE: {"servo": SERVO_ACKNOWLEDGE, "color": [51, 230, 70], "effect": FX_BREATHING, "speed": 0.5,
+    EMO_GREETING: {"servo": SERVO_GREETING, "color": [12, 8, 5], "effect": FX_BREATHING, "speed": 0.3, "camera": "on"},
+    EMO_GOODBYE: {"servo": SERVO_GOODBYE, "color": [12, 8, 5], "effect": FX_BREATHING, "speed": 0.5},
+    EMO_CARING: {"servo": SERVO_NOD, "color": [12, 8, 6], "effect": FX_BREATHING, "speed": 0.4, "camera": "on"},
+    EMO_ACKNOWLEDGE: {"servo": SERVO_ACKNOWLEDGE, "color": [3, 12, 4], "effect": FX_BREATHING, "speed": 0.5,
                       "camera": "on"},
-    EMO_STRETCHING: {"servo": SERVO_STRETCHING, "color": [145, 140, 30], "effect": FX_BREATHING, "speed": 0.6,
+    EMO_STRETCHING: {"servo": SERVO_STRETCHING, "color": [12, 12, 2], "effect": FX_BREATHING, "speed": 0.6,
                      "camera": "on"},
-    EMO_MUSIC_STRONG: {"servo": SERVO_MUSIC_ROCK, "color": [155, 221, 155], "effect": FX_RAINBOW, "speed": 1.0},
-    EMO_MUSIC_CHILL: {"servo": SERVO_MUSIC_ROCK, "color": [252, 136, 3], "effect": FX_BREATHING, "speed": 0.3},
-    EMO_SCAN: {"servo": SERVO_SCANNING, "color": [36, 84, 24], "effect": FX_PULSE, "speed": 0.3, "camera": "on"},
-    EMO_NOD: {"servo": SERVO_NOD, "color": [107, 73, 13], "effect": FX_BREATHING, "speed": 0.5, "camera": "on"},
-    EMO_HEADSHAKE: {"servo": SERVO_HEADSHAKE, "color": [206, 77, 14], "effect": FX_BREATHING, "speed": 0.5, "camera": "on"},
+    EMO_MUSIC_STRONG: {"servo": SERVO_MUSIC_ROCK, "color": [8, 12, 8], "effect": FX_RAINBOW, "speed": 1.0},
+    EMO_MUSIC_CHILL: {"servo": SERVO_MUSIC_ROCK, "color": [16, 9, 0], "effect": FX_BREATHING, "speed": 0.3},
+    EMO_SCAN: {"servo": SERVO_SCANNING, "color": [5, 12, 3], "effect": FX_PULSE, "speed": 0.3, "camera": "on"},
+    EMO_NOD: {"servo": SERVO_NOD, "color": [12, 8, 1], "effect": FX_BREATHING, "speed": 0.5, "camera": "on"},
+    EMO_HEADSHAKE: {"servo": SERVO_HEADSHAKE, "color": [16, 6, 1], "effect": FX_BREATHING, "speed": 0.5,
+                    "camera": "on"},
 }
 
 # Lighting scene presets — simulated color temperature via RGB mixing.
@@ -306,6 +340,24 @@ STATUS_LED_PRESETS = {
     # privacy indicator stops reading in a daylit room.
     "mic_muted": {"effect": FX_BREATHING, "color": [10, 0, 0], "speed": 0.8},  # dark red — mic muted
 }
+
+# Button hold-warning LEDs — what the strip shows WHILE a physical button is
+# held, one color per armed tier (see hal/drivers/button_actions.py for the
+# hold thresholds and hal/drivers/gpio_button.py for the blink/solid staging).
+# Same peak budget as STATUS_LED_PRESETS (16 for these low-green hues): writing
+# 255 here would not make them "bright but safe" — clamp_color only scales a
+# color's PEAK up to the light.max_brightness ceiling (lamp: 120), so dimming
+# has to happen here. Purple identifies the sleep tier; blink vs solid separates
+# shutdown from factory-reset, so those two share a color on purpose.
+LED_SLEEP_WARN = (8, 5, 16)  # sleepy purple (blinking) — hold 2-5s
+LED_SHUTDOWN_WARN = (16, 0, 0)  # red (blinking) — hold 5-10s
+LED_FACTORY_RESET = (16, 0, 0)  # red (solid) — hold 10s+
+
+# Backend-error flash (app_state._flash_backend_error) — one notification_flash
+# when an agent API call fails. Amber-yellow, deliberately a different hue from
+# the statusled "hardware" fault cue so the two do not read as the same thing.
+# Same peak budget as everything else here (12, green-dominant).
+LED_BACKEND_ERROR_FLASH = (12, 9, 0)
 
 # Ambient resting look — what the strip settles into when no user LED state
 # exists. MUST mirror the Go ambient fallback (system/ambient/service.go

@@ -27,6 +27,17 @@ from hal.drivers.voice._internal.config import (
 logger = logging.getLogger("hal.voice")
 
 
+def _normalize(text: str) -> str:
+    """Lowercase, strip punctuation, collapse whitespace."""
+    return " ".join(re.sub(r"[^\w\s]", "", text.casefold()).split())
+
+
+def _sentences(transcript: str) -> list[str]:
+    """Split a transcript into normalized sentences (empty ones dropped)."""
+    parts = (_normalize(p) for p in re.split(r"[.!?]+", transcript))
+    return [p for p in parts if p]
+
+
 def merge_wake_words(*word_lists: list[str]) -> list[str]:
     """Merge wake-word aliases case-insensitively while preserving order."""
     merged: list[str] = []
@@ -151,22 +162,51 @@ class SpeakerDecorator:
             self._wake_words = [w.lower() for w in words]
         logger.info("Wake words updated: %s", self._wake_words)
 
-    def starts_with_wake_word(self, transcript: str) -> bool:
-        """Return true when an interim transcript starts with a wake phrase.
-
-        The realtime gate must not trigger merely because the agent name appears
-        in the middle of a conversation. Case and punctuation are ignored so
-        Deepgram variants such as ``Hey Luna, ...`` and ``hey luna ...`` match.
-        """
-        normalized = re.sub(r"[^\w\s]", "", transcript.casefold()).strip()
-        if not normalized:
-            return False
+    def _normalized_wake_phrases(self) -> list[str]:
+        """Configured wake phrases, normalized the same way transcripts are."""
         with self._wake_words_lock:
             wake_words = list(self._wake_words)
-        for wake_word in wake_words:
-            phrase = re.sub(r"[^\w\s]", "", wake_word.casefold()).strip()
-            if phrase and (normalized == phrase or normalized.startswith(phrase + " ")):
-                return True
+        phrases = [_normalize(w) for w in wake_words]
+        return [p for p in phrases if p]
+
+    def starts_with_wake_word(self, transcript: str) -> bool:
+        """Return true when a wake phrase opens or closes any SENTENCE.
+
+        Three positions, deliberately not four:
+
+          * sentence start — "hey luna, what time is it"
+          * sentence end   — "what time is it, hey luna" (vocative; how people
+            actually talk once a thought arrives before they remember to
+            address the device)
+          * a LATER sentence — a mic session is one continuous stretch of
+            speech, not one sentence, so STT hands back
+            "What was the score? Hi lamp, can you hear me?" as ONE transcript.
+            Matching only the head of the whole thing threw that turn away
+            entirely: the gate rejected it, the question never reached the
+            agent, and the user just saw silence (device-observed 18/08/2026).
+
+        Mid-sentence stays rejected — the agent's name landing inside a
+        sentence is ordinary conversation ABOUT the device ("this lamp is
+        nice"), and letting that open the gate is how a device barges into a
+        chat between two other people.
+
+        Case and punctuation are ignored so Deepgram variants such as
+        ``Hey Luna, ...`` and ``hey luna ...`` both match.
+
+        Name kept as-is: every caller reads it as "is this turn addressed to
+        us", and the sentence-level rule is what that question always meant.
+        """
+        phrases = self._normalized_wake_phrases()
+        if not phrases:
+            return False
+        for sentence in _sentences(transcript):
+            for phrase in phrases:
+                if (
+                    sentence == phrase
+                    or sentence.startswith(phrase + " ")
+                    or sentence.endswith(" " + phrase)
+                ):
+                    return True
         return False
 
     def classify_wake_word(self, combined: str) -> tuple[str, str]:

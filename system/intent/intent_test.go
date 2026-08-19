@@ -1,6 +1,7 @@
 package intent
 
 import (
+	"strings"
 	"testing"
 
 	"go.autonomous.ai/os/system/lib/i18n"
@@ -100,5 +101,48 @@ func TestLocalChitchatAttentionAliasesDoNotDependOnVoiceWakeWordGate(t *testing.
 			}
 			t.Errorf("Match(%q) rule = %s, want %s", text, got, want)
 		}
+	}
+}
+
+// TestChitchatWholeWordOnly locks the fix for a substring match that answered
+// ordinary sentences as greetings: "hi" sits inside "this", "his", "machine",
+// so "What is this?" was replied to with "Hi there!" locally and never reached
+// the agent.
+func TestChitchatWholeWordOnly(t *testing.T) {
+	SetChitchatEnabled(true)
+	t.Cleanup(func() { SetChitchatEnabled(true) })
+
+	for _, text := range []string{
+		"Body of his arm.",
+		"What is this?",
+		"This is broken",
+		"His name is Tom",
+		"The machine is loud",
+	} {
+		if r := Match(text); r != nil && strings.HasPrefix(r.Rule, "chitchat_") {
+			t.Errorf("Match(%q) = %s, want no chitchat match", text, r.Rule)
+		}
+	}
+
+	for _, text := range []string{"hi", "hello there", "hey", "bye", "thanks a lot"} {
+		r := Match(text)
+		if r == nil || !strings.HasPrefix(r.Rule, "chitchat_") {
+			t.Errorf("Match(%q) = %v, want a chitchat match", text, r)
+		}
+	}
+}
+
+// TestChitchatDisabled covers the realtime case: the voice agent answers social
+// talk itself, so os-server must not also fire a canned reply — while command
+// intents keep working.
+func TestChitchatDisabled(t *testing.T) {
+	SetChitchatEnabled(false)
+	t.Cleanup(func() { SetChitchatEnabled(true) })
+
+	if r := Match("hi"); r != nil {
+		t.Errorf("Match(\"hi\") = %s, want nil when chitchat is off", r.Rule)
+	}
+	if r := Match("turn on the light"); r == nil || r.Rule != "led_on" {
+		t.Errorf("Match(\"turn on the light\") = %v, want led_on", r)
 	}
 }

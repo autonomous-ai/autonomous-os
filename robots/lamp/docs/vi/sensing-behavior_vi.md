@@ -113,7 +113,7 @@ Agent gọi `/emotion idle` (0.4), fire `/servo/track/stop` để thả follow n
 
 Được gửi tự động bởi `PresenceService` của HAL khi **không phát hiện chuyển động trong 15 phút** (sau khi đã dim đèn ở phút thứ 5). Lúc này đèn đã tắt — agent chỉ cần **thông báo đi ngủ** qua TTS và Telegram.
 
-Agent gọi `/emotion sleepy` (0.8), fire `/servo/track/stop` để thả follow cũ còn sót. HAL lập tức chuyển LED sang đen, mute mic lẫn speaker, đồng thời dừng TTS hoặc nhạc đang phát; sau 2 giây `sleepy` liên tục, HAL release torque của servo và lock mọi lệnh motion. Chỉ wake emotion mới resume motion servo, đồng thời chỉ unmute các trạng thái mic/speaker mà sleepy đã tự mute. Mute audio do sleepy chỉ là runtime-only, không còn sau khi HAL restart; mute thủ công của user vẫn được persist. Đây là hành động cuối cùng trước khi Lamp hoàn toàn idle.
+Agent gọi `/emotion sleepy` (0.8), fire `/servo/track/stop` để thả follow cũ còn sót. HAL lập tức chuyển LED sang đen, mute mic lẫn speaker, đồng thời dừng TTS hoặc nhạc đang phát; sau 1 giây `sleepy` liên tục, HAL release torque của servo và lock mọi lệnh motion. Chỉ `greeting` hoặc `stretching` mới resume motion servo (`_SLEEP_GATE_ALLOWED` trong `hal/routes/emotion.py`) — emotion cảm xúc như `curious`/`happy` bị bỏ qua khi đang ngủ, nên task nền của agent không đánh thức được thiết bị; tap nút GPIO thì được, đồng thời chỉ unmute các trạng thái mic/speaker mà sleepy đã tự mute. Mute audio do sleepy chỉ là runtime-only, không còn sau khi HAL restart; mute thủ công của user vẫn được persist. Đây là hành động cuối cùng trước khi Lamp hoàn toàn idle.
 
 Timeline tự động điều khiển presence:
 1. **5 phút không chuyển động** → đèn dim xuống 20% (tự động, không cần agent)

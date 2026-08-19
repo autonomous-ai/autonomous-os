@@ -14,6 +14,11 @@ from hal import config as _hal_config
 # OS server endpoint
 # ---------------------------------------------------------------------------
 OS_SENSING_URL = "http://127.0.0.1:5000/api/sensing/event"
+# Dead-air filler for the realtime wait. os-server owns the phrase pools, the
+# language resolution, and the WAV cache; HAL only decides WHEN the wait has run
+# long enough to deserve one. See PlayFiller in
+# system/server/sensing/delivery/http/deadair_filler.go.
+OS_FILLER_URL = "http://127.0.0.1:5000/api/sensing/filler"
 
 
 # ---------------------------------------------------------------------------
@@ -43,6 +48,24 @@ SILERO_VAD_ENABLED = os.environ.get("HAL_SILERO_ENABLED", "false").lower() == "t
 SILERO_VAD_THRESHOLD = float(os.environ.get("HAL_SILERO_THRESHOLD", "0.3"))
 SILERO_CHUNK_SIZE = int(os.environ.get("HAL_SILERO_CHUNK_SIZE", "512"))
 SILERO_MODEL_PATH = Path(__file__).resolve().parent.parent / "resources" / "silero_vad.onnx"
+
+# Silero on the SILENCE clock (end of turn), not just the entry gate.
+#
+# Closing a session is driven by RMS alone: any frame above RMS_THRESHOLD
+# refreshes the silence timer. In a noisy room the noise floor sits above the
+# threshold, so the timer never expires — the turn runs to MAX_SESSION_DURATION
+# and ships mostly room noise to STT, which comes back empty or as junk and the
+# device answers nothing (device-observed 18/08/2026: sessions of 8-25s with
+# transcript='(empty)'). Energy VAD misses roughly half of real speech frames
+# in noise; production voice stacks (Pipecat, LiveKit, Deepgram) all put a
+# neural VAD on this decision instead.
+#
+# So RMS stays as the cheap first gate, and Silero confirms before the timer is
+# actually refreshed. Batched over a window rather than run per frame: Silero
+# costs ~20ms/frame on ARM and its LSTM wants more than one 64ms frame to
+# settle. Set HAL_SILENCE_VAD_ENABLED=false to fall back to pure RMS.
+SILENCE_VAD_ENABLED = os.environ.get("HAL_SILENCE_VAD_ENABLED", "true").lower() == "true"
+SILENCE_VAD_WINDOW_FRAMES = int(os.environ.get("HAL_SILENCE_VAD_WINDOW_FRAMES", "3"))
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +142,7 @@ SPEECH_EMOTION_ENABLED = _hal_config.SPEECH_EMOTION_ENABLED
 # IDENTITY.md name is set, so an unnamed device isn't hardcoded to "lamp".
 # Last resort "friend" when device_type is also unavailable.
 # ---------------------------------------------------------------------------
-_wake_name = (_hal_config._os_cfg_get("device_type") or "friend").strip().lower()
+_wake_name = _hal_config.resolve_device_type("friend")
 WAKE_WORD_PREFIXES = ("hello", "hey", "hi", "alo", "okay", "ok", "wake up")
 DEFAULT_WAKE_WORDS = [
     *(f"{prefix} autonomous" for prefix in WAKE_WORD_PREFIXES),

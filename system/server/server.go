@@ -172,6 +172,18 @@ func (s *Server) Serve(closeFn func()) error {
 	if deviceType == "" {
 		log.Fatal("[config] device_type unresolved — set DEVICE_TYPE env (provisioning) or config.json device_type; refusing to assume 'lamp'")
 	}
+	// Persist the resolved class so config.json actually carries device_type, the
+	// key HAL and software-update read. Provisioning only writes the DEVICE_TYPE
+	// env, so without this seed the key never exists on a provisioned device and
+	// every config.json reader silently falls back (HAL's wake words resolved to
+	// "friend", making the device-type wake phrases the web UI advertises dead).
+	// Idempotent — only the first start after upgrade writes.
+	if s.config.DeviceType != deviceType {
+		s.config.DeviceType = deviceType
+		if err := s.config.Save(); err != nil {
+			slog.Error("seed device_type failed", "component", "config", "error", err)
+		}
+	}
 
 	// Set GELF host to device_id + stamp device class for centralized logging
 	if s.config.DeviceID != "" {
@@ -239,6 +251,24 @@ func (s *Server) Serve(closeFn func()) error {
 			slog.Warn("seed tts defaults from ROBOT.md failed", "component", "server", "provider", seedProvider, "voice", seedVoice, "error", err)
 		} else {
 			slog.Info("seeded tts defaults from ROBOT.md", "component", "server", "provider", seedProvider, "voice", seedVoice)
+		}
+	}
+
+	// Wake-word gate: adopt the body's declared default (ROBOT.md voice.wakeword)
+	// while config.json still has no wakeword key. Only a config.json os-server
+	// just created reaches here with nil — one loaded from disk without the key
+	// is a device provisioned before the switch existed, and ProvideConfig has
+	// already pinned it to false so an OTA cannot make a device in use stop
+	// answering. Once written, Settings owns the value; this never runs again.
+	if s.config.WakeWord == nil {
+		if v, declared := device.WakeWordDefault(deviceType); declared {
+			if err := s.config.WithLockSave(func(c *config.Config) {
+				c.WakeWord = &v
+			}); err != nil {
+				slog.Warn("seed wakeword default from ROBOT.md failed", "component", "server", "wakeword", v, "error", err)
+			} else {
+				slog.Info("seeded wakeword default from ROBOT.md", "component", "server", "wakeword", v)
+			}
 		}
 	}
 
@@ -347,6 +377,8 @@ func (s *Server) Serve(closeFn func()) error {
 	sensing.GET("snapshot/:category/:name", s.sensingHandler.GetSnapshot)
 	sensing.GET("agent-snapshot/:runtime/:source/:name", s.sensingHandler.GetAgentSnapshot)
 	sensing.GET("audio/:name", s.sensingHandler.GetAudio)
+	// HAL-driven dead-air filler for the realtime wait (see PlayFiller).
+	sensing.POST("filler", s.sensingHandler.PlayFiller)
 
 	// Voice file delete (filesystem orchestration on Pi). Voice enroll
 	// itself lives on hal at /hw/speaker/record-enroll because hardware

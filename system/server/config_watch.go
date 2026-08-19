@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go.autonomous.ai/os/system/device"
+	"go.autonomous.ai/os/system/intent"
 	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/lib/safego"
 	"go.autonomous.ai/os/system/server/config"
@@ -27,6 +28,8 @@ func (s *Server) runConfigChangeListener(ctx context.Context) {
 			// Refresh the HAL bearer token whenever config changes — covers
 			// llm_api_key rotation via PUT /api/device/config without restart.
 			hal.SetAPIKey(s.config.LLMAPIKey)
+			// Realtime can be toggled from Settings; chitchat follows it.
+			intent.SetChitchatEnabled(!s.config.RealtimeEnabled())
 			s.handleSetUpCompleteChange(s.config.SetUpCompleted)
 			s.handleDeviceIDChange(s.config.DeviceID)
 			s.handleMQTTConfigChange()

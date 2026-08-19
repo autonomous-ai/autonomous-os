@@ -190,6 +190,11 @@ class VoiceService:
         # works even when HAL_SILERO_ENABLED is false (the common case) and never
         # shares LSTM state with the entry gate. See _rt_noise_is_speech.
         self._rt_noise_vad: SileroVADFilter | None = None
+        # Third instance, for the silence clock (see SILENCE_VAD_ENABLED). Same
+        # reason as the guard above: its own LSTM state, so confirming "is this
+        # noise or speech" mid-capture cannot disturb the entry gate's state,
+        # and it works whether or not the entry gate is enabled.
+        self._silence_vad: SileroVADFilter | None = None
 
         # Speaker decoration (wake-word + speaker recognizer + SER). Speaker-ID and
         # SER (speech emotion) are voice people-perception — gated on the `audio`
@@ -478,6 +483,35 @@ class VoiceService:
             return is_speech
         except Exception as e:
             logger.warning("Realtime noise-guard Silero inference failed: %s", e)
+            return True
+
+    def _silence_window_is_speech(self, window, device_rate: int) -> bool:
+        """Is this above-RMS window real speech, or just a loud room?
+
+        Answers the one question the silence clock needs: should this window
+        refresh the timer. Keeps its LSTM state ACROSS calls within a session
+        (unlike the per-turn guard above) — the window is a continuation of the
+        same utterance, so the state carries useful context; the caller resets
+        it at session start.
+
+        Fails open (True) on any error: a model glitch must never cut somebody
+        off mid-sentence. That direction of failure only costs the old
+        RMS-only behavior, which is what we already had.
+        """
+        if self._silence_vad is None:
+            try:
+                self._silence_vad = SileroVADFilter(
+                    voice_cfg.SILERO_MODEL_PATH, self._np
+                )
+            except Exception as e:
+                logger.warning("Silence-clock Silero load failed: %s", e)
+                return True
+        if not self._silence_vad.available:
+            return True
+        try:
+            return self._silence_vad.is_speech(window, device_rate)
+        except Exception as e:
+            logger.warning("Silence-clock Silero inference failed: %s", e)
             return True
 
     # ------------------------------------------------------------------
@@ -990,6 +1024,28 @@ class VoiceService:
             wake_partial_hypothesis[0] = ""
             return wake_final_hypothesis[0]
 
+        def fire_listening_cue() -> None:
+            """Show the listening cue, once per session, only when this turn is
+            actually addressed to the device.
+
+            The cue is not free: it paints the strip AND holds the body still
+            (a preset with servo=None halts the animation loop — see
+            routes/emotion.py). With a wake word configured, firing it on any
+            partial means every conversation happening in the room lights the
+            lamp up and freezes it, which reads as the device butting in.
+            So: wake word heard, or an open follow-up window. Without a wake
+            word configured every utterance IS addressed to the device, so the
+            cue fires on the first partial as before.
+            """
+            if listening_emotion_sent[0]:
+                return
+            if hal_config.WAKEWORD_ENABLED and not (
+                wake_word_detected.is_set() or wakeword_followup_active
+            ):
+                return
+            listening_emotion_sent[0] = True
+            self._set_emotion_local(presets.EMO_LISTENING)
+
         def open_wake_word_gate(candidate: str, source: str) -> None:
             if (
                 hal_config.WAKEWORD_ENABLED
@@ -1001,6 +1057,10 @@ class VoiceService:
                 logger.info(
                     "Wake-word gate opened by STT %s: '%s'", source, candidate
                 )
+                # Fire here too, not just from the partial below: the gate can
+                # open on a later partial (or on the final), and the cue should
+                # land the moment the device knows it is being addressed.
+                fire_listening_cue()
 
         def confirm_wake_word_gate(candidate: str) -> None:
             if (
@@ -1023,9 +1083,7 @@ class VoiceService:
                     open_wake_word_gate(candidate, "partial")
                 last_partial[0] = text
                 self._backchannel.on_partial(text)
-                if not listening_emotion_sent[0]:
-                    listening_emotion_sent[0] = True
-                    self._set_emotion_local(presets.EMO_LISTENING)
+                fire_listening_cue()
                 return
             # Accumulate final segments — don't send yet, wait for session close.
             # Flux model fires multiple EndOfTurn events for natural pauses within
@@ -1267,6 +1325,16 @@ class VoiceService:
             # the user stops, so without this the voiceprint ends up 30-50%
             # silence and the embedding degrades. (Pre-initialized to -1 above.)
             last_speech_idx = len(audio_buffer) - 1
+            # Above-RMS frames waiting for Silero to confirm they are speech
+            # before they refresh the silence clock. See SILENCE_VAD_ENABLED.
+            silence_probe: list = []
+            silence_vad_on = (
+                voice_cfg.SILENCE_VAD_ENABLED
+                and voice_cfg.SILENCE_VAD_WINDOW_FRAMES > 0
+            )
+            if silence_vad_on and self._silence_vad is not None:
+                self._silence_vad.reset_state()
+            noise_windows = 0
             # No LED here: the cue waits for the first STT partial (see the
             # listening-cue note above). Opening a session is cheap to be wrong
             # about; lighting the strip is not.
@@ -1339,10 +1407,40 @@ class VoiceService:
                 self._mic_level = energy
                 self._mic_level_ts = time.time()
                 if energy >= voice_cfg.RMS_THRESHOLD:
-                    last_speech_time = time.time()
-                    last_speech_idx = len(audio_buffer) - 1
+                    if not silence_vad_on:
+                        last_speech_time = time.time()
+                        last_speech_idx = len(audio_buffer) - 1
+                    else:
+                        # RMS said "loud". Ask Silero whether it was a VOICE
+                        # before letting it hold the session open. Batched: one
+                        # inference per window, not per frame.
+                        silence_probe.append(data)
+                        if len(silence_probe) >= voice_cfg.SILENCE_VAD_WINDOW_FRAMES:
+                            window = self._np.concatenate(silence_probe)
+                            probe_frames = len(silence_probe)
+                            silence_probe = []
+                            if self._silence_window_is_speech(window, device_rate):
+                                last_speech_time = time.time()
+                                last_speech_idx = len(audio_buffer) - 1
+                            else:
+                                # Not a voice — leave the clock running so a
+                                # noisy room can still time out. The frames stay
+                                # in audio_buffer; only the clock is withheld.
+                                noise_windows += 1
+                                if noise_windows in (1, 10, 50):
+                                    logger.info(
+                                        "Silence clock: %d loud window(s) rejected as "
+                                        "non-speech (%d frames each)",
+                                        noise_windows, probe_frames,
+                                    )
                 elif (time.time() - last_speech_time) > voice_cfg.SILENCE_TIMEOUT_S:
-                    logger.info("Silence detected, disconnecting STT")
+                    if noise_windows:
+                        logger.info(
+                            "Silence detected, disconnecting STT "
+                            "(%d loud window(s) were non-speech)", noise_windows
+                        )
+                    else:
+                        logger.info("Silence detected, disconnecting STT")
                     break
         except Exception as e:
             if _is_normal_ws_close(e):
@@ -1365,9 +1463,24 @@ class VoiceService:
                 and wake_word_detected.is_set()
                 and not wake_word_confirmed.is_set()
             ):
-                logger.info(
-                    "Wake-word partial rejected — no matching final STT result; dropping turn"
-                )
+                # Last look, on the ASSEMBLED transcript. The per-segment checks
+                # above run on wake_final_candidate(), which passes through
+                # merge_stt_hypothesis() — and that keeps only \w+ tokens, so
+                # sentence punctuation is gone by then. A wake phrase opening a
+                # LATER sentence ("Is that match playing tonight? Hello lamp,
+                # let's check it out.") therefore looked mid-sentence and the
+                # whole turn was dropped, wake word and all (device-observed
+                # 18/08/2026). `combined` is the real transcript with its
+                # punctuation intact, which is what the sentence rule needs.
+                if self._decorator.starts_with_wake_word(combined):
+                    wake_word_confirmed.set()
+                    logger.info(
+                        "Wake-word confirmed on assembled transcript: %r", combined
+                    )
+                else:
+                    logger.info(
+                        "Wake-word partial rejected — no matching final STT result; dropping turn"
+                    )
 
             # Noise guard for empty-STT turns: a session can open on a noise blip
             # that fools the entry VAD, then STT finds no words. Re-check the FULL

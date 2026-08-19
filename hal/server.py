@@ -518,11 +518,9 @@ async def lifespan(app: FastAPI):
             stt_provider = None
             logger.info("STT selection: deepgram_key=%s, DeepgramSTT=%s, AutonomousSTT=%s, agent=%s",
                         bool(dgk), DeepgramSTT is not None, AutonomousSTT is not None, agent_name)
+            stt_keywords = state._stt_boost_terms()
             if dgk and DeepgramSTT:
-                dg_keywords = [f"{agent_name}:3"]
-                if " " in agent_name:
-                    dg_keywords.append(" ".join(agent_name) + ":2")
-                stt_provider = DeepgramSTT(api_key=dgk, keywords=dg_keywords)
+                stt_provider = DeepgramSTT(api_key=dgk, keywords=stt_keywords)
             elif llm_key and llm_url and AutonomousSTT:
                 stt_model = (os_cfg.get("stt_model") or "").strip() or None
                 stt_language = (os_cfg.get("stt_language") or "").strip() or None
@@ -531,9 +529,6 @@ async def lifespan(app: FastAPI):
                     stt_kwargs["model"] = stt_model
                 if stt_language:
                     stt_kwargs["language"] = stt_language
-                stt_keywords = [f"{agent_name}:3"]
-                if " " in agent_name:
-                    stt_keywords.append(" ".join(agent_name) + ":2")
                 stt_provider = AutonomousSTT(
                     api_key=llm_key, base_url=llm_url,
                     keywords=stt_keywords, **stt_kwargs

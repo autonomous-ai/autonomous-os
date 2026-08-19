@@ -12,6 +12,12 @@ gateway:
 voice:
   tts_provider: elevenlabs
   #tts_voice: Rachel      # optional
+  # Out-of-the-box wake-word gate: a lamp sits in a shared room and hears every
+  # conversation in it, so it waits to be addressed ("hey lamp" / "hey
+  # autonomous" / "hey <agent name>") instead of answering ambient speech.
+  # Adopted only while config.json has no wakeword key (a device os-server is
+  # setting up for the first time); Settings owns the value from then on.
+  wakeword: true
 capabilities:
   audio:        { routes: [audio, speaker, voice], required: true }
   vision:       { routes: [camera], driver: opencv, required: true }
