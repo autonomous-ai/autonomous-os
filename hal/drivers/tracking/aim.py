@@ -137,6 +137,10 @@ class AimResult:
     bearing_consulted: Optional[dict] = None
     # One entry per decision, in order. What was seen, where, what was commanded.
     steps: list = field(default_factory=list)
+    # Size of the LAST correction issued. The caller scales the capture settle
+    # to it: an aim that exits right after a 30 deg swing leaves the arm still
+    # ringing, and a flat settle photographs the ring as motion blur.
+    last_move_deg: float = 0.0
 
 
 # How long after a servo write a frame is trusted to show the new pose.
@@ -402,6 +406,46 @@ def _step_toward_bearing(svc: Any, out: Optional[dict] = None) -> bool:
         return False
 
 
+# Self-calibration bounds for the measured degrees-per-dx_frac scale. The
+# device has measured 91 deg near the frame centre and 229 deg at the edge, so
+# the window is deliberately wide — it exists only to reject nonsense from a
+# noisy or mis-detected step, not to encode a value.
+MIN_SCALE_DEG: float = 40.0
+MAX_SCALE_DEG: float = 400.0
+# Below these, a step tells us nothing: dividing a tiny shift by a tiny move
+# amplifies detector jitter into a wild scale.
+CALIB_MIN_MOVE_DEG: float = 3.0
+CALIB_MIN_SHIFT_FRAC: float = 0.02
+# How fast the measured scale follows the newest step. High because the true
+# scale genuinely changes as the subject moves in from the edge.
+CALIB_ALPHA: float = 0.6
+# Hard cap on one correction, whatever the measured scale says.
+MAX_STEP_DEG: float = 45.0
+
+
+def _measure_scale(moved_deg: float, shift_frac: float) -> Optional[float]:
+    """Degrees of yaw per unit dx_frac, measured from what the last step did.
+
+    This replaces the fixed FOV constant, which cannot be right everywhere: the
+    lens is a fisheye, so degrees-per-pixel grows toward the edge (device-
+    measured 91 deg centre, 229 deg edge). One constant either overshoots the
+    middle or crawls at the edge — measuring the LOCAL scale each step avoids
+    choosing.
+
+    Returns None when the step is not informative enough to divide by.
+    """
+    if abs(moved_deg) < CALIB_MIN_MOVE_DEG or abs(shift_frac) < CALIB_MIN_SHIFT_FRAC:
+        return None
+    if (moved_deg > 0) != (shift_frac > 0):
+        # The subject moved the wrong way for our correction — they walked, or
+        # the detector jumped to something else. Not a measurement of optics.
+        return None
+    scale = abs(moved_deg) / abs(shift_frac)
+    if not (MIN_SCALE_DEG <= scale <= MAX_SCALE_DEG):
+        return None
+    return scale
+
+
 # A joint is "already there" within this much, so a search does not re-issue a
 # move for rounding noise on every step.
 POSE_TOLERANCE_DEG: float = 2.0
@@ -515,6 +559,14 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
     yaw_total = 0.0
     bearing_steps = 0
     last_dx_frac: Optional[float] = None
+    # Measured degrees-per-dx_frac for THIS aim. Per-aim, not persisted: the
+    # scale depends on where in the frame the subject is, so a value learned
+    # last time at the edge would be wrong near the centre.
+    scale_deg: Optional[float] = None
+    # (yaw, dx_frac) captured just before the last move, so the next
+    # measurement can tell what that move actually achieved.
+    pending_calib: Optional[Tuple[float, float]] = None
+    last_move_deg = 0.0
     start_yaw = _yaw_of(svc)
     steps: list = []
     bearing_consulted: Optional[dict] = None
@@ -524,7 +576,7 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
         whether the head moved rather than just what was decided."""
         return AimResult(
             aimed, reason, iterations, yaw_total, last_dx_frac, bearing_steps,
-            start_yaw, _yaw_of(svc), bearing_consulted, steps,
+            start_yaw, _yaw_of(svc), bearing_consulted, steps, last_move_deg,
         )
 
     with _camera_consumer(cap):
@@ -597,13 +649,32 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
                 f"iter {iterations + 1}: {kind} dx={last_dx_frac * 100:+.1f}%",
             )
 
+            # Learn the local scale from what the previous step actually did,
+            # before deciding whether we are done.
+            if pending_calib is not None:
+                prev_yaw, prev_dx = pending_calib
+                measured = _measure_scale(
+                    _yaw_of(svc) - prev_yaw, prev_dx - last_dx_frac
+                )
+                if measured is not None:
+                    scale_deg = (
+                        measured if scale_deg is None
+                        else (1.0 - CALIB_ALPHA) * scale_deg + CALIB_ALPHA * measured
+                    )
+                pending_calib = None
+
             if abs(last_dx_frac) <= CENTRE_DEADBAND_FRAC:
                 _record_bearing_if_centred(svc, last_dx_frac)
                 return _result(True, f"centred on {kind}")
 
             # Yaw sign per the tracker's verified convention: dx>0 (subject right of
             # centre) -> base_yaw INCREASES. Do not flip this without device evidence.
-            yaw_deg = AIM_GAIN * dx * (config.LOOK_AIM_FOV_DEG / w_fr)
+            # Magnitude comes from the MEASURED scale once we have one; the config
+            # FOV is only the first-step guess.
+            scale = scale_deg if scale_deg is not None else config.LOOK_AIM_FOV_DEG
+            yaw_deg = AIM_GAIN * last_dx_frac * scale
+            yaw_deg = max(-MAX_STEP_DEG, min(MAX_STEP_DEG, yaw_deg))
+            pending_calib = (_yaw_of(svc), last_dx_frac)
 
             try:
                 with look_debug.stage("aim.move"):
@@ -614,12 +685,15 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
                 return _result(False, f"nudge failed: {e}")
 
             yaw_total += yaw_deg
+            last_move_deg = yaw_deg
             iterations += 1
             steps.append({"n": iterations, "saw": kind, "dx_frac": round(last_dx_frac, 3),
-                          "action": f"centre: yaw {yaw_deg:+.1f}", "yaw": _yaw_of(svc)})
+                          "action": f"centre: yaw {yaw_deg:+.1f}", "yaw": _yaw_of(svc),
+                          "scale": round(scale, 1)})
             logger.info(
-                "[look-aim] iter=%d %s dx=%.0fpx (%.1f%%) -> yaw %+.1f deg",
-                iterations, kind, dx, last_dx_frac * 100.0, yaw_deg,
+                "[look-aim] iter=%d %s dx=%.0fpx (%.1f%%) -> yaw %+.1f deg (scale=%.0f%s)",
+                iterations, kind, dx, last_dx_frac * 100.0, yaw_deg, scale,
+                "" if scale_deg is not None else " guess",
             )
 
     return _result(abs(last_dx_frac or 1.0) <= CENTRE_DEADBAND_FRAC, "max iterations")

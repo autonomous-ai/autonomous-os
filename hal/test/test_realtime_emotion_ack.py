@@ -85,3 +85,31 @@ def test_spoken_is_keyword_only_and_required():
         except TypeError:
             return
     raise AssertionError("spoken must be required")
+
+
+# --- Capture settle scaling --------------------------------------------------
+
+def test_capture_settle_scales_with_the_last_move():
+    """A timed-out aim exits right after a big swing and the arm is still
+    ringing; a flat 0.3s photographs that ring as blur."""
+    from hal.realtime.orchestrator import _capture_settle_s
+
+    still = _capture_settle_s(mock.Mock(last_move_deg=0.0))
+    swung = _capture_settle_s(mock.Mock(last_move_deg=30.0))
+    assert swung > still
+
+
+def test_capture_settle_is_capped_so_latency_cannot_run_away():
+    """This delay is paid before the user hears an answer — a sharper frame is
+    not worth unbounded waiting."""
+    from hal.realtime.orchestrator import CAPTURE_SETTLE_MAX_S, _capture_settle_s
+
+    assert _capture_settle_s(mock.Mock(last_move_deg=500.0)) == CAPTURE_SETTLE_MAX_S
+    assert CAPTURE_SETTLE_MAX_S <= 0.5
+
+
+def test_capture_settle_survives_a_missing_aim_result():
+    """Aiming can be disabled or raise; the capture must still happen."""
+    from hal.realtime.orchestrator import CAPTURE_SETTLE_BASE_S, _capture_settle_s
+
+    assert _capture_settle_s(None) == CAPTURE_SETTLE_BASE_S

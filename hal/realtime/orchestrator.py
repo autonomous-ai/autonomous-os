@@ -129,6 +129,25 @@ EMOTION_TOOL: dict[str, Any] = {
     },
 }
 
+# Capture settle. 0.3s suits the tracker's small corrections, but an aim that
+# exits on its deadline does so right after a large swing, and a lamp arm is
+# still ringing well past 300ms — which is why timed-out looks came back blurred
+# while centred ones were sharp (device-observed 2026-08-19).
+#
+# The ceiling is deliberately tight: this delay is paid before the user gets an
+# answer, so a sharper frame is not worth much latency. A 30 deg swing buys
+# 200ms extra, and nothing buys more.
+CAPTURE_SETTLE_BASE_S: float = 0.3
+CAPTURE_SETTLE_MAX_S: float = 0.5
+CAPTURE_SETTLE_PER_DEG_S: float = 0.0067
+
+
+def _capture_settle_s(res: Any) -> float:
+    """Settle time for the shutter, scaled to how far the head last moved."""
+    move = abs(float(getattr(res, "last_move_deg", 0.0) or 0.0))
+    return min(CAPTURE_SETTLE_MAX_S, CAPTURE_SETTLE_BASE_S + CAPTURE_SETTLE_PER_DEG_S * move)
+
+
 LOOK_TOOL_NAME: str = "look"
 LOOK_TOOL_DESCRIPTION: str = (
     "Capture a single frame from the device's camera and look at it, so you can "
@@ -1057,6 +1076,9 @@ class RealtimeOrchestrator:
         from hal.drivers.tracking.aim import servo_ownership
 
         with servo_ownership():
+            # None when aiming is disabled or raised — the settle below then
+            # falls back to the base value rather than NameError-ing the look.
+            res: Any = None
             if config.LOOK_AIM_ENABLED:
                 try:
                     from hal.drivers.tracking.aim import aim_for_look
@@ -1083,7 +1105,7 @@ class RealtimeOrchestrator:
                     logger.warning("[realtime] look: aim raised, capturing anyway: %s", e)
 
             with look_debug.stage("capture"):
-                frame = self._capture_frame()
+                frame = self._capture_frame(_capture_settle_s(res))
         if frame is None:
             logger.warning("[realtime] look: no camera frame available")
             look_debug.abandon("no_camera_frame")
@@ -1138,7 +1160,7 @@ class RealtimeOrchestrator:
         return True
 
     @staticmethod
-    def _capture_frame() -> Any:
+    def _capture_frame(settle_s: float = 0.3) -> Any:
         """Return the latest camera frame (BGR ndarray) downscaled for cost, or
         None if no camera. Reads HAL camera state in-process (no HTTP loopback);
         mirrors the wait/disable handling of routes.camera.camera_snapshot.
@@ -1166,7 +1188,7 @@ class RealtimeOrchestrator:
                 frame: Any = capture_still(
                     cap,
                     getattr(state, "animation_service", None),
-                    settle_s=0.3,
+                    settle_s=settle_s,
                     # 2.0s, not less: a camera woken from disabled (cap.start()
                     # above) can take over a second to deliver its first frame.
                     timeout_s=2.0,

@@ -549,12 +549,44 @@ def test_calibrated_fov_centres_within_two_iterations():
     assert abs(svc.yaw - 30.0) < 8.0, f"settled at {svc.yaw:+.1f} deg, subject at +30"
 
 
-def test_undercalibrated_fov_is_what_made_it_slow():
-    """The 60 deg guess needs far more steps for the same subject — the
-    regression this constant exists to prevent. Undershoot, never overshoot."""
+def test_self_calibration_recovers_from_a_wrong_fov_constant():
+    """The constant is only the first guess.
+
+    A fisheye has no single right value — the device measured 91 deg near the
+    frame centre and 229 deg at the edge — so the aim measures the LOCAL scale
+    from what its own last move achieved. A badly wrong constant must therefore
+    cost at most the first step, not the whole aim.
+    """
     res_bad, _ = _run_closed_loop(30.0, 60.0)
     res_good, _ = _run_closed_loop(30.0, 100.0)
-    assert res_bad.iterations > res_good.iterations
+    assert res_bad.aimed and res_good.aimed, (res_bad.reason, res_good.reason)
+    assert res_bad.iterations <= res_good.iterations + 1, (
+        f"a wrong constant cost {res_bad.iterations - res_good.iterations} extra steps"
+    )
+
+
+def test_measured_scale_is_recorded_per_step():
+    """The scale is the number to look at when an aim crawls — it must be in
+    the trace, and flagged while it is still the unmeasured guess."""
+    res, _ = _run_closed_loop(30.0, 100.0)
+    assert res.steps and all("scale" in st for st in res.steps)
+
+
+def test_scale_measurement_rejects_uninformative_steps():
+    """Dividing a tiny shift by a tiny move turns detector jitter into a wild
+    scale, and one wild scale sends the head across the room."""
+    assert aim._measure_scale(0.5, 0.10) is None      # move too small
+    assert aim._measure_scale(20.0, 0.001) is None    # shift too small
+    assert aim._measure_scale(20.0, -0.10) is None    # subject went the wrong way
+    assert aim._measure_scale(400.0, 0.05) is None    # implausible, out of bounds
+    assert aim._measure_scale(20.0, 0.10) == 200.0    # a real measurement
+
+
+def test_last_move_is_reported_for_the_capture_settle():
+    """An aim that exits straight after a big swing leaves the arm ringing; the
+    caller needs the size to know how long to let it settle."""
+    res, _ = _run_closed_loop(30.0, 100.0)
+    assert res.last_move_deg != 0.0
 
 
 def test_aim_never_overshoots_past_the_subject():
