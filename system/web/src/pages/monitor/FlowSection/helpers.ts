@@ -1007,6 +1007,11 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
     if (ev.type === "flow_event" && ev.detail?.node === "tts_muted") {
       if (info.tts_speak.length < 3) info.tts_speak.push("🔇 speaker muted — reply not spoken");
     }
+    // tts_cancelled: the user took the floor back with a single click. The turn
+    // kept running and its text is on screen — it just lost the speaker.
+    if (ev.type === "flow_event" && ev.detail?.node === "tts_cancelled") {
+      if (info.tts_speak.length < 3) info.tts_speak.push("✋ cancelled by click — reply not spoken");
+    }
     if (ev.type === "flow_event" && ev.detail?.node === "telegram_alert_broadcast") {
       const d = ev.detail as FlowEventDetail | undefined;
       const sessions = Number(d?.data?.sessions ?? 0);
@@ -1150,6 +1155,9 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
     }
     if (ev.type === "flow_event" && ev.detail?.node === "tts_muted") {
       pushUnique(info.os_gate, "🔇 → TTS muted (speaker)");
+    }
+    if (ev.type === "flow_event" && ev.detail?.node === "tts_cancelled") {
+      pushUnique(info.os_gate, "✋ → TTS cancelled (click)");
     }
     if (ev.type === "flow_event" && ev.detail?.node === "no_reply") {
       pushUnique(info.os_gate, "🚫 → no reply");

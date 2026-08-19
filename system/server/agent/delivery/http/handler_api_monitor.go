@@ -111,6 +111,27 @@ func (h *AgentHandler) StopTTS(c *gin.Context) {
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(nil))
 }
 
+// CancelSpeechHandler silences the turns that are in flight right now and cuts
+// whatever the speaker is already playing. Fired by the physical cancel gesture
+// (single click) via HAL, so the user gets the floor back without waiting for
+// the agent to finish.
+//
+// Two halves, because neither alone is enough: StopTTS kills the sentence being
+// played AND the pre-synthesised queue behind it (hal tts service stop() clears
+// the pending list), while the watermark stops os-server from handing HAL the
+// sentences that have not been generated yet. Stopping only at HAL means the
+// device goes quiet for one sentence and then resumes.
+func (h *AgentHandler) CancelSpeechHandler(c *gin.Context) {
+	h.CancelSpeech()
+	if err := h.agentGateway.StopTTS(); err != nil {
+		// The watermark already landed — the backlog stays muted regardless.
+		// Report the failure but do not fail the request: a HAL hiccup must
+		// not make the gesture look like it did nothing.
+		slog.Warn("StopTTS during speech cancel failed", "component", "agent", "error", err)
+	}
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(nil))
+}
+
 // SetBusy marks the agent as busy from an external signal (e.g. turn-gate hook firing at
 // message:preprocessed before lifecycle_start SSE arrives). Closes the timing gap for
 // channel-initiated turns (Telegram, Slack, Discord) that bypass the OS server entirely.

@@ -42,6 +42,15 @@ FACTORY_RESET_DURATION = 10.0  # seconds held → factory-reset on release (supe
 # conversation history without speaking back.
 OS_SENSING_URL = "http://127.0.0.1:5000/api/sensing/event"
 
+# OS server speech-cancel endpoint. stop_tts() only silences what HAL already
+# holds (the sentence playing plus the pre-synthesised queue); the OS server
+# keeps handing over the sentences of every turn still in flight, so without
+# this call the device goes quiet for one sentence and then talks on. The OS
+# server marks those turns as no-longer-allowed-to-speak — they keep running,
+# they just lose the speaker. Turns started AFTER the click are unaffected, so
+# the user can click and immediately say something new.
+OS_SPEECH_CANCEL_URL = "http://127.0.0.1:5000/api/agent/speech/cancel"
+
 # Agent-notify batching for petting. Every notify is a full LLM turn on the
 # OS server side (the NO_REPLY hint suppresses speech, not the turn), and the
 # local phrase playback alone would allow one notify every ~2-4s during a
@@ -85,6 +94,23 @@ def _notify_head_pat(spoken: str):
         )
     except Exception:
         pass
+
+
+def _cancel_agent_speech(source: str):
+    """Tell the OS server to stop speaking for every turn currently in flight.
+
+    Fire-and-forget on its own thread: the click's felt latency is the whole
+    point of the gesture (see the sca-trace timings below), and a stalled OS
+    server must not delay the local stop. The local stop_tts() runs anyway, so
+    a lost call degrades to "quiet for one sentence" rather than to nothing."""
+
+    def _post():
+        try:
+            requests.post(OS_SPEECH_CANCEL_URL, json={}, timeout=1.0)
+        except Exception as e:
+            logger.warning("%s speech-cancel call failed: %s", source, e)
+
+    threading.Thread(target=_post, daemon=True, name=f"{source}-speech-cancel").start()
 
 
 def _current_lang() -> str:
@@ -238,6 +264,12 @@ def single_click_action(source: str = "button", announce: bool = True, chime: bo
     from hal.routes.voice import stop_tts, unmute_mic
 
     t_start = time.monotonic()
+    # Dispatched first and off-thread so the mute reaches the OS server while
+    # the local wake/unmute steps below are still running. Fired on both
+    # branches, not just the stopping-speaker one: a click that unmutes the mic
+    # is the user taking the floor too, and a backlog of turns queued up while
+    # the mic was muted must not start talking over them.
+    _cancel_agent_speech(source)
     _wake_if_sleepy(source)
     logger.info("[sca-trace] wake done +%.0fms", (time.monotonic() - t_start) * 1000)
 
