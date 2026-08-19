@@ -7,7 +7,7 @@ Source: colors are what the **lamp** actually shows — `robots/lamp/presets.jso
 | `curious` | 0, 12, 0 | `#000c00` green | overlay | candle | 0.3 | curious |
 | `happy` | 12, 12, 0 | `#0c0c00` yellow | overlay | candle | 0.2 | happy_wiggle |
 | `sad` | 16, 0, 0 | `#100000` red | overlay | breathing | 0.4 | sad |
-| `thinking` | 0, 12, 0 | `#000c00` green | overlay | pulse | 0.3 | thinking_deep |
+| `thinking` | 0, 12, 0 | `#000c00` green | overlay | pulse | 0.3 | — (see note) |
 | `idle` | 8, 4, 0 | `#080400` dim amber | overlay | breathing | 0.2 | idle |
 | `excited` | 12, 12, 0 | `#0c0c00` yellow | overlay | candle | 0.5 | excited |
 | `shy` | 16, 0, 0 | `#100000` red | overlay | breathing | 0.3 | shy |
@@ -67,13 +67,16 @@ Two technical notes:
 - **This table lives in `robots/lamp/presets.json`**, the per-device overlay merged field by field at boot via `hal/board/presets_overlay.py` — `hal/presets.py` is *not* edited. Other robots (reachy, intern) therefore keep the base palette, and reverting the lamp to the base palette is just deleting the `emotion` section from that JSON file.
 - **Do not confuse `EMO_IDLE` with `AMBIENT_RESTING_LED`.** The latter is `[0, 0, 0]` (product call 30/07/2026: a resting strip is fully off); `EMO_IDLE` is an emotion the agent actively emits and still has a color.
 
-## `listening` has no servo
+## `thinking` and `listening` have no servo
 
-It is the only preset that sets `"servo": None` — LED only, the lamp holds still. `listening` runs while the user is actually speaking; servo noise plus chassis vibration goes straight into the mic and dirties STT.
+Both set `"servo": None` — LED only, the lamp holds still:
 
-`thinking` does have a servo (`thinking_deep`), but it is still a special case on the LED side: the emotion-ack hook fires it on **every** preprocessed message, so its LED sits behind the `_BACKGROUND_EMOTIONS` guard in `hal/app_state.py` to keep a whole conversation from being repainted green.
+- `listening` runs while the user is actually speaking; servo noise plus chassis vibration goes straight into the mic and dirties STT.
+- `thinking` is fired by the emotion-ack hook on **every** preprocessed message, so a servo there means the body fidgets through the whole conversation. It also moves the camera: `thinking_deep.csv` sweeps wrist_pitch 34° and wrist_roll 32°, and the camera sits in the head — so when the realtime `look` tool fires (it fires during the model's turn, i.e. while `thinking` is showing) the user has to chase a moving, rolling camera to hold an object in frame. The same hook is why its LED sits behind the `_BACKGROUND_EMOTIONS` guard in `hal/app_state.py`, to keep a whole conversation from being repainted green.
 
-`listening.csv` stays in `hal/recordings/` even though no emotion maps to it: `/servo/play` can still call it by hand, and Reachy still maps it (`hal/drivers/motors/reachy_service.py`).
+On the lamp `thinking` gets `"servo": null` from `robots/lamp/presets.json`; the base preset in `hal/presets.py` still maps it to `thinking_deep` for bodies that want it.
+
+`listening.csv` and `thinking_deep.csv` stay in `hal/recordings/` even with no emotion mapping to them: `/servo/play` can still call them by hand, and Reachy still maps them (`hal/drivers/motors/reachy_service.py`).
 
 The code path handles `servo: None` natively — `hal/routes/emotion.py` skips the play branch and `POST /emotion` returns `"servo": null`, and `listening` schedules no LED restore at all.
 
