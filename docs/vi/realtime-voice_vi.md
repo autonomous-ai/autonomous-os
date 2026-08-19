@@ -108,6 +108,25 @@ Silero **riêng** — cái thứ ba, bên cạnh gate đầu vào và noise guar
 phiên. Nó fail-open: model lỗi thì coi như có tiếng nói, nên thiết bị không bao
 giờ cắt lời ai.
 
+### Mic bỏ qua chính cue backchannel của mình
+
+Cue lắng nghe của backchannel ("Ok", "Mm", "Oh") được phát mà **không** set cờ
+`speaking` của TTS — cố ý, vì cờ đó sẽ kết thúc session STT đang chạy, đúng cái
+session mà cue sinh ra để giữ. Nhưng `speaking` cũng là thứ duy nhất bình thường
+giữ mic tắt khi thiết bị đang nói, nên cue lọt thẳng vào mic và VAD đầu vào mở một
+session **mới** trên chính nó khoảng một giây sau. Quan sát trên thiết bị
+19/08/2026: `'Ok'` quay lại thành `transcript='Okay.'` và `'Oh'` thành
+`transcript='no'`, mỗi cái chạy thành một lượt thật mà không ai nói.
+
+`Backchannel.self_audio_active` bịt lỗ này mà không đụng `speaking`. `_play()` cài
+một deadline (độ dài clip + `HAL_BACKCHANNEL_ECHO_TAIL_S`) *trước khi* sample đầu
+tiên phát ra, rồi neo lại phần đuôi theo thời điểm playback thực sự kết thúc. Trong
+lúc deadline còn hiệu lực, vòng VAD bỏ các frame đó khỏi phép thử speech **và**
+khỏi lookback pre-roll — giữ chúng trong lookback thì cue sẽ thành audio mở đầu của
+session kế — rồi reset LSTM của Silero khi resume, đúng phần dọn dẹp mà warm-mic
+drain vẫn làm. Chỉ chặn việc **mở** session; session đang stream không bị đụng, đó
+mới là mục đích của tính năng.
+
 `robots/lamp/rootfs/opt/hal/.env` hạ `HAL_MAX_SESSION_DURATION_S` xuống `20`
 (default trong code vẫn là `30`); trần đó chỉ chạm tới khi đồng hồ im lặng không
 bao giờ hết hạn, mà người nói thật luôn ngừng lâu hơn `SILENCE_TIMEOUT` trong

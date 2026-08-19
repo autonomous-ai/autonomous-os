@@ -763,6 +763,7 @@ class VoiceService:
         speech_pre_buffer = []  # frames buffered during holdoff period
         lookback = deque(maxlen=voice_cfg.PRE_ROLL_FRAMES)
         draining = False  # warm-mic: True while draining frames during TTS/music
+        bc_muting = False  # True while dropping frames that carry our own cue
 
         # Keepalive: pre-connect STT WS so it's ready before speech is detected.
         keepalive_session = None
@@ -832,6 +833,30 @@ class VoiceService:
                 if not voice_cfg.WARM_MIC:
                     return
                 continue  # warm: loop back → drain branch handles it
+
+            # Our own backchannel cue is in the room: it bypasses the TTS
+            # `speaking` flag on purpose (that flag would kill the running STT
+            # session), so nothing above filters it. Drop these frames entirely —
+            # not just from the VAD test but from `lookback` too, or the cue
+            # would come back as the next session's pre-roll. Any speech run in
+            # progress is abandoned: a cue only fires after the partial stalled,
+            # so there is no user utterance to clip here.
+            if self._backchannel.self_audio_active:
+                if not bc_muting:
+                    bc_muting = True
+                    logger.info("Backchannel cue in the room — VAD muted until it decays")
+                if speech_start is not None:
+                    speech_start = None
+                    speech_pre_buffer = []
+                continue
+            if bc_muting:
+                # Same cleanup the warm-mic drain does on resume: the dropped
+                # frames are a discontinuity for Silero's LSTM, and the lookback
+                # must not pre-roll audio from before the cue.
+                bc_muting = False
+                lookback.clear()
+                self._silero_reset_state()
+                logger.info("Backchannel cue decayed — VAD resumed")
 
             # Append to lookback for pre-roll.
             lookback.append(data)

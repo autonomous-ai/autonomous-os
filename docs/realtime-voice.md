@@ -113,6 +113,25 @@ so the other paths' LSTM state stays clean, and it resets that state at the
 start of every session. It fails open: a model error counts as speech, so the
 device never cuts anyone off.
 
+### The mic ignores our own backchannel cue
+
+Backchannel listening cues ("Ok", "Mm", "Oh") are played on purpose **without**
+setting the TTS `speaking` flag, because that flag ends the running STT session —
+the one the cue exists to keep alive. But `speaking` is also the only thing that
+normally keeps the mic off while the device talks, so the cue reached the mic
+unfiltered and the entry VAD opened a **new** session on it about a second later.
+Device-observed 19/08/2026: `'Ok'` came back as `transcript='Okay.'` and `'Oh'` as
+`transcript='no'`, each running as a real turn that no user spoke.
+
+`Backchannel.self_audio_active` closes this without touching `speaking`. `_play()`
+arms a deadline (clip length + `HAL_BACKCHANNEL_ECHO_TAIL_S`) *before* the first
+sample leaves, then re-anchors the tail to when playback actually ended. While it
+holds, the VAD loop drops those frames from the speech test **and** from the
+pre-roll lookback — keeping them in lookback would just replay the cue as the next
+session's opening audio — and resets Silero's LSTM on resume, the same cleanup the
+warm-mic drain does. Only session *opening* is suppressed; a session already
+streaming is untouched, which is the whole point of the feature.
+
 `robots/lamp/rootfs/opt/hal/.env` lowers `HAL_MAX_SESSION_DURATION_S` to `20`
 (the code default stays `30`); that ceiling is only reached when the silence
 clock never expires, and a real speaker always pauses longer than
