@@ -107,13 +107,26 @@ Nếu sau này dùng `blink`: `blink()` map speed 1.0 → **~3 Hz** (`hal/driver
 
 ## `candle` đổi độ sáng, không bao giờ đổi hue
 
-`candle()` (`hal/drivers/rgb/effects.py`) cho mỗi pixel một hệ số flicker riêng trong `[CANDLE_FLICKER_MIN, 1.0]` (`CANDLE_FLICKER_MIN = 0.4`) và scale **cả ba channel bằng đúng một hệ số đó**: `tuple(min(255, int(c * flicker)) for c in color)`. Mọi pixel cùng một màu, chỉ khác độ sáng — cả strip đọc ra như một ngọn lửa thở không đều, thay vì một mớ màu khác nhau.
+`candle()` (`hal/drivers/rgb/effects.py`) cho mỗi pixel một mức flicker riêng trong `[CANDLE_FLICKER_MIN, 1.0]` (`CANDLE_FLICKER_MIN = 0.8`) và scale **cả ba channel bằng đúng một mức đó**: `tuple(min(255, int(c * level)) for c in color)`. Mọi pixel cùng một màu, chỉ khác độ sáng — cả strip đọc ra như một ngọn lửa thở không đều, thay vì một mớ màu khác nhau.
 
 Đây đúng là luật của chính các preset: hạ sáng bằng scale, không bao giờ bằng cách chọn màu mới. Hue là thứ agent muốn nói.
 
 Trước đây nó phá luật này. Bản cũ xử lý từng channel riêng — `r = color[0]*flicker + random.randint(0, 20)`, `g = color[1]*flicker*random.uniform(0.6, 0.9)`, `b = color[2]*flicker*0.3` — còn sống được khi màu emotion còn sáng, nhưng không sống nổi sau khi hạ xuống mức chỉ báo với peak chỉ 12–16. Cộng `+20` vào đỏ khi đó là **lớn hơn cả chính màu đó**. Đo trên lamp (19/08/2026): `happy`, khai báo `[12, 9, 1]` ở hue 44° vàng, vẽ ra pixel trải từ `(9, 5, 0)` tới `(26, 4, 0)` — đỏ lên tới 2.2× giá trị khai báo của chính nó, hue sập về 5–20°, nên mắt thấy một mảng cam lốm đốm thay vì vàng đều. `excited` `[12, 8, 12]` (hồng tím, hue 300°) tệ nhất: xanh dương bị nhân ×0.3 trong khi đỏ bị thổi lên, và ra thành cam. Sau khi sửa, hue đo được giữ đúng: happy 36–48°, curious 36–43°, excited đúng 300°.
 
 Emotion bị ảnh hưởng: `curious`, `happy`, `excited`, `laugh`, `confused` — năm cái dùng candle. `breathing` và `pulse` chưa bao giờ dính bug này vì chúng luôn chỉ scale theo tỉ lệ (`int(c * brightness)`).
+
+### …và nó không còn nhấp nháy gắt nữa
+
+Cùng đợt sửa đó còn xử lý một vấn đề thứ hai, độc lập, trong `candle`: trước đây nó bốc một mức ngẫu nhiên mới cho mỗi pixel **mỗi frame**, ở nhịp `0.05/speed` — 4 Hz với `happy`/`laugh`/`confused`, 10 Hz với `excited` — nhảy tuỳ ý trong khoảng 0.4 đến 1.0 của màu gốc. Đó là độ sâu điều biến 60% ở 4–10 Hz, trong khi IEEE 1789-2015 xếp **mọi** flicker dưới 90 Hz vào vùng rủi ro cao (ở 100 Hz giới hạn đã là 1.6%). Dải 3–70 Hz chính là dải bị gắn với đau đầu và khó chịu thị giác, và trên một chiếc đèn bàn chiếu thẳng vào mặt thì nó bị phản ánh là gây chóng mặt.
+
+Hai thay đổi kéo nó về trong khuyến nghị mà không đổi bản chất effect:
+
+- **Refresh cố định 30 Hz kèm nội suy** (`CANDLE_REFRESH_HZ = 30`). Mỗi pixel giờ đi dần về mức đích thay vì nhảy phắt tới — `speed` quyết định nó đi nhanh cỡ nào, chứ không phải nó dịch chuyển tức thời bao nhiêu lần mỗi giây. Mắt bắt vào các bước nhảy; một đường dốc mượt cùng chu kỳ đọc ra là chuyển động, không phải nhấp nháy.
+- **Nâng sàn 0.4 → 0.8**, kéo độ sâu điều biến từ 60% xuống 20%.
+
+Đo trên lamp sau đó: `happy` refresh 29.2 Hz ở mức điều biến 9.1%, `excited` 29.1 Hz ở 18.2%, và nhịp flicker cảm nhận được rơi vào khoảng 0.85 Hz (speed 0.2) đến 2.25 Hz (`excited`, speed 0.5) — dưới mốc 3 Hz nơi dải khó chịu bắt đầu. Hệ số `speed * 0.6` trong phần tiệm cận chính là thứ giữ `excited` ở đó; nâng nó lên là đẩy preset sôi nổi nhất trở lại vào dải đó.
+
+`CANDLE_FLICKER_MIN` và `CANDLE_REFRESH_HZ` là ngưỡng an toàn thị giác, không phải tuỳ chọn thẩm mỹ. Đừng hạ cái nào xuống nếu chưa đọc lại chuẩn.
 
 ## LED Restore Behavior
 
