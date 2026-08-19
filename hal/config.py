@@ -571,8 +571,15 @@ SPEAKER_PROC_RMS_TARGET: float = float(
 # bound memory on long clips. The ~20 MB weight is NOT committed — it downloads
 # on first use from the CDN into /root/local/models (same convention as the pose
 # / faceid weights); if it can't be resolved the gate is skipped with a warning.
+#
+# OFF by default. It rejects a real speaker often enough to hurt: on device it
+# dropped ordinary utterances as FAIL-low-stoi, and a rejected turn has no
+# speaker at all, which is worse than a lower-confidence identification the
+# recogniser's own thresholds can still weigh. Set
+# HAL_SPEAKER_PROC_ENABLE_STOI=true to gate on intelligibility where the room is
+# noisy enough for that trade to pay off.
 SPEAKER_PROC_ENABLE_STOI: bool = (
-    os.environ.get("HAL_SPEAKER_PROC_ENABLE_STOI", "true").lower() == "true"
+    os.environ.get("HAL_SPEAKER_PROC_ENABLE_STOI", "false").lower() == "true"
 )
 SPEAKER_PROC_STOI_MODEL_PATH: str = os.environ.get(
     "HAL_SPEAKER_PROC_STOI_MODEL_PATH",
