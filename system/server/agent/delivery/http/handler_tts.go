@@ -85,7 +85,12 @@ func (h *AgentHandler) isSpeechCancelled(runID string) bool {
 	if mark == 0 || runID == "" {
 		return false
 	}
-	return h.runCreatedAtMs(runID) <= mark
+	// Callers disagree on which id they are holding: the TTS path has already
+	// been translated to the device run id, while HW dispatch can still carry
+	// the raw backend UUID for the SAME turn. Resolving here keeps one verdict
+	// per turn — without it a cancelled run had its speech muted while its
+	// servo and LED markers fired anyway (device-observed, 19/8).
+	return h.runCreatedAtMs(h.resolveRunID(runID)) <= mark
 }
 
 // CancelSpeech silences every turn that is in flight right now. Called by the

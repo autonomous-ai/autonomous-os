@@ -7,7 +7,45 @@ import (
 )
 
 func newCancelTestHandler() *AgentHandler {
-	return &AgentHandler{runFirstSeenMs: make(map[string]int64)}
+	return &AgentHandler{
+		runFirstSeenMs: make(map[string]int64),
+		runIDMap:       make(map[string]string),
+	}
+}
+
+// Device-observed regression (19/8): the TTS path holds the device run id while
+// HW dispatch can still be holding the backend UUID for the SAME turn. Judging
+// them separately muted the reply but let the servo and LED markers through, so
+// the device went quiet and kept moving.
+func TestCancelVerdictIsSameForBackendUUIDAndDeviceRunID(t *testing.T) {
+	h := newCancelTestHandler()
+	deviceID := deviceRunID(5, time.Now().Add(-2*time.Second))
+	backendUUID := "0198f2c1-4a7b-7c3d-9e10-5f6a7b8c9d0e"
+	h.mapRunID(backendUUID, deviceID)
+
+	h.CancelSpeech()
+
+	if !h.isSpeechCancelled(deviceID) {
+		t.Fatalf("device run id should be cancelled")
+	}
+	if !h.isSpeechCancelled(backendUUID) {
+		t.Errorf("backend UUID for the same turn must reach the same verdict — HW markers would fire on a muted turn")
+	}
+}
+
+// An unmapped UUID (turn started after the click, mapping not recorded yet)
+// must still be allowed to act — otherwise a cancel would freeze the body of
+// every later turn too.
+func TestUnmappedBackendUUIDAfterCancelStillActs(t *testing.T) {
+	h := newCancelTestHandler()
+	h.CancelSpeech()
+	// An id with no readable creation time is dated by when it was first seen,
+	// and a tie with the mark counts as cancelled (conservative). Step past the
+	// mark so this exercises "seen later", not the same-millisecond tie.
+	time.Sleep(2 * time.Millisecond)
+	if h.isSpeechCancelled("0198f2c1-dead-7c3d-9e10-5f6a7b8c9d0e") {
+		t.Errorf("unmapped run first seen after the cancel must not be muted")
+	}
 }
 
 func deviceRunID(seq int, at time.Time) string {
