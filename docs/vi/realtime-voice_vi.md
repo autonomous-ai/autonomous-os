@@ -209,21 +209,30 @@ nói xem thấy gì"), prompt bắt buộc gọi một `delegate_to_main` gộp 
 `look` — để lệnh chuyển động không bị âm thầm bỏ rơi. Orchestrator đăng ký tool `look` (`orchestrator.py`,
 `LOOK_TOOL`) và xử lý trong `_handle_look_call`:
 
-1. Lấy frame camera **nét** **in-process** (`_capture_frame` gọi
+1. **Ngắm đầu vào đối tượng trước**, trên thiết bị có thể chuyển động — nếu
+   không thì model sẽ trả lời đầy tự tin về bất cứ thứ gì cái đầu tình cờ đang
+   hướng tới. Xem
+   [Look-aim](../../robots/lamp/docs/vi/vision-tracking_vi.md#look-aim--ngắm-đầu-trước-khi-một-câu-hỏi-thị-giác-chụp-ảnh)
+   để biết vòng lặp ngắm, cách nó chọn ai mới là người đang hỏi, và bearing đã
+   ghi nhớ mà nó quay về khi không thấy ai.
+2. Lấy frame camera **nét** **in-process** (`_capture_frame` gọi
    `capture_still` — không qua HTTP loopback; servo bị freeze (cả animation
    loop lẫn servo worker của tracker đều tôn trọng cờ này) và frame chỉ được
-   chấp nhận khi timestamp chụp ≥ 0.3s sau lần ghi bus servo cuối, nên motion
-   blur không lọt tới model; không thêm độ trễ khi servo vốn đang đứng yên
-   hoặc thiết bị không có servo), downscale về `HAL_GEMINI_VISION_MAX_WIDTH`
+   chấp nhận khi timestamp chụp vượt quá thời gian chờ lắng tính từ lần ghi bus
+   servo cuối, nên motion blur không lọt tới model. Thời gian lắng là 0.3s, co
+   giãn theo độ lớn của lần chỉnh ngắm cuối với trần 0.5s — một lần ngắm hết hạn
+   chót sẽ thoát ra ngay sau một cú quay lớn, và cần đèn vẫn còn rung quá mốc
+   300ms cố định; không thêm độ trễ khi servo vốn đang đứng yên hoặc thiết bị
+   không có servo), downscale về `HAL_GEMINI_VISION_MAX_WIDTH`
    (mặc định 768px) để giới hạn token ảnh.
-2. Đẩy vào làm **video input** realtime (`ImageInput` → `send_realtime_input(video=…)`),
+3. Đẩy vào làm **video input** realtime (`ImageInput` → `send_realtime_input(video=…)`),
    rồi **replay turn**: Live API xếp frame gửi giữa-turn vào turn KẾ TIẾP
    (device-proven: flow ack-tool → tiếp-turn cũ khiến mọi câu look trả lời bằng
    ảnh của lần look *trước* — lệch 1 ảnh, delay ack bao nhiêu cũng không cứu),
    nên thay vì ack tool call, orchestrator yield `LookReplaySignal` và
    `run_realtime_turn` gửi lại audio của turn + commit lần nữa trên CÙNG
    session. Frame đang xếp hàng vào đúng turn replay.
-3. Turn replay kích hoạt `look` lần nữa, rơi vào reuse guard
+4. Turn replay kích hoạt `look` lần nữa, rơi vào reuse guard
    (`VISION_MIN_INTERVAL_S`) và được ack `trigger_response=True` — model trả
    lời bằng frame lúc này đã thật sự nằm trong context.
 

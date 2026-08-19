@@ -338,7 +338,7 @@ wall. `hal/drivers/tracking/aim.py` centres the subject first.
 |---|---|
 | **Trigger** | the `look` tool firing — **not** ordinary conversation |
 | **Scope** | yaw only |
-| **Budget** | `HAL_LOOK_AIM_DEADLINE_S` (0.8 s); on expiry it captures from wherever it reached |
+| **Budget** | `HAL_LOOK_AIM_DEADLINE_S` (8 s); on expiry it captures from wherever it reached |
 | **Disable** | `HAL_LOOK_AIM=false` |
 
 Ordinary chat is untouched: the body stays still through listening and thinking as before. Only a
@@ -359,10 +359,16 @@ is already playing, but not one dispatched afterwards, which is exactly the wind
 The previous lock value is restored rather than cleared, so a look never ends a genuine
 object-tracking session that was already running.
 
-**Why yaw only.** The yaw sign is copied from the tracker's empirically verified convention
-(`dx>0` → `base_yaw` increases). `AnimationService.nudge()` drives `base_pitch`, whereas the tracker
-distributes pitch across base/elbow/wrist — so the pitch sign is **not** validated on this path, and
-an inverted pitch is a bug this codebase has already hit once (see `servo_follow.command_pid`).
+**Why the centring loop is yaw only.** The yaw sign is copied from the tracker's empirically
+verified convention (`dx>0` → `base_yaw` increases). `AnimationService.nudge()` drives `base_pitch`,
+whereas the tracker distributes pitch across base/elbow/wrist — so the pitch sign is **not**
+validated on this path, and an inverted pitch is a bug this codebase has already hit once (see
+`servo_follow.command_pid`).
+
+The bearing restore in priority 3 is the exception, and it is safe for a specific reason: it sends an
+**absolute** pose via `move_and_hold`, not a relative nudge. An absolute target has no sign to get
+wrong. That is what lets a head left pointing at the floor recover its height — with yaw-only
+correction it would sweep the floor in a circle no matter how right the direction was.
 
 **Priority order:**
 
@@ -371,15 +377,105 @@ an inverted pitch is a bug this codebase has already hit once (see `servo_follow
 2. **Nothing visible, but a subject was confirmed at this pose seconds ago** → **hold and capture.**
    Treat the disappearance as *occlusion, not absence* — that is what a held-up object looks like to
    a detector, and turning away would abandon the very thing the user asked about.
-3. **Nothing visible and nothing seen recently** → step toward the remembered bearing, re-detecting
-   after **every** step. Steps are capped at `BEARING_STEP_DEG` well under the camera FOV because
-   `nudge()` blocks: one large blind move could pass straight over someone standing en route and
-   arrive at an empty spot with high confidence.
+3. **Nothing visible and nothing seen recently** → go to the remembered **pose** — direction and
+   posture together — in a single absolute move. This used to advance in `BEARING_STEP_DEG` hops,
+   re-detecting between them so it could not pass over someone standing en route; the hops were
+   dropped because the lens sees ~110°, so anyone in between is already in frame before the head
+   moves at all. They bought no coverage and cost a detect plus a settle each, roughly a second per
+   hop out of the aim's own budget.
 4. **Deadline** → capture from wherever the head reached. It never sweeps here.
 
 Every move goes through `nudge()`, so `SAFETY.md`'s `max_speed` stretches the move rather than being
 bypassed to meet the deadline. A physical-button single click aborts it (`button_actions.py`), since
 that gesture means "stop moving and pay attention to me".
+
+#### Which detection counts as "the person asking"
+
+A `person` box is not enough. The detector's global floor is `DETECT_MIN_CONFIDENCE = 0.15`,
+deliberately loose because it is tuned for the **tracker**, where losing a lock on a phone at an odd
+angle costs more than a false positive. Aiming wants the opposite trade — a false positive turns the
+lamp at a wall — so the aim applies its own two gates:
+
+| gate | default | rejects |
+|---|---|---|
+| `HAL_LOOK_AIM_MIN_PERSON_HEIGHT_FRAC` | 0.15 | a colleague across the room (measured 0.10 of frame height) |
+| `HAL_LOOK_AIM_MIN_FACE_HEIGHT_FRAC` | 0.08 | a spurious far face (measured 0.035) |
+| `HAL_LOOK_AIM_MIN_CONFIDENCE` | 0.5 | low-confidence noise, e.g. a person rendered on a monitor |
+
+Size is measured on **height**, not area or width: a close subject is routinely clipped left or right
+by the frame edge, but their apparent height still scales with distance.
+
+A rejected detection is reported as **no subject at all**, not as a target — so the aim falls through
+to hold-or-consult-the-bearing rather than turning to a stranger at the other end of the room. Faces
+come from YuNet, which enforces its own threshold and reports no confidence, so only the height gate
+applies there.
+
+#### Self-calibrating pixels-to-degrees
+
+The aim does **not** trust a fixed FOV constant. It measures degrees-per-`dx_frac` from what its own
+last move actually achieved, and uses that for the next correction; `HAL_LOOK_AIM_FOV_DEG` (100°) is
+only the first-step guess before any measurement exists.
+
+This exists because no single constant can be right. The lens is a fisheye: the same device measured
+**91° near the frame centre and 229° at the edge**. A constant tuned for the centre crawls at the
+edge (four iterations still not centred, then a timeout); one tuned for the edge overshoots the
+centre and oscillates.
+
+Guards, because dividing a small shift by a small move turns detector jitter into a wild scale: a
+step is ignored unless the head moved >3° and the subject shifted >0.02 of frame, and unless the
+shift went the **same** direction as the correction — a wrong-way shift means the subject walked or
+the detector jumped to something else, which is not a measurement of optics. The result is clamped to
+40–250° and damped by `SCALE_SAFETY` (0.7), deliberately biased low: the measurement is taken at the
+current eccentricity but spent at a smaller one, and undershoot costs a step where overshoot
+oscillates.
+
+#### Capture timing
+
+Two costs were paid inside the aim's budget before being moved out of it:
+
+- **Detector warm-up.** The first `detect()` loads the model lazily and cost ~9 s on device — enough
+  on its own to blow the deadline and the realtime turn's watchdog. It is now pre-warmed on a
+  background thread at HAL start (`server.py`), so the first real look runs at the same speed as
+  every later one.
+- **Stale frames.** Reading `last_frame` straight after a move returns the **pre-move** image, so the
+  next correction is computed from a pose the head has already left. On device that produced six
+  identical +12.3° corrections with `dx` frozen at 0.241 while the head travelled 61°. The aim now
+  holds the camera consumer for the whole aim (without one the device does not capture at full FPS)
+  and requires a frame stamped after the servo settled. **No fresh feedback, no move.**
+
+The shutter itself uses `capture_still`, which freezes the servos and waits for quiet. Its settle
+scales with the size of the last correction (0.3 s base, +0.0067 s/deg, capped at 0.5 s), because an
+aim that exits on its deadline does so immediately after a large swing and a lamp arm is still
+ringing past a flat 300 ms — that was the difference between sharp captures on centred aims and
+blurred ones on timed-out aims. The cap is deliberately tight: this delay is paid before the user
+hears an answer.
+
+#### Debugging a look
+
+Off by default; when disabled every hook is a single cached bool check, so it costs nothing to leave
+in place.
+
+```bash
+HAL_LOOK_DEBUG=true          # per-look trace dirs under drivers/tracking/look_logs/
+HAL_LOOK_DEBUG_FRAMES=false  # keep the trace, skip the per-step JPEGs
+```
+
+Each look writes `<timestamp>_<status>/` containing:
+
+| file | what it answers |
+|---|---|
+| `step_NN_*.jpg` | what the detector locked onto each iteration — green box, green line at box centre, red line at frame centre. The gap between the lines **is** `dx`. |
+| `capture.jpg` | the frame actually sent to the model |
+| `result.json` | the decision trail: per step `saw` / `dx_frac` / `conf` / `scale` / commanded yaw / resulting pose, plus the bearing consulted |
+| `profile.json` | stage timings, and `waiting_on_model_ms` |
+
+The status in the directory name (`OK_realtime_handled`, `OK_delegated`, `OK_fallback`) says which
+path answered the turn, so a bad answer can be attributed before opening anything.
+
+`waiting_on_model_ms` is the one to read first: it is total minus everything the device did itself,
+and it separates "the lamp is slow" from "the lamp finished in 2 s and then waited 24 s for the
+model". Sub-stages are nested inside their roll-up and excluded from the device total, so the
+residual is honest. The same numbers appear on one `LOOK-PROFILE` log line per look.
 
 ### Search sweep — asked for, never inline
 
@@ -435,14 +531,42 @@ user is genuinely left waiting.
 
 ### Remembered user bearing
 
-`hal/drivers/tracking/user_bearing.py` folds **centred** sightings into one decaying estimate at
-`/var/lib/hal/user_bearing.json` (`HAL_USER_BEARING_PATH`). One angle, not a histogram — the lamp
-only ever needs one direction to turn to.
+`hal/drivers/tracking/user_bearing.py` folds sightings into one decaying estimate at
+`/var/lib/hal/user_bearing.json` (`HAL_USER_BEARING_PATH`). One place, not a histogram — the lamp
+only ever needs one pose to return to.
 
-Only sightings within **2%** of frame centre are recorded, which is tighter than the aim's own
-framing tolerance. That is deliberate: at frame centre the servo position **is** the bearing, so
-there is no pixel→angle conversion, and therefore no dependency on the camera FOV constant (disputed
-— 60° in `constants.py` vs 78° in the hardware BOM) or on the lens projection model.
+**It stores a full servo pose, not a single angle** (schema v2; a v1 file migrates and keeps its
+learned direction). `bearing_deg` remains as the yaw component so callers that only want a direction
+need not know joint names, and it is *derived from* `pose["base_yaw.pos"]` so the two can never
+disagree. Yaw alone is not enough to look at someone: pitch is spread across base/elbow/wrist, so a
+head left pointing at the floor sweeps the floor in a circle no matter how right the yaw is. Each
+joint gets its own EMA at the same rate as the yaw; a relocation replaces the pose outright rather
+than averaging, since the old posture describes the old place.
+
+Sightings reach it two ways:
+
+- **From a look aim**, when the subject ends within **2%** of frame centre — tighter than the aim's
+  own framing tolerance, and deliberately so: at frame centre the servo position **is** the bearing,
+  with no pixel→angle conversion and therefore no dependency on the disputed camera FOV constant.
+- **From the passive sampler** (`bearing_sampler.py`), every `HAL_BEARING_SAMPLE_INTERVAL_S` (300 s).
+  The aim-only path recorded roughly two samples a day against a six-hour confidence half-life — it
+  decayed faster than it learned, so the one thing that rescues a look when nobody is visible was
+  never confident enough to be consulted. The sampler **never moves the lamp**: it reads a frame and
+  the current servo positions, and recovers the bearing arithmetically as `yaw + dx × scale`.
+
+The sampler declines rather than guess. Horizontal offset is tolerated only to
+`HAL_BEARING_SAMPLE_MAX_DX_FRAC` (0.25), because that correction leans on the very FOV constant the
+aim exists to avoid trusting. The **posture** is recorded only when the subject is also vertically
+centred (`HAL_BEARING_SAMPLE_MAX_DY_FRAC`, 0.15) — pitch cannot be corrected arithmetically here, so
+a subject high or low in frame means the current pitch is *not* looking at them and storing it would
+teach a posture aimed at the floor. It also skips while the body is aiming or tracking, while the
+camera is disabled, and takes the detector lock non-blocking so a user's question never waits on it.
+It applies the same size and confidence gates as the aim.
+
+Each sample writes an annotated frame to `/var/lib/hal/snapshots/sensing_bearing/`
+(`HAL_BEARING_SNAPSHOT`, newest 30 kept, oldest evicted) — **including the detections it rejected**,
+labelled with why, since "it ignored a far stranger" and "it saw nothing" look identical in the
+estimate. Servable at `GET /api/sensing/snapshot/sensing_bearing/<name>`.
 
 Angles are averaged **linearly, not circularly**: `base_yaw` is a bounded ±135° servo range that does
 not wrap, so a circular mean would be wrong at the extremes.
@@ -454,8 +578,13 @@ Outliers are damped rather than accepted — someone crossing the room must not 
 to check the maths and the sign:
 
 ```bash
+curl -s localhost:5001/servo/bearing     # includes the full pose
 cat /var/lib/hal/user_bearing.json
 ```
+
+A `known` bearing with an empty `pose` means the estimate predates the pose schema and has not been
+re-sighted yet: a search will restore direction but not head height until the next sighting fills it
+in.
 
 `bearing_deg` should settle near where the user actually sits. An estimate sitting **mirrored about
 zero** means the yaw sign is inverted — the failure this file is most exposed to, because it is
