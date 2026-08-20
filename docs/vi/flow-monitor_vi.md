@@ -173,6 +173,7 @@ IN   <input text>
 OUT  🔊 <output text>
 ```
 
+- **Khung hình `look` đi kèm lượt thoại.** Khi tool `look` realtime chụp, HAL chép khung hình sang `/var/lib/hal/snapshots/sensing_look/` (`hal/realtime/look_monitor.py`, giữ 20 cái mới nhất) và gắn marker `[snapshot: ...]` vào chính message mà lượt đó đã gửi — nên tấm ảnh hiện **ngay trong lượt đã hỏi nó**, cạnh transcript và câu trả lời, thay vì là một event riêng không gắn với câu hỏi nào. os-server bóc marker trước khi text tới model nhưng vẫn giữ trong flow JSONL, giống hệt cách `motion.activity` làm. Khác với snapshot của `motion.activity`, **khung hình này CHÍNH LÀ thứ model đã thấy**, nên nó là vật chứng để đối chiếu với câu trả lời của model. (Nhánh `look.capture` chỉ-cho-monitor vẫn còn trong `handler.go` từ thiết kế trước; HAL không còn gửi nữa.)
 - Strip được extract từ marker `[snapshot:]` + `[pose_bucket:]` / `[pose_worst:]` trong `sensing_input`. Click thumbnail mở lightbox inline (giống cũ).
 - Nút **LOAD MORE** mở `PoseBucketModal` → fetch `/api/hardware/sensing/pose-bucket/<id>` (proxy về lelamp) → render bảng từng sample (monospace + cột joint giống Sensing tab). Row có filename trong `worst_snapshots` được highlight (viền đỏ + ⭐) để xem nhanh khung tệ nhất.
 - Khi /dm fire, OS server tự đính các worst snapshot vào Telegram qua `sendMediaGroup` — caption nằm trên ảnh đầu tiên, agent không cần biết file path. Xem `robots/lamp/docs/sensing-behavior.md` mục "/dm auto-attach".

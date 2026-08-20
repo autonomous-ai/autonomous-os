@@ -356,14 +356,39 @@ export function refineTurnTypeFromSensingInputs(turn: Turn): void {
   }
 
   // OpenClaw heartbeat runs (reply = HEARTBEAT_OK, tagged by the OS server via
-  // the heartbeat_run flow event). Classify FIRST: their chat_input can carry a
+  // the heartbeat_run flow event). Classify EARLY: their chat_input can carry a
   // stale copy of the previous turn's message (history-fetch race on old
   // events), which would otherwise mislabel them as sensing/channel and render
   // a doppelganger of the real turn.
-  for (const ev of turn.events) {
-    if (ev.type === "heartbeat_run" || (ev.type === "flow_event" && ev.detail?.node === "heartbeat_run")) {
-      turn.type = "heartbeat";
-      return;
+  //
+  // But a heartbeat that MERGED with a real device turn is not a heartbeat.
+  // OpenClaw steer-batches a pending self-fire into an arriving message, so one
+  // trace can hold both. That only shows when the turn has no reply of its own:
+  // a `voice_agent_handled` turn deliberately returns NO_REPLY (the realtime
+  // model already spoke), so HEARTBEAT_OK becomes the run's reply, this rule
+  // claims the turn, and the user's question renders as a silent heartbeat with
+  // only its snapshot visible. Device 2026-08-19: 12 of 45 heartbeat runs that
+  // day were real turns masked this way.
+  //
+  // A real `sensing_input` WITH content is the discriminator — a genuine
+  // self-fire has none, because its stale copy arrives as `chat_input`, which is
+  // exactly the case the rule above was written for.
+  const hasDeviceInput = turn.events.some((ev) => {
+    const isSensingInput = ev.type === "sensing_input"
+      || ((ev.type === "flow_enter" || ev.type === "flow_event")
+        && ev.detail?.node === "sensing_input");
+    if (!isSensingInput) return false;
+    const detail = ev.detail as FlowEventDetail | undefined;
+    const message = detail?.data?.message ?? detail?.message;
+    return typeof message === "string" && message.trim() !== "";
+  });
+
+  if (!hasDeviceInput) {
+    for (const ev of turn.events) {
+      if (ev.type === "heartbeat_run" || (ev.type === "flow_event" && ev.detail?.node === "heartbeat_run")) {
+        turn.type = "heartbeat";
+        return;
+      }
     }
   }
 
