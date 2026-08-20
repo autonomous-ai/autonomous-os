@@ -238,10 +238,29 @@ def _stop_active_tracking(source: str):
         logger.warning("%s single click -- failed to stop object tracking: %s", source, e)
 
 
+def _grant_wakeword_focus(source: str):
+    """Let a single click stand in for the wake phrase.
+
+    With wake word enabled, an utterance is only dispatched to the agent when
+    it starts with the wake phrase or falls inside the follow-up window. The
+    click already announced "I'm listening", so it has to open that window
+    itself — otherwise the user answers the cue and nothing happens. No-op
+    when wake word is disabled: every utterance dispatches already."""
+    voice = state.voice_service
+    if not voice:
+        return
+    try:
+        voice.grant_wakeword_focus(source)
+    except Exception as e:
+        # Never let the focus grant block the rest of the click.
+        logger.warning("%s single click -- wake-word focus grant failed: %s", source, e)
+
+
 def single_click_action(source: str = "button", announce: bool = True, chime: bool = True):
     """Stop active tracking and in-flight speech / unmute mic + speaker.
 
-    Then announce the listening cue.
+    Then open the wake-word window (if wake word is on) and announce the
+    listening cue.
     announce=False skips the cue (caller fires announce_listening_cue later).
     chime=False skips the ack ping (caller already chimed at gesture start)."""
     # Stopping movement is safe even with the hardware mic kill switch off: it
@@ -294,6 +313,7 @@ def single_click_action(source: str = "button", announce: bool = True, chime: bo
         logger.info("%s single click -- stopping speaker", source)
         stop_tts()
         audio_stop()
+    _grant_wakeword_focus(source)
     # Ack ping AFTER the stop: stop_tts frees the persistent stream lock
     # within ~10ms, so the chime sounds effectively at gesture time.
     if chime:
