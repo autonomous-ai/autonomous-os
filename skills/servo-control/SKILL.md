@@ -50,6 +50,25 @@ Controls the device's servo motors for directional aiming and physical animation
 **Input:** "Stop moving" / "Hold still" / "Freeze" / "Stand still"
 **Output:** `[HW:/servo/hold:{}]` OK, holding still.
 
+**Input:** "Turn to the right and hold that position"
+**Output:** `[HW:/servo/aim:{"direction":"right"}][HW:/servo/hold:{}]` Turned right and holding.
+→ Compound movement: emit **one marker per clause**, in order. They fire sequentially before TTS. Dropping the `hold` half means the device drifts back — never confirm a step you did not fire.
+
+**Input:** "Turn right, hold it there, and tell me what you see"
+**Output:** move FIRST with curl (so the camera sees the NEW view), then snapshot, then reply:
+```bash
+curl -sX POST http://127.0.0.1:5001/servo/aim -H 'Content-Type: application/json' -d '{"direction":"right"}'
+curl -sX POST http://127.0.0.1:5001/servo/hold -d '{}'
+curl -s "http://127.0.0.1:5001/camera/snapshot?save=true&width=768&quality=75"
+```
+→ Then describe the image. Do **not** use `[HW:...]` markers here — markers fire only *after* your reply is written, so a snapshot taken during the turn would show the OLD position. See the Camera skill.
+
+**Input:** "Where are you?" / "Can you find me?" / "Look around for me" / "Where did I go?"
+**Output:** `[HW:/servo/search:{}]` Looking around for you...
+
+**Input:** "I moved you" / "You're in a new place" / "I put you somewhere else" / "Forget where I sit"
+**Output:** `[HW:/servo/bearing/reset:{}]` Got it — I'll forget where you usually are and learn it again.
+
 **Input:** "Resume" / "Move again" / "You can move now" / "Start moving"
 **Output:** `[HW:/servo/resume:{}]` Alright, back to normal!
 

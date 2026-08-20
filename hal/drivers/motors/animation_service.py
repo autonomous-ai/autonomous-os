@@ -723,7 +723,12 @@ class AnimationService:
             logger.warning("[halt] could not pin current position: %s", e)
         logger.info("[halt] motion halted, holding position (torque ON)")
 
-    def move_to(self, target_positions: Dict[str, float], duration: float = DEFAULT_MOVE_DURATION):
+    def move_to(
+        self,
+        target_positions: Dict[str, float],
+        duration: float = DEFAULT_MOVE_DURATION,
+        should_abort: Optional[Callable[[], bool]] = None,
+    ):
         """Smoothly move servos to target positions using software interpolation.
 
         Instead of sending the target in one shot (which causes jerky instant jumps),
@@ -733,6 +738,13 @@ class AnimationService:
         Args:
             target_positions: dict of joint positions, e.g. {"base_yaw.pos": 0.0, ...}
             duration: time in seconds to reach the target (default 2.0)
+            should_abort: checked every frame; True stops the move mid-flight.
+                Defaults to _motion_aborted, which also treats a cleared
+                _running as an abort. A caller that clears _running ITSELF to
+                take exclusive control of the bus (aim does exactly that) must
+                pass its own predicate, or it aborts its own move at frame 1.
+                Mirrors move_to_raw, which has taken this argument since the
+                stop-that-holds work; move_to was left without it.
         """
         if not self.robot:
             raise RuntimeError("Robot not connected")
@@ -754,9 +766,10 @@ class AnimationService:
                 return
 
         total_frames = max(1, int(duration * self.fps))
+        abort = should_abort or self._motion_aborted
 
         for frame in range(1, total_frames + 1):
-            if self._motion_aborted():
+            if abort():
                 logger.info("move_to aborted at frame %d/%d — holding position", frame, total_frames)
                 return
             t0 = time.perf_counter()
@@ -1108,7 +1121,14 @@ class AnimationService:
 
         try:
             if eff_duration > 0:
-                self.move_to(positions, duration=eff_duration)
+                # Abort on a real halt (POST /servo/stop) only. NOT on
+                # _motion_aborted, whose _running check this very method just
+                # falsified two lines up to take the bus.
+                self.move_to(
+                    positions,
+                    duration=eff_duration,
+                    should_abort=lambda: self._halt.is_set(),
+                )
             else:
                 self.send_positions(positions)
         finally:

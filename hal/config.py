@@ -100,6 +100,18 @@ TRACKING_FACE_DETECTOR_ENABLED: bool = os.environ.get(
 
 # --- Sensing: os-server integration ---
 OS_SENSING_URL = "http://127.0.0.1:5000/api/sensing/event"
+# Named-pool filler (os-server owns phrases + language + WAV cache).
+OS_SENSING_FILLER_URL = "http://127.0.0.1:5000/api/sensing/filler"
+# Publish the captured `look` frame to the Flow Monitor.
+#
+# Requires the matching `look.capture` handler in os-server — that handler is
+# what makes the event monitor-only. Without it the sensing endpoint has no type
+# whitelist, so the event falls through to the agent-forward path and injects a
+# phantom turn containing the frame path. Set HAL_LOOK_MONITOR=false if HAL is
+# ever deployed ahead of os-server.
+LOOK_MONITOR_ENABLED: bool = (
+    os.environ.get("HAL_LOOK_MONITOR", "true").lower() in ("1", "true", "yes")
+)
 OS_WELLBEING_LOG_URL = "http://127.0.0.1:5000/api/wellbeing/log"
 GUARD_STATUS_URL = "http://127.0.0.1:5000/api/guard"
 GUARD_CHECK_INTERVAL_S = float(os.environ.get("HAL_GUARD_CHECK_INTERVAL_S", "10.0"))
@@ -261,6 +273,23 @@ EMOTION_CONFIDENCE_THRESHOLD = float(
 )
 EMOTION_FLUSH_S = float(os.environ.get("HAL_EMOTION_FLUSH_S", "10.0"))
 EMOTION_DEDUP_WINDOW_S = float(os.environ.get("HAL_EMOTION_DEDUP_WINDOW_S", "300.0"))
+# How long `thinking` may stay on continuously before the device falls back to
+# idle. `thinking` is the only face nothing clears on its own: it is set at the
+# start of a wait and overwritten by whatever the reply expresses, so a turn
+# that dies mid-flight (realtime exception, delegate that never answers) leaves
+# it burning forever with no user input to break it out. 0 disables the net.
+#
+# 25s comes from device logs (lamp-0c89, 2026-08-19), not from feel. Two kinds
+# of turn hold `thinking` legitimately: a realtime in-session reply clears it in
+# 0.4-8.6s (n=15, p50 6.5), and a delegated turn runs until the main agent
+# answers — event-forwarded → assistant-turn-done measured 6-22s over 5 days
+# (n=21, p95 21). So the window has to clear 22s or it would blink idle in the
+# middle of a live delegate; 25 is that ceiling plus a small margin. Cutting
+# early is cheap (the real emotion re-sets on arrival), so the margin stays thin
+# rather than doubling the stuck time when the net actually fires.
+EMOTION_THINKING_RESET_S = float(
+    os.environ.get("HAL_EMOTION_THINKING_RESET_S", "25.0")
+)
 EMOTION_SNAPSHOT_DIR = os.environ.get(
     "HAL_EMOTION_SNAPSHOT_DIR",
     os.path.join(tempfile.gettempdir(), "hal-emotion-snapshots"),
@@ -542,8 +571,15 @@ SPEAKER_PROC_RMS_TARGET: float = float(
 # bound memory on long clips. The ~20 MB weight is NOT committed — it downloads
 # on first use from the CDN into /root/local/models (same convention as the pose
 # / faceid weights); if it can't be resolved the gate is skipped with a warning.
+#
+# OFF by default. It rejects a real speaker often enough to hurt: on device it
+# dropped ordinary utterances as FAIL-low-stoi, and a rejected turn has no
+# speaker at all, which is worse than a lower-confidence identification the
+# recogniser's own thresholds can still weigh. Set
+# HAL_SPEAKER_PROC_ENABLE_STOI=true to gate on intelligibility where the room is
+# noisy enough for that trade to pay off.
 SPEAKER_PROC_ENABLE_STOI: bool = (
-    os.environ.get("HAL_SPEAKER_PROC_ENABLE_STOI", "true").lower() == "true"
+    os.environ.get("HAL_SPEAKER_PROC_ENABLE_STOI", "false").lower() == "true"
 )
 SPEAKER_PROC_STOI_MODEL_PATH: str = os.environ.get(
     "HAL_SPEAKER_PROC_STOI_MODEL_PATH",
@@ -842,6 +878,124 @@ REALTIME_GEMINI_VISION: bool = (
 )
 REALTIME_GEMINI_VISION_MAX_WIDTH: int = int(
     os.environ.get("HAL_GEMINI_VISION_MAX_WIDTH", "768")
+)
+# Aim the head at the subject BEFORE the `look` tool captures. `look` takes no
+# parameters and grabs whatever the camera currently sees, so without this the
+# model can answer confidently about a wall. Bounded by LOOK_AIM_DEADLINE_S so a
+# live turn never stalls: on expiry the capture proceeds from wherever the head
+# reached. Yaw only — see hal/drivers/tracking/aim.py for why pitch is excluded.
+# Set HAL_LOOK_AIM=false to disable without a rollout if it misbehaves in the field.
+LOOK_AIM_ENABLED: bool = (
+    os.environ.get("HAL_LOOK_AIM", "true").lower() in ("1", "true", "yes")
+)
+# Ceiling for the aim, not a cost: it returns the moment the subject is centred,
+# so a converged aim never spends this. It only bounds the failure case — the
+# head starting far off the subject, where each iteration costs ~1s (detect +
+# settle + move) and cutting it short means capturing a frame the subject is not
+# in. Device-tuned 2026-08-19: 0.8s allowed a single iteration and every look
+# that began off-centre timed out mid-correction, capturing a blurred, uncentred
+# frame. Long enough to converge beats short enough to fail fast.
+#
+# The dead-air filler (REALTIME_FILLER_DELAY_S, 1.5s) covers the wait when it
+# does run long.
+LOOK_AIM_DEADLINE_S: float = float(
+    os.environ.get("HAL_LOOK_AIM_DEADLINE_S", "8")
+)
+# Horizontal field of view used ONLY to convert the subject's pixel offset into
+# degrees of yaw for the look-aim. Deliberately separate from
+# tracking/constants.py CAMERA_FOV_DEG (60.0), which the object tracker is tuned
+# around — correcting the shared constant would silently re-tune tracking too.
+#
+# 60 was a guess and it is roughly half the truth, which made every aim step
+# remove only ~46% of the error: device traces put the real lens at 107-123 deg
+# (2026-08-19, measured as head-degrees-moved per frame-fraction the subject
+# shifted). 100 is set slightly BELOW the measurement on purpose — the lens is a
+# fisheye, so the mapping is non-linear and compressed at the edges, and
+# undershooting converges monotonically while overshooting oscillates.
+LOOK_AIM_FOV_DEG: float = float(
+    os.environ.get("HAL_LOOK_AIM_FOV_DEG", "100.0")
+)
+# Confidence floor for the aim's own person/face lookup. The detector's global
+# DETECT_MIN_CONFIDENCE is 0.15 — deliberately loose, tuned so the TRACKER keeps
+# its lock on a phone at an odd angle, where a miss costs more than a false
+# positive. Aiming wants the opposite trade: a false positive turns the lamp at
+# a wall (device 2026-08-19 — a person rendered inside a laptop screen was
+# accepted and aimed at). Raised here only, leaving the tracker's floor alone.
+#
+# Applies to detections that report a confidence; the YuNet face path enforces
+# its own threshold instead.
+LOOK_AIM_MIN_CONFIDENCE: float = float(
+    os.environ.get("HAL_LOOK_AIM_MIN_CONFIDENCE", "0.5")
+)
+# Minimum apparent size for a detection to count as "the person talking to us".
+# Expressed as a fraction of FRAME HEIGHT: a close subject is often clipped
+# left/right, but their height still scales with distance. Device-measured on
+# 1280x720 — a far colleague reads ~0.10 and a spurious far face ~0.035, while
+# the actual asker reads ~0.23.
+LOOK_AIM_MIN_PERSON_HEIGHT_FRAC: float = float(
+    os.environ.get("HAL_LOOK_AIM_MIN_PERSON_HEIGHT_FRAC", "0.15")
+)
+# Faces are a much smaller box than a whole person at the same distance, so
+# they get their own, lower floor.
+LOOK_AIM_MIN_FACE_HEIGHT_FRAC: float = float(
+    os.environ.get("HAL_LOOK_AIM_MIN_FACE_HEIGHT_FRAC", "0.08")
+)
+# Passive bearing sampling. Without it the estimate only learns from visual
+# questions that happen to end near-perfectly centred — 2 samples in a full day
+# of device testing, against a 6h confidence half-life, so it decayed faster
+# than it learned. This watches for a NEARBY person on a slow cadence and folds
+# in what it sees, so the lamp knows where its user usually is without being
+# asked anything.
+BEARING_SAMPLE_ENABLED: bool = (
+    os.environ.get("HAL_BEARING_SAMPLE", "true").lower() in ("1", "true", "yes")
+)
+# 5 minutes: eight samples reaches full confidence inside an hour of presence,
+# and one detector inference per 5 min is a rounding error on the CPU.
+BEARING_SAMPLE_INTERVAL_S: float = float(
+    os.environ.get("HAL_BEARING_SAMPLE_INTERVAL_S", "300")
+)
+# The subject may be off-centre horizontally — their bearing is recovered as
+# yaw + dx x scale — but only so far, because that correction leans on the FOV
+# constant the aim exists to avoid trusting.
+BEARING_SAMPLE_MAX_DX_FRAC: float = float(
+    os.environ.get("HAL_BEARING_SAMPLE_MAX_DX_FRAC", "0.25")
+)
+# The POSTURE is only recorded when the subject is also vertically centred:
+# pitch cannot be corrected arithmetically, so an off-centre pitch would teach
+# the lamp a posture that does not look at anyone.
+BEARING_SAMPLE_MAX_DY_FRAC: float = float(
+    os.environ.get("HAL_BEARING_SAMPLE_MAX_DY_FRAC", "0.15")
+)
+# Save what each bearing sample saw, box drawn on, under
+# SNAPSHOT_PERSIST_DIR/sensing_bearing/. Servable by
+# GET /api/sensing/snapshot/sensing_bearing/<name>, so the samples can be
+# reviewed without SSH.
+BEARING_SNAPSHOT_ENABLED: bool = (
+    os.environ.get("HAL_BEARING_SNAPSHOT", "true").lower() in ("1", "true", "yes")
+)
+# Oldest are evicted past this. One frame per sample interval accumulates
+# quietly forever otherwise.
+BEARING_SNAPSHOT_KEEP: int = int(
+    os.environ.get("HAL_BEARING_SNAPSHOT_KEEP", "30")
+)
+# Where the remembered user bearing lives. NOT a boot sidecar: this must survive
+# reboots, unlike the mic/speaker/camera state in app_state.
+USER_BEARING_PATH: str = os.environ.get(
+    "HAL_USER_BEARING_PATH", "/var/lib/hal/user_bearing.json"
+)
+# Speak while the aim searches for the user. ON by default: the lamp physically
+# turning away mid-question is confusing unless it says why, and that is the one
+# aim state that genuinely needs a voice.
+LOOK_AIM_SPEAK: bool = (
+    os.environ.get("HAL_LOOK_AIM_SPEAK", "true").lower() in ("1", "true", "yes")
+)
+# Announce the capture itself ("let me see"). ON, but narrow: it fires only when
+# the aim actually had to move, so the common case — subject already centred,
+# shutter in a few hundred ms — stays silent. That makes it cover the waits
+# without narrating every visual question. Set HAL_LOOK_AIM_SPEAK_CAPTURE=false
+# to silence it if it turns out to stack awkwardly after a search.
+LOOK_AIM_SPEAK_CAPTURE: bool = (
+    os.environ.get("HAL_LOOK_AIM_SPEAK_CAPTURE", "true").lower() in ("1", "true", "yes")
 )
 # Cost guard for `look`: minimum seconds between two image SENDS. A model can call
 # look several times in a row (same turn, or back-to-back turns); each new image

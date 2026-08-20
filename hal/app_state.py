@@ -98,6 +98,9 @@ _camera_manual_override = False
 # orchestrator's look handler; consumed + cleared once in turn_dispatch (strictly
 # per-turn). Path is a file in _SNAPSHOT_DIR; ts is time.monotonic() of capture.
 realtime_look_frame_path: Optional[str] = None
+# Servable copy of the same frame (under /var/lib/hal/snapshots/sensing_look/)
+# so the turn the user sees can show it as a thumbnail. Consumed by turn_dispatch.
+realtime_look_monitor_path: Optional[str] = None
 realtime_look_frame_ts: float = 0.0
 
 # --- Voice identity (speaker-ID as a presence signal) ---
@@ -258,6 +261,10 @@ _sleepy_release_timer: Optional[threading.Timer] = None
 # animation loop, so the body never stays frozen once the moment has passed.
 # Cancelled on every /emotion (see routes/emotion.py).
 _still_idle_timer: Optional[threading.Timer] = None
+# Fires idle after `thinking` has been held continuously for too long — the
+# last-resort net for a turn that never produced the emotion that would have
+# replaced it. Cancelled/re-armed on every /emotion (see routes/emotion.py).
+_thinking_reset_timer: Optional[threading.Timer] = None
 # Set once sleepy has released torque. Servo routes honor this lock until a
 # wake emotion explicitly resumes the motion service.
 _sleep_servo_released = False
@@ -1068,6 +1075,41 @@ def _on_tts_speak_start():
     _effect_thread.start()
 
 
+def _clear_thinking_after_reply():
+    """End the `thinking` face when the reply that answered it finishes speaking.
+
+    `thinking` is set at the start of a wait and has no natural end: only the
+    emotion the reply expresses replaces it. A turn whose reply carries no
+    emotion marker — common for delegated turns answered by the main agent —
+    therefore leaves the face (and, through `_thinking_cue_active`, every later
+    LED restore) on the pulse long after the device finished talking. Speaking
+    the reply IS the end of the wait, so use it as the signal.
+
+    Only genuine agent replies count: `realtime_feedback` is set exclusively by
+    the runtime's own output, so dead-air fillers, mumble and system notices —
+    the TTS that plays *during* the wait, which the cue exists to survive — are
+    skipped. The caller restores the user LED state right after, and dropping
+    the flag first is what lets that restore settle instead of repainting the
+    pulse.
+    """
+    global _thinking_cue_active
+
+    if _current_emotion != EMO_THINKING:
+        return
+    if not (tts_service and getattr(tts_service, "realtime_feedback", False)):
+        return
+
+    logger.info("TTS end: agent reply finished -- clearing thinking face")
+    _thinking_cue_active = False
+    try:
+        from hal.models import EmotionRequest
+        from hal.routes.emotion import express_emotion
+
+        express_emotion(EmotionRequest(emotion=EMO_IDLE))
+    except Exception as e:
+        logger.warning("Thinking clear after reply failed: %s", e)
+
+
 def _on_tts_speak_end():
     """Called by TTSService when TTS playback finishes or is interrupted."""
     global _tts_speaking
@@ -1076,6 +1118,8 @@ def _on_tts_speak_end():
 
     _tts_speaking = False
     logger.info("TTS speaking LED end: stopping effect and restoring")
+
+    _clear_thinking_after_reply()
 
     _stop_current_effect()
 

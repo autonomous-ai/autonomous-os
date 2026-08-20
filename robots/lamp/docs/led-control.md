@@ -251,6 +251,14 @@ Two consequences worth knowing:
 - After a reboot the strip stays dark until something asks for light: the LED sidecar is
   boot-scoped, so every boot starts with no user state and lands on the resting look.
 
+Every release path has to *ask* for the resting look — a path that paints its own "back to
+normal" color silently opts out of the default. Two used to: scene-off dispatched the `idle`
+preset color, and music-stop started idle breathing, both leftovers from when resting was a
+warm white. With resting black, that left the strip glowing dim orange after a scene or a
+song until some unrelated restore happened to clear it. Both now go through the shared
+settle (`led.restore_led` / `ambient_resting_is_dark`), so turning a scene off turns the
+light off.
+
 Setting both knobs back to `(255, 200, 140)` (warm white ~2700K @ speed 0.3) restores the
 previous behavior, where an idle lamp read as a cozy lamp turned on rather than a cold
 "device booting" blue, and the warm tone stayed clear of every status color. That look is

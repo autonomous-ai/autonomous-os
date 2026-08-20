@@ -108,6 +108,25 @@ Silero **riêng** — cái thứ ba, bên cạnh gate đầu vào và noise guar
 phiên. Nó fail-open: model lỗi thì coi như có tiếng nói, nên thiết bị không bao
 giờ cắt lời ai.
 
+### Mic bỏ qua chính cue backchannel của mình
+
+Cue lắng nghe của backchannel ("Ok", "Mm", "Oh") được phát mà **không** set cờ
+`speaking` của TTS — cố ý, vì cờ đó sẽ kết thúc session STT đang chạy, đúng cái
+session mà cue sinh ra để giữ. Nhưng `speaking` cũng là thứ duy nhất bình thường
+giữ mic tắt khi thiết bị đang nói, nên cue lọt thẳng vào mic và VAD đầu vào mở một
+session **mới** trên chính nó khoảng một giây sau. Quan sát trên thiết bị
+19/08/2026: `'Ok'` quay lại thành `transcript='Okay.'` và `'Oh'` thành
+`transcript='no'`, mỗi cái chạy thành một lượt thật mà không ai nói.
+
+`Backchannel.self_audio_active` bịt lỗ này mà không đụng `speaking`. `_play()` cài
+một deadline (độ dài clip + `HAL_BACKCHANNEL_ECHO_TAIL_S`) *trước khi* sample đầu
+tiên phát ra, rồi neo lại phần đuôi theo thời điểm playback thực sự kết thúc. Trong
+lúc deadline còn hiệu lực, vòng VAD bỏ các frame đó khỏi phép thử speech **và**
+khỏi lookback pre-roll — giữ chúng trong lookback thì cue sẽ thành audio mở đầu của
+session kế — rồi reset LSTM của Silero khi resume, đúng phần dọn dẹp mà warm-mic
+drain vẫn làm. Chỉ chặn việc **mở** session; session đang stream không bị đụng, đó
+mới là mục đích của tính năng.
+
 `robots/lamp/rootfs/opt/hal/.env` hạ `HAL_MAX_SESSION_DURATION_S` xuống `20`
 (default trong code vẫn là `30`); trần đó chỉ chạm tới khi đồng hồ im lặng không
 bao giờ hết hạn, mà người nói thật luôn ngừng lâu hơn `SILENCE_TIMEOUT` trong
@@ -179,26 +198,41 @@ thiết bị smart-home của họ, tin nhắn của họ) cho `delegate_to_main
 
 ## Thị giác trong phiên — tool `look` (chỉ Gemini)
 
-Khi người dùng hỏi về thứ thiết bị **nhìn thấy** ("cái này là gì?", "tôi đang cầm
-gì?", "đọc cái nhãn này", "màu gì đây?"), model realtime trả lời ngay trong phiên
-thay vì delegate. Orchestrator đăng ký tool `look` (`orchestrator.py`,
+Khi người dùng hỏi về thứ thiết bị **nhìn thấy** ("cái này là gì?", "nhìn cái này
+nè", "nhìn thứ tôi đang cầm", "tôi đang cầm gì?", "đọc cái nhãn này", "màu gì đây?"),
+model realtime trả lời ngay trong phiên thay vì delegate. Lưu ý "nhìn cái này" đi vào
+đường này, **không phải** đường bật/tắt camera riêng tư — `skills/camera/SKILL.md`
+phân biệt động từ theo thứ đứng sau nó, vì "nhìn tôi này" nghĩa là "bật camera lên"
+còn "nhìn cái này" là một câu hỏi về một vật. Chỉ áp dụng cho turn **thuần** hỏi về
+thứ nhìn thấy: nếu cùng turn còn kèm hành động ("quay sang phải, giữ nguyên đó, rồi
+nói xem thấy gì"), prompt bắt buộc gọi một `delegate_to_main` gộp cả hai vế — không
+`look` — để lệnh chuyển động không bị âm thầm bỏ rơi. Orchestrator đăng ký tool `look` (`orchestrator.py`,
 `LOOK_TOOL`) và xử lý trong `_handle_look_call`:
 
-1. Lấy frame camera **nét** **in-process** (`_capture_frame` gọi
+1. **Ngắm đầu vào đối tượng trước**, trên thiết bị có thể chuyển động — nếu
+   không thì model sẽ trả lời đầy tự tin về bất cứ thứ gì cái đầu tình cờ đang
+   hướng tới. Xem
+   [Look-aim](../../robots/lamp/docs/vi/vision-tracking_vi.md#look-aim--ngắm-đầu-trước-khi-một-câu-hỏi-thị-giác-chụp-ảnh)
+   để biết vòng lặp ngắm, cách nó chọn ai mới là người đang hỏi, và bearing đã
+   ghi nhớ mà nó quay về khi không thấy ai.
+2. Lấy frame camera **nét** **in-process** (`_capture_frame` gọi
    `capture_still` — không qua HTTP loopback; servo bị freeze (cả animation
    loop lẫn servo worker của tracker đều tôn trọng cờ này) và frame chỉ được
-   chấp nhận khi timestamp chụp ≥ 0.3s sau lần ghi bus servo cuối, nên motion
-   blur không lọt tới model; không thêm độ trễ khi servo vốn đang đứng yên
-   hoặc thiết bị không có servo), downscale về `HAL_GEMINI_VISION_MAX_WIDTH`
+   chấp nhận khi timestamp chụp vượt quá thời gian chờ lắng tính từ lần ghi bus
+   servo cuối, nên motion blur không lọt tới model. Thời gian lắng là 0.3s, co
+   giãn theo độ lớn của lần chỉnh ngắm cuối với trần 0.5s — một lần ngắm hết hạn
+   chót sẽ thoát ra ngay sau một cú quay lớn, và cần đèn vẫn còn rung quá mốc
+   300ms cố định; không thêm độ trễ khi servo vốn đang đứng yên hoặc thiết bị
+   không có servo), downscale về `HAL_GEMINI_VISION_MAX_WIDTH`
    (mặc định 768px) để giới hạn token ảnh.
-2. Đẩy vào làm **video input** realtime (`ImageInput` → `send_realtime_input(video=…)`),
+3. Đẩy vào làm **video input** realtime (`ImageInput` → `send_realtime_input(video=…)`),
    rồi **replay turn**: Live API xếp frame gửi giữa-turn vào turn KẾ TIẾP
    (device-proven: flow ack-tool → tiếp-turn cũ khiến mọi câu look trả lời bằng
    ảnh của lần look *trước* — lệch 1 ảnh, delay ack bao nhiêu cũng không cứu),
    nên thay vì ack tool call, orchestrator yield `LookReplaySignal` và
    `run_realtime_turn` gửi lại audio của turn + commit lần nữa trên CÙNG
    session. Frame đang xếp hàng vào đúng turn replay.
-3. Turn replay kích hoạt `look` lần nữa, rơi vào reuse guard
+4. Turn replay kích hoạt `look` lần nữa, rơi vào reuse guard
    (`VISION_MIN_INTERVAL_S`) và được ack `trigger_response=True` — model trả
    lời bằng frame lúc này đã thật sự nằm trong context.
 
@@ -478,6 +512,15 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
    | Wake-word / follow-up | sau khi capture xong, khi final xác nhận wake phrase | Có |
    | Deferred (rebuild sau noise-drop) | sau khi capture xong, trên session thay thế | Có |
 
+   Cả hai dòng chạy sau capture còn bị chặn thêm một điều kiện: lượt đó **không**
+   phải noise. Chúng chạy sau khi noise guard đã phân loại xong capture, nên một
+   lượt STT rỗng mà không phải tiếng nói sẽ không mở gì cả: không `[TURN CONTEXT]`,
+   không audio, không session thay thế. Chính việc không gửi mới làm cho đường
+   skip-commit trở nên miễn phí — nếu không, toàn bộ buffer của lượt đó đã vào (và
+   bị tính tiền trong) một activity đang mở mà ngay bước sau lại vứt đi. Session
+   được mở *sớm hơn* trong lúc capture (always-listening) thì đã stream audio rồi
+   nên vẫn bị discard như cũ.
+
    Ở mode always-listening, prepass speaker-ID (`identify_and_decorate`, chạy **một
    lần** cuối session) chỉ giải được người nói *sau khi* context đã gửi đi kèm tên
    từ khuôn mặt. HAL gửi tiếp một correction `[TURN CONTEXT UPDATE]` nêu đúng người
@@ -524,6 +567,34 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
    thinking thay vì rơi về user state. Cờ được bỏ khi cue clear và khi có bất
    kỳ emotion nào khác vào qua `POST /emotion`, nên emotion model tự express
    không bị đè.
+
+   Turn **delegate** cố ý giữ cue — chặng main-agent phía sau mới là phần chờ
+   dài, và hook của nó cũng tự bắn `thinking` lại. Turn ném exception thì KHÔNG
+   phải bàn giao đó (không còn gì trong HAL đang lái mặt), nên nhánh exception
+   clear cue trước khi rơi xuống forward sang OS server.
+
+   Vì `thinking` chỉ bị kết thúc bởi chính emotion mà câu trả lời express, một
+   turn không sinh ra emotion nào — delegate mà agent trả lời không kèm marker,
+   forward không bao giờ xảy ra — từng để mặt (và qua `_thinking_cue_active`,
+   mọi lần restore LED sau đó) kẹt ở pulse cho tới khi user nói tiếp. Giờ có hai
+   thứ kết thúc nó.
+
+   **Câu trả lời nói xong = hết chờ.** `_on_tts_speak_end` (`hal/app_state.py`)
+   clear `thinking` khi TTS kết thúc, có gate `tts_service.realtime_feedback` —
+   cờ chỉ do chính reply của agentic runtime set. Dead-air filler, mumble,
+   system notice để False, nên TTS phát *trong lúc* chờ (đúng thứ mà cờ cue sinh
+   ra để sống sót qua) không kết thúc cue. Đây là ca phổ biến và được xử đúng
+   thời điểm: mặt đúng ngay khi máy ngừng nói, bất kể agent có nhả marker hay
+   không.
+
+   **Watchdog là lưới cho turn không hề nói.** `POST /emotion` arm một timer
+   chặn cuối mỗi khi emotion là `thinking`: sau
+   `HAL_EMOTION_THINKING_RESET_S` (mặc định 25s, `0` = tắt) thinking LIÊN TỤC,
+   nó bỏ cờ cue, express `idle` và restore LED user state. Bất kỳ emotion nào
+   khác huỷ timer; một `thinking` mới arm lại. Cửa sổ này lớn hơn khoảng giữ
+   thật dài nhất đo trên máy (realtime clear trong 0.4-8.6s; delegate
+   event-forwarded → assistant-turn-done chạy 6-22s), nên không thể nháy idle
+   giữa lúc turn còn sống.
 5. **Tiêu thụ.** `for output in stream_output()`:
    - `TextOutput` → các câu được flush sang TTS (`speak` / `speak_queue`).
      Nếu `speak` báo busy (TTS khác đang giữ loa non-interruptible, ví dụ

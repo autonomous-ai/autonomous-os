@@ -35,6 +35,23 @@ Returns JSON: `{"path": ".../media/hal-snapshots/snap_1712567890123.jpg"}`.
 
 No need to aim servo or sleep before snapshot — the server freezes servos automatically for a stable frame.
 
+## Never describe the view without an image
+
+If you are about to say what you see, this turn MUST contain either a
+`[vision-image]` line or a `/camera/snapshot` call whose image you actually
+looked at. Describing the room from memory, from an earlier turn's photo, or
+from a plausible guess ("same view — the desk, your screen…") is a fabrication,
+even when the guess happens to be close. No image → say you'll take a look and
+take one; never invent.
+
+## Move first, then snapshot
+
+When the request combines a movement and a visual question ("turn right, hold
+it there, and tell me what you see"), fire the servo calls **with curl during
+the turn** (`POST /servo/aim`, `POST /servo/hold`), *then* snapshot. `[HW:...]`
+markers are executed only after your reply is composed, so a marker-based aim
+would move the device *after* the photo — you would describe the old view.
+
 ## Workflow
 1. Call `GET /camera/snapshot?save=true&width=768&quality=75` — **always call directly, never check /camera first**. The endpoint auto-enables camera if disabled.
 2. Analyze the image and describe what you see.
@@ -106,9 +123,27 @@ Any phrase meaning "stop looking" or "camera off" MUST trigger `[HW:/camera/disa
 | User says | Action |
 |-----------|--------|
 | "don't look" / "stop looking" / "stop watching" / "privacy mode" / "camera off" / "don't watch me" / "give me privacy" / "stop staring" | `[HW:/camera/disable:{}]` — MUST call |
-| "look at me" / "camera on" / "you can look now" / "start watching" / "look at this" | `[HW:/camera/enable:{}]` — MUST call |
+| "look at me" / "camera on" / "you can look now" / "start watching" | `[HW:/camera/enable:{}]` — MUST call |
+
+### "Look at ..." is ambiguous — route by what follows
+
+The verb alone does NOT mean "turn the camera on". Only phrases about the *device's own
+camera state* belong in the table above.
+
+| User says | Meaning | Route to |
+|-----------|---------|----------|
+| "look at me" / "camera on" / "you can look now" | turn the camera back on | `[HW:/camera/enable:{}]` |
+| **"look at this"** / "look at what I'm holding" / "what is this" | a visual question about an object | **snapshot + analyze** (Workflow above) |
+| "look at the desk / table / wall" | a fixed location | `servo-control` `/servo/aim` |
+| "look at the cup and follow it" | a movable object to track | `servo-tracking` `/servo/track` |
+
+**"Look at this" is a visual question, not a privacy toggle.** The user is holding something
+up to be identified. Replying "Got it, camera on" answers a question they did not ask.
 
 ### Examples
+
+**Input:** "Look at this" / "Look at what I'm holding"
+**Output:** `GET /camera/snapshot?save=true&width=768&quality=75` → analyze image. Say what the object is. Do NOT call `[HW:/camera/enable:{}]` — the snapshot endpoint auto-enables the camera.
 
 **Input:** "Don't watch me"
 **Output:** `[HW:/camera/disable:{}]` Got it, camera off. Just say "look at me" when you want me to see again.

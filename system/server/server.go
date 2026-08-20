@@ -447,6 +447,10 @@ func (s *Server) Serve(closeFn func()) error {
 	// not enough since the raw openclaw.json holds gateway tokens.
 	agent.POST("tts/stop", adminAuthMiddleware(s.config), s.agentHandler.StopTTS)
 	agent.POST("busy", adminAuthMiddleware(s.config), s.agentHandler.SetBusy)
+	// Physical cancel gesture — HAL calls this from the device itself, so it
+	// authenticates by locality like the other HAL-initiated endpoints rather
+	// than by admin token (the button must work before/without a login).
+	agent.POST("speech/cancel", localOnlyMiddleware(), s.agentHandler.CancelSpeechHandler)
 	// Restart the active runtime (openclaw/hermes/codex/opencode/claudecode/picoclaw).
 	// Each runtime's RestartAgent() picks the actual command — see handler_api_monitor.go.
 	agent.POST("restart", adminAuthMiddleware(s.config), s.agentHandler.Restart)

@@ -27,5 +27,14 @@
     "idle":         { "color": [8, 4, 0] },
     "nod":          { "color": [8, 4, 0] },
     "stretching":   { "color": [8, 4, 0] }
+  },
+  "_comment_scene": "Scene brightness only — hue (the color temperature mix) stays at the base value. Two things were wrong at the base levels. (1) reading/focus/energize all landed above lamp's max_brightness ceiling of 120, and clamp_color only scales DOWN, so all three collapsed to peak 120: three different scenes rendering as one, at the brightest level the ring can do. (2) Peak alone understates a scene: unlike an emotion cue, a scene lights all 64 pixels, so total flux is far higher than the peak number suggests — judging a scene by its peak the way we judge an indicator makes it come out too bright, which is what happened on the first pass here. Peaks now: energize 61, reading 48, focus 38, relax 25, movie 10, night 3. Night is deliberately far below the rest — it is a nightlight, meant to let you find your way without waking you, not to light the room; it is also blue-free by hue so it does not suppress melatonin. Spaced wider at the top because perceived brightness goes as roughly the cube root of value.",
+  "scene": {
+    "energize": { "brightness": 0.24 },
+    "reading":  { "brightness": 0.19 },
+    "focus":    { "brightness": 0.15 },
+    "relax":    { "brightness": 0.1 },
+    "movie":    { "brightness": 0.04 },
+    "night":    { "brightness": 0.012 }
   }
 }

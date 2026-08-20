@@ -259,6 +259,26 @@ class VoiceService:
     def set_music_service(self, music_service) -> None:
         self._music = music_service
 
+    def grant_wakeword_focus(self, source: str = "button") -> bool:
+        """Open the wake-word follow-up window without a spoken wake phrase.
+
+        A single click is a "give me the floor" gesture: the device stops
+        talking and announces it is listening, so requiring the user to say
+        the wake phrase right after would contradict the cue. Granting the
+        same focus window a wake word grants makes the click a wake event.
+        No-op when wake word is off (every utterance already dispatches) or
+        when follow-up focus is disabled (timeout 0)."""
+        if not hal_config.WAKEWORD_ENABLED:
+            return False
+        if self._wakeword_focus.refresh():
+            logger.info(
+                "%s -- wake-word focus granted for %.0fs",
+                source,
+                hal_config.WAKEWORD_FOLLOWUP_TIMEOUT_S,
+            )
+            return True
+        return False
+
     def set_wake_words(self, words: list) -> None:
         """Update wake word list at runtime (called when agent is renamed)."""
         self._decorator.set_wake_words(
@@ -763,6 +783,7 @@ class VoiceService:
         speech_pre_buffer = []  # frames buffered during holdoff period
         lookback = deque(maxlen=voice_cfg.PRE_ROLL_FRAMES)
         draining = False  # warm-mic: True while draining frames during TTS/music
+        bc_muting = False  # True while dropping frames that carry our own cue
 
         # Keepalive: pre-connect STT WS so it's ready before speech is detected.
         keepalive_session = None
@@ -832,6 +853,30 @@ class VoiceService:
                 if not voice_cfg.WARM_MIC:
                     return
                 continue  # warm: loop back → drain branch handles it
+
+            # Our own backchannel cue is in the room: it bypasses the TTS
+            # `speaking` flag on purpose (that flag would kill the running STT
+            # session), so nothing above filters it. Drop these frames entirely —
+            # not just from the VAD test but from `lookback` too, or the cue
+            # would come back as the next session's pre-roll. Any speech run in
+            # progress is abandoned: a cue only fires after the partial stalled,
+            # so there is no user utterance to clip here.
+            if self._backchannel.self_audio_active:
+                if not bc_muting:
+                    bc_muting = True
+                    logger.info("Backchannel cue in the room — VAD muted until it decays")
+                if speech_start is not None:
+                    speech_start = None
+                    speech_pre_buffer = []
+                continue
+            if bc_muting:
+                # Same cleanup the warm-mic drain does on resume: the dropped
+                # frames are a discontinuity for Silero's LSTM, and the lookback
+                # must not pre-roll audio from before the cue.
+                bc_muting = False
+                lookback.clear()
+                self._silero_reset_state()
+                logger.info("Backchannel cue decayed — VAD resumed")
 
             # Append to lookback for pre-roll.
             lookback.append(data)
@@ -1549,7 +1594,25 @@ class VoiceService:
 
             # Capture can end just after the STT callback. One final check
             # avoids dropping a matched partial that raced the loop exit.
-            start_realtime_turn()
+            #
+            # Guarded by the same noise check as the deferred flush below: this
+            # call site runs AFTER the noise guard, so an empty non-speech turn
+            # is already known to be uncommittable here. Opening the turn anyway
+            # sent [TURN CONTEXT] plus the whole audio buffer into the model's
+            # open activity — billed, then thrown away one line later by the
+            # skip-commit path, which also had to swap in a fresh session.
+            # Sessions opened earlier in the capture (always-listening path) have
+            # already streamed audio, so they still run and still get discarded.
+            if is_noise_turn(combined, buf_duration, rt_audio_is_speech):
+                if not realtime_turn_started:
+                    logger.info(
+                        "[realtime] Noise turn — not opening realtime turn after capture "
+                        "(empty STT, silero_speech=%s, dur=%.2fs); nothing sent to model",
+                        rt_audio_is_speech,
+                        buf_duration,
+                    )
+            else:
+                start_realtime_turn()
 
             # `discard_open_activity()` starts its replacement session in the
             # background. A user can begin the next utterance before that
@@ -1636,6 +1699,17 @@ class VoiceService:
                 rt = RealtimeTurnResult()
 
             # --- OS server send + SER (reuses the prepass speaker-ID) ----------
+            # Re-check the focus instead of trusting only the session-start
+            # latch: a button click can open the window while this session is
+            # already streaming, and that click means the floor is the user's
+            # for the sentence they are saying right now. The latch still wins
+            # on its own (a session that started inside the window stays
+            # authorized even if the deadline lapses mid-sentence), so this
+            # only ever adds authorization.
+            wakeword_followup_active = (
+                wakeword_followup_active
+                or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active())
+            )
             wakeword_authorized = wake_word_confirmed.is_set() or wakeword_followup_active
             if should_dispatch_to_main(
                 hal_config.WAKEWORD_ENABLED,

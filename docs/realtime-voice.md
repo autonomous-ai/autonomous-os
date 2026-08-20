@@ -113,6 +113,25 @@ so the other paths' LSTM state stays clean, and it resets that state at the
 start of every session. It fails open: a model error counts as speech, so the
 device never cuts anyone off.
 
+### The mic ignores our own backchannel cue
+
+Backchannel listening cues ("Ok", "Mm", "Oh") are played on purpose **without**
+setting the TTS `speaking` flag, because that flag ends the running STT session —
+the one the cue exists to keep alive. But `speaking` is also the only thing that
+normally keeps the mic off while the device talks, so the cue reached the mic
+unfiltered and the entry VAD opened a **new** session on it about a second later.
+Device-observed 19/08/2026: `'Ok'` came back as `transcript='Okay.'` and `'Oh'` as
+`transcript='no'`, each running as a real turn that no user spoke.
+
+`Backchannel.self_audio_active` closes this without touching `speaking`. `_play()`
+arms a deadline (clip length + `HAL_BACKCHANNEL_ECHO_TAIL_S`) *before* the first
+sample leaves, then re-anchors the tail to when playback actually ended. While it
+holds, the VAD loop drops those frames from the speech test **and** from the
+pre-roll lookback — keeping them in lookback would just replay the cue as the next
+session's opening audio — and resets Silero's LSTM on resume, the same cleanup the
+warm-mic drain does. Only session *opening* is suppressed; a session already
+streaming is untouched, which is the whole point of the feature.
+
 `robots/lamp/rootfs/opt/hal/.env` lowers `HAL_MAX_SESSION_DURATION_S` to `20`
 (the code default stays `30`); that ceiling is only reached when the silence
 clock never expires, and a real speaker always pauses longer than
@@ -188,26 +207,41 @@ Trade-offs:
 
 ## In-session vision — the `look` tool (Gemini only)
 
-When the user asks about what the device **sees** ("what is this?", "what am I
-holding?", "read this label", "what colour is this?"), the realtime model answers
-in-session instead of delegating. The orchestrator registers a `look` tool
+When the user asks about what the device **sees** ("what is this?", "look at this",
+"look at what I'm holding", "what am I holding?", "read this label", "what colour is
+this?"), the realtime model answers in-session instead of delegating. Note "look at
+this" routes here, **not** to the camera privacy toggle — `skills/camera/SKILL.md`
+disambiguates the verb by what follows it, since "look at me" means "turn the camera
+on" while "look at this" is a question about an object. This only applies to turns
+that are **purely** a question about what it sees: if the same turn also contains an
+action ("turn to the right, hold it there, and tell me what you see"), the prompt
+requires a single `delegate_to_main` covering both halves — no `look` — so the
+movement is never silently dropped. The orchestrator registers a `look` tool
 (`orchestrator.py`, `LOOK_TOOL`) and handles the call in `_handle_look_call`:
 
-1. Grab a **sharp** camera frame **in-process** (`_capture_frame` calls
+1. **Aim the head at the subject first**, on devices that can move — otherwise a
+   confident answer gets given about whatever the head happened to face. See
+   [Look-aim](../robots/lamp/docs/vision-tracking.md#look-aim--pointing-the-head-before-a-visual-question-captures)
+   for the aim loop, how it picks which person is the one asking, and the
+   remembered bearing it falls back on when nobody is visible.
+2. Grab a **sharp** camera frame **in-process** (`_capture_frame` calls
    `capture_still` — no HTTP loopback; servos are frozen (animation loop +
    tracker worker both honor the flag) and the frame is only accepted once its
-   capture timestamp is ≥ 0.3s after the last servo bus write, so motion blur
-   can't reach the model; zero added latency when the servos are already still
-   or the device has none), downscaled to `HAL_GEMINI_VISION_MAX_WIDTH`
+   capture timestamp is past the settle after the last servo bus write, so motion
+   blur can't reach the model. The settle is 0.3s, scaled up with the size of the
+   last aim correction to a 0.5s ceiling — an aim that exits on its deadline does
+   so straight after a large swing, and the arm is still ringing past a flat
+   300ms; zero added latency when the servos are already still or the device has
+   none), downscaled to `HAL_GEMINI_VISION_MAX_WIDTH`
    (default 768px) to bound image tokens.
-2. Enqueue it as realtime **video input** (`ImageInput` → `send_realtime_input(video=…)`),
+3. Enqueue it as realtime **video input** (`ImageInput` → `send_realtime_input(video=…)`),
    then **replay the turn**: the Live API queues a frame sent mid-turn for the
    NEXT turn (device-proven: the tool-ack → continue-turn flow answered every
    look from the *previous* look's image — a one-image lag no ack delay fixes),
    so instead of acking the tool call, the orchestrator yields `LookReplaySignal`
    and `run_realtime_turn` re-appends the turn's audio and commits again on the
    SAME session. The queued frame joins the replayed turn.
-3. The replayed turn re-triggers `look`, which hits the reuse guard
+4. The replayed turn re-triggers `look`, which hits the reuse guard
    (`VISION_MIN_INTERVAL_S`) and is acked with `trigger_response=True` — the
    model answers from the frame that is now genuinely in context.
 
@@ -499,6 +533,14 @@ turn ("hello") right after a restart would leak to the main agent.
    | Wake-word / follow-up | after capture, once a final wake phrase confirms | Yes |
    | Deferred (noise-drop rebuild) | after capture, on the replacement session | Yes |
 
+   Both post-capture rows are additionally gated on the turn **not** being noise.
+   They run after the noise guard has already classified the capture, so an
+   empty-STT non-speech turn opens nothing: no `[TURN CONTEXT]`, no audio, and no
+   replacement session. Skipping the send is what makes the skip-commit path free
+   — otherwise the turn's whole buffer entered (and was billed by) an open
+   activity that the very next step discarded. Sessions opened *earlier* in the
+   capture (always-listening) have already streamed audio and are still discarded.
+
    In always-listening mode the speaker-ID prepass (`identify_and_decorate`, run
    **once** at session end) resolves the voice speaker *after* the context already
    went out with the face name. HAL then sends a `[TURN CONTEXT UPDATE]` correction
@@ -547,6 +589,37 @@ turn ("hello") right after a restart would leak to the main agent.
    follows TTS repaints the thinking pulse instead of settling on the user
    state. The flag is dropped when the cue clears and by any other emotion
    coming through `POST /emotion`, so an expressed emotion is never stomped.
+
+   A **delegated** turn keeps the cue on purpose — the main-agent hop that
+   follows is the longer wait, and its own hook re-fires `thinking` anyway. A
+   turn that raises does *not* count as that handover (nothing in HAL is still
+   driving the face), so the exception path clears the cue before falling
+   through to the OS server.
+
+   Because `thinking` is only ever ended by the emotion the reply expresses, a
+   turn that produces none — a delegate the agent answers without an emotion
+   marker, a forward that never happens — used to leave the face and, through
+   `_thinking_cue_active`, every later LED restore stuck on the pulse until the
+   user spoke again. Two things end it now.
+
+   **The reply finishing is the end of the wait.** `_on_tts_speak_end`
+   (`hal/app_state.py`) clears `thinking` when TTS ends, gated on
+   `tts_service.realtime_feedback` — the flag only the agentic runtime's own
+   reply sets. Dead-air fillers, mumble and system notices leave it False, so
+   the TTS that plays *during* a wait (exactly what the cue flag exists to
+   survive) does not end the cue. This covers the common case at the right
+   moment: the face is correct the instant the device stops talking, whether or
+   not the agent bothered with an emotion marker.
+
+   **The watchdog is the net for turns that never speak.** `POST /emotion` arms
+   a last-resort timer whenever
+   the emotion is `thinking`: after `HAL_EMOTION_THINKING_RESET_S` (default
+   25 s, `0` disables) of *continuous* thinking it drops the cue flag, expresses
+   `idle`, and restores the user's LED state. Any other emotion cancels the
+   timer; a fresh `thinking` re-arms it. The window clears the longest real hold
+   measured on device (realtime replies clear in 0.4-8.6 s; a delegated
+   event-forwarded → assistant-turn-done runs 6-22 s), so it cannot blink idle
+   in the middle of a live turn.
 5. **Consume.** `for output in stream_output()`:
    - `TextOutput` → sentences are flushed to TTS (`speak` / `speak_queue`).
      If `speak` returns busy (another non-interruptible TTS holds the

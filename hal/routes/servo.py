@@ -391,6 +391,73 @@ def aim_servo(req: ServoAimRequest):
         raise HTTPException(500, f"Servo aim failed: {e}")
 
 
+@router.post("/servo/search", response_model=StatusResponse)
+def search_for_user():
+    """Sweep for the user and stop on the first one seen.
+
+    Deliberately NOT what the look-aim does. The aim runs inside a live turn
+    under a deadline; this takes seconds, so it is only entered when the user
+    asked for it ("where are you?") or accepted an offer after a failed look.
+
+    Seeded from the remembered bearing and expanding outward, so the likely
+    place is checked first.
+    """
+    from hal.drivers.tracking.search import search_for_subject
+
+    res = search_for_subject()
+    return {
+        "status": "ok",
+        "message": (
+            f"{res.reason} at yaw {res.found_at_yaw:+.0f} after {res.stops_visited} stop(s)"
+            if res.found and res.found_at_yaw is not None
+            else f"{res.reason} after {res.stops_visited} stop(s)"
+        ),
+    }
+
+
+@router.get("/servo/bearing")
+def get_user_bearing():
+    """Inspect the remembered user bearing.
+
+    Exists so the estimate can be checked without SSH-ing to the device. The
+    thing to look for is `bearing_deg` settling near where the user actually
+    sits — an estimate mirrored about zero means the yaw sign is inverted, which
+    is silent otherwise because this value is open-loop.
+    """
+    from hal.drivers.tracking import user_bearing
+
+    est = user_bearing.read_estimate()
+    if est is None:
+        # None, not 0.0 — dead ahead is a real bearing, "unknown" must differ.
+        return {"status": "ok", "known": False}
+    return {
+        "status": "ok",
+        "known": True,
+        "bearing_deg": est.bearing_deg,
+        "confidence": est.confidence,
+        "samples": est.samples,
+        "age_s": round(est.age_s, 1),
+        # The full remembered posture. An empty pose on a known bearing means
+        # the estimate predates the pose schema and has not been re-sighted yet,
+        # so a search will restore direction but not head height.
+        "pose": est.pose,
+    }
+
+
+@router.post("/servo/bearing/reset", response_model=StatusResponse)
+def reset_user_bearing():
+    """Forget where the user usually is — "I moved you".
+
+    The escape hatch for a relocated lamp. Automatic detection needs several
+    failed predictions before it acts, which is right for avoiding false
+    positives but slow when the user already KNOWS the lamp moved.
+    """
+    from hal.drivers.tracking import user_bearing
+
+    user_bearing.clear()
+    return {"status": "ok", "message": "user bearing cleared"}
+
+
 @router.post("/servo/nudge", response_model=ServoAimResponse)
 def nudge_servo(req: ServoNudgeRequest):
     """Move servo by relative degrees from current position."""
