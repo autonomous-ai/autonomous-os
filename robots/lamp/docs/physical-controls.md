@@ -52,7 +52,7 @@ Two properties decide the implementation:
 * **People turn before they speak, never after.** Sampling the camera when the mic fires would arrive after the gesture and could never observe the transition from looking away to looking here, which is the entire signal. So the watcher samples continuously into a ring buffer (`HAL_GAZE_BUFFER_S`, default 3 s) and speech triggers a read **backwards** through it — the same shape as the mic's own pre-roll lookback, which exists so the start of a sentence is not lost.
 * **Presence is not the signal.** The user is visible beside this lamp all day, so "a person is detected" gates nothing, and "a face is detected" barely more — a face turned to a monitor still detects. The gate is on head **orientation**, tight enough to reject the common posture of talking to a colleague with the torso still square to the desk.
 
-Head yaw is derived from the five landmarks `YuNet` already returns (`detect_face_with_landmarks` in `detection.py`): the nose's offset from the eye midpoint, measured along the eye line and normalised by half the inter-ocular distance, is `sin(yaw)` under a pinhole projection. Measuring along the eye line rather than the image x-axis is what keeps a **rolled** head (resting on a hand) from reading as a turned one. No second model is loaded and no extra inference runs; at `HAL_GAZE_SAMPLE_FPS` (default 3) the cost is a rounding error on the 8-core CPU.
+Head yaw is derived from the five landmarks `YuNet` already returns (`detect_face_with_landmarks` in `detection.py`): the nose's offset from the eye midpoint, measured along the eye line and normalised by half the inter-ocular distance, is `sin(yaw)` under a pinhole projection. Measuring along the eye line rather than the image x-axis is what keeps a **rolled** head (resting on a hand) from reading as a turned one. No second model is loaded and no extra inference runs; at `HAL_GAZE_SAMPLE_FPS` (default 6) the cost is a rounding error on the 8-core CPU — measured, not assumed: CPU idle went 69.2% to 68.8% with the watcher running.
 
 | Env var | Default | Tunes |
 |---|---|---|
@@ -63,8 +63,8 @@ Head yaw is derived from the five landmarks `YuNet` already returns (`detect_fac
 | `HAL_GAZE_MIN_FACE_PX` | 48 | Minimum face height **in pixels**. Below this the landmarks span a few pixels and the yaw is arithmetic on rounding error, so the sample does not vote at all. |
 | `HAL_GAZE_WINDOW_S` | 1.5 | Evidence window ending at the moment of speech. |
 | `HAL_GAZE_MIN_FACING_RATIO` | 0.6 | Fraction of that window that must have seen a facing head. A ratio, not an unbroken run — per-sample yaw is genuinely noisy. |
-| `HAL_GAZE_MIN_SAMPLES` | 3 | Below this there is not enough evidence to decide either way. |
-| `HAL_GAZE_SAMPLE_FPS` | 3 | Sampling rate. Turning the head is slow; raising this buys nothing and costs power. |
+| `HAL_GAZE_MIN_SAMPLES` | 2 | Below this there is not enough evidence to decide either way. The loop achieves ~2 samples/s whatever the rate asks for — it is paced by fetching a frame and running the detector — so 3 rejected users the rest of the pipeline agreed were facing the lamp. |
+| `HAL_GAZE_SAMPLE_FPS` | 6 | Sampling rate. The gesture is slow, but the decision is a vote and only measured samples count — at 3 fps a window often held one usable sample, refusing a user facing the lamp dead-on. |
 | `HAL_GAZE_BUFFER_S` | 3.0 | Yaw history retained. Must exceed `WINDOW_S`. |
 | `HAL_GAZE_COOLDOWN_S` | 5 | Minimum gap between gaze-opened gates, so one conversation cannot open one per sentence. |
 | `HAL_GAZE_REPOINT` | `true` | Turn toward the remembered bearing when nobody has been visible. |

@@ -1080,6 +1080,19 @@ class VoiceService:
             wake_partial_hypothesis[0] = ""
             return wake_final_hypothesis[0]
 
+        def addressed_to_us() -> bool:
+            """Whether the sentence being spoken has been shown to be for us.
+
+            True when no wake word is configured (every utterance is), or when
+            one was heard, or inside the follow-up window a wake word, a click
+            or a gaze opened. Everything that CLAIMS to be the addressee — the
+            listening cue, the backchannel — has to ask this first, or the lamp
+            answers conversations it was never part of.
+            """
+            if not hal_config.WAKEWORD_ENABLED:
+                return True
+            return wake_word_detected.is_set() or wakeword_followup_active
+
         def fire_listening_cue() -> None:
             """Show the listening cue, once per session, only when this turn is
             actually addressed to the device.
@@ -1095,9 +1108,7 @@ class VoiceService:
             """
             if listening_emotion_sent[0]:
                 return
-            if hal_config.WAKEWORD_ENABLED and not (
-                wake_word_detected.is_set() or wakeword_followup_active
-            ):
+            if not addressed_to_us():
                 return
             listening_emotion_sent[0] = True
             self._set_emotion_local(presets.EMO_LISTENING)
@@ -1138,7 +1149,17 @@ class VoiceService:
                     logger.debug("Wake-word partial candidate: '%s'", candidate)
                     open_wake_word_gate(candidate, "partial")
                 last_partial[0] = text
-                self._backchannel.on_partial(text)
+                # Same gate as the listening cue below. A backchannel is the
+                # device saying "go on, I'm listening", which is a claim to be
+                # the addressee — so it must not fire for a sentence the device
+                # has not been shown is meant for it. It predates the wake gate
+                # (Apr 2026, "call on every STT partial") and kept firing on
+                # every utterance after that gate arrived, so the lamp murmured
+                # "Right" at conversations between two other people, and made
+                # testing the openers actively misleading: the cue sounds like
+                # acknowledgement while the turn is dropped unheard.
+                if addressed_to_us():
+                    self._backchannel.on_partial(text)
                 fire_listening_cue()
                 return
             # Accumulate final segments — don't send yet, wait for session close.

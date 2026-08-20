@@ -52,7 +52,7 @@ Hai đặc tính quyết định cách implement:
 * **Người ta quay TRƯỚC khi nói, không bao giờ sau.** Chờ mic báo rồi mới nhìn thì đã muộn — và tệ hơn là không bao giờ thấy được **sự chuyển** từ nhìn chỗ khác sang nhìn đèn, vốn là toàn bộ tín hiệu. Nên watcher lấy mẫu liên tục vào một ring buffer (`HAL_GAZE_BUFFER_S`, mặc định 3 s), còn tiếng nói chỉ kích hoạt việc **đọc ngược** buffer đó. Đây đúng mô hình mic đang dùng với pre-roll lookback của nó, thứ tồn tại để không mất âm đầu câu.
 * **Có mặt người KHÔNG phải tín hiệu.** User ngồi cạnh đèn cả ngày nên "phát hiện có người" gần như luôn đúng và không lọc được gì; "phát hiện có mặt" cũng chỉ hơn chút — mặt quay về màn hình vẫn detect ra. Gate đặt trên **hướng đầu**, đủ chặt để loại tư thế rất thường gặp: nói chuyện với đồng nghiệp trong khi thân vẫn hướng về bàn.
 
-Head yaw suy ra từ 5 landmark mà `YuNet` vốn đã trả về (`detect_face_with_landmarks` trong `detection.py`): độ lệch của mũi so với trung điểm hai mắt, đo **dọc theo đường nối hai mắt** và chuẩn hoá bằng nửa khoảng cách hai mắt, chính là `sin(yaw)` dưới phép chiếu pinhole. Đo dọc đường nối mắt thay vì theo trục x của ảnh là thứ giữ cho đầu **nghiêng** (chống tay lên má) không bị đọc thành đầu quay. Không load thêm model nào, không chạy thêm inference nào; ở `HAL_GAZE_SAMPLE_FPS` (mặc định 3) chi phí là số lẻ trên CPU 8 nhân.
+Head yaw suy ra từ 5 landmark mà `YuNet` vốn đã trả về (`detect_face_with_landmarks` trong `detection.py`): độ lệch của mũi so với trung điểm hai mắt, đo **dọc theo đường nối hai mắt** và chuẩn hoá bằng nửa khoảng cách hai mắt, chính là `sin(yaw)` dưới phép chiếu pinhole. Đo dọc đường nối mắt thay vì theo trục x của ảnh là thứ giữ cho đầu **nghiêng** (chống tay lên má) không bị đọc thành đầu quay. Không load thêm model nào, không chạy thêm inference nào; ở `HAL_GAZE_SAMPLE_FPS` (mặc định 6) chi phí là số lẻ trên CPU 8 nhân — đo thật chứ không suy đoán: CPU idle 69.2% xuống 68.8% khi watcher chạy.
 
 | Env var | Mặc định | Chỉnh cái gì |
 |---|---|---|
@@ -63,8 +63,8 @@ Head yaw suy ra từ 5 landmark mà `YuNet` vốn đã trả về (`detect_face_
 | `HAL_GAZE_MIN_FACE_PX` | 48 | Chiều cao mặt tối thiểu **tính bằng pixel**. Dưới ngưỡng này landmark chỉ cách nhau vài pixel, góc tính ra là số học trên sai số làm tròn, nên mẫu đó không được bỏ phiếu. |
 | `HAL_GAZE_WINDOW_S` | 1.5 | Cửa sổ bằng chứng, kết thúc tại thời điểm bắt đầu nói. |
 | `HAL_GAZE_MIN_FACING_RATIO` | 0.6 | Tỉ lệ mẫu trong cửa sổ phải thấy đầu hướng về đèn. Là TỈ LỆ, không phải chuỗi liên tục — yaw từng mẫu nhiễu thật. |
-| `HAL_GAZE_MIN_SAMPLES` | 3 | Dưới mức này không đủ bằng chứng để kết luận theo chiều nào. |
-| `HAL_GAZE_SAMPLE_FPS` | 3 | Tần suất lấy mẫu. Quay đầu là động tác chậm; tăng lên không được gì mà tốn điện. |
+| `HAL_GAZE_MIN_SAMPLES` | 2 | Dưới mức này không đủ bằng chứng để kết luận theo chiều nào. Vòng lặp thực tế chỉ đạt ~2 mẫu/s dù cấu hình bao nhiêu — nó bị chặn bởi việc lấy frame và chạy detector — nên để 3 là loại oan cả user mà mọi tầng khác đều đồng ý là đang nhìn đèn. |
+| `HAL_GAZE_SAMPLE_FPS` | 6 | Tần suất lấy mẫu. Cử chỉ thì chậm, nhưng quyết định là một cuộc bỏ phiếu và chỉ mẫu đo được mới tính — ở 3 fps cửa sổ thường chỉ còn một mẫu dùng được, từ chối cả user đang nhìn thẳng vào đèn. |
 | `HAL_GAZE_BUFFER_S` | 3.0 | Lịch sử yaw giữ lại. Phải lớn hơn `WINDOW_S`. |
 | `HAL_GAZE_COOLDOWN_S` | 5 | Khoảng cách tối thiểu giữa hai lần gaze mở gate. |
 | `HAL_GAZE_REPOINT` | `true` | Quay về bearing đã nhớ khi lâu không thấy ai. |

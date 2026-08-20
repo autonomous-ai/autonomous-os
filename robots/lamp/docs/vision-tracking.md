@@ -556,12 +556,25 @@ Sightings reach it two ways:
 
 The sampler declines rather than guess. Horizontal offset is tolerated only to
 `HAL_BEARING_SAMPLE_MAX_DX_FRAC` (0.25), because that correction leans on the very FOV constant the
-aim exists to avoid trusting. The **posture** is recorded only when the subject is also vertically
-centred (`HAL_BEARING_SAMPLE_MAX_DY_FRAC`, 0.15) — pitch cannot be corrected arithmetically here, so
-a subject high or low in frame means the current pitch is *not* looking at them and storing it would
-teach a posture aimed at the floor. It also skips while the body is aiming or tracking, while the
-camera is disabled, and takes the detector lock non-blocking so a user's question never waits on it.
-It applies the same size and confidence gates as the aim.
+aim exists to avoid trusting. It also skips while the body is aiming or tracking, while the camera is
+disabled, and takes the detector lock non-blocking so a user's question never waits on it.
+
+**It learns from faces only, never from `person` boxes.** A person box says where a body is, and a
+body fills the frame whenever the camera happens to be aimed low — so learning from one memorises
+the posture that was pointing at the desk and calls it "where the user is". Device-observed: 22
+samples, confidence 0.99, and a stored posture with `wrist_pitch -78` that could not see a face at
+all. Every consumer downstream then restored that posture faithfully and found nobody, which reads
+as the lamp being broken rather than as the bearing being wrong. A face in frame proves the opposite
+by construction: this posture sees a head, so restoring it will see one again.
+
+**The posture is recorded wherever in frame the face sat.** The vertical gate that used to guard it
+(`HAL_BEARING_SAMPLE_MAX_DY_FRAC`) was written for person boxes, where a centred torso said nothing
+about whether the head was in frame. Keeping it for faces was self-defeating: while the camera is
+aimed low every face sits near the top edge, so every sighting failed the gate, so no posture was
+ever stored, so there was nothing to restore and the camera stayed low — device-observed `dy` of
+-15.8% then -41.2%, two sightings, and a remembered "pose" holding only a yaw. A posture that catches
+the user at the frame edge is imperfect; it is also incomparably better than one pointing at the
+desk, and the per-joint EMA walks it toward centre as the framing it enables improves.
 
 Each sample writes an annotated frame to `/var/lib/hal/snapshots/sensing_bearing/`
 (`HAL_BEARING_SNAPSHOT`, newest 30 kept, oldest evicted) — **including the detections it rejected**,

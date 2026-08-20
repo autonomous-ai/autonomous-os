@@ -83,6 +83,19 @@ class AnimationService:
         self.idle_recording = idle_recording
         self.hold_s = hold_s
         self._hold_until: float = 0.0  # timestamp until which to hold pose before returning to idle
+        # Idle anchor: {joint: absolute degrees} the IDLE recording should breathe
+        # around, instead of around the pose it happens to have been recorded at.
+        #
+        # An idle recording is absolute on every joint and loops forever, so
+        # wherever anything else leaves the head, idle walks it back to the
+        # recorded pose within a cycle. On a desk that pose points at the
+        # keyboard, which is why a camera aimed at the user does not stay aimed
+        # at them. Anchoring shifts the whole loop without changing its shape:
+        # the lamp breathes exactly as before, around a different centre.
+        self._idle_anchor: Dict[str, float] = {}
+        # First-frame value per joint of the idle recording — the centre the
+        # offset is measured from. Captured when the recording is loaded.
+        self._idle_baseline: Dict[str, float] = {}
         self._no_idle_recordings = NO_IDLE_RECORDINGS
         # disable_torque_on_disconnect=False: dropping torque is what `release()`
         # does, deliberately and on request ("arm limp"). A shutdown is not that
@@ -354,6 +367,10 @@ class AnimationService:
         # Set up new playback
         self._current_recording = recording_name
         self._current_actions = actions
+        if recording_name == self.idle_recording and actions:
+            # The pose the recording itself starts from — anchoring is measured
+            # as a displacement from this, so the loop keeps its own shape.
+            self._idle_baseline = dict(actions[0])
         self._current_frame_index = 0
         
         # If we have a current state, set up interpolation to the first frame.
@@ -480,6 +497,7 @@ class AnimationService:
                     target_val = self._interpolation_target[joint]
                     interpolated_action[joint] = current_val + (target_val - current_val) * progress
                 
+                interpolated_action = self._anchor_action(interpolated_action)
                 with self.bus_lock:
                     self.robot.send_action(interpolated_action)
                 self._current_state = interpolated_action.copy()
@@ -488,7 +506,9 @@ class AnimationService:
 
             # Play current frame
             if self._current_frame_index < len(self._current_actions):
-                action = self._current_actions[self._current_frame_index]
+                action = self._anchor_action(
+                    self._current_actions[self._current_frame_index]
+                )
                 with self.bus_lock:
                     self.robot.send_action(action)
                 self._current_state = action.copy()
@@ -704,6 +724,29 @@ class AnimationService:
         next frame would clear it.
         """
         self._halt.clear()
+
+    def set_idle_anchor(self, joints: Optional[Dict[str, float]]) -> None:
+        """Re-centre the idle loop on these absolute joint positions.
+
+        Pass None or {} to go back to playing idle exactly as recorded. Joints
+        not named are untouched, so anchoring one axis does not freeze the rest.
+        """
+        self._idle_anchor = dict(joints) if joints else {}
+
+    def _anchor_action(self, action: Dict[str, float]) -> Dict[str, float]:
+        """Shift one idle frame onto the anchor. Returns it unchanged if there
+        is nothing to anchor, so the normal path allocates nothing extra."""
+        if not self._idle_anchor or self._current_recording != self.idle_recording:
+            return action
+        shifted = dict(action)
+        for joint, anchor in self._idle_anchor.items():
+            if joint not in shifted:
+                continue
+            base = self._idle_baseline.get(joint)
+            if base is None:
+                continue
+            shifted[joint] = shifted[joint] + (float(anchor) - float(base))
+        return shifted
 
     def halt(self) -> None:
         """Abort any move/recording in flight and hold position. Torque stays ON."""

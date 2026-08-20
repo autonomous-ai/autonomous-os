@@ -554,12 +554,25 @@ Các lần nhìn thấy đi vào đây theo hai đường:
 
 Bộ lấy mẫu thà từ chối còn hơn đoán. Độ lệch ngang chỉ được chấp nhận tới
 `HAL_BEARING_SAMPLE_MAX_DX_FRAC` (0.25), vì phép hiệu chỉnh đó dựa vào đúng cái hằng số FOV mà aim
-sinh ra để khỏi phải tin. **Tư thế** chỉ được ghi khi đối tượng đồng thời nằm giữa theo chiều dọc
-(`HAL_BEARING_SAMPLE_MAX_DY_FRAC`, 0.15) — pitch ở đây không thể hiệu chỉnh bằng số học, nên đối tượng
-nằm cao hay thấp trong khung nghĩa là pitch hiện tại *không* nhìn vào họ, và lưu lại sẽ dạy cho lamp
-một tư thế chúi xuống sàn. Nó cũng bỏ qua khi thân đang aim hoặc đang bám, khi camera bị tắt, và lấy
-khóa bộ phát hiện theo kiểu không chặn để câu hỏi của người dùng không bao giờ phải chờ nó. Nó áp cùng
-các cổng kích thước và độ tin cậy như aim.
+sinh ra để khỏi phải tin. Nó cũng bỏ qua khi thân đang aim hoặc đang bám, khi camera bị tắt, và lấy
+khóa bộ phát hiện theo kiểu không chặn để câu hỏi của người dùng không bao giờ phải chờ nó.
+
+**Nó chỉ học từ `face`, không bao giờ từ box `person`.** Box person cho biết một thân người ở đâu, mà
+thân người thì lấp đầy khung mỗi khi camera tình cờ chĩa thấp — nên học từ nó là ghi nhớ đúng cái tư
+thế đang nhìn xuống bàn rồi gọi đó là "chỗ user ngồi". Đo trên thiết bị: 22 mẫu, confidence 0.99, tư
+thế lưu lại có `wrist_pitch -78` và không nhìn thấy nổi một khuôn mặt nào. Mọi nơi tiêu thụ phía sau
+đều khôi phục trung thành tư thế đó rồi chẳng thấy ai — nhìn từ ngoài thì đó là đèn hỏng, chứ không
+phải bearing sai. Thấy được mặt thì chứng minh điều ngược lại theo định nghĩa: tư thế này nhìn thấy
+đầu người, khôi phục nó sẽ lại thấy.
+
+**Tư thế được ghi bất kể mặt nằm đâu trong khung.** Cửa dọc từng gác nó
+(`HAL_BEARING_SAMPLE_MAX_DY_FRAC`) viết cho box person, nơi thân người ở giữa khung không nói lên
+được đầu có trong khung hay không. Giữ cửa đó cho `face` là tự phá: khi camera đang chĩa thấp thì mặt
+nào cũng nằm sát mép trên, nên mọi lần thấy đều trượt cửa, nên không tư thế nào từng được lưu, nên
+không có gì để khôi phục và camera cứ ở nguyên chỗ thấp — đo được `dy` -15.8% rồi -41.2%, hai lần
+thấy mặt, và một "pose" ghi nhớ chỉ có mỗi yaw. Tư thế bắt được người dùng ở rìa khung thì không hoàn
+hảo; nhưng nó tốt hơn vô cùng so với tư thế chĩa vào mặt bàn, và EMA từng khớp sẽ kéo nó về giữa khi
+khung hình mà chính nó tạo ra tốt dần lên.
 
 Mỗi lần lấy mẫu ghi một khung hình có chú thích vào `/var/lib/hal/snapshots/sensing_bearing/`
 (`HAL_BEARING_SNAPSHOT`, giữ 30 cái mới nhất, cũ nhất bị dọn) — **kể cả những phát hiện bị loại**, có
