@@ -52,13 +52,13 @@ class FaceRecognizer:
 
     def __init__(
         self,
-        area_ratio_threshold: float = config.FACE_AREA_RATIO_THRESHOLD,
+        height_ratio_threshold: float = config.FACE_HEIGHT_RATIO_THRESHOLD,
         threshold: float = 0.4,
         negative_threshold: float | None = 0.2,
         max_strangers: int = 50,
         model_name: str = "buffalo_sc",
     ):
-        self._area_ratio_threshold: float = area_ratio_threshold
+        self._height_ratio_threshold: float = height_ratio_threshold
         self._threshold: float = threshold
         self._negative_threshold: float | None = negative_threshold
         self._max_strangers: int = max_strangers
@@ -192,8 +192,7 @@ class FaceRecognizer:
             msg = f"[{self.__class__.__name__}] service must be started first"
             raise RuntimeError(msg)
 
-        H, W = frame.shape[:2]
-        frame_area = H * W
+        frame_h = frame.shape[0]
 
         raw_results = self._app.get(frame)
         n_faces = len(raw_results)
@@ -228,9 +227,9 @@ class FaceRecognizer:
             s_score = float(stranger_scores[i])
             bbox = [int(v) for v in raw_results[i]["bbox"]]
             x1, y1, x2, y2 = bbox
-            face_area = max(x2 - x1, 0) * max(y2 - y1, 0)
+            face_h = max(y2 - y1, 0)
 
-            if face_area / frame_area < self._area_ratio_threshold:
+            if face_h / frame_h < self._height_ratio_threshold:
                 continue
 
             det_score = det_scores[i]
@@ -349,7 +348,7 @@ class FacePerception(Perception[cv2.typing.MatLike]):
         negative_threshold: float | None = 0.2,
         max_strangers: int = 50,
         model_name: str = "buffalo_sc",
-        area_ratio_threshold: float = config.FACE_AREA_RATIO_THRESHOLD,
+        height_ratio_threshold: float = config.FACE_HEIGHT_RATIO_THRESHOLD,
         owners_forget_ts: float = config.FACE_OWNER_FORGET_S,
         strangers_forget_ts: float = config.FACE_STRANGER_FORGET_S,
     ):
@@ -357,7 +356,7 @@ class FacePerception(Perception[cv2.typing.MatLike]):
 
         self._presense_service: PresenseService | None = presense_service
         self._face_recognizer: FaceRecognizer = FaceRecognizer(
-            area_ratio_threshold=area_ratio_threshold,
+            height_ratio_threshold=height_ratio_threshold,
             threshold=threshold,
             negative_threshold=negative_threshold,
             max_strangers=max_strangers,
