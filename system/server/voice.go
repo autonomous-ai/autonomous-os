@@ -21,13 +21,33 @@ func (s *Server) voicePreview(c *gin.Context) {
 		Text     string `json:"text"`
 		Voice    string `json:"voice"`
 		Provider string `json:"provider"`
+		// Optional overrides — populated by the admin's Test Voice button
+		// so the operator can validate pending BaseURL / APIKey edits
+		// BEFORE hitting Save Changes. Empty = fall back to saved config
+		// (matches the historic behaviour where the browser never shipped
+		// the key). Same-origin admin call already authenticated by
+		// adminAuthMiddleware, and the device is the ultimate destination
+		// of the key anyway, so echoing it back over loopback carries no
+		// new exposure vs storing it on disk.
+		BaseURL string `json:"base_url"`
+		APIKey  string `json:"api_key"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.Text) == "" {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError("text required"))
 		return
 	}
-	apiKey := s.config.GetTTSAPIKey()
-	baseURL := s.config.GetTTSBaseURL()
+	// Prefer the pending overrides so Test Voice actually tests the fields
+	// the operator can see on-screen. Falls back to saved config for any
+	// override the caller omitted (e.g. old Test buttons that only send
+	// voice + provider still work exactly as before).
+	baseURL := strings.TrimSpace(body.BaseURL)
+	if baseURL == "" {
+		baseURL = s.config.GetTTSBaseURL()
+	}
+	apiKey := strings.TrimSpace(body.APIKey)
+	if apiKey == "" {
+		apiKey = s.config.GetTTSAPIKey()
+	}
 	if err := hal.SpeakPreview(body.Text, body.Voice, body.Provider, apiKey, baseURL); err != nil {
 		slog.Warn("voice preview failed", "component", "voice", "error", err)
 		c.JSON(http.StatusBadGateway, serializers.ResponseError("preview failed: "+err.Error()))
@@ -35,3 +55,4 @@ func (s *Server) voicePreview(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(true))
 }
+

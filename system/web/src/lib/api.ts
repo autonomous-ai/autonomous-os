@@ -456,6 +456,12 @@ export interface TestTTSOptions {
   /** BCP-47 stt_language code; picks a friendly demo phrase in that language. */
   lang?: string;
   provider?: string;
+  /** Optional URL/key override — lets the admin's Test Voice validate a
+   *  pending edit BEFORE clicking Save Changes. Empty = server falls back
+   *  to the on-disk config. Same-origin admin call, so echoing the key
+   *  back adds no exposure vs storing it on the device. */
+  baseUrl?: string;
+  apiKey?: string;
 }
 
 const TTS_DEMO_PHRASES: Record<string, string> = {
@@ -471,9 +477,9 @@ function demoPhraseFor(lang?: string): string {
 }
 
 /** POST /api/voice/preview — server reads the TTS API key + base URL from
- *  cfg and forwards to the device. Browser never sees or ships the credential
- *  (audit web F13). Operator can still pick a non-default voice/provider for
- *  the test by passing `provider` in opts. */
+ *  cfg by default, or from the optional baseUrl/apiKey overrides in opts
+ *  (so the admin's Test Voice can validate a pending edit before Save).
+ *  Same-origin + adminAuth gated. */
 export async function testTTSVoice(voice: string, opts: TestTTSOptions = {}): Promise<void> {
   await apiRequest<boolean>(`${API_BASE}/api/voice/preview`, {
     method: "POST",
@@ -482,6 +488,8 @@ export async function testTTSVoice(voice: string, opts: TestTTSOptions = {}): Pr
       text: opts.text || demoPhraseFor(opts.lang),
       voice,
       provider: opts.provider || undefined,
+      base_url: opts.baseUrl || undefined,
+      api_key: opts.apiKey || undefined,
     }),
   });
 }
