@@ -161,6 +161,14 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     discordGuildId: string; discordUserId: string;
     mqttEndpoint: string; mqttPort: string; mqttUsername: string;
     faChannel: string; fdChannel: string;
+    // Realtime block. Fields tracked here so /setting#realtime edits flip
+    // the Save Changes button — earlier they were missing from the baseline
+    // and the button stayed disabled no matter what the operator changed.
+    realtimeEnabled: boolean;
+    realtimeProvider: string;
+    realtimeVoice: string;
+    realtimeReasoning: string;
+    realtimeBaseUrl: string;
   };
   // Held as state, not a ref: the Save button's disabled/enabled rendering is
   // derived from it, and React 19 requires render-relevant values to be state.
@@ -294,6 +302,15 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
           mqttUsername: cfg.mqtt_username ?? "",
           faChannel: cfg.fa_channel ?? "",
           fdChannel: cfg.fd_channel ?? "",
+          // Mirror the defaults the individual useState calls use, so the
+          // baseline reflects what actually rendered — not the server's raw
+          // (possibly missing) values. Otherwise `dirty` would flip true on
+          // page load for any field the server omitted.
+          realtimeEnabled: cfg.realtime?.enabled ?? true,
+          realtimeProvider: cfg.realtime?.provider || "gemini",
+          realtimeVoice: cfg.realtime?.voice || "Kore",
+          realtimeReasoning: cfg.realtime?.reasoning || "MINIMAL",
+          realtimeBaseUrl: cfg.realtime?.base_url ?? "",
         });
       })
       .catch((err: Error) => setError(err.message))
@@ -374,9 +391,18 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     mqttUsername !== baseline.mqttUsername ||
     faChannel !== baseline.faChannel ||
     fdChannel !== baseline.fdChannel ||
+    // Realtime block: without these, toggling Enabled / picking a provider /
+    // pasting a Base URL on /setting#realtime silently produced NO change to
+    // dirty and the Save button never enabled.
+    realtimeEnabled !== baseline.realtimeEnabled ||
+    realtimeProvider !== baseline.realtimeProvider ||
+    realtimeVoice !== baseline.realtimeVoice ||
+    realtimeReasoning !== baseline.realtimeReasoning ||
+    realtimeBaseUrl !== baseline.realtimeBaseUrl ||
     !!password || !!adminPassword || !!llmApiKey || !!ttsApiKey ||
     !!sttApiKey || !!deepgramApiKey || !!mqttPassword ||
-    !!teleToken || !!slackBotToken || !!slackAppToken || !!discordBotToken
+    !!teleToken || !!slackBotToken || !!slackAppToken || !!discordBotToken ||
+    !!realtimeApiKey
   );
 
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
@@ -460,6 +486,8 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         discordGuildId, discordUserId,
         mqttEndpoint, mqttPort, mqttUsername,
         faChannel, fdChannel,
+        realtimeEnabled, realtimeProvider, realtimeVoice,
+        realtimeReasoning, realtimeBaseUrl,
       });
       // Clear typed secrets so their non-empty state no longer marks the form
       // dirty. Their persisted values live server-side; has_* flags surface
@@ -469,6 +497,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
       setDeepgramApiKey(""); setMqttPassword("");
       setTeleToken(""); setSlackBotToken(""); setSlackAppToken("");
       setDiscordBotToken("");
+      setRealtimeApiKey("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed.");
     }

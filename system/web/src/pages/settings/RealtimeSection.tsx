@@ -8,6 +8,19 @@ import type { LlmLoadedState } from "@/hooks/setup/types";
 // Voice + reasoning are provider-specific — keep these lists in sync with
 // system/server/config/realtime.go (ValidateRealtimeKnobs) and the HAL enums.
 const PROVIDERS = ["gemini", "openai", "qwen", "none"];
+
+// Display labels for the Provider dropdown. Values on the wire stay lowercase
+// (server-side switch keys off "gemini" / "openai" / …); only the human-facing
+// string is title-cased. Unknown providers fall back to first-letter capitalise
+// so the UI never shows a raw lowercase entry.
+const PROVIDER_LABEL: Record<string, string> = {
+  gemini: "Gemini",
+  openai: "OpenAI",
+  qwen: "Qwen",
+  none: "None",
+};
+const displayProvider = (v: string): string =>
+  PROVIDER_LABEL[v] ?? (v ? v[0].toUpperCase() + v.slice(1) : v);
 const VOICES: Record<string, string[]> = {
   gemini: ["Puck", "Charon", "Kore", "Fenrir", "Aoede"],
   openai: ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"],
@@ -80,7 +93,7 @@ export function RealtimeSection({
       <div style={{ marginBottom: 12 }}>
         <label htmlFor="realtime_provider" style={labelStyle}>Provider</label>
         <select id="realtime_provider" value={provider} onChange={(e) => onProviderChange(e.target.value)} style={selectStyle}>
-          {providers.map((p) => <option key={p} value={p}>{p}</option>)}
+          {providers.map((p) => <option key={p} value={p}>{displayProvider(p)}</option>)}
         </select>
       </div>
 
