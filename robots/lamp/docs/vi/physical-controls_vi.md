@@ -41,6 +41,45 @@ Cử chỉ 1 chạm là **cơ chế barge-in và huỷ attention chính** của 
 
 Khi wake word đang bật, cú click cũng **được tính như một wake event**: `single_click_action` gọi `voice_service.grant_wakeword_focus(source)`, mở đúng cửa sổ follow-up focus (`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, mặc định 20 s) mà câu wake phrase mở ra. Không có nó thì thiết bị nói "Nghe đây" rồi lại bỏ câu trả lời của user vì thiếu wake phrase. Cửa sổ được kiểm tra lại ở thời điểm dispatch, không chỉ latch lúc mở mic session, nên click giữa lúc session đang chạy vẫn authorize câu user đang nói. No-op khi wake word tắt (mọi câu đã dispatch sẵn) hoặc timeout follow-up = 0.
 
+### Quay về phía đèn — trigger wake thứ ba
+
+Wake gate có **ba** cửa vào, không phải hai. Bên cạnh wake phrase nói ra và single click, **quay mặt về phía đèn rồi nói** cũng mở đúng cửa sổ đó (`hal/drivers/tracking/gaze.py`), qua đúng seam `voice_service.grant_wakeword_focus(source)` mà cú click dùng — mọi thứ phía sau gate không đổi.
+
+Lý do nằm ở hình dạng sản phẩm chứ không phải sở thích. Đèn bàn nằm cách user một cánh tay và trong tầm nhìn cả ngày, nên lặp wake phrase vài chục lần một ngày nghe như đang ra lệnh cho một thiết bị, còn bấm nút thì như đang vận hành máy. Giữa hai người, tín hiệu không phải hai thứ đó: người ta **quay về phía nhau rồi nói**. Các sản phẩm phổ biến hoá "hey <name>" đều không có camera và đặt ở đầu kia phòng, nên không so sánh trực tiếp được.
+
+Hai đặc tính quyết định cách implement:
+
+* **Người ta quay TRƯỚC khi nói, không bao giờ sau.** Chờ mic báo rồi mới nhìn thì đã muộn — và tệ hơn là không bao giờ thấy được **sự chuyển** từ nhìn chỗ khác sang nhìn đèn, vốn là toàn bộ tín hiệu. Nên watcher lấy mẫu liên tục vào một ring buffer (`HAL_GAZE_BUFFER_S`, mặc định 3 s), còn tiếng nói chỉ kích hoạt việc **đọc ngược** buffer đó. Đây đúng mô hình mic đang dùng với pre-roll lookback của nó, thứ tồn tại để không mất âm đầu câu.
+* **Có mặt người KHÔNG phải tín hiệu.** User ngồi cạnh đèn cả ngày nên "phát hiện có người" gần như luôn đúng và không lọc được gì; "phát hiện có mặt" cũng chỉ hơn chút — mặt quay về màn hình vẫn detect ra. Gate đặt trên **hướng đầu**, đủ chặt để loại tư thế rất thường gặp: nói chuyện với đồng nghiệp trong khi thân vẫn hướng về bàn.
+
+Head yaw suy ra từ 5 landmark mà `YuNet` vốn đã trả về (`detect_face_with_landmarks` trong `detection.py`): độ lệch của mũi so với trung điểm hai mắt, đo **dọc theo đường nối hai mắt** và chuẩn hoá bằng nửa khoảng cách hai mắt, chính là `sin(yaw)` dưới phép chiếu pinhole. Đo dọc đường nối mắt thay vì theo trục x của ảnh là thứ giữ cho đầu **nghiêng** (chống tay lên má) không bị đọc thành đầu quay. Không load thêm model nào, không chạy thêm inference nào; ở `HAL_GAZE_SAMPLE_FPS` (mặc định 3) chi phí là số lẻ trên CPU 8 nhân.
+
+| Env var | Mặc định | Chỉnh cái gì |
+|---|---|---|
+| `HAL_GAZE_WAKE` | `false` | Công tắc tổng. Tắt = chỉ còn hai cửa như hiện nay. |
+| `HAL_GAZE_SHADOW` | `true` | Chỉ log quyết định, không mở gate. Không tốn gì — không turn nào mở nên không tốn LLM hay TTS. |
+| `HAL_GAZE_MAX_YAW_DEG` | 25 | Nón chấp nhận ở giữa khung. |
+| `HAL_GAZE_EDGE_CONE_SCALE` | 1.8 | Nón nới rộng bao nhiêu ở rìa khung, nơi barrel distortion thổi phồng góc. |
+| `HAL_GAZE_MIN_FACE_PX` | 48 | Chiều cao mặt tối thiểu **tính bằng pixel**. Dưới ngưỡng này landmark chỉ cách nhau vài pixel, góc tính ra là số học trên sai số làm tròn, nên mẫu đó không được bỏ phiếu. |
+| `HAL_GAZE_WINDOW_S` | 1.5 | Cửa sổ bằng chứng, kết thúc tại thời điểm bắt đầu nói. |
+| `HAL_GAZE_MIN_FACING_RATIO` | 0.6 | Tỉ lệ mẫu trong cửa sổ phải thấy đầu hướng về đèn. Là TỈ LỆ, không phải chuỗi liên tục — yaw từng mẫu nhiễu thật. |
+| `HAL_GAZE_MIN_SAMPLES` | 3 | Dưới mức này không đủ bằng chứng để kết luận theo chiều nào. |
+| `HAL_GAZE_SAMPLE_FPS` | 3 | Tần suất lấy mẫu. Quay đầu là động tác chậm; tăng lên không được gì mà tốn điện. |
+| `HAL_GAZE_BUFFER_S` | 3.0 | Lịch sử yaw giữ lại. Phải lớn hơn `WINDOW_S`. |
+| `HAL_GAZE_COOLDOWN_S` | 5 | Khoảng cách tối thiểu giữa hai lần gaze mở gate. |
+| `HAL_GAZE_REPOINT` | `true` | Quay về bearing đã nhớ khi lâu không thấy ai. |
+| `HAL_GAZE_REPOINT_AFTER_S` | 45 | Phải vắng mặt bao lâu mới quay. |
+| `HAL_GAZE_REPOINT_COOLDOWN_S` | 300 | Tối đa một lần quay trong khoảng này. |
+| `HAL_GAZE_REPOINT_MIN_CONFIDENCE` | 0.5 | Dưới confidence này thì bearing không đáng để quay. |
+
+Hai tham số trong đó là **đo ra**, không phải chọn. `MIN_FACE_PX` có vì probe trên thiết bị bắt được ba đồng nghiệp ở nền cỡ 8–18 px cho ra yaw 49 / 20 / 29 — nhiễu thuần — bên cạnh người dùng ngồi tại bàn cỡ 78 px với yaw 90 hoàn toàn đúng; hai nhóm không chồng lấn nên ngưỡng này xoá cả một lớp rác chứ không phải chỉnh cho vừa. `MIN_FACING_RATIO` có vì trail của một người ngồi yên đọc ra `[10,15,8,25,36,1,-,90]`, mức dao động mà không cái đầu nào làm được, nên mọi luật đòi MỌI mẫu phải đạt đều sẽ loại oan họ.
+
+Lâu không thấy ai mà đèn tự quay: đó là `REPOINT`, và là thứ **duy nhất** trong watcher động vào thân đèn. Recording idle là một vòng lặp các pose tuyệt đối, đảo `base_pitch` khoảng 17° mỗi chu kỳ, nên dù đặt đèn ở đâu thì idle cũng kéo camera về pose ghi sẵn của chính nó — trên bàn làm việc thì đó là bàn phím. Đặt pose đã nhớ một lần sẽ bị vòng lặp kế tiếp ghi đè; muốn đậu đúng ở bearing thì phải offset toàn bộ playback theo bearing, việc đó thuộc về motion playback chứ không thuộc tính năng này. Nên đèn làm điều mà con người làm: không thấy ai có thể đang nói với mình thì quay về chỗ người đó hay ngồi, một lần, rồi chờ.
+
+Shadow mode tồn tại chính để một buổi chạy cạnh user thật cho ra số liệu (`[gaze] speech: yaw=… facing=…%/…% -> WOULD_WAKE`) đủ để chốt các ngưỡng trên.
+
+Suy biến sạch theo cả hai chiều. Máy **không có camera** thì watcher không bao giờ arm, hai cửa kia nguyên vẹn — không cần cấu hình riêng. Khi `HAL_WAKEWORD_ENABLED` **false** thì watcher không khởi động luôn: không có wake word thì mọi câu đã dispatch sẵn, không còn gate nào để mở, chạy tiếp chỉ tốn CPU để quyết định một thứ vô nghĩa. Một mẫu gaze cũng bị bỏ qua khi thân đang aim hoặc tracking, khi camera bị tắt vì quyền riêng tư, và khi detector lock đang do một `look` đang chạy giữ.
+
 Chuỗi end-to-end:
 1. `gpio_button.py` / `ttp223.py` detect single click → gọi `single_click_action(source)` trong `button_actions.py`
 2. `single_click_action` → `_cancel_agent_speech()` (thread fire-and-forget) + `tracker_service.stop()` nếu đang tracking + `stop_tts()` (routes/voice.py) + `audio_stop()` (routes/music.py) + thread deferred `_announce_listening()`

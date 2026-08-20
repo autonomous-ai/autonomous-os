@@ -978,6 +978,101 @@ BEARING_SNAPSHOT_ENABLED: bool = (
 BEARING_SNAPSHOT_KEEP: int = int(
     os.environ.get("HAL_BEARING_SNAPSHOT_KEEP", "30")
 )
+# --- Gaze wake: turning toward the lamp as a third way to address it ----------
+#
+# A desk lamp sits an arm's length from its user, so "hey <name>" ten times a
+# day reads as talking to an appliance, and a button press reads as operating
+# one. Between two people the cue is neither: you turn toward someone and speak.
+#
+# This adds that as a THIRD opener of the existing wake gate, alongside the
+# spoken wake phrase and the single click. It does not replace either, and it
+# does not touch what happens after the gate opens. On a device without a
+# camera it simply never arms, leaving the other two openers untouched.
+#
+# It is inert when WAKEWORD_ENABLED is false: with no wake word, every utterance
+# already dispatches, so there is no gate left to open.
+GAZE_WAKE_ENABLED: bool = (
+    os.environ.get("HAL_GAZE_WAKE", "false").lower() in ("1", "true", "yes")
+)
+# Log the decision without acting on it. ON by default so the thresholds below
+# can be chosen from measurements taken beside a real user, rather than guessed:
+# nobody knows what angle reads as "addressing the lamp" until it is counted.
+# Shadow runs cost nothing — no turn is opened, so no LLM or TTS is spent.
+GAZE_WAKE_SHADOW: bool = (
+    os.environ.get("HAL_GAZE_SHADOW", "true").lower() in ("1", "true", "yes")
+)
+# How far the head may be turned off the lamp and still count as facing it.
+# Device-observed reference frames: a near-profile head (one ear visible, both
+# eyes not) measures well past 60 deg and must NOT open the gate — that is the
+# posture of someone talking to a colleague while their torso happens to face
+# the desk. A head with both eyes and both lenses visible measures under 25.
+GAZE_MAX_YAW_DEG: float = float(os.environ.get("HAL_GAZE_MAX_YAW_DEG", "25"))
+# How far back the evidence window reaches from the newest sample. One knob,
+# not a separate "hold" and "speech window": both described the same span — the
+# moments between turning toward the lamp and starting to speak — and two names
+# for one span drift apart. People turn BEFORE they speak, so this reaches
+# backwards only; nothing after the trigger is ever consulted.
+#
+# 1.5 s is also the smallest window that carries enough samples to vote with. At
+# 3 fps a 0.8 s window holds three observations, and three noisy samples cannot
+# support a majority the noise cannot flip.
+GAZE_WINDOW_S: float = float(os.environ.get("HAL_GAZE_WINDOW_S", "1.5"))
+# What fraction of the samples in that window must have seen a facing head.
+#
+# NOT an unbroken run. Per-sample yaw is noisy: at 640x360 a face filling a
+# fifth of the frame leaves ~25 px between the eyes, so a one-pixel landmark
+# error moves the angle a long way, and asin amplifies it further near the
+# extremes. A device trail of a user plainly facing the lamp read
+# [10,15,8,25,36,1,-,90] across two seconds — an impossible amount of real head
+# movement, so the variation is measurement, not gesture. Requiring every sample
+# to pass rejects that; requiring most of them separates it cleanly from a head
+# genuinely turned away, which reads [3,90,90,90,90,90,90,90].
+GAZE_MIN_FACING_RATIO: float = float(
+    os.environ.get("HAL_GAZE_MIN_FACING_RATIO", "0.6")
+)
+# Below this many samples in the window there is not enough evidence to call it
+# either way, so it is not called. Guards the moments after start-up and after a
+# live look monopolised the detector.
+GAZE_MIN_SAMPLES: int = int(os.environ.get("HAL_GAZE_MIN_SAMPLES", "3"))
+# Minimum face height in PIXELS for a sample to be trusted at all.
+#
+# In pixels, not as a fraction of the frame, because what this protects is
+# landmark precision and that depends on pixels alone. Yaw is recovered from the
+# offset between five landmarks; on a face 10 px tall those five points fall
+# within about three pixels of each other, so the angle is arithmetic performed
+# on rounding error. Device probe, one frame: three background colleagues at
+# 8-18 px yielded yaw 49 / 20 / 29 with detector scores 0.43-0.70 — pure noise —
+# while the seated user at 78 px and score 0.88 measured 90 and was, correctly,
+# in profile. The two populations do not overlap, so this floor removes the
+# entire class of garbage rather than tuning against it.
+#
+# It also subsumes the old frame-fraction floor: anyone far enough away to be a
+# bystander is, by construction, too small in pixels.
+GAZE_MIN_FACE_PX: int = int(os.environ.get("HAL_GAZE_MIN_FACE_PX", "48"))
+# How much wider the acceptance cone grows for a face at the very edge of frame,
+# as a multiple of GAZE_MAX_YAW_DEG. Scales linearly with distance from the
+# frame centre; 1.0 disables the compensation.
+#
+# The yaw estimate assumes a pinhole projection, and this lens is not one — the
+# aim was rewritten to stop trusting a fixed FOV for the same reason, and the
+# repo cannot even agree on the number (60 deg in constants.py against 78 in the
+# hardware BOM) because barrel distortion makes it position-dependent. A face at
+# the edge has its landmark geometry stretched, which inflates the angle.
+# Device-measured: a user who did not move read [8,9,15,5,12,33,35,28] as their
+# face drifted outward, and the tail was refused for a turn that never happened.
+GAZE_EDGE_CONE_SCALE: float = float(
+    os.environ.get("HAL_GAZE_EDGE_CONE_SCALE", "1.8")
+)
+# Seconds of yaw history kept. Must exceed GAZE_WINDOW_S or the lookback cannot
+# see far enough back to judge the gesture.
+GAZE_BUFFER_S: float = float(os.environ.get("HAL_GAZE_BUFFER_S", "3.0"))
+# Sampling rate of the watcher. Turning your head is a slow gesture; 3 fps
+# resolves it with room to spare, and YuNet at this cadence is a rounding error
+# on an 8-core CPU. Raising this buys nothing and costs power.
+GAZE_SAMPLE_FPS: float = float(os.environ.get("HAL_GAZE_SAMPLE_FPS", "3"))
+# Minimum gap between two gaze-opened gates, so a single conversation cannot
+# open one per sentence. The follow-up window already covers continuing a turn.
+GAZE_COOLDOWN_S: float = float(os.environ.get("HAL_GAZE_COOLDOWN_S", "5"))
 # Where the remembered user bearing lives. NOT a boot sidecar: this must survive
 # reboots, unlike the mic/speaker/camera state in app_state.
 USER_BEARING_PATH: str = os.environ.get(
@@ -1167,3 +1262,45 @@ REALTIME_SUMMARIZER_API_KEY: str = os.environ.get("HAL_REALTIME_SUMMARIZER_API_K
 _summarizer_base: str = os.environ.get("HAL_REALTIME_SUMMARIZER_BASE_URL", "") or _os_cfg_get("llm_base_url", "")
 REALTIME_SUMMARIZER_BASE_URL: str = _summarizer_base.rstrip("/").removesuffix("/v1") if _summarizer_base else ""
 REALTIME_SUMMARIZER_MODEL: str = os.environ.get("HAL_REALTIME_SUMMARIZER_MODEL", "claude-haiku-4-5-20251001")
+
+# Gaze re-point: turn back toward the remembered bearing when nobody has been
+# visible for a while.
+#
+# Needed because the idle recording is a LOOP of absolute poses that swings
+# base_pitch about 17 degrees per cycle (see routes/emotion.py), so wherever the
+# lamp is left, idle walks the camera back to the recording's own pose — which
+# on a desk points at the keyboard, not at the user. Parking the remembered pose
+# once would simply be overwritten by the next loop. Resting properly at the
+# bearing would mean offsetting the whole playback by it, which is a change to
+# motion playback rather than to this feature.
+#
+# So this does what a person does instead: if it cannot see who might be talking
+# to it, it turns to where they usually are. Once, then it waits.
+GAZE_REPOINT_ENABLED: bool = (
+    os.environ.get("HAL_GAZE_REPOINT", "true").lower() in ("1", "true", "yes")
+)
+# Nobody WELL FRAMED for this long before turning. Long enough that leaning out
+# of frame for a moment does not send the head hunting, short enough that the
+# idle loop cannot walk the camera off the user and leave it there: the loop
+# swings base_pitch every cycle, so the drift is continuous and a long timer
+# simply means a long stretch where the feature cannot see who is talking.
+GAZE_REPOINT_AFTER_S: float = float(
+    os.environ.get("HAL_GAZE_REPOINT_AFTER_S", "12")
+)
+# ...and at most this often, so an empty desk does not become a lamp that turns
+# every few seconds all night.
+GAZE_REPOINT_COOLDOWN_S: float = float(
+    os.environ.get("HAL_GAZE_REPOINT_COOLDOWN_S", "60")
+)
+# How far off frame centre a face may sit and still count as "somebody is here,
+# no need to turn". A face at the very edge is about to leave the frame, so
+# treating it as well framed is what let the absence timer reset forever while
+# the user drifted out of view — device-measured at edge=0.71-0.75 with the
+# lamp still refusing to re-point.
+GAZE_WELL_FRAMED_EDGE: float = float(
+    os.environ.get("HAL_GAZE_WELL_FRAMED_EDGE", "0.6")
+)
+# Below this confidence the bearing is not worth moving for.
+GAZE_REPOINT_MIN_CONFIDENCE: float = float(
+    os.environ.get("HAL_GAZE_REPOINT_MIN_CONFIDENCE", "0.5")
+)

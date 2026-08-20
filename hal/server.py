@@ -727,6 +727,15 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.debug("bearing sampler unavailable: %s", e)
 
+        # Watch for the user turning toward the lamp, so addressing it does not
+        # always require the wake phrase. Off by default; shadow-logs when on.
+        try:
+            from hal.drivers.tracking import gaze
+
+            gaze.start()
+        except Exception as e:
+            logger.debug("gaze watcher unavailable: %s", e)
+
     # Start display (GC9A01 eyes)
     if DisplayService:
         try:

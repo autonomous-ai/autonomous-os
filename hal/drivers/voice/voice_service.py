@@ -925,6 +925,17 @@ class VoiceService:
                         len(history) * voice_cfg.FRAME_DURATION_MS,
                         buffered,
                     )
+                    # Speech is confirmed (Silero has agreed) — the moment to
+                    # ask whether the user had turned toward the lamp just
+                    # before saying it. Reads the gaze buffer BACKWARDS; it does
+                    # not capture anything now, because the turn happened before
+                    # this line ran. No-op unless the feature is armed.
+                    try:
+                        from hal.drivers.tracking import gaze
+
+                        gaze.on_speech_start()
+                    except Exception as e:
+                        logger.debug("gaze wake check skipped: %s", e)
                     speech_pre_buffer = [
                         resample_to_stt(f, device_rate, voice_cfg.STT_RATE, self._np)
                         for f in all_frames

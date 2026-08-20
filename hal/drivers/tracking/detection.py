@@ -231,6 +231,39 @@ def _detect_face_yunet(frame: npt.NDArray[np.uint8]) -> Optional[Tuple[int, int,
     return (x, y, fw, fh)
 
 
+def detect_face_with_landmarks(
+    frame: npt.NDArray[np.uint8],
+) -> Optional[Tuple[Tuple[int, int, int, int], Tuple[float, ...]]]:
+    """Largest face as ``((x, y, w, h), landmarks)``, or None.
+
+    Same detector and same largest-face policy as _detect_face_yunet, but keeps
+    the five landmarks (right eye, left eye, nose, right and left mouth corner)
+    that the bbox-only path throws away. Head orientation is recoverable from
+    them, so the gaze watcher needs no second model and no second inference.
+
+    Deliberately quiet: this runs on a loop, and logging every sample the way
+    _detect_face_yunet does would bury the journal.
+    """
+    detector = _get_yunet()
+    if detector is None:
+        return None
+    h, w = frame.shape[:2]
+    try:
+        detector.setInputSize((w, h))
+        _, faces = detector.detect(frame)
+    except Exception as e:
+        logger.debug("YuNet landmark detect failed: %s", e)
+        return None
+    if faces is None or len(faces) == 0:
+        return None
+    best = max(faces, key=lambda f: float(f[2]) * float(f[3]))
+    x, y, fw, fh = int(best[0]), int(best[1]), int(best[2]), int(best[3])
+    x = max(0, x); y = max(0, y)
+    fw = max(1, min(fw, w - x)); fh = max(1, min(fh, h - y))
+    # Row layout: [x, y, w, h, lm_x1, lm_y1 ... lm_x5, lm_y5, score].
+    return (x, y, fw, fh), tuple(float(v) for v in best[4:14])
+
+
 class ObjectDetector:
     """Detect an object by name: YuNet for faces, local YOLOv8n for COCO
     classes, remote YOLOWorld for open vocabulary.

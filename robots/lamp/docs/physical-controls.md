@@ -41,6 +41,45 @@ The 1-tap gesture is Lamp's primary **barge-in and attention-cancel mechanism**:
 
 When wake word is enabled, the click also **counts as a wake event**: `single_click_action` calls `voice_service.grant_wakeword_focus(source)`, which opens the same follow-up focus window (`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, default 20 s) a spoken wake phrase opens. Without it the device would announce "Listening" and then drop the user's answer for missing the wake phrase. The window is re-checked at dispatch time, not only latched at mic-session start, so a click during an already-open session still authorizes the sentence being spoken. No-op when wake word is off (every utterance already dispatches) or when the follow-up timeout is 0.
 
+### Turning toward the lamp as a third wake trigger
+
+The wake gate has three openers, not two. Alongside the spoken wake phrase and the single click, **turning toward the lamp and speaking** opens the same window (`hal/drivers/tracking/gaze.py`), through the same `voice_service.grant_wakeword_focus(source)` seam the click uses — nothing downstream of the gate changes.
+
+The reason is device shape rather than preference. A desk lamp sits an arm's length from its user and is in view all day, so a wake phrase repeated dozens of times reads as addressing an appliance, and a button press reads as operating one. Between two people the cue is neither: you turn toward someone and speak. Products that popularised "hey <name>" have no camera and sit across a room, so the comparison does not carry.
+
+Two properties decide the implementation:
+
+* **People turn before they speak, never after.** Sampling the camera when the mic fires would arrive after the gesture and could never observe the transition from looking away to looking here, which is the entire signal. So the watcher samples continuously into a ring buffer (`HAL_GAZE_BUFFER_S`, default 3 s) and speech triggers a read **backwards** through it — the same shape as the mic's own pre-roll lookback, which exists so the start of a sentence is not lost.
+* **Presence is not the signal.** The user is visible beside this lamp all day, so "a person is detected" gates nothing, and "a face is detected" barely more — a face turned to a monitor still detects. The gate is on head **orientation**, tight enough to reject the common posture of talking to a colleague with the torso still square to the desk.
+
+Head yaw is derived from the five landmarks `YuNet` already returns (`detect_face_with_landmarks` in `detection.py`): the nose's offset from the eye midpoint, measured along the eye line and normalised by half the inter-ocular distance, is `sin(yaw)` under a pinhole projection. Measuring along the eye line rather than the image x-axis is what keeps a **rolled** head (resting on a hand) from reading as a turned one. No second model is loaded and no extra inference runs; at `HAL_GAZE_SAMPLE_FPS` (default 3) the cost is a rounding error on the 8-core CPU.
+
+| Env var | Default | Tunes |
+|---|---|---|
+| `HAL_GAZE_WAKE` | `false` | Master switch. Off means today's two openers only. |
+| `HAL_GAZE_SHADOW` | `true` | Log the decision without opening the gate. Costs nothing — no turn opens, so no LLM or TTS is spent. |
+| `HAL_GAZE_MAX_YAW_DEG` | 25 | Acceptance cone at frame centre. |
+| `HAL_GAZE_EDGE_CONE_SCALE` | 1.8 | How much wider the cone grows at the frame edge, where barrel distortion inflates the angle. |
+| `HAL_GAZE_MIN_FACE_PX` | 48 | Minimum face height **in pixels**. Below this the landmarks span a few pixels and the yaw is arithmetic on rounding error, so the sample does not vote at all. |
+| `HAL_GAZE_WINDOW_S` | 1.5 | Evidence window ending at the moment of speech. |
+| `HAL_GAZE_MIN_FACING_RATIO` | 0.6 | Fraction of that window that must have seen a facing head. A ratio, not an unbroken run — per-sample yaw is genuinely noisy. |
+| `HAL_GAZE_MIN_SAMPLES` | 3 | Below this there is not enough evidence to decide either way. |
+| `HAL_GAZE_SAMPLE_FPS` | 3 | Sampling rate. Turning the head is slow; raising this buys nothing and costs power. |
+| `HAL_GAZE_BUFFER_S` | 3.0 | Yaw history retained. Must exceed `WINDOW_S`. |
+| `HAL_GAZE_COOLDOWN_S` | 5 | Minimum gap between gaze-opened gates, so one conversation cannot open one per sentence. |
+| `HAL_GAZE_REPOINT` | `true` | Turn toward the remembered bearing when nobody has been visible. |
+| `HAL_GAZE_REPOINT_AFTER_S` | 45 | How long nobody must be visible first. |
+| `HAL_GAZE_REPOINT_COOLDOWN_S` | 300 | At most one turn per this interval. |
+| `HAL_GAZE_REPOINT_MIN_CONFIDENCE` | 0.5 | Bearing confidence below which turning is not worth it. |
+
+Two of these were measured rather than chosen. `MIN_FACE_PX` exists because a device probe found three background colleagues detected at 8-18 px yielding yaw 49 / 20 / 29 — noise — beside the seated user at 78 px whose 90 was correct; the populations do not overlap, so the floor removes the class rather than tuning against it. `MIN_FACING_RATIO` exists because a trail of a stationary user read `[10,15,8,25,36,1,-,90]`, a spread no head performs, so any rule demanding every sample pass would reject them.
+
+Nobody has been visible for a while and the lamp turns: that is `REPOINT`, and it is the only thing in the watcher that moves the body. The idle recording is a loop of absolute poses that swings `base_pitch` about 17 degrees per cycle, so it walks the camera back to the recording's own pose — on a desk, at the keyboard. Parking the remembered pose once would simply be overwritten by the next loop; resting there properly would mean offsetting the whole playback by the bearing, which belongs to motion playback rather than to this feature. So the lamp does what a person does instead: if it cannot see who might be talking to it, it turns to where they usually are, once, then waits.
+
+Thresholds are meant to be chosen from measurement, not guessed — shadow mode exists so a run beside a real user produces the counts (`[gaze] speech: yaw=… hold=…/… -> WOULD_WAKE`) that settle what angle reads as "addressing the lamp".
+
+Degradation is by omission in both directions. On a device with **no camera** the watcher never arms and the other two openers are untouched — no separate configuration. When `HAL_WAKEWORD_ENABLED` is **false** the watcher does not start at all: with no wake word every utterance already dispatches, so there is no gate left to open and the check would burn CPU to decide nothing. A gaze sample is also skipped while the body is aiming or tracking, when the camera is disabled for privacy, and whenever the detector lock is held by a live `look`.
+
 End-to-end chain:
 1. `gpio_button.py` / `ttp223.py` detect single click → call `single_click_action(source)` in `button_actions.py`
 2. `single_click_action` → `_cancel_agent_speech()` (fire-and-forget thread) + active `tracker_service.stop()` + `stop_tts()` (routes/voice.py) + `audio_stop()` (routes/music.py) + deferred `_announce_listening()` thread
