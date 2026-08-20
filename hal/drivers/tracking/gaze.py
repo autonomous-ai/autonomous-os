@@ -245,10 +245,19 @@ def _sample_once() -> Optional[str]:
         return _skip("no camera capture on this device")
     if svc is None:
         return _skip("no animation service")
-    # Mid-aim or mid-track the head is swinging, so a yaw measured now describes
-    # the lamp's motion rather than the user's intent.
-    if getattr(svc, "_tracking_active", False):
-        return "body busy aiming or tracking"
+    # Skip only while the head is actually MOVING — a yaw measured mid-swing
+    # describes the lamp's motion, not the user's intent.
+    #
+    # Not `_tracking_active`. That flag stays set for the whole of a tracking
+    # session, and a session is exactly when the lamp is following the user's
+    # face: the state where it is most obviously attending to them, and where
+    # refusing to notice they are addressing it reads as broken. Tracking also
+    # holds still most of the time — it corrects, then waits — so the flag
+    # blocks far more than the moving head it was standing in for.
+    last_write = getattr(svc, "last_servo_write", 0.0)
+    if isinstance(last_write, (int, float)) and last_write > 0:
+        if (time.monotonic() - float(last_write)) < aim.FRAME_SETTLE_S:
+            return "head still settling from a move"
 
     # Non-blocking: a live look must never wait behind a background sample.
     if not aim._detector_lock_use.acquire(blocking=False):

@@ -456,3 +456,56 @@ def test_faces_too_small_to_measure_are_left_out_of_the_denominator(monkeypatch)
     gaze.record_sample(5.0, 10, 0.1, now=now)               # another
     ratio, n = gaze.facing_ratio(now)
     assert n == 1 and ratio == pytest.approx(1.0)
+
+
+# --- sampling while the body is busy -----------------------------------------
+
+
+class _MovingSvc:
+    """Animation service whose head last moved `ago` seconds ago."""
+
+    def __init__(self, ago, tracking=False):
+        self._ago = ago
+        self._tracking_active = tracking
+
+    @property
+    def last_servo_write(self):
+        return gaze.time.monotonic() - self._ago
+
+
+def _sample_reason(svc, monkeypatch):
+    import hal.app_state as state
+
+    monkeypatch.setattr(state, "camera_capture", object(), raising=False)
+    monkeypatch.setattr(state, "animation_service", svc, raising=False)
+    monkeypatch.setattr(state, "_camera_disabled", False, raising=False)
+    from hal.drivers.tracking import aim
+
+    # Hold the detector lock so the call returns before touching hardware; what
+    # matters here is only whether it got that far.
+    aim._detector_lock_use.acquire()
+    try:
+        return gaze._sample_once()
+    finally:
+        aim._detector_lock_use.release()
+
+
+def test_a_tracking_session_no_longer_blocks_sampling(monkeypatch):
+    """Tracking is the lamp FOLLOWING the user's face.
+
+    It is the state where the lamp is most obviously attending to them, so
+    refusing to notice they are addressing it reads as broken. The flag stays
+    set for a whole session while the head is mostly still.
+    """
+    from hal.drivers.tracking import aim
+
+    svc = _MovingSvc(ago=aim.FRAME_SETTLE_S + 1.0, tracking=True)
+    assert _sample_reason(svc, monkeypatch) == "detector busy with a live look"
+
+
+def test_a_head_still_settling_from_a_move_is_not_sampled(monkeypatch):
+    """Mid-swing the yaw describes the lamp's motion, not the user's intent."""
+    from hal.drivers.tracking import aim
+
+    svc = _MovingSvc(ago=aim.FRAME_SETTLE_S / 2.0)
+    assert _sample_reason(svc, monkeypatch) == "head still settling from a move"
