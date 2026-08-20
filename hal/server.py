@@ -38,6 +38,7 @@ from hal.config import (
     HTTP_HOST,
     HTTP_PORT,
     DEVICE_ID,
+    LOOK_AIM_ENABLED,
     SERVO_FPS,
     SERVO_HOLD_S,
     SERVO_PLAY_RAMP_S,
@@ -703,6 +704,28 @@ async def lifespan(app: FastAPI):
 
     if SensingService and sensing_enabled:
         threading.Thread(target=_start_sensing, daemon=True, name="sensing-init").start()
+
+    # Warm the look-aim detector. Its first inference loads the model lazily and
+    # costs seconds; paid here it never lands inside a look's aim deadline.
+    if LOOK_AIM_ENABLED and "camera" in _plan.mounted:
+        def _warm_look_aim():
+            try:
+                from hal.drivers.tracking.aim import prewarm
+                prewarm()
+            except Exception as e:
+                logger.debug("look-aim prewarm unavailable: %s", e)
+
+        threading.Thread(target=_warm_look_aim, daemon=True, name="warm-look-aim").start()
+
+        # Learn where the user usually sits, passively. Without this the bearing
+        # only learns from perfectly-centred look questions and decays faster
+        # than it accumulates.
+        try:
+            from hal.drivers.tracking import bearing_sampler
+
+            bearing_sampler.start()
+        except Exception as e:
+            logger.debug("bearing sampler unavailable: %s", e)
 
     # Start display (GC9A01 eyes)
     if DisplayService:

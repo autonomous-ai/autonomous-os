@@ -227,6 +227,18 @@ def announce_listening_cue(source: str = "button"):
 
 def _stop_active_tracking(source: str):
     """Stop object tracking when a single click asks the device for attention."""
+    # A look-aim moves the head without going through TrackerService, so the
+    # is_tracking guard below would miss it — the user would press the button to
+    # stop the lamp moving and it would keep turning. Abort it unconditionally.
+    try:
+        from hal.drivers.tracking.aim import request_abort as _abort_aim
+        from hal.drivers.tracking.search import request_abort as _abort_search
+
+        _abort_aim()
+        _abort_search()
+    except Exception as e:
+        logger.debug("%s single click -- aim/search abort unavailable: %s", source, e)
+
     tracker = state.tracker_service
     if not tracker or not tracker.is_tracking:
         return

@@ -207,30 +207,41 @@ Trade-offs:
 
 ## In-session vision — the `look` tool (Gemini only)
 
-When the user asks about what the device **sees** ("what is this?", "what am I
-holding?", "read this label", "what colour is this?"), the realtime model answers
-in-session instead of delegating. This only applies to turns that are **purely**
-a question about what it sees: if the same turn also contains an action ("turn
-to the right, hold it there, and tell me what you see"), the prompt requires a
-single `delegate_to_main` covering both halves — no `look` — so the movement is
-never silently dropped. The orchestrator registers a `look` tool
+When the user asks about what the device **sees** ("what is this?", "look at this",
+"look at what I'm holding", "what am I holding?", "read this label", "what colour is
+this?"), the realtime model answers in-session instead of delegating. Note "look at
+this" routes here, **not** to the camera privacy toggle — `skills/camera/SKILL.md`
+disambiguates the verb by what follows it, since "look at me" means "turn the camera
+on" while "look at this" is a question about an object. This only applies to turns
+that are **purely** a question about what it sees: if the same turn also contains an
+action ("turn to the right, hold it there, and tell me what you see"), the prompt
+requires a single `delegate_to_main` covering both halves — no `look` — so the
+movement is never silently dropped. The orchestrator registers a `look` tool
 (`orchestrator.py`, `LOOK_TOOL`) and handles the call in `_handle_look_call`:
 
-1. Grab a **sharp** camera frame **in-process** (`_capture_frame` calls
+1. **Aim the head at the subject first**, on devices that can move — otherwise a
+   confident answer gets given about whatever the head happened to face. See
+   [Look-aim](../robots/lamp/docs/vision-tracking.md#look-aim--pointing-the-head-before-a-visual-question-captures)
+   for the aim loop, how it picks which person is the one asking, and the
+   remembered bearing it falls back on when nobody is visible.
+2. Grab a **sharp** camera frame **in-process** (`_capture_frame` calls
    `capture_still` — no HTTP loopback; servos are frozen (animation loop +
    tracker worker both honor the flag) and the frame is only accepted once its
-   capture timestamp is ≥ 0.3s after the last servo bus write, so motion blur
-   can't reach the model; zero added latency when the servos are already still
-   or the device has none), downscaled to `HAL_GEMINI_VISION_MAX_WIDTH`
+   capture timestamp is past the settle after the last servo bus write, so motion
+   blur can't reach the model. The settle is 0.3s, scaled up with the size of the
+   last aim correction to a 0.5s ceiling — an aim that exits on its deadline does
+   so straight after a large swing, and the arm is still ringing past a flat
+   300ms; zero added latency when the servos are already still or the device has
+   none), downscaled to `HAL_GEMINI_VISION_MAX_WIDTH`
    (default 768px) to bound image tokens.
-2. Enqueue it as realtime **video input** (`ImageInput` → `send_realtime_input(video=…)`),
+3. Enqueue it as realtime **video input** (`ImageInput` → `send_realtime_input(video=…)`),
    then **replay the turn**: the Live API queues a frame sent mid-turn for the
    NEXT turn (device-proven: the tool-ack → continue-turn flow answered every
    look from the *previous* look's image — a one-image lag no ack delay fixes),
    so instead of acking the tool call, the orchestrator yields `LookReplaySignal`
    and `run_realtime_turn` re-appends the turn's audio and commits again on the
    SAME session. The queued frame joins the replayed turn.
-3. The replayed turn re-triggers `look`, which hits the reuse guard
+4. The replayed turn re-triggers `look`, which hits the reuse guard
    (`VISION_MIN_INTERVAL_S`) and is acked with `trigger_response=True` — the
    model answers from the frame that is now genuinely in context.
 

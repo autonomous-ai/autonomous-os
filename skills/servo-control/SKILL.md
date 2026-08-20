@@ -63,6 +63,12 @@ curl -s "http://127.0.0.1:5001/camera/snapshot?save=true&width=768&quality=75"
 ```
 → Then describe the image. Do **not** use `[HW:...]` markers here — markers fire only *after* your reply is written, so a snapshot taken during the turn would show the OLD position. See the Camera skill.
 
+**Input:** "Where are you?" / "Can you find me?" / "Look around for me" / "Where did I go?"
+**Output:** `[HW:/servo/search:{}]` Looking around for you...
+
+**Input:** "I moved you" / "You're in a new place" / "I put you somewhere else" / "Forget where I sit"
+**Output:** `[HW:/servo/bearing/reset:{}]` Got it — I'll forget where you usually are and learn it again.
+
 **Input:** "Resume" / "Move again" / "You can move now" / "Start moving"
 **Output:** `[HW:/servo/resume:{}]` Alright, back to normal!
 

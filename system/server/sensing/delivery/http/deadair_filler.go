@@ -326,8 +326,41 @@ func PlayOpeningFillerNow() {
 // Fire-and-forget: returns 200 as soon as the filler is queued. The caller is
 // racing the model's first sentence, so waiting on TTS would be pointless.
 func (h *SensingHandler) PlayFiller(c *gin.Context) {
-	go PlayOpeningFillerNow()
+	// Optional body selects a specific pool. Bodyless calls keep the original
+	// behaviour (the realtime dead-air wait), so existing callers are unchanged.
+	var req struct {
+		Pool string `json:"pool"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	if req.Pool != "" {
+		go PlayPoolFillerNow(req.Pool)
+	} else {
+		go PlayOpeningFillerNow()
+	}
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(nil))
+}
+
+// PlayPoolFillerNow speaks one phrase from a named tool pool. Used by the
+// look-aim, whose states ("searching", "found") need their own phrasing rather
+// than the generic "one sec" — a lamp physically turning away from the user is
+// confusing unless it says why.
+//
+// Silent when the pool is unknown or empty: a missing phrase must never block
+// the aim or the capture that follows it.
+func PlayPoolFillerNow(pool string) {
+	lang := i18n.Lang()
+	phrases := toolPoolForLang(lang, pool)
+	if len(phrases) == 0 {
+		return
+	}
+	filler := pickFrom(phrases, "")
+	if filler == "" {
+		return
+	}
+	slog.Info("pool filler firing", "component", "sensing", "lang", lang, "pool", pool, "filler", filler)
+	if err := hal.SpeakCachedInterruptible(filler); err != nil {
+		slog.Warn("pool filler failed", "component", "sensing", "pool", pool, "error", err)
+	}
 }
 
 // FillerManager schedules and cancels dead-air fillers driven by OpenClaw
