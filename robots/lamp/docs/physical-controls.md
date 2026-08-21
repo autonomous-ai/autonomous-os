@@ -77,6 +77,13 @@ When several faces are in frame, the one whose head counts is the one **nearest 
 | `HAL_GAZE_REPOINT_AFTER_S` | 45 | How long nobody must be visible first. |
 | `HAL_GAZE_REPOINT_COOLDOWN_S` | 300 | At most one turn per this interval. |
 | `HAL_GAZE_REPOINT_MIN_CONFIDENCE` | 0.5 | Bearing confidence below which turning is not worth it. |
+| `HAL_GAZE_PITCH` | `true` | Raise or lower `wrist_pitch` so a face sits inside the frame rather than above it. On a desk the lamp starts out pointing at the keyboard, and no left-right aim recovers from that. Was off while corrections were being undone between steps; with that fixed the loop converges — measured 45% → 21% → 16% of frame height, each step starting where the last left off. Still open-loop against a coupled two-link arm, so `MAX_STEP_DEG` and `MAX_BLIND_STEPS` are what bound it. |
+| `HAL_GAZE_PITCH_DEG_PER_FRAME` | 45 | Degrees of `wrist_pitch` per full frame height. A seed, not a calibration: the loop re-measures after every step. |
+| `HAL_GAZE_PITCH_MAX_STEP_DEG` | 15 | Largest single correction. |
+| `HAL_GAZE_PITCH_DEAD_ZONE_FRAC` | 0.15 | Offset from centre below which the framing is left alone. |
+| `HAL_GAZE_PITCH_COOLDOWN_S` | 4 | Minimum gap between corrections. |
+| `HAL_GAZE_PITCH_MAX_BLIND_STEPS` | 0 | Corrections allowed from the coarse torso fallback rather than a real face, before a face must confirm the direction. |
+| `HAL_GAZE_IDLE_ANCHOR` | `true` | Re-centre the idle loop on the pose a face was seen from, so idle does not walk the correction back. |
 
 Two of these were measured rather than chosen. `MIN_FACE_PX` exists because a device probe found three background colleagues detected at 8-18 px yielding yaw 49 / 20 / 29 — noise — beside the seated user at 78 px whose 90 was correct; the populations do not overlap, so the floor removes the class rather than tuning against it. `MIN_FACING_RATIO` exists because a trail of a stationary user read `[10,15,8,25,36,1,-,90]`, a spread no head performs, so any rule demanding every sample pass would reject them.
 

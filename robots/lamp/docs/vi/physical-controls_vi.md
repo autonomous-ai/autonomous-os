@@ -77,6 +77,13 @@ Khi trong khung có nhiều mặt, mặt được tính là mặt **gần tâm k
 | `HAL_GAZE_REPOINT_AFTER_S` | 45 | Phải vắng mặt bao lâu mới quay. |
 | `HAL_GAZE_REPOINT_COOLDOWN_S` | 300 | Tối đa một lần quay trong khoảng này. |
 | `HAL_GAZE_REPOINT_MIN_CONFIDENCE` | 0.5 | Dưới confidence này thì bearing không đáng để quay. |
+| `HAL_GAZE_PITCH` | `true` | Nâng/hạ `wrist_pitch` để khuôn mặt nằm trong khung thay vì ở phía trên khung. Đặt trên bàn thì đèn khởi điểm chĩa vào bàn phím, và không có cú chỉnh trái-phải nào cứu được chuyện đó. Trước đây tắt vì mỗi bước chỉnh đều bị xoá giữa chừng; sửa xong thì vòng lặp hội tụ — đo được 45% → 21% → 16% chiều cao khung, mỗi bước xuất phát đúng chỗ bước trước để lại. Vẫn là vòng hở trên cánh tay hai khâu ghép nhau, nên `MAX_STEP_DEG` và `MAX_BLIND_STEPS` mới là thứ bó nó. |
+| `HAL_GAZE_PITCH_DEG_PER_FRAME` | 45 | Số độ `wrist_pitch` cho trọn một chiều cao khung. Là hạt giống, không phải hiệu chuẩn: sau mỗi bước nó đo lại. |
+| `HAL_GAZE_PITCH_MAX_STEP_DEG` | 15 | Bước chỉnh lớn nhất một lần. |
+| `HAL_GAZE_PITCH_DEAD_ZONE_FRAC` | 0.15 | Lệch dưới mức này thì để yên. |
+| `HAL_GAZE_PITCH_COOLDOWN_S` | 4 | Khoảng cách tối thiểu giữa hai lần chỉnh. |
+| `HAL_GAZE_PITCH_MAX_BLIND_STEPS` | 0 | Số lần được chỉnh dựa trên suy đoán từ thân người thay vì mặt thật, trước khi phải có một khuôn mặt xác nhận hướng. |
+| `HAL_GAZE_IDLE_ANCHOR` | `true` | Dời tâm vòng idle về tư thế đã nhìn thấy mặt, để idle không kéo ngược cú chỉnh. |
 
 Hai tham số trong đó là **đo ra**, không phải chọn. `MIN_FACE_PX` có vì probe trên thiết bị bắt được ba đồng nghiệp ở nền cỡ 8–18 px cho ra yaw 49 / 20 / 29 — nhiễu thuần — bên cạnh người dùng ngồi tại bàn cỡ 78 px với yaw 90 hoàn toàn đúng; hai nhóm không chồng lấn nên ngưỡng này xoá cả một lớp rác chứ không phải chỉnh cho vừa. `MIN_FACING_RATIO` có vì trail của một người ngồi yên đọc ra `[10,15,8,25,36,1,-,90]`, mức dao động mà không cái đầu nào làm được, nên mọi luật đòi MỌI mẫu phải đạt đều sẽ loại oan họ.
 
