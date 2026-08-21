@@ -7,10 +7,11 @@ what it currently outputs.
 
 import math
 
+import numpy as np
 import pytest
 
 import hal.config as config
-from hal.drivers.tracking import gaze
+from hal.drivers.tracking import detection, gaze
 
 
 def _landmarks(right_eye, left_eye, nose, mouth_r=(0.0, 0.0), mouth_l=(0.0, 0.0)):
@@ -128,6 +129,79 @@ def test_the_cone_widens_toward_the_frame_edge():
 
 def test_edge_slack_never_rescues_a_genuine_profile():
     assert gaze.facing_lamp(90.0, 120, 1.0) is False
+
+
+# --- which face the gate listens to -----------------------------------------
+
+
+class _FakeYuNet:
+    """Stands in for the loaded YuNet model, returning canned detections."""
+
+    def __init__(self, rows):
+        self._rows = np.array(rows, dtype=np.float32) if rows else None
+
+    def setInputSize(self, size):
+        pass
+
+    def detect(self, frame):
+        return 1, self._rows
+
+
+def _face_row(x, w, h, nose_x=0.0):
+    """One YuNet row: [x, y, w, h, 10 landmark coords, score]."""
+    return [float(x), 0.0, float(w), float(h)] + [nose_x] * 10 + [0.9]
+
+
+def _detect(monkeypatch, rows, frame_w=640):
+    monkeypatch.setattr(detection, "_get_yunet", lambda: _FakeYuNet(rows))
+    frame = np.zeros((480, frame_w, 3), dtype=np.uint8)
+    return detection.detect_face_with_landmarks(frame)
+
+
+def test_the_face_nearest_the_frame_centre_wins_over_the_larger_one(monkeypatch):
+    """A colleague leaning in must not take the gate from the seated user.
+
+    Both clear the size floor, so largest-face would hand the sample to the
+    nearer colleague at the edge; the lamp's own aim says the centred face is
+    the one it is pointed at.
+    """
+    big = config.GAZE_MIN_FACE_PX * 2
+    small = config.GAZE_MIN_FACE_PX + 2
+    colleague = _face_row(x=500, w=big, h=big, nose_x=1.0)
+    user = _face_row(x=300, w=small, h=small, nose_x=2.0)
+    (fx, _, fw, fh), landmarks = _detect(monkeypatch, [colleague, user])
+    assert (fx, fw, fh) == (300, small, small)
+    assert landmarks[4] == 2.0
+
+
+def test_a_single_face_is_picked_exactly_as_before(monkeypatch):
+    """The common case must not change: one candidate, both policies agree."""
+    h = config.GAZE_MIN_FACE_PX * 2
+    (fx, _, fw, fh), _ = _detect(monkeypatch, [_face_row(x=500, w=h, h=h)])
+    assert (fx, fw, fh) == (500, h, h)
+
+
+def test_faces_too_small_to_measure_do_not_win_by_sitting_in_the_centre(monkeypatch):
+    """Background colleagues detect at 8-18 px; a centred one must not be
+    preferred over the user whose yaw is actually measurable."""
+    user_h = config.GAZE_MIN_FACE_PX * 2
+    background = _face_row(x=310, w=12, h=12)
+    user = _face_row(x=40, w=user_h, h=user_h)
+    (fx, _, _, fh), _ = _detect(monkeypatch, [background, user])
+    assert (fx, fh) == (40, user_h)
+
+
+def test_with_nobody_measurable_the_largest_face_still_comes_back(monkeypatch):
+    """The caller re-aims vertically off this bbox, and that correction is
+    needed exactly when every face is too small — returning None would strand
+    a camera pointing too low."""
+    (fx, _, _, fh), _ = _detect(monkeypatch, [_face_row(x=10, w=8, h=8),
+                                              _face_row(x=600, w=18, h=18)])
+    assert (fx, fh) == (600, 18)
+
+
+def test_no_detections_is_still_none(monkeypatch):
+    assert _detect(monkeypatch, []) is None
 
 
 # --- the rolling buffer -----------------------------------------------------

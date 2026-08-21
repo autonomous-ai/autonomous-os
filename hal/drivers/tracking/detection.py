@@ -234,12 +234,25 @@ def _detect_face_yunet(frame: npt.NDArray[np.uint8]) -> Optional[Tuple[int, int,
 def detect_face_with_landmarks(
     frame: npt.NDArray[np.uint8],
 ) -> Optional[Tuple[Tuple[int, int, int, int], Tuple[float, ...]]]:
-    """Largest face as ``((x, y, w, h), landmarks)``, or None.
+    """The face whose head counts, as ``((x, y, w, h), landmarks)``, or None.
 
-    Same detector and same largest-face policy as _detect_face_yunet, but keeps
-    the five landmarks (right eye, left eye, nose, right and left mouth corner)
-    that the bbox-only path throws away. Head orientation is recoverable from
-    them, so the gaze watcher needs no second model and no second inference.
+    Same detector as _detect_face_yunet but a DIFFERENT selection policy, and
+    it keeps the five landmarks (right eye, left eye, nose, right and left
+    mouth corner) that the bbox-only path throws away. Head orientation is
+    recoverable from them, so the gaze watcher needs no second model and no
+    second inference.
+
+    Selection: among faces tall enough for the yaw to mean anything
+    (GAZE_MIN_FACE_PX — below it the landmarks span a few pixels and the angle
+    is arithmetic on rounding error), take the one nearest the frame centre.
+    Largest-face would hand the gate to whoever leans in closest, which is the
+    user only by convention; the lamp's own aim is the better prior for which
+    face is the one it is pointed at. With one qualifying face the two policies
+    agree, so this only bites when a second person genuinely shares the desk.
+
+    Falls back to the largest face when nobody clears the size floor: the
+    caller reads the bbox for vertical re-aim as well as for the gate, and that
+    correction is most needed exactly when every face is too small to measure.
 
     Deliberately quiet: this runs on a loop, and logging every sample the way
     _detect_face_yunet does would bury the journal.
@@ -256,7 +269,12 @@ def detect_face_with_landmarks(
         return None
     if faces is None or len(faces) == 0:
         return None
-    best = max(faces, key=lambda f: float(f[2]) * float(f[3]))
+    cx = float(w) / 2.0
+    measurable = [f for f in faces if float(f[3]) >= config.GAZE_MIN_FACE_PX]
+    if measurable:
+        best = min(measurable, key=lambda f: abs((float(f[0]) + float(f[2]) / 2.0) - cx))
+    else:
+        best = max(faces, key=lambda f: float(f[2]) * float(f[3]))
     x, y, fw, fh = int(best[0]), int(best[1]), int(best[2]), int(best[3])
     x = max(0, x); y = max(0, y)
     fw = max(1, min(fw, w - x)); fh = max(1, min(fh, h - y))
