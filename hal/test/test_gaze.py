@@ -659,6 +659,30 @@ def test_a_service_that_knows_nothing_of_idle_is_treated_as_moving():
     assert gaze.idle_breathing(object()) is False
 
 
+def test_a_tracking_pursuit_does_not_count_as_a_move_either(monkeypatch):
+    """Tracking writes the arm every frame, so settling was never stale.
+
+    That put the whole of tracking back behind the settling test, through the
+    back door, after that test was written specifically not to use
+    `_tracking_active` — measured with tracking up: 0.7 samples/s against
+    4.5/s blocked, and a user at yaw 0.9 deg with a 130 px face dead centre
+    refused for having one sample in the window instead of two.
+    """
+    from hal.drivers.tracking import aim
+
+    svc = _MovingSvc(ago=aim.FRAME_SETTLE_S / 2.0, tracking=True)
+    assert gaze.following_a_face(svc) is True
+    assert _sample_reason(svc, monkeypatch) == "detector busy with a live look"
+
+
+def test_a_body_doing_neither_is_still_treated_as_moving(monkeypatch):
+    from hal.drivers.tracking import aim
+
+    svc = _MovingSvc(ago=aim.FRAME_SETTLE_S / 2.0, tracking=False)
+    assert gaze.following_a_face(svc) is False
+    assert _sample_reason(svc, monkeypatch) == "head still settling from a move"
+
+
 def test_a_blocked_turn_is_reported_as_blocked_not_as_a_sample(monkeypatch):
     """The loop's rate figure must count evidence, not attempts.
 

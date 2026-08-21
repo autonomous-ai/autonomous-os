@@ -396,6 +396,27 @@ def _anchor_idle_here(svc: Any, pitch: Optional[float] = None) -> None:
     )
 
 
+def following_a_face(svc: Any) -> bool:
+    """Whether the servo writes are a tracking session pursuing the user.
+
+    Tracking writes the arm every frame to keep a person centred, so
+    `last_servo_write` is never stale while it runs — which put the whole of
+    tracking back behind the settling test, through the back door, after that
+    test was written specifically NOT to use `_tracking_active`. Device-
+    measured with tracking up: 0.7 samples/s recorded against 4.5/s blocked,
+    and a user at yaw 0.9 deg with a 130 px face dead centre was refused for
+    having one sample in the window instead of two.
+
+    The reason the original rule rejected `_tracking_active` still holds, and
+    is stronger here than for idle: tracking is the lamp FOLLOWING this user's
+    face. Refusing to notice they are addressing it, precisely then, is the
+    most broken-looking moment available. A pursuit is also a small continuous
+    correction rather than a relocation — the same shape as idle breathing, for
+    the same reason the yaw survives it.
+    """
+    return bool(svc is not None and getattr(svc, "_tracking_active", False))
+
+
 def idle_breathing(svc: Any) -> bool:
     """Whether the only thing writing the servos is the idle loop looping.
 
@@ -472,7 +493,7 @@ def _sample_once() -> Optional[str]:  # noqa: C901
     last_write = getattr(svc, "last_servo_write", 0.0)
     if isinstance(last_write, (int, float)) and last_write > 0:
         if (time.monotonic() - float(last_write)) < aim.FRAME_SETTLE_S:
-            if not idle_breathing(svc):
+            if not (idle_breathing(svc) or following_a_face(svc)):
                 return "head still settling from a move"
 
     # Non-blocking: a live look must never wait behind a background sample.
@@ -767,7 +788,11 @@ def _maybe_repoint(now: float) -> None:
 def _loop() -> None:
     interval = 1.0 / max(0.5, config.GAZE_SAMPLE_FPS)
     counted = 0
-    blocked = 0
+    # Blocked turns BY REASON. One total says evidence is being lost; it does
+    # not say which gate is losing it, and the two are fixed in different
+    # places — this cost a round of guessing at 4.5/s blocked before the cause
+    # was pinned on the settling test rather than on the detector lock.
+    blocked: Dict[str, int] = {}
     counted_from = 0.0
     # Let the camera and detector finish warming before the first sample.
     if _stop.wait(10.0):
@@ -806,18 +831,22 @@ def _loop() -> None:
                 if skipped is None:
                     counted += 1
                 else:
-                    blocked += 1
+                    blocked[skipped] = blocked.get(skipped, 0) + 1
                 if counted_from <= 0.0:
                     counted_from = now
                 elif (now - counted_from) >= 60.0:
                     elapsed = now - counted_from
+                    why = ", ".join(
+                        f"{n / elapsed:.1f}/s {reason}"
+                        for reason, n in sorted(
+                            blocked.items(), key=lambda kv: -kv[1]
+                        )
+                    ) or "nothing blocked"
                     logger.info(
-                        "[gaze] sampling at %.1f/s (asked %.1f/s), %.1f/s more "
-                        "frames blocked before they could be measured",
-                        counted / elapsed, config.GAZE_SAMPLE_FPS,
-                        blocked / elapsed,
+                        "[gaze] sampling at %.1f/s (asked %.1f/s); blocked: %s",
+                        counted / elapsed, config.GAZE_SAMPLE_FPS, why,
                     )
-                    counted, blocked, counted_from = 0, 0, now
+                    counted, blocked, counted_from = 0, {}, now
                 # Framing first: a face inside the frame is what everything
                 # else is measured from, and turning to a bearing that still
                 # points at the desk finds nobody however right the bearing is.
