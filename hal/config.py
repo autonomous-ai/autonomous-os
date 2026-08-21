@@ -803,6 +803,17 @@ REALTIME_NOISE_SPEECH_RATIO: float = float(
 REALTIME_REQUIRE_TRANSCRIPT: bool = os.environ.get(
     "HAL_REALTIME_REQUIRE_TRANSCRIPT", "true"
 ).lower() in ("1", "true", "yes")
+# Noise guard for turns that DO have a transcript. The guards above only run when
+# STT came back empty, so a noise turn whose STT invented a word ("Ừ", "Okay",
+# "Thank you" — nova-3 reports confidence 1.0 for these) bypasses every check and
+# commits. Backend telemetry sees those as turns of pure noise. Fabrications are
+# short, so when a transcript has at most this many words the Silero voiced-ratio
+# guard runs on it too, and the turn is dropped if the audio was not speech. A
+# real short command ("bật đèn") is voiced and still passes. 0 disables the check;
+# raising it puts longer real utterances at the mercy of the voiced-ratio floor.
+REALTIME_NOISE_GUARD_MAX_WORDS: int = int(
+    os.environ.get("HAL_REALTIME_NOISE_GUARD_MAX_WORDS", "3")
+)
 # Turn detection / VAD: "server_vad" | "semantic_vad" | "off"
 # For Gemini: "off" disables automatic activity detection; any other value enables it.
 # For OpenAI: maps to turn_detection type in session config.
