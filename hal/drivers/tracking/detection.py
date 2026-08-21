@@ -8,6 +8,7 @@ ORIGINAL camera coordinates as (x, y, w, h), or None.
 import base64
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -198,6 +199,35 @@ def _iou_xyxy(a, b) -> float:
     return inter / (area_a + area_b - inter)
 
 
+def _measurable_faces(faces) -> list:
+    """The detector rows whose box is a real number, dropping the rest.
+
+    YuNet can return a non-finite bbox — device-observed on a face leaving the
+    frame while tracking (offset past 25% of the frame, bbox_area down to 1.9%,
+    conf 0.29): the row came back with an infinite coordinate and `int()` on it
+    raised OverflowError, killing the tracker's detect thread mid-session.
+
+    Dropping the row rather than clamping it is the honest reading: infinity is
+    not a very large face, it is the detector saying nothing usable, and the
+    callers already have a "no face this frame" path that behaves correctly.
+
+    The filter runs BEFORE the largest / nearest-centre choice on purpose. An
+    infinite width wins any largest-by-area contest, so filtering afterwards
+    would let one bad row hide a perfectly good face behind it.
+    """
+    if faces is None:
+        return []
+    out = []
+    for f in faces:
+        try:
+            box = [float(v) for v in f[:4]]
+        except (TypeError, ValueError):
+            continue
+        if all(math.isfinite(v) for v in box):
+            out.append(f)
+    return out
+
+
 def _detect_face_yunet(frame: npt.NDArray[np.uint8]) -> Optional[Tuple[int, int, int, int]]:
     """Run YuNet on the frame, return the largest face bbox (x,y,w,h) or None.
 
@@ -216,7 +246,8 @@ def _detect_face_yunet(frame: npt.NDArray[np.uint8]) -> Optional[Tuple[int, int,
     except Exception as e:
         logger.warning("YuNet detect failed: %s", e)
         return None
-    if faces is None or len(faces) == 0:
+    faces = _measurable_faces(faces)
+    if len(faces) == 0:
         logger.info("[tracking_yunet] not found latency=%.0fms", latency_ms)
         return None
     # faces rows: [x, y, w, h, lm_x1..lm_y5, score]. Pick the largest by area.
@@ -267,7 +298,8 @@ def detect_face_with_landmarks(
     except Exception as e:
         logger.debug("YuNet landmark detect failed: %s", e)
         return None
-    if faces is None or len(faces) == 0:
+    faces = _measurable_faces(faces)
+    if len(faces) == 0:
         return None
     cx = float(w) / 2.0
     measurable = [f for f in faces if float(f[3]) >= config.GAZE_MIN_FACE_PX]

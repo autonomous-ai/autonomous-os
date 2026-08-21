@@ -204,6 +204,39 @@ def test_no_detections_is_still_none(monkeypatch):
     assert _detect(monkeypatch, []) is None
 
 
+def test_an_infinite_box_is_dropped_instead_of_crashing_the_detector(monkeypatch):
+    """Device-observed: YuNet returned a non-finite bbox and int() raised.
+
+        detection.py:224  x, y, fw, fh = int(best[0]), ...
+        OverflowError: cannot convert float infinity to integer
+
+    It killed the tracker's detect thread mid-session, on a face leaving the
+    frame (offset past 25% of the frame, bbox_area 1.9%, conf 0.29).
+    """
+    h = config.GAZE_MIN_FACE_PX * 2
+    rows = [_face_row(x=float("inf"), w=h, h=h), _face_row(x=200, w=h, h=h)]
+    (fx, _, _, fh), _ = _detect(monkeypatch, rows)
+    assert (fx, fh) == (200, h)
+
+
+def test_an_infinite_box_cannot_hide_the_real_face_behind_it(monkeypatch):
+    """Infinity wins any largest-by-area contest, so it must be filtered out
+    BEFORE the choice is made, not after."""
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    rows = [_face_row(x=10, w=float("inf"), h=float("inf")),
+            _face_row(x=300, w=60, h=60)]
+    monkeypatch.setattr(detection, "_get_yunet", lambda: _FakeYuNet(rows))
+    assert detection._detect_face_yunet(frame) == (300, 0, 60, 60)
+
+
+def test_every_box_unusable_reads_as_no_face(monkeypatch):
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    rows = [_face_row(x=float("nan"), w=60, h=60)]
+    monkeypatch.setattr(detection, "_get_yunet", lambda: _FakeYuNet(rows))
+    assert detection._detect_face_yunet(frame) is None
+    assert _detect(monkeypatch, rows) is None
+
+
 # --- the rolling buffer -----------------------------------------------------
 
 
