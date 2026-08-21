@@ -495,9 +495,21 @@ class AnimationService:
                 progress = 1.0 - (self._interpolation_frames / denom)
                 progress = max(0.0, min(1.0, progress))
                 
-                # Interpolate between current state and target
+                # Anchor the TARGET, never the interpolated result. _current_state
+                # always holds an already-anchored pose, and _interpolation_target
+                # is the raw first frame, so shifting the blend of the two applied
+                # the anchor offset a second time to the part that came from
+                # _current_state: at progress 0 the very first command was
+                # `current + offset`, a whole-offset jump in one frame before the
+                # recording had played anything. With gaze anchoring idle that
+                # offset is the distance between the recording's baseline and
+                # where gaze wants the head — over 180 deg for a recording
+                # authored around wrist_pitch -186. Both ends of the blend live
+                # in anchored space now, so progress 0 is exactly the current
+                # pose and the move starts from standstill.
+                target = self._anchor_action(self._interpolation_target)
                 interpolated_action = {}
-                for joint in self._interpolation_target.keys():
+                for joint in target.keys():
                     # Default 0 is unsafe if _current_state is incomplete (see _sync_state_from_hardware).
                     current_val = self._current_state.get(joint) if self._current_state else None
                     if current_val is None:
@@ -506,10 +518,9 @@ class AnimationService:
                             joint,
                         )
                         current_val = 0.0
-                    target_val = self._interpolation_target[joint]
+                    target_val = target[joint]
                     interpolated_action[joint] = current_val + (target_val - current_val) * progress
-                
-                interpolated_action = self._anchor_action(interpolated_action)
+
                 with self.bus_lock:
                     self.robot.send_action(interpolated_action)
                 self._current_state = interpolated_action.copy()
