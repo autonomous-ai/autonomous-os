@@ -53,6 +53,10 @@ from hal.realtime.voice_agent.base import VoiceAgentBase
 logger = logging.getLogger(__name__)
 
 DEFAULT_SAMPLE_RATE: int = 16000
+# How often the idle-close watchdog checks. Well under the shortest observed
+# provider-side idle death (86s), so the hang-up always lands first, and cheap
+# enough that polling costs nothing.
+IDLE_CLOSE_POLL_S: float = 10.0
 INITIAL_CONNECT_RETRY_DELAY_S: float = 2.0
 INITIAL_CONNECT_RETRY_MAX_DELAY_S: float = 60.0
 
@@ -262,6 +266,8 @@ class RealtimeOrchestrator:
         self._last_look_sent_monotonic: float = 0.0
         self._agent: VoiceAgentBase | None = None
         self._started: threading.Event = threading.Event()
+        self._idle_close_stop: threading.Event = threading.Event()
+        self._idle_close_thread: threading.Thread | None = None
         # A provider can be unreachable while HAL starts (network/DNS outage,
         # temporary quota error, upstream maintenance). VoiceAgentBase can only
         # reconnect after its send/receive loops exist, so a failure in its first
@@ -624,6 +630,81 @@ class RealtimeOrchestrator:
                 return
             delay_s = min(delay_s * 2, INITIAL_CONNECT_RETRY_MAX_DELAY_S)
 
+    def _idle_close_threshold(self) -> float:
+        """Seconds of no-turn before we close the session ourselves.
+
+        DELIBERATELY the same value as the pre-turn recycle. That is what makes
+        this free: any turn arriving past this threshold was already going to pay
+        a handshake, because prepare_turn() rebuilds anything staler than it. So
+        closing early costs nothing a turn would not have paid anyway -- it only
+        removes the window in which Gemini can kill the session first.
+
+        Do NOT give this its own knob. If the two drift apart, turns landing in
+        the gap between them start paying handshakes they did not pay before.
+        """
+        return config.REALTIME_GEMINI_PRE_TURN_RECYCLE_S
+
+    def _start_idle_close_loop(self) -> None:
+        """Watchdog: hang up an idle session before the provider does."""
+        if self._idle_close_thread is not None and self._idle_close_thread.is_alive():
+            return
+        self._idle_close_stop.clear()
+        self._idle_close_thread = threading.Thread(
+            target=self._idle_close_loop,
+            daemon=True,
+            name="rt-idle-close",
+        )
+        self._idle_close_thread.start()
+
+    def _idle_close_loop(self) -> None:
+        """Disconnect a session that has served no turn for the threshold.
+
+        Gemini closes a session it receives nothing on -- observed WS 1008 "The
+        operation was aborted" after 86-185s, with 107 of 113 such closes landing
+        on sessions that had served ZERO turns. HAL keeps sessions open between
+        turns for first-turn latency, and noise captures rejected by Silero/STT
+        never reach the model, so a "busy" device can still look silent upstream.
+
+        Hanging up first turns an upstream error into an ordinary local
+        disconnect. prepare_turn() reconnects on demand when someone speaks.
+        """
+        while not self._idle_close_stop.is_set():
+            if self._idle_close_stop.wait(IDLE_CLOSE_POLL_S):
+                return
+            threshold = self._idle_close_threshold()
+            if threshold <= 0 or not self._started.is_set():
+                continue
+            if config.REALTIME_PROVIDER.strip().lower() != "gemini":
+                continue
+            # Nothing to hang up, or no turn has happened yet: an unused session
+            # right after start is the pre-connect doing its job, and closing it
+            # would defeat the reason it exists.
+            if self._agent is None or self._last_turn_monotonic <= 0.0:
+                continue
+            if self.rebuilding:
+                continue
+            idle = time.monotonic() - self._last_turn_monotonic
+            if idle < threshold:
+                continue
+            with self._lifecycle_lock:
+                agent = self._agent
+                if agent is None or not self._started.is_set():
+                    continue
+                self._agent = None
+            logger.info(
+                "[realtime] %.0fs idle (>= %.0fs) — closing the Gemini session before "
+                "the provider does; the next turn reconnects",
+                idle,
+                threshold,
+            )
+            try:
+                agent.disconnect()
+            except Exception:
+                logger.exception("[realtime] Idle close failed")
+            # Stop re-firing every poll while still idle. prepare_turn() stamps a
+            # fresh value on the next real turn.
+            self._last_turn_monotonic = 0.0
+
     def start(self) -> None:
         """Create the agent based on config and connect."""
         provider: str = config.REALTIME_PROVIDER.strip().lower()
@@ -654,6 +735,7 @@ class RealtimeOrchestrator:
                 "[realtime] Failed to connect realtime agent — retrying in background"
             )
         self._started.set()
+        self._start_idle_close_loop()
         if not self.available:
             self._start_connect_retry_loop()
 
@@ -680,6 +762,7 @@ class RealtimeOrchestrator:
     def stop(self) -> None:
         """Disconnect the agent and summarize unsummarized memory."""
         self._connect_retry_stop.set()
+        self._idle_close_stop.set()
         with self._lifecycle_lock:
             self._started.clear()
             agent = self._agent
