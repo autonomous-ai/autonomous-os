@@ -659,6 +659,13 @@ turn ("hello") right after a restart would leak to the main agent.
      If `speak` returns busy (another non-interruptible TTS holds the
      speaker, e.g. an ambient nudge), the sentence falls back to
      `speak_queue` so the reply plays after it instead of being lost.
+     Queued agent speech is turn-aware: each entry carries a `turn_id` and
+     monotonically increasing `turn_seq`.
+     Accepting a newer run stops the active older utterance and removes its
+     pending entries, so the user hears the reply that is relevant now. A
+     delayed request from the superseded run is dropped rather than rejoining
+     the queue. `POST /tts/stop` likewise cancels both active playback and
+     every pending entry.
    - `DelegateSignal` → stop; forward `[voice-instruction] …` + transcript to the
      OS server with the original `event_type`.
    - Otherwise the turn was handled locally → the OS server is told
