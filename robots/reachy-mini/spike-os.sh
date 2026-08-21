@@ -71,19 +71,44 @@ say "1/4  Seed $CONFIG_DIR (config.json + bootstrap.json)"
 # provisioned yet" rather than an error. See ensure_bootstrap_config.
 ensure_bootstrap_config
 # Minimal config: the only fail-loud startup guard is device_type (server.go:
-# "device_type unresolved … refusing to assume 'lamp'"). Everything else
-# defaults and the web setup flow fills it in. Never overwrite an existing
-# config — it holds provisioning state, keys and channels.
+# "device_type unresolved … refusing to assume 'lamp'"). The rest the web setup
+# flow fills in. Never overwrite an existing config — it holds provisioning
+# state, keys and channels.
+#
+# openclaw_config_dir must be seeded explicitly. A key absent from config.json
+# does NOT pick up the Default() value in system/server/config/config.go — Load
+# and ProvideConfig unmarshal onto a zero-valued struct, so a missing key means
+# the empty string, not /root/.openclaw. Every gateway-token read is
+# filepath.Join(OpenclawConfigDir, "openclaw.json"), which with an empty dir
+# resolves to the RELATIVE "openclaw.json" → /root/openclaw.json under
+# WorkingDirectory=/root. That path never exists, so the token is never found,
+# the agent websocket reconnects every 5s forever and WaitForAgentReady never
+# returns. It fails silently: the join yields a valid path, just the wrong one.
 mkdir -p "$CONFIG_DIR"
 if [ -f "$CONFIG_DIR/config.json" ]; then
-  info "config.json already present — keeping it"
+  # Backfill only the missing key. Configs seeded by earlier runs of this script
+  # carry the same hole, so "keep what is there" alone would leave this robot
+  # broken even after a re-run.
+  if jq -e 'has("openclaw_config_dir") and .openclaw_config_dir != ""' \
+      "$CONFIG_DIR/config.json" >/dev/null 2>&1; then
+    info "config.json already present — keeping it"
+  else
+    tmp="$(mktemp)"
+    jq '.openclaw_config_dir = "'"$OPENCLAW_CONFIG_DIR"'"' "$CONFIG_DIR/config.json" >"$tmp" \
+      || die "failed to backfill openclaw_config_dir into $CONFIG_DIR/config.json"
+    chmod 600 "$tmp"
+    mv "$tmp" "$CONFIG_DIR/config.json"
+    info "config.json kept; backfilled openclaw_config_dir=$OPENCLAW_CONFIG_DIR"
+  fi
 else
   cat >"$CONFIG_DIR/config.json" <<JSON
 {
   "httpPort": 5000,
-  "device_type": "$DEVICE_TYPE"
+  "device_type": "$DEVICE_TYPE",
+  "openclaw_config_dir": "$OPENCLAW_CONFIG_DIR"
 }
 JSON
+  chmod 600 "$CONFIG_DIR/config.json"
   info "seeded config.json for device_type=$DEVICE_TYPE"
 fi
 

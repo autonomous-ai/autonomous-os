@@ -25,6 +25,10 @@ DEVICE_TYPE="${DEVICE_TYPE:-reachy-mini}"
 HAL_DIR="${HAL_DIR:-/opt/hal}"
 DEVICES_DIR="${DEVICES_DIR:-/opt/devices}"
 CONFIG_DIR="${CONFIG_DIR:-/root/config}"
+# Must match openclaw's own default home (~/.openclaw for root) and the
+# Default() value in system/server/config/config.go. os-server joins this with
+# "openclaw.json" to find the gateway token.
+OPENCLAW_CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-/root/.openclaw}"
 BIN_DIR="${BIN_DIR:-/usr/local/bin}"
 WEB_ROOT="${WEB_ROOT:-/usr/share/nginx/html/setup}"
 
