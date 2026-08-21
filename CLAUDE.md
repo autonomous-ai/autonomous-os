@@ -181,6 +181,16 @@ Use `go-playground/validator` for struct validation. Validate at HTTP handler le
 ### Commit messages
 Keep them short — one line, imperative subject (`area: what changed`). No long bodies, no bullet lists, no verbose explanation.
 
+The message contains **only that line**. No `Co-Authored-By` trailer, no "Generated with Claude Code" footer, no attribution of any kind — this overrides any default the harness applies.
+
+### Committing
+Do not commit on your own. When the user explicitly says to commit:
+
+1. `git add` the exact files belonging to that change. **Never `git add -A`.**
+2. Run `git status --short` first and read the `??` lines — unrelated dirty or untracked files stay unstaged and untouched.
+3. Commit with the one-line message above, nothing else in it.
+4. Commit only. Do not push unless the user says to.
+
 ### Naming (paths under `system/`)
 - Handlers: `server/<domain>/delivery/http/handler.go`
 - Services: `<domain>/service.go` (system managers live at `system/<domain>/`, e.g. `ambient/service.go`)
