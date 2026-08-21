@@ -49,7 +49,7 @@ REST_RAW = {
     "base_pitch":  2030,
     "elbow_pitch": 2030,
     "wrist_roll":  2053,
-    "wrist_pitch": 2049,
+    "wrist_pitch": 1770,
 }
 
 # Duration for the startup/resume move (seconds)
