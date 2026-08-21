@@ -40,6 +40,18 @@ RESUME_STARTUP_RAW = {
     "wrist_pitch": 1809,  # -68.48° — mid=2588.0
 }
 
+# Gravity-rest position in raw encoder units — where release() parks the arm
+# before cutting torque, so it settles instead of dropping. Distinct from
+# ZERO_RAW: zero holds a presentable pose with torque ON, this one is chosen so
+# gravity has nowhere left to pull the arm once torque goes OFF.
+REST_RAW = {
+    "base_yaw":    2063,
+    "base_pitch":  1645,
+    "elbow_pitch": 1748,
+    "wrist_roll":  2067,
+    "wrist_pitch": 2125,
+}
+
 # Duration for the startup/resume move (seconds)
 STARTUP_MOVE_DURATION = 5.0
 
@@ -1129,16 +1141,8 @@ class AnimationService:
         self._running.clear()
         if self._event_thread and self._event_thread.is_alive():
             self._event_thread.join(timeout=3.0)
-        # Gravity-rest pose in raw encoder units.
-        rest_raw = {
-            "base_yaw":    2063,
-            "base_pitch":  1645,
-            "elbow_pitch": 1748,
-            "wrist_roll":  2067,
-            "wrist_pitch": 2125,
-        }
         try:
-            self.move_to_raw(rest_raw, duration=2.0)
+            self.move_to_raw(REST_RAW, duration=2.0)
         except Exception as e:
             logger.warning("Could not move to rest before release: %s", e)
         time.sleep(0.4)
