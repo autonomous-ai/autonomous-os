@@ -224,15 +224,26 @@ SCENE_PRESETS = {
 # every value here a function of range_min/range_max in the calibration JSON —
 # recalibrate a joint to a different span and the same number points somewhere else.
 #
-# Retuned on 21/08/2026 for the ranges in hal/calibration/robots/hal_follower/hal.json
-# as of `hal: recalibrate hal_follower servo ranges`. base_pitch and elbow_pitch went
-# from a narrow measured span (1608-3017 and 1651-3082) to the full 0-4095, which
-# moves their mid by ~265 and ~319 raw and rescales the whole axis, so every entry
-# below shifted; base_yaw, wrist_roll and wrist_pitch moved less but still moved.
-# Values were carried over by round-tripping each one through the OLD span to raw and
-# back through the NEW span, so the physical poses are the ones that were tuned by
-# hand — only the numbers naming them changed. Redo that round-trip after the next
-# recalibration; do not hand-edit one joint and leave the rest.
+# Recaptured by hand on 21/08/2026, on the arm as recalibrated by
+# `hal: recalibrate hal_follower servo ranges`: the head was driven to each pose
+# from the Manual Move sliders in the web monitor and the slider values written
+# down here.
+#
+# They were NOT converted from the previous set, and a future recalibration must
+# not convert them either. Converting looks correct and is not: the obvious
+# transform holds the raw encoder tick constant across the range change, but the
+# servo reports Present_Position = Actual - Homing_Offset, and a hand
+# recalibration rewrites Homing_Offset in the servo's own EEPROM. Same tick,
+# different physical pose. That conversion was tried here first and produced a
+# set where only left and right looked right — the two aims dominated by the one
+# joint whose span barely moved (base_yaw), while every pitch was visibly off.
+#
+# So: after a recalibration, drive the head to each pose and write down what the
+# sliders say. It takes eight poses and it is the only method that can be checked
+# by looking at the lamp.
+#
+# left and right below are still the converted values and are known to be wrong;
+# they are pending a hand capture like the rest.
 AIM_PRESETS = {
     AIM_CENTER: {"base_yaw.pos": 0.0, "base_pitch.pos": 25.0, "elbow_pitch.pos": 43.0, "wrist_roll.pos": 10.0,
                  "wrist_pitch.pos": 30.0},
@@ -244,10 +255,10 @@ AIM_PRESETS = {
                "wrist_pitch.pos": 52.07},
     AIM_RIGHT: {"base_yaw.pos": 88.36, "base_pitch.pos": 2.62, "elbow_pitch.pos": 35.5, "wrist_roll.pos": 10.06,
                 "wrist_pitch.pos": 52.07},
-    AIM_UP: {"base_yaw.pos": 1.39, "base_pitch.pos": 16.38, "elbow_pitch.pos": 40.04, "wrist_roll.pos": 10.06,
-             "wrist_pitch.pos": 46.66},
-    AIM_DOWN: {"base_yaw.pos": 1.39, "base_pitch.pos": -8.37, "elbow_pitch.pos": -9.23, "wrist_roll.pos": 10.06,
-               "wrist_pitch.pos": -1.41},
+    AIM_UP: {"base_yaw.pos": -0.4, "base_pitch.pos": 39.0, "elbow_pitch.pos": 65.0, "wrist_roll.pos": 8.9,
+             "wrist_pitch.pos": 27.9},
+    AIM_DOWN: {"base_yaw.pos": 0.0, "base_pitch.pos": 8.0, "elbow_pitch.pos": 15.0, "wrist_roll.pos": 5.0,
+               "wrist_pitch.pos": -8.0},
     AIM_USER: {"base_yaw.pos": 0.0, "base_pitch.pos": 26.0, "elbow_pitch.pos": 33.0, "wrist_roll.pos": 10.0,
                "wrist_pitch.pos": -38.0},
 }
