@@ -98,6 +98,10 @@ def dispatch_turn(
       delegated → forward the agent's instruction summary + STT transcript.
       neither   → send the plain transcript so the main agent answers.
 
+    ``rt.route`` records WHICH of those happened and why (see the ROUTE_* values
+    in realtime_turn); it is logged once per turn as ``[turn] route=…`` and does
+    not affect routing itself.
+
     ``audio_buffer`` is the trimmed buffer (speaker recognition); ``ser_audio_buffer``
     is the untrimmed snapshot (SER keeps laughter / sighs).
 
@@ -125,6 +129,25 @@ def dispatch_turn(
     if event_type_override is not None:
         event_type = event_type_override
     user = UNKNOWN_USER_LABEL
+
+    # One line per turn saying where it went and why. Every branch below leads
+    # somewhere different, but only the delegated one used to announce itself —
+    # so a turn answered by the main agent because the realtime session had died
+    # looked identical in the journal to one the model deliberately handed off.
+    # Grep `[turn] route=` to follow any turn end to end.
+    if rt.handled:
+        destination = "realtime (main agent notified, stays silent)"
+    elif not combined:
+        destination = "nowhere (no transcript — nothing to send)"
+    else:
+        destination = "main agent"
+    logger.info(
+        "[turn] route=%s → %s (event=%s, stt=%r)",
+        rt.route,
+        destination,
+        event_type,
+        combined[:80] if combined else "(empty)",
+    )
 
     if combined:
         # Reuse the prepass result when the realtime path already identified the
