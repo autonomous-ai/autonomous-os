@@ -133,10 +133,12 @@ bỏ qua bước trả media — thiếu nó thì daemon nằm im, câm và mù,
 stack của Pollen.
 
 Một tác dụng phụ đã đo: handler `release` của daemon reset luôn mixer của card về
-mức của nó (90% trước khi gọi, 62% sau). Driver đọc lại mức đã persist và ghi
-xuống qua route `/audio/volume` ngay sau release, nếu không một lần restart HAL
-đơn thuần sẽ để loa ở mức của Pollen trong khi slider, file state và agent đều
-vẫn báo mức của người dùng.
+mức của nó (90% trước khi gọi, 62% sau). Driver ghi mức đúng xuống qua route
+`/audio/volume` ngay sau release, nếu không một lần restart HAL đơn thuần sẽ để
+loa ở mức của Pollen trong khi slider, file state và agent đều vẫn báo mức của
+người dùng. Có mức đã persist thì lấy mức đó; chưa có thì lấy `startup_volume`
+trong ROBOT.md của thân máy — máy chưa ai đụng slider mà bỏ qua sẽ nằm luôn ở
+mức −23 dB của daemon, và lần boot đầu của người dùng mới đọc y như hỏng loa.
 
 Việc này đi kèm — chứ không thay thế — `media_backend="no_media"` của SDK, vì
 tham số đó chỉ ngăn *SDK client* giành media.
