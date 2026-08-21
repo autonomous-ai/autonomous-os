@@ -25,6 +25,21 @@ STT pipeline. At end-of-turn the model either:
 The `delegate_to_main` tool is registered automatically by the orchestrator
 (`orchestrator.py`, `DELEGATE_TOOL`).
 
+**Delegating is not the only way a turn reaches the main agent**, which is why
+every turn logs one routing line — `[turn] route=<why> → <where>` from
+`turn_dispatch.py`. Grep `[turn] route=` in the HAL journal to follow any turn
+end to end. The values (`ROUTE_*` in `realtime_turn.py`):
+
+| `route=` | Where the turn went |
+|---|---|
+| `realtime_handled` | Realtime spoke it. The main agent gets `voice_agent_handled` and stays silent. |
+| `delegated` | The model called `delegate_to_main`. |
+| `realtime_no_output` | Committed, but nothing came back (`receive()` timeout, dead WS) — main agent answers. |
+| `realtime_error` | The turn raised; forwarded rather than lost. |
+| `realtime_unavailable` | No live session to commit to — main agent answers. |
+| `noise_dropped` | The noise guard rejected it; never committed, and with no transcript it reaches nobody. |
+| `realtime_not_started` | Realtime off, or no turn was opened for this capture. |
+
 On a delegate call, `stream_output()` **breaks the turn immediately** after
 yielding the `DelegateSignal` — it does *not* wait for the model's
 `turn_complete`. The model has nothing more to say once it delegates, so
@@ -798,6 +813,7 @@ is a top-level `config.json` flag:
 | `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` | `20.0` | Silent-turn watchdog used instead of the default for turns where a `look` fired (per-turn, via `extend_recv_timeout()`). Gemini's forced thinking over a text-dense frame can stay silent >8 s right before the answer — the default watchdog was killing those turns |
 | `HAL_REALTIME_REQUIRE_TRANSCRIPT` | `true` | Never commit an empty-STT turn to the model. Real speech that nova-3 missed (short utterances) is voiced and passes the VAD/Silero guards, so committing its raw audio makes the model invent a reply to silence (a generic greeting, often with a name nobody said). When `true`, any empty-STT turn is dropped regardless of duration/voicing — silence beats a wrong reply. Set `false` to fall back to the Silero-gated audio-only path below. |
 | `HAL_REALTIME_MIN_COMMIT_DURATION_S` | `0.8` | Sessions shorter than this with no STT transcript are treated as VAD noise and not committed to the model. Only consulted when `HAL_REALTIME_REQUIRE_TRANSCRIPT=false`. |
+| `HAL_REALTIME_NOISE_GUARD_MAX_WORDS` | `3` | Extends the Silero voiced-ratio guard to turns that DO have a transcript, up to this many words. STT invents a short filler out of room noise and reports full confidence for it, so such a turn used to bypass every guard (they all only ran on an empty transcript) and commit pure noise to the model. A transcript of at most this many words is re-checked against `HAL_REALTIME_NOISE_SPEECH_RATIO` and dropped when the audio was never voiced; a real short command is voiced and still commits. Longer transcripts are never re-checked, so the voiced-ratio floor can't silence a real utterance. `0` disables. |
 | `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Cost control: when a turn arrives after this many seconds of silence, recycle (rebuild) the session **after** that turn so the next turn drops the per-turn context the provider re-bills on a long-lived session. A post-pause turn is effectively a new conversation; long-term continuity survives via the reloaded `summary.md`. For native-audio Gemini, this is skipped when a successful pre-turn recycle already made the same idle gap fresh. `0` disables. Reuses the zombie-recovery rebuild path. |
 | `HAL_GEMINI_SESSION_RESUMPTION` | `false` | Resume the same Gemini session across reconnects. OFF by default — the `campaign-api` proxy doesn't forward the resumption handshake, so resuming through it yields a zombie session (cold reconnects work). Enable only against an endpoint that supports it. |
 | `HAL_GEMINI_PRE_TURN_RECYCLE_S` | `120` | Gemini transport guard: when a new spoken turn starts after this much idle time, rebuild the Gemini session **before** streaming pre-roll/audio so the turn does not hit a proxy/SDK idle-dead socket. `0` disables. A successful pre-turn recycle suppresses the generic post-turn idle recycle for that same turn, so one idle gap creates at most one cost/transport rebuild. |

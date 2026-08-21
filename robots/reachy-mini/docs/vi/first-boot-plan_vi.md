@@ -341,7 +341,7 @@ HAL_SILERO_ENABLED=true
 HAL_SILERO_THRESHOLD=0.15             # ? chỉnh trên phần cứng thật
 HAL_SILERO_CHUNK_SIZE=512
 HAL_WEBRTCVAD_ENABLED=true
-HAL_WEBRTCVAD_AGGRESSIVENESS=0        # ? có thể cần cao hơn vì servo ồn
+HAL_WEBRTCVAD_AGGRESSIVENESS=2        # ? có thể cần 3 vì servo ồn
 HAL_WEBRTCVAD_FRAME_MS=30
 HAL_TTS_SPEED=1.1
 
@@ -386,8 +386,8 @@ OPENBLAS_NUM_THREADS=1
 **Câu hỏi chỉnh sửa quan trọng trên phần cứng thật**:
 
 1. **Ngưỡng VAD**: Servo motors của Reachy có thể tạo nhiều tiếng ồn cơ khí
-   hơn servo Feetech của Lamp. Có thể cần `HAL_WEBRTCVAD_AGGRESSIVENESS=1`
-   hoặc cao hơn.
+   hơn servo Feetech của Lamp. Gate đang ở default của code là 2; servo ồn
+   có thể cần `HAL_WEBRTCVAD_AGGRESSIVENESS=3`.
 2. **Echo floor**: Loa 5W so với 3W của Lamp — `HAL_ECHO_RMS_FLOOR` có thể cần
    tăng để tránh tự kích hoạt khi phát TTS.
 3. **Camera**: nếu Pi Camera v3 dùng libcamera, `VideoCapture(index)` của OpenCV

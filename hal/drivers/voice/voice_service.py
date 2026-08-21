@@ -34,10 +34,13 @@ from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
 from hal.drivers.voice._internal.audio_recorder import ArecordStream
 from hal.drivers.voice._internal.realtime_turn import (
+    ROUTE_NOISE_DROPPED,
+    ROUTE_NOT_STARTED,
     RealtimeTurnResult,
     build_speaker_correction,
     build_turn_context,
     is_noise_turn,
+    needs_noise_guard,
     run_realtime_turn,
     should_dispatch_to_main,
 )
@@ -1559,14 +1562,15 @@ class VoiceService:
                         "Wake-word partial rejected — no matching final STT result; dropping turn"
                     )
 
-            # Noise guard for empty-STT turns: a session can open on a noise blip
-            # that fools the entry VAD, then STT finds no words. Re-check the FULL
-            # captured buffer with Silero; if it isn't speech, run_realtime_turn
-            # treats it as noise and skips the commit (no self-talk, no wasted
-            # tokens). Fail-open: any error → leave it True (don't drop a real turn).
+            # Noise guard: a session can open on a noise blip that fools the entry
+            # VAD, and STT then either finds no words or invents a short filler for
+            # it. Re-check the FULL captured buffer with Silero; if it isn't speech,
+            # run_realtime_turn treats it as noise and skips the commit (no
+            # self-talk, no wasted tokens, no noise-only turns reaching the model).
+            # Fail-open: any error → leave it True (don't drop a real turn).
             rt_audio_is_speech = True
             if (
-                not combined
+                needs_noise_guard(combined)
                 and hal_config.REALTIME_REQUIRE_SPEECH_ON_EMPTY_STT
                 and audio_buffer
             ):
@@ -1576,8 +1580,9 @@ class VoiceService:
                     )
                     rt_audio_is_speech = self._rt_noise_is_speech(pcm)
                     logger.info(
-                        "[realtime] noise-guard ran: empty STT, silero_speech=%s "
+                        "[realtime] noise-guard ran: stt=%r, silero_speech=%s "
                         "(samples=%d, dur=%.2fs)",
+                        combined[:40] if combined else "(empty)",
                         rt_audio_is_speech, len(pcm), buf_duration,
                     )
                 except Exception as e:
@@ -1639,7 +1644,8 @@ class VoiceService:
                 if not realtime_turn_started:
                     logger.info(
                         "[realtime] Noise turn — not opening realtime turn after capture "
-                        "(empty STT, silero_speech=%s, dur=%.2fs); nothing sent to model",
+                        "(stt=%r, silero_speech=%s, dur=%.2fs); nothing sent to model",
+                        combined[:40] if combined else "(empty)",
                         rt_audio_is_speech,
                         buf_duration,
                     )
@@ -1728,7 +1734,16 @@ class VoiceService:
                     rt_audio_is_speech,
                 )
             else:
-                rt = RealtimeTurnResult()
+                # No realtime turn was opened this capture. Distinguish the two
+                # reasons in the routing log: the noise guard rejected it, or
+                # realtime was off / never armed.
+                rt = RealtimeTurnResult(
+                    route=(
+                        ROUTE_NOISE_DROPPED
+                        if is_noise_turn(combined, buf_duration, rt_audio_is_speech)
+                        else ROUTE_NOT_STARTED
+                    )
+                )
 
             # --- OS server send + SER (reuses the prepass speaker-ID) ----------
             # Re-check the focus instead of trusting only the session-start
