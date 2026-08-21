@@ -1353,23 +1353,37 @@ GAZE_REPOINT_MIN_CONFIDENCE: float = float(
 #   elbow_pitch  0.2 px of vertical effect
 #   wrist_pitch  -70.6 -> -55 -> -45 raised it steadily, bringing a face that
 #                was clipped by the frame edge fully into view at 91 px
-# So: wrist_pitch, increasing tilts up. Note the tracker's own pitch weights
+# So: wrist_pitch is the neck. The DIRECTION recorded above did not survive a
+# paired re-measurement: holding the bus quiet and taking 18 face samples per
+# position, interleaved, -75 -> -90 moved the face DOWN the frame (+0.103) and
+# -68 -> -98 likewise (+0.185). Decreasing the joint tilts the camera UP. See
+# _maybe_pitch in gaze.py, where the correction now carries that sign.
+# Note the tracker's own pitch weights
 # spread across base and elbow with PITCH_WEIGHT_WRIST = 0.0, which is likely
 # why this joint was never the one anybody reached for.
-# OFF. Kept because the measurement behind it stands, but the loop it feeds
-# does not: camera direction depends on base_pitch and wrist_pitch TOGETHER —
-# the arm folds at its base, so that joint rotates AND translates the camera and
-# the same wrist angle points somewhere different for every base angle. Driving
-# one joint per-degree against a coupled two-link arm, with no kinematic model,
-# walked the head to its limit while still missing the user.
+# ON, after being off. The objection that turned it off was real and is worth
+# keeping written down: camera direction depends on base_pitch and wrist_pitch
+# TOGETHER — the arm folds at its base, so that joint rotates AND translates the
+# camera, and the same wrist angle points somewhere different for every base
+# angle. Driving one joint per-degree against a coupled two-link arm, with no
+# kinematic model, walked the head to its limit while still missing the user.
 #
-# The device already has the right mechanism for this and it needs no model: the
-# remembered bearing stores a FULL pose, and restoring it is one absolute move.
-# What was wrong was never the aiming, it was that the pose had been learned
-# from `person` boxes and so pointed at a torso. Fix the learning and the
-# posture comes back for free — see bearing_sampler.
+# What changed is not the kinematics, it is that the corrections stopped being
+# undone between steps. Two things were erasing them: the repoint re-anchoring
+# idle on a remembered wrist angle recorded minutes earlier, and the idle loop
+# pulling back toward the pose the recording was made at. With both fixed the
+# loop converges instead of walking — device-measured, one run, three steps:
+# 45% above centre -> 21% -> 16%, each starting exactly where the last left off.
+#
+# It is still open-loop against a coupled arm, so the limit case remains real:
+# the same session drove wrist_pitch to -90.6 and sat on the mechanical stop
+# before recovering. The per-step cap and the blind-step budget are what bound
+# that, not any model of the arm. The remembered bearing (a full pose, restored
+# in one absolute move — see bearing_sampler) is still the better mechanism when
+# a pose has actually been learned; this loop is what gets a face into frame in
+# the first place, so a pose worth remembering can be learned at all.
 GAZE_PITCH_ENABLED: bool = (
-    os.environ.get("HAL_GAZE_PITCH", "false").lower() in ("1", "true", "yes")
+    os.environ.get("HAL_GAZE_PITCH", "true").lower() in ("1", "true", "yes")
 )
 # Degrees of wrist_pitch per FULL frame height. A seed, not a calibration: the
 # correction re-measures itself every step because it moves and then looks

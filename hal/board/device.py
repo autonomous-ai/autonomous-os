@@ -32,6 +32,12 @@ logger = logging.getLogger("hal.device")
 SCHEMA_NAMESPACE = "autonomous.device"
 SUPPORTED_SCHEMA_MAJORS = frozenset({1})
 
+# Speaker level a device boots at when its ROBOT.md declares no
+# `startup_volume`. 100% means software at max, so the hardware/alsactl level
+# is the effective control. Fail-safe to max, never to silent. Must stay equal
+# to Go's device.DefaultStartupVolume (system/device/devicemd.go).
+DEFAULT_STARTUP_VOLUME = 100
+
 _RE_SCHEMA = re.compile(r"^schema:\s*(\S+)\s*$", re.MULTILINE)
 _RE_SCHEMA_VERSION = re.compile(r"^" + re.escape(SCHEMA_NAMESPACE) + r"\.v(\d+)$")
 
@@ -104,6 +110,19 @@ def _parse_scalar(front_matter: str, key: str) -> str:
     """A top-level `key: value` scalar from the front matter, trimmed, or ''."""
     m = re.search(r"^" + re.escape(key) + r":\s*(.+?)\s*$", front_matter, re.MULTILINE)
     return m.group(1) if m else ""
+
+
+def _parse_startup_volume(front_matter: str) -> int:
+    """The `startup_volume:` (0-100) scalar, or DEFAULT_STARTUP_VOLUME when it
+    is absent or out of range. Mirrors Go's device.StartupVolume — same field,
+    same fallback — because both runtimes restore the speaker level and must
+    not disagree about what this body's level is."""
+    raw = _parse_scalar(front_matter, "startup_volume")
+    try:
+        v = int(raw)
+    except ValueError:
+        return DEFAULT_STARTUP_VOLUME
+    return v if 0 <= v <= 100 else DEFAULT_STARTUP_VOLUME
 
 
 def _parse_memory_backend(front_matter: str) -> str:
@@ -195,6 +214,7 @@ class DeviceProfile:
     boards: List[str]
     safety_ref: str
     memory_backend: str
+    startup_volume: int
     capabilities: Dict[str, Capability]
 
     def declared_routes(self) -> Dict[str, bool]:
@@ -244,6 +264,7 @@ def parse_device(device_type: str, text: str) -> DeviceProfile:
         boards=parse_boards(front_matter),
         safety_ref=_parse_scalar(front_matter, "safety_ref"),
         memory_backend=_parse_memory_backend(front_matter),
+        startup_volume=_parse_startup_volume(front_matter),
         capabilities=capabilities,
     )
 

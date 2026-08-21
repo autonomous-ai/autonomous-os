@@ -841,17 +841,22 @@ def neck(monkeypatch):
 
 
 def test_a_face_above_centre_tilts_the_camera_up(neck):
-    """The case that made the lamp stare at the keyboard all afternoon."""
+    """The case that made the lamp stare at the keyboard all afternoon.
+
+    Up is the DECREASING direction on this joint — device-measured, see
+    _maybe_pitch. Asserting the joint number rather than the word "up" is the
+    whole point: the sign is the thing that was wrong.
+    """
     gaze._last_dy_frac = -0.4
     gaze._maybe_pitch(gaze.time.monotonic())
     assert neck.moves, "a clipped-high face should raise the camera"
-    assert neck.moves[0]["wrist_pitch.pos"] > -70.0
+    assert neck.moves[0]["wrist_pitch.pos"] < -70.0
 
 
 def test_a_face_below_centre_tilts_the_camera_down(neck):
     gaze._last_dy_frac = 0.4
     gaze._maybe_pitch(gaze.time.monotonic())
-    assert neck.moves[0]["wrist_pitch.pos"] < -70.0
+    assert neck.moves[0]["wrist_pitch.pos"] > -70.0
 
 
 def test_a_face_near_enough_to_centre_is_left_alone(neck):
@@ -872,16 +877,16 @@ def test_one_correction_is_bounded(neck):
     gaze._last_dy_frac = -1.0
     gaze._maybe_pitch(gaze.time.monotonic())
     moved = neck.moves[0]["wrist_pitch.pos"] - (-70.0)
-    assert moved == pytest.approx(config.GAZE_PITCH_MAX_STEP_DEG)
+    assert moved == pytest.approx(-config.GAZE_PITCH_MAX_STEP_DEG)
 
 
 def test_the_correction_stays_inside_the_mechanical_range(neck):
     from hal.drivers.tracking import constants as C
 
-    neck.wrist = C.WRIST_PITCH_MAX - 1.0
+    neck.wrist = C.WRIST_PITCH_MIN + 1.0
     gaze._last_dy_frac = -1.0
     gaze._maybe_pitch(gaze.time.monotonic())
-    assert neck.moves[0]["wrist_pitch.pos"] <= C.WRIST_PITCH_MAX
+    assert neck.moves[0]["wrist_pitch.pos"] >= C.WRIST_PITCH_MIN
 
 
 def test_it_never_moves_a_body_something_else_owns(neck):

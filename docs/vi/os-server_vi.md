@@ -358,7 +358,8 @@ HAL (Python): FastAPI standard JSON responses.
    - Kết nối OpenClaw WebSocket
    - Kết nối MQTT
    - Start ambient behaviors
-   - Đặt volume loa theo `startup_volume` của thiết bị (front matter ROBOT.md, mặc định 100)
+   - Chờ HAL trả lời `GET :5001/health` (tối đa 120s) trước mọi lời gọi HAL. os-server bind :5000 sớm hơn hẳn lúc FastAPI của HAL lắng nghe, lần boot đầu còn phải dựng venv và load model, nên một lời gọi một-lần không có hàng rào sẽ mất trắng vì connection refused
+   - Đặt volume loa: mức user chỉnh gần nhất (HAL ghi lại mỗi lần `/audio/volume`) được ưu tiên; không có thì lấy `startup_volume` của thiết bị (front matter ROBOT.md, mặc định 100)
 4. Nếu chưa setup: chờ `POST /api/device/setup`
 
 ## Logging

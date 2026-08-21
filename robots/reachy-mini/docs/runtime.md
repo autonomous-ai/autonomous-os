@@ -257,9 +257,12 @@ own shutdown hook and leave the daemon deaf and blind.
 
 Two details worth knowing: `release()` retries 5× at 2 s intervals, because the
 daemon is a systemd service starting alongside HAL and may not be listening on a
-cold boot; and it restores the persisted speaker level afterwards, because the
-daemon's release handler resets the card's mixer to its own level (measured: 90 %
-before, 62 % after).
+cold boot; and it restores the speaker level afterwards, because the daemon's
+release handler resets the card's mixer to its own level (measured: 90 % before,
+62 % after). It restores the persisted level when there is one, and this body's
+ROBOT.md `startup_volume` when there is not — a unit that never touched the
+slider would otherwise be left at the daemon's own −23 dB, which on a new
+owner's first boot reads as broken hardware.
 
 This pairs with — and does not replace — the SDK's `media_backend="no_media"`,
 which only stops the *SDK client* from grabbing media.

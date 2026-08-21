@@ -361,7 +361,8 @@ HAL (Python): FastAPI standard JSON responses.
    - Connect OpenClaw WebSocket
    - Connect MQTT
    - Start ambient behaviors
-   - Set speaker volume to the device's `startup_volume` (ROBOT.md front matter, default 100)
+   - Wait for HAL to answer `GET :5001/health` (up to 120s) before any HAL call. os-server binds :5000 well before HAL's FastAPI is listening, and a first boot also builds the venv and loads models, so an un-gated one-shot call is lost to a connection refused
+   - Set speaker volume: the level the user last set (persisted by HAL on every `/audio/volume` change) wins; otherwise the device's `startup_volume` (ROBOT.md front matter, default 100)
 4. If not yet set up: wait for `POST /api/device/setup`
 
 ## Logging

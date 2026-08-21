@@ -223,7 +223,10 @@ for _owner_name in dict.fromkeys(
 
     _owner_cls = resolve_media_owner(_owner_name)
     if _owner_cls is not None:
-        _media_owners.append(_owner_cls())
+        # startup_volume travels with the handover because releasing the media
+        # is what resets the card's mixer — the owner needs this body's level to
+        # put it back on a unit that has no persisted level yet.
+        _media_owners.append(_owner_cls(startup_volume=_profile.startup_volume))
         logger.info("Media owner '%s' declared — HAL will borrow the hardware", _owner_name)
 
 SensingService = None
