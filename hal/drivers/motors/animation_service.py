@@ -20,24 +20,36 @@ DEFAULT_MOVE_DURATION = 2.0
 IDLE_ANCHOR_SLEW_DPS = 40.0
 
 # Zero/hold position in raw encoder units — the physical resting pose after release.
-# wrist_pitch (-59.18°, raw 1914) exceeds calibrated range_min=2044, so move_to_raw is used.
 ZERO_RAW = {
-    "base_yaw":    2100,  #   5.22° — mid=2041.5
-    "base_pitch":  2082,  # -20.25° — mid=2312.5
-    "elbow_pitch": 2019,  # -30.54° — mid=2366.5
-    "wrist_roll":  2070,  #   0.00° — mid=2070.0
-    "wrist_pitch": 1914,  # -59.18° — mid=2588.0
+    "base_yaw":    2029,
+    "base_pitch":  2030,
+    "elbow_pitch": 2030,
+    "wrist_roll":  2053,
+    "wrist_pitch": 2049,
 }
 
-# Wake/resume position in raw encoder units — all 5 joints.
-# Pre-computed from calibration JSON: raw = int(deg * 4095/360 + mid), mid=(range_min+range_max)/2.
-# wrist_pitch (-68.48°, raw 1809) exceeds calibrated range_min=2044, so move_to_raw is used.
-RESUME_STARTUP_RAW = {
-    "base_yaw":    2109,  #   5.96° — mid=2041.5
-    "base_pitch":  2105,  # -18.20° — mid=2312.5
-    "elbow_pitch": 2233,  # -11.68° — mid=2366.5
-    "wrist_roll":  2070,  #   0.00° — mid=2070.0
-    "wrist_pitch": 1809,  # -68.48° — mid=2588.0
+# Wake position in raw encoder units — all 5 joints. Where the arm goes once
+# on connect, as the first queued event, before idle starts animating.
+# Not used by resume(): that path re-enables torque and goes straight to idle.
+STARTUP_RAW = {
+    "base_yaw":    2025,
+    "base_pitch":  2674,
+    "elbow_pitch": 2636,
+    "wrist_roll":  2054,
+    "wrist_pitch": 2056,
+}
+
+# Gravity-rest position in raw encoder units — where release() parks the arm
+# before cutting torque, so it settles instead of dropping. Currently identical
+# to ZERO_RAW; kept separate because the two answer different questions (hold a
+# presentable pose with torque ON vs. leave gravity nothing to pull once torque
+# goes OFF) and have diverged before.
+REST_RAW = {
+    "base_yaw":    2029,
+    "base_pitch":  2030,
+    "elbow_pitch": 2030,
+    "wrist_roll":  2053,
+    "wrist_pitch": 2049,
 }
 
 # Duration for the startup/resume move (seconds)
@@ -321,7 +333,7 @@ class AnimationService:
         # no goal writes land after a torque-off.
         try:
             self.move_to_raw(
-                RESUME_STARTUP_RAW,
+                STARTUP_RAW,
                 duration=STARTUP_MOVE_DURATION,
                 should_abort=lambda: not self._running.is_set(),
             )
@@ -1129,16 +1141,8 @@ class AnimationService:
         self._running.clear()
         if self._event_thread and self._event_thread.is_alive():
             self._event_thread.join(timeout=3.0)
-        # Gravity-rest pose in raw encoder units.
-        rest_raw = {
-            "base_yaw":    2063,
-            "base_pitch":  1645,
-            "elbow_pitch": 1748,
-            "wrist_roll":  2067,
-            "wrist_pitch": 2125,
-        }
         try:
-            self.move_to_raw(rest_raw, duration=2.0)
+            self.move_to_raw(REST_RAW, duration=2.0)
         except Exception as e:
             logger.warning("Could not move to rest before release: %s", e)
         time.sleep(0.4)

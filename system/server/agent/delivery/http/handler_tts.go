@@ -41,6 +41,29 @@ func isLLMLimitText(text string) bool {
 // to outlive the turn it describes.
 const runFirstSeenTTL = 30 * time.Minute
 
+// ttsTurnSequence returns the local total order assigned to a turn. Lifecycle
+// start normally calls it first; the delivery path also calls it as a safe
+// fallback for runtimes that omit lifecycle.start. The order deliberately
+// persists for the server lifetime: a background POST from an old turn must
+// retain its old sequence and be rejected by HAL, not receive a new one.
+func (h *AgentHandler) ttsTurnSequence(runID string) uint64 {
+	if runID == "" {
+		return 0
+	}
+	h.ttsTurnMu.Lock()
+	defer h.ttsTurnMu.Unlock()
+	if h.ttsTurnOrder == nil {
+		h.ttsTurnOrder = make(map[string]uint64)
+	}
+	if seq, ok := h.ttsTurnOrder[runID]; ok {
+		return seq
+	}
+	h.ttsTurnNextSeq++
+	seq := h.ttsTurnNextSeq
+	h.ttsTurnOrder[runID] = seq
+	return seq
+}
+
 // runCreatedAtMs returns the unix-ms creation time of the turn behind runID.
 //
 // Device-issued ids end in the millisecond stamp allocated by the runtime's
@@ -166,4 +189,18 @@ func (h *AgentHandler) deliverTTS(send func(string) error, text, flowRunID, errC
 		}
 		slog.Error(errCtx, "component", "agent", "error", err)
 	}()
+}
+
+// deliverTTSQueue sends an agent reply through the turn-aware queue when the
+// selected runtime supports it. The fallback keeps third-party gateways
+// compatible, although built-in runtimes all provide the stronger contract.
+func (h *AgentHandler) deliverTTSQueue(text, flowRunID, errCtx string) {
+	if queue, ok := h.agentGateway.(domain.TurnAwareTTSQueue); ok {
+		turnSeq := h.ttsTurnSequence(flowRunID)
+		h.deliverTTS(func(text string) error {
+			return queue.SendToHALTTSQueueForTurn(text, flowRunID, turnSeq)
+		}, text, flowRunID, errCtx)
+		return
+	}
+	h.deliverTTS(h.agentGateway.SendToHALTTSQueue, text, flowRunID, errCtx)
 }

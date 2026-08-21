@@ -5,6 +5,12 @@ import type { ServoState } from "./types";
 import { StatusDot } from "./components";
 import { usePolling } from "../../hooks/usePolling";
 
+// Minimum gap between live-drag writes, in ms. The servo bus is a 6.4 Mbit
+// serial line shared with the animation loop, and a range input fires far
+// faster than it can answer; ~12 writes/s is smooth to the eye and leaves the
+// bus room to breathe.
+const LIVE_THROTTLE_MS = 80;
+
 interface ServoDetail {
   id: number;
   angle: number | null;
@@ -24,6 +30,17 @@ export function ServoSection() {
   const [moveTargets, setMoveTargets] = useState<Record<string, number>>({});
   const [moveDuration, setMoveDuration] = useState<number>(2.0);
   const [moving, setMoving] = useState(false);
+  // Live drag: send each slider change straight to the servo instead of waiting
+  // for the Move button. Aiming the head is a "look at it and stop when it's
+  // right" job, and a 2s interpolated move per attempt makes that unusable.
+  const [liveDrag, setLiveDrag] = useState(false);
+  // Throttle state for live drag. A range input fires on every pixel, which is
+  // far more than the serial bus can absorb; without this the queue backs up and
+  // the head keeps moving after the mouse stops. Trailing send guarantees the
+  // final resting value lands even if it arrived inside a throttle window.
+  const liveLastSent = useRef(0);
+  const liveTrailing = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const liveInFlight = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -155,6 +172,46 @@ export function ServoSection() {
     setMoveTargets(next);
     flash("Synced sliders to current pose");
   };
+
+  // One joint, duration 0. Zero duration is not just "fast": it takes the
+  // send_action path in move_and_hold instead of the interpolating one, so a
+  // drag lands as a single bus write and never queues a 2s tween behind itself.
+  const sendLive = useCallback((joint: string, value: number) => {
+    const fire = async () => {
+      if (liveInFlight.current) return;
+      liveInFlight.current = true;
+      liveLastSent.current = Date.now();
+      try {
+        await fetch(`${HW}/servo/move`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ positions: { [joint]: value }, duration: 0 }),
+        });
+      } catch {
+        // A dropped frame mid-drag is not worth a toast — the next one corrects
+        // it, and the trailing send below always delivers the final value.
+      } finally {
+        liveInFlight.current = false;
+      }
+    };
+    if (liveTrailing.current) clearTimeout(liveTrailing.current);
+    const since = Date.now() - liveLastSent.current;
+    if (since >= LIVE_THROTTLE_MS && !liveInFlight.current) {
+      void fire();
+    } else {
+      liveTrailing.current = setTimeout(() => { void fire(); }, LIVE_THROTTLE_MS - since);
+    }
+  }, []);
+
+  const onJointChange = useCallback((joint: string, v: number) => {
+    setMoveTargets((m) => ({ ...m, [joint]: v }));
+    if (liveDrag) sendLive(joint, v);
+  }, [liveDrag, sendLive]);
+
+  // Drop a pending trailing send if the section unmounts mid-drag.
+  useEffect(() => () => {
+    if (liveTrailing.current) clearTimeout(liveTrailing.current);
+  }, []);
 
   const moveServo = async () => {
     if (moving) return;
@@ -313,6 +370,21 @@ export function ServoSection() {
             <span style={{ fontSize: 11, color: "var(--lm-text-muted)" }}>
               direct /servo/move — clamped to ±90°
             </span>
+            <label
+              title="Send each slider change straight to the servo (duration 0), instead of waiting for the Move button."
+              style={{
+                fontSize: 11, display: "flex", alignItems: "center", gap: 5, cursor: "pointer",
+                color: liveDrag ? "var(--lm-green)" : "var(--lm-text-muted)", fontWeight: 600,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={liveDrag}
+                onChange={(e) => setLiveDrag(e.target.checked)}
+                style={{ accentColor: "var(--lm-green)", cursor: "pointer" }}
+              />
+              Live drag
+            </label>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <button
@@ -362,7 +434,7 @@ export function ServoSection() {
                 joint={joint}
                 value={moveTargets[joint] ?? 0}
                 actual={servos[joint]?.angle ?? null}
-                onChange={(v) => setMoveTargets((m) => ({ ...m, [joint]: v }))}
+                onChange={(v) => onJointChange(joint, v)}
               />
             ))}
           </div>

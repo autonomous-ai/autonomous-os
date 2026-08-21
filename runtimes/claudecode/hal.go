@@ -153,3 +153,16 @@ func (s *ClaudeCodeService) SendToHALTTSQueue(text string) error {
 	s.monitorBus.Push(domain.MonitorEvent{Type: "tts", Summary: text})
 	return nil
 }
+
+func (s *ClaudeCodeService) SendToHALTTSQueueForTurn(text, turnID string, turnSeq uint64) error {
+	text = stripForTTS(text)
+	if text == "" {
+		return nil
+	}
+	if err := hal.SpeakQueueReplyForTurn(text, turnID, turnSeq); err != nil {
+		return fmt.Errorf("speak-queue: %w", err)
+	}
+	slog.Info("TTS queued", "component", "claudecode", "turn_id", turnID, "turn_seq", turnSeq, "text", truncRunes(text, 80))
+	s.monitorBus.Push(domain.MonitorEvent{Type: "tts", Summary: text})
+	return nil
+}
