@@ -7,10 +7,11 @@ what it currently outputs.
 
 import math
 
+import numpy as np
 import pytest
 
 import hal.config as config
-from hal.drivers.tracking import gaze
+from hal.drivers.tracking import detection, gaze
 
 
 def _landmarks(right_eye, left_eye, nose, mouth_r=(0.0, 0.0), mouth_l=(0.0, 0.0)):
@@ -128,6 +129,112 @@ def test_the_cone_widens_toward_the_frame_edge():
 
 def test_edge_slack_never_rescues_a_genuine_profile():
     assert gaze.facing_lamp(90.0, 120, 1.0) is False
+
+
+# --- which face the gate listens to -----------------------------------------
+
+
+class _FakeYuNet:
+    """Stands in for the loaded YuNet model, returning canned detections."""
+
+    def __init__(self, rows):
+        self._rows = np.array(rows, dtype=np.float32) if rows else None
+
+    def setInputSize(self, size):
+        pass
+
+    def detect(self, frame):
+        return 1, self._rows
+
+
+def _face_row(x, w, h, nose_x=0.0):
+    """One YuNet row: [x, y, w, h, 10 landmark coords, score]."""
+    return [float(x), 0.0, float(w), float(h)] + [nose_x] * 10 + [0.9]
+
+
+def _detect(monkeypatch, rows, frame_w=640):
+    monkeypatch.setattr(detection, "_get_yunet", lambda: _FakeYuNet(rows))
+    frame = np.zeros((480, frame_w, 3), dtype=np.uint8)
+    return detection.detect_face_with_landmarks(frame)
+
+
+def test_the_face_nearest_the_frame_centre_wins_over_the_larger_one(monkeypatch):
+    """A colleague leaning in must not take the gate from the seated user.
+
+    Both clear the size floor, so largest-face would hand the sample to the
+    nearer colleague at the edge; the lamp's own aim says the centred face is
+    the one it is pointed at.
+    """
+    big = config.GAZE_MIN_FACE_PX * 2
+    small = config.GAZE_MIN_FACE_PX + 2
+    colleague = _face_row(x=500, w=big, h=big, nose_x=1.0)
+    user = _face_row(x=300, w=small, h=small, nose_x=2.0)
+    (fx, _, fw, fh), landmarks = _detect(monkeypatch, [colleague, user])
+    assert (fx, fw, fh) == (300, small, small)
+    assert landmarks[4] == 2.0
+
+
+def test_a_single_face_is_picked_exactly_as_before(monkeypatch):
+    """The common case must not change: one candidate, both policies agree."""
+    h = config.GAZE_MIN_FACE_PX * 2
+    (fx, _, fw, fh), _ = _detect(monkeypatch, [_face_row(x=500, w=h, h=h)])
+    assert (fx, fw, fh) == (500, h, h)
+
+
+def test_faces_too_small_to_measure_do_not_win_by_sitting_in_the_centre(monkeypatch):
+    """Background colleagues detect at 8-18 px; a centred one must not be
+    preferred over the user whose yaw is actually measurable."""
+    user_h = config.GAZE_MIN_FACE_PX * 2
+    background = _face_row(x=310, w=12, h=12)
+    user = _face_row(x=40, w=user_h, h=user_h)
+    (fx, _, _, fh), _ = _detect(monkeypatch, [background, user])
+    assert (fx, fh) == (40, user_h)
+
+
+def test_with_nobody_measurable_the_largest_face_still_comes_back(monkeypatch):
+    """The caller re-aims vertically off this bbox, and that correction is
+    needed exactly when every face is too small — returning None would strand
+    a camera pointing too low."""
+    (fx, _, _, fh), _ = _detect(monkeypatch, [_face_row(x=10, w=8, h=8),
+                                              _face_row(x=600, w=18, h=18)])
+    assert (fx, fh) == (600, 18)
+
+
+def test_no_detections_is_still_none(monkeypatch):
+    assert _detect(monkeypatch, []) is None
+
+
+def test_an_infinite_box_is_dropped_instead_of_crashing_the_detector(monkeypatch):
+    """Device-observed: YuNet returned a non-finite bbox and int() raised.
+
+        detection.py:224  x, y, fw, fh = int(best[0]), ...
+        OverflowError: cannot convert float infinity to integer
+
+    It killed the tracker's detect thread mid-session, on a face leaving the
+    frame (offset past 25% of the frame, bbox_area 1.9%, conf 0.29).
+    """
+    h = config.GAZE_MIN_FACE_PX * 2
+    rows = [_face_row(x=float("inf"), w=h, h=h), _face_row(x=200, w=h, h=h)]
+    (fx, _, _, fh), _ = _detect(monkeypatch, rows)
+    assert (fx, fh) == (200, h)
+
+
+def test_an_infinite_box_cannot_hide_the_real_face_behind_it(monkeypatch):
+    """Infinity wins any largest-by-area contest, so it must be filtered out
+    BEFORE the choice is made, not after."""
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    rows = [_face_row(x=10, w=float("inf"), h=float("inf")),
+            _face_row(x=300, w=60, h=60)]
+    monkeypatch.setattr(detection, "_get_yunet", lambda: _FakeYuNet(rows))
+    assert detection._detect_face_yunet(frame) == (300, 0, 60, 60)
+
+
+def test_every_box_unusable_reads_as_no_face(monkeypatch):
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    rows = [_face_row(x=float("nan"), w=60, h=60)]
+    monkeypatch.setattr(detection, "_get_yunet", lambda: _FakeYuNet(rows))
+    assert detection._detect_face_yunet(frame) is None
+    assert _detect(monkeypatch, rows) is None
 
 
 # --- the rolling buffer -----------------------------------------------------
@@ -359,6 +466,9 @@ def _absent_for(seconds):
     """Pretend the last face was seen `seconds` ago."""
     gaze._last_face_t = gaze.time.monotonic() - seconds
     gaze._last_repoint_t = gaze.time.monotonic() - 10_000.0
+    # No pitch correction in flight: that one takes precedence, and these cases
+    # are about the absence, not about the two of them competing.
+    gaze._last_pitch_t = gaze.time.monotonic() - 10_000.0
 
 
 def test_a_long_absence_turns_the_lamp_to_the_remembered_bearing(body):
@@ -389,6 +499,28 @@ def test_it_never_moves_a_body_something_else_owns(body):
     body._music_playing = True
     gaze._maybe_repoint(gaze.time.monotonic())
     assert body.moves == []
+
+
+def test_a_recent_pitch_correction_outranks_the_remembered_bearing(body):
+    """The two used to undo each other, on the device, every few seconds.
+
+    Pitch lifted the camera onto a face it could actually see (-72.8 -> -61.9);
+    thirteen seconds later repoint re-anchored idle on the remembered pose,
+    wrist -46.7, dropping the aim back to where the face was clipped. Pitch
+    wins because it is correcting toward a face visible now, while the bearing
+    is a guess about where one was last seen.
+    """
+    _absent_for(config.GAZE_REPOINT_AFTER_S + 1)
+    gaze._last_pitch_t = gaze.time.monotonic() - 1.0
+    gaze._maybe_repoint(gaze.time.monotonic())
+    assert body.moves == []
+
+
+def test_an_old_pitch_correction_no_longer_holds_the_bearing_back(body):
+    _absent_for(config.GAZE_REPOINT_AFTER_S + 1)
+    gaze._last_pitch_t = gaze.time.monotonic() - config.GAZE_REPOINT_AFTER_S - 1.0
+    gaze._maybe_repoint(gaze.time.monotonic())
+    assert body.moves
 
 
 def test_a_bearing_it_does_not_trust_is_not_worth_turning_for(body, monkeypatch):
@@ -509,6 +641,172 @@ def test_a_head_still_settling_from_a_move_is_not_sampled(monkeypatch):
 
     svc = _MovingSvc(ago=aim.FRAME_SETTLE_S / 2.0)
     assert _sample_reason(svc, monkeypatch) == "head still settling from a move"
+
+
+class _BreathingSvc(_MovingSvc):
+    """The arm looping the idle recording at reduced FPS — writing, not moving."""
+
+    idle_recording = "idle"
+
+    def __init__(self, ago, settled=True, recording="idle"):
+        super().__init__(ago)
+        self._idle_settled = settled
+        self._current_recording = recording
+
+
+def test_the_idle_loop_breathing_does_not_count_as_a_move(monkeypatch):
+    """Idle writes the servos every frame, forever.
+
+    So `last_servo_write` is almost never stale and the settling test alone
+    refused nearly every frame: 0.3 samples/s recorded against 4.9/s blocked on
+    the device. Idle motion is millimetres and slow; the yaw survives it.
+    """
+    from hal.drivers.tracking import aim
+
+    svc = _BreathingSvc(ago=aim.FRAME_SETTLE_S / 2.0)
+    assert gaze.idle_breathing(svc) is True
+    # It gets past the settling test now — the next gate is the detector lock,
+    # which _sample_reason holds.
+    assert _sample_reason(svc, monkeypatch) == "detector busy with a live look"
+
+
+def test_interpolating_into_idle_is_still_a_real_move(monkeypatch):
+    """Unsettled idle is the relocation INTO idle, which does smear the yaw."""
+    from hal.drivers.tracking import aim
+
+    svc = _BreathingSvc(ago=aim.FRAME_SETTLE_S / 2.0, settled=False)
+    assert gaze.idle_breathing(svc) is False
+    assert _sample_reason(svc, monkeypatch) == "head still settling from a move"
+
+
+def test_another_recording_playing_is_not_breathing(monkeypatch):
+    from hal.drivers.tracking import aim
+
+    svc = _BreathingSvc(ago=aim.FRAME_SETTLE_S / 2.0, recording="greeting")
+    assert gaze.idle_breathing(svc) is False
+    assert _sample_reason(svc, monkeypatch) == "head still settling from a move"
+
+
+def test_a_service_that_knows_nothing_of_idle_is_treated_as_moving():
+    assert gaze.idle_breathing(None) is False
+    assert gaze.idle_breathing(object()) is False
+
+
+def test_a_tracking_pursuit_does_not_count_as_a_move_either(monkeypatch):
+    """Tracking writes the arm every frame, so settling was never stale.
+
+    That put the whole of tracking back behind the settling test, through the
+    back door, after that test was written specifically not to use
+    `_tracking_active` — measured with tracking up: 0.7 samples/s against
+    4.5/s blocked, and a user at yaw 0.9 deg with a 130 px face dead centre
+    refused for having one sample in the window instead of two.
+    """
+    from hal.drivers.tracking import aim
+
+    svc = _MovingSvc(ago=aim.FRAME_SETTLE_S / 2.0, tracking=True)
+    assert gaze.following_a_face(svc) is True
+    assert _sample_reason(svc, monkeypatch) == "detector busy with a live look"
+
+
+def test_a_body_doing_neither_is_still_treated_as_moving(monkeypatch):
+    from hal.drivers.tracking import aim
+
+    svc = _MovingSvc(ago=aim.FRAME_SETTLE_S / 2.0, tracking=False)
+    assert gaze.following_a_face(svc) is False
+    assert _sample_reason(svc, monkeypatch) == "head still settling from a move"
+
+
+def test_a_blocked_turn_is_reported_as_blocked_not_as_a_sample(monkeypatch):
+    """The loop's rate figure must count evidence, not attempts.
+
+    Counting iterations reported 5.7/s on the device while the buffer held
+    nothing newer than the 1.5 s window — under 1/s of real evidence. Every
+    turn that returns a reason recorded nothing, so it belongs in the blocked
+    tally, and the two must not be the same number.
+    """
+    from hal.drivers.tracking import aim
+
+    svc = _MovingSvc(ago=aim.FRAME_SETTLE_S / 2.0)
+    assert _sample_reason(svc, monkeypatch) is not None
+
+
+# --- landmarks that were never actually seen ---------------------------------
+
+
+def test_landmarks_inside_the_frame_are_measurable():
+    lm = _landmarks((100.0, 100.0), (140.0, 100.0), (120.0, 120.0))
+    assert gaze.landmarks_in_frame(lm, 640.0, 360.0) is True
+
+
+def test_an_eye_above_the_top_edge_was_never_seen():
+    """Device-measured: box [264, -1, 162, 92], eyes at y=-3.0 and y=-1.3.
+
+    The user was sitting straight in front of the lamp; the camera was aimed
+    too low, so the top of the head fell outside the frame and YuNet
+    extrapolated the eyes above it.
+    """
+    lm = _landmarks((336.5, -3.0), (391.0, -1.3), (374.6, 14.5))
+    assert gaze.landmarks_in_frame(lm, 640.0, 360.0) is False
+
+
+def test_a_landmark_past_any_other_edge_is_refused_too():
+    for lm in (
+        _landmarks((-2.0, 100.0), (140.0, 100.0), (120.0, 120.0)),
+        _landmarks((100.0, 100.0), (700.0, 100.0), (120.0, 120.0)),
+        _landmarks((100.0, 100.0), (140.0, 100.0), (120.0, 400.0)),
+    ):
+        assert gaze.landmarks_in_frame(lm, 640.0, 360.0) is False
+
+
+def test_a_clipped_mouth_does_not_disqualify_the_yaw():
+    """Only the eyes and the nose feed the angle; the mouth is along for the ride."""
+    lm = _landmarks(
+        (100.0, 100.0), (140.0, 100.0), (120.0, 120.0),
+        mouth_r=(105.0, 400.0), mouth_l=(135.0, 400.0),
+    )
+    assert gaze.landmarks_in_frame(lm, 640.0, 360.0) is True
+
+
+def test_missing_or_non_finite_landmarks_are_not_in_frame():
+    assert gaze.landmarks_in_frame((), 640.0, 360.0) is False
+    assert gaze.landmarks_in_frame((1.0, 2.0), 640.0, 360.0) is False
+    assert gaze.landmarks_in_frame((float("nan"),) * 10, 640.0, 360.0) is False
+
+
+def test_a_clipped_face_is_recorded_as_unmeasured_not_as_a_profile(monkeypatch):
+    """The whole bug, end to end.
+
+    A face clipped at the top used to record 90.0 — the clamp's output, not a
+    measurement — which facing_ratio counted as a vote AGAINST facing. So a
+    user looking straight at the lamp produced trail=[90,90,90,90] and was
+    refused. It must land in the buffer as "no measurement" instead.
+    """
+    import hal.app_state as state
+
+    from hal.drivers.tracking import aim, detection as det, frame_utils
+
+    frame = np.zeros((360, 640, 3), dtype=np.uint8)
+    monkeypatch.setattr(state, "camera_capture", object(), raising=False)
+    monkeypatch.setattr(state, "animation_service", _Svc(), raising=False)
+    monkeypatch.setattr(state, "_camera_disabled", False, raising=False)
+    monkeypatch.setattr(aim, "_grab_frame", lambda cap, svc: frame)
+    monkeypatch.setattr(aim, "get_detector", lambda: None)
+    monkeypatch.setattr(frame_utils, "downscale", lambda f: (f, 1.0))
+    # The measured detection: eyes above the top edge, face big and centred.
+    monkeypatch.setattr(
+        det, "detect_face_with_landmarks",
+        lambda f: ((264, 0, 162, 92),
+                   _landmarks((336.5, -3.0), (391.0, -1.3), (374.6, 14.5))),
+    )
+
+    gaze.reset_for_test()
+    assert gaze._sample_once() is None
+    (_, yaw, px, _), = gaze.snapshot()
+    assert yaw == float("inf")     # unmeasured, so it votes neither way
+    assert px == pytest.approx(92.0)
+    # The frame still says which way to move: the head is above centre.
+    assert gaze._last_dy_frac is not None and gaze._last_dy_frac < 0
+    assert gaze._last_dy_from_face is True
 
 
 # --- vertical centring (the neck) -------------------------------------------
@@ -719,6 +1017,41 @@ def test_repointing_also_discards_them(body):
     _absent_for(config.GAZE_REPOINT_AFTER_S + 1)
     gaze._maybe_repoint(gaze.time.monotonic())
     assert body.moves and gaze.snapshot() == []
+
+
+def test_repoint_does_not_re_anchor_a_wrist_the_pitch_loop_has_corrected(body):
+    """The slow half of the same fight.
+
+    Device-observed: pitch lifted the camera to -31.5 where it could see a
+    face, and thirty-four seconds later the repoint anchored idle back on the
+    remembered -46.1, from where the face is clipped again. The bearing memory
+    is worth believing about which way to face — that is what the move uses —
+    but not about how high to look.
+    """
+    anchored = {}
+    body.set_idle_anchor = lambda j: anchored.update(j or {})
+    _absent_for(config.GAZE_REPOINT_AFTER_S + 1)
+    gaze._last_pitch_t = gaze.time.monotonic() - config.GAZE_REPOINT_AFTER_S - 1.0
+    gaze._maybe_repoint(gaze.time.monotonic())
+    assert body.moves                                  # it still turned
+    assert "wrist_pitch.pos" not in anchored           # but left the aim alone
+    assert anchored.get("base_pitch.pos") == pytest.approx(0.0)
+
+
+def test_with_no_correction_yet_the_remembered_pose_is_anchored_whole(body, monkeypatch):
+    from hal.drivers.tracking import user_bearing
+
+    class _EstWithPitch(_Est):
+        pose = {"base_yaw.pos": 4.0, "base_pitch.pos": 0.0, "wrist_pitch.pos": -70.0}
+
+    monkeypatch.setattr(user_bearing, "read_estimate", lambda: _EstWithPitch())
+    anchored = {}
+    body.set_idle_anchor = lambda j: anchored.update(j or {})
+    _absent_for(config.GAZE_REPOINT_AFTER_S + 1)
+    gaze._last_pitch_t = 0.0                           # pitch has never spoken
+    gaze._last_anchor = None
+    gaze._maybe_repoint(gaze.time.monotonic())
+    assert anchored.get("wrist_pitch.pos") == pytest.approx(-70.0)
 
 
 def test_a_face_driven_correction_anchors_the_idle_loop(neck, monkeypatch):

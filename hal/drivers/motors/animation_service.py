@@ -12,6 +12,13 @@ logger = logging.getLogger(__name__)
 # Default interpolation duration for move_to (seconds)
 DEFAULT_MOVE_DURATION = 2.0
 
+# How fast the applied idle anchor may travel toward a newly requested one
+# (degrees per second, per joint). Gaze re-aims by tens of degrees at once, and
+# applying that to the next frame is a step no recording ever contains. Sized
+# below the idle recording's own pitch peaks (~70 deg/s) so a re-aim reads as a
+# deliberate move rather than a snap: a 40 deg re-aim takes about a second.
+IDLE_ANCHOR_SLEW_DPS = 40.0
+
 # Zero/hold position in raw encoder units — the physical resting pose after release.
 # wrist_pitch (-59.18°, raw 1914) exceeds calibrated range_min=2044, so move_to_raw is used.
 ZERO_RAW = {
@@ -92,7 +99,13 @@ class AnimationService:
         # keyboard, which is why a camera aimed at the user does not stay aimed
         # at them. Anchoring shifts the whole loop without changing its shape:
         # the lamp breathes exactly as before, around a different centre.
+        # The anchor currently APPLIED to frames. It follows _idle_anchor_target
+        # at a bounded rate rather than jumping: the offset is a position command
+        # in disguise, so replacing it outright teleports the arm by the whole
+        # difference in one frame (see _advance_idle_anchor).
         self._idle_anchor: Dict[str, float] = {}
+        # Where the anchor is being asked to go. set_idle_anchor writes this.
+        self._idle_anchor_target: Dict[str, float] = {}
         # First-frame value per joint of the idle recording — the centre the
         # offset is measured from. Captured when the recording is loaded.
         self._idle_baseline: Dict[str, float] = {}
@@ -342,8 +355,20 @@ class AnimationService:
         self._handle_play(self._music_recording)
 
     def _handle_music_stop(self):
-        """Stop music groove — interrupt immediately and return to idle."""
+        """Stop music groove — interrupt immediately and return to idle.
+
+        No-op when nothing was grooving. routes/music.audio_stop() calls
+        _on_music_complete() outside its `music_service.playing` guard, and
+        that path also double-fires (explicit /audio/stop plus the music
+        thread's finally), so this used to run up to twice on every single
+        click — which stopped nothing but restarted idle from frame 0, yanking
+        the arm out of mid-loop. Restoring idle is only meaningful if music
+        actually took the body away from it.
+        """
+        was_playing = self._music_playing
         self._music_playing = False
+        if not was_playing:
+            return
         self._hold_until = 0.0  # skip hold, go to idle right away
         self._handle_play(self.idle_recording)
     
@@ -483,9 +508,21 @@ class AnimationService:
                 progress = 1.0 - (self._interpolation_frames / denom)
                 progress = max(0.0, min(1.0, progress))
                 
-                # Interpolate between current state and target
+                # Anchor the TARGET, never the interpolated result. _current_state
+                # always holds an already-anchored pose, and _interpolation_target
+                # is the raw first frame, so shifting the blend of the two applied
+                # the anchor offset a second time to the part that came from
+                # _current_state: at progress 0 the very first command was
+                # `current + offset`, a whole-offset jump in one frame before the
+                # recording had played anything. With gaze anchoring idle that
+                # offset is the distance between the recording's baseline and
+                # where gaze wants the head — over 180 deg for a recording
+                # authored around wrist_pitch -186. Both ends of the blend live
+                # in anchored space now, so progress 0 is exactly the current
+                # pose and the move starts from standstill.
+                target = self._anchor_action(self._interpolation_target)
                 interpolated_action = {}
-                for joint in self._interpolation_target.keys():
+                for joint in target.keys():
                     # Default 0 is unsafe if _current_state is incomplete (see _sync_state_from_hardware).
                     current_val = self._current_state.get(joint) if self._current_state else None
                     if current_val is None:
@@ -494,10 +531,9 @@ class AnimationService:
                             joint,
                         )
                         current_val = 0.0
-                    target_val = self._interpolation_target[joint]
+                    target_val = target[joint]
                     interpolated_action[joint] = current_val + (target_val - current_val) * progress
-                
-                interpolated_action = self._anchor_action(interpolated_action)
+
                 with self.bus_lock:
                     self.robot.send_action(interpolated_action)
                 self._current_state = interpolated_action.copy()
@@ -730,12 +766,56 @@ class AnimationService:
 
         Pass None or {} to go back to playing idle exactly as recorded. Joints
         not named are untouched, so anchoring one axis does not freeze the rest.
+
+        The move is a request, not an immediate jump — the applied anchor slews
+        toward it at IDLE_ANCHOR_SLEW_DPS.
         """
-        self._idle_anchor = dict(joints) if joints else {}
+        self._idle_anchor_target = dict(joints) if joints else {}
+
+    def _advance_idle_anchor(self) -> None:
+        """Step the applied anchor one frame closer to the requested one.
+
+        The anchor offset is added to every idle frame, so a change in it is a
+        position command: assigning a new anchor outright moved the arm by the
+        whole difference within one frame. Gaze re-aims in steps of tens of
+        degrees (device-observed: wrist_pitch anchor -4.9 -> +36.7 in one go,
+        a 41 deg jump at ~830 deg/s), which is faster than anything the
+        recordings themselves contain. Bounding the travel keeps a re-aim a
+        move the eye can follow, without damping the loop's own swing.
+        """
+        target = self._idle_anchor_target
+        applied = self._idle_anchor
+        if applied == target:
+            return
+        step = IDLE_ANCHOR_SLEW_DPS / max(self.fps, 1)
+        for joint in set(applied) | set(target):
+            # A joint dropped from the target eases back to the recorded pose,
+            # i.e. to an offset of zero, which is the baseline itself.
+            want = target.get(joint, self._idle_baseline.get(joint))
+            if want is None:
+                # No baseline to ease back to; nothing to measure a step against.
+                applied.pop(joint, None)
+                continue
+            have = applied.get(joint, self._idle_baseline.get(joint))
+            if have is None:
+                # First anchor before the recording loaded: no baseline means
+                # _anchor_action ignores this joint anyway, so there is no jump
+                # to spread out.
+                applied[joint] = float(want)
+                continue
+            delta = float(want) - float(have)
+            if abs(delta) <= step:
+                if joint in target:
+                    applied[joint] = float(want)
+                else:
+                    applied.pop(joint, None)
+                continue
+            applied[joint] = float(have) + (step if delta > 0 else -step)
 
     def _anchor_action(self, action: Dict[str, float]) -> Dict[str, float]:
         """Shift one idle frame onto the anchor. Returns it unchanged if there
         is nothing to anchor, so the normal path allocates nothing extra."""
+        self._advance_idle_anchor()
         if not self._idle_anchor or self._current_recording != self.idle_recording:
             return action
         shifted = dict(action)

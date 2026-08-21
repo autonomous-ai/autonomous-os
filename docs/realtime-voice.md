@@ -223,12 +223,46 @@ one exception to the model's binary "tool OR speech" rule — the model calls it
    runs inside the HAL process, so there is no HTTP loopback / serialization. It
    runs parallel to the audio already streaming, so the face changes without
    blocking speech;
-2. acknowledges the call with `FunctionCallResultInput(trigger_response=False)`,
-   which records the result in history **without** spawning a second model
-   response. For OpenAI and Qwen this skips `response.create`
-   (`openai_realtime.py` / `qwen_realtime.py`); for
-   Gemini the tool response simply lets the turn continue. Net added latency to
-   speech ≈ 0.
+2. answers the call with `FunctionCallResultInput`, whose `trigger_response`
+   depends on whether the model has already spoken this turn
+   (`orchestrator.py`, `_handle_emotion_call`). If it **has** spoken
+   (`trigger_response=False`), the result is recorded without spawning a second
+   model response — for OpenAI and Qwen this skips `response.create`
+   (`openai_realtime.py` / `qwen_realtime.py`); on Gemini the ack is not sent at
+   all, because `send_tool_response` there *continues* the turn and makes the
+   model re-speak its whole reply. If it has **not** spoken yet, the tool call is
+   the entire generation so far and Gemini pauses until answered, so the ack is
+   sent (`trigger_response=True`) or the turn deadlocks until the watchdog fires.
+   Net added latency to speech ≈ 0.
+
+### Pending-tool-call audio gate (Gemini)
+
+Gemini Live **refuses `send_realtime_input` while a tool call it emitted is
+unanswered**, and enforces this by closing the session with WebSocket **`1008`**
+("The operation was aborted"). This is a deliberate policy close by the provider,
+not a dropped stream — a transport drop shows up as `1006` with an empty reason
+and is handled by the proxy, not here.
+
+`gemini_live.py` therefore gates the mic on that window:
+
+- receiving a `tool_call` registers every `call_id` in `_pending_tool_calls`;
+- while that set is non-empty, `_async_send_input` **drops** incoming
+  `AudioInput` frames (and the manual-VAD `activityStart` that brackets them)
+  instead of sending them. Dropping rather than buffering is deliberate: the
+  window is normally milliseconds, and a buffer would replay stale speech into
+  the next turn;
+- dispatching a `FunctionCallResultInput` clears that `call_id` **before** the
+  `trigger_response` branch. This matters most on the fire-and-forget path
+  above, which returns early without telling Gemini anything — nothing else
+  would ever reopen the gate, and the device would stay deaf for the rest of the
+  session;
+- a reconnect clears the set (a fresh session inherits no calls), and an
+  unresolved call expires after `_pending_tool_max_s` (10s) so a crashed handler
+  costs at most one risky window rather than the microphone.
+
+`activityEnd` in `_async_commit` is **not** gated: it only fires when an
+`activityStart` was already sent, and skipping it would leave the activity
+bracket open and wedge every later commit.
 
 The model is told (`resources/system_prompt*.md`, "Expression Exception") to
 never wait for, announce, or speak the emotion aloud. Note this is distinct from

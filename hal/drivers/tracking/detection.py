@@ -8,6 +8,7 @@ ORIGINAL camera coordinates as (x, y, w, h), or None.
 import base64
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -198,6 +199,35 @@ def _iou_xyxy(a, b) -> float:
     return inter / (area_a + area_b - inter)
 
 
+def _measurable_faces(faces) -> list:
+    """The detector rows whose box is a real number, dropping the rest.
+
+    YuNet can return a non-finite bbox — device-observed on a face leaving the
+    frame while tracking (offset past 25% of the frame, bbox_area down to 1.9%,
+    conf 0.29): the row came back with an infinite coordinate and `int()` on it
+    raised OverflowError, killing the tracker's detect thread mid-session.
+
+    Dropping the row rather than clamping it is the honest reading: infinity is
+    not a very large face, it is the detector saying nothing usable, and the
+    callers already have a "no face this frame" path that behaves correctly.
+
+    The filter runs BEFORE the largest / nearest-centre choice on purpose. An
+    infinite width wins any largest-by-area contest, so filtering afterwards
+    would let one bad row hide a perfectly good face behind it.
+    """
+    if faces is None:
+        return []
+    out = []
+    for f in faces:
+        try:
+            box = [float(v) for v in f[:4]]
+        except (TypeError, ValueError):
+            continue
+        if all(math.isfinite(v) for v in box):
+            out.append(f)
+    return out
+
+
 def _detect_face_yunet(frame: npt.NDArray[np.uint8]) -> Optional[Tuple[int, int, int, int]]:
     """Run YuNet on the frame, return the largest face bbox (x,y,w,h) or None.
 
@@ -216,7 +246,8 @@ def _detect_face_yunet(frame: npt.NDArray[np.uint8]) -> Optional[Tuple[int, int,
     except Exception as e:
         logger.warning("YuNet detect failed: %s", e)
         return None
-    if faces is None or len(faces) == 0:
+    faces = _measurable_faces(faces)
+    if len(faces) == 0:
         logger.info("[tracking_yunet] not found latency=%.0fms", latency_ms)
         return None
     # faces rows: [x, y, w, h, lm_x1..lm_y5, score]. Pick the largest by area.
@@ -234,12 +265,25 @@ def _detect_face_yunet(frame: npt.NDArray[np.uint8]) -> Optional[Tuple[int, int,
 def detect_face_with_landmarks(
     frame: npt.NDArray[np.uint8],
 ) -> Optional[Tuple[Tuple[int, int, int, int], Tuple[float, ...]]]:
-    """Largest face as ``((x, y, w, h), landmarks)``, or None.
+    """The face whose head counts, as ``((x, y, w, h), landmarks)``, or None.
 
-    Same detector and same largest-face policy as _detect_face_yunet, but keeps
-    the five landmarks (right eye, left eye, nose, right and left mouth corner)
-    that the bbox-only path throws away. Head orientation is recoverable from
-    them, so the gaze watcher needs no second model and no second inference.
+    Same detector as _detect_face_yunet but a DIFFERENT selection policy, and
+    it keeps the five landmarks (right eye, left eye, nose, right and left
+    mouth corner) that the bbox-only path throws away. Head orientation is
+    recoverable from them, so the gaze watcher needs no second model and no
+    second inference.
+
+    Selection: among faces tall enough for the yaw to mean anything
+    (GAZE_MIN_FACE_PX — below it the landmarks span a few pixels and the angle
+    is arithmetic on rounding error), take the one nearest the frame centre.
+    Largest-face would hand the gate to whoever leans in closest, which is the
+    user only by convention; the lamp's own aim is the better prior for which
+    face is the one it is pointed at. With one qualifying face the two policies
+    agree, so this only bites when a second person genuinely shares the desk.
+
+    Falls back to the largest face when nobody clears the size floor: the
+    caller reads the bbox for vertical re-aim as well as for the gate, and that
+    correction is most needed exactly when every face is too small to measure.
 
     Deliberately quiet: this runs on a loop, and logging every sample the way
     _detect_face_yunet does would bury the journal.
@@ -254,9 +298,15 @@ def detect_face_with_landmarks(
     except Exception as e:
         logger.debug("YuNet landmark detect failed: %s", e)
         return None
-    if faces is None or len(faces) == 0:
+    faces = _measurable_faces(faces)
+    if len(faces) == 0:
         return None
-    best = max(faces, key=lambda f: float(f[2]) * float(f[3]))
+    cx = float(w) / 2.0
+    measurable = [f for f in faces if float(f[3]) >= config.GAZE_MIN_FACE_PX]
+    if measurable:
+        best = min(measurable, key=lambda f: abs((float(f[0]) + float(f[2]) / 2.0) - cx))
+    else:
+        best = max(faces, key=lambda f: float(f[2]) * float(f[3]))
     x, y, fw, fh = int(best[0]), int(best[1]), int(best[2]), int(best[3])
     x = max(0, x); y = max(0, y)
     fw = max(1, min(fw, w - x)); fh = max(1, min(fh, h - y))

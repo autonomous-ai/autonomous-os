@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Loader2, Volume2, Check, AlertCircle } from "lucide-react";
 import { C, LockedField, LockedPasswordField, SectionCard } from "@/components/setup/shared";
 import { testTTSVoice } from "@/lib/api";
@@ -177,7 +177,9 @@ export function TTSSection({
   ttsLoaded, llmLoaded,
   ttsApiKey, setTtsApiKey,
   ttsBaseUrl, setTtsBaseUrl,
-  ttsProvider, setTtsProvider, ttsProviders,
+  // ttsProviders is kept in the props signature so a future switch back to a
+  // server-driven provider list is a drop-in swap.
+  ttsProvider, setTtsProvider, ttsProviders: _ttsProviders,
   ttsVoice, setTtsVoice, ttsVoices,
   sttLanguage,
 }: {
@@ -199,10 +201,15 @@ export function TTSSection({
   // URL yet. Initialised from the URL on first mount; re-synced when the
   // URL changes externally (config save, prop reload) but NOT when the
   // current choice is "custom" (they own the URL then, don't yank them).
+  // Re-sync happens during render (not in an effect) by comparing the URL we
+  // last synced against: setting state in an effect would cascade an extra
+  // render pass on every URL change.
   const [choice, setChoice] = useState<ProviderChoice>(() => detectChoice(ttsBaseUrl));
-  useEffect(() => {
-    setChoice((prev) => (prev === "custom" ? prev : detectChoice(ttsBaseUrl)));
-  }, [ttsBaseUrl]);
+  const [syncedUrl, setSyncedUrl] = useState(ttsBaseUrl);
+  if (syncedUrl !== ttsBaseUrl) {
+    setSyncedUrl(ttsBaseUrl);
+    if (choice !== "custom") setChoice(detectChoice(ttsBaseUrl));
+  }
   const meta = CHOICES[choice];
 
   // Vendor for the current choice. Autonomous defers to the on-disk
@@ -430,10 +437,6 @@ export function TTSSection({
         />
       </div>
 
-      {/* Suppress the "unused" lint on ttsProviders — kept in the props
-          signature so a future switch back to server-driven list is a
-          drop-in swap. */}
-      {false && <span>{ttsProviders.join(",")}</span>}
     </SectionCard>
   );
 }

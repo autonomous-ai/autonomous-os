@@ -121,6 +121,17 @@ Why that order, specifically:
 - **`WorkingDirectory=/root` for os-server** — `config.Load` reads the *relative*
   path `config/config.json`, so any other working directory silently points
   os-server and HAL at different config files.
+- **the seeded `config.json` must name `openclaw_config_dir`** — a key absent
+  from the file does *not* fall back to the `Default()` value in
+  `system/server/config/config.go`; both `Load` and `ProvideConfig` unmarshal
+  onto a zero-valued struct, so a missing key means `""`, not `/root/.openclaw`.
+  os-server finds the gateway token at
+  `filepath.Join(OpenclawConfigDir, "openclaw.json")`, which for an empty dir
+  resolves to the *relative* `openclaw.json` → `/root/openclaw.json`. That file
+  never exists, so the token is never read, the agent websocket reconnects every
+  5s forever and `WaitForAgentReady` never returns — with no error in the log,
+  since the join produced a perfectly valid path, just the wrong one. This only
+  ever bit a fully clean install: `config.json` normally survives an uninstall.
 - **web is not optional plumbing** — os-server binds `127.0.0.1:5000` and serves
   no static files, so nginx is what makes both the bundle and the API reachable.
   `/hw/` stays **loopback-only** (`allow 127.0.0.1; deny all`), matching the

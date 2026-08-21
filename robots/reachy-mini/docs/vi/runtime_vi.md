@@ -249,6 +249,18 @@ trong khi mọi service vẫn báo healthy.
 | 5 | `spike-agent.sh` | Cài Node.js 22 (NodeSource) + `openclaw` đúng version OTA pin, seed `/root/.openclaw`, chạy gateway ở loopback `18789` |
 | 6 | `spike-bootstrap.sh` | Worker OTA: seed `/root/config/bootstrap.json`, cài `robots/reachy-mini/software-update` → `/usr/local/bin/software-update` (worker exec script này để áp update; thiếu nó thì mọi lần apply đều fail `executable file not found in $PATH` trong khi mọi unit vẫn báo healthy), poll feed mỗi `5m` |
 
+`config.json` mà bước 3 seed **bắt buộc phải có `openclaw_config_dir`**. Key
+thiếu trong file KHÔNG rơi về giá trị `Default()` ở
+`system/server/config/config.go` — cả `Load` lẫn `ProvideConfig` đều unmarshal
+vào struct zero-value, nên thiếu key nghĩa là `""` chứ không phải
+`/root/.openclaw`. os-server tìm gateway token bằng
+`filepath.Join(OpenclawConfigDir, "openclaw.json")`; dir rỗng cho ra đường dẫn
+*tương đối* `openclaw.json` → `/root/openclaw.json`. File đó không bao giờ tồn
+tại: token không đọc được, websocket của agent reconnect 5s/lần vô hạn,
+`WaitForAgentReady` không bao giờ xong — và log không có lỗi nào, vì phép join
+trả về một path hợp lệ, chỉ là sai chỗ. Lỗi này chỉ lộ khi cài sạch hoàn toàn,
+do `config.json` bình thường vẫn sống sót qua uninstall.
+
 Thứ tự có lý do. `device` phải chạy trước vì mọi thứ khác đọc file nó cài.
 `bootstrap` để **cuối cùng**: nó có thể restart os-server và hal ngay khi thấy
 build mới hơn, làm việc đó giữa lúc đang cài dở biến một lượt bring-up sạch thành
