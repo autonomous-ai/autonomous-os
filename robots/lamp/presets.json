@@ -1,6 +1,7 @@
 {
   "_comment": "Per-device preset overrides for lamp. See robots/contract/ROBOT-SPEC.md § Per-device presets. Lamp's LED ring has 64 pixels (vs the platform default of 64). Emotion colors below regroup the base palette into 6 hues 60 deg apart — see robots/lamp/docs/emotion-led-mapping.md § Six hue groups for why.",
   "led_count": 64,
+  "_comment_listening": "Speed only; the color is the blue group value below. Base speed is 1.2, the fastest in EMOTION_PRESETS (every other breathing preset is 0.2-0.6), and it was reported as glaring on the lamp. Lowering the color had already been tried and did not help, because the level was never this cue's problem. breathing() sweeps 0 -> peak -> 0 over 100 steps of 0.03/speed, so modulation depth is 100% at every speed and only the period moves: 2.5 s at 1.2. A full-ring, full-depth swing that fast, sustained for as long as the user keeps talking, reads as pulsing rather than as light. 0.3 puts it back with the family. Confirmed by eye on lamp-0c89, 21/08/2026.",
   "emotion": {
     "sad":          { "color": [16, 0, 0] },
     "shy":          { "color": [16, 0, 0] },
@@ -18,7 +19,7 @@
 
     "music_chill":  { "color": [0, 12, 12] },
 
-    "listening":    { "color": [0, 0, 16] },
+    "listening":    { "color": [0, 0, 16], "speed": 0.3 },
 
     "greeting":     { "color": [16, 0, 16] },
     "goodbye":      { "color": [16, 0, 16] },
