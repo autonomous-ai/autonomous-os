@@ -160,10 +160,43 @@ việc nói. Khi `stream_output()` thấy lời gọi (`_handle_emotion_call`), 
    `routes/emotion.py` `express_emotion`) trong một daemon thread — realtime agent
    chạy ngay trong process HAL nên không cần loopback HTTP / serialize. Nó chạy
    song song với audio đang stream, nên mặt đổi mà không chặn giọng;
-2. xác nhận lời gọi bằng `FunctionCallResultInput(trigger_response=False)`, tức
-   ghi kết quả vào history **mà không** sinh response thứ hai. Với OpenAI điều
-   này bỏ qua `response.create` (`openai_realtime.py`); với Gemini thì tool
-   response chỉ để lượt tiếp tục. Độ trễ cộng thêm vào giọng nói ≈ 0.
+2. trả lời lời gọi bằng `FunctionCallResultInput`, trong đó `trigger_response`
+   phụ thuộc việc model đã nói trong lượt này hay chưa (`orchestrator.py`,
+   `_handle_emotion_call`). Nếu **đã** nói (`trigger_response=False`), kết quả
+   được ghi lại mà không sinh response thứ hai — với OpenAI và Qwen điều này bỏ
+   qua `response.create` (`openai_realtime.py` / `qwen_realtime.py`); với Gemini
+   thì ack **không được gửi đi**, vì `send_tool_response` ở đó làm lượt *tiếp
+   tục* và model nói lại toàn bộ câu trả lời. Nếu **chưa** nói, tool call chính
+   là toàn bộ phần model sinh ra cho tới lúc đó và Gemini dừng chờ, nên phải gửi
+   ack (`trigger_response=True`) nếu không lượt sẽ treo tới khi watchdog nổ. Độ
+   trễ cộng thêm vào giọng nói ≈ 0.
+
+### Cổng chặn audio khi tool call đang chờ (Gemini)
+
+Gemini Live **từ chối `send_realtime_input` khi một tool call do nó phát ra chưa
+được trả lời**, và cưỡng chế bằng cách đóng session với WebSocket **`1008`**
+("The operation was aborted"). Đây là provider chủ động đóng theo policy, không
+phải stream bị rớt — rớt ở tầng transport hiện ra là `1006` với reason rỗng và
+được xử lý ở proxy, không phải ở đây.
+
+Vì vậy `gemini_live.py` chặn mic trong cửa sổ đó:
+
+- nhận `tool_call` thì đăng ký mọi `call_id` vào `_pending_tool_calls`;
+- khi tập đó còn phần tử, `_async_send_input` **vứt** các frame `AudioInput`
+  (và `activityStart` của manual VAD đi kèm) thay vì gửi. Vứt chứ không buffer
+  là có chủ ý: cửa sổ thường chỉ vài mili-giây, còn buffer sẽ phát lại lời nói
+  cũ sang lượt sau;
+- khi dispatch `FunctionCallResultInput`, `call_id` được xoá **trước** nhánh
+  `trigger_response`. Điều này quan trọng nhất ở path fire-and-forget phía trên
+  — path đó return sớm mà không báo gì cho Gemini, nên không còn chỗ nào mở lại
+  cổng và thiết bị sẽ điếc suốt phần còn lại của session;
+- reconnect thì xoá sạch tập (session mới không thừa kế tool call nào), và một
+  call không bao giờ được giải quyết sẽ hết hạn sau `_pending_tool_max_s` (10s)
+  để một handler chết chỉ tốn nhiều nhất một cửa sổ rủi ro, chứ không mất mic.
+
+`activityEnd` trong `_async_commit` **không** bị chặn: nó chỉ chạy khi
+`activityStart` đã được gửi, bỏ qua nó sẽ để ngỏ activity bracket và làm treo
+mọi lần commit sau.
 
 Model được dặn (`resources/system_prompt*.md`, mục "Expression Exception") không
 chờ, không thông báo, không đọc tên cảm xúc thành tiếng. Lưu ý điều này khác
