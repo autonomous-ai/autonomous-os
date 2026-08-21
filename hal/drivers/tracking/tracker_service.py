@@ -565,7 +565,7 @@ class TrackerService:
                     moving_str = motion_state
                 else:
                     direction, moving_str = "·", "INIT"
-                logger.info("[tracking_object] target='%s' pos=(%.0f%%,%.0f%%) quad=%s offset=(%.0f,%.0f) dist=%.0fpx state=%s dir=%s bbox_area=%.1f%% conf=%.2f yolo_age=%.1fs",
+                logger.debug("[tracking_object] target='%s' pos=(%.0f%%,%.0f%%) quad=%s offset=(%.0f,%.0f) dist=%.0fpx state=%s dir=%s bbox_area=%.1f%% conf=%.2f yolo_age=%.1fs",
                             state.target_label, screen_x_pct, screen_y_pct, quadrant,
                             dx, dy, offset_mag, moving_str, direction, bbox_ratio * 100,
                             confidence, time.perf_counter() - last_yolo_confirm_t)

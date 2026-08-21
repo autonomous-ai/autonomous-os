@@ -633,6 +633,12 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
      Nếu `speak` báo busy (TTS khác đang giữ loa non-interruptible, ví dụ
      nudge ambient), câu sẽ fallback sang `speak_queue` để phát sau đó thay
      vì bị mất luôn.
+     Speech của agent trong queue nhận biết theo lượt: mỗi entry mang `turn_id`
+     và `turn_seq` tăng đơn điệu.
+     Khi nhận một run mới hơn, TTS dừng câu cũ đang phát và bỏ các entry
+     pending của run cũ để người dùng nghe reply phù hợp ở thời điểm đó. Một
+     request đến muộn từ run đã bị thay thế cũng bị bỏ thay vì quay lại queue.
+     `POST /tts/stop` cũng huỷ cả playback đang chạy lẫn mọi entry pending.
    - `DelegateSignal` → dừng; chuyển `[voice-instruction] …` + transcript tới OS
      server với `event_type` gốc.
    - Ngược lại lượt đã được xử lý cục bộ → báo OS server `voice_agent_handled`

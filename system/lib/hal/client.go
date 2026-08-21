@@ -179,6 +179,19 @@ func SpeakQueueReply(text string) error {
 	return postSpeak("/voice/speak-queue", body)
 }
 
+// SpeakQueueReplyForTurn is the turn-owned form of SpeakQueueReply. turnSeq
+// is allocated by the agent handler when a turn starts. HAL uses the pair to
+// make the newest turn win even when background HTTP posts arrive out of order.
+func SpeakQueueReplyForTurn(text, turnID string, turnSeq uint64) error {
+	body, _ := json.Marshal(map[string]any{
+		"text":              text,
+		"realtime_feedback": true,
+		"turn_id":           turnID,
+		"turn_seq":          turnSeq,
+	})
+	return postSpeak("/voice/speak-queue", body)
+}
+
 // SpeakInterruptible sends text to TTS; playback can be cut short by incoming voice.
 func SpeakInterruptible(text string) error {
 	body, _ := json.Marshal(map[string]any{"text": text, "interruptible": true})

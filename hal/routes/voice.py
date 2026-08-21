@@ -343,6 +343,8 @@ def speak_queue_text(req: SpeakRequest):
         req.text,
         interruptible=req.interruptible,
         realtime_feedback=req.realtime_feedback,
+        turn_id=req.turn_id,
+        turn_seq=req.turn_seq,
     )
     if not ok:
         raise HTTPException(503, "TTS not available")

@@ -138,3 +138,18 @@ func TestNoCancelMeansNothingMuted(t *testing.T) {
 		t.Errorf("without a cancel even an old run must speak")
 	}
 }
+
+func TestTTSTurnSequenceIsStableAndMonotonic(t *testing.T) {
+	h := newCancelTestHandler()
+
+	first := h.ttsTurnSequence("turn-a")
+	if first == 0 {
+		t.Fatal("first turn must receive a non-zero sequence")
+	}
+	if again := h.ttsTurnSequence("turn-a"); again != first {
+		t.Fatalf("same turn received a new sequence: got %d, want %d", again, first)
+	}
+	if second := h.ttsTurnSequence("turn-b"); second <= first {
+		t.Fatalf("newer turn sequence = %d, want > %d", second, first)
+	}
+}

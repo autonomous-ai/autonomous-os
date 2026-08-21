@@ -413,3 +413,11 @@ type AgentGateway interface {
 	// session.message role=user — identical in shape to real channel input.
 	IsRecentOutboundChat(text string) bool
 }
+
+// TurnAwareTTSQueue is implemented by agent runtimes that can attach an
+// ordered turn identity to HAL's queued TTS endpoint. It remains separate from
+// AgentGateway while downstream integrations migrate; the built-in runtimes
+// all implement it.
+type TurnAwareTTSQueue interface {
+	SendToHALTTSQueueForTurn(text, turnID string, turnSeq uint64) error
+}
