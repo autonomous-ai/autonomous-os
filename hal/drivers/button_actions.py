@@ -301,6 +301,17 @@ def single_click_action(source: str = "button", announce: bool = True, chime: bo
     # is the user taking the floor too, and a backlog of turns queued up while
     # the mic was muted must not start talking over them.
     _cancel_agent_speech(source)
+    # Stamp the music cancel watermark BEFORE audio_stop(): the cancelled turn
+    # keeps running server-side and its pending music tool call can land on
+    # /audio/play right after this, which a bare stop cannot beat. Stamping
+    # first closes that window (routes/music.audio_play refuses inside it).
+    state.note_music_cancel()
+    # Stop music on BOTH branches below. This is the "give me the floor"
+    # gesture, and the mic-muted branch used to unmute the mic while leaving
+    # music playing — a click that visibly did nothing about the loudest thing
+    # in the room. Also kills a play still in its yt-dlp resolve phase, since
+    # MusicService.playing stays True while the music thread holds the lock.
+    audio_stop()
     _wake_if_sleepy(source)
     logger.info("[sca-trace] wake done +%.0fms", (time.monotonic() - t_start) * 1000)
 
@@ -324,7 +335,6 @@ def single_click_action(source: str = "button", announce: bool = True, chime: bo
     else:
         logger.info("%s single click -- stopping speaker", source)
         stop_tts()
-        audio_stop()
     _grant_wakeword_focus(source)
     # Ack ping AFTER the stop: stop_tts frees the persistent stream lock
     # within ~10ms, so the chime sounds effectively at gesture time.

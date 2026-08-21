@@ -311,6 +311,41 @@ _mic_muted_led = False
 # gesture skip it so a stray click can't relax the mute mid-recording.
 _enrolling = False
 
+# --- Music cancel watermark ---
+#
+# time.monotonic() of the last cancel gesture (single click). The Go-side
+# speech/cancel watermark only mutes TTS — the cancelled turn keeps running and
+# its pending music tool call still reaches /audio/play, so a click could be
+# followed seconds later by music the user just killed (the yt-dlp resolve takes
+# 1-5s, and MusicService.play() clears its own _stop_event, so a point-in-time
+# audio_stop() cannot win that race).
+#
+# /audio/play refuses any request landing within MUSIC_CANCEL_GUARD_S of the
+# mark. Monotone like the Go watermark: a later click only moves it forward.
+# 0.0 = no cancel yet.
+_music_cancel_ms: float = 0.0
+
+# Guard window after a cancel click during which /audio/play is refused.
+# Sized to cover the cancelled turn's in-flight tool call (agent → OS server →
+# HAL is well under a second) while staying below the floor of a genuinely NEW
+# music request: after a click the user still has to speak, be transcribed, and
+# have the LLM emit the tool call — never under ~3s in practice.
+MUSIC_CANCEL_GUARD_S = 3.0
+
+
+def note_music_cancel() -> None:
+    """Stamp the music cancel watermark. Called by the single-click gesture."""
+    global _music_cancel_ms
+    _music_cancel_ms = time.monotonic()
+
+
+def music_cancel_active() -> bool:
+    """True while /audio/play must be refused because of a recent cancel."""
+    if not _music_cancel_ms:
+        return False
+    return (time.monotonic() - _music_cancel_ms) < MUSIC_CANCEL_GUARD_S
+
+
 # Set True by destructive button actions (long_press, factory_reset) right
 # before they kick `shutdown`/`reboot`/OS-server reset. The lifespan shutdown
 # handler in server.py checks this flag so it doesn't speak a second
