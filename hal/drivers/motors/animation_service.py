@@ -342,8 +342,20 @@ class AnimationService:
         self._handle_play(self._music_recording)
 
     def _handle_music_stop(self):
-        """Stop music groove — interrupt immediately and return to idle."""
+        """Stop music groove — interrupt immediately and return to idle.
+
+        No-op when nothing was grooving. routes/music.audio_stop() calls
+        _on_music_complete() outside its `music_service.playing` guard, and
+        that path also double-fires (explicit /audio/stop plus the music
+        thread's finally), so this used to run up to twice on every single
+        click — which stopped nothing but restarted idle from frame 0, yanking
+        the arm out of mid-loop. Restoring idle is only meaningful if music
+        actually took the body away from it.
+        """
+        was_playing = self._music_playing
         self._music_playing = False
+        if not was_playing:
+            return
         self._hold_until = 0.0  # skip hold, go to idle right away
         self._handle_play(self.idle_recording)
     
