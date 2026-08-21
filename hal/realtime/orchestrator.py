@@ -545,9 +545,23 @@ class RealtimeOrchestrator:
         if provider != "gemini":
             return
         threshold = config.REALTIME_GEMINI_PRE_TURN_RECYCLE_S
+        idle = (
+            time.monotonic() - self._last_turn_monotonic
+            if self._last_turn_monotonic > 0.0
+            else -1.0
+        )
+        # TEMPORARY (field diagnosis 2026-08-21): the recycle was not firing on a
+        # measured 64s gap and the reason is not visible from outside. Remove once
+        # the cause is known.
+        logger.info(
+            "[realtime] prepare_turn: threshold=%.0fs idle=%.0fs last_turn=%.1f -> %s",
+            threshold,
+            idle,
+            self._last_turn_monotonic,
+            "RECYCLE" if (threshold > 0 and idle >= threshold) else "skip",
+        )
         if threshold <= 0 or self._last_turn_monotonic <= 0.0:
             return
-        idle = time.monotonic() - self._last_turn_monotonic
         if idle < threshold:
             return
         logger.info(
