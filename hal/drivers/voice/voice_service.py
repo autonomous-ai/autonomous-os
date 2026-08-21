@@ -240,7 +240,13 @@ class VoiceService:
                     and not tts_service.native_mode
                     and tts_service.realtime_feedback
                 ):
-                    text: str = tts_service.last_spoken_text
+                    spoken_text: str = tts_service.last_spoken_text
+                    # [TTS HISTORY] below only exists inside the CURRENT Gemini
+                    # socket. Persist OpenClaw's actual spoken reply as well, or
+                    # a recycle (idle recovery / unresolved Gemini tool call)
+                    # loses it before the next user turn.
+                    self._realtime.save_main_agent_reply_fragment(spoken_text)
+                    text: str = spoken_text
                     # Direction is INTO the realtime model: whatever was just
                     # spoken (often an OpenClaw reply, not Gemini's own output) is
                     # pushed to Gemini as history so it stays aware of what the
@@ -1762,6 +1768,13 @@ class VoiceService:
                 hal_config.WAKEWORD_ENABLED,
                 wakeword_authorized,
             ):
+                # Gemini's audio context and [TTS HISTORY] are session-local.
+                # When this turn is delegated or falls back to the main agent,
+                # persist the user's request before sending it downstream so a
+                # session replacement cannot erase the handoff from realtime's
+                # next-session context.
+                if combined and not rt.handled:
+                    self._realtime.save_main_handoff(combined)
                 # A realtime connection failure or silent timeout is not a
                 # handled turn. Preserve the STT fallback so a wake-word command
                 # never disappears just because Gemini is temporarily down.

@@ -520,6 +520,15 @@ Các lượt realtime được append vào file JSONL (`HAL_REALTIME_MEMORY_PATH
 (giữ lại `HAL_REALTIME_MEMORY_TRIM_KEEP`). `RealtimeSummarizer` (`summarizer.py`)
 nén device + realtime memory qua **Anthropic Messages API**
 (`HAL_REALTIME_SUMMARIZER_MODEL`, mặc định `claude-haiku-4-5-20251001`).
+Điều này gồm cả lượt delegate hoặc fallback sang main agent: HAL lưu request của
+user trước khi dispatch, rồi lưu từng fragment TTS opt-in của main agent sau khi
+nói xong. `[TTS HISTORY]` vẫn cập nhật session live hiện tại ngay lập tức, nhưng
+không được coi là memory bền: session mới sau idle hoặc tool-call sẽ nạp lại từ
+JSONL/summary.
+Với các runtime dùng layout OpenClaw (OpenClaw, PicoClaw, Codex, Claude Code,
+OpenCode), context manager còn nạp `MEMORY.md` ở root của workspace, ngoài
+device summary được sinh ra và các file `memory/*.md` mới. Hermes dùng
+`memories/MEMORY.md` theo layout native của nó.
 Summarize chạy lúc `start()` (bù phần chưa tóm tắt) và `stop()` (flush). Phần
 catch-up ở `start()` chạy trong **thread nền** (sau `connect()`), nên lời gọi
 Anthropic không chặn session trở thành `available` — nếu chặn thì một lượt nói
