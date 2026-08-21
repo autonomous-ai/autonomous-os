@@ -470,7 +470,10 @@ class RealtimeOrchestrator:
                     logger.exception("[realtime] old agent disconnect failed")
 
     def _rebuild_now(
-        self, reason: str, cancel_event: threading.Event | None = None
+        self,
+        reason: str,
+        cancel_event: threading.Event | None = None,
+        discard_old_on_failure: bool = False,
     ) -> bool:
         """Synchronously swap in a fresh session before audio is streamed.
 
@@ -480,7 +483,11 @@ class RealtimeOrchestrator:
         """
         if not self._begin_rebuild():
             return False
-        return self._rebuild_locked(reason, cancel_event=cancel_event)
+        return self._rebuild_locked(
+            reason,
+            discard_old_on_failure=discard_old_on_failure,
+            cancel_event=cancel_event,
+        )
 
     def _rebuild_in_background(
         self, reason: str, thread_name: str, discard_old_on_failure: bool = False
@@ -534,6 +541,25 @@ class RealtimeOrchestrator:
         # capture that was dropped before it reached stream_output().
         self._skip_post_idle_recycle = False
         provider: str = config.REALTIME_PROVIDER.strip().lower()
+        agent = getattr(self, "_agent", None)
+        # An unanswered Gemini tool call makes the entire Live session
+        # non-reusable: audio, turn-context text, video, and manual-VAD
+        # activityEnd can all be rejected with 1008. Fire-and-forget expression
+        # calls intentionally skip their Gemini acknowledgement to avoid a
+        # duplicate reply, so replace that session before the next capture.
+        if (
+            provider == "gemini"
+            and agent is not None
+            and agent.requires_fresh_session
+        ):
+            logger.info(
+                "[realtime] Rebuilding Gemini session after unresolved tool call before streaming audio"
+            )
+            if self._rebuild_now(
+                "gemini-unresolved-tool-call", discard_old_on_failure=True
+            ):
+                self._skip_post_idle_recycle = True
+            return
         # NOT gated on gemini_needs_idle_workaround(). That predicate asks whether
         # the MODEL has the native-audio idle-resume bug, but an idle session dying
         # is a session-lifecycle fact, not a model one: Gemini closes a session it

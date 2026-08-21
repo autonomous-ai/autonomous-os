@@ -62,6 +62,16 @@ class VoiceAgentBase(ABC):
         return self._connected.is_set()
 
     @property
+    def requires_fresh_session(self) -> bool:
+        """Whether the provider session must be replaced before another turn.
+
+        Providers normally return ``False``. Gemini overrides this after an
+        unresolved function call because its Live API refuses further client
+        input on that session.
+        """
+        return False
+
+    @property
     @abstractmethod
     def sample_rate(self) -> int:
         """Sample rate expected by this provider (Hz) — the INPUT/mic rate."""

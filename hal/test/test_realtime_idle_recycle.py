@@ -21,7 +21,8 @@ def _orch(monkeypatch, model: str, idle_s: float, threshold: float = 60.0):
     o._skip_post_idle_recycle = False
     o._last_turn_monotonic = time.monotonic() - idle_s
     o._rebuilt = []
-    o._rebuild_now = lambda reason: (o._rebuilt.append(reason), True)[1]
+    o._agent = None
+    o._rebuild_now = lambda reason, **kwargs: (o._rebuilt.append(reason), True)[1]
     return o
 
 
@@ -64,6 +65,16 @@ def test_non_gemini_provider_untouched(monkeypatch):
     monkeypatch.setattr(hal_config, "REALTIME_PROVIDER", "openai", raising=False)
     o.prepare_turn()
     assert o._rebuilt == []
+
+
+def test_unresolved_tool_call_rebuilds_before_audio(monkeypatch):
+    o = _orch(monkeypatch, "models/gemini-3.1-flash-live-preview", idle_s=5)
+    o._agent = SimpleNamespace(requires_fresh_session=True)
+
+    o.prepare_turn()
+
+    assert o._rebuilt == ["gemini-unresolved-tool-call"]
+    assert o._skip_post_idle_recycle is True
 
 
 # The threshold has to sit under the shortest idle gap that actually killed a
