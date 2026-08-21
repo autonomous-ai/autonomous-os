@@ -71,6 +71,15 @@ grep -r "$REQUEST_ID" /var/log/nginx/ /workspace/logs/ || echo "NEVER REACHED TH
 `urt=` is the upstream response time; compare it against the ladder in
 [deployment.md](deployment.md#timeout-ladder).
 
+A full access line carries the timestamp, both status codes, both timings and the
+request id -- enough to bound an incident in time without correlating against the
+service logs:
+
+```
+1.2.3.4 [21/Aug/2026:08:15:21 +0000] lelamp-rp.autonomous.ai "POST /api/dl/owlv2 HTTP/1.1" \
+  client=200 upstream=200 rt=0.393 urt=0.373 addr=127.0.0.1:7999 rid=79b0250114c29f05
+```
+
 ## 1c. A log file stopped growing
 
 Both servers use `ResilientRotatingFileHandler` (`src/core/logging_ext.py`). The
