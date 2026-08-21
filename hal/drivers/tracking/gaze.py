@@ -118,6 +118,41 @@ def head_yaw_deg(landmarks: Sequence[float]) -> Optional[float]:
     return abs(math.degrees(math.asin(ratio)))
 
 
+def landmarks_in_frame(landmarks: Sequence[float], width: float,
+                       height: float) -> bool:
+    """Whether every landmark the yaw is built from was actually SEEN.
+
+    YuNet reports landmarks for a face clipped by a frame edge as freely as for
+    one wholly inside it, and the ones outside come back with coordinates off
+    the frame — device-measured on this lamp, a user sitting plainly in front
+    of it: box ``[264, -1, 162, 92]`` with both eyes at ``y = -3.0`` and
+    ``y = -1.3``. Those two numbers are an extrapolation, not an observation.
+
+    Fed to head_yaw_deg they push the nose ratio past 1, where the clamp turns
+    "not measurable" into exactly 90.0 — a number indistinguishable from a real
+    profile, and one facing_ratio then counts as a valid vote AGAINST. That is
+    how a user looking straight at the lamp produced `trail=[90,90,90,90]`.
+
+    So the rule is the same one the size floor already states: a measurement
+    that cannot be made must not vote either way. Only the first three points —
+    the two eyes and the nose — matter, because they are the only ones the yaw
+    reads; a mouth corner below the chin line being clipped says nothing about
+    the angle.
+    """
+    try:
+        pts = [float(v) for v in landmarks[:6]]
+    except (TypeError, ValueError):
+        return False
+    if len(pts) < 6:
+        return False
+    for x, y in zip(pts[0::2], pts[1::2]):
+        if not (math.isfinite(x) and math.isfinite(y)):
+            return False
+        if x < 0.0 or y < 0.0 or x > width or y > height:
+            return False
+    return True
+
+
 def cone_for(edge_frac: float) -> float:
     """The acceptance cone that applies to a face this far off frame centre.
 
@@ -293,13 +328,27 @@ def _anchor_idle_from_pose(svc: Any, pose: Any) -> None:
         if j in ("base_pitch.pos", "wrist_pitch.pos")
         and isinstance(v, (int, float))
     }
+    # The remembered wrist_pitch is a stale vertical aim, and re-resting on it
+    # undoes every correction the pitch loop has made. Device-observed after
+    # the two stopped firing in the same second: pitch lifted the camera to
+    # -31.5, then thirty-four seconds later this anchored idle back on -46.1,
+    # from where the face is clipped again. The bearing memory is worth
+    # believing about which way to FACE, which is what the move itself uses;
+    # about how high to look, a correction made seconds ago from a face on
+    # screen beats a number recorded minutes ago. So once pitch has spoken,
+    # leave the wrist where it put it and anchor the rest.
+    if _last_pitch_t > 0.0:
+        anchor.pop("wrist_pitch.pos", None)
     if not anchor:
         return
     pitch = anchor.get("wrist_pitch.pos")
     if _last_anchor is not None and pitch is not None and abs(pitch - _last_anchor) < 1.0:
         return
     setter(anchor)
-    _last_anchor = pitch
+    # Only when this anchor actually carried a wrist angle — otherwise the
+    # pitch loop's memory of where it last put the wrist still stands.
+    if pitch is not None:
+        _last_anchor = pitch
     logger.info(
         "[gaze] idle now rests at %s",
         " ".join(f"{k.split('.')[0]}={v:+.1f}" for k, v in sorted(anchor.items())),
@@ -347,6 +396,26 @@ def _anchor_idle_here(svc: Any, pitch: Optional[float] = None) -> None:
     )
 
 
+def idle_breathing(svc: Any) -> bool:
+    """Whether the only thing writing the servos is the idle loop looping.
+
+    The animation service marks that state itself: `_idle_settled` is set when
+    the idle recording reaches its end and starts round again at reduced FPS,
+    and cleared the moment anything else takes the arm — an emotion, a tracking
+    session, a commanded move, or the interpolation INTO idle, which is a real
+    relocation and reads as one here too.
+
+    This is a read of an existing flag rather than a new seam on purpose: the
+    service already had to know the difference to keep the lamp from startling
+    at its own joints (see is_noisy_motion), and a second, parallel notion of
+    "is it moving" would be one more thing to keep in step.
+    """
+    if svc is None or not getattr(svc, "_idle_settled", False):
+        return False
+    current = getattr(svc, "_current_recording", None)
+    return current is not None and current == getattr(svc, "idle_recording", None)
+
+
 _skips_logged: set = set()
 
 
@@ -391,10 +460,20 @@ def _sample_once() -> Optional[str]:  # noqa: C901
     # refusing to notice they are addressing it reads as broken. Tracking also
     # holds still most of the time — it corrects, then waits — so the flag
     # blocks far more than the moving head it was standing in for.
+    #
+    # And not every servo write is a move. The idle loop breathes: it writes
+    # the arm every frame, forever, so `last_servo_write` is almost never older
+    # than FRAME_SETTLE_S and this test alone refused nearly every frame.
+    # Device-measured once the loop started counting recorded samples rather
+    # than attempts: 0.3 samples/s recorded against 4.9/s blocked — 94% of the
+    # evidence thrown away, which no window size or sample floor downstream can
+    # recover from. Idle motion is millimetres and slow; the yaw survives it.
+    # A settling window exists for a real relocation, so it applies to one.
     last_write = getattr(svc, "last_servo_write", 0.0)
     if isinstance(last_write, (int, float)) and last_write > 0:
         if (time.monotonic() - float(last_write)) < aim.FRAME_SETTLE_S:
-            return "head still settling from a move"
+            if not idle_breathing(svc):
+                return "head still settling from a move"
 
     # Non-blocking: a live look must never wait behind a background sample.
     if not aim._detector_lock_use.acquire(blocking=False):
@@ -457,7 +536,16 @@ def _sample_once() -> Optional[str]:  # noqa: C901
         # to the edge used to keep resetting this clock while sliding out of
         # view, so the lamp never turned to keep them.
         _last_face_t = time.monotonic()
-    record_sample(head_yaw_deg(landmarks), float(fh), edge)
+    # A face whose eyes sit outside the frame is a face this camera is pointed
+    # too low at, not a face turned away. Record it as unmeasured — the vertical
+    # offset above still stands, so _maybe_pitch gets its correction from the
+    # very frame the yaw had to be thrown away in.
+    yaw = (
+        head_yaw_deg(landmarks)
+        if landmarks_in_frame(landmarks, frame_w, frame_h)
+        else None
+    )
+    record_sample(yaw, float(fh), edge)
     return None
 
 
@@ -620,6 +708,19 @@ def _maybe_repoint(now: float) -> None:
         return
     if (now - _last_repoint_t) < config.GAZE_REPOINT_COOLDOWN_S:
         return
+    # Not while the framing is being corrected. These two both move the head
+    # and both re-anchor idle, so together they fought: device-observed, pitch
+    # lifted the camera to a face it could see (-72.8 -> -61.9) and thirteen
+    # seconds later repoint anchored idle back on the REMEMBERED pose, wrist
+    # -46.7, dropping the aim to where the face was clipped again — over and
+    # over, wrist_pitch restarting from -67.8, then -72.8, then -43.6.
+    #
+    # Precedence goes to pitch because the two answer different questions and
+    # only one of them has current evidence: pitch is correcting toward a face
+    # visible RIGHT NOW, while repoint is a guess about where a face was last
+    # seen, which is worth acting on only when nothing is visible at all.
+    if (now - _last_pitch_t) < config.GAZE_REPOINT_AFTER_S:
+        return
 
     import hal.app_state as state
 
@@ -666,6 +767,7 @@ def _maybe_repoint(now: float) -> None:
 def _loop() -> None:
     interval = 1.0 / max(0.5, config.GAZE_SAMPLE_FPS)
     counted = 0
+    blocked = 0
     counted_from = 0.0
     # Let the camera and detector finish warming before the first sample.
     if _stop.wait(10.0):
@@ -689,20 +791,33 @@ def _loop() -> None:
     with aim._camera_consumer(cap):
         while not _stop.is_set():
             try:
-                _sample_once()
+                skipped = _sample_once()
                 now = time.monotonic()
-                # Report the rate ACHIEVED, not the one configured. The loop is
-                # paced by fetching a frame and running the detector, so asking
-                # for more samples per second does not produce them, and every
-                # window-size decision downstream depends on the real figure.
-                counted += 1
+                # Report the rate ACHIEVED, and achieved means RECORDED. Counting
+                # iterations instead counts the turns that recorded nothing —
+                # a frame refused for settling or for a busy detector leaves the
+                # buffer exactly as it was — and the two numbers are not close:
+                # this loop reported 5.7/s on the device while the buffer held
+                # samples older than the 1.5 s window, i.e. under 1/s of real
+                # evidence, which is what starved GAZE_MIN_SAMPLES and refused
+                # users who were plainly facing the lamp. Every window-size and
+                # min-samples decision downstream reads this figure, so it has
+                # to mean what it says.
+                if skipped is None:
+                    counted += 1
+                else:
+                    blocked += 1
                 if counted_from <= 0.0:
                     counted_from = now
                 elif (now - counted_from) >= 60.0:
-                    logger.info("[gaze] sampling at %.1f/s (asked %.1f/s)",
-                                counted / (now - counted_from),
-                                config.GAZE_SAMPLE_FPS)
-                    counted, counted_from = 0, now
+                    elapsed = now - counted_from
+                    logger.info(
+                        "[gaze] sampling at %.1f/s (asked %.1f/s), %.1f/s more "
+                        "frames blocked before they could be measured",
+                        counted / elapsed, config.GAZE_SAMPLE_FPS,
+                        blocked / elapsed,
+                    )
+                    counted, blocked, counted_from = 0, 0, now
                 # Framing first: a face inside the frame is what everything
                 # else is measured from, and turning to a bearing that still
                 # points at the desk finds nobody however right the bearing is.
