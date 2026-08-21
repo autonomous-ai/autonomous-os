@@ -147,6 +147,61 @@ which do not exist until the first `connect()` succeeds. No HAL restart or new
 audio is required; voice turns keep using the main-agent fallback until the
 connection recovers.
 
+## Echo cancellation (AEC)
+
+`hal/drivers/voice/aec.py` runs the mic through WebRTC's APM (AEC3) with the
+audio being played as the reference. It is **provider-independent**: the
+reference is tapped in `_WatchedStream.write` (`tts/service.py`), the single
+point every playback path reaches the device through — synthesized speech, the
+`speak_queue` drain, and realtime **native audio**. Tapping there rather than at
+synthesis is deliberate: TTS renders a sentence far faster than real time, while
+the output stream writes at playback rate, which is the timing the mic sees.
+
+**Off by default** (`HAL_AEC_ENABLED=false`). It needs the
+`aec-audio-processing` binding, which is **not** a hal dependency — PyPI ships
+no Linux wheels for it, so a device needs a locally built one. When the import
+fails, `configure()` logs once and every entry point becomes a no-op; the voice
+path behaves exactly as before.
+
+| Env | Default | Meaning |
+|-----|---------|---------|
+| `HAL_AEC_ENABLED` | `false` | Master switch |
+| `HAL_AEC_DELAY_MS` | `150` | Speaker→mic delay hint. Measured lag on a lamp is ~154 ms; correcting 80→150 took ERLE from 10.9 to 18.6 dB |
+| `HAL_AEC_NS` | `true` | Also run APM noise suppression |
+| `HAL_AEC_TAIL_S` | `0.5` | Keep cancelling this long after the last speaker write, then bypass the APM |
+| `HAL_AEC_DUMP_DIR` | — | Write `aec_mic/ref/out.wav` for offline ERLE analysis |
+
+Only the **barge-in monitor** and the main VAD loop are wrapped. Because
+`_wait_for_tts()` closes the mic while the device speaks, the barge-in monitor
+is currently the only path where the mic is open during playback — so it is the
+only place AEC can be measured until the mic stays open through playback (full
+duplex, not implemented). The reverb gate is deliberately left uncancelled so
+its timing is unchanged.
+
+**Measured on a lamp** (OrangePi sun60 / A523, USB mic + USB speaker — two
+independent clock domains), speaking a ~22 s utterance with the mic open:
+
+| delay hint | ERLE overall | during convergence | converged |
+|---|---|---|---|
+| 80 ms (old default) | 10.9 dB | 6.5 dB | 18.8 dB |
+| **150 ms** | **18.6 dB** | **14.2 dB** | **21.1 dB** |
+
+Cost is ~3.9 % of one A523 core at realtime. The MacBook reference figure for
+the same canceller is ~42 dB; the gap is the hardware — two free-running USB
+clocks and a cheap analog path. Whether ~20 dB is enough to stop STT reading the
+device's own speech is not yet established: that needs a mic-open turn, which
+`_wait_for_tts()` does not currently allow.
+
+`process()` buffers to the APM's fixed 10 ms frames and returns exactly as many
+samples as the caller asked for (priming once with up to 10 ms of silence), so
+hal's 64 ms framing is unaffected. ERLE is logged periodically while the
+speaker is active — **0 dB means the canceller is doing nothing**.
+
+> The image already loads PulseAudio's `module-echo-cancel` (`setup.sh`), but
+> nothing reaches it: a udev rule sets `PULSE_IGNORE=1` on the speaker codec so
+> hal can own it, and capture goes through `arecord -D plughw:` directly. That
+> module has no reference and no client; it is not what cancels echo here.
+
 ## Emotion expression (fire-and-forget)
 
 If the device declares the `expression` capability
@@ -800,3 +855,4 @@ is a top-level `config.json` flag:
 | `models/`, `enums/` | Input/output/event types, provider + gateway enums |
 | `resources/` | System prompts (shared + per-provider) |
 | `../voice/voice_service.py` | Integration: streams mic audio, consumes output, routes delegate/handled |
+| `../voice/aec.py` | WebRTC AEC3 on the mic path; reference tapped at the TTS output stream (all providers) |

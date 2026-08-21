@@ -51,6 +51,7 @@ from hal.drivers.voice._internal.speaker_decorate import (
 from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
 from hal.drivers.voice._internal.vad_filters import SileroVADFilter, WebRTCVADFilter
 from hal.drivers.voice._internal.wakeword_focus import WakeWordFocus
+from hal.drivers.voice import aec
 from hal.drivers.voice.backchannel import Backchannel
 from hal.drivers.voice.stt import STTProvider
 
@@ -657,6 +658,9 @@ class VoiceService:
                     blocksize=frame_size,
                     device=self._input_device,
                 )
+            # The one place the mic is already open while the speaker plays, so
+            # the only place AEC can be measured before full duplex exists.
+            mic_ctx = aec.wrap_mic(mic_ctx, device_rate, np)
             with mic_ctx as mic:
                 while self._running and self._tts_is_speaking():
                     data, overflowed = mic.read(frame_size)
@@ -752,6 +756,7 @@ class VoiceService:
                         blocksize=frame_size,
                         device=self._input_device,
                     )
+                mic_ctx = aec.wrap_mic(mic_ctx, device_rate, self._np)
                 with mic_ctx as mic:
                     logger.info(
                         "Listening for speech (RMS=%d, rate=%dHz, backend=%s)...",

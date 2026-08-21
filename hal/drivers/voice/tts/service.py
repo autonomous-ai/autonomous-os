@@ -20,6 +20,7 @@ from typing import Optional
 
 import numpy as np
 
+from hal.drivers.voice import aec
 from hal.drivers.voice.tts.backend import (
     TTSBackend,
     TTS_SAMPLE_RATE,
@@ -79,6 +80,10 @@ class _WatchedStream:
 
     def write(self, data):
         self._owner._write_started_ts = time.monotonic()
+        # Echo reference, tapped at playback rate — the timing the mic sees.
+        # Covers synthesized speech, the queue drain and realtime native audio,
+        # since all three reach the device through this one stream.
+        aec.reference_write(data, self._owner._stream_rate)
         try:
             return self._stream.write(data)
         finally:

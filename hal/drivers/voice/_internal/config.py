@@ -101,6 +101,25 @@ WARM_MIC_ECHO_SKIP_MAX_S = float(os.environ.get("HAL_WARM_MIC_ECHO_SKIP_MAX_S", 
 
 
 # ---------------------------------------------------------------------------
+# Acoustic echo cancellation (WebRTC AEC3) — see drivers/voice/aec.py.
+# Off by default: it needs the `aec-audio-processing` native binding, which is
+# not a hal dependency. Absent, every AEC entry point is a no-op.
+# ---------------------------------------------------------------------------
+AEC_ENABLED = os.environ.get("HAL_AEC_ENABLED", "false").lower() == "true"
+# Speaker→mic delay hint. AEC3 estimates the real delay itself, but the hint
+# decides how fast it converges. Measured on a lamp (USB mic + USB speaker) the
+# true lag is ~154ms; correcting the hint from 80 to 150 took ERLE from 10.9 to
+# 18.6 dB overall and 6.5 to 14.2 dB during the convergence phase.
+AEC_DELAY_MS = int(os.environ.get("HAL_AEC_DELAY_MS", "150"))
+AEC_NOISE_SUPPRESSION = os.environ.get("HAL_AEC_NS", "true").lower() == "true"
+# Keep cancelling for this long after the last speaker write, then bypass the
+# APM until playback resumes.
+AEC_TAIL_S = float(os.environ.get("HAL_AEC_TAIL_S", "0.5"))
+# Set to a directory to write aec_mic/ref/out.wav for offline ERLE analysis.
+AEC_DUMP_DIR = os.environ.get("HAL_AEC_DUMP_DIR", "")
+
+
+# ---------------------------------------------------------------------------
 # STT keepalive — pre-connect WS before speech is detected to cut latency
 # ---------------------------------------------------------------------------
 STT_KEEPALIVE = os.environ.get("HAL_STT_KEEPALIVE", "false").lower() == "true"

@@ -141,6 +141,46 @@ với reconnect send/receive của provider, vì các loop đó chưa tồn tạ
 `connect()` thành công. Không cần restart HAL hay chờ audio mới; các lượt voice
 vẫn fallback xuống agent chính cho tới khi kết nối hồi phục.
 
+## Khử vọng âm (AEC)
+
+`hal/drivers/voice/aec.py` đưa audio mic qua APM của WebRTC (AEC3), lấy audio
+đang phát làm tín hiệu tham chiếu. Nó **độc lập với provider**: tham chiếu được
+lấy tại `_WatchedStream.write` (`tts/service.py`) — điểm duy nhất mà mọi đường
+phát ra loa đều đi qua: giọng tổng hợp, phần drain của `speak_queue`, và **native
+audio** của realtime. Lấy ở đó thay vì tại lúc tổng hợp là có chủ ý: TTS render
+một câu nhanh hơn thời gian thực rất nhiều, còn output stream ghi đúng tốc độ
+phát — đúng nhịp mà mic nghe thấy.
+
+**Mặc định tắt** (`HAL_AEC_ENABLED=false`). Nó cần binding
+`aec-audio-processing`, vốn **không** phải dependency của hal — PyPI không có
+wheel Linux nào, nên thiết bị cần wheel tự build. Khi import thất bại,
+`configure()` log một lần và mọi entry point trở thành no-op; đường voice hoạt
+động y như trước.
+
+| Env | Mặc định | Ý nghĩa |
+|-----|----------|---------|
+| `HAL_AEC_ENABLED` | `false` | Công tắc chính |
+| `HAL_AEC_DELAY_MS` | `150` | Gợi ý độ trễ loa→mic. Độ trễ đo trên lamp ~154 ms; sửa 80→150 đưa ERLE từ 10.9 lên 18.6 dB |
+| `HAL_AEC_NS` | `true` | Bật thêm khử nhiễu của APM |
+| `HAL_AEC_TAIL_S` | `0.5` | Tiếp tục khử trong khoảng này sau lần ghi loa cuối, rồi bypass APM |
+| `HAL_AEC_DUMP_DIR` | — | Ghi `aec_mic/ref/out.wav` để phân tích ERLE offline |
+
+Chỉ **barge-in monitor** và vòng VAD chính được bọc. Vì `_wait_for_tts()` đóng
+mic khi thiết bị đang nói, barge-in monitor hiện là đường duy nhất mic còn mở
+trong lúc phát — nên đó cũng là chỗ duy nhất đo được AEC, cho tới khi mic được
+giữ mở suốt lúc phát (full duplex, chưa làm). Cổng reverb cố ý không khử để giữ
+nguyên timing của nó.
+
+`process()` gom audio về khung cố định 10 ms của APM và trả về đúng số mẫu mà
+caller yêu cầu (mồi một lần bằng tối đa 10 ms im lặng), nên khung 64 ms của hal
+không đổi. ERLE được log định kỳ khi loa đang hoạt động — **0 dB nghĩa là bộ khử
+không làm gì cả**.
+
+> Image đã load sẵn `module-echo-cancel` của PulseAudio (`setup.sh`), nhưng
+> không có gì đi tới nó: một udev rule đặt `PULSE_IGNORE=1` cho card loa để hal
+> tự sở hữu, còn capture đi thẳng qua `arecord -D plughw:`. Module đó không có
+> tham chiếu lẫn client; nó không phải thứ đang khử vọng âm ở đây.
+
 ## Biểu cảm cảm xúc (fire-and-forget)
 
 Nếu thiết bị khai báo capability `expression`
@@ -770,3 +810,4 @@ trong `config.json`:
 | `models/`, `enums/` | Kiểu input/output/event, enum provider + gateway |
 | `resources/` | System prompt (chung + theo provider) |
 | `../voice/voice_service.py` | Tích hợp: stream audio mic, tiêu thụ output, route delegate/handled |
+| `../voice/aec.py` | WebRTC AEC3 trên đường mic; tham chiếu lấy tại TTS output stream (mọi provider) |

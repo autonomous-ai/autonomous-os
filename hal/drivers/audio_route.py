@@ -142,6 +142,14 @@ def bt_active() -> bool:
 
 
 def _swap_tts(output_idx: Optional[int]) -> None:
+    # A new sink is a new acoustic path — the canceller's buffered reference
+    # belongs to the old one.
+    try:
+        from hal.drivers.voice import aec
+
+        aec.reset()
+    except Exception:
+        pass
     tts = state.tts_service
     if tts is None:
         return
