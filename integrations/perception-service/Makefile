@@ -122,15 +122,21 @@ start-runpod-master: start-nginx start-runpod-dlserver start-runpod-lbserver
 start-runpod-master-ssl: start-nginx-ssl start-runpod-dlserver start-runpod-lbserver
 
 start-runpod-slave: start-nginx stop-runpod-dlserver install
-	@command -v multilog >/dev/null || apt-get install -y daemontools
-	@mkdir -p /workspace/logs/dlserver/stderr
-	@$(SET_TRT_LD_PATH); nohup python -m dlserver --host 127.0.0.1 --port $(LBSERVER_PORT) --log-dir /workspace/logs/dlserver --pid-file $(DLSERVER_PID) </dev/null 2>&1 | multilog t s1048576 n3 /workspace/logs/dlserver/stderr &
+	@$(SET_TRT_LD_PATH); nohup setsid bash scripts/run-with-restart.sh \
+		--pid-file $(DLSERVER_PID) --wrapper-pid-file $(DLSERVER_WRAPPER_PID) --cooldown 5 \
+		--probe-url http://127.0.0.1:$(LBSERVER_PORT)/livez \
+		--log-dir /workspace/logs/dlserver -- \
+		python -m dlserver --host 127.0.0.1 --port $(LBSERVER_PORT) --log-dir /workspace/logs/dlserver \
+		</dev/null >/dev/null 2>&1 &
 	@echo "dlserver started on port $(LBSERVER_PORT) (slave, no LB)"
 
 start-runpod-slave-ssl: start-nginx-ssl stop-runpod-dlserver install
-	@command -v multilog >/dev/null || apt-get install -y daemontools
-	@mkdir -p /workspace/logs/dlserver/stderr
-	@$(SET_TRT_LD_PATH); nohup python -m dlserver --host 127.0.0.1 --port $(LBSERVER_PORT) --log-dir /workspace/logs/dlserver --pid-file $(DLSERVER_PID) </dev/null 2>&1 | multilog t s1048576 n3 /workspace/logs/dlserver/stderr &
+	@$(SET_TRT_LD_PATH); nohup setsid bash scripts/run-with-restart.sh \
+		--pid-file $(DLSERVER_PID) --wrapper-pid-file $(DLSERVER_WRAPPER_PID) --cooldown 5 \
+		--probe-url http://127.0.0.1:$(LBSERVER_PORT)/livez \
+		--log-dir /workspace/logs/dlserver -- \
+		python -m dlserver --host 127.0.0.1 --port $(LBSERVER_PORT) --log-dir /workspace/logs/dlserver \
+		</dev/null >/dev/null 2>&1 &
 	@echo "dlserver started on port $(LBSERVER_PORT) (slave-ssl, no LB)"
 
 gen-ssl-cert:
@@ -172,53 +178,34 @@ start-nginx-ssl: gen-ssl-cert stop-nginx
 	nginx -c /etc/nginx/perception-service-nginx-ssl.conf
 
 start-runpod-dlserver: install stop-runpod-dlserver
-	@command -v multilog >/dev/null || apt-get install -y daemontools
-	@$(SET_TRT_LD_PATH); nohup bash scripts/run-with-restart.sh \
+	@$(SET_TRT_LD_PATH); nohup setsid bash scripts/run-with-restart.sh \
 		--pid-file $(DLSERVER_PID) --wrapper-pid-file $(DLSERVER_WRAPPER_PID) --cooldown 5 \
+		--probe-url http://127.0.0.1:$(DLSERVER_PORT)/livez \
 		--log-dir /workspace/logs/dlserver -- \
 		python -m dlserver --host 127.0.0.1 --port $(DLSERVER_PORT) --log-dir /workspace/logs/dlserver \
 		</dev/null >/dev/null 2>&1 &
 	@echo "dlserver started on port $(DLSERVER_PORT) (auto-restart enabled)"
 
 stop-runpod-dlserver:
-	@if [ -f $(DLSERVER_WRAPPER_PID) ]; then \
-		kill $$(cat $(DLSERVER_WRAPPER_PID)) 2>/dev/null || true; \
-		rm -f $(DLSERVER_WRAPPER_PID); \
-	fi
-	@if [ -f $(DLSERVER_PID) ]; then \
-		kill $$(cat $(DLSERVER_PID)) 2>/dev/null || true; \
-		rm -f $(DLSERVER_PID); \
-	fi
-	@rm -f /workspace/logs/dlserver/stderr/lock
-	@sleep 2
-	@echo "dlserver stopped"
+	@bash scripts/stop-tree.sh dlserver $(DLSERVER_PORT) $(DLSERVER_WRAPPER_PID) $(DLSERVER_PID)
 
 start-runpod-lbserver: install-lb stop-runpod-lbserver
-	@command -v multilog >/dev/null || apt-get install -y daemontools
-	@nohup bash scripts/run-with-restart.sh \
+	@nohup setsid bash scripts/run-with-restart.sh \
 		--pid-file $(LBSERVER_PID) --wrapper-pid-file $(LBSERVER_WRAPPER_PID) --cooldown 5 \
+		--probe-url http://127.0.0.1:$(LBSERVER_PORT)/livez \
 		--log-dir /workspace/logs/lbserver -- \
 		python -m lbserver --host 127.0.0.1 --port $(LBSERVER_PORT) --log-dir /workspace/logs/lbserver \
 		</dev/null >/dev/null 2>&1 &
 	@echo "lbserver started on port $(LBSERVER_PORT) (auto-restart enabled)"
 
 stop-runpod-lbserver:
-	@if [ -f $(LBSERVER_WRAPPER_PID) ]; then \
-		kill $$(cat $(LBSERVER_WRAPPER_PID)) 2>/dev/null || true; \
-		rm -f $(LBSERVER_WRAPPER_PID); \
-	fi
-	@if [ -f $(LBSERVER_PID) ]; then \
-		kill $$(cat $(LBSERVER_PID)) 2>/dev/null || true; \
-		rm -f $(LBSERVER_PID); \
-	fi
-	@rm -f /workspace/logs/lbserver/stderr/lock
-	@sleep 2
-	@echo "lbserver stopped"
+	@bash scripts/stop-tree.sh lbserver $(LBSERVER_PORT) $(LBSERVER_WRAPPER_PID) $(LBSERVER_PID)
 
 start-jupyter:
 	@if ! command -v jupyter-lab > /dev/null 2>&1; then \
 		python -m pip install jupyter; \
 	fi
+	@command -v multilog >/dev/null || apt-get install -y daemontools
 	@mkdir -p /workspace/logs/jupyter
 	@(sleep 3 && TOKEN=$$(grep -oP 'token=\K[a-f0-9]+' /workspace/logs/jupyter/current 2>/dev/null | tail -1); \
 	if [ -n "$$TOKEN" ]; then \

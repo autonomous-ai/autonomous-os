@@ -21,11 +21,11 @@ IDLE_ANCHOR_SLEW_DPS = 40.0
 
 # Zero/hold position in raw encoder units — the physical resting pose after release.
 ZERO_RAW = {
-    "base_yaw":    2029,
-    "base_pitch":  2030,
-    "elbow_pitch": 2030,
-    "wrist_roll":  2053,
-    "wrist_pitch": 2049,
+    "base_yaw":    2025,
+    "base_pitch":  2674,
+    "elbow_pitch": 2636,
+    "wrist_roll":  2054,
+    "wrist_pitch": 2056,
 }
 
 # Wake position in raw encoder units — all 5 joints. Where the arm goes once
@@ -49,7 +49,7 @@ REST_RAW = {
     "base_pitch":  2030,
     "elbow_pitch": 2030,
     "wrist_roll":  2053,
-    "wrist_pitch": 2049,
+    "wrist_pitch": 1770,
 }
 
 # Duration for the startup/resume move (seconds)

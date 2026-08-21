@@ -735,8 +735,14 @@ REALTIME_ZOMBIE_RECONNECT_AFTER: int = int(
 REALTIME_SESSION_IDLE_RESET_S: float = float(
     os.environ.get("HAL_REALTIME_SESSION_IDLE_RESET_S", "240")
 )
+# Must stay BELOW the shortest observed idle death, or the recycle fires too late
+# and the turn still lands on a session Gemini already closed. Measured idle gaps
+# before a WS 1008 on 2026-08-21: 86s, 98s, 150s, 150s, 185s -- so 120s was inside
+# the failure range. 60s clears the 86s floor with margin. The cost is bounded: this
+# only fires on a turn that FOLLOWS a long silence, and voice_service buffers the
+# audio across the ~1s handshake (see `rebuilding`), so nothing is dropped.
 REALTIME_GEMINI_PRE_TURN_RECYCLE_S: float = float(
-    os.environ.get("HAL_GEMINI_PRE_TURN_RECYCLE_S", "120")
+    os.environ.get("HAL_GEMINI_PRE_TURN_RECYCLE_S", "60")
 )
 # Gemini 1011 recovery: how many times to reconnect a FRESH session and replay
 # the just-captured turn audio when a turn produced no output (the campaign-api
@@ -804,6 +810,17 @@ REALTIME_NOISE_SPEECH_RATIO: float = float(
 REALTIME_REQUIRE_TRANSCRIPT: bool = os.environ.get(
     "HAL_REALTIME_REQUIRE_TRANSCRIPT", "true"
 ).lower() in ("1", "true", "yes")
+# Noise guard for turns that DO have a transcript. The guards above only run when
+# STT came back empty, so a noise turn whose STT invented a word ("Ừ", "Okay",
+# "Thank you" — nova-3 reports confidence 1.0 for these) bypasses every check and
+# commits. Backend telemetry sees those as turns of pure noise. Fabrications are
+# short, so when a transcript has at most this many words the Silero voiced-ratio
+# guard runs on it too, and the turn is dropped if the audio was not speech. A
+# real short command ("bật đèn") is voiced and still passes. 0 disables the check;
+# raising it puts longer real utterances at the mercy of the voiced-ratio floor.
+REALTIME_NOISE_GUARD_MAX_WORDS: int = int(
+    os.environ.get("HAL_REALTIME_NOISE_GUARD_MAX_WORDS", "3")
+)
 # Turn detection / VAD: "server_vad" | "semantic_vad" | "off"
 # For Gemini: "off" disables automatic activity detection; any other value enables it.
 # For OpenAI: maps to turn_detection type in session config.

@@ -286,13 +286,33 @@ public key as `text/plain`, or `404` if encryption is disabled. See
 
 ## Error responses
 
+### `GET /livez` (both servers)
+
+Liveness only: returns `200 {"status":"alive"}` if a coroutine can still be
+scheduled. No auth, no model checks, no downstream calls. Restricted to localhost
+at the nginx layer -- it exists for the watchdog, not for callers.
+
+Do not confuse it with `GET /hal/api/dl/health`, which is *readiness*: it needs an
+API key and reports which models finished loading.
+
 | Code | When |
 |------|------|
 | `400` | Bad/undecodable body, image, or audio; decryption auth-tag failure (lbserver) |
 | `401` | Missing/invalid `X-API-Key` |
 | `404` | `GET /api/crypto/public-key` when crypto disabled |
-| `502` | lbserver: backend unreachable |
+| `502` | lbserver: backend unreachable (connect refused -- the backend is **down**) |
 | `503` | Model/dependency unavailable for the requested perception |
+| `504` | lbserver: backend timed out after `lb.http_timeout` (the backend is **hung** -- it accepted the connection and never replied). nginx returns its own `504` if `proxy_read_timeout` (45s) expires first |
 | WS `1008` | lbserver: encryption required but key exchange missing |
-| WS `1011` | lbserver: key exchange failed / backend unreachable |
+| WS `1011` | lbserver: key exchange failed, backend unreachable, or backend handshake timed out |
+
+Every response carries `X-Request-ID` -- echoed if the caller sent one, otherwise
+minted by nginx. The same id appears in the nginx access log (`rid=`) and in every
+lbserver and dlserver log line, so one request can be traced end to end:
+
+```bash
+grep -r "$REQUEST_ID" /var/log/nginx/ /workspace/logs/
+```
+
+If it matches nothing, the request never reached this host.
 </content>

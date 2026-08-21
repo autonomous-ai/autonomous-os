@@ -16,6 +16,7 @@ import logging
 import logging.handlers
 import os
 import signal
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -34,9 +35,23 @@ from lbserver.models import WSCipherMessage, WSKeyExchangeRequest
 from lbserver.routes.crypto import router as crypto_router
 from lbserver.utils import RoundRobin
 from lbserver.utils.crypto import encrypt_http_response, try_decrypt_http_body
+from core.livez import router as livez_router
+from core.logging_ext import ResilientRotatingFileHandler
+from core.request_context import (
+    InstanceAlreadyRunning,
+    acquire_instance_lock,
+    install_request_id_logging,
+    request_id_middleware,
+)
 from lbserver.utils.state import get_crypto, set_crypto
 
-LOG_FORMAT = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+LOG_FORMAT = "%(asctime)s [%(name)s] [%(request_id)s] %(levelname)s: %(message)s"
+
+# Must run before any record is emitted: LOG_FORMAT references %(request_id)s.
+install_request_id_logging()
+
+# Holds the single-instance flock for the process lifetime; closing it releases.
+_instance_lock: object | None = None
 logger = logging.getLogger("lbserver")
 
 
@@ -70,12 +85,40 @@ async def _lifespan(app: FastAPI):
         )
         set_crypto(crypto)
         logger.info("Encryption enabled (key_dir=%s)", settings.crypto.key_dir)
-    yield
-    set_crypto(None)
+
+    # One client for the whole process. Created last so an earlier startup failure
+    # cannot leak it, and closed first on shutdown.
+    app.state.http_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(
+            settings.lb.http_timeout, connect=settings.lb.connect_timeout
+        ),
+        limits=httpx.Limits(
+            max_connections=settings.lb.max_connections,
+            max_keepalive_connections=settings.lb.max_keepalive,
+        ),
+    )
+    logger.info(
+        "HTTP client pool ready (max_connections=%s keepalive=%s timeout=%ss connect=%ss)",
+        settings.lb.max_connections,
+        settings.lb.max_keepalive,
+        settings.lb.http_timeout,
+        settings.lb.connect_timeout,
+    )
+    try:
+        yield
+    finally:
+        await app.state.http_client.aclose()
+        app.state.http_client = None
+        set_crypto(None)
 
 
 app = FastAPI(title="DL Backend Load Balancer", lifespan=_lifespan)
+app.middleware("http")(request_id_middleware)
 app.include_router(crypto_router, prefix="/api/crypto")
+# Liveness: no prefix, no auth. MUST be registered before the catch-all
+# proxy route below, or /livez would be forwarded to a backend instead of
+# answering locally -- which would make lbserver look dead whenever dlserver is.
+app.include_router(livez_router)
 
 
 # ---------------------------------------------------------------------------
@@ -107,17 +150,34 @@ async def proxy_http(request: Request, path: str) -> Response:
     if request.method in ("POST", "PUT", "PATCH") and body:
         body, encrypted_key = try_decrypt_http_body(body)
 
+    # Reuse the process-wide pooled client. Constructing one per request re-parsed
+    # the CA bundle every time (~11ms of CPU even for a plaintext localhost call)
+    # and opened a fresh TCP connection that was never reused.
+    client: httpx.AsyncClient | None = getattr(request.app.state, "http_client", None)
+    if client is None:  # pragma: no cover - only if lifespan did not run
+        logger.error("[HTTP] No pooled client; lifespan did not run")
+        raise HTTPException(status_code=503, detail="Proxy not ready")
+
     try:
-        async with httpx.AsyncClient(timeout=settings.lb.http_timeout) as client:
-            resp = await client.request(
-                method=request.method,
-                url=url,
-                headers=headers,
-                params=dict(request.query_params),
-                content=body,
-            )
-    except httpx.ConnectError:
-        logger.error("[HTTP] Backend unreachable: %s", backend)
+        resp = await client.request(
+            method=request.method,
+            url=url,
+            headers=headers,
+            params=dict(request.query_params),
+            content=body,
+        )
+    # Order matters: TimeoutException is a subclass of RequestError, so it must be
+    # caught first. A hung-but-listening backend completes the TCP handshake (the
+    # kernel does it, into the accept queue), so ConnectError never fires and the
+    # read times out instead -- previously that escaped uncaught and Starlette
+    # rendered a generic 500, hiding the fact that the backend was the problem.
+    except httpx.TimeoutException:
+        logger.error(
+            "[HTTP] Backend timed out after %ss: %s", settings.lb.http_timeout, backend
+        )
+        raise HTTPException(status_code=504, detail=f"Backend timed out: {backend}")
+    except httpx.RequestError as e:
+        logger.error("[HTTP] Backend unreachable: %s -- %s", backend, e)
         raise HTTPException(status_code=502, detail=f"Backend unreachable: {backend}")
 
     content = resp.content
@@ -300,6 +360,10 @@ async def proxy_ws(client_ws: WebSocket, path: str) -> None:
                     t.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
 
+    except TimeoutError as e:
+        # websockets raises this on open_timeout; it is what a hung backend produces.
+        logger.error("[WS] Backend handshake timed out: %s — %s", backend, e)
+        await client_ws.close(code=1011, reason=f"Backend timed out: {backend}")
     except (websockets.exceptions.InvalidStatus, OSError) as e:
         logger.error("[WS] Backend connection failed: %s — %s", backend, e)
         await client_ws.close(code=1011, reason=f"Backend unreachable: {backend}")
@@ -329,6 +393,10 @@ def _setup_logging(log_dir: str | None) -> dict[str, Any] | None:
 
     try:
         Path(log_dir).mkdir(parents=True, exist_ok=True)
+        # Hold this for the process lifetime -- see acquire_instance_lock. It must
+        # be taken BEFORE the rotation below, which renames/unlinks unconditionally.
+        global _instance_lock
+        _instance_lock = acquire_instance_lock(log_dir)
         log_path = Path(log_dir) / "lbserver.log"
         uvicorn_log_path = Path(log_dir) / "uvicorn.log"
         # Rotate old logs
@@ -337,39 +405,41 @@ def _setup_logging(log_dir: str | None) -> dict[str, Any] | None:
                 bak.unlink()
             for old in Path(log_dir).glob(f"{prefix}*"):
                 old.rename(Path(str(old) + ".bak"))
-        handler = logging.handlers.RotatingFileHandler(str(log_path), maxBytes=1_048_576, backupCount=3)
+        handler = ResilientRotatingFileHandler(str(log_path), maxBytes=1_048_576, backupCount=3)
         handler.setFormatter(logging.Formatter(LOG_FORMAT))
         logging.basicConfig(level=logging.INFO, handlers=[handler])
 
+        # Route uvicorn/fastapi logs to a separate file.
+        # NOTE: "uvicorn" and "uvicorn.access" MUST share a single handler instance.
+        # Two RotatingFileHandlers on the same path keep independent byte counters and
+        # roll over independently, so one eventually unlinks the inode the other still
+        # holds open. On MooseFS (/workspace) writing to a deleted-but-open file returns
+        # EIO, which floods stderr with logging tracebacks and can wedge the process.
         return {
             "version": 1,
             "disable_existing_loggers": False,
             "formatters": {
                 "default": {"format": LOG_FORMAT},
-                "access": {"format": LOG_FORMAT},
             },
             "handlers": {
-                "default": {
+                "file": {
                     "formatter": "default",
-                    "class": "logging.handlers.RotatingFileHandler",
-                    "filename": str(uvicorn_log_path),
-                    "maxBytes": 1_048_576,
-                    "backupCount": 3,
-                },
-                "access": {
-                    "formatter": "access",
-                    "class": "logging.handlers.RotatingFileHandler",
+                    "class": "core.logging_ext.ResilientRotatingFileHandler",
                     "filename": str(uvicorn_log_path),
                     "maxBytes": 1_048_576,
                     "backupCount": 3,
                 },
             },
             "loggers": {
-                "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
+                "uvicorn": {"handlers": ["file"], "level": "INFO", "propagate": False},
                 "uvicorn.error": {"level": "INFO"},
-                "uvicorn.access": {"handlers": ["access"], "level": "INFO", "propagate": False},
+                "uvicorn.access": {"handlers": ["file"], "level": "INFO", "propagate": False},
             },
         }
+    except InstanceAlreadyRunning:
+        # Never fall back to console here: continuing would run a second instance
+        # that clobbers the live one's log files. Propagate and let main() exit.
+        raise
     except Exception as e:
         logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
         logging.getLogger(__name__).warning("File logging setup failed, using console: %s", e)
@@ -378,7 +448,11 @@ def _setup_logging(log_dir: str | None) -> dict[str, Any] | None:
 
 def main() -> None:
     args = parse_args()
-    uvicorn_log_config = _setup_logging(args.log_dir)
+    try:
+        uvicorn_log_config = _setup_logging(args.log_dir)
+    except InstanceAlreadyRunning as e:
+        print(f"refusing to start: {e}", file=sys.stderr)
+        raise SystemExit(3) from None
 
     def _handle_sigterm(signum, frame):
         logger.critical("SIGTERM received — shutting down (pid=%d)", os.getpid())

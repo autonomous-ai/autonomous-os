@@ -358,7 +358,7 @@ HAL_SILERO_ENABLED=true
 HAL_SILERO_THRESHOLD=0.15             # ? tune on real hardware
 HAL_SILERO_CHUNK_SIZE=512
 HAL_WEBRTCVAD_ENABLED=true
-HAL_WEBRTCVAD_AGGRESSIVENESS=0        # ? may need higher for noisy servo motors
+HAL_WEBRTCVAD_AGGRESSIVENESS=2        # ? may need 3 for noisy servo motors
 HAL_WEBRTCVAD_FRAME_MS=30
 HAL_TTS_SPEED=1.1
 
@@ -403,8 +403,8 @@ OPENBLAS_NUM_THREADS=1
 **Key tuning questions for real hardware**:
 
 1. **VAD threshold**: Reachy's servo motors may produce more mechanical noise
-   than Lamp's Feetech servos. May need `HAL_WEBRTCVAD_AGGRESSIVENESS=1` or
-   higher.
+   than Lamp's Feetech servos. The gate sits at the code default of 2; noisy
+   servos may need `HAL_WEBRTCVAD_AGGRESSIVENESS=3`.
 2. **Echo floor**: 5W speaker vs Lamp's 3W — `HAL_ECHO_RMS_FLOOR` may need
    raising to avoid self-triggering during TTS playback.
 3. **Camera**: if Pi Camera v3 uses libcamera, OpenCV `VideoCapture(index)` may

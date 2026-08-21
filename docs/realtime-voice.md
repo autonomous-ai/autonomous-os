@@ -25,6 +25,21 @@ STT pipeline. At end-of-turn the model either:
 The `delegate_to_main` tool is registered automatically by the orchestrator
 (`orchestrator.py`, `DELEGATE_TOOL`).
 
+**Delegating is not the only way a turn reaches the main agent**, which is why
+every turn logs one routing line — `[turn] route=<why> → <where>` from
+`turn_dispatch.py`. Grep `[turn] route=` in the HAL journal to follow any turn
+end to end. The values (`ROUTE_*` in `realtime_turn.py`):
+
+| `route=` | Where the turn went |
+|---|---|
+| `realtime_handled` | Realtime spoke it. The main agent gets `voice_agent_handled` and stays silent. |
+| `delegated` | The model called `delegate_to_main`. |
+| `realtime_no_output` | Committed, but nothing came back (`receive()` timeout, dead WS) — main agent answers. |
+| `realtime_error` | The turn raised; forwarded rather than lost. |
+| `realtime_unavailable` | No live session to commit to — main agent answers. |
+| `noise_dropped` | The noise guard rejected it; never committed, and with no transcript it reaches nobody. |
+| `realtime_not_started` | Realtime off, or no turn was opened for this capture. |
+
 On a delegate call, `stream_output()` **breaks the turn immediately** after
 yielding the `DelegateSignal` — it does *not* wait for the model's
 `turn_complete`. The model has nothing more to say once it delegates, so
@@ -235,7 +250,7 @@ one exception to the model's binary "tool OR speech" rule — the model calls it
    sent (`trigger_response=True`) or the turn deadlocks until the watchdog fires.
    Net added latency to speech ≈ 0.
 
-### Pending-tool-call audio gate (Gemini)
+### Pending-tool-call session quarantine (Gemini)
 
 Gemini Live **refuses `send_realtime_input` while a tool call it emitted is
 unanswered**, and enforces this by closing the session with WebSocket **`1008`**
@@ -243,26 +258,29 @@ unanswered**, and enforces this by closing the session with WebSocket **`1008`**
 not a dropped stream — a transport drop shows up as `1006` with an empty reason
 and is handled by the proxy, not here.
 
-`gemini_live.py` therefore gates the mic on that window:
+`gemini_live.py` therefore quarantines the **whole client side** of that
+session, rather than merely gating microphone audio:
 
-- receiving a `tool_call` registers every `call_id` in `_pending_tool_calls`;
-- while that set is non-empty, `_async_send_input` **drops** incoming
-  `AudioInput` frames (and the manual-VAD `activityStart` that brackets them)
-  instead of sending them. Dropping rather than buffering is deliberate: the
-  window is normally milliseconds, and a buffer would replay stale speech into
-  the next turn;
-- dispatching a `FunctionCallResultInput` clears that `call_id` **before** the
-  `trigger_response` branch. This matters most on the fire-and-forget path
-  above, which returns early without telling Gemini anything — nothing else
-  would ever reopen the gate, and the device would stay deaf for the rest of the
-  session;
-- a reconnect clears the set (a fresh session inherits no calls), and an
-  unresolved call expires after `_pending_tool_max_s` (10s) so a crashed handler
-  costs at most one risky window rather than the microphone.
+- receiving a `tool_call` registers every `call_id` in `_pending_tool_calls` and
+  makes the session non-sendable;
+- while any call remains unresolved, **all client input is suppressed**:
+  `AudioInput`, manual-VAD `activityStart`, `activityEnd`, commits, and other
+  client messages. Nothing is buffered for replay, because it would turn speech
+  captured during an invalid provider state into a stale later turn;
+- for a normal `FunctionCallResultInput`, the call stays pending until Gemini
+  has accepted `send_tool_response`. Only that successful provider acknowledgement
+  clears the call and makes the same session usable again. A failed or rejected
+  acknowledgement leaves the session quarantined and it is discarded;
+- the fire-and-forget `express_emotion` path above deliberately sends no Gemini
+  acknowledgement after speech has started, because doing so makes Gemini repeat
+  the reply. Such a session can never become valid again: it remains
+  non-reusable and the next `prepare_turn()` rebuilds a fresh session;
+- there is no expiry or other timeout that reopens a quarantined session. A
+  fresh/rebuilt session has no inherited pending calls.
 
-`activityEnd` in `_async_commit` is **not** gated: it only fires when an
-`activityStart` was already sent, and skipping it would leave the activity
-bracket open and wedge every later commit.
+In particular, `_async_commit` suppresses `activityEnd` while quarantined too.
+Completing an old activity bracket is not safe when Gemini is waiting for the
+tool result; the replacement session starts its next activity cleanly.
 
 The model is told (`resources/system_prompt*.md`, "Expression Exception") to
 never wait for, announce, or speak the emotion aloud. Note this is distinct from
@@ -950,6 +968,7 @@ is a top-level `config.json` flag:
 | `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` | `20.0` | Silent-turn watchdog used instead of the default for turns where a `look` fired (per-turn, via `extend_recv_timeout()`). Gemini's forced thinking over a text-dense frame can stay silent >8 s right before the answer — the default watchdog was killing those turns |
 | `HAL_REALTIME_REQUIRE_TRANSCRIPT` | `true` | Never commit an empty-STT turn to the model. Real speech that nova-3 missed (short utterances) is voiced and passes the VAD/Silero guards, so committing its raw audio makes the model invent a reply to silence (a generic greeting, often with a name nobody said). When `true`, any empty-STT turn is dropped regardless of duration/voicing — silence beats a wrong reply. Set `false` to fall back to the Silero-gated audio-only path below. |
 | `HAL_REALTIME_MIN_COMMIT_DURATION_S` | `0.8` | Sessions shorter than this with no STT transcript are treated as VAD noise and not committed to the model. Only consulted when `HAL_REALTIME_REQUIRE_TRANSCRIPT=false`. |
+| `HAL_REALTIME_NOISE_GUARD_MAX_WORDS` | `3` | Extends the Silero voiced-ratio guard to turns that DO have a transcript, up to this many words. STT invents a short filler out of room noise and reports full confidence for it, so such a turn used to bypass every guard (they all only ran on an empty transcript) and commit pure noise to the model. A transcript of at most this many words is re-checked against `HAL_REALTIME_NOISE_SPEECH_RATIO` and dropped when the audio was never voiced; a real short command is voiced and still commits. Longer transcripts are never re-checked, so the voiced-ratio floor can't silence a real utterance. `0` disables. |
 | `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Cost control: when a turn arrives after this many seconds of silence, recycle (rebuild) the session **after** that turn so the next turn drops the per-turn context the provider re-bills on a long-lived session. A post-pause turn is effectively a new conversation; long-term continuity survives via the reloaded `summary.md`. For native-audio Gemini, this is skipped when a successful pre-turn recycle already made the same idle gap fresh. `0` disables. Reuses the zombie-recovery rebuild path. |
 | `HAL_GEMINI_SESSION_RESUMPTION` | `false` | Resume the same Gemini session across reconnects. OFF by default — the `campaign-api` proxy doesn't forward the resumption handshake, so resuming through it yields a zombie session (cold reconnects work). Enable only against an endpoint that supports it. |
 | `HAL_GEMINI_PRE_TURN_RECYCLE_S` | `120` | Gemini transport guard: when a new spoken turn starts after this much idle time, rebuild the Gemini session **before** streaming pre-roll/audio so the turn does not hit a proxy/SDK idle-dead socket. `0` disables. A successful pre-turn recycle suppresses the generic post-turn idle recycle for that same turn, so one idle gap creates at most one cost/transport rebuild. |

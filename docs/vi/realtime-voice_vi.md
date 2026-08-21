@@ -25,6 +25,21 @@ lượt, model sẽ:
 Tool `delegate_to_main` được orchestrator đăng ký tự động (`orchestrator.py`,
 `DELEGATE_TOOL`).
 
+**Delegate KHÔNG phải cách duy nhất để một turn xuống agent chính**, nên mỗi turn
+đều in một dòng routing — `[turn] route=<vì sao> → <đi đâu>` từ
+`turn_dispatch.py`. Grep `[turn] route=` trong journal HAL là lần được từ đầu đến
+cuối một turn. Các giá trị (`ROUTE_*` trong `realtime_turn.py`):
+
+| `route=` | Turn đi đâu |
+|---|---|
+| `realtime_handled` | Realtime đã nói. Agent chính nhận `voice_agent_handled` và im lặng. |
+| `delegated` | Model gọi `delegate_to_main`. |
+| `realtime_no_output` | Đã commit nhưng không có gì trả về (`receive()` timeout, WS chết) — agent chính trả lời. |
+| `realtime_error` | Turn ném lỗi; forward xuống thay vì mất luôn. |
+| `realtime_unavailable` | Không có session sống để commit — agent chính trả lời. |
+| `noise_dropped` | Noise guard chặn; không commit, và nếu không có transcript thì không tới ai cả. |
+| `realtime_not_started` | Realtime tắt, hoặc capture này không mở turn nào. |
+
 Khi model gọi delegate, `stream_output()` **break turn ngay lập tức** sau khi
 yield `DelegateSignal` — *không* chờ `turn_complete` của model. Model đã delegate
 thì không còn gì để nói nữa, nên drain nốt turn chỉ khiến nó chặn ở timeout
@@ -211,7 +226,7 @@ việc nói. Khi `stream_output()` thấy lời gọi (`_handle_emotion_call`), 
    ack (`trigger_response=True`) nếu không lượt sẽ treo tới khi watchdog nổ. Độ
    trễ cộng thêm vào giọng nói ≈ 0.
 
-### Cổng chặn audio khi tool call đang chờ (Gemini)
+### Cô lập session khi tool call đang chờ (Gemini)
 
 Gemini Live **từ chối `send_realtime_input` khi một tool call do nó phát ra chưa
 được trả lời**, và cưỡng chế bằng cách đóng session với WebSocket **`1008`**
@@ -219,24 +234,29 @@ Gemini Live **từ chối `send_realtime_input` khi một tool call do nó phát
 phải stream bị rớt — rớt ở tầng transport hiện ra là `1006` với reason rỗng và
 được xử lý ở proxy, không phải ở đây.
 
-Vì vậy `gemini_live.py` chặn mic trong cửa sổ đó:
+Vì vậy `gemini_live.py` cách ly **toàn bộ phía client** của session đó, thay vì
+chỉ chặn audio từ mic:
 
-- nhận `tool_call` thì đăng ký mọi `call_id` vào `_pending_tool_calls`;
-- khi tập đó còn phần tử, `_async_send_input` **vứt** các frame `AudioInput`
-  (và `activityStart` của manual VAD đi kèm) thay vì gửi. Vứt chứ không buffer
-  là có chủ ý: cửa sổ thường chỉ vài mili-giây, còn buffer sẽ phát lại lời nói
-  cũ sang lượt sau;
-- khi dispatch `FunctionCallResultInput`, `call_id` được xoá **trước** nhánh
-  `trigger_response`. Điều này quan trọng nhất ở path fire-and-forget phía trên
-  — path đó return sớm mà không báo gì cho Gemini, nên không còn chỗ nào mở lại
-  cổng và thiết bị sẽ điếc suốt phần còn lại của session;
-- reconnect thì xoá sạch tập (session mới không thừa kế tool call nào), và một
-  call không bao giờ được giải quyết sẽ hết hạn sau `_pending_tool_max_s` (10s)
-  để một handler chết chỉ tốn nhiều nhất một cửa sổ rủi ro, chứ không mất mic.
+- nhận `tool_call` thì đăng ký mọi `call_id` vào `_pending_tool_calls` và làm
+  session không thể gửi thêm dữ liệu;
+- khi còn bất kỳ call nào chưa được giải quyết, **mọi input từ client đều bị
+  chặn**: `AudioInput`, `activityStart` manual VAD, `activityEnd`, commit và các
+  message client khác. Không buffer để phát lại, vì như vậy lời nói thu trong
+  trạng thái provider không hợp lệ sẽ thành một lượt cũ ở thời điểm sau;
+- với `FunctionCallResultInput` thông thường, call vẫn pending đến khi Gemini
+  đã chấp nhận `send_tool_response`. Chỉ provider acknowledgement thành công đó
+  mới xoá call và làm session hiện tại dùng lại được. Ack thất bại hoặc bị từ
+  chối giữ session ở trạng thái cách ly và session sẽ bị bỏ;
+- path `express_emotion` fire-and-forget phía trên cố ý không gửi acknowledgement
+  cho Gemini khi model đã bắt đầu nói, vì gửi nó làm Gemini lặp lại câu trả lời.
+  Session như vậy không thể hợp lệ trở lại: nó không được dùng lại, và lần
+  `prepare_turn()` tiếp theo sẽ rebuild một session mới;
+- không có expiry hay timeout nào mở lại một session đang cách ly. Session
+  fresh/rebuild không thừa kế pending call.
 
-`activityEnd` trong `_async_commit` **không** bị chặn: nó chỉ chạy khi
-`activityStart` đã được gửi, bỏ qua nó sẽ để ngỏ activity bracket và làm treo
-mọi lần commit sau.
+Đặc biệt, `_async_commit` cũng chặn `activityEnd` khi session bị cách ly. Hoàn
+tất activity bracket cũ không an toàn khi Gemini còn chờ tool result; session
+thay thế sẽ bắt đầu activity kế tiếp một cách sạch sẽ.
 
 Model được dặn (`resources/system_prompt*.md`, mục "Expression Exception") không
 chờ, không thông báo, không đọc tên cảm xúc thành tiếng. Lưu ý điều này khác
@@ -903,6 +923,7 @@ trong `config.json`:
 | `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` | `20.0` | Watchdog im-lặng dùng thay mặc định cho turn có `look` (theo từng turn, qua `extend_recv_timeout()`). Gemini bị ép thinking trên frame dày chữ có thể im >8 s ngay trước khi trả lời — watchdog mặc định giết nhầm mấy turn đó |
 | `HAL_REALTIME_REQUIRE_TRANSCRIPT` | `true` | Không bao giờ commit turn empty-STT lên model. Giọng thật mà nova-3 miss (câu ngắn) vẫn là voiced nên qua hết guard VAD/Silero, commit audio thô khiến model bịa câu trả lời cho khoảng im lặng (lời chào chung chung, thường kèm tên không ai nói). Khi `true`, mọi turn empty-STT bị bỏ bất kể duration/voicing — im còn hơn trả lời sai. Đặt `false` để quay về đường audio-only gated bằng Silero bên dưới. |
 | `HAL_REALTIME_MIN_COMMIT_DURATION_S` | `0.8` | Session ngắn hơn ngưỡng này mà không có STT transcript bị coi là nhiễu VAD, không commit lên model. Chỉ xét khi `HAL_REALTIME_REQUIRE_TRANSCRIPT=false`. |
+| `HAL_REALTIME_NOISE_GUARD_MAX_WORDS` | `3` | Mở rộng guard voiced-ratio của Silero sang cả turn CÓ transcript, tối đa ngần này từ. STT bịa một từ đệm ngắn từ tiếng ồn phòng và báo confidence tối đa cho nó, nên turn kiểu đó trước đây lọt hết mọi guard (guard chỉ chạy khi transcript rỗng) và commit nhiễu thuần lên model. Transcript nhiều nhất ngần này từ sẽ bị kiểm lại theo `HAL_REALTIME_NOISE_SPEECH_RATIO` và bị bỏ nếu audio chưa từng voiced; lệnh ngắn nói thật vẫn là voiced nên vẫn commit. Transcript dài hơn không bao giờ bị kiểm lại, nên ngưỡng voiced-ratio không thể làm câm một câu nói thật. `0` = tắt. |
 | `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Kiểm soát chi phí: khi một turn đến sau ngần này giây im lặng, recycle (rebuild) session **sau** turn đó để turn kế tiếp bỏ phần context mỗi-turn mà provider re-bill trên session sống lâu. Turn sau khoảng nghỉ dài coi như cuộc hội thoại mới; trí nhớ dài hạn vẫn còn nhờ nạp lại `summary.md`. Với Gemini native-audio, bước này bị bỏ qua nếu pre-turn recycle thành công đã làm mới session cho chính idle gap đó. `0` = tắt. Dùng lại đường rebuild của zombie-recovery. |
 | `HAL_GEMINI_SESSION_RESUMPTION` | `false` | Resume cùng session Gemini qua reconnect. Mặc định OFF — proxy `campaign-api` không forward đúng resumption handshake nên resume qua nó tạo session zombie (cold reconnect thì chạy được). Chỉ bật khi endpoint hỗ trợ. |
 | `HAL_GEMINI_PRE_TURN_RECYCLE_S` | `120` | Guard transport cho Gemini: khi lượt nói mới bắt đầu sau ngần này giây idle, rebuild session Gemini **trước khi** stream pre-roll/audio để turn không đụng socket chết vì idle ở proxy/SDK. `0` = tắt. Pre-turn recycle thành công sẽ chặn idle recycle generic sau chính turn đó, nên một idle gap chỉ tạo tối đa một rebuild phục vụ transport/chi phí. |

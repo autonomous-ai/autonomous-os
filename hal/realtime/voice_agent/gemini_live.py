@@ -118,19 +118,12 @@ class GeminiLiveAgent(VoiceAgentBase):
         # Gemini rejects send_realtime_input while a tool call it emitted is still
         # unanswered, and closes the session with 1008 ("The operation was
         # aborted") — a deliberate policy close, not a transport drop. Track the
-        # call_ids currently in flight and drop mic audio while the set is
-        # non-empty. Cleared by the result dispatch for BOTH ack paths: a
-        # fire-and-forget tool (trigger_response=False) never tells Gemini
-        # anything, so nothing else would ever clear it and the mic would stay
-        # deaf for the rest of the session.
+        # call_ids currently in flight and drop all normal client input while the
+        # set is non-empty. A fire-and-forget tool (trigger_response=False) is
+        # deliberately not acknowledged to Gemini, so that session must be
+        # replaced before another turn rather than locally clearing the call.
         self._pending_tool_calls: set[str] = set()
-        # Safety valve. If a tool call is never resolved at all (handler crashed,
-        # consumer dropped the event), the gate above would mute the device
-        # permanently. Expire it after this long and resume sending — worst case
-        # we are back to the pre-fix behaviour and risk a 1008, which beats a
-        # microphone that never recovers.
-        self._pending_tool_deadline: float | None = None
-        self._pending_tool_max_s: float = 10.0
+        self._requires_fresh_session: bool = False
         self._gated_audio_frames: int = 0
         self._reconnect_delay_s: float = config.reconnect_delay_s
         self._last_reconnect_at: float = 0.0
@@ -160,6 +153,14 @@ class GeminiLiveAgent(VoiceAgentBase):
         # Gemini Live always streams native audio output at 24 kHz, regardless of
         # the 16 kHz input rate (`sample_rate`).
         return 24000
+
+    @property
+    @override
+    def requires_fresh_session(self) -> bool:
+        """Whether an unacknowledged tool call makes this session unusable."""
+        return getattr(self, "_requires_fresh_session", False) or bool(
+            self._pending_tool_calls
+        )
 
     def _build_config(self) -> types.LiveConnectConfig:
         lang: str | None = self._config.language
@@ -336,26 +337,11 @@ class GeminiLiveAgent(VoiceAgentBase):
                 logger.warning("[realtime] Gemini IO thread did not stop within %.1fs", self._join_timeout_s)
 
     def _tool_call_pending(self) -> bool:
-        """True while Gemini is waiting on a tool result, so realtime input is
-        refused. Expires the gate past _pending_tool_max_s (see the deadline
-        comment in __init__)."""
-        if not self._pending_tool_calls:
-            return False
-        deadline: float | None = self._pending_tool_deadline
-        if deadline is not None and time.monotonic() > deadline:
-            logger.warning(
-                "[realtime] Tool call(s) %s unresolved after %.0fs — releasing the "
-                "audio gate",
-                sorted(self._pending_tool_calls),
-                self._pending_tool_max_s,
-            )
-            self._clear_pending_tool_calls()
-            return False
-        return True
+        """True while Gemini is waiting on a tool result and rejects input."""
+        return bool(self._pending_tool_calls)
 
     def _clear_pending_tool_calls(self) -> None:
         self._pending_tool_calls.clear()
-        self._pending_tool_deadline = None
         if self._gated_audio_frames:
             logger.debug(
                 "[realtime] Dropped %d audio frame(s) during tool call",
@@ -366,21 +352,21 @@ class GeminiLiveAgent(VoiceAgentBase):
     async def _async_send_input(self, input: InputBase | None) -> None:
         if self._session is None or input is None:
             return
-        if isinstance(input, AudioInput):
-            # Gemini refuses realtime input while a tool call is pending and kills
-            # the session with 1008. Drop these frames rather than buffer them: the
-            # window is normally milliseconds, and an unbounded buffer would replay
-            # stale speech into the next turn. activityStart is gated with the audio
-            # it brackets — the forum text names activity signals alongside audio,
-            # and starting an activity we then send no audio for is meaningless.
-            # activityEnd in _async_commit stays ungated on purpose: it only fires
-            # when _activity_started is True, i.e. we did send an activityStart
-            # before the gate closed, and skipping it would leave the bracket open
-            # and wedge every later turn's commit.
-            if self._tool_call_pending():
+        # Gemini rejects every normal client input while it is waiting for a
+        # function response, including user text, images, audio, and manual-VAD
+        # activity signals. Do not let one of those policy violations close the
+        # WebSocket with 1008. FunctionCallResultInput is the sole allowed input.
+        if not isinstance(input, FunctionCallResultInput) and self._tool_call_pending():
+            if isinstance(input, AudioInput):
                 self._gated_audio_frames += 1
-                return
-
+            else:
+                logger.debug(
+                    "[realtime] Dropped %s while tool call(s) %s are pending",
+                    type(input).__name__,
+                    sorted(self._pending_tool_calls),
+                )
+            return
+        if isinstance(input, AudioInput):
             # When VAD is disabled, send activityStart before first audio
             if self._vad_disabled and not self._activity_started:
                 await self._session.send_realtime_input(
@@ -421,23 +407,30 @@ class GeminiLiveAgent(VoiceAgentBase):
                 video=types.Blob(data=buf.tobytes(), mime_type="image/jpeg")
             )
         elif isinstance(input, FunctionCallResultInput):
-            # Release the audio gate FIRST, before the trigger_response branch
-            # below returns early. The result has been produced either way; from
-            # here on the mic must flow again regardless of whether we tell Gemini
-            # about it.
-            self._pending_tool_calls.discard(input.call_id)
-            if not self._pending_tool_calls:
-                self._clear_pending_tool_calls()
-
             # Fire-and-forget tools (trigger_response=False, e.g. express_emotion)
             # must NOT be acknowledged on Gemini Live: unlike OpenAI (where the
             # result is a conversation item and response.create is a separate call),
             # Gemini's send_tool_response CONTINUES the turn — the model then
             # RE-GENERATES and re-speaks its whole reply, double-billing TTS
             # (device-observed 2026-06-29: reply spoken twice, with express_emotion
-            # logged between the two copies). The side effect already ran; just skip
-            # the ack. delegate_to_main keeps trigger_response=True and is sent.
+            # logged between the two copies). Gemini still considers this call
+            # unresolved, so retain the gate and require a fresh session before
+            # the next turn. End the local turn now instead of waiting for a
+            # turn_complete that Gemini cannot emit without the response.
             if not input.trigger_response:
+                if input.call_id in self._pending_tool_calls:
+                    self._requires_fresh_session = True
+                    logger.info(
+                        "[realtime] Tool call %s intentionally unacknowledged — "
+                        "fresh Gemini session required",
+                        input.call_id,
+                    )
+                    turn_done: threading.Event | None = getattr(self, "_turn_done", None)
+                    if turn_done is not None:
+                        turn_done.set()
+                    recv_queue = getattr(self, "_recv_queue", None)
+                    if recv_queue is not None:
+                        recv_queue.put(TurnDoneEvent())
                 return
             # input.output is normally a JSON object string, but send_function_result()
             # is public and may be handed arbitrary text — Gemini's response field
@@ -457,11 +450,24 @@ class GeminiLiveAgent(VoiceAgentBase):
                     )
                 ]
             )
+            # Gemini accepted the response, so this call is resolved. Keeping the
+            # gate until after the await avoids racing subsequent client input
+            # against the tool response on the wire.
+            self._pending_tool_calls.discard(input.call_id)
+            if not self._pending_tool_calls:
+                self._clear_pending_tool_calls()
 
     async def _async_commit(self) -> None:
         if self._session is None:
             return
         if self._vad_disabled and self._activity_started:
+            if self._tool_call_pending():
+                logger.debug(
+                    "[realtime] Suppressed activityEnd while tool call(s) %s are pending",
+                    sorted(self._pending_tool_calls),
+                )
+                self._activity_started = False
+                return
             await self._session.send_realtime_input(activity_end=types.ActivityEnd())
             self._activity_started = False
             self._turn_done.clear()
@@ -619,7 +625,6 @@ class GeminiLiveAgent(VoiceAgentBase):
                 self._pending_tool_calls.update(
                     fc.id or "" for fc in message.tool_call.function_calls
                 )
-                self._pending_tool_deadline = time.monotonic() + self._pending_tool_max_s
                 for fc in message.tool_call.function_calls:
                     logger.debug("[realtime] Function call: %s (call_id=%s)", fc.name, fc.id)
                     self._recv_queue.put(
@@ -679,6 +684,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         # A fresh session inherits no tool calls — dropping the gate here keeps a
         # call that died with the old socket from muting the new one.
         self._clear_pending_tool_calls()
+        self._requires_fresh_session = False
         self._turn_done.set()  # unblock any waiting commit
         self._last_reconnect_at = 0.0  # bypass _ensure_connected throttle
         self._reconnect_backoff = self._reconnect_delay_s  # zombie recovery → retry now
@@ -701,6 +707,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         # A fresh session inherits no tool calls — dropping the gate here keeps a
         # call that died with the old socket from muting the new one.
         self._clear_pending_tool_calls()
+        self._requires_fresh_session = False
         self._turn_done.set()  # unblock any waiting commit
         if self._loop is None:
             logger.error("[realtime] Cannot reconnect — event loop is None")
