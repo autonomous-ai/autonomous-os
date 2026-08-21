@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import queue
+import sys
 import threading
 import time
 import uuid
@@ -63,6 +64,9 @@ class PipecatConfig:
         "HAL_PIPECAT_GEMINI_SEARCH_MODEL", "gemini-3.5-flash-lite"
     )
     search_timeout_s: float = float(os.environ.get("HAL_PIPECAT_SEARCH_TIMEOUT_S", "6"))
+    # pipecat logs through loguru at DEBUG, which floods the device journal with
+    # per-frame lines. Raise to DEBUG only when tracing the pipeline.
+    log_level: str = os.environ.get("HAL_PIPECAT_LOG_LEVEL", "WARNING")
 
 
 # --- Turn events -----------------------------------------------------------
@@ -84,19 +88,51 @@ class ToolCall:
 
 @dataclass
 class TurnMetrics:
-    """Where a turn's latency went. `server` bundles network RTT + prefill."""
+    """Where a turn's latency went and what it cost.
+
+    A turn that calls a tool makes more than one request, so token counts and
+    payload bytes are TURN TOTALS across `requests`, not per-request values.
+    """
 
     wait: float = 0.0
     server: float = 0.0
     stream: float = 0.0
     ttft: float = 0.0
     prompt_chars: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cached_tokens: int = 0
+    reasoning_tokens: int = 0
+    images: int = 0
+    payload_bytes: int = 0
+    requests: int = 0
 
     def __str__(self) -> str:
-        return (
-            f"ttft {self.ttft:.2f}s | wait {self.wait:.2f}s | server {self.server:.2f}s "
-            f"| stream {self.stream:.2f}s | prompt {self.prompt_chars / 1000:.1f}k chars"
-        )
+        parts = [
+            f"ttft {self.ttft:.2f}s",
+            f"wait {self.wait:.2f}s",
+            f"server {self.server:.2f}s",
+            f"stream {self.stream:.2f}s",
+        ]
+        prompt = f"prompt {self.prompt_chars / 1000:.1f}k chars"
+        if self.prompt_tokens:
+            prompt += f"/{self.prompt_tokens} tok"
+            if self.cached_tokens:
+                pct = 100.0 * self.cached_tokens / self.prompt_tokens
+                prompt += f" ({self.cached_tokens} cached, {pct:.0f}%)"
+        parts.append(prompt)
+        if self.completion_tokens or self.reasoning_tokens:
+            out = f"out {self.completion_tokens} tok"
+            if self.reasoning_tokens:
+                out += f" ({self.reasoning_tokens} reasoning)"
+            parts.append(out)
+        if self.images:
+            parts.append(f"images {self.images}")
+        if self.payload_bytes:
+            parts.append(f"payload {self.payload_bytes / 1024:.1f} KB")
+        if self.requests > 1:
+            parts.append(f"{self.requests} requests")
+        return " | ".join(parts)
 
 
 @dataclass
@@ -113,6 +149,13 @@ class _TurnState:
     headers: float = 0.0
     first_token: float = 0.0
     prompt_chars: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cached_tokens: int = 0
+    reasoning_tokens: int = 0
+    images: int = 0
+    payload_bytes: int = 0
+    requests: int = 0
     searches: int = 0
     pending: dict = field(default_factory=dict)
     calls_started: int = 0
@@ -122,6 +165,8 @@ class _TurnState:
         self.started = started
         self.request_sent = self.headers = self.first_token = 0.0
         self.prompt_chars = self.searches = self.calls_started = 0
+        self.prompt_tokens = self.completion_tokens = self.cached_tokens = 0
+        self.reasoning_tokens = self.images = self.payload_bytes = self.requests = 0
         self.response_ended = False
         self.pending.clear()
 
@@ -179,6 +224,13 @@ class PipecatAgent:
         except ImportError as e:
             logger.warning("[pipecat] not installed (%s) — disabled", e)
             return False
+        try:
+            from loguru import logger as _loguru
+
+            _loguru.remove()
+            _loguru.add(sys.stderr, level=self._config.log_level)
+        except Exception:
+            pass
 
         self._stopping.clear()
         started = threading.Event()
@@ -252,7 +304,7 @@ class PipecatAgent:
                     aggregators.assistant(),
                 ]
             ),
-            params=PipelineParams(enable_metrics=True),
+            params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
             idle_timeout_secs=None,
             conversation_id=self._session_id,
         )
@@ -519,6 +571,13 @@ class PipecatAgent:
             stream=(t.first_token - t.headers) if t.first_token and t.headers else 0.0,
             ttft=(t.first_token - t.started) if t.first_token else 0.0,
             prompt_chars=t.prompt_chars,
+            prompt_tokens=t.prompt_tokens,
+            completion_tokens=t.completion_tokens,
+            cached_tokens=t.cached_tokens,
+            reasoning_tokens=t.reasoning_tokens,
+            images=t.images,
+            payload_bytes=t.payload_bytes,
+            requests=t.requests,
         )
 
     def _trim_history(self) -> None:
@@ -574,6 +633,28 @@ async def _cancel_tasks() -> None:
         await asyncio.gather(*pending, return_exceptions=True)
 
 
+def _measure_messages(messages) -> tuple[int, int]:
+    """(text chars, image parts) over a message list.
+
+    Counts text separately from images: a base64 image part is ~100k characters
+    and would otherwise swamp the prompt-size number it shares a field with.
+    """
+    chars = images = 0
+    for message in messages:
+        content = message.get("content", "")
+        if isinstance(content, str):
+            chars += len(content)
+            continue
+        for part in content or ():
+            if not isinstance(part, dict):
+                chars += len(str(part))
+            elif part.get("type") == "text":
+                chars += len(part.get("text", ""))
+            else:
+                images += 1
+    return chars, images
+
+
 def _build_llm(config: PipecatConfig, turn: _TurnState):
     from pipecat.services.openai.llm import OpenAILLMService
 
@@ -596,24 +677,44 @@ def _build_llm(config: PipecatConfig, turn: _TurnState):
             limits = httpx.Limits(
                 max_keepalive_connections=100, max_connections=1000, keepalive_expiry=None
             )
+            async def on_request(request) -> None:
+                # The body as it actually goes on the wire — the only honest
+                # payload number, since the SDK reshapes what the context holds.
+                try:
+                    turn.payload_bytes += len(request.content or b"")
+                    turn.requests += 1
+                except Exception:
+                    pass
+
+            hooks = {"request": [on_request]}
             try:
-                http_client = DefaultAsyncHttpxClient(http2=config.http2, limits=limits)
+                http_client = DefaultAsyncHttpxClient(
+                    http2=config.http2, limits=limits, event_hooks=hooks
+                )
             except ImportError:
                 logger.warning('[pipecat] HTTP/2 needs httpx[http2]; using HTTP/1.1')
-                http_client = DefaultAsyncHttpxClient(limits=limits)
+                http_client = DefaultAsyncHttpxClient(limits=limits, event_hooks=hooks)
             client = AsyncOpenAI(
                 api_key=api_key, base_url=base_url, http_client=http_client
             )
             return client.with_options(max_retries=config.max_retries)
 
         async def get_chat_completions(self, context):
-            self._turn.prompt_chars = sum(
-                len(str(m.get("content", ""))) for m in context.get_messages()
-            )
+            chars, images = _measure_messages(context.get_messages())
+            self._turn.prompt_chars = chars
+            self._turn.images = images
             self._turn.request_sent = time.perf_counter()
             stream = await super().get_chat_completions(context)
             self._turn.headers = time.perf_counter()
             return stream
+
+        async def start_llm_usage_metrics(self, tokens):
+            """Accumulate: a turn with a tool call bills more than one request."""
+            self._turn.prompt_tokens += tokens.prompt_tokens or 0
+            self._turn.completion_tokens += tokens.completion_tokens or 0
+            self._turn.cached_tokens += getattr(tokens, "cache_read_input_tokens", 0) or 0
+            self._turn.reasoning_tokens += getattr(tokens, "reasoning_tokens", 0) or 0
+            await super().start_llm_usage_metrics(tokens)
 
     return _TimedLLM(
         api_key=config.api_key,
@@ -660,3 +761,53 @@ class _Collector:
                 await self.push_frame(frame, direction)
 
         return Collector()
+
+
+# --- Smoke test ------------------------------------------------------------
+# python -m hal.pipecat_rt ["prompt" ...]   — needs HAL_PIPECAT_BASE_URL/_MODEL.
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    prompts = sys.argv[1:] or [
+        "hello, who are you?",
+        "what is the capital of Vietnam?",
+        "play some jazz music please",
+    ]
+    delegate = (
+        "delegate_to_main",
+        "Hand the request to the main system: device control, music, scheduling, "
+        "memory, skills. Pass a short summary of what the user wants.",
+        {
+            "properties": {
+                "message": {"type": "string", "description": "What the user actually asked for."}
+            },
+            "required": ["message"],
+        },
+    )
+    agent = PipecatAgent(
+        PipecatConfig(),
+        instructions=(
+            "You are Lamp, a small desk robot. Keep replies to one or two short spoken "
+            "sentences. When the user asks for device control, music, scheduling or "
+            "memory, call delegate_to_main instead of answering."
+        ),
+        host_tools=[delegate],
+    )
+    started = time.perf_counter()
+    if not agent.start():
+        sys.exit("start failed — missing pipecat-ai/httpx[http2], or base_url/model unset")
+    print(f"ready in {time.perf_counter() - started:.2f}s")
+
+    for prompt in prompts:
+        print(f"\nuser: {prompt}")
+        reply = ""
+        for event in agent.run_turn(prompt):
+            if isinstance(event, TextChunk):
+                reply += event.text
+            elif isinstance(event, ToolCall):
+                print(f"  tool {event.name}({event.arguments})")
+                agent.tool_result(event.call_id, '{"result": "delegated"}', run_llm=False)
+        print(f"lamp: {reply.strip()!r}\n  {agent.last_metrics}")
+
+    agent.stop()

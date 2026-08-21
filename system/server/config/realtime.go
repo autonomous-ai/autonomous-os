@@ -25,13 +25,14 @@ import (
 type RealtimeConfig struct {
 	// Enabled toggles the realtime brain. Unset → true (mirrors HAL's
 	// HAL_REALTIME_ENABLED default); set false to disable.
-	Enabled  *bool           `json:"enabled,omitempty" yaml:"enabled"`
-	Provider string          `json:"provider,omitempty" yaml:"provider"` // none|gemini|openai|qwen ("" == none)
-	APIKey   string          `json:"api_key,omitempty" yaml:"apiKey"`    // empty → falls back to LLMAPIKey
-	BaseURL  string          `json:"base_url,omitempty" yaml:"baseURL"`  // empty → falls back to LLMBaseURL
-	Gemini   *GeminiRealtime `json:"gemini,omitempty" yaml:"gemini"`
-	OpenAI   *OpenAIRealtime `json:"openai,omitempty" yaml:"openai"`
-	Qwen     *QwenRealtime   `json:"qwen,omitempty" yaml:"qwen"`
+	Enabled  *bool            `json:"enabled,omitempty" yaml:"enabled"`
+	Provider string           `json:"provider,omitempty" yaml:"provider"` // none|gemini|openai|qwen|pipecat ("" == none)
+	APIKey   string           `json:"api_key,omitempty" yaml:"apiKey"`    // empty → falls back to LLMAPIKey
+	BaseURL  string           `json:"base_url,omitempty" yaml:"baseURL"`  // empty → falls back to LLMBaseURL
+	Gemini   *GeminiRealtime  `json:"gemini,omitempty" yaml:"gemini"`
+	OpenAI   *OpenAIRealtime  `json:"openai,omitempty" yaml:"openai"`
+	Qwen     *QwenRealtime    `json:"qwen,omitempty" yaml:"qwen"`
+	Pipecat  *PipecatRealtime `json:"pipecat,omitempty" yaml:"pipecat"`
 }
 
 // GeminiRealtime holds Gemini Live's provider-specific knobs. Empty fields → HAL
@@ -74,6 +75,23 @@ type QwenRealtime struct {
 	// the qwen twin of Gemini's GoogleSearch. nil → HAL default (on). Kept here
 	// so an operator's explicit override survives config re-saves.
 	Search *bool `json:"search,omitempty" yaml:"search"`
+}
+
+// PipecatRealtime holds the cascaded pipecat brain's knobs. It is NOT an
+// audio-native provider: HAL keeps its own STT/TTS and pipecat drives only the
+// LLM half of the turn, so there is no voice and no reasoning field. The
+// endpoint is any OpenAI-compatible /v1 host; empty api_key/base_url/model fall
+// back to the AI brain's (llm_api_key / llm_base_url / llm_model), which is
+// already such a host. The shared realtime.api_key/base_url are deliberately
+// NOT consulted — those carry the WS-suffixed campaign-api values gemini and
+// openai use.
+type PipecatRealtime struct {
+	APIKey  string `json:"api_key,omitempty" yaml:"apiKey"`
+	BaseURL string `json:"base_url,omitempty" yaml:"baseURL"` // e.g. https://host/v1
+	Model   string `json:"model,omitempty" yaml:"model"`
+	// SearchAPIKey enables the `web_search` tool (Gemini grounding). Separate
+	// key because the gateway above is typically self-hosted with no search.
+	SearchAPIKey string `json:"search_api_key,omitempty" yaml:"searchAPIKey"`
 }
 
 // Realtime per-provider defaults — what os-server resolves (and pushes) when the
@@ -196,10 +214,17 @@ func (c *Config) RealtimeBaseURLOverride() string {
 	if c.Realtime == nil {
 		return ""
 	}
-	// qwen keeps its own base_url in the sub-object (never the shared field).
-	if c.RealtimeProvider() == "qwen" {
+	// qwen and pipecat keep their own base_url in the sub-object (never the
+	// shared field, which carries the WS-suffixed campaign-api value).
+	switch c.RealtimeProvider() {
+	case "qwen":
 		if c.Realtime.Qwen != nil {
 			return c.Realtime.Qwen.BaseURL
+		}
+		return ""
+	case "pipecat":
+		if c.Realtime.Pipecat != nil {
+			return c.Realtime.Pipecat.BaseURL
 		}
 		return ""
 	}
@@ -212,8 +237,11 @@ func (c *Config) RealtimeHasAPIKey() bool {
 	if c.Realtime == nil {
 		return false
 	}
-	if c.RealtimeProvider() == "qwen" {
+	switch c.RealtimeProvider() {
+	case "qwen":
 		return c.Realtime.Qwen != nil && c.Realtime.Qwen.APIKey != ""
+	case "pipecat":
+		return c.Realtime.Pipecat != nil && c.Realtime.Pipecat.APIKey != ""
 	}
 	return c.Realtime.APIKey != ""
 }
@@ -237,6 +265,12 @@ func (c *Config) RealtimeModel() string {
 			return c.Realtime.Qwen.Model
 		}
 		return defaultRealtimeQwenModel
+	case "pipecat":
+		// No default of its own: unset means "reuse the AI brain's model", which
+		// HAL resolves from llm_model.
+		if c.Realtime != nil && c.Realtime.Pipecat != nil {
+			return c.Realtime.Pipecat.Model
+		}
 	}
 	return ""
 }
@@ -301,7 +335,7 @@ var (
 // cheapest (the default). Voices match the maps below; KEEP IN SYNC with the HAL
 // enums (hal/realtime/enums).
 var (
-	RealtimeProviders           = []string{"gemini", "openai", "qwen", "none"}
+	RealtimeProviders           = []string{"gemini", "openai", "qwen", "pipecat", "none"}
 	RealtimeGeminiVoiceList     = []string{"Puck", "Charon", "Kore", "Fenrir", "Aoede"}
 	RealtimeOpenAIVoiceList     = []string{"alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"}
 	RealtimeQwenVoiceList       = []string{"Cherry", "Serena", "Ethan", "Chelsie"}
@@ -321,8 +355,8 @@ type RealtimeOptions struct {
 func GetRealtimeOptions() RealtimeOptions {
 	return RealtimeOptions{
 		Providers: RealtimeProviders,
-		Voices:    map[string][]string{"gemini": RealtimeGeminiVoiceList, "openai": RealtimeOpenAIVoiceList, "qwen": RealtimeQwenVoiceList},
-		Reasoning: map[string][]string{"gemini": RealtimeGeminiThinkingList, "openai": RealtimeOpenAIReasoningList, "qwen": {}},
+		Voices:    map[string][]string{"gemini": RealtimeGeminiVoiceList, "openai": RealtimeOpenAIVoiceList, "qwen": RealtimeQwenVoiceList, "pipecat": {}},
+		Reasoning: map[string][]string{"gemini": RealtimeGeminiThinkingList, "openai": RealtimeOpenAIReasoningList, "qwen": {}, "pipecat": {}},
 	}
 }
 
@@ -330,10 +364,10 @@ func GetRealtimeOptions() RealtimeOptions {
 // the off-synonyms / empty). Anything else is rejected.
 func ValidateRealtimeProvider(provider string) error {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "gemini", "openai", "qwen", "none", "off", "disabled", "":
+	case "gemini", "openai", "qwen", "pipecat", "none", "off", "disabled", "":
 		return nil
 	default:
-		return fmt.Errorf("invalid realtime provider %q (want gemini|openai|qwen|none)", provider)
+		return fmt.Errorf("invalid realtime provider %q (want gemini|openai|qwen|pipecat|none)", provider)
 	}
 }
 
@@ -364,8 +398,17 @@ func ValidateRealtimeKnobs(provider, voice, reasoning string) error {
 		if reasoning != "" {
 			return fmt.Errorf("qwen realtime has no reasoning knob, got %q", reasoning)
 		}
+	case "pipecat":
+		// Cascaded: the device's own TTS owns the voice and the model exposes no
+		// reasoning tier, so both knobs are meaningless here.
+		if voice != "" {
+			return fmt.Errorf("pipecat has no voice knob (device TTS owns it), got %q", voice)
+		}
+		if reasoning != "" {
+			return fmt.Errorf("pipecat has no reasoning knob, got %q", reasoning)
+		}
 	default:
-		return fmt.Errorf("realtime model/voice/reasoning require a concrete provider (gemini|openai|qwen), got %q", provider)
+		return fmt.Errorf("realtime model/voice/reasoning require a concrete provider (gemini|openai|qwen|pipecat), got %q", provider)
 	}
 	return nil
 }

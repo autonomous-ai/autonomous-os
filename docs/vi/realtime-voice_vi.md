@@ -375,14 +375,19 @@ chụp thì không có gì để bàn giao, agent chụp như bình thường.
 
 ## Các provider
 
-Ba backend thay thế cho nhau, chọn bằng `HAL_REALTIME_PROVIDER`
-(`none` | `gemini` | `openai` | `qwen`):
+Bốn backend, chọn bằng `HAL_REALTIME_PROVIDER` / `realtime.provider`
+(`none` | `gemini` | `openai` | `qwen` | `pipecat`). Ba cái đầu là
+**audio-native** — nhận frame mic và trả về tiếng nói. `pipecat` là **cascaded**:
+HAL giữ nguyên STT và TTS của mình, pipecat chỉ lo phần giữa của lượt. Nó không
+dùng chung gì với `voice_agent/` và không phải `VoiceAgentBase`; xem
+[Pipecat](#pipecat--provider-cascaded) bên dưới.
 
 | Provider | Class | Mô hình threading | Model mặc định | Sample rate |
 |----------|-------|-------------------|----------------|-------------|
 | Gemini Live | `voice_agent/gemini_live.py` `GeminiLiveAgent` | event loop asyncio riêng trên thread `gemini-io`; thread send/recv submit coroutine qua `run_coroutine_threadsafe` | `gemini-2.5-flash-native-audio-preview-12-2025` | 16000 Hz |
 | OpenAI Realtime | `voice_agent/openai_realtime.py` `OpenAIRealtimeAgent` | thuần đồng bộ; 1 `RealtimeConnection` dùng chung bởi thread send/recv, serialize bằng reentrant lock | `gpt-realtime-2` | 24000 Hz |
 | Qwen Omni Realtime | `voice_agent/qwen_realtime.py` `QwenRealtimeAgent` | thuần đồng bộ; client `websockets.sync.client` thô | `qwen3.5-omni-plus-realtime` | 16000 Hz |
+| Pipecat (cascaded) | `pipecat_session.py` `PipecatSession` trên `hal/pipecat_rt.py` `PipecatAgent` | event loop asyncio riêng trên thread `pipecat-loop`; API public là sync, dựa trên queue | `llm_model` (không có default riêng) | không có — text vào, text ra |
 
 Gemini Live dùng `google-genai` và private asyncio loop của nó do thread
 `gemini-io` sở hữu. Teardown đóng/hủy provider receive task trước, rồi mới join
@@ -455,6 +460,89 @@ trên queue:
   `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` — mặc định 8 s — để kết thúc lượt im lặng
   và fallback sang main agent mà không bị dead-air dài).
 - `available` ⇔ websocket/session đã connect (`_connected`).
+
+### Pipecat — provider cascaded
+
+Chọn bằng `realtime.provider = "pipecat"`. Pipeline rút gọn còn
+
+```
+transcript ──▶ LLMContext ──▶ LLM (tương thích OpenAI) ──▶ text chunk
+                               └─ tool ──▶ xử lý tại chỗ, hoặc đẩy lên host
+```
+
+nên nửa audio của lượt không đổi: vẫn STT đó tạo transcript và vẫn TTS đó đọc
+câu trả lời, từng câu một. Turn driver là
+`drivers/voice/_internal/pipecat_turn.py` (`run_pipecat_turn`), bản song sinh
+cascaded của `realtime_turn.py`. Nó trả về cùng `RealtimeTurnResult`, và dùng
+chung wait filler, thinking cue, CoT leak filter với driver audio-native — nên
+với người dùng, hai bộ não cảm giác như nhau.
+
+Những thứ nó **không** có, theo thiết kế:
+
+- **Không native audio** — giọng của model không bao giờ được phát; device tự nói.
+- **Không nhận diện cảm xúc/ngữ điệu giọng** — model thấy text, không thấy audio.
+  Đây là đánh đổi có chủ đích để lấy latency; `express_emotion` vẫn chạy, dựa
+  trên nội dung câu trả lời thay vì giọng người nói.
+- **Không có `look` / thị giác trong phiên**, không look-replay — câu hỏi thị
+  giác delegate cho main agent.
+- **Không retry khôi phục WS** — không có session dài hạn để mất.
+- **Không có knob voice hay reasoning** — TTS của device quyết định giọng và
+  model không expose mức reasoning, nên `ValidateRealtimeKnobs` từ chối cả hai.
+
+`PipecatSession` duck-type đúng phần bề mặt của `RealtimeOrchestrator` mà
+`voice_service` chạm tới lúc capture (`available`, `prepare_turn`,
+`append_audio`, `send_text`, `sample_rate`, `rebuilding`,
+`wait_until_available`, `save_turn`), nên chỉ lời gọi turn là rẽ nhánh.
+`append_audio` là no-op có chủ đích: bộ não này nhận transcript đã hoàn chỉnh.
+
+Persona và memory đến từ **cùng** `ContextManagerBase` (khóa theo gateway) mà
+provider audio-native dùng, nên identity, `summary.md` và catalog skills giống
+hệt. Instructions được dựng lại mỗi `HAL_REALTIME_SESSION_MAX_TURNS` lượt để một
+lần đổi tên hay memory mới kịp vào; giữa hai lần dựng, prompt ổn định từng byte —
+đó chính là thứ giữ ấm prefix cache của gateway.
+
+Tool: `delegate_to_main` (trả kết quả với `run_llm=False` — lượt kết thúc, main
+agent tiếp quản), `express_emotion` (fire-and-forget trên daemon thread, trả với
+`run_llm=True` để model vẫn còn nợ người dùng lời nói), và `web_search` tùy chọn
+dùng Gemini grounding khi có `realtime.pipecat.search_api_key`, giới hạn theo
+lượt bằng `HAL_PIPECAT_SEARCH_BUDGET`.
+
+**Metric mỗi lượt.** Mỗi lượt ghi một dòng log ở mức INFO:
+
+```
+[pipecat] ttft 0.62s | wait 0.00s | server 0.61s | stream 0.01s |
+          prompt 38.3k chars/10866 tok | out 11 tok | payload 40.8 KB
+```
+
+| Field | Ý nghĩa |
+|-------|---------|
+| `ttft` | từ lúc transcript vào hàng đợi → text frame đầu tiên đi ra |
+| `wait` | thời gian trong pipeline trước khi request được gửi (aggregation) |
+| `server` | gửi request → nhận header: RTT mạng + prefill |
+| `stream` | header → token đầu tiên |
+| `prompt` | kích thước text của context, và số prompt token server tính |
+| `out` | completion token, kèm `(N reasoning)` khi server báo |
+| `images` | số image part trong context (bỏ qua khi không có) |
+| `payload` | số byte thực sự ghi lên dây, đo bằng httpx request hook |
+| `N requests` | chỉ hiện khi một lượt gọi nhiều hơn một request |
+
+Số token và payload là **tổng của cả lượt, không phải từng request**: trả lời một
+tool call tốn thêm một request gửi lại toàn bộ prompt, nên một lượt có
+`express_emotion` gần như nhân đôi cả hai. Đó là cái giá nhìn thấy được của tool,
+và cũng là lý do các bộ đếm cộng dồn thay vì ghi đè.
+
+`cached` (prefix-cache hit) chỉ xuất hiện khi endpoint trả
+`prompt_tokens_details.cached_tokens`, và `reasoning` chỉ khi có
+`completion_tokens_details.reasoning_tokens`. Pipecat map sẵn cả hai; gateway nào
+không trả thì field đó đơn giản là không nằm trong dòng log.
+
+**Lưu ý dependency.** `pipecat-ai` không phải dependency của HAL và pin
+`onnxruntime~=1.24.3`, sẽ hạ cấp bản 1.27.x mà device đang dùng cho TEN-VAD và
+insightface. Hãy cài với `--no-deps` cộng thêm các module pipecat import lúc load
+package (`loguru`, `pyloudnorm`, `soxr`, `resampy`, `markdown`, `nltk`,
+`num2words`, `defusedxml`, `docopt`) để onnxruntime được giữ nguyên.
+`PipecatAgent.start()` trả `False` khi thiếu package, và provider fallback về
+main agent thay vì làm hỏng lượt.
 
 ### An toàn connection của OpenAI
 
@@ -718,8 +806,8 @@ chỉ-thuộc-os-server.
 
 Model ở Go tại `system/server/config/realtime.go`; đọc ở HAL tại
 `hal/config.py`. Field chung ở trên; knob theo provider nằm trong sub-object
-`gemini` / `openai` / `qwen`, `provider` chọn cái đang active (`none` hoặc vắng →
-tắt realtime). `api_key` / `base_url` rỗng → fallback `llm_api_key` /
+`gemini` / `openai` / `qwen` / `pipecat`, `provider` chọn cái đang active (`none`
+hoặc vắng → tắt realtime). `api_key` / `base_url` rỗng → fallback `llm_api_key` /
 `llm_base_url` — **trừ qwen**: credential của qwen là của riêng nó
 (`realtime.qwen.api_key` / `realtime.qwen.base_url`, Go struct `QwenRealtime`
 còn có `model`/`voice`), **cố tình không** fallback về `realtime.api_key`/
@@ -727,6 +815,14 @@ còn có `model`/`voice`), **cố tình không** fallback về `realtime.api_key
 không đi qua proxy `campaign-api`. Set qua `realtime.qwen.*` trong config.json
 hoặc qua env trên device (`DASHSCOPE_API_KEY`, `HAL_QWEN_REALTIME_BASE_URL`
 trong `/opt/hal/.env`); thiếu cả hai thì WS handshake fail rõ ràng trong log hal.
+
+`pipecat` cũng giữ credential riêng trong `realtime.pipecat.*` (Go struct
+`PipecatRealtime`) và bỏ qua `realtime.api_key`/`base_url` chung — vốn mang giá
+trị proxy có suffix WS. Endpoint của nó là host tương thích OpenAI `/v1` thuần,
+nên field nào trống sẽ fallback về **AI brain** (`llm_base_url` / `llm_api_key` /
+`llm_model`) — vốn đã là host như vậy. Nếu không resolve được base_url hoặc
+model, `PipecatSession.start()` ghi log và ở trạng thái không khả dụng, các lượt
+rơi về main agent.
 
 > **Để `base_url` trống trừ khi có endpoint riêng (không qua proxy).** Khi trống,
 > HAL tự suy ra `<llm_base_url>/ws/gemini` (hoặc `/ws/openai`) — đúng suffix WS mà
@@ -746,7 +842,8 @@ trong `/opt/hal/.env`); thiếu cả hai thì WS handshake fail rõ ràng trong 
     "provider": "gemini",
     "gemini": { "model": "gemini-3.1-flash-live-preview", "voice": "Kore", "thinking_level": "MINIMAL" },
     "openai": { "model": "gpt-realtime-2", "voice": "alloy", "reasoning_effort": "minimal" },
-    "qwen": { "api_key": "sk-…", "base_url": "wss://…", "model": "qwen3.5-omni-plus-realtime", "voice": "Ethan" }
+    "qwen": { "api_key": "sk-…", "base_url": "wss://…", "model": "qwen3.5-omni-plus-realtime", "voice": "Ethan" },
+    "pipecat": { "model": "qwen/qwen3.6-35b-a3b", "base_url": "https://…/v1", "api_key": "…", "search_api_key": "AIza…" }
   }
 }
 ```
@@ -800,7 +897,7 @@ trong `config.json`:
 | `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `20` | Số giây idle của cửa sổ focus sau lệnh. Mỗi `voice_command` hoặc `voice_followup` được nhận sẽ refresh cửa sổ. `0` tắt follow-up và buộc mỗi phiên mic phải có wake phrase. Bị bỏ qua khi `wakeword` là false. |
 | `HAL_SILENCE_VAD_ENABLED` | `true` | Yêu cầu Silero xác nhận có tiếng nói trước khi refresh đồng hồ im lặng kết thúc lượt. RMS vẫn là cổng chặn rẻ chạy trước; đặt `false` để quay về phát hiện im lặng thuần RMS. |
 | `HAL_SILENCE_VAD_WINDOW_FRAMES` | `3` | Số frame gom lại cho mỗi lần chạy Silero ở bước kiểm đó — Silero tốn ~20 ms/frame trên ARM và LSTM của nó cần hơn một frame 64 ms mới ổn định. |
-| `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `qwen` |
+| `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `qwen` \| `pipecat` |
 | `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = activity detection thủ công) |
 | `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Số giây tối đa `receive()` chờ output event kế tiếp trước khi kết thúc lượt im lặng (fallback sang main agent) |
 | `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` | `20.0` | Watchdog im-lặng dùng thay mặc định cho turn có `look` (theo từng turn, qua `extend_recv_timeout()`). Gemini bị ép thinking trên frame dày chữ có thể im >8 s ngay trước khi trả lời — watchdog mặc định giết nhầm mấy turn đó |
@@ -829,6 +926,16 @@ trong `config.json`:
 | `HAL_QWEN_REALTIME_BASE_URL` | — | WS host DashScope (`wss://<workspace-host>/api-ws/v1/realtime`); **không** fallback về `llm_base_url` — chỉ đọc `realtime.qwen.base_url` khi env trống |
 | `HAL_QWEN_REALTIME_MODEL` | `qwen3.5-omni-plus-realtime` | turbo legacy: không gọi function call, lờ turn context |
 | `HAL_QWEN_REALTIME_VOICE` | `Ethan` | 3.5-plus: thêm Serena; chỉ-turbo: Cherry \| Chelsie |
+| `HAL_PIPECAT_BASE_URL` | `llm_base_url` | Host tương thích OpenAI `/v1`; override `realtime.pipecat.base_url` |
+| `HAL_PIPECAT_API_KEY` | `llm_api_key` | Override `realtime.pipecat.api_key` |
+| `HAL_PIPECAT_MODEL` | `llm_model` | Override `realtime.pipecat.model` |
+| `HAL_PIPECAT_GEMINI_KEY` | — | Bật tool `web_search` (Gemini grounding). Không set → không đăng ký tool search |
+| `HAL_PIPECAT_SEARCH_BUDGET` | `2` | Số lần `web_search` tối đa mỗi lượt |
+| `HAL_PIPECAT_MAX_TOKENS` | `512` | Giới hạn token sinh ra — **tính cả argument của tool call**, nên budget nhỏ sẽ cắt cụt JSON và mất lượt |
+| `HAL_PIPECAT_MAX_HISTORY` | `128` | Số message giữ trong phiên trước khi trim; memory dài hạn nằm trong system prompt |
+| `HAL_PIPECAT_HTTP2` | `true` | Dùng HTTP/2 tới gateway |
+| `HAL_PIPECAT_TURN_TIMEOUT_S` | `20` | Watchdog mỗi lượt |
+| `HAL_PIPECAT_LOG_LEVEL` | `WARNING` | pipecat log qua loguru ở mức DEBUG mặc định, làm ngập journal của device với log từng frame |
 | `HAL_REALTIME_MEMORY_PATH` | `<workspace>/realtime/memory.jsonl` | |
 | `HAL_REALTIME_MAX_MEMORY_ENTRIES` / `_TRIM_KEEP` | `1000` / `500` | |
 | `HAL_REALTIME_SUMMARIZER_ENABLED` | `true` | |
@@ -849,4 +956,7 @@ trong `config.json`:
 | `models/`, `enums/` | Kiểu input/output/event, enum provider + gateway |
 | `resources/` | System prompt (chung + theo provider) |
 | `../voice/voice_service.py` | Tích hợp: stream audio mic, tiêu thụ output, route delegate/handled |
+| `pipecat_session.py` | Bộ não cascaded: sở hữu `PipecatAgent`, dùng lại context manager, duck-type bề mặt capture |
+| `../../pipecat_rt.py` | Engine pipecat độc lập (`PipecatAgent`): dựng pipeline, bắc cầu tool, metric mỗi lượt. Chạy độc lập được: `python -m hal.pipecat_rt` |
+| `../voice/_internal/pipecat_turn.py` | Turn driver cascaded (`run_pipecat_turn`) — bản text của `realtime_turn.py` |
 | `../voice/aec.py` | WebRTC AEC3 trên đường mic; tham chiếu lấy tại TTS output stream (mọi provider) |

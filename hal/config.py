@@ -661,6 +661,7 @@ _RT: dict = _os_cfg_realtime()
 _RT_GEMINI: dict = _RT.get("gemini") if isinstance(_RT.get("gemini"), dict) else {}
 _RT_OPENAI: dict = _RT.get("openai") if isinstance(_RT.get("openai"), dict) else {}
 _RT_QWEN: dict = _RT.get("qwen") if isinstance(_RT.get("qwen"), dict) else {}
+_RT_PIPECAT: dict = _RT.get("pipecat") if isinstance(_RT.get("pipecat"), dict) else {}
 
 
 def _rt_str(env_key: str, cfg_val, default: str) -> str:
@@ -683,7 +684,7 @@ def _rt_enabled() -> bool:
 
 
 REALTIME_ENABLED: bool = _rt_enabled()
-REALTIME_PROVIDER: str = _rt_str("HAL_REALTIME_PROVIDER", _RT.get("provider"), "gemini")  # none | gemini | openai | qwen
+REALTIME_PROVIDER: str = _rt_str("HAL_REALTIME_PROVIDER", _RT.get("provider"), "gemini")  # none | gemini | openai | qwen | pipecat
 # When enabled, do not send a voice turn to the realtime agent until an STT
 # interim transcript starts with one of the configured wake phrases. This is a
 # top-level config.json setting because it also gates the non-realtime Go path.
@@ -1198,6 +1199,31 @@ REALTIME_QWEN_SEARCH: bool = (
     in ("1", "true", "yes")
 )
 REALTIME_QWEN_SAMPLE_RATE: int = 16000
+
+# --- Realtime: Pipecat (cascaded) ---
+# Not an audio-native brain: HAL keeps its own STT and TTS and pipecat drives
+# only the middle of the turn (text in -> LLM + tools -> text out), so there is
+# no voice or reasoning knob here. The endpoint is any OpenAI-compatible /v1
+# host; blank values fall back to the AI brain's, which is already such a host.
+REALTIME_PIPECAT_API_KEY: str = (
+    os.environ.get("HAL_PIPECAT_API_KEY", "")
+    or _RT_PIPECAT.get("api_key", "")
+    or _os_cfg_get("llm_api_key", "")
+)
+REALTIME_PIPECAT_BASE_URL: str = (
+    os.environ.get("HAL_PIPECAT_BASE_URL", "")
+    or _RT_PIPECAT.get("base_url", "")
+    or _os_cfg_get("llm_base_url", "")
+)
+REALTIME_PIPECAT_MODEL: str = _rt_str(
+    "HAL_PIPECAT_MODEL", _RT_PIPECAT.get("model"), _os_cfg_get("llm_model", "")
+)
+# Gemini grounding search, offered to the model as a `web_search` tool. Separate
+# key because the gateway above is typically self-hosted and has no search.
+REALTIME_PIPECAT_SEARCH_KEY: str = (
+    os.environ.get("HAL_PIPECAT_GEMINI_KEY", "")
+    or _RT_PIPECAT.get("search_api_key", "")
+)
 
 # --- Realtime: Context manager ---
 OPENCLAW_WORKSPACE_DIR: str = os.environ.get("HAL_OPENCLAW_WORKSPACE_DIR", "/root/.openclaw/workspace")

@@ -41,6 +41,7 @@ from hal.drivers.voice._internal.realtime_turn import (
     run_realtime_turn,
     should_dispatch_to_main,
 )
+from hal.drivers.voice._internal.pipecat_turn import run_pipecat_turn
 from hal.drivers.voice._internal.sensing_sender import SensingSender
 from hal.drivers.voice._internal.session_finalize import finalize_session
 from hal.drivers.voice._internal.speaker_decorate import (
@@ -218,11 +219,25 @@ class VoiceService:
         # OS server event sender (with echo similarity filter)
         self._sensing_sender = SensingSender(tts_service=tts_service)
 
-        # Realtime voice agent — parallel audio pipeline (Gemini Live / OpenAI Realtime).
-        self._realtime = RealtimeOrchestrator(
-            gateway=AgentGateway(hal_config.AGENT_GATEWAY),
-            enable_expression=enable_expression,
+        # Realtime voice agent. Two shapes behind one handle: the audio-native
+        # providers (Gemini Live / OpenAI Realtime / Qwen Omni) stream mic frames,
+        # while pipecat is cascaded and takes the finished STT transcript. Both
+        # answer the same capture-path surface, so only the turn driver branches.
+        self._pipecat: bool = (
+            hal_config.REALTIME_PROVIDER.strip().lower() == "pipecat"
         )
+        if self._pipecat:
+            from hal.realtime.pipecat_session import PipecatSession
+
+            self._realtime = PipecatSession(
+                gateway=AgentGateway(hal_config.AGENT_GATEWAY),
+                enable_expression=enable_expression,
+            )
+        else:
+            self._realtime = RealtimeOrchestrator(
+                gateway=AgentGateway(hal_config.AGENT_GATEWAY),
+                enable_expression=enable_expression,
+            )
 
         # Hook into TTS on_speak_end to feed spoken text back to the realtime agent.
         # With turn_complete=False on text inputs, this won't trigger a standalone response.
@@ -1722,7 +1737,14 @@ class VoiceService:
                 except Exception as e:
                     logger.warning("[realtime] speaker correction send failed: %s", e)
 
-            if realtime_turn_started:
+            if realtime_turn_started and self._pipecat:
+                rt = run_pipecat_turn(
+                    self._realtime,
+                    self._tts,
+                    self.strip_rt_markers,
+                    combined,
+                )
+            elif realtime_turn_started:
                 rt = run_realtime_turn(
                     self._realtime,
                     self._tts,

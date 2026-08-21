@@ -44,10 +44,11 @@ func applyRealtimeSet(c *config.Config, d domain.RealtimeSetData) {
 	if d.Provider != "" {
 		rt.Provider = strings.ToLower(strings.TrimSpace(d.Provider))
 	}
-	// Credentials are provider-routed: qwen keeps its own api_key/base_url in
-	// the qwen sub-object (HAL deliberately ignores the shared fields for qwen
-	// — they hold the campaign-api credentials used by gemini/openai).
-	if strings.ToLower(strings.TrimSpace(rt.Provider)) == "qwen" {
+	// Credentials are provider-routed: qwen and pipecat keep their own
+	// api_key/base_url in their sub-object (HAL deliberately ignores the shared
+	// fields for both — those hold the campaign-api credentials gemini/openai use).
+	switch strings.ToLower(strings.TrimSpace(rt.Provider)) {
+	case "qwen":
 		if d.APIKey != "" || d.BaseURL != "" {
 			if rt.Qwen == nil {
 				rt.Qwen = &config.QwenRealtime{}
@@ -59,7 +60,19 @@ func applyRealtimeSet(c *config.Config, d domain.RealtimeSetData) {
 				rt.Qwen.BaseURL = d.BaseURL
 			}
 		}
-	} else {
+	case "pipecat":
+		if d.APIKey != "" || d.BaseURL != "" {
+			if rt.Pipecat == nil {
+				rt.Pipecat = &config.PipecatRealtime{}
+			}
+			if d.APIKey != "" {
+				rt.Pipecat.APIKey = d.APIKey
+			}
+			if d.BaseURL != "" {
+				rt.Pipecat.BaseURL = d.BaseURL
+			}
+		}
+	default:
 		if d.APIKey != "" {
 			rt.APIKey = d.APIKey
 		}
@@ -107,7 +120,15 @@ func applyRealtimeSet(c *config.Config, d domain.RealtimeSetData) {
 		if d.Voice != "" {
 			rt.Qwen.Voice = d.Voice
 		}
-		// no reasoning knob — validateRealtimeSet already rejected it
+	// no reasoning knob — validateRealtimeSet already rejected it
+	case "pipecat":
+		if rt.Pipecat == nil {
+			rt.Pipecat = &config.PipecatRealtime{}
+		}
+		if d.Model != "" {
+			rt.Pipecat.Model = d.Model
+		}
+		// no voice/reasoning knobs — validateRealtimeSet already rejected them
 	}
 }
 

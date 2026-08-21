@@ -3,11 +3,13 @@ import { C, LockedField, LockedPasswordField, SectionCard } from "@/components/s
 import { getRealtimeOptions } from "@/lib/api";
 import type { LlmLoadedState } from "@/hooks/setup/types";
 
-// Realtime voice-agent (Gemini Live / OpenAI Realtime) config. Values map 1:1 to
-// the config.json `realtime` block (HAL reads it; os-server restarts HAL on save).
-// Voice + reasoning are provider-specific — keep these lists in sync with
+// Realtime voice-agent config. Values map 1:1 to the config.json `realtime`
+// block (HAL reads it; os-server restarts HAL on save). Voice + reasoning are
+// provider-specific — keep these lists in sync with
 // system/server/config/realtime.go (ValidateRealtimeKnobs) and the HAL enums.
-const PROVIDERS = ["gemini", "openai", "qwen", "none"];
+// pipecat is the odd one out: cascaded rather than audio-native, so it has
+// neither knob and its endpoint is a plain OpenAI-compatible /v1 host.
+const PROVIDERS = ["gemini", "openai", "qwen", "pipecat", "none"];
 
 // Display labels for the Provider dropdown. Values on the wire stay lowercase
 // (server-side switch keys off "gemini" / "openai" / …); only the human-facing
@@ -17,6 +19,7 @@ const PROVIDER_LABEL: Record<string, string> = {
   gemini: "Gemini",
   openai: "OpenAI",
   qwen: "Qwen",
+  pipecat: "Pipecat",
   none: "None",
 };
 const displayProvider = (v: string): string =>
@@ -25,14 +28,24 @@ const VOICES: Record<string, string[]> = {
   gemini: ["Puck", "Charon", "Kore", "Fenrir", "Aoede"],
   openai: ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"],
   qwen: ["Cherry", "Serena", "Ethan", "Chelsie"],
+  pipecat: [],
 };
 // Reasoning depth = cost knob. First entry (cheapest) is the default.
-// qwen realtime has no reasoning knob → empty list hides the selector.
+// qwen realtime and pipecat have no reasoning knob → empty list hides the selector.
 const REASONING: Record<string, string[]> = {
   gemini: ["MINIMAL", "LOW", "MEDIUM", "HIGH"],
   openai: ["minimal", "low", "medium", "high", "xhigh"],
   qwen: [],
+  pipecat: [],
 };
+
+// A provider only accepts the knobs it actually has: pipecat has neither (the
+// device TTS owns the voice, and the model exposes no reasoning tier) and qwen
+// has no reasoning. The server REJECTS an unsupported knob, so the save payload
+// must be filtered by these — hiding the selector is not enough, since the
+// state keeps whatever the previous provider left behind.
+export const providerHasVoice = (p: string): boolean => (VOICES[p] ?? []).length > 0;
+export const providerHasReasoning = (p: string): boolean => (REASONING[p] ?? []).length > 0;
 
 export interface RealtimeLoadedState {
   apiKey: boolean;
@@ -88,7 +101,7 @@ export function RealtimeSection({
     <SectionCard id="realtime" title="Realtime" active={active}>
       <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, cursor: "pointer", fontSize: 12.5, color: C.text }}>
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-        Enabled (audio-native brain — Gemini Live / OpenAI Realtime / Qwen Omni Realtime)
+        Enabled (audio-native — Gemini Live / OpenAI Realtime / Qwen Omni — or cascaded Pipecat)
       </label>
       <div style={{ marginBottom: 12 }}>
         <label htmlFor="realtime_provider" style={labelStyle}>Provider</label>
@@ -118,7 +131,7 @@ export function RealtimeSection({
           )}
 
           <LockedPasswordField lockedInitially={realtimeLoaded.apiKey || llmLoaded.apiKey} label="API Key (optional — leave blank to reuse AI brain key)" id="realtime_api_key" value={apiKey} onChange={setApiKey} placeholder="sk-... / AIza..." />
-          <LockedField lockedInitially={llmLoaded.baseUrl} label="Base URL (optional — leave blank to derive from AI brain base URL)" id="realtime_base_url" value={baseUrl} onChange={setBaseUrl} placeholder="wss://… /ws/gemini" />
+          <LockedField lockedInitially={llmLoaded.baseUrl} label="Base URL (optional — leave blank to derive from AI brain base URL)" id="realtime_base_url" value={baseUrl} onChange={setBaseUrl} placeholder={provider === "pipecat" ? "https://… /v1" : "wss://… /ws/gemini"} />
         </>
       )}
     </SectionCard>
