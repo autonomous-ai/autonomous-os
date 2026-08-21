@@ -217,24 +217,39 @@ SCENE_PRESETS = {
 }
 
 # Servo aim presets — named device-head directions mapped to joint positions (normalized -100..100).
-# Neutral: base_yaw=3, base_pitch=-30, elbow_pitch=57, wrist_roll=0, wrist_pitch=18
+#
+# These numbers are NOT angles. norm_mode is RANGE_M100_100 (use_degrees=False in
+# config_hal_follower.py), so each one is a position on that joint's calibrated
+# span: raw = ((v + 100) / 200) * (range_max - range_min) + range_min. That makes
+# every value here a function of range_min/range_max in the calibration JSON —
+# recalibrate a joint to a different span and the same number points somewhere else.
+#
+# Retuned on 21/08/2026 for the ranges in hal/calibration/robots/hal_follower/hal.json
+# as of `hal: recalibrate hal_follower servo ranges`. base_pitch and elbow_pitch went
+# from a narrow measured span (1608-3017 and 1651-3082) to the full 0-4095, which
+# moves their mid by ~265 and ~319 raw and rescales the whole axis, so every entry
+# below shifted; base_yaw, wrist_roll and wrist_pitch moved less but still moved.
+# Values were carried over by round-tripping each one through the OLD span to raw and
+# back through the NEW span, so the physical poses are the ones that were tuned by
+# hand — only the numbers naming them changed. Redo that round-trip after the next
+# recalibration; do not hand-edit one joint and leave the rest.
 AIM_PRESETS = {
-    AIM_CENTER: {"base_yaw.pos": 3.0, "base_pitch.pos": -20.0, "elbow_pitch.pos": 32.0, "wrist_roll.pos": 0.0,
-                 "wrist_pitch.pos": 0.0},
-    AIM_DESK: {"base_yaw.pos": 3.0, "base_pitch.pos": 5.0, "elbow_pitch.pos": 20.0, "wrist_roll.pos": 0.0,
-               "wrist_pitch.pos": 40.0},
-    AIM_WALL: {"base_yaw.pos": 3.0, "base_pitch.pos": 5.0, "elbow_pitch.pos": -10.0, "wrist_roll.pos": 0.0,
-               "wrist_pitch.pos": -89},
-    AIM_LEFT: {"base_yaw.pos": -90.0, "base_pitch.pos": -30.0, "elbow_pitch.pos": 57.0, "wrist_roll.pos": 0.0,
-               "wrist_pitch.pos": 18.0},
-    AIM_RIGHT: {"base_yaw.pos": 90.0, "base_pitch.pos": -30.0, "elbow_pitch.pos": 57.0, "wrist_roll.pos": 0.0,
-                "wrist_pitch.pos": 18.0},
-    AIM_UP: {"base_yaw.pos": 3.0, "base_pitch.pos": 10.0, "elbow_pitch.pos": 70.0, "wrist_roll.pos": 0.0,
-             "wrist_pitch.pos": 10.0},
-    AIM_DOWN: {"base_yaw.pos": 3.0, "base_pitch.pos": -61.93, "elbow_pitch.pos": -71, "wrist_roll.pos": 0.0,
-               "wrist_pitch.pos": -61},
-    AIM_USER: {"base_yaw.pos": 0.0, "base_pitch.pos": 0.0, "elbow_pitch.pos": 0.0, "wrist_roll.pos": 0.0,
-               "wrist_pitch.pos": -85.0},
+    AIM_CENTER: {"base_yaw.pos": 0.0, "base_pitch.pos": 25.0, "elbow_pitch.pos": 43.0, "wrist_roll.pos": 10.0,
+                 "wrist_pitch.pos": 30.0},
+    AIM_DESK: {"base_yaw.pos": 0.6, "base_pitch.pos": 41.0, "elbow_pitch.pos": 42.9, "wrist_roll.pos": 9.2,
+               "wrist_pitch.pos": 29.8},
+    AIM_WALL: {"base_yaw.pos": 0.6, "base_pitch.pos": 19.0, "elbow_pitch.pos": 42.9, "wrist_roll.pos": 0.0,
+               "wrist_pitch.pos": -6.0},
+    AIM_LEFT: {"base_yaw.pos": -91.57, "base_pitch.pos": 2.62, "elbow_pitch.pos": 35.5, "wrist_roll.pos": 10.06,
+               "wrist_pitch.pos": 52.07},
+    AIM_RIGHT: {"base_yaw.pos": 88.36, "base_pitch.pos": 2.62, "elbow_pitch.pos": 35.5, "wrist_roll.pos": 10.06,
+                "wrist_pitch.pos": 52.07},
+    AIM_UP: {"base_yaw.pos": 1.39, "base_pitch.pos": 16.38, "elbow_pitch.pos": 40.04, "wrist_roll.pos": 10.06,
+             "wrist_pitch.pos": 46.66},
+    AIM_DOWN: {"base_yaw.pos": 1.39, "base_pitch.pos": -8.37, "elbow_pitch.pos": -9.23, "wrist_roll.pos": 10.06,
+               "wrist_pitch.pos": -1.41},
+    AIM_USER: {"base_yaw.pos": 0.0, "base_pitch.pos": 26.0, "elbow_pitch.pos": 33.0, "wrist_roll.pos": 10.0,
+               "wrist_pitch.pos": -38.0},
 }
 
 # System status LED presets — the color/effect/speed the device shows for each
