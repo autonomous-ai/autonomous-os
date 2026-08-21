@@ -38,6 +38,7 @@ from hal.config import (
     HTTP_HOST,
     HTTP_PORT,
     DEVICE_ID,
+    LOOK_AIM_ENABLED,
     SERVO_FPS,
     SERVO_HOLD_S,
     SERVO_PLAY_RAMP_S,
@@ -222,7 +223,10 @@ for _owner_name in dict.fromkeys(
 
     _owner_cls = resolve_media_owner(_owner_name)
     if _owner_cls is not None:
-        _media_owners.append(_owner_cls())
+        # startup_volume travels with the handover because releasing the media
+        # is what resets the card's mixer — the owner needs this body's level to
+        # put it back on a unit that has no persisted level yet.
+        _media_owners.append(_owner_cls(startup_volume=_profile.startup_volume))
         logger.info("Media owner '%s' declared — HAL will borrow the hardware", _owner_name)
 
 SensingService = None
@@ -518,11 +522,9 @@ async def lifespan(app: FastAPI):
             stt_provider = None
             logger.info("STT selection: deepgram_key=%s, DeepgramSTT=%s, AutonomousSTT=%s, agent=%s",
                         bool(dgk), DeepgramSTT is not None, AutonomousSTT is not None, agent_name)
+            stt_keywords = state._stt_boost_terms()
             if dgk and DeepgramSTT:
-                dg_keywords = [f"{agent_name}:3"]
-                if " " in agent_name:
-                    dg_keywords.append(" ".join(agent_name) + ":2")
-                stt_provider = DeepgramSTT(api_key=dgk, keywords=dg_keywords)
+                stt_provider = DeepgramSTT(api_key=dgk, keywords=stt_keywords)
             elif llm_key and llm_url and AutonomousSTT:
                 stt_model = (os_cfg.get("stt_model") or "").strip() or None
                 stt_language = (os_cfg.get("stt_language") or "").strip() or None
@@ -531,9 +533,6 @@ async def lifespan(app: FastAPI):
                     stt_kwargs["model"] = stt_model
                 if stt_language:
                     stt_kwargs["language"] = stt_language
-                stt_keywords = [f"{agent_name}:3"]
-                if " " in agent_name:
-                    stt_keywords.append(" ".join(agent_name) + ":2")
                 stt_provider = AutonomousSTT(
                     api_key=llm_key, base_url=llm_url,
                     keywords=stt_keywords, **stt_kwargs
@@ -708,6 +707,37 @@ async def lifespan(app: FastAPI):
 
     if SensingService and sensing_enabled:
         threading.Thread(target=_start_sensing, daemon=True, name="sensing-init").start()
+
+    # Warm the look-aim detector. Its first inference loads the model lazily and
+    # costs seconds; paid here it never lands inside a look's aim deadline.
+    if LOOK_AIM_ENABLED and "camera" in _plan.mounted:
+        def _warm_look_aim():
+            try:
+                from hal.drivers.tracking.aim import prewarm
+                prewarm()
+            except Exception as e:
+                logger.debug("look-aim prewarm unavailable: %s", e)
+
+        threading.Thread(target=_warm_look_aim, daemon=True, name="warm-look-aim").start()
+
+        # Learn where the user usually sits, passively. Without this the bearing
+        # only learns from perfectly-centred look questions and decays faster
+        # than it accumulates.
+        try:
+            from hal.drivers.tracking import bearing_sampler
+
+            bearing_sampler.start()
+        except Exception as e:
+            logger.debug("bearing sampler unavailable: %s", e)
+
+        # Watch for the user turning toward the lamp, so addressing it does not
+        # always require the wake phrase. Off by default; shadow-logs when on.
+        try:
+            from hal.drivers.tracking import gaze
+
+            gaze.start()
+        except Exception as e:
+            logger.debug("gaze watcher unavailable: %s", e)
 
     # Start display (GC9A01 eyes)
     if DisplayService:

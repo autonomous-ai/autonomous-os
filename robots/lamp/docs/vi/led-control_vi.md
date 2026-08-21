@@ -244,6 +244,13 @@ Hai hệ quả cần biết:
 - Sau reboot strip ở yên trong bóng tối cho tới khi có thứ gì cần đèn: sidecar LED là
   boot-scoped nên mỗi lần boot đều bắt đầu với no user state và rơi vào resting look.
 
+Mọi đường release đều phải *hỏi* resting look — đường nào tự paint màu "về bình thường" của
+riêng nó là tự ý bỏ qua default. Từng có hai đường như vậy: scene-off dispatch màu preset
+`idle`, và music-stop khởi động idle breathing, đều là tàn dư từ thời resting còn là trắng
+ấm. Với resting đen, chúng để strip sáng cam mờ sau một scene hoặc một bài hát cho tới khi
+có restore nào đó tình cờ xoá đi. Cả hai giờ đi qua settle chung (`led.restore_led` /
+`ambient_resting_is_dark`), nên tắt scene là tắt đèn.
+
 Đổi cả hai knob về `(255, 200, 140)` (trắng ấm ~2700K @ speed 0.3) là khôi phục hành vi cũ:
 đèn idle trông như một cái đèn ấm cúng đang bật thay vì màu xanh "thiết bị" lạnh, và tông ấm
 đó tránh trùng với mọi màu status. Chính look này là thứ bật lại đèn ~60s sau khi user tắt,

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  Megaphone, Timer, PauseCircle, Mic, Armchair, Ban, MessageSquare,
+  Megaphone, Timer, PauseCircle, Mic, Armchair, Ban, MessageSquare, Hand,
   Volume2, TriangleAlert, Moon, Lightbulb, X, Workflow, Circle,
 } from "lucide-react";
 import type { Turn } from "./types";
@@ -83,6 +83,17 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
   const hasBroadcast = turn.events.some((ev) =>
     ev.type === "flow_event" && ev.detail?.node === "telegram_alert_broadcast"
   );
+  // A cancelled turn still reports DONE — it ran to completion, it just never
+  // reached the speaker. Without its own marker the header is identical to a
+  // turn the user actually heard, which is exactly the question you ask when
+  // scanning the timeline for "why did it go quiet there?".
+  // Either signal counts: a turn can lose only its voice (the usual case) or
+  // only its body (web-chat turns never speak, so the click shows up purely as
+  // dropped HW markers).
+  const wasCancelled = turn.events.some((ev) =>
+    ev.type === "flow_event" &&
+    (ev.detail?.node === "tts_cancelled" || ev.detail?.node === "hw_cancelled")
+  );
   const fmtToken = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
   const statusLabel = turn.status === "done"
     ? "DONE"
@@ -143,6 +154,16 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
             fontSize: 8, padding: "1px 5px", borderRadius: 3,
             background: "var(--lm-red-dim)", color: "var(--lm-red)", fontWeight: 700,
           }}><Megaphone size={9} strokeWidth={2.5} /> BROADCAST</span>
+        )}
+        {wasCancelled && (
+          <span
+            title="Cancelled by a single click — the turn finished but was never spoken"
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 3,
+              fontSize: 8, padding: "1px 5px", borderRadius: 3,
+              background: "var(--lm-amber-dim)", color: "var(--lm-amber)", fontWeight: 700,
+            }}
+          ><Hand size={9} strokeWidth={2.5} /> CANCELLED</span>
         )}
         {currentUser && (() => {
           const isUnknown = currentUser === "unknown";

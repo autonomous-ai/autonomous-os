@@ -7,7 +7,10 @@ orchestrator / TTS handles and the marker-stripper passed in.
 """
 
 import logging
+import threading
 from typing import Callable, NamedTuple, Optional
+
+import requests
 
 from hal import app_state as hal_app_state
 from hal import config as hal_config
@@ -17,6 +20,7 @@ from hal.realtime.config import gemini_needs_idle_workaround
 from hal.realtime.models import AudioOutput as RTAudioOutput
 from hal.realtime.models import TextOutput as RTTextOutput
 from hal.realtime.models.signal import DelegateSignal, LookReplaySignal
+from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice._internal.cot_leak_filter import CoTLeakFilter, clean_transcript
 
 logger = logging.getLogger("hal.voice")
@@ -55,8 +59,9 @@ def _thinking_cue_start() -> None:
         express_emotion(EmotionRequest(emotion=presets.EMO_THINKING))
         # thinking is a background emotion, so the route's LED path skips it
         # whenever the user has a saved color (guard against per-message hook
-        # spam). This cue is deliberate and always cleared — force the purple
-        # pulse so the wait is visible. User-LED-off still wins inside.
+        # spam). This cue is deliberate and always cleared — force the pulse so
+        # the wait is visible. User-LED-off still wins inside.
+        hal_app_state._thinking_cue_active = True
         hal_app_state._apply_emotion_led_display(
             presets.EMO_THINKING, 0.7, force_led=True
         )
@@ -64,11 +69,66 @@ def _thinking_cue_start() -> None:
         logger.warning("[realtime] thinking cue failed: %s", e)
 
 
+class _WaitFiller:
+    """Speak one dead-air filler if the realtime model keeps the user waiting.
+
+    The thinking cue above covers the wait visually; this covers it audibly.
+    Chit-chat replies start in ~1s and must never be interrupted by a filler, so
+    the phrase only fires after REALTIME_FILLER_DELAY_S with still no output —
+    which in practice means a turn the model is grounding with Google Search.
+
+    os-server picks the phrase and speaks it from its WAV cache (POST
+    /api/sensing/filler): keeping the pools there means the realtime wait and
+    the main-agent wait draw from the same voice, and neither drifts when the
+    other is edited. The filler is spoken interruptible, so the model's first
+    sentence cuts it off mid-word rather than queueing behind it.
+
+    One filler per turn, by construction: the timer is single-shot. cancel() is
+    idempotent and safe to call from any exit path, including exceptions.
+    """
+
+    def __init__(self) -> None:
+        self._timer: Optional[threading.Timer] = None
+        self._fired = False
+
+    def arm(self) -> None:
+        delay = hal_config.REALTIME_FILLER_DELAY_S
+        if delay <= 0 or self._timer is not None or self._fired:
+            return
+        self._timer = threading.Timer(delay, self._fire)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _fire(self) -> None:
+        self._fired = True
+        try:
+            requests.post(voice_cfg.OS_FILLER_URL, timeout=2)
+            logger.info(
+                "[realtime] dead-air filler requested after %.1fs of no output",
+                hal_config.REALTIME_FILLER_DELAY_S,
+            )
+        except Exception as e:
+            logger.warning("[realtime] dead-air filler request failed: %s", e)
+
+    def cancel(self) -> None:
+        if self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
+
+    @property
+    def fired(self) -> bool:
+        return self._fired
+
+
 def _thinking_cue_clear() -> None:
     """Return to idle when the reply starts (or the turn produced nothing) —
     ONLY if the face still shows our `thinking`, so an emotion the model
     expressed via the express_emotion tool is never stomped."""
     try:
+        # Drop the cue's claim on the strip first: every exit path calls this,
+        # so the flag can never outlive the turn even when the guard below
+        # returns early (model expressed its own emotion mid-turn).
+        hal_app_state._thinking_cue_active = False
         if hal_app_state._current_emotion != presets.EMO_THINKING:
             return
         from hal.models import EmotionRequest
@@ -240,6 +300,11 @@ def run_realtime_turn(
         # Fill the Gemini wait with `thinking` (cleared at first output).
         # Delegated turns keep it — the main agent's wait is even longer.
         _thinking_cue_start()
+        # Audible half of the same wait (see _WaitFiller). Armed here rather
+        # than per attempt so a 1011 retry does not restart the clock — from the
+        # user's side it is one uninterrupted silence.
+        wait_filler = _WaitFiller()
+        wait_filler.arm()
         try:
             # 1011 recovery (idle-death): the campaign-api proxy drops idle
             # 2.5-native-audio sessions, so a turn that follows a pause lands on a
@@ -305,6 +370,10 @@ def run_realtime_turn(
                     if isinstance(output, DelegateSignal):
                         delegated = True
                         delegate_msg = output.message
+                        # The wait is over — the main-agent hop that follows has
+                        # its own filler (os-server fires one on the forwarded
+                        # voice turn), so ours must not fire on top of it.
+                        wait_filler.cancel()
                         continue
                     if delegated:
                         continue
@@ -317,6 +386,7 @@ def run_realtime_turn(
                             if native_started:
                                 logger.info("[realtime] Native audio → playing model voice")
                                 _thinking_cue_clear()
+                                wait_filler.cancel()
                         if native_started:
                             tts.native_play_frame(output.audio)
                         if output.transcript:
@@ -344,6 +414,11 @@ def run_realtime_turn(
                                     # non-interruptible TTS holds the speaker
                                     # (ambient nudge racing the turn) — queue
                                     # the reply instead of losing it entirely.
+                                    # Cancel BEFORE speaking: a filler that fires
+                                    # in the gap between here and playback would
+                                    # interrupt the very sentence it exists to
+                                    # cover (both are interruptible).
+                                    wait_filler.cancel()
                                     if not tts.speak(sentence):
                                         tts.speak_queue(sentence)
                                     first_sentence_sent = True
@@ -416,7 +491,9 @@ def run_realtime_turn(
                         logger.info(
                             "[realtime] Final fragment → speak: %r", remaining[:80]
                         )
-                        # Same busy fallback as the first-sentence site above.
+                        # Same cancel-then-busy-fallback as the first-sentence
+                        # site above.
+                        wait_filler.cancel()
                         if not tts.speak(remaining):
                             tts.speak_queue(remaining)
                         first_sentence_sent = True
@@ -483,7 +560,18 @@ def run_realtime_turn(
                 except Exception:
                     pass
                 native_started = False
+            # The cue is normally handed over to the delegate path (the main
+            # agent's wait is longer, and its own hook re-fires thinking on the
+            # forwarded turn). A crashed turn is not that handover: nothing in
+            # this process is still driving the face, so hand it back to the
+            # user's state instead of leaving the pulse claimed. If the forward
+            # below does reach the agent, the hook paints thinking again.
+            _thinking_cue_clear()
             delegated = True  # fall through to OS server on error
+        finally:
+            # Covers every exit — reply spoken, delegate, empty turn, exception.
+            # A timer left armed here would fire into the NEXT turn's silence.
+            wait_filler.cancel()
     elif hal_config.REALTIME_ENABLED and noise_turn:
         logger.info(
             "[realtime] Skipping commit — empty STT, not committing to model "

@@ -1,7 +1,7 @@
 """Shared button/touch actions.
 
 Reused by any input device that maps to the same three gestures:
-- single_click_action(): stop speaker / unmute mic + speaker + announce listening
+- single_click_action(): stop object tracking and speaker / unmute mic + speaker + announce listening
 - triple_click_action(): reboot OS
 - long_press_action():  shutdown OS
 
@@ -41,6 +41,15 @@ FACTORY_RESET_DURATION = 10.0  # seconds held → factory-reset on release (supe
 # OS server appends a NO_REPLY hint so the agent records the event in
 # conversation history without speaking back.
 OS_SENSING_URL = "http://127.0.0.1:5000/api/sensing/event"
+
+# OS server speech-cancel endpoint. stop_tts() only silences what HAL already
+# holds (the sentence playing plus the pre-synthesised queue); the OS server
+# keeps handing over the sentences of every turn still in flight, so without
+# this call the device goes quiet for one sentence and then talks on. The OS
+# server marks those turns as no-longer-allowed-to-speak — they keep running,
+# they just lose the speaker. Turns started AFTER the click are unaffected, so
+# the user can click and immediately say something new.
+OS_SPEECH_CANCEL_URL = "http://127.0.0.1:5000/api/agent/speech/cancel"
 
 # Agent-notify batching for petting. Every notify is a full LLM turn on the
 # OS server side (the NO_REPLY hint suppresses speech, not the turn), and the
@@ -85,6 +94,23 @@ def _notify_head_pat(spoken: str):
         )
     except Exception:
         pass
+
+
+def _cancel_agent_speech(source: str):
+    """Tell the OS server to stop speaking for every turn currently in flight.
+
+    Fire-and-forget on its own thread: the click's felt latency is the whole
+    point of the gesture (see the sca-trace timings below), and a stalled OS
+    server must not delay the local stop. The local stop_tts() runs anyway, so
+    a lost call degrades to "quiet for one sentence" rather than to nothing."""
+
+    def _post():
+        try:
+            requests.post(OS_SPEECH_CANCEL_URL, json={}, timeout=1.0)
+        except Exception as e:
+            logger.warning("%s speech-cancel call failed: %s", source, e)
+
+    threading.Thread(target=_post, daemon=True, name=f"{source}-speech-cancel").start()
 
 
 def _current_lang() -> str:
@@ -199,10 +225,60 @@ def announce_listening_cue(source: str = "button"):
         ).start()
 
 
+def _stop_active_tracking(source: str):
+    """Stop object tracking when a single click asks the device for attention."""
+    # A look-aim moves the head without going through TrackerService, so the
+    # is_tracking guard below would miss it — the user would press the button to
+    # stop the lamp moving and it would keep turning. Abort it unconditionally.
+    try:
+        from hal.drivers.tracking.aim import request_abort as _abort_aim
+        from hal.drivers.tracking.search import request_abort as _abort_search
+
+        _abort_aim()
+        _abort_search()
+    except Exception as e:
+        logger.debug("%s single click -- aim/search abort unavailable: %s", source, e)
+
+    tracker = state.tracker_service
+    if not tracker or not tracker.is_tracking:
+        return
+    try:
+        logger.info("%s single click -- stopping object tracking", source)
+        tracker.stop()
+    except Exception as e:
+        # A tracker failure must not block the click's microphone/speaker action.
+        logger.warning("%s single click -- failed to stop object tracking: %s", source, e)
+
+
+def _grant_wakeword_focus(source: str):
+    """Let a single click stand in for the wake phrase.
+
+    With wake word enabled, an utterance is only dispatched to the agent when
+    it starts with the wake phrase or falls inside the follow-up window. The
+    click already announced "I'm listening", so it has to open that window
+    itself — otherwise the user answers the cue and nothing happens. No-op
+    when wake word is disabled: every utterance dispatches already."""
+    voice = state.voice_service
+    if not voice:
+        return
+    try:
+        voice.grant_wakeword_focus(source)
+    except Exception as e:
+        # Never let the focus grant block the rest of the click.
+        logger.warning("%s single click -- wake-word focus grant failed: %s", source, e)
+
+
 def single_click_action(source: str = "button", announce: bool = True, chime: bool = True):
-    """Stop in-flight speech / unmute mic + speaker, then announce listening cue.
+    """Stop active tracking and in-flight speech / unmute mic + speaker.
+
+    Then open the wake-word window (if wake word is on) and announce the
+    listening cue.
     announce=False skips the cue (caller fires announce_listening_cue later).
     chime=False skips the ack ping (caller already chimed at gesture start)."""
+    # Stopping movement is safe even with the hardware mic kill switch off: it
+    # does not wake or unmute the microphone, but still lets the user cancel an
+    # active follow session with the same direct-attention gesture.
+    _stop_active_tracking(source)
     # Hardware mic-mute switch is the authority: while it is physically off,
     # taps on the GPIO button / TTP223 touchpad must NOT wake, unmute, or
     # announce — the whole gesture flow would violate the kill-switch promise.
@@ -219,6 +295,23 @@ def single_click_action(source: str = "button", announce: bool = True, chime: bo
     from hal.routes.voice import stop_tts, unmute_mic
 
     t_start = time.monotonic()
+    # Dispatched first and off-thread so the mute reaches the OS server while
+    # the local wake/unmute steps below are still running. Fired on both
+    # branches, not just the stopping-speaker one: a click that unmutes the mic
+    # is the user taking the floor too, and a backlog of turns queued up while
+    # the mic was muted must not start talking over them.
+    _cancel_agent_speech(source)
+    # Stamp the music cancel watermark BEFORE audio_stop(): the cancelled turn
+    # keeps running server-side and its pending music tool call can land on
+    # /audio/play right after this, which a bare stop cannot beat. Stamping
+    # first closes that window (routes/music.audio_play refuses inside it).
+    state.note_music_cancel()
+    # Stop music on BOTH branches below. This is the "give me the floor"
+    # gesture, and the mic-muted branch used to unmute the mic while leaving
+    # music playing — a click that visibly did nothing about the loudest thing
+    # in the room. Also kills a play still in its yt-dlp resolve phase, since
+    # MusicService.playing stays True while the music thread holds the lock.
+    audio_stop()
     _wake_if_sleepy(source)
     logger.info("[sca-trace] wake done +%.0fms", (time.monotonic() - t_start) * 1000)
 
@@ -242,7 +335,7 @@ def single_click_action(source: str = "button", announce: bool = True, chime: bo
     else:
         logger.info("%s single click -- stopping speaker", source)
         stop_tts()
-        audio_stop()
+    _grant_wakeword_focus(source)
     # Ack ping AFTER the stop: stop_tts frees the persistent stream lock
     # within ~10ms, so the chime sounds effectively at gesture time.
     if chime:

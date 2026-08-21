@@ -150,6 +150,7 @@ Config field: `guard_mode` trong `config/config.json` (bool, mặc định `fals
 | GET | `/api/agent/status` | Trạng thái kết nối WS; gồm `uptime` (uptime WS phía OS server) và `agentUptime` (uptime tiến trình OpenClaw, không reset khi OS server restart) |
 | GET | `/api/agent/events` | SSE stream events real-time |
 | GET | `/api/agent/recent` | 100 events gần nhất (ring buffer) |
+| POST | `/api/agent/speech/cancel` | Cử chỉ huỷ vật lý (single click, do HAL gọi — auth loopback-only để nút vẫn chạy khi chưa login). Bịt miệng mọi turn đang chạy và dừng playback ở HAL (`StopTTS`, đồng thời xoá luôn hàng đợi speak đã pre-synth). **Không** abort turn: turn vẫn chạy tiếp, tool vẫn fire, text vẫn về web chat và history — chỉ mất quyền dùng loa. Cài đặt bằng một watermark unix-ms đơn điệu (`speechWatermarkMs`): `deliverTTS` bỏ mọi câu trả lời thuộc turn được tạo tại hoặc trước mốc, kèm flow event `tts_cancelled`. Tuổi của turn đọc từ runID — id thiết bị kết thúc bằng timestamp tạo (`device-chat-7-<unix-ms>`, 13 chữ số), id kênh (`tg-<messageID>`) không có nên fallback về thời điểm đầu tiên run đó xin nói. Vì turn mới luôn nằm phía sau mốc, user click xong nói ngay được trong khi backlog cũ chạy nốt trong im lặng; watermark không bao giờ cần xoá. Cùng cái mốc đó cũng chặn luôn marker `[HW:]` của turn tại `fireHWCall` — servo và LED dừng theo, vì thiết bị vẫn cựa quậy sau khi bị bảo dừng thì user đọc là "nó phớt lờ mình". runID được đưa qua `resolveRunID` trước: đường TTS đã cầm id thiết bị trong khi đường HW có thể còn cầm UUID gốc của backend cho CÙNG một turn, và phán riêng lẻ thì câu trả lời bị bịt trong khi marker vẫn fire. Riêng `/dm`, `/broadcast`, `/speak` được miễn (cổng chặn đặt sau chúng): click nghĩa là "đừng nói với tôi", không được nuốt câu trả lời gửi cho user Telegram. |
 | POST | `/api/agent/restart` | Recovery "start + enable + restart" cho runtime đang active. Các bước: (1) best-effort `systemctl enable <unit>` — `<unit>` lấy từ map runtime→unit (`openclaw`, `hermes-gateway`, `picoclaw`, `codex`, `claudecode`, `opencode`) — để fix vẫn còn sau reboot; (2) `agentGateway.RestartAgent()` gọi `systemctl restart <unit>` — tự START service ngay cả khi đang stopped. Response `{backend, enabled}`. Dùng bởi card Agent Gateway ở Overview để phục hồi gateway đã stopped+disabled, không cần SSH. Các caller restart nội bộ (config refresh, migration) vẫn bỏ qua bước enable. |
 
 ---
@@ -351,12 +352,14 @@ HAL (Python): FastAPI standard JSON responses.
 
 1. OS Server khởi động Gin trên :5000
 2. Đọc `config/config.json`
+   - Seed `device_type` từ device class đã resolve (env `DEVICE_TYPE`, không có thì lấy key sẵn có) để config.json mang giá trị này cho các bên đọc không có env — wake word của HAL và `software-update`. Provisioning chỉ ghi env, nên không có seed này thì key không bao giờ tồn tại trên máy đã provision. Chỉ ghi khi giá trị đang lưu khác giá trị resolve
    - Seed `tts_provider` + `tts_voice` từ block `voice:` trong ROBOT.md khi user chưa chọn (ghi một lần; lựa chọn đã lưu của user luôn thắng; provider vắng/không hợp lệ → `openai`). Khi provider seed là `elevenlabs` mà không khai báo voice, chọn default theo ngôn ngữ (`vi`→Ngan, `zh`→Amy, còn lại Rachel)
 3. Nếu `SetUpCompleted`:
    - Kết nối OpenClaw WebSocket
    - Kết nối MQTT
    - Start ambient behaviors
-   - Đặt volume loa theo `startup_volume` của thiết bị (front matter ROBOT.md, mặc định 100)
+   - Chờ HAL trả lời `GET :5001/health` (tối đa 120s) trước mọi lời gọi HAL. os-server bind :5000 sớm hơn hẳn lúc FastAPI của HAL lắng nghe, lần boot đầu còn phải dựng venv và load model, nên một lời gọi một-lần không có hàng rào sẽ mất trắng vì connection refused
+   - Đặt volume loa: mức user chỉnh gần nhất (HAL ghi lại mỗi lần `/audio/volume`) được ưu tiên; không có thì lấy `startup_volume` của thiết bị (front matter ROBOT.md, mặc định 100)
 4. Nếu chưa setup: chờ `POST /api/device/setup`
 
 ## Logging
@@ -389,6 +392,8 @@ Khi nhận event `voice_command`, `voice_followup` hoặc `voice`, OS server che
 | "mute speaker" | `POST /speaker/mute` (im lặng — không TTS xác nhận) |
 | "unmute speaker" | `POST /speaker/unmute` + "Speaker on!" |
 
-Keyword match theo nguyên cụm với word boundary ASCII — "unmute speaker" không kích rule "mute speaker".
+Keyword match theo nguyên cụm với word boundary ASCII — "unmute speaker" không kích rule "mute speaker". Các rule chitchat (chào / tạm biệt / cảm ơn, match theo từng ngôn ngữ) dùng chung phép kiểm tra boundary đó: trước đây match chuỗi con thô khiến phrase 2 ký tự "hi" khớp nằm trong "this", "his", "machine", nên câu bình thường như "What is this?" bị trả lời tại chỗ bằng "Hi there!" và không bao giờ tới agent.
+
+Chitchat **tắt khi realtime voice agent đang bật** — model nhận mọi lượt voice trước os-server và tự trả lời phần xã giao, đúng nhân cách của nó. Bật cả hai nghĩa là một câu canned với giọng khác chen ngang đúng những lượt model tình cờ im. Các rule lệnh phía trên vẫn chạy trong mọi trường hợp vì chúng thật sự nhanh hơn một vòng model. Cổng này bám theo `realtime.enabled` ngay lúc chạy, đổi trong Settings không cần restart.
 
 Không match → forward OpenClaw.

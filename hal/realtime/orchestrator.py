@@ -129,6 +129,25 @@ EMOTION_TOOL: dict[str, Any] = {
     },
 }
 
+# Capture settle. 0.3s suits the tracker's small corrections, but an aim that
+# exits on its deadline does so right after a large swing, and a lamp arm is
+# still ringing well past 300ms — which is why timed-out looks came back blurred
+# while centred ones were sharp (device-observed 2026-08-19).
+#
+# The ceiling is deliberately tight: this delay is paid before the user gets an
+# answer, so a sharper frame is not worth much latency. A 30 deg swing buys
+# 200ms extra, and nothing buys more.
+CAPTURE_SETTLE_BASE_S: float = 0.3
+CAPTURE_SETTLE_MAX_S: float = 0.5
+CAPTURE_SETTLE_PER_DEG_S: float = 0.0067
+
+
+def _capture_settle_s(res: Any) -> float:
+    """Settle time for the shutter, scaled to how far the head last moved."""
+    move = abs(float(getattr(res, "last_move_deg", 0.0) or 0.0))
+    return min(CAPTURE_SETTLE_MAX_S, CAPTURE_SETTLE_BASE_S + CAPTURE_SETTLE_PER_DEG_S * move)
+
+
 LOOK_TOOL_NAME: str = "look"
 LOOK_TOOL_DESCRIPTION: str = (
     "Capture a single frame from the device's camera and look at it, so you can "
@@ -754,7 +773,9 @@ class RealtimeOrchestrator:
                 isinstance(output, FunctionCallOutput)
                 and output.name == EMOTION_TOOL_NAME
             ):
-                self._handle_emotion_call(output)
+                # `produced` decides whether the ack is safe to send — see
+                # _handle_emotion_call.
+                self._handle_emotion_call(output, spoken=produced)
                 continue
             if (
                 isinstance(output, FunctionCallOutput)
@@ -883,7 +904,7 @@ class RealtimeOrchestrator:
             self._turns_since_recycle = 0
             self._force_rebuild()
 
-    def _handle_emotion_call(self, output: FunctionCallOutput) -> None:
+    def _handle_emotion_call(self, output: FunctionCallOutput, *, spoken: bool) -> None:
         """Fire the device's emotion expression without blocking the spoken turn.
 
         Fire-and-forget: the HAL /emotion call runs in a daemon thread (parallel
@@ -919,14 +940,27 @@ class RealtimeOrchestrator:
                 "[realtime] express_emotion called with empty emotion — ignoring"
             )
 
-        # Acknowledge the call in history but do NOT trigger a new response.
+        # Whether to ack depends on whether the model has spoken yet THIS turn.
+        #
+        # spoken=True — the reply is already out and the emotion was a side
+        #   effect. Acking here makes Gemini continue the turn and re-speak the
+        #   whole reply, double-billing TTS (device-observed 2026-06-29). Stay
+        #   silent; the side effect has already run. This is the common path and
+        #   its behaviour is unchanged.
+        #
+        # spoken=False — the tool call IS the model's entire generation so far.
+        #   Gemini pauses generation until it gets a tool response, so skipping
+        #   the ack deadlocks the turn: the model never speaks, the watchdog
+        #   fires (8s, or 20s on a look turn) and the turn falls back to the main
+        #   agent. Device-observed 2026-08-19 — every express_emotion turn that
+        #   day died this way, look or not. Ack so generation resumes.
         if self._agent is not None:
             self._agent.send(
                 [
                     FunctionCallResultInput(
                         call_id=output.call_id,
                         output='{"result": "expressed"}',
-                        trigger_response=False,
+                        trigger_response=not spoken,
                     )
                 ]
             )
@@ -988,6 +1022,9 @@ class RealtimeOrchestrator:
         """
         if self._agent is None:
             return False
+        from hal.drivers.tracking import look_debug
+
+        look_debug.start()
         now: float = time.monotonic()
         # Cost guard: no NEW image within VISION_MIN_INTERVAL_S of the last send
         # or twice in one turn. Doubles as the replay-turn path: the replayed
@@ -1009,6 +1046,10 @@ class RealtimeOrchestrator:
                 "[realtime] look: reusing recent frame (%s) — no new image sent (cost)",
                 reason,
             )
+            # NOT a failure and NOT a separate look: this is the replayed turn
+            # reading the frame captured moments ago. Closing the trace here
+            # would throw away the aim data and the capture from the first call.
+            look_debug.note_event(f"reused recent frame ({reason})")
             # Reading a frame (esp. text) can keep Gemini thinking silently
             # past the default watchdog — give THIS turn a longer window so
             # the answer isn't cut off seconds before it arrives.
@@ -1023,9 +1064,51 @@ class RealtimeOrchestrator:
             )
             return False
 
-        frame = self._capture_frame()
+        # Aim BEFORE capturing. `look` has no parameters, so without this the
+        # frame is whatever the head happened to face — the model then answers
+        # confidently about the wrong scene. Bounded by LOOK_AIM_DEADLINE_S and
+        # never fatal: a failed aim still captures, because dead air in a live
+        # turn is worse than an imperfectly framed frame.
+        # Own the body for aim AND capture. An emotion animation landing between
+        # them re-poses the head on every joint (recordings are absolute, roll
+        # included), which is how a "curious" reaction ends up pointing the
+        # camera at the ceiling for a visual question.
+        from hal.drivers.tracking.aim import servo_ownership
+
+        with servo_ownership():
+            # None when aiming is disabled or raised — the settle below then
+            # falls back to the base value rather than NameError-ing the look.
+            res: Any = None
+            if config.LOOK_AIM_ENABLED:
+                try:
+                    from hal.drivers.tracking.aim import aim_for_look
+
+                    t_aim = time.monotonic()
+                    with look_debug.stage("aim.total"):
+                        res = aim_for_look(config.LOOK_AIM_DEADLINE_S)
+                    logger.info(
+                        "[realtime] look: aim %s (%s) iters=%d yaw=%+.1f in %.0fms",
+                        "OK" if res.aimed else "skipped",
+                        res.reason, res.iterations, res.yaw_moved_deg,
+                        (time.monotonic() - t_aim) * 1000,
+                    )
+                    look_debug.note_aim(res)
+                    # Announce the capture only when the aim actually had work to
+                    # do — an already-centred shutter fires in a few hundred ms
+                    # and needs no narration.
+                    if config.LOOK_AIM_SPEAK_CAPTURE and res.iterations > 0:
+                        from hal.drivers.tracking.aim import _say
+
+                        with look_debug.stage("speak_filler"):
+                            _say("look_capturing")
+                except Exception as e:
+                    logger.warning("[realtime] look: aim raised, capturing anyway: %s", e)
+
+            with look_debug.stage("capture"):
+                frame = self._capture_frame(_capture_settle_s(res))
         if frame is None:
             logger.warning("[realtime] look: no camera frame available")
+            look_debug.abandon("no_camera_frame")
             self._agent.send(
                 [
                     FunctionCallResultInput(
@@ -1036,9 +1119,14 @@ class RealtimeOrchestrator:
             )
             return False
 
-        self._agent.send([ImageInput(image=frame)])
+        with look_debug.stage("send_image"):
+            self._agent.send([ImageInput(image=frame)])
         self._looked_this_turn = True
-        self._last_look_sent_monotonic = now
+        # Stamp the SEND, not the call entry. `now` is taken before the aim, so
+        # a 3s aim made the guard below expire 3s early — the replay landed at
+        # 12.6s against a 10s window and re-aimed from scratch instead of
+        # reusing the frame (device trace 2026-08-19).
+        self._last_look_sent_monotonic = time.monotonic()
         # The replayed turn (frame + re-committed audio) inherits the same
         # risk of a long silent think over the frame; extend its watchdog too.
         # receive() clears the override when the replayed turn ends.
@@ -1046,7 +1134,22 @@ class RealtimeOrchestrator:
         # Persist the SAME frame so that if this turn later delegates / falls
         # back to the main agent (e.g. Gemini times out mid-turn), the agent
         # reuses it instead of taking a fresh snapshot. See turn_dispatch.
-        saved_path: str | None = self._persist_look_frame(frame)
+        import hal.app_state as state
+
+        with look_debug.stage("persist"):
+            saved_path: str | None = self._persist_look_frame(frame)
+        look_debug.note_capture(saved_path)
+        # Stash a servable copy so the frame can appear in the turn the user
+        # actually sees. It is attached to that turn's message as a
+        # [snapshot: ...] marker by turn_dispatch — NOT posted as an event of
+        # its own, which showed up as a bare path in a turn with no context.
+        if config.LOOK_MONITOR_ENABLED:
+            try:
+                from hal.realtime.look_monitor import persist_for_monitor
+
+                state.realtime_look_monitor_path = persist_for_monitor(saved_path)
+            except Exception as e:
+                logger.debug("[realtime] look: monitor copy skipped: %s", e)
         logger.info(
             "[realtime] look: captured frame %s in %.0fms → %s — replaying "
             "turn so the frame joins it",
@@ -1057,7 +1160,7 @@ class RealtimeOrchestrator:
         return True
 
     @staticmethod
-    def _capture_frame() -> Any:
+    def _capture_frame(settle_s: float = 0.3) -> Any:
         """Return the latest camera frame (BGR ndarray) downscaled for cost, or
         None if no camera. Reads HAL camera state in-process (no HTTP loopback);
         mirrors the wait/disable handling of routes.camera.camera_snapshot.
@@ -1085,7 +1188,7 @@ class RealtimeOrchestrator:
                 frame: Any = capture_still(
                     cap,
                     getattr(state, "animation_service", None),
-                    settle_s=0.3,
+                    settle_s=settle_s,
                     # 2.0s, not less: a camera woken from disabled (cap.start()
                     # above) can take over a second to deliver its first frame.
                     timeout_s=2.0,

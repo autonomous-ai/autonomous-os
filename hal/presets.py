@@ -153,7 +153,7 @@ EMOTION_PRESETS = {
     EMO_CURIOUS: {"servo": SERVO_CURIOUS, "color": [12, 8, 0], "effect": FX_CANDLE, "speed": 0.3, "camera": "on"},
     EMO_HAPPY: {"servo": SERVO_HAPPY_WIGGLE, "color": [12, 9, 1], "effect": FX_CANDLE, "speed": 0.2, "camera": "on"},
     EMO_SAD: {"servo": SERVO_SAD, "color": [16, 8, 8], "effect": FX_BREATHING, "speed": 0.4, "camera": "on"},
-    EMO_THINKING: {"servo": None,  # SERVO_THINKING_DEEP,
+    EMO_THINKING: {"servo": SERVO_THINKING_DEEP,
                    "color": [6, 12, 4],
                    "effect": FX_PULSE,
                    "speed": 0.3,

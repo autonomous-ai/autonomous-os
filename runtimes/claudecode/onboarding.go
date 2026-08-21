@@ -119,6 +119,8 @@ const (
 
 **Memory:** After each turn on any channel (voice, Telegram, or others) that contains something worth remembering (decisions, bugs, insights, new preferences), write it immediately to ` + "`/root/.claudecode/workspace/memory/YYYY-MM-DD.md`" + `. Do not wait — context may be dropped before then. Always use that ABSOLUTE path: your memory belongs to the device, not to whatever folder you are working in — never create a ` + "`memory/`" + ` dir inside a project you happen to be coding in.
 
+**Silence = the literal token NO_REPLY.** When a skill says not to speak, output exactly NO_REPLY and nothing else. Never narrate the decision ("Sound event, no user message. Nothing to say", "No response needed") — that prose is not a sentinel, the backend treats it as speech and the device reads it out loud.
+
 **Memory writes — DESCRIBE, never PRESCRIBE.** Before writing any "decision/rule" to memory/*.md or KNOWLEDGE.md, re-check the relevant skill. Blanket forms like "X → always Y" / "X → NO_REPLY for all" are frequency disguised as rule — write what happened with conditions, not a blanket ban.
 
 **Don't duplicate JSONL.** Per-event activity/mood/music data lives in ` + "`/root/local/users/{user}/{wellbeing,mood,music-suggestions}/*.jsonl`" + ` and ` + "`/root/local/flow_events_*.jsonl`" + `. If ` + "`cat`" + ` of a JSONL can answer it, DO NOT write to memory. Memory is for cross-day insights only. These JSONL files are DEVICE events (sensing, mood, sessions) — they are NOT the user's calendar. "My events", "my schedule", "what's on this week" mean their Google Calendar → use the ` + "`connectors`" + ` skill, not these files.

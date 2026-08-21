@@ -152,6 +152,7 @@ Config field: `guard_mode` in `config/config.json` (bool, default `false`). The 
 | GET | `/api/agent/status` | WS connection status; includes `uptime` (OS server WS uptime) and `agentUptime` (OpenClaw process uptime, survives OS server restarts) |
 | GET | `/api/agent/events` | SSE stream real-time events |
 | GET | `/api/agent/recent` | 100 most recent events (ring buffer) |
+| POST | `/api/agent/speech/cancel` | Physical cancel gesture (single click, called by HAL — loopback-only auth so the button works without a login). Silences every turn currently in flight and stops HAL playback (`StopTTS`, which also clears the pre-synthesised speak-queue). The turns are **not** aborted: they keep running, their tools still fire, and their text still reaches web chat and history — they only lose the speaker. Implemented as a monotone unix-ms watermark (`speechWatermarkMs`): `deliverTTS` drops any reply whose turn was created at or before the mark and logs a `tts_cancelled` flow event. Turn age comes from the runID — device ids end in their creation stamp (`device-chat-7-<unix-ms>`, 13 digits), channel ids (`tg-<messageID>`) have none and fall back to the first time speech was requested for that run. Because new turns are always on the far side of the mark, the user can click and immediately speak again while an older backlog drains silently; the watermark never needs clearing. The same mark also drops the turn's `[HW:]` markers in `fireHWCall` — servos and LEDs stop too, since a device that keeps moving after being told to stop reads as ignoring the user. The run id is put through `resolveRunID` first: the TTS path already holds the device id while HW dispatch may still carry the raw backend UUID for the same turn, and judging them separately muted the reply while the markers fired anyway. `/dm`, `/broadcast` and `/speak` are exempt (the gate sits after them): the click means "stop talking to me" and must not swallow a reply addressed to a Telegram user. |
 | POST | `/api/agent/restart` | "Start + enable + restart" recovery for the active runtime. Steps: (1) best-effort `systemctl enable <unit>` — where `<unit>` is picked from a runtime→unit map (`openclaw`, `hermes-gateway`, `picoclaw`, `codex`, `claudecode`, `opencode`) — so the fix survives a reboot; (2) `agentGateway.RestartAgent()` which resolves to `systemctl restart <unit>` and thus STARTS the service even if it was stopped. Response `{backend, enabled}`. Used by the Overview's Agent Gateway card to recover a gateway that was stopped+disabled, without SSH. Internal restart callers (config refresh, migration) still bypass the enable step. |
 
 ---
@@ -354,12 +355,14 @@ HAL (Python): FastAPI standard JSON responses.
 
 1. OS Server starts Gin on :5000
 2. Reads `config/config.json`
+   - Seeds `device_type` from the resolved device class (`DEVICE_TYPE` env, else the existing key) so config.json carries it for readers that have no env — HAL's wake words and `software-update`. Provisioning only writes the env, so without this seed the key never exists on a provisioned device. Written once, when the stored value differs
    - Seeds `tts_provider` + `tts_voice` from ROBOT.md `voice:` block when the user hasn't chosen them (persisted once; the user's saved choice always wins; provider absent/unknown → `openai`). When the seeded provider is `elevenlabs` and no voice is declared, picks a language-aware default (`vi`→Ngan, `zh`→Amy, else Rachel)
 3. If `SetUpCompleted`:
    - Connect OpenClaw WebSocket
    - Connect MQTT
    - Start ambient behaviors
-   - Set speaker volume to the device's `startup_volume` (ROBOT.md front matter, default 100)
+   - Wait for HAL to answer `GET :5001/health` (up to 120s) before any HAL call. os-server binds :5000 well before HAL's FastAPI is listening, and a first boot also builds the venv and loads models, so an un-gated one-shot call is lost to a connection refused
+   - Set speaker volume: the level the user last set (persisted by HAL on every `/audio/volume` change) wins; otherwise the device's `startup_volume` (ROBOT.md front matter, default 100)
 4. If not yet set up: wait for `POST /api/device/setup`
 
 ## Logging
@@ -393,6 +396,8 @@ When receiving a `voice_command`, `voice_followup`, or `voice` event, the OS ser
 | "mute speaker" | `POST /speaker/mute` (silent — no TTS confirm) |
 | "unmute speaker" | `POST /speaker/unmute` + "Speaker on!" |
 
-Keyword matching is whole-phrase with ASCII word boundaries — "unmute speaker" does not trigger the "mute speaker" rule.
+Keyword matching is whole-phrase with ASCII word boundaries — "unmute speaker" does not trigger the "mute speaker" rule. The chitchat rules (greeting / farewell / thanks, matched per language) use the same boundary test: a plain substring match let the two-letter phrase "hi" fire inside "this", "his" and "machine", so ordinary sentences like "What is this?" were answered locally with "Hi there!" and never reached the agent.
+
+Chitchat is **off while the realtime voice agent is enabled** — the model receives every voice turn before os-server does and answers social talk itself, in character. Leaving both on meant a canned reply in a different voice barging in on the turns the model happened to stay silent for. Command rules above stay on either way; they genuinely beat a model round-trip. The gate follows `realtime.enabled` live, so toggling it in Settings needs no restart.
 
 No match → forward to OpenClaw.

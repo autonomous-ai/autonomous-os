@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"go.autonomous.ai/os/system/device"
@@ -64,11 +65,23 @@ var rules = slices.Concat(ledRules, sceneRules, audioRules, miscRules, trackingR
 // servo) never matches a command it can't execute, and never POSTs to a HAL
 // route its body doesn't serve.
 func Match(text string) *Result {
+	return match(text, chitchatEnabled())
+}
+
+// MatchCommands is Match with chitchat skipped — only the command rules run.
+// Use it when something else already owns social talk (see SetChitchatEnabled).
+func MatchCommands(text string) *Result {
+	return match(text, false)
+}
+
+func match(text string, allowChitchat bool) *Result {
 	// Chitchat needs a stricter normalization than command rules — speaker
 	// prefixes, voice tags, and the (audio saved at ...) suffix from the
 	// sensing message must be stripped for an exact phrase match to work.
-	if r := matchChitchat(stripChitchatPrefixes(text)); r != nil {
-		return r
+	if allowChitchat {
+		if r := matchChitchat(stripChitchatPrefixes(text)); r != nil {
+			return r
+		}
 	}
 
 	t := normalize(text)
@@ -94,6 +107,34 @@ var deviceCaps map[string]bool
 // Configure sets the capability set used to gate local intents. Call once at
 // startup before any Match. nil/empty caps = fail-open.
 func Configure(caps map[string]bool) { deviceCaps = caps }
+
+// chitchatOff turns off the social rules while another layer owns social talk.
+// Guarded by chitchatMu because the config watcher flips it at runtime.
+var (
+	chitchatMu  sync.RWMutex
+	chitchatOff bool
+)
+
+// SetChitchatEnabled turns the chitchat rules on or off.
+//
+// They exist to answer "hi" / "chào" from the WAV cache instead of paying an
+// LLM round-trip. The realtime voice agent answers social talk itself, in
+// under a second and in character, and it gets every voice turn BEFORE
+// os-server does — so with realtime on, chitchat only ever fires on turns the
+// model stayed silent for, where it barges in with a canned line in a
+// different voice. Off is the right default there; the command rules (lights,
+// volume, time) stay on either way since those genuinely beat the model.
+func SetChitchatEnabled(enabled bool) {
+	chitchatMu.Lock()
+	chitchatOff = !enabled
+	chitchatMu.Unlock()
+}
+
+func chitchatEnabled() bool {
+	chitchatMu.RLock()
+	defer chitchatMu.RUnlock()
+	return !chitchatOff
+}
 
 // capEnabled is fail-open: an empty capability (no hardware dependency) is always
 // on; otherwise nil/empty deviceCaps → true. The maximal reference device (Lamp)

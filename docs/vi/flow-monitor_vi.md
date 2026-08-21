@@ -144,6 +144,8 @@ Khi có câu bị drop, lifecycle:end emit event `cot_leak_filtered` (`data.drop
 
 OpenClaw agent trả `NO_REPLY` (hoặc dạng cắt ngắn `NO`, `NO_RE`, `NO_...`) khi quyết định không cần trả lời — thường cho passive sensing events (sound, motion). `isAgentNoReply()` trong `handler.go` suppress: không phát TTS, không hiện output. Match: `"NO"` chính xác, hoặc bắt đầu bằng `"NO_"` / `"NO_RE"` (case-insensitive).
 
+**Chặn "kể lại việc im lặng".** Model đôi khi tả quyết định im lặng bằng văn xuôi thay vì trả sentinel (vd `Sound event, no user message. Nothing to say`). Đoạn đó lọt `isAgentNoReply()` nên `isMetaNonReply()` trong `handler_text.go` chặn thêm: text ≤ 100 byte, không có `?`, khớp một trong các cụm meta (`nothing to say/add/report`, `no (user) message/reply/response/comment (needed)`, `no need to reply/respond/speak/say`, `staying|remaining silent`, `no action needed`). Áp ở cuối lượt (`handler_event_agent.go`) và trong `tryFirstSentenceFlush()` (`handler_state.go`) — chỗ này defer mà KHÔNG đánh dấu đã stream, để câu thật sau đó vẫn giữ được lợi thế first-audio. Cả hai đều log `WARN` và lượt được báo là `no_reply`.
+
 ### Output text & first-sentence streaming
 
 Web (chat + flow Output) đọc text reply từ event `tts_send`, ưu tiên `data.full_text` (toàn bộ reply) rồi fallback `data.text`. Khi câu đầu được stream sớm tới TTS giữa turn (event `tts_stream_send`, gửi trước để giảm latency), `data.text` chỉ chứa **phần còn lại** (câu 1 đã bị cắt để không phát 2 lần), còn `data.full_text` mới giữ câu 1 + phần còn lại. Web không đọc `tts_stream_send`, nên thiếu `full_text` thì câu 1 sẽ không hiện. `data.streamed_len` là byte offset nơi phần còn lại bắt đầu.
@@ -171,6 +173,7 @@ IN   <input text>
 OUT  🔊 <output text>
 ```
 
+- **Khung hình `look` đi kèm lượt thoại.** Khi tool `look` realtime chụp, HAL chép khung hình sang `/var/lib/hal/snapshots/sensing_look/` (`hal/realtime/look_monitor.py`, giữ 20 cái mới nhất) và gắn marker `[snapshot: ...]` vào chính message mà lượt đó đã gửi — nên tấm ảnh hiện **ngay trong lượt đã hỏi nó**, cạnh transcript và câu trả lời, thay vì là một event riêng không gắn với câu hỏi nào. os-server bóc marker trước khi text tới model nhưng vẫn giữ trong flow JSONL, giống hệt cách `motion.activity` làm. Khác với snapshot của `motion.activity`, **khung hình này CHÍNH LÀ thứ model đã thấy**, nên nó là vật chứng để đối chiếu với câu trả lời của model. (Nhánh `look.capture` chỉ-cho-monitor vẫn còn trong `handler.go` từ thiết kế trước; HAL không còn gửi nữa.)
 - Strip được extract từ marker `[snapshot:]` + `[pose_bucket:]` / `[pose_worst:]` trong `sensing_input`. Click thumbnail mở lightbox inline (giống cũ).
 - Nút **LOAD MORE** mở `PoseBucketModal` → fetch `/api/hardware/sensing/pose-bucket/<id>` (proxy về lelamp) → render bảng từng sample (monospace + cột joint giống Sensing tab). Row có filename trong `worst_snapshots` được highlight (viền đỏ + ⭐) để xem nhanh khung tệ nhất.
 - Khi /dm fire, OS server tự đính các worst snapshot vào Telegram qua `sendMediaGroup` — caption nằm trên ảnh đầu tiên, agent không cần biết file path. Xem `robots/lamp/docs/sensing-behavior.md` mục "/dm auto-attach".

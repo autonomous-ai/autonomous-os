@@ -272,3 +272,41 @@ startup_volume: 250
 		t.Fatalf("missing: StartupVolume = %d, want %d", v, DefaultStartupVolume)
 	}
 }
+
+func TestWakeWordDefault(t *testing.T) {
+	cases := []struct {
+		name         string
+		voiceBlock   string
+		wantValue    bool
+		wantDeclared bool
+	}{
+		{"declared true", "voice:\n  wakeword: true\n", true, true},
+		{"declared false", "voice:\n  wakeword: false\n", false, true},
+		{"undeclared", "voice:\n  tts_provider: elevenlabs\n", false, false},
+		{"no voice block", "", false, false},
+		{"unparseable value", "voice:\n  wakeword: maybe\n", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			writeDeviceMD(t, "lamp", `---
+schema: autonomous.device.v1
+`+tc.voiceBlock+`capabilities:
+  audio: { required: true }
+---
+
+# Lamp
+`)
+			value, declared := WakeWordDefault("lamp")
+			if value != tc.wantValue || declared != tc.wantDeclared {
+				t.Fatalf("WakeWordDefault = (%v, %v), want (%v, %v)", value, declared, tc.wantValue, tc.wantDeclared)
+			}
+		})
+	}
+}
+
+func TestWakeWordDefault_Missing(t *testing.T) {
+	t.Setenv("DEVICES_DIR", t.TempDir())
+	if value, declared := WakeWordDefault("ghost"); value || declared {
+		t.Fatalf("WakeWordDefault = (%v, %v), want (false, false)", value, declared)
+	}
+}

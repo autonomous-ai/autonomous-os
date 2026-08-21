@@ -73,3 +73,32 @@ def test_device_type_alias_is_retained_alongside_agent_name():
         "hey luna",
         "wake up luna",
     ]
+
+
+def test_wake_word_matches_a_later_sentence():
+    """A mic session is one stretch of speech, not one sentence.
+
+    Device-observed 18/08/2026: the whole turn was dropped because the wake
+    phrase opened the SECOND sentence.
+    """
+    decorator = _decorator(["hi lamp", "hey lamp"])
+
+    assert decorator.starts_with_wake_word(
+        "What was the score of the Vietnam versus Malaysia match? Hi lamp, can you hear me?"
+    )
+    assert decorator.starts_with_wake_word("Okay. Hey lamp, turn the light off.")
+
+
+def test_wake_word_matches_a_trailing_vocative():
+    decorator = _decorator(["hi lamp", "hey lamp"])
+
+    assert decorator.starts_with_wake_word("What time is it, hey lamp?")
+    assert decorator.starts_with_wake_word("Turn the light off. Hi lamp")
+
+
+def test_wake_word_still_rejects_mid_sentence_mentions():
+    decorator = _decorator(["hi lamp", "hey lamp"])
+
+    assert not decorator.starts_with_wake_word("I said hey lamp earlier and nothing happened")
+    assert not decorator.starts_with_wake_word("this hi lamp thing is broken")
+    assert not decorator.starts_with_wake_word("Nice weather. I bought a lamp yesterday.")

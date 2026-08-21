@@ -987,7 +987,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 				}, flowRunID)
 				text = filteredFull
 			}
-			if isAgentNoReply(text) {
+			if isAgentNoReply(text) || isMetaNonReply(text) {
 				// NO_REPLY in remainder. If streamed > 0 the agent
 				// already spoke sentence 1; can't unspeak it. Log a
 				// warning so we notice any skill that mixes NO_REPLY

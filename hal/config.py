@@ -100,6 +100,18 @@ TRACKING_FACE_DETECTOR_ENABLED: bool = os.environ.get(
 
 # --- Sensing: os-server integration ---
 OS_SENSING_URL = "http://127.0.0.1:5000/api/sensing/event"
+# Named-pool filler (os-server owns phrases + language + WAV cache).
+OS_SENSING_FILLER_URL = "http://127.0.0.1:5000/api/sensing/filler"
+# Publish the captured `look` frame to the Flow Monitor.
+#
+# Requires the matching `look.capture` handler in os-server — that handler is
+# what makes the event monitor-only. Without it the sensing endpoint has no type
+# whitelist, so the event falls through to the agent-forward path and injects a
+# phantom turn containing the frame path. Set HAL_LOOK_MONITOR=false if HAL is
+# ever deployed ahead of os-server.
+LOOK_MONITOR_ENABLED: bool = (
+    os.environ.get("HAL_LOOK_MONITOR", "true").lower() in ("1", "true", "yes")
+)
 OS_WELLBEING_LOG_URL = "http://127.0.0.1:5000/api/wellbeing/log"
 GUARD_STATUS_URL = "http://127.0.0.1:5000/api/guard"
 GUARD_CHECK_INTERVAL_S = float(os.environ.get("HAL_GUARD_CHECK_INTERVAL_S", "10.0"))
@@ -130,7 +142,16 @@ FACE_STRANGER_FORGET_S = float(os.environ.get("HAL_FACE_STRANGER_FORGET_S", "180
 # turn every FACE_COOLDOWN_S (10s). Friend enters are not affected.
 FACE_STRANGER_ENTER_FLOOR_S = float(os.environ.get("HAL_FACE_STRANGER_ENTER_FLOOR_S", "300.0"))
 FACE_STRANGER_FLUSH_S = float(os.environ.get("HAL_FACE_STRANGER_FLUSH_S", "10.0"))
-FACE_AREA_RATIO_THRESHOLD = float(os.environ.get("HAL_FACE_AREA_RATIO_THRESHOLD", "0.05"))
+# Minimum face bbox HEIGHT as a fraction of frame height. Height, not area:
+# area falls off as 1/d^2 while a linear dimension falls off as 1/d, so the
+# area form made the knob twice as sensitive for the same change in reach.
+# More importantly, yaw (turning the head — the common case) compresses the
+# bbox WIDTH while leaving height intact, so an area gate rejected angled
+# faces harder than frontal ones at the same distance — fighting the
+# extended-set feature that exists to learn those angled views.
+FACE_HEIGHT_RATIO_THRESHOLD = float(
+    os.environ.get("HAL_FACE_HEIGHT_RATIO_THRESHOLD", "0.10")
+)
 
 # --- Sensing: Voice identity (speaker-ID as a presence signal) ---
 # How long a confidently matched speaker stays the "current voice user" after
@@ -160,6 +181,26 @@ def _os_cfg_get(key: str, default: str = "") -> str:
             return json.load(f).get(key, default)
     except Exception:
         return default
+
+def resolve_device_type(default: str = "") -> str:
+    """Return the device class (lamp/dog/intern): DEVICE_TYPE env, then config.json.
+
+    Provisioning writes DEVICE_TYPE into /opt/hal/.env and the os-server unit;
+    config.json normally carries NO device_type key at all (it is only a manual
+    fallback for dev machines). So a bare _os_cfg_get("device_type") resolves to
+    the caller's fallback on every provisioned device — anything deriving
+    behaviour from the device class must go through here instead. Same order as
+    server._resolve_device_type / mic_button._resolve_device_type, without the
+    fail-loud: callers here have a usable default.
+    """
+    dev = os.environ.get("DEVICE_TYPE")
+    if dev:
+        return dev.strip().lower()
+    cfg = _os_cfg_get("device_type")
+    if cfg:
+        return str(cfg).strip().lower()
+    return default
+
 
 DL_BACKEND_URL = _os_cfg_get("llm_base_url") or os.environ.get("DL_BACKEND_URL", "")
 DL_API_KEY = _os_cfg_get("llm_api_key") or os.environ.get("DL_API_KEY", "")
@@ -241,6 +282,23 @@ EMOTION_CONFIDENCE_THRESHOLD = float(
 )
 EMOTION_FLUSH_S = float(os.environ.get("HAL_EMOTION_FLUSH_S", "10.0"))
 EMOTION_DEDUP_WINDOW_S = float(os.environ.get("HAL_EMOTION_DEDUP_WINDOW_S", "300.0"))
+# How long `thinking` may stay on continuously before the device falls back to
+# idle. `thinking` is the only face nothing clears on its own: it is set at the
+# start of a wait and overwritten by whatever the reply expresses, so a turn
+# that dies mid-flight (realtime exception, delegate that never answers) leaves
+# it burning forever with no user input to break it out. 0 disables the net.
+#
+# 25s comes from device logs (lamp-0c89, 2026-08-19), not from feel. Two kinds
+# of turn hold `thinking` legitimately: a realtime in-session reply clears it in
+# 0.4-8.6s (n=15, p50 6.5), and a delegated turn runs until the main agent
+# answers — event-forwarded → assistant-turn-done measured 6-22s over 5 days
+# (n=21, p95 21). So the window has to clear 22s or it would blink idle in the
+# middle of a live delegate; 25 is that ceiling plus a small margin. Cutting
+# early is cheap (the real emotion re-sets on arrival), so the margin stays thin
+# rather than doubling the stuck time when the net actually fires.
+EMOTION_THINKING_RESET_S = float(
+    os.environ.get("HAL_EMOTION_THINKING_RESET_S", "25.0")
+)
 EMOTION_SNAPSHOT_DIR = os.environ.get(
     "HAL_EMOTION_SNAPSHOT_DIR",
     os.path.join(tempfile.gettempdir(), "hal-emotion-snapshots"),
@@ -522,8 +580,15 @@ SPEAKER_PROC_RMS_TARGET: float = float(
 # bound memory on long clips. The ~20 MB weight is NOT committed — it downloads
 # on first use from the CDN into /root/local/models (same convention as the pose
 # / faceid weights); if it can't be resolved the gate is skipped with a warning.
+#
+# OFF by default. It rejects a real speaker often enough to hurt: on device it
+# dropped ordinary utterances as FAIL-low-stoi, and a rejected turn has no
+# speaker at all, which is worse than a lower-confidence identification the
+# recogniser's own thresholds can still weigh. Set
+# HAL_SPEAKER_PROC_ENABLE_STOI=true to gate on intelligibility where the room is
+# noisy enough for that trade to pay off.
 SPEAKER_PROC_ENABLE_STOI: bool = (
-    os.environ.get("HAL_SPEAKER_PROC_ENABLE_STOI", "true").lower() == "true"
+    os.environ.get("HAL_SPEAKER_PROC_ENABLE_STOI", "false").lower() == "true"
 )
 SPEAKER_PROC_STOI_MODEL_PATH: str = os.environ.get(
     "HAL_SPEAKER_PROC_STOI_MODEL_PATH",
@@ -823,6 +888,244 @@ REALTIME_GEMINI_VISION: bool = (
 REALTIME_GEMINI_VISION_MAX_WIDTH: int = int(
     os.environ.get("HAL_GEMINI_VISION_MAX_WIDTH", "768")
 )
+# Aim the head at the subject BEFORE the `look` tool captures. `look` takes no
+# parameters and grabs whatever the camera currently sees, so without this the
+# model can answer confidently about a wall. Bounded by LOOK_AIM_DEADLINE_S so a
+# live turn never stalls: on expiry the capture proceeds from wherever the head
+# reached. Yaw only — see hal/drivers/tracking/aim.py for why pitch is excluded.
+# Set HAL_LOOK_AIM=false to disable without a rollout if it misbehaves in the field.
+LOOK_AIM_ENABLED: bool = (
+    os.environ.get("HAL_LOOK_AIM", "true").lower() in ("1", "true", "yes")
+)
+# Ceiling for the aim, not a cost: it returns the moment the subject is centred,
+# so a converged aim never spends this. It only bounds the failure case — the
+# head starting far off the subject, where each iteration costs ~1s (detect +
+# settle + move) and cutting it short means capturing a frame the subject is not
+# in. Device-tuned 2026-08-19: 0.8s allowed a single iteration and every look
+# that began off-centre timed out mid-correction, capturing a blurred, uncentred
+# frame. Long enough to converge beats short enough to fail fast.
+#
+# The dead-air filler (REALTIME_FILLER_DELAY_S, 1.5s) covers the wait when it
+# does run long.
+LOOK_AIM_DEADLINE_S: float = float(
+    os.environ.get("HAL_LOOK_AIM_DEADLINE_S", "8")
+)
+# Horizontal field of view used ONLY to convert the subject's pixel offset into
+# degrees of yaw for the look-aim. Deliberately separate from
+# tracking/constants.py CAMERA_FOV_DEG (60.0), which the object tracker is tuned
+# around — correcting the shared constant would silently re-tune tracking too.
+#
+# 60 was a guess and it is roughly half the truth, which made every aim step
+# remove only ~46% of the error: device traces put the real lens at 107-123 deg
+# (2026-08-19, measured as head-degrees-moved per frame-fraction the subject
+# shifted). 100 is set slightly BELOW the measurement on purpose — the lens is a
+# fisheye, so the mapping is non-linear and compressed at the edges, and
+# undershooting converges monotonically while overshooting oscillates.
+LOOK_AIM_FOV_DEG: float = float(
+    os.environ.get("HAL_LOOK_AIM_FOV_DEG", "100.0")
+)
+# Confidence floor for the aim's own person/face lookup. The detector's global
+# DETECT_MIN_CONFIDENCE is 0.15 — deliberately loose, tuned so the TRACKER keeps
+# its lock on a phone at an odd angle, where a miss costs more than a false
+# positive. Aiming wants the opposite trade: a false positive turns the lamp at
+# a wall (device 2026-08-19 — a person rendered inside a laptop screen was
+# accepted and aimed at). Raised here only, leaving the tracker's floor alone.
+#
+# Applies to detections that report a confidence; the YuNet face path enforces
+# its own threshold instead.
+LOOK_AIM_MIN_CONFIDENCE: float = float(
+    os.environ.get("HAL_LOOK_AIM_MIN_CONFIDENCE", "0.5")
+)
+# Minimum apparent size for a detection to count as "the person talking to us".
+# Expressed as a fraction of FRAME HEIGHT: a close subject is often clipped
+# left/right, but their height still scales with distance. Device-measured on
+# 1280x720 — a far colleague reads ~0.10 and a spurious far face ~0.035, while
+# the actual asker reads ~0.23.
+LOOK_AIM_MIN_PERSON_HEIGHT_FRAC: float = float(
+    os.environ.get("HAL_LOOK_AIM_MIN_PERSON_HEIGHT_FRAC", "0.15")
+)
+# Faces are a much smaller box than a whole person at the same distance, so
+# they get their own, lower floor.
+LOOK_AIM_MIN_FACE_HEIGHT_FRAC: float = float(
+    os.environ.get("HAL_LOOK_AIM_MIN_FACE_HEIGHT_FRAC", "0.08")
+)
+# Passive bearing sampling. Without it the estimate only learns from visual
+# questions that happen to end near-perfectly centred — 2 samples in a full day
+# of device testing, against a 6h confidence half-life, so it decayed faster
+# than it learned. This watches for a NEARBY person on a slow cadence and folds
+# in what it sees, so the lamp knows where its user usually is without being
+# asked anything.
+BEARING_SAMPLE_ENABLED: bool = (
+    os.environ.get("HAL_BEARING_SAMPLE", "true").lower() in ("1", "true", "yes")
+)
+# 5 minutes: eight samples reaches full confidence inside an hour of presence,
+# and one detector inference per 5 min is a rounding error on the CPU.
+BEARING_SAMPLE_INTERVAL_S: float = float(
+    os.environ.get("HAL_BEARING_SAMPLE_INTERVAL_S", "300")
+)
+# The subject may be off-centre horizontally — their bearing is recovered as
+# yaw + dx x scale — but only so far, because that correction leans on the FOV
+# constant the aim exists to avoid trusting.
+BEARING_SAMPLE_MAX_DX_FRAC: float = float(
+    os.environ.get("HAL_BEARING_SAMPLE_MAX_DX_FRAC", "0.25")
+)
+# The POSTURE is only recorded when the subject is also vertically centred:
+# pitch cannot be corrected arithmetically, so an off-centre pitch would teach
+# the lamp a posture that does not look at anyone.
+# 0.30, loosened once the sampler learned from FACES instead of person boxes.
+# The strict value existed because a torso centred vertically said nothing about
+# whether the head was in frame at all, so a posture recorded from one could be
+# aimed at a chest. A face in frame carries its own proof: this posture sees a
+# head. Device-observed at the old value, a sighting 15.8% off centre was
+# refused its posture and stored a bearing with a single joint — leaving nothing
+# to restore, which is the whole point of remembering a pose.
+BEARING_SAMPLE_MAX_DY_FRAC: float = float(
+    os.environ.get("HAL_BEARING_SAMPLE_MAX_DY_FRAC", "0.30")
+)
+# Save what each bearing sample saw, box drawn on, under
+# SNAPSHOT_PERSIST_DIR/sensing_bearing/. Servable by
+# GET /api/sensing/snapshot/sensing_bearing/<name>, so the samples can be
+# reviewed without SSH.
+BEARING_SNAPSHOT_ENABLED: bool = (
+    os.environ.get("HAL_BEARING_SNAPSHOT", "true").lower() in ("1", "true", "yes")
+)
+# Oldest are evicted past this. One frame per sample interval accumulates
+# quietly forever otherwise.
+BEARING_SNAPSHOT_KEEP: int = int(
+    os.environ.get("HAL_BEARING_SNAPSHOT_KEEP", "30")
+)
+# --- Gaze wake: turning toward the lamp as a third way to address it ----------
+#
+# A desk lamp sits an arm's length from its user, so "hey <name>" ten times a
+# day reads as talking to an appliance, and a button press reads as operating
+# one. Between two people the cue is neither: you turn toward someone and speak.
+#
+# This adds that as a THIRD opener of the existing wake gate, alongside the
+# spoken wake phrase and the single click. It does not replace either, and it
+# does not touch what happens after the gate opens. On a device without a
+# camera it simply never arms, leaving the other two openers untouched.
+#
+# It is inert when WAKEWORD_ENABLED is false: with no wake word, every utterance
+# already dispatches, so there is no gate left to open.
+GAZE_WAKE_ENABLED: bool = (
+    os.environ.get("HAL_GAZE_WAKE", "false").lower() in ("1", "true", "yes")
+)
+# Log the decision without acting on it. ON by default so the thresholds below
+# can be chosen from measurements taken beside a real user, rather than guessed:
+# nobody knows what angle reads as "addressing the lamp" until it is counted.
+# Shadow runs cost nothing — no turn is opened, so no LLM or TTS is spent.
+GAZE_WAKE_SHADOW: bool = (
+    os.environ.get("HAL_GAZE_SHADOW", "true").lower() in ("1", "true", "yes")
+)
+# How far the head may be turned off the lamp and still count as facing it.
+# Device-observed reference frames: a near-profile head (one ear visible, both
+# eyes not) measures well past 60 deg and must NOT open the gate — that is the
+# posture of someone talking to a colleague while their torso happens to face
+# the desk. A head with both eyes and both lenses visible measures under 25.
+GAZE_MAX_YAW_DEG: float = float(os.environ.get("HAL_GAZE_MAX_YAW_DEG", "25"))
+# How far back the evidence window reaches from the newest sample. One knob,
+# not a separate "hold" and "speech window": both described the same span — the
+# moments between turning toward the lamp and starting to speak — and two names
+# for one span drift apart. People turn BEFORE they speak, so this reaches
+# backwards only; nothing after the trigger is ever consulted.
+#
+# 1.5 s is also the smallest window that carries enough samples to vote with. At
+# 3 fps a 0.8 s window holds three observations, and three noisy samples cannot
+# support a majority the noise cannot flip.
+GAZE_WINDOW_S: float = float(os.environ.get("HAL_GAZE_WINDOW_S", "1.5"))
+# What fraction of the samples in that window must have seen a facing head.
+#
+# NOT an unbroken run. Per-sample yaw is noisy: at 640x360 a face filling a
+# fifth of the frame leaves ~25 px between the eyes, so a one-pixel landmark
+# error moves the angle a long way, and asin amplifies it further near the
+# extremes. A device trail of a user plainly facing the lamp read
+# [10,15,8,25,36,1,-,90] across two seconds — an impossible amount of real head
+# movement, so the variation is measurement, not gesture. Requiring every sample
+# to pass rejects that; requiring most of them separates it cleanly from a head
+# genuinely turned away, which reads [3,90,90,90,90,90,90,90].
+GAZE_MIN_FACING_RATIO: float = float(
+    os.environ.get("HAL_GAZE_MIN_FACING_RATIO", "0.6")
+)
+# Below this many samples in the window there is not enough evidence to call it
+# either way, so it is not called. Guards the moments after start-up and after a
+# live look monopolised the detector.
+#
+# 2, not 3. The loop is paced by real work — waiting on a frame, then running
+# the detector — so it achieves roughly two samples a second whatever
+# GAZE_SAMPLE_FPS asks for, and a 1.5 s window holds two or three. At 3 this
+# floor rejected users the rest of the pipeline agreed were facing the lamp:
+# `yaw=1.0 face=84px facing=100% of 1 -> skip`, with a trail of seven
+# consecutive in-cone samples behind it. Raising the sample rate does not help;
+# the ceiling is the work, not the sleep.
+GAZE_MIN_SAMPLES: int = int(os.environ.get("HAL_GAZE_MIN_SAMPLES", "2"))
+# Minimum face height in PIXELS for a sample to be trusted at all.
+#
+# In pixels, not as a fraction of the frame, because what this protects is
+# landmark precision and that depends on pixels alone. Yaw is recovered from the
+# offset between five landmarks; on a face 10 px tall those five points fall
+# within about three pixels of each other, so the angle is arithmetic performed
+# on rounding error. Device probe, one frame: three background colleagues at
+# 8-18 px yielded yaw 49 / 20 / 29 with detector scores 0.43-0.70 — pure noise —
+# while the seated user at 78 px and score 0.88 measured 90 and was, correctly,
+# in profile. The two populations do not overlap, so this floor removes the
+# entire class of garbage rather than tuning against it.
+#
+# It also subsumes the old frame-fraction floor: anyone far enough away to be a
+# bystander is, by construction, too small in pixels.
+GAZE_MIN_FACE_PX: int = int(os.environ.get("HAL_GAZE_MIN_FACE_PX", "48"))
+# How much wider the acceptance cone grows for a face at the very edge of frame,
+# as a multiple of GAZE_MAX_YAW_DEG. Scales linearly with distance from the
+# frame centre; 1.0 disables the compensation.
+#
+# The yaw estimate assumes a pinhole projection, and this lens is not one — the
+# aim was rewritten to stop trusting a fixed FOV for the same reason, and the
+# repo cannot even agree on the number (60 deg in constants.py against 78 in the
+# hardware BOM) because barrel distortion makes it position-dependent. A face at
+# the edge has its landmark geometry stretched, which inflates the angle.
+# Device-measured: a user who did not move read [8,9,15,5,12,33,35,28] as their
+# face drifted outward, and the tail was refused for a turn that never happened.
+GAZE_EDGE_CONE_SCALE: float = float(
+    os.environ.get("HAL_GAZE_EDGE_CONE_SCALE", "1.8")
+)
+# Seconds of yaw history kept. Must exceed GAZE_WINDOW_S or the lookback cannot
+# see far enough back to judge the gesture.
+GAZE_BUFFER_S: float = float(os.environ.get("HAL_GAZE_BUFFER_S", "3.0"))
+# Sampling rate of the watcher.
+#
+# 6, not the 3 that resolving the gesture alone would need. The gesture is slow,
+# but the DECISION is a vote, and the vote only counts samples that actually
+# measured a head: dropped frames and faces too small to trust are excluded. At
+# 3 fps a 1.5 s window held four or five raw samples and often just one to three
+# usable ones, which sits right on GAZE_MIN_SAMPLES — so a user facing the lamp
+# dead-on was refused for want of evidence (`yaw=4.5 face=49px facing=100% of 1
+# -> skip`). Sampling twice as often buys the tally enough votes to be stable.
+#
+# Affordable because the cost was measured, not assumed: with the watcher
+# running, CPU idle went 69.2% -> 68.8% and HAL's own share did not rise above
+# its normal range on the 8-core A523. YuNet on a downscaled frame is cheap.
+GAZE_SAMPLE_FPS: float = float(os.environ.get("HAL_GAZE_SAMPLE_FPS", "6"))
+# Minimum gap between two gaze-opened gates, so a single conversation cannot
+# open one per sentence. The follow-up window already covers continuing a turn.
+GAZE_COOLDOWN_S: float = float(os.environ.get("HAL_GAZE_COOLDOWN_S", "5"))
+# Where the remembered user bearing lives. NOT a boot sidecar: this must survive
+# reboots, unlike the mic/speaker/camera state in app_state.
+USER_BEARING_PATH: str = os.environ.get(
+    "HAL_USER_BEARING_PATH", "/var/lib/hal/user_bearing.json"
+)
+# Speak while the aim searches for the user. ON by default: the lamp physically
+# turning away mid-question is confusing unless it says why, and that is the one
+# aim state that genuinely needs a voice.
+LOOK_AIM_SPEAK: bool = (
+    os.environ.get("HAL_LOOK_AIM_SPEAK", "true").lower() in ("1", "true", "yes")
+)
+# Announce the capture itself ("let me see"). ON, but narrow: it fires only when
+# the aim actually had to move, so the common case — subject already centred,
+# shutter in a few hundred ms — stays silent. That makes it cover the waits
+# without narrating every visual question. Set HAL_LOOK_AIM_SPEAK_CAPTURE=false
+# to silence it if it turns out to stack awkwardly after a search.
+LOOK_AIM_SPEAK_CAPTURE: bool = (
+    os.environ.get("HAL_LOOK_AIM_SPEAK_CAPTURE", "true").lower() in ("1", "true", "yes")
+)
 # Cost guard for `look`: minimum seconds between two image SENDS. A model can call
 # look several times in a row (same turn, or back-to-back turns); each new image
 # costs vision tokens. Within this window we DON'T capture/send a fresh frame —
@@ -977,6 +1280,14 @@ REALTIME_REPLY_SYNC_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_REPLY_SYNC
 # later turn until recycle; Gemini only needs the gist to avoid repeating
 # itself.
 REALTIME_TTS_HISTORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_TTS_HISTORY_MAX_CHARS", "300"))
+# Dead air while the realtime model works on a committed turn. Chit-chat answers
+# start in ~1s and need nothing, but a turn the model grounds with Google Search
+# emits no token until the search returns — 3-6s of a device that looks awake and
+# sounds dead. After this many seconds with no output yet, HAL asks os-server to
+# speak one opening filler ("one sec", "let me check"); the model's own first
+# sentence interrupts it. Set high enough that a normal answer never races it.
+# 0 disables.
+REALTIME_FILLER_DELAY_S: float = float(os.environ.get("HAL_REALTIME_FILLER_DELAY_S", "1.5"))
 
 # --- Realtime: Summarizer (Anthropic Messages API) ---
 REALTIME_SUMMARIZER_ENABLED: bool = os.environ.get("HAL_REALTIME_SUMMARIZER_ENABLED", "true").lower() in ("1", "true", "yes")
@@ -985,3 +1296,160 @@ REALTIME_SUMMARIZER_API_KEY: str = os.environ.get("HAL_REALTIME_SUMMARIZER_API_K
 _summarizer_base: str = os.environ.get("HAL_REALTIME_SUMMARIZER_BASE_URL", "") or _os_cfg_get("llm_base_url", "")
 REALTIME_SUMMARIZER_BASE_URL: str = _summarizer_base.rstrip("/").removesuffix("/v1") if _summarizer_base else ""
 REALTIME_SUMMARIZER_MODEL: str = os.environ.get("HAL_REALTIME_SUMMARIZER_MODEL", "claude-haiku-4-5-20251001")
+
+# Gaze re-point: turn back toward the remembered bearing when nobody has been
+# visible for a while.
+#
+# Needed because the idle recording is a LOOP of absolute poses that swings
+# base_pitch about 17 degrees per cycle (see routes/emotion.py), so wherever the
+# lamp is left, idle walks the camera back to the recording's own pose — which
+# on a desk points at the keyboard, not at the user. Parking the remembered pose
+# once would simply be overwritten by the next loop. Resting properly at the
+# bearing would mean offsetting the whole playback by it, which is a change to
+# motion playback rather than to this feature.
+#
+# So this does what a person does instead: if it cannot see who might be talking
+# to it, it turns to where they usually are. Once, then it waits.
+GAZE_REPOINT_ENABLED: bool = (
+    os.environ.get("HAL_GAZE_REPOINT", "true").lower() in ("1", "true", "yes")
+)
+# Nobody WELL FRAMED for this long before turning. Long enough that leaning out
+# of frame for a moment does not send the head hunting, short enough that the
+# idle loop cannot walk the camera off the user and leave it there: the loop
+# swings base_pitch every cycle, so the drift is continuous and a long timer
+# simply means a long stretch where the feature cannot see who is talking.
+GAZE_REPOINT_AFTER_S: float = float(
+    os.environ.get("HAL_GAZE_REPOINT_AFTER_S", "12")
+)
+# ...and at most this often, so an empty desk does not become a lamp that turns
+# every few seconds all night.
+GAZE_REPOINT_COOLDOWN_S: float = float(
+    os.environ.get("HAL_GAZE_REPOINT_COOLDOWN_S", "60")
+)
+# How far off frame centre a face may sit and still count as "somebody is here,
+# no need to turn". A face at the very edge is about to leave the frame, so
+# treating it as well framed is what let the absence timer reset forever while
+# the user drifted out of view — device-measured at edge=0.71-0.75 with the
+# lamp still refusing to re-point.
+GAZE_WELL_FRAMED_EDGE: float = float(
+    os.environ.get("HAL_GAZE_WELL_FRAMED_EDGE", "0.6")
+)
+# Below this confidence the bearing is not worth moving for.
+GAZE_REPOINT_MIN_CONFIDENCE: float = float(
+    os.environ.get("HAL_GAZE_REPOINT_MIN_CONFIDENCE", "0.5")
+)
+
+# Vertical centring — the neck the aim never had.
+#
+# The look aim drives yaw only, deliberately: the pitch sign was never validated
+# for its relative `nudge()` path, and an inverted pitch is a bug this codebase
+# already hit once. The consequence on a desk is that the camera cannot recover
+# from pointing low, so the user's head sits above the frame and no amount of
+# left-right correction brings it back.
+#
+# Device-measured which joint is actually the neck, by moving each and looking:
+#   base_pitch   folds the whole arm, so it both rotates AND translates the
+#                camera - not monotonic (10.6 raised the view, 18.6 lowered it)
+#   elbow_pitch  0.2 px of vertical effect
+#   wrist_pitch  -70.6 -> -55 -> -45 raised it steadily, bringing a face that
+#                was clipped by the frame edge fully into view at 91 px
+# So: wrist_pitch is the neck. The DIRECTION recorded above did not survive a
+# paired re-measurement: holding the bus quiet and taking 18 face samples per
+# position, interleaved, -75 -> -90 moved the face DOWN the frame (+0.103) and
+# -68 -> -98 likewise (+0.185). Decreasing the joint tilts the camera UP. See
+# _maybe_pitch in gaze.py, where the correction now carries that sign.
+# Note the tracker's own pitch weights
+# spread across base and elbow with PITCH_WEIGHT_WRIST = 0.0, which is likely
+# why this joint was never the one anybody reached for.
+# ON, after being off. The objection that turned it off was real and is worth
+# keeping written down: camera direction depends on base_pitch and wrist_pitch
+# TOGETHER — the arm folds at its base, so that joint rotates AND translates the
+# camera, and the same wrist angle points somewhere different for every base
+# angle. Driving one joint per-degree against a coupled two-link arm, with no
+# kinematic model, walked the head to its limit while still missing the user.
+#
+# What changed is not the kinematics, it is that the corrections stopped being
+# undone between steps. Two things were erasing them: the repoint re-anchoring
+# idle on a remembered wrist angle recorded minutes earlier, and the idle loop
+# pulling back toward the pose the recording was made at. With both fixed the
+# loop converges instead of walking — device-measured, one run, three steps:
+# 45% above centre -> 21% -> 16%, each starting exactly where the last left off.
+#
+# It is still open-loop against a coupled arm, so the limit case remains real:
+# the same session drove wrist_pitch to -90.6 and sat on the mechanical stop
+# before recovering. The per-step cap and the blind-step budget are what bound
+# that, not any model of the arm. The remembered bearing (a full pose, restored
+# in one absolute move — see bearing_sampler) is still the better mechanism when
+# a pose has actually been learned; this loop is what gets a face into frame in
+# the first place, so a pose worth remembering can be learned at all.
+GAZE_PITCH_ENABLED: bool = (
+    os.environ.get("HAL_GAZE_PITCH", "true").lower() in ("1", "true", "yes")
+)
+# Degrees of wrist_pitch per FULL frame height. A seed, not a calibration: the
+# correction re-measures itself every step because it moves and then looks
+# again, so an imperfect constant costs an extra iteration, not accuracy.
+GAZE_PITCH_DEG_PER_FRAME: float = float(
+    os.environ.get("HAL_GAZE_PITCH_DEG_PER_FRAME", "45")
+)
+# Largest single correction. Small enough that a wrong sign is a mistake the
+# next measurement reverses, rather than a head swung to a limit.
+#
+# 15, not 8. The step is the binding constraint, not the estimate: a face 40%
+# above centre asks for 18 degrees and got 8, so each correction fell short and
+# the next frame reported almost the same offset — device-observed 41%, 33%,
+# 42% across three corrections, converging on nothing. The sign is now measured
+# rather than assumed, so the reason for keeping the step tiny is gone.
+GAZE_PITCH_MAX_STEP_DEG: float = float(
+    os.environ.get("HAL_GAZE_PITCH_MAX_STEP_DEG", "15")
+)
+# Vertical offset, as a fraction of frame height, that counts as centred enough.
+# Wider than it needs to be: the aim is to get the face INSIDE the frame with
+# room around it, not to centre it perfectly, and every correction is a visible
+# head movement the user did not ask for.
+GAZE_PITCH_DEAD_ZONE_FRAC: float = float(
+    os.environ.get("HAL_GAZE_PITCH_DEAD_ZONE_FRAC", "0.15")
+)
+# Minimum gap between corrections, so a user who keeps moving does not turn the
+# lamp into a head that nods along.
+GAZE_PITCH_COOLDOWN_S: float = float(
+    os.environ.get("HAL_GAZE_PITCH_COOLDOWN_S", "4")
+)
+# How many corrections in a row may be driven by the torso fallback before it
+# stops and waits for a real face. The fallback knows the head is above the
+# frame but not by how much, so its evidence can stay true no matter how far
+# the neck has moved — which is a loop, not a correction. Device-observed
+# before this bound: wrist_pitch climbed -89.7 -> -34.6 in eight steps and kept
+# going, because a user sitting close fills the frame at every pitch.
+# 0 — the blind search is off by default, and the code is kept for a device
+# where it earns its place.
+#
+# It cannot converge. The torso fallback reports the same fixed offset every
+# time (it knows the head is above the frame, never by how much), so once the
+# idle anchor follows each step there is nothing left to pull back and the
+# search becomes a one-way ratchet: device-observed -45 -> -30 -> -15 -> 0 ->
+# +14, on its way to pointing at the ceiling. To a user that reads as the lamp
+# wandering off, which is worse than the lamp sitting still.
+#
+# It is also unnecessary here. Face-driven corrections do the work whenever a
+# face is visible at all, and the anchor is what makes one correction stick.
+# When no face is visible the honest thing is to stay put: this device has a
+# remembered bearing to turn to and a user who can tilt it, and neither of
+# those is improved by sweeping the room.
+GAZE_PITCH_MAX_BLIND_STEPS: int = int(
+    os.environ.get("HAL_GAZE_PITCH_MAX_BLIND_STEPS", "0")
+)
+
+# Let the idle loop breathe around the pose the user was last seen from.
+#
+# The idle recording is absolute on every joint and loops forever, so within a
+# cycle of any correction it walks the camera back to the pose it was recorded
+# at — on a desk, the keyboard. Every framing fix was therefore temporary, and
+# gaze spent its time re-correcting instead of watching. Anchoring shifts the
+# whole loop without changing its shape: same motion, different centre.
+#
+# Scoped to idle deliberately. Emotion recordings may fling the head anywhere,
+# because by the time one plays the user has already been heard; what has to be
+# true is only that the RESTING pose can see whoever might speak next.
+GAZE_IDLE_ANCHOR: bool = (
+    os.environ.get("HAL_GAZE_IDLE_ANCHOR", "true").lower() in ("1", "true", "yes")
+)

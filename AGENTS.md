@@ -57,7 +57,11 @@ See `docs/DEV-MULTI-IDE.md` for full conventions.
 ## Working Style
 
 - The user reviews and commits by hand. Do not create commits unless explicitly
-  asked.
+  asked. When asked: `git add` the exact files of that change (never `git add -A`),
+  check `git status --short` for unrelated dirty or untracked files and leave them
+  alone, then commit with a single-line message and **nothing else in it** — no
+  `Co-Authored-By` trailer, no "Generated with" footer, no body. Commit only; do
+  not push unless told to.
 - Work in small, reviewable chunks. When a task spans multiple concerns, split
   it by concern and verify each batch before moving to the next.
 - Stay in scope. Flag unrelated issues instead of fixing them opportunistically.

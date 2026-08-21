@@ -16,6 +16,7 @@ var (
 	reVoiceBlock      = regexp.MustCompile(`(?m)^voice:[ \t]*\n((?:[ \t]+.*\n?)+)`)
 	reVoiceProvider   = regexp.MustCompile(`(?m)^[ \t]+tts_provider:[ \t]*(\S+)`)
 	reVoiceVoice      = regexp.MustCompile(`(?m)^[ \t]+tts_voice:[ \t]*(\S+)`)
+	reVoiceWakeWord   = regexp.MustCompile(`(?m)^[ \t]+wakeword:[ \t]*(\S+)`)
 	reSoulRef         = regexp.MustCompile(`(?m)^soul_ref:[ \t]*(\S+)`)
 	reCapBlock        = regexp.MustCompile(`(?m)^capabilities:[ \t]*\n((?:[ \t]+.*\n?)+)`)
 	reCapKey          = regexp.MustCompile(`(?m)^[ \t]+(\w+):`)
@@ -260,4 +261,25 @@ func TTSProvider(deviceType string) string {
 // owns its validity, mirroring how startup_volume trusts its number.
 func TTSVoice(deviceType string) string {
 	return voiceField(deviceType, reVoiceVoice)
+}
+
+// WakeWordDefault returns the `voice.wakeword` declared in
+// robots/<deviceType>/ROBOT.md and whether it was declared at all. It is the
+// body's OUT-OF-THE-BOX gate: a lamp sitting in a shared room wants to be
+// addressed before it answers, while a push-to-talk body does not.
+//
+// os-server adopts it only while config.json carries no wakeword key — i.e. a
+// config it just created. A device provisioned before the switch existed is
+// pinned to false by ProvideConfig, so an OTA can never make a unit already in
+// use stop answering. Undeclared or unparseable → (false, false) → the legacy
+// always-listening default.
+func WakeWordDefault(deviceType string) (value bool, declared bool) {
+	switch strings.ToLower(voiceField(deviceType, reVoiceWakeWord)) {
+	case "true":
+		return true, true
+	case "false":
+		return false, true
+	default:
+		return false, false
+	}
 }

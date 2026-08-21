@@ -188,6 +188,7 @@ All knobs live in `hal/drivers/tracking/constants.py`. (The old dead `GIMBAL_*` 
 | No detector confirm for `STOP_NO_YOLO_S` (20 s) | Stop — ghost tracking |
 | CSRT misses `YOLO_MAX_MISS` (30) after `MAX_TRACKING_RETRIES` (4) | Stop — object gone |
 | Tracking duration > 5 minutes | Stop — timeout to save motor/CPU |
+| GPIO-button or TTP223 single-click | Stop — explicit user attention-cancel |
 
 Note: a large bbox (e.g. a person filling the frame) is **not** a stop condition — PID drives off the centroid, not bbox size, so a close object still tracks. When tracking ends the arm glides back to zero at tracking speed (no snap).
 
@@ -321,3 +322,341 @@ Camera section shows:
 - Fast-loop CPU floor on the Allwinner A523 is ViT inference + detector cost; the frame downscale (`VISION_MAX_WIDTH`) and local imgsz=320 are the main levers.
 - Motion smoothness comes from the decoupled servo worker + SmoothDamp + velocity feedforward; the alpha-beta filter + reinit gating keep the goal itself stable so the follower isn't chasing noise.
 - Small/far objects (e.g. a cup across the room) can exceed both local and remote detector resolution — a perception limit, not a control bug.
+
+---
+
+## Look-aim — pointing the head before a visual question captures
+
+Separate from object tracking above, and driven by a different trigger.
+
+The realtime `look` tool takes **no parameters**: it captures whatever the head currently faces
+(`orchestrator.py` — *"the model just signals intent to look; the device grabs the current frame"*).
+So a visual question — *"what am I holding?"* — could be answered confidently from a picture of a
+wall. `hal/drivers/tracking/aim.py` centres the subject first.
+
+| | |
+|---|---|
+| **Trigger** | the `look` tool firing — **not** ordinary conversation |
+| **Scope** | yaw only |
+| **Budget** | `HAL_LOOK_AIM_DEADLINE_S` (8 s); on expiry it captures from wherever it reached |
+| **Disable** | `HAL_LOOK_AIM=false` |
+
+Ordinary chat is untouched: the body stays still through listening and thinking as before. Only a
+`look` call releases it, because that is the moment the device was explicitly asked to look at
+something.
+
+**The body is owned for the whole look.** From the moment the aim starts until the shutter closes,
+`servo_ownership()` sets the same `_tracking_active` lock the vision tracker uses, which suppresses
+**all** emotion servo animation (`routes/emotion.py`) and makes the animation loop drop any recording
+in progress.
+
+This is not optional polish. Emotion presets play **recorded** poses that are absolute on every
+joint — including `wrist_roll` — so one arriving between the aim and the capture re-poses the head
+entirely, and the frame shows wherever the animation parked it rather than the user. A "curious"
+reaction landing mid-question is enough to capture the ceiling. `nudge()` preempts an animation that
+is already playing, but not one dispatched afterwards, which is exactly the window the capture sits in.
+
+The previous lock value is restored rather than cleared, so a look never ends a genuine
+object-tracking session that was already running.
+
+**Why the centring loop is yaw only.** The yaw sign is copied from the tracker's empirically
+verified convention (`dx>0` → `base_yaw` increases). `AnimationService.nudge()` drives `base_pitch`,
+whereas the tracker distributes pitch across base/elbow/wrist — so the pitch sign is **not**
+validated on this path, and an inverted pitch is a bug this codebase has already hit once (see
+`servo_follow.command_pid`).
+
+The bearing restore in priority 3 is the exception, and it is safe for a specific reason: it sends an
+**absolute** pose via `move_and_hold`, not a relative nudge. An absolute target has no sign to get
+wrong. That is what lets a head left pointing at the floor recover its height — with yaw-only
+correction it would sweep the floor in a circle no matter how right the direction was.
+
+**Priority order:**
+
+1. **Person visible** → centre it. Person box preferred over the face box: a held-up object often
+   hides the face but rarely the whole body, and framing the person includes whatever they hold.
+2. **Nothing visible, but a subject was confirmed at this pose seconds ago** → **hold and capture.**
+   Treat the disappearance as *occlusion, not absence* — that is what a held-up object looks like to
+   a detector, and turning away would abandon the very thing the user asked about.
+3. **Nothing visible and nothing seen recently** → go to the remembered **pose** — direction and
+   posture together — in a single absolute move. This used to advance in `BEARING_STEP_DEG` hops,
+   re-detecting between them so it could not pass over someone standing en route; the hops were
+   dropped because the lens sees ~110°, so anyone in between is already in frame before the head
+   moves at all. They bought no coverage and cost a detect plus a settle each, roughly a second per
+   hop out of the aim's own budget.
+4. **Deadline** → capture from wherever the head reached. It never sweeps here.
+
+Every move goes through `nudge()`, so `SAFETY.md`'s `max_speed` stretches the move rather than being
+bypassed to meet the deadline. A physical-button single click aborts it (`button_actions.py`), since
+that gesture means "stop moving and pay attention to me".
+
+#### Which detection counts as "the person asking"
+
+A `person` box is not enough. The detector's global floor is `DETECT_MIN_CONFIDENCE = 0.15`,
+deliberately loose because it is tuned for the **tracker**, where losing a lock on a phone at an odd
+angle costs more than a false positive. Aiming wants the opposite trade — a false positive turns the
+lamp at a wall — so the aim applies its own two gates:
+
+| gate | default | rejects |
+|---|---|---|
+| `HAL_LOOK_AIM_MIN_PERSON_HEIGHT_FRAC` | 0.15 | a colleague across the room (measured 0.10 of frame height) |
+| `HAL_LOOK_AIM_MIN_FACE_HEIGHT_FRAC` | 0.08 | a spurious far face (measured 0.035) |
+| `HAL_LOOK_AIM_MIN_CONFIDENCE` | 0.5 | low-confidence noise, e.g. a person rendered on a monitor |
+
+Size is measured on **height**, not area or width: a close subject is routinely clipped left or right
+by the frame edge, but their apparent height still scales with distance.
+
+A rejected detection is reported as **no subject at all**, not as a target — so the aim falls through
+to hold-or-consult-the-bearing rather than turning to a stranger at the other end of the room. Faces
+come from YuNet, which enforces its own threshold and reports no confidence, so only the height gate
+applies there.
+
+#### Self-calibrating pixels-to-degrees
+
+The aim does **not** trust a fixed FOV constant. It measures degrees-per-`dx_frac` from what its own
+last move actually achieved, and uses that for the next correction; `HAL_LOOK_AIM_FOV_DEG` (100°) is
+only the first-step guess before any measurement exists.
+
+This exists because no single constant can be right. The lens is a fisheye: the same device measured
+**91° near the frame centre and 229° at the edge**. A constant tuned for the centre crawls at the
+edge (four iterations still not centred, then a timeout); one tuned for the edge overshoots the
+centre and oscillates.
+
+Guards, because dividing a small shift by a small move turns detector jitter into a wild scale: a
+step is ignored unless the head moved >3° and the subject shifted >0.02 of frame, and unless the
+shift went the **same** direction as the correction — a wrong-way shift means the subject walked or
+the detector jumped to something else, which is not a measurement of optics. The result is clamped to
+40–250° and damped by `SCALE_SAFETY` (0.7), deliberately biased low: the measurement is taken at the
+current eccentricity but spent at a smaller one, and undershoot costs a step where overshoot
+oscillates.
+
+#### Capture timing
+
+Two costs were paid inside the aim's budget before being moved out of it:
+
+- **Detector warm-up.** The first `detect()` loads the model lazily and cost ~9 s on device — enough
+  on its own to blow the deadline and the realtime turn's watchdog. It is now pre-warmed on a
+  background thread at HAL start (`server.py`), so the first real look runs at the same speed as
+  every later one.
+- **Stale frames.** Reading `last_frame` straight after a move returns the **pre-move** image, so the
+  next correction is computed from a pose the head has already left. On device that produced six
+  identical +12.3° corrections with `dx` frozen at 0.241 while the head travelled 61°. The aim now
+  holds the camera consumer for the whole aim (without one the device does not capture at full FPS)
+  and requires a frame stamped after the servo settled. **No fresh feedback, no move.**
+
+The shutter itself uses `capture_still`, which freezes the servos and waits for quiet. Its settle
+scales with the size of the last correction (0.3 s base, +0.0067 s/deg, capped at 0.5 s), because an
+aim that exits on its deadline does so immediately after a large swing and a lamp arm is still
+ringing past a flat 300 ms — that was the difference between sharp captures on centred aims and
+blurred ones on timed-out aims. The cap is deliberately tight: this delay is paid before the user
+hears an answer.
+
+#### Debugging a look
+
+Off by default; when disabled every hook is a single cached bool check, so it costs nothing to leave
+in place.
+
+```bash
+HAL_LOOK_DEBUG=true          # per-look trace dirs under drivers/tracking/look_logs/
+HAL_LOOK_DEBUG_FRAMES=false  # keep the trace, skip the per-step JPEGs
+```
+
+Each look writes `<timestamp>_<status>/` containing:
+
+| file | what it answers |
+|---|---|
+| `step_NN_*.jpg` | what the detector locked onto each iteration — green box, green line at box centre, red line at frame centre. The gap between the lines **is** `dx`. |
+| `capture.jpg` | the frame actually sent to the model |
+| `result.json` | the decision trail: per step `saw` / `dx_frac` / `conf` / `scale` / commanded yaw / resulting pose, plus the bearing consulted |
+| `profile.json` | stage timings, and `waiting_on_model_ms` |
+
+The status in the directory name (`OK_realtime_handled`, `OK_delegated`, `OK_fallback`) says which
+path answered the turn, so a bad answer can be attributed before opening anything.
+
+`waiting_on_model_ms` is the one to read first: it is total minus everything the device did itself,
+and it separates "the lamp is slow" from "the lamp finished in 2 s and then waited 24 s for the
+model". Sub-stages are nested inside their roll-up and excluded from the device total, so the
+residual is honest. The same numbers appear on one `LOOK-PROFILE` log line per look.
+
+### Search sweep — asked for, never inline
+
+Distinct from the look-aim, and deliberately kept off the capture path. The aim runs inside a live
+turn under a deadline; a sweep takes seconds, which is exactly the dead air that design avoids. So a
+sweep is only entered where the time is affordable:
+
+- the user asks outright — *"where are you?"*, *"can you find me?"* (`skills/servo-control`)
+- they accept an offer after a failed look — *"I can't see it. Want me to look around?"*
+
+`POST /servo/search` — sweeps and stops on the first subject seen.
+
+**Ordering is the whole trick.** Stops are seeded from the remembered bearing and expand outward
+(`seed`, `seed±45°`, `seed±90°`, …) rather than sweeping left-to-right, so the likely place is checked
+first. That is what usually turns a multi-second sweep into a single stop.
+
+Steps are `STEP_DEG` (45°), deliberately **smaller than the camera FOV** so tiles overlap — stepping
+by a full FOV would leave seams where someone straddling two tiles is missed by both. Stops are
+clamped to the ±135° mechanical range, and the head is given `SETTLE_S` to stop ringing before each
+frame is read, since a moving head yields a blurred frame and a detector that misses what is in view.
+
+Aborted by the physical button like the aim, and it never sweeps while the camera is disabled — a
+search is a lot of conspicuous movement to perform when the user has asked the device not to look.
+
+> Not built: an LED cue while sweeping. Transient LED state lives behind the route request models, so
+> driving it from here would mean HTTP loopback (which this codebase avoids) or duplicating the
+> restore bookkeeping — and a cue that fails to restore would strand the lamp's LED. Worth doing
+> properly rather than partially.
+
+### Speaking while it searches
+
+A lamp that silently swivels away mid-question looks broken. One that says *"where are you?"* while
+doing it reads as trying to help.
+
+os-server owns the phrases, the language resolution and the WAV cache
+(`system/lib/i18n/fillers.go`, pools `look_searching` / `look_found` / `look_capturing`); HAL only
+decides **when**, via `POST /api/sensing/filler` with `{"pool": "..."}`.
+
+| State | When | Default |
+|---|---|---|
+| `look_searching` | the first step toward the remembered bearing | **on** (`HAL_LOOK_AIM_SPEAK`) |
+| `look_found` | a subject appears **after** a search was announced | on (same flag) |
+| `look_capturing` | the aim had work to do before the shutter | on (`HAL_LOOK_AIM_SPEAK_CAPTURE`) |
+
+The gating matters more than the phrases. **Nothing is said when the subject is already centred** —
+that capture completes in a few hundred milliseconds, so every phrase here is conditional on the aim
+having actually moved. *"There you are"* only fires as the resolution of an announced search, never
+on its own. Searching announces **once**, not per step. And the capture line fires only when the aim
+had work to do, which is what keeps it from prefixing every visual question.
+
+A fast, silent, correct capture is already the good outcome — speech is reserved for the moments the
+user is genuinely left waiting.
+
+### Remembered user bearing
+
+`hal/drivers/tracking/user_bearing.py` folds sightings into one decaying estimate at
+`/var/lib/hal/user_bearing.json` (`HAL_USER_BEARING_PATH`). One place, not a histogram — the lamp
+only ever needs one pose to return to.
+
+**It stores a full servo pose, not a single angle** (schema v2; a v1 file migrates and keeps its
+learned direction). `bearing_deg` remains as the yaw component so callers that only want a direction
+need not know joint names, and it is *derived from* `pose["base_yaw.pos"]` so the two can never
+disagree. Yaw alone is not enough to look at someone: pitch is spread across base/elbow/wrist, so a
+head left pointing at the floor sweeps the floor in a circle no matter how right the yaw is. Each
+joint gets its own EMA at the same rate as the yaw; a relocation replaces the pose outright rather
+than averaging, since the old posture describes the old place.
+
+Sightings reach it two ways:
+
+- **From a look aim**, when the subject ends within **2%** of frame centre — tighter than the aim's
+  own framing tolerance, and deliberately so: at frame centre the servo position **is** the bearing,
+  with no pixel→angle conversion and therefore no dependency on the disputed camera FOV constant.
+- **From the passive sampler** (`bearing_sampler.py`), every `HAL_BEARING_SAMPLE_INTERVAL_S` (300 s).
+  The aim-only path recorded roughly two samples a day against a six-hour confidence half-life — it
+  decayed faster than it learned, so the one thing that rescues a look when nobody is visible was
+  never confident enough to be consulted. The sampler **never moves the lamp**: it reads a frame and
+  the current servo positions, and recovers the bearing arithmetically as `yaw + dx × scale`.
+
+The sampler declines rather than guess. Horizontal offset is tolerated only to
+`HAL_BEARING_SAMPLE_MAX_DX_FRAC` (0.25), because that correction leans on the very FOV constant the
+aim exists to avoid trusting. It also skips while the body is aiming or tracking, while the camera is
+disabled, and takes the detector lock non-blocking so a user's question never waits on it.
+
+**It learns from faces only, never from `person` boxes.** A person box says where a body is, and a
+body fills the frame whenever the camera happens to be aimed low — so learning from one memorises
+the posture that was pointing at the desk and calls it "where the user is". Device-observed: 22
+samples, confidence 0.99, and a stored posture with `wrist_pitch -78` that could not see a face at
+all. Every consumer downstream then restored that posture faithfully and found nobody, which reads
+as the lamp being broken rather than as the bearing being wrong. A face in frame proves the opposite
+by construction: this posture sees a head, so restoring it will see one again.
+
+**The posture is recorded wherever in frame the face sat.** The vertical gate that used to guard it
+(`HAL_BEARING_SAMPLE_MAX_DY_FRAC`) was written for person boxes, where a centred torso said nothing
+about whether the head was in frame. Keeping it for faces was self-defeating: while the camera is
+aimed low every face sits near the top edge, so every sighting failed the gate, so no posture was
+ever stored, so there was nothing to restore and the camera stayed low — device-observed `dy` of
+-15.8% then -41.2%, two sightings, and a remembered "pose" holding only a yaw. A posture that catches
+the user at the frame edge is imperfect; it is also incomparably better than one pointing at the
+desk, and the per-joint EMA walks it toward centre as the framing it enables improves.
+
+Each sample writes an annotated frame to `/var/lib/hal/snapshots/sensing_bearing/`
+(`HAL_BEARING_SNAPSHOT`, newest 30 kept, oldest evicted) — **including the detections it rejected**,
+labelled with why, since "it ignored a far stranger" and "it saw nothing" look identical in the
+estimate. Servable at `GET /api/sensing/snapshot/sensing_bearing/<name>`.
+
+Angles are averaged **linearly, not circularly**: `base_yaw` is a bounded ±135° servo range that does
+not wrap, so a circular mean would be wrong at the extremes.
+
+Outliers are damped rather than accepted — someone crossing the room must not flip the estimate — but
+`OUTLIER_STREAK` consecutive far sightings are treated as a genuine relocation and accepted wholesale.
+
+**Consumed by aim priority 3** (above) once confidence passes `MIN_BEARING_CONFIDENCE`. Inspect it
+to check the maths and the sign:
+
+```bash
+curl -s localhost:5001/servo/bearing     # includes the full pose
+cat /var/lib/hal/user_bearing.json
+```
+
+A `known` bearing with an empty `pose` means the estimate predates the pose schema and has not been
+re-sighted yet: a search will restore direction but not head height until the next sighting fills it
+in.
+
+`bearing_deg` should settle near where the user actually sits. An estimate sitting **mirrored about
+zero** means the yaw sign is inverted — the failure this file is most exposed to, because it is
+open-loop and nothing corrects it.
+
+### Noticing that the lamp has been moved
+
+The bearing is stored in **lamp-relative** coordinates, so picking the lamp up or rotating it on the
+desk invalidates it instantly — while the file still looks perfectly valid.
+
+Nothing on this device can observe that directly:
+
+| Approach | Why not |
+|---|---|
+| IMU / accelerometer | none fitted — absent from the BOM and from HAL |
+| Servo feedback | `base_yaw` measures the head against the **base**. Rotating the whole lamp moves the world, not the joint. |
+| Reboot as a hint | weak both ways — lamps reboot without moving, and move without rebooting |
+
+So it is **inferred from failed predictions**: when aim priority 3 turns to the remembered bearing
+and finds nobody, that is a miss. `PREDICTION_MISS_LIMIT` misses drops the estimate, and it rebuilds
+from live sightings.
+
+Three guards keep ordinary life from looking like a relocation:
+
+- **A single miss is not enough** — the user may simply be out of the room.
+- **A hit resets the streak**, so occasional absences never accumulate.
+- **Misses must be clustered** (`MISS_STREAK_WINDOW_S`). A moved lamp fails every attempt from the
+  moment it moved; a user who is sometimes in another room produces isolated misses spread over
+  weeks. Without the window those become indistinguishable once enough time passes.
+
+And a miss is only ever counted when the lamp **actually looked and found nothing**. Camera disabled,
+no frame, deadline, button abort, and the occlusion hold all return without scoring — privacy mode in
+particular must never erase where the user sits.
+
+This self-heals for **any** cause (lamp moved, furniture rearranged, user changed desk) without ever
+needing to know which one happened.
+
+#### How big a move has to be before anything needs to detect it
+
+Most moves never reach the miss-counting above, because the estimate corrects itself:
+
+| Lamp rotated by | What corrects it |
+|---|---|
+| **< half the camera FOV** (~30°) | the user is **still in frame** at the stale bearing, so the aim finds and centres them anyway — and that sighting records the new correct yaw. Plain EMA pulls the estimate over. **Nothing detects the move; nothing needs to.** |
+| up to `OUTLIER_DEG` (45°) | not visible from the stale bearing, but found while stepping toward it. The sighting is still under the outlier threshold, so it is folded in at full weight. |
+| beyond `OUTLIER_DEG` | sightings look like outliers, so `OUTLIER_STREAK` consecutive ones are accepted as a relocation. |
+| far enough that the user is never found | the miss streak drops the estimate and it rebuilds from scratch. |
+
+So the machinery above is only for the **last** case. A lamp nudged on the desk is handled by the
+estimate's own update rule, which is why the small case is also the quietest — the lamp never learns
+it moved, and does not need to.
+
+**Inspect and reset:**
+
+```bash
+curl 127.0.0.1:5001/servo/bearing              # {"known":true,"bearing_deg":-18.5,...}
+curl -X POST 127.0.0.1:5001/servo/bearing/reset
+```
+
+The reset is also wired to speech via `skills/servo-control` — *"I moved you"*, *"you're in a new
+place"*. Automatic detection needs several failures before acting, which is right for avoiding false
+positives but slow when the user already knows the lamp moved.

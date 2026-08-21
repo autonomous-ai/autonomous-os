@@ -3,6 +3,7 @@
 import logging
 import re
 from typing import Iterator, Optional
+from urllib.parse import urlparse
 
 from hal.presets import LANG_EN, LANG_VI
 from hal.drivers.voice.tts.backend import (
@@ -122,9 +123,38 @@ class ElevenLabsTTSBackend(TTSBackend):
             pool = cls.VOICE_IDS_BY_LANG[LANG_EN]
         return list(pool.keys())
 
+    # Direct ElevenLabs API hosts. The api.us / api.eu splits are the
+    # regional endpoints ElevenLabs docs advertise; everything else
+    # (autonomous.ai proxy, private mirrors) still gets the `/elevenlabs`
+    # prefix so proxy routing keeps working.
+    _DIRECT_HOSTS = frozenset({
+        "api.elevenlabs.io",
+        "api.us.elevenlabs.io",
+        "api.eu.elevenlabs.io",
+    })
+
+    @classmethod
+    def _is_direct_elevenlabs(cls, base_url: str) -> bool:
+        try:
+            host = urlparse(base_url).hostname or ""
+        except Exception:
+            return False
+        return host.lower() in cls._DIRECT_HOSTS
+
     def __init__(self, api_key: str, base_url: Optional[str] = None):
         self._api_key = api_key
-        self._base_url = _ensure_openai_v1(base_url or "") + self.ELEVENLABS_PATH
+        # The `/elevenlabs` sub-path is autonomous.ai proxy routing
+        # (campaign-api routes `<base>/elevenlabs/text-to-speech/...` to the
+        # provider). A BYO operator pointing directly at api.elevenlabs.io
+        # should NOT get the extra prefix — the real API is
+        # `<base>/text-to-speech/...`, and appending `/elevenlabs` gives a 404
+        # ("/v1/elevenlabs/text-to-speech/..."). Detect the direct-API host
+        # and skip the prefix.
+        resolved = _ensure_openai_v1(base_url or "")
+        if self._is_direct_elevenlabs(resolved):
+            self._base_url = resolved
+        else:
+            self._base_url = resolved + self.ELEVENLABS_PATH
         self._client = None
         try:
             import httpx

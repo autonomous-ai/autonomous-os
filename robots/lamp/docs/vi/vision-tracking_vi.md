@@ -188,6 +188,7 @@ Mọi knob nằm trong `hal/drivers/tracking/constants.py`. (Đường proportio
 | Không detector confirm trong `STOP_NO_YOLO_S` (20 s) | Dừng — ghost tracking |
 | CSRT miss `YOLO_MAX_MISS` (30) sau `MAX_TRACKING_RETRIES` (4) | Dừng — vật thể biến mất |
 | Thời lượng tracking > 5 phút | Dừng — timeout để tiết kiệm motor/CPU |
+| Single-click từ nút GPIO hoặc TTP223 | Dừng — user chủ động huỷ attention |
 
 Lưu ý: một bbox lớn (ví dụ một người lấp đầy frame) **không** phải điều kiện dừng — PID chạy theo centroid, không phải kích thước bbox, nên một vật thể ở gần vẫn track. Khi tracking kết thúc, cánh tay trượt về zero ở tốc độ tracking (không snap).
 
@@ -323,3 +324,339 @@ Camera section hiển thị:
 - Vật thể nhỏ/xa (ví dụ một cái ly ở đầu phòng) có thể vượt độ phân giải của cả detector local lẫn remote — đây là giới hạn perception, không phải bug điều khiển.
 </content>
 </invoke>
+
+---
+
+## Look-aim — ngắm đầu trước khi một câu hỏi thị giác chụp ảnh
+
+Tách biệt với phần theo dõi vật thể ở trên, và do một trigger khác kích hoạt.
+
+Tool `look` của realtime **không có tham số**: nó chụp đúng thứ đầu đang hướng tới
+(`orchestrator.py` — *"the model just signals intent to look; the device grabs the current frame"*).
+Nên một câu hỏi thị giác — *"tôi đang cầm gì đây?"* — có thể được trả lời rất tự tin từ một tấm ảnh
+bức tường. `hal/drivers/tracking/aim.py` căn giữa đối tượng trước.
+
+| | |
+|---|---|
+| **Trigger** | tool `look` được gọi — **không phải** hội thoại thông thường |
+| **Phạm vi** | chỉ yaw |
+| **Ngân sách** | `HAL_LOOK_AIM_DEADLINE_S` (8 s); hết hạn thì chụp từ đúng chỗ nó tới được |
+| **Tắt** | `HAL_LOOK_AIM=false` |
+
+Hội thoại thông thường không đổi: thân máy vẫn đứng yên suốt pha lắng nghe và suy nghĩ như trước.
+Chỉ một lời gọi `look` mới giải phóng nó, vì đó đúng là khoảnh khắc thiết bị được yêu cầu tường minh
+là hãy nhìn vào một vật.
+
+**Thân máy được sở hữu trong suốt cả lượt look.** Từ lúc pha ngắm bắt đầu cho tới khi màn trập đóng,
+`servo_ownership()` bật đúng cái khóa `_tracking_active` mà vision tracker vẫn dùng, khóa này chặn
+**toàn bộ** animation servo của emotion (`routes/emotion.py`) và khiến vòng animation bỏ luôn bản ghi
+đang phát dở.
+
+Đây không phải phần đánh bóng cho đẹp. Các preset emotion phát những tư thế **đã ghi sẵn**, tuyệt đối
+trên mọi khớp — kể cả `wrist_roll` — nên chỉ cần một cái rơi vào giữa pha ngắm và lần chụp là đầu bị
+đặt lại hoàn toàn, và khung hình cho ra đúng chỗ animation đã đỗ lại chứ không phải người dùng. Một
+phản ứng "tò mò" rơi vào giữa câu hỏi là đủ để chụp lên trần nhà. `nudge()` chiếm quyền được một
+animation *đang* phát, nhưng không chặn được cái được gọi *sau đó* — mà đó lại đúng là khoảng thời gian
+lần chụp nằm trong.
+
+Giá trị khóa trước đó được khôi phục chứ không bị xóa, nên một lượt look không bao giờ kết thúc một
+phiên bám vật thể đang chạy thật.
+
+**Vì sao vòng lặp căn giữa chỉ dùng yaw.** Quy ước dấu của yaw được chép từ quy ước đã kiểm chứng
+thực nghiệm của tracker (`dx>0` → `base_yaw` tăng). `AnimationService.nudge()` điều khiển
+`base_pitch`, trong khi tracker phân bổ pitch trên base/elbow/wrist — nên dấu của pitch **chưa** được
+kiểm chứng trên đường này, và pitch đảo dấu là lỗi codebase này đã từng mắc một lần (xem
+`servo_follow.command_pid`).
+
+Việc khôi phục bearing ở ưu tiên 3 là ngoại lệ, và nó an toàn vì một lý do cụ thể: nó gửi một tư thế
+**tuyệt đối** qua `move_and_hold`, không phải nudge tương đối. Mục tiêu tuyệt đối thì không có dấu nào
+để sai. Đó chính là thứ cho phép cái đầu đang chúi xuống sàn lấy lại đúng độ cao — nếu chỉ chỉnh yaw,
+nó sẽ quét sàn theo vòng tròn dù hướng có đúng tới đâu.
+
+**Thứ tự ưu tiên:**
+
+1. **Thấy người** → căn giữa. Ưu tiên khung bao người hơn khung bao mặt: vật giơ lên hay che mất mặt
+   nhưng hiếm khi che cả người, và lấy khung cả người thì bao gồm luôn thứ họ đang cầm.
+2. **Không thấy gì, nhưng vài giây trước vừa xác nhận có người ở đúng tư thế này** → **giữ nguyên và
+   chụp.** Coi việc biến mất là *bị che khuất, không phải vắng mặt* — đó đúng là hình ảnh của một vật
+   giơ lên dưới góc nhìn của bộ phát hiện, và quay đi lúc đó là bỏ rơi đúng thứ người dùng vừa hỏi.
+3. **Không thấy gì và gần đây cũng không thấy** → về thẳng **tư thế** đã ghi nhớ — cả hướng lẫn dáng
+   — trong một lệnh tuyệt đối duy nhất. Trước đây nó đi từng nhịp `BEARING_STEP_DEG` và phát hiện lại
+   giữa các nhịp để không đi lướt qua người đang đứng giữa đường; các nhịp này đã bị bỏ vì ống kính
+   nhìn được ~110°, nên ai đứng ở giữa thì đã nằm trong khung hình từ trước khi đầu nhúc nhích. Chúng
+   không mua thêm vùng phủ nào mà mỗi nhịp tốn một lần detect cộng một lần chờ lắng, khoảng một giây,
+   trừ thẳng vào ngân sách của aim.
+4. **Hết hạn chót** → chụp từ đúng chỗ đầu tới được. Ở đây không bao giờ quét.
+
+Mọi chuyển động đều đi qua `nudge()`, nên `max_speed` trong `SAFETY.md` sẽ kéo dãn thời gian di chuyển
+chứ không bị bỏ qua để kịp hạn chót. Một cú click đơn trên nút vật lý sẽ hủy nó
+(`button_actions.py`), vì cử chỉ đó nghĩa là "dừng lại và chú ý vào tôi".
+
+#### Phát hiện nào mới được tính là "người đang hỏi"
+
+Một khung bao `person` là chưa đủ. Ngưỡng toàn cục của bộ phát hiện là `DETECT_MIN_CONFIDENCE = 0.15`,
+cố tình để lỏng vì nó được tinh chỉnh cho **tracker**, nơi mất khóa vào cái điện thoại đặt nghiêng còn
+tệ hơn một lần nhận nhầm. Aim cần đánh đổi ngược lại — nhận nhầm là quay đèn vào tường — nên aim áp
+hai cổng của riêng nó:
+
+| cổng | mặc định | loại bỏ |
+|---|---|---|
+| `HAL_LOOK_AIM_MIN_PERSON_HEIGHT_FRAC` | 0.15 | đồng nghiệp ở đầu kia phòng (đo được 0.10 chiều cao khung) |
+| `HAL_LOOK_AIM_MIN_FACE_HEIGHT_FRAC` | 0.08 | khuôn mặt xa bị nhận nhầm (đo được 0.035) |
+| `HAL_LOOK_AIM_MIN_CONFIDENCE` | 0.5 | nhiễu độ tin cậy thấp, ví dụ người hiện trên màn hình |
+
+Kích thước đo theo **chiều cao**, không theo diện tích hay chiều rộng: người ở gần thường bị mép khung
+cắt mất bên trái hoặc phải, nhưng chiều cao biểu kiến vẫn tỉ lệ với khoảng cách.
+
+Một phát hiện bị loại được báo là **không có đối tượng nào**, chứ không phải một mục tiêu — nên aim
+rơi xuống nhánh giữ-nguyên hoặc tra bearing thay vì quay sang một người lạ ở cuối phòng. Khuôn mặt do
+YuNet trả về, vốn tự áp ngưỡng riêng và không báo độ tin cậy, nên ở đó chỉ có cổng chiều cao.
+
+#### Tự hiệu chuẩn pixel sang độ
+
+Aim **không** tin vào một hằng số FOV cố định. Nó đo số độ trên mỗi `dx_frac` từ chính kết quả cú
+chuyển động vừa rồi của nó, rồi dùng cho lần chỉnh kế tiếp; `HAL_LOOK_AIM_FOV_DEG` (100°) chỉ là phỏng
+đoán cho bước đầu tiên khi chưa có phép đo nào.
+
+Nó tồn tại vì không hằng số nào đúng được. Ống kính là mắt cá: cùng một thiết bị đo được **91° gần tâm
+khung và 229° ở rìa**. Hằng số chỉnh cho tâm sẽ bò rất chậm ở rìa (bốn vòng lặp vẫn chưa căn giữa rồi
+hết hạn chót); chỉnh cho rìa thì vọt quá ở tâm và dao động.
+
+Có các chốt chặn, vì lấy một dịch chuyển nhỏ chia cho một cú di chuyển nhỏ sẽ biến nhiễu của bộ phát
+hiện thành một tỉ lệ điên rồ: một bước bị bỏ qua trừ khi đầu đã quay >3° và đối tượng dịch >0.02 khung,
+và trừ khi chiều dịch **cùng** chiều với lệnh chỉnh — dịch ngược chiều nghĩa là người đó đi chỗ khác
+hoặc bộ phát hiện nhảy sang vật khác, không phải phép đo quang học. Kết quả bị kẹp trong 40–250° và
+giảm chấn bởi `SCALE_SAFETY` (0.7), cố tình thiên thấp: phép đo lấy ở độ lệch tâm hiện tại nhưng đem
+tiêu ở độ lệch nhỏ hơn, mà thiếu thì chỉ tốn thêm một bước còn thừa thì dao động.
+
+#### Thời điểm chụp
+
+Hai khoản chi phí từng nằm trong ngân sách của aim, nay đã được đưa ra ngoài:
+
+- **Làm nóng bộ phát hiện.** Lần `detect()` đầu tiên nạp model kiểu lười và tốn ~9 s trên thiết bị —
+  tự nó đã đủ thổi bay cả hạn chót lẫn watchdog của lượt realtime. Giờ nó được làm nóng sẵn trên một
+  luồng nền lúc HAL khởi động (`server.py`), nên lần look thật đầu tiên chạy nhanh ngang mọi lần sau.
+- **Khung hình cũ.** Đọc `last_frame` ngay sau một cú di chuyển sẽ trả về ảnh **trước khi di chuyển**,
+  nên lần chỉnh kế tiếp được tính từ một tư thế mà đầu đã rời khỏi. Trên thiết bị, việc này tạo ra sáu
+  lệnh chỉnh +12,3° giống hệt nhau với `dx` đứng yên ở 0,241 trong khi đầu đi hết 61°. Giờ aim giữ
+  consumer camera suốt cả lần aim (không có nó thì thiết bị không chụp ở full FPS) và bắt buộc phải có
+  khung hình đóng dấu sau khi servo đã lắng. **Không có phản hồi mới thì không di chuyển.**
+
+Bản thân cú chụp dùng `capture_still`, vốn đóng băng servo và chờ yên tĩnh. Thời gian chờ lắng của nó
+co giãn theo độ lớn của lần chỉnh cuối (0,3 s nền, +0,0067 s/độ, chặn trên 0,5 s), vì một lần aim hết
+hạn chót sẽ thoát ra ngay sau một cú quay lớn, mà cần đèn vẫn còn rung quá mốc 300 ms cố định — đó
+chính là khác biệt giữa ảnh nét ở các lần aim căn được giữa và ảnh nhòe ở các lần hết hạn chót. Trần
+này cố tình để chặt: độ trễ đó người dùng phải chờ trước khi nghe được câu trả lời.
+
+#### Gỡ lỗi một lần look
+
+Mặc định tắt; khi tắt thì mọi hook chỉ là một phép kiểm tra bool đã cache, nên để nguyên trong code
+không tốn gì.
+
+```bash
+HAL_LOOK_DEBUG=true          # thư mục trace mỗi lần look, dưới drivers/tracking/look_logs/
+HAL_LOOK_DEBUG_FRAMES=false  # giữ trace, bỏ qua ảnh JPEG từng bước
+```
+
+Mỗi lần look ghi ra `<timestamp>_<status>/` gồm:
+
+| file | trả lời câu hỏi gì |
+|---|---|
+| `step_NN_*.jpg` | bộ phát hiện đã khóa vào cái gì ở mỗi vòng lặp — khung xanh, vạch xanh ở tâm khung bao, vạch đỏ ở tâm khung hình. Khoảng cách giữa hai vạch **chính là** `dx`. |
+| `capture.jpg` | khung hình thực sự đã gửi cho model |
+| `result.json` | chuỗi quyết định: mỗi bước có `saw` / `dx_frac` / `conf` / `scale` / yaw đã lệnh / tư thế thu được, kèm bearing đã tra |
+| `profile.json` | thời gian từng chặng, và `waiting_on_model_ms` |
+
+Trạng thái trong tên thư mục (`OK_realtime_handled`, `OK_delegated`, `OK_fallback`) cho biết nhánh nào
+đã trả lời lượt đó, nên một câu trả lời tệ có thể quy trách nhiệm trước khi mở bất cứ file nào.
+
+`waiting_on_model_ms` là con số nên đọc đầu tiên: nó bằng tổng trừ đi mọi thứ thiết bị tự làm, và nó
+tách bạch "lamp chậm" với "lamp xong trong 2 s rồi ngồi chờ model 24 s". Các chặng con nằm lồng trong
+chặng cha và bị loại khỏi tổng của thiết bị, nên phần dư là trung thực. Cùng bộ số đó xuất hiện trên
+một dòng log `LOOK-PROFILE` mỗi lần look.
+
+### Quét tìm kiếm — chỉ khi được yêu cầu, không bao giờ nội tuyến
+
+Khác với look-aim, và cố ý nằm ngoài đường chụp. Pha ngắm chạy trong một lượt hội thoại đang diễn ra
+với hạn chót; một pha quét mất vài giây, đúng là khoảng lặng chết mà thiết kế đó sinh ra để tránh. Nên
+pha quét chỉ được vào ở nơi có thể thong thả:
+
+- người dùng yêu cầu thẳng — *"bạn đang ở đâu?"*, *"tìm tôi được không?"* (`skills/servo-control`)
+- họ đồng ý với đề nghị sau một lần nhìn thất bại — *"Tôi không thấy nó. Bạn có muốn tôi quay quanh tìm thử không?"*
+
+`POST /servo/search` — quét và dừng ngay ở đối tượng đầu tiên nhìn thấy.
+
+**Thứ tự mới là mấu chốt.** Các điểm dừng được gieo mầm từ bearing đã ghi nhớ rồi lan dần ra hai bên
+(`seed`, `seed±45°`, `seed±90°`, …) thay vì quét từ trái sang phải, để nơi khả dĩ nhất được kiểm tra
+trước. Đó chính là thứ thường biến một pha quét vài giây thành chỉ một điểm dừng.
+
+Mỗi bước là `STEP_DEG` (45°), cố ý **nhỏ hơn FOV của camera** để các ô chồng lấn — bước bằng đúng cả
+FOV sẽ để lại khe hở, nơi một người đứng vắt giữa hai ô bị cả hai ô bỏ sót. Các điểm dừng bị kẹp trong
+tầm cơ khí ±135°, và đầu được cho `SETTLE_S` để hết rung trước mỗi lần đọc khung hình, vì đầu đang
+chuyển động cho ảnh nhòe và bộ phát hiện sẽ bỏ sót thứ đang nằm ngay trong tầm nhìn.
+
+Bị hủy bởi nút bấm vật lý giống như pha ngắm, và không bao giờ quét khi camera đang tắt — một pha quét
+là rất nhiều chuyển động lộ liễu để thực hiện khi người dùng vừa yêu cầu thiết bị đừng nhìn.
+
+> Chưa làm: tín hiệu LED trong lúc quét. Trạng thái LED transient nằm sau các request model của route,
+> nên điều khiển nó từ đây sẽ phải đi vòng qua HTTP loopback (điều codebase này tránh) hoặc nhân bản
+> phần bookkeeping khôi phục — và một tín hiệu không khôi phục được sẽ làm kẹt LED của lamp. Đáng làm
+> cho tử tế thay vì làm nửa vời.
+
+### Nói trong lúc đang tìm
+
+Một chiếc lamp lặng lẽ xoay đi giữa câu hỏi trông như bị hỏng. Một chiếc vừa xoay vừa nói *"bạn đang ở
+đâu?"* thì đọc ra là đang cố giúp.
+
+os-server sở hữu các câu, phần phân giải ngôn ngữ và cache WAV (`system/lib/i18n/fillers.go`, các pool
+`look_searching` / `look_found` / `look_capturing`); HAL chỉ quyết định **khi nào**, qua
+`POST /api/sensing/filler` với `{"pool": "..."}`.
+
+| Trạng thái | Khi nào | Mặc định |
+|---|---|---|
+| `look_searching` | bước đầu tiên về phía bearing đã ghi nhớ | **bật** (`HAL_LOOK_AIM_SPEAK`) |
+| `look_found` | có người xuất hiện **sau khi** đã thông báo đang tìm | bật (cùng cờ) |
+| `look_capturing` | pha ngắm có việc phải làm trước khi bấm máy | bật (`HAL_LOOK_AIM_SPEAK_CAPTURE`) |
+
+Phần chặn quan trọng hơn bản thân các câu nói. **Không nói gì khi đối tượng đã nằm giữa sẵn** — lần chụp
+đó xong trong vài trăm mili giây, nên mọi câu ở đây đều có điều kiện là pha ngắm thực sự đã phải di
+chuyển. *"Bạn đây rồi"* chỉ phát ra như phần kết của một lần tìm đã được thông báo, không bao giờ đứng
+một mình. Trạng thái đang tìm chỉ thông báo **một lần**, không phải mỗi bước. Còn câu lúc chụp chỉ phát
+khi pha ngắm có việc phải làm — đó là thứ giữ cho nó không mở đầu mọi câu hỏi thị giác.
+
+Một lần chụp nhanh, im lặng và đúng vốn đã là kết quả tốt — lời nói chỉ dành cho những khoảnh khắc người
+dùng thực sự phải chờ.
+
+### Bearing người dùng đã ghi nhớ
+
+`hal/drivers/tracking/user_bearing.py` gộp các lần nhìn thấy thành một ước lượng suy giảm duy nhất
+tại `/var/lib/hal/user_bearing.json` (`HAL_USER_BEARING_PATH`). Một chỗ duy nhất, không phải histogram
+— lamp chỉ bao giờ cần một tư thế để quay về.
+
+**Nó lưu cả tư thế servo, không phải một góc đơn lẻ** (schema v2; file v1 sẽ được migrate và giữ lại
+hướng đã học). `bearing_deg` vẫn còn như thành phần yaw để bên gọi chỉ cần hướng thì không phải biết
+tên khớp, và nó được *suy ra từ* `pose["base_yaw.pos"]` nên hai giá trị không bao giờ mâu thuẫn. Chỉ
+yaw thôi thì không đủ để nhìn vào ai đó: pitch trải trên base/elbow/wrist, nên cái đầu bị bỏ lại ở tư
+thế chúi xuống sàn sẽ quét sàn theo vòng tròn dù yaw có đúng tới đâu. Mỗi khớp có EMA riêng với cùng
+tốc độ như yaw; khi phát hiện dời chỗ thì tư thế bị thay hẳn chứ không lấy trung bình, vì tư thế cũ mô
+tả chỗ cũ.
+
+Các lần nhìn thấy đi vào đây theo hai đường:
+
+- **Từ một lần look aim**, khi đối tượng kết thúc trong phạm vi **2%** quanh tâm khung — chặt hơn cả
+  dung sai căn khung của chính pha ngắm, và cố ý như vậy: ở tâm khung thì vị trí servo **chính là**
+  bearing, không có phép quy đổi pixel→góc nào và do đó không phụ thuộc vào hằng số FOV đang tranh cãi.
+- **Từ bộ lấy mẫu thụ động** (`bearing_sampler.py`), mỗi `HAL_BEARING_SAMPLE_INTERVAL_S` (300 s).
+  Đường chỉ-qua-aim ghi được khoảng hai mẫu một ngày so với chu kỳ bán rã độ tin cậy sáu tiếng — nó
+  suy giảm nhanh hơn tốc độ học, nên thứ duy nhất cứu được một lần look khi không thấy ai lại chẳng
+  bao giờ đủ tự tin để được tra tới. Bộ lấy mẫu **không bao giờ làm lamp chuyển động**: nó đọc một
+  khung hình và vị trí servo hiện tại, rồi suy ra bearing bằng số học `yaw + dx × scale`.
+
+Bộ lấy mẫu thà từ chối còn hơn đoán. Độ lệch ngang chỉ được chấp nhận tới
+`HAL_BEARING_SAMPLE_MAX_DX_FRAC` (0.25), vì phép hiệu chỉnh đó dựa vào đúng cái hằng số FOV mà aim
+sinh ra để khỏi phải tin. Nó cũng bỏ qua khi thân đang aim hoặc đang bám, khi camera bị tắt, và lấy
+khóa bộ phát hiện theo kiểu không chặn để câu hỏi của người dùng không bao giờ phải chờ nó.
+
+**Nó chỉ học từ `face`, không bao giờ từ box `person`.** Box person cho biết một thân người ở đâu, mà
+thân người thì lấp đầy khung mỗi khi camera tình cờ chĩa thấp — nên học từ nó là ghi nhớ đúng cái tư
+thế đang nhìn xuống bàn rồi gọi đó là "chỗ user ngồi". Đo trên thiết bị: 22 mẫu, confidence 0.99, tư
+thế lưu lại có `wrist_pitch -78` và không nhìn thấy nổi một khuôn mặt nào. Mọi nơi tiêu thụ phía sau
+đều khôi phục trung thành tư thế đó rồi chẳng thấy ai — nhìn từ ngoài thì đó là đèn hỏng, chứ không
+phải bearing sai. Thấy được mặt thì chứng minh điều ngược lại theo định nghĩa: tư thế này nhìn thấy
+đầu người, khôi phục nó sẽ lại thấy.
+
+**Tư thế được ghi bất kể mặt nằm đâu trong khung.** Cửa dọc từng gác nó
+(`HAL_BEARING_SAMPLE_MAX_DY_FRAC`) viết cho box person, nơi thân người ở giữa khung không nói lên
+được đầu có trong khung hay không. Giữ cửa đó cho `face` là tự phá: khi camera đang chĩa thấp thì mặt
+nào cũng nằm sát mép trên, nên mọi lần thấy đều trượt cửa, nên không tư thế nào từng được lưu, nên
+không có gì để khôi phục và camera cứ ở nguyên chỗ thấp — đo được `dy` -15.8% rồi -41.2%, hai lần
+thấy mặt, và một "pose" ghi nhớ chỉ có mỗi yaw. Tư thế bắt được người dùng ở rìa khung thì không hoàn
+hảo; nhưng nó tốt hơn vô cùng so với tư thế chĩa vào mặt bàn, và EMA từng khớp sẽ kéo nó về giữa khi
+khung hình mà chính nó tạo ra tốt dần lên.
+
+Mỗi lần lấy mẫu ghi một khung hình có chú thích vào `/var/lib/hal/snapshots/sensing_bearing/`
+(`HAL_BEARING_SNAPSHOT`, giữ 30 cái mới nhất, cũ nhất bị dọn) — **kể cả những phát hiện bị loại**, có
+ghi rõ lý do, vì "nó bỏ qua một người lạ ở xa" và "nó không thấy gì" trông y hệt nhau trong ước lượng.
+Xem được tại `GET /api/sensing/snapshot/sensing_bearing/<name>`.
+
+Các góc được lấy trung bình **tuyến tính, không phải theo vòng tròn**: `base_yaw` là dải servo bị chặn
+±135° và không quấn vòng, nên trung bình theo vòng tròn sẽ sai ở hai đầu dải.
+
+Giá trị lệch (outlier) bị làm giảm ảnh hưởng chứ không bị nhận thẳng — một người đi ngang qua phòng
+không được phép lật ngược ước lượng — nhưng `OUTLIER_STREAK` lần lệch liên tiếp sẽ được coi là dời chỗ
+thật và được nhận nguyên vẹn.
+
+**Được tiêu thụ bởi ưu tiên 3 của pha ngắm** (ở trên) khi độ tin cậy vượt `MIN_BEARING_CONFIDENCE`.
+Hãy mở ra kiểm tra phép tính và dấu:
+
+```bash
+curl -s localhost:5001/servo/bearing     # có kèm cả tư thế đầy đủ
+cat /var/lib/hal/user_bearing.json
+```
+
+Một bearing `known` nhưng `pose` rỗng nghĩa là ước lượng có từ trước schema tư thế và chưa được nhìn
+thấy lại: một lần tìm kiếm sẽ khôi phục hướng nhưng chưa khôi phục độ cao đầu, cho tới khi lần nhìn
+thấy kế tiếp điền vào.
+
+`bearing_deg` phải hội tụ về gần nơi người dùng thực sự ngồi. Một ước lượng nằm **đối xứng gương qua
+0** nghĩa là dấu yaw bị đảo — đây là kiểu hỏng mà file này dễ dính nhất, vì nó chạy vòng hở và không
+có gì sửa sai cho nó.
+
+### Phát hiện lamp đã bị dời chỗ
+
+Bearing được lưu theo hệ quy chiếu **gắn với lamp**, nên nhấc lamp lên hay xoay nó trên bàn là nó sai
+ngay lập tức — trong khi file vẫn trông hoàn toàn hợp lệ.
+
+Không có gì trên thiết bị này quan sát được điều đó một cách trực tiếp:
+
+| Cách tiếp cận | Vì sao không được |
+|---|---|
+| IMU / cảm biến gia tốc | không được lắp — không có trong BOM lẫn trong HAL |
+| Phản hồi servo | `base_yaw` đo vị trí đầu so với **đế**. Xoay cả chiếc lamp làm thay đổi thế giới chứ không làm thay đổi khớp. |
+| Dựa vào lần khởi động lại | yếu ở cả hai chiều — lamp reboot mà không bị dời, và bị dời mà không reboot |
+
+Nên nó được **suy ra từ các dự đoán sai**: khi ưu tiên 3 của pha ngắm quay tới bearing đã ghi nhớ mà
+không thấy ai, đó là một lần trượt. `PREDICTION_MISS_LIMIT` lần trượt sẽ hủy ước lượng, và nó tự dựng
+lại từ các lần nhìn thấy mới.
+
+Ba lớp bảo vệ giúp sinh hoạt bình thường không bị hiểu nhầm thành dời chỗ:
+
+- **Một lần trượt là chưa đủ** — người dùng có thể chỉ đang ra ngoài.
+- **Một lần trúng xóa sạch chuỗi trượt**, nên những lần vắng mặt lẻ tẻ không bao giờ cộng dồn.
+- **Các lần trượt phải xảy ra gần nhau** (`MISS_STREAK_WINDOW_S`). Lamp bị dời sẽ trượt ở mọi lần thử
+  kể từ lúc bị dời; còn người dùng thỉnh thoảng ở phòng khác thì tạo ra các lần trượt rời rạc trải dài
+  hàng tuần. Không có cửa sổ thời gian thì sau đủ lâu hai thứ đó trông y hệt nhau.
+
+Và một lần trượt chỉ được tính khi lamp **thực sự đã nhìn và không thấy gì**. Camera đang tắt, không
+lấy được khung hình, hết hạn chót, bị nút bấm hủy, và cả trường hợp giữ nguyên vì bị che khuất — tất cả
+đều thoát ra mà không chấm điểm; đặc biệt chế độ riêng tư tuyệt đối không được phép xóa dần nơi người
+dùng hay ngồi.
+
+Cách này tự chữa lành cho **mọi** nguyên nhân (lamp bị dời, đồ đạc sắp xếp lại, người dùng đổi bàn) mà
+không bao giờ cần biết nguyên nhân nào đã xảy ra.
+
+#### Phải dời bao nhiêu thì mới cần tới cơ chế phát hiện
+
+Phần lớn các lần dời chỗ không bao giờ chạm tới cơ chế đếm trượt ở trên, vì ước lượng tự sửa lấy:
+
+| Lamp bị xoay | Cái gì sửa nó |
+|---|---|
+| **nhỏ hơn nửa FOV camera** (~30°) | người dùng **vẫn nằm trong khung hình** ở bearing cũ, nên pha ngắm vẫn tìm thấy và căn giữa được — và chính lần nhìn thấy đó ghi lại góc yaw mới đúng. EMA thông thường kéo ước lượng theo. **Không có gì phát hiện ra việc dời chỗ; và cũng không cần.** |
+| tới `OUTLIER_DEG` (45°) | không thấy được từ bearing cũ, nhưng tìm thấy trong lúc bước dần về phía đó. Lần nhìn thấy vẫn dưới ngưỡng outlier nên được nhận với trọng số đầy đủ. |
+| vượt `OUTLIER_DEG` | các lần nhìn thấy trông như outlier, nên `OUTLIER_STREAK` lần liên tiếp sẽ được nhận là một lần dời chỗ. |
+| xa tới mức không bao giờ tìm thấy người dùng | chuỗi trượt sẽ hủy ước lượng và nó dựng lại từ đầu. |
+
+Nên toàn bộ cơ chế ở trên chỉ dành cho trường hợp **cuối cùng**. Một chiếc lamp bị xê dịch nhẹ trên bàn
+được xử lý bởi chính quy tắc cập nhật của ước lượng — đó cũng là lý do trường hợp nhỏ lại là trường hợp
+êm nhất: lamp không bao giờ biết là nó đã bị dời, và cũng không cần biết.
+
+**Xem và đặt lại:**
+
+```bash
+curl 127.0.0.1:5001/servo/bearing              # {"known":true,"bearing_deg":-18.5,...}
+curl -X POST 127.0.0.1:5001/servo/bearing/reset
+```
+
+Lệnh đặt lại cũng được nối với giọng nói qua `skills/servo-control` — *"tôi đã dời bạn đi"*, *"bạn
+đang ở chỗ mới"*. Việc phát hiện tự động cần vài lần thất bại mới hành động, điều đó đúng để tránh báo
+động giả nhưng chậm khi người dùng vốn đã BIẾT là lamp bị dời.

@@ -248,6 +248,7 @@ If the device speaker is muted, HAL answers the TTS call with HTTP 200 `{"status
 
 Node info extracted from turn events:
 - `sensing_input` → Sensing node (type + message). Detail: `{ type }`.
+- **The `look` frame rides the voice turn.** When the realtime `look` tool captures, HAL copies the frame to `/var/lib/hal/snapshots/sensing_look/` (`hal/realtime/look_monitor.py`, newest 20 kept) and appends a `[snapshot: ...]` marker to the message that turn already sends — so the picture appears **inside the turn that asked for it**, next to the transcript and the reply, instead of as a separate event with no question attached. os-server strips the marker before the text reaches the model but keeps it in the flow JSONL, exactly as `motion.activity` does. Unlike a `motion.activity` snapshot, **this frame IS what the model saw**, making it the artefact to compare against the model's answer. (A `look.capture` monitor-only branch still exists in `handler.go` from the earlier design; HAL no longer sends it.)
 - `chat_send` → outbound `chat.send` from the device. Detail: `{ type, run_id, has_session, has_image, image_bytes, message }`. `type` is `"user"` for real user / sensing-driven input, or `"system"` for internal notifications (skill watcher, wake greeting). The WS RPC payload sent to OpenClaw is identical in both cases — `type` only labels the flow event so the UI can distinguish them. Auto-compact does **not** emit a `chat_send`; it calls the `sessions.compact` RPC directly via `CompactSession`.
 - `sound_tracker` → pushed by HAL Python directly via `POST /api/monitor/event`. Appears alongside `sensing_input` turns to show escalation state:
   - `{ action: "silent", occurrence: 1 }` — forwarded, agent stays silent
@@ -294,6 +295,8 @@ Raw deltas in `agent_last_token` stay unfiltered for debugging. Slack mid-turn s
 ### NO_REPLY suppression
 
 The agent may respond with `NO_REPLY` (or truncated forms `NO`, `NO_RE`, `NO_...`) when it decides not to respond — typically for passive sensing events like sound/motion. These are suppressed by `isAgentNoReply()` in `handler.go`: no TTS playback, no output display. Matches: exact `"NO"`, or any string starting with `"NO_"` or `"NO_RE"` (case-insensitive after trim). Source: `lifecycle_end` payload if available, otherwise fetched from `chat.history` RPC on `lifecycle_end` (async goroutine, best-effort). OpenClaw `lifecycle_end` currently does not include usage data, so `chat.history` is the primary source.
+
+**Silence-narration gate.** Models sometimes describe their decision to stay quiet instead of emitting the sentinel (e.g. `Sound event, no user message. Nothing to say`). That prose passes `isAgentNoReply()`, so `isMetaNonReply()` in `handler_text.go` suppresses it too: text ≤ 100 bytes, no `?`, matching one of the meta phrases (`nothing to say/add/report`, `no (user) message/reply/response/comment (needed)`, `no need to reply/respond/speak/say`, `staying|remaining silent`, `no action needed`). Applied at end-of-turn (`handler_event_agent.go`) and in `tryFirstSentenceFlush()` (`handler_state.go`), where it defers WITHOUT marking the run streamed so a later real sentence still gets the first-audio latency win. Both hits log a `WARN` and the turn is reported as `no_reply`.
 
 ## Stream summary events (`agent_*_token` / `thinking_*_token`)
 

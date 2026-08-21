@@ -8,6 +8,7 @@ ORIGINAL camera coordinates as (x, y, w, h), or None.
 import base64
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -198,6 +199,35 @@ def _iou_xyxy(a, b) -> float:
     return inter / (area_a + area_b - inter)
 
 
+def _measurable_faces(faces) -> list:
+    """The detector rows whose box is a real number, dropping the rest.
+
+    YuNet can return a non-finite bbox — device-observed on a face leaving the
+    frame while tracking (offset past 25% of the frame, bbox_area down to 1.9%,
+    conf 0.29): the row came back with an infinite coordinate and `int()` on it
+    raised OverflowError, killing the tracker's detect thread mid-session.
+
+    Dropping the row rather than clamping it is the honest reading: infinity is
+    not a very large face, it is the detector saying nothing usable, and the
+    callers already have a "no face this frame" path that behaves correctly.
+
+    The filter runs BEFORE the largest / nearest-centre choice on purpose. An
+    infinite width wins any largest-by-area contest, so filtering afterwards
+    would let one bad row hide a perfectly good face behind it.
+    """
+    if faces is None:
+        return []
+    out = []
+    for f in faces:
+        try:
+            box = [float(v) for v in f[:4]]
+        except (TypeError, ValueError):
+            continue
+        if all(math.isfinite(v) for v in box):
+            out.append(f)
+    return out
+
+
 def _detect_face_yunet(frame: npt.NDArray[np.uint8]) -> Optional[Tuple[int, int, int, int]]:
     """Run YuNet on the frame, return the largest face bbox (x,y,w,h) or None.
 
@@ -216,7 +246,8 @@ def _detect_face_yunet(frame: npt.NDArray[np.uint8]) -> Optional[Tuple[int, int,
     except Exception as e:
         logger.warning("YuNet detect failed: %s", e)
         return None
-    if faces is None or len(faces) == 0:
+    faces = _measurable_faces(faces)
+    if len(faces) == 0:
         logger.info("[tracking_yunet] not found latency=%.0fms", latency_ms)
         return None
     # faces rows: [x, y, w, h, lm_x1..lm_y5, score]. Pick the largest by area.
@@ -231,6 +262,58 @@ def _detect_face_yunet(frame: npt.NDArray[np.uint8]) -> Optional[Tuple[int, int,
     return (x, y, fw, fh)
 
 
+def detect_face_with_landmarks(
+    frame: npt.NDArray[np.uint8],
+) -> Optional[Tuple[Tuple[int, int, int, int], Tuple[float, ...]]]:
+    """The face whose head counts, as ``((x, y, w, h), landmarks)``, or None.
+
+    Same detector as _detect_face_yunet but a DIFFERENT selection policy, and
+    it keeps the five landmarks (right eye, left eye, nose, right and left
+    mouth corner) that the bbox-only path throws away. Head orientation is
+    recoverable from them, so the gaze watcher needs no second model and no
+    second inference.
+
+    Selection: among faces tall enough for the yaw to mean anything
+    (GAZE_MIN_FACE_PX — below it the landmarks span a few pixels and the angle
+    is arithmetic on rounding error), take the one nearest the frame centre.
+    Largest-face would hand the gate to whoever leans in closest, which is the
+    user only by convention; the lamp's own aim is the better prior for which
+    face is the one it is pointed at. With one qualifying face the two policies
+    agree, so this only bites when a second person genuinely shares the desk.
+
+    Falls back to the largest face when nobody clears the size floor: the
+    caller reads the bbox for vertical re-aim as well as for the gate, and that
+    correction is most needed exactly when every face is too small to measure.
+
+    Deliberately quiet: this runs on a loop, and logging every sample the way
+    _detect_face_yunet does would bury the journal.
+    """
+    detector = _get_yunet()
+    if detector is None:
+        return None
+    h, w = frame.shape[:2]
+    try:
+        detector.setInputSize((w, h))
+        _, faces = detector.detect(frame)
+    except Exception as e:
+        logger.debug("YuNet landmark detect failed: %s", e)
+        return None
+    faces = _measurable_faces(faces)
+    if len(faces) == 0:
+        return None
+    cx = float(w) / 2.0
+    measurable = [f for f in faces if float(f[3]) >= config.GAZE_MIN_FACE_PX]
+    if measurable:
+        best = min(measurable, key=lambda f: abs((float(f[0]) + float(f[2]) / 2.0) - cx))
+    else:
+        best = max(faces, key=lambda f: float(f[2]) * float(f[3]))
+    x, y, fw, fh = int(best[0]), int(best[1]), int(best[2]), int(best[3])
+    x = max(0, x); y = max(0, y)
+    fw = max(1, min(fw, w - x)); fh = max(1, min(fh, h - y))
+    # Row layout: [x, y, w, h, lm_x1, lm_y1 ... lm_x5, lm_y5, score].
+    return (x, y, fw, fh), tuple(float(v) for v in best[4:14])
+
+
 class ObjectDetector:
     """Detect an object by name: YuNet for faces, local YOLOv8n for COCO
     classes, remote YOLOWorld for open vocabulary.
@@ -242,6 +325,9 @@ class ObjectDetector:
 
     def __init__(self, on_confidence: Optional[Callable[[float], None]] = None):
         self._on_confidence = on_confidence
+        # Confidence of the most recent accepted box, or None. Read under the
+        # caller's own lock — a single shared detector serves several callers.
+        self.last_confidence: Optional[float] = None
         # perf_counter of the last remote-YOLOWorld fallback attempt (throttle).
         self._last_remote_attempt_t: float = 0.0
         self._crypto: CryptoSession | None = None
@@ -254,7 +340,8 @@ class ObjectDetector:
                 logger.error("Tracker: encryption required but no public key available")
 
     def detect(self, frame: npt.NDArray[np.uint8], target: str,
-               strict: bool = True) -> Optional[Tuple[int, int, int, int]]:
+               strict: bool = True,
+               min_conf: Optional[float] = None) -> Optional[Tuple[int, int, int, int]]:
         """Detect an object by name. Tries local YOLOv8n first (fast, COCO classes),
         falls back to remote YOLOWorld API for open-vocab targets.
 
@@ -265,9 +352,19 @@ class ObjectDetector:
         reinit gates (area median, IoU, center distance) already protect the
         lock; cross-class disambiguation stays on in both modes.
 
+        min_conf raises the floor for THIS call only. The global
+        DETECT_MIN_CONFIDENCE is 0.15, deliberately loose so the tracker keeps
+        its lock on a phone at an odd angle — but a caller asking "is this the
+        person talking to me" wants the opposite trade, where a false positive
+        turns the lamp at a wall.
+
+        The confidence of whatever is returned is left on `last_confidence`, so
+        a caller can log why it accepted a box.
+
         Returns (x, y, w, h) top-left bbox in ORIGINAL camera coords, or None.
         """
         target_key = (target or "").lower().strip()
+        self.last_confidence = None
 
         # Run every detector on the downscaled frame for speed; map any bbox back
         # to original coords before returning so callers/servo math are unaware.
@@ -301,6 +398,8 @@ class ObjectDetector:
                     h_fr, w_fr = frame.shape[:2]
                     frame_area = float(h_fr * w_fr)
                     conf_floor = C.DETECT_MIN_CONFIDENCE
+                    if min_conf is not None:
+                        conf_floor = max(conf_floor, float(min_conf))
                     if strict:
                         conf_floor = max(conf_floor, _CONFUSABLE_CONF_FLOOR.get(coco_idx, 0.0))
                     boxes = []  # (cls, conf, x1, y1, x2, y2)
@@ -339,6 +438,7 @@ class ObjectDetector:
                                 break
                     if best is not None:
                         bbox, conf, area_ratio, _ = best
+                        self.last_confidence = conf
                         logger.info("[tracking_yolo_local] target='%s' bbox=%s conf=%.3f area=%.1f%% latency=%.0fms",
                                     target, bbox, conf, area_ratio * 100, t_ms)
                         return scale_bbox(bbox, _up)
@@ -466,6 +566,7 @@ class ObjectDetector:
             latency_ms = (time.perf_counter() - t_req) * 1000
             if self._on_confidence is not None:
                 self._on_confidence(round(best["confidence"], 3))
+            self.last_confidence = best.get("confidence")
             logger.info("YOLOWorld: '%s' found at bbox=%s conf=%.3f", target, bbox, best["confidence"])
             logger.info("[tracking_yolo_response] target='%s' found=True bbox=%s conf=%.3f latency=%.0fms",
                         target, bbox, best["confidence"], latency_ms)

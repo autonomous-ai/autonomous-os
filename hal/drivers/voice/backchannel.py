@@ -20,6 +20,7 @@ Config (env vars):
     HAL_BACKCHANNEL_STALL_S     partial unchanged for N seconds → play cue (0 = every partial)
     HAL_BACKCHANNEL_INTERVAL_S  min seconds between cues
     HAL_BACKCHANNEL_VOLUME      volume multiplier 0.0–1.0
+    HAL_BACKCHANNEL_ECHO_TAIL_S seconds after playback the mic still ignores itself
 """
 
 import logging
@@ -64,6 +65,9 @@ MIN_INTERVAL_S = float(os.environ.get("HAL_BACKCHANNEL_INTERVAL_S", "5.0"))
 # Kept at 0.5 so backchannel bleed doesn't saturate the mic and corrupt the
 # speaker-ID embedding of whoever is still talking.
 VOLUME = float(os.environ.get("HAL_BACKCHANNEL_VOLUME", "0.5"))
+# Extra seconds after cue playback during which the mic still counts as hearing
+# our own audio. Covers speaker/room reverb tail, which outlasts the samples.
+ECHO_TAIL_S = float(os.environ.get("HAL_BACKCHANNEL_ECHO_TAIL_S", "0.4"))
 
 
 class Backchannel:
@@ -75,6 +79,8 @@ class Backchannel:
         self._last_cue_time: float = 0.0
         self._lock = threading.Lock()
         self._timer: Optional[threading.Timer] = None
+        # Monotonic deadline until which our own cue audio is in the room.
+        self._self_audio_until: float = 0.0
 
         if FILLERS:
             logger.info("Backchannel enabled: fillers=%s, stall=%.1fs, interval=%.1fs",
@@ -83,6 +89,19 @@ class Backchannel:
     @property
     def enabled(self) -> bool:
         return len(FILLERS) > 0
+
+    @property
+    def self_audio_active(self) -> bool:
+        """True while a cue is playing (plus reverb tail).
+
+        Deliberately NOT the TTS `speaking` flag: that flag ends the running STT
+        session, which is exactly what backchannel must not do. This one only
+        tells the VAD loop that what it hears right now is us, so it must not
+        OPEN a new session on it. Device-observed 19/08/2026: without this, every
+        cue spawned a phantom session ~1s later whose transcript was the cue
+        itself ('Ok' → 'Okay.', 'Oh' → 'no'), which then ran as a real turn.
+        """
+        return time.monotonic() < self._self_audio_until
 
     def on_partial(self, text: str) -> None:
         """Called on each STT partial. Schedules a cue if partial stalls."""
@@ -161,9 +180,27 @@ class Backchannel:
             # Reuse the TTS persistent stream — the device is held exclusively
             # so opening a second OutputStream returns PaErrorCode -9985.
             samples_2d = samples.reshape(-1, 1)
-            with tts._stream_lock:
-                stream = tts._ensure_stream(dst_rate)
-                stream.write(samples_2d)
-            logger.info("Backchannel played: '%s'", text)
+            # Arm the self-audio window BEFORE the first sample leaves, and size
+            # it from the actual clip length: stream.write() blocks until the
+            # audio is consumed, so arming afterwards would already be too late
+            # for the VAD loop running in parallel.
+            duration_s = len(samples) / float(dst_rate)
+            with self._lock:
+                self._self_audio_until = time.monotonic() + duration_s + ECHO_TAIL_S
+            try:
+                with tts._stream_lock:
+                    stream = tts._ensure_stream(dst_rate)
+                    stream.write(samples_2d)
+            finally:
+                # Re-anchor the tail to when playback actually ended — waiting on
+                # _stream_lock can push real playback past the estimate above.
+                with self._lock:
+                    self._self_audio_until = max(
+                        self._self_audio_until, time.monotonic() + ECHO_TAIL_S
+                    )
+            logger.info(
+                "Backchannel played: '%s' (%.2fs, mic self-audio window +%.1fs)",
+                text, duration_s, ECHO_TAIL_S,
+            )
         except Exception as e:
             logger.warning("Backchannel play failed: %s", e)

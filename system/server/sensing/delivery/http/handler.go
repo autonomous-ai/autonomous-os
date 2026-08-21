@@ -85,6 +85,13 @@ type SensingHandler struct {
 func ProvideSensingHandler(gw domain.AgentGateway, bus *monitor.Bus, cfg *config.Config, sled *statusled.Service, isSleeping func() bool) *SensingHandler {
 	// Gate local intent rules to what this device's body can do — set once here.
 	intent.Configure(device.Capabilities(cfg.DeviceTypeOrDefault()))
+	// Social talk belongs to whoever answers first. With the realtime agent on,
+	// it takes every voice turn before os-server sees one and replies in
+	// character — so local chitchat would only ever fire on turns it stayed
+	// silent for, barging in with a canned line in another voice. Command
+	// intents (lights, volume, time) stay on regardless: those genuinely beat
+	// the model. Re-evaluated on every config change (see runConfigChangeListener).
+	intent.SetChitchatEnabled(!cfg.RealtimeEnabled())
 	return &SensingHandler{
 		agentGateway: gw,
 		monitorBus:   bus,
@@ -131,6 +138,20 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	}
 
 	startPayload := map[string]any{"type": req.Type, "message": req.Message}
+
+	// look.capture is MONITOR-ONLY. The realtime `look` tool already sent the
+	// frame straight to the model, so forwarding text here would inject a
+	// phantom turn the user never asked for. Log the flow event — the monitor
+	// derives the thumbnail from the frame path in the message — then stop.
+	// Unlike motion.activity (snapshot shown but stripped before the LLM), this
+	// frame IS the model's input, which is what makes it worth surfacing.
+	if req.Type == "look.capture" {
+		lookRunID := fmt.Sprintf("look-%d", time.Now().UnixMilli())
+		lookStart := flow.Start("sensing_input", startPayload, lookRunID)
+		flow.End("sensing_input", lookStart, map[string]any{"type": req.Type}, lookRunID)
+		c.JSON(http.StatusOK, serializers.ResponseSuccess(nil))
+		return
+	}
 
 	// Push sensing input to monitor.
 	monitorDetail := map[string]any{"type": req.Type}

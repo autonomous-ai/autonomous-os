@@ -257,6 +257,49 @@ export async function setupDevice(body: SetupRequest): Promise<boolean> {
   });
 }
 
+/** POST /api/device/wifi-provision — AP-portal setup path. `ssid` is
+ *  required; every other field is optional and, when omitted or empty, tells
+ *  the backend to leave the current on-disk value alone. Backend gates this
+ *  to callers on the AP subnet (192.168.100.0/24), so it only works when the
+ *  browser is joined to the device's own hotspot. Used by the standalone
+ *  /wifi page (not the full /setup wizard). */
+export interface WifiProvisionBody {
+  ssid: string;
+  password?: string;
+  // LLM
+  llm_api_key?: string;
+  llm_base_url?: string;
+  llm_model?: string;
+  // Voice pipeline
+  stt_api_key?: string;
+  stt_base_url?: string;
+  stt_language?: string;
+  tts_api_key?: string;
+  tts_base_url?: string;
+  tts_provider?: string;
+  tts_voice?: string;
+  // Admin auth
+  admin_password?: string;
+  // Messaging channel (optional). channel = telegram | slack | discord.
+  // Only the sub-tokens matching `channel` are honored by the backend.
+  channel?: string;
+  telegram_bot_token?: string;
+  telegram_user_id?: string;
+  slack_bot_token?: string;
+  slack_app_token?: string;
+  slack_user_id?: string;
+  discord_bot_token?: string;
+  discord_guild_id?: string;
+  discord_user_id?: string;
+}
+export async function wifiProvision(body: WifiProvisionBody): Promise<boolean> {
+  return apiRequest<boolean>(`${API_BASE}/api/device/wifi-provision`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 export interface SetupStatus {
   phase: "idle" | "connecting" | "connected" | "failed";
   lan_ip: string;
@@ -413,6 +456,12 @@ export interface TestTTSOptions {
   /** BCP-47 stt_language code; picks a friendly demo phrase in that language. */
   lang?: string;
   provider?: string;
+  /** Optional URL/key override — lets the admin's Test Voice validate a
+   *  pending edit BEFORE clicking Save Changes. Empty = server falls back
+   *  to the on-disk config. Same-origin admin call, so echoing the key
+   *  back adds no exposure vs storing it on the device. */
+  baseUrl?: string;
+  apiKey?: string;
 }
 
 const TTS_DEMO_PHRASES: Record<string, string> = {
@@ -428,9 +477,9 @@ function demoPhraseFor(lang?: string): string {
 }
 
 /** POST /api/voice/preview — server reads the TTS API key + base URL from
- *  cfg and forwards to the device. Browser never sees or ships the credential
- *  (audit web F13). Operator can still pick a non-default voice/provider for
- *  the test by passing `provider` in opts. */
+ *  cfg by default, or from the optional baseUrl/apiKey overrides in opts
+ *  (so the admin's Test Voice can validate a pending edit before Save).
+ *  Same-origin + adminAuth gated. */
 export async function testTTSVoice(voice: string, opts: TestTTSOptions = {}): Promise<void> {
   await apiRequest<boolean>(`${API_BASE}/api/voice/preview`, {
     method: "POST",
@@ -439,6 +488,8 @@ export async function testTTSVoice(voice: string, opts: TestTTSOptions = {}): Pr
       text: opts.text || demoPhraseFor(opts.lang),
       voice,
       provider: opts.provider || undefined,
+      base_url: opts.baseUrl || undefined,
+      api_key: opts.apiKey || undefined,
     }),
   });
 }

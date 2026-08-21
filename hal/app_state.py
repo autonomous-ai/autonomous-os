@@ -98,6 +98,9 @@ _camera_manual_override = False
 # orchestrator's look handler; consumed + cleared once in turn_dispatch (strictly
 # per-turn). Path is a file in _SNAPSHOT_DIR; ts is time.monotonic() of capture.
 realtime_look_frame_path: Optional[str] = None
+# Servable copy of the same frame (under /var/lib/hal/snapshots/sensing_look/)
+# so the turn the user sees can show it as a thumbnail. Consumed by turn_dispatch.
+realtime_look_monitor_path: Optional[str] = None
 realtime_look_frame_ts: float = 0.0
 
 # --- Voice identity (speaker-ID as a presence signal) ---
@@ -244,6 +247,13 @@ _user_led_state: Optional[dict] = None
 _restore_timer: Optional[threading.Timer] = None
 _sleeping: bool = False
 _current_emotion: Optional[str] = None
+# True while the realtime turn is showing its `thinking` cue. A dead-air
+# filler is TTS, so it stops the pulse and _restore_user_led would settle on
+# the user state — leaving the rest of the wait (often the longest part, the
+# reason the filler fired at all) with no visual at all. While this is set,
+# restore repaints the cue instead. Cleared by the same code that clears the
+# cue (hal/drivers/voice/_internal/realtime_turn.py).
+_thinking_cue_active: bool = False
 # Fires release_servos after sleepy stays active continuously. Cancelled
 # the moment the emotion changes away from sleepy (see routes/emotion.py).
 _sleepy_release_timer: Optional[threading.Timer] = None
@@ -251,6 +261,10 @@ _sleepy_release_timer: Optional[threading.Timer] = None
 # animation loop, so the body never stays frozen once the moment has passed.
 # Cancelled on every /emotion (see routes/emotion.py).
 _still_idle_timer: Optional[threading.Timer] = None
+# Fires idle after `thinking` has been held continuously for too long — the
+# last-resort net for a turn that never produced the emotion that would have
+# replaced it. Cancelled/re-armed on every /emotion (see routes/emotion.py).
+_thinking_reset_timer: Optional[threading.Timer] = None
 # Set once sleepy has released torque. Servo routes honor this lock until a
 # wake emotion explicitly resumes the motion service.
 _sleep_servo_released = False
@@ -296,6 +310,41 @@ _mic_muted_led = False
 # is NOT a user preference — this flag lets the single-click "unmute speaker"
 # gesture skip it so a stray click can't relax the mute mid-recording.
 _enrolling = False
+
+# --- Music cancel watermark ---
+#
+# time.monotonic() of the last cancel gesture (single click). The Go-side
+# speech/cancel watermark only mutes TTS — the cancelled turn keeps running and
+# its pending music tool call still reaches /audio/play, so a click could be
+# followed seconds later by music the user just killed (the yt-dlp resolve takes
+# 1-5s, and MusicService.play() clears its own _stop_event, so a point-in-time
+# audio_stop() cannot win that race).
+#
+# /audio/play refuses any request landing within MUSIC_CANCEL_GUARD_S of the
+# mark. Monotone like the Go watermark: a later click only moves it forward.
+# 0.0 = no cancel yet.
+_music_cancel_ms: float = 0.0
+
+# Guard window after a cancel click during which /audio/play is refused.
+# Sized to cover the cancelled turn's in-flight tool call (agent → OS server →
+# HAL is well under a second) while staying below the floor of a genuinely NEW
+# music request: after a click the user still has to speak, be transcribed, and
+# have the LLM emit the tool call — never under ~3s in practice.
+MUSIC_CANCEL_GUARD_S = 3.0
+
+
+def note_music_cancel() -> None:
+    """Stamp the music cancel watermark. Called by the single-click gesture."""
+    global _music_cancel_ms
+    _music_cancel_ms = time.monotonic()
+
+
+def music_cancel_active() -> bool:
+    """True while /audio/play must be refused because of a recent cancel."""
+    if not _music_cancel_ms:
+        return False
+    return (time.monotonic() - _music_cancel_ms) < MUSIC_CANCEL_GUARD_S
+
 
 # Set True by destructive button actions (long_press, factory_reset) right
 # before they kick `shutdown`/`reboot`/OS-server reset. The lifespan shutdown
@@ -911,6 +960,13 @@ def _restore_user_led():
         _start_mic_muted_effect()
         return
 
+    # A realtime turn still waiting on the model owns the strip: repaint the
+    # thinking cue the filler's speaking_wave just overwrote.
+    if _thinking_cue_active:
+        logger.info("LED restore: realtime thinking cue still active -- repainting")
+        _apply_emotion_led_display(EMO_THINKING, 0.7, force_led=True)
+        return
+
     state = _user_led_state
     if state is None:
         # A dark resting look means "no user state" settles to black, exactly
@@ -1054,6 +1110,41 @@ def _on_tts_speak_start():
     _effect_thread.start()
 
 
+def _clear_thinking_after_reply():
+    """End the `thinking` face when the reply that answered it finishes speaking.
+
+    `thinking` is set at the start of a wait and has no natural end: only the
+    emotion the reply expresses replaces it. A turn whose reply carries no
+    emotion marker — common for delegated turns answered by the main agent —
+    therefore leaves the face (and, through `_thinking_cue_active`, every later
+    LED restore) on the pulse long after the device finished talking. Speaking
+    the reply IS the end of the wait, so use it as the signal.
+
+    Only genuine agent replies count: `realtime_feedback` is set exclusively by
+    the runtime's own output, so dead-air fillers, mumble and system notices —
+    the TTS that plays *during* the wait, which the cue exists to survive — are
+    skipped. The caller restores the user LED state right after, and dropping
+    the flag first is what lets that restore settle instead of repainting the
+    pulse.
+    """
+    global _thinking_cue_active
+
+    if _current_emotion != EMO_THINKING:
+        return
+    if not (tts_service and getattr(tts_service, "realtime_feedback", False)):
+        return
+
+    logger.info("TTS end: agent reply finished -- clearing thinking face")
+    _thinking_cue_active = False
+    try:
+        from hal.models import EmotionRequest
+        from hal.routes.emotion import express_emotion
+
+        express_emotion(EmotionRequest(emotion=EMO_IDLE))
+    except Exception as e:
+        logger.warning("Thinking clear after reply failed: %s", e)
+
+
 def _on_tts_speak_end():
     """Called by TTSService when TTS playback finishes or is interrupted."""
     global _tts_speaking
@@ -1062,6 +1153,8 @@ def _on_tts_speak_end():
 
     _tts_speaking = False
     logger.info("TTS speaking LED end: stopping effect and restoring")
+
+    _clear_thinking_after_reply()
 
     _stop_current_effect()
 
@@ -1298,8 +1391,8 @@ def _read_agent_name() -> str:
     # No IDENTITY.md name → use the device type (lamp/dog/intern) so an unnamed
     # device is addressed by its class instead of a hardcoded "lamp".
     try:
-        from hal.config import _os_cfg_get
-        device_type = (_os_cfg_get("device_type") or "").strip().lower()
+        from hal.config import resolve_device_type
+        device_type = resolve_device_type()
         if device_type:
             return device_type
     except Exception:
@@ -1314,6 +1407,34 @@ def _build_wake_words(name: str) -> list[str]:
         f"{prefix} {n}"
         for prefix in ("hello", "hey", "hi", "alo", "okay", "ok", "wake up")
     ]
+
+
+def _stt_boost_terms() -> list[str]:
+    """Names STT must not mangle: everything that can open the wake-word gate.
+
+    STT decides whether a turn is heard at all, and it mis-hears proper nouns it
+    has no reason to expect — "hi lamp" came back as "hi lance", "hello rachel"
+    as "hello risa", and each miss silently drops the whole turn. Boosting only
+    the agent name is not enough: the device type and the permanent "autonomous"
+    alias arm the same gate (see _build_wake_words and the DEFAULT_WAKE_WORDS
+    the voice service merges in).
+
+    Returned in Deepgram's `keyword:intensifier` form. The Flux and nova-3 paths
+    strip the weight — their `keyterm` parameter takes plain terms. Duplicates
+    are dropped so an unnamed device, whose agent name falls back to the device
+    type, does not boost the same word twice.
+    """
+    from hal.config import resolve_device_type
+
+    seen: set[str] = set()
+    terms: list[str] = []
+    for name in (_read_agent_name(), resolve_device_type(), "autonomous"):
+        name = (name or "").strip().lower()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        terms.append(f"{name}:3")
+    return terms
 
 
 def _find_audio_device(output: bool = True) -> Optional[int]:

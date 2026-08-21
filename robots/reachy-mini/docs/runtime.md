@@ -121,6 +121,17 @@ Why that order, specifically:
 - **`WorkingDirectory=/root` for os-server** — `config.Load` reads the *relative*
   path `config/config.json`, so any other working directory silently points
   os-server and HAL at different config files.
+- **the seeded `config.json` must name `openclaw_config_dir`** — a key absent
+  from the file does *not* fall back to the `Default()` value in
+  `system/server/config/config.go`; both `Load` and `ProvideConfig` unmarshal
+  onto a zero-valued struct, so a missing key means `""`, not `/root/.openclaw`.
+  os-server finds the gateway token at
+  `filepath.Join(OpenclawConfigDir, "openclaw.json")`, which for an empty dir
+  resolves to the *relative* `openclaw.json` → `/root/openclaw.json`. That file
+  never exists, so the token is never read, the agent websocket reconnects every
+  5s forever and `WaitForAgentReady` never returns — with no error in the log,
+  since the join produced a perfectly valid path, just the wrong one. This only
+  ever bit a fully clean install: `config.json` normally survives an uninstall.
 - **web is not optional plumbing** — os-server binds `127.0.0.1:5000` and serves
   no static files, so nginx is what makes both the bundle and the API reachable.
   `/hw/` stays **loopback-only** (`allow 127.0.0.1; deny all`), matching the
@@ -246,9 +257,12 @@ own shutdown hook and leave the daemon deaf and blind.
 
 Two details worth knowing: `release()` retries 5× at 2 s intervals, because the
 daemon is a systemd service starting alongside HAL and may not be listening on a
-cold boot; and it restores the persisted speaker level afterwards, because the
-daemon's release handler resets the card's mixer to its own level (measured: 90 %
-before, 62 % after).
+cold boot; and it restores the speaker level afterwards, because the daemon's
+release handler resets the card's mixer to its own level (measured: 90 % before,
+62 % after). It restores the persisted level when there is one, and this body's
+ROBOT.md `startup_volume` when there is not — a unit that never touched the
+slider would otherwise be left at the daemon's own −23 dB, which on a new
+owner's first boot reads as broken hardware.
 
 This pairs with — and does not replace — the SDK's `media_backend="no_media"`,
 which only stops the *SDK client* from grabbing media.

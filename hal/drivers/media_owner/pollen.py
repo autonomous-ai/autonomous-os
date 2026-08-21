@@ -25,6 +25,8 @@ import time
 
 import requests
 
+from hal.board.device import DEFAULT_STARTUP_VOLUME
+
 logger = logging.getLogger(__name__)
 
 
@@ -38,12 +40,25 @@ class PollenDaemonMediaOwner:
     _RELEASE_ATTEMPTS = 5
     _RETRY_DELAY_S = 2.0
 
-    def __init__(self, host: str | None = None, port: int | None = None):
+    def __init__(
+        self,
+        host: str | None = None,
+        port: int | None = None,
+        startup_volume: int | None = None,
+    ):
         # Same defaults and env names as hal/drivers/motors/reachy_service.py —
         # HAL runs on the robot's own Pi, so the daemon is local.
         self._host = host or os.getenv("REACHY_DAEMON_HOST", "localhost")
         self._port = int(port or os.getenv("REACHY_DAEMON_PORT", "8000"))
         self._base = f"http://{self._host}:{self._port}/api/media"
+        # This body's ROBOT.md `startup_volume`, passed in by the caller that
+        # already holds the DeviceProfile — a driver reaching back into the
+        # server to load its own profile would be an import cycle. None means
+        # the caller had no profile to hand over, so fall back to the same
+        # default the parsers use rather than inventing a second answer.
+        self._startup_volume = (
+            startup_volume if startup_volume is not None else DEFAULT_STARTUP_VOLUME
+        )
 
     def _post(self, action: str) -> bool:
         resp = requests.post(f"{self._base}/{action}", timeout=self._TIMEOUT_S)
@@ -62,17 +77,25 @@ class PollenDaemonMediaOwner:
         so a plain HAL restart left the speaker at Pollen's level while the
         slider, the persisted file, and the agent all still said the user's.
 
-        Best-effort and quiet when there is no persisted level yet (first boot):
-        the daemon's own default is a reasonable thing to be left with.
+        With no persisted level yet — a new owner's first boot, or any unit that
+        never touched the slider — falls back to the body's declared
+        `startup_volume`. Leaving the daemon's own level in place is NOT a
+        neutral default: it is -23dB, while a ROBOT.md that declares nothing
+        means 100 (device.DEFAULT_STARTUP_VOLUME). Silence on first boot reads
+        as broken hardware, so the fallback matters most exactly where the file
+        is missing.
         """
+        pct = None
         try:
             from hal.config import VOLUME_STATE_PATH
             with open(VOLUME_STATE_PATH) as f:
                 pct = int(f.read().strip())
         except Exception:
-            return
-        if not 0 <= pct <= 100:
-            return
+            pct = None
+        source = "persisted"
+        if pct is None or not 0 <= pct <= 100:
+            pct = self._startup_volume
+            source = "startup_volume"
         try:
             # Through the route rather than a fresh amixer call: it owns the
             # dB envelope and the DAC/BT-sink routing, and duplicating that
@@ -81,7 +104,9 @@ class PollenDaemonMediaOwner:
             from hal.routes.audio import set_volume
 
             set_volume(VolumeRequest(volume=pct))
-            logger.info("[media-owner] pollen release reset the mixer — restored %d%%", pct)
+            logger.info(
+                "[media-owner] pollen release reset the mixer — restored %d%% (%s)", pct, source
+            )
         except Exception as e:
             logger.warning(
                 "[media-owner] could not restore volume %d%% after release: %s", pct, e

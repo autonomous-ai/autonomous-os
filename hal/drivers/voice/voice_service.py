@@ -190,6 +190,11 @@ class VoiceService:
         # works even when HAL_SILERO_ENABLED is false (the common case) and never
         # shares LSTM state with the entry gate. See _rt_noise_is_speech.
         self._rt_noise_vad: SileroVADFilter | None = None
+        # Third instance, for the silence clock (see SILENCE_VAD_ENABLED). Same
+        # reason as the guard above: its own LSTM state, so confirming "is this
+        # noise or speech" mid-capture cannot disturb the entry gate's state,
+        # and it works whether or not the entry gate is enabled.
+        self._silence_vad: SileroVADFilter | None = None
 
         # Speaker decoration (wake-word + speaker recognizer + SER). Speaker-ID and
         # SER (speech emotion) are voice people-perception — gated on the `audio`
@@ -253,6 +258,26 @@ class VoiceService:
 
     def set_music_service(self, music_service) -> None:
         self._music = music_service
+
+    def grant_wakeword_focus(self, source: str = "button") -> bool:
+        """Open the wake-word follow-up window without a spoken wake phrase.
+
+        A single click is a "give me the floor" gesture: the device stops
+        talking and announces it is listening, so requiring the user to say
+        the wake phrase right after would contradict the cue. Granting the
+        same focus window a wake word grants makes the click a wake event.
+        No-op when wake word is off (every utterance already dispatches) or
+        when follow-up focus is disabled (timeout 0)."""
+        if not hal_config.WAKEWORD_ENABLED:
+            return False
+        if self._wakeword_focus.refresh():
+            logger.info(
+                "%s -- wake-word focus granted for %.0fs",
+                source,
+                hal_config.WAKEWORD_FOLLOWUP_TIMEOUT_S,
+            )
+            return True
+        return False
 
     def set_wake_words(self, words: list) -> None:
         """Update wake word list at runtime (called when agent is renamed)."""
@@ -478,6 +503,35 @@ class VoiceService:
             return is_speech
         except Exception as e:
             logger.warning("Realtime noise-guard Silero inference failed: %s", e)
+            return True
+
+    def _silence_window_is_speech(self, window, device_rate: int) -> bool:
+        """Is this above-RMS window real speech, or just a loud room?
+
+        Answers the one question the silence clock needs: should this window
+        refresh the timer. Keeps its LSTM state ACROSS calls within a session
+        (unlike the per-turn guard above) — the window is a continuation of the
+        same utterance, so the state carries useful context; the caller resets
+        it at session start.
+
+        Fails open (True) on any error: a model glitch must never cut somebody
+        off mid-sentence. That direction of failure only costs the old
+        RMS-only behavior, which is what we already had.
+        """
+        if self._silence_vad is None:
+            try:
+                self._silence_vad = SileroVADFilter(
+                    voice_cfg.SILERO_MODEL_PATH, self._np
+                )
+            except Exception as e:
+                logger.warning("Silence-clock Silero load failed: %s", e)
+                return True
+        if not self._silence_vad.available:
+            return True
+        try:
+            return self._silence_vad.is_speech(window, device_rate)
+        except Exception as e:
+            logger.warning("Silence-clock Silero inference failed: %s", e)
             return True
 
     # ------------------------------------------------------------------
@@ -729,6 +783,7 @@ class VoiceService:
         speech_pre_buffer = []  # frames buffered during holdoff period
         lookback = deque(maxlen=voice_cfg.PRE_ROLL_FRAMES)
         draining = False  # warm-mic: True while draining frames during TTS/music
+        bc_muting = False  # True while dropping frames that carry our own cue
 
         # Keepalive: pre-connect STT WS so it's ready before speech is detected.
         keepalive_session = None
@@ -799,6 +854,30 @@ class VoiceService:
                     return
                 continue  # warm: loop back → drain branch handles it
 
+            # Our own backchannel cue is in the room: it bypasses the TTS
+            # `speaking` flag on purpose (that flag would kill the running STT
+            # session), so nothing above filters it. Drop these frames entirely —
+            # not just from the VAD test but from `lookback` too, or the cue
+            # would come back as the next session's pre-roll. Any speech run in
+            # progress is abandoned: a cue only fires after the partial stalled,
+            # so there is no user utterance to clip here.
+            if self._backchannel.self_audio_active:
+                if not bc_muting:
+                    bc_muting = True
+                    logger.info("Backchannel cue in the room — VAD muted until it decays")
+                if speech_start is not None:
+                    speech_start = None
+                    speech_pre_buffer = []
+                continue
+            if bc_muting:
+                # Same cleanup the warm-mic drain does on resume: the dropped
+                # frames are a discontinuity for Silero's LSTM, and the lookback
+                # must not pre-roll audio from before the cue.
+                bc_muting = False
+                lookback.clear()
+                self._silero_reset_state()
+                logger.info("Backchannel cue decayed — VAD resumed")
+
             # Append to lookback for pre-roll.
             lookback.append(data)
 
@@ -846,6 +925,17 @@ class VoiceService:
                         len(history) * voice_cfg.FRAME_DURATION_MS,
                         buffered,
                     )
+                    # Speech is confirmed (Silero has agreed) — the moment to
+                    # ask whether the user had turned toward the lamp just
+                    # before saying it. Reads the gaze buffer BACKWARDS; it does
+                    # not capture anything now, because the turn happened before
+                    # this line ran. No-op unless the feature is armed.
+                    try:
+                        from hal.drivers.tracking import gaze
+
+                        gaze.on_speech_start()
+                    except Exception as e:
+                        logger.debug("gaze wake check skipped: %s", e)
                     speech_pre_buffer = [
                         resample_to_stt(f, device_rate, voice_cfg.STT_RATE, self._np)
                         for f in all_frames
@@ -990,6 +1080,19 @@ class VoiceService:
             wake_partial_hypothesis[0] = ""
             return wake_final_hypothesis[0]
 
+        def addressed_to_us() -> bool:
+            """Whether the sentence being spoken has been shown to be for us.
+
+            True when no wake word is configured (every utterance is), or when
+            one was heard, or inside the follow-up window a wake word, a click
+            or a gaze opened. Everything that CLAIMS to be the addressee — the
+            listening cue, the backchannel — has to ask this first, or the lamp
+            answers conversations it was never part of.
+            """
+            if not hal_config.WAKEWORD_ENABLED:
+                return True
+            return wake_word_detected.is_set() or wakeword_followup_active
+
         def fire_listening_cue() -> None:
             """Show the listening cue, once per session, only when this turn is
             actually addressed to the device.
@@ -1005,9 +1108,7 @@ class VoiceService:
             """
             if listening_emotion_sent[0]:
                 return
-            if hal_config.WAKEWORD_ENABLED and not (
-                wake_word_detected.is_set() or wakeword_followup_active
-            ):
+            if not addressed_to_us():
                 return
             listening_emotion_sent[0] = True
             self._set_emotion_local(presets.EMO_LISTENING)
@@ -1048,7 +1149,17 @@ class VoiceService:
                     logger.debug("Wake-word partial candidate: '%s'", candidate)
                     open_wake_word_gate(candidate, "partial")
                 last_partial[0] = text
-                self._backchannel.on_partial(text)
+                # Same gate as the listening cue below. A backchannel is the
+                # device saying "go on, I'm listening", which is a claim to be
+                # the addressee — so it must not fire for a sentence the device
+                # has not been shown is meant for it. It predates the wake gate
+                # (Apr 2026, "call on every STT partial") and kept firing on
+                # every utterance after that gate arrived, so the lamp murmured
+                # "Right" at conversations between two other people, and made
+                # testing the openers actively misleading: the cue sounds like
+                # acknowledgement while the turn is dropped unheard.
+                if addressed_to_us():
+                    self._backchannel.on_partial(text)
                 fire_listening_cue()
                 return
             # Accumulate final segments — don't send yet, wait for session close.
@@ -1291,6 +1402,16 @@ class VoiceService:
             # the user stops, so without this the voiceprint ends up 30-50%
             # silence and the embedding degrades. (Pre-initialized to -1 above.)
             last_speech_idx = len(audio_buffer) - 1
+            # Above-RMS frames waiting for Silero to confirm they are speech
+            # before they refresh the silence clock. See SILENCE_VAD_ENABLED.
+            silence_probe: list = []
+            silence_vad_on = (
+                voice_cfg.SILENCE_VAD_ENABLED
+                and voice_cfg.SILENCE_VAD_WINDOW_FRAMES > 0
+            )
+            if silence_vad_on and self._silence_vad is not None:
+                self._silence_vad.reset_state()
+            noise_windows = 0
             # No LED here: the cue waits for the first STT partial (see the
             # listening-cue note above). Opening a session is cheap to be wrong
             # about; lighting the strip is not.
@@ -1363,10 +1484,40 @@ class VoiceService:
                 self._mic_level = energy
                 self._mic_level_ts = time.time()
                 if energy >= voice_cfg.RMS_THRESHOLD:
-                    last_speech_time = time.time()
-                    last_speech_idx = len(audio_buffer) - 1
+                    if not silence_vad_on:
+                        last_speech_time = time.time()
+                        last_speech_idx = len(audio_buffer) - 1
+                    else:
+                        # RMS said "loud". Ask Silero whether it was a VOICE
+                        # before letting it hold the session open. Batched: one
+                        # inference per window, not per frame.
+                        silence_probe.append(data)
+                        if len(silence_probe) >= voice_cfg.SILENCE_VAD_WINDOW_FRAMES:
+                            window = self._np.concatenate(silence_probe)
+                            probe_frames = len(silence_probe)
+                            silence_probe = []
+                            if self._silence_window_is_speech(window, device_rate):
+                                last_speech_time = time.time()
+                                last_speech_idx = len(audio_buffer) - 1
+                            else:
+                                # Not a voice — leave the clock running so a
+                                # noisy room can still time out. The frames stay
+                                # in audio_buffer; only the clock is withheld.
+                                noise_windows += 1
+                                if noise_windows in (1, 10, 50):
+                                    logger.info(
+                                        "Silence clock: %d loud window(s) rejected as "
+                                        "non-speech (%d frames each)",
+                                        noise_windows, probe_frames,
+                                    )
                 elif (time.time() - last_speech_time) > voice_cfg.SILENCE_TIMEOUT_S:
-                    logger.info("Silence detected, disconnecting STT")
+                    if noise_windows:
+                        logger.info(
+                            "Silence detected, disconnecting STT "
+                            "(%d loud window(s) were non-speech)", noise_windows
+                        )
+                    else:
+                        logger.info("Silence detected, disconnecting STT")
                     break
         except Exception as e:
             if _is_normal_ws_close(e):
@@ -1389,9 +1540,24 @@ class VoiceService:
                 and wake_word_detected.is_set()
                 and not wake_word_confirmed.is_set()
             ):
-                logger.info(
-                    "Wake-word partial rejected — no matching final STT result; dropping turn"
-                )
+                # Last look, on the ASSEMBLED transcript. The per-segment checks
+                # above run on wake_final_candidate(), which passes through
+                # merge_stt_hypothesis() — and that keeps only \w+ tokens, so
+                # sentence punctuation is gone by then. A wake phrase opening a
+                # LATER sentence ("Is that match playing tonight? Hello lamp,
+                # let's check it out.") therefore looked mid-sentence and the
+                # whole turn was dropped, wake word and all (device-observed
+                # 18/08/2026). `combined` is the real transcript with its
+                # punctuation intact, which is what the sentence rule needs.
+                if self._decorator.starts_with_wake_word(combined):
+                    wake_word_confirmed.set()
+                    logger.info(
+                        "Wake-word confirmed on assembled transcript: %r", combined
+                    )
+                else:
+                    logger.info(
+                        "Wake-word partial rejected — no matching final STT result; dropping turn"
+                    )
 
             # Noise guard for empty-STT turns: a session can open on a noise blip
             # that fools the entry VAD, then STT finds no words. Re-check the FULL
@@ -1460,7 +1626,25 @@ class VoiceService:
 
             # Capture can end just after the STT callback. One final check
             # avoids dropping a matched partial that raced the loop exit.
-            start_realtime_turn()
+            #
+            # Guarded by the same noise check as the deferred flush below: this
+            # call site runs AFTER the noise guard, so an empty non-speech turn
+            # is already known to be uncommittable here. Opening the turn anyway
+            # sent [TURN CONTEXT] plus the whole audio buffer into the model's
+            # open activity — billed, then thrown away one line later by the
+            # skip-commit path, which also had to swap in a fresh session.
+            # Sessions opened earlier in the capture (always-listening path) have
+            # already streamed audio, so they still run and still get discarded.
+            if is_noise_turn(combined, buf_duration, rt_audio_is_speech):
+                if not realtime_turn_started:
+                    logger.info(
+                        "[realtime] Noise turn — not opening realtime turn after capture "
+                        "(empty STT, silero_speech=%s, dur=%.2fs); nothing sent to model",
+                        rt_audio_is_speech,
+                        buf_duration,
+                    )
+            else:
+                start_realtime_turn()
 
             # `discard_open_activity()` starts its replacement session in the
             # background. A user can begin the next utterance before that
@@ -1547,6 +1731,17 @@ class VoiceService:
                 rt = RealtimeTurnResult()
 
             # --- OS server send + SER (reuses the prepass speaker-ID) ----------
+            # Re-check the focus instead of trusting only the session-start
+            # latch: a button click can open the window while this session is
+            # already streaming, and that click means the floor is the user's
+            # for the sentence they are saying right now. The latch still wins
+            # on its own (a session that started inside the window stays
+            # authorized even if the deadline lapses mid-sentence), so this
+            # only ever adds authorization.
+            wakeword_followup_active = (
+                wakeword_followup_active
+                or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active())
+            )
             wakeword_authorized = wake_word_confirmed.is_set() or wakeword_followup_active
             if should_dispatch_to_main(
                 hal_config.WAKEWORD_ENABLED,

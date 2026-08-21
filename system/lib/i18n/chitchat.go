@@ -16,7 +16,10 @@ import (
 var chitchatInputs = map[Phrase]map[string][]string{
 	PhraseChitchatGreeting: {
 		LangVI:   {"chào", "chào {name}", "{name} ơi"},
-		LangEN:   {"hi", "hi {name}", "hello {name}"},
+		// Bare "hello"/"hey" belong here too: the matcher compares whole words,
+		// so only "{name}"-less greetings reach a device the user addresses
+		// without naming it ("hello there" matched nothing before).
+		LangEN:   {"hi", "hello", "hey", "hi {name}", "hello {name}", "hey {name}"},
 		LangZhCN: {"你好", "你好啊", "嗨", "嘿"},
 		LangZhTW: {"你好", "嗨"},
 	},
