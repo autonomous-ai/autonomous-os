@@ -98,6 +98,10 @@ make start-runpod-slave        # nginx :8899 → dlserver :7999   (no LB on this
 make start-runpod-slave-ssl    # same, HTTPS
 ```
 
+Slave nodes run under the same `run-with-restart.sh` watchdog as the master, so
+they auto-restart on exit and get the same log rotation and size cap. `make
+stop-runpod-dlserver` stops a slave node too.
+
 On the **master**, point the LB at the local dlserver plus every slave's public
 endpoint, then start the master stack:
 
@@ -133,7 +137,7 @@ Override with `DLSERVER_PORT`, `LBSERVER_PORT`, `JUPYTER_PORT` make variables.
 | `make start-lbserver` | Foreground lbserver on `:7999` |
 | `make start-runpod-master` | Background: nginx + dlserver + lbserver (HTTP) |
 | `make start-runpod-master-ssl` | Same with self-signed TLS |
-| `make start-runpod-slave` | Background: nginx + dlserver only (no LB) |
+| `make start-runpod-slave` | Background: nginx + dlserver only (no LB), with auto-restart watchdog |
 | `make start-runpod-slave-ssl` | Same with TLS |
 | `make start-runpod-dlserver` | Background dlserver with auto-restart watchdog |
 | `make start-runpod-lbserver` | Background lbserver with auto-restart watchdog |
@@ -179,13 +183,132 @@ run-with-restart.sh [OPTIONS] -- COMMAND [ARGS...]
   --pid-file PATH           inner process PID (for stop targets)
   --wrapper-pid-file PATH   watchdog's own PID
   --cooldown SECONDS        wait between restarts (default: 5)
-  --log-dir PATH            structured logging via multilog:
-                              log-dir/stdout/   server stdout
-                              log-dir/stderr/   server stderr
-                              log-dir/watchdog/ restart events
+  --probe-url URL           liveness probe; after PROBE_FAILURES consecutive
+                            failures the child is SIGKILLed and restarted
+  --log-dir PATH            plain-file logging (never a pipe -- a blocked pipe
+                            can freeze the server):
+                              log-dir/stdout.log    server stdout
+                              log-dir/stderr.log    server stderr
+                              log-dir/watchdog.log  restart events
+                            Rotated to .1/.2/.3 at startup and whenever a file
+                            exceeds MAX_LOG_BYTES (default 8 MiB, checked every
+                            GUARD_INTERVAL seconds, default 60).
 ```
 
 Sending `SIGTERM` to the wrapper gracefully stops the inner process and exits.
+
+### Liveness watchdog
+
+`wait` alone only fires when the child **exits**. A frozen child never exits, so
+the wrapper waited 3.5h on 2026-08-10 and ~50min on 2026-08-17 while the port
+stayed bound and every port-based check reported green.
+
+The wrapper now polls `--probe-url` alongside `wait`:
+
+| Env var | Default | Meaning |
+|---------|---------|---------|
+| `PROBE_INTERVAL` | 10s | between probes |
+| `PROBE_TIMEOUT` | 5s | per-probe curl timeout |
+| `PROBE_FAILURES` | 6 | consecutive failures before acting (~60s) |
+| `PROBE_GRACE` | 180s | no probing for this long after start |
+
+`PROBE_GRACE` is not optional padding: dlserver takes ~2-3 minutes to load models
+(08:51 -> 08:53 on the real box). Probing during that window would kill it before
+it ever served a request, and it would never finish booting.
+
+On `PROBE_FAILURES` consecutive failures the wrapper sends **SIGKILL**, not
+SIGTERM. A hung uvicorn absorbs SIGTERM: its handler only sets `should_exit`, and
+the only thing that can act on that flag is the event loop -- the thing that is
+stuck.
+
+**Probe `/livez`, never `/health`.** `/livez` takes no auth and checks nothing but
+the event loop. `/hal/api/dl/health` is a *readiness* check -- it reports whether
+the models loaded, needs an API key, and would restart-loop the server during a
+slow start or after a key rotation. Readiness failing means "route traffic
+elsewhere"; liveness failing means "restart this process".
+
+### Stopping
+
+`make stop-runpod-*` runs `scripts/stop-tree.sh`, which:
+
+1. resolves the real holder from the **listening socket**, not just `/tmp/*.pid`
+   (a failed start overwrites those with its own dead PIDs)
+2. escalates **SIGTERM -> SIGTERM -> SIGKILL**, polling up to 10s per round
+3. kills whole **process groups** -- start targets use `setsid` so each wrapper
+   owns its group, covering the child, size guard and liveness probe
+4. **exits non-zero if anything survives**, so `start` refuses to run on a dirty
+   slate rather than dying later on `EADDRINUSE`
+
+It distinguishes two failures, both non-zero:
+
+| Message | Meaning |
+|---------|---------|
+| `FAILED to stop cleanly -- our processes survived` | escalation did not work; investigate before retrying |
+| `stopped, but port N is still held by another process` | we stopped, but something else owns the port |
+
+A PID found *only* because it holds the port is checked against the service name
+before being killed. On a slave node dlserver binds `LBSERVER_PORT`, so
+`stop-runpod-lbserver` would otherwise resolve `:7999` to dlserver and kill it.
+
+A process sharing the caller's own group (an instance from a build predating
+`setsid`) is killed individually -- killing that group would take down `make`
+itself mid-stop.
+
+### Single instance per log directory
+
+Each server takes an exclusive `flock` on `<log-dir>/.instance.lock` before it
+rotates anything, and exits **3** if another instance holds it. The startup
+rotation renames and unlinks every matching log file unconditionally, so without
+this a second start yanked the log files out from under a running instance --
+which is what made the 2026-08-10 outage unrecoverable.
+
+`flock` rather than a PID file: it is race-free, and the kernel releases it
+however the holder dies, including SIGKILL.
+
+### Timeout ladder
+
+Deadlines shrink as you go inward, so the innermost layer gives up first and every
+layer above it reports an attributable failure rather than inventing its own:
+
+| Layer | Setting | Value |
+|-------|---------|-------|
+| HAL (device) | client read timeout | 10-15s |
+| nginx | `proxy_read_timeout` (`nginx.conf`) | 45s |
+| nginx | `proxy_connect_timeout` | 5s |
+| lbserver | `lb.http_timeout` (`config.py`) — read/write/pool | 30s |
+| lbserver | `lb.connect_timeout` | 5s |
+| lbserver | `lb.ws_open_timeout` | 30s |
+
+### Backend connection pool
+
+lbserver keeps **one** `httpx.AsyncClient` for the whole process, created in
+`lifespan` and closed on shutdown.
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `lb.max_connections` | 100 | concurrent connections to all backends |
+| `lb.max_keepalive` | 20 | idle connections kept warm |
+
+It previously built a client **per request**, which re-parsed the CA bundle every
+time — about 11 ms of CPU for a plaintext localhost call, capping the LB at
+roughly 90 req/s on its single event loop, and opening a fresh TCP connection
+that was never reused. Measured: 68 req/s per-request vs 554 req/s pooled, and
+1 connection instead of 50 for 50 requests.
+
+`max_connections` also bounds the damage from a hung backend: once that many
+requests are stuck, further ones raise `httpx.PoolTimeout`. That is a
+`TimeoutException`, so it surfaces as **504** with the backend named in the log —
+the same path as any other backend timeout. Raise it if you see spurious 504s
+under healthy load; lower it to fail faster when a backend is sick.
+
+**Never set two adjacent layers to the same value.** nginx and lbserver were both
+120s, which made the winner nondeterministic: a hung backend surfaced as `504`
+sometimes and `500` other times. lbserver must expire first so it can log which
+backend timed out and return `504`.
+
+HAL's 10-15s sits *inside* the whole chain, so the device still gives up before
+nginx does. Raising it above 45s would make failures attributable end to end, but
+costs realtime responsiveness -- that is a device-side decision, deployed by OTA.
 
 ### PID files and logs
 

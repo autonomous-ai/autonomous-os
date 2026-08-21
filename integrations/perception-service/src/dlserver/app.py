@@ -15,6 +15,7 @@ import logging.handlers
 import os
 import secrets
 import signal
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,14 @@ from dlserver.utils.state import (
     set_object_models,
     set_pose_model,
 )
+from core.livez import router as livez_router
+from core.logging_ext import ResilientRotatingFileHandler
+from core.request_context import (
+    InstanceAlreadyRunning,
+    acquire_instance_lock,
+    install_request_id_logging,
+    request_id_middleware,
+)
 from factory import (
     build_action_perception,
     build_audio_embedder,
@@ -56,7 +65,13 @@ from factory import (
     build_pose_perception,
 )
 
-LOG_FORMAT = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+LOG_FORMAT = "%(asctime)s [%(name)s] [%(request_id)s] %(levelname)s: %(message)s"
+
+# Must run before any record is emitted: LOG_FORMAT references %(request_id)s.
+install_request_id_logging()
+
+# Holds the single-instance flock for the process lifetime; closing it releases.
+_instance_lock: object | None = None
 logger = logging.getLogger(__name__)
 
 # --- Auth ---
@@ -177,6 +192,9 @@ async def lifespan(app: FastAPI):
 # --- App + Routers ---
 
 app = FastAPI(title="DL Backend", lifespan=lifespan)
+app.middleware("http")(request_id_middleware)
+# Liveness: no prefix, no auth. Restricted to localhost at the nginx layer.
+app.include_router(livez_router)
 
 # Existing perceptions — /hal/api/dl/ prefix
 app.include_router(action_ws_router, prefix="/hal/api/dl")
@@ -215,6 +233,10 @@ def _setup_logging(log_dir: str | None) -> dict[str, Any] | None:
 
     try:
         Path(log_dir).mkdir(parents=True, exist_ok=True)
+        # Hold this for the process lifetime -- see acquire_instance_lock. It must
+        # be taken BEFORE the rotation below, which renames/unlinks unconditionally.
+        global _instance_lock
+        _instance_lock = acquire_instance_lock(log_dir)
         log_path = Path(log_dir) / "dlserver.log"
         uvicorn_log_path = Path(log_dir) / "uvicorn.log"
         # Rotate old logs
@@ -223,40 +245,41 @@ def _setup_logging(log_dir: str | None) -> dict[str, Any] | None:
                 bak.unlink()
             for old in Path(log_dir).glob(f"{prefix}*"):
                 old.rename(Path(str(old) + ".bak"))
-        handler = logging.handlers.RotatingFileHandler(str(log_path), maxBytes=1_048_576, backupCount=3)
+        handler = ResilientRotatingFileHandler(str(log_path), maxBytes=1_048_576, backupCount=3)
         handler.setFormatter(logging.Formatter(LOG_FORMAT))
         logging.basicConfig(level=logging.INFO, handlers=[handler])
 
-        # Route uvicorn/fastapi logs to a separate file
+        # Route uvicorn/fastapi logs to a separate file.
+        # NOTE: "uvicorn" and "uvicorn.access" MUST share a single handler instance.
+        # Two RotatingFileHandlers on the same path keep independent byte counters and
+        # roll over independently, so one eventually unlinks the inode the other still
+        # holds open. On MooseFS (/workspace) writing to a deleted-but-open file returns
+        # EIO, which floods stderr with logging tracebacks and can wedge the process.
         return {
             "version": 1,
             "disable_existing_loggers": False,
             "formatters": {
                 "default": {"format": LOG_FORMAT},
-                "access": {"format": LOG_FORMAT},
             },
             "handlers": {
-                "default": {
+                "file": {
                     "formatter": "default",
-                    "class": "logging.handlers.RotatingFileHandler",
-                    "filename": str(uvicorn_log_path),
-                    "maxBytes": 1_048_576,
-                    "backupCount": 3,
-                },
-                "access": {
-                    "formatter": "access",
-                    "class": "logging.handlers.RotatingFileHandler",
+                    "class": "core.logging_ext.ResilientRotatingFileHandler",
                     "filename": str(uvicorn_log_path),
                     "maxBytes": 1_048_576,
                     "backupCount": 3,
                 },
             },
             "loggers": {
-                "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
+                "uvicorn": {"handlers": ["file"], "level": "INFO", "propagate": False},
                 "uvicorn.error": {"level": "INFO"},
-                "uvicorn.access": {"handlers": ["access"], "level": "INFO", "propagate": False},
+                "uvicorn.access": {"handlers": ["file"], "level": "INFO", "propagate": False},
             },
         }
+    except InstanceAlreadyRunning:
+        # Never fall back to console here: continuing would run a second instance
+        # that clobbers the live one's log files. Propagate and let main() exit.
+        raise
     except Exception as e:
         logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
         logging.getLogger(__name__).warning("File logging setup failed, using console: %s", e)
@@ -265,7 +288,11 @@ def _setup_logging(log_dir: str | None) -> dict[str, Any] | None:
 
 def main() -> None:
     args = parse_args()
-    uvicorn_log_config = _setup_logging(args.log_dir)
+    try:
+        uvicorn_log_config = _setup_logging(args.log_dir)
+    except InstanceAlreadyRunning as e:
+        print(f"refusing to start: {e}", file=sys.stderr)
+        raise SystemExit(3) from None
 
     # Log SIGTERM so we know when the container/orchestrator kills us.
     # SIGKILL (OOM) can't be caught — but SIGTERM (graceful stop) now logs.
