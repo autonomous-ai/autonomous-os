@@ -1317,6 +1317,28 @@ class RealtimeOrchestrator:
         """Save a conversation turn to realtime memory."""
         self._context.add_turn(user_text, agent_text)
 
+    def save_main_handoff(self, user_text: str) -> None:
+        """Persist a user turn that the main agent will answer.
+
+        The live provider retains the audio turn only while its current session
+        survives. Record the handoff before OpenClaw replies so a Gemini session
+        recycle cannot make the device forget what the user asked.
+        """
+        self.save_turn(
+            user_text=user_text,
+            agent_text="[This request was handed to the main agent; its spoken reply follows.]",
+        )
+
+    def save_main_agent_reply_fragment(self, text: str) -> None:
+        """Persist a spoken main-agent reply for future realtime sessions.
+
+        Main-agent TTS is sentence-streamed, so one logical reply may arrive as
+        multiple fragments. Retaining each fragment preserves the complete
+        answer without relying on the ephemeral ``[TTS HISTORY]`` injection.
+        """
+        if text.strip():
+            self.save_turn(user_text="[Main agent reply]", agent_text=text)
+
     def send_function_result(self, call_id: str, output: str) -> None:
         """Send a function call result back to the model."""
         if self._agent is not None:

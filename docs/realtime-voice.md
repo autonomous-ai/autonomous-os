@@ -539,6 +539,15 @@ Realtime turns are appended to a JSONL log (`HAL_REALTIME_MEMORY_PATH`, default
 (keeping `HAL_REALTIME_MEMORY_TRIM_KEEP`). `RealtimeSummarizer` (`summarizer.py`)
 condenses device + realtime memory via the **Anthropic Messages API**
 (`HAL_REALTIME_SUMMARIZER_MODEL`, default `claude-haiku-4-5-20251001`).
+This includes a turn delegated or fallen back to the main agent: HAL persists the
+user request before dispatch, then persists every opted-in main-agent TTS reply
+fragment when it finishes speaking. `[TTS HISTORY]` still updates the current
+live session immediately, but it is not treated as durable memory: an idle or
+tool-call session replacement starts from the JSONL/summary instead.
+For OpenClaw-layout runtimes (OpenClaw, PicoClaw, Codex, Claude Code, OpenCode),
+the context manager also loads the workspace-root `MEMORY.md` in addition to the
+derived device summary and recent `memory/*.md` files. Hermes instead uses its
+native `memories/MEMORY.md`.
 Summarization runs at `start()` (catch-up) and `stop()` (flush). The `start()`
 catch-up runs in a **background thread** (after `connect()`), so the Anthropic
 call never blocks the session from becoming `available` — otherwise an early
@@ -553,6 +562,8 @@ turn ("hello") right after a restart would leak to the main agent.
    the `realtime_feedback` flag on `/voice/speak[-queue]`). Only the agentic
    runtime's actual reply opts in — os-server sends it via `hal.SpeakReply` /
    `hal.SpeakQueueReply` (which `SendToHALTTS` / `SendToHALTTSQueue` use).
+   The same opted-in fragments are appended to realtime memory, so a new Gemini
+   session retains a main-agent answer rather than relying on the old socket.
    Hardcoded TTS (dead-air fillers, ambient mumble, backchannel, reconnect /
    health notices, local chitchat) goes through plain `hal.Speak` and is **never**
    fed back — otherwise the model would echo lines it never generated.
