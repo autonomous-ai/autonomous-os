@@ -734,8 +734,14 @@ REALTIME_ZOMBIE_RECONNECT_AFTER: int = int(
 REALTIME_SESSION_IDLE_RESET_S: float = float(
     os.environ.get("HAL_REALTIME_SESSION_IDLE_RESET_S", "240")
 )
+# Must stay BELOW the shortest observed idle death, or the recycle fires too late
+# and the turn still lands on a session Gemini already closed. Measured idle gaps
+# before a WS 1008 on 2026-08-21: 86s, 98s, 150s, 150s, 185s -- so 120s was inside
+# the failure range. 60s clears the 86s floor with margin. The cost is bounded: this
+# only fires on a turn that FOLLOWS a long silence, and voice_service buffers the
+# audio across the ~1s handshake (see `rebuilding`), so nothing is dropped.
 REALTIME_GEMINI_PRE_TURN_RECYCLE_S: float = float(
-    os.environ.get("HAL_GEMINI_PRE_TURN_RECYCLE_S", "120")
+    os.environ.get("HAL_GEMINI_PRE_TURN_RECYCLE_S", "60")
 )
 # Gemini 1011 recovery: how many times to reconnect a FRESH session and replay
 # the just-captured turn audio when a turn produced no output (the campaign-api

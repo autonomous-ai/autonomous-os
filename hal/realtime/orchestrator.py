@@ -534,7 +534,15 @@ class RealtimeOrchestrator:
         # capture that was dropped before it reached stream_output().
         self._skip_post_idle_recycle = False
         provider: str = config.REALTIME_PROVIDER.strip().lower()
-        if provider != "gemini" or not gemini_needs_idle_workaround():
+        # NOT gated on gemini_needs_idle_workaround(). That predicate asks whether
+        # the MODEL has the native-audio idle-resume bug, but an idle session dying
+        # is a session-lifecycle fact, not a model one: Gemini closes a session it
+        # receives nothing on, whichever model is behind it. Measured 2026-08-21 on
+        # gemini-3.1-flash-live-preview (lamp-0c89 and intern-v2): WS 1008 "The
+        # operation was aborted" after 86-185s with nothing sent to the model, and
+        # 107 of 113 such closes landed on sessions that had served ZERO turns.
+        # Gating this on the model left 3.1 with no protection at all.
+        if provider != "gemini":
             return
         threshold = config.REALTIME_GEMINI_PRE_TURN_RECYCLE_S
         if threshold <= 0 or self._last_turn_monotonic <= 0.0:
