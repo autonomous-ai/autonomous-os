@@ -676,8 +676,21 @@ def _maybe_pitch(now: float) -> None:
         return
 
     # A face ABOVE centre (dy < 0) needs the camera tilted UP, and up is the
-    # increasing direction on this joint.
-    step = -dy * config.GAZE_PITCH_DEG_PER_FRAME
+    # DECREASING direction on this joint — the opposite of what this loop
+    # assumed. Device-measured on lamp-0c89, paired A/B/A with the servo bus
+    # held quiet, 18 face samples per position interleaved over three cycles so
+    # a subject who shifts cancels out:
+    #
+    #   wrist_pitch -75 -> median dy +0.009 | -90 -> +0.113  (moved -15, dy +0.103)
+    #   wrist_pitch -68 -> median dy -0.078 | -98 -> +0.108  (moved -30, dy +0.185)
+    #
+    # Lowering the joint moves the face DOWN the frame, i.e. the camera swung
+    # UP. With the old sign every correction enlarged the error it was
+    # measuring, so the loop ratcheted one way until it hit the stop —
+    # device-observed -72.6 -> -54.7 -> -42.9 -> -28.2 while each look still
+    # reported the face above centre, which is what a wrong sign looks like
+    # from the outside.
+    step = dy * config.GAZE_PITCH_DEG_PER_FRAME
     step = max(-config.GAZE_PITCH_MAX_STEP_DEG,
                min(config.GAZE_PITCH_MAX_STEP_DEG, step))
     target = max(C.WRIST_PITCH_MIN, min(C.WRIST_PITCH_MAX, cur + step))
