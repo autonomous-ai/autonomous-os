@@ -195,7 +195,7 @@ one exception to the model's binary "tool OR speech" rule — the model calls it
    sent (`trigger_response=True`) or the turn deadlocks until the watchdog fires.
    Net added latency to speech ≈ 0.
 
-### Pending-tool-call audio gate (Gemini)
+### Pending-tool-call session quarantine (Gemini)
 
 Gemini Live **refuses `send_realtime_input` while a tool call it emitted is
 unanswered**, and enforces this by closing the session with WebSocket **`1008`**
@@ -203,26 +203,29 @@ unanswered**, and enforces this by closing the session with WebSocket **`1008`**
 not a dropped stream — a transport drop shows up as `1006` with an empty reason
 and is handled by the proxy, not here.
 
-`gemini_live.py` therefore gates the mic on that window:
+`gemini_live.py` therefore quarantines the **whole client side** of that
+session, rather than merely gating microphone audio:
 
-- receiving a `tool_call` registers every `call_id` in `_pending_tool_calls`;
-- while that set is non-empty, `_async_send_input` **drops** incoming
-  `AudioInput` frames (and the manual-VAD `activityStart` that brackets them)
-  instead of sending them. Dropping rather than buffering is deliberate: the
-  window is normally milliseconds, and a buffer would replay stale speech into
-  the next turn;
-- dispatching a `FunctionCallResultInput` clears that `call_id` **before** the
-  `trigger_response` branch. This matters most on the fire-and-forget path
-  above, which returns early without telling Gemini anything — nothing else
-  would ever reopen the gate, and the device would stay deaf for the rest of the
-  session;
-- a reconnect clears the set (a fresh session inherits no calls), and an
-  unresolved call expires after `_pending_tool_max_s` (10s) so a crashed handler
-  costs at most one risky window rather than the microphone.
+- receiving a `tool_call` registers every `call_id` in `_pending_tool_calls` and
+  makes the session non-sendable;
+- while any call remains unresolved, **all client input is suppressed**:
+  `AudioInput`, manual-VAD `activityStart`, `activityEnd`, commits, and other
+  client messages. Nothing is buffered for replay, because it would turn speech
+  captured during an invalid provider state into a stale later turn;
+- for a normal `FunctionCallResultInput`, the call stays pending until Gemini
+  has accepted `send_tool_response`. Only that successful provider acknowledgement
+  clears the call and makes the same session usable again. A failed or rejected
+  acknowledgement leaves the session quarantined and it is discarded;
+- the fire-and-forget `express_emotion` path above deliberately sends no Gemini
+  acknowledgement after speech has started, because doing so makes Gemini repeat
+  the reply. Such a session can never become valid again: it remains
+  non-reusable and the next `prepare_turn()` rebuilds a fresh session;
+- there is no expiry or other timeout that reopens a quarantined session. A
+  fresh/rebuilt session has no inherited pending calls.
 
-`activityEnd` in `_async_commit` is **not** gated: it only fires when an
-`activityStart` was already sent, and skipping it would leave the activity
-bracket open and wedge every later commit.
+In particular, `_async_commit` suppresses `activityEnd` while quarantined too.
+Completing an old activity bracket is not safe when Gemini is waiting for the
+tool result; the replacement session starts its next activity cleanly.
 
 The model is told (`resources/system_prompt*.md`, "Expression Exception") to
 never wait for, announce, or speak the emotion aloud. Note this is distinct from

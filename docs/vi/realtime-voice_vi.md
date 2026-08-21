@@ -186,7 +186,7 @@ việc nói. Khi `stream_output()` thấy lời gọi (`_handle_emotion_call`), 
    ack (`trigger_response=True`) nếu không lượt sẽ treo tới khi watchdog nổ. Độ
    trễ cộng thêm vào giọng nói ≈ 0.
 
-### Cổng chặn audio khi tool call đang chờ (Gemini)
+### Cô lập session khi tool call đang chờ (Gemini)
 
 Gemini Live **từ chối `send_realtime_input` khi một tool call do nó phát ra chưa
 được trả lời**, và cưỡng chế bằng cách đóng session với WebSocket **`1008`**
@@ -194,24 +194,29 @@ Gemini Live **từ chối `send_realtime_input` khi một tool call do nó phát
 phải stream bị rớt — rớt ở tầng transport hiện ra là `1006` với reason rỗng và
 được xử lý ở proxy, không phải ở đây.
 
-Vì vậy `gemini_live.py` chặn mic trong cửa sổ đó:
+Vì vậy `gemini_live.py` cách ly **toàn bộ phía client** của session đó, thay vì
+chỉ chặn audio từ mic:
 
-- nhận `tool_call` thì đăng ký mọi `call_id` vào `_pending_tool_calls`;
-- khi tập đó còn phần tử, `_async_send_input` **vứt** các frame `AudioInput`
-  (và `activityStart` của manual VAD đi kèm) thay vì gửi. Vứt chứ không buffer
-  là có chủ ý: cửa sổ thường chỉ vài mili-giây, còn buffer sẽ phát lại lời nói
-  cũ sang lượt sau;
-- khi dispatch `FunctionCallResultInput`, `call_id` được xoá **trước** nhánh
-  `trigger_response`. Điều này quan trọng nhất ở path fire-and-forget phía trên
-  — path đó return sớm mà không báo gì cho Gemini, nên không còn chỗ nào mở lại
-  cổng và thiết bị sẽ điếc suốt phần còn lại của session;
-- reconnect thì xoá sạch tập (session mới không thừa kế tool call nào), và một
-  call không bao giờ được giải quyết sẽ hết hạn sau `_pending_tool_max_s` (10s)
-  để một handler chết chỉ tốn nhiều nhất một cửa sổ rủi ro, chứ không mất mic.
+- nhận `tool_call` thì đăng ký mọi `call_id` vào `_pending_tool_calls` và làm
+  session không thể gửi thêm dữ liệu;
+- khi còn bất kỳ call nào chưa được giải quyết, **mọi input từ client đều bị
+  chặn**: `AudioInput`, `activityStart` manual VAD, `activityEnd`, commit và các
+  message client khác. Không buffer để phát lại, vì như vậy lời nói thu trong
+  trạng thái provider không hợp lệ sẽ thành một lượt cũ ở thời điểm sau;
+- với `FunctionCallResultInput` thông thường, call vẫn pending đến khi Gemini
+  đã chấp nhận `send_tool_response`. Chỉ provider acknowledgement thành công đó
+  mới xoá call và làm session hiện tại dùng lại được. Ack thất bại hoặc bị từ
+  chối giữ session ở trạng thái cách ly và session sẽ bị bỏ;
+- path `express_emotion` fire-and-forget phía trên cố ý không gửi acknowledgement
+  cho Gemini khi model đã bắt đầu nói, vì gửi nó làm Gemini lặp lại câu trả lời.
+  Session như vậy không thể hợp lệ trở lại: nó không được dùng lại, và lần
+  `prepare_turn()` tiếp theo sẽ rebuild một session mới;
+- không có expiry hay timeout nào mở lại một session đang cách ly. Session
+  fresh/rebuild không thừa kế pending call.
 
-`activityEnd` trong `_async_commit` **không** bị chặn: nó chỉ chạy khi
-`activityStart` đã được gửi, bỏ qua nó sẽ để ngỏ activity bracket và làm treo
-mọi lần commit sau.
+Đặc biệt, `_async_commit` cũng chặn `activityEnd` khi session bị cách ly. Hoàn
+tất activity bracket cũ không an toàn khi Gemini còn chờ tool result; session
+thay thế sẽ bắt đầu activity kế tiếp một cách sạch sẽ.
 
 Model được dặn (`resources/system_prompt*.md`, mục "Expression Exception") không
 chờ, không thông báo, không đọc tên cảm xúc thành tiếng. Lưu ý điều này khác
