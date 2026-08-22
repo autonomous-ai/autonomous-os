@@ -293,10 +293,12 @@ release is not reinstalled on the next poll. Publishing a different version
 automatically resumes OTA for that component. Rollback itself does not need the
 metadata URL or network access.
 
-Devices without `signing_public_key` deliberately remain in legacy mode: they
-read the top-level entries and emit a warning rather than failing OTA. This is a
-compatibility bridge, not a trust guarantee; pin the public key to opt in to
-verified OTA.
+Devices without `signing_public_key` remain in legacy mode only when no
+custody handoff has closed leftover paths: they read the top-level entries and
+emit a warning rather than failing OTA. After handoff (`leftover_closed` in
+`/var/lib/lamp/custody.json`, or `ota_frozen`), unsigned metadata is refused.
+Pin the public key before F1 if the body should still receive vendor updates.
+This is a compatibility bridge, not a trust guarantee.
 
 **Wait-then-retry when unprovisioned**: if `metadata_url` is empty (device not
 set up yet), `Serve()` does not start the poll loop or healthcheck server. It logs

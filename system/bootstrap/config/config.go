@@ -28,6 +28,12 @@ type Config struct {
 	// authorizes OTA metadata for this deployment. It is provisioned locally and
 	// is never accepted from the metadata feed itself.
 	SigningPublicKey string `json:"signing_public_key" yaml:"signingPublicKey"`
+	// OtaFrozen is a local operator freeze. The owner-facing freeze also lives
+	// on the custody record (ota_frozen); either one refuses apply.
+	OtaFrozen bool `json:"ota_frozen,omitempty" yaml:"otaFrozen"`
+	// CustodyFile is the ABP custody record. After handoff leftover_closed
+	// requires a signature; ota_frozen refuses apply. Missing file is legacy.
+	CustodyFile string `json:"custody_file,omitempty" yaml:"custodyFile"`
 	// RollbackVersions records release versions explicitly rolled back by the
 	// local updater. Bootstrap skips only an exact matching target, allowing a
 	// later metadata version to resume automatic OTA without operator cleanup.
@@ -45,6 +51,7 @@ func Default() Config {
 		MetadataURL:  "",
 		PollInterval: "5m",
 		StateFile:    "/root/bootstrap/state.json",
+		CustodyFile:  "/var/lib/lamp/custody.json",
 	}
 }
 

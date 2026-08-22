@@ -290,9 +290,11 @@ bỏ qua đúng target đó nên release lỗi không bị cài lại ở lần 
 có version khác, OTA của component đó tự tiếp tục. Bản thân rollback không cần
 metadata URL hoặc mạng.
 
-Device không có `signing_public_key` chủ ý ở legacy mode: nó đọc component top
-level và chỉ log cảnh báo, không làm OTA lỗi. Đây là compatibility bridge, không
-phải bảo đảm trust; pin public key để bật verified OTA.
+Device không có `signing_public_key` chỉ còn legacy khi chưa handoff:
+đọc component top level và chỉ log cảnh báo. Sau handoff (`leftover_closed`
+trong `/var/lib/lamp/custody.json`, hoặc `ota_frozen`), metadata unsigned bị
+từ chối. Pin public key trước F1 nếu body vẫn cần nhận vendor update.
+Đây là compatibility bridge, không phải bảo đảm trust.
 
 **Đợi-rồi-retry khi chưa provisioning**: nếu `metadata_url` rỗng (device chưa
 setup), `Serve()` không khởi động poll loop lẫn healthcheck server. Nó log

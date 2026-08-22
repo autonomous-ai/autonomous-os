@@ -550,7 +550,13 @@ func (b *Bootstrap) fetchMetadataPayload(ctx context.Context) ([]byte, bool, err
 	if err != nil {
 		return nil, false, fmt.Errorf("read metadata: %w", err)
 	}
-	if strings.TrimSpace(b.cfg.SigningPublicKey) == "" {
+	cust := loadVendorCustody(b.custodyFile())
+	frozen := cust.OtaFrozen || (b.cfg != nil && b.cfg.OtaFrozen)
+	signedKey := b.cfg != nil && strings.TrimSpace(b.cfg.SigningPublicKey) != ""
+	if ok, reason := allowVendorApply(signedKey, frozen, cust.LeftoverClosed); !ok {
+		return nil, false, fmt.Errorf("vendor ota refused: %s", reason)
+	}
+	if !signedKey {
 		slog.Warn("OTA signature verification disabled: signing_public_key is not provisioned", "component", "bootstrap")
 		return data, false, nil
 	}
