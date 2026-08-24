@@ -626,6 +626,32 @@ The unit name is the one declared in `/usr/local/lib/os-runtimes/hermes/service`
 not the requested one. No `.previous` backup: like claudecode, the install is
 owned by the upstream tool, not by a file we copy.
 
+### PicoClaw Case (manual only — and the odd one out on versioning)
+
+PicoClaw is a raw binary from our OWN GitHub releases (no tarball, unlike codex).
+Its published `version` is the release **TAG** (`v0.3.1-fixvision`), not a semver:
+`picoclaw version` prints an unrelated build description
+(`nightly-44-g1959045c-dirty`), so the tag cannot be recovered from the binary.
+The update therefore stamps the installed tag to
+`/usr/local/lib/os-runtimes/picoclaw/installed-version` — that stamp, not
+`picoclaw version`, is what any version check must read.
+
+```bash
+"picoclaw")
+    curl -fsSL https://github.com/autonomous-ai/picoclaw/releases/download/${VERSION}/picoclaw-linux-arm64
+    picoclaw --no-color version         # run it FROM THE TEMP DIR first: the only integrity gate
+    install -D -m 0755 /usr/local/bin/picoclaw /root/bootstrap/rollback/picoclaw.previous
+    install -m 0755 …                   /usr/local/bin/picoclaw
+    echo "$VERSION" > /usr/local/lib/os-runtimes/picoclaw/installed-version
+    systemctl restart picoclaw          # conditional: unit exists only when the runtime is active
+    ;;
+```
+
+`make upload-picoclaw <release-tag>` verifies the tag actually has a
+`picoclaw-linux-arm64` asset before publishing — a typo would otherwise only
+surface as a failed OTA on every polling device. Rollback works
+(`software-update rollback picoclaw`).
+
 ---
 
 ## 6. HAL Runtime — Source & Integration

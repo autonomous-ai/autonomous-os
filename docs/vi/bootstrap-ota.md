@@ -614,6 +614,32 @@ Tên unit lấy đúng theo khai báo trong `/usr/local/lib/os-runtimes/hermes/s
 phải version yêu cầu. Không có backup `.previous`: giống claudecode, bản cài do
 tool upstream sở hữu chứ không phải file mình copy.
 
+### Xử lý PicoClaw (chạy tay — và là ca cá biệt về version)
+
+PicoClaw là binary trần từ GitHub releases của CHÍNH MÌNH (không tarball, khác
+codex). `version` publish ra là **TAG** release (`v0.3.1-fixvision`), không phải
+semver: `picoclaw version` in ra một chuỗi build không liên quan
+(`nightly-44-g1959045c-dirty`), nên không thể suy ngược tag từ binary. Vì vậy
+bản update ghi tag đã cài vào
+`/usr/local/lib/os-runtimes/picoclaw/installed-version` — mọi chỗ kiểm version
+phải đọc stamp này, không phải `picoclaw version`.
+
+```bash
+"picoclaw")
+    curl -fsSL https://github.com/autonomous-ai/picoclaw/releases/download/${VERSION}/picoclaw-linux-arm64
+    picoclaw --no-color version         # chạy TỪ THƯ MỤC TẠM trước: cổng kiểm tra toàn vẹn duy nhất
+    install -D -m 0755 /usr/local/bin/picoclaw /root/bootstrap/rollback/picoclaw.previous
+    install -m 0755 …                   /usr/local/bin/picoclaw
+    echo "$VERSION" > /usr/local/lib/os-runtimes/picoclaw/installed-version
+    systemctl restart picoclaw          # có điều kiện: unit chỉ tồn tại khi runtime đang active
+    ;;
+```
+
+`make upload-picoclaw <release-tag>` kiểm tra tag có thật asset
+`picoclaw-linux-arm64` trước khi publish — gõ sai tag nếu không sẽ chỉ lộ ra
+dưới dạng OTA fail trên mọi thiết bị đang poll. Rollback dùng được
+(`software-update rollback picoclaw`).
+
 ---
 
 ## 6. HAL Runtime — Nguồn & Tích Hợp

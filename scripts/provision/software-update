@@ -176,10 +176,10 @@ restore_hal_backup() {
 }
 
 [ "$(id -u)" -ne 0 ] && { echo "Run as root."; exit 1; }
-[ $# -lt 1 ] && { echo "Usage: software-update <component>|rollback <os-server|bootstrap|web|device|hal|codex|opencode>"; exit 1; }
+[ $# -lt 1 ] && { echo "Usage: software-update <component>|rollback <os-server|bootstrap|web|device|hal|codex|opencode|picoclaw>"; exit 1; }
 APP="$1"
 if [ "$APP" = "rollback" ]; then
-  [ $# -eq 2 ] || { echo "Usage: software-update rollback <os-server|bootstrap|web|device|hal|codex|opencode>"; exit 1; }
+  [ $# -eq 2 ] || { echo "Usage: software-update rollback <os-server|bootstrap|web|device|hal|codex|opencode|picoclaw>"; exit 1; }
   ROLLBACK_TARGET="$2"
   if [ "$ROLLBACK_TARGET" = "web" ]; then
     BACKUP="$ROLLBACK_DIR/web.previous"
@@ -245,7 +245,8 @@ if [ "$APP" = "rollback" ]; then
     bootstrap) DEST=/usr/local/bin/bootstrap-server; UNIT=bootstrap ;;
     codex) DEST=/usr/local/bin/codex; UNIT=codex ;;
     opencode) DEST=/usr/local/bin/opencode; UNIT=opencode ;;
-    *) echo "Rollback is currently supported for os-server, bootstrap, codex and opencode only"; exit 1 ;;
+    picoclaw) DEST=/usr/local/bin/picoclaw; UNIT=picoclaw ;;
+    *) echo "Rollback is currently supported for os-server, bootstrap, codex, opencode and picoclaw only"; exit 1 ;;
   esac
   BACKUP="/root/bootstrap/rollback/${ROLLBACK_TARGET}.previous"
   [ -x "$BACKUP" ] || { echo "No rollback backup for $ROLLBACK_TARGET"; exit 1; }
@@ -263,11 +264,11 @@ if [ "$APP" = "rollback" ]; then
     fi
   fi
   install -D -m 0755 "$BACKUP" "$DEST"
-  # codex.service / opencode.service only exist once the runtime has been
-  # switched to them (the binary is baked on every lamp/intern-v2 image
+  # codex.service / opencode.service / picoclaw.service only exist once the
+  # runtime has been switched to them (the binary is baked on every lamp/intern-v2 image
   # regardless) — restoring the binary on a device running another runtime must
   # not fail the rollback.
-  if { [ "$ROLLBACK_TARGET" = "codex" ] || [ "$ROLLBACK_TARGET" = "opencode" ]; } && [ ! -f "/etc/systemd/system/${UNIT}.service" ]; then
+  if { [ "$ROLLBACK_TARGET" = "codex" ] || [ "$ROLLBACK_TARGET" = "opencode" ] || [ "$ROLLBACK_TARGET" = "picoclaw" ]; } && [ ! -f "/etc/systemd/system/${UNIT}.service" ]; then
     echo "[software-update] ${UNIT}.service absent (runtime not active) — binary restored, no restart"
   else
     systemctl restart "$UNIT"
@@ -277,8 +278,8 @@ if [ "$APP" = "rollback" ]; then
   exit 0
 fi
 case "$APP" in
-  os-server|openclaw|codex|claudecode|opencode|hermes|bootstrap|web|hal|claude-desktop-buddy|device) ;;
-  *) echo "Unknown app: $APP. Use os-server, openclaw, codex, claudecode, opencode, hermes, bootstrap, web, hal, claude-desktop-buddy, or device."; exit 1 ;;
+  os-server|openclaw|codex|claudecode|opencode|hermes|picoclaw|bootstrap|web|hal|claude-desktop-buddy|device) ;;
+  *) echo "Unknown app: $APP. Use os-server, openclaw, codex, claudecode, opencode, hermes, picoclaw, bootstrap, web, hal, claude-desktop-buddy, or device."; exit 1 ;;
 esac
 
 if [ -z "${OTA_METADATA_URL:-}" ]; then
@@ -486,6 +487,43 @@ elif [ "$APP" = "hermes" ]; then
     echo "[software-update] hermes-gateway.service absent (runtime not active) — CLI updated, no restart"
   fi
   echo "hermes updated to $HERMES_NOW"
+elif [ "$APP" = "picoclaw" ]; then
+  # PicoClaw is a raw binary from our own GitHub releases (no tarball, unlike
+  # codex). Mirrors runtimes/picoclaw/install.sh and the imager pre-bake.
+  #
+  # VERSION here is the release TAG (v0.3.1-fixvision), not a semver: PicoClaw's
+  # `picoclaw version` prints an unrelated build description
+  # ("nightly-44-g1959045c-dirty"), so the tag cannot be recovered from the
+  # binary. That is why the installed tag is stamped to
+  # /usr/local/lib/os-runtimes/picoclaw/installed-version below — a version
+  # check (here or in a future bootstrap worker) must read that stamp.
+  [ -x /usr/local/bin/picoclaw ] || { echo "picoclaw is not installed on this device — switch the runtime to picoclaw first"; exit 1; }
+  case "$(uname -m)" in
+    aarch64|arm64) PICO_ASSET="picoclaw-linux-arm64" ;;
+    x86_64)        PICO_ASSET="picoclaw-linux-amd64" ;;
+    *) echo "Unsupported arch $(uname -m) for picoclaw"; exit 1 ;;
+  esac
+  PICO_URL="https://github.com/autonomous-ai/picoclaw/releases/download/${VERSION}/${PICO_ASSET}"
+  DIR_TMP=$(mktemp -d)
+  echo "[software-update] downloading $PICO_URL"
+  download_verified "$PICO_URL" "$DIR_TMP/$PICO_ASSET" "" || { echo "Failed to download picoclaw $VERSION"; exit 1; }
+  # No tarball and no sha256 (our own upstream artifact), so the only integrity
+  # gate is running the new binary before it is trusted — do it from the temp
+  # dir, BEFORE overwriting the installed one.
+  chmod 0755 "$DIR_TMP/$PICO_ASSET"
+  "$DIR_TMP/$PICO_ASSET" --no-color version >/dev/null 2>&1 || { echo "Downloaded picoclaw $VERSION is not runnable — keeping the current binary"; exit 1; }
+  install -D -m 0755 /usr/local/bin/picoclaw /root/bootstrap/rollback/picoclaw.previous
+  install -m 0755 "$DIR_TMP/$PICO_ASSET" /usr/local/bin/picoclaw
+  mkdir -p /usr/local/lib/os-runtimes/picoclaw
+  echo "$VERSION" > /usr/local/lib/os-runtimes/picoclaw/installed-version
+  # picoclaw.service only exists once the runtime was switched to picoclaw;
+  # every lamp/intern-v2 image bakes the binary regardless of runtime.
+  if [ -f /etc/systemd/system/picoclaw.service ]; then
+    systemctl restart picoclaw
+  else
+    echo "[software-update] picoclaw.service absent (runtime not active) — binary updated, no restart"
+  fi
+  echo "picoclaw updated to $VERSION"
 elif [ "$APP" = "web" ]; then
   [ -z "$URL" ] && { echo "Metadata has no url for web"; exit 1; }
   ZIP_TMP=$(mktemp)
