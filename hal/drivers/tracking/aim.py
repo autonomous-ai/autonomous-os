@@ -276,6 +276,51 @@ def _is_near_enough(box: Tuple[int, int, int, int], frame: Any, target: str) -> 
         return True  # never let the filter itself lose a subject
 
 
+def _nearest_person(detector: Any, frame: Any):
+    """The closest person big enough to be the asker, or None.
+
+    Caller holds `_detector_lock_use`. Returns the same
+    ``(box, target, confidence)`` shape as `_detect_subject`, or None when the
+    candidate path is unavailable (an older detector, a failure, or nobody
+    clearing the floor) so the caller can fall back to `detect`.
+    """
+    getter = getattr(detector, "detect_candidates", None)
+    if not callable(getter):
+        return None  # detector predates the candidate path
+    try:
+        candidates = getter(
+            frame, "person", strict=False,
+            min_conf=config.LOOK_AIM_MIN_CONFIDENCE,
+        )
+        # isinstance, not truthiness: a test double's attribute is a Mock, which
+        # is callable AND truthy but not iterable, and the comprehension below
+        # would raise out of the aim entirely. The same guard the bearing step
+        # already applies to a malformed estimate.
+        if not isinstance(candidates, (list, tuple)) or not candidates:
+            return None
+        # Floor FIRST, then rank. Both halves matter — see _detect_subject.
+        near = [(b, c) for b, c in candidates if _is_near_enough(b, frame, "person")]
+    except Exception as e:
+        logger.debug("[look-aim] person candidates failed: %s", e)
+        return None
+    if not near:
+        logger.debug(
+            "[look-aim] %d person box(es), none near enough to be the asker",
+            len(candidates),
+        )
+        return None
+    # Tallest wins; confidence only breaks a tie between similar heights.
+    box, conf = max(near, key=lambda bc: (bc[0][3], bc[1]))
+    if len(near) > 1:
+        logger.info(
+            "[look-aim] %d people in frame — taking the nearest (h=%dpx conf=%.2f) "
+            "over %s",
+            len(near), box[3], conf,
+            ", ".join(f"h={b[3]}px conf={c:.2f}" for b, c in near if b is not box),
+        )
+    return box, "person", conf
+
+
 def _detect_subject(detector: Any, frame: Any):
     """Nearest plausible person box preferred, face as fallback.
 
@@ -288,10 +333,32 @@ def _detect_subject(detector: Any, frame: Any):
     bearing, which is a far better answer than turning to a stranger at the
     other end of the room.
 
+    Among several people, the one CLOSEST is taken as the asker — apparent
+    height, the only distance cue a single camera has. Not the detector's own
+    pick: `detect` ranks by confidence, which measures how CANONICAL a shape
+    is, and that inverts the answer exactly when it matters. Device-proven
+    2026-08-24 (look_logs/20260824-112802): a small, fully-visible colleague at
+    the back scored 0.71 while the person actually asking — clipped by the
+    frame edge, occluded by the toy they were holding up, close enough to be a
+    face and one shoulder — did not win at all, and the aim turned 19.8 deg
+    away from them.
+
+    The size floor therefore has to run BEFORE the choice. Applied after, as it
+    was, it only ever rubber-stamps a decision already made: `detect` returns
+    ONE box, so the asker was discarded before `_is_near_enough` saw anything.
+    The same lesson is written out in detection._measurable_faces, for faces.
+
+    Faces need none of this: `_detect_face_yunet` already picks the LARGEST,
+    and largest is tallest, so a floor applied afterwards can only reject — it
+    cannot pick the wrong one.
+
     Returns (box, target, confidence); confidence is None for detectors that do
     not report one.
     """
     with _detector_lock_use:
+        nearest = _nearest_person(detector, frame)
+        if nearest is not None:
+            return nearest
         for target in ("person", "face"):
             try:
                 box = detector.detect(

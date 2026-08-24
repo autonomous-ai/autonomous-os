@@ -764,3 +764,87 @@ def test_the_measured_scale_is_biased_low_not_high():
     true scale is lower — so it must be damped, never amplified."""
     assert 0.0 < aim.SCALE_SAFETY < 1.0
     assert aim.MAX_SCALE_DEG <= 250.0, "400 asked for corrections that got clamped"
+
+
+# --- Subject selection: the asker, not the detector's favourite (F24) ---
+
+
+def _candidate_detector(candidates, face=None):
+    """Detector exposing `detect_candidates` for person, `detect` for face."""
+    d = mock.Mock()
+    d.detect_candidates = mock.Mock(
+        side_effect=lambda f, t, strict=False, min_conf=None: (
+            list(candidates) if t == "person" else []
+        )
+    )
+    d.detect = mock.Mock(
+        side_effect=lambda f, t, strict=True, min_conf=None: face if t == "face" else None
+    )
+    d.last_confidence = 0.5
+    return d
+
+
+def test_the_nearest_person_wins_over_a_more_confident_distant_one():
+    """The device failure, reproduced (look_logs/20260824-112802).
+
+    A small, fully-visible colleague at the back scored 0.71 while the person
+    actually asking — clipped, occluded by what they held up — scored lower.
+    Confidence ranked the colleague first and the aim turned 19.8 deg away.
+    """
+    frame = _frame(width=1280, height=720)
+    colleague = ((300, 210, 160, 190), 0.71)   # 190px tall, 26% of frame
+    asker = ((640, 0, 640, 700), 0.52)         # 700px tall, at the edge
+    box, kind, conf = aim._detect_subject(_candidate_detector([colleague, asker]), frame)
+
+    assert box == asker[0], "the closest person is the one talking to the lamp"
+    assert kind == "person"
+    assert conf == 0.52
+
+
+def test_a_detection_too_small_to_be_the_asker_is_not_chosen():
+    """The floor still rejects — it just runs before the choice now."""
+    frame = _frame(width=1280, height=720)
+    far = ((300, 300, 40, 70), 0.95)  # 70px = 9.7% of frame, under the 15% floor
+    box, kind, _ = aim._detect_subject(_candidate_detector([far], face=None), frame)
+
+    assert box is None and kind == ""
+
+
+def test_the_size_floor_is_applied_before_ranking_not_after():
+    """A high-confidence stranger must not shadow a qualifying asker.
+
+    `detect` returns ONE box, so filtering afterwards could only rubber-stamp
+    whatever confidence had already picked — which is how the wrong human got
+    through.
+    """
+    frame = _frame(width=1280, height=720)
+    tiny_but_certain = ((10, 10, 30, 60), 0.99)   # 8% of frame — under the floor
+    real_asker = ((600, 100, 400, 500), 0.40)     # 69% of frame
+    box, _kind, _conf = aim._detect_subject(
+        _candidate_detector([tiny_but_certain, real_asker]), frame
+    )
+
+    assert box == real_asker[0]
+
+
+def test_no_person_candidates_falls_back_to_the_face_path():
+    frame = _frame(width=1280, height=720)
+    face_box = (500, 200, 120, 140)  # 19% of frame height, over the 8% face floor
+    box, kind, _ = aim._detect_subject(_candidate_detector([], face=face_box), frame)
+
+    assert box == face_box and kind == "face"
+
+
+def test_a_detector_without_the_candidate_path_still_works():
+    """Older detector object: fall through to `detect`, do not raise."""
+    frame = _frame(width=1280, height=720)
+    d = mock.Mock(spec=["detect", "last_confidence"])
+    d.detect = mock.Mock(
+        side_effect=lambda f, t, strict=True, min_conf=None: (
+            (100, 100, 300, 400) if t == "person" else None
+        )
+    )
+    d.last_confidence = 0.8
+    box, kind, _ = aim._detect_subject(d, frame)
+
+    assert box == (100, 100, 300, 400) and kind == "person"
