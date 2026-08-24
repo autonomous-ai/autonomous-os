@@ -334,7 +334,7 @@ the moment the user pointed at). `_handle_look_call` persists the frame to
 `_SNAPSHOT_DIR` and records it in `app_state.realtime_look_frame_path`;
 `turn_dispatch._take_vision_handoff()` consumes it **once per turn** (strictly: a
 handled turn that already used it clears it so a later delegate can't pick up a
-stale image) and, when fresh (`HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S`, default 20s),
+stale image) and, when fresh (`HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S`, default 45s),
 prepends a `[vision-image] <path>` hint line to the message and ships the frame
 as base64 in the sensing POST's `image` field. What os-server
 then does with the image is decided by the **describe-first gate** in
@@ -718,6 +718,15 @@ HAL reads `config.json` at import, a config change needs a **HAL restart** to ta
 effect. A live edit triggers that restart immediately (`restartHAL` in
 `system/device/service.go`).
 
+### STT model and language
+
+`stt_language` selects the persisted `stt_model`: English uses
+`flux-general-en`; Vietnamese and the other supported non-English languages use
+`nova-3-general` with the selected BCP-47 language code. That pair is passed to
+the AutonomousSTT proxy, including a healthwatch voice-pipeline restart. This
+makes a saved Vietnamese configuration effective after a proxy restart; it does
+not claim that one model provides arbitrary Vietnamese-English code-switching.
+
 **Restart only when the config changed.** os-server does *not* restart HAL on
 every os-server restart — that would needlessly drop the voice pipeline. Instead
 it hashes `config.json` and stores the hash in `config/.hal_config_hash` whenever
@@ -824,8 +833,8 @@ is a top-level `config.json` flag:
 | `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `qwen` |
 | `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = manual activity detection) |
 | `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Max seconds `receive()` waits for the next output event before ending a silent turn (fallback to main agent) |
-| `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` | `20.0` | Silent-turn watchdog used instead of the default for turns where a `look` fired (per-turn, via `extend_recv_timeout()`). Gemini's forced thinking over a text-dense frame can stay silent >8 s right before the answer — the default watchdog was killing those turns |
-| `HAL_REALTIME_REQUIRE_TRANSCRIPT` | `true` | Never commit an empty-STT turn to the model. Real speech that nova-3 missed (short utterances) is voiced and passes the VAD/Silero guards, so committing its raw audio makes the model invent a reply to silence (a generic greeting, often with a name nobody said). When `true`, any empty-STT turn is dropped regardless of duration/voicing — silence beats a wrong reply. Set `false` to fall back to the Silero-gated audio-only path below. |
+| `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` | `20.0` | Silent-turn watchdog used instead of the default for turns where a `look` fired (per-turn, via `extend_recv_timeout()`). Gemini's forced thinking over a text-dense frame can stay silent >8 s right before the answer — the default watchdog was killing those turns. Raising it delays the look-frame handoff, so keep `HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S` above it |
+| `HAL_REALTIME_REQUIRE_TRANSCRIPT` | `true` | Never commit an empty-STT turn to the model. A final transcript containing only punctuation or symbols (for example `.`) is normalized to empty before gaze, speaker-ID, realtime, dispatch, or follow-up refresh; it cannot create a `voice_followup`. Real speech that nova-3 missed (short utterances) is voiced and passes the VAD/Silero guards, so committing its raw audio makes the model invent a reply to silence (a generic greeting, often with a name nobody said). When `true`, any empty-STT turn is dropped regardless of duration/voicing — silence beats a wrong reply. Set `false` to fall back to the Silero-gated audio-only path below. |
 | `HAL_REALTIME_MIN_COMMIT_DURATION_S` | `0.8` | Sessions shorter than this with no STT transcript are treated as VAD noise and not committed to the model. Only consulted when `HAL_REALTIME_REQUIRE_TRANSCRIPT=false`. |
 | `HAL_REALTIME_NOISE_GUARD_MAX_WORDS` | `3` | Extends the Silero voiced-ratio guard to turns that DO have a transcript, up to this many words. STT invents a short filler out of room noise and reports full confidence for it, so such a turn used to bypass every guard (they all only ran on an empty transcript) and commit pure noise to the model. A transcript of at most this many words is re-checked against `HAL_REALTIME_NOISE_SPEECH_RATIO` and dropped when the audio was never voiced; a real short command is voiced and still commits. Longer transcripts are never re-checked, so the voiced-ratio floor can't silence a real utterance. `0` disables. |
 | `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Cost control: when a turn arrives after this many seconds of silence, recycle (rebuild) the session **after** that turn so the next turn drops the per-turn context the provider re-bills on a long-lived session. A post-pause turn is effectively a new conversation; long-term continuity survives via the reloaded `summary.md`. For native-audio Gemini, this is skipped when a successful pre-turn recycle already made the same idle gap fresh. `0` disables. Reuses the zombie-recovery rebuild path. |
@@ -841,7 +850,7 @@ is a top-level `config.json` flag:
 | `HAL_GEMINI_VISION` | `true` | In-session `look` tool (Gemini only). Lets the realtime model capture one camera frame and answer visual questions ("what is this?") in-session instead of delegating. Default on; only registered when the device also has the `vision` capability. Also settable via `realtime.gemini.vision` in config.json. |
 | `HAL_GEMINI_VISION_MAX_WIDTH` | `768` | Max width (px) the captured frame is downscaled to before sending — bounds image tokens. |
 | `HAL_GEMINI_VISION_MIN_INTERVAL_S` | `10` | Cost guard: minimum seconds between two image **sends**. Repeat `look` calls within this window (or a second call in the same turn) reuse the frame already in context instead of sending a new one. `0` = always send fresh. |
-| `HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S` | `20` | Max age of a `look` frame still handed off (by path) to the main agent on a delegate/timeout fallback so it reuses the image instead of re-snapshotting. `0` disables the age guard (frame is still cleared per-turn). |
+| `HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S` | `45` | Max age of a `look` frame still handed off to the main agent on a delegate/timeout fallback so it reuses the image instead of re-snapshotting. **Must stay above `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` plus dispatch time** — the timeout fallback only fires after that watchdog expires, so equal values expire every frame (both were `20` from 2026-07-06 to 2026-08-24 and the handoff never once fired). `0` disables the age guard (frame is still cleared per-turn). |
 | `OPENAI_API_KEY` | — | OpenAI key; falls back to `llm_api_key` |
 | `HAL_OPENAI_REALTIME_MODEL` | `gpt-realtime-2` | |
 | `HAL_OPENAI_REALTIME_VOICE` | `alloy` | |

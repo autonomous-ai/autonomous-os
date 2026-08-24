@@ -237,7 +237,7 @@ UNIT
 | Service | ExecStart | Port | Notes |
 |---|---|---|---|
 | `os-server.service` | `/usr/local/bin/os-server` | 5000 | Main HTTP API, always running |
-| `bootstrap.service` | `/usr/local/bin/bootstrap-server` | 8080 | OTA worker, polls for updates. Exposes `POST /force-check` to trigger immediate OTA check |
+| `bootstrap.service` | `/usr/local/bin/bootstrap-server` | 8080 | OTA worker, polls for updates. Exposes `POST /force-check` to trigger an immediate OTA check and `GET /security` for the OTA trust posture |
 | `openclaw.service` | `xvfb-run ... openclaw gateway run` | — | AI brain, memory limit 1500M |
 | `hal.service` | `uvicorn hal.server:app --host 127.0.0.1 --port 5001` | 5001 | Hardware drivers (servo, LED, camera, audio) |
 | nginx | `nginx` | 80 | Setup SPA + reverse proxy (`/api/` → OS Server 5000, `/hw/` → HAL 5001) |
@@ -293,10 +293,91 @@ release is not reinstalled on the next poll. Publishing a different version
 automatically resumes OTA for that component. Rollback itself does not need the
 metadata URL or network access.
 
+Directory installs have the same recovery contract. Before a web update, the
+updater stops nginx, swaps the fully unpacked staged bundle into place, and
+retains the previous bundle at `/root/bootstrap/rollback/web.previous` together
+with nginx's prior active/inactive state. It then requires `index.html`, a valid
+`nginx -t`, and—when nginx had been running—a successful loopback `GET /`.
+Failure automatically restores the saved bundle and service state. An operator
+can also run `software-update rollback web`; the rejected version is recorded in
+`rollback_versions` just like a binary rollback.
+
+For a device profile, the updater stages the ZIP, stops only the `os-server` and
+`hal` services that were active, and retains the old profile at
+`/root/bootstrap/rollback/device.previous`. It also snapshots the exact files
+covered by the old or new `rootfs/` overlay in `device.previous.rootfs`; rollback
+therefore restores overwritten files and removes files introduced only by the
+rejected profile. Local `/opt/hal/.env` tuning remains preserved. The profile
+must contain `ROBOT.md`; each service that was active must recover and answer
+its loopback health endpoint. A failed check restores the known-good profile and
+its prior service state automatically. Use `software-update rollback device` for
+an operator rollback; the rejected device-profile version is then blocked.
+
 Devices without `signing_public_key` deliberately remain in legacy mode: they
 read the top-level entries and emit a warning rather than failing OTA. This is a
 compatibility bridge, not a trust guarantee; pin the public key to opt in to
 verified OTA.
+
+### OTA security posture (operator-visible)
+
+The warning above is a log line, so a device silently stuck in legacy mode is
+invisible to a fleet operator. Both processes expose the posture as data:
+
+| Endpoint | Served by | Notes |
+|----------|-----------|-------|
+| `GET http://127.0.0.1:8080/security` | `bootstrap-server` | Source of truth: the worker holds the pinned key and performs verification. Loopback only. |
+| `GET /api/system/ota-security` | `os-server` | Proxies the above verbatim inside the standard `{"status":1,"data":…}` wrapper. `502` when the bootstrap worker is unreachable. |
+
+```json
+{
+  "mode": "verified",
+  "metadata_format": "autonomous-ota/v1",
+  "key_fingerprint": "9f2c1ab30d4e5f60",
+  "artifact_checksums": true,
+  "last_metadata_fetch": {
+    "at": "2026-08-24T09:12:03Z",
+    "verified": true
+  }
+}
+```
+
+- `mode` is `verified` when `signing_public_key` is provisioned, `legacy`
+  otherwise. This is the single field to alert on across the fleet.
+- `key_fingerprint` is the first 16 hex characters of the SHA-256 of the pinned
+  key, so operators can confirm *which* key a device trusts (and spot devices
+  left on a rotated-out key) without the endpoint echoing key material. Absent
+  in legacy mode.
+- `artifact_checksums` reports whether per-component SHA-256 digests are
+  enforced. It follows `mode`: digests are only meaningful when the metadata
+  carrying them is authentic.
+- `last_metadata_fetch` is the outcome of the most recent fetch, including
+  transport failures (`error` is set, `verified` is `false`). It is absent until
+  the first fetch completes after a restart, so a device that has never reached
+  its feed is distinguishable from one whose feed is healthy.
+
+### Signed-only cutover
+
+Signed metadata is published as a superset: the payload's component entries stay
+at the top level for already-deployed workers, with the authenticated document
+under `signed`. That compatibility copy is what keeps legacy mode exploitable,
+so it has to be retired. The rollout:
+
+1. **Publish signed** (done). Release writers add the `signed` envelope whenever
+   `OTA_SIGNING_PRIVATE_KEY` and `OTA_SIGNING_KEY_ID` are set. Devices ignore it
+   until a key is pinned.
+2. **Provision keys.** New devices get `OTA_SIGNING_PUBLIC_KEY` at setup; the
+   existing fleet gets it written into `/root/config/bootstrap.json`. No
+   redeploy is needed — the worker reads the key on the next config load.
+3. **Confirm the fleet.** Poll `GET /api/system/ota-security` and require
+   `mode == "verified"` with the expected `key_fingerprint` on every device.
+   This step is the gate: do not proceed while any device reports `legacy`.
+4. **Cut over.** Publish with `OTA_METADATA_SIGNED_ONLY=1`, which drops the
+   top-level copy so the document contains only `signed`. An unmigrated device
+   then stops updating (loudly) instead of updating from an unauthenticated
+   source — the intended failure direction.
+
+Rollback for step 4 is publishing once more without the flag; devices already in
+verified mode are unaffected either way, since they read only `signed`.
 
 **Wait-then-retry when unprovisioned**: if `metadata_url` is empty (device not
 set up yet), `Serve()` does not start the poll loop or healthcheck server. It logs
@@ -420,35 +501,25 @@ It reads the OTA metadata URL from `metadata_url` in `/root/config/bootstrap.jso
 (an explicit `OTA_METADATA_URL` env var overrides it for manual/debug runs), and
 aborts with an error if neither is set — no compiled-in URL.
 
-### HAL Case (NEW)
+### HAL Case
 
 ```bash
 "hal")
-    echo "Updating HAL to $VERSION..."
+    # Preserve the complete runtime and prior service state.
+    systemctl stop hal
+    mv /opt/hal /root/bootstrap/rollback/hal.previous
 
-    # Download
-    curl -fsSL "$URL" -o /tmp/hal-update.zip
+    # Build the candidate in a sibling directory. .env, venv, and uv cache
+    # are copied from the retained runtime before uv sync.
+    unzip -q "$ZIP" -d /opt/.hal.new
+    cp -a /root/bootstrap/rollback/hal.previous/{.env,.venv,.uv-cache} /opt/.hal.new/
+    (cd /opt/.hal.new && uv sync --python 3.12 --extra hardware)
+    mv /opt/.hal.new /opt/hal
 
-    # Stop service before updating
-    systemctl stop hal.service
-
-    # Backup current
-    cp -r /opt/hal /opt/hal.bak 2>/dev/null || true
-
-    # Extract (preserve venv if only code changed, or rebuild)
-    unzip -o /tmp/hal-update.zip -d /opt/hal/
-
-    # Reinstall dependencies if requirements.txt changed
-    /opt/hal/venv/bin/pip install -r /opt/hal/requirements.txt --quiet
-
-    # Restart
-    systemctl start hal.service
-
-    # Cleanup
-    rm -f /tmp/hal-update.zip
-    rm -rf /opt/hal.bak
-
-    echo "HAL updated to $VERSION"
+    systemctl restart hal
+    curl -fsS http://127.0.0.1:5001/health
+    # Any staging or health failure restores hal.previous and its old state.
+    # Operators can also run: software-update rollback hal
     ;;
 ```
 

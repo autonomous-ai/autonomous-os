@@ -18,6 +18,7 @@
 | GET | `/api/system/info` | CPU, RAM, temp, uptime, version, trạng thái agent (name/connected/emotion/version/uptime) |
 | GET | `/api/system/network` | WiFi SSID, IP, signal, internet status |
 | GET | `/api/system/dashboard` | Snapshot tổng hợp (agent + config + HW) |
+| GET | `/api/system/ota-security` | Trạng thái tin cậy OTA lấy từ bootstrap worker: `legacy` hay `verified`, fingerprint key đã pin, lần fetch metadata gần nhất (xem `bootstrap-ota.md`) |
 
 ### Device Setup
 

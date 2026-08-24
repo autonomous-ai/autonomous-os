@@ -195,7 +195,7 @@ line carries a `sessionID`. The Go translator maps them onto the same
 |---|---|
 | first line carrying `sessionID` | capture session key |
 | `step_start` | `agent` lifecycle `phase:start` (once per turn) |
-| `text` | **accumulated** — the reply text (device shape: `part.text`; flat `text` accepted as fallback); no token delta stream |
+| `text` | **buffered as the reply** (device shape: `part.text`; flat `text` accepted as fallback); no token delta stream. A newer part demotes the previous to `stream:thinking` (see *Preambles* below) |
 | `reasoning` | *(ignored — thinking, not content)* |
 | `tool_use` | `agent` tool `phase:start` + `phase:end` pair |
 | `step_finish` / `message.updated` | capture per-turn token usage (`part.tokens` / `info.tokens`) |
@@ -208,10 +208,20 @@ line carries a `sessionID`. The Go translator maps them onto the same
 whose `part.reason == "stop"`, then the process exits. Since `opencode run` is a
 per-turn subprocess, a **clean exit (rc=0) is the turn boundary**: the gatewayd
 (`turn.go`) marks the turn ended and **synthesizes a `{"type":"session.idle"}`
-frame** so the translator finalizes exactly once. The accumulated `text` is
+frame** so the translator finalizes exactly once. The buffered `text` is
 surfaced there as a single assistant delta **before** `chat.final` / `lifecycle.end`
 — the N=1 case of the streaming contract, which lets the shared consumer flush TTS
 + `[HW:/…]` hardware markers at `lifecycle.end`.
+
+**Preambles.** opencode narrates before it calls a tool, as its own `text` part
+("Using the sensing skill for this presence event."). Joining every part would
+speak that whole trail — the same leak fixed in codex (see
+[codex.md](codex.md)). So only the **last** `text` part of a turn is the reply:
+each earlier one is demoted to `stream:thinking` (Flow Monitor only, never TTS
+or a channel reply) as soon as a newer part proves it was not the reply.
+Exception: a non-final part carrying a `[HW:/…]` marker is a real hardware
+action and stays in the reply. Prompt wording cannot suppress preambles
+reliably — this is the enforcement point.
 
 **Usage:** token counts ride `step_finish` under `part.tokens.{input,output,cache.read}`
 (also read from `message.updated` `info.tokens` when present). The translator

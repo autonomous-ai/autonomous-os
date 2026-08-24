@@ -20,7 +20,7 @@ Single 12 V input. One step-down to 5 V for the SBC and ring. 3.3 V comes from t
         ┌──────────────┼──────────────┐
         │              │              │
      SBC USB-C      WS2812 ring     5V Nidec fan
-    (Pi 5 / OPi)   (64 px, capped)
+    (Pi 5 / OPi)   (32 px, capped)
     (~2A typ)      (~1.0A capped)   (~0.2A)
                        │
                   3.3V (from SBC, sensors only)
@@ -38,7 +38,7 @@ Single 12 V input. One step-down to 5 V for the SBC and ring. 3.3 V comes from t
 | 12 V fan (if used) | 0.2 A | 0.3 A | Optional |
 | **5 V total** (out of buck) | ~2.5 A | ~3.0 A | MP2482 limit |
 | SBC (Pi 5 or OPi 4 Pro) | 1.8 A | 2.5 A | Spikes during boot + camera + servo activity |
-| WS2812 ring (capped) | 0.5 A | 1.0 A | Brightness cap in software; full white 64 px = 3.84 A which is **not allowed** |
+| WS2812 ring (capped) | 0.5 A | 1.0 A | Brightness cap in software; full white 32 px = 1.92 A which is **not allowed** |
 | Nidec 5 V fan | 0.15 A | 0.20 A | |
 | **3.3 V** (from SBC) | < 0.05 A | < 0.10 A | TTP223 ×4 + headroom |
 

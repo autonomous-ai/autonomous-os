@@ -55,19 +55,14 @@ REST_RAW = {
 # Duration for the startup/resume move (seconds)
 STARTUP_MOVE_DURATION = 5.0
 
-# Peak joint speed the STS3215 can actually deliver, in degrees/second.
-# Measured on device: recordings commanding >500 deg/s leave the servo 55 deg
-# behind its goal — it saturates, lags, then snaps, which is the audible
-# grinding. Recordings are resampled so no segment exceeds this; segments that
-# would are stretched in time instead. Set HAL_SERVO_MAX_DPS=0 to disable
-# stretching and play recordings at their authored speed.
-SERVO_MAX_DPS = float(os.environ.get("HAL_SERVO_MAX_DPS", "250"))
-
-# Recordings are authored at ~20 Hz but the playback loop steps one frame per
-# tick at self.fps, so raw frames play at the wrong wall-clock speed. Frames are
-# resampled onto the loop's own grid at load time; this is the CSV column that
-# carries the authored timing.
-RECORDING_TIME_COLUMN = "timestamp"
+# Playback timing (speed ceiling, time column, stretch + resample) is shared
+# with the mock driver so the simulator plays a recording exactly as the body
+# does — see hal/drivers/motors/recording_timing.py.
+from hal.drivers.motors.recording_timing import (  # noqa: E402
+    RECORDING_TIME_COLUMN,
+    SERVO_MAX_DPS,
+    resample_recording,
+)
 
 # Internal event: wake move + state sync, queued by start() so the 5s
 # interpolation runs in the event thread instead of blocking the caller
@@ -638,70 +633,11 @@ class AnimationService:
         
         return sorted(recordings)
     
-    def _stretch_timeline(self, times: List[float], frames: List[Dict[str, float]]) -> List[float]:
-        """Widen the gaps that demand more joint speed than the servo can deliver.
-
-        Returns a new, still-monotonic time axis. Only over-speed segments grow;
-        everything else keeps its authored timing, so a recording slows down
-        exactly where it was impossible and nowhere else.
-        """
-        if SERVO_MAX_DPS <= 0:
-            return times
-
-        out = [times[0]]
-        for i in range(1, len(frames)):
-            authored_dt = max(times[i] - times[i - 1], 1e-3)
-            peak_delta = max(
-                (abs(frames[i][j] - frames[i - 1][j]) for j in frames[i]),
-                default=0.0,
-            )
-            needed_dt = peak_delta / SERVO_MAX_DPS
-            out.append(out[-1] + max(authored_dt, needed_dt))
-        return out
-
-    def _resample_recording(
-        self, times: List[float], frames: List[Dict[str, float]], name: str
-    ) -> List[Dict[str, float]]:
-        """Put frames on the playback loop's own 1/fps grid.
-
-        The loop steps exactly one frame per tick, so a list sampled at self.fps
-        plays at real time by construction — no timing logic in the hot path.
-        """
-        stretched = self._stretch_timeline(times, frames)
-        duration = stretched[-1] - stretched[0]
-        if duration <= 0:
-            return frames
-
-        joints = list(frames[0].keys())
-        step = 1.0 / self.fps
-        total = max(1, int(round(duration / step)))
-
-        out: List[Dict[str, float]] = []
-        src = 0
-        for k in range(total + 1):
-            t = stretched[0] + min(k * step, duration)
-            # stretched[] is monotonic and t only advances, so this walk is O(n).
-            while src < len(stretched) - 2 and stretched[src + 1] < t:
-                src += 1
-            span = stretched[src + 1] - stretched[src]
-            p = 0.0 if span <= 0 else (t - stretched[src]) / span
-            p = max(0.0, min(1.0, p))
-            a, b = frames[src], frames[src + 1]
-            out.append({j: a[j] + (b[j] - a[j]) * p for j in joints})
-
-        authored = times[-1] - times[0]
-        if SERVO_MAX_DPS > 0 and duration > authored * 1.01:
-            logger.info(
-                "recording %r stretched %.2fs -> %.2fs to stay under %.0f deg/s",
-                name, authored, duration, SERVO_MAX_DPS,
-            )
-        return out
-
     def _load_recording(self, recording_name: str) -> Optional[List[Dict[str, float]]]:
         """Load a recording from cache or file, resampled for playback.
 
         Frames are returned on the event loop's 1/fps grid with over-speed
-        segments stretched — see _resample_recording. Playback itself stays a
+        segments stretched — see recording_timing.resample_recording. Playback stays a
         plain frame-per-tick walk.
         """
         # Check cache first
@@ -738,7 +674,7 @@ class AnimationService:
                 self._recording_cache[recording_name] = actions
                 return actions
 
-            actions = self._resample_recording(times, actions, recording_name)
+            actions = resample_recording(times, actions, recording_name, self.fps)
 
             # Cache the recording
             self._recording_cache[recording_name] = actions
@@ -1103,7 +1039,7 @@ class AnimationService:
         """Invalidate the cache for a recording (used after upload).
 
         `actions` arrives stripped of its timestamp column, so caching it here
-        would store frames that never went through _resample_recording — the
+        would store frames that never went through resample_recording — the
         uploaded copy would play at raw frame rate while the identical file read
         from disk played correctly. The upload route writes the CSV before
         calling this, so dropping the entry lets the normal load path pick it up.

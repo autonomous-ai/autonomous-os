@@ -190,7 +190,7 @@ All knobs live in `hal/drivers/tracking/constants.py`. (The old dead `GIMBAL_*` 
 | Tracking duration > 5 minutes | Stop — timeout to save motor/CPU |
 | GPIO-button or TTP223 single-click | Stop — explicit user attention-cancel |
 
-Note: a large bbox (e.g. a person filling the frame) is **not** a stop condition — PID drives off the centroid, not bbox size, so a close object still tracks. When tracking ends the arm glides back to zero at tracking speed (no snap).
+Note: a large bbox (e.g. a person filling the frame) is **not** a stop condition — PID drives off the centroid, not bbox size, so a close object still tracks. When tracking ends the arm glides back to zero at tracking speed (no snap), then the idle animation is dispatched again — see [Interaction with Other Systems](#interaction-with-other-systems).
 
 ### Auto-stop on gateway/network disconnect
 
@@ -316,6 +316,8 @@ Camera section shows:
 | Sensing (face, motion) | Continues — shares camera | Continues |
 | Camera stream overlay | Green bbox drawn | Normal stream |
 | TTS | Continues normally | Continues normally |
+
+Resuming idle is an **explicit dispatch**, not a side effect of clearing the tracking flag. While `_tracking_active` is set, `AnimationService._continue_playback` drops the in-flight recording (`_current_recording = None`) so nothing fights the tracker. Clearing the flag does not put it back: the event loop returns at its first guard (`if not self._current_recording`), so without a dispatch the arm sits rigid at zero with torque on until the next emotion or play command. The `_track_loop` `finally` therefore ends with `animation_service.dispatch("play", animation_service.idle_recording)` — dispatch rather than `_handle_play` so playback stays owned by the event thread, matching the music-stop, `aim` and `resume` exits.
 
 ## Performance Notes
 

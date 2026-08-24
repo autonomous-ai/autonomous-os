@@ -215,7 +215,7 @@ map chúng sang đúng khuôn `domain.WSEvent` mà handler OpenClaw tiêu thụ:
 | `item.started` `command_execution` / `mcp_tool_call` | `agent` tool `phase:start` (`shell` / `server.tool`) |
 | `item.completed` `command_execution` / `mcp_tool_call` | tool `phase:end` (phát start trước nếu chưa thấy) |
 | `item.completed` `web_search` / `file_change` | cặp tool `phase:start` + `phase:end` |
-| `item.completed` `agent_message` | **tích luỹ** — exec mode không có delta stream |
+| `item.completed` `agent_message` | **giữ làm câu trả lời** — exec mode không có delta stream. Cái mới đẩy cái trước xuống `stream:thinking` (xem *Preamble* bên dưới) |
 | `item.*` `reasoning` / `todo_list` | *(bỏ qua — status, không phải nội dung)* |
 | `turn.completed` | `agent` `stream:assistant` (nguyên câu trả lời trong **một** delta) **+** `chat` `state:final role:assistant` **+** lifecycle `phase:end` kèm usage — kết thúc turn |
 | `turn.failed` / `error` / `bridge.error` | `agent` lifecycle `phase:error` — kết thúc turn |
@@ -225,6 +225,18 @@ Giống PicoClaw, text `agent_message` tích luỹ được đưa ra ở `turn.c
 dưới dạng một assistant delta duy nhất **trước** `chat.final` /
 `lifecycle.end` — trường hợp N=1 của hợp đồng streaming, chính nó cho consumer
 chung flush TTS + marker phần cứng `[HW:/…]` tại `lifecycle.end`.
+
+**Preamble.** Codex exec tự thuật trước khi gọi tool, thành một item
+`agent_message` riêng ("Using the sensing skill for this presence event.",
+"Posture summary is present, so this is the posture-nudge route."). Gộp hết
+`agent_message` lại là đọc cả chuỗi tự thuật đó ra loa — đúng lỗi leak thấy ở
+`presence.enter` và nudge `motion.activity`. Nên chỉ `agent_message` **cuối
+cùng** của turn mới là câu trả lời: mỗi cái trước đó bị đẩy xuống
+`stream:thinking` (chỉ vào Flow Monitor, không bao giờ ra TTS hay reply kênh)
+ngay khi có cái mới hơn chứng minh nó không phải câu trả lời. Ngoại lệ: message
+không phải cuối mà mang marker `[HW:/…]` là hành động phần cứng thật nên vẫn
+giữ trong reply. Chỉnh prompt không chặn preamble một cách đáng tin — đây mới là
+chỗ cưỡng chế.
 
 **Usage:** `turn.completed` mang `{input_tokens, cached_input_tokens,
 output_tokens}`; translator map `input + cached → InputTokens` (xấp xỉ kích
@@ -240,8 +252,21 @@ fresh (best-effort khi socket đang rớt: id cũ resume lỗi thì bridge tự 
 fresh).
 
 Codex **tự auto-compact context của nó** (`model_auto_compact_token_limit`),
-nên `ShouldRotateSession` chỉ là **lưới an toàn 150k token** cho thread chạy
-hoang — hiếm khi kích hoạt. Theo
+nên `ShouldRotateSession` chỉ là **lưới an toàn 250k token** cho thread chạy
+hoang — hiếm khi kích hoạt. Nó tính trên kích thước **context** đang sống —
+`input_tokens + cached_input_tokens` của `turn.completed` gần nhất, được
+translator lưu vào `lastContextTokens` — chứ không phải `totalTokens` mà handler
+chung truyền vào (số đó cộng cả output của lượt này, là khối lượng turn chứ
+không phải context). Tự đọc usage frame của mình giúp thay đổi này nằm gọn
+trong codex: các backend khác không bị đụng tới.
+
+Lưới này từng là 150k và tính trên `totalTokens` của handler cho tới
+24/8/2026, khi thiết bị cho thấy nó kích hoạt trên turn bình thường chứ không
+phải turn chạy hoang — 3 trong 8 turn sensing liên tiếp trên lamp-0c89 vượt
+ngưỡng (context 153k / 170k). Mỗi lần rotate là mất thread, thread mới lại
+shell-đọc lại toàn bộ `SKILL.md` (6 lần gọi, ~60s), đẩy context vượt ngưỡng
+ngay lập tức: một vòng lặp rotate. Lưới an toàn phải nằm **trên** mức mà
+compaction của codex ổn định lại, không phải nằm trong đó. Theo
 [`adding-agent-runtime_vi.md`](adding-agent-runtime_vi.md) §4 "No fake
 success", `CompactSession`, `GetConfigJSON` (config của Codex là TOML + secrets
 trong `.env` — không có file JSON để lộ ra), `UpdatePrimaryModel`, và

@@ -1,7 +1,8 @@
 # Motion Playback
 
 How servo recordings in `hal/recordings/` become motion. Source:
-`hal/drivers/motors/animation_service.py`.
+`hal/drivers/motors/animation_service.py`, with the timing rule itself in
+`hal/drivers/motors/recording_timing.py`.
 
 ## Timing
 
@@ -22,6 +23,8 @@ The cap is not cosmetic. Measured on lamp-0c89 by sampling `Present_Position` wh
 | `idle` | 9.95s | 115 deg/s | 9.97s | none |
 
 `idle` is already within budget, so it is not stretched at all — but it gained the most, because the loop no longer drops to 5 Hz once idle settles. That reduction stepped fps-grid frames six times too slowly and delivered breathing as five visible jerks per second; it cost more in smoothness than it saved in CPU.
+
+The same rule runs off-hardware. `MockMotionService` (`HAL_BOARD=sim`, the `make sim` laptop body) imports `resample_recording` from the same module and replays on the same 30 Hz grid, so a recording takes the same wall-clock time in the simulator as on a body. Its `move_to`/`aim`/`nudge` interpolate over the commanded `duration` and block until arrival, as the SDK-backed driver does. What the simulator still does not model: inertia, collision, torque, and per-unit EEPROM calibration.
 
 Two consequences worth knowing:
 

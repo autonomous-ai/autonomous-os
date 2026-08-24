@@ -326,7 +326,7 @@ frame mà `look` đã chụp được bàn giao cho main agent để nó trả l
 `app_state.realtime_look_frame_path`; `turn_dispatch._take_vision_handoff()`
 tiêu thụ nó **một lần mỗi turn** (turn đã handled dùng rồi thì clear luôn để
 delegate sau không nhặt phải ảnh cũ) và, khi còn tươi
-(`HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S`, mặc định 20s), chèn dòng hint
+(`HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S`, mặc định 45s), chèn dòng hint
 `[vision-image] <path>` vào message VÀ gửi frame dạng base64 trong field
 `image` của sensing POST.
 os-server xử lý ảnh theo **gate describe-first** trong `system/vision` (xem
@@ -689,6 +689,15 @@ nếu thiếu — nên file luôn có realtime config sửa được. HAL **tự
 lúc import, đổi config phải **restart HAL** mới ăn. Sửa lúc đang chạy thì restart
 liền (`restartHAL` trong `system/device/service.go`).
 
+### Model và ngôn ngữ STT
+
+`stt_language` chọn `stt_model` được lưu: English dùng `flux-general-en`; tiếng
+Việt và các ngôn ngữ không phải English được hỗ trợ dùng `nova-3-general` với mã
+BCP-47 đã chọn. Cặp đó được truyền cho proxy AutonomousSTT, kể cả lúc healthwatch
+khởi động lại voice pipeline. Vì vậy cấu hình tiếng Việt đã lưu vẫn có hiệu lực
+sau khi proxy restart; điều này không có nghĩa một model duy nhất xử lý chính xác
+mọi trường hợp code-switching Việt–Anh.
+
 **Chỉ restart khi config thực sự đổi.** os-server *không* restart HAL mỗi lần
 os-server restart — làm vậy sẽ rớt voice pipeline vô ích. Thay vào đó nó hash
 `config.json` và lưu hash vào `config/.hal_config_hash` mỗi khi (re)start HAL. Lúc
@@ -792,8 +801,8 @@ trong `config.json`:
 | `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `qwen` |
 | `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = activity detection thủ công) |
 | `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Số giây tối đa `receive()` chờ output event kế tiếp trước khi kết thúc lượt im lặng (fallback sang main agent) |
-| `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` | `20.0` | Watchdog im-lặng dùng thay mặc định cho turn có `look` (theo từng turn, qua `extend_recv_timeout()`). Gemini bị ép thinking trên frame dày chữ có thể im >8 s ngay trước khi trả lời — watchdog mặc định giết nhầm mấy turn đó |
-| `HAL_REALTIME_REQUIRE_TRANSCRIPT` | `true` | Không bao giờ commit turn empty-STT lên model. Giọng thật mà nova-3 miss (câu ngắn) vẫn là voiced nên qua hết guard VAD/Silero, commit audio thô khiến model bịa câu trả lời cho khoảng im lặng (lời chào chung chung, thường kèm tên không ai nói). Khi `true`, mọi turn empty-STT bị bỏ bất kể duration/voicing — im còn hơn trả lời sai. Đặt `false` để quay về đường audio-only gated bằng Silero bên dưới. |
+| `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` | `20.0` | Watchdog im-lặng dùng thay mặc định cho turn có `look` (theo từng turn, qua `extend_recv_timeout()`). Gemini bị ép thinking trên frame dày chữ có thể im >8 s ngay trước khi trả lời — watchdog mặc định giết nhầm mấy turn đó. Nâng nó lên là hoãn luôn handoff frame `look`, nên phải giữ `HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S` cao hơn |
+| `HAL_REALTIME_REQUIRE_TRANSCRIPT` | `true` | Không bao giờ commit turn empty-STT lên model. Final transcript chỉ có dấu câu/ký hiệu (ví dụ `.`) được chuẩn hoá thành empty trước gaze, speaker-ID, realtime, dispatch hay refresh follow-up; nó không thể tạo `voice_followup`. Giọng thật mà nova-3 miss (câu ngắn) vẫn là voiced nên qua hết guard VAD/Silero, commit audio thô khiến model bịa câu trả lời cho khoảng im lặng (lời chào chung chung, thường kèm tên không ai nói). Khi `true`, mọi turn empty-STT bị bỏ bất kể duration/voicing — im còn hơn trả lời sai. Đặt `false` để quay về đường audio-only gated bằng Silero bên dưới. |
 | `HAL_REALTIME_MIN_COMMIT_DURATION_S` | `0.8` | Session ngắn hơn ngưỡng này mà không có STT transcript bị coi là nhiễu VAD, không commit lên model. Chỉ xét khi `HAL_REALTIME_REQUIRE_TRANSCRIPT=false`. |
 | `HAL_REALTIME_NOISE_GUARD_MAX_WORDS` | `3` | Mở rộng guard voiced-ratio của Silero sang cả turn CÓ transcript, tối đa ngần này từ. STT bịa một từ đệm ngắn từ tiếng ồn phòng và báo confidence tối đa cho nó, nên turn kiểu đó trước đây lọt hết mọi guard (guard chỉ chạy khi transcript rỗng) và commit nhiễu thuần lên model. Transcript nhiều nhất ngần này từ sẽ bị kiểm lại theo `HAL_REALTIME_NOISE_SPEECH_RATIO` và bị bỏ nếu audio chưa từng voiced; lệnh ngắn nói thật vẫn là voiced nên vẫn commit. Transcript dài hơn không bao giờ bị kiểm lại, nên ngưỡng voiced-ratio không thể làm câm một câu nói thật. `0` = tắt. |
 | `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Kiểm soát chi phí: khi một turn đến sau ngần này giây im lặng, recycle (rebuild) session **sau** turn đó để turn kế tiếp bỏ phần context mỗi-turn mà provider re-bill trên session sống lâu. Turn sau khoảng nghỉ dài coi như cuộc hội thoại mới; trí nhớ dài hạn vẫn còn nhờ nạp lại `summary.md`. Với Gemini native-audio, bước này bị bỏ qua nếu pre-turn recycle thành công đã làm mới session cho chính idle gap đó. `0` = tắt. Dùng lại đường rebuild của zombie-recovery. |
@@ -809,7 +818,7 @@ trong `config.json`:
 | `HAL_GEMINI_VISION` | `true` | Tool `look` trong phiên (chỉ Gemini). Cho model realtime chụp một frame camera và trả lời câu hỏi thị giác ("cái này là gì?") ngay trong phiên thay vì delegate. Mặc định bật; chỉ đăng ký khi thiết bị còn có capability `vision`. Cũng đặt được qua `realtime.gemini.vision` trong config.json. |
 | `HAL_GEMINI_VISION_MAX_WIDTH` | `768` | Bề rộng tối đa (px) frame được downscale trước khi gửi — giới hạn token ảnh. |
 | `HAL_GEMINI_VISION_MIN_INTERVAL_S` | `10` | Chặn chi phí: số giây tối thiểu giữa hai lần **gửi ảnh**. Gọi `look` lặp trong khoảng này (hoặc gọi lần hai trong cùng turn) sẽ xài lại ảnh đã có trong context thay vì gửi ảnh mới. `0` = luôn gửi ảnh mới. |
-| `HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S` | `20` | Tuổi tối đa của frame `look` còn được bàn giao (bằng path) cho main agent khi delegate/timeout fallback để nó xài lại ảnh thay vì chụp lại. `0` tắt guard tuổi (frame vẫn bị clear mỗi turn). |
+| `HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S` | `45` | Tuổi tối đa của frame `look` còn được bàn giao cho main agent khi delegate/timeout fallback để nó xài lại ảnh thay vì chụp lại. **Phải lớn hơn `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` cộng thời gian dispatch** — nhánh timeout fallback chỉ chạy sau khi watchdog đó hết giờ, nên để bằng nhau là mọi frame đều hết hạn (cả hai cùng bằng `20` từ 2026-07-06 đến 2026-08-24 và handoff chưa từng bắn lần nào). `0` tắt guard tuổi (frame vẫn bị clear mỗi turn). |
 | `OPENAI_API_KEY` | — | Key OpenAI; fallback về `llm_api_key` |
 | `HAL_OPENAI_REALTIME_MODEL` | `gpt-realtime-2` | |
 | `HAL_OPENAI_REALTIME_VOICE` | `alloy` | |

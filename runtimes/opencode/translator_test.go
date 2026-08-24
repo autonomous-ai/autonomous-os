@@ -97,8 +97,10 @@ func TestTranslateHappyTurn(t *testing.T) {
 		t.Fatalf("missing expected events: start=%v toolStart=%v toolEnd=%v delta=%v end=%v",
 			lifecycleStart, toolStart, toolEnd, assistantDelta, lifecycleEnd)
 	}
-	if chatFinal != "Hello\n\nworld" {
-		t.Fatalf("final chat text = %q, want %q", chatFinal, "Hello\n\nworld")
+	// "Hello" is the pre-tool narration, "world" the reply: only the LAST text
+	// part is the reply (the preamble is demoted to the thinking stream).
+	if chatFinal != "world" {
+		t.Fatalf("final chat text = %q, want %q", chatFinal, "world")
 	}
 	if lifecycleEndUsage == nil || lifecycleEndUsage.InputTokens != 12 || lifecycleEndUsage.OutputTokens != 5 {
 		t.Fatalf("usage not carried to lifecycle.end: %+v", lifecycleEndUsage)
