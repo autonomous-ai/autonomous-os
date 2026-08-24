@@ -20,6 +20,15 @@ motion driver (`mock`, `hal/drivers/motors/mock_service.py`) keeps joints in a
 dict, and the board entry `sim` exists so HAL has a wiring profile to load on a
 machine with no device tree.
 
+What the dict does model, because a simulator that got these wrong would teach
+the wrong thing: moves interpolate over their commanded `duration` and block
+until they arrive; `aim`/`nudge` obey the `motion.max_speed` ceiling from
+`SAFETY.md`; recordings replay through the shared stretch-and-resample timing in
+`hal/drivers/motors/recording_timing.py`, so an animation lasts what it lasts on
+a body; and `release` drops the pitch joints to a gravity stop before cutting
+torque, leaving yaw where it pointed. What it still does not model: inertia,
+collision, real torque, and per-unit EEPROM servo calibration.
+
 Run it on a laptop:
 
 ```bash

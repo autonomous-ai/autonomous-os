@@ -1218,12 +1218,67 @@ def simulator_cad():
     return FileResponse(mesh, media_type="model/stl")
 
 
-@app.get("/simulator/state", include_in_schema=False)
-def simulator_state():
-    """Expose only the local UI mode; no hardware state is changed here."""
+@app.get("/simulator/pixels", include_in_schema=False)
+def simulator_pixels():
+    """Every pixel on the ring, right now, for the local viewer.
+
+    /led/color cannot drive a visualiser: while an effect runs it reports the
+    effect's static base color, and otherwise it reads pixel 0 alone. Neither
+    shows what the ring is actually doing, so breathing, candle and rainbow all
+    render as one unchanging color. This reads the strip buffer itself.
+    """
     if not _simulation or _profile.id != "lamp":
         return HTMLResponse(status_code=404, content="Lamp simulator is unavailable")
-    return {"media": _simulation_media}
+    service = state.rgb_service
+    if not service:
+        return {"pixels": []}
+    strip = service.strip
+    pixels = []
+    for index in range(service.led_count):
+        raw = strip.getPixelColor(index)
+        # Real strips pack a pixel into an int; the in-memory strip keeps tuples.
+        pixels.append(
+            list(raw)[:3] if isinstance(raw, (tuple, list))
+            else [(raw >> 16) & 0xFF, (raw >> 8) & 0xFF, raw & 0xFF]
+        )
+    return {"pixels": pixels}
+
+
+@app.get("/simulator/rig", include_in_schema=False)
+def simulator_rig():
+    """Serve the Lamp's rigged CAD model for the local viewer.
+
+    Unlike the STL assembly this GLB carries an armature: five joint nodes named
+    exactly as HAL names them (base_yaw, base_pitch, elbow_pitch, wrist_pitch,
+    wrist_roll), so live joint state can drive the real geometry instead of a
+    stand-in made of boxes.
+    """
+    if not _simulation or _profile.id != "lamp":
+        return HTMLResponse(status_code=404, content="Lamp simulator is unavailable")
+    model = Path(_devices_dir()) / "lamp" / "hardware" / "cad" / "glb" / "lamp.glb"
+    if not model.is_file() or model.stat().st_size < 1024:
+        return HTMLResponse(
+            status_code=404,
+            content="Lamp rig is unavailable; run git lfs pull in the repository.",
+        )
+    return FileResponse(model, media_type="model/gltf-binary")
+
+
+@app.get("/simulator/state", include_in_schema=False)
+def simulator_state():
+    """Expose the local UI mode and the rig's zero pose; changes no state.
+
+    The GLB is modelled in the same pose the CAD assembly is: the lamp standing
+    as it does when aimed at center. So the viewer must read joint angles as
+    offsets from the center preset, not from zero, or every pose comes out bent
+    twice. Serving the preset (rather than hardcoding it in the page) keeps the
+    two from drifting when the per-device presets change.
+    """
+    if not _simulation or _profile.id != "lamp":
+        return HTMLResponse(status_code=404, content="Lamp simulator is unavailable")
+    from hal.presets import AIM_CENTER, AIM_PRESETS
+
+    return {"media": _simulation_media, "rig_zero": AIM_PRESETS[AIM_CENTER]}
 
 
 from hal.server_support.http_security import (
