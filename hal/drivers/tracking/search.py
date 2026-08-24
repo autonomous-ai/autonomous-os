@@ -12,9 +12,17 @@ affordable —
   * they accept an offer after a failed look — "I can't see it. Want me to
     look around?"
 
-Coverage: yaw spans -135..+135 and the camera sees ~60-78 deg, so stepping in
-sub-FOV increments covers nearly the whole circle, leaving only a small wedge
-directly behind the lamp.
+Coverage: yaw spans -135..+135 and the camera sees ~100 deg (measured
+107-123 on device; LOOK_AIM_FOV_DEG is set to 100, deliberately below the
+measurement — see hal/config.py). STEP_DEG stays well under that, so stops
+overlap and the sweep covers nearly the whole circle, leaving only a small
+wedge directly behind the lamp.
+
+The "~60-78 deg" this once claimed came from constants.CAMERA_FOV_DEG and the
+hardware BOM, which disagree with each other and both with the device. The aim
+stopped trusting a fixed FOV entirely (it measures the local scale per step);
+this file only needs the number to be a lower bound on stop spacing, which 100
+comfortably is.
 
 Search order is seeded from the remembered bearing and expands outward rather
 than sweeping left-to-right, because the most likely place is worth looking at
@@ -83,21 +91,75 @@ def _stop_list(seed: float) -> List[float]:
     return stops
 
 
-def _seed_yaw(svc: Any) -> float:
-    """Where to look first: the remembered bearing when we have one, else
-    wherever the head already points."""
-    try:
-        from hal.drivers.tracking import user_bearing
-
-        est = user_bearing.read_estimate()
-        if est is not None:
-            return est.bearing_deg
-    except Exception:
-        pass
+def _current_yaw(svc: Any) -> float:
     try:
         return float(svc.get_positions().get("base_yaw.pos", 0.0))
     except Exception:
         return 0.0
+
+
+def _seed_from_bearing(svc: Any) -> float:
+    """Where to look first, and from what POSTURE.
+
+    Restores the remembered pose before returning its yaw, because a sweep is
+    the one place where yaw alone is provably not enough: it steps the head
+    across up to MAX_STOPS bearings, and if the pitch is left aimed at the desk
+    it sweeps the desk MAX_STOPS times and reports nobody there. That is
+    `user_bearing`'s own warning — "a head left pointing at the floor sweeps the
+    floor in a circle no matter how right the yaw is" — applied to the consumer
+    that sweeps by definition.
+
+    The other two consumers already restore the whole posture. This one read
+    `bearing_deg` and nothing else, so the search was the only place the lesson
+    of #226 had not landed.
+
+    Confidence is honoured too, at the aim's permissive floor rather than
+    gaze's: a seed is an ordering hint, and being wrong costs one extra stop out
+    of eight, not a wasted turn. Below it, start from where the head already
+    points and sweep outward from there.
+    """
+    try:
+        from hal.drivers.tracking import aim, user_bearing
+
+        est = user_bearing.read_estimate()
+        if est is None:
+            return _current_yaw(svc)
+        if est.confidence < aim.MIN_BEARING_CONFIDENCE:
+            logger.info(
+                "[search] ignoring bearing %+.1f — confidence %.2f < %.2f",
+                est.bearing_deg, est.confidence, aim.MIN_BEARING_CONFIDENCE,
+            )
+            return _current_yaw(svc)
+
+        # Posture first, in ONE absolute move — the same mechanism the aim and
+        # the gaze repoint use, so all three restore identically. An absolute
+        # target has no sign to get wrong, which is why pitch is safe here and
+        # not in a relative nudge.
+        try:
+            current = svc.get_positions()
+            target, _step = aim._bearing_step_target(svc, est, current)
+            if target:
+                duration = aim.min_move_duration(
+                    state.safety_policy, target, current, MOVE_DURATION_S
+                )
+                svc.move_and_hold(target, duration=duration)
+                logger.info(
+                    "[search] restored remembered posture (%d joints) before sweeping",
+                    len(target),
+                )
+        except Exception as e:
+            # A failed restore must not cost the search: sweeping from the
+            # wrong pitch still beats not sweeping at all.
+            logger.warning("[search] posture restore skipped: %s", e)
+
+        return est.bearing_deg
+    except Exception:
+        return _current_yaw(svc)
+
+
+def _seed_yaw(svc: Any) -> float:
+    """Backwards-compatible alias — see _seed_from_bearing."""
+    return _seed_from_bearing(svc)
 
 
 def search_for_subject(target: str = "person", detector: Any = None) -> SearchResult:

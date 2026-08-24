@@ -39,15 +39,34 @@ class _FakeCap:
 class _FakeSvc:
     def __init__(self):
         self.yaw = 0.0
+        self.holds = []            # absolute poses restored before the sweep
         self.nudge = mock.Mock(side_effect=self._nudge)
-        self.get_positions = mock.Mock(side_effect=lambda: {"base_yaw.pos": self.yaw})
+        # A real arm reports every joint. `_bearing_step_target` treats a joint
+        # ABSENT from the current pose as already-correct, so a double that
+        # returns yaw alone can never restore pitch — and would hide the very
+        # thing this file now tests.
+        self.get_positions = mock.Mock(side_effect=lambda: {
+            "base_yaw.pos": self.yaw,
+            "base_pitch.pos": 0.0,
+            "elbow_pitch.pos": 0.0,
+            "wrist_pitch.pos": 0.0,
+        })
+
+    def get_joint_names(self):
+        return ["base_yaw.pos", "base_pitch.pos", "elbow_pitch.pos", "wrist_pitch.pos"]
+
+    def move_and_hold(self, target, duration=None):
+        self.holds.append(dict(target))
+        if "base_yaw.pos" in target:
+            self.yaw = float(target["base_yaw.pos"])
 
     def _nudge(self, y, p, d, cur, pol):
         self.yaw += y
         return {"base_yaw.pos": self.yaw}
 
 
-def _run(detect_at_stop=None, bearing=None, disabled=False, abort_at_stop=None):
+def _run(detect_at_stop=None, bearing=None, disabled=False, abort_at_stop=None,
+         confidence=0.9, pose=None):
     """detect_at_stop: 1-based stop index at which a subject appears."""
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     svc = _FakeSvc()
@@ -66,7 +85,13 @@ def _run(detect_at_stop=None, bearing=None, disabled=False, abort_at_stop=None):
 
     det = mock.Mock()
     det.detect = mock.Mock(side_effect=_detect)
-    est = mock.Mock(bearing_deg=bearing) if bearing is not None else None
+    if bearing is None:
+        est = None
+    else:
+        est = mock.Mock(bearing_deg=bearing, confidence=confidence)
+        # A real estimate carries a whole posture; the seed restores it before
+        # sweeping (see _seed_from_bearing).
+        est.pose = {"base_yaw.pos": bearing} if pose is None else pose
 
     with (
         mock.patch.object(state, "camera_capture", _FakeCap(frame)),
@@ -140,3 +165,68 @@ def test_a_stale_abort_does_not_block_the_next_search():
     search.request_abort()
     res, _svc = _run(detect_at_stop=1)
     assert res.found is True
+
+
+# --- Task F / F7: the search restores the posture and honours confidence ---
+
+
+def test_the_sweep_restores_the_remembered_posture_first():
+    """A sweep is the one consumer that provably needs more than yaw.
+
+    It steps the head across up to MAX_STOPS bearings; with the pitch left
+    aimed at the desk it sweeps the desk MAX_STOPS times and reports nobody
+    there — `user_bearing`'s own warning, applied to the consumer that sweeps
+    by definition.
+    """
+    _res, svc = _run(
+        bearing=40.0,
+        pose={"base_yaw.pos": 40.0, "base_pitch.pos": -12.0, "wrist_pitch.pos": -30.0},
+    )
+    assert svc.holds, "no posture was restored before sweeping"
+    restored = svc.holds[0]
+    assert "wrist_pitch.pos" in restored or "base_pitch.pos" in restored, restored
+
+
+def test_a_low_confidence_bearing_does_not_seed_the_sweep():
+    """A seed is an ordering hint, but an estimate about to be dropped is not
+    one — start from where the head already points instead."""
+    from hal.drivers.tracking import aim
+
+    res, svc = _run(bearing=120.0, confidence=aim.MIN_BEARING_CONFIDENCE - 0.05)
+    assert svc.holds == [], "a bearing below the floor must not move the head"
+    assert res.stops_visited >= 1
+
+
+def test_a_confident_bearing_still_seeds_the_sweep():
+    from hal.drivers.tracking import aim
+
+    _res, svc = _run(bearing=40.0, confidence=aim.MIN_BEARING_CONFIDENCE + 0.05)
+    assert svc.holds, "a bearing above the floor should be used"
+
+
+def test_no_estimate_falls_back_to_where_the_head_points():
+    _res, svc = _run(bearing=None)
+    assert svc.holds == []
+
+
+def test_a_failed_posture_restore_still_sweeps():
+    """Sweeping from the wrong pitch beats not sweeping at all."""
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    svc = _FakeSvc()
+    svc.move_and_hold = mock.Mock(side_effect=RuntimeError("servo busy"))
+    det = mock.Mock()
+    det.detect = mock.Mock(return_value=None)
+    est = mock.Mock(bearing_deg=40.0, confidence=0.9)
+    est.pose = {"base_yaw.pos": 40.0, "wrist_pitch.pos": -30.0}
+
+    with (
+        mock.patch.object(state, "camera_capture", _FakeCap(frame)),
+        mock.patch.object(state, "animation_service", svc),
+        mock.patch.object(state, "safety_policy", None),
+        mock.patch.object(state, "_camera_disabled", False, create=True),
+        mock.patch.object(search.time, "sleep"),
+        mock.patch("hal.drivers.tracking.user_bearing.read_estimate", return_value=est),
+    ):
+        res = search.search_for_subject(detector=det)
+
+    assert res.stops_visited >= 1, "a failed restore must not abort the search"
