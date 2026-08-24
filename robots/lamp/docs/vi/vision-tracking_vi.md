@@ -190,7 +190,7 @@ Mọi knob nằm trong `hal/drivers/tracking/constants.py`. (Đường proportio
 | Thời lượng tracking > 5 phút | Dừng — timeout để tiết kiệm motor/CPU |
 | Single-click từ nút GPIO hoặc TTP223 | Dừng — user chủ động huỷ attention |
 
-Lưu ý: một bbox lớn (ví dụ một người lấp đầy frame) **không** phải điều kiện dừng — PID chạy theo centroid, không phải kích thước bbox, nên một vật thể ở gần vẫn track. Khi tracking kết thúc, cánh tay trượt về zero ở tốc độ tracking (không snap).
+Lưu ý: một bbox lớn (ví dụ một người lấp đầy frame) **không** phải điều kiện dừng — PID chạy theo centroid, không phải kích thước bbox, nên một vật thể ở gần vẫn track. Khi tracking kết thúc, cánh tay trượt về zero ở tốc độ tracking (không snap), rồi idle animation được dispatch lại — xem [Tương tác với các hệ thống khác](#tương-tác-với-các-hệ-thống-khác).
 
 ### Tự động dừng khi mất kết nối gateway/network
 
@@ -316,6 +316,8 @@ Camera section hiển thị:
 | Sensing (face, motion) | Tiếp tục — chia sẻ camera | Tiếp tục |
 | Camera stream overlay | Vẽ bbox xanh | Stream bình thường |
 | TTS | Tiếp tục bình thường | Tiếp tục bình thường |
+
+Việc quay lại idle là một **dispatch tường minh**, không phải hệ quả phụ của việc xoá cờ tracking. Khi `_tracking_active` đang bật, `AnimationService._continue_playback` bỏ recording đang chạy dở (`_current_recording = None`) để không có gì tranh servo với tracker. Xoá cờ không đặt lại giá trị đó: event loop return ngay ở guard đầu tiên (`if not self._current_recording`), nên nếu không dispatch thì cánh tay đứng cứng ở zero với torque vẫn bật cho tới lệnh emotion hoặc play kế tiếp. Vì vậy khối `finally` của `_track_loop` kết thúc bằng `animation_service.dispatch("play", animation_service.idle_recording)` — dùng dispatch thay vì `_handle_play` để việc phát vẫn thuộc về event thread, giống các đường thoát music-stop, `aim` và `resume`.
 
 ## Ghi chú hiệu năng
 
