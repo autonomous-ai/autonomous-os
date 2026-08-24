@@ -544,8 +544,8 @@ def test_a_recent_pitch_correction_outranks_the_remembered_bearing(body):
     """The two used to undo each other, on the device, every few seconds.
 
     Pitch lifted the camera onto a face it could actually see (-72.8 -> -61.9);
-    thirteen seconds later repoint re-anchored idle on the remembered pose,
-    wrist -46.7, dropping the aim back to where the face was clipped. Pitch
+    thirteen seconds later repoint turned the head back toward the remembered
+    pose, wrist -46.7, dropping the aim to where the face was clipped. Pitch
     wins because it is correcting toward a face visible now, while the bearing
     is a guess about where one was last seen.
     """
@@ -1063,75 +1063,3 @@ def test_repointing_also_discards_them(body):
     assert body.moves and gaze.snapshot() == []
 
 
-def test_repoint_does_not_re_anchor_a_wrist_the_pitch_loop_has_corrected(body):
-    """The slow half of the same fight.
-
-    Device-observed: pitch lifted the camera to -31.5 where it could see a
-    face, and thirty-four seconds later the repoint anchored idle back on the
-    remembered -46.1, from where the face is clipped again. The bearing memory
-    is worth believing about which way to face — that is what the move uses —
-    but not about how high to look.
-    """
-    anchored = {}
-    body.set_idle_anchor = lambda j: anchored.update(j or {})
-    _absent_for(config.GAZE_REPOINT_AFTER_S + 1)
-    gaze._last_pitch_t = gaze.time.monotonic() - config.GAZE_REPOINT_AFTER_S - 1.0
-    gaze._maybe_repoint(gaze.time.monotonic())
-    assert body.moves                                  # it still turned
-    assert "wrist_pitch.pos" not in anchored           # but left the aim alone
-    assert anchored.get("base_pitch.pos") == pytest.approx(0.0)
-
-
-def test_with_no_correction_yet_the_remembered_pose_is_anchored_whole(body, monkeypatch):
-    from hal.drivers.tracking import user_bearing
-
-    class _EstWithPitch(_Est):
-        pose = {"base_yaw.pos": 4.0, "base_pitch.pos": 0.0, "wrist_pitch.pos": -70.0}
-
-    monkeypatch.setattr(user_bearing, "read_estimate", lambda: _EstWithPitch())
-    anchored = {}
-    body.set_idle_anchor = lambda j: anchored.update(j or {})
-    _absent_for(config.GAZE_REPOINT_AFTER_S + 1)
-    gaze._last_pitch_t = 0.0                           # pitch has never spoken
-    gaze._last_anchor = None
-    gaze._maybe_repoint(gaze.time.monotonic())
-    assert anchored.get("wrist_pitch.pos") == pytest.approx(-70.0)
-
-
-def test_a_face_driven_correction_anchors_the_idle_loop(neck, monkeypatch):
-    """Anchoring must not wait for a perfectly centred face.
-
-    Waiting was circular: idle drags the camera back within a cycle, so the
-    centred frame that would justify anchoring never arrives and every
-    correction is undone before the next one lands.
-    """
-    anchored = {}
-    neck.set_idle_anchor = lambda j: anchored.update(j or {})
-    gaze._last_anchor = None
-    gaze._last_dy_from_face = True
-    gaze._last_dy_frac = -0.4
-    gaze._maybe_pitch(gaze.time.monotonic())
-    assert anchored.get("wrist_pitch.pos") == pytest.approx(
-        neck.moves[0]["wrist_pitch.pos"]
-    )
-
-
-def test_a_guessed_correction_anchors_too_so_idle_does_not_undo_it(neck, monkeypatch):
-    """A search whose progress is erased between steps is not a search.
-
-    Leaving the anchor behind during a blind search let idle pull back to where
-    the search started — device-observed the head reaching -32.4 and being
-    dragged to -41.5 before the next look. The blind budget bounds how far a
-    guess can take this; the anchor only stops it being wasted.
-    """
-    monkeypatch.setattr(config, "GAZE_PITCH_MAX_BLIND_STEPS", 3)
-    anchored = {}
-    neck.set_idle_anchor = lambda j: anchored.update(j or {})
-    gaze._last_anchor = None
-    gaze._last_dy_from_face = False
-    gaze._blind_pitch_steps = 0
-    gaze._last_dy_frac = -0.5
-    gaze._maybe_pitch(gaze.time.monotonic())
-    assert anchored.get("wrist_pitch.pos") == pytest.approx(
-        neck.moves[0]["wrist_pitch.pos"]
-    )

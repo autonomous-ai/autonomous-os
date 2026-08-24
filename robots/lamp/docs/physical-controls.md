@@ -83,7 +83,6 @@ When several faces are in frame, the one whose head counts is the one **nearest 
 | `HAL_GAZE_PITCH_DEAD_ZONE_FRAC` | 0.15 | Offset from centre below which the framing is left alone. |
 | `HAL_GAZE_PITCH_COOLDOWN_S` | 4 | Minimum gap between corrections. |
 | `HAL_GAZE_PITCH_MAX_BLIND_STEPS` | 0 | Corrections allowed from the coarse torso fallback rather than a real face, before a face must confirm the direction. |
-| `HAL_GAZE_IDLE_ANCHOR` | `true` | Re-centre the idle loop on the pose a face was seen from, so idle does not walk the correction back. |
 
 The lamp image deliberately overrides `HAL_GAZE_MAX_YAW_DEG` to **60°**. This is device calibration, not a generic default: on lamp-0c89 YuNet measured a user looking directly into the camera through glasses at 55.7–59.1°. It does not relax the two-valid-sample minimum or the 60% vote, so a lone frame still cannot open the gate.
 

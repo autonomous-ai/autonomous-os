@@ -83,7 +83,6 @@ Khi trong khung có nhiều mặt, mặt được tính là mặt **gần tâm k
 | `HAL_GAZE_PITCH_DEAD_ZONE_FRAC` | 0.15 | Lệch dưới mức này thì để yên. |
 | `HAL_GAZE_PITCH_COOLDOWN_S` | 4 | Khoảng cách tối thiểu giữa hai lần chỉnh. |
 | `HAL_GAZE_PITCH_MAX_BLIND_STEPS` | 0 | Số lần được chỉnh dựa trên suy đoán từ thân người thay vì mặt thật, trước khi phải có một khuôn mặt xác nhận hướng. |
-| `HAL_GAZE_IDLE_ANCHOR` | `true` | Dời tâm vòng idle về tư thế đã nhìn thấy mặt, để idle không kéo ngược cú chỉnh. |
 
 Image của lamp chủ động override `HAL_GAZE_MAX_YAW_DEG` thành **60°**. Đây là calibration riêng cho thiết bị, không phải mặc định chung: trên lamp-0c89, YuNet đo user đang nhìn thẳng vào camera qua kính thành 55,7–59,1°. Ngưỡng tối thiểu hai mẫu hợp lệ và phiếu bầu 60% vẫn giữ nguyên, nên một frame đơn lẻ vẫn không đủ để mở gate.
 
