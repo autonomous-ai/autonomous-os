@@ -84,8 +84,10 @@ claim that a rendered `down` or `right` pose is physically correct.
 This is an interface simulator, not a physics model: it has no mass or
 collision model, while shipped recording CSVs replay their timing in memory.
 Virtual camera/audio content is deterministic. To boot a minimal contract test
-body instead, use `make sim DEVICE_TYPE=sim`. See
-`robots/sim/ROBOT.md` for that body's narrower motion-only contract.
+body instead, use `make sim DEVICE_TYPE=sim`. That body declares `motion` and
+`system` and nothing else, which is how we prove HAL mounts exactly what a
+`ROBOT.md` declares and no more — lamp cannot show that, because lamp declares
+everything. See `robots/sim/ROBOT.md`.
 
 For a manual Mac media check, use `make sim SIM_MEDIA=host`. This explicitly
 opens the host camera, microphone and speaker: the simulator page shows its

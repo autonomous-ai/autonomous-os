@@ -83,8 +83,10 @@ với Lamp vật lý.
 Đây là interface simulator, không phải physics model: không có khối lượng hay
 va chạm; recording CSV có sẵn chỉ replay timing trong RAM. Nội dung
 camera/audio ảo là deterministic. Muốn boot test body tối giản theo contract
-thì chạy `make sim DEVICE_TYPE=sim`. Xem `robots/sim/ROBOT.md` để biết
-contract motion-only hẹp hơn của body đó.
+thì chạy `make sim DEVICE_TYPE=sim`. Body đó chỉ khai `motion` và `system`,
+không gì khác — đó là cách chứng minh HAL mount đúng những gì `ROBOT.md` khai
+và không mount thêm; lamp không kiểm được điều này vì lamp khai đủ mọi thứ.
+Xem `robots/sim/ROBOT.md`.
 
 Muốn kiểm tra media thật trên Mac, chạy `make sim SIM_MEDIA=host`. Lệnh này
 chủ động mở camera, microphone và speaker của máy: trang simulator hiển thị
