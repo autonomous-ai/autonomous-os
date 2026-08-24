@@ -568,6 +568,29 @@ bằng `make upload-claudecode <semver-trần>`, thả bằng `make promote-clau
 giống codex, bootstrap worker chưa tiêu thụ `claudecode.version` nên hiện chỉ
 chạy tay qua SSH.
 
+### Xử lý OpenCode (mới chỉ chạy tay — bootstrap worker CHƯA đọc)
+
+OpenCode dùng installer chính chủ (arch detection + giải nén là việc của
+upstream); mình chỉ pin version và ép thư mục cài. Khớp với
+`runtimes/opencode/install.sh` và bake trong imager — giữ cả ba đồng bộ.
+
+```bash
+"opencode")
+    install -D -m 0755 /usr/local/bin/opencode /root/bootstrap/rollback/opencode.previous
+    curl -fsSL https://opencode.ai/install | OPENCODE_INSTALL_DIR=/usr/local/bin bash -s -- --version "$VERSION"
+    # …rồi bước copy dự phòng y như install.sh, phòng khi installer bỏ qua
+    # OPENCODE_INSTALL_DIR và dùng ~/.opencode/bin.
+    opencode --version
+    systemctl restart opencode      # có điều kiện: unit chỉ tồn tại khi runtime đang active
+    ;;
+```
+
+`OPENCODE_INSTALL_DIR` PHẢI đứng trước `bash`, không phải `curl` — trong pipeline
+`VAR=x curl … | bash` biến chỉ bind vào `curl`. Vì đây đúng là binary ở đường dẫn
+cố định nên nó CÓ backup `.previous`: `software-update rollback opencode` chạy
+được, khác claudecode. Publish bằng `make upload-opencode <semver-trần>`, thả
+bằng `make promote-opencode`.
+
 ---
 
 ## 6. HAL Runtime — Nguồn & Tích Hợp

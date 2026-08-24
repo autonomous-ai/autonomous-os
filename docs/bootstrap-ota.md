@@ -580,6 +580,29 @@ a file we saved. Publish with `make upload-claudecode <bare-semver>`, release
 with `make promote-claudecode`; as with codex, the bootstrap worker does not
 consume `claudecode.version` yet, so this is the SSH-only path for now.
 
+### OpenCode Case (manual only — not yet wired to the bootstrap worker)
+
+OpenCode uses its official installer (arch detection + extraction are upstream's
+job); we only pin the version and force the install dir. Mirrors
+`runtimes/opencode/install.sh` and the imager pre-bake — keep the three in step.
+
+```bash
+"opencode")
+    install -D -m 0755 /usr/local/bin/opencode /root/bootstrap/rollback/opencode.previous
+    curl -fsSL https://opencode.ai/install | OPENCODE_INSTALL_DIR=/usr/local/bin bash -s -- --version "$VERSION"
+    # …then the same belt-and-suspenders copy install.sh does, in case the
+    # installer ignored OPENCODE_INSTALL_DIR and used ~/.opencode/bin.
+    opencode --version
+    systemctl restart opencode      # conditional: unit exists only when the runtime is active
+    ;;
+```
+
+`OPENCODE_INSTALL_DIR` MUST prefix `bash`, not `curl` — in a `VAR=x curl … | bash`
+pipeline the variable binds to `curl` only. Because this one really is a binary
+at a stable path, it does get a `.previous` backup: `software-update rollback
+opencode` works, unlike claudecode. Publish with `make upload-opencode
+<bare-semver>`, release with `make promote-opencode`.
+
 ---
 
 ## 6. HAL Runtime — Source & Integration

@@ -176,10 +176,10 @@ restore_hal_backup() {
 }
 
 [ "$(id -u)" -ne 0 ] && { echo "Run as root."; exit 1; }
-[ $# -lt 1 ] && { echo "Usage: software-update <component>|rollback <os-server|bootstrap|web|device|hal|codex>"; exit 1; }
+[ $# -lt 1 ] && { echo "Usage: software-update <component>|rollback <os-server|bootstrap|web|device|hal|codex|opencode>"; exit 1; }
 APP="$1"
 if [ "$APP" = "rollback" ]; then
-  [ $# -eq 2 ] || { echo "Usage: software-update rollback <os-server|bootstrap|web|device|hal|codex>"; exit 1; }
+  [ $# -eq 2 ] || { echo "Usage: software-update rollback <os-server|bootstrap|web|device|hal|codex|opencode>"; exit 1; }
   ROLLBACK_TARGET="$2"
   if [ "$ROLLBACK_TARGET" = "web" ]; then
     BACKUP="$ROLLBACK_DIR/web.previous"
@@ -244,7 +244,8 @@ if [ "$APP" = "rollback" ]; then
     os-server) DEST=/usr/local/bin/os-server; UNIT=os-server ;;
     bootstrap) DEST=/usr/local/bin/bootstrap-server; UNIT=bootstrap ;;
     codex) DEST=/usr/local/bin/codex; UNIT=codex ;;
-    *) echo "Rollback is currently supported for os-server, bootstrap and codex only"; exit 1 ;;
+    opencode) DEST=/usr/local/bin/opencode; UNIT=opencode ;;
+    *) echo "Rollback is currently supported for os-server, bootstrap, codex and opencode only"; exit 1 ;;
   esac
   BACKUP="/root/bootstrap/rollback/${ROLLBACK_TARGET}.previous"
   [ -x "$BACKUP" ] || { echo "No rollback backup for $ROLLBACK_TARGET"; exit 1; }
@@ -262,11 +263,12 @@ if [ "$APP" = "rollback" ]; then
     fi
   fi
   install -D -m 0755 "$BACKUP" "$DEST"
-  # codex.service only exists once the runtime has been switched to codex (the
-  # binary is baked on every lamp/intern-v2 image regardless) — restoring the
-  # binary on a device running another runtime must not fail the rollback.
-  if [ "$ROLLBACK_TARGET" = "codex" ] && [ ! -f /etc/systemd/system/codex.service ]; then
-    echo "[software-update] codex.service absent (runtime not active) — binary restored, no restart"
+  # codex.service / opencode.service only exist once the runtime has been
+  # switched to them (the binary is baked on every lamp/intern-v2 image
+  # regardless) — restoring the binary on a device running another runtime must
+  # not fail the rollback.
+  if { [ "$ROLLBACK_TARGET" = "codex" ] || [ "$ROLLBACK_TARGET" = "opencode" ]; } && [ ! -f "/etc/systemd/system/${UNIT}.service" ]; then
+    echo "[software-update] ${UNIT}.service absent (runtime not active) — binary restored, no restart"
   else
     systemctl restart "$UNIT"
   fi
@@ -275,8 +277,8 @@ if [ "$APP" = "rollback" ]; then
   exit 0
 fi
 case "$APP" in
-  os-server|openclaw|codex|claudecode|bootstrap|web|hal|claude-desktop-buddy|device) ;;
-  *) echo "Unknown app: $APP. Use os-server, openclaw, codex, claudecode, bootstrap, web, hal, claude-desktop-buddy, or device."; exit 1 ;;
+  os-server|openclaw|codex|claudecode|opencode|bootstrap|web|hal|claude-desktop-buddy|device) ;;
+  *) echo "Unknown app: $APP. Use os-server, openclaw, codex, claudecode, opencode, bootstrap, web, hal, claude-desktop-buddy, or device."; exit 1 ;;
 esac
 
 if [ -z "${OTA_METADATA_URL:-}" ]; then
@@ -430,6 +432,36 @@ elif [ "$APP" = "claudecode" ]; then
     echo "[software-update] claudecode.service absent (runtime not active) — CLI updated, no restart"
   fi
   echo "claudecode updated to $VERSION"
+elif [ "$APP" = "opencode" ]; then
+  # OpenCode ships via its own official installer, which does arch detection and
+  # tarball extraction itself; we only pin the version and force the install dir.
+  # Mirrors runtimes/opencode/install.sh and the imager pre-bake exactly — keep
+  # the three in step.
+  #
+  # OPENCODE_INSTALL_DIR MUST prefix `bash` (the process running the installer),
+  # NOT `curl` — in a `VAR=x curl … | bash` pipeline the var binds to curl only,
+  # and the installer would fall back to its ~/.opencode/bin default.
+  [ -x /usr/local/bin/opencode ] || { echo "opencode is not installed on this device — switch the runtime to opencode first"; exit 1; }
+  export HOME=/root
+  install -D -m 0755 /usr/local/bin/opencode /root/bootstrap/rollback/opencode.previous
+  curl -fsSL https://opencode.ai/install | OPENCODE_INSTALL_DIR=/usr/local/bin bash -s -- --version "$VERSION" \
+    || { echo "opencode installer failed for $VERSION"; exit 1; }
+  # Belt-and-suspenders, same as install.sh: the official installer has ignored
+  # OPENCODE_INSTALL_DIR before and dropped the binary at its own default.
+  if [ ! -x /usr/local/bin/opencode ]; then
+    OC_SRC="$(command -v opencode 2>/dev/null || true)"
+    [ -x "$OC_SRC" ] || OC_SRC="/root/.opencode/bin/opencode"
+    [ -x "$OC_SRC" ] && install -m 0755 "$OC_SRC" /usr/local/bin/opencode
+  fi
+  /usr/local/bin/opencode --version || { echo "opencode not runnable after update"; exit 1; }
+  # opencode.service only exists once the runtime was switched to opencode;
+  # every lamp/intern-v2 image bakes the CLI regardless of runtime.
+  if [ -f /etc/systemd/system/opencode.service ]; then
+    systemctl restart opencode
+  else
+    echo "[software-update] opencode.service absent (runtime not active) — CLI updated, no restart"
+  fi
+  echo "opencode updated to $VERSION"
 elif [ "$APP" = "web" ]; then
   [ -z "$URL" ] && { echo "Metadata has no url for web"; exit 1; }
   ZIP_TMP=$(mktemp)
