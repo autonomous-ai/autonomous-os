@@ -383,3 +383,28 @@ def test_the_fingerprint_follows_content_not_timestamp():
             with open(cal, "w", encoding="utf-8") as f:
                 f.write('{"base_yaw": {"homing_offset": 1909}}')
             assert ub._calibration_fingerprint() != first
+
+
+def test_the_calibration_path_comes_from_the_robot_not_a_second_derivation():
+    """Two copies of the resolution rule can drift; the arm's own answer cannot.
+
+    A drifted mirror would fingerprint a file the arm never loaded — dropping
+    good bearings on every read, or accepting a stale pose from another unit.
+    """
+    import hal.app_state as state
+
+    robot = mock.Mock()
+    robot.calibration_fpath = "/var/lib/hal/calibration/robots/hal_follower/lamp-ac82.json"
+    svc = mock.Mock()
+    svc.robot = robot
+    with mock.patch.object(state, "animation_service", svc, create=True):
+        assert ub._calibration_path().endswith("lamp-ac82.json")
+
+
+def test_it_falls_back_to_deriving_the_path_with_no_robot_connected():
+    """Off-device tests, and the window before the arm connects."""
+    import hal.app_state as state
+
+    with mock.patch.object(state, "animation_service", None, create=True):
+        path = ub._calibration_path()
+    assert path is None or path.endswith(".json")

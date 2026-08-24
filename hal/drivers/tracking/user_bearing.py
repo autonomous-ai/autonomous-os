@@ -48,10 +48,25 @@ BASE_YAW_JOINT: str = "base_yaw.pos"
 def _calibration_path() -> Optional[str]:
     """The calibration file the arm actually loaded, or None.
 
-    Mirrors LeLampFollowerConfig.__post_init__: a per-device id reads
-    ``<PERSISTENT_CALIBRATION_DIR>/<id>.json`` when that file exists, and
-    everything else falls back to the repo file under the id "hal".
+    ASK the robot rather than recomputing. lerobot resolves this once, in
+    Robot.__init__, and keeps it on `calibration_fpath` — the file it really
+    read. Deriving it a second time from DEVICE_ID and the two candidate
+    directories means two copies of a rule that can drift, and a mirror that
+    drifts would fingerprint a file the arm never loaded: either dropping good
+    bearings on every read, or accepting a stale pose from the wrong unit.
+
+    The derivation below is kept only as a fallback for when there is no live
+    robot to ask — off-device tests, and the window before the arm connects.
     """
+    try:
+        import hal.app_state as state
+
+        svc = getattr(state, "animation_service", None)
+        fpath = getattr(getattr(svc, "robot", None), "calibration_fpath", None)
+        if fpath:
+            return str(fpath)
+    except Exception:
+        pass
     try:
         from hal.config import DEVICE_ID
         from hal.follower.config_hal_follower import (
