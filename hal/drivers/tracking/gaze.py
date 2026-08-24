@@ -379,14 +379,39 @@ def facing_ratio(now: Optional[float] = None) -> Tuple[float, int]:
     # Losing sight of someone entirely is still handled, just not by this ratio:
     # the denominator shrinks below GAZE_MIN_SAMPLES and the caller declines to
     # decide, which is the honest answer when nothing was seen.
+    return _ratio_between(samples, t - window, t)
+
+
+def _ratio_between(samples: List[Tuple[float, float, float, float]],
+                   lo: float, hi: float) -> Tuple[float, int]:
+    """``(fraction facing, samples examined)`` over ``[lo, hi]``."""
     measured = [
         s for s in samples
-        if s[0] >= t - window and s[1] != float("inf") and s[2] >= config.GAZE_MIN_FACE_PX
+        if lo <= s[0] <= hi and s[1] != float("inf") and s[2] >= config.GAZE_MIN_FACE_PX
     ]
     if not measured:
         return 0.0, 0
     facing = sum(1 for _, yaw, px, edge in measured if facing_lamp(yaw, px, edge))
     return facing / float(len(measured)), len(measured)
+
+
+def facing_before(now: Optional[float] = None) -> Tuple[float, int]:
+    """The same ratio over the window IMMEDIATELY BEFORE the decision window.
+
+    This is the baseline the whole design rests on and never had. The module
+    docstring says the signal is "the TRANSITION from looking away to looking
+    here" — but facing_ratio only ever measured the present, so a user who sits
+    facing the lamp's direction all day passed on every utterance. Presence
+    became the signal, which is precisely what the design says must not happen.
+    Device-measured 2026-08-24 in shadow: nine of nine accepted gestures had
+    flat trails like [13,12,12,11,12,11,13,21] — already facing, no turn.
+
+    The samples were always there. GAZE_BUFFER_S retains more history than
+    GAZE_WINDOW_S reads, and the older half was simply never consulted.
+    """
+    t = time.monotonic() if now is None else now
+    window = max(0.0, config.GAZE_WINDOW_S)
+    return _ratio_between(snapshot(), t - 2.0 * window, t - window)
 
 
 def _headroom_from_person(frame: Any, detector: Any) -> Optional[float]:
@@ -710,16 +735,34 @@ def on_speech_start() -> bool:
         yaw_txt = "none" if latest is None or latest[1] == float("inf") else f"{latest[1]:.1f}"
         px_txt = "0" if latest is None else f"{latest[2]:.0f}"
         edge_txt = "0.00" if latest is None else f"{latest[3]:.2f}"
-        would = (
-            considered >= config.GAZE_MIN_SAMPLES
-            and ratio >= config.GAZE_MIN_FACING_RATIO
+        measured_enough = considered >= config.GAZE_MIN_SAMPLES
+        facing_now = ratio >= config.GAZE_MIN_FACING_RATIO
+
+        # Did they TURN, or were they already pointing this way? See
+        # facing_before. An unmeasurable baseline is not evidence against a
+        # turn, so it does not veto — but it is reported, because "we could not
+        # tell" and "they turned" must not read alike in the log.
+        before_ratio, before_n = facing_before()
+        baseline_known = before_n >= config.GAZE_MIN_SAMPLES
+        turned = (
+            not config.GAZE_REQUIRE_TRANSITION
+            or not baseline_known
+            or before_ratio <= config.GAZE_TRANSITION_MAX_BEFORE
         )
+
+        would = measured_enough and facing_now and turned
 
         now = time.monotonic()
         cooling = would and (now - _last_grant_t) < config.GAZE_COOLDOWN_S
+        # "blind" is not "skip". Nothing measurable in the window means the lamp
+        # could not see, which is a different failure from a user who looked
+        # away — they are fixed in different places, and reading alike in the
+        # log is how the feature's real state stayed hidden (F17).
         verdict = (
             "WOULD_WAKE" if would and not cooling
             else "cooldown" if cooling
+            else "blind" if not measured_enough
+            else "no-turn" if facing_now and not turned
             else "skip"
         )
         # The trail is what makes a refusal diagnosable: a single number cannot
@@ -730,9 +773,11 @@ def on_speech_start() -> bool:
         )
         logger.info(
             "[gaze] speech: yaw=%s face=%spx edge=%s facing=%.0f%%/%.0f%% of %d "
-            "trail=[%s] -> %s%s",
+            "was=%s trail=[%s] -> %s%s",
             yaw_txt, px_txt, edge_txt, ratio * 100.0,
-            config.GAZE_MIN_FACING_RATIO * 100.0, considered, trail, verdict,
+            config.GAZE_MIN_FACING_RATIO * 100.0, considered,
+            f"{before_ratio * 100:.0f}%/{before_n}" if baseline_known else "?",
+            trail, verdict,
             " (shadow)" if config.GAZE_WAKE_SHADOW else "",
         )
         if not would or cooling or config.GAZE_WAKE_SHADOW:

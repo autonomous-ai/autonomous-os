@@ -1106,7 +1106,27 @@ GAZE_EDGE_CONE_SCALE: float = float(
 )
 # Seconds of yaw history kept. Must exceed GAZE_WINDOW_S or the lookback cannot
 # see far enough back to judge the gesture.
-GAZE_BUFFER_S: float = float(os.environ.get("HAL_GAZE_BUFFER_S", "3.0"))
+# Must be at least TWICE GAZE_WINDOW_S now, not merely longer: the transition
+# test reads the window before the decision window as its baseline, so the
+# buffer has to hold both. 4.0 leaves margin over the 2 x 1.5 = 3.0 minimum.
+GAZE_BUFFER_S: float = float(os.environ.get("HAL_GAZE_BUFFER_S", "4.0"))
+# Require evidence that the user TURNED toward the lamp, rather than merely that
+# they were pointing at it while speaking.
+#
+# The module docstring has always named the transition as the signal — "PRESENCE
+# IS NOT THE SIGNAL … a face turned to a monitor still detects" — but nothing
+# computed one, so a user sitting square to their desk passed on every utterance.
+# Device-measured in shadow 2026-08-24: nine of nine accepted gestures had flat
+# trails ([13,12,12,11,12,11,13,21] and similar). Not one was a turn.
+GAZE_REQUIRE_TRANSITION: bool = (
+    os.environ.get("HAL_GAZE_REQUIRE_TRANSITION", "true").lower() in ("1", "true", "yes")
+)
+# The baseline window must be BELOW this facing ratio for the present window to
+# count as a turn toward the lamp. Deliberately generous: a gesture only has to
+# start from "not reliably facing", not from a full profile.
+GAZE_TRANSITION_MAX_BEFORE: float = float(
+    os.environ.get("HAL_GAZE_TRANSITION_MAX_BEFORE", "0.5")
+)
 # Sampling rate of the watcher.
 #
 # 6, not the 3 that resolving the gesture alone would need. The gesture is slow,

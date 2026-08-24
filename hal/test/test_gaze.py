@@ -1423,3 +1423,95 @@ def test_nothing_is_scored_when_no_repoint_is_pending(monkeypatch):
     gaze._repoint_pending_t = 0.0
     gaze._verify_repoint(gaze.time.monotonic())
     assert calls == []
+
+
+# --- Task E / F17 + F19: the gate must see a TURN, not a posture ---
+
+
+def _turn_trail(values, now, span=None):
+    """Lay `values` across the WHOLE buffer, oldest first, ending at `now`.
+
+    Distinct from `_trail` above, which fills only the decision window. The
+    transition test reads the window before that one, so these tests have to
+    span both.
+    """
+    span = 2.0 * config.GAZE_WINDOW_S if span is None else span
+    n = len(values)
+    for i, yaw in enumerate(values):
+        gaze.record_sample(yaw, 90.0, 0.05, now=now - span + span * i / (n - 1))
+
+
+def test_a_user_already_facing_the_lamp_is_not_a_gesture(armed, voice):
+    """The device failure, reproduced (shadow, 2026-08-24).
+
+    Nine of nine accepted gestures had flat trails like this one. Every one
+    would have opened the gate for a user who simply sits square to their desk —
+    presence as the signal, which the module docstring says must not happen.
+    """
+    t = gaze.time.monotonic()
+    _turn_trail([13, 12, 12, 11, 12, 11, 13, 21], t)
+    assert gaze.on_speech_start() is False
+
+
+def test_turning_toward_the_lamp_still_opens_the_gate(armed, voice):
+    """Away for the baseline, facing for the decision window — a clean turn."""
+    t = gaze.time.monotonic()
+    _turn_trail([90, 88, 85, 90, 12, 10, 8, 9], t)
+    assert gaze.on_speech_start() is True
+
+
+def test_a_turn_caught_mid_buffer_is_marginal_by_construction():
+    """Recorded because it bit: the real device trail [90,61,24,15,20,14,7,15]
+    lands the turn in the MIDDLE of the buffer, so half the baseline window
+    already shows facing and the ratio sits exactly on the threshold.
+
+    That is inherent, not a tuning error — the buffer is only 2x the window, so
+    a slow turn spans both. It means GAZE_TRANSITION_MAX_BEFORE trades late
+    gestures against steady-facing false positives, and a gesture caught
+    half-way may legitimately fail.
+    """
+    t = 10_000.0
+    _turn_trail([90, 61, 24, 15, 20, 14, 7, 15], t)
+    before_ratio, before_n = gaze.facing_before(t)
+    assert before_n >= config.GAZE_MIN_SAMPLES
+    assert 0.4 <= before_ratio <= 0.7, before_ratio
+
+
+def test_the_transition_test_can_be_turned_off(armed, voice, monkeypatch):
+    monkeypatch.setattr(config, "GAZE_REQUIRE_TRANSITION", False)
+    t = gaze.time.monotonic()
+    _turn_trail([13, 12, 12, 11, 12, 11, 13, 21], t)
+    assert gaze.on_speech_start() is True
+
+
+def test_an_unmeasurable_baseline_does_not_veto(armed, voice):
+    """"We could not tell" is not evidence against a turn.
+
+    The baseline is often missing — the buffer is cleared whenever the camera
+    moves — and vetoing on that would make the feature fire almost never.
+    """
+    t = gaze.time.monotonic()
+    # samples only inside the decision window; nothing before it
+    for i in range(8):
+        gaze.record_sample(5.0, 90.0, 0.05,
+                           now=t - config.GAZE_WINDOW_S + i * 0.1)
+    assert gaze.on_speech_start() is True
+
+
+def test_blindness_is_reported_as_blind_not_as_looking_away(armed, voice, caplog=None):
+    """Different failures, fixed in different places — they must not read alike."""
+    import logging as _logging
+
+    records = []
+    handler = _logging.Handler()
+    handler.emit = lambda r: records.append(r.getMessage())
+    gaze.logger.addHandler(handler)
+    prev = gaze.logger.level
+    gaze.logger.setLevel(_logging.INFO)
+    try:
+        gaze.on_speech_start()          # empty buffer
+    finally:
+        gaze.logger.removeHandler(handler)
+        gaze.logger.setLevel(prev)
+
+    assert any("-> blind" in m for m in records), records
