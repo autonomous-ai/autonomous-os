@@ -2,7 +2,7 @@
 
 ## Hardware
 
-- **64 WS2812 RGB LEDs** — grid 8x5
+- **32 WS2812 RGB LEDs** — one ring
 - Driver: `rpi_ws281x` (Python, HAL owns)
 - FastAPI endpoints on `:5001`
 
@@ -31,7 +31,7 @@ stays lit until the first LED command, which may be minutes after boot.
 | GET | `/led` | LED strip info (count, available) |
 | GET | `/led/color` | Current color `{"r", "g", "b"}` |
 | POST | `/led/solid` | Fill entire strip with one color |
-| POST | `/led/paint` | Set per-pixel colors (array up to 64 items), or a gradient with `"gradient": true` |
+| POST | `/led/paint` | Set per-pixel colors (array up to 32 items), or a gradient with `"gradient": true` |
 | POST | `/led/off` | Turn off all LEDs |
 | POST | `/led/effect` | Start an effect |
 | POST | `/led/effect/stop` | Stop running effect |
@@ -64,9 +64,9 @@ POST /led/paint
 {"colors": [[0, 200, 200], [150, 0, 255]], "gradient": true}
 ```
 
-With `"gradient": true` the colors are treated as gradient **stops** and linearly interpolated across the whole strip (CSS-gradient style) — the example above fades cyan → purple over all 64 pixels. Works with any number of stops ≥ 1.
+With `"gradient": true` the colors are treated as gradient **stops** and linearly interpolated across the whole strip (CSS-gradient style) — the example above fades cyan → purple over all 32 pixels. Works with any number of stops ≥ 1.
 
-Paint stops any running effect first (an effect repaints the strip every ~40ms and would overwrite it) and, unless `"transient": true`, saves the painted pixel list as the user LED state — so emotion animations, TTS waves, and HAL restarts within the same boot restore the exact gradient. For gradients the *expanded* 64-pixel list is saved, not the stops.
+Paint stops any running effect first (an effect repaints the strip every ~40ms and would overwrite it) and, unless `"transient": true`, saves the painted pixel list as the user LED state — so emotion animations, TTS waves, and HAL restarts within the same boot restore the exact gradient. For gradients the *expanded* 32-pixel list is saved, not the stops.
 
 ## Effects
 

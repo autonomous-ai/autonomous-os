@@ -13,7 +13,7 @@ Parts tagged **optional** or **decorative** in the notes column are **not requir
 | OrangePi 4 Pro | 4GB or 6GB RAM | |
 | Servo x5 | STS3215 ST-3215-C018 | |
 | Servo control board (USB) | Waveshare Bus Servo Adapter | https://www.waveshare.com/product/modules/motors-servos/drivers/bus-servo-adapter-a.htm |
-| RGB LED ring | WS2812B 64-LED ring | 64 px is what the driver and `presets.json` assume (see `wiring.md`, `power.md`) |
+| RGB LED ring | WS2812B 32-LED ring | 32 px is what the driver and `presets.json` assume (see `wiring.md`, `power.md`) |
 | User button | Tactile button switch 6 mm | https://www.adafruit.com/product/367 or equivalent. Merged with reset (hold 15 s to reset) |
 | RJ45 extender | | extends the OrangePi 4 Pro Ethernet port |
 | Wire, screw, header, USB-C female | | to be updated |
