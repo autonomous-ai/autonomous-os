@@ -14,7 +14,12 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from hal.realtime.models import AudioInput, FunctionCallResultInput, TextInput
+from hal.realtime.models import (
+    AudioInput,
+    FunctionCallResultInput,
+    ImageInput,
+    TextInput,
+)
 from hal.realtime.voice_agent.gemini_live import GeminiLiveAgent
 
 
@@ -58,6 +63,10 @@ def _agent(session: _RecordingSession) -> GeminiLiveAgent:
 
 def _audio() -> AudioInput:
     return AudioInput(audio=np.zeros(160, dtype=np.float32))
+
+
+def _frame() -> np.ndarray:
+    return np.zeros((4, 4, 3), dtype=np.uint8)
 
 
 def _tool_call_message(*call_ids: str) -> SimpleNamespace:
@@ -248,3 +257,74 @@ def test_activity_end_is_suppressed_while_a_tool_call_is_pending():
     # replacement.
     assert agent._activity_started is False
     assert agent.requires_fresh_session is True
+
+
+def test_an_image_is_dropped_while_a_tool_call_is_pending():
+    """The gate is not audio-only: ImageInput rides send_realtime_input too.
+
+    This is the `look` flow's frame. It shares the API Gemini refuses while a
+    call is unanswered, so it must be gated for the same reason audio is —
+    otherwise the session dies with 1008 instead of losing one frame.
+    """
+    session = _RecordingSession()
+    agent = _agent(session)
+    agent._pending_tool_calls = {"call-1"}
+
+    asyncio.run(agent._async_send_input(ImageInput(image=_frame())))
+
+    assert session.realtime_inputs == []
+    # Not audio, so it must not be counted as a gated audio frame.
+    assert agent._gated_audio_frames == 0
+
+
+def test_an_image_flows_once_the_tool_call_has_been_answered():
+    """What the look flow depends on: ack first, then the frame goes out.
+
+    The fresh-frame path used to send no result at all and relied on the gate's
+    10s expiry outliving an 8s aim — flaky by construction, and broken outright
+    once the expiry was removed. Acknowledging the call is what reopens
+    send_realtime_input for both the frame and the replayed audio.
+    """
+    session = _RecordingSession()
+    agent = _agent(session)
+    agent._pending_tool_calls = {"call-1"}
+
+    asyncio.run(
+        agent._async_send_input(
+            FunctionCallResultInput(
+                call_id="call-1",
+                output='{"result": "frame incoming; wait for the image"}',
+                trigger_response=True,
+            )
+        )
+    )
+    assert agent._pending_tool_calls == set()
+
+    asyncio.run(agent._async_send_input(ImageInput(image=_frame())))
+    assert len(session.realtime_inputs) == 1
+    assert "video" in session.realtime_inputs[0]
+
+
+def test_replayed_audio_flows_once_the_tool_call_has_been_answered():
+    """The other half of the look flow: the user's utterance is sent twice.
+
+    The replay re-appends the SAME mic frames so the queued image joins the
+    question. Those are AudioInput, so an unanswered call silences the replay
+    as surely as it drops the frame — the model then answers from nothing.
+    """
+    session = _RecordingSession()
+    agent = _agent(session)
+    agent._pending_tool_calls = {"call-1"}
+
+    asyncio.run(agent._async_send_input(_audio()))
+    assert session.realtime_inputs == []
+
+    asyncio.run(
+        agent._async_send_input(
+            FunctionCallResultInput(call_id="call-1", output="{}", trigger_response=True)
+        )
+    )
+    asyncio.run(agent._async_send_input(_audio()))
+
+    assert len(session.realtime_inputs) == 1
+    assert "audio" in session.realtime_inputs[0]
