@@ -980,11 +980,16 @@
       // as HAL does, so live joint state drives the real geometry. The axis each
       // joint turns about was read out of the model's own bundled animation, not
       // guessed: base_yaw +Y, the pitches ±X, wrist_roll +Z in bone-local space.
+      // Signs are which way a RISING HAL angle turns the joint, which is not what
+      // the model's own animation clip happens to sweep — reading the axes off
+      // that clip got all three pitches backwards, so `up` bowed the lamp and
+      // `desk` raised it. Checked against the aim presets by measuring the head's
+      // height in the rig: up 336mm > center 293 > down 280 > desk 270.
       const RIG_AXES = {
         "base_yaw.pos": [0, 1, 0],
-        "base_pitch.pos": [-1, 0, 0],
-        "elbow_pitch.pos": [1, 0, 0],
-        "wrist_pitch.pos": [-1, 0, 0],
+        "base_pitch.pos": [1, 0, 0],
+        "elbow_pitch.pos": [-1, 0, 0],
+        "wrist_pitch.pos": [1, 0, 0],
         "wrist_roll.pos": [0, 0, 1],
       };
       // The GLB is authored in metres; the rest of this viewer works in the
