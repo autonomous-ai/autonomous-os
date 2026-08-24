@@ -26,6 +26,7 @@ circular mean would be wrong at the extremes.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -39,9 +40,51 @@ import hal.config as config
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION: int = 2
+SCHEMA_VERSION: int = 3
 # Which component of the pose IS the bearing direction.
 BASE_YAW_JOINT: str = "base_yaw.pos"
+
+
+def _calibration_path() -> Optional[str]:
+    """The calibration file the arm actually loaded, or None.
+
+    Mirrors LeLampFollowerConfig.__post_init__: a per-device id reads
+    ``<PERSISTENT_CALIBRATION_DIR>/<id>.json`` when that file exists, and
+    everything else falls back to the repo file under the id "hal".
+    """
+    try:
+        from hal.config import DEVICE_ID
+        from hal.follower.config_hal_follower import (
+            CALIBRATION_DIR,
+            PERSISTENT_CALIBRATION_DIR,
+        )
+    except Exception:
+        return None
+    try:
+        if DEVICE_ID and DEVICE_ID != "hal":
+            per_device = PERSISTENT_CALIBRATION_DIR / f"{DEVICE_ID}.json"
+            if per_device.is_file():
+                return str(per_device)
+        return str(CALIBRATION_DIR / "hal.json")
+    except Exception:
+        return None
+
+
+def _calibration_fingerprint() -> Optional[str]:
+    """Short content hash of the live calibration, or None if unreadable.
+
+    CONTENT, not mtime: an OTA rewrites the file's timestamp without changing a
+    single offset, and invalidating a good bearing on every update would be its
+    own bug.
+    """
+    path = _calibration_path()
+    if not path:
+        return None
+    try:
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()[:16]
+    except Exception:
+        return None
 
 # Weight of each new sighting in the running mean. Low enough that one stray
 # sample cannot move the estimate far, high enough to follow a real move within
@@ -118,14 +161,41 @@ def _load_raw() -> Optional[dict]:
     if not isinstance(d, dict):
         return None
     version = d.get("version")
-    if version == 1:
-        # v1 knew only base_yaw. Keep the learned direction — it took hours of
-        # sightings — and let the pose fill in on the next centred sighting.
-        d = dict(d)
-        d["version"] = SCHEMA_VERSION
-        d.setdefault("pose", {})
-        return d
+    if version in (1, 2):
+        # Every stored angle is in DEGREES ON A SPECIFIC CALIBRATION, and neither
+        # of these schemas recorded which. homing_offset and range_min/max are
+        # per physical unit and change on every recalibration — 6f0c4ec4 zeroed
+        # all five offsets — so the same number names a different posture
+        # afterwards. A v1/v2 file cannot be checked, and an unverifiable pose
+        # restored confidently is exactly the failure this version exists to
+        # stop: it aims the camera somewhere wrong at up to confidence 1.0 and
+        # self-heals only after three clustered prediction misses.
+        #
+        # v1 used to be migrated by keeping its yaw. That is no longer safe
+        # either: the recalibration moved base_yaw's scale too, so the direction
+        # is as suspect as the posture. Re-learning costs about eight sightings.
+        logger.info(
+            "[user-bearing] dropping a v%s estimate — it predates calibration "
+            "tracking, so its angles cannot be trusted on this arm", version,
+        )
+        return None
     if version != SCHEMA_VERSION:
+        return None
+    stored = d.get("calibration")
+    live = _calibration_fingerprint()
+    if live is None:
+        # Cannot read the calibration at all. Be permissive rather than wiping
+        # every estimate on the fleet over a missing file or a permissions
+        # change — an unreadable calibration usually means the arm is not
+        # running, not that the numbers moved.
+        logger.debug("[user-bearing] calibration unreadable — accepting stored estimate")
+        return d
+    if stored != live:
+        logger.info(
+            "[user-bearing] calibration changed (%s -> %s) — dropping the stored "
+            "pose; every angle in it describes the old arm",
+            stored, live,
+        )
         return None
     return d
 
@@ -234,6 +304,9 @@ def record_sighting(
 
     ok = _write_raw({
         "version": SCHEMA_VERSION,
+        # Stamped on every write, so a recalibration invalidates the estimate on
+        # the next read rather than the next time somebody notices.
+        "calibration": _calibration_fingerprint(),
         "bearing_deg": round(bearing, 3),
         "pose": blended,
         "confidence": _confidence(samples, 0.0),

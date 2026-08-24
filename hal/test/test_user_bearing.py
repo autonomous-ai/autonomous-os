@@ -298,3 +298,88 @@ def test_a_sighting_without_a_pose_still_moves_the_bearing(tmp_path, monkeypatch
     assert est.bearing_deg > 0.0, "the pose-less sighting was ignored"
     assert est.pose["base_pitch.pos"] == 5.0, "the known posture was lost"
     assert est.pose["base_yaw.pos"] == est.bearing_deg
+
+
+# --- F1: a pose is only valid on the calibration it was recorded against ---
+
+
+def _seed(d, payload):
+    with open(_tmp_path(d), "w", encoding="utf-8") as f:
+        json.dump(payload, f)
+
+
+def _fp(value):
+    return mock.patch.object(ub, "_calibration_fingerprint", lambda: value)
+
+
+def test_a_v2_estimate_is_dropped_because_its_calibration_is_unknown():
+    """Every angle is degrees ON A CALIBRATION, and v2 never recorded which.
+
+    `6f0c4ec4` zeroed all five homing offsets, so the same number names a
+    different posture afterwards. An unverifiable pose restored at confidence
+    1.0 is the failure this schema version exists to stop.
+    """
+    with tempfile.TemporaryDirectory() as d, _with_path(d):
+        _seed(d, {"version": 2, "bearing_deg": 42.0, "pose": {"base_yaw.pos": 42.0},
+                  "confidence": 1.0, "samples": 20, "updated": 1_000_000.0})
+        assert ub.read_estimate(now=1_000_001.0) is None
+
+
+def test_a_v1_estimate_is_dropped_too_not_migrated():
+    """v1's yaw used to be kept. The recalibration moved base_yaw's scale as
+    well, so the direction is as suspect as the posture."""
+    with tempfile.TemporaryDirectory() as d, _with_path(d):
+        _seed(d, {"version": 1, "bearing_deg": 42.0, "samples": 20,
+                  "updated": 1_000_000.0})
+        assert ub.read_estimate(now=1_000_001.0) is None
+
+
+def test_a_pose_from_a_different_calibration_is_refused():
+    with tempfile.TemporaryDirectory() as d, _with_path(d), _fp("beef1234"):
+        _seed(d, {"version": 3, "calibration": "0000dead", "bearing_deg": 42.0,
+                  "pose": {"base_yaw.pos": 42.0}, "confidence": 1.0,
+                  "samples": 20, "updated": 1_000_000.0})
+        assert ub.read_estimate(now=1_000_001.0) is None
+
+
+def test_a_pose_from_the_same_calibration_is_kept():
+    with tempfile.TemporaryDirectory() as d, _with_path(d), _fp("beef1234"):
+        _seed(d, {"version": 3, "calibration": "beef1234", "bearing_deg": 42.0,
+                  "pose": {"base_yaw.pos": 42.0}, "confidence": 1.0,
+                  "samples": 20, "updated": 1_000_000.0})
+        est = ub.read_estimate(now=1_000_001.0)
+        assert est is not None and est.bearing_deg == 42.0
+
+
+def test_an_unreadable_calibration_does_not_wipe_the_estimate():
+    """A missing file or a permissions change usually means the arm is not
+    running, not that the numbers moved — wiping the fleet's bearings over that
+    would be its own bug."""
+    with tempfile.TemporaryDirectory() as d, _with_path(d), _fp(None):
+        _seed(d, {"version": 3, "calibration": "0000dead", "bearing_deg": 42.0,
+                  "pose": {"base_yaw.pos": 42.0}, "confidence": 1.0,
+                  "samples": 20, "updated": 1_000_000.0})
+        est = ub.read_estimate(now=1_000_001.0)
+        assert est is not None and est.bearing_deg == 42.0
+
+
+def test_a_sighting_stamps_the_live_calibration():
+    with tempfile.TemporaryDirectory() as d, _with_path(d), _fp("beef1234"):
+        ub.record_sighting(10.0, pose={"base_yaw.pos": 10.0})
+        with open(_tmp_path(d), encoding="utf-8") as f:
+            assert json.load(f)["calibration"] == "beef1234"
+
+
+def test_the_fingerprint_follows_content_not_timestamp():
+    """An OTA rewrites the calibration's mtime without changing an offset."""
+    with tempfile.TemporaryDirectory() as d:
+        cal = os.path.join(d, "hal.json")
+        with open(cal, "w", encoding="utf-8") as f:
+            f.write('{"base_yaw": {"homing_offset": 0}}')
+        with mock.patch.object(ub, "_calibration_path", lambda: cal):
+            first = ub._calibration_fingerprint()
+            os.utime(cal, (0, 0))          # same bytes, different timestamp
+            assert ub._calibration_fingerprint() == first
+            with open(cal, "w", encoding="utf-8") as f:
+                f.write('{"base_yaw": {"homing_offset": 1909}}')
+            assert ub._calibration_fingerprint() != first
