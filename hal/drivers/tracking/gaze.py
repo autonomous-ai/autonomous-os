@@ -788,7 +788,24 @@ def on_speech_start() -> bool:
         voice = getattr(state, "voice_service", None)
         if voice is None or not hasattr(voice, "grant_wakeword_focus"):
             return False
-        granted = bool(voice.grant_wakeword_focus("gaze"))
+        # A shorter floor than the wake phrase or the button get. Those are
+        # deliberate acts; this is an inference from where a head was pointing,
+        # and it opens a window that every later turn EXTENDS (voice_service
+        # refreshes on each authorised turn). A wrong inference therefore does
+        # not cost one turn, it costs a conversation — so the opener that is
+        # least sure of itself claims the least floor.
+        try:
+            granted = bool(
+                voice.grant_wakeword_focus("gaze", timeout_s=config.GAZE_WAKE_FOCUS_S)
+            )
+        except TypeError:
+            # Voice service predates the shorter-window argument. Degrade to the
+            # full allowance rather than lose the gate entirely — the same
+            # fallback _detect_subject uses for a detector without `min_conf`.
+            # Silently returning False here would disable the feature on a
+            # version skew and look exactly like "nobody ever turns to the lamp".
+            logger.debug("[gaze] voice service has no timeout_s — full window")
+            granted = bool(voice.grant_wakeword_focus("gaze"))
         if granted:
             _last_grant_t = now
         return granted

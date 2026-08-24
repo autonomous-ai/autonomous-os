@@ -351,9 +351,11 @@ def test_samples_older_than_the_buffer_window_are_dropped():
 class _Voice:
     def __init__(self):
         self.grants = []
+        self.windows = []
 
-    def grant_wakeword_focus(self, source="button"):
+    def grant_wakeword_focus(self, source="button", timeout_s=None):
         self.grants.append(source)
+        self.windows.append(timeout_s)
         return True
 
 
@@ -1515,3 +1517,38 @@ def test_blindness_is_reported_as_blind_not_as_looking_away(armed, voice, caplog
         gaze.logger.setLevel(prev)
 
     assert any("-> blind" in m for m in records), records
+
+
+def test_gaze_asks_for_a_shorter_window_than_a_deliberate_wake(armed, voice):
+    """The opener least sure of itself claims the least floor (F20)."""
+    t = gaze.time.monotonic()
+    _turn_trail([90, 88, 85, 90, 12, 10, 8, 9], t)
+
+    assert gaze.on_speech_start() is True
+    assert voice.grants == ["gaze"]
+    assert voice.windows == [config.GAZE_WAKE_FOCUS_S]
+
+
+def test_an_older_voice_service_still_gets_a_gate(armed, monkeypatch):
+    """Version skew must degrade to the full window, not silence the feature.
+
+    Returning False on a TypeError would look exactly like "nobody ever turns
+    to the lamp" — the hardest failure to notice in this whole feature.
+    """
+    import hal.app_state as state
+
+    class _OldVoice:
+        def __init__(self):
+            self.grants = []
+
+        def grant_wakeword_focus(self, source="button"):   # no timeout_s
+            self.grants.append(source)
+            return True
+
+    v = _OldVoice()
+    monkeypatch.setattr(state, "voice_service", v, raising=False)
+    t = gaze.time.monotonic()
+    _turn_trail([90, 88, 85, 90, 12, 10, 8, 9], t)
+
+    assert gaze.on_speech_start() is True
+    assert v.grants == ["gaze"]

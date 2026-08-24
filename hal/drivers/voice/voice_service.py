@@ -268,7 +268,8 @@ class VoiceService:
     def set_music_service(self, music_service) -> None:
         self._music = music_service
 
-    def grant_wakeword_focus(self, source: str = "button") -> bool:
+    def grant_wakeword_focus(self, source: str = "button",
+                             timeout_s: float | None = None) -> bool:
         """Open the wake-word follow-up window without a spoken wake phrase.
 
         A single click is a "give me the floor" gesture: the device stops
@@ -279,11 +280,13 @@ class VoiceService:
         when follow-up focus is disabled (timeout 0)."""
         if not hal_config.WAKEWORD_ENABLED:
             return False
-        if self._wakeword_focus.refresh():
+        if self._wakeword_focus.refresh(timeout_s):
             logger.info(
                 "%s -- wake-word focus granted for %.0fs",
                 source,
-                hal_config.WAKEWORD_FOLLOWUP_TIMEOUT_S,
+                hal_config.WAKEWORD_FOLLOWUP_TIMEOUT_S
+                if timeout_s is None
+                else min(hal_config.WAKEWORD_FOLLOWUP_TIMEOUT_S, timeout_s),
             )
             return True
         return False

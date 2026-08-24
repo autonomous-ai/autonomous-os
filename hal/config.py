@@ -1144,6 +1144,20 @@ GAZE_SAMPLE_FPS: float = float(os.environ.get("HAL_GAZE_SAMPLE_FPS", "6"))
 # Minimum gap between two gaze-opened gates, so a single conversation cannot
 # open one per sentence. The follow-up window already covers continuing a turn.
 GAZE_COOLDOWN_S: float = float(os.environ.get("HAL_GAZE_COOLDOWN_S", "5"))
+# How much floor a gaze wake claims, against WAKEWORD_FOLLOWUP_TIMEOUT_S for the
+# wake phrase and the button (60 on lamp).
+#
+# The window self-extends: every authorised turn with a transcript refreshes it
+# (voice_service), so one wrong opener does not cost a turn, it costs a
+# conversation — a discussion held near the lamp keeps the lamp in it until a
+# gap longer than the window. The wake phrase and the click are deliberate acts
+# and keep the full allowance; this one is an inference about where a head was
+# pointing, so it claims less. Capped by the default, never above it.
+# 10, not 20: WAKEWORD_FOLLOWUP_TIMEOUT_S's own CODE default is 20, so 20 here
+# would be no reduction at all on any device that has not overridden it — only
+# a lamp with the 60s override would see a difference. The point is a smaller
+# allowance everywhere, not just where someone happened to widen the default.
+GAZE_WAKE_FOCUS_S: float = float(os.environ.get("HAL_GAZE_WAKE_FOCUS_S", "10"))
 # Where the remembered user bearing lives. NOT a boot sidecar: this must survive
 # reboots, unlike the mic/speaker/camera state in app_state.
 USER_BEARING_PATH: str = os.environ.get(
