@@ -229,7 +229,7 @@ Accessed via nginx proxy: `/hw/*` → `127.0.0.1:5001`
 | POST | `/servo/release` | Disable torque on all servos |
 | GET | `/servo/position` | Current servo positions |
 | GET | `/servo/aim` | List aim directions |
-| POST | `/servo/aim` | Aim device head (center, desk, wall, left, right, up, down, user) |
+| POST | `/servo/aim` | Aim device head (center, desk, wall, left, right, up, down, user). `left`/`right` change only `base_yaw`; an explicit `center` resets it; every other direction — and the unknown-direction fallback — keeps the current yaw |
 | GET | `/servo/track/targets` | List suggested target names for YOLOWorld detection |
 | POST | `/servo/track` | Start tracking — `{"target":"cup"}` (auto-detect) or `{"bbox":[x,y,w,h]}`. See [vision-tracking.md](../robots/lamp/docs/vision-tracking.md) |
 | POST | `/servo/track/stop` | Stop current tracking session |

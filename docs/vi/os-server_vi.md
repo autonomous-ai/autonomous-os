@@ -226,7 +226,7 @@ Truy cập qua nginx proxy: `/hw/*` → `127.0.0.1:5001`
 | POST | `/servo/release` | Tắt torque tất cả servo |
 | GET | `/servo/position` | Vị trí servo hiện tại |
 | GET | `/servo/aim` | Danh sách aim directions |
-| POST | `/servo/aim` | Aim đầu thiết bị (center, desk, wall, left, right, up, down, user) |
+| POST | `/servo/aim` | Aim đầu thiết bị (center, desk, wall, left, right, up, down, user). `left`/`right` chỉ đổi `base_yaw`; `center` gọi tường minh thì reset nó; các hướng còn lại — và fallback khi hướng lạ — giữ nguyên yaw hiện tại |
 | GET | `/servo/track/targets` | Danh sách target gợi ý cho YOLOWorld |
 | POST | `/servo/track` | Bắt đầu tracking — `{"target":"cup"}` (tự detect) hoặc `{"bbox":[x,y,w,h]}`. Xem [vision-tracking_vi.md](../../robots/lamp/docs/vi/vision-tracking_vi.md) |
 | POST | `/servo/track/stop` | Dừng phiên tracking |

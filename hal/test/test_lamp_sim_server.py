@@ -184,10 +184,41 @@ class TestLampSimulationServer(unittest.TestCase):
         _, playing = self._json("/servo")
         self.assertEqual(playing["current"], "nod")
 
+    def test_center_is_the_aim_that_recenters_yaw(self):
+        """left/right used to be a one-way trip: no aim could bring yaw back."""
+        from hal.presets import AIM_CENTER, AIM_PRESETS
+
+        _, left = self._json("/servo/aim", "POST", {"direction": "left", "duration": 0.1})
+        self.assertNotAlmostEqual(left["positions"]["base_yaw.pos"], 0.0, places=1)
+
+        _, centered = self._json("/servo/aim", "POST", {"direction": "center", "duration": 0.1})
+        self.assertAlmostEqual(
+            centered["positions"]["base_yaw.pos"],
+            AIM_PRESETS[AIM_CENTER]["base_yaw.pos"],
+            places=3,
+        )
+
+        # Every other aim still keeps the yaw it was given.
+        self._json("/servo/aim", "POST", {"direction": "left", "duration": 0.1})
+        _, up = self._json("/servo/aim", "POST", {"direction": "up", "duration": 0.1})
+        self.assertAlmostEqual(
+            up["positions"]["base_yaw.pos"],
+            AIM_PRESETS["left"]["base_yaw.pos"],
+            places=3,
+        )
+
+        # The fallback lands on center, but a typo must not move yaw.
+        _, unknown = self._json("/servo/aim", "POST", {"direction": "sideways", "duration": 0.1})
+        self.assertAlmostEqual(
+            unknown["positions"]["base_yaw.pos"],
+            AIM_PRESETS["left"]["base_yaw.pos"],
+            places=3,
+        )
+
     def test_named_aims_match_the_reference_lamp_driver(self):
-        # AnimationService keeps the current yaw for center/desk/up/down, and
-        # changes only base_yaw for left/right. The simulator must not invent a
-        # friendlier two-joint table for its visualizer.
+        # AnimationService keeps the current yaw for desk/up/down, changes only
+        # base_yaw for left/right, resets it for an explicit center. The
+        # simulator must not invent a friendlier two-joint table.
         _, centered = self._json("/servo/aim", "POST", {"direction": "center", "duration": 0.1})
         self.assertEqual(centered["positions"]["base_pitch.pos"], -20.0)
         self.assertEqual(centered["positions"]["elbow_pitch.pos"], 32.0)

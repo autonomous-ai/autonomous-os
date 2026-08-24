@@ -261,6 +261,7 @@ class MockMotionService:
         from hal.safety.policy import min_move_duration
 
         preset = AIM_PRESETS.get(direction)
+        explicit_center = direction == AIM_CENTER
         if preset is None:
             logger.warning("Unknown aim direction %r — defaulting to center", direction)
             direction = AIM_CENTER
@@ -269,6 +270,9 @@ class MockMotionService:
         current = current_positions or self.get_positions()
         if direction in (AIM_LEFT, AIM_RIGHT):
             target = {**current, "base_yaw.pos": preset["base_yaw.pos"]}
+        elif explicit_center:
+            # Same rule as AnimationService.
+            target = dict(preset)
         else:
             target = {**preset, "base_yaw.pos": current.get("base_yaw.pos", preset["base_yaw.pos"])}
         # Same speed ceiling the body obeys: a simulator that swung faster than

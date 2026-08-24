@@ -1170,6 +1170,8 @@ class AnimationService:
         from hal.safety.policy import min_move_duration
 
         preset = AIM_PRESETS.get(direction)
+        # Only an explicit center owns yaw — the fallback below lands on center too.
+        explicit_center = direction == AIM_CENTER
         if preset is None:
             # Unknown direction (the LLM reached for a word that isn't a preset,
             # e.g. "front") — aim the neutral center pose instead of failing the
@@ -1182,6 +1184,9 @@ class AnimationService:
         # keep current yaw. This is the lamp's 5-DOF kinematic convention.
         if direction in (AIM_LEFT, AIM_RIGHT):
             positions = {**current_positions, "base_yaw.pos": preset["base_yaw.pos"]}
+        elif explicit_center:
+            # Without this, left/right is a one-way trip.
+            positions = dict(preset)
         else:
             positions = {**preset, "base_yaw.pos": current_positions.get("base_yaw.pos", preset["base_yaw.pos"])}
 
