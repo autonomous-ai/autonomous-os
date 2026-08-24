@@ -4,28 +4,28 @@ Source: colors are what the **lamp** actually shows — `robots/lamp/presets.jso
 
 | Emotion | Color (RGB) | Hex | Color source | Effect | Speed | Servo Animation |
 |---|---|---|---|---|---|---|
-| `curious` | 0, 12, 0 | `#000c00` green | overlay | candle | 0.3 | curious |
-| `happy` | 12, 12, 0 | `#0c0c00` yellow | overlay | candle | 0.2 | happy_wiggle |
-| `sad` | 16, 0, 0 | `#100000` red | overlay | breathing | 0.4 | sad |
-| `thinking` | 0, 12, 0 | `#000c00` green | overlay | pulse | 0.3 | — (see note) |
-| `idle` | 8, 4, 0 | `#080400` dim amber | overlay | breathing | 0.2 | idle |
-| `excited` | 12, 12, 0 | `#0c0c00` yellow | overlay | candle | 0.5 | excited |
-| `shy` | 16, 0, 0 | `#100000` red | overlay | breathing | 0.3 | shy |
+| `curious` | 0, 4, 0 | `#000400` green | overlay | candle | 0.3 | curious |
+| `happy` | 4, 4, 0 | `#040400` yellow | overlay | candle | 0.2 | happy_wiggle |
+| `sad` | 5, 0, 0 | `#050000` red | overlay | breathing | 0.4 | sad |
+| `thinking` | 0, 4, 0 | `#000400` green | overlay | pulse | 0.3 | — (see note) |
+| `idle` | 4, 2, 0 | `#040200` dim amber | overlay | breathing | 0.2 | idle |
+| `excited` | 4, 4, 0 | `#040400` yellow | overlay | candle | 0.5 | excited |
+| `shy` | 5, 0, 0 | `#050000` red | overlay | breathing | 0.3 | shy |
 | `shock` | 12, 12, 12 | `#0c0c0c` soft white | base | notification_flash | 1.0 | shock |
-| `listening` | 0, 0, 16 | `#000010` blue | overlay | breathing | 1.2 | — (see note) |
-| `laugh` | 12, 12, 0 | `#0c0c00` yellow | overlay | candle | 0.2 | laugh |
-| `confused` | 16, 0, 0 | `#100000` red | overlay | candle | 0.2 | confused |
+| `listening` | 0, 0, 5 | `#000005` blue | overlay | breathing | 1.2 | — (see note) |
+| `laugh` | 4, 4, 0 | `#040400` yellow | overlay | candle | 0.2 | laugh |
+| `confused` | 5, 0, 0 | `#050000` red | overlay | candle | 0.2 | confused |
 | `sleepy` | 0, 0, 0 | `#000000` black (off) | base | solid | — | sleepy |
-| `greeting` | 16, 0, 16 | `#100010` purple | overlay | breathing | 0.3 | greeting \| wake_up |
-| `goodbye` | 16, 0, 16 | `#100010` purple | overlay | breathing | 0.5 | goodbye |
-| `caring` | 16, 0, 16 | `#100010` purple | overlay | breathing | 0.4 | nod |
-| `acknowledge` | 0, 12, 0 | `#000c00` green | overlay | breathing | 0.5 | acknowledge |
-| `stretching` | 8, 4, 0 | `#080400` dim amber | overlay | breathing | 0.6 | stretching |
+| `greeting` | 5, 0, 5 | `#050005` purple | overlay | breathing | 0.3 | greeting \| wake_up |
+| `goodbye` | 5, 0, 5 | `#050005` purple | overlay | breathing | 0.5 | goodbye |
+| `caring` | 5, 0, 5 | `#050005` purple | overlay | breathing | 0.4 | nod |
+| `acknowledge` | 0, 4, 0 | `#000400` green | overlay | breathing | 0.5 | acknowledge |
+| `stretching` | 4, 2, 0 | `#040200` dim amber | overlay | breathing | 0.6 | stretching |
 | `music_strong` | 8, 12, 8 | `#080c08` pale green (no effect — see below) | base | rainbow | 1.0 | music_rock |
-| `music_chill` | 0, 12, 12 | `#000c0c` cyan | overlay | breathing | 0.3 | music_rock \| music_groove \| music_jazz \| music_waltz |
-| `scan` | 0, 12, 0 | `#000c00` green | overlay | pulse | 0.3 | scanning |
-| `nod` | 8, 4, 0 | `#080400` dim amber | overlay | breathing | 0.5 | nod |
-| `headshake` | 16, 0, 0 | `#100000` red | overlay | breathing | 0.5 | headshake |
+| `music_chill` | 0, 4, 4 | `#000404` cyan | overlay | breathing | 0.3 | music_rock \| music_groove \| music_jazz \| music_waltz |
+| `scan` | 0, 4, 0 | `#000400` green | overlay | pulse | 0.3 | scanning |
+| `nod` | 4, 2, 0 | `#040200` dim amber | overlay | breathing | 0.5 | nod |
+| `headshake` | 5, 0, 0 | `#050000` red | overlay | breathing | 0.5 | headshake |
 
 `music_strong`'s color is inert: it runs the `rainbow` effect, and `rainbow()` in `hal/drivers/rgb/effects.py` ignores the `color` argument and sweeps the whole hue circle itself — which is why the overlay does not bother to set it.
 
@@ -39,27 +39,29 @@ This is fallout from the dimming pass. Before 18/08 the presets ran at high peak
 
 **Turning the brightness back up is not the fix.** With gamma 2.2, dropping peak from 255 to 90 costs only ~40% of *perceived* brightness while keeping 90 color levels; dropping 90 → 12 costs another ~40% of perceived brightness but throws away 7.5× the color resolution. Almost all of the anti-glare benefit is already won in the first step; the second step is nearly pure cost.
 
-So the lamp keeps the peak exactly where it is (12/16 — **no increase in total light at all**) and spends the remaining headroom on hue instead: six groups, 60° apart.
+So the lamp keeps the peak exactly where it is (5/4/2 — **no increase in total light at all**) and spends the remaining headroom on hue instead: six groups, 60° apart.
 
 | Group | Hue | RGB | Emotions |
 |---|---|---|---|
-| negative | 0° red | `[16, 0, 0]` | `sad`, `shy`, `confused`, `headshake` |
-| joy | 60° yellow | `[12, 12, 0]` | `happy`, `laugh`, `excited` |
-| processing | 120° green | `[0, 12, 0]` | `curious`, `thinking`, `scan`, `acknowledge` |
-| music | 180° cyan | `[0, 12, 12]` | `music_chill` |
-| listening | 240° blue | `[0, 0, 16]` | `listening` |
-| social | 300° purple | `[16, 0, 16]` | `greeting`, `goodbye`, `caring` |
-| background | 30° amber, peak 8 | `[8, 4, 0]` | `idle`, `nod`, `stretching` |
+| negative | 0° red | `[5, 0, 0]` | `sad`, `shy`, `confused`, `headshake` |
+| joy | 60° yellow | `[4, 4, 0]` | `happy`, `laugh`, `excited` |
+| processing | 120° green | `[0, 4, 0]` | `curious`, `thinking`, `scan`, `acknowledge` |
+| music | 180° cyan | `[0, 4, 4]` | `music_chill` |
+| listening | 240° blue | `[0, 0, 5]` | `listening` |
+| social | 300° purple | `[5, 0, 5]` | `greeting`, `goodbye`, `caring` |
+| background | 30° amber, peak 4 | `[4, 2, 0]` | `idle`, `nod`, `stretching` |
 | alarm | white | `[12, 12, 12]` | `shock` (unchanged) |
 | sleep | off | `[0, 0, 0]` | `sleepy` (unchanged) |
 
 Three things are deliberate:
 
 1. **Every color has at least one channel at 0** — maximum saturation. At a peak of 12–16 this is mandatory: a diluted color like `[12, 8, 1]` loses whatever made it itself, while `[0, 12, 0]` still reads unmistakably green no matter how faint it gets.
-2. **`idle` / `nod` / `stretching` drop to peak 8**, one step below every other emotion. `idle` is the state the lamp spends the most time in, so it deserves to recede — and this *lowers* total light output rather than raising it. Confirmed on the real lamp by the user as less glaring.
+2. **`idle` / `nod` / `stretching` drop to peak 4**, one step below every other emotion. `idle` is the state the lamp spends the most time in, so it deserves to recede — and this *lowers* total light output rather than raising it. Confirmed on the real lamp by the user as less glaring.
 3. **Within a group, emotions are told apart by effect + speed, not by color** — e.g. the joy group: `happy` candle 0.2, `laugh` candle 0.2, `excited` candle 0.5. The eye discriminates rhythm far better than it discriminates 4° of hue.
 
 The trade-off, stated plainly: 22 emotions now share 6 colors. From the color alone you can read the **group**, not the specific emotion. That is accepted because the situation it replaced let you read nothing at all.
+On 24/08/2026 the peaks came down again, in three passes on device the same day. Pass 1 halved everything (16/12/8 -> 8/6/4), because the previous level was still reported as glaring. Pass 2 dropped only the green-dominant tier, 6 -> 4: green at peak 6 was still called glaring while red at peak 8 read fine — WS2812's green die is brighter than its red at the same value by more than the base 12-vs-16 rule allows for. Pass 3 then lowered the low-green tier 8 -> 5 as well. Every pass scales all three channels proportionally, so the six hues never move; only the amplitude does. On top of that, emotion colors are multiplied by the request's `intensity` (default 0.7) before they reach the strip, so `listening`'s declared `[0, 0, 5]` arrives as `[0, 0, 3]` and `idle`'s `[4, 2, 0]` as `[2, 1, 0]`. That is at or below the peak-8 floor documented in `hal/presets.py`: breathing and pulse truncate per frame (`int(c * brightness)`), so the cycle has very few distinct levels left and visible stepping is the thing to watch for. Measured on lamp-0c89, 24/08/2026.
+
 
 Two technical notes:
 
@@ -99,8 +101,8 @@ Measured on lamp-0c89: after `listening`, all 5 servo angles held at T+2s / T+5s
 
 Emotion LEDs are an **indicator**, not illumination — they share a budget with `STATUS_LED_PRESETS`:
 
-- green-leaning hues (green / yellow / cyan / white) → peak channel **12**
-- little or no green (red / purple / orange / blue) → peak channel **16**
+- green-leaning hues (green / yellow / cyan / white) → peak channel **4**
+- little or no green (red / purple / orange / blue) → peak channel **5**
 
 Each color is brought down by **scaling the original RGB proportionally** to its tier, so every emotion keeps its original hue. Dimming must be done by scaling, not by picking a new color — the hue is what the agent is trying to say; brightness is only how loudly it says it.
 

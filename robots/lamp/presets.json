@@ -1,33 +1,49 @@
 {
-  "_comment": "Per-device preset overrides for lamp. See robots/contract/ROBOT-SPEC.md § Per-device presets. Lamp's LED ring is 32 pixels (vs the platform default of 64) — measured on lamp-0c89 by painting 0-31 red and 32-63 green: the whole ring came up red, so addresses past 31 fall off the end of the chain and light nothing. Declaring 64 put pulse's origin (led_count/2) outside the ring and gave rainbow only half a spectrum. See issue #246. Emotion colors below regroup the base palette into 6 hues 60 deg apart — see robots/lamp/docs/emotion-led-mapping.md § Six hue groups for why.",
+  "_comment": "Per-device preset overrides for lamp. See robots/contract/ROBOT-SPEC.md § Per-device presets. Lamp's LED ring is 32 pixels (vs the platform default of 64) — measured on lamp-0c89 by painting 0-31 red and 32-63 green: the whole ring came up red, so addresses past 31 fall off the end of the chain and light nothing. Declaring 64 put pulse's origin (led_count/2) outside the ring and gave rainbow only half a spectrum. See issue #246. Emotion colors below regroup the base palette into 6 hues 60 deg apart — see robots/lamp/docs/emotion-led-mapping.md § Six hue groups for why. Peaks were halved on 24/08/2026 (16 -> 8, 12 -> 6, background 8/4 -> 4/2) — still reported as too bright at the previous level. Halving is done by scaling every channel proportionally, so all six hues are unchanged; only the amplitude moves.",
   "led_count": 32,
   "_comment_listening": "Speed only; the color is the blue group value below. Base speed is 1.2, the fastest in EMOTION_PRESETS (every other breathing preset is 0.2-0.6), and it was reported as glaring on the lamp. Lowering the color had already been tried and did not help, because the level was never this cue's problem. breathing() sweeps 0 -> peak -> 0 over 100 steps of 0.03/speed, so modulation depth is 100% at every speed and only the period moves: 2.5 s at 1.2. A full-ring, full-depth swing that fast, sustained for as long as the user keeps talking, reads as pulsing rather than as light. 0.3 puts it back with the family. Confirmed by eye on lamp-0c89, 21/08/2026.",
   "emotion": {
-    "sad":          { "color": [16, 0, 0] },
-    "shy":          { "color": [16, 0, 0] },
-    "confused":     { "color": [16, 0, 0] },
-    "headshake":    { "color": [16, 0, 0] },
+    "sad":          { "color": [5, 0, 0] },
+    "shy":          { "color": [5, 0, 0] },
+    "confused":     { "color": [5, 0, 0] },
+    "headshake":    { "color": [5, 0, 0] },
 
-    "happy":        { "color": [12, 12, 0] },
-    "laugh":        { "color": [12, 12, 0] },
-    "excited":      { "color": [12, 12, 0] },
+    "happy":        { "color": [4, 4, 0] },
+    "laugh":        { "color": [4, 4, 0] },
+    "excited":      { "color": [4, 4, 0] },
 
-    "curious":      { "color": [0, 12, 0] },
-    "thinking":     { "color": [0, 12, 0], "servo": null },
-    "scan":         { "color": [0, 12, 0] },
-    "acknowledge":  { "color": [0, 12, 0] },
+    "curious":      { "color": [0, 4, 0] },
+    "thinking":     { "color": [0, 4, 0], "servo": null },
+    "scan":         { "color": [0, 4, 0] },
+    "acknowledge":  { "color": [0, 4, 0] },
 
-    "music_chill":  { "color": [0, 12, 12] },
+    "music_chill":  { "color": [0, 4, 4] },
 
-    "listening":    { "color": [0, 0, 16], "speed": 0.3 },
+    "listening":    { "color": [0, 0, 5], "speed": 0.3 },
 
-    "greeting":     { "color": [16, 0, 16] },
-    "goodbye":      { "color": [16, 0, 16] },
-    "caring":       { "color": [16, 0, 16] },
+    "greeting":     { "color": [5, 0, 5] },
+    "goodbye":      { "color": [5, 0, 5] },
+    "caring":       { "color": [5, 0, 5] },
 
-    "idle":         { "color": [8, 4, 0] },
-    "nod":          { "color": [8, 4, 0] },
-    "stretching":   { "color": [8, 4, 0] }
+    "idle":         { "color": [4, 2, 0] },
+    "nod":          { "color": [4, 2, 0] },
+    "stretching":   { "color": [4, 2, 0] }
+  },
+  "_comment_status_led": "Same halving as the emotion table above, and for the same reason: the base peaks (12 green-dominant / 16 low-green, hal/presets.py STATUS_LED_PRESETS) were still reported as too bright on lamp. Every color is scaled proportionally, so each cue keeps the hue that identifies it; only the amplitude moves. Effect and speed are NOT overridden — they come from the base table, which is what tells cues apart at these levels. Second pass, same day: the green-dominant cues were still called glaring at peak 6 while red `error` at peak 8 read fine, so the green tier drops to 4 while the low-green tier stays at 8 — WS2812's green die is brighter than its red at the same value by more than the base 12-vs-16 rule allows for. The other half of the fix is rhythm, not level: every long-lived breathing cue here ran at speed 3.0, the fastest in the file, and it is now 0.6 — the same thing that fixed `listening` on 21/08 (see the listening note above), where lowering the color had already failed. `wifi_connecting` (blink) and the flashes keep their speed; blink must stay <= 0.5 per the note in hal/presets.py. Third pass, same day: red at 8 was called glaring too, so the low-green tier drops 8 -> 5 as well (emotion table moved with it). `mic_muted` stays at 5 and is NOT lowered further — it is the privacy indicator and the base file warns it has to stay readable in a daylit room. Two deliberate exceptions: `setup` stays at 16 because it is the onboarding cue that has to be spotted across a room while someone asks 'is it on yet?', and `ota_error` keeps 1 in green/blue rather than rounding to 0 so it stays the same off-red as the base. Note the base file's stated floor of peak ~8: below that, breathing/pulse scale and truncate per frame (int(c * brightness) in drivers/rgb/effects.py), so a peak of 6 leaves the cycle only 6 distinct levels and the strip can visibly step. That is the thing to look for by eye on device.",
+  "status_led": {
+    "ota":             { "color": [0, 4, 0], "speed": 0.6 },
+    "error":           { "color": [5, 0, 0] },
+    "booting":         { "color": [0, 2, 5], "speed": 0.6 },
+    "connectivity":    { "color": [5, 2, 0], "speed": 0.6 },
+    "wifi_connecting": { "color": [0, 2, 5] },
+    "hal_down":        { "color": [4, 0, 5], "speed": 0.6 },
+    "agent_down":      { "color": [0, 4, 4], "speed": 0.6 },
+    "hardware":        { "color": [4, 4, 0], "speed": 0.6 },
+    "ready_flash":     { "color": [4, 4, 4] },
+    "ota_progress":    { "color": [5, 2, 0] },
+    "ota_error":       { "color": [5, 1, 1] },
+    "ota_success":     { "color": [0, 4, 1] },
+    "mic_muted":       { "color": [5, 0, 0] }
   },
   "_comment_scene": "Scene brightness only — hue (the color temperature mix) stays at the base value. Two things were wrong at the base levels. (1) reading/focus/energize all landed above lamp's max_brightness ceiling of 120, and clamp_color only scales DOWN, so all three collapsed to peak 120: three different scenes rendering as one, at the brightest level the ring can do. (2) Peak alone understates a scene: unlike an emotion cue, a scene lights all 32 pixels, so total flux is far higher than the peak number suggests — judging a scene by its peak the way we judge an indicator makes it come out too bright, which is what happened on the first pass here. Peaks now: energize 61, reading 48, focus 38, relax 25, movie 10, night 3. Night is deliberately far below the rest — it is a nightlight, meant to let you find your way without waking you, not to light the room; it is also blue-free by hue so it does not suppress melatonin. Spaced wider at the top because perceived brightness goes as roughly the cube root of value.",
   "scene": {

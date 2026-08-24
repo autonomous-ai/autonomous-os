@@ -11,21 +11,25 @@ Không có tín hiệu này, user không phân biệt được Lamp đang khởi
 
 ## Các Trạng Thái
 
-Tất cả các state dùng effect `breathing` speed 3.0 trừ khi ghi rõ. Giá trị RGB lấy từ `STATUS_LED_PRESETS` trong `hal/presets.py` (phía Go chỉ gửi *tên* state); các giá trị được tune về luminance thấp và cân bằng theo hue để cue sáng lâu không bị chói.
+Tất cả các state dùng effect `breathing` trừ khi ghi rõ. Bảng base chạy nó ở speed 3.0, nhưng trên lamp sáu cue sống lâu — `ota`, `booting`, `connectivity`, `hal_down`, `agent_down` và `hardware` — thở ở speed 0.6 qua overlay. Giá trị RGB gốc nằm trong `STATUS_LED_PRESETS` của `hal/presets.py` (phía Go chỉ gửi *tên* state), nhưng trên lamp chúng **đã bị override** bởi khối `status_led` trong `robots/lamp/presets.json` — overlay per-device được merge lúc boot bởi `hal/board/presets_overlay.py`. Overlay patch cả `color` lẫn `speed` (speed cho sáu cue nói trên); tên effect vẫn lấy từ bảng base, và robot khác giữ nguyên giá trị base. Các giá trị vẫn được tune về luminance thấp và cân bằng theo hue để cue sáng lâu không bị chói.
 
 | Trạng thái (hằng số code) | Màu | RGB | Ý nghĩa | Trigger | Tự tắt |
 |---|---|---|---|---|---|
-| `StateConnectivity` | Cam | `(16, 7, 0)` | **Mất internet** — Wi-Fi kết nối nhưng không có internet | Network monitor: 5 lần ping thất bại liên tiếp (~25s) | Có — khi ping thành công |
-| `StateError` | Đỏ | `(16, 0, 0)` | **Lỗi** — Lỗi hệ thống (reserved) | Lỗi nghiêm trọng | Có — khi lỗi được khắc phục |
-| `StateOTA` | Xanh lá | `(0, 12, 0)` | **Đang update** — OTA firmware đang chạy (enum dự trữ; bootstrap drive LED OTA trực tiếp qua `lib/hal` — xem "Bootstrap (OTA)" bên dưới) | Bootstrap reconcile phát hiện update | Khởi động lại sau khi update xong |
-| `StateBooting` | Xanh dương | `(0, 6, 16)` | **Đang khởi động** — Lamp đang bật | `server.go` lúc startup | Có — khi OpenClaw agent connect và sẵn sàng |
-| `StateLeLampDown` | Tím | `(11, 0, 16)` | **HAL Down** — Server phần cứng không phản hồi. Khi HAL đang down LED **tắt hẳn** vì driver LED cũng chết theo; tím breathing chỉ flash ~3s khi phục hồi | `healthwatch` poll HAL `/health` thất bại | Tự tắt 3s sau khi phục hồi |
-| `StateAgentDown` | Cyan | `(0, 12, 12)` | **Agent Down** — AI brain mất kết nối | OpenClaw WebSocket ngắt (`runtimes/openclaw/service_ws.go`) | Có — khi WebSocket reconnect |
-| `StateHardware` | Vàng | `(12, 12, 0)` | **Hardware Failure** — servo/LED/audio/voice không healthy qua HAL `/health` | `healthwatch` poll (mỗi 5s); camera và sensing không tính | Có — khi tất cả linh kiện báo OK |
+| `StateConnectivity` | Cam | `(5, 2, 0)` | **Mất internet** — Wi-Fi kết nối nhưng không có internet | Network monitor: 5 lần ping thất bại liên tiếp (~25s) | Có — khi ping thành công |
+| `StateError` | Đỏ | `(5, 0, 0)` | **Lỗi** — Lỗi hệ thống (reserved) | Lỗi nghiêm trọng | Có — khi lỗi được khắc phục |
+| `StateOTA` | Xanh lá | `(0, 4, 0)` | **Đang update** — OTA firmware đang chạy (enum dự trữ; bootstrap drive LED OTA trực tiếp qua `lib/hal` — xem "Bootstrap (OTA)" bên dưới) | Bootstrap reconcile phát hiện update | Khởi động lại sau khi update xong |
+| `StateBooting` | Xanh dương | `(0, 2, 5)` | **Đang khởi động** — Lamp đang bật | `server.go` lúc startup | Có — khi OpenClaw agent connect và sẵn sàng |
+| `StateLeLampDown` | Tím | `(4, 0, 5)` | **HAL Down** — Server phần cứng không phản hồi. Khi HAL đang down LED **tắt hẳn** vì driver LED cũng chết theo; tím breathing chỉ flash ~3s khi phục hồi | `healthwatch` poll HAL `/health` thất bại | Tự tắt 3s sau khi phục hồi |
+| `StateAgentDown` | Cyan | `(0, 4, 4)` | **Agent Down** — AI brain mất kết nối | OpenClaw WebSocket ngắt (`runtimes/openclaw/service_ws.go`) | Có — khi WebSocket reconnect |
+| `StateHardware` | Vàng | `(4, 4, 0)` | **Hardware Failure** — servo/LED/audio/voice không healthy qua HAL `/health` | `healthwatch` poll (mỗi 5s); camera và sensing không tính | Có — khi tất cả linh kiện báo OK |
+
+### Độ sáng (overlay của lamp)
+
+Ngày 24/08/2026 độ sáng status cue trên lamp được chỉnh bằng mắt trên lamp-0c89, qua ba lượt. Lượt 1 hạ đúng một nửa so với base (12 với các cue nhiều xanh lá, 16 với các cue ít xanh lá). Lượt 2 hạ tiếp riêng nhóm xanh 6 → 4, vì xanh ở mức 6 vẫn chói trong khi đỏ ở mức 8 nhìn đã ổn — die xanh của WS2812 sáng hơn die đỏ ở cùng giá trị nhiều hơn mức mà luật 12-vs-16 bù được. Lượt 3 hạ nhóm low-green 8 → 5. Mọi lượt đều scale tỉ lệ trên cả ba kênh nên hue không đổi, chỉ luminance giảm. Nửa còn lại của cách sửa là **nhịp** chứ không phải mức: mấy cue này chạy `breathing` speed 3.0 — nhanh nhất trong file — và thở nhanh mà kéo dài thì mắt đọc thành "đang nhấp nháy" chứ không phải ánh sáng (đúng vết `listening` hồi 21/08, hạ màu không ăn thua), nên chúng được hạ về 0.6. Hai thứ **cố ý** không hạ: `setup` giữ `(16, 16, 16)` vì lúc onboarding phải nhìn thấy từ xa, và `mic_muted` giữ mức của nó vì là đèn báo privacy, phải đọc được trong phòng sáng. Lưu ý sàn peak ~8 ghi trong `hal/presets.py`: dưới mức đó `breathing`/`pulse` bị truncate mỗi frame (`int(c * brightness)` trong `hal/drivers/rgb/effects.py`) nên một chu kỳ chỉ còn rất ít mức sáng và strip có thể thấy giật cấp — đó là thứ cần soi bằng mắt trên máy thật. Sau các lượt hạ này, `error` và `mic_muted` trùng màu `(5, 0, 0)`; phân biệt bằng hình dạng (pulse vs breathing) — đúng cách bảng base vẫn dùng.
 
 ### Ready flash
 
-Sau khi boot xong (Booting clear và không state nào khác active), `statusled.FlashReady()` bắn flash **trắng** `(12, 12, 12)` ngắn `notification_flash` ~1s để báo agent sẵn sàng nhận lệnh. Sẽ không bắn nếu có status state nào đang active.
+Sau khi boot xong (Booting clear và không state nào khác active), `statusled.FlashReady()` bắn flash **trắng** `(4, 4, 4)` ngắn `notification_flash` ~1s để báo agent sẵn sàng nhận lệnh. Sẽ không bắn nếu có status state nào đang active.
 
 ### OTA chi tiết (do bootstrap drive)
 
@@ -33,9 +37,9 @@ Bootstrap binary gọi `lib/hal` trực tiếp (không qua `statusled.Service`):
 
 | Giai đoạn | LED | Source |
 |---|---|---|
-| Đang tải + cài | Cam `(16, 8, 0)` `breathing` speed 0.4 | `bootstrap/bootstrap.go` |
-| Thành công | Xanh lá `(0, 12, 4)` `notification_flash` ngắn rồi dừng | `bootstrap/bootstrap.go` |
-| Thất bại | Đỏ `(16, 2, 2)` `pulse` speed 1.5 | `bootstrap/bootstrap.go` |
+| Đang tải + cài | Cam `(5, 2, 0)` `breathing` speed 0.4 | `bootstrap/bootstrap.go` |
+| Thành công | Xanh lá `(0, 4, 1)` `notification_flash` ngắn rồi dừng | `bootstrap/bootstrap.go` |
+| Thất bại | Đỏ `(5, 1, 1)` `pulse` speed 1.5 | `bootstrap/bootstrap.go` |
 
 Lưu ý: cam/đỏ OTA của bootstrap dùng RGB và effect parameters hơi khác so với enum trong `statusled.Service` — bootstrap là binary riêng, sở hữu LED trong khi OTA đang chạy.
 

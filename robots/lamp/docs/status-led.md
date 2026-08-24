@@ -11,21 +11,25 @@ Without them, users cannot tell whether Lamp is booting, updating, disconnected 
 
 ## States
 
-All states use the `breathing` effect at speed 3.0 unless noted. RGB values come from `STATUS_LED_PRESETS` in `hal/presets.py` (the Go side sends only the state *name*); they are tuned to a low, hue-equalised luminance so a cue that stays lit does not glare.
+All states use the `breathing` effect. The base table runs it at speed 3.0, but on lamp the six long-lived cues — `ota`, `booting`, `connectivity`, `hal_down`, `agent_down` and `hardware` — breathe at speed 0.6 via the overlay. RGB values are the base `STATUS_LED_PRESETS` in `hal/presets.py` (the Go side sends only the state *name*) as overridden by the `status_led` block in `robots/lamp/presets.json`, the per-device overlay merged at boot by `hal/board/presets_overlay.py`. The overlay patches `color` and, for those six cues, `speed`; the effect name still comes from the base table, and other robots keep the base values. They are tuned to a low, hue-equalised luminance so a cue that stays lit does not glare.
 
 | State (code constant) | Color | RGB | Meaning | Triggered by | Auto-clears |
 |---|---|---|---|---|---|
-| `StateConnectivity` | Orange | `(16, 7, 0)` | **No Internet** — Wi-Fi connected but no internet | Network monitor: 5 consecutive ping failures (~25s) | Yes — when ping succeeds |
-| `StateError` | Red | `(16, 0, 0)` | **Error** — System error (reserved) | Critical failure | Yes — when error resolves |
-| `StateOTA` | Green | `(0, 12, 0)` | **Updating** — OTA firmware update in progress (reserved enum; bootstrap drives OTA LED directly via `lib/hal` — see "Bootstrap (OTA)" below) | Bootstrap reconcile detects update | Reboots after update completes |
-| `StateBooting` | Blue | `(0, 6, 16)` | **Booting** — Lamp is starting up | `server.go` on startup | Yes — when OpenClaw agent connects and is ready |
-| `StateLeLampDown` | Purple | `(11, 0, 16)` | **HAL Down** — Hardware server unreachable. While HAL is down the LED is **dark** because the LED driver itself is down; the purple breathing only shows for ~3s on recovery | `healthwatch` poll fails to reach HAL `/health` | Auto-clears 3s after recovery |
-| `StateAgentDown` | Cyan | `(0, 12, 12)` | **Agent Down** — AI brain disconnected | OpenClaw WebSocket drops (`runtimes/openclaw/service_ws.go`) | Yes — when WebSocket reconnects |
-| `StateHardware` | Yellow | `(12, 12, 0)` | **Hardware Failure** — servo/LED/audio/voice component reports unhealthy via HAL `/health` | `healthwatch` poll (every 5s); camera and sensing excluded | Yes — when all monitored components report healthy |
+| `StateConnectivity` | Orange | `(5, 2, 0)` | **No Internet** — Wi-Fi connected but no internet | Network monitor: 5 consecutive ping failures (~25s) | Yes — when ping succeeds |
+| `StateError` | Red | `(5, 0, 0)` | **Error** — System error (reserved) | Critical failure | Yes — when error resolves |
+| `StateOTA` | Green | `(0, 4, 0)` | **Updating** — OTA firmware update in progress (reserved enum; bootstrap drives OTA LED directly via `lib/hal` — see "Bootstrap (OTA)" below) | Bootstrap reconcile detects update | Reboots after update completes |
+| `StateBooting` | Blue | `(0, 2, 5)` | **Booting** — Lamp is starting up | `server.go` on startup | Yes — when OpenClaw agent connects and is ready |
+| `StateLeLampDown` | Purple | `(4, 0, 5)` | **HAL Down** — Hardware server unreachable. While HAL is down the LED is **dark** because the LED driver itself is down; the purple breathing only shows for ~3s on recovery | `healthwatch` poll fails to reach HAL `/health` | Auto-clears 3s after recovery |
+| `StateAgentDown` | Cyan | `(0, 4, 4)` | **Agent Down** — AI brain disconnected | OpenClaw WebSocket drops (`runtimes/openclaw/service_ws.go`) | Yes — when WebSocket reconnects |
+| `StateHardware` | Yellow | `(4, 4, 0)` | **Hardware Failure** — servo/LED/audio/voice component reports unhealthy via HAL `/health` | `healthwatch` poll (every 5s); camera and sensing excluded | Yes — when all monitored components report healthy |
+
+### Brightness (lamp overlay)
+
+The lamp levels were tuned by eye on lamp-0c89 on 24/08/2026, in three passes. Pass 1 halved every cue from the base peaks (12 for green-dominant cues, 16 for low-green ones), which were still reported as too bright in a dim room. Pass 2 dropped the green tier again, 6 → 4: green at 6 was still glaring while red at 8 read fine, because the WS2812's green die outruns its red at equal value by more than the base 12-vs-16 rule allows for. Pass 3 took the low-green tier 8 → 5. Every step scales all three channels proportionally, so hue never moves and only luminance drops. The other half of the fix was rhythm, not level: these cues ran at speed 3.0, the fastest in the file, and long-lived fast breathing reads as pulsing rather than as light — the same thing that fixed `listening` on 21/08, where lowering the color alone had already failed — hence speed 0.6. Two cues were deliberately left alone: `setup` stays at `(16, 16, 16)` because it must be spotted across a room during onboarding, and `mic_muted` stays readable in a daylit room because it is a privacy indicator. Note the base file's stated floor of peak ~8: below it, `breathing`/`pulse` truncate per frame (`int(c * brightness)` in `hal/drivers/rgb/effects.py`) so the cycle has few distinct levels and the strip can visibly step, which is what to check by eye on device. After the retune `error` and `mic_muted` share the same color `(5, 0, 0)`; they are told apart by shape — `error` pulses, `mic_muted` breathes — which is the separation the base file already relies on.
 
 ### Ready flash
 
-After boot completes (Booting cleared and no other state active), `statusled.FlashReady()` fires a brief **white** `(12, 12, 12)` `notification_flash` for ~1s to indicate the agent is ready to accept commands. Suppressed if any status state is active.
+After boot completes (Booting cleared and no other state active), `statusled.FlashReady()` fires a brief **white** `(4, 4, 4)` `notification_flash` for ~1s to indicate the agent is ready to accept commands. Suppressed if any status state is active.
 
 ### OTA sub-states (driven by bootstrap)
 
@@ -33,9 +37,9 @@ The bootstrap binary calls `lib/hal` directly (it does not go through `statusled
 
 | Phase | LED behavior | Source |
 |---|---|---|
-| Downloading + installing | Orange `(16, 8, 0)` `breathing` speed 0.4 | `bootstrap/bootstrap.go` |
-| Success | Green `(0, 12, 4)` brief `notification_flash` then stop | `bootstrap/bootstrap.go` |
-| Failure | Red `(16, 2, 2)` `pulse` speed 1.5 | `bootstrap/bootstrap.go` |
+| Downloading + installing | Orange `(5, 2, 0)` `breathing` speed 0.4 | `bootstrap/bootstrap.go` |
+| Success | Green `(0, 4, 1)` brief `notification_flash` then stop | `bootstrap/bootstrap.go` |
+| Failure | Red `(5, 1, 1)` `pulse` speed 1.5 | `bootstrap/bootstrap.go` |
 
 Note that bootstrap's OTA orange/red use slightly different RGB and effect parameters than the `statusled.Service` enum entries — bootstrap is a separate binary that owns the LED while OTA is in progress.
 
