@@ -13,6 +13,7 @@ so both brains feel identical to the user.
 import contextlib
 import json
 import logging
+import re
 import threading
 from typing import Callable
 
@@ -78,6 +79,71 @@ def _fire_emotion(arguments: str) -> None:
         args=(emotion, intensity),
         daemon=True,
     ).start()
+
+
+# Defense in depth: prompting alone (system_prompt_pipecat.md) did not stop a
+# model from sometimes writing a tool call as TEXT instead of a real function
+# call (device-observed on qwen/qwen3.6-35b-a3b, 2026-08-24: agent_reply =
+# '[express_emotion] {"emotion": "greeting"} I\'m here! ...'). Cascaded has no
+# native audio — every character left in a reply is spoken verbatim by TTS —
+# so a leaked marker like this gets read aloud, JSON and all, unless caught
+# here. Named tools only (not a bare `[word] {...}`): a legitimate reply could
+# coincidentally contain a bracketed word followed by a JSON-shaped clause.
+_LEAKED_TOOL_CALL_RE = re.compile(
+    r"\[\s*(express_emotion|delegate_to_main|look|web_search)\s*\]\s*(\{[^}]*\})?",
+    re.IGNORECASE,
+)
+
+
+def _repair_leaked_tool_calls(text: str, fire: bool = False) -> str:
+    """Repair a leaked `[tool_name] {...}` marker in `text`.
+
+    `express_emotion` is REFORMATTED, not deleted: `[express_emotion]
+    {"emotion": "greeting"}` becomes `[greeting]` — the same square-bracket
+    delivery-tag convention ElevenLabs v3 already uses for `[laughs]`,
+    `[calm]`, etc. (see system_prompt_pipecat.md's Allowed Audio Tags). Those
+    tags are delivery cues, not spoken words — ElevenLabs shapes the reading
+    from them rather than reading them aloud — so this fixes the leak AND
+    keeps the emotional colour, instead of throwing it away.
+
+    `fire=True` additionally fires the real express_emotion side effect (the
+    face/LED) via the same _fire_emotion() a correct tool call uses — the
+    model's intent lands twice: once as a delivery cue in speech, once
+    physically. Call with fire=True exactly once per leaked marker — at the
+    site that actually speaks the text — so it doesn't double-fire when the
+    same raw text is ALSO cleaned for the saved transcript.
+
+    The other three tool names have no natural delivery-tag equivalent —
+    their arguments carry real intent (a message, a capture, a query) that
+    isn't safe to reconstruct from malformed text — so those are stripped
+    entirely, same as an express_emotion leak with no parseable emotion.
+    """
+    if "[" not in text:
+        return text
+
+    def _handle(m: "re.Match[str]") -> str:
+        name, args = m.group(1).lower(), m.group(2)
+        if name == "express_emotion" and args:
+            try:
+                emotion = str(json.loads(args).get("emotion", "")).strip().lower()
+            except (ValueError, TypeError):
+                emotion = ""
+            if emotion:
+                if fire:
+                    logger.warning(
+                        "[pipecat] recovered a leaked express_emotion call: %s", args
+                    )
+                    _fire_emotion(args)
+                else:
+                    logger.warning(
+                        "[pipecat] reformatted a leaked express_emotion call: %s", args
+                    )
+                return f"[{emotion}]"
+        logger.warning("[pipecat] stripped a leaked %s call from the reply", name)
+        return ""
+
+    cleaned = _LEAKED_TOOL_CALL_RE.sub(_handle, text)
+    return re.sub(r"  +", " ", cleaned).strip()
 
 
 def _capture_look_frame():
@@ -248,7 +314,9 @@ def run_pipecat_turn(
             text_parts.append(event.text)
             sentence_buf += event.text
             if tts is not None and sentence_buf.rstrip().endswith(SENTENCE_ENDS):
-                sentence: str = leak_filter.filter_text(strip_markers(sentence_buf))
+                sentence: str = leak_filter.filter_text(
+                    strip_markers(_repair_leaked_tool_calls(sentence_buf, fire=True))
+                )
                 if sentence:
                     if not first_sentence_sent:
                         logger.info("[pipecat] First sentence → speak: %r", sentence[:80])
@@ -264,14 +332,18 @@ def run_pipecat_turn(
                         tts.speak_queue(sentence)
                 sentence_buf = ""
 
+        # fire=False: the same leaked marker was already recovered/fired at the
+        # speaking sites above — this only cleans the SAVED transcript text.
         transcript: str = clean_transcript(
-            strip_markers("".join(text_parts)), reply_lang
+            strip_markers(_repair_leaked_tool_calls("".join(text_parts))), reply_lang
         )
 
         if delegated:
             logger.info("[pipecat] Delegated → will forward to OS server")
         else:
-            remaining: str = leak_filter.filter_text(strip_markers(sentence_buf))
+            remaining: str = leak_filter.filter_text(
+                strip_markers(_repair_leaked_tool_calls(sentence_buf, fire=True))
+            )
             if remaining and tts is not None and not stopped:
                 if not first_sentence_sent:
                     logger.info("[pipecat] Final fragment → speak: %r", remaining[:80])
