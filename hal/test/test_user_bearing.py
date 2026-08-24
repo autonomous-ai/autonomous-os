@@ -254,19 +254,24 @@ def test_pose_joints_are_smoothed_like_the_bearing(tmp_path, monkeypatch):
     assert 0.0 < pitch < 20.0, f"expected a smoothed pitch, got {pitch}"
 
 
-def test_v1_file_keeps_its_learned_bearing(tmp_path, monkeypatch):
-    """A schema bump must not throw away hours of sightings — v1 had no pose,
-    so it migrates with an empty one and refills on the next sighting."""
+def test_v1_file_is_no_longer_migrated(tmp_path, monkeypatch):
+    """This used to keep v1's yaw, on the grounds that a schema bump must not
+    throw away hours of sightings. v3 reverses that deliberately.
+
+    The reason the yaw looked safe to keep was that only the POSE was new in
+    v2. But a recalibration moves every joint's degree scale, base_yaw
+    included — `6f0c4ec4` zeroed all five homing offsets — so a v1 bearing is
+    an angle in an unknown frame of reference, not a direction. Restoring it
+    confidently is the failure the calibration fingerprint exists to prevent,
+    and re-learning costs about eight sightings.
+    """
     path = tmp_path / "b.json"
     path.write_text(json.dumps({
         "version": 1, "bearing_deg": 25.709, "confidence": 0.25,
         "samples": 2, "outlier_streak": 0, "updated": __import__("time").time(),
     }))
     monkeypatch.setattr(ub.config, "USER_BEARING_PATH", str(path), raising=False)
-    est = ub.read_estimate()
-    assert est is not None, "v1 estimate was discarded"
-    assert est.bearing_deg == 25.709
-    assert est.pose == {}
+    assert ub.read_estimate() is None
 
 
 def test_relocation_replaces_the_posture_rather_than_averaging_it(tmp_path, monkeypatch):

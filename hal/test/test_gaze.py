@@ -1039,8 +1039,11 @@ def test_blind_corrections_stop_after_a_few_and_wait_for_a_real_face(neck, monke
     """The fallback knows the head is up there, never how far."""
     monkeypatch.setattr(config, "GAZE_PITCH_MAX_BLIND_STEPS", 3)
     gaze._blind_pitch_steps = 0
-    _fill_dy(-0.5, from_face=False)
     for i in range(config.GAZE_PITCH_MAX_BLIND_STEPS + 3):
+        # Refill each round: a correction clears the window it was computed
+        # from, so on the device the sampler has to rebuild one before the loop
+        # may act again. That refill IS the spacing between blind steps now.
+        _fill_dy(-0.5, from_face=False)
         gaze._last_pitch_t = gaze.time.monotonic() - 10_000.0
         gaze._maybe_pitch(gaze.time.monotonic())
     assert len(neck.moves) == config.GAZE_PITCH_MAX_BLIND_STEPS
@@ -1299,3 +1302,55 @@ def test_gaze_still_declines_to_move_a_body_someone_else_owns(monkeypatch):
     gaze._maybe_pitch(gaze.time.monotonic())
 
     assert svc.moves == [] and svc.owned_during_move == []
+
+
+# --- Debug snapshots: a correction has to show what it acted on ---
+
+
+def test_a_correction_writes_the_frame_it_was_computed_from(neck, tmp_path, monkeypatch):
+    """The log says the median was -41%. It cannot say of WHAT.
+
+    Every time this feature was actually understood it was from a picture: the
+    clipped-eyes case, the wrong-person aim (F24), the roll experiment. A
+    correction that leaves no frame behind is a correction nobody can diagnose.
+    """
+    import numpy as _np
+
+    monkeypatch.setattr(config, "SNAPSHOT_PERSIST_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(config, "GAZE_SNAPSHOT_ENABLED", True, raising=False)
+    gaze._last_frame = _np.zeros((90, 160, 3), dtype=_np.uint8)
+    gaze._last_box = (10, 5, 40, 40)
+
+    _fill_dy(-0.4)
+    gaze._maybe_pitch(gaze.time.monotonic())
+
+    assert neck.moves, "precondition: the correction fired"
+    written = list((tmp_path / gaze.SNAPSHOT_CATEGORY).glob("*.jpg"))
+    assert len(written) == 1, "one frame per correction"
+
+
+def test_snapshots_can_be_turned_off(neck, tmp_path, monkeypatch):
+    import numpy as _np
+
+    monkeypatch.setattr(config, "SNAPSHOT_PERSIST_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(config, "GAZE_SNAPSHOT_ENABLED", False, raising=False)
+    gaze._last_frame = _np.zeros((90, 160, 3), dtype=_np.uint8)
+
+    _fill_dy(-0.4)
+    gaze._maybe_pitch(gaze.time.monotonic())
+
+    assert neck.moves, "the correction must still happen"
+    assert not (tmp_path / gaze.SNAPSHOT_CATEGORY).exists()
+
+
+def test_a_failing_snapshot_never_costs_the_correction(neck, monkeypatch):
+    """Debug output is never allowed to break the thing it observes."""
+    monkeypatch.setattr(
+        gaze, "_save_snapshot",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    _fill_dy(-0.4)
+    try:
+        gaze._maybe_pitch(gaze.time.monotonic())
+    except OSError:
+        raise AssertionError("a snapshot failure must not escape _maybe_pitch")

@@ -1460,6 +1460,23 @@ GAZE_PITCH_WINDOW_S: float = float(
 GAZE_PITCH_MIN_SAMPLES: int = int(
     os.environ.get("HAL_GAZE_PITCH_MIN_SAMPLES", "8")
 )
+# Write an annotated frame beside every pitch correction, into
+# SNAPSHOT_PERSIST_DIR/sensing_gaze/ (newest GAZE_SNAPSHOT_KEEP kept).
+#
+# The log line says the median was -0.41 of frame height. It cannot say whether
+# that was the user's face, a colleague's, or a coat on a chair — and this loop
+# spent a week walking the head while its numbers looked reasonable. Every time
+# this feature was actually understood it was by looking at a picture: the
+# clipped-eyes case (`landmarks_in_frame`), the wrong-person aim (F24), and the
+# roll experiment that proved wrist_roll aims rather than rotates. The log is
+# for noticing; the frame is for diagnosing.
+#
+# Same category convention and viewer as the bearing sampler's snapshots, so
+# the two read identically.
+GAZE_SNAPSHOT_ENABLED: bool = (
+    os.environ.get("HAL_GAZE_SNAPSHOT", "true").lower() in ("1", "true", "yes")
+)
+GAZE_SNAPSHOT_KEEP: int = int(os.environ.get("HAL_GAZE_SNAPSHOT_KEEP", "40"))
 # How many corrections in a row may be driven by the torso fallback before it
 # stops and waits for a real face. The fallback knows the head is above the
 # frame but not by how much, so its evidence can stay true no matter how far

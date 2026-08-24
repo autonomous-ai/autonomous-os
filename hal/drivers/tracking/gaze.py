@@ -76,6 +76,55 @@ _blind_pitch_steps: int = 0
 _dy_samples: Deque[Tuple[float, float, bool]] = deque()
 _dy_lock = threading.Lock()
 
+# Newest sampled frame and the box measured in it, kept ONLY so a correction can
+# show what it acted on. One downscaled frame, replaced each sample.
+_last_frame: Any = None
+_last_box: Any = None
+
+# Must begin with "sensing_" to be servable by the monitor snapshot route.
+SNAPSHOT_CATEGORY: str = "sensing_gaze"
+
+
+def _save_snapshot(label: str) -> Optional[str]:
+    """Write the frame this correction was computed from, annotated. Never raises.
+
+    Mirrors bearing_sampler._save_snapshot so both debug views read identically:
+    green box on the detection, red line at frame centre.
+    """
+    if not getattr(config, "GAZE_SNAPSHOT_ENABLED", True) or _last_frame is None:
+        return None
+    try:
+        import os
+
+        from hal.drivers.tracking.look_debug import encode_annotated
+
+        jpg = encode_annotated(_last_frame, _last_box, label)
+        if jpg is None:
+            return None
+        root = getattr(config, "SNAPSHOT_PERSIST_DIR", "/var/lib/hal/snapshots")
+        directory = os.path.join(root, SNAPSHOT_CATEGORY)
+        os.makedirs(directory, exist_ok=True)
+        # Timestamped, so lexical order is time order and pruning is a slice.
+        name = time.strftime("%Y%m%d-%H%M%S") + ".jpg"
+        path = os.path.join(directory, name)
+        with open(path, "wb") as f:
+            f.write(jpg)
+        keep = int(getattr(config, "GAZE_SNAPSHOT_KEEP", 40) or 0)
+        if keep > 0:
+            stale = sorted(
+                (f for f in os.listdir(directory) if f.endswith(".jpg")),
+                reverse=True,
+            )[keep:]
+            for old in stale:
+                try:
+                    os.unlink(os.path.join(directory, old))
+                except OSError:
+                    pass
+        return path
+    except Exception as e:
+        logger.debug("[gaze] snapshot skipped: %s", e)
+        return None
+
 
 def record_dy(dy: Optional[float], from_face: bool,
               now: Optional[float] = None) -> None:
@@ -583,7 +632,7 @@ def _sample_once() -> Optional[str]:  # noqa: C901
     finally:
         aim._detector_lock_use.release()
 
-    global _last_dy_frac, _last_dy_from_face
+    global _last_dy_frac, _last_dy_from_face, _last_frame, _last_box
     if face is None:
         # No face — but that is exactly the state where the camera is most
         # likely pointing too low, and correcting it needs SOME vertical
@@ -599,6 +648,7 @@ def _sample_once() -> Optional[str]:  # noqa: C901
         _last_dy_frac = _headroom_from_person(frame_or_small, detector)
         _last_dy_from_face = False
         record_dy(_last_dy_frac, False)
+        _last_frame, _last_box = frame_or_small, None
         record_sample(None, 0.0, 0.0)
         return None
     (fx, fy, fw, fh), landmarks = face
@@ -609,6 +659,7 @@ def _sample_once() -> Optional[str]:  # noqa: C901
     _last_dy_frac = ((fy + fh / 2.0) - frame_h / 2.0) / frame_h
     _last_dy_from_face = True
     record_dy(_last_dy_frac, True)
+    _last_frame, _last_box = small, (fx, fy, fw, fh)
 
     # Distance of the face centre from the frame centre, 0 at the middle and 1
     # at either edge — how far into the lens distortion this sample sits.
@@ -801,6 +852,15 @@ def _maybe_pitch(now: float) -> None:
             cur, target,
             "" if from_face
             else f" [blind {_blind_pitch_steps}/{config.GAZE_PITCH_MAX_BLIND_STEPS}]",
+        )
+        # Last, deliberately: this is debug output, and it must not be able to
+        # skip the bookkeeping above. A snapshot that failed before
+        # discard_samples() would leave the window uncleared and let the loop
+        # correct again from offsets measured at the pose it has just left.
+        _save_snapshot(
+            f"{'face' if from_face else 'torso'} dy={dy * 100:+.0f}% "
+            f"(median of {n_dy} over {span_dy:.1f}s) "
+            f"wrist_pitch {cur:+.1f} -> {target:+.1f}"
         )
     except Exception as e:
         logger.debug("[gaze] pitch move skipped: %s", e)
@@ -999,6 +1059,8 @@ def reset_for_test() -> None:
     _last_face_t = 0.0
     _last_repoint_t = 0.0
     _last_dy_frac = None
+    globals()["_last_frame"] = None
+    globals()["_last_box"] = None
     _last_pitch_t = 0.0
     _blind_pitch_steps = 0
     _last_dy_from_face = False
