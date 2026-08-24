@@ -290,6 +290,15 @@ bỏ qua đúng target đó nên release lỗi không bị cài lại ở lần 
 có version khác, OTA của component đó tự tiếp tục. Bản thân rollback không cần
 metadata URL hoặc mạng.
 
+Các component cài theo thư mục cũng có cùng hợp đồng recovery. Trước khi update
+web, updater dừng nginx, swap bundle đã giải nén hoàn chỉnh từ thư mục staging,
+và giữ bundle trước đó tại `/root/bootstrap/rollback/web.previous` cùng trạng
+thái active/inactive trước đó của nginx. Sau đó nó đòi hỏi có `index.html`,
+`nginx -t` hợp lệ và—khi nginx vốn đang chạy—`GET /` loopback thành công. Nếu
+thất bại, updater tự khôi phục bundle và trạng thái service đã lưu. Operator cũng
+có thể chạy `software-update rollback web`; version bị loại được ghi vào
+`rollback_versions` giống rollback binary.
+
 Device không có `signing_public_key` chủ ý ở legacy mode: nó đọc component top
 level và chỉ log cảnh báo, không làm OTA lỗi. Đây là compatibility bridge, không
 phải bảo đảm trust; pin public key để bật verified OTA.

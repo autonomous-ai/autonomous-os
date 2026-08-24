@@ -100,6 +100,13 @@ the previous binary at `/root/bootstrap/rollback/`. Use
 `sudo software-update rollback os-server` (or `bootstrap`) to restore it; the
 failed version is blocked until the feed publishes a different version.
 
+Web OTA follows the same recovery model. It stages and validates the new bundle
+before replacing `/usr/share/nginx/html/setup`, preserves the previous bundle at
+`/root/bootstrap/rollback/web.previous`, and records whether nginx was running.
+The update requires `index.html`, `nginx -t`, and a loopback `GET /` when nginx
+was active; a failed check restores the known-good bundle automatically. Use
+`sudo software-update rollback web` for an operator-initiated rollback.
+
 `spike.sh` is a **thin orchestrator** — it reimplements nothing, it just runs the
 component scripts in order. Each of those also runs standalone:
 

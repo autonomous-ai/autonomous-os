@@ -27,12 +27,86 @@ set -e
 # baked at image build). An explicit OTA_METADATA_URL env var still overrides it
 # for manual/debug runs. No compiled-in default — abort if neither is set.
 BOOTSTRAP_JSON="/root/config/bootstrap.json"
+ROLLBACK_DIR="/root/bootstrap/rollback"
+WEB_ROOT="/usr/share/nginx/html/setup"
+
+# Web is a directory install, so retain the complete prior bundle and whether
+# nginx was running. The backup is only replaced after the new ZIP has been
+# downloaded and unpacked into a sibling staging directory.
+save_web_service_state() {
+  mkdir -p "$ROLLBACK_DIR"
+  if systemctl is-active --quiet nginx; then
+    echo active >"$ROLLBACK_DIR/web.nginx-state"
+  else
+    echo inactive >"$ROLLBACK_DIR/web.nginx-state"
+  fi
+}
+
+web_was_active() {
+  [ "$(cat "$ROLLBACK_DIR/web.nginx-state" 2>/dev/null || echo active)" = active ]
+}
+
+restore_web_service_state() {
+  if web_was_active; then
+    systemctl restart nginx
+  else
+    systemctl stop nginx 2>/dev/null || true
+  fi
+}
+
+wait_for_web() {
+  local attempt=1
+  while [ "$attempt" -le 30 ]; do
+    curl -fsS --max-time 5 http://127.0.0.1/ >/dev/null 2>&1 && return 0
+    sleep 1
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
+check_web() {
+  [ -f "$WEB_ROOT/index.html" ] || return 1
+  nginx -t >/dev/null || return 1
+  ! web_was_active || { systemctl is-active --quiet nginx && wait_for_web; }
+}
+
+restore_web_backup() {
+  local backup="$ROLLBACK_DIR/web.previous" failed="$ROLLBACK_DIR/web.failed"
+  [ -d "$backup" ] || { echo "No rollback backup for web" >&2; return 1; }
+  rm -rf "$failed"
+  [ ! -e "$WEB_ROOT" ] || mv "$WEB_ROOT" "$failed"
+  mv "$backup" "$WEB_ROOT"
+}
+
 [ "$(id -u)" -ne 0 ] && { echo "Run as root."; exit 1; }
-[ $# -lt 1 ] && { echo "Usage: software-update <component>|rollback <os-server|bootstrap>"; exit 1; }
+[ $# -lt 1 ] && { echo "Usage: software-update <component>|rollback <os-server|bootstrap|web>"; exit 1; }
 APP="$1"
 if [ "$APP" = "rollback" ]; then
-  [ $# -eq 2 ] || { echo "Usage: software-update rollback <os-server|bootstrap>"; exit 1; }
+  [ $# -eq 2 ] || { echo "Usage: software-update rollback <os-server|bootstrap|web>"; exit 1; }
   ROLLBACK_TARGET="$2"
+  if [ "$ROLLBACK_TARGET" = "web" ]; then
+    BACKUP="$ROLLBACK_DIR/web.previous"
+    [ -d "$BACKUP" ] || { echo "No rollback backup for web"; exit 1; }
+    BLOCKED_VERSION="$(cat "$WEB_ROOT/VERSION" 2>/dev/null || true)"
+    if [ -z "$BLOCKED_VERSION" ] && [ -f /root/bootstrap/state.json ]; then
+      BLOCKED_VERSION=$(jq -r '.components.web // empty' /root/bootstrap/state.json 2>/dev/null || true)
+    fi
+    if [ -n "$BLOCKED_VERSION" ] && [ -f "$BOOTSTRAP_JSON" ]; then
+      CONFIG_TMP=$(mktemp)
+      if jq --arg version "$BLOCKED_VERSION" '.rollback_versions = (.rollback_versions // {}) | .rollback_versions.web = $version' "$BOOTSTRAP_JSON" >"$CONFIG_TMP"; then
+        mv "$CONFIG_TMP" "$BOOTSTRAP_JSON"
+      else
+        rm -f "$CONFIG_TMP"
+        echo "WARN: could not record rollback version; lower min_version before the next OTA poll"
+      fi
+    fi
+    systemctl stop nginx 2>/dev/null || true
+    restore_web_backup
+    restore_web_service_state
+    check_web || { echo "web rollback health check failed"; exit 1; }
+    echo "web restored from $BACKUP"
+    exit 0
+  fi
   case "$ROLLBACK_TARGET" in
     os-server) DEST=/usr/local/bin/os-server; UNIT=os-server ;;
     bootstrap) DEST=/usr/local/bin/bootstrap-server; UNIT=bootstrap ;;
@@ -176,14 +250,25 @@ elif [ "$APP" = "openclaw" ]; then
 elif [ "$APP" = "web" ]; then
   [ -z "$URL" ] && { echo "Metadata has no url for web"; exit 1; }
   ZIP_TMP=$(mktemp)
-  DIR_TMP=$(mktemp -d)
   download_verified "$URL" "$ZIP_TMP" "$SHA256" || { echo "Failed checksum verification for web"; exit 1; }
+  DIR_TMP=$(mktemp -d "$(dirname "$WEB_ROOT")/.setup.new.XXXXXX")
   unzip -o -q "$ZIP_TMP" -d "$DIR_TMP"
   echo "$VERSION" > "$DIR_TMP/VERSION"
-  WEB_ROOT="/usr/share/nginx/html/setup"
-  rm -rf "${WEB_ROOT:?}"/*
-  cp -a "$DIR_TMP"/* "$WEB_ROOT"
-  systemctl restart nginx
+  [ -f "$DIR_TMP/index.html" ] || { echo "No index.html in web zip"; exit 1; }
+  save_web_service_state
+  systemctl stop nginx 2>/dev/null || true
+  rm -rf "$ROLLBACK_DIR/web.previous"
+  mv "$WEB_ROOT" "$ROLLBACK_DIR/web.previous"
+  mv "$DIR_TMP" "$WEB_ROOT"
+  DIR_TMP=""
+  if ! restore_web_service_state || ! check_web; then
+    echo "web health check failed; restoring the known-good bundle" >&2
+    systemctl stop nginx 2>/dev/null || true
+    restore_web_backup
+    restore_web_service_state || true
+    check_web || true
+    exit 1
+  fi
   echo "web updated to $VERSION"
 elif [ "$APP" = "hal" ]; then
   [ -z "$URL" ] && { echo "Metadata has no url for hal"; exit 1; }

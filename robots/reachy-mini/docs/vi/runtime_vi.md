@@ -227,6 +227,13 @@ cũ tại `/root/bootstrap/rollback/`. Dùng `sudo software-update rollback
 os-server` (hoặc `bootstrap`) để khôi phục; version lỗi bị chặn tới khi feed có
 version khác.
 
+Web OTA cũng theo cùng model recovery. Nó stage và xác thực bundle mới trước khi
+thay `/usr/share/nginx/html/setup`, giữ bundle trước đó tại
+`/root/bootstrap/rollback/web.previous`, và ghi lại nginx có đang chạy hay không.
+Update yêu cầu có `index.html`, `nginx -t`, và `GET /` loopback khi nginx đang
+active; check lỗi sẽ tự khôi phục bundle known-good. Dùng
+`sudo software-update rollback web` khi operator cần rollback chủ động.
+
 Layout là **layout production**, không phải cây riêng cho spike:
 
 | Thành phần | Đường dẫn |

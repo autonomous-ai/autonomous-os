@@ -293,6 +293,15 @@ release is not reinstalled on the next poll. Publishing a different version
 automatically resumes OTA for that component. Rollback itself does not need the
 metadata URL or network access.
 
+Directory installs have the same recovery contract. Before a web update, the
+updater stops nginx, swaps the fully unpacked staged bundle into place, and
+retains the previous bundle at `/root/bootstrap/rollback/web.previous` together
+with nginx's prior active/inactive state. It then requires `index.html`, a valid
+`nginx -t`, and—when nginx had been running—a successful loopback `GET /`.
+Failure automatically restores the saved bundle and service state. An operator
+can also run `software-update rollback web`; the rejected version is recorded in
+`rollback_versions` just like a binary rollback.
+
 Devices without `signing_public_key` deliberately remain in legacy mode: they
 read the top-level entries and emit a warning rather than failing OTA. This is a
 compatibility bridge, not a trust guarantee; pin the public key to opt in to
