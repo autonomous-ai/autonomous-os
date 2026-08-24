@@ -63,14 +63,6 @@ _last_grant_t: float = 0.0
 # When a usable face was last seen, and when we last turned to look for one.
 _last_face_t: float = 0.0
 _last_repoint_t: float = 0.0
-# Vertical offset of the last face seen, as a fraction of frame height: negative
-# means it sat above the centre. None when nothing measurable was in frame.
-_last_dy_frac: Optional[float] = None
-# Whether that offset came from a real face or from the coarse person fallback.
-_last_dy_from_face: bool = False
-_last_pitch_t: float = 0.0
-# Consecutive corrections driven by the fallback rather than by a face.
-_blind_pitch_steps: int = 0
 # A VAD-confirmed utterance found no recent usable face. The watcher consumes
 # this request and restores the remembered pose without blocking the mic loop;
 # the completed utterance gets one final gaze check after the camera settles.
@@ -278,47 +270,6 @@ def facing_ratio(now: Optional[float] = None) -> Tuple[float, int]:
     return facing / float(len(measured)), len(measured)
 
 
-def _headroom_from_person(frame: Any, detector: Any) -> Optional[float]:
-    """A vertical offset to correct by when no face could be measured.
-
-    Returns a negative fraction (meaning "tilt up") when a person is visible
-    with their head cut off by the top of the frame, else None. Deliberately
-    coarse: this only has to get a head back INTO frame, at which point the
-    face path takes over with a real measurement.
-    """
-    if frame is None or detector is None:
-        return None
-    try:
-        box = detector.detect(frame, "person", strict=False,
-                              min_conf=config.LOOK_AIM_MIN_CONFIDENCE)
-    except TypeError:
-        try:
-            box = detector.detect(frame, "person", strict=False)
-        except Exception:
-            return None
-    except Exception:
-        return None
-    if box is None:
-        return None
-    _, y, _, h = box
-    frame_h = float(frame.shape[0]) or 1.0
-    if float(h) / frame_h < config.LOOK_AIM_MIN_PERSON_HEIGHT_FRAC:
-        return None  # too far away to be the person at this desk
-    # Touching the top edge means the body continues past it — the head is
-    # outside the frame, above.
-    if float(y) > 2.0:
-        return None
-    # A torso filling the frame with no face above it does mean the camera is
-    # pointing too low — heads sit above bodies, and this lamp sits below head
-    # height on a desk. What made that inference dangerous was not the
-    # inference: it was that it stays true no matter how far the neck has
-    # already travelled, so acting on it repeatedly is a loop rather than a
-    # correction (device-observed: wrist_pitch -89.7 -> -34.6 in eight steps,
-    # still climbing). The bound lives in the caller, as a budget of blind
-    # steps, which is where a "keep going until you can see" search belongs.
-    return -0.5
-
-
 def following_a_face(svc: Any) -> bool:
     """Whether the servo writes are a tracking session pursuing the user.
 
@@ -444,31 +395,12 @@ def _sample_once() -> Optional[str]:  # noqa: C901
     finally:
         aim._detector_lock_use.release()
 
-    global _last_dy_frac, _last_dy_from_face
     if face is None:
-        # No face — but that is exactly the state where the camera is most
-        # likely pointing too low, and correcting it needs SOME vertical
-        # reference. A person box gives one: it says nothing about which way
-        # the head faces, so it can never feed the gate, but a torso whose top
-        # is cut off by the frame edge says the head is above the frame.
-        #
-        # Without this the correction dead-ends. It takes several bounded steps
-        # to undo a large offset, and the first step can push a barely-visible
-        # face out of view entirely — after which nothing is measurable and the
-        # camera stays wrong forever. Device-observed: one correction fired
-        # (-67.1 -> -59.1), then every later sample read `-`.
-        _last_dy_frac = _headroom_from_person(frame_or_small, detector)
-        _last_dy_from_face = False
         record_sample(None, 0.0, 0.0)
         return None
     (fx, fy, fw, fh), landmarks = face
     frame_w = float(small.shape[1]) or 1.0
     frame_h = float(small.shape[0]) or 1.0
-    # Negative when the face sits above the frame centre — the case that means
-    # the camera is pointing too low to see who is talking.
-    _last_dy_frac = ((fy + fh / 2.0) - frame_h / 2.0) / frame_h
-    _last_dy_from_face = True
-
     # Distance of the face centre from the frame centre, 0 at the middle and 1
     # at either edge — how far into the lens distortion this sample sits.
     edge = min(1.0, abs((fx + fw / 2.0) - frame_w / 2.0) / (frame_w / 2.0))
@@ -481,9 +413,8 @@ def _sample_once() -> Optional[str]:  # noqa: C901
         # view, so the lamp never turned to keep them.
         _last_face_t = time.monotonic()
     # A face whose eyes sit outside the frame is a face this camera is pointed
-    # too low at, not a face turned away. Record it as unmeasured — the vertical
-    # offset above still stands, so _maybe_pitch gets its correction from the
-    # very frame the yaw had to be thrown away in.
+    # too low at, not a face turned away. Record it as unmeasured rather than
+    # letting the clamp report it as a profile and vote against facing.
     yaw = (
         head_yaw_deg(landmarks)
         if landmarks_in_frame(landmarks, frame_w, frame_h)
@@ -603,95 +534,6 @@ def _consume_speech_repoint(now: float) -> None:
         logger.info("[gaze] speech-start reacquire unavailable")
 
 
-def _maybe_pitch(now: float) -> None:
-    """Raise or lower the camera so a face sits inside the frame, not above it.
-
-    This is the neck the aim never had — see GAZE_PITCH_ENABLED for which joint
-    turned out to be it and how that was measured. Absolute `move_and_hold`,
-    never a relative nudge: the sign risk that kept pitch out of the aim lives
-    in the relative path, and an absolute target has no sign to get wrong.
-
-    Corrects toward the frame centre and stops there. It does not track a face
-    continuously — the point is only to stop the head pointing at the desk.
-    """
-    global _last_pitch_t, _blind_pitch_steps
-
-    if not (config.GAZE_PITCH_ENABLED and config.GAZE_WAKE_ENABLED):
-        return
-    dy = _last_dy_frac
-    if dy is None or abs(dy) <= config.GAZE_PITCH_DEAD_ZONE_FRAC:
-        return
-    if (now - _last_pitch_t) < config.GAZE_PITCH_COOLDOWN_S:
-        return
-    # The fallback is a guess, not a measurement — it says "the head is up
-    # there somewhere", never how far. Let it walk the camera a few steps and
-    # then stop until a real face confirms the direction was right. Otherwise a
-    # guess that stays true forever moves the neck forever.
-    if not _last_dy_from_face:
-        if _blind_pitch_steps >= config.GAZE_PITCH_MAX_BLIND_STEPS:
-            return
-
-    import hal.app_state as state
-
-    from hal.drivers.tracking import constants as C
-
-    svc = getattr(state, "animation_service", None)
-    if svc is None or getattr(svc, "_tracking_active", False):
-        return
-    if getattr(svc, "_music_playing", False):
-        return
-
-    try:
-        current = svc.get_positions()
-        cur = float(current.get("wrist_pitch.pos", 0.0))
-    except Exception as e:
-        logger.debug("[gaze] pitch skipped, no pose: %s", e)
-        return
-
-    # A face ABOVE centre (dy < 0) needs the camera tilted UP, and up is the
-    # DECREASING direction on this joint — the opposite of what this loop
-    # assumed. Device-measured on lamp-0c89, paired A/B/A with the servo bus
-    # held quiet, 18 face samples per position interleaved over three cycles so
-    # a subject who shifts cancels out:
-    #
-    #   wrist_pitch -75 -> median dy +0.009 | -90 -> +0.113  (moved -15, dy +0.103)
-    #   wrist_pitch -68 -> median dy -0.078 | -98 -> +0.108  (moved -30, dy +0.185)
-    #
-    # Lowering the joint moves the face DOWN the frame, i.e. the camera swung
-    # UP. With the old sign every correction enlarged the error it was
-    # measuring, so the loop ratcheted one way until it hit the stop —
-    # device-observed -72.6 -> -54.7 -> -42.9 -> -28.2 while each look still
-    # reported the face above centre, which is what a wrong sign looks like
-    # from the outside.
-    step = dy * config.GAZE_PITCH_DEG_PER_FRAME
-    step = max(-config.GAZE_PITCH_MAX_STEP_DEG,
-               min(config.GAZE_PITCH_MAX_STEP_DEG, step))
-    target = max(C.WRIST_PITCH_MIN, min(C.WRIST_PITCH_MAX, cur + step))
-    if abs(target - cur) < 0.5:
-        return
-
-    try:
-        from hal.drivers.tracking import aim
-
-        duration = aim.min_move_duration(
-            state.safety_policy, {"wrist_pitch.pos": target}, current,
-            aim.MOVE_DURATION_S,
-        )
-        svc.move_and_hold({"wrist_pitch.pos": target}, duration=duration)
-        discard_samples()
-        _last_pitch_t = now
-        _blind_pitch_steps = 0 if _last_dy_from_face else _blind_pitch_steps + 1
-        logger.info(
-            "[gaze] %s %.0f%% %s of centre — wrist_pitch %+.1f -> %+.1f%s",
-            "face" if _last_dy_from_face else "head (from torso)",
-            abs(dy) * 100.0, "above" if dy < 0 else "below", cur, target,
-            "" if _last_dy_from_face
-            else f" [blind {_blind_pitch_steps}/{config.GAZE_PITCH_MAX_BLIND_STEPS}]",
-        )
-    except Exception as e:
-        logger.debug("[gaze] pitch move skipped: %s", e)
-
-
 def _maybe_repoint(now: float, *, force: bool = False) -> bool:
     """Turn toward the remembered bearing when nobody has been visible.
 
@@ -711,20 +553,6 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
     # repeatedly turn just because no face is visible.
     if (now - _last_repoint_t) < config.GAZE_REPOINT_COOLDOWN_S:
         return False
-    # Not while the framing is being corrected. These two both move the head
-    # and both re-anchor idle, so together they fought: device-observed, pitch
-    # lifted the camera to a face it could see (-72.8 -> -61.9) and thirteen
-    # seconds later repoint anchored idle back on the REMEMBERED pose, wrist
-    # -46.7, dropping the aim to where the face was clipped again — over and
-    # over, wrist_pitch restarting from -67.8, then -72.8, then -43.6.
-    #
-    # Precedence goes to pitch because the two answer different questions and
-    # only one of them has current evidence: pitch is correcting toward a face
-    # visible RIGHT NOW, while repoint is a guess about where a face was last
-    # seen, which is worth acting on only when nothing is visible at all.
-    if (now - _last_pitch_t) < config.GAZE_REPOINT_AFTER_S:
-        return False
-
     import hal.app_state as state
 
     from hal.drivers.tracking import aim, user_bearing
@@ -837,10 +665,6 @@ def _loop() -> None:
                     )
                     counted, blocked, counted_from = 0, {}, now
                 _consume_speech_repoint(now)
-                # Framing first: a face inside the frame is what everything
-                # else is measured from, and turning to a bearing that still
-                # points at the desk finds nobody however right the bearing is.
-                _maybe_pitch(now)
                 _maybe_repoint(now)
             except Exception as e:  # a background watcher must never take HAL down
                 logger.debug("[gaze] sample skipped: %s", e)
@@ -882,16 +706,11 @@ def stop() -> None:
 def reset_for_test() -> None:
     """Clear buffered samples and the cooldown between tests."""
     global _last_grant_t, _last_face_t, _last_repoint_t
-    global _last_dy_frac, _last_pitch_t, _blind_pitch_steps, _last_dy_from_face
     global _speech_repoint_requested_t
     with _samples_lock:
         _samples.clear()
     _last_grant_t = 0.0
     _last_face_t = 0.0
     _last_repoint_t = 0.0
-    _last_dy_frac = None
-    _last_pitch_t = 0.0
-    _blind_pitch_steps = 0
-    _last_dy_from_face = False
     _speech_repoint_requested_t = 0.0
     _speech_repoint_requested.clear()
