@@ -523,6 +523,39 @@ aborts with an error if neither is set — no compiled-in URL.
     ;;
 ```
 
+### Codex Case (manual only — not yet wired to the bootstrap worker)
+
+The Codex CLI is a static musl binary published on GitHub releases, so unlike
+every other component nothing of ours is hosted on GCS for it: metadata carries
+only `codex.version` (no `url`/`sha256`), and the release URL is composed from
+that version. Metadata stores the **bare semver** (`0.149.1`) because that is
+what `codex --version` prints; the upstream tag prefix (`rust-v`) is re-added
+when downloading. Keep this download in step with the same one in
+`runtimes/codex/install.sh` and `scripts/imager/build-orangepi.sh`.
+
+```bash
+"codex")
+    curl -fsSL https://github.com/openai/codex/releases/download/rust-v${VERSION}/codex-aarch64-unknown-linux-musl.tar.gz
+    tar -xzf …            # the extract IS the integrity check (no sha256 for upstream artifacts)
+    install -D -m 0755 /usr/local/bin/codex /root/bootstrap/rollback/codex.previous
+    install -m 0755 …     /usr/local/bin/codex
+    codex --version       # abort if the new binary is not runnable
+    # codex.service only exists once the runtime was switched to codex; every
+    # lamp/intern-v2 image bakes the BINARY regardless, so the restart is
+    # conditional. Operators can roll back: software-update rollback codex
+    systemctl restart codex
+    ;;
+```
+
+Publish a version with `make upload-codex <bare-semver>`, release it to the
+fleet with `make promote-codex`. **The bootstrap worker does not consume
+`codex.version` yet** — until `OTAKeyCodex` exists in `system/domain/ota.go` and
+`bootstrap.go`, publishing only enables the manual path
+(`sudo software-update codex` over SSH).
+
+Only the binary is touched: `config.toml`, `.env`, and the persona stay owned by
+the presync hook, so an update cannot clobber a device's Codex configuration.
+
 ---
 
 ## 6. HAL Runtime — Source & Integration

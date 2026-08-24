@@ -513,6 +513,37 @@ và exit lỗi nếu cả hai đều rỗng — không có URL hardcode.
     ;;
 ```
 
+### Xử lý Codex (mới chỉ chạy tay — bootstrap worker CHƯA đọc)
+
+Codex CLI là binary musl tĩnh publish trên GitHub releases, nên khác mọi thành
+phần khác: không có artifact nào của mình nằm trên GCS. Metadata chỉ chứa
+`codex.version` (không `url`/`sha256`), URL release được ghép từ chính version
+đó. Metadata lưu **semver trần** (`0.149.1`) vì đó là thứ `codex --version` in
+ra; tiền tố tag upstream (`rust-v`) được ghép lại lúc tải. Giữ đoạn tải này
+đồng bộ với `runtimes/codex/install.sh` và `scripts/imager/build-orangepi.sh`.
+
+```bash
+"codex")
+    curl -fsSL https://github.com/openai/codex/releases/download/rust-v${VERSION}/codex-aarch64-unknown-linux-musl.tar.gz
+    tar -xzf …            # bước giải nén CHÍNH LÀ kiểm tra toàn vẹn (artifact upstream không có sha256)
+    install -D -m 0755 /usr/local/bin/codex /root/bootstrap/rollback/codex.previous
+    install -m 0755 …     /usr/local/bin/codex
+    codex --version       # abort nếu binary mới không chạy được
+    # codex.service chỉ tồn tại sau khi đã switch runtime sang codex; mọi image
+    # lamp/intern-v2 đều bake sẵn BINARY bất kể runtime, nên restart là có điều
+    # kiện. Operator có thể rollback: software-update rollback codex
+    systemctl restart codex
+    ;;
+```
+
+Publish version bằng `make upload-codex <semver-trần>`, thả cho fleet bằng
+`make promote-codex`. **Bootstrap worker chưa tiêu thụ `codex.version`** — chừng
+nào `OTAKeyCodex` chưa có trong `system/domain/ota.go` và `bootstrap.go`, publish
+chỉ mở đường chạy tay (`sudo software-update codex` qua SSH).
+
+Chỉ binary bị đụng: `config.toml`, `.env` và persona vẫn do presync hook sở hữu,
+nên update không thể ghi đè cấu hình Codex của thiết bị.
+
 ---
 
 ## 6. HAL Runtime — Nguồn & Tích Hợp
