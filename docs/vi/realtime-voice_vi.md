@@ -551,6 +551,26 @@ tool call tốn thêm một request gửi lại toàn bộ prompt, nên một l�
 `express_emotion` gần như nhân đôi cả hai. Đó là cái giá nhìn thấy được của tool,
 và cũng là lý do các bộ đếm cộng dồn thay vì ghi đè.
 
+**Phía trước bộ não.** Các chỉ số trên bắt đầu đếm từ lúc gọi `run_turn()`, nên
+chúng không nói gì về khoảng chờ giữa lúc người dùng nói xong và lúc request rời
+thiết bị. `_stream_session` ghi riêng khoảng đó, mỗi lượt có transcript một dòng:
+
+```
+TURN LATENCY — STT final → brain 3.41s (silence-wait 2.02s, stt-close 0.11s,
+              speaker-id 1.24s, ctx 0.04s)
+```
+
+| Trường | Ý nghĩa |
+|--------|---------|
+| `STT final → brain` | kết quả STT final đầu tiên → lúc gọi trình điều khiển lượt |
+| `silence-wait` | vòng lặp capture vẫn chạy hết `HAL_SILENCE_TIMEOUT` dù text đã có |
+| `stt-close` | `stt_session.close()` — `CloseStream` cộng thời gian join luồng nhận |
+| `speaker-id` | phần việc cuối capture: finalize buffer, noise guard khi STT rỗng, và prepass nhận diện người nói (tiền xử lý trên thiết bị + vòng gọi `/embed`) |
+| `ctx` | flush realtime hoãn lại, hiệu chỉnh người nói, dựng `[TURN CONTEXT]` |
+
+Mọi đoạn đều nằm trên luồng capture và trước request LLM, nên đoạn nào chiếm ưu
+thế trong dòng này chính là khoảng lặng người dùng phải nghe.
+
 `cached` (prefix-cache hit) chỉ xuất hiện khi endpoint trả
 `prompt_tokens_details.cached_tokens`, và `reasoning` chỉ khi có
 `completion_tokens_details.reasoning_tokens`. Pipecat map sẵn cả hai; gateway nào
@@ -638,8 +658,18 @@ theo agent gateway (`HAL_AGENT_GATEWAY`):
 subclass cài `load_device_context`, `load_device_memory`, `load_skills_catalog`,
 `summarize_device_memory`. Prompt nền nằm ở `resources/` (`system_prompt.md` +
 bản theo provider `system_prompt_openai.md` / `system_prompt_gemini.md` /
-`system_prompt_qwen.md`, đăng ký trong `PROVIDER_PROMPT_PATHS` của
-context_manager).
+`system_prompt_qwen.md` / `system_prompt_pipecat.md`, đăng ký trong
+`PROVIDER_PROMPT_PATHS` của context_manager). `PipecatSession` luôn truyền
+`provider="pipecat"` cho context manager bất kể agent thực sự đang chạy là
+framework pipecat hay `CascadedAgent`, nên cả hai brain cascaded dùng chung
+`system_prompt_pipecat.md`. File này theo phong cách gọn của Gemini thay vì
+bản OpenAI dài dòng hơn, cộng thêm một điều mà hai prompt audio-native không
+cần: vì brain cascaded không có giọng nói gốc, mọi ký tự trong reply đều được
+TTS đọc nguyên văn — nên một lần gọi tool bị lỗi, rò rỉ vào `content` dưới
+dạng văn bản thay vì một lệnh gọi hàm thật (ví dụ model viết
+`[express_emotion] {"emotion": "curious"}` thành chữ) sẽ bị đọc to nguyên
+văn. Prompt cấm rõ dạng này bằng ví dụ SAI/ĐÚNG cụ thể (quan sát thực tế trên
+`qwen/qwen3.6-35b-a3b`, 2026-08-24).
 
 ### Memory & summarization
 
@@ -857,10 +887,24 @@ trong `/opt/hal/.env`); thiếu cả hai thì WS handshake fail rõ ràng trong 
 `pipecat` cũng giữ credential riêng trong `realtime.pipecat.*` (Go struct
 `PipecatRealtime`) và bỏ qua `realtime.api_key`/`base_url` chung — vốn mang giá
 trị proxy có suffix WS. Endpoint của nó là host tương thích OpenAI `/v1` thuần,
-nên field nào trống sẽ fallback về **AI brain** (`llm_base_url` / `llm_api_key` /
-`llm_model`) — vốn đã là host như vậy. Nếu không resolve được base_url hoặc
-model, `PipecatSession.start()` ghi log và ở trạng thái không khả dụng, các lượt
-rơi về main agent.
+và `base_url` + `model` mặc định **đi cùng nhau** về route qwen của autonomous:
+
+| Field | Mặc định khi để trống |
+|-------|-----------------------|
+| `realtime.pipecat.base_url` | `https://campaign-api.autonomous.ai/api/v1/ai/v1/qwen/v1` |
+| `realtime.pipecat.model` | `qwen/qwen3.6-35b-a3b` |
+| `realtime.pipecat.api_key` | `llm_api_key` (device key của campaign-api) |
+
+Hai field đầu mặc định cùng nhau là có chủ đích: model được phục vụ trên route
+đó và **không** có trên route catalog `llm_base_url` chung, nên suy ra một cái từ
+AI brain mà không suy ra cái kia sẽ ra 404 chứ không phải fallback. Chỉ còn key
+là suy ra được — route này xác thực bằng đúng device key mà TTS/STT dùng, do
+OpenAI SDK gửi dưới dạng `Authorization: Bearer` (đã dò 2026-08-24:
+`/qwen/v1/models` và `/qwen/v1/chat/completions` trả `401 {"error":{"message":
+"Missing or invalid API key."}}` khi không xác thực, trong khi route không tồn
+tại trả 404). Nếu không resolve được base_url hoặc model,
+`PipecatSession.start()` ghi log và ở trạng thái không khả dụng, các lượt rơi về
+main agent.
 
 > **Để `base_url` trống trừ khi có endpoint riêng (không qua proxy).** Khi trống,
 > HAL tự suy ra `<llm_base_url>/ws/gemini` (hoặc `/ws/openai`) — đúng suffix WS mà
@@ -965,10 +1009,10 @@ trong `config.json`:
 | `HAL_QWEN_REALTIME_BASE_URL` | — | WS host DashScope (`wss://<workspace-host>/api-ws/v1/realtime`); **không** fallback về `llm_base_url` — chỉ đọc `realtime.qwen.base_url` khi env trống |
 | `HAL_QWEN_REALTIME_MODEL` | `qwen3.5-omni-plus-realtime` | turbo legacy: không gọi function call, lờ turn context |
 | `HAL_QWEN_REALTIME_VOICE` | `Ethan` | 3.5-plus: thêm Serena; chỉ-turbo: Cherry \| Chelsie |
-| `HAL_PIPECAT_BASE_URL` | `llm_base_url` | Host tương thích OpenAI `/v1`; override `realtime.pipecat.base_url` |
+| `HAL_PIPECAT_BASE_URL` | route qwen của autonomous | Host tương thích OpenAI `/v1`; override `realtime.pipecat.base_url` |
 | `HAL_PIPECAT_API_KEY` | `llm_api_key` | Override `realtime.pipecat.api_key` |
-| `HAL_PIPECAT_MODEL` | `llm_model` | Override `realtime.pipecat.model` |
-| `HAL_PIPECAT_GEMINI_KEY` | — | Bật tool `web_search` (Gemini grounding). Không set → không đăng ký tool search |
+| `HAL_PIPECAT_MODEL` | `qwen/qwen3.6-35b-a3b` | Override `realtime.pipecat.model` |
+| `HAL_PIPECAT_GEMINI_KEY` | — | Bật tool `web_search`. Đây là key **Google** AI Studio, không phải device key: lệnh grounding đi thẳng tới `generativelanguage.googleapis.com`, thứ mà `campaign-api` không proxy (nó chỉ fronting Gemini dưới dạng Live WS ở `/ws/gemini`). Không set → không đăng ký tool search |
 | `HAL_PIPECAT_SEARCH_BUDGET` | `2` | Số lần `web_search` tối đa mỗi lượt |
 | `HAL_PIPECAT_MAX_TOKENS` | `512` | Giới hạn token sinh ra — **tính cả argument của tool call**, nên budget nhỏ sẽ cắt cụt JSON và mất lượt |
 | `HAL_PIPECAT_MAX_HISTORY` | `128` | Số message giữ trong phiên trước khi trim; memory dài hạn nằm trong system prompt |

@@ -44,7 +44,7 @@ func applyRealtimeSet(c *config.Config, d domain.RealtimeSetData) {
 	if d.Provider != "" {
 		rt.Provider = strings.ToLower(strings.TrimSpace(d.Provider))
 	}
-	// Credentials are provider-routed: qwen and pipecat keep their own
+	// Credentials are provider-routed: qwen and the cascaded brains keep their own
 	// api_key/base_url in their sub-object (HAL deliberately ignores the shared
 	// fields for both — those hold the campaign-api credentials gemini/openai use).
 	switch strings.ToLower(strings.TrimSpace(rt.Provider)) {
@@ -60,7 +60,7 @@ func applyRealtimeSet(c *config.Config, d domain.RealtimeSetData) {
 				rt.Qwen.BaseURL = d.BaseURL
 			}
 		}
-	case "pipecat":
+	case "pipecat", "cascaded":
 		if d.APIKey != "" || d.BaseURL != "" {
 			if rt.Pipecat == nil {
 				rt.Pipecat = &config.PipecatRealtime{}
@@ -121,7 +121,7 @@ func applyRealtimeSet(c *config.Config, d domain.RealtimeSetData) {
 			rt.Qwen.Voice = d.Voice
 		}
 	// no reasoning knob — validateRealtimeSet already rejected it
-	case "pipecat":
+	case "pipecat", "cascaded":
 		if rt.Pipecat == nil {
 			rt.Pipecat = &config.PipecatRealtime{}
 		}

@@ -10,17 +10,23 @@ The wait filler, thinking cue and CoT leak filter are shared with realtime_turn
 so both brains feel identical to the user.
 """
 
+import contextlib
 import json
 import logging
 import threading
 from typing import Callable
 
 from hal import config as hal_config
-from hal.pipecat_rt import TextChunk, ToolCall
+from hal.pipecat_rt import TextChunk as _PipecatText, ToolCall as _PipecatTool
+from hal.realtime.voice_agent.openai_cascaded import (
+    TextChunk as _CascadedText,
+    ToolCall as _CascadedTool,
+)
 from hal.realtime.orchestrator import (
     DEFAULT_EMOTION_INTENSITY,
     DELEGATE_TOOL_NAME,
     EMOTION_TOOL_NAME,
+    LOOK_TOOL_NAME,
     RealtimeOrchestrator,
 )
 from hal.drivers.voice._internal.cot_leak_filter import CoTLeakFilter, clean_transcript
@@ -34,6 +40,23 @@ from hal.drivers.voice._internal.realtime_turn import (
 )
 
 logger = logging.getLogger("hal.voice")
+
+# Sent instead of a transcript when the user cut the device off but their words
+# did not survive. They are talking over the loudspeaker, and cancellation on
+# this hardware is nearly all nonlinear suppression, which removes the near-end
+# along with the echo (measured WER 1.00 on real double talk). Going silent is
+# the worst possible response to being interrupted, so hand the floor back.
+INTERRUPTED_NO_TEXT = (
+    "[The user just interrupted you mid-sentence, but their words could not be "
+    "made out. Stop what you were saying, acknowledge the interruption in one "
+    "short sentence, and ask what they need.]"
+)
+INTERRUPTED_PREFIX = "[The user interrupted you mid-sentence:] "
+
+# The two cascaded brains emit their own event classes with identical shape, so
+# the driver matches on either. Neither import pulls in pipecat itself.
+TEXT_CHUNK = (_PipecatText, _CascadedText)
+TOOL_CALL = (_PipecatTool, _CascadedTool)
 
 
 def _fire_emotion(arguments: str) -> None:
@@ -57,11 +80,68 @@ def _fire_emotion(arguments: str) -> None:
     ).start()
 
 
+def _capture_look_frame():
+    """Aim, capture and persist one camera frame for the `look` tool.
+
+    Reuses RealtimeOrchestrator's capture path instead of reimplementing it —
+    same pattern as _fire_emotion above. Persisting the frame also arms the
+    existing Flow Monitor snapshot marker and, where look_debug exists,
+    closes its trace via the SAME mechanism turn_dispatch.dispatch_turn
+    already uses for the audio-native path — no closing call needed here.
+
+    Aim and tracing are OPTIONAL: `hal.drivers.tracking.aim` / `look_debug`
+    and the `LOOK_AIM_*` config knobs are newer additions some deployed HAL
+    builds predate, so both degrade to a plain, untraced capture rather than
+    failing the tool call. `RealtimeOrchestrator._capture_frame` is called
+    with no positional args for the same reason — it takes an optional
+    `settle_s` on the current codebase but older builds accept none at all;
+    omitting it works against both.
+
+    Returns the BGR frame, or None if unavailable.
+    """
+    try:
+        from hal.drivers.tracking import look_debug
+    except ImportError:
+        look_debug = None
+    if look_debug is not None:
+        look_debug.start()
+
+    try:
+        from hal.drivers.tracking.aim import servo_ownership
+    except ImportError:
+        servo_ownership = contextlib.nullcontext
+
+    with servo_ownership():
+        if getattr(hal_config, "LOOK_AIM_ENABLED", False):
+            try:
+                from hal.drivers.tracking.aim import aim_for_look
+
+                res = aim_for_look(hal_config.LOOK_AIM_DEADLINE_S)
+                if look_debug is not None:
+                    look_debug.note_aim(res)
+            except Exception as e:
+                logger.warning("[pipecat] look: aim raised, capturing anyway: %s", e)
+        frame = RealtimeOrchestrator._capture_frame()
+
+    if frame is None:
+        logger.warning("[pipecat] look: no camera frame available")
+        if look_debug is not None:
+            try:
+                look_debug.abandon("no_camera_frame")
+            except Exception:
+                pass
+        return None
+    RealtimeOrchestrator._persist_look_frame(frame)
+    return frame
+
+
 def run_pipecat_turn(
     session,
     tts,
     strip_markers: Callable[[str], str],
     combined: str,
+    cancelled: Callable[[], bool] | None = None,
+    interrupted: bool = False,
 ) -> RealtimeTurnResult:
     """Send the transcript to the pipecat brain and speak its reply.
 
@@ -74,7 +154,17 @@ def run_pipecat_turn(
         logger.warning("[pipecat] enabled but not available — falling back to OS server")
         return RealtimeTurnResult()
 
-    text: str = (combined or "").strip()
+    user_text: str = (combined or "").strip()
+    text: str = user_text
+    if interrupted:
+        # The barge-in gate already proved someone spoke: two consecutive
+        # frames over the level threshold AND a speech classifier agreeing.
+        # Whether the words survived cancellation is a separate question.
+        text = f"{INTERRUPTED_PREFIX}{text}" if text else INTERRUPTED_NO_TEXT
+        logger.info(
+            "[pipecat] turn follows a barge-in (transcript=%r)",
+            user_text or "(empty)",
+        )
     if not text:
         logger.info("[pipecat] empty transcript — nothing to send (no audio path)")
         return RealtimeTurnResult()
@@ -91,9 +181,24 @@ def run_pipecat_turn(
 
     _thinking_cue_start()
     wait_filler.arm()
+    stopped = False
+
+    def _cancelled() -> bool:
+        return cancelled is not None and cancelled()
+
     try:
         for event in session.run_turn(text):
-            if isinstance(event, ToolCall):
+            if _cancelled():
+                # Barge-in. Drop the rest of the reply rather than queueing it
+                # behind the user's new question.
+                stopped = True
+                logger.info("[pipecat] barge-in — abandoning the rest of this reply")
+                try:
+                    session.abort_turn()
+                except Exception:
+                    pass
+                break
+            if isinstance(event, TOOL_CALL):
                 if event.name == DELEGATE_TOOL_NAME:
                     delegated = True
                     try:
@@ -114,13 +219,30 @@ def run_pipecat_turn(
                     # the user words.
                     session.tool_result(event.call_id, '{"status": "ok"}', run_llm=True)
                     continue
+                if event.name == LOOK_TOOL_NAME:
+                    frame = _capture_look_frame()
+                    if frame is None:
+                        session.tool_result(
+                            event.call_id, '{"error": "camera unavailable"}', run_llm=True
+                        )
+                    else:
+                        # run_llm=True: the model still owes an answer — the
+                        # image rides alongside, CascadedAgent adds it to
+                        # context so the very next round already sees it.
+                        session.tool_result(
+                            event.call_id,
+                            '{"result": "captured — describe what you currently see"}',
+                            run_llm=True,
+                            image=frame,
+                        )
+                    continue
                 logger.warning("[pipecat] unknown tool %r", event.name)
                 session.tool_result(
                     event.call_id, '{"error": "unknown tool"}', run_llm=True
                 )
                 continue
 
-            if delegated or not isinstance(event, TextChunk):
+            if delegated or not isinstance(event, TEXT_CHUNK):
                 continue
 
             text_parts.append(event.text)
@@ -150,7 +272,7 @@ def run_pipecat_turn(
             logger.info("[pipecat] Delegated → will forward to OS server")
         else:
             remaining: str = leak_filter.filter_text(strip_markers(sentence_buf))
-            if remaining and tts is not None:
+            if remaining and tts is not None and not stopped:
                 if not first_sentence_sent:
                     logger.info("[pipecat] Final fragment → speak: %r", remaining[:80])
                     wait_filler.cancel()
@@ -168,11 +290,15 @@ def run_pipecat_turn(
             if first_sentence_sent or transcript:
                 handled = True
                 logger.info(
-                    "[pipecat] Chit-chat complete — agent_reply=%r",
+                    "[pipecat] %s — agent_reply=%r",
+                    "Interrupted mid-reply" if stopped else "Chit-chat complete",
                     transcript[:200] if transcript else "(empty)",
                 )
+                # Store what the user actually said, not the wrapper: the
+                # marker is guidance for this reply, not conversation history.
                 session.save_turn(
-                    user_text=text, agent_text=transcript or "(empty)"
+                    user_text=user_text or "(interrupted — words not intelligible)",
+                    agent_text=transcript or "(empty)",
                 )
             else:
                 logger.info("[pipecat] No output (empty / timeout) — falling back")

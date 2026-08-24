@@ -584,6 +584,27 @@ tool call costs a second request that re-sends the whole prompt, so an
 `express_emotion` turn roughly doubles both. That is the visible price of the
 tool, and the reason the counters accumulate rather than overwrite.
 
+**Upstream of the brain.** Those metrics start when `run_turn()` is called, so
+they say nothing about the wait between the user finishing their sentence and
+the request leaving the device. `_stream_session` logs that separately, once per
+turn that produced a transcript:
+
+```
+TURN LATENCY — STT final → brain 3.41s (silence-wait 2.02s, stt-close 0.11s,
+              speaker-id 1.24s, ctx 0.04s)
+```
+
+| Field | Meaning |
+|-------|---------|
+| `STT final → brain` | first final STT result → the turn driver is called |
+| `silence-wait` | the capture loop still running on `HAL_SILENCE_TIMEOUT` after the text already existed |
+| `stt-close` | `stt_session.close()` — `CloseStream` plus the receive-thread join |
+| `speaker-id` | end-of-capture work: buffer finalize, empty-STT noise guard, and the speaker-ID prepass (on-device preprocessing + the `/embed` round trip) |
+| `ctx` | deferred realtime flush, speaker correction, `[TURN CONTEXT]` build |
+
+Every segment is on the capture thread and strictly before the LLM request, so
+whatever dominates this line is dead air the user hears.
+
 `cached` (prefix-cache hits) appears only when the endpoint returns
 `prompt_tokens_details.cached_tokens`, and `reasoning` only with
 `completion_tokens_details.reasoning_tokens`. Both are mapped by pipecat; a
@@ -672,8 +693,19 @@ assembled per agent gateway (`HAL_AGENT_GATEWAY`):
 and summarization; subclasses implement `load_device_context`,
 `load_device_memory`, `load_skills_catalog`, and `summarize_device_memory`.
 Base prompts live in `resources/` (`system_prompt.md` plus per-provider
-`system_prompt_openai.md` / `system_prompt_gemini.md` / `system_prompt_qwen.md`,
-registered in the context manager's `PROVIDER_PROMPT_PATHS` map).
+`system_prompt_openai.md` / `system_prompt_gemini.md` / `system_prompt_qwen.md` /
+`system_prompt_pipecat.md`, registered in the context manager's
+`PROVIDER_PROMPT_PATHS` map). `PipecatSession` passes `provider="pipecat"` to
+the context manager regardless of which agent is actually driving the turn
+(the pipecat framework or `CascadedAgent`), so both cascaded brains share
+`system_prompt_pipecat.md`. It follows Gemini's tighter style rather than the
+older, more verbose OpenAI prompt, plus one addition neither audio-native
+prompt needs: since a cascaded brain has no native voice, every character of
+its reply is spoken verbatim by TTS, so a malformed tool-call attempt that
+leaks into `content` — e.g. a model writing `[express_emotion] {"emotion":
+"curious"}` as text instead of a real function call — gets read aloud in
+full. The prompt bans this shape by name with a worked WRONG/RIGHT example
+(device-observed on `qwen/qwen3.6-35b-a3b`, 2026-08-24).
 
 ### Memory & summarization
 
@@ -902,8 +934,22 @@ or via env on the device (`DASHSCOPE_API_KEY`, `HAL_QWEN_REALTIME_BASE_URL` in
 `pipecat` likewise keeps its own credentials in `realtime.pipecat.*` (Go struct
 `PipecatRealtime`) and ignores the shared `realtime.api_key`/`base_url`, which
 carry the WS-suffixed proxy values. Its endpoint is a plain OpenAI-compatible
-`/v1` host, so when a field is empty it falls back to the **AI brain's**
-(`llm_base_url` / `llm_api_key` / `llm_model`) — already such a host. With no
+`/v1` host, and `base_url` + `model` default **together** to the autonomous qwen
+route:
+
+| Field | Default when unset |
+|-------|--------------------|
+| `realtime.pipecat.base_url` | `https://campaign-api.autonomous.ai/api/v1/ai/v1/qwen/v1` |
+| `realtime.pipecat.model` | `qwen/qwen3.6-35b-a3b` |
+| `realtime.pipecat.api_key` | `llm_api_key` (the campaign-api device key) |
+
+They default together on purpose: the model is served on that route and **not**
+on the generic `llm_base_url` catalog route, so deriving one from the AI brain
+and not the other is a 404, not a fallback. Only the key still derives — the
+route authenticates with the same device key as TTS/STT, sent by the OpenAI SDK
+as `Authorization: Bearer` (probed 2026-08-24: `/qwen/v1/models` and
+`/qwen/v1/chat/completions` answer `401 {"error":{"message":"Missing or invalid
+API key."}}` unauthenticated, where an unknown route answers 404). With no
 base_url or model resolvable, `PipecatSession.start()` logs and stays
 unavailable, and turns fall through to the main agent.
 
@@ -1012,10 +1058,10 @@ is a top-level `config.json` flag:
 | `HAL_QWEN_REALTIME_BASE_URL` | — | DashScope workspace WS host; overrides `realtime.qwen.base_url`. Never derived from `llm_base_url` |
 | `HAL_QWEN_REALTIME_MODEL` | `qwen3.5-omni-plus-realtime` | turbo is legacy: no function calls, ignores turn context |
 | `HAL_QWEN_REALTIME_VOICE` | `Ethan` | 3.5-plus: also `Serena`; turbo-only: `Cherry` \| `Chelsie` |
-| `HAL_PIPECAT_BASE_URL` | `llm_base_url` | OpenAI-compatible `/v1` host; overrides `realtime.pipecat.base_url` |
+| `HAL_PIPECAT_BASE_URL` | autonomous qwen route | OpenAI-compatible `/v1` host; overrides `realtime.pipecat.base_url` |
 | `HAL_PIPECAT_API_KEY` | `llm_api_key` | Overrides `realtime.pipecat.api_key` |
-| `HAL_PIPECAT_MODEL` | `llm_model` | Overrides `realtime.pipecat.model` |
-| `HAL_PIPECAT_GEMINI_KEY` | — | Enables the `web_search` tool (Gemini grounding). Unset → no search tool is offered |
+| `HAL_PIPECAT_MODEL` | `qwen/qwen3.6-35b-a3b` | Overrides `realtime.pipecat.model` |
+| `HAL_PIPECAT_GEMINI_KEY` | — | Enables the `web_search` tool. A **Google** AI Studio key, not the device key: the grounding call goes straight to `generativelanguage.googleapis.com`, which `campaign-api` does not proxy (it fronts Gemini only as the Live WS at `/ws/gemini`). Unset → no search tool is offered |
 | `HAL_PIPECAT_SEARCH_BUDGET` | `2` | Max `web_search` calls per turn |
 | `HAL_PIPECAT_MAX_TOKENS` | `512` | Caps generated tokens — **includes tool-call arguments**, so a small budget truncates the JSON and loses the turn |
 | `HAL_PIPECAT_MAX_HISTORY` | `128` | In-session messages kept before trimming; durable memory rides in the system prompt |

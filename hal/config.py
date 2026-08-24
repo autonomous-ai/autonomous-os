@@ -684,7 +684,7 @@ def _rt_enabled() -> bool:
 
 
 REALTIME_ENABLED: bool = _rt_enabled()
-REALTIME_PROVIDER: str = _rt_str("HAL_REALTIME_PROVIDER", _RT.get("provider"), "gemini")  # none | gemini | openai | qwen | pipecat
+REALTIME_PROVIDER: str = _rt_str("HAL_REALTIME_PROVIDER", _RT.get("provider"), "gemini")  # none | gemini | openai | qwen | pipecat | cascaded
 # When enabled, do not send a voice turn to the realtime agent until an STT
 # interim transcript starts with one of the configured wake phrases. This is a
 # top-level config.json setting because it also gates the non-realtime Go path.
@@ -1234,11 +1234,22 @@ REALTIME_QWEN_SEARCH: bool = (
 )
 REALTIME_QWEN_SAMPLE_RATE: int = 16000
 
-# --- Realtime: Pipecat (cascaded) ---
+# --- Realtime: cascaded brains (pipecat | cascaded) ---
+# Both read this same block, so switching provider between them keeps the
+# endpoint. `pipecat` drives the turn through the pipecat framework; `cascaded`
+# is the same contract over a plain OpenAI-compatible client with no framework.
 # Not an audio-native brain: HAL keeps its own STT and TTS and pipecat drives
 # only the middle of the turn (text in -> LLM + tools -> text out), so there is
 # no voice or reasoning knob here. The endpoint is any OpenAI-compatible /v1
-# host; blank values fall back to the AI brain's, which is already such a host.
+# host.
+#
+# base_url and model default TOGETHER to the autonomous qwen route: the model is
+# served there and NOT on the generic llm_base_url catalog route, so deriving one
+# from the AI brain and not the other is a 404, not a fallback. The key still
+# derives — that route authenticates with the same campaign-api device key as
+# TTS/STT, sent by the OpenAI SDK as `Authorization: Bearer`.
+REALTIME_PIPECAT_DEFAULT_BASE_URL = "https://campaign-api.autonomous.ai/api/v1/ai/v1/qwen/v1"
+REALTIME_PIPECAT_DEFAULT_MODEL = "qwen/qwen3.6-35b-a3b"
 REALTIME_PIPECAT_API_KEY: str = (
     os.environ.get("HAL_PIPECAT_API_KEY", "")
     or _RT_PIPECAT.get("api_key", "")
@@ -1247,10 +1258,10 @@ REALTIME_PIPECAT_API_KEY: str = (
 REALTIME_PIPECAT_BASE_URL: str = (
     os.environ.get("HAL_PIPECAT_BASE_URL", "")
     or _RT_PIPECAT.get("base_url", "")
-    or _os_cfg_get("llm_base_url", "")
+    or REALTIME_PIPECAT_DEFAULT_BASE_URL
 )
 REALTIME_PIPECAT_MODEL: str = _rt_str(
-    "HAL_PIPECAT_MODEL", _RT_PIPECAT.get("model"), _os_cfg_get("llm_model", "")
+    "HAL_PIPECAT_MODEL", _RT_PIPECAT.get("model"), REALTIME_PIPECAT_DEFAULT_MODEL
 )
 # Gemini grounding search, offered to the model as a `web_search` tool. Separate
 # key because the gateway above is typically self-hosted and has no search.

@@ -1,4 +1,4 @@
-"""Cascaded realtime brain — pipecat driving the LLM half of a voice turn.
+"""Cascaded realtime brain — driving the LLM half of a voice turn from text.
 
 The audio-native providers (gemini/openai/qwen) take microphone frames and
 return speech. This one does not: HAL keeps its own STT and TTS, and pipecat
@@ -14,7 +14,6 @@ import logging
 from typing import Any, Generator
 
 from hal import config
-from hal.pipecat_rt import PipecatAgent, PipecatConfig
 from hal.realtime.config import _load_language
 from hal.realtime.context_manager import ContextManagerBase
 from hal.realtime.enums import AgentGateway
@@ -22,7 +21,9 @@ from hal.realtime.orchestrator import (
     DEFAULT_SAMPLE_RATE,
     DELEGATE_TOOL,
     EMOTION_TOOL,
+    LOOK_TOOL,
     RealtimeOrchestrator,
+    _camera_present,
 )
 from hal.realtime.summarizer import RealtimeSummarizer
 
@@ -47,9 +48,14 @@ class PipecatSession:
         self,
         gateway: AgentGateway = AgentGateway.OPENCLAW,
         enable_expression: bool = False,
+        provider: str = "pipecat",
     ) -> None:
         self._expression_enabled = enable_expression
-        self._agent: PipecatAgent | None = None
+        # "pipecat" drives the turn through the pipecat framework; "cascaded"
+        # is the same contract over a plain OpenAI-compatible client, with no
+        # framework and no pipecat dependency. Both read realtime.pipecat.*.
+        self._provider = (provider or "pipecat").strip().lower()
+        self._agent = None
         self._turns_since_rebuild = 0
 
         summarizer: RealtimeSummarizer | None = None
@@ -85,8 +91,15 @@ class PipecatSession:
         tools = [_as_host_tool(DELEGATE_TOOL)]
         if self._expression_enabled:
             tools.append(_as_host_tool(EMOTION_TOOL))
-        agent = PipecatAgent(
-            PipecatConfig(
+        # In-session vision, cascaded only: the image-in-context flow lives in
+        # CascadedAgent (ImageContext). Legacy pipecat keeps delegating visual
+        # questions to main, same as it does today. `_camera_present` is the
+        # same "can this device see" signal RealtimeOrchestrator gates on.
+        if self._provider == "cascaded" and _camera_present():
+            tools.append(_as_host_tool(LOOK_TOOL))
+        agent_cls, config_cls = self._agent_classes()
+        agent = agent_cls(
+            config_cls(
                 base_url=config.REALTIME_PIPECAT_BASE_URL,
                 api_key=config.REALTIME_PIPECAT_API_KEY or "not-needed",
                 model=config.REALTIME_PIPECAT_MODEL,
@@ -96,14 +109,31 @@ class PipecatSession:
             host_tools=tools,
         )
         if not agent.start():
-            logger.warning("[pipecat] start failed — falling back to the main agent")
+            logger.warning(
+                "[%s] start failed — falling back to the main agent", self._provider
+            )
             return
         self._agent = agent
         logger.info(
-            "[pipecat] ready — model=%s base_url=%s",
+            "[%s] ready — model=%s base_url=%s",
+            self._provider,
             config.REALTIME_PIPECAT_MODEL,
             config.REALTIME_PIPECAT_BASE_URL,
         )
+
+    def _agent_classes(self):
+        """(agent, config) classes for this provider. Imported lazily so the
+        cascaded path never pulls in pipecat."""
+        if self._provider == "cascaded":
+            from hal.realtime.voice_agent.openai_cascaded import (
+                CascadedAgent,
+                CascadedConfig,
+            )
+
+            return CascadedAgent, CascadedConfig
+        from hal.pipecat_rt import PipecatAgent, PipecatConfig
+
+        return PipecatAgent, PipecatConfig
 
     def stop(self) -> None:
         agent, self._agent = self._agent, None
@@ -152,8 +182,19 @@ class PipecatSession:
             return iter(())
         return self._agent.run_turn(transcript)
 
-    def tool_result(self, call_id: str, output: str, run_llm: bool = True) -> None:
-        if self._agent is not None:
+    def tool_result(
+        self, call_id: str, output: str, run_llm: bool = True, image=None
+    ) -> None:
+        if self._agent is None:
+            return
+        # `image` is CascadedAgent-only (see openai_cascaded.CascadedAgent.
+        # tool_result); the legacy PipecatAgent signature has no such kwarg,
+        # so it must never receive it — not even as None. `look` is only ever
+        # registered for provider="cascaded" (see start()), so this branch is
+        # the only caller that would ever pass one.
+        if image is not None:
+            self._agent.tool_result(call_id, output, run_llm=run_llm, image=image)
+        else:
             self._agent.tool_result(call_id, output, run_llm=run_llm)
 
     def abort_turn(self) -> None:

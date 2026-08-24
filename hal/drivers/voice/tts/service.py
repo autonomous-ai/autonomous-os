@@ -89,6 +89,20 @@ class _WatchedStream:
         finally:
             self._owner._write_started_ts = None
 
+    def write_untapped(self, data):
+        """Write without recording an echo reference.
+
+        For audio that is not playback: the idle keepalive below pushes silence
+        purely to stop the codec suspending. Tapping it kept EchoReference
+        permanently non-idle, which defeated AecStream's bypass and left the APM
+        gating the microphone between every word.
+        """
+        self._owner._write_started_ts = time.monotonic()
+        try:
+            return self._stream.write(data)
+        finally:
+            self._owner._write_started_ts = None
+
     def __getattr__(self, name):
         return getattr(self._stream, name)
 
@@ -313,7 +327,13 @@ class TTSService:
                     if self._speaking:
                         continue
                     silence = np.zeros((self._stream_rate // 50, 1), dtype=np.float32)
-                    self._stream.write(silence)
+                    # Untapped: this is not playback, and recording it as an
+                    # echo reference would keep the canceller permanently awake.
+                    writer = getattr(self._stream, "write_untapped", None)
+                    if writer is not None:
+                        writer(silence)
+                    else:
+                        self._stream.write(silence)
             except Exception as e:
                 logger.debug("Silence keepalive write failed, invalidating: %s", e)
                 # Don't call _invalidate_stream() under lock recursively.

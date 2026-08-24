@@ -283,6 +283,16 @@ def configure(rate: int) -> bool:
     return True
 
 
+def active() -> bool:
+    """Whether cancellation is actually running — configured AND binding present.
+
+    Callers that relax an echo defence must gate on this, not on AEC_ENABLED:
+    with the binding missing every entry point is a no-op and the mic still
+    carries full speaker bleed.
+    """
+    return _canceller is not None
+
+
 def wrap_mic(mic_ctx, rate: int, np):
     """Return `mic_ctx` wrapped with echo cancellation, or unchanged when off."""
     if not configure(rate):
