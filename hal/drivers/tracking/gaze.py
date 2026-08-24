@@ -845,7 +845,7 @@ def _maybe_pitch(now: float) -> None:
         _last_pitch_t = now
         _blind_pitch_steps = 0 if from_face else _blind_pitch_steps + 1
         logger.info(
-            "[gaze] %s %.0f%% %s of centre (median of %d over %.1fs) — "
+            "[gaze] %s %.0f%% %s centre (median of %d over %.1fs) — "
             "wrist_pitch %+.1f -> %+.1f%s",
             "face" if from_face else "head (from torso)",
             abs(dy) * 100.0, "above" if dy < 0 else "below", n_dy, span_dy,
