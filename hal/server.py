@@ -194,8 +194,16 @@ if "camera" in _declared:
         # Same selector shape as motion: ROBOT.md picks the backend, because a
         # CSI sensor behind libcamera and a UVC webcam share no open path.
         _vision_cap = _profile.capabilities.get("vision")
+        # Simulation never uses the production UVC driver: "virtual" paints a
+        # synthetic scene, "host" opens the developer machine's webcam through
+        # the platform's native OpenCV backend. Only a real body reaches the
+        # ROBOT.md `driver:` selector.
+        if _simulation:
+            _camera_driver = "host" if _simulation_media == "host" else "virtual"
+        else:
+            _camera_driver = _vision_cap.driver if _vision_cap else None
         LocalVideoCaptureDevice = resolve_camera_class(
-            "virtual" if _simulation and _simulation_media != "host" else (_vision_cap.driver if _vision_cap else None),
+            _camera_driver,
             _vision_cap.required if _vision_cap else False,
         )
         if LocalVideoCaptureDevice is None:
@@ -290,6 +298,64 @@ _ttp223_handler = None
 # Set the moment lifespan shutdown begins — late async initializers (sensing-init)
 # check it so they don't start services nobody will stop.
 _lifespan_stopping = threading.Event()
+
+
+def _sim_audio_probe(sd_module) -> None:
+    """Confirm the host speaker and microphone are actually usable (sim only).
+
+    Enumeration is not permission: on macOS `sd.query_devices()` lists the
+    built-in microphone even when the terminal app has never been granted
+    microphone access, and only the first real read raises. Probing a few
+    milliseconds at boot turns that into one honest fallback with an actionable
+    message, instead of a 500 the first time someone presses "Record 3s".
+    """
+    import platform
+
+    def _mac_hint(what: str) -> str:
+        if platform.system() != "Darwin":
+            return ""
+        return (
+            f" Grant {what} access to the terminal app running HAL: "
+            f"System Settings > Privacy & Security > {what}, then restart "
+            f"`make sim SIM_MEDIA=host`."
+        )
+
+    if state.audio_output_device is None:
+        state.sim_media_fallback("audio", "no host output (speaker) device found")
+        state.audio_output_device = 0
+        state.audio_input_device = 0
+        return
+    if state.audio_input_device is None:
+        state.sim_media_fallback(
+            "audio", "no host input (microphone) device found" + _mac_hint("Microphone")
+        )
+        state.audio_output_device = 0
+        state.audio_input_device = 0
+        return
+    try:
+        rate = int(sd_module.query_devices(state.audio_input_device)["default_samplerate"])
+        rec = sd_module.rec(
+            max(1, rate // 20),
+            samplerate=rate,
+            channels=1,
+            dtype="int16",
+            device=state.audio_input_device,
+        )
+        sd_module.wait()
+        if rec is None:
+            raise RuntimeError("microphone returned no samples")
+    except Exception as e:
+        state.sim_media_fallback(
+            "audio", f"microphone unusable: {e}" + _mac_hint("Microphone")
+        )
+        state.audio_output_device = 0
+        state.audio_input_device = 0
+        return
+    logger.info(
+        "Host media: speaker device=%s, microphone device=%s",
+        state.audio_output_device,
+        state.audio_input_device,
+    )
 
 
 @asynccontextmanager
@@ -391,6 +457,31 @@ async def lifespan(app: FastAPI):
                 f"Camera opened (device={camera_device_id}, {CAMERA_WIDTH}x{CAMERA_HEIGHT})"
             )
         except Exception as e:
+            if _simulation and _simulation_media == "host":
+                # A missing / busy / permission-denied host webcam must not leave
+                # the simulator with no camera at all, and must not leave a live
+                # stream promised in the UI. Drop to the virtual scene and record
+                # why, so GET /simulator/state can say so.
+                state.sim_media_fallback("camera", str(e))
+                try:
+                    from hal.drivers.camera.virtual_capture_device import (
+                        VirtualVideoCaptureDevice,
+                    )
+
+                    cap = VirtualVideoCaptureDevice(
+                        VideoCaptureDeviceInfo(
+                            device_id=CAMERA_INDEX,
+                            max_width=CAMERA_WIDTH,
+                            max_height=CAMERA_HEIGHT,
+                        )
+                    )
+                    if not state._camera_disabled:
+                        cap.start()
+                    state.camera_capture = cap
+                    logger.info("Camera fell back to the virtual capture device")
+                    return
+                except Exception as e2:
+                    logger.warning(f"Virtual camera fallback failed: {e2}")
             logger.warning(f"Camera failed to start: {e}")
 
     hw_threads = []
@@ -479,6 +570,16 @@ async def lifespan(app: FastAPI):
             logger.info(f"Audio output device: {state.audio_output_device}")
         if state.audio_input_device is not None:
             logger.info(f"Audio input device: {state.audio_input_device}")
+        if _simulation and _simulation_media == "host":
+            _sim_audio_probe(sd)
+    elif _simulation and _simulation_media == "host" and {
+        "audio", "voice", "music", "speaker"
+    } & set(_plan.mounted):
+        state.sim_media_fallback(
+            "audio", "sounddevice is not installed in this environment"
+        )
+        state.audio_output_device = 0
+        state.audio_input_device = 0
 
     # Auto-start voice pipeline from os-server config
     if _simulation and "voice" in _plan.mounted:
@@ -1278,7 +1379,24 @@ def simulator_state():
         return HTMLResponse(status_code=404, content="Lamp simulator is unavailable")
     from hal.presets import AIM_CENTER, AIM_PRESETS
 
-    return {"media": _simulation_media, "rig_zero": AIM_PRESETS[AIM_CENTER]}
+    # `media` stays the effective mode (what is really running) so the page and
+    # any script reading it can never be told "host" while looking at the
+    # virtual scene. It degrades to "virtual" as soon as either subsystem does;
+    # `media_camera` / `media_audio` give the per-subsystem truth and
+    # `media_reasons` the actionable why.
+    effective = (
+        "host"
+        if state.sim_media_camera == "host" and state.sim_media_audio == "host"
+        else "virtual"
+    )
+    return {
+        "media": effective,
+        "media_requested": _simulation_media,
+        "media_camera": state.sim_media_camera,
+        "media_audio": state.sim_media_audio,
+        "media_reasons": dict(state.sim_media_reasons),
+        "rig_zero": AIM_PRESETS[AIM_CENTER],
+    }
 
 
 from hal.server_support.http_security import (

@@ -93,6 +93,23 @@ camera stream, **Play test tone** uses the speaker, and **Record 3 seconds**
 captures a WAV for playback. The default `SIM_MEDIA=virtual` remains
 permission-free and deterministic for tests.
 
+Host mode never hard-fails. Each subsystem is probed at boot — the webcam is
+opened and read once, the microphone records a few milliseconds — and whichever
+one is missing, busy or permission-denied falls back to its virtual device with
+a logged `[sim-media]` line. `GET /simulator/state` reports the outcome per
+subsystem (`media_camera`, `media_audio`, `media_reasons`, with `media` being
+"host" only when both are), and the simulator page prints the same reason and
+disables the tone/record buttons whenever audio is virtual. On macOS the two
+permissions live under System Settings > Privacy & Security > Camera and
+Microphone, and must be granted to the terminal app running HAL.
+
+The camera in host mode uses a simulation-only driver
+(`hal/drivers/camera/host_capture_device.py`, registered as `host`) that opens
+the webcam through the platform's native OpenCV backend — AVFoundation on
+macOS, where the production V4L2 path and its USB power-cycle healing do not
+exist. Production bodies still resolve their `driver:` from ROBOT.md.
+The STT/TTS voice pipeline stays virtual in both modes.
+
 ## Voice Pipeline
 
 ```

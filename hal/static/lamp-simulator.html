@@ -1416,12 +1416,26 @@
             ? `${l.effect} effect · ${hex}`
             : `${l.on ? "solid" : "off"} · ${hex}`;
           rigZero = sim.rig_zero || rigZero;
-          const host = sim.media === "host";
-          document.querySelector("#tone").disabled = !host;
-          document.querySelector("#record").disabled = !host;
-          document.querySelector("#media-note").textContent = host
-            ? "Host media: tone uses this Mac speaker; record uses this Mac microphone."
-            : "Virtual media: tone is intentionally silent and recording is a deterministic silent WAV. Restart with make sim SIM_MEDIA=host to test this Mac.";
+          // Camera and audio can end up in different modes (a granted webcam
+          // with a denied microphone), so read each one rather than a single
+          // blended flag — the note must never promise live audio the server
+          // has already downgraded.
+          const camHost = (sim.media_camera || sim.media) === "host";
+          const audioHost = (sim.media_audio || sim.media) === "host";
+          const reasons = sim.media_reasons || {};
+          document.querySelector("#tone").disabled = !audioHost;
+          document.querySelector("#record").disabled = !audioHost;
+          const note = [
+            camHost
+              ? "Camera: this Mac webcam (live)."
+              : `Camera: virtual scene (still image).${reasons.camera ? " " + reasons.camera : ""}`,
+            audioHost
+              ? "Audio: this Mac speaker + microphone."
+              : `Audio: virtual — tone is silent, recording is a silent WAV.${reasons.audio ? " " + reasons.audio : ""}`,
+          ];
+          if (!camHost && !audioHost && sim.media_requested !== "host")
+            note.push("Restart with make sim SIM_MEDIA=host to use this Mac.");
+          document.querySelector("#media-note").textContent = note.join(" ");
         } catch (e) {
           dot.style.background = "#e75e4e";
           status.textContent = "HAL unavailable";
