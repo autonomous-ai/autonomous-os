@@ -5,6 +5,7 @@ so they state what the estimator is supposed to mean rather than re-recording
 what it currently outputs.
 """
 
+import json
 import math
 
 import numpy as np
@@ -871,6 +872,53 @@ def test_a_face_below_centre_tilts_the_camera_down(neck):
     _fill_dy(0.4)
     gaze._maybe_pitch(gaze.time.monotonic())
     assert neck.moves[0]["wrist_pitch.pos"] > -70.0
+
+
+def test_the_pitch_sign_is_only_valid_while_the_joint_direction_is():
+    """Fail loudly if the calibration stops supporting the sign above.
+
+    The two tests before this one assert a NUMBER — that up is the decreasing
+    direction on wrist_pitch. That is not a property of the code, it is a
+    property of the arm, established by a paired A/B on the device. A
+    recalibration can invert it, and if it does, those tests keep passing while
+    `_maybe_pitch` drives the error instead of closing it. That already
+    happened once: the A/B predates `6f0c4ec4` and the loop has been off on
+    lamp ever since.
+
+    A test cannot measure an arm. It can check the two things the sign depends
+    on, which lerobot makes explicit in `motors_bus._normalize`:
+
+        norm = (((bounded_val - min_) / (max_ - min_)) * 200) - 100
+        normalized_values[id_] = -norm if drive_mode else norm
+
+    That is the RANGE_M100_100 branch, which is the one in play — `use_degrees`
+    is False in config_hal_follower and never overridden (see also the note at
+    presets.py:221). So the sign inverts if `drive_mode` becomes non-zero, or if
+    the range is stored descending and flips the denominator. `homing_offset`
+    shifts the zero without inverting anything, so it is deliberately not
+    checked here — it moves poses, not directions.
+
+    Read from whatever calibration the arm actually loaded: the per-unit file
+    on a provisioned device, the repo hal.json on a fresh one.
+    """
+    from hal.drivers.tracking import user_bearing
+
+    path = user_bearing._calibration_path()
+    assert path, "no calibration resolved — the pitch sign cannot be vouched for"
+    with open(path, encoding="utf-8") as f:
+        cal = json.load(f)
+
+    wp = cal["wrist_pitch"]
+    assert wp["drive_mode"] == 0, (
+        f"{path}: wrist_pitch drive_mode is {wp['drive_mode']}, not 0. lerobot "
+        "negates the normalised value when this is set, so UP is no longer the "
+        "decreasing direction. Redo the A/B before trusting _maybe_pitch."
+    )
+    assert wp["range_min"] < wp["range_max"], (
+        f"{path}: wrist_pitch range is stored descending "
+        f"({wp['range_min']} -> {wp['range_max']}), which flips the sign of the "
+        "normalisation. Redo the A/B before trusting _maybe_pitch."
+    )
 
 
 def test_a_face_near_enough_to_centre_is_left_alone(neck):
