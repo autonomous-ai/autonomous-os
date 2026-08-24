@@ -62,6 +62,12 @@ var toolFillers = map[string]map[string][]string{
 		// already waiting — narrating every visual question gets old fast.
 		"look_searching": {"Where are you?", "Let me find you", "Hold on, looking for you", "One sec, finding you"},
 		"look_found":     {"There you are", "Got you", "Found you"},
+		// The resolution of an announced search that FAILED. look_searching
+		// promises to look; without this the lamp turns away, says "Where are
+		// you?", then goes quiet while the model describes whatever the camera
+		// happened to be pointing at — the question answered about the wrong
+		// thing, with nothing acknowledging that the search came up empty.
+		"look_lost":      {"I can't find you", "I've lost you", "I can't see you from here"},
 		"look_capturing": {"Let me see", "Having a look", "Taking a look"},
 		"web_search":     {"Let me look that up", "Quick search", "Checking around", "Hunting that down"},
 		"x_search":       {"Peeking at X", "Quick look on X", "Checking X"},
@@ -86,6 +92,7 @@ var toolFillers = map[string]map[string][]string{
 	LangVI: {
 		"look_searching": {"Bạn đang ở đâu?", "Để tôi tìm bạn", "Chờ chút, tôi đang tìm bạn"},
 		"look_found":     {"Bạn đây rồi", "Thấy bạn rồi"},
+		"look_lost":      {"Tôi không tìm thấy bạn", "Tôi không thấy bạn đâu", "Từ đây tôi không thấy bạn"},
 		"look_capturing": {"Để tôi xem nào", "Tôi nhìn thử"},
 		"web_search":     {"Để {Name} tìm chút", "Để xem có gì hay", "Lùng chút nha", "Tra cho bạn nha"},
 		"x_search":       {"Ngó X tí", "Xem trên X chút", "Lùng X coi"},

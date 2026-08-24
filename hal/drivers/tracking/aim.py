@@ -60,13 +60,20 @@ RECORD_DEADBAND_FRAC: float = 0.02
 # asked to look at.
 RECENT_SIGHTING_S: float = 4.0
 RECENT_SIGHTING_YAW_TOL_DEG: float = 25.0
-# Priority 3 — remembered-bearing fallback, taken in STEPS. nudge() blocks until
-# the move completes, so a single large move travels blind and can pass straight
-# over someone standing between here and there. Keep each step well under the
-# camera FOV so detection runs at least once per FOV of travel.
-# Retained as the cap on how far one bearing move may travel in a single
-# command, not as a hop size — the move goes directly to the remembered pose.
-BEARING_STEP_DEG: float = 20.0
+# Priority 3 — the remembered-bearing fallback.
+#
+# It used to advance in fixed-size hops, re-detecting between them so it
+# could not sail past somebody standing en route. `0dc1b667` removed the hops:
+# the lens sees ~110 deg, so anyone between here and there is already in frame
+# before the head moves at all, and each hop cost a detect plus a settle —
+# most of a second against the aim's deadline. The move now goes straight to
+# the remembered pose in one absolute command.
+#
+# So MAX_BEARING_STEPS no longer bounds hops. It bounds ATTEMPTS, and in
+# practice never binds: after the first move `_bearing_step_target` finds every
+# joint inside POSE_TOLERANCE_DEG and returns None, so a second attempt never
+# happens. Kept as a backstop against a move that reports success without
+# arriving — a stuck servo would otherwise retry forever.
 MAX_BEARING_STEPS: int = 3
 # Below this the estimate is too green or too stale to be worth turning for.
 MIN_BEARING_CONFIDENCE: float = 0.2
@@ -590,8 +597,8 @@ def _bearing_step_target(svc: Any, est: Any, current: dict):
     Returns (target, step_deg), or (None, 0.0) when the head is already in the
     remembered shape.
 
-    The move goes straight to the remembered pose. It used to advance in
-    BEARING_STEP_DEG hops, re-detecting between them so it could not sail past
+    The move goes straight to the remembered pose. It used to advance in fixed
+    hops, re-detecting between them so it could not sail past
     someone standing en route — but the lens sees about 110 deg, so anyone
     between here and there is already in frame before the head moves at all.
     The hops bought no extra coverage and cost a detect plus a settle each,
@@ -703,6 +710,9 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
     pending_calib: Optional[Tuple[float, float]] = None
     last_move_deg = 0.0
     announced_found = False
+    # Whether `look_searching` was ever spoken. Only an ANNOUNCED search
+    # owes the user a resolution — see the give-up branch.
+    announced_search = False
     # Did this aim ever confirm a subject? Read by _result to score the
     # remembered bearing exactly once, whichever way the aim exits.
     found_any = False
@@ -764,8 +774,9 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
                                   "action": "hold (recent sighting — likely occluded)",
                                   "yaw": _yaw_of(svc)})
                     return _result(False, "holding: seen here moments ago (likely occluded)")
-                # Priority 3 — step toward the remembered bearing, re-detecting after
-                # every step so we cannot sail past someone en route.
+                # Priority 3 — go to the remembered bearing, then re-detect from
+                # a post-move frame. One absolute move, not a series of hops:
+                # see MAX_BEARING_STEPS for why the hops were removed.
                 probe: dict = {}
                 if bearing_steps < MAX_BEARING_STEPS and _step_toward_bearing(svc, probe):
                     bearing_consulted = probe.get("bearing")
@@ -775,6 +786,7 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
                     if bearing_steps == 0 and config.LOOK_AIM_SPEAK:
                         # Only on the FIRST step: the lamp is about to turn away from
                         # the user mid-question, which reads as broken unless explained.
+                        announced_search = True
                         _say("look_searching")
                     bearing_steps += 1
                     iterations += 1
@@ -783,6 +795,15 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
                 steps.append({"n": iterations + 1, "saw": None,
                               "action": probe.get("skipped", "give up — nothing found"),
                               "yaw": _yaw_of(svc)})
+                # Close the loop the announcement opened. `look_searching`
+                # promises to look; going silent here leaves the lamp turned
+                # away mid-question with nothing said, while the model answers
+                # about whatever the camera happened to be facing. Only when a
+                # search was actually announced — a look that never turned owes
+                # no explanation, and narrating every failed detection would be
+                # the noise `look_capturing` is already gated to avoid.
+                if announced_search and config.LOOK_AIM_SPEAK:
+                    _say("look_lost")
                 return _result(False, "subject not found")
 
             if bearing_steps > 0 and not announced_found and config.LOOK_AIM_SPEAK:

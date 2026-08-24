@@ -902,3 +902,29 @@ def test_the_bearing_is_scored_at_most_once_per_aim():
     """It used to be called on EVERY iteration a subject was visible."""
     _res, calls = _scored(None)
     assert len(calls) <= 1
+
+
+# --- Task H / F13: an announced search owes the user a resolution ---
+
+
+def test_a_failed_search_says_so():
+    """`look_searching` promises to look. Going silent leaves the lamp turned
+    away mid-question while the model answers about the wrong scene."""
+    said = []
+    with mock.patch.object(aim, "_say", side_effect=said.append):
+        res, _calls = _scored(None)
+
+    assert res.bearing_steps > 0, "precondition: a search was announced"
+    assert "look_searching" in said
+    assert said[-1] == "look_lost", said
+
+
+def test_a_look_that_never_searched_stays_quiet():
+    """A look that found the subject immediately owes no explanation, and
+    narrating every visual question is what the filler gating exists to avoid."""
+    said = []
+    with mock.patch.object(aim, "_say", side_effect=said.append):
+        _res, _calls = _scored((300, 100, 60, 200))
+
+    assert "look_searching" not in said
+    assert "look_lost" not in said
