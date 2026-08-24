@@ -325,6 +325,16 @@
         <div class="grid" id="play-grid">
           <span id="play-empty" class="foot">Loading recordings…</span>
         </div>
+        <h2>Emotions</h2>
+        <div class="grid" id="emotion-grid">
+          <span id="emotion-empty" class="foot">Loading emotions…</span>
+        </div>
+        <p class="foot" id="emotion-note">
+          One emotion drives several channels at once — servo recording, LED
+          color/effect, and sometimes camera or audio. Sleep gates most of them:
+          while <code>sleepy</code> is current, HAL answers
+          <code>ignored</code> and nothing moves.
+        </p>
         <h2>Motor control</h2>
         <div class="grid">
           <button data-motor="zero" title="Hold at 0°; blocks play calls">
@@ -407,6 +417,14 @@
         "wrist_pitch.pos",
         "wrist_roll.pos",
       ];
+      // Emotion presets are INDICATORS on real hardware: their peak channel is
+      // 12-16 of 255 (see EMOTION_PRESETS), because a lamp ring at full value is
+      // painful to sit next to. A real LED at 12/255 is still plainly visible in
+      // a room; a screen pixel at 4.7% is black. Mapping the peak straight to
+      // the shade's emissive term therefore rendered every emotion as "LED off".
+      // Perceptual (gamma) curve instead — hue and relative ordering are kept,
+      // only the low end is lifted into the range a monitor can show.
+      const displayLevel = (peak) => Math.pow(Math.min(1, peak / 255), 0.4);
       let target = Object.fromEntries(joints.map((j) => [j, 0])),
         pose = { ...target },
         led = [0, 0, 0],
@@ -546,7 +564,7 @@
       // `lampHeight` re-enables the old height cutoff, which is only meaningful
       // for the static STL: that mesh is one welded blob with no separable shade.
       const fs =
-        "precision mediump float;\n#define LAMP_GAIN 3.2\n varying vec3 vN,vP,vLocal;uniform vec3 color,emit,ledColor,ringCenter,ringU,ringW;" +
+        "precision mediump float;\n#define LAMP_GAIN 3.2\n// How far one LED's light spreads along the ring, in turns. The real\n// shade sits millimetres from a 64-LED ring, so a single pixel washes\n// over roughly a sixth of the circle - which is why a ripple reads there\n// as one ring brightening while a sharp sim showed two separate arcs.\n#define DIFFUSE_STEP 0.013\n varying vec3 vN,vP,vLocal;uniform vec3 color,emit,ledColor,ringCenter,ringU,ringW;" +
         "uniform float ledLevel,lampMask,lampHeight,ringLit;uniform sampler2D ring;" +
         "void main(){vec3 N=normalize(vN);vec3 l=normalize(vec3(-.4,.85,.65));float d=max(dot(N,l),0.);" +
         "float rim=pow(1.-max(dot(N,normalize(-vP)),0.),2.);" +
@@ -565,10 +583,10 @@
         // spreads into its neighbours, which is why a ripple reads on the real
         // lamp as one ring brightening rather than two hard arcs. Blur along the
         // ring by a few degrees to reproduce that spreading.
-        "float u=ang*0.15915494+0.5;vec3 pixel=vec3(0.);" +
-        "for(int k=-3;k<=3;k++){float w=1.0-abs(float(k))/4.0;" +
-        "pixel+=texture2D(ring,vec2(u+float(k)*0.012,0.5)).rgb*w;}" +
-        "pixel/=4.0;" +
+        "float u=ang*0.15915494+0.5;vec3 pixel=vec3(0.);float wsum=0.;" +
+        "for(int k=-8;k<=8;k++){float w=exp(-float(k*k)/18.0);" +
+        "pixel+=texture2D(ring,vec2(u+float(k)*DIFFUSE_STEP,0.5)).rgb*w;wsum+=w;}" +
+        "pixel/=wsum;" +
         // A lit diffuser is a source, not a shaded surface: fade its albedo out
         // as it lights up, otherwise white plastic + full glow clips to white.
         "vec3 tint=ringLit>.5?pixel:ledColor;" +
@@ -635,6 +653,11 @@
       // the GLB: centroid of the 10,339 diffuser vertices, and the mean normal
       // as the axis they circle. Radii run 40-60 mm about it, which matches the
       // physical 64-LED ring. Metres, because that is what the model is in.
+      // Physical lamps on the ring. The lamp ships a 32-lamp ring while
+      // robots/lamp/presets.json declares led_count 64, so half of every frame
+      // HAL paints falls off the end of the chain and never lights anything.
+      // Tracked upstream in issue #246 (the CAD envelope fits 32, not 64).
+      const RING_LEDS = 32;
       const RING_CENTER = [0.0742, 0.2747, -0.0011],
         RING_U = [-0.7344, -0.6787, 0.0],
         RING_W = [-0.0072, 0.0078, 0.9999];
@@ -655,10 +678,30 @@
 
       function uploadRing() {
         if (!ringPixels.length) return false;
-        const width = ringPixels.length,
+        // The lamp's ring carries RING_LEDS physical lamps, but presets.json
+        // declares a longer strip, so HAL paints pixels that no lamp ever
+        // receives — a WS2812 chain simply drops what runs off its end. Mapping
+        // the full buffer onto the circle showed light the device cannot emit:
+        // pulse, which originates at index led_count/2, appeared as two arcs
+        // here while the lamp shows only the one arc that fits.
+        const width = Math.min(ringPixels.length, RING_LEDS),
           data = new Uint8Array(width * 4);
-        ringPixels.forEach((px, i) => {
-          data.set([px[0], px[1], px[2], 255], i * 4);
+        // The per-pixel path ignores ledLevel (ringLit takes the texture's own
+        // brightness), so the perceptual lift has to be baked in here too or an
+        // emotion renders as a dark tint instead of a lit shade. Scale each
+        // pixel about its own peak: hue is untouched, only the level moves.
+        ringPixels.slice(0, width).forEach((px, i) => {
+          const peak = Math.max(px[0], px[1], px[2]);
+          const gain = peak > 0 ? (displayLevel(peak) * 255) / peak : 0;
+          data.set(
+            [
+              Math.min(255, Math.round(px[0] * gain)),
+              Math.min(255, Math.round(px[1] * gain)),
+              Math.min(255, Math.round(px[2] * gain)),
+              255,
+            ],
+            i * 4,
+          );
         });
         gl.bindTexture(gl.TEXTURE_2D, ringTex);
         if (width !== ringWidth) {
@@ -706,7 +749,7 @@
           L.ledColor,
           peak > 0 ? source.map((v) => v / peak) : [0, 0, 0],
         );
-        gl.uniform1f(L.ledLevel, peak / 255);
+        gl.uniform1f(L.ledLevel, displayLevel(peak));
       }
       function mesh(v, n, i) {
         const o = { i: gl.createBuffer(), count: i.length };
@@ -918,7 +961,11 @@
           mm(head, M.tr(0, -5, 0), M.sc(70, 1, 70)),
           [0.14, 0.15, 0.16],
         );
-        const glow = led.map((x) => Math.min(1, x / 120));
+        const peak = Math.max(...led);
+        const glow =
+          peak > 0
+            ? led.map((x) => (x / peak) * displayLevel(peak))
+            : [0, 0, 0];
         draw(
           ring,
           mm(head, M.tr(0, -8, 0), M.sc(60, 60, 60)),
@@ -1313,12 +1360,13 @@
       }
       async function refresh() {
         try {
-          const [h, p, l, s, sim] = await Promise.all([
+          const [h, p, l, s, sim, emo] = await Promise.all([
             api("/health"),
             api("/servo/position"),
             api("/led/color"),
             api("/servo"),
             api("/simulator/state"),
+            api("/emotion/status"),
           ]);
           target = { ...target, ...(p.positions || {}) };
           const ok = h.servo && h.led && h.camera;
@@ -1334,7 +1382,17 @@
                     .toString()
                     .padStart(4)}°`,
               )
-              .join("\n") + `\nrecording     ${s.current || "idle"}`;
+              .join("\n") +
+            `\nrecording     ${s.current || "idle"}` +
+            `\nemotion       ${emo.current_emotion || "none"}${
+              emo.sleeping ? " (sleeping)" : ""
+            }`;
+          // Mark the current emotion, as the device web UI's pill cloud does.
+          document
+            .querySelectorAll("#emotion-grid button")
+            .forEach((b) =>
+              b.classList.toggle("primary", b.textContent === emo.current_emotion),
+            );
           // Mark the playing recording, as the device web UI does.
           document
             .querySelectorAll("#play-grid button")
@@ -1384,9 +1442,10 @@
         }
       };
       async function loadControls() {
-        const [aim, servo] = await Promise.all([
+        const [aim, servo, presets] = await Promise.all([
           api("/servo/aim"),
           api("/servo"),
+          api("/emotion/presets"),
         ]);
         fillGrid(
           document.querySelector("#aim-grid"),
@@ -1408,6 +1467,31 @@
           (recording) =>
             act(`Playing ${recording}…`, "/servo/play", { recording }),
         );
+        fillGrid(
+          document.querySelector("#emotion-grid"),
+          document.querySelector("#emotion-empty"),
+          Object.keys(presets || {}),
+          "emotions",
+          expressEmotion,
+        );
+      }
+      // Same call the device web UI makes (OverviewSection pill cloud):
+      // POST /emotion {emotion, intensity}. Not act(): HAL answers 200 with
+      // status "ignored" when the sleep gate drops the emotion, and reporting
+      // that as ✓ would lie about a device that did not move.
+      async function expressEmotion(emotion) {
+        try {
+          const r = await api("/emotion", { emotion, intensity: 1.0 });
+          action.textContent =
+            r.status === "ignored"
+              ? `⃠ ${emotion} ignored (asleep — try greeting or stretching)`
+              : `✓ ${emotion} · servo ${r.servo || "none"} · led ${
+                  r.led ? `rgb(${r.led.join(",")})` : "unchanged"
+                }`;
+          await refresh();
+        } catch (e) {
+          action.textContent = `✕ ${e.message}`;
+        }
       }
       document.querySelectorAll("[data-effect]").forEach(
         (b) =>
