@@ -1,7 +1,8 @@
 # Phát chuyển động (Motion Playback)
 
 Recording servo trong `hal/recordings/` được biến thành chuyển động như thế nào.
-Source: `hal/drivers/motors/animation_service.py`.
+Source: `hal/drivers/motors/animation_service.py`, còn luật tính nhịp nằm ở
+`hal/drivers/motors/recording_timing.py`.
 
 ## Nhịp phát
 
@@ -22,6 +23,8 @@ Ngưỡng này không phải để làm đẹp. Đo trên lamp-0c89 bằng cách
 | `idle` | 9.95s | 115 deg/s | 9.97s | không |
 
 `idle` vốn đã nằm trong ngưỡng nên không bị giãn chút nào — nhưng nó lại hưởng lợi nhiều nhất, vì vòng lặp không còn tụt xuống 5 Hz khi idle đã settle. Mức giảm đó bước frame lưới fps chậm gấp sáu lần và biến nhịp thở thành năm cú giật thấy rõ mỗi giây; nó tốn về độ mượt nhiều hơn phần CPU tiết kiệm được.
+
+Luật này chạy cả khi không có phần cứng. `MockMotionService` (`HAL_BOARD=sim`, thân máy chạy trên laptop qua `make sim`) import `resample_recording` từ đúng module đó và phát trên cùng lưới 30 Hz, nên một recording tốn đúng bằng thời gian thực như trên thân máy thật. `move_to`/`aim`/`nudge` của nó nội suy theo `duration` được lệnh và chặn cho tới khi tới nơi, y như driver dùng SDK. Thứ simulator vẫn KHÔNG mô hình hoá: quán tính, va chạm, torque thật, và calibration EEPROM riêng của từng con servo.
 
 Hai hệ quả cần biết:
 

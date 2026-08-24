@@ -89,6 +89,8 @@ type Bootstrap struct {
 	// (e.g. HAL + web + os-server all behind min_version). Reset at the top of
 	// every checkOnce so a later cycle that finds new updates re-announces.
 	announcedThisCycle bool
+	// security records the last metadata fetch outcome for GET /security.
+	security securityTracker
 }
 
 // configRetryInterval is how often Serve reloads bootstrap.json while waiting for
@@ -155,6 +157,9 @@ func (b *Bootstrap) Serve() error {
 	r.Use(gin.Recovery())
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+	r.GET("/security", func(c *gin.Context) {
+		c.JSON(http.StatusOK, b.securityStatus())
 	})
 	r.POST("/force-check", func(c *gin.Context) {
 		go func() {
@@ -533,7 +538,12 @@ func (b *Bootstrap) fetchMetadata(ctx context.Context) (domain.OTAMetadata, erro
 	return decodeOTAMetadataPayload(payload, verified)
 }
 
-func (b *Bootstrap) fetchMetadataPayload(ctx context.Context) ([]byte, bool, error) {
+func (b *Bootstrap) fetchMetadataPayload(ctx context.Context) (payload []byte, verified bool, err error) {
+	// Every outcome — including a transport failure before any verification
+	// could run — lands in the security status, so an operator polling
+	// GET /security sees a stalled feed instead of a stale success.
+	defer func() { b.security.record(verified, err) }()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.cfg.MetadataURL, nil)
 	if err != nil {
 		return nil, false, fmt.Errorf("build metadata request: %w", err)
@@ -554,7 +564,7 @@ func (b *Bootstrap) fetchMetadataPayload(ctx context.Context) ([]byte, bool, err
 		slog.Warn("OTA signature verification disabled: signing_public_key is not provisioned", "component", "bootstrap")
 		return data, false, nil
 	}
-	payload, err := verifyOTAMetadata(data, b.cfg.SigningPublicKey)
+	payload, err = verifyOTAMetadata(data, b.cfg.SigningPublicKey)
 	if err != nil {
 		return nil, false, fmt.Errorf("verify metadata %s: %w", b.cfg.MetadataURL, err)
 	}

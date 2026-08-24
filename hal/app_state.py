@@ -86,6 +86,39 @@ simulation_audio: bool = (
 )
 simulation_volume: int = 65
 
+# --- Simulation media mode (HAL_SIM_MEDIA) ---
+#
+# `sim_media_requested` is what the developer asked for on the command line;
+# `sim_media_camera` / `sim_media_audio` are what each subsystem ACTUALLY runs
+# after boot, because a host device can be missing, busy, or permission-denied.
+# The two are kept apart on purpose: a Mac with a working webcam but a denied
+# microphone must report host video and virtual audio, not one blurred answer.
+# `sim_media_reasons` carries the human-actionable why for each downgrade and is
+# surfaced at GET /simulator/state so the page never shows a still image while
+# claiming to be live.
+sim_media_requested: str = os.environ.get("HAL_SIM_MEDIA", "virtual").strip().lower()
+sim_media_camera: str = sim_media_requested
+sim_media_audio: str = sim_media_requested
+sim_media_reasons: dict = {}
+
+
+def sim_media_fallback(kind: str, reason: str) -> None:
+    """Downgrade one simulated media subsystem to the virtual device.
+
+    `kind` is "camera" or "audio". Idempotent: the first reason wins, so a
+    retry loop cannot overwrite the original cause with a vaguer one.
+    """
+    global sim_media_camera, sim_media_audio, simulation_audio
+    if kind == "camera":
+        sim_media_camera = "virtual"
+    elif kind == "audio":
+        sim_media_audio = "virtual"
+        simulation_audio = True
+    else:
+        raise ValueError(f"unknown media kind: {kind}")
+    sim_media_reasons.setdefault(kind, reason)
+    logger.warning("[sim-media] %s falling back to virtual: %s", kind, reason)
+
 # --- Camera state ---
 
 _camera_disabled = False

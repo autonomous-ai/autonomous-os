@@ -84,14 +84,33 @@ claim that a rendered `down` or `right` pose is physically correct.
 This is an interface simulator, not a physics model: it has no mass or
 collision model, while shipped recording CSVs replay their timing in memory.
 Virtual camera/audio content is deterministic. To boot a minimal contract test
-body instead, use `make sim DEVICE_TYPE=sim`. See
-`robots/sim/ROBOT.md` for that body's narrower motion-only contract.
+body instead, use `make sim DEVICE_TYPE=sim`. That body declares `motion` and
+`system` and nothing else, which is how we prove HAL mounts exactly what a
+`ROBOT.md` declares and no more — lamp cannot show that, because lamp declares
+everything. See `robots/sim/ROBOT.md`.
 
 For a manual Mac media check, use `make sim SIM_MEDIA=host`. This explicitly
 opens the host camera, microphone and speaker: the simulator page shows its
 camera stream, **Play test tone** uses the speaker, and **Record 3 seconds**
 captures a WAV for playback. The default `SIM_MEDIA=virtual` remains
 permission-free and deterministic for tests.
+
+Host mode never hard-fails. Each subsystem is probed at boot — the webcam is
+opened and read once, the microphone records a few milliseconds — and whichever
+one is missing, busy or permission-denied falls back to its virtual device with
+a logged `[sim-media]` line. `GET /simulator/state` reports the outcome per
+subsystem (`media_camera`, `media_audio`, `media_reasons`, with `media` being
+"host" only when both are), and the simulator page prints the same reason and
+disables the tone/record buttons whenever audio is virtual. On macOS the two
+permissions live under System Settings > Privacy & Security > Camera and
+Microphone, and must be granted to the terminal app running HAL.
+
+The camera in host mode uses a simulation-only driver
+(`hal/drivers/camera/host_capture_device.py`, registered as `host`) that opens
+the webcam through the platform's native OpenCV backend — AVFoundation on
+macOS, where the production V4L2 path and its USB power-cycle healing do not
+exist. Production bodies still resolve their `driver:` from ROBOT.md.
+The STT/TTS voice pipeline stays virtual in both modes.
 
 ## Voice Pipeline
 

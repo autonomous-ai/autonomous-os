@@ -218,7 +218,7 @@ them onto the same `domain.WSEvent` shape the OpenClaw handler consumes:
 | `item.started` `command_execution` / `mcp_tool_call` | `agent` tool `phase:start` (`shell` / `server.tool`) |
 | `item.completed` `command_execution` / `mcp_tool_call` | tool `phase:end` (start emitted first when unseen) |
 | `item.completed` `web_search` / `file_change` | tool `phase:start` + `phase:end` pair |
-| `item.completed` `agent_message` | **accumulated** — no delta stream in exec mode |
+| `item.completed` `agent_message` | **buffered as the reply** — no delta stream in exec mode. A newer one demotes the previous to `stream:thinking` (see *Preambles* below) |
 | `item.*` `reasoning` / `todo_list` | *(ignored — status, not content)* |
 | `turn.completed` | `agent` `stream:assistant` (whole reply as **one** delta) **+** `chat` `state:final role:assistant` **+** lifecycle `phase:end` with usage — ends the turn |
 | `turn.failed` / `error` / `bridge.error` | `agent` lifecycle `phase:error` — ends the turn |
@@ -228,6 +228,17 @@ Like PicoClaw, the accumulated `agent_message` text is surfaced at
 `turn.completed` as a single assistant delta **before** `chat.final` /
 `lifecycle.end` — the N=1 case of the streaming contract, which is what lets
 the shared consumer flush TTS + `[HW:/…]` hardware markers at `lifecycle.end`.
+
+**Preambles.** Codex exec narrates before it calls a tool, as its own
+`agent_message` item ("Using the sensing skill for this presence event.",
+"Posture summary is present, so this is the posture-nudge route."). Joining
+every `agent_message` would speak that whole trail — the leak seen on
+`presence.enter` and `motion.activity` nudges. So only the **last**
+`agent_message` of a turn is the reply: each earlier one is demoted to
+`stream:thinking` (Flow Monitor only, never TTS or a channel reply) as soon as a
+newer one proves it was not the reply. Exception: a non-final message carrying a
+`[HW:/…]` marker is a real hardware action and stays in the reply. Prompt
+wording cannot suppress preambles reliably — this is the enforcement point.
 
 **Usage:** `turn.completed` carries `{input_tokens, cached_input_tokens,
 output_tokens}`; the translator maps `input + cached → InputTokens` (an
@@ -245,8 +256,20 @@ via `codex exec resume <id>` (history lives on disk under
 retries fresh on its own).
 
 Codex **auto-compacts its own context** (`model_auto_compact_token_limit`), so
-`ShouldRotateSession` is only a **150k-token safety net** for runaway threads —
-it rarely fires. Per [`adding-agent-runtime.md`](adding-agent-runtime.md) §4
+`ShouldRotateSession` is only a **250k-token safety net** for runaway threads —
+it rarely fires. It keys on the live **context** size — `input_tokens +
+cached_input_tokens` from the last `turn.completed`, stashed by the translator
+into `lastContextTokens` — and not on the `totalTokens` the shared handler
+passes, which folds in this turn's output (turn volume, not context). Reading
+its own usage frame keeps this codex-local: the other backends are untouched.
+
+The net was 150k keyed on the handler's `totalTokens` until
+2026-08-24, when the device showed it firing on ordinary turns instead of
+runaway ones — 3 of 8 consecutive sensing turns on lamp-0c89 crossed it
+(context 153k / 170k). Each rotation dropped the thread, and the fresh thread
+re-read every `SKILL.md` by shell (6 calls, ~60s), which pushed the context
+straight back over the line: a rotation treadmill. A net has to sit **above**
+where codex's own compaction settles, not inside it. Per [`adding-agent-runtime.md`](adding-agent-runtime.md) §4
 "No fake success", `CompactSession`, `GetConfigJSON` (Codex config is TOML +
 `.env` secrets — no JSON file to expose), `UpdatePrimaryModel`, and
 `RefreshModelsConfig` all return `domain.ErrNotSupportedByRuntime` — never

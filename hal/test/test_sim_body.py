@@ -132,10 +132,17 @@ class TestMockMotionService(unittest.TestCase):
 
     def test_release_travels_before_torque_off(self):
         """The mock reproduces the honest behavior of the real driver: release
-        moves to rest first, so it is not a stop."""
-        self.m.move_to({"base_yaw.pos": 40.0})
+        reaches rest first, so it is not a stop.
+
+        Rest is where gravity puts a limp arm: the pitch joints drop to their
+        stops, while yaw keeps whatever it was pointing at — nothing pulls the
+        arm around a vertical axis."""
+        self.m.move_to({"base_yaw.pos": 40.0, "base_pitch.pos": 25.0})
         self.assertEqual(self.m.release(), {})
-        self.assertEqual(self.m.get_positions()["base_yaw.pos"], 0.0)
+        settled = self.m.get_positions()
+        self.assertEqual(settled["base_yaw.pos"], 40.0, "gravity turned the yaw")
+        for joint, stop in mock.GRAVITY_REST.items():
+            self.assertAlmostEqual(settled[joint], stop, places=3)
         self.assertIn("release", [c[0] for c in self.m.calls])
 
     def test_halt_holds_position_and_keeps_torque(self):
@@ -149,13 +156,18 @@ class TestMockMotionService(unittest.TestCase):
 
     def test_halt_and_release_are_opposites(self):
         """Same call site, opposite contracts — the confusion #201 is about."""
-        self.m.move_to({"base_yaw.pos": 40.0})
+        self.m.move_to({"base_yaw.pos": 40.0, "base_pitch.pos": 25.0})
         parked = self.m.get_positions()["base_yaw.pos"]
+        parked_pitch = self.m.get_positions()["base_pitch.pos"]
         self.m.halt()
         self.assertEqual(self.m.get_positions()["base_yaw.pos"], parked)
         self.assertTrue(self.m._torque)
         self.m.release()
-        self.assertEqual(self.m.get_positions()["base_yaw.pos"], 0.0)
+        # halt kept the pose with torque on; release goes limp and the arm falls.
+        self.assertLess(
+            self.m.get_positions()["base_pitch.pos"], parked_pitch,
+            "release left the arm holding its pitch — that is a halt",
+        )
         self.assertFalse(self.m._torque)
 
     def test_halt_is_idempotent_and_cleared_by_the_next_move(self):

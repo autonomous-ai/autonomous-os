@@ -197,7 +197,7 @@ opencode mang một `sessionID`. Translator Go map chúng sang đúng khuôn
 |---|---|
 | dòng đầu mang `sessionID` | bắt session key |
 | `step_start` | `agent` lifecycle `phase:start` (một lần mỗi turn) |
-| `text` | **tích luỹ** — text câu trả lời (khuôn thiết bị: `part.text`; `text` phẳng được chấp nhận làm fallback); không có stream token delta |
+| `text` | **giữ làm câu trả lời** (khuôn thiết bị: `part.text`; `text` phẳng được chấp nhận làm fallback); không có stream token delta. Part mới đẩy part trước xuống `stream:thinking` (xem *Preamble* bên dưới) |
 | `reasoning` | *(bỏ qua — suy nghĩ, không phải nội dung)* |
 | `tool_use` | cặp `agent` tool `phase:start` + `phase:end` |
 | `step_finish` / `message.updated` | bắt token usage theo turn (`part.tokens` / `info.tokens`) |
@@ -210,10 +210,20 @@ opencode mang một `sessionID`. Translator Go map chúng sang đúng khuôn
 `step_finish` có `part.reason == "stop"`, rồi process thoát. Vì `opencode run` là
 subprocess theo từng turn, một **exit sạch (rc=0) chính là ranh giới turn**:
 gatewayd (`turn.go`) đánh dấu turn đã kết thúc và **synthesize một frame
-`{"type":"session.idle"}`** để translator finalize đúng một lần. Text `text` tích
-luỹ được đưa ra ở đó dưới dạng một assistant delta duy nhất **trước**
+`{"type":"session.idle"}`** để translator finalize đúng một lần. Text `text` đang
+giữ được đưa ra ở đó dưới dạng một assistant delta duy nhất **trước**
 `chat.final` / `lifecycle.end` — trường hợp N=1 của hợp đồng streaming, chính nó
 cho consumer chung flush TTS + marker phần cứng `[HW:/…]` tại `lifecycle.end`.
+
+**Preamble.** opencode tự thuật trước khi gọi tool, thành một part `text` riêng
+("Using the sensing skill for this presence event."). Gộp hết các part lại là
+đọc cả chuỗi tự thuật đó ra loa — đúng lỗi đã fix ở codex (xem
+[codex_vi.md](codex_vi.md)). Nên chỉ part `text` **cuối cùng** của turn mới là
+câu trả lời: mỗi part trước đó bị đẩy xuống `stream:thinking` (chỉ vào Flow
+Monitor, không bao giờ ra TTS hay reply kênh) ngay khi có part mới hơn chứng
+minh nó không phải câu trả lời. Ngoại lệ: part không phải cuối mà mang marker
+`[HW:/…]` là hành động phần cứng thật nên vẫn giữ trong reply. Chỉnh prompt
+không chặn preamble một cách đáng tin — đây mới là chỗ cưỡng chế.
 
 **Usage:** số token đi theo `step_finish` dưới
 `part.tokens.{input,output,cache.read}` (cũng đọc từ `message.updated`

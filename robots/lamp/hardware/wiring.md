@@ -27,7 +27,7 @@ Single momentary tactile, normally-open. Single-click = stop / unmute. Triple-cl
 
 ---
 
-## WS2812 RGB LED ring (64 pixels)
+## WS2812 RGB LED ring (32 pixels)
 
 5 V data + power + GND. Common ground with SBC. Brightness capped in software — see `power.md` for current budget rationale.
 
@@ -43,7 +43,7 @@ Single momentary tactile, normally-open. Single-click = stop / unmute. Triple-cl
 
 > **Pi 4 fallback**: PWM driver on GPIO 12 (header pin 32). See `hal/drivers/rgb/rgb_service.py:182-186`.
 
-> **Power note**: 64 px × 60 mA white worst-case = 3.84 A. Software caps brightness; do not test at full white without a 5 A-capable rail.
+> **Power note**: 32 px × 60 mA white worst-case = 1.92 A. Software caps brightness; do not test at full white without a 5 A-capable rail.
 
 ---
 

@@ -18,6 +18,7 @@
 | GET | `/api/system/info` | CPU, RAM, temp, uptime, version, agent status (name/connected/emotion/version/uptime) |
 | GET | `/api/system/network` | WiFi SSID, IP, signal, internet status |
 | GET | `/api/system/dashboard` | Aggregated snapshot (agent + config + HW) |
+| GET | `/api/system/ota-security` | OTA trust posture from the bootstrap worker: `legacy` vs `verified`, pinned key fingerprint, last metadata fetch (see `bootstrap-ota.md`) |
 
 ### Device Setup
 

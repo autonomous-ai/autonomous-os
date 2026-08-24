@@ -12,13 +12,6 @@ logger = logging.getLogger(__name__)
 # Default interpolation duration for move_to (seconds)
 DEFAULT_MOVE_DURATION = 2.0
 
-# How fast the applied idle anchor may travel toward a newly requested one
-# (degrees per second, per joint). Gaze re-aims by tens of degrees at once, and
-# applying that to the next frame is a step no recording ever contains. Sized
-# below the idle recording's own pitch peaks (~70 deg/s) so a re-aim reads as a
-# deliberate move rather than a snap: a 40 deg re-aim takes about a second.
-IDLE_ANCHOR_SLEW_DPS = 40.0
-
 # Zero/hold position in raw encoder units — the physical resting pose after release.
 ZERO_RAW = {
     "base_yaw":    2025,
@@ -55,19 +48,14 @@ REST_RAW = {
 # Duration for the startup/resume move (seconds)
 STARTUP_MOVE_DURATION = 5.0
 
-# Peak joint speed the STS3215 can actually deliver, in degrees/second.
-# Measured on device: recordings commanding >500 deg/s leave the servo 55 deg
-# behind its goal — it saturates, lags, then snaps, which is the audible
-# grinding. Recordings are resampled so no segment exceeds this; segments that
-# would are stretched in time instead. Set HAL_SERVO_MAX_DPS=0 to disable
-# stretching and play recordings at their authored speed.
-SERVO_MAX_DPS = float(os.environ.get("HAL_SERVO_MAX_DPS", "250"))
-
-# Recordings are authored at ~20 Hz but the playback loop steps one frame per
-# tick at self.fps, so raw frames play at the wrong wall-clock speed. Frames are
-# resampled onto the loop's own grid at load time; this is the CSV column that
-# carries the authored timing.
-RECORDING_TIME_COLUMN = "timestamp"
+# Playback timing (speed ceiling, time column, stretch + resample) is shared
+# with the mock driver so the simulator plays a recording exactly as the body
+# does — see hal/drivers/motors/recording_timing.py.
+from hal.drivers.motors.recording_timing import (  # noqa: E402
+    RECORDING_TIME_COLUMN,
+    SERVO_MAX_DPS,
+    resample_recording,
+)
 
 # Internal event: wake move + state sync, queued by start() so the 5s
 # interpolation runs in the event thread instead of blocking the caller
@@ -102,25 +90,6 @@ class AnimationService:
         self.idle_recording = idle_recording
         self.hold_s = hold_s
         self._hold_until: float = 0.0  # timestamp until which to hold pose before returning to idle
-        # Idle anchor: {joint: absolute degrees} the IDLE recording should breathe
-        # around, instead of around the pose it happens to have been recorded at.
-        #
-        # An idle recording is absolute on every joint and loops forever, so
-        # wherever anything else leaves the head, idle walks it back to the
-        # recorded pose within a cycle. On a desk that pose points at the
-        # keyboard, which is why a camera aimed at the user does not stay aimed
-        # at them. Anchoring shifts the whole loop without changing its shape:
-        # the lamp breathes exactly as before, around a different centre.
-        # The anchor currently APPLIED to frames. It follows _idle_anchor_target
-        # at a bounded rate rather than jumping: the offset is a position command
-        # in disguise, so replacing it outright teleports the arm by the whole
-        # difference in one frame (see _advance_idle_anchor).
-        self._idle_anchor: Dict[str, float] = {}
-        # Where the anchor is being asked to go. set_idle_anchor writes this.
-        self._idle_anchor_target: Dict[str, float] = {}
-        # First-frame value per joint of the idle recording — the centre the
-        # offset is measured from. Captured when the recording is loaded.
-        self._idle_baseline: Dict[str, float] = {}
         self._no_idle_recordings = NO_IDLE_RECORDINGS
         # disable_torque_on_disconnect=False: dropping torque is what `release()`
         # does, deliberately and on request ("arm limp"). A shutdown is not that
@@ -404,10 +373,6 @@ class AnimationService:
         # Set up new playback
         self._current_recording = recording_name
         self._current_actions = actions
-        if recording_name == self.idle_recording and actions:
-            # The pose the recording itself starts from — anchoring is measured
-            # as a displacement from this, so the loop keeps its own shape.
-            self._idle_baseline = dict(actions[0])
         self._current_frame_index = 0
         
         # If we have a current state, set up interpolation to the first frame.
@@ -520,19 +485,7 @@ class AnimationService:
                 progress = 1.0 - (self._interpolation_frames / denom)
                 progress = max(0.0, min(1.0, progress))
                 
-                # Anchor the TARGET, never the interpolated result. _current_state
-                # always holds an already-anchored pose, and _interpolation_target
-                # is the raw first frame, so shifting the blend of the two applied
-                # the anchor offset a second time to the part that came from
-                # _current_state: at progress 0 the very first command was
-                # `current + offset`, a whole-offset jump in one frame before the
-                # recording had played anything. With gaze anchoring idle that
-                # offset is the distance between the recording's baseline and
-                # where gaze wants the head — over 180 deg for a recording
-                # authored around wrist_pitch -186. Both ends of the blend live
-                # in anchored space now, so progress 0 is exactly the current
-                # pose and the move starts from standstill.
-                target = self._anchor_action(self._interpolation_target)
+                target = self._interpolation_target
                 interpolated_action = {}
                 for joint in target.keys():
                     # Default 0 is unsafe if _current_state is incomplete (see _sync_state_from_hardware).
@@ -554,9 +507,7 @@ class AnimationService:
 
             # Play current frame
             if self._current_frame_index < len(self._current_actions):
-                action = self._anchor_action(
-                    self._current_actions[self._current_frame_index]
-                )
+                action = self._current_actions[self._current_frame_index]
                 with self.bus_lock:
                     self.robot.send_action(action)
                 self._current_state = action.copy()
@@ -638,70 +589,11 @@ class AnimationService:
         
         return sorted(recordings)
     
-    def _stretch_timeline(self, times: List[float], frames: List[Dict[str, float]]) -> List[float]:
-        """Widen the gaps that demand more joint speed than the servo can deliver.
-
-        Returns a new, still-monotonic time axis. Only over-speed segments grow;
-        everything else keeps its authored timing, so a recording slows down
-        exactly where it was impossible and nowhere else.
-        """
-        if SERVO_MAX_DPS <= 0:
-            return times
-
-        out = [times[0]]
-        for i in range(1, len(frames)):
-            authored_dt = max(times[i] - times[i - 1], 1e-3)
-            peak_delta = max(
-                (abs(frames[i][j] - frames[i - 1][j]) for j in frames[i]),
-                default=0.0,
-            )
-            needed_dt = peak_delta / SERVO_MAX_DPS
-            out.append(out[-1] + max(authored_dt, needed_dt))
-        return out
-
-    def _resample_recording(
-        self, times: List[float], frames: List[Dict[str, float]], name: str
-    ) -> List[Dict[str, float]]:
-        """Put frames on the playback loop's own 1/fps grid.
-
-        The loop steps exactly one frame per tick, so a list sampled at self.fps
-        plays at real time by construction — no timing logic in the hot path.
-        """
-        stretched = self._stretch_timeline(times, frames)
-        duration = stretched[-1] - stretched[0]
-        if duration <= 0:
-            return frames
-
-        joints = list(frames[0].keys())
-        step = 1.0 / self.fps
-        total = max(1, int(round(duration / step)))
-
-        out: List[Dict[str, float]] = []
-        src = 0
-        for k in range(total + 1):
-            t = stretched[0] + min(k * step, duration)
-            # stretched[] is monotonic and t only advances, so this walk is O(n).
-            while src < len(stretched) - 2 and stretched[src + 1] < t:
-                src += 1
-            span = stretched[src + 1] - stretched[src]
-            p = 0.0 if span <= 0 else (t - stretched[src]) / span
-            p = max(0.0, min(1.0, p))
-            a, b = frames[src], frames[src + 1]
-            out.append({j: a[j] + (b[j] - a[j]) * p for j in joints})
-
-        authored = times[-1] - times[0]
-        if SERVO_MAX_DPS > 0 and duration > authored * 1.01:
-            logger.info(
-                "recording %r stretched %.2fs -> %.2fs to stay under %.0f deg/s",
-                name, authored, duration, SERVO_MAX_DPS,
-            )
-        return out
-
     def _load_recording(self, recording_name: str) -> Optional[List[Dict[str, float]]]:
         """Load a recording from cache or file, resampled for playback.
 
         Frames are returned on the event loop's 1/fps grid with over-speed
-        segments stretched — see _resample_recording. Playback itself stays a
+        segments stretched — see recording_timing.resample_recording. Playback stays a
         plain frame-per-tick walk.
         """
         # Check cache first
@@ -738,7 +630,7 @@ class AnimationService:
                 self._recording_cache[recording_name] = actions
                 return actions
 
-            actions = self._resample_recording(times, actions, recording_name)
+            actions = resample_recording(times, actions, recording_name, self.fps)
 
             # Cache the recording
             self._recording_cache[recording_name] = actions
@@ -772,73 +664,6 @@ class AnimationService:
         next frame would clear it.
         """
         self._halt.clear()
-
-    def set_idle_anchor(self, joints: Optional[Dict[str, float]]) -> None:
-        """Re-centre the idle loop on these absolute joint positions.
-
-        Pass None or {} to go back to playing idle exactly as recorded. Joints
-        not named are untouched, so anchoring one axis does not freeze the rest.
-
-        The move is a request, not an immediate jump — the applied anchor slews
-        toward it at IDLE_ANCHOR_SLEW_DPS.
-        """
-        self._idle_anchor_target = dict(joints) if joints else {}
-
-    def _advance_idle_anchor(self) -> None:
-        """Step the applied anchor one frame closer to the requested one.
-
-        The anchor offset is added to every idle frame, so a change in it is a
-        position command: assigning a new anchor outright moved the arm by the
-        whole difference within one frame. Gaze re-aims in steps of tens of
-        degrees (device-observed: wrist_pitch anchor -4.9 -> +36.7 in one go,
-        a 41 deg jump at ~830 deg/s), which is faster than anything the
-        recordings themselves contain. Bounding the travel keeps a re-aim a
-        move the eye can follow, without damping the loop's own swing.
-        """
-        target = self._idle_anchor_target
-        applied = self._idle_anchor
-        if applied == target:
-            return
-        step = IDLE_ANCHOR_SLEW_DPS / max(self.fps, 1)
-        for joint in set(applied) | set(target):
-            # A joint dropped from the target eases back to the recorded pose,
-            # i.e. to an offset of zero, which is the baseline itself.
-            want = target.get(joint, self._idle_baseline.get(joint))
-            if want is None:
-                # No baseline to ease back to; nothing to measure a step against.
-                applied.pop(joint, None)
-                continue
-            have = applied.get(joint, self._idle_baseline.get(joint))
-            if have is None:
-                # First anchor before the recording loaded: no baseline means
-                # _anchor_action ignores this joint anyway, so there is no jump
-                # to spread out.
-                applied[joint] = float(want)
-                continue
-            delta = float(want) - float(have)
-            if abs(delta) <= step:
-                if joint in target:
-                    applied[joint] = float(want)
-                else:
-                    applied.pop(joint, None)
-                continue
-            applied[joint] = float(have) + (step if delta > 0 else -step)
-
-    def _anchor_action(self, action: Dict[str, float]) -> Dict[str, float]:
-        """Shift one idle frame onto the anchor. Returns it unchanged if there
-        is nothing to anchor, so the normal path allocates nothing extra."""
-        self._advance_idle_anchor()
-        if not self._idle_anchor or self._current_recording != self.idle_recording:
-            return action
-        shifted = dict(action)
-        for joint, anchor in self._idle_anchor.items():
-            if joint not in shifted:
-                continue
-            base = self._idle_baseline.get(joint)
-            if base is None:
-                continue
-            shifted[joint] = shifted[joint] + (float(anchor) - float(base))
-        return shifted
 
     def halt(self) -> None:
         """Abort any move/recording in flight and hold position. Torque stays ON."""
@@ -1103,7 +928,7 @@ class AnimationService:
         """Invalidate the cache for a recording (used after upload).
 
         `actions` arrives stripped of its timestamp column, so caching it here
-        would store frames that never went through _resample_recording — the
+        would store frames that never went through resample_recording — the
         uploaded copy would play at raw frame rate while the identical file read
         from disk played correctly. The upload route writes the CSV before
         calling this, so dropping the entry lets the normal load path pick it up.

@@ -256,7 +256,13 @@ class VoiceService:
                     and not tts_service.native_mode
                     and tts_service.realtime_feedback
                 ):
-                    text: str = tts_service.last_spoken_text
+                    spoken_text: str = tts_service.last_spoken_text
+                    # [TTS HISTORY] below only exists inside the CURRENT Gemini
+                    # socket. Persist OpenClaw's actual spoken reply as well, or
+                    # a recycle (idle recovery / unresolved Gemini tool call)
+                    # loses it before the next user turn.
+                    self._realtime.save_main_agent_reply_fragment(spoken_text)
+                    text: str = spoken_text
                     # Direction is INTO the realtime model: whatever was just
                     # spoken (often an OpenClaw reply, not Gemini's own output) is
                     # pushed to Gemini as history so it stays aware of what the
@@ -950,9 +956,10 @@ class VoiceService:
                     )
                     # Speech is confirmed (Silero has agreed) — the moment to
                     # ask whether the user had turned toward the lamp just
-                    # before saying it. Reads the gaze buffer BACKWARDS; it does
-                    # not capture anything now, because the turn happened before
-                    # this line ran. No-op unless the feature is armed.
+                    # before saying it. Normally this reads the gaze buffer
+                    # backwards; only an empty-evidence result asks the watcher
+                    # to restore the remembered pose asynchronously, while this
+                    # audio capture keeps running. No-op unless armed.
                     try:
                         from hal.drivers.tracking import gaze
 
@@ -1259,6 +1266,12 @@ class VoiceService:
                     or not hal_config.REALTIME_ENABLED
                 ):
                     return False
+                # Same pre-turn hygiene as the always-listening path below: the
+                # tool-call quarantine lives in prepare_turn(), so skipping it
+                # here let an `express_emotion` turn silence the next one. Safe
+                # after the capture_complete guard — the utterance is fully
+                # buffered, so a rebuild cannot split it.
+                self._realtime.prepare_turn()
                 if self._realtime.rebuilding or not self._realtime.available:
                     logger.info(
                         "[realtime] Wake-word turn falls back — session unavailable after final confirmation"
@@ -1582,6 +1595,24 @@ class VoiceService:
                         "Wake-word partial rejected — no matching final STT result; dropping turn"
                     )
 
+            # A VAD-confirmed utterance can begin while the camera is pointed
+            # away from the remembered user. In that precise no-evidence case
+            # gaze requested an asynchronous re-acquire at speech start. Check
+            # once more now that the same utterance has finished: the watcher
+            # may have collected enough stable face samples while STT captured
+            # it. A measured facing-away head never takes this recovery path.
+            if combined:
+                try:
+                    from hal.drivers.tracking import gaze
+
+                    gaze.on_speech_end()
+                except Exception as e:
+                    logger.debug("gaze speech-end check skipped: %s", e)
+                wakeword_followup_active = (
+                    wakeword_followup_active
+                    or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active())
+                )
+
             # Noise guard: a session can open on a noise blip that fools the entry
             # VAD, and STT then either finds no words or invents a short filler for
             # it. Re-check the FULL captured buffer with Silero; if it isn't speech,
@@ -1789,6 +1820,13 @@ class VoiceService:
                 hal_config.WAKEWORD_ENABLED,
                 wakeword_authorized,
             ):
+                # Gemini's audio context and [TTS HISTORY] are session-local.
+                # When this turn is delegated or falls back to the main agent,
+                # persist the user's request before sending it downstream so a
+                # session replacement cannot erase the handoff from realtime's
+                # next-session context.
+                if combined and not rt.handled:
+                    self._realtime.save_main_handoff(combined)
                 # A realtime connection failure or silent timeout is not a
                 # handled turn. Preserve the STT fallback so a wake-word command
                 # never disappears just because Gemini is temporarily down.

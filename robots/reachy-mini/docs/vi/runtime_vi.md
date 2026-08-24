@@ -227,6 +227,27 @@ cũ tại `/root/bootstrap/rollback/`. Dùng `sudo software-update rollback
 os-server` (hoặc `bootstrap`) để khôi phục; version lỗi bị chặn tới khi feed có
 version khác.
 
+Web OTA cũng theo cùng model recovery. Nó stage và xác thực bundle mới trước khi
+thay `/usr/share/nginx/html/setup`, giữ bundle trước đó tại
+`/root/bootstrap/rollback/web.previous`, và ghi lại nginx có đang chạy hay không.
+Update yêu cầu có `index.html`, `nginx -t`, và `GET /` loopback khi nginx đang
+active; check lỗi sẽ tự khôi phục bundle known-good. Dùng
+`sudo software-update rollback web` khi operator cần rollback chủ động.
+
+Device-profile OTA stage package trước khi swap
+`/opt/devices/reachy-mini`, lưu profile trước đó và mọi rootfs target bị ảnh
+hưởng, sau đó phục hồi trạng thái service `os-server` và HAL cũ. Nó giữ file
+tuning local `/opt/hal/.env`. Profile mới phải có `ROBOT.md`; mỗi service trước
+đó active phải qua health endpoint loopback, nếu không profile known-good sẽ tự
+được phục hồi. Dùng `sudo software-update rollback device` để recovery thủ công.
+
+HAL OTA giữ toàn bộ runtime `/opt/hal` trước đó—`.env`, virtual environment và
+uv cache—tại `/root/bootstrap/rollback/hal.previous`. Runtime mới được giải nén
+và sync trong thư mục staging kề bên, chỉ sau đó mới swap vào vị trí chạy. HAL
+trở về trạng thái active/inactive trước đó và service đang active phải trả về
+`http://127.0.0.1:5001/health`. Mọi lỗi staging hoặc health sẽ tự phục hồi
+runtime known-good. Dùng `sudo software-update rollback hal` để recovery thủ công.
+
 Layout là **layout production**, không phải cây riêng cho spike:
 
 | Thành phần | Đường dẫn |

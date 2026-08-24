@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -60,6 +61,23 @@ const DescribeTimeout = 80 * time.Second
 // a fresh connection for genuinely hung requests while staying above the
 // text-dense floor.
 var describeAttemptTimeouts = [...]time.Duration{45 * time.Second, 35 * time.Second}
+
+// describeMaxTokens is the output budget for one describe call. It must cover
+// the model's REASONING as well as the description: qwen3.6-plus (the catalog's
+// default_image_model) thinks before it writes, and the thinking is billed to
+// the same budget while producing no content block. Overrun it and the response
+// is HTTP 200 with `content: []` and `stop_reason: "max_tokens"` — a
+// deterministic empty answer, not a transient failure.
+//
+// Sized from device measurements 2026-08-24 (lamp-0c89, one 118 KB look frame,
+// same prompt, 11 calls): the OLD 500 budget was cut every time (out=501). Total
+// output on a successful call ranged 868–1677 tokens — nearly 2x spread on the
+// SAME image — so the ceiling has to clear the tail, not the median. At 2000,
+// 4/5 calls succeeded and the fifth was cut at exactly 2001; at 4000, 5/5
+// succeeded with the worst case at 1617, leaving ~2.4x headroom. Text-dense
+// frames ("read this label") were not in the sample and plausibly cost more,
+// which is the other reason not to trim this to the observed maximum.
+const describeMaxTokens = 4000
 
 // Emphasis on the user's request so the description surfaces what the answer
 // needs (label text, object identity, counts) instead of a generic caption.
@@ -141,11 +159,34 @@ func imageModel() string {
 	return DefaultImageModel
 }
 
+// stopReasonMaxTokens is the anthropic-messages stop_reason for a response cut
+// off at the output budget.
+const stopReasonMaxTokens = "max_tokens"
+
+// errBudget reports a response cut off at describeMaxTokens before the model
+// wrote any content. Retrying it is pointless — see DescribeWithRetry.
+type errBudget struct {
+	tokens int
+	limit  int
+}
+
+func (e errBudget) Error() string {
+	return fmt.Sprintf("model spent the whole %d-token budget on reasoning and returned no content "+
+		"(output_tokens=%d, stop_reason=%s) — raise describeMaxTokens",
+		e.limit, e.tokens, stopReasonMaxTokens)
+}
+
 // DescribeWithRetry runs Describe once per describeAttemptTimeouts entry,
 // returning the first success. Uses context.Background() on purpose: the
 // description must complete even if the HAL client gives up on the sensing
 // HTTP request early (its POST timeout can be shorter than a slow describe).
 // On total failure the error carries every attempt's failure.
+//
+// A budget overrun (errBudget) stops the loop instead of retrying: the retry
+// sends an identical request with an identical budget, so it fails identically.
+// Device-observed 2026-08-24 — both attempts returned the same empty response
+// and the turn paid 26s of dead air for a foregone conclusion. Every other
+// failure (timeout, 5xx, dead connection) still gets its retry.
 func DescribeWithRetry(cfg *config.Config, imageB64 string, question string) (string, error) {
 	var errs []string
 	for i, timeout := range describeAttemptTimeouts {
@@ -156,6 +197,10 @@ func DescribeWithRetry(cfg *config.Config, imageB64 string, question string) (st
 			return desc, nil
 		}
 		errs = append(errs, fmt.Sprintf("attempt %d (%s): %v", i+1, timeout, err))
+		var budget errBudget
+		if errors.As(err, &budget) {
+			break
+		}
 	}
 	return "", fmt.Errorf("%s", strings.Join(errs, "; "))
 }
@@ -178,7 +223,7 @@ func Describe(ctx context.Context, cfg *config.Config, imageB64 string, question
 	model := imageModel()
 	body, err := json.Marshal(map[string]any{
 		"model":      model,
-		"max_tokens": 500,
+		"max_tokens": describeMaxTokens,
 		"messages": []any{
 			map[string]any{
 				"role": "user",
@@ -229,6 +274,10 @@ func Describe(ctx context.Context, cfg *config.Config, imageB64 string, question
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
+		StopReason string `json:"stop_reason"`
+		Usage      struct {
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
 	}
 	if err := json.Unmarshal(respBody, &out); err != nil {
 		return "", fmt.Errorf("decode describe response: %w", err)
@@ -238,7 +287,15 @@ func Describe(ctx context.Context, cfg *config.Config, imageB64 string, question
 			return strings.TrimSpace(c.Text), nil
 		}
 	}
-	return "", fmt.Errorf("describe response has no text content")
+	// No text block. Carry stop_reason and the token count: without them the
+	// error reads the same whether the model was cut off mid-reasoning or
+	// genuinely returned nothing, and telling those apart meant reproducing the
+	// call by hand (device debug 2026-08-24).
+	if out.StopReason == stopReasonMaxTokens {
+		return "", errBudget{tokens: out.Usage.OutputTokens, limit: describeMaxTokens}
+	}
+	return "", fmt.Errorf("describe response has no text content (stop_reason=%q, output_tokens=%d)",
+		out.StopReason, out.Usage.OutputTokens)
 }
 
 func truncate(s string, n int) string {

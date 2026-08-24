@@ -4,6 +4,7 @@ import pytest
 
 from hal import config as hal_config
 from hal.drivers.voice._internal.realtime_turn import is_noise_turn, needs_noise_guard
+from hal.drivers.voice._internal.session_finalize import finalize_session
 
 
 @pytest.fixture(autouse=True)
@@ -51,3 +52,17 @@ def test_missing_guard_result_never_drops_a_turn():
 
 def test_empty_transcript_still_dropped_by_require_transcript():
     assert is_noise_turn("", 2.0, audio_is_speech=True)
+
+
+@pytest.mark.parametrize("raw", [".", "…", "?!", "——"])
+def test_punctuation_only_stt_final_is_normalized_to_empty(raw):
+    combined, _ser_audio, _duration = finalize_session([], [""], [raw], -1)
+
+    assert combined == ""
+
+
+@pytest.mark.parametrize("raw", ["okay", "hôm nay", "你好", "123"])
+def test_spoken_unicode_stt_final_is_preserved(raw):
+    combined, _ser_audio, _duration = finalize_session([], [""], [raw], -1)
+
+    assert combined == raw

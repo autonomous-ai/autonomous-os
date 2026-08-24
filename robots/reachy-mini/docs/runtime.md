@@ -100,6 +100,29 @@ the previous binary at `/root/bootstrap/rollback/`. Use
 `sudo software-update rollback os-server` (or `bootstrap`) to restore it; the
 failed version is blocked until the feed publishes a different version.
 
+Web OTA follows the same recovery model. It stages and validates the new bundle
+before replacing `/usr/share/nginx/html/setup`, preserves the previous bundle at
+`/root/bootstrap/rollback/web.previous`, and records whether nginx was running.
+The update requires `index.html`, `nginx -t`, and a loopback `GET /` when nginx
+was active; a failed check restores the known-good bundle automatically. Use
+`sudo software-update rollback web` for an operator-initiated rollback.
+
+Device-profile OTA stages the package before swapping
+`/opt/devices/reachy-mini`, saves the prior profile and every affected rootfs
+target, then restores the prior `os-server` and HAL service state. It preserves
+the local `/opt/hal/.env` tuning file. The new profile must contain `ROBOT.md`;
+each previously active service must pass its loopback health endpoint or the
+known-good profile is restored automatically. Use
+`sudo software-update rollback device` for a manual recovery.
+
+HAL OTA keeps the complete previous `/opt/hal` runtime—its `.env`, virtual
+environment, and uv cache—at `/root/bootstrap/rollback/hal.previous`. The new
+runtime is unpacked and synchronized in a sibling staging directory; only then
+is it swapped into place. HAL is returned to its prior active/inactive state and
+an active service must answer `http://127.0.0.1:5001/health`. Any staging or
+health failure restores the known-good runtime automatically. Use
+`sudo software-update rollback hal` for a manual recovery.
+
 `spike.sh` is a **thin orchestrator** — it reimplements nothing, it just runs the
 component scripts in order. Each of those also runs standalone:
 

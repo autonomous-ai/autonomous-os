@@ -234,7 +234,7 @@ UNIT
 | Service | Lệnh chạy | Port | Ghi chú |
 |---|---|---|---|
 | `os-server.service` | `/usr/local/bin/os-server` | 5000 | HTTP API chính, luôn chạy |
-| `bootstrap.service` | `/usr/local/bin/bootstrap-server` | 8080 | OTA worker, poll cập nhật. Expose `POST /force-check` để kích hoạt kiểm tra OTA ngay lập tức |
+| `bootstrap.service` | `/usr/local/bin/bootstrap-server` | 8080 | OTA worker, poll cập nhật. Expose `POST /force-check` để kích hoạt kiểm tra OTA ngay lập tức và `GET /security` cho trạng thái tin cậy OTA |
 | `openclaw.service` | `xvfb-run ... openclaw gateway run` | — | AI brain, memory limit 1500M |
 | `hal.service` | `uvicorn hal.server:app --host 127.0.0.1 --port 5001` | 5001 | Hardware drivers (servo, LED, camera, audio) |
 | nginx | `nginx` | 80 | Setup SPA + reverse proxy (`/api/` → OS Server 5000, `/hw/` → HAL 5001) |
@@ -290,9 +290,86 @@ bỏ qua đúng target đó nên release lỗi không bị cài lại ở lần 
 có version khác, OTA của component đó tự tiếp tục. Bản thân rollback không cần
 metadata URL hoặc mạng.
 
+Các component cài theo thư mục cũng có cùng hợp đồng recovery. Trước khi update
+web, updater dừng nginx, swap bundle đã giải nén hoàn chỉnh từ thư mục staging,
+và giữ bundle trước đó tại `/root/bootstrap/rollback/web.previous` cùng trạng
+thái active/inactive trước đó của nginx. Sau đó nó đòi hỏi có `index.html`,
+`nginx -t` hợp lệ và—khi nginx vốn đang chạy—`GET /` loopback thành công. Nếu
+thất bại, updater tự khôi phục bundle và trạng thái service đã lưu. Operator cũng
+có thể chạy `software-update rollback web`; version bị loại được ghi vào
+`rollback_versions` giống rollback binary.
+
+Với device profile, updater stage ZIP, chỉ dừng `os-server` và `hal` vốn đang
+active, rồi giữ profile cũ tại `/root/bootstrap/rollback/device.previous`. Nó
+cũng snapshot chính xác các file thuộc `rootfs/` của profile cũ hoặc mới trong
+`device.previous.rootfs`; rollback vì vậy khôi phục file bị ghi đè và xoá file
+chỉ được profile lỗi thêm vào. Tuning local trong `/opt/hal/.env` vẫn được giữ.
+Profile bắt buộc có `ROBOT.md`; mỗi service vốn active phải khởi động lại và trả
+về health endpoint loopback. Check lỗi sẽ tự phục hồi profile known-good và trạng
+thái service cũ. Dùng `software-update rollback device` khi operator rollback;
+version profile bị loại sau đó sẽ bị chặn.
+
 Device không có `signing_public_key` chủ ý ở legacy mode: nó đọc component top
 level và chỉ log cảnh báo, không làm OTA lỗi. Đây là compatibility bridge, không
 phải bảo đảm trust; pin public key để bật verified OTA.
+
+### Trạng thái bảo mật OTA (operator nhìn thấy được)
+
+Cảnh báo ở trên chỉ là một dòng log, nên một device kẹt ở legacy mode là vô hình
+với người vận hành fleet. Cả hai tiến trình đều expose trạng thái đó dưới dạng dữ liệu:
+
+| Endpoint | Do ai phục vụ | Ghi chú |
+|----------|---------------|---------|
+| `GET http://127.0.0.1:8080/security` | `bootstrap-server` | Nguồn sự thật: worker giữ key đã pin và thực hiện verify. Chỉ loopback. |
+| `GET /api/system/ota-security` | `os-server` | Proxy nguyên văn endpoint trên, bọc trong wrapper chuẩn `{"status":1,"data":…}`. Trả `502` khi bootstrap worker không với tới được. |
+
+```json
+{
+  "mode": "verified",
+  "metadata_format": "autonomous-ota/v1",
+  "key_fingerprint": "9f2c1ab30d4e5f60",
+  "artifact_checksums": true,
+  "last_metadata_fetch": {
+    "at": "2026-08-24T09:12:03Z",
+    "verified": true
+  }
+}
+```
+
+- `mode` là `verified` khi đã provision `signing_public_key`, ngược lại là
+  `legacy`. Đây là field duy nhất cần cảnh báo trên toàn fleet.
+- `key_fingerprint` là 16 ký tự hex đầu của SHA-256 của key đã pin, để operator
+  biết device đang tin **key nào** (và phát hiện device còn kẹt ở key đã xoay
+  vòng) mà endpoint không phải phát lại key material. Không có ở legacy mode.
+- `artifact_checksums` cho biết SHA-256 từng component có được enforce không. Nó
+  đi theo `mode`: digest chỉ có ý nghĩa khi metadata mang nó là xác thực.
+- `last_metadata_fetch` là kết quả lần fetch gần nhất, gồm cả lỗi transport
+  (`error` được set, `verified` là `false`). Nó vắng mặt cho tới khi lần fetch
+  đầu tiên sau restart hoàn tất, nên device chưa từng với tới feed phân biệt
+  được với device có feed khoẻ mạnh.
+
+### Cutover sang signed-only
+
+Metadata ký được publish dạng superset: component entry của payload vẫn nằm ở
+top level cho các worker đã deploy, còn tài liệu xác thực nằm dưới `signed`. Bản
+copy tương thích đó chính là thứ giữ cho legacy mode còn khai thác được, nên
+phải gỡ. Lộ trình:
+
+1. **Publish có ký** (đã xong). Release writer thêm envelope `signed` mỗi khi có
+   `OTA_SIGNING_PRIVATE_KEY` và `OTA_SIGNING_KEY_ID`. Device bỏ qua nó tới khi
+   được pin key.
+2. **Provision key.** Device mới nhận `OTA_SIGNING_PUBLIC_KEY` lúc setup; fleet
+   hiện có thì ghi vào `/root/config/bootstrap.json`. Không cần redeploy —
+   worker đọc key ở lần load config kế tiếp.
+3. **Xác nhận toàn fleet.** Poll `GET /api/system/ota-security` và yêu cầu
+   `mode == "verified"` cùng đúng `key_fingerprint` trên mọi device. Bước này là
+   cổng chặn: còn device nào báo `legacy` thì không đi tiếp.
+4. **Cutover.** Publish với `OTA_METADATA_SIGNED_ONLY=1`, cờ này bỏ bản copy top
+   level nên tài liệu chỉ còn `signed`. Device chưa migrate sẽ dừng update (và
+   kêu to) thay vì update từ nguồn không xác thực — đúng hướng lỗi mong muốn.
+
+Rollback cho bước 4 là publish lại một lần nữa mà không bật cờ; device đã ở
+verified mode không bị ảnh hưởng theo hướng nào, vì chúng chỉ đọc `signed`.
 
 **Đợi-rồi-retry khi chưa provisioning**: nếu `metadata_url` rỗng (device chưa
 setup), `Serve()` không khởi động poll loop lẫn healthcheck server. Nó log
@@ -414,35 +491,25 @@ Script đọc URL metadata OTA từ `metadata_url` trong `/root/config/bootstrap
 (biến môi trường `OTA_METADATA_URL` nếu set sẽ override, dùng cho chạy thủ công/debug),
 và exit lỗi nếu cả hai đều rỗng — không có URL hardcode.
 
-### Xử lý HAL (MỚI)
+### Xử lý HAL
 
 ```bash
 "hal")
-    echo "Updating HAL to $VERSION..."
+    # Giữ nguyên toàn bộ runtime và trạng thái service trước đó.
+    systemctl stop hal
+    mv /opt/hal /root/bootstrap/rollback/hal.previous
 
-    # Tải
-    curl -fsSL "$URL" -o /tmp/hal-update.zip
+    # Build candidate ở thư mục kề. .env, venv và uv cache được copy từ
+    # runtime đã giữ trước khi chạy uv sync.
+    unzip -q "$ZIP" -d /opt/.hal.new
+    cp -a /root/bootstrap/rollback/hal.previous/{.env,.venv,.uv-cache} /opt/.hal.new/
+    (cd /opt/.hal.new && uv sync --python 3.12 --extra hardware)
+    mv /opt/.hal.new /opt/hal
 
-    # Dừng service trước khi cập nhật
-    systemctl stop hal.service
-
-    # Backup
-    cp -r /opt/hal /opt/hal.bak 2>/dev/null || true
-
-    # Giải nén (giữ venv nếu chỉ thay đổi code, hoặc rebuild)
-    unzip -o /tmp/hal-update.zip -d /opt/hal/
-
-    # Cài lại dependencies nếu requirements.txt thay đổi
-    /opt/hal/venv/bin/pip install -r /opt/hal/requirements.txt --quiet
-
-    # Khởi động lại
-    systemctl start hal.service
-
-    # Dọn dẹp
-    rm -f /tmp/hal-update.zip
-    rm -rf /opt/hal.bak
-
-    echo "HAL updated to $VERSION"
+    systemctl restart hal
+    curl -fsS http://127.0.0.1:5001/health
+    # Lỗi staging hoặc health sẽ khôi phục hal.previous và trạng thái cũ.
+    # Operator cũng có thể chạy: software-update rollback hal
     ;;
 ```
 

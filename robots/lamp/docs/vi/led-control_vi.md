@@ -2,7 +2,7 @@
 
 ## Phần Cứng
 
-- **64 WS2812 RGB LEDs** — grid 8x5
+- **32 WS2812 RGB LEDs** — một vòng ring
 - Driver: `rpi_ws281x` (Python, HAL owns)
 - FastAPI endpoints trên `:5001`
 
@@ -31,7 +31,7 @@ lệnh LED đầu tiên, có thể vài phút sau khi boot.
 | GET | `/led` | LED strip info (count, available) |
 | GET | `/led/color` | Màu hiện tại `{"r", "g", "b"}` |
 | POST | `/led/solid` | Fill toàn bộ strip 1 màu |
-| POST | `/led/paint` | Set từng pixel (array tối đa 64 items), hoặc gradient với `"gradient": true` |
+| POST | `/led/paint` | Set từng pixel (array tối đa 32 items), hoặc gradient với `"gradient": true` |
 | POST | `/led/off` | Tắt tất cả LED |
 | POST | `/led/effect` | Bật effect |
 | POST | `/led/effect/stop` | Dừng effect đang chạy |
@@ -64,9 +64,9 @@ POST /led/paint
 {"colors": [[0, 200, 200], [150, 0, 255]], "gradient": true}
 ```
 
-Với `"gradient": true`, các màu được coi là **stop** của gradient và nội suy tuyến tính trên toàn bộ strip (kiểu CSS gradient) — ví dụ trên fade cyan → tím qua cả 64 pixel. Chấp nhận số stop bất kỳ ≥ 1.
+Với `"gradient": true`, các màu được coi là **stop** của gradient và nội suy tuyến tính trên toàn bộ strip (kiểu CSS gradient) — ví dụ trên fade cyan → tím qua cả 32 pixel. Chấp nhận số stop bất kỳ ≥ 1.
 
-Paint tự dừng effect đang chạy trước (effect repaint strip mỗi ~40ms sẽ đè lên) và, trừ khi `"transient": true`, lưu danh sách pixel đã paint làm user LED state — nên emotion animation, TTS wave, và HAL restart trong cùng phiên boot đều restore đúng gradient. Với gradient, danh sách 64 pixel *đã expand* được lưu, không phải các stop.
+Paint tự dừng effect đang chạy trước (effect repaint strip mỗi ~40ms sẽ đè lên) và, trừ khi `"transient": true`, lưu danh sách pixel đã paint làm user LED state — nên emotion animation, TTS wave, và HAL restart trong cùng phiên boot đều restore đúng gradient. Với gradient, danh sách 32 pixel *đã expand* được lưu, không phải các stop.
 
 ## Effects
 

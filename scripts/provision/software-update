@@ -1,0 +1,480 @@
+#!/bin/bash
+set -e
+# Metadata URL comes from the bootstrap worker config (single source of truth,
+# baked at image build). An explicit OTA_METADATA_URL env var still overrides it
+# for manual/debug runs. No compiled-in default — abort if neither is set.
+BOOTSTRAP_JSON="/root/config/bootstrap.json"
+ROLLBACK_DIR="/root/bootstrap/rollback"
+WEB_ROOT="/usr/share/nginx/html/setup"
+HAL_DIR="/opt/hal"
+
+# Web is a directory install, so retain the complete prior bundle and whether
+# nginx was running. The backup is only replaced after the new ZIP has been
+# downloaded and unpacked into a sibling staging directory.
+save_web_service_state() {
+  mkdir -p "$ROLLBACK_DIR"
+  if systemctl is-active --quiet nginx; then
+    echo active >"$ROLLBACK_DIR/web.nginx-state"
+  else
+    echo inactive >"$ROLLBACK_DIR/web.nginx-state"
+  fi
+}
+
+web_was_active() {
+  [ "$(cat "$ROLLBACK_DIR/web.nginx-state" 2>/dev/null || echo active)" = active ]
+}
+
+restore_web_service_state() {
+  if web_was_active; then
+    systemctl restart nginx
+  else
+    systemctl stop nginx 2>/dev/null || true
+  fi
+}
+
+wait_for_web() {
+  local attempt=1
+  while [ "$attempt" -le 30 ]; do
+    curl -fsS --max-time 5 http://127.0.0.1/ >/dev/null 2>&1 && return 0
+    sleep 1
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
+check_web() {
+  [ -f "$WEB_ROOT/index.html" ] || return 1
+  nginx -t >/dev/null || return 1
+  ! web_was_active || { systemctl is-active --quiet nginx && wait_for_web; }
+}
+
+restore_web_backup() {
+  local backup="$ROLLBACK_DIR/web.previous" failed="$ROLLBACK_DIR/web.failed"
+  [ -d "$backup" ] || { echo "No rollback backup for web" >&2; return 1; }
+  rm -rf "$failed"
+  [ ! -e "$WEB_ROOT" ] || mv "$WEB_ROOT" "$failed"
+  mv "$backup" "$WEB_ROOT"
+}
+
+resolve_device_profile() {
+  DEVICE_TYPE="$(grep -E '^DEVICE_TYPE=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
+  [ -z "$DEVICE_TYPE" ] && DEVICE_TYPE="$(jq -r '.device_type // empty' /root/config/config.json 2>/dev/null)"
+  [ -n "$DEVICE_TYPE" ] || { echo "ERROR: device_type not found in /opt/hal/.env or /root/config/config.json" >&2; return 1; }
+  DEVICES_DIR="$(grep -E '^DEVICES_DIR=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
+  [ -n "$DEVICES_DIR" ] || DEVICES_DIR=/opt/devices
+  DEVICE_DEST="$DEVICES_DIR/$DEVICE_TYPE"
+}
+
+save_device_service_state() {
+  mkdir -p "$ROLLBACK_DIR"
+  for unit in os-server hal; do
+    if systemctl is-active --quiet "$unit"; then
+      echo "$unit=active"
+    else
+      echo "$unit=inactive"
+    fi
+  done >"$ROLLBACK_DIR/device.services"
+}
+
+device_was_active() {
+  local unit="$1"
+  grep -qx "$unit=active" "$ROLLBACK_DIR/device.services" 2>/dev/null || [ ! -f "$ROLLBACK_DIR/device.services" ]
+}
+
+restore_device_service_state() {
+  if device_was_active os-server; then systemctl restart os-server; else systemctl stop os-server 2>/dev/null || true; fi
+  if device_was_active hal; then systemctl restart hal; else systemctl stop hal 2>/dev/null || true; fi
+}
+
+wait_for_url() {
+  local url="$1" max_attempts="$2" attempt=1
+  while [ "$attempt" -le "$max_attempts" ]; do
+    curl -fsS --max-time 5 "$url" >/dev/null 2>&1 && return 0
+    sleep 1
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
+check_device_profile() {
+  [ -f "$DEVICE_DEST/ROBOT.md" ] || return 1
+  ! device_was_active hal || { systemctl is-active --quiet hal && wait_for_url http://127.0.0.1:5001/health 120; }
+  ! device_was_active os-server || { systemctl is-active --quiet os-server && wait_for_url http://127.0.0.1:5000/api/health/live 60; }
+}
+
+snapshot_device_rootfs() {
+  # Save every file the old or staged profile can overlay, including an explicit
+  # absent marker so rollback removes files introduced only by the failed OTA.
+  local old_rootfs="$1" new_rootfs="$2" archive="$ROLLBACK_DIR/device.previous.rootfs"
+  local list rel target state
+  list=$(mktemp)
+  rm -rf "$archive"
+  mkdir -p "$archive/files"
+  { [ -d "$old_rootfs" ] && (cd "$old_rootfs" && find . \( -type f -o -type l \) -print); [ -d "$new_rootfs" ] && (cd "$new_rootfs" && find . \( -type f -o -type l \) -print); } | sort -u >"$list"
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    target="/${rel#./}"
+    if [ -e "$target" ] || [ -L "$target" ]; then
+      state=present
+      mkdir -p "$archive/files/$(dirname "${rel#./}")"
+      cp -a "$target" "$archive/files/${rel#./}"
+    else
+      state=absent
+    fi
+    printf '%s\t%s\n' "$rel" "$state" >>"$archive/manifest"
+  done <"$list"
+  rm -f "$list"
+}
+
+restore_device_rootfs() {
+  local archive="$ROLLBACK_DIR/device.previous.rootfs" rel state target
+  [ -f "$archive/manifest" ] || return 0
+  while IFS=$'\t' read -r rel state; do
+    target="/${rel#./}"
+    if [ "$state" = present ]; then
+      mkdir -p "$(dirname "$target")"
+      cp -a "$archive/files/${rel#./}" "$target"
+    else
+      rm -f "$target"
+    fi
+  done <"$archive/manifest"
+}
+
+restore_device_backup() {
+  local backup="$ROLLBACK_DIR/device.previous" failed="$ROLLBACK_DIR/device.failed"
+  [ -d "$backup" ] || { echo "No rollback backup for device" >&2; return 1; }
+  rm -rf "$failed"
+  [ ! -e "$DEVICE_DEST" ] || mv "$DEVICE_DEST" "$failed"
+  mv "$backup" "$DEVICE_DEST"
+  restore_device_rootfs
+}
+
+save_hal_service_state() {
+  mkdir -p "$ROLLBACK_DIR"
+  if systemctl is-active --quiet hal; then echo active >"$ROLLBACK_DIR/hal.service-state"; else echo inactive >"$ROLLBACK_DIR/hal.service-state"; fi
+}
+
+hal_was_active() {
+  [ "$(cat "$ROLLBACK_DIR/hal.service-state" 2>/dev/null || echo active)" = active ]
+}
+
+restore_hal_service_state() {
+  if hal_was_active; then systemctl restart hal; else systemctl stop hal 2>/dev/null || true; fi
+}
+
+check_hal() {
+  [ -f "$HAL_DIR/VERSION_HAL" ] || return 1
+  ! hal_was_active || { systemctl is-active --quiet hal && wait_for_url http://127.0.0.1:5001/health 120; }
+}
+
+restore_hal_backup() {
+  local backup="$ROLLBACK_DIR/hal.previous" failed="$ROLLBACK_DIR/hal.failed"
+  [ -d "$backup" ] || { echo "No rollback backup for hal" >&2; return 1; }
+  rm -rf "$failed"
+  [ ! -e "$HAL_DIR" ] || mv "$HAL_DIR" "$failed"
+  mv "$backup" "$HAL_DIR"
+}
+
+[ "$(id -u)" -ne 0 ] && { echo "Run as root."; exit 1; }
+[ $# -lt 1 ] && { echo "Usage: software-update <component>|rollback <os-server|bootstrap|web|device|hal>"; exit 1; }
+APP="$1"
+if [ "$APP" = "rollback" ]; then
+  [ $# -eq 2 ] || { echo "Usage: software-update rollback <os-server|bootstrap|web|device|hal>"; exit 1; }
+  ROLLBACK_TARGET="$2"
+  if [ "$ROLLBACK_TARGET" = "web" ]; then
+    BACKUP="$ROLLBACK_DIR/web.previous"
+    [ -d "$BACKUP" ] || { echo "No rollback backup for web"; exit 1; }
+    BLOCKED_VERSION="$(cat "$WEB_ROOT/VERSION" 2>/dev/null || true)"
+    if [ -z "$BLOCKED_VERSION" ] && [ -f /root/bootstrap/state.json ]; then
+      BLOCKED_VERSION=$(jq -r '.components.web // empty' /root/bootstrap/state.json 2>/dev/null || true)
+    fi
+    if [ -n "$BLOCKED_VERSION" ] && [ -f "$BOOTSTRAP_JSON" ]; then
+      CONFIG_TMP=$(mktemp)
+      if jq --arg version "$BLOCKED_VERSION" '.rollback_versions = (.rollback_versions // {}) | .rollback_versions.web = $version' "$BOOTSTRAP_JSON" >"$CONFIG_TMP"; then
+        mv "$CONFIG_TMP" "$BOOTSTRAP_JSON"
+      else
+        rm -f "$CONFIG_TMP"
+        echo "WARN: could not record rollback version; lower min_version before the next OTA poll"
+      fi
+    fi
+    systemctl stop nginx 2>/dev/null || true
+    restore_web_backup
+    restore_web_service_state
+    check_web || { echo "web rollback health check failed"; exit 1; }
+    echo "web restored from $BACKUP"
+    exit 0
+  fi
+  if [ "$ROLLBACK_TARGET" = "device" ]; then
+    resolve_device_profile || exit 1
+    BACKUP="$ROLLBACK_DIR/device.previous"
+    [ -d "$BACKUP" ] || { echo "No rollback backup for device"; exit 1; }
+    BLOCKED_VERSION="$(cat "$DEVICE_DEST/VERSION" 2>/dev/null || true)"
+    if [ -z "$BLOCKED_VERSION" ] && [ -f /root/bootstrap/state.json ]; then
+      BLOCKED_VERSION=$(jq -r '.components.device // empty' /root/bootstrap/state.json 2>/dev/null || true)
+    fi
+    if [ -n "$BLOCKED_VERSION" ] && [ -f "$BOOTSTRAP_JSON" ]; then
+      CONFIG_TMP=$(mktemp)
+      if jq --arg version "$BLOCKED_VERSION" '.rollback_versions = (.rollback_versions // {}) | .rollback_versions.device = $version' "$BOOTSTRAP_JSON" >"$CONFIG_TMP"; then mv "$CONFIG_TMP" "$BOOTSTRAP_JSON"; else rm -f "$CONFIG_TMP"; echo "WARN: could not record rollback version; lower min_version before the next OTA poll"; fi
+    fi
+    systemctl stop os-server 2>/dev/null || true
+    systemctl stop hal 2>/dev/null || true
+    restore_device_backup
+    restore_device_service_state
+    check_device_profile || { echo "device rollback health check failed"; exit 1; }
+    echo "device restored from $BACKUP"
+    exit 0
+  fi
+  if [ "$ROLLBACK_TARGET" = "hal" ]; then
+    BACKUP="$ROLLBACK_DIR/hal.previous"
+    [ -d "$BACKUP" ] || { echo "No rollback backup for hal"; exit 1; }
+    BLOCKED_VERSION="$(cat "$HAL_DIR/VERSION_HAL" 2>/dev/null || true)"
+    if [ -z "$BLOCKED_VERSION" ] && [ -f /root/bootstrap/state.json ]; then BLOCKED_VERSION=$(jq -r '.components.hal // empty' /root/bootstrap/state.json 2>/dev/null || true); fi
+    if [ -n "$BLOCKED_VERSION" ] && [ -f "$BOOTSTRAP_JSON" ]; then
+      CONFIG_TMP=$(mktemp)
+      if jq --arg version "$BLOCKED_VERSION" '.rollback_versions = (.rollback_versions // {}) | .rollback_versions.hal = $version' "$BOOTSTRAP_JSON" >"$CONFIG_TMP"; then mv "$CONFIG_TMP" "$BOOTSTRAP_JSON"; else rm -f "$CONFIG_TMP"; echo "WARN: could not record rollback version; lower min_version before the next OTA poll"; fi
+    fi
+    systemctl stop hal 2>/dev/null || true
+    restore_hal_backup
+    restore_hal_service_state
+    check_hal || { echo "HAL rollback health check failed"; exit 1; }
+    echo "hal restored from $BACKUP"
+    exit 0
+  fi
+  case "$ROLLBACK_TARGET" in
+    os-server) DEST=/usr/local/bin/os-server; UNIT=os-server ;;
+    bootstrap) DEST=/usr/local/bin/bootstrap-server; UNIT=bootstrap ;;
+    *) echo "Rollback is currently supported for os-server and bootstrap only"; exit 1 ;;
+  esac
+  BACKUP="/root/bootstrap/rollback/${ROLLBACK_TARGET}.previous"
+  [ -x "$BACKUP" ] || { echo "No rollback backup for $ROLLBACK_TARGET"; exit 1; }
+  BLOCKED_VERSION=$("$DEST" --version 2>/dev/null | sed -nE 's/.*([0-9]+\.[0-9]+\.[0-9]+([-.+_][0-9A-Za-z.-]+)?).*/\1/p' | head -1)
+  if [ -z "$BLOCKED_VERSION" ] && [ -f /root/bootstrap/state.json ]; then
+    BLOCKED_VERSION=$(jq -r --arg key "$ROLLBACK_TARGET" '.components[$key] // empty' /root/bootstrap/state.json 2>/dev/null || true)
+  fi
+  if [ -n "$BLOCKED_VERSION" ] && [ -f "$BOOTSTRAP_JSON" ]; then
+    CONFIG_TMP=$(mktemp)
+    if jq --arg key "$ROLLBACK_TARGET" --arg version "$BLOCKED_VERSION" '.rollback_versions = (.rollback_versions // {}) | .rollback_versions[$key] = $version' "$BOOTSTRAP_JSON" >"$CONFIG_TMP"; then
+      mv "$CONFIG_TMP" "$BOOTSTRAP_JSON"
+    else
+      rm -f "$CONFIG_TMP"
+      echo "WARN: could not record rollback version; lower min_version before the next OTA poll"
+    fi
+  fi
+  install -D -m 0755 "$BACKUP" "$DEST"
+  systemctl restart "$UNIT"
+  [ "$ROLLBACK_TARGET" != "bootstrap" ] && systemctl restart bootstrap
+  echo "$ROLLBACK_TARGET restored from $BACKUP"
+  exit 0
+fi
+case "$APP" in
+  os-server|openclaw|bootstrap|web|hal|claude-desktop-buddy|device) ;;
+  *) echo "Unknown app: $APP. Use os-server, openclaw, bootstrap, web, hal, claude-desktop-buddy, or device."; exit 1 ;;
+esac
+
+if [ -z "${OTA_METADATA_URL:-}" ]; then
+  OTA_METADATA_URL="$(jq -r '.metadata_url // empty' "$BOOTSTRAP_JSON" 2>/dev/null || true)"
+fi
+if [ -z "$OTA_METADATA_URL" ]; then
+  echo "[software-update] ERROR: no metadata_url in $BOOTSTRAP_JSON and OTA_METADATA_URL unset"
+  exit 1
+fi
+echo "[software-update] OTA metadata: $OTA_METADATA_URL"
+
+METADATA_TMP=$(mktemp)
+METADATA_PAYLOAD=$(mktemp)
+ZIP_TMP=""
+DIR_TMP=""
+trap 'rm -f "$METADATA_TMP" "$METADATA_PAYLOAD" "$ZIP_TMP"; rm -rf "$DIR_TMP"' EXIT
+curl -fsSL -H "Cache-Control: no-cache" -H "Pragma: no-cache" -o "$METADATA_TMP" "$OTA_METADATA_URL" || { echo "Failed to fetch metadata from $OTA_METADATA_URL"; exit 1; }
+OTA_SIGNING_PUBLIC_KEY="$(jq -r '.signing_public_key // empty' "$BOOTSTRAP_JSON" 2>/dev/null || true)"
+if [ -n "$OTA_SIGNING_PUBLIC_KEY" ]; then
+  PUBLIC_DER=$(mktemp); SIGNATURE_TMP=$(mktemp)
+  jq -er '(.signed // .) | .format == "autonomous-ota/v1" and .signature.algorithm == "ed25519"' "$METADATA_TMP" >/dev/null || { echo "Unsigned or unsupported OTA metadata"; exit 1; }
+  printf '\060\052\060\005\006\003\053\145\160\003\041\000' > "$PUBLIC_DER"
+  printf '%s' "$OTA_SIGNING_PUBLIC_KEY" | base64 -d >> "$PUBLIC_DER" || { echo "Invalid OTA signing public key"; exit 1; }
+  jq -r '(.signed // .).payload' "$METADATA_TMP" | base64 -d > "$METADATA_PAYLOAD" || { echo "Invalid OTA metadata payload"; exit 1; }
+  jq -r '(.signed // .).signature.value' "$METADATA_TMP" | base64 -d > "$SIGNATURE_TMP" || { echo "Invalid OTA metadata signature"; exit 1; }
+  openssl pkeyutl -verify -pubin -keyform DER -inkey "$PUBLIC_DER" -rawin -in "$METADATA_PAYLOAD" -sigfile "$SIGNATURE_TMP" >/dev/null || { echo "OTA metadata signature verification failed"; exit 1; }
+else
+  echo "[software-update] WARN: OTA signing is not configured; using legacy unsigned metadata"
+  cp "$METADATA_TMP" "$METADATA_PAYLOAD"
+fi
+if [ "$APP" = "device" ]; then
+  # Device profile lives nested under devices.<type>; resolve THIS device's type.
+  DEVICE_TYPE="$(grep -E '^DEVICE_TYPE=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
+  [ -z "$DEVICE_TYPE" ] && DEVICE_TYPE="$(jq -r '.device_type // empty' /root/config/config.json 2>/dev/null)"
+  # No lamp fallback: pulling the lamp profile onto a device whose class can't be
+  # resolved would overwrite its persona with the wrong one — refuse instead.
+  [ -z "$DEVICE_TYPE" ] && { echo "ERROR: device_type not found in /opt/hal/.env or /root/config/config.json — cannot resolve device profile"; exit 1; }
+  VERSION=$(jq -r --arg t "$DEVICE_TYPE" '.devices[$t].version // empty' "$METADATA_PAYLOAD")
+  URL=$(jq -r --arg t "$DEVICE_TYPE" '.devices[$t].url // empty' "$METADATA_PAYLOAD")
+  SHA256=$(jq -r --arg t "$DEVICE_TYPE" '.devices[$t].sha256 // empty' "$METADATA_PAYLOAD")
+else
+  META_KEY="$APP"
+  VERSION=$(jq -r --arg a "$META_KEY" '.[$a].version // empty' "$METADATA_PAYLOAD")
+  URL=$(jq -r --arg a "$META_KEY" '.[$a].url // empty' "$METADATA_PAYLOAD")
+  SHA256=$(jq -r --arg a "$META_KEY" '.[$a].sha256 // empty' "$METADATA_PAYLOAD")
+fi
+[ -z "$VERSION" ] && { echo "Metadata has no version for $APP"; exit 1; }
+[ -z "$URL" ] || [ -z "$OTA_SIGNING_PUBLIC_KEY" ] || [[ "$SHA256" =~ ^[a-fA-F0-9]{64}$ ]] || { echo "Metadata has no valid SHA-256 for $APP"; exit 1; }
+
+download_verified() {
+  local url="$1" destination="$2" digest="$3"
+  curl -fsSL -H "Cache-Control: no-cache" -o "$destination" "$url" || return 1
+  [ -z "$digest" ] || echo "$digest  $destination" | sha256sum -c - >/dev/null
+}
+
+if [ "$APP" = "os-server" ]; then
+  [ -z "$URL" ] && { echo "Metadata has no url for os-server"; exit 1; }
+  ZIP_TMP=$(mktemp)
+  DIR_TMP=$(mktemp -d)
+  download_verified "$URL" "$ZIP_TMP" "$SHA256" || { echo "Failed checksum verification for os-server"; exit 1; }
+  unzip -o -q "$ZIP_TMP" -d "$DIR_TMP"
+  BIN=$(find "$DIR_TMP" -type f -executable 2>/dev/null | head -1)
+  [ -z "$BIN" ] && BIN=$(find "$DIR_TMP" -type f 2>/dev/null | head -1)
+  [ -z "$BIN" ] || [ ! -f "$BIN" ] && { echo "No binary in os-server zip"; exit 1; }
+  install -D -m 0755 /usr/local/bin/os-server /root/bootstrap/rollback/os-server.previous
+  cp -f "$BIN" /usr/local/bin/os-server
+  chmod +x /usr/local/bin/os-server
+  systemctl restart os-server
+  echo "os-server updated to $VERSION"
+elif [ "$APP" = "bootstrap" ]; then
+  [ -z "$URL" ] && { echo "Metadata has no url for bootstrap"; exit 1; }
+  ZIP_TMP=$(mktemp)
+  DIR_TMP=$(mktemp -d)
+  download_verified "$URL" "$ZIP_TMP" "$SHA256" || { echo "Failed checksum verification for bootstrap"; exit 1; }
+  unzip -o -q "$ZIP_TMP" -d "$DIR_TMP"
+  BIN=$(find "$DIR_TMP" -type f -executable 2>/dev/null | head -1)
+  [ -z "$BIN" ] && BIN=$(find "$DIR_TMP" -type f 2>/dev/null | head -1)
+  [ -z "$BIN" ] || [ ! -f "$BIN" ] && { echo "No binary in bootstrap zip"; exit 1; }
+  install -D -m 0755 /usr/local/bin/bootstrap-server /root/bootstrap/rollback/bootstrap.previous
+  cp -f "$BIN" /usr/local/bin/bootstrap-server
+  chmod +x /usr/local/bin/bootstrap-server
+  systemctl restart bootstrap
+  echo "bootstrap updated to $VERSION"
+elif [ "$APP" = "openclaw" ]; then
+  VER="${VERSION:-latest}"
+  npm install -g "openclaw@${VER}" || { echo "npm install openclaw failed"; exit 1; }
+  openclaw plugins install @openclaw/discord@${VER} --force 2>&1 || echo "[software-update] WARN: discord plugin install failed (non-fatal)"
+  openclaw plugins install @openclaw/slack@${VER} --force 2>&1 || echo "[software-update] WARN: slack plugin install failed (non-fatal)"
+  systemctl restart openclaw
+  echo "openclaw updated to $VER"
+elif [ "$APP" = "web" ]; then
+  [ -z "$URL" ] && { echo "Metadata has no url for web"; exit 1; }
+  ZIP_TMP=$(mktemp)
+  download_verified "$URL" "$ZIP_TMP" "$SHA256" || { echo "Failed checksum verification for web"; exit 1; }
+  DIR_TMP=$(mktemp -d "$(dirname "$WEB_ROOT")/.setup.new.XXXXXX")
+  unzip -o -q "$ZIP_TMP" -d "$DIR_TMP"
+  echo "$VERSION" > "$DIR_TMP/VERSION"
+  [ -f "$DIR_TMP/index.html" ] || { echo "No index.html in web zip"; exit 1; }
+  save_web_service_state
+  systemctl stop nginx 2>/dev/null || true
+  rm -rf "$ROLLBACK_DIR/web.previous"
+  mv "$WEB_ROOT" "$ROLLBACK_DIR/web.previous"
+  mv "$DIR_TMP" "$WEB_ROOT"
+  DIR_TMP=""
+  if ! restore_web_service_state || ! check_web; then
+    echo "web health check failed; restoring the known-good bundle" >&2
+    systemctl stop nginx 2>/dev/null || true
+    restore_web_backup
+    restore_web_service_state || true
+    check_web || true
+    exit 1
+  fi
+  echo "web updated to $VERSION"
+elif [ "$APP" = "hal" ]; then
+  [ -z "$URL" ] && { echo "Metadata has no url for hal"; exit 1; }
+  ZIP_TMP=$(mktemp)
+  download_verified "$URL" "$ZIP_TMP" "$SHA256" || { echo "Failed checksum verification for hal"; exit 1; }
+  UV_BIN="$(command -v uv || true)"
+  [ -n "$UV_BIN" ] || [ ! -x /root/.local/bin/uv ] || UV_BIN=/root/.local/bin/uv
+  [ -n "$UV_BIN" ] || { echo "uv not found"; exit 1; }
+  save_hal_service_state
+  systemctl stop hal 2>/dev/null || true
+  rm -rf "$ROLLBACK_DIR/hal.previous"
+  if ! mv "$HAL_DIR" "$ROLLBACK_DIR/hal.previous"; then
+    restore_hal_service_state || true
+    exit 1
+  fi
+  DIR_TMP=$(mktemp -d "$(dirname "$HAL_DIR")/.hal.new.XXXXXX")
+  export UV_CACHE_DIR="$DIR_TMP/.uv-cache" UV_HTTP_TIMEOUT=180
+  if ! (
+    unzip -o -q "$ZIP_TMP" -d "$DIR_TMP" || exit 1
+    if [ -f "$ROLLBACK_DIR/hal.previous/.env" ]; then cp -a "$ROLLBACK_DIR/hal.previous/.env" "$DIR_TMP/.env" || exit 1; fi
+    if [ -d "$ROLLBACK_DIR/hal.previous/.venv" ]; then cp -a "$ROLLBACK_DIR/hal.previous/.venv" "$DIR_TMP/.venv" || exit 1; fi
+    if [ -d "$ROLLBACK_DIR/hal.previous/.uv-cache" ]; then cp -a "$ROLLBACK_DIR/hal.previous/.uv-cache" "$DIR_TMP/.uv-cache" || exit 1; fi
+    find "$UV_CACHE_DIR" -name "lerobot.egg-info" -type d 2>/dev/null | xargs rm -rf
+    cd "$DIR_TMP" || exit 1
+    "$UV_BIN" sync --python 3.12 --extra hardware || exit 1
+  ); then
+    echo "HAL staging failed; restoring known-good runtime" >&2
+    cd /
+    restore_hal_backup
+    restore_hal_service_state || true
+    exit 1
+  fi
+  cd /
+  if ! mv "$DIR_TMP" "$HAL_DIR"; then
+    echo "HAL activation failed; restoring known-good runtime" >&2
+    restore_hal_backup
+    restore_hal_service_state || true
+    exit 1
+  fi
+  DIR_TMP=""
+  if ! restore_hal_service_state || ! check_hal; then
+    echo "HAL health check failed; restoring the known-good runtime" >&2
+    systemctl stop hal 2>/dev/null || true
+    restore_hal_backup
+    restore_hal_service_state || true
+    check_hal || true
+    exit 1
+  fi
+  echo "hal updated to $VERSION"
+elif [ "$APP" = "claude-desktop-buddy" ]; then
+  [ -z "$URL" ] && { echo "Metadata has no url for claude-desktop-buddy"; exit 1; }
+  ZIP_TMP=$(mktemp)
+  DIR_TMP=$(mktemp -d)
+  download_verified "$URL" "$ZIP_TMP" "$SHA256" || { echo "Failed checksum verification for claude-desktop-buddy"; exit 1; }
+  BUDDY_DIR="/opt/claude-desktop-buddy"
+  mkdir -p "$BUDDY_DIR"
+  unzip -o -q "$ZIP_TMP" -d "$DIR_TMP"
+  [ -f "$DIR_TMP/buddy-plugin" ] && cp -f "$DIR_TMP/buddy-plugin" "$BUDDY_DIR/buddy-plugin" && chmod +x "$BUDDY_DIR/buddy-plugin"
+  [ ! -f "/root/config/buddy.json" ] && [ -f "$DIR_TMP/config/buddy.json" ] && mkdir -p /root/config && cp -f "$DIR_TMP/config/buddy.json" /root/config/buddy.json
+  echo "$VERSION" > "$BUDDY_DIR/VERSION_BUDDY"
+  systemctl restart claude-desktop-buddy
+  echo "claude-desktop-buddy updated to $VERSION"
+elif [ "$APP" = "device" ]; then
+  [ -z "$URL" ] && { echo "Metadata has no url for devices.$DEVICE_TYPE"; exit 1; }
+  resolve_device_profile || exit 1
+  DEST="$DEVICE_DEST"
+  ZIP_TMP=$(mktemp)
+  download_verified "$URL" "$ZIP_TMP" "$SHA256" || { echo "Failed checksum verification for device profile"; exit 1; }
+  mkdir -p "$DEVICES_DIR"
+  DIR_TMP=$(mktemp -d "$DEVICES_DIR/.${DEVICE_TYPE}.new.XXXXXX")
+  unzip -o -q "$ZIP_TMP" -d "$DIR_TMP"
+  [ -f "$DIR_TMP/ROBOT.md" ] || { echo "No ROBOT.md in device profile"; exit 1; }
+  [ -d "$DEST" ] || { echo "No installed device profile at $DEST"; exit 1; }
+  save_device_service_state
+  systemctl stop os-server 2>/dev/null || true
+  systemctl stop hal 2>/dev/null || true
+  snapshot_device_rootfs "$DEST/rootfs" "$DIR_TMP/rootfs"
+  rm -rf "$ROLLBACK_DIR/device.previous"
+  mv "$DEST" "$ROLLBACK_DIR/device.previous"
+  mv "$DIR_TMP" "$DEST"
+  DIR_TMP=""
+  # Keep local tuning in .env exactly as the existing updater did.
+  ENV_BACKUP=""
+  if [ -f /opt/hal/.env ]; then ENV_BACKUP=$(mktemp); cp -a /opt/hal/.env "$ENV_BACKUP"; fi
+  [ ! -d "$DEST/rootfs" ] || cp -a "$DEST/rootfs/." /
+  if [ -n "$ENV_BACKUP" ]; then cp -a "$ENV_BACKUP" /opt/hal/.env; rm -f "$ENV_BACKUP"; fi
+  if ! restore_device_service_state || ! check_device_profile; then
+    echo "device profile health check failed; restoring the known-good profile" >&2
+    systemctl stop os-server 2>/dev/null || true
+    systemctl stop hal 2>/dev/null || true
+    restore_device_backup
+    restore_device_service_state || true
+    check_device_profile || true
+    exit 1
+  fi
+  echo "device profile ($DEVICE_TYPE) updated to $VERSION"
+fi
