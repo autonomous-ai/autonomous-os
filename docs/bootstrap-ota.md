@@ -603,6 +603,29 @@ at a stable path, it does get a `.previous` backup: `software-update rollback
 opencode` works, unlike claudecode. Publish with `make upload-opencode
 <bare-semver>`, release with `make promote-opencode`.
 
+### Hermes Case (manual only — and NOT pinnable)
+
+Hermes is a git install; `runtimes/hermes/install.sh` stamps
+`/usr/local/lib/hermes-agent/.install_method=git` precisely so the upstream
+updater recognizes it. That updater takes **no target version** — `hermes update`
+always moves to upstream HEAD. The published `hermes.version` therefore decides
+*when* the fleet updates (via `min_version`), not *which* build it gets.
+
+```bash
+"hermes")
+    hermes update                       # no version arg exists upstream
+    hermes --version                    # abort if not runnable
+    # Landed version != metadata version → WARN, not fail: nothing on the
+    # device could have pinned it.
+    systemctl restart hermes-gateway    # unit is hermes-gateway.service, not hermes.service
+    ;;
+```
+
+The unit name is the one declared in `/usr/local/lib/os-runtimes/hermes/service`
+(`hermes-gateway`), and the run reports the version Hermes actually landed on,
+not the requested one. No `.previous` backup: like claudecode, the install is
+owned by the upstream tool, not by a file we copy.
+
 ---
 
 ## 6. HAL Runtime — Source & Integration

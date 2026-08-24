@@ -277,8 +277,8 @@ if [ "$APP" = "rollback" ]; then
   exit 0
 fi
 case "$APP" in
-  os-server|openclaw|codex|claudecode|opencode|bootstrap|web|hal|claude-desktop-buddy|device) ;;
-  *) echo "Unknown app: $APP. Use os-server, openclaw, codex, claudecode, opencode, bootstrap, web, hal, claude-desktop-buddy, or device."; exit 1 ;;
+  os-server|openclaw|codex|claudecode|opencode|hermes|bootstrap|web|hal|claude-desktop-buddy|device) ;;
+  *) echo "Unknown app: $APP. Use os-server, openclaw, codex, claudecode, opencode, hermes, bootstrap, web, hal, claude-desktop-buddy, or device."; exit 1 ;;
 esac
 
 if [ -z "${OTA_METADATA_URL:-}" ]; then
@@ -462,6 +462,30 @@ elif [ "$APP" = "opencode" ]; then
     echo "[software-update] opencode.service absent (runtime not active) — CLI updated, no restart"
   fi
   echo "opencode updated to $VERSION"
+elif [ "$APP" = "hermes" ]; then
+  # Hermes is a git install (runtimes/hermes/install.sh stamps
+  # /usr/local/lib/hermes-agent/.install_method=git so the upstream updater
+  # recognizes it). `hermes update` takes NO target version — it always moves to
+  # upstream HEAD. So $VERSION here is the version we EXPECT to land on: a
+  # mismatch afterwards is a WARNING, not a failure, because there is nothing on
+  # the device that could have pinned it.
+  #
+  # Unit is hermes-gateway.service, not hermes.service (declared in
+  # /usr/local/lib/os-runtimes/hermes/service).
+  command -v hermes >/dev/null 2>&1 || { echo "hermes is not installed on this device — switch the runtime to hermes first"; exit 1; }
+  export HOME=/root
+  hermes update || { echo "hermes update failed"; exit 1; }
+  HERMES_NOW=$(hermes --version 2>/dev/null | sed -nE 's/.*([0-9]+\.[0-9]+\.[0-9]+([-.+_][0-9A-Za-z.-]+)?).*/\1/p' | head -1)
+  [ -n "$HERMES_NOW" ] || { echo "hermes not runnable after update"; exit 1; }
+  if [ "$HERMES_NOW" != "$VERSION" ]; then
+    echo "[software-update] WARN: hermes landed on $HERMES_NOW, metadata expected $VERSION (upstream HEAD moved — hermes cannot be pinned)"
+  fi
+  if [ -f /etc/systemd/system/hermes-gateway.service ]; then
+    systemctl restart hermes-gateway
+  else
+    echo "[software-update] hermes-gateway.service absent (runtime not active) — CLI updated, no restart"
+  fi
+  echo "hermes updated to $HERMES_NOW"
 elif [ "$APP" = "web" ]; then
   [ -z "$URL" ] && { echo "Metadata has no url for web"; exit 1; }
   ZIP_TMP=$(mktemp)

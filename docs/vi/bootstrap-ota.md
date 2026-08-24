@@ -591,6 +591,29 @@ cố định nên nó CÓ backup `.previous`: `software-update rollback opencode
 được, khác claudecode. Publish bằng `make upload-opencode <semver-trần>`, thả
 bằng `make promote-opencode`.
 
+### Xử lý Hermes (chạy tay — và KHÔNG pin được version)
+
+Hermes cài kiểu git; `runtimes/hermes/install.sh` ghi
+`/usr/local/lib/hermes-agent/.install_method=git` chính là để updater upstream
+nhận ra. Updater đó **không nhận version đích** — `hermes update` luôn nhảy lên
+HEAD của upstream. Nên `hermes.version` publish ra chỉ quyết định *khi nào* fleet
+update (qua `min_version`), không quyết định *bản nào*.
+
+```bash
+"hermes")
+    hermes update                       # upstream không có tham số version
+    hermes --version                    # abort nếu không chạy được
+    # Version thực tế != version metadata → CẢNH BÁO, không fail: trên thiết bị
+    # không có gì pin được nó.
+    systemctl restart hermes-gateway    # unit là hermes-gateway.service, không phải hermes.service
+    ;;
+```
+
+Tên unit lấy đúng theo khai báo trong `/usr/local/lib/os-runtimes/hermes/service`
+(`hermes-gateway`), và lần chạy báo về version Hermes THỰC SỰ đạt được, không
+phải version yêu cầu. Không có backup `.previous`: giống claudecode, bản cài do
+tool upstream sở hữu chứ không phải file mình copy.
+
 ---
 
 ## 6. HAL Runtime — Nguồn & Tích Hợp
