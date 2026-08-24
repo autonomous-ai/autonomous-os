@@ -10,6 +10,8 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
+import numpy as np
+
 from hal.drivers.camera.factory import resolve_camera_class
 from hal.drivers.camera.host_capture_device import (
     HostCameraUnavailable,
@@ -39,10 +41,23 @@ class TestHostCameraDriver(unittest.TestCase):
         cap = mock.Mock()
         cap.isOpened.return_value = True
         cap.read.return_value = (False, None)
-        with mock.patch("hal.drivers.camera.host_capture_device.cv2.VideoCapture", return_value=cap):
+        with mock.patch("hal.drivers.camera.host_capture_device.cv2.VideoCapture", return_value=cap), \
+             mock.patch("hal.drivers.camera.host_capture_device.time.sleep"):
             with self.assertRaises(HostCameraUnavailable) as ctx:
                 probe_host_camera(0)
         self.assertIn("no frame", str(ctx.exception))
+
+    def test_probe_waits_out_the_capture_session_warmup(self):
+        # AVFoundation misses the first reads while the session starts. Judging
+        # the camera on read #1 downgrades a working webcam to virtual.
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        cap = mock.Mock()
+        cap.isOpened.return_value = True
+        cap.read.side_effect = [(False, None), (False, None), (True, frame)]
+        with mock.patch("hal.drivers.camera.host_capture_device.cv2.VideoCapture", return_value=cap), \
+             mock.patch("hal.drivers.camera.host_capture_device.time.sleep"):
+            probe_host_camera(0)  # must not raise
+        self.assertEqual(cap.read.call_count, 3)
 
     def test_macos_failure_names_the_permission_the_user_must_grant(self):
         cap = mock.Mock()
