@@ -24,6 +24,18 @@ def finalize_session(audio_buffer, last_partial, final_segments, last_speech_idx
         final_segments.append(last_partial[0])
     combined = " ".join(final_segments).strip()
 
+    # An STT final such as "." or "…" is not a user turn.  It used to pass
+    # every `if combined` gate, which could send an empty-looking `voice_followup`
+    # to the main agent and refresh the follow-up focus window.  Keep Unicode
+    # letters and numbers (including Vietnamese and CJK text); reject only a
+    # transcript made entirely of punctuation, symbols, or whitespace.
+    if combined and not any(char.isalnum() for char in combined):
+        logger.info(
+            "Session transcript has no spoken content; treating it as empty: %r",
+            combined,
+        )
+        combined = ""
+
     # Snapshot the FULL (untrimmed) buffer for SER before trimming.
     ser_audio_buffer = list(audio_buffer)
 
