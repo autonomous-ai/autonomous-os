@@ -936,9 +936,10 @@ class VoiceService:
                     )
                     # Speech is confirmed (Silero has agreed) — the moment to
                     # ask whether the user had turned toward the lamp just
-                    # before saying it. Reads the gaze buffer BACKWARDS; it does
-                    # not capture anything now, because the turn happened before
-                    # this line ran. No-op unless the feature is armed.
+                    # before saying it. Normally this reads the gaze buffer
+                    # backwards; only an empty-evidence result asks the watcher
+                    # to restore the remembered pose asynchronously, while this
+                    # audio capture keeps running. No-op unless armed.
                     try:
                         from hal.drivers.tracking import gaze
 
@@ -1567,6 +1568,24 @@ class VoiceService:
                     logger.info(
                         "Wake-word partial rejected — no matching final STT result; dropping turn"
                     )
+
+            # A VAD-confirmed utterance can begin while the camera is pointed
+            # away from the remembered user. In that precise no-evidence case
+            # gaze requested an asynchronous re-acquire at speech start. Check
+            # once more now that the same utterance has finished: the watcher
+            # may have collected enough stable face samples while STT captured
+            # it. A measured facing-away head never takes this recovery path.
+            if combined:
+                try:
+                    from hal.drivers.tracking import gaze
+
+                    gaze.on_speech_end()
+                except Exception as e:
+                    logger.debug("gaze speech-end check skipped: %s", e)
+                wakeword_followup_active = (
+                    wakeword_followup_active
+                    or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active())
+                )
 
             # Noise guard: a session can open on a noise blip that fools the entry
             # VAD, and STT then either finds no words or invents a short filler for

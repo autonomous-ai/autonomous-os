@@ -49,7 +49,7 @@ Lý do nằm ở hình dạng sản phẩm chứ không phải sở thích. Đè
 
 Hai đặc tính quyết định cách implement:
 
-* **Người ta quay TRƯỚC khi nói, không bao giờ sau.** Chờ mic báo rồi mới nhìn thì đã muộn — và tệ hơn là không bao giờ thấy được **sự chuyển** từ nhìn chỗ khác sang nhìn đèn, vốn là toàn bộ tín hiệu. Nên watcher lấy mẫu liên tục vào một ring buffer (`HAL_GAZE_BUFFER_S`, mặc định 3 s), còn tiếng nói chỉ kích hoạt việc **đọc ngược** buffer đó. Đây đúng mô hình mic đang dùng với pre-roll lookback của nó, thứ tồn tại để không mất âm đầu câu.
+* **Người ta quay TRƯỚC khi nói, không bao giờ sau.** Bình thường tiếng nói chỉ kích hoạt việc watcher **đọc ngược** ring buffer (`HAL_GAZE_BUFFER_S`, mặc định 3 s) — đúng mô hình pre-roll lookback của mic để không mất âm đầu câu. Có một nhánh recovery: nếu lần đọc này có ít hơn hai mẫu mặt dùng được, VAD yêu cầu watcher khôi phục pose user đã nhớ mà không chặn việc thu audio. Trước khi dispatch **chính transcript đó**, gaze được kiểm tra thêm một lần. Đầu đã đo được là đang quay đi sẽ không vào nhánh này, nên tiếng nói nghe ké vẫn không làm lamp quay về ai đó rồi mở gate.
 * **Có mặt người KHÔNG phải tín hiệu.** User ngồi cạnh đèn cả ngày nên "phát hiện có người" gần như luôn đúng và không lọc được gì; "phát hiện có mặt" cũng chỉ hơn chút — mặt quay về màn hình vẫn detect ra. Gate đặt trên **hướng đầu**, đủ chặt để loại tư thế rất thường gặp: nói chuyện với đồng nghiệp trong khi thân vẫn hướng về bàn.
 
 Head yaw suy ra từ 5 landmark mà `YuNet` vốn đã trả về (`detect_face_with_landmarks` trong `detection.py`): độ lệch của mũi so với trung điểm hai mắt, đo **dọc theo đường nối hai mắt** và chuẩn hoá bằng nửa khoảng cách hai mắt, chính là `sin(yaw)` dưới phép chiếu pinhole. Đo dọc đường nối mắt thay vì theo trục x của ảnh là thứ giữ cho đầu **nghiêng** (chống tay lên má) không bị đọc thành đầu quay. Không load thêm model nào, không chạy thêm inference nào; ở `HAL_GAZE_SAMPLE_FPS` (mặc định 6) chi phí là số lẻ trên CPU 8 nhân — đo thật chứ không suy đoán: CPU idle 69.2% xuống 68.8% khi watcher chạy.
@@ -74,8 +74,8 @@ Khi trong khung có nhiều mặt, mặt được tính là mặt **gần tâm k
 | `HAL_GAZE_BUFFER_S` | 3.0 | Lịch sử yaw giữ lại. Phải lớn hơn `WINDOW_S`. |
 | `HAL_GAZE_COOLDOWN_S` | 5 | Khoảng cách tối thiểu giữa hai lần gaze mở gate. |
 | `HAL_GAZE_REPOINT` | `true` | Quay về bearing đã nhớ khi lâu không thấy ai. |
-| `HAL_GAZE_REPOINT_AFTER_S` | 45 | Phải vắng mặt bao lâu mới quay. |
-| `HAL_GAZE_REPOINT_COOLDOWN_S` | 300 | Tối đa một lần quay trong khoảng này. |
+| `HAL_GAZE_REPOINT_AFTER_S` | 12 | Phải vắng mặt bao lâu mới quay. Recovery do voice kích hoạt khi không có evidence sẽ bỏ qua khoảng chờ này, nhưng không bỏ qua cooldown di chuyển. |
+| `HAL_GAZE_REPOINT_COOLDOWN_S` | 60 | Tối đa một lần quay trong khoảng này, kể cả recovery do voice kích hoạt. |
 | `HAL_GAZE_REPOINT_MIN_CONFIDENCE` | 0.5 | Dưới confidence này thì bearing không đáng để quay. |
 | `HAL_GAZE_PITCH` | `false` trên lamp (mặc định trong code là `true`) | Nâng/hạ `wrist_pitch` để khuôn mặt nằm trong khung thay vì ở phía trên khung. Đặt trên bàn thì đèn khởi điểm chĩa vào bàn phím, và không có cú chỉnh trái-phải nào cứu được chuyện đó. Nó từng hội tụ — đo được 45% → 21% → 16% chiều cao khung — nhưng **đang tắt trên lamp từ 21/08/2026**, sau khi dải servo `hal_follower` được calib lại: vòng lặp giờ đẩy `wrist_pitch` −20.7 → −35.7 → −46.0 → −51.7 → −59.2 → −72.8 → −78.3 mà lần nhìn nào cũng vẫn báo mặt Ở TRÊN tâm, tức mỗi lần chỉnh lại làm sai số to thêm. Hai nghi phạm chưa kiểm chứng — phép A/B xác định chiều của khớp này có trước lần calib nên dấu có thể đã đảo, và idle có vẻ kéo ngược cú chỉnh (ra lệnh −41.4, lần nhìn kế tiếp vẫn đọc −26.4). Đừng bật lại khi chưa xác nhận được một trong hai; xem ghi chú tại chính biến này trong `robots/lamp/rootfs/opt/hal/.env`. |
 | `HAL_GAZE_PITCH_DEG_PER_FRAME` | 45 | Số độ `wrist_pitch` cho trọn một chiều cao khung. Là hạt giống, không phải hiệu chuẩn: sau mỗi bước nó đo lại. |
@@ -84,6 +84,8 @@ Khi trong khung có nhiều mặt, mặt được tính là mặt **gần tâm k
 | `HAL_GAZE_PITCH_COOLDOWN_S` | 4 | Khoảng cách tối thiểu giữa hai lần chỉnh. |
 | `HAL_GAZE_PITCH_MAX_BLIND_STEPS` | 0 | Số lần được chỉnh dựa trên suy đoán từ thân người thay vì mặt thật, trước khi phải có một khuôn mặt xác nhận hướng. |
 | `HAL_GAZE_IDLE_ANCHOR` | `true` | Dời tâm vòng idle về tư thế đã nhìn thấy mặt, để idle không kéo ngược cú chỉnh. |
+
+Image của lamp chủ động override `HAL_GAZE_MAX_YAW_DEG` thành **60°**. Đây là calibration riêng cho thiết bị, không phải mặc định chung: trên lamp-0c89, YuNet đo user đang nhìn thẳng vào camera qua kính thành 55,7–59,1°. Ngưỡng tối thiểu hai mẫu hợp lệ và phiếu bầu 60% vẫn giữ nguyên, nên một frame đơn lẻ vẫn không đủ để mở gate.
 
 Hai tham số trong đó là **đo ra**, không phải chọn. `MIN_FACE_PX` có vì probe trên thiết bị bắt được ba đồng nghiệp ở nền cỡ 8–18 px cho ra yaw 49 / 20 / 29 — nhiễu thuần — bên cạnh người dùng ngồi tại bàn cỡ 78 px với yaw 90 hoàn toàn đúng; hai nhóm không chồng lấn nên ngưỡng này xoá cả một lớp rác chứ không phải chỉnh cho vừa. `MIN_FACING_RATIO` có vì trail của một người ngồi yên đọc ra `[10,15,8,25,36,1,-,90]`, mức dao động mà không cái đầu nào làm được, nên mọi luật đòi MỌI mẫu phải đạt đều sẽ loại oan họ.
 

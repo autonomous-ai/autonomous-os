@@ -49,7 +49,7 @@ The reason is device shape rather than preference. A desk lamp sits an arm's len
 
 Two properties decide the implementation:
 
-* **People turn before they speak, never after.** Sampling the camera when the mic fires would arrive after the gesture and could never observe the transition from looking away to looking here, which is the entire signal. So the watcher samples continuously into a ring buffer (`HAL_GAZE_BUFFER_S`, default 3 s) and speech triggers a read **backwards** through it — the same shape as the mic's own pre-roll lookback, which exists so the start of a sentence is not lost.
+* **People turn before they speak, never after.** Normally speech reads the watcher's ring buffer (`HAL_GAZE_BUFFER_S`, default 3 s) **backwards** — the same shape as the mic's own pre-roll lookback, which exists so the start of a sentence is not lost. There is one recovery path: if that read has fewer than two usable face samples, VAD asks the watcher to restore the remembered user pose without blocking audio capture. Before dispatching that *same* transcript it checks gaze once more. A head measured facing away does not take this path, so overheard speech still cannot turn the lamp toward a person and open the gate.
 * **Presence is not the signal.** The user is visible beside this lamp all day, so "a person is detected" gates nothing, and "a face is detected" barely more — a face turned to a monitor still detects. The gate is on head **orientation**, tight enough to reject the common posture of talking to a colleague with the torso still square to the desk.
 
 Head yaw is derived from the five landmarks `YuNet` already returns (`detect_face_with_landmarks` in `detection.py`): the nose's offset from the eye midpoint, measured along the eye line and normalised by half the inter-ocular distance, is `sin(yaw)` under a pinhole projection. Measuring along the eye line rather than the image x-axis is what keeps a **rolled** head (resting on a hand) from reading as a turned one. No second model is loaded and no extra inference runs; at `HAL_GAZE_SAMPLE_FPS` (default 6) the cost is a rounding error on the 8-core CPU — measured, not assumed: CPU idle went 69.2% to 68.8% with the watcher running.
@@ -74,8 +74,8 @@ When several faces are in frame, the one whose head counts is the one **nearest 
 | `HAL_GAZE_BUFFER_S` | 3.0 | Yaw history retained. Must exceed `WINDOW_S`. |
 | `HAL_GAZE_COOLDOWN_S` | 5 | Minimum gap between gaze-opened gates, so one conversation cannot open one per sentence. |
 | `HAL_GAZE_REPOINT` | `true` | Turn toward the remembered bearing when nobody has been visible. |
-| `HAL_GAZE_REPOINT_AFTER_S` | 45 | How long nobody must be visible first. |
-| `HAL_GAZE_REPOINT_COOLDOWN_S` | 300 | At most one turn per this interval. |
+| `HAL_GAZE_REPOINT_AFTER_S` | 12 | How long nobody must be visible first. A voice-triggered empty-evidence recovery bypasses this delay, but not the movement cooldown. |
+| `HAL_GAZE_REPOINT_COOLDOWN_S` | 60 | At most one turn per this interval, including a voice-triggered recovery. |
 | `HAL_GAZE_REPOINT_MIN_CONFIDENCE` | 0.5 | Bearing confidence below which turning is not worth it. |
 | `HAL_GAZE_PITCH` | `false` on lamp (code default `true`) | Raise or lower `wrist_pitch` so a face sits inside the frame rather than above it. On a desk the lamp starts out pointing at the keyboard, and no left-right aim recovers from that. It did converge once — measured 45% → 21% → 16% of frame height — but **it is off on lamp since 21/08/2026**, after the `hal_follower` servo ranges were recalibrated: the loop now walks `wrist_pitch` −20.7 → −35.7 → −46.0 → −51.7 → −59.2 → −72.8 → −78.3 while every look still reports the face ABOVE centre, so each correction grows the error it is measuring. Two unverified candidates — the A/B that fixed this joint's direction predates the recalibration and the sign may have flipped, and idle appears to drag the correction back (commanded −41.4, next look still read −26.4). Do not re-enable until one is confirmed; see the note on the flag in `robots/lamp/rootfs/opt/hal/.env`. |
 | `HAL_GAZE_PITCH_DEG_PER_FRAME` | 45 | Degrees of `wrist_pitch` per full frame height. A seed, not a calibration: the loop re-measures after every step. |
@@ -84,6 +84,8 @@ When several faces are in frame, the one whose head counts is the one **nearest 
 | `HAL_GAZE_PITCH_COOLDOWN_S` | 4 | Minimum gap between corrections. |
 | `HAL_GAZE_PITCH_MAX_BLIND_STEPS` | 0 | Corrections allowed from the coarse torso fallback rather than a real face, before a face must confirm the direction. |
 | `HAL_GAZE_IDLE_ANCHOR` | `true` | Re-centre the idle loop on the pose a face was seen from, so idle does not walk the correction back. |
+
+The lamp image deliberately overrides `HAL_GAZE_MAX_YAW_DEG` to **60°**. This is device calibration, not a generic default: on lamp-0c89 YuNet measured a user looking directly into the camera through glasses at 55.7–59.1°. It does not relax the two-valid-sample minimum or the 60% vote, so a lone frame still cannot open the gate.
 
 Two of these were measured rather than chosen. `MIN_FACE_PX` exists because a device probe found three background colleagues detected at 8-18 px yielding yaw 49 / 20 / 29 — noise — beside the seated user at 78 px whose 90 was correct; the populations do not overlap, so the floor removes the class rather than tuning against it. `MIN_FACING_RATIO` exists because a trail of a stationary user read `[10,15,8,25,36,1,-,90]`, a spread no head performs, so any rule demanding every sample pass would reject them.
 

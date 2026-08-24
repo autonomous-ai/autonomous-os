@@ -16,10 +16,12 @@ Two design points worth keeping straight:
     then looking would arrive after the gesture is over, and — worse — could
     never see the TRANSITION from looking away to looking here, which is the
     whole signal. So the camera samples continuously into a short ring buffer
-    and speech merely triggers a read BACKWARDS through it. This mirrors what
+    and speech normally triggers a read BACKWARDS through it. This mirrors what
     the mic already does with its own pre-roll: it records into a lookback and
     recovers the ~640 ms before the trigger, or it would lose the start of every
-    sentence.
+    sentence. If no usable face evidence exists at all, the watcher first
+    restores the remembered pose and the completed same utterance gets one
+    constrained recovery check.
 
   * PRESENCE IS NOT THE SIGNAL. The user sits beside this lamp all day, so "a
     person is visible" is true almost always and gates nothing. "A face is
@@ -69,6 +71,11 @@ _last_dy_from_face: bool = False
 _last_pitch_t: float = 0.0
 # Consecutive corrections driven by the fallback rather than by a face.
 _blind_pitch_steps: int = 0
+# A VAD-confirmed utterance found no recent usable face. The watcher consumes
+# this request and restores the remembered pose without blocking the mic loop;
+# the completed utterance gets one final gaze check after the camera settles.
+_speech_repoint_requested = threading.Event()
+_speech_repoint_requested_t: float = 0.0
 
 
 def head_yaw_deg(landmarks: Sequence[float]) -> Optional[float]:
@@ -570,17 +577,24 @@ def _sample_once() -> Optional[str]:  # noqa: C901
     return None
 
 
-def on_speech_start() -> bool:
-    """Called the moment VAD confirms speech. Decides, logs, maybe opens the gate.
+def _check_speech(stage: str, *, request_repoint: bool) -> bool:
+    """Decide whether the current utterance was addressed to the lamp.
 
-    Returns True when the gate was actually opened, which is never in shadow
-    mode. Never raises: a failure here must degrade to today's behaviour (wake
-    phrase and button only), not break the voice loop.
+    The normal start check uses only evidence from before speech. A missing face
+    is different from a facing-away verdict: it requests one return to the
+    remembered user pose, then the final check may use the evidence gathered
+    while that same utterance was being captured.
     """
-    global _last_grant_t
+    global _last_grant_t, _speech_repoint_requested_t
     try:
         if not config.GAZE_WAKE_ENABLED:
             return False
+        # A noise-only capture may never reach on_speech_end() because it has
+        # no transcript. Starting a fresh VAD-confirmed utterance supersedes
+        # that abandoned request rather than letting it leak into this one.
+        if request_repoint:
+            _speech_repoint_requested_t = 0.0
+            _speech_repoint_requested.clear()
 
         ratio, considered = facing_ratio()
         samples = snapshot()
@@ -607,13 +621,26 @@ def on_speech_start() -> bool:
             for _, yaw, _, _ in samples[-8:]
         )
         logger.info(
-            "[gaze] speech: yaw=%s face=%spx edge=%s facing=%.0f%%/%.0f%% of %d "
+            "[gaze] %s: yaw=%s face=%spx edge=%s facing=%.0f%%/%.0f%% of %d "
             "trail=[%s] -> %s%s",
-            yaw_txt, px_txt, edge_txt, ratio * 100.0,
+            stage, yaw_txt, px_txt, edge_txt, ratio * 100.0,
             config.GAZE_MIN_FACING_RATIO * 100.0, considered, trail, verdict,
             " (shadow)" if config.GAZE_WAKE_SHADOW else "",
         )
-        if not would or cooling or config.GAZE_WAKE_SHADOW:
+        if not would:
+            # Do not turn toward somebody who was measured facing away: that is
+            # precisely the signal that the nearby speech may be for somebody
+            # else. Reacquire only when there was too little usable evidence to
+            # make any orientation decision at all.
+            if request_repoint and considered < config.GAZE_MIN_SAMPLES:
+                _speech_repoint_requested_t = now
+                _speech_repoint_requested.set()
+                logger.info(
+                    "[gaze] %s: no usable face evidence; requesting remembered-pose reacquire",
+                    stage,
+                )
+            return False
+        if cooling or config.GAZE_WAKE_SHADOW:
             return False
 
         import hal.app_state as state
@@ -621,13 +648,43 @@ def on_speech_start() -> bool:
         voice = getattr(state, "voice_service", None)
         if voice is None or not hasattr(voice, "grant_wakeword_focus"):
             return False
-        granted = bool(voice.grant_wakeword_focus("gaze"))
+        source = "gaze" if stage == "speech-start" else "gaze-reacquired"
+        granted = bool(voice.grant_wakeword_focus(source))
         if granted:
             _last_grant_t = now
         return granted
     except Exception as e:
-        logger.debug("[gaze] speech-start check skipped: %s", e)
+        logger.debug("[gaze] %s check skipped: %s", stage, e)
         return False
+
+
+def on_speech_start() -> bool:
+    """Check the pre-speech gaze window when VAD confirms speech."""
+    return _check_speech("speech-start", request_repoint=True)
+
+
+def on_speech_end() -> bool:
+    """Retry one utterance after a voice-triggered pose reacquire.
+
+    This is intentionally conditional on a failed start check with no usable
+    face. It is not a general second chance for a person who was observed
+    speaking away from the lamp.
+    """
+    global _speech_repoint_requested_t
+    if _speech_repoint_requested_t <= 0.0:
+        return False
+    _speech_repoint_requested_t = 0.0
+    _speech_repoint_requested.clear()
+    return _check_speech("speech-end", request_repoint=False)
+
+
+def _consume_speech_repoint(now: float) -> None:
+    """Run a pending VAD request from the watcher, never from the mic thread."""
+    if not _speech_repoint_requested.is_set():
+        return
+    _speech_repoint_requested.clear()
+    if not _maybe_repoint(now, force=True):
+        logger.info("[gaze] speech-start reacquire unavailable")
 
 
 def _maybe_pitch(now: float) -> None:
@@ -726,7 +783,7 @@ def _maybe_pitch(now: float) -> None:
         logger.debug("[gaze] pitch move skipped: %s", e)
 
 
-def _maybe_repoint(now: float) -> None:
+def _maybe_repoint(now: float, *, force: bool = False) -> bool:
     """Turn toward the remembered bearing when nobody has been visible.
 
     Deliberately conservative: this is the one thing in the watcher that MOVES
@@ -737,11 +794,14 @@ def _maybe_repoint(now: float) -> None:
     global _last_repoint_t
 
     if not (config.GAZE_REPOINT_ENABLED and config.GAZE_WAKE_ENABLED):
-        return
-    if (now - _last_face_t) < config.GAZE_REPOINT_AFTER_S:
-        return
+        return False
+    if not force and (now - _last_face_t) < config.GAZE_REPOINT_AFTER_S:
+        return False
+    # Voice may bypass the long *absence* delay, but never the movement
+    # cooldown. VAD intentionally admits some noise so it cannot make the lamp
+    # repeatedly turn just because no face is visible.
     if (now - _last_repoint_t) < config.GAZE_REPOINT_COOLDOWN_S:
-        return
+        return False
     # Not while the framing is being corrected. These two both move the head
     # and both re-anchor idle, so together they fought: device-observed, pitch
     # lifted the camera to a face it could see (-72.8 -> -61.9) and thirteen
@@ -754,7 +814,7 @@ def _maybe_repoint(now: float) -> None:
     # visible RIGHT NOW, while repoint is a guess about where a face was last
     # seen, which is worth acting on only when nothing is visible at all.
     if (now - _last_pitch_t) < config.GAZE_REPOINT_AFTER_S:
-        return
+        return False
 
     import hal.app_state as state
 
@@ -762,20 +822,25 @@ def _maybe_repoint(now: float) -> None:
 
     svc = getattr(state, "animation_service", None)
     if svc is None or getattr(svc, "_tracking_active", False):
-        return
+        return False
     if getattr(svc, "_music_playing", False):
-        return  # the groove owns the body
+        return False  # the groove owns the body
 
     est = user_bearing.read_estimate()
     if est is None or est.confidence < config.GAZE_REPOINT_MIN_CONFIDENCE:
-        return
+        return False
 
     try:
         current = svc.get_positions()
         target, step = aim._bearing_step_target(svc, est, current)
         if target is None:
             _last_repoint_t = now  # already there; do not re-check every sample
-            return
+            logger.info(
+                "[gaze] %s: already at remembered bearing %+.1f",
+                "speech-start reacquire" if force else "repoint",
+                est.bearing_deg,
+            )
+            return True
         duration = aim.min_move_duration(
             state.safety_policy, target, current, aim.MOVE_DURATION_S
         )
@@ -789,13 +854,22 @@ def _maybe_repoint(now: float) -> None:
         _anchor_idle_from_pose(svc, getattr(est, "pose", None))
         discard_samples()
         _last_repoint_t = now
-        logger.info(
-            "[gaze] nobody visible for %.0fs — turning %+.1f deg to the "
-            "remembered bearing %+.1f (conf=%.2f)",
-            now - _last_face_t, step, est.bearing_deg, est.confidence,
-        )
+        if force:
+            logger.info(
+                "[gaze] speech-start reacquire: turning %+.1f deg to remembered "
+                "bearing %+.1f (conf=%.2f)",
+                step, est.bearing_deg, est.confidence,
+            )
+        else:
+            logger.info(
+                "[gaze] nobody visible for %.0fs — turning %+.1f deg to the "
+                "remembered bearing %+.1f (conf=%.2f)",
+                now - _last_face_t, step, est.bearing_deg, est.confidence,
+            )
+        return True
     except Exception as e:
         logger.debug("[gaze] repoint skipped: %s", e)
+        return False
 
 
 def _loop() -> None:
@@ -860,6 +934,7 @@ def _loop() -> None:
                         counted / elapsed, config.GAZE_SAMPLE_FPS, why,
                     )
                     counted, blocked, counted_from = 0, {}, now
+                _consume_speech_repoint(now)
                 # Framing first: a face inside the frame is what everything
                 # else is measured from, and turning to a bearing that still
                 # points at the desk finds nobody however right the bearing is.
@@ -906,6 +981,7 @@ def reset_for_test() -> None:
     """Clear buffered samples and the cooldown between tests."""
     global _last_grant_t, _last_face_t, _last_repoint_t
     global _last_dy_frac, _last_pitch_t, _blind_pitch_steps, _last_dy_from_face
+    global _speech_repoint_requested_t
     with _samples_lock:
         _samples.clear()
     _last_grant_t = 0.0
@@ -915,4 +991,6 @@ def reset_for_test() -> None:
     _last_pitch_t = 0.0
     _blind_pitch_steps = 0
     _last_dy_from_face = False
+    _speech_repoint_requested_t = 0.0
+    _speech_repoint_requested.clear()
     globals()["_last_anchor"] = None

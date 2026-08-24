@@ -6,6 +6,7 @@ what it currently outputs.
 """
 
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -388,6 +389,38 @@ def test_a_glance_too_brief_to_be_addressing_does_not_open_the_gate(armed, voice
     assert voice.grants == []
 
 
+def test_missing_face_requests_reacquire_and_can_authorize_the_same_utterance(armed, voice):
+    """A lamp that lost framing must not make the user repeat their sentence."""
+    assert gaze.on_speech_start() is False
+    assert gaze._speech_repoint_requested.is_set()
+
+    _hold_now()  # samples gathered after the watcher restored the remembered pose
+    assert gaze.on_speech_end() is True
+    assert voice.grants == ["gaze-reacquired"]
+    assert not gaze._speech_repoint_requested.is_set()
+
+
+def test_a_measured_away_head_never_requests_the_reacquire_exception(armed, voice):
+    now = gaze.time.monotonic()
+    _trail(now, [90.0, 90.0, 90.0, 90.0])
+    assert gaze.on_speech_start() is False
+    assert not gaze._speech_repoint_requested.is_set()
+
+    _hold_now()
+    assert gaze.on_speech_end() is False
+    assert voice.grants == []
+
+
+def test_voice_rechecks_reacquired_gaze_before_realtime_can_be_authorized():
+    """The recovery must still apply to the utterance that caused the turn."""
+    voice_source = (
+        Path(__file__).parents[1] / "drivers" / "voice" / "voice_service.py"
+    ).read_text()
+    assert voice_source.index("gaze.on_speech_end()") < voice_source.index(
+        "# Noise guard: a session can open"
+    )
+
+
 def test_the_cooldown_stops_one_conversation_opening_a_gate_per_sentence(armed, voice):
     _hold_now()
     assert gaze.on_speech_start() is True
@@ -481,6 +514,12 @@ def test_a_brief_absence_does_not_send_the_head_hunting(body):
     _absent_for(config.GAZE_REPOINT_AFTER_S - 1)
     gaze._maybe_repoint(gaze.time.monotonic())
     assert body.moves == []
+
+
+def test_a_speech_reacquire_bypasses_the_background_absence_delay(body):
+    _absent_for(0.0)
+    assert gaze._maybe_repoint(gaze.time.monotonic(), force=True) is True
+    assert body.moves and body.moves[0]["base_yaw.pos"] == pytest.approx(4.0)
 
 
 def test_it_turns_at_most_once_per_cooldown(body):

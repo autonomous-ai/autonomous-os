@@ -1044,7 +1044,10 @@ GAZE_MAX_YAW_DEG: float = float(os.environ.get("HAL_GAZE_MAX_YAW_DEG", "25"))
 # not a separate "hold" and "speech window": both described the same span — the
 # moments between turning toward the lamp and starting to speak — and two names
 # for one span drift apart. People turn BEFORE they speak, so this reaches
-# backwards only; nothing after the trigger is ever consulted.
+# backwards only. The sole exception is an empty-evidence recovery: VAD asks
+# the watcher to restore the remembered pose, then the completed SAME utterance
+# is checked once more. A head actually measured facing away never gets that
+# exception, so this does not turn general speech into a wake trigger.
 #
 # 1.5 s is also the smallest window that carries enough samples to vote with. At
 # 3 fps a 0.8 s window holds three observations, and three noisy samples cannot
