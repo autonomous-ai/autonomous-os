@@ -1153,6 +1153,35 @@ class RealtimeOrchestrator:
             )
             return False
 
+        # Resolve the tool call BEFORE the frame goes out. Both the image and
+        # the replayed audio below travel on `send_realtime_input`, which Gemini
+        # refuses while a call it emitted is unanswered — so leaving this call
+        # pending does not merely risk a 1008, it means the gate in
+        # `_async_send_input` drops the frame AND every replayed audio frame,
+        # and the turn ends with nothing to answer from (main-agent fallback).
+        #
+        # This path used to send no result at all. That worked only because the
+        # gate carried a 10s expiry and a look with a slow aim (deadline 8s)
+        # usually outlived it — flaky by construction. The expiry is gone, so
+        # the call has to be answered rather than waited out.
+        #
+        # trigger_response=True is the only variant that reaches Gemini's
+        # send_tool_response and clears the gate; trigger_response=False is the
+        # fire-and-forget path, which deliberately tells Gemini nothing and
+        # therefore leaves the session quarantined. The response it triggers is
+        # cancelled immediately after by end_turn() + skip_next_turn_done() in
+        # the caller — the payload tells the model to hold, and the replayed
+        # turn is what it actually answers.
+        with look_debug.stage("ack_tool_call"):
+            self._agent.send(
+                [
+                    FunctionCallResultInput(
+                        call_id=output.call_id,
+                        output='{"result": "frame incoming; wait for the image"}',
+                        trigger_response=True,
+                    )
+                ]
+            )
         with look_debug.stage("send_image"):
             self._agent.send([ImageInput(image=frame)])
         self._looked_this_turn = True
