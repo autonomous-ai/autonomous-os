@@ -115,6 +115,14 @@ each previously active service must pass its loopback health endpoint or the
 known-good profile is restored automatically. Use
 `sudo software-update rollback device` for a manual recovery.
 
+HAL OTA keeps the complete previous `/opt/hal` runtime—its `.env`, virtual
+environment, and uv cache—at `/root/bootstrap/rollback/hal.previous`. The new
+runtime is unpacked and synchronized in a sibling staging directory; only then
+is it swapped into place. HAL is returned to its prior active/inactive state and
+an active service must answer `http://127.0.0.1:5001/health`. Any staging or
+health failure restores the known-good runtime automatically. Use
+`sudo software-update rollback hal` for a manual recovery.
+
 `spike.sh` is a **thin orchestrator** — it reimplements nothing, it just runs the
 component scripts in order. Each of those also runs standalone:
 

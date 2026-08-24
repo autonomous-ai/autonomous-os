@@ -501,35 +501,25 @@ It reads the OTA metadata URL from `metadata_url` in `/root/config/bootstrap.jso
 (an explicit `OTA_METADATA_URL` env var overrides it for manual/debug runs), and
 aborts with an error if neither is set — no compiled-in URL.
 
-### HAL Case (NEW)
+### HAL Case
 
 ```bash
 "hal")
-    echo "Updating HAL to $VERSION..."
+    # Preserve the complete runtime and prior service state.
+    systemctl stop hal
+    mv /opt/hal /root/bootstrap/rollback/hal.previous
 
-    # Download
-    curl -fsSL "$URL" -o /tmp/hal-update.zip
+    # Build the candidate in a sibling directory. .env, venv, and uv cache
+    # are copied from the retained runtime before uv sync.
+    unzip -q "$ZIP" -d /opt/.hal.new
+    cp -a /root/bootstrap/rollback/hal.previous/{.env,.venv,.uv-cache} /opt/.hal.new/
+    (cd /opt/.hal.new && uv sync --python 3.12 --extra hardware)
+    mv /opt/.hal.new /opt/hal
 
-    # Stop service before updating
-    systemctl stop hal.service
-
-    # Backup current
-    cp -r /opt/hal /opt/hal.bak 2>/dev/null || true
-
-    # Extract (preserve venv if only code changed, or rebuild)
-    unzip -o /tmp/hal-update.zip -d /opt/hal/
-
-    # Reinstall dependencies if requirements.txt changed
-    /opt/hal/venv/bin/pip install -r /opt/hal/requirements.txt --quiet
-
-    # Restart
-    systemctl start hal.service
-
-    # Cleanup
-    rm -f /tmp/hal-update.zip
-    rm -rf /opt/hal.bak
-
-    echo "HAL updated to $VERSION"
+    systemctl restart hal
+    curl -fsS http://127.0.0.1:5001/health
+    # Any staging or health failure restores hal.previous and its old state.
+    # Operators can also run: software-update rollback hal
     ;;
 ```
 

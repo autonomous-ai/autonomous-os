@@ -29,6 +29,7 @@ set -e
 BOOTSTRAP_JSON="/root/config/bootstrap.json"
 ROLLBACK_DIR="/root/bootstrap/rollback"
 WEB_ROOT="/usr/share/nginx/html/setup"
+HAL_DIR="/opt/hal"
 
 # Web is a directory install, so retain the complete prior bundle and whether
 # nginx was running. The backup is only replaced after the new ZIP has been
@@ -154,11 +155,37 @@ restore_device_backup() {
   restore_device_rootfs
 }
 
+save_hal_service_state() {
+  mkdir -p "$ROLLBACK_DIR"
+  if systemctl is-active --quiet hal; then echo active >"$ROLLBACK_DIR/hal.service-state"; else echo inactive >"$ROLLBACK_DIR/hal.service-state"; fi
+}
+
+hal_was_active() {
+  [ "$(cat "$ROLLBACK_DIR/hal.service-state" 2>/dev/null || echo active)" = active ]
+}
+
+restore_hal_service_state() {
+  if hal_was_active; then systemctl restart hal; else systemctl stop hal 2>/dev/null || true; fi
+}
+
+check_hal() {
+  [ -f "$HAL_DIR/VERSION_HAL" ] || return 1
+  ! hal_was_active || { systemctl is-active --quiet hal && wait_for_url http://127.0.0.1:5001/health 120; }
+}
+
+restore_hal_backup() {
+  local backup="$ROLLBACK_DIR/hal.previous" failed="$ROLLBACK_DIR/hal.failed"
+  [ -d "$backup" ] || { echo "No rollback backup for hal" >&2; return 1; }
+  rm -rf "$failed"
+  [ ! -e "$HAL_DIR" ] || mv "$HAL_DIR" "$failed"
+  mv "$backup" "$HAL_DIR"
+}
+
 [ "$(id -u)" -ne 0 ] && { echo "Run as root."; exit 1; }
-[ $# -lt 1 ] && { echo "Usage: software-update <component>|rollback <os-server|bootstrap|web|device>"; exit 1; }
+[ $# -lt 1 ] && { echo "Usage: software-update <component>|rollback <os-server|bootstrap|web|device|hal>"; exit 1; }
 APP="$1"
 if [ "$APP" = "rollback" ]; then
-  [ $# -eq 2 ] || { echo "Usage: software-update rollback <os-server|bootstrap|web|device>"; exit 1; }
+  [ $# -eq 2 ] || { echo "Usage: software-update rollback <os-server|bootstrap|web|device|hal>"; exit 1; }
   ROLLBACK_TARGET="$2"
   if [ "$ROLLBACK_TARGET" = "web" ]; then
     BACKUP="$ROLLBACK_DIR/web.previous"
@@ -199,6 +226,22 @@ if [ "$APP" = "rollback" ]; then
     restore_device_service_state
     check_device_profile || { echo "device rollback health check failed"; exit 1; }
     echo "device restored from $BACKUP"
+    exit 0
+  fi
+  if [ "$ROLLBACK_TARGET" = "hal" ]; then
+    BACKUP="$ROLLBACK_DIR/hal.previous"
+    [ -d "$BACKUP" ] || { echo "No rollback backup for hal"; exit 1; }
+    BLOCKED_VERSION="$(cat "$HAL_DIR/VERSION_HAL" 2>/dev/null || true)"
+    if [ -z "$BLOCKED_VERSION" ] && [ -f /root/bootstrap/state.json ]; then BLOCKED_VERSION=$(jq -r '.components.hal // empty' /root/bootstrap/state.json 2>/dev/null || true); fi
+    if [ -n "$BLOCKED_VERSION" ] && [ -f "$BOOTSTRAP_JSON" ]; then
+      CONFIG_TMP=$(mktemp)
+      if jq --arg version "$BLOCKED_VERSION" '.rollback_versions = (.rollback_versions // {}) | .rollback_versions.hal = $version' "$BOOTSTRAP_JSON" >"$CONFIG_TMP"; then mv "$CONFIG_TMP" "$BOOTSTRAP_JSON"; else rm -f "$CONFIG_TMP"; echo "WARN: could not record rollback version; lower min_version before the next OTA poll"; fi
+    fi
+    systemctl stop hal 2>/dev/null || true
+    restore_hal_backup
+    restore_hal_service_state
+    check_hal || { echo "HAL rollback health check failed"; exit 1; }
+    echo "hal restored from $BACKUP"
     exit 0
   fi
   case "$ROLLBACK_TARGET" in
@@ -368,8 +411,6 @@ elif [ "$APP" = "hal" ]; then
   [ -z "$URL" ] && { echo "Metadata has no url for hal"; exit 1; }
   ZIP_TMP=$(mktemp)
   download_verified "$URL" "$ZIP_TMP" "$SHA256" || { echo "Failed checksum verification for hal"; exit 1; }
-  HAL_DIR="/opt/hal"
-  unzip -o -q "$ZIP_TMP" -d "$HAL_DIR"
   # uv is a per-user install and this runs under sudo, whose secure_path does not
   # include /home/pollen/.local/bin — so `command -v uv` misses the copy Pollen
   # ships. The lamp-derived fallback (/root/.local/bin/uv) does not exist here at
@@ -385,18 +426,53 @@ elif [ "$APP" = "hal" ]; then
   # Cache INSIDE /opt/hal, exactly as spike-hal.sh installed it. uv reuses the
   # cache it finds; pointing at root's default instead re-downloads several GB
   # (torch and friends) onto a disk with ~1.8 GB free.
-  export UV_CACHE_DIR="$HAL_DIR/.uv-cache"
+  save_hal_service_state
+  systemctl stop hal 2>/dev/null || true
+  rm -rf "$ROLLBACK_DIR/hal.previous"
+  if ! mv "$HAL_DIR" "$ROLLBACK_DIR/hal.previous"; then
+    restore_hal_service_state || true
+    exit 1
+  fi
+  DIR_TMP=$(mktemp -d "$(dirname "$HAL_DIR")/.hal.new.XXXXXX")
+  export UV_CACHE_DIR="$DIR_TMP/.uv-cache"
   # 30s is uv's default per-request timeout — too tight for a 300 MB wheel.
   export UV_HTTP_TIMEOUT=180
-  find "$UV_CACHE_DIR" -name "lerobot.egg-info" -type d 2>/dev/null | xargs rm -rf
   # --extra reachy is NOT optional here. `uv sync` is authoritative: it removes
   # anything outside the resolved extras, so syncing with `--extra hardware`
   # alone UNINSTALLS the Reachy SDK and leaves HAL with no motion or camera
   # driver. spike-hal.sh:146 installs with both extras; these must stay in step.
-  cd "$HAL_DIR" && "$UV_BIN" sync --python 3.12 --extra hardware --extra reachy || { echo "uv sync failed"; exit 1; }
+  if ! (
+    unzip -o -q "$ZIP_TMP" -d "$DIR_TMP" || exit 1
+    if [ -f "$ROLLBACK_DIR/hal.previous/.env" ]; then cp -a "$ROLLBACK_DIR/hal.previous/.env" "$DIR_TMP/.env" || exit 1; fi
+    if [ -d "$ROLLBACK_DIR/hal.previous/.venv" ]; then cp -a "$ROLLBACK_DIR/hal.previous/.venv" "$DIR_TMP/.venv" || exit 1; fi
+    if [ -d "$ROLLBACK_DIR/hal.previous/.uv-cache" ]; then cp -a "$ROLLBACK_DIR/hal.previous/.uv-cache" "$DIR_TMP/.uv-cache" || exit 1; fi
+    find "$UV_CACHE_DIR" -name "lerobot.egg-info" -type d 2>/dev/null | xargs rm -rf
+    cd "$DIR_TMP" || exit 1
+    "$UV_BIN" sync --python 3.12 --extra hardware --extra reachy || exit 1
+  ); then
+    echo "HAL staging failed; restoring known-good runtime" >&2
+    cd /
+    restore_hal_backup
+    restore_hal_service_state || true
+    exit 1
+  fi
   "$UV_BIN" cache prune >/dev/null 2>&1 || true
   cd /
-  systemctl restart hal
+  if ! mv "$DIR_TMP" "$HAL_DIR"; then
+    echo "HAL activation failed; restoring known-good runtime" >&2
+    restore_hal_backup
+    restore_hal_service_state || true
+    exit 1
+  fi
+  DIR_TMP=""
+  if ! restore_hal_service_state || ! check_hal; then
+    echo "HAL health check failed; restoring the known-good runtime" >&2
+    systemctl stop hal 2>/dev/null || true
+    restore_hal_backup
+    restore_hal_service_state || true
+    check_hal || true
+    exit 1
+  fi
   echo "hal updated to $VERSION"
 elif [ "$APP" = "claude-desktop-buddy" ]; then
   [ -z "$URL" ] && { echo "Metadata has no url for claude-desktop-buddy"; exit 1; }

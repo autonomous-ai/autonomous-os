@@ -241,6 +241,13 @@ tuning local `/opt/hal/.env`. Profile mới phải có `ROBOT.md`; mỗi service
 đó active phải qua health endpoint loopback, nếu không profile known-good sẽ tự
 được phục hồi. Dùng `sudo software-update rollback device` để recovery thủ công.
 
+HAL OTA giữ toàn bộ runtime `/opt/hal` trước đó—`.env`, virtual environment và
+uv cache—tại `/root/bootstrap/rollback/hal.previous`. Runtime mới được giải nén
+và sync trong thư mục staging kề bên, chỉ sau đó mới swap vào vị trí chạy. HAL
+trở về trạng thái active/inactive trước đó và service đang active phải trả về
+`http://127.0.0.1:5001/health`. Mọi lỗi staging hoặc health sẽ tự phục hồi
+runtime known-good. Dùng `sudo software-update rollback hal` để recovery thủ công.
+
 Layout là **layout production**, không phải cây riêng cho spike:
 
 | Thành phần | Đường dẫn |

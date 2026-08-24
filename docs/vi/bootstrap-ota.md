@@ -491,35 +491,25 @@ Script đọc URL metadata OTA từ `metadata_url` trong `/root/config/bootstrap
 (biến môi trường `OTA_METADATA_URL` nếu set sẽ override, dùng cho chạy thủ công/debug),
 và exit lỗi nếu cả hai đều rỗng — không có URL hardcode.
 
-### Xử lý HAL (MỚI)
+### Xử lý HAL
 
 ```bash
 "hal")
-    echo "Updating HAL to $VERSION..."
+    # Giữ nguyên toàn bộ runtime và trạng thái service trước đó.
+    systemctl stop hal
+    mv /opt/hal /root/bootstrap/rollback/hal.previous
 
-    # Tải
-    curl -fsSL "$URL" -o /tmp/hal-update.zip
+    # Build candidate ở thư mục kề. .env, venv và uv cache được copy từ
+    # runtime đã giữ trước khi chạy uv sync.
+    unzip -q "$ZIP" -d /opt/.hal.new
+    cp -a /root/bootstrap/rollback/hal.previous/{.env,.venv,.uv-cache} /opt/.hal.new/
+    (cd /opt/.hal.new && uv sync --python 3.12 --extra hardware)
+    mv /opt/.hal.new /opt/hal
 
-    # Dừng service trước khi cập nhật
-    systemctl stop hal.service
-
-    # Backup
-    cp -r /opt/hal /opt/hal.bak 2>/dev/null || true
-
-    # Giải nén (giữ venv nếu chỉ thay đổi code, hoặc rebuild)
-    unzip -o /tmp/hal-update.zip -d /opt/hal/
-
-    # Cài lại dependencies nếu requirements.txt thay đổi
-    /opt/hal/venv/bin/pip install -r /opt/hal/requirements.txt --quiet
-
-    # Khởi động lại
-    systemctl start hal.service
-
-    # Dọn dẹp
-    rm -f /tmp/hal-update.zip
-    rm -rf /opt/hal.bak
-
-    echo "HAL updated to $VERSION"
+    systemctl restart hal
+    curl -fsS http://127.0.0.1:5001/health
+    # Lỗi staging hoặc health sẽ khôi phục hal.previous và trạng thái cũ.
+    # Operator cũng có thể chạy: software-update rollback hal
     ;;
 ```
 
