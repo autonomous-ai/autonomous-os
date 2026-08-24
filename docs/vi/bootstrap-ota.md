@@ -234,7 +234,7 @@ UNIT
 | Service | Lệnh chạy | Port | Ghi chú |
 |---|---|---|---|
 | `os-server.service` | `/usr/local/bin/os-server` | 5000 | HTTP API chính, luôn chạy |
-| `bootstrap.service` | `/usr/local/bin/bootstrap-server` | 8080 | OTA worker, poll cập nhật. Expose `POST /force-check` để kích hoạt kiểm tra OTA ngay lập tức |
+| `bootstrap.service` | `/usr/local/bin/bootstrap-server` | 8080 | OTA worker, poll cập nhật. Expose `POST /force-check` để kích hoạt kiểm tra OTA ngay lập tức và `GET /security` cho trạng thái tin cậy OTA |
 | `openclaw.service` | `xvfb-run ... openclaw gateway run` | — | AI brain, memory limit 1500M |
 | `hal.service` | `uvicorn hal.server:app --host 127.0.0.1 --port 5001` | 5001 | Hardware drivers (servo, LED, camera, audio) |
 | nginx | `nginx` | 80 | Setup SPA + reverse proxy (`/api/` → OS Server 5000, `/hw/` → HAL 5001) |
@@ -293,6 +293,64 @@ metadata URL hoặc mạng.
 Device không có `signing_public_key` chủ ý ở legacy mode: nó đọc component top
 level và chỉ log cảnh báo, không làm OTA lỗi. Đây là compatibility bridge, không
 phải bảo đảm trust; pin public key để bật verified OTA.
+
+### Trạng thái bảo mật OTA (operator nhìn thấy được)
+
+Cảnh báo ở trên chỉ là một dòng log, nên một device kẹt ở legacy mode là vô hình
+với người vận hành fleet. Cả hai tiến trình đều expose trạng thái đó dưới dạng dữ liệu:
+
+| Endpoint | Do ai phục vụ | Ghi chú |
+|----------|---------------|---------|
+| `GET http://127.0.0.1:8080/security` | `bootstrap-server` | Nguồn sự thật: worker giữ key đã pin và thực hiện verify. Chỉ loopback. |
+| `GET /api/system/ota-security` | `os-server` | Proxy nguyên văn endpoint trên, bọc trong wrapper chuẩn `{"status":1,"data":…}`. Trả `502` khi bootstrap worker không với tới được. |
+
+```json
+{
+  "mode": "verified",
+  "metadata_format": "autonomous-ota/v1",
+  "key_fingerprint": "9f2c1ab30d4e5f60",
+  "artifact_checksums": true,
+  "last_metadata_fetch": {
+    "at": "2026-08-24T09:12:03Z",
+    "verified": true
+  }
+}
+```
+
+- `mode` là `verified` khi đã provision `signing_public_key`, ngược lại là
+  `legacy`. Đây là field duy nhất cần cảnh báo trên toàn fleet.
+- `key_fingerprint` là 16 ký tự hex đầu của SHA-256 của key đã pin, để operator
+  biết device đang tin **key nào** (và phát hiện device còn kẹt ở key đã xoay
+  vòng) mà endpoint không phải phát lại key material. Không có ở legacy mode.
+- `artifact_checksums` cho biết SHA-256 từng component có được enforce không. Nó
+  đi theo `mode`: digest chỉ có ý nghĩa khi metadata mang nó là xác thực.
+- `last_metadata_fetch` là kết quả lần fetch gần nhất, gồm cả lỗi transport
+  (`error` được set, `verified` là `false`). Nó vắng mặt cho tới khi lần fetch
+  đầu tiên sau restart hoàn tất, nên device chưa từng với tới feed phân biệt
+  được với device có feed khoẻ mạnh.
+
+### Cutover sang signed-only
+
+Metadata ký được publish dạng superset: component entry của payload vẫn nằm ở
+top level cho các worker đã deploy, còn tài liệu xác thực nằm dưới `signed`. Bản
+copy tương thích đó chính là thứ giữ cho legacy mode còn khai thác được, nên
+phải gỡ. Lộ trình:
+
+1. **Publish có ký** (đã xong). Release writer thêm envelope `signed` mỗi khi có
+   `OTA_SIGNING_PRIVATE_KEY` và `OTA_SIGNING_KEY_ID`. Device bỏ qua nó tới khi
+   được pin key.
+2. **Provision key.** Device mới nhận `OTA_SIGNING_PUBLIC_KEY` lúc setup; fleet
+   hiện có thì ghi vào `/root/config/bootstrap.json`. Không cần redeploy —
+   worker đọc key ở lần load config kế tiếp.
+3. **Xác nhận toàn fleet.** Poll `GET /api/system/ota-security` và yêu cầu
+   `mode == "verified"` cùng đúng `key_fingerprint` trên mọi device. Bước này là
+   cổng chặn: còn device nào báo `legacy` thì không đi tiếp.
+4. **Cutover.** Publish với `OTA_METADATA_SIGNED_ONLY=1`, cờ này bỏ bản copy top
+   level nên tài liệu chỉ còn `signed`. Device chưa migrate sẽ dừng update (và
+   kêu to) thay vì update từ nguồn không xác thực — đúng hướng lỗi mong muốn.
+
+Rollback cho bước 4 là publish lại một lần nữa mà không bật cờ; device đã ở
+verified mode không bị ảnh hưởng theo hướng nào, vì chúng chỉ đọc `signed`.
 
 **Đợi-rồi-retry khi chưa provisioning**: nếu `metadata_url` rỗng (device chưa
 setup), `Serve()` không khởi động poll loop lẫn healthcheck server. Nó log

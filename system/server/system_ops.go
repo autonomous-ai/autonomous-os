@@ -3,8 +3,10 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os/exec"
 	"strconv"
@@ -67,6 +69,39 @@ func (s *Server) softwareUpdate(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 	c.JSON(http.StatusOK, serializers.ResponseSuccess("software update triggered: "+target))
+}
+
+// otaSecurity reports whether this device verifies OTA metadata and artifacts.
+// GET /api/system/ota-security
+//
+// The bootstrap worker owns the answer (it holds the pinned key and performs
+// the verification), so this handler proxies its /security endpoint verbatim
+// rather than re-reading bootstrap.json and guessing.
+func (s *Server) otaSecurity(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:8080/security", nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, serializers.ResponseError("build request: "+err.Error()))
+		return
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, serializers.ResponseError("bootstrap unreachable: "+err.Error()))
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		c.JSON(http.StatusBadGateway, serializers.ResponseError("bootstrap security status: "+resp.Status))
+		return
+	}
+	var status map[string]any
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&status); err != nil {
+		c.JSON(http.StatusBadGateway, serializers.ResponseError("decode security status: "+err.Error()))
+		return
+	}
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(status))
 }
 
 // execCommand runs a shell command (sh -c) and returns stdout, stderr, and exit code.

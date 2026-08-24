@@ -237,7 +237,7 @@ UNIT
 | Service | ExecStart | Port | Notes |
 |---|---|---|---|
 | `os-server.service` | `/usr/local/bin/os-server` | 5000 | Main HTTP API, always running |
-| `bootstrap.service` | `/usr/local/bin/bootstrap-server` | 8080 | OTA worker, polls for updates. Exposes `POST /force-check` to trigger immediate OTA check |
+| `bootstrap.service` | `/usr/local/bin/bootstrap-server` | 8080 | OTA worker, polls for updates. Exposes `POST /force-check` to trigger an immediate OTA check and `GET /security` for the OTA trust posture |
 | `openclaw.service` | `xvfb-run ... openclaw gateway run` | — | AI brain, memory limit 1500M |
 | `hal.service` | `uvicorn hal.server:app --host 127.0.0.1 --port 5001` | 5001 | Hardware drivers (servo, LED, camera, audio) |
 | nginx | `nginx` | 80 | Setup SPA + reverse proxy (`/api/` → OS Server 5000, `/hw/` → HAL 5001) |
@@ -297,6 +297,67 @@ Devices without `signing_public_key` deliberately remain in legacy mode: they
 read the top-level entries and emit a warning rather than failing OTA. This is a
 compatibility bridge, not a trust guarantee; pin the public key to opt in to
 verified OTA.
+
+### OTA security posture (operator-visible)
+
+The warning above is a log line, so a device silently stuck in legacy mode is
+invisible to a fleet operator. Both processes expose the posture as data:
+
+| Endpoint | Served by | Notes |
+|----------|-----------|-------|
+| `GET http://127.0.0.1:8080/security` | `bootstrap-server` | Source of truth: the worker holds the pinned key and performs verification. Loopback only. |
+| `GET /api/system/ota-security` | `os-server` | Proxies the above verbatim inside the standard `{"status":1,"data":…}` wrapper. `502` when the bootstrap worker is unreachable. |
+
+```json
+{
+  "mode": "verified",
+  "metadata_format": "autonomous-ota/v1",
+  "key_fingerprint": "9f2c1ab30d4e5f60",
+  "artifact_checksums": true,
+  "last_metadata_fetch": {
+    "at": "2026-08-24T09:12:03Z",
+    "verified": true
+  }
+}
+```
+
+- `mode` is `verified` when `signing_public_key` is provisioned, `legacy`
+  otherwise. This is the single field to alert on across the fleet.
+- `key_fingerprint` is the first 16 hex characters of the SHA-256 of the pinned
+  key, so operators can confirm *which* key a device trusts (and spot devices
+  left on a rotated-out key) without the endpoint echoing key material. Absent
+  in legacy mode.
+- `artifact_checksums` reports whether per-component SHA-256 digests are
+  enforced. It follows `mode`: digests are only meaningful when the metadata
+  carrying them is authentic.
+- `last_metadata_fetch` is the outcome of the most recent fetch, including
+  transport failures (`error` is set, `verified` is `false`). It is absent until
+  the first fetch completes after a restart, so a device that has never reached
+  its feed is distinguishable from one whose feed is healthy.
+
+### Signed-only cutover
+
+Signed metadata is published as a superset: the payload's component entries stay
+at the top level for already-deployed workers, with the authenticated document
+under `signed`. That compatibility copy is what keeps legacy mode exploitable,
+so it has to be retired. The rollout:
+
+1. **Publish signed** (done). Release writers add the `signed` envelope whenever
+   `OTA_SIGNING_PRIVATE_KEY` and `OTA_SIGNING_KEY_ID` are set. Devices ignore it
+   until a key is pinned.
+2. **Provision keys.** New devices get `OTA_SIGNING_PUBLIC_KEY` at setup; the
+   existing fleet gets it written into `/root/config/bootstrap.json`. No
+   redeploy is needed — the worker reads the key on the next config load.
+3. **Confirm the fleet.** Poll `GET /api/system/ota-security` and require
+   `mode == "verified"` with the expected `key_fingerprint` on every device.
+   This step is the gate: do not proceed while any device reports `legacy`.
+4. **Cut over.** Publish with `OTA_METADATA_SIGNED_ONLY=1`, which drops the
+   top-level copy so the document contains only `signed`. An unmigrated device
+   then stops updating (loudly) instead of updating from an unauthenticated
+   source — the intended failure direction.
+
+Rollback for step 4 is publishing once more without the flag; devices already in
+verified mode are unaffected either way, since they read only `signed`.
 
 **Wait-then-retry when unprovisioned**: if `metadata_url` is empty (device not
 set up yet), `Serve()` does not start the poll loop or healthcheck server. It logs
