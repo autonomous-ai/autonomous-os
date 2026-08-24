@@ -47,6 +47,16 @@ class MotionService(Protocol):
         """True when zero_pose or hold is active — idle/ambient animations suppressed."""
         ...
 
+    @property
+    def motion_mode(self) -> Optional[str]:
+        """The mode holding the body ("zero"/"hold"/"released"), or None.
+
+        `is_suppressed` says whether a play is refused; this says which mode
+        refused it. None because the drivers have a flag per mode and none for
+        their absence.
+        """
+        ...
+
     # --- Freeze (camera stabilization) ---
 
     def freeze(self) -> None: ...

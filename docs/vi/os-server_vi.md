@@ -220,8 +220,8 @@ Truy cập qua nginx proxy: `/hw/*` → `127.0.0.1:5001`
 
 | Method | Endpoint | Mô tả |
 |--------|----------|-------|
-| GET | `/servo` | Recordings + animation state |
-| POST | `/servo/play` | Phát animation (idle, curious, nod, headshake, happy_wiggle, sad, excited, shock, shy, scanning, wake_up, music_groove, listening, thinking_deep, laugh, confused, sleepy, greeting, acknowledge, stretching). Idle tự chạy khi boot. |
+| GET | `/servo` | Recordings + animation state + `motion_mode` (`zero` / `hold` / `released`, hoặc `null` khi không mode nào đang giữ body) — chế độ tư thế quyết định `/servo/play` có được thực thi hay không |
+| POST | `/servo/play` | Phát animation (idle, curious, nod, headshake, happy_wiggle, sad, excited, shock, shy, scanning, wake_up, music_groove, listening, thinking_deep, laugh, confused, sleepy, greeting, acknowledge, stretching). Idle tự chạy khi boot. Trả `{"status":"ignored","reason":"hold"\|"zero"\|"released"\|"sleeping"}` khi mode hoặc sleep gate bỏ qua lệnh — `"ok"` nghĩa là recording đã thực sự chạy. |
 | POST | `/servo/move` | Gửi joint positions với smooth interpolation |
 | POST | `/servo/release` | Tắt torque tất cả servo |
 | GET | `/servo/position` | Vị trí servo hiện tại |

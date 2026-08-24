@@ -223,8 +223,8 @@ Accessed via nginx proxy: `/hw/*` → `127.0.0.1:5001`
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/servo` | Recordings + animation state |
-| POST | `/servo/play` | Play animation (idle, curious, nod, headshake, happy_wiggle, sad, excited, shock, shy, scanning, wake_up, music_groove, listening, thinking_deep, laugh, confused, sleepy, greeting, acknowledge, stretching). Idle auto-plays on boot. |
+| GET | `/servo` | Recordings + animation state + `motion_mode` (`zero` / `hold` / `released`, or `null` when no mode is holding the body) — the posture mode that decides whether `/servo/play` is honoured |
+| POST | `/servo/play` | Play animation (idle, curious, nod, headshake, happy_wiggle, sad, excited, shock, shy, scanning, wake_up, music_groove, listening, thinking_deep, laugh, confused, sleepy, greeting, acknowledge, stretching). Idle auto-plays on boot. Answers `{"status":"ignored","reason":"hold"\|"zero"\|"released"\|"sleeping"}` when the mode or the sleep gate drops the play — `"ok"` means the recording actually started. |
 | POST | `/servo/move` | Send joint positions with smooth interpolation |
 | POST | `/servo/release` | Disable torque on all servos |
 | GET | `/servo/position` | Current servo positions |

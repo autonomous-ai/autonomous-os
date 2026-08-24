@@ -150,6 +150,40 @@ class TestLampSimulationServer(unittest.TestCase):
         _, stopped_effect = self._json("/led/effect/stop", "POST", {})
         self.assertEqual(stopped_effect["status"], "ok")
 
+    def test_a_suppressed_motor_refuses_play_and_names_the_mode(self):
+        """A play the driver drops must not come back as "ok", and GET /servo
+        must name the mode that dropped it."""
+        try:
+            _, held = self._json("/servo/hold", "POST", {})
+            self.assertEqual(held["status"], "ok")
+            _, state = self._json("/servo")
+            self.assertEqual(state["motion_mode"], "hold")
+
+            _, dropped = self._json("/servo/play", "POST", {"recording": "nod"})
+            self.assertEqual(dropped["status"], "ignored")
+            self.assertEqual(dropped["reason"], "hold")
+            time.sleep(0.05)
+            _, after = self._json("/servo")
+            self.assertNotEqual(after["current"], "nod")
+
+            self._json("/servo/zero", "POST", {})
+            _, zeroed = self._json("/servo")
+            self.assertEqual(zeroed["motion_mode"], "zero")
+            _, dropped_zero = self._json("/servo/play", "POST", {"recording": "nod"})
+            self.assertEqual(dropped_zero["reason"], "zero")
+        finally:
+            self._json("/servo/resume", "POST", {})
+
+        _, resumed = self._json("/servo")
+        self.assertIsNone(resumed["motion_mode"])
+        _, ok = self._json("/servo/play", "POST", {"recording": "nod"})
+        self.assertEqual(ok["status"], "ok")
+        # A play that ran carries no reason at all, not a null to special-case.
+        self.assertNotIn("reason", ok)
+        time.sleep(0.05)
+        _, playing = self._json("/servo")
+        self.assertEqual(playing["current"], "nod")
+
     def test_named_aims_match_the_reference_lamp_driver(self):
         # AnimationService keeps the current yaw for center/desk/up/down, and
         # changes only base_yaw for left/right. The simulator must not invent a

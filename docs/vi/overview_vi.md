@@ -74,7 +74,11 @@ cho HAL docs và, với body Lamp mặc định, `http://127.0.0.1:5001/simulato
 Link sau có CAD assembly Lamp đã check-in để xem quanh, cùng giá trị live của
 năm joint, playback recording và nút LED effect qua đúng endpoint `/servo/*`
 và `/led/*` mà skill sử dụng: kéo để xoay camera, cuộn để zoom, double-click
-để reset. Motion preview của CAD phản hồi theo joint live, kể cả khi phát
+để reset. Bảng state ghi rõ posture mode đang giữ body (`zero`, `hold`) bên
+cạnh giá trị joint live, và nút Motor control đang giữ mode đó được làm sáng: một
+animation bấm lúc motor đang hold sẽ hiện là bị bỏ qua kèm lý do, không phải
+dấu tích, vì `/servo/play` trả `"ignored"` thay vì `"ok"` cho lệnh nó đã bỏ.
+Motion preview của CAD phản hồi theo joint live, kể cả khi phát
 recording; một control chuyển về assembly tĩnh nguyên bản để đối chiếu. Repo
 chưa có hierarchy cơ khí, pivot, axis hay CAD zero offset đã calibration, nên
 phản hồi hình ảnh này không khẳng định pose `down` hoặc `right` render ra đúng

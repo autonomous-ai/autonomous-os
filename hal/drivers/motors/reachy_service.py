@@ -383,6 +383,18 @@ class ReachyMotionService:
         return self._zero_mode or self._hold_mode or self._released
 
     @property
+    def motion_mode(self) -> Optional[str]:
+        """`released` first: a limp robot is the one state whose answer is not
+        "press Resume"."""
+        if self._released:
+            return "released"
+        if self._zero_mode:
+            return "zero"
+        if self._hold_mode:
+            return "hold"
+        return None
+
+    @property
     def _ambient_blocked(self) -> bool:
         """True when self-driven motion (the music groove) must not continue.
 

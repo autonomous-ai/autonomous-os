@@ -75,7 +75,12 @@ local links for the HAL docs and, for the default Lamp body,
 checked-in Lamp CAD assembly plus live five-joint values, recording playback,
 and LED-effect controls using the same `/servo/*` and `/led/*` endpoints a
 skill uses. Drag to orbit, scroll to zoom, and double-click to reset the
-camera. Its CAD motion preview responds to the live joint values, including
+camera. The state panel names the posture mode holding the body (`zero`,
+`hold`) next to the live joints, and the Motor control button that owns it is lit: an
+animation pressed while the motor is held is reported as ignored with that
+reason, not as a tick, because `/servo/play` answers `"ignored"` rather than
+`"ok"` for a play it dropped. Its CAD motion preview responds to the live joint
+values, including
 recording playback; a control switches to the untouched static assembly for
 comparison. The repository does not include the mechanical joint hierarchy,
 pivots, axes, or calibrated CAD zero offsets, so this visual response is not a

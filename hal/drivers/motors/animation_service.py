@@ -1025,6 +1025,17 @@ class AnimationService:
         """True when zero_pose or explicit hold is active."""
         return getattr(self, "_zero_mode", False) or self._hold_mode
 
+    @property
+    def motion_mode(self) -> Optional[str]:
+        """Zero wins over hold: zero_pose() parks the body, hold() only freezes
+        it. A released body also reports None — release() cuts torque without
+        setting either flag."""
+        if getattr(self, "_zero_mode", False):
+            return "zero"
+        if self._hold_mode:
+            return "hold"
+        return None
+
     def ensure_running(self) -> None:
         """Restart the event loop if it stopped (e.g. after zero/hold)."""
         if not self._running.is_set():

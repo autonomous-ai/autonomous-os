@@ -1354,10 +1354,24 @@
         if (!r.ok) throw Error(`${path} → ${r.status}`);
         return r.json();
       };
+      // "ignored" = the route accepted the call and did nothing. Printing a tick
+      // over that is what made a held motor read as a laggy page.
+      const MODE_BUTTON = { zero: "zero", hold: "hold", released: "release" };
+      const IGNORED_HINT = {
+        hold: "hold mode — press Resume",
+        zero: "zero mode — press Resume",
+        released: "torque released — press Resume",
+        sleeping: "device asleep — try greeting or stretching",
+      };
       async function act(label, path, body) {
         try {
-          await api(path, body);
-          action.textContent = `✓ ${label}`;
+          const r = await api(path, body);
+          action.textContent =
+            r && r.status === "ignored"
+              ? `⌀ ${label} ignored (${
+                  IGNORED_HINT[r.reason] || r.reason || "refused"
+                })`
+              : `✓ ${label}`;
           await refresh();
         } catch (e) {
           action.textContent = `✕ ${e.message}`;
@@ -1374,6 +1388,9 @@
             api("/emotion/status"),
           ]);
           target = { ...target, ...(p.positions || {}) };
+          // null = nothing holding the body. "normal" below is this page's label
+          // for that, not a mode HAL has.
+          const mode = s.motion_mode || null;
           const ok = h.servo && h.led && h.camera;
           dot.style.background = ok ? "#83dd86" : "#e75e4e";
           status.textContent = ok ? "HAL connected" : "HAL degraded";
@@ -1391,7 +1408,19 @@
             `\nrecording     ${s.current || "idle"}` +
             `\nemotion       ${emo.current_emotion || "none"}${
               emo.sleeping ? " (sleeping)" : ""
+            }` +
+            // The mode that silently refuses every animation button, named next
+            // to the state it refuses.
+            `\nmotor         ${mode || "normal"}${
+              mode ? " (animations blocked — press Resume)" : ""
             }`;
+          // Mapped, not compared: Reachy reports "released", its button is
+          // "release".
+          document
+            .querySelectorAll("[data-motor]")
+            .forEach((b) =>
+              b.classList.toggle("primary", MODE_BUTTON[mode] === b.dataset.motor),
+            );
           // Mark the current emotion, as the device web UI's pill cloud does.
           document
             .querySelectorAll("#emotion-grid button")
