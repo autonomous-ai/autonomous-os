@@ -1,6 +1,6 @@
 # Emotion → LED + Animation Mapping
 
-Source: colors are what the **lamp** actually shows — `robots/lamp/presets.json` (the per-device overlay) merged over `hal/presets.py` `EMOTION_PRESETS`. The overlay only replaces `color`; effect, speed and servo always come from the base presets. The `Color source` column says whether a row's color comes from the lamp `overlay` or is still the untouched `base` value.
+Source: colors are what the **lamp** actually shows — `robots/lamp/presets.json` (the per-device overlay) merged over `hal/presets.py` `EMOTION_PRESETS`. The overlay patches any field, not just `color` — `presets_overlay.py` does `base[key].update(fields)`, and lamp uses that to override `speed` on `listening` and `servo` on `thinking`. Fields it does not mention keep the base value. The `Color source` column says whether a row's color comes from the lamp `overlay` or is still the untouched `base` value.
 
 | Emotion | Color (RGB) | Hex | Color source | Effect | Speed | Servo Animation |
 |---|---|---|---|---|---|---|

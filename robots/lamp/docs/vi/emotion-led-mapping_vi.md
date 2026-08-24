@@ -1,6 +1,6 @@
 # Emotion → LED + Animation Mapping
 
-Nguồn: màu trong bảng là màu **lamp** thực sự hiển thị — `robots/lamp/presets.json` (overlay riêng cho device) merge đè lên `EMOTION_PRESETS` trong `hal/presets.py`. Overlay chỉ thay `color`; effect, speed và servo luôn lấy từ preset gốc. Cột `Color source` cho biết màu của dòng đó đến từ `overlay` của lamp hay vẫn là giá trị `base` chưa đụng tới.
+Nguồn: màu trong bảng là màu **lamp** thực sự hiển thị — `robots/lamp/presets.json` (overlay riêng cho device) merge đè lên `EMOTION_PRESETS` trong `hal/presets.py`. Overlay patch được mọi field chứ không riêng `color` — `presets_overlay.py` gọi `base[key].update(fields)`, và lamp dùng đúng cơ chế đó để override `speed` của `listening` và `servo` của `thinking`. Field nào không khai thì giữ giá trị base. Cột `Color source` cho biết màu của dòng đó đến từ `overlay` của lamp hay vẫn là giá trị `base` chưa đụng tới.
 
 | Emotion | Color (RGB) | Hex | Color source | Effect | Speed | Servo Animation |
 |---|---|---|---|---|---|---|
