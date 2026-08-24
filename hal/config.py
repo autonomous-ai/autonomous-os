@@ -1427,9 +1427,38 @@ GAZE_PITCH_DEAD_ZONE_FRAC: float = float(
     os.environ.get("HAL_GAZE_PITCH_DEAD_ZONE_FRAC", "0.15")
 )
 # Minimum gap between corrections, so a user who keeps moving does not turn the
-# lamp into a head that nods along.
+# lamp into a head that nods along. Mostly superseded by GAZE_PITCH_WINDOW_S —
+# the buffer is cleared after every correction, so refilling it already spaces
+# them out — but kept as a floor.
 GAZE_PITCH_COOLDOWN_S: float = float(
     os.environ.get("HAL_GAZE_PITCH_COOLDOWN_S", "4")
+)
+# How long a stretch of vertical offsets a correction is computed from.
+#
+# NOT the latest sample, which is what this loop used to do and why a validated
+# sign still walked the head. `wrist_roll` is a second AIMING axis on this arm —
+# device-proven 2026-08-24 by pinning every other joint and varying only roll:
+# the horizon stayed level while the view panned, i.e. roll does not rotate the
+# image, it points the camera. And idle.csv sweeps wrist_roll ~32 deg every ~10s
+# cycle, forever.
+#
+# So the vertical offset a single frame reports is the framing error PLUS a
+# periodic disturbance from wherever idle's roll happens to be. Measured on the
+# same three frames, subject unmoved: dy +0.101 at roll -1.8 against +0.143 at
+# roll +29.3 — 0.042 of frame height from roll alone, about 28% of the dead
+# zone below, on a loop that fired every 4s from one sample.
+#
+# A median over a full idle cycle cancels a periodic disturbance while a real
+# framing error survives it. 12s, comfortably longer than the ~10s cycle, so the
+# window always spans a whole period rather than a biased arc of one.
+GAZE_PITCH_WINDOW_S: float = float(
+    os.environ.get("HAL_GAZE_PITCH_WINDOW_S", "12")
+)
+# ...and this many measurements inside it, or the median is one noisy frame
+# wearing a median's clothes. At GAZE_SAMPLE_FPS a full window holds far more;
+# this is the floor for acting on a partly-filled one.
+GAZE_PITCH_MIN_SAMPLES: int = int(
+    os.environ.get("HAL_GAZE_PITCH_MIN_SAMPLES", "8")
 )
 # How many corrections in a row may be driven by the torso fallback before it
 # stops and waits for a real face. The fallback knows the head is above the

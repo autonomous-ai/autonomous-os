@@ -70,6 +70,61 @@ _last_pitch_t: float = 0.0
 # Consecutive corrections driven by the fallback rather than by a face.
 _blind_pitch_steps: int = 0
 
+# (monotonic timestamp, vertical offset as a fraction of frame height, whether
+# it came from a real face). Bounded by GAZE_PITCH_WINDOW_S, and cleared
+# whenever the camera moves — see record_dy.
+_dy_samples: Deque[Tuple[float, float, bool]] = deque()
+_dy_lock = threading.Lock()
+
+
+def record_dy(dy: Optional[float], from_face: bool,
+              now: Optional[float] = None) -> None:
+    """Fold one vertical-offset measurement into the pitch window.
+
+    Unmeasurable frames are dropped rather than recorded as zero: "no face this
+    frame" is not "the face is centred", and feeding it in would drag the median
+    toward the dead zone and stall the correction.
+    """
+    if dy is None:
+        return
+    t = time.monotonic() if now is None else now
+    with _dy_lock:
+        _dy_samples.append((t, float(dy), bool(from_face)))
+        cutoff = t - max(1.0, config.GAZE_PITCH_WINDOW_S)
+        while _dy_samples and _dy_samples[0][0] < cutoff:
+            _dy_samples.popleft()
+
+
+def _dy_estimate(now: Optional[float] = None):
+    """``(median dy, from_face, n, span_s)`` over the window, or None.
+
+    Median, not mean: idle's roll disturbance is periodic and roughly
+    symmetric, but a face leaving frame produces one-sided outliers, and a mean
+    would follow them.
+
+    Faces outrank the torso fallback outright rather than being averaged with
+    it — the fallback reports a fixed -0.5 whatever the real offset is, so
+    blending the two would corrupt a real measurement with a constant.
+    """
+    t = time.monotonic() if now is None else now
+    with _dy_lock:
+        rows = [r for r in _dy_samples if r[0] >= t - config.GAZE_PITCH_WINDOW_S]
+    if not rows:
+        return None
+    face_rows = [r for r in rows if r[2]]
+    use = face_rows if face_rows else rows
+    if len(use) < config.GAZE_PITCH_MIN_SAMPLES:
+        return None
+    span = use[-1][0] - use[0][0]
+    # A full period, not a biased arc of one: half a roll cycle's worth of
+    # samples has the disturbance's mean in it, not zero.
+    if span < config.GAZE_PITCH_WINDOW_S * 0.8:
+        return None
+    vals = sorted(v for _, v, _ in use)
+    mid = len(vals) // 2
+    med = vals[mid] if len(vals) % 2 else 0.5 * (vals[mid - 1] + vals[mid])
+    return med, bool(face_rows), len(use), span
+
 
 def head_yaw_deg(landmarks: Sequence[float]) -> Optional[float]:
     """Absolute head yaw in degrees from YuNet's five landmarks.
@@ -218,6 +273,13 @@ def discard_samples() -> None:
     """
     with _samples_lock:
         _samples.clear()
+    # The vertical window too: every offset in it was measured from the pose the
+    # camera has just left, so a correction computed from them would be aimed at
+    # where the face used to sit. Clearing also spaces corrections apart — the
+    # loop cannot act again until a fresh window has refilled, which is the real
+    # gap between steps now, not GAZE_PITCH_COOLDOWN_S.
+    with _dy_lock:
+        _dy_samples.clear()
 
 
 def snapshot() -> List[Tuple[float, float, float, float]]:
@@ -536,6 +598,7 @@ def _sample_once() -> Optional[str]:  # noqa: C901
         # (-67.1 -> -59.1), then every later sample read `-`.
         _last_dy_frac = _headroom_from_person(frame_or_small, detector)
         _last_dy_from_face = False
+        record_dy(_last_dy_frac, False)
         record_sample(None, 0.0, 0.0)
         return None
     (fx, fy, fw, fh), landmarks = face
@@ -545,6 +608,7 @@ def _sample_once() -> Optional[str]:  # noqa: C901
     # the camera is pointing too low to see who is talking.
     _last_dy_frac = ((fy + fh / 2.0) - frame_h / 2.0) / frame_h
     _last_dy_from_face = True
+    record_dy(_last_dy_frac, True)
 
     # Distance of the face centre from the frame centre, 0 at the middle and 1
     # at either edge — how far into the lens distortion this sample sits.
@@ -645,8 +709,11 @@ def _maybe_pitch(now: float) -> None:
 
     if not (config.GAZE_PITCH_ENABLED and config.GAZE_WAKE_ENABLED):
         return
-    dy = _last_dy_frac
-    if dy is None or abs(dy) <= config.GAZE_PITCH_DEAD_ZONE_FRAC:
+    est = _dy_estimate(now)
+    if est is None:
+        return  # window not filled yet — see GAZE_PITCH_WINDOW_S
+    dy, from_face, n_dy, span_dy = est
+    if abs(dy) <= config.GAZE_PITCH_DEAD_ZONE_FRAC:
         return
     if (now - _last_pitch_t) < config.GAZE_PITCH_COOLDOWN_S:
         return
@@ -654,7 +721,7 @@ def _maybe_pitch(now: float) -> None:
     # there somewhere", never how far. Let it walk the camera a few steps and
     # then stop until a real face confirms the direction was right. Otherwise a
     # guess that stays true forever moves the neck forever.
-    if not _last_dy_from_face:
+    if not from_face:
         if _blind_pitch_steps >= config.GAZE_PITCH_MAX_BLIND_STEPS:
             return
 
@@ -714,12 +781,14 @@ def _maybe_pitch(now: float) -> None:
         _anchor_idle_here(svc, target)
         discard_samples()
         _last_pitch_t = now
-        _blind_pitch_steps = 0 if _last_dy_from_face else _blind_pitch_steps + 1
+        _blind_pitch_steps = 0 if from_face else _blind_pitch_steps + 1
         logger.info(
-            "[gaze] %s %.0f%% %s of centre — wrist_pitch %+.1f -> %+.1f%s",
-            "face" if _last_dy_from_face else "head (from torso)",
-            abs(dy) * 100.0, "above" if dy < 0 else "below", cur, target,
-            "" if _last_dy_from_face
+            "[gaze] %s %.0f%% %s of centre (median of %d over %.1fs) — "
+            "wrist_pitch %+.1f -> %+.1f%s",
+            "face" if from_face else "head (from torso)",
+            abs(dy) * 100.0, "above" if dy < 0 else "below", n_dy, span_dy,
+            cur, target,
+            "" if from_face
             else f" [blind {_blind_pitch_steps}/{config.GAZE_PITCH_MAX_BLIND_STEPS}]",
         )
     except Exception as e:
@@ -908,6 +977,8 @@ def reset_for_test() -> None:
     global _last_dy_frac, _last_pitch_t, _blind_pitch_steps, _last_dy_from_face
     with _samples_lock:
         _samples.clear()
+    with _dy_lock:
+        _dy_samples.clear()
     _last_grant_t = 0.0
     _last_face_t = 0.0
     _last_repoint_t = 0.0

@@ -28,6 +28,20 @@ def _landmarks(right_eye, left_eye, nose, mouth_r=(0.0, 0.0), mouth_l=(0.0, 0.0)
 # --- head_yaw_deg -----------------------------------------------------------
 
 
+
+def _fill_dy(dy, from_face=True, n=12, span=None):
+    """Seed the pitch window with a steady offset.
+
+    `_maybe_pitch` no longer reads one sample — it takes the median over
+    GAZE_PITCH_WINDOW_S so idle's roll sweep (a second AIMING axis on this arm,
+    device-proven 2026-08-24) averages out. Tests therefore have to present a
+    window, not a scalar.
+    """
+    span = config.GAZE_PITCH_WINDOW_S if span is None else span
+    t0 = gaze.time.monotonic() - span
+    for i in range(n):
+        gaze.record_dy(dy, from_face, now=t0 + span * i / max(1, n - 1))
+
 def test_nose_centred_between_the_eyes_reads_as_facing_forward():
     lm = _landmarks((100.0, 100.0), (140.0, 100.0), (120.0, 120.0))
     assert gaze.head_yaw_deg(lm) == pytest.approx(0.0, abs=0.01)
@@ -847,34 +861,34 @@ def test_a_face_above_centre_tilts_the_camera_up(neck):
     _maybe_pitch. Asserting the joint number rather than the word "up" is the
     whole point: the sign is the thing that was wrong.
     """
-    gaze._last_dy_frac = -0.4
+    _fill_dy(-0.4)
     gaze._maybe_pitch(gaze.time.monotonic())
     assert neck.moves, "a clipped-high face should raise the camera"
     assert neck.moves[0]["wrist_pitch.pos"] < -70.0
 
 
 def test_a_face_below_centre_tilts_the_camera_down(neck):
-    gaze._last_dy_frac = 0.4
+    _fill_dy(0.4)
     gaze._maybe_pitch(gaze.time.monotonic())
     assert neck.moves[0]["wrist_pitch.pos"] > -70.0
 
 
 def test_a_face_near_enough_to_centre_is_left_alone(neck):
     """Every correction is a visible head movement nobody asked for."""
-    gaze._last_dy_frac = config.GAZE_PITCH_DEAD_ZONE_FRAC - 0.01
+    _fill_dy(config.GAZE_PITCH_DEAD_ZONE_FRAC - 0.01)
     gaze._maybe_pitch(gaze.time.monotonic())
     assert neck.moves == []
 
 
 def test_no_face_measured_means_no_correction(neck):
-    gaze._last_dy_frac = None
+    # empty window: nothing measured at all
     gaze._maybe_pitch(gaze.time.monotonic())
     assert neck.moves == []
 
 
 def test_one_correction_is_bounded(neck):
     """A wrong sign must be a small mistake the next look reverses."""
-    gaze._last_dy_frac = -1.0
+    _fill_dy(-1.0)
     gaze._maybe_pitch(gaze.time.monotonic())
     moved = neck.moves[0]["wrist_pitch.pos"] - (-70.0)
     assert moved == pytest.approx(-config.GAZE_PITCH_MAX_STEP_DEG)
@@ -884,13 +898,13 @@ def test_the_correction_stays_inside_the_mechanical_range(neck):
     from hal.drivers.tracking import constants as C
 
     neck.wrist = C.WRIST_PITCH_MIN + 1.0
-    gaze._last_dy_frac = -1.0
+    _fill_dy(-1.0)
     gaze._maybe_pitch(gaze.time.monotonic())
     assert neck.moves[0]["wrist_pitch.pos"] >= C.WRIST_PITCH_MIN
 
 
 def test_it_never_moves_a_body_something_else_owns(neck):
-    gaze._last_dy_frac = -0.4
+    _fill_dy(-0.4)
     neck._tracking_active = True
     gaze._maybe_pitch(gaze.time.monotonic())
     neck._tracking_active = False
@@ -900,7 +914,7 @@ def test_it_never_moves_a_body_something_else_owns(neck):
 
 
 def test_corrections_are_rate_limited(neck):
-    gaze._last_dy_frac = -0.4
+    _fill_dy(-0.4)
     now = gaze.time.monotonic()
     gaze._maybe_pitch(now)
     gaze._maybe_pitch(now + 0.5)
@@ -977,8 +991,7 @@ def test_blind_corrections_stop_after_a_few_and_wait_for_a_real_face(neck, monke
     """The fallback knows the head is up there, never how far."""
     monkeypatch.setattr(config, "GAZE_PITCH_MAX_BLIND_STEPS", 3)
     gaze._blind_pitch_steps = 0
-    gaze._last_dy_from_face = False
-    gaze._last_dy_frac = -0.5
+    _fill_dy(-0.5, from_face=False)
     for i in range(config.GAZE_PITCH_MAX_BLIND_STEPS + 3):
         gaze._last_pitch_t = gaze.time.monotonic() - 10_000.0
         gaze._maybe_pitch(gaze.time.monotonic())
@@ -990,9 +1003,8 @@ def test_the_blind_search_is_off_by_default(neck):
     with the anchor following each step it becomes a one-way ratchet. Device-
     observed -45 -> -30 -> -15 -> 0 -> +14, heading for the ceiling."""
     assert config.GAZE_PITCH_MAX_BLIND_STEPS == 0
-    gaze._last_dy_from_face = False
     gaze._blind_pitch_steps = 0
-    gaze._last_dy_frac = -0.5
+    _fill_dy(-0.5, from_face=False)
     gaze._maybe_pitch(gaze.time.monotonic())
     assert neck.moves == []
 
@@ -1000,8 +1012,7 @@ def test_the_blind_search_is_off_by_default(neck):
 def test_a_real_face_clears_the_blind_budget(neck):
     """Seeing a face again means the guessing worked; allow guessing later."""
     gaze._blind_pitch_steps = config.GAZE_PITCH_MAX_BLIND_STEPS
-    gaze._last_dy_from_face = True
-    gaze._last_dy_frac = -0.4
+    _fill_dy(-0.4, from_face=True)
     gaze._last_pitch_t = gaze.time.monotonic() - 10_000.0
     gaze._maybe_pitch(gaze.time.monotonic())
     assert neck.moves and gaze._blind_pitch_steps == 0
@@ -1011,8 +1022,7 @@ def test_moving_the_neck_discards_what_was_seen_from_the_old_pose(neck):
     """Samples describe an angle as seen from ONE camera pose."""
     gaze.record_sample(44, 80, 0.1)
     gaze.record_sample(48, 80, 0.1)
-    gaze._last_dy_frac = -0.4
-    gaze._last_dy_from_face = True
+    _fill_dy(-0.4, from_face=True)
     gaze._maybe_pitch(gaze.time.monotonic())
     assert neck.moves and gaze.snapshot() == []
 
@@ -1069,8 +1079,7 @@ def test_a_face_driven_correction_anchors_the_idle_loop(neck, monkeypatch):
     anchored = {}
     neck.set_idle_anchor = lambda j: anchored.update(j or {})
     gaze._last_anchor = None
-    gaze._last_dy_from_face = True
-    gaze._last_dy_frac = -0.4
+    _fill_dy(-0.4, from_face=True)
     gaze._maybe_pitch(gaze.time.monotonic())
     assert anchored.get("wrist_pitch.pos") == pytest.approx(
         neck.moves[0]["wrist_pitch.pos"]
@@ -1089,10 +1098,90 @@ def test_a_guessed_correction_anchors_too_so_idle_does_not_undo_it(neck, monkeyp
     anchored = {}
     neck.set_idle_anchor = lambda j: anchored.update(j or {})
     gaze._last_anchor = None
-    gaze._last_dy_from_face = False
     gaze._blind_pitch_steps = 0
-    gaze._last_dy_frac = -0.5
+    _fill_dy(-0.5, from_face=False)
     gaze._maybe_pitch(gaze.time.monotonic())
     assert anchored.get("wrist_pitch.pos") == pytest.approx(
         neck.moves[0]["wrist_pitch.pos"]
     )
+
+
+# --- The pitch window: idle's roll sweep must not drive corrections (F25) ---
+
+
+def test_one_sample_is_not_enough_to_move_the_neck(neck):
+    """The bug this window exists for.
+
+    `_maybe_pitch` used to correct from `_last_dy_frac`, a single frame. Idle
+    sweeps wrist_roll ~32 deg every ~10s and roll AIMS the camera on this arm,
+    so one frame's vertical offset is the framing error plus wherever that
+    sweep happens to be. Correcting from it every 4s is how a validated sign
+    still walked the head.
+    """
+    gaze.record_dy(-0.4, True)
+    gaze._maybe_pitch(gaze.time.monotonic())
+    assert neck.moves == [], "one measurement is not evidence of a framing error"
+
+
+def test_a_window_shorter_than_an_idle_cycle_is_refused(neck):
+    """Half a roll cycle carries the disturbance's mean, not zero."""
+    _fill_dy(-0.4, n=12, span=config.GAZE_PITCH_WINDOW_S * 0.5)
+    gaze._maybe_pitch(gaze.time.monotonic())
+    assert neck.moves == []
+
+
+def test_a_roll_sweep_around_a_centred_face_does_not_move_the_neck(neck):
+    """The disturbance alone must not look like a framing error.
+
+    A face sitting at centre while roll swings the camera through its cycle:
+    the samples swing either side of zero, and their median is inside the dead
+    zone even though individual frames are well outside it.
+    """
+    import math
+    span = config.GAZE_PITCH_WINDOW_S
+    t0 = gaze.time.monotonic() - span
+    n = 24
+    for i in range(n):
+        phase = 2.0 * math.pi * i / n
+        gaze.record_dy(0.30 * math.sin(phase), True, now=t0 + span * i / (n - 1))
+    gaze._maybe_pitch(gaze.time.monotonic())
+    assert neck.moves == [], "a periodic disturbance is not a framing error"
+
+
+def test_a_real_offset_survives_the_same_sweep(neck):
+    """...and the signal underneath it still gets corrected, with the right sign."""
+    import math
+    span = config.GAZE_PITCH_WINDOW_S
+    t0 = gaze.time.monotonic() - span
+    n = 24
+    for i in range(n):
+        phase = 2.0 * math.pi * i / n
+        # a face 40% above centre, plus the same roll swing as above
+        gaze.record_dy(-0.40 + 0.30 * math.sin(phase), True,
+                       now=t0 + span * i / (n - 1))
+    gaze._maybe_pitch(gaze.time.monotonic())
+    assert neck.moves, "a real offset must still be corrected through the noise"
+    assert neck.moves[0]["wrist_pitch.pos"] < -70.0, "up is the decreasing direction"
+
+
+def test_a_correction_clears_the_window_it_was_computed_from(neck):
+    """Those offsets describe the pose the camera has just left.
+
+    Clearing is also what spaces corrections apart now: the loop cannot act
+    again until a fresh window has refilled.
+    """
+    _fill_dy(-0.4)
+    gaze._maybe_pitch(gaze.time.monotonic())
+    assert neck.moves, "precondition: the first correction fired"
+    assert gaze._dy_estimate() is None, "the window must be empty after a move"
+
+
+def test_an_unmeasurable_frame_is_not_recorded_as_centred(neck):
+    """`None` is 'no evidence', not 'dy = 0' — recording zero would stall it."""
+    _fill_dy(-0.4, n=10)
+    before = gaze._dy_estimate()
+    for _ in range(20):
+        gaze.record_dy(None, False)
+    after = gaze._dy_estimate()
+    assert before is not None and after is not None
+    assert before[0] == after[0], "unmeasurable frames must not move the median"
