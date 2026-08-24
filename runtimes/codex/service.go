@@ -109,6 +109,14 @@ type CodexService struct {
 	// item.completed without a prior item.started still yields a start+end pair.
 	toolStartSeen map[string]bool
 
+	// lastContextTokens is the live context size (input + cached) reported by
+	// the most recent turn.completed. ShouldRotateSession keys on it rather
+	// than on the totalTokens the shared handler passes, which folds in this
+	// turn's OUTPUT — turn volume, not context. Codex-local on purpose: the
+	// other backends keep the handler's existing number until there is device
+	// evidence they need otherwise.
+	lastContextTokens atomic.Int64
+
 	// mcpMu serializes config.toml [mcp_servers] read-modify-write cycles (mcp.go).
 	mcpMu sync.Mutex
 

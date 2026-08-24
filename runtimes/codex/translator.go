@@ -380,6 +380,8 @@ func (s *CodexService) emitFinal(f codexFrame, dispatch func(domain.WSEvent)) {
 			"inputTokens", f.Usage.InputTokens,
 			"cachedInputTokens", f.Usage.CachedInputTokens,
 			"outputTokens", f.Usage.OutputTokens)
+		// Live context size for the rotation net (see rotation.go).
+		s.lastContextTokens.Store(int64(f.Usage.InputTokens + f.Usage.CachedInputTokens))
 	}
 	slog.Info("codex <<< turn completed", logArgs...)
 

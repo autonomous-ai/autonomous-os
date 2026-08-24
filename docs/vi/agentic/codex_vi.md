@@ -252,8 +252,21 @@ fresh (best-effort khi socket đang rớt: id cũ resume lỗi thì bridge tự 
 fresh).
 
 Codex **tự auto-compact context của nó** (`model_auto_compact_token_limit`),
-nên `ShouldRotateSession` chỉ là **lưới an toàn 150k token** cho thread chạy
-hoang — hiếm khi kích hoạt. Theo
+nên `ShouldRotateSession` chỉ là **lưới an toàn 250k token** cho thread chạy
+hoang — hiếm khi kích hoạt. Nó tính trên kích thước **context** đang sống —
+`input_tokens + cached_input_tokens` của `turn.completed` gần nhất, được
+translator lưu vào `lastContextTokens` — chứ không phải `totalTokens` mà handler
+chung truyền vào (số đó cộng cả output của lượt này, là khối lượng turn chứ
+không phải context). Tự đọc usage frame của mình giúp thay đổi này nằm gọn
+trong codex: các backend khác không bị đụng tới.
+
+Lưới này từng là 150k và tính trên `totalTokens` của handler cho tới
+24/8/2026, khi thiết bị cho thấy nó kích hoạt trên turn bình thường chứ không
+phải turn chạy hoang — 3 trong 8 turn sensing liên tiếp trên lamp-0c89 vượt
+ngưỡng (context 153k / 170k). Mỗi lần rotate là mất thread, thread mới lại
+shell-đọc lại toàn bộ `SKILL.md` (6 lần gọi, ~60s), đẩy context vượt ngưỡng
+ngay lập tức: một vòng lặp rotate. Lưới an toàn phải nằm **trên** mức mà
+compaction của codex ổn định lại, không phải nằm trong đó. Theo
 [`adding-agent-runtime_vi.md`](adding-agent-runtime_vi.md) §4 "No fake
 success", `CompactSession`, `GetConfigJSON` (config của Codex là TOML + secrets
 trong `.env` — không có file JSON để lộ ra), `UpdatePrimaryModel`, và

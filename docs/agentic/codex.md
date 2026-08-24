@@ -256,8 +256,20 @@ via `codex exec resume <id>` (history lives on disk under
 retries fresh on its own).
 
 Codex **auto-compacts its own context** (`model_auto_compact_token_limit`), so
-`ShouldRotateSession` is only a **150k-token safety net** for runaway threads —
-it rarely fires. Per [`adding-agent-runtime.md`](adding-agent-runtime.md) §4
+`ShouldRotateSession` is only a **250k-token safety net** for runaway threads —
+it rarely fires. It keys on the live **context** size — `input_tokens +
+cached_input_tokens` from the last `turn.completed`, stashed by the translator
+into `lastContextTokens` — and not on the `totalTokens` the shared handler
+passes, which folds in this turn's output (turn volume, not context). Reading
+its own usage frame keeps this codex-local: the other backends are untouched.
+
+The net was 150k keyed on the handler's `totalTokens` until
+2026-08-24, when the device showed it firing on ordinary turns instead of
+runaway ones — 3 of 8 consecutive sensing turns on lamp-0c89 crossed it
+(context 153k / 170k). Each rotation dropped the thread, and the fresh thread
+re-read every `SKILL.md` by shell (6 calls, ~60s), which pushed the context
+straight back over the line: a rotation treadmill. A net has to sit **above**
+where codex's own compaction settles, not inside it. Per [`adding-agent-runtime.md`](adding-agent-runtime.md) §4
 "No fake success", `CompactSession`, `GetConfigJSON` (Codex config is TOML +
 `.env` secrets — no JSON file to expose), `UpdatePrimaryModel`, and
 `RefreshModelsConfig` all return `domain.ErrNotSupportedByRuntime` — never
