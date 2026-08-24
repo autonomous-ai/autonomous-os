@@ -268,14 +268,20 @@ def pulse(
     step_delay = 0.04 / speed
     led_count = getattr(svc, "led_count", DEFAULT_LED_COUNT)
     center = led_count // 2
-    max_radius = center + 1
+    # The strip is a closed ring: pixel 0 sits next to the last pixel, so the
+    # farthest any pixel can be from the wavefront's origin is half the ring,
+    # and the ripple meets itself on the far side. Measuring along a straight
+    # line instead (abs(i - center)) made the wave stop dead at the seam and
+    # read as two mirrored arcs.
+    max_radius = center
     while not is_done(deadline, stop_event):
         for radius in range(max_radius + 1):
             if is_done(deadline, stop_event):
                 return
             pixels = [base_color] * led_count
             for i in range(led_count):
-                dist = abs(i - center)
+                delta = abs(i - center)
+                dist = min(delta, led_count - delta)
                 if dist <= radius:
                     falloff = max(
                         0.0, 1.0 - abs(dist - radius) / max(max_radius * 0.3, 1)
