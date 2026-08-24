@@ -1185,3 +1185,69 @@ def test_an_unmeasurable_frame_is_not_recorded_as_centred(neck):
     after = gaze._dy_estimate()
     assert before is not None and after is not None
     assert before[0] == after[0], "unmeasurable frames must not move the median"
+
+
+# --- F5: the body is owned while gaze moves it ---
+
+
+class _OwnershipSvc(_PitchSvc):
+    """Records whether the body was OWNED at the instant it was moved.
+
+    `_tracking_active` is the lock `routes/emotion.py` reads to suppress emotion
+    servo and the animation loop reads to drop an in-progress recording. Asking
+    afterwards proves nothing — ownership is released in a `finally` — so the
+    flag has to be sampled from inside the move itself.
+    """
+
+    def __init__(self, wrist=-70.0):
+        super().__init__(wrist)
+        self.owned_during_move = []
+
+    def move_and_hold(self, target, duration=None):
+        self.owned_during_move.append(bool(self._tracking_active))
+        return super().move_and_hold(target, duration=duration)
+
+
+def _owned_neck(monkeypatch):
+    import hal.app_state as state
+
+    svc = _OwnershipSvc()
+    monkeypatch.setattr(state, "animation_service", svc, raising=False)
+    monkeypatch.setattr(state, "safety_policy", None, raising=False)
+    monkeypatch.setattr(config, "GAZE_WAKE_ENABLED", True)
+    monkeypatch.setattr(config, "GAZE_PITCH_ENABLED", True)
+    gaze._last_pitch_t = gaze.time.monotonic() - 10_000.0
+    return svc
+
+
+def test_a_pitch_correction_owns_the_body_while_it_moves(monkeypatch):
+    """Idle writes every joint forever and an emotion re-poses all of them.
+
+    Both were named as candidate causes for this loop walking instead of
+    converging, and neither is stopped by anything except this lock.
+    """
+    svc = _owned_neck(monkeypatch)
+    _fill_dy(-0.4)
+    gaze._maybe_pitch(gaze.time.monotonic())
+
+    assert svc.moves, "precondition: the correction fired"
+    assert svc.owned_during_move == [True], "the move must happen under ownership"
+
+
+def test_ownership_is_released_after_the_correction(monkeypatch):
+    """A watcher that kept the lock would silence emotions for good."""
+    svc = _owned_neck(monkeypatch)
+    _fill_dy(-0.4)
+    gaze._maybe_pitch(gaze.time.monotonic())
+
+    assert svc._tracking_active is False
+
+
+def test_gaze_still_declines_to_move_a_body_someone_else_owns(monkeypatch):
+    """Claiming must not become stealing: a live look or tracking session wins."""
+    svc = _owned_neck(monkeypatch)
+    svc._tracking_active = True
+    _fill_dy(-0.4)
+    gaze._maybe_pitch(gaze.time.monotonic())
+
+    assert svc.moves == [] and svc.owned_during_move == []

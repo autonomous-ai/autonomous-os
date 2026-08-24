@@ -771,7 +771,18 @@ def _maybe_pitch(now: float) -> None:
             state.safety_policy, {"wrist_pitch.pos": target}, current,
             aim.MOVE_DURATION_S,
         )
-        svc.move_and_hold({"wrist_pitch.pos": target}, duration=duration)
+        # Own the body for the move. Without this the correction competes with
+        # whatever else is writing the arm, and something always is: idle plays
+        # absolutely on every joint and never stops, and an emotion dispatched
+        # mid-move re-poses the head entirely (`aim.servo_ownership` exists for
+        # exactly that). Both were listed as candidate causes for this loop
+        # walking rather than converging.
+        #
+        # The guard above already declined to start while someone else owns the
+        # arm, so this only ever claims a free body; ownership is restored, not
+        # cleared, so a tracking session that began meanwhile is not released.
+        with aim.servo_ownership():
+            svc.move_and_hold({"wrist_pitch.pos": target}, duration=duration)
         # Anchor on EVERY correction, including the guessed ones. Leaving the
         # anchor behind during a search means idle keeps pulling back to where
         # the search started and erases it step by step — device-observed the
@@ -848,7 +859,12 @@ def _maybe_repoint(now: float) -> None:
         duration = aim.min_move_duration(
             state.safety_policy, target, current, aim.MOVE_DURATION_S
         )
-        svc.move_and_hold(target, duration=duration)
+        # Owned for the same reason as the pitch correction, and more so: this
+        # one restores a whole posture across four joints, so an emotion landing
+        # in the middle leaves the head in a blend of two poses rather than
+        # either of them.
+        with aim.servo_ownership():
+            svc.move_and_hold(target, duration=duration)
         # Make idle rest here too. Turning to the remembered pose is undone
         # within one idle cycle otherwise — idle is absolute and loops, so it
         # walks the camera back to the pose the recording was made at. The
