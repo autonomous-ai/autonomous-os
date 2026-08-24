@@ -78,11 +78,87 @@ restore_web_backup() {
   mv "$backup" "$WEB_ROOT"
 }
 
+resolve_device_profile() {
+  DEVICE_TYPE="$(grep -E '^DEVICE_TYPE=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
+  [ -z "$DEVICE_TYPE" ] && DEVICE_TYPE="$(jq -r '.device_type // empty' /root/config/config.json 2>/dev/null)"
+  [ -n "$DEVICE_TYPE" ] || { echo "ERROR: device_type not found in /opt/hal/.env or /root/config/config.json" >&2; return 1; }
+  DEVICES_DIR="$(grep -E '^DEVICES_DIR=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
+  [ -n "$DEVICES_DIR" ] || DEVICES_DIR=/opt/devices
+  DEVICE_DEST="$DEVICES_DIR/$DEVICE_TYPE"
+}
+
+save_device_service_state() {
+  mkdir -p "$ROLLBACK_DIR"
+  for unit in os-server hal; do
+    if systemctl is-active --quiet "$unit"; then echo "$unit=active"; else echo "$unit=inactive"; fi
+  done >"$ROLLBACK_DIR/device.services"
+}
+
+device_was_active() {
+  local unit="$1"
+  grep -qx "$unit=active" "$ROLLBACK_DIR/device.services" 2>/dev/null || [ ! -f "$ROLLBACK_DIR/device.services" ]
+}
+
+restore_device_service_state() {
+  if device_was_active os-server; then systemctl restart os-server; else systemctl stop os-server 2>/dev/null || true; fi
+  if device_was_active hal; then systemctl restart hal; else systemctl stop hal 2>/dev/null || true; fi
+}
+
+wait_for_url() {
+  local url="$1" max_attempts="$2" attempt=1
+  while [ "$attempt" -le "$max_attempts" ]; do
+    curl -fsS --max-time 5 "$url" >/dev/null 2>&1 && return 0
+    sleep 1
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
+check_device_profile() {
+  [ -f "$DEVICE_DEST/ROBOT.md" ] || return 1
+  ! device_was_active hal || { systemctl is-active --quiet hal && wait_for_url http://127.0.0.1:5001/health 120; }
+  ! device_was_active os-server || { systemctl is-active --quiet os-server && wait_for_url http://127.0.0.1:5000/api/health/live 60; }
+}
+
+snapshot_device_rootfs() {
+  local old_rootfs="$1" new_rootfs="$2" archive="$ROLLBACK_DIR/device.previous.rootfs"
+  local list rel target state
+  list=$(mktemp)
+  rm -rf "$archive"
+  mkdir -p "$archive/files"
+  { [ -d "$old_rootfs" ] && (cd "$old_rootfs" && find . \( -type f -o -type l \) -print); [ -d "$new_rootfs" ] && (cd "$new_rootfs" && find . \( -type f -o -type l \) -print); } | sort -u >"$list"
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    target="/${rel#./}"
+    if [ -e "$target" ] || [ -L "$target" ]; then state=present; mkdir -p "$archive/files/$(dirname "${rel#./}")"; cp -a "$target" "$archive/files/${rel#./}"; else state=absent; fi
+    printf '%s\t%s\n' "$rel" "$state" >>"$archive/manifest"
+  done <"$list"
+  rm -f "$list"
+}
+
+restore_device_rootfs() {
+  local archive="$ROLLBACK_DIR/device.previous.rootfs" rel state target
+  [ -f "$archive/manifest" ] || return 0
+  while IFS=$'\t' read -r rel state; do
+    target="/${rel#./}"
+    if [ "$state" = present ]; then mkdir -p "$(dirname "$target")"; cp -a "$archive/files/${rel#./}" "$target"; else rm -f "$target"; fi
+  done <"$archive/manifest"
+}
+
+restore_device_backup() {
+  local backup="$ROLLBACK_DIR/device.previous" failed="$ROLLBACK_DIR/device.failed"
+  [ -d "$backup" ] || { echo "No rollback backup for device" >&2; return 1; }
+  rm -rf "$failed"
+  [ ! -e "$DEVICE_DEST" ] || mv "$DEVICE_DEST" "$failed"
+  mv "$backup" "$DEVICE_DEST"
+  restore_device_rootfs
+}
+
 [ "$(id -u)" -ne 0 ] && { echo "Run as root."; exit 1; }
-[ $# -lt 1 ] && { echo "Usage: software-update <component>|rollback <os-server|bootstrap|web>"; exit 1; }
+[ $# -lt 1 ] && { echo "Usage: software-update <component>|rollback <os-server|bootstrap|web|device>"; exit 1; }
 APP="$1"
 if [ "$APP" = "rollback" ]; then
-  [ $# -eq 2 ] || { echo "Usage: software-update rollback <os-server|bootstrap|web>"; exit 1; }
+  [ $# -eq 2 ] || { echo "Usage: software-update rollback <os-server|bootstrap|web|device>"; exit 1; }
   ROLLBACK_TARGET="$2"
   if [ "$ROLLBACK_TARGET" = "web" ]; then
     BACKUP="$ROLLBACK_DIR/web.previous"
@@ -105,6 +181,24 @@ if [ "$APP" = "rollback" ]; then
     restore_web_service_state
     check_web || { echo "web rollback health check failed"; exit 1; }
     echo "web restored from $BACKUP"
+    exit 0
+  fi
+  if [ "$ROLLBACK_TARGET" = "device" ]; then
+    resolve_device_profile || exit 1
+    BACKUP="$ROLLBACK_DIR/device.previous"
+    [ -d "$BACKUP" ] || { echo "No rollback backup for device"; exit 1; }
+    BLOCKED_VERSION="$(cat "$DEVICE_DEST/VERSION" 2>/dev/null || true)"
+    if [ -z "$BLOCKED_VERSION" ] && [ -f /root/bootstrap/state.json ]; then BLOCKED_VERSION=$(jq -r '.components.device // empty' /root/bootstrap/state.json 2>/dev/null || true); fi
+    if [ -n "$BLOCKED_VERSION" ] && [ -f "$BOOTSTRAP_JSON" ]; then
+      CONFIG_TMP=$(mktemp)
+      if jq --arg version "$BLOCKED_VERSION" '.rollback_versions = (.rollback_versions // {}) | .rollback_versions.device = $version' "$BOOTSTRAP_JSON" >"$CONFIG_TMP"; then mv "$CONFIG_TMP" "$BOOTSTRAP_JSON"; else rm -f "$CONFIG_TMP"; echo "WARN: could not record rollback version; lower min_version before the next OTA poll"; fi
+    fi
+    systemctl stop os-server 2>/dev/null || true
+    systemctl stop hal 2>/dev/null || true
+    restore_device_backup
+    restore_device_service_state
+    check_device_profile || { echo "device rollback health check failed"; exit 1; }
+    echo "device restored from $BACKUP"
     exit 0
   fi
   case "$ROLLBACK_TARGET" in
@@ -319,50 +413,41 @@ elif [ "$APP" = "claude-desktop-buddy" ]; then
   echo "claude-desktop-buddy updated to $VERSION"
 elif [ "$APP" = "device" ]; then
   [ -z "$URL" ] && { echo "Metadata has no url for devices.$DEVICE_TYPE"; exit 1; }
-  DEVICES_DIR="$(grep -E '^DEVICES_DIR=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
-  [ -z "$DEVICES_DIR" ] && DEVICES_DIR="/opt/devices"
-  DEST="$DEVICES_DIR/$DEVICE_TYPE"
+  resolve_device_profile || exit 1
+  DEST="$DEVICE_DEST"
   ZIP_TMP=$(mktemp)
   download_verified "$URL" "$ZIP_TMP" "$SHA256" || { echo "Failed checksum verification for device profile"; exit 1; }
-  # Mirror, not merge — same as spike-device.sh: a capability or rootfs file
-  # removed upstream must actually disappear, and unzipping over the old tree
-  # would keep it forever.
-  rm -rf "${DEST:?}"
-  mkdir -p "$DEST"
-  unzip -o -q "$ZIP_TMP" -d "$DEST"
-  rm -f "$ZIP_TMP"
-  # Re-apply the device rootfs overlay onto / before services restart — the
-  # profile's /etc/asound.conf and /opt/hal/.env live there, so an OTA that only
-  # unzipped into $DEST would leave HAL on the old tuning.
-  #
-  # But KEEP an existing /opt/hal/.env. It is the one overlay file an operator
-  # edits on the robot (VAD thresholds, sensing floors, camera tuning), and this
-  # branch runs UNATTENDED from the bootstrap worker — silently resetting tuning
-  # on a routine update is exactly how it was lost before (spike-device.sh keeps
-  # it too, and only --force-env replaces it). Absent → installed, because HAL
-  # will not start without DEVICE_TYPE.
-  if [ -d "$DEST/rootfs" ]; then
-    ENV_DST="/opt/hal/.env"
-    ENV_BACKUP=""
-    if [ -f "$ENV_DST" ]; then
-      ENV_BACKUP="$(mktemp)"
-      cp -a "$ENV_DST" "$ENV_BACKUP"
-    fi
-    cp -a "$DEST/rootfs/." /
-    if [ -n "$ENV_BACKUP" ]; then
-      cp -a "$ENV_BACKUP" "$ENV_DST"
-      rm -f "$ENV_BACKUP"
-    fi
+  mkdir -p "$DEVICES_DIR"
+  DIR_TMP=$(mktemp -d "$DEVICES_DIR/.${DEVICE_TYPE}.new.XXXXXX")
+  unzip -o -q "$ZIP_TMP" -d "$DIR_TMP"
+  [ -f "$DIR_TMP/ROBOT.md" ] || { echo "No ROBOT.md in device profile"; exit 1; }
+  [ -d "$DEST" ] || { echo "No installed device profile at $DEST"; exit 1; }
+  save_device_service_state
+  systemctl stop os-server 2>/dev/null || true
+  systemctl stop hal 2>/dev/null || true
+  snapshot_device_rootfs "$DEST/rootfs" "$DIR_TMP/rootfs"
+  rm -rf "$ROLLBACK_DIR/device.previous"
+  mv "$DEST" "$ROLLBACK_DIR/device.previous"
+  mv "$DIR_TMP" "$DEST"
+  DIR_TMP=""
+  ENV_BACKUP=""
+  if [ -f /opt/hal/.env ]; then ENV_BACKUP=$(mktemp); cp -a /opt/hal/.env "$ENV_BACKUP"; fi
+  [ ! -d "$DEST/rootfs" ] || cp -a "$DEST/rootfs/." /
+  if [ -n "$ENV_BACKUP" ]; then cp -a "$ENV_BACKUP" /opt/hal/.env; rm -f "$ENV_BACKUP"; fi
+  if ! restore_device_service_state || ! check_device_profile; then
+    echo "device profile health check failed; restoring the known-good profile" >&2
+    systemctl stop os-server 2>/dev/null || true
+    systemctl stop hal 2>/dev/null || true
+    restore_device_backup
+    restore_device_service_state || true
+    check_device_profile || true
+    exit 1
   fi
-  # Refresh this script from the package just installed, so a fix in the updater
-  # reaches the robot over OTA instead of needing a hand-copy. Syntax-checked
-  # first: a broken updater is the one thing nothing else on the robot can repair.
+  # Only refresh the updater after the profile itself is confirmed healthy.
   if [ -f "$DEST/software-update" ] && bash -n "$DEST/software-update" 2>/dev/null; then
     install -m 0755 "$DEST/software-update" /usr/local/bin/software-update.new
     mv -f /usr/local/bin/software-update.new /usr/local/bin/software-update
     echo "[software-update] refreshed /usr/local/bin/software-update from $DEST"
   fi
-  systemctl restart os-server 2>/dev/null || true
-  systemctl restart hal 2>/dev/null || true
   echo "device profile ($DEVICE_TYPE) updated to $VERSION"
 fi

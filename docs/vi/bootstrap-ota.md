@@ -299,6 +299,16 @@ thất bại, updater tự khôi phục bundle và trạng thái service đã l�
 có thể chạy `software-update rollback web`; version bị loại được ghi vào
 `rollback_versions` giống rollback binary.
 
+Với device profile, updater stage ZIP, chỉ dừng `os-server` và `hal` vốn đang
+active, rồi giữ profile cũ tại `/root/bootstrap/rollback/device.previous`. Nó
+cũng snapshot chính xác các file thuộc `rootfs/` của profile cũ hoặc mới trong
+`device.previous.rootfs`; rollback vì vậy khôi phục file bị ghi đè và xoá file
+chỉ được profile lỗi thêm vào. Tuning local trong `/opt/hal/.env` vẫn được giữ.
+Profile bắt buộc có `ROBOT.md`; mỗi service vốn active phải khởi động lại và trả
+về health endpoint loopback. Check lỗi sẽ tự phục hồi profile known-good và trạng
+thái service cũ. Dùng `software-update rollback device` khi operator rollback;
+version profile bị loại sau đó sẽ bị chặn.
+
 Device không có `signing_public_key` chủ ý ở legacy mode: nó đọc component top
 level và chỉ log cảnh báo, không làm OTA lỗi. Đây là compatibility bridge, không
 phải bảo đảm trust; pin public key để bật verified OTA.

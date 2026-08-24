@@ -302,6 +302,17 @@ Failure automatically restores the saved bundle and service state. An operator
 can also run `software-update rollback web`; the rejected version is recorded in
 `rollback_versions` just like a binary rollback.
 
+For a device profile, the updater stages the ZIP, stops only the `os-server` and
+`hal` services that were active, and retains the old profile at
+`/root/bootstrap/rollback/device.previous`. It also snapshots the exact files
+covered by the old or new `rootfs/` overlay in `device.previous.rootfs`; rollback
+therefore restores overwritten files and removes files introduced only by the
+rejected profile. Local `/opt/hal/.env` tuning remains preserved. The profile
+must contain `ROBOT.md`; each service that was active must recover and answer
+its loopback health endpoint. A failed check restores the known-good profile and
+its prior service state automatically. Use `software-update rollback device` for
+an operator rollback; the rejected device-profile version is then blocked.
+
 Devices without `signing_public_key` deliberately remain in legacy mode: they
 read the top-level entries and emit a warning rather than failing OTA. This is a
 compatibility bridge, not a trust guarantee; pin the public key to opt in to

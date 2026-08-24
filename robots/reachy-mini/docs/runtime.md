@@ -107,6 +107,14 @@ The update requires `index.html`, `nginx -t`, and a loopback `GET /` when nginx
 was active; a failed check restores the known-good bundle automatically. Use
 `sudo software-update rollback web` for an operator-initiated rollback.
 
+Device-profile OTA stages the package before swapping
+`/opt/devices/reachy-mini`, saves the prior profile and every affected rootfs
+target, then restores the prior `os-server` and HAL service state. It preserves
+the local `/opt/hal/.env` tuning file. The new profile must contain `ROBOT.md`;
+each previously active service must pass its loopback health endpoint or the
+known-good profile is restored automatically. Use
+`sudo software-update rollback device` for a manual recovery.
+
 `spike.sh` is a **thin orchestrator** — it reimplements nothing, it just runs the
 component scripts in order. Each of those also runs standalone:
 

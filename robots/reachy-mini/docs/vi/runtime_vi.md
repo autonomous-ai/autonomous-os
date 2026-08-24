@@ -234,6 +234,13 @@ Update yêu cầu có `index.html`, `nginx -t`, và `GET /` loopback khi nginx �
 active; check lỗi sẽ tự khôi phục bundle known-good. Dùng
 `sudo software-update rollback web` khi operator cần rollback chủ động.
 
+Device-profile OTA stage package trước khi swap
+`/opt/devices/reachy-mini`, lưu profile trước đó và mọi rootfs target bị ảnh
+hưởng, sau đó phục hồi trạng thái service `os-server` và HAL cũ. Nó giữ file
+tuning local `/opt/hal/.env`. Profile mới phải có `ROBOT.md`; mỗi service trước
+đó active phải qua health endpoint loopback, nếu không profile known-good sẽ tự
+được phục hồi. Dùng `sudo software-update rollback device` để recovery thủ công.
+
 Layout là **layout production**, không phải cây riêng cho spike:
 
 | Thành phần | Đường dẫn |
