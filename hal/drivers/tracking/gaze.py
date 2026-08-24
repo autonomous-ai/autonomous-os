@@ -67,6 +67,10 @@ _last_dy_frac: Optional[float] = None
 # Whether that offset came from a real face or from the coarse person fallback.
 _last_dy_from_face: bool = False
 _last_pitch_t: float = 0.0
+# When a repoint moved the head, and what _last_face_t was at that moment.
+# Non-zero means a verdict is owed to the bearing — see _verify_repoint.
+_repoint_pending_t: float = 0.0
+_repoint_face_t_before: float = 0.0
 # Consecutive corrections driven by the fallback rather than by a face.
 _blind_pitch_steps: int = 0
 
@@ -937,6 +941,14 @@ def _maybe_repoint(now: float) -> None:
         _anchor_idle_from_pose(svc, getattr(est, "pose", None))
         discard_samples()
         _last_repoint_t = now
+        # Owe the estimate a verdict. Deliberately not measured here: a
+        # synchronous detect would need the detector lock and a settle, inside
+        # a watcher whose whole design is never to make a live look wait. The
+        # sampler is already looking at the new view several times a second, so
+        # the honest answer arrives by itself a few seconds from now.
+        global _repoint_pending_t, _repoint_face_t_before
+        _repoint_pending_t = now
+        _repoint_face_t_before = _last_face_t
         logger.info(
             "[gaze] nobody visible for %.0fs — turning %+.1f deg to the "
             "remembered bearing %+.1f (conf=%.2f)",
@@ -944,6 +956,41 @@ def _maybe_repoint(now: float) -> None:
         )
     except Exception as e:
         logger.debug("[gaze] repoint skipped: %s", e)
+
+
+def _verify_repoint(now: float) -> None:
+    """Tell the bearing whether turning to it actually found the user.
+
+    A hit is `_last_face_t` having advanced past the moment of the turn: that
+    clock only moves for a face big enough to measure AND inside
+    GAZE_WELL_FRAMED_EDGE, which is exactly the question "did turning here find
+    them", not the weaker "was anything visible".
+
+    Scored once per repoint. A miss is not conclusive on its own — the user may
+    simply be out of the room — which is why user_bearing requires several
+    clustered misses before dropping anything.
+    """
+    global _repoint_pending_t
+
+    if _repoint_pending_t <= 0.0:
+        return
+    if (now - _repoint_pending_t) < config.GAZE_REPOINT_VERIFY_S:
+        return
+    hit = _last_face_t > _repoint_face_t_before
+    _repoint_pending_t = 0.0
+    try:
+        from hal.drivers.tracking import user_bearing
+
+        dropped = user_bearing.record_prediction(hit)
+    except Exception as e:
+        logger.debug("[gaze] repoint scoring skipped: %s", e)
+        return
+    logger.info(
+        "[gaze] repoint %s — %s%s",
+        "found the user" if hit else "found nobody",
+        "bearing confirmed" if hit else "counted against the bearing",
+        " (estimate dropped)" if dropped else "",
+    )
 
 
 def _loop() -> None:
@@ -1013,6 +1060,7 @@ def _loop() -> None:
                 # points at the desk finds nobody however right the bearing is.
                 _maybe_pitch(now)
                 _maybe_repoint(now)
+                _verify_repoint(now)
             except Exception as e:  # a background watcher must never take HAL down
                 logger.debug("[gaze] sample skipped: %s", e)
             if _stop.wait(interval):
@@ -1061,6 +1109,8 @@ def reset_for_test() -> None:
     _last_grant_t = 0.0
     _last_face_t = 0.0
     _last_repoint_t = 0.0
+    globals()["_repoint_pending_t"] = 0.0
+    globals()["_repoint_face_t_before"] = 0.0
     _last_dy_frac = None
     globals()["_last_frame"] = None
     globals()["_last_box"] = None

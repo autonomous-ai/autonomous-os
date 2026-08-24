@@ -1355,6 +1355,21 @@ GAZE_WELL_FRAMED_EDGE: float = float(
 GAZE_REPOINT_MIN_CONFIDENCE: float = float(
     os.environ.get("HAL_GAZE_REPOINT_MIN_CONFIDENCE", "0.5")
 )
+# How long after turning to the remembered bearing to wait before deciding
+# whether anyone was actually there.
+#
+# The estimate self-heals by being told when it predicted wrongly, and until now
+# only a `look` ever told it — this watcher turned to the bearing and never
+# reported back, so the consumer that acts MOST often was the one contributing
+# nothing. Device-observed 2026-08-24: two repoints onto a confidence-0.99
+# estimate, neither verified, the confidence unchanged afterwards.
+#
+# Long enough for the move to settle and the sampler to get several looks at the
+# new view (it manages 3-6/s), short enough that the verdict still describes the
+# moment the lamp turned.
+GAZE_REPOINT_VERIFY_S: float = float(
+    os.environ.get("HAL_GAZE_REPOINT_VERIFY_S", "6")
+)
 
 # Vertical centring — the neck the aim never had.
 #

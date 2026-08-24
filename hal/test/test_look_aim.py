@@ -848,3 +848,57 @@ def test_a_detector_without_the_candidate_path_still_works():
     box, kind, _ = aim._detect_subject(d, frame)
 
     assert box == (100, 100, 300, 400) and kind == "person"
+
+
+# --- Task C / F12: every exit scores the remembered bearing ---
+
+
+def _scored(box, target_hit="person", deadline=5.0):
+    """Run an aim WITH a bearing available; return (result, what was scored).
+
+    Not built on `_run`: that helper pins `read_estimate` to None so the aims it
+    drives never consult the bearing, which is exactly the thing under test here.
+    """
+    calls = []
+    from hal.drivers.tracking import user_bearing
+
+    est = mock.Mock()
+    est.bearing_deg = 40.0
+    est.confidence = 0.9
+    est.pose = {"base_yaw.pos": 40.0}
+
+    frame = _frame()
+    svc = _FakeSvc()
+    with (
+        mock.patch.object(state, "camera_capture", _FakeCap(frame)),
+        mock.patch.object(state, "animation_service", svc),
+        mock.patch.object(state, "safety_policy", None),
+        mock.patch.object(state, "_camera_disabled", False, create=True),
+        mock.patch.object(user_bearing, "read_estimate", return_value=est),
+        mock.patch.object(
+            user_bearing, "record_prediction",
+            side_effect=lambda hit, now=None: calls.append(hit) or False,
+        ),
+    ):
+        res = aim.aim_for_look(deadline, detector=_detector(box, target_hit))
+    return res, calls
+
+
+def test_a_bearing_step_that_finds_nobody_is_counted_as_a_miss():
+    """The give-up exit always reported this. It is the other four that did not."""
+    res, calls = _scored(None)
+    assert res.bearing_steps > 0, "precondition: the bearing was consulted"
+    assert calls == [False]
+
+
+def test_an_aim_that_never_consulted_the_bearing_says_nothing_about_it():
+    """A hit or a miss from an aim that never turned there is not evidence."""
+    res, calls = _scored((300, 100, 60, 200))
+    assert res.bearing_steps == 0
+    assert calls == [], "no bearing step means no verdict"
+
+
+def test_the_bearing_is_scored_at_most_once_per_aim():
+    """It used to be called on EVERY iteration a subject was visible."""
+    _res, calls = _scored(None)
+    assert len(calls) <= 1

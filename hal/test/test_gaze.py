@@ -1354,3 +1354,72 @@ def test_a_failing_snapshot_never_costs_the_correction(neck, monkeypatch):
         gaze._maybe_pitch(gaze.time.monotonic())
     except OSError:
         raise AssertionError("a snapshot failure must not escape _maybe_pitch")
+
+
+# --- Task C / F11: a repoint must report back to the bearing ---
+
+
+def _repoint_scored(monkeypatch):
+    """Capture what gaze told user_bearing, without touching a real file."""
+    calls = []
+    from hal.drivers.tracking import user_bearing
+    monkeypatch.setattr(
+        user_bearing, "record_prediction",
+        lambda hit, now=None: calls.append(hit) or False,
+    )
+    return calls
+
+
+def test_a_repoint_that_finds_the_user_confirms_the_bearing(monkeypatch):
+    calls = _repoint_scored(monkeypatch)
+    t = gaze.time.monotonic()
+    gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
+    gaze._repoint_face_t_before = t - 100.0
+    gaze._last_face_t = t - 1.0          # a face was seen AFTER the turn
+
+    gaze._verify_repoint(t)
+    assert calls == [True]
+
+
+def test_a_repoint_that_finds_nobody_counts_against_the_bearing(monkeypatch):
+    """The self-healing this feeds is why a moved lamp eventually forgets."""
+    calls = _repoint_scored(monkeypatch)
+    t = gaze.time.monotonic()
+    gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
+    gaze._repoint_face_t_before = t - 100.0
+    gaze._last_face_t = t - 100.0        # nothing seen since the turn
+
+    gaze._verify_repoint(t)
+    assert calls == [False]
+
+
+def test_the_verdict_waits_for_the_settle_window(monkeypatch):
+    """Judged too early, every repoint would read as a miss: the move has not
+    settled and the sampler has not looked at the new view yet."""
+    calls = _repoint_scored(monkeypatch)
+    t = gaze.time.monotonic()
+    gaze._repoint_pending_t = t - 1.0    # only just turned
+    gaze._repoint_face_t_before = t - 100.0
+    gaze._last_face_t = t - 100.0
+
+    gaze._verify_repoint(t)
+    assert calls == [], "too early to judge"
+
+
+def test_each_repoint_is_scored_exactly_once(monkeypatch):
+    calls = _repoint_scored(monkeypatch)
+    t = gaze.time.monotonic()
+    gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
+    gaze._repoint_face_t_before = t - 100.0
+    gaze._last_face_t = t - 1.0
+
+    for _ in range(5):
+        gaze._verify_repoint(t)
+    assert calls == [True], "a repeated verdict would double-count"
+
+
+def test_nothing_is_scored_when_no_repoint_is_pending(monkeypatch):
+    calls = _repoint_scored(monkeypatch)
+    gaze._repoint_pending_t = 0.0
+    gaze._verify_repoint(gaze.time.monotonic())
+    assert calls == []

@@ -703,13 +703,29 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
     pending_calib: Optional[Tuple[float, float]] = None
     last_move_deg = 0.0
     announced_found = False
+    # Did this aim ever confirm a subject? Read by _result to score the
+    # remembered bearing exactly once, whichever way the aim exits.
+    found_any = False
     start_yaw = _yaw_of(svc)
     steps: list = []
     bearing_consulted: Optional[dict] = None
 
     def _result(aimed: bool, reason: str) -> AimResult:
         """Build the outcome with the pose actually reached, so a trace shows
-        whether the head moved rather than just what was decided."""
+        whether the head moved rather than just what was decided.
+
+        Also scores the remembered bearing, HERE rather than at each exit. The
+        aim leaves by five doors — centred, deadline, max iterations, no fresh
+        frame, occlusion hold, give-up — and only the give-up one used to
+        report a miss. A bearing move plus its settle is most of a second
+        against an 8s deadline, so timing out right after turning is ordinary,
+        and every one of those was an invisible failure: the estimate kept its
+        confidence while repeatedly finding nobody.
+
+        Scoring in the single place every exit passes through means a door
+        added later cannot forget to.
+        """
+        _score_prediction(bearing_steps, found=found_any)
         return AimResult(
             aimed, reason, iterations, yaw_total, last_dx_frac, bearing_steps,
             start_yaw, _yaw_of(svc), bearing_consulted, steps, last_move_deg,
@@ -763,7 +779,6 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
                     bearing_steps += 1
                     iterations += 1
                     continue
-                _score_prediction(bearing_steps, found=False)
                 bearing_consulted = probe.get("bearing", bearing_consulted)
                 steps.append({"n": iterations + 1, "saw": None,
                               "action": probe.get("skipped", "give up — nothing found"),
@@ -777,7 +792,7 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
                 # 2026-08-19 said "bạn đây rồi" four times in three seconds.
                 announced_found = True
                 _say("look_found")
-            _score_prediction(bearing_steps, found=True)
+            found_any = True
             _note_sighting(svc)
             x, _y, w, _h = box
             w_fr = float(frame.shape[1])
