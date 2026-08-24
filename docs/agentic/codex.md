@@ -218,7 +218,7 @@ them onto the same `domain.WSEvent` shape the OpenClaw handler consumes:
 | `item.started` `command_execution` / `mcp_tool_call` | `agent` tool `phase:start` (`shell` / `server.tool`) |
 | `item.completed` `command_execution` / `mcp_tool_call` | tool `phase:end` (start emitted first when unseen) |
 | `item.completed` `web_search` / `file_change` | tool `phase:start` + `phase:end` pair |
-| `item.completed` `agent_message` | **accumulated** — no delta stream in exec mode |
+| `item.completed` `agent_message` | **buffered as the reply** — no delta stream in exec mode. A newer one demotes the previous to `stream:thinking` (see *Preambles* below) |
 | `item.*` `reasoning` / `todo_list` | *(ignored — status, not content)* |
 | `turn.completed` | `agent` `stream:assistant` (whole reply as **one** delta) **+** `chat` `state:final role:assistant` **+** lifecycle `phase:end` with usage — ends the turn |
 | `turn.failed` / `error` / `bridge.error` | `agent` lifecycle `phase:error` — ends the turn |
@@ -228,6 +228,17 @@ Like PicoClaw, the accumulated `agent_message` text is surfaced at
 `turn.completed` as a single assistant delta **before** `chat.final` /
 `lifecycle.end` — the N=1 case of the streaming contract, which is what lets
 the shared consumer flush TTS + `[HW:/…]` hardware markers at `lifecycle.end`.
+
+**Preambles.** Codex exec narrates before it calls a tool, as its own
+`agent_message` item ("Using the sensing skill for this presence event.",
+"Posture summary is present, so this is the posture-nudge route."). Joining
+every `agent_message` would speak that whole trail — the leak seen on
+`presence.enter` and `motion.activity` nudges. So only the **last**
+`agent_message` of a turn is the reply: each earlier one is demoted to
+`stream:thinking` (Flow Monitor only, never TTS or a channel reply) as soon as a
+newer one proves it was not the reply. Exception: a non-final message carrying a
+`[HW:/…]` marker is a real hardware action and stays in the reply. Prompt
+wording cannot suppress preambles reliably — this is the enforcement point.
 
 **Usage:** `turn.completed` carries `{input_tokens, cached_input_tokens,
 output_tokens}`; the translator maps `input + cached → InputTokens` (an
