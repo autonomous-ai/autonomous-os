@@ -709,6 +709,11 @@ REALTIME_RECV_QUEUE_TIMEOUT_S: float = float(
 # zero output events — the default watchdog killed such turns seconds before
 # the answer (device-observed 2026-07-06). Applies per-turn via
 # agent.extend_recv_timeout(); normal turns keep the tight default above.
+#
+# Raising this also delays the look-frame handoff, which only happens once this
+# watchdog gives up: keep REALTIME_GEMINI_VISION_HANDOFF_MAX_AGE_S comfortably
+# above it, or the frame expires before it can be handed off (that regression
+# ran from 2026-07-06 to 2026-08-24 — see that setting's comment).
 REALTIME_LOOK_RECV_TIMEOUT_S: float = float(
     os.environ.get("HAL_REALTIME_LOOK_RECV_TIMEOUT_S", "20.0")
 )
@@ -1155,12 +1160,21 @@ REALTIME_GEMINI_VISION_MIN_INTERVAL_S: float = float(
     os.environ.get("HAL_GEMINI_VISION_MIN_INTERVAL_S", "10.0")
 )
 # Vision handoff: when a `look` turn delegates / falls back to the main agent
-# (e.g. Gemini timed out mid-turn), the frame `look` already captured is handed
-# to the main agent BY PATH so it reuses it instead of snapshotting again. The
-# handoff path is only attached if the frame is younger than this (freshness
-# guard; the frame is also cleared per-turn). 0 disables the age guard.
+# (e.g. Gemini timed out mid-turn), the frame `look` already captured rides the
+# sensing POST so the main agent answers from it instead of snapshotting again.
+# The frame is only attached if it is younger than this (freshness guard; the
+# frame is also cleared per-turn). 0 disables the age guard.
+#
+# MUST stay ABOVE REALTIME_LOOK_RECV_TIMEOUT_S plus dispatch time. The timeout
+# fallback is the main way this handoff is reached, and it only fires after that
+# watchdog has run its full course — after which HAL still replays the turn
+# audio and runs speaker ID before POSTing. Set the two equal and the guard
+# expires every frame it exists to serve: both were 20.0 between 2026-07-06
+# (when the look watchdog went 8s -> 20s and nobody adjusted this) and
+# 2026-08-24, and lamp-0c89 measured 3/3 look turns falling back at exactly 20s
+# with the image dropped, so the vision describe never ran once.
 REALTIME_GEMINI_VISION_HANDOFF_MAX_AGE_S: float = float(
-    os.environ.get("HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S", "20.0")
+    os.environ.get("HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S", "45.0")
 )
 
 # --- Realtime: OpenAI Realtime ---
