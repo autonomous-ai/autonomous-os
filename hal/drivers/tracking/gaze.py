@@ -98,7 +98,10 @@ def _save_snapshot(label: str) -> Optional[str]:
 
         from hal.drivers.tracking.look_debug import encode_annotated
 
-        jpg = encode_annotated(_last_frame, _last_box, label)
+        # both_axes: this loop servos on dy, so the horizontal pair is the
+        # one that shows the error being corrected. The aim's view stays
+        # vertical-only — it can only move yaw.
+        jpg = encode_annotated(_last_frame, _last_box, label, both_axes=True)
         if jpg is None:
             return None
         root = getattr(config, "SNAPSHOT_PERSIST_DIR", "/var/lib/hal/snapshots")
