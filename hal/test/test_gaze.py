@@ -1566,3 +1566,50 @@ def test_an_older_voice_service_still_gets_a_gate(armed, monkeypatch):
 
     assert gaze.on_speech_start() is True
     assert v.grants == ["gaze"]
+
+
+# --- Task E / F21: record WHO, without acting on it yet ---
+
+
+def test_the_gate_records_who_face_perception_thinks_is_here(armed, voice, monkeypatch):
+    """Evidence first. Gaze picks the face nearest frame centre and has no idea
+    who spoke; nothing in the log distinguished a correct wake from a colleague
+    facing the lamp while the user talked."""
+    import hal.app_state as state
+
+    monkeypatch.setattr(state, "face_user", lambda: ("leo", 3.0), raising=False)
+    assert gaze._who_is_in_frame() == ("leo", 3.0)
+
+
+def test_an_unknown_face_reports_empty_rather_than_guessing(armed, monkeypatch):
+    import hal.app_state as state
+
+    monkeypatch.setattr(state, "face_user", lambda: ("", 0.0), raising=False)
+    assert gaze._who_is_in_frame() == ("", 0.0)
+
+
+def test_identity_lookup_never_costs_a_wake(armed, voice, monkeypatch):
+    """Face perception is optional — no camera, no presence capability, or a
+    failing lookup must not break the gate."""
+    import hal.app_state as state
+
+    def _boom():
+        raise RuntimeError("perception down")
+
+    monkeypatch.setattr(state, "face_user", _boom, raising=False)
+    assert gaze._who_is_in_frame() == ("", 0.0)
+
+    t = gaze.time.monotonic()
+    _turn_trail([90, 88, 85, 90, 12, 10, 8, 9], t)
+    assert gaze.on_speech_start() is True, "a broken lookup must not veto"
+
+
+def test_identity_is_observed_not_enforced(armed, voice, monkeypatch):
+    """F21 is still OPEN. A colleague in frame must NOT yet change the verdict —
+    gating on this before measuring it would be guessing twice."""
+    import hal.app_state as state
+
+    monkeypatch.setattr(state, "face_user", lambda: ("someone-else", 1.0), raising=False)
+    t = gaze.time.monotonic()
+    _turn_trail([90, 88, 85, 90, 12, 10, 8, 9], t)
+    assert gaze.on_speech_start() is True

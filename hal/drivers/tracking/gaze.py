@@ -723,6 +723,34 @@ def _sample_once() -> Optional[str]:  # noqa: C901
     return None
 
 
+def _who_is_in_frame() -> Tuple[str, float]:
+    """``(label, age_s)`` of whoever face perception currently believes is here.
+
+    Recorded on every gate decision, and read by nothing yet — F21 is open, and
+    this is the evidence needed to close it honestly.
+
+    The gap it measures: gaze picks the face nearest frame CENTRE and has no
+    idea who spoke. Speaker recognition resolves at session END, so it cannot
+    inform a decision made at speech start. Both failure directions are
+    ordinary at a shared desk — a colleague facing the lamp while the user
+    speaks, and the user facing it while a colleague speaks — and today nothing
+    in the log distinguishes either from a correct wake.
+
+    NOTE this is not necessarily the face gaze measured. `face_user()` reports
+    the FaceRecognizer's current user, derived from its own people map; the
+    watcher's nearest-to-centre pick may be somebody else entirely. That
+    difference is precisely what wants observing before anyone gates on it.
+    """
+    try:
+        import hal.app_state as state
+
+        label, age = state.face_user()
+        return (label or ""), float(age or 0.0)
+    except Exception as e:
+        logger.debug("[gaze] face identity lookup skipped: %s", e)
+        return "", 0.0
+
+
 def _check_speech(stage: str, *, request_repoint: bool) -> bool:
     """Decide whether the current utterance was addressed to the lamp.
 
@@ -764,6 +792,8 @@ def _check_speech(stage: str, *, request_repoint: bool) -> bool:
         )
 
         would = measured_enough and facing_now and turned
+        # Observed, never acted on — see _who_is_in_frame and F21.
+        who, who_age = _who_is_in_frame()
 
         now = time.monotonic()
         cooling = would and (now - _last_grant_t) < config.GAZE_COOLDOWN_S
@@ -786,10 +816,11 @@ def _check_speech(stage: str, *, request_repoint: bool) -> bool:
         )
         logger.info(
             "[gaze] %s: yaw=%s face=%spx edge=%s facing=%.0f%%/%.0f%% of %d "
-            "was=%s trail=[%s] -> %s%s",
+            "was=%s who=%s trail=[%s] -> %s%s",
             stage, yaw_txt, px_txt, edge_txt, ratio * 100.0,
             config.GAZE_MIN_FACING_RATIO * 100.0, considered,
             f"{before_ratio * 100:.0f}%/{before_n}" if baseline_known else "?",
+            f"{who}({who_age:.0f}s)" if who else "?",
             trail, verdict,
             " (shadow)" if config.GAZE_WAKE_SHADOW else "",
         )
