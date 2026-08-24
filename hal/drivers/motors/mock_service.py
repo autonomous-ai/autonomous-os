@@ -55,6 +55,19 @@ GRAVITY_REST = {
 # tuned so the fall takes about half a second, which is what the arm does.
 GRAVITY_DPS2 = 900.0
 
+# After a one-shot recording ends the body keeps that pose briefly, then eases
+# back into idle. aim() holds longer than a gesture does: the point of aiming is
+# to look somewhere and stay looking, so 5s matches the physical driver.
+AIM_HOLD_S = 5.0
+
+# What routes/servo.py reports while that post-aim hold is running. The physical
+# driver uses the same sentinel, so a client cannot tell the two apart.
+AIM_HOLD_RECORDING = "__aim_hold__"
+
+# Recordings that end by holding their final pose rather than returning to idle
+# — sleepy stays down until something wakes the lamp.
+NO_IDLE_RECORDINGS = {"sleepy"}
+
 # The Lamp joint set, so skills and recordings written against the reference
 # body work unchanged against the mock one.
 DEFAULT_JOINTS = (
@@ -73,8 +86,10 @@ class MockMotionService:
         self,
         joints: Optional[Set[str]] = None,
         safety_policy: Any = None,
+        idle_recording: str = "idle",
     ) -> None:
         self._joints = set(joints or DEFAULT_JOINTS)
+        self.idle_recording = idle_recording
         # Keep the same construction shape as SDK-backed motion services. The
         # HTTP routes still enforce the policy; retaining it here lets the mock
         # boot through the production factory without special cases.
@@ -248,6 +263,9 @@ class MockMotionService:
         # Same speed ceiling the body obeys: a simulator that swung faster than
         # SAFETY.md allows would show a move the robot cannot make.
         self._travel(target, min_move_duration(safety_policy, target, current, duration))
+        # Look, stay looking, then breathe again — the physical driver parks an
+        # __aim_hold__ pose for 5s and only then returns to idle.
+        self._settle_to_idle(AIM_HOLD_S)
         self._record("aim", direction, duration)
         return self.get_positions()
 
@@ -325,8 +343,15 @@ class MockMotionService:
         self._play_cancel.set()
         self._current_recording = None
 
-    def _play_recording(self, name: str) -> None:
-        """Replay the shipped CSV frames in memory, with no actuator output."""
+    def _play_recording(self, name: str, hold_s: float = 0.0) -> None:
+        """Replay the shipped CSV frames in memory, with no actuator output.
+
+        A recording that finishes does not leave the body frozen where it
+        landed: the driver holds that pose for `hold_s`, then interpolates back
+        into the idle loop, and idle repeats until something else is commanded.
+        A mock that stopped dead instead would show a lamp that goes still after
+        every gesture, which is not what the robot does.
+        """
         self._cancel_playback()
         frames = self._load_recording(name)
         if not frames:
@@ -338,19 +363,53 @@ class MockMotionService:
         self._current_recording = name
 
         def replay() -> None:
-            previous = frames[0][0]
+            playing, current, hold = name, frames, hold_s
             try:
-                for timestamp, positions in frames:
-                    if cancel.wait(max(0.0, timestamp - previous)):
+                while True:
+                    previous = current[0][0]
+                    for timestamp, positions in current:
+                        if cancel.wait(max(0.0, timestamp - previous)):
+                            return
+                        self._apply(positions)
+                        previous = timestamp
+                    if playing == self.idle_recording:
+                        continue  # idle is the resting loop, not a one-shot
+                    # sleepy and friends are meant to hold their final pose, and
+                    # an explicit hold() means the caller owns the pose now.
+                    if playing in NO_IDLE_RECORDINGS or self._suppressed:
                         return
-                    self._apply(positions)
-                    previous = timestamp
+                    if hold and cancel.wait(hold):
+                        return
+                    hold = 0.0
+                    following = self._load_recording(self.idle_recording)
+                    if not following:
+                        return
+                    playing, current = self.idle_recording, following
+                    self._current_recording = playing
             finally:
                 if self._play_cancel is cancel:
                     self._current_recording = None
 
         self._play_thread = threading.Thread(
             target=replay, daemon=True, name=f"mock-servo-{name}"
+        )
+        self._play_thread.start()
+
+    def _settle_to_idle(self, hold_s: float) -> None:
+        """Hold the pose just reached, then fall back into the idle loop."""
+        self._cancel_playback()
+        cancel = threading.Event()
+        self._play_cancel = cancel
+        self._current_recording = AIM_HOLD_RECORDING
+
+        def settle() -> None:
+            if cancel.wait(hold_s):
+                return
+            if self._play_cancel is cancel and not self._suppressed:
+                self._play_recording(self.idle_recording)
+
+        self._play_thread = threading.Thread(
+            target=settle, daemon=True, name="mock-servo-settle"
         )
         self._play_thread.start()
 
