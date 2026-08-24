@@ -544,6 +544,30 @@ chỉ mở đường chạy tay (`sudo software-update codex` qua SSH).
 Chỉ binary bị đụng: `config.toml`, `.env` và persona vẫn do presync hook sở hữu,
 nên update không thể ghi đè cấu hình Codex của thiết bị.
 
+### Xử lý Claude Code (mới chỉ chạy tay — bootstrap worker CHƯA đọc)
+
+Khác Codex, Claude Code **không** phải binary mình tự đặt: installer của
+Anthropic sở hữu `/root/.local/share/claude/versions/<ver>` và trỏ
+`/root/.local/bin/claude` vào đó, còn `/usr/local/bin/claude` chỉ là symlink của
+mình. Nên update = chạy lại installer với version đã publish (installer nhận
+version qua tham số vị trí: `install.sh [stable|latest|VERSION]`).
+
+```bash
+"claudecode")
+    HOME=/root curl -fsSL https://claude.ai/install.sh | bash -s -- "$VERSION"
+    ln -sf /root/.local/bin/claude /usr/local/bin/claude   # installer có thể trỏ lại symlink của nó
+    claude --version                                       # abort nếu không chạy được
+    systemctl restart claudecode                           # có điều kiện: unit chỉ tồn tại khi runtime đang active
+    ;;
+```
+
+Cố ý **không có backup `.previous` / rollback target**: installer vẫn giữ thư mục
+`versions/<ver>` cũ, nên muốn lùi thì publish version cũ rồi chạy
+`software-update claudecode`, chứ không phải khôi phục file mình lưu. Publish
+bằng `make upload-claudecode <semver-trần>`, thả bằng `make promote-claudecode`;
+giống codex, bootstrap worker chưa tiêu thụ `claudecode.version` nên hiện chỉ
+chạy tay qua SSH.
+
 ---
 
 ## 6. HAL Runtime — Nguồn & Tích Hợp

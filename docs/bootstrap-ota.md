@@ -556,6 +556,30 @@ fleet with `make promote-codex`. **The bootstrap worker does not consume
 Only the binary is touched: `config.toml`, `.env`, and the persona stay owned by
 the presync hook, so an update cannot clobber a device's Codex configuration.
 
+### Claude Code Case (manual only — not yet wired to the bootstrap worker)
+
+Unlike Codex, Claude Code is **not** a binary we place: Anthropic's installer
+owns `/root/.local/share/claude/versions/<ver>` and repoints
+`/root/.local/bin/claude` at it, and `/usr/local/bin/claude` is only our symlink
+into that. The update therefore re-runs the installer pinned to the published
+version (it takes the version as a positional arg: `install.sh [stable|latest|VERSION]`).
+
+```bash
+"claudecode")
+    HOME=/root curl -fsSL https://claude.ai/install.sh | bash -s -- "$VERSION"
+    ln -sf /root/.local/bin/claude /usr/local/bin/claude   # installer may repoint its own symlink
+    claude --version                                       # abort if not runnable
+    systemctl restart claudecode                           # conditional: unit exists only when the runtime is active
+    ;;
+```
+
+There is deliberately **no `.previous` backup / rollback target**: the installer
+keeps the old `versions/<ver>` directory, so going back is
+`software-update claudecode` with an older version published — not a restore of
+a file we saved. Publish with `make upload-claudecode <bare-semver>`, release
+with `make promote-claudecode`; as with codex, the bootstrap worker does not
+consume `claudecode.version` yet, so this is the SSH-only path for now.
+
 ---
 
 ## 6. HAL Runtime — Source & Integration

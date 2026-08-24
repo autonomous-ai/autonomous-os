@@ -275,8 +275,8 @@ if [ "$APP" = "rollback" ]; then
   exit 0
 fi
 case "$APP" in
-  os-server|openclaw|codex|bootstrap|web|hal|claude-desktop-buddy|device) ;;
-  *) echo "Unknown app: $APP. Use os-server, openclaw, codex, bootstrap, web, hal, claude-desktop-buddy, or device."; exit 1 ;;
+  os-server|openclaw|codex|claudecode|bootstrap|web|hal|claude-desktop-buddy|device) ;;
+  *) echo "Unknown app: $APP. Use os-server, openclaw, codex, claudecode, bootstrap, web, hal, claude-desktop-buddy, or device."; exit 1 ;;
 esac
 
 if [ -z "${OTA_METADATA_URL:-}" ]; then
@@ -405,6 +405,31 @@ elif [ "$APP" = "codex" ]; then
     echo "[software-update] codex.service absent (runtime not active) — binary updated, no restart"
   fi
   echo "codex updated to $VERSION"
+elif [ "$APP" = "claudecode" ]; then
+  # Claude Code is installed by Anthropic's own installer, which owns
+  # /root/.local/share/claude/versions/<ver> and repoints
+  # /root/.local/bin/claude at it; /usr/local/bin/claude is only our symlink
+  # into that (runtimes/claudecode/install.sh + the imager pre-bake). So the
+  # update is "re-run the installer pinned to $VERSION" — NOT a binary copy,
+  # and there is deliberately no .previous backup: the installer keeps the old
+  # version dir, so a downgrade is `software-update claudecode` with the older
+  # version published, not a rollback of a file we saved.
+  #
+  # The installer takes the version as a POSITIONAL arg: install.sh [stable|latest|VERSION].
+  [ -x /usr/local/bin/claude ] || { echo "claude is not installed on this device — switch the runtime to claudecode first"; exit 1; }
+  export HOME=/root
+  curl -fsSL https://claude.ai/install.sh | bash -s -- "$VERSION" || { echo "claude installer failed for $VERSION"; exit 1; }
+  # Re-point our stable path in case the installer replaced the symlink target.
+  [ -x /root/.local/bin/claude ] && ln -sf /root/.local/bin/claude /usr/local/bin/claude
+  /usr/local/bin/claude --version || { echo "claude not runnable after update"; exit 1; }
+  # claudecode.service only exists once the runtime was switched to claudecode;
+  # every lamp/intern-v2 image bakes the CLI regardless of runtime.
+  if [ -f /etc/systemd/system/claudecode.service ]; then
+    systemctl restart claudecode
+  else
+    echo "[software-update] claudecode.service absent (runtime not active) — CLI updated, no restart"
+  fi
+  echo "claudecode updated to $VERSION"
 elif [ "$APP" = "web" ]; then
   [ -z "$URL" ] && { echo "Metadata has no url for web"; exit 1; }
   ZIP_TMP=$(mktemp)

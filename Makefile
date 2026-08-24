@@ -189,7 +189,7 @@ autonomous-build-chat:
 OTA_SIGNING_KEY_DIR ?= $(HOME)/.config/autonomous/ota
 OTA_SIGNING_KEY_ID ?= ota-$(shell date +%Y%m%d)
 
-.PHONY: ota-keygen upload-os-server upload-bootstrap upload-hal upload-claude-desktop-buddy upload-autonomous-buddy upload-web upload-skills upload-hooks upload-setup upload-setup-ap upload-openclaw upload-codex upload-device upload-twitch-irc upload-autonomous-chat upload-all promote-os-server promote-bootstrap promote-web promote-hal promote-claude-desktop-buddy promote-openclaw promote-codex promote-device
+.PHONY: ota-keygen upload-os-server upload-bootstrap upload-hal upload-claude-desktop-buddy upload-autonomous-buddy upload-web upload-skills upload-hooks upload-setup upload-setup-ap upload-openclaw upload-codex upload-claudecode upload-device upload-twitch-irc upload-autonomous-chat upload-all promote-os-server promote-bootstrap promote-web promote-hal promote-claude-desktop-buddy promote-openclaw promote-codex promote-claudecode promote-device
 
 # Generate a deployment-owned Ed25519 keypair outside the repository. The
 # private PEM is for release writers only; the printed public key is provisioned
@@ -276,6 +276,18 @@ upload-codex:
 	@if [ -z "$(CODEX_VERSION_ARG)" ]; then echo "Usage: make upload-codex <version>   (bare semver, e.g. 0.149.1)" >&2; exit 1; fi
 	bash scripts/release/upload-codex.sh "$(CODEX_VERSION_ARG)"
 
+# Claude Code CLI: `make upload-claudecode 2.1.218` (bare semver, no leading v).
+ifeq (upload-claudecode,$(firstword $(MAKECMDGOALS)))
+  CLAUDECODE_VERSION_ARG := $(word 2,$(MAKECMDGOALS))
+  ifneq ($(CLAUDECODE_VERSION_ARG),)
+    $(eval $(CLAUDECODE_VERSION_ARG):;@:)
+  endif
+endif
+
+upload-claudecode:
+	@if [ -z "$(CLAUDECODE_VERSION_ARG)" ]; then echo "Usage: make upload-claudecode <version>   (bare semver, e.g. 2.1.218)" >&2; exit 1; fi
+	bash scripts/release/upload-claudecode.sh "$(CLAUDECODE_VERSION_ARG)"
+
 # Allow positional device type: `make upload-device lamp` (publishes ONE device
 # profile). Per-device by design — each type versions + publishes independently,
 # so it's NOT in upload-all (publishing lamp must not touch intern).
@@ -297,14 +309,14 @@ upload-device:
 #   make promote-hal                # min_version = hal.version
 #   make promote-os-server V=1.4.0  # pin floor explicitly
 #   make promote-device DT=lamp     # devices.lamp profile
-promote-os-server promote-bootstrap promote-web promote-hal promote-claude-desktop-buddy promote-openclaw promote-codex:
+promote-os-server promote-bootstrap promote-web promote-hal promote-claude-desktop-buddy promote-openclaw promote-codex promote-claudecode:
 	bash scripts/release/promote-ota.sh $(patsubst promote-%,%,$@) $(V)
 
 promote-device:
 	@if [ -z "$(DT)" ]; then echo "Usage: make promote-device DT=<type> [V=<min_version>]" >&2; exit 1; fi
 	bash scripts/release/promote-ota.sh device "$(DT)" $(V)
 
-# upload-openclaw / upload-codex are intentionally NOT in upload-all — bumping an
+# upload-openclaw / upload-codex / upload-claudecode are intentionally NOT in upload-all — bumping an
 # agent CLI version is an explicit decision, not a side effect of pushing other
 # artifacts.
 upload-all: upload-os-server upload-bootstrap upload-hal upload-claude-desktop-buddy upload-web upload-skills upload-hooks
