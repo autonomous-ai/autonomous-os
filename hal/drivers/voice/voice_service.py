@@ -1246,6 +1246,12 @@ class VoiceService:
                     or not hal_config.REALTIME_ENABLED
                 ):
                     return False
+                # Same pre-turn hygiene as the always-listening path below: the
+                # tool-call quarantine lives in prepare_turn(), so skipping it
+                # here let an `express_emotion` turn silence the next one. Safe
+                # after the capture_complete guard — the utterance is fully
+                # buffered, so a rebuild cannot split it.
+                self._realtime.prepare_turn()
                 if self._realtime.rebuilding or not self._realtime.available:
                     logger.info(
                         "[realtime] Wake-word turn falls back — session unavailable after final confirmation"
