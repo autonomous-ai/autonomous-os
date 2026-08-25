@@ -847,11 +847,20 @@ class _PitchSvc(_Svc):
     # The correction is spread over all three pitch joints, so a stand-in that
     # only reports the wrist would have every joint start from a default 0.0 and
     # make the assertions below meaningless.
+    _ATTR = {
+        "base_pitch.pos": "base",
+        "elbow_pitch.pos": "elbow",
+        "wrist_pitch.pos": "wrist",
+    }
+
     def __init__(self, wrist=-70.0, base=10.0, elbow=5.0):
         super().__init__()
         self.wrist = wrist
         self.base = base
         self.elbow = elbow
+        # joint -> (lo, hi) it refuses to move past, the way a stalled servo
+        # does. Empty means every joint arrives where it is sent.
+        self.stalls = {}
 
     def get_positions(self):
         return {
@@ -864,6 +873,22 @@ class _PitchSvc(_Svc):
     def get_joint_names(self):
         return ["base_yaw.pos", "base_pitch.pos", "elbow_pitch.pos", "wrist_pitch.pos"]
 
+    def move_and_hold(self, target, duration=None):
+        """Record the command AND arrive at it.
+
+        A stand-in that records the move but leaves get_positions() unchanged
+        looks exactly like an arm that stalled, so the landing check would treat
+        every test as a failed correction and every assertion below would pass
+        for the wrong reason.
+        """
+        self.moves.append(target)
+        for joint, want in target.items():
+            attr = self._ATTR.get(joint)
+            if attr is None:
+                continue
+            lo, hi = self.stalls.get(joint, (float("-inf"), float("inf")))
+            setattr(self, attr, max(lo, min(hi, float(want))))
+
 
 @pytest.fixture
 def neck(monkeypatch):
@@ -874,6 +899,10 @@ def neck(monkeypatch):
     monkeypatch.setattr(state, "safety_policy", None, raising=False)
     monkeypatch.setattr(config, "GAZE_WAKE_ENABLED", True)
     monkeypatch.setattr(config, "GAZE_PITCH_ENABLED", True)
+    # The settle before reading the pose back is there for a real bus; paying
+    # it on every correction would add seconds to the suite for nothing.
+    monkeypatch.setattr(config, "GAZE_PITCH_SETTLE_S", 0.0)
+    gaze._pitch_stalls.clear()
     gaze._last_pitch_t = gaze.time.monotonic() - 10_000.0
     # Corrections are face-driven unless a test says otherwise: the guessed
     # path is off by default and has to be opted into explicitly.
@@ -1340,6 +1369,10 @@ def _owned_neck(monkeypatch):
     monkeypatch.setattr(state, "safety_policy", None, raising=False)
     monkeypatch.setattr(config, "GAZE_WAKE_ENABLED", True)
     monkeypatch.setattr(config, "GAZE_PITCH_ENABLED", True)
+    # The settle before reading the pose back is there for a real bus; paying
+    # it on every correction would add seconds to the suite for nothing.
+    monkeypatch.setattr(config, "GAZE_PITCH_SETTLE_S", 0.0)
+    gaze._pitch_stalls.clear()
     gaze._last_pitch_t = gaze.time.monotonic() - 10_000.0
     return svc
 
@@ -1690,3 +1723,79 @@ def test_the_watcher_loop_still_calls_the_pitch_correction():
     # Framing before bearing: turning to a bearing that still points at the desk
     # finds nobody however right the bearing is.
     assert body.index("_maybe_pitch(now)") < body.index("_maybe_repoint(now)")
+
+
+# --- the correction has to actually arrive -------------------------------------
+#
+# Device-observed 2026-08-25: six consecutive corrections all read
+# `elbow_pitch +12.3` and all commanded +25.8. move_and_hold reports nothing, so
+# the loop could not tell a completed correction from a failed one and re-sent
+# the same unreachable target every ~10s. Only base_pitch's 10% share landed, so
+# the offset crept 43% -> 26% instead of closing.
+
+
+def test_a_joint_that_does_not_arrive_is_benched(neck):
+    neck.stalls["elbow_pitch.pos"] = (-90.0, 8.0)      # refuses to lift past +8
+    _fill_dy(-0.6)
+    gaze._maybe_pitch(gaze.time.monotonic())
+
+    assert "elbow_pitch.pos" in gaze._pitch_stalls, (
+        "a joint commanded somewhere it never reached must be noticed"
+    )
+
+
+def test_the_next_correction_routes_around_the_benched_joint(neck):
+    neck.stalls["elbow_pitch.pos"] = (-90.0, 8.0)
+    now = gaze.time.monotonic()
+    _fill_dy(-0.6)
+    gaze._maybe_pitch(now)
+    first_elbow_ask = neck.moves[0]["elbow_pitch.pos"]
+
+    gaze._last_pitch_t = now - 10_000.0                 # let it act again
+    _fill_dy(-0.6)
+    gaze._maybe_pitch(now + 1.0)
+
+    assert len(neck.moves) == 2, "precondition: a second correction fired"
+    second = neck.moves[1]
+    assert second["elbow_pitch.pos"] <= first_elbow_ask, (
+        "the second correction must not ask the stalled joint for more travel"
+    )
+    # ...and the tilt has to come from somewhere else instead.
+    assert second["base_pitch.pos"] < neck.moves[0]["base_pitch.pos"]
+
+
+def test_a_benched_joint_is_readmitted_once_it_has_rested(neck):
+    """Benching is a rest, not a verdict — the elbow that stalled at +17.4
+    reached +44 three times running after 60s of quiet."""
+    neck.stalls["elbow_pitch.pos"] = (-90.0, 8.0)
+    now = gaze.time.monotonic()
+    _fill_dy(-0.6)
+    gaze._maybe_pitch(now)
+    assert "elbow_pitch.pos" in gaze._pitch_stalls
+
+    neck.stalls.clear()                                  # it cooled down
+    lo, hi = gaze._pitch_travel_limits(now + config.GAZE_PITCH_STALL_REST_S + 1.0)
+    assert "elbow_pitch.pos" not in lo and "elbow_pitch.pos" not in hi
+    assert "elbow_pitch.pos" not in gaze._pitch_stalls
+
+
+def test_a_joint_that_arrives_is_not_benched(neck):
+    _fill_dy(-0.4)
+    gaze._maybe_pitch(gaze.time.monotonic())
+    assert gaze._pitch_stalls == {}, "a correction that landed is not a stall"
+
+
+def test_idle_is_anchored_on_where_the_arm_got_to_not_where_it_was_sent(neck):
+    """Anchoring an unreached target tells idle to hold a pose the servo has
+    already refused — the same command that heats it."""
+    neck.stalls["elbow_pitch.pos"] = (-90.0, 8.0)
+    anchored = {}
+    neck.set_idle_anchor = lambda j: anchored.update(j or {})
+
+    _fill_dy(-0.6)
+    gaze._maybe_pitch(gaze.time.monotonic())
+
+    assert anchored, "precondition: the correction anchored idle"
+    assert anchored["elbow_pitch.pos"] == pytest.approx(8.0), (
+        f"anchored on {anchored['elbow_pitch.pos']:+.1f}, but the elbow stopped at +8.0"
+    )

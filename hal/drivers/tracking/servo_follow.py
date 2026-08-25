@@ -44,7 +44,12 @@ PITCH_AXIS_HARD = {
 }
 
 
-def distribute_pitch(current: Dict[str, float], pitch_deg: float) -> Dict[str, float]:
+def distribute_pitch(
+    current: Dict[str, float],
+    pitch_deg: float,
+    travel_min: Optional[Dict[str, float]] = None,
+    travel_max: Optional[Dict[str, float]] = None,
+) -> Dict[str, float]:
     """Spread one camera-pitch correction across the three pitch joints.
 
     Allocated against the travel each joint actually HAS in the direction being
@@ -65,6 +70,12 @@ def distribute_pitch(current: Dict[str, float], pitch_deg: float) -> Dict[str, f
     moving: elbow +1.6 framed the desk, +54.8 framed the ceiling. Elbow is the
     strongest and freest joint upward, which is what its 0.90 weight encodes.
 
+    travel_min / travel_max narrow a joint's usable range for this call only.
+    Callers that can observe a joint failing to arrive use them to route around
+    it — the measured limits below are static, but what a servo will actually
+    deliver is not: the same elbow stalled at +17.4 and, after 60s of rest,
+    reached +44 three times running.
+
     Shared with `gaze._maybe_pitch` on purpose — two copies of the joint model
     is how the wrist bug survived as long as it did.
     """
@@ -77,8 +88,8 @@ def distribute_pitch(current: Dict[str, float], pitch_deg: float) -> Dict[str, f
     def room(joint: str) -> float:
         """Degrees of tilt this joint can still give in the requested direction."""
         lo, hi = PITCH_AXIS_HARD[joint]
-        lo = max(lo, C.PITCH_TRAVEL_MIN.get(joint, lo))
-        hi = min(hi, C.PITCH_TRAVEL_MAX.get(joint, hi))
+        lo = max(lo, C.PITCH_TRAVEL_MIN.get(joint, lo), (travel_min or {}).get(joint, lo))
+        hi = min(hi, C.PITCH_TRAVEL_MAX.get(joint, hi), (travel_max or {}).get(joint, hi))
         rising = (PITCH_AXIS_SIGN[joint] > 0.0) == down
         return max(0.0, (hi - target[joint]) if rising else (target[joint] - lo))
 

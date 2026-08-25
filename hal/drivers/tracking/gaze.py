@@ -468,6 +468,75 @@ PITCH_JOINTS = ("base_pitch.pos", "elbow_pitch.pos", "wrist_pitch.pos")
 
 _last_anchor: Optional[Dict[str, float]] = None
 
+# Joints that were commanded somewhere and did not arrive.
+#   joint -> (position it stopped at, +1 blocked going up / -1 going down, rest until)
+# Emptied as each entry expires, so a joint is only ever benched temporarily.
+_pitch_stalls: Dict[str, Tuple[float, float, float]] = {}
+
+
+def _pitch_travel_limits(now: float) -> Tuple[Dict[str, float], Dict[str, float]]:
+    """Narrowed travel for joints that recently failed to arrive.
+
+    A stalled joint is benched rather than written off: the same elbow that
+    stopped at +17.4 reached +44 three times running after 60s of rest, so the
+    limit is a rest period, not a permanent verdict.
+    """
+    travel_min: Dict[str, float] = {}
+    travel_max: Dict[str, float] = {}
+    for joint, (stopped_at, direction, until) in list(_pitch_stalls.items()):
+        if now >= until:
+            del _pitch_stalls[joint]
+            logger.info("[gaze] %s rested, allowed back into the correction", joint)
+            continue
+        if direction > 0:
+            travel_max[joint] = stopped_at - config.GAZE_PITCH_STALL_BACKOFF_DEG
+        else:
+            travel_min[joint] = stopped_at + config.GAZE_PITCH_STALL_BACKOFF_DEG
+    return travel_min, travel_max
+
+
+def _verify_landed(svc: Any, target: Dict[str, float], now: float) -> Dict[str, float]:
+    """Read the pose back and bench any joint that did not get where it was sent.
+
+    Without this the loop cannot tell a completed correction from a failed one,
+    so it re-sends the same unreachable target every cycle — which is precisely
+    what heats a servo into refusing. Returns {joint: where it actually stopped}
+    for whatever came up short.
+    """
+    time.sleep(config.GAZE_PITCH_SETTLE_S)
+    try:
+        after = svc.get_positions()
+    except Exception as e:
+        logger.debug("[gaze] could not verify the correction landed: %s", e)
+        return {}
+    short: Dict[str, float] = {}
+    for joint, want in target.items():
+        got = after.get(joint)
+        if got is None:
+            continue
+        gap = float(want) - float(got)
+        if abs(gap) <= config.GAZE_PITCH_LAND_TOL_DEG:
+            # It moved freely, so any earlier verdict about it is stale.
+            _pitch_stalls.pop(joint, None)
+            continue
+        short[joint] = float(got)
+        _pitch_stalls[joint] = (
+            float(got), 1.0 if gap > 0 else -1.0,
+            now + config.GAZE_PITCH_STALL_REST_S,
+        )
+    if short:
+        logger.warning(
+            "[gaze] correction did not land: %s — resting %s for %.0fs and "
+            "correcting with the other joints",
+            ", ".join(
+                f"{j.split('.')[0]} asked {target[j]:+.1f} reached {at:+.1f}"
+                for j, at in sorted(short.items())
+            ),
+            " and ".join(sorted(j.split(".")[0] for j in short)),
+            config.GAZE_PITCH_STALL_REST_S,
+        )
+    return short
+
 
 def _anchor_is_new(anchor: Dict[str, float]) -> bool:
     """True when this anchor differs enough from the last one to be worth sending.
@@ -1042,7 +1111,8 @@ def _maybe_pitch(now: float) -> None:
     # correction used to be commanded into a hard stop. The servo accepted the
     # target unclamped, reported `position error 14.6 deg`, and the head never
     # moved. base_pitch and elbow_pitch are where the upward travel actually is.
-    target = servo_follow.distribute_pitch(current, step)
+    travel_min, travel_max = _pitch_travel_limits(now)
+    target = servo_follow.distribute_pitch(current, step, travel_min, travel_max)
     moved = max(
         (abs(target[j] - float(current.get(j, 0.0))) for j in target),
         default=0.0,
@@ -1075,13 +1145,22 @@ def _maybe_pitch(now: float) -> None:
         # cleared, so a tracking session that began meanwhile is not released.
         with aim.servo_ownership():
             svc.move_and_hold(target, duration=duration)
+            # Verify inside the lock: once ownership drops idle resumes, and a
+            # read taken then measures idle's swing rather than where the move
+            # ended.
+            short = _verify_landed(svc, target, now)
+        # Anchor idle on what the arm actually did, not on what was asked for.
+        # Anchoring an unreached target tells idle to keep holding a pose the
+        # servo has already refused — the same command that heats it.
+        landed = dict(target)
+        landed.update(short)
         # Anchor on EVERY correction, including the guessed ones. Leaving the
         # anchor behind during a search means idle keeps pulling back to where
         # the search started and erases it step by step — device-observed the
         # head reaching -32.4 and being dragged to -41.5 before the next look.
         # A search whose progress is undone between steps is not a search. The
         # blind budget already bounds how far a guess may take this.
-        _anchor_idle_here(svc, target)
+        _anchor_idle_here(svc, landed)
         discard_samples()
         _last_pitch_t = now
         _blind_pitch_steps = 0 if from_face else _blind_pitch_steps + 1
@@ -1091,10 +1170,15 @@ def _maybe_pitch(now: float) -> None:
             "face" if from_face else "head (from torso)",
             abs(dy) * 100.0, "above" if dy < 0 else "below", n_dy, span_dy,
             step,
+            # Reports where each joint ENDED UP. The old line printed the
+            # target, so six corrections in a row could claim
+            # "elbow_pitch +12.3->+25.8" while the elbow never left +12.3.
             ", ".join(
-                f"{j.split('.')[0]} {float(current.get(j, 0.0)):+.1f}->{target[j]:+.1f}"
+                f"{j.split('.')[0]} {float(current.get(j, 0.0)):+.1f}->{landed[j]:+.1f}"
+                + ("" if j not in short else f" (asked {target[j]:+.1f})")
                 for j in sorted(target)
-                if abs(target[j] - float(current.get(j, 0.0))) >= 0.05
+                if abs(landed[j] - float(current.get(j, 0.0))) >= 0.05
+                or j in short
             ) or "nothing",
             "" if from_face
             else f" [blind {_blind_pitch_steps}/{config.GAZE_PITCH_MAX_BLIND_STEPS}]",
@@ -1107,9 +1191,9 @@ def _maybe_pitch(now: float) -> None:
             f"{'face' if from_face else 'torso'} dy={dy * 100:+.0f}% "
             f"(median of {n_dy} over {span_dy:.1f}s) tilt {step:+.1f} deg via "
             + " ".join(
-                f"{j.split('.')[0]}{float(current.get(j, 0.0)):+.1f}->{target[j]:+.1f}"
+                f"{j.split('.')[0]}{float(current.get(j, 0.0)):+.1f}->{landed[j]:+.1f}"
                 for j in sorted(target)
-                if abs(target[j] - float(current.get(j, 0.0))) >= 0.05
+                if abs(landed[j] - float(current.get(j, 0.0))) >= 0.05
             )
         )
     except Exception as e:
@@ -1365,5 +1449,6 @@ def reset_for_test() -> None:
     _blind_pitch_steps = 0
     _last_dy_from_face = False
     globals()["_last_anchor"] = None
+    _pitch_stalls.clear()
     _speech_repoint_requested_t = 0.0
     _speech_repoint_requested.clear()

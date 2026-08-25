@@ -1568,6 +1568,38 @@ GAZE_PITCH_MAX_BLIND_STEPS: int = int(
     os.environ.get("HAL_GAZE_PITCH_MAX_BLIND_STEPS", "0")
 )
 
+# Check that a correction actually arrived, and stop asking a joint that cannot.
+#
+# `move_and_hold` reports nothing, so a stalled joint used to be indistinguish-
+# able from a successful one: the loop re-commanded the same unreachable target
+# every ~10s forever. Device-observed 2026-08-25 across six consecutive
+# corrections, elbow_pitch read +12.3 every single time while being sent to
+# +25.8 — only base_pitch's 10% share was landing, so the offset crept 43% ->
+# 26% instead of closing.
+#
+# That is worse than slow. Re-commanding a stall is what heats a servo into
+# giving up: the same elbow that stalled at +17.4 reached +44 three times out of
+# three after 60s of rest. So the loop was manufacturing the condition it kept
+# tripping over. Noticing the short move is what breaks that cycle.
+GAZE_PITCH_LAND_TOL_DEG: float = float(
+    os.environ.get("HAL_GAZE_PITCH_LAND_TOL_DEG", "2.0")
+)
+# Let the arm arrive before reading it back — a read taken mid-glide reports a
+# short move that is merely still moving.
+GAZE_PITCH_SETTLE_S: float = float(
+    os.environ.get("HAL_GAZE_PITCH_SETTLE_S", "0.35")
+)
+# How long a joint that came up short is left out of the allocation. Matched to
+# the measured recovery: a rested elbow was reliable again after ~60s.
+GAZE_PITCH_STALL_REST_S: float = float(
+    os.environ.get("HAL_GAZE_PITCH_STALL_REST_S", "60")
+)
+# Stop short of where it actually stalled, so the retry does not lean on the
+# stop again the moment the joint is readmitted.
+GAZE_PITCH_STALL_BACKOFF_DEG: float = float(
+    os.environ.get("HAL_GAZE_PITCH_STALL_BACKOFF_DEG", "2.0")
+)
+
 # Let the idle loop breathe around the pose the user was last seen from.
 #
 # The idle recording is absolute on every joint and loops forever, so within a
