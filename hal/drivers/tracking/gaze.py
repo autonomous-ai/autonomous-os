@@ -158,6 +158,52 @@ def record_dy(dy: Optional[float], from_face: bool,
             _dy_samples.popleft()
 
 
+_dx_samples: Deque[Tuple[float, float, bool]] = deque()
+_dx_lock = threading.Lock()
+_last_yaw_t: float = 0.0
+
+
+def record_dx(dx: Optional[float], from_face: bool,
+              now: Optional[float] = None) -> None:
+    """Fold one horizontal-offset measurement into the pan window."""
+    if dx is None:
+        return
+    t = time.monotonic() if now is None else now
+    with _dx_lock:
+        _dx_samples.append((t, float(dx), bool(from_face)))
+        cutoff = t - max(1.0, config.GAZE_YAW_WINDOW_S)
+        while _dx_samples and _dx_samples[0][0] < cutoff:
+            _dx_samples.popleft()
+
+
+def discard_dx_samples() -> None:
+    """Drop the pan window — the offsets in it describe a pose already left."""
+    with _dx_lock:
+        _dx_samples.clear()
+
+
+def _dx_estimate(now: Optional[float] = None):
+    """``(median dx, n, span_s)`` over the pan window, or None.
+
+    Median for the same reason as dy: idle's own swing is periodic and roughly
+    symmetric, while a face leaving frame produces one-sided outliers a mean
+    would chase.
+    """
+    t = time.monotonic() if now is None else now
+    with _dx_lock:
+        rows = [r for r in _dx_samples if r[0] >= t - config.GAZE_YAW_WINDOW_S]
+    if len(rows) < config.GAZE_YAW_MIN_SAMPLES:
+        return None
+    span = rows[-1][0] - rows[0][0]
+    if span < config.GAZE_YAW_WINDOW_S * 0.8:
+        return None
+    values = sorted(r[1] for r in rows)
+    mid = len(values) // 2
+    med = (values[mid] if len(values) % 2
+           else (values[mid - 1] + values[mid]) / 2.0)
+    return med, len(rows), span
+
+
 def _dy_estimate(now: Optional[float] = None):
     """``(median dy, from_face, n, span_s)`` over the window, or None.
 
@@ -495,7 +541,8 @@ def _pitch_travel_limits(now: float) -> Tuple[Dict[str, float], Dict[str, float]
     return travel_min, travel_max
 
 
-def _verify_landed(svc: Any, target: Dict[str, float], now: float) -> Dict[str, float]:
+def _verify_landed(svc: Any, target: Dict[str, float], now: float,
+                   bench: bool = True) -> Dict[str, float]:
     """Read the pose back and bench any joint that did not get where it was sent.
 
     Without this the loop cannot tell a completed correction from a failed one,
@@ -546,11 +593,15 @@ def _verify_landed(svc: Any, target: Dict[str, float], now: float) -> Dict[str, 
             _pitch_stalls.pop(joint, None)
             continue
         short[joint] = float(got)
-        _pitch_stalls[joint] = (
-            float(got), 1.0 if gap > 0 else -1.0,
-            now + config.GAZE_PITCH_STALL_REST_S,
-        )
-    if short:
+        # `bench` is off for the pan loop: _pitch_stalls feeds the PITCH travel
+        # limits, and filing base_yaw or wrist_roll in there would be a category
+        # error even though nothing would read it.
+        if bench:
+            _pitch_stalls[joint] = (
+                float(got), 1.0 if gap > 0 else -1.0,
+                now + config.GAZE_PITCH_STALL_REST_S,
+            )
+    if short and bench:
         logger.warning(
             "[gaze] correction did not land: %s — resting %s for %.0fs and "
             "correcting with the other joints",
@@ -723,6 +774,24 @@ def _pitch_quiet(reason: str, now: float, detail: str = "") -> None:
     logger.info("[gaze] no pitch correction: %s%s", reason, f" ({detail})" if detail else "")
 
 
+_yaw_quiet_logged: Dict[str, float] = {}
+
+
+def _yaw_quiet(reason: str, now: float, detail: str = "") -> None:
+    """Say why no pan fired. Throttled per reason, exactly as _pitch_quiet is.
+
+    Written at the same time as the pan loop rather than after a field
+    investigation, because the pitch loop taught this the expensive way: seven
+    silent early returns meant "the lamp did not move" had seven
+    indistinguishable causes.
+    """
+    last = _yaw_quiet_logged.get(reason, 0.0)
+    if (now - last) < PITCH_QUIET_LOG_EVERY_S:
+        return
+    _yaw_quiet_logged[reason] = now
+    logger.info("[gaze] no pan: %s%s", reason, f" ({detail})" if detail else "")
+
+
 def _skip(reason: str) -> str:
     """Log the FIRST time sampling is skipped for each distinct reason.
 
@@ -837,6 +906,12 @@ def _sample_once() -> Optional[str]:  # noqa: C901
     _last_dy_frac = ((fy + fh / 2.0) - frame_h / 2.0) / frame_h
     _last_dy_from_face = True
     record_dy(_last_dy_frac, True)
+    # Signed horizontal offset, from the same box, for the pan correction.
+    # `edge` below is the ABSOLUTE version of this and cannot be used for it:
+    # which side the face is on is the whole question when deciding which way
+    # to turn. Torso has no horizontal fallback — a person box clipped by the
+    # LEFT edge says nothing about where their face is within it.
+    record_dx(((fx + fw / 2.0) - frame_w / 2.0) / frame_w, True)
     _last_frame, _last_box = small, (fx, fy, fw, fh)
 
     # Distance of the face centre from the frame centre, 0 at the middle and 1
@@ -860,6 +935,113 @@ def _sample_once() -> Optional[str]:  # noqa: C901
     )
     record_sample(yaw, float(fh), edge)
     return None
+
+
+def _maybe_yaw(now: float) -> None:
+    """Turn toward a face sitting off to one side.
+
+    The horizontal twin of _maybe_pitch, and it inherits that loop's scars:
+    own the body for the move, anchor idle BEFORE measuring (idle resumes the
+    instant ownership drops and will drag the arm back while you time it), and
+    check the correction actually arrived instead of trusting that it did.
+
+    Deliberately lazier than the pitch loop. Vertical framing fails in one
+    direction — a user stands and leaves the top of frame — so it is worth
+    chasing. Horizontal drift is usually someone shifting in a chair, and a lamp
+    that swings after every lean is exactly the twitchiness this whole watcher
+    is damped to avoid.
+    """
+    global _last_yaw_t
+    if not config.GAZE_YAW_ENABLED:
+        return
+    if now - _last_yaw_t < config.GAZE_PITCH_COOLDOWN_S:
+        return   # cooling down; not worth a line every frame
+
+    est = _dx_estimate(now)
+    if est is None:
+        with _dx_lock:
+            have = len(_dx_samples)
+        _yaw_quiet(
+            "window not filled", now,
+            f"{have} samples, need {config.GAZE_YAW_MIN_SAMPLES} "
+            f"spanning {config.GAZE_YAW_WINDOW_S * 0.8:.0f}s",
+        )
+        return
+    dx, n_dx, span_dx = est
+    if abs(dx) <= config.GAZE_YAW_DEAD_ZONE_FRAC:
+        _yaw_quiet(
+            "already centred enough", now,
+            f"dx={dx * 100:+.0f}% within +/-{config.GAZE_YAW_DEAD_ZONE_FRAC * 100:.0f}%",
+        )
+        return
+
+    import hal.app_state as state
+
+    from hal.drivers.tracking import servo_follow
+
+    svc = getattr(state, "animation_service", None)
+    if svc is None or getattr(svc, "_tracking_active", False):
+        _yaw_quiet("body owned by something else", now)
+        return
+    if getattr(svc, "_music_playing", False):
+        _yaw_quiet("music has the body", now)
+        return
+    try:
+        current = svc.get_positions()
+    except Exception as e:
+        logger.debug("[gaze] pan skipped, no pose: %s", e)
+        return
+
+    # dx > 0 means the face sits RIGHT of centre, and increasing either pan
+    # joint turns the camera right — device-verified by capture on both joints,
+    # so the step carries dx's sign unchanged.
+    step = dx * config.GAZE_YAW_DEG_PER_FRAME
+    step = max(-config.GAZE_YAW_MAX_STEP_DEG,
+               min(config.GAZE_YAW_MAX_STEP_DEG, step))
+    target = servo_follow.distribute_yaw(current, step)
+    moved = max(
+        (abs(target[j] - float(current.get(j, 0.0))) for j in target),
+        default=0.0,
+    )
+    if moved < 0.5:
+        _yaw_quiet(
+            "already at the limit of travel", now,
+            " ".join(
+                f"{j.split('.')[0]} {float(current.get(j, 0.0)):+.1f}->{target[j]:+.1f}"
+                for j in sorted(target)
+            ),
+        )
+        return
+
+    try:
+        from hal.drivers.tracking import aim
+
+        duration = aim.min_move_duration(
+            state.safety_policy, target, current, config.GAZE_YAW_MOVE_S,
+        )
+        with aim.servo_ownership():
+            svc.move_and_hold(target, duration=duration)
+            _anchor_idle_here(svc, target)
+            short = _verify_landed(svc, target, now, bench=False)
+        landed = dict(target)
+        landed.update(short)
+        if short:
+            _anchor_idle_here(svc, landed)
+        discard_dx_samples()
+        _last_yaw_t = now
+        logger.info(
+            "[gaze] face %.0f%% %s of centre (median of %d over %.1fs) — "
+            "pan %+.1f deg via %s",
+            abs(dx) * 100.0, "right" if dx > 0 else "left", n_dx, span_dx, step,
+            ", ".join(
+                f"{j.split('.')[0]} {float(current.get(j, 0.0)):+.1f}->{landed[j]:+.1f}"
+                + ("" if j not in short else f" (asked {target[j]:+.1f})")
+                for j in sorted(target)
+                if abs(landed[j] - float(current.get(j, 0.0))) >= 0.05 or j in short
+            ) or "nothing",
+        )
+    except Exception as e:
+        logger.debug("[gaze] pan move skipped: %s", e)
 
 
 def _who_is_in_frame() -> Tuple[str, float]:
@@ -1422,6 +1604,10 @@ def _loop() -> None:
                 # else is measured from, and turning to a bearing that still
                 # points at the desk finds nobody however right the bearing is.
                 _maybe_pitch(now)
+                # Pan after tilt, never in the same breath: both own the body
+                # and both clear their own window, so running them together
+                # would have each measuring a pose the other has just left.
+                _maybe_yaw(now)
                 _consume_speech_repoint(now)
                 _maybe_repoint(now)
                 _verify_repoint(now)
@@ -1483,5 +1669,7 @@ def reset_for_test() -> None:
     _last_dy_from_face = False
     globals()["_last_anchor"] = None
     _pitch_stalls.clear()
+    discard_dx_samples()
+    globals()["_last_yaw_t"] = 0.0
     _speech_repoint_requested_t = 0.0
     _speech_repoint_requested.clear()

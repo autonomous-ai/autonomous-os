@@ -288,3 +288,78 @@ def test_ownership_is_released_even_if_the_follow_loop_raises(monkeypatch):
         follower._worker(service, running)
 
     assert not service._tracking_active, "a crashed worker must not wedge the lock"
+
+
+# --- pan allocation ------------------------------------------------------------
+
+
+def _pan_rest() -> dict[str, float]:
+    return {"base_yaw.pos": 0.0, "wrist_roll.pos": 0.0}
+
+
+def test_a_face_on_the_right_turns_the_camera_right():
+    """Device-verified by capture, both joints: base_yaw -24 and wrist_roll -34
+    each put the subject at the FAR RIGHT of frame, +24/+34 brought them left.
+    So increasing either pans right, and dx > 0 is corrected by increasing both.
+    """
+    before = _pan_rest()
+    after = servo_follow.distribute_yaw(before, +10.0)
+
+    assert after["base_yaw.pos"] > 0.0
+    assert after["wrist_roll.pos"] > 0.0
+
+
+def test_a_face_on_the_left_turns_the_camera_left():
+    before = _pan_rest()
+    after = servo_follow.distribute_yaw(before, -10.0)
+
+    assert after["base_yaw.pos"] < 0.0
+    assert after["wrist_roll.pos"] < 0.0
+
+
+def test_the_base_leads_the_pan():
+    """base_yaw carries the correction, not the wrist.
+
+    Turning the base is what reads as "it looked at me", and user_bearing stores
+    the bearing AS base_yaw — aiming mostly with the wrist would leave the
+    remembered bearing describing a pose the lamp never held.
+    """
+    before = _pan_rest()
+    after = servo_follow.distribute_yaw(before, +10.0)
+
+    assert after["base_yaw.pos"] > after["wrist_roll.pos"]
+
+
+def test_the_full_pan_is_delivered_when_there_is_room():
+    before = _pan_rest()
+    for want in (-12.0, -4.0, 3.0, 9.0):
+        after = servo_follow.distribute_yaw(before, want)
+        total = sum(after[j] - before[j] for j in after)
+        assert total == pytest.approx(want, abs=0.01), want
+
+
+def test_a_saturated_yaw_hands_the_rest_to_the_wrist():
+    """base_yaw pinned at its travel limit: the pan must still happen."""
+    before = {"base_yaw.pos": C.YAW_TRAVEL_MAX["base_yaw.pos"], "wrist_roll.pos": 0.0}
+    after = servo_follow.distribute_yaw(before, +10.0)
+
+    assert after["base_yaw.pos"] == pytest.approx(before["base_yaw.pos"])
+    assert after["wrist_roll.pos"] == pytest.approx(10.0, abs=0.01)
+
+
+def test_a_pan_with_nowhere_to_go_moves_nothing():
+    before = {
+        "base_yaw.pos":   C.YAW_TRAVEL_MAX["base_yaw.pos"],
+        "wrist_roll.pos": C.YAW_TRAVEL_MAX["wrist_roll.pos"],
+    }
+    assert servo_follow.distribute_yaw(before, +10.0) == pytest.approx(before)
+
+
+def test_pitch_and_pan_do_not_touch_each_other_s_joints():
+    """A tilt must never pan, and a pan must never tilt."""
+    pitch = servo_follow.distribute_pitch(
+        {"base_pitch.pos": 20.0, "elbow_pitch.pos": 10.0, "wrist_pitch.pos": -20.0}, -8.0)
+    assert "base_yaw.pos" not in pitch and "wrist_roll.pos" not in pitch
+
+    pan = servo_follow.distribute_yaw(_pan_rest(), 8.0)
+    assert not ({"base_pitch.pos", "elbow_pitch.pos", "wrist_pitch.pos"} & set(pan))

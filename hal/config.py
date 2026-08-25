@@ -1584,6 +1584,36 @@ GAZE_PITCH_MAX_BLIND_STEPS: int = int(
 GAZE_PITCH_LAND_TOL_DEG: float = float(
     os.environ.get("HAL_GAZE_PITCH_LAND_TOL_DEG", "2.0")
 )
+# --- horizontal (pan) correction -------------------------------------------
+#
+# The mirror of the pitch knobs below, and deliberately LAZIER. Vertical framing
+# fails in one direction — a user stands and leaves the top of frame — so it is
+# worth chasing. Horizontal drift is mostly a person shifting in a chair, and a
+# lamp that swings to follow every lean is the twitchy behaviour the whole gaze
+# loop is damped to avoid. So: a wider dead zone and a smaller step than pitch.
+GAZE_YAW_ENABLED: bool = (
+    os.environ.get("HAL_GAZE_YAW", "true").lower() in ("1", "true", "yes")
+)
+GAZE_YAW_WINDOW_S: float = float(os.environ.get("HAL_GAZE_YAW_WINDOW_S", "12"))
+GAZE_YAW_MIN_SAMPLES: int = int(os.environ.get("HAL_GAZE_YAW_MIN_SAMPLES", "8"))
+# Wider than the pitch dead zone (0.15): a face 20% off centre horizontally is
+# still comfortably framed, whereas 20% high is on its way out of the top.
+GAZE_YAW_DEAD_ZONE_FRAC: float = float(
+    os.environ.get("HAL_GAZE_YAW_DEAD_ZONE_FRAC", "0.22")
+)
+# dx is a fraction of frame WIDTH, and the lens spans far more degrees
+# horizontally than the correction needs to be aggressive about.
+GAZE_YAW_DEG_PER_FRAME: float = float(
+    os.environ.get("HAL_GAZE_YAW_DEG_PER_FRAME", "40")
+)
+GAZE_YAW_MAX_STEP_DEG: float = float(
+    os.environ.get("HAL_GAZE_YAW_MAX_STEP_DEG", "12")
+)
+# Neither pan joint fights gravity, so they arrive quickly — but the whole lamp
+# turning is a bigger visual event than a head tilt, so it gets the same gentle
+# second as the pitch correction rather than the brisk look.aim quarter.
+GAZE_YAW_MOVE_S: float = float(os.environ.get("HAL_GAZE_YAW_MOVE_S", "1.0"))
+
 # How long a pitch correction takes, in seconds.
 #
 # Separate from aim.MOVE_DURATION_S (0.25) on purpose. That constant is shared

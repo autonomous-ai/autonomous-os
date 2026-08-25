@@ -1854,3 +1854,91 @@ def test_a_correction_moves_gently_and_does_not_slow_look_aim(neck, monkeypatch)
     assert aim.MOVE_DURATION_S == pytest.approx(0.25), (
         "look.aim's shared duration must not have been stretched with it"
     )
+
+
+# --- horizontal correction -----------------------------------------------------
+
+
+def _fill_dx(dx, n=20):
+    """Fill the pan window with a steady horizontal offset."""
+    span = config.GAZE_YAW_WINDOW_S
+    t0 = gaze.time.monotonic() - span
+    for i in range(n):
+        gaze.record_dx(dx, True, now=t0 + span * i / (n - 1))
+
+
+@pytest.fixture
+def pan(neck, monkeypatch):
+    monkeypatch.setattr(config, "GAZE_YAW_ENABLED", True, raising=False)
+    gaze.discard_dx_samples()
+    gaze._last_yaw_t = 0.0
+    return neck
+
+
+def test_a_face_off_to_the_right_turns_the_lamp(pan):
+    _fill_dx(0.4)
+    gaze._maybe_yaw(gaze.time.monotonic())
+    assert pan.moves, "a face well off centre should turn the lamp"
+    assert pan.moves[0]["base_yaw.pos"] > 0.0
+
+
+def test_a_face_off_to_the_left_turns_the_lamp_the_other_way(pan):
+    _fill_dx(-0.4)
+    gaze._maybe_yaw(gaze.time.monotonic())
+    assert pan.moves[0]["base_yaw.pos"] < 0.0
+
+
+def test_a_face_near_enough_to_centre_is_left_alone_horizontally(pan):
+    """Wider dead zone than pitch on purpose: 20% off centre horizontally is
+    still comfortably framed, where 20% high is on its way out of the top."""
+    _fill_dx(config.GAZE_YAW_DEAD_ZONE_FRAC - 0.01)
+    gaze._maybe_yaw(gaze.time.monotonic())
+    assert pan.moves == []
+
+
+def test_a_pan_never_touches_the_pitch_joints(pan):
+    """The two loops own different axes; a pan that tilts is a bug."""
+    _fill_dx(0.5)
+    gaze._maybe_yaw(gaze.time.monotonic())
+    assert pan.moves
+    assert not ({"base_pitch.pos", "elbow_pitch.pos", "wrist_pitch.pos"}
+                & set(pan.moves[0]))
+
+
+def test_one_pan_is_bounded(pan):
+    _fill_dx(1.0)
+    gaze._maybe_yaw(gaze.time.monotonic())
+    total = sum(pan.moves[0][j] for j in pan.moves[0])
+    assert total == pytest.approx(config.GAZE_YAW_MAX_STEP_DEG)
+
+
+def test_a_pan_clears_the_window_it_was_computed_from(pan):
+    """Those offsets describe the pose the camera has just left."""
+    _fill_dx(0.4)
+    gaze._maybe_yaw(gaze.time.monotonic())
+    assert pan.moves, "precondition: the pan fired"
+    assert gaze._dx_estimate() is None, "the window must be empty after a move"
+
+
+def test_a_pan_never_moves_a_body_something_else_owns(pan):
+    """The tracking follower drives base_yaw hardest of all; fighting it is how
+    the pitch loop spent an afternoon reporting corrections that never landed."""
+    _fill_dx(0.5)
+    pan._tracking_active = True
+    gaze._maybe_yaw(gaze.time.monotonic())
+    assert pan.moves == []
+
+
+def test_the_watcher_loop_pans_as_well_as_tilts():
+    """A source check, deliberately: the failure mode being guarded against is
+    nothing CALLING the correction, which no test of the function can catch —
+    a merge dropped _maybe_pitch(now) from this same loop once already.
+    """
+    import inspect
+
+    body = inspect.getsource(gaze._loop)
+    assert "_maybe_yaw(now)" in body, "the watcher never pans"
+    assert body.index("_maybe_pitch(now)") < body.index("_maybe_yaw(now)"), (
+        "tilt runs before pan; each clears its own window and owns the body, so "
+        "the order has to be fixed rather than incidental"
+    )

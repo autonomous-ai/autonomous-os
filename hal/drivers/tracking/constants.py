@@ -186,6 +186,17 @@ PITCH_TRAVEL_MIN = {
     "elbow_pitch.pos":  -4.0,
     "wrist_pitch.pos": -33.0,
 }
+# Measured pan travel, same day and the same way as PITCH_TRAVEL_*. wrist_roll
+# reached every target from -59 to +59 cleanly — markedly better behaved than
+# any pitch joint, because neither of these two lifts the arm against gravity.
+YAW_TRAVEL_MIN = {
+    "base_yaw.pos":   -100.0,
+    "wrist_roll.pos":  -55.0,
+}
+YAW_TRAVEL_MAX = {
+    "base_yaw.pos":    100.0,
+    "wrist_roll.pos":   55.0,
+}
 PITCH_TRAVEL_MAX = {
     "base_pitch.pos":   30.0,
     "elbow_pitch.pos":  58.0,
@@ -201,8 +212,30 @@ ELBOW_PITCH_SIGN = -1.0
 # Maximum tracking duration (seconds) — auto-stop to save motor/CPU.
 MAX_TRACK_DURATION_S = 300  # 5 minutes
 
+# Yaw distribution across the two joints that PAN the camera.
+#
+# Device-measured 2026-08-25 by pinning every other joint and capturing:
+#   base_yaw   -24 -> face at the far right of frame;  +24 -> centre-left
+#   wrist_roll -34 -> face at the far right of frame;  +34 -> left
+# So INCREASING either joint pans the camera right, and a face on the right
+# (dx > 0) is corrected by increasing both. Same sign, no ELBOW_PITCH_SIGN
+# equivalent needed.
+#
+# base_yaw leads for two reasons beyond its larger travel: turning the base is
+# the gesture people read as "it looked at me", and `user_bearing` stores the
+# bearing AS base_yaw — so aiming mostly with the wrist would leave the
+# remembered bearing describing a pose the lamp never actually held.
+# wrist_roll assists, and picks up whatever a saturated yaw cannot take.
+#
+# Unlike the pitch joints these two are on nearly the same scale — 12.0 vs 11.5
+# encoder counts per normalised unit — so treating their contributions as 1:1
+# is sound here in a way it is not for pitch.
+YAW_WEIGHT_BASE = 0.75
+YAW_WEIGHT_ROLL = 0.25
+
 # Servo position limits (degrees).
 YAW_MIN, YAW_MAX = -135.0, 135.0
+WRIST_ROLL_MIN, WRIST_ROLL_MAX = -90.0, 90.0
 BASE_PITCH_MIN, BASE_PITCH_MAX = -90.0, 30.0
 ELBOW_PITCH_MIN, ELBOW_PITCH_MAX = -90.0, 90.0
 WRIST_PITCH_MIN, WRIST_PITCH_MAX = -90.0, 90.0
