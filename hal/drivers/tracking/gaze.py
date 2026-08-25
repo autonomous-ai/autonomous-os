@@ -512,18 +512,28 @@ def _verify_landed(svc: Any, target: Dict[str, float], now: float) -> Dict[str, 
     except Exception as e:
         logger.debug("[gaze] could not verify the correction landed: %s", e)
         return {}
+    # Poll until it ARRIVES, or until the cap. Deliberately not "until it stops
+    # moving": a servo has not started moving in the first few milliseconds after
+    # its goal is written, so a stopped-looking pair of reads is the normal state
+    # BEFORE the move as well as after it. That exit fired one poll in, 0.16s
+    # after the goal was written — device-traced, gaze asked elbow_pitch for
+    # +30.9 from +17.4 and declared failure while the joint was still
+    # accelerating. Reaching it needed ~24 real degrees, or 150 deg/s. So it
+    # benched a healthy joint on every correction, took it out of the
+    # allocation, and made the thing it was measuring worse.
     deadline = time.monotonic() + config.GAZE_PITCH_SETTLE_S
-    while time.monotonic() < deadline:
-        time.sleep(0.15)
-        try:
-            now_pose = svc.get_positions()
-        except Exception:
+    while True:
+        if all(
+            abs(after.get(j, want) - want) <= config.GAZE_PITCH_LAND_TOL_DEG
+            for j, want in target.items()
+        ):
             break
-        moving = any(
-            abs(now_pose.get(j, 0.0) - after.get(j, 0.0)) > 0.2 for j in target
-        )
-        after = now_pose
-        if not moving:
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.1)
+        try:
+            after = svc.get_positions()
+        except Exception:
             break
     short: Dict[str, float] = {}
     for joint, want in target.items():

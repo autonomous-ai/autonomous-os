@@ -1799,3 +1799,33 @@ def test_idle_is_anchored_on_where_the_arm_got_to_not_where_it_was_sent(neck):
     assert anchored["elbow_pitch.pos"] == pytest.approx(8.0), (
         f"anchored on {anchored['elbow_pitch.pos']:+.1f}, but the elbow stopped at +8.0"
     )
+
+
+def test_a_move_still_in_flight_is_not_called_a_failure(neck, monkeypatch):
+    """The regression the landing check itself introduced.
+
+    A servo has not started moving in the first milliseconds after its goal is
+    written, so "two reads the same" is the normal state BEFORE a move as well
+    as after. Device-traced: gaze wrote elbow_pitch +30.9 and declared failure
+    0.16s later, which would have needed 150 deg/s. It benched a healthy joint
+    on every correction and removed it from the allocation.
+    """
+    monkeypatch.setattr(config, "GAZE_PITCH_SETTLE_S", 2.0)
+    reads = {"n": 0}
+    real = neck.get_positions
+
+    def slow_arrival():
+        # Stays put for the first few polls, then arrives — a real servo.
+        reads["n"] += 1
+        pose = real()
+        if reads["n"] < 4 and neck.moves:
+            return dict(pose, **{"elbow_pitch.pos": 5.0})
+        return pose
+
+    neck.get_positions = slow_arrival
+    _fill_dy(-0.6)
+    gaze._maybe_pitch(gaze.time.monotonic())
+
+    assert gaze._pitch_stalls == {}, (
+        "a joint that arrived late must not be benched as if it had stalled"
+    )
