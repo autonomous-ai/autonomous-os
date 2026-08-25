@@ -510,7 +510,19 @@ on a device running Hermes. Gating on presence would make each poll announce
 uses, and restart a unit that does not exist — forever.
 `componentInstalled` therefore compares the key against `agent_runtime` in
 `/root/config/config.json`; an unreadable/unset value means "not this runtime"
-(skip), which is the safe direction. OpenClaw keeps its `inPath` check: it is
+(skip), which is the safe direction.
+
+A **second gate** guards the other direction: `updaterSupports(key)` reads
+`/usr/local/bin/software-update` and requires its exact branch guard
+(`[ "$APP" = "<key>" ]`) to be present. `software-update` reaches a device only
+via the imager or `setup.sh` — never over OTA — so a device provisioned before
+these keys existed keeps an updater that answers `Unknown app: codex` forever.
+Without the gate, every poll (5m) on such a device would speak "device is
+updating", breathe orange, fail the apply and latch the LED red (the error path
+does not call `restoreLED`). With it, those devices simply never receive
+agent-CLI updates — the only outcome available to them anyway — silently. The
+match is the branch guard, not the bare key: the key also appears in comments and
+in the usage strings of an updater that does not implement it. OpenClaw keeps its `inPath` check: it is
 npm-installed per device rather than baked, and older provisioning may leave
 `agent_runtime` unset.
 

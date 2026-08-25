@@ -202,3 +202,33 @@ func TestComponentInstalledAgentCLIsFollowRuntime(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdaterSupports(t *testing.T) {
+	dir := t.TempDir()
+	script := `#!/bin/bash
+# Usage: software-update <os-server|codex|picoclaw>   <- usage text alone must NOT count
+if [ "$APP" = "os-server" ]; then
+  :
+elif [ "$APP" = "codex" ]; then
+  :
+fi
+`
+	if err := os.WriteFile(filepath.Join(dir, "software-update"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+
+	if !updaterSupports(domain.OTAKeyCodex) {
+		t.Error("codex branch present but reported unsupported")
+	}
+	// picoclaw appears in the usage line only — a loose substring search would
+	// wrongly report support for an updater that cannot apply it.
+	if updaterSupports(domain.OTAKeyPicoClaw) {
+		t.Error("picoclaw reported supported from its usage-string mention alone")
+	}
+	// An updater that is not on PATH at all must report no support, not panic.
+	t.Setenv("PATH", t.TempDir())
+	if updaterSupports(domain.OTAKeyCodex) {
+		t.Error("missing software-update reported as supporting codex")
+	}
+}

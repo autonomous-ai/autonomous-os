@@ -499,7 +499,18 @@ chạy Hermes. Gate theo sự hiện diện của binary sẽ khiến mỗi vòn
 "thiết bị đang cập nhật", chuyển LED cam, tải một CLI thiết bị không dùng, rồi
 restart một unit không tồn tại — lặp mãi mãi. Nên `componentInstalled` so key với
 `agent_runtime` trong `/root/config/config.json`; đọc không được hoặc rỗng nghĩa
-là "không phải runtime này" (bỏ qua) — hướng an toàn. OpenClaw giữ nguyên kiểm
+là "không phải runtime này" (bỏ qua) — hướng an toàn.
+
+**Cửa thứ hai** chặn hướng còn lại: `updaterSupports(key)` đọc
+`/usr/local/bin/software-update` và đòi đúng branch guard
+(`[ "$APP" = "<key>" ]`) phải có mặt. `software-update` chỉ vào máy qua imager
+hoặc `setup.sh` — KHÔNG bao giờ qua OTA — nên máy provision trước khi có các key
+này sẽ giữ mãi bản updater trả `Unknown app: codex`. Không có cửa này thì mỗi
+vòng poll (5 phút) máy đó sẽ nói "thiết bị đang cập nhật", thở cam, fail lúc
+apply rồi kẹt LED đỏ (nhánh lỗi không gọi `restoreLED`). Có nó thì máy cũ đơn
+giản là không nhận update CLI — kết cục duy nhất chúng có thể có — và im lặng.
+Khớp theo branch guard chứ không theo key trần: key còn xuất hiện trong comment
+và trong usage string của bản updater không hề implement nó. OpenClaw giữ nguyên kiểm
 tra `inPath`: nó cài bằng npm theo từng máy chứ không bake sẵn, và provisioning
 cũ có thể chưa set `agent_runtime`.
 

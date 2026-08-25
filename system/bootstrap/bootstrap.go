@@ -712,7 +712,17 @@ func (b *Bootstrap) componentInstalled(key string) bool {
 		// and restart a unit that does not exist — forever.
 		//
 		// The runtime the device actually runs is the real predicate.
-		return resolveAgentRuntime() == key
+		//
+		// Second gate: the on-device updater must know the key. `software-update`
+		// reaches a device ONLY via the imager or setup.sh (see scripts/README.md)
+		// — never over OTA — so a device provisioned before these keys existed
+		// keeps an updater that answers "Unknown app: codex" forever. Without this
+		// check that device would, every poll (5m): speak "device is updating",
+		// breathe orange, fail the apply, and latch the LED red (the error path
+		// does not restoreLED). Skipping instead means such devices simply never
+		// receive agent-CLI updates — which is the only outcome available to them
+		// anyway — and do it silently.
+		return resolveAgentRuntime() == key && updaterSupports(key)
 	case domain.OTAKeyWeb:
 		return dirExists("/usr/share/nginx/html/setup")
 	case domain.OTAKeyHal:
@@ -753,6 +763,29 @@ func resolveAgentRuntime() string {
 		return ""
 	}
 	return strings.TrimSpace(c.AgentRuntime)
+}
+
+// updaterSupports reports whether the on-device `software-update` script has a
+// branch for this component key.
+//
+// It matches the branch guard verbatim — `[ "$APP" = "<key>" ]`, the exact form
+// every branch in scripts/provision/software-update uses — rather than looking
+// for the key anywhere in the file: the key also appears in comments and in the
+// usage strings of an updater that does NOT implement it, so a loose search
+// would report support that isn't there.
+//
+// A missing/unreadable script means "no support": the caller then skips the
+// component, which is strictly better than exec'ing an updater that will fail.
+func updaterSupports(key string) bool {
+	path, err := exec.LookPath("software-update")
+	if err != nil {
+		return false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), `[ "$APP" = "`+key+`" ]`)
 }
 
 func inPath(name string) bool {
