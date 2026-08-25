@@ -121,6 +121,10 @@ func (s *PicoclawService) EnsureOnboarding() error {
 	// servo-control on a motionless device), keeping picoclaw's built-ins. Skill dirs
 	// are read per-turn from disk, so no gateway reload is needed.
 	s.pruneUnsupportedSkills()
+	// Re-sync all supported skills at boot/config reconciliation, mirroring
+	// OpenClaw. The watcher only reacts to metadata changes after it starts, so
+	// this self-heals a stale local skill when os-server starts after a CDN update.
+	changedSkills := s.downloadSkills()
 
 	needRestart := false
 
@@ -163,6 +167,10 @@ func (s *PicoclawService) EnsureOnboarding() error {
 			return fmt.Errorf("restart picoclaw after onboarding: %w", err)
 		}
 	}
+
+	// Notify after a possible restart so the bridge is available to deliver the
+	// re-read request for skills that changed on disk.
+	s.notifySkillChanges(changedSkills)
 
 	// TODO(picoclaw-onboarding-parity): openclaw additionally pins messages.queue.mode
 	// (picoclaw has its own steering_mode — verify before mirroring). (openclaw.json-

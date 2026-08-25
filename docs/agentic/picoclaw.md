@@ -126,6 +126,10 @@ self-heals after a factory reset, mirroring hermes' presync):
     (`picoclawBuiltinSkills`: `agent-browser`, `github`, `hardware`, `skill-creator`,
     `summarize`, `tmux`, `weather`); everything else under `workspace/skills` is
     deleted. Fail-open when ROBOT.md declares no caps. No reload (skills read per-turn);
+    then refreshes every supported skill from the CDN, so a local skill that was
+    stale before the watcher started self-heals on boot/config reconciliation. If
+    any skill content changed, it notifies the agent after a possible gateway restart
+    to re-read the updated `SKILL.md` files;
   - when any block changed, **restarts the gateway** (`restartPicoclawGateway` →
     `systemctl restart picoclaw`) so it re-reads the workspace files (log+skip when
     systemctl is unavailable). Not the gateway `/reload` endpoint — it needs an admin

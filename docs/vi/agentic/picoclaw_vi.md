@@ -123,7 +123,10 @@ tự-heal sau factory reset, giống presync của hermes):
     như openclaw) **hoặc** là built-in của picoclaw (`picoclawBuiltinSkills`:
     `agent-browser`, `github`, `hardware`, `skill-creator`, `summarize`, `tmux`,
     `weather`); còn lại trong `workspace/skills` thì xoá. Fail-open khi ROBOT.md không
-    khai cap. Không reload (skill đọc per-turn);
+    khai cap. Không reload (skill đọc per-turn); sau đó tải lại mọi skill được hỗ trợ
+    từ CDN, nên skill local đã cũ trước khi watcher chạy sẽ tự phục hồi ở lần
+    boot/config reconciliation. Nếu nội dung skill đổi, agent được báo sau khi gateway
+    có thể đã restart để đọc lại các file `SKILL.md` mới;
   - khi có block đổi, **restart gateway** (`restartPicoclawGateway` → `systemctl
     restart picoclaw`) để nạp lại file workspace (log+skip nếu không có systemctl).
     Không dùng endpoint `/reload` của gateway — nó cần auth admin mình không có (token
