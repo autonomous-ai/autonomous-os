@@ -63,8 +63,8 @@ OS server sử dụng MQTT để giao tiếp với backend server (báo cáo tr�
 rồi `gateway.default` trong `ROBOT.md` của device, cuối cùng mặc định `openclaw`.
 Phản hồi còn kèm các field tùy chọn khi có: `hal_version`, `openclaw_version`,
 `hermes_version`, `picoclaw_version`, `codex_version`, `claudecode_version`,
-`opencode_version`, `local_ip`, `tts_provider`, `tts_voice`, `stt_language`, `timezone`,
-`unsupported_channels`, `skills`. `wakeword_enabled` luôn có mặt và báo trạng thái
+`opencode_version`, `local_ip`, `tts_provider`, `tts_voice`, `tts_model`, `stt_language`,
+`stt_provider`, `timezone`, `unsupported_channels`, `skills`. `wakeword_enabled` luôn có mặt và báo trạng thái
 effective của wake-word gate top-level trong config (`true` hoặc `false`; config legacy
 thiếu giá trị này sẽ báo `false`). `timezone` là múi giờ IANA **trực tiếp** của device (ví dụ
 `Asia/Ho_Chi_Minh`), đọc tươi từ `/etc/timezone` (fallback về config), không chỉ là
@@ -90,7 +90,7 @@ nhưng chỉ `handleInfo` set nó, nên reply `data` không bao giờ mang theo.
 (`POST {llm_base}/ping`, build bởi `system/device.buildPingPayload`, gửi qua
 `system/beclient`) mang cùng bộ field trạng thái thiết bị như uplink `info`
 này — `local_ip`, `device`, `device_id`, `timezone`, `tts_provider`,
-`tts_voice`, `stt_language`, `wakeword_enabled`, `hal_version`, `unsupported_channels` — cộng thêm
+`tts_voice`, `tts_model`, `stt_language`, `stt_provider`, `wakeword_enabled`, `hal_version`, `unsupported_channels` — cộng thêm
 `agent_runtime` và `agent_runtime_version`. Khác với `info` (báo version của
 mọi backend đã cài cạnh nhau), ping chỉ gửi **version của runtime đang
 active**. Ping bắn ở: (1) ngay sau khi join WiFi lúc setup (status
@@ -98,6 +98,15 @@ active**. Ping bắn ở: (1) ngay sau khi join WiFi lúc setup (status
 tới ~2 phút, để đường cứu popup Setup mô tả trong `docs/setup-flow.md` hoạt
 động được), (2) một lần khi setup xong (status `working`), và (3) định kỳ từ
 status reporter. Field nào backend không xài thì đơn giản là bị bỏ qua.
+
+**Bỏ qua với LLM host tự host (BYO) không cấu hình MQTT.** `beclient.Ping`
+(`system/beclient/client.go`) không gửi gì — trả về `(nil, nil)`, giống hệt
+nhánh short-circuit `base == "" || token == ""` sẵn có — khi `config.MQTTEndpoint`
+rỗng **và** host của `llm_base_url` không phải `autonomous.ai` hay subdomain
+`*.autonomous.ai`. Thiết bị trỏ vào LLM host tự host/BYO mà không có quan hệ
+MQTT nào với backend autonomous thì `/ping` không có nơi để đến (404 ở đó), nên
+mỗi tick định kỳ đáng lẽ sẽ fail ầm ĩ. Việc bỏ qua chỉ log một lần mỗi tiến
+trình (`sync.Once`), không log mỗi tick.
 
 Ping còn mang thêm **`skills`** — những skill runtime đang chạy hiện có, đúng bộ
 mà panel Manage skills trên web hiển thị (`AgentGateway.ListSkills`, cũng là thứ

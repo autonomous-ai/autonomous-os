@@ -654,6 +654,17 @@ class VoiceStartRequest(BaseModel):
     deepgram_api_key: str = Field(
         "", description="Deepgram API key (optional, falls back to Autonomous STT)"
     )
+    stt_provider: str = Field(
+        "",
+        description="STT provider: '' (legacy auto: deepgram if deepgram_api_key set, else autonomous), "
+        "'deepgram', 'autonomous', or 'openai' (any OpenAI-compatible /audio/transcriptions server)",
+    )
+    stt_model: str = Field(
+        "", description="STT model name (optional; provider-specific default when empty)"
+    )
+    stt_language: str = Field(
+        "", description="STT language hint (optional, e.g. 'en', 'vi')"
+    )
     tts_voice: str = Field(
         "", description="TTS voice name (optional, defaults to config TTS_VOICE)"
     )
@@ -662,6 +673,9 @@ class VoiceStartRequest(BaseModel):
     )
     tts_provider: str = Field(
         PROVIDER_OPENAI, description=f"TTS provider: '{PROVIDER_OPENAI}' (default) or '{PROVIDER_ELEVENLABS}'"
+    )
+    tts_model: str = Field(
+        "", description="TTS model name (optional; defaults to the backend's built-in default when empty)"
     )
 
 

@@ -271,13 +271,16 @@ export interface WifiProvisionBody {
   llm_base_url?: string;
   llm_model?: string;
   // Voice pipeline
+  stt_provider?: "" | "autonomous" | "deepgram" | "openai";
   stt_api_key?: string;
   stt_base_url?: string;
   stt_language?: string;
+  stt_model?: string;
   tts_api_key?: string;
   tts_base_url?: string;
   tts_provider?: string;
   tts_voice?: string;
+  tts_model?: string;
   // Admin auth
   admin_password?: string;
   // Messaging channel (optional). channel = telegram | slack | discord.
@@ -350,10 +353,12 @@ export interface DeviceConfig {
   llm_disable_thinking: boolean;
   stt_base_url: string;
   tts_base_url: string;
+  stt_provider: string;
   stt_language: string;
   stt_model: string;
   tts_provider: string;
   tts_voice: string;
+  tts_model: string;
   wakeword: boolean;
   agent_name: string;
   wake_phrases: string[];
@@ -388,10 +393,17 @@ export interface DeviceConfig {
   has_admin_password: boolean;
 }
 
-export async function getTTSVoices(provider?: string, lang?: string): Promise<string[]> {
+export async function getTTSVoices(provider?: string, lang?: string, model?: string): Promise<string[]> {
   const qs = new URLSearchParams();
   if (provider) qs.set("provider", provider);
   if (lang) qs.set("lang", lang);
+  // Only meaningful for provider=openai: it selects which voice list the
+  // server asks its configured TTS host for. There is deliberately no
+  // base_url param — the endpoint is unauthenticated, and letting the caller
+  // choose the host would make the server forward its TTS credential
+  // anywhere (SSRF + key exfiltration). The host always comes from the
+  // device's saved config, so an unsaved base URL yields the static list.
+  if (model) qs.set("model", model);
   const params = qs.toString() ? `?${qs.toString()}` : "";
   return apiRequest<string[]>(`${API_BASE}/api/device/voices${params}`);
 }

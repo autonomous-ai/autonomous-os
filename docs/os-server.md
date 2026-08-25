@@ -26,6 +26,7 @@
 |--------|----------|-------------|
 | POST | `/api/device/setup` | Configure WiFi + LLM + channel + MQTT (async, returns immediately) |
 | POST | `/api/device/channel` | Change messaging channel |
+| GET | `/api/device/voices` | Proxies HAL's `GET /voice/voices`. Query: `provider?` (default `openai`), `lang?`, `model?` — **nothing else is read from the query**. This route is unauthenticated, so the TTS host is **never** caller-supplied: for `provider=openai` it comes from `config.TTSBaseURL` (falling back to `config.LLMBaseURL`), and `model` falls back to `config.TTSModel`. No credential is forwarded to HAL either — HAL reads `tts_api_key` / `llm_api_key` from the same `config.json`. A caller-supplied `base_url` would make the device forward its TTS credential to an arbitrary host (SSRF + key exfiltration). Consequence: a base URL edited in the UI but not yet saved is probed only after Save; until then the static voice list is returned. |
 
 ### Device Timezone
 
@@ -329,10 +330,19 @@ Requires sensing with camera (InsightFace). Enrolled person JPEGs persist under 
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/voice/start` | Start voice pipeline (Deepgram STT + TTS) |
+| POST | `/voice/start` | Start voice pipeline. Body fields (all optional, empty falls back to `config.json`'s equivalent key via `_cfg_fallback` — an older os-server that doesn't send them at all): `stt_provider` (`""` legacy \| `autonomous` \| `deepgram` \| `openai`), `stt_model`, `stt_language`, `tts_model`, plus the pre-existing key/base-URL/voice/provider fields. See "STT/TTS provider selection" below. |
 | POST | `/voice/stop` | Stop voice pipeline |
 | POST | `/voice/speak` | TTS — convert text to speech. Body fields: `text`, `voice?`, `interruptible?`, `provider?`, `tts_api_key?`, `tts_base_url?`, `cached?` (use WAV cache, render+save on miss), `prerender?` (render+save without playing — boot warmup) |
 | GET | `/voice/status` | voice_available, voice_listening, tts_available, tts_speaking |
+| GET | `/voice/voices` | TTS voice list. Query: `provider?`, `lang?` (BCP-47, filters ElevenLabs to a language bucket), `model?`. **The TTS host is resolved server-side from config (`tts_base_url` → `llm_base_url`); any caller-supplied `base_url` query param is ignored** (defense-in-depth against SSRF + key exfiltration — matters if HAL is reached directly on a `0.0.0.0` `make hal-dev` bind). For `openai` it then queries that host's own `GET {base_url}/v1/audio/voices?model=<model>` for its real voice list (e.g. a local oMLX instance); falls back to the hardcoded 9-name OpenAI list on a missing/empty response or error. The credential is read from `config.json` (`tts_api_key` → `llm_api_key`), never from a query param. |
+
+### STT/TTS provider selection
+
+`select_stt_provider()` (`hal/drivers/voice/stt/select.py`) is the single policy shared by both HAL's boot auto-start (`hal/server.py`, reading `config.json` directly) and `POST /voice/start` (reading the request body): `stt_provider=""` picks Deepgram if a Deepgram key is configured, else Autonomous (legacy behavior); `"deepgram"`/`"autonomous"`/`"openai"` force that provider. `stt_api_key`/`stt_base_url` fall back to the LLM key/URL when empty either way.
+
+`OpenAISTT` (`hal/drivers/voice/stt/openai.py`) talks to any OpenAI-compatible `POST {base_url}/audio/transcriptions` endpoint (default model `whisper-1`). Unlike Deepgram/Autonomous it is **batch-only**: audio is buffered in memory and POSTed once as a WAV file when the session closes, returning one final transcript — no partial/interim results. `_ensure_openai_v1()` (`hal/drivers/voice/tts/openai.py`, shared by TTS and STT) appends `/v1` to any non-empty base URL that doesn't already end in it (previously scoped to `campaign-api.autonomous.ai` only).
+
+The Deepgram-SKU auto-derivation from `stt_language` (`sttModelForLanguage`, `system/device/config_update.go` / `system/device/setup.go`) only fires when the effective `STTProvider` is `""` (legacy) or `"autonomous"` — the `openai`/`deepgram` providers own their own model naming and are never overwritten by it. An explicit `stt_model` from the caller wins whenever `STTProvider == "openai"`.
 
 ### System
 

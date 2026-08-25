@@ -667,6 +667,26 @@ class RealtimeOrchestrator:
             logger.info("Realtime orchestrator disabled (provider=%s)", provider)
             return
 
+        # A device with no `realtime` block in config.json still defaults to
+        # enabled:true, provider:gemini — with no api_key resolved anywhere
+        # (env, config.json realtime.api_key, or llm_api_key). Without this
+        # check that case still calls connect(), which fails, then retries
+        # forever in _connect_retry_loop (network attempt + a warning log
+        # every ≤60s, indefinitely) instead of just staying off. Log once and
+        # skip — the same fix applies to openai/qwen, which hit the identical
+        # retry-forever path when their key is unset.
+        provider_api_keys = {
+            "gemini": config.REALTIME_GEMINI_API_KEY,
+            "openai": config.REALTIME_OPENAI_API_KEY,
+            "qwen": config.REALTIME_QWEN_API_KEY,
+        }
+        if provider in provider_api_keys and not provider_api_keys[provider]:
+            logger.warning(
+                "[realtime] No API key configured for provider=%s — realtime voice agent disabled",
+                provider,
+            )
+            return
+
         self._connect_retry_stop.clear()
 
         instructions: str = self._context.build_instructions()

@@ -30,13 +30,16 @@ export interface SetupRequest {
   llm_api_key: string;
   llm_model: string;
   deepgram_api_key?: string;
+  stt_provider?: "" | "autonomous" | "deepgram" | "openai";
   stt_api_key?: string;
   stt_language?: string;
+  stt_model?: string;
   tts_api_key?: string;
   stt_base_url?: string;
   tts_base_url?: string;
   tts_provider?: string;
   tts_voice?: string;
+  tts_model?: string;
   device_id?: string;
   /** Hardware-derived ID (Lamp-XXXX from Pi serial / eth MAC). Read-only — set by the device at runtime. */
   mac?: string;

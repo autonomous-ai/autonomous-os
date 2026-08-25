@@ -241,10 +241,19 @@ func (s *Service) restartVoice() {
 
 	// Always attempt restart — HAL falls back to AutonomousSTT if no Deepgram key.
 	if err := hal.StartVoice(hal.VoiceStartConfig{
-		DeepgramKey: s.cfg.DeepgramAPIKey,
-		LLMKey:      s.cfg.LLMAPIKey,
-		LLMBaseURL:  s.cfg.LLMBaseURL,
-		TTSProvider: s.cfg.TTSProvider,
+		DeepgramKey:     s.cfg.DeepgramAPIKey,
+		LLMKey:          s.cfg.LLMAPIKey,
+		STTKey:          s.cfg.GetSTTAPIKey(),
+		TTSKey:          s.cfg.GetTTSAPIKey(),
+		LLMBaseURL:      s.cfg.LLMBaseURL,
+		STTBaseURL:      s.cfg.STTBaseURL,
+		TTSBaseURL:      s.cfg.TTSBaseURL,
+		TTSVoice:        s.cfg.TTSVoice,
+		TTSInstructions: s.cfg.TTSInstructions,
+		TTSProvider:     s.cfg.TTSProvider,
+		STTProvider:     s.cfg.STTProvider,
+		STTModel:        s.cfg.STTModel,
+		TTSModel:        s.cfg.TTSModel,
 	}); err != nil {
 		slog.Error("voice restart failed", "component", "healthwatch", "error", err)
 		s.bus.Push(domain.MonitorEvent{

@@ -262,6 +262,18 @@ func adminAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 		// Session cookie path (browser, post-login). Cookies auto-attach so
 		// this covers <img>, <a>, EventSource and any same-site fetch.
 		if session.HasValid(c, cfg) {
+			// Defense-in-depth CSRF: the os_session cookie is SameSite=Strict
+			// (session.go), so a cross-site request already can't carry it. If a
+			// browser ever attached it cross-site anyway, refuse the cookie-
+			// authenticated path. Bearer/token paths below are intentionally
+			// exempt — cross-origin apps hold a secret and legitimately send
+			// Sec-Fetch-Site: cross-site. Absent/other values (same-origin,
+			// same-site, none, or old browsers) are allowed (fail-open).
+			if c.GetHeader("Sec-Fetch-Site") == "cross-site" {
+				c.JSON(http.StatusForbidden, serializers.ResponseError("cross-site request rejected"))
+				c.Abort()
+				return
+			}
 			c.Next()
 			return
 		}

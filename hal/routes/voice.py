@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 import hal.app_state as state
-from hal.config import AUDIO_INPUT_ALSA, TTS_SPEED, TTS_VOICE, TTS_INSTRUCTIONS
+from hal.config import AUDIO_INPUT_ALSA, TTS_SPEED, TTS_VOICE, TTS_INSTRUCTIONS, _os_cfg_get
 from hal.models import (
     SpeakRequest,
     StatusResponse,
@@ -30,8 +30,7 @@ router = APIRouter(tags=["Voice"])
 sd = None
 np = None
 VoiceService = None
-DeepgramSTT = None
-AutonomousSTT = None
+select_stt_provider = None
 TTSService = None
 
 try:
@@ -41,8 +40,7 @@ except ImportError:
     pass
 
 try:
-    from hal.drivers.voice.stt import AutonomousSTT
-    from hal.drivers.voice.stt import DeepgramSTT
+    from hal.drivers.voice.stt import select_stt_provider
     from hal.drivers.voice.voice_service import VoiceService
 except ImportError:
     pass
@@ -52,6 +50,20 @@ try:
     from hal.drivers.voice.tts import PROVIDER_OPENAI
 except ImportError:
     PROVIDER_OPENAI = "openai"
+
+
+def _cfg_fallback(value: str, config_key: str) -> str:
+    """Empty request field falls back to the same key in os-server's config.json.
+
+    An older os-server binary won't send stt_provider/stt_model/stt_language/
+    tts_model on POST /voice/start at all (VoiceStartRequest defaults them to
+    "" on this end), so this keeps those settings from silently vanishing on
+    every call instead of only working after an os-server upgrade.
+    """
+    if value:
+        return value
+    from hal.config import _os_cfg_get
+    return (_os_cfg_get(config_key, "") or "").strip()
 
 
 @router.post("/voice/start", response_model=StatusResponse)
@@ -73,8 +85,13 @@ def start_voice(req: VoiceStartRequest):
     # households with one shared credential keep working.
     tts_api_key = req.tts_api_key or req.llm_api_key
     tts_base_url = req.tts_base_url or req.llm_base_url
-    stt_api_key = req.stt_api_key or req.llm_api_key
-    stt_base_url = req.stt_base_url or req.llm_base_url
+    stt_provider_name = _cfg_fallback(req.stt_provider, "stt_provider")
+    stt_model = _cfg_fallback(req.stt_model, "stt_model")
+    stt_language = _cfg_fallback(req.stt_language, "stt_language")
+    tts_model = _cfg_fallback(req.tts_model, "tts_model")
+    tts_kwargs = {}
+    if tts_model:
+        tts_kwargs["model"] = tts_model
 
     need_tts = TTSService and (
         not (state.tts_service and state.tts_service.available)
@@ -107,6 +124,7 @@ def start_voice(req: VoiceStartRequest):
                 on_speak_start=state._on_tts_speak_start,
                 on_speak_end=state._on_tts_speak_end,
                 provider=req.tts_provider,
+                **tts_kwargs,
             )
             state.logger.info("TTSService started (provider=%s, voice=%s)", req.tts_provider, voice)
             if state.music_service:
@@ -133,11 +151,17 @@ def start_voice(req: VoiceStartRequest):
         # "autonomous" alias arm the same gate (see _build_wake_words and
         # voice/_internal/config.py DEFAULT_WAKE_WORDS).
         stt_keywords = state._stt_boost_terms()
-        if req.deepgram_api_key and DeepgramSTT:
-            stt_provider = DeepgramSTT(api_key=req.deepgram_api_key, keywords=stt_keywords)
-        elif AutonomousSTT:
-            stt_provider = AutonomousSTT(
-                api_key=stt_api_key, base_url=stt_base_url, keywords=stt_keywords
+        if select_stt_provider:
+            stt_provider = select_stt_provider(
+                stt_provider=stt_provider_name,
+                deepgram_api_key=req.deepgram_api_key,
+                llm_api_key=req.llm_api_key,
+                llm_base_url=req.llm_base_url,
+                stt_api_key=req.stt_api_key,
+                stt_base_url=req.stt_base_url,
+                stt_model=stt_model,
+                stt_language=stt_language,
+                keywords=stt_keywords,
             )
         if not stt_provider:
             raise HTTPException(503, "No STT provider available")
@@ -188,7 +212,12 @@ def update_voice_config(req: VoiceConfigRequest):
 
 
 @router.get("/voice/voices")
-def get_voices(provider: Optional[str] = None, lang: Optional[str] = None):
+def get_voices(
+    provider: Optional[str] = None,
+    lang: Optional[str] = None,
+    base_url: Optional[str] = None,
+    model: Optional[str] = None,
+):
     """Return available TTS voices for the requested (or current) provider.
 
     `lang` is a BCP-47 stt_language code (e.g. "vi", "zh-CN"). When set,
@@ -197,6 +226,22 @@ def get_voices(provider: Optional[str] = None, lang: Optional[str] = None):
     Empty / unknown lang returns the full flat list (back-compat for
     older clients that don't send lang). OpenAI voices ignore lang —
     its built-in voices are language-agnostic.
+
+    For the openai provider we query the configured server's own
+    `GET /audio/voices?model=<model>` for its actual voice list (e.g. a
+    local oMLX instance) instead of returning the hardcoded OpenAI names.
+    Falls back to the hardcoded list on a missing/empty response or error.
+
+    SECURITY: the base URL decides which host we send the device's TTS
+    credential to, so it is resolved HERE from config.json only
+    (`tts_base_url`, falling back to `llm_base_url`) and the caller-supplied
+    `base_url` query param is ignored. This closes the SSRF + key-exfil
+    primitive even if HAL is reached directly on a 0.0.0.0 (make hal-dev)
+    bind — the credential can only ever reach the configured host. The
+    credential itself is never accepted as a parameter either: it is read
+    from the same config.json (`tts_api_key`, falling back to `llm_api_key`),
+    so it also stays out of query strings and access logs. The `base_url`
+    param is retained for signature back-compat with os-server's caller.
     """
     from hal.drivers.voice.tts import ElevenLabsTTSBackend
     from hal.drivers.voice.tts import PROVIDER_ELEVENLABS, PROVIDER_OPENAI as _PO
@@ -207,7 +252,35 @@ def get_voices(provider: Optional[str] = None, lang: Optional[str] = None):
             "provider": provider,
             "voices": ElevenLabsTTSBackend.voices_for_language(lang or ""),
         }
-    return {"provider": provider, "voices": ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"]}
+    default_voices = ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"]
+    # SECURITY: resolve the base URL from config only, ignoring the caller's
+    # `base_url` param, so the device credential can never be redirected to an
+    # attacker host (matters if HAL is reached directly on a 0.0.0.0 bind).
+    # An empty result means "no configured TTS host" -> return the default list
+    # and make no outbound request (fail closed).
+    base_url = (_os_cfg_get("tts_base_url") or _os_cfg_get("llm_base_url") or "").strip()
+    if base_url:
+        try:
+            import requests
+            from hal.drivers.voice.tts.openai import _ensure_openai_v1
+            api_key = _os_cfg_get("tts_api_key") or _os_cfg_get("llm_api_key")
+            headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+            resp = requests.get(
+                f"{_ensure_openai_v1(base_url)}/audio/voices",
+                params={"model": model or "tts-1"},
+                headers=headers,
+                timeout=5,
+            )
+            resp.raise_for_status()
+            voices = (resp.json() or {}).get("voices") or []
+            if voices:
+                return {"provider": provider, "voices": voices}
+        except Exception as e:
+            state.logger.info(
+                "OpenAI-compatible /audio/voices lookup failed (base_url=%s): %s — using default list",
+                base_url, e,
+            )
+    return {"provider": provider, "voices": default_voices}
 
 
 @router.post("/voice/speak", response_model=StatusResponse)

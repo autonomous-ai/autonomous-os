@@ -23,23 +23,13 @@ var (
 )
 
 // StartHALVoice starts the HAL voice pipeline. Backend-agnostic — only
-// talks to the HAL daemon on the Pi.
-func (s *HermesService) StartHALVoice(deepgramKey, llmKey, sttKey, ttsKey, llmBaseURL, sttBaseURL, ttsBaseURL, ttsVoice, ttsInstructions, ttsProvider string) error {
-	if deepgramKey == "" {
+// talks to the HAL daemon on the Pi. See hal.VoiceStartConfig for field
+// semantics.
+func (s *HermesService) StartHALVoice(cfg hal.VoiceStartConfig) error {
+	if cfg.DeepgramKey == "" {
 		return nil
 	}
-	if err := hal.StartVoice(hal.VoiceStartConfig{
-		DeepgramKey:     deepgramKey,
-		LLMKey:          llmKey,
-		STTKey:          sttKey,
-		TTSKey:          ttsKey,
-		LLMBaseURL:      llmBaseURL,
-		STTBaseURL:      sttBaseURL,
-		TTSBaseURL:      ttsBaseURL,
-		TTSVoice:        ttsVoice,
-		TTSInstructions: ttsInstructions,
-		TTSProvider:     ttsProvider,
-	}); err != nil {
+	if err := hal.StartVoice(cfg); err != nil {
 		return err
 	}
 	slog.Info("HAL voice pipeline started", "component", "hermes")

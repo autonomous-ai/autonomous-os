@@ -26,6 +26,10 @@ import { PluginsSection } from "@/pages/settings/PluginsSection";
 // is the agent-backend switch (its own Switch button, not part of Save).
 export type SettingsSectionId = "device" | "wifi" | "llm" | "runtime" | "voice" | "face" | "tts" | "realtime" | "stt" | "channel" | "mqtt" | "mcp" | "plugins" | "timezone";
 
+// Valid stt_provider values — used to validate the config's stt_provider
+// field before trusting it (see the config-load effect below).
+const STT_PROVIDERS: SttProvider[] = ["autonomous", "deepgram", "openai"];
+
 // Header-row label lookup. Kept local so the panel can render the active-section
 // title above the form without depending on the page's NAV_GROUPS config.
 const SECTION_LABELS: Record<SettingsSectionId, string> = {
@@ -90,8 +94,11 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const [deepgramApiKey, setDeepgramApiKey] = useState("");
   const [sttApiKey, setSttApiKey] = useState("");
   const [sttBaseUrl, setSttBaseUrl] = useState("");
-  // STT provider: derived from saved config (deepgram if key present, else autonomous).
-  // Default for fresh devices is "autonomous" — uses LLM endpoint as fallback.
+  const [sttModel, setSttModel] = useState("");
+  // STT provider: prefilled from cfg.stt_provider (falling back to inferring
+  // "deepgram" from has_deepgram_api_key on older configs that predate the
+  // field — see the config-load effect). Default for fresh devices is
+  // "autonomous" — uses LLM endpoint as fallback.
   const [sttProvider, setSttProvider] = useState<SttProvider>("autonomous");
   // STT language drives model selection on the server (operators don't pick
   // model directly). Defaults to "en" so a never-configured device lands on
@@ -99,10 +106,37 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const [sttLanguage, setSttLanguage] = useState("en");
   const [ttsApiKey, setTtsApiKey] = useState("");
   const [ttsBaseUrl, setTtsBaseUrl] = useState("");
+  const [ttsModel, setTtsModel] = useState("");
   const [ttsProvider, setTtsProvider] = useState("elevenlabs");
   const [ttsProviders, setTtsProviders] = useState<string[]>([]);
   const [ttsVoice, setTtsVoice] = useState("Rachel");
   const [ttsVoices, setTtsVoices] = useState<string[]>([]);
+  // "Touched" latches for the AI-Brain→TTS/STT key/URL mirror below: true
+  // once the operator has explicitly edited that field (or a preset picker
+  // set a real value into it), false again if they clear it back to empty.
+  // Replaces the old "mirror while the target is empty" check, which broke
+  // on the very first keystroke into a SOURCE field (llmUrl/llmApiKey have
+  // their own visible inputs) — see the mirror effects below for why.
+  const [ttsApiKeyTouched, setTtsApiKeyTouched] = useState(false);
+  const [ttsBaseUrlTouched, setTtsBaseUrlTouched] = useState(false);
+  const [sttApiKeyTouched, setSttApiKeyTouched] = useState(false);
+  const [sttBaseUrlTouched, setSttBaseUrlTouched] = useState(false);
+  const onTtsApiKeyChange = useCallback((v: string) => {
+    setTtsApiKey(v);
+    setTtsApiKeyTouched(v !== "");
+  }, []);
+  const onTtsBaseUrlChange = useCallback((v: string) => {
+    setTtsBaseUrl(v);
+    setTtsBaseUrlTouched(v !== "");
+  }, []);
+  const onSttApiKeyChange = useCallback((v: string) => {
+    setSttApiKey(v);
+    setSttApiKeyTouched(v !== "");
+  }, []);
+  const onSttBaseUrlChange = useCallback((v: string) => {
+    setSttBaseUrl(v);
+    setSttBaseUrlTouched(v !== "");
+  }, []);
   const [realtimeEnabled, setRealtimeEnabled] = useState(true);
   const [wakeWord, setWakeWord] = useState(false);
   const [agentName, setAgentName] = useState("");
@@ -153,8 +187,8 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   type InitialSnapshot = {
     ssid: string; deviceId: string;
     llmUrl: string; llmModel: string; llmDisableThinking: boolean;
-    sttBaseUrl: string; sttProvider: SttProvider; sttLanguage: string;
-    ttsBaseUrl: string; ttsProvider: string; ttsVoice: string;
+    sttBaseUrl: string; sttProvider: SttProvider; sttLanguage: string; sttModel: string;
+    ttsBaseUrl: string; ttsProvider: string; ttsVoice: string; ttsModel: string;
     wakeWord: boolean;
     channel: ChannelType;
     teleUserId: string; slackUserId: string;
@@ -211,11 +245,24 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         setLlmModel(cfg.llm_model ?? "");
         setLlmDisableThinking(cfg.llm_disable_thinking ?? false);
         setSttBaseUrl(cfg.stt_base_url ?? "");
-        setSttProvider(cfg.has_deepgram_api_key ? "deepgram" : "autonomous");
+        // Mirroring effects below must leave an already-saved URL alone —
+        // mark it touched the instant we load a real value, same as the TTS
+        // base URL below.
+        setSttBaseUrlTouched(!!cfg.stt_base_url);
+        // Prefer the explicit stt_provider field; older configs written
+        // before it existed fall back to inferring "deepgram" from the
+        // presence of a Deepgram key. Also used below for `baseline`.
+        const sttProviderInit: SttProvider = STT_PROVIDERS.includes(cfg.stt_provider as SttProvider)
+          ? (cfg.stt_provider as SttProvider)
+          : (cfg.has_deepgram_api_key ? "deepgram" : "autonomous");
+        setSttProvider(sttProviderInit);
         setSttLanguage(cfg.stt_language || "en");
+        setSttModel(cfg.stt_model || "");
         setTtsBaseUrl(cfg.tts_base_url ?? "");
+        setTtsBaseUrlTouched(!!cfg.tts_base_url);
         setTtsProvider(cfg.tts_provider || "elevenlabs");
         setTtsVoice(cfg.tts_voice || "Rachel");
+        setTtsModel(cfg.tts_model || "");
         setWakeWord(cfg.wakeword ?? false);
         setAgentName(cfg.agent_name ?? "");
         setWakePhrases(cfg.wake_phrases ?? []);
@@ -276,9 +323,9 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         // Mirror the post-load behavior of the LLM→TTS/STT base-URL auto-fill
         // effects so the baseline matches the rendered state. Without this,
         // a config with llm_base_url but no tts/stt_base_url would show the
-        // form as dirty immediately on load.
+        // form as dirty immediately on load. Reuses `sttProviderInit`
+        // computed above (same value just written via setSttProvider).
         const llmUrlInit = cfg.llm_base_url ?? "";
-        const sttProviderInit: SttProvider = cfg.has_deepgram_api_key ? "deepgram" : "autonomous";
         setBaseline({
           ssid: cfg.network_ssid ?? "",
           deviceId: cfg.device_id ?? "",
@@ -288,9 +335,11 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
           sttBaseUrl: (cfg.stt_base_url ?? "") || (sttProviderInit === "autonomous" ? llmUrlInit : ""),
           sttProvider: sttProviderInit,
           sttLanguage: cfg.stt_language || "en",
+          sttModel: cfg.stt_model ?? "",
           ttsBaseUrl: (cfg.tts_base_url ?? "") || llmUrlInit,
           ttsProvider: cfg.tts_provider || "elevenlabs",
           ttsVoice: cfg.tts_voice || "Rachel",
+          ttsModel: cfg.tts_model ?? "",
           wakeWord: cfg.wakeword ?? false,
           channel: (cfg.channel as ChannelType) || "telegram",
           teleUserId: cfg.telegram_user_id ?? "",
@@ -319,51 +368,79 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     getTTSVoices().then(setTtsVoices).catch(() => {});
   }, []);
 
-  // Refetch voices when provider OR stt_language changes — only reset voice
-  // if the currently-saved voice is not in the new (filtered) list.
-  // Passing sttLanguage filters ElevenLabs voices to the active language's
-  // bucket so VN/CN owners only see voices that sound natural for them.
-  const providerChangedByUser = useRef(false);
-  useEffect(() => {
-    getTTSVoices(ttsProvider, sttLanguage).then((voices) => {
-      setTtsVoices(voices);
-      if (providerChangedByUser.current && voices.length > 0 && !voices.includes(ttsVoice)) {
-        setTtsVoice(voices[0]);
-      }
-      providerChangedByUser.current = true;
-    }).catch(() => {});
-  }, [ttsProvider, sttLanguage, ttsVoice]);
-
-  // Auto-mirror AI Brain key/URL into TTS while TTS field is empty.
-  // Once the user types into TTS the sync stops; clearing it re-enables mirroring.
+  // Refetch voices when provider, stt_language, or (for openai) the model
+  // change — only reset voice if the currently-saved voice is not in the new
+  // (filtered) list. Passing sttLanguage filters ElevenLabs voices to the
+  // active language's bucket so VN/CN owners only see voices that sound
+  // natural for them. Debounced 500ms so typing a model doesn't fire a
+  // request per keystroke.
   //
-  // The four effects below trip react-hooks/set-state-in-effect. They are
-  // suppressed rather than rewritten because the mirroring is deliberately
-  // *sticky*: once a field has been filled from the AI Brain value it stops
-  // tracking it, so the value cannot be derived during render (a derived
-  // `ttsBaseUrl || llmUrl` would keep following later llmUrl edits, which is a
-  // different behavior). Folding the mirror into the setters passed to
-  // LLMSection/TTSSection/STTSection would change those components' prop
-  // contracts. Deferring the setState (queueMicrotask) would silence the rule
-  // but change commit timing. All three are behavior changes, so the pattern
-  // stays as-is and is left for a deliberate follow-up.
+  // The TTS base URL is deliberately NOT sent: /api/device/voices is
+  // unauthenticated, so the server resolves the host from the saved config
+  // instead of trusting the query (a caller-supplied host would make the
+  // server forward its TTS credential anywhere). Consequence: an edited but
+  // unsaved base URL is probed only after Save.
+  const providerChangedByUser = useRef(false);
+  const openaiTtsModel = ttsProvider === "openai" ? ttsModel : "";
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      getTTSVoices(ttsProvider, sttLanguage, openaiTtsModel).then((voices) => {
+        setTtsVoices(voices);
+        if (providerChangedByUser.current && voices.length > 0 && !voices.includes(ttsVoice)) {
+          setTtsVoice(voices[0]);
+        }
+        providerChangedByUser.current = true;
+      }).catch(() => {});
+    }, 500);
+    return () => window.clearTimeout(timer);
+    // Deliberately narrow deps: this effect must refetch ONLY when the
+    // provider, language, or (openai) model change. `ttsVoice`/`setTtsVoice`
+    // are what the effect writes, so adding them would refire the catalog
+    // fetch on every voice selection (and re-run the reset logic against a
+    // half-updated list). Mirrors the same rule in
+    // `hooks/setup/useTTSCatalog.ts` — keep the two in step.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ttsProvider, sttLanguage, openaiTtsModel]);
+
+  // Auto-mirror AI Brain key/URL into TTS while the operator hasn't touched
+  // the TTS field themselves. Once they edit TTS directly the sync stops;
+  // clearing it back to empty re-enables mirroring (see the touched-flag
+  // setters declared above, and the onTtsApiKeyChange/onTtsBaseUrlChange/
+  // onSttApiKeyChange/onSttBaseUrlChange wrappers passed to the section
+  // components below in place of the raw setters).
+  //
+  // This used to gate on "target field is empty" instead of a dedicated
+  // touched flag — that broke on the very first character typed into
+  // llmUrl/llmApiKey (which DO have their own visible inputs here, unlike
+  // Setup): each keystroke re-ran the effect, the first one landed in the
+  // still-empty tts/stt field, and the very next keystroke found that field
+  // non-empty and stopped mirroring — so e.g. tts_base_url could end up
+  // silently saved as just "h", the first character of an in-progress LLM
+  // URL edit that the operator never touched TTS/STT for at all.
+  //
+  // The four effects below still trip react-hooks/set-state-in-effect —
+  // suppressed for the same reason as before: the touched flag can't be
+  // derived during render (it's driven by user intent — an onChange call —
+  // not a pure function of props), so this has to live in an effect.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (!ttsApiKey && llmApiKey) setTtsApiKey(llmApiKey);
-  }, [llmApiKey, ttsApiKey]);
+    if (!ttsApiKeyTouched) setTtsApiKey(llmApiKey);
+  }, [llmApiKey, ttsApiKeyTouched]);
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (!ttsBaseUrl && llmUrl) setTtsBaseUrl(llmUrl);
-  }, [llmUrl, ttsBaseUrl]);
-  // Same auto-mirror for STT in autonomous mode (Deepgram has its own key).
+    if (!ttsBaseUrlTouched) setTtsBaseUrl(llmUrl);
+  }, [llmUrl, ttsBaseUrlTouched]);
+  // Same auto-mirror for STT, but only in "autonomous" mode — Deepgram has
+  // its own key and OpenAI-compatible STT is a distinct, explicitly
+  // configured endpoint that shouldn't silently inherit the AI Brain's.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (sttProvider === "autonomous" && !sttApiKey && llmApiKey) setSttApiKey(llmApiKey);
-  }, [llmApiKey, sttApiKey, sttProvider]);
+    if (sttProvider === "autonomous" && !sttApiKeyTouched) setSttApiKey(llmApiKey);
+  }, [llmApiKey, sttApiKeyTouched, sttProvider]);
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (sttProvider === "autonomous" && !sttBaseUrl && llmUrl) setSttBaseUrl(llmUrl);
-  }, [llmUrl, sttBaseUrl, sttProvider]);
+    if (sttProvider === "autonomous" && !sttBaseUrlTouched) setSttBaseUrl(llmUrl);
+  }, [llmUrl, sttBaseUrlTouched, sttProvider]);
 
   // Dirty = any non-secret field diverges from the loaded/last-saved baseline,
   // OR any secret field has user-typed content. Save button uses this to stay
@@ -377,9 +454,11 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     sttBaseUrl !== baseline.sttBaseUrl ||
     sttProvider !== baseline.sttProvider ||
     sttLanguage !== baseline.sttLanguage ||
+    sttModel !== baseline.sttModel ||
     ttsBaseUrl !== baseline.ttsBaseUrl ||
     ttsProvider !== baseline.ttsProvider ||
     ttsVoice !== baseline.ttsVoice ||
+    ttsModel !== baseline.ttsModel ||
     wakeWord !== baseline.wakeWord ||
     channel !== baseline.channel ||
     teleUserId !== baseline.teleUserId ||
@@ -429,8 +508,8 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         channel,
         llm_base_url: llmUrl, llm_model: llmModel,
         llm_disable_thinking: llmDisableThinking,
-        stt_base_url: sttBaseUrl, stt_language: sttLanguage,
-        tts_base_url: ttsBaseUrl, tts_provider: ttsProvider, tts_voice: ttsVoice,
+        stt_base_url: sttBaseUrl, stt_language: sttLanguage, stt_provider: sttProvider, stt_model: sttModel,
+        tts_base_url: ttsBaseUrl, tts_provider: ttsProvider, tts_voice: ttsVoice, tts_model: ttsModel,
         device_id: deviceId,
         mqtt_endpoint: mqttEndpoint, mqtt_username: mqttUsername,
         mqtt_port: mqttPort ? parseInt(mqttPort, 10) : 0,
@@ -478,8 +557,8 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
       setBaseline({
         ssid, deviceId,
         llmUrl, llmModel, llmDisableThinking,
-        sttBaseUrl, sttProvider, sttLanguage,
-        ttsBaseUrl, ttsProvider, ttsVoice,
+        sttBaseUrl, sttProvider, sttLanguage, sttModel,
+        ttsBaseUrl, ttsProvider, ttsVoice, ttsModel,
         wakeWord,
         channel,
         teleUserId, slackUserId,
@@ -494,6 +573,12 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
       // "configured" in the UI.
       setPassword(""); setAdminPassword("");
       setLlmApiKey(""); setTtsApiKey(""); setSttApiKey("");
+      // Un-touch the key mirrors too — cleared here via the raw setters (not
+      // onTtsApiKeyChange/onSttApiKeyChange), so their touched flags need
+      // resetting explicitly, same as the operator clearing the field by
+      // hand would do. Base-URL touched flags are NOT reset here: base URLs
+      // aren't cleared on save, so their touched state should persist.
+      setTtsApiKeyTouched(false); setSttApiKeyTouched(false);
       setDeepgramApiKey(""); setMqttPassword("");
       setTeleToken(""); setSlackBotToken(""); setSlackAppToken("");
       setDiscordBotToken("");
@@ -506,8 +591,8 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     channel, teleToken, teleUserId, slackBotToken, slackAppToken, slackUserId,
     discordBotToken, discordGuildId, discordUserId, ssid, password, adminPassword, llmUrl,
     llmApiKey, llmModel, llmDisableThinking, deepgramApiKey, sttApiKey, sttBaseUrl,
-    sttProvider, sttLanguage, sttLoaded,
-    ttsApiKey, ttsBaseUrl, ttsProvider, ttsVoice, deviceId,
+    sttProvider, sttLanguage, sttModel, sttLoaded,
+    ttsApiKey, ttsBaseUrl, ttsProvider, ttsVoice, ttsModel, deviceId,
     mqttEndpoint, mqttUsername, mqttPassword, mqttPort, faChannel, fdChannel,
     realtimeEnabled, wakeWord, realtimeProvider, realtimeVoice, realtimeReasoning, realtimeApiKey, realtimeBaseUrl,
   ]);
@@ -611,12 +696,13 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
               active={activeSection === "tts"}
               ttsLoaded={ttsLoaded}
               llmLoaded={llmLoaded}
-              ttsApiKey={ttsApiKey} setTtsApiKey={setTtsApiKey}
-              ttsBaseUrl={ttsBaseUrl} setTtsBaseUrl={setTtsBaseUrl}
+              ttsApiKey={ttsApiKey} setTtsApiKey={onTtsApiKeyChange}
+              ttsBaseUrl={ttsBaseUrl} setTtsBaseUrl={onTtsBaseUrlChange}
               ttsProvider={ttsProvider} setTtsProvider={setTtsProvider}
               ttsProviders={ttsProviders}
               ttsVoice={ttsVoice} setTtsVoice={setTtsVoice}
               ttsVoices={ttsVoices}
+              ttsModel={ttsModel} setTtsModel={setTtsModel}
               sttLanguage={sttLanguage}
             />
 
@@ -639,8 +725,9 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
               sttLoaded={sttLoaded}
               llmLoaded={llmLoaded}
               deepgramApiKey={deepgramApiKey} setDeepgramApiKey={setDeepgramApiKey}
-              sttApiKey={sttApiKey} setSttApiKey={setSttApiKey}
-              sttBaseUrl={sttBaseUrl} setSttBaseUrl={setSttBaseUrl}
+              sttApiKey={sttApiKey} setSttApiKey={onSttApiKeyChange}
+              sttBaseUrl={sttBaseUrl} setSttBaseUrl={onSttBaseUrlChange}
+              sttModel={sttModel} setSttModel={setSttModel}
             />
 
             <ChannelSection

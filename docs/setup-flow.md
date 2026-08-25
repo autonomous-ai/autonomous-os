@@ -583,6 +583,60 @@ Concretely: `intern-v2` declares `audio`, `sensing`, `companion`, `system`,
 never **Face**. Fail-open while `/api/system/info` is in flight (an unknown
 capability set answers `true`), matching every other capability gate in the web.
 
+### Voice step — TTS model + live voice list (openai provider)
+
+`components/setup/TTSSection.tsx` gains a **TTS model** text input (placeholder
+`tts-1`), shown only when `ttsProvider === "openai"`, submitted as `tts_model`
+alongside the pre-existing provider/voice fields. It also feeds
+`useTTSCatalog.ts`'s live voice query: for `openai`, the hook debounces 500ms
+(so typing a base URL/model doesn't fire a request per keystroke) and calls
+`getTTSVoices(provider, lang, ttsBaseUrl || llmUrl, ttsModel)` — server-side this
+hits `GET /api/device/voices`, which for `openai` queries the target server's own
+`GET {base_url}/v1/audio/voices?model=<model>` and falls back to the hardcoded
+9-name OpenAI list on failure (see `docs/os-server.md`).
+
+Both `TTSSection` variants (`components/setup/TTSSection.tsx` for the wizard,
+`pages/settings/TTSSection.tsx` for Settings) render the **Voice** field as a
+free-text input instead of a `<select>` whenever the resolved voice list is
+empty — a custom OpenAI-compatible endpoint the server couldn't probe (or
+hasn't returned voices for yet) no longer forces the operator to pick from a
+hardcoded list that may not exist on their backend.
+
+### STT credential mirroring was removed, not fixed
+
+`useSetupController.ts` used to silently mirror `llmApiKey`/`llmUrl` into
+`ttsApiKey`/`ttsBaseUrl`/`sttApiKey`/`sttBaseUrl` via a `useEffect` that copied
+the LLM value in **while the target field was still empty**. STT has no input
+field anywhere in the Setup wizard, and TTS's key/base-URL fields aren't shown
+either (only provider + voice are) — but `llmUrl` **does** have a visible input
+(`LLMSection`), and every keystroke into it re-ran the effect: the first
+character landed in the still-empty `ttsBaseUrl`, and the very next keystroke
+found it non-empty and stopped mirroring. A device could therefore have
+`tts_base_url` (and `stt_base_url`) submitted as just `"h"` — the first
+character of an LLM URL the operator never touched TTS/STT for at all. The
+mirroring effects (and the now-unused `sttApiKey`/`sttBaseUrl` state) were
+removed outright rather than patched: HAL already falls back `tts`/`stt`
+key/base-URL to the LLM ones when submitted empty (`_cfg_fallback` in
+`hal/routes/voice.py` — see `docs/os-server.md`), so the wizard just submits
+what the operator actually typed (or nothing) and lets the backend fall back.
+`pages/settings/SettingsPanel.tsx` has the analogous mirror for its own
+(visible) TTS/STT key/URL fields; there it was kept but reworked from
+"target field is empty" to an explicit per-field "touched" flag, set only by
+the field's own `onChange` — the same first-keystroke bug applied there too,
+since `llmUrl`/`llmApiKey` are visible inputs in Settings as well.
+
+### Wi-Fi step — submitting while already on the target SSID
+
+The final Setup submit validation used to require a typed `password` (or a
+`hasNetworkPassword` config flag) unconditionally, even when the Wi-Fi step's
+own done-state (see "Marking the Wi-Fi step done after the reload" above) had
+already determined the device is live-associated with the exact network still
+selected in the picker. `useSetupController.ts`'s submit gate now adds the same
+escape hatch: `wifiConnected && ssid === currentSsid` skips the password
+requirement. The `ssid === currentSsid` half matters on its own — an operator
+can switch the picker to a **different** network after the live probe
+resolves `wifiConnected`, and that network's password is still required.
+
 ### Deep-linking into a step via the URL hash
 
 A URL like `http://<lan_ip>/setup?<params>#voice` opens the **Voice** tab

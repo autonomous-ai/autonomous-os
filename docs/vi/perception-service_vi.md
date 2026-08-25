@@ -54,8 +54,24 @@ Lựa chọn model và output:
 
 ## Thiết bị dùng nó thế nào
 
-HAL là client chính. Trỏ nó tới backend bằng `DL_BACKEND_URL` và `DL_API_KEY` dùng
-chung (gửi qua `X-API-Key`), và tùy chọn bật mã hóa phía client. Sensing stream khung
+HAL là client chính. `DL_BACKEND_URL` (`hal/config.py` `dl_base_url()`) resolve
+theo thứ tự ưu tiên: (1) key `dl_base_url` tường minh trong `config.json`, hoặc
+biến env `DL_BACKEND_URL` (cùng độ ưu tiên, dùng cho máy dev); (2) `llm_base_url`,
+nhưng **chỉ khi** host của nó là `autonomous.ai` hoặc subdomain `*.autonomous.ai`;
+nếu không thì `""` (tắt). Sở dĩ có logic này vì các endpoint DL này — mọi thứ dưới
+`/hal/api/dl/...`: speaker-ID, tư thế, nhận diện hành động/motion, SER, cảm xúc,
+YOLO — chỉ tồn tại trên backend riêng của autonomous; nếu suy ra URL trực tiếp từ
+`llm_base_url` thì mỗi frame/câu nói sẽ gửi một request thật tới path
+`/hal/api/dl/...` trên host LLM tự host (BYO) như oMLX hay một server tương thích
+OpenAI khác, và nhận về 404/403. Khi không cấu hình base URL, các processor phụ
+thuộc DL (`RemoteMotionChecker`, `RemotePoseEstimator`, `SpeakerRecognizer`) chỉ
+log một lần rồi giữ trạng thái tắt thay vì retry (và log traceback) mỗi frame
+hoặc mỗi câu nói. `dl_base_url` là một key thô trong `config.json`, HAL đọc trực
+tiếp (`_os_cfg_get`) — nó chưa có field kiểu trong struct Go `config.Config` và
+chưa có control nào ở UI Setup/Settings; muốn dùng thì tự thêm bằng tay vào
+`config.json` cho thiết bị cần dịch vụ DL của autonomous song song với
+`llm_base_url` không phải của autonomous. HAL cũng gửi `DL_API_KEY` dùng
+chung (qua `X-API-Key`), và tùy chọn bật mã hóa phía client. Sensing stream khung
 hình camera tới các endpoint hành động/tư thế/cảm xúc; voice POST âm thanh cuối câu
 nói tới endpoint cảm xúc giọng nói. Với đường embedding người nói, HAL chạy pipeline
 lọc/VAD/chuẩn hoá audio **tại thiết bị** và gọi `/audio-recognizer/embed` với

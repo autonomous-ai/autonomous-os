@@ -281,7 +281,21 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 			// HAL being absent — waitHALReady above handles that.
 			if s.config.DeepgramAPIKey != "" {
 				for attempt := 1; attempt <= 10; attempt++ {
-					err := s.agentGateway.StartHALVoice(s.config.DeepgramAPIKey, s.config.LLMAPIKey, s.config.GetSTTAPIKey(), s.config.GetTTSAPIKey(), s.config.LLMBaseURL, s.config.GetSTTBaseURL(), s.config.GetTTSBaseURL(), s.config.TTSVoice, s.config.TTSInstructions, s.config.TTSProvider)
+					err := s.agentGateway.StartHALVoice(hal.VoiceStartConfig{
+						DeepgramKey:     s.config.DeepgramAPIKey,
+						LLMKey:          s.config.LLMAPIKey,
+						STTKey:          s.config.GetSTTAPIKey(),
+						TTSKey:          s.config.GetTTSAPIKey(),
+						LLMBaseURL:      s.config.LLMBaseURL,
+						STTBaseURL:      s.config.GetSTTBaseURL(),
+						TTSBaseURL:      s.config.GetTTSBaseURL(),
+						TTSVoice:        s.config.TTSVoice,
+						TTSInstructions: s.config.TTSInstructions,
+						TTSProvider:     s.config.TTSProvider,
+						STTProvider:     s.config.STTProvider,
+						STTModel:        s.config.STTModel,
+						TTSModel:        s.config.TTSModel,
+					})
 					if err == nil {
 						break
 					}

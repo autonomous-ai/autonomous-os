@@ -615,6 +615,25 @@ package's `.env` wins. `--uninstall` removes `/opt/devices/reachy-mini` but
 deliberately leaves `/etc/asound.conf` and `/opt/hal/.env` in place — other units
 still read them.
 
+**A manual `rsync --delete` of `hal/` wipes `.env` — it isn't in the repo.**
+`/opt/hal/.env` is rootfs-overlay content (`robots/reachy-mini/rootfs/opt/hal/.env`),
+not part of the `hal/` component itself, and it is exactly what `hal.service`'s
+`EnvironmentFile=$HAL_DIR/.env` reads for `DEVICE_TYPE` and `DEVICES_DIR` (see
+above). `spike-hal.sh` deliberately stopped rsyncing straight from a developer's
+working tree for this and other reasons (see the script's header) and now only
+unzips the OTA package's `hal/` component over `/opt/hal` — never `--delete` —
+so `.env` survives a redeploy. A one-off `rsync -a --delete hal/
+pollen@host:/opt/hal/` done by hand to iterate faster bypasses that and deletes
+`/opt/hal/.env` along with anything else under `/opt/hal` not present in the
+repo's `hal/` tree. With `DEVICES_DIR` gone, `hal/server.py` `_devices_dir()`
+falls back to its dev default (`hal/../robots`, i.e. the repo layout) instead of
+`/opt/devices`, so `_device_profile()` can't find `reachy-mini/ROBOT.md` there
+and HAL fails hard with `"ROBOT.md required but not loaded for device
+'reachy-mini' (devices_dir=...)"` — or the systemd unit doesn't even start,
+since `EnvironmentFile=` (no `-` prefix) is required, not optional. Back up
+`/opt/hal/.env` before an ad-hoc `--delete` sync, or restore it by rerunning
+`spike-device.sh`.
+
 Audio names are filled in from recon. Mic and speaker are the **same** USB card
 (`card 0: Audio [Reachy Mini Audio], device 0`), so
 `robots/reachy-mini/rootfs/etc/asound.conf` aliases both to it, addressed by

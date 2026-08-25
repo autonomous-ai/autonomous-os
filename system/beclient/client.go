@@ -7,9 +7,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -33,6 +35,9 @@ type Client struct {
 	// slack.auth.test against the bot_token in openclaw.json. Written by the
 	// status reporter, read by the ping loop. Empty when slack isn't configured.
 	cachedSlackTeamID atomic.Value // string
+	// logBYOPingSkip ensures the "skipping backend ping" notice below fires
+	// once per process instead of once per StatusReportInterval tick.
+	logBYOPingSkip sync.Once
 }
 
 // New creates a new BE client. Base URL is read from cfg.LLMBaseURL on each request.
@@ -170,11 +175,35 @@ func slackAuthTest(httpClient *http.Client, botToken string) (string, error) {
 	return out.TeamID, nil
 }
 
+// isAutonomousHost reports whether rawURL's host is autonomous.ai or a
+// subdomain of it. An unparseable URL is treated as non-autonomous (fail
+// toward skipping a doomed ping rather than spamming a bad host).
+func isAutonomousHost(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "autonomous.ai" || strings.HasSuffix(host, ".autonomous.ai")
+}
+
 // Ping notifies the backend. Uses LLM API key as Bearer token. Returns the backend response if available.
 // Appends ?mqtt=true when MQTT is not yet configured, signaling the backend to include MQTT config in the response.
 func (c *Client) Ping(token string, payload PingPayload) (*PingResponse, error) {
 	base := strings.TrimSuffix(strings.TrimSpace(c.config.LLMBaseURL), "/")
 	if base == "" || token == "" {
+		return nil, nil
+	}
+	// A device pointed at a self-hosted/BYO LLM host (not autonomous.ai) and
+	// with no MQTT endpoint configured has no relationship with the autonomous
+	// backend at all — /ping doesn't exist there, so every tick would 404.
+	// Skip silently (nil, nil — same as the base=="" case above); log the
+	// skip once per process rather than once per StatusReportInterval tick.
+	if strings.TrimSpace(c.config.MQTTEndpoint) == "" && !isAutonomousHost(base) {
+		c.logBYOPingSkip.Do(func() {
+			slog.Info("skipping backend ping: BYO LLM host with no MQTT endpoint configured",
+				"component", "beclient", "llm_base_url", base)
+		})
 		return nil, nil
 	}
 	// LLMBaseURL is configured with a trailing /v1 for OpenAI-compat LLM calls

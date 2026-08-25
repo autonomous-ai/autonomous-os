@@ -564,6 +564,25 @@ một lần bất kỳ file nào của Pollen mà nó ghi đè (`<file>.pre-auto
 "device -1", trong khi `aplay` từ shell vẫn chạy — nên đây là bước 1, không phải
 bước phụ.
 
+**`rsync --delete` thủ công cho `hal/` sẽ xoá mất `.env` — nó không nằm trong
+repo.** `/opt/hal/.env` là nội dung rootfs overlay
+(`robots/reachy-mini/rootfs/opt/hal/.env`), không phải một phần của component
+`hal/`, và chính là file `EnvironmentFile=$HAL_DIR/.env` của `hal.service` đọc
+để lấy `DEVICE_TYPE` và `DEVICES_DIR` (xem ở trên). `spike-hal.sh` đã cố ý bỏ
+kiểu rsync thẳng từ working tree của dev vì lý do này và các lý do khác (xem
+comment đầu script) — giờ nó chỉ unzip component `hal/` của gói OTA đè lên
+`/opt/hal`, không bao giờ dùng `--delete`, nên `.env` sống sót qua mỗi lần
+redeploy. Một lệnh `rsync -a --delete hal/ pollen@host:/opt/hal/` chạy tay để
+lặp nhanh hơn thì bỏ qua cơ chế đó và xoá luôn `/opt/hal/.env` cùng bất kỳ file
+nào khác dưới `/opt/hal` mà cây `hal/` trong repo không có. Mất `DEVICES_DIR`,
+`hal/server.py` `_devices_dir()` rơi về default cho dev (`hal/../robots`, tức
+layout của repo) thay vì `/opt/devices`, nên `_device_profile()` không tìm thấy
+`reachy-mini/ROBOT.md` ở đó và HAL chết cứng với lỗi `"ROBOT.md required but
+not loaded for device 'reachy-mini' (devices_dir=...)"` — hoặc unit systemd
+còn không khởi động nổi, vì `EnvironmentFile=` (không có tiền tố `-`) là bắt
+buộc, không phải tùy chọn. Hãy backup `/opt/hal/.env` trước khi sync `--delete`
+thủ công, hoặc phục hồi nó bằng cách chạy lại `spike-device.sh`.
+
 Một khác biệt hành vi so với Lamp: vì thu và phát là cùng một thiết bị USB, chúng
 dùng chung clock domain. Mic và loa của Lamp nằm trên hai bus USB khác nhau nên
 trôi clock — đó là lý do barge-in bị tắt ở Lamp. Reachy không có kiểu trôi đó,

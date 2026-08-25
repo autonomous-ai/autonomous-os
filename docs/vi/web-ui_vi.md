@@ -150,6 +150,23 @@ Các mục Monitor được serialize thành id thuần, ví dụ `/monitor#over
 
 Trang `/edit` độc lập (cũ) đã bị gỡ bỏ; `SettingsPanel` của nó giờ chỉ truy cập được qua các tab `/setting` bên trong Monitor. `/edit` (và link "update →" trong Setup) giờ redirect tới `/setting`.
 
+**Language (`/setting#stt`, `STTSection.tsx`)** — select provider có thêm lựa
+chọn `openai` bên cạnh `autonomous`/`deepgram` sẵn có (type `SttProvider`).
+Chọn `openai` hiện ra ô nhập **Model** (placeholder `whisper-1`), gửi kèm là
+`stt_model`. `sttProvider` được điền sẵn từ field `stt_provider` của config đã
+load, chỉ fallback về suy luận `deepgram` từ `has_deepgram_api_key` với config
+cũ lưu trước khi field đó tồn tại.
+
+**Voice (`/setting#tts`, `TTSSection.tsx`)** — cùng ô nhập **TTS model** như
+Setup wizard (chỉ `openai`, gửi `tts_model`, cấp dữ liệu cho query voice trực
+tiếp — xem `docs/setup-flow.md`), và cùng cơ chế fallback **Voice** dạng nhập
+text tự do khi danh sách voice resolve ra rỗng. Việc mirror key/base-URL
+AI-Brain→TTS/STT ở đây dùng cờ "touched" riêng cho từng field (chỉ set bởi
+`onChange` của chính field đó, vd `onTtsBaseUrlChange`) thay vì "field đích
+đang rỗng" — cách cũ bị lỗi ngay từ ký tự đầu gõ vào input `llmUrl`/`llmApiKey`
+(hiển thị trong Settings), cùng loại bug đã sửa trong Setup wizard bằng cách
+bỏ hẳn cơ chế mirror ở đó (xem `docs/setup-flow.md`).
+
 ---
 
 ## 4. Polling & Data Sources

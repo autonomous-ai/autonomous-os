@@ -345,11 +345,33 @@ func (h *DeviceHandler) UpdateConfig(c *gin.Context) {
 // back to a static list. `lang` (BCP-47 stt_language code) lets the web UI
 // filter voices to those that sound natural in the active language; empty
 // lang returns the full flat list.
+//
+// This route is UNAUTHENTICATED (the setup wizard calls it before an admin
+// password exists), so the request may only pick *which* provider/language/
+// model to ask about — never *where* to ask. The TTS host is always derived
+// from server-side config, and no credential is passed to HAL at all (HAL
+// reads the key from the same config.json). Accepting `base_url` from the
+// query would turn this endpoint into an SSRF + credential-exfiltration
+// primitive for anyone who can reach the device on the LAN.
 func (h *DeviceHandler) GetVoices(c *gin.Context) {
 	provider := c.DefaultQuery("provider", domain.TTSProviderOpenAI)
 	lang := c.Query("lang")
 
-	if voices, err := hal.ListVoices(provider, lang); err == nil && len(voices) > 0 {
+	// `model` is the only openai-specific knob the caller may set: it selects a
+	// voice list on the configured host, it does not choose the host.
+	model := c.Query("model")
+	var baseURL string
+	if provider == domain.TTSProviderOpenAI {
+		baseURL = h.config.TTSBaseURL
+		if baseURL == "" {
+			baseURL = h.config.LLMBaseURL
+		}
+		if model == "" {
+			model = h.config.TTSModel
+		}
+	}
+
+	if voices, err := hal.ListVoices(provider, lang, baseURL, model); err == nil && len(voices) > 0 {
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(voices))
 		return
 	}

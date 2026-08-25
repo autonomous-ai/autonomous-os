@@ -162,11 +162,20 @@ class RemotePoseEstimator:
         self._crypto: CryptoSession | None = None
         self._last_heartbeat_ts: float = 0.0
         self._heartbeat_interval: float = config.DL_HEARTBEAT_INTERVAL_S
+        # update() re-calls _prepare_session() every frame while unconnected —
+        # without this, an unconfigured DL base URL (BYO LLM host) retries the
+        # connection and logs a full traceback on every single frame.
+        self._logged_unconfigured: bool = False
 
         self._prepare_session()
 
     def _prepare_session(self) -> None:
         if self._ws_session is not None:
+            return
+        if not self._base_url:
+            if not self._logged_unconfigured:
+                logger.info("[%s] no DL base URL configured — pose estimation disabled", self.__class__.__name__)
+                self._logged_unconfigured = True
             return
 
         try:
