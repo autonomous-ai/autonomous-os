@@ -198,7 +198,7 @@ The reset is **single-flight** with a 5-minute cooldown (`FactoryResetMinInterva
 class of user-visible switch: someone — or a night scene — put the device to
 sleep, and restarting HAL must not undo that. An OTA restarts HAL, so before
 this sidecar an update at 3 am woke the device up: strip back on, mic listening,
-sensing ungated. `POST /emotion` persists the flag whenever it flips, and
+sensing ungated. The sidecar also carries the mic/speaker mutes **sleep itself owns** — those are deliberately kept out of the mic/speaker sidecars so waking hands the switches back to whatever the user chose, which used to mean a restart came back listening, with a still-in-flight agent turn free to speak out loud. `POST /emotion` persists the flag whenever it flips, and
 `server.py` lifespan re-expresses `sleepy` once the drivers are up, so the device
 LOOKS asleep again rather than booting into the resting look with the flag
 quietly set. The motion driver is also told to come up **without** its wake

@@ -198,7 +198,7 @@ Reset là **single-flight** + cooldown 5 phút (`FactoryResetMinInterval`) dùng
 với các switch người dùng thấy được: ai đó — hoặc một scene ban đêm — đã cho
 thiết bị ngủ, và restart HAL không được phép huỷ điều đó. OTA thì restart HAL,
 nên trước khi có sidecar này, một lần update lúc 3 giờ sáng là thiết bị tỉnh dậy:
-đèn sáng lại, mic nghe lại, sensing hết bị gate. `POST /emotion` ghi cờ mỗi lần
+đèn sáng lại, mic nghe lại, sensing hết bị gate. Sidecar này còn mang theo mute mic/loa **do chính sleep sở hữu** — chúng cố ý không nằm trong sidecar mic/speaker để lúc thức trả switch về đúng lựa chọn của user, mà hệ quả trước đây là restart xong máy nghe lại được và một turn agent còn đang bay vẫn nói thành tiếng. `POST /emotion` ghi cờ mỗi lần
 nó đổi, và lifespan trong `server.py` express lại `sleepy` sau khi driver đã lên,
 để thiết bị TRÔNG vẫn đang ngủ chứ không phải boot vào look nghỉ với cái cờ được
 set âm thầm. Driver chuyển động cũng được yêu cầu khởi động **không** kèm chuỗi

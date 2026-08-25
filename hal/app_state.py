@@ -532,7 +532,23 @@ def _persist_speaker_state():
 
 
 def _persist_sleep_state():
-    _save_boot_sidecar(_SLEEP_STATE_PATH, {"sleeping": _sleeping})
+    """Persist sleep AND the mutes sleep itself owns.
+
+    The mute flags are deliberately absent from the mic/speaker sidecars:
+    _finalize_sleepy_peripherals marks them sleep-owned so waking restores the
+    user's own choice, and writing them there would leak sleep's mute into that.
+    But in-memory-only meant a restart came back with the mic listening and the
+    speaker live on a sleeping device — a turn still in flight then spoke out
+    loud. So they ride with sleep, in sleep's own sidecar, and are restored
+    together with it."""
+    _save_boot_sidecar(
+        _SLEEP_STATE_PATH,
+        {
+            "sleeping": _sleeping,
+            "auto_muted_mic": _sleepy_auto_muted_mic,
+            "auto_muted_speaker": _sleepy_auto_muted_speaker,
+        },
+    )
 
 
 def start_voice_service(reason: str) -> bool:
@@ -587,6 +603,7 @@ def _finalize_sleepy_peripherals(mute_mic: bool, mute_speaker: bool):
         if music_service and music_service.playing:
             music_service.stop()
 
+    _persist_sleep_state()
     logger.info("Sleepy finalized: LED off, mic muted, speaker muted")
 
 
@@ -601,6 +618,7 @@ def _wake_sleepy_peripherals():
         if _hw_mic_switch_muted is not True:
             _mic_muted = False
             start_voice_service("sleepy-wake")
+    _persist_sleep_state()
     logger.info("Sleepy wake: restored sleepy-owned audio state")
 
 
@@ -619,7 +637,7 @@ def _load_peripheral_sidecars():
     speak time."""
     global _mic_muted, _mic_manual_override, _speaker_muted
     global _camera_disabled, _camera_manual_override, _mic_muted_led
-    global _sleeping
+    global _sleeping, _sleepy_auto_muted_mic, _sleepy_auto_muted_speaker
     if d := _load_boot_sidecar(_MIC_STATE_PATH):
         _mic_muted = bool(d.get("muted"))
         _mic_manual_override = bool(d.get("manual_override"))
@@ -632,10 +650,19 @@ def _load_peripheral_sidecars():
         _camera_disabled = bool(d.get("disabled"))
         _camera_manual_override = bool(d.get("manual_override"))
     if d := _load_boot_sidecar(_SLEEP_STATE_PATH):
-        # Restoring the flag alone already re-arms every gate that reads it
-        # (sensing, LED, servo, music). Looking asleep again is the APPLY step,
-        # done once the drivers are up — see server.py lifespan.
+        # Restoring the flag re-arms every gate that reads it (sensing, LED,
+        # servo, music). The mutes come back with it, still marked sleep-owned
+        # so the next wake hands the mic and speaker back to whatever the USER
+        # had chosen. Nothing is applied to hardware here: the body is already
+        # in the sleep pose and stays limp (AnimationService.start(skip_wake)),
+        # and TTS/voice consult these flags at speak/listen time.
         _sleeping = bool(d.get("sleeping"))
+        if _sleeping and d.get("auto_muted_mic"):
+            _mic_muted = True
+            _sleepy_auto_muted_mic = True
+        if _sleeping and d.get("auto_muted_speaker"):
+            _speaker_muted = True
+            _sleepy_auto_muted_speaker = True
     if _mic_muted or _speaker_muted or _camera_disabled or _sleeping:
         logger.info(
             "Peripheral switches restored: mic_muted=%s speaker_muted=%s camera_disabled=%s sleeping=%s",

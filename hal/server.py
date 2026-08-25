@@ -941,8 +941,14 @@ async def lifespan(app: FastAPI):
         try:
             from hal.presets import EMO_SLEEPY
 
+            # Everything sleep owns — the flag and the mic/speaker mutes — comes
+            # back from its sidecar at import. All that is left is the emotion
+            # bookkeeping the restore did not go through.
             state._current_emotion = EMO_SLEEPY
-            logger.info("Sleep restored: state kept asleep (no wake performance)")
+            logger.info(
+                "Sleep restored: asleep, mic_muted=%s speaker_muted=%s (no wake performance)",
+                state._mic_muted, state._speaker_muted,
+            )
         except Exception as e:
             logger.warning(f"Sleep restore bookkeeping failed: {e}")
 
