@@ -1,3 +1,5 @@
+
+https://github.com/user-attachments/assets/a1066e96-2d6b-4256-85d8-8893676a02c8
 ## Autonomous OS: The "Android" for Robots
 
 Robots have been around for years but have never been autonomous — someone has to drive them with a remote, and they've stopped at scripted demos. Autonomous OS brings autonomy to robots: install it on your robot and it comes alive.
@@ -16,7 +18,7 @@ The simplest way in is a robot we have already tested it on. What each of them c
 
 [Lamp](https://www.autonomous.ai/lamp) is the robot that shows the whole OS — it sees, hears, speaks, moves, and ships with Autonomous OS on it.
 
-https://github.com/user-attachments/assets/67ea08b5-2ccf-427a-bdb2-efbe5090be2b
+https://github.com/user-attachments/assets/c80f1255-4355-4f59-9114-6d3b8d4007a2
 
 1. **Add it.** In the Autonomous app ([iOS](https://apps.apple.com/app/id6744885683) | [Android](https://play.google.com/store/apps/details?id=ai.autonomous.connect.wifi)), tap **Add robot → Lamp**.
 2. **Set up Wi-Fi.** Pick your network in the app; it joins the robot's hotspot and hands over the keys and pairing.
