@@ -108,7 +108,7 @@ WARM_MIC_ECHO_SKIP_MAX_S = float(os.environ.get("HAL_WARM_MIC_ECHO_SKIP_MAX_S", 
 # break a device that lacks the binding. Note that it also turns BARGE_IN on
 # (see BARGE_IN_ENABLED below), which is NOT a no-op.
 # ---------------------------------------------------------------------------
-AEC_ENABLED = os.environ.get("HAL_AEC_ENABLED", "true").lower() == "true"
+AEC_ENABLED = os.environ.get("HAL_AEC_ENABLED", "false").lower() == "true"
 # Speaker→mic delay hint. AEC3 estimates the real delay itself, but the hint
 # decides how fast it converges. Measured from HAL's own aec_mic/aec_ref dump
 # (24/08/2026, lamp-ee17): the lag between the frames the APM is actually
