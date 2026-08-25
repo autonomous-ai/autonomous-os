@@ -16,7 +16,7 @@ The simplest way in is a robot we have already tested it on. What each of them c
 
 [Lamp](https://www.autonomous.ai/lamp) is the robot that shows the whole OS — it sees, hears, speaks, moves, and ships with Autonomous OS on it.
 
-<img src="robots/lamp/images/lamp-hero.webp" alt="Autonomous Lamp on a desk, ring lit">
+https://github.com/user-attachments/assets/67ea08b5-2ccf-427a-bdb2-efbe5090be2b
 
 1. **Add it.** In the Autonomous app ([iOS](https://apps.apple.com/app/id6744885683) | [Android](https://play.google.com/store/apps/details?id=ai.autonomous.connect.wifi)), tap **Add robot → Lamp**.
 2. **Set up Wi-Fi.** Pick your network in the app; it joins the robot's hotspot and hands over the keys and pairing.
