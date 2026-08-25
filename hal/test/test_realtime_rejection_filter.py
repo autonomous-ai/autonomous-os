@@ -11,6 +11,8 @@ from hal.drivers.voice._internal.realtime_turn import (
     ROUTE_AI_REJECTED,
     RealtimeTurnResult,
     run_realtime_turn,
+    should_defer_speaker_id_prepass,
+    should_arm_realtime_wait_filler,
     should_drop_realtime_rejection,
 )
 from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
@@ -111,6 +113,22 @@ def test_filter_can_be_disabled_without_changing_the_result(monkeypatch):
     assert not should_drop_realtime_rejection(
         RealtimeTurnResult(route=ROUTE_AI_REJECTED, rejected=True)
     )
+
+
+def test_short_ambiguous_transcripts_do_not_arm_an_audible_filler(monkeypatch):
+    monkeypatch.setattr(hal_config, "REALTIME_NOISE_GUARD_MAX_WORDS", 3)
+    assert not should_arm_realtime_wait_filler("o")
+    assert not should_arm_realtime_wait_filler("you.")
+    assert not should_arm_realtime_wait_filler("Yeah, exactly")
+    assert should_arm_realtime_wait_filler("Do you like me?")
+
+
+def test_short_transcript_defers_speaker_id_until_after_ai_verdict(monkeypatch):
+    monkeypatch.setattr(hal_config, "REALTIME_ENABLED", True)
+    monkeypatch.setattr(hal_config, "REALTIME_AI_REJECT_FILTER", True)
+    assert should_defer_speaker_id_prepass("o")
+    assert should_defer_speaker_id_prepass("you.")
+    assert not should_defer_speaker_id_prepass("Do you like me?")
 
 
 class _Decorator:

@@ -613,9 +613,11 @@ turn ("hello") right after a restart would leak to the main agent.
    **once** at session end) resolves the voice speaker *after* the context already
    went out with the face name. HAL then sends a `[TURN CONTEXT UPDATE]` correction
    naming the real speaker — still **before** `commit_audio()`, so it is part of the
-   same turn. Skipped when the context already carried the right name, or when the
-   turn is noise. The prepass result is reused downstream — speaker recognition
-   never runs twice.
+   same turn. A short transcript in the AI-rejection ambiguity range defers this
+   external embedding call until after realtime decides; an explicit rejection
+   avoids the call entirely, while every non-rejected downstream turn still gets
+   the same one-time identity result. It is skipped when the context already carried
+   the right name, or when the turn is noise.
 
    **Gemini native-audio caveat:** `send_text()` drops **all** non-response text on
    Gemini `*native-audio*` models (`gemini_needs_idle_workaround()`), because
@@ -646,7 +648,11 @@ turn ("hello") right after a restart would leak to the main agent.
    language, and the WAV cache, so the realtime wait and the main-agent wait
    sound alike. A normal chit-chat reply (~1 s) never reaches the timer; a turn
    the model grounds with Google Search, which emits no token until the search
-   returns, does. The filler is interruptible, so the model's first sentence
+   returns, does. **It is not armed for a short transcript in the noise-guard
+   ambiguity range** (up to `HAL_REALTIME_NOISE_GUARD_MAX_WORDS`, default 3):
+   the model may explicitly reject `o`, `you.`, or `Yeah.` shortly after commit,
+   and an early filler would turn that silent rejection into an audible nuisance.
+   The filler is interruptible, so the model's first sentence
    cuts it off; every exit path (reply, delegate, empty turn, exception)
    cancels the timer, and delegate cancels explicitly because the main-agent
    hop that follows fires its own filler. `0` disables.

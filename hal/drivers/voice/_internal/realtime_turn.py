@@ -279,6 +279,32 @@ def needs_noise_guard(combined: str) -> bool:
     return 0 < len(combined.split()) <= max_words
 
 
+def should_arm_realtime_wait_filler(combined: str) -> bool:
+    """Return whether this realtime turn may receive an audible wait filler.
+
+    Short STT output is the ambiguity class that the realtime model reviews
+    with ``reject_turn``. A filler would speak before that verdict arrives and
+    turn an otherwise silent rejection into an audible response.
+    """
+    return not needs_noise_guard(combined)
+
+
+def should_defer_speaker_id_prepass(combined: str) -> bool:
+    """Return whether speaker ID can wait for the explicit AI rejection verdict.
+
+    The recognizer is an external inference call. It provides no value for a
+    short turn the realtime model explicitly rejects, while delaying audio
+    commit by hundreds of milliseconds. A non-rejected turn still resolves its
+    identity before downstream dispatch.
+    """
+    return (
+        hal_config.REALTIME_ENABLED
+        and hal_config.REALTIME_AI_REJECT_FILTER
+        and bool(combined)
+        and needs_noise_guard(combined)
+    )
+
+
 def is_noise_turn(
     combined: str, buf_duration: float, audio_is_speech: bool = True
 ) -> bool:
@@ -354,7 +380,13 @@ def run_realtime_turn(
         # than per attempt so a 1011 retry does not restart the clock — from the
         # user's side it is one uninterrupted silence.
         wait_filler = _WaitFiller()
-        wait_filler.arm()
+        if should_arm_realtime_wait_filler(combined):
+            wait_filler.arm()
+        else:
+            logger.info(
+                "[realtime] Short transcript — suppressing dead-air filler while "
+                "the model decides whether to reject"
+            )
         try:
             # 1011 recovery (idle-death): the campaign-api proxy drops idle
             # 2.5-native-audio sessions, so a turn that follows a pause lands on a

@@ -591,9 +591,11 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
    Ở mode always-listening, prepass speaker-ID (`identify_and_decorate`, chạy **một
    lần** cuối session) chỉ giải được người nói *sau khi* context đã gửi đi kèm tên
    từ khuôn mặt. HAL gửi tiếp một correction `[TURN CONTEXT UPDATE]` nêu đúng người
-   nói — vẫn **trước** `commit_audio()` nên thuộc cùng một lượt. Bỏ qua khi context
-   đã mang đúng tên, hoặc khi lượt đó là noise. Kết quả prepass được xài lại ở hạ
-   nguồn — speaker recognition không bao giờ chạy hai lần.
+   nói — vẫn **trước** `commit_audio()` nên thuộc cùng một lượt. Transcript ngắn
+   trong vùng mơ hồ AI-rejection sẽ hoãn external embedding call tới khi realtime
+   quyết định xong; một lần reject rõ ràng tránh luôn call này, còn mọi turn không
+   reject vẫn nhận cùng một kết quả identity duy nhất trước khi đi hạ nguồn. Bỏ qua
+   khi context đã mang đúng tên, hoặc khi lượt đó là noise.
 
    **Lưu ý Gemini native-audio:** `send_text()` bỏ **toàn bộ** text không tạo
    response trên các model Gemini `*native-audio*` (`gemini_needs_idle_workaround()`),
@@ -623,7 +625,11 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
    os-server, nên khoảng chờ realtime và khoảng chờ main agent nghe giống nhau.
    Câu chit-chat bình thường (~1s) không bao giờ chạm timer; lượt model dùng
    Google Search — không ra token nào cho tới khi search xong — thì có. Filler
-   phát interruptible nên câu đầu tiên của model cắt ngang nó; mọi đường thoát
+   **không được arm cho transcript ngắn nằm trong vùng mơ hồ của noise guard**
+   (tối đa `HAL_REALTIME_NOISE_GUARD_MAX_WORDS`, mặc định 3 từ): model có thể
+   `reject_turn` rõ ràng cho `o`, `you.` hay `Yeah.` ngay sau commit, và filler
+   sớm sẽ biến một lần từ chối im lặng thành âm thanh gây khó chịu. Filler phát
+   interruptible nên câu đầu tiên của model cắt ngang nó; mọi đường thoát
    (trả lời, delegate, turn rỗng, exception) đều cancel timer, riêng delegate
    cancel tường minh vì chặng main agent ngay sau đó tự bắn filler của nó. `0`
    để tắt.
