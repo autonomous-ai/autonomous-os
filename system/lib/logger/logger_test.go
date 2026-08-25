@@ -10,6 +10,28 @@ import (
 	"time"
 )
 
+func TestLevelFromEnv(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  slog.Level
+	}{
+		{name: "debug", value: "DEBUG", want: slog.LevelDebug},
+		{name: "case and whitespace ignored", value: " warning ", want: slog.LevelWarn},
+		{name: "error", value: "ERROR", want: slog.LevelError},
+		{name: "invalid uses default", value: "TRACE", want: slog.LevelInfo},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HAL_LOG_LEVEL", tt.value)
+			if got := levelFromEnv(); got != tt.want {
+				t.Fatalf("levelFromEnv() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestGELFHandlerDropsWhenBoundedQueueIsFull(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
