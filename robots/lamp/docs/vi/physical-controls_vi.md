@@ -201,7 +201,11 @@ nên trước khi có sidecar này, một lần update lúc 3 giờ sáng là th
 đèn sáng lại, mic nghe lại, sensing hết bị gate. `POST /emotion` ghi cờ mỗi lần
 nó đổi, và lifespan trong `server.py` express lại `sleepy` sau khi driver đã lên,
 để thiết bị TRÔNG vẫn đang ngủ chứ không phải boot vào look nghỉ với cái cờ được
-set âm thầm. Reboot cả máy thì vẫn tỉnh như cũ.
+set âm thầm. Driver chuyển động cũng được yêu cầu khởi động **không** kèm chuỗi
+thức dậy (`start(skip_wake=True)`): startup pose là một cú move 5 giây rồi tới
+idle loop, nên sửa sau nghĩa là con lamp đang ngủ vẫn đứng dậy, cử động, rồi mới
+nằm xuống lại. Khôi phục cờ ngay lúc import — trước khi driver start — chính là
+thứ cho phép BỎ QUA thay vì hoàn tác. Reboot cả máy thì vẫn tỉnh như cũ.
 
 
 Mic mute, speaker mute và camera disable mỗi cái persist vào một sidecar

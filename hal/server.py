@@ -399,7 +399,9 @@ async def lifespan(app: FastAPI):
                 # ramp is computed in the driver, with no route to pass it in
                 # the way aim/nudge do.
                 svc = AnimationService(safety_policy=_safety)
-            svc.start()
+            # A device that was asleep must not perform its wake sequence just
+            # because HAL restarted (see AnimationService.start docstring).
+            svc.start(skip_wake=state._sleeping)
             state.animation_service = svc
             logger.info("Motion service started (%s)", type(svc).__name__)
         except Exception as e:

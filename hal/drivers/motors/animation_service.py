@@ -198,7 +198,16 @@ class AnimationService:
                 pk.write1ByteTxRx(ph, sid, 40, 1)   # Torque_Enable = 1
                 logger.info(f"{motor_name} (ID {sid}): P={pgain}, torque ON")
 
-    def start(self):
+    def start(self, skip_wake: bool = False):
+        """skip_wake: come up without the startup pose + idle loop.
+
+        Used when HAL restarts on a device that was asleep (OTA, deploy). The
+        wake move takes 5s of visible motion and the idle loop keeps the body
+        going after it — so a sleeping lamp would stand up, breathe, and only
+        then be told to go back to sleep once lifespan finishes. The sleep flag
+        is restored at import, before this runs, so the whole performance can
+        simply be skipped instead of undone afterwards.
+        """
         self.robot = LeLampFollower(self.robot_config)
         try:
             self.robot.connect(calibrate=False)
@@ -220,6 +229,9 @@ class AnimationService:
         self._running.set()
         self._event_thread = threading.Thread(target=self._event_loop, daemon=True)
         self._event_thread.start()
+        if skip_wake:
+            logger.info("Servo startup move + idle skipped -- device was asleep")
+            return
         self.dispatch(SERVO_CMD_STARTUP_MOVE, None)
 
         # Auto-play idle (same as upstream) so lamp moves immediately after boot

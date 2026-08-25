@@ -201,7 +201,11 @@ this sidecar an update at 3 am woke the device up: strip back on, mic listening,
 sensing ungated. `POST /emotion` persists the flag whenever it flips, and
 `server.py` lifespan re-expresses `sleepy` once the drivers are up, so the device
 LOOKS asleep again rather than booting into the resting look with the flag
-quietly set. A full device reboot still starts awake.
+quietly set. The motion driver is also told to come up **without** its wake
+sequence (`start(skip_wake=True)`): the startup pose is a 5 s move followed by
+the idle loop, so undoing it afterwards meant a sleeping lamp stood up, moved,
+and only then lay back down. Restoring the flag at import — before the drivers
+start — is what makes skipping possible instead of reverting. A full device reboot still starts awake.
 
 
 Mic mute, speaker mute, and camera disable each persist to their own boot-scoped
