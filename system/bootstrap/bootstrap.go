@@ -263,7 +263,13 @@ func (b *Bootstrap) checkOnce(ctx context.Context) error {
 	// detectVersion / applyUpdate already handle OTAKeyOpenClaw (npm install +
 	// systemctl restart openclaw); the old reconcileOpenClawFromNpm() pulled
 	// "latest" from `npm view` instead and is no longer needed.
-	for _, key := range []string{domain.OTAKeyOSServer, domain.OTAKeyBootstrap, domain.OTAKeyWeb, domain.OTAKeyHal, domain.OTAKeyBuddy, domain.OTAKeyOpenClaw} {
+	// The agent-runtime CLIs (codex/claudecode/opencode/picoclaw) ride the same
+	// loop; componentInstalled gates each to the runtime the device actually
+	// runs. Hermes is intentionally NOT here — see domain.OTAKeyCodex's comment.
+	for _, key := range []string{
+		domain.OTAKeyOSServer, domain.OTAKeyBootstrap, domain.OTAKeyWeb, domain.OTAKeyHal, domain.OTAKeyBuddy,
+		domain.OTAKeyOpenClaw, domain.OTAKeyCodex, domain.OTAKeyClaudeCode, domain.OTAKeyOpenCode, domain.OTAKeyPicoClaw,
+	} {
 		component, ok := meta[key]
 		if !ok {
 			continue
@@ -624,7 +630,37 @@ func (b *Bootstrap) detectVersion(ctx context.Context, key string) string {
 		if err != nil {
 			return ""
 		}
-		return openclawNormalizeVersion(string(out))
+		return cliSemver(string(out))
+	case domain.OTAKeyCodex:
+		// "codex-cli 0.142.5" — the metadata carries the bare semver.
+		out, err := system.Run(runCtx, "codex", "--version")
+		if err != nil {
+			return ""
+		}
+		return cliSemver(string(out))
+	case domain.OTAKeyClaudeCode:
+		// "2.1.218 (Claude Code)".
+		out, err := system.Run(runCtx, "claude", "--version")
+		if err != nil {
+			return ""
+		}
+		return cliSemver(string(out))
+	case domain.OTAKeyOpenCode:
+		out, err := system.Run(runCtx, "opencode", "--version")
+		if err != nil {
+			return ""
+		}
+		return cliSemver(string(out))
+	case domain.OTAKeyPicoClaw:
+		// Deliberately NOT `picoclaw version`: that prints a build description
+		// ("nightly-44-g1959045c-dirty") with no relation to the release tag, so
+		// it would never parse and the component would look infinitely stale.
+		// `software-update picoclaw` stamps the tag it installed here instead.
+		data, err := os.ReadFile(domain.PicoClawVersionStamp)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(data))
 	case domain.OTAKeyDevice:
 		dir := os.Getenv("DEVICES_DIR")
 		if dir == "" {
@@ -662,7 +698,21 @@ func (b *Bootstrap) componentInstalled(key string) bool {
 	case domain.OTAKeyOpenClaw:
 		// Absent on devices running another agent runtime (hermes, codex,
 		// claudecode, …). Those must not be dragged onto OpenClaw by the OTA.
+		// Left on binary presence deliberately: openclaw is npm-installed per
+		// device rather than baked into every image, so the check is meaningful
+		// here — and an unset agent_runtime (older provisioning) must not stop
+		// OpenClaw devices from updating.
 		return inPath("openclaw")
+	case domain.OTAKeyCodex, domain.OTAKeyClaudeCode, domain.OTAKeyOpenCode, domain.OTAKeyPicoClaw:
+		// Binary presence proves NOTHING for these: scripts/imager/build-orangepi.sh
+		// bakes every agent CLI onto every lamp/intern-v2 image regardless of
+		// DEFAULT_AGENT. An inPath() check would therefore mark all four
+		// "installed" on every device, and each poll would announce "device is
+		// updating" over the speaker, turn the strip orange, download the CLI,
+		// and restart a unit that does not exist — forever.
+		//
+		// The runtime the device actually runs is the real predicate.
+		return resolveAgentRuntime() == key
 	case domain.OTAKeyWeb:
 		return dirExists("/usr/share/nginx/html/setup")
 	case domain.OTAKeyHal:
@@ -684,6 +734,27 @@ func (b *Bootstrap) componentInstalled(key string) bool {
 	}
 }
 
+// resolveAgentRuntime returns the agent runtime this device runs, from
+// `agent_runtime` in /root/config/config.json (the same file os-server writes
+// when the user switches runtimes in the web UI). Returns "" when the file or
+// key is missing — callers treat that as "not this runtime", which is the safe
+// direction: an unknown runtime skips the CLI update instead of pushing one.
+//
+// Values match the domain.OTAKey* constants for the CLIs by construction.
+func resolveAgentRuntime() string {
+	data, err := os.ReadFile("/root/config/config.json")
+	if err != nil {
+		return ""
+	}
+	var c struct {
+		AgentRuntime string `json:"agent_runtime"`
+	}
+	if json.Unmarshal(data, &c) != nil {
+		return ""
+	}
+	return strings.TrimSpace(c.AgentRuntime)
+}
+
 func inPath(name string) bool {
 	_, err := exec.LookPath(name)
 	return err == nil
@@ -697,7 +768,8 @@ func dirExists(path string) bool {
 // applyUpdate runs the appropriate update command for the given component.
 func (b *Bootstrap) applyUpdate(ctx context.Context, key string, component domain.OTAComponent) error {
 	switch key {
-	case domain.OTAKeyOSServer, domain.OTAKeyWeb, domain.OTAKeyHal, domain.OTAKeyBuddy, domain.OTAKeyOpenClaw, domain.OTAKeyDevice:
+	case domain.OTAKeyOSServer, domain.OTAKeyWeb, domain.OTAKeyHal, domain.OTAKeyBuddy, domain.OTAKeyOpenClaw, domain.OTAKeyDevice,
+		domain.OTAKeyCodex, domain.OTAKeyClaudeCode, domain.OTAKeyOpenCode, domain.OTAKeyPicoClaw:
 		// All non-bootstrap components delegate to the on-device
 		// `software-update <key>` script (installed by setup.sh) so the
 		// install logic lives in one place — the script self-fetches
@@ -725,9 +797,13 @@ func (b *Bootstrap) applyUpdate(ctx context.Context, key string, component domai
 	}
 }
 
-// openclawNormalizeVersion extracts the version from openclaw --version output (e.g. "OpenClaw 2026.3.8 (3caab92)" -> "2026.3.8").
-// Used only for OTAKeyOpenClaw.
-func openclawNormalizeVersion(raw string) string {
+// cliSemver extracts the semver from the FIRST line of an agent CLI's
+// --version output: "OpenClaw 2026.3.8 (3caab92)" -> "2026.3.8",
+// "codex-cli 0.142.5" -> "0.142.5", "2.1.218 (Claude Code)" -> "2.1.218".
+// Shared by openclaw/codex/claudecode/opencode — every one of them prints the
+// version somewhere on line one, and each publishes that bare semver as its
+// metadata version. NOT usable for picoclaw (no semver in its output).
+func cliSemver(raw string) string {
 	line := strings.TrimSpace(strings.TrimRight(raw, "\r\n"))
 	if i := strings.IndexByte(line, '\n'); i >= 0 {
 		line = strings.TrimSpace(line[:i])

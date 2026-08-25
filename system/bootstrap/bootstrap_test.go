@@ -169,3 +169,36 @@ func TestComponentInstalled(t *testing.T) {
 		t.Error("device profile reported installed with an unresolved device type")
 	}
 }
+
+func TestCLISemver(t *testing.T) {
+	cases := map[string]string{
+		"OpenClaw 2026.3.8 (3caab92)":  "2026.3.8",
+		"codex-cli 0.142.5":            "0.142.5",
+		"2.1.218 (Claude Code)":        "2.1.218",
+		"1.18.4":                       "1.18.4",
+		"0.5.2\nextra line 9.9.9":      "0.5.2",
+		"nightly-44-g1959045c-dirty":   "",
+		"picoclaw nightly-44-g1959045": "",
+	}
+	for raw, want := range cases {
+		if got := cliSemver(raw); got != want {
+			t.Errorf("cliSemver(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+func TestComponentInstalledAgentCLIsFollowRuntime(t *testing.T) {
+	// The agent CLIs are gated on the configured runtime, not on the binary
+	// being present — every lamp/intern-v2 image bakes all of them. With no
+	// resolvable config (this test host), every CLI must report NOT installed so
+	// the worker never pushes a runtime the device does not run.
+	if _, err := os.Stat("/root/config/config.json"); err == nil {
+		t.Skip("host has a real /root/config/config.json; runtime gate not isolatable")
+	}
+	b := &Bootstrap{}
+	for _, key := range []string{domain.OTAKeyCodex, domain.OTAKeyClaudeCode, domain.OTAKeyOpenCode, domain.OTAKeyPicoClaw} {
+		if b.componentInstalled(key) {
+			t.Errorf("%s reported installed with an unresolvable agent_runtime", key)
+		}
+	}
+}

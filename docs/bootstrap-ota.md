@@ -112,6 +112,13 @@ const (
     OTAKeyBootstrap = "bootstrap"
     OTAKeyWeb       = "web"
     OTAKeyOpenClaw  = "openclaw"
+    // Agent-runtime CLIs. Each value is also the runtime name in config.json
+    // `agent_runtime` — that equality is how bootstrap updates only the CLI the
+    // device actually runs. Hermes is absent on purpose (cannot be pinned).
+    OTAKeyCodex      = "codex"
+    OTAKeyClaudeCode = "claudecode"
+    OTAKeyOpenCode   = "opencode"
+    OTAKeyPicoClaw   = "picoclaw"
     // OTAKeyLeLamp's value is "hal" — the HAL OTA metadata key
 )
 
@@ -479,6 +486,9 @@ Bootstrap uses `lib/hal` to show update status on LEDs. See [status-led.md](../r
 | `web` | Read file `/usr/share/nginx/html/setup/VERSION` |
 | `openclaw` | Run `openclaw --version`, extract semver with regex |
 | `hal` | Run `/opt/hal/venv/bin/python -m hal --version` OR read `/opt/hal/VERSION` file |
+| `codex` / `claudecode` / `opencode` | Run `<cli> --version`, extract semver from line one (`cliSemver`) |
+| `picoclaw` | Read `/usr/local/lib/os-runtimes/picoclaw/installed-version` — its `version` output carries no semver |
+| `hermes` | — not auto-updated (see below) |
 
 ### Update Application Per Component
 
@@ -489,6 +499,20 @@ Bootstrap uses `lib/hal` to show update status on LEDs. See [status-led.md](../r
 | `web` | Run `software-update web` |
 | `openclaw` | ~~Run `npm install -g openclaw@{version}` → `systemctl restart openclaw`~~ (temporarily disabled) |
 | `hal` | Run `software-update hal` → `systemctl restart hal` |
+| `codex` / `claudecode` / `opencode` / `picoclaw` | Run `software-update <key>` — only on the device whose `agent_runtime` IS that runtime |
+| `hermes` | Not in the loop: `hermes update` cannot be pinned, so a `min_version` it never reaches would re-trigger every poll. SSH-only. |
+
+**Why the agent CLIs are gated on `agent_runtime`, not on the binary:**
+`scripts/imager/build-orangepi.sh` bakes every agent CLI onto every lamp /
+intern-v2 image regardless of `DEFAULT_AGENT`, so `inPath("codex")` is true even
+on a device running Hermes. Gating on presence would make each poll announce
+"device is updating", turn the strip orange, download a CLI the device never
+uses, and restart a unit that does not exist — forever.
+`componentInstalled` therefore compares the key against `agent_runtime` in
+`/root/config/config.json`; an unreadable/unset value means "not this runtime"
+(skip), which is the safe direction. OpenClaw keeps its `inPath` check: it is
+npm-installed per device rather than baked, and older provisioning may leave
+`agent_runtime` unset.
 
 ---
 
@@ -523,7 +547,7 @@ aborts with an error if neither is set — no compiled-in URL.
     ;;
 ```
 
-### Codex Case (manual only — not yet wired to the bootstrap worker)
+### Codex Case
 
 The Codex CLI is a static musl binary published on GitHub releases, so unlike
 every other component nothing of ours is hosted on GCS for it: metadata carries
@@ -548,15 +572,12 @@ when downloading. Keep this download in step with the same one in
 ```
 
 Publish a version with `make upload-codex <bare-semver>`, release it to the
-fleet with `make promote-codex`. **The bootstrap worker does not consume
-`codex.version` yet** — until `OTAKeyCodex` exists in `system/domain/ota.go` and
-`bootstrap.go`, publishing only enables the manual path
-(`sudo software-update codex` over SSH).
+fleet with `make promote-codex`.
 
 Only the binary is touched: `config.toml`, `.env`, and the persona stay owned by
 the presync hook, so an update cannot clobber a device's Codex configuration.
 
-### Claude Code Case (manual only — not yet wired to the bootstrap worker)
+### Claude Code Case
 
 Unlike Codex, Claude Code is **not** a binary we place: Anthropic's installer
 owns `/root/.local/share/claude/versions/<ver>` and repoints
@@ -577,10 +598,9 @@ There is deliberately **no `.previous` backup / rollback target**: the installer
 keeps the old `versions/<ver>` directory, so going back is
 `software-update claudecode` with an older version published — not a restore of
 a file we saved. Publish with `make upload-claudecode <bare-semver>`, release
-with `make promote-claudecode`; as with codex, the bootstrap worker does not
-consume `claudecode.version` yet, so this is the SSH-only path for now.
+with `make promote-claudecode`.
 
-### OpenCode Case (manual only — not yet wired to the bootstrap worker)
+### OpenCode Case
 
 OpenCode uses its official installer (arch detection + extraction are upstream's
 job); we only pin the version and force the install dir. Mirrors
@@ -603,7 +623,7 @@ at a stable path, it does get a `.previous` backup: `software-update rollback
 opencode` works, unlike claudecode. Publish with `make upload-opencode
 <bare-semver>`, release with `make promote-opencode`.
 
-### Hermes Case (manual only — and NOT pinnable)
+### Hermes Case (SSH-only — NOT pinnable, so never auto-applied)
 
 Hermes is a git install; `runtimes/hermes/install.sh` stamps
 `/usr/local/lib/hermes-agent/.install_method=git` precisely so the upstream
@@ -626,7 +646,7 @@ The unit name is the one declared in `/usr/local/lib/os-runtimes/hermes/service`
 not the requested one. No `.previous` backup: like claudecode, the install is
 owned by the upstream tool, not by a file we copy.
 
-### PicoClaw Case (manual only — and the odd one out on versioning)
+### PicoClaw Case (the odd one out on versioning)
 
 PicoClaw is a raw binary from our OWN GitHub releases (no tarball, unlike codex).
 Its published `version` is the release **TAG** (`v0.3.1-fixvision`), not a semver:

@@ -112,6 +112,13 @@ const (
     OTAKeyBootstrap = "bootstrap"
     OTAKeyWeb       = "web"
     OTAKeyOpenClaw  = "openclaw"
+    // Agent-runtime CLIs. Each value is also the runtime name in config.json
+    // `agent_runtime` — that equality is how bootstrap updates only the CLI the
+    // device actually runs. Hermes is absent on purpose (cannot be pinned).
+    OTAKeyCodex      = "codex"
+    OTAKeyClaudeCode = "claudecode"
+    OTAKeyOpenCode   = "opencode"
+    OTAKeyPicoClaw   = "picoclaw"
     // OTAKeyLeLamp's value is "hal" — the HAL OTA metadata key
 )
 
@@ -469,6 +476,9 @@ Bootstrap dùng `lib/hal` để báo trạng thái update qua LED. Xem chi tiế
 | `web` | Đọc file `/usr/share/nginx/html/setup/VERSION` |
 | `openclaw` | Chạy `openclaw --version`, trích xuất semver bằng regex |
 | `hal` | Chạy `/opt/hal/venv/bin/python -m hal --version` HOẶC đọc `/opt/hal/VERSION` |
+| `codex` / `claudecode` / `opencode` | Chạy `<cli> --version`, lấy semver ở dòng đầu (`cliSemver`) |
+| `picoclaw` | Đọc `/usr/local/lib/os-runtimes/picoclaw/installed-version` — output `version` của nó không có semver |
+| `hermes` | — không auto-update (xem bên dưới) |
 
 ### Cách cập nhật từng thành phần
 
@@ -479,6 +489,19 @@ Bootstrap dùng `lib/hal` để báo trạng thái update qua LED. Xem chi tiế
 | `web` | Chạy `software-update web` |
 | `openclaw` | ~~Chạy `npm install -g openclaw@{version}` → `systemctl restart openclaw`~~ (tạm thời tắt) |
 | `hal` | Chạy `software-update hal` → `systemctl restart hal` |
+| `codex` / `claudecode` / `opencode` / `picoclaw` | Chạy `software-update <key>` — CHỈ trên thiết bị có `agent_runtime` đúng bằng runtime đó |
+| `hermes` | Không nằm trong loop: `hermes update` không pin được, nên một `min_version` nó không bao giờ đạt sẽ kích lại mỗi vòng poll. Chỉ chạy tay qua SSH. |
+
+**Vì sao CLI của agent gate theo `agent_runtime` chứ không theo binary:**
+`scripts/imager/build-orangepi.sh` bake CLI của MỌI agent lên mọi image lamp /
+intern-v2 bất kể `DEFAULT_AGENT`, nên `inPath("codex")` vẫn đúng trên máy đang
+chạy Hermes. Gate theo sự hiện diện của binary sẽ khiến mỗi vòng poll phát TTS
+"thiết bị đang cập nhật", chuyển LED cam, tải một CLI thiết bị không dùng, rồi
+restart một unit không tồn tại — lặp mãi mãi. Nên `componentInstalled` so key với
+`agent_runtime` trong `/root/config/config.json`; đọc không được hoặc rỗng nghĩa
+là "không phải runtime này" (bỏ qua) — hướng an toàn. OpenClaw giữ nguyên kiểm
+tra `inPath`: nó cài bằng npm theo từng máy chứ không bake sẵn, và provisioning
+cũ có thể chưa set `agent_runtime`.
 
 ---
 
@@ -513,7 +536,7 @@ và exit lỗi nếu cả hai đều rỗng — không có URL hardcode.
     ;;
 ```
 
-### Xử lý Codex (mới chỉ chạy tay — bootstrap worker CHƯA đọc)
+### Xử lý Codex
 
 Codex CLI là binary musl tĩnh publish trên GitHub releases, nên khác mọi thành
 phần khác: không có artifact nào của mình nằm trên GCS. Metadata chỉ chứa
@@ -537,14 +560,12 @@ ra; tiền tố tag upstream (`rust-v`) được ghép lại lúc tải. Giữ �
 ```
 
 Publish version bằng `make upload-codex <semver-trần>`, thả cho fleet bằng
-`make promote-codex`. **Bootstrap worker chưa tiêu thụ `codex.version`** — chừng
-nào `OTAKeyCodex` chưa có trong `system/domain/ota.go` và `bootstrap.go`, publish
-chỉ mở đường chạy tay (`sudo software-update codex` qua SSH).
+`make promote-codex`.
 
 Chỉ binary bị đụng: `config.toml`, `.env` và persona vẫn do presync hook sở hữu,
 nên update không thể ghi đè cấu hình Codex của thiết bị.
 
-### Xử lý Claude Code (mới chỉ chạy tay — bootstrap worker CHƯA đọc)
+### Xử lý Claude Code
 
 Khác Codex, Claude Code **không** phải binary mình tự đặt: installer của
 Anthropic sở hữu `/root/.local/share/claude/versions/<ver>` và trỏ
@@ -564,11 +585,9 @@ version qua tham số vị trí: `install.sh [stable|latest|VERSION]`).
 Cố ý **không có backup `.previous` / rollback target**: installer vẫn giữ thư mục
 `versions/<ver>` cũ, nên muốn lùi thì publish version cũ rồi chạy
 `software-update claudecode`, chứ không phải khôi phục file mình lưu. Publish
-bằng `make upload-claudecode <semver-trần>`, thả bằng `make promote-claudecode`;
-giống codex, bootstrap worker chưa tiêu thụ `claudecode.version` nên hiện chỉ
-chạy tay qua SSH.
+bằng `make upload-claudecode <semver-trần>`, thả bằng `make promote-claudecode`.
 
-### Xử lý OpenCode (mới chỉ chạy tay — bootstrap worker CHƯA đọc)
+### Xử lý OpenCode
 
 OpenCode dùng installer chính chủ (arch detection + giải nén là việc của
 upstream); mình chỉ pin version và ép thư mục cài. Khớp với
@@ -591,7 +610,7 @@ cố định nên nó CÓ backup `.previous`: `software-update rollback opencode
 được, khác claudecode. Publish bằng `make upload-opencode <semver-trần>`, thả
 bằng `make promote-opencode`.
 
-### Xử lý Hermes (chạy tay — và KHÔNG pin được version)
+### Xử lý Hermes (chỉ SSH — KHÔNG pin được nên không bao giờ auto-apply)
 
 Hermes cài kiểu git; `runtimes/hermes/install.sh` ghi
 `/usr/local/lib/hermes-agent/.install_method=git` chính là để updater upstream
@@ -614,7 +633,7 @@ Tên unit lấy đúng theo khai báo trong `/usr/local/lib/os-runtimes/hermes/s
 phải version yêu cầu. Không có backup `.previous`: giống claudecode, bản cài do
 tool upstream sở hữu chứ không phải file mình copy.
 
-### Xử lý PicoClaw (chạy tay — và là ca cá biệt về version)
+### Xử lý PicoClaw (ca cá biệt về version)
 
 PicoClaw là binary trần từ GitHub releases của CHÍNH MÌNH (không tarball, khác
 codex). `version` publish ra là **TAG** release (`v0.3.1-fixvision`), không phải
