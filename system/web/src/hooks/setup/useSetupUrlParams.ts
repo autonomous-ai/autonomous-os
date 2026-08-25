@@ -25,6 +25,7 @@ export interface SetupUrlParams {
   sttLanguage: string;
   ttsProvider: string;
   ttsVoice: string;
+  ttsModel: string;
 }
 
 // Snapshot the URL query string at module-load time, BEFORE React renders
@@ -157,6 +158,7 @@ export function useSetupUrlParams(): SetupUrlParams {
       sttLanguage: INITIAL_PARAMS.get("stt_language") ?? "",
       ttsProvider: INITIAL_PARAMS.get("tts_provider") ?? "",
       ttsVoice: INITIAL_PARAMS.get("tts_voice") ?? "",
+      ttsModel: INITIAL_PARAMS.get("tts_model") ?? "",
     }),
     [],
   );

@@ -170,12 +170,12 @@ export function useSetupController(mode: SetupMode) {
   });
   const [llmDisableThinking, setLlmDisableThinking] = useState(false);
   // deepgram input is hidden in this build; submit reads urlParams.deepgramApiKey directly
-  const [ttsApiKey, setTtsApiKey] = useState(urlParams.ttsApiKey || "");
+  const [ttsApiKey] = useState(urlParams.ttsApiKey || "");
   const [ttsBaseUrl, setTtsBaseUrl] = useState(urlParams.ttsBaseUrl || "");
-  // STT credentials are not exposed in Setup UI but still saved to config so
-  // the device's voice pipeline has fallback values mirroring the LLM endpoint.
-  const [sttApiKey, setSttApiKey] = useState("");
-  const [sttBaseUrl, setSttBaseUrl] = useState("");
+  // STT credentials have no input in Setup UI at all (see TTSSection.tsx —
+  // only provider + voice are exposed; there's no STT section here), so
+  // they're omitted from the submit body below and HAL falls back to the
+  // LLM key/URL on its own.
   // Pre-fill STT language from URL param, else browser locale so VN/CN buyers
   // don't have to touch this field; users can still override before submitting.
   // URL value is validated against the dropdown allow-list — server stores
@@ -197,8 +197,9 @@ export function useSetupController(mode: SetupMode) {
   });
   const [ttsProvider, setTtsProvider] = useState(urlParams.ttsProvider || "elevenlabs");
   const [ttsVoice, setTtsVoice] = useState(urlParams.ttsVoice || "Rachel");
+  const [ttsModel, setTtsModel] = useState(urlParams.ttsModel || "");
   const { ttsProviders, ttsVoices } = useTTSCatalog({
-    ttsProvider, sttLanguage, ttsVoice,
+    ttsProvider, sttLanguage, ttsVoice, ttsModel,
     urlProvider: urlParams.ttsProvider,
     urlVoice: urlParams.ttsVoice,
     setTtsProvider, setTtsVoice,
@@ -600,21 +601,20 @@ export function useSetupController(mode: SetupMode) {
   }, [setupWorking, setupPhase, deviceMdnsHost, setupLanIP, setupErrorMsg]);
 
 
-  // Auto-mirror AI Brain key/URL into TTS while TTS field is empty.
-  // Once the user types into TTS the sync stops; clearing it re-enables mirroring.
-  useEffect(() => {
-    if (!ttsApiKey && llmApiKey) setTtsApiKey(llmApiKey);
-  }, [llmApiKey, ttsApiKey]);
-  useEffect(() => {
-    if (!ttsBaseUrl && llmUrl) setTtsBaseUrl(llmUrl);
-  }, [llmUrl, ttsBaseUrl]);
-  // Same for STT (no UI in Setup — silently mirrors LLM into config).
-  useEffect(() => {
-    if (!sttApiKey && llmApiKey) setSttApiKey(llmApiKey);
-  }, [llmApiKey, sttApiKey]);
-  useEffect(() => {
-    if (!sttBaseUrl && llmUrl) setSttBaseUrl(llmUrl);
-  }, [llmUrl, sttBaseUrl]);
+  // tts_api_key/tts_base_url and stt_api_key/stt_base_url have no input
+  // fields anywhere in Setup (see TTSSection.tsx — only provider + voice are
+  // exposed; STT has no section at all here). They used to be silently
+  // mirrored from the AI Brain key/URL via useEffect ("copy while empty").
+  // That mirror was buggy even with no TTS/STT UI to type into: llmUrl DOES
+  // have a visible input (LLMSection), and every keystroke into it re-ran
+  // the effect. The first keystroke landed in the still-empty ttsBaseUrl;
+  // the second keystroke found ttsBaseUrl non-empty and the mirror stopped
+  // — so a device could get `tts_base_url` silently submitted as just "h"
+  // from the very first character the operator typed into the LLM URL
+  // field. Removing the mirror instead of patching it is safe: HAL already
+  // falls back tts/stt base_url/key to the LLM ones when they're submitted
+  // empty, so we just submit them as entered (empty/undefined unless
+  // prefilled) and let the backend fall back.
 
   const scrollTo = (id: SectionId) => {
     setActiveSection(id);
@@ -916,7 +916,14 @@ export function useSetupController(mode: SetupMode) {
         setActiveSection("wifi");
         return;
       }
-    } else if (!password && !hasNetworkPassword) {
+    } else if (!(wifiConnected && ssid === currentSsid) && !password && !hasNetworkPassword) {
+      // Mirrors the same escape hatch as sectionDone.wifi above: the device
+      // is already confirmed (via live probe) to be associated with
+      // `currentSsid`, so if that's still the network selected in the
+      // picker there's no password to collect. Requiring `ssid ===
+      // currentSsid` (not just `wifiConnected`) matters because the
+      // operator can switch the picker to a *different* network after the
+      // probe resolves — that network's password is still required.
       setError("Enter the Wi-Fi password.");
       setActiveSection("wifi");
       return;
@@ -955,13 +962,12 @@ export function useSetupController(mode: SetupMode) {
         llm_model: urlParams.llmModel || llmModel,
         llm_disable_thinking: llmDisableThinking || undefined,
         deepgram_api_key: urlParams.deepgramApiKey || undefined,
-        stt_api_key: sttApiKey || undefined,
-        stt_base_url: sttBaseUrl || undefined,
         stt_language: sttLanguage || undefined,
         tts_api_key: ttsApiKey || undefined,
         tts_base_url: ttsBaseUrl || undefined,
         tts_provider: ttsProvider || undefined,
         tts_voice: ttsVoice || undefined,
+        tts_model: ttsModel || undefined,
         device_id: urlParams.deviceId || deviceId,
         admin_password: adminPassword || undefined,
       };
@@ -1010,9 +1016,10 @@ export function useSetupController(mode: SetupMode) {
   }, [
     channel, urlParams, teleToken, teleUserId, slackBotToken, slackAppToken, slackUserId,
     discordBotToken, discordGuildId, discordUserId, ssid, password, llmUrl, llmApiKey,
-    llmModel, llmDisableThinking, sttApiKey, sttBaseUrl, ttsApiKey, ttsBaseUrl, ttsVoice, deviceId,
+    llmModel, llmDisableThinking, ttsApiKey, ttsBaseUrl, ttsVoice, ttsModel, deviceId,
     mqttEndpoint, mqttPort, mqttUsername, mqttPassword, faChannel, fdChannel,
     sttLanguage, ttsProvider, hasNetworkPassword, adminPassword, wiredUplink,
+    wifiConnected, currentSsid,
   ]);
 
   return {
@@ -1046,6 +1053,7 @@ export function useSetupController(mode: SetupMode) {
     // language + TTS
     sttLanguage, setSttLanguage,
     ttsProvider, setTtsProvider, ttsProviders, ttsVoice, setTtsVoice, ttsVoices,
+    ttsModel, setTtsModel,
     // enrollment
     faceOwners, loadFaceOwners, canEnrollVoice, canEnrollFace,
   };

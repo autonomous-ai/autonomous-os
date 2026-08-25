@@ -310,9 +310,24 @@ func (s *Service) ReprovisionWifi(data domain.WifiProvisionRequest) error {
 	if v := strings.TrimSpace(data.STTBaseURL); v != "" {
 		s.config.STTBaseURL = urlnorm.NormalizeBaseURL(v)
 	}
+	if v := strings.TrimSpace(data.STTProvider); v != "" {
+		s.config.STTProvider = v
+	}
+	// Operators pick a language; the matching Deepgram SKU is auto-derived
+	// because end users don't know which model handles which language. Only
+	// derive when the effective STT provider is "" (legacy) or "autonomous" —
+	// the openai/deepgram providers own their own model naming and must not
+	// be clobbered by language-based derivation.
 	if v := strings.TrimSpace(data.STTLanguage); v != "" {
 		s.config.STTLanguage = v
-		s.config.STTModel = sttModelForLanguage(v)
+		if s.config.STTProvider == "" || s.config.STTProvider == "autonomous" {
+			s.config.STTModel = sttModelForLanguage(v)
+		}
+	}
+	// Explicit stt_model is caller-controlled when the provider is "openai" —
+	// applied after the language-derivation block above so it always wins.
+	if v := strings.TrimSpace(data.STTModel); v != "" && s.config.STTProvider == "openai" {
+		s.config.STTModel = v
 	}
 	if v := strings.TrimSpace(data.TTSAPIKey); v != "" {
 		s.config.TTSAPIKey = v
@@ -325,6 +340,9 @@ func (s *Service) ReprovisionWifi(data domain.WifiProvisionRequest) error {
 	}
 	if v := strings.TrimSpace(data.TTSVoice); v != "" {
 		s.config.TTSVoice = v
+	}
+	if v := strings.TrimSpace(data.TTSModel); v != "" {
+		s.config.TTSModel = v
 	}
 	if data.AdminPassword != "" {
 		hash, hashErr := bcrypt.GenerateFromPassword([]byte(data.AdminPassword), bcrypt.DefaultCost)
@@ -507,12 +525,28 @@ func (s *Service) Setup(data domain.SetupRequest) error {
 	s.config.STTBaseURL = data.STTBaseURL
 	s.config.TTSBaseURL = data.TTSBaseURL
 	s.config.STTLanguage = data.STTLanguage
-	s.config.STTModel = sttModelForLanguage(data.STTLanguage)
+	s.config.STTProvider = data.STTProvider
+	// Operators pick a language; the matching Deepgram SKU is auto-derived
+	// because end users don't know which model handles which language. Only
+	// derive when the effective STT provider is "" (legacy) or "autonomous" —
+	// the openai/deepgram providers own their own model naming and must not
+	// be clobbered by language-based derivation.
+	if s.config.STTProvider == "" || s.config.STTProvider == "autonomous" {
+		s.config.STTModel = sttModelForLanguage(data.STTLanguage)
+	}
+	// Explicit stt_model is caller-controlled when the provider is "openai" —
+	// applied after the language-derivation block above so it always wins.
+	if data.STTModel != "" && s.config.STTProvider == "openai" {
+		s.config.STTModel = data.STTModel
+	}
 	if data.TTSProvider != "" {
 		s.config.TTSProvider = data.TTSProvider
 	}
 	if data.TTSVoice != "" {
 		s.config.TTSVoice = data.TTSVoice
+	}
+	if data.TTSModel != "" {
+		s.config.TTSModel = data.TTSModel
 	}
 	s.config.MQTTEndpoint = data.MQTTEndpoint
 	s.config.MQTTUsername = data.MQTTUsername

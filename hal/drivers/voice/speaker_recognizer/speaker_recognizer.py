@@ -1106,6 +1106,10 @@ class SpeakerRecognizer:
     ) -> None:
         self._api_url = api_url or _API_URL
         self._api_key = api_key or _API_KEY
+        # recognize() runs per utterance — without this, a BYO LLM host with
+        # no dl_base_url configured logs "not configured" on every single
+        # utterance instead of once.
+        self._logged_unavailable = False
         self._users_dir = Path(users_dir) if users_dir else _USERS_DIR
         self._match_threshold = (
             match_threshold if match_threshold is not None else _MATCH_COS
@@ -3109,7 +3113,9 @@ class SpeakerRecognizer:
             saved_path = self._save_incoming_audio(wav_bytes)
 
         if not self.available:
-            logger.warning("Embedding server not configured — set SPEAKER_EMBEDDING_API_URL or DL_BACKEND_URL")
+            if not self._logged_unavailable:
+                logger.warning("Embedding server not configured — set SPEAKER_EMBEDDING_API_URL or dl_base_url; speaker-ID returning 'unknown' until configured")
+                self._logged_unavailable = True
             if self._debug.enabled:  # SPEAKER-DEBUG
                 self._debug.record(
                     "recognize", reason="api-not-configured",

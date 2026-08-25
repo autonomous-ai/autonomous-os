@@ -7,7 +7,7 @@ export interface SttLoadedState {
   baseUrl: boolean;
 }
 
-export type SttProvider = "autonomous" | "deepgram";
+export type SttProvider = "autonomous" | "deepgram" | "openai";
 
 export function STTSection({
   active,
@@ -17,6 +17,7 @@ export function STTSection({
   deepgramApiKey, setDeepgramApiKey,
   sttApiKey, setSttApiKey,
   sttBaseUrl, setSttBaseUrl,
+  sttModel, setSttModel,
 }: {
   active: boolean;
   sttLanguage: string; setSttLanguage: (v: string) => void;
@@ -26,6 +27,7 @@ export function STTSection({
   deepgramApiKey: string; setDeepgramApiKey: (v: string) => void;
   sttApiKey: string; setSttApiKey: (v: string) => void;
   sttBaseUrl: string; setSttBaseUrl: (v: string) => void;
+  sttModel: string; setSttModel: (v: string) => void;
 }) {
   return (
     <SectionCard id="stt" title="Language" active={active}>
@@ -73,6 +75,7 @@ export function STTSection({
           >
             <option value="autonomous">Autonomous (reuse AI brain)</option>
             <option value="deepgram">Deepgram</option>
+            <option value="openai">OpenAI-compatible</option>
           </select>
         </div>
         {sttProvider === "deepgram" ? (
@@ -81,6 +84,26 @@ export function STTSection({
           <>
             <LockedPasswordField lockedInitially={sttLoaded.apiKey || llmLoaded.apiKey} label="API Key (optional — leave blank to reuse AI brain key)" id="stt_api_key" value={sttApiKey} onChange={setSttApiKey} placeholder="sk-..." />
             <LockedField lockedInitially={sttLoaded.baseUrl || llmLoaded.baseUrl} label="Base URL (optional — leave blank to reuse AI brain base URL)" id="stt_base_url" value={sttBaseUrl} onChange={setSttBaseUrl} placeholder="https://api.openai.com/v1" />
+            {sttProvider === "openai" && (
+              <div style={{ marginBottom: 12 }}>
+                <label htmlFor="stt_model" style={{ display: "block", fontSize: 11, color: C.textDim, marginBottom: 5 }}>
+                  Model
+                </label>
+                <input
+                  id="stt_model"
+                  type="text"
+                  value={sttModel}
+                  onChange={(e) => setSttModel(e.target.value)}
+                  placeholder="whisper-1"
+                  style={{
+                    width: "100%", boxSizing: "border-box",
+                    background: C.surface, border: `1px solid ${C.border}`,
+                    borderRadius: 7, padding: "8px 11px",
+                    fontSize: 12.5, color: C.text, outline: "none",
+                  }}
+                />
+              </div>
+            )}
           </>
         )}
       </div>

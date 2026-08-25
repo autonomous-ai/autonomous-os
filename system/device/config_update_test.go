@@ -118,6 +118,43 @@ func TestApplyUpdateLanguageDerivesModel(t *testing.T) {
 	}
 }
 
+// TestApplyUpdateSTTProviderOpenAIKeepsExplicitModel covers the gating rule:
+// once stt_provider is "openai", the caller owns stt_model — a language
+// change must not clobber it with the autonomous-STT derivation, and an
+// explicit stt_model in the request must be honored.
+func TestApplyUpdateSTTProviderOpenAIKeepsExplicitModel(t *testing.T) {
+	c := baseConfig()
+	c.STTProvider = "openai"
+	c.STTModel = "whisper-1"
+
+	ch := applyUpdate(c, domain.UpdateConfigRequest{STTLanguage: "vi"}, "")
+	if !ch.lang {
+		t.Fatalf("language change not flagged: %+v", ch)
+	}
+	if c.STTModel != "whisper-1" {
+		t.Fatalf("openai stt_model clobbered by language derivation: %s", c.STTModel)
+	}
+
+	applyUpdate(c, domain.UpdateConfigRequest{STTModel: "whisper-2"}, "")
+	if c.STTModel != "whisper-2" {
+		t.Fatalf("explicit openai stt_model not applied: %s", c.STTModel)
+	}
+}
+
+// TestApplyUpdateSTTProviderEmptyStillDerives asserts the legacy/autonomous
+// path (stt_provider "" or "autonomous") keeps deriving stt_model from
+// stt_language, unaffected by the openai gate above.
+func TestApplyUpdateSTTProviderEmptyStillDerives(t *testing.T) {
+	c := baseConfig()
+	ch := applyUpdate(c, domain.UpdateConfigRequest{STTLanguage: "vi"}, "")
+	if !ch.lang {
+		t.Fatalf("language change not flagged: %+v", ch)
+	}
+	if c.STTModel != "nova-3-general" {
+		t.Fatalf("stt model not derived for empty provider: %s", c.STTModel)
+	}
+}
+
 func TestApplyUpdateWifi(t *testing.T) {
 	c := baseConfig()
 	ch := applyUpdate(c, domain.UpdateConfigRequest{SSID: "new-wifi", Password: "new-pass"}, "")

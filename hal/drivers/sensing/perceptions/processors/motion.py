@@ -182,6 +182,10 @@ class RemoteMotionChecker:
         self._person_min_area_ratio: float = person_min_area_ratio
         self._ws_session: ClientConnection | None = None
         self._crypto: CryptoSession | None = None
+        # update() re-calls _prepare_session() every frame while unconnected —
+        # without this, an unconfigured DL base URL (BYO LLM host) retries the
+        # connection and logs a full traceback on every single frame.
+        self._logged_unconfigured: bool = False
 
         self._prepare_session()
 
@@ -192,6 +196,11 @@ class RemoteMotionChecker:
     def _prepare_session(self):
         if self._ws_session is not None:
             logger.info("[%s] has been started", self.__class__.__name__)
+            return
+        if not self._base_url:
+            if not self._logged_unconfigured:
+                logger.info("[%s] no DL base URL configured — action recognition disabled", self.__class__.__name__)
+                self._logged_unconfigured = True
             return
 
         try:

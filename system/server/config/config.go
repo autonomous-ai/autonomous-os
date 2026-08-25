@@ -162,6 +162,9 @@ type Config struct {
 	TTSProvider     string `json:"tts_provider" yaml:"ttsProvider"`
 	TTSVoice        string `json:"tts_voice" yaml:"ttsVoice"`
 	TTSInstructions string `json:"tts_instructions" yaml:"ttsInstructions"`
+	// TTSModel selects the TTS model for the active TTSProvider. Empty means
+	// use HAL's backend default.
+	TTSModel string `json:"tts_model,omitempty" yaml:"ttsModel"`
 
 	// AgentRuntime selects which agentic backend to use: "openclaw" (default), "hermes", "picoclaw", "claudecode", etc.
 	AgentRuntime string `json:"agent_runtime" yaml:"agentRuntime"`
@@ -229,6 +232,14 @@ type Config struct {
 	// Empty string means use hal's default (flux-general-en).
 	// Example: "nova-3" to enable Deepgram Nova 3 with language support.
 	STTModel string `json:"stt_model,omitempty" yaml:"sttModel"`
+
+	// STTProvider selects the speech-to-text backend: "" | "autonomous" |
+	// "deepgram" | "openai". Empty means HAL's legacy selection (derives from
+	// DeepgramAPIKey/STTModel as before). When set to "openai" or "deepgram",
+	// STTModel is caller-controlled and is NOT overwritten by the language-based
+	// autonomous STT model derivation (see sttModelForLanguage in
+	// system/device/config_update.go and system/device/setup.go).
+	STTProvider string `json:"stt_provider,omitempty" yaml:"sttProvider"`
 
 	// STTLanguage sets the BCP-47 language code for STT (e.g. "vi", "en").
 	// Only used when STTModel is non-empty. Empty means auto-detect.

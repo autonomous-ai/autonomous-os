@@ -65,6 +65,12 @@ type SetupRequest struct {
 	STTLanguage string `json:"stt_language"`
 	TTSProvider string `json:"tts_provider"`
 	TTSVoice    string `json:"tts_voice"`
+	// STTProvider selects the STT backend ("" | "autonomous" | "deepgram" |
+	// "openai"). STTModel is caller-controlled when STTProvider is "openai"
+	// (see config.STTProvider). TTSModel selects the TTS model for TTSProvider.
+	STTProvider string `json:"stt_provider"`
+	STTModel    string `json:"stt_model"`
+	TTSModel    string `json:"tts_model"`
 
 	// optional
 	DeviceID string `json:"device_id" validate:"required"`
@@ -129,6 +135,10 @@ type WifiProvisionRequest struct {
 	TTSBaseURL     string `json:"tts_base_url"`
 	TTSProvider    string `json:"tts_provider"`
 	TTSVoice       string `json:"tts_voice"`
+	// STTProvider / STTModel / TTSModel: see SetupRequest for semantics.
+	STTProvider string `json:"stt_provider"`
+	STTModel    string `json:"stt_model"`
+	TTSModel    string `json:"tts_model"`
 
 	// AdminPassword: plaintext operator-picked password. bcrypted into
 	// config.AdminPasswordHash. Empty on a re-provision = keep current
@@ -689,7 +699,9 @@ type MQTTInfoResponse struct {
 	Time        string `json:"time"`
 	TTSProvider string `json:"tts_provider,omitempty"`
 	TTSVoice    string `json:"tts_voice,omitempty"`
+	TTSModel    string `json:"tts_model,omitempty"`
 	STTLanguage string `json:"stt_language,omitempty"`
+	STTProvider string `json:"stt_provider,omitempty"`
 	// WakeWordEnabled is the effective top-level wake-word gate from config. It is
 	// intentionally not omitted so MQTT consumers can distinguish disabled
 	// from an older device that does not report the setting.
@@ -742,7 +754,9 @@ func NewMQTTInfoResponse(cfg *config.Config, msgType string, mac string) MQTTInf
 		Time:            time.Now().UTC().Format(time.RFC3339Nano),
 		TTSProvider:     cfg.TTSProvider,
 		TTSVoice:        cfg.TTSVoice,
+		TTSModel:        cfg.TTSModel,
 		STTLanguage:     cfg.STTLanguage,
+		STTProvider:     cfg.STTProvider,
 		WakeWordEnabled: cfg.WakeWordEnabled(),
 		Timezone:        cfg.Timezone,
 	}
@@ -1335,8 +1349,10 @@ type ConfigPublicResponse struct {
 	TTSBaseURL         string   `json:"tts_base_url"`
 	STTLanguage        string   `json:"stt_language"`
 	STTModel           string   `json:"stt_model"`
+	STTProvider        string   `json:"stt_provider"`
 	TTSProvider        string   `json:"tts_provider"`
 	TTSVoice           string   `json:"tts_voice"`
+	TTSModel           string   `json:"tts_model"`
 	WakeWord           bool     `json:"wakeword"`
 	AgentName          string   `json:"agent_name"`
 	WakePhrases        []string `json:"wake_phrases"`
@@ -1401,7 +1417,13 @@ type UpdateConfigRequest struct {
 	STTBaseURL     string `json:"stt_base_url"`
 	TTSBaseURL     string `json:"tts_base_url"`
 	STTLanguage    string `json:"stt_language"`
-	DeviceID       string `json:"device_id"`
+	// STTProvider selects the STT backend ("" | "autonomous" | "deepgram" |
+	// "openai"). STTModel is caller-controlled when STTProvider is "openai" —
+	// otherwise it is derived from STTLanguage (see sttModelForLanguage in
+	// system/device/config_update.go).
+	STTProvider string `json:"stt_provider"`
+	STTModel    string `json:"stt_model"`
+	DeviceID    string `json:"device_id"`
 
 	MQTTEndpoint string `json:"mqtt_endpoint"`
 	MQTTUsername string `json:"mqtt_username"`
@@ -1412,6 +1434,7 @@ type UpdateConfigRequest struct {
 
 	TTSProvider string `json:"tts_provider"`
 	TTSVoice    string `json:"tts_voice"`
+	TTSModel    string `json:"tts_model"`
 	WakeWord    *bool  `json:"wakeword,omitempty"`
 
 	// Realtime voice-agent config (Gemini Live / OpenAI Realtime). Same payload

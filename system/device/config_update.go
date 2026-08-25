@@ -43,8 +43,10 @@ func (s *Service) GetPublicConfig() domain.ConfigPublicResponse {
 		TTSBaseURL:         s.config.TTSBaseURL,
 		STTLanguage:        s.config.STTLanguage,
 		STTModel:           s.config.STTModel,
+		STTProvider:        s.config.STTProvider,
 		TTSProvider:        s.config.TTSProvider,
 		TTSVoice:           s.config.TTSVoice,
+		TTSModel:           s.config.TTSModel,
 		WakeWord:           s.config.WakeWordEnabled(),
 		AgentName:          agentName,
 		WakePhrases:        i18n.BuildSupportedVoiceWakeWords(agentName, deviceType),
@@ -129,8 +131,11 @@ type voiceSnapshot struct {
 	ttsAPIKey      string
 	sttBaseURL     string
 	ttsBaseURL     string
+	sttProvider    string
+	sttModel       string
 	ttsProvider    string
 	ttsVoice       string
+	ttsModel       string
 }
 
 func voiceFields(c *config.Config) voiceSnapshot {
@@ -142,8 +147,11 @@ func voiceFields(c *config.Config) voiceSnapshot {
 		ttsAPIKey:      c.TTSAPIKey,
 		sttBaseURL:     c.STTBaseURL,
 		ttsBaseURL:     c.TTSBaseURL,
+		sttProvider:    c.STTProvider,
+		sttModel:       c.STTModel,
 		ttsProvider:    c.TTSProvider,
 		ttsVoice:       c.TTSVoice,
+		ttsModel:       c.TTSModel,
 	}
 }
 
@@ -271,11 +279,24 @@ func applyVoicePipelineFields(c *config.Config, data domain.UpdateConfigRequest,
 	if data.TTSBaseURL != "" {
 		c.TTSBaseURL = urlnorm.NormalizeBaseURL(data.TTSBaseURL)
 	}
+	if data.STTProvider != "" {
+		c.STTProvider = data.STTProvider
+	}
 	// Operators pick a language; the matching Deepgram SKU is auto-derived
-	// because end users don't know which model handles which language.
+	// because end users don't know which model handles which language. Only
+	// derive when the effective STT provider is "" (legacy) or "autonomous" —
+	// the openai/deepgram providers own their own model naming and must not
+	// be clobbered by language-based derivation.
 	if data.STTLanguage != "" {
 		c.STTLanguage = data.STTLanguage
-		c.STTModel = sttModelForLanguage(data.STTLanguage)
+		if c.STTProvider == "" || c.STTProvider == "autonomous" {
+			c.STTModel = sttModelForLanguage(data.STTLanguage)
+		}
+	}
+	// Explicit stt_model is caller-controlled when the provider is "openai" —
+	// applied after the language-derivation block above so it always wins.
+	if data.STTModel != "" && c.STTProvider == "openai" {
+		c.STTModel = data.STTModel
 	}
 	ch.newLang = c.STTLanguage
 	ch.lang = ch.prevLang != ch.newLang
@@ -285,6 +306,9 @@ func applyVoicePipelineFields(c *config.Config, data domain.UpdateConfigRequest,
 	}
 	if data.TTSVoice != "" {
 		c.TTSVoice = data.TTSVoice
+	}
+	if data.TTSModel != "" {
+		c.TTSModel = data.TTSModel
 	}
 	// Realtime block (validated by the caller before the lock). Sent = apply +
 	// restart hal.
@@ -511,7 +535,9 @@ func (s *Service) UpdateVoiceConfig(provider, voice, language string) error {
 	}
 	if language != "" {
 		s.config.STTLanguage = language
-		s.config.STTModel = sttModelForLanguage(language)
+		if s.config.STTProvider == "" || s.config.STTProvider == "autonomous" {
+			s.config.STTModel = sttModelForLanguage(language)
+		}
 	}
 	if err := s.config.Save(); err != nil {
 		return fmt.Errorf("save config: %w", err)

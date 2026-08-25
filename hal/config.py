@@ -208,7 +208,39 @@ def resolve_device_type(default: str = "") -> str:
     return default
 
 
-DL_BACKEND_URL = _os_cfg_get("llm_base_url") or os.environ.get("DL_BACKEND_URL", "")
+def _is_autonomous_host(url: str) -> bool:
+    """True if `url`'s host is autonomous.ai or a *.autonomous.ai subdomain."""
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return False
+    return host == "autonomous.ai" or host.endswith(".autonomous.ai")
+
+
+def dl_base_url() -> str:
+    """Base URL for autonomous's cloud DL services (speaker-ID, pose, motion,
+    action recognition, SER, emotion, YOLO — everything under the
+    `/hal/api/dl/...` prefix).
+
+    These endpoints exist ONLY on autonomous's own backend. A BYO LLM host
+    (oMLX, a third-party OpenAI-compatible server, ...) doesn't implement
+    them, so blindly deriving this from llm_base_url sent a real request to
+    that host's `/hal/api/dl/...` path on every utterance/frame and got back
+    a 404/403. An explicit `dl_base_url` in config.json (or the DL_BACKEND_URL
+    env var, same precedence, for dev machines) always wins; otherwise
+    llm_base_url is used ONLY when its host is autonomous.ai or a
+    *.autonomous.ai subdomain — else "" (every DL caller already treats an
+    empty base URL as "not configured" and skips the network call).
+    """
+    explicit = _os_cfg_get("dl_base_url") or os.environ.get("DL_BACKEND_URL", "")
+    if explicit:
+        return explicit
+    llm_url = _os_cfg_get("llm_base_url", "")
+    return llm_url if _is_autonomous_host(llm_url) else ""
+
+
+DL_BACKEND_URL = dl_base_url()
 DL_API_KEY = _os_cfg_get("llm_api_key") or os.environ.get("DL_API_KEY", "")
 # Device-internal auth token — the secret a caller presents to reach this HAL,
 # kept SEPARATE from the LLM provider key (DL_API_KEY). Falls back to the LLM key

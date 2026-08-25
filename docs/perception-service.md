@@ -52,9 +52,24 @@ tune `BATCH_SIZE` and `BATCH_TIMEOUT` per model. Model choices and outputs:
 
 ## Using it from a device
 
-HAL is the main client. Point it at the backend with `DL_BACKEND_URL` and the
-shared `DL_API_KEY` (sent as `X-API-Key`), and optionally enable client-side
-encryption. Sensing streams camera frames to the action/pose/emotion endpoints;
+HAL is the main client. `DL_BACKEND_URL` (`hal/config.py` `dl_base_url()`) resolves
+in priority order: (1) an explicit `dl_base_url` key in `config.json`, or the
+`DL_BACKEND_URL` env var (same precedence, for dev machines); (2) `llm_base_url`,
+but **only** when its host is `autonomous.ai` or a `*.autonomous.ai` subdomain;
+otherwise `""` (disabled). This exists because these DL endpoints — everything
+under `/hal/api/dl/...`: speaker-ID, pose, motion/action recognition, SER,
+emotion, YOLO — live only on autonomous's own backend; blindly deriving the URL
+from `llm_base_url` sent a live request to a BYO LLM host's (oMLX, a third-party
+OpenAI-compatible server) `/hal/api/dl/...` path on every frame/utterance and got
+back a 404/403. With no base URL configured, the DL-dependent processors
+(`RemoteMotionChecker`, `RemotePoseEstimator`, `SpeakerRecognizer`) log once and
+stay disabled instead of retrying (and logging a traceback) every frame or
+utterance. `dl_base_url` is a raw `config.json` key read directly by HAL
+(`_os_cfg_get`) — it has no typed field in the Go `config.Config` struct and no
+Setup/Settings UI control yet; set it by hand in `config.json` on a device that
+needs autonomous's DL services alongside a non-autonomous `llm_base_url`. HAL
+also sends the shared `DL_API_KEY` (as `X-API-Key`), and optionally enables
+client-side encryption. Sensing streams camera frames to the action/pose/emotion endpoints;
 voice posts end-of-utterance audio to the speech-emotion endpoint. For the
 speaker-embedding path, HAL runs the audio filter/VAD/normalize pipeline
 **on-device** and calls `/audio-recognizer/embed` with `preprocess=false`, so

@@ -167,6 +167,18 @@ với reconnect send/receive của provider, vì các loop đó chưa tồn tạ
 `connect()` thành công. Không cần restart HAL hay chờ audio mới; các lượt voice
 vẫn fallback xuống agent chính cho tới khi kết nối hồi phục.
 
+**Không có API key nào cả → tắt, không retry.** Thiết bị không có block
+`realtime` trong `config.json` vẫn resolve về `enabled:true, provider:gemini`
+theo default có sẵn của HAL, và nếu không resolve được key nào cho provider
+đang active (env, `config.json` `realtime.<provider>.api_key`, hay
+`llm_api_key`) thì trước đây vẫn gọi `connect()`, fail, rồi retry mãi mãi
+trong loop ở trên — một lượt thử mạng cộng một dòng log warning mỗi ≤60s, vô
+thời hạn. `orchestrator.py` giờ kiểm tra key đã resolve cho `gemini`/`openai`/
+`qwen` trước khi bắt đầu retry loop: thiếu key → log một lần (`"No API key
+configured for provider=%s — realtime voice agent disabled"`) rồi return. Các
+lượt voice fallback xuống agent chính, giống như bất kỳ thiết bị nào khác tắt
+realtime.
+
 ## Biểu cảm cảm xúc (fire-and-forget)
 
 Nếu thiết bị khai báo capability `expression`

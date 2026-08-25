@@ -14,13 +14,16 @@ logger = logging.getLogger("hal.voice.tts")
 
 
 def _ensure_openai_v1(base_url: str) -> str:
-    """Append /v1 to autonomous API base URLs that are missing it.
+    """Append /v1 to an OpenAI-compatible base URL that is missing it.
 
-    Covers three cases: (1) missing /v1 → append it, (2) already has /v1 →
-    leave untouched, (3) non-autonomous URL → leave untouched.
+    Generic across any OpenAI-compatible HTTP server — the autonomous
+    campaign-api proxy, a local oMLX instance, a direct ElevenLabs host, or
+    anything else speaking the same `{base_url}/audio/...` / `{base_url}/
+    text-to-speech/...` shape: a base URL already ending in /v1 is left
+    untouched, anything else gets /v1 appended.
     """
-    base_url = base_url.rstrip("/")
-    if "campaign-api.autonomous.ai" in base_url and base_url.endswith("/ai"):
+    base_url = (base_url or "").rstrip("/")
+    if base_url and not base_url.endswith("/v1"):
         base_url += "/v1"
     return base_url
 

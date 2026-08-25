@@ -6,6 +6,7 @@ export function TTSSection({
   active, isContinue,
   ttsProvider, setTtsProvider, ttsProviders,
   ttsVoice, setTtsVoice, ttsVoices,
+  ttsModel, setTtsModel,
   sttLanguage,
 }: {
   active: boolean;
@@ -14,6 +15,7 @@ export function TTSSection({
   ttsProviders: string[];
   ttsVoice: string; setTtsVoice: (v: string) => void;
   ttsVoices: string[];
+  ttsModel: string; setTtsModel: (v: string) => void;
   sttLanguage: string;
 }) {
   return (
@@ -37,20 +39,72 @@ export function TTSSection({
           ))}
         </select>
       </div>
+      {ttsProvider === "openai" && (
+        <div style={{ marginBottom: FIELD_GAP }}>
+          <label htmlFor="tts_model" style={LABEL_STYLE}>
+            TTS model
+          </label>
+          <input
+            id="tts_model"
+            type="text"
+            value={ttsModel}
+            onChange={(e) => setTtsModel(e.target.value)}
+            placeholder="tts-1"
+            style={INPUT_STYLE}
+          />
+        </div>
+      )}
       <div style={{ marginBottom: FIELD_GAP }}>
         <label htmlFor="tts_voice" style={LABEL_STYLE}>
           Voice
         </label>
-        <select
-          id="tts_voice"
-          value={ttsVoice}
-          onChange={(e) => setTtsVoice(e.target.value)}
-          style={{ ...INPUT_STYLE, cursor: "pointer" }}
-        >
-          {(ttsVoices.length > 0 ? ttsVoices : ["Rachel"]).map((v) => (
-            <option key={v} value={v}>{v}</option>
-          ))}
-        </select>
+        {ttsProvider === "openai" ? (
+          // OpenAI-compatible endpoints are BYO: the server can only list the
+          // voices of the host already saved in config, and mid-wizard nothing
+          // is saved yet — so it returns the static OpenAI names. Offer those
+          // as suggestions but always let the operator type, otherwise a
+          // custom backend's voice (e.g. an oMLX one) is unreachable here.
+          <>
+            <input
+              id="tts_voice"
+              type="text"
+              list="tts_voice_options"
+              value={ttsVoice}
+              onChange={(e) => setTtsVoice(e.target.value)}
+              placeholder="alloy"
+              style={INPUT_STYLE}
+            />
+            <datalist id="tts_voice_options">
+              {ttsVoices.map((v) => (
+                <option key={v} value={v} />
+              ))}
+            </datalist>
+          </>
+        ) : ttsVoices.length > 0 ? (
+          <select
+            id="tts_voice"
+            value={ttsVoice}
+            onChange={(e) => setTtsVoice(e.target.value)}
+            style={{ ...INPUT_STYLE, cursor: "pointer" }}
+          >
+            {ttsVoices.map((v) => (
+              <option key={v} value={v}>{v}</option>
+            ))}
+          </select>
+        ) : (
+          // No server-known voice list for this provider/endpoint (e.g. a
+          // custom OpenAI-compatible base URL the server couldn't probe) —
+          // let the operator type the voice name directly instead of
+          // offering a hardcoded list that may not exist on their backend.
+          <input
+            id="tts_voice"
+            type="text"
+            value={ttsVoice}
+            onChange={(e) => setTtsVoice(e.target.value)}
+            placeholder="Rachel"
+            style={INPUT_STYLE}
+          />
+        )}
         {isContinue ? (
           <button
             type="button"

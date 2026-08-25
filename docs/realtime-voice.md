@@ -173,6 +173,17 @@ which do not exist until the first `connect()` succeeds. No HAL restart or new
 audio is required; voice turns keep using the main-agent fallback until the
 connection recovers.
 
+**No API key at all → disabled, not retried.** A device with no `realtime`
+block in `config.json` still resolves to `enabled:true, provider:gemini` at
+HAL's own built-in default, and with no key resolved anywhere for the active
+provider (env, `config.json` `realtime.<provider>.api_key`, or `llm_api_key`)
+that used to still call `connect()`, fail, and retry forever in the loop above
+— a network attempt plus a warning log every ≤60s, indefinitely. `orchestrator.py`
+now checks the resolved key for `gemini`/`openai`/`qwen` before starting the
+retry loop at all: missing → log once (`"No API key configured for
+provider=%s — realtime voice agent disabled"`) and return. Voice turns fall
+back to the main agent, same as any other disabled-realtime device.
+
 ## Emotion expression (fire-and-forget)
 
 If the device declares the `expression` capability

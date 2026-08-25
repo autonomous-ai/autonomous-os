@@ -60,6 +60,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
     discordBotToken, setDiscordBotToken, discordGuildId, setDiscordGuildId, discordUserId, setDiscordUserId,
     sttLanguage, setSttLanguage,
     ttsProvider, setTtsProvider, ttsProviders, ttsVoice, setTtsVoice, ttsVoices,
+    ttsModel, setTtsModel,
     faceOwners, loadFaceOwners, canEnrollVoice, canEnrollFace,
   } = useSetupController(mode);
 
@@ -306,6 +307,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
                       ttsProviders={ttsProviders}
                       ttsVoice={ttsVoice} setTtsVoice={setTtsVoice}
                       ttsVoices={ttsVoices}
+                      ttsModel={ttsModel} setTtsModel={setTtsModel}
                       sttLanguage={sttLanguage}
                     />
                   </div>

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+
+	"go.autonomous.ai/os/system/lib/hal"
 )
 
 // ErrNotSupportedByRuntime is returned by AgentGateway methods that the active
@@ -343,10 +345,10 @@ type AgentGateway interface {
 	// SetVolume sets speaker volume on HAL (0-100).
 	SetVolume(pct int) error
 
-	// StartHALVoice starts the voice pipeline on HAL. sttKey / ttsKey
-	// and sttBaseURL / ttsBaseURL are the AutonomousSTT and TTS endpoints;
-	// pass empty for any to fall back to llmKey / llmBaseURL.
-	StartHALVoice(deepgramKey, llmKey, sttKey, ttsKey, llmBaseURL, sttBaseURL, ttsBaseURL, ttsVoice, ttsInstructions, ttsProvider string) error
+	// StartHALVoice starts the voice pipeline on HAL. See hal.VoiceStartConfig
+	// for field semantics — sttKey/ttsKey and sttBaseURL/ttsBaseURL fall back
+	// to llmKey/llmBaseURL when empty.
+	StartHALVoice(cfg hal.VoiceStartConfig) error
 
 	// WatchIdentity polls IDENTITY.md and pushes updated wake words to HAL on rename.
 	WatchIdentity(ctx context.Context)

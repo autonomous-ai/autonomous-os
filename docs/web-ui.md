@@ -150,6 +150,23 @@ Monitor leaves serialize as the plain id, e.g. `/monitor#overview`, `/monitor#sy
 
 The legacy standalone `/edit` page was removed; its `SettingsPanel` is now reachable only through the `/setting` tabs inside Monitor. `/edit` (and the Setup "update →" hint) now redirect to `/setting`.
 
+**Language (`/setting#stt`, `STTSection.tsx`)** — provider select gained an
+`openai` option alongside the existing `autonomous`/`deepgram` (`SttProvider`
+type). Selecting `openai` reveals a **Model** text input (placeholder
+`whisper-1`), submitted as `stt_model`. `sttProvider` is prefilled from the
+loaded config's `stt_provider` field, falling back to inferring `deepgram` from
+`has_deepgram_api_key` only on an older config saved before that field existed.
+
+**Voice (`/setting#tts`, `TTSSection.tsx`)** — same **TTS model** input as the
+Setup wizard (`openai` only, submits `tts_model`, feeds the live voice-list
+query — see `docs/setup-flow.md`), and the same free-typed **Voice** fallback
+when the resolved voice list is empty. The AI-Brain→TTS/STT key/base-URL
+mirroring here uses a per-field "touched" flag (set only by that field's own
+`onChange`, e.g. `onTtsBaseUrlChange`) rather than "target field is empty" —
+the latter broke on the very first keystroke into the (visible, in Settings)
+`llmUrl`/`llmApiKey` inputs, the same class of bug fixed in the Setup wizard by
+removing its mirror outright (see `docs/setup-flow.md`).
+
 ---
 
 ## 4. Polling & Data Sources

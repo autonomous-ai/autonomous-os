@@ -24,27 +24,14 @@ var (
 	reWhitespace = regexp.MustCompile(`\s+`)
 )
 
-// StartHALVoice starts the voice pipeline on HAL with API keys from
-// config. sttKey / ttsKey + sttBaseURL / ttsBaseURL are split out from
-// llmKey / llmBaseURL so households with separate STT / TTS accounts can
-// configure each independently. Pass empty for any of them to make HAL
-// fall back to the LLM equivalent.
-func (s *OpenclawService) StartHALVoice(deepgramKey, llmKey, sttKey, ttsKey, llmBaseURL, sttBaseURL, ttsBaseURL, ttsVoice, ttsInstructions, ttsProvider string) error {
-	if deepgramKey == "" {
+// StartHALVoice starts the voice pipeline on HAL. See hal.VoiceStartConfig
+// for field semantics — sttKey/ttsKey + sttBaseURL/ttsBaseURL fall back to
+// llmKey/llmBaseURL when empty.
+func (s *OpenclawService) StartHALVoice(cfg hal.VoiceStartConfig) error {
+	if cfg.DeepgramKey == "" {
 		return nil
 	}
-	if err := hal.StartVoice(hal.VoiceStartConfig{
-		DeepgramKey:     deepgramKey,
-		LLMKey:          llmKey,
-		STTKey:          sttKey,
-		TTSKey:          ttsKey,
-		LLMBaseURL:      llmBaseURL,
-		STTBaseURL:      sttBaseURL,
-		TTSBaseURL:      ttsBaseURL,
-		TTSVoice:        ttsVoice,
-		TTSInstructions: ttsInstructions,
-		TTSProvider:     ttsProvider,
-	}); err != nil {
+	if err := hal.StartVoice(cfg); err != nil {
 		return err
 	}
 	slog.Info("HAL voice pipeline started", "component", "openclaw")

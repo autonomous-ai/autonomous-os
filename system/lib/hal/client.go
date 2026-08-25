@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -290,6 +291,12 @@ type VoiceStartConfig struct {
 	TTSVoice        string
 	TTSInstructions string
 	TTSProvider     string
+	// STTProvider selects the STT backend ("" | "autonomous" | "deepgram" |
+	// "openai"); empty = HAL's legacy selection. STTModel/TTSModel select the
+	// model within the chosen provider; empty = HAL's backend default.
+	STTProvider string
+	STTModel    string
+	TTSModel    string
 }
 
 // StartVoice starts the voice pipeline with the given config.
@@ -320,6 +327,15 @@ func StartVoice(cfg VoiceStartConfig) error {
 	if cfg.TTSProvider != "" {
 		payload["tts_provider"] = cfg.TTSProvider
 	}
+	if cfg.STTProvider != "" {
+		payload["stt_provider"] = cfg.STTProvider
+	}
+	if cfg.STTModel != "" {
+		payload["stt_model"] = cfg.STTModel
+	}
+	if cfg.TTSModel != "" {
+		payload["tts_model"] = cfg.TTSModel
+	}
 	body, _ := json.Marshal(payload)
 	return post("/voice/start", body)
 }
@@ -333,15 +349,30 @@ func StopVoicePipeline() error {
 
 // ListVoices returns available TTS voices for the given provider, filtered
 // to lang's curated bucket when lang is non-empty (BCP-47, e.g. "vi",
-// "zh-CN"). Empty lang returns the full flat list. Returns an error if
-// HAL is unreachable or returns non-2xx — callers should fall back to
-// a static list in that case.
-func ListVoices(provider, lang string) ([]string, error) {
-	path := "/voice/voices?provider=" + provider
+// "zh-CN"). Empty lang returns the full flat list. baseURL and model are
+// optional overrides (e.g. for provider "openai" pointed at a non-default
+// TTS host/model) — empty means HAL uses its own defaults. baseURL selects
+// which host HAL will query and HAL attaches the device's TTS credential to
+// that request, so it MUST come from server-side config and never from an
+// HTTP caller. No credential is passed here: HAL reads it from the same
+// config.json. Returns an error if HAL is unreachable or returns non-2xx —
+// callers should fall back to a static list in that case.
+func ListVoices(provider, lang, baseURL, model string) ([]string, error) {
+	// Every value is escaped via url.Values: provider/lang come from an
+	// unauthenticated HTTP caller, and raw concatenation let
+	// `provider=openai%26base_url=...` inject a base_url on this hop.
+	q := url.Values{}
+	q.Set("provider", provider)
 	if lang != "" {
-		path += "&lang=" + lang
+		q.Set("lang", lang)
 	}
-	resp, err := doGet(path)
+	if baseURL != "" {
+		q.Set("base_url", baseURL)
+	}
+	if model != "" {
+		q.Set("model", model)
+	}
+	resp, err := doGet("/voice/voices?" + q.Encode())
 	if err != nil {
 		return nil, err
 	}

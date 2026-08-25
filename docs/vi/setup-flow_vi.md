@@ -551,6 +551,58 @@ Cụ thể: `intern-v2` khai báo `audio`, `sensing`, `companion`, `system`, `li
 hiện **Face**. Fail-open trong lúc `/api/system/info` chưa về (tập capability chưa biết
 thì trả `true`), giống mọi capability gate khác trong web.
 
+### Bước Voice — model TTS + danh sách voice trực tiếp (provider openai)
+
+`components/setup/TTSSection.tsx` có thêm ô nhập **TTS model** (placeholder
+`tts-1`), chỉ hiện khi `ttsProvider === "openai"`, gửi kèm là `tts_model` cùng
+các field provider/voice đã có. Nó cũng cấp dữ liệu cho query voice trực tiếp
+của `useTTSCatalog.ts`: với `openai`, hook debounce 500ms (để gõ base URL/model
+không bắn request mỗi ký tự) rồi gọi `getTTSVoices(provider, lang, ttsBaseUrl
+|| llmUrl, ttsModel)` — phía server, việc này gọi `GET /api/device/voices`, và
+với `openai` nó truy vấn `GET {base_url}/v1/audio/voices?model=<model>` của
+chính server đích, fallback về danh sách 9 tên OpenAI cứng khi lỗi (xem
+`docs/os-server.md`).
+
+Cả hai biến thể `TTSSection` (`components/setup/TTSSection.tsx` cho wizard,
+`pages/settings/TTSSection.tsx` cho Settings) đều render field **Voice** dưới
+dạng ô nhập text tự do thay vì `<select>` bất cứ khi nào danh sách voice
+resolve ra rỗng — một endpoint tương thích OpenAI tuỳ chỉnh mà server không
+probe được (hoặc chưa trả voice nào) sẽ không còn ép operator chọn từ danh
+sách cứng có thể không tồn tại trên backend của họ.
+
+### Mirror credential STT bị bỏ hẳn, không phải sửa
+
+`useSetupController.ts` trước đây âm thầm mirror `llmApiKey`/`llmUrl` vào
+`ttsApiKey`/`ttsBaseUrl`/`sttApiKey`/`sttBaseUrl` qua một `useEffect` copy giá
+trị LLM vào **khi field đích còn rỗng**. STT không có input field nào trong
+Setup wizard, field key/base-URL của TTS cũng không hiện (chỉ có provider +
+voice) — nhưng `llmUrl` **lại có** input hiển thị (`LLMSection`), và mỗi ký tự
+gõ vào đó chạy lại effect: ký tự đầu tiên rơi vào `ttsBaseUrl` còn rỗng, rồi
+ký tự tiếp theo thấy nó không còn rỗng nên dừng mirror. Vậy nên một thiết bị
+có thể gửi `tts_base_url` (và `stt_base_url`) chỉ là `"h"` — ký tự đầu của URL
+LLM mà operator chưa hề động vào TTS/STT cho nó. Các effect mirror (và state
+`sttApiKey`/`sttBaseUrl` giờ không dùng nữa) bị bỏ hẳn thay vì vá lại: HAL đã
+tự fallback key/base-URL `tts`/`stt` về của LLM khi gửi rỗng (`_cfg_fallback`
+trong `hal/routes/voice.py` — xem `docs/os-server.md`), nên wizard chỉ gửi
+đúng cái operator thật sự gõ (hoặc không gửi gì) và để backend tự fallback.
+`pages/settings/SettingsPanel.tsx` có cơ chế mirror tương tự cho field
+key/URL TTS/STT (hiển thị) của riêng nó; ở đó cơ chế được giữ lại nhưng đổi từ
+"field đích đang rỗng" sang cờ "touched" tường minh cho từng field, chỉ set
+bởi `onChange` của chính field đó — bug ký tự-đầu-tiên y hệt cũng xảy ra ở
+đây, vì `llmUrl`/`llmApiKey` cũng là input hiển thị trong Settings.
+
+### Bước Wi-Fi — submit khi đã ở đúng SSID mục tiêu
+
+Validate submit cuối cùng của Setup trước đây luôn đòi hỏi `password` đã gõ
+(hoặc cờ config `hasNetworkPassword`) vô điều kiện, kể cả khi trạng thái
+"xong" của bước Wi-Fi (xem "Đánh dấu bước Wi-Fi đã xong sau khi reload" ở
+trên) đã xác định thiết bị đang live-associated đúng mạng còn đang được chọn
+trong picker. Cổng submit của `useSetupController.ts` giờ thêm cùng lối thoát
+đó: `wifiConnected && ssid === currentSsid` bỏ qua yêu cầu password. Nửa vế
+`ssid === currentSsid` tự nó có ý nghĩa riêng — operator có thể đổi picker
+sang mạng **khác** sau khi probe live đã resolve `wifiConnected`, và mạng đó
+vẫn cần password.
+
 ### Deep-link vào một bước qua URL hash
 
 Một URL kiểu `http://<lan_ip>/setup?<params>#voice` phải mở thẳng tab **Voice**.

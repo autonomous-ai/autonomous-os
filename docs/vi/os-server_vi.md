@@ -26,6 +26,7 @@
 |--------|----------|-------|
 | POST | `/api/device/setup` | Cấu hình WiFi + LLM + channel + MQTT (async, trả về ngay) |
 | POST | `/api/device/channel` | Thay đổi messaging channel |
+| GET | `/api/device/voices` | Proxy tới `GET /voice/voices` của HAL. Query: `provider?` (mặc định `openai`), `lang?`, `model?` — **không đọc gì khác từ query**. Route này không yêu cầu xác thực, nên TTS host **không bao giờ** lấy từ caller: với `provider=openai` nó đến từ `config.TTSBaseURL` (fallback `config.LLMBaseURL`), còn `model` fallback về `config.TTSModel`. Cũng không chuyển credential nào sang HAL — HAL tự đọc `tts_api_key` / `llm_api_key` từ chính `config.json` đó. Nếu cho phép `base_url` từ query, thiết bị sẽ gửi credential TTS tới host tùy ý (SSRF + lộ key). Hệ quả: base URL vừa sửa trên UI nhưng chưa Save thì chưa được probe; trước đó endpoint trả về danh sách voice tĩnh. |
 
 ### Device Timezone (Múi giờ)
 
@@ -326,10 +327,19 @@ Cần sensing có camera (InsightFace). Mặc định ảnh người đã đăng
 
 | Method | Endpoint | Mô tả |
 |--------|----------|-------|
-| POST | `/voice/start` | Start voice pipeline (Deepgram STT + TTS) |
+| POST | `/voice/start` | Start voice pipeline. Body fields (đều tùy chọn, để trống thì fallback về key tương ứng trong `config.json` qua `_cfg_fallback` — dành cho os-server cũ chưa gửi các field này): `stt_provider` (`""` legacy \| `autonomous` \| `deepgram` \| `openai`), `stt_model`, `stt_language`, `tts_model`, cộng các field key/base-URL/voice/provider sẵn có. Xem "Chọn provider STT/TTS" bên dưới. |
 | POST | `/voice/stop` | Stop voice pipeline |
 | POST | `/voice/speak` | TTS — chuyển text thành giọng nói. Body fields: `text`, `voice?`, `interruptible?`, `provider?`, `tts_api_key?`, `tts_base_url?`, `cached?` (dùng WAV cache, render+save khi miss), `prerender?` (render+save không play — warmup lúc boot) |
 | GET | `/voice/status` | voice_available, voice_listening, tts_available, tts_speaking |
+| GET | `/voice/voices` | Danh sách voice TTS. Query: `provider?`, `lang?` (BCP-47, lọc ElevenLabs theo bucket ngôn ngữ), `model?`. **TTS host được resolve phía server từ config (`tts_base_url` → `llm_base_url`); mọi `base_url` do caller cung cấp đều bị bỏ qua** (phòng thủ nhiều lớp chống SSRF + lộ key — quan trọng khi HAL bị truy cập trực tiếp trên bind `0.0.0.0` của `make hal-dev`). Với `openai`, sau đó truy vấn `GET {base_url}/v1/audio/voices?model=<model>` của host đó để lấy danh sách voice thật (vd một instance oMLX local); fallback về danh sách 9 tên OpenAI cứng khi response rỗng/thiếu hoặc lỗi. Credential đọc từ `config.json` (`tts_api_key` → `llm_api_key`), không bao giờ qua query param. |
+
+### Chọn provider STT/TTS
+
+`select_stt_provider()` (`hal/drivers/voice/stt/select.py`) là policy dùng chung cho cả auto-start lúc boot của HAL (`hal/server.py`, đọc thẳng `config.json`) và `POST /voice/start` (đọc từ body request): `stt_provider=""` chọn Deepgram nếu có cấu hình key Deepgram, không thì chọn Autonomous (hành vi legacy); `"deepgram"`/`"autonomous"`/`"openai"` ép buộc provider đó. `stt_api_key`/`stt_base_url` fallback về key/URL LLM khi để trống, dù chọn provider nào.
+
+`OpenAISTT` (`hal/drivers/voice/stt/openai.py`) nói chuyện với bất kỳ endpoint tương thích OpenAI nào qua `POST {base_url}/audio/transcriptions` (model mặc định `whisper-1`). Khác với Deepgram/Autonomous, nó **chỉ chạy theo lô (batch)**: audio được buffer trong bộ nhớ và POST một lần dưới dạng file WAV khi session đóng, trả về một transcript cuối cùng — không có kết quả partial/interim. `_ensure_openai_v1()` (`hal/drivers/voice/tts/openai.py`, dùng chung cho TTS và STT) thêm `/v1` vào bất kỳ base URL không rỗng nào chưa kết thúc bằng `/v1` (trước đây chỉ áp dụng riêng cho `campaign-api.autonomous.ai`).
+
+Việc tự suy ra SKU Deepgram từ `stt_language` (`sttModelForLanguage`, `system/device/config_update.go` / `system/device/setup.go`) chỉ chạy khi `STTProvider` hiệu lực là `""` (legacy) hoặc `"autonomous"` — provider `openai`/`deepgram` tự quản lý tên model riêng và không bao giờ bị ghi đè bởi logic này. `stt_model` tường minh từ caller luôn thắng khi `STTProvider == "openai"`.
 
 ### System
 

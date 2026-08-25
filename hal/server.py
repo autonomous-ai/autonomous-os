@@ -257,12 +257,14 @@ if _simulation and "sensing" in _declared:
 VoiceService = None
 DeepgramSTT = None
 AutonomousSTT = None
+select_stt_provider = None
 TTSService = None
 PROVIDER_OPENAI = "openai"  # fallback when the TTS import below is skipped/unavailable
 if "voice" in _declared:
     try:
         from hal.drivers.voice.stt import AutonomousSTT
         from hal.drivers.voice.stt import DeepgramSTT
+        from hal.drivers.voice.stt import select_stt_provider
         from hal.drivers.voice.voice_service import VoiceService
     except ImportError as e:
         logger.warning(f"Voice service not available: {e}")
@@ -599,6 +601,10 @@ async def lifespan(app: FastAPI):
         llm_url = os_cfg.get("llm_base_url", "")
         voice = os_cfg.get("tts_voice", "") or TTS_VOICE
         tts_provider = os_cfg.get("tts_provider", PROVIDER_OPENAI)
+        tts_model = (os_cfg.get("tts_model") or "").strip()
+        tts_kwargs = {}
+        if tts_model:
+            tts_kwargs["model"] = tts_model
         if llm_key and llm_url and TTSService and not state.tts_service:
             state.tts_service = TTSService(
                 api_key=llm_key,
@@ -612,6 +618,7 @@ async def lifespan(app: FastAPI):
                 on_speak_start=state._on_tts_speak_start,
                 on_speak_end=state._on_tts_speak_end,
                 provider=tts_provider,
+                **tts_kwargs,
             )
             logger.info(
                 "TTSService auto-started (provider=%s, output_device=%s, available=%s)",
@@ -622,23 +629,21 @@ async def lifespan(app: FastAPI):
         if VoiceService and not state.voice_service:
             agent_name = state._read_agent_name()
             wake_words = state._build_wake_words(agent_name)
-            stt_provider = None
             logger.info("STT selection: deepgram_key=%s, DeepgramSTT=%s, AutonomousSTT=%s, agent=%s",
                         bool(dgk), DeepgramSTT is not None, AutonomousSTT is not None, agent_name)
             stt_keywords = state._stt_boost_terms()
-            if dgk and DeepgramSTT:
-                stt_provider = DeepgramSTT(api_key=dgk, keywords=stt_keywords)
-            elif llm_key and llm_url and AutonomousSTT:
-                stt_model = (os_cfg.get("stt_model") or "").strip() or None
-                stt_language = (os_cfg.get("stt_language") or "").strip() or None
-                stt_kwargs = {}
-                if stt_model:
-                    stt_kwargs["model"] = stt_model
-                if stt_language:
-                    stt_kwargs["language"] = stt_language
-                stt_provider = AutonomousSTT(
-                    api_key=llm_key, base_url=llm_url,
-                    keywords=stt_keywords, **stt_kwargs
+            stt_provider = None
+            if select_stt_provider:
+                stt_provider = select_stt_provider(
+                    stt_provider=os_cfg.get("stt_provider", ""),
+                    deepgram_api_key=dgk,
+                    llm_api_key=llm_key,
+                    llm_base_url=llm_url,
+                    stt_api_key=os_cfg.get("stt_api_key", ""),
+                    stt_base_url=os_cfg.get("stt_base_url", ""),
+                    stt_model=(os_cfg.get("stt_model") or "").strip(),
+                    stt_language=(os_cfg.get("stt_language") or "").strip(),
+                    keywords=stt_keywords,
                 )
             if stt_provider:
                 state.voice_service = VoiceService(

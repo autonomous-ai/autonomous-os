@@ -181,6 +181,7 @@ export function TTSSection({
   // server-driven provider list is a drop-in swap.
   ttsProvider, setTtsProvider, ttsProviders: _ttsProviders,
   ttsVoice, setTtsVoice, ttsVoices,
+  ttsModel, setTtsModel,
   sttLanguage,
 }: {
   active: boolean;
@@ -192,6 +193,7 @@ export function TTSSection({
   ttsProviders: string[];
   ttsVoice: string; setTtsVoice: (v: string) => void;
   ttsVoices: string[];
+  ttsModel: string; setTtsModel: (v: string) => void;
   sttLanguage: string;
 }) {
   // Choice is stored as state (not derived) so the operator can pick
@@ -228,7 +230,14 @@ export function TTSSection({
   // English names, and vice-versa. OpenAI's voices are language-agnostic,
   // so the language dropdown is a no-op there (voice list stays the same).
   const [lang, setLang] = useState<Lang>("");
-  const voices = voicesFor(vendor, lang, sttLanguage);
+  // For OpenAI, prefer the server's live voice list over the hardcoded
+  // OPENAI_VOICES fallback, since a custom OpenAI-compatible endpoint may
+  // expose a different set of voice names. The server queries the SAVED
+  // tts_base_url (never a URL from the browser — that was an SSRF/key-leak
+  // path) with the requested model; see SettingsPanel's refetch effect.
+  // ElevenLabs keeps its curated per-language pool.
+  const liveOpenaiVoices = vendor === "openai" ? ttsVoices : [];
+  const voices = liveOpenaiVoices.length > 0 ? liveOpenaiVoices : voicesFor(vendor, lang, sttLanguage);
 
   const onChoice = (next: ProviderChoice) => {
     setChoice(next);   // always commit the pick — even Custom, so the picker doesn't snap back
@@ -388,6 +397,22 @@ export function TTSSection({
         placeholder={ttsLoaded.apiKey ? "•••••••• saved (click ✎ to rotate)" : "sk-..."}
       />
 
+      {/* 5b. TTS model — only meaningful for OpenAI (elevenlabs has no
+          model concept here). Also feeds the live voice-list query above. */}
+      {vendor === "openai" && (
+        <div style={{ marginBottom: 12 }}>
+          <label htmlFor="tts_model" style={labelStyle}>TTS model</label>
+          <input
+            id="tts_model"
+            type="text"
+            value={ttsModel}
+            onChange={(e) => setTtsModel(e.target.value)}
+            placeholder="tts-1"
+            style={selectStyle}
+          />
+        </div>
+      )}
+
       {/* 6a. Language — filters the Voice list. Session-local (not saved to
           config). Autonomous(ElevenLabs) has distinct voice pools per
           language (English "Rachel" vs Vietnamese "Ngan" vs Chinese "Amy"),
@@ -418,16 +443,29 @@ export function TTSSection({
           (server would 404). */}
       <div style={{ marginBottom: 12 }}>
         <label htmlFor="tts_voice" style={labelStyle}>Voice</label>
-        <select
-          id="tts_voice"
-          value={voices.includes(ttsVoice) ? ttsVoice : (voices[0] ?? "")}
-          onChange={(e) => setTtsVoice(e.target.value)}
-          style={selectStyle}
-        >
-          {(voices.length > 0 ? voices : ttsVoices).map((v) => (
-            <option key={v} value={v}>{displayVoice(v)}</option>
-          ))}
-        </select>
+        {voices.length > 0 ? (
+          <select
+            id="tts_voice"
+            value={voices.includes(ttsVoice) ? ttsVoice : (voices[0] ?? "")}
+            onChange={(e) => setTtsVoice(e.target.value)}
+            style={selectStyle}
+          >
+            {voices.map((v) => (
+              <option key={v} value={v}>{displayVoice(v)}</option>
+            ))}
+          </select>
+        ) : (
+          // No known voice list for this vendor/endpoint — let the operator
+          // type the voice name directly instead of offering an empty picker.
+          <input
+            id="tts_voice"
+            type="text"
+            value={ttsVoice}
+            onChange={(e) => setTtsVoice(e.target.value)}
+            placeholder="alloy"
+            style={selectStyle}
+          />
+        )}
         <TestVoiceButton
           voice={ttsVoice}
           lang={lang || sttLanguage}

@@ -55,7 +55,9 @@ func (h *DeviceMQTTHandler) handleInfo(_ domain.MQTTMessage) error {
 		"local_ip", msg.LocalIP,
 		"tts_provider", msg.TTSProvider,
 		"tts_voice", msg.TTSVoice,
+		"tts_model", msg.TTSModel,
 		"stt_language", msg.STTLanguage,
+		"stt_provider", msg.STTProvider,
 		"timezone", msg.Timezone,
 		"skills", len(msg.Skills),
 	)

@@ -64,7 +64,7 @@ The OS server uses MQTT to communicate with the backend server (status reporting
 `openclaw`. The response also carries these optional fields when known:
 `hal_version`, `openclaw_version`, `hermes_version`, `picoclaw_version`,
 `codex_version`, `claudecode_version`, `opencode_version`, `local_ip`, `tts_provider`, `tts_voice`,
-`stt_language`, `timezone`, `unsupported_channels`, `skills`. `wakeword_enabled` is always
+`tts_model`, `stt_language`, `stt_provider`, `timezone`, `unsupported_channels`, `skills`. `wakeword_enabled` is always
 present and reports the effective top-level wake-word gate from config
 (`true` or `false`; a missing legacy config value reports `false`). `timezone` is the device's
 **live** IANA zone (e.g. `Asia/Ho_Chi_Minh`), read fresh from `/etc/timezone`
@@ -92,8 +92,8 @@ populates it, so `data` results never carry it.
 **HTTP backend ping mirrors these fields.** The device-initiated ping
 (`POST {llm_base}/ping`, built by `system/device.buildPingPayload`, sent via
 `system/beclient`) carries the same device-state fields as this `info` uplink —
-`local_ip`, `device`, `device_id`, `timezone`, `tts_provider`, `tts_voice`,
-`stt_language`, `wakeword_enabled`, `hal_version`, `unsupported_channels` — plus `agent_runtime` and
+`local_ip`, `device`, `device_id`, `timezone`, `tts_provider`, `tts_voice`, `tts_model`,
+`stt_language`, `stt_provider`, `wakeword_enabled`, `hal_version`, `unsupported_channels` — plus `agent_runtime` and
 `agent_runtime_version`. Unlike `info` (which reports every installed backend's
 version side by side), the ping sends **only the active runtime's version**. It
 fires (1) right after WiFi join during setup (status `setting_up`,
@@ -101,6 +101,15 @@ fire-and-forget — publishes `local_ip` before the up-to-2-min agent setup, so
 the Setup-popup rescue described in `docs/setup-flow.md` can work), (2) once
 when setup completes (status `working`), and (3) periodically from the status
 reporter. Fields the backend doesn't consume are simply ignored.
+
+**Skipped for a BYO LLM host with no MQTT configured.** `beclient.Ping`
+(`system/beclient/client.go`) sends nothing — returns `(nil, nil)`, same as the
+existing `base == "" || token == ""` short-circuit — when `config.MQTTEndpoint`
+is empty **and** `llm_base_url`'s host is not `autonomous.ai` or a
+`*.autonomous.ai` subdomain. A device pointed at a self-hosted/BYO LLM host with
+no MQTT relationship to the autonomous backend has nowhere for `/ping` to land
+(it 404s there), so every periodic tick would otherwise fail loudly. The skip is
+logged once per process (`sync.Once`), not once per tick.
 
 The ping also carries **`skills`** — what the active runtime currently has
 installed, the same set the web UI's Manage-skills panel shows
