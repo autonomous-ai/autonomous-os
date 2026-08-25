@@ -188,6 +188,45 @@ func (s *Server) otaVersions(c *gin.Context) {
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(versions))
 }
 
+// otaUpdating lists the components the bootstrap worker is installing right now,
+// so the Versions card can label that row "updating…" while the work runs. Cheap
+// by design (no metadata fetch) — the UI polls it every couple of seconds.
+// GET /api/system/ota-updating
+func (s *Server) otaUpdating(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:8080/updating", nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, serializers.ResponseError("build request: "+err.Error()))
+		return
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, serializers.ResponseError("bootstrap unreachable: "+err.Error()))
+		return
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Updating []string `json:"updating"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&body); err != nil {
+		c.JSON(http.StatusBadGateway, serializers.ResponseError("decode updating: "+err.Error()))
+		return
+	}
+	// Mirror the "agent" alias of /ota-versions so the Agent row can be matched
+	// without the browser knowing which runtime this device runs.
+	runtime := device.CurrentAgentRuntimeFromConfig(s.config)
+	out := append([]string{}, body.Updating...)
+	for _, k := range body.Updating {
+		if k == runtime {
+			out = append(out, "agent")
+			break
+		}
+	}
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(map[string]any{"updating": out}))
+}
+
 // execCommand runs a shell command (sh -c) and returns stdout, stderr, and exit code.
 // POST /api/system/exec  body: {"cmd": "..."}
 func (s *Server) execCommand(c *gin.Context) {

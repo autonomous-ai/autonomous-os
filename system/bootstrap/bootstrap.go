@@ -172,6 +172,11 @@ func (b *Bootstrap) Serve() error {
 	r.GET("/security", func(c *gin.Context) {
 		c.JSON(http.StatusOK, b.securityStatus())
 	})
+	// Cheap sibling of /versions: no metadata fetch, so the web UI can poll it
+	// every couple of seconds while an update runs without hammering the CDN.
+	r.GET("/updating", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"updating": UpdatesInFlight()})
+	})
 	r.GET("/versions", func(c *gin.Context) {
 		c.JSON(http.StatusOK, b.versionReport(c.Request.Context()))
 	})
