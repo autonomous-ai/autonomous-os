@@ -170,8 +170,13 @@ class AnimationService:
     # P gain — match upstream default (16 for all). Higher values cause jerky motion.
     _SERVO_PGAIN = {1: 16, 2: 16, 3: 16, 4: 16, 5: 16}
 
-    def _configure_servos_raw(self):
+    def _configure_servos_raw(self, energize: bool = True):
         """Configure servos directly via scservo_sdk, bypassing lerobot.
+
+        energize=False leaves Torque_Enable at 0: the gains and mode are still
+        written, but the body stays limp. Used when HAL restarts on a sleeping
+        device — a sleeping lamp rests with torque off, and switching it on just
+        to switch it off again a second later is a visible twitch for no gain.
 
         lerobot's bus.write() requires a fully successful connect() handshake.
         When servos are offline, connect() fails and bus.write() raises
@@ -195,8 +200,11 @@ class AnimationService:
                 pk.write1ByteTxRx(ph, sid, 21, pgain)  # P_Coefficient
                 pk.write1ByteTxRx(ph, sid, 23, 0)   # I_Coefficient
                 pk.write1ByteTxRx(ph, sid, 22, 32)  # D_Coefficient
-                pk.write1ByteTxRx(ph, sid, 40, 1)   # Torque_Enable = 1
-                logger.info(f"{motor_name} (ID {sid}): P={pgain}, torque ON")
+                if energize:
+                    pk.write1ByteTxRx(ph, sid, 40, 1)   # Torque_Enable = 1
+                logger.info(
+                    f"{motor_name} (ID {sid}): P={pgain}, torque {'ON' if energize else 'OFF (asleep)'}"
+                )
 
     def start(self, skip_wake: bool = False):
         """skip_wake: come up without the startup pose + idle loop.
@@ -216,7 +224,7 @@ class AnimationService:
 
         # Configure servos directly — works even if connect() partially failed
         try:
-            self._configure_servos_raw()
+            self._configure_servos_raw(energize=not skip_wake)
         except Exception as e:
             logger.warning(f"Raw configure failed: {e}")
 
