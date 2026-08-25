@@ -101,6 +101,12 @@ func TestCompareVersions(t *testing.T) {
 	}
 }
 
+func TestForceTargetAllowedIncludesBootstrap(t *testing.T) {
+	if !forceTargetAllowed[domain.OTAKeyBootstrap] {
+		t.Fatal("bootstrap must be a force-update target so the debug Versions card can trigger its self-update")
+	}
+}
+
 func TestOTAErrorLEDSchedulesRestore(t *testing.T) {
 	devicesDir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(devicesDir, "no-light"), 0o755); err != nil {

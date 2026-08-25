@@ -113,29 +113,25 @@ export function OverviewSection({
   // looked broken: the worker logs "held by min_version floor" and the button
   // just says OK. Fetched once per mount (a human opening a page, not a hot
   // path) and only in debug, where the buttons can appear at all.
-  const [otaUpdatable, setOtaUpdatable] = useState<Record<string, boolean>>({});
+  const [otaVersions, setOtaVersions] = useState<Record<string, { current?: string; update_available?: boolean }>>({});
   const refreshOtaVersions = useCallback(async () => {
     try {
       const r = await fetch(`${API}/system/ota-versions`);
       if (!r.ok) return;
       const j = await r.json();
       if (!j?.data) return;
-      const map: Record<string, boolean> = {};
-      for (const [key, v] of Object.entries(j.data as Record<string, { update_available?: boolean }>)) {
-        // Only "is there a newer build". held_by_floor is deliberately NOT
-        // consulted: that floor stages the automatic fleet rollout, while this
-        // button installs the published version on this one device — the same
-        // thing `software-update <key>` over SSH has always done.
-        map[key] = !!v?.update_available;
-      }
-      setOtaUpdatable(map);
+      setOtaVersions(j.data as Record<string, { current?: string; update_available?: boolean }>);
     } catch { /* bootstrap down → no buttons, same as nothing to update */ }
   }, []);
   useEffect(() => {
     if (!isDebug) return;
     void refreshOtaVersions();
   }, [isDebug, refreshOtaVersions]);
-  const canUpdate = (target: string) => isDebug && !!otaUpdatable[target];
+  // held_by_floor is deliberately NOT consulted: that floor stages the
+  // automatic fleet rollout, while this button installs the published version
+  // on this one device — the same thing `software-update <key>` over SSH has
+  // always done.
+  const canUpdate = (target: string) => isDebug && !!otaVersions[target]?.update_available;
 
   // Which rows are installing right now. Polled from the cheap /ota-updating
   // (no metadata fetch) every 2s while something runs, and every 10s otherwise
@@ -563,6 +559,7 @@ export function OverviewSection({
             <VersionRow name="OS"     color="var(--lm-amber)"  version={sys?.version ?? null}    uptime={sys?.serviceUptime ?? null}                            updateTarget={canUpdate("os-server") ? "os-server" : null} updating={isUpdating("os-server")} onTriggered={onUpdateTriggered} />
             <VersionRow name="HAL"    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={canUpdate("hal") ? "hal" : null} updating={isUpdating("hal")} onTriggered={onUpdateTriggered} />
             <VersionRow name="Agent"  color="var(--lm-purple)" version={oc?.version ?? null}     uptime={oc?.connected ? (oc?.agentUptime ?? null) : null}      updateTarget={canUpdate("agent") ? "agent" : null} updating={isUpdating("agent")} onTriggered={onUpdateTriggered} />
+            {isDebug && <VersionRow name="Bootstrap" color="var(--lm-text-dim)" version={otaVersions.bootstrap?.current ?? null} uptime={null} updateTarget={canUpdate("bootstrap") ? "bootstrap" : null} updating={isUpdating("bootstrap")} onTriggered={onUpdateTriggered} />}
           </div>
         </div>
         </div>
@@ -975,7 +972,7 @@ function VersionRow({ name, color, version, uptime, updateTarget, updating = fal
   color: string;
   version: string | null;
   uptime: number | null;
-  updateTarget: "os-server" | "web" | "hal" | "agent" | null;
+  updateTarget: "os-server" | "bootstrap" | "web" | "hal" | "agent" | null;
   // An install runs for tens of seconds (the component stops, is rebuilt and
   // restarts). Without a label the row just sits there — on HAL it even shows a
   // stale version while /opt/hal does not exist — and the natural reaction is to

@@ -523,8 +523,9 @@ Two different acts, and mixing them up is what made the web button look broken:
 
 The web Versions card's `update` button is `force-update` (via
 `POST /api/system/software-update/:target`). Both are limited to the same target
-allowlist, and `componentInstalled` still refuses a component this device does
-not have.
+allowlist, including `bootstrap`; a Bootstrap update detaches its installer so
+the replacement worker can restart safely. `componentInstalled` still refuses a
+component this device does not have.
 
 ### `GET /versions` (bootstrap, loopback)
 

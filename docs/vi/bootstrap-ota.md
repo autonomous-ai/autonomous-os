@@ -510,7 +510,8 @@ Hai việc khác nhau, và lẫn lộn chúng chính là thứ làm nút web tr�
 
 Nút `update` trong card Versions là `force-update` (qua
 `POST /api/system/software-update/:target`). Cả hai dùng chung allowlist target,
-và `componentInstalled` vẫn từ chối component thiết bị không có.
+bao gồm `bootstrap`; Bootstrap tách installer nền để worker thay thế restart an
+toàn. `componentInstalled` vẫn từ chối component thiết bị không có.
 
 ### `GET /versions` (bootstrap, loopback)
 

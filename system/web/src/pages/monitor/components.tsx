@@ -25,7 +25,7 @@ export function StatusDot({ ok }: { ok: boolean }) {
 // CLI (codex / claudecode / opencode / picoclaw). The browser deliberately does
 // not learn which runtime is active just to build this URL.
 export function SoftwareUpdateButton({ target, label, onTriggered }: {
-  target: "os-server" | "web" | "hal" | "agent";
+  target: "os-server" | "bootstrap" | "web" | "hal" | "agent";
   label: string;
   // Called the moment the POST is accepted. The card needs this because a small
   // component (os-server, web) finishes in a few seconds — faster than the idle
