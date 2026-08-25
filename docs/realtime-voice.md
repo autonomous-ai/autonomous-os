@@ -379,14 +379,19 @@ snapshots normally.
 
 ## Providers
 
-Three interchangeable backends, selected by `HAL_REALTIME_PROVIDER` /
-`realtime.provider` (`none` | `gemini` | `openai` | `qwen`):
+Four backends, selected by `HAL_REALTIME_PROVIDER` / `realtime.provider`
+(`none` | `gemini` | `openai` | `qwen` | `pipecat`). The first three are
+**audio-native** — they take microphone frames and return speech. `pipecat` is
+**cascaded**: HAL keeps its own STT and TTS and pipecat drives only the middle of
+the turn. It shares nothing with `voice_agent/` and is not a `VoiceAgentBase`;
+see [Pipecat](#pipecat--the-cascaded-provider) below.
 
 | Provider | Class | Threading model | Default model | Sample rate |
 |----------|-------|-----------------|---------------|-------------|
 | Gemini Live | `voice_agent/gemini_live.py` `GeminiLiveAgent` | private asyncio loop on a `gemini-io` thread; send/recv threads submit coroutines via `run_coroutine_threadsafe` | `gemini-2.5-flash-native-audio-preview-12-2025` | 16000 Hz |
 | OpenAI Realtime | `voice_agent/openai_realtime.py` `OpenAIRealtimeAgent` | fully synchronous; one `RealtimeConnection` shared by send/recv threads, serialized by a reentrant lock | `gpt-realtime-2` | 24000 Hz |
 | Qwen Omni Realtime | `voice_agent/qwen_realtime.py` `QwenRealtimeAgent` | fully synchronous; raw `websockets.sync.client` socket shared by send/recv threads, reusing the openai_realtime thread/queue skeleton | `qwen3.5-omni-plus-realtime` | 16000 Hz in / 24000 Hz out |
+| Pipecat (cascaded) | `pipecat_session.py` `PipecatSession` over `hal/pipecat_rt.py` `PipecatAgent` | private asyncio loop on a `pipecat-loop` thread; the public API is sync and queue-based | `llm_model` (no default of its own) | n/a — text in, text out |
 
 Gemini Live uses `google-genai` and keeps its private asyncio loop owned by its
 `gemini-io` thread. Teardown first closes/cancels the provider receive task,
@@ -465,6 +470,171 @@ queue-based contract:
   so a silent/no-response turn falls back to the main agent without long dead-air).
 - `available` ⇔ the websocket/session is connected (`_connected`).
 
+### Pipecat — the cascaded provider
+
+Selected with `realtime.provider = "pipecat"`. The pipeline reduces to
+
+```
+transcript ──▶ LLMContext ──▶ LLM (OpenAI-compatible) ──▶ text chunks
+                               └─ tools ──▶ handled here, or raised to the host
+```
+
+so the audio half of the turn never changes: the same STT produces the
+transcript and the same TTS speaks the reply, sentence by sentence. The turn
+driver is `drivers/voice/_internal/pipecat_turn.py` (`run_pipecat_turn`), the
+cascaded twin of `realtime_turn.py`. It returns the same `RealtimeTurnResult`,
+and it shares the wait filler, the thinking cue and the CoT leak filter with the
+audio-native driver, so both brains feel identical to the user.
+
+What it does **not** have, by construction:
+
+- **No native audio** — the model's voice is never played; the device speaks.
+- **No speech emotion or tone recognition** — the model sees text, not audio.
+  This is the deliberate trade for latency; `express_emotion` still works,
+  driven by the reply's content rather than the speaker's voice.
+- **No `look` / in-session vision** and no look-replay — visual questions
+  delegate to the main agent.
+- **No WS-recovery retry** — there is no long-lived session to lose.
+- **No voice or reasoning knob** — the device TTS owns the voice and the model
+  exposes no reasoning tier, so `ValidateRealtimeKnobs` rejects both.
+
+`PipecatSession` duck-types the slice of `RealtimeOrchestrator` that
+`voice_service` touches during capture (`available`, `prepare_turn`,
+`append_audio`, `send_text`, `sample_rate`, `rebuilding`,
+`wait_until_available`, `save_turn`), so only the turn call branches.
+`append_audio` is a documented no-op: this brain is fed the finished transcript.
+
+Persona and memory come from the **same** gateway-keyed `ContextManagerBase` the
+audio-native providers use, so identity, `summary.md` and the skills catalog are
+identical. Instructions are rebuilt every `HAL_REALTIME_SESSION_MAX_TURNS` turns
+so a rename or new memory lands; between rebuilds the prompt is byte-stable,
+which is what keeps the gateway's prefix cache warm.
+
+**Leaked tool calls.** Prompting alone does not stop a model writing a tool call
+as TEXT instead of calling it (device-observed on `qwen/qwen3.6-35b-a3b`).
+Cascaded has no native audio — every character left in a reply is spoken
+verbatim — so `_repair_leaked_tool_calls` in `pipecat_turn.py` catches
+`[tool_name] {...}` markers before TTS sees them.
+
+`express_emotion` is the only one that can survive as text, and only when the
+emotion has an ElevenLabs delivery-tag equivalent:
+
+| Emotion | Spoken text | Face |
+|---------|-------------|------|
+| `laugh` | `[laughs]` | fires |
+| `excited` | `[excited]` | fires |
+| every other preset (`thinking`, `greeting`, `happy`, …) | **suppressed** | fires |
+| unparseable / other tools | stripped | — |
+
+The suppression matters because the two vocabularies differ: `express_emotion`
+names the device FACE (12 presets), while delivery tags are a smaller set of
+human reactions. `tts/openai.py`'s `_strip_audio_tags` knows only the ElevenLabs
+set, so an unknown bracket word is handed to the synthesizer and read aloud —
+`[thinking]` reached a user that way (2026-08-25). Suppression drops the text,
+never the expression: the face fires on every parseable emotion either way.
+
+Tools: `delegate_to_main` (answered with `run_llm=False` — the turn is over, the
+main agent takes it), `express_emotion` (fire-and-forget on a daemon thread,
+answered with `run_llm=True` so the model still owes the user words), and an
+and a grounded `web_search`, budgeted per turn by `HAL_PIPECAT_SEARCH_BUDGET`.
+
+**`web_search` routes through campaign-api**, at
+`/api/v1/ai/v1/google-search/v1beta/interactions` — so it needs no Google AI
+Studio key: `realtime.pipecat.search_api_key` is blank in the normal case and
+the device key (`llm_api_key`) authenticates as `Authorization: Bearer`. The
+tool is therefore offered on every device that has an LLM key, where it used to
+require an extra credential nobody set.
+
+That endpoint speaks the Gemini **interactions** API, not
+`models/{id}:generateContent`:
+
+```json
+{"model": "gemini-3.5-flash-lite", "input": "who won the euro 2024?",
+ "tools": [{"type": "google_search"}],
+ "system_instruction": "Answer in ONE short factual sentence. …",
+ "generation_config": {"max_output_tokens": 120}}
+```
+
+Three things it does not forgive: knobs are **snake_case** (`generationConfig`
+is rejected outright), `system_instruction` is a bare **string** and not
+`{"parts":[…]}`, and `thinking_level` accepts only `high|low|medium` — there is
+no `minimal`. The reply is a `steps` transcript (`thought`, an optional
+`google_search_call`/`google_search_result` pair, then `model_output`), so the
+answer is the text of the `model_output` step; a query answered without
+searching simply has no search step.
+
+Model choice is a latency decision, measured against the proxy on live queries
+(2026-08-24, four grounded questions):
+
+| Model | Wall clock | Notes |
+|-------|-----------|-------|
+| `gemini-3.5-flash-lite` (default) | 2.15–2.24 s | grounded every query |
+| `gemini-3.5-flash` | ~5.6 s | marginal against `search_timeout_s` 6 s |
+| `gemini-3.7-flash` | 2.25–18.38 s | blows the timeout, and returned an **empty** answer once |
+
+Hence flash-lite: a search that lands after the timeout is dead air, and one
+that lands empty is worse — an empty result is reported to the model as a miss
+(`{"error": "search returned nothing…"}`), never as `{"answer": ""}`, so it
+falls back on what it knows instead of re-querying.
+
+**Per-turn metrics.** Each turn logs one line at INFO:
+
+```
+[pipecat] ttft 0.62s | wait 0.00s | server 0.61s | stream 0.01s |
+          prompt 38.3k chars/10866 tok | out 11 tok | payload 40.8 KB
+```
+
+| Field | Meaning |
+|-------|---------|
+| `ttft` | transcript queued → first text frame out |
+| `wait` | time inside the pipeline before the request went out (aggregation) |
+| `server` | request sent → response headers: network RTT + prefill |
+| `stream` | headers → first token |
+| `prompt` | context text size, and prompt tokens the server billed |
+| `out` | completion tokens, with `(N reasoning)` when reported |
+| `images` | image parts in the context (omitted when none) |
+| `payload` | bytes actually written on the wire, measured by an httpx request hook |
+| `N requests` | shown only when a turn made more than one call |
+
+Token counts and payload bytes are **turn totals, not per-request**: answering a
+tool call costs a second request that re-sends the whole prompt, so an
+`express_emotion` turn roughly doubles both. That is the visible price of the
+tool, and the reason the counters accumulate rather than overwrite.
+
+**Upstream of the brain.** Those metrics start when `run_turn()` is called, so
+they say nothing about the wait between the user finishing their sentence and
+the request leaving the device. `_stream_session` logs that separately, once per
+turn that produced a transcript:
+
+```
+TURN LATENCY — STT final → brain 3.41s (silence-wait 2.02s, stt-close 0.11s,
+              speaker-id 1.24s, ctx 0.04s)
+```
+
+| Field | Meaning |
+|-------|---------|
+| `STT final → brain` | first final STT result → the turn driver is called |
+| `silence-wait` | the capture loop still running on `HAL_SILENCE_TIMEOUT` after the text already existed |
+| `stt-close` | `stt_session.close()` — `CloseStream` plus the receive-thread join |
+| `speaker-id` | end-of-capture work: buffer finalize, empty-STT noise guard, and the speaker-ID prepass (on-device preprocessing + the `/embed` round trip) |
+| `ctx` | deferred realtime flush, speaker correction, `[TURN CONTEXT]` build |
+
+Every segment is on the capture thread and strictly before the LLM request, so
+whatever dominates this line is dead air the user hears.
+
+`cached` (prefix-cache hits) appears only when the endpoint returns
+`prompt_tokens_details.cached_tokens`, and `reasoning` only with
+`completion_tokens_details.reasoning_tokens`. Both are mapped by pipecat; a
+gateway that omits them simply leaves the field out of the line.
+
+**Dependency note.** `pipecat-ai` is not a HAL dependency and pins
+`onnxruntime~=1.24.3`, which would downgrade the 1.27.x the device uses for
+TEN-VAD and insightface. Install it with `--no-deps` plus the modules pipecat
+imports at package load (`loguru`, `pyloudnorm`, `soxr`, `resampy`, `markdown`,
+`nltk`, `num2words`, `defusedxml`, `docopt`) so onnxruntime is left alone.
+`PipecatAgent.start()` returns `False` when the package is missing, and the
+provider then falls back to the main agent instead of failing the turn.
+
 ### OpenAI connection safety
 
 The OpenAI agent shares a single `RealtimeConnection` between its send and recv
@@ -540,8 +710,19 @@ assembled per agent gateway (`HAL_AGENT_GATEWAY`):
 and summarization; subclasses implement `load_device_context`,
 `load_device_memory`, `load_skills_catalog`, and `summarize_device_memory`.
 Base prompts live in `resources/` (`system_prompt.md` plus per-provider
-`system_prompt_openai.md` / `system_prompt_gemini.md` / `system_prompt_qwen.md`,
-registered in the context manager's `PROVIDER_PROMPT_PATHS` map).
+`system_prompt_openai.md` / `system_prompt_gemini.md` / `system_prompt_qwen.md` /
+`system_prompt_pipecat.md`, registered in the context manager's
+`PROVIDER_PROMPT_PATHS` map). `PipecatSession` passes `provider="pipecat"` to
+the context manager regardless of which agent is actually driving the turn
+(the pipecat framework or `CascadedAgent`), so both cascaded brains share
+`system_prompt_pipecat.md`. It follows Gemini's tighter style rather than the
+older, more verbose OpenAI prompt, plus one addition neither audio-native
+prompt needs: since a cascaded brain has no native voice, every character of
+its reply is spoken verbatim by TTS, so a malformed tool-call attempt that
+leaks into `content` — e.g. a model writing `[express_emotion] {"emotion":
+"curious"}` as text instead of a real function call — gets read aloud in
+full. The prompt bans this shape by name with a worked WRONG/RIGHT example
+(device-observed on `qwen/qwen3.6-35b-a3b`, 2026-08-24).
 
 ### Memory & summarization
 
@@ -763,8 +944,8 @@ spurious HAL restart on the next boot after an os-server-only field changes.
 
 Modelled in Go at `system/server/config/realtime.go`; read in HAL at
 `hal/config.py`. Shared fields sit at the top; per-provider knobs live in
-`gemini` / `openai` / `qwen` sub-objects, with `provider` selecting the active
-one (`none` or absent → realtime off). Empty `api_key` / `base_url` fall back to
+`gemini` / `openai` / `qwen` / `pipecat` sub-objects, with `provider` selecting
+the active one (`none` or absent → realtime off). Empty `api_key` / `base_url` fall back to
 `llm_api_key` / `llm_base_url` — **except qwen**: its credentials are its own
 (`realtime.qwen.api_key` / `realtime.qwen.base_url`, Go struct `QwenRealtime`),
 with deliberately **no fallback** to the shared `realtime.api_key`/`base_url` or
@@ -772,6 +953,28 @@ with deliberately **no fallback** to the shared `realtime.api_key`/`base_url` or
 through the `campaign-api` proxy. Set them via `realtime.qwen.*` in config.json
 or via env on the device (`DASHSCOPE_API_KEY`, `HAL_QWEN_REALTIME_BASE_URL` in
 `/opt/hal/.env`); with neither set the WS handshake fails loudly in the hal log.
+
+`pipecat` likewise keeps its own credentials in `realtime.pipecat.*` (Go struct
+`PipecatRealtime`) and ignores the shared `realtime.api_key`/`base_url`, which
+carry the WS-suffixed proxy values. Its endpoint is a plain OpenAI-compatible
+`/v1` host, and `base_url` + `model` default **together** to the autonomous qwen
+route:
+
+| Field | Default when unset |
+|-------|--------------------|
+| `realtime.pipecat.base_url` | `https://campaign-api.autonomous.ai/api/v1/ai/v1/qwen/v1` |
+| `realtime.pipecat.model` | `qwen/qwen3.6-35b-a3b` |
+| `realtime.pipecat.api_key` | `llm_api_key` (the campaign-api device key) |
+
+They default together on purpose: the model is served on that route and **not**
+on the generic `llm_base_url` catalog route, so deriving one from the AI brain
+and not the other is a 404, not a fallback. Only the key still derives — the
+route authenticates with the same device key as TTS/STT, sent by the OpenAI SDK
+as `Authorization: Bearer` (probed 2026-08-24: `/qwen/v1/models` and
+`/qwen/v1/chat/completions` answer `401 {"error":{"message":"Missing or invalid
+API key."}}` unauthenticated, where an unknown route answers 404). With no
+base_url or model resolvable, `PipecatSession.start()` logs and stays
+unavailable, and turns fall through to the main agent.
 
 > **Leave `base_url` blank unless you have a non-proxy endpoint.** (Applies to
 > gemini/openai; qwen never derives from `llm_base_url` — it uses its own
@@ -791,7 +994,8 @@ or via env on the device (`DASHSCOPE_API_KEY`, `HAL_QWEN_REALTIME_BASE_URL` in
     "provider": "gemini",
     "gemini": { "model": "gemini-3.1-flash-live-preview", "voice": "Kore", "thinking_level": "MINIMAL" },
     "openai": { "model": "gpt-realtime-2", "voice": "alloy", "reasoning_effort": "minimal" },
-    "qwen": { "model": "qwen3.5-omni-plus-realtime", "voice": "Ethan", "api_key": "sk-…", "base_url": "wss://…" }
+    "qwen": { "model": "qwen3.5-omni-plus-realtime", "voice": "Ethan", "api_key": "sk-…", "base_url": "wss://…" },
+    "pipecat": { "model": "qwen/qwen3.6-35b-a3b", "base_url": "https://…/v1", "api_key": "…" }
   }
 }
 ```
@@ -847,7 +1051,7 @@ is a top-level `config.json` flag:
 | `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `20` | Idle seconds for the short post-command focus window. Each accepted `voice_command` or `voice_followup` refreshes it. `0` disables follow-ups and requires a wake phrase for every mic session. Ignored when `wakeword` is false. |
 | `HAL_SILENCE_VAD_ENABLED` | `true` | Require Silero to confirm speech before the end-of-turn silence clock is refreshed. RMS remains the cheap pre-gate; set `false` to fall back to pure-RMS silence detection. |
 | `HAL_SILENCE_VAD_WINDOW_FRAMES` | `3` | Number of frames batched per Silero run for that check — Silero costs ~20 ms/frame on ARM and its LSTM needs more than one 64 ms frame to settle. |
-| `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `qwen` |
+| `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `qwen` \| `pipecat` |
 | `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = manual activity detection) |
 | `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Max seconds `receive()` waits for the next output event before ending a silent turn (fallback to main agent) |
 | `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` | `20.0` | Silent-turn watchdog used instead of the default for turns where a `look` fired (per-turn, via `extend_recv_timeout()`). Gemini's forced thinking over a text-dense frame can stay silent >8 s right before the answer — the default watchdog was killing those turns. Raising it delays the look-frame handoff, so keep `HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S` above it |
@@ -878,6 +1082,19 @@ is a top-level `config.json` flag:
 | `HAL_QWEN_REALTIME_BASE_URL` | — | DashScope workspace WS host; overrides `realtime.qwen.base_url`. Never derived from `llm_base_url` |
 | `HAL_QWEN_REALTIME_MODEL` | `qwen3.5-omni-plus-realtime` | turbo is legacy: no function calls, ignores turn context |
 | `HAL_QWEN_REALTIME_VOICE` | `Ethan` | 3.5-plus: also `Serena`; turbo-only: `Cherry` \| `Chelsie` |
+| `HAL_PIPECAT_BASE_URL` | autonomous qwen route | OpenAI-compatible `/v1` host; overrides `realtime.pipecat.base_url` |
+| `HAL_PIPECAT_API_KEY` | `llm_api_key` | Overrides `realtime.pipecat.api_key` |
+| `HAL_PIPECAT_MODEL` | `qwen/qwen3.6-35b-a3b` | Overrides `realtime.pipecat.model` |
+| `HAL_PIPECAT_GEMINI_KEY` | `llm_api_key` | Credential for `web_search`. Normally unset — the campaign-api proxy takes the device key, so the tool is always offered. Set it only alongside a non-proxy `HAL_PIPECAT_SEARCH_BASE_URL` |
+| `HAL_PIPECAT_SEARCH_BASE_URL` | campaign-api google-search route | `web_search` endpoint (Gemini interactions API); overrides `realtime.pipecat.search_base_url` |
+| `HAL_PIPECAT_GEMINI_SEARCH_MODEL` | `gemini-3.5-flash-lite` | Grounding model. `gemini-3.7-flash` measured 2.25–18.38 s and one empty answer — too slow for a spoken turn |
+| `HAL_PIPECAT_SEARCH_BUDGET` | `2` | Max `web_search` calls per turn |
+| `HAL_PIPECAT_SEARCH_TIMEOUT_S` | `10` | Per-search deadline. Measured on lamp-ee17 (2026-08-25, n=12): the grounded route runs median 3.9–8.1 s with a 21 s tail, while the chat endpoint on the same proxy host answers in 0.9 s — the search route is the slow part, not the device. A timeout is worse than a wait: the tool reports unavailable and the model answers from stale knowledge, so the user hears a confident wrong fact |
+| `HAL_PIPECAT_MAX_TOKENS` | `512` | Caps generated tokens — **includes tool-call arguments**, so a small budget truncates the JSON and loses the turn |
+| `HAL_PIPECAT_MAX_HISTORY` | `128` | In-session messages kept before trimming; durable memory rides in the system prompt |
+| `HAL_PIPECAT_HTTP2` | `true` | HTTP/2 to the gateway |
+| `HAL_PIPECAT_TURN_TIMEOUT_S` | `20` | Per-turn watchdog |
+| `HAL_PIPECAT_LOG_LEVEL` | `WARNING` | pipecat logs through loguru at DEBUG by default, which floods the device journal with per-frame lines |
 | `HAL_REALTIME_MEMORY_PATH` | `<workspace>/realtime/memory.jsonl` | |
 | `HAL_REALTIME_MAX_MEMORY_ENTRIES` / `_TRIM_KEEP` | `1000` / `500` | |
 | `HAL_REALTIME_SUMMARIZER_ENABLED` | `true` | |
@@ -898,3 +1115,6 @@ is a top-level `config.json` flag:
 | `models/`, `enums/` | Input/output/event types, provider + gateway enums |
 | `resources/` | System prompts (shared + per-provider) |
 | `../voice/voice_service.py` | Integration: streams mic audio, consumes output, routes delegate/handled |
+| `pipecat_session.py` | Cascaded brain: owns the `PipecatAgent`, reuses the context manager, duck-types the capture surface |
+| `../../pipecat_rt.py` | Standalone pipecat engine (`PipecatAgent`): pipeline build, tool bridging, per-turn metrics. Runnable on its own: `python -m hal.pipecat_rt` |
+| `../voice/_internal/pipecat_turn.py` | Cascaded turn driver (`run_pipecat_turn`) — the text twin of `realtime_turn.py` |

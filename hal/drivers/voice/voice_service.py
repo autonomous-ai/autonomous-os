@@ -46,6 +46,7 @@ from hal.drivers.voice._internal.realtime_turn import (
     should_defer_speaker_id_prepass,
     should_dispatch_to_main,
 )
+from hal.drivers.voice._internal.pipecat_turn import run_pipecat_turn
 from hal.drivers.voice._internal.sensing_sender import SensingSender
 from hal.drivers.voice._internal.session_finalize import finalize_session
 from hal.drivers.voice._internal.speaker_decorate import (
@@ -222,11 +223,25 @@ class VoiceService:
         # OS server event sender (with echo similarity filter)
         self._sensing_sender = SensingSender(tts_service=tts_service)
 
-        # Realtime voice agent — parallel audio pipeline (Gemini Live / OpenAI Realtime).
-        self._realtime = RealtimeOrchestrator(
-            gateway=AgentGateway(hal_config.AGENT_GATEWAY),
-            enable_expression=enable_expression,
-        )
+        # Realtime voice agent. Two shapes behind one handle: the audio-native
+        # providers (Gemini Live / OpenAI Realtime / Qwen Omni) stream mic frames,
+        # while pipecat/cascaded take the finished STT transcript. Both
+        # answer the same capture-path surface, so only the turn driver branches.
+        provider: str = hal_config.REALTIME_PROVIDER.strip().lower()
+        self._cascaded: bool = provider in ("pipecat", "cascaded")
+        if self._cascaded:
+            from hal.realtime.pipecat_session import PipecatSession
+
+            self._realtime = PipecatSession(
+                gateway=AgentGateway(hal_config.AGENT_GATEWAY),
+                enable_expression=enable_expression,
+                provider=provider,
+            )
+        else:
+            self._realtime = RealtimeOrchestrator(
+                gateway=AgentGateway(hal_config.AGENT_GATEWAY),
+                enable_expression=enable_expression,
+            )
 
         # Hook into TTS on_speak_end to feed spoken text back to the realtime agent.
         # With turn_complete=False on text inputs, this won't trigger a standalone response.
@@ -1076,6 +1091,10 @@ class VoiceService:
         # either shape can arm the gate as soon as the alias is complete.
         wake_partial_hypothesis = [""]
         wake_final_hypothesis = [""]
+        # Monotonic stamp of the FIRST final STT result — the moment this turn's
+        # text exists. Everything after it and before the brain request is dead
+        # air the user hears; see the TURN LATENCY line in the finally block.
+        first_final_ts = [0.0]
 
         def wake_partial_candidate(text: str) -> str:
             wake_partial_hypothesis[0] = merge_stt_hypothesis(
@@ -1203,6 +1222,8 @@ class VoiceService:
                     final_segments.append(seg)
             last_partial[0] = ""
             final_sent[0] = True
+            if not first_final_ts[0]:
+                first_final_ts[0] = time.monotonic()
 
         rt_audio_buffer: list = []
         # A noise-drop can be rebuilding a clean Gemini session in the
@@ -1551,9 +1572,11 @@ class VoiceService:
             else:
                 logger.error("STT stream error: %s", e)
         finally:
+            t_exit = time.monotonic()
             self._backchannel.reset()
             self._listening = False
             stt_session.close()
+            t_closed = time.monotonic()
             combined, ser_audio_buffer, buf_duration = finalize_session(
                 audio_buffer, last_partial, final_segments, last_speech_idx
             )
@@ -1682,6 +1705,7 @@ class VoiceService:
                     ),
                 )
 
+            t_ident = time.monotonic()
             if defer_speaker_prepass:
                 logger.info(
                     "[realtime] Short transcript — deferring speaker-ID prepass "
@@ -1784,7 +1808,29 @@ class VoiceService:
                 except Exception as e:
                     logger.warning("[realtime] speaker correction send failed: %s", e)
 
-            if realtime_turn_started:
+            # How long the user waited AFTER their words were already text.
+            # The brain's own metrics start here, so without this line the turn
+            # reads as fast while the whole gap sits upstream of it.
+            if first_final_ts[0]:
+                t_brain = time.monotonic()
+                logger.info(
+                    "TURN LATENCY — STT final → brain %.2fs "
+                    "(silence-wait %.2fs, stt-close %.2fs, speaker-id %.2fs, ctx %.2fs)",
+                    t_brain - first_final_ts[0],
+                    t_exit - first_final_ts[0],
+                    t_closed - t_exit,
+                    t_ident - t_closed,
+                    t_brain - t_ident,
+                )
+
+            if realtime_turn_started and self._cascaded:
+                rt = run_pipecat_turn(
+                    self._realtime,
+                    self._tts,
+                    self.strip_rt_markers,
+                    combined,
+                )
+            elif realtime_turn_started:
                 rt = run_realtime_turn(
                     self._realtime,
                     self._tts,
