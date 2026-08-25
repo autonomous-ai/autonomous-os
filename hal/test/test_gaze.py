@@ -2023,3 +2023,32 @@ def test_the_watcher_loop_pans_as_well_as_tilts():
         "tilt runs before pan; each clears its own window and owns the body, so "
         "the order has to be fixed rather than incidental"
     )
+
+
+def test_the_lift_still_happens_when_the_elbow_is_dead(neck, height_store):
+    """elbow_pitch on this unit intermittently ignores its goal.
+
+    It accepts the target, reports no error, and does not move — then works
+    again later. At a weight of 0.90 that took 90% of every correction with it:
+    device-observed, a 15 deg climb step delivering 1.5 deg because only
+    base_pitch's share ever arrived. The lift must not depend on it.
+    """
+    neck.stalls["elbow_pitch.pos"] = (-90.0, 5.0)      # frozen where it starts
+    now = gaze.time.monotonic()
+
+    _fill_dy(-0.5)
+    gaze._maybe_pitch(now)
+    assert neck.base < 10.0, "base_pitch must carry the lift the elbow refused"
+
+    # ...and once benched, the NEXT correction should not budget for it at all.
+    gaze._last_pitch_t = now - 10_000.0
+    base_before = neck.base
+    _fill_dy(-0.5)
+    gaze._maybe_pitch(now + 1.0)
+
+    second = neck.moves[-1]
+    asked_of_elbow = abs(second["elbow_pitch.pos"] - 5.0)
+    asked_of_base = abs(second["base_pitch.pos"] - base_before)
+    assert asked_of_base > asked_of_elbow, (
+        "a benched joint must not keep receiving the biggest share"
+    )

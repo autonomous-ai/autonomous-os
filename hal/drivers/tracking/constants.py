@@ -158,9 +158,23 @@ SACCADE_EXIT_FRAC = 0.12
 # (The comment that used to sit here said "use wrist alone for predictable pitch
 # control", which had not matched PITCH_WEIGHT_WRIST = 0.0 for some time. The
 # device disagrees with it too — see PITCH_TRAVEL_* below.)
-PITCH_WEIGHT_BASE  = 0.10
-PITCH_WEIGHT_ELBOW = 0.90
-PITCH_WEIGHT_WRIST = 0.0
+# elbow_pitch still leads, because on a healthy arm it is the joint that
+# produces most of the vertical movement — device-measured with base and wrist
+# pinned, elbow +1.6 framed the desk and +54.8 framed the ceiling.
+#
+# It no longer takes almost all of it. The elbow on lamp-ac82 is intermittently
+# unresponsive (a hardware fault, not a tuning one): it accepts a goal, reports
+# no error, and simply does not move, then works again later. At 0.90 that took
+# 90% of every correction with it — device-observed, a 15 deg climb step
+# delivering 1.5 deg because only base_pitch's share arrived.
+#
+# Spreading the remainder over both other joints keeps the loop useful while the
+# elbow is out. The landing check already benches a joint that fails to arrive
+# and re-routes the next correction, so this is about not depending on it in the
+# first place rather than about detecting the fault.
+PITCH_WEIGHT_BASE  = 0.20
+PITCH_WEIGHT_ELBOW = 0.60
+PITCH_WEIGHT_WRIST = 0.20
 
 # Travel each pitch joint actually has, measured on lamp-ac82 2026-08-25 by
 # commanding each joint alone and reading the position error `/servo/move`
