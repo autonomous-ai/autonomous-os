@@ -144,6 +144,11 @@ export function OverviewSection({
   // the row picks up its new version and the button disappears.
   const [otaUpdating, setOtaUpdating] = useState<string[]>([]);
   const otaUpdatingRef = useRef<string[]>([]);
+  // Optimistic overlay: keyed by target, value = when the click was accepted.
+  // Held for a few seconds so a component that installs faster than one poll
+  // still flashes the label instead of jumping straight to "done".
+  const [justTriggered, setJustTriggered] = useState<Record<string, number>>({});
+  const pokePollRef = useRef<() => void>(() => {});
   useEffect(() => {
     if (!isDebug) return;
     let cancelled = false;
@@ -162,10 +167,28 @@ export function OverviewSection({
       } catch { /* bootstrap down → treat as "nothing running" */ }
       if (!cancelled) timer = setTimeout(poll, otaUpdatingRef.current.length > 0 ? 2000 : 10000);
     };
+    // Let a click jump the queue instead of waiting out the idle interval.
+    pokePollRef.current = () => { if (timer) clearTimeout(timer); void poll(); };
     void poll();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [isDebug, refreshOtaVersions]);
-  const isUpdating = (target: string) => otaUpdating.includes(target);
+
+  const onUpdateTriggered = useCallback((target: string) => {
+    setJustTriggered((prev) => ({ ...prev, [target]: Date.now() }));
+    pokePollRef.current();
+    // Clear the overlay after the grace window and re-read versions: by then
+    // either the server reports it (label stays via otaUpdating) or it is done.
+    setTimeout(() => {
+      setJustTriggered((prev) => {
+        const next = { ...prev };
+        delete next[target];
+        return next;
+      });
+      void refreshOtaVersions();
+    }, 6000);
+  }, [refreshOtaVersions]);
+
+  const isUpdating = (target: string) => otaUpdating.includes(target) || target in justTriggered;
 
   // Volume slider: local state for smooth dragging, API call only on release
   const [localVolume, setLocalVolume] = useState<number | null>(null);
@@ -536,10 +559,10 @@ export function OverviewSection({
           <div style={{ marginBottom: 10 }}><CardLabel icon={<Tag size={13} />} text="Versions" /></div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <VersionRow name="Host"   color="var(--lm-text)"   version={null}                    uptime={sys?.uptime ?? null}                                   updateTarget={null} />
-            <VersionRow name="Web"    color="var(--lm-teal)"   version={webVersion}              uptime={null}                                                  updateTarget={canUpdate("web") ? "web" : null} updating={isUpdating("web")} />
-            <VersionRow name="OS"     color="var(--lm-amber)"  version={sys?.version ?? null}    uptime={sys?.serviceUptime ?? null}                            updateTarget={canUpdate("os-server") ? "os-server" : null} updating={isUpdating("os-server")} />
-            <VersionRow name="HAL"    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={canUpdate("hal") ? "hal" : null} updating={isUpdating("hal")} />
-            <VersionRow name="Agent"  color="var(--lm-purple)" version={oc?.version ?? null}     uptime={oc?.connected ? (oc?.agentUptime ?? null) : null}      updateTarget={canUpdate("agent") ? "agent" : null} updating={isUpdating("agent")} />
+            <VersionRow name="Web"    color="var(--lm-teal)"   version={webVersion}              uptime={null}                                                  updateTarget={canUpdate("web") ? "web" : null} updating={isUpdating("web")} onTriggered={onUpdateTriggered} />
+            <VersionRow name="OS"     color="var(--lm-amber)"  version={sys?.version ?? null}    uptime={sys?.serviceUptime ?? null}                            updateTarget={canUpdate("os-server") ? "os-server" : null} updating={isUpdating("os-server")} onTriggered={onUpdateTriggered} />
+            <VersionRow name="HAL"    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={canUpdate("hal") ? "hal" : null} updating={isUpdating("hal")} onTriggered={onUpdateTriggered} />
+            <VersionRow name="Agent"  color="var(--lm-purple)" version={oc?.version ?? null}     uptime={oc?.connected ? (oc?.agentUptime ?? null) : null}      updateTarget={canUpdate("agent") ? "agent" : null} updating={isUpdating("agent")} onTriggered={onUpdateTriggered} />
           </div>
         </div>
         </div>
@@ -947,7 +970,7 @@ function ToggleButton({ active, label, onClick, disabled = false }: {
   );
 }
 
-function VersionRow({ name, color, version, uptime, updateTarget, updating = false }: {
+function VersionRow({ name, color, version, uptime, updateTarget, updating = false, onTriggered }: {
   name: string;
   color: string;
   version: string | null;
@@ -958,6 +981,7 @@ function VersionRow({ name, color, version, uptime, updateTarget, updating = fal
   // stale version while /opt/hal does not exist — and the natural reaction is to
   // press the button again, which is how a device lost its runtime.
   updating?: boolean;
+  onTriggered?: (target: string) => void;
 }) {
   // 4-column grid keeps name/version/uptime/button vertically aligned across rows.
   return (
@@ -975,7 +999,7 @@ function VersionRow({ name, color, version, uptime, updateTarget, updating = fal
       <span style={{ display: "flex", justifyContent: "flex-end" }}>
         {updating
           ? <span style={{ fontSize: 9.5, fontWeight: 600, color: "var(--lm-amber)" }} title="Installing — the component restarts when it finishes">updating…</span>
-          : updateTarget && <SoftwareUpdateButton target={updateTarget} label="update" />}
+          : updateTarget && <SoftwareUpdateButton target={updateTarget} label="update" onTriggered={onTriggered} />}
       </span>
     </div>
   );
