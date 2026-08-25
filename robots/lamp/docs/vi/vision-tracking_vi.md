@@ -488,12 +488,18 @@ pha quét chỉ được vào ở nơi có thể thong thả:
 
 `POST /servo/search` — quét và dừng ngay ở đối tượng đầu tiên nhìn thấy.
 
-**Ba điểm dừng, quét từ trái sang phải**, lấy bearing đã ghi nhớ làm tâm: `seed−90°`, `seed`,
-`seed+90°`, và bị kẹp vào giới hạn cơ khí chứ không bị loại bỏ. Thứ tự theo VỊ TRÍ, không theo xác
-suất — trước đây seed được kiểm tra trước rồi lan dần ra hai bên, tìm ra người trong ít điểm dừng nhất
-nhưng khiến đế lắc qua lắc lại quanh tâm. Điều đó không lộ khi mỗi điểm dừng chỉ là một khoảnh khắc
-ngắn; nay đầu đèn ngó quanh ở từng vị trí, những cú đảo chiều ấy trông như bồn chồn chứ không như đang
-tìm. Với ba điểm dừng, seed bị kiểm tra thứ hai thay vì thứ nhất — nhiều nhất là tốn thêm một điểm dừng.
+**Ba điểm dừng: bearing đã ghi nhớ trước, rồi quét từ trái sang phải** — `seed`, `seed−90°`,
+`seed+90°`, bị kẹp vào giới hạn cơ khí chứ không bị loại bỏ. Seed đi trước vì pha quét dừng ngay ở đối
+tượng ĐẦU TIÊN nhìn thấy, mà "đầu tiên" phải là người được hỏi tới: với thứ tự thuần trái-sang-phải,
+pha quét đã tìm thấy một đồng nghiệp ở bàn khác (yaw −102°) trong khi người dùng ngồi ngay tại seed,
+−12°, chỗ mà nó không bao giờ tới. Phần còn lại chạy từ trái sang phải, vì để đế lắc qua lắc lại quanh
+tâm trông như bồn chồn khi đầu đèn cũng đang ngó quanh ở từng điểm dừng. Một lần đảo chiều trên đường
+đi là đủ.
+
+**Kết thúc thì tay dừng ở đâu.** Không tìm thấy ai → quay về đúng tư thế lúc bắt đầu quét, thay vì
+đóng băng ở chỗ cái nhìn cuối cùng bỏ lại. Tìm thấy → đầu được dựng thẳng lại bằng cách xoay ĐẾ đúng
+bằng góc đầu đang nghiêng, nên camera vẫn hướng vào đối tượng mà đầu thì ngay ngắn. Bị huỷ → không di
+chuyển gì cả: một cú nhấn nút nghĩa là "dừng lại", và đi về chỗ cũ là thừa một chuyển động.
 
 **Khi chưa có bearing** — máy mới, hoặc bearing vừa bị reset — pha quét trước hết đưa tay về đúng tư
 thế của bản ghi idle thay vì bắt đầu từ chỗ nó đang đứng. Một vòng lặp vừa dắt đầu đèn đi lòng vòng

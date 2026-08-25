@@ -490,12 +490,19 @@ sweep is only entered where the time is affordable:
 
 `POST /servo/search` — sweeps and stops on the first subject seen.
 
-**Three stops, left to right**, centred on the remembered bearing: `seed−90°`, `seed`, `seed+90°`,
-clamped to the mechanical range rather than dropped. Ordered by position, not likelihood — the seed
-used to come first and the rest alternate outward, which found people in the fewest stops but swung
-the base back and forth across centre. That was invisible when each stop was a brief pause; now that
-the head looks around at every position, the reversals read as agitation rather than searching. With
-three stops the seed is checked second instead of first, so the cost is at most one extra stop.
+**Three stops: the remembered bearing first, then left to right** — `seed`, `seed−90°`, `seed+90°`,
+clamped to the mechanical range rather than dropped. The seed goes first because the sweep stops on
+the *first* subject it sees, and "first" has to mean the person who was asked about: with pure
+left-to-right ordering the sweep found a colleague at another desk (yaw −102°) while the user sat at
+the seed, −12°, which it never reached. Everything after the seed runs left to right, because the base
+swinging back and forth across centre reads as agitation once the head is also looking around at each
+stop. One reversal on the way out is enough.
+
+**Where it leaves the arm.** Nothing found → back to the pose the sweep started from, rather than
+frozen wherever the last look left the head. Found → the head is straightened by turning the *base* as
+far as the head was turned, so the camera keeps pointing at the subject with the head level. Aborted →
+nothing moves: a single click means "stop moving", and travelling home is one more move than was asked
+for.
 
 **With no bearing yet** — a fresh unit, or one whose bearing was reset — the sweep first rests the arm
 on the idle recording's own pose rather than starting from wherever it happens to stand. A loop that

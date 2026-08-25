@@ -135,22 +135,28 @@ def test_stops_overlap_so_nobody_falls_between_them():
     )
 
 
-def test_the_sweep_is_centred_on_the_remembered_bearing():
-    """Ordered by position now, not likelihood — so the seed sits in the middle
-    rather than first. It is still what the sweep is built around."""
+def test_the_sweep_checks_the_remembered_bearing_first():
+    """The sweep stops on the FIRST subject it sees, so "first" has to mean the
+    person who was asked about.
+
+    Device-observed 2026-08-25 with pure left-to-right ordering: it found a
+    person at yaw -102 — a colleague at another desk — while the user sat at the
+    seed, -12, which it never reached. Ordering by position alone answers "is
+    anyone in this room" when the question was "where are YOU".
+    """
     stops = search._stop_list(60.0)
-    assert 60.0 in stops
-    assert stops[len(stops) // 2] == 60.0, "the seed should be the middle stop"
+    assert stops[0] == 60.0, "the likely place must be checked first"
 
 
-def test_the_sweep_runs_left_to_right():
-    """The base used to swing back and forth across centre (seed, +90, -90).
-    That was invisible when each stop was a brief pause; with the head doing a
-    three-look sweep at every position it reads as agitation, not searching.
+def test_everything_after_the_seed_runs_left_to_right():
+    """One reversal on the way out is enough. Alternating outward
+    (seed, +90, -90) swings the base back and forth across centre, which reads
+    as agitation once the head is also looking around at every stop.
     """
     stops = search._stop_list(0.0)
-    assert stops == sorted(stops), f"not left to right: {stops}"
-    assert stops == [-search.STEP_DEG, 0.0, search.STEP_DEG]
+    rest = stops[1:]
+    assert rest == sorted(rest), f"not left to right after the seed: {stops}"
+    assert stops == [0.0, -search.STEP_DEG, search.STEP_DEG]
 
 
 def test_stops_stay_inside_the_mechanical_range():
@@ -258,7 +264,8 @@ def test_with_no_idle_pose_either_the_sweep_starts_where_it_stands():
     """The last resort. A device with neither memory still sweeps rather than
     refusing — half a search beats none."""
     _res, svc = _run(bearing=None, idle_baseline={})
-    assert [h for h in svc.holds if "base_pitch.pos" in h] == []
+    idle_pitch = _FakeSvc.IDLE_BASELINE["base_pitch.pos"]
+    assert [h for h in svc.holds if h.get("base_pitch.pos") == idle_pitch] == []
 
 
 def test_a_confident_bearing_still_seeds_the_sweep():
@@ -346,3 +353,42 @@ def test_looking_around_multiplies_the_stops_not_the_yaw_positions():
         f"{res.stops_visited} stops from {yaw_stops} yaw positions"
     )
     assert yaw_stops == 3, "three yaw positions is the whole point of the wider step"
+
+
+# --- where the sweep leaves the arm --------------------------------------------
+
+
+def test_a_failed_sweep_returns_to_where_it_started():
+    """Nothing found means nothing to look at. Freezing wherever the last look
+    left the head leaves the lamp cocked 45 deg over, staring at a wall."""
+    _res, svc = _run(bearing=None)
+    last = svc.holds[-1]
+    assert last.get("wrist_roll.pos") == pytest.approx(
+        _FakeSvc.IDLE_BASELINE["wrist_roll.pos"]
+    ), f"did not return to the starting pose: {last}"
+
+
+def test_a_successful_sweep_keeps_looking_at_the_subject():
+    """Returning to the seed here would fix the posture and lose the person.
+
+    The head is straightened by turning the BASE as far as the head was turned,
+    so the camera ends up pointing at exactly the same place with the head level.
+    """
+    res, svc = _run(detect_at_stop=1, bearing=None)
+    assert res.found
+    last = svc.holds[-1]
+    assert last.get("wrist_roll.pos") == pytest.approx(0.0), "head left cocked"
+    # roll -45 is the first look, so the base must absorb that -45.
+    assert last["base_yaw.pos"] == pytest.approx(
+        _FakeSvc.IDLE_BASELINE["base_yaw.pos"] + search.ROLL_STOPS[0]
+    )
+
+
+def test_an_abort_leaves_the_arm_exactly_where_it_stopped():
+    """A single click means "stop moving and pay attention to me". Travelling
+    home afterwards is one more move than was asked for."""
+    _res, svc = _run(abort_at_stop=2, bearing=None)
+    idle_roll = _FakeSvc.IDLE_BASELINE["wrist_roll.pos"]
+    assert svc.holds[-1].get("wrist_roll.pos") != pytest.approx(idle_roll), (
+        "an aborted sweep travelled back to its starting pose"
+    )

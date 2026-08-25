@@ -98,18 +98,20 @@ class SearchResult:
 
 
 def _stop_list(seed: float) -> List[float]:
-    """Yaw stops from left to right, centred on the seed.
+    """The seed first, then the remaining stops left to right.
 
-    Ordered by POSITION, not by likelihood. The seed used to come first and the
-    rest alternate outward (seed, +45, -45, +90, -90 ...), which found people in
-    the fewest stops but swung the base back and forth across centre. That was
-    invisible when each stop was a brief pause; now that the head does a
-    three-look sweep at every position, the reversals read as agitation rather
-    than searching.
+    Two things are being bought at once, and they pull against each other.
 
-    The cost of giving that up is small here: with three stops the seed is
-    checked second instead of first, so at worst one extra stop — about two
-    seconds — against a sweep that reads as one deliberate movement.
+    The seed goes first because the sweep stops on the FIRST subject it sees,
+    and "first" should mean the person who was asked about. Device-observed
+    2026-08-25 with pure left-to-right ordering: the sweep found a person at
+    yaw -102 — a colleague at another desk — while the user sat at the seed,
+    -12, which it never reached. Ordering by position alone answers "is anyone
+    in this room" when the question was "where are YOU".
+
+    Everything after that runs left to right, because the base swinging back and
+    forth across centre (seed, +90, -90) reads as agitation once the head is
+    also looking around at each stop. One reversal on the way out is enough.
 
     Clamped rather than dropped at the mechanical limits: with only three stops
     a discarded one leaves a real hole, whereas a clamped one still looks
@@ -118,12 +120,14 @@ def _stop_list(seed: float) -> List[float]:
     """
     seed = max(C.YAW_MIN, min(C.YAW_MAX, seed))
     span = (MAX_STOPS - 1) // 2
-    stops: List[float] = []
+    rest: List[float] = []
     for i in range(-span, span + 1):
+        if i == 0:
+            continue
         y = max(C.YAW_MIN, min(C.YAW_MAX, seed + i * STEP_DEG))
-        if y not in stops:
-            stops.append(y)
-    return sorted(stops)
+        if y != seed and y not in rest:
+            rest.append(y)
+    return [seed] + sorted(rest)
 
 
 def _current_yaw(svc: Any) -> float:
@@ -214,6 +218,48 @@ def _look_at_roll(svc: Any, roll: float) -> bool:
         return False
 
 
+def _restore(svc: Any, pose: Optional[dict]) -> None:
+    """Put the arm back on a remembered pose. Never raises."""
+    if not pose:
+        return
+    try:
+        from hal.drivers.tracking import aim
+
+        current = svc.get_positions()
+        duration = aim.min_move_duration(
+            state.safety_policy, pose, current, MOVE_DURATION_S
+        )
+        svc.move_and_hold(pose, duration=duration)
+    except Exception as e:
+        logger.warning("[search] could not return to the starting pose: %s", e)
+
+
+def _straighten_head_onto(svc: Any, yaw: float, roll: float) -> None:
+    """Keep looking where the subject was found, but with the head level.
+
+    A search that ends the moment it sees someone ends with the head cocked
+    wherever it happened to be looking — up to 45 deg over. Returning to the
+    seed would fix the posture and lose the subject; turning the BASE by as much
+    as the head is turned keeps the camera pointed at exactly the same place
+    while the head comes back to centre.
+    """
+    aimed_at = yaw + roll
+    settled = max(C.YAW_MIN, min(C.YAW_MAX, aimed_at))
+    # Whatever the base cannot absorb stays in the head, so the camera still
+    # points at the subject even when the turn runs into the mechanical limit.
+    try:
+        from hal.drivers.tracking import aim
+
+        target = {"base_yaw.pos": settled, "wrist_roll.pos": aimed_at - settled}
+        current = svc.get_positions()
+        duration = aim.min_move_duration(
+            state.safety_policy, target, current, MOVE_DURATION_S
+        )
+        svc.move_and_hold(target, duration=duration)
+    except Exception as e:
+        logger.warning("[search] could not straighten onto the subject: %s", e)
+
+
 def _rest_on_idle_pose(svc: Any) -> Optional[float]:
     """Stand the arm on the idle recording's own pose, and return its yaw.
 
@@ -283,6 +329,14 @@ def search_for_subject(target: str = "person", detector: Any = None) -> SearchRe
             return SearchResult(False, "no detector")
 
     stops = _stop_list(_seed_yaw(svc))
+    # Captured AFTER seeding, so it is the pose the sweep started from
+    # rather than whatever the arm was doing before — that is where a
+    # failed search should leave the lamp.
+    try:
+        seed_pose = {j: float(v) for j, v in svc.get_positions().items()
+                     if j.endswith('.pos')}
+    except Exception:
+        seed_pose = None
     logger.info("[search] sweeping %d stops for '%s': %s",
                 len(stops), target, [round(s) for s in stops])
 
@@ -323,10 +377,18 @@ def search_for_subject(target: str = "person", detector: Any = None) -> SearchRe
                     "[search] found %s at yaw %+.0f roll %+.0f after %d stop(s)",
                     kind, yaw, roll, visited,
                 )
+                _straighten_head_onto(svc, yaw, roll)
                 return SearchResult(True, f"found {kind}", visited, yaw)
 
         # Head back to centre before the base turns, so the next yaw stop looks
         # where the stop list says it does rather than 45 deg off it.
         _look_at_roll(svc, ROLL_CENTRE)
 
+    # Nothing found, so nothing to look at — go back to where the sweep began
+    # rather than freezing wherever the last look left the head. An ABORT does
+    # not come through here: a button press means stop moving, and travelling
+    # home would be one more move than was asked for.
+    _restore(svc, seed_pose)
+    logger.info("[search] nobody found after %d stop(s) — back to the starting pose",
+                visited)
     return SearchResult(False, "nobody found", visited)
