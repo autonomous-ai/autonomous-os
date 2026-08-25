@@ -275,6 +275,8 @@ class MockMotionService:
             target = dict(preset)
         else:
             target = {**preset, "base_yaw.pos": current.get("base_yaw.pos", preset["base_yaw.pos"])}
+        self._cancel_playback()
+        self._halted = False
         # Same speed ceiling the body obeys: a simulator that swung faster than
         # SAFETY.md allows would show a move the robot cannot make.
         self._travel(target, min_move_duration(safety_policy, target, current, duration))

@@ -122,13 +122,31 @@ class TestMockMotionService(unittest.TestCase):
         self.assertEqual(self.m.calls[-1], ("move_to", {"base_yaw.pos": 20.0}, 0.5))
 
     def test_aim_and_nudge(self):
-        self.assertEqual(self.m.aim("left", 0.3, self.m.get_positions(), None)["base_yaw.pos"], -90.0)
+        from hal.presets import AIM_CENTER, AIM_PRESETS
+
+        left_yaw = AIM_PRESETS["left"]["base_yaw.pos"]
+        self.assertEqual(self.m.aim("left", 0.3, self.m.get_positions(), None)["base_yaw.pos"], left_yaw)
         after = self.m.nudge(-5.0, 10.0, 0.2, self.m.get_positions(), None)
-        self.assertEqual(after["base_yaw.pos"], -95.0)
+        self.assertEqual(after["base_yaw.pos"], left_yaw - 5.0)
         self.assertEqual(after["base_pitch.pos"], 10.0)
         unknown = self.m.aim("sideways", 0.3, self.m.get_positions(), None)
-        self.assertEqual(unknown["base_yaw.pos"], -95.0)
-        self.assertEqual(unknown["elbow_pitch.pos"], 32.0)
+        self.assertEqual(unknown["base_yaw.pos"], left_yaw - 5.0, "unknown aim moved the yaw")
+        self.assertEqual(unknown["elbow_pitch.pos"], AIM_PRESETS[AIM_CENTER]["elbow_pitch.pos"])
+
+    def test_aim_clears_a_previous_halt(self):
+        """A still emotion halts the body (POST /emotion listening); the aim
+        that follows must still move.
+
+        On the physical driver AnimationService.aim goes through move_to, whose
+        _begin_motion clears the halt. The mock travels directly, so it has to
+        clear the flag itself — otherwise every aim after a still emotion is a
+        silent no-op while the route keeps answering "ok"."""
+        from hal.presets import AIM_PRESETS
+
+        self.m.halt()
+        moved = self.m.aim("left", 0.3, self.m.get_positions(), None)
+        self.assertEqual(moved["base_yaw.pos"], AIM_PRESETS["left"]["base_yaw.pos"],
+                         "halt swallowed the aim")
 
     def test_release_travels_before_torque_off(self):
         """The mock reproduces the honest behavior of the real driver: release
