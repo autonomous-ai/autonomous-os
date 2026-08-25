@@ -1596,10 +1596,21 @@ GAZE_YAW_ENABLED: bool = (
 )
 GAZE_YAW_WINDOW_S: float = float(os.environ.get("HAL_GAZE_YAW_WINDOW_S", "12"))
 GAZE_YAW_MIN_SAMPLES: int = int(os.environ.get("HAL_GAZE_YAW_MIN_SAMPLES", "8"))
-# Wider than the pitch dead zone (0.15): a face 20% off centre horizontally is
-# still comfortably framed, whereas 20% high is on its way out of the top.
+# dx runs -0.5 (left edge) to +0.5 (right edge), so this band is a fraction of
+# the FULL frame width: 0.10 lets the face sit a fifth of the way to the edge
+# before the lamp turns.
+#
+# Started at 0.22 on the reasoning that horizontal drift is just someone
+# shifting in a chair and worth ignoring. Device-observed: deliberately moving
+# side to side at a desk peaked at dx=+20%, so the loop measured the movement
+# correctly and declined every time — a threshold that wide barely fires.
+#
+# Narrower than the pitch dead zone (0.15) rather than wider, because the value
+# tested is the MEDIAN over GAZE_YAW_WINDOW_S. The window is what rejects
+# leaning and fidgeting; making the dead zone do that job a second time only
+# costs the correction it was supposed to allow.
 GAZE_YAW_DEAD_ZONE_FRAC: float = float(
-    os.environ.get("HAL_GAZE_YAW_DEAD_ZONE_FRAC", "0.22")
+    os.environ.get("HAL_GAZE_YAW_DEAD_ZONE_FRAC", "0.10")
 )
 # dx is a fraction of frame WIDTH, and the lens spans far more degrees
 # horizontally than the correction needs to be aggressive about.

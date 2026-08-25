@@ -1889,8 +1889,14 @@ def test_a_face_off_to_the_left_turns_the_lamp_the_other_way(pan):
 
 
 def test_a_face_near_enough_to_centre_is_left_alone_horizontally(pan):
-    """Wider dead zone than pitch on purpose: 20% off centre horizontally is
-    still comfortably framed, where 20% high is on its way out of the top."""
+    """Small offsets are left alone; the window handles jitter, this handles aim.
+
+    The band is deliberately narrow (0.10, narrower than pitch's 0.15) because
+    the value tested is a median over GAZE_YAW_WINDOW_S — leaning and fidgeting
+    are already rejected by the window, so widening this only suppresses
+    corrections that should have happened. At 0.22 it declined every real
+    movement measured on the device.
+    """
     _fill_dx(config.GAZE_YAW_DEAD_ZONE_FRAC - 0.01)
     gaze._maybe_yaw(gaze.time.monotonic())
     assert pan.moves == []
