@@ -161,6 +161,9 @@ func (b *Bootstrap) Serve() error {
 	r.GET("/security", func(c *gin.Context) {
 		c.JSON(http.StatusOK, b.securityStatus())
 	})
+	r.GET("/versions", func(c *gin.Context) {
+		c.JSON(http.StatusOK, b.versionReport(c.Request.Context()))
+	})
 	r.POST("/force-check", func(c *gin.Context) {
 		go func() {
 			if err := b.checkOnce(context.Background()); err != nil {

@@ -467,6 +467,15 @@ Bootstrap dùng `lib/hal` để báo trạng thái update qua LED. Xem chi tiế
 | Thành công | Flash xanh lá `(0, 255, 80)`, rồi khôi phục LED look user đã chọn hoặc ambient resting look nếu chưa có user state |
 | Thất bại | Đỏ pulse `(255, 30, 30)` |
 
+### `GET /versions` (bootstrap, loopback)
+
+Trả `{current, target, min_version, update_available, held_by_floor}` cho mọi
+component thiết bị THỰC SỰ có (`componentInstalled`), nên mục CLI chính là runtime
+nó đang chạy, không có cái nào khác. `held_by_floor` nghĩa là đã publish bản mới
+nhưng `min_version` chưa được promote lên — worker sẽ từ chối, nên card Versions
+trên web coi component bị giữ là "không có update". os-server proxy thành
+`GET /api/system/ota-versions`.
+
 ### Phát hiện version hiện tại
 
 | Thành phần | Cách phát hiện |

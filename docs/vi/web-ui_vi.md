@@ -169,6 +169,7 @@ Monitor poll API system/HW mỗi **3 giây**. Flow dùng hybrid theo file: REST 
 | `GET /api/agent/events` | SSE từ monitor bus, giữ để tương thích |
 | `POST /api/agent/restart` | Recovery "start + enable + restart": backend gọi best-effort `systemctl enable <unit>` (để fix vẫn còn sau reboot) rồi gọi `RestartAgent()` của runtime (chạy `systemctl restart <unit>` — start nếu đang stopped). Là nút icon restart nhỏ ở góc phải-dưới card Agent Gateway. |
 | `POST /api/system/force-update` | Kích hoạt kiểm tra OTA qua bootstrap worker (proxy tới `localhost:8080/force-check`) |
+| `GET /api/system/ota-versions` | Trả `{current, target, min_version, update_available, held_by_floor}` cho từng component (proxy bootstrap `/versions`, kèm alias `agent` cho CLI của runtime đang chạy). Card Versions chỉ hiện nút `update` khi `update_available && !held_by_floor` — component bị giữ bởi sàn thì update sẽ bị từ chối, nút trông như hỏng |
 | `POST /api/system/software-update/:target` | Kiểm tra OTA cho một component. `target`: `os-server` \| `web` \| `hal` \| `agent`. **`agent` là target ảo** — os-server tự phân giải sang CLI của runtime đang chạy (`codex`/`claudecode`/`opencode`/`picoclaw`) để trình duyệt không cần biết runtime nào; `hermes` trả 400 (không pin được nên bootstrap không bao giờ auto-apply). Giới hạn 1 lần / target / 30 giây |
 
 > **Lưu ý format**: OS server API trả `{ status: 1, data: <payload>, message: null }` khi thành công.

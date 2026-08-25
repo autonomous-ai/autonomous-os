@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Satellite, Globe, Eye, Volume2, Cpu, Drama, Clapperboard, Bot, Tag, Wifi, LayoutDashboard } from "lucide-react";
 import { S } from "./styles";
-import { HW } from "./types";
+import { API, HW } from "./types";
 
 const EMOTION_EMOJI: Record<string, string> = {
   happy: "😊", curious: "🤔", thinking: "💭", sad: "😢", excited: "🤩",
@@ -107,6 +107,32 @@ export function OverviewSection({
   // so the regular monitor view doesn't ship one-click OTA triggers (rate
   // limit + admin auth still apply on the server side either way).
   const isDebug = new URLSearchParams(window.location.search).get("debug") === "true";
+
+  // Which components actually HAVE a newer build. Without this the card showed
+  // an `update` button on every row, and pressing one with nothing to install
+  // looked broken: the worker logs "held by min_version floor" and the button
+  // just says OK. Fetched once per mount (a human opening a page, not a hot
+  // path) and only in debug, where the buttons can appear at all.
+  const [otaUpdatable, setOtaUpdatable] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    if (!isDebug) return;
+    let cancelled = false;
+    fetch(`${API}/system/ota-versions`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (cancelled || !j?.data) return;
+        const map: Record<string, boolean> = {};
+        for (const [key, v] of Object.entries(j.data as Record<string, { update_available?: boolean; held_by_floor?: boolean }>)) {
+          // held_by_floor: a newer build exists but min_version was not promoted,
+          // so the worker would refuse it — same "button does nothing" trap.
+          map[key] = !!v?.update_available && !v?.held_by_floor;
+        }
+        setOtaUpdatable(map);
+      })
+      .catch(() => { /* bootstrap down → no buttons, same as nothing to update */ });
+    return () => { cancelled = true; };
+  }, [isDebug]);
+  const canUpdate = (target: string) => isDebug && !!otaUpdatable[target];
 
   // Volume slider: local state for smooth dragging, API call only on release
   const [localVolume, setLocalVolume] = useState<number | null>(null);
@@ -477,10 +503,10 @@ export function OverviewSection({
           <div style={{ marginBottom: 10 }}><CardLabel icon={<Tag size={13} />} text="Versions" /></div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <VersionRow name="Host"   color="var(--lm-text)"   version={null}                    uptime={sys?.uptime ?? null}                                   updateTarget={null} />
-            <VersionRow name="Web"    color="var(--lm-teal)"   version={webVersion}              uptime={null}                                                  updateTarget={isDebug ? "web" : null} />
-            <VersionRow name="OS"     color="var(--lm-amber)"  version={sys?.version ?? null}    uptime={sys?.serviceUptime ?? null}                            updateTarget={isDebug ? "os-server" : null} />
-            <VersionRow name="HAL"    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={isDebug ? "hal" : null} />
-            <VersionRow name="Agent"  color="var(--lm-purple)" version={oc?.version ?? null}     uptime={oc?.connected ? (oc?.agentUptime ?? null) : null}      updateTarget={isDebug ? "agent" : null} />
+            <VersionRow name="Web"    color="var(--lm-teal)"   version={webVersion}              uptime={null}                                                  updateTarget={canUpdate("web") ? "web" : null} />
+            <VersionRow name="OS"     color="var(--lm-amber)"  version={sys?.version ?? null}    uptime={sys?.serviceUptime ?? null}                            updateTarget={canUpdate("os-server") ? "os-server" : null} />
+            <VersionRow name="HAL"    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={canUpdate("hal") ? "hal" : null} />
+            <VersionRow name="Agent"  color="var(--lm-purple)" version={oc?.version ?? null}     uptime={oc?.connected ? (oc?.agentUptime ?? null) : null}      updateTarget={canUpdate("agent") ? "agent" : null} />
           </div>
         </div>
         </div>

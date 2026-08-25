@@ -136,6 +136,50 @@ func (s *Server) otaSecurity(c *gin.Context) {
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(status))
 }
 
+// otaVersions reports, per component, what this device runs vs what the OTA feed
+// offers — so the Versions card can show an `update` button ONLY where an update
+// actually exists instead of on every row.
+// GET /api/system/ota-versions
+//
+// Proxies the bootstrap worker (it owns metadata + version detection) and adds
+// one alias: "agent" duplicates the entry of the configured runtime's CLI. The
+// browser therefore never needs to know which runtime this device runs — the
+// same trick POST /software-update/agent uses.
+func (s *Server) otaVersions(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:8080/versions", nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, serializers.ResponseError("build request: "+err.Error()))
+		return
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, serializers.ResponseError("bootstrap unreachable: "+err.Error()))
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		c.JSON(http.StatusBadGateway, serializers.ResponseError("bootstrap versions: "+resp.Status))
+		return
+	}
+	var versions map[string]any
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&versions); err != nil {
+		c.JSON(http.StatusBadGateway, serializers.ResponseError("decode versions: "+err.Error()))
+		return
+	}
+	// Hermes is never auto-applied (see domain/ota.go), so it gets no alias and
+	// the Agent row stays button-less on a Hermes device — matching what
+	// POST /software-update/agent would answer.
+	if runtime := device.CurrentAgentRuntimeFromConfig(s.config); runtime != domain.AgentRuntimeHermes {
+		if entry, ok := versions[runtime]; ok {
+			versions["agent"] = entry
+		}
+	}
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(versions))
+}
+
 // execCommand runs a shell command (sh -c) and returns stdout, stderr, and exit code.
 // POST /api/system/exec  body: {"cmd": "..."}
 func (s *Server) execCommand(c *gin.Context) {

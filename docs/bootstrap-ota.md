@@ -477,6 +477,15 @@ Bootstrap uses `lib/hal` to show update status on LEDs. See [status-led.md](../r
 | Success | Green flash `(0, 255, 80)`, then restore the user-selected LED look or the ambient resting look when none exists |
 | Failure | Red pulse `(255, 30, 30)` |
 
+### `GET /versions` (bootstrap, loopback)
+
+Reports `{current, target, min_version, update_available, held_by_floor}` for every
+component this device actually has (`componentInstalled`), so the agent-CLI entry
+is the runtime it runs and nothing else. `held_by_floor` means a newer build is
+published but `min_version` was not promoted to it — the worker will refuse it,
+which is why the web Versions card treats held components as "no update".
+os-server proxies this as `GET /api/system/ota-versions`.
+
 ### Version Detection Per Component
 
 | Component | How to Detect Current Version |
