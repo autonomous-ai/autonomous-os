@@ -365,6 +365,9 @@ HAL (Python): FastAPI standard JSON responses.
 
 ## Logging
 
+OS Server ghi các record từ mức INFO trở lên ra stdout và file cục bộ xoay vòng
+`/var/log/os-server.log` (mỗi file 2 MB, giữ lại 10 bản sao mới nhất).
+
 Khi có cấu hình `GELF_URL`, OS Server gửi log từ mức INFO trở lên tới collector tập
 trung bằng một worker với queue giới hạn 256 record. Logging không block request path
 và không tạo goroutine theo từng record: khi collector chậm/không hoạt động và queue

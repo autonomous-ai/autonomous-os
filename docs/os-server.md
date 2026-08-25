@@ -368,6 +368,9 @@ HAL (Python): FastAPI standard JSON responses.
 
 ## Logging
 
+OS Server writes INFO-and-higher records to stdout and the rotating local file
+`/var/log/os-server.log` (2 MB per file, retaining the 10 newest backups).
+
 When `GELF_URL` is configured, OS Server ships INFO-and-higher records to that
 central collector through one worker with a bounded queue of 256 records. Logging
 never blocks the request path or creates a goroutine per record: when the collector
