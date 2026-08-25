@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 import hal.app_state as state
+import hal.config as config
 from hal.drivers.tracking import constants as C
 from hal.drivers.tracking import search
 
@@ -121,19 +122,35 @@ def _run(detect_at_stop=None, bearing=None, disabled=False, abort_at_stop=None,
 
 
 def test_stops_overlap_so_nobody_falls_between_them():
-    # Stepping by a full FOV would leave seams; a person straddling two tiles
-    # would be missed by both.
-    assert search.STEP_DEG < C.CAMERA_FOV_DEG, "step must be smaller than the field of view"
+    """Seams are what a sweep must not have — a person straddling two tiles
+    would be missed by both.
+
+    The head covers the gap now, so the base may step further than the lens is
+    wide. What has to hold is that one yaw stop's TOTAL reach (widest roll plus
+    half the field of view) still overlaps the next stop's.
+    """
+    reach = max(search.ROLL_STOPS) + config.LOOK_AIM_FOV_DEG / 2.0
+    assert search.STEP_DEG < 2 * reach, (
+        f"step {search.STEP_DEG} leaves a seam between stops reaching +/-{reach}"
+    )
 
 
-def test_search_starts_at_the_remembered_bearing():
+def test_the_sweep_is_centred_on_the_remembered_bearing():
+    """Ordered by position now, not likelihood — so the seed sits in the middle
+    rather than first. It is still what the sweep is built around."""
     stops = search._stop_list(60.0)
-    assert stops[0] == 60.0, "the likely place must be checked first"
+    assert 60.0 in stops
+    assert stops[len(stops) // 2] == 60.0, "the seed should be the middle stop"
 
 
-def test_search_expands_outward_from_the_seed():
+def test_the_sweep_runs_left_to_right():
+    """The base used to swing back and forth across centre (seed, +90, -90).
+    That was invisible when each stop was a brief pause; with the head doing a
+    three-look sweep at every position it reads as agitation, not searching.
+    """
     stops = search._stop_list(0.0)
-    assert stops[1:3] == [search.STEP_DEG, -search.STEP_DEG]
+    assert stops == sorted(stops), f"not left to right: {stops}"
+    assert stops == [-search.STEP_DEG, 0.0, search.STEP_DEG]
 
 
 def test_stops_stay_inside_the_mechanical_range():
@@ -143,7 +160,17 @@ def test_stops_stay_inside_the_mechanical_range():
 
 
 def test_seed_beyond_the_limit_is_clamped():
-    assert search._stop_list(999.0)[0] == C.YAW_MAX
+    stops = search._stop_list(999.0)
+    assert max(stops) == C.YAW_MAX
+    assert all(C.YAW_MIN <= y <= C.YAW_MAX for y in stops)
+
+
+def test_a_stop_past_the_limit_is_clamped_not_dropped():
+    """With only three stops a discarded one leaves a real hole, whereas a
+    clamped one still looks somewhere useful."""
+    stops = search._stop_list(C.YAW_MAX - 10.0)
+    assert len(stops) == 3, f"a stop was dropped instead of clamped: {stops}"
+    assert C.YAW_MAX in stops
 
 
 def test_stops_on_first_sighting_rather_than_completing_the_sweep():
@@ -314,9 +341,8 @@ def test_looking_around_multiplies_the_stops_not_the_yaw_positions():
     """Three looks per yaw stop, so coverage comes from the head rather than
     from turning the body more often."""
     res, svc = _run(bearing=None)
-    # The first yaw stop needs no move — the seed already left the head there —
-    # so the body turns once fewer than the number of stops it visits.
-    yaw_stops = svc.nudge.call_count + 1
+    yaw_stops = len(search._stop_list(_FakeSvc.IDLE_BASELINE["base_yaw.pos"]))
     assert res.stops_visited == yaw_stops * len(search.ROLL_STOPS), (
         f"{res.stops_visited} stops from {yaw_stops} yaw positions"
     )
+    assert yaw_stops == 3, "three yaw positions is the whole point of the wider step"

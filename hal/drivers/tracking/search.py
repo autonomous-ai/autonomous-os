@@ -43,14 +43,25 @@ from hal.drivers.tracking.aim import _detect_subject, _grab_frame
 
 logger = logging.getLogger(__name__)
 
-# Stops must overlap: stepping by the full FOV would leave seams where a person
-# straddling two tiles is missed by both.
-STEP_DEG: float = 45.0
+# How far the base turns between stops.
+#
+# 90, not 45, because the head now looks around at each stop and covers the gap.
+# With ROLL_STOPS at +/-45 and a ~100 deg lens (LOOK_AIM_FOV_DEG), one yaw stop
+# sees a continuous span of yaw+/-95:
+#
+#   roll -45  ->  yaw-95 .. yaw+5
+#   roll   0  ->  yaw-50 .. yaw+50
+#   roll +45  ->  yaw+5  .. yaw+95
+#
+# So stops at seed and seed+/-90 cover seed+/-185 — the whole circle, with
+# overlap and no seams. Stepping by 45 as before would re-check ground the head
+# has already covered, at three detections a time.
+STEP_DEG: float = 90.0
 # Servos are commanded, then given time to stop ringing before a frame is read.
 # SERVO_SMOOTH_TIME (0.32) is the easing constant this mirrors.
 SETTLE_S: float = 0.35
 MOVE_DURATION_S: float = 0.3
-MAX_STOPS: int = 8
+MAX_STOPS: int = 3
 
 # Where the head looks at each yaw stop, in order: left, straight on, right —
 # then back to centre before the base turns again.
@@ -87,25 +98,32 @@ class SearchResult:
 
 
 def _stop_list(seed: float) -> List[float]:
-    """Yaw stops ordered by likelihood: the seed first, then alternating
-    outward. Clamped to the mechanical range and de-duplicated."""
-    stops: List[float] = []
+    """Yaw stops from left to right, centred on the seed.
+
+    Ordered by POSITION, not by likelihood. The seed used to come first and the
+    rest alternate outward (seed, +45, -45, +90, -90 ...), which found people in
+    the fewest stops but swung the base back and forth across centre. That was
+    invisible when each stop was a brief pause; now that the head does a
+    three-look sweep at every position, the reversals read as agitation rather
+    than searching.
+
+    The cost of giving that up is small here: with three stops the seed is
+    checked second instead of first, so at worst one extra stop — about two
+    seconds — against a sweep that reads as one deliberate movement.
+
+    Clamped rather than dropped at the mechanical limits: with only three stops
+    a discarded one leaves a real hole, whereas a clamped one still looks
+    somewhere useful. De-duplicated, so a seed near a limit yields fewer stops
+    rather than the same stop twice.
+    """
     seed = max(C.YAW_MIN, min(C.YAW_MAX, seed))
-    stops.append(seed)
-    step = 1
-    while len(stops) < MAX_STOPS:
-        added = False
-        for sign in (1, -1):
-            y = seed + sign * step * STEP_DEG
-            if C.YAW_MIN <= y <= C.YAW_MAX and y not in stops:
-                stops.append(y)
-                added = True
-                if len(stops) >= MAX_STOPS:
-                    break
-        if not added:
-            break  # both directions have run off the mechanical limits
-        step += 1
-    return stops
+    span = (MAX_STOPS - 1) // 2
+    stops: List[float] = []
+    for i in range(-span, span + 1):
+        y = max(C.YAW_MIN, min(C.YAW_MAX, seed + i * STEP_DEG))
+        if y not in stops:
+            stops.append(y)
+    return sorted(stops)
 
 
 def _current_yaw(svc: Any) -> float:

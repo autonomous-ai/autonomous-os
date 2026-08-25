@@ -488,9 +488,12 @@ pha quét chỉ được vào ở nơi có thể thong thả:
 
 `POST /servo/search` — quét và dừng ngay ở đối tượng đầu tiên nhìn thấy.
 
-**Thứ tự mới là mấu chốt.** Các điểm dừng được gieo mầm từ bearing đã ghi nhớ rồi lan dần ra hai bên
-(`seed`, `seed±45°`, `seed±90°`, …) thay vì quét từ trái sang phải, để nơi khả dĩ nhất được kiểm tra
-trước. Đó chính là thứ thường biến một pha quét vài giây thành chỉ một điểm dừng.
+**Ba điểm dừng, quét từ trái sang phải**, lấy bearing đã ghi nhớ làm tâm: `seed−90°`, `seed`,
+`seed+90°`, và bị kẹp vào giới hạn cơ khí chứ không bị loại bỏ. Thứ tự theo VỊ TRÍ, không theo xác
+suất — trước đây seed được kiểm tra trước rồi lan dần ra hai bên, tìm ra người trong ít điểm dừng nhất
+nhưng khiến đế lắc qua lắc lại quanh tâm. Điều đó không lộ khi mỗi điểm dừng chỉ là một khoảnh khắc
+ngắn; nay đầu đèn ngó quanh ở từng vị trí, những cú đảo chiều ấy trông như bồn chồn chứ không như đang
+tìm. Với ba điểm dừng, seed bị kiểm tra thứ hai thay vì thứ nhất — nhiều nhất là tốn thêm một điểm dừng.
 
 **Khi chưa có bearing** — máy mới, hoặc bearing vừa bị reset — pha quét trước hết đưa tay về đúng tư
 thế của bản ghi idle thay vì bắt đầu từ chỗ nó đang đứng. Một vòng lặp vừa dắt đầu đèn đi lòng vòng
@@ -499,7 +502,9 @@ cũng là kỹ ở sai nửa không gian. Tư thế idle vốn dĩ là tư thế
 "không chúc xuống sàn" đến từ chính tư thế đó, không cần thêm một phép kiểm tra pitch riêng.
 
 **Ở mỗi điểm dừng, đầu đèn ngó quanh** — `wrist_roll` sang −45°, 0°, rồi +45°, trước khi đế xoay tiếp
-và đầu trở về giữa. Mỗi góc là một điểm DỪNG, không phải lướt qua: đầu còn đang động thì khung hình bị
+và đầu trở về giữa. Đó cũng là lý do đế có thể bước 90° mà không để lại khe hở: với ống kính ~100°,
+một điểm dừng yaw nhìn được liền mạch `yaw±95°` (roll −45 phủ `yaw−95…yaw+5`, roll 0 phủ `yaw±50`,
+roll +45 phủ `yaw−5…yaw+95`), nên ba điểm dừng phủ `seed±185°` — trọn vòng tròn. Mỗi góc là một điểm DỪNG, không phải lướt qua: đầu còn đang động thì khung hình bị
 nhoè và bộ nhận diện bỏ sót thứ đang hiện rành rành trong khung. Dùng `wrist_roll` thay vì xoay
 `base_yaw` nhiều hơn vì hai thứ đó nhìn không giống nhau — xoay cả cây đèn trông như camera đặt trên
 mâm xoay, còn xoay đầu trên một thân đứng yên trông như một sinh vật đang ngó quanh. Roll đảo hướng

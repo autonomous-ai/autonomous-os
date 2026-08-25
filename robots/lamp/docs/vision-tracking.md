@@ -490,9 +490,12 @@ sweep is only entered where the time is affordable:
 
 `POST /servo/search` — sweeps and stops on the first subject seen.
 
-**Ordering is the whole trick.** Stops are seeded from the remembered bearing and expand outward
-(`seed`, `seed±45°`, `seed±90°`, …) rather than sweeping left-to-right, so the likely place is checked
-first. That is what usually turns a multi-second sweep into a single stop.
+**Three stops, left to right**, centred on the remembered bearing: `seed−90°`, `seed`, `seed+90°`,
+clamped to the mechanical range rather than dropped. Ordered by position, not likelihood — the seed
+used to come first and the rest alternate outward, which found people in the fewest stops but swung
+the base back and forth across centre. That was invisible when each stop was a brief pause; now that
+the head looks around at every position, the reversals read as agitation rather than searching. With
+three stops the seed is checked second instead of first, so the cost is at most one extra stop.
 
 **With no bearing yet** — a fresh unit, or one whose bearing was reset — the sweep first rests the arm
 on the idle recording's own pose rather than starting from wherever it happens to stand. A loop that
@@ -502,7 +505,9 @@ lamp is designed to rest in, so "not aimed at the floor" comes from the pose its
 separate pitch check.
 
 **At each stop the head looks around** — `wrist_roll` to −45°, 0°, then +45°, before the base turns
-again and the head returns to centre. Each is a stop, not a pan-through: a head still moving gives a
+again and the head returns to centre. This is why the base can step 90° without leaving seams: with
+a ~100° lens, one yaw stop sees a continuous `yaw±95°` (roll −45 covers `yaw−95…yaw+5`, roll 0 covers
+`yaw±50`, roll +45 covers `yaw−5…yaw+95`), so three stops cover `seed±185°` — the whole circle. Each is a stop, not a pan-through: a head still moving gives a
 blurred frame and a detector that misses what is plainly in view. `wrist_roll` rather than more
 `base_yaw` because the two are not equivalent to watch — turning the whole lamp reads as a camera on a
 turntable, turning the head at a fixed body reads as something looking around. Roll pans the view
