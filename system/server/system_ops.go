@@ -16,6 +16,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"go.autonomous.ai/os/system/device"
+	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/server/serializers"
 )
 
@@ -32,10 +34,30 @@ var (
 const softwareUpdateMinInterval = 30 * time.Second
 
 // softwareUpdate triggers an OTA update for a single named component via the bootstrap worker.
-// POST /api/system/software-update/:target  (target: os-server | web | hal)
+// POST /api/system/software-update/:target
+// target: os-server | web | hal | agent (resolves to the configured runtime's CLI)
 func (s *Server) softwareUpdate(c *gin.Context) {
 	target := c.Param("target")
-	allowed := map[string]bool{"os-server": true, "web": true, "hal": true}
+	// "agent" is a virtual target: the caller (the Versions card) knows there is
+	// an agent CLI but not WHICH one, so the runtime is resolved here rather than
+	// shipped to the browser. It maps to the OTA key of the configured runtime —
+	// they share the same names by construction (domain.AgentRuntime* ==
+	// domain.OTAKey* for the CLIs).
+	if target == "agent" {
+		runtime := device.CurrentAgentRuntimeFromConfig(s.config)
+		// Hermes is excluded on purpose: `hermes update` cannot be pinned to a
+		// version, so bootstrap never auto-applies it (see domain/ota.go). A
+		// button that silently did nothing would be worse than no button.
+		if runtime == domain.AgentRuntimeHermes {
+			c.JSON(http.StatusBadRequest, serializers.ResponseError("hermes cannot be updated over OTA — run `software-update hermes` on the device"))
+			return
+		}
+		target = runtime
+	}
+	allowed := map[string]bool{
+		"os-server": true, "web": true, "hal": true,
+		domain.OTAKeyCodex: true, domain.OTAKeyClaudeCode: true, domain.OTAKeyOpenCode: true, domain.OTAKeyPicoClaw: true,
+	}
 	if !allowed[target] {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError("unknown target: "+target))
 		return
@@ -68,6 +90,16 @@ func (s *Server) softwareUpdate(c *gin.Context) {
 		return
 	}
 	defer resp.Body.Close()
+	// Propagate a refusal instead of reporting success: bootstrap keeps its own
+	// target allowlist, so the two can disagree (they did while the agent CLIs
+	// were being added). Without this the web button says "OK" for a check that
+	// never ran.
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		c.JSON(http.StatusBadGateway, serializers.ResponseError(
+			fmt.Sprintf("bootstrap refused %s: %s %s", target, resp.Status, strings.TrimSpace(string(body)))))
+		return
+	}
 	c.JSON(http.StatusOK, serializers.ResponseSuccess("software update triggered: "+target))
 }
 

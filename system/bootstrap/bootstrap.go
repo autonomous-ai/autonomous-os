@@ -171,7 +171,16 @@ func (b *Bootstrap) Serve() error {
 	})
 	r.POST("/force-check/:target", func(c *gin.Context) {
 		target := c.Param("target")
-		allowed := map[string]bool{domain.OTAKeyOSServer: true, domain.OTAKeyWeb: true, domain.OTAKeyHal: true}
+		// The agent CLIs are here so the web Versions card can force a check for
+		// the runtime a device runs; os-server resolves its virtual "agent"
+		// target to one of these before forwarding. componentInstalled still
+		// decides whether the check does anything (wrong runtime / old on-device
+		// updater → skipped), so a stray call cannot push a CLI onto a device
+		// that does not run it.
+		allowed := map[string]bool{
+			domain.OTAKeyOSServer: true, domain.OTAKeyWeb: true, domain.OTAKeyHal: true,
+			domain.OTAKeyCodex: true, domain.OTAKeyClaudeCode: true, domain.OTAKeyOpenCode: true, domain.OTAKeyPicoClaw: true,
+		}
 		if !allowed[target] {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown target: " + target})
 			return

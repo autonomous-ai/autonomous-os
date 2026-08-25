@@ -21,7 +21,10 @@ export function StatusDot({ ok }: { ok: boolean }) {
   );
 }
 
-export function SoftwareUpdateButton({ target, label }: { target: "os-server" | "web" | "hal"; label: string }) {
+// "agent" is a virtual target: os-server resolves it to the configured runtime's
+// CLI (codex / claudecode / opencode / picoclaw). The browser deliberately does
+// not learn which runtime is active just to build this URL.
+export function SoftwareUpdateButton({ target, label }: { target: "os-server" | "web" | "hal" | "agent"; label: string }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const trigger = async () => {
