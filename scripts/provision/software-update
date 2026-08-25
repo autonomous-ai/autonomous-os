@@ -211,11 +211,16 @@ check_hal() {
 # staged tree with the mode the live one had (default 0755).
 publish_mode() {
   local staged="$1" reference="$2"
-  if [ -d "$reference" ]; then
-    chmod --reference="$reference" "$staged" 2>/dev/null || chmod 0755 "$staged"
-  else
-    chmod 0755 "$staged"
-  fi
+  # Copy the live tree's mode only when it is at least world-readable+executable.
+  # Inheriting blindly propagates a bad mode forever: a tree published once by
+  # the old 0700 path hands 0700 to its successor, and to the one after that.
+  # 0755 is what the imager installs, so it is the floor.
+  local ref_mode=""
+  [ ! -d "$reference" ] || ref_mode="$(stat -c "%a" "$reference" 2>/dev/null || true)"
+  case "$ref_mode" in
+    755|775|777|745|750) chmod "$ref_mode" "$staged" ;;
+    *) chmod 0755 "$staged" ;;
+  esac
 }
 
 # A uv/virtualenv is NOT relocatable: every console script in .venv/bin carries
