@@ -218,6 +218,23 @@ def _look_at_roll(svc: Any, roll: float) -> bool:
         return False
 
 
+def _abandon(svc: Any, seed_pose: Optional[dict], visited: int) -> "SearchResult":
+    """End an aborted sweep on the pose it started from.
+
+    "Stop moving" is the request, and the pose the sweep happens to be frozen in
+    is not a resting one — the head can be cocked 45 deg over, facing a wall.
+    Stopping there answers the letter of the request and none of it: what the
+    click asks for is the lamp to stop searching and attend to the person, which
+    means ending somewhere it can see them from.
+
+    Both abort checks route through here, so there is one definition of where an
+    interrupted search leaves the arm.
+    """
+    _restore(svc, seed_pose)
+    logger.info("[search] aborted after %d stop(s) — back to the starting pose", visited)
+    return SearchResult(False, "aborted", visited)
+
+
 def _restore(svc: Any, pose: Optional[dict]) -> None:
     """Put the arm back on a remembered pose. Never raises."""
     if not pose:
@@ -343,7 +360,7 @@ def search_for_subject(target: str = "person", detector: Any = None) -> SearchRe
     visited = 0
     for yaw in stops:
         if _abort_evt.is_set():
-            return SearchResult(False, "aborted", visited)
+            return _abandon(svc, seed_pose, visited)
 
         try:
             current = svc.get_positions()
@@ -359,7 +376,7 @@ def search_for_subject(target: str = "person", detector: Any = None) -> SearchRe
         # blurred frame and a detector that misses what is plainly in view.
         for roll in ROLL_STOPS:
             if _abort_evt.is_set():
-                return SearchResult(False, "aborted", visited)
+                return _abandon(svc, seed_pose, visited)
             if not _look_at_roll(svc, roll):
                 continue
 
@@ -385,9 +402,7 @@ def search_for_subject(target: str = "person", detector: Any = None) -> SearchRe
         _look_at_roll(svc, ROLL_CENTRE)
 
     # Nothing found, so nothing to look at — go back to where the sweep began
-    # rather than freezing wherever the last look left the head. An ABORT does
-    # not come through here: a button press means stop moving, and travelling
-    # home would be one more move than was asked for.
+    # rather than freezing wherever the last look left the head.
     _restore(svc, seed_pose)
     logger.info("[search] nobody found after %d stop(s) — back to the starting pose",
                 visited)

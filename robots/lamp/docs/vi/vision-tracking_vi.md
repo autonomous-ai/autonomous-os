@@ -497,9 +497,10 @@ tâm trông như bồn chồn khi đầu đèn cũng đang ngó quanh ở từng
 đi là đủ.
 
 **Kết thúc thì tay dừng ở đâu.** Không tìm thấy ai → quay về đúng tư thế lúc bắt đầu quét, thay vì
-đóng băng ở chỗ cái nhìn cuối cùng bỏ lại. Tìm thấy → đầu được dựng thẳng lại bằng cách xoay ĐẾ đúng
-bằng góc đầu đang nghiêng, nên camera vẫn hướng vào đối tượng mà đầu thì ngay ngắn. Bị huỷ → không di
-chuyển gì cả: một cú nhấn nút nghĩa là "dừng lại", và đi về chỗ cũ là thừa một chuyển động.
+đóng băng ở chỗ cái nhìn cuối cùng bỏ lại. Bị huỷ → cũng vậy: một cú nhấn nút nghĩa là "ngừng tìm và
+để ý tới tôi", mà tư thế một pha quét bị cắt ngang đóng băng lại không phải tư thế nghỉ — đầu có thể
+đang nghiêng 45°, mặt hướng vào tường. Tìm thấy → đầu được dựng thẳng lại bằng cách xoay ĐẾ đúng bằng
+góc đầu đang nghiêng, nên camera vẫn hướng vào đối tượng mà đầu thì ngay ngắn.
 
 **Khi chưa có bearing** — máy mới, hoặc bearing vừa bị reset — pha quét trước hết đưa tay về đúng tư
 thế của bản ghi idle thay vì bắt đầu từ chỗ nó đang đứng. Một vòng lặp vừa dắt đầu đèn đi lòng vòng

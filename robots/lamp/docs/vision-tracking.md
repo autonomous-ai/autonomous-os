@@ -499,10 +499,10 @@ swinging back and forth across centre reads as agitation once the head is also l
 stop. One reversal on the way out is enough.
 
 **Where it leaves the arm.** Nothing found → back to the pose the sweep started from, rather than
-frozen wherever the last look left the head. Found → the head is straightened by turning the *base* as
-far as the head was turned, so the camera keeps pointing at the subject with the head level. Aborted →
-nothing moves: a single click means "stop moving", and travelling home is one more move than was asked
-for.
+frozen wherever the last look left the head. Aborted → the same: a click means "stop searching and
+attend to me", and the pose an interrupted sweep freezes in is not a resting one — the head can be
+cocked 45° over, facing a wall. Found → the head is straightened by turning the *base* as far as the
+head was turned, so the camera keeps pointing at the subject with the head level.
 
 **With no bearing yet** — a fresh unit, or one whose bearing was reset — the sweep first rests the arm
 on the idle recording's own pose rather than starting from wherever it happens to stand. A loop that

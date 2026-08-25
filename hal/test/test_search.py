@@ -384,11 +384,17 @@ def test_a_successful_sweep_keeps_looking_at_the_subject():
     )
 
 
-def test_an_abort_leaves_the_arm_exactly_where_it_stopped():
-    """A single click means "stop moving and pay attention to me". Travelling
-    home afterwards is one more move than was asked for."""
-    _res, svc = _run(abort_at_stop=2, bearing=None)
-    idle_roll = _FakeSvc.IDLE_BASELINE["wrist_roll.pos"]
-    assert svc.holds[-1].get("wrist_roll.pos") != pytest.approx(idle_roll), (
-        "an aborted sweep travelled back to its starting pose"
-    )
+def test_an_abort_also_returns_to_where_it_started():
+    """A single click means "stop searching and attend to me".
+
+    The pose an interrupted sweep freezes in is not a resting one — the head can
+    be cocked 45 deg over, facing a wall. Stopping there answers the letter of
+    the request and none of it: attending to someone means ending somewhere they
+    can be seen from.
+    """
+    res, svc = _run(abort_at_stop=2, bearing=None)
+    assert res.reason == "aborted"
+    last = svc.holds[-1]
+    assert last.get("wrist_roll.pos") == pytest.approx(
+        _FakeSvc.IDLE_BASELINE["wrist_roll.pos"]
+    ), f"an aborted sweep did not return to its starting pose: {last}"
