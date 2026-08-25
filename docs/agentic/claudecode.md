@@ -428,11 +428,13 @@ Telegram, across multiple folders each with its own session.
   `CLAUDE.md` itself is runtime-specific and never carried.
 - **No HEARTBEAT.md** — Claude Code has no heartbeat loop that would read it; a
   conscious skip, not an oversight.
-- **Skills** live in `workspace/.claude/skills/` (native, auto-discovered).
-  Capability-pruned on onboarding; **restored from the CDN when empty**
-  (`ensureSkills` — covers factory reset); steady-state updates via
-  `skill_watcher.go` (5-min OTA metadata poll, notify via
-  `SendSystemChatMessage`).
+- **Skills** live in `/root/.claude/skills/` (native, auto-discovered).
+  On every onboarding, the capability gate is applied and the complete supported
+  catalog is reconciled from the CDN, repairing stale local files even when the
+watcher starts after an OTA publish. `skill_watcher.go` then polls OTA metadata
+every five minutes for later publishes. A real content change restarts the
+bridge and then notifies the agent through `SendSystemChatMessage` to re-read it.
+A failed ZIP download or extract leaves the version pending for the next poll.
 - **MCP is real** (`mcp.go`): `WriteMCPEntry`/`RemoveMCPEntry` upsert
   `workspace/.mcp.json` `mcpServers` (canonical `{command,args,env}` /
   `{type,url,headers}` entries pass through verbatim) + bridge restart;

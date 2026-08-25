@@ -419,11 +419,13 @@ folder một phiên riêng.
   đặc thù runtime và không bao giờ được mang theo.
 - **Không có HEARTBEAT.md** — Claude Code không có heartbeat loop nào sẽ đọc
   nó; một quyết định bỏ có ý thức, không phải bỏ sót.
-- **Skills** nằm trong `workspace/.claude/skills/` (native, tự-discover). Được
-  capability-prune lúc onboarding; **restore từ CDN khi rỗng**
-  (`ensureSkills` — bao case factory reset); cập nhật steady-state qua
-  `skill_watcher.go` (poll metadata OTA 5 phút, notify qua
-  `SendSystemChatMessage`).
+- **Skills** nằm trong `/root/.claude/skills/` (native, tự-discover). Mỗi lần
+  onboarding đều áp dụng capability gate và đồng bộ toàn bộ catalog được hỗ trợ
+  từ CDN, sửa cả file local cũ khi watcher khởi động sau một lần OTA publish.
+  `skill_watcher.go` tiếp tục poll metadata OTA mỗi năm phút để bắt các bản
+  publish sau đó. Khi nội dung thật sự đổi, bridge được restart rồi agent được
+  thông báo qua `SendSystemChatMessage` để đọc lại skill. Download hoặc extract
+  ZIP lỗi giữ version ở trạng thái chờ cho poll tiếp theo.
 - **MCP là thật** (`mcp.go`): `WriteMCPEntry`/`RemoveMCPEntry` upsert
   `mcpServers` trong `workspace/.mcp.json` (entry canonical `{command,args,env}` /
   `{type,url,headers}` pass through nguyên văn) + restart bridge;
