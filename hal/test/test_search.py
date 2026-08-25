@@ -487,3 +487,40 @@ def test_waiting_gives_up_rather_than_stalling_the_sweep():
         assert time.monotonic() - t0 < 2.0, "it stalled instead of giving up"
     finally:
         search.ARRIVE_TIMEOUT_S = original
+
+
+def test_the_sweep_owns_the_body_for_its_whole_duration():
+    """Idle plays absolutely, on every joint, and never stops on its own.
+
+    Device-traced during one sweep: idle wrote base_yaw 280 times to the
+    search's 31, so every commanded stop was overwritten ~33ms later. The base
+    appeared to crawl — 90 deg took 5.9s with HAL running against 0.35s with the
+    arm to itself. Not a slow servo, a contested one.
+    """
+    import hal.app_state as app_state
+    from hal.drivers.tracking import aim
+
+    owned_during = []
+    real_grab = search._grab_frame
+
+    svc = _FakeSvc()
+    svc._tracking_active = False
+
+    def watching(cap):
+        owned_during.append(getattr(svc, "_tracking_active", False))
+        return real_grab(cap)
+
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    det = mock.Mock()
+    det.detect = mock.Mock(return_value=None)
+
+    with mock.patch.object(app_state, "camera_capture", mock.Mock(), create=True), \
+         mock.patch.object(app_state, "animation_service", svc, create=True), \
+         mock.patch.object(app_state, "safety_policy", None, create=True), \
+         mock.patch.object(search, "_grab_frame", watching), \
+         mock.patch.object(search, "_detect_subject", lambda d, f: (None, None, None)):
+        search.search_for_subject(detector=det)
+
+    assert owned_during, "the sweep never looked at anything"
+    assert all(owned_during), "idle was free to overwrite the sweep's own stops"
+    assert not svc._tracking_active, "ownership was not handed back"

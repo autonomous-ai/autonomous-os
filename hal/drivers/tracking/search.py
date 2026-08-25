@@ -400,6 +400,22 @@ def search_for_subject(target: str = "person", detector: Any = None) -> SearchRe
         if detector is None:
             return SearchResult(False, "no detector")
 
+    # Own the body for the whole sweep. Without this the idle recording keeps
+    # playing straight through it, absolutely and on every joint, and every stop
+    # the search commands is overwritten by the next idle frame ~33ms later.
+    #
+    # Device-traced 2026-08-25 during one sweep: idle wrote base_yaw 280 times
+    # to the search's 31. The visible result was a base that crawled — 90 deg
+    # took 5.9s with HAL running, against 0.35s for the same move with the arm
+    # to itself. Not a slow servo, a contested one.
+    from hal.drivers.tracking import aim
+
+    with aim.servo_ownership():
+        return _sweep(svc, cap, detector, target)
+
+
+def _sweep(svc: Any, cap: Any, detector: Any, target: str) -> SearchResult:
+    """The sweep itself, with the body already owned."""
     stops = _stop_list(_seed_yaw(svc))
     # Captured AFTER seeding, so it is the pose the sweep started from
     # rather than whatever the arm was doing before — that is where a
