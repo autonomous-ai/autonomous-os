@@ -55,6 +55,24 @@ rm -f "$ZIP_PATH"
 (cd "$DEVICE_DIR" && zip -r "$ZIP_PATH" . \
   -x "docs/*" "hardware/*" "images/*" ".git/*" "*/__pycache__/*" "*.pyc")
 
+# Stage the canonical on-device updater at the package root, the same way
+# upload-setup.sh inlines it into setup.sh — so it is never a second copy kept in
+# sync by hand (robots/reachy-mini/software-update used to be exactly that, and
+# drifted: it never gained the agent-CLI components). Boards that install from
+# the device package (Reachy's spike-bootstrap.sh looks for
+# `<package>/software-update`, i.e. /opt/devices/<type>/software-update) pick up
+# the current updater with every profile release.
+#
+# Deliberately NOT placed under rootfs/: `software-update device` copies
+# rootfs/. onto / with `cp -a`, which rewrites files in place — and bash reads a
+# script lazily, so overwriting /usr/local/bin/software-update while that very
+# script is the running process would corrupt its own execution.
+SWUPDATE_SRC="${RELEASE_DIR}/../provision/software-update"
+[[ -f "$SWUPDATE_SRC" ]] || { echo "Error: canonical updater not found at $SWUPDATE_SRC" >&2; exit 1; }
+bash -n "$SWUPDATE_SRC" || { echo "Error: canonical software-update is not valid bash" >&2; exit 1; }
+echo "========== Staging canonical software-update into ${ZIP_NAME} =========="
+zip -j "$ZIP_PATH" "$SWUPDATE_SRC"
+
 echo "========== Upload ${ZIP_NAME} to Google Cloud Storage (no-cache) =========="
 gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" cp "$ZIP_PATH" "gs://${GCS_BUCKET}/${GCS_PATH}"
 ZIP_SHA256=$(ota_artifact_sha256 "$ZIP_PATH")
