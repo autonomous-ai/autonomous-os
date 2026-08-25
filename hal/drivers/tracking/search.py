@@ -35,7 +35,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional
 
 import hal.app_state as state
 from hal.drivers.tracking import constants as C
@@ -376,7 +376,9 @@ def _seed_yaw(svc: Any) -> float:
     return _seed_from_bearing(svc)
 
 
-def search_for_subject(target: str = "person", detector: Any = None) -> SearchResult:
+def search_for_subject(target: str = "person", detector: Any = None,
+                       on_progress: Optional[Callable[[int, int], None]] = None
+                       ) -> SearchResult:
     """Sweep for a subject, stopping at the first one seen.
 
     Returns rather than raising: a failed search still has to give the caller
@@ -411,11 +413,18 @@ def search_for_subject(target: str = "person", detector: Any = None) -> SearchRe
     from hal.drivers.tracking import aim
 
     with aim.servo_ownership():
-        return _sweep(svc, cap, detector, target)
+        return _sweep(svc, cap, detector, target, on_progress)
 
 
-def _sweep(svc: Any, cap: Any, detector: Any, target: str) -> SearchResult:
-    """The sweep itself, with the body already owned."""
+def _sweep(svc: Any, cap: Any, detector: Any, target: str,
+           on_progress: Optional[Callable[[int, int], None]] = None) -> SearchResult:
+    """The sweep itself, with the body already owned.
+
+    `on_progress(visited, total)` is called after every look. It exists so a
+    caller can fill the silence — a sweep is half a minute of a lamp moving
+    without saying anything — while leaving the decision of WHAT to say, and
+    whether to say anything at all, outside this file.
+    """
     stops = _stop_list(_seed_yaw(svc))
     # Captured AFTER seeding, so it is the pose the sweep started from
     # rather than whatever the arm was doing before — that is where a
@@ -425,8 +434,9 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str) -> SearchResult:
                      if j.endswith('.pos')}
     except Exception:
         seed_pose = None
-    logger.info("[search] sweeping %d stops for '%s': %s",
-                len(stops), target, [round(s) for s in stops])
+    total_looks = len(stops) * len(ROLL_STOPS)
+    logger.info("[search] sweeping %d stops (%d looks) for '%s': %s",
+                len(stops), total_looks, target, [round(s) for s in stops])
 
     visited = 0
     for yaw in stops:
@@ -458,6 +468,12 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str) -> SearchResult:
             # and a detector that misses what is actually in view.
             time.sleep(SETTLE_S)
             visited += 1
+            if on_progress is not None:
+                try:
+                    on_progress(visited, total_looks)
+                except Exception as e:
+                    # A talkative caller must never be able to sink the search.
+                    logger.debug("[search] progress callback failed: %s", e)
 
             frame = _grab_frame(cap)
             if frame is None:

@@ -1128,9 +1128,16 @@ class RealtimeOrchestrator:
                     )
                     look_debug.note_aim(res)
                     # Announce the capture only when the aim actually had work to
-                    # do — an already-centred shutter fires in a few hundred ms
-                    # and needs no narration.
-                    if config.LOOK_AIM_SPEAK_CAPTURE and res.iterations > 0:
+                    # do AND got somewhere — an already-centred shutter fires in
+                    # a few hundred ms and needs no narration, and a failed one
+                    # has already said `look_lost`.
+                    #
+                    # `iterations > 0` alone was not enough: a failed aim still
+                    # counts its bearing steps, so "I can't find you" was
+                    # followed by "let me take a look", which tells the story
+                    # backwards. Audible once the look-around made the failure
+                    # path seconds long instead of instant.
+                    if config.LOOK_AIM_SPEAK_CAPTURE and res.aimed and res.iterations > 0:
                         from hal.drivers.tracking.aim import _say
 
                         with look_debug.stage("speak_filler"):

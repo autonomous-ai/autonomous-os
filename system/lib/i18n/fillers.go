@@ -61,7 +61,12 @@ var toolFillers = map[string]map[string][]string{
 		// aim actually has to search or takes long enough that the user is
 		// already waiting — narrating every visual question gets old fast.
 		"look_searching": {"Where are you?", "Let me find you", "Hold on, looking for you", "One sec, finding you"},
-		"look_found":     {"There you are", "Got you", "Found you"},
+		// Said ONCE, at the midpoint of a look-around, because the sweep is
+		// about half a minute of the lamp swinging in silence and one phrase at
+		// the start does not cover it. Repeating look_searching instead would
+		// ask "where are you?" twice, which sounds stuck rather than patient.
+		"look_still_searching": {"Still looking", "One moment", "Nearly there", "Bear with me"},
+		"look_found":           {"There you are", "Got you", "Found you"},
 		// The resolution of an announced search that FAILED. look_searching
 		// promises to look; without this the lamp turns away, says "Where are
 		// you?", then goes quiet while the model describes whatever the camera
@@ -90,29 +95,30 @@ var toolFillers = map[string]map[string][]string{
 		"image":          {"Taking a look", "Peeking at it"},
 	},
 	LangVI: {
-		"look_searching": {"Bạn đang ở đâu?", "Để tôi tìm bạn", "Chờ chút, tôi đang tìm bạn"},
-		"look_found":     {"Bạn đây rồi", "Thấy bạn rồi"},
-		"look_lost":      {"Tôi không tìm thấy bạn", "Tôi không thấy bạn đâu", "Từ đây tôi không thấy bạn"},
-		"look_capturing": {"Để tôi xem nào", "Tôi nhìn thử"},
-		"web_search":     {"Để {Name} tìm chút", "Để xem có gì hay", "Lùng chút nha", "Tra cho bạn nha"},
-		"x_search":       {"Ngó X tí", "Xem trên X chút", "Lùng X coi"},
-		"web_fetch":      {"Để mình xem chút", "Mở ra xem nha", "Để {Name} ngó qua", "Coi thử nha"},
-		"read":           {"Để {Name} đọc qua", "Xem chút nha", "Lướt qua chút", "Để mình ngó"},
-		"memory_search":  {"Để {Name} nhớ lại", "Lục trí nhớ chút", "Đợi {Name} nhớ ra"},
-		"memory_get":     {"Để {Name} nhớ chút", "Đợi mình nhớ ra"},
-		"exec":           {"{Name} làm liền", "Đang làm cho bạn", "Đợi tí nha", "Mình lo nha"},
-		"process":        {"Mình lo phần đó", "Đang làm phía sau"},
-		"image_generate": {"Để {Name} vẽ chút", "Đang vẽ nha", "Sáng tác chút", "Đợi {Name} tạo nha"},
-		"video_generate": {"Đang dựng cho bạn", "Để {Name} làm chút"},
-		"music_generate": {"Đang sáng tác nha", "Để {Name} soạn nhạc"},
-		"update_plan":    {"Để {Name} sắp xếp lại", "Tính lại chút", "Nghĩ lại chút"},
-		"session_status": {"Để {Name} nhìn lại", "Coi tình hình chút"},
-		"apply_patch":    {"Đang chỉnh chút", "Sửa giúp bạn"},
-		"pdf":            {"Để {Name} đọc qua", "Lướt qua chút"},
-		"canvas":         {"Đang vẽ nha", "Phác chút coi"},
-		"nodes":          {"{Name} làm liền", "Để mình lo nha"},
-		"subagents":      {"Để {Name} nhờ phụ chút", "Gọi phụ tá nha"},
-		"image":          {"Để {Name} nhìn nha", "Ngắm tí coi"},
+		"look_searching":       {"Bạn đang ở đâu?", "Để tôi tìm bạn", "Chờ chút, tôi đang tìm bạn"},
+		"look_found":           {"Bạn đây rồi", "Thấy bạn rồi"},
+		"look_lost":            {"Tôi không tìm thấy bạn", "Tôi không thấy bạn đâu", "Từ đây tôi không thấy bạn"},
+		"look_still_searching": {"Vẫn đang tìm", "Chờ chút nữa", "Sắp thấy rồi", "Đợi tôi tí"},
+		"look_capturing":       {"Để tôi xem nào", "Tôi nhìn thử"},
+		"web_search":           {"Để {Name} tìm chút", "Để xem có gì hay", "Lùng chút nha", "Tra cho bạn nha"},
+		"x_search":             {"Ngó X tí", "Xem trên X chút", "Lùng X coi"},
+		"web_fetch":            {"Để mình xem chút", "Mở ra xem nha", "Để {Name} ngó qua", "Coi thử nha"},
+		"read":                 {"Để {Name} đọc qua", "Xem chút nha", "Lướt qua chút", "Để mình ngó"},
+		"memory_search":        {"Để {Name} nhớ lại", "Lục trí nhớ chút", "Đợi {Name} nhớ ra"},
+		"memory_get":           {"Để {Name} nhớ chút", "Đợi mình nhớ ra"},
+		"exec":                 {"{Name} làm liền", "Đang làm cho bạn", "Đợi tí nha", "Mình lo nha"},
+		"process":              {"Mình lo phần đó", "Đang làm phía sau"},
+		"image_generate":       {"Để {Name} vẽ chút", "Đang vẽ nha", "Sáng tác chút", "Đợi {Name} tạo nha"},
+		"video_generate":       {"Đang dựng cho bạn", "Để {Name} làm chút"},
+		"music_generate":       {"Đang sáng tác nha", "Để {Name} soạn nhạc"},
+		"update_plan":          {"Để {Name} sắp xếp lại", "Tính lại chút", "Nghĩ lại chút"},
+		"session_status":       {"Để {Name} nhìn lại", "Coi tình hình chút"},
+		"apply_patch":          {"Đang chỉnh chút", "Sửa giúp bạn"},
+		"pdf":                  {"Để {Name} đọc qua", "Lướt qua chút"},
+		"canvas":               {"Đang vẽ nha", "Phác chút coi"},
+		"nodes":                {"{Name} làm liền", "Để mình lo nha"},
+		"subagents":            {"Để {Name} nhờ phụ chút", "Gọi phụ tá nha"},
+		"image":                {"Để {Name} nhìn nha", "Ngắm tí coi"},
 	},
 	LangZhCN: {
 		"web_search":     {"我帮你找找", "查一下哦", "我去搜搜", "找一下啊"},

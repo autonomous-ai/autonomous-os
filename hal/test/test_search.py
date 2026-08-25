@@ -89,7 +89,7 @@ class _FakeSvc:
 
 
 def _run(detect_at_stop=None, bearing=None, disabled=False, abort_at_stop=None,
-         confidence=0.9, pose=None, idle_baseline=None):
+         confidence=0.9, pose=None, idle_baseline=None, on_progress=None):
     """detect_at_stop: 1-based stop index at which a subject appears."""
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     svc = _FakeSvc(idle_baseline=idle_baseline)
@@ -124,7 +124,7 @@ def _run(detect_at_stop=None, bearing=None, disabled=False, abort_at_stop=None,
         mock.patch.object(search.time, "sleep"),
         mock.patch("hal.drivers.tracking.user_bearing.read_estimate", return_value=est),
     ):
-        res = search.search_for_subject(detector=det)
+        res = search.search_for_subject(detector=det, on_progress=on_progress)
     return res, svc
 
 
@@ -524,3 +524,37 @@ def test_the_sweep_owns_the_body_for_its_whole_duration():
     assert owned_during, "the sweep never looked at anything"
     assert all(owned_during), "idle was free to overwrite the sweep's own stops"
     assert not svc._tracking_active, "ownership was not handed back"
+
+
+def test_a_caller_can_follow_the_sweep_stop_by_stop():
+    """A sweep is half a minute of the lamp moving without saying anything.
+
+    The callback exists so a caller can fill that, while WHAT to say — and
+    whether to say anything — stays outside this file.
+    """
+    seen = []
+    _res, _svc = _run(bearing=None, on_progress=lambda v, t: seen.append((v, t)))
+
+    assert seen, "the sweep reported no progress at all"
+    assert [v for v, _ in seen] == list(range(1, len(seen) + 1)), seen
+    assert all(t == seen[-1][0] for _, t in seen), "the total kept changing"
+
+
+def test_the_midpoint_of_a_full_sweep_is_the_middle_look():
+    """Three yaw stops of three looks each, so #5 — the middle look of the
+    middle stop, which is the right-hand stop at roll 0."""
+    seen = []
+    _res, _svc = _run(bearing=None, on_progress=lambda v, t: seen.append((v, t)))
+
+    total = seen[-1][1]
+    halfway = [v for v, t in seen if v * 2 >= t][0]
+    assert total == 9, f"expected 9 looks, got {total}"
+    assert halfway == 5, f"midpoint should be look 5, got {halfway}"
+
+
+def test_a_talkative_caller_cannot_sink_the_sweep():
+    def boom(visited, total):
+        raise RuntimeError("tts exploded")
+
+    res, _svc = _run(bearing=None, on_progress=boom)
+    assert res.stops_visited == 9, "the sweep stopped when the callback threw"

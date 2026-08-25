@@ -335,10 +335,28 @@ def _sweep_for_subject() -> bool:
     so a top-level import either way is a cycle. The aim asking the sweep for
     help is the only direction that edge runs.
     """
+    said = {"midpoint": False}
+
+    def _halfway(visited: int, total: int) -> None:
+        """Say something once, in the middle of the sweep.
+
+        A sweep is half a minute of the lamp swinging in silence. One phrase at
+        the start does not cover that, and repeating `look_searching` would ask
+        "where are you?" twice, which sounds stuck rather than patient.
+
+        Deliberately once and at the midpoint, not on a timer: the point is to
+        break the longest gap, not to narrate every stop.
+        """
+        if said["midpoint"] or visited * 2 < total:
+            return
+        said["midpoint"] = True
+        if config.LOOK_AIM_SPEAK:
+            _say("look_still_searching")
+
     try:
         from hal.drivers.tracking.search import search_for_subject
 
-        res = search_for_subject()
+        res = search_for_subject(on_progress=_halfway)
         logger.info("[look-aim] looked around: %s after %d stop(s)",
                     res.reason, res.stops_visited)
         return bool(res.found)
