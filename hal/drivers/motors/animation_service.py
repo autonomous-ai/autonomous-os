@@ -13,42 +13,49 @@ logger = logging.getLogger(__name__)
 DEFAULT_MOVE_DURATION = 2.0
 
 # Zero/hold position in raw encoder units — the physical resting pose after release.
-# wrist_pitch (-59.18°, raw 1914) exceeds calibrated range_min=2044, so move_to_raw is used.
 ZERO_RAW = {
-    "base_yaw":    2100,  #   5.22° — mid=2041.5
-    "base_pitch":  2082,  # -20.25° — mid=2312.5
-    "elbow_pitch": 2019,  # -30.54° — mid=2366.5
-    "wrist_roll":  2070,  #   0.00° — mid=2070.0
-    "wrist_pitch": 1914,  # -59.18° — mid=2588.0
+    "base_yaw":    2025,
+    "base_pitch":  2674,
+    "elbow_pitch": 2636,
+    "wrist_roll":  2054,
+    "wrist_pitch": 2056,
 }
 
-# Wake/resume position in raw encoder units — all 5 joints.
-# Pre-computed from calibration JSON: raw = int(deg * 4095/360 + mid), mid=(range_min+range_max)/2.
-# wrist_pitch (-68.48°, raw 1809) exceeds calibrated range_min=2044, so move_to_raw is used.
-RESUME_STARTUP_RAW = {
-    "base_yaw":    2109,  #   5.96° — mid=2041.5
-    "base_pitch":  2105,  # -18.20° — mid=2312.5
-    "elbow_pitch": 2233,  # -11.68° — mid=2366.5
-    "wrist_roll":  2070,  #   0.00° — mid=2070.0
-    "wrist_pitch": 1809,  # -68.48° — mid=2588.0
+# Wake position in raw encoder units — all 5 joints. Where the arm goes once
+# on connect, as the first queued event, before idle starts animating.
+# Not used by resume(): that path re-enables torque and goes straight to idle.
+STARTUP_RAW = {
+    "base_yaw":    2025,
+    "base_pitch":  2674,
+    "elbow_pitch": 2636,
+    "wrist_roll":  2054,
+    "wrist_pitch": 2056,
+}
+
+# Gravity-rest position in raw encoder units — where release() parks the arm
+# before cutting torque, so it settles instead of dropping. Currently identical
+# to ZERO_RAW; kept separate because the two answer different questions (hold a
+# presentable pose with torque ON vs. leave gravity nothing to pull once torque
+# goes OFF) and have diverged before.
+REST_RAW = {
+    "base_yaw":    2029,
+    "base_pitch":  2030,
+    "elbow_pitch": 2030,
+    "wrist_roll":  2053,
+    "wrist_pitch": 1770,
 }
 
 # Duration for the startup/resume move (seconds)
 STARTUP_MOVE_DURATION = 5.0
 
-# Peak joint speed the STS3215 can actually deliver, in degrees/second.
-# Measured on device: recordings commanding >500 deg/s leave the servo 55 deg
-# behind its goal — it saturates, lags, then snaps, which is the audible
-# grinding. Recordings are resampled so no segment exceeds this; segments that
-# would are stretched in time instead. Set HAL_SERVO_MAX_DPS=0 to disable
-# stretching and play recordings at their authored speed.
-SERVO_MAX_DPS = float(os.environ.get("HAL_SERVO_MAX_DPS", "250"))
-
-# Recordings are authored at ~20 Hz but the playback loop steps one frame per
-# tick at self.fps, so raw frames play at the wrong wall-clock speed. Frames are
-# resampled onto the loop's own grid at load time; this is the CSV column that
-# carries the authored timing.
-RECORDING_TIME_COLUMN = "timestamp"
+# Playback timing (speed ceiling, time column, stretch + resample) is shared
+# with the mock driver so the simulator plays a recording exactly as the body
+# does — see hal/drivers/motors/recording_timing.py.
+from hal.drivers.motors.recording_timing import (  # noqa: E402
+    RECORDING_TIME_COLUMN,
+    SERVO_MAX_DPS,
+    resample_recording,
+)
 
 # Internal event: wake move + state sync, queued by start() so the 5s
 # interpolation runs in the event thread instead of blocking the caller
@@ -163,8 +170,13 @@ class AnimationService:
     # P gain — match upstream default (16 for all). Higher values cause jerky motion.
     _SERVO_PGAIN = {1: 16, 2: 16, 3: 16, 4: 16, 5: 16}
 
-    def _configure_servos_raw(self):
+    def _configure_servos_raw(self, energize: bool = True):
         """Configure servos directly via scservo_sdk, bypassing lerobot.
+
+        energize=False leaves Torque_Enable at 0: the gains and mode are still
+        written, but the body stays limp. Used when HAL restarts on a sleeping
+        device — a sleeping lamp rests with torque off, and switching it on just
+        to switch it off again a second later is a visible twitch for no gain.
 
         lerobot's bus.write() requires a fully successful connect() handshake.
         When servos are offline, connect() fails and bus.write() raises
@@ -188,10 +200,22 @@ class AnimationService:
                 pk.write1ByteTxRx(ph, sid, 21, pgain)  # P_Coefficient
                 pk.write1ByteTxRx(ph, sid, 23, 0)   # I_Coefficient
                 pk.write1ByteTxRx(ph, sid, 22, 32)  # D_Coefficient
-                pk.write1ByteTxRx(ph, sid, 40, 1)   # Torque_Enable = 1
-                logger.info(f"{motor_name} (ID {sid}): P={pgain}, torque ON")
+                if energize:
+                    pk.write1ByteTxRx(ph, sid, 40, 1)   # Torque_Enable = 1
+                logger.info(
+                    f"{motor_name} (ID {sid}): P={pgain}, torque {'ON' if energize else 'OFF (asleep)'}"
+                )
 
-    def start(self):
+    def start(self, skip_wake: bool = False):
+        """skip_wake: come up without the startup pose + idle loop.
+
+        Used when HAL restarts on a device that was asleep (OTA, deploy). The
+        wake move takes 5s of visible motion and the idle loop keeps the body
+        going after it — so a sleeping lamp would stand up, breathe, and only
+        then be told to go back to sleep once lifespan finishes. The sleep flag
+        is restored at import, before this runs, so the whole performance can
+        simply be skipped instead of undone afterwards.
+        """
         self.robot = LeLampFollower(self.robot_config)
         try:
             self.robot.connect(calibrate=False)
@@ -200,7 +224,7 @@ class AnimationService:
 
         # Configure servos directly — works even if connect() partially failed
         try:
-            self._configure_servos_raw()
+            self._configure_servos_raw(energize=not skip_wake)
         except Exception as e:
             logger.warning(f"Raw configure failed: {e}")
 
@@ -213,6 +237,9 @@ class AnimationService:
         self._running.set()
         self._event_thread = threading.Thread(target=self._event_loop, daemon=True)
         self._event_thread.start()
+        if skip_wake:
+            logger.info("Servo startup move + idle skipped -- device was asleep")
+            return
         self.dispatch(SERVO_CMD_STARTUP_MOVE, None)
 
         # Auto-play idle (same as upstream) so lamp moves immediately after boot
@@ -295,7 +322,7 @@ class AnimationService:
         # no goal writes land after a torque-off.
         try:
             self.move_to_raw(
-                RESUME_STARTUP_RAW,
+                STARTUP_RAW,
                 duration=STARTUP_MOVE_DURATION,
                 should_abort=lambda: not self._running.is_set(),
             )
@@ -329,8 +356,20 @@ class AnimationService:
         self._handle_play(self._music_recording)
 
     def _handle_music_stop(self):
-        """Stop music groove — interrupt immediately and return to idle."""
+        """Stop music groove — interrupt immediately and return to idle.
+
+        No-op when nothing was grooving. routes/music.audio_stop() calls
+        _on_music_complete() outside its `music_service.playing` guard, and
+        that path also double-fires (explicit /audio/stop plus the music
+        thread's finally), so this used to run up to twice on every single
+        click — which stopped nothing but restarted idle from frame 0, yanking
+        the arm out of mid-loop. Restoring idle is only meaningful if music
+        actually took the body away from it.
+        """
+        was_playing = self._music_playing
         self._music_playing = False
+        if not was_playing:
+            return
         self._hold_until = 0.0  # skip hold, go to idle right away
         self._handle_play(self.idle_recording)
     
@@ -466,9 +505,9 @@ class AnimationService:
                 progress = 1.0 - (self._interpolation_frames / denom)
                 progress = max(0.0, min(1.0, progress))
                 
-                # Interpolate between current state and target
+                target = self._interpolation_target
                 interpolated_action = {}
-                for joint in self._interpolation_target.keys():
+                for joint in target.keys():
                     # Default 0 is unsafe if _current_state is incomplete (see _sync_state_from_hardware).
                     current_val = self._current_state.get(joint) if self._current_state else None
                     if current_val is None:
@@ -477,9 +516,9 @@ class AnimationService:
                             joint,
                         )
                         current_val = 0.0
-                    target_val = self._interpolation_target[joint]
+                    target_val = target[joint]
                     interpolated_action[joint] = current_val + (target_val - current_val) * progress
-                
+
                 with self.bus_lock:
                     self.robot.send_action(interpolated_action)
                 self._current_state = interpolated_action.copy()
@@ -570,70 +609,11 @@ class AnimationService:
         
         return sorted(recordings)
     
-    def _stretch_timeline(self, times: List[float], frames: List[Dict[str, float]]) -> List[float]:
-        """Widen the gaps that demand more joint speed than the servo can deliver.
-
-        Returns a new, still-monotonic time axis. Only over-speed segments grow;
-        everything else keeps its authored timing, so a recording slows down
-        exactly where it was impossible and nowhere else.
-        """
-        if SERVO_MAX_DPS <= 0:
-            return times
-
-        out = [times[0]]
-        for i in range(1, len(frames)):
-            authored_dt = max(times[i] - times[i - 1], 1e-3)
-            peak_delta = max(
-                (abs(frames[i][j] - frames[i - 1][j]) for j in frames[i]),
-                default=0.0,
-            )
-            needed_dt = peak_delta / SERVO_MAX_DPS
-            out.append(out[-1] + max(authored_dt, needed_dt))
-        return out
-
-    def _resample_recording(
-        self, times: List[float], frames: List[Dict[str, float]], name: str
-    ) -> List[Dict[str, float]]:
-        """Put frames on the playback loop's own 1/fps grid.
-
-        The loop steps exactly one frame per tick, so a list sampled at self.fps
-        plays at real time by construction — no timing logic in the hot path.
-        """
-        stretched = self._stretch_timeline(times, frames)
-        duration = stretched[-1] - stretched[0]
-        if duration <= 0:
-            return frames
-
-        joints = list(frames[0].keys())
-        step = 1.0 / self.fps
-        total = max(1, int(round(duration / step)))
-
-        out: List[Dict[str, float]] = []
-        src = 0
-        for k in range(total + 1):
-            t = stretched[0] + min(k * step, duration)
-            # stretched[] is monotonic and t only advances, so this walk is O(n).
-            while src < len(stretched) - 2 and stretched[src + 1] < t:
-                src += 1
-            span = stretched[src + 1] - stretched[src]
-            p = 0.0 if span <= 0 else (t - stretched[src]) / span
-            p = max(0.0, min(1.0, p))
-            a, b = frames[src], frames[src + 1]
-            out.append({j: a[j] + (b[j] - a[j]) * p for j in joints})
-
-        authored = times[-1] - times[0]
-        if SERVO_MAX_DPS > 0 and duration > authored * 1.01:
-            logger.info(
-                "recording %r stretched %.2fs -> %.2fs to stay under %.0f deg/s",
-                name, authored, duration, SERVO_MAX_DPS,
-            )
-        return out
-
     def _load_recording(self, recording_name: str) -> Optional[List[Dict[str, float]]]:
         """Load a recording from cache or file, resampled for playback.
 
         Frames are returned on the event loop's 1/fps grid with over-speed
-        segments stretched — see _resample_recording. Playback itself stays a
+        segments stretched — see recording_timing.resample_recording. Playback stays a
         plain frame-per-tick walk.
         """
         # Check cache first
@@ -670,7 +650,7 @@ class AnimationService:
                 self._recording_cache[recording_name] = actions
                 return actions
 
-            actions = self._resample_recording(times, actions, recording_name)
+            actions = resample_recording(times, actions, recording_name, self.fps)
 
             # Cache the recording
             self._recording_cache[recording_name] = actions
@@ -968,7 +948,7 @@ class AnimationService:
         """Invalidate the cache for a recording (used after upload).
 
         `actions` arrives stripped of its timestamp column, so caching it here
-        would store frames that never went through _resample_recording — the
+        would store frames that never went through resample_recording — the
         uploaded copy would play at raw frame rate while the identical file read
         from disk played correctly. The upload route writes the CSV before
         calling this, so dropping the entry lets the normal load path pick it up.
@@ -1006,16 +986,8 @@ class AnimationService:
         self._running.clear()
         if self._event_thread and self._event_thread.is_alive():
             self._event_thread.join(timeout=3.0)
-        # Gravity-rest pose in raw encoder units.
-        rest_raw = {
-            "base_yaw":    2063,
-            "base_pitch":  1645,
-            "elbow_pitch": 1748,
-            "wrist_roll":  2067,
-            "wrist_pitch": 2125,
-        }
         try:
-            self.move_to_raw(rest_raw, duration=2.0)
+            self.move_to_raw(REST_RAW, duration=2.0)
         except Exception as e:
             logger.warning("Could not move to rest before release: %s", e)
         time.sleep(0.4)

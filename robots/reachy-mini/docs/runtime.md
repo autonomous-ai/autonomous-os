@@ -100,6 +100,29 @@ the previous binary at `/root/bootstrap/rollback/`. Use
 `sudo software-update rollback os-server` (or `bootstrap`) to restore it; the
 failed version is blocked until the feed publishes a different version.
 
+Web OTA follows the same recovery model. It stages and validates the new bundle
+before replacing `/usr/share/nginx/html/setup`, preserves the previous bundle at
+`/root/bootstrap/rollback/web.previous`, and records whether nginx was running.
+The update requires `index.html`, `nginx -t`, and a loopback `GET /` when nginx
+was active; a failed check restores the known-good bundle automatically. Use
+`sudo software-update rollback web` for an operator-initiated rollback.
+
+Device-profile OTA stages the package before swapping
+`/opt/devices/reachy-mini`, saves the prior profile and every affected rootfs
+target, then restores the prior `os-server` and HAL service state. It preserves
+the local `/opt/hal/.env` tuning file. The new profile must contain `ROBOT.md`;
+each previously active service must pass its loopback health endpoint or the
+known-good profile is restored automatically. Use
+`sudo software-update rollback device` for a manual recovery.
+
+HAL OTA keeps the complete previous `/opt/hal` runtime—its `.env`, virtual
+environment, and uv cache—at `/root/bootstrap/rollback/hal.previous`. The new
+runtime is unpacked and synchronized in a sibling staging directory; only then
+is it swapped into place. HAL is returned to its prior active/inactive state and
+an active service must answer `http://127.0.0.1:5001/health`. Any staging or
+health failure restores the known-good runtime automatically. Use
+`sudo software-update rollback hal` for a manual recovery.
+
 `spike.sh` is a **thin orchestrator** — it reimplements nothing, it just runs the
 component scripts in order. Each of those also runs standalone:
 
@@ -110,7 +133,7 @@ component scripts in order. Each of those also runs standalone:
 | 3 | `spike-os.sh` | `os-server` → `/usr/local/bin/os-server`, seeds `/root/config/config.json`, runs it **as root with `WorkingDirectory=/root`** |
 | 4 | `spike-web.sh` | `web` → `/usr/share/nginx/html/setup`, installs nginx, writes the spike vhost |
 | 5 | `spike-agent.sh` | Node.js 22 (NodeSource) + `openclaw` at the OTA-pinned version, seeds `/root/.openclaw`, runs `openclaw gateway run` on loopback `18789` |
-| 6 | `spike-bootstrap.sh` | `bootstrap` → `/usr/local/bin/bootstrap-server`, seeds `/root/config/bootstrap.json`, installs `robots/reachy-mini/software-update` → `/usr/local/bin/software-update` (the helper the worker execs; without it every apply fails with `executable file not found in $PATH` while all units report healthy) |
+| 6 | `spike-bootstrap.sh` | `bootstrap` → `/usr/local/bin/bootstrap-server`, seeds `/root/config/bootstrap.json`, installs the `software-update` staged at the device-package root by `upload-device.sh` (canonical `scripts/provision/software-update`) → `/usr/local/bin/software-update` (the helper the worker execs; without it every apply fails with `executable file not found in $PATH` while all units report healthy) |
 
 Why that order, specifically:
 
@@ -121,6 +144,17 @@ Why that order, specifically:
 - **`WorkingDirectory=/root` for os-server** — `config.Load` reads the *relative*
   path `config/config.json`, so any other working directory silently points
   os-server and HAL at different config files.
+- **the seeded `config.json` must name `openclaw_config_dir`** — a key absent
+  from the file does *not* fall back to the `Default()` value in
+  `system/server/config/config.go`; both `Load` and `ProvideConfig` unmarshal
+  onto a zero-valued struct, so a missing key means `""`, not `/root/.openclaw`.
+  os-server finds the gateway token at
+  `filepath.Join(OpenclawConfigDir, "openclaw.json")`, which for an empty dir
+  resolves to the *relative* `openclaw.json` → `/root/openclaw.json`. That file
+  never exists, so the token is never read, the agent websocket reconnects every
+  5s forever and `WaitForAgentReady` never returns — with no error in the log,
+  since the join produced a perfectly valid path, just the wrong one. This only
+  ever bit a fully clean install: `config.json` normally survives an uninstall.
 - **web is not optional plumbing** — os-server binds `127.0.0.1:5000` and serves
   no static files, so nginx is what makes both the bundle and the API reachable.
   `/hw/` stays **loopback-only** (`allow 127.0.0.1; deny all`), matching the
@@ -246,9 +280,12 @@ own shutdown hook and leave the daemon deaf and blind.
 
 Two details worth knowing: `release()` retries 5× at 2 s intervals, because the
 daemon is a systemd service starting alongside HAL and may not be listening on a
-cold boot; and it restores the persisted speaker level afterwards, because the
-daemon's release handler resets the card's mixer to its own level (measured: 90 %
-before, 62 % after).
+cold boot; and it restores the speaker level afterwards, because the daemon's
+release handler resets the card's mixer to its own level (measured: 90 % before,
+62 % after). It restores the persisted level when there is one, and this body's
+ROBOT.md `startup_volume` when there is not — a unit that never touched the
+slider would otherwise be left at the daemon's own −23 dB, which on a new
+owner's first boot reads as broken hardware.
 
 This pairs with — and does not replace — the SDK's `media_backend="no_media"`,
 which only stops the *SDK client* from grabbing media.

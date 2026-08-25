@@ -83,14 +83,31 @@ với Lamp vật lý.
 Đây là interface simulator, không phải physics model: không có khối lượng hay
 va chạm; recording CSV có sẵn chỉ replay timing trong RAM. Nội dung
 camera/audio ảo là deterministic. Muốn boot test body tối giản theo contract
-thì chạy `make sim DEVICE_TYPE=sim`. Xem `robots/sim/ROBOT.md` để biết
-contract motion-only hẹp hơn của body đó.
+thì chạy `make sim DEVICE_TYPE=sim`. Body đó chỉ khai `motion` và `system`,
+không gì khác — đó là cách chứng minh HAL mount đúng những gì `ROBOT.md` khai
+và không mount thêm; lamp không kiểm được điều này vì lamp khai đủ mọi thứ.
+Xem `robots/sim/ROBOT.md`.
 
 Muốn kiểm tra media thật trên Mac, chạy `make sim SIM_MEDIA=host`. Lệnh này
 chủ động mở camera, microphone và speaker của máy: trang simulator hiển thị
 camera stream, **Play test tone** dùng speaker, còn **Record 3 seconds** thu
 WAV để phát lại. Mặc định `SIM_MEDIA=virtual` không xin permission và giữ test
 deterministic.
+
+Host mode không bao giờ crash. Lúc boot mỗi subsystem được probe — webcam mở và
+đọc thử một frame, microphone thu vài mili-giây — cái nào thiếu, đang bị chiếm
+hoặc bị từ chối permission thì tự rơi về thiết bị ảo kèm log `[sim-media]`.
+`GET /simulator/state` báo kết quả theo từng subsystem (`media_camera`,
+`media_audio`, `media_reasons`; `media` chỉ là "host" khi cả hai đều host), và
+trang simulator in đúng lý do đó, đồng thời tắt nút tone/record khi audio là
+ảo. Trên macOS, hai permission nằm ở System Settings > Privacy & Security >
+Camera và Microphone, phải cấp cho ứng dụng terminal đang chạy HAL.
+
+Camera ở host mode dùng driver chỉ-dành-cho-simulation
+(`hal/drivers/camera/host_capture_device.py`, đăng ký tên `host`) mở webcam qua
+backend OpenCV gốc của hệ điều hành — AVFoundation trên macOS, nơi đường V4L2
+của production và phần healing power-cycle USB không tồn tại. Body thật vẫn
+chọn `driver:` từ ROBOT.md. Pipeline STT/TTS vẫn là ảo ở cả hai mode.
 
 ## Voice Pipeline
 

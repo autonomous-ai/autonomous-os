@@ -14,5 +14,8 @@
   "status_led": {
     "booting": { "color": [0, 60, 200] },
     "error": { "color": [255, 0, 0], "speed": 4.0 }
+  },
+  "button_led": {
+    "sleep_warn": { "color": [20, 12, 40] }
   }
 }

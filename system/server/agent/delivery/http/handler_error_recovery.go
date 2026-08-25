@@ -154,7 +154,7 @@ func (h *AgentHandler) tryRecoverIncompleteTurn(runID, flowRunID, sessionKey str
 		// turn read tts_send only); remainder skips the already-streamed
 		// first sentence exactly like the lifecycle:end path.
 		flow.Log("tts_send", map[string]any{"run_id": flowRunID, "text": remainder, "full_text": text, "streamed_len": streamedLen}, flowRunID)
-		h.deliverTTS(h.agentGateway.SendToHALTTSQueue, remainder, flowRunID, "recovered-reply TTS delivery failed")
+		h.deliverTTSQueue(remainder, flowRunID, "recovered-reply TTS delivery failed")
 	default:
 		// Single-sentence reply already fully streamed mid-turn.
 		flow.Log("tts_stream_complete", map[string]any{"run_id": flowRunID, "text": text}, flowRunID)

@@ -194,8 +194,16 @@ if "camera" in _declared:
         # Same selector shape as motion: ROBOT.md picks the backend, because a
         # CSI sensor behind libcamera and a UVC webcam share no open path.
         _vision_cap = _profile.capabilities.get("vision")
+        # Simulation never uses the production UVC driver: "virtual" paints a
+        # synthetic scene, "host" opens the developer machine's webcam through
+        # the platform's native OpenCV backend. Only a real body reaches the
+        # ROBOT.md `driver:` selector.
+        if _simulation:
+            _camera_driver = "host" if _simulation_media == "host" else "virtual"
+        else:
+            _camera_driver = _vision_cap.driver if _vision_cap else None
         LocalVideoCaptureDevice = resolve_camera_class(
-            "virtual" if _simulation and _simulation_media != "host" else (_vision_cap.driver if _vision_cap else None),
+            _camera_driver,
             _vision_cap.required if _vision_cap else False,
         )
         if LocalVideoCaptureDevice is None:
@@ -223,7 +231,10 @@ for _owner_name in dict.fromkeys(
 
     _owner_cls = resolve_media_owner(_owner_name)
     if _owner_cls is not None:
-        _media_owners.append(_owner_cls())
+        # startup_volume travels with the handover because releasing the media
+        # is what resets the card's mixer — the owner needs this body's level to
+        # put it back on a unit that has no persisted level yet.
+        _media_owners.append(_owner_cls(startup_volume=_profile.startup_volume))
         logger.info("Media owner '%s' declared — HAL will borrow the hardware", _owner_name)
 
 SensingService = None
@@ -289,6 +300,64 @@ _ttp223_handler = None
 _lifespan_stopping = threading.Event()
 
 
+def _sim_audio_probe(sd_module) -> None:
+    """Confirm the host speaker and microphone are actually usable (sim only).
+
+    Enumeration is not permission: on macOS `sd.query_devices()` lists the
+    built-in microphone even when the terminal app has never been granted
+    microphone access, and only the first real read raises. Probing a few
+    milliseconds at boot turns that into one honest fallback with an actionable
+    message, instead of a 500 the first time someone presses "Record 3s".
+    """
+    import platform
+
+    def _mac_hint(what: str) -> str:
+        if platform.system() != "Darwin":
+            return ""
+        return (
+            f" Grant {what} access to the terminal app running HAL: "
+            f"System Settings > Privacy & Security > {what}, then restart "
+            f"`make sim SIM_MEDIA=host`."
+        )
+
+    if state.audio_output_device is None:
+        state.sim_media_fallback("audio", "no host output (speaker) device found")
+        state.audio_output_device = 0
+        state.audio_input_device = 0
+        return
+    if state.audio_input_device is None:
+        state.sim_media_fallback(
+            "audio", "no host input (microphone) device found" + _mac_hint("Microphone")
+        )
+        state.audio_output_device = 0
+        state.audio_input_device = 0
+        return
+    try:
+        rate = int(sd_module.query_devices(state.audio_input_device)["default_samplerate"])
+        rec = sd_module.rec(
+            max(1, rate // 20),
+            samplerate=rate,
+            channels=1,
+            dtype="int16",
+            device=state.audio_input_device,
+        )
+        sd_module.wait()
+        if rec is None:
+            raise RuntimeError("microphone returned no samples")
+    except Exception as e:
+        state.sim_media_fallback(
+            "audio", f"microphone unusable: {e}" + _mac_hint("Microphone")
+        )
+        state.audio_output_device = 0
+        state.audio_input_device = 0
+        return
+    logger.info(
+        "Host media: speaker device=%s, microphone device=%s",
+        state.audio_output_device,
+        state.audio_input_device,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _gpio_button_handler, _ttp223_handler
@@ -330,7 +399,9 @@ async def lifespan(app: FastAPI):
                 # ramp is computed in the driver, with no route to pass it in
                 # the way aim/nudge do.
                 svc = AnimationService(safety_policy=_safety)
-            svc.start()
+            # A device that was asleep must not perform its wake sequence just
+            # because HAL restarted (see AnimationService.start docstring).
+            svc.start(skip_wake=state._sleeping)
             state.animation_service = svc
             logger.info("Motion service started (%s)", type(svc).__name__)
         except Exception as e:
@@ -388,6 +459,31 @@ async def lifespan(app: FastAPI):
                 f"Camera opened (device={camera_device_id}, {CAMERA_WIDTH}x{CAMERA_HEIGHT})"
             )
         except Exception as e:
+            if _simulation and _simulation_media == "host":
+                # A missing / busy / permission-denied host webcam must not leave
+                # the simulator with no camera at all, and must not leave a live
+                # stream promised in the UI. Drop to the virtual scene and record
+                # why, so GET /simulator/state can say so.
+                state.sim_media_fallback("camera", str(e))
+                try:
+                    from hal.drivers.camera.virtual_capture_device import (
+                        VirtualVideoCaptureDevice,
+                    )
+
+                    cap = VirtualVideoCaptureDevice(
+                        VideoCaptureDeviceInfo(
+                            device_id=CAMERA_INDEX,
+                            max_width=CAMERA_WIDTH,
+                            max_height=CAMERA_HEIGHT,
+                        )
+                    )
+                    if not state._camera_disabled:
+                        cap.start()
+                    state.camera_capture = cap
+                    logger.info("Camera fell back to the virtual capture device")
+                    return
+                except Exception as e2:
+                    logger.warning(f"Virtual camera fallback failed: {e2}")
             logger.warning(f"Camera failed to start: {e}")
 
     hw_threads = []
@@ -476,6 +572,16 @@ async def lifespan(app: FastAPI):
             logger.info(f"Audio output device: {state.audio_output_device}")
         if state.audio_input_device is not None:
             logger.info(f"Audio input device: {state.audio_input_device}")
+        if _simulation and _simulation_media == "host":
+            _sim_audio_probe(sd)
+    elif _simulation and _simulation_media == "host" and {
+        "audio", "voice", "music", "speaker"
+    } & set(_plan.mounted):
+        state.sim_media_fallback(
+            "audio", "sounddevice is not installed in this environment"
+        )
+        state.audio_output_device = 0
+        state.audio_input_device = 0
 
     # Auto-start voice pipeline from os-server config
     if _simulation and "voice" in _plan.mounted:
@@ -727,6 +833,15 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.debug("bearing sampler unavailable: %s", e)
 
+        # Watch for the user turning toward the lamp, so addressing it does not
+        # always require the wake phrase. Off by default; shadow-logs when on.
+        try:
+            from hal.drivers.tracking import gaze
+
+            gaze.start()
+        except Exception as e:
+            logger.debug("gaze watcher unavailable: %s", e)
+
     # Start display (GC9A01 eyes)
     if DisplayService:
         try:
@@ -812,6 +927,30 @@ async def lifespan(app: FastAPI):
             state._start_mic_muted_effect()
         except Exception as e:
             logger.warning(f"Mic-muted LED repaint failed: {e}")
+
+    # Sleep restored from the sidecar. Do NOT re-express `sleepy` here: that
+    # PLAYS the going-to-sleep animation, so a device that was already resting
+    # in the sleep pose energised its servos, moved, and released again — from
+    # the outside, exactly the "it woke up, then went back to sleep" this whole
+    # change exists to prevent. The body is left as sleep left it (limp, servos
+    # not energised — see AnimationService.start(skip_wake)), the strip stays
+    # dark because nothing paints it, and every `_sleeping` gate is already
+    # armed from the import-time restore. All that is missing is the emotion
+    # bookkeeping the restore did not go through.
+    if state._sleeping:
+        try:
+            from hal.presets import EMO_SLEEPY
+
+            # Everything sleep owns — the flag and the mic/speaker mutes — comes
+            # back from its sidecar at import. All that is left is the emotion
+            # bookkeeping the restore did not go through.
+            state._current_emotion = EMO_SLEEPY
+            logger.info(
+                "Sleep restored: asleep, mic_muted=%s speaker_muted=%s (no wake performance)",
+                state._mic_muted, state._speaker_muted,
+            )
+        except Exception as e:
+            logger.warning(f"Sleep restore bookkeeping failed: {e}")
 
     # Thermal fail-safe monitor (only when `thermal` bounds are declared).
     if _safety and _safety.thermal:
@@ -1206,12 +1345,84 @@ def simulator_cad():
     return FileResponse(mesh, media_type="model/stl")
 
 
-@app.get("/simulator/state", include_in_schema=False)
-def simulator_state():
-    """Expose only the local UI mode; no hardware state is changed here."""
+@app.get("/simulator/pixels", include_in_schema=False)
+def simulator_pixels():
+    """Every pixel on the ring, right now, for the local viewer.
+
+    /led/color cannot drive a visualiser: while an effect runs it reports the
+    effect's static base color, and otherwise it reads pixel 0 alone. Neither
+    shows what the ring is actually doing, so breathing, candle and rainbow all
+    render as one unchanging color. This reads the strip buffer itself.
+    """
     if not _simulation or _profile.id != "lamp":
         return HTMLResponse(status_code=404, content="Lamp simulator is unavailable")
-    return {"media": _simulation_media}
+    service = state.rgb_service
+    if not service:
+        return {"pixels": []}
+    strip = service.strip
+    pixels = []
+    for index in range(service.led_count):
+        raw = strip.getPixelColor(index)
+        # Real strips pack a pixel into an int; the in-memory strip keeps tuples.
+        pixels.append(
+            list(raw)[:3] if isinstance(raw, (tuple, list))
+            else [(raw >> 16) & 0xFF, (raw >> 8) & 0xFF, raw & 0xFF]
+        )
+    return {"pixels": pixels}
+
+
+@app.get("/simulator/rig", include_in_schema=False)
+def simulator_rig():
+    """Serve the Lamp's rigged CAD model for the local viewer.
+
+    Unlike the STL assembly this GLB carries an armature: five joint nodes named
+    exactly as HAL names them (base_yaw, base_pitch, elbow_pitch, wrist_pitch,
+    wrist_roll), so live joint state can drive the real geometry instead of a
+    stand-in made of boxes.
+    """
+    if not _simulation or _profile.id != "lamp":
+        return HTMLResponse(status_code=404, content="Lamp simulator is unavailable")
+    model = Path(_devices_dir()) / "lamp" / "hardware" / "cad" / "glb" / "lamp.glb"
+    if not model.is_file() or model.stat().st_size < 1024:
+        return HTMLResponse(
+            status_code=404,
+            content="Lamp rig is unavailable; run git lfs pull in the repository.",
+        )
+    return FileResponse(model, media_type="model/gltf-binary")
+
+
+@app.get("/simulator/state", include_in_schema=False)
+def simulator_state():
+    """Expose the local UI mode and the rig's zero pose; changes no state.
+
+    The GLB is modelled in the same pose the CAD assembly is: the lamp standing
+    as it does when aimed at center. So the viewer must read joint angles as
+    offsets from the center preset, not from zero, or every pose comes out bent
+    twice. Serving the preset (rather than hardcoding it in the page) keeps the
+    two from drifting when the per-device presets change.
+    """
+    if not _simulation or _profile.id != "lamp":
+        return HTMLResponse(status_code=404, content="Lamp simulator is unavailable")
+    from hal.presets import AIM_CENTER, AIM_PRESETS
+
+    # `media` stays the effective mode (what is really running) so the page and
+    # any script reading it can never be told "host" while looking at the
+    # virtual scene. It degrades to "virtual" as soon as either subsystem does;
+    # `media_camera` / `media_audio` give the per-subsystem truth and
+    # `media_reasons` the actionable why.
+    effective = (
+        "host"
+        if state.sim_media_camera == "host" and state.sim_media_audio == "host"
+        else "virtual"
+    )
+    return {
+        "media": effective,
+        "media_requested": _simulation_media,
+        "media_camera": state.sim_media_camera,
+        "media_audio": state.sim_media_audio,
+        "media_reasons": dict(state.sim_media_reasons),
+        "rig_zero": AIM_PRESETS[AIM_CENTER],
+    }
 
 
 from hal.server_support.http_security import (

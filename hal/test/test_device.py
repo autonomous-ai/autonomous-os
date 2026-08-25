@@ -4,11 +4,13 @@ Pure logic, no hardware. Also parses the REAL committed robots/lamp and
 robots/intern-v2 ROBOT.md files to guard the contract against drift.
 """
 import os
+import re
 import shutil
 import tempfile
 import unittest
 
 from hal.board.device import (
+    DEFAULT_STARTUP_VOLUME,
     Capability,
     MountPlan,
     extract_front_matter,
@@ -133,6 +135,33 @@ class TestParsing(unittest.TestCase):
         # SAMPLE declares no memory block; lamp declares { backend: local }.
         self.assertEqual(parse_device("sample", SAMPLE).memory_backend, "")
         self.assertEqual(load_device("lamp", DEVICES_DIR).memory_backend, "local")
+
+    def test_startup_volume_parsed(self):
+        # Real bodies declare their own level; the parser must not flatten them
+        # to one number — restoring the speaker after a media handover reads it.
+        self.assertEqual(load_device("lamp", DEVICES_DIR).startup_volume, 65)
+        self.assertEqual(load_device("reachy-mini", DEVICES_DIR).startup_volume, 100)
+
+    def test_startup_volume_defaults_when_absent_or_out_of_range(self):
+        # SAMPLE declares none. Fail-safe to max, never to silent.
+        self.assertEqual(parse_device("sample", SAMPLE).startup_volume, DEFAULT_STARTUP_VOLUME)
+        for bad in ("101", "-5", "loud"):
+            md = SAMPLE.replace("soul_ref:", f"startup_volume: {bad}\nsoul_ref:")
+            self.assertEqual(
+                parse_device("sample", md).startup_volume, DEFAULT_STARTUP_VOLUME, bad
+            )
+
+    def test_startup_volume_matches_go_default(self):
+        # Two runtimes parse this field (hal/board/device.py and Go's
+        # system/device/devicemd.go) and both restore the speaker. A drift
+        # between their defaults is a device that boots at two levels.
+        go_src = os.path.join(
+            os.path.dirname(DEVICES_DIR), "system", "device", "devicemd.go"
+        )
+        with open(go_src) as f:
+            m = re.search(r"DefaultStartupVolume\s*=\s*(\d+)", f.read())
+        self.assertIsNotNone(m, "DefaultStartupVolume not found in devicemd.go")
+        self.assertEqual(int(m.group(1)), DEFAULT_STARTUP_VOLUME)
 
     def test_declared_routes_required_rollup(self):
         dev = parse_device("sample", SAMPLE)

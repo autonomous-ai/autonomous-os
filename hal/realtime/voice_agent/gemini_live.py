@@ -115,6 +115,16 @@ class GeminiLiveAgent(VoiceAgentBase):
         self._first_audio_received: bool = False
         self._vad_disabled: bool = not config.vad_enabled
         self._activity_started: bool = False
+        # Gemini rejects send_realtime_input while a tool call it emitted is still
+        # unanswered, and closes the session with 1008 ("The operation was
+        # aborted") — a deliberate policy close, not a transport drop. Track the
+        # call_ids currently in flight and drop all normal client input while the
+        # set is non-empty. A fire-and-forget tool (trigger_response=False) is
+        # deliberately not acknowledged to Gemini, so that session must be
+        # replaced before another turn rather than locally clearing the call.
+        self._pending_tool_calls: set[str] = set()
+        self._requires_fresh_session: bool = False
+        self._gated_audio_frames: int = 0
         self._reconnect_delay_s: float = config.reconnect_delay_s
         self._last_reconnect_at: float = 0.0
         # Exponential backoff: the recv loop self-reconnects when disconnected, so a
@@ -143,6 +153,14 @@ class GeminiLiveAgent(VoiceAgentBase):
         # Gemini Live always streams native audio output at 24 kHz, regardless of
         # the 16 kHz input rate (`sample_rate`).
         return 24000
+
+    @property
+    @override
+    def requires_fresh_session(self) -> bool:
+        """Whether an unacknowledged tool call makes this session unusable."""
+        return getattr(self, "_requires_fresh_session", False) or bool(
+            self._pending_tool_calls
+        )
 
     def _build_config(self) -> types.LiveConnectConfig:
         lang: str | None = self._config.language
@@ -318,8 +336,35 @@ class GeminiLiveAgent(VoiceAgentBase):
             if io_thread.is_alive():
                 logger.warning("[realtime] Gemini IO thread did not stop within %.1fs", self._join_timeout_s)
 
+    def _tool_call_pending(self) -> bool:
+        """True while Gemini is waiting on a tool result and rejects input."""
+        return bool(self._pending_tool_calls)
+
+    def _clear_pending_tool_calls(self) -> None:
+        self._pending_tool_calls.clear()
+        if self._gated_audio_frames:
+            logger.debug(
+                "[realtime] Dropped %d audio frame(s) during tool call",
+                self._gated_audio_frames,
+            )
+            self._gated_audio_frames = 0
+
     async def _async_send_input(self, input: InputBase | None) -> None:
         if self._session is None or input is None:
+            return
+        # Gemini rejects every normal client input while it is waiting for a
+        # function response, including user text, images, audio, and manual-VAD
+        # activity signals. Do not let one of those policy violations close the
+        # WebSocket with 1008. FunctionCallResultInput is the sole allowed input.
+        if not isinstance(input, FunctionCallResultInput) and self._tool_call_pending():
+            if isinstance(input, AudioInput):
+                self._gated_audio_frames += 1
+            else:
+                logger.debug(
+                    "[realtime] Dropped %s while tool call(s) %s are pending",
+                    type(input).__name__,
+                    sorted(self._pending_tool_calls),
+                )
             return
         if isinstance(input, AudioInput):
             # When VAD is disabled, send activityStart before first audio
@@ -368,9 +413,24 @@ class GeminiLiveAgent(VoiceAgentBase):
             # Gemini's send_tool_response CONTINUES the turn — the model then
             # RE-GENERATES and re-speaks its whole reply, double-billing TTS
             # (device-observed 2026-06-29: reply spoken twice, with express_emotion
-            # logged between the two copies). The side effect already ran; just skip
-            # the ack. delegate_to_main keeps trigger_response=True and is sent.
+            # logged between the two copies). Gemini still considers this call
+            # unresolved, so retain the gate and require a fresh session before
+            # the next turn. End the local turn now instead of waiting for a
+            # turn_complete that Gemini cannot emit without the response.
             if not input.trigger_response:
+                if input.call_id in self._pending_tool_calls:
+                    self._requires_fresh_session = True
+                    logger.info(
+                        "[realtime] Tool call %s intentionally unacknowledged — "
+                        "fresh Gemini session required",
+                        input.call_id,
+                    )
+                    turn_done: threading.Event | None = getattr(self, "_turn_done", None)
+                    if turn_done is not None:
+                        turn_done.set()
+                    recv_queue = getattr(self, "_recv_queue", None)
+                    if recv_queue is not None:
+                        recv_queue.put(TurnDoneEvent())
                 return
             # input.output is normally a JSON object string, but send_function_result()
             # is public and may be handed arbitrary text — Gemini's response field
@@ -390,11 +450,24 @@ class GeminiLiveAgent(VoiceAgentBase):
                     )
                 ]
             )
+            # Gemini accepted the response, so this call is resolved. Keeping the
+            # gate until after the await avoids racing subsequent client input
+            # against the tool response on the wire.
+            self._pending_tool_calls.discard(input.call_id)
+            if not self._pending_tool_calls:
+                self._clear_pending_tool_calls()
 
     async def _async_commit(self) -> None:
         if self._session is None:
             return
         if self._vad_disabled and self._activity_started:
+            if self._tool_call_pending():
+                logger.debug(
+                    "[realtime] Suppressed activityEnd while tool call(s) %s are pending",
+                    sorted(self._pending_tool_calls),
+                )
+                self._activity_started = False
+                return
             await self._session.send_realtime_input(activity_end=types.ActivityEnd())
             self._activity_started = False
             self._turn_done.clear()
@@ -545,6 +618,13 @@ class GeminiLiveAgent(VoiceAgentBase):
                     return
 
             elif message.tool_call and message.tool_call.function_calls:
+                # Close the audio gate before the events are queued: the consumer
+                # runs on another thread and can dispatch a result immediately, so
+                # registering the call_ids afterwards could race a clear and leave
+                # a phantom entry pending until the deadline.
+                self._pending_tool_calls.update(
+                    fc.id or "" for fc in message.tool_call.function_calls
+                )
                 for fc in message.tool_call.function_calls:
                     logger.debug("[realtime] Function call: %s (call_id=%s)", fc.name, fc.id)
                     self._recv_queue.put(
@@ -601,6 +681,10 @@ class GeminiLiveAgent(VoiceAgentBase):
         logger.warning("[realtime] Forcing reconnect — session looks zombie (silent)")
         self._connected.clear()
         self._activity_started = False
+        # A fresh session inherits no tool calls — dropping the gate here keeps a
+        # call that died with the old socket from muting the new one.
+        self._clear_pending_tool_calls()
+        self._requires_fresh_session = False
         self._turn_done.set()  # unblock any waiting commit
         self._last_reconnect_at = 0.0  # bypass _ensure_connected throttle
         self._reconnect_backoff = self._reconnect_delay_s  # zombie recovery → retry now
@@ -620,6 +704,10 @@ class GeminiLiveAgent(VoiceAgentBase):
             return
         self._connected.clear()
         self._activity_started = False
+        # A fresh session inherits no tool calls — dropping the gate here keeps a
+        # call that died with the old socket from muting the new one.
+        self._clear_pending_tool_calls()
+        self._requires_fresh_session = False
         self._turn_done.set()  # unblock any waiting commit
         if self._loop is None:
             logger.error("[realtime] Cannot reconnect — event loop is None")

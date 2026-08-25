@@ -125,7 +125,14 @@ def _sample_once() -> bool:
         kind = ""
         conf = None
         rejected = None  # kept only so the snapshot can show what was dismissed
-        for target in ("person", "face"):
+        # FACE only, never `person`. A person box says where a body is, and a
+        # body fills the frame whenever the camera is aimed low — so learning
+        # from it memorises the pose that was pointing at the desk and calls it
+        # "where the user is". Device-observed: 22 samples, confidence 0.99, and
+        # a stored posture with wrist_pitch -78 that could not see a face at all.
+        # A face in frame proves the opposite by construction: this pose sees a
+        # head, so restoring it will see one again.
+        for target in ("face",):
             try:
                 found = detector.detect(
                     frame, target, strict=False,
@@ -171,14 +178,31 @@ def _sample_once() -> bool:
         return False
 
     bearing = yaw + dx_frac * float(config.LOOK_AIM_FOV_DEG)
-    # Posture only when it genuinely points at them — see the module docstring.
-    pose = positions if abs(dy_frac) <= config.BEARING_SAMPLE_MAX_DY_FRAC else None
+    # Posture is recorded whenever a FACE was the thing seen, wherever it sat in
+    # frame. The vertical gate below was written for `person` boxes, where a
+    # centred torso said nothing about whether the head was in frame — a posture
+    # learned from one could be aimed at a chest. A face carries its own proof:
+    # this posture sees a head.
+    #
+    # Keeping the gate for faces was self-defeating. While the camera is aimed
+    # low every face sits near the top edge, so every sighting failed the gate,
+    # so no posture was ever stored, so there was nothing to restore and the
+    # camera stayed low — device-observed dy of -15.8% then -41.2%, two
+    # sightings, `joints=1`, a remembered "pose" containing only a yaw. A
+    # posture that catches the user at the frame edge is imperfect; it is also
+    # incomparably better than one pointing at the desk, and the estimate's EMA
+    # walks it toward centre as the framing it enables improves.
+    pose = positions if kind == "face" else (
+        positions if abs(dy_frac) <= config.BEARING_SAMPLE_MAX_DY_FRAC else None
+    )
     if pose is not None:
         pose = dict(pose)
         pose["base_yaw.pos"] = bearing
 
     recorded = user_bearing.record_sighting(bearing, pose=pose)
     note = "" if pose is not None else " (bearing only, not vertically centred)"
+    if pose is not None and abs(dy_frac) > config.BEARING_SAMPLE_MAX_DY_FRAC:
+        note = f" (posture from a face {abs(dy_frac) * 100:.0f}% off centre)"
     if recorded:
         _save_snapshot(
             frame, box,

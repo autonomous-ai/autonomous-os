@@ -70,6 +70,14 @@ live next to the backend and are embedded + registered in `install.go`:
 **`install.sh`** (one-time):
 1. installs `jq` + `yq` + the pinned `picoclaw` binary (GitHub release,
    `picoclaw-linux-arm64`) into `/usr/local/bin`;
+
+   > The pin is the image baseline only. Field updates go via
+   > `make upload-picoclaw <release-tag>` + `make promote-picoclaw`, which the
+   > bootstrap worker applies as `software-update picoclaw` on devices whose
+   > `agent_runtime` is `picoclaw`. That command also stamps the installed tag to
+   > `/usr/local/lib/os-runtimes/picoclaw/installed-version` — `picoclaw version`
+   > prints a build description with no semver, so the stamp is the ONLY way the
+   > worker can tell which release is installed. See `docs/bootstrap-ota.md` §5.
 2. `picoclaw onboard` (only when `config.json` is absent) creates `/root/.picoclaw`
    — workspace + a baseline `config.json` and `.security.yml`;
 3. writes **`picoclaw.service`** (`ExecStart=/usr/local/bin/picoclaw gateway`,
@@ -118,6 +126,10 @@ self-heals after a factory reset, mirroring hermes' presync):
     (`picoclawBuiltinSkills`: `agent-browser`, `github`, `hardware`, `skill-creator`,
     `summarize`, `tmux`, `weather`); everything else under `workspace/skills` is
     deleted. Fail-open when ROBOT.md declares no caps. No reload (skills read per-turn);
+    then refreshes every supported skill from the CDN, so a local skill that was
+    stale before the watcher started self-heals on boot/config reconciliation. If
+    any skill content changed, it notifies the agent after a possible gateway restart
+    to re-read the updated `SKILL.md` files;
   - when any block changed, **restarts the gateway** (`restartPicoclawGateway` →
     `systemctl restart picoclaw`) so it re-reads the workspace files (log+skip when
     systemctl is unavailable). Not the gateway `/reload` endpoint — it needs an admin
@@ -129,7 +141,9 @@ self-heals after a factory reset, mirroring hermes' presync):
 A separate **skill watcher** (`skill_watcher.go`, started at boot like openclaw)
 polls OTA metadata every 5 min and auto-updates `workspace/skills/<name>` from the
 CDN when a supported skill's version bumps (capability-gated via
-`skills.Supported`), then notifies the agent with `SendSystemChatMessage`.
+`skills.Supported`), then notifies the agent with `SendSystemChatMessage`. Each
+successful poll logs `skill watcher: checked`; if a ZIP download or extraction fails,
+the watcher leaves that skill's version pending and retries it on the next poll.
 - **§1 structure** (`jq` on `config.json`) — `agents.defaults` (provider
   `anthropic-messages`, `model_name "autonomous"`, `image_model "autonomous_vision"`,
   `restrict_to_workspace:false`, `allow_read_outside_workspace:true`), the `autonomous`

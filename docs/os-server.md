@@ -18,6 +18,7 @@
 | GET | `/api/system/info` | CPU, RAM, temp, uptime, version, agent status (name/connected/emotion/version/uptime) |
 | GET | `/api/system/network` | WiFi SSID, IP, signal, internet status |
 | GET | `/api/system/dashboard` | Aggregated snapshot (agent + config + HW) |
+| GET | `/api/system/ota-security` | OTA trust posture from the bootstrap worker: `legacy` vs `verified`, pinned key fingerprint, last metadata fetch (see `bootstrap-ota.md`) |
 
 ### Device Setup
 
@@ -361,18 +362,25 @@ HAL (Python): FastAPI standard JSON responses.
    - Connect OpenClaw WebSocket
    - Connect MQTT
    - Start ambient behaviors
-   - Set speaker volume to the device's `startup_volume` (ROBOT.md front matter, default 100)
+   - Wait for HAL to answer `GET :5001/health` (up to 120s) before any HAL call. os-server binds :5000 well before HAL's FastAPI is listening, and a first boot also builds the venv and loads models, so an un-gated one-shot call is lost to a connection refused
+   - Set speaker volume: the level the user last set (persisted by HAL on every `/audio/volume` change) wins; otherwise the device's `startup_volume` (ROBOT.md front matter, default 100)
 4. If not yet set up: wait for `POST /api/device/setup`
 
 ## Logging
 
-When `GELF_URL` is configured, OS Server ships INFO-and-higher records to that
-central collector through one worker with a bounded queue of 256 records. Logging
-never blocks the request path or creates a goroutine per record: when the collector
-is slow or unavailable and the queue is full, newly produced GELF records are
-dropped (with rate-limited stderr notices) while console and local rotating-file
-logging continue. On shutdown, the worker flushes queued records for up to five
-seconds before cancelling any remaining delivery.
+`HAL_LOG_LEVEL` in the shared `/opt/hal/.env` controls the level for HAL,
+OS Server, and bootstrap. Allowed values are `DEBUG`, `INFO` (the default),
+`WARN`, and `ERROR`. OS Server writes records at that level and higher to stdout
+and the rotating local file `/var/log/os-server.log` (2 MB per file, retaining
+the 10 newest backups).
+
+When `GELF_URL` is configured, OS Server ships records at the same configured
+level and higher to that central collector through one worker with a bounded queue
+of 256 records. Logging never blocks the request path or creates a goroutine per
+record: when the collector is slow or unavailable and the queue is full, newly
+produced GELF records are dropped (with rate-limited stderr notices) while console
+and local rotating-file logging continue. On shutdown, the worker flushes queued
+records for up to five seconds before cancelling any remaining delivery.
 
 ## Local Intent Matching
 

@@ -112,6 +112,13 @@ const (
     OTAKeyBootstrap = "bootstrap"
     OTAKeyWeb       = "web"
     OTAKeyOpenClaw  = "openclaw"
+    // Agent-runtime CLIs. Each value is also the runtime name in config.json
+    // `agent_runtime` — that equality is how bootstrap updates only the CLI the
+    // device actually runs. Hermes is absent on purpose (cannot be pinned).
+    OTAKeyCodex      = "codex"
+    OTAKeyClaudeCode = "claudecode"
+    OTAKeyOpenCode   = "opencode"
+    OTAKeyPicoClaw   = "picoclaw"
     // OTAKeyLeLamp's value is "hal" — the HAL OTA metadata key
 )
 
@@ -237,7 +244,7 @@ UNIT
 | Service | ExecStart | Port | Notes |
 |---|---|---|---|
 | `os-server.service` | `/usr/local/bin/os-server` | 5000 | Main HTTP API, always running |
-| `bootstrap.service` | `/usr/local/bin/bootstrap-server` | 8080 | OTA worker, polls for updates. Exposes `POST /force-check` to trigger immediate OTA check |
+| `bootstrap.service` | `/usr/local/bin/bootstrap-server` | 8080 | OTA worker, polls for updates. Exposes `POST /force-check` to trigger an immediate OTA check and `GET /security` for the OTA trust posture |
 | `openclaw.service` | `xvfb-run ... openclaw gateway run` | — | AI brain, memory limit 1500M |
 | `hal.service` | `uvicorn hal.server:app --host 127.0.0.1 --port 5001` | 5001 | Hardware drivers (servo, LED, camera, audio) |
 | nginx | `nginx` | 80 | Setup SPA + reverse proxy (`/api/` → OS Server 5000, `/hw/` → HAL 5001) |
@@ -293,10 +300,91 @@ release is not reinstalled on the next poll. Publishing a different version
 automatically resumes OTA for that component. Rollback itself does not need the
 metadata URL or network access.
 
+Directory installs have the same recovery contract. Before a web update, the
+updater stops nginx, swaps the fully unpacked staged bundle into place, and
+retains the previous bundle at `/root/bootstrap/rollback/web.previous` together
+with nginx's prior active/inactive state. It then requires `index.html`, a valid
+`nginx -t`, and—when nginx had been running—a successful loopback `GET /`.
+Failure automatically restores the saved bundle and service state. An operator
+can also run `software-update rollback web`; the rejected version is recorded in
+`rollback_versions` just like a binary rollback.
+
+For a device profile, the updater stages the ZIP, stops only the `os-server` and
+`hal` services that were active, and retains the old profile at
+`/root/bootstrap/rollback/device.previous`. It also snapshots the exact files
+covered by the old or new `rootfs/` overlay in `device.previous.rootfs`; rollback
+therefore restores overwritten files and removes files introduced only by the
+rejected profile. Local `/opt/hal/.env` tuning remains preserved. The profile
+must contain `ROBOT.md`; each service that was active must recover and answer
+its loopback health endpoint. A failed check restores the known-good profile and
+its prior service state automatically. Use `software-update rollback device` for
+an operator rollback; the rejected device-profile version is then blocked.
+
 Devices without `signing_public_key` deliberately remain in legacy mode: they
 read the top-level entries and emit a warning rather than failing OTA. This is a
 compatibility bridge, not a trust guarantee; pin the public key to opt in to
 verified OTA.
+
+### OTA security posture (operator-visible)
+
+The warning above is a log line, so a device silently stuck in legacy mode is
+invisible to a fleet operator. Both processes expose the posture as data:
+
+| Endpoint | Served by | Notes |
+|----------|-----------|-------|
+| `GET http://127.0.0.1:8080/security` | `bootstrap-server` | Source of truth: the worker holds the pinned key and performs verification. Loopback only. |
+| `GET /api/system/ota-security` | `os-server` | Proxies the above verbatim inside the standard `{"status":1,"data":…}` wrapper. `502` when the bootstrap worker is unreachable. |
+
+```json
+{
+  "mode": "verified",
+  "metadata_format": "autonomous-ota/v1",
+  "key_fingerprint": "9f2c1ab30d4e5f60",
+  "artifact_checksums": true,
+  "last_metadata_fetch": {
+    "at": "2026-08-24T09:12:03Z",
+    "verified": true
+  }
+}
+```
+
+- `mode` is `verified` when `signing_public_key` is provisioned, `legacy`
+  otherwise. This is the single field to alert on across the fleet.
+- `key_fingerprint` is the first 16 hex characters of the SHA-256 of the pinned
+  key, so operators can confirm *which* key a device trusts (and spot devices
+  left on a rotated-out key) without the endpoint echoing key material. Absent
+  in legacy mode.
+- `artifact_checksums` reports whether per-component SHA-256 digests are
+  enforced. It follows `mode`: digests are only meaningful when the metadata
+  carrying them is authentic.
+- `last_metadata_fetch` is the outcome of the most recent fetch, including
+  transport failures (`error` is set, `verified` is `false`). It is absent until
+  the first fetch completes after a restart, so a device that has never reached
+  its feed is distinguishable from one whose feed is healthy.
+
+### Signed-only cutover
+
+Signed metadata is published as a superset: the payload's component entries stay
+at the top level for already-deployed workers, with the authenticated document
+under `signed`. That compatibility copy is what keeps legacy mode exploitable,
+so it has to be retired. The rollout:
+
+1. **Publish signed** (done). Release writers add the `signed` envelope whenever
+   `OTA_SIGNING_PRIVATE_KEY` and `OTA_SIGNING_KEY_ID` are set. Devices ignore it
+   until a key is pinned.
+2. **Provision keys.** New devices get `OTA_SIGNING_PUBLIC_KEY` at setup; the
+   existing fleet gets it written into `/root/config/bootstrap.json`. No
+   redeploy is needed — the worker reads the key on the next config load.
+3. **Confirm the fleet.** Poll `GET /api/system/ota-security` and require
+   `mode == "verified"` with the expected `key_fingerprint` on every device.
+   This step is the gate: do not proceed while any device reports `legacy`.
+4. **Cut over.** Publish with `OTA_METADATA_SIGNED_ONLY=1`, which drops the
+   top-level copy so the document contains only `signed`. An unmigrated device
+   then stops updating (loudly) instead of updating from an unauthenticated
+   source — the intended failure direction.
+
+Rollback for step 4 is publishing once more without the flag; devices already in
+verified mode are unaffected either way, since they read only `signed`.
 
 **Wait-then-retry when unprovisioned**: if `metadata_url` is empty (device not
 set up yet), `Serve()` does not start the poll loop or healthcheck server. It logs
@@ -349,7 +437,7 @@ reconcile(key, target):
   5. If current < floor →
      a. Set LED orange breathing (OTA in progress)
      b. applyUpdate(key, target)   # installs target.version via software-update
-     c. Success → green flash | Failure → red pulse
+     c. Success → green flash | Failure → red pulse for 10 s, then restore LED state
 ```
 
 > Manual `software-update <key>` over SSH does NOT pass through `reconcile` — it
@@ -385,9 +473,68 @@ Bootstrap uses `lib/hal` to show update status on LEDs. See [status-led.md](../r
 
 | Phase | LED |
 |-------|-----|
-| Downloading + installing | Orange breathing `(255, 140, 0)` |
-| Success | Green flash `(0, 255, 80)`, then restore the user-selected LED look or the ambient resting look when none exists |
-| Failure | Red pulse `(255, 30, 30)` |
+| Downloading + installing | Orange breathing `[16, 8, 0]` |
+| Success | Green flash `[0, 12, 4]` for 1 second, then restore the user-selected LED look or the ambient resting look when none exists |
+| Failure | Red pulse `[16, 2, 2]` for 10 seconds, then restore the user-selected LED look or the ambient resting look when none exists |
+
+### Invariants the updater must keep (learned the hard way)
+
+A device lost `/opt/hal`, its staging dir AND its rollback backup from two clicks
+on the web update button 30 s apart. The five safeguards below are implemented
+in `scripts/provision/software-update`, and each is easy to reintroduce:
+
+1. **One run at a time** (`flock` on `/var/lock/software-update.lock`). Every
+   branch publishes by `mv`-ing the live tree to `<name>.previous`, so a second
+   concurrent run `rm -rf`s the first run's only backup and then fails on the
+   missing source. The per-target 30 s rate limit in os-server does not prevent
+   this.
+2. **A missing install directory is a REINSTALL, not an error.** `mv "$HAL_DIR"`
+   aborting on an absent `/opt/hal` meant the one command that could repair the
+   device refused to run.
+3. **Publish with the live tree's mode** (`publish_mode`). `mktemp -d` is 0700;
+   moving such a directory onto `/usr/share/nginx/html/setup` makes nginx
+   (www-data) answer 403 to everything, so the health check fails and the update
+   rolls itself back — forever, on every device.
+4. **A virtualenv is not relocatable** (`relocate_venv_scripts`). Building
+   `.venv` inside the staging dir bakes `#!/opt/.hal.new.XXXXXX/.venv/bin/python`
+   into every console script; the unit then dies with `203/EXEC` once staging is
+   gone. Invisible while an old `.venv` is inherited — it only bites on a fresh
+   install, i.e. exactly the recovery path.
+5. **Failure feedback must be temporary.** An OTA failure may pulse red to make
+   the outcome visible, but it restores the user-selected LED look or ambient
+   resting look after 10 seconds; failure feedback must never latch the strip.
+
+Plus one that made all of the above hard to see: **the saved service state is a
+snapshot taken at the start of a run**, so a run that begins while a previous
+failed update left the unit down records "inactive" and every later update
+faithfully restores "down". `unit_wanted_active` now treats a systemd-`enabled`
+unit as "must run", and `check_web`/`check_hal` probe what the unit is ACTUALLY
+doing instead of skipping the probe when the snapshot said it should be down (the
+old form reported success while the web UI served 403s).
+
+### `POST /force-update/:target` vs `POST /force-check/:target` (bootstrap, loopback)
+
+Two different acts, and mixing them up is what made the web button look broken:
+
+| Endpoint | Meaning | `min_version` |
+|---|---|---|
+| `force-update/<key>` | Install the published `version` NOW — the same thing `software-update <key>` does over SSH | **ignored** (the floor stages the fleet, not one deliberate operator) |
+| `force-check/<key>` | Re-run the AUTOMATIC decision for that component | **respected** — a component at or above the floor does nothing |
+
+The web Versions card's `update` button is `force-update` (via
+`POST /api/system/software-update/:target`). Both are limited to the same target
+allowlist, including `bootstrap`; a Bootstrap update detaches its installer so
+the replacement worker can restart safely. `componentInstalled` still refuses a
+component this device does not have.
+
+### `GET /versions` (bootstrap, loopback)
+
+Reports `{current, target, min_version, update_available, held_by_floor}` for every
+component this device actually has (`componentInstalled`), so the agent-CLI entry
+is the runtime it runs and nothing else. `held_by_floor` means a newer build is
+published but `min_version` was not promoted to it — the worker will refuse it,
+which is why the web Versions card treats held components as "no update".
+os-server proxies this as `GET /api/system/ota-versions`.
 
 ### Version Detection Per Component
 
@@ -398,6 +545,9 @@ Bootstrap uses `lib/hal` to show update status on LEDs. See [status-led.md](../r
 | `web` | Read file `/usr/share/nginx/html/setup/VERSION` |
 | `openclaw` | Run `openclaw --version`, extract semver with regex |
 | `hal` | Run `/opt/hal/venv/bin/python -m hal --version` OR read `/opt/hal/VERSION` file |
+| `codex` / `claudecode` / `opencode` | Run `<cli> --version`, extract semver from line one (`cliSemver`) |
+| `picoclaw` | Read `/usr/local/lib/os-runtimes/picoclaw/installed-version` — its `version` output carries no semver |
+| `hermes` | — not auto-updated (see below) |
 
 ### Update Application Per Component
 
@@ -408,6 +558,46 @@ Bootstrap uses `lib/hal` to show update status on LEDs. See [status-led.md](../r
 | `web` | Run `software-update web` |
 | `openclaw` | ~~Run `npm install -g openclaw@{version}` → `systemctl restart openclaw`~~ (temporarily disabled) |
 | `hal` | Run `software-update hal` → `systemctl restart hal` |
+| `codex` / `claudecode` / `opencode` / `picoclaw` | Run `software-update <key>` — only on the device whose `agent_runtime` IS that runtime |
+| `hermes` | Not in the loop: `hermes update` cannot be pinned, so a `min_version` it never reaches would re-trigger every poll. SSH-only. |
+
+**Why the agent CLIs are gated on `agent_runtime`, not on the binary:**
+`scripts/imager/build-orangepi.sh` bakes every agent CLI onto every lamp /
+intern-v2 image regardless of `DEFAULT_AGENT`, so `inPath("codex")` is true even
+on a device running Hermes. Gating on presence would make each poll announce
+"device is updating", turn the strip orange, download a CLI the device never
+uses, and restart a unit that does not exist — forever.
+`componentInstalled` therefore compares the key against `agent_runtime` in
+`/root/config/config.json`; an unreadable/unset value means "not this runtime"
+(skip), which is the safe direction.
+
+A **second gate** guards the other direction: `updaterSupports(key)` reads
+`/usr/local/bin/software-update` and requires its exact branch guard
+(`[ "$APP" = "<key>" ]`) to be present. `software-update` reaches a device only
+via the imager or `setup.sh` — never over OTA — so a device provisioned before
+these keys existed keeps an updater that answers `Unknown app: codex` forever.
+Without the gate, every poll (5m) on such a device would speak "device is
+updating", breathe orange, fail the apply, and briefly pulse red before restoring
+the normal LED state. With it, those devices simply never receive agent-CLI
+updates — the only outcome available to them anyway — silently. The match is the
+branch guard, not the bare key: the key also appears in comments and in the usage
+strings of an updater that does not implement it.
+
+**Healing a device that has an old updater.** `make upload-setup` also publishes
+the updater raw at `{CDN}/software-update`, so one SSH command brings a field
+device up to the current one:
+
+```bash
+sudo curl -fsSL https://cdn.autonomous.ai/os/software-update -o /tmp/su \
+  && sudo bash -n /tmp/su \
+  && sudo install -m 0755 /tmp/su /usr/local/bin/software-update
+```
+
+`bash -n` before `install` is the point: a truncated download must not replace a
+working updater. After this the device picks up agent-CLI updates on its next
+poll — no restart needed, bootstrap re-reads the file every cycle. OpenClaw keeps its `inPath` check: it is
+npm-installed per device rather than baked, and older provisioning may leave
+`agent_runtime` unset.
 
 ---
 
@@ -420,37 +610,168 @@ It reads the OTA metadata URL from `metadata_url` in `/root/config/bootstrap.jso
 (an explicit `OTA_METADATA_URL` env var overrides it for manual/debug runs), and
 aborts with an error if neither is set — no compiled-in URL.
 
-### HAL Case (NEW)
+### HAL Case
+
+> **The uv cache lives outside the runtime tree** (`/opt/.uv-cache-hal`, next to
+> `/opt/hal` so uv can hardlink into the new venv). It used to sit at
+> `/opt/hal/.uv-cache`, so every update copied it — measured at 2.5 GB, beside a
+> 2.3 GB `.venv` — into the staging tree before syncing: ~4.8 GB shuffled across
+> eMMC before any real work, minutes of HAL downtime, and a cache duplicated per
+> update. Neither directory is copied now; an in-tree cache is migrated once.
+> Measured on a lamp: **5-6 min → 41 s**, and `/opt/hal` shrank from ~4.8 GB to
+> 98 MB (the venv hardlinks into the shared cache).
+
+> **The publish window is crash-safe.** Between "move the live tree aside" and
+> "rename the staged tree into place" the component does not exist on disk. A
+> `trap` records that pending move and puts the tree back if the process exits
+> first — an interrupted SSH (HUP), a `systemctl restart bootstrap` killing the
+> cgroup (TERM), or any failure path. SIGKILL and power loss cannot be trapped;
+> those land on the reinstall path instead (a missing tree is installed fresh).
 
 ```bash
 "hal")
-    echo "Updating HAL to $VERSION..."
+    # Preserve the complete runtime and prior service state.
+    systemctl stop hal
+    mv /opt/hal /root/bootstrap/rollback/hal.previous
 
-    # Download
-    curl -fsSL "$URL" -o /tmp/hal-update.zip
+    # Build the candidate in a sibling directory. .env, venv, and uv cache
+    # are copied from the retained runtime before uv sync.
+    unzip -q "$ZIP" -d /opt/.hal.new
+    cp -a /root/bootstrap/rollback/hal.previous/{.env,.venv,.uv-cache} /opt/.hal.new/
+    (cd /opt/.hal.new && uv sync --python 3.12 --extra hardware)
+    mv /opt/.hal.new /opt/hal
 
-    # Stop service before updating
-    systemctl stop hal.service
-
-    # Backup current
-    cp -r /opt/hal /opt/hal.bak 2>/dev/null || true
-
-    # Extract (preserve venv if only code changed, or rebuild)
-    unzip -o /tmp/hal-update.zip -d /opt/hal/
-
-    # Reinstall dependencies if requirements.txt changed
-    /opt/hal/venv/bin/pip install -r /opt/hal/requirements.txt --quiet
-
-    # Restart
-    systemctl start hal.service
-
-    # Cleanup
-    rm -f /tmp/hal-update.zip
-    rm -rf /opt/hal.bak
-
-    echo "HAL updated to $VERSION"
+    systemctl restart hal
+    curl -fsS http://127.0.0.1:5001/health
+    # Any staging or health failure restores hal.previous and its old state.
+    # Operators can also run: software-update rollback hal
     ;;
 ```
+
+### Codex Case
+
+The Codex CLI is a static musl binary published on GitHub releases, so unlike
+every other component nothing of ours is hosted on GCS for it: metadata carries
+only `codex.version` (no `url`/`sha256`), and the release URL is composed from
+that version. Metadata stores the **bare semver** (`0.149.1`) because that is
+what `codex --version` prints; the upstream tag prefix (`rust-v`) is re-added
+when downloading. Keep this download in step with the same one in
+`runtimes/codex/install.sh` and `scripts/imager/build-orangepi.sh`.
+
+```bash
+"codex")
+    curl -fsSL https://github.com/openai/codex/releases/download/rust-v${VERSION}/codex-aarch64-unknown-linux-musl.tar.gz
+    tar -xzf …            # the extract IS the integrity check (no sha256 for upstream artifacts)
+    install -D -m 0755 /usr/local/bin/codex /root/bootstrap/rollback/codex.previous
+    install -m 0755 …     /usr/local/bin/codex
+    codex --version       # abort if the new binary is not runnable
+    # codex.service only exists once the runtime was switched to codex; every
+    # lamp/intern-v2 image bakes the BINARY regardless, so the restart is
+    # conditional. Operators can roll back: software-update rollback codex
+    systemctl restart codex
+    ;;
+```
+
+Publish a version with `make upload-codex <bare-semver>`, release it to the
+fleet with `make promote-codex`.
+
+Only the binary is touched: `config.toml`, `.env`, and the persona stay owned by
+the presync hook, so an update cannot clobber a device's Codex configuration.
+
+### Claude Code Case
+
+Unlike Codex, Claude Code is **not** a binary we place: Anthropic's installer
+owns `/root/.local/share/claude/versions/<ver>` and repoints
+`/root/.local/bin/claude` at it, and `/usr/local/bin/claude` is only our symlink
+into that. The update therefore re-runs the installer pinned to the published
+version (it takes the version as a positional arg: `install.sh [stable|latest|VERSION]`).
+
+```bash
+"claudecode")
+    HOME=/root curl -fsSL https://claude.ai/install.sh | bash -s -- "$VERSION"
+    ln -sf /root/.local/bin/claude /usr/local/bin/claude   # installer may repoint its own symlink
+    claude --version                                       # abort if not runnable
+    systemctl restart claudecode                           # conditional: unit exists only when the runtime is active
+    ;;
+```
+
+There is deliberately **no `.previous` backup / rollback target**: the installer
+keeps the old `versions/<ver>` directory, so going back is
+`software-update claudecode` with an older version published — not a restore of
+a file we saved. Publish with `make upload-claudecode <bare-semver>`, release
+with `make promote-claudecode`.
+
+### OpenCode Case
+
+OpenCode uses its official installer (arch detection + extraction are upstream's
+job); we only pin the version and force the install dir. Mirrors
+`runtimes/opencode/install.sh` and the imager pre-bake — keep the three in step.
+
+```bash
+"opencode")
+    install -D -m 0755 /usr/local/bin/opencode /root/bootstrap/rollback/opencode.previous
+    curl -fsSL https://opencode.ai/install | OPENCODE_INSTALL_DIR=/usr/local/bin bash -s -- --version "$VERSION"
+    # …then the same belt-and-suspenders copy install.sh does, in case the
+    # installer ignored OPENCODE_INSTALL_DIR and used ~/.opencode/bin.
+    opencode --version
+    systemctl restart opencode      # conditional: unit exists only when the runtime is active
+    ;;
+```
+
+`OPENCODE_INSTALL_DIR` MUST prefix `bash`, not `curl` — in a `VAR=x curl … | bash`
+pipeline the variable binds to `curl` only. Because this one really is a binary
+at a stable path, it does get a `.previous` backup: `software-update rollback
+opencode` works, unlike claudecode. Publish with `make upload-opencode
+<bare-semver>`, release with `make promote-opencode`.
+
+### Hermes Case (SSH-only — NOT pinnable, so never auto-applied)
+
+Hermes is a git install; `runtimes/hermes/install.sh` stamps
+`/usr/local/lib/hermes-agent/.install_method=git` precisely so the upstream
+updater recognizes it. That updater takes **no target version** — `hermes update`
+always moves to upstream HEAD. The published `hermes.version` therefore decides
+*when* the fleet updates (via `min_version`), not *which* build it gets.
+
+```bash
+"hermes")
+    hermes update                       # no version arg exists upstream
+    hermes --version                    # abort if not runnable
+    # Landed version != metadata version → WARN, not fail: nothing on the
+    # device could have pinned it.
+    systemctl restart hermes-gateway    # unit is hermes-gateway.service, not hermes.service
+    ;;
+```
+
+The unit name is the one declared in `/usr/local/lib/os-runtimes/hermes/service`
+(`hermes-gateway`), and the run reports the version Hermes actually landed on,
+not the requested one. No `.previous` backup: like claudecode, the install is
+owned by the upstream tool, not by a file we copy.
+
+### PicoClaw Case (the odd one out on versioning)
+
+PicoClaw is a raw binary from our OWN GitHub releases (no tarball, unlike codex).
+Its published `version` is the release **TAG** (`v0.3.1-fixvision`), not a semver:
+`picoclaw version` prints an unrelated build description
+(`nightly-44-g1959045c-dirty`), so the tag cannot be recovered from the binary.
+The update therefore stamps the installed tag to
+`/usr/local/lib/os-runtimes/picoclaw/installed-version` — that stamp, not
+`picoclaw version`, is what any version check must read.
+
+```bash
+"picoclaw")
+    curl -fsSL https://github.com/autonomous-ai/picoclaw/releases/download/${VERSION}/picoclaw-linux-arm64
+    picoclaw --no-color version         # run it FROM THE TEMP DIR first: the only integrity gate
+    install -D -m 0755 /usr/local/bin/picoclaw /root/bootstrap/rollback/picoclaw.previous
+    install -m 0755 …                   /usr/local/bin/picoclaw
+    echo "$VERSION" > /usr/local/lib/os-runtimes/picoclaw/installed-version
+    systemctl restart picoclaw          # conditional: unit exists only when the runtime is active
+    ;;
+```
+
+`make upload-picoclaw <release-tag>` verifies the tag actually has a
+`picoclaw-linux-arm64` asset before publishing — a typo would otherwise only
+surface as a failed OTA on every polling device. Rollback works
+(`software-update rollback picoclaw`).
 
 ---
 
@@ -616,6 +937,12 @@ echo "HAL $NEW_VERSION published."
 | `scripts/release/upload-setup.sh` | Setup script | Upload to GCS |
 | `scripts/release/upload-setup-ap.sh` | AP setup script | Upload to GCS |
 | `scripts/release/upload-skills.sh` | OpenClaw skill files | Upload to GCS |
+| `scripts/release/upload-openclaw.sh` | OpenClaw npm version | Metadata only (`npm install -g` on device) |
+| `scripts/release/upload-codex.sh` | Codex CLI version | Metadata only (GitHub release tarball on device) |
+| `scripts/release/upload-claudecode.sh` | Claude Code CLI version | Metadata only (Anthropic installer on device) |
+| `scripts/release/upload-opencode.sh` | OpenCode CLI version | Metadata only (opencode.ai installer on device) |
+| `scripts/release/upload-picoclaw.sh` | PicoClaw release TAG | Metadata only (GitHub asset on device); verifies the tag exists |
+| `scripts/release/upload-hermes.sh` | Hermes version (SSH-only, unpinnable) | Metadata only (`hermes update` on device) |
 | `scripts/provision/install.sh` | CDN install shortcut | `curl ... \| sudo bash` on Pi |
 | `scripts/release/tag-release.sh` | Git release tag with OTA metadata snapshot | Fetch metadata.json → annotated tag → `git push origin <tag>` |
 

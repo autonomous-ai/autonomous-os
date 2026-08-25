@@ -258,33 +258,40 @@ def pulse(
     svc,
     base_color: tuple = (0, 0, 0),
 ):
-    """Ripple pulse overlaid on a base color.
+    """A pulse of light travelling around the ring, overlaid on a base color.
 
-    Pixels outside the wavefront stay at base_color; pixels at the wavefront
-    blend toward `color` by a falloff factor. Killing the effect mid-frame
-    leaves the strip showing base_color + a fading ripple instead of a
-    half-painted dark frame.
+    Pixels away from the wavefront stay at base_color; pixels near it blend
+    toward `color` by a falloff factor, so the pulse has a bright head and a
+    short tail. Killing the effect mid-frame leaves base_color plus a fading
+    wave rather than a half-painted dark frame.
+
+    The wavefront travels: it used to sit at a fixed origin and expand outward,
+    which on a closed ring is two arcs opening in opposite directions — never
+    the one moving light the effect is named for. (That it ever looked right on
+    the lamp was an accident of led_count being declared twice the true ring
+    size, which put the origin off the end of the strip so only one arc showed.)
     """
     step_delay = 0.04 / speed
     led_count = getattr(svc, "led_count", DEFAULT_LED_COUNT)
-    center = led_count // 2
-    max_radius = center + 1
+    # How much of the ring the pulse covers. A sixth reads as a distinct moving
+    # light: wide enough to have a tail, narrow enough to leave the ring dark
+    # ahead of it.
+    width = max(2.0, led_count / 6.0)
     while not is_done(deadline, stop_event):
-        for radius in range(max_radius + 1):
+        for head in range(led_count):
             if is_done(deadline, stop_event):
                 return
             pixels = [base_color] * led_count
             for i in range(led_count):
-                dist = abs(i - center)
-                if dist <= radius:
-                    falloff = max(
-                        0.0, 1.0 - abs(dist - radius) / max(max_radius * 0.3, 1)
+                delta = abs(i - head)
+                # Distance the short way round — pixel 0 neighbours the last one.
+                dist = min(delta, led_count - delta)
+                falloff = max(0.0, 1.0 - dist / width)
+                if falloff > 0:
+                    pixels[i] = tuple(
+                        int(base_color[c] + (color[c] - base_color[c]) * falloff)
+                        for c in range(3)
                     )
-                    if falloff > 0:
-                        pixels[i] = tuple(
-                            int(base_color[c] + (color[c] - base_color[c]) * falloff)
-                            for c in range(3)
-                        )
             svc.dispatch(RGB_CMD_PAINT, pixels)
             stop_event.wait(step_delay)
 

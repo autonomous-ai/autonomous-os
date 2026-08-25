@@ -29,7 +29,29 @@ const (
 	// Unlike the others it is NOT a flat metadata key — the profile lives nested
 	// at metadata.devices.<device_type> (one metadata.json serves all types).
 	OTAKeyDevice = "device"
+
+	// Agent-runtime CLIs. Each value is BOTH the metadata key and the
+	// `software-update` arg, and each equals the runtime name in config.json
+	// `agent_runtime` — bootstrap relies on that equality to update only the CLI
+	// of the runtime a device actually runs (every lamp/intern-v2 image bakes ALL
+	// of these binaries regardless of runtime, so binary presence proves nothing).
+	//
+	// Hermes is deliberately absent: `hermes update` takes no target version and
+	// always moves to upstream HEAD, so a min_version floor it cannot reach would
+	// re-trigger the update every poll forever. It stays manual-only
+	// (`software-update hermes` over SSH).
+	OTAKeyCodex      = "codex"
+	OTAKeyClaudeCode = "claudecode"
+	OTAKeyOpenCode   = "opencode"
+	// OTAKeyPicoClaw's version is the GitHub release TAG (v0.3.1-fixvision), not
+	// a semver: `picoclaw version` prints an unrelated build description, so the
+	// installed tag is read from a stamp file instead (see detectVersion).
+	OTAKeyPicoClaw = "picoclaw"
 )
+
+// PicoClawVersionStamp records the release tag `software-update picoclaw`
+// installed. It exists because the PicoClaw binary cannot report its own tag.
+const PicoClawVersionStamp = "/usr/local/lib/os-runtimes/picoclaw/installed-version"
 
 // OTAMetadata is the JSON shape returned by the OTA metadata URL.
 //

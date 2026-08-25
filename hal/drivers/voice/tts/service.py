@@ -154,6 +154,14 @@ class TTSService:
         # synth-TTFB gap between sentences. stop() clears the queue.
         self._pending_queue_lock = threading.Lock()
         self._pending_queue: list = []  # list[_PendingSpeech]
+        # A queue request may arrive out of order because the Go handler posts
+        # each streamed segment in its own goroutine. Keep a turn sequence at
+        # the HAL boundary so an old request cannot re-enter after a newer turn
+        # has already taken the speaker. The request lock covers comparison,
+        # preemption, and enqueue as one transaction.
+        self._queue_request_lock = threading.Lock()
+        self._latest_queue_turn_id = ""
+        self._latest_queue_turn_seq = 0
 
         # Optional callbacks for LED speaking effect.
         # on_speak_start(): called when TTS playback begins (before audio streams).
@@ -564,7 +572,14 @@ class TTSService:
         thread.start()
         return True
 
-    def speak_queue(self, text: str, interruptible: bool = False, realtime_feedback: bool = False) -> bool:
+    def speak_queue(
+        self,
+        text: str,
+        interruptible: bool = False,
+        realtime_feedback: bool = False,
+        turn_id: str = "",
+        turn_seq: int = 0,
+    ) -> bool:
         """Speak `text`. If TTS is idle, plays immediately (same as speak()).
         If TTS is currently speaking, the text is appended to a pending queue
         and pre-synthesized in the background; once the current playback
@@ -587,51 +602,97 @@ class TTSService:
             logger.info("TTS suppressed (queue) -- speaker muted: %s", text[:50])
             return False
 
-        # Cache-first — same rationale as speak(): exact-match warm phrases
-        # (OS notices) must play without an API call, or a rate-limited
-        # provider silences the very notice explaining the rate limit. Only
-        # taken while idle; a busy strip queues normally below.
-        if not self._speaking and self._tts_cache_path(text).exists():
-            logger.info("TTS cache-first hit (queue): %s", text[:50])
-            return self.speak_cached(
-                text, interruptible=interruptible, realtime_feedback=realtime_feedback
-            )
+        # Serialize the complete arrival path. A newer turn owns the speaker:
+        # it stops the current utterance and clears pending older segments. A
+        # delayed POST from an older turn is deliberately acknowledged but
+        # dropped, so it cannot append itself after the replacement turn.
+        with self._queue_request_lock:
+            preempted = False
+            if turn_id and turn_seq:
+                if turn_seq < self._latest_queue_turn_seq:
+                    logger.info(
+                        "TTS queued speech dropped -- superseded turn (turn_id=%s seq=%d latest_id=%s latest_seq=%d): %s",
+                        turn_id, turn_seq, self._latest_queue_turn_id,
+                        self._latest_queue_turn_seq, text[:60],
+                    )
+                    return True
+                if turn_seq == self._latest_queue_turn_seq and turn_id != self._latest_queue_turn_id:
+                    logger.warning(
+                        "TTS queued speech dropped -- conflicting turn sequence (turn_id=%s seq=%d latest_id=%s): %s",
+                        turn_id, turn_seq, self._latest_queue_turn_id, text[:60],
+                    )
+                    return True
+                if turn_seq > self._latest_queue_turn_seq:
+                    previous_id = self._latest_queue_turn_id
+                    self._latest_queue_turn_id = turn_id
+                    self._latest_queue_turn_seq = turn_seq
+                    with self._pending_queue_lock:
+                        has_pending = bool(self._pending_queue)
+                    if self._speaking or has_pending:
+                        logger.info(
+                            "TTS newer turn preempting speaker (old_turn=%s new_turn=%s seq=%d)",
+                            previous_id or "untracked", turn_id, turn_seq,
+                        )
+                        self.stop()
+                        preempted = True
 
-        if self._lock.acquire(blocking=False):
-            # Idle — start a normal speech (same as speak()).
-            self._stop_event.clear()
-            self._speaking = True
-            self._interruptible = interruptible
-            self._last_spoken_text = text
-            self._realtime_feedback = realtime_feedback
-            thread = threading.Thread(
-                target=self._speak_sync,
-                args=(text,),
+            # Cache-first — same rationale as speak(): exact-match warm phrases
+            # (OS notices) must play without an API call, or a rate-limited
+            # provider silences the very notice explaining the rate limit. Only
+            # taken while idle; a busy strip queues normally below.
+            if not self._speaking and self._tts_cache_path(text).exists():
+                logger.info("TTS cache-first hit (queue): %s", text[:50])
+                return self.speak_cached(
+                    text, interruptible=interruptible, realtime_feedback=realtime_feedback
+                )
+
+            # A newer turn must take the lock itself after stopping the old
+            # worker. Queuing it behind a set stop_event would strand it: the
+            # interrupted worker correctly refuses to drain any queue. Same-
+            # turn continuations retain the non-blocking queue behavior.
+            if preempted:
+                acquired = self._lock.acquire(blocking=True, timeout=2.0)
+                if not acquired:
+                    logger.warning("TTS lock not released after newer-turn preemption: %s", text[:50])
+                    return False
+            else:
+                acquired = self._lock.acquire(blocking=False)
+
+            if acquired:
+                # Idle — start a normal speech (same as speak()).
+                self._stop_event.clear()
+                self._speaking = True
+                self._interruptible = interruptible
+                self._last_spoken_text = text
+                self._realtime_feedback = realtime_feedback
+                thread = threading.Thread(
+                    target=self._speak_sync,
+                    args=(text,),
+                    daemon=True,
+                    name="tts-speak-queue",
+                )
+                thread.start()
+                return True
+
+            # Busy — queue + kick off pre-synth so frames are ready when the
+            # current speech ends. We don't try to interrupt segments of the
+            # same turn; a newer turn was already handled above.
+            item = _PendingSpeech(text=text, interruptible=interruptible)
+            with self._pending_queue_lock:
+                self._pending_queue.append(item)
+                depth = len(self._pending_queue)
+            threading.Thread(
+                target=self._pre_synth_pending,
+                args=(item,),
                 daemon=True,
-                name="tts-speak-queue",
+                name="tts-pre-synth",
+            ).start()
+            logger.info(
+                "TTS queued for pre-synth (busy, queue depth=%d): %s",
+                depth,
+                text[:60],
             )
-            thread.start()
             return True
-
-        # Busy — queue + kick off pre-synth so frames are ready when the
-        # current speech ends. We don't try to interrupt even if the current
-        # speech is interruptible; the whole point of speak_queue() is to
-        # chain on top of the current speech, not replace it.
-        item = _PendingSpeech(text=text, interruptible=interruptible)
-        with self._pending_queue_lock:
-            self._pending_queue.append(item)
-        threading.Thread(
-            target=self._pre_synth_pending,
-            args=(item,),
-            daemon=True,
-            name="tts-pre-synth",
-        ).start()
-        logger.info(
-            "TTS queued for pre-synth (busy, queue depth=%d): %s",
-            len(self._pending_queue),
-            text[:60],
-        )
-        return True
 
     def _pre_synth_pending(self, item: "_PendingSpeech") -> None:
         """Synthesize PCM for a queued item in a background thread. Streams

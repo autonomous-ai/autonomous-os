@@ -164,10 +164,12 @@ pitch_correction = clamp(PID(soft_deadband(dy)) + VFF·vy·deg_per_px·dt,  ±5�
 | `SERVO_MIN_CONF` | 0.25 | Confidence floor for firing the servo PID at all |
 | `TRACKER_TRUST_CONF` / `TRUST_TRACKER_S` | 0.4 / 2.5 | Detector-gated trust (see above) |
 | `YOLO_MAX_MISS` | 30 | Consecutive tracker misses before retry |
-| `MAX_TRACK_DURATION_S` | 300 | Auto-stop timeout (5 min) |
+| `MAX_TRACK_DURATION_S` | `HAL_TRACKING_MAX_DURATION_S` (10) | Auto-stop timeout (10 s default; configured per device) |
 | `_LOCAL_IMGSZ` | 320 | Local YOLO inference size (640 → 1.3–2.9 s, too slow) |
 
 All knobs live in `hal/drivers/tracking/constants.py`. (The old dead `GIMBAL_*` / `EMA_ALPHA` proportional path was removed in the package split.)
+
+Set `HAL_TRACKING_MAX_DURATION_S` in the Lamp's `/opt/hal/.env` to choose the wall-clock session limit; the installed Lamp default is `10`. Restart the `hal` service after changing it.
 
 ### Servo Position Limits
 
@@ -187,10 +189,10 @@ All knobs live in `hal/drivers/tracking/constants.py`. (The old dead `GIMBAL_*` 
 | Bbox overflows frame + no detect for 3 s | Forced retry, then stop if unrecovered |
 | No detector confirm for `STOP_NO_YOLO_S` (20 s) | Stop — ghost tracking |
 | CSRT misses `YOLO_MAX_MISS` (30) after `MAX_TRACKING_RETRIES` (4) | Stop — object gone |
-| Tracking duration > 5 minutes | Stop — timeout to save motor/CPU |
+| Tracking duration > `HAL_TRACKING_MAX_DURATION_S` (10 s by default) | Stop — timeout to save motor/CPU |
 | GPIO-button or TTP223 single-click | Stop — explicit user attention-cancel |
 
-Note: a large bbox (e.g. a person filling the frame) is **not** a stop condition — PID drives off the centroid, not bbox size, so a close object still tracks. When tracking ends the arm glides back to zero at tracking speed (no snap).
+Note: a large bbox (e.g. a person filling the frame) is **not** a stop condition — PID drives off the centroid, not bbox size, so a close object still tracks. When tracking ends the arm glides back to zero at tracking speed (no snap), then the idle animation is dispatched again — see [Interaction with Other Systems](#interaction-with-other-systems).
 
 ### Auto-stop on gateway/network disconnect
 
@@ -316,6 +318,8 @@ Camera section shows:
 | Sensing (face, motion) | Continues — shares camera | Continues |
 | Camera stream overlay | Green bbox drawn | Normal stream |
 | TTS | Continues normally | Continues normally |
+
+Resuming idle is an **explicit dispatch**, not a side effect of clearing the tracking flag. While `_tracking_active` is set, `AnimationService._continue_playback` drops the in-flight recording (`_current_recording = None`) so nothing fights the tracker. Clearing the flag does not put it back: the event loop returns at its first guard (`if not self._current_recording`), so without a dispatch the arm sits rigid at zero with torque on until the next emotion or play command. The `_track_loop` `finally` therefore ends with `animation_service.dispatch("play", animation_service.idle_recording)` — dispatch rather than `_handle_play` so playback stays owned by the event thread, matching the music-stop, `aim` and `resume` exits.
 
 ## Performance Notes
 
@@ -556,12 +560,25 @@ Sightings reach it two ways:
 
 The sampler declines rather than guess. Horizontal offset is tolerated only to
 `HAL_BEARING_SAMPLE_MAX_DX_FRAC` (0.25), because that correction leans on the very FOV constant the
-aim exists to avoid trusting. The **posture** is recorded only when the subject is also vertically
-centred (`HAL_BEARING_SAMPLE_MAX_DY_FRAC`, 0.15) — pitch cannot be corrected arithmetically here, so
-a subject high or low in frame means the current pitch is *not* looking at them and storing it would
-teach a posture aimed at the floor. It also skips while the body is aiming or tracking, while the
-camera is disabled, and takes the detector lock non-blocking so a user's question never waits on it.
-It applies the same size and confidence gates as the aim.
+aim exists to avoid trusting. It also skips while the body is aiming or tracking, while the camera is
+disabled, and takes the detector lock non-blocking so a user's question never waits on it.
+
+**It learns from faces only, never from `person` boxes.** A person box says where a body is, and a
+body fills the frame whenever the camera happens to be aimed low — so learning from one memorises
+the posture that was pointing at the desk and calls it "where the user is". Device-observed: 22
+samples, confidence 0.99, and a stored posture with `wrist_pitch -78` that could not see a face at
+all. Every consumer downstream then restored that posture faithfully and found nobody, which reads
+as the lamp being broken rather than as the bearing being wrong. A face in frame proves the opposite
+by construction: this posture sees a head, so restoring it will see one again.
+
+**The posture is recorded wherever in frame the face sat.** The vertical gate that used to guard it
+(`HAL_BEARING_SAMPLE_MAX_DY_FRAC`) was written for person boxes, where a centred torso said nothing
+about whether the head was in frame. Keeping it for faces was self-defeating: while the camera is
+aimed low every face sits near the top edge, so every sighting failed the gate, so no posture was
+ever stored, so there was nothing to restore and the camera stayed low — device-observed `dy` of
+-15.8% then -41.2%, two sightings, and a remembered "pose" holding only a yaw. A posture that catches
+the user at the frame edge is imperfect; it is also incomparably better than one pointing at the
+desk, and the per-joint EMA walks it toward centre as the framing it enables improves.
 
 Each sample writes an annotated frame to `/var/lib/hal/snapshots/sensing_bearing/`
 (`HAL_BEARING_SNAPSHOT`, newest 30 kept, oldest evicted) — **including the detections it rejected**,

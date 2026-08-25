@@ -165,7 +165,9 @@ func (s *OpenCodeService) captureUsage(f opencodeFrame) {
 //
 //	first line w/ sessionID        → capture session key
 //	step_start                     → lifecycle.start (once per turn)
-//	text                           → accumulate final text (no delta stream)
+//	text                           → buffer as the reply (no delta stream); a
+//	                                 newer part demotes the previous to thinking
+//	                                 unless it carries a [HW:…] marker
 //	reasoning                      → ignored (thinking, not content)
 //	tool_use                       → tool.start + tool.end pair
 //	step_finish / message.updated  → capture token usage
@@ -191,9 +193,24 @@ func (s *OpenCodeService) translateFrame(raw []byte, dispatch func(domain.WSEven
 	case "text":
 		s.ensureTurnStarted(dispatch)
 		if txt := f.textContent(); strings.TrimSpace(txt) != "" {
+			// Like codex exec, opencode narrates before it calls a tool ("Using
+			// the sensing skill for this presence event.") as its own `text`
+			// part. Only the LAST one is the reply; every earlier one is
+			// narration that must never reach TTS, so it is demoted to the
+			// thinking stream (Flow Monitor only) as soon as a newer part
+			// proves it was not the reply. Exception: a part carrying a
+			// [HW:…] marker is a real hardware action and is kept.
 			s.turnMu.Lock()
+			var preamble string
+			if n := len(s.assistantParts); n > 0 && !hasHWMarker(s.assistantParts[n-1]) {
+				preamble = s.assistantParts[n-1]
+				s.assistantParts = s.assistantParts[:n-1]
+			}
 			s.assistantParts = append(s.assistantParts, txt)
 			s.turnMu.Unlock()
+			if preamble != "" {
+				s.emitThinking(preamble, dispatch)
+			}
 		}
 	case "reasoning":
 		// thinking — status, not content (matches codex/hermes)
@@ -270,6 +287,32 @@ func (s *OpenCodeService) ensureToolStart(id, name, args string, dispatch func(d
 	if !seen {
 		s.emitToolStart(id, name, args, dispatch)
 	}
+}
+
+// hasHWMarker reports whether text carries an inline hardware marker, in either
+// the plain form `[HW:/led/off]` or the markdown-link form
+// `[Lights off](HW:/led/off)`. Deliberately coarse: it only decides whether a
+// non-final text part is narration (droppable) or a real action to keep — the
+// authoritative parse lives in server/agent/delivery/http/handler_hw.go.
+func hasHWMarker(text string) bool {
+	return strings.Contains(text, "[HW:") || strings.Contains(text, "](HW:")
+}
+
+// emitThinking surfaces text on the thinking stream, which the OS server routes
+// to Flow Monitor only — never to TTS or a channel reply.
+func (s *OpenCodeService) emitThinking(text string, dispatch func(domain.WSEvent)) {
+	runID := s.getCurrentRunID()
+	slog.Info("opencode <<< preamble demoted to thinking", "component", "opencode",
+		"runID", runID, "text", truncRunes(text, 200))
+	payload, _ := json.Marshal(map[string]any{
+		"runId":      runID,
+		"sessionKey": s.GetSessionKey(),
+		"stream":     "thinking",
+		"data": map[string]any{
+			"text": text,
+		},
+	})
+	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
 }
 
 func (s *OpenCodeService) emitToolStart(id, name, args string, dispatch func(domain.WSEvent)) {

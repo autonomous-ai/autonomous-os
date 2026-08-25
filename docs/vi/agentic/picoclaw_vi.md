@@ -69,6 +69,14 @@ nằm cạnh backend và được embed + đăng ký trong `install.go`:
 **`install.sh`** (một lần):
 1. cài `jq` + `yq` + binary `picoclaw` đã pin (GitHub release,
    `picoclaw-linux-arm64`) vào `/usr/local/bin`;
+
+   > Pin này chỉ là baseline của image. Máy ngoài thực địa update qua
+   > `make upload-picoclaw <release-tag>` + `make promote-picoclaw`, bootstrap
+   > worker áp dụng bằng `software-update picoclaw` trên máy có `agent_runtime`
+   > là `picoclaw`. Lệnh đó còn ghi tag đã cài vào
+   > `/usr/local/lib/os-runtimes/picoclaw/installed-version` — `picoclaw version`
+   > in ra chuỗi build không có semver, nên stamp là cách DUY NHẤT worker biết
+   > release nào đang cài. Xem `docs/vi/bootstrap-ota.md` §5.
 2. `picoclaw onboard` (chỉ khi chưa có `config.json`) tạo `/root/.picoclaw` —
    workspace + `config.json` và `.security.yml` baseline;
 3. ghi **`picoclaw.service`** (`ExecStart=/usr/local/bin/picoclaw gateway`,
@@ -115,7 +123,10 @@ tự-heal sau factory reset, giống presync của hermes):
     như openclaw) **hoặc** là built-in của picoclaw (`picoclawBuiltinSkills`:
     `agent-browser`, `github`, `hardware`, `skill-creator`, `summarize`, `tmux`,
     `weather`); còn lại trong `workspace/skills` thì xoá. Fail-open khi ROBOT.md không
-    khai cap. Không reload (skill đọc per-turn);
+    khai cap. Không reload (skill đọc per-turn); sau đó tải lại mọi skill được hỗ trợ
+    từ CDN, nên skill local đã cũ trước khi watcher chạy sẽ tự phục hồi ở lần
+    boot/config reconciliation. Nếu nội dung skill đổi, agent được báo sau khi gateway
+    có thể đã restart để đọc lại các file `SKILL.md` mới;
   - khi có block đổi, **restart gateway** (`restartPicoclawGateway` → `systemctl
     restart picoclaw`) để nạp lại file workspace (log+skip nếu không có systemctl).
     Không dùng endpoint `/reload` của gateway — nó cần auth admin mình không có (token
@@ -126,7 +137,9 @@ tự-heal sau factory reset, giống presync của hermes):
 Một **skill watcher** riêng (`skill_watcher.go`, chạy lúc boot như openclaw) poll OTA
 metadata mỗi 5 phút và tự cập nhật `workspace/skills/<name>` từ CDN khi version của
 skill được hỗ trợ thay đổi (gate qua `skills.Supported`), rồi báo agent qua
-`SendSystemChatMessage`.
+`SendSystemChatMessage`. Mỗi lần poll thành công đều log `skill watcher: checked`;
+nếu tải ZIP hoặc extract lỗi, watcher giữ version của skill đó ở trạng thái pending
+và thử lại ở poll kế tiếp.
 - **§1 cấu trúc** (`jq` trên `config.json`) — `agents.defaults` (provider
   `anthropic-messages`, `model_name "autonomous"`, `image_model "autonomous_vision"`,
   `restrict_to_workspace:false`, `allow_read_outside_workspace:true`), hai entry

@@ -41,10 +41,60 @@ The 1-tap gesture is Lamp's primary **barge-in and attention-cancel mechanism**:
 
 When wake word is enabled, the click also **counts as a wake event**: `single_click_action` calls `voice_service.grant_wakeword_focus(source)`, which opens the same follow-up focus window (`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, default 20 s) a spoken wake phrase opens. Without it the device would announce "Listening" and then drop the user's answer for missing the wake phrase. The window is re-checked at dispatch time, not only latched at mic-session start, so a click during an already-open session still authorizes the sentence being spoken. No-op when wake word is off (every utterance already dispatches) or when the follow-up timeout is 0.
 
+### Turning toward the lamp as a third wake trigger
+
+The wake gate has three openers, not two. Alongside the spoken wake phrase and the single click, **turning toward the lamp and speaking** opens the same window (`hal/drivers/tracking/gaze.py`), through the same `voice_service.grant_wakeword_focus(source)` seam the click uses — nothing downstream of the gate changes.
+
+The reason is device shape rather than preference. A desk lamp sits an arm's length from its user and is in view all day, so a wake phrase repeated dozens of times reads as addressing an appliance, and a button press reads as operating one. Between two people the cue is neither: you turn toward someone and speak. Products that popularised "hey <name>" have no camera and sit across a room, so the comparison does not carry.
+
+Two properties decide the implementation:
+
+* **People turn before they speak, never after.** Normally speech reads the watcher's ring buffer (`HAL_GAZE_BUFFER_S`, default 3 s) **backwards** — the same shape as the mic's own pre-roll lookback, which exists so the start of a sentence is not lost. There is one recovery path: if that read has fewer than two usable face samples, VAD asks the watcher to restore the remembered user pose without blocking audio capture. Before dispatching that *same* transcript it checks gaze once more. A head measured facing away does not take this path, so overheard speech still cannot turn the lamp toward a person and open the gate.
+* **Presence is not the signal.** The user is visible beside this lamp all day, so "a person is detected" gates nothing, and "a face is detected" barely more — a face turned to a monitor still detects. The gate is on head **orientation**, tight enough to reject the common posture of talking to a colleague with the torso still square to the desk.
+
+Head yaw is derived from the five landmarks `YuNet` already returns (`detect_face_with_landmarks` in `detection.py`): the nose's offset from the eye midpoint, measured along the eye line and normalised by half the inter-ocular distance, is `sin(yaw)` under a pinhole projection. Measuring along the eye line rather than the image x-axis is what keeps a **rolled** head (resting on a hand) from reading as a turned one. No second model is loaded and no extra inference runs; at `HAL_GAZE_SAMPLE_FPS` (default 6) the cost is a rounding error on the 8-core CPU — measured, not assumed: CPU idle went 69.2% to 68.8% with the watcher running.
+
+A landmark outside the frame is not a measurement. `YuNet` reports the five points for a face clipped by a frame edge as readily as for one wholly inside it, and the clipped ones come back off the frame — device-measured with a user sitting straight in front of the lamp, its camera aimed too low: box `[264, -1, 162, 92]` with both eyes at `y = -3.0` and `y = -1.3`. Fed to the yaw those coordinates push the nose ratio past 1, where the clamp turns "not measurable" into exactly `90.0` — indistinguishable from a genuine profile, and counted as a vote **against** facing. That is how a user looking straight at the lamp produced `trail=[90,90,90,90]` and was refused. So a sample whose eyes or nose fall outside the frame is recorded as **unmeasured** — it votes neither way, like a frame with no face at all. Clipped mouth corners are ignored — the angle never reads them.
+
+Detector rows whose box is not a finite number are dropped before any of this. YuNet can return an infinite coordinate for a face leaving the frame — device-observed while tracking, at 1.9% bbox area and 0.29 confidence — and `int()` on it raised `OverflowError`, killing the tracker's detect thread mid-session. Infinity is not a very large face; it is the detector saying nothing usable, so the row goes and the existing "no face this frame" path takes over. The filter runs before the largest / nearest-centre choice, because an infinite width wins any largest-by-area contest and would otherwise hide a perfectly good face behind it.
+
+When several faces are in frame, the one whose head counts is the one **nearest the frame centre** among those at least `HAL_GAZE_MIN_FACE_PX` tall — not the largest. Largest-face would hand the gate to whoever leans in closest, which is the user only by convention; the lamp's own aim is the better prior for which face it is pointed at. With one qualifying face the two rules agree, so this only bites when a second person shares the desk. If nobody clears the size floor the largest face is returned anyway, so the sample still records that somebody is there. Note that the bbox-only tracking path (`_detect_face_yunet`, used by object follow) keeps its own largest-face policy — the two are independent.
+
+| Env var | Default | Tunes |
+|---|---|---|
+| `HAL_GAZE_WAKE` | `false` | Master switch. Off means today's two openers only. |
+| `HAL_GAZE_SHADOW` | `true` | Log the decision without opening the gate. Costs nothing — no turn opens, so no LLM or TTS is spent. |
+| `HAL_GAZE_MAX_YAW_DEG` | 25 | Acceptance cone at frame centre. |
+| `HAL_GAZE_EDGE_CONE_SCALE` | 1.8 | How much wider the cone grows at the frame edge, where barrel distortion inflates the angle. |
+| `HAL_GAZE_MIN_FACE_PX` | 48 | Minimum face height **in pixels**. Below this the landmarks span a few pixels and the yaw is arithmetic on rounding error, so the sample does not vote at all. |
+| `HAL_GAZE_WINDOW_S` | 1.5 | Evidence window ending at the moment of speech. |
+| `HAL_GAZE_MIN_FACING_RATIO` | 0.6 | Fraction of that window that must have seen a facing head. A ratio, not an unbroken run — per-sample yaw is genuinely noisy. |
+| `HAL_GAZE_MIN_SAMPLES` | 2 | Below this there is not enough evidence to decide either way. The loop achieves ~2 samples/s whatever the rate asks for — it is paced by fetching a frame and running the detector — so 3 rejected users the rest of the pipeline agreed were facing the lamp. The `[gaze] sampling at N/s` line counts samples actually RECORDED, and reports separately how many frames were blocked before they could be measured (settling from a servo write, or the detector held by a live look). Counting attempts instead once reported 5.7/s while the buffer held nothing newer than the 1.5 s window — under 1/s of real evidence. |
+| `HAL_GAZE_SAMPLE_FPS` | 6 | Sampling rate. The gesture is slow, but the decision is a vote and only measured samples count — at 3 fps a window often held one usable sample, refusing a user facing the lamp dead-on. |
+| `HAL_GAZE_BUFFER_S` | 3.0 | Yaw history retained. Must exceed `WINDOW_S`. |
+| `HAL_GAZE_COOLDOWN_S` | 5 | Minimum gap between gaze-opened gates, so one conversation cannot open one per sentence. |
+| `HAL_GAZE_REPOINT` | `true` | Turn toward the remembered bearing when nobody has been visible. |
+| `HAL_GAZE_REPOINT_AFTER_S` | 12 | How long nobody must be visible first. A voice-triggered empty-evidence recovery bypasses this delay, but not the movement cooldown. |
+| `HAL_GAZE_REPOINT_COOLDOWN_S` | 60 | At most one turn per this interval, including a voice-triggered recovery. |
+| `HAL_GAZE_REPOINT_MIN_CONFIDENCE` | 0.5 | Bearing confidence below which turning is not worth it. |
+
+The lamp image deliberately overrides `HAL_GAZE_MAX_YAW_DEG` to **60°**. This is device calibration, not a generic default: on lamp-0c89 YuNet measured a user looking directly into the camera through glasses at 55.7–59.1°. It does not relax the two-valid-sample minimum or the 60% vote, so a lone frame still cannot open the gate.
+
+Two of these were measured rather than chosen. `MIN_FACE_PX` exists because a device probe found three background colleagues detected at 8-18 px yielding yaw 49 / 20 / 29 — noise — beside the seated user at 78 px whose 90 was correct; the populations do not overlap, so the floor removes the class rather than tuning against it. `MIN_FACING_RATIO` exists because a trail of a stationary user read `[10,15,8,25,36,1,-,90]`, a spread no head performs, so any rule demanding every sample pass would reject them.
+
+Nobody has been visible for a while and the lamp turns: that is `REPOINT`, and it is the only thing in the watcher that moves the body. The idle recording is a loop of absolute poses that swings `base_pitch` about 17 degrees per cycle, so it walks the camera back to the recording's own pose — on a desk, at the keyboard. Parking the remembered pose once would simply be overwritten by the next loop; resting there properly would mean offsetting the whole playback by the bearing, which belongs to motion playback rather than to this feature. So the lamp does what a person does instead: if it cannot see who might be talking to it, it turns to where they usually are, once, then waits.
+
+Thresholds are meant to be chosen from measurement, not guessed — shadow mode exists so a run beside a real user produces the counts (`[gaze] speech: yaw=… hold=…/… -> WOULD_WAKE`) that settle what angle reads as "addressing the lamp".
+
+Degradation is by omission in both directions. On a device with **no camera** the watcher never arms and the other two openers are untouched — no separate configuration. When `HAL_WAKEWORD_ENABLED` is **false** the watcher does not start at all: with no wake word every utterance already dispatches, so there is no gate left to open and the check would burn CPU to decide nothing. A gaze sample is also skipped while the head is relocating, when the camera is disabled for privacy, and whenever the detector lock is held by a live `look`.
+
+**Relocating, not merely writing.** Two states write the servos continuously without moving the head anywhere: the idle loop breathing, and a tracking session pursuing the user's face. Treating either as a move means `last_servo_write` is never stale and nearly every frame is refused — measured, idle: 0.3 samples/s recorded against 4.9/s blocked; measured, tracking: 0.7/s against 4.5/s, refusing a user at yaw 0.9° with a 130 px face dead centre for having one sample in the window instead of two. Tracking matters most: it is the lamp following this user's face, so refusing to notice they are addressing it precisely then is the most broken-looking moment available — which is why the settling test must not become `_tracking_active` by the back door. Both are small continuous corrections and the yaw survives them. The `[gaze] sampling at N/s; blocked: …` line breaks the blocked count down by reason, because the two gates are fixed in different places.
+
 End-to-end chain:
 1. `gpio_button.py` / `ttp223.py` detect single click → call `single_click_action(source)` in `button_actions.py`
 2. `single_click_action` → `_cancel_agent_speech()` (fire-and-forget thread) + active `tracker_service.stop()` + `stop_tts()` (routes/voice.py) + `audio_stop()` (routes/music.py) + deferred `_announce_listening()` thread
 2a. `_cancel_agent_speech()` → `POST /api/agent/speech/cancel` on the OS server. Needed because `stop_tts()` only silences what HAL already holds: the sentence playing plus the pre-synthesised queue. The OS server streams a reply sentence by sentence, so without this call the device goes quiet for one sentence and then talks on. The OS server mutes every turn in flight (see `docs/os-server.md`) while letting turns started after the click speak — so the user can tap and immediately say something new even with a backlog of older turns still draining. The turns are not aborted, only unspoken. Dispatched on its own thread and fired on both branches (mic-unmute and stop-speaker), since either way the tap means the user is taking the floor.
+2b. `state.note_music_cancel()` → stamps a HAL-side music cancel watermark, and `audio_stop()` runs on **both** branches (mic-unmute and stop-speaker), not just the stop-speaker one. Needed because the OS server's cancel is TTS-only: the cancelled turn keeps running and its pending music tool call still reaches `POST /audio/play` a moment later, where a fresh `music-play` thread clears its own `_stop_event` — so a point-in-time stop always loses that race and the user hears music they just cancelled once `yt-dlp` finishes resolving (1–5 s). While the watermark is fresh (`app_state.MUSIC_CANCEL_GUARD_S`, 3 s) `/audio/play` answers `{"status": "suppressed"}` instead of playing. The window is sized to cover the in-flight tool call but stay under the floor of a genuinely new request (speak → STT → LLM → tool is never under ~3 s), so "tap, then ask for a song" still works.
 3. `stop_tts()` → `tts_service.stop()` sets `_stop_event`; every blocking loop in TTS streaming (synth, render, playback) honors the event and aborts cleanly without leaving the speaker pegged
 
 ### Voice barge-in (optional, off by default)
@@ -83,6 +133,8 @@ The watcher thread polls the hold duration and drives the RGB LED at HIGH priori
 | 10 s+ | red, solid | factory-reset armed — releasing now wipes + reboots |
 
 Purple identifies the sleep tier; red blink vs red solid differentiates shutdown from factory-reset. The LED is a silent no-op when the RGB service is unavailable (dev machines) — the button still works.
+
+The three colors are presets, not constants baked into the driver: `BUTTON_LED_PRESETS` in `hal/presets.py` (`sleep_warn` / `shutdown_warn` / `factory_reset`), overridable per device through the `button_led` section of `robots/<id>/presets.json` like every other LED table. The driver owns the staging — when to blink, when to go solid — and reads the color at the moment it paints, because the overlay merges the table in place at boot.
 
 Per-edge debounce is 200 ms (press and release ticks tracked independently so a quick tap isn't dropped while bouncy repeats of the same edge are filtered).
 
@@ -141,6 +193,20 @@ The actions live in one place so the GPIO button, TTP223, and any future input (
 The reset is **single-flight** with a 5-minute cooldown (`FactoryResetMinInterval`) shared across all trigger surfaces (GPIO hold, HTTP, MQTT) — a circuit breaker against runaway callers and accidental repeats.
 
 ## Mute/disable persistence across HAL restarts
+
+**Sleep persists the same way** (`/tmp/hal-sleep-state.json`). It is the same
+class of user-visible switch: someone — or a night scene — put the device to
+sleep, and restarting HAL must not undo that. An OTA restarts HAL, so before
+this sidecar an update at 3 am woke the device up: strip back on, mic listening,
+sensing ungated. The sidecar also carries the mic/speaker mutes **sleep itself owns** — those are deliberately kept out of the mic/speaker sidecars so waking hands the switches back to whatever the user chose, which used to mean a restart came back listening, with a still-in-flight agent turn free to speak out loud. `POST /emotion` persists the flag whenever it flips, and
+`server.py` lifespan re-expresses `sleepy` once the drivers are up, so the device
+LOOKS asleep again rather than booting into the resting look with the flag
+quietly set. The motion driver is also told to come up **without** its wake
+sequence (`start(skip_wake=True)`): the startup pose is a 5 s move followed by
+the idle loop, so undoing it afterwards meant a sleeping lamp stood up, moved,
+and only then lay back down. Restoring the flag at import — before the drivers
+start — is what makes skipping possible instead of reverting. A full device reboot still starts awake.
+
 
 Mic mute, speaker mute, and camera disable each persist to their own boot-scoped
 sidecar — `/tmp/hal-mic-state.json`, `/tmp/hal-speaker-state.json`,

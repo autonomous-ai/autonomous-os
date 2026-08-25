@@ -47,7 +47,7 @@ tell "no servo by design" from "servo lib missing" from "servo broken."
 | `manufacturer` | no | Informational, not parsed — who makes the body (`Pollen Robotics`, `Unitree`). |
 | `extends` | no | Informational, not parsed — records which profile a declaration was copied from (`_base`). |
 | `memory` | no | Memory backend declaration (`{ backend: <name> }`). Informational — the brain owns memory today; surfaced via HAL `GET /device`, not gated. |
-| `startup_volume` | no | Speaker volume (0–100) os-server applies once at startup. Absent / out of range → `100` (software at max, so the hardware/alsactl level is the effective control). Lets a device with a loud speaker boot quieter instead of hardcoding the level. |
+| `startup_volume` | no | Speaker volume (0–100) the device boots at. os-server applies it once at startup, and HAL falls back to it when restoring the level after a media handover resets the mixer. Either way the level the user last set wins where one exists. Absent / out of range → `100` (software at max, so the hardware/alsactl level is the effective control). Lets a device with a loud speaker boot quieter instead of hardcoding the level. |
 | `voice` | no | Voice defaults for this body (`{ tts_provider: <openai\|elevenlabs>, tts_voice: <name-or-id> }`). Both are **defaults** seeded into `config.json` once at startup, only when the user hasn't chosen them — so the Setup UI, HAL auto-start, and StartHALVoice all agree; the user's saved choice always wins. `tts_provider` absent / unknown → legacy default (`openai`). `tts_voice` pins the default voice explicitly (accepted verbatim). When the seeded provider is `elevenlabs` and `tts_voice` is absent, os-server picks a **language-aware** default (`vi`→Ngan, `zh`→Amy, else Rachel) so the voice matches the provider — an elevenlabs default with an openai voice like `nova` would otherwise 400. |
 
 ### Capability declaration
@@ -138,16 +138,20 @@ them; a device with no file keeps the defaults verbatim. This is the same
   "emotion":    { "listening": { "color": [255, 120, 0] } },
   "scene":      { "relax":     { "brightness": 0.3 } },
   "aim":        { "desk":      { "base_pitch.pos": 8.0 } },
-  "status_led": { "booting":   { "color": [0, 60, 200] } }
+  "status_led": { "booting":   { "color": [0, 60, 200] } },
+  "button_led": { "sleep_warn": { "color": [20, 12, 40] } }
 }
 ```
 
-- Every section (`led_count`, `emotion`, `scene`, `aim`, `status_led`) is optional.
+- Every section (`led_count`, `emotion`, `scene`, `aim`, `status_led`, `button_led`) is optional.
   `status_led` restyles the os-server system-status feedback (booting/error/ota/
   connectivity/hal_down/agent_down/hardware/ready_flash + bootstrap OTA
   ota_progress/ota_error/ota_success + setup) — the OS owns the state machine,
   HAL owns the color/effect/speed. `setup` is a persistent solid; the rest are
-  transient effect overlays.
+  transient effect overlays. `button_led` restyles the hold-warning colors shown
+  while a physical button is held (`sleep_warn`/`shutdown_warn`/`factory_reset`,
+  needs the `button` capability) — the driver owns the staging (blink vs solid),
+  the preset owns only the color.
 - Each entry patches the matching base entry **field-by-field** — only the named
   fields change; the rest stay at the default.
 - Naming a preset absent from the base table (a typo), a malformed file, or a

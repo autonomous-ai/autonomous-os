@@ -31,6 +31,10 @@ CAMERA_DRIVERS: dict[str, Tuple[str, str]] = {
     # Raspberry Pi CSI sensors behind libcamera, via an rpicam-vid MJPEG pipe.
     "rpicam": ("hal.drivers.camera.rpicam_capture_device", "RpicamVideoCaptureDevice"),
     "virtual": ("hal.drivers.camera.virtual_capture_device", "VirtualVideoCaptureDevice"),
+    # Simulation only (HAL_SIM_MEDIA=host): the developer machine's webcam via
+    # the platform's native OpenCV backend. Never selected by a ROBOT.md
+    # `driver:` on real hardware.
+    "host": ("hal.drivers.camera.host_capture_device", "HostVideoCaptureDevice"),
 }
 
 

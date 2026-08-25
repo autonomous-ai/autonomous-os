@@ -2,13 +2,15 @@
 
 The whole stack has needed a robot to run. This is the smallest thing that
 satisfies `MotionService` without hardware: joints are floats in a dict, moves
-land instantly, and every call is recorded so a test (or a person poking HAL on
-a laptop) can see exactly what the robot was told to do.
+interpolate over their commanded duration the way the SDK-backed driver does,
+and every call is recorded so a test (or a person poking HAL on a laptop) can
+see exactly what the robot was told to do.
 
 It is used by `robots/sim` (the mock body) together with `HAL_BOARD=sim`. It
 is not a physics simulator: it models neither inertia nor collision. It does
-replay recorded CSV frame timing in memory so route consumers can observe the
-same changing joint-state contract without any actuator output.
+replay the shipped CSV recordings in memory, through the same stretch-and-
+resample timing the physical driver uses (hal/drivers/motors/recording_timing.py),
+so a recording takes the same wall-clock time here as it does on a body.
 
     from hal.drivers.motors.mock_service import MockMotionService
     m = MockMotionService(); m.start()
@@ -26,7 +28,45 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
+from hal.drivers.motors.recording_timing import RECORDING_TIME_COLUMN, resample_recording
+
 logger = logging.getLogger("hal.motion.mock")
+
+# Frame grid for playback and interpolated moves. Matches the rate the
+# SDK-backed service runs its event loop at, so a recording takes the same
+# wall-clock time here as it does on a body.
+PLAYBACK_FPS = 30.0
+
+# Where the arm ends up once torque is cut. The physical driver reaches this by
+# walking to REST_RAW (raw servo ticks) and letting the arm settle; those ticks
+# cannot be converted to degrees here, because the tick->degree mapping lives in
+# each servo's own EEPROM calibration. So the mock arrives the way the real arm
+# does — by falling. The stops are the lowest angle each joint was ever recorded
+# at across hal/recordings/*.csv, i.e. the bottom of its observed travel, and
+# "lower is downward" is the convention the `down` aim preset uses
+# (base_pitch 8, elbow 15, wrist_pitch -8 vs center's 25/43/30).
+GRAVITY_REST = {
+    "base_pitch.pos": -13.7,
+    "elbow_pitch.pos": -11.5,
+    "wrist_pitch.pos": -27.8,
+}
+
+# Degrees/second^2 for the limp arm. Not a physical model of the linkage — it is
+# tuned so the fall takes about half a second, which is what the arm does.
+GRAVITY_DPS2 = 900.0
+
+# After a one-shot recording ends the body keeps that pose briefly, then eases
+# back into idle. aim() holds longer than a gesture does: the point of aiming is
+# to look somewhere and stay looking, so 5s matches the physical driver.
+AIM_HOLD_S = 5.0
+
+# What routes/servo.py reports while that post-aim hold is running. The physical
+# driver uses the same sentinel, so a client cannot tell the two apart.
+AIM_HOLD_RECORDING = "__aim_hold__"
+
+# Recordings that end by holding their final pose rather than returning to idle
+# — sleepy stays down until something wakes the lamp.
+NO_IDLE_RECORDINGS = {"sleepy"}
 
 # The Lamp joint set, so skills and recordings written against the reference
 # body work unchanged against the mock one.
@@ -46,8 +86,10 @@ class MockMotionService:
         self,
         joints: Optional[Set[str]] = None,
         safety_policy: Any = None,
+        idle_recording: str = "idle",
     ) -> None:
         self._joints = set(joints or DEFAULT_JOINTS)
+        self.idle_recording = idle_recording
         # Keep the same construction shape as SDK-backed motion services. The
         # HTTP routes still enforce the policy; retaining it here lets the mock
         # boot through the production factory without special cases.
@@ -79,7 +121,7 @@ class MockMotionService:
 
     # --- Lifecycle ---
 
-    def start(self) -> None:
+    def start(self, skip_wake: bool = False) -> None:
         self._connected = True
         self._record("start")
         logger.info("[mock] motion up — %d joints, no hardware", len(self._joints))
@@ -135,12 +177,12 @@ class MockMotionService:
     def move_to(self, target_positions: Dict[str, float], duration: float = 2.0) -> None:
         self._cancel_playback()
         self._halted = False
-        self._apply(target_positions)
+        self._travel(target_positions, duration)
         self._record("move_to", dict(target_positions), duration)
 
     def move_and_hold(self, target_positions: Dict[str, float], duration: float = 2.0) -> None:
         self._cancel_playback()
-        self._apply(target_positions)
+        self._travel(target_positions, duration)
         self._suppressed = True
         self._record("move_and_hold", dict(target_positions), duration)
 
@@ -163,10 +205,11 @@ class MockMotionService:
         self._record("zero_pose")
 
     def release(self) -> Dict[str, str]:
-        # Same shape as the real driver: travel to rest, then torque off. The
-        # mock is where "release is not a stop" is easiest to see — the arm
-        # moves first, and nothing here can abort a move in flight either.
-        self._apply({j: 0.0 for j in self._joints})
+        # Same shape as the real driver: reach rest, then torque off. The mock
+        # is where "release is not a stop" is easiest to see — the arm moves
+        # first, and nothing here can abort that move in flight either.
+        self._cancel_playback()
+        self._fall()
         self._torque = False
         self._record("release")
         return {}
@@ -204,6 +247,7 @@ class MockMotionService:
         # safe motion driver, not a second Lamp kinematic table: left/right
         # only pan base_yaw; other named aims preserve the current yaw.
         from hal.presets import AIM_CENTER, AIM_LEFT, AIM_PRESETS, AIM_RIGHT
+        from hal.safety.policy import min_move_duration
 
         preset = AIM_PRESETS.get(direction)
         if preset is None:
@@ -216,23 +260,78 @@ class MockMotionService:
             target = {**current, "base_yaw.pos": preset["base_yaw.pos"]}
         else:
             target = {**preset, "base_yaw.pos": current.get("base_yaw.pos", preset["base_yaw.pos"])}
-        self._apply(target)
+        # Same speed ceiling the body obeys: a simulator that swung faster than
+        # SAFETY.md allows would show a move the robot cannot make.
+        self._travel(target, min_move_duration(safety_policy, target, current, duration))
+        # Look, stay looking, then breathe again — the physical driver parks an
+        # __aim_hold__ pose for 5s and only then returns to idle.
+        self._settle_to_idle(AIM_HOLD_S)
         self._record("aim", direction, duration)
         return self.get_positions()
 
     def nudge(self, yaw: float, pitch: float, duration: float,
               current_positions: Dict[str, float],
               safety_policy: Any) -> Dict[str, float]:
+        from hal.safety.policy import min_move_duration
+
         base = current_positions or self.get_positions()
         target = {
             "base_yaw.pos": base.get("base_yaw.pos", 0.0) + yaw,
             "base_pitch.pos": base.get("base_pitch.pos", 0.0) + pitch,
         }
-        self._apply(target)
+        # move_and_hold, as the real driver does — a nudge holds where it lands.
+        self.move_and_hold(target, min_move_duration(safety_policy, target, base, duration))
         self._record("nudge", yaw, pitch, duration)
         return self.get_positions()
 
     # --- internals ---
+
+    def _travel(self, target: Dict[str, float], duration: float) -> None:
+        """Interpolate to the target at PLAYBACK_FPS, blocking like the body does.
+
+        The SDK-backed driver's move_to walks frames and returns only once the
+        arm has arrived, so a caller measuring how long a move takes measures
+        the same thing here. duration <= 0 lands in one step, as it does there.
+        """
+        frames = int(duration * PLAYBACK_FPS)
+        if frames < 1:
+            self._apply(target)
+            return
+        start = self.get_positions()
+        step = 1.0 / PLAYBACK_FPS
+        for frame in range(1, frames + 1):
+            if self._halted:
+                return
+            time.sleep(step)
+            p = frame / frames
+            self._apply({
+                joint: start.get(joint, value) + (value - start.get(joint, value)) * p
+                for joint, value in target.items()
+            })
+
+    def _fall(self) -> None:
+        """Let the limp arm drop to GRAVITY_REST, accelerating as it goes.
+
+        A joint that is already at or below its stop does not move: gravity only
+        pulls one way. Yaw and roll are untouched — the arm swings about
+        horizontal axes, so neither of those is loaded by its own weight.
+        """
+        speed = {joint: 0.0 for joint in GRAVITY_REST}
+        step = 1.0 / PLAYBACK_FPS
+        while True:
+            moving = {}
+            for joint, stop in GRAVITY_REST.items():
+                if joint not in self._joints:
+                    continue
+                angle = self.get_positions().get(joint, 0.0)
+                if angle <= stop:
+                    continue
+                speed[joint] += GRAVITY_DPS2 * step
+                moving[joint] = max(stop, angle - speed[joint] * step)
+            if not moving:
+                return
+            time.sleep(step)
+            self._apply(moving)
 
     def _apply(self, positions: Dict[str, float]) -> None:
         with self._lock:
@@ -244,8 +343,15 @@ class MockMotionService:
         self._play_cancel.set()
         self._current_recording = None
 
-    def _play_recording(self, name: str) -> None:
-        """Replay the shipped CSV frames in memory, with no actuator output."""
+    def _play_recording(self, name: str, hold_s: float = 0.0) -> None:
+        """Replay the shipped CSV frames in memory, with no actuator output.
+
+        A recording that finishes does not leave the body frozen where it
+        landed: the driver holds that pose for `hold_s`, then interpolates back
+        into the idle loop, and idle repeats until something else is commanded.
+        A mock that stopped dead instead would show a lamp that goes still after
+        every gesture, which is not what the robot does.
+        """
         self._cancel_playback()
         frames = self._load_recording(name)
         if not frames:
@@ -257,13 +363,29 @@ class MockMotionService:
         self._current_recording = name
 
         def replay() -> None:
-            previous = frames[0][0]
+            playing, current, hold = name, frames, hold_s
             try:
-                for timestamp, positions in frames:
-                    if cancel.wait(max(0.0, timestamp - previous)):
+                while True:
+                    previous = current[0][0]
+                    for timestamp, positions in current:
+                        if cancel.wait(max(0.0, timestamp - previous)):
+                            return
+                        self._apply(positions)
+                        previous = timestamp
+                    if playing == self.idle_recording:
+                        continue  # idle is the resting loop, not a one-shot
+                    # sleepy and friends are meant to hold their final pose, and
+                    # an explicit hold() means the caller owns the pose now.
+                    if playing in NO_IDLE_RECORDINGS or self._suppressed:
                         return
-                    self._apply(positions)
-                    previous = timestamp
+                    if hold and cancel.wait(hold):
+                        return
+                    hold = 0.0
+                    following = self._load_recording(self.idle_recording)
+                    if not following:
+                        return
+                    playing, current = self.idle_recording, following
+                    self._current_recording = playing
             finally:
                 if self._play_cancel is cancel:
                     self._current_recording = None
@@ -273,25 +395,60 @@ class MockMotionService:
         )
         self._play_thread.start()
 
+    def _settle_to_idle(self, hold_s: float) -> None:
+        """Hold the pose just reached, then fall back into the idle loop."""
+        self._cancel_playback()
+        cancel = threading.Event()
+        self._play_cancel = cancel
+        self._current_recording = AIM_HOLD_RECORDING
+
+        def settle() -> None:
+            if cancel.wait(hold_s):
+                return
+            if self._play_cancel is cancel and not self._suppressed:
+                self._play_recording(self.idle_recording)
+
+        self._play_thread = threading.Thread(
+            target=settle, daemon=True, name="mock-servo-settle"
+        )
+        self._play_thread.start()
+
     def _load_recording(self, name: str) -> List[tuple[float, Dict[str, float]]]:
+        """Frames on the same grid the physical driver would play them on.
+
+        A simulator that played a recording faster than the body can move it
+        would misreport the one thing playback is about, so the shared
+        stretch-and-resample rule runs here too — see recording_timing.
+        """
+        step = 1.0 / PLAYBACK_FPS
         if name in self._recordings:
-            return [(index * 0.05, positions) for index, positions in enumerate(self._recordings[name])]
+            return [(index * step, positions) for index, positions in enumerate(self._recordings[name])]
         path = Path(__file__).parents[2] / "recordings" / f"{name}.csv"
         if not path.is_file():
             return []
         try:
             with path.open(newline="") as source:
-                return [
-                    (
-                        float(row["timestamp"]),
-                        {joint: float(value) for joint, value in row.items()
-                         if joint != "timestamp" and value is not None},
-                    )
-                    for row in csv.DictReader(source)
-                ]
+                times: List[float] = []
+                frames: List[Dict[str, float]] = []
+                for row in csv.DictReader(source):
+                    raw_t = row.get(RECORDING_TIME_COLUMN)
+                    if raw_t in (None, ""):
+                        times = []
+                        break
+                    times.append(float(raw_t))
+                    frames.append({
+                        joint: float(value) for joint, value in row.items()
+                        if joint != RECORDING_TIME_COLUMN and value is not None
+                    })
         except (OSError, ValueError, KeyError) as exc:
             logger.warning("[mock] cannot load recording %r: %s", name, exc)
             return []
+
+        if len(frames) < 2 or len(times) != len(frames):
+            # No usable time axis: play what was authored rather than invent timing.
+            return [(index * step, positions) for index, positions in enumerate(frames)]
+        resampled = resample_recording(times, frames, name, PLAYBACK_FPS)
+        return [(index * step, positions) for index, positions in enumerate(resampled)]
 
     def _record(self, name: str, *args: Any) -> None:
         self.calls.append((name, *args))

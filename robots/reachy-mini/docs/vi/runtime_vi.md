@@ -133,10 +133,12 @@ bỏ qua bước trả media — thiếu nó thì daemon nằm im, câm và mù,
 stack của Pollen.
 
 Một tác dụng phụ đã đo: handler `release` của daemon reset luôn mixer của card về
-mức của nó (90% trước khi gọi, 62% sau). Driver đọc lại mức đã persist và ghi
-xuống qua route `/audio/volume` ngay sau release, nếu không một lần restart HAL
-đơn thuần sẽ để loa ở mức của Pollen trong khi slider, file state và agent đều
-vẫn báo mức của người dùng.
+mức của nó (90% trước khi gọi, 62% sau). Driver ghi mức đúng xuống qua route
+`/audio/volume` ngay sau release, nếu không một lần restart HAL đơn thuần sẽ để
+loa ở mức của Pollen trong khi slider, file state và agent đều vẫn báo mức của
+người dùng. Có mức đã persist thì lấy mức đó; chưa có thì lấy `startup_volume`
+trong ROBOT.md của thân máy — máy chưa ai đụng slider mà bỏ qua sẽ nằm luôn ở
+mức −23 dB của daemon, và lần boot đầu của người dùng mới đọc y như hỏng loa.
 
 Việc này đi kèm — chứ không thay thế — `media_backend="no_media"` của SDK, vì
 tham số đó chỉ ngăn *SDK client* giành media.
@@ -225,6 +227,27 @@ cũ tại `/root/bootstrap/rollback/`. Dùng `sudo software-update rollback
 os-server` (hoặc `bootstrap`) để khôi phục; version lỗi bị chặn tới khi feed có
 version khác.
 
+Web OTA cũng theo cùng model recovery. Nó stage và xác thực bundle mới trước khi
+thay `/usr/share/nginx/html/setup`, giữ bundle trước đó tại
+`/root/bootstrap/rollback/web.previous`, và ghi lại nginx có đang chạy hay không.
+Update yêu cầu có `index.html`, `nginx -t`, và `GET /` loopback khi nginx đang
+active; check lỗi sẽ tự khôi phục bundle known-good. Dùng
+`sudo software-update rollback web` khi operator cần rollback chủ động.
+
+Device-profile OTA stage package trước khi swap
+`/opt/devices/reachy-mini`, lưu profile trước đó và mọi rootfs target bị ảnh
+hưởng, sau đó phục hồi trạng thái service `os-server` và HAL cũ. Nó giữ file
+tuning local `/opt/hal/.env`. Profile mới phải có `ROBOT.md`; mỗi service trước
+đó active phải qua health endpoint loopback, nếu không profile known-good sẽ tự
+được phục hồi. Dùng `sudo software-update rollback device` để recovery thủ công.
+
+HAL OTA giữ toàn bộ runtime `/opt/hal` trước đó—`.env`, virtual environment và
+uv cache—tại `/root/bootstrap/rollback/hal.previous`. Runtime mới được giải nén
+và sync trong thư mục staging kề bên, chỉ sau đó mới swap vào vị trí chạy. HAL
+trở về trạng thái active/inactive trước đó và service đang active phải trả về
+`http://127.0.0.1:5001/health`. Mọi lỗi staging hoặc health sẽ tự phục hồi
+runtime known-good. Dùng `sudo software-update rollback hal` để recovery thủ công.
+
 Layout là **layout production**, không phải cây riêng cho spike:
 
 | Thành phần | Đường dẫn |
@@ -247,7 +270,19 @@ trong khi mọi service vẫn báo healthy.
 | 3 | `spike-os.sh` | Tải binary `os-server` về `/usr/local/bin`, seed `/root/config/config.json` tối thiểu, chạy **dưới root với `WorkingDirectory=/root`** |
 | 4 | `spike-web.sh` | Cài nginx, tải bundle `web` về `/usr/share/nginx/html/setup`, viết vhost `reachy-spike` |
 | 5 | `spike-agent.sh` | Cài Node.js 22 (NodeSource) + `openclaw` đúng version OTA pin, seed `/root/.openclaw`, chạy gateway ở loopback `18789` |
-| 6 | `spike-bootstrap.sh` | Worker OTA: seed `/root/config/bootstrap.json`, cài `robots/reachy-mini/software-update` → `/usr/local/bin/software-update` (worker exec script này để áp update; thiếu nó thì mọi lần apply đều fail `executable file not found in $PATH` trong khi mọi unit vẫn báo healthy), poll feed mỗi `5m` |
+| 6 | `spike-bootstrap.sh` | Worker OTA: seed `/root/config/bootstrap.json`, cài `software-update` được `upload-device.sh` stage sẵn ở gốc device package (bản canonical `scripts/provision/software-update`) → `/usr/local/bin/software-update` (worker exec script này để áp update; thiếu nó thì mọi lần apply đều fail `executable file not found in $PATH` trong khi mọi unit vẫn báo healthy), poll feed mỗi `5m` |
+
+`config.json` mà bước 3 seed **bắt buộc phải có `openclaw_config_dir`**. Key
+thiếu trong file KHÔNG rơi về giá trị `Default()` ở
+`system/server/config/config.go` — cả `Load` lẫn `ProvideConfig` đều unmarshal
+vào struct zero-value, nên thiếu key nghĩa là `""` chứ không phải
+`/root/.openclaw`. os-server tìm gateway token bằng
+`filepath.Join(OpenclawConfigDir, "openclaw.json")`; dir rỗng cho ra đường dẫn
+*tương đối* `openclaw.json` → `/root/openclaw.json`. File đó không bao giờ tồn
+tại: token không đọc được, websocket của agent reconnect 5s/lần vô hạn,
+`WaitForAgentReady` không bao giờ xong — và log không có lỗi nào, vì phép join
+trả về một path hợp lệ, chỉ là sai chỗ. Lỗi này chỉ lộ khi cài sạch hoàn toàn,
+do `config.json` bình thường vẫn sống sót qua uninstall.
 
 Thứ tự có lý do. `device` phải chạy trước vì mọi thứ khác đọc file nó cài.
 `bootstrap` để **cuối cùng**: nó có thể restart os-server và hal ngay khi thấy

@@ -65,5 +65,4 @@ the internet — [`SECURITY.md`](../SECURITY.md) has the audit.
 
 ## Running more than one robot
 
-Until a real `POST /servo/stop` and unprivileged runtimes merge, keep the fleet
-on its own `OTA_METADATA_URL` and pinned signing key.
+Keep the fleet on its own `OTA_METADATA_URL` and pinned signing key.

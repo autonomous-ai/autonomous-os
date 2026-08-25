@@ -11,6 +11,7 @@ The caller (voice_service) drives the orchestrator:
   3. Iterate stream_output():
      - Yields AudioOutput / TextOutput / FunctionCallOutput chunks
      - Yields DelegateSignal if model called delegate_to_main (then stops)
+     - Yields RejectSignal if model explicitly rejects a non-user turn (then stops)
 """
 
 import json
@@ -46,7 +47,7 @@ from hal.realtime.models import (
     OutputBase,
     TextInput,
 )
-from hal.realtime.models.signal import DelegateSignal, LookReplaySignal
+from hal.realtime.models.signal import DelegateSignal, LookReplaySignal, RejectSignal
 from hal.realtime.summarizer import RealtimeSummarizer
 from hal.realtime.voice_agent.base import VoiceAgentBase
 
@@ -83,6 +84,25 @@ DELEGATE_TOOL: dict[str, Any] = {
             },
         },
         "required": ["message"],
+    },
+}
+
+REJECT_TURN_TOOL_NAME: str = "reject_turn"
+REJECT_TURN_TOOL_DESCRIPTION: str = (
+    "Call this only when you are confident this audio is background noise, "
+    "other people's conversation, an incomplete fragment, or otherwise not "
+    "addressed to this device. This explicitly drops the turn: never call it "
+    "for a request you could answer or delegate, and never call it merely "
+    "because you are uncertain. Keep voice output completely blank."
+)
+
+REJECT_TURN_TOOL: dict[str, Any] = {
+    "type": "function",
+    "name": REJECT_TURN_TOOL_NAME,
+    "description": REJECT_TURN_TOOL_DESCRIPTION,
+    "parameters": {
+        "type": "object",
+        "properties": {},
     },
 }
 
@@ -234,6 +254,10 @@ class RealtimeOrchestrator:
         # the model can't call it and nothing fires.
         self._expression_enabled: bool = enable_expression
         tools: list[dict[str, Any]] = [DELEGATE_TOOL]
+        # Keep the AI rejection policy behind one explicit runtime flag. When
+        # disabled, a silent model turn follows the existing main-agent fallback.
+        if config.REALTIME_AI_REJECT_FILTER:
+            tools.append(REJECT_TURN_TOOL)
         if enable_expression:
             tools.append(EMOTION_TOOL)
         # `look` (in-session vision) is registered only when ALL hold: a camera is
@@ -470,7 +494,10 @@ class RealtimeOrchestrator:
                     logger.exception("[realtime] old agent disconnect failed")
 
     def _rebuild_now(
-        self, reason: str, cancel_event: threading.Event | None = None
+        self,
+        reason: str,
+        cancel_event: threading.Event | None = None,
+        discard_old_on_failure: bool = False,
     ) -> bool:
         """Synchronously swap in a fresh session before audio is streamed.
 
@@ -480,7 +507,11 @@ class RealtimeOrchestrator:
         """
         if not self._begin_rebuild():
             return False
-        return self._rebuild_locked(reason, cancel_event=cancel_event)
+        return self._rebuild_locked(
+            reason,
+            discard_old_on_failure=discard_old_on_failure,
+            cancel_event=cancel_event,
+        )
 
     def _rebuild_in_background(
         self, reason: str, thread_name: str, discard_old_on_failure: bool = False
@@ -534,7 +565,34 @@ class RealtimeOrchestrator:
         # capture that was dropped before it reached stream_output().
         self._skip_post_idle_recycle = False
         provider: str = config.REALTIME_PROVIDER.strip().lower()
-        if provider != "gemini" or not gemini_needs_idle_workaround():
+        agent = getattr(self, "_agent", None)
+        # An unanswered Gemini tool call makes the entire Live session
+        # non-reusable: audio, turn-context text, video, and manual-VAD
+        # activityEnd can all be rejected with 1008. Fire-and-forget expression
+        # calls intentionally skip their Gemini acknowledgement to avoid a
+        # duplicate reply, so replace that session before the next capture.
+        if (
+            provider == "gemini"
+            and agent is not None
+            and agent.requires_fresh_session
+        ):
+            logger.info(
+                "[realtime] Rebuilding Gemini session after unresolved tool call before streaming audio"
+            )
+            if self._rebuild_now(
+                "gemini-unresolved-tool-call", discard_old_on_failure=True
+            ):
+                self._skip_post_idle_recycle = True
+            return
+        # NOT gated on gemini_needs_idle_workaround(). That predicate asks whether
+        # the MODEL has the native-audio idle-resume bug, but an idle session dying
+        # is a session-lifecycle fact, not a model one: Gemini closes a session it
+        # receives nothing on, whichever model is behind it. Measured 2026-08-21 on
+        # gemini-3.1-flash-live-preview (lamp-0c89 and intern-v2): WS 1008 "The
+        # operation was aborted" after 86-185s with nothing sent to the model, and
+        # 107 of 113 such closes landed on sessions that had served ZERO turns.
+        # Gating this on the model left 3.1 with no protection at all.
+        if provider != "gemini":
             return
         threshold = config.REALTIME_GEMINI_PRE_TURN_RECYCLE_S
         if threshold <= 0 or self._last_turn_monotonic <= 0.0:
@@ -727,12 +785,13 @@ class RealtimeOrchestrator:
 
     def stream_output(
         self,
-    ) -> Generator[OutputBase | DelegateSignal | LookReplaySignal, None, None]:
+    ) -> Generator[OutputBase | DelegateSignal | RejectSignal | LookReplaySignal, None, None]:
         """Yield outputs from the model one by one as they arrive.
 
         Yields:
           - AudioOutput / TextOutput / FunctionCallOutput as they stream in
           - DelegateSignal if model called delegate_to_main (then stops)
+          - RejectSignal if model explicitly rejected the turn (then stops)
           - LookReplaySignal if model called look and a fresh frame was sent —
             the caller must re-append the turn's audio and commit again so the
             frame joins the replayed turn (then stops)
@@ -777,6 +836,44 @@ class RealtimeOrchestrator:
                 # _handle_emotion_call.
                 self._handle_emotion_call(output, spoken=produced)
                 continue
+            if (
+                isinstance(output, FunctionCallOutput)
+                and output.name == REJECT_TURN_TOOL_NAME
+            ):
+                # A rejection is only safe before any user-visible output. The
+                # prompt requires this tool to be the whole turn; this guard
+                # prevents a malformed late call from hiding a real response.
+                if produced:
+                    logger.warning(
+                        "[realtime] Ignoring reject_turn after output already began"
+                    )
+                    self._agent.send(
+                        [
+                            FunctionCallResultInput(
+                                call_id=output.call_id,
+                                output='{"error": "reject_turn must be the only turn outcome"}',
+                            )
+                        ]
+                    )
+                    # End rather than letting an acknowledgement generate a
+                    # second response after the model has already spoken.
+                    self._agent.end_turn()
+                    break
+                logger.info("[realtime] Model explicitly rejected this turn")
+                # Acknowledge like delegation so Gemini does not leave a pending
+                # tool call that poisons the next manual-VAD activity.
+                self._agent.send(
+                    [
+                        FunctionCallResultInput(
+                            call_id=output.call_id,
+                            output='{"result": "turn dropped"}',
+                        )
+                    ]
+                )
+                produced = True
+                self._agent.end_turn()
+                yield RejectSignal()
+                break
             if (
                 isinstance(output, FunctionCallOutput)
                 and output.name == DELEGATE_TOOL_NAME
@@ -1119,6 +1216,35 @@ class RealtimeOrchestrator:
             )
             return False
 
+        # Resolve the tool call BEFORE the frame goes out. Both the image and
+        # the replayed audio below travel on `send_realtime_input`, which Gemini
+        # refuses while a call it emitted is unanswered — so leaving this call
+        # pending does not merely risk a 1008, it means the gate in
+        # `_async_send_input` drops the frame AND every replayed audio frame,
+        # and the turn ends with nothing to answer from (main-agent fallback).
+        #
+        # This path used to send no result at all. That worked only because the
+        # gate carried a 10s expiry and a look with a slow aim (deadline 8s)
+        # usually outlived it — flaky by construction. The expiry is gone, so
+        # the call has to be answered rather than waited out.
+        #
+        # trigger_response=True is the only variant that reaches Gemini's
+        # send_tool_response and clears the gate; trigger_response=False is the
+        # fire-and-forget path, which deliberately tells Gemini nothing and
+        # therefore leaves the session quarantined. The response it triggers is
+        # cancelled immediately after by end_turn() + skip_next_turn_done() in
+        # the caller — the payload tells the model to hold, and the replayed
+        # turn is what it actually answers.
+        with look_debug.stage("ack_tool_call"):
+            self._agent.send(
+                [
+                    FunctionCallResultInput(
+                        call_id=output.call_id,
+                        output='{"result": "frame incoming; wait for the image"}',
+                        trigger_response=True,
+                    )
+                ]
+            )
         with look_debug.stage("send_image"):
             self._agent.send([ImageInput(image=frame)])
         self._looked_this_turn = True
@@ -1282,6 +1408,28 @@ class RealtimeOrchestrator:
     def save_turn(self, user_text: str, agent_text: str) -> None:
         """Save a conversation turn to realtime memory."""
         self._context.add_turn(user_text, agent_text)
+
+    def save_main_handoff(self, user_text: str) -> None:
+        """Persist a user turn that the main agent will answer.
+
+        The live provider retains the audio turn only while its current session
+        survives. Record the handoff before OpenClaw replies so a Gemini session
+        recycle cannot make the device forget what the user asked.
+        """
+        self.save_turn(
+            user_text=user_text,
+            agent_text="[This request was handed to the main agent; its spoken reply follows.]",
+        )
+
+    def save_main_agent_reply_fragment(self, text: str) -> None:
+        """Persist a spoken main-agent reply for future realtime sessions.
+
+        Main-agent TTS is sentence-streamed, so one logical reply may arrive as
+        multiple fragments. Retaining each fragment preserves the complete
+        answer without relying on the ephemeral ``[TTS HISTORY]`` injection.
+        """
+        if text.strip():
+            self.save_turn(user_text="[Main agent reply]", agent_text=text)
 
     def send_function_result(self, call_id: str, output: str) -> None:
         """Send a function call result back to the model."""

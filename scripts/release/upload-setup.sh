@@ -8,11 +8,63 @@ SETUP_FILE="${RELEASE_DIR}/../provision/setup.sh"
 # Bucket and path matching https://storage.googleapis.com/s3-autonomous-upgrade-3/${BUCKET_PREFIX}/setup.sh
 GCS_PATH="${GCS_PATH:-${BUCKET_PREFIX}/setup.sh}"
 
+SWUPDATE_FILE="${RELEASE_DIR}/../provision/software-update"
+
 if [[ ! -f "$SETUP_FILE" ]]; then
   echo "Error: setup.sh not found at $SETUP_FILE"
   exit 1
 fi
+if [[ ! -f "$SWUPDATE_FILE" ]]; then
+  echo "Error: software-update not found at $SWUPDATE_FILE"
+  exit 1
+fi
+
+# Inline the canonical on-device updater into the published setup.sh. The repo
+# copy of setup.sh carries only a placeholder between the two markers (it is
+# curl'd onto a bare device and cannot read the repo), so the assembly happens
+# here — at release time, never in git. That keeps the imagers, which install
+# the same file directly, and setup.sh on one version without anybody having to
+# regenerate and remember to commit.
+BEGIN_MARK='  # >>> BEGIN software-update (generated)'
+END_MARK='  # <<< END software-update (generated)'
+UPLOAD_FILE="$(mktemp)"
+trap 'rm -f "$UPLOAD_FILE"' EXIT
+
+grep -qF "$BEGIN_MARK" "$SETUP_FILE" && grep -qF "$END_MARK" "$SETUP_FILE" || {
+  echo "Error: software-update markers missing in $SETUP_FILE — did the block get hand-edited?"
+  exit 1
+}
+
+awk -v begin="$BEGIN_MARK" -v end="$END_MARK" -v body="$SWUPDATE_FILE" '
+  $0 == begin { print; print "  cat >/usr/local/bin/software-update <<'\''SOFTWAREUPDATE'\''";
+                while ((getline line < body) > 0) print line;
+                close(body); print "SOFTWAREUPDATE"; skip = 1; next }
+  $0 == end   { skip = 0 }
+  !skip       { print }
+' "$SETUP_FILE" > "$UPLOAD_FILE"
+
+bash -n "$UPLOAD_FILE" || { echo "Error: assembled setup.sh is not valid bash"; exit 1; }
+grep -q "placeholder body" "$UPLOAD_FILE" && { echo "Error: placeholder survived inlining"; exit 1; }
 
 echo "========== Upload setup.sh to Google Cloud Storage (no-cache) =========="
-gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" cp "$SETUP_FILE" "gs://${GCS_BUCKET}/${GCS_PATH}"
+echo "  (software-update inlined from $SWUPDATE_FILE)"
+gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" cp "$UPLOAD_FILE" "gs://${GCS_BUCKET}/${GCS_PATH}"
 echo "Done: gs://${GCS_BUCKET}/${GCS_PATH}"
+
+# Also publish the updater as a standalone file. `software-update` otherwise only
+# reaches a device at provisioning time (imager, or setup.sh above), so a device
+# already in the field can never get a newer one — and an old updater silently
+# skips every component it does not know (bootstrap's updaterSupports gate).
+# This gives an operator a one-liner to heal such a device:
+#
+#   sudo curl -fsSL https://cdn.autonomous.ai/os/software-update -o /tmp/su \
+#     && sudo bash -n /tmp/su \
+#     && sudo install -m 0755 /tmp/su /usr/local/bin/software-update
+#
+# Published raw (NOT the setup.sh-inlined form) so the fetch needs no unwrapping.
+SWUPDATE_GCS_PATH="${SWUPDATE_GCS_PATH:-${BUCKET_PREFIX}/software-update}"
+echo "========== Upload software-update to Google Cloud Storage (no-cache) =========="
+gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" \
+       -h "Content-Type:text/x-shellscript" \
+       cp "$SWUPDATE_FILE" "gs://${GCS_BUCKET}/${SWUPDATE_GCS_PATH}"
+echo "Done: gs://${GCS_BUCKET}/${SWUPDATE_GCS_PATH}"

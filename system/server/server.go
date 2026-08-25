@@ -309,6 +309,9 @@ func (s *Server) Serve(closeFn func()) error {
 	system.GET("info", s.healthHandler.SystemInfo)
 	system.GET("network", s.healthHandler.NetworkInfo)
 	system.GET("dashboard", s.healthHandler.Dashboard)
+	system.GET("ota-security", s.otaSecurity)
+	system.GET("ota-versions", s.otaVersions)
+	system.GET("ota-updating", s.otaUpdating)
 	system.POST("software-update/:target", adminAuthMiddleware(s.config), s.softwareUpdate)
 	system.POST("factory-reset", adminOrLoopbackAuth(s.config), func(c *gin.Context) {
 		systemshell.FactoryReset(c, s.agentGateway)

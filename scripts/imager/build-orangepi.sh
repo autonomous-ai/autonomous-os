@@ -854,193 +854,10 @@ chmod 600 "\$WPA_CONF"
 EOFSCRIPT
 chmod +x /usr/local/bin/connect-wifi
 
-cat > /usr/local/bin/software-update <<'EOFSCRIPT'
-#!/bin/bash
-set -e
-# Metadata URL comes from the bootstrap worker config (single source of truth,
-# baked at image build). An explicit OTA_METADATA_URL env var still overrides it
-# for manual/debug runs. No compiled-in default — abort if neither is set.
-BOOTSTRAP_JSON="/root/config/bootstrap.json"
-[ "\$(id -u)" -ne 0 ] && { echo "Run as root."; exit 1; }
-[ \$# -lt 1 ] && { echo "Usage: software-update <component>|rollback <os-server|bootstrap>"; exit 1; }
-APP="\$1"
-if [ "\$APP" = "rollback" ]; then
-  [ \$# -eq 2 ] || { echo "Usage: software-update rollback <os-server|bootstrap>"; exit 1; }
-  ROLLBACK_TARGET="\$2"
-  case "\$ROLLBACK_TARGET" in
-    os-server) DEST=/usr/local/bin/os-server; UNIT=os-server ;;
-    bootstrap) DEST=/usr/local/bin/bootstrap-server; UNIT=bootstrap ;;
-    *) echo "Rollback is currently supported for os-server and bootstrap only"; exit 1 ;;
-  esac
-  BACKUP="/root/bootstrap/rollback/\${ROLLBACK_TARGET}.previous"
-  [ -x "\$BACKUP" ] || { echo "No rollback backup for \$ROLLBACK_TARGET"; exit 1; }
-  BLOCKED_VERSION=\$("\$DEST" --version 2>/dev/null | sed -nE 's/.*([0-9]+\.[0-9]+\.[0-9]+([-.+_][0-9A-Za-z.-]+)?).*/\1/p' | head -1)
-  if [ -z "\$BLOCKED_VERSION" ] && [ -f /root/bootstrap/state.json ]; then
-    BLOCKED_VERSION=\$(jq -r --arg key "\$ROLLBACK_TARGET" '.components[\$key] // empty' /root/bootstrap/state.json 2>/dev/null || true)
-  fi
-  if [ -n "\$BLOCKED_VERSION" ] && [ -f "\$BOOTSTRAP_JSON" ]; then
-    CONFIG_TMP=\$(mktemp)
-    if jq --arg key "\$ROLLBACK_TARGET" --arg version "\$BLOCKED_VERSION" '.rollback_versions = (.rollback_versions // {}) | .rollback_versions[\$key] = \$version' "\$BOOTSTRAP_JSON" >"\$CONFIG_TMP"; then
-      mv "\$CONFIG_TMP" "\$BOOTSTRAP_JSON"
-    else
-      rm -f "\$CONFIG_TMP"
-      echo "WARN: could not record rollback version; lower min_version before the next OTA poll"
-    fi
-  fi
-  install -D -m 0755 "\$BACKUP" "\$DEST"
-  systemctl restart "\$UNIT"
-  [ "\$ROLLBACK_TARGET" != "bootstrap" ] && systemctl restart bootstrap
-  echo "\$ROLLBACK_TARGET restored from \$BACKUP"
-  exit 0
-fi
-case "\$APP" in
-  os-server|openclaw|bootstrap|web|hal|claude-desktop-buddy|device) ;;
-  *) echo "Unknown app: \$APP. Use os-server, openclaw, bootstrap, web, hal, claude-desktop-buddy, or device."; exit 1 ;;
-esac
-
-if [ -z "\${OTA_METADATA_URL:-}" ]; then
-  OTA_METADATA_URL="\$(jq -r '.metadata_url // empty' "\$BOOTSTRAP_JSON" 2>/dev/null || true)"
-fi
-if [ -z "\$OTA_METADATA_URL" ]; then
-  echo "[software-update] ERROR: no metadata_url in \$BOOTSTRAP_JSON and OTA_METADATA_URL unset"
-  exit 1
-fi
-echo "[software-update] OTA metadata: \$OTA_METADATA_URL"
-
-METADATA_TMP=\$(mktemp)
-METADATA_PAYLOAD=\$(mktemp)
-ZIP_TMP=""
-DIR_TMP=""
-trap 'rm -f "\$METADATA_TMP" "\$METADATA_PAYLOAD" "\$ZIP_TMP"; rm -rf "\$DIR_TMP"' EXIT
-curl -fsSL -H "Cache-Control: no-cache" -H "Pragma: no-cache" -o "\$METADATA_TMP" "\$OTA_METADATA_URL" || { echo "Failed to fetch metadata from \$OTA_METADATA_URL"; exit 1; }
-OTA_SIGNING_PUBLIC_KEY="\$(jq -r '.signing_public_key // empty' "\$BOOTSTRAP_JSON" 2>/dev/null || true)"
-if [ -n "\$OTA_SIGNING_PUBLIC_KEY" ]; then
-  PUBLIC_DER=\$(mktemp); SIGNATURE_TMP=\$(mktemp)
-  jq -er '(.signed // .) | .format == "autonomous-ota/v1" and .signature.algorithm == "ed25519"' "\$METADATA_TMP" >/dev/null || { echo "Unsigned or unsupported OTA metadata"; exit 1; }
-  printf '\060\052\060\005\006\003\053\145\160\003\041\000' > "\$PUBLIC_DER"
-  printf '%s' "\$OTA_SIGNING_PUBLIC_KEY" | base64 -d >> "\$PUBLIC_DER" || { echo "Invalid OTA signing public key"; exit 1; }
-  jq -r '(.signed // .).payload' "\$METADATA_TMP" | base64 -d > "\$METADATA_PAYLOAD" || { echo "Invalid OTA metadata payload"; exit 1; }
-  jq -r '(.signed // .).signature.value' "\$METADATA_TMP" | base64 -d > "\$SIGNATURE_TMP" || { echo "Invalid OTA metadata signature"; exit 1; }
-  openssl pkeyutl -verify -pubin -keyform DER -inkey "\$PUBLIC_DER" -rawin -in "\$METADATA_PAYLOAD" -sigfile "\$SIGNATURE_TMP" >/dev/null || { echo "OTA metadata signature verification failed"; exit 1; }
-else
-  echo "[software-update] WARN: OTA signing is not configured; using legacy unsigned metadata"
-  cp "\$METADATA_TMP" "\$METADATA_PAYLOAD"
-fi
-if [ "\$APP" = "device" ]; then
-  # Device profile lives nested under devices.<type>; resolve THIS device's type.
-  DEVICE_TYPE="\$(grep -E '^DEVICE_TYPE=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
-  [ -z "\$DEVICE_TYPE" ] && DEVICE_TYPE="\$(jq -r '.device_type // empty' /root/config/config.json 2>/dev/null)"
-  # No lamp fallback: pulling the lamp profile onto a device whose class can't be
-  # resolved would overwrite its persona with the wrong one — refuse instead.
-  [ -z "\$DEVICE_TYPE" ] && { echo "ERROR: device_type not found in /opt/hal/.env or /root/config/config.json — cannot resolve device profile"; exit 1; }
-  VERSION=\$(jq -r --arg t "\$DEVICE_TYPE" '.devices[\$t].version // empty' "\$METADATA_PAYLOAD")
-  URL=\$(jq -r --arg t "\$DEVICE_TYPE" '.devices[\$t].url // empty' "\$METADATA_PAYLOAD")
-  SHA256=\$(jq -r --arg t "\$DEVICE_TYPE" '.devices[\$t].sha256 // empty' "\$METADATA_PAYLOAD")
-else
-  META_KEY="\$APP"
-  VERSION=\$(jq -r --arg a "\$META_KEY" '.[\$a].version // empty' "\$METADATA_PAYLOAD")
-  URL=\$(jq -r --arg a "\$META_KEY" '.[\$a].url // empty' "\$METADATA_PAYLOAD")
-  SHA256=\$(jq -r --arg a "\$META_KEY" '.[\$a].sha256 // empty' "\$METADATA_PAYLOAD")
-fi
-[ -z "\$VERSION" ] && { echo "Metadata has no version for \$APP"; exit 1; }
-[ -z "\$URL" ] || [ -z "\$OTA_SIGNING_PUBLIC_KEY" ] || [[ "\$SHA256" =~ ^[a-fA-F0-9]{64}$ ]] || { echo "Metadata has no valid SHA-256 for \$APP"; exit 1; }
-
-download_verified() {
-  local url="\$1" destination="\$2" digest="\$3"
-  curl -fsSL -H "Cache-Control: no-cache" -o "\$destination" "\$url" || return 1
-  [ -z "\$digest" ] || echo "\$digest  \$destination" | sha256sum -c - >/dev/null
-}
-
-if [ "\$APP" = "os-server" ]; then
-  [ -z "\$URL" ] && { echo "Metadata has no url for os-server"; exit 1; }
-  ZIP_TMP=\$(mktemp)
-  DIR_TMP=\$(mktemp -d)
-  download_verified "\$URL" "\$ZIP_TMP" "\$SHA256" || { echo "Failed checksum verification for os-server"; exit 1; }
-  unzip -o -q "\$ZIP_TMP" -d "\$DIR_TMP"
-  BIN=\$(find "\$DIR_TMP" -type f -executable 2>/dev/null | head -1)
-  [ -z "\$BIN" ] && BIN=\$(find "\$DIR_TMP" -type f 2>/dev/null | head -1)
-  [ -z "\$BIN" ] || [ ! -f "\$BIN" ] && { echo "No binary in os-server zip"; exit 1; }
-  install -D -m 0755 /usr/local/bin/os-server /root/bootstrap/rollback/os-server.previous
-  cp -f "\$BIN" /usr/local/bin/os-server
-  chmod +x /usr/local/bin/os-server
-  systemctl restart os-server
-  echo "os-server updated to \$VERSION"
-elif [ "\$APP" = "bootstrap" ]; then
-  [ -z "\$URL" ] && { echo "Metadata has no url for bootstrap"; exit 1; }
-  ZIP_TMP=\$(mktemp)
-  DIR_TMP=\$(mktemp -d)
-  download_verified "\$URL" "\$ZIP_TMP" "\$SHA256" || { echo "Failed checksum verification for bootstrap"; exit 1; }
-  unzip -o -q "\$ZIP_TMP" -d "\$DIR_TMP"
-  BIN=\$(find "\$DIR_TMP" -type f -executable 2>/dev/null | head -1)
-  [ -z "\$BIN" ] && BIN=\$(find "\$DIR_TMP" -type f 2>/dev/null | head -1)
-  [ -z "\$BIN" ] || [ ! -f "\$BIN" ] && { echo "No binary in bootstrap zip"; exit 1; }
-  install -D -m 0755 /usr/local/bin/bootstrap-server /root/bootstrap/rollback/bootstrap.previous
-  cp -f "\$BIN" /usr/local/bin/bootstrap-server
-  chmod +x /usr/local/bin/bootstrap-server
-  systemctl restart bootstrap
-  echo "bootstrap updated to \$VERSION"
-elif [ "\$APP" = "openclaw" ]; then
-  VER="\${VERSION:-latest}"
-  npm install -g "openclaw@\${VER}" || { echo "npm install openclaw failed"; exit 1; }
-  openclaw plugins install @openclaw/discord@\${VER} --force 2>&1 || echo "[software-update] WARN: discord plugin install failed (non-fatal)"
-  openclaw plugins install @openclaw/slack@\${VER} --force 2>&1 || echo "[software-update] WARN: slack plugin install failed (non-fatal)"
-  systemctl restart openclaw
-  echo "openclaw updated to \$VER"
-elif [ "\$APP" = "web" ]; then
-  [ -z "\$URL" ] && { echo "Metadata has no url for web"; exit 1; }
-  ZIP_TMP=\$(mktemp)
-  DIR_TMP=\$(mktemp -d)
-  download_verified "\$URL" "\$ZIP_TMP" "\$SHA256" || { echo "Failed checksum verification for web"; exit 1; }
-  unzip -o -q "\$ZIP_TMP" -d "\$DIR_TMP"
-  echo "\$VERSION" > "\$DIR_TMP/VERSION"
-  WEB_ROOT="/usr/share/nginx/html/setup"
-  rm -rf "\${WEB_ROOT:?}"/*
-  cp -a "\$DIR_TMP"/* "\$WEB_ROOT"
-  systemctl restart nginx
-  echo "web updated to \$VERSION"
-elif [ "\$APP" = "hal" ]; then
-  [ -z "\$URL" ] && { echo "Metadata has no url for hal"; exit 1; }
-  ZIP_TMP=\$(mktemp)
-  download_verified "\$URL" "\$ZIP_TMP" "\$SHA256" || { echo "Failed checksum verification for hal"; exit 1; }
-  HAL_DIR="/opt/hal"
-  unzip -o -q "\$ZIP_TMP" -d "\$HAL_DIR"
-  UV_BIN=\$(command -v uv || echo "/root/.local/bin/uv")
-  find /root/.cache/uv -name "lerobot.egg-info" -type d 2>/dev/null | xargs rm -rf
-  cd "\$HAL_DIR" && "\$UV_BIN" sync --python 3.12 --extra hardware || { echo "uv sync failed"; exit 1; }
-  cd /
-  systemctl restart hal
-  echo "hal updated to \$VERSION"
-elif [ "\$APP" = "claude-desktop-buddy" ]; then
-  [ -z "\$URL" ] && { echo "Metadata has no url for claude-desktop-buddy"; exit 1; }
-  ZIP_TMP=\$(mktemp)
-  DIR_TMP=\$(mktemp -d)
-  download_verified "\$URL" "\$ZIP_TMP" "\$SHA256" || { echo "Failed checksum verification for claude-desktop-buddy"; exit 1; }
-  BUDDY_DIR="/opt/claude-desktop-buddy"
-  mkdir -p "\$BUDDY_DIR"
-  unzip -o -q "\$ZIP_TMP" -d "\$DIR_TMP"
-  [ -f "\$DIR_TMP/buddy-plugin" ] && cp -f "\$DIR_TMP/buddy-plugin" "\$BUDDY_DIR/buddy-plugin" && chmod +x "\$BUDDY_DIR/buddy-plugin"
-  [ ! -f "/root/config/buddy.json" ] && [ -f "\$DIR_TMP/config/buddy.json" ] && mkdir -p /root/config && cp -f "\$DIR_TMP/config/buddy.json" /root/config/buddy.json
-  echo "\$VERSION" > "\$BUDDY_DIR/VERSION_BUDDY"
-  systemctl restart claude-desktop-buddy
-  echo "claude-desktop-buddy updated to \$VERSION"
-elif [ "\$APP" = "device" ]; then
-  [ -z "\$URL" ] && { echo "Metadata has no url for devices.\$DEVICE_TYPE"; exit 1; }
-  DEVICES_DIR="\$(grep -E '^DEVICES_DIR=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
-  [ -z "\$DEVICES_DIR" ] && DEVICES_DIR="/opt/devices"
-  DEST="\$DEVICES_DIR/\$DEVICE_TYPE"
-  ZIP_TMP=\$(mktemp)
-  download_verified "\$URL" "\$ZIP_TMP" "\$SHA256" || { echo "Failed checksum verification for device profile"; exit 1; }
-  mkdir -p "\$DEST"
-  unzip -o -q "\$ZIP_TMP" -d "\$DEST"
-  rm -f "\$ZIP_TMP"
-  # Re-apply the device rootfs overlay onto / before services restart.
-  [ -d "\$DEST/rootfs" ] && cp -a "\$DEST/rootfs/." /
-  systemctl restart os-server 2>/dev/null || true
-  systemctl restart hal 2>/dev/null || true
-  echo "device profile (\$DEVICE_TYPE) updated to \$VERSION"
-fi
-EOFSCRIPT
-chmod +x /usr/local/bin/software-update
+# /usr/local/bin/software-update is NOT written here — it is installed from
+# the canonical scripts/provision/software-update on the host, after this
+# chroot block (see "install canonical software-update" below). Keeping it
+# out of the chroot heredoc also takes it out of the escaping regime.
 
 # ── network configs (hostapd, dnsmasq, wpa, dhcpcd) ──────────────────────────
 echo "[stage] network configs"
@@ -1336,6 +1153,15 @@ fi
 
 echo "[stage] chroot Phase 2 complete"
 CHROOT_STAGES
+
+# ── install canonical software-update ────────────────────────────────────────
+# The on-device OTA updater is one file in the repo (scripts/provision/
+# software-update), staged into /input by the imager Makefile and installed
+# here from the host — NOT written by heredoc inside the chroot. setup.sh
+# inlines the same file at release time, so all fleets carry one version.
+echo "[stage] install /usr/local/bin/software-update (canonical)"
+[ -f /input/software-update ] || err "/input/software-update missing — run via 'make build' (it stages the file)"
+install -m 0755 /input/software-update "${MNT}/usr/local/bin/software-update"
 
 # Read runtime versions captured inside chroot (shell vars don't propagate out).
 BAKED_OPENCLAW_VERSION=$(cat "${MNT}/tmp/baked-openclaw-version" 2>/dev/null | tr -d '[:space:]' || echo "unknown")

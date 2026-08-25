@@ -27,8 +27,9 @@ def _first_sentence(text: str, cap: int = 150) -> str:
 class OpenClawContextManager(ContextManagerBase):
     """Context manager for the OpenClaw agent runtime.
 
-    Reads SOUL.md/IDENTITY.md/USER.md for identity, workspace/memory/*.md for
-    device memory, and workspace/skills/*/SKILL.md for the skill catalog.
+    Reads SOUL.md/IDENTITY.md/USER.md for identity, root MEMORY.md plus
+    workspace/memory/*.md for device memory, and workspace/skills/*/SKILL.md
+    for the skill catalog.
     """
 
     FRONTMATTER_RE: re.Pattern[str] = re.compile(r"^---\s*\n(.*?)\n---", re.DOTALL)
@@ -74,7 +75,7 @@ class OpenClawContextManager(ContextManagerBase):
 
     @override
     def load_device_memory(self) -> list[str]:
-        """Load device_summary.md + unsummarized memory files (modified after last summary)."""
+        """Load root MEMORY.md, device summary, and recent memory files."""
         entries: list[str] = []
 
         if self._device_summary_path.exists():
@@ -86,6 +87,33 @@ class OpenClawContextManager(ContextManagerBase):
                     entries.append(f"[Previous summary]\n{summary}")
             except Exception as e:
                 logger.warning("[realtime] Failed to read device summary: %s", e)
+
+        total_chars: int = sum(len(entry) for entry in entries)
+
+        # OpenClaw-layout runtimes keep their curated long-term memory at the
+        # workspace root. It is not a daily file and therefore cannot be
+        # recovered from device_summary.md; omitting it made realtime sessions
+        # forget facts that the main agent correctly remembered.
+        root_memory_path: Path = self._workspace / "MEMORY.md"
+        try:
+            root_memory: str = root_memory_path.read_text(encoding="utf-8").strip()
+            if root_memory:
+                root_entry: str = f"## Long-term memory\n\n{root_memory}"
+                remaining = self._device_memory_max_chars - total_chars
+                if remaining > 0:
+                    if len(root_entry) > remaining:
+                        logger.warning(
+                            "[realtime] root MEMORY.md truncated %d → %d chars",
+                            len(root_entry),
+                            remaining,
+                        )
+                        root_entry = root_entry[:remaining]
+                    entries.append(root_entry)
+                    total_chars += len(root_entry)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logger.warning("[realtime] Failed to read %s: %s", root_memory_path, e)
 
         memory_dir: Path = self._workspace / "memory"
         if not memory_dir.is_dir():
@@ -102,7 +130,6 @@ class OpenClawContextManager(ContextManagerBase):
             key=lambda f: f.stat().st_mtime,
             reverse=True,
         )
-        total_chars: int = sum(len(e) for e in entries)
         for md_file in md_files:
             if md_file.stat().st_mtime <= summary_mtime:
                 break

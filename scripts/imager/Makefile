@@ -114,6 +114,13 @@ build: build-preflight
 	# Build the Docker build environment (shared for both targets)
 	docker build -t pi-builder .
 
+	# Stage the canonical on-device updater as a build input. It is the single
+	# source of truth (scripts/provision/software-update) shared with setup.sh;
+	# the Docker build context is this directory, so the file cannot be COPY'd
+	# into the builder image — it rides the /input mount instead. Re-copied on
+	# every build, so the staged copy can never go stale.
+	cp ../provision/software-update input/software-update
+
 	# Run it — needs --privileged for losetup/mount.
 	# BUILD_SCRIPT controls which builder runs inside the container.
 	docker run --rm \

@@ -16,7 +16,7 @@ class MotorsService(ServiceBase):
         self.robot: LeLampFollower = None
         self.recordings_dir = os.path.join(os.path.dirname(__file__), "..", "..", "recordings")
     
-    def start(self):
+    def start(self, skip_wake: bool = False):
         super().start()
         self.robot = LeLampFollower(self.robot_config)
         self.robot.connect(calibrate=False)

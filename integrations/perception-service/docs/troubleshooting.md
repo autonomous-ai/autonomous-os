@@ -53,32 +53,112 @@ curl -s -H "X-API-Key: $API_KEY" http://127.0.0.1:8899/hal/api/dl/health
 A 401 is a liveness signal, not a failure. Only the `200` body confirms models
 are actually loaded, which is why the autostart probe checks for it.
 
-## 2. Reading the logs
+## 1b. Triaging a reported 5xx
 
-Logs are [multilog](https://cr.yp.to/daemontools/multilog.html) directories, not
-files. The live file is always `current`, and every line is prefixed with a
-TAI64N timestamp that must be decoded:
+Start from the request id in the report. One command decides which layer to look at:
 
 ```bash
-tail -100 /workspace/logs/dlserver/watchdog/current | tai64nlocal
-tail -200 /workspace/logs/dlserver/stderr/current   | tai64nlocal
-tail -100 /workspace/logs/lbserver/watchdog/current | tai64nlocal
-tail -50  /workspace/logs/autostart/autostart.log   # plain text, no decoding
+grep -r "$REQUEST_ID" /var/log/nginx/ /workspace/logs/ || echo "NEVER REACHED THIS HOST"
 ```
 
-Without `tai64nlocal` every line starts with `@400000006a5db23a…` and you cannot
-correlate anything with wall-clock time.
+| nginx access line | Meaning | Next step |
+|---|---|---|
+| *(no match anywhere)* | Never arrived -- died at the caller, Cloudflare or the ingress | Nothing to do here. Check the caller's own logs. |
+| `client=504 upstream=-` | Backend **hung**: accepted the connection, never replied | `cat /proc/$(cat /tmp/dlserver.pid)/wchan` -- `pipe_write` means a frozen event loop |
+| `client=502 upstream=-` | Backend **down**: connect refused | Did it restart? Check `watchdog.log` |
+| `client=200 upstream=200` | Healthy here | Failure is downstream -- client timeout or transport |
 
-Rotated segments live in the same directory, and **the suffix tells you how the
-previous run ended**:
+`urt=` is the upstream response time; compare it against the ladder in
+[deployment.md](deployment.md#timeout-ladder).
 
-| Suffix | Meaning |
-|--------|---------|
-| `@…​.s` | Normal rotation (hit the 1 MB size limit). Says nothing about health |
-| `@…​.u` | multilog was killed before it could finalise the file — **abrupt termination of the whole process group** |
+A full access line carries the timestamp, both status codes, both timings and the
+request id -- enough to bound an incident in time without correlating against the
+service logs:
 
-A `.u` file's mtime is the last moment anything was written, which is your best
-estimate of when the process died.
+```
+1.2.3.4 [21/Aug/2026:08:15:21 +0000] lelamp-rp.autonomous.ai "POST /api/dl/owlv2 HTTP/1.1" \
+  client=200 upstream=200 rt=0.393 urt=0.373 addr=127.0.0.1:7999 rid=79b0250114c29f05
+```
+
+## 1c. A log file stopped growing
+
+Both servers use `ResilientRotatingFileHandler` (`src/core/logging_ext.py`). The
+stock handler never reopens a dead stream, so one failed write silenced a log
+until the next restart -- `lbserver.log` stopped at 07:59:35 on 2026-08-17 and
+stayed dead for the rest of the day while its mtime kept advancing.
+
+On a write failure the handler now closes and reopens; if the file itself is
+unwritable it rolls over **once** to a fresh inode; if that still fails it mutes
+for `retry_after` (30s) and tries again. Failure notices on stderr are
+rate-limited to one per window instead of a ~40-line traceback per record.
+
+So a log that is *permanently* frozen now means the fault outlasted every retry.
+Check:
+
+```bash
+# is it really frozen, or just quiet?
+stat -c '%s %y' /workspace/logs/lbserver/lbserver.log     # sample twice
+
+# NUL bytes at the tail = the storage lost that region (reads return zeros)
+S=$(stat -c %s FILE); N=$(tr -d '\000' < FILE | wc -c); echo "NUL=$((S-N))"
+
+# read what survives -- less/editors call it binary and garble it
+tr -d '\000' < FILE | less
+
+# is the fd still on a live inode, or a deleted one?
+ls -l /proc/$(cat /tmp/lbserver.pid)/fd | grep -a workspace
+```
+
+| Symptom | Meaning |
+|---|---|
+| fd shows `(deleted)` | An unlinked-but-open file. Should not happen since the handlers were merged -- if it does, the double-handler bug is back |
+| fd on a live inode, NUL tail, size frozen | Storage-side fault on that file's backing chunks. Not preventable from the app; the handler should have rolled over |
+| `[logging] write failed` on stderr | The handler is retrying. One line per 30s is normal during a fault |
+
+> `/workspace` is MooseFS. The client tools that would identify a bad chunk
+> (`mfsfileinfo`, `mfscheckfile`) are **not installed** -- worth adding, since
+> without them a storage fault can only be inferred from symptoms.
+
+## 2. Reading the logs
+
+Logs are plain text files. No decoding is needed:
+
+```bash
+tail -100 /workspace/logs/dlserver/watchdog.log
+tail -200 /workspace/logs/dlserver/stderr.log
+tail -100 /workspace/logs/lbserver/watchdog.log
+tail -50  /workspace/logs/autostart/autostart.log
+```
+
+| File | Contents |
+|------|----------|
+| `<svc>/stdout.log` | server stdout |
+| `<svc>/stderr.log` | server stderr (library warnings, tracebacks) |
+| `<svc>/watchdog.log` | restart events from `run-with-restart.sh` |
+| `<svc>/<svc>.log` | application log (`RotatingFileHandler`, 1 MB × 3) |
+| `<svc>/uvicorn.log` | uvicorn error **and** access log (one shared handler) |
+
+Rotation keeps 3 generations as `.1`, `.2`, `.3`:
+
+- `stdout/stderr/watchdog.log` are rotated by `run-with-restart.sh` — once at
+  startup, and whenever a file exceeds `MAX_LOG_BYTES` (default 8 MiB, checked
+  every `GUARD_INTERVAL` seconds, default 60). The size guard **copies then
+  truncates in place**; it must never rename, because the server holds an
+  `O_APPEND` fd and would keep writing to the renamed inode.
+- `<svc>.log` and `uvicorn.log` are rotated by Python's `RotatingFileHandler`.
+
+> **Historical note.** Before 2026-08-18 these were
+> [multilog](https://cr.yp.to/daemontools/multilog.html) *directories* (`stdout/`,
+> `stderr/`, `watchdog/`) whose live file was `current`, TAI64N-prefixed and read
+> via `tai64nlocal`. Those directories may still exist with old data — decode them
+> with `tai64nlocal` as before. They are no longer written to.
+>
+> multilog was removed because its documented reaction to a write error is to
+> *pause and retry forever*, which stops it draining its input pipe. The server on
+> the other end then blocks in `pipe_write` with no timeout and no way to run signal
+> handlers — and that writer is the asyncio event loop. This froze lbserver on
+> 2026-08-10 and dlserver on 2026-08-17. A plain file redirect cannot block the
+> writer: a failed write returns an error instead.
 
 ## 3. Crash, or group kill?
 
@@ -216,9 +296,14 @@ make start-runpod-master
 make info
 ```
 
-Always stop before starting. The stop targets also clear the stale
-`/workspace/logs/*/stderr/lock` files that would otherwise block multilog on the
-next start.
+Always stop before starting.
+
+> The stop targets still `rm -f /workspace/logs/*/stderr/lock`. That is now a
+> no-op left over from multilog and will be removed — the lock files are not
+> recreated. Note the stop targets only kill the PIDs recorded in `/tmp/*.pid`,
+> so multilogs or other tree members started by an older build can survive as
+> orphans; check with
+> `ps -eo pid,ppid,args | grep -aE 'multilog|run-with-restart'` before starting.
 
 Two things that silently produce a *misconfigured* server rather than a failure:
 

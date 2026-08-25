@@ -222,6 +222,14 @@ def audio_play(req: MusicPlayRequest):
     # Safety gate (SAFETY.md audio.quiet_hours): no loud discretionary output
     # during the window. Deterministic, real wall-clock; spoken replies (TTS) are
     # unaffected — only music is suppressed.
+    # Cancel gate: a single click kills the turn's speaker output, but the turn
+    # itself keeps running on the Go side (speech/cancel is a TTS-only
+    # watermark) and its pending music tool call still lands here seconds later.
+    # Refuse it — otherwise music the user just cancelled starts anyway once
+    # yt-dlp finishes resolving. See app_state.MUSIC_CANCEL_GUARD_S.
+    if state.music_cancel_active():
+        state.logger.info("POST /audio/play: suppressed -- cancelled by recent click (query='%s')", req.query[:80])
+        return {"status": "suppressed"}
     if audio_quiet_now(state.safety_policy):
         state.logger.info("POST /audio/play: suppressed -- audio quiet hours (query='%s')", req.query[:80])
         _announce_quiet_hours()

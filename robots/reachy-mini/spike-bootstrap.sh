@@ -84,8 +84,10 @@ say "3/4  Install the software-update helper"
 # first robot detecting updates it could never apply, five minutes apart, forever
 # — with every unit reporting healthy.
 #
-# The script ships in this device package (robots/reachy-mini/software-update),
-# so it sits next to this file. Fatal when missing: continuing would reproduce
+# The script ships in this device package: upload-device.sh stages the canonical
+# scripts/provision/software-update at the package root, so it sits next to this
+# file. (It used to be a checked-in copy under robots/reachy-mini/ — that copy
+# drifted and is gone; there is one source now.) Fatal when missing: continuing would reproduce
 # exactly that failure, and nothing on the robot can repair it afterwards.
 SU_SRC="$SPIKE_DIR/software-update"
 [ -f "$SU_SRC" ] || SU_SRC="$DEVICES_DIR/$DEVICE_TYPE/software-update"

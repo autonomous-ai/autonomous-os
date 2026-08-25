@@ -22,11 +22,24 @@
         padding: 28px 0;
       }
       main {
-        width: min(1240px, 94vw);
+        /* Full width. The panel used to be a fixed 310px column sized for a
+           handful of hardcoded buttons; now it lists every aim preset and every
+           recording HAL reports (30+), so it needs room to grow sideways rather
+           than running off the bottom of the page. */
+        width: 96vw;
         display: grid;
-        grid-template-columns: minmax(0, 1fr) 310px;
+        grid-template-columns: minmax(0, 1fr) minmax(360px, 26vw);
         gap: 20px;
         align-items: start;
+      }
+      /* The viewer stays put while a long control panel scrolls past it. */
+      .stage {
+        position: sticky;
+        top: 18px;
+      }
+      aside {
+        max-height: calc(100vh - 56px);
+        overflow-y: auto;
       }
       .stage {
         position: relative;
@@ -47,21 +60,6 @@
       }
       canvas:active {
         cursor: grabbing;
-      }
-      .lamp-ring {
-        position: absolute;
-        z-index: 1;
-        width: 100px;
-        height: 100px;
-        border: 9px solid transparent;
-        border-radius: 50%;
-        pointer-events: none;
-        opacity: 0;
-        transform: translate(-50%, -50%);
-        transition:
-          opacity 160ms ease,
-          left 120ms linear,
-          top 120ms linear;
       }
       .caption {
         z-index: 2;
@@ -297,7 +295,6 @@
           height="720"
           aria-label="Autonomous Lamp 3D motion preview"
         ></canvas>
-        <div class="lamp-ring" id="lamp-ring" aria-hidden="true"></div>
         <div class="caption">
           <span id="view-title">Lamp motion preview</span
           ><small id="view-detail"
@@ -320,22 +317,45 @@
           Controls call production HAL routes. The preview follows the five live
           joint values.
         </p>
-        <h2>Pose</h2>
-        <div class="grid">
-          <button data-aim="left">Look left</button
-          ><button data-aim="center">Center</button
-          ><button data-aim="right">Look right</button
-          ><button data-aim="desk">Desk</button><button data-aim="up">Up</button
-          ><button data-aim="down">Down</button>
+        <h2>Aim Direction</h2>
+        <div class="grid" id="aim-grid">
+          <span id="aim-empty" class="foot">Loading directions…</span>
         </div>
         <h2>Animations</h2>
+        <div class="grid" id="play-grid">
+          <span id="play-empty" class="foot">Loading recordings…</span>
+        </div>
+        <h2>Emotions</h2>
+        <div class="grid" id="emotion-grid">
+          <span id="emotion-empty" class="foot">Loading emotions…</span>
+        </div>
+        <p class="foot" id="emotion-note">
+          One emotion drives several channels at once — servo recording, LED
+          color/effect, and sometimes camera or audio. Sleep gates most of them:
+          while <code>sleepy</code> is current, HAL answers
+          <code>ignored</code> and nothing moves.
+        </p>
+        <h2>Motor control</h2>
         <div class="grid">
-          <button data-play="greeting">Greeting</button
-          ><button data-play="happy_wiggle">Happy</button
-          ><button data-play="curious">Curious</button
-          ><button data-play="nod">Nod</button
-          ><button data-play="scanning">Scan</button
-          ><button class="danger" id="stop">Stop</button>
+          <button data-motor="zero" title="Hold at 0°; blocks play calls">
+            Zero (0°)</button
+          ><button data-motor="hold" title="Freeze pose; emotions still play">
+            Hold</button
+          ><button data-motor="resume" title="Exit hold, restart idle">
+            Resume</button
+          ><button
+            class="danger"
+            data-motor="release"
+            title="Disable torque; move by hand"
+          >
+            Release</button
+          ><button
+            class="danger"
+            id="stop"
+            title="Abort what is in flight, hold position, torque stays on"
+          >
+            Stop
+          </button>
         </div>
         <h2>LED</h2>
         <div class="grid">
@@ -386,7 +406,6 @@
         action = document.querySelector("#action"),
         ledPreview = document.querySelector("#led-preview"),
         ledLabel = document.querySelector("#led-label"),
-        lampRing = document.querySelector("#lamp-ring"),
         viewTitle = document.querySelector("#view-title"),
         viewDetail = document.querySelector("#view-detail"),
         viewToggle = document.querySelector("#view-toggle"),
@@ -398,9 +417,18 @@
         "wrist_pitch.pos",
         "wrist_roll.pos",
       ];
+      // Emotion presets are INDICATORS on real hardware: their peak channel is
+      // 12-16 of 255 (see EMOTION_PRESETS), because a lamp ring at full value is
+      // painful to sit next to. A real LED at 12/255 is still plainly visible in
+      // a room; a screen pixel at 4.7% is black. Mapping the peak straight to
+      // the shade's emissive term therefore rendered every emotion as "LED off".
+      // Perceptual (gamma) curve instead — hue and relative ordering are kept,
+      // only the low end is lifted into the range a monitor can show.
+      const displayLevel = (peak) => Math.pow(Math.min(1, peak / 255), 0.4);
       let target = Object.fromEntries(joints.map((j) => [j, 0])),
         pose = { ...target },
         led = [0, 0, 0],
+        ringPixels = [],
         az = -0.68,
         el = 0.27,
         zoom = 1,
@@ -411,10 +439,20 @@
         action.textContent = "WebGL is unavailable in this browser.";
         throw Error("WebGL unavailable");
       }
-      viewTitle.textContent = "Lamp CAD motion preview";
-      viewDetail.textContent =
-        "Actual CAD mesh with motion visualization from live HAL joint state.";
-      viewToggle.textContent = "View raw CAD reference";
+      // ?raw opens straight into the static CAD assembly; the default view is
+      // the jointed preview, the only one that shows servo motion.
+      viewTitle.textContent = rawCAD
+        ? "Actual Lamp CAD reference"
+        : "Lamp motion preview";
+      viewDetail.textContent = rawCAD
+        ? "Raw static assembly — the STL is one welded mesh, so it does not move with the joints."
+        : "Jointed preview driven by live HAL joint state · drag to orbit · scroll to zoom.";
+      viewToggle.textContent = rawCAD
+        ? "Return to live motion"
+        : "View actual CAD (static)";
+      loading.textContent = rawCAD
+        ? "Loading the 54 MB Lamp CAD mesh…"
+        : "Loading the 22 MB rigged Lamp model…";
       const V = {
         sub: (a, b) => a.map((x, i) => x - b[i]),
         dot: (a, b) => a.reduce((s, x, i) => s + x * b[i], 0),
@@ -503,31 +541,216 @@
           ];
         },
       };
+      // The jointed preview feeds unit primitives that each carry their own
+      // model matrix down the joint chain; the CAD mesh is already in world
+      // space and passes the identity. Both need `model` to exist.
       const vs =
-        "attribute vec3 p,n;uniform mat4 view,proj;varying vec3 vN,vP;void main(){vN=n;vP=p;gl_Position=proj*view*vec4(p,1.);}";
+        "attribute vec3 p,n;attribute vec4 joint,weight;" +
+        "uniform mat4 model,view,proj,jointMat[5];uniform mat3 normalMat;uniform float skinned;" +
+        "varying vec3 vN,vP,vLocal;" +
+        // GLSL ES 1.00 only allows a uniform array to be indexed by a constant or
+        // a loop counter, never by something read out of an attribute — so the
+        // joint index has to be matched against the counter instead of used as
+        // one. mat3(mat4) is likewise avoided: the truncating constructor is not
+        // portable this far back, so the upper 3x3 is picked out by hand.
+        "mat4 skinMatrix(){mat4 a=mat4(0.);for(int i=0;i<5;i++){float f=float(i);" +
+        "float w=(f==joint.x?weight.x:0.)+(f==joint.y?weight.y:0.)+(f==joint.z?weight.z:0.)+(f==joint.w?weight.w:0.);" +
+        "a+=w*jointMat[i];}return a;}" +
+        "void main(){mat4 s=skinned>.5?skinMatrix():mat4(1.);vec4 w=model*s*vec4(p,1.);vLocal=p;" +
+        "mat3 sn=mat3(s[0].xyz,s[1].xyz,s[2].xyz);" +
+        "vN=skinned>.5?sn*n:normalMat*n;vP=w.xyz;gl_Position=proj*view*w;}";
+      // `lampMask` is how much of the LED light this surface carries, decided per
+      // draw call from the geometry itself, so the glow travels with the head.
+      // `lampHeight` re-enables the old height cutoff, which is only meaningful
+      // for the static STL: that mesh is one welded blob with no separable shade.
       const fs =
-        "precision mediump float;varying vec3 vN,vP;uniform vec3 color,emit,ledColor;uniform float ledLevel;void main(){vec3 l=normalize(vec3(-.4,.85,.65));float d=max(dot(normalize(vN),l),0.);float rim=pow(1.-max(dot(normalize(vN),normalize(-vP)),0.),2.);float shade=smoothstep(220.,285.,vP.y);vec3 lamp=ledColor*ledLevel*shade*(.45+.55*d);gl_FragColor=vec4(color*(.18+.82*d)+emit+rim*.10+lamp,1.);}";
+        "precision mediump float;\n#define LAMP_GAIN 3.2\n// How far one LED's light spreads along the ring, in turns. The real\n// shade sits millimetres from a 64-LED ring, so a single pixel washes\n// over roughly a sixth of the circle - which is why a ripple reads there\n// as one ring brightening while a sharp sim showed two separate arcs.\n#define DIFFUSE_STEP 0.013\n varying vec3 vN,vP,vLocal;uniform vec3 color,emit,ledColor,ringCenter,ringU,ringW;" +
+        "uniform float ledLevel,lampMask,lampHeight,ringLit;uniform sampler2D ring;" +
+        "void main(){vec3 N=normalize(vN);vec3 l=normalize(vec3(-.4,.85,.65));float d=max(dot(N,l),0.);" +
+        "float rim=pow(1.-max(dot(N,normalize(-vP)),0.),2.);" +
+        // ledLevel is the ring's overall brightness, used when all we have is one
+        // averaged color. A per-pixel sample already carries its own brightness,
+        // so multiplying by ledLevel again squared it and rendered a lit ring
+        // four times too dark.
+        "float m=lampMask*(ringLit>.5?1.0:ledLevel)*(lampHeight>.5?smoothstep(220.,285.,vP.y):1.);" +
+        // Which of the 64 pixels lights this spot: the angle of the fragment
+        // about the shade axis, measured in the diffuser's own local frame so
+        // the mapping survives skinning. Without this the whole shade showed one
+        // averaged color and a rainbow chasing round the ring looked static.
+        "vec3 rel=vLocal-ringCenter;" +
+        "float ang=atan(dot(rel,ringW),dot(rel,ringU));" +
+        // The diffuser is frosted plastic, not a bare LED: light from one pixel
+        // spreads into its neighbours, which is why a ripple reads on the real
+        // lamp as one ring brightening rather than two hard arcs. Blur along the
+        // ring by a few degrees to reproduce that spreading.
+        "float u=ang*0.15915494+0.5;vec3 pixel=vec3(0.);float wsum=0.;" +
+        "for(int k=-8;k<=8;k++){float w=exp(-float(k*k)/18.0);" +
+        "pixel+=texture2D(ring,vec2(u+float(k)*DIFFUSE_STEP,0.5)).rgb*w;wsum+=w;}" +
+        "pixel/=wsum;" +
+        // A lit diffuser is a source, not a shaded surface: fade its albedo out
+        // as it lights up, otherwise white plastic + full glow clips to white.
+        "vec3 tint=ringLit>.5?pixel:ledColor;" +
+        // An LED is far brighter than any surface in the scene, and the ring is
+        // capped at max_brightness 120 of 255, so a straight 0-1 mapping renders
+        // a lit lamp as dark grey. Drive it past white and let it clip, which is
+        // what a camera does looking at the real diffuser, and add a soft halo so
+        // the light reads as coming out of the shade rather than painted on it.
+        "float glow=m*LAMP_GAIN;" +
+        "vec3 lamp=tint*glow+tint*glow*glow*0.35;" +
+        "vec3 body=color*(.18+.82*d)*(1.-.75*min(m,1.));" +
+        "gl_FragColor=vec4(body+emit+rim*.10+lamp,1.);}";
+      // A shader that fails to compile takes the whole program down with it and
+      // every draw call then silently no-ops — an all-black canvas with nothing
+      // in the console. Surface the driver's log instead of guessing.
+      function fatal(message) {
+        action.textContent = `✕ ${message}`;
+        loading.textContent = message;
+        loading.hidden = false;
+        throw Error(message);
+      }
       function shader(t, s) {
         const o = gl.createShader(t);
         gl.shaderSource(o, s);
         gl.compileShader(o);
+        if (!gl.getShaderParameter(o, gl.COMPILE_STATUS))
+          fatal(
+            `${t === gl.VERTEX_SHADER ? "Vertex" : "Fragment"} shader: ${gl.getShaderInfoLog(o)}`,
+          );
         return o;
       }
       const program = gl.createProgram();
       gl.attachShader(program, shader(gl.VERTEX_SHADER, vs));
       gl.attachShader(program, shader(gl.FRAGMENT_SHADER, fs));
       gl.linkProgram(program);
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS))
+        fatal(`Shader link failed: ${gl.getProgramInfoLog(program)}`);
       gl.useProgram(program);
       const L = {
         p: gl.getAttribLocation(program, "p"),
         n: gl.getAttribLocation(program, "n"),
+        joint: gl.getAttribLocation(program, "joint"),
+        weight: gl.getAttribLocation(program, "weight"),
+        model: gl.getUniformLocation(program, "model"),
+        joints: gl.getUniformLocation(program, "jointMat"),
+        skinned: gl.getUniformLocation(program, "skinned"),
+        normal: gl.getUniformLocation(program, "normalMat"),
         view: gl.getUniformLocation(program, "view"),
         proj: gl.getUniformLocation(program, "proj"),
         color: gl.getUniformLocation(program, "color"),
         emit: gl.getUniformLocation(program, "emit"),
         ledColor: gl.getUniformLocation(program, "ledColor"),
         ledLevel: gl.getUniformLocation(program, "ledLevel"),
+        lampMask: gl.getUniformLocation(program, "lampMask"),
+        lampHeight: gl.getUniformLocation(program, "lampHeight"),
+        ring: gl.getUniformLocation(program, "ring"),
+        ringLit: gl.getUniformLocation(program, "ringLit"),
+        ringCenter: gl.getUniformLocation(program, "ringCenter"),
+        ringU: gl.getUniformLocation(program, "ringU"),
+        ringW: gl.getUniformLocation(program, "ringW"),
       };
+
+      // The ring's geometry in the diffuser mesh's own coordinates, measured off
+      // the GLB: centroid of the 10,339 diffuser vertices, and the mean normal
+      // as the axis they circle. Radii run 40-60 mm about it, which matches the
+      // physical 64-LED ring. Metres, because that is what the model is in.
+      // Physical lamps on the ring. The lamp ships a 32-lamp ring while
+      // robots/lamp/presets.json declares led_count 64, so half of every frame
+      // HAL paints falls off the end of the chain and never lights anything.
+      // Tracked upstream in issue #246 (the CAD envelope fits 32, not 64).
+      const RING_LEDS = 32;
+      const RING_CENTER = [0.0742, 0.2747, -0.0011],
+        RING_U = [-0.7344, -0.6787, 0.0],
+        RING_W = [-0.0072, 0.0078, 0.9999];
+      // One texel per LED. A uniform array would have been the obvious choice,
+      // but WebGL1 only guarantees 16 fragment uniform vectors and the ring has
+      // 64 pixels, so the strip travels as a texture instead.
+      const ringTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, ringTex);
+      for (const [key, value] of [
+        [gl.TEXTURE_MIN_FILTER, gl.LINEAR],
+        [gl.TEXTURE_MAG_FILTER, gl.LINEAR],
+        // The strip is a loop: pixel 63 sits next to pixel 0.
+        [gl.TEXTURE_WRAP_S, gl.REPEAT],
+        [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE],
+      ])
+        gl.texParameteri(gl.TEXTURE_2D, key, value);
+      let ringWidth = 0;
+
+      function uploadRing() {
+        if (!ringPixels.length) return false;
+        // The lamp's ring carries RING_LEDS physical lamps, but presets.json
+        // declares a longer strip, so HAL paints pixels that no lamp ever
+        // receives — a WS2812 chain simply drops what runs off its end. Mapping
+        // the full buffer onto the circle showed light the device cannot emit:
+        // pulse, which originates at index led_count/2, appeared as two arcs
+        // here while the lamp shows only the one arc that fits.
+        const width = Math.min(ringPixels.length, RING_LEDS),
+          data = new Uint8Array(width * 4);
+        // The per-pixel path ignores ledLevel (ringLit takes the texture's own
+        // brightness), so the perceptual lift has to be baked in here too or an
+        // emotion renders as a dark tint instead of a lit shade. Scale each
+        // pixel about its own peak: hue is untouched, only the level moves.
+        ringPixels.slice(0, width).forEach((px, i) => {
+          const peak = Math.max(px[0], px[1], px[2]);
+          const gain = peak > 0 ? (displayLevel(peak) * 255) / peak : 0;
+          data.set(
+            [
+              Math.min(255, Math.round(px[0] * gain)),
+              Math.min(255, Math.round(px[1] * gain)),
+              Math.min(255, Math.round(px[2] * gain)),
+              255,
+            ],
+            i * 4,
+          );
+        });
+        gl.bindTexture(gl.TEXTURE_2D, ringTex);
+        if (width !== ringWidth) {
+          gl.texImage2D(
+            gl.TEXTURE_2D, 0, gl.RGBA, width, 1, 0, gl.RGBA,
+            gl.UNSIGNED_BYTE, data,
+          );
+          ringWidth = width;
+        } else {
+          gl.texSubImage2D(
+            gl.TEXTURE_2D, 0, 0, 0, width, 1, gl.RGBA, gl.UNSIGNED_BYTE, data,
+          );
+        }
+        return true;
+      }
+      // Hue and brightness are split so a dim amber still reads amber instead of
+      // washing towards grey; `led` is 0-255 per channel straight from /led/color.
+      function ledUniforms() {
+        // Per-pixel light needs the live strip; the mean is the fallback for a
+        // HAL without /simulator/pixels, and for the box stand-in and the welded
+        // STL, neither of which has a ring to map onto.
+        const lit = uploadRing();
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, ringTex);
+        gl.uniform1i(L.ring, 0);
+        gl.uniform1f(L.ringLit, lit && rig ? 1 : 0);
+        gl.uniform3fv(L.ringCenter, RING_CENTER);
+        gl.uniform3fv(L.ringU, RING_U);
+        gl.uniform3fv(L.ringW, RING_W);
+        // The shade is one diffuser, so what it emits is the ring's mean — that
+        // is also what a camera sees through frosted plastic. Per-pixel light
+        // would need the ring's angular layout, which the shade geometry does
+        // not carry. An effect changes this mean every frame, which is what
+        // makes breathing and candle read as motion rather than a flat color.
+        const source = ringPixels.length
+          ? ringPixels
+              .reduce(
+                (sum, px) => [sum[0] + px[0], sum[1] + px[1], sum[2] + px[2]],
+                [0, 0, 0],
+              )
+              .map((v) => v / ringPixels.length)
+          : led;
+        const peak = Math.max(...source);
+        gl.uniform3fv(
+          L.ledColor,
+          peak > 0 ? source.map((v) => v / peak) : [0, 0, 0],
+        );
+        gl.uniform1f(L.ledLevel, displayLevel(peak));
+      }
       function mesh(v, n, i) {
         const o = { i: gl.createBuffer(), count: i.length };
         for (const [k, d] of Object.entries({ p: v, n })) {
@@ -686,6 +909,9 @@
         gl.drawElements(gl.TRIANGLES, o.count, gl.UNSIGNED_SHORT, 0);
       }
       function drawPreview() {
+        // The stand-in carries its light in the torus' `emit`, not in lampMask.
+        gl.uniform1f(L.lampMask, 0);
+        gl.uniform1f(L.lampHeight, 0);
         const ivory = [0.91, 0.88, 0.8],
           edge = [0.24, 0.23, 0.2],
           dark = [0.05, 0.06, 0.065],
@@ -735,7 +961,11 @@
           mm(head, M.tr(0, -5, 0), M.sc(70, 1, 70)),
           [0.14, 0.15, 0.16],
         );
-        const glow = led.map((x) => Math.min(1, x / 120));
+        const peak = Math.max(...led);
+        const glow =
+          peak > 0
+            ? led.map((x) => (x / peak) * displayLevel(peak))
+            : [0, 0, 0];
         draw(
           ring,
           mm(head, M.tr(0, -8, 0), M.sc(60, 60, 60)),
@@ -744,6 +974,272 @@
         );
         draw(front, mm(head, M.tr(0, -9, 0), M.sc(42, 1, 42)), dark);
       }
+      // --- Rigged model -----------------------------------------------------
+      //
+      // /simulator/rig serves a GLB whose armature names its five joints exactly
+      // as HAL does, so live joint state drives the real geometry. The axis each
+      // joint turns about was read out of the model's own bundled animation, not
+      // guessed: base_yaw +Y, the pitches ±X, wrist_roll +Z in bone-local space.
+      // Signs are which way a RISING HAL angle turns the joint, which is not what
+      // the model's own animation clip happens to sweep — reading the axes off
+      // that clip got all three pitches backwards, so `up` bowed the lamp and
+      // `desk` raised it. Checked against the aim presets by measuring the head's
+      // height in the rig: up 336mm > center 293 > down 280 > desk 270.
+      const RIG_AXES = {
+        "base_yaw.pos": [0, 1, 0],
+        "base_pitch.pos": [1, 0, 0],
+        "elbow_pitch.pos": [-1, 0, 0],
+        "wrist_pitch.pos": [1, 0, 0],
+        "wrist_roll.pos": [0, 0, 1],
+      };
+      // The GLB is authored in metres; the rest of this viewer works in the
+      // millimetres the STL and the camera framing already use.
+      const RIG_SCALE = 1000;
+      // The model's rest pose is the CAD assembly pose, which is the lamp aimed
+      // at center — not all-joints-zero. So a joint angle is applied as its
+      // distance from center. GET /simulator/state serves the center preset so
+      // this cannot drift from robots/lamp/presets.json.
+      let rigZero = {};
+      // Which GLB surfaces are the light. Measured off the file, in the shade's
+      // own frame (origin + axis taken from the wrist_roll bone's rest pose,
+      // which points 45° forward-down):
+      //   node 5_wrist_pitch / material 6 ("Level 6") — the only surface that
+      //     spans the full shade opening (radius 17-83 mm) AND sits furthest
+      //     forward on it (axial 71.8 mm vs 65 mm for the LED-module annuli
+      //     stacked behind it), with 92% of its front-slab normals facing out.
+      //     Untextured pure white, unlike every other head part. That is the
+      //     diffuser — the disc you actually see glow.
+      //   node 5_wrist_pitch / material 0 ("Level 1") — the shade shell and its
+      //     front lip, given a low spill so the ring reads as lit from within
+      //     rather than as a floating disc.
+      // Both are keyed on the node too: those material indices are reused by the
+      // static base mesh, which must never glow.
+      const LAMP_PARTS = { 6: 1, 0: 0.18 };
+      const LAMP_NODE = "5_wrist_pitch";
+      let rig = null,
+        rigError = "";
+
+      const Q = {
+        // Quaternion (x,y,z,w) -> column-major mat4, with translation folded in.
+        toMat: (q, t) => {
+          const [x, y, z, w] = q;
+          return [
+            1 - 2 * (y * y + z * z), 2 * (x * y + z * w), 2 * (x * z - y * w), 0,
+            2 * (x * y - z * w), 1 - 2 * (x * x + z * z), 2 * (y * z + x * w), 0,
+            2 * (x * z + y * w), 2 * (y * z - x * w), 1 - 2 * (x * x + y * y), 0,
+            t[0], t[1], t[2], 1,
+          ];
+        },
+        mul: (a, b) => [
+          a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+          a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+          a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+          a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+        ],
+        axis: (a, deg) => {
+          const h = (deg * Math.PI) / 360,
+            s = Math.sin(h);
+          return [a[0] * s, a[1] * s, a[2] * s, Math.cos(h)];
+        },
+      };
+
+      const GL_TYPE = {
+        5120: Int8Array,
+        5121: Uint8Array,
+        5122: Int16Array,
+        5123: Uint16Array,
+        5125: Uint32Array,
+        5126: Float32Array,
+      };
+      const GL_COMPONENTS = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
+
+      async function loadRig() {
+        if (rig) return;
+        const response = await fetch("/simulator/rig");
+        if (!response.ok) throw Error(await response.text());
+        const raw = await response.arrayBuffer(),
+          view = new DataView(raw);
+        if (view.getUint32(0, true) !== 0x46546c67) throw Error("not a GLB");
+        let at = 12,
+          gltf = null,
+          bin = null;
+        while (at < raw.byteLength) {
+          const length = view.getUint32(at, true),
+            kind = view.getUint32(at + 4, true);
+          if (kind === 0x4e4f534a)
+            gltf = JSON.parse(
+              new TextDecoder().decode(new Uint8Array(raw, at + 8, length)),
+            );
+          else if (kind === 0x004e4942) bin = { offset: at + 8, length };
+          at += 8 + length + ((4 - (length % 4)) % 4);
+        }
+        if (!gltf || !bin) throw Error("GLB is missing a chunk");
+
+        const readAccessor = (index) => {
+          const a = gltf.accessors[index],
+            v = gltf.bufferViews[a.bufferView],
+            Type = GL_TYPE[a.componentType],
+            n = GL_COMPONENTS[a.type],
+            start =
+              bin.offset + (v.byteOffset || 0) + (a.byteOffset || 0);
+          // Interleaved buffer views would need a strided copy; Blender's
+          // exporter writes tightly packed ones, so assert rather than guess.
+          if (v.byteStride && v.byteStride !== n * Type.BYTES_PER_ELEMENT)
+            throw Error("interleaved accessor is unsupported");
+          return new Type(raw, start, a.count * n);
+        };
+        const buffer = (data, target) => {
+          const b = gl.createBuffer();
+          gl.bindBuffer(target, b);
+          gl.bufferData(target, data, gl.STATIC_DRAW);
+          return b;
+        };
+
+        const skin = gltf.skins[0],
+          ibm = readAccessor(skin.inverseBindMatrices),
+          jointNodes = skin.joints;
+        const parts = [];
+        for (const node of gltf.nodes) {
+          if (node.mesh === undefined) continue;
+          const skinned = node.skin !== undefined;
+          for (const prim of gltf.meshes[node.mesh].primitives) {
+            const material = gltf.materials[prim.material],
+              color = (material?.pbrMetallicRoughness?.baseColorFactor || [
+                0.85, 0.85, 0.85, 1,
+              ]).slice(0, 3);
+            const indices = readAccessor(prim.indices);
+            parts.push({
+              color,
+              node,
+              lamp:
+                node.name === LAMP_NODE
+                  ? LAMP_PARTS[prim.material] || 0
+                  : 0,
+              skinned,
+              count: indices.length,
+              indexType:
+                indices.BYTES_PER_ELEMENT === 4
+                  ? gl.UNSIGNED_INT
+                  : gl.UNSIGNED_SHORT,
+              index: buffer(indices, gl.ELEMENT_ARRAY_BUFFER),
+              position: buffer(
+                readAccessor(prim.attributes.POSITION),
+                gl.ARRAY_BUFFER,
+              ),
+              normal: buffer(
+                readAccessor(prim.attributes.NORMAL),
+                gl.ARRAY_BUFFER,
+              ),
+              joints: skinned
+                ? buffer(
+                    new Float32Array(readAccessor(prim.attributes.JOINTS_0)),
+                    gl.ARRAY_BUFFER,
+                  )
+                : null,
+              weights: skinned
+                ? buffer(
+                    new Float32Array(readAccessor(prim.attributes.WEIGHTS_0)),
+                    gl.ARRAY_BUFFER,
+                  )
+                : null,
+            });
+          }
+        }
+        if (parts.some((p) => p.indexType === gl.UNSIGNED_INT))
+          gl.getExtension("OES_element_index_uint");
+
+        rig = {
+          nodes: gltf.nodes,
+          jointNodes,
+          ibm,
+          parts,
+          jointByName: Object.fromEntries(
+            gltf.nodes.map((n, i) => [n.name, i]),
+          ),
+        };
+        viewDetail.textContent = `${parts.length} rigged parts · five joints driven by live HAL state.`;
+        loading.hidden = true;
+      }
+
+      // World matrix per node, with the five HAL joints rotated off their rest
+      // pose. Walked from the scene roots so a parent is always solved first.
+      function rigJointMatrices() {
+        const world = new Array(rig.nodes.length).fill(null),
+          childOf = {};
+        rig.nodes.forEach((n, i) =>
+          (n.children || []).forEach((c) => (childOf[c] = i)),
+        );
+        const local = (i) => {
+          const n = rig.nodes[i],
+            t = n.translation || [0, 0, 0];
+          let q = n.rotation || [0, 0, 0, 1];
+          const joint = Object.keys(RIG_AXES).find(
+            (name) => name.split(".")[0] === n.name,
+          );
+          if (joint)
+            q = Q.mul(
+              q,
+              Q.axis(RIG_AXES[joint], pose[joint] - (rigZero[joint] || 0)),
+            );
+          return Q.toMat(q, t);
+        };
+        const solve = (i) => {
+          if (world[i]) return world[i];
+          const parent = childOf[i];
+          world[i] =
+            parent === undefined
+              ? local(i)
+              : M.mul(solve(parent), local(i));
+          return world[i];
+        };
+        return rig.jointNodes.map((node, k) =>
+          M.mul(solve(node), Array.from(rig.ibm.slice(k * 16, k * 16 + 16))),
+        );
+      }
+
+      function drawRig() {
+        if (!rig) return;
+        const joints = rigJointMatrices(),
+          flat = new Float32Array(joints.length * 16);
+        joints.forEach((m, i) => flat.set(m, i * 16));
+        gl.uniformMatrix4fv(L.joints, false, flat);
+        ledUniforms();
+        gl.uniform1f(L.lampHeight, 0);
+        const scale = M.sc(RIG_SCALE, RIG_SCALE, RIG_SCALE);
+        for (const part of rig.parts) {
+          const model = M.mul(scale, Q.toMat(
+            part.node.rotation || [0, 0, 0, 1],
+            part.node.translation || [0, 0, 0],
+          ));
+          gl.uniformMatrix4fv(L.model, false, part.skinned ? scale : model);
+          gl.uniformMatrix3fv(L.normal, false, [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+          gl.uniform1f(L.skinned, part.skinned ? 1 : 0);
+          gl.uniform3fv(L.color, part.color);
+          gl.uniform3fv(L.emit, [0, 0, 0]);
+          gl.uniform1f(L.lampMask, part.lamp);
+          for (const [loc, buf, size] of [
+            [L.p, part.position, 3],
+            [L.n, part.normal, 3],
+            [L.joint, part.joints, 4],
+            [L.weight, part.weights, 4],
+          ]) {
+            if (loc < 0) continue;
+            if (!buf) {
+              gl.disableVertexAttribArray(loc);
+              gl.vertexAttrib4f(loc, 0, 0, 0, 0);
+              continue;
+            }
+            gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+            gl.enableVertexAttribArray(loc);
+            gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+          }
+          gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, part.index);
+          gl.drawElements(gl.TRIANGLES, part.count, part.indexType, 0);
+        }
+        gl.uniform1f(L.skinned, 0);
+        gl.uniform1f(L.lampMask, 0);
+      }
+
       async function loadCAD() {
         if (cadMesh) return;
         try {
@@ -798,6 +1294,8 @@
       }
       function drawCAD() {
         if (!cadMesh) return;
+        gl.uniformMatrix4fv(L.model, false, M.id());
+        gl.uniformMatrix3fv(L.normal, false, [1, 0, 0, 0, 1, 0, 0, 0, 1]);
         gl.bindBuffer(gl.ARRAY_BUFFER, cadMesh.p);
         gl.vertexAttribPointer(L.p, 3, gl.FLOAT, false, 0, 0);
         gl.enableVertexAttribArray(L.p);
@@ -806,32 +1304,27 @@
         gl.enableVertexAttribArray(L.n);
         gl.uniform3fv(L.color, [0.89, 0.84, 0.74]);
         gl.uniform3fv(L.emit, [0, 0, 0]);
-        gl.uniform3fv(L.ledColor, led.map((value) => Math.min(1, value / 120)));
-        gl.uniform1f(L.ledLevel, Math.max(...led) > 0 ? 1 : 0);
+        ledUniforms();
+        // No separable shade in the welded STL, so the height cutoff stands in.
+        gl.uniform1f(L.lampMask, 1);
+        gl.uniform1f(L.lampHeight, 1);
         gl.drawArrays(gl.TRIANGLES, 0, cadMesh.count);
       }
       function render() {
-        for (const j of joints) pose[j] += (target[j] - pose[j]) * 0.11;
+        // Draw the joint angles HAL reports, not a smoothed chase of them. The
+        // driver already interpolates a move at 30 Hz; adding a second easing
+        // here invented a trajectory the body never made — slower to start,
+        // never quite arriving. The only smoothing left is HAL's own.
+        for (const j of joints) pose[j] = target[j];
         gl.viewport(0, 0, canvas.width, canvas.height);
         gl.enable(gl.DEPTH_TEST);
         gl.clearColor(0.045, 0.052, 0.05, 0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-        const livePitch = rawCAD
-            ? 0
-            : Math.max(
-                -38,
-                Math.min(
-                  38,
-                  -(
-                    0.15 * (pose["base_pitch.pos"] + 20) +
-                    0.65 * (pose["elbow_pitch.pos"] - 32) +
-                    0.2 * pose["wrist_pitch.pos"]
-                  ),
-                ),
-              ),
-          liveYaw = rawCAD ? 0 : pose["base_yaw.pos"],
-          previewAz = az - d(liveYaw * 0.38),
-          previewEl = Math.max(-0.42, Math.min(0.75, el + d(livePitch * 0.32))),
+        // The camera stays where the user put it. In the jointed preview the
+        // body itself carries the pose; the static CAD assembly has no joints
+        // to carry it, so nothing moves there either.
+        const previewAz = az,
+          previewEl = el,
           r = 660 * zoom,
           t = [0, 205, 0],
           eye = [
@@ -839,24 +1332,17 @@
             t[1] + r * Math.sin(previewEl),
             r * Math.cos(previewAz) * Math.cos(previewEl),
           ];
-        const lit = Math.max(...led) > 0;
-        const ringColor = led.map((value) =>
-          Math.min(255, Math.round(value * 2.1)),
-        );
-        lampRing.style.left = "52%";
-        lampRing.style.top = "23%";
-        lampRing.style.opacity = lit ? "1" : "0";
-        lampRing.style.borderColor = `rgb(${ringColor.join(",")})`;
-        lampRing.style.boxShadow = lit
-          ? `0 0 14px rgb(${ringColor.join(",")}), 0 0 54px rgb(${ringColor.join(",")})`
-          : "none";
         gl.uniformMatrix4fv(L.view, false, M.look(eye, t));
         gl.uniformMatrix4fv(
           L.proj,
           false,
           M.pers(0.78, canvas.width / canvas.height, 10, 1800),
         );
-        drawCAD();
+        // Rig first: it is the only view that is both the real geometry and
+        // jointed. drawPreview is the stand-in for when the GLB is missing.
+        if (rawCAD) drawCAD();
+        else if (rig) drawRig();
+        else drawPreview();
         requestAnimationFrame(render);
       }
       const api = async (path, body) => {
@@ -879,12 +1365,13 @@
       }
       async function refresh() {
         try {
-          const [h, p, l, s, sim] = await Promise.all([
+          const [h, p, l, s, sim, emo] = await Promise.all([
             api("/health"),
             api("/servo/position"),
             api("/led/color"),
             api("/servo"),
             api("/simulator/state"),
+            api("/emotion/status"),
           ]);
           target = { ...target, ...(p.positions || {}) };
           const ok = h.servo && h.led && h.camera;
@@ -900,42 +1387,131 @@
                     .toString()
                     .padStart(4)}°`,
               )
-              .join("\n") + `\nrecording     ${s.current || "idle"}`;
+              .join("\n") +
+            `\nrecording     ${s.current || "idle"}` +
+            `\nemotion       ${emo.current_emotion || "none"}${
+              emo.sleeping ? " (sleeping)" : ""
+            }`;
+          // Mark the current emotion, as the device web UI's pill cloud does.
+          document
+            .querySelectorAll("#emotion-grid button")
+            .forEach((b) =>
+              b.classList.toggle("primary", b.textContent === emo.current_emotion),
+            );
+          // Mark the playing recording, as the device web UI does.
+          document
+            .querySelectorAll("#play-grid button")
+            .forEach((b) =>
+              b.classList.toggle("primary", b.textContent === s.current),
+            );
           const c = l.color || [0, 0, 0],
             hex = l.hex || "#000";
+          // Feed the shade's emissive term. Without this the `led` array stayed
+          // at its initial zero forever and the lamp never lit.
+          led = c.slice(0, 3);
           ledPreview.style.background = `rgb(${c.join(",")})`;
           ledPreview.style.color = hex;
           ledPreview.classList.toggle("running", Boolean(l.effect));
           ledLabel.textContent = l.effect
             ? `${l.effect} effect · ${hex}`
             : `${l.on ? "solid" : "off"} · ${hex}`;
-          const host = sim.media === "host";
-          document.querySelector("#tone").disabled = !host;
-          document.querySelector("#record").disabled = !host;
-          document.querySelector("#media-note").textContent = host
-            ? "Host media: tone uses this Mac speaker; record uses this Mac microphone."
-            : "Virtual media: tone is intentionally silent and recording is a deterministic silent WAV. Restart with make sim SIM_MEDIA=host to test this Mac.";
+          rigZero = sim.rig_zero || rigZero;
+          // Camera and audio can end up in different modes (a granted webcam
+          // with a denied microphone), so read each one rather than a single
+          // blended flag — the note must never promise live audio the server
+          // has already downgraded.
+          const camHost = (sim.media_camera || sim.media) === "host";
+          const audioHost = (sim.media_audio || sim.media) === "host";
+          const reasons = sim.media_reasons || {};
+          document.querySelector("#tone").disabled = !audioHost;
+          document.querySelector("#record").disabled = !audioHost;
+          const note = [
+            camHost
+              ? "Camera: this Mac webcam (live)."
+              : `Camera: virtual scene (still image).${reasons.camera ? " " + reasons.camera : ""}`,
+            audioHost
+              ? "Audio: this Mac speaker + microphone."
+              : `Audio: virtual — tone is silent, recording is a silent WAV.${reasons.audio ? " " + reasons.audio : ""}`,
+          ];
+          if (!camHost && !audioHost && sim.media_requested !== "host")
+            note.push("Restart with make sim SIM_MEDIA=host to use this Mac.");
+          document.querySelector("#media-note").textContent = note.join(" ");
         } catch (e) {
           dot.style.background = "#e75e4e";
           status.textContent = "HAL unavailable";
           stateEl.textContent = e.message;
         }
       }
-      document.querySelectorAll("[data-aim]").forEach(
-        (b) =>
-          (b.onclick = () =>
-            act(`Aim: ${b.dataset.aim}`, "/servo/aim", {
-              direction: b.dataset.aim,
-              duration: 0.25,
-            })),
-      );
-      document.querySelectorAll("[data-play]").forEach(
-        (b) =>
-          (b.onclick = () =>
-            act(`Playing ${b.dataset.play}`, "/servo/play", {
-              recording: b.dataset.play,
-            })),
-      );
+      // Pose and animation buttons come from HAL itself, exactly as the device
+      // web UI builds them (ServoSection.tsx): the aim directions from
+      // GET /servo/aim, the recordings from GET /servo. A hardcoded list here
+      // would drift the moment a preset or a CSV is added.
+      const fillGrid = (grid, empty, names, label, run) => {
+        grid.querySelectorAll("button").forEach((b) => b.remove());
+        if (!names.length) {
+          if (empty) empty.textContent = `No ${label} available`;
+          return;
+        }
+        if (empty) empty.remove();
+        for (const name of names) {
+          const button = document.createElement("button");
+          button.textContent = name;
+          button.onclick = () => run(name);
+          grid.append(button);
+        }
+      };
+      async function loadControls() {
+        const [aim, servo, presets] = await Promise.all([
+          api("/servo/aim"),
+          api("/servo"),
+          api("/emotion/presets"),
+        ]);
+        fillGrid(
+          document.querySelector("#aim-grid"),
+          document.querySelector("#aim-empty"),
+          aim?.directions || [],
+          "directions",
+          // duration 2.0, the same value the device web UI sends.
+          (direction) =>
+            act(`Aiming ${direction}…`, "/servo/aim", {
+              direction,
+              duration: 2.0,
+            }),
+        );
+        fillGrid(
+          document.querySelector("#play-grid"),
+          document.querySelector("#play-empty"),
+          servo?.available_recordings || [],
+          "recordings",
+          (recording) =>
+            act(`Playing ${recording}…`, "/servo/play", { recording }),
+        );
+        fillGrid(
+          document.querySelector("#emotion-grid"),
+          document.querySelector("#emotion-empty"),
+          Object.keys(presets || {}),
+          "emotions",
+          expressEmotion,
+        );
+      }
+      // Same call the device web UI makes (OverviewSection pill cloud):
+      // POST /emotion {emotion, intensity}. Not act(): HAL answers 200 with
+      // status "ignored" when the sleep gate drops the emotion, and reporting
+      // that as ✓ would lie about a device that did not move.
+      async function expressEmotion(emotion) {
+        try {
+          const r = await api("/emotion", { emotion, intensity: 1.0 });
+          action.textContent =
+            r.status === "ignored"
+              ? `⃠ ${emotion} ignored (asleep — try greeting or stretching)`
+              : `✓ ${emotion} · servo ${r.servo || "none"} · led ${
+                  r.led ? `rgb(${r.led.join(",")})` : "unchanged"
+                }`;
+          await refresh();
+        } catch (e) {
+          action.textContent = `✕ ${e.message}`;
+        }
+      }
       document.querySelectorAll("[data-effect]").forEach(
         (b) =>
           (b.onclick = () =>
@@ -952,6 +1528,12 @@
         act("Light switched off", "/led/off", {});
       document.querySelector("#stop").onclick = () =>
         act("Servo stop sent", "/servo/stop", {});
+      // The device web UI's Motor Control card: same four routes, same order.
+      document.querySelectorAll("[data-motor]").forEach(
+        (b) =>
+          (b.onclick = () =>
+            act(`${b.textContent.trim()} sent`, `/servo/${b.dataset.motor}`, {})),
+      );
       document.querySelector("#effect-stop").onclick = () =>
         act("LED effect stopped", "/led/effect/stop", {});
       document.querySelector("#tone").onclick = () =>
@@ -979,13 +1561,30 @@
         rawCAD = !rawCAD;
         viewTitle.textContent = rawCAD
           ? "Actual Lamp CAD reference"
-          : "Lamp CAD motion preview";
+          : "Lamp motion preview";
         viewDetail.textContent = rawCAD
-          ? "Raw static assembly — no joint visualization."
-          : "Actual CAD mesh with motion visualization from live HAL joint state.";
+          ? "Raw static assembly — the STL is one welded mesh, so it does not move with the joints."
+          : "Jointed preview driven by live HAL joint state · drag to orbit · scroll to zoom.";
         viewToggle.textContent = rawCAD
           ? "Return to live motion"
-          : "View raw CAD reference";
+          : "View actual CAD (static)";
+        // Each model is fetched once, the first time its view is asked for.
+        if (rawCAD) {
+          if (!cadMesh) {
+            loading.textContent = "Loading the 54 MB Lamp CAD mesh…";
+            loading.hidden = false;
+          }
+          loadCAD();
+        } else if (!rig && !rigError) {
+          loading.textContent = "Loading the 22 MB rigged Lamp model…";
+          loading.hidden = false;
+          loadRig().catch((e) => {
+            rigError = e.message;
+            loading.hidden = true;
+          });
+        } else {
+          loading.hidden = true;
+        }
       };
       canvas.addEventListener("pointerdown", (e) => {
         drag = [e.clientX, e.clientY];
@@ -1018,9 +1617,42 @@
         el = 0.27;
         zoom = 1;
       });
+      // Ring pixels on the same fast timer as motion. /led/color reports an
+      // effect's static base color, so polling that made breathing, candle and
+      // rainbow all look like one flat color; this reads the strip buffer.
+      setInterval(async () => {
+        try {
+          const { pixels } = await api("/simulator/pixels");
+          if (pixels && pixels.length) ringPixels = pixels;
+        } catch {
+          // Older HAL without the endpoint: fall back to the /led/color value.
+        }
+      }, 1000 / 30);
+      // Joint state on its own fast timer, at the rate the driver writes frames.
+      // The rest of the panel (health, LED, media) has no reason to poll that
+      // often, and bundling them meant motion was sampled 3x too slowly to show
+      // the shape of a move.
+      setInterval(async () => {
+        try {
+          const p = await api("/servo/position");
+          target = { ...target, ...(p.positions || {}) };
+        } catch {
+          // refresh() owns reporting connection loss; stale pose is fine here.
+        }
+      }, 1000 / 30);
       setInterval(refresh, 100);
       refresh();
-      loadCAD();
+      loadControls().catch((e) => {
+        action.textContent = `✕ controls unavailable: ${e.message}`;
+      });
+      if (rawCAD) loadCAD();
+      else
+        loadRig().catch((e) => {
+          // No rig checked out: the box stand-in still shows joint motion.
+          rigError = e.message;
+          loading.hidden = true;
+          viewDetail.textContent = `Rig unavailable (${e.message}) — showing the box stand-in, still driven by live joint state.`;
+        });
       render();
     </script>
   </body>

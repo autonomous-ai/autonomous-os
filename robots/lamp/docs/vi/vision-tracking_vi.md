@@ -164,10 +164,12 @@ pitch_correction = clamp(PID(soft_deadband(dy)) + VFF·vy·deg_per_px·dt,  ±5�
 | `SERVO_MIN_CONF` | 0.25 | Sàn confidence để fire servo PID |
 | `TRACKER_TRUST_CONF` / `TRUST_TRACKER_S` | 0.4 / 2.5 | Detector-gated trust (xem trên) |
 | `YOLO_MAX_MISS` | 30 | Số lần CSRT miss liên tiếp trước khi retry |
-| `MAX_TRACK_DURATION_S` | 300 | Timeout tự động dừng (5 phút) |
+| `MAX_TRACK_DURATION_S` | `HAL_TRACKING_MAX_DURATION_S` (10) | Timeout tự động dừng (mặc định 10 giây; cấu hình theo từng thiết bị) |
 | `_LOCAL_IMGSZ` | 320 | Kích thước inference local YOLO (640 → 1.3–2.9 s, quá chậm) |
 
 Mọi knob nằm trong `hal/drivers/tracking/constants.py`. (Đường proportional chết `GIMBAL_*` / `EMA_ALPHA` đã bị xoá khi tách package.)
+
+Đặt `HAL_TRACKING_MAX_DURATION_S` trong `/opt/hal/.env` của Lamp để chọn giới hạn thời gian thực cho một session; mặc định Lamp đã cài là `10`. Khởi động lại service `hal` sau khi đổi.
 
 ### Giới hạn vị trí servo
 
@@ -187,10 +189,10 @@ Mọi knob nằm trong `hal/drivers/tracking/constants.py`. (Đường proportio
 | Bbox tràn frame + không detect trong 3 s | Buộc retry, rồi dừng nếu không phục hồi |
 | Không detector confirm trong `STOP_NO_YOLO_S` (20 s) | Dừng — ghost tracking |
 | CSRT miss `YOLO_MAX_MISS` (30) sau `MAX_TRACKING_RETRIES` (4) | Dừng — vật thể biến mất |
-| Thời lượng tracking > 5 phút | Dừng — timeout để tiết kiệm motor/CPU |
+| Thời lượng tracking > `HAL_TRACKING_MAX_DURATION_S` (mặc định 10 giây) | Dừng — timeout để tiết kiệm motor/CPU |
 | Single-click từ nút GPIO hoặc TTP223 | Dừng — user chủ động huỷ attention |
 
-Lưu ý: một bbox lớn (ví dụ một người lấp đầy frame) **không** phải điều kiện dừng — PID chạy theo centroid, không phải kích thước bbox, nên một vật thể ở gần vẫn track. Khi tracking kết thúc, cánh tay trượt về zero ở tốc độ tracking (không snap).
+Lưu ý: một bbox lớn (ví dụ một người lấp đầy frame) **không** phải điều kiện dừng — PID chạy theo centroid, không phải kích thước bbox, nên một vật thể ở gần vẫn track. Khi tracking kết thúc, cánh tay trượt về zero ở tốc độ tracking (không snap), rồi idle animation được dispatch lại — xem [Tương tác với các hệ thống khác](#tương-tác-với-các-hệ-thống-khác).
 
 ### Tự động dừng khi mất kết nối gateway/network
 
@@ -316,6 +318,8 @@ Camera section hiển thị:
 | Sensing (face, motion) | Tiếp tục — chia sẻ camera | Tiếp tục |
 | Camera stream overlay | Vẽ bbox xanh | Stream bình thường |
 | TTS | Tiếp tục bình thường | Tiếp tục bình thường |
+
+Việc quay lại idle là một **dispatch tường minh**, không phải hệ quả phụ của việc xoá cờ tracking. Khi `_tracking_active` đang bật, `AnimationService._continue_playback` bỏ recording đang chạy dở (`_current_recording = None`) để không có gì tranh servo với tracker. Xoá cờ không đặt lại giá trị đó: event loop return ngay ở guard đầu tiên (`if not self._current_recording`), nên nếu không dispatch thì cánh tay đứng cứng ở zero với torque vẫn bật cho tới lệnh emotion hoặc play kế tiếp. Vì vậy khối `finally` của `_track_loop` kết thúc bằng `animation_service.dispatch("play", animation_service.idle_recording)` — dùng dispatch thay vì `_handle_play` để việc phát vẫn thuộc về event thread, giống các đường thoát music-stop, `aim` và `resume`.
 
 ## Ghi chú hiệu năng
 
@@ -554,12 +558,25 @@ Các lần nhìn thấy đi vào đây theo hai đường:
 
 Bộ lấy mẫu thà từ chối còn hơn đoán. Độ lệch ngang chỉ được chấp nhận tới
 `HAL_BEARING_SAMPLE_MAX_DX_FRAC` (0.25), vì phép hiệu chỉnh đó dựa vào đúng cái hằng số FOV mà aim
-sinh ra để khỏi phải tin. **Tư thế** chỉ được ghi khi đối tượng đồng thời nằm giữa theo chiều dọc
-(`HAL_BEARING_SAMPLE_MAX_DY_FRAC`, 0.15) — pitch ở đây không thể hiệu chỉnh bằng số học, nên đối tượng
-nằm cao hay thấp trong khung nghĩa là pitch hiện tại *không* nhìn vào họ, và lưu lại sẽ dạy cho lamp
-một tư thế chúi xuống sàn. Nó cũng bỏ qua khi thân đang aim hoặc đang bám, khi camera bị tắt, và lấy
-khóa bộ phát hiện theo kiểu không chặn để câu hỏi của người dùng không bao giờ phải chờ nó. Nó áp cùng
-các cổng kích thước và độ tin cậy như aim.
+sinh ra để khỏi phải tin. Nó cũng bỏ qua khi thân đang aim hoặc đang bám, khi camera bị tắt, và lấy
+khóa bộ phát hiện theo kiểu không chặn để câu hỏi của người dùng không bao giờ phải chờ nó.
+
+**Nó chỉ học từ `face`, không bao giờ từ box `person`.** Box person cho biết một thân người ở đâu, mà
+thân người thì lấp đầy khung mỗi khi camera tình cờ chĩa thấp — nên học từ nó là ghi nhớ đúng cái tư
+thế đang nhìn xuống bàn rồi gọi đó là "chỗ user ngồi". Đo trên thiết bị: 22 mẫu, confidence 0.99, tư
+thế lưu lại có `wrist_pitch -78` và không nhìn thấy nổi một khuôn mặt nào. Mọi nơi tiêu thụ phía sau
+đều khôi phục trung thành tư thế đó rồi chẳng thấy ai — nhìn từ ngoài thì đó là đèn hỏng, chứ không
+phải bearing sai. Thấy được mặt thì chứng minh điều ngược lại theo định nghĩa: tư thế này nhìn thấy
+đầu người, khôi phục nó sẽ lại thấy.
+
+**Tư thế được ghi bất kể mặt nằm đâu trong khung.** Cửa dọc từng gác nó
+(`HAL_BEARING_SAMPLE_MAX_DY_FRAC`) viết cho box person, nơi thân người ở giữa khung không nói lên
+được đầu có trong khung hay không. Giữ cửa đó cho `face` là tự phá: khi camera đang chĩa thấp thì mặt
+nào cũng nằm sát mép trên, nên mọi lần thấy đều trượt cửa, nên không tư thế nào từng được lưu, nên
+không có gì để khôi phục và camera cứ ở nguyên chỗ thấp — đo được `dy` -15.8% rồi -41.2%, hai lần
+thấy mặt, và một "pose" ghi nhớ chỉ có mỗi yaw. Tư thế bắt được người dùng ở rìa khung thì không hoàn
+hảo; nhưng nó tốt hơn vô cùng so với tư thế chĩa vào mặt bàn, và EMA từng khớp sẽ kéo nó về giữa khi
+khung hình mà chính nó tạo ra tốt dần lên.
 
 Mỗi lần lấy mẫu ghi một khung hình có chú thích vào `/var/lib/hal/snapshots/sensing_bearing/`
 (`HAL_BEARING_SNAPSHOT`, giữ 30 cái mới nhất, cũ nhất bị dọn) — **kể cả những phát hiện bị loại**, có

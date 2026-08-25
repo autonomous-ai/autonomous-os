@@ -178,6 +178,12 @@ class TestLampSimulationServer(unittest.TestCase):
         self.assertIn("/simulator/cad", page)
         self.assertIn("/simulator/reference", page)
         _, sim_state = self._json("/simulator/state")
-        self.assertEqual(sim_state, {"media": "virtual"})
+        self.assertEqual(sim_state["media"], "virtual")
+        # The viewer reads joint angles as offsets from the center preset,
+        # because the model's rest pose IS the centered lamp. Serving the preset
+        # keeps the page from hardcoding a copy that drifts from presets.json.
+        from hal.presets import AIM_CENTER, AIM_PRESETS
+
+        self.assertEqual(sim_state["rig_zero"], AIM_PRESETS[AIM_CENTER])
         with self._response("/simulator/reference") as response:
             self.assertEqual(response.headers.get_content_type(), "image/webp")

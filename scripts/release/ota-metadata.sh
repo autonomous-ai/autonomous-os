@@ -38,9 +38,17 @@ ota_metadata_sign() {
   payload_b64=$(base64 <"$payload" | tr -d '\n')
   signature_b64=$(base64 <"$signature" | tr -d '\n')
   # Keep the payload's component entries at the top level for already deployed
-  # workers. New workers use only .signed after verifying it.
+  # workers. New workers use only .signed after verifying it. Set
+  # OTA_METADATA_SIGNED_ONLY=1 to drop that compatibility copy once the fleet
+  # has migrated: the published document then carries nothing a legacy worker
+  # can consume, so an unmigrated device stops updating instead of updating
+  # from an unauthenticated source.
+  local base='.'
+  if [ "${OTA_METADATA_SIGNED_ONLY:-0}" = "1" ]; then
+    base='{}'
+  fi
   jq --arg payload "$payload_b64" --arg signature "$signature_b64" --arg keyID "$OTA_SIGNING_KEY_ID" \
-    '. + {signed:{format:"autonomous-ota/v1", payload:$payload, signature:{algorithm:"ed25519", key_id:$keyID, value:$signature}}}' \
+    "$base"' + {signed:{format:"autonomous-ota/v1", payload:$payload, signature:{algorithm:"ed25519", key_id:$keyID, value:$signature}}}' \
     "$payload" >"$envelope"
 }
 

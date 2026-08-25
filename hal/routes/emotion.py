@@ -112,6 +112,10 @@ def express_emotion(req: EmotionRequest):
 
     was_sleeping = state._sleeping
     state._sleeping = req.emotion == EMO_SLEEPY
+    if state._sleeping != was_sleeping:
+        # Survive a HAL restart (OTA, deploy, crash): without this the device
+        # wakes up on its own the next time the service restarts.
+        state._persist_sleep_state()
     state._current_emotion = req.emotion
     # Any other emotion supersedes the realtime thinking cue — drop its claim
     # so an LED restore never repaints thinking over what was just expressed.

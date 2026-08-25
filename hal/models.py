@@ -300,6 +300,12 @@ class SpeakRequest(BaseModel):
     realtime_feedback: bool = Field(
         False, description="Feed this text to the realtime agent as history (agent replies only)"
     )
+    # Queue ownership for streamed agent replies. turn_seq is a monotonically
+    # increasing, os-server-local order assigned when a turn starts; HAL uses it
+    # to reject a delayed request from an older turn after a newer one won.
+    # Plain /voice/speak callers and system notices leave both fields empty.
+    turn_id: str = Field("", max_length=200, description="Owning agent turn for /voice/speak-queue")
+    turn_seq: int = Field(0, ge=0, description="Monotonic owning-turn order for /voice/speak-queue")
 
     model_config = {
         "json_schema_extra": {"examples": [{"text": "[laugh] Hey! How are you doing today? I missed you! [sigh] It has been so quiet around here.", "voice": "Rachel"}]}

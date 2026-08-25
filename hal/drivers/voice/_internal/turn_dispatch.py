@@ -8,6 +8,10 @@ the utterance for speech-emotion recognition.
 import logging
 
 from hal import config as hal_config
+from hal.drivers.voice._internal.realtime_turn import (
+    ROUTE_NOISE_DROPPED,
+    should_drop_downstream_turn,
+)
 from hal.drivers.voice.speech_emotion.constants import UNKNOWN_USER_LABEL
 
 logger = logging.getLogger("hal.voice")
@@ -96,7 +100,13 @@ def dispatch_turn(
       handled   → send as ``voice_agent_handled`` (+ input-branching hint) so the
                   main agent stays silent — realtime already spoke.
       delegated → forward the agent's instruction summary + STT transcript.
+      rejected  → drop only an explicit ``reject_turn`` tool result.
       neither   → send the plain transcript so the main agent answers.
+
+    ``rt.route`` records WHICH of those happened and why (see the ROUTE_* values
+    in realtime_turn); it is logged once per turn as ``[turn] route=…``. The
+    separate explicit-rejection bit is the sole policy gate that may suppress a
+    normal fallback.
 
     ``audio_buffer`` is the trimmed buffer (speaker recognition); ``ser_audio_buffer``
     is the untrimmed snapshot (SER keeps laughter / sighs).
@@ -126,7 +136,31 @@ def dispatch_turn(
         event_type = event_type_override
     user = UNKNOWN_USER_LABEL
 
-    if combined:
+    # One line per turn saying where it went and why. Every branch below leads
+    # somewhere different, but only the delegated one used to announce itself —
+    # so a turn answered by the main agent because the realtime session had died
+    # looked identical in the journal to one the model deliberately handed off.
+    # Grep `[turn] route=` to follow any turn end to end.
+    dropped = should_drop_downstream_turn(rt)
+    if rt.route == ROUTE_NOISE_DROPPED:
+        destination = "nowhere (noise guard rejected turn)"
+    elif dropped:
+        destination = "nowhere (model explicitly rejected non-user turn)"
+    elif rt.handled:
+        destination = "realtime (main agent notified, stays silent)"
+    elif not combined:
+        destination = "nowhere (no transcript — nothing to send)"
+    else:
+        destination = "main agent"
+    logger.info(
+        "[turn] route=%s → %s (event=%s, stt=%r)",
+        rt.route,
+        destination,
+        event_type,
+        combined[:80] if combined else "(empty)",
+    )
+
+    if combined and not dropped:
         # Reuse the prepass result when the realtime path already identified the
         # speaker this turn; otherwise identify now. Never runs recognition twice.
         if identity is not None:
@@ -194,6 +228,18 @@ def dispatch_turn(
                 fallback_msg,
                 event_type=event_type,
                 image_b64=vision_image if vision_hint else "",
+            )
+    elif combined:
+        if rt.route == ROUTE_NOISE_DROPPED:
+            logger.info(
+                "[turn] Noise guard dropped fabricated transcript before OS dispatch"
+            )
+        else:
+            # Keep this filter as a distinct, easily reversible gate. No silent
+            # completion, timeout, or transport error reaches here — those leave
+            # rt.rejected false and follow the normal fallback above.
+            logger.info(
+                "[turn] Explicit AI rejection filter dropped transcript before OS dispatch"
             )
 
     # Submit SER — uses the UNTRIMMED snapshot so laughter / sighs survive.

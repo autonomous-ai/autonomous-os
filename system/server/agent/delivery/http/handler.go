@@ -56,6 +56,14 @@ type AgentHandler struct {
 	runFirstSeenMu sync.Mutex
 	runFirstSeenMs map[string]int64
 
+	// ttsTurnOrder assigns each agent turn a local, monotonic sequence when
+	// its lifecycle starts. HAL receives this sequence with queued speech, so
+	// late HTTP posts from an older turn cannot reclaim the speaker after a
+	// newer turn has already produced a reply.
+	ttsTurnMu      sync.Mutex
+	ttsTurnOrder   map[string]uint64
+	ttsTurnNextSeq uint64
+
 	// assistantBuf accumulates assistant deltas per runId so we can send the
 	// full text to TTS when the agent turn ends (lifecycle "end").
 	//
@@ -240,6 +248,7 @@ func ProvideAgentHandler(gw domain.AgentGateway, bus *monitor.Bus, sled *statusl
 		activeRunIDBySession: make(map[string]string),
 		errorRecoveredRuns:   make(map[string]time.Time),
 		runFirstSeenMs:       make(map[string]int64),
+		ttsTurnOrder:         make(map[string]uint64),
 	}
 }
 

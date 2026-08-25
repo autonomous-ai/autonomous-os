@@ -116,7 +116,9 @@ func (u *codexUse) toDomain() *domain.TokenUsage {
 //	item.completed command/mcp    → tool.end (start first when unseen)
 //	item.completed web_search /
 //	               file_change    → tool.start + tool.end pair
-//	item.completed agent_message  → accumulate final text (no delta stream)
+//	item.completed agent_message  → buffer as the reply (no delta stream); the
+//	                                previous buffered one is demoted to thinking
+//	item.completed agent_message  → …unless it carries [HW:…], then it is kept
 //	item.* reasoning / todo_list  → ignored
 //	turn.completed                → delta(final) + chat.final + lifecycle.end
 //	turn.failed / error /
@@ -188,9 +190,24 @@ func (s *CodexService) handleItemCompleted(f codexFrame, dispatch func(domain.WS
 		if strings.TrimSpace(it.Text) == "" {
 			return
 		}
+		// Codex exec emits "preamble" agent_message items before it calls a
+		// tool ("Using the sensing skill for this presence event.", "Checking
+		// the posture reference for phrasing."). Only the LAST agent_message of
+		// a turn is the reply; every earlier one is narration that must never
+		// reach TTS. So a buffered part is demoted to the thinking stream (Flow
+		// Monitor only) as soon as a newer one proves it was not the reply —
+		// unless it carries a [HW:…] marker, which is a real hardware action.
 		s.turnMu.Lock()
+		var preamble string
+		if n := len(s.assistantParts); n > 0 && !hasHWMarker(s.assistantParts[n-1]) {
+			preamble = s.assistantParts[n-1]
+			s.assistantParts = s.assistantParts[:n-1]
+		}
 		s.assistantParts = append(s.assistantParts, it.Text)
 		s.turnMu.Unlock()
+		if preamble != "" {
+			s.emitThinking(preamble, dispatch)
+		}
 	case "command_execution":
 		s.ensureToolStart(it.ID, "shell", it.Command, dispatch)
 		s.emitToolEnd(it.ID, truncRunes(it.AggregatedOutput, 400), dispatch)
@@ -208,6 +225,32 @@ func (s *CodexService) handleItemCompleted(f codexFrame, dispatch func(domain.WS
 	default:
 		slog.Debug("codex: unhandled item kind", "component", "codex", "kind", it.kind())
 	}
+}
+
+// hasHWMarker reports whether text carries an inline hardware marker, in
+// either the plain form `[HW:/led/off]` or the markdown-link form
+// `[Lights off](HW:/led/off)`. Deliberately coarse: it only decides whether a
+// non-final agent_message is narration (droppable) or a real action to keep —
+// the authoritative parse lives in server/agent/delivery/http/handler_hw.go.
+func hasHWMarker(text string) bool {
+	return strings.Contains(text, "[HW:") || strings.Contains(text, "](HW:")
+}
+
+// emitThinking surfaces text on the thinking stream, which the OS server routes
+// to Flow Monitor only — never to TTS or a channel reply.
+func (s *CodexService) emitThinking(text string, dispatch func(domain.WSEvent)) {
+	runID := s.getCurrentRunID()
+	slog.Info("codex <<< preamble demoted to thinking", "component", "codex",
+		"runID", runID, "text", truncRunes(text, 200))
+	payload, _ := json.Marshal(map[string]any{
+		"runId":      runID,
+		"sessionKey": s.GetSessionKey(),
+		"stream":     "thinking",
+		"data": map[string]any{
+			"text": text,
+		},
+	})
+	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
 }
 
 func mcpToolName(it codexItem) string {
@@ -337,6 +380,8 @@ func (s *CodexService) emitFinal(f codexFrame, dispatch func(domain.WSEvent)) {
 			"inputTokens", f.Usage.InputTokens,
 			"cachedInputTokens", f.Usage.CachedInputTokens,
 			"outputTokens", f.Usage.OutputTokens)
+		// Live context size for the rotation net (see rotation.go).
+		s.lastContextTokens.Store(int64(f.Usage.InputTokens + f.Usage.CachedInputTokens))
 	}
 	slog.Info("codex <<< turn completed", logArgs...)
 

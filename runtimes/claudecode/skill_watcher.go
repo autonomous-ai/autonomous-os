@@ -45,19 +45,21 @@ func (s *ClaudeCodeService) StartSkillWatcher(ctx context.Context) {
 				slog.Info("skill watcher: fetch failed", "component", "skill-watcher", "error", err)
 				continue
 			}
+			slog.Info("skill watcher: checked", "component", "skill-watcher", "skills", len(remote))
 
 			supported := map[string]bool{}
 			for _, n := range s.supportedSkills() {
 				supported[n] = true
 			}
 			var toUpdate []string
+			pendingVersions := map[string]string{}
 			for name, ver := range remote {
 				if !supported[name] {
 					continue
 				}
 				if ver != "" && ver != lastVersions[name] {
 					toUpdate = append(toUpdate, name)
-					lastVersions[name] = ver
+					pendingVersions[name] = ver
 				}
 			}
 			if len(toUpdate) == 0 {
@@ -65,8 +67,11 @@ func (s *ClaudeCodeService) StartSkillWatcher(ctx context.Context) {
 			}
 
 			slog.Info("skill versions changed", "component", "skill-watcher", "skills", toUpdate)
-			changed := s.downloadSkillsByName(toUpdate)
-			s.notifySkillChanges(changed)
+			result := s.downloadSkillsByNameResult(toUpdate)
+			for _, name := range result.applied {
+				lastVersions[name] = pendingVersions[name]
+			}
+			s.notifySkillChanges(result.changed)
 		}
 	}
 }
@@ -96,18 +101,37 @@ func (s *ClaudeCodeService) skillsBaseURL() string {
 	return ""
 }
 
+// downloadSkills reconciles every platform skill supported by this device from
+// the CDN. EnsureOnboarding calls it on every boot/config reconcile; the
+// content hash in downloadSkillsByName keeps an unchanged catalog quiet.
+func (s *ClaudeCodeService) downloadSkills() []string {
+	return s.downloadSkillsByName(s.supportedSkills())
+}
+
 // downloadSkillsByName downloads specific skill zips from the CDN, extracts each
 // atomically into claudecodeSkillsDir/<name> (Claude Code's USER-level skill dir,
 // auto-discovered in every session regardless of cwd), and returns the names that
 // actually changed on disk (version pre-filter + content hash). Mirrors openclaw.
 func (s *ClaudeCodeService) downloadSkillsByName(names []string) []string {
+	return s.downloadSkillsByNameResult(names).changed
+}
+
+type skillDownloadResult struct {
+	changed []string
+	applied []string
+}
+
+// downloadSkillsByNameResult reports successfully applied skills separately
+// from skills whose content changed. The watcher advances a version only after
+// download and extraction succeed, so transient CDN failures retry next poll.
+func (s *ClaudeCodeService) downloadSkillsByNameResult(names []string) skillDownloadResult {
 	base := s.skillsBaseURL()
 	if base == "" {
 		slog.Info("skill download skipped: no ota_metadata_url configured", "component", "skill-watcher")
-		return nil
+		return skillDownloadResult{}
 	}
 	skillsDir := claudecodeSkillsDir
-	var changed []string
+	result := skillDownloadResult{}
 	for _, name := range names {
 		url := fmt.Sprintf("%s/%s.zip", base, name)
 		tmpZip, err := skills.DownloadToTempFile(url, "skill-*.zip")
@@ -125,6 +149,7 @@ func (s *ClaudeCodeService) downloadSkillsByName(names []string) []string {
 			continue
 		}
 		os.Remove(tmpZip)
+		result.applied = append(result.applied, name)
 
 		newHash, _ := skills.FolderHash(targetDir)
 		if oldHash != "" && oldHash == newHash {
@@ -132,9 +157,9 @@ func (s *ClaudeCodeService) downloadSkillsByName(names []string) []string {
 				"component", "skill-watcher", "skill", name)
 			continue
 		}
-		changed = append(changed, name)
+		result.changed = append(result.changed, name)
 	}
-	return changed
+	return result
 }
 
 // notifySkillChanges tells the agent to re-read the changed skills. Mirrors openclaw.

@@ -135,6 +135,40 @@ func (s *Server) waitAndPaintSetupReady() {
 	slog.Warn("setup-needed paint skipped: hal LED not ready within 30s", "component", "server")
 }
 
+// halStartupTimeout bounds waitHALReady. Generous because a first boot pays
+// for building the Python venv and loading models before FastAPI binds :5001 —
+// the case that matters most, since that is a new owner's very first impression.
+const halStartupTimeout = 120 * time.Second
+
+// waitHALReady polls HAL /health until it answers, and reports whether it did.
+// os-server reaches its startup tasks long before HAL's FastAPI is listening
+// (Python boot is slower), so a request fired straight at :5001 loses to a
+// connection refused and — for one-shot calls like the volume init — is simply
+// gone. Callers that need HAL up gate on this instead of each growing a retry
+// loop of its own.
+//
+// Only reachability is checked, not per-subsystem readiness: the subsystem
+// flags mean different things per device (a device with no LED never reports
+// led:true), so gating on them would hang wherever the capability is absent.
+func waitHALReady(timeout time.Duration) bool {
+	start := time.Now()
+	deadline := start.Add(timeout)
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for {
+		if _, err := hal.GetHealth(); err == nil {
+			slog.Info("hal ready", "component", "server", "waited", time.Since(start).Round(time.Second))
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			slog.Warn("hal not ready within timeout, continuing anyway",
+				"component", "server", "timeout", timeout)
+			return false
+		}
+		<-ticker.C
+	}
+}
+
 // handleSetUpCompleteChange starts or stops the network monitor and status reporter based on SetUpCompleted.
 // When true: cancels any previous monitor context, creates a new one, starts monitor and reporter, and runs OpenClaw ready check.
 // When false: cancels monitor/reporter (they exit on ctx.Done()) and switches to AP mode.
@@ -233,8 +267,18 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 			} else {
 				slog.Info("config unchanged since HAL last started, skipping hal restart", "component", "server")
 			}
-			// Start voice pipeline on HAL (if Deepgram key configured)
-			// Retry because hal may not be running yet at setup time.
+
+			// Everything below talks to HAL, so wait for its HTTP port once here
+			// rather than making each call site carry its own retry. The restart
+			// above is the obvious reason HAL may be down, but it is not the only
+			// one (hal.service Restart=always, a slow first boot building the venv
+			// and loading models), so we poll even when no restart happened —
+			// GetHealth returns immediately against a live HAL.
+			waitHALReady(halStartupTimeout)
+
+			// Start voice pipeline on HAL (if Deepgram key configured).
+			// Retries cover a rejected key or a HAL that came up unhealthy, not
+			// HAL being absent — waitHALReady above handles that.
 			if s.config.DeepgramAPIKey != "" {
 				for attempt := 1; attempt <= 10; attempt++ {
 					err := s.agentGateway.StartHALVoice(s.config.DeepgramAPIKey, s.config.LLMAPIKey, s.config.GetSTTAPIKey(), s.config.GetTTSAPIKey(), s.config.LLMBaseURL, s.config.GetSTTBaseURL(), s.config.GetTTSBaseURL(), s.config.TTSVoice, s.config.TTSInstructions, s.config.TTSProvider)

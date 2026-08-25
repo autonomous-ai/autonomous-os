@@ -86,6 +86,39 @@ simulation_audio: bool = (
 )
 simulation_volume: int = 65
 
+# --- Simulation media mode (HAL_SIM_MEDIA) ---
+#
+# `sim_media_requested` is what the developer asked for on the command line;
+# `sim_media_camera` / `sim_media_audio` are what each subsystem ACTUALLY runs
+# after boot, because a host device can be missing, busy, or permission-denied.
+# The two are kept apart on purpose: a Mac with a working webcam but a denied
+# microphone must report host video and virtual audio, not one blurred answer.
+# `sim_media_reasons` carries the human-actionable why for each downgrade and is
+# surfaced at GET /simulator/state so the page never shows a still image while
+# claiming to be live.
+sim_media_requested: str = os.environ.get("HAL_SIM_MEDIA", "virtual").strip().lower()
+sim_media_camera: str = sim_media_requested
+sim_media_audio: str = sim_media_requested
+sim_media_reasons: dict = {}
+
+
+def sim_media_fallback(kind: str, reason: str) -> None:
+    """Downgrade one simulated media subsystem to the virtual device.
+
+    `kind` is "camera" or "audio". Idempotent: the first reason wins, so a
+    retry loop cannot overwrite the original cause with a vaguer one.
+    """
+    global sim_media_camera, sim_media_audio, simulation_audio
+    if kind == "camera":
+        sim_media_camera = "virtual"
+    elif kind == "audio":
+        sim_media_audio = "virtual"
+        simulation_audio = True
+    else:
+        raise ValueError(f"unknown media kind: {kind}")
+    sim_media_reasons.setdefault(kind, reason)
+    logger.warning("[sim-media] %s falling back to virtual: %s", kind, reason)
+
 # --- Camera state ---
 
 _camera_disabled = False
@@ -311,6 +344,41 @@ _mic_muted_led = False
 # gesture skip it so a stray click can't relax the mute mid-recording.
 _enrolling = False
 
+# --- Music cancel watermark ---
+#
+# time.monotonic() of the last cancel gesture (single click). The Go-side
+# speech/cancel watermark only mutes TTS — the cancelled turn keeps running and
+# its pending music tool call still reaches /audio/play, so a click could be
+# followed seconds later by music the user just killed (the yt-dlp resolve takes
+# 1-5s, and MusicService.play() clears its own _stop_event, so a point-in-time
+# audio_stop() cannot win that race).
+#
+# /audio/play refuses any request landing within MUSIC_CANCEL_GUARD_S of the
+# mark. Monotone like the Go watermark: a later click only moves it forward.
+# 0.0 = no cancel yet.
+_music_cancel_ms: float = 0.0
+
+# Guard window after a cancel click during which /audio/play is refused.
+# Sized to cover the cancelled turn's in-flight tool call (agent → OS server →
+# HAL is well under a second) while staying below the floor of a genuinely NEW
+# music request: after a click the user still has to speak, be transcribed, and
+# have the LLM emit the tool call — never under ~3s in practice.
+MUSIC_CANCEL_GUARD_S = 3.0
+
+
+def note_music_cancel() -> None:
+    """Stamp the music cancel watermark. Called by the single-click gesture."""
+    global _music_cancel_ms
+    _music_cancel_ms = time.monotonic()
+
+
+def music_cancel_active() -> bool:
+    """True while /audio/play must be refused because of a recent cancel."""
+    if not _music_cancel_ms:
+        return False
+    return (time.monotonic() - _music_cancel_ms) < MUSIC_CANCEL_GUARD_S
+
+
 # Set True by destructive button actions (long_press, factory_reset) right
 # before they kick `shutdown`/`reboot`/OS-server reset. The lifespan shutdown
 # handler in server.py checks this flag so it doesn't speak a second
@@ -418,6 +486,11 @@ _user_led_state = _load_user_led_state()
 _MIC_STATE_PATH = "/tmp/hal-mic-state.json"
 _SPEAKER_STATE_PATH = "/tmp/hal-speaker-state.json"
 _CAMERA_STATE_PATH = "/tmp/hal-camera-state.json"
+# Sleep is the same class of user-facing switch: someone (or a night scene) put
+# the device to sleep, and a HAL restart must not undo that. An OTA restarts HAL
+# — so before this sidecar, updating HAL while the device slept woke it up, with
+# the strip back on and the mic listening, in the middle of the night.
+_SLEEP_STATE_PATH = "/tmp/hal-sleep-state.json"
 
 
 def _save_boot_sidecar(path: str, payload: dict):
@@ -456,6 +529,26 @@ def _persist_mic_state():
 
 def _persist_speaker_state():
     _save_boot_sidecar(_SPEAKER_STATE_PATH, {"muted": _speaker_muted})
+
+
+def _persist_sleep_state():
+    """Persist sleep AND the mutes sleep itself owns.
+
+    The mute flags are deliberately absent from the mic/speaker sidecars:
+    _finalize_sleepy_peripherals marks them sleep-owned so waking restores the
+    user's own choice, and writing them there would leak sleep's mute into that.
+    But in-memory-only meant a restart came back with the mic listening and the
+    speaker live on a sleeping device — a turn still in flight then spoke out
+    loud. So they ride with sleep, in sleep's own sidecar, and are restored
+    together with it."""
+    _save_boot_sidecar(
+        _SLEEP_STATE_PATH,
+        {
+            "sleeping": _sleeping,
+            "auto_muted_mic": _sleepy_auto_muted_mic,
+            "auto_muted_speaker": _sleepy_auto_muted_speaker,
+        },
+    )
 
 
 def start_voice_service(reason: str) -> bool:
@@ -510,6 +603,7 @@ def _finalize_sleepy_peripherals(mute_mic: bool, mute_speaker: bool):
         if music_service and music_service.playing:
             music_service.stop()
 
+    _persist_sleep_state()
     logger.info("Sleepy finalized: LED off, mic muted, speaker muted")
 
 
@@ -524,6 +618,7 @@ def _wake_sleepy_peripherals():
         if _hw_mic_switch_muted is not True:
             _mic_muted = False
             start_voice_service("sleepy-wake")
+    _persist_sleep_state()
     logger.info("Sleepy wake: restored sleepy-owned audio state")
 
 
@@ -542,6 +637,7 @@ def _load_peripheral_sidecars():
     speak time."""
     global _mic_muted, _mic_manual_override, _speaker_muted
     global _camera_disabled, _camera_manual_override, _mic_muted_led
+    global _sleeping, _sleepy_auto_muted_mic, _sleepy_auto_muted_speaker
     if d := _load_boot_sidecar(_MIC_STATE_PATH):
         _mic_muted = bool(d.get("muted"))
         _mic_manual_override = bool(d.get("manual_override"))
@@ -553,12 +649,27 @@ def _load_peripheral_sidecars():
     if d := _load_boot_sidecar(_CAMERA_STATE_PATH):
         _camera_disabled = bool(d.get("disabled"))
         _camera_manual_override = bool(d.get("manual_override"))
-    if _mic_muted or _speaker_muted or _camera_disabled:
+    if d := _load_boot_sidecar(_SLEEP_STATE_PATH):
+        # Restoring the flag re-arms every gate that reads it (sensing, LED,
+        # servo, music). The mutes come back with it, still marked sleep-owned
+        # so the next wake hands the mic and speaker back to whatever the USER
+        # had chosen. Nothing is applied to hardware here: the body is already
+        # in the sleep pose and stays limp (AnimationService.start(skip_wake)),
+        # and TTS/voice consult these flags at speak/listen time.
+        _sleeping = bool(d.get("sleeping"))
+        if _sleeping and d.get("auto_muted_mic"):
+            _mic_muted = True
+            _sleepy_auto_muted_mic = True
+        if _sleeping and d.get("auto_muted_speaker"):
+            _speaker_muted = True
+            _sleepy_auto_muted_speaker = True
+    if _mic_muted or _speaker_muted or _camera_disabled or _sleeping:
         logger.info(
-            "Peripheral switches restored: mic_muted=%s speaker_muted=%s camera_disabled=%s",
+            "Peripheral switches restored: mic_muted=%s speaker_muted=%s camera_disabled=%s sleeping=%s",
             _mic_muted,
             _speaker_muted,
             _camera_disabled,
+            _sleeping,
         )
 
 

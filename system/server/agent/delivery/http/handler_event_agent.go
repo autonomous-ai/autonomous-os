@@ -77,6 +77,9 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 	switch payload.Stream {
 	case "lifecycle":
 		slog.Info("lifecycle event", "component", "agent", "phase", payload.Data.Phase, "runId", payload.RunID, "flowRunId", flowRunID, "session", payload.SessionKey)
+		if payload.Data.Phase == "start" {
+			h.ttsTurnSequence(flowRunID)
+		}
 
 		// Track agent-path activity per sessionKey so the session.message
 		// handler can skip turns already driven by the agent stream
@@ -780,7 +783,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 						"run_id", flowRunID,
 						"sentence", cleaned[:min(len(cleaned), 100)])
 					flow.Log("tts_stream_send", map[string]any{"run_id": flowRunID, "text": cleaned}, flowRunID)
-					h.deliverTTS(h.agentGateway.SendToHALTTSQueue, cleaned, flowRunID, "streaming TTS delivery failed")
+					h.deliverTTSQueue(cleaned, flowRunID, "streaming TTS delivery failed")
 				}
 			}
 		}
@@ -1096,7 +1099,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 					// can display the complete reply — it only reads tts_send and would
 					// otherwise drop sentence 1 (logged separately as tts_stream_send).
 					flow.Log("tts_send", map[string]any{"run_id": flowRunID, "text": remainderText, "full_text": text, "streamed_len": streamedLen}, flowRunID)
-					h.deliverTTS(h.agentGateway.SendToHALTTSQueue, remainderText, flowRunID, "TTS delivery failed")
+					h.deliverTTSQueue(remainderText, flowRunID, "TTS delivery failed")
 				}
 				// Guard broadcast is handled above (before the if/else) to ensure
 				// it fires even on NO_REPLY / empty / suppressed paths.

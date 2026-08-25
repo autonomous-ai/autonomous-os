@@ -19,13 +19,24 @@ from hal.clock import device_now
 from hal.realtime.config import gemini_needs_idle_workaround
 from hal.realtime.models import AudioOutput as RTAudioOutput
 from hal.realtime.models import TextOutput as RTTextOutput
-from hal.realtime.models.signal import DelegateSignal, LookReplaySignal
+from hal.realtime.models.signal import DelegateSignal, LookReplaySignal, RejectSignal
 from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice._internal.cot_leak_filter import CoTLeakFilter, clean_transcript
 
 logger = logging.getLogger("hal.voice")
 
 SENTENCE_ENDS = (".", "!", "?", "。", "！", "？")
+
+# How a turn resolved, for the single routing log line in dispatch_turn. Every
+# value except HANDLED or AI_REJECTED means the main agent answers this turn.
+ROUTE_HANDLED = "realtime_handled"          # realtime spoke; main agent stays silent
+ROUTE_DELEGATED = "delegated"               # the model asked to hand off
+ROUTE_AI_REJECTED = "ai_rejected"           # model explicitly rejected this non-user turn
+ROUTE_NO_OUTPUT = "realtime_no_output"      # committed, but nothing came back (timeout / dead WS)
+ROUTE_ERROR = "realtime_error"              # the turn raised; forwarded instead of lost
+ROUTE_UNAVAILABLE = "realtime_unavailable"  # no live session to commit to
+ROUTE_NOISE_DROPPED = "noise_dropped"       # never committed — noise guard rejected it
+ROUTE_NOT_STARTED = "realtime_not_started"  # realtime off, or no turn was opened this capture
 
 
 def _reply_language_name() -> str:
@@ -217,6 +228,34 @@ class RealtimeTurnResult(NamedTuple):
     handled: bool = False
     transcript: str = ""
     delegate_msg: str = ""
+    # Why the turn ended up where it did — one of ROUTE_*. Only the delegated
+    # path used to log a reason, so every OTHER way of reaching the main agent
+    # (no output, dead session, dropped noise, realtime off) was invisible and
+    # indistinguishable in the journal. dispatch_turn logs this on every turn.
+    route: str = ROUTE_NOT_STARTED
+    # This is deliberately separate from `route`: an empty/no-output turn must
+    # retain main-agent fallback. Only an explicit reject_turn tool call sets it.
+    rejected: bool = False
+
+
+def should_drop_realtime_rejection(rt: RealtimeTurnResult) -> bool:
+    """Return whether the explicit AI rejection may suppress downstream dispatch.
+
+    This isolated policy gate is intentionally the only behavior-changing check.
+    Disable ``HAL_REALTIME_AI_REJECT_FILTER`` to immediately restore the old
+    fallback for every turn, including previously explicit rejections.
+    """
+    return hal_config.REALTIME_AI_REJECT_FILTER and rt.rejected
+
+
+def should_drop_downstream_turn(rt: RealtimeTurnResult) -> bool:
+    """Return whether a terminal guard/model decision must stop OS dispatch.
+
+    A noise guard rejection is terminal even when STT fabricated a short word:
+    forwarding that word would undo the guard and let room noise reach the main
+    agent. The explicit AI rejection remains separately configurable above.
+    """
+    return rt.route == ROUTE_NOISE_DROPPED or should_drop_realtime_rejection(rt)
 
 
 def should_dispatch_to_main(
@@ -237,10 +276,55 @@ def should_dispatch_to_main(
     return wakeword_authorized
 
 
+def needs_noise_guard(combined: str) -> bool:
+    """Return whether the Silero voiced-ratio guard must run for this transcript.
+
+    Always for an empty transcript. Also for a very short one: STT fabricates a
+    filler word out of room noise and reports full confidence for it, which used
+    to bypass every guard here and commit a turn of pure noise to the model.
+    """
+    if not combined:
+        return True
+    max_words: int = hal_config.REALTIME_NOISE_GUARD_MAX_WORDS
+    return 0 < len(combined.split()) <= max_words
+
+
+def should_arm_realtime_wait_filler(combined: str) -> bool:
+    """Return whether this realtime turn may receive an audible wait filler.
+
+    Short STT output is the ambiguity class that the realtime model reviews
+    with ``reject_turn``. A filler would speak before that verdict arrives and
+    turn an otherwise silent rejection into an audible response.
+    """
+    return not needs_noise_guard(combined)
+
+
+def should_defer_speaker_id_prepass(combined: str) -> bool:
+    """Return whether speaker ID can wait for the explicit AI rejection verdict.
+
+    The recognizer is an external inference call. It provides no value for a
+    short turn the realtime model explicitly rejects, while delaying audio
+    commit by hundreds of milliseconds. A non-rejected turn still resolves its
+    identity before downstream dispatch.
+    """
+    return (
+        hal_config.REALTIME_ENABLED
+        and hal_config.REALTIME_AI_REJECT_FILTER
+        and bool(combined)
+        and needs_noise_guard(combined)
+    )
+
+
 def is_noise_turn(
     combined: str, buf_duration: float, audio_is_speech: bool = True
 ) -> bool:
     """Return whether this capture must not be committed to the realtime model."""
+    # A short transcript that Silero judged non-speech is an STT fabrication over
+    # noise, not a short command — drop it whatever REQUIRE_TRANSCRIPT says. Only
+    # reachable when the caller actually ran the guard (audio_is_speech defaults
+    # to True), so a missing check still never drops a turn.
+    if not audio_is_speech and combined and needs_noise_guard(combined):
+        return True
     if hal_config.REALTIME_REQUIRE_TRANSCRIPT:
         return not combined
     return not combined and (
@@ -265,8 +349,10 @@ def run_realtime_turn(
     """
     delegated = False
     handled = False
+    rejected = False
     transcript = ""
     delegate_msg = ""
+    route = ROUTE_NOT_STARTED
     native = hal_config.REALTIME_NATIVE_AUDIO and tts is not None
     native_started = False  # cleanup guard: True between begin and end
     native_played = False    # did native audio actually play this turn (for handled)
@@ -304,7 +390,13 @@ def run_realtime_turn(
         # than per attempt so a 1011 retry does not restart the clock — from the
         # user's side it is one uninterrupted silence.
         wait_filler = _WaitFiller()
-        wait_filler.arm()
+        if should_arm_realtime_wait_filler(combined):
+            wait_filler.arm()
+        else:
+            logger.info(
+                "[realtime] Short transcript — suppressing dead-air filler while "
+                "the model decides whether to reject"
+            )
         try:
             # 1011 recovery (idle-death): the campaign-api proxy drops idle
             # 2.5-native-audio sessions, so a turn that follows a pause lands on a
@@ -375,6 +467,13 @@ def run_realtime_turn(
                         # voice turn), so ours must not fire on top of it.
                         wait_filler.cancel()
                         continue
+                    if isinstance(output, RejectSignal):
+                        rejected = True
+                        # No main-agent handoff follows an explicit rejection.
+                        # Cancel the filler and leave the thinking LED in the
+                        # same clean state as any other completed empty turn.
+                        wait_filler.cancel()
+                        break
                     if delegated:
                         continue
                     # Native voice: play the model's OWN audio straight to the speaker.
@@ -457,6 +556,7 @@ def run_realtime_turn(
                 # retry is safe. Stop as soon as the turn produced real output.
                 produced: bool = (
                     delegated
+                    or rejected
                     or first_sentence_sent
                     or native_started
                     or bool("".join(text_parts).strip())
@@ -480,7 +580,20 @@ def run_realtime_turn(
                 native_started = False
                 native_played = True
 
-            if delegated:
+            if rejected:
+                route = ROUTE_AI_REJECTED
+                logger.info(
+                    "[realtime] Model explicitly rejected turn — no main-agent dispatch"
+                )
+                _thinking_cue_clear()
+                try:
+                    from hal.routes.led import restore_led
+
+                    restore_led()
+                except Exception:
+                    pass
+            elif delegated:
+                route = ROUTE_DELEGATED
                 logger.info("[realtime] Model delegated → will forward to OS server")
             else:
                 # Flush any remaining text that didn't end with a sentence boundary
@@ -514,6 +627,7 @@ def run_realtime_turn(
                 spoke = native_played if native else (first_sentence_sent or bool(transcript))
                 if spoke:
                     handled = True
+                    route = ROUTE_HANDLED
                     # Label this `agent_reply`, not `transcript`: it is what Moon
                     # SAID, not what the user said. Elsewhere `transcript` means the
                     # user's STT, so reusing the word here reads as role-reversed.
@@ -528,6 +642,7 @@ def run_realtime_turn(
                             agent_text=transcript or "(audio only)",
                         )
                 else:
+                    route = ROUTE_NO_OUTPUT
                     # No spoken output from the realtime agent (empty / timeout). Do
                     # NOT claim a forward here — whether the turn actually reaches the
                     # OS server is decided by the caller's `if combined:`. A pure
@@ -568,14 +683,17 @@ def run_realtime_turn(
             # below does reach the agent, the hook paints thinking again.
             _thinking_cue_clear()
             delegated = True  # fall through to OS server on error
+            route = ROUTE_ERROR
         finally:
             # Covers every exit — reply spoken, delegate, empty turn, exception.
             # A timer left armed here would fire into the NEXT turn's silence.
             wait_filler.cancel()
     elif hal_config.REALTIME_ENABLED and noise_turn:
+        route = ROUTE_NOISE_DROPPED
         logger.info(
-            "[realtime] Skipping commit — empty STT, not committing to model "
-            "(require_transcript=%s, dur=%.2fs, min=%.2fs, silero_speech=%s)",
+            "[realtime] Skipping commit — noise turn, not committing to model "
+            "(stt=%r, require_transcript=%s, dur=%.2fs, min=%.2fs, silero_speech=%s)",
+            combined[:40] if combined else "(empty)",
             hal_config.REALTIME_REQUIRE_TRANSCRIPT,
             buf_duration,
             hal_config.REALTIME_MIN_COMMIT_DURATION_S,
@@ -594,8 +712,16 @@ def run_realtime_turn(
             except Exception:
                 logger.exception("[realtime] noise-drop discard failed")
     elif hal_config.REALTIME_ENABLED:
+        route = ROUTE_UNAVAILABLE
         logger.warning(
             "[realtime] Enabled but agent not available — falling back to OS server"
         )
 
-    return RealtimeTurnResult(delegated, handled, transcript, delegate_msg)
+    return RealtimeTurnResult(
+        delegated=delegated,
+        handled=handled,
+        transcript=transcript,
+        delegate_msg=delegate_msg,
+        route=route,
+        rejected=rejected,
+    )
