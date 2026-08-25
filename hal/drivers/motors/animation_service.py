@@ -187,11 +187,55 @@ class AnimationService:
         # Tracking lock — stricter than hold_mode: absolutely no servo writes
         # from the animation loop, and in-progress recordings are dropped so
         # they don't fight the tracker or resume jerking when tracking ends.
-        # Set only by the tracker service.
-        self._tracking_active = False
+        #
+        # Two ways to hold it, because there are two kinds of owner:
+        #   * the flag, assigned directly (`svc._tracking_active = True`) by code
+        #     that owns the body for a bounded stretch — aim.servo_ownership.
+        #   * the counter, held by a WRITER for as long as its thread is alive.
+        #
+        # The counter exists because the flag alone described the wrong span.
+        # `_track_loop` set it on entry and cleared it on exit, but the thing
+        # actually writing the bus is `ServoFollower._worker`, which outlives
+        # that loop. Between the clear and the worker stopping, the lock read
+        # free while the follower was still writing every joint at 30fps.
+        #
+        # Device-traced 2026-08-25: five subsystems wrote elbow_pitch in one
+        # minute — the follower 130 times at a fixed goal, idle 37, gaze 32,
+        # look.aim 16. Gaze declines to move a body someone else owns, asked,
+        # was told the body was free, and had every correction overwritten
+        # 33ms later. It reported the servo as failing to reach its target.
+        self._tracking_flag = False
+        self._body_owners = 0
+        self._body_owner_lock = threading.Lock()
 
         # When True, idle recording finished and pose is held — loop sleeps longer to save CPU
         self._idle_settled = False
+
+    @property
+    def _tracking_active(self) -> bool:
+        """True while anything owns the body — a flag holder or a live writer."""
+        return self._tracking_flag or self._body_owners > 0
+
+    @_tracking_active.setter
+    def _tracking_active(self, value: bool) -> None:
+        # Assignment sets the FLAG only. It cannot release a writer that is still
+        # running, which is what `_track_loop` clearing it used to do.
+        self._tracking_flag = bool(value)
+
+    def acquire_body(self) -> None:
+        """Claim the body for as long as the caller keeps writing to it.
+
+        For owners whose lifetime is a THREAD rather than a block: the follow
+        worker holds this from the moment it starts until it stops, so the lock
+        covers every frame it writes rather than only the loop that spawned it.
+        Re-entrant by count, so nested or overlapping owners each release once.
+        """
+        with self._body_owner_lock:
+            self._body_owners += 1
+
+    def release_body(self) -> None:
+        with self._body_owner_lock:
+            self._body_owners = max(0, self._body_owners - 1)
 
     # P gain — upstream default is 16 for all. Higher values cause jerky motion,
     # so this stays at 16 except where a joint has been measured to need more.

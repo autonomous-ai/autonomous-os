@@ -285,6 +285,24 @@ class ServoFollower:
         velocity profile. Each joint carries its own velocity, so when a fresh
         goal arrives mid-move the follower retargets without a restart jerk.
         """
+        # Own the body for as long as this thread writes to it. The tracker's
+        # own flag spans `_track_loop`, which this worker outlives — and in that
+        # gap the lock read free while this loop was still writing every joint
+        # at 30fps, so gaze happily made corrections that were overwritten on
+        # the next frame and then reported the servo as broken.
+        acquire = getattr(animation_service, "acquire_body", None)
+        release = getattr(animation_service, "release_body", None)
+        if acquire:
+            acquire()
+        try:
+            self._follow(animation_service, running)
+        finally:
+            if release:
+                release()
+
+    def _follow(self, animation_service, running: threading.Event) -> None:
+        """The follow loop itself. Split out so ownership is released on EVERY
+        exit path, including an exception mid-loop."""
         idle_sleep = 0.01
         vel = {k: 0.0 for k in JOINTS}   # per-joint SmoothDamp velocity (deg/s)
         last_sent = self.positions()

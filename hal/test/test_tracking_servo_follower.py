@@ -187,3 +187,104 @@ def test_a_correction_with_nowhere_to_go_moves_nothing():
 def test_zero_asks_for_nothing():
     before = _rest()
     assert servo_follow.distribute_pitch(before, 0.0) == pytest.approx(before)
+
+
+# --- body ownership spans the writer's whole lifetime ---------------------------
+
+
+class _OwnableService(_FakeAnimationService):
+    """Animation service stand-in with the real ownership semantics."""
+
+    def __init__(self):
+        super().__init__()
+        self._tracking_flag = False
+        self._body_owners = 0
+        self._body_owner_lock = threading.Lock()
+        self.seen_while_writing = []
+
+    @property
+    def _tracking_active(self):
+        return self._tracking_flag or self._body_owners > 0
+
+    @_tracking_active.setter
+    def _tracking_active(self, value):
+        self._tracking_flag = bool(value)
+
+    def acquire_body(self):
+        with self._body_owner_lock:
+            self._body_owners += 1
+
+    def release_body(self):
+        with self._body_owner_lock:
+            self._body_owners = max(0, self._body_owners - 1)
+
+
+def _run_worker_briefly(follower, service, running, seconds=0.3):
+    """Run the worker in a thread and stop it, with a bounded wait.
+
+    Never drive the loop's exit from inside send_action: if the goal happens to
+    match the current pose nothing is written, the loop spins, and the test
+    hangs instead of failing.
+    """
+    thread = threading.Thread(target=follower._worker, args=(service, running))
+    thread.start()
+    time.sleep(seconds)
+    running.clear()
+    thread.join(timeout=3.0)
+    assert not thread.is_alive(), "the worker did not stop"
+
+
+def test_the_follow_worker_owns_the_body_for_as_long_as_it_writes():
+    """The gap that let gaze fight the tracker and lose.
+
+    `_track_loop` set the tracking flag on entry and cleared it on exit, but the
+    thing writing the bus is this worker, which outlives that loop. In the gap
+    the lock read free while the follower was still writing every joint at 30fps
+    — device-traced, the follower wrote elbow_pitch 130 times in a minute at a
+    fixed goal while gaze made corrections that were erased on the next frame.
+    """
+    service = _OwnableService()
+    running = threading.Event()
+    running.set()
+    follower = ServoFollower()
+    follower.read_initial_positions(service)
+
+    # Whoever spawned the worker has already cleared its own flag, exactly as
+    # _track_loop does on the way out.
+    service._tracking_active = False
+
+    owned = []
+    real_send = service.robot.send_action
+
+    def watching(action):
+        owned.append(service._tracking_active)
+        real_send(action)
+
+    service.robot.send_action = watching
+    follower.set_goal(dict(_pose(40.0)))       # far enough that it must write
+    _run_worker_briefly(follower, service, running)
+
+    assert owned, "precondition: the worker wrote at least one frame"
+    assert all(owned), "the body must read as owned while the follower writes"
+    assert not service._tracking_active, "and free again once the worker stops"
+
+
+def test_ownership_is_released_even_if_the_follow_loop_raises(monkeypatch):
+    """Exercises the try/finally directly.
+
+    Going through the real loop would hang: it catches and logs bus errors and
+    keeps going, so a send_action that always raises never ends the loop.
+    """
+    service = _OwnableService()
+    running = threading.Event()
+    running.set()
+    follower = ServoFollower()
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("bus")
+
+    monkeypatch.setattr(follower, "_follow", boom)
+    with pytest.raises(RuntimeError):
+        follower._worker(service, running)
+
+    assert not service._tracking_active, "a crashed worker must not wedge the lock"
