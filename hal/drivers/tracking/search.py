@@ -376,6 +376,30 @@ def _seed_yaw(svc: Any) -> float:
     return _seed_from_bearing(svc)
 
 
+def _say_at_the_midpoint() -> Callable[[int, int], None]:
+    """A progress handler that breaks the silence once, halfway through.
+
+    A sweep is up to half a minute of the lamp swinging without a word. One
+    phrase before it starts does not cover that, and repeating `look_searching`
+    would ask "where are you?" twice, which sounds stuck rather than patient.
+
+    The default for every sweep, not just the look-aim's. Whoever started it —
+    the user asking outright, or the aim giving up — is waiting through the same
+    silence.
+    """
+    said = {"done": False}
+
+    def handler(visited: int, total: int) -> None:
+        if said["done"] or visited * 2 < total:
+            return
+        said["done"] = True
+        from hal.drivers.tracking.aim import _say
+
+        _say("look_still_searching")
+
+    return handler
+
+
 def search_for_subject(target: str = "person", detector: Any = None,
                        on_progress: Optional[Callable[[int, int], None]] = None
                        ) -> SearchResult:
@@ -411,6 +435,11 @@ def search_for_subject(target: str = "person", detector: Any = None,
     # took 5.9s with HAL running, against 0.35s for the same move with the arm
     # to itself. Not a slow servo, a contested one.
     from hal.drivers.tracking import aim
+
+    # Narrating the midpoint is the default; a caller passes its own handler
+    # only to do something else, and `on_progress=lambda *_: None` to stay quiet.
+    if on_progress is None:
+        on_progress = _say_at_the_midpoint()
 
     with aim.servo_ownership():
         return _sweep(svc, cap, detector, target, on_progress)

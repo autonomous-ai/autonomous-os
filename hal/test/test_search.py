@@ -558,3 +558,40 @@ def test_a_talkative_caller_cannot_sink_the_sweep():
 
     res, _svc = _run(bearing=None, on_progress=boom)
     assert res.stops_visited == 9, "the sweep stopped when the callback threw"
+
+
+def test_every_sweep_narrates_its_own_midpoint():
+    """Whoever started it is waiting through the same silence.
+
+    This used to be passed in by the look-aim, which meant a sweep the USER
+    asked for — "where are you?" — ran its full half-minute without a word.
+    """
+    said = []
+    with mock.patch("hal.drivers.tracking.aim._say", side_effect=said.append):
+        _res, _svc = _run(bearing=None)
+
+    assert said == ["look_still_searching"], (
+        f"expected exactly one midpoint phrase, got {said}"
+    )
+
+
+def test_a_sweep_that_ends_early_stays_quiet():
+    """Found on the second look: there was no long silence to fill."""
+    said = []
+    with mock.patch("hal.drivers.tracking.aim._say", side_effect=said.append):
+        res, _svc = _run(detect_at_stop=2, bearing=None)
+
+    assert res.found
+    assert said == [], f"narrated a sweep that never went quiet: {said}"
+
+
+def test_a_caller_can_take_over_the_narration():
+    """The default speaks; a caller passing its own handler replaces it, and one
+    that does nothing keeps the sweep silent."""
+    said = []
+    seen = []
+    with mock.patch("hal.drivers.tracking.aim._say", side_effect=said.append):
+        _res, _svc = _run(bearing=None, on_progress=lambda v, t: seen.append(v))
+
+    assert seen, "the caller's handler never ran"
+    assert said == [], "the default narration fired as well as the caller's"
