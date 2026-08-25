@@ -492,6 +492,19 @@ pha quét chỉ được vào ở nơi có thể thong thả:
 (`seed`, `seed±45°`, `seed±90°`, …) thay vì quét từ trái sang phải, để nơi khả dĩ nhất được kiểm tra
 trước. Đó chính là thứ thường biến một pha quét vài giây thành chỉ một điểm dừng.
 
+**Khi chưa có bearing** — máy mới, hoặc bearing vừa bị reset — pha quét trước hết đưa tay về đúng tư
+thế của bản ghi idle thay vì bắt đầu từ chỗ nó đang đứng. Một vòng lặp vừa dắt đầu đèn đi lòng vòng
+không để lại tư thế nào do ai chọn cả, và quét từ một camera đang chúc xuống bàn thì có kỹ đến mấy
+cũng là kỹ ở sai nửa không gian. Tư thế idle vốn dĩ là tư thế đèn được thiết kế để nghỉ, nên bảo đảm
+"không chúc xuống sàn" đến từ chính tư thế đó, không cần thêm một phép kiểm tra pitch riêng.
+
+**Ở mỗi điểm dừng, đầu đèn ngó quanh** — `wrist_roll` sang −45°, 0°, rồi +45°, trước khi đế xoay tiếp
+và đầu trở về giữa. Mỗi góc là một điểm DỪNG, không phải lướt qua: đầu còn đang động thì khung hình bị
+nhoè và bộ nhận diện bỏ sót thứ đang hiện rành rành trong khung. Dùng `wrist_roll` thay vì xoay
+`base_yaw` nhiều hơn vì hai thứ đó nhìn không giống nhau — xoay cả cây đèn trông như camera đặt trên
+mâm xoay, còn xoay đầu trên một thân đứng yên trông như một sinh vật đang ngó quanh. Roll đảo hướng
+nhìn nhưng giữ đường chân trời nằm ngang, nên không thể chúc camera xuống sàn giữa chừng.
+
 Mỗi bước là `STEP_DEG` (45°), cố ý **nhỏ hơn FOV của camera** để các ô chồng lấn — bước bằng đúng cả
 FOV sẽ để lại khe hở, nơi một người đứng vắt giữa hai ô bị cả hai ô bỏ sót. Các điểm dừng bị kẹp trong
 tầm cơ khí ±135°, và đầu được cho `SETTLE_S` để hết rung trước mỗi lần đọc khung hình, vì đầu đang

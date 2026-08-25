@@ -52,6 +52,23 @@ SETTLE_S: float = 0.35
 MOVE_DURATION_S: float = 0.3
 MAX_STOPS: int = 8
 
+# Where the head looks at each yaw stop, in order: left, straight on, right —
+# then back to centre before the base turns again.
+#
+# wrist_roll rather than more base_yaw because the two are not equivalent to
+# watch. Turning the whole lamp reads as a camera on a turntable; turning the
+# head at a fixed body reads as something looking around. Device-measured the
+# same day: roll pans the view while leaving the horizon level (it aims the
+# camera, it does not rotate the image), and it reached every target from -59
+# to +59 cleanly — so +/-45 is comfortably inside its travel and cannot tilt
+# the camera toward the floor part-way through a sweep.
+#
+# Absolute, not relative to the seed: at roll 0 the camera looks along base_yaw,
+# which is what makes a yaw stop mean what the stop list says it means.
+ROLL_LOOK_DEG: float = 45.0
+ROLL_STOPS = (-ROLL_LOOK_DEG, 0.0, ROLL_LOOK_DEG)
+ROLL_CENTRE: float = 0.0
+
 _abort_evt = threading.Event()
 
 
@@ -123,13 +140,15 @@ def _seed_from_bearing(svc: Any) -> float:
 
         est = user_bearing.read_estimate()
         if est is None:
-            return _current_yaw(svc)
+            seeded = _rest_on_idle_pose(svc)
+            return _current_yaw(svc) if seeded is None else seeded
         if est.confidence < aim.MIN_BEARING_CONFIDENCE:
             logger.info(
                 "[search] ignoring bearing %+.1f — confidence %.2f < %.2f",
                 est.bearing_deg, est.confidence, aim.MIN_BEARING_CONFIDENCE,
             )
-            return _current_yaw(svc)
+            seeded = _rest_on_idle_pose(svc)
+            return _current_yaw(svc) if seeded is None else seeded
 
         # Posture first, in ONE absolute move — the same mechanism the aim and
         # the gaze repoint use, so all three restore identically. An absolute
@@ -154,7 +173,66 @@ def _seed_from_bearing(svc: Any) -> float:
 
         return est.bearing_deg
     except Exception:
-        return _current_yaw(svc)
+        seeded = _rest_on_idle_pose(svc)
+        return _current_yaw(svc) if seeded is None else seeded
+
+
+def _look_at_roll(svc: Any, roll: float) -> bool:
+    """Turn the head to an absolute wrist_roll angle. False if it could not."""
+    try:
+        from hal.drivers.tracking import aim
+
+        current = svc.get_positions()
+        if abs(roll - float(current.get("wrist_roll.pos", 0.0))) <= 0.5:
+            return True
+        target = {"wrist_roll.pos": float(roll)}
+        duration = aim.min_move_duration(
+            state.safety_policy, target, current, MOVE_DURATION_S
+        )
+        svc.move_and_hold(target, duration=duration)
+        return True
+    except Exception as e:
+        logger.warning("[search] look to roll %+.0f failed: %s", roll, e)
+        return False
+
+
+def _rest_on_idle_pose(svc: Any) -> Optional[float]:
+    """Stand the arm on the idle recording's own pose, and return its yaw.
+
+    The fallback for a device with no bearing yet — a fresh unit, or one whose
+    bearing was reset. Without it the sweep started from wherever the arm
+    happened to be, which on a loop that has just been walking the head around
+    is not a pose anyone chose. A sweep from a camera aimed at the desk finds
+    nothing however thorough it is.
+
+    The idle baseline is the recording's first frame, which the animation
+    service already holds — no file parsing, and it is by construction a pose
+    the lamp is designed to rest in. Device-checked 2026-08-25: it looks out at
+    head height with the room in view, so the "not aimed at the floor"
+    guarantee comes from the pose itself and needs no separate pitch check.
+    """
+    baseline = getattr(svc, "_idle_baseline", None)
+    if not isinstance(baseline, dict) or not baseline:
+        return None
+    target = {j: float(v) for j, v in baseline.items() if j.endswith(".pos")}
+    if not target:
+        return None
+    try:
+        from hal.drivers.tracking import aim
+
+        current = svc.get_positions()
+        duration = aim.min_move_duration(
+            state.safety_policy, target, current, MOVE_DURATION_S
+        )
+        svc.move_and_hold(target, duration=duration)
+        logger.info(
+            "[search] no bearing yet — resting on the idle pose (%d joints) before sweeping",
+            len(target),
+        )
+        return float(target.get("base_yaw.pos", _current_yaw(svc)))
+    except Exception as e:
+        logger.warning("[search] idle-pose restore skipped: %s", e)
+        return None
 
 
 def _seed_yaw(svc: Any) -> float:
@@ -204,17 +282,33 @@ def search_for_subject(target: str = "person", detector: Any = None) -> SearchRe
             logger.warning("[search] move to %+.0f failed: %s", yaw, e)
             return SearchResult(False, f"move failed: {e}", visited)
 
-        # Settle before reading: a head still ringing gives a blurred frame and
-        # a detector that misses what is actually in view.
-        time.sleep(SETTLE_S)
-        visited += 1
+        # Look around from here before turning the body again: left, centre,
+        # right. Each is a STOP, not a pan-through — a head still moving gives a
+        # blurred frame and a detector that misses what is plainly in view.
+        for roll in ROLL_STOPS:
+            if _abort_evt.is_set():
+                return SearchResult(False, "aborted", visited)
+            if not _look_at_roll(svc, roll):
+                continue
 
-        frame = _grab_frame(cap)
-        if frame is None:
-            continue
-        box, kind, _conf = _detect_subject(detector, frame)
-        if box is not None:
-            logger.info("[search] found %s at yaw %+.0f after %d stop(s)", kind, yaw, visited)
-            return SearchResult(True, f"found {kind}", visited, yaw)
+            # Settle before reading: a head still ringing gives a blurred frame
+            # and a detector that misses what is actually in view.
+            time.sleep(SETTLE_S)
+            visited += 1
+
+            frame = _grab_frame(cap)
+            if frame is None:
+                continue
+            box, kind, _conf = _detect_subject(detector, frame)
+            if box is not None:
+                logger.info(
+                    "[search] found %s at yaw %+.0f roll %+.0f after %d stop(s)",
+                    kind, yaw, roll, visited,
+                )
+                return SearchResult(True, f"found {kind}", visited, yaw)
+
+        # Head back to centre before the base turns, so the next yaw stop looks
+        # where the stop list says it does rather than 45 deg off it.
+        _look_at_roll(svc, ROLL_CENTRE)
 
     return SearchResult(False, "nobody found", visited)

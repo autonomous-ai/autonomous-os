@@ -37,9 +37,20 @@ class _FakeCap:
 
 
 class _FakeSvc:
-    def __init__(self):
+    # The idle recording's first frame, which the animation service holds. The
+    # sweep rests on it when there is no bearing to seed from.
+    IDLE_BASELINE = {
+        "base_yaw.pos": 3.0, "base_pitch.pos": 29.8, "elbow_pitch.pos": 27.1,
+        "wrist_pitch.pos": -61.7, "wrist_roll.pos": 8.2,
+    }
+
+    def __init__(self, idle_baseline=None):
         self.yaw = 0.0
+        self.roll = 0.0
         self.holds = []            # absolute poses restored before the sweep
+        self._idle_baseline = (
+            dict(self.IDLE_BASELINE) if idle_baseline is None else idle_baseline
+        )
         self.nudge = mock.Mock(side_effect=self._nudge)
         # A real arm reports every joint. `_bearing_step_target` treats a joint
         # ABSENT from the current pose as already-correct, so a double that
@@ -50,15 +61,19 @@ class _FakeSvc:
             "base_pitch.pos": 0.0,
             "elbow_pitch.pos": 0.0,
             "wrist_pitch.pos": 0.0,
+            "wrist_roll.pos": self.roll,
         })
 
     def get_joint_names(self):
-        return ["base_yaw.pos", "base_pitch.pos", "elbow_pitch.pos", "wrist_pitch.pos"]
+        return ["base_yaw.pos", "base_pitch.pos", "elbow_pitch.pos",
+                "wrist_pitch.pos", "wrist_roll.pos"]
 
     def move_and_hold(self, target, duration=None):
         self.holds.append(dict(target))
         if "base_yaw.pos" in target:
             self.yaw = float(target["base_yaw.pos"])
+        if "wrist_roll.pos" in target:
+            self.roll = float(target["wrist_roll.pos"])
 
     def _nudge(self, y, p, d, cur, pol):
         self.yaw += y
@@ -66,10 +81,10 @@ class _FakeSvc:
 
 
 def _run(detect_at_stop=None, bearing=None, disabled=False, abort_at_stop=None,
-         confidence=0.9, pose=None):
+         confidence=0.9, pose=None, idle_baseline=None):
     """detect_at_stop: 1-based stop index at which a subject appears."""
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
-    svc = _FakeSvc()
+    svc = _FakeSvc(idle_baseline=idle_baseline)
     calls = {"n": 0}
 
     def _detect(f, t, strict=True):
@@ -187,14 +202,36 @@ def test_the_sweep_restores_the_remembered_posture_first():
     assert "wrist_pitch.pos" in restored or "base_pitch.pos" in restored, restored
 
 
-def test_a_low_confidence_bearing_does_not_seed_the_sweep():
-    """A seed is an ordering hint, but an estimate about to be dropped is not
-    one — start from where the head already points instead."""
+def test_a_low_confidence_bearing_is_not_used_to_seed_the_sweep():
+    """An estimate about to be dropped is not an ordering hint."""
     from hal.drivers.tracking import aim
 
     res, svc = _run(bearing=120.0, confidence=aim.MIN_BEARING_CONFIDENCE - 0.05)
-    assert svc.holds == [], "a bearing below the floor must not move the head"
+    seeded_from_bearing = [h for h in svc.holds if h.get("base_yaw.pos") == 120.0]
+    assert seeded_from_bearing == [], "a bearing below the floor must not aim the head"
     assert res.stops_visited >= 1
+
+
+def test_no_bearing_rests_on_the_idle_pose_before_sweeping():
+    """Sweeping from wherever the arm happens to be finds nothing.
+
+    A loop that has been walking the head around does not leave it in a pose
+    anyone chose, and a sweep from a camera aimed at the desk is thorough about
+    the wrong hemisphere. The idle baseline is by construction a pose the lamp
+    is designed to rest in — device-checked, it looks out at head height — so
+    the "not aimed at the floor" guarantee comes from the pose, not from a
+    separate pitch check.
+    """
+    _res, svc = _run(bearing=None)
+    rested = [h for h in svc.holds if h.get("base_pitch.pos") == 29.8]
+    assert rested, f"expected a rest on the idle pose, got {svc.holds[:3]}"
+
+
+def test_with_no_idle_pose_either_the_sweep_starts_where_it_stands():
+    """The last resort. A device with neither memory still sweeps rather than
+    refusing — half a search beats none."""
+    _res, svc = _run(bearing=None, idle_baseline={})
+    assert [h for h in svc.holds if "base_pitch.pos" in h] == []
 
 
 def test_a_confident_bearing_still_seeds_the_sweep():
@@ -202,11 +239,6 @@ def test_a_confident_bearing_still_seeds_the_sweep():
 
     _res, svc = _run(bearing=40.0, confidence=aim.MIN_BEARING_CONFIDENCE + 0.05)
     assert svc.holds, "a bearing above the floor should be used"
-
-
-def test_no_estimate_falls_back_to_where_the_head_points():
-    _res, svc = _run(bearing=None)
-    assert svc.holds == []
 
 
 def test_a_failed_posture_restore_still_sweeps():
@@ -230,3 +262,61 @@ def test_a_failed_posture_restore_still_sweeps():
         res = search.search_for_subject(detector=det)
 
     assert res.stops_visited >= 1, "a failed restore must not abort the search"
+
+
+# --- the head looks around at each stop ----------------------------------------
+
+
+def _rolls(svc):
+    """Every wrist_roll angle the sweep commanded, in order."""
+    return [h["wrist_roll.pos"] for h in svc.holds if "wrist_roll.pos" in h]
+
+
+def test_each_stop_looks_left_centre_and_right():
+    """Turning the whole lamp reads as a camera on a turntable; turning the head
+    at a fixed body reads as something looking around. Both cover ground, only
+    one of them looks alive."""
+    _res, svc = _run(bearing=None)
+    rolls = _rolls(svc)
+
+    assert -45.0 in rolls and 0.0 in rolls and 45.0 in rolls
+    first = rolls.index(-45.0)
+    assert rolls[first:first + 3] == [-45.0, 0.0, 45.0], (
+        f"expected left -> centre -> right, got {rolls[:6]}"
+    )
+
+
+def test_the_head_returns_to_centre_before_the_base_turns():
+    """At roll 0 the camera looks along base_yaw, which is what makes a yaw stop
+    mean what the stop list says. Turning the base with the head still cranked
+    45 deg over would aim every later stop somewhere other than where it claims.
+    """
+    _res, svc = _run(bearing=None)
+    rolls = _rolls(svc)
+
+    # After each right-look there must be a return to centre before the next
+    # left-look begins the following stop.
+    for i, roll in enumerate(rolls):
+        if roll == 45.0 and any(r == -45.0 for r in rolls[i + 1:]):
+            nxt = rolls[i + 1:]
+            assert nxt[0] == 0.0, f"base turned with the head still at +45: {rolls}"
+
+
+def test_a_subject_found_mid_look_stops_the_sweep_there():
+    """The sweep ends on the first subject seen — that is the whole contract,
+    and adding a second axis must not make it keep looking past them."""
+    res, svc = _run(detect_at_stop=2, bearing=None)
+    assert res.found
+    assert res.stops_visited == 2, "it kept looking after finding someone"
+
+
+def test_looking_around_multiplies_the_stops_not_the_yaw_positions():
+    """Three looks per yaw stop, so coverage comes from the head rather than
+    from turning the body more often."""
+    res, svc = _run(bearing=None)
+    # The first yaw stop needs no move — the seed already left the head there —
+    # so the body turns once fewer than the number of stops it visits.
+    yaw_stops = svc.nudge.call_count + 1
+    assert res.stops_visited == yaw_stops * len(search.ROLL_STOPS), (
+        f"{res.stops_visited} stops from {yaw_stops} yaw positions"
+    )

@@ -494,6 +494,20 @@ sweep is only entered where the time is affordable:
 (`seed`, `seed±45°`, `seed±90°`, …) rather than sweeping left-to-right, so the likely place is checked
 first. That is what usually turns a multi-second sweep into a single stop.
 
+**With no bearing yet** — a fresh unit, or one whose bearing was reset — the sweep first rests the arm
+on the idle recording's own pose rather than starting from wherever it happens to stand. A loop that
+has been walking the head around does not leave it in a pose anyone chose, and a sweep from a camera
+aimed at the desk is thorough about the wrong hemisphere. The idle pose is by construction one the
+lamp is designed to rest in, so "not aimed at the floor" comes from the pose itself and needs no
+separate pitch check.
+
+**At each stop the head looks around** — `wrist_roll` to −45°, 0°, then +45°, before the base turns
+again and the head returns to centre. Each is a stop, not a pan-through: a head still moving gives a
+blurred frame and a detector that misses what is plainly in view. `wrist_roll` rather than more
+`base_yaw` because the two are not equivalent to watch — turning the whole lamp reads as a camera on a
+turntable, turning the head at a fixed body reads as something looking around. Roll pans the view
+while leaving the horizon level, so it cannot tilt the camera toward the floor part-way through.
+
 Steps are `STEP_DEG` (45°), deliberately **smaller than the camera FOV** so tiles overlap — stepping
 by a full FOV would leave seams where someone straddling two tiles is missed by both. Stops are
 clamped to the ±135° mechanical range, and the head is given `SETTLE_S` to stop ringing before each
