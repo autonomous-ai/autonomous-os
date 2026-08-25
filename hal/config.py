@@ -1543,30 +1543,6 @@ GAZE_SNAPSHOT_ENABLED: bool = (
     os.environ.get("HAL_GAZE_SNAPSHOT", "true").lower() in ("1", "true", "yes")
 )
 GAZE_SNAPSHOT_KEEP: int = int(os.environ.get("HAL_GAZE_SNAPSHOT_KEEP", "40"))
-# How many corrections in a row may be driven by the torso fallback before it
-# stops and waits for a real face. The fallback knows the head is above the
-# frame but not by how much, so its evidence can stay true no matter how far
-# the neck has moved — which is a loop, not a correction. Device-observed
-# before this bound: wrist_pitch climbed -89.7 -> -34.6 in eight steps and kept
-# going, because a user sitting close fills the frame at every pitch.
-# 0 — the blind search is off by default, and the code is kept for a device
-# where it earns its place.
-#
-# It cannot converge. The torso fallback reports the same fixed offset every
-# time (it knows the head is above the frame, never by how much), so once the
-# idle anchor follows each step there is nothing left to pull back and the
-# search becomes a one-way ratchet: device-observed -45 -> -30 -> -15 -> 0 ->
-# +14, on its way to pointing at the ceiling. To a user that reads as the lamp
-# wandering off, which is worse than the lamp sitting still.
-#
-# It is also unnecessary here. Face-driven corrections do the work whenever a
-# face is visible at all, and the anchor is what makes one correction stick.
-# When no face is visible the honest thing is to stay put: this device has a
-# remembered bearing to turn to and a user who can tilt it, and neither of
-# those is improved by sweeping the room.
-GAZE_PITCH_MAX_BLIND_STEPS: int = int(
-    os.environ.get("HAL_GAZE_PITCH_MAX_BLIND_STEPS", "0")
-)
 
 # Check that a correction actually arrived, and stop asking a joint that cannot.
 #
@@ -1584,6 +1560,33 @@ GAZE_PITCH_MAX_BLIND_STEPS: int = int(
 GAZE_PITCH_LAND_TOL_DEG: float = float(
     os.environ.get("HAL_GAZE_PITCH_LAND_TOL_DEG", "2.0")
 )
+# --- climbing to find a face ------------------------------------------------
+#
+# A person box that TOUCHES the top edge of the frame means the body continues
+# past it, so the head is above and this camera is aimed too low. That is the
+# only shape of evidence used: an unclipped body with no face means the head IS
+# in frame and simply was not detected — turned away, in profile, backlit — and
+# climbing then aims at the ceiling for no reason.
+#
+# A fixed step rather than a proportional one, because the torso says "the head
+# is up there somewhere" and never how far. Proportional control needs an error
+# signal; this is a search.
+GAZE_FACE_SEARCH_STEP_DEG: float = float(
+    os.environ.get("HAL_GAZE_FACE_SEARCH_STEP_DEG", "15")
+)
+# About 60 degrees of climb. Bounded because the evidence stays true no matter
+# how far the neck has already travelled, so acting on it forever is a loop and
+# not a search.
+GAZE_FACE_SEARCH_MAX_STEPS: int = int(
+    os.environ.get("HAL_GAZE_FACE_SEARCH_MAX_STEPS", "4")
+)
+
+# Where the arm was standing the last time it could see a face. Separate from
+# USER_BEARING_PATH deliberately — see face_height.py.
+FACE_HEIGHT_PATH: str = os.environ.get(
+    "HAL_FACE_HEIGHT_PATH", "/var/lib/hal/face_height.json"
+)
+
 # --- horizontal (pan) correction -------------------------------------------
 #
 # The mirror of the pitch knobs below, and deliberately LAZIER. Vertical framing

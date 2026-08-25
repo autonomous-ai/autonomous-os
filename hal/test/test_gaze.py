@@ -1131,34 +1131,109 @@ def test_a_person_filling_the_frame_still_means_look_up():
     assert gaze._headroom_from_person(_Frame(), det) == pytest.approx(-0.5)
 
 
-def test_blind_corrections_stop_after_a_few_and_wait_for_a_real_face(neck, monkeypatch):
-    """The fallback knows the head is up there, never how far."""
-    monkeypatch.setattr(config, "GAZE_PITCH_MAX_BLIND_STEPS", 3)
+@pytest.fixture
+def height_store(tmp_path, monkeypatch):
+    """Point the height memory at a temp file — never the real /var/lib path."""
+    from hal.drivers.tracking import face_height
+
+    path = tmp_path / "face_height.json"
+    monkeypatch.setattr(config, "FACE_HEIGHT_PATH", str(path), raising=False)
+    return face_height
+
+
+def test_the_climb_stops_after_its_budget(neck, monkeypatch, height_store):
+    """A clipped torso says the head is up there, never how far.
+
+    Unbounded, this is a one-way ratchet: the fallback reports the same offset
+    however far the neck has already travelled, so it climbs forever. That is
+    what got the old blind search disabled — device-observed
+    -45 -> -30 -> -15 -> 0 -> +14, heading for the ceiling.
+    """
+    monkeypatch.setattr(config, "GAZE_FACE_SEARCH_MAX_STEPS", 3)
     gaze._blind_pitch_steps = 0
-    for i in range(config.GAZE_PITCH_MAX_BLIND_STEPS + 3):
+    gaze._climb_gave_up = False
+    for _ in range(config.GAZE_FACE_SEARCH_MAX_STEPS + 4):
         # Refill each round: a correction clears the window it was computed
-        # from, so on the device the sampler has to rebuild one before the loop
-        # may act again. That refill IS the spacing between blind steps now.
+        # from, so the sampler has to rebuild one before the loop may act again.
         _fill_dy(-0.5, from_face=False)
         gaze._last_pitch_t = gaze.time.monotonic() - 10_000.0
         gaze._maybe_pitch(gaze.time.monotonic())
-    assert len(neck.moves) == config.GAZE_PITCH_MAX_BLIND_STEPS
+    assert len(neck.moves) == config.GAZE_FACE_SEARCH_MAX_STEPS
 
 
-def test_the_blind_search_is_off_by_default(neck):
-    """It cannot converge — the fallback reports the same offset every time, so
-    with the anchor following each step it becomes a one-way ratchet. Device-
-    observed -45 -> -30 -> -15 -> 0 -> +14, heading for the ceiling."""
-    assert config.GAZE_PITCH_MAX_BLIND_STEPS == 0
+def test_giving_up_does_not_restart_the_climb(neck, monkeypatch, height_store):
+    """The ratchet, in its subtlest form.
+
+    Resetting the step budget when the search gives up would let it climb, give
+    up, reset and climb again — the same runaway with extra steps. Only a real
+    face clears the budget.
+    """
+    monkeypatch.setattr(config, "GAZE_FACE_SEARCH_MAX_STEPS", 2)
     gaze._blind_pitch_steps = 0
+    gaze._climb_gave_up = False
+    for _ in range(12):
+        _fill_dy(-0.5, from_face=False)
+        gaze._last_pitch_t = gaze.time.monotonic() - 10_000.0
+        gaze._maybe_pitch(gaze.time.monotonic())
+    assert len(neck.moves) == 2, "the climb restarted itself"
+
+
+def test_each_climb_step_is_a_fixed_size(neck, monkeypatch, height_store):
+    """A search, not a proportional correction.
+
+    dy from the torso path is a constant placeholder, so scaling it would only
+    produce the same number dressed up as a measurement.
+    """
+    monkeypatch.setattr(config, "GAZE_FACE_SEARCH_STEP_DEG", 15.0)
+    gaze._blind_pitch_steps = 0
+    gaze._climb_gave_up = False
     _fill_dy(-0.5, from_face=False)
     gaze._maybe_pitch(gaze.time.monotonic())
-    assert neck.moves == []
+
+    moved = neck.moves[0]
+    before = {"base_pitch.pos": 10.0, "elbow_pitch.pos": 5.0, "wrist_pitch.pos": -70.0}
+    tilt = ((moved["base_pitch.pos"] - before["base_pitch.pos"])
+            + (moved["wrist_pitch.pos"] - before["wrist_pitch.pos"])
+            - (moved["elbow_pitch.pos"] - before["elbow_pitch.pos"]))
+    assert tilt == pytest.approx(-15.0), "up, by exactly one step"
 
 
-def test_a_real_face_clears_the_blind_budget(neck):
+def test_a_spent_climb_returns_to_a_height_that_worked(neck, monkeypatch, height_store):
+    """Otherwise the arm is left pointing at the ceiling with nothing in frame —
+    the state it cannot recover from, because every later sample reads as "no
+    face" and the search has no budget left to try again."""
+    monkeypatch.setattr(config, "GAZE_FACE_SEARCH_MAX_STEPS", 1)
+    height_store.record({"base_pitch.pos": 24.0, "elbow_pitch.pos": 31.0,
+                         "wrist_pitch.pos": -30.0})
+    gaze._blind_pitch_steps = 0
+    gaze._climb_gave_up = False
+    for _ in range(3):
+        _fill_dy(-0.5, from_face=False)
+        gaze._last_pitch_t = gaze.time.monotonic() - 10_000.0
+        gaze._maybe_pitch(gaze.time.monotonic())
+
+    assert len(neck.moves) == 2, "one climb step, then the trip home"
+    assert neck.moves[-1]["elbow_pitch.pos"] == pytest.approx(31.0)
+
+
+def test_only_a_real_face_updates_the_remembered_height(neck, height_store):
+    """A pose the climb merely stopped at proves nothing — the point of the
+    store is that a face was actually measured from there."""
+    gaze._blind_pitch_steps = 0
+    gaze._climb_gave_up = False
+    _fill_dy(-0.5, from_face=False)
+    gaze._maybe_pitch(gaze.time.monotonic())
+    assert height_store.read() is None, "a blind climb step is not evidence"
+
+    gaze._last_pitch_t = gaze.time.monotonic() - 10_000.0
+    _fill_dy(-0.4, from_face=True)
+    gaze._maybe_pitch(gaze.time.monotonic())
+    assert height_store.read() is not None, "a face-driven correction is"
+
+
+def test_a_real_face_clears_the_climb_budget(neck):
     """Seeing a face again means the guessing worked; allow guessing later."""
-    gaze._blind_pitch_steps = config.GAZE_PITCH_MAX_BLIND_STEPS
+    gaze._blind_pitch_steps = config.GAZE_FACE_SEARCH_MAX_STEPS
     _fill_dy(-0.4, from_face=True)
     gaze._last_pitch_t = gaze.time.monotonic() - 10_000.0
     gaze._maybe_pitch(gaze.time.monotonic())
@@ -1247,7 +1322,7 @@ def test_a_guessed_correction_anchors_too_so_idle_does_not_undo_it(neck, monkeyp
     dragged to -41.5 before the next look. The blind budget bounds how far a
     guess can take this; the anchor only stops it being wasted.
     """
-    monkeypatch.setattr(config, "GAZE_PITCH_MAX_BLIND_STEPS", 3)
+    monkeypatch.setattr(config, "GAZE_FACE_SEARCH_MAX_STEPS", 3)
     anchored = {}
     neck.set_idle_anchor = lambda j: anchored.update(j or {})
     gaze._last_anchor = None

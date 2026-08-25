@@ -75,6 +75,9 @@ _repoint_pending_t: float = 0.0
 _repoint_face_t_before: float = 0.0
 # Consecutive corrections driven by the fallback rather than by a face.
 _blind_pitch_steps: int = 0
+# True once a climb has spent its budget, so the give-up runs ONCE rather than
+# on every pass. Cleared only by a real face — see _return_to_known_height.
+_climb_gave_up: bool = False
 # A VAD-confirmed utterance found no recent usable face. The watcher consumes
 # this request and restores the remembered pose without blocking the mic loop;
 # the completed utterance gets one final gaze check after the camera settles.
@@ -1222,6 +1225,53 @@ def _consume_speech_repoint(now: float) -> None:
         logger.info("[gaze] speech-start reacquire unavailable")
 
 
+def _return_to_known_height(now: float) -> None:
+    """Go back to a height a face was last seen from, and stop climbing.
+
+    The end of a failed search, not a correction. Leaving the arm wherever the
+    climb ran out means it is pointed at the ceiling with nothing measurable in
+    frame — the state the whole loop cannot recover from, because every later
+    sample reads as "no face" and the search has no budget left to try again.
+    """
+    global _last_pitch_t
+    import hal.app_state as state
+
+    from hal.drivers.tracking import face_height
+
+    svc = getattr(state, "animation_service", None)
+    if svc is None or getattr(svc, "_tracking_active", False):
+        return
+    try:
+        current = svc.get_positions()
+    except Exception:
+        return
+    target = face_height.height_target(current)
+    # The budget is deliberately NOT reset here. Resetting would let the loop
+    # climb, give up, reset, and climb again — the one-way ratchet that got the
+    # old blind search disabled (device-observed -45 -> -30 -> -15 -> 0 -> +14,
+    # heading for the ceiling). Only a real face clears it.
+    discard_samples()
+    _last_pitch_t = now
+    if target is None:
+        logger.info("[gaze] climb gave up, and no earlier height is remembered")
+        return
+    try:
+        from hal.drivers.tracking import aim
+
+        duration = aim.min_move_duration(
+            state.safety_policy, target, current, config.GAZE_PITCH_MOVE_S,
+        )
+        with aim.servo_ownership():
+            svc.move_and_hold(target, duration=duration)
+            _anchor_idle_here(svc, target)
+        logger.info(
+            "[gaze] climb gave up; back to the last height a face was seen from (%s)",
+            " ".join(f"{j.split('.')[0]}={v:+.1f}" for j, v in sorted(target.items())),
+        )
+    except Exception as e:
+        logger.debug("[gaze] could not restore the known height: %s", e)
+
+
 def _maybe_pitch(now: float) -> None:
     """Raise or lower the camera so a face sits inside the frame, not above it.
 
@@ -1237,7 +1287,7 @@ def _maybe_pitch(now: float) -> None:
     that one restores a pose that once worked, this one finds a new one when no
     remembered pose does.
     """
-    global _last_pitch_t, _blind_pitch_steps
+    global _last_pitch_t, _blind_pitch_steps, _climb_gave_up
 
     if not (config.GAZE_PITCH_ENABLED and config.GAZE_WAKE_ENABLED):
         return
@@ -1261,18 +1311,30 @@ def _maybe_pitch(now: float) -> None:
     if (now - _last_pitch_t) < config.GAZE_PITCH_COOLDOWN_S:
         _pitch_quiet("cooling down", now)
         return
-    # The fallback is a guess, not a measurement — it says "the head is up
-    # there somewhere", never how far. Let it walk the camera a few steps and
-    # then stop until a real face confirms the direction was right. Otherwise a
-    # guess that stays true forever moves the neck forever.
-    if not from_face:
-        if _blind_pitch_steps >= config.GAZE_PITCH_MAX_BLIND_STEPS:
-            _pitch_quiet(
-                "blind budget spent", now,
-                f"{_blind_pitch_steps}/{config.GAZE_PITCH_MAX_BLIND_STEPS} "
-                "torso-driven steps taken; waiting for a real face",
+    # The fallback is a guess, not a measurement — a clipped torso says "the head
+    # is up there somewhere" and never how far. So a torso-driven correction is a
+    # SEARCH, climbing by a fixed step until a face appears, rather than a
+    # proportional correction toward an error nobody measured.
+    #
+    # Bounded, because the evidence stays true however far the neck has already
+    # travelled: acting on it forever is a loop, not a search. On giving up the
+    # arm goes back to a height that worked before rather than being left
+    # staring at the ceiling, where nothing is measurable and it cannot recover.
+    searching = not from_face
+    if searching and _blind_pitch_steps >= config.GAZE_FACE_SEARCH_MAX_STEPS:
+        if not _climb_gave_up:
+            _climb_gave_up = True
+            logger.info(
+                "[gaze] climb budget spent: %d/%d steps and still no face",
+                _blind_pitch_steps, config.GAZE_FACE_SEARCH_MAX_STEPS,
             )
-            return
+            _return_to_known_height(now)
+        else:
+            _pitch_quiet(
+                "climb budget spent", now,
+                "waiting for a real face before climbing again",
+            )
+        return
 
     import hal.app_state as state
 
@@ -1310,9 +1372,14 @@ def _maybe_pitch(now: float) -> None:
     # A negative step therefore means "tilt the camera UP", and that is the
     # convention `servo_follow.distribute_pitch` expects, so the two compose
     # directly.
-    step = dy * config.GAZE_PITCH_DEG_PER_FRAME
-    step = max(-config.GAZE_PITCH_MAX_STEP_DEG,
-               min(config.GAZE_PITCH_MAX_STEP_DEG, step))
+    if searching:
+        # dy is a constant -0.5 placeholder from the torso path, so scaling it
+        # would only ever produce the same number dressed as a measurement.
+        step = -abs(config.GAZE_FACE_SEARCH_STEP_DEG)
+    else:
+        step = dy * config.GAZE_PITCH_DEG_PER_FRAME
+        step = max(-config.GAZE_PITCH_MAX_STEP_DEG,
+                   min(config.GAZE_PITCH_MAX_STEP_DEG, step))
     # Spread the correction over all three pitch joints instead of spending it
     # all on the wrist. Looking up drives wrist NEGATIVE, and on this arm the
     # wrist stalls at -34.8 while idle already rests it near -32 — so every
@@ -1379,6 +1446,14 @@ def _maybe_pitch(now: float) -> None:
         discard_samples()
         _last_pitch_t = now
         _blind_pitch_steps = 0 if from_face else _blind_pitch_steps + 1
+        if from_face:
+            _climb_gave_up = False
+            # Only a face-driven correction is worth remembering. A pose the
+            # climb merely stopped at proves nothing — the whole point of the
+            # store is that a face was actually measured from there.
+            from hal.drivers.tracking import face_height
+
+            face_height.record(landed if not short else svc.get_positions())
         logger.info(
             "[gaze] %s %.0f%% %s centre (median of %d over %.1fs) — "
             "tilt %+.1f deg via %s%s",
@@ -1396,7 +1471,7 @@ def _maybe_pitch(now: float) -> None:
                 or j in short
             ) or "nothing",
             "" if from_face
-            else f" [blind {_blind_pitch_steps}/{config.GAZE_PITCH_MAX_BLIND_STEPS}]",
+            else f" [climb {_blind_pitch_steps}/{config.GAZE_FACE_SEARCH_MAX_STEPS}]",
         )
         # Last, deliberately: this is debug output, and it must not be able to
         # skip the bookkeeping above. A snapshot that failed before
@@ -1666,6 +1741,7 @@ def reset_for_test() -> None:
     globals()["_last_box"] = None
     _last_pitch_t = 0.0
     _blind_pitch_steps = 0
+    globals()["_climb_gave_up"] = False
     _last_dy_from_face = False
     globals()["_last_anchor"] = None
     _pitch_stalls.clear()
