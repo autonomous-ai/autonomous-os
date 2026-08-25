@@ -65,3 +65,5 @@ integrations/perception-service/src/core/ser/models/emotion2vec_plus_large/emoti
 integrations/perception-service/tests/mock_data/audio/speakers/
 
 # Hardware CAD binaries are stored via Git LFS — see .gitattributes
+skills-store-publish-api.md
+skills-ext
