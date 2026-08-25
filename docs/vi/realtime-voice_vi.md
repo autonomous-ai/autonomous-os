@@ -167,6 +167,81 @@ với reconnect send/receive của provider, vì các loop đó chưa tồn tạ
 `connect()` thành công. Không cần restart HAL hay chờ audio mới; các lượt voice
 vẫn fallback xuống agent chính cho tới khi kết nối hồi phục.
 
+## Khử vọng âm (AEC)
+
+`hal/drivers/voice/aec.py` đưa audio mic qua APM của WebRTC (AEC3), lấy audio
+đang phát làm tín hiệu tham chiếu. Nó **độc lập với provider**: tham chiếu được
+lấy tại `_WatchedStream.write` (`tts/service.py`) — điểm duy nhất mà mọi đường
+phát ra loa đều đi qua: giọng tổng hợp, phần drain của `speak_queue`, và **native
+audio** của realtime. Lấy ở đó thay vì tại lúc tổng hợp là có chủ ý: TTS render
+một câu nhanh hơn thời gian thực rất nhiều, còn output stream ghi đúng tốc độ
+phát — đúng nhịp mà mic nghe thấy.
+
+**Mặc định bật** (`HAL_AEC_ENABLED=true`). Nó cần binding
+`aec-audio-processing`, vốn **không** phải dependency của hal — PyPI không có
+wheel Linux nào, nên thiết bị cần wheel tự build. Khi import thất bại,
+`configure()` log một lần và mọi entry point trở thành no-op; đường voice hoạt
+động y như trước, nên mặc định bật vẫn an toàn với thiết bị không có binding.
+Tuy nhiên nó cũng bật luôn **barge-in** (xem bên dưới), và cái đó thì không phải
+no-op.
+
+| Env | Mặc định | Ý nghĩa |
+|-----|----------|---------|
+| `HAL_AEC_ENABLED` | `true` | Công tắc chính. Cũng là mặc định của `HAL_BARGE_IN_ENABLED` |
+| `HAL_AEC_DELAY_MS` | `205` | Gợi ý độ trễ loa→mic. **Theo từng thiết bị** — phải đo, đừng chép lại |
+| `HAL_AEC_NS` | `true` | Bật thêm khử nhiễu của APM. Trên phần cứng này nó gánh phần lớn việc khử |
+| `HAL_AEC_TAIL_S` | `2.0` | Tiếp tục khử trong khoảng này sau lần ghi loa cuối, rồi bypass APM |
+| `HAL_AEC_REF_MS` | `500` | Độ sâu FIFO của tham chiếu vọng âm |
+| `HAL_AEC_DUMP_DIR` | — | Ghi `aec_mic/ref/out.wav` để phân tích ERLE offline |
+
+Vòng VAD chính được bọc, và với `HAL_WARM_MIC=true` (nay là mặc định) mic vẫn mở
+suốt lúc phát, nên việc khử chạy ngay trong lúc thiết bị đang nói chứ không chỉ
+trong barge-in monitor cũ. Cổng reverb cố ý không khử để giữ nguyên timing.
+
+**Đo trên lamp** (OrangePi sun60 / A523, mic USB + loa USB — hai miền clock độc
+lập). Gợi ý độ trễ phải theo từng thiết bị vì hai clock USB chạy tự do: trên
+`lamp-ee17` độ trễ thật là 204 ms (trung vị, một lượt 93 s) và 192 ms ở lượt
+khác, trôi 154→215 ms ngay trong một lượt (~667 ppm). Sửa 150→205 đưa ERLE đạt
+được từ 15.2 lên 17.9 dB. Trước đó sửa 80→150 trên cùng máy đưa từ 10.9 lên
+18.6 dB.
+
+Chi phí ~3.9 % một core A523 ở thời gian thực. Cùng bộ khử này trên MacBook đạt
+~42 dB; khoảng cách là do phần cứng — hai clock USB tự do và đường analog rẻ.
+Chỉ ~1.6 dB vọng âm ở đây là dự đoán được **tuyến tính** (coherence 0.31), nên
+gần như toàn bộ việc khử là suppression — đó là lý do tắt `HAL_AEC_NS` mất ~10 dB
+ERLE và làm residual tăng gấp ba.
+
+### Hạn chế đã biết: tham chiếu bị đói
+
+`EchoReference` là một FIFO được lấy tại lúc ALSA **nhận** audio, nhưng mic chỉ
+nghe thấy audio đó sau trọn một output buffer, còn TTS thì ghi theo từng cụm
+theo nhịp mạng. Khi phần ghi chạy trước xa hơn độ sâu FIFO, những byte cũ nhất —
+đúng những byte mic sắp nghe — bị bỏ, và tham chiếu cạn khô cho phần còn lại của
+cụm. Đo trên `lamp-ee17`: tham chiếu **underrun trên 30–86 % số khung xử lý**
+trong một lượt trả lời, và ERLE mỗi cửa sổ dao động từ −25.1 dB tới 23.2 dB theo
+đó. Ở những khung *có* tham chiếu, bộ khử đạt 15–23 dB — nên thiếu hụt là do đói
+tham chiếu, không phải do APM.
+
+Tăng độ sâu FIFO không sửa được mà còn tệ hơn (`HAL_AEC_REF_MS=1500` đo được
+3.6 / 2.3 dB so với 23.2 / 19.1 dB ở 500) vì độ trễ dẫn trước trở nên thay đổi
+và vượt cửa sổ căn chỉnh của AEC3. Cách sửa thật sự là ghi tham chiếu theo nhịp
+**phát** thay vì nhịp ghi, cộng với một thread capture riêng để mic thôi rút
+`arecord` theo từng cụm. Cả hai đều chưa làm.
+
+`aec.uncancelled()` cho biết khung vừa đọc có đi qua mà **không** được khử thật
+hay không — tham chiếu underrun, stream bị bypass, hoặc mic overrun. Barge-in
+gate theo cờ này để không quyết định dựa trên vọng âm thô.
+
+`process()` gom audio về khung cố định 10 ms của APM và trả về đúng số mẫu mà
+caller yêu cầu (mồi một lần bằng tối đa 10 ms im lặng), nên khung 64 ms của hal
+không đổi. ERLE được log định kỳ khi loa đang hoạt động — **0 dB nghĩa là bộ khử
+không làm gì cả**.
+
+> Image đã load sẵn `module-echo-cancel` của PulseAudio (`setup.sh`), nhưng
+> không có gì đi tới nó: một udev rule đặt `PULSE_IGNORE=1` cho card loa để hal
+> tự sở hữu, còn capture đi thẳng qua `arecord -D plughw:`. Module đó không có
+> tham chiếu lẫn client; nó không phải thứ đang khử vọng âm ở đây.
+
 ## Biểu cảm cảm xúc (fire-and-forget)
 
 Nếu thiết bị khai báo capability `expression`
@@ -866,3 +941,4 @@ trong `config.json`:
 | `models/`, `enums/` | Kiểu input/output/event, enum provider + gateway |
 | `resources/` | System prompt (chung + theo provider) |
 | `../voice/voice_service.py` | Tích hợp: stream audio mic, tiêu thụ output, route delegate/handled |
+| `../voice/aec.py` | WebRTC AEC3 trên đường mic; tham chiếu lấy tại TTS output stream (mọi provider) |

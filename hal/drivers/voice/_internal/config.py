@@ -92,12 +92,50 @@ MAX_SESSION_DURATION_S = float(os.environ.get("HAL_MAX_SESSION_DURATION_S", "30"
 # right after a push-to-talk cue ("listening!"), so the user's first words
 # land before the mic is live and get clipped. Default off → legacy behavior
 # (close on TTS, reopen after). Opt in with HAL_WARM_MIC=true.
-WARM_MIC = os.environ.get("HAL_WARM_MIC", "false").lower() == "true"
+WARM_MIC = os.environ.get("HAL_WARM_MIC", "true").lower() == "true"
 # Max echo-skip after TTS/music ends before resuming VAD (warm mic only).
 # Bounded ≪ the legacy 1.5s reverb gate so a user who talks right after a cue
 # resumes fast and the pre-roll lookback captures their opening words. Skips
 # early once the room drops below ECHO_RMS_FLOOR.
-WARM_MIC_ECHO_SKIP_MAX_S = float(os.environ.get("HAL_WARM_MIC_ECHO_SKIP_MAX_S", "0.3"))
+WARM_MIC_ECHO_SKIP_MAX_S = float(os.environ.get("HAL_WARM_MIC_ECHO_SKIP_MAX_S", "0.1"))
+
+
+# ---------------------------------------------------------------------------
+# Acoustic echo cancellation (WebRTC AEC3) — see drivers/voice/aec.py.
+# On by default. It needs the `aec-audio-processing` native binding, which is
+# not a hal dependency — absent, every AEC entry point degrades to a no-op and
+# the voice path behaves exactly as it did before, so defaulting this on cannot
+# break a device that lacks the binding. Note that it also turns BARGE_IN on
+# (see BARGE_IN_ENABLED below), which is NOT a no-op.
+# ---------------------------------------------------------------------------
+AEC_ENABLED = os.environ.get("HAL_AEC_ENABLED", "true").lower() == "true"
+# Speaker→mic delay hint. AEC3 estimates the real delay itself, but the hint
+# decides how fast it converges. Measured from HAL's own aec_mic/aec_ref dump
+# (24/08/2026, lamp-ee17): the lag between the frames the APM is actually
+# handed is 204ms median, not the 150 this used to declare. It also drifts
+# 154→215ms over 93s (~667ppm) because the mic and speaker are separate USB
+# devices with independent clocks — which is why this is a per-device value and
+# not a constant. Re-measure with HAL_AEC_DUMP_DIR after any audio hardware
+# change; a wrong hint costs convergence, not correctness.
+AEC_DELAY_MS = int(os.environ.get("HAL_AEC_DELAY_MS", "205"))
+AEC_NOISE_SUPPRESSION = os.environ.get("HAL_AEC_NS", "true").lower() == "true"
+# Keep cancelling for this long after the last speaker write, then bypass the
+# APM until playback resumes. 2.0, not 0.5: the gaps between the sentences of
+# one reply are longer than half a second, so a 0.5s tail let the canceller
+# bypass and reset mid-reply and then re-converge from cold. Every bypass costs
+# convergence — the ERLE logged in the window right after `AEC engaged` ranges
+# from -25.1 dB to 23.2 dB, against 15-23 dB once settled.
+AEC_TAIL_S = float(os.environ.get("HAL_AEC_TAIL_S", "2.0"))
+# Depth of the echo-reference FIFO. It must hold everything written but
+# not yet heard: the tap fires when ALSA ACCEPTS audio, the mic hears it a
+# full output buffer later, and TTS writes in network-paced bursts. When
+# the FIFO is shallower than that lead, the oldest bytes -- exactly the
+# ones the mic is about to hear -- are dropped and the reference then runs
+# dry for the rest of the burst. Measured on lamp-ee17 at 500ms: the
+# reference underran on 30-98% of processed frames during a reply.
+AEC_REF_MS = int(os.environ.get("HAL_AEC_REF_MS", "500"))
+# Set to a directory to write aec_mic/ref/out.wav for offline ERLE analysis.
+AEC_DUMP_DIR = os.environ.get("HAL_AEC_DUMP_DIR", "")
 
 
 # ---------------------------------------------------------------------------
@@ -112,21 +150,67 @@ STT_KEEPALIVE_PING_S = float(os.environ.get("HAL_STT_KEEPALIVE_PING_S", "3"))
 
 
 # ---------------------------------------------------------------------------
-# Voice barge-in — interrupt in-flight TTS when user speaks during playback.
-# Requires hardware where mic doesn't pick up speaker bleed above the
-# threshold (physical separation or hardware AEC). Default off; enable only
-# after measuring bleed RMS at the deployed mic position.
+# Voice barge-in — interrupt in-flight TTS when the user speaks during playback.
+# Defaults to AEC_ENABLED: cancellation is what makes it safe, so the two turn
+# on together.
 #
-# BLOCK_MS sizes the per-read chunk of the monitor's mic capture. Larger
-# blocks = fewer Python wakeups + fewer numpy passes, which is critical on
-# Pi-class boards where the TTS sounddevice pump is already CPU-bound.
-# 256ms gives roughly 4x less per-frame overhead vs the 64ms VAD frame size
-# at the cost of trigger latency (1 block = 256ms minimum response time).
+# EVERY NUMBER BELOW IS PER-DEVICE. They are the values running on lamp-ee17
+# (USB mic card 3 + USB speaker card 4, independent clocks, speaker at 25%) and
+# they are a starting point, not a recipe. Re-measure on new audio hardware:
+# park HAL_BARGE_IN_RMS_THRESHOLD at 30000 so nothing can fire, speak nothing,
+# and read the `drain peak RMS=` line each reply logs.
+#
+# The honest state of this gate, measured 25/08/2026 with AEC_DELAY_MS=205:
+#   echo residual ceiling (room silent, 3 replies)   9804  6510  7849
+#   real user interruptions                          8027 (and 9361-20298 on
+#                                                    24/08 at the old 150 hint)
+# The populations OVERLAP — 8027 sits under the 9804 ceiling — so no level
+# threshold separates them. A threshold below the ceiling self-interrupts; one
+# above it misses quiet interruptions. Separating them needs the envelope
+# decorrelation test (echo tracks the far-end envelope, a person does not),
+# which is not implemented.
+#
+# BLOCK_MS sizes the per-read chunk of the LEGACY monitor's mic capture, which
+# is unreachable while WARM_MIC is true (the default) — the warm path reuses the
+# capture loop's own 64ms frames. It is kept aligned with that frame size so the
+# two paths trigger on comparable evidence if warm mic is ever turned off.
 # ---------------------------------------------------------------------------
-BARGE_IN_ENABLED = os.environ.get("HAL_BARGE_IN_ENABLED", "false").lower() == "true"
-BARGE_IN_RMS_THRESHOLD = int(os.environ.get("HAL_BARGE_IN_RMS_THRESHOLD", "9000"))
+BARGE_IN_ENABLED = os.environ.get(
+    "HAL_BARGE_IN_ENABLED", str(AEC_ENABLED)
+).lower() == "true"
+# 5000. This is BELOW the measured echo ceiling above, deliberately: it favours
+# catching a normal speaking voice over never self-interrupting. Expect the lamp
+# to cut itself off on the loudest syllables of its own replies — at 4500 that
+# was observed firing on RMS 5530 / 6446 / 6637 / 7749, twice transcribing the
+# lamp's own words as the user's turn. Raise toward 11000 to trade the other
+# way; there is no value that gets both.
+BARGE_IN_RMS_THRESHOLD = int(os.environ.get("HAL_BARGE_IN_RMS_THRESHOLD", "5000"))
 BARGE_IN_TRIGGER_FRAMES = int(os.environ.get("HAL_BARGE_IN_TRIGGER_FRAMES", "1"))
-BARGE_IN_BLOCK_MS = int(os.environ.get("HAL_BARGE_IN_BLOCK_MS", "256"))
+BARGE_IN_BLOCK_MS = int(os.environ.get("HAL_BARGE_IN_BLOCK_MS", "64"))
+# Warm-mic path only: consecutive 64ms VAD frames over threshold needed to fire.
+# BLOCK_MS above sizes the legacy monitor's own reads; the warm path reuses the
+# capture loop's frames, so the guard is expressed in frames instead.
+BARGE_IN_WARM_FRAMES = int(os.environ.get("HAL_BARGE_IN_WARM_FRAMES", "2"))
+# Second condition: the burst must also BE speech. Level alone cannot tell a
+# person from a door slam — measured on real recorded echo, webrtcvad accepted
+# 7/7 non-speech probes (door slam, keys, cough, beep, music, noise burst,
+# chair scrape) at the same level where speech fires, while Silero rejected all
+# 7 at no latency cost. Evaluated only after the level gate passes, so the
+# model runs on candidates rather than on every drained frame.
+# The ratio is below the turn-level noise guard's on purpose: the window is
+# short and the audio is post-AEC double talk, which scores lower than a clean
+# utterance. Every decision logs its ratio — tune from those.
+#
+# Do NOT expect this to reject the lamp's own voice; it cannot, because echo IS
+# speech. Measured 25/08/2026: echo scored 0.50, 0.75 and 1.00 on separate
+# events while real interruptions scored 0.08, 0.88 and 1.00. Raising it to 0.60
+# was tried and rejected real turns without stopping the echo. Level does the
+# separating; this only rejects loud NON-speech (door slam, keys, cough).
+BARGE_IN_REQUIRE_SPEECH = os.environ.get(
+    "HAL_BARGE_IN_REQUIRE_SPEECH", "true"
+).lower() == "true"
+BARGE_IN_SPEECH_RATIO = float(os.environ.get("HAL_BARGE_IN_SPEECH_RATIO", "0.35"))
+BARGE_IN_SPEECH_FRAMES = int(os.environ.get("HAL_BARGE_IN_SPEECH_FRAMES", "6"))
 
 
 # ---------------------------------------------------------------------------
