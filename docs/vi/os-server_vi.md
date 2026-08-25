@@ -378,6 +378,7 @@ của board, giống từng byte** (`runtimes/codex/paths_default_test.go` kiể
 | `CODEX_WS_TOKEN` | `autonomous_codex_token` | Bearer token os-server gửi tới bridge |
 | `OS_AGENT_HOME` | `/root` | Gốc để một coding session Telegram resolve `~` và đường dẫn tương đối |
 | `OS_AGENT_STATE_PATH` | `/root/config/agent_state.json` | Lịch sử chuyển runtime (persona migration) |
+| `OS_BOOTSTRAP_CONFIG` | `/root/config/bootstrap.json` | File os-server đọc `metadata_url` — base cho skill zip và skill watcher |
 | `OS_LOG_FILE` | `/var/log/os-server.log` | File log xoay vòng |
 | `DEVICE_TYPE` / `DEVICES_DIR` | — / `/opt/devices` | Chọn body và gốc `robots/<type>/` (đã có sẵn) |
 
@@ -399,7 +400,21 @@ Các núm trong Makefile: `OS_STATE_DIR` (mặc định `/tmp/autonomous-os`),
 `agent_runtime` và `set_up_completed: true` vào config.json của state dir — cái
 cuối quan trọng vì startup sequence chạy presync và `EnsureOnboarding` bị gate
 bởi nó (`server/config_watch.go`), thiếu nó thì workspace sẽ rỗng. Target không
-cài đặt runtime nào cả: codex CLI, skills và `AGENTS.md` được xem như đã có sẵn.
+tự cài codex CLI — nó được xem như đã có sẵn trên `PATH`.
+
+Nhưng skills thì tự cài. `os-dev-seed.sh` còn seed một `bootstrap.json` chứa
+`metadata_url`, dựng từ chính `GCS_BUCKET` / `BUCKET_PREFIX` khai trong
+`scripts/release/ota-config.sh`, nên URL dev không thể lệch với thứ
+`upload-skills.sh` publish. Có nó rồi thì `EnsureOnboarding` chạy đúng
+`downloadSkills()` như trên board: mọi skill mà `DEVICE_TYPE` này hỗ trợ được tải
+về dạng `<base>/skills/<name>.zip` vào `$CODEX_HOME/skills`, sau đó skill watcher
+tự cập nhật khi version đổi. Object trên CDN là public nên không cần credential.
+Seed một lần — `bootstrap.json` đã sửa sẽ được giữ nguyên.
+
+`metadata_url` là key DUY NHẤT os-server đọc từ file đó, và chỉ có skill watcher
+cùng helper `otaBaseURL()` của các runtime dùng tới, nên bật nó off-device chỉ
+mở đúng phần skills — OTA tự cập nhật nằm ở binary `bootstrap-server` riêng, mà
+`make os-dev` không chạy.
 
 Hai điều cần biết trên macOS:
 

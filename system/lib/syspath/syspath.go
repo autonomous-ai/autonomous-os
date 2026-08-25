@@ -42,3 +42,9 @@ func AgentStatePath() string {
 
 // LogFile is os-server's rotating log file.
 func LogFile() string { return envOr("OS_LOG_FILE", "/var/log/os-server.log") }
+
+// BootstrapConfig is the OTA worker's config file. os-server reads only
+// metadata_url from it — the base for skill zips and the skill watcher.
+func BootstrapConfig() string {
+	return envOr("OS_BOOTSTRAP_CONFIG", "/root/config/bootstrap.json")
+}

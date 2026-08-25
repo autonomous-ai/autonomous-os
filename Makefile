@@ -69,6 +69,7 @@ OS_DEV_ENV = \
 	CODEX_PORT=$(CODEX_PORT) \
 	OS_AGENT_HOME=$(OS_STATE_DIR) \
 	OS_AGENT_STATE_PATH=$(OS_STATE_DIR)/config/agent_state.json \
+	OS_BOOTSTRAP_CONFIG=$(OS_STATE_DIR)/config/bootstrap.json \
 	OS_LOG_FILE=$(OS_STATE_DIR)/os-server.log
 
 .PHONY: os-dev os-dev-build os-dev-seed codex-dev

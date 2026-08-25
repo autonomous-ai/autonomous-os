@@ -43,4 +43,18 @@ if [ "$AGENT_RUNTIME" = "codex" ] && [ -f "$CODEX_HOME/config.toml" ] && [ ! -f 
   log "backed up $CODEX_HOME/config.toml → config.toml.pre-os-dev (presync rewrites it)"
 fi
 
+# bootstrap.json carries metadata_url, the ONLY thing os-server reads from that
+# file (skill zip base + skill watcher). Without it downloadSkills logs
+# "no ota_metadata_url configured" and the workspace stays skill-less. The bucket
+# values come from the release scripts' single edit point, so the dev URL cannot
+# drift from what upload-skills.sh publishes. Seeded once — a dev's edit survives.
+BOOTSTRAP_JSON="$STATE_DIR/config/bootstrap.json"
+if [ ! -f "$BOOTSTRAP_JSON" ]; then
+  # shellcheck source=/dev/null
+  . "$(dirname "$0")/../release/ota-config.sh"
+  URL="${OTA_METADATA_URL:-https://storage.googleapis.com/${GCS_BUCKET}/${BUCKET_PREFIX}/ota/metadata.json}"
+  printf '{\n  "metadata_url": "%s"\n}\n' "$URL" > "$BOOTSTRAP_JSON"
+  log "seeded $BOOTSTRAP_JSON (metadata_url=$URL)"
+fi
+
 log "state dir ready: $STATE_DIR"

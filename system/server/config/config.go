@@ -13,19 +13,19 @@ import (
 	"sync"
 
 	"go.autonomous.ai/os/system/lib/mqtt"
+	"go.autonomous.ai/os/system/lib/syspath"
 	"go.autonomous.ai/os/system/lib/urlnorm"
 )
 
-// bootstrapConfigPath is the OTA worker's config file. The device-wide OTA
-// metadata URL is seeded there at provisioning (single source of truth);
-// os-server's OTA-derived features (skill watcher, onboarding skills/hooks,
-// OTA poller) read it from the same file rather than duplicating it here.
-const bootstrapConfigPath = "/root/config/bootstrap.json"
-
-// otaMetadataURLFromBootstrap returns metadata_url from bootstrap.json, or ""
-// when the file is missing or invalid (e.g. device not yet provisioned).
+// otaMetadataURLFromBootstrap returns metadata_url from the OTA worker's config
+// file, or "" when it is missing or invalid (e.g. device not yet provisioned).
+// The device-wide OTA metadata URL is seeded there at provisioning (single
+// source of truth); os-server's OTA-derived features (skill watcher, onboarding
+// skills/hooks) read it from the same file rather than duplicating it here.
+// Resolved per call so OS_BOOTSTRAP_CONFIG (off-device) is honoured no matter
+// when it is set; unset = the device path.
 func otaMetadataURLFromBootstrap() string {
-	data, err := os.ReadFile(bootstrapConfigPath)
+	data, err := os.ReadFile(syspath.BootstrapConfig())
 	if err != nil {
 		return ""
 	}

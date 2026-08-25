@@ -380,6 +380,7 @@ no second code path. Only the device-absolute paths move, through the env vars
 | `CODEX_WS_TOKEN` | `autonomous_codex_token` | Bearer token os-server sends to the bridge |
 | `OS_AGENT_HOME` | `/root` | Root a Telegram coding session resolves `~` and relative folders against |
 | `OS_AGENT_STATE_PATH` | `/root/config/agent_state.json` | Runtime-switch history (persona migration) |
+| `OS_BOOTSTRAP_CONFIG` | `/root/config/bootstrap.json` | The file os-server reads `metadata_url` from — the base for skill zips and the skill watcher |
 | `OS_LOG_FILE` | `/var/log/os-server.log` | Rotating log file |
 | `DEVICE_TYPE` / `DEVICES_DIR` | — / `/opt/devices` | Body selector and `robots/<type>/` root (pre-existing) |
 
@@ -401,8 +402,22 @@ Makefile knobs: `OS_STATE_DIR` (default `/tmp/autonomous-os`), `OS_AGENT_RUNTIME
 and `set_up_completed: true` into the state dir's config.json — the last one
 matters because the startup sequence that runs presync and `EnsureOnboarding`
 is gated on it (`server/config_watch.go`), so without it the workspace stays
-empty. Nothing in the target installs a runtime: the codex CLI, its skills and
-`AGENTS.md` are expected to be in place already.
+empty. Nothing in the target installs the codex CLI itself — that is expected to
+be on `PATH` already.
+
+Skills DO install themselves. `os-dev-seed.sh` also seeds a `bootstrap.json`
+carrying `metadata_url`, derived from the same `GCS_BUCKET` / `BUCKET_PREFIX`
+that `scripts/release/ota-config.sh` defines, so the dev URL cannot drift from
+what `upload-skills.sh` publishes. With it set, `EnsureOnboarding` runs the same
+`downloadSkills()` the board runs: every skill this `DEVICE_TYPE` supports is
+pulled as `<base>/skills/<name>.zip` into `$CODEX_HOME/skills`, and the skill
+watcher then refreshes it on version changes. The CDN objects are public, so no
+credentials are involved. Seeded once — an edited `bootstrap.json` survives.
+
+`metadata_url` is the ONLY key os-server reads from that file, and its only
+consumers are the skill watcher and the runtimes' `otaBaseURL()` helpers, so
+setting it off-device enables skills and nothing else — OTA self-update lives in
+the separate `bootstrap-server` binary, which `make os-dev` does not run.
 
 Two things to know on macOS:
 
