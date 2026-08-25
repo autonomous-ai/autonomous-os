@@ -112,6 +112,13 @@ const (
     OTAKeyBootstrap = "bootstrap"
     OTAKeyWeb       = "web"
     OTAKeyOpenClaw  = "openclaw"
+    // Agent-runtime CLIs. Each value is also the runtime name in config.json
+    // `agent_runtime` — that equality is how bootstrap updates only the CLI the
+    // device actually runs. Hermes is absent on purpose (cannot be pinned).
+    OTAKeyCodex      = "codex"
+    OTAKeyClaudeCode = "claudecode"
+    OTAKeyOpenCode   = "opencode"
+    OTAKeyPicoClaw   = "picoclaw"
     // OTAKeyLeLamp's value is "hal" — the HAL OTA metadata key
 )
 
@@ -234,7 +241,7 @@ UNIT
 | Service | Lệnh chạy | Port | Ghi chú |
 |---|---|---|---|
 | `os-server.service` | `/usr/local/bin/os-server` | 5000 | HTTP API chính, luôn chạy |
-| `bootstrap.service` | `/usr/local/bin/bootstrap-server` | 8080 | OTA worker, poll cập nhật. Expose `POST /force-check` để kích hoạt kiểm tra OTA ngay lập tức |
+| `bootstrap.service` | `/usr/local/bin/bootstrap-server` | 8080 | OTA worker, poll cập nhật. Expose `POST /force-check` để kích hoạt kiểm tra OTA ngay lập tức và `GET /security` cho trạng thái tin cậy OTA |
 | `openclaw.service` | `xvfb-run ... openclaw gateway run` | — | AI brain, memory limit 1500M |
 | `hal.service` | `uvicorn hal.server:app --host 127.0.0.1 --port 5001` | 5001 | Hardware drivers (servo, LED, camera, audio) |
 | nginx | `nginx` | 80 | Setup SPA + reverse proxy (`/api/` → OS Server 5000, `/hw/` → HAL 5001) |
@@ -290,9 +297,86 @@ bỏ qua đúng target đó nên release lỗi không bị cài lại ở lần 
 có version khác, OTA của component đó tự tiếp tục. Bản thân rollback không cần
 metadata URL hoặc mạng.
 
+Các component cài theo thư mục cũng có cùng hợp đồng recovery. Trước khi update
+web, updater dừng nginx, swap bundle đã giải nén hoàn chỉnh từ thư mục staging,
+và giữ bundle trước đó tại `/root/bootstrap/rollback/web.previous` cùng trạng
+thái active/inactive trước đó của nginx. Sau đó nó đòi hỏi có `index.html`,
+`nginx -t` hợp lệ và—khi nginx vốn đang chạy—`GET /` loopback thành công. Nếu
+thất bại, updater tự khôi phục bundle và trạng thái service đã lưu. Operator cũng
+có thể chạy `software-update rollback web`; version bị loại được ghi vào
+`rollback_versions` giống rollback binary.
+
+Với device profile, updater stage ZIP, chỉ dừng `os-server` và `hal` vốn đang
+active, rồi giữ profile cũ tại `/root/bootstrap/rollback/device.previous`. Nó
+cũng snapshot chính xác các file thuộc `rootfs/` của profile cũ hoặc mới trong
+`device.previous.rootfs`; rollback vì vậy khôi phục file bị ghi đè và xoá file
+chỉ được profile lỗi thêm vào. Tuning local trong `/opt/hal/.env` vẫn được giữ.
+Profile bắt buộc có `ROBOT.md`; mỗi service vốn active phải khởi động lại và trả
+về health endpoint loopback. Check lỗi sẽ tự phục hồi profile known-good và trạng
+thái service cũ. Dùng `software-update rollback device` khi operator rollback;
+version profile bị loại sau đó sẽ bị chặn.
+
 Device không có `signing_public_key` chủ ý ở legacy mode: nó đọc component top
 level và chỉ log cảnh báo, không làm OTA lỗi. Đây là compatibility bridge, không
 phải bảo đảm trust; pin public key để bật verified OTA.
+
+### Trạng thái bảo mật OTA (operator nhìn thấy được)
+
+Cảnh báo ở trên chỉ là một dòng log, nên một device kẹt ở legacy mode là vô hình
+với người vận hành fleet. Cả hai tiến trình đều expose trạng thái đó dưới dạng dữ liệu:
+
+| Endpoint | Do ai phục vụ | Ghi chú |
+|----------|---------------|---------|
+| `GET http://127.0.0.1:8080/security` | `bootstrap-server` | Nguồn sự thật: worker giữ key đã pin và thực hiện verify. Chỉ loopback. |
+| `GET /api/system/ota-security` | `os-server` | Proxy nguyên văn endpoint trên, bọc trong wrapper chuẩn `{"status":1,"data":…}`. Trả `502` khi bootstrap worker không với tới được. |
+
+```json
+{
+  "mode": "verified",
+  "metadata_format": "autonomous-ota/v1",
+  "key_fingerprint": "9f2c1ab30d4e5f60",
+  "artifact_checksums": true,
+  "last_metadata_fetch": {
+    "at": "2026-08-24T09:12:03Z",
+    "verified": true
+  }
+}
+```
+
+- `mode` là `verified` khi đã provision `signing_public_key`, ngược lại là
+  `legacy`. Đây là field duy nhất cần cảnh báo trên toàn fleet.
+- `key_fingerprint` là 16 ký tự hex đầu của SHA-256 của key đã pin, để operator
+  biết device đang tin **key nào** (và phát hiện device còn kẹt ở key đã xoay
+  vòng) mà endpoint không phải phát lại key material. Không có ở legacy mode.
+- `artifact_checksums` cho biết SHA-256 từng component có được enforce không. Nó
+  đi theo `mode`: digest chỉ có ý nghĩa khi metadata mang nó là xác thực.
+- `last_metadata_fetch` là kết quả lần fetch gần nhất, gồm cả lỗi transport
+  (`error` được set, `verified` là `false`). Nó vắng mặt cho tới khi lần fetch
+  đầu tiên sau restart hoàn tất, nên device chưa từng với tới feed phân biệt
+  được với device có feed khoẻ mạnh.
+
+### Cutover sang signed-only
+
+Metadata ký được publish dạng superset: component entry của payload vẫn nằm ở
+top level cho các worker đã deploy, còn tài liệu xác thực nằm dưới `signed`. Bản
+copy tương thích đó chính là thứ giữ cho legacy mode còn khai thác được, nên
+phải gỡ. Lộ trình:
+
+1. **Publish có ký** (đã xong). Release writer thêm envelope `signed` mỗi khi có
+   `OTA_SIGNING_PRIVATE_KEY` và `OTA_SIGNING_KEY_ID`. Device bỏ qua nó tới khi
+   được pin key.
+2. **Provision key.** Device mới nhận `OTA_SIGNING_PUBLIC_KEY` lúc setup; fleet
+   hiện có thì ghi vào `/root/config/bootstrap.json`. Không cần redeploy —
+   worker đọc key ở lần load config kế tiếp.
+3. **Xác nhận toàn fleet.** Poll `GET /api/system/ota-security` và yêu cầu
+   `mode == "verified"` cùng đúng `key_fingerprint` trên mọi device. Bước này là
+   cổng chặn: còn device nào báo `legacy` thì không đi tiếp.
+4. **Cutover.** Publish với `OTA_METADATA_SIGNED_ONLY=1`, cờ này bỏ bản copy top
+   level nên tài liệu chỉ còn `signed`. Device chưa migrate sẽ dừng update (và
+   kêu to) thay vì update từ nguồn không xác thực — đúng hướng lỗi mong muốn.
+
+Rollback cho bước 4 là publish lại một lần nữa mà không bật cờ; device đã ở
+verified mode không bị ảnh hưởng theo hướng nào, vì chúng chỉ đọc `signed`.
 
 **Đợi-rồi-retry khi chưa provisioning**: nếu `metadata_url` rỗng (device chưa
 setup), `Serve()` không khởi động poll loop lẫn healthcheck server. Nó log
@@ -344,7 +428,7 @@ reconcile(key, target):
   5. Nếu current < floor →
      a. Bật LED cam breathing (đang update)
      b. applyUpdate(key, target)   # cài target.version qua software-update
-     c. Thành công → flash xanh lá | Thất bại → đỏ pulse
+     c. Thành công → flash xanh lá rồi khôi phục LED | Thất bại → đỏ pulse 10 giây rồi khôi phục LED
 ```
 
 > `software-update <key>` thủ công qua SSH KHÔNG đi qua `reconcile` — nó cài
@@ -379,9 +463,64 @@ Bootstrap dùng `lib/hal` để báo trạng thái update qua LED. Xem chi tiế
 
 | Giai đoạn | LED |
 |----------|-----|
-| Đang tải + cài | Cam breathing `(255, 140, 0)` |
-| Thành công | Flash xanh lá `(0, 255, 80)`, rồi khôi phục LED look user đã chọn hoặc ambient resting look nếu chưa có user state |
-| Thất bại | Đỏ pulse `(255, 30, 30)` |
+| Đang tải + cài | Cam breathing `[16, 8, 0]` |
+| Thành công | Flash xanh lá `[0, 12, 4]` trong 1 giây, rồi khôi phục LED look user đã chọn hoặc ambient resting look nếu chưa có user state |
+| Thất bại | Đỏ pulse `[16, 2, 2]` trong 10 giây, rồi khôi phục LED look user đã chọn hoặc ambient resting look nếu chưa có user state |
+
+### Bất biến mà updater phải giữ (trả giá mới biết)
+
+Một máy mất sạch `/opt/hal`, thư mục staging VÀ bản backup rollback chỉ vì bấm
+nút update trên web 2 lần cách nhau 30 giây. Bốn lỗi xếp chồng; cả bốn đã vá
+trong `scripts/provision/software-update`, và đều rất dễ tái phạm:
+
+1. **Mỗi lúc chỉ một lần chạy** (`flock` trên `/var/lock/software-update.lock`).
+   Mọi nhánh đều publish bằng cách `mv` cây đang chạy sang `<name>.previous`, nên
+   lần chạy thứ hai `rm -rf` mất backup duy nhất của lần thứ nhất rồi chết vì
+   không còn nguồn. Rate-limit 30 giây/target ở os-server KHÔNG chặn được.
+2. **Thiếu thư mục cài đặt là REINSTALL, không phải lỗi.** `mv "$HAL_DIR"` abort
+   khi `/opt/hal` vắng nghĩa là lệnh duy nhất có thể cứu máy lại từ chối chạy.
+3. **Publish theo đúng mode của cây đang sống** (`publish_mode`). `mktemp -d` cho
+   0700; `mv` thư mục đó lên `/usr/share/nginx/html/setup` làm nginx (www-data)
+   trả 403 cho mọi request → health check fail → update tự rollback, mãi mãi,
+   trên mọi máy.
+4. **Virtualenv không relocatable** (`relocate_venv_scripts`). Build `.venv`
+   trong staging làm mọi console script mang shebang
+   `#!/opt/.hal.new.XXXXXX/.venv/bin/python`; staging biến mất là unit chết
+   `203/EXEC`. Không lộ khi kế thừa `.venv` cũ — chỉ cắn đúng lúc cài mới, tức
+   đúng đường khôi phục.
+5. **Phản hồi lỗi phải tạm thời.** OTA fail có thể pulse đỏ để báo lỗi, nhưng
+   sau 10 giây phải khôi phục LED look user đã chọn hoặc ambient resting look;
+   phản hồi lỗi không được giữ strip ở đỏ.
+
+Cộng thêm một lỗi làm mọi thứ trên khó thấy: **trạng thái service được chụp ở đầu
+mỗi lần chạy**, nên lần chạy bắt đầu khi update trước đó đang fail sẽ ghi
+"inactive", và mọi update sau khôi phục trung thành trạng thái "chết" đó.
+`unit_wanted_active` giờ coi unit còn `enabled` trong systemd là "phải chạy", và
+`check_web`/`check_hal` dò đúng thứ unit ĐANG làm thay vì bỏ qua khi snapshot bảo
+nó nên tắt (dạng cũ báo thành công trong khi web UI trả 403).
+
+### `POST /force-update/:target` vs `POST /force-check/:target` (bootstrap, loopback)
+
+Hai việc khác nhau, và lẫn lộn chúng chính là thứ làm nút web trông như hỏng:
+
+| Endpoint | Nghĩa | `min_version` |
+|---|---|---|
+| `force-update/<key>` | Cài `version` đã publish NGAY — đúng thứ `software-update <key>` làm qua SSH | **bỏ qua** (sàn để staging cả fleet, không phải để chặn operator chủ đích) |
+| `force-check/<key>` | Chạy lại quyết định TỰ ĐỘNG cho component đó | **tôn trọng** — component đã bằng/cao hơn sàn thì không làm gì |
+
+Nút `update` trong card Versions là `force-update` (qua
+`POST /api/system/software-update/:target`). Cả hai dùng chung allowlist target,
+bao gồm `bootstrap`; Bootstrap tách installer nền để worker thay thế restart an
+toàn. `componentInstalled` vẫn từ chối component thiết bị không có.
+
+### `GET /versions` (bootstrap, loopback)
+
+Trả `{current, target, min_version, update_available, held_by_floor}` cho mọi
+component thiết bị THỰC SỰ có (`componentInstalled`), nên mục CLI chính là runtime
+nó đang chạy, không có cái nào khác. `held_by_floor` nghĩa là đã publish bản mới
+nhưng `min_version` chưa được promote lên — worker sẽ từ chối, nên card Versions
+trên web coi component bị giữ là "không có update". os-server proxy thành
+`GET /api/system/ota-versions`.
 
 ### Phát hiện version hiện tại
 
@@ -392,6 +531,9 @@ Bootstrap dùng `lib/hal` để báo trạng thái update qua LED. Xem chi tiế
 | `web` | Đọc file `/usr/share/nginx/html/setup/VERSION` |
 | `openclaw` | Chạy `openclaw --version`, trích xuất semver bằng regex |
 | `hal` | Chạy `/opt/hal/venv/bin/python -m hal --version` HOẶC đọc `/opt/hal/VERSION` |
+| `codex` / `claudecode` / `opencode` | Chạy `<cli> --version`, lấy semver ở dòng đầu (`cliSemver`) |
+| `picoclaw` | Đọc `/usr/local/lib/os-runtimes/picoclaw/installed-version` — output `version` của nó không có semver |
+| `hermes` | — không auto-update (xem bên dưới) |
 
 ### Cách cập nhật từng thành phần
 
@@ -402,6 +544,44 @@ Bootstrap dùng `lib/hal` để báo trạng thái update qua LED. Xem chi tiế
 | `web` | Chạy `software-update web` |
 | `openclaw` | ~~Chạy `npm install -g openclaw@{version}` → `systemctl restart openclaw`~~ (tạm thời tắt) |
 | `hal` | Chạy `software-update hal` → `systemctl restart hal` |
+| `codex` / `claudecode` / `opencode` / `picoclaw` | Chạy `software-update <key>` — CHỈ trên thiết bị có `agent_runtime` đúng bằng runtime đó |
+| `hermes` | Không nằm trong loop: `hermes update` không pin được, nên một `min_version` nó không bao giờ đạt sẽ kích lại mỗi vòng poll. Chỉ chạy tay qua SSH. |
+
+**Vì sao CLI của agent gate theo `agent_runtime` chứ không theo binary:**
+`scripts/imager/build-orangepi.sh` bake CLI của MỌI agent lên mọi image lamp /
+intern-v2 bất kể `DEFAULT_AGENT`, nên `inPath("codex")` vẫn đúng trên máy đang
+chạy Hermes. Gate theo sự hiện diện của binary sẽ khiến mỗi vòng poll phát TTS
+"thiết bị đang cập nhật", chuyển LED cam, tải một CLI thiết bị không dùng, rồi
+restart một unit không tồn tại — lặp mãi mãi. Nên `componentInstalled` so key với
+`agent_runtime` trong `/root/config/config.json`; đọc không được hoặc rỗng nghĩa
+là "không phải runtime này" (bỏ qua) — hướng an toàn.
+
+**Cửa thứ hai** chặn hướng còn lại: `updaterSupports(key)` đọc
+`/usr/local/bin/software-update` và đòi đúng branch guard
+(`[ "$APP" = "<key>" ]`) phải có mặt. `software-update` chỉ vào máy qua imager
+hoặc `setup.sh` — KHÔNG bao giờ qua OTA — nên máy provision trước khi có các key
+này sẽ giữ mãi bản updater trả `Unknown app: codex`. Không có cửa này thì mỗi
+vòng poll (5 phút) máy đó sẽ nói "thiết bị đang cập nhật", thở cam, rồi fail lúc
+apply; LED chỉ pulse đỏ trong 10 giây trước khi tự khôi phục. Có nó thì máy cũ
+đơn giản là không nhận update CLI — kết cục duy nhất chúng có thể có — và im lặng.
+Khớp theo branch guard chứ không theo key trần: key còn xuất hiện trong comment
+và trong usage string của bản updater không hề implement nó.
+
+**Chữa máy đang dùng updater cũ.** `make upload-setup` còn publish bản raw tại
+`{CDN}/software-update`, nên một lệnh SSH là đủ đưa máy ngoài thực địa lên bản
+hiện tại:
+
+```bash
+sudo curl -fsSL https://cdn.autonomous.ai/os/software-update -o /tmp/su \
+  && sudo bash -n /tmp/su \
+  && sudo install -m 0755 /tmp/su /usr/local/bin/software-update
+```
+
+`bash -n` trước `install` chính là điểm mấu chốt: tải dở dang không được phép đè
+lên một updater đang chạy tốt. Sau đó máy sẽ nhận update CLI ở vòng poll kế
+tiếp — không cần restart, bootstrap đọc lại file mỗi vòng. OpenClaw giữ nguyên kiểm
+tra `inPath`: nó cài bằng npm theo từng máy chứ không bake sẵn, và provisioning
+cũ có thể chưa set `agent_runtime`.
 
 ---
 
@@ -414,37 +594,165 @@ Script đọc URL metadata OTA từ `metadata_url` trong `/root/config/bootstrap
 (biến môi trường `OTA_METADATA_URL` nếu set sẽ override, dùng cho chạy thủ công/debug),
 và exit lỗi nếu cả hai đều rỗng — không có URL hardcode.
 
-### Xử lý HAL (MỚI)
+### Xử lý HAL
+
+> **Cache uv nằm NGOÀI cây runtime** (`/opt/.uv-cache-hal`, cạnh `/opt/hal` để uv
+> hardlink vào venv mới). Trước đây nó ở `/opt/hal/.uv-cache` nên mỗi lần update
+> đều copy nó — đo được 2.5 GB, cạnh `.venv` 2.3 GB — sang staging trước khi sync:
+> ~4.8 GB chép qua eMMC trước khi làm việc thật, HAL chết vài phút, và cache bị
+> nhân bản mỗi lần update. Giờ không copy thư mục nào; cache in-tree được migrate
+> một lần. Đo trên lamp: **5-6 phút → 41 giây**, và `/opt/hal` từ ~4.8 GB còn
+> 98 MB (venv hardlink vào cache dùng chung).
+
+> **Cửa sổ publish an toàn trước gián đoạn.** Giữa lúc "dời cây đang chạy đi" và
+> "đổi tên cây staging vào chỗ", component không tồn tại trên đĩa. Một `trap` ghi
+> lại lần dời đang treo và trả cây về nếu tiến trình thoát trước — SSH đứt (HUP),
+> `systemctl restart bootstrap` giết cả cgroup (TERM), hay bất kỳ nhánh lỗi nào.
+> SIGKILL và mất điện thì không trap được; những ca đó rơi vào đường cài lại
+> (cây bị thiếu sẽ được cài mới).
 
 ```bash
 "hal")
-    echo "Updating HAL to $VERSION..."
+    # Giữ nguyên toàn bộ runtime và trạng thái service trước đó.
+    systemctl stop hal
+    mv /opt/hal /root/bootstrap/rollback/hal.previous
 
-    # Tải
-    curl -fsSL "$URL" -o /tmp/hal-update.zip
+    # Build candidate ở thư mục kề. .env, venv và uv cache được copy từ
+    # runtime đã giữ trước khi chạy uv sync.
+    unzip -q "$ZIP" -d /opt/.hal.new
+    cp -a /root/bootstrap/rollback/hal.previous/{.env,.venv,.uv-cache} /opt/.hal.new/
+    (cd /opt/.hal.new && uv sync --python 3.12 --extra hardware)
+    mv /opt/.hal.new /opt/hal
 
-    # Dừng service trước khi cập nhật
-    systemctl stop hal.service
-
-    # Backup
-    cp -r /opt/hal /opt/hal.bak 2>/dev/null || true
-
-    # Giải nén (giữ venv nếu chỉ thay đổi code, hoặc rebuild)
-    unzip -o /tmp/hal-update.zip -d /opt/hal/
-
-    # Cài lại dependencies nếu requirements.txt thay đổi
-    /opt/hal/venv/bin/pip install -r /opt/hal/requirements.txt --quiet
-
-    # Khởi động lại
-    systemctl start hal.service
-
-    # Dọn dẹp
-    rm -f /tmp/hal-update.zip
-    rm -rf /opt/hal.bak
-
-    echo "HAL updated to $VERSION"
+    systemctl restart hal
+    curl -fsS http://127.0.0.1:5001/health
+    # Lỗi staging hoặc health sẽ khôi phục hal.previous và trạng thái cũ.
+    # Operator cũng có thể chạy: software-update rollback hal
     ;;
 ```
+
+### Xử lý Codex
+
+Codex CLI là binary musl tĩnh publish trên GitHub releases, nên khác mọi thành
+phần khác: không có artifact nào của mình nằm trên GCS. Metadata chỉ chứa
+`codex.version` (không `url`/`sha256`), URL release được ghép từ chính version
+đó. Metadata lưu **semver trần** (`0.149.1`) vì đó là thứ `codex --version` in
+ra; tiền tố tag upstream (`rust-v`) được ghép lại lúc tải. Giữ đoạn tải này
+đồng bộ với `runtimes/codex/install.sh` và `scripts/imager/build-orangepi.sh`.
+
+```bash
+"codex")
+    curl -fsSL https://github.com/openai/codex/releases/download/rust-v${VERSION}/codex-aarch64-unknown-linux-musl.tar.gz
+    tar -xzf …            # bước giải nén CHÍNH LÀ kiểm tra toàn vẹn (artifact upstream không có sha256)
+    install -D -m 0755 /usr/local/bin/codex /root/bootstrap/rollback/codex.previous
+    install -m 0755 …     /usr/local/bin/codex
+    codex --version       # abort nếu binary mới không chạy được
+    # codex.service chỉ tồn tại sau khi đã switch runtime sang codex; mọi image
+    # lamp/intern-v2 đều bake sẵn BINARY bất kể runtime, nên restart là có điều
+    # kiện. Operator có thể rollback: software-update rollback codex
+    systemctl restart codex
+    ;;
+```
+
+Publish version bằng `make upload-codex <semver-trần>`, thả cho fleet bằng
+`make promote-codex`.
+
+Chỉ binary bị đụng: `config.toml`, `.env` và persona vẫn do presync hook sở hữu,
+nên update không thể ghi đè cấu hình Codex của thiết bị.
+
+### Xử lý Claude Code
+
+Khác Codex, Claude Code **không** phải binary mình tự đặt: installer của
+Anthropic sở hữu `/root/.local/share/claude/versions/<ver>` và trỏ
+`/root/.local/bin/claude` vào đó, còn `/usr/local/bin/claude` chỉ là symlink của
+mình. Nên update = chạy lại installer với version đã publish (installer nhận
+version qua tham số vị trí: `install.sh [stable|latest|VERSION]`).
+
+```bash
+"claudecode")
+    HOME=/root curl -fsSL https://claude.ai/install.sh | bash -s -- "$VERSION"
+    ln -sf /root/.local/bin/claude /usr/local/bin/claude   # installer có thể trỏ lại symlink của nó
+    claude --version                                       # abort nếu không chạy được
+    systemctl restart claudecode                           # có điều kiện: unit chỉ tồn tại khi runtime đang active
+    ;;
+```
+
+Cố ý **không có backup `.previous` / rollback target**: installer vẫn giữ thư mục
+`versions/<ver>` cũ, nên muốn lùi thì publish version cũ rồi chạy
+`software-update claudecode`, chứ không phải khôi phục file mình lưu. Publish
+bằng `make upload-claudecode <semver-trần>`, thả bằng `make promote-claudecode`.
+
+### Xử lý OpenCode
+
+OpenCode dùng installer chính chủ (arch detection + giải nén là việc của
+upstream); mình chỉ pin version và ép thư mục cài. Khớp với
+`runtimes/opencode/install.sh` và bake trong imager — giữ cả ba đồng bộ.
+
+```bash
+"opencode")
+    install -D -m 0755 /usr/local/bin/opencode /root/bootstrap/rollback/opencode.previous
+    curl -fsSL https://opencode.ai/install | OPENCODE_INSTALL_DIR=/usr/local/bin bash -s -- --version "$VERSION"
+    # …rồi bước copy dự phòng y như install.sh, phòng khi installer bỏ qua
+    # OPENCODE_INSTALL_DIR và dùng ~/.opencode/bin.
+    opencode --version
+    systemctl restart opencode      # có điều kiện: unit chỉ tồn tại khi runtime đang active
+    ;;
+```
+
+`OPENCODE_INSTALL_DIR` PHẢI đứng trước `bash`, không phải `curl` — trong pipeline
+`VAR=x curl … | bash` biến chỉ bind vào `curl`. Vì đây đúng là binary ở đường dẫn
+cố định nên nó CÓ backup `.previous`: `software-update rollback opencode` chạy
+được, khác claudecode. Publish bằng `make upload-opencode <semver-trần>`, thả
+bằng `make promote-opencode`.
+
+### Xử lý Hermes (chỉ SSH — KHÔNG pin được nên không bao giờ auto-apply)
+
+Hermes cài kiểu git; `runtimes/hermes/install.sh` ghi
+`/usr/local/lib/hermes-agent/.install_method=git` chính là để updater upstream
+nhận ra. Updater đó **không nhận version đích** — `hermes update` luôn nhảy lên
+HEAD của upstream. Nên `hermes.version` publish ra chỉ quyết định *khi nào* fleet
+update (qua `min_version`), không quyết định *bản nào*.
+
+```bash
+"hermes")
+    hermes update                       # upstream không có tham số version
+    hermes --version                    # abort nếu không chạy được
+    # Version thực tế != version metadata → CẢNH BÁO, không fail: trên thiết bị
+    # không có gì pin được nó.
+    systemctl restart hermes-gateway    # unit là hermes-gateway.service, không phải hermes.service
+    ;;
+```
+
+Tên unit lấy đúng theo khai báo trong `/usr/local/lib/os-runtimes/hermes/service`
+(`hermes-gateway`), và lần chạy báo về version Hermes THỰC SỰ đạt được, không
+phải version yêu cầu. Không có backup `.previous`: giống claudecode, bản cài do
+tool upstream sở hữu chứ không phải file mình copy.
+
+### Xử lý PicoClaw (ca cá biệt về version)
+
+PicoClaw là binary trần từ GitHub releases của CHÍNH MÌNH (không tarball, khác
+codex). `version` publish ra là **TAG** release (`v0.3.1-fixvision`), không phải
+semver: `picoclaw version` in ra một chuỗi build không liên quan
+(`nightly-44-g1959045c-dirty`), nên không thể suy ngược tag từ binary. Vì vậy
+bản update ghi tag đã cài vào
+`/usr/local/lib/os-runtimes/picoclaw/installed-version` — mọi chỗ kiểm version
+phải đọc stamp này, không phải `picoclaw version`.
+
+```bash
+"picoclaw")
+    curl -fsSL https://github.com/autonomous-ai/picoclaw/releases/download/${VERSION}/picoclaw-linux-arm64
+    picoclaw --no-color version         # chạy TỪ THƯ MỤC TẠM trước: cổng kiểm tra toàn vẹn duy nhất
+    install -D -m 0755 /usr/local/bin/picoclaw /root/bootstrap/rollback/picoclaw.previous
+    install -m 0755 …                   /usr/local/bin/picoclaw
+    echo "$VERSION" > /usr/local/lib/os-runtimes/picoclaw/installed-version
+    systemctl restart picoclaw          # có điều kiện: unit chỉ tồn tại khi runtime đang active
+    ;;
+```
+
+`make upload-picoclaw <release-tag>` kiểm tra tag có thật asset
+`picoclaw-linux-arm64` trước khi publish — gõ sai tag nếu không sẽ chỉ lộ ra
+dưới dạng OTA fail trên mọi thiết bị đang poll. Rollback dùng được
+(`software-update rollback picoclaw`).
 
 ---
 
@@ -610,6 +918,12 @@ echo "HAL $NEW_VERSION published."
 | `scripts/release/upload-setup.sh` | Script setup | Upload lên GCS |
 | `scripts/release/upload-setup-ap.sh` | Script setup AP | Upload lên GCS |
 | `scripts/release/upload-skills.sh` | OpenClaw skill files | Upload lên GCS |
+| `scripts/release/upload-openclaw.sh` | Version OpenClaw npm | Chỉ metadata (device chạy `npm install -g`) |
+| `scripts/release/upload-codex.sh` | Version Codex CLI | Chỉ metadata (device tải tarball GitHub release) |
+| `scripts/release/upload-claudecode.sh` | Version Claude Code CLI | Chỉ metadata (device chạy installer Anthropic) |
+| `scripts/release/upload-opencode.sh` | Version OpenCode CLI | Chỉ metadata (device chạy installer opencode.ai) |
+| `scripts/release/upload-picoclaw.sh` | TAG release PicoClaw | Chỉ metadata (device tải asset GitHub); kiểm tra tag có thật |
+| `scripts/release/upload-hermes.sh` | Version Hermes (chỉ SSH, không pin được) | Chỉ metadata (device chạy `hermes update`) |
 | `scripts/provision/install.sh` | CDN install shortcut | `curl ... \| sudo bash` trên Pi |
 | `scripts/release/tag-release.sh` | Git release tag kèm OTA metadata snapshot | Fetch metadata.json → annotated tag → `git push origin <tag>` |
 

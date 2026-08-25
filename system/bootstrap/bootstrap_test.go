@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"go.autonomous.ai/os/system/bootstrap/config"
 	"go.autonomous.ai/os/system/bootstrap/state"
@@ -100,6 +101,43 @@ func TestCompareVersions(t *testing.T) {
 	}
 }
 
+func TestForceTargetAllowedIncludesBootstrap(t *testing.T) {
+	if !forceTargetAllowed[domain.OTAKeyBootstrap] {
+		t.Fatal("bootstrap must be a force-update target so the debug Versions card can trigger its self-update")
+	}
+}
+
+func TestOTAErrorLEDSchedulesRestore(t *testing.T) {
+	devicesDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(devicesDir, "no-light"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(devicesDir, "no-light", "ROBOT.md"), []byte("---\ncapabilities:\n  audio: {}\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DEVICES_DIR", devicesDir)
+	t.Setenv("DEVICE_TYPE", "no-light")
+
+	original := scheduleOTAErrorRestore
+	defer func() { scheduleOTAErrorRestore = original }()
+	var gotDelay time.Duration
+	var gotRestore func()
+	scheduleOTAErrorRestore = func(delay time.Duration, restore func()) {
+		gotDelay = delay
+		gotRestore = restore
+	}
+
+	(&Bootstrap{}).showOTAErrorLED()
+
+	if gotDelay != otaErrorLEDDisplayDuration {
+		t.Fatalf("error LED restore delay = %v, want %v", gotDelay, otaErrorLEDDisplayDuration)
+	}
+	if gotRestore == nil {
+		t.Fatal("error LED did not schedule a restore")
+	}
+	gotRestore()
+}
+
 // A component the device does not have must not read as "out of date". Before
 // this gate, an absent artifact made detectVersion return "" — which sorts below
 // every min_version floor — so the worker announced an update over the speaker,
@@ -167,5 +205,68 @@ func TestComponentInstalled(t *testing.T) {
 	t.Setenv("DEVICE_TYPE", "")
 	if b.componentInstalled(domain.OTAKeyDevice) {
 		t.Error("device profile reported installed with an unresolved device type")
+	}
+}
+
+func TestCLISemver(t *testing.T) {
+	cases := map[string]string{
+		"OpenClaw 2026.3.8 (3caab92)":  "2026.3.8",
+		"codex-cli 0.142.5":            "0.142.5",
+		"2.1.218 (Claude Code)":        "2.1.218",
+		"1.18.4":                       "1.18.4",
+		"0.5.2\nextra line 9.9.9":      "0.5.2",
+		"nightly-44-g1959045c-dirty":   "",
+		"picoclaw nightly-44-g1959045": "",
+	}
+	for raw, want := range cases {
+		if got := cliSemver(raw); got != want {
+			t.Errorf("cliSemver(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+func TestComponentInstalledAgentCLIsFollowRuntime(t *testing.T) {
+	// The agent CLIs are gated on the configured runtime, not on the binary
+	// being present — every lamp/intern-v2 image bakes all of them. With no
+	// resolvable config (this test host), every CLI must report NOT installed so
+	// the worker never pushes a runtime the device does not run.
+	if _, err := os.Stat("/root/config/config.json"); err == nil {
+		t.Skip("host has a real /root/config/config.json; runtime gate not isolatable")
+	}
+	b := &Bootstrap{}
+	for _, key := range []string{domain.OTAKeyCodex, domain.OTAKeyClaudeCode, domain.OTAKeyOpenCode, domain.OTAKeyPicoClaw} {
+		if b.componentInstalled(key) {
+			t.Errorf("%s reported installed with an unresolvable agent_runtime", key)
+		}
+	}
+}
+
+func TestUpdaterSupports(t *testing.T) {
+	dir := t.TempDir()
+	script := `#!/bin/bash
+# Usage: software-update <os-server|codex|picoclaw>   <- usage text alone must NOT count
+if [ "$APP" = "os-server" ]; then
+  :
+elif [ "$APP" = "codex" ]; then
+  :
+fi
+`
+	if err := os.WriteFile(filepath.Join(dir, "software-update"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+
+	if !updaterSupports(domain.OTAKeyCodex) {
+		t.Error("codex branch present but reported unsupported")
+	}
+	// picoclaw appears in the usage line only — a loose substring search would
+	// wrongly report support for an updater that cannot apply it.
+	if updaterSupports(domain.OTAKeyPicoClaw) {
+		t.Error("picoclaw reported supported from its usage-string mention alone")
+	}
+	// An updater that is not on PATH at all must report no support, not panic.
+	t.Setenv("PATH", t.TempDir())
+	if updaterSupports(domain.OTAKeyCodex) {
+		t.Error("missing software-update reported as supporting codex")
 	}
 }

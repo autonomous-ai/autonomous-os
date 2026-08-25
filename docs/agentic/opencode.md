@@ -87,7 +87,11 @@ sufficient — a direct `bash install.sh` fully configures AND starts the backen
    the binary in its default `~/.opencode/bin` on the test device — so a
    belt-and-suspenders step copies whatever the installer produced into
    `/usr/local/bin/opencode` (the path the unit + `verify` hook use).
-   `OPENCODE_VERSION` is pinned (currently `1.18.4`);
+   `OPENCODE_VERSION` is pinned (currently `1.18.4`) — the baseline for a
+   freshly flashed image only: devices in the field update via
+   `make upload-opencode <bare-semver>` + `make promote-opencode`, which the
+   bootstrap worker applies as `software-update opencode`
+   (`docs/bootstrap-ota.md` §5);
 3. runs the presync hook once (`/usr/local/bin/runtime-opencode-presync`,
    materialized by os-server BEFORE the installer — §1.2);
 4. writes + enables **`opencode.service`** (`ExecStart=/usr/local/bin/os-server
@@ -165,6 +169,12 @@ target that XDG path: `presync.sh` §1 (openclaw migration), `skill_watcher.go`
 (CDN download + the skill-change notify), and `pruneUnsupportedSkills`
 (capability gate). Factory reset wipes `~/.config/opencode`, so the set is
 re-migrated from openclaw on the next `EnsureOnboarding`.
+`EnsureOnboarding` also refreshes every supported skill from the CDN on boot or
+config reconciliation, self-healing a local skill that was stale before the watcher
+started. It sends the skill-change notification after a possible gateway restart.
+The watcher logs each successful metadata poll as `skill watcher: checked`; a ZIP
+download or extraction failure leaves that skill's version pending for retry on the
+next poll.
 
 ## 2. Transport & sending a turn
 

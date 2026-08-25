@@ -375,9 +375,17 @@ STATUS_LED_PRESETS = {
 # color's PEAK up to the light.max_brightness ceiling (lamp: 120), so dimming
 # has to happen here. Purple identifies the sleep tier; blink vs solid separates
 # shutdown from factory-reset, so those two share a color on purpose.
-LED_SLEEP_WARN = (8, 5, 16)  # sleepy purple (blinking) — hold 2-5s
-LED_SHUTDOWN_WARN = (16, 0, 0)  # red (blinking) — hold 5-10s
-LED_FACTORY_RESET = (16, 0, 0)  # red (solid) — hold 10s+
+#
+# A dict rather than three module constants so devices can restyle these through
+# presets.json like every other LED table. The overlay merges tables IN PLACE
+# (board/presets_overlay.py), which only reaches readers that go through the
+# dict at call time — `from hal.presets import LED_SLEEP_WARN` would bind the
+# value at import and silently ignore the override.
+BUTTON_LED_PRESETS = {
+    "sleep_warn": {"color": [8, 5, 16]},  # sleepy purple (blinking) — hold 2-5s
+    "shutdown_warn": {"color": [16, 0, 0]},  # red (blinking) — hold 5-10s
+    "factory_reset": {"color": [16, 0, 0]},  # red (solid) — hold 10s+
+}
 
 # Backend-error flash (app_state._flash_backend_error) — one notification_flash
 # when an agent API call fails. Amber-yellow, deliberately a different hue from

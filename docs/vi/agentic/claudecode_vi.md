@@ -47,6 +47,14 @@ resolve backend trong `system/agent/factory.go`. Switch vào/ra đi qua flow
    (`curl -fsSL https://claude.ai/install.sh | bash` → `~/.local/bin/claude`,
    binary standalone, linux arm64/amd64, không cần Node.js), symlink sang
    `/usr/local/bin/claude`;
+
+   > **Update ngoài thực địa** không chạy lại đường cài này từ đầu: publish bằng
+   > `make upload-claudecode <semver-trần>` + `make promote-claudecode`, bootstrap
+   > worker sẽ chạy `software-update claudecode` (chạy lại installer đúng version
+   > đó, trỏ lại symlink, restart `claudecode.service`) trên máy có
+   > `agent_runtime` là `claudecode`. Không có backup rollback — installer vẫn giữ
+   > `~/.local/share/claude/versions/<ver>`, nên muốn lùi thì publish bản cũ. Xem
+   > `docs/vi/bootstrap-ota.md` §5.
 3. **không bun, không channel plugin** — telegram + discord do device sở hữu
    (os-server tự chạy các receive loop, §7), nên bước plugin marketplace bỏ
    hẳn;
@@ -411,11 +419,13 @@ folder một phiên riêng.
   đặc thù runtime và không bao giờ được mang theo.
 - **Không có HEARTBEAT.md** — Claude Code không có heartbeat loop nào sẽ đọc
   nó; một quyết định bỏ có ý thức, không phải bỏ sót.
-- **Skills** nằm trong `workspace/.claude/skills/` (native, tự-discover). Được
-  capability-prune lúc onboarding; **restore từ CDN khi rỗng**
-  (`ensureSkills` — bao case factory reset); cập nhật steady-state qua
-  `skill_watcher.go` (poll metadata OTA 5 phút, notify qua
-  `SendSystemChatMessage`).
+- **Skills** nằm trong `/root/.claude/skills/` (native, tự-discover). Mỗi lần
+  onboarding đều áp dụng capability gate và đồng bộ toàn bộ catalog được hỗ trợ
+  từ CDN, sửa cả file local cũ khi watcher khởi động sau một lần OTA publish.
+  `skill_watcher.go` tiếp tục poll metadata OTA mỗi năm phút để bắt các bản
+  publish sau đó. Khi nội dung thật sự đổi, bridge được restart rồi agent được
+  thông báo qua `SendSystemChatMessage` để đọc lại skill. Download hoặc extract
+  ZIP lỗi giữ version ở trạng thái chờ cho poll tiếp theo.
 - **MCP là thật** (`mcp.go`): `WriteMCPEntry`/`RemoveMCPEntry` upsert
   `mcpServers` trong `workspace/.mcp.json` (entry canonical `{command,args,env}` /
   `{type,url,headers}` pass through nguyên văn) + restart bridge;

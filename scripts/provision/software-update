@@ -1,0 +1,808 @@
+#!/bin/bash
+set -e
+# Metadata URL comes from the bootstrap worker config (single source of truth,
+# baked at image build). An explicit OTA_METADATA_URL env var still overrides it
+# for manual/debug runs. No compiled-in default — abort if neither is set.
+BOOTSTRAP_JSON="/root/config/bootstrap.json"
+ROLLBACK_DIR="/root/bootstrap/rollback"
+WEB_ROOT="/usr/share/nginx/html/setup"
+HAL_DIR="/opt/hal"
+
+# Web is a directory install, so retain the complete prior bundle and whether
+# nginx was running. The backup is only replaced after the new ZIP has been
+# downloaded and unpacked into a sibling staging directory.
+save_web_service_state() {
+  mkdir -p "$ROLLBACK_DIR"
+  if systemctl is-active --quiet nginx; then
+    echo active >"$ROLLBACK_DIR/web.nginx-state"
+  else
+    echo inactive >"$ROLLBACK_DIR/web.nginx-state"
+  fi
+}
+
+# Was this unit supposed to be running once the update finishes?
+#
+# The recorded snapshot alone is not enough: it is taken at the START of a run,
+# so a run that begins while a PREVIOUS failed update left the unit down records
+# "inactive" — and every later update then faithfully restores "down". That is
+# how a successful web update finished with nginx stopped (and check_web
+# short-circuited past its HTTP probe, reporting success while the UI was dead),
+# and how HAL stayed stopped after its runtime was rebuilt. A unit systemd still
+# has enabled is meant to run, so treat enabled as "yes" regardless of the
+# snapshot. A unit deliberately disabled stays down.
+unit_wanted_active() {
+  local unit="$1" state_file="$2"
+  [ "$(cat "$state_file" 2>/dev/null || echo active)" = active ] && return 0
+  if systemctl is-enabled --quiet "$unit" 2>/dev/null; then
+    echo "[software-update] $unit was recorded inactive but is enabled — starting it (a failed earlier run can poison that snapshot)"
+    return 0
+  fi
+  return 1
+}
+
+web_was_active() {
+  unit_wanted_active nginx "$ROLLBACK_DIR/web.nginx-state"
+}
+
+restore_web_service_state() {
+  if web_was_active; then
+    systemctl restart nginx
+  else
+    systemctl stop nginx 2>/dev/null || true
+  fi
+}
+
+wait_for_web() {
+  local attempt=1
+  while [ "$attempt" -le 30 ]; do
+    curl -fsS --max-time 5 http://127.0.0.1/ >/dev/null 2>&1 && return 0
+    sleep 1
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
+check_web() {
+  [ -f "$WEB_ROOT/index.html" ] || return 1
+  nginx -t >/dev/null || return 1
+  # Gate the probe on what nginx IS doing, not on what the snapshot predicted:
+  # the old form skipped the HTTP check entirely whenever the snapshot said
+  # "inactive", so a 403-serving web root passed as healthy.
+  systemctl is-active --quiet nginx || return 0
+  wait_for_web
+}
+
+restore_web_backup() {
+  local backup="$ROLLBACK_DIR/web.previous" failed="$ROLLBACK_DIR/web.failed"
+  [ -d "$backup" ] || { echo "No rollback backup for web" >&2; return 1; }
+  rm -rf "$failed"
+  [ ! -e "$WEB_ROOT" ] || mv "$WEB_ROOT" "$failed"
+  mv "$backup" "$WEB_ROOT"
+}
+
+resolve_device_profile() {
+  DEVICE_TYPE="$(grep -E '^DEVICE_TYPE=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
+  [ -z "$DEVICE_TYPE" ] && DEVICE_TYPE="$(jq -r '.device_type // empty' /root/config/config.json 2>/dev/null)"
+  [ -n "$DEVICE_TYPE" ] || { echo "ERROR: device_type not found in /opt/hal/.env or /root/config/config.json" >&2; return 1; }
+  DEVICES_DIR="$(grep -E '^DEVICES_DIR=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
+  [ -n "$DEVICES_DIR" ] || DEVICES_DIR=/opt/devices
+  DEVICE_DEST="$DEVICES_DIR/$DEVICE_TYPE"
+}
+
+save_device_service_state() {
+  mkdir -p "$ROLLBACK_DIR"
+  for unit in os-server hal; do
+    if systemctl is-active --quiet "$unit"; then
+      echo "$unit=active"
+    else
+      echo "$unit=inactive"
+    fi
+  done >"$ROLLBACK_DIR/device.services"
+}
+
+device_was_active() {
+  local unit="$1"
+  grep -qx "$unit=active" "$ROLLBACK_DIR/device.services" 2>/dev/null && return 0
+  [ ! -f "$ROLLBACK_DIR/device.services" ] && return 0
+  # Same poisoned-snapshot reasoning as unit_wanted_active above.
+  if systemctl is-enabled --quiet "$unit" 2>/dev/null; then
+    echo "[software-update] $unit was recorded inactive but is enabled — starting it"
+    return 0
+  fi
+  return 1
+}
+
+restore_device_service_state() {
+  if device_was_active os-server; then systemctl restart os-server; else systemctl stop os-server 2>/dev/null || true; fi
+  if device_was_active hal; then systemctl restart hal; else systemctl stop hal 2>/dev/null || true; fi
+}
+
+wait_for_url() {
+  local url="$1" max_attempts="$2" attempt=1
+  while [ "$attempt" -le "$max_attempts" ]; do
+    curl -fsS --max-time 5 "$url" >/dev/null 2>&1 && return 0
+    sleep 1
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
+check_device_profile() {
+  [ -f "$DEVICE_DEST/ROBOT.md" ] || return 1
+  ! device_was_active hal || { systemctl is-active --quiet hal && wait_for_url http://127.0.0.1:5001/health 120; }
+  ! device_was_active os-server || { systemctl is-active --quiet os-server && wait_for_url http://127.0.0.1:5000/api/health/live 60; }
+}
+
+snapshot_device_rootfs() {
+  # Save every file the old or staged profile can overlay, including an explicit
+  # absent marker so rollback removes files introduced only by the failed OTA.
+  local old_rootfs="$1" new_rootfs="$2" archive="$ROLLBACK_DIR/device.previous.rootfs"
+  local list rel target state
+  list=$(mktemp)
+  rm -rf "$archive"
+  mkdir -p "$archive/files"
+  { [ -d "$old_rootfs" ] && (cd "$old_rootfs" && find . \( -type f -o -type l \) -print); [ -d "$new_rootfs" ] && (cd "$new_rootfs" && find . \( -type f -o -type l \) -print); } | sort -u >"$list"
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    target="/${rel#./}"
+    if [ -e "$target" ] || [ -L "$target" ]; then
+      state=present
+      mkdir -p "$archive/files/$(dirname "${rel#./}")"
+      cp -a "$target" "$archive/files/${rel#./}"
+    else
+      state=absent
+    fi
+    printf '%s\t%s\n' "$rel" "$state" >>"$archive/manifest"
+  done <"$list"
+  rm -f "$list"
+}
+
+restore_device_rootfs() {
+  local archive="$ROLLBACK_DIR/device.previous.rootfs" rel state target
+  [ -f "$archive/manifest" ] || return 0
+  while IFS=$'\t' read -r rel state; do
+    target="/${rel#./}"
+    if [ "$state" = present ]; then
+      mkdir -p "$(dirname "$target")"
+      cp -a "$archive/files/${rel#./}" "$target"
+    else
+      rm -f "$target"
+    fi
+  done <"$archive/manifest"
+}
+
+restore_device_backup() {
+  local backup="$ROLLBACK_DIR/device.previous" failed="$ROLLBACK_DIR/device.failed"
+  [ -d "$backup" ] || { echo "No rollback backup for device" >&2; return 1; }
+  rm -rf "$failed"
+  [ ! -e "$DEVICE_DEST" ] || mv "$DEVICE_DEST" "$failed"
+  mv "$backup" "$DEVICE_DEST"
+  restore_device_rootfs
+}
+
+save_hal_service_state() {
+  mkdir -p "$ROLLBACK_DIR"
+  if systemctl is-active --quiet hal; then echo active >"$ROLLBACK_DIR/hal.service-state"; else echo inactive >"$ROLLBACK_DIR/hal.service-state"; fi
+}
+
+hal_was_active() {
+  unit_wanted_active hal "$ROLLBACK_DIR/hal.service-state"
+}
+
+restore_hal_service_state() {
+  if hal_was_active; then systemctl restart hal; else systemctl stop hal 2>/dev/null || true; fi
+}
+
+check_hal() {
+  [ -f "$HAL_DIR/VERSION_HAL" ] || return 1
+  # Same as check_web: probe what HAL is actually doing. The old form passed
+  # silently whenever the snapshot said the unit should be down — including the
+  # case where a broken venv made it impossible to start at all.
+  systemctl is-active --quiet hal || return 0
+  wait_for_url http://127.0.0.1:5001/health 120
+}
+
+# A staging directory built with `mktemp -d` is mode 700 by design. Three
+# branches (web, hal, device) `mv` such a directory INTO PLACE, which silently
+# changes the installed tree's permissions — and the web root is read by nginx as
+# www-data, so a 700 root-owned /usr/share/nginx/html/setup answers 403 to every
+# request. The health check then fails and the update rolls itself back: an OTA
+# that can never succeed, for a reason nothing in the log names. Publish the
+# staged tree with the mode the live one had (default 0755).
+publish_mode() {
+  local staged="$1" reference="$2"
+  # Copy the live tree's mode only when it is at least world-readable+executable.
+  # Inheriting blindly propagates a bad mode forever: a tree published once by
+  # the old 0700 path hands 0700 to its successor, and to the one after that.
+  # 0755 is what the imager installs, so it is the floor.
+  local ref_mode=""
+  [ ! -d "$reference" ] || ref_mode="$(stat -c "%a" "$reference" 2>/dev/null || true)"
+  case "$ref_mode" in
+    755|775|777|745|750) chmod "$ref_mode" "$staged" ;;
+    *) chmod 0755 "$staged" ;;
+  esac
+}
+
+# A uv/virtualenv is NOT relocatable: every console script in .venv/bin carries
+# an absolute shebang. Building the venv inside the staging directory and moving
+# it leaves `#!/opt/.hal.new.XXXXXX/.venv/bin/python`, so systemd fails the unit
+# with 203/EXEC once the staging path is gone. Normally invisible because the
+# previous .venv is copied in and its shebangs already point at $HAL_DIR — it
+# only bites on a fresh install, which is exactly the recovery path. Rewrite the
+# staged path to the final one after the move; a no-op when nothing refers to it.
+relocate_venv_scripts() {
+  local venv="$1" from="$2" to="$3"
+  [ -d "$venv/bin" ] || return 0
+  grep -rlI --binary-files=without-match -- "$from" "$venv/bin" 2>/dev/null \
+    | xargs -r sed -i "s|$from|$to|g"
+  [ ! -f "$venv/pyvenv.cfg" ] || sed -i "s|$from|$to|g" "$venv/pyvenv.cfg"
+}
+
+# Crash safety for the publish window.
+#
+# Every branch publishes by moving the live tree aside and renaming a staged one
+# into its place. Between those two renames the component simply does not exist
+# on disk — and if the process dies there (a `systemctl restart bootstrap` kills
+# the whole cgroup, an SSH hangup, a power cut), nothing restores it: that is how
+# a device was left with no /opt/hal at all. Record the pending move, and put the
+# tree back if we exit before publishing.
+#
+# SIGKILL and power loss cannot be trapped; recovery for those is the reinstall
+# path (a missing tree is treated as "install fresh", see the HAL branch).
+PENDING_MOVED_FROM=""
+PENDING_MOVED_TO=""
+PENDING_RESTORE_SERVICES=""
+
+mark_publish_pending() {
+  PENDING_MOVED_FROM="$1"   # where the live tree used to be
+  PENDING_MOVED_TO="$2"     # where it was moved to
+  PENDING_RESTORE_SERVICES="${3:-}"  # optional function that brings services back
+}
+
+clear_publish_pending() {
+  PENDING_MOVED_FROM=""
+  PENDING_MOVED_TO=""
+  PENDING_RESTORE_SERVICES=""
+}
+
+on_exit() {
+  local code=$?
+  if [ -n "$PENDING_MOVED_FROM" ] && [ ! -e "$PENDING_MOVED_FROM" ] && [ -d "$PENDING_MOVED_TO" ]; then
+    echo "[software-update] interrupted mid-publish — putting $PENDING_MOVED_FROM back" >&2
+    mv "$PENDING_MOVED_TO" "$PENDING_MOVED_FROM" 2>/dev/null || true
+    [ -z "$PENDING_RESTORE_SERVICES" ] || "$PENDING_RESTORE_SERVICES" || true
+  fi
+  rm -f "$METADATA_TMP" "$METADATA_PAYLOAD" "$ZIP_TMP" 2>/dev/null || true
+  [ -z "$DIR_TMP" ] || rm -rf "$DIR_TMP"
+  exit "$code"
+}
+
+restore_hal_backup() {
+  local backup="$ROLLBACK_DIR/hal.previous" failed="$ROLLBACK_DIR/hal.failed"
+  [ -d "$backup" ] || { echo "No rollback backup for hal" >&2; return 1; }
+  rm -rf "$failed"
+  [ ! -e "$HAL_DIR" ] || mv "$HAL_DIR" "$failed"
+  mv "$backup" "$HAL_DIR"
+}
+
+[ "$(id -u)" -ne 0 ] && { echo "Run as root."; exit 1; }
+# One update at a time, whoever asks. Two concurrent runs destroy each other:
+# the component branches move the installed tree to <name>.previous, so a second
+# run `rm -rf`s the first run's ONLY backup and then fails on the missing source
+# — which is exactly how a device ended up with no /opt/hal, no staging dir and
+# no hal.previous (two clicks on the web update button, 30s apart, sailed past
+# the per-target rate limit). The lock is released when the process exits, so a
+# killed run cannot wedge it.
+exec 9>/var/lock/software-update.lock
+if ! flock -n 9; then
+  echo "[software-update] another update is already running (pid $(cat /var/lock/software-update.pid 2>/dev/null)) — refusing to run a second one"
+  exit 1
+fi
+echo $$ >/var/lock/software-update.pid
+[ $# -lt 1 ] && { echo "Usage: software-update <component>|rollback <os-server|bootstrap|web|device|hal|codex|opencode|picoclaw>"; exit 1; }
+APP="$1"
+if [ "$APP" = "rollback" ]; then
+  [ $# -eq 2 ] || { echo "Usage: software-update rollback <os-server|bootstrap|web|device|hal|codex|opencode|picoclaw>"; exit 1; }
+  ROLLBACK_TARGET="$2"
+  if [ "$ROLLBACK_TARGET" = "web" ]; then
+    BACKUP="$ROLLBACK_DIR/web.previous"
+    [ -d "$BACKUP" ] || { echo "No rollback backup for web"; exit 1; }
+    BLOCKED_VERSION="$(cat "$WEB_ROOT/VERSION" 2>/dev/null || true)"
+    if [ -z "$BLOCKED_VERSION" ] && [ -f /root/bootstrap/state.json ]; then
+      BLOCKED_VERSION=$(jq -r '.components.web // empty' /root/bootstrap/state.json 2>/dev/null || true)
+    fi
+    if [ -n "$BLOCKED_VERSION" ] && [ -f "$BOOTSTRAP_JSON" ]; then
+      CONFIG_TMP=$(mktemp)
+      if jq --arg version "$BLOCKED_VERSION" '.rollback_versions = (.rollback_versions // {}) | .rollback_versions.web = $version' "$BOOTSTRAP_JSON" >"$CONFIG_TMP"; then
+        mv "$CONFIG_TMP" "$BOOTSTRAP_JSON"
+      else
+        rm -f "$CONFIG_TMP"
+        echo "WARN: could not record rollback version; lower min_version before the next OTA poll"
+      fi
+    fi
+    systemctl stop nginx 2>/dev/null || true
+    restore_web_backup
+    restore_web_service_state
+    check_web || { echo "web rollback health check failed"; exit 1; }
+    echo "web restored from $BACKUP"
+    exit 0
+  fi
+  if [ "$ROLLBACK_TARGET" = "device" ]; then
+    resolve_device_profile || exit 1
+    BACKUP="$ROLLBACK_DIR/device.previous"
+    [ -d "$BACKUP" ] || { echo "No rollback backup for device"; exit 1; }
+    BLOCKED_VERSION="$(cat "$DEVICE_DEST/VERSION" 2>/dev/null || true)"
+    if [ -z "$BLOCKED_VERSION" ] && [ -f /root/bootstrap/state.json ]; then
+      BLOCKED_VERSION=$(jq -r '.components.device // empty' /root/bootstrap/state.json 2>/dev/null || true)
+    fi
+    if [ -n "$BLOCKED_VERSION" ] && [ -f "$BOOTSTRAP_JSON" ]; then
+      CONFIG_TMP=$(mktemp)
+      if jq --arg version "$BLOCKED_VERSION" '.rollback_versions = (.rollback_versions // {}) | .rollback_versions.device = $version' "$BOOTSTRAP_JSON" >"$CONFIG_TMP"; then mv "$CONFIG_TMP" "$BOOTSTRAP_JSON"; else rm -f "$CONFIG_TMP"; echo "WARN: could not record rollback version; lower min_version before the next OTA poll"; fi
+    fi
+    systemctl stop os-server 2>/dev/null || true
+    systemctl stop hal 2>/dev/null || true
+    restore_device_backup
+    restore_device_service_state
+    check_device_profile || { echo "device rollback health check failed"; exit 1; }
+    echo "device restored from $BACKUP"
+    exit 0
+  fi
+  if [ "$ROLLBACK_TARGET" = "hal" ]; then
+    BACKUP="$ROLLBACK_DIR/hal.previous"
+    [ -d "$BACKUP" ] || { echo "No rollback backup for hal"; exit 1; }
+    BLOCKED_VERSION="$(cat "$HAL_DIR/VERSION_HAL" 2>/dev/null || true)"
+    if [ -z "$BLOCKED_VERSION" ] && [ -f /root/bootstrap/state.json ]; then BLOCKED_VERSION=$(jq -r '.components.hal // empty' /root/bootstrap/state.json 2>/dev/null || true); fi
+    if [ -n "$BLOCKED_VERSION" ] && [ -f "$BOOTSTRAP_JSON" ]; then
+      CONFIG_TMP=$(mktemp)
+      if jq --arg version "$BLOCKED_VERSION" '.rollback_versions = (.rollback_versions // {}) | .rollback_versions.hal = $version' "$BOOTSTRAP_JSON" >"$CONFIG_TMP"; then mv "$CONFIG_TMP" "$BOOTSTRAP_JSON"; else rm -f "$CONFIG_TMP"; echo "WARN: could not record rollback version; lower min_version before the next OTA poll"; fi
+    fi
+    systemctl stop hal 2>/dev/null || true
+    restore_hal_backup
+    restore_hal_service_state
+    check_hal || { echo "HAL rollback health check failed"; exit 1; }
+    echo "hal restored from $BACKUP"
+    exit 0
+  fi
+  case "$ROLLBACK_TARGET" in
+    os-server) DEST=/usr/local/bin/os-server; UNIT=os-server ;;
+    bootstrap) DEST=/usr/local/bin/bootstrap-server; UNIT=bootstrap ;;
+    codex) DEST=/usr/local/bin/codex; UNIT=codex ;;
+    opencode) DEST=/usr/local/bin/opencode; UNIT=opencode ;;
+    picoclaw) DEST=/usr/local/bin/picoclaw; UNIT=picoclaw ;;
+    *) echo "Rollback is currently supported for os-server, bootstrap, codex, opencode and picoclaw only"; exit 1 ;;
+  esac
+  BACKUP="/root/bootstrap/rollback/${ROLLBACK_TARGET}.previous"
+  [ -x "$BACKUP" ] || { echo "No rollback backup for $ROLLBACK_TARGET"; exit 1; }
+  BLOCKED_VERSION=$("$DEST" --version 2>/dev/null | sed -nE 's/.*([0-9]+\.[0-9]+\.[0-9]+([-.+_][0-9A-Za-z.-]+)?).*/\1/p' | head -1)
+  if [ -z "$BLOCKED_VERSION" ] && [ -f /root/bootstrap/state.json ]; then
+    BLOCKED_VERSION=$(jq -r --arg key "$ROLLBACK_TARGET" '.components[$key] // empty' /root/bootstrap/state.json 2>/dev/null || true)
+  fi
+  if [ -n "$BLOCKED_VERSION" ] && [ -f "$BOOTSTRAP_JSON" ]; then
+    CONFIG_TMP=$(mktemp)
+    if jq --arg key "$ROLLBACK_TARGET" --arg version "$BLOCKED_VERSION" '.rollback_versions = (.rollback_versions // {}) | .rollback_versions[$key] = $version' "$BOOTSTRAP_JSON" >"$CONFIG_TMP"; then
+      mv "$CONFIG_TMP" "$BOOTSTRAP_JSON"
+    else
+      rm -f "$CONFIG_TMP"
+      echo "WARN: could not record rollback version; lower min_version before the next OTA poll"
+    fi
+  fi
+  install -D -m 0755 "$BACKUP" "$DEST"
+  # codex.service / opencode.service / picoclaw.service only exist once the
+  # runtime has been switched to them (the binary is baked on every lamp/intern-v2 image
+  # regardless) — restoring the binary on a device running another runtime must
+  # not fail the rollback.
+  if { [ "$ROLLBACK_TARGET" = "codex" ] || [ "$ROLLBACK_TARGET" = "opencode" ] || [ "$ROLLBACK_TARGET" = "picoclaw" ]; } && [ ! -f "/etc/systemd/system/${UNIT}.service" ]; then
+    echo "[software-update] ${UNIT}.service absent (runtime not active) — binary restored, no restart"
+  else
+    systemctl restart "$UNIT"
+  fi
+  [ "$ROLLBACK_TARGET" != "bootstrap" ] && systemctl restart bootstrap
+  echo "$ROLLBACK_TARGET restored from $BACKUP"
+  exit 0
+fi
+case "$APP" in
+  os-server|openclaw|codex|claudecode|opencode|hermes|picoclaw|bootstrap|web|hal|claude-desktop-buddy|device) ;;
+  *) echo "Unknown app: $APP. Use os-server, openclaw, codex, claudecode, opencode, hermes, picoclaw, bootstrap, web, hal, claude-desktop-buddy, or device."; exit 1 ;;
+esac
+
+if [ -z "${OTA_METADATA_URL:-}" ]; then
+  OTA_METADATA_URL="$(jq -r '.metadata_url // empty' "$BOOTSTRAP_JSON" 2>/dev/null || true)"
+fi
+if [ -z "$OTA_METADATA_URL" ]; then
+  echo "[software-update] ERROR: no metadata_url in $BOOTSTRAP_JSON and OTA_METADATA_URL unset"
+  exit 1
+fi
+echo "[software-update] OTA metadata: $OTA_METADATA_URL"
+
+METADATA_TMP=$(mktemp)
+METADATA_PAYLOAD=$(mktemp)
+ZIP_TMP=""
+DIR_TMP=""
+trap on_exit EXIT
+# INT/TERM/HUP run the same restore: the default action for these would skip the
+# EXIT trap's cleanup in some shells, and HUP is what an interrupted SSH sends.
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+curl -fsSL -H "Cache-Control: no-cache" -H "Pragma: no-cache" -o "$METADATA_TMP" "$OTA_METADATA_URL" || { echo "Failed to fetch metadata from $OTA_METADATA_URL"; exit 1; }
+OTA_SIGNING_PUBLIC_KEY="$(jq -r '.signing_public_key // empty' "$BOOTSTRAP_JSON" 2>/dev/null || true)"
+if [ -n "$OTA_SIGNING_PUBLIC_KEY" ]; then
+  PUBLIC_DER=$(mktemp); SIGNATURE_TMP=$(mktemp)
+  jq -er '(.signed // .) | .format == "autonomous-ota/v1" and .signature.algorithm == "ed25519"' "$METADATA_TMP" >/dev/null || { echo "Unsigned or unsupported OTA metadata"; exit 1; }
+  printf '\060\052\060\005\006\003\053\145\160\003\041\000' > "$PUBLIC_DER"
+  printf '%s' "$OTA_SIGNING_PUBLIC_KEY" | base64 -d >> "$PUBLIC_DER" || { echo "Invalid OTA signing public key"; exit 1; }
+  jq -r '(.signed // .).payload' "$METADATA_TMP" | base64 -d > "$METADATA_PAYLOAD" || { echo "Invalid OTA metadata payload"; exit 1; }
+  jq -r '(.signed // .).signature.value' "$METADATA_TMP" | base64 -d > "$SIGNATURE_TMP" || { echo "Invalid OTA metadata signature"; exit 1; }
+  openssl pkeyutl -verify -pubin -keyform DER -inkey "$PUBLIC_DER" -rawin -in "$METADATA_PAYLOAD" -sigfile "$SIGNATURE_TMP" >/dev/null || { echo "OTA metadata signature verification failed"; exit 1; }
+else
+  echo "[software-update] WARN: OTA signing is not configured; using legacy unsigned metadata"
+  cp "$METADATA_TMP" "$METADATA_PAYLOAD"
+fi
+if [ "$APP" = "device" ]; then
+  # Device profile lives nested under devices.<type>; resolve THIS device's type.
+  DEVICE_TYPE="$(grep -E '^DEVICE_TYPE=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
+  [ -z "$DEVICE_TYPE" ] && DEVICE_TYPE="$(jq -r '.device_type // empty' /root/config/config.json 2>/dev/null)"
+  # No lamp fallback: pulling the lamp profile onto a device whose class can't be
+  # resolved would overwrite its persona with the wrong one — refuse instead.
+  [ -z "$DEVICE_TYPE" ] && { echo "ERROR: device_type not found in /opt/hal/.env or /root/config/config.json — cannot resolve device profile"; exit 1; }
+  VERSION=$(jq -r --arg t "$DEVICE_TYPE" '.devices[$t].version // empty' "$METADATA_PAYLOAD")
+  URL=$(jq -r --arg t "$DEVICE_TYPE" '.devices[$t].url // empty' "$METADATA_PAYLOAD")
+  SHA256=$(jq -r --arg t "$DEVICE_TYPE" '.devices[$t].sha256 // empty' "$METADATA_PAYLOAD")
+else
+  META_KEY="$APP"
+  VERSION=$(jq -r --arg a "$META_KEY" '.[$a].version // empty' "$METADATA_PAYLOAD")
+  URL=$(jq -r --arg a "$META_KEY" '.[$a].url // empty' "$METADATA_PAYLOAD")
+  SHA256=$(jq -r --arg a "$META_KEY" '.[$a].sha256 // empty' "$METADATA_PAYLOAD")
+fi
+[ -z "$VERSION" ] && { echo "Metadata has no version for $APP"; exit 1; }
+[ -z "$URL" ] || [ -z "$OTA_SIGNING_PUBLIC_KEY" ] || [[ "$SHA256" =~ ^[a-fA-F0-9]{64}$ ]] || { echo "Metadata has no valid SHA-256 for $APP"; exit 1; }
+
+download_verified() {
+  local url="$1" destination="$2" digest="$3"
+  curl -fsSL -H "Cache-Control: no-cache" -o "$destination" "$url" || return 1
+  [ -z "$digest" ] || echo "$digest  $destination" | sha256sum -c - >/dev/null
+}
+
+if [ "$APP" = "os-server" ]; then
+  [ -z "$URL" ] && { echo "Metadata has no url for os-server"; exit 1; }
+  ZIP_TMP=$(mktemp)
+  DIR_TMP=$(mktemp -d)
+  download_verified "$URL" "$ZIP_TMP" "$SHA256" || { echo "Failed checksum verification for os-server"; exit 1; }
+  unzip -o -q "$ZIP_TMP" -d "$DIR_TMP"
+  BIN=$(find "$DIR_TMP" -type f -executable 2>/dev/null | head -1)
+  [ -z "$BIN" ] && BIN=$(find "$DIR_TMP" -type f 2>/dev/null | head -1)
+  [ -z "$BIN" ] || [ ! -f "$BIN" ] && { echo "No binary in os-server zip"; exit 1; }
+  install -D -m 0755 /usr/local/bin/os-server /root/bootstrap/rollback/os-server.previous
+  cp -f "$BIN" /usr/local/bin/os-server
+  chmod +x /usr/local/bin/os-server
+  systemctl restart os-server
+  echo "os-server updated to $VERSION"
+elif [ "$APP" = "bootstrap" ]; then
+  [ -z "$URL" ] && { echo "Metadata has no url for bootstrap"; exit 1; }
+  ZIP_TMP=$(mktemp)
+  DIR_TMP=$(mktemp -d)
+  download_verified "$URL" "$ZIP_TMP" "$SHA256" || { echo "Failed checksum verification for bootstrap"; exit 1; }
+  unzip -o -q "$ZIP_TMP" -d "$DIR_TMP"
+  BIN=$(find "$DIR_TMP" -type f -executable 2>/dev/null | head -1)
+  [ -z "$BIN" ] && BIN=$(find "$DIR_TMP" -type f 2>/dev/null | head -1)
+  [ -z "$BIN" ] || [ ! -f "$BIN" ] && { echo "No binary in bootstrap zip"; exit 1; }
+  install -D -m 0755 /usr/local/bin/bootstrap-server /root/bootstrap/rollback/bootstrap.previous
+  cp -f "$BIN" /usr/local/bin/bootstrap-server
+  chmod +x /usr/local/bin/bootstrap-server
+  systemctl restart bootstrap
+  echo "bootstrap updated to $VERSION"
+elif [ "$APP" = "openclaw" ]; then
+  VER="${VERSION:-latest}"
+  npm install -g "openclaw@${VER}" || { echo "npm install openclaw failed"; exit 1; }
+  openclaw plugins install @openclaw/discord@${VER} --force 2>&1 || echo "[software-update] WARN: discord plugin install failed (non-fatal)"
+  openclaw plugins install @openclaw/slack@${VER} --force 2>&1 || echo "[software-update] WARN: slack plugin install failed (non-fatal)"
+  systemctl restart openclaw
+  echo "openclaw updated to $VER"
+elif [ "$APP" = "codex" ]; then
+  # The Codex CLI is a static musl binary published on GitHub releases — there
+  # is no url/sha256 in metadata (nothing of ours is hosted on GCS for it), so
+  # the release URL is composed from the version. Metadata carries the BARE
+  # semver (0.149.1) because that is what `codex --version` prints; the upstream
+  # tag adds the "rust-v" prefix, re-added here. Keep in step with the same
+  # download in runtimes/codex/install.sh and scripts/imager/build-orangepi.sh.
+  #
+  # Only the binary is touched: config.toml / .env / persona stay owned by the
+  # presync hook, so nothing here can clobber a device's Codex configuration.
+  [ -x /usr/local/bin/codex ] || { echo "codex is not installed on this device — switch the runtime to codex first"; exit 1; }
+  case "$(uname -m)" in
+    aarch64|arm64) CODEX_ASSET="codex-aarch64-unknown-linux-musl.tar.gz" ;;
+    x86_64)        CODEX_ASSET="codex-x86_64-unknown-linux-musl.tar.gz" ;;
+    *) echo "Unsupported arch $(uname -m) for codex"; exit 1 ;;
+  esac
+  CODEX_URL="https://github.com/openai/codex/releases/download/rust-v${VERSION}/${CODEX_ASSET}"
+  DIR_TMP=$(mktemp -d)
+  echo "[software-update] downloading $CODEX_URL"
+  # No sha256 to verify against (upstream artifact, not ours) — the tar extract
+  # below is the integrity check: a truncated or corrupt download fails here
+  # rather than landing a broken binary in /usr/local/bin.
+  download_verified "$CODEX_URL" "$DIR_TMP/$CODEX_ASSET" "" || { echo "Failed to download codex $VERSION"; exit 1; }
+  tar -xzf "$DIR_TMP/$CODEX_ASSET" -C "$DIR_TMP" || { echo "Corrupt codex tarball for $VERSION"; exit 1; }
+  CODEX_SRC="$DIR_TMP/${CODEX_ASSET%.tar.gz}"
+  [ -f "$CODEX_SRC" ] || { echo "No codex binary in tarball"; exit 1; }
+  install -D -m 0755 /usr/local/bin/codex /root/bootstrap/rollback/codex.previous
+  install -m 0755 "$CODEX_SRC" /usr/local/bin/codex
+  /usr/local/bin/codex --version || { echo "codex binary not runnable after update"; exit 1; }
+  # The unit only exists once the device has actually switched to the codex
+  # runtime. Every lamp/intern-v2 image bakes the BINARY regardless of runtime
+  # (scripts/imager/build-orangepi.sh), so a restart here must not be assumed.
+  if [ -f /etc/systemd/system/codex.service ]; then
+    systemctl restart codex
+  else
+    echo "[software-update] codex.service absent (runtime not active) — binary updated, no restart"
+  fi
+  echo "codex updated to $VERSION"
+elif [ "$APP" = "claudecode" ]; then
+  # Claude Code is installed by Anthropic's own installer, which owns
+  # /root/.local/share/claude/versions/<ver> and repoints
+  # /root/.local/bin/claude at it; /usr/local/bin/claude is only our symlink
+  # into that (runtimes/claudecode/install.sh + the imager pre-bake). So the
+  # update is "re-run the installer pinned to $VERSION" — NOT a binary copy,
+  # and there is deliberately no .previous backup: the installer keeps the old
+  # version dir, so a downgrade is `software-update claudecode` with the older
+  # version published, not a rollback of a file we saved.
+  #
+  # The installer takes the version as a POSITIONAL arg: install.sh [stable|latest|VERSION].
+  [ -x /usr/local/bin/claude ] || { echo "claude is not installed on this device — switch the runtime to claudecode first"; exit 1; }
+  export HOME=/root
+  curl -fsSL https://claude.ai/install.sh | bash -s -- "$VERSION" || { echo "claude installer failed for $VERSION"; exit 1; }
+  # Re-point our stable path in case the installer replaced the symlink target.
+  [ -x /root/.local/bin/claude ] && ln -sf /root/.local/bin/claude /usr/local/bin/claude
+  /usr/local/bin/claude --version || { echo "claude not runnable after update"; exit 1; }
+  # claudecode.service only exists once the runtime was switched to claudecode;
+  # every lamp/intern-v2 image bakes the CLI regardless of runtime.
+  if [ -f /etc/systemd/system/claudecode.service ]; then
+    systemctl restart claudecode
+  else
+    echo "[software-update] claudecode.service absent (runtime not active) — CLI updated, no restart"
+  fi
+  echo "claudecode updated to $VERSION"
+elif [ "$APP" = "opencode" ]; then
+  # OpenCode ships via its own official installer, which does arch detection and
+  # tarball extraction itself; we only pin the version and force the install dir.
+  # Mirrors runtimes/opencode/install.sh and the imager pre-bake exactly — keep
+  # the three in step.
+  #
+  # OPENCODE_INSTALL_DIR MUST prefix `bash` (the process running the installer),
+  # NOT `curl` — in a `VAR=x curl … | bash` pipeline the var binds to curl only,
+  # and the installer would fall back to its ~/.opencode/bin default.
+  [ -x /usr/local/bin/opencode ] || { echo "opencode is not installed on this device — switch the runtime to opencode first"; exit 1; }
+  export HOME=/root
+  install -D -m 0755 /usr/local/bin/opencode /root/bootstrap/rollback/opencode.previous
+  curl -fsSL https://opencode.ai/install | OPENCODE_INSTALL_DIR=/usr/local/bin bash -s -- --version "$VERSION" \
+    || { echo "opencode installer failed for $VERSION"; exit 1; }
+  # Belt-and-suspenders, same as install.sh: the official installer has ignored
+  # OPENCODE_INSTALL_DIR before and dropped the binary at its own default.
+  if [ ! -x /usr/local/bin/opencode ]; then
+    OC_SRC="$(command -v opencode 2>/dev/null || true)"
+    [ -x "$OC_SRC" ] || OC_SRC="/root/.opencode/bin/opencode"
+    [ -x "$OC_SRC" ] && install -m 0755 "$OC_SRC" /usr/local/bin/opencode
+  fi
+  /usr/local/bin/opencode --version || { echo "opencode not runnable after update"; exit 1; }
+  # opencode.service only exists once the runtime was switched to opencode;
+  # every lamp/intern-v2 image bakes the CLI regardless of runtime.
+  if [ -f /etc/systemd/system/opencode.service ]; then
+    systemctl restart opencode
+  else
+    echo "[software-update] opencode.service absent (runtime not active) — CLI updated, no restart"
+  fi
+  echo "opencode updated to $VERSION"
+elif [ "$APP" = "hermes" ]; then
+  # Hermes is a git install (runtimes/hermes/install.sh stamps
+  # /usr/local/lib/hermes-agent/.install_method=git so the upstream updater
+  # recognizes it). `hermes update` takes NO target version — it always moves to
+  # upstream HEAD. So $VERSION here is the version we EXPECT to land on: a
+  # mismatch afterwards is a WARNING, not a failure, because there is nothing on
+  # the device that could have pinned it.
+  #
+  # Unit is hermes-gateway.service, not hermes.service (declared in
+  # /usr/local/lib/os-runtimes/hermes/service).
+  command -v hermes >/dev/null 2>&1 || { echo "hermes is not installed on this device — switch the runtime to hermes first"; exit 1; }
+  export HOME=/root
+  hermes update || { echo "hermes update failed"; exit 1; }
+  HERMES_NOW=$(hermes --version 2>/dev/null | sed -nE 's/.*([0-9]+\.[0-9]+\.[0-9]+([-.+_][0-9A-Za-z.-]+)?).*/\1/p' | head -1)
+  [ -n "$HERMES_NOW" ] || { echo "hermes not runnable after update"; exit 1; }
+  if [ "$HERMES_NOW" != "$VERSION" ]; then
+    echo "[software-update] WARN: hermes landed on $HERMES_NOW, metadata expected $VERSION (upstream HEAD moved — hermes cannot be pinned)"
+  fi
+  if [ -f /etc/systemd/system/hermes-gateway.service ]; then
+    systemctl restart hermes-gateway
+  else
+    echo "[software-update] hermes-gateway.service absent (runtime not active) — CLI updated, no restart"
+  fi
+  echo "hermes updated to $HERMES_NOW"
+elif [ "$APP" = "picoclaw" ]; then
+  # PicoClaw is a raw binary from our own GitHub releases (no tarball, unlike
+  # codex). Mirrors runtimes/picoclaw/install.sh and the imager pre-bake.
+  #
+  # VERSION here is the release TAG (v0.3.1-fixvision), not a semver: PicoClaw's
+  # `picoclaw version` prints an unrelated build description
+  # ("nightly-44-g1959045c-dirty"), so the tag cannot be recovered from the
+  # binary. That is why the installed tag is stamped to
+  # /usr/local/lib/os-runtimes/picoclaw/installed-version below — a version
+  # check (here or in a future bootstrap worker) must read that stamp.
+  [ -x /usr/local/bin/picoclaw ] || { echo "picoclaw is not installed on this device — switch the runtime to picoclaw first"; exit 1; }
+  case "$(uname -m)" in
+    aarch64|arm64) PICO_ASSET="picoclaw-linux-arm64" ;;
+    x86_64)        PICO_ASSET="picoclaw-linux-amd64" ;;
+    *) echo "Unsupported arch $(uname -m) for picoclaw"; exit 1 ;;
+  esac
+  PICO_URL="https://github.com/autonomous-ai/picoclaw/releases/download/${VERSION}/${PICO_ASSET}"
+  DIR_TMP=$(mktemp -d)
+  echo "[software-update] downloading $PICO_URL"
+  download_verified "$PICO_URL" "$DIR_TMP/$PICO_ASSET" "" || { echo "Failed to download picoclaw $VERSION"; exit 1; }
+  # No tarball and no sha256 (our own upstream artifact), so the only integrity
+  # gate is running the new binary before it is trusted — do it from the temp
+  # dir, BEFORE overwriting the installed one.
+  chmod 0755 "$DIR_TMP/$PICO_ASSET"
+  "$DIR_TMP/$PICO_ASSET" --no-color version >/dev/null 2>&1 || { echo "Downloaded picoclaw $VERSION is not runnable — keeping the current binary"; exit 1; }
+  install -D -m 0755 /usr/local/bin/picoclaw /root/bootstrap/rollback/picoclaw.previous
+  install -m 0755 "$DIR_TMP/$PICO_ASSET" /usr/local/bin/picoclaw
+  mkdir -p /usr/local/lib/os-runtimes/picoclaw
+  echo "$VERSION" > /usr/local/lib/os-runtimes/picoclaw/installed-version
+  # picoclaw.service only exists once the runtime was switched to picoclaw;
+  # every lamp/intern-v2 image bakes the binary regardless of runtime.
+  if [ -f /etc/systemd/system/picoclaw.service ]; then
+    systemctl restart picoclaw
+  else
+    echo "[software-update] picoclaw.service absent (runtime not active) — binary updated, no restart"
+  fi
+  echo "picoclaw updated to $VERSION"
+elif [ "$APP" = "web" ]; then
+  [ -z "$URL" ] && { echo "Metadata has no url for web"; exit 1; }
+  ZIP_TMP=$(mktemp)
+  download_verified "$URL" "$ZIP_TMP" "$SHA256" || { echo "Failed checksum verification for web"; exit 1; }
+  DIR_TMP=$(mktemp -d "$(dirname "$WEB_ROOT")/.setup.new.XXXXXX")
+  unzip -o -q "$ZIP_TMP" -d "$DIR_TMP"
+  echo "$VERSION" > "$DIR_TMP/VERSION"
+  [ -f "$DIR_TMP/index.html" ] || { echo "No index.html in web zip"; exit 1; }
+  save_web_service_state
+  systemctl stop nginx 2>/dev/null || true
+  rm -rf "$ROLLBACK_DIR/web.previous"
+  mv "$WEB_ROOT" "$ROLLBACK_DIR/web.previous"
+  mark_publish_pending "$WEB_ROOT" "$ROLLBACK_DIR/web.previous" restore_web_service_state
+  publish_mode "$DIR_TMP" "$ROLLBACK_DIR/web.previous"
+  mv "$DIR_TMP" "$WEB_ROOT"
+  clear_publish_pending
+  DIR_TMP=""
+  if ! restore_web_service_state || ! check_web; then
+    echo "web health check failed; restoring the known-good bundle" >&2
+    systemctl stop nginx 2>/dev/null || true
+    restore_web_backup
+    restore_web_service_state || true
+    check_web || true
+    exit 1
+  fi
+  echo "web updated to $VERSION"
+elif [ "$APP" = "hal" ]; then
+  [ -z "$URL" ] && { echo "Metadata has no url for hal"; exit 1; }
+  ZIP_TMP=$(mktemp)
+  download_verified "$URL" "$ZIP_TMP" "$SHA256" || { echo "Failed checksum verification for hal"; exit 1; }
+  UV_BIN="$(command -v uv || true)"
+  [ -n "$UV_BIN" ] || [ ! -x /root/.local/bin/uv ] || UV_BIN=/root/.local/bin/uv
+  [ -n "$UV_BIN" ] || { echo "uv not found"; exit 1; }
+  save_hal_service_state
+  systemctl stop hal 2>/dev/null || true
+  # A missing $HAL_DIR is a REINSTALL, not an error: an interrupted earlier run
+  # can leave the runtime moved away with nothing to move back, and aborting
+  # here would make the one command that could repair the device refuse to run.
+  # There is simply no rollback point for this run — say so rather than pretend.
+  if [ -d "$HAL_DIR" ]; then
+    rm -rf "$ROLLBACK_DIR/hal.previous"
+    if ! mv "$HAL_DIR" "$ROLLBACK_DIR/hal.previous"; then
+      restore_hal_service_state || true
+      exit 1
+    fi
+    mark_publish_pending "$HAL_DIR" "$ROLLBACK_DIR/hal.previous" restore_hal_service_state
+  else
+    echo "[software-update] $HAL_DIR is absent — reinstalling from scratch (no rollback point for this run)"
+    rm -rf "$ROLLBACK_DIR/hal.previous"
+  fi
+  DIR_TMP=$(mktemp -d "$(dirname "$HAL_DIR")/.hal.new.XXXXXX")
+  # The uv cache lives OUTSIDE the runtime tree, and is never copied.
+  #
+  # It used to sit at $HAL_DIR/.uv-cache, so every update copied it (and .venv)
+  # into the staging tree before syncing. That cache only grows — measured at
+  # 2.5G with a 2.3G .venv beside it — so each update moved ~4.8G across eMMC
+  # before doing any real work, taking minutes and making the device look hung
+  # while HAL was down. Keeping it at a fixed path next to $HAL_DIR (same
+  # filesystem, so uv can hardlink instead of copying package contents into the
+  # venv) removes both copies and stops the cache being duplicated per update.
+  #
+  # Migrate an in-tree cache the first time we see one, so a device does not
+  # re-download everything after this change.
+  HAL_UV_CACHE="${HAL_UV_CACHE:-$(dirname "$HAL_DIR")/.uv-cache-hal}"
+  if [ ! -d "$HAL_UV_CACHE" ] && [ -d "$ROLLBACK_DIR/hal.previous/.uv-cache" ]; then
+    echo "[software-update] migrating uv cache out of the runtime tree → $HAL_UV_CACHE"
+    mv "$ROLLBACK_DIR/hal.previous/.uv-cache" "$HAL_UV_CACHE" || mkdir -p "$HAL_UV_CACHE"
+  fi
+  mkdir -p "$HAL_UV_CACHE"
+  export UV_CACHE_DIR="$HAL_UV_CACHE" UV_HTTP_TIMEOUT=180
+  if ! (
+    unzip -o -q "$ZIP_TMP" -d "$DIR_TMP" || exit 1
+    if [ -f "$ROLLBACK_DIR/hal.previous/.env" ]; then cp -a "$ROLLBACK_DIR/hal.previous/.env" "$DIR_TMP/.env" || exit 1; fi
+    find "$UV_CACHE_DIR" -name "lerobot.egg-info" -type d 2>/dev/null | xargs rm -rf
+    cd "$DIR_TMP" || exit 1
+    "$UV_BIN" sync --python 3.12 --extra hardware || exit 1
+  ); then
+    echo "HAL staging failed; restoring known-good runtime" >&2
+    cd /
+    restore_hal_backup
+    restore_hal_service_state || true
+    exit 1
+  fi
+  cd /
+  publish_mode "$DIR_TMP" "$ROLLBACK_DIR/hal.previous"
+  HAL_STAGED="$DIR_TMP"
+  if ! mv "$DIR_TMP" "$HAL_DIR"; then
+    echo "HAL activation failed; restoring known-good runtime" >&2
+    restore_hal_backup
+    restore_hal_service_state || true
+    exit 1
+  fi
+  DIR_TMP=""
+  clear_publish_pending
+  relocate_venv_scripts "$HAL_DIR/.venv" "$HAL_STAGED" "$HAL_DIR"
+  if ! restore_hal_service_state || ! check_hal; then
+    echo "HAL health check failed; restoring the known-good runtime" >&2
+    systemctl stop hal 2>/dev/null || true
+    restore_hal_backup
+    restore_hal_service_state || true
+    check_hal || true
+    exit 1
+  fi
+  echo "hal updated to $VERSION"
+elif [ "$APP" = "claude-desktop-buddy" ]; then
+  [ -z "$URL" ] && { echo "Metadata has no url for claude-desktop-buddy"; exit 1; }
+  ZIP_TMP=$(mktemp)
+  DIR_TMP=$(mktemp -d)
+  download_verified "$URL" "$ZIP_TMP" "$SHA256" || { echo "Failed checksum verification for claude-desktop-buddy"; exit 1; }
+  BUDDY_DIR="/opt/claude-desktop-buddy"
+  mkdir -p "$BUDDY_DIR"
+  unzip -o -q "$ZIP_TMP" -d "$DIR_TMP"
+  [ -f "$DIR_TMP/buddy-plugin" ] && cp -f "$DIR_TMP/buddy-plugin" "$BUDDY_DIR/buddy-plugin" && chmod +x "$BUDDY_DIR/buddy-plugin"
+  [ ! -f "/root/config/buddy.json" ] && [ -f "$DIR_TMP/config/buddy.json" ] && mkdir -p /root/config && cp -f "$DIR_TMP/config/buddy.json" /root/config/buddy.json
+  echo "$VERSION" > "$BUDDY_DIR/VERSION_BUDDY"
+  systemctl restart claude-desktop-buddy
+  echo "claude-desktop-buddy updated to $VERSION"
+elif [ "$APP" = "device" ]; then
+  [ -z "$URL" ] && { echo "Metadata has no url for devices.$DEVICE_TYPE"; exit 1; }
+  resolve_device_profile || exit 1
+  DEST="$DEVICE_DEST"
+  ZIP_TMP=$(mktemp)
+  download_verified "$URL" "$ZIP_TMP" "$SHA256" || { echo "Failed checksum verification for device profile"; exit 1; }
+  mkdir -p "$DEVICES_DIR"
+  DIR_TMP=$(mktemp -d "$DEVICES_DIR/.${DEVICE_TYPE}.new.XXXXXX")
+  unzip -o -q "$ZIP_TMP" -d "$DIR_TMP"
+  [ -f "$DIR_TMP/ROBOT.md" ] || { echo "No ROBOT.md in device profile"; exit 1; }
+  [ -d "$DEST" ] || { echo "No installed device profile at $DEST"; exit 1; }
+  save_device_service_state
+  systemctl stop os-server 2>/dev/null || true
+  systemctl stop hal 2>/dev/null || true
+  snapshot_device_rootfs "$DEST/rootfs" "$DIR_TMP/rootfs"
+  rm -rf "$ROLLBACK_DIR/device.previous"
+  mv "$DEST" "$ROLLBACK_DIR/device.previous"
+  mark_publish_pending "$DEST" "$ROLLBACK_DIR/device.previous" restore_device_service_state
+  publish_mode "$DIR_TMP" "$ROLLBACK_DIR/device.previous"
+  mv "$DIR_TMP" "$DEST"
+  DIR_TMP=""
+  clear_publish_pending
+  # Keep local tuning in .env exactly as the existing updater did.
+  ENV_BACKUP=""
+  if [ -f /opt/hal/.env ]; then ENV_BACKUP=$(mktemp); cp -a /opt/hal/.env "$ENV_BACKUP"; fi
+  [ ! -d "$DEST/rootfs" ] || cp -a "$DEST/rootfs/." /
+  if [ -n "$ENV_BACKUP" ]; then cp -a "$ENV_BACKUP" /opt/hal/.env; rm -f "$ENV_BACKUP"; fi
+  if ! restore_device_service_state || ! check_device_profile; then
+    echo "device profile health check failed; restoring the known-good profile" >&2
+    systemctl stop os-server 2>/dev/null || true
+    systemctl stop hal 2>/dev/null || true
+    restore_device_backup
+    restore_device_service_state || true
+    check_device_profile || true
+    exit 1
+  fi
+  echo "device profile ($DEVICE_TYPE) updated to $VERSION"
+fi

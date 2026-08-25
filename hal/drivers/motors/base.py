@@ -27,7 +27,10 @@ class MotionService(Protocol):
 
     # --- Lifecycle ---
 
-    def start(self) -> None: ...
+    # skip_wake: bring the body up WITHOUT its startup pose / idle loop, for a
+    # HAL restart on a device that was asleep. Optional so a driver with no
+    # wake sequence can ignore it.
+    def start(self, skip_wake: bool = False) -> None: ...
     def stop(self, timeout: float = 5.0) -> None: ...
 
     @property

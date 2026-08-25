@@ -332,7 +332,14 @@ native module của browser-tool (node-gyp) bị treo vô hạn trên board ARM,
 voice lamp không bao giờ dùng browser tools (gateway thuần Python nên không cần).
 Vì vậy nó **không** còn chạy bản monolithic `curl | bash --skip-setup`. Sau vòng
 lặp stage, installer ghi `git` vào `/usr/local/lib/hermes-agent/.install_method`
-để một lệnh `hermes update` về sau nhận ra đây là git install. Tiếp đó installer
+để một lệnh `hermes update` về sau nhận ra đây là git install.
+
+> **Hermes là runtime DUY NHẤT không được OTA worker tự cập nhật.** `hermes
+> update` không nhận version đích — luôn nhảy lên upstream HEAD — nên một sàn
+> `min_version` nó không bao giờ đạt sẽ kích lại update mỗi vòng poll, mãi mãi.
+> `make upload-hermes` + `make promote-hermes` vẫn publish con số, nhưng chỉ
+> `sudo software-update hermes` qua SSH mới áp dụng (và nó CẢNH BÁO chứ không
+> fail khi version thực tế khác). Xem `docs/vi/bootstrap-ota.md` §5. Tiếp đó installer
 dừng `openclaw` (để import skills không tranh chấp state đang chạy của nó), seed
 các key `API_SERVER_*` trong `~/.hermes/.env`, rồi **giao toàn bộ phần config.yaml
 + skills cho hook presync** (gọi inline), và cuối cùng cài + start gateway như một
@@ -613,10 +620,14 @@ Copy soul dùng `Overwrite=true` (switch lấy persona của runtime nguồn; ba
 trước). Chiều ngược hermes→openclaw **strip identity card khỏi SOUL VÀ restore các
 field của nó về `IDENTITY.md` của OpenClaw** (`restoreIdentityCard`, nghịch đảo của
 inline) — nên tên đặt dưới Hermes sống sót cả chiều về, không chỉ chiều đi.
-**Skills** được giữ tươi dưới Hermes nhờ
-`runtimes/hermes/skill_watcher.go` — auto-update từ CDN vào `skills/openclaw-imports`,
-gate theo capability, mirror watcher OpenClaw (engine chung ở
-`system/skills/skillzip.go`).
+**Skills** được giữ tươi dưới Hermes qua hai đường bổ sung nhau:
+`EnsureOnboarding` luôn gate theo capability và đồng bộ toàn bộ catalog được hỗ
+trợ từ CDN vào `skills/openclaw-imports` (sửa cả file local cũ khi OTA đã publish
+trước lúc watcher khởi động), còn `skill_watcher.go` poll metadata OTA mỗi năm phút
+để bắt các bản publish sau đó. Cả hai dùng engine chung
+`system/skills/skillzip.go`; khi nội dung thật sự đổi, gateway được restart rồi
+agent nhận thông báo đọc lại các skill đã đổi. Download hoặc extract ZIP lỗi không
+làm version tiến lên, nên poll năm phút kế tiếp sẽ thử lại.
 
 **Hai root skill.** `~/.hermes/skills/` có namespace, và os-server ghi vào một
 root riêng của nó (`runtimes/hermes/save_skill.go`):

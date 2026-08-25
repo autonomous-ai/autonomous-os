@@ -42,6 +42,8 @@ from hal.drivers.voice._internal.realtime_turn import (
     is_noise_turn,
     needs_noise_guard,
     run_realtime_turn,
+    should_drop_downstream_turn,
+    should_defer_speaker_id_prepass,
     should_dispatch_to_main,
 )
 from hal.drivers.voice._internal.sensing_sender import SensingSender
@@ -936,9 +938,10 @@ class VoiceService:
                     )
                     # Speech is confirmed (Silero has agreed) — the moment to
                     # ask whether the user had turned toward the lamp just
-                    # before saying it. Reads the gaze buffer BACKWARDS; it does
-                    # not capture anything now, because the turn happened before
-                    # this line ran. No-op unless the feature is armed.
+                    # before saying it. Normally this reads the gaze buffer
+                    # backwards; only an empty-evidence result asks the watcher
+                    # to restore the remembered pose asynchronously, while this
+                    # audio capture keeps running. No-op unless armed.
                     try:
                         from hal.drivers.tracking import gaze
 
@@ -1221,6 +1224,11 @@ class VoiceService:
         sent_turn_speaker = None
         turn_context_sent = False
 
+        # Give backchannel cues a lifecycle token before any STT callback can
+        # schedule one. A cue delayed behind normal TTS must not survive this
+        # capture and play into the next mic session.
+        self._backchannel.begin_session()
+
         def start_realtime_turn() -> bool:
             """Open realtime as soon as the wake-word partial is available.
 
@@ -1245,6 +1253,12 @@ class VoiceService:
                     or not hal_config.REALTIME_ENABLED
                 ):
                     return False
+                # Same pre-turn hygiene as the always-listening path below: the
+                # tool-call quarantine lives in prepare_turn(), so skipping it
+                # here let an `express_emotion` turn silence the next one. Safe
+                # after the capture_complete guard — the utterance is fully
+                # buffered, so a rebuild cannot split it.
+                self._realtime.prepare_turn()
                 if self._realtime.rebuilding or not self._realtime.available:
                     logger.info(
                         "[realtime] Wake-word turn falls back — session unavailable after final confirmation"
@@ -1568,6 +1582,24 @@ class VoiceService:
                         "Wake-word partial rejected — no matching final STT result; dropping turn"
                     )
 
+            # A VAD-confirmed utterance can begin while the camera is pointed
+            # away from the remembered user. In that precise no-evidence case
+            # gaze requested an asynchronous re-acquire at speech start. Check
+            # once more now that the same utterance has finished: the watcher
+            # may have collected enough stable face samples while STT captured
+            # it. A measured facing-away head never takes this recovery path.
+            if combined:
+                try:
+                    from hal.drivers.tracking import gaze
+
+                    gaze.on_speech_end()
+                except Exception as e:
+                    logger.debug("gaze speech-end check skipped: %s", e)
+                wakeword_followup_active = (
+                    wakeword_followup_active
+                    or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active())
+                )
+
             # Noise guard: a session can open on a noise blip that fools the entry
             # VAD, and STT then either finds no words or invents a short filler for
             # it. Re-check the FULL captured buffer with Silero; if it isn't speech,
@@ -1594,15 +1626,21 @@ class VoiceService:
                 except Exception as e:
                     logger.warning("Realtime noise-guard buffer decode failed: %s", e)
 
-            # Speaker-ID prepass: resolve the voice speaker ONCE now that capture
-            # is complete — the voiceprint needs the whole utterance, so this is
-            # the EARLIEST point it can run, and in always-listening mode it is
-            # already later than the [TURN CONTEXT] send (hence the correction
-            # below). The result is reused by dispatch_turn (recognition never
-            # runs twice). Unknown / gate-reject → display None → face fallback. Wrapped
-            # defensively: it now runs on the reply path, so a recognizer error
-            # must not kill the turn.
-            if combined:
+            # Speaker-ID prepass normally resolves the voice speaker ONCE now
+            # that capture is complete — the voiceprint needs the whole
+            # utterance, so this is the earliest point it can run. A short
+            # ambiguous transcript is the exception: defer its external
+            # embedding call until realtime has had a chance to reject it.
+            # That lets an `o`-style turn reach `reject_turn` without paying a
+            # speaker-ID round-trip first. A non-rejected turn still resolves
+            # before dispatch below, preserving speaker decoration and the
+            # device-wide confident voice identity.
+            defer_speaker_prepass = should_defer_speaker_id_prepass(combined)
+
+            def resolve_turn_speaker_identity(*, after_realtime_decision: bool = False) -> None:
+                nonlocal turn_identity, turn_speaker_display
+                if not combined:
+                    return
                 _final_text, _ = self._decorator.classify_wake_word(combined)
                 try:
                     turn_identity = self._decorator.identify_and_decorate(
@@ -1630,10 +1668,27 @@ class VoiceService:
                     turn_speaker_display,
                     turn_identity[1] if turn_identity else None,
                     sent_turn_speaker,
-                    "correction needed"
-                    if (turn_speaker_display and turn_speaker_display != sent_turn_speaker)
-                    else "no correction needed",
+                    (
+                        "resolved after realtime decision"
+                        if after_realtime_decision
+                        else (
+                            "correction needed"
+                            if (
+                                turn_speaker_display
+                                and turn_speaker_display != sent_turn_speaker
+                            )
+                            else "no correction needed"
+                        )
+                    ),
                 )
+
+            if defer_speaker_prepass:
+                logger.info(
+                    "[realtime] Short transcript — deferring speaker-ID prepass "
+                    "until after the AI rejection decision"
+                )
+            else:
+                resolve_turn_speaker_identity()
 
             # Capture can end just after the STT callback. One final check
             # avoids dropping a matched partial that raced the loop exit.
@@ -1751,7 +1806,7 @@ class VoiceService:
                     )
                 )
 
-            # --- OS server send + SER (reuses the prepass speaker-ID) ----------
+            # --- OS server send + SER (uses the prepass speaker-ID) ------------
             # Re-check the focus instead of trusting only the session-start
             # latch: a button click can open the window while this session is
             # already streaming, and that click means the floor is the user's
@@ -1764,16 +1819,21 @@ class VoiceService:
                 or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active())
             )
             wakeword_authorized = wake_word_confirmed.is_set() or wakeword_followup_active
-            if should_dispatch_to_main(
+            dispatch_to_main = should_dispatch_to_main(
                 hal_config.WAKEWORD_ENABLED,
                 wakeword_authorized,
-            ):
+            )
+            downstream_dropped = should_drop_downstream_turn(rt)
+            if defer_speaker_prepass and dispatch_to_main and not downstream_dropped:
+                resolve_turn_speaker_identity(after_realtime_decision=True)
+
+            if dispatch_to_main:
                 # Gemini's audio context and [TTS HISTORY] are session-local.
                 # When this turn is delegated or falls back to the main agent,
                 # persist the user's request before sending it downstream so a
                 # session replacement cannot erase the handoff from realtime's
                 # next-session context.
-                if combined and not rt.handled:
+                if combined and not rt.handled and not downstream_dropped:
                     self._realtime.save_main_handoff(combined)
                 # A realtime connection failure or silent timeout is not a
                 # handled turn. Preserve the STT fallback so a wake-word command
@@ -1792,7 +1852,12 @@ class VoiceService:
                     ),
                     identity=turn_identity,
                 )
-                if combined and hal_config.WAKEWORD_ENABLED and wakeword_authorized:
+                if (
+                    combined
+                    and not downstream_dropped
+                    and hal_config.WAKEWORD_ENABLED
+                    and wakeword_authorized
+                ):
                     if self._wakeword_focus.refresh():
                         logger.info(
                             "Wake-word follow-up focus refreshed for %.0fs",

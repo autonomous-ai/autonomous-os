@@ -164,10 +164,12 @@ pitch_correction = clamp(PID(soft_deadband(dy)) + VFF·vy·deg_per_px·dt,  ±5�
 | `SERVO_MIN_CONF` | 0.25 | Sàn confidence để fire servo PID |
 | `TRACKER_TRUST_CONF` / `TRUST_TRACKER_S` | 0.4 / 2.5 | Detector-gated trust (xem trên) |
 | `YOLO_MAX_MISS` | 30 | Số lần CSRT miss liên tiếp trước khi retry |
-| `MAX_TRACK_DURATION_S` | 300 | Timeout tự động dừng (5 phút) |
+| `MAX_TRACK_DURATION_S` | `HAL_TRACKING_MAX_DURATION_S` (10) | Timeout tự động dừng (mặc định 10 giây; cấu hình theo từng thiết bị) |
 | `_LOCAL_IMGSZ` | 320 | Kích thước inference local YOLO (640 → 1.3–2.9 s, quá chậm) |
 
 Mọi knob nằm trong `hal/drivers/tracking/constants.py`. (Đường proportional chết `GIMBAL_*` / `EMA_ALPHA` đã bị xoá khi tách package.)
+
+Đặt `HAL_TRACKING_MAX_DURATION_S` trong `/opt/hal/.env` của Lamp để chọn giới hạn thời gian thực cho một session; mặc định Lamp đã cài là `10`. Khởi động lại service `hal` sau khi đổi.
 
 ### Giới hạn vị trí servo
 
@@ -187,10 +189,10 @@ Mọi knob nằm trong `hal/drivers/tracking/constants.py`. (Đường proportio
 | Bbox tràn frame + không detect trong 3 s | Buộc retry, rồi dừng nếu không phục hồi |
 | Không detector confirm trong `STOP_NO_YOLO_S` (20 s) | Dừng — ghost tracking |
 | CSRT miss `YOLO_MAX_MISS` (30) sau `MAX_TRACKING_RETRIES` (4) | Dừng — vật thể biến mất |
-| Thời lượng tracking > 5 phút | Dừng — timeout để tiết kiệm motor/CPU |
+| Thời lượng tracking > `HAL_TRACKING_MAX_DURATION_S` (mặc định 10 giây) | Dừng — timeout để tiết kiệm motor/CPU |
 | Single-click từ nút GPIO hoặc TTP223 | Dừng — user chủ động huỷ attention |
 
-Lưu ý: một bbox lớn (ví dụ một người lấp đầy frame) **không** phải điều kiện dừng — PID chạy theo centroid, không phải kích thước bbox, nên một vật thể ở gần vẫn track. Khi tracking kết thúc, cánh tay trượt về zero ở tốc độ tracking (không snap).
+Lưu ý: một bbox lớn (ví dụ một người lấp đầy frame) **không** phải điều kiện dừng — PID chạy theo centroid, không phải kích thước bbox, nên một vật thể ở gần vẫn track. Khi tracking kết thúc, cánh tay trượt về zero ở tốc độ tracking (không snap), rồi idle animation được dispatch lại — xem [Tương tác với các hệ thống khác](#tương-tác-với-các-hệ-thống-khác).
 
 ### Tự động dừng khi mất kết nối gateway/network
 
@@ -316,6 +318,8 @@ Camera section hiển thị:
 | Sensing (face, motion) | Tiếp tục — chia sẻ camera | Tiếp tục |
 | Camera stream overlay | Vẽ bbox xanh | Stream bình thường |
 | TTS | Tiếp tục bình thường | Tiếp tục bình thường |
+
+Việc quay lại idle là một **dispatch tường minh**, không phải hệ quả phụ của việc xoá cờ tracking. Khi `_tracking_active` đang bật, `AnimationService._continue_playback` bỏ recording đang chạy dở (`_current_recording = None`) để không có gì tranh servo với tracker. Xoá cờ không đặt lại giá trị đó: event loop return ngay ở guard đầu tiên (`if not self._current_recording`), nên nếu không dispatch thì cánh tay đứng cứng ở zero với torque vẫn bật cho tới lệnh emotion hoặc play kế tiếp. Vì vậy khối `finally` của `_track_loop` kết thúc bằng `animation_service.dispatch("play", animation_service.idle_recording)` — dùng dispatch thay vì `_handle_play` để việc phát vẫn thuộc về event thread, giống các đường thoát music-stop, `aim` và `resume`.
 
 ## Ghi chú hiệu năng
 

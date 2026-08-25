@@ -79,6 +79,17 @@ func compareVersions(a, b string) int {
 	return 0
 }
 
+// forceTargetAllowed limits both force endpoints to components an operator can
+// meaningfully target from the UI. The agent CLIs are included so the Versions
+// card can update the runtime a device runs; os-server resolves its virtual
+// "agent" target to one of these before forwarding. componentInstalled is still
+// what decides whether the work happens (wrong runtime / old on-device updater →
+// refused), so a stray call cannot push a CLI onto a device that does not run it.
+var forceTargetAllowed = map[string]bool{
+	domain.OTAKeyOSServer: true, domain.OTAKeyBootstrap: true, domain.OTAKeyWeb: true, domain.OTAKeyHal: true,
+	domain.OTAKeyCodex: true, domain.OTAKeyClaudeCode: true, domain.OTAKeyOpenCode: true, domain.OTAKeyPicoClaw: true,
+}
+
 // Bootstrap is the simplified OTA worker.
 type Bootstrap struct {
 	cfg    *config.Config
@@ -89,11 +100,23 @@ type Bootstrap struct {
 	// (e.g. HAL + web + os-server all behind min_version). Reset at the top of
 	// every checkOnce so a later cycle that finds new updates re-announces.
 	announcedThisCycle bool
+	// security records the last metadata fetch outcome for GET /security.
+	security securityTracker
 }
 
 // configRetryInterval is how often Serve reloads bootstrap.json while waiting for
 // it to provide a metadata URL (i.e. the device is not yet provisioned).
 const configRetryInterval = 30 * time.Second
+
+// otaErrorLEDDisplayDuration keeps a failed-update cue visible long enough to
+// be noticed without leaving the strip latched red until a later operation.
+const otaErrorLEDDisplayDuration = 10 * time.Second
+
+// scheduleOTAErrorRestore is a small seam for testing the delayed cleanup
+// without sleeping. Production always uses time.AfterFunc.
+var scheduleOTAErrorRestore = func(delay time.Duration, restore func()) {
+	time.AfterFunc(delay, restore)
+}
 
 // ProvideServer creates a Bootstrap from config. The metadata URL may be empty
 // here (device not yet provisioned); Serve waits for it before polling.
@@ -156,6 +179,17 @@ func (b *Bootstrap) Serve() error {
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+	r.GET("/security", func(c *gin.Context) {
+		c.JSON(http.StatusOK, b.securityStatus())
+	})
+	// Cheap sibling of /versions: no metadata fetch, so the web UI can poll it
+	// every couple of seconds while an update runs without hammering the CDN.
+	r.GET("/updating", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"updating": UpdatesInFlight()})
+	})
+	r.GET("/versions", func(c *gin.Context) {
+		c.JSON(http.StatusOK, b.versionReport(c.Request.Context()))
+	})
 	r.POST("/force-check", func(c *gin.Context) {
 		go func() {
 			if err := b.checkOnce(context.Background()); err != nil {
@@ -164,10 +198,29 @@ func (b *Bootstrap) Serve() error {
 		}()
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "update check triggered"})
 	})
+	// force-update: install the published `version` NOW, floor and all — the
+	// endpoint behind the web Versions card's button, equivalent to running
+	// `software-update <target>` over SSH. force-check below is the other thing:
+	// re-run the AUTOMATIC decision, which respects min_version.
+	r.POST("/force-update/:target", func(c *gin.Context) {
+		target := c.Param("target")
+		if !forceTargetAllowed[target] {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown target: " + target})
+			return
+		}
+		// Async: an install runs for minutes (download + restart) and would blow
+		// any HTTP timeout. The caller gets "started"; the outcome lands in the
+		// journal and in the next /versions read.
+		go func() {
+			if err := b.forceUpdate(context.Background(), target); err != nil {
+				slog.Error("force update failed", "component", "bootstrap", "target", target, "error", err)
+			}
+		}()
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "update started", "target": target})
+	})
 	r.POST("/force-check/:target", func(c *gin.Context) {
 		target := c.Param("target")
-		allowed := map[string]bool{domain.OTAKeyOSServer: true, domain.OTAKeyWeb: true, domain.OTAKeyHal: true}
-		if !allowed[target] {
+		if !forceTargetAllowed[target] {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown target: " + target})
 			return
 		}
@@ -258,7 +311,13 @@ func (b *Bootstrap) checkOnce(ctx context.Context) error {
 	// detectVersion / applyUpdate already handle OTAKeyOpenClaw (npm install +
 	// systemctl restart openclaw); the old reconcileOpenClawFromNpm() pulled
 	// "latest" from `npm view` instead and is no longer needed.
-	for _, key := range []string{domain.OTAKeyOSServer, domain.OTAKeyBootstrap, domain.OTAKeyWeb, domain.OTAKeyHal, domain.OTAKeyBuddy, domain.OTAKeyOpenClaw} {
+	// The agent-runtime CLIs (codex/claudecode/opencode/picoclaw) ride the same
+	// loop; componentInstalled gates each to the runtime the device actually
+	// runs. Hermes is intentionally NOT here — see domain.OTAKeyCodex's comment.
+	for _, key := range []string{
+		domain.OTAKeyOSServer, domain.OTAKeyBootstrap, domain.OTAKeyWeb, domain.OTAKeyHal, domain.OTAKeyBuddy,
+		domain.OTAKeyOpenClaw, domain.OTAKeyCodex, domain.OTAKeyClaudeCode, domain.OTAKeyOpenCode, domain.OTAKeyPicoClaw,
+	} {
 		component, ok := meta[key]
 		if !ok {
 			continue
@@ -366,6 +425,13 @@ func (b *Bootstrap) restoreLED() {
 	if device.Has(resolveDeviceType(), device.CapLight) {
 		hal.RestoreLED()
 	}
+}
+
+// showOTAErrorLED briefly signals a failed OTA with a red pulse, then returns
+// the strip to the user's LED state (or the ambient resting state).
+func (b *Bootstrap) showOTAErrorLED() {
+	b.progressLED("ota_error")
+	scheduleOTAErrorRestore(otaErrorLEDDisplayDuration, b.restoreLED)
 }
 
 // resolveDeviceType returns this device's class for picking devices.<type> in
@@ -501,7 +567,7 @@ func (b *Bootstrap) reconcile(ctx context.Context, key string, target domain.OTA
 	b.progressLED("ota_progress")
 
 	if err := b.applyUpdate(ctx, key, target); err != nil {
-		b.progressLED("ota_error") // red pulse on error
+		b.showOTAErrorLED()
 		return false, err
 	}
 
@@ -533,7 +599,12 @@ func (b *Bootstrap) fetchMetadata(ctx context.Context) (domain.OTAMetadata, erro
 	return decodeOTAMetadataPayload(payload, verified)
 }
 
-func (b *Bootstrap) fetchMetadataPayload(ctx context.Context) ([]byte, bool, error) {
+func (b *Bootstrap) fetchMetadataPayload(ctx context.Context) (payload []byte, verified bool, err error) {
+	// Every outcome — including a transport failure before any verification
+	// could run — lands in the security status, so an operator polling
+	// GET /security sees a stalled feed instead of a stale success.
+	defer func() { b.security.record(verified, err) }()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.cfg.MetadataURL, nil)
 	if err != nil {
 		return nil, false, fmt.Errorf("build metadata request: %w", err)
@@ -554,7 +625,7 @@ func (b *Bootstrap) fetchMetadataPayload(ctx context.Context) ([]byte, bool, err
 		slog.Warn("OTA signature verification disabled: signing_public_key is not provisioned", "component", "bootstrap")
 		return data, false, nil
 	}
-	payload, err := verifyOTAMetadata(data, b.cfg.SigningPublicKey)
+	payload, err = verifyOTAMetadata(data, b.cfg.SigningPublicKey)
 	if err != nil {
 		return nil, false, fmt.Errorf("verify metadata %s: %w", b.cfg.MetadataURL, err)
 	}
@@ -614,7 +685,37 @@ func (b *Bootstrap) detectVersion(ctx context.Context, key string) string {
 		if err != nil {
 			return ""
 		}
-		return openclawNormalizeVersion(string(out))
+		return cliSemver(string(out))
+	case domain.OTAKeyCodex:
+		// "codex-cli 0.142.5" — the metadata carries the bare semver.
+		out, err := system.Run(runCtx, "codex", "--version")
+		if err != nil {
+			return ""
+		}
+		return cliSemver(string(out))
+	case domain.OTAKeyClaudeCode:
+		// "2.1.218 (Claude Code)".
+		out, err := system.Run(runCtx, "claude", "--version")
+		if err != nil {
+			return ""
+		}
+		return cliSemver(string(out))
+	case domain.OTAKeyOpenCode:
+		out, err := system.Run(runCtx, "opencode", "--version")
+		if err != nil {
+			return ""
+		}
+		return cliSemver(string(out))
+	case domain.OTAKeyPicoClaw:
+		// Deliberately NOT `picoclaw version`: that prints a build description
+		// ("nightly-44-g1959045c-dirty") with no relation to the release tag, so
+		// it would never parse and the component would look infinitely stale.
+		// `software-update picoclaw` stamps the tag it installed here instead.
+		data, err := os.ReadFile(domain.PicoClawVersionStamp)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(data))
 	case domain.OTAKeyDevice:
 		dir := os.Getenv("DEVICES_DIR")
 		if dir == "" {
@@ -652,7 +753,31 @@ func (b *Bootstrap) componentInstalled(key string) bool {
 	case domain.OTAKeyOpenClaw:
 		// Absent on devices running another agent runtime (hermes, codex,
 		// claudecode, …). Those must not be dragged onto OpenClaw by the OTA.
+		// Left on binary presence deliberately: openclaw is npm-installed per
+		// device rather than baked into every image, so the check is meaningful
+		// here — and an unset agent_runtime (older provisioning) must not stop
+		// OpenClaw devices from updating.
 		return inPath("openclaw")
+	case domain.OTAKeyCodex, domain.OTAKeyClaudeCode, domain.OTAKeyOpenCode, domain.OTAKeyPicoClaw:
+		// Binary presence proves NOTHING for these: scripts/imager/build-orangepi.sh
+		// bakes every agent CLI onto every lamp/intern-v2 image regardless of
+		// DEFAULT_AGENT. An inPath() check would therefore mark all four
+		// "installed" on every device, and each poll would announce "device is
+		// updating" over the speaker, turn the strip orange, download the CLI,
+		// and restart a unit that does not exist — forever.
+		//
+		// The runtime the device actually runs is the real predicate.
+		//
+		// Second gate: the on-device updater must know the key. `software-update`
+		// reaches a device ONLY via the imager or setup.sh (see scripts/README.md)
+		// — never over OTA — so a device provisioned before these keys existed
+		// keeps an updater that answers "Unknown app: codex" forever. Without this
+		// check that device would, every poll (5m): speak "device is updating",
+		// breathe orange, fail the apply, and show a temporary red error cue.
+		// Skipping instead means such devices simply never
+		// receive agent-CLI updates — which is the only outcome available to them
+		// anyway — and do it silently.
+		return resolveAgentRuntime() == key && updaterSupports(key)
 	case domain.OTAKeyWeb:
 		return dirExists("/usr/share/nginx/html/setup")
 	case domain.OTAKeyHal:
@@ -674,6 +799,50 @@ func (b *Bootstrap) componentInstalled(key string) bool {
 	}
 }
 
+// resolveAgentRuntime returns the agent runtime this device runs, from
+// `agent_runtime` in /root/config/config.json (the same file os-server writes
+// when the user switches runtimes in the web UI). Returns "" when the file or
+// key is missing — callers treat that as "not this runtime", which is the safe
+// direction: an unknown runtime skips the CLI update instead of pushing one.
+//
+// Values match the domain.OTAKey* constants for the CLIs by construction.
+func resolveAgentRuntime() string {
+	data, err := os.ReadFile("/root/config/config.json")
+	if err != nil {
+		return ""
+	}
+	var c struct {
+		AgentRuntime string `json:"agent_runtime"`
+	}
+	if json.Unmarshal(data, &c) != nil {
+		return ""
+	}
+	return strings.TrimSpace(c.AgentRuntime)
+}
+
+// updaterSupports reports whether the on-device `software-update` script has a
+// branch for this component key.
+//
+// It matches the branch guard verbatim — `[ "$APP" = "<key>" ]`, the exact form
+// every branch in scripts/provision/software-update uses — rather than looking
+// for the key anywhere in the file: the key also appears in comments and in the
+// usage strings of an updater that does NOT implement it, so a loose search
+// would report support that isn't there.
+//
+// A missing/unreadable script means "no support": the caller then skips the
+// component, which is strictly better than exec'ing an updater that will fail.
+func updaterSupports(key string) bool {
+	path, err := exec.LookPath("software-update")
+	if err != nil {
+		return false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), `[ "$APP" = "`+key+`" ]`)
+}
+
 func inPath(name string) bool {
 	_, err := exec.LookPath(name)
 	return err == nil
@@ -687,7 +856,8 @@ func dirExists(path string) bool {
 // applyUpdate runs the appropriate update command for the given component.
 func (b *Bootstrap) applyUpdate(ctx context.Context, key string, component domain.OTAComponent) error {
 	switch key {
-	case domain.OTAKeyOSServer, domain.OTAKeyWeb, domain.OTAKeyHal, domain.OTAKeyBuddy, domain.OTAKeyOpenClaw, domain.OTAKeyDevice:
+	case domain.OTAKeyOSServer, domain.OTAKeyWeb, domain.OTAKeyHal, domain.OTAKeyBuddy, domain.OTAKeyOpenClaw, domain.OTAKeyDevice,
+		domain.OTAKeyCodex, domain.OTAKeyClaudeCode, domain.OTAKeyOpenCode, domain.OTAKeyPicoClaw:
 		// All non-bootstrap components delegate to the on-device
 		// `software-update <key>` script (installed by setup.sh) so the
 		// install logic lives in one place — the script self-fetches
@@ -715,9 +885,13 @@ func (b *Bootstrap) applyUpdate(ctx context.Context, key string, component domai
 	}
 }
 
-// openclawNormalizeVersion extracts the version from openclaw --version output (e.g. "OpenClaw 2026.3.8 (3caab92)" -> "2026.3.8").
-// Used only for OTAKeyOpenClaw.
-func openclawNormalizeVersion(raw string) string {
+// cliSemver extracts the semver from the FIRST line of an agent CLI's
+// --version output: "OpenClaw 2026.3.8 (3caab92)" -> "2026.3.8",
+// "codex-cli 0.142.5" -> "0.142.5", "2.1.218 (Claude Code)" -> "2.1.218".
+// Shared by openclaw/codex/claudecode/opencode — every one of them prints the
+// version somewhere on line one, and each publishes that bare semver as its
+// metadata version. NOT usable for picoclaw (no semver in its output).
+func cliSemver(raw string) string {
 	line := strings.TrimSpace(strings.TrimRight(raw, "\r\n"))
 	if i := strings.IndexByte(line, '\n'); i >= 0 {
 		line = strings.TrimSpace(line[:i])

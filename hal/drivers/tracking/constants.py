@@ -6,6 +6,8 @@ here is either shared between modules or a behavior dial worth finding in
 one place.
 """
 
+from hal.config import TRACKING_MAX_DURATION_S
+
 # Vision-pipeline max width (px). The ViT tracker AND the detectors (YuNet /
 # local YOLO / remote YOLOWorld) run on a frame downscaled to at most this
 # width; every bbox they return is mapped back to ORIGINAL camera coordinates
@@ -164,8 +166,9 @@ PITCH_WEIGHT_WRIST = 0.0
 # chases dy in the correct direction. Set back to +1 if the wiring is restored.
 ELBOW_PITCH_SIGN = -1.0
 
-# Maximum tracking duration (seconds) — auto-stop to save motor/CPU.
-MAX_TRACK_DURATION_S = 300  # 5 minutes
+# Maximum tracking duration (seconds) — auto-stop to save motor/CPU. The
+# per-device value comes from HAL_TRACKING_MAX_DURATION_S at HAL startup.
+MAX_TRACK_DURATION_S = TRACKING_MAX_DURATION_S
 
 # Servo position limits (degrees).
 YAW_MIN, YAW_MAX = -135.0, 135.0

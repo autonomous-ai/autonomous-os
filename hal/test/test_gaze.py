@@ -6,6 +6,7 @@ what it currently outputs.
 """
 
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -388,6 +389,38 @@ def test_a_glance_too_brief_to_be_addressing_does_not_open_the_gate(armed, voice
     assert voice.grants == []
 
 
+def test_missing_face_requests_reacquire_and_can_authorize_the_same_utterance(armed, voice):
+    """A lamp that lost framing must not make the user repeat their sentence."""
+    assert gaze.on_speech_start() is False
+    assert gaze._speech_repoint_requested.is_set()
+
+    _hold_now()  # samples gathered after the watcher restored the remembered pose
+    assert gaze.on_speech_end() is True
+    assert voice.grants == ["gaze-reacquired"]
+    assert not gaze._speech_repoint_requested.is_set()
+
+
+def test_a_measured_away_head_never_requests_the_reacquire_exception(armed, voice):
+    now = gaze.time.monotonic()
+    _trail(now, [90.0, 90.0, 90.0, 90.0])
+    assert gaze.on_speech_start() is False
+    assert not gaze._speech_repoint_requested.is_set()
+
+    _hold_now()
+    assert gaze.on_speech_end() is False
+    assert voice.grants == []
+
+
+def test_voice_rechecks_reacquired_gaze_before_realtime_can_be_authorized():
+    """The recovery must still apply to the utterance that caused the turn."""
+    voice_source = (
+        Path(__file__).parents[1] / "drivers" / "voice" / "voice_service.py"
+    ).read_text()
+    assert voice_source.index("gaze.on_speech_end()") < voice_source.index(
+        "# Noise guard: a session can open"
+    )
+
+
 def test_the_cooldown_stops_one_conversation_opening_a_gate_per_sentence(armed, voice):
     _hold_now()
     assert gaze.on_speech_start() is True
@@ -466,9 +499,6 @@ def _absent_for(seconds):
     """Pretend the last face was seen `seconds` ago."""
     gaze._last_face_t = gaze.time.monotonic() - seconds
     gaze._last_repoint_t = gaze.time.monotonic() - 10_000.0
-    # No pitch correction in flight: that one takes precedence, and these cases
-    # are about the absence, not about the two of them competing.
-    gaze._last_pitch_t = gaze.time.monotonic() - 10_000.0
 
 
 def test_a_long_absence_turns_the_lamp_to_the_remembered_bearing(body):
@@ -481,6 +511,12 @@ def test_a_brief_absence_does_not_send_the_head_hunting(body):
     _absent_for(config.GAZE_REPOINT_AFTER_S - 1)
     gaze._maybe_repoint(gaze.time.monotonic())
     assert body.moves == []
+
+
+def test_a_speech_reacquire_bypasses_the_background_absence_delay(body):
+    _absent_for(0.0)
+    assert gaze._maybe_repoint(gaze.time.monotonic(), force=True) is True
+    assert body.moves and body.moves[0]["base_yaw.pos"] == pytest.approx(4.0)
 
 
 def test_it_turns_at_most_once_per_cooldown(body):
@@ -499,28 +535,6 @@ def test_it_never_moves_a_body_something_else_owns(body):
     body._music_playing = True
     gaze._maybe_repoint(gaze.time.monotonic())
     assert body.moves == []
-
-
-def test_a_recent_pitch_correction_outranks_the_remembered_bearing(body):
-    """The two used to undo each other, on the device, every few seconds.
-
-    Pitch lifted the camera onto a face it could actually see (-72.8 -> -61.9);
-    thirteen seconds later repoint re-anchored idle on the remembered pose,
-    wrist -46.7, dropping the aim back to where the face was clipped. Pitch
-    wins because it is correcting toward a face visible now, while the bearing
-    is a guess about where one was last seen.
-    """
-    _absent_for(config.GAZE_REPOINT_AFTER_S + 1)
-    gaze._last_pitch_t = gaze.time.monotonic() - 1.0
-    gaze._maybe_repoint(gaze.time.monotonic())
-    assert body.moves == []
-
-
-def test_an_old_pitch_correction_no_longer_holds_the_bearing_back(body):
-    _absent_for(config.GAZE_REPOINT_AFTER_S + 1)
-    gaze._last_pitch_t = gaze.time.monotonic() - config.GAZE_REPOINT_AFTER_S - 1.0
-    gaze._maybe_repoint(gaze.time.monotonic())
-    assert body.moves
 
 
 def test_a_bearing_it_does_not_trust_is_not_worth_turning_for(body, monkeypatch):
@@ -804,217 +818,6 @@ def test_a_clipped_face_is_recorded_as_unmeasured_not_as_a_profile(monkeypatch):
     (_, yaw, px, _), = gaze.snapshot()
     assert yaw == float("inf")     # unmeasured, so it votes neither way
     assert px == pytest.approx(92.0)
-    # The frame still says which way to move: the head is above centre.
-    assert gaze._last_dy_frac is not None and gaze._last_dy_frac < 0
-    assert gaze._last_dy_from_face is True
-
-
-# --- vertical centring (the neck) -------------------------------------------
-
-
-class _PitchSvc(_Svc):
-    def __init__(self, wrist=-70.0):
-        super().__init__()
-        self.wrist = wrist
-
-    def get_positions(self):
-        return {"base_yaw.pos": 0.0, "wrist_pitch.pos": self.wrist}
-
-    def get_joint_names(self):
-        return ["base_yaw.pos", "wrist_pitch.pos"]
-
-
-@pytest.fixture
-def neck(monkeypatch):
-    import hal.app_state as state
-
-    svc = _PitchSvc()
-    monkeypatch.setattr(state, "animation_service", svc, raising=False)
-    monkeypatch.setattr(state, "safety_policy", None, raising=False)
-    monkeypatch.setattr(config, "GAZE_WAKE_ENABLED", True)
-    monkeypatch.setattr(config, "GAZE_PITCH_ENABLED", True)
-    gaze._last_pitch_t = gaze.time.monotonic() - 10_000.0
-    # Corrections are face-driven unless a test says otherwise: the guessed
-    # path is off by default and has to be opted into explicitly.
-    gaze._last_dy_from_face = True
-    return svc
-
-
-def test_a_face_above_centre_tilts_the_camera_up(neck):
-    """The case that made the lamp stare at the keyboard all afternoon.
-
-    Up is the DECREASING direction on this joint — device-measured, see
-    _maybe_pitch. Asserting the joint number rather than the word "up" is the
-    whole point: the sign is the thing that was wrong.
-    """
-    gaze._last_dy_frac = -0.4
-    gaze._maybe_pitch(gaze.time.monotonic())
-    assert neck.moves, "a clipped-high face should raise the camera"
-    assert neck.moves[0]["wrist_pitch.pos"] < -70.0
-
-
-def test_a_face_below_centre_tilts_the_camera_down(neck):
-    gaze._last_dy_frac = 0.4
-    gaze._maybe_pitch(gaze.time.monotonic())
-    assert neck.moves[0]["wrist_pitch.pos"] > -70.0
-
-
-def test_a_face_near_enough_to_centre_is_left_alone(neck):
-    """Every correction is a visible head movement nobody asked for."""
-    gaze._last_dy_frac = config.GAZE_PITCH_DEAD_ZONE_FRAC - 0.01
-    gaze._maybe_pitch(gaze.time.monotonic())
-    assert neck.moves == []
-
-
-def test_no_face_measured_means_no_correction(neck):
-    gaze._last_dy_frac = None
-    gaze._maybe_pitch(gaze.time.monotonic())
-    assert neck.moves == []
-
-
-def test_one_correction_is_bounded(neck):
-    """A wrong sign must be a small mistake the next look reverses."""
-    gaze._last_dy_frac = -1.0
-    gaze._maybe_pitch(gaze.time.monotonic())
-    moved = neck.moves[0]["wrist_pitch.pos"] - (-70.0)
-    assert moved == pytest.approx(-config.GAZE_PITCH_MAX_STEP_DEG)
-
-
-def test_the_correction_stays_inside_the_mechanical_range(neck):
-    from hal.drivers.tracking import constants as C
-
-    neck.wrist = C.WRIST_PITCH_MIN + 1.0
-    gaze._last_dy_frac = -1.0
-    gaze._maybe_pitch(gaze.time.monotonic())
-    assert neck.moves[0]["wrist_pitch.pos"] >= C.WRIST_PITCH_MIN
-
-
-def test_it_never_moves_a_body_something_else_owns(neck):
-    gaze._last_dy_frac = -0.4
-    neck._tracking_active = True
-    gaze._maybe_pitch(gaze.time.monotonic())
-    neck._tracking_active = False
-    neck._music_playing = True
-    gaze._maybe_pitch(gaze.time.monotonic())
-    assert neck.moves == []
-
-
-def test_corrections_are_rate_limited(neck):
-    gaze._last_dy_frac = -0.4
-    now = gaze.time.monotonic()
-    gaze._maybe_pitch(now)
-    gaze._maybe_pitch(now + 0.5)
-    assert len(neck.moves) == 1
-
-
-# --- headroom from a person box when no face is measurable -------------------
-
-
-class _Box:
-    """Detector stand-in returning one fixed box for 'person'."""
-
-    def __init__(self, box):
-        self.box = box
-
-    def detect(self, frame, target, strict=False, min_conf=None):
-        return self.box if target == "person" else None
-
-
-class _Frame:
-    def __init__(self, h=360, w=640):
-        self.shape = (h, w, 3)
-
-
-def test_a_torso_cut_off_at_the_top_asks_the_camera_to_tilt_up():
-    """The head is outside the frame, above — the only readable evidence left.
-
-    Without this the correction dead-ends: undoing a large offset takes several
-    bounded steps, and the first can push a barely-visible face out of view, at
-    which point nothing is measurable and the camera stays wrong forever.
-    """
-    det = _Box((100, 0, 200, 300))       # top edge, tall
-    assert gaze._headroom_from_person(_Frame(), det) == pytest.approx(-0.5)
-
-
-def test_a_whole_person_well_inside_the_frame_needs_no_correction():
-    det = _Box((100, 40, 200, 250))      # top edge clear
-    assert gaze._headroom_from_person(_Frame(), det) is None
-
-
-def test_a_distant_person_is_not_this_desk_and_is_ignored():
-    det = _Box((100, 0, 20, 20))         # touching the top, but tiny
-    assert gaze._headroom_from_person(_Frame(), det) is None
-
-
-def test_no_person_and_no_detector_yield_no_correction():
-    assert gaze._headroom_from_person(_Frame(), _Box(None)) is None
-    assert gaze._headroom_from_person(_Frame(), None) is None
-    assert gaze._headroom_from_person(None, _Box((0, 0, 100, 300))) is None
-
-
-def test_a_detector_that_raises_does_not_break_sampling():
-    class _Angry:
-        def detect(self, *a, **k):
-            raise RuntimeError("model gone")
-
-    assert gaze._headroom_from_person(_Frame(), _Angry()) is None
-
-
-def test_a_person_filling_the_frame_still_means_look_up():
-    """A user sitting close fills the frame top to bottom at every pitch.
-
-    This is the exact case the fallback exists for — a torso with no face above
-    it means the camera is too low, because heads sit above bodies and this
-    lamp sits below head height. The danger was never the inference, it was
-    that it stays true however far the neck has already travelled; the budget
-    of blind steps in the caller is what makes acting on it terminate.
-    """
-    det = _Box((100, 0, 200, 360))       # clipped top AND bottom
-    assert gaze._headroom_from_person(_Frame(), det) == pytest.approx(-0.5)
-
-
-def test_blind_corrections_stop_after_a_few_and_wait_for_a_real_face(neck, monkeypatch):
-    """The fallback knows the head is up there, never how far."""
-    monkeypatch.setattr(config, "GAZE_PITCH_MAX_BLIND_STEPS", 3)
-    gaze._blind_pitch_steps = 0
-    gaze._last_dy_from_face = False
-    gaze._last_dy_frac = -0.5
-    for i in range(config.GAZE_PITCH_MAX_BLIND_STEPS + 3):
-        gaze._last_pitch_t = gaze.time.monotonic() - 10_000.0
-        gaze._maybe_pitch(gaze.time.monotonic())
-    assert len(neck.moves) == config.GAZE_PITCH_MAX_BLIND_STEPS
-
-
-def test_the_blind_search_is_off_by_default(neck):
-    """It cannot converge — the fallback reports the same offset every time, so
-    with the anchor following each step it becomes a one-way ratchet. Device-
-    observed -45 -> -30 -> -15 -> 0 -> +14, heading for the ceiling."""
-    assert config.GAZE_PITCH_MAX_BLIND_STEPS == 0
-    gaze._last_dy_from_face = False
-    gaze._blind_pitch_steps = 0
-    gaze._last_dy_frac = -0.5
-    gaze._maybe_pitch(gaze.time.monotonic())
-    assert neck.moves == []
-
-
-def test_a_real_face_clears_the_blind_budget(neck):
-    """Seeing a face again means the guessing worked; allow guessing later."""
-    gaze._blind_pitch_steps = config.GAZE_PITCH_MAX_BLIND_STEPS
-    gaze._last_dy_from_face = True
-    gaze._last_dy_frac = -0.4
-    gaze._last_pitch_t = gaze.time.monotonic() - 10_000.0
-    gaze._maybe_pitch(gaze.time.monotonic())
-    assert neck.moves and gaze._blind_pitch_steps == 0
-
-
-def test_moving_the_neck_discards_what_was_seen_from_the_old_pose(neck):
-    """Samples describe an angle as seen from ONE camera pose."""
-    gaze.record_sample(44, 80, 0.1)
-    gaze.record_sample(48, 80, 0.1)
-    gaze._last_dy_frac = -0.4
-    gaze._last_dy_from_face = True
-    gaze._maybe_pitch(gaze.time.monotonic())
-    assert neck.moves and gaze.snapshot() == []
 
 
 def test_repointing_also_discards_them(body):
@@ -1024,75 +827,3 @@ def test_repointing_also_discards_them(body):
     assert body.moves and gaze.snapshot() == []
 
 
-def test_repoint_does_not_re_anchor_a_wrist_the_pitch_loop_has_corrected(body):
-    """The slow half of the same fight.
-
-    Device-observed: pitch lifted the camera to -31.5 where it could see a
-    face, and thirty-four seconds later the repoint anchored idle back on the
-    remembered -46.1, from where the face is clipped again. The bearing memory
-    is worth believing about which way to face — that is what the move uses —
-    but not about how high to look.
-    """
-    anchored = {}
-    body.set_idle_anchor = lambda j: anchored.update(j or {})
-    _absent_for(config.GAZE_REPOINT_AFTER_S + 1)
-    gaze._last_pitch_t = gaze.time.monotonic() - config.GAZE_REPOINT_AFTER_S - 1.0
-    gaze._maybe_repoint(gaze.time.monotonic())
-    assert body.moves                                  # it still turned
-    assert "wrist_pitch.pos" not in anchored           # but left the aim alone
-    assert anchored.get("base_pitch.pos") == pytest.approx(0.0)
-
-
-def test_with_no_correction_yet_the_remembered_pose_is_anchored_whole(body, monkeypatch):
-    from hal.drivers.tracking import user_bearing
-
-    class _EstWithPitch(_Est):
-        pose = {"base_yaw.pos": 4.0, "base_pitch.pos": 0.0, "wrist_pitch.pos": -70.0}
-
-    monkeypatch.setattr(user_bearing, "read_estimate", lambda: _EstWithPitch())
-    anchored = {}
-    body.set_idle_anchor = lambda j: anchored.update(j or {})
-    _absent_for(config.GAZE_REPOINT_AFTER_S + 1)
-    gaze._last_pitch_t = 0.0                           # pitch has never spoken
-    gaze._last_anchor = None
-    gaze._maybe_repoint(gaze.time.monotonic())
-    assert anchored.get("wrist_pitch.pos") == pytest.approx(-70.0)
-
-
-def test_a_face_driven_correction_anchors_the_idle_loop(neck, monkeypatch):
-    """Anchoring must not wait for a perfectly centred face.
-
-    Waiting was circular: idle drags the camera back within a cycle, so the
-    centred frame that would justify anchoring never arrives and every
-    correction is undone before the next one lands.
-    """
-    anchored = {}
-    neck.set_idle_anchor = lambda j: anchored.update(j or {})
-    gaze._last_anchor = None
-    gaze._last_dy_from_face = True
-    gaze._last_dy_frac = -0.4
-    gaze._maybe_pitch(gaze.time.monotonic())
-    assert anchored.get("wrist_pitch.pos") == pytest.approx(
-        neck.moves[0]["wrist_pitch.pos"]
-    )
-
-
-def test_a_guessed_correction_anchors_too_so_idle_does_not_undo_it(neck, monkeypatch):
-    """A search whose progress is erased between steps is not a search.
-
-    Leaving the anchor behind during a blind search let idle pull back to where
-    the search started — device-observed the head reaching -32.4 and being
-    dragged to -41.5 before the next look. The blind budget bounds how far a
-    guess can take this; the anchor only stops it being wasted.
-    """
-    monkeypatch.setattr(config, "GAZE_PITCH_MAX_BLIND_STEPS", 3)
-    anchored = {}
-    neck.set_idle_anchor = lambda j: anchored.update(j or {})
-    gaze._last_anchor = None
-    gaze._last_dy_from_face = False
-    gaze._blind_pitch_steps = 0
-    gaze._last_dy_frac = -0.5
-    gaze._maybe_pitch(gaze.time.monotonic())
-    assert anchored.get("wrist_pitch.pos") == pytest.approx(
-        neck.moves[0]["wrist_pitch.pos"]
-    )

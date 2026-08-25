@@ -100,6 +100,29 @@ the previous binary at `/root/bootstrap/rollback/`. Use
 `sudo software-update rollback os-server` (or `bootstrap`) to restore it; the
 failed version is blocked until the feed publishes a different version.
 
+Web OTA follows the same recovery model. It stages and validates the new bundle
+before replacing `/usr/share/nginx/html/setup`, preserves the previous bundle at
+`/root/bootstrap/rollback/web.previous`, and records whether nginx was running.
+The update requires `index.html`, `nginx -t`, and a loopback `GET /` when nginx
+was active; a failed check restores the known-good bundle automatically. Use
+`sudo software-update rollback web` for an operator-initiated rollback.
+
+Device-profile OTA stages the package before swapping
+`/opt/devices/reachy-mini`, saves the prior profile and every affected rootfs
+target, then restores the prior `os-server` and HAL service state. It preserves
+the local `/opt/hal/.env` tuning file. The new profile must contain `ROBOT.md`;
+each previously active service must pass its loopback health endpoint or the
+known-good profile is restored automatically. Use
+`sudo software-update rollback device` for a manual recovery.
+
+HAL OTA keeps the complete previous `/opt/hal` runtime—its `.env`, virtual
+environment, and uv cache—at `/root/bootstrap/rollback/hal.previous`. The new
+runtime is unpacked and synchronized in a sibling staging directory; only then
+is it swapped into place. HAL is returned to its prior active/inactive state and
+an active service must answer `http://127.0.0.1:5001/health`. Any staging or
+health failure restores the known-good runtime automatically. Use
+`sudo software-update rollback hal` for a manual recovery.
+
 `spike.sh` is a **thin orchestrator** — it reimplements nothing, it just runs the
 component scripts in order. Each of those also runs standalone:
 
@@ -110,7 +133,7 @@ component scripts in order. Each of those also runs standalone:
 | 3 | `spike-os.sh` | `os-server` → `/usr/local/bin/os-server`, seeds `/root/config/config.json`, runs it **as root with `WorkingDirectory=/root`** |
 | 4 | `spike-web.sh` | `web` → `/usr/share/nginx/html/setup`, installs nginx, writes the spike vhost |
 | 5 | `spike-agent.sh` | Node.js 22 (NodeSource) + `openclaw` at the OTA-pinned version, seeds `/root/.openclaw`, runs `openclaw gateway run` on loopback `18789` |
-| 6 | `spike-bootstrap.sh` | `bootstrap` → `/usr/local/bin/bootstrap-server`, seeds `/root/config/bootstrap.json`, installs `robots/reachy-mini/software-update` → `/usr/local/bin/software-update` (the helper the worker execs; without it every apply fails with `executable file not found in $PATH` while all units report healthy) |
+| 6 | `spike-bootstrap.sh` | `bootstrap` → `/usr/local/bin/bootstrap-server`, seeds `/root/config/bootstrap.json`, installs the `software-update` staged at the device-package root by `upload-device.sh` (canonical `scripts/provision/software-update`) → `/usr/local/bin/software-update` (the helper the worker execs; without it every apply fails with `executable file not found in $PATH` while all units report healthy) |
 
 Why that order, specifically:
 

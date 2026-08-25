@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"log/slog"
 	"os"
 
 	"github.com/joho/godotenv"
@@ -53,7 +52,7 @@ func main() {
 	// Missing file is non-fatal — env may also be supplied by systemd.
 	_ = godotenv.Load("/opt/hal/.env")
 
-	cleanup := logger.Init(slog.LevelDebug, syspath.LogFile())
+	cleanup := logger.Init(syspath.LogFile())
 	defer cleanup()
 
 	srv, err := server.InitializeServer()

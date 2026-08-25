@@ -27,7 +27,7 @@ func main() {
 	// Missing file is non-fatal — env may also be supplied by systemd.
 	_ = godotenv.Load("/opt/hal/.env")
 
-	cleanup := logger.Init(slog.LevelDebug, "/var/log/bootstrap.log")
+	cleanup := logger.Init("/var/log/bootstrap.log")
 	defer cleanup()
 
 	b, err := bootstrap.ProvideServer()

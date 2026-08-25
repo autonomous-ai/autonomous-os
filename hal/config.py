@@ -96,6 +96,12 @@ TRACKING_FACE_DETECTOR_ENABLED: bool = os.environ.get(
     "HAL_TRACKING_FACE_DETECTOR", "true"
 ).strip().lower() in ("1", "true", "yes", "on")
 
+# Wall-clock limit for one object-tracking session. Read at HAL startup; set
+# HAL_TRACKING_MAX_DURATION_S per device to tune it without changing code.
+TRACKING_MAX_DURATION_S: float = float(
+    os.environ.get("HAL_TRACKING_MAX_DURATION_S", "10")
+)
+
 # --- Data layout ---
 
 # --- Sensing: os-server integration ---
@@ -709,6 +715,11 @@ REALTIME_RECV_QUEUE_TIMEOUT_S: float = float(
 # zero output events — the default watchdog killed such turns seconds before
 # the answer (device-observed 2026-07-06). Applies per-turn via
 # agent.extend_recv_timeout(); normal turns keep the tight default above.
+#
+# Raising this also delays the look-frame handoff, which only happens once this
+# watchdog gives up: keep REALTIME_GEMINI_VISION_HANDOFF_MAX_AGE_S comfortably
+# above it, or the frame expires before it can be handed off (that regression
+# ran from 2026-07-06 to 2026-08-24 — see that setting's comment).
 REALTIME_LOOK_RECV_TIMEOUT_S: float = float(
     os.environ.get("HAL_REALTIME_LOOK_RECV_TIMEOUT_S", "20.0")
 )
@@ -808,6 +819,12 @@ REALTIME_NOISE_SPEECH_RATIO: float = float(
 # false to fall back to the Silero-gated audio-only path.
 REALTIME_REQUIRE_TRANSCRIPT: bool = os.environ.get(
     "HAL_REALTIME_REQUIRE_TRANSCRIPT", "true"
+).lower() in ("1", "true", "yes")
+# Register the explicit `reject_turn` tool and allow only that tool call to
+# suppress the main-agent fallback. A plain silent completion, timeout, or error
+# still falls back as before. Set false to turn this experimental AI filter off.
+REALTIME_AI_REJECT_FILTER: bool = os.environ.get(
+    "HAL_REALTIME_AI_REJECT_FILTER", "true"
 ).lower() in ("1", "true", "yes")
 # Noise guard for turns that DO have a transcript. The guards above only run when
 # STT came back empty, so a noise turn whose STT invented a word ("Ừ", "Okay",
@@ -1044,7 +1061,10 @@ GAZE_MAX_YAW_DEG: float = float(os.environ.get("HAL_GAZE_MAX_YAW_DEG", "25"))
 # not a separate "hold" and "speech window": both described the same span — the
 # moments between turning toward the lamp and starting to speak — and two names
 # for one span drift apart. People turn BEFORE they speak, so this reaches
-# backwards only; nothing after the trigger is ever consulted.
+# backwards only. The sole exception is an empty-evidence recovery: VAD asks
+# the watcher to restore the remembered pose, then the completed SAME utterance
+# is checked once more. A head actually measured facing away never gets that
+# exception, so this does not turn general speech into a wake trigger.
 #
 # 1.5 s is also the smallest window that carries enough samples to vote with. At
 # 3 fps a 0.8 s window holds three observations, and three noisy samples cannot
@@ -1152,12 +1172,21 @@ REALTIME_GEMINI_VISION_MIN_INTERVAL_S: float = float(
     os.environ.get("HAL_GEMINI_VISION_MIN_INTERVAL_S", "10.0")
 )
 # Vision handoff: when a `look` turn delegates / falls back to the main agent
-# (e.g. Gemini timed out mid-turn), the frame `look` already captured is handed
-# to the main agent BY PATH so it reuses it instead of snapshotting again. The
-# handoff path is only attached if the frame is younger than this (freshness
-# guard; the frame is also cleared per-turn). 0 disables the age guard.
+# (e.g. Gemini timed out mid-turn), the frame `look` already captured rides the
+# sensing POST so the main agent answers from it instead of snapshotting again.
+# The frame is only attached if it is younger than this (freshness guard; the
+# frame is also cleared per-turn). 0 disables the age guard.
+#
+# MUST stay ABOVE REALTIME_LOOK_RECV_TIMEOUT_S plus dispatch time. The timeout
+# fallback is the main way this handoff is reached, and it only fires after that
+# watchdog has run its full course — after which HAL still replays the turn
+# audio and runs speaker ID before POSTing. Set the two equal and the guard
+# expires every frame it exists to serve: both were 20.0 between 2026-07-06
+# (when the look watchdog went 8s -> 20s and nobody adjusted this) and
+# 2026-08-24, and lamp-0c89 measured 3/3 look turns falling back at exactly 20s
+# with the image dropped, so the vision describe never ran once.
 REALTIME_GEMINI_VISION_HANDOFF_MAX_AGE_S: float = float(
-    os.environ.get("HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S", "20.0")
+    os.environ.get("HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S", "45.0")
 )
 
 # --- Realtime: OpenAI Realtime ---
@@ -1354,119 +1383,4 @@ GAZE_WELL_FRAMED_EDGE: float = float(
 # Below this confidence the bearing is not worth moving for.
 GAZE_REPOINT_MIN_CONFIDENCE: float = float(
     os.environ.get("HAL_GAZE_REPOINT_MIN_CONFIDENCE", "0.5")
-)
-
-# Vertical centring — the neck the aim never had.
-#
-# The look aim drives yaw only, deliberately: the pitch sign was never validated
-# for its relative `nudge()` path, and an inverted pitch is a bug this codebase
-# already hit once. The consequence on a desk is that the camera cannot recover
-# from pointing low, so the user's head sits above the frame and no amount of
-# left-right correction brings it back.
-#
-# Device-measured which joint is actually the neck, by moving each and looking:
-#   base_pitch   folds the whole arm, so it both rotates AND translates the
-#                camera - not monotonic (10.6 raised the view, 18.6 lowered it)
-#   elbow_pitch  0.2 px of vertical effect
-#   wrist_pitch  -70.6 -> -55 -> -45 raised it steadily, bringing a face that
-#                was clipped by the frame edge fully into view at 91 px
-# So: wrist_pitch is the neck. The DIRECTION recorded above did not survive a
-# paired re-measurement: holding the bus quiet and taking 18 face samples per
-# position, interleaved, -75 -> -90 moved the face DOWN the frame (+0.103) and
-# -68 -> -98 likewise (+0.185). Decreasing the joint tilts the camera UP. See
-# _maybe_pitch in gaze.py, where the correction now carries that sign.
-# Note the tracker's own pitch weights
-# spread across base and elbow with PITCH_WEIGHT_WRIST = 0.0, which is likely
-# why this joint was never the one anybody reached for.
-# ON, after being off. The objection that turned it off was real and is worth
-# keeping written down: camera direction depends on base_pitch and wrist_pitch
-# TOGETHER — the arm folds at its base, so that joint rotates AND translates the
-# camera, and the same wrist angle points somewhere different for every base
-# angle. Driving one joint per-degree against a coupled two-link arm, with no
-# kinematic model, walked the head to its limit while still missing the user.
-#
-# What changed is not the kinematics, it is that the corrections stopped being
-# undone between steps. Two things were erasing them: the repoint re-anchoring
-# idle on a remembered wrist angle recorded minutes earlier, and the idle loop
-# pulling back toward the pose the recording was made at. With both fixed the
-# loop converges instead of walking — device-measured, one run, three steps:
-# 45% above centre -> 21% -> 16%, each starting exactly where the last left off.
-#
-# It is still open-loop against a coupled arm, so the limit case remains real:
-# the same session drove wrist_pitch to -90.6 and sat on the mechanical stop
-# before recovering. The per-step cap and the blind-step budget are what bound
-# that, not any model of the arm. The remembered bearing (a full pose, restored
-# in one absolute move — see bearing_sampler) is still the better mechanism when
-# a pose has actually been learned; this loop is what gets a face into frame in
-# the first place, so a pose worth remembering can be learned at all.
-GAZE_PITCH_ENABLED: bool = (
-    os.environ.get("HAL_GAZE_PITCH", "true").lower() in ("1", "true", "yes")
-)
-# Degrees of wrist_pitch per FULL frame height. A seed, not a calibration: the
-# correction re-measures itself every step because it moves and then looks
-# again, so an imperfect constant costs an extra iteration, not accuracy.
-GAZE_PITCH_DEG_PER_FRAME: float = float(
-    os.environ.get("HAL_GAZE_PITCH_DEG_PER_FRAME", "45")
-)
-# Largest single correction. Small enough that a wrong sign is a mistake the
-# next measurement reverses, rather than a head swung to a limit.
-#
-# 15, not 8. The step is the binding constraint, not the estimate: a face 40%
-# above centre asks for 18 degrees and got 8, so each correction fell short and
-# the next frame reported almost the same offset — device-observed 41%, 33%,
-# 42% across three corrections, converging on nothing. The sign is now measured
-# rather than assumed, so the reason for keeping the step tiny is gone.
-GAZE_PITCH_MAX_STEP_DEG: float = float(
-    os.environ.get("HAL_GAZE_PITCH_MAX_STEP_DEG", "15")
-)
-# Vertical offset, as a fraction of frame height, that counts as centred enough.
-# Wider than it needs to be: the aim is to get the face INSIDE the frame with
-# room around it, not to centre it perfectly, and every correction is a visible
-# head movement the user did not ask for.
-GAZE_PITCH_DEAD_ZONE_FRAC: float = float(
-    os.environ.get("HAL_GAZE_PITCH_DEAD_ZONE_FRAC", "0.15")
-)
-# Minimum gap between corrections, so a user who keeps moving does not turn the
-# lamp into a head that nods along.
-GAZE_PITCH_COOLDOWN_S: float = float(
-    os.environ.get("HAL_GAZE_PITCH_COOLDOWN_S", "4")
-)
-# How many corrections in a row may be driven by the torso fallback before it
-# stops and waits for a real face. The fallback knows the head is above the
-# frame but not by how much, so its evidence can stay true no matter how far
-# the neck has moved — which is a loop, not a correction. Device-observed
-# before this bound: wrist_pitch climbed -89.7 -> -34.6 in eight steps and kept
-# going, because a user sitting close fills the frame at every pitch.
-# 0 — the blind search is off by default, and the code is kept for a device
-# where it earns its place.
-#
-# It cannot converge. The torso fallback reports the same fixed offset every
-# time (it knows the head is above the frame, never by how much), so once the
-# idle anchor follows each step there is nothing left to pull back and the
-# search becomes a one-way ratchet: device-observed -45 -> -30 -> -15 -> 0 ->
-# +14, on its way to pointing at the ceiling. To a user that reads as the lamp
-# wandering off, which is worse than the lamp sitting still.
-#
-# It is also unnecessary here. Face-driven corrections do the work whenever a
-# face is visible at all, and the anchor is what makes one correction stick.
-# When no face is visible the honest thing is to stay put: this device has a
-# remembered bearing to turn to and a user who can tilt it, and neither of
-# those is improved by sweeping the room.
-GAZE_PITCH_MAX_BLIND_STEPS: int = int(
-    os.environ.get("HAL_GAZE_PITCH_MAX_BLIND_STEPS", "0")
-)
-
-# Let the idle loop breathe around the pose the user was last seen from.
-#
-# The idle recording is absolute on every joint and loops forever, so within a
-# cycle of any correction it walks the camera back to the pose it was recorded
-# at — on a desk, the keyboard. Every framing fix was therefore temporary, and
-# gaze spent its time re-correcting instead of watching. Anchoring shifts the
-# whole loop without changing its shape: same motion, different centre.
-#
-# Scoped to idle deliberately. Emotion recordings may fling the head anywhere,
-# because by the time one plays the user has already been heard; what has to be
-# true is only that the RESTING pose can see whoever might speak next.
-GAZE_IDLE_ANCHOR: bool = (
-    os.environ.get("HAL_GAZE_IDLE_ANCHOR", "true").lower() in ("1", "true", "yes")
 )

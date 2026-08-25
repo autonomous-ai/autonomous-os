@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -387,9 +388,13 @@ func SetGELFDeviceType(deviceType string) {
 }
 
 // Init sets up the global slog default logger with colored console output.
+// HAL_LOG_LEVEL controls the level for the Go services and HAL from the shared
+// /opt/hal/.env. Missing or invalid values default to INFO.
 // If logFilePath is non-empty, logs are also written to that file (plain text, no color).
 // Returns a cleanup function to close the log file (call via defer).
-func Init(level slog.Level, logFilePath string) func() {
+func Init(logFilePath string) func() {
+	level := levelFromEnv()
+
 	consoleHandler := &colorHandler{
 		w:     os.Stdout,
 		level: level,
@@ -421,7 +426,7 @@ func Init(level slog.Level, logFilePath string) func() {
 	handlers := []slog.Handler{consoleHandler, fileHandler}
 	var gelf *gelfHandler
 	if gelfURL != "" {
-		gelf = newGELFHandler(slog.LevelInfo, "os-server") // pre-config host; SetGELFHost(DeviceID) overrides once config loads
+		gelf = newGELFHandler(level, "os-server") // pre-config host; SetGELFHost(DeviceID) overrides once config loads
 		activeGELF = gelf
 		handlers = append(handlers, gelf)
 	}
@@ -436,5 +441,20 @@ func Init(level slog.Level, logFilePath string) func() {
 			gelf.sender.close()
 		}
 		rotatingWriter.Close()
+	}
+}
+
+func levelFromEnv() slog.Level {
+	switch strings.ToUpper(strings.TrimSpace(os.Getenv("HAL_LOG_LEVEL"))) {
+	case "DEBUG":
+		return slog.LevelDebug
+	case "INFO":
+		return slog.LevelInfo
+	case "WARN", "WARNING":
+		return slog.LevelWarn
+	case "ERROR":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
 	}
 }

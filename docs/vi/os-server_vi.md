@@ -18,6 +18,7 @@
 | GET | `/api/system/info` | CPU, RAM, temp, uptime, version, trạng thái agent (name/connected/emotion/version/uptime) |
 | GET | `/api/system/network` | WiFi SSID, IP, signal, internet status |
 | GET | `/api/system/dashboard` | Snapshot tổng hợp (agent + config + HW) |
+| GET | `/api/system/ota-security` | Trạng thái tin cậy OTA lấy từ bootstrap worker: `legacy` hay `verified`, fingerprint key đã pin, lần fetch metadata gần nhất (xem `bootstrap-ota.md`) |
 
 ### Device Setup
 
@@ -411,12 +412,18 @@ Hai điều cần biết trên macOS:
 
 ## Logging
 
-Khi có cấu hình `GELF_URL`, OS Server gửi log từ mức INFO trở lên tới collector tập
-trung bằng một worker với queue giới hạn 256 record. Logging không block request path
-và không tạo goroutine theo từng record: khi collector chậm/không hoạt động và queue
-đầy, GELF record mới bị drop (có stderr notice rate-limit); log console và rotating
-file cục bộ vẫn tiếp tục. Khi shutdown, worker flush record trong queue tối đa năm
-giây trước khi hủy delivery còn lại.
+`HAL_LOG_LEVEL` trong `/opt/hal/.env` dùng chung điều khiển mức log cho HAL,
+OS Server và bootstrap. Các giá trị hợp lệ là `DEBUG`, `INFO` (mặc định),
+`WARN`, và `ERROR`. OS Server ghi các record từ mức đã cấu hình trở lên ra stdout
+và file cục bộ xoay vòng `/var/log/os-server.log` (mỗi file 2 MB, giữ lại 10
+bản sao mới nhất).
+
+Khi có cấu hình `GELF_URL`, OS Server gửi các record từ cùng mức đã cấu hình trở lên
+tới collector tập trung bằng một worker với queue giới hạn 256 record. Logging không
+block request path và không tạo goroutine theo từng record: khi collector chậm/không
+hoạt động và queue đầy, GELF record mới bị drop (có stderr notice rate-limit); log
+console và rotating file cục bộ vẫn tiếp tục. Khi shutdown, worker flush record trong
+queue tối đa năm giây trước khi hủy delivery còn lại.
 
 ## Local Intent Matching
 

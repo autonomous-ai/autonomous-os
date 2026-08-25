@@ -207,6 +207,10 @@ func (s *CodexService) EnsureOnboarding() error {
 	// servo-control on a motionless device). Skill dirs are read per-turn from
 	// disk, so no gateway reload is needed.
 	s.pruneUnsupportedSkills()
+	// Re-sync all supported skills at boot/config reconciliation, mirroring
+	// OpenClaw. The watcher only reacts to metadata changes after it starts, so
+	// this self-heals a stale local skill when os-server starts after a CDN update.
+	changedSkills := s.downloadSkills()
 
 	// OS-managed markdown blocks (incl. the persona inline block below).
 	// Refreshing them never requires a gateway restart: the gatewayd spawns a
@@ -276,12 +280,48 @@ func (s *CodexService) EnsureOnboarding() error {
 		}
 	}
 
+	// Skills are read per turn, so no gateway restart is needed. A restart can
+	// briefly leave the bridge disconnected, so wait for it before sending the
+	// re-read request instead of silently losing the notification.
+	s.notifySkillChangesWhenReady(changedSkills)
+
 	// (openclaw additionally pins messages.queue.mode — N/A for codex: the
 	// gatewayd strictly serializes turns through one `codex exec` at a time, so
 	// there is no queue mode to pin. openclaw.json-specific steps —
 	// hooks/logging/controlUi — are likewise N/A; skill capability-gating is
 	// done above via pruneUnsupportedSkills.)
 	return nil
+}
+
+const skillNotifyReadyTimeout = 60 * time.Second
+
+// notifySkillChangesWhenReady waits for a just-restarted Codex bridge before
+// asking it to re-read changed skills. EnsureOnboarding is already running off
+// the HTTP serving path; the bounded wait preserves the notification without
+// delaying request handling.
+func (s *CodexService) notifySkillChangesWhenReady(changedSkills []string) {
+	if len(changedSkills) == 0 {
+		return
+	}
+
+	deadline := time.NewTimer(skillNotifyReadyTimeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if s.IsReady() {
+			s.notifySkillChanges(changedSkills)
+			return
+		}
+		select {
+		case <-deadline.C:
+			slog.Warn("skill update notification timed out waiting for Codex bridge",
+				"component", "skill-watcher", "skills", changedSkills)
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // ensureAgentsMDBlock injects/refreshes the OS-managed block in workspace/AGENTS.md.

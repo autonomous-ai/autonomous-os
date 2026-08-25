@@ -34,7 +34,13 @@ import logging
 import os
 from typing import Any, Dict
 
-from hal.presets import AIM_PRESETS, EMOTION_PRESETS, SCENE_PRESETS, STATUS_LED_PRESETS
+from hal.presets import (
+    AIM_PRESETS,
+    BUTTON_LED_PRESETS,
+    EMOTION_PRESETS,
+    SCENE_PRESETS,
+    STATUS_LED_PRESETS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +55,7 @@ _TABLES: Dict[str, Dict[str, Dict[str, Any]]] = {
     "scene": SCENE_PRESETS,
     "aim": AIM_PRESETS,
     "status_led": STATUS_LED_PRESETS,
+    "button_led": BUTTON_LED_PRESETS,
 }
 
 

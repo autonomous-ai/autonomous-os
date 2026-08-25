@@ -427,6 +427,12 @@ class TrackerService:
             while state.running.is_set():
                 t0 = time.perf_counter()
 
+                # This is a wall-clock session limit. Check before reading the
+                # frame so a stalled camera cannot keep tracking alive forever.
+                if time.perf_counter() - track_start_t > C.MAX_TRACK_DURATION_S:
+                    logger.warning("Tracking timeout after %ds, stopping", C.MAX_TRACK_DURATION_S)
+                    break
+
                 frame = camera_capture.last_frame
                 if frame is None:
                     time.sleep(1.0 / C.FAST_LOOP_FPS)
@@ -837,10 +843,6 @@ class TrackerService:
                     servo_count = 0
                     fps_t0 = time.perf_counter()
 
-                if time.perf_counter() - track_start_t > C.MAX_TRACK_DURATION_S:
-                    logger.warning("Tracking timeout after %ds, stopping", C.MAX_TRACK_DURATION_S)
-                    break
-
                 dt = time.perf_counter() - t0
                 sleep_time = (1.0 / C.FAST_LOOP_FPS) - dt
                 if sleep_time > 0:
@@ -891,3 +893,11 @@ class TrackerService:
                     target=animation_service._event_loop, daemon=True
                 )
                 animation_service._event_thread.start()
+
+            # Restart idle. The tracking lock in _continue_playback cleared
+            # _current_recording, so the revived event loop has nothing to
+            # play and would return at its first guard forever — arm rigid at
+            # zero with torque on. Every other exit re-enters idle the same
+            # way (music stop, aim, resume); this one used to be the gap.
+            # dispatch, not _handle_play: playback belongs to the event thread.
+            animation_service.dispatch("play", animation_service.idle_recording)

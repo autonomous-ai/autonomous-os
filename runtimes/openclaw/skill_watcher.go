@@ -56,13 +56,14 @@ func (s *OpenclawService) StartSkillWatcher(ctx context.Context) {
 				supported[n] = true
 			}
 			var toUpdate []string
+			pendingVersions := map[string]string{}
 			for name, ver := range remote {
 				if !supported[name] {
 					continue
 				}
 				if ver != "" && ver != lastVersions[name] {
 					toUpdate = append(toUpdate, name)
-					lastVersions[name] = ver
+					pendingVersions[name] = ver
 				}
 			}
 			if len(toUpdate) == 0 {
@@ -70,8 +71,11 @@ func (s *OpenclawService) StartSkillWatcher(ctx context.Context) {
 			}
 
 			slog.Info("skill versions changed", "component", "skill-watcher", "skills", toUpdate)
-			changed := s.downloadSkillsByName(toUpdate)
-			s.notifySkillChanges(changed)
+			result := s.downloadSkillsByNameResult(toUpdate)
+			for _, name := range result.applied {
+				lastVersions[name] = pendingVersions[name]
+			}
+			s.notifySkillChanges(result.changed)
 		}
 	}
 }
@@ -88,13 +92,25 @@ func (s *OpenclawService) downloadSkills() []string {
 // skill folder; the version pre-filter + content hash mean a returned name had
 // real content changes.
 func (s *OpenclawService) downloadSkillsByName(names []string) []string {
+	return s.downloadSkillsByNameResult(names).changed
+}
+
+type skillDownloadResult struct {
+	changed []string
+	applied []string
+}
+
+// downloadSkillsByNameResult reports successfully applied skills separately from
+// skills whose content changed. A watcher only advances an OTA version after its
+// archive is downloaded and extracted, so a transient failure is retried.
+func (s *OpenclawService) downloadSkillsByNameResult(names []string) skillDownloadResult {
 	base := s.skillsBaseURL()
 	if base == "" {
 		slog.Info("skill download skipped: no ota_metadata_url configured", "component", "skill-watcher")
-		return nil
+		return skillDownloadResult{}
 	}
 	skillsDir := filepath.Join(s.config.OpenclawConfigDir, "workspace", "skills")
-	var changed []string
+	result := skillDownloadResult{}
 	for _, name := range names {
 		url := fmt.Sprintf("%s/%s.zip", base, name)
 		tmpZip, err := skills.DownloadToTempFile(url, "skill-*.zip")
@@ -115,6 +131,7 @@ func (s *OpenclawService) downloadSkillsByName(names []string) []string {
 			continue
 		}
 		os.Remove(tmpZip)
+		result.applied = append(result.applied, name)
 
 		newHash, _ := skills.FolderHash(targetDir)
 		if oldHash != "" && oldHash == newHash {
@@ -122,9 +139,9 @@ func (s *OpenclawService) downloadSkillsByName(names []string) []string {
 				"component", "skill-watcher", "skill", name)
 			continue
 		}
-		changed = append(changed, name)
+		result.changed = append(result.changed, name)
 	}
-	return changed
+	return result
 }
 
 // notifySkillChanges sends a single message to the agent listing all changed skills.

@@ -163,8 +163,7 @@ var presyncStateFiles = []string{
 //     while active self-heals without a runtime switch;
 //  2. seed KNOWLEDGE.md + the empty persona satellite files the CLAUDE.md
 //     imports point at;
-//  3. capability-gate skills + restore them from the CDN when the dir is empty
-//     (factory reset / first boot);
+//  3. capability-gate and reconcile every supported skill from the CDN;
 //  4. refresh the OS-managed CLAUDE.md / SOUL.md blocks;
 //  5. self-heal the systemd unit and restart the bridge only when something
 //     actually changed (or it is down) — an unchanged boot is a no-op.
@@ -187,12 +186,14 @@ func (s *ClaudeCodeService) EnsureOnboarding() error {
 	// FIRST, so the prune/restore below see the real (post-migration) dir.
 	skillsMigrated := migrateSkillsToUserScope()
 
-	// Capability-gate skills; restore the supported set from the CDN when the
-	// skills dir is empty (factory reset wiped it / first boot).
+	// Capability-gate skills, then reconcile the entire supported set from the
+	// CDN. This also repairs an old local skill when the watcher starts after OTA
+	// metadata was already published at its new version.
 	s.pruneUnsupportedSkills()
-	skillsRestored := s.ensureSkills()
+	changedSkills := s.downloadSkills()
+	skillsSynced := len(changedSkills) > 0
 
-	needRestart := presyncChanged || personaSeeded || skillsRestored || skillsMigrated
+	needRestart := presyncChanged || personaSeeded || skillsSynced || skillsMigrated
 
 	if modified, err := s.ensureSoulMDBlock(); err != nil {
 		slog.Error("ensure SOUL.md block failed", "component", "claudecode-onboarding", "error", err)
@@ -224,13 +225,16 @@ func (s *ClaudeCodeService) EnsureOnboarding() error {
 
 	slog.Info("claudecode onboarding: (re)starting bridge", "component", "claudecode",
 		"presync_changed", presyncChanged, "persona_seeded", personaSeeded,
-		"skills_restored", skillsRestored, "unit_installed", unitInstalled, "unit_down", unitDown)
+		"skills_synced", skillsSynced, "unit_installed", unitInstalled, "unit_down", unitDown)
 	enableClaudeCodeGateway()
 	if err := restartClaudeCodeGateway(); err != nil {
 		// Non-fatal: the new config is on disk; the bridge picks it up on its
 		// next (re)start. Don't block the os-server boot path.
 		slog.Warn("claudecode bridge restart failed", "component", "claudecode", "error", err)
 	}
+	// Send this after the restart attempt so the bridge is available to receive
+	// the re-read instruction, matching OpenClaw's onboarding ordering.
+	s.notifySkillChanges(changedSkills)
 	return nil
 }
 
@@ -533,29 +537,6 @@ func (s *ClaudeCodeService) pruneUnsupportedSkills() {
 		}
 		slog.Info("pruned unsupported skill (capability gate)", "component", "claudecode-onboarding", "skill", name)
 	}
-}
-
-// ensureSkills downloads all supported skills from the CDN into
-// claudecodeSkillsDir when the directory is absent or empty. Covers factory
-// reset (which wipes it) and first boot. Steady-state updates are
-// handled by StartSkillWatcher (version-gated CDN polling). Returns true when
-// skills were restored so EnsureOnboarding includes a bridge restart. Mirrors
-// hermes.ensureSkills.
-func (s *ClaudeCodeService) ensureSkills() bool {
-	skillsDir := claudecodeSkillsDir
-	entries, err := os.ReadDir(skillsDir)
-	if err == nil && len(entries) > 0 {
-		return false // skills present — watcher handles updates
-	}
-	names := s.supportedSkills()
-	if len(names) == 0 {
-		return false
-	}
-	slog.Info("claudecode onboarding: skills dir empty — restoring from CDN",
-		"component", "claudecode", "count", len(names))
-	changed := s.downloadSkillsByName(names)
-	slog.Info("claudecode onboarding: skills restored", "component", "claudecode", "restored", len(changed))
-	return len(changed) > 0
 }
 
 // migrateSkillsToUserScope moves skills installed by an older os-server under

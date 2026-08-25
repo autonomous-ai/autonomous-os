@@ -83,7 +83,7 @@ snake_case → camelCase.
 - **Auth:** `POST /api/login`, `POST /api/logout`, `POST /api/login/exchange`.
 - **TTS/Voice:** `GET /api/device/tts-providers`, `GET /api/device/voices?provider&lang`, `POST /api/voice/preview`.
 - **Hardware (`/api/hardware/*`):** servo, led, camera, sensing, face (enroll/remove/owners), bluetooth, audio, presence, scene, display.
-- **Agent/observability:** `/api/agent/flow-stream` (SSE), `/api/analytics`, `/api/logs?source=&limit=`, `/api/pty/*` (WS).
+- **Agent/observability:** `/api/agent/flow-stream` (SSE), `/api/analytics`, `/api/logs/tail?source=&lines=`, `/api/logs/stream?source=` (SSE), `/api/pty/*` (WS).
 
 ---
 
@@ -146,7 +146,7 @@ always mounted (to preserve thread context); some tabs are debug-only.
 | Face-Owners | enrolled faces, galleries, cooldown timers, per-user history | poll 2s `/hw/face/*` |
 | Chat | web chat UI, history, quick-pick | SSE flow-stream + RPC to agent |
 | CLI *(debug)* | multi-tab xterm terminal, PTY per tab | **WebSocket** `/api/pty/{id}/ws` |
-| Logs *(debug)* | aggregated HAL / os-server / agent / buddy logs, level + ANSI strip | poll 1–2s `/api/logs?source=` |
+| Logs *(debug)* | aggregated HAL / os-server / bootstrap (`bootstrap.service` journal) / agent / buddy logs, level + ANSI strip | tail `/api/logs/tail?source=&lines=` + SSE `/api/logs/stream?source=` |
 | Analytics *(debug)* | turn count, duration P50/P95, token metrics, inner-loop timing | poll `/api/analytics?from&to` |
 
 **Flow Monitor** (`monitor/FlowSection/`) groups SSE events into **Turns**

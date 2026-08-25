@@ -3,8 +3,10 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os/exec"
 	"strconv"
@@ -14,6 +16,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"go.autonomous.ai/os/system/device"
+	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/server/serializers"
 )
 
@@ -29,11 +33,34 @@ var (
 
 const softwareUpdateMinInterval = 30 * time.Second
 
-// softwareUpdate triggers an OTA update for a single named component via the bootstrap worker.
-// POST /api/system/software-update/:target  (target: os-server | web | hal)
+// softwareUpdate installs the published version of one component now, via the
+// bootstrap worker — the UI equivalent of `software-update <target>` over SSH.
+// The staged-rollout floor (min_version) governs the AUTOMATIC worker only; an
+// operator updating one device on purpose is not subject to it.
+// POST /api/system/software-update/:target
+// target: os-server | bootstrap | web | hal | agent (resolves to the configured runtime's CLI)
 func (s *Server) softwareUpdate(c *gin.Context) {
 	target := c.Param("target")
-	allowed := map[string]bool{"os-server": true, "web": true, "hal": true}
+	// "agent" is a virtual target: the caller (the Versions card) knows there is
+	// an agent CLI but not WHICH one, so the runtime is resolved here rather than
+	// shipped to the browser. It maps to the OTA key of the configured runtime —
+	// they share the same names by construction (domain.AgentRuntime* ==
+	// domain.OTAKey* for the CLIs).
+	if target == "agent" {
+		runtime := device.CurrentAgentRuntimeFromConfig(s.config)
+		// Hermes is excluded on purpose: `hermes update` cannot be pinned to a
+		// version, so bootstrap never auto-applies it (see domain/ota.go). A
+		// button that silently did nothing would be worse than no button.
+		if runtime == domain.AgentRuntimeHermes {
+			c.JSON(http.StatusBadRequest, serializers.ResponseError("hermes cannot be updated over OTA — run `software-update hermes` on the device"))
+			return
+		}
+		target = runtime
+	}
+	allowed := map[string]bool{
+		"os-server": true, domain.OTAKeyBootstrap: true, "web": true, "hal": true,
+		domain.OTAKeyCodex: true, domain.OTAKeyClaudeCode: true, domain.OTAKeyOpenCode: true, domain.OTAKeyPicoClaw: true,
+	}
 	if !allowed[target] {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError("unknown target: "+target))
 		return
@@ -54,7 +81,12 @@ func (s *Server) softwareUpdate(c *gin.Context) {
 	softwareUpdateLastFire[target] = time.Now()
 	softwareUpdateLastFireMu.Unlock()
 
-	url := "http://127.0.0.1:8080/force-check/" + target
+	// force-update, NOT force-check: this button stands for "run
+	// `software-update <target>` on this device", which installs the published
+	// version outright. force-check would re-run the AUTOMATIC decision instead,
+	// and that one respects min_version — so a component whose rollout floor has
+	// not been promoted would silently do nothing while the UI said OK.
+	url := "http://127.0.0.1:8080/force-update/" + target
 	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, url, nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, serializers.ResponseError("build request: "+err.Error()))
@@ -66,7 +98,133 @@ func (s *Server) softwareUpdate(c *gin.Context) {
 		return
 	}
 	defer resp.Body.Close()
+	// Propagate a refusal instead of reporting success: bootstrap keeps its own
+	// target allowlist, so the two can disagree (they did while the agent CLIs
+	// were being added). Without this the web button says "OK" for a check that
+	// never ran.
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		c.JSON(http.StatusBadGateway, serializers.ResponseError(
+			fmt.Sprintf("bootstrap refused %s: %s %s", target, resp.Status, strings.TrimSpace(string(body)))))
+		return
+	}
 	c.JSON(http.StatusOK, serializers.ResponseSuccess("software update triggered: "+target))
+}
+
+// otaSecurity reports whether this device verifies OTA metadata and artifacts.
+// GET /api/system/ota-security
+//
+// The bootstrap worker owns the answer (it holds the pinned key and performs
+// the verification), so this handler proxies its /security endpoint verbatim
+// rather than re-reading bootstrap.json and guessing.
+func (s *Server) otaSecurity(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:8080/security", nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, serializers.ResponseError("build request: "+err.Error()))
+		return
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, serializers.ResponseError("bootstrap unreachable: "+err.Error()))
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		c.JSON(http.StatusBadGateway, serializers.ResponseError("bootstrap security status: "+resp.Status))
+		return
+	}
+	var status map[string]any
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&status); err != nil {
+		c.JSON(http.StatusBadGateway, serializers.ResponseError("decode security status: "+err.Error()))
+		return
+	}
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(status))
+}
+
+// otaVersions reports, per component, what this device runs vs what the OTA feed
+// offers — so the Versions card can show an `update` button ONLY where an update
+// actually exists instead of on every row.
+// GET /api/system/ota-versions
+//
+// Proxies the bootstrap worker (it owns metadata + version detection) and adds
+// one alias: "agent" duplicates the entry of the configured runtime's CLI. The
+// browser therefore never needs to know which runtime this device runs — the
+// same trick POST /software-update/agent uses.
+func (s *Server) otaVersions(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:8080/versions", nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, serializers.ResponseError("build request: "+err.Error()))
+		return
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, serializers.ResponseError("bootstrap unreachable: "+err.Error()))
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		c.JSON(http.StatusBadGateway, serializers.ResponseError("bootstrap versions: "+resp.Status))
+		return
+	}
+	var versions map[string]any
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&versions); err != nil {
+		c.JSON(http.StatusBadGateway, serializers.ResponseError("decode versions: "+err.Error()))
+		return
+	}
+	// Hermes is never auto-applied (see domain/ota.go), so it gets no alias and
+	// the Agent row stays button-less on a Hermes device — matching what
+	// POST /software-update/agent would answer.
+	if runtime := device.CurrentAgentRuntimeFromConfig(s.config); runtime != domain.AgentRuntimeHermes {
+		if entry, ok := versions[runtime]; ok {
+			versions["agent"] = entry
+		}
+	}
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(versions))
+}
+
+// otaUpdating lists the components the bootstrap worker is installing right now,
+// so the Versions card can label that row "updating…" while the work runs. Cheap
+// by design (no metadata fetch) — the UI polls it every couple of seconds.
+// GET /api/system/ota-updating
+func (s *Server) otaUpdating(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:8080/updating", nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, serializers.ResponseError("build request: "+err.Error()))
+		return
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, serializers.ResponseError("bootstrap unreachable: "+err.Error()))
+		return
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Updating []string `json:"updating"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&body); err != nil {
+		c.JSON(http.StatusBadGateway, serializers.ResponseError("decode updating: "+err.Error()))
+		return
+	}
+	// Mirror the "agent" alias of /ota-versions so the Agent row can be matched
+	// without the browser knowing which runtime this device runs.
+	runtime := device.CurrentAgentRuntimeFromConfig(s.config)
+	out := append([]string{}, body.Updating...)
+	for _, k := range body.Updating {
+		if k == runtime {
+			out = append(out, "agent")
+			break
+		}
+	}
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(map[string]any{"updating": out}))
 }
 
 // execCommand runs a shell command (sh -c) and returns stdout, stderr, and exit code.

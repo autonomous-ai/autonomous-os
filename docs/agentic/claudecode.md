@@ -49,6 +49,14 @@ backend in `system/agent/factory.go`. Switching in/out goes through the generic
    (`curl -fsSL https://claude.ai/install.sh | bash` → `~/.local/bin/claude`,
    standalone binary, linux arm64/amd64, no Node.js), symlinked to
    `/usr/local/bin/claude`;
+
+   > **Field updates** don't re-run this install path from scratch: publish with
+   > `make upload-claudecode <bare-semver>` + `make promote-claudecode`, and the
+   > bootstrap worker runs `software-update claudecode` (re-runs the installer
+   > pinned to that version, re-points the symlink, restarts `claudecode.service`)
+   > on devices whose `agent_runtime` is `claudecode`. No rollback backup exists —
+   > the installer keeps `~/.local/share/claude/versions/<ver>`, so downgrading
+   > means publishing the older version. See `docs/bootstrap-ota.md` §5.
 3. **no bun, no channel plugins** — telegram + discord are device-owned
    (os-server runs the receive loops itself, §7), so the plugin marketplace
    step is gone entirely;
@@ -420,11 +428,13 @@ Telegram, across multiple folders each with its own session.
   `CLAUDE.md` itself is runtime-specific and never carried.
 - **No HEARTBEAT.md** — Claude Code has no heartbeat loop that would read it; a
   conscious skip, not an oversight.
-- **Skills** live in `workspace/.claude/skills/` (native, auto-discovered).
-  Capability-pruned on onboarding; **restored from the CDN when empty**
-  (`ensureSkills` — covers factory reset); steady-state updates via
-  `skill_watcher.go` (5-min OTA metadata poll, notify via
-  `SendSystemChatMessage`).
+- **Skills** live in `/root/.claude/skills/` (native, auto-discovered).
+  On every onboarding, the capability gate is applied and the complete supported
+  catalog is reconciled from the CDN, repairing stale local files even when the
+watcher starts after an OTA publish. `skill_watcher.go` then polls OTA metadata
+every five minutes for later publishes. A real content change restarts the
+bridge and then notifies the agent through `SendSystemChatMessage` to re-read it.
+A failed ZIP download or extract leaves the version pending for the next poll.
 - **MCP is real** (`mcp.go`): `WriteMCPEntry`/`RemoveMCPEntry` upsert
   `workspace/.mcp.json` `mcpServers` (canonical `{command,args,env}` /
   `{type,url,headers}` entries pass through verbatim) + bridge restart;

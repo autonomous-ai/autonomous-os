@@ -332,7 +332,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
       }
       providerChangedByUser.current = true;
     }).catch(() => {});
-  }, [ttsProvider, sttLanguage]);
+  }, [ttsProvider, sttLanguage, ttsVoice]);
 
   // Auto-mirror AI Brain key/URL into TTS while TTS field is empty.
   // Once the user types into TTS the sync stops; clearing it re-enables mirroring.

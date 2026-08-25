@@ -136,7 +136,13 @@ Read the `[activity] Activity detected: <labels>.` message + the `[wellbeing_con
 - **Reference files own the phrasing** for routes #2–#5 (morning-greeting / sleep-winddown / meal-reminder / posture-nudge). The corresponding HW marker logs `action=<route name>` so the next event in the same window/day sees `*_done_today` / `*_done_this_window` true and skips re-firing.
 - The `nudge_*` row you POST in routes #6 (hydration) / #7 (break) acts as the next reset point for `hydration_delta_min` / `break_delta_min`, so once you nudge the delta drops to 0 and the next reminder of that kind only fires after another full threshold window. Route #8 (toilet) similarly resets `drinks_since_toilet_nudge` to 0 on POST.
 - Route #5 (posture) does NOT follow that pattern — re-firing is gated by HAL's tumbling pose window: a `[posture_summary]` block only appears at the end of each completed window where bad_ratio crossed the threshold AND the user is still sedentary. Your POST does not by itself reset a timer; if the block is absent, you cannot nudge.
-- Never narrate the routing decision in the spoken reply.
+- **Never narrate the routing decision in the spoken reply.** The reply is read
+  aloud verbatim — the row you picked and why is scratch, not speech. Device-observed
+  leak, 2026-08-24: *"Route: sedentary `using computer` at 70 min since last break →
+  **break nudge** (route #7). Checking the emotion marker format before speaking"* —
+  the lamp read that out and never got to the nudge. Never announce a step you are
+  about to take ("Checking…", "Let me read…", "I'll log X then respond"): do it, then
+  speak. Start the reply at the first word the user should hear.
 
 ## Reaction (when the user just did the thing)
 

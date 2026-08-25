@@ -79,6 +79,13 @@ backend):
    asset `codex-aarch64-unknown-linux-musl.tar.gz` — static musl, no runtime
    deps) to `/usr/local/bin/codex`; idempotent (skips when the pinned version
    is already installed);
+
+   > **Updating a device already in the field** does NOT go through this pin:
+   > publish with `make upload-codex <bare-semver>` + `make promote-codex`, and
+   > the bootstrap worker runs `software-update codex` (binary swap + restart)
+   > on every device whose `agent_runtime` is `codex`. The pin here is the
+   > baseline a freshly flashed image starts from — keep it in step with
+   > `scripts/imager/build-orangepi.sh`. See `docs/bootstrap-ota.md` §5.
 3. runs the presync hook once (`/usr/local/bin/runtime-codex-presync`,
    materialized by os-server BEFORE the installer — §1.2);
 4. writes + enables **`codex.service`** (`ExecStart=/usr/local/bin/os-server
@@ -180,6 +187,15 @@ never scans — a device with skills there gets an empty `@` picker and no nativ
 skill loading. All producers target `codexSkillsDir`: `presync.sh` §1 (openclaw
 migration → `$CODEX_DIR/skills`), `skill_watcher.go` (CDN download + the
 `notifySkillChanges` message), and `pruneUnsupportedSkills` (capability gate).
+`EnsureOnboarding` also refreshes every supported skill from the CDN on boot or
+configuration reconciliation. This repairs a stale local skill if OS Server was
+restarted after a CDN publish, before the five-minute version watcher observed
+the change; unchanged content is not re-notified. The watcher logs every poll and
+only records an OTA version after its archive is downloaded and extracted, so a
+transient download failure is retried on the next five-minute poll.
+After an onboarding-triggered sync that also restarts the Codex bridge, the
+re-read notification waits up to one minute for the bridge to reconnect rather
+than being dropped while it is unavailable.
 `migrateSkillsToCodexHome` lifts any legacy `workspace/skills` left by an older
 os-server into the native root and drops the workspace copy (idempotent);
 factory reset wipes all of `/root/.codex`, so the set is re-migrated from

@@ -114,7 +114,13 @@ Rules:
 - **Cooldown only gates music, not checkin.** When `last_suggestion_age_min ∈ [0, 7)` the music branch is blocked (row #2 fails its third clause) and the event falls through to checkin (row #3). The agent still asks — it just doesn't suggest music back-to-back. The only `NO_REPLY` path is row #1 (active audio).
 - **Output ownership:** `music` → produced by `music-suggestion/SKILL.md`. `checkin` → produced by `reference/checkin.md` (this skill). `action` → emitted inline by this router (the `[HW:/emotion:...]` marker in row #1).
 - **Cooldown is shared** between music and checkin: both log via `music-suggestion/log` so `last_suggestion_age_min` reflects either channel.
-- Never narrate the routing decision in the spoken reply.
+- **Never narrate the routing decision in the spoken reply.** The reply is read
+  aloud verbatim — the row you picked and why is scratch, not speech. Device-observed
+  leak, 2026-08-24: *"A speech-emotion happy cue, fresh decision, audio idle, cooldown
+  clear — routes to a music suggestion (speak only, unknown user). Sounds like a good
+  mood — want some upbeat feel-good tunes?"* Only the last sentence was the reply;
+  everything before it was the routing table thought out loud. Start the reply at the
+  first word the user should hear.
 - `Neutral` is filtered upstream at HAL and never reaches this skill in practice; no special case needed here.
 
 ## Voice cue is weaker than camera cue
