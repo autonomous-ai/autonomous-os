@@ -1,5 +1,3 @@
-
-https://github.com/user-attachments/assets/a1066e96-2d6b-4256-85d8-8893676a02c8
 ## Autonomous OS: The "Android" for Robots
 
 Robots have been around for years but have never been autonomous — someone has to drive them with a remote, and they've stopped at scripted demos. Autonomous OS brings autonomy to robots: install it on your robot and it comes alive.
