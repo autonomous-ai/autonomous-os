@@ -20,8 +20,28 @@ save_web_service_state() {
   fi
 }
 
+# Was this unit supposed to be running once the update finishes?
+#
+# The recorded snapshot alone is not enough: it is taken at the START of a run,
+# so a run that begins while a PREVIOUS failed update left the unit down records
+# "inactive" — and every later update then faithfully restores "down". That is
+# how a successful web update finished with nginx stopped (and check_web
+# short-circuited past its HTTP probe, reporting success while the UI was dead),
+# and how HAL stayed stopped after its runtime was rebuilt. A unit systemd still
+# has enabled is meant to run, so treat enabled as "yes" regardless of the
+# snapshot. A unit deliberately disabled stays down.
+unit_wanted_active() {
+  local unit="$1" state_file="$2"
+  [ "$(cat "$state_file" 2>/dev/null || echo active)" = active ] && return 0
+  if systemctl is-enabled --quiet "$unit" 2>/dev/null; then
+    echo "[software-update] $unit was recorded inactive but is enabled — starting it (a failed earlier run can poison that snapshot)"
+    return 0
+  fi
+  return 1
+}
+
 web_was_active() {
-  [ "$(cat "$ROLLBACK_DIR/web.nginx-state" 2>/dev/null || echo active)" = active ]
+  unit_wanted_active nginx "$ROLLBACK_DIR/web.nginx-state"
 }
 
 restore_web_service_state() {
@@ -45,7 +65,11 @@ wait_for_web() {
 check_web() {
   [ -f "$WEB_ROOT/index.html" ] || return 1
   nginx -t >/dev/null || return 1
-  ! web_was_active || { systemctl is-active --quiet nginx && wait_for_web; }
+  # Gate the probe on what nginx IS doing, not on what the snapshot predicted:
+  # the old form skipped the HTTP check entirely whenever the snapshot said
+  # "inactive", so a 403-serving web root passed as healthy.
+  systemctl is-active --quiet nginx || return 0
+  wait_for_web
 }
 
 restore_web_backup() {
@@ -78,7 +102,14 @@ save_device_service_state() {
 
 device_was_active() {
   local unit="$1"
-  grep -qx "$unit=active" "$ROLLBACK_DIR/device.services" 2>/dev/null || [ ! -f "$ROLLBACK_DIR/device.services" ]
+  grep -qx "$unit=active" "$ROLLBACK_DIR/device.services" 2>/dev/null && return 0
+  [ ! -f "$ROLLBACK_DIR/device.services" ] && return 0
+  # Same poisoned-snapshot reasoning as unit_wanted_active above.
+  if systemctl is-enabled --quiet "$unit" 2>/dev/null; then
+    echo "[software-update] $unit was recorded inactive but is enabled — starting it"
+    return 0
+  fi
+  return 1
 }
 
 restore_device_service_state() {
@@ -155,7 +186,7 @@ save_hal_service_state() {
 }
 
 hal_was_active() {
-  [ "$(cat "$ROLLBACK_DIR/hal.service-state" 2>/dev/null || echo active)" = active ]
+  unit_wanted_active hal "$ROLLBACK_DIR/hal.service-state"
 }
 
 restore_hal_service_state() {
@@ -164,7 +195,42 @@ restore_hal_service_state() {
 
 check_hal() {
   [ -f "$HAL_DIR/VERSION_HAL" ] || return 1
-  ! hal_was_active || { systemctl is-active --quiet hal && wait_for_url http://127.0.0.1:5001/health 120; }
+  # Same as check_web: probe what HAL is actually doing. The old form passed
+  # silently whenever the snapshot said the unit should be down — including the
+  # case where a broken venv made it impossible to start at all.
+  systemctl is-active --quiet hal || return 0
+  wait_for_url http://127.0.0.1:5001/health 120
+}
+
+# A staging directory built with `mktemp -d` is mode 700 by design. Three
+# branches (web, hal, device) `mv` such a directory INTO PLACE, which silently
+# changes the installed tree's permissions — and the web root is read by nginx as
+# www-data, so a 700 root-owned /usr/share/nginx/html/setup answers 403 to every
+# request. The health check then fails and the update rolls itself back: an OTA
+# that can never succeed, for a reason nothing in the log names. Publish the
+# staged tree with the mode the live one had (default 0755).
+publish_mode() {
+  local staged="$1" reference="$2"
+  if [ -d "$reference" ]; then
+    chmod --reference="$reference" "$staged" 2>/dev/null || chmod 0755 "$staged"
+  else
+    chmod 0755 "$staged"
+  fi
+}
+
+# A uv/virtualenv is NOT relocatable: every console script in .venv/bin carries
+# an absolute shebang. Building the venv inside the staging directory and moving
+# it leaves `#!/opt/.hal.new.XXXXXX/.venv/bin/python`, so systemd fails the unit
+# with 203/EXEC once the staging path is gone. Normally invisible because the
+# previous .venv is copied in and its shebangs already point at $HAL_DIR — it
+# only bites on a fresh install, which is exactly the recovery path. Rewrite the
+# staged path to the final one after the move; a no-op when nothing refers to it.
+relocate_venv_scripts() {
+  local venv="$1" from="$2" to="$3"
+  [ -d "$venv/bin" ] || return 0
+  grep -rlI --binary-files=without-match -- "$from" "$venv/bin" 2>/dev/null \
+    | xargs -r sed -i "s|$from|$to|g"
+  [ ! -f "$venv/pyvenv.cfg" ] || sed -i "s|$from|$to|g" "$venv/pyvenv.cfg"
 }
 
 restore_hal_backup() {
@@ -176,6 +242,19 @@ restore_hal_backup() {
 }
 
 [ "$(id -u)" -ne 0 ] && { echo "Run as root."; exit 1; }
+# One update at a time, whoever asks. Two concurrent runs destroy each other:
+# the component branches move the installed tree to <name>.previous, so a second
+# run `rm -rf`s the first run's ONLY backup and then fails on the missing source
+# — which is exactly how a device ended up with no /opt/hal, no staging dir and
+# no hal.previous (two clicks on the web update button, 30s apart, sailed past
+# the per-target rate limit). The lock is released when the process exits, so a
+# killed run cannot wedge it.
+exec 9>/var/lock/software-update.lock
+if ! flock -n 9; then
+  echo "[software-update] another update is already running (pid $(cat /var/lock/software-update.pid 2>/dev/null)) — refusing to run a second one"
+  exit 1
+fi
+echo $$ >/var/lock/software-update.pid
 [ $# -lt 1 ] && { echo "Usage: software-update <component>|rollback <os-server|bootstrap|web|device|hal|codex|opencode|picoclaw>"; exit 1; }
 APP="$1"
 if [ "$APP" = "rollback" ]; then
@@ -536,6 +615,7 @@ elif [ "$APP" = "web" ]; then
   systemctl stop nginx 2>/dev/null || true
   rm -rf "$ROLLBACK_DIR/web.previous"
   mv "$WEB_ROOT" "$ROLLBACK_DIR/web.previous"
+  publish_mode "$DIR_TMP" "$ROLLBACK_DIR/web.previous"
   mv "$DIR_TMP" "$WEB_ROOT"
   DIR_TMP=""
   if ! restore_web_service_state || ! check_web; then
@@ -556,10 +636,19 @@ elif [ "$APP" = "hal" ]; then
   [ -n "$UV_BIN" ] || { echo "uv not found"; exit 1; }
   save_hal_service_state
   systemctl stop hal 2>/dev/null || true
-  rm -rf "$ROLLBACK_DIR/hal.previous"
-  if ! mv "$HAL_DIR" "$ROLLBACK_DIR/hal.previous"; then
-    restore_hal_service_state || true
-    exit 1
+  # A missing $HAL_DIR is a REINSTALL, not an error: an interrupted earlier run
+  # can leave the runtime moved away with nothing to move back, and aborting
+  # here would make the one command that could repair the device refuse to run.
+  # There is simply no rollback point for this run — say so rather than pretend.
+  if [ -d "$HAL_DIR" ]; then
+    rm -rf "$ROLLBACK_DIR/hal.previous"
+    if ! mv "$HAL_DIR" "$ROLLBACK_DIR/hal.previous"; then
+      restore_hal_service_state || true
+      exit 1
+    fi
+  else
+    echo "[software-update] $HAL_DIR is absent — reinstalling from scratch (no rollback point for this run)"
+    rm -rf "$ROLLBACK_DIR/hal.previous"
   fi
   DIR_TMP=$(mktemp -d "$(dirname "$HAL_DIR")/.hal.new.XXXXXX")
   export UV_CACHE_DIR="$DIR_TMP/.uv-cache" UV_HTTP_TIMEOUT=180
@@ -579,6 +668,8 @@ elif [ "$APP" = "hal" ]; then
     exit 1
   fi
   cd /
+  publish_mode "$DIR_TMP" "$ROLLBACK_DIR/hal.previous"
+  HAL_STAGED="$DIR_TMP"
   if ! mv "$DIR_TMP" "$HAL_DIR"; then
     echo "HAL activation failed; restoring known-good runtime" >&2
     restore_hal_backup
@@ -586,6 +677,7 @@ elif [ "$APP" = "hal" ]; then
     exit 1
   fi
   DIR_TMP=""
+  relocate_venv_scripts "$HAL_DIR/.venv" "$HAL_STAGED" "$HAL_DIR"
   if ! restore_hal_service_state || ! check_hal; then
     echo "HAL health check failed; restoring the known-good runtime" >&2
     systemctl stop hal 2>/dev/null || true
@@ -625,6 +717,7 @@ elif [ "$APP" = "device" ]; then
   snapshot_device_rootfs "$DEST/rootfs" "$DIR_TMP/rootfs"
   rm -rf "$ROLLBACK_DIR/device.previous"
   mv "$DEST" "$ROLLBACK_DIR/device.previous"
+  publish_mode "$DIR_TMP" "$ROLLBACK_DIR/device.previous"
   mv "$DIR_TMP" "$DEST"
   DIR_TMP=""
   # Keep local tuning in .env exactly as the existing updater did.

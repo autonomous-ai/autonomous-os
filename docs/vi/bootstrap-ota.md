@@ -467,6 +467,35 @@ Bootstrap dùng `lib/hal` để báo trạng thái update qua LED. Xem chi tiế
 | Thành công | Flash xanh lá `(0, 255, 80)`, rồi khôi phục LED look user đã chọn hoặc ambient resting look nếu chưa có user state |
 | Thất bại | Đỏ pulse `(255, 30, 30)` |
 
+### Bất biến mà updater phải giữ (trả giá mới biết)
+
+Một máy mất sạch `/opt/hal`, thư mục staging VÀ bản backup rollback chỉ vì bấm
+nút update trên web 2 lần cách nhau 30 giây. Bốn lỗi xếp chồng; cả bốn đã vá
+trong `scripts/provision/software-update`, và đều rất dễ tái phạm:
+
+1. **Mỗi lúc chỉ một lần chạy** (`flock` trên `/var/lock/software-update.lock`).
+   Mọi nhánh đều publish bằng cách `mv` cây đang chạy sang `<name>.previous`, nên
+   lần chạy thứ hai `rm -rf` mất backup duy nhất của lần thứ nhất rồi chết vì
+   không còn nguồn. Rate-limit 30 giây/target ở os-server KHÔNG chặn được.
+2. **Thiếu thư mục cài đặt là REINSTALL, không phải lỗi.** `mv "$HAL_DIR"` abort
+   khi `/opt/hal` vắng nghĩa là lệnh duy nhất có thể cứu máy lại từ chối chạy.
+3. **Publish theo đúng mode của cây đang sống** (`publish_mode`). `mktemp -d` cho
+   0700; `mv` thư mục đó lên `/usr/share/nginx/html/setup` làm nginx (www-data)
+   trả 403 cho mọi request → health check fail → update tự rollback, mãi mãi,
+   trên mọi máy.
+4. **Virtualenv không relocatable** (`relocate_venv_scripts`). Build `.venv`
+   trong staging làm mọi console script mang shebang
+   `#!/opt/.hal.new.XXXXXX/.venv/bin/python`; staging biến mất là unit chết
+   `203/EXEC`. Không lộ khi kế thừa `.venv` cũ — chỉ cắn đúng lúc cài mới, tức
+   đúng đường khôi phục.
+
+Cộng thêm một lỗi làm mọi thứ trên khó thấy: **trạng thái service được chụp ở đầu
+mỗi lần chạy**, nên lần chạy bắt đầu khi update trước đó đang fail sẽ ghi
+"inactive", và mọi update sau khôi phục trung thành trạng thái "chết" đó.
+`unit_wanted_active` giờ coi unit còn `enabled` trong systemd là "phải chạy", và
+`check_web`/`check_hal` dò đúng thứ unit ĐANG làm thay vì bỏ qua khi snapshot bảo
+nó nên tắt (dạng cũ báo thành công trong khi web UI trả 403).
+
 ### `POST /force-update/:target` vs `POST /force-check/:target` (bootstrap, loopback)
 
 Hai việc khác nhau, và lẫn lộn chúng chính là thứ làm nút web trông như hỏng:

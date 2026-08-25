@@ -477,6 +477,38 @@ Bootstrap uses `lib/hal` to show update status on LEDs. See [status-led.md](../r
 | Success | Green flash `(0, 255, 80)`, then restore the user-selected LED look or the ambient resting look when none exists |
 | Failure | Red pulse `(255, 30, 30)` |
 
+### Invariants the updater must keep (learned the hard way)
+
+A device lost `/opt/hal`, its staging dir AND its rollback backup from two clicks
+on the web update button 30 s apart. Four defects lined up; all four are fixed in
+`scripts/provision/software-update`, and each is easy to reintroduce:
+
+1. **One run at a time** (`flock` on `/var/lock/software-update.lock`). Every
+   branch publishes by `mv`-ing the live tree to `<name>.previous`, so a second
+   concurrent run `rm -rf`s the first run's only backup and then fails on the
+   missing source. The per-target 30 s rate limit in os-server does not prevent
+   this.
+2. **A missing install directory is a REINSTALL, not an error.** `mv "$HAL_DIR"`
+   aborting on an absent `/opt/hal` meant the one command that could repair the
+   device refused to run.
+3. **Publish with the live tree's mode** (`publish_mode`). `mktemp -d` is 0700;
+   moving such a directory onto `/usr/share/nginx/html/setup` makes nginx
+   (www-data) answer 403 to everything, so the health check fails and the update
+   rolls itself back — forever, on every device.
+4. **A virtualenv is not relocatable** (`relocate_venv_scripts`). Building
+   `.venv` inside the staging dir bakes `#!/opt/.hal.new.XXXXXX/.venv/bin/python`
+   into every console script; the unit then dies with `203/EXEC` once staging is
+   gone. Invisible while an old `.venv` is inherited — it only bites on a fresh
+   install, i.e. exactly the recovery path.
+
+Plus one that made all of the above hard to see: **the saved service state is a
+snapshot taken at the start of a run**, so a run that begins while a previous
+failed update left the unit down records "inactive" and every later update
+faithfully restores "down". `unit_wanted_active` now treats a systemd-`enabled`
+unit as "must run", and `check_web`/`check_hal` probe what the unit is ACTUALLY
+doing instead of skipping the probe when the snapshot said it should be down (the
+old form reported success while the web UI served 403s).
+
 ### `POST /force-update/:target` vs `POST /force-check/:target` (bootstrap, loopback)
 
 Two different acts, and mixing them up is what made the web button look broken:
