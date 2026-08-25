@@ -656,12 +656,28 @@ elif [ "$APP" = "hal" ]; then
     rm -rf "$ROLLBACK_DIR/hal.previous"
   fi
   DIR_TMP=$(mktemp -d "$(dirname "$HAL_DIR")/.hal.new.XXXXXX")
-  export UV_CACHE_DIR="$DIR_TMP/.uv-cache" UV_HTTP_TIMEOUT=180
+  # The uv cache lives OUTSIDE the runtime tree, and is never copied.
+  #
+  # It used to sit at $HAL_DIR/.uv-cache, so every update copied it (and .venv)
+  # into the staging tree before syncing. That cache only grows — measured at
+  # 2.5G with a 2.3G .venv beside it — so each update moved ~4.8G across eMMC
+  # before doing any real work, taking minutes and making the device look hung
+  # while HAL was down. Keeping it at a fixed path next to $HAL_DIR (same
+  # filesystem, so uv can hardlink instead of copying package contents into the
+  # venv) removes both copies and stops the cache being duplicated per update.
+  #
+  # Migrate an in-tree cache the first time we see one, so a device does not
+  # re-download everything after this change.
+  HAL_UV_CACHE="${HAL_UV_CACHE:-$(dirname "$HAL_DIR")/.uv-cache-hal}"
+  if [ ! -d "$HAL_UV_CACHE" ] && [ -d "$ROLLBACK_DIR/hal.previous/.uv-cache" ]; then
+    echo "[software-update] migrating uv cache out of the runtime tree → $HAL_UV_CACHE"
+    mv "$ROLLBACK_DIR/hal.previous/.uv-cache" "$HAL_UV_CACHE" || mkdir -p "$HAL_UV_CACHE"
+  fi
+  mkdir -p "$HAL_UV_CACHE"
+  export UV_CACHE_DIR="$HAL_UV_CACHE" UV_HTTP_TIMEOUT=180
   if ! (
     unzip -o -q "$ZIP_TMP" -d "$DIR_TMP" || exit 1
     if [ -f "$ROLLBACK_DIR/hal.previous/.env" ]; then cp -a "$ROLLBACK_DIR/hal.previous/.env" "$DIR_TMP/.env" || exit 1; fi
-    if [ -d "$ROLLBACK_DIR/hal.previous/.venv" ]; then cp -a "$ROLLBACK_DIR/hal.previous/.venv" "$DIR_TMP/.venv" || exit 1; fi
-    if [ -d "$ROLLBACK_DIR/hal.previous/.uv-cache" ]; then cp -a "$ROLLBACK_DIR/hal.previous/.uv-cache" "$DIR_TMP/.uv-cache" || exit 1; fi
     find "$UV_CACHE_DIR" -name "lerobot.egg-info" -type d 2>/dev/null | xargs rm -rf
     cd "$DIR_TMP" || exit 1
     "$UV_BIN" sync --python 3.12 --extra hardware || exit 1

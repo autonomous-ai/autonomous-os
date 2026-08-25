@@ -608,6 +608,13 @@ aborts with an error if neither is set — no compiled-in URL.
 
 ### HAL Case
 
+> **The uv cache lives outside the runtime tree** (`/opt/.uv-cache-hal`, next to
+> `/opt/hal` so uv can hardlink into the new venv). It used to sit at
+> `/opt/hal/.uv-cache`, so every update copied it — measured at 2.5 GB, beside a
+> 2.3 GB `.venv` — into the staging tree before syncing: ~4.8 GB shuffled across
+> eMMC before any real work, minutes of HAL downtime, and a cache duplicated per
+> update. Neither directory is copied now; an in-tree cache is migrated once.
+
 ```bash
 "hal")
     # Preserve the complete runtime and prior service state.

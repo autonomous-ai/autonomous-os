@@ -592,6 +592,13 @@ và exit lỗi nếu cả hai đều rỗng — không có URL hardcode.
 
 ### Xử lý HAL
 
+> **Cache uv nằm NGOÀI cây runtime** (`/opt/.uv-cache-hal`, cạnh `/opt/hal` để uv
+> hardlink vào venv mới). Trước đây nó ở `/opt/hal/.uv-cache` nên mỗi lần update
+> đều copy nó — đo được 2.5 GB, cạnh `.venv` 2.3 GB — sang staging trước khi sync:
+> ~4.8 GB chép qua eMMC trước khi làm việc thật, HAL chết vài phút, và cache bị
+> nhân bản mỗi lần update. Giờ không copy thư mục nào; cache in-tree được migrate
+> một lần.
+
 ```bash
 "hal")
     # Giữ nguyên toàn bộ runtime và trạng thái service trước đó.
