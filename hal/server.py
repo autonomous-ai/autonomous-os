@@ -926,6 +926,26 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Mic-muted LED repaint failed: {e}")
 
+    # Sleep restored from the sidecar: re-express `sleepy` so the device LOOKS
+    # asleep again (dim strip, servos left released, sensing gated) instead of
+    # booting into the default resting look with the flag quietly set. Going
+    # through the normal /emotion path keeps one owner of what sleepy means —
+    # LED preset, servo handling and the auto-release timer all come with it.
+    # An OTA restarts HAL, so without this an update at 3am woke the device up.
+    if state._sleeping:
+        def _reapply_sleep():
+            try:
+                from hal.presets import EMO_SLEEPY
+                from hal.routes.emotion import express_emotion
+                from hal.models import EmotionRequest
+
+                express_emotion(EmotionRequest(emotion=EMO_SLEEPY))
+                logger.info("Sleep restored: re-expressed sleepy after restart")
+            except Exception as e:
+                logger.warning(f"Sleep re-apply failed: {e}")
+
+        threading.Thread(target=_reapply_sleep, daemon=True, name="sleep-restore").start()
+
     # Thermal fail-safe monitor (only when `thermal` bounds are declared).
     if _safety and _safety.thermal:
         threading.Thread(

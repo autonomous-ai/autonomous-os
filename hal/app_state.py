@@ -486,6 +486,11 @@ _user_led_state = _load_user_led_state()
 _MIC_STATE_PATH = "/tmp/hal-mic-state.json"
 _SPEAKER_STATE_PATH = "/tmp/hal-speaker-state.json"
 _CAMERA_STATE_PATH = "/tmp/hal-camera-state.json"
+# Sleep is the same class of user-facing switch: someone (or a night scene) put
+# the device to sleep, and a HAL restart must not undo that. An OTA restarts HAL
+# — so before this sidecar, updating HAL while the device slept woke it up, with
+# the strip back on and the mic listening, in the middle of the night.
+_SLEEP_STATE_PATH = "/tmp/hal-sleep-state.json"
 
 
 def _save_boot_sidecar(path: str, payload: dict):
@@ -524,6 +529,10 @@ def _persist_mic_state():
 
 def _persist_speaker_state():
     _save_boot_sidecar(_SPEAKER_STATE_PATH, {"muted": _speaker_muted})
+
+
+def _persist_sleep_state():
+    _save_boot_sidecar(_SLEEP_STATE_PATH, {"sleeping": _sleeping})
 
 
 def start_voice_service(reason: str) -> bool:
@@ -610,6 +619,7 @@ def _load_peripheral_sidecars():
     speak time."""
     global _mic_muted, _mic_manual_override, _speaker_muted
     global _camera_disabled, _camera_manual_override, _mic_muted_led
+    global _sleeping
     if d := _load_boot_sidecar(_MIC_STATE_PATH):
         _mic_muted = bool(d.get("muted"))
         _mic_manual_override = bool(d.get("manual_override"))
@@ -621,12 +631,18 @@ def _load_peripheral_sidecars():
     if d := _load_boot_sidecar(_CAMERA_STATE_PATH):
         _camera_disabled = bool(d.get("disabled"))
         _camera_manual_override = bool(d.get("manual_override"))
-    if _mic_muted or _speaker_muted or _camera_disabled:
+    if d := _load_boot_sidecar(_SLEEP_STATE_PATH):
+        # Restoring the flag alone already re-arms every gate that reads it
+        # (sensing, LED, servo, music). Looking asleep again is the APPLY step,
+        # done once the drivers are up — see server.py lifespan.
+        _sleeping = bool(d.get("sleeping"))
+    if _mic_muted or _speaker_muted or _camera_disabled or _sleeping:
         logger.info(
-            "Peripheral switches restored: mic_muted=%s speaker_muted=%s camera_disabled=%s",
+            "Peripheral switches restored: mic_muted=%s speaker_muted=%s camera_disabled=%s sleeping=%s",
             _mic_muted,
             _speaker_muted,
             _camera_disabled,
+            _sleeping,
         )
 
 

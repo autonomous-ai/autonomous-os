@@ -194,6 +194,16 @@ Reset là **single-flight** + cooldown 5 phút (`FactoryResetMinInterval`) dùng
 
 ## Persist mute/disable qua HAL restart
 
+**Sleep cũng persist theo cách này** (`/tmp/hal-sleep-state.json`). Nó cùng loại
+với các switch người dùng thấy được: ai đó — hoặc một scene ban đêm — đã cho
+thiết bị ngủ, và restart HAL không được phép huỷ điều đó. OTA thì restart HAL,
+nên trước khi có sidecar này, một lần update lúc 3 giờ sáng là thiết bị tỉnh dậy:
+đèn sáng lại, mic nghe lại, sensing hết bị gate. `POST /emotion` ghi cờ mỗi lần
+nó đổi, và lifespan trong `server.py` express lại `sleepy` sau khi driver đã lên,
+để thiết bị TRÔNG vẫn đang ngủ chứ không phải boot vào look nghỉ với cái cờ được
+set âm thầm. Reboot cả máy thì vẫn tỉnh như cũ.
+
+
 Mic mute, speaker mute và camera disable mỗi cái persist vào một sidecar
 boot-scoped riêng — `/tmp/hal-mic-state.json`, `/tmp/hal-speaker-state.json`,
 `/tmp/hal-camera-state.json` (cùng pattern `boot_id` với sidecar LED/scene) —
