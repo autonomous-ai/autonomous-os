@@ -645,10 +645,14 @@ The soul copy uses `Overwrite=true` (a switch adopts the source runtime's person
 backed up first). The reverse hermes→openclaw **strips the identity card from the
 SOUL and restores its fields back into OpenClaw's `IDENTITY.md`** (`restoreIdentityCard`,
 the inverse of the inline) — so the name set under Hermes survives the trip back,
-not just the trip out. **Skills** stay fresh under Hermes via
-`runtimes/hermes/skill_watcher.go` — CDN auto-update into `skills/openclaw-imports`,
-capability-gated, mirroring the OpenClaw watcher (shared engine in
-`system/skills/skillzip.go`).
+not just the trip out. **Skills** stay fresh under Hermes via two complementary
+paths: every `EnsureOnboarding` capability-gates and reconciles the full supported
+catalog from the CDN into `skills/openclaw-imports` (repairing stale local files
+even when OTA was published before the watcher started), while `skill_watcher.go`
+polls OTA metadata every five minutes for later publishes. Both use the shared
+`system/skills/skillzip.go` engine; a real content change restarts the gateway and
+then tells the agent to re-read the changed skills. A failed ZIP download or extract
+does not advance its version, so the next five-minute poll retries it.
 
 **Two skill roots.** `~/.hermes/skills/` is namespaced, and os-server writes to a
 second root of its own (`runtimes/hermes/save_skill.go`):
