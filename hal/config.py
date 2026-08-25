@@ -1560,6 +1560,25 @@ GAZE_SNAPSHOT_KEEP: int = int(os.environ.get("HAL_GAZE_SNAPSHOT_KEEP", "40"))
 GAZE_PITCH_LAND_TOL_DEG: float = float(
     os.environ.get("HAL_GAZE_PITCH_LAND_TOL_DEG", "2.0")
 )
+# When a repoint turns to the remembered bearing and finds nobody, look around
+# before writing the user off.
+#
+# The cooldown is the whole safety of this. Gaze repoints whenever no face has
+# been seen for GAZE_REPOINT_AFTER_S (12s), so with nothing holding it back a
+# user out at lunch would get: 12s wait, turn, nobody, ~23s sweep, nobody, 12s
+# wait, turn, nobody, sweep... a lamp scanning an empty room every thirty-five
+# seconds for an hour. An absence should produce ONE search, not forty.
+#
+# Nobody asked for this sweep, which is the difference from the look-aim's: it
+# is the same reasoning as GAZE_PITCH_COOLDOWN_S and the climb budget — an
+# autonomous loop needs a bound on how often it may repeat itself.
+GAZE_SWEEP_ENABLED: bool = (
+    os.environ.get("HAL_GAZE_SWEEP", "true").lower() in ("1", "true", "yes")
+)
+GAZE_SWEEP_COOLDOWN_S: float = float(
+    os.environ.get("HAL_GAZE_SWEEP_COOLDOWN_S", "900")
+)
+
 # --- climbing to find a face ------------------------------------------------
 #
 # A person box that TOUCHES the top edge of the frame means the body continues

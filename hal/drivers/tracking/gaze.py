@@ -164,6 +164,9 @@ def record_dy(dy: Optional[float], from_face: bool,
 _dx_samples: Deque[Tuple[float, float, bool]] = deque()
 _dx_lock = threading.Lock()
 _last_yaw_t: float = 0.0
+# When the watcher last looked around. In-memory only: a restart clears it, and
+# that is fine — a reboot is a reasonable moment to be allowed to search again.
+_last_sweep_t: float = 0.0
 
 
 def record_dx(dx: Optional[float], from_face: bool,
@@ -1611,6 +1614,44 @@ def _verify_repoint(now: float) -> None:
         "bearing confirmed" if hit else "counted against the bearing",
         " (estimate dropped)" if dropped else "",
     )
+    if not hit:
+        _maybe_sweep(now)
+
+
+def _maybe_sweep(now: float) -> None:
+    """Look around, after turning to the remembered bearing found nobody.
+
+    The bearing is a guess about where someone WAS. Having acted on it and found
+    an empty chair, the honest next step is to look rather than to conclude.
+
+    Rate-limited hard, because nobody asked for this. A repoint can fire every
+    GAZE_REPOINT_AFTER_S, so without the cooldown an absent user would have the
+    lamp sweeping the room every ~35s indefinitely.
+    """
+    global _last_sweep_t
+    if not config.GAZE_SWEEP_ENABLED:
+        return
+    if _last_sweep_t > 0.0 and (now - _last_sweep_t) < config.GAZE_SWEEP_COOLDOWN_S:
+        logger.info(
+            "[gaze] not looking around — last sweep was %.0f min ago (waiting %.0f)",
+            (now - _last_sweep_t) / 60.0, config.GAZE_SWEEP_COOLDOWN_S / 60.0,
+        )
+        return
+    _last_sweep_t = now
+    try:
+        from hal.drivers.tracking.search import search_for_subject
+
+        res = search_for_subject()
+    except Exception as e:
+        logger.warning("[gaze] look-around unavailable: %s", e)
+        return
+    logger.info("[gaze] looked around: %s after %d stop(s)",
+                res.reason, res.stops_visited)
+    if res.found:
+        # The sweep owned the body and moved the head; every offset measured
+        # before it describes a pose the camera has since left.
+        discard_samples()
+        discard_dx_samples()
 
 
 def _loop() -> None:
@@ -1747,5 +1788,6 @@ def reset_for_test() -> None:
     _pitch_stalls.clear()
     discard_dx_samples()
     globals()["_last_yaw_t"] = 0.0
+    globals()["_last_sweep_t"] = 0.0
     _speech_repoint_requested_t = 0.0
     _speech_repoint_requested.clear()

@@ -4,11 +4,13 @@ The sign test is the important one: an inverted yaw sign is silent — the lamp
 turns confidently the wrong way and nothing in the code looks wrong.
 """
 
+import time
 from unittest import mock
 
 import numpy as np
 import pytest
 
+import hal.config as config
 import hal.app_state as state
 from hal.drivers.tracking import aim
 
@@ -76,7 +78,11 @@ def _reset_module_state():
     aim._last_seen_mono = 0.0
     aim._last_seen_yaw = 0.0
     aim._abort_evt.clear()
-    yield
+    # The give-up path now looks around before saying it is lost. A real sweep
+    # drives servos and a detector for tens of seconds, which no test of the aim
+    # wants; the tests that care about it patch this themselves.
+    with mock.patch.object(aim, "_sweep_for_subject", return_value=False):
+        yield
 
 
 def _frame(width=640, height=480):
@@ -928,3 +934,73 @@ def test_a_look_that_never_searched_stays_quiet():
 
     assert "look_searching" not in said
     assert "look_lost" not in said
+
+
+# --- the aim looks around before it claims to be lost ---
+
+
+def test_look_lost_is_only_said_after_actually_looking_around():
+    """`look_lost` claims "I can't find you".
+
+    Until now it said that having only turned toward a remembered bearing —
+    a guess about where someone WAS, not a search. The phrase has to be earned.
+    """
+    swept = []
+    with mock.patch.object(aim, "_sweep_for_subject",
+                           side_effect=lambda: swept.append(True) or False), \
+         mock.patch.object(aim, "_say", side_effect=(said := []).append):
+        _res, _calls = _scored(None)
+
+    assert swept, "it gave up without looking around"
+    assert said.index("look_searching") < said.index("look_lost"), said
+
+
+def test_a_subject_found_by_the_sweep_is_then_centred():
+    """The sweep stops the moment it SEES someone; it does not centre them, and
+    centring is this function's job."""
+    seen = {"n": 0}
+
+    def found_after_sweep():
+        seen["n"] += 1
+        return True
+
+    with mock.patch.object(aim, "_sweep_for_subject", side_effect=found_after_sweep), \
+         mock.patch.object(aim, "_say", side_effect=(said := []).append):
+        res, _calls = _scored(None)
+
+    assert seen["n"] >= 1
+    assert "look_lost" not in said, "it swept, found someone, and still cried lost"
+
+
+def test_the_deadline_stops_counting_while_the_sweep_runs():
+    """The deadline exists so a live turn never stalls in SILENCE.
+
+    `look_searching` has already dealt with the silence, and a sweep takes
+    longer than the whole 8s budget — charging it against that budget would mean
+    never sweeping at all.
+    """
+    def slow_sweep():
+        time.sleep(0.4)
+        return False
+
+    with mock.patch.object(config, "LOOK_AIM_DEADLINE_S", 0.5), \
+         mock.patch.object(aim, "_sweep_for_subject", side_effect=slow_sweep), \
+         mock.patch.object(aim, "_say", side_effect=(said := []).append):
+        _res, _calls = _scored(None)
+
+    assert "look_lost" in said, (
+        "the deadline swallowed the aim mid-sweep instead of pausing"
+    )
+
+
+def test_a_sweep_that_cannot_run_does_not_sink_the_aim():
+    """The caller still needs an answer, even if it is "I could not find you".
+
+    Tests the guard inside `_sweep_for_subject` rather than around it — patching
+    the whole function would step over the very try/except being checked.
+    """
+    from hal.drivers.tracking import search
+
+    with mock.patch.object(search, "search_for_subject",
+                           side_effect=RuntimeError("no camera")):
+        assert aim._sweep_for_subject() is False

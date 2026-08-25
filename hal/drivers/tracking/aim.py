@@ -328,6 +328,27 @@ def _nearest_person(detector: Any, frame: Any):
     return box, "person", conf
 
 
+def _sweep_for_subject() -> bool:
+    """Look around for the subject. True if the sweep stopped on one.
+
+    Imported here rather than at module scope: `search` imports from this file,
+    so a top-level import either way is a cycle. The aim asking the sweep for
+    help is the only direction that edge runs.
+    """
+    try:
+        from hal.drivers.tracking.search import search_for_subject
+
+        res = search_for_subject()
+        logger.info("[look-aim] looked around: %s after %d stop(s)",
+                    res.reason, res.stops_visited)
+        return bool(res.found)
+    except Exception as e:
+        # A sweep that cannot run must not sink the aim — the caller still needs
+        # an answer, even if it is "I could not find you".
+        logger.warning("[look-aim] look-around unavailable: %s", e)
+        return False
+
+
 def _detect_subject(detector: Any, frame: Any):
     """Nearest plausible person box preferred, face as fallback.
 
@@ -795,6 +816,32 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
                 steps.append({"n": iterations + 1, "saw": None,
                               "action": probe.get("skipped", "give up — nothing found"),
                               "yaw": _yaw_of(svc)})
+                # Before giving up, actually look around. `look_lost` claims
+                # "I can't find you", and until now it said that having only
+                # turned toward a remembered bearing — which is a guess about
+                # where someone WAS, not a search. The phrase should be earned.
+                if not announced_search and config.LOOK_AIM_SPEAK:
+                    # The lamp is about to move a lot and take seconds over it.
+                    # Saying so is what turns that from dead air into waiting.
+                    announced_search = True
+                    _say("look_searching")
+                swept_at = time.monotonic()
+                found_by_sweep = _sweep_for_subject()
+                # The clock stops while sweeping. The deadline exists so a live
+                # turn never stalls in SILENCE; the announcement above has
+                # already dealt with that, and charging the sweep against a
+                # budget it cannot fit in would mean never sweeping at all.
+                t_end += time.monotonic() - swept_at
+                steps.append({"n": iterations + 1,
+                              "action": "looked around",
+                              "saw": "subject" if found_by_sweep else None,
+                              "yaw": _yaw_of(svc)})
+                if found_by_sweep:
+                    # Back into the loop: the sweep stopped on a subject but did
+                    # not centre them, and centring is this function's job.
+                    iterations += 1
+                    continue
+
                 # Close the loop the announcement opened. `look_searching`
                 # promises to look; going silent here leaves the lamp turned
                 # away mid-question with nothing said, while the model answers

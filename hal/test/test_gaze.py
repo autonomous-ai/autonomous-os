@@ -2052,3 +2052,86 @@ def test_the_lift_still_happens_when_the_elbow_is_dead(neck, height_store):
     assert asked_of_base > asked_of_elbow, (
         "a benched joint must not keep receiving the biggest share"
     )
+
+
+# --- looking around after the bearing turns up nothing --------------------------
+
+
+@pytest.fixture
+def sweeper(monkeypatch):
+    """Stand in for the search, and record whether it was asked to run."""
+    from hal.drivers.tracking import search
+
+    calls = []
+
+    def fake(*a, **kw):
+        calls.append(True)
+        return search.SearchResult(False, "nobody found", 9)
+
+    monkeypatch.setattr(search, "search_for_subject", fake)
+    monkeypatch.setattr(config, "GAZE_SWEEP_ENABLED", True, raising=False)
+    monkeypatch.setattr(config, "GAZE_SWEEP_COOLDOWN_S", 900.0, raising=False)
+    gaze._last_sweep_t = 0.0
+    return calls
+
+
+def test_a_repoint_that_finds_nobody_looks_around(sweeper):
+    """The bearing is a guess about where someone WAS. Having acted on it and
+    found an empty chair, the honest next step is to look, not to conclude."""
+    gaze._maybe_sweep(gaze.time.monotonic())
+    assert sweeper, "it wrote the user off without looking"
+
+
+def test_it_does_not_sweep_again_within_the_cooldown(sweeper):
+    """A repoint can fire every GAZE_REPOINT_AFTER_S (12s). Without the cooldown
+    a user out at lunch would have the lamp scanning an empty room every ~35s
+    for as long as they were gone."""
+    now = gaze.time.monotonic()
+    gaze._maybe_sweep(now)
+    for later in (30.0, 120.0, 600.0, 899.0):
+        gaze._maybe_sweep(now + later)
+    assert len(sweeper) == 1, f"swept {len(sweeper)} times inside the cooldown"
+
+
+def test_it_may_sweep_again_once_the_cooldown_has_passed(sweeper):
+    now = gaze.time.monotonic()
+    gaze._maybe_sweep(now)
+    gaze._maybe_sweep(now + config.GAZE_SWEEP_COOLDOWN_S + 1.0)
+    assert len(sweeper) == 2
+
+
+def test_the_sweep_can_be_turned_off(sweeper, monkeypatch):
+    monkeypatch.setattr(config, "GAZE_SWEEP_ENABLED", False, raising=False)
+    gaze._maybe_sweep(gaze.time.monotonic())
+    assert sweeper == []
+
+
+def test_a_sweep_that_cannot_run_does_not_break_the_watcher(monkeypatch):
+    """The watcher loop has to keep sampling whatever the search does."""
+    from hal.drivers.tracking import search
+
+    monkeypatch.setattr(config, "GAZE_SWEEP_ENABLED", True, raising=False)
+    def boom(*a, **kw):
+        raise RuntimeError("no camera")
+
+    monkeypatch.setattr(search, "search_for_subject", boom)
+    gaze._last_sweep_t = 0.0
+    gaze._maybe_sweep(gaze.time.monotonic())      # must not raise
+
+
+def test_finding_someone_drops_the_offsets_measured_before_the_sweep(monkeypatch):
+    """The sweep owns the body and moves the head, so every offset measured
+    before it describes a pose the camera has since left."""
+    from hal.drivers.tracking import search
+
+    monkeypatch.setattr(config, "GAZE_SWEEP_ENABLED", True, raising=False)
+    monkeypatch.setattr(search, "search_for_subject",
+                        lambda *a, **kw: search.SearchResult(True, "found person", 2, 40.0))
+    gaze._last_sweep_t = 0.0
+    _fill_dy(-0.4)
+    _fill_dx(0.4)
+
+    gaze._maybe_sweep(gaze.time.monotonic())
+
+    assert gaze._dy_estimate() is None, "stale vertical offsets survived the sweep"
+    assert gaze._dx_estimate() is None, "stale horizontal offsets survived the sweep"
