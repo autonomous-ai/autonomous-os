@@ -96,6 +96,12 @@ TRACKING_FACE_DETECTOR_ENABLED: bool = os.environ.get(
     "HAL_TRACKING_FACE_DETECTOR", "true"
 ).strip().lower() in ("1", "true", "yes", "on")
 
+# Wall-clock limit for one object-tracking session. Read at HAL startup; set
+# HAL_TRACKING_MAX_DURATION_S per device to tune it without changing code.
+TRACKING_MAX_DURATION_S: float = float(
+    os.environ.get("HAL_TRACKING_MAX_DURATION_S", "10")
+)
+
 # --- Data layout ---
 
 # --- Sensing: os-server integration ---
@@ -1378,4 +1384,3 @@ GAZE_WELL_FRAMED_EDGE: float = float(
 GAZE_REPOINT_MIN_CONFIDENCE: float = float(
     os.environ.get("HAL_GAZE_REPOINT_MIN_CONFIDENCE", "0.5")
 )
-

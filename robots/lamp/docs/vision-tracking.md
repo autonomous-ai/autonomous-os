@@ -164,10 +164,12 @@ pitch_correction = clamp(PID(soft_deadband(dy)) + VFF·vy·deg_per_px·dt,  ±5�
 | `SERVO_MIN_CONF` | 0.25 | Confidence floor for firing the servo PID at all |
 | `TRACKER_TRUST_CONF` / `TRUST_TRACKER_S` | 0.4 / 2.5 | Detector-gated trust (see above) |
 | `YOLO_MAX_MISS` | 30 | Consecutive tracker misses before retry |
-| `MAX_TRACK_DURATION_S` | 300 | Auto-stop timeout (5 min) |
+| `MAX_TRACK_DURATION_S` | `HAL_TRACKING_MAX_DURATION_S` (10) | Auto-stop timeout (10 s default; configured per device) |
 | `_LOCAL_IMGSZ` | 320 | Local YOLO inference size (640 → 1.3–2.9 s, too slow) |
 
 All knobs live in `hal/drivers/tracking/constants.py`. (The old dead `GIMBAL_*` / `EMA_ALPHA` proportional path was removed in the package split.)
+
+Set `HAL_TRACKING_MAX_DURATION_S` in the Lamp's `/opt/hal/.env` to choose the wall-clock session limit; the installed Lamp default is `10`. Restart the `hal` service after changing it.
 
 ### Servo Position Limits
 
@@ -187,7 +189,7 @@ All knobs live in `hal/drivers/tracking/constants.py`. (The old dead `GIMBAL_*` 
 | Bbox overflows frame + no detect for 3 s | Forced retry, then stop if unrecovered |
 | No detector confirm for `STOP_NO_YOLO_S` (20 s) | Stop — ghost tracking |
 | CSRT misses `YOLO_MAX_MISS` (30) after `MAX_TRACKING_RETRIES` (4) | Stop — object gone |
-| Tracking duration > 5 minutes | Stop — timeout to save motor/CPU |
+| Tracking duration > `HAL_TRACKING_MAX_DURATION_S` (10 s by default) | Stop — timeout to save motor/CPU |
 | GPIO-button or TTP223 single-click | Stop — explicit user attention-cancel |
 
 Note: a large bbox (e.g. a person filling the frame) is **not** a stop condition — PID drives off the centroid, not bbox size, so a close object still tracks. When tracking ends the arm glides back to zero at tracking speed (no snap), then the idle animation is dispatched again — see [Interaction with Other Systems](#interaction-with-other-systems).
