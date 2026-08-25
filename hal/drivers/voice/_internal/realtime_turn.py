@@ -248,6 +248,16 @@ def should_drop_realtime_rejection(rt: RealtimeTurnResult) -> bool:
     return hal_config.REALTIME_AI_REJECT_FILTER and rt.rejected
 
 
+def should_drop_downstream_turn(rt: RealtimeTurnResult) -> bool:
+    """Return whether a terminal guard/model decision must stop OS dispatch.
+
+    A noise guard rejection is terminal even when STT fabricated a short word:
+    forwarding that word would undo the guard and let room noise reach the main
+    agent. The explicit AI rejection remains separately configurable above.
+    """
+    return rt.route == ROUTE_NOISE_DROPPED or should_drop_realtime_rejection(rt)
+
+
 def should_dispatch_to_main(
     wakeword_enabled: bool,
     wakeword_authorized: bool,

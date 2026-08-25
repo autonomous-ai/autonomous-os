@@ -9,10 +9,12 @@ from unittest import mock
 import hal.config as hal_config
 from hal.drivers.voice._internal.realtime_turn import (
     ROUTE_AI_REJECTED,
+    ROUTE_NOISE_DROPPED,
     RealtimeTurnResult,
     run_realtime_turn,
     should_defer_speaker_id_prepass,
     should_arm_realtime_wait_filler,
+    should_drop_downstream_turn,
     should_drop_realtime_rejection,
 )
 from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
@@ -70,6 +72,10 @@ def test_only_an_explicit_reject_tool_result_drops_dispatch(monkeypatch):
         RealtimeTurnResult(route=ROUTE_AI_REJECTED, rejected=True)
     )
     assert not should_drop_realtime_rejection(RealtimeTurnResult())
+
+
+def test_noise_guard_drop_is_terminal_even_with_a_fabricated_transcript():
+    assert should_drop_downstream_turn(RealtimeTurnResult(route=ROUTE_NOISE_DROPPED))
 
 
 class _RejectingRealtime:
@@ -164,6 +170,23 @@ def test_explicit_reject_does_not_send_the_transcript_to_os(monkeypatch):
             [],
             [],
             RealtimeTurnResult(route=ROUTE_AI_REJECTED, rejected=True),
+        )
+    assert sender.sent == []
+
+
+def test_noise_guard_drop_does_not_send_a_fabricated_transcript_to_os():
+    sender = _Sender()
+    with mock.patch(
+        "hal.drivers.voice._internal.turn_dispatch._take_vision_handoff",
+        return_value=("", ""),
+    ):
+        dispatch_turn(
+            _Decorator(),
+            sender,
+            "take.",
+            [],
+            [],
+            RealtimeTurnResult(route=ROUTE_NOISE_DROPPED),
         )
     assert sender.sent == []
 

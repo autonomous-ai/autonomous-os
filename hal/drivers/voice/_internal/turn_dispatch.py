@@ -8,7 +8,10 @@ the utterance for speech-emotion recognition.
 import logging
 
 from hal import config as hal_config
-from hal.drivers.voice._internal.realtime_turn import should_drop_realtime_rejection
+from hal.drivers.voice._internal.realtime_turn import (
+    ROUTE_NOISE_DROPPED,
+    should_drop_downstream_turn,
+)
 from hal.drivers.voice.speech_emotion.constants import UNKNOWN_USER_LABEL
 
 logger = logging.getLogger("hal.voice")
@@ -138,8 +141,10 @@ def dispatch_turn(
     # so a turn answered by the main agent because the realtime session had died
     # looked identical in the journal to one the model deliberately handed off.
     # Grep `[turn] route=` to follow any turn end to end.
-    rejected = should_drop_realtime_rejection(rt)
-    if rejected:
+    dropped = should_drop_downstream_turn(rt)
+    if rt.route == ROUTE_NOISE_DROPPED:
+        destination = "nowhere (noise guard rejected turn)"
+    elif dropped:
         destination = "nowhere (model explicitly rejected non-user turn)"
     elif rt.handled:
         destination = "realtime (main agent notified, stays silent)"
@@ -155,7 +160,7 @@ def dispatch_turn(
         combined[:80] if combined else "(empty)",
     )
 
-    if combined and not rejected:
+    if combined and not dropped:
         # Reuse the prepass result when the realtime path already identified the
         # speaker this turn; otherwise identify now. Never runs recognition twice.
         if identity is not None:
@@ -225,12 +230,17 @@ def dispatch_turn(
                 image_b64=vision_image if vision_hint else "",
             )
     elif combined:
-        # Keep this filter as a distinct, easily reversible gate. No silent
-        # completion, timeout, or transport error reaches here — those leave
-        # rt.rejected false and follow the normal fallback above.
-        logger.info(
-            "[turn] Explicit AI rejection filter dropped transcript before OS dispatch"
-        )
+        if rt.route == ROUTE_NOISE_DROPPED:
+            logger.info(
+                "[turn] Noise guard dropped fabricated transcript before OS dispatch"
+            )
+        else:
+            # Keep this filter as a distinct, easily reversible gate. No silent
+            # completion, timeout, or transport error reaches here — those leave
+            # rt.rejected false and follow the normal fallback above.
+            logger.info(
+                "[turn] Explicit AI rejection filter dropped transcript before OS dispatch"
+            )
 
     # Submit SER — uses the UNTRIMMED snapshot so laughter / sighs survive.
     decorator.submit_speech_emotion_from_session(ser_audio_buffer, user=user)

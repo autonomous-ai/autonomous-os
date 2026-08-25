@@ -42,7 +42,7 @@ from hal.drivers.voice._internal.realtime_turn import (
     is_noise_turn,
     needs_noise_guard,
     run_realtime_turn,
-    should_drop_realtime_rejection,
+    should_drop_downstream_turn,
     should_defer_speaker_id_prepass,
     should_dispatch_to_main,
 )
@@ -1818,8 +1818,8 @@ class VoiceService:
                 hal_config.WAKEWORD_ENABLED,
                 wakeword_authorized,
             )
-            realtime_rejected = should_drop_realtime_rejection(rt)
-            if defer_speaker_prepass and dispatch_to_main and not realtime_rejected:
+            downstream_dropped = should_drop_downstream_turn(rt)
+            if defer_speaker_prepass and dispatch_to_main and not downstream_dropped:
                 resolve_turn_speaker_identity(after_realtime_decision=True)
 
             if dispatch_to_main:
@@ -1828,7 +1828,7 @@ class VoiceService:
                 # persist the user's request before sending it downstream so a
                 # session replacement cannot erase the handoff from realtime's
                 # next-session context.
-                if combined and not rt.handled and not realtime_rejected:
+                if combined and not rt.handled and not downstream_dropped:
                     self._realtime.save_main_handoff(combined)
                 # A realtime connection failure or silent timeout is not a
                 # handled turn. Preserve the STT fallback so a wake-word command
@@ -1849,7 +1849,7 @@ class VoiceService:
                 )
                 if (
                     combined
-                    and not realtime_rejected
+                    and not downstream_dropped
                     and hal_config.WAKEWORD_ENABLED
                     and wakeword_authorized
                 ):
