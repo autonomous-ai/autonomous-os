@@ -31,6 +31,13 @@ class ContextManagerBase(ABC):
         "openai": RESOURCES_DIR / "system_prompt_openai.md",
         "gemini": RESOURCES_DIR / "system_prompt_gemini.md",
         "qwen": RESOURCES_DIR / "system_prompt_qwen.md",
+        # Shared by both cascaded brains — PipecatSession passes provider=
+        # "pipecat" to this constructor regardless of whether the underlying
+        # agent is the pipecat framework or CascadedAgent (see
+        # pipecat_session.py). Both have no native audio: every character of
+        # a reply is spoken verbatim by TTS, which is why this prompt bans
+        # writing a tool call as text more explicitly than the others.
+        "pipecat": RESOURCES_DIR / "system_prompt_pipecat.md",
     }
 
     LANGUAGE_NAMES: dict[str, str] = {

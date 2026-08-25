@@ -11,7 +11,7 @@ import { WifiSection } from "@/pages/settings/WifiSection";
 import { VoiceSection as EditVoiceSection } from "@/pages/settings/VoiceSection";
 import { FaceSection as EditFaceSection } from "@/pages/settings/FaceSection";
 import { TTSSection } from "@/pages/settings/TTSSection";
-import { RealtimeSection } from "@/pages/settings/RealtimeSection";
+import { RealtimeSection, providerHasReasoning, providerHasVoice } from "@/pages/settings/RealtimeSection";
 import { AgentRuntimeSection } from "@/pages/settings/AgentRuntimeSection";
 import { TimezoneSection } from "@/pages/settings/TimezoneSection";
 import { STTSection, type SttProvider } from "@/pages/settings/STTSection";
@@ -440,7 +440,13 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
       if (adminPassword) body.admin_password = adminPassword;
       // Realtime block — server applies + restarts hal. api_key only when typed.
       const realtime: Record<string, unknown> = { enabled: realtimeEnabled, provider: realtimeProvider };
-      if (realtimeProvider !== "none") { realtime.voice = realtimeVoice; realtime.reasoning = realtimeReasoning; }
+      // Only the knobs this provider actually has: the server rejects the rest,
+      // and the state still holds the previous provider's values (a provider whose
+      // knob the server reports empty leaves the useState default in place).
+      if (realtimeProvider !== "none") {
+        if (providerHasVoice(realtimeProvider)) realtime.voice = realtimeVoice;
+        if (providerHasReasoning(realtimeProvider)) realtime.reasoning = realtimeReasoning;
+      }
       if (realtimeBaseUrl) realtime.base_url = realtimeBaseUrl;
       if (realtimeApiKey) realtime.api_key = realtimeApiKey;
       body.realtime = realtime;

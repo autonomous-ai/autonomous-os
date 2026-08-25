@@ -3,11 +3,16 @@ import { C, LockedField, LockedPasswordField, SectionCard } from "@/components/s
 import { getRealtimeOptions } from "@/lib/api";
 import type { LlmLoadedState } from "@/hooks/setup/types";
 
-// Realtime voice-agent (Gemini Live / OpenAI Realtime) config. Values map 1:1 to
-// the config.json `realtime` block (HAL reads it; os-server restarts HAL on save).
-// Voice + reasoning are provider-specific — keep these lists in sync with
+// Realtime voice-agent config. Values map 1:1 to the config.json `realtime`
+// block (HAL reads it; os-server restarts HAL on save). Voice + reasoning are
+// provider-specific — keep these lists in sync with
 // system/server/config/realtime.go (ValidateRealtimeKnobs) and the HAL enums.
-const PROVIDERS = ["gemini", "openai", "qwen", "none"];
+// pipecat and cascaded are the odd ones out: both drive the LLM half of the
+// turn from the STT transcript rather than being audio-native, so neither has a
+// voice/reasoning knob and both point at a plain OpenAI-compatible /v1 host.
+// They share the realtime.pipecat.* block, so switching between them keeps the
+// endpoint — cascaded is the same brain without the pipecat dependency.
+const PROVIDERS = ["gemini", "openai", "qwen", "pipecat", "cascaded", "none"];
 
 // Display labels for the Provider dropdown. Values on the wire stay lowercase
 // (server-side switch keys off "gemini" / "openai" / …); only the human-facing
@@ -17,6 +22,8 @@ const PROVIDER_LABEL: Record<string, string> = {
   gemini: "Gemini",
   openai: "OpenAI",
   qwen: "Qwen",
+  pipecat: "Pipecat",
+  cascaded: "Cascaded",
   none: "None",
 };
 const displayProvider = (v: string): string =>
@@ -25,14 +32,27 @@ const VOICES: Record<string, string[]> = {
   gemini: ["Puck", "Charon", "Kore", "Fenrir", "Aoede"],
   openai: ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"],
   qwen: ["Cherry", "Serena", "Ethan", "Chelsie"],
+  pipecat: [],
+  cascaded: [],
 };
 // Reasoning depth = cost knob. First entry (cheapest) is the default.
-// qwen realtime has no reasoning knob → empty list hides the selector.
+// qwen realtime, pipecat and cascaded have no reasoning knob → empty list hides
+// the selector.
 const REASONING: Record<string, string[]> = {
   gemini: ["MINIMAL", "LOW", "MEDIUM", "HIGH"],
   openai: ["minimal", "low", "medium", "high", "xhigh"],
   qwen: [],
+  pipecat: [],
+  cascaded: [],
 };
+
+// A provider only accepts the knobs it actually has: pipecat and cascaded have
+// neither (the device TTS owns the voice, and the model exposes no reasoning
+// tier) and qwen has no reasoning. The server REJECTS an unsupported knob, so the save payload
+// must be filtered by these — hiding the selector is not enough, since the
+// state keeps whatever the previous provider left behind.
+export const providerHasVoice = (p: string): boolean => (VOICES[p] ?? []).length > 0;
+export const providerHasReasoning = (p: string): boolean => (REASONING[p] ?? []).length > 0;
 
 export interface RealtimeLoadedState {
   apiKey: boolean;
@@ -74,6 +94,9 @@ export function RealtimeSection({
   const providers = opts?.providers ?? PROVIDERS;
   const voices = (opts?.voices ?? VOICES)[provider] ?? [];
   const reasonings = (opts?.reasoning ?? REASONING)[provider] ?? [];
+  // The two cascaded brains share realtime.pipecat.* — and its base_url no
+  // longer derives from the AI brain, so the field's copy differs for them.
+  const cascaded = provider === "pipecat" || provider === "cascaded";
 
   // Switching provider resets voice/reasoning to that provider's defaults so we
   // never submit, e.g., an OpenAI voice while provider=gemini (server rejects it).
@@ -88,7 +111,7 @@ export function RealtimeSection({
     <SectionCard id="realtime" title="Realtime" active={active}>
       <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, cursor: "pointer", fontSize: 12.5, color: C.text }}>
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-        Enabled (audio-native brain — Gemini Live / OpenAI Realtime / Qwen Omni Realtime)
+        Enabled (audio-native — Gemini Live / OpenAI Realtime / Qwen Omni — or cascaded Pipecat)
       </label>
       <div style={{ marginBottom: 12 }}>
         <label htmlFor="realtime_provider" style={labelStyle}>Provider</label>
@@ -118,7 +141,7 @@ export function RealtimeSection({
           )}
 
           <LockedPasswordField lockedInitially={realtimeLoaded.apiKey || llmLoaded.apiKey} label="API Key (optional — leave blank to reuse AI brain key)" id="realtime_api_key" value={apiKey} onChange={setApiKey} placeholder="sk-... / AIza..." />
-          <LockedField lockedInitially={llmLoaded.baseUrl} label="Base URL (optional — leave blank to derive from AI brain base URL)" id="realtime_base_url" value={baseUrl} onChange={setBaseUrl} placeholder="wss://… /ws/gemini" />
+          <LockedField lockedInitially={llmLoaded.baseUrl} label={cascaded ? "Base URL (optional — leave blank for the autonomous qwen route)" : "Base URL (optional — leave blank to derive from AI brain base URL)"} id="realtime_base_url" value={baseUrl} onChange={setBaseUrl} placeholder={cascaded ? "https://campaign-api.autonomous.ai/api/v1/ai/v1/qwen/v1" : "wss://… /ws/gemini"} />
         </>
       )}
     </SectionCard>

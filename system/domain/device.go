@@ -1156,7 +1156,7 @@ type MQTTTTSSetAck struct {
 // `realtime.set` downlink (data block) and the HTTP UpdateConfig `realtime` field.
 type RealtimeSetData struct {
 	Enabled   *bool  `json:"enabled,omitempty"`   // nil = leave unchanged
-	Provider  string `json:"provider,omitempty"`  // gemini | openai | none
+	Provider  string `json:"provider,omitempty"`  // gemini | openai | qwen | pipecat | cascaded | none
 	Model     string `json:"model,omitempty"`     // active provider's model
 	Voice     string `json:"voice,omitempty"`     // active provider's voice
 	Reasoning string `json:"reasoning,omitempty"` // gemini thinking_level OR openai reasoning_effort

@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Coding convention
+
+Avoid commenting anything; just drop short notes for critical functions; other functions just need a description, params note (and/or short example); do not provide full payload or usecase to trigger the function; The same expectation for module layer;
+
 ## Multi-IDE Rules (Cursor + Claude Code)
 
 This repo is developed in both **Cursor** and **Claude Code**. The following rules (from `.cursor/rules/`) apply to all code changes:
