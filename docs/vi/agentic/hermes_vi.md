@@ -332,7 +332,14 @@ native module của browser-tool (node-gyp) bị treo vô hạn trên board ARM,
 voice lamp không bao giờ dùng browser tools (gateway thuần Python nên không cần).
 Vì vậy nó **không** còn chạy bản monolithic `curl | bash --skip-setup`. Sau vòng
 lặp stage, installer ghi `git` vào `/usr/local/lib/hermes-agent/.install_method`
-để một lệnh `hermes update` về sau nhận ra đây là git install. Tiếp đó installer
+để một lệnh `hermes update` về sau nhận ra đây là git install.
+
+> **Hermes là runtime DUY NHẤT không được OTA worker tự cập nhật.** `hermes
+> update` không nhận version đích — luôn nhảy lên upstream HEAD — nên một sàn
+> `min_version` nó không bao giờ đạt sẽ kích lại update mỗi vòng poll, mãi mãi.
+> `make upload-hermes` + `make promote-hermes` vẫn publish con số, nhưng chỉ
+> `sudo software-update hermes` qua SSH mới áp dụng (và nó CẢNH BÁO chứ không
+> fail khi version thực tế khác). Xem `docs/vi/bootstrap-ota.md` §5. Tiếp đó installer
 dừng `openclaw` (để import skills không tranh chấp state đang chạy của nó), seed
 các key `API_SERVER_*` trong `~/.hermes/.env`, rồi **giao toàn bộ phần config.yaml
 + skills cho hook presync** (gọi inline), và cuối cùng cài + start gateway như một

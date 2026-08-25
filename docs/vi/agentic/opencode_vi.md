@@ -88,7 +88,10 @@ backend đầy đủ):
    test installer **vẫn** đặt binary vào mặc định `~/.opencode/bin` của nó — nên
    một bước belt-and-suspenders copy bất kỳ thứ gì installer tạo ra vào
    `/usr/local/bin/opencode` (đường dẫn mà unit + hook `verify` dùng).
-   `OPENCODE_VERSION` được pin (hiện tại `1.18.4`);
+   `OPENCODE_VERSION` được pin (hiện tại `1.18.4`) — chỉ là baseline cho image
+   mới flash: máy đã ngoài thực địa update qua `make upload-opencode
+   <semver-trần>` + `make promote-opencode`, bootstrap worker áp dụng bằng
+   `software-update opencode` (`docs/vi/bootstrap-ota.md` §5);
 3. chạy hook presync một lần (`/usr/local/bin/runtime-opencode-presync`, được
    os-server materialize TRƯỚC installer — §1.2);
 4. ghi + enable **`opencode.service`** (`ExecStart=/usr/local/bin/os-server

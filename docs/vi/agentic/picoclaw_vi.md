@@ -69,6 +69,14 @@ nằm cạnh backend và được embed + đăng ký trong `install.go`:
 **`install.sh`** (một lần):
 1. cài `jq` + `yq` + binary `picoclaw` đã pin (GitHub release,
    `picoclaw-linux-arm64`) vào `/usr/local/bin`;
+
+   > Pin này chỉ là baseline của image. Máy ngoài thực địa update qua
+   > `make upload-picoclaw <release-tag>` + `make promote-picoclaw`, bootstrap
+   > worker áp dụng bằng `software-update picoclaw` trên máy có `agent_runtime`
+   > là `picoclaw`. Lệnh đó còn ghi tag đã cài vào
+   > `/usr/local/lib/os-runtimes/picoclaw/installed-version` — `picoclaw version`
+   > in ra chuỗi build không có semver, nên stamp là cách DUY NHẤT worker biết
+   > release nào đang cài. Xem `docs/vi/bootstrap-ota.md` §5.
 2. `picoclaw onboard` (chỉ khi chưa có `config.json`) tạo `/root/.picoclaw` —
    workspace + `config.json` và `.security.yml` baseline;
 3. ghi **`picoclaw.service`** (`ExecStart=/usr/local/bin/picoclaw gateway`,

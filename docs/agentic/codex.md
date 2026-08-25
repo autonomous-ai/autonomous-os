@@ -70,6 +70,13 @@ backend):
    asset `codex-aarch64-unknown-linux-musl.tar.gz` — static musl, no runtime
    deps) to `/usr/local/bin/codex`; idempotent (skips when the pinned version
    is already installed);
+
+   > **Updating a device already in the field** does NOT go through this pin:
+   > publish with `make upload-codex <bare-semver>` + `make promote-codex`, and
+   > the bootstrap worker runs `software-update codex` (binary swap + restart)
+   > on every device whose `agent_runtime` is `codex`. The pin here is the
+   > baseline a freshly flashed image starts from — keep it in step with
+   > `scripts/imager/build-orangepi.sh`. See `docs/bootstrap-ota.md` §5.
 3. runs the presync hook once (`/usr/local/bin/runtime-codex-presync`,
    materialized by os-server BEFORE the installer — §1.2);
 4. writes + enables **`codex.service`** (`ExecStart=/usr/local/bin/os-server

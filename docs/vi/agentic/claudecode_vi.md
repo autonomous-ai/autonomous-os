@@ -47,6 +47,14 @@ resolve backend trong `system/agent/factory.go`. Switch vào/ra đi qua flow
    (`curl -fsSL https://claude.ai/install.sh | bash` → `~/.local/bin/claude`,
    binary standalone, linux arm64/amd64, không cần Node.js), symlink sang
    `/usr/local/bin/claude`;
+
+   > **Update ngoài thực địa** không chạy lại đường cài này từ đầu: publish bằng
+   > `make upload-claudecode <semver-trần>` + `make promote-claudecode`, bootstrap
+   > worker sẽ chạy `software-update claudecode` (chạy lại installer đúng version
+   > đó, trỏ lại symlink, restart `claudecode.service`) trên máy có
+   > `agent_runtime` là `claudecode`. Không có backup rollback — installer vẫn giữ
+   > `~/.local/share/claude/versions/<ver>`, nên muốn lùi thì publish bản cũ. Xem
+   > `docs/vi/bootstrap-ota.md` §5.
 3. **không bun, không channel plugin** — telegram + discord do device sở hữu
    (os-server tự chạy các receive loop, §7), nên bước plugin marketplace bỏ
    hẳn;

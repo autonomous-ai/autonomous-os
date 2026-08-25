@@ -49,6 +49,14 @@ backend in `system/agent/factory.go`. Switching in/out goes through the generic
    (`curl -fsSL https://claude.ai/install.sh | bash` → `~/.local/bin/claude`,
    standalone binary, linux arm64/amd64, no Node.js), symlinked to
    `/usr/local/bin/claude`;
+
+   > **Field updates** don't re-run this install path from scratch: publish with
+   > `make upload-claudecode <bare-semver>` + `make promote-claudecode`, and the
+   > bootstrap worker runs `software-update claudecode` (re-runs the installer
+   > pinned to that version, re-points the symlink, restarts `claudecode.service`)
+   > on devices whose `agent_runtime` is `claudecode`. No rollback backup exists —
+   > the installer keeps `~/.local/share/claude/versions/<ver>`, so downgrading
+   > means publishing the older version. See `docs/bootstrap-ota.md` §5.
 3. **no bun, no channel plugins** — telegram + discord are device-owned
    (os-server runs the receive loops itself, §7), so the plugin marketplace
    step is gone entirely;

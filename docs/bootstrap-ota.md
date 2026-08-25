@@ -836,6 +836,12 @@ echo "HAL $NEW_VERSION published."
 | `scripts/release/upload-setup.sh` | Setup script | Upload to GCS |
 | `scripts/release/upload-setup-ap.sh` | AP setup script | Upload to GCS |
 | `scripts/release/upload-skills.sh` | OpenClaw skill files | Upload to GCS |
+| `scripts/release/upload-openclaw.sh` | OpenClaw npm version | Metadata only (`npm install -g` on device) |
+| `scripts/release/upload-codex.sh` | Codex CLI version | Metadata only (GitHub release tarball on device) |
+| `scripts/release/upload-claudecode.sh` | Claude Code CLI version | Metadata only (Anthropic installer on device) |
+| `scripts/release/upload-opencode.sh` | OpenCode CLI version | Metadata only (opencode.ai installer on device) |
+| `scripts/release/upload-picoclaw.sh` | PicoClaw release TAG | Metadata only (GitHub asset on device); verifies the tag exists |
+| `scripts/release/upload-hermes.sh` | Hermes version (SSH-only, unpinnable) | Metadata only (`hermes update` on device) |
 | `scripts/provision/install.sh` | CDN install shortcut | `curl ... \| sudo bash` on Pi |
 | `scripts/release/tag-release.sh` | Git release tag with OTA metadata snapshot | Fetch metadata.json → annotated tag → `git push origin <tag>` |
 

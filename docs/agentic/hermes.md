@@ -354,6 +354,13 @@ inline, a direct `bash install.sh` is fully configured and running.
 > `echo git > /usr/local/lib/hermes-agent/.install_method` so a later
 > `hermes update` recognizes this as a git install.
 
+> **Hermes is the one runtime the OTA worker never auto-updates.** `hermes update`
+> takes no target version — it always moves to upstream HEAD — so a `min_version`
+> floor it cannot reach would re-trigger the update on every poll forever.
+> `make upload-hermes` + `make promote-hermes` publish the number, but only
+> `sudo software-update hermes` over SSH applies it (and it WARNS, rather than
+> fails, when the landed version differs). See `docs/bootstrap-ota.md` §5.
+
 > **Install log lives off zram.** The installer tees all stdout+stderr to
 > `$HERMES_LOG`, default **`/root/.hermes/install.log`** (persistent rootfs) —
 > **not** under `/var/log`, which on these boards is a volatile zram mount

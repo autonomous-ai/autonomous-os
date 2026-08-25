@@ -70,6 +70,12 @@ backend đầy đủ):
    `codex-aarch64-unknown-linux-musl.tar.gz` — musl static, không cần runtime
    deps) vào `/usr/local/bin/codex`; idempotent (bỏ qua khi đúng version đã
    cài);
+
+   > **Update máy đã ngoài thực địa** KHÔNG đi qua pin này: publish bằng
+   > `make upload-codex <semver-trần>` + `make promote-codex`, bootstrap worker sẽ
+   > chạy `software-update codex` (thay binary + restart) trên mọi máy có
+   > `agent_runtime` là `codex`. Pin ở đây là baseline cho image mới flash — giữ
+   > đồng bộ với `scripts/imager/build-orangepi.sh`. Xem `docs/vi/bootstrap-ota.md` §5.
 3. chạy hook presync một lần (`/usr/local/bin/runtime-codex-presync`, được
    os-server materialize TRƯỚC installer — §1.2);
 4. ghi + enable **`codex.service`** (`ExecStart=/usr/local/bin/os-server

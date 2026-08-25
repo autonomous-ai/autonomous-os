@@ -70,6 +70,14 @@ live next to the backend and are embedded + registered in `install.go`:
 **`install.sh`** (one-time):
 1. installs `jq` + `yq` + the pinned `picoclaw` binary (GitHub release,
    `picoclaw-linux-arm64`) into `/usr/local/bin`;
+
+   > The pin is the image baseline only. Field updates go via
+   > `make upload-picoclaw <release-tag>` + `make promote-picoclaw`, which the
+   > bootstrap worker applies as `software-update picoclaw` on devices whose
+   > `agent_runtime` is `picoclaw`. That command also stamps the installed tag to
+   > `/usr/local/lib/os-runtimes/picoclaw/installed-version` — `picoclaw version`
+   > prints a build description with no semver, so the stamp is the ONLY way the
+   > worker can tell which release is installed. See `docs/bootstrap-ota.md` §5.
 2. `picoclaw onboard` (only when `config.json` is absent) creates `/root/.picoclaw`
    — workspace + a baseline `config.json` and `.security.yml`;
 3. writes **`picoclaw.service`** (`ExecStart=/usr/local/bin/picoclaw gateway`,

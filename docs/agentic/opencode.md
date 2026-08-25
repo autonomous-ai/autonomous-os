@@ -87,7 +87,11 @@ sufficient — a direct `bash install.sh` fully configures AND starts the backen
    the binary in its default `~/.opencode/bin` on the test device — so a
    belt-and-suspenders step copies whatever the installer produced into
    `/usr/local/bin/opencode` (the path the unit + `verify` hook use).
-   `OPENCODE_VERSION` is pinned (currently `1.18.4`);
+   `OPENCODE_VERSION` is pinned (currently `1.18.4`) — the baseline for a
+   freshly flashed image only: devices in the field update via
+   `make upload-opencode <bare-semver>` + `make promote-opencode`, which the
+   bootstrap worker applies as `software-update opencode`
+   (`docs/bootstrap-ota.md` §5);
 3. runs the presync hook once (`/usr/local/bin/runtime-opencode-presync`,
    materialized by os-server BEFORE the installer — §1.2);
 4. writes + enables **`opencode.service`** (`ExecStart=/usr/local/bin/os-server

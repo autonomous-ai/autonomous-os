@@ -823,6 +823,12 @@ echo "HAL $NEW_VERSION published."
 | `scripts/release/upload-setup.sh` | Script setup | Upload lên GCS |
 | `scripts/release/upload-setup-ap.sh` | Script setup AP | Upload lên GCS |
 | `scripts/release/upload-skills.sh` | OpenClaw skill files | Upload lên GCS |
+| `scripts/release/upload-openclaw.sh` | Version OpenClaw npm | Chỉ metadata (device chạy `npm install -g`) |
+| `scripts/release/upload-codex.sh` | Version Codex CLI | Chỉ metadata (device tải tarball GitHub release) |
+| `scripts/release/upload-claudecode.sh` | Version Claude Code CLI | Chỉ metadata (device chạy installer Anthropic) |
+| `scripts/release/upload-opencode.sh` | Version OpenCode CLI | Chỉ metadata (device chạy installer opencode.ai) |
+| `scripts/release/upload-picoclaw.sh` | TAG release PicoClaw | Chỉ metadata (device tải asset GitHub); kiểm tra tag có thật |
+| `scripts/release/upload-hermes.sh` | Version Hermes (chỉ SSH, không pin được) | Chỉ metadata (device chạy `hermes update`) |
 | `scripts/provision/install.sh` | CDN install shortcut | `curl ... \| sudo bash` trên Pi |
 | `scripts/release/tag-release.sh` | Git release tag kèm OTA metadata snapshot | Fetch metadata.json → annotated tag → `git push origin <tag>` |
 
