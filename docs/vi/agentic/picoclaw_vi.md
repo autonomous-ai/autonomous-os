@@ -137,7 +137,9 @@ tự-heal sau factory reset, giống presync của hermes):
 Một **skill watcher** riêng (`skill_watcher.go`, chạy lúc boot như openclaw) poll OTA
 metadata mỗi 5 phút và tự cập nhật `workspace/skills/<name>` từ CDN khi version của
 skill được hỗ trợ thay đổi (gate qua `skills.Supported`), rồi báo agent qua
-`SendSystemChatMessage`.
+`SendSystemChatMessage`. Mỗi lần poll thành công đều log `skill watcher: checked`;
+nếu tải ZIP hoặc extract lỗi, watcher giữ version của skill đó ở trạng thái pending
+và thử lại ở poll kế tiếp.
 - **§1 cấu trúc** (`jq` trên `config.json`) — `agents.defaults` (provider
   `anthropic-messages`, `model_name "autonomous"`, `image_model "autonomous_vision"`,
   `restrict_to_workspace:false`, `allow_read_outside_workspace:true`), hai entry

@@ -141,7 +141,9 @@ self-heals after a factory reset, mirroring hermes' presync):
 A separate **skill watcher** (`skill_watcher.go`, started at boot like openclaw)
 polls OTA metadata every 5 min and auto-updates `workspace/skills/<name>` from the
 CDN when a supported skill's version bumps (capability-gated via
-`skills.Supported`), then notifies the agent with `SendSystemChatMessage`.
+`skills.Supported`), then notifies the agent with `SendSystemChatMessage`. Each
+successful poll logs `skill watcher: checked`; if a ZIP download or extraction fails,
+the watcher leaves that skill's version pending and retries it on the next poll.
 - **§1 structure** (`jq` on `config.json`) — `agents.defaults` (provider
   `anthropic-messages`, `model_name "autonomous"`, `image_model "autonomous_vision"`,
   `restrict_to_workspace:false`, `allow_read_outside_workspace:true`), the `autonomous`
