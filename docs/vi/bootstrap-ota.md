@@ -597,7 +597,15 @@ và exit lỗi nếu cả hai đều rỗng — không có URL hardcode.
 > đều copy nó — đo được 2.5 GB, cạnh `.venv` 2.3 GB — sang staging trước khi sync:
 > ~4.8 GB chép qua eMMC trước khi làm việc thật, HAL chết vài phút, và cache bị
 > nhân bản mỗi lần update. Giờ không copy thư mục nào; cache in-tree được migrate
-> một lần.
+> một lần. Đo trên lamp: **5-6 phút → 41 giây**, và `/opt/hal` từ ~4.8 GB còn
+> 98 MB (venv hardlink vào cache dùng chung).
+
+> **Cửa sổ publish an toàn trước gián đoạn.** Giữa lúc "dời cây đang chạy đi" và
+> "đổi tên cây staging vào chỗ", component không tồn tại trên đĩa. Một `trap` ghi
+> lại lần dời đang treo và trả cây về nếu tiến trình thoát trước — SSH đứt (HUP),
+> `systemctl restart bootstrap` giết cả cgroup (TERM), hay bất kỳ nhánh lỗi nào.
+> SIGKILL và mất điện thì không trap được; những ca đó rơi vào đường cài lại
+> (cây bị thiếu sẽ được cài mới).
 
 ```bash
 "hal")

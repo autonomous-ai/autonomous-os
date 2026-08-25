@@ -238,6 +238,45 @@ relocate_venv_scripts() {
   [ ! -f "$venv/pyvenv.cfg" ] || sed -i "s|$from|$to|g" "$venv/pyvenv.cfg"
 }
 
+# Crash safety for the publish window.
+#
+# Every branch publishes by moving the live tree aside and renaming a staged one
+# into its place. Between those two renames the component simply does not exist
+# on disk — and if the process dies there (a `systemctl restart bootstrap` kills
+# the whole cgroup, an SSH hangup, a power cut), nothing restores it: that is how
+# a device was left with no /opt/hal at all. Record the pending move, and put the
+# tree back if we exit before publishing.
+#
+# SIGKILL and power loss cannot be trapped; recovery for those is the reinstall
+# path (a missing tree is treated as "install fresh", see the HAL branch).
+PENDING_MOVED_FROM=""
+PENDING_MOVED_TO=""
+PENDING_RESTORE_SERVICES=""
+
+mark_publish_pending() {
+  PENDING_MOVED_FROM="$1"   # where the live tree used to be
+  PENDING_MOVED_TO="$2"     # where it was moved to
+  PENDING_RESTORE_SERVICES="${3:-}"  # optional function that brings services back
+}
+
+clear_publish_pending() {
+  PENDING_MOVED_FROM=""
+  PENDING_MOVED_TO=""
+  PENDING_RESTORE_SERVICES=""
+}
+
+on_exit() {
+  local code=$?
+  if [ -n "$PENDING_MOVED_FROM" ] && [ ! -e "$PENDING_MOVED_FROM" ] && [ -d "$PENDING_MOVED_TO" ]; then
+    echo "[software-update] interrupted mid-publish — putting $PENDING_MOVED_FROM back" >&2
+    mv "$PENDING_MOVED_TO" "$PENDING_MOVED_FROM" 2>/dev/null || true
+    [ -z "$PENDING_RESTORE_SERVICES" ] || "$PENDING_RESTORE_SERVICES" || true
+  fi
+  rm -f "$METADATA_TMP" "$METADATA_PAYLOAD" "$ZIP_TMP" 2>/dev/null || true
+  [ -z "$DIR_TMP" ] || rm -rf "$DIR_TMP"
+  exit "$code"
+}
+
 restore_hal_backup() {
   local backup="$ROLLBACK_DIR/hal.previous" failed="$ROLLBACK_DIR/hal.failed"
   [ -d "$backup" ] || { echo "No rollback backup for hal" >&2; return 1; }
@@ -379,7 +418,11 @@ METADATA_TMP=$(mktemp)
 METADATA_PAYLOAD=$(mktemp)
 ZIP_TMP=""
 DIR_TMP=""
-trap 'rm -f "$METADATA_TMP" "$METADATA_PAYLOAD" "$ZIP_TMP"; rm -rf "$DIR_TMP"' EXIT
+trap on_exit EXIT
+# INT/TERM/HUP run the same restore: the default action for these would skip the
+# EXIT trap's cleanup in some shells, and HUP is what an interrupted SSH sends.
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
 curl -fsSL -H "Cache-Control: no-cache" -H "Pragma: no-cache" -o "$METADATA_TMP" "$OTA_METADATA_URL" || { echo "Failed to fetch metadata from $OTA_METADATA_URL"; exit 1; }
 OTA_SIGNING_PUBLIC_KEY="$(jq -r '.signing_public_key // empty' "$BOOTSTRAP_JSON" 2>/dev/null || true)"
 if [ -n "$OTA_SIGNING_PUBLIC_KEY" ]; then
@@ -620,8 +663,10 @@ elif [ "$APP" = "web" ]; then
   systemctl stop nginx 2>/dev/null || true
   rm -rf "$ROLLBACK_DIR/web.previous"
   mv "$WEB_ROOT" "$ROLLBACK_DIR/web.previous"
+  mark_publish_pending "$WEB_ROOT" "$ROLLBACK_DIR/web.previous" restore_web_service_state
   publish_mode "$DIR_TMP" "$ROLLBACK_DIR/web.previous"
   mv "$DIR_TMP" "$WEB_ROOT"
+  clear_publish_pending
   DIR_TMP=""
   if ! restore_web_service_state || ! check_web; then
     echo "web health check failed; restoring the known-good bundle" >&2
@@ -651,6 +696,7 @@ elif [ "$APP" = "hal" ]; then
       restore_hal_service_state || true
       exit 1
     fi
+    mark_publish_pending "$HAL_DIR" "$ROLLBACK_DIR/hal.previous" restore_hal_service_state
   else
     echo "[software-update] $HAL_DIR is absent — reinstalling from scratch (no rollback point for this run)"
     rm -rf "$ROLLBACK_DIR/hal.previous"
@@ -698,6 +744,7 @@ elif [ "$APP" = "hal" ]; then
     exit 1
   fi
   DIR_TMP=""
+  clear_publish_pending
   relocate_venv_scripts "$HAL_DIR/.venv" "$HAL_STAGED" "$HAL_DIR"
   if ! restore_hal_service_state || ! check_hal; then
     echo "HAL health check failed; restoring the known-good runtime" >&2
@@ -738,9 +785,11 @@ elif [ "$APP" = "device" ]; then
   snapshot_device_rootfs "$DEST/rootfs" "$DIR_TMP/rootfs"
   rm -rf "$ROLLBACK_DIR/device.previous"
   mv "$DEST" "$ROLLBACK_DIR/device.previous"
+  mark_publish_pending "$DEST" "$ROLLBACK_DIR/device.previous" restore_device_service_state
   publish_mode "$DIR_TMP" "$ROLLBACK_DIR/device.previous"
   mv "$DIR_TMP" "$DEST"
   DIR_TMP=""
+  clear_publish_pending
   # Keep local tuning in .env exactly as the existing updater did.
   ENV_BACKUP=""
   if [ -f /opt/hal/.env ]; then ENV_BACKUP=$(mktemp); cp -a /opt/hal/.env "$ENV_BACKUP"; fi

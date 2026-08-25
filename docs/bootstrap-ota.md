@@ -614,6 +614,15 @@ aborts with an error if neither is set — no compiled-in URL.
 > 2.3 GB `.venv` — into the staging tree before syncing: ~4.8 GB shuffled across
 > eMMC before any real work, minutes of HAL downtime, and a cache duplicated per
 > update. Neither directory is copied now; an in-tree cache is migrated once.
+> Measured on a lamp: **5-6 min → 41 s**, and `/opt/hal` shrank from ~4.8 GB to
+> 98 MB (the venv hardlinks into the shared cache).
+
+> **The publish window is crash-safe.** Between "move the live tree aside" and
+> "rename the staged tree into place" the component does not exist on disk. A
+> `trap` records that pending move and puts the tree back if the process exits
+> first — an interrupted SSH (HUP), a `systemctl restart bootstrap` killing the
+> cgroup (TERM), or any failure path. SIGKILL and power loss cannot be trapped;
+> those land on the reinstall path instead (a missing tree is installed fresh).
 
 ```bash
 "hal")
