@@ -147,6 +147,12 @@ session kế — rồi reset LSTM của Silero khi resume, đúng phần dọn d
 drain vẫn làm. Chỉ chặn việc **mở** session; session đang stream không bị đụng, đó
 mới là mục đích của tính năng.
 
+Mỗi cue còn được buộc vào epoch của phiên STT đã yêu cầu nó. Nếu TTS bình thường
+giữ output stream đủ lâu để phiên gốc kết thúc, cue đang chờ bị huỷ ngay trước lúc
+phát; nó không thể lọt vào một phiên mic mới thành transcript bịa. Cơ chế này chỉ
+huỷ lời nói tuỳ chọn của thiết bị — không đóng, xoá hay mute mic của người dùng, nên
+vẫn hỗ trợ barge-in.
+
 `robots/lamp/rootfs/opt/hal/.env` hạ `HAL_MAX_SESSION_DURATION_S` xuống `20`
 (default trong code vẫn là `30`); trần đó chỉ chạm tới khi đồng hồ im lặng không
 bao giờ hết hạn, mà người nói thật luôn ngừng lâu hơn `SILENCE_TIMEOUT` trong

@@ -1224,6 +1224,11 @@ class VoiceService:
         sent_turn_speaker = None
         turn_context_sent = False
 
+        # Give backchannel cues a lifecycle token before any STT callback can
+        # schedule one. A cue delayed behind normal TTS must not survive this
+        # capture and play into the next mic session.
+        self._backchannel.begin_session()
+
         def start_realtime_turn() -> bool:
             """Open realtime as soon as the wake-word partial is available.
 

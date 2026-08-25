@@ -152,6 +152,12 @@ session's opening audio — and resets Silero's LSTM on resume, the same cleanup
 warm-mic drain does. Only session *opening* is suppressed; a session already
 streaming is untouched, which is the whole point of the feature.
 
+Each cue is also bound to the STT-session epoch that scheduled it. If normal TTS
+holds the output stream long enough for that source session to end, the queued cue
+is cancelled immediately before playback; it cannot leak into a newer mic session
+as a fabricated transcript. This cancels only optional device speech — it never
+closes, clears, or mutes user microphone capture, so barge-in remains available.
+
 `robots/lamp/rootfs/opt/hal/.env` lowers `HAL_MAX_SESSION_DURATION_S` to `20`
 (the code default stays `30`); that ceiling is only reached when the silence
 clock never expires, and a real speaker always pauses longer than
