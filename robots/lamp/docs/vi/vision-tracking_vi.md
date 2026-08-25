@@ -486,7 +486,10 @@ pha quét chỉ được vào ở nơi có thể thong thả:
 - người dùng yêu cầu thẳng — *"bạn đang ở đâu?"*, *"tìm tôi được không?"* (`skills/servo-control`)
 - họ đồng ý với đề nghị sau một lần nhìn thất bại — *"Tôi không thấy nó. Bạn có muốn tôi quay quanh tìm thử không?"*
 
-`POST /servo/search` — quét và dừng ngay ở đối tượng đầu tiên nhìn thấy.
+`POST /servo/search` — quét và dừng ngay ở đối tượng đầu tiên nhìn thấy. Hãy tính khoảng **2 giây mỗi
+điểm dừng** (đo trên máy thật): ~0,65 s để di chuyển và ổn định, phần còn lại là lấy khung hình và nhận
+diện. Một pha quét 3×3 đầy đủ mà không thấy ai vì thế tốn khoảng 20 giây — đó là lý do chỉ vào đây khi
+còn dư thời gian.
 
 **Ba điểm dừng: bearing đã ghi nhớ trước, rồi quét từ trái sang phải** — `seed`, `seed−90°`,
 `seed+90°`, bị kẹp vào giới hạn cơ khí chứ không bị loại bỏ. Seed đi trước vì pha quét dừng ngay ở đối
@@ -508,8 +511,13 @@ không để lại tư thế nào do ai chọn cả, và quét từ một camera
 cũng là kỹ ở sai nửa không gian. Tư thế idle vốn dĩ là tư thế đèn được thiết kế để nghỉ, nên bảo đảm
 "không chúc xuống sàn" đến từ chính tư thế đó, không cần thêm một phép kiểm tra pitch riêng.
 
-**Ở mỗi điểm dừng, đầu đèn ngó quanh** — `wrist_roll` sang −45°, 0°, rồi +45°, trước khi đế xoay tiếp
-và đầu trở về giữa. Đó cũng là lý do đế có thể bước 90° mà không để lại khe hở: với ống kính ~100°,
+**Ở mỗi điểm dừng, đầu đèn ngó quanh** — `wrist_roll` sang −45°, 0°, +45°, luôn theo chiều đó. Sự mượt
+mà đến từ THỨ TỰ các điểm dừng chứ không phải từ việc đảo chiều đầu: một điểm dừng kết thúc khi đang
+nhìn về `yaw+45°`, và điểm dừng kế bên phải mở ra ở `yaw+90°` với đầu ở −45° — *cùng một hướng nhìn*.
+**Cú xoay đế và cú xoay đầu được gửi trong CÙNG một lệnh**, nên hai chuyển động triệt tiêu nhau và
+camera giữ nguyên hướng trong khi cây đèn tự sắp xếp lại bên dưới. Nếu xoay đế trước rồi mới xoay đầu,
+hướng nhìn sẽ văng ra `yaw+135°` rồi quay lại — đo trên máy thật là +48° → +138° → +48°, một cú lắc
+90° đi-rồi-về ở mỗi lần chuyển điểm dừng. Đó cũng là lý do đế có thể bước 90° mà không để lại khe hở: với ống kính ~100°,
 một điểm dừng yaw nhìn được liền mạch `yaw±95°` (roll −45 phủ `yaw−95…yaw+5`, roll 0 phủ `yaw±50`,
 roll +45 phủ `yaw−5…yaw+95`), nên ba điểm dừng phủ `seed±185°` — trọn vòng tròn. Mỗi góc là một điểm DỪNG, không phải lướt qua: đầu còn đang động thì khung hình bị
 nhoè và bộ nhận diện bỏ sót thứ đang hiện rành rành trong khung. Dùng `wrist_roll` thay vì xoay

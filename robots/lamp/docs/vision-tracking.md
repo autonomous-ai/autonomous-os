@@ -488,7 +488,10 @@ sweep is only entered where the time is affordable:
 - the user asks outright — *"where are you?"*, *"can you find me?"* (`skills/servo-control`)
 - they accept an offer after a failed look — *"I can't see it. Want me to look around?"*
 
-`POST /servo/search` — sweeps and stops on the first subject seen.
+`POST /servo/search` — sweeps and stops on the first subject seen. Budget roughly **2 seconds per
+stop** (measured on device): ~0.65 s of movement and settling, the rest frame grab and detection. A
+full 3×3 sweep that finds nobody therefore costs about 20 seconds, which is why this is entered only
+when the time is affordable.
 
 **Three stops: the remembered bearing first, then left to right** — `seed`, `seed−90°`, `seed+90°`,
 clamped to the mechanical range rather than dropped. The seed goes first because the sweep stops on
@@ -511,8 +514,13 @@ aimed at the desk is thorough about the wrong hemisphere. The idle pose is by co
 lamp is designed to rest in, so "not aimed at the floor" comes from the pose itself and needs no
 separate pitch check.
 
-**At each stop the head looks around** — `wrist_roll` to −45°, 0°, then +45°, before the base turns
-again and the head returns to centre. This is why the base can step 90° without leaving seams: with
+**At each stop the head looks around** — `wrist_roll` to −45°, 0°, +45°, always in that direction.
+The smoothness comes from the stop order, not from reversing the head: a stop ends looking at
+`yaw+45°`, and the next stop to the right opens at `yaw+90°` with the head at −45°, which is *the same
+direction*. **The base turn and the head turn are sent as one move**, so the two rotations cancel and
+the camera holds its line while the lamp rearranges itself underneath. Move the base first and the
+head second and the view flies out to `yaw+135°` and comes back — traced on device as
++48° → +138° → +48°, a 90° out-and-back wobble at every handover. This is why the base can step 90° without leaving seams: with
 a ~100° lens, one yaw stop sees a continuous `yaw±95°` (roll −45 covers `yaw−95…yaw+5`, roll 0 covers
 `yaw±50`, roll +45 covers `yaw−5…yaw+95`), so three stops cover `seed±185°` — the whole circle. Each is a stop, not a pan-through: a head still moving gives a
 blurred frame and a detector that misses what is plainly in view. `wrist_roll` rather than more

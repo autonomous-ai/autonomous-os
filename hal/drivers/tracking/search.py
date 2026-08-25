@@ -78,7 +78,6 @@ MAX_STOPS: int = 3
 # which is what makes a yaw stop mean what the stop list says it means.
 ROLL_LOOK_DEG: float = 45.0
 ROLL_STOPS = (-ROLL_LOOK_DEG, 0.0, ROLL_LOOK_DEG)
-ROLL_CENTRE: float = 0.0
 
 _abort_evt = threading.Event()
 
@@ -109,9 +108,15 @@ def _stop_list(seed: float) -> List[float]:
     -12, which it never reached. Ordering by position alone answers "is anyone
     in this room" when the question was "where are YOU".
 
-    Everything after that runs left to right, because the base swinging back and
-    forth across centre (seed, +90, -90) reads as agitation once the head is
-    also looking around at each stop. One reversal on the way out is enough.
+    After the seed it goes RIGHT, then left. That order is what lets the sweep
+    flow: the seed stop finishes looking at seed+45, and the right stop opens on
+    exactly the same direction (seed+90 with the head at -45), so the handover is
+    invisible. Going left first would throw the head back across everything it
+    had just covered.
+
+    The one unavoidable jump is the last: the right stop ends at seed+135 and the
+    left stop starts at seed-135. There is no ordering that avoids it, because
+    the two ends of the sweep are simply far apart.
 
     Clamped rather than dropped at the mechanical limits: with only three stops
     a discarded one leaves a real hole, whereas a clamped one still looks
@@ -120,14 +125,14 @@ def _stop_list(seed: float) -> List[float]:
     """
     seed = max(C.YAW_MIN, min(C.YAW_MAX, seed))
     span = (MAX_STOPS - 1) // 2
-    rest: List[float] = []
-    for i in range(-span, span + 1):
-        if i == 0:
-            continue
+    stops: List[float] = [seed]
+    # Right first (+1, +2, ...), then left (-1, -2, ...), so the head can carry
+    # on rightward out of the seed before the one long trip back across.
+    for i in list(range(1, span + 1)) + list(range(-1, -span - 1, -1)):
         y = max(C.YAW_MIN, min(C.YAW_MAX, seed + i * STEP_DEG))
-        if y != seed and y not in rest:
-            rest.append(y)
-    return [seed] + sorted(rest)
+        if y not in stops:
+            stops.append(y)
+    return stops
 
 
 def _current_yaw(svc: Any) -> float:
@@ -199,15 +204,26 @@ def _seed_from_bearing(svc: Any) -> float:
         return _current_yaw(svc) if seeded is None else seeded
 
 
-def _look_at_roll(svc: Any, roll: float) -> bool:
-    """Turn the head to an absolute wrist_roll angle. False if it could not."""
+def _look_at(svc: Any, roll: float, yaw: Optional[float] = None) -> bool:
+    """Point the camera at one look. False if the move could not be made.
+
+    When `yaw` is given the base and the head move TOGETHER, in one command, and
+    that is the whole reason the sweep flows. A stop ends looking at yaw+45; the
+    next stop opens at yaw+90 with the head at -45, which is the same direction.
+    Move the base first and the head second and the view flies out to yaw+135 and
+    comes back — device-traced as +48 -> +138 -> +48, a 90 deg out-and-back
+    wobble at every handover. Travelling together, the two rotations cancel and
+    the camera simply holds its line while the lamp rearranges itself under it.
+    """
     try:
         from hal.drivers.tracking import aim
 
         current = svc.get_positions()
-        if abs(roll - float(current.get("wrist_roll.pos", 0.0))) <= 0.5:
-            return True
         target = {"wrist_roll.pos": float(roll)}
+        if yaw is not None:
+            target["base_yaw.pos"] = float(yaw)
+        if all(abs(v - float(current.get(j, 0.0))) <= 0.5 for j, v in target.items()):
+            return True
         duration = aim.min_move_duration(
             state.safety_policy, target, current, MOVE_DURATION_S
         )
@@ -362,22 +378,25 @@ def search_for_subject(target: str = "person", detector: Any = None) -> SearchRe
         if _abort_evt.is_set():
             return _abandon(svc, seed_pose, visited)
 
-        try:
-            current = svc.get_positions()
-            delta = yaw - float(current.get("base_yaw.pos", 0.0))
-            if abs(delta) > 0.5:
-                svc.nudge(delta, 0.0, MOVE_DURATION_S, current, state.safety_policy)
-        except Exception as e:
-            logger.warning("[search] move to %+.0f failed: %s", yaw, e)
-            return SearchResult(False, f"move failed: {e}", visited)
-
-        # Look around from here before turning the body again: left, centre,
-        # right. Each is a STOP, not a pan-through — a head still moving gives a
-        # blurred frame and a detector that misses what is plainly in view.
-        for roll in ROLL_STOPS:
+        # Look around from here before turning the body again. Each angle is a
+        # STOP, not a pan-through — a head still moving gives a blurred frame
+        # and a detector that misses what is plainly in view.
+        #
+        # Always left to right, and the stop ORDER is what makes that smooth.
+        # A stop ends at roll +45, looking at yaw+45; the next stop to the right
+        # is yaw+90, whose first look at roll -45 is also yaw+45 — the same
+        # direction. The base turns +90 while the head turns -90 and the camera
+        # never leaves the spot.
+        #
+        # Alternating the roll direction instead was tried and is worse: it
+        # destroys precisely that handover, because the next stop then opens
+        # where the last one already was and the head has nowhere to carry on to.
+        for n, roll in enumerate(ROLL_STOPS):
             if _abort_evt.is_set():
                 return _abandon(svc, seed_pose, visited)
-            if not _look_at_roll(svc, roll):
+            # The first look of a stop carries the base turn with it, so the
+            # handover from the previous stop is one continuous movement.
+            if not _look_at(svc, roll, yaw=yaw if n == 0 else None):
                 continue
 
             # Settle before reading: a head still ringing gives a blurred frame
@@ -396,10 +415,6 @@ def search_for_subject(target: str = "person", detector: Any = None) -> SearchRe
                 )
                 _straighten_head_onto(svc, yaw, roll)
                 return SearchResult(True, f"found {kind}", visited, yaw)
-
-        # Head back to centre before the base turns, so the next yaw stop looks
-        # where the stop list says it does rather than 45 deg off it.
-        _look_at_roll(svc, ROLL_CENTRE)
 
     # Nothing found, so nothing to look at — go back to where the sweep began
     # rather than freezing wherever the last look left the head.

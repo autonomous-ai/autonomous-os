@@ -49,6 +49,10 @@ class _FakeSvc:
         self.yaw = 0.0
         self.roll = 0.0
         self.holds = []            # absolute poses restored before the sweep
+        # (yaw, roll) after every commanded move, in order. The base turns via
+        # nudge() and the head via move_and_hold(), so neither call log alone
+        # shows where the camera actually pointed at each step.
+        self.trail = []
         self._idle_baseline = (
             dict(self.IDLE_BASELINE) if idle_baseline is None else idle_baseline
         )
@@ -75,9 +79,11 @@ class _FakeSvc:
             self.yaw = float(target["base_yaw.pos"])
         if "wrist_roll.pos" in target:
             self.roll = float(target["wrist_roll.pos"])
+        self.trail.append((self.yaw, self.roll))
 
     def _nudge(self, y, p, d, cur, pol):
         self.yaw += y
+        self.trail.append((self.yaw, self.roll))
         return {"base_yaw.pos": self.yaw}
 
 
@@ -148,15 +154,14 @@ def test_the_sweep_checks_the_remembered_bearing_first():
     assert stops[0] == 60.0, "the likely place must be checked first"
 
 
-def test_everything_after_the_seed_runs_left_to_right():
-    """One reversal on the way out is enough. Alternating outward
-    (seed, +90, -90) swings the base back and forth across centre, which reads
-    as agitation once the head is also looking around at every stop.
+def test_the_sweep_goes_right_before_left():
+    """The order is what makes the sweep flow.
+
+    The seed stop finishes looking at seed+45, and the RIGHT stop opens on the
+    same direction (seed+90 with the head at -45), so the handover is invisible.
+    Going left first would throw the head back across everything just covered.
     """
-    stops = search._stop_list(0.0)
-    rest = stops[1:]
-    assert rest == sorted(rest), f"not left to right after the seed: {stops}"
-    assert stops == [0.0, -search.STEP_DEG, search.STEP_DEG]
+    assert search._stop_list(0.0) == [0.0, search.STEP_DEG, -search.STEP_DEG]
 
 
 def test_stops_stay_inside_the_mechanical_range():
@@ -306,6 +311,12 @@ def _rolls(svc):
     return [h["wrist_roll.pos"] for h in svc.holds if "wrist_roll.pos" in h]
 
 
+def _sweep_rolls(svc):
+    """Just the looks — without the pose restored before the sweep, or the one
+    the sweep ends on. Both are deliberate moves home, not part of the search."""
+    return _rolls(svc)[1:-1]
+
+
 def test_each_stop_looks_left_centre_and_right():
     """Turning the whole lamp reads as a camera on a turntable; turning the head
     at a fixed body reads as something looking around. Both cover ground, only
@@ -320,20 +331,44 @@ def test_each_stop_looks_left_centre_and_right():
     )
 
 
-def test_the_head_returns_to_centre_before_the_base_turns():
-    """At roll 0 the camera looks along base_yaw, which is what makes a yaw stop
-    mean what the stop list says. Turning the base with the head still cranked
-    45 deg over would aim every later stop somewhere other than where it claims.
+def _view_directions(svc):
+    """Where the camera pointed after each commanded move: base_yaw + wrist_roll.
+
+    The roll angles alone say nothing about smoothness — a 90 deg swing of the
+    head can leave the view exactly where it was if the base moved the other way,
+    which is precisely how the seed hands over to the next stop.
+    """
+    return [yaw + roll for yaw, roll in svc.trail]
+
+
+def test_the_view_carries_on_from_stop_to_stop():
+    """One stop ends where the next begins, so the camera sweeps continuously.
+
+    Exactly one discontinuity is allowed: the far right and the far left are
+    genuinely far apart, and no ordering removes that.
     """
     _res, svc = _run(bearing=None)
-    rolls = _rolls(svc)
+    views = _view_directions(svc)[1:-1]
 
-    # After each right-look there must be a return to centre before the next
-    # left-look begins the following stop.
-    for i, roll in enumerate(rolls):
-        if roll == 45.0 and any(r == -45.0 for r in rolls[i + 1:]):
-            nxt = rolls[i + 1:]
-            assert nxt[0] == 0.0, f"base turned with the head still at +45: {rolls}"
+    jumps = [abs(b - a) for a, b in zip(views, views[1:])
+             if abs(b - a) > search.STEP_DEG + 1e-6]
+    assert len(jumps) <= 1, f"more than one discontinuity in {[round(v) for v in views]}"
+
+
+def test_the_handover_between_the_seed_and_the_next_stop_is_seamless():
+    """The base turns +90 while the head turns -90 and the camera does not move.
+    That cancellation is the whole reason the right stop comes second."""
+    _res, svc = _run(bearing=None)
+    views = _view_directions(svc)[1:]
+
+    # The seed's three looks, then the base turn onto the next stop. The turn
+    # lands on the same view the last look ended on, which is the point.
+    end_of_seed = views[2]
+    after_the_turn = views[3]
+    assert after_the_turn == pytest.approx(end_of_seed), (
+        f"handover jumped {end_of_seed:+.0f} -> {after_the_turn:+.0f} in "
+        f"{[round(v) for v in views[:6]]}"
+    )
 
 
 def test_a_subject_found_mid_look_stops_the_sweep_there():
