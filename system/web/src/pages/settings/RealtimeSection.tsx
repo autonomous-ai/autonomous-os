@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { C, LockedField, LockedPasswordField, SectionCard } from "@/components/setup/shared";
 import { getRealtimeOptions } from "@/lib/api";
 import type { LlmLoadedState } from "@/hooks/setup/types";
+import { REASONING, VOICES } from "@/pages/settings/realtimeKnobs";
 
 // Realtime voice-agent config. Values map 1:1 to the config.json `realtime`
 // block (HAL reads it; os-server restarts HAL on save). Voice + reasoning are
@@ -28,32 +29,6 @@ const PROVIDER_LABEL: Record<string, string> = {
 };
 const displayProvider = (v: string): string =>
   PROVIDER_LABEL[v] ?? (v ? v[0].toUpperCase() + v.slice(1) : v);
-const VOICES: Record<string, string[]> = {
-  gemini: ["Puck", "Charon", "Kore", "Fenrir", "Aoede"],
-  openai: ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"],
-  qwen: ["Cherry", "Serena", "Ethan", "Chelsie"],
-  pipecat: [],
-  cascaded: [],
-};
-// Reasoning depth = cost knob. First entry (cheapest) is the default.
-// qwen realtime, pipecat and cascaded have no reasoning knob → empty list hides
-// the selector.
-const REASONING: Record<string, string[]> = {
-  gemini: ["MINIMAL", "LOW", "MEDIUM", "HIGH"],
-  openai: ["minimal", "low", "medium", "high", "xhigh"],
-  qwen: [],
-  pipecat: [],
-  cascaded: [],
-};
-
-// A provider only accepts the knobs it actually has: pipecat and cascaded have
-// neither (the device TTS owns the voice, and the model exposes no reasoning
-// tier) and qwen has no reasoning. The server REJECTS an unsupported knob, so the save payload
-// must be filtered by these — hiding the selector is not enough, since the
-// state keeps whatever the previous provider left behind.
-export const providerHasVoice = (p: string): boolean => (VOICES[p] ?? []).length > 0;
-export const providerHasReasoning = (p: string): boolean => (REASONING[p] ?? []).length > 0;
-
 export interface RealtimeLoadedState {
   apiKey: boolean;
 }
