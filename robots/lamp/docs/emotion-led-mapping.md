@@ -4,10 +4,10 @@ Source: colors are what the **lamp** actually shows — `robots/lamp/presets.jso
 
 | Emotion | Color (RGB) | Hex | Color source | Effect | Speed | Servo Animation |
 |---|---|---|---|---|---|---|
-| `curious` | 0, 4, 0 | `#000400` green | overlay | candle | 0.3 | curious |
+| `curious` | 5, 0, 2 | `#050002` rose | overlay | candle | 0.3 | curious |
 | `happy` | 4, 4, 0 | `#040400` yellow | overlay | candle | 0.2 | happy_wiggle |
 | `sad` | 5, 0, 0 | `#050000` red | overlay | breathing | 0.4 | sad |
-| `thinking` | 0, 4, 0 | `#000400` green | overlay | pulse | 0.3 | — (see note) |
+| `thinking` | 5, 0, 2 | `#050002` rose | overlay | pulse | 0.3 | — (see note) |
 | `idle` | 4, 2, 0 | `#040200` dim amber | overlay | breathing | 0.2 | idle |
 | `excited` | 4, 4, 0 | `#040400` yellow | overlay | candle | 0.5 | excited |
 | `shy` | 5, 0, 0 | `#050000` red | overlay | breathing | 0.3 | shy |
@@ -19,11 +19,11 @@ Source: colors are what the **lamp** actually shows — `robots/lamp/presets.jso
 | `greeting` | 5, 0, 5 | `#050005` purple | overlay | breathing | 0.3 | greeting \| wake_up |
 | `goodbye` | 5, 0, 5 | `#050005` purple | overlay | breathing | 0.5 | goodbye |
 | `caring` | 5, 0, 5 | `#050005` purple | overlay | breathing | 0.4 | nod |
-| `acknowledge` | 0, 4, 0 | `#000400` green | overlay | breathing | 0.5 | acknowledge |
+| `acknowledge` | 5, 0, 2 | `#050002` rose | overlay | breathing | 0.5 | acknowledge |
 | `stretching` | 4, 2, 0 | `#040200` dim amber | overlay | breathing | 0.6 | stretching |
 | `music_strong` | 8, 12, 8 | `#080c08` pale green (no effect — see below) | base | rainbow | 1.0 | music_rock |
 | `music_chill` | 0, 4, 4 | `#000404` cyan | overlay | breathing | 0.3 | music_rock \| music_groove \| music_jazz \| music_waltz |
-| `scan` | 0, 4, 0 | `#000400` green | overlay | pulse | 0.3 | scanning |
+| `scan` | 5, 0, 2 | `#050002` rose | overlay | pulse | 0.3 | scanning |
 | `nod` | 4, 2, 0 | `#040200` dim amber | overlay | breathing | 0.5 | nod |
 | `headshake` | 5, 0, 0 | `#050000` red | overlay | breathing | 0.5 | headshake |
 
@@ -39,13 +39,13 @@ This is fallout from the dimming pass. Before 18/08 the presets ran at high peak
 
 **Turning the brightness back up is not the fix.** With gamma 2.2, dropping peak from 255 to 90 costs only ~40% of *perceived* brightness while keeping 90 color levels; dropping 90 → 12 costs another ~40% of perceived brightness but throws away 7.5× the color resolution. Almost all of the anti-glare benefit is already won in the first step; the second step is nearly pure cost.
 
-So the lamp keeps the peak exactly where it is (5/4/2 — **no increase in total light at all**) and spends the remaining headroom on hue instead: six groups, 60° apart.
+So the lamp keeps the peak exactly where it is (5/4/2 — **no increase in total light at all**) and spends the remaining headroom on hue instead: six groups, 60° apart — with one deliberate exception, `processing` at 330°, explained under the table.
 
 | Group | Hue | RGB | Emotions |
 |---|---|---|---|
 | negative | 0° red | `[5, 0, 0]` | `sad`, `shy`, `confused`, `headshake` |
 | joy | 60° yellow | `[4, 4, 0]` | `happy`, `laugh`, `excited` |
-| processing | 120° green | `[0, 4, 0]` | `curious`, `thinking`, `scan`, `acknowledge` |
+| processing | 330° rose | `[5, 0, 2]` | `curious`, `thinking`, `scan`, `acknowledge` |
 | music | 180° cyan | `[0, 4, 4]` | `music_chill` |
 | listening | 240° blue | `[0, 0, 5]` | `listening` |
 | social | 300° purple | `[5, 0, 5]` | `greeting`, `goodbye`, `caring` |
@@ -53,9 +53,13 @@ So the lamp keeps the peak exactly where it is (5/4/2 — **no increase in total
 | alarm | white | `[4, 4, 4]` | `shock` (hue unchanged, level lowered) |
 | sleep | off | `[0, 0, 0]` | `sleepy` (unchanged) |
 
+**`processing` is at 330°, not the 120° green its slot originally held** (25/08/2026, reported by eye on lamp-0c89). Green was called glaring at `[0, 4, 0]`, which is already the bottom of the green tier: `intensity` 0.7 makes that `[0, 2, 0]` on the strip, and one step lower is `[0, 1, 0]`, where breathing and pulse truncate per frame and the cycle visibly steps. Level was therefore not the lever available. The cause is the emitter rather than the amplitude — WS2812's green die is brighter than its red at the same value, the same finding that already put the green tier at 4 while every other tier sits at 5 — so *every* green-dominant hue, 60° through 180°, carries the problem and no amount of dimming escapes it. Moving the group off green is the only fix that keeps the whole ring lit (the "just light fewer pixels" alternative is ruled out; see `led-control.md`).
+
+The cost is 30° of separation from the negative group (red 0°) instead of the usual 60°. That neighbour was chosen on purpose: `sad`/`shy`/`confused`/`headshake` almost never immediately precede `thinking`/`scan` within a turn, whereas `listening` → `thinking` happens on *every* turn — which is what rules out the blue/violet side (240°–300°) as the place to crowd, even though blue is the dimmest die.
+
 Three things are deliberate:
 
-1. **Every color has at least one channel at 0** — maximum saturation. At a peak of 12–16 this is mandatory: a diluted color like `[12, 8, 1]` loses whatever made it itself, while `[0, 12, 0]` still reads unmistakably green no matter how faint it gets.
+1. **Every color has at least one channel at 0** — maximum saturation. At a peak of 12–16 this is mandatory: a diluted color like `[12, 8, 1]` loses whatever made it itself, while `[0, 12, 0]` still reads unmistakably green no matter how faint it gets. For `processing` the zeroed channel is specifically *green*, for a second reason stacked on top of saturation: holding green at 0 is what keeps the bright green die dark. Red and blue mix freely inside that group — the rule is about the die, not about staying monochrome.
 2. **`idle` / `nod` / `stretching` drop to peak 4**, one step below every other emotion. `idle` is the state the lamp spends the most time in, so it deserves to recede — and this *lowers* total light output rather than raising it. Confirmed on the real lamp by the user as less glaring.
 3. **Within a group, emotions are told apart by effect + speed, not by color** — e.g. the joy group: `happy` candle 0.2, `laugh` candle 0.2, `excited` candle 0.5. The eye discriminates rhythm far better than it discriminates 4° of hue.
 

@@ -2,6 +2,7 @@
   "_comment": "Per-device preset overrides for lamp. See robots/contract/ROBOT-SPEC.md § Per-device presets. Lamp's LED ring is 32 pixels (vs the platform default of 64) — measured on lamp-0c89 by painting 0-31 red and 32-63 green: the whole ring came up red, so addresses past 31 fall off the end of the chain and light nothing. Declaring 64 put pulse's origin (led_count/2) outside the ring and gave rainbow only half a spectrum. See issue #246. Emotion colors below regroup the base palette into 6 hues 60 deg apart — see robots/lamp/docs/emotion-led-mapping.md § Six hue groups for why. Peaks were halved on 24/08/2026 (16 -> 8, 12 -> 6, background 8/4 -> 4/2) — still reported as too bright at the previous level. Halving is done by scaling every channel proportionally, so all six hues are unchanged; only the amplitude moves. `shock` is not part of the six hue groups (it is the white alarm cue) but is overridden anyway, 12 -> 4: it sat out the three passes above and so ended up roughly 3x brighter than every other emotion, where in the base file it was only one tier apart (12 vs 16). It takes the green-dominant tier because white is green-dominant, which puts it at the same [4, 4, 4] as `ready_flash` in the status_led table below — the two are the same white flash and the base file asks to keep them in step.",
   "led_count": 32,
   "_comment_listening": "Speed only; the color is the blue group value below. Base speed is 1.2, the fastest in EMOTION_PRESETS (every other breathing preset is 0.2-0.6), and it was reported as glaring on the lamp. Lowering the color had already been tried and did not help, because the level was never this cue's problem. breathing() sweeps 0 -> peak -> 0 over 100 steps of 0.03/speed, so modulation depth is 100% at every speed and only the period moves: 2.5 s at 1.2. A full-ring, full-depth swing that fast, sustained for as long as the user keeps talking, reads as pulsing rather than as light. 0.3 puts it back with the family. Confirmed by eye on lamp-0c89, 21/08/2026.",
+  "_comment_processing_group": "The processing group (curious/thinking/scan/acknowledge) is rose [5, 0, 2], hue 330 deg, NOT the green 120 deg slot the six-hue layout originally gave it. Green was reported as glaring on 25/08/2026 at [0, 4, 0], which is already the lowest the green tier goes: intensity 0.7 turns it into [0, 2, 0] on the strip, and one step lower is [0, 1, 0], where breathing/pulse truncate per frame and the cycle visibly steps. Level was therefore not the lever. The cause is the emitter, not the amplitude -- WS2812's green die is brighter than its red at the same value (the same finding that put the green tier at 4 while every other tier is 5), so EVERY green-dominant hue, 60 through 180 deg, carries the problem and no amount of dimming escapes it. Moving the group off green entirely is the only fix that keeps the whole ring lit. Green is held at exactly 0 for that reason -- this is about not waking the green die, not about keeping colors saturated, so red and blue may be mixed freely here. Rose costs 30 deg of separation from the negative group (red 0 deg) instead of the layout's usual 60; that neighbour was chosen deliberately, because sad/shy/confused/headshake almost never immediately precede thinking/scan in a turn, whereas listening -> thinking happens every single turn and would have made the blue/violet side of the wheel the worse place to crowd.",
   "emotion": {
     "sad":          { "color": [5, 0, 0] },
     "shy":          { "color": [5, 0, 0] },
@@ -12,10 +13,10 @@
     "laugh":        { "color": [4, 4, 0] },
     "excited":      { "color": [4, 4, 0] },
 
-    "curious":      { "color": [0, 4, 0] },
-    "thinking":     { "color": [0, 4, 0], "servo": null },
-    "scan":         { "color": [0, 4, 0] },
-    "acknowledge":  { "color": [0, 4, 0] },
+    "curious":      { "color": [5, 0, 2] },
+    "thinking":     { "color": [5, 0, 2], "servo": null },
+    "scan":         { "color": [5, 0, 2] },
+    "acknowledge":  { "color": [5, 0, 2] },
 
     "music_chill":  { "color": [0, 4, 4] },
 

@@ -4,10 +4,10 @@ Nguồn: màu trong bảng là màu **lamp** thực sự hiển thị — `robot
 
 | Emotion | Color (RGB) | Hex | Color source | Effect | Speed | Servo Animation |
 |---|---|---|---|---|---|---|
-| `curious` | 0, 4, 0 | `#000400` xanh lá | overlay | candle | 0.3 | curious |
+| `curious` | 5, 0, 2 | `#050002` hồng rose | overlay | candle | 0.3 | curious |
 | `happy` | 4, 4, 0 | `#040400` vàng | overlay | candle | 0.2 | happy_wiggle |
 | `sad` | 5, 0, 0 | `#050000` đỏ | overlay | breathing | 0.4 | sad |
-| `thinking` | 0, 4, 0 | `#000400` xanh lá | overlay | pulse | 0.3 | thinking_deep |
+| `thinking` | 5, 0, 2 | `#050002` hồng rose | overlay | pulse | 0.3 | thinking_deep |
 | `idle` | 4, 2, 0 | `#040200` amber dim | overlay | breathing | 0.2 | idle |
 | `excited` | 4, 4, 0 | `#040400` vàng | overlay | candle | 0.5 | excited |
 | `shy` | 5, 0, 0 | `#050000` đỏ | overlay | breathing | 0.3 | shy |
@@ -19,11 +19,11 @@ Nguồn: màu trong bảng là màu **lamp** thực sự hiển thị — `robot
 | `greeting` | 5, 0, 5 | `#050005` tím | overlay | breathing | 0.3 | greeting \| wake_up |
 | `goodbye` | 5, 0, 5 | `#050005` tím | overlay | breathing | 0.5 | goodbye |
 | `caring` | 5, 0, 5 | `#050005` tím | overlay | breathing | 0.4 | nod |
-| `acknowledge` | 0, 4, 0 | `#000400` xanh lá | overlay | breathing | 0.5 | acknowledge |
+| `acknowledge` | 5, 0, 2 | `#050002` hồng rose | overlay | breathing | 0.5 | acknowledge |
 | `stretching` | 4, 2, 0 | `#040200` amber dim | overlay | breathing | 0.6 | stretching |
 | `music_strong` | 8, 12, 8 | `#080c08` xanh lá nhạt (màu vô tác dụng — xem dưới) | base | rainbow | 1.0 | music_rock |
 | `music_chill` | 0, 4, 4 | `#000404` cyan | overlay | breathing | 0.3 | music_rock \| music_groove \| music_jazz \| music_waltz |
-| `scan` | 0, 4, 0 | `#000400` xanh lá | overlay | pulse | 0.3 | scanning |
+| `scan` | 5, 0, 2 | `#050002` hồng rose | overlay | pulse | 0.3 | scanning |
 | `nod` | 4, 2, 0 | `#040200` amber dim | overlay | breathing | 0.5 | nod |
 | `headshake` | 5, 0, 0 | `#050000` đỏ | overlay | breathing | 0.5 | headshake |
 
@@ -39,13 +39,13 @@ Bảng trên là palette gốc trong `hal/presets.py`. Trên lamp nó bị overr
 
 **Tăng độ sáng trở lại KHÔNG phải là cách chữa.** Với gamma 2.2, hạ peak từ 255 xuống 90 chỉ mất ~40% độ sáng *cảm nhận* mà vẫn giữ 90 mức màu; hạ tiếp 90 → 12 mất thêm ~40% độ sáng cảm nhận nhưng vứt đi gấp 7.5× độ phân giải màu. Gần như toàn bộ lợi ích chống chói đã ăn xong ở bước đầu; bước thứ hai gần như chỉ toàn cái giá phải trả.
 
-Nên lamp giữ nguyên peak đúng chỗ nó đang ở (5/4 — **không tăng thêm chút ánh sáng tổng nào**) và tiêu phần dư địa còn lại vào hue: sáu nhóm, cách nhau 60°.
+Nên lamp giữ nguyên peak đúng chỗ nó đang ở (5/4 — **không tăng thêm chút ánh sáng tổng nào**) và tiêu phần dư địa còn lại vào hue: sáu nhóm, cách nhau 60° — trừ đúng một ngoại lệ có chủ ý, `processing` ở 330°, giải thích ngay dưới bảng.
 
 | Group | Hue | RGB | Emotions |
 |---|---|---|---|
 | negative | 0° đỏ | `[5, 0, 0]` | `sad`, `shy`, `confused`, `headshake` |
 | joy | 60° vàng | `[4, 4, 0]` | `happy`, `laugh`, `excited` |
-| processing | 120° xanh lá | `[0, 4, 0]` | `curious`, `thinking`, `scan`, `acknowledge` |
+| processing | 330° hồng rose | `[5, 0, 2]` | `curious`, `thinking`, `scan`, `acknowledge` |
 | music | 180° cyan | `[0, 4, 4]` | `music_chill` |
 | listening | 240° xanh dương | `[0, 0, 5]` | `listening` |
 | social | 300° tím | `[5, 0, 5]` | `greeting`, `goodbye`, `caring` |
@@ -53,9 +53,13 @@ Nên lamp giữ nguyên peak đúng chỗ nó đang ở (5/4 — **không tăng 
 | alarm | trắng | `[4, 4, 4]` | `shock` (giữ hue, hạ mức) |
 | sleep | tắt | `[0, 0, 0]` | `sleepy` (giữ nguyên) |
 
+**`processing` nằm ở 330°, không phải 120° xanh lá như slot ban đầu của nó** (25/08/2026, user báo bằng mắt trên lamp-0c89). Xanh lá bị kêu chói ở `[0, 4, 0]`, vốn đã là đáy của tier xanh: `intensity` 0.7 biến nó thành `[0, 2, 0]` khi ra strip, và hạ thêm một bậc là `[0, 1, 0]` — chỗ mà breathing/pulse truncate mỗi frame và chu kỳ giật cấp thấy rõ. Nên mức KHÔNG phải cái lever còn dùng được. Nguyên nhân nằm ở con die chứ không ở biên độ — die xanh lá của WS2812 sáng hơn die đỏ ở cùng giá trị, đúng cái phát hiện đã đẩy tier xanh xuống 4 trong khi mọi tier khác là 5 — nên *mọi* hue green-dominant, từ 60° tới 180°, đều dính, và hạ số bao nhiêu cũng không thoát. Đưa nhóm này ra khỏi vùng xanh là cách chữa duy nhất mà vẫn giữ được nguyên vòng ring sáng (lối "bật ít pixel đi" đã bị loại — xem `led-control.md`).
+
+Cái giá là chỉ còn cách nhóm negative (đỏ 0°) 30° thay vì 60° như thường lệ. Hàng xóm này được chọn có chủ ý: `sad`/`shy`/`confused`/`headshake` gần như không bao giờ đi ngay trước `thinking`/`scan` trong một lượt, trong khi `listening` → `thinking` xảy ra ở *mọi* lượt — đó chính là thứ loại phía xanh dương/tím (240°–300°) khỏi danh sách chỗ để chen, dù die xanh dương mờ nhất.
+
 Ba điểm là cố ý:
 
-1. **Mọi màu đều có ít nhất một channel bằng 0** — bão hoà tối đa. Ở peak 12–16 đây là bắt buộc: màu pha loãng kiểu `[12, 8, 1]` mất hết cái làm nên chính nó, trong khi `[0, 12, 0]` vẫn đọc ra xanh lá không lẫn đi đâu được dù mờ tới mấy.
+1. **Mọi màu đều có ít nhất một channel bằng 0** — bão hoà tối đa. Ở peak 12–16 đây là bắt buộc: màu pha loãng kiểu `[12, 8, 1]` mất hết cái làm nên chính nó, trong khi `[0, 12, 0]` vẫn đọc ra xanh lá không lẫn đi đâu được dù mờ tới mấy. Riêng `processing`, channel bằng 0 đó là *xanh lá*, vì một lý do thứ hai chồng lên chuyện bão hoà: giữ xanh lá ở 0 chính là thứ giữ cho con die xanh sáng chói kia tắt. Đỏ và xanh dương trong nhóm đó pha thoải mái — luật này nói về con die, không phải về việc phải đơn sắc.
 2. **`idle` / `nod` / `stretching` hạ xuống peak 4**, thấp hơn mọi emotion khác một bậc. `idle` là trạng thái đèn ở lâu nhất, nên nó xứng đáng lùi lại phía sau — và việc này *giảm* tổng ánh sáng chứ không tăng. User đã xác nhận trên lamp thật là đỡ chói hơn.
 3. **Trong cùng một nhóm, emotion phân biệt nhau bằng effect + speed chứ không bằng màu** — ví dụ nhóm joy: `happy` candle 0.2, `laugh` candle 0.2, `excited` candle 0.5. Mắt phân biệt nhịp tốt hơn nhiều so với phân biệt 4° hue.
 
