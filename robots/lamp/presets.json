@@ -21,7 +21,7 @@
 
     "listening":    { "color": [0, 0, 5], "speed": 0.3 },
 
-    "shock":        { "color": [4, 4, 4] },
+    "shock":        { "color": [2, 2, 2] },
 
     "greeting":     { "color": [5, 0, 5] },
     "goodbye":      { "color": [5, 0, 5] },
