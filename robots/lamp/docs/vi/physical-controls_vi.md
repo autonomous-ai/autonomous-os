@@ -134,6 +134,8 @@ Thread watcher poll thời lượng giữ và đẩy LED RGB ở priority HIGH (
 
 Màu tím nhận diện mức sleep; đỏ nháy vs đỏ đứng phân biệt shutdown với factory-reset. LED là no-op im lặng khi RGB service không có (máy dev) — nút vẫn hoạt động.
 
+Ba màu này là preset chứ không phải hằng nhúng cứng trong driver: `BUTTON_LED_PRESETS` trong `hal/presets.py` (`sleep_warn` / `shutdown_warn` / `factory_reset`), device override được qua section `button_led` của `robots/<id>/presets.json` giống mọi bảng LED khác. Driver giữ phần staging — lúc nào nháy, lúc nào để đứng — và đọc màu ngay lúc paint, vì overlay merge bảng tại chỗ lúc boot.
+
 Debounce mỗi edge là 200 ms (tick nhấn và nhả track độc lập để tap nhanh không bị drop trong khi bounce lặp của cùng một edge bị lọc).
 
 ## Detect TTP223 (`hal/drivers/ttp223.py`)

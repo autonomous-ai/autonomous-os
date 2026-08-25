@@ -138,16 +138,20 @@ them; a device with no file keeps the defaults verbatim. This is the same
   "emotion":    { "listening": { "color": [255, 120, 0] } },
   "scene":      { "relax":     { "brightness": 0.3 } },
   "aim":        { "desk":      { "base_pitch.pos": 8.0 } },
-  "status_led": { "booting":   { "color": [0, 60, 200] } }
+  "status_led": { "booting":   { "color": [0, 60, 200] } },
+  "button_led": { "sleep_warn": { "color": [20, 12, 40] } }
 }
 ```
 
-- Every section (`led_count`, `emotion`, `scene`, `aim`, `status_led`) is optional.
+- Every section (`led_count`, `emotion`, `scene`, `aim`, `status_led`, `button_led`) is optional.
   `status_led` restyles the os-server system-status feedback (booting/error/ota/
   connectivity/hal_down/agent_down/hardware/ready_flash + bootstrap OTA
   ota_progress/ota_error/ota_success + setup) — the OS owns the state machine,
   HAL owns the color/effect/speed. `setup` is a persistent solid; the rest are
-  transient effect overlays.
+  transient effect overlays. `button_led` restyles the hold-warning colors shown
+  while a physical button is held (`sleep_warn`/`shutdown_warn`/`factory_reset`,
+  needs the `button` capability) — the driver owns the staging (blink vs solid),
+  the preset owns only the color.
 - Each entry patches the matching base entry **field-by-field** — only the named
   fields change; the rest stay at the default.
 - Naming a preset absent from the base table (a typo), a malformed file, or a

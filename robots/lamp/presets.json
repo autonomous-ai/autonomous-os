@@ -48,6 +48,12 @@
     "mic_muted":       { "color": [5, 0, 0] },
     "setup":           { "color": [3, 3, 3] }
   },
+  "_comment_button_led": "Button hold-warning colors (hal/presets.py BUTTON_LED_PRESETS), on the same low-green tier of 5 as `error` / `mic_muted` above — every channel scaled proportionally from the base 16, so the purple that identifies the sleep tier keeps its hue and only the amplitude moves. These sat out the 24/08/2026 passes because they were module constants until `button_led` was added as an override section, which is why they read as brighter than every other cue on the strip. The peak-8 truncation floor in hal/presets.py does not apply: these are blink and solid, neither of which scales a color per frame. shutdown_warn and factory_reset share a color on purpose — the driver tells them apart by blink vs solid, not by hue.",
+  "button_led": {
+    "sleep_warn":     { "color": [3, 2, 5] },
+    "shutdown_warn":  { "color": [5, 0, 0] },
+    "factory_reset":  { "color": [5, 0, 0] }
+  },
   "_comment_scene": "Scene brightness only — hue (the color temperature mix) stays at the base value. Two things were wrong at the base levels. (1) reading/focus/energize all landed above lamp's max_brightness ceiling of 120, and clamp_color only scales DOWN, so all three collapsed to peak 120: three different scenes rendering as one, at the brightest level the ring can do. (2) Peak alone understates a scene: unlike an emotion cue, a scene lights all 32 pixels, so total flux is far higher than the peak number suggests — judging a scene by its peak the way we judge an indicator makes it come out too bright, which is what happened on the first pass here. Peaks now: energize 61, reading 48, focus 38, relax 25, movie 10, night 3. Night is deliberately far below the rest — it is a nightlight, meant to let you find your way without waking you, not to light the room; it is also blue-free by hue so it does not suppress melatonin. Spaced wider at the top because perceived brightness goes as roughly the cube root of value.",
   "scene": {
     "energize": { "brightness": 0.24 },

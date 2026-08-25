@@ -134,6 +134,8 @@ The watcher thread polls the hold duration and drives the RGB LED at HIGH priori
 
 Purple identifies the sleep tier; red blink vs red solid differentiates shutdown from factory-reset. The LED is a silent no-op when the RGB service is unavailable (dev machines) — the button still works.
 
+The three colors are presets, not constants baked into the driver: `BUTTON_LED_PRESETS` in `hal/presets.py` (`sleep_warn` / `shutdown_warn` / `factory_reset`), overridable per device through the `button_led` section of `robots/<id>/presets.json` like every other LED table. The driver owns the staging — when to blink, when to go solid — and reads the color at the moment it paints, because the overlay merges the table in place at boot.
+
 Per-edge debounce is 200 ms (press and release ticks tracked independently so a quick tap isn't dropped while bouncy repeats of the same edge are filtered).
 
 ## TTP223 detection (`hal/drivers/ttp223.py`)
