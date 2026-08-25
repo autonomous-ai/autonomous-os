@@ -169,6 +169,9 @@ target that XDG path: `presync.sh` §1 (openclaw migration), `skill_watcher.go`
 (CDN download + the skill-change notify), and `pruneUnsupportedSkills`
 (capability gate). Factory reset wipes `~/.config/opencode`, so the set is
 re-migrated from openclaw on the next `EnsureOnboarding`.
+`EnsureOnboarding` also refreshes every supported skill from the CDN on boot or
+config reconciliation, self-healing a local skill that was stale before the watcher
+started. It sends the skill-change notification after a possible gateway restart.
 
 ## 2. Transport & sending a turn
 

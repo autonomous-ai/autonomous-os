@@ -71,6 +71,13 @@ func (s *OpenCodeService) StartSkillWatcher(ctx context.Context) {
 	}
 }
 
+// downloadSkills refreshes every skill supported by this device from the CDN.
+// EnsureOnboarding calls it on boot so a skill that was stale before the watcher
+// started is still reconciled, matching OpenClaw's onboarding behavior.
+func (s *OpenCodeService) downloadSkills() []string {
+	return s.downloadSkillsByName(s.supportedSkills())
+}
+
 // supportedSkills resolves this device's capabilities from ROBOT.md and filters the
 // platform skill catalog to what it can run (shared metadata in system/skills, the
 // same gate OpenClaw uses).

@@ -170,6 +170,9 @@ thư mục project và `~/.claude/skills/` để tương thích Claude). Mọi n
 `skill_watcher.go` (tải CDN + thông điệp notify khi skill đổi), và
 `pruneUnsupportedSkills` (capability gate). Factory reset xoá `~/.config/opencode`,
 nên bộ skills được migrate lại từ openclaw ở lần `EnsureOnboarding` kế tiếp.
+`EnsureOnboarding` cũng tải lại mọi skill được hỗ trợ từ CDN khi boot hoặc reconcile
+config, tự phục hồi skill local đã cũ trước khi watcher chạy. Nó gửi thông báo skill
+đổi sau khi gateway có thể đã restart.
 
 ## 2. Transport & gửi một turn
 
