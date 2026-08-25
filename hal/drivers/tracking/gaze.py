@@ -589,6 +589,26 @@ def idle_breathing(svc: Any) -> bool:
 
 _skips_logged: set = set()
 
+# Last time each pitch-decline reason was logged, so the loop can say why it is
+# NOT correcting without a line every 170ms.
+_pitch_quiet_logged: Dict[str, float] = {}
+PITCH_QUIET_LOG_EVERY_S: float = 20.0
+
+
+def _pitch_quiet(reason: str, now: float, detail: str = "") -> None:
+    """Say why no correction fired. Throttled per reason.
+
+    Every early return in _maybe_pitch used to be silent, so "the lamp did not
+    move" had seven indistinguishable causes and diagnosing it meant guessing.
+    A loop that declines for a reason it will not state is a loop nobody can
+    debug from the field.
+    """
+    last = _pitch_quiet_logged.get(reason, 0.0)
+    if (now - last) < PITCH_QUIET_LOG_EVERY_S:
+        return
+    _pitch_quiet_logged[reason] = now
+    logger.info("[gaze] no pitch correction: %s%s", reason, f" ({detail})" if detail else "")
+
 
 def _skip(reason: str) -> str:
     """Log the FIRST time sampling is skipped for each distinct reason.
@@ -686,6 +706,12 @@ def _sample_once() -> Optional[str]:  # noqa: C901
         # (-67.1 -> -59.1), then every later sample read `-`.
         _last_dy_frac = _headroom_from_person(frame_or_small, detector)
         _last_dy_from_face = False
+        if _last_dy_frac is None:
+            # No face AND no clipped torso — nothing vertical to measure. This
+            # is the state a user who has stood right out of frame produces,
+            # and it is why the buffer can stay empty while sampling looks fine.
+            _pitch_quiet("nothing measurable in frame", time.monotonic(),
+                         "no face, and no person box clipped by the top edge")
         record_dy(_last_dy_frac, False)
         _last_frame, _last_box = frame_or_small, None
         record_sample(None, 0.0, 0.0)
@@ -922,11 +948,23 @@ def _maybe_pitch(now: float) -> None:
         return
     est = _dy_estimate(now)
     if est is None:
-        return  # window not filled yet — see GAZE_PITCH_WINDOW_S
+        with _dy_lock:
+            have = len(_dy_samples)
+        _pitch_quiet(
+            "window not filled", now,
+            f"{have} samples, need {config.GAZE_PITCH_MIN_SAMPLES} "
+            f"spanning {config.GAZE_PITCH_WINDOW_S * 0.8:.0f}s",
+        )
+        return
     dy, from_face, n_dy, span_dy = est
     if abs(dy) <= config.GAZE_PITCH_DEAD_ZONE_FRAC:
+        _pitch_quiet(
+            "already centred enough", now,
+            f"dy={dy * 100:+.0f}% within +/-{config.GAZE_PITCH_DEAD_ZONE_FRAC * 100:.0f}%",
+        )
         return
     if (now - _last_pitch_t) < config.GAZE_PITCH_COOLDOWN_S:
+        _pitch_quiet("cooling down", now)
         return
     # The fallback is a guess, not a measurement — it says "the head is up
     # there somewhere", never how far. Let it walk the camera a few steps and
@@ -934,6 +972,11 @@ def _maybe_pitch(now: float) -> None:
     # guess that stays true forever moves the neck forever.
     if not from_face:
         if _blind_pitch_steps >= config.GAZE_PITCH_MAX_BLIND_STEPS:
+            _pitch_quiet(
+                "blind budget spent", now,
+                f"{_blind_pitch_steps}/{config.GAZE_PITCH_MAX_BLIND_STEPS} "
+                "torso-driven steps taken; waiting for a real face",
+            )
             return
 
     import hal.app_state as state
@@ -942,8 +985,10 @@ def _maybe_pitch(now: float) -> None:
 
     svc = getattr(state, "animation_service", None)
     if svc is None or getattr(svc, "_tracking_active", False):
+        _pitch_quiet("body owned by something else", now)
         return
     if getattr(svc, "_music_playing", False):
+        _pitch_quiet("music has the body", now)
         return
 
     try:
@@ -973,6 +1018,10 @@ def _maybe_pitch(now: float) -> None:
                min(config.GAZE_PITCH_MAX_STEP_DEG, step))
     target = max(C.WRIST_PITCH_MIN, min(C.WRIST_PITCH_MAX, cur + step))
     if abs(target - cur) < 0.5:
+        _pitch_quiet(
+            "already at the limit of travel", now,
+            f"wrist_pitch {cur:+.1f}, range {C.WRIST_PITCH_MIN:.0f}..{C.WRIST_PITCH_MAX:.0f}",
+        )
         return
 
     try:
@@ -1211,6 +1260,10 @@ def _loop() -> None:
                         counted / elapsed, config.GAZE_SAMPLE_FPS, why,
                     )
                     counted, blocked, counted_from = 0, {}, now
+                # Framing first: a face inside the frame is what everything
+                # else is measured from, and turning to a bearing that still
+                # points at the desk finds nobody however right the bearing is.
+                _maybe_pitch(now)
                 _consume_speech_repoint(now)
                 _maybe_repoint(now)
                 _verify_repoint(now)

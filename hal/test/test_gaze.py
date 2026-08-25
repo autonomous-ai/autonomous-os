@@ -1613,3 +1613,23 @@ def test_identity_is_observed_not_enforced(armed, voice, monkeypatch):
     t = gaze.time.monotonic()
     _turn_trail([90, 88, 85, 90, 12, 10, 8, 9], t)
     assert gaze.on_speech_start() is True
+
+
+def test_the_watcher_loop_still_calls_the_pitch_correction():
+    """Regression: the merge with main dropped this call entirely.
+
+    Main had removed the pitch loop, so its `_loop` had no call to it. Resolving
+    the conflict kept the FUNCTION from our side and the CALL SITE from theirs,
+    leaving `_maybe_pitch` as dead code — the vertical correction silently did
+    nothing on device, and every symptom got misattributed to thresholds.
+
+    A source check rather than a behavioural one on purpose: the failure was
+    that nothing called it, which no test of the function itself can catch.
+    """
+    import inspect
+
+    body = inspect.getsource(gaze._loop)
+    assert "_maybe_pitch(now)" in body, "the watcher must drive the pitch correction"
+    # Framing before bearing: turning to a bearing that still points at the desk
+    # finds nobody however right the bearing is.
+    assert body.index("_maybe_pitch(now)") < body.index("_maybe_repoint(now)")
