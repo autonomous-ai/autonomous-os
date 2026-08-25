@@ -11,7 +11,7 @@ Source: colors are what the **lamp** actually shows — `robots/lamp/presets.jso
 | `idle` | 4, 2, 0 | `#040200` dim amber | overlay | breathing | 0.2 | idle |
 | `excited` | 4, 4, 0 | `#040400` yellow | overlay | candle | 0.5 | excited |
 | `shy` | 5, 0, 0 | `#050000` red | overlay | breathing | 0.3 | shy |
-| `shock` | 12, 12, 12 | `#0c0c0c` soft white | base | notification_flash | 1.0 | shock |
+| `shock` | 4, 4, 4 | `#040404` soft white | overlay | notification_flash | 1.0 | shock |
 | `listening` | 0, 0, 5 | `#000005` blue | overlay | breathing | 1.2 | — (see note) |
 | `laugh` | 4, 4, 0 | `#040400` yellow | overlay | candle | 0.2 | laugh |
 | `confused` | 5, 0, 0 | `#050000` red | overlay | candle | 0.2 | confused |
@@ -50,7 +50,7 @@ So the lamp keeps the peak exactly where it is (5/4/2 — **no increase in total
 | listening | 240° blue | `[0, 0, 5]` | `listening` |
 | social | 300° purple | `[5, 0, 5]` | `greeting`, `goodbye`, `caring` |
 | background | 30° amber, peak 4 | `[4, 2, 0]` | `idle`, `nod`, `stretching` |
-| alarm | white | `[12, 12, 12]` | `shock` (unchanged) |
+| alarm | white | `[4, 4, 4]` | `shock` (hue unchanged, level lowered) |
 | sleep | off | `[0, 0, 0]` | `sleepy` (unchanged) |
 
 Three things are deliberate:
@@ -63,8 +63,9 @@ The trade-off, stated plainly: 22 emotions now share 6 colors. From the color al
 On 24/08/2026 the peaks came down again, in three passes on device the same day. Pass 1 halved everything (16/12/8 -> 8/6/4), because the previous level was still reported as glaring. Pass 2 dropped only the green-dominant tier, 6 -> 4: green at peak 6 was still called glaring while red at peak 8 read fine — WS2812's green die is brighter than its red at the same value by more than the base 12-vs-16 rule allows for. Pass 3 then lowered the low-green tier 8 -> 5 as well. Every pass scales all three channels proportionally, so the six hues never move; only the amplitude does. On top of that, emotion colors are multiplied by the request's `intensity` (default 0.7) before they reach the strip, so `listening`'s declared `[0, 0, 5]` arrives as `[0, 0, 3]` and `idle`'s `[4, 2, 0]` as `[2, 1, 0]`. That is at or below the peak-8 floor documented in `hal/presets.py`: breathing and pulse truncate per frame (`int(c * brightness)`), so the cycle has very few distinct levels left and visible stepping is the thing to watch for. Measured on lamp-0c89, 24/08/2026.
 
 
-Two technical notes:
+Technical notes:
 
+- **`shock` is overridden even though it is not one of the six hue groups.** It is the white alarm cue and keeps its hue, but it sat out the three lowering passes of 24/08/2026 and so ended up ~3x brighter than every other emotion — in `hal/presets.py` it was only one tier apart (12 vs 16). It now takes the green-dominant tier (white is green-dominant), landing on the same `[4, 4, 4]` as `ready_flash` in the `status_led` table; the base file asks to keep those two in step because they are the same white flash.
 - **`music_strong` is intentionally absent** from the override table. It uses the `rainbow` effect, and `rainbow()` in `hal/drivers/rgb/effects.py` ignores the `color` argument entirely — it sweeps the whole hue circle itself. Assigning it a color would mean nothing.
 - **This table lives in `robots/lamp/presets.json`**, the per-device overlay merged field by field at boot via `hal/board/presets_overlay.py` — `hal/presets.py` is *not* edited. Other robots (reachy, intern) therefore keep the base palette, and reverting the lamp to the base palette is just deleting the `emotion` section from that JSON file.
 - **Do not confuse `EMO_IDLE` with `AMBIENT_RESTING_LED`.** The latter is `[0, 0, 0]` (product call 30/07/2026: a resting strip is fully off); `EMO_IDLE` is an emotion the agent actively emits and still has a color.

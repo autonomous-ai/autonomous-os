@@ -11,7 +11,7 @@ Nguồn: màu trong bảng là màu **lamp** thực sự hiển thị — `robot
 | `idle` | 4, 2, 0 | `#040200` amber dim | overlay | breathing | 0.2 | idle |
 | `excited` | 4, 4, 0 | `#040400` vàng | overlay | candle | 0.5 | excited |
 | `shy` | 5, 0, 0 | `#050000` đỏ | overlay | breathing | 0.3 | shy |
-| `shock` | 12, 12, 12 | `#0c0c0c` trắng dịu | base | notification_flash | 1.0 | shock |
+| `shock` | 4, 4, 4 | `#040404` trắng dịu | overlay | notification_flash | 1.0 | shock |
 | `listening` | 0, 0, 5 | `#000005` xanh dương | overlay | breathing | 1.2 | — (xem ghi chú) |
 | `laugh` | 4, 4, 0 | `#040400` vàng | overlay | candle | 0.2 | laugh |
 | `confused` | 5, 0, 0 | `#050000` đỏ | overlay | candle | 0.2 | confused |
@@ -50,7 +50,7 @@ Nên lamp giữ nguyên peak đúng chỗ nó đang ở (5/4 — **không tăng 
 | listening | 240° xanh dương | `[0, 0, 5]` | `listening` |
 | social | 300° tím | `[5, 0, 5]` | `greeting`, `goodbye`, `caring` |
 | background | 30° amber, peak 4 | `[4, 2, 0]` | `idle`, `nod`, `stretching` |
-| alarm | trắng | `[12, 12, 12]` | `shock` (giữ nguyên) |
+| alarm | trắng | `[4, 4, 4]` | `shock` (giữ hue, hạ mức) |
 | sleep | tắt | `[0, 0, 0]` | `sleepy` (giữ nguyên) |
 
 Ba điểm là cố ý:
@@ -63,8 +63,9 @@ Nói thẳng cái đánh đổi: 22 emotion giờ dùng chung 6 màu. Nhìn màu
 
 Ngày 24/08/2026 peak bị hạ ba lượt trong cùng một ngày, mỗi lượt đều đo bằng mắt trên lamp-0c89. Lượt 1 chia đôi toàn bộ (16/12/8 → 8/6/4) vì mức cũ vẫn bị báo là chói. Lượt 2 chỉ hạ nhóm green-dominant 6 → 4: xanh ở peak 6 vẫn bị báo chói trong khi đỏ ở peak 8 nhìn ổn — die xanh của WS2812 sáng hơn die đỏ ở cùng giá trị, nhiều hơn mức luật 12-vs-16 bù được. Lượt 3 hạ nốt nhóm low-green 8 → 5. Mọi lượt đều scale tỉ lệ nên sáu hue không đổi, chỉ biên độ giảm. Cần nhớ thêm: emotion còn bị nhân `intensity` (mặc định 0.7) trước khi ra strip, nên `listening` khai `[0, 0, 5]` thực tế chỉ còn `[0, 0, 3]`, `idle` `[4, 2, 0]` còn `[2, 1, 0]` — bằng hoặc dưới sàn peak 8 ghi trong `hal/presets.py`. Ở mức đó `breathing`/`pulse` truncate mỗi frame (`int(c * brightness)`) nên cả chu kỳ chỉ còn rất ít mức sáng; thứ cần soi tiếp là giật cấp, không phải chói.
 
-Hai ghi chú kỹ thuật:
+Ghi chú kỹ thuật:
 
+- **`shock` được override dù không thuộc 6 nhóm hue.** Nó là cue báo động màu trắng và giữ nguyên hue, nhưng đã đứng ngoài 3 lượt hạ mức ngày 24/08/2026 nên thành sáng gấp ~3x mọi emotion khác — trong `hal/presets.py` nó chỉ cách một bậc (12 vs 16). Nay nó lấy bậc green-dominant (trắng là green-dominant), rơi đúng vào `[4, 4, 4]` giống `ready_flash` ở bảng `status_led`; file base yêu cầu giữ hai cue này đồng bộ vì chúng là cùng một cú chớp trắng.
 - **`music_strong` cố tình không có** trong bảng override. Nó dùng effect `rainbow`, mà `rainbow()` trong `hal/drivers/rgb/effects.py` bỏ qua hoàn toàn tham số `color` — nó tự quét trọn vòng hue. Gán màu cho nó là vô nghĩa.
 - **Bảng này nằm trong `robots/lamp/presets.json`**, overlay riêng cho device, merge từng field lúc boot qua `hal/board/presets_overlay.py` — `hal/presets.py` *không* bị sửa. Nên các robot khác (reachy, intern) vẫn giữ palette gốc, và muốn trả lamp về palette gốc thì chỉ cần xoá section `emotion` trong file JSON đó.
 - **Đừng nhầm `EMO_IDLE` với `AMBIENT_RESTING_LED`.** Cái sau là `[0, 0, 0]` (quyết định sản phẩm 30/07/2026: strip lúc nghỉ thì tắt hẳn); `EMO_IDLE` là một emotion agent chủ động phát ra và vẫn có màu.

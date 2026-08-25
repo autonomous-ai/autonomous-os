@@ -1,5 +1,5 @@
 {
-  "_comment": "Per-device preset overrides for lamp. See robots/contract/ROBOT-SPEC.md § Per-device presets. Lamp's LED ring is 32 pixels (vs the platform default of 64) — measured on lamp-0c89 by painting 0-31 red and 32-63 green: the whole ring came up red, so addresses past 31 fall off the end of the chain and light nothing. Declaring 64 put pulse's origin (led_count/2) outside the ring and gave rainbow only half a spectrum. See issue #246. Emotion colors below regroup the base palette into 6 hues 60 deg apart — see robots/lamp/docs/emotion-led-mapping.md § Six hue groups for why. Peaks were halved on 24/08/2026 (16 -> 8, 12 -> 6, background 8/4 -> 4/2) — still reported as too bright at the previous level. Halving is done by scaling every channel proportionally, so all six hues are unchanged; only the amplitude moves.",
+  "_comment": "Per-device preset overrides for lamp. See robots/contract/ROBOT-SPEC.md § Per-device presets. Lamp's LED ring is 32 pixels (vs the platform default of 64) — measured on lamp-0c89 by painting 0-31 red and 32-63 green: the whole ring came up red, so addresses past 31 fall off the end of the chain and light nothing. Declaring 64 put pulse's origin (led_count/2) outside the ring and gave rainbow only half a spectrum. See issue #246. Emotion colors below regroup the base palette into 6 hues 60 deg apart — see robots/lamp/docs/emotion-led-mapping.md § Six hue groups for why. Peaks were halved on 24/08/2026 (16 -> 8, 12 -> 6, background 8/4 -> 4/2) — still reported as too bright at the previous level. Halving is done by scaling every channel proportionally, so all six hues are unchanged; only the amplitude moves. `shock` is not part of the six hue groups (it is the white alarm cue) but is overridden anyway, 12 -> 4: it sat out the three passes above and so ended up roughly 3x brighter than every other emotion, where in the base file it was only one tier apart (12 vs 16). It takes the green-dominant tier because white is green-dominant, which puts it at the same [4, 4, 4] as `ready_flash` in the status_led table below — the two are the same white flash and the base file asks to keep them in step.",
   "led_count": 32,
   "_comment_listening": "Speed only; the color is the blue group value below. Base speed is 1.2, the fastest in EMOTION_PRESETS (every other breathing preset is 0.2-0.6), and it was reported as glaring on the lamp. Lowering the color had already been tried and did not help, because the level was never this cue's problem. breathing() sweeps 0 -> peak -> 0 over 100 steps of 0.03/speed, so modulation depth is 100% at every speed and only the period moves: 2.5 s at 1.2. A full-ring, full-depth swing that fast, sustained for as long as the user keeps talking, reads as pulsing rather than as light. 0.3 puts it back with the family. Confirmed by eye on lamp-0c89, 21/08/2026.",
   "emotion": {
@@ -20,6 +20,8 @@
     "music_chill":  { "color": [0, 4, 4] },
 
     "listening":    { "color": [0, 0, 5], "speed": 0.3 },
+
+    "shock":        { "color": [4, 4, 4] },
 
     "greeting":     { "color": [5, 0, 5] },
     "goodbye":      { "color": [5, 0, 5] },
