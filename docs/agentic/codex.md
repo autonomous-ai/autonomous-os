@@ -168,6 +168,15 @@ never scans — a device with skills there gets an empty `@` picker and no nativ
 skill loading. All producers target `codexSkillsDir`: `presync.sh` §1 (openclaw
 migration → `$CODEX_DIR/skills`), `skill_watcher.go` (CDN download + the
 `notifySkillChanges` message), and `pruneUnsupportedSkills` (capability gate).
+`EnsureOnboarding` also refreshes every supported skill from the CDN on boot or
+configuration reconciliation. This repairs a stale local skill if OS Server was
+restarted after a CDN publish, before the five-minute version watcher observed
+the change; unchanged content is not re-notified. The watcher logs every poll and
+only records an OTA version after its archive is downloaded and extracted, so a
+transient download failure is retried on the next five-minute poll.
+After an onboarding-triggered sync that also restarts the Codex bridge, the
+re-read notification waits up to one minute for the bridge to reconnect rather
+than being dropped while it is unavailable.
 `migrateSkillsToCodexHome` lifts any legacy `workspace/skills` left by an older
 os-server into the native root and drops the workspace copy (idempotent);
 factory reset wipes all of `/root/.codex`, so the set is re-migrated from

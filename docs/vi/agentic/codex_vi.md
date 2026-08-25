@@ -164,7 +164,15 @@ Code). KHÔNG đặt ở `workspace/skills` — codex không bao giờ quét nó
 skills ở đó sẽ có picker `@` rỗng và không nạp skill native. Mọi nơi tạo skill đều
 trỏ tới `codexSkillsDir`: `presync.sh` §1 (migrate từ openclaw → `$CODEX_DIR/skills`),
 `skill_watcher.go` (tải CDN + thông điệp `notifySkillChanges`), và
-`pruneUnsupportedSkills` (capability gate). `migrateSkillsToCodexHome` nâng bất kỳ
+`pruneUnsupportedSkills` (capability gate). `EnsureOnboarding` cũng tải lại mọi
+skill được hỗ trợ từ CDN khi boot hoặc reconcile cấu hình. Việc này sửa skill local
+bị cũ nếu OS Server restart sau lúc CDN publish, trước khi watcher version năm phút
+kịp thấy thay đổi; nội dung không đổi sẽ không bị thông báo lại. Watcher log mỗi
+lần poll và chỉ ghi nhận version OTA sau khi tải/extract archive thành công, nên lỗi
+tải tạm thời sẽ được thử lại ở lần poll năm phút sau. Sau một lần sync từ onboarding
+cũng restart Codex bridge, thông báo yêu cầu đọc lại skill chờ bridge reconnect tối đa
+một phút thay vì bị mất khi bridge chưa sẵn sàng.
+`migrateSkillsToCodexHome` nâng bất kỳ
 `workspace/skills` cũ do os-server đời trước để lại vào thư mục native rồi xoá bản
 workspace (idempotent); factory reset xoá toàn bộ `/root/.codex`, nên bộ skills
 được migrate lại từ openclaw ở lần `EnsureOnboarding` kế tiếp.
