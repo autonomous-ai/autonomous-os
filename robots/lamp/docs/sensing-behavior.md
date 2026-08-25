@@ -39,9 +39,9 @@ HAL fires a sound event on every audio sample that crosses `SOUND_RMS_THRESHOLD`
 
 | Stage | What the agent sees | Agent reaction |
 |---|---|---|
-| Occurrence 1 | `... — occurrence 1` | `/emotion shock` (0.8), NO_REPLY |
+| Occurrence 1 | `... — occurrence 1` | `/emotion curious` (0.6), NO_REPLY |
 | Occurrence 2 | **nothing** — counted tracker-side, not forwarded | no agent turn |
-| Occurrence 3+ | `... — persistent (occurrence 3)` | `/emotion curious` (0.9), speaks once |
+| Occurrence 3+ | `... — persistent (occurrence 3)` | `/emotion shock` (0.9), speaks once |
 | After speaking | dropped by Python (suppressed 3 min) | nothing reaches agent |
 | 2 min silence | window resets | back to occurrence 1 |
 

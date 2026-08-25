@@ -39,9 +39,9 @@ HAL bắn một sound event cho mỗi audio sample vượt ngưỡng `SOUND_RMS_
 
 | Giai đoạn | Agent nhận | Phản ứng của agent |
 |---|---|---|
-| Lần 1 | `... — occurrence 1` | `/emotion shock` (0.8), im lặng |
+| Lần 1 | `... — occurrence 1` | `/emotion curious` (0.6), im lặng |
 | Lần 2 | **không có gì** — chỉ đếm ở tracker, không forward | không tốn turn agent |
-| Lần 3+ | `... — persistent (occurrence 3)` | `/emotion curious` (0.9), nói 1 lần |
+| Lần 3+ | `... — persistent (occurrence 3)` | `/emotion shock` (0.9), nói 1 lần |
 | Sau khi nói | Python drop (suppress 3 phút) | Không có gì đến agent |
 | Im lặng 2 phút | Window reset | Trở về lần 1 |
 
