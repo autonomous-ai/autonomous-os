@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"go.autonomous.ai/os/system/bootstrap/config"
 	"go.autonomous.ai/os/system/bootstrap/state"
@@ -98,6 +99,37 @@ func TestCompareVersions(t *testing.T) {
 			t.Errorf("compareVersions(%q, %q) = %d, want %d", c.a, c.b, got, c.want)
 		}
 	}
+}
+
+func TestOTAErrorLEDSchedulesRestore(t *testing.T) {
+	devicesDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(devicesDir, "no-light"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(devicesDir, "no-light", "ROBOT.md"), []byte("---\ncapabilities:\n  audio: {}\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DEVICES_DIR", devicesDir)
+	t.Setenv("DEVICE_TYPE", "no-light")
+
+	original := scheduleOTAErrorRestore
+	defer func() { scheduleOTAErrorRestore = original }()
+	var gotDelay time.Duration
+	var gotRestore func()
+	scheduleOTAErrorRestore = func(delay time.Duration, restore func()) {
+		gotDelay = delay
+		gotRestore = restore
+	}
+
+	(&Bootstrap{}).showOTAErrorLED()
+
+	if gotDelay != otaErrorLEDDisplayDuration {
+		t.Fatalf("error LED restore delay = %v, want %v", gotDelay, otaErrorLEDDisplayDuration)
+	}
+	if gotRestore == nil {
+		t.Fatal("error LED did not schedule a restore")
+	}
+	gotRestore()
 }
 
 // A component the device does not have must not read as "out of date". Before

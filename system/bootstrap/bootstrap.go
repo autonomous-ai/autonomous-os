@@ -108,6 +108,16 @@ type Bootstrap struct {
 // it to provide a metadata URL (i.e. the device is not yet provisioned).
 const configRetryInterval = 30 * time.Second
 
+// otaErrorLEDDisplayDuration keeps a failed-update cue visible long enough to
+// be noticed without leaving the strip latched red until a later operation.
+const otaErrorLEDDisplayDuration = 10 * time.Second
+
+// scheduleOTAErrorRestore is a small seam for testing the delayed cleanup
+// without sleeping. Production always uses time.AfterFunc.
+var scheduleOTAErrorRestore = func(delay time.Duration, restore func()) {
+	time.AfterFunc(delay, restore)
+}
+
 // ProvideServer creates a Bootstrap from config. The metadata URL may be empty
 // here (device not yet provisioned); Serve waits for it before polling.
 func ProvideServer() (*Bootstrap, error) {
@@ -417,6 +427,13 @@ func (b *Bootstrap) restoreLED() {
 	}
 }
 
+// showOTAErrorLED briefly signals a failed OTA with a red pulse, then returns
+// the strip to the user's LED state (or the ambient resting state).
+func (b *Bootstrap) showOTAErrorLED() {
+	b.progressLED("ota_error")
+	scheduleOTAErrorRestore(otaErrorLEDDisplayDuration, b.restoreLED)
+}
+
 // resolveDeviceType returns this device's class for picking devices.<type> in
 // OTA metadata: DEVICE_TYPE env → config.json device_type. Returns "" when
 // unresolved — NO "lamp" fallback (callers skip the device-profile OTA rather
@@ -550,7 +567,7 @@ func (b *Bootstrap) reconcile(ctx context.Context, key string, target domain.OTA
 	b.progressLED("ota_progress")
 
 	if err := b.applyUpdate(ctx, key, target); err != nil {
-		b.progressLED("ota_error") // red pulse on error
+		b.showOTAErrorLED()
 		return false, err
 	}
 
@@ -756,8 +773,8 @@ func (b *Bootstrap) componentInstalled(key string) bool {
 		// — never over OTA — so a device provisioned before these keys existed
 		// keeps an updater that answers "Unknown app: codex" forever. Without this
 		// check that device would, every poll (5m): speak "device is updating",
-		// breathe orange, fail the apply, and latch the LED red (the error path
-		// does not restoreLED). Skipping instead means such devices simply never
+		// breathe orange, fail the apply, and show a temporary red error cue.
+		// Skipping instead means such devices simply never
 		// receive agent-CLI updates — which is the only outcome available to them
 		// anyway — and do it silently.
 		return resolveAgentRuntime() == key && updaterSupports(key)

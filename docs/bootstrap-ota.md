@@ -437,7 +437,7 @@ reconcile(key, target):
   5. If current < floor →
      a. Set LED orange breathing (OTA in progress)
      b. applyUpdate(key, target)   # installs target.version via software-update
-     c. Success → green flash | Failure → red pulse
+     c. Success → green flash | Failure → red pulse for 10 s, then restore LED state
 ```
 
 > Manual `software-update <key>` over SSH does NOT pass through `reconcile` — it
@@ -473,15 +473,15 @@ Bootstrap uses `lib/hal` to show update status on LEDs. See [status-led.md](../r
 
 | Phase | LED |
 |-------|-----|
-| Downloading + installing | Orange breathing `(255, 140, 0)` |
-| Success | Green flash `(0, 255, 80)`, then restore the user-selected LED look or the ambient resting look when none exists |
-| Failure | Red pulse `(255, 30, 30)` |
+| Downloading + installing | Orange breathing `[16, 8, 0]` |
+| Success | Green flash `[0, 12, 4]` for 1 second, then restore the user-selected LED look or the ambient resting look when none exists |
+| Failure | Red pulse `[16, 2, 2]` for 10 seconds, then restore the user-selected LED look or the ambient resting look when none exists |
 
 ### Invariants the updater must keep (learned the hard way)
 
 A device lost `/opt/hal`, its staging dir AND its rollback backup from two clicks
-on the web update button 30 s apart. Four defects lined up; all four are fixed in
-`scripts/provision/software-update`, and each is easy to reintroduce:
+on the web update button 30 s apart. The five safeguards below are implemented
+in `scripts/provision/software-update`, and each is easy to reintroduce:
 
 1. **One run at a time** (`flock` on `/var/lock/software-update.lock`). Every
    branch publishes by `mv`-ing the live tree to `<name>.previous`, so a second
@@ -500,6 +500,9 @@ on the web update button 30 s apart. Four defects lined up; all four are fixed i
    into every console script; the unit then dies with `203/EXEC` once staging is
    gone. Invisible while an old `.venv` is inherited — it only bites on a fresh
    install, i.e. exactly the recovery path.
+5. **Failure feedback must be temporary.** An OTA failure may pulse red to make
+   the outcome visible, but it restores the user-selected LED look or ambient
+   resting look after 10 seconds; failure feedback must never latch the strip.
 
 Plus one that made all of the above hard to see: **the saved service state is a
 snapshot taken at the start of a run**, so a run that begins while a previous
@@ -573,11 +576,11 @@ A **second gate** guards the other direction: `updaterSupports(key)` reads
 via the imager or `setup.sh` — never over OTA — so a device provisioned before
 these keys existed keeps an updater that answers `Unknown app: codex` forever.
 Without the gate, every poll (5m) on such a device would speak "device is
-updating", breathe orange, fail the apply and latch the LED red (the error path
-does not call `restoreLED`). With it, those devices simply never receive
-agent-CLI updates — the only outcome available to them anyway — silently. The
-match is the branch guard, not the bare key: the key also appears in comments and
-in the usage strings of an updater that does not implement it.
+updating", breathe orange, fail the apply, and briefly pulse red before restoring
+the normal LED state. With it, those devices simply never receive agent-CLI
+updates — the only outcome available to them anyway — silently. The match is the
+branch guard, not the bare key: the key also appears in comments and in the usage
+strings of an updater that does not implement it.
 
 **Healing a device that has an old updater.** `make upload-setup` also publishes
 the updater raw at `{CDN}/software-update`, so one SSH command brings a field

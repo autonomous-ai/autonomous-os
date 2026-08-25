@@ -63,7 +63,7 @@ func (b *Bootstrap) forceUpdate(ctx context.Context, key string) error {
 	// `software-update` (the script self-fetches metadata and installs
 	// `version`), so there is nothing to look up here.
 	if err := b.applyUpdate(ctx, key, domain.OTAComponent{}); err != nil {
-		b.progressLED("ota_error")
+		b.showOTAErrorLED()
 		return err
 	}
 	b.progressLED("ota_success")

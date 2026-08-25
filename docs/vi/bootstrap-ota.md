@@ -428,7 +428,7 @@ reconcile(key, target):
   5. Nếu current < floor →
      a. Bật LED cam breathing (đang update)
      b. applyUpdate(key, target)   # cài target.version qua software-update
-     c. Thành công → flash xanh lá | Thất bại → đỏ pulse
+     c. Thành công → flash xanh lá rồi khôi phục LED | Thất bại → đỏ pulse 10 giây rồi khôi phục LED
 ```
 
 > `software-update <key>` thủ công qua SSH KHÔNG đi qua `reconcile` — nó cài
@@ -463,9 +463,9 @@ Bootstrap dùng `lib/hal` để báo trạng thái update qua LED. Xem chi tiế
 
 | Giai đoạn | LED |
 |----------|-----|
-| Đang tải + cài | Cam breathing `(255, 140, 0)` |
-| Thành công | Flash xanh lá `(0, 255, 80)`, rồi khôi phục LED look user đã chọn hoặc ambient resting look nếu chưa có user state |
-| Thất bại | Đỏ pulse `(255, 30, 30)` |
+| Đang tải + cài | Cam breathing `[16, 8, 0]` |
+| Thành công | Flash xanh lá `[0, 12, 4]` trong 1 giây, rồi khôi phục LED look user đã chọn hoặc ambient resting look nếu chưa có user state |
+| Thất bại | Đỏ pulse `[16, 2, 2]` trong 10 giây, rồi khôi phục LED look user đã chọn hoặc ambient resting look nếu chưa có user state |
 
 ### Bất biến mà updater phải giữ (trả giá mới biết)
 
@@ -488,6 +488,9 @@ trong `scripts/provision/software-update`, và đều rất dễ tái phạm:
    `#!/opt/.hal.new.XXXXXX/.venv/bin/python`; staging biến mất là unit chết
    `203/EXEC`. Không lộ khi kế thừa `.venv` cũ — chỉ cắn đúng lúc cài mới, tức
    đúng đường khôi phục.
+5. **Phản hồi lỗi phải tạm thời.** OTA fail có thể pulse đỏ để báo lỗi, nhưng
+   sau 10 giây phải khôi phục LED look user đã chọn hoặc ambient resting look;
+   phản hồi lỗi không được giữ strip ở đỏ.
 
 Cộng thêm một lỗi làm mọi thứ trên khó thấy: **trạng thái service được chụp ở đầu
 mỗi lần chạy**, nên lần chạy bắt đầu khi update trước đó đang fail sẽ ghi
@@ -557,9 +560,9 @@ là "không phải runtime này" (bỏ qua) — hướng an toàn.
 (`[ "$APP" = "<key>" ]`) phải có mặt. `software-update` chỉ vào máy qua imager
 hoặc `setup.sh` — KHÔNG bao giờ qua OTA — nên máy provision trước khi có các key
 này sẽ giữ mãi bản updater trả `Unknown app: codex`. Không có cửa này thì mỗi
-vòng poll (5 phút) máy đó sẽ nói "thiết bị đang cập nhật", thở cam, fail lúc
-apply rồi kẹt LED đỏ (nhánh lỗi không gọi `restoreLED`). Có nó thì máy cũ đơn
-giản là không nhận update CLI — kết cục duy nhất chúng có thể có — và im lặng.
+vòng poll (5 phút) máy đó sẽ nói "thiết bị đang cập nhật", thở cam, rồi fail lúc
+apply; LED chỉ pulse đỏ trong 10 giây trước khi tự khôi phục. Có nó thì máy cũ
+đơn giản là không nhận update CLI — kết cục duy nhất chúng có thể có — và im lặng.
 Khớp theo branch guard chứ không theo key trần: key còn xuất hiện trong comment
 và trong usage string của bản updater không hề implement nó.
 
