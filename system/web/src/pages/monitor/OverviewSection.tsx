@@ -12,6 +12,20 @@ const EMOTION_EMOJI: Record<string, string> = {
   scan: "👀", nod: "👍", headshake: "🙅",
 };
 
+type OtaVersions = Record<string, { current?: string; update_available?: boolean }>;
+
+async function fetchOtaVersions(): Promise<OtaVersions | null> {
+  try {
+    const response = await fetch(`${API}/system/ota-versions`);
+    if (!response.ok) return null;
+    const body = await response.json();
+    return body?.data as OtaVersions | null;
+  } catch {
+    // Bootstrap down → no buttons, same as nothing to update.
+    return null;
+  }
+}
+
 function rgbToHex(rgb: number[]): string {
   return "#" + rgb.map(c => c.toString(16).padStart(2, "0")).join("");
 }
@@ -113,20 +127,20 @@ export function OverviewSection({
   // looked broken: the worker logs "held by min_version floor" and the button
   // just says OK. Fetched once per mount (a human opening a page, not a hot
   // path) and only in debug, where the buttons can appear at all.
-  const [otaVersions, setOtaVersions] = useState<Record<string, { current?: string; update_available?: boolean }>>({});
-  const refreshOtaVersions = useCallback(async () => {
-    try {
-      const r = await fetch(`${API}/system/ota-versions`);
-      if (!r.ok) return;
-      const j = await r.json();
-      if (!j?.data) return;
-      setOtaVersions(j.data as Record<string, { current?: string; update_available?: boolean }>);
-    } catch { /* bootstrap down → no buttons, same as nothing to update */ }
+  const [otaVersions, setOtaVersions] = useState<OtaVersions>({});
+  const refreshOtaVersions = useCallback(() => {
+    void fetchOtaVersions().then((versions) => {
+      if (versions) setOtaVersions(versions);
+    });
   }, []);
   useEffect(() => {
     if (!isDebug) return;
-    void refreshOtaVersions();
-  }, [isDebug, refreshOtaVersions]);
+    let cancelled = false;
+    fetchOtaVersions().then((versions) => {
+      if (!cancelled && versions) setOtaVersions(versions);
+    });
+    return () => { cancelled = true; };
+  }, [isDebug]);
   // held_by_floor is deliberately NOT consulted: that floor stages the
   // automatic fleet rollout, while this button installs the published version
   // on this one device — the same thing `software-update <key>` over SSH has

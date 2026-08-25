@@ -472,6 +472,8 @@ interface Conversation {
   pinned?: boolean;
 }
 
+const EMPTY_MESSAGES: ChatMessage[] = [];
+
 function loadConvos(): Conversation[] {
   try {
     const raw = localStorage.getItem(CONVOS_KEY);
@@ -738,7 +740,7 @@ export function ChatSection({ events, isActive }: Props) {
   const [toolChips, setToolChips] = useState<ToolChip[]>([]); // tool calls for current pending response
 
   const active = convos.find((c) => c.id === activeId) ?? null;
-  const messages = active?.messages ?? [];
+  const messages = active?.messages ?? EMPTY_MESSAGES;
 
   // Persist
   useEffect(() => { saveConvos(convos); }, [convos]);
