@@ -1587,7 +1587,7 @@ GAZE_PITCH_LAND_TOL_DEG: float = float(
 # Let the arm arrive before reading it back — a read taken mid-glide reports a
 # short move that is merely still moving.
 GAZE_PITCH_SETTLE_S: float = float(
-    os.environ.get("HAL_GAZE_PITCH_SETTLE_S", "0.35")
+    os.environ.get("HAL_GAZE_PITCH_SETTLE_S", "1.8")
 )
 # How long a joint that came up short is left out of the allocation. Matched to
 # the measured recovery: a rested elbow was reliable again after ~60s.

@@ -193,8 +193,30 @@ class AnimationService:
         # When True, idle recording finished and pose is held — loop sleeps longer to save CPU
         self._idle_settled = False
 
-    # P gain — match upstream default (16 for all). Higher values cause jerky motion.
-    _SERVO_PGAIN = {1: 16, 2: 16, 3: 16, 4: 16, 5: 16}
+    # P gain — upstream default is 16 for all. Higher values cause jerky motion,
+    # so this stays at 16 except where a joint has been measured to need more.
+    #
+    # elbow_pitch (3) is the exception. It carries the most gravity torque of any
+    # joint (the whole forearm plus head), and with P=16 and no integral term the
+    # commanded torque — proportional to error — could not overcome gravity plus
+    # static friction for a SMALL error. It did not move a little; it did not move
+    # at all. Device-measured 2026-08-25, lifting the elbow, 3 trials each:
+    #
+    #                  +3 deg    +6 deg   +10 deg
+    #   P=16 I=0        0/3       2/3       3/3
+    #   P=32 I=10       3/3       3/3       3/3
+    #
+    # Which is why the servo page always looked fine — a slider drag is a big
+    # move, comfortably over the threshold — while gaze, whose corrections are
+    # 6-13 deg, sat in the dead band and silently did nothing for an afternoon.
+    _SERVO_PGAIN = {1: 16, 2: 16, 3: 32, 4: 16, 5: 16}
+
+    # I gain — 0 everywhere by default, which is what the servos ship with. An
+    # integral term is what lets a joint keep pushing on a small error instead of
+    # settling for whatever P alone can deliver, so it is the half of the fix that
+    # addresses stiction rather than droop. Only elbow_pitch has been measured to
+    # need it; the other joints are left alone rather than retuned on a guess.
+    _SERVO_IGAIN = {3: 10}
 
     def _configure_servos_raw(self):
         """Configure servos directly via scservo_sdk, bypassing lerobot.
@@ -211,6 +233,7 @@ class AnimationService:
             for motor_name, motor_obj in self.robot.bus.motors.items():
                 sid = motor_obj.id
                 pgain = self._SERVO_PGAIN.get(sid, 32)
+                igain = self._SERVO_IGAIN.get(sid, 0)
                 # Ping first
                 _, result, _ = pk.ping(ph, sid)
                 if result != COMM_SUCCESS:
@@ -219,10 +242,10 @@ class AnimationService:
                 pk.write1ByteTxRx(ph, sid, 40, 0)   # Torque_Enable = 0
                 pk.write1ByteTxRx(ph, sid, 33, 0)   # Operating_Mode = position
                 pk.write1ByteTxRx(ph, sid, 21, pgain)  # P_Coefficient
-                pk.write1ByteTxRx(ph, sid, 23, 0)   # I_Coefficient
+                pk.write1ByteTxRx(ph, sid, 23, igain)  # I_Coefficient
                 pk.write1ByteTxRx(ph, sid, 22, 32)  # D_Coefficient
                 pk.write1ByteTxRx(ph, sid, 40, 1)   # Torque_Enable = 1
-                logger.info(f"{motor_name} (ID {sid}): P={pgain}, torque ON")
+                logger.info(f"{motor_name} (ID {sid}): P={pgain}, I={igain}, torque ON")
 
     def start(self):
         self.robot = LeLampFollower(self.robot_config)

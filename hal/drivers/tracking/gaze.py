@@ -503,12 +503,28 @@ def _verify_landed(svc: Any, target: Dict[str, float], now: float) -> Dict[str, 
     what heats a servo into refusing. Returns {joint: where it actually stopped}
     for whatever came up short.
     """
-    time.sleep(config.GAZE_PITCH_SETTLE_S)
+    # Wait for the arm to STOP, not for a fixed interval. elbow_pitch is heavy
+    # and gravity-loaded and takes about a second to cross ten degrees, so the
+    # 0.35s flat sleep this used to do was reading it mid-glide and calling a
+    # move in progress a move that failed.
     try:
         after = svc.get_positions()
     except Exception as e:
         logger.debug("[gaze] could not verify the correction landed: %s", e)
         return {}
+    deadline = time.monotonic() + config.GAZE_PITCH_SETTLE_S
+    while time.monotonic() < deadline:
+        time.sleep(0.15)
+        try:
+            now_pose = svc.get_positions()
+        except Exception:
+            break
+        moving = any(
+            abs(now_pose.get(j, 0.0) - after.get(j, 0.0)) > 0.2 for j in target
+        )
+        after = now_pose
+        if not moving:
+            break
     short: Dict[str, float] = {}
     for joint, want in target.items():
         got = after.get(joint)
@@ -1145,22 +1161,27 @@ def _maybe_pitch(now: float) -> None:
         # cleared, so a tracking session that began meanwhile is not released.
         with aim.servo_ownership():
             svc.move_and_hold(target, duration=duration)
-            # Verify inside the lock: once ownership drops idle resumes, and a
-            # read taken then measures idle's swing rather than where the move
-            # ended.
+            # Anchor BEFORE measuring, not after. Idle resumes the instant the
+            # move returns, and an unanchored idle walks the arm back toward the
+            # recorded pose — so verifying first timed the correction while
+            # something else was actively undoing it, and blamed the servo.
+            _anchor_idle_here(svc, target)
+            # Verify inside the lock: once ownership drops, an emotion can re-pose
+            # the head and the read would measure that instead.
             short = _verify_landed(svc, target, now)
-        # Anchor idle on what the arm actually did, not on what was asked for.
-        # Anchoring an unreached target tells idle to keep holding a pose the
-        # servo has already refused — the same command that heats it.
         landed = dict(target)
         landed.update(short)
+        if short:
+            # Re-anchor on what the arm actually did. Leaving idle aimed at a
+            # pose the joint could not reach means it spends every cycle pulling
+            # toward somewhere unreachable.
+            _anchor_idle_here(svc, landed)
         # Anchor on EVERY correction, including the guessed ones. Leaving the
         # anchor behind during a search means idle keeps pulling back to where
         # the search started and erases it step by step — device-observed the
         # head reaching -32.4 and being dragged to -41.5 before the next look.
         # A search whose progress is undone between steps is not a search. The
         # blind budget already bounds how far a guess may take this.
-        _anchor_idle_here(svc, landed)
         discard_samples()
         _last_pitch_t = now
         _blind_pitch_steps = 0 if from_face else _blind_pitch_steps + 1
