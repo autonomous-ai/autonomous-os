@@ -122,10 +122,12 @@ export function OverviewSection({
       .then((j) => {
         if (cancelled || !j?.data) return;
         const map: Record<string, boolean> = {};
-        for (const [key, v] of Object.entries(j.data as Record<string, { update_available?: boolean; held_by_floor?: boolean }>)) {
-          // held_by_floor: a newer build exists but min_version was not promoted,
-          // so the worker would refuse it — same "button does nothing" trap.
-          map[key] = !!v?.update_available && !v?.held_by_floor;
+        for (const [key, v] of Object.entries(j.data as Record<string, { update_available?: boolean }>)) {
+          // Only "is there a newer build". held_by_floor is deliberately NOT
+          // consulted: that floor stages the automatic fleet rollout, while this
+          // button installs the published version on this one device — the same
+          // thing `software-update <key>` over SSH has always done.
+          map[key] = !!v?.update_available;
         }
         setOtaUpdatable(map);
       })

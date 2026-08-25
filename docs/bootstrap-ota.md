@@ -477,6 +477,20 @@ Bootstrap uses `lib/hal` to show update status on LEDs. See [status-led.md](../r
 | Success | Green flash `(0, 255, 80)`, then restore the user-selected LED look or the ambient resting look when none exists |
 | Failure | Red pulse `(255, 30, 30)` |
 
+### `POST /force-update/:target` vs `POST /force-check/:target` (bootstrap, loopback)
+
+Two different acts, and mixing them up is what made the web button look broken:
+
+| Endpoint | Meaning | `min_version` |
+|---|---|---|
+| `force-update/<key>` | Install the published `version` NOW — the same thing `software-update <key>` does over SSH | **ignored** (the floor stages the fleet, not one deliberate operator) |
+| `force-check/<key>` | Re-run the AUTOMATIC decision for that component | **respected** — a component at or above the floor does nothing |
+
+The web Versions card's `update` button is `force-update` (via
+`POST /api/system/software-update/:target`). Both are limited to the same target
+allowlist, and `componentInstalled` still refuses a component this device does
+not have.
+
 ### `GET /versions` (bootstrap, loopback)
 
 Reports `{current, target, min_version, update_available, held_by_floor}` for every

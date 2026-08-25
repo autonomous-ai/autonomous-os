@@ -33,7 +33,10 @@ var (
 
 const softwareUpdateMinInterval = 30 * time.Second
 
-// softwareUpdate triggers an OTA update for a single named component via the bootstrap worker.
+// softwareUpdate installs the published version of one component now, via the
+// bootstrap worker — the UI equivalent of `software-update <target>` over SSH.
+// The staged-rollout floor (min_version) governs the AUTOMATIC worker only; an
+// operator updating one device on purpose is not subject to it.
 // POST /api/system/software-update/:target
 // target: os-server | web | hal | agent (resolves to the configured runtime's CLI)
 func (s *Server) softwareUpdate(c *gin.Context) {
@@ -78,7 +81,12 @@ func (s *Server) softwareUpdate(c *gin.Context) {
 	softwareUpdateLastFire[target] = time.Now()
 	softwareUpdateLastFireMu.Unlock()
 
-	url := "http://127.0.0.1:8080/force-check/" + target
+	// force-update, NOT force-check: this button stands for "run
+	// `software-update <target>` on this device", which installs the published
+	// version outright. force-check would re-run the AUTOMATIC decision instead,
+	// and that one respects min_version — so a component whose rollout floor has
+	// not been promoted would silently do nothing while the UI said OK.
+	url := "http://127.0.0.1:8080/force-update/" + target
 	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, url, nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, serializers.ResponseError("build request: "+err.Error()))

@@ -79,6 +79,17 @@ func compareVersions(a, b string) int {
 	return 0
 }
 
+// forceTargetAllowed limits both force endpoints to components an operator can
+// meaningfully target from the UI. The agent CLIs are included so the Versions
+// card can update the runtime a device runs; os-server resolves its virtual
+// "agent" target to one of these before forwarding. componentInstalled is still
+// what decides whether the work happens (wrong runtime / old on-device updater →
+// refused), so a stray call cannot push a CLI onto a device that does not run it.
+var forceTargetAllowed = map[string]bool{
+	domain.OTAKeyOSServer: true, domain.OTAKeyWeb: true, domain.OTAKeyHal: true,
+	domain.OTAKeyCodex: true, domain.OTAKeyClaudeCode: true, domain.OTAKeyOpenCode: true, domain.OTAKeyPicoClaw: true,
+}
+
 // Bootstrap is the simplified OTA worker.
 type Bootstrap struct {
 	cfg    *config.Config
@@ -172,19 +183,29 @@ func (b *Bootstrap) Serve() error {
 		}()
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "update check triggered"})
 	})
+	// force-update: install the published `version` NOW, floor and all — the
+	// endpoint behind the web Versions card's button, equivalent to running
+	// `software-update <target>` over SSH. force-check below is the other thing:
+	// re-run the AUTOMATIC decision, which respects min_version.
+	r.POST("/force-update/:target", func(c *gin.Context) {
+		target := c.Param("target")
+		if !forceTargetAllowed[target] {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown target: " + target})
+			return
+		}
+		// Async: an install runs for minutes (download + restart) and would blow
+		// any HTTP timeout. The caller gets "started"; the outcome lands in the
+		// journal and in the next /versions read.
+		go func() {
+			if err := b.forceUpdate(context.Background(), target); err != nil {
+				slog.Error("force update failed", "component", "bootstrap", "target", target, "error", err)
+			}
+		}()
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "update started", "target": target})
+	})
 	r.POST("/force-check/:target", func(c *gin.Context) {
 		target := c.Param("target")
-		// The agent CLIs are here so the web Versions card can force a check for
-		// the runtime a device runs; os-server resolves its virtual "agent"
-		// target to one of these before forwarding. componentInstalled still
-		// decides whether the check does anything (wrong runtime / old on-device
-		// updater → skipped), so a stray call cannot push a CLI onto a device
-		// that does not run it.
-		allowed := map[string]bool{
-			domain.OTAKeyOSServer: true, domain.OTAKeyWeb: true, domain.OTAKeyHal: true,
-			domain.OTAKeyCodex: true, domain.OTAKeyClaudeCode: true, domain.OTAKeyOpenCode: true, domain.OTAKeyPicoClaw: true,
-		}
-		if !allowed[target] {
+		if !forceTargetAllowed[target] {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown target: " + target})
 			return
 		}

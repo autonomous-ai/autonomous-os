@@ -467,6 +467,19 @@ Bootstrap dùng `lib/hal` để báo trạng thái update qua LED. Xem chi tiế
 | Thành công | Flash xanh lá `(0, 255, 80)`, rồi khôi phục LED look user đã chọn hoặc ambient resting look nếu chưa có user state |
 | Thất bại | Đỏ pulse `(255, 30, 30)` |
 
+### `POST /force-update/:target` vs `POST /force-check/:target` (bootstrap, loopback)
+
+Hai việc khác nhau, và lẫn lộn chúng chính là thứ làm nút web trông như hỏng:
+
+| Endpoint | Nghĩa | `min_version` |
+|---|---|---|
+| `force-update/<key>` | Cài `version` đã publish NGAY — đúng thứ `software-update <key>` làm qua SSH | **bỏ qua** (sàn để staging cả fleet, không phải để chặn operator chủ đích) |
+| `force-check/<key>` | Chạy lại quyết định TỰ ĐỘNG cho component đó | **tôn trọng** — component đã bằng/cao hơn sàn thì không làm gì |
+
+Nút `update` trong card Versions là `force-update` (qua
+`POST /api/system/software-update/:target`). Cả hai dùng chung allowlist target,
+và `componentInstalled` vẫn từ chối component thiết bị không có.
+
 ### `GET /versions` (bootstrap, loopback)
 
 Trả `{current, target, min_version, update_available, held_by_floor}` cho mọi
