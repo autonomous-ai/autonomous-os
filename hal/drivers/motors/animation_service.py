@@ -253,14 +253,20 @@ class AnimationService:
     # Which is why the servo page always looked fine — a slider drag is a big
     # move, comfortably over the threshold — while gaze, whose corrections are
     # 6-13 deg, sat in the dead band and silently did nothing for an afternoon.
-    _SERVO_PGAIN = {1: 16, 2: 16, 3: 32, 4: 16, 5: 16}
+    # wrist_pitch (5) joined elbow_pitch (3) once it started carrying a real
+    # share of the vertical correction. Same failure, same fix: it sat at +9.7
+    # with ~43 deg of travel above it, was asked for 3 deg, and did not move.
+    # Not a limit — the deadband. base_pitch (2) is deliberately left alone; it
+    # lands every ask it is given, and adding integral to a joint that already
+    # works risks hunting for no gain.
+    _SERVO_PGAIN = {1: 16, 2: 16, 3: 32, 4: 16, 5: 32}
 
     # I gain — 0 everywhere by default, which is what the servos ship with. An
     # integral term is what lets a joint keep pushing on a small error instead of
     # settling for whatever P alone can deliver, so it is the half of the fix that
     # addresses stiction rather than droop. Only elbow_pitch has been measured to
     # need it; the other joints are left alone rather than retuned on a guess.
-    _SERVO_IGAIN = {3: 10}
+    _SERVO_IGAIN = {3: 10, 5: 10}
 
     def _configure_servos_raw(self):
         """Configure servos directly via scservo_sdk, bypassing lerobot.
