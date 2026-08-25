@@ -42,6 +42,7 @@ from hal.drivers.voice._internal.realtime_turn import (
     is_noise_turn,
     needs_noise_guard,
     run_realtime_turn,
+    should_drop_realtime_rejection,
     should_dispatch_to_main,
 )
 from hal.drivers.voice._internal.sensing_sender import SensingSender
@@ -1793,12 +1794,13 @@ class VoiceService:
                 hal_config.WAKEWORD_ENABLED,
                 wakeword_authorized,
             ):
+                realtime_rejected = should_drop_realtime_rejection(rt)
                 # Gemini's audio context and [TTS HISTORY] are session-local.
                 # When this turn is delegated or falls back to the main agent,
                 # persist the user's request before sending it downstream so a
                 # session replacement cannot erase the handoff from realtime's
                 # next-session context.
-                if combined and not rt.handled:
+                if combined and not rt.handled and not realtime_rejected:
                     self._realtime.save_main_handoff(combined)
                 # A realtime connection failure or silent timeout is not a
                 # handled turn. Preserve the STT fallback so a wake-word command
@@ -1817,7 +1819,12 @@ class VoiceService:
                     ),
                     identity=turn_identity,
                 )
-                if combined and hal_config.WAKEWORD_ENABLED and wakeword_authorized:
+                if (
+                    combined
+                    and not realtime_rejected
+                    and hal_config.WAKEWORD_ENABLED
+                    and wakeword_authorized
+                ):
                     if self._wakeword_focus.refresh():
                         logger.info(
                             "Wake-word follow-up focus refreshed for %.0fs",

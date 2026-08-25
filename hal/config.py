@@ -814,6 +814,12 @@ REALTIME_NOISE_SPEECH_RATIO: float = float(
 REALTIME_REQUIRE_TRANSCRIPT: bool = os.environ.get(
     "HAL_REALTIME_REQUIRE_TRANSCRIPT", "true"
 ).lower() in ("1", "true", "yes")
+# Register the explicit `reject_turn` tool and allow only that tool call to
+# suppress the main-agent fallback. A plain silent completion, timeout, or error
+# still falls back as before. Set false to turn this experimental AI filter off.
+REALTIME_AI_REJECT_FILTER: bool = os.environ.get(
+    "HAL_REALTIME_AI_REJECT_FILTER", "true"
+).lower() in ("1", "true", "yes")
 # Noise guard for turns that DO have a transcript. The guards above only run when
 # STT came back empty, so a noise turn whose STT invented a word ("Ừ", "Okay",
 # "Thank you" — nova-3 reports confidence 1.0 for these) bypasses every check and

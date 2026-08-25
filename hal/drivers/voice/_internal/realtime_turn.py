@@ -19,7 +19,7 @@ from hal.clock import device_now
 from hal.realtime.config import gemini_needs_idle_workaround
 from hal.realtime.models import AudioOutput as RTAudioOutput
 from hal.realtime.models import TextOutput as RTTextOutput
-from hal.realtime.models.signal import DelegateSignal, LookReplaySignal
+from hal.realtime.models.signal import DelegateSignal, LookReplaySignal, RejectSignal
 from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice._internal.cot_leak_filter import CoTLeakFilter, clean_transcript
 
@@ -28,9 +28,10 @@ logger = logging.getLogger("hal.voice")
 SENTENCE_ENDS = (".", "!", "?", "。", "！", "？")
 
 # How a turn resolved, for the single routing log line in dispatch_turn. Every
-# value except HANDLED means the main agent answers this turn.
+# value except HANDLED or AI_REJECTED means the main agent answers this turn.
 ROUTE_HANDLED = "realtime_handled"          # realtime spoke; main agent stays silent
 ROUTE_DELEGATED = "delegated"               # the model asked to hand off
+ROUTE_AI_REJECTED = "ai_rejected"           # model explicitly rejected this non-user turn
 ROUTE_NO_OUTPUT = "realtime_no_output"      # committed, but nothing came back (timeout / dead WS)
 ROUTE_ERROR = "realtime_error"              # the turn raised; forwarded instead of lost
 ROUTE_UNAVAILABLE = "realtime_unavailable"  # no live session to commit to
@@ -232,6 +233,19 @@ class RealtimeTurnResult(NamedTuple):
     # (no output, dead session, dropped noise, realtime off) was invisible and
     # indistinguishable in the journal. dispatch_turn logs this on every turn.
     route: str = ROUTE_NOT_STARTED
+    # This is deliberately separate from `route`: an empty/no-output turn must
+    # retain main-agent fallback. Only an explicit reject_turn tool call sets it.
+    rejected: bool = False
+
+
+def should_drop_realtime_rejection(rt: RealtimeTurnResult) -> bool:
+    """Return whether the explicit AI rejection may suppress downstream dispatch.
+
+    This isolated policy gate is intentionally the only behavior-changing check.
+    Disable ``HAL_REALTIME_AI_REJECT_FILTER`` to immediately restore the old
+    fallback for every turn, including previously explicit rejections.
+    """
+    return hal_config.REALTIME_AI_REJECT_FILTER and rt.rejected
 
 
 def should_dispatch_to_main(
@@ -299,6 +313,7 @@ def run_realtime_turn(
     """
     delegated = False
     handled = False
+    rejected = False
     transcript = ""
     delegate_msg = ""
     route = ROUTE_NOT_STARTED
@@ -410,6 +425,13 @@ def run_realtime_turn(
                         # voice turn), so ours must not fire on top of it.
                         wait_filler.cancel()
                         continue
+                    if isinstance(output, RejectSignal):
+                        rejected = True
+                        # No main-agent handoff follows an explicit rejection.
+                        # Cancel the filler and leave the thinking LED in the
+                        # same clean state as any other completed empty turn.
+                        wait_filler.cancel()
+                        break
                     if delegated:
                         continue
                     # Native voice: play the model's OWN audio straight to the speaker.
@@ -492,6 +514,7 @@ def run_realtime_turn(
                 # retry is safe. Stop as soon as the turn produced real output.
                 produced: bool = (
                     delegated
+                    or rejected
                     or first_sentence_sent
                     or native_started
                     or bool("".join(text_parts).strip())
@@ -515,7 +538,19 @@ def run_realtime_turn(
                 native_started = False
                 native_played = True
 
-            if delegated:
+            if rejected:
+                route = ROUTE_AI_REJECTED
+                logger.info(
+                    "[realtime] Model explicitly rejected turn — no main-agent dispatch"
+                )
+                _thinking_cue_clear()
+                try:
+                    from hal.routes.led import restore_led
+
+                    restore_led()
+                except Exception:
+                    pass
+            elif delegated:
                 route = ROUTE_DELEGATED
                 logger.info("[realtime] Model delegated → will forward to OS server")
             else:
@@ -640,4 +675,11 @@ def run_realtime_turn(
             "[realtime] Enabled but agent not available — falling back to OS server"
         )
 
-    return RealtimeTurnResult(delegated, handled, transcript, delegate_msg, route)
+    return RealtimeTurnResult(
+        delegated=delegated,
+        handled=handled,
+        transcript=transcript,
+        delegate_msg=delegate_msg,
+        route=route,
+        rejected=rejected,
+    )
