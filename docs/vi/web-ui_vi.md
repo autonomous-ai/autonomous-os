@@ -1,6 +1,6 @@
 # Web UI — Monitor Dashboard
 
-## Ngày cập nhật: 2026-08-17
+## Ngày cập nhật: 2026-08-25
 
 ---
 
@@ -142,7 +142,7 @@ Nhóm Settings có thể thu gọn nằm trong `NAV` của sidebar dùng chung (
 | Plugins | `/setting#plugins` |
 | Timezone | `/setting#timezone` |
 
-Các mục Monitor được serialize thành id thuần, ví dụ `/monitor#overview`, `/monitor#system`, `/monitor#flow`. Mặc định: `/monitor` không có hash / hash không hợp lệ → `overview`; `/setting` không có hash / hash không hợp lệ → `general` (URL được chuẩn hóa thành `/setting#general`). Deep-link (ví dụ `/setting#wifi`) và nút back/forward của trình duyệt được tôn trọng qua một effect dựa trên `useLocation`. Người dùng không-debug chỉ thấy các mục trong `PUBLIC_SECTIONS` (gồm Chat, Overview, Info, Flow, Camera, Users, Bluetooth, **Logs**, **CLI**, và các mục Settings công khai General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); `?debug=true` mở khóa phần còn lại (Sensing, Analytics, Servo, API Docs, Agent gateway, và các mục Settings sâu hơn AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Bấm `update` là nút đổi ngay thành `updating…` — nút KHÔNG bao giờ báo "OK", vì chữ đó đọc như "xong rồi" trong khi request mới chỉ KHỞI ĐỘNG việc cài (và với component chạy vài giây thì nó còn hiện trước cả lúc dòng kịp báo tiến trình). Khi lỗi thì hiện đúng lý do server trả về (`rate-limited, retry in 8s`, `bootstrap unreachable`) thay vì chữ "Failed" trống rỗng. Trong lúc đang cài, dòng đó hiện `updating…` thay cho nút (một lần cài mất vài chục giây — component dừng, build lại, khởi động lại — và một dòng đứng im khiến người dùng bấm lần hai, chính là cách một máy từng mất sạch HAL runtime). Các nút `update` trong card **Versions** ở Overview (dòng Web / OS / HAL / Agent) cũng bị chặn theo cách này — người xem thường không có nút kích OTA một chạm. Toggle **Debug** trên top bar, ngay cạnh nút Dark/Light, bật/tắt query parameter này nhưng vẫn giữ hash của mục đang mở và các query parameter khác; màu amber cho biết debug mode đang bật.
+Các mục Monitor được serialize thành id thuần, ví dụ `/monitor#overview`, `/monitor#system`, `/monitor#flow`. Mặc định: `/monitor` không có hash / hash không hợp lệ → `overview`; `/setting` không có hash / hash không hợp lệ → `general` (URL được chuẩn hóa thành `/setting#general`). Deep-link (ví dụ `/setting#wifi`) và nút back/forward của trình duyệt được tôn trọng qua một effect dựa trên `useLocation`. Người dùng không-debug chỉ thấy các mục trong `PUBLIC_SECTIONS` (gồm Chat, Overview, Info, Flow, Camera, Users, Bluetooth, **Logs**, **CLI**, và các mục Settings công khai General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); `?debug=true` mở khóa phần còn lại (Sensing, Analytics, Servo, API Docs, Agent gateway, và các mục Settings sâu hơn AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Bấm `update` là nút đổi ngay thành `updating…` — nút KHÔNG bao giờ báo "OK", vì chữ đó đọc như "xong rồi" trong khi request mới chỉ KHỞI ĐỘNG việc cài (và với component chạy vài giây thì nó còn hiện trước cả lúc dòng kịp báo tiến trình). Khi lỗi thì hiện đúng lý do server trả về (`rate-limited, retry in 8s`, `bootstrap unreachable`) thay vì chữ "Failed" trống rỗng. Trong lúc đang cài, dòng đó hiện `updating…` thay cho nút (một lần cài mất vài chục giây — component dừng, build lại, khởi động lại — và một dòng đứng im khiến người dùng bấm lần hai, chính là cách một máy từng mất sạch HAL runtime). Các nút `update` trong card **Versions** ở Overview (dòng Web / OS / HAL / Agent / Bootstrap) cũng bị chặn theo cách này — người xem thường không có nút kích OTA một chạm. Toggle **Debug** trên top bar, ngay cạnh nút Dark/Light, bật/tắt query parameter này nhưng vẫn giữ hash của mục đang mở và các query parameter khác; màu amber cho biết debug mode đang bật.
 
 **Wake-word gate** nằm trong card **General** công khai, không nằm ở mục Realtime chỉ-debug. Checkbox ghi cờ `wakeword` top-level; lưu Settings sẽ restart HAL để áp dụng. Card liệt kê toàn bộ wake phrase hiện được chấp nhận, gồm tên agent hiện tại chính xác cùng các alias cố định `autonomous` và device type; hệ thống quản lý danh sách này. Tải lại Settings sau khi đổi tên agent để thấy tên mới.
 
@@ -171,7 +171,7 @@ Monitor poll API system/HW mỗi **3 giây**. Flow dùng hybrid theo file: REST 
 | `POST /api/system/force-update` | Kích hoạt kiểm tra OTA qua bootstrap worker (proxy tới `localhost:8080/force-check`) |
 | `GET /api/system/ota-versions` | Trả `{current, target, min_version, update_available, held_by_floor}` cho từng component (proxy bootstrap `/versions`, kèm alias `agent` cho CLI của runtime đang chạy). Card Versions hiện nút `update` ở mọi chỗ `update_available` = true (`held_by_floor` vẫn được trả về nhưng KHÔNG dùng để quyết định nút: nút cài bản đã publish lên chính máy này, giống `software-update <key>` qua SSH, còn sàn chỉ dùng để staging rollout tự động) |
 | `GET /api/system/ota-updating` | Các component worker đang cài ngay lúc này (`{updating: [...]}`, kèm alias `agent`). Cố ý làm rẻ — không fetch metadata — vì card Versions poll nó mỗi 2 giây trong lúc cài và hiện `updating…` ở dòng đó thay cho nút |
-| `POST /api/system/software-update/:target` | Kiểm tra OTA cho một component. `target`: `os-server` \| `web` \| `hal` \| `agent`. **`agent` là target ảo** — os-server tự phân giải sang CLI của runtime đang chạy (`codex`/`claudecode`/`opencode`/`picoclaw`) để trình duyệt không cần biết runtime nào; `hermes` trả 400 (không pin được nên bootstrap không bao giờ auto-apply). Giới hạn 1 lần / target / 30 giây |
+| `POST /api/system/software-update/:target` | Kiểm tra OTA cho một component. `target`: `os-server` \| `bootstrap` \| `web` \| `hal` \| `agent`. Bootstrap tự cập nhật bằng cách chạy installer nền, nên có thể restart worker thay thế an toàn. **`agent` là target ảo** — os-server tự phân giải sang CLI của runtime đang chạy (`codex`/`claudecode`/`opencode`/`picoclaw`) để trình duyệt không cần biết runtime nào; `hermes` trả 400 (không pin được nên bootstrap không bao giờ auto-apply). Giới hạn 1 lần / target / 30 giây |
 
 > **Lưu ý format**: OS server API trả `{ status: 1, data: <payload>, message: null }` khi thành công.
 
@@ -366,13 +366,14 @@ Hành vi gom nhóm Turn Pipeline:
 
 ### 5.5 Logs Section
 
-- Tab log runtime: HAL, OS (os-server), Buddy, cùng **Agent** và **Agent Service** (source id `openclaw` / `openclaw-service`).
+- Tab log runtime: HAL, OS (os-server), Buddy, **Bootstrap**, cùng **Agent** và **Agent Service** (source id `bootstrap`, `openclaw` / `openclaw-service`). Tab **Bootstrap** đọc journal của systemd unit `bootstrap.service`.
 - Tab **Agent**/**Agent Service** là runtime-aware — backend (`resolveLogSource` trong `server/logs.go`) trỏ chúng tới backend agentic nào đang chạy:
   - openclaw: `Agent` → `/var/log/openclaw/agent.log` (fallback file `/tmp/openclaw/openclaw-*.log` mới nhất), `Agent Service` → `journal:openclaw.service`
   - hermes: `Agent` → `/root/.hermes/logs/agent.log`, `Agent Service` → `journal:hermes-gateway.service`
   - picoclaw: `Agent` → `/root/.picoclaw/logs/gateway.log`, `Agent Service` → `journal:picoclaw.service`
   - codex: `Agent` → `journal:codex.service`, `Agent Service` → `journal:codex.service` (bridge gatewayd không có file log — chỉ journal)
-- Mỗi panel stream qua SSE (`GET /api/logs/stream?source=<source>`) với fallback polling.
+- Tab **Bootstrap** nạp `N` dòng gần nhất qua `GET /api/logs/tail?source=bootstrap&lines=N`, rồi nhận dòng mới qua SSE `GET /api/logs/stream?source=bootstrap`; cả hai request đều yêu cầu xác thực.
+- Mỗi panel stream qua SSE (`GET /api/logs/stream?source=<source>`); lần nạp đầu và nút làm mới đọc `GET /api/logs/tail?source=<source>&lines=N`.
 - Hỗ trợ filter theo level (ALL/DEBUG/INFO/WARN/ERROR) và tìm kiếm text/regex.
 
 > **Lưu ý**: Camera có vai trò kép — (1) hiển thị live stream cho user xem, (2) nguồn dữ liệu sensing tự động. Sensing service đọc frame từ camera mỗi 2s để detect motion, face (Haar cascade), và light level. Khi phát hiện sự kiện đáng kể (người xuất hiện, chuyển động lớn), auto-snapshot full-resolution JPEG được gửi kèm event tới OpenClaw AI để phân tích bằng vision.
