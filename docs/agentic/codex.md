@@ -50,13 +50,22 @@ block on an approval prompt (paired with `approval_policy = "never"` +
 `codex.ProvideService`, anything unknown falls back to OpenClaw. On startup a
 `AGENT BACKEND ACTIVE → CODEX` banner prints `ws_url` + `conversation`.
 
-Wire constants (`runtimes/codex/constants.go`, no per-unit config):
+Wire values (`runtimes/codex/constants.go`). All three device paths below are
+resolved once at process start from the SAME env vars the gatewayd and
+`presync.sh` read (`system/lib/syspath`); unset env gives the device defaults,
+so the board is unaffected:
 
-| Const | Default | Meaning |
-|---|---|---|
-| `WSURL` | `ws://127.0.0.1:18792/codex/ws/` | Local bridge WebSocket endpoint |
-| `Token` | `autonomous_codex_token` | Bearer token on connect; the bridge reads the same value from `/root/.codex/.env` (`CODEX_WS_TOKEN`, presync-owned) |
-| `Conversation` | `device-main` | Label only — Codex owns its thread ids (§3) |
+| Value | Default | Env | Meaning |
+|---|---|---|---|
+| `WSURL` | `ws://127.0.0.1:18792/codex/ws/` | `CODEX_PORT` | Local bridge WebSocket endpoint |
+| `Token` | `autonomous_codex_token` | `CODEX_WS_TOKEN` | Bearer token on connect; the bridge reads the same value from `$CODEX_HOME/.env` (presync-owned) |
+| `codexHome` | `/root/.codex` | `CODEX_HOME` | State dir every other codex path derives from — workspace, skills, sessions, config.toml, `.env`, the telegram state files |
+| `Conversation` | `device-main` | — | Label only — Codex owns its thread ids (§3) |
+
+Setting `CODEX_HOME` alone relocates the whole backend, on both the client and
+`codex-gatewayd` (which anchors its per-file defaults on it). That is what
+`make os-dev` / `make codex-dev` use to run the shipped binary off-device — see
+[os-server.md § Off-device run](../os-server.md#off-device-run-laptop).
 
 ## 1.1 Install (`install.sh`)
 
@@ -123,14 +132,24 @@ restarts the gateway only on a real change. It owns everything stateful:
   API key outranks/conflicts with ChatGPT auth).
 
 On top of the presync run, `EnsureOnboarding` (`onboarding.go`) does the same
-workspace reconcile the other backends get: seeds `KNOWLEDGE.md` from the
-embedded template only if absent, injects the OS-managed
+workspace reconcile the other backends get: seeds `KNOWLEDGE.md` **and
+`AGENTS.md`** from their embedded templates only if absent, injects the OS-managed
 `<!-- OS DO NOT REMOVE -->` blocks into `SOUL.md` / `AGENTS.md` /
 `HEARTBEAT.md` (OpenClaw-derived, stripped of OpenClaw-only bits), refreshes
 the **global** user AGENTS.md block (`ensureUserAgentsMDBlock`, see below), and
 capability-gates skills. Markdown-only changes never restart the gateway —
 each `codex exec` re-reads the workspace; only a presync config change or a
 unit self-heal restarts it.
+
+**Why `AGENTS.md` is seeded.** Codex has no `setup` command to regenerate a base
+`AGENTS.md` the way openclaw does, and a **codex-only device** — one that never
+ran openclaw, leaving presync §1 nothing to migrate — therefore had none at all.
+Since `AGENTS.md` is the only file codex auto-loads, no file meant no OS block
+**and no persona**: the agent introduced itself as "Codex". `EnsureOnboarding`
+now seeds `runtimes/codex/resources/AGENTS.md` (a short workspace base carrying
+the `Your Workspace` heading the block injector anchors on) through
+`seedFileIfAbsent`, which **never overwrites** — a device migrated from openclaw
+keeps its own file untouched.
 
 **Persona inline block (AGENTS.md).** Codex auto-loads ONLY `AGENTS.md` into
 context; the "Session Startup" instruction to read `SOUL.md`/`IDENTITY.md` is

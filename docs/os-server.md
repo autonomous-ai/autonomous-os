@@ -365,6 +365,55 @@ HAL (Python): FastAPI standard JSON responses.
    - Set speaker volume: the level the user last set (persisted by HAL on every `/audio/volume` change) wins; otherwise the device's `startup_volume` (ROBOT.md front matter, default 100)
 4. If not yet set up: wait for `POST /api/device/setup`
 
+## Off-device run (laptop)
+
+`make os-dev` runs the **same binary** that ships to the board — no build tag,
+no second code path. Only the device-absolute paths move, through the env vars
+`system/lib/syspath` reads. **Unset env = board defaults, byte for byte**
+(`runtimes/codex/paths_default_test.go` asserts this).
+
+| Env var | Default (device) | Used for |
+|---------|------------------|----------|
+| `CODEX_HOME` | `/root/.codex` | Codex state dir — config.toml, auth.json, `.env`, `skills/`, `sessions/`, `workspace/`. Anchors every codex path on both the client and `codex-gatewayd` |
+| `CODEX_PORT` | `18792` | Bridge WebSocket port (`WSURL` and the gatewayd listener) |
+| `CODEX_WS_TOKEN` | `autonomous_codex_token` | Bearer token os-server sends to the bridge |
+| `OS_AGENT_HOME` | `/root` | Root a Telegram coding session resolves `~` and relative folders against |
+| `OS_AGENT_STATE_PATH` | `/root/config/agent_state.json` | Runtime-switch history (persona migration) |
+| `OS_LOG_FILE` | `/var/log/os-server.log` | Rotating log file |
+| `DEVICE_TYPE` / `DEVICES_DIR` | — / `/opt/devices` | Body selector and `robots/<type>/` root (pre-existing) |
+
+`config.json` needs no env: `configPath` is `config/config.json` relative to the
+cwd, so `os-dev` runs from the state dir exactly as systemd's
+`WorkingDirectory=/root` does on the board.
+
+A full laptop stack is three terminals:
+
+```bash
+make sim          # HAL on :5001
+make codex-dev    # codex bridge on $CODEX_PORT
+make os-dev       # API on :5000
+```
+
+Makefile knobs: `OS_STATE_DIR` (default `/tmp/autonomous-os`), `OS_AGENT_RUNTIME`
+(default `codex`), `CODEX_HOME` (default `$HOME/.codex`), `CODEX_PORT`,
+`CODEX_BIN`. `scripts/dev/os-dev-seed.sh` writes `device_type`, `agent_runtime`
+and `set_up_completed: true` into the state dir's config.json — the last one
+matters because the startup sequence that runs presync and `EnsureOnboarding`
+is gated on it (`server/config_watch.go`), so without it the workspace stays
+empty. Nothing in the target installs a runtime: the codex CLI, its skills and
+`AGENTS.md` are expected to be in place already.
+
+Two things to know on macOS:
+
+- AirPlay Receiver also listens on `*:5000`. os-server binds `127.0.0.1:5000`,
+  but a request to `localhost:5000` can still land on AirTunes — turn the
+  receiver off (System Settings > General > AirDrop & Handoff) or change
+  `httpPort`.
+- `presync.sh` regenerates `config.toml` on every boot and keeps only
+  `[mcp_servers.*]`. `os-dev-seed.sh` copies a pre-existing one to
+  `config.toml.pre-os-dev` once, so pointing `CODEX_HOME` at a real install is
+  not a one-way door.
+
 ## Logging
 
 When `GELF_URL` is configured, OS Server ships INFO-and-higher records to that

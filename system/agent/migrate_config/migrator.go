@@ -19,7 +19,11 @@
 // the destination runtime, then syncs config.json to match.
 package migrateconfig
 
-import "fmt"
+import (
+	"fmt"
+
+	"go.autonomous.ai/os/system/lib/syspath"
+)
 
 // LLMConfig is the canonical representation of per-device LLM provider settings
 // shared across runtimes. Only the fields that runtimes actually store in their
@@ -90,7 +94,7 @@ func DefaultOptions(openclawConfigDir, hermesRoot string) Options {
 		OpenclawConfigDir: openclawConfigDir,
 		HermesRoot:        hermesRoot,
 		PicoclawConfigDir: "/root/.picoclaw",
-		CodexHome:         "/root/.codex",
+		CodexHome:         syspath.CodexHome(),
 		ClaudecodeDir:     "/root/.claudecode",
 		OpenCodeHome:      "/root/.opencode",
 		OpenCodeConfig:    "/root/.config/opencode/opencode.json",

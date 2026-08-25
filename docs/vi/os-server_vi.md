@@ -362,6 +362,53 @@ HAL (Python): FastAPI standard JSON responses.
    - Đặt volume loa: mức user chỉnh gần nhất (HAL ghi lại mỗi lần `/audio/volume`) được ưu tiên; không có thì lấy `startup_volume` của thiết bị (front matter ROBOT.md, mặc định 100)
 4. Nếu chưa setup: chờ `POST /api/device/setup`
 
+## Chạy off-device (laptop)
+
+`make os-dev` chạy **đúng binary** được ship lên board — không build tag, không
+có nhánh code thứ hai. Chỉ các đường dẫn tuyệt đối của thiết bị là thay đổi,
+qua các biến môi trường mà `system/lib/syspath` đọc. **Không set env = mặc định
+của board, giống từng byte** (`runtimes/codex/paths_default_test.go` kiểm chứng
+điều này).
+
+| Biến môi trường | Mặc định (device) | Dùng cho |
+|-----------------|-------------------|----------|
+| `CODEX_HOME` | `/root/.codex` | State dir của Codex — config.toml, auth.json, `.env`, `skills/`, `sessions/`, `workspace/`. Là gốc của mọi đường dẫn codex ở cả client lẫn `codex-gatewayd` |
+| `CODEX_PORT` | `18792` | Cổng WebSocket của bridge (`WSURL` và listener của gatewayd) |
+| `CODEX_WS_TOKEN` | `autonomous_codex_token` | Bearer token os-server gửi tới bridge |
+| `OS_AGENT_HOME` | `/root` | Gốc để một coding session Telegram resolve `~` và đường dẫn tương đối |
+| `OS_AGENT_STATE_PATH` | `/root/config/agent_state.json` | Lịch sử chuyển runtime (persona migration) |
+| `OS_LOG_FILE` | `/var/log/os-server.log` | File log xoay vòng |
+| `DEVICE_TYPE` / `DEVICES_DIR` | — / `/opt/devices` | Chọn body và gốc `robots/<type>/` (đã có sẵn) |
+
+`config.json` không cần env: `configPath` là `config/config.json` tương đối theo
+cwd, nên `os-dev` chạy từ state dir đúng như `WorkingDirectory=/root` của systemd
+trên board.
+
+Một stack đầy đủ trên laptop cần ba terminal:
+
+```bash
+make sim          # HAL trên :5001
+make codex-dev    # codex bridge trên $CODEX_PORT
+make os-dev       # API trên :5000
+```
+
+Các núm trong Makefile: `OS_STATE_DIR` (mặc định `/tmp/autonomous-os`),
+`OS_AGENT_RUNTIME` (mặc định `codex`), `CODEX_HOME` (mặc định `$HOME/.codex`),
+`CODEX_PORT`, `CODEX_BIN`. `scripts/dev/os-dev-seed.sh` ghi `device_type`,
+`agent_runtime` và `set_up_completed: true` vào config.json của state dir — cái
+cuối quan trọng vì startup sequence chạy presync và `EnsureOnboarding` bị gate
+bởi nó (`server/config_watch.go`), thiếu nó thì workspace sẽ rỗng. Target không
+cài đặt runtime nào cả: codex CLI, skills và `AGENTS.md` được xem như đã có sẵn.
+
+Hai điều cần biết trên macOS:
+
+- AirPlay Receiver cũng listen `*:5000`. os-server bind `127.0.0.1:5000`, nhưng
+  request tới `localhost:5000` vẫn có thể rơi vào AirTunes — tắt receiver
+  (System Settings > General > AirDrop & Handoff) hoặc đổi `httpPort`.
+- `presync.sh` sinh lại `config.toml` mỗi lần boot và chỉ giữ `[mcp_servers.*]`.
+  `os-dev-seed.sh` sao lưu file có sẵn thành `config.toml.pre-os-dev` một lần,
+  nên trỏ `CODEX_HOME` vào một bản cài thật không phải đường một chiều.
+
 ## Logging
 
 Khi có cấu hình `GELF_URL`, OS Server gửi log từ mức INFO trở lên tới collector tập

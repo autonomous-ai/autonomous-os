@@ -21,6 +21,8 @@ package migratepersona
 import (
 	"fmt"
 	"path/filepath"
+
+	"go.autonomous.ai/os/system/lib/syspath"
 )
 
 // Runtime identifies an agent backend whose persona lives on-device in an
@@ -139,7 +141,7 @@ func DefaultOptions(openclawConfigDir, hermesRoot string) Options {
 		OpenclawWorkspace:   filepath.Join(openclawConfigDir, "workspace"),
 		HermesRoot:          hermesRoot,
 		PicoclawWorkspace:   "/root/.picoclaw/workspace",
-		CodexWorkspace:      "/root/.codex/workspace",
+		CodexWorkspace:      filepath.Join(syspath.CodexHome(), "workspace"),
 		ClaudecodeWorkspace: "/root/.claudecode/workspace",
 		OpenCodeWorkspace:   "/root/.opencode/workspace",
 		IncludeDailyMemory:  true,

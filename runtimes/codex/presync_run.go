@@ -10,11 +10,13 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"go.autonomous.ai/os/system/server/config"
 )
 
 // Files presync.sh owns — hashed around the run so EnsureOnboarding restarts
 // the gateway only when the config actually changed (hermes pattern).
-const (
+var (
 	codexConfigTOML = codexHome + "/config.toml"
 	codexEnvFile    = codexHome + "/.env"
 )
@@ -45,7 +47,12 @@ func (s *CodexService) runPresync() error {
 	// boot copies the openclaw workspace (presync.sh §1 migrate).
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "bash", path).CombinedOutput()
+	cmd := exec.CommandContext(ctx, "bash", path)
+	cmd.Env = append(os.Environ(),
+		"CODEX_DIR="+codexHome,
+		"CONFIG_JSON="+config.Path(),
+	)
+	out, err := cmd.CombinedOutput()
 	if len(out) > 0 {
 		slog.Info("codex presync output", "component", "codex", "output", strings.TrimSpace(string(out)))
 	}

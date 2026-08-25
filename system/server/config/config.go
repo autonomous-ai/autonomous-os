@@ -40,6 +40,17 @@ func otaMetadataURLFromBootstrap() string {
 
 var configPath = "config/config.json"
 
+// Path returns the absolute path of config.json. Child processes that read the
+// same file (the codex presync hook) are handed it explicitly, so they cannot
+// disagree with os-server about which config is live. Falls back to the
+// cwd-relative value when the cwd cannot be resolved.
+func Path() string {
+	if abs, err := filepath.Abs(configPath); err == nil {
+		return abs
+	}
+	return configPath
+}
+
 // OSVersion is injected at build time via ldflags.
 // Example:
 //
@@ -377,6 +388,15 @@ func ProvideConfig() *Config {
 				slog.Error("save config after migration failed", "component", "config", "error", err)
 			}
 		}
+	}
+
+	// A config.json missing httpPort would bind port 0 — an ephemeral port the
+	// web UI, HAL and the app all fail to reach, with nothing in the log saying
+	// why. Fall back to the default instead of trusting the zero value.
+	if cfg.HttpPort == 0 {
+		cfg.HttpPort = Default().HttpPort
+		slog.Warn("config.json has no httpPort — using default",
+			"component", "config", "port", cfg.HttpPort)
 	}
 
 	// Seed the realtime block with defaults if an already-provisioned config.json

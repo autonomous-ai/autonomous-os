@@ -50,13 +50,22 @@ prompt approval (đi cặp với `approval_policy = "never"` +
 `codex.ProvideService`, giá trị lạ rơi về OpenClaw. Khi khởi động, banner
 `AGENT BACKEND ACTIVE → CODEX` in `ws_url` + `conversation`.
 
-Hằng số kết nối (`runtimes/codex/constants.go`, không có config theo máy):
+Giá trị kết nối (`runtimes/codex/constants.go`). Cả ba đường dẫn thiết bị dưới
+đây được resolve một lần lúc khởi động process, từ CÙNG các biến môi trường mà
+gatewayd và `presync.sh` đọc (`system/lib/syspath`); không set env thì ra đúng
+mặc định của thiết bị, nên board không bị ảnh hưởng:
 
-| Hằng | Mặc định | Ý nghĩa |
-|---|---|---|
-| `WSURL` | `ws://127.0.0.1:18792/codex/ws/` | Endpoint WebSocket của bridge cục bộ |
-| `Token` | `autonomous_codex_token` | Bearer token khi connect; bridge đọc cùng giá trị từ `/root/.codex/.env` (`CODEX_WS_TOKEN`, do presync sở hữu) |
-| `Conversation` | `device-main` | Chỉ là nhãn — Codex sở hữu thread id của nó (§3) |
+| Giá trị | Mặc định | Env | Ý nghĩa |
+|---|---|---|---|
+| `WSURL` | `ws://127.0.0.1:18792/codex/ws/` | `CODEX_PORT` | Endpoint WebSocket của bridge cục bộ |
+| `Token` | `autonomous_codex_token` | `CODEX_WS_TOKEN` | Bearer token khi connect; bridge đọc cùng giá trị từ `$CODEX_HOME/.env` (do presync sở hữu) |
+| `codexHome` | `/root/.codex` | `CODEX_HOME` | State dir mà mọi đường dẫn codex khác dẫn xuất ra — workspace, skills, sessions, config.toml, `.env`, các file state telegram |
+| `Conversation` | `device-main` | — | Chỉ là nhãn — Codex sở hữu thread id của nó (§3) |
+
+Chỉ cần set `CODEX_HOME` là dời được cả backend, ở cả phía client lẫn
+`codex-gatewayd` (gatewayd lấy nó làm gốc cho mặc định từng file). Đó chính là
+cách `make os-dev` / `make codex-dev` chạy binary được ship ở ngoài thiết bị —
+xem [os-server_vi.md § Chạy off-device](../os-server_vi.md#chạy-off-device-laptop).
 
 ## 1.1 Cài đặt (`install.sh`)
 
@@ -123,13 +132,23 @@ restart gateway khi có thay đổi thật. Nó sở hữu mọi thứ stateful:
   key sẽ lấn át/xung đột với auth ChatGPT).
 
 Trên nền lần chạy presync, `EnsureOnboarding` (`onboarding.go`) làm cùng phần
-reconcile workspace như các backend khác: seed `KNOWLEDGE.md` từ template nhúng
-chỉ khi chưa có, inject các khối OS-managed `<!-- OS DO NOT REMOVE -->` vào
+reconcile workspace như các backend khác: seed `KNOWLEDGE.md` **và `AGENTS.md`**
+từ template nhúng chỉ khi chưa có, inject các khối OS-managed `<!-- OS DO NOT REMOVE -->` vào
 `SOUL.md` / `AGENTS.md` / `HEARTBEAT.md` (gốc OpenClaw, lược phần
 chỉ-OpenClaw), refresh khối AGENTS.md **toàn cục** ở tầng user
 (`ensureUserAgentsMDBlock`, xem bên dưới), và capability-gate skills. Thay đổi
 chỉ-markdown không bao giờ restart gateway — mỗi `codex exec` đọc lại
 workspace; chỉ presync đổi config hoặc self-heal unit mới restart.
+
+**Vì sao phải seed `AGENTS.md`.** Codex không có lệnh `setup` để sinh lại
+`AGENTS.md` nền như openclaw, nên một **thiết bị chỉ chạy codex** — chưa từng
+chạy openclaw, khiến presync §1 không có gì để migrate — hoàn toàn không có file
+này. Mà `AGENTS.md` lại là file duy nhất codex tự nạp, nên không có file nghĩa là
+không có khối OS **và không có persona**: agent tự giới thiệu là "Codex".
+`EnsureOnboarding` giờ seed `runtimes/codex/resources/AGENTS.md` (một bản nền
+ngắn, mang tiêu đề `Your Workspace` mà bộ inject khối bám vào) qua
+`seedFileIfAbsent` — hàm này **không bao giờ ghi đè**, nên thiết bị đã migrate từ
+openclaw vẫn giữ nguyên file của nó.
 
 **Khối persona inline (AGENTS.md).** Codex chỉ tự nạp DUY NHẤT `AGENTS.md` vào
 context; chỉ dẫn "Session Startup" bảo đọc `SOUL.md`/`IDENTITY.md` là tự

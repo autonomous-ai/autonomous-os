@@ -45,6 +45,52 @@ os-lint:
 os-test:
 	go test ./...
 
+# ── Off-device run (laptop) ──────────────────────────────────────────────────
+# Runs the SAME binary that ships to the board — no build tag, no second code
+# path. Only the device-absolute paths move, via the env vars system/lib/syspath
+# reads (unset = board defaults). Needs three terminals for a full stack:
+#   make sim        HAL on :5001
+#   make codex-dev  codex bridge on $(CODEX_PORT)
+#   make os-dev     API on :5000
+# The runtime itself (codex CLI, its skills, AGENTS.md) is expected to be
+# installed already — nothing here provisions it.
+OS_STATE_DIR     ?= /tmp/autonomous-os
+OS_AGENT_RUNTIME ?= codex
+CODEX_HOME       ?= $(HOME)/.codex
+CODEX_PORT       ?= 18792
+CODEX_BIN        ?= $(shell command -v codex 2>/dev/null)
+
+# One env set shared by both processes so the bridge and its client can never
+# disagree about where codex's state lives.
+OS_DEV_ENV = \
+	DEVICE_TYPE=$(DEVICE_TYPE) \
+	DEVICES_DIR=$(CURDIR)/robots \
+	CODEX_HOME=$(CODEX_HOME) \
+	CODEX_PORT=$(CODEX_PORT) \
+	OS_AGENT_HOME=$(OS_STATE_DIR) \
+	OS_AGENT_STATE_PATH=$(OS_STATE_DIR)/config/agent_state.json \
+	OS_LOG_FILE=$(OS_STATE_DIR)/os-server.log
+
+.PHONY: os-dev os-dev-build os-dev-seed codex-dev
+
+os-dev-build:
+	@mkdir -p $(OS_STATE_DIR)
+	go build -ldflags "$(LDFLAGS_OS)" -o $(OS_STATE_DIR)/os-server ./system/cmd/os-server
+
+os-dev-seed:
+	@bash scripts/dev/os-dev-seed.sh $(OS_STATE_DIR) $(DEVICE_TYPE) $(OS_AGENT_RUNTIME) $(CODEX_HOME)
+
+# cd into the state dir: config.json is resolved relative to the cwd, exactly as
+# systemd's WorkingDirectory=/root does it on the board.
+os-dev: os-dev-build os-dev-seed
+	@echo "os-server: http://127.0.0.1:5000/api/health/live (runtime=$(OS_AGENT_RUNTIME))"
+	cd $(OS_STATE_DIR) && $(OS_DEV_ENV) ./os-server
+
+codex-dev: os-dev-build
+	@test -n "$(CODEX_BIN)" || { echo "codex CLI not found on PATH — set CODEX_BIN=<path>"; exit 1; }
+	@echo "codex bridge: ws://127.0.0.1:$(CODEX_PORT)/codex/ws/ (CODEX_HOME=$(CODEX_HOME))"
+	$(OS_DEV_ENV) CODEX_BIN=$(CODEX_BIN) $(OS_STATE_DIR)/os-server codex-gatewayd
+
 # ============================================================================
 # HAL (Python) — dev | run | test
 # ============================================================================
