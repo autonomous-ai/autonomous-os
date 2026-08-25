@@ -5,6 +5,7 @@ overlap so nobody falls between them, it stays inside the mechanical range,
 and it stops the moment it finds someone rather than completing the sweep.
 """
 
+import time
 from unittest import mock
 
 import numpy as np
@@ -433,3 +434,56 @@ def test_an_abort_also_returns_to_where_it_started():
     assert last.get("wrist_roll.pos") == pytest.approx(
         _FakeSvc.IDLE_BASELINE["wrist_roll.pos"]
     ), f"an aborted sweep did not return to its starting pose: {last}"
+
+
+def test_the_shutter_waits_for_the_arm_to_stop_moving():
+    """move_and_hold returns when it has finished SENDING, not when the servos
+    have arrived.
+
+    Device-measured: a 90 deg base_yaw turn returns the call in 0.77s and is
+    still moving at 5.88s, because base_yaw manages ~14 deg/s under the whole
+    lamp's inertia. Without waiting, the head began its looks and the shutter
+    fired mid-swing — blurred frames, aimed somewhere other than the stop they
+    are recorded against.
+    """
+    svc = _FakeSvc()
+    reads = {"n": 0}
+    real = svc.get_positions
+
+    def still_moving():
+        # Reports a different yaw for the first few polls, like an arm that has
+        # been commanded and is on its way.
+        reads["n"] += 1
+        pose = dict(real())
+        if reads["n"] < 4:
+            pose["base_yaw.pos"] = pose["base_yaw.pos"] + 30.0 / reads["n"]
+        return pose
+
+    svc.get_positions = still_moving
+    t0 = time.monotonic()
+    search._wait_until_still(svc, {"base_yaw.pos": 90.0})
+    waited = time.monotonic() - t0
+
+    assert reads["n"] >= 4, "it did not keep polling while the arm moved"
+    assert waited < search.ARRIVE_TIMEOUT_S, "it waited out the whole timeout"
+
+
+def test_waiting_gives_up_rather_than_stalling_the_sweep():
+    """A stop the arm cannot quite reach is still a fine place to shoot from;
+    waiting forever for an arrival that never comes is not."""
+    svc = _FakeSvc()
+    jitter = {"n": 0}
+
+    def never_settles():
+        jitter["n"] += 1
+        return {"base_yaw.pos": 100.0 * (jitter["n"] % 2), "wrist_roll.pos": 0.0}
+
+    svc.get_positions = never_settles
+    original = search.ARRIVE_TIMEOUT_S
+    search.ARRIVE_TIMEOUT_S = 0.4
+    try:
+        t0 = time.monotonic()
+        search._wait_until_still(svc, {"base_yaw.pos": 90.0})
+        assert time.monotonic() - t0 < 2.0, "it stalled instead of giving up"
+    finally:
+        search.ARRIVE_TIMEOUT_S = original

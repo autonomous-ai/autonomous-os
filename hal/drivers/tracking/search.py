@@ -61,6 +61,20 @@ STEP_DEG: float = 90.0
 # SERVO_SMOOTH_TIME (0.32) is the easing constant this mirrors.
 SETTLE_S: float = 0.35
 MOVE_DURATION_S: float = 0.3
+# How long to wait for the arm to actually ARRIVE before settling and shooting.
+#
+# move_and_hold returns when it has finished sending frames, not when the servos
+# have got there. Device-measured: a 90 deg base_yaw turn returns the call in
+# 0.77s and is still moving at 5.88s, because base_yaw manages about 14 deg/s
+# under the whole lamp's inertia while min_move_duration paces the interpolation
+# for the declared 120 deg/s ceiling. Without this wait the head began its looks
+# and the shutter fired while the base was still swinging — blurred frames,
+# aimed somewhere other than the stop they are recorded against.
+#
+# Gains are not the cause and were checked: base_yaw runs at 14 deg/s at P=16
+# and at P=32/I=10 alike, and every servo has Goal_Speed=0 (uncapped).
+ARRIVE_TIMEOUT_S: float = 7.0
+ARRIVE_STILL_DEG: float = 0.8
 MAX_STOPS: int = 3
 
 # Where the head looks at each yaw stop, in order: left, straight on, right —
@@ -204,6 +218,30 @@ def _seed_from_bearing(svc: Any) -> float:
         return _current_yaw(svc) if seeded is None else seeded
 
 
+def _wait_until_still(svc: Any, target: dict) -> None:
+    """Block until the commanded joints stop moving, or the timeout bites.
+
+    Waits for the joints to STOP rather than to reach their target: a stop the
+    arm cannot quite reach is still a fine place to take a picture from, whereas
+    waiting for an exact arrival that never comes would stall the whole sweep.
+    """
+    deadline = time.monotonic() + ARRIVE_TIMEOUT_S
+    last: Optional[dict] = None
+    while time.monotonic() < deadline:
+        try:
+            now_pose = svc.get_positions()
+        except Exception:
+            return
+        if last is not None and all(
+            abs(float(now_pose.get(j, 0.0)) - float(last.get(j, 0.0))) < ARRIVE_STILL_DEG
+            for j in target
+        ):
+            return
+        last = now_pose
+        time.sleep(0.1)
+    logger.info("[search] still moving after %.1fs — shooting anyway", ARRIVE_TIMEOUT_S)
+
+
 def _look_at(svc: Any, roll: float, yaw: Optional[float] = None) -> bool:
     """Point the camera at one look. False if the move could not be made.
 
@@ -228,6 +266,7 @@ def _look_at(svc: Any, roll: float, yaw: Optional[float] = None) -> bool:
             state.safety_policy, target, current, MOVE_DURATION_S
         )
         svc.move_and_hold(target, duration=duration)
+        _wait_until_still(svc, target)
         return True
     except Exception as e:
         logger.warning("[search] look to roll %+.0f failed: %s", roll, e)
