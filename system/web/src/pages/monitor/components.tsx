@@ -24,7 +24,15 @@ export function StatusDot({ ok }: { ok: boolean }) {
 // "agent" is a virtual target: os-server resolves it to the configured runtime's
 // CLI (codex / claudecode / opencode / picoclaw). The browser deliberately does
 // not learn which runtime is active just to build this URL.
-export function SoftwareUpdateButton({ target, label }: { target: "os-server" | "web" | "hal" | "agent"; label: string }) {
+export function SoftwareUpdateButton({ target, label, onTriggered }: {
+  target: "os-server" | "web" | "hal" | "agent";
+  label: string;
+  // Called the moment the POST is accepted. The card needs this because a small
+  // component (os-server, web) finishes in a few seconds — faster than the idle
+  // poll interval — so waiting for the server to report it would show no
+  // "updating" state at all for exactly the updates that look most abrupt.
+  onTriggered?: (target: string) => void;
+}) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const trigger = async () => {
@@ -34,13 +42,27 @@ export function SoftwareUpdateButton({ target, label }: { target: "os-server" | 
       const token = getApiToken();
       const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
       const r = await fetch(`${API}/system/software-update/${target}`, { method: "POST", headers });
-      if (r.ok) setMsg("OK");
-      else setMsg("Failed");
+      if (r.ok) {
+        // No "OK" here on purpose: the request only STARTS the install, and a
+        // success word next to a button that is about to be replaced by
+        // "updating…" reads as "already done" — the wrong story in the wrong
+        // order. The row's own state tells the truth from here.
+        onTriggered?.(target);
+      } else {
+        // Surface what the server said (e.g. "rate-limited, retry in 8s",
+        // "bootstrap unreachable") instead of a bare "Failed" that hides it.
+        let reason = "Failed";
+        try {
+          const j = await r.json();
+          if (typeof j?.message === "string" && j.message) reason = j.message;
+        } catch { /* keep the generic word */ }
+        setMsg(reason.length > 42 ? `${reason.slice(0, 41)}…` : reason);
+      }
     } catch {
       setMsg("Unreachable");
     } finally {
       setBusy(false);
-      setTimeout(() => setMsg(null), 3000);
+      setTimeout(() => setMsg(null), 6000);
     }
   };
   return (
