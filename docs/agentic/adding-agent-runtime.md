@@ -258,8 +258,9 @@ in its backend doc (e.g. `docs/agentic/hermes.md`), not a blanket guarantee here
   (`FetchSkillVersions`/`DownloadToTempFile`/`FolderHash`/`ExtractSkillZip`). Add a
   thin `runtimes/<name>/skill_watcher.go` parallel to `runtimes/openclaw/skill_watcher.go`
   — only the **target dir** and the **notify path** differ. Gate with
-  `skills.Supported(device.Capabilities(...))`. Notify the agent with
-  `SendSystemChatMessage`.
+  `skills.Supported(device.Capabilities(...))`. Advance a watched version only after
+  download and extraction succeed, so a transient failure retries on the next poll.
+  Notify the agent with `SendSystemChatMessage`.
 
 ---
 
