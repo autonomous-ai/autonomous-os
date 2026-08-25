@@ -99,3 +99,91 @@ def test_worker_coalesces_small_steps_until_they_accumulate(monkeypatch):
     assert len(service.robot.actions) == 1
     first = service.robot.actions[0]["base_yaw.pos"]
     assert C.SERVO_COMMAND_MIN_DELTA <= first < C.SERVO_COMMAND_MIN_DELTA * 4
+
+
+# --- pitch allocation across the three joints ---------------------------------
+#
+# The arm's travel is badly asymmetric (constants.PITCH_TRAVEL_*), so these
+# assert against direction, not against a fixed split.
+
+
+def _tilt(before: dict, after: dict) -> float:
+    """Total camera tilt the joint deltas add up to, positive = down."""
+    return sum(
+        (after[j] - before[j]) / servo_follow.PITCH_AXIS_SIGN[j]
+        for j in servo_follow.PITCH_AXIS_SIGN
+    )
+
+
+def _rest() -> dict[str, float]:
+    """A pose like the one idle actually leaves the arm in."""
+    return {"base_pitch.pos": 27.0, "elbow_pitch.pos": 24.0, "wrist_pitch.pos": -32.0}
+
+
+def test_looking_up_does_not_lean_on_the_wrist():
+    """wrist_pitch stalls at -34.8 and idle rests it near -32.
+
+    Spending an upward correction there is what made gaze announce a correction
+    every 10s while the head never moved.
+    """
+    before = _rest()
+    after = servo_follow.distribute_pitch(before, -12.0)
+
+    assert abs(after["wrist_pitch.pos"] - before["wrist_pitch.pos"]) <= 2.0
+    assert after["elbow_pitch.pos"] > before["elbow_pitch.pos"], "elbow lifts the camera"
+    assert _tilt(before, after) == pytest.approx(-12.0, abs=0.01)
+
+
+def test_looking_down_does_use_the_wrist():
+    """Downward is where the wrist has ~65 deg, and it should not go to waste.
+
+    elbow_pitch runs out first going down (it stops near -4), so a correction
+    larger than the elbow can absorb has to land somewhere — the wrist is where.
+    """
+    before = _rest()
+    after = servo_follow.distribute_pitch(before, 40.0)
+
+    assert after["wrist_pitch.pos"] > before["wrist_pitch.pos"], (
+        "a correction the elbow cannot absorb must reach the wrist"
+    )
+    assert _tilt(before, after) == pytest.approx(40.0, abs=0.01)
+
+
+def test_a_joint_at_its_stop_is_never_commanded_further_into_it():
+    """The failure this whole allocator exists to make impossible."""
+    before = dict(_rest(), **{"wrist_pitch.pos": C.PITCH_TRAVEL_MIN["wrist_pitch.pos"]})
+    after = servo_follow.distribute_pitch(before, -15.0)
+
+    assert after["wrist_pitch.pos"] >= before["wrist_pitch.pos"] - 1e-6
+
+
+def test_a_joint_parked_beyond_its_travel_is_not_dragged_further_out():
+    """Idle can leave a joint outside the measured range; do not make it worse."""
+    parked = C.PITCH_TRAVEL_MIN["wrist_pitch.pos"] - 5.0
+    before = dict(_rest(), **{"wrist_pitch.pos": parked})
+    after = servo_follow.distribute_pitch(before, -15.0)
+
+    assert after["wrist_pitch.pos"] >= parked - 1e-6
+
+
+def test_the_full_correction_is_delivered_when_there_is_room_for_it():
+    before = _rest()
+    for want in (-10.0, -3.0, 5.0, 18.0):
+        after = servo_follow.distribute_pitch(before, want)
+        assert _tilt(before, after) == pytest.approx(want, abs=0.01), want
+
+
+def test_a_correction_with_nowhere_to_go_moves_nothing():
+    """Every joint pinned at its upward stop: the caller must see 'no travel'."""
+    before = {
+        "base_pitch.pos":  C.PITCH_TRAVEL_MIN["base_pitch.pos"],
+        "elbow_pitch.pos": C.PITCH_TRAVEL_MAX["elbow_pitch.pos"],
+        "wrist_pitch.pos": C.PITCH_TRAVEL_MIN["wrist_pitch.pos"],
+    }
+    after = servo_follow.distribute_pitch(before, -15.0)
+    assert after == pytest.approx(before)
+
+
+def test_zero_asks_for_nothing():
+    before = _rest()
+    assert servo_follow.distribute_pitch(before, 0.0) == pytest.approx(before)

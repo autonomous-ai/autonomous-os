@@ -150,13 +150,47 @@ SACCADE_MAX_SPEED_DPS = 100.0
 SACCADE_OFFSET_FRAC = 0.22
 SACCADE_EXIT_FRAC = 0.12
 
-# Pitch distribution across 3 joints.
-# Empirical: only wrist_pitch is pure rotation. base+elbow primarily translate
-# camera (kinematic coupling) → object grows in frame but doesn't move toward
-# center. Use wrist alone for predictable pitch control.
+# Pitch distribution across 3 joints — the PREFERENCE, not the whole story.
+# `servo_follow.distribute_pitch` spends these weights first and then hands
+# whatever a saturated joint could not absorb to any joint that still has room,
+# so a weight of 0.0 means "not first choice", not "never".
+#
+# (The comment that used to sit here said "use wrist alone for predictable pitch
+# control", which had not matched PITCH_WEIGHT_WRIST = 0.0 for some time. The
+# device disagrees with it too — see PITCH_TRAVEL_* below.)
 PITCH_WEIGHT_BASE  = 0.10
 PITCH_WEIGHT_ELBOW = 0.90
 PITCH_WEIGHT_WRIST = 0.0
+
+# Travel each pitch joint actually has, measured on lamp-ac82 2026-08-25 by
+# commanding each joint alone and reading the position error `/servo/move`
+# reports. Nothing here is a software clamp — `clamped` came back equal to
+# `requested` every time; these are where the arm stops.
+#
+#   base_pitch    -20 .. +30   (-30 stalled at -17.4)
+#   elbow_pitch    -5 .. +60   (-15 stalled at  -5.2)
+#   wrist_pitch    -35 .. +33  (-50 stalled at -34.8, +40 reached +32.9)
+#
+# The limits matter because they are wildly asymmetric and the wide MIN/MAX
+# below hide it. Looking up drives wrist NEGATIVE, and idle rests it near -32 —
+# roughly 2 degrees short of its stop. Gaze used to spend its entire correction
+# there, so the servo reported `position error 14.6 deg` and the head never
+# moved. Allocating against real travel is what stops that being possible.
+#
+# Held a margin inside the measured stall so a correction stops just short of
+# pushing, rather than stalling the motor against the end of its travel.
+# Per-unit, and configuration-dependent (base reached -20 only once elbow was
+# high), so treat these as conservative rather than exact.
+PITCH_TRAVEL_MIN = {
+    "base_pitch.pos":  -18.0,
+    "elbow_pitch.pos":  -4.0,
+    "wrist_pitch.pos": -33.0,
+}
+PITCH_TRAVEL_MAX = {
+    "base_pitch.pos":   30.0,
+    "elbow_pitch.pos":  58.0,
+    "wrist_pitch.pos":  32.0,
+}
 
 # Elbow servo polarity. The elbow_pitch motor's positive direction was reversed
 # in hardware (2026-06-19), so a positive pitch_correction now drives the camera

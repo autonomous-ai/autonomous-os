@@ -844,15 +844,25 @@ def test_a_clipped_face_is_recorded_as_unmeasured_not_as_a_profile(monkeypatch):
 
 
 class _PitchSvc(_Svc):
-    def __init__(self, wrist=-70.0):
+    # The correction is spread over all three pitch joints, so a stand-in that
+    # only reports the wrist would have every joint start from a default 0.0 and
+    # make the assertions below meaningless.
+    def __init__(self, wrist=-70.0, base=10.0, elbow=5.0):
         super().__init__()
         self.wrist = wrist
+        self.base = base
+        self.elbow = elbow
 
     def get_positions(self):
-        return {"base_yaw.pos": 0.0, "wrist_pitch.pos": self.wrist}
+        return {
+            "base_yaw.pos": 0.0,
+            "base_pitch.pos": self.base,
+            "elbow_pitch.pos": self.elbow,
+            "wrist_pitch.pos": self.wrist,
+        }
 
     def get_joint_names(self):
-        return ["base_yaw.pos", "wrist_pitch.pos"]
+        return ["base_yaw.pos", "base_pitch.pos", "elbow_pitch.pos", "wrist_pitch.pos"]
 
 
 @pytest.fixture
@@ -874,20 +884,45 @@ def neck(monkeypatch):
 def test_a_face_above_centre_tilts_the_camera_up(neck):
     """The case that made the lamp stare at the keyboard all afternoon.
 
-    Up is the DECREASING direction on this joint — device-measured, see
-    _maybe_pitch. Asserting the joint number rather than the word "up" is the
-    whole point: the sign is the thing that was wrong.
+    Up is the INCREASING direction on elbow_pitch and the decreasing direction
+    on base_pitch — device-measured 2026-08-25 with base and wrist pinned and
+    only elbow moving: +1.6 framed the desk, +54.8 framed the ceiling.
+    Asserting the joint numbers rather than the word "up" is the whole point:
+    the sign is the thing that was wrong.
     """
     _fill_dy(-0.4)
     gaze._maybe_pitch(gaze.time.monotonic())
     assert neck.moves, "a clipped-high face should raise the camera"
-    assert neck.moves[0]["wrist_pitch.pos"] < -70.0
+    assert neck.moves[0]["elbow_pitch.pos"] > 5.0
+    assert neck.moves[0]["base_pitch.pos"] < 10.0
 
 
 def test_a_face_below_centre_tilts_the_camera_down(neck):
     _fill_dy(0.4)
     gaze._maybe_pitch(gaze.time.monotonic())
-    assert neck.moves[0]["wrist_pitch.pos"] > -70.0
+    assert neck.moves[0]["elbow_pitch.pos"] < 5.0
+    assert neck.moves[0]["base_pitch.pos"] > 10.0
+
+
+def test_the_lift_does_not_lean_on_the_joint_that_cannot_lift(neck):
+    """wrist_pitch is why this feature did nothing for an afternoon.
+
+    Looking up drives wrist NEGATIVE, and on lamp-ac82 it stalls at -34.8 while
+    idle rests it near -32 — about 2 deg of headroom. The old loop spent the
+    entire correction there: `/servo/move` accepted the target unclamped,
+    reported `position error 14.6 deg (target=-49.0, actual=-34.4)`, and the
+    head never moved. Whatever the weights become, the upward correction must
+    not depend on that joint.
+    """
+    _fill_dy(-0.9)
+    gaze._maybe_pitch(gaze.time.monotonic())
+    moved = neck.moves[0]
+    wrist_delta = abs(moved["wrist_pitch.pos"] - (-70.0))
+    lifting = abs(moved["elbow_pitch.pos"] - 5.0) + abs(moved["base_pitch.pos"] - 10.0)
+    assert lifting > wrist_delta, (
+        "the wrist cannot deliver an upward correction on this arm; the lift has "
+        "to come from base_pitch and elbow_pitch"
+    )
 
 
 def test_the_pitch_sign_is_only_valid_while_the_joint_direction_is():
@@ -924,17 +959,21 @@ def test_the_pitch_sign_is_only_valid_while_the_joint_direction_is():
     with open(path, encoding="utf-8") as f:
         cal = json.load(f)
 
-    wp = cal["wrist_pitch"]
-    assert wp["drive_mode"] == 0, (
-        f"{path}: wrist_pitch drive_mode is {wp['drive_mode']}, not 0. lerobot "
-        "negates the normalised value when this is set, so UP is no longer the "
-        "decreasing direction. Redo the A/B before trusting _maybe_pitch."
-    )
-    assert wp["range_min"] < wp["range_max"], (
-        f"{path}: wrist_pitch range is stored descending "
-        f"({wp['range_min']} -> {wp['range_max']}), which flips the sign of the "
-        "normalisation. Redo the A/B before trusting _maybe_pitch."
-    )
+    # The joints the correction is actually spread over. wrist_pitch used to be
+    # checked here and no longer is — it carries weight 0.0, so its calibration
+    # can invert without changing where the camera ends up pointing.
+    for joint in ("base_pitch", "elbow_pitch"):
+        wp = cal[joint]
+        assert wp["drive_mode"] == 0, (
+            f"{path}: {joint} drive_mode is {wp['drive_mode']}, not 0. lerobot "
+            "negates the normalised value when this is set, so UP is no longer "
+            "the direction _maybe_pitch assumes. Redo the A/B before trusting it."
+        )
+        assert wp["range_min"] < wp["range_max"], (
+            f"{path}: {joint} range is stored descending "
+            f"({wp['range_min']} -> {wp['range_max']}), which flips the sign of "
+            "the normalisation. Redo the A/B before trusting _maybe_pitch."
+        )
 
 
 def test_a_face_near_enough_to_centre_is_left_alone(neck):
@@ -951,11 +990,23 @@ def test_no_face_measured_means_no_correction(neck):
 
 
 def test_one_correction_is_bounded(neck):
-    """A wrong sign must be a small mistake the next look reverses."""
+    """A wrong sign must be a small mistake the next look reverses.
+
+    The bound is on the CAMERA rotation, not on any single joint. The three
+    pitch axes are parallel, so the total tilt is the sum of what each joint
+    contributed — which is also why the weights sum to 1.0.
+    """
     _fill_dy(-1.0)
     gaze._maybe_pitch(gaze.time.monotonic())
-    moved = neck.moves[0]["wrist_pitch.pos"] - (-70.0)
-    assert moved == pytest.approx(-config.GAZE_PITCH_MAX_STEP_DEG)
+    moved = neck.moves[0]
+    before = {"base_pitch.pos": 10.0, "elbow_pitch.pos": 5.0, "wrist_pitch.pos": -70.0}
+    # elbow is mounted reversed, so its joint delta counts against the camera.
+    tilt = (
+        (moved["base_pitch.pos"] - before["base_pitch.pos"])
+        + (moved["wrist_pitch.pos"] - before["wrist_pitch.pos"])
+        - (moved["elbow_pitch.pos"] - before["elbow_pitch.pos"])
+    )
+    assert tilt == pytest.approx(-config.GAZE_PITCH_MAX_STEP_DEG)
 
 
 def test_the_correction_stays_inside_the_mechanical_range(neck):
@@ -1101,7 +1152,7 @@ def test_repointing_also_discards_them(body):
     assert body.moves and gaze.snapshot() == []
 
 
-def test_repoint_does_not_re_anchor_a_wrist_the_pitch_loop_has_corrected(body):
+def test_repoint_does_not_re_anchor_a_vertical_aim_the_pitch_loop_has_corrected(body):
     """The slow half of the same fight.
 
     Device-observed: pitch lifted the camera to -31.5 where it could see a
@@ -1109,6 +1160,11 @@ def test_repoint_does_not_re_anchor_a_wrist_the_pitch_loop_has_corrected(body):
     remembered -46.1, from where the face is clipped again. The bearing memory
     is worth believing about which way to face — that is what the move uses —
     but not about how high to look.
+
+    That rule used to cover wrist_pitch alone. Every joint the pitch loop
+    steers is a vertical one, so a remembered base_pitch or elbow_pitch undoes
+    the correction just as surely; the pitch loop's own anchor holds the
+    posture instead.
     """
     anchored = {}
     body.set_idle_anchor = lambda j: anchored.update(j or {})
@@ -1116,8 +1172,9 @@ def test_repoint_does_not_re_anchor_a_wrist_the_pitch_loop_has_corrected(body):
     gaze._last_pitch_t = gaze.time.monotonic() - config.GAZE_REPOINT_AFTER_S - 1.0
     gaze._maybe_repoint(gaze.time.monotonic())
     assert body.moves                                  # it still turned
-    assert "wrist_pitch.pos" not in anchored           # but left the aim alone
-    assert anchored.get("base_pitch.pos") == pytest.approx(0.0)
+    assert not (set(anchored) & set(gaze.PITCH_JOINTS)), (
+        f"repoint re-anchored a vertical joint the pitch loop owns: {sorted(anchored)}"
+    )
 
 
 def test_with_no_correction_yet_the_remembered_pose_is_anchored_whole(body, monkeypatch):
@@ -1228,7 +1285,7 @@ def test_a_real_offset_survives_the_same_sweep(neck):
                        now=t0 + span * i / (n - 1))
     gaze._maybe_pitch(gaze.time.monotonic())
     assert neck.moves, "a real offset must still be corrected through the noise"
-    assert neck.moves[0]["wrist_pitch.pos"] < -70.0, "up is the decreasing direction"
+    assert neck.moves[0]["elbow_pitch.pos"] > 5.0, "up is the increasing direction on elbow"
 
 
 def test_a_correction_clears_the_window_it_was_computed_from(neck):

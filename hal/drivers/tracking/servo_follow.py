@@ -21,6 +21,88 @@ logger = logging.getLogger(__name__)
 JOINTS = ("base_yaw.pos", "base_pitch.pos", "elbow_pitch.pos", "wrist_pitch.pos")
 
 
+# Joint delta that produces one degree of DOWNWARD camera tilt. The three pitch
+# axes are parallel, so each contributes about 1:1 and the contributions simply
+# add — which is what lets a correction be split across them at all. The elbow
+# motor's positive direction is reversed in hardware, hence its -1.
+PITCH_AXIS_SIGN = {
+    "base_pitch.pos":  1.0,
+    "elbow_pitch.pos": C.ELBOW_PITCH_SIGN,
+    "wrist_pitch.pos": 1.0,
+}
+PITCH_AXIS_WEIGHT = {
+    "base_pitch.pos":  C.PITCH_WEIGHT_BASE,
+    "elbow_pitch.pos": C.PITCH_WEIGHT_ELBOW,
+    "wrist_pitch.pos": C.PITCH_WEIGHT_WRIST,
+}
+# Absolute stops, as a backstop for a joint already parked outside its measured
+# travel — the allocator never drives one further out than it found it.
+PITCH_AXIS_HARD = {
+    "base_pitch.pos":  (C.BASE_PITCH_MIN, C.BASE_PITCH_MAX),
+    "elbow_pitch.pos": (C.ELBOW_PITCH_MIN, C.ELBOW_PITCH_MAX),
+    "wrist_pitch.pos": (C.WRIST_PITCH_MIN, C.WRIST_PITCH_MAX),
+}
+
+
+def distribute_pitch(current: Dict[str, float], pitch_deg: float) -> Dict[str, float]:
+    """Spread one camera-pitch correction across the three pitch joints.
+
+    Allocated against the travel each joint actually HAS in the direction being
+    asked for, not by fixed weights alone. The weights still choose who goes
+    first; a joint with no room contributes nothing and its share passes to a
+    joint that can move.
+
+    That distinction is the whole point, because the arm is badly asymmetric
+    (see PITCH_TRAVEL_* in constants). Looking up, wrist_pitch has about 2 deg
+    before it stalls; looking down it has about 65. A fixed weight has to pick
+    one number for both, so it either wastes the wrist entirely or commands it
+    into a stop. Gaze did the latter: it spent every correction on the wrist,
+    `/servo/move` accepted the target unclamped, the servo answered
+    `position error 14.6 deg (target=-49.0, actual=-34.4)`, and the head never
+    lifted while the log cheerfully announced a correction every 10 seconds.
+
+    Device-measured the same day with base and wrist pinned and only elbow
+    moving: elbow +1.6 framed the desk, +54.8 framed the ceiling. Elbow is the
+    strongest and freest joint upward, which is what its 0.90 weight encodes.
+
+    Shared with `gaze._maybe_pitch` on purpose — two copies of the joint model
+    is how the wrist bug survived as long as it did.
+    """
+    target = {j: float(current.get(j, 0.0)) for j in PITCH_AXIS_SIGN}
+    remaining = float(pitch_deg)
+    if abs(remaining) < 1e-9:
+        return target
+    down = remaining > 0.0
+
+    def room(joint: str) -> float:
+        """Degrees of tilt this joint can still give in the requested direction."""
+        lo, hi = PITCH_AXIS_HARD[joint]
+        lo = max(lo, C.PITCH_TRAVEL_MIN.get(joint, lo))
+        hi = min(hi, C.PITCH_TRAVEL_MAX.get(joint, hi))
+        rising = (PITCH_AXIS_SIGN[joint] > 0.0) == down
+        return max(0.0, (hi - target[joint]) if rising else (target[joint] - lo))
+
+    budget = abs(remaining)
+    # Pass 1 honours the weights. Pass 2 hands whatever a saturated joint could
+    # not take to anyone with room left — which is how wrist_pitch earns its
+    # keep on downward corrections despite a first-choice weight of 0.0.
+    for weights in (PITCH_AXIS_WEIGHT, {j: 1.0 for j in PITCH_AXIS_SIGN}):
+        if budget <= 1e-9:
+            break
+        pool = [j for j in PITCH_AXIS_SIGN if weights[j] > 0.0 and room(j) > 1e-9]
+        total = sum(weights[j] for j in pool)
+        if not pool or total <= 0.0:
+            continue
+        share_of = budget
+        for joint in pool:
+            if budget <= 1e-9:
+                break
+            give = min(share_of * weights[joint] / total, room(joint), budget)
+            target[joint] += PITCH_AXIS_SIGN[joint] * (give if down else -give)
+            budget -= give
+    return target
+
+
 class ServoFollower:
     """Owns the servo goal, the follow worker thread, and the arm's current
     tracked position for the 4 tracking joints."""
@@ -136,12 +218,8 @@ class ServoFollower:
         """
         with self._lock:
             cur = self._positions_locked()
-        target = {
-            "base_yaw.pos":    max(C.YAW_MIN,         min(C.YAW_MAX,         cur["base_yaw.pos"]    + yaw_step)),
-            "base_pitch.pos":  max(C.BASE_PITCH_MIN,  min(C.BASE_PITCH_MAX,  cur["base_pitch.pos"]  + pitch_correction * C.PITCH_WEIGHT_BASE)),
-            "elbow_pitch.pos": max(C.ELBOW_PITCH_MIN, min(C.ELBOW_PITCH_MAX, cur["elbow_pitch.pos"] + C.ELBOW_PITCH_SIGN * pitch_correction * C.PITCH_WEIGHT_ELBOW)),
-            "wrist_pitch.pos": max(C.WRIST_PITCH_MIN, min(C.WRIST_PITCH_MAX, cur["wrist_pitch.pos"] + pitch_correction * C.PITCH_WEIGHT_WRIST)),
-        }
+        target = dict(distribute_pitch(cur, pitch_correction))
+        target["base_yaw.pos"] = max(C.YAW_MIN, min(C.YAW_MAX, cur["base_yaw.pos"] + yaw_step))
         # Warn loudly when an axis has saturated against its mechanical limit and
         # the PID is still demanding more travel in that direction — camera
         # physically can't follow further; only re-centering the device helps.

@@ -462,7 +462,26 @@ def _headroom_from_person(frame: Any, detector: Any) -> Optional[float]:
     return -0.5
 
 
-_last_anchor: Optional[float] = None
+# Every joint the pitch loop steers. All three are vertical, so all three are
+# what a remembered (and therefore stale) posture must not be allowed to undo.
+PITCH_JOINTS = ("base_pitch.pos", "elbow_pitch.pos", "wrist_pitch.pos")
+
+_last_anchor: Optional[Dict[str, float]] = None
+
+
+def _anchor_is_new(anchor: Dict[str, float]) -> bool:
+    """True when this anchor differs enough from the last one to be worth sending.
+
+    Keyed on the WHOLE posture, not on wrist_pitch alone. Once the pitch
+    correction was spread across three joints the wrist stopped moving at all
+    (it carries weight 0.0), so a wrist-only test reported "unchanged" for every
+    correction and suppressed the anchor every time — leaving idle free to drag
+    the head straight back down after each lift, which is the exact symptom this
+    anchor exists to prevent.
+    """
+    if _last_anchor is None or set(anchor) != set(_last_anchor):
+        return True
+    return any(abs(anchor[j] - _last_anchor[j]) >= 1.0 for j in anchor)
 
 
 def _anchor_idle_from_pose(svc: Any, pose: Any) -> None:
@@ -487,25 +506,23 @@ def _anchor_idle_from_pose(svc: Any, pose: Any) -> None:
     # about how high to look, a correction made seconds ago from a face on
     # screen beats a number recorded minutes ago. So once pitch has spoken,
     # leave the wrist where it put it and anchor the rest.
+    #
+    # Every joint the pitch loop steers is a vertical one, so once it has spoken
+    # the whole remembered vertical posture is stale, not just the wrist.
     if _last_pitch_t > 0.0:
-        anchor.pop("wrist_pitch.pos", None)
-    if not anchor:
-        return
-    pitch = anchor.get("wrist_pitch.pos")
-    if _last_anchor is not None and pitch is not None and abs(pitch - _last_anchor) < 1.0:
+        for joint in PITCH_JOINTS:
+            anchor.pop(joint, None)
+    if not anchor or not _anchor_is_new(anchor):
         return
     setter(anchor)
-    # Only when this anchor actually carried a wrist angle — otherwise the
-    # pitch loop's memory of where it last put the wrist still stands.
-    if pitch is not None:
-        _last_anchor = pitch
+    _last_anchor = dict(anchor)
     logger.info(
         "[gaze] idle now rests at %s",
         " ".join(f"{k.split('.')[0]}={v:+.1f}" for k, v in sorted(anchor.items())),
     )
 
 
-def _anchor_idle_here(svc: Any, pitch: Optional[float] = None) -> None:
+def _anchor_idle_here(svc: Any, pitch: Optional[Dict[str, float]] = None) -> None:
     """Tell the idle loop to breathe around the pose we can see the user from."""
     global _last_anchor
     if not config.GAZE_IDLE_ANCHOR:
@@ -521,25 +538,26 @@ def _anchor_idle_here(svc: Any, pitch: Optional[float] = None) -> None:
     # and still missed), while base_pitch -30 with wrist_pitch -78 framed them
     # perfectly. Anchoring one joint therefore preserves a posture that was
     # never the reason the framing worked.
+    #
+    # elbow_pitch joined that list once the correction started using it: it is
+    # the joint carrying most of the lift (weight 0.90), so an anchor without it
+    # holds the two minor joints steady and lets idle walk the lift itself back.
     anchor: Dict[str, float] = {}
     try:
         pose = svc.get_positions()
-        for joint in ("base_pitch.pos", "wrist_pitch.pos"):
+        for joint in PITCH_JOINTS:
             if joint in pose:
                 anchor[joint] = float(pose[joint])
     except (TypeError, ValueError, AttributeError):
         return
-    if pitch is not None:
-        anchor["wrist_pitch.pos"] = float(pitch)
-    if not anchor:
-        return
-    pitch = anchor.get("wrist_pitch.pos", 0.0)
-    # Only when it has actually moved: re-sending the same anchor every frame
-    # would log noise and churn the dict for nothing.
-    if _last_anchor is not None and abs(pitch - _last_anchor) < 1.0:
+    # The commanded target, not the pose read back: the read happens while the
+    # move is still settling, so the pose lags where the correction just put it.
+    for joint, value in (pitch or {}).items():
+        anchor[joint] = float(value)
+    if not anchor or not _anchor_is_new(anchor):
         return
     setter(anchor)
-    _last_anchor = pitch
+    _last_anchor = dict(anchor)
     logger.info(
         "[gaze] idle now breathes around %s",
         " ".join(f"{k.split('.')[0]}={v:+.1f}" for k, v in sorted(anchor.items())),
@@ -981,7 +999,7 @@ def _maybe_pitch(now: float) -> None:
 
     import hal.app_state as state
 
-    from hal.drivers.tracking import constants as C
+    from hal.drivers.tracking import servo_follow
 
     svc = getattr(state, "animation_service", None)
     if svc is None or getattr(svc, "_tracking_active", False):
@@ -993,7 +1011,6 @@ def _maybe_pitch(now: float) -> None:
 
     try:
         current = svc.get_positions()
-        cur = float(current.get("wrist_pitch.pos", 0.0))
     except Exception as e:
         logger.debug("[gaze] pitch skipped, no pose: %s", e)
         return
@@ -1013,14 +1030,30 @@ def _maybe_pitch(now: float) -> None:
     # device-observed -72.6 -> -54.7 -> -42.9 -> -28.2 while each look still
     # reported the face above centre, which is what a wrong sign looks like
     # from the outside.
+    # A negative step therefore means "tilt the camera UP", and that is the
+    # convention `servo_follow.distribute_pitch` expects, so the two compose
+    # directly.
     step = dy * config.GAZE_PITCH_DEG_PER_FRAME
     step = max(-config.GAZE_PITCH_MAX_STEP_DEG,
                min(config.GAZE_PITCH_MAX_STEP_DEG, step))
-    target = max(C.WRIST_PITCH_MIN, min(C.WRIST_PITCH_MAX, cur + step))
-    if abs(target - cur) < 0.5:
+    # Spread the correction over all three pitch joints instead of spending it
+    # all on the wrist. Looking up drives wrist NEGATIVE, and on this arm the
+    # wrist stalls at -34.8 while idle already rests it near -32 — so every
+    # correction used to be commanded into a hard stop. The servo accepted the
+    # target unclamped, reported `position error 14.6 deg`, and the head never
+    # moved. base_pitch and elbow_pitch are where the upward travel actually is.
+    target = servo_follow.distribute_pitch(current, step)
+    moved = max(
+        (abs(target[j] - float(current.get(j, 0.0))) for j in target),
+        default=0.0,
+    )
+    if moved < 0.5:
         _pitch_quiet(
             "already at the limit of travel", now,
-            f"wrist_pitch {cur:+.1f}, range {C.WRIST_PITCH_MIN:.0f}..{C.WRIST_PITCH_MAX:.0f}",
+            " ".join(
+                f"{j.split('.')[0]} {float(current.get(j, 0.0)):+.1f}->{target[j]:+.1f}"
+                for j in sorted(target)
+            ),
         )
         return
 
@@ -1028,8 +1061,7 @@ def _maybe_pitch(now: float) -> None:
         from hal.drivers.tracking import aim
 
         duration = aim.min_move_duration(
-            state.safety_policy, {"wrist_pitch.pos": target}, current,
-            aim.MOVE_DURATION_S,
+            state.safety_policy, target, current, aim.MOVE_DURATION_S,
         )
         # Own the body for the move. Without this the correction competes with
         # whatever else is writing the arm, and something always is: idle plays
@@ -1042,7 +1074,7 @@ def _maybe_pitch(now: float) -> None:
         # arm, so this only ever claims a free body; ownership is restored, not
         # cleared, so a tracking session that began meanwhile is not released.
         with aim.servo_ownership():
-            svc.move_and_hold({"wrist_pitch.pos": target}, duration=duration)
+            svc.move_and_hold(target, duration=duration)
         # Anchor on EVERY correction, including the guessed ones. Leaving the
         # anchor behind during a search means idle keeps pulling back to where
         # the search started and erases it step by step — device-observed the
@@ -1055,10 +1087,15 @@ def _maybe_pitch(now: float) -> None:
         _blind_pitch_steps = 0 if from_face else _blind_pitch_steps + 1
         logger.info(
             "[gaze] %s %.0f%% %s centre (median of %d over %.1fs) — "
-            "wrist_pitch %+.1f -> %+.1f%s",
+            "tilt %+.1f deg via %s%s",
             "face" if from_face else "head (from torso)",
             abs(dy) * 100.0, "above" if dy < 0 else "below", n_dy, span_dy,
-            cur, target,
+            step,
+            ", ".join(
+                f"{j.split('.')[0]} {float(current.get(j, 0.0)):+.1f}->{target[j]:+.1f}"
+                for j in sorted(target)
+                if abs(target[j] - float(current.get(j, 0.0))) >= 0.05
+            ) or "nothing",
             "" if from_face
             else f" [blind {_blind_pitch_steps}/{config.GAZE_PITCH_MAX_BLIND_STEPS}]",
         )
@@ -1068,8 +1105,12 @@ def _maybe_pitch(now: float) -> None:
         # correct again from offsets measured at the pose it has just left.
         _save_snapshot(
             f"{'face' if from_face else 'torso'} dy={dy * 100:+.0f}% "
-            f"(median of {n_dy} over {span_dy:.1f}s) "
-            f"wrist_pitch {cur:+.1f} -> {target:+.1f}"
+            f"(median of {n_dy} over {span_dy:.1f}s) tilt {step:+.1f} deg via "
+            + " ".join(
+                f"{j.split('.')[0]}{float(current.get(j, 0.0)):+.1f}->{target[j]:+.1f}"
+                for j in sorted(target)
+                if abs(target[j] - float(current.get(j, 0.0))) >= 0.05
+            )
         )
     except Exception as e:
         logger.debug("[gaze] pitch move skipped: %s", e)
