@@ -510,7 +510,21 @@ vòng poll (5 phút) máy đó sẽ nói "thiết bị đang cập nhật", th�
 apply rồi kẹt LED đỏ (nhánh lỗi không gọi `restoreLED`). Có nó thì máy cũ đơn
 giản là không nhận update CLI — kết cục duy nhất chúng có thể có — và im lặng.
 Khớp theo branch guard chứ không theo key trần: key còn xuất hiện trong comment
-và trong usage string của bản updater không hề implement nó. OpenClaw giữ nguyên kiểm
+và trong usage string của bản updater không hề implement nó.
+
+**Chữa máy đang dùng updater cũ.** `make upload-setup` còn publish bản raw tại
+`{CDN}/software-update`, nên một lệnh SSH là đủ đưa máy ngoài thực địa lên bản
+hiện tại:
+
+```bash
+sudo curl -fsSL https://cdn.autonomous.ai/os/software-update -o /tmp/su \
+  && sudo bash -n /tmp/su \
+  && sudo install -m 0755 /tmp/su /usr/local/bin/software-update
+```
+
+`bash -n` trước `install` chính là điểm mấu chốt: tải dở dang không được phép đè
+lên một updater đang chạy tốt. Sau đó máy sẽ nhận update CLI ở vòng poll kế
+tiếp — không cần restart, bootstrap đọc lại file mỗi vòng. OpenClaw giữ nguyên kiểm
 tra `inPath`: nó cài bằng npm theo từng máy chứ không bake sẵn, và provisioning
 cũ có thể chưa set `agent_runtime`.
 

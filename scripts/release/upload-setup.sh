@@ -50,3 +50,21 @@ echo "========== Upload setup.sh to Google Cloud Storage (no-cache) =========="
 echo "  (software-update inlined from $SWUPDATE_FILE)"
 gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" cp "$UPLOAD_FILE" "gs://${GCS_BUCKET}/${GCS_PATH}"
 echo "Done: gs://${GCS_BUCKET}/${GCS_PATH}"
+
+# Also publish the updater as a standalone file. `software-update` otherwise only
+# reaches a device at provisioning time (imager, or setup.sh above), so a device
+# already in the field can never get a newer one — and an old updater silently
+# skips every component it does not know (bootstrap's updaterSupports gate).
+# This gives an operator a one-liner to heal such a device:
+#
+#   sudo curl -fsSL https://cdn.autonomous.ai/os/software-update -o /tmp/su \
+#     && sudo bash -n /tmp/su \
+#     && sudo install -m 0755 /tmp/su /usr/local/bin/software-update
+#
+# Published raw (NOT the setup.sh-inlined form) so the fetch needs no unwrapping.
+SWUPDATE_GCS_PATH="${SWUPDATE_GCS_PATH:-${BUCKET_PREFIX}/software-update}"
+echo "========== Upload software-update to Google Cloud Storage (no-cache) =========="
+gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" \
+       -h "Content-Type:text/x-shellscript" \
+       cp "$SWUPDATE_FILE" "gs://${GCS_BUCKET}/${SWUPDATE_GCS_PATH}"
+echo "Done: gs://${GCS_BUCKET}/${SWUPDATE_GCS_PATH}"

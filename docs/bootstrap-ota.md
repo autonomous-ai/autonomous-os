@@ -522,7 +522,21 @@ updating", breathe orange, fail the apply and latch the LED red (the error path
 does not call `restoreLED`). With it, those devices simply never receive
 agent-CLI updates — the only outcome available to them anyway — silently. The
 match is the branch guard, not the bare key: the key also appears in comments and
-in the usage strings of an updater that does not implement it. OpenClaw keeps its `inPath` check: it is
+in the usage strings of an updater that does not implement it.
+
+**Healing a device that has an old updater.** `make upload-setup` also publishes
+the updater raw at `{CDN}/software-update`, so one SSH command brings a field
+device up to the current one:
+
+```bash
+sudo curl -fsSL https://cdn.autonomous.ai/os/software-update -o /tmp/su \
+  && sudo bash -n /tmp/su \
+  && sudo install -m 0755 /tmp/su /usr/local/bin/software-update
+```
+
+`bash -n` before `install` is the point: a truncated download must not replace a
+working updater. After this the device picks up agent-CLI updates on its next
+poll — no restart needed, bootstrap re-reads the file every cycle. OpenClaw keeps its `inPath` check: it is
 npm-installed per device rather than baked, and older provisioning may leave
 `agent_runtime` unset.
 
