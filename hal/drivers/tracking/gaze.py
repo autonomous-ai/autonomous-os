@@ -1156,8 +1156,10 @@ def _maybe_pitch(now: float) -> None:
     try:
         from hal.drivers.tracking import aim
 
+        # min_move_duration only ever STRETCHES a move to respect the speed
+        # ceiling, so passing the gentler figure is a floor, not a cap.
         duration = aim.min_move_duration(
-            state.safety_policy, target, current, aim.MOVE_DURATION_S,
+            state.safety_policy, target, current, config.GAZE_PITCH_MOVE_S,
         )
         # Own the body for the move. Without this the correction competes with
         # whatever else is writing the arm, and something always is: idle plays

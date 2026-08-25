@@ -1584,6 +1584,20 @@ GAZE_PITCH_MAX_BLIND_STEPS: int = int(
 GAZE_PITCH_LAND_TOL_DEG: float = float(
     os.environ.get("HAL_GAZE_PITCH_LAND_TOL_DEG", "2.0")
 )
+# How long a pitch correction takes, in seconds.
+#
+# Separate from aim.MOVE_DURATION_S (0.25) on purpose. That constant is shared
+# with look.aim, which runs up to six iterations per call and wants each one
+# brisk; stretching it there would turn a ~3.5s "look at me" into ~8s. Gaze
+# makes ONE unrequested move every ten seconds or so, and there is nothing
+# waiting on it, so it can afford to be gentle.
+#
+# 0.25s put a full 15 deg correction at 60 deg/s — inside the SAFETY.md ceiling
+# of 120, but a visible snap on a desk lamp and needlessly hard on a joint that
+# spends the move fighting gravity. At 1.0s the same correction runs at 15 deg/s.
+GAZE_PITCH_MOVE_S: float = float(
+    os.environ.get("HAL_GAZE_PITCH_MOVE_S", "1.0")
+)
 # Let the arm arrive before reading it back — a read taken mid-glide reports a
 # short move that is merely still moving.
 GAZE_PITCH_SETTLE_S: float = float(

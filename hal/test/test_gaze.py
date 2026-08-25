@@ -1829,3 +1829,28 @@ def test_a_move_still_in_flight_is_not_called_a_failure(neck, monkeypatch):
     assert gaze._pitch_stalls == {}, (
         "a joint that arrived late must not be benched as if it had stalled"
     )
+
+
+def test_a_correction_moves_gently_and_does_not_slow_look_aim(neck, monkeypatch):
+    """Gaze gets its own move duration; look.aim keeps the brisk shared one.
+
+    A 15 deg correction in 0.25s is 60 deg/s — inside the SAFETY.md ceiling of
+    120, but a visible snap and hard on a joint fighting gravity for the whole
+    move. Gaze makes one unrequested move every ~10s with nothing waiting on it,
+    so it can be gentle; look.aim runs up to six iterations per call and cannot.
+    """
+    from hal.drivers.tracking import aim
+
+    seen = {}
+    real = neck.move_and_hold
+    neck.move_and_hold = lambda t, duration=None: (
+        seen.setdefault("duration", duration), real(t, duration=duration))[1]
+
+    monkeypatch.setattr(config, "GAZE_PITCH_MOVE_S", 1.0)
+    _fill_dy(-0.4)
+    gaze._maybe_pitch(gaze.time.monotonic())
+
+    assert seen["duration"] == pytest.approx(1.0)
+    assert aim.MOVE_DURATION_S == pytest.approx(0.25), (
+        "look.aim's shared duration must not have been stretched with it"
+    )
