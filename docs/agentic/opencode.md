@@ -172,6 +172,9 @@ re-migrated from openclaw on the next `EnsureOnboarding`.
 `EnsureOnboarding` also refreshes every supported skill from the CDN on boot or
 config reconciliation, self-healing a local skill that was stale before the watcher
 started. It sends the skill-change notification after a possible gateway restart.
+The watcher logs each successful metadata poll as `skill watcher: checked`; a ZIP
+download or extraction failure leaves that skill's version pending for retry on the
+next poll.
 
 ## 2. Transport & sending a turn
 

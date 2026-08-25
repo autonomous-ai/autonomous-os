@@ -45,19 +45,21 @@ func (s *OpenCodeService) StartSkillWatcher(ctx context.Context) {
 				slog.Info("skill watcher: fetch failed", "component", "skill-watcher", "error", err)
 				continue
 			}
+			slog.Info("skill watcher: checked", "component", "skill-watcher", "skills", len(remote))
 
 			supported := map[string]bool{}
 			for _, n := range s.supportedSkills() {
 				supported[n] = true
 			}
 			var toUpdate []string
+			pendingVersions := map[string]string{}
 			for name, ver := range remote {
 				if !supported[name] {
 					continue
 				}
 				if ver != "" && ver != lastVersions[name] {
 					toUpdate = append(toUpdate, name)
-					lastVersions[name] = ver
+					pendingVersions[name] = ver
 				}
 			}
 			if len(toUpdate) == 0 {
@@ -65,8 +67,11 @@ func (s *OpenCodeService) StartSkillWatcher(ctx context.Context) {
 			}
 
 			slog.Info("skill versions changed", "component", "skill-watcher", "skills", toUpdate)
-			changed := s.downloadSkillsByName(toUpdate)
-			s.notifySkillChanges(changed)
+			result := s.downloadSkillsByNameResult(toUpdate)
+			for _, name := range result.applied {
+				lastVersions[name] = pendingVersions[name]
+			}
+			s.notifySkillChanges(result.changed)
 		}
 	}
 }
@@ -107,13 +112,25 @@ func (s *OpenCodeService) skillsBaseURL() string {
 // atomically into opencodeSkillsDir/<name> (~/.config/opencode/skills), and returns the names that actually
 // changed on disk (version pre-filter + content hash). Mirrors openclaw.
 func (s *OpenCodeService) downloadSkillsByName(names []string) []string {
+	return s.downloadSkillsByNameResult(names).changed
+}
+
+type skillDownloadResult struct {
+	changed []string
+	applied []string
+}
+
+// downloadSkillsByNameResult reports successfully applied skills separately from
+// skills whose content changed. A watcher must only advance a skill's OTA version
+// after a successful download and extraction, otherwise the next poll retries it.
+func (s *OpenCodeService) downloadSkillsByNameResult(names []string) skillDownloadResult {
 	base := s.skillsBaseURL()
 	if base == "" {
 		slog.Info("skill download skipped: no ota_metadata_url configured", "component", "skill-watcher")
-		return nil
+		return skillDownloadResult{}
 	}
 	skillsDir := opencodeSkillsDir
-	var changed []string
+	result := skillDownloadResult{}
 	for _, name := range names {
 		url := fmt.Sprintf("%s/%s.zip", base, name)
 		tmpZip, err := skills.DownloadToTempFile(url, "skill-*.zip")
@@ -131,6 +148,7 @@ func (s *OpenCodeService) downloadSkillsByName(names []string) []string {
 			continue
 		}
 		os.Remove(tmpZip)
+		result.applied = append(result.applied, name)
 
 		newHash, _ := skills.FolderHash(targetDir)
 		if oldHash != "" && oldHash == newHash {
@@ -138,9 +156,9 @@ func (s *OpenCodeService) downloadSkillsByName(names []string) []string {
 				"component", "skill-watcher", "skill", name)
 			continue
 		}
-		changed = append(changed, name)
+		result.changed = append(result.changed, name)
 	}
-	return changed
+	return result
 }
 
 // notifySkillChanges tells the agent to re-read the changed skills. Mirrors openclaw.

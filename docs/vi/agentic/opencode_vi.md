@@ -173,6 +173,8 @@ nên bộ skills được migrate lại từ openclaw ở lần `EnsureOnboardin
 `EnsureOnboarding` cũng tải lại mọi skill được hỗ trợ từ CDN khi boot hoặc reconcile
 config, tự phục hồi skill local đã cũ trước khi watcher chạy. Nó gửi thông báo skill
 đổi sau khi gateway có thể đã restart.
+Watcher log mỗi lần poll metadata thành công là `skill watcher: checked`; nếu tải ZIP
+hoặc extract lỗi, version của skill đó vẫn pending để thử lại ở poll kế tiếp.
 
 ## 2. Transport & gửi một turn
 
