@@ -40,6 +40,17 @@ func otaMetadataURLFromBootstrap() string {
 
 var configPath = "config/config.json"
 
+// Dir returns the directory config.json lives in (/root/config in production —
+// os-server runs with WorkingDirectory=/root). Exported so sibling on-disk
+// stores that must NEVER live inside config.json itself (e.g. system/schedule's
+// schedules.json) can still anchor next to it: config_watch.go watches
+// config.json specifically and reloads a good deal of device state on every
+// change to it, which a frequent, unrelated write (like a schedule run
+// timestamp) must not trigger.
+func Dir() string {
+	return filepath.Dir(configPath)
+}
+
 // OSVersion is injected at build time via ldflags.
 // Example:
 //

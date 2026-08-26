@@ -538,6 +538,16 @@ const (
 	// allow-list the HTTP endpoint enforces, so `path` being client-supplied is
 	// safe the same way it is safe there.
 	KindChatFileGet = "chat.file.get"
+
+	// KindScheduleSync replaces the device's entire Scheduled task list. Full-state
+	// by design: the backend's list is authoritative, so reconnect, OTA-gate-opening
+	// and drift repair are all the same message. Acks with the computed next_run_at
+	// per schedule so the backend can render "Next run in 16 hours".
+	KindScheduleSync = "schedule.sync"
+
+	// KindScheduleRun runs ONE stored schedule immediately (the "Run now" button).
+	// Does not change the schedule's cadence or its next_run_at.
+	KindScheduleRun = "schedule.run"
 )
 
 // Connector (MCP) data-kind prefixes. The connector code is the suffix, e.g.

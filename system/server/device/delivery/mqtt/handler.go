@@ -14,6 +14,7 @@ import (
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/mqtt"
 	"go.autonomous.ai/os/system/network"
+	"go.autonomous.ai/os/system/schedule"
 	"go.autonomous.ai/os/system/server/config"
 )
 
@@ -50,6 +51,16 @@ type DeviceMQTTHandler struct {
 	// Nil only in tests that build the handler directly; handleChatSend nil-checks
 	// so a missing stream degrades to "turn runs, backend sees only the ack".
 	chatStream *ChatStream
+	// scheduleStore persists the "Scheduled" feature's task list to
+	// schedules.json — a SIBLING of config.json (config.Dir()), never inside it
+	// (see schedule.Store's doc comment). Shared between handleScheduleSync /
+	// handleScheduleRun and scheduleRunner below.
+	scheduleStore *schedule.Store
+	// scheduleRunner is the once-a-minute ticker that fires due schedules
+	// through agentGateway.SendSystemChatMessage. Built once at startup;
+	// started by StartScheduleRunnerLoop from config_watch.go alongside the
+	// other background loops (OAuth/connector refresh).
+	scheduleRunner *schedule.Runner
 }
 
 // mcpConnectorSpec lists the remote-MCP connectors that the generic writer
@@ -158,7 +169,11 @@ func (h *DeviceMQTTHandler) refreshableConnectorWriters() []ConnectorWriter {
 // ProvideDeviceMQTTHandler creates DeviceMQTTHandler with all command handlers.
 func ProvideDeviceMQTTHandler(cfg *config.Config, mqttFactory *mqtt.Factory, ds *device.Service, ns *network.Service, gw domain.AgentGateway, chatStream *ChatStream) DeviceMQTTHandler {
 	configsDir := filepath.Join(cfg.OpenclawConfigDir, "workspace", "configs")
-	return DeviceMQTTHandler{
+	// schedules.json is a SIBLING of config.json, never inside it — see
+	// schedule.Store's doc comment and config.Dir().
+	scheduleStore := schedule.NewStore(filepath.Join(config.Dir(), "schedules.json"))
+
+	h := DeviceMQTTHandler{
 		config:         cfg,
 		mqttFactory:    mqttFactory,
 		deviceService:  ds,
@@ -170,7 +185,16 @@ func ProvideDeviceMQTTHandler(cfg *config.Config, mqttFactory *mqtt.Factory, ds 
 		specialConnectorWriters: newSpecialConnectorWriters(cfg, gw),
 		oauthAlertStatus:        map[string]string{},
 		chatStream:              chatStream,
+		scheduleStore:           scheduleStore,
 	}
+	// h.publishScheduleRunReport is bound to THIS local h, not to whatever copy
+	// the caller eventually stores (wire_gen.go copies the return value into
+	// Server.deviceMQTTHandler) — that is safe here because publishDataResult
+	// only ever reads h.config/h.mqttFactory, and both are pointers shared
+	// identically by every copy of this struct. Do not add any other
+	// mutable-by-value state to this closure without re-checking that holds.
+	h.scheduleRunner = schedule.NewRunner(scheduleStore, gw, cfg.DeviceID, h.publishScheduleRunReport)
+	return h
 }
 
 func (h *DeviceMQTTHandler) publish(data interface{}) error {
@@ -289,6 +313,10 @@ func (h *DeviceMQTTHandler) dispatchData(env domain.MQTTDataCommand) error {
 		return h.handleChatSend(env)
 	case domain.KindChatFileGet:
 		return h.handleChatFileGet(env)
+	case domain.KindScheduleSync:
+		return h.handleScheduleSync(env)
+	case domain.KindScheduleRun:
+		return h.handleScheduleRun(env)
 	default:
 		slog.Warn("unknown data kind", "component", "mqtt", "kind", env.Kind)
 		return h.publishDataResult(env.Kind, "failure", "unknown kind: "+env.Kind, nil)
