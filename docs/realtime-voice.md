@@ -778,9 +778,15 @@ turn ("hello") right after a restart would leak to the main agent.
    still no output, HAL calls `POST /api/sensing/filler` and os-server speaks
    one opening filler from its cache — os-server owns the phrase pools, the
    language, and the WAV cache, so the realtime wait and the main-agent wait
-   sound alike. A normal chit-chat reply (~1 s) never reaches the timer; a turn
-   the model grounds with Google Search, which emits no token until the search
-   returns, does. **It is not armed for a short transcript in the noise-guard
+   sound alike. Whether this fires on every turn or only on slow ones is a
+   property of the model, and the default assumes a fast one: a chit-chat reply
+   arriving in ~1 s never reaches the timer, while a turn grounded with Google
+   Search does. Measure before trusting that on a given body — on `lamp-0c89`
+   (26/08/2026, `gemini-3.1-flash-live-preview` behind the campaign-api proxy)
+   no turn reached its first sentence in under 3.0 s (median 4.0 s, n=31), so
+   the filler is the only thing the user hears early and the lamp lowers the
+   delay to 0.5 s in its device `.env`. Set it from measured
+   time-to-first-sentence, not from the default. **It is not armed for a short transcript in the noise-guard
    ambiguity range** (up to `HAL_REALTIME_NOISE_GUARD_MAX_WORDS`, default 3):
    the model may explicitly reject `o`, `you.`, or `Yeah.` shortly after commit,
    and an early filler would turn that silent rejection into an audible nuisance.

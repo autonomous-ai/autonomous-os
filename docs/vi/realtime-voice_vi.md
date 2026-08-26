@@ -753,8 +753,14 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
    chưa có output nào, HAL gọi `POST /api/sensing/filler` và os-server phát một
    câu filler mở đầu từ cache — pool phrase, ngôn ngữ và WAV cache đều nằm ở
    os-server, nên khoảng chờ realtime và khoảng chờ main agent nghe giống nhau.
-   Câu chit-chat bình thường (~1s) không bao giờ chạm timer; lượt model dùng
-   Google Search — không ra token nào cho tới khi search xong — thì có. Filler
+   Filler bắn ở mọi lượt hay chỉ ở lượt chậm là **tính chất của model**, và giá
+   trị mặc định giả định model nhanh: câu chit-chat về trong ~1s thì không chạm
+   timer, còn lượt dùng Google Search thì có. Phải ĐO trước khi tin điều đó trên
+   một body cụ thể — trên `lamp-0c89` (26/08/2026, `gemini-3.1-flash-live-preview`
+   qua proxy campaign-api) không lượt nào ra câu đầu dưới 3.0s (median 4.0s,
+   n=31), nên filler là thứ duy nhất người dùng nghe được lúc đầu, và lamp hạ
+   ngưỡng xuống 0.5s trong `.env` của nó. Đặt giá trị này theo thời gian
+   time-to-first-sentence đo được, đừng theo mặc định. Filler
    **không được arm cho transcript ngắn nằm trong vùng mơ hồ của noise guard**
    (tối đa `HAL_REALTIME_NOISE_GUARD_MAX_WORDS`, mặc định 3 từ): model có thể
    `reject_turn` rõ ràng cho `o`, `you.` hay `Yeah.` ngay sau commit, và filler
