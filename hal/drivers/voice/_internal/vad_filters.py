@@ -173,7 +173,7 @@ class SileroVADFilter:
             return True
 
     def speech_metrics(self, data, device_rate: int):
-        """Return (peak, mean, voiced_ratio) over the whole `data` buffer.
+        """Return (peak, mean, voiced_ratio, span_ratio) for `data`.
 
         Unlike is_speech (which is peak-only — one transient chunk crossing the
         threshold marks the whole buffer speech, fine for fast onset detection at
@@ -181,10 +181,20 @@ class SileroVADFilter:
         fraction of 32ms chunks that are voiced. A real speaking turn is voiced
         across most of its length; sustained noise has only sparse voiced chunks.
 
-        Fails open: returns (1.0, 1.0, 1.0) on error so callers treat it as speech.
+        `voiced_ratio` is that fraction over the WHOLE buffer; `span_ratio` is
+        the same fraction measured only between the first and last voiced chunk.
+        They differ when a buffer carries silence around the speech — a captured
+        turn always does, since the session prepends VAD pre-roll and keeps a
+        200ms tail — and the padding then drags voiced_ratio down in proportion
+        to how SHORT the utterance is. Judging a whole turn wants span_ratio;
+        judging a live sliding window (barge-in) wants voiced_ratio, since there
+        is no padding to discount and a span measure would only be more lenient.
+
+        Fails open: returns (1.0, 1.0, 1.0, 1.0) on error so callers treat it as
+        speech.
         """
         if self._session is None:
-            return (1.0, 1.0, 1.0)
+            return (1.0, 1.0, 1.0, 1.0)
         try:
             np = self._np
             if device_rate != STT_RATE:
@@ -217,11 +227,22 @@ class SileroVADFilter:
                     self._context = x[:, -64:]
 
             if not confs:
-                return (1.0, 1.0, 1.0)
+                return (1.0, 1.0, 1.0, 1.0)
             peak = max(confs)
             mean = sum(confs) / len(confs)
-            ratio = sum(c >= SILERO_VAD_THRESHOLD for c in confs) / len(confs)
-            return (peak, mean, ratio)
+            voiced = [c >= SILERO_VAD_THRESHOLD for c in confs]
+            ratio = sum(voiced) / len(voiced)
+            # Span: first..last voiced chunk inclusive. No voiced chunk at all
+            # means there is no span to measure and span_ratio collapses to the
+            # whole-buffer ratio (0.0) — the reject path, which is correct.
+            if any(voiced):
+                first = voiced.index(True)
+                last = len(voiced) - 1 - voiced[::-1].index(True)
+                span = voiced[first:last + 1]
+                span_ratio = sum(span) / len(span)
+            else:
+                span_ratio = ratio
+            return (peak, mean, ratio, span_ratio)
         except Exception as e:
             logger.warning("Silero speech_metrics error: %s", e)
-            return (1.0, 1.0, 1.0)
+            return (1.0, 1.0, 1.0, 1.0)
