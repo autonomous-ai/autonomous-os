@@ -183,9 +183,14 @@ point every playback path reaches the device through — synthesized speech, the
 synthesis is deliberate: TTS renders a sentence far faster than real time, while
 the output stream writes at playback rate, which is the timing the mic sees.
 
-**On by default** (`HAL_AEC_ENABLED=true`). It needs the
-`aec-audio-processing` binding, which is **not** a hal dependency — PyPI ships
-no Linux wheels for it, so a device needs a locally built one. When the import
+**Off by default** (`HAL_AEC_ENABLED=false`); the lamp image opts in via its
+device `.env`. It needs the
+`aec-audio-processing` binding, which is **not** a base hal dependency — PyPI
+ships no Linux wheels for it, so a device builds it from source. It lives behind
+the `aec` extra (`uv sync --extra aec`), deliberately kept out of `dependencies`
+and out of `hardware`: the build needs meson/ninja, which the lamp image does
+not install, so a hard dep would break both the image build and
+`software-update hal` for a feature that is off by default. When the import
 fails, `configure()` logs once and every entry point becomes a no-op; the voice
 path behaves exactly as before, so the default is safe on a device without the
 binding. It does, however, also switch **barge-in** on (see below), and that is
@@ -193,7 +198,7 @@ not a no-op.
 
 | Env | Default | Meaning |
 |-----|---------|---------|
-| `HAL_AEC_ENABLED` | `true` | Master switch. Also the default for `HAL_BARGE_IN_ENABLED` |
+| `HAL_AEC_ENABLED` | `false` | Master switch. Also the default for `HAL_BARGE_IN_ENABLED` |
 | `HAL_AEC_DELAY_MS` | `205` | Speaker→mic delay hint. **Per-device** — measure it, don't inherit it |
 | `HAL_AEC_NS` | `true` | Also run APM noise suppression. Carries most of the cancellation on this hardware |
 | `HAL_AEC_TAIL_S` | `2.0` | Keep cancelling this long after the last speaker write, then bypass the APM |

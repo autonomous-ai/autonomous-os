@@ -99,7 +99,7 @@ Chuỗi end-to-end:
 
 ### Voice barge-in (mặc định bật)
 
-Cắt bằng giọng nói — nói trong lúc Lamp đang nói để Lamp dừng và lắng nghe — theo `HAL_BARGE_IN_ENABLED`, vốn mặc định bằng `HAL_AEC_ENABLED` (nay là `true`). Việc khử vọng âm là thứ làm cho nó an toàn, nên hai cái bật cùng nhau.
+Cắt bằng giọng nói — nói trong lúc Lamp đang nói để Lamp dừng và lắng nghe — theo `HAL_BARGE_IN_ENABLED`, vốn mặc định bằng `HAL_AEC_ENABLED` — trong code là `false`, nhưng `.env` của lamp ghim cả hai thành `true`. Việc khử vọng âm là thứ làm cho nó an toàn, nên hai cái bật cùng nhau, và barge-in nằm im mỗi khi bộ khử không thật sự chạy.
 
 Đường đang chạy là vòng **warm mic**, không phải `_monitor_barge_in()`. Với `HAL_WARM_MIC=true` (mặc định), `arecord` vẫn mở suốt lúc phát và vòng capture rút rồi bỏ frame; barge-in được phát hiện ngay ở đó, trên chính frame 64 ms của vòng lặp, khi `HAL_BARGE_IN_WARM_FRAMES` frame liên tiếp vượt `HAL_BARGE_IN_RMS_THRESHOLD` **và** Silero đồng ý đó là tiếng nói **và** `aec.uncancelled()` xác nhận frame đó thật sự đã được khử. `_monitor_barge_in()` (block 256 ms, chỉ xét mức) là đường cũ và không thể tới được khi warm mic bật — `HAL_BARGE_IN_BLOCK_MS` và `HAL_BARGE_IN_TRIGGER_FRAMES` chỉ định cỡ cho đường đó. Chuỗi downstream giống tap-to-interrupt.
 

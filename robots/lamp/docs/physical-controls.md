@@ -99,7 +99,7 @@ End-to-end chain:
 
 ### Voice barge-in (on by default)
 
-Voice-driven interrupt — speak during TTS to make Lamp stop and listen — follows `HAL_BARGE_IN_ENABLED`, which defaults to `HAL_AEC_ENABLED` (now `true`). Cancellation is what makes it safe, so the two turn on together.
+Voice-driven interrupt — speak during TTS to make Lamp stop and listen — follows `HAL_BARGE_IN_ENABLED`, which defaults to `HAL_AEC_ENABLED` — `false` in code, but the lamp `.env` pins both to `true`. Cancellation is what makes it safe, so the two turn on together, and barge-in stays inert whenever the canceller is not actually running.
 
 The active path is the **warm mic** loop, not `_monitor_barge_in()`. With `HAL_WARM_MIC=true` (the default) `arecord` stays open through playback and the capture loop drains and discards frames; barge-in is detected there, on the loop's own 64 ms frames, when `HAL_BARGE_IN_WARM_FRAMES` consecutive frames exceed `HAL_BARGE_IN_RMS_THRESHOLD` **and** a Silero pass agrees it is speech **and** `aec.uncancelled()` says the frame was really cancelled. `_monitor_barge_in()` (256 ms blocks, level only) is the legacy path and is unreachable while warm mic is on — `HAL_BARGE_IN_BLOCK_MS` and `HAL_BARGE_IN_TRIGGER_FRAMES` only size that one. Downstream chain is the same as tap-to-interrupt.
 

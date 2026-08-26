@@ -57,7 +57,6 @@ dependencies = [
     "openai>=1.60.0",
     "pydantic>=2.0.0",
     "websockets>=12.0",
-    "aec-audio-processing>=1.0.1"
 ]
 
 [build-system]
@@ -119,4 +118,16 @@ reachy = [
     # linux-only marker: the SDK pins onnxruntime==1.27.0 which has no
     # darwin-x86_64 wheels; the extra only ever installs on the robot's Pi.
     "reachy-mini>=1.9; sys_platform == 'linux'",
+]
+# Acoustic echo cancellation on the mic path (docs/realtime-voice.md).
+# NOT in `dependencies` and NOT merged into `hardware`: PyPI ships no Linux
+# wheel, so it builds the vendored webrtc-audio-processing + abseil from source
+# and needs meson/ninja, which the lamp image does not install. As a hard dep it
+# fails `uv sync` — that is BOTH the image build (scripts/imager, which stops
+# shipping devices) and `software-update hal` on every device in the field — for
+# a feature that is off by default (HAL_AEC_ENABLED). The import in
+# drivers/voice/aec.py is already optional: without it the mic runs uncancelled.
+# Install on-device with: uv sync --extra aec
+aec = [
+    "aec-audio-processing>=1.0.1",
 ]

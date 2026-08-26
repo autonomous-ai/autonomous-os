@@ -177,9 +177,13 @@ audio** của realtime. Lấy ở đó thay vì tại lúc tổng hợp là có 
 một câu nhanh hơn thời gian thực rất nhiều, còn output stream ghi đúng tốc độ
 phát — đúng nhịp mà mic nghe thấy.
 
-**Mặc định bật** (`HAL_AEC_ENABLED=true`). Nó cần binding
-`aec-audio-processing`, vốn **không** phải dependency của hal — PyPI không có
-wheel Linux nào, nên thiết bị cần wheel tự build. Khi import thất bại,
+**Mặc định tắt** (`HAL_AEC_ENABLED=false`); image lamp bật lên qua `.env` của
+thiết bị. Nó cần binding
+`aec-audio-processing`, vốn **không** phải dependency gốc của hal — PyPI không
+có wheel Linux nào, nên thiết bị phải build từ source. Nó nằm sau extra `aec`
+(`uv sync --extra aec`), cố ý để ngoài `dependencies` và ngoài `hardware`: bước
+build cần meson/ninja mà image lamp không cài, nên khai hard dep sẽ làm hỏng cả
+build image lẫn `software-update hal` cho một tính năng vốn mặc định tắt. Khi import thất bại,
 `configure()` log một lần và mọi entry point trở thành no-op; đường voice hoạt
 động y như trước, nên mặc định bật vẫn an toàn với thiết bị không có binding.
 Tuy nhiên nó cũng bật luôn **barge-in** (xem bên dưới), và cái đó thì không phải
@@ -187,7 +191,7 @@ no-op.
 
 | Env | Mặc định | Ý nghĩa |
 |-----|----------|---------|
-| `HAL_AEC_ENABLED` | `true` | Công tắc chính. Cũng là mặc định của `HAL_BARGE_IN_ENABLED` |
+| `HAL_AEC_ENABLED` | `false` | Công tắc chính. Cũng là mặc định của `HAL_BARGE_IN_ENABLED` |
 | `HAL_AEC_DELAY_MS` | `205` | Gợi ý độ trễ loa→mic. **Theo từng thiết bị** — phải đo, đừng chép lại |
 | `HAL_AEC_NS` | `true` | Bật thêm khử nhiễu của APM. Trên phần cứng này nó gánh phần lớn việc khử |
 | `HAL_AEC_TAIL_S` | `2.0` | Tiếp tục khử trong khoảng này sau lần ghi loa cuối, rồi bypass APM |
