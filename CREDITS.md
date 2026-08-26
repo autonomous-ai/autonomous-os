@@ -72,4 +72,42 @@ sounddevice, webrtcvad, LiveKit Agents and the vendor API clients — OpenAI, Go
 GenAI, Anthropic, Deepgram, ElevenLabs, Qwen (`hal/pyproject.toml`); React, Vite,
 Tailwind, Radix, framer-motion, chart.js and xterm (`system/web/package.json`).
 
+## Speech the robot makes itself
+
+Piper is the on-device TTS option. **None of it ships in the image** — the operator
+turns it on in Settings → Voice and the device fetches the engine and each voice from
+upstream at that moment. That is a deliberate boundary, not an accident of packaging:
+what a user downloads for themselves, we are not distributing.
+
+- **[Piper](https://github.com/rhasspy/piper)** (MIT) — the synthesis engine. Archived
+  by its owner on 2025-10-07; the release tarballs and the voice repo both still work,
+  and the voice repo was still being updated as of 2026-08. Development moved to
+  **[piper1-gpl](https://github.com/OHF-Voice/piper1-gpl)**, which is **GPL-3.0**.
+- The engine tarball carries **espeak-ng** (**GPL-3.0**), **onnxruntime** (MIT) and
+  `piper_phonemize` (MIT). The MIT badge on Piper covers Piper's own code — the bundle
+  around it does not inherit it. Anyone who decides to ship this inside the image
+  becomes a distributor of GPL-3.0 and owes the source offer and, for a consumer
+  device, a look at GPLv3 §6. Read that license first.
+- HAL runs the binary as a **separate process** over a pipe
+  (`hal/drivers/voice/tts/piper.py`), never as a linked library. Keep it that way.
+
+Voices are listed with their licence in
+[`hal/drivers/voice/tts/piper_catalog.py`](hal/drivers/voice/tts/piper_catalog.py),
+which is the enforcement point: a voice is offered only after someone read its dataset
+terms. Adding one is a licensing decision.
+
+- Nothing owed: `en_US-ljspeech`, `en_US-kristin` (public domain); `es_ES-davefx`,
+  `de_DE-thorsten`, `pt_BR-faber` (CC0).
+- **Attribution owed** — credited here, which is the whole point of this file:
+  - **`vi_VN-vais1000`** — VAIS-1000 Vietnamese Speech Synthesis Corpus,
+    [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+  - **`en_US-libritts_r`** — LibriTTS-R, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+  - **`fr_FR-siwis`** — SIWIS French Speech Synthesis Database,
+    [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+- Deliberately **not** offered, and why, so nobody re-adds them: `en_US-lessac`
+  (Blizzard 2013 — a research licence granted by hand, per organisation);
+  `en_US-hfc_female`, `en_US-hfc_male`, `en_US-ryan`, `hi_IN-priyamvada`,
+  `vi_VN-vivos` (CC BY-**NC**-SA — no commercial use); `vi_VN-25hours`,
+  `ru_RU-irina`, `zh_CN-huayan` (licence unknown).
+
 Something missing or miscredited? Open an issue — we would rather fix it than owe it.

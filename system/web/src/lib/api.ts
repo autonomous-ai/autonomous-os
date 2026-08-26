@@ -746,3 +746,57 @@ export async function logout(): Promise<boolean> {
   setApiToken("");
   return apiRequest<boolean>(`${API_BASE}/api/logout`, { method: "POST" });
 }
+
+// ── Piper: on-device TTS install ──────────────────────────────────────────
+//
+// Piper ships in no OTA component, so a device that predates it has no
+// /opt/piper. The operator installs the engine and downloads voices from
+// Settings → Voice; both run as a background job on the device and are
+// polled through `job`.
+
+export interface PiperCatalogEntry {
+  name: string;
+  language: string;
+  lang_code: string;
+  license: string;
+  requires_attribution: boolean;
+  size_mb: number;
+  installed: boolean;
+}
+export interface PiperJob {
+  active: boolean;
+  kind: string;      // "engine" | "voice"
+  target: string;
+  percent: number;
+  error: string;
+  done: boolean;
+}
+export interface PiperStatus {
+  engine_installed: boolean;
+  voices_installed: string[];
+  default_voice: string;
+  catalog: PiperCatalogEntry[];
+  job: PiperJob;
+}
+
+export async function getPiperStatus(): Promise<PiperStatus> {
+  return apiRequest<PiperStatus>(`${API_BASE}/api/voice/piper/status`);
+}
+
+/** Install the Piper engine. Already-installed returns ok, not an error. */
+export async function installPiperEngine(): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`${API_BASE}/api/voice/piper/install`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
+}
+
+/** Download one catalogue voice (~63 MB). */
+export async function installPiperVoice(name: string): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`${API_BASE}/api/voice/piper/voice`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
