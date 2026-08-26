@@ -41,9 +41,11 @@ The 1-tap gesture is Lamp's primary **barge-in and attention-cancel mechanism**:
 
 When wake word is enabled, the click also **counts as a wake event**: `single_click_action` calls `voice_service.grant_wakeword_focus(source)`, which opens the same follow-up focus window (`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, default 20 s) a spoken wake phrase opens. Without it the device would announce "Listening" and then drop the user's answer for missing the wake phrase. The window is re-checked at dispatch time, not only latched at mic-session start, so a click during an already-open session still authorizes the sentence being spoken. No-op when wake word is off (every utterance already dispatches) or when the follow-up timeout is 0.
 
-### Turning toward the lamp as a third wake trigger
+### Presence enter and turning toward the lamp as wake triggers
 
-The wake gate has three openers, not two. Alongside the spoken wake phrase and the single click, **turning toward the lamp and speaking** opens the same window (`hal/drivers/tracking/gaze.py`), through the same `voice_service.grant_wakeword_focus(source)` seam the click uses — nothing downstream of the gate changes.
+The wake gate has four openers: a spoken wake phrase, a single click, a newly detected person, and turning toward the lamp before speaking. A successful `presence.enter` opens the same follow-up focus window through `SensingService`, so a recognized person can say “hello, Leo” and an unknown person can say “hello there” without first saying the wake phrase. It grants focus only after the presence event has passed its normal cooldown; it does not unmute or start an unavailable microphone.
+
+**Turning toward the lamp and speaking** uses that same window (`hal/drivers/tracking/gaze.py`), through `voice_service.grant_wakeword_focus(source)` just like presence enter and the click — nothing downstream of the gate changes.
 
 The reason is device shape rather than preference. A desk lamp sits an arm's length from its user and is in view all day, so a wake phrase repeated dozens of times reads as addressing an appliance, and a button press reads as operating one. Between two people the cue is neither: you turn toward someone and speak. Products that popularised "hey <name>" have no camera and sit across a room, so the comparison does not carry.
 
@@ -62,7 +64,7 @@ When several faces are in frame, the one whose head counts is the one **nearest 
 
 | Env var | Default | Tunes |
 |---|---|---|
-| `HAL_GAZE_WAKE` | `false` | Master switch. Off means today's two openers only. |
+| `HAL_GAZE_WAKE` | `false` | Master switch for the gaze opener. Off leaves the spoken, click, and presence-enter openers available. |
 | `HAL_GAZE_SHADOW` | `true` | Log the decision without opening the gate. Costs nothing — no turn opens, so no LLM or TTS is spent. |
 | `HAL_GAZE_MAX_YAW_DEG` | 25 | Acceptance cone at frame centre. |
 | `HAL_GAZE_EDGE_CONE_SCALE` | 1.8 | How much wider the cone grows at the frame edge, where barrel distortion inflates the angle. |
@@ -86,7 +88,7 @@ Nobody has been visible for a while and the lamp turns: that is `REPOINT`, and i
 
 Thresholds are meant to be chosen from measurement, not guessed — shadow mode exists so a run beside a real user produces the counts (`[gaze] speech: yaw=… hold=…/… -> WOULD_WAKE`) that settle what angle reads as "addressing the lamp".
 
-Degradation is by omission in both directions. On a device with **no camera** the watcher never arms and the other two openers are untouched — no separate configuration. When `HAL_WAKEWORD_ENABLED` is **false** the watcher does not start at all: with no wake word every utterance already dispatches, so there is no gate left to open and the check would burn CPU to decide nothing. A gaze sample is also skipped while the head is relocating, when the camera is disabled for privacy, and whenever the detector lock is held by a live `look`.
+Degradation is by omission in both directions. On a device with **no camera** neither gaze nor camera-derived presence enter can arm, while the spoken and click openers are untouched — no separate configuration. When `HAL_WAKEWORD_ENABLED` is **false** the watcher does not start at all: with no wake word every utterance already dispatches, so there is no gate left to open and the check would burn CPU to decide nothing. A gaze sample is also skipped while the head is relocating, when the camera is disabled for privacy, and whenever the detector lock is held by a live `look`.
 
 **Relocating, not merely writing.** Two states write the servos continuously without moving the head anywhere: the idle loop breathing, and a tracking session pursuing the user's face. Treating either as a move means `last_servo_write` is never stale and nearly every frame is refused — measured, idle: 0.3 samples/s recorded against 4.9/s blocked; measured, tracking: 0.7/s against 4.5/s, refusing a user at yaw 0.9° with a 130 px face dead centre for having one sample in the window instead of two. Tracking matters most: it is the lamp following this user's face, so refusing to notice they are addressing it precisely then is the most broken-looking moment available — which is why the settling test must not become `_tracking_active` by the back door. Both are small continuous corrections and the yaw survives them. The `[gaze] sampling at N/s; blocked: …` line breaks the blocked count down by reason, because the two gates are fixed in different places.
 

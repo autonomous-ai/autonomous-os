@@ -337,6 +337,9 @@ class SensingService:
             if cur_ts - last < cd:
                 return
 
+        if event_type == "presence.enter":
+            self._grant_wakeword_focus_for_presence()
+
         # Collect all images to save (single image or list)
         frames = images or []
 
@@ -386,3 +389,24 @@ class SensingService:
                 self._last_event_time[event_type] = cur_ts
         except requests.RequestException as e:
             logger.warning("[sensing] Failed to send event to the OS server: %s", e)
+
+    @staticmethod
+    def _grant_wakeword_focus_for_presence() -> None:
+        """Let a newly detected person stand in for the wake phrase.
+
+        Presence enter is the visual equivalent of someone arriving at the
+        conversation. The existing follow-up window lets either a recognized
+        person ("hello, Leo") or a stranger ("hello there") speak naturally
+        without changing the downstream voice gate. The voice service retains
+        its normal no-op behavior when wake words are off, follow-up focus is
+        disabled, or the microphone pipeline is unavailable.
+        """
+        try:
+            from hal import app_state as state
+
+            voice = state.voice_service
+            if voice is not None and hasattr(voice, "grant_wakeword_focus"):
+                voice.grant_wakeword_focus("presence.enter")
+        except Exception as e:
+            # Presence reporting must continue even when voice is unavailable.
+            logger.warning("[sensing] presence.enter wake-focus grant failed: %s", e)
