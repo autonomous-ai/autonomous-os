@@ -776,7 +776,8 @@ as the lamp being broken rather than as the bearing being wrong. A face in frame
 by construction: this posture sees a head, so restoring it will see one again.
 
 **The posture is recorded wherever in frame the face sat.** The vertical gate that used to guard it
-(`HAL_BEARING_SAMPLE_MAX_DY_FRAC`) was written for person boxes, where a centred torso said nothing
+(`HAL_BEARING_SAMPLE_MAX_DY_FRAC`, since deleted — it had stopped gating anything and only shaped a
+log string) was written for person boxes, where a centred torso said nothing
 about whether the head was in frame. Keeping it for faces was self-defeating: while the camera is
 aimed low every face sits near the top edge, so every sighting failed the gate, so no posture was
 ever stored, so there was nothing to restore and the camera stayed low — device-observed `dy` of

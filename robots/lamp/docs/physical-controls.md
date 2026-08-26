@@ -69,7 +69,7 @@ When several faces are in frame, the one whose head counts is the one **nearest 
 | `HAL_GAZE_SHADOW` | `true` | Log the decision without opening the gate. Costs nothing — no turn opens, so no LLM or TTS is spent. |
 | `HAL_GAZE_MAX_YAW_DEG` | 25 | Acceptance cone at frame centre. |
 | `HAL_GAZE_EDGE_CONE_SCALE` | 1.8 | How much wider the cone grows at the frame edge, where barrel distortion inflates the angle. |
-| `HAL_GAZE_MIN_FACE_PX` | 48 | Minimum face height **in pixels**. Below this the landmarks span a few pixels and the yaw is arithmetic on rounding error, so the sample does not vote at all. |
+| `HAL_GAZE_MIN_FACE_PX` | 48 | Minimum face height **in pixels of the downscaled frame** — the watcher detects on `frame_utils.downscale(frame)`, which clamps width to `VISION_MAX_WIDTH` (640), so at 1280×720 this floor is 96 px in the original image and at 640 or narrower it is 48 px in both. Below it the landmarks span a few pixels and the yaw is arithmetic on rounding error, so the sample does not vote at all. Unlike `LOOK_AIM_MIN_FACE_HEIGHT_FRAC`, which is a fraction and immune, this value silently doubles or halves if the camera mode changes. |
 | `HAL_GAZE_WINDOW_S` | 1.5 | Evidence window ending at the moment of speech. |
 | `HAL_GAZE_MIN_FACING_RATIO` | 0.6 | Fraction of that window that must have seen a facing head. A ratio, not an unbroken run — per-sample yaw is genuinely noisy. |
 | `HAL_GAZE_MIN_SAMPLES` | 2 | Below this there is not enough evidence to decide either way. The loop achieves ~2 samples/s whatever the rate asks for — it is paced by fetching a frame and running the detector — so 3 rejected users the rest of the pipeline agreed were facing the lamp. The `[gaze] sampling at N/s` line counts samples actually RECORDED, and reports separately how many frames were blocked before they could be measured (settling from a servo write, or the detector held by a live look). Counting attempts instead once reported 5.7/s while the buffer held nothing newer than the 1.5 s window — under 1/s of real evidence. |
@@ -94,7 +94,18 @@ Nobody has been visible for a while and the lamp turns: that is `REPOINT`. It wa
 
 Thresholds are meant to be chosen from measurement, not guessed — shadow mode exists so a run beside a real user produces the counts (`[gaze] speech: yaw=… hold=…/… -> WOULD_WAKE`) that settle what angle reads as "addressing the lamp".
 
-Degradation is by omission in both directions. On a device with **no camera** neither gaze nor camera-derived presence enter can arm, while the spoken and click openers are untouched — no separate configuration. When `HAL_WAKEWORD_ENABLED` is **false** the watcher does not start at all: with no wake word every utterance already dispatches, so there is no gate left to open and the check would burn CPU to decide nothing. A gaze sample is also skipped while the head is relocating, when the camera is disabled for privacy, and whenever the detector lock is held by a live `look`.
+**What actually has to be true for gaze to arm.** `HAL_GAZE_WAKE` calls itself the master switch, and it is necessary but not sufficient — there are four conditions, and three of them live somewhere other than the gaze table:
+
+| # | Condition | Where it lives |
+|---|---|---|
+| 1 | `LOOK_AIM_ENABLED` | `HAL_LOOK_AIM` env var — the watcher and the bearing sampler both start *inside* the look-aim block (`hal/server.py:816`) |
+| 2 | a camera in the mount plan | device declaration — `"camera" in _plan.mounted` |
+| 3 | the wake word is on | **os-server `config.json`, key `wakeword`** — read via `_os_cfg_get("wakeword", False)`. There is **no** `HAL_WAKEWORD_ENABLED` environment variable; setting one has no effect |
+| 4 | `HAL_GAZE_WAKE` | the gaze table above |
+
+Turning look-aim off is the surprising one: it silently disables the third wake opener *and* the passive bearing learner, neither of which names look-aim anywhere. If the watcher is not running and the table looks right, check 1–3 before suspecting 4 — the log line to look for is `[gaze] not starting: wake word disabled, nothing to gate`.
+
+Degradation is by omission in both directions. On a device with **no camera** neither gaze nor camera-derived presence enter can arm, while the spoken and click openers are untouched — no separate configuration. When the wake word is **off** the watcher does not start at all: with no wake word every utterance already dispatches, so there is no gate left to open and the check would burn CPU to decide nothing. A gaze sample is also skipped while the head is relocating, when the camera is disabled for privacy, and whenever the detector lock is held by a live `look`.
 
 **Relocating, not merely writing.** Two states write the servos continuously without moving the head anywhere: the idle loop breathing, and a tracking session pursuing the user's face. Treating either as a move means `last_servo_write` is never stale and nearly every frame is refused — measured, idle: 0.3 samples/s recorded against 4.9/s blocked; measured, tracking: 0.7/s against 4.5/s, refusing a user at yaw 0.9° with a 130 px face dead centre for having one sample in the window instead of two. Tracking matters most: it is the lamp following this user's face, so refusing to notice they are addressing it precisely then is the most broken-looking moment available — which is why the settling test must not become `_tracking_active` by the back door. Both are small continuous corrections and the yaw survives them. The `[gaze] sampling at N/s; blocked: …` line breaks the blocked count down by reason, because the two gates are fixed in different places.
 

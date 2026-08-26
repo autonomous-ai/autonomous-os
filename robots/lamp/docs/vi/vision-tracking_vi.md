@@ -775,7 +775,8 @@ phải bearing sai. Thấy được mặt thì chứng minh điều ngược l�
 đầu người, khôi phục nó sẽ lại thấy.
 
 **Tư thế được ghi bất kể mặt nằm đâu trong khung.** Cửa dọc từng gác nó
-(`HAL_BEARING_SAMPLE_MAX_DY_FRAC`) viết cho box person, nơi thân người ở giữa khung không nói lên
+(`HAL_BEARING_SAMPLE_MAX_DY_FRAC`, nay đã xoá — nó không còn chặn gì nữa mà chỉ còn nắn một chuỗi
+log) viết cho box person, nơi thân người ở giữa khung không nói lên
 được đầu có trong khung hay không. Giữ cửa đó cho `face` là tự phá: khi camera đang chĩa thấp thì mặt
 nào cũng nằm sát mép trên, nên mọi lần thấy đều trượt cửa, nên không tư thế nào từng được lưu, nên
 không có gì để khôi phục và camera cứ ở nguyên chỗ thấp — đo được `dy` -15.8% rồi -41.2%, hai lần

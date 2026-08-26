@@ -1010,19 +1010,6 @@ BEARING_SAMPLE_INTERVAL_S: float = float(
 BEARING_SAMPLE_MAX_DX_FRAC: float = float(
     os.environ.get("HAL_BEARING_SAMPLE_MAX_DX_FRAC", "0.25")
 )
-# The POSTURE is only recorded when the subject is also vertically centred:
-# pitch cannot be corrected arithmetically, so an off-centre pitch would teach
-# the lamp a posture that does not look at anyone.
-# 0.30, loosened once the sampler learned from FACES instead of person boxes.
-# The strict value existed because a torso centred vertically said nothing about
-# whether the head was in frame at all, so a posture recorded from one could be
-# aimed at a chest. A face in frame carries its own proof: this posture sees a
-# head. Device-observed at the old value, a sighting 15.8% off centre was
-# refused its posture and stored a bearing with a single joint — leaving nothing
-# to restore, which is the whole point of remembering a pose.
-BEARING_SAMPLE_MAX_DY_FRAC: float = float(
-    os.environ.get("HAL_BEARING_SAMPLE_MAX_DY_FRAC", "0.30")
-)
 # Save what each bearing sample saw, box drawn on, under
 # SNAPSHOT_PERSIST_DIR/sensing_bearing/. Servable by
 # GET /api/sensing/snapshot/sensing_bearing/<name>, so the samples can be
@@ -1116,6 +1103,15 @@ GAZE_MIN_SAMPLES: int = int(os.environ.get("HAL_GAZE_MIN_SAMPLES", "2"))
 #
 # It also subsumes the old frame-fraction floor: anyone far enough away to be a
 # bystander is, by construction, too small in pixels.
+#
+# WHICH pixels: the DOWNSCALED frame the watcher detects on, not the camera's
+# own resolution. `_loop` measures on `frame_utils.downscale(frame)`, which
+# clamps width to VISION_MAX_WIDTH (640) and returns scale = 640/w — so at
+# 1280x720 this 48 px floor is 96 px in the original image, and at 640 or
+# narrower it is 48 px in both. Unlike LOOK_AIM_MIN_FACE_HEIGHT_FRAC, which is
+# a fraction and immune, this constant silently doubles or halves if
+# VISION_MAX_WIDTH or the camera mode changes. The device logs it reads against
+# (`face=49px`) are downscaled readings, so the number matches practice today.
 GAZE_MIN_FACE_PX: int = int(os.environ.get("HAL_GAZE_MIN_FACE_PX", "48"))
 # How much wider the acceptance cone grows for a face at the very edge of frame,
 # as a multiple of GAZE_MAX_YAW_DEG. Scales linearly with distance from the
