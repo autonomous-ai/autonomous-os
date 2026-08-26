@@ -230,7 +230,10 @@ class AnimationService:
     # So "put it back how it was" cannot be done by writing 0; it needs the
     # value that reproduces the original pace. 0.062 deg/s per unit measured,
     # so ~175 is the ~16 deg/s the arm has always run at.
-    UNWRITTEN_SPEED_EQUIVALENT = 175
+    @property
+    def UNWRITTEN_SPEED_EQUIVALENT(self) -> int:
+        """The pace base_yaw rests at — the same value startup writes."""
+        return self._SERVO_REST_SPEED.get(1, 175)
 
     def set_joint_speed(self, motor_name: str, speed: int) -> bool:
         """Cap one joint's velocity, or lift the cap with 0. Never raises.
@@ -301,6 +304,22 @@ class AnimationService:
     # need it; the other joints are left alone rather than retuned on a guess.
     _SERVO_IGAIN = {3: 10, 5: 10}
 
+    # Resting Goal_Speed, written at startup purely so the value is KNOWN.
+    #
+    # Not a speed change: 175 reproduces the pace base_yaw already runs at, so
+    # nothing moves differently for having it here. What it fixes is that the
+    # search raises this joint to sweep briskly and lowers it again in a
+    # `finally` — and a finally cannot survive the process being killed. HAL
+    # crashing, or being restarted, part-way through a sweep left base_yaw fast
+    # for idle, emotions and everything else, permanently, because nothing else
+    # ever wrote the register. Device-reproduced: killed mid-sweep it read 1200,
+    # and still read 1200 after a full restart.
+    #
+    # Only base_yaw, because only base_yaw is ever retuned. A joint nobody
+    # touches needs no backstop, and writing one for every joint is the global
+    # change this deliberately is not.
+    _SERVO_REST_SPEED = {1: 175}
+
     def _configure_servos_raw(self):
         """Configure servos directly via scservo_sdk, bypassing lerobot.
 
@@ -317,6 +336,7 @@ class AnimationService:
                 sid = motor_obj.id
                 pgain = self._SERVO_PGAIN.get(sid, 32)
                 igain = self._SERVO_IGAIN.get(sid, 0)
+                rest_speed = self._SERVO_REST_SPEED.get(sid)
                 # Ping first
                 _, result, _ = pk.ping(ph, sid)
                 if result != COMM_SUCCESS:
@@ -327,8 +347,15 @@ class AnimationService:
                 pk.write1ByteTxRx(ph, sid, 21, pgain)  # P_Coefficient
                 pk.write1ByteTxRx(ph, sid, 23, igain)  # I_Coefficient
                 pk.write1ByteTxRx(ph, sid, 22, 32)  # D_Coefficient
+                # See _SERVO_REST_SPEED: clears a cap a killed sweep left behind.
+                if rest_speed is not None:
+                    pk.write2ByteTxRx(ph, sid, self._GOAL_SPEED_REG, rest_speed)
                 pk.write1ByteTxRx(ph, sid, 40, 1)   # Torque_Enable = 1
-                logger.info(f"{motor_name} (ID {sid}): P={pgain}, I={igain}, torque ON")
+                logger.info(
+                    f"{motor_name} (ID {sid}): P={pgain}, I={igain}"
+                    + (f", speed={rest_speed}" if rest_speed is not None else "")
+                    + ", torque ON"
+                )
 
     def start(self):
         self.robot = LeLampFollower(self.robot_config)

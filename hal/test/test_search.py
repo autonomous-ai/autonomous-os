@@ -636,3 +636,16 @@ def test_the_base_speed_is_restored_even_when_the_sweep_raises():
 
     assert len(svc.speeds) == 2, f"speed not restored: {svc.speeds}"
     assert svc.speeds[-1][1] == _FakeSvc.UNWRITTEN_SPEED_EQUIVALENT
+
+
+def test_the_resting_speed_the_sweep_restores_is_the_one_startup_writes():
+    """Two places must agree on what "resting" means, or a killed sweep and a
+    clean one leave the arm at different paces.
+
+    Only runs where the servo driver imports — it pulls in lerobot, which is a
+    device dependency.
+    """
+    pytest.importorskip("lerobot")
+    from hal.drivers.motors.animation_service import AnimationService
+
+    assert AnimationService._SERVO_REST_SPEED.get(1) == _FakeSvc.UNWRITTEN_SPEED_EQUIVALENT
