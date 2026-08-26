@@ -638,7 +638,7 @@ aborts with an error if neither is set — no compiled-in URL.
     # are copied from the retained runtime before uv sync.
     unzip -q "$ZIP" -d /opt/.hal.new
     cp -a /root/bootstrap/rollback/hal.previous/{.env,.venv,.uv-cache} /opt/.hal.new/
-    (cd /opt/.hal.new && uv sync --python 3.12 --extra hardware)
+    (cd /opt/.hal.new && uv sync --python 3.12 --extra hardware --extra aec)
     mv /opt/.hal.new /opt/hal
 
     systemctl restart hal
@@ -1007,7 +1007,7 @@ HAL version is a plain text `VERSION` file in the package root. Read by bootstra
 - [x] **HAL HTTP port**: `5001` (OS Server is `5000`).
 - [x] **Bridge protocol**: Simple HTTP proxy. HAL runs FastAPI on `127.0.0.1:5001`, OS Server proxies from port 5000.
 - [x] **Python version**: Pinned to Python 3.12+ (`pyproject.toml`, `.python-version`, `setup.sh` uses `uv sync --python 3.12`).
-- [x] **HAL packaging**: On-device venv via `uv sync --python 3.12 --extra hardware` at `/opt/hal/.venv`. OTA preserves venv, reinstalls only on requirements change.
+- [x] **HAL packaging**: On-device venv via `uv sync --python 3.12 --extra hardware --extra aec` at `/opt/hal/.venv`. OTA preserves venv, reinstalls only on requirements change.
 - [x] **Display driver**: DisplayService (GC9A01) is part of HAL Python at `hal/service/display/display_service.py`.
 - [x] **HAL config**: Environment variable-based (`config.py` reads from env vars). `.env` file support via `python-dotenv`. No separate config file needed.
 

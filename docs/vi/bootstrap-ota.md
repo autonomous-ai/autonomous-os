@@ -621,7 +621,7 @@ và exit lỗi nếu cả hai đều rỗng — không có URL hardcode.
     # runtime đã giữ trước khi chạy uv sync.
     unzip -q "$ZIP" -d /opt/.hal.new
     cp -a /root/bootstrap/rollback/hal.previous/{.env,.venv,.uv-cache} /opt/.hal.new/
-    (cd /opt/.hal.new && uv sync --python 3.12 --extra hardware)
+    (cd /opt/.hal.new && uv sync --python 3.12 --extra hardware --extra aec)
     mv /opt/.hal.new /opt/hal
 
     systemctl restart hal
