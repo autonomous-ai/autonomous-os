@@ -1,3 +1,4 @@
+import os
 #!/usr/bin/env python
 
 # Copyright 2025 The HuggingFace Inc. team. All rights reserved.
@@ -32,6 +33,10 @@ from lerobot.robots.utils import ensure_safe_goal_position
 from .config_hal_follower import LeLampFollowerConfig
 
 logger = logging.getLogger(__name__)
+
+# Set HAL_TRACE_JOINT to a motor name (e.g. "elbow_pitch") to log every
+# Goal_Position write for it together with the call site that made it.
+_TRACE_JOINT = os.environ.get("HAL_TRACE_JOINT", "").strip()
 
 
 class LeLampFollower(Robot):
@@ -213,6 +218,24 @@ class LeLampFollower(Robot):
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
         goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
+
+        # Temporary: name whoever writes a joint, so a correction that is applied
+        # and then quietly undone shows both writers. Off unless HAL_TRACE_JOINT
+        # names a motor — extract_stack on every frame at 30fps is not free.
+        if _TRACE_JOINT and _TRACE_JOINT in goal_pos:
+            import traceback
+            stack = traceback.extract_stack(limit=6)[:-1]
+            where = " <- ".join(
+                f"{f.name}:{f.lineno}" for f in reversed(stack[-3:])
+            )
+            try:
+                te = self.bus.read("Torque_Enable", _TRACE_JOINT, normalize=False)
+                pr = self.bus.read("Present_Position", _TRACE_JOINT, normalize=False)
+                mv = self.bus.read("Moving", _TRACE_JOINT, normalize=False)
+            except Exception as e:
+                te = pr = mv = "err:%s" % e
+            logger.info("[trace] %s goal=%.2f torque=%s present_raw=%s moving=%s  %s",
+                        _TRACE_JOINT, goal_pos[_TRACE_JOINT], te, pr, mv, where)
 
         # Cap goal position when too far away from present position.
         # /!\ Slower fps expected due to reading from the follower.

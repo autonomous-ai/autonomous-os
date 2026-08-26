@@ -142,15 +142,43 @@ Nhóm Settings có thể thu gọn nằm trong `NAV` của sidebar dùng chung (
 | Plugins | `/setting#plugins` |
 | Timezone | `/setting#timezone` |
 
-Các mục Monitor được serialize thành id thuần, ví dụ `/monitor#overview`, `/monitor#system`, `/monitor#flow`. Mặc định: `/monitor` không có hash / hash không hợp lệ → `overview`; `/setting` không có hash / hash không hợp lệ → `general` (URL được chuẩn hóa thành `/setting#general`). Deep-link (ví dụ `/setting#wifi`) và nút back/forward của trình duyệt được tôn trọng qua một effect dựa trên `useLocation`. Người dùng không-debug chỉ thấy các mục trong `PUBLIC_SECTIONS` (gồm Chat, Overview, Info, Flow, Camera, Users, Bluetooth, **Logs**, **CLI**, và các mục Settings công khai General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); `?debug=true` mở khóa phần còn lại (Sensing, Analytics, Servo, API Docs, Agent gateway, và các mục Settings sâu hơn AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Bấm `update` là nút đổi ngay thành `updating…` — nút KHÔNG bao giờ báo "OK", vì chữ đó đọc như "xong rồi" trong khi request mới chỉ KHỞI ĐỘNG việc cài (và với component chạy vài giây thì nó còn hiện trước cả lúc dòng kịp báo tiến trình). Khi lỗi thì hiện đúng lý do server trả về (`rate-limited, retry in 8s`, `bootstrap unreachable`) thay vì chữ "Failed" trống rỗng. Trong lúc đang cài, dòng đó hiện `updating…` thay cho nút (một lần cài mất vài chục giây — component dừng, build lại, khởi động lại — và một dòng đứng im khiến người dùng bấm lần hai, chính là cách một máy từng mất sạch HAL runtime). Các nút `update` trong card **Versions** ở Overview (dòng Web / OS / HAL / Agent / Bootstrap) cũng bị chặn theo cách này — người xem thường không có nút kích OTA một chạm. Toggle **Debug** trên top bar, ngay cạnh nút Dark/Light, bật/tắt query parameter này nhưng vẫn giữ hash của mục đang mở và các query parameter khác; màu amber cho biết debug mode đang bật.
+Các mục Monitor được serialize thành id thuần, ví dụ `/monitor#overview`, `/monitor#system`, `/monitor#flow`. Mặc định: `/monitor` không có hash / hash không hợp lệ → `overview`; `/setting` không có hash / hash không hợp lệ → `general` (URL được chuẩn hóa thành `/setting#general`). Deep-link (ví dụ `/setting#wifi`) và nút back/forward của trình duyệt được tôn trọng qua một effect dựa trên `useLocation`. Người dùng không-debug chỉ thấy các mục trong `PUBLIC_SECTIONS` (gồm Chat, Overview, Info, Flow, Camera, Users, Bluetooth, **Logs**, **CLI**, và các mục Settings công khai General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); `?debug=true` mở khóa phần còn lại (Sensing, Analytics, Servo, API Docs, Agent gateway, và các mục Settings sâu hơn AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Bấm `update` là nút đổi ngay thành `updating…` — nút KHÔNG bao giờ báo "OK", vì chữ đó đọc như "xong rồi" trong khi request mới chỉ KHỞI ĐỘNG việc cài (và với component chạy vài giây thì nó còn hiện trước cả lúc dòng kịp báo tiến trình). Khi lỗi thì hiện đúng lý do server trả về (`rate-limited, retry in 8s`, `bootstrap unreachable`) thay vì chữ "Failed" trống rỗng. Trong lúc đang cài, dòng đó hiện `updating…` thay cho nút (một lần cài mất vài chục giây — component dừng, build lại, khởi động lại — và một dòng đứng im khiến người dùng bấm lần hai, chính là cách một máy từng mất sạch HAL runtime). Các nút `update` trong card **Versions** ở Overview (dòng Web / OS / HAL / Agent, cộng Bootstrap và Device ở debug) cũng bị chặn theo cách này — người xem thường không có nút kích OTA một chạm. Toggle **Debug** trên top bar, ngay cạnh nút Dark/Light, bật/tắt query parameter này nhưng vẫn giữ hash của mục đang mở và các query parameter khác; màu amber cho biết debug mode đang bật.
 
-**Wake-word gate** nằm trong card **General** công khai, không nằm ở mục Realtime chỉ-debug. Checkbox ghi cờ `wakeword` top-level; lưu Settings sẽ restart HAL để áp dụng. Card liệt kê toàn bộ wake phrase hiện được chấp nhận, gồm tên agent hiện tại chính xác cùng các alias cố định `autonomous` và device type; hệ thống quản lý danh sách này. Tải lại Settings sau khi đổi tên agent để thấy tên mới.
+**Speech attention gate** nằm trong card **General** công khai, không nằm ở mục Realtime chỉ-debug. Checkbox vẫn ghi cờ `wakeword` top-level; lưu Settings sẽ restart HAL để áp dụng. Khi bật, speech phải đi sau một attention trigger: wake phrase nói ra, single click, quay về phía lamp rồi nói, hoặc một người đã enrolled xuất hiện trong khung (`presence.enter`). Event chỉ có stranger không mở voice gate, trừ khi deployment đặt `HAL_PRESENCE_WAKE_STRANGERS=true`. Card liệt kê các phrase **nói ra** hiện được chấp nhận, gồm tên agent hiện tại chính xác cùng các alias cố định `autonomous` và device type; hệ thống quản lý danh sách này. Tải lại Settings sau khi đổi tên agent để thấy tên mới. Khi tắt, mọi câu nói được xử lý mà không cần trigger.
 
 **Timezone** (`/setting#timezone`, nội bộ `settings:timezone`, `TimezoneSection.tsx`) — một mục chỉ-admin mà, giống Agent Runtime, **không** nằm trong luồng "Save Changes" của form: nó có nút **Apply** riêng. Mục này tải zone hiện tại và danh sách zone IANA chọn được qua `GET /api/device/timezone`, cho người vận hành chọn một zone từ một dropdown duy nhất (`<select>` nhóm theo khu vực bằng `<optgroup>`, mỗi dòng ghi `(GMT+7) Ho Chi Minh` và sắp theo offset UTC, giống cách các trình chọn timezone phổ biến trên web làm), và hiển thị preview trực tiếp giờ địa phương theo zone đã chọn. Khi nhấn **Apply** nó gọi `POST /api/device/timezone {timezone}`; thay đổi áp dụng ngay lập tức (không cần khởi động lại thiết bị).
 
 Trang `/edit` độc lập (cũ) đã bị gỡ bỏ; `SettingsPanel` của nó giờ chỉ truy cập được qua các tab `/setting` bên trong Monitor. `/edit` (và link "update →" trong Setup) giờ redirect tới `/setting`.
 
 ---
+
+#### Voice — panel Piper
+
+`TTSSection` (`system/web/src/pages/settings/TTSSection.tsx`) có thêm provider
+thứ tư, **Piper (Local — free)**. Nó khác ba cái kia ở chỗ không có base URL và
+không có API key, nên chọn nó là hai ô đó ẩn đi — và bộ lọc ngôn ngữ cũng ẩn
+luôn, vì với Piper thì *model chính là ngôn ngữ*, lọc chỉ khiến người dùng không
+thấy model mà chính họ đã cài.
+
+Thay vào đó panel hiện trạng thái cài đặt, theo đúng thứ tự phụ thuộc thật:
+engine trước, giọng sau. Danh sách giọng chỉ hiện **sau khi** engine tồn tại, vì
+tải một model 63 MB mà máy chưa chạy được là 63 MB đổ đi. Mỗi dòng hiện license
+ngay cạnh tên model — mọi giọng được mời tải đều dùng thương mại được, nhưng
+license khác nhau, và người chọn nên nhìn thấy điều đó.
+
+Tiến độ được poll mỗi hai giây và **chỉ khi có job đang chạy**; đây là phần duy
+nhất của trang có trạng thái tự đổi mà người dùng không đụng vào. Việc tải diễn
+ra trên thiết bị, nên panel đọc trường `job` từ
+`GET /api/voice/piper/status` chứ không tự theo dõi gì.
+
+Hai chi tiết nên giữ nếu sau này refactor. Ngôn ngữ câu thử được suy ra từ **tên
+giọng** (`vi_VN-…` → `vi`) chứ không lấy từ bộ lọc ngôn ngữ vốn đã bị Piper ẩn —
+thiếu chỗ này thì nút Test Voice gửi ngôn ngữ STT của máy và đọc câu mẫu tiếng
+Anh bằng model tiếng Việt, nghe ra như giọng hỏng chứ không phải như chọn sai
+ngôn ngữ. Và phần ghi công **cố tình không** hiện ở đây: nghĩa vụ đó thuộc về
+bên phân phối giọng, không phải người bật nó lên, và `CREDITS.md` mới là chỗ
+hoàn thành nghĩa vụ.
+
 
 ## 4. Polling & Data Sources
 
@@ -169,9 +197,9 @@ Monitor poll API system/HW mỗi **3 giây**. Flow dùng hybrid theo file: REST 
 | `GET /api/agent/events` | SSE từ monitor bus, giữ để tương thích |
 | `POST /api/agent/restart` | Recovery "start + enable + restart": backend gọi best-effort `systemctl enable <unit>` (để fix vẫn còn sau reboot) rồi gọi `RestartAgent()` của runtime (chạy `systemctl restart <unit>` — start nếu đang stopped). Là nút icon restart nhỏ ở góc phải-dưới card Agent Gateway. |
 | `POST /api/system/force-update` | Kích hoạt kiểm tra OTA qua bootstrap worker (proxy tới `localhost:8080/force-check`) |
-| `GET /api/system/ota-versions` | Trả `{current, target, min_version, update_available, held_by_floor}` cho từng component (proxy bootstrap `/versions`, kèm alias `agent` cho CLI của runtime đang chạy). Card Versions hiện nút `update` ở mọi chỗ `update_available` = true (`held_by_floor` vẫn được trả về nhưng KHÔNG dùng để quyết định nút: nút cài bản đã publish lên chính máy này, giống `software-update <key>` qua SSH, còn sàn chỉ dùng để staging rollout tự động) |
+| `GET /api/system/ota-versions` | Trả `{current, target, min_version, update_available, held_by_floor}` cho từng component (proxy bootstrap `/versions`, gồm device profile đang cài từ `devices.<device_type>`, kèm alias `agent` cho CLI của runtime đang chạy). Card Versions hiện nút `update` ở mọi chỗ `update_available` = true (`held_by_floor` vẫn được trả về nhưng KHÔNG dùng để quyết định nút: nút cài bản đã publish lên chính máy này, giống `software-update <key>` qua SSH, còn sàn chỉ dùng để staging rollout tự động) |
 | `GET /api/system/ota-updating` | Các component worker đang cài ngay lúc này (`{updating: [...]}`, kèm alias `agent`). Cố ý làm rẻ — không fetch metadata — vì card Versions poll nó mỗi 2 giây trong lúc cài và hiện `updating…` ở dòng đó thay cho nút |
-| `POST /api/system/software-update/:target` | Kiểm tra OTA cho một component. `target`: `os-server` \| `bootstrap` \| `web` \| `hal` \| `agent`. Bootstrap tự cập nhật bằng cách chạy installer nền, nên có thể restart worker thay thế an toàn. **`agent` là target ảo** — os-server tự phân giải sang CLI của runtime đang chạy (`codex`/`claudecode`/`opencode`/`picoclaw`) để trình duyệt không cần biết runtime nào; `hermes` trả 400 (không pin được nên bootstrap không bao giờ auto-apply). Giới hạn 1 lần / target / 30 giây |
+| `POST /api/system/software-update/:target` | Kiểm tra OTA cho một component. `target`: `os-server` \| `bootstrap` \| `web` \| `hal` \| `device` \| `agent`. Bootstrap tự cập nhật bằng cách chạy installer nền, nên có thể restart worker thay thế an toàn; `device` cài profile `devices.<device_type>` đã resolve. **`agent` là target ảo** — os-server tự phân giải sang CLI của runtime đang chạy (`codex`/`claudecode`/`opencode`/`picoclaw`) để trình duyệt không cần biết runtime nào; `hermes` trả 400 (không pin được nên bootstrap không bao giờ auto-apply). Giới hạn 1 lần / target / 30 giây |
 
 > **Lưu ý format**: OS server API trả `{ status: 1, data: <payload>, message: null }` khi thành công.
 
@@ -569,12 +597,25 @@ Lý do tồn tại: HAL Python (`hal/`) ship dưới GPL v3, bake sẵn vào ima
 # Build production
 make web-build        # tsc + vite build → system/web/dist/
 
-# Deploy lên Pi
-make web-deploy       # web-build + rsync dist/ → /usr/share/nginx/html/setup/
-
-# Deploy HAL (khi thay đổi server.py)
-make hal-deploy       # rsync + pip install + systemctl restart hal.service
+# Deploy lên MỘT thiết bị theo IP (dev push — KHÔNG phải đường OTA cho cả fleet)
+IP=172.168.20.255 make device-deploy   # hal + os-server
+IP=172.168.20.255 make hal-deploy      # chỉ hal, không cần build
+IP=172.168.20.255 make os-deploy       # cross-compile + thay binary
 ```
 
-> Deploy dùng `PI_HOST=lamp.local` (mDNS). Nếu không resolve được, dùng IP trực tiếp:
-> `PI_USER=root PI_HOST=<DEVICE_IP> make web-deploy`
+Chạy bằng `scripts/deploy-device.sh`. `PI_USER` mặc định `orangepi` và `PI_PASS`
+mặc định `orangepi` (cần `sshpass`); đặt `PI_PASS=""` để dùng SSH key của bạn và
+sudo tương tác. Có thể dùng `PI_HOST` thay cho `IP`.
+
+`.env`, `.venv` và `calibration/` trên thiết bị không bao giờ bị ghi đè, và bước
+swap chạy không có `--delete`, nên các đường dẫn riêng của thiết bị (ngoài repo)
+vẫn còn nguyên.
+
+> **Chạy `--dry-run` trước khi nhánh của bạn có thể cũ hơn thiết bị.** Bước swap
+> ghi đè, nên một checkout cũ có thể âm thầm hoàn tác phần việc chỉ tồn tại trên
+> thiết bị:
+> `IP=<DEVICE_IP> bash scripts/deploy-device.sh --hal --dry-run`
+
+Các target trên dành cho một thiết bị trong LAN. Để phát hành cho cả fleet, dùng
+đường OTA — `make upload-hal` rồi `make promote-hal`, vốn đánh version cho
+artifact và roll out.

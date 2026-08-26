@@ -87,7 +87,8 @@ func compareVersions(a, b string) int {
 // refused), so a stray call cannot push a CLI onto a device that does not run it.
 var forceTargetAllowed = map[string]bool{
 	domain.OTAKeyOSServer: true, domain.OTAKeyBootstrap: true, domain.OTAKeyWeb: true, domain.OTAKeyHal: true,
-	domain.OTAKeyCodex: true, domain.OTAKeyClaudeCode: true, domain.OTAKeyOpenCode: true, domain.OTAKeyPicoClaw: true,
+	domain.OTAKeyDevice: true,
+	domain.OTAKeyCodex:  true, domain.OTAKeyClaudeCode: true, domain.OTAKeyOpenCode: true, domain.OTAKeyPicoClaw: true,
 }
 
 // Bootstrap is the simplified OTA worker.
@@ -299,6 +300,12 @@ func (b *Bootstrap) checkOnce(ctx context.Context) error {
 		slog.Warn("empty metadata", "component", "bootstrap", "url", b.cfg.MetadataURL)
 		return nil
 	}
+
+	// Bring the on-device updater current BEFORE reconciling: the components
+	// below delegate their installs to it, and a fix shipped in the updater is
+	// only useful if it lands before the run that needs it. `software-update` is
+	// not an OTA component, so this is the only automatic path it has.
+	b.refreshUpdater(ctx)
 
 	// Reset per-cycle so a later cycle that finds new updates can announce
 	// again. Without this reset the operator would only hear the cue once per

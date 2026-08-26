@@ -228,6 +228,54 @@ def _measurable_faces(faces) -> list:
     return out
 
 
+def _yolo_rows(results) -> list:
+    """Flatten ultralytics results into ``(cls, conf, x1, y1, x2, y2)`` rows."""
+    rows = []
+    for r in results:
+        if r.boxes is None or len(r.boxes) == 0:
+            continue
+        for b in r.boxes:
+            x1, y1, x2, y2 = b.xyxy[0].tolist()
+            rows.append((int(b.cls[0]), float(b.conf[0]), x1, y1, x2, y2))
+    return rows
+
+
+def _class_candidates(rows: list, coco_idx: int, conf_floor: float,
+                      frame_area: float) -> list:
+    """Rows of the target class that clear the confidence and area gates.
+
+    Returns ``(bbox, conf, area_ratio, rect)`` per survivor, in the frame the
+    rows were measured in. Deliberately does NOT rank or disambiguate — callers
+    differ on both, and keeping the gates in one place is what stops them
+    drifting apart (see detect vs detect_candidates).
+    """
+    out = []
+    for cls, conf, x1, y1, x2, y2 in rows:
+        if cls != coco_idx or conf < conf_floor:
+            continue
+        bw = int(x2 - x1)
+        bh = int(y2 - y1)
+        area_ratio = (bw * bh) / frame_area if frame_area > 0 else 0.0
+        if not (C.DETECT_MIN_AREA_RATIO <= area_ratio <= C.DETECT_MAX_AREA_RATIO):
+            continue
+        out.append(((int(x1), int(y1), bw, bh), conf, area_ratio, (x1, y1, x2, y2)))
+    return out
+
+
+def _cross_class_rival(rows: list, coco_idx: int, rect, conf: float):
+    """A higher-confidence box of ANOTHER class sharing this spot, or None.
+
+    The model believing the object is that other thing is a reason to reject
+    rather than to seed a tracker on a lookalike (phone↔mouse↔remote).
+    """
+    for cls, other_conf, x1, y1, x2, y2 in rows:
+        if cls == coco_idx or other_conf <= conf:
+            continue
+        if _iou_xyxy(rect, (x1, y1, x2, y2)) >= _CROSS_CLASS_IOU:
+            return cls, other_conf
+    return None
+
+
 def _detect_face_yunet(frame: npt.NDArray[np.uint8]) -> Optional[Tuple[int, int, int, int]]:
     """Run YuNet on the frame, return the largest face bbox (x,y,w,h) or None.
 
@@ -402,40 +450,30 @@ class ObjectDetector:
                         conf_floor = max(conf_floor, float(min_conf))
                     if strict:
                         conf_floor = max(conf_floor, _CONFUSABLE_CONF_FLOOR.get(coco_idx, 0.0))
-                    boxes = []  # (cls, conf, x1, y1, x2, y2)
-                    for r in results:
-                        if r.boxes is None or len(r.boxes) == 0:
-                            continue
-                        for b in r.boxes:
-                            x1, y1, x2, y2 = b.xyxy[0].tolist()
-                            boxes.append((int(b.cls[0]), float(b.conf[0]), x1, y1, x2, y2))
+                    boxes = _yolo_rows(results)
                     best = None
-                    for cls, conf, x1, y1, x2, y2 in boxes:
-                        if cls != coco_idx or conf < conf_floor:
-                            continue
-                        bw = int(x2 - x1)
-                        bh = int(y2 - y1)
-                        area_ratio = (bw * bh) / frame_area if frame_area > 0 else 0.0
-                        if not (C.DETECT_MIN_AREA_RATIO <= area_ratio <= C.DETECT_MAX_AREA_RATIO):
-                            continue
-                        if best is None or conf > best[1]:
-                            best = ((int(x1), int(y1), bw, bh), conf, area_ratio, (x1, y1, x2, y2))
+                    for cand in _class_candidates(boxes, coco_idx, conf_floor, frame_area):
+                        if best is None or cand[1] > best[1]:
+                            best = cand
                     # Cross-class disambiguation: a same-spot box of another
                     # class with HIGHER confidence means the model believes the
                     # object is that other thing — reject instead of seeding the
                     # tracker on a lookalike (phone↔mouse↔remote).
+                    #
+                    # Applied to the BEST box only, and a rejection returns
+                    # nothing rather than falling to the runner-up — preserved
+                    # exactly, because the tracker's lock depends on it. The
+                    # per-candidate variant lives in detect_candidates, which no
+                    # tracking path calls.
                     if best is not None:
-                        rect = best[3]
-                        for cls, conf, x1, y1, x2, y2 in boxes:
-                            if cls == coco_idx or conf <= best[1]:
-                                continue
-                            if _iou_xyxy(rect, (x1, y1, x2, y2)) >= _CROSS_CLASS_IOU:
-                                rival = model.names.get(cls, str(cls)) if hasattr(model, "names") else str(cls)
-                                logger.info(
-                                    "[tracking_yolo_local] reject '%s' conf=%.3f — same spot is '%s' conf=%.3f (cross-class)",
-                                    target, best[1], rival, conf)
-                                best = None
-                                break
+                        rival_hit = _cross_class_rival(boxes, coco_idx, best[3], best[1])
+                        if rival_hit is not None:
+                            cls, conf = rival_hit
+                            rival = model.names.get(cls, str(cls)) if hasattr(model, "names") else str(cls)
+                            logger.info(
+                                "[tracking_yolo_local] reject '%s' conf=%.3f — same spot is '%s' conf=%.3f (cross-class)",
+                                target, best[1], rival, conf)
+                            best = None
                     if best is not None:
                         bbox, conf, area_ratio, _ = best
                         self.last_confidence = conf
@@ -458,6 +496,69 @@ class ObjectDetector:
             logger.info("[tracking_yolo] target='%s' not in COCO — using remote", target)
 
         return self._detect_remote(frame, target, _up)
+
+    def detect_candidates(self, frame: npt.NDArray[np.uint8], target: str,
+                          strict: bool = False,
+                          min_conf: Optional[float] = None) -> list:
+        """Every plausible box for `target`, not just the best one.
+
+        `detect` answers "which ONE box" by picking the highest confidence, and
+        that is right for the tracker: a lock needs a single target, and the
+        confusable-class guard exists to keep it off a lookalike.
+
+        It is wrong for the aim. Confidence measures how CANONICAL a shape is,
+        so a small, fully-visible colleague at the back of the room outscores
+        the person actually talking to the lamp — who is clipped by the frame
+        edge, occluded by whatever they are holding up, and close enough that
+        "person" is a face and one shoulder. Device-proven 2026-08-24: the
+        background colleague won at conf 0.71 and the aim turned 19.8 deg away
+        from the asker.
+
+        Returning every survivor lets the caller rank by its own notion of
+        "the subject" — for the aim, apparent height, which is the only
+        distance cue one camera has. The size floor can then be applied BEFORE
+        the choice instead of after it; applied after, it can only rubber-stamp
+        a choice already made, which is how the wrong human got through.
+
+        Local COCO path only. Returns ``[(bbox, conf)]`` in ORIGINAL camera
+        coords, unranked, or ``[]`` when this path does not apply — the caller
+        falls back to `detect` for faces and open-vocab targets.
+        """
+        target_key = (target or "").lower().strip()
+        coco_idx = _COCO_CLASSES.get(target_key)
+        if not _DETECT_LOCAL_ENABLED or coco_idx is None:
+            return []
+        model = _get_local_yolo()
+        if model is None:
+            return []
+        frame, _scale = downscale(frame)
+        _up = 1.0 / _scale if _scale else 1.0
+        try:
+            results = model(frame, verbose=False, imgsz=_LOCAL_IMGSZ,
+                            conf=C.DETECT_MIN_CONFIDENCE)
+        except Exception as e:
+            logger.debug("[tracking_yolo_local] candidate detect failed: %s", e)
+            return []
+        h_fr, w_fr = frame.shape[:2]
+        frame_area = float(h_fr * w_fr)
+        conf_floor = C.DETECT_MIN_CONFIDENCE
+        if min_conf is not None:
+            conf_floor = max(conf_floor, float(min_conf))
+        if strict:
+            conf_floor = max(conf_floor, _CONFUSABLE_CONF_FLOOR.get(coco_idx, 0.0))
+
+        rows = _yolo_rows(results)
+        out = []
+        for bbox, conf, _area_ratio, rect in _class_candidates(
+            rows, coco_idx, conf_floor, frame_area
+        ):
+            # Per-candidate here, unlike `detect`: with several boxes on the
+            # table, one being a lookalike is a reason to drop THAT box, not to
+            # abandon the frame.
+            if _cross_class_rival(rows, coco_idx, rect, conf) is not None:
+                continue
+            out.append((scale_bbox(bbox, _up), conf))
+        return out
 
     def _detect_remote(self, frame: npt.NDArray[np.uint8], target: str,
                        up_factor: float) -> Optional[Tuple[int, int, int, int]]:

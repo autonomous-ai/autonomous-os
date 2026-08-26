@@ -253,10 +253,38 @@ PENDING_MOVED_FROM=""
 PENDING_MOVED_TO=""
 PENDING_RESTORE_SERVICES=""
 
+# Services this run has stopped and not yet brought back.
+#
+# Separate from the pending-publish state above, and armed EARLIER, because the
+# two windows are not the same. A branch stops its services first and only then
+# starts moving trees around, so an exit between those two points used to leave
+# the device with its services down and nothing to bring them back:
+# mark_publish_pending had not run yet, so on_exit had no restore function to
+# call. Device-observed 26/08/2026 on lamp-0c89: `software-update device` wrote
+# its service snapshot, ran `systemctl stop os-server`, and died on the SIGTERM
+# that same stop delivered (the updater was inside os-server's cgroup). hal was
+# never even reached, os-server stayed down, and the run left no other trace.
+#
+# Arm this immediately before the first `systemctl stop` of a branch and disarm
+# it once services are confirmed back, so EVERY exit path in between — signal,
+# `set -e`, an explicit `exit 1` — restores them.
+STOPPED_SERVICES_RESTORE=""
+
+arm_service_restore() {
+  STOPPED_SERVICES_RESTORE="$1"
+}
+
+disarm_service_restore() {
+  STOPPED_SERVICES_RESTORE=""
+}
+
 mark_publish_pending() {
   PENDING_MOVED_FROM="$1"   # where the live tree used to be
   PENDING_MOVED_TO="$2"     # where it was moved to
   PENDING_RESTORE_SERVICES="${3:-}"  # optional function that brings services back
+  # Callers that publish also stopped services; keep the longer-lived latch in
+  # step so it stays armed for a branch that never called arm_service_restore.
+  [ -z "${3:-}" ] || arm_service_restore "$3"
 }
 
 clear_publish_pending() {
@@ -270,7 +298,14 @@ on_exit() {
   if [ -n "$PENDING_MOVED_FROM" ] && [ ! -e "$PENDING_MOVED_FROM" ] && [ -d "$PENDING_MOVED_TO" ]; then
     echo "[software-update] interrupted mid-publish — putting $PENDING_MOVED_FROM back" >&2
     mv "$PENDING_MOVED_TO" "$PENDING_MOVED_FROM" 2>/dev/null || true
-    [ -z "$PENDING_RESTORE_SERVICES" ] || "$PENDING_RESTORE_SERVICES" || true
+  fi
+  # After the tree is back, not before: restarting a service onto a half-moved
+  # tree would start it against the staging path. One call only — the latch is
+  # what the publish window used to duplicate.
+  if [ -n "$STOPPED_SERVICES_RESTORE" ]; then
+    echo "[software-update] exiting with services stopped — bringing them back" >&2
+    "$STOPPED_SERVICES_RESTORE" || true
+    disarm_service_restore
   fi
   rm -f "$METADATA_TMP" "$METADATA_PAYLOAD" "$ZIP_TMP" 2>/dev/null || true
   [ -z "$DIR_TMP" ] || rm -rf "$DIR_TMP"
@@ -286,6 +321,52 @@ restore_hal_backup() {
 }
 
 [ "$(id -u)" -ne 0 ] && { echo "Run as root."; exit 1; }
+
+# Hand the work to a transient systemd SERVICE and wait for it.
+#
+# Every branch stops the component it replaces, and three of them stop whatever
+# is hosting the caller: `os-server` and `device` stop os-server, which serves
+# the web CLI; `web` stops nginx, which carries that CLI's connection. Run
+# inline, the updater is a child of that shell, so the stop kills its cgroup —
+# SIGKILL, no trap, update abandoned half-done. Device-observed 26/08/2026 on
+# lamp-0c89: `software-update device` published the profile and died before
+# applying its rootfs, leaving os-server down and a staging dir behind.
+#
+# A transient service has no client process to kill: systemd owns it, in its own
+# cgroup, so it runs to completion no matter what happens to the caller. --wait
+# keeps the familiar CLI behaviour — the shell blocks and gets the real exit
+# code — but if that shell dies, the update carries on instead of aborting.
+#
+# NOT `--scope`: a scope IS owned by the systemd-run client, which lives in the
+# caller's cgroup, so killing the caller stops the scope. That was tried on
+# 26/08/2026 and made things worse (it broke the SSH-hangup path that used to
+# recover cleanly), so do not swap this back.
+#
+# Output goes to the journal rather than the terminal; the line below says how
+# to follow it. Probe first so a box without systemd-run still updates inline.
+if [ -z "${SOFTWARE_UPDATE_DETACHED:-}" ] && command -v systemd-run >/dev/null 2>&1; then
+  SU_UNIT="software-update-$1-$$"
+  if systemd-run --unit="probe-$SU_UNIT" --collect --quiet --wait \
+      --service-type=oneshot -- /bin/true >/dev/null 2>&1; then
+    SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+    # Carry the caller's overrides across. A transient unit starts from a clean
+    # environment, so anything the operator exported would be dropped —
+    # SILENTLY, which is the dangerous part: `OTA_METADATA_URL=<staging-feed>
+    # software-update web` ran against the PRODUCTION feed and reported success
+    # (measured 26/08/2026). Every variable this script reads from the
+    # environment belongs in this list; keep it in step with the `${VAR:-}`
+    # reads above.
+    SU_ENV=()
+    for v in OTA_METADATA_URL HAL_UV_CACHE; do
+      [ -z "${!v:-}" ] || SU_ENV+=("--setenv=$v=${!v}")
+    done
+    echo "[software-update] running as $SU_UNIT.service — follow with: journalctl -fu $SU_UNIT"
+    exec systemd-run --unit="$SU_UNIT" --collect --quiet --wait \
+      --service-type=oneshot --setenv=SOFTWARE_UPDATE_DETACHED=1 \
+      "${SU_ENV[@]}" -- "$SELF" "$@"
+  fi
+  echo "[software-update] transient units unavailable — running inline" >&2
+fi
 # One update at a time, whoever asks. Two concurrent runs destroy each other:
 # the component branches move the installed tree to <name>.previous, so a second
 # run `rm -rf`s the first run's ONLY backup and then fails on the missing source
@@ -320,9 +401,11 @@ if [ "$APP" = "rollback" ]; then
         echo "WARN: could not record rollback version; lower min_version before the next OTA poll"
       fi
     fi
+    arm_service_restore restore_web_service_state
     systemctl stop nginx 2>/dev/null || true
     restore_web_backup
     restore_web_service_state
+    disarm_service_restore
     check_web || { echo "web rollback health check failed"; exit 1; }
     echo "web restored from $BACKUP"
     exit 0
@@ -339,10 +422,12 @@ if [ "$APP" = "rollback" ]; then
       CONFIG_TMP=$(mktemp)
       if jq --arg version "$BLOCKED_VERSION" '.rollback_versions = (.rollback_versions // {}) | .rollback_versions.device = $version' "$BOOTSTRAP_JSON" >"$CONFIG_TMP"; then mv "$CONFIG_TMP" "$BOOTSTRAP_JSON"; else rm -f "$CONFIG_TMP"; echo "WARN: could not record rollback version; lower min_version before the next OTA poll"; fi
     fi
+    arm_service_restore restore_device_service_state
     systemctl stop os-server 2>/dev/null || true
     systemctl stop hal 2>/dev/null || true
     restore_device_backup
     restore_device_service_state
+    disarm_service_restore
     check_device_profile || { echo "device rollback health check failed"; exit 1; }
     echo "device restored from $BACKUP"
     exit 0
@@ -356,9 +441,11 @@ if [ "$APP" = "rollback" ]; then
       CONFIG_TMP=$(mktemp)
       if jq --arg version "$BLOCKED_VERSION" '.rollback_versions = (.rollback_versions // {}) | .rollback_versions.hal = $version' "$BOOTSTRAP_JSON" >"$CONFIG_TMP"; then mv "$CONFIG_TMP" "$BOOTSTRAP_JSON"; else rm -f "$CONFIG_TMP"; echo "WARN: could not record rollback version; lower min_version before the next OTA poll"; fi
     fi
+    arm_service_restore restore_hal_service_state
     systemctl stop hal 2>/dev/null || true
     restore_hal_backup
     restore_hal_service_state
+    disarm_service_restore
     check_hal || { echo "HAL rollback health check failed"; exit 1; }
     echo "hal restored from $BACKUP"
     exit 0
@@ -660,6 +747,7 @@ elif [ "$APP" = "web" ]; then
   echo "$VERSION" > "$DIR_TMP/VERSION"
   [ -f "$DIR_TMP/index.html" ] || { echo "No index.html in web zip"; exit 1; }
   save_web_service_state
+  arm_service_restore restore_web_service_state
   systemctl stop nginx 2>/dev/null || true
   rm -rf "$ROLLBACK_DIR/web.previous"
   mv "$WEB_ROOT" "$ROLLBACK_DIR/web.previous"
@@ -676,6 +764,7 @@ elif [ "$APP" = "web" ]; then
     check_web || true
     exit 1
   fi
+  disarm_service_restore
   echo "web updated to $VERSION"
 elif [ "$APP" = "hal" ]; then
   [ -z "$URL" ] && { echo "Metadata has no url for hal"; exit 1; }
@@ -685,6 +774,7 @@ elif [ "$APP" = "hal" ]; then
   [ -n "$UV_BIN" ] || [ ! -x /root/.local/bin/uv ] || UV_BIN=/root/.local/bin/uv
   [ -n "$UV_BIN" ] || { echo "uv not found"; exit 1; }
   save_hal_service_state
+  arm_service_restore restore_hal_service_state
   systemctl stop hal 2>/dev/null || true
   # A missing $HAL_DIR is a REINSTALL, not an error: an interrupted earlier run
   # can leave the runtime moved away with nothing to move back, and aborting
@@ -726,7 +816,7 @@ elif [ "$APP" = "hal" ]; then
     if [ -f "$ROLLBACK_DIR/hal.previous/.env" ]; then cp -a "$ROLLBACK_DIR/hal.previous/.env" "$DIR_TMP/.env" || exit 1; fi
     find "$UV_CACHE_DIR" -name "lerobot.egg-info" -type d 2>/dev/null | xargs rm -rf
     cd "$DIR_TMP" || exit 1
-    "$UV_BIN" sync --python 3.12 --extra hardware || exit 1
+    "$UV_BIN" sync --python 3.12 --extra hardware --extra aec || exit 1
   ); then
     echo "HAL staging failed; restoring known-good runtime" >&2
     cd /
@@ -754,6 +844,7 @@ elif [ "$APP" = "hal" ]; then
     check_hal || true
     exit 1
   fi
+  disarm_service_restore
   echo "hal updated to $VERSION"
 elif [ "$APP" = "claude-desktop-buddy" ]; then
   [ -z "$URL" ] && { echo "Metadata has no url for claude-desktop-buddy"; exit 1; }
@@ -780,6 +871,7 @@ elif [ "$APP" = "device" ]; then
   [ -f "$DIR_TMP/ROBOT.md" ] || { echo "No ROBOT.md in device profile"; exit 1; }
   [ -d "$DEST" ] || { echo "No installed device profile at $DEST"; exit 1; }
   save_device_service_state
+  arm_service_restore restore_device_service_state
   systemctl stop os-server 2>/dev/null || true
   systemctl stop hal 2>/dev/null || true
   snapshot_device_rootfs "$DEST/rootfs" "$DIR_TMP/rootfs"
@@ -790,11 +882,23 @@ elif [ "$APP" = "device" ]; then
   mv "$DIR_TMP" "$DEST"
   DIR_TMP=""
   clear_publish_pending
-  # Keep local tuning in .env exactly as the existing updater did.
-  ENV_BACKUP=""
-  if [ -f /opt/hal/.env ]; then ENV_BACKUP=$(mktemp); cp -a /opt/hal/.env "$ENV_BACKUP"; fi
+  # Apply the profile's rootfs overlay, /opt/hal/.env included.
+  #
+  # The repo is the only source of a device's .env: a dev edits
+  # robots/<type>/rootfs/opt/hal/.env, publishes with `make upload-device`, and
+  # every device picks it up on its next `software-update device`. Anything
+  # edited directly on a device is a temporary experiment from an SSH session,
+  # and is MEANT to be overwritten by the next update — that is how the machine
+  # gets back to what the repo says.
+  #
+  # This used to back .env up and restore it afterwards, which quietly broke
+  # that flow: the new file reached /opt/devices/<type>/rootfs/opt/hal/.env and
+  # was then thrown away, so no running device ever received an .env change
+  # again — only freshly flashed ones did. Device-observed 26/08/2026 on
+  # lamp-0c89: a published HAL_REALTIME_FILLER_DELAY_S never reached the live
+  # file and HAL kept running the old value. Do not re-add the backup; if a
+  # value has to differ per unit, it belongs in that unit's profile in the repo.
   [ ! -d "$DEST/rootfs" ] || cp -a "$DEST/rootfs/." /
-  if [ -n "$ENV_BACKUP" ]; then cp -a "$ENV_BACKUP" /opt/hal/.env; rm -f "$ENV_BACKUP"; fi
   if ! restore_device_service_state || ! check_device_profile; then
     echo "device profile health check failed; restoring the known-good profile" >&2
     systemctl stop os-server 2>/dev/null || true
@@ -804,5 +908,6 @@ elif [ "$APP" = "device" ]; then
     check_device_profile || true
     exit 1
   fi
+  disarm_service_restore
   echo "device profile ($DEVICE_TYPE) updated to $VERSION"
 fi

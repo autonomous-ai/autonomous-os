@@ -334,6 +334,49 @@ Requires sensing with camera (InsightFace). Enrolled person JPEGs persist under 
 | POST | `/voice/speak` | TTS — convert text to speech. Body fields: `text`, `voice?`, `interruptible?`, `provider?`, `tts_api_key?`, `tts_base_url?`, `cached?` (use WAV cache, render+save on miss), `prerender?` (render+save without playing — boot warmup) |
 | GET | `/voice/status` | voice_available, voice_listening, tts_available, tts_speaking |
 
+### Piper — on-device TTS
+
+A third TTS provider alongside `openai` and `elevenlabs`, selected as
+`tts_provider: "piper"`. Synthesis runs on the device, which removes the two
+limits a hosted provider imposes: there is no shared concurrency cap to queue
+behind (every unit renders its own audio, so throughput scales with units sold
+and costs nothing per utterance), and there is no network round trip, so
+time-to-first-audio drops — measured 129–236 ms for short replies against the
+2–5 s a hosted call typically takes. The trade is quality: Piper is audibly
+behind a hosted neural voice, so it is offered as the free default rather than
+as a replacement.
+
+**Nothing ships in the image.** The engine (~26 MB) and each voice (~63 MB) are
+downloaded to the device when the operator asks for them in Settings → Voice.
+That keeps the image small, means a unit that never leaves the hosted voice
+pays nothing, and — because the user's own device fetches from upstream — keeps
+Autonomous out of the business of redistributing GPL-3.0 software. Bundling
+Piper into the image would reverse that; see `CREDITS.md`.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/voice/piper/status` | Engine installed, voices installed, the download catalogue, and any job in flight. Proxied to HAL and re-wrapped in the standard envelope — the web client rejects a bare payload. |
+| POST | `/api/voice/piper/install` | Install the engine. Idempotent: already-installed returns ok, so the UI can call it without checking first. |
+| POST | `/api/voice/piper/voice` | Download one catalogue voice. Body `{name}`; names outside the catalogue are refused, so a caller cannot turn this into an arbitrary fetch into `/opt/piper`. |
+
+All three are admin-gated: they install software and write ~63 MB per voice.
+HAL serves the same three under `/voice/piper/*`; downloads run on a background
+thread and report progress through `job` in the status payload, because a 63 MB
+pull is far longer than an HTTP request should be held open for.
+
+Two things the implementation gets wrong if copied carelessly. Piper output
+already peaks at full scale, so the `volume_boost` of 2.5 the hosted backends
+use would clip every vowel — the backend reports `1.0`. And model load costs
+~700 ms, which dominated time-to-first-audio for short replies until the
+backend started keeping a pre-spawned process warm and replacing it after each
+utterance.
+
+Voices are enumerated from the filesystem (`/opt/piper/voices/*.onnx`), not from
+a hardcoded list, so dropping a model in makes it selectable. Which models are
+*offered* for download is a licensing decision, recorded with each entry in
+`hal/drivers/voice/tts/piper_catalog.py`.
+
+
 ### System
 
 | Method | Endpoint | Description |

@@ -510,7 +510,7 @@ Hai việc khác nhau, và lẫn lộn chúng chính là thứ làm nút web tr�
 
 Nút `update` trong card Versions là `force-update` (qua
 `POST /api/system/software-update/:target`). Cả hai dùng chung allowlist target,
-bao gồm `bootstrap`; Bootstrap tách installer nền để worker thay thế restart an
+bao gồm `bootstrap` và `device`; Bootstrap tách installer nền để worker thay thế restart an
 toàn. `componentInstalled` vẫn từ chối component thiết bị không có.
 
 ### `GET /versions` (bootstrap, loopback)
@@ -520,7 +520,8 @@ component thiết bị THỰC SỰ có (`componentInstalled`), nên mục CLI ch
 nó đang chạy, không có cái nào khác. `held_by_floor` nghĩa là đã publish bản mới
 nhưng `min_version` chưa được promote lên — worker sẽ từ chối, nên card Versions
 trên web coi component bị giữ là "không có update". os-server proxy thành
-`GET /api/system/ota-versions`.
+`GET /api/system/ota-versions`. Device profile đang cài được báo thành `device`,
+resolve từ `metadata.devices.<device_type>` lồng nhau thay vì danh sách component phẳng.
 
 ### Phát hiện version hiện tại
 
@@ -529,6 +530,7 @@ trên web coi component bị giữ là "không có update". os-server proxy thà
 | `os-server` | Chạy `os-server --version`, parse output |
 | `bootstrap` | Hằng số compile-time `config.BootstrapVersion` (ldflags) |
 | `web` | Đọc file `/usr/share/nginx/html/setup/VERSION` |
+| `device` | Đọc `/opt/devices/<device_type>/VERSION` |
 | `openclaw` | Chạy `openclaw --version`, trích xuất semver bằng regex |
 | `hal` | Chạy `/opt/hal/venv/bin/python -m hal --version` HOẶC đọc `/opt/hal/VERSION` |
 | `codex` / `claudecode` / `opencode` | Chạy `<cli> --version`, lấy semver ở dòng đầu (`cliSemver`) |
@@ -542,6 +544,7 @@ trên web coi component bị giữ là "không có update". os-server proxy thà
 | `os-server` | Chạy `software-update os-server` (block tối đa 10 phút) |
 | `bootstrap` | Spawn detached `software-update bootstrap` (tự cập nhật, sống sót sau restart) |
 | `web` | Chạy `software-update web` |
+| `device` | Chạy `software-update device` cho profile `devices.<device_type>` đã resolve; rootfs overlay được áp dụng nhưng vẫn giữ `.env` HAL local của thiết bị |
 | `openclaw` | ~~Chạy `npm install -g openclaw@{version}` → `systemctl restart openclaw`~~ (tạm thời tắt) |
 | `hal` | Chạy `software-update hal` → `systemctl restart hal` |
 | `codex` / `claudecode` / `opencode` / `picoclaw` | Chạy `software-update <key>` — CHỈ trên thiết bị có `agent_runtime` đúng bằng runtime đó |
@@ -568,8 +571,22 @@ Khớp theo branch guard chứ không theo key trần: key còn xuất hiện tr
 và trong usage string của bản updater không hề implement nó.
 
 **Chữa máy đang dùng updater cũ.** `make upload-setup` còn publish bản raw tại
-`{CDN}/software-update`, nên một lệnh SSH là đủ đưa máy ngoài thực địa lên bản
-hiện tại:
+`{CDN}/software-update`. Bootstrap giờ **tự động** làm mới bản trên máy từ đó, ở
+đầu mỗi vòng kiểm tra, trước khi reconcile bất kỳ component nào — updater không
+phải OTA component nên đây là đường tự động duy nhất nó có
+(`system/bootstrap/updater_refresh.go`). URL được suy ra từ `metadata_url`
+(`{base}/ota/metadata.json` → `{base}/software-update`) chứ không cấu hình riêng,
+nên hai thứ không thể trỏ về hai bản khác nhau.
+
+Cơ chế làm mới này cố ý rụt rè. Nó bỏ qua khi đang có force update chạy (bash
+đọc script theo kiểu lười, đè lên updater *đang chạy* sẽ khiến nó thực thi tiếp ở
+một offset bất kỳ — cũng chính là lý do script không được tự cập nhật chính nó),
+nó validate bản tải về bằng `bash -n` **trước** khi đụng vào file thật, nó ghi
+file tạm cùng thư mục rồi `rename` nên việc thay thế là atomic, và mọi thất bại
+đều giữ nguyên updater cũ. Thiết bị không bao giờ được rơi vào cảnh mất updater.
+
+Lệnh thủ công bên dưới vẫn dùng được, và vẫn là cách đúng khi bạn cần bản updater
+mới **ngay** thay vì chờ vòng poll kế tiếp:
 
 ```bash
 sudo curl -fsSL https://cdn.autonomous.ai/os/software-update -o /tmp/su \
@@ -621,7 +638,7 @@ và exit lỗi nếu cả hai đều rỗng — không có URL hardcode.
     # runtime đã giữ trước khi chạy uv sync.
     unzip -q "$ZIP" -d /opt/.hal.new
     cp -a /root/bootstrap/rollback/hal.previous/{.env,.venv,.uv-cache} /opt/.hal.new/
-    (cd /opt/.hal.new && uv sync --python 3.12 --extra hardware)
+    (cd /opt/.hal.new && uv sync --python 3.12 --extra hardware --extra aec)
     mv /opt/.hal.new /opt/hal
 
     systemctl restart hal

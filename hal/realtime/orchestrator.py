@@ -1191,9 +1191,16 @@ class RealtimeOrchestrator:
                     )
                     look_debug.note_aim(res)
                     # Announce the capture only when the aim actually had work to
-                    # do — an already-centred shutter fires in a few hundred ms
-                    # and needs no narration.
-                    if config.LOOK_AIM_SPEAK_CAPTURE and res.iterations > 0:
+                    # do AND got somewhere — an already-centred shutter fires in
+                    # a few hundred ms and needs no narration, and a failed one
+                    # has already said `look_lost`.
+                    #
+                    # `iterations > 0` alone was not enough: a failed aim still
+                    # counts its bearing steps, so "I can't find you" was
+                    # followed by "let me take a look", which tells the story
+                    # backwards. Audible once the look-around made the failure
+                    # path seconds long instead of instant.
+                    if config.LOOK_AIM_SPEAK_CAPTURE and res.aimed and res.iterations > 0:
                         from hal.drivers.tracking.aim import _say
 
                         with look_debug.stage("speak_filler"):
@@ -1235,12 +1242,34 @@ class RealtimeOrchestrator:
         # cancelled immediately after by end_turn() + skip_next_turn_done() in
         # the caller — the payload tells the model to hold, and the replayed
         # turn is what it actually answers.
+        # Tell the model whether the aim actually found the user, not just that
+        # a frame is coming. Without it the model cannot tell a well-framed shot
+        # from "wherever the camera happened to be pointing after failing to
+        # find anyone", so it answers both with the same confidence — the
+        # "embarrassingly wrong" the tool description itself warns about.
+        #
+        # The frame is still sent. `look` is mostly asked about OBJECTS ("what
+        # am I holding?", "read this label"), and the case where the person
+        # detector fails is exactly the case where the object is filling the
+        # frame — the asker close, clipped by the edge, occluded by the very
+        # thing they are asking about. Withholding the image there would break
+        # the question in the pose people actually hold things in.
+        found_user = bool(res is None or getattr(res, "aimed", False)
+                          or getattr(res, "reason", "") != "subject not found")
+        ack: dict[str, Any] = {"result": "frame incoming; wait for the image"}
+        if not found_user:
+            ack["found_user"] = False
+            ack["note"] = (
+                "I could not find you in view. This frame is wherever the "
+                "camera was already pointing, so say you cannot see them "
+                "rather than describing it as if they had shown you something."
+            )
         with look_debug.stage("ack_tool_call"):
             self._agent.send(
                 [
                     FunctionCallResultInput(
                         call_id=output.call_id,
-                        output='{"result": "frame incoming; wait for the image"}',
+                        output=json.dumps(ack),
                         trigger_response=True,
                     )
                 ]

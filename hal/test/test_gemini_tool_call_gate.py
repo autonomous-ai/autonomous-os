@@ -328,3 +328,49 @@ def test_replayed_audio_flows_once_the_tool_call_has_been_answered():
 
     assert len(session.realtime_inputs) == 1
     assert "audio" in session.realtime_inputs[0]
+
+
+# --- The look ack tells the model whether the aim found the user ---
+
+
+def _ack_payload(res):
+    """The dict the orchestrator would send as the look tool's result."""
+    import json as _json
+
+    found_user = bool(res is None or getattr(res, "aimed", False)
+                      or getattr(res, "reason", "") != "subject not found")
+    ack = {"result": "frame incoming; wait for the image"}
+    if not found_user:
+        ack["found_user"] = False
+        ack["note"] = "..."
+    return _json.loads(_json.dumps(ack))
+
+
+class _Aim:
+    def __init__(self, aimed, reason):
+        self.aimed = aimed
+        self.reason = reason
+
+
+def test_a_centred_aim_reports_nothing_unusual():
+    assert "found_user" not in _ack_payload(_Aim(True, "centred on person"))
+
+
+def test_running_out_of_time_still_counts_as_finding_them():
+    """The person IS in frame on these exits — just not centred yet. Flagging
+    them would make the model hedge on a perfectly good picture."""
+    assert "found_user" not in _ack_payload(_Aim(False, "deadline"))
+    assert "found_user" not in _ack_payload(_Aim(False, "max iterations"))
+
+
+def test_finding_nobody_is_reported_to_the_model():
+    """Without this the model cannot tell a framed shot from "wherever the
+    camera happened to be pointing", and answers both with equal confidence."""
+    ack = _ack_payload(_Aim(False, "subject not found"))
+    assert ack["found_user"] is False
+
+
+def test_a_disabled_aim_makes_no_claim_either_way():
+    """LOOK_AIM_ENABLED off, or the aim raised — no aim ran, so nothing is
+    known about framing and the model should not be told otherwise."""
+    assert "found_user" not in _ack_payload(None)

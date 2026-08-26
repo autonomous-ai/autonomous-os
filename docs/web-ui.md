@@ -142,15 +142,45 @@ The Settings collapsible group lives in the shared sidebar `NAV` (`system/web/sr
 | Plugins | `/setting#plugins` |
 | Timezone | `/setting#timezone` |
 
-Monitor leaves serialize as the plain id, e.g. `/monitor#overview`, `/monitor#system`, `/monitor#flow`. Defaults: `/monitor` with no/invalid hash → `overview`; `/setting` with no/invalid hash → `general` (URL normalized to `/setting#general`). Deep-links (e.g. `/setting#wifi`) and browser back/forward are honored via a `useLocation`-driven effect. Non-debug users only see the leaves in `PUBLIC_SECTIONS` (which includes Chat, Overview, Info, Flow, Camera, Users, Bluetooth, **Logs**, **CLI**, and the public Settings leaves General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); `?debug=true` reveals the rest (Sensing, Analytics, Servo, API Docs, Agent gateway, and the deeper Settings leaves AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Pressing `update` swaps the button for `updating…` immediately — the button never says "OK", which would read as "done" for a request that has only STARTED the install (and, for a component that finishes in seconds, arrived before the row could even show progress). Failures show the server's own reason (`rate-limited, retry in 8s`, `bootstrap unreachable`) rather than a bare "Failed". While an install runs, that row shows `updating…` in place of the button (an install takes tens of seconds — the component stops, is rebuilt and restarts — and a row that just sits there invites a second click, which is how a device once lost its HAL runtime). The `update` buttons in the Overview **Versions** card (Web / OS / HAL / Agent / Bootstrap rows) are gated the same way — regular viewers get no one-click OTA trigger. The top-bar **Debug** toggle beside the Dark/Light button toggles that query parameter while preserving the active route hash and any other query parameters; its amber state indicates that debug mode is enabled.
+Monitor leaves serialize as the plain id, e.g. `/monitor#overview`, `/monitor#system`, `/monitor#flow`. Defaults: `/monitor` with no/invalid hash → `overview`; `/setting` with no/invalid hash → `general` (URL normalized to `/setting#general`). Deep-links (e.g. `/setting#wifi`) and browser back/forward are honored via a `useLocation`-driven effect. Non-debug users only see the leaves in `PUBLIC_SECTIONS` (which includes Chat, Overview, Info, Flow, Camera, Users, Bluetooth, **Logs**, **CLI**, and the public Settings leaves General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); `?debug=true` reveals the rest (Sensing, Analytics, Servo, API Docs, Agent gateway, and the deeper Settings leaves AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Pressing `update` swaps the button for `updating…` immediately — the button never says "OK", which would read as "done" for a request that has only STARTED the install (and, for a component that finishes in seconds, arrived before the row could even show progress). Failures show the server's own reason (`rate-limited, retry in 8s`, `bootstrap unreachable`) rather than a bare "Failed". While an install runs, that row shows `updating…` in place of the button (an install takes tens of seconds — the component stops, is rebuilt and restarts — and a row that just sits there invites a second click, which is how a device once lost its HAL runtime). The `update` buttons in the Overview **Versions** card (Web / OS / HAL / Agent rows, plus Bootstrap and Device in debug) are gated the same way — regular viewers get no one-click OTA trigger. The top-bar **Debug** toggle beside the Dark/Light button toggles that query parameter while preserving the active route hash and any other query parameters; its amber state indicates that debug mode is enabled.
 
-**Wake-word gate** lives in the public **General** settings card, not the debug-only Realtime section. Its checkbox writes the top-level `wakeword` flag; saving restarts HAL so the change applies. The card lists every currently accepted phrase, including the active agent's exact current name and the permanent `autonomous` and device-type aliases; the system manages that list. Reload Settings after an agent rename to see the new name.
+**Speech attention gate** lives in the public **General** settings card, not the debug-only Realtime section. Its checkbox writes the top-level `wakeword` flag; saving restarts HAL so the change applies. When enabled, speech must follow an attention trigger: a spoken phrase, single click, turning toward the lamp while speaking, or an enrolled person entering view (`presence.enter`). A stranger-only enter does not open the voice gate unless the deployment sets `HAL_PRESENCE_WAKE_STRANGERS=true`. The card lists the currently accepted **spoken** phrases, including the active agent's exact current name and the permanent `autonomous` and device-type aliases; the system manages that list. Reload Settings after an agent rename to see the new name. When disabled, every utterance is handled without a trigger.
 
 **Timezone** (`/setting#timezone`, internal `settings:timezone`, `TimezoneSection.tsx`) — an admin-gated section that, like Agent Runtime, is **not** part of the form's "Save Changes" flow: it has its own **Apply** button. It loads the current zone and the selectable IANA zone list via `GET /api/device/timezone`, lets the operator pick a zone from a single dropdown (`<select>` grouped by region via `<optgroup>`, each option labelled `(GMT+7) Ho Chi Minh` and ordered by UTC offset, the way common web timezone pickers work), and shows a live preview of the local time in the selected zone. On **Apply** it calls `POST /api/device/timezone {timezone}`; the change applies immediately (no device restart needed).
 
 The legacy standalone `/edit` page was removed; its `SettingsPanel` is now reachable only through the `/setting` tabs inside Monitor. `/edit` (and the Setup "update →" hint) now redirect to `/setting`.
 
 ---
+
+#### Voice — the Piper panel
+
+`TTSSection` (`system/web/src/pages/settings/TTSSection.tsx`) gains a fourth
+provider, **Piper (Local — free)**. It is unlike the other three in that it has
+no base URL and no API key, so selecting it hides both fields, and hides the
+language filter as well — a Piper voice *is* a language, so filtering the list
+would only conceal models the operator installed on purpose.
+
+In their place the panel renders the install state, in the order the dependency
+actually runs: the engine first, then voices. Voice rows stay hidden until the
+engine exists, because downloading a 63 MB model the device cannot yet load is
+63 MB wasted. Each row shows its licence next to the model name — every voice
+offered is safe to ship, but the licences differ, and the person choosing one
+should be able to see which.
+
+Progress polls every two seconds and **only while a job is running**; this is
+the one part of the page whose state changes without the operator touching
+anything. Downloads happen on the device, so the panel reads `job` out of
+`GET /api/voice/piper/status` rather than tracking anything itself.
+
+Two details worth keeping if this code is refactored. The preview language is
+derived from the voice name (`vi_VN-…` → `vi`) rather than from the language
+filter, which Piper hides — without that the Test Voice button sends the
+device's STT language and speaks an English sample line through a Vietnamese
+model, which sounds like a broken voice rather than a mismatched one. And
+attribution is deliberately *not* surfaced here: it is owed by whoever
+distributes a voice, not by the person switching one on, and `CREDITS.md` is
+what discharges it.
+
 
 ## 4. Polling & Data Sources
 
@@ -171,9 +201,9 @@ Monitor polls system/HW APIs every **3 seconds**. Flow uses file-backed hybrid m
 | `GET /api/logs/stream?source=bootstrap` | Authenticated SSE stream for live Bootstrap Logs-tab updates. |
 | `POST /api/agent/restart` | "Start + enable + restart" recovery: backend does best-effort `systemctl enable <unit>` (so the fix survives reboot) then calls the runtime's own `RestartAgent()` (which resolves to `systemctl restart <unit>` — starts if stopped). Powers the Agent Gateway card's small restart icon at bottom-right. |
 | `POST /api/system/force-update` | Triggers OTA check via bootstrap worker (proxies to `localhost:8080/force-check`) |
-| `GET /api/system/ota-versions` | Per-component `{current, target, min_version, update_available, held_by_floor}` (proxies bootstrap `/versions`, plus an `agent` alias for the configured runtime's CLI). The Versions card shows an `update` button wherever `update_available` is true (`held_by_floor` is reported but NOT used for the button: the button installs the published version on this device, like `software-update <key>` over SSH, and the floor only stages the automatic fleet rollout) |
+| `GET /api/system/ota-versions` | Per-component `{current, target, min_version, update_available, held_by_floor}` (proxies bootstrap `/versions`, including the installed device profile from `devices.<device_type>`, plus an `agent` alias for the configured runtime's CLI). The Versions card shows an `update` button wherever `update_available` is true (`held_by_floor` is reported but NOT used for the button: the button installs the published version on this device, like `software-update <key>` over SSH, and the floor only stages the automatic fleet rollout) |
 | `GET /api/system/ota-updating` | Components the worker is installing right now (`{updating: [...]}`, plus the `agent` alias). Deliberately cheap — no metadata fetch — because the Versions card polls it every 2 s while an install runs and shows `updating…` on that row instead of the button |
-| `POST /api/system/software-update/:target` | Per-component OTA check. `target`: `os-server` \| `bootstrap` \| `web` \| `hal` \| `agent`. Bootstrap self-updates by spawning the installer in the background, so its replacement can safely restart the worker. **`agent` is virtual** — os-server resolves it to the configured runtime's CLI (`codex`/`claudecode`/`opencode`/`picoclaw`) so the browser never needs to know which runtime runs; `hermes` returns 400 (it cannot be pinned, so bootstrap never auto-applies it). Rate-limited to one call per target per 30 s |
+| `POST /api/system/software-update/:target` | Per-component OTA check. `target`: `os-server` \| `bootstrap` \| `web` \| `hal` \| `device` \| `agent`. Bootstrap self-updates by spawning the installer in the background, so its replacement can safely restart the worker; `device` installs the resolved `devices.<device_type>` profile. **`agent` is virtual** — os-server resolves it to the configured runtime's CLI (`codex`/`claudecode`/`opencode`/`picoclaw`) so the browser never needs to know which runtime runs; `hermes` returns 400 (it cannot be pinned, so bootstrap never auto-applies it). Rate-limited to one call per target per 30 s |
 
 > **Note on format**: The OS server API returns `{ status: 1, data: <payload>, message: null }` on success.
 
@@ -576,12 +606,24 @@ Reason it exists: HAL Python (`hal/`) ships GPL v3, baked into the board image. 
 # Build production
 make web-build        # tsc + vite build → system/web/dist/
 
-# Deploy to Pi
-make web-deploy       # web-build + rsync dist/ → /usr/share/nginx/html/setup/
-
-# Deploy HAL (when server.py changes)
-make hal-deploy       # rsync + pip install + systemctl restart hal.service
+# Deploy to one device by IP (dev push — NOT the OTA fleet path)
+IP=172.168.20.255 make device-deploy   # hal + os-server
+IP=172.168.20.255 make hal-deploy      # hal only, no build step
+IP=172.168.20.255 make os-deploy       # cross-compile + swap the binary
 ```
 
-> Deploy uses `PI_HOST=lamp.local` (mDNS). If it doesn't resolve, use IP directly:
-> `PI_USER=root PI_HOST=<DEVICE_IP> make web-deploy`
+Backed by `scripts/deploy-device.sh`. `PI_USER` defaults to `orangepi` and
+`PI_PASS` to `orangepi` (needs `sshpass`); set `PI_PASS=""` to use your SSH key
+and interactive sudo instead. `PI_HOST` works in place of `IP`.
+
+`.env`, `.venv` and `calibration/` on the device are never overwritten, and the
+swap runs without `--delete`, so device-local paths outside the repo survive.
+
+> **Run `--dry-run` first when your branch might be behind the device.** The
+> swap overwrites, so a stale checkout can silently revert work that only
+> exists on the device:
+> `IP=<DEVICE_IP> bash scripts/deploy-device.sh --hal --dry-run`
+
+These are for a single device on your LAN. To ship to the fleet, use the OTA
+path instead — `make upload-hal` then `make promote-hal`, which versions the
+artifact and rolls it out.

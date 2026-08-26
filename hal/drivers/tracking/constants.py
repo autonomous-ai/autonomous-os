@@ -152,13 +152,72 @@ SACCADE_MAX_SPEED_DPS = 100.0
 SACCADE_OFFSET_FRAC = 0.22
 SACCADE_EXIT_FRAC = 0.12
 
-# Pitch distribution across 3 joints.
-# Empirical: only wrist_pitch is pure rotation. base+elbow primarily translate
-# camera (kinematic coupling) → object grows in frame but doesn't move toward
-# center. Use wrist alone for predictable pitch control.
-PITCH_WEIGHT_BASE  = 0.10
-PITCH_WEIGHT_ELBOW = 0.90
-PITCH_WEIGHT_WRIST = 0.0
+# Pitch distribution across 3 joints — the PREFERENCE, not the whole story.
+# `servo_follow.distribute_pitch` spends these weights first and then hands
+# whatever a saturated joint could not absorb to any joint that still has room,
+# so a weight of 0.0 means "not first choice", not "never".
+#
+# (The comment that used to sit here said "use wrist alone for predictable pitch
+# control", which had not matched PITCH_WEIGHT_WRIST = 0.0 for some time. The
+# device disagrees with it too — see PITCH_TRAVEL_* below.)
+# elbow_pitch still leads, because on a healthy arm it is the joint that
+# produces most of the vertical movement — device-measured with base and wrist
+# pinned, elbow +1.6 framed the desk and +54.8 framed the ceiling.
+#
+# It no longer takes almost all of it. The elbow on lamp-ac82 is intermittently
+# unresponsive (a hardware fault, not a tuning one): it accepts a goal, reports
+# no error, and simply does not move, then works again later. At 0.90 that took
+# 90% of every correction with it — device-observed, a 15 deg climb step
+# delivering 1.5 deg because only base_pitch's share arrived.
+#
+# Spreading the remainder over both other joints keeps the loop useful while the
+# elbow is out. The landing check already benches a joint that fails to arrive
+# and re-routes the next correction, so this is about not depending on it in the
+# first place rather than about detecting the fault.
+PITCH_WEIGHT_BASE  = 0.20
+PITCH_WEIGHT_ELBOW = 0.60
+PITCH_WEIGHT_WRIST = 0.20
+
+# Travel each pitch joint actually has, measured on lamp-ac82 2026-08-25 by
+# commanding each joint alone and reading the position error `/servo/move`
+# reports. Nothing here is a software clamp — `clamped` came back equal to
+# `requested` every time; these are where the arm stops.
+#
+#   base_pitch    -20 .. +30   (-30 stalled at -17.4)
+#   elbow_pitch    -5 .. +60   (-15 stalled at  -5.2)
+#   wrist_pitch    -35 .. +33  (-50 stalled at -34.8, +40 reached +32.9)
+#
+# The limits matter because they are wildly asymmetric and the wide MIN/MAX
+# below hide it. Looking up drives wrist NEGATIVE, and idle rests it near -32 —
+# roughly 2 degrees short of its stop. Gaze used to spend its entire correction
+# there, so the servo reported `position error 14.6 deg` and the head never
+# moved. Allocating against real travel is what stops that being possible.
+#
+# Held a margin inside the measured stall so a correction stops just short of
+# pushing, rather than stalling the motor against the end of its travel.
+# Per-unit, and configuration-dependent (base reached -20 only once elbow was
+# high), so treat these as conservative rather than exact.
+PITCH_TRAVEL_MIN = {
+    "base_pitch.pos":  -18.0,
+    "elbow_pitch.pos":  -4.0,
+    "wrist_pitch.pos": -33.0,
+}
+# Measured pan travel, same day and the same way as PITCH_TRAVEL_*. wrist_roll
+# reached every target from -59 to +59 cleanly — markedly better behaved than
+# any pitch joint, because neither of these two lifts the arm against gravity.
+YAW_TRAVEL_MIN = {
+    "base_yaw.pos":   -100.0,
+    "wrist_roll.pos":  -55.0,
+}
+YAW_TRAVEL_MAX = {
+    "base_yaw.pos":    100.0,
+    "wrist_roll.pos":   55.0,
+}
+PITCH_TRAVEL_MAX = {
+    "base_pitch.pos":   30.0,
+    "elbow_pitch.pos":  58.0,
+    "wrist_pitch.pos":  32.0,
+}
 
 # Elbow servo polarity. The elbow_pitch motor's positive direction was reversed
 # in hardware (2026-06-19), so a positive pitch_correction now drives the camera
@@ -170,8 +229,30 @@ ELBOW_PITCH_SIGN = -1.0
 # per-device value comes from HAL_TRACKING_MAX_DURATION_S at HAL startup.
 MAX_TRACK_DURATION_S = TRACKING_MAX_DURATION_S
 
+# Yaw distribution across the two joints that PAN the camera.
+#
+# Device-measured 2026-08-25 by pinning every other joint and capturing:
+#   base_yaw   -24 -> face at the far right of frame;  +24 -> centre-left
+#   wrist_roll -34 -> face at the far right of frame;  +34 -> left
+# So INCREASING either joint pans the camera right, and a face on the right
+# (dx > 0) is corrected by increasing both. Same sign, no ELBOW_PITCH_SIGN
+# equivalent needed.
+#
+# base_yaw leads for two reasons beyond its larger travel: turning the base is
+# the gesture people read as "it looked at me", and `user_bearing` stores the
+# bearing AS base_yaw — so aiming mostly with the wrist would leave the
+# remembered bearing describing a pose the lamp never actually held.
+# wrist_roll assists, and picks up whatever a saturated yaw cannot take.
+#
+# Unlike the pitch joints these two are on nearly the same scale — 12.0 vs 11.5
+# encoder counts per normalised unit — so treating their contributions as 1:1
+# is sound here in a way it is not for pitch.
+YAW_WEIGHT_BASE = 0.75
+YAW_WEIGHT_ROLL = 0.25
+
 # Servo position limits (degrees).
 YAW_MIN, YAW_MAX = -135.0, 135.0
+WRIST_ROLL_MIN, WRIST_ROLL_MAX = -90.0, 90.0
 BASE_PITCH_MIN, BASE_PITCH_MAX = -90.0, 30.0
 ELBOW_PITCH_MIN, ELBOW_PITCH_MAX = -90.0, 90.0
 WRIST_PITCH_MIN, WRIST_PITCH_MAX = -90.0, 90.0
