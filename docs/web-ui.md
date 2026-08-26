@@ -268,6 +268,8 @@ Monitor polls system/HW APIs every **3 seconds**. Flow uses file-backed hybrid m
 | `GET /api/system/ota-versions` | Per-component `{current, target, min_version, update_available, held_by_floor}` (proxies bootstrap `/versions`, including the installed device profile from `devices.<device_type>`, plus an `agent` alias for the configured runtime's CLI). The Versions card shows an `update` button wherever `update_available` is true (`held_by_floor` is reported but NOT used for the button: the button installs the published version on this device, like `software-update <key>` over SSH, and the floor only stages the automatic fleet rollout) |
 | `GET /api/system/ota-updating` | Components the worker is installing right now (`{updating: [...]}`, plus the `agent` alias). Deliberately cheap — no metadata fetch — because the Versions card polls it every 2 s while an install runs and shows `updating…` on that row instead of the button |
 | `POST /api/system/software-update/:target` | Per-component OTA check. `target`: `os-server` \| `bootstrap` \| `web` \| `hal` \| `device` \| `agent`. Bootstrap self-updates by spawning the installer in the background, so its replacement can safely restart the worker; `device` installs the resolved `devices.<device_type>` profile. **`agent` is virtual** — os-server resolves it to the configured runtime's CLI (`codex`/`claudecode`/`opencode`/`picoclaw`) so the browser never needs to know which runtime runs; `hermes` returns 400 (it cannot be pinned, so bootstrap never auto-applies it). Rate-limited to one call per target per 30 s |
+| `POST /api/system/reboot` | Admin-gated reboot request. OS server returns `202` first, then calls HAL's cue-aware reboot action. |
+| `POST /api/system/shutdown` | Admin-gated shutdown request. OS server returns `202` first, then calls HAL's cue-aware, servo-release shutdown action. |
 
 > **Note on format**: The OS server API returns `{ status: 1, data: <payload>, message: null }` on success.
 
@@ -350,6 +352,10 @@ the shorter Presence card from being stretched by the taller Audio card.
 - Shows available scene presets (reading, focus, relax, movie, night, energize). Fetched from `GET /hw/scene`.
 - Clickable buttons activate a scene via `POST /hw/scene` with `{"scene": "<name>"}`.
 - Active scene highlighted with amber accent.
+
+**Power**
+- The compact Overview card has **Reboot** and **Shut down** buttons, each with a confirmation prompt; both stay disabled after an accepted request so a second power operation cannot be queued from the page.
+- Buttons call the admin-gated OS-server endpoints, never HAL directly. The server acknowledges first and has a single-flight guard, then HAL performs the same explicit action sequence used by physical controls: reboot announces before restarting; shutdown announces and releases the servos before power-off.
 
 **Servo Pose**
 - Currently running pose (current)

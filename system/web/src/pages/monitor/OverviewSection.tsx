@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Satellite, Globe, Eye, Volume2, Cpu, Drama, Clapperboard, Bot, Tag, Wifi, LayoutDashboard } from "lucide-react";
+import { Satellite, Globe, Eye, Volume2, Cpu, Drama, Clapperboard, Bot, Tag, Wifi, LayoutDashboard, Power } from "lucide-react";
 import { S } from "./styles";
 import { API, HW } from "./types";
 
@@ -49,7 +49,7 @@ function useEmotionPresets() {
   return { emotions, colors };
 }
 import type { SystemInfo, NetworkInfo, HWHealth, OCStatus, PresenceInfo, VoiceStatus, ServoState, DisplayState, AudioVolume, LEDColor, SceneInfo } from "./types";
-import { StatusDot, HWBadge, SignalBars, Skeleton, SkeletonRows, SoftwareUpdateButton, StatRow, StatusBadge, STATUS_TONE, CardLabel, RestartAgentButton } from "./components";
+import { StatusDot, HWBadge, SignalBars, Skeleton, SkeletonRows, SoftwareUpdateButton, StatRow, StatusBadge, STATUS_TONE, CardLabel, RestartAgentButton, DevicePowerButtons } from "./components";
 import { formatUptime, formatAgo, useCountUp } from "./utils";
 import { BuddyCard } from "./BuddyCard";
 
@@ -663,6 +663,14 @@ export function OverviewSection({
             </div>
         </div>
         )}
+
+        {/* Power actions are intentionally routed through os-server: it applies
+            admin auth, acknowledges the browser, then invokes HAL's full
+            cue-aware reboot/shutdown sequence. */}
+        <div className="lm-mon-card" style={monCard}>
+          <div style={{ marginBottom: 12 }}><CardLabel icon={<Power size={13} />} text="Power" /></div>
+          <DevicePowerButtons />
+        </div>
 
         {/* Autonomous Buddy pairing — closes out the compact (left) column. */}
         <BuddyCard />

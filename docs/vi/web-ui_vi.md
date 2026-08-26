@@ -261,6 +261,8 @@ Monitor poll API system/HW mỗi **3 giây**. Flow dùng hybrid theo file: REST 
 | `GET /api/system/ota-versions` | Trả `{current, target, min_version, update_available, held_by_floor}` cho từng component (proxy bootstrap `/versions`, gồm device profile đang cài từ `devices.<device_type>`, kèm alias `agent` cho CLI của runtime đang chạy). Card Versions hiện nút `update` ở mọi chỗ `update_available` = true (`held_by_floor` vẫn được trả về nhưng KHÔNG dùng để quyết định nút: nút cài bản đã publish lên chính máy này, giống `software-update <key>` qua SSH, còn sàn chỉ dùng để staging rollout tự động) |
 | `GET /api/system/ota-updating` | Các component worker đang cài ngay lúc này (`{updating: [...]}`, kèm alias `agent`). Cố ý làm rẻ — không fetch metadata — vì card Versions poll nó mỗi 2 giây trong lúc cài và hiện `updating…` ở dòng đó thay cho nút |
 | `POST /api/system/software-update/:target` | Kiểm tra OTA cho một component. `target`: `os-server` \| `bootstrap` \| `web` \| `hal` \| `device` \| `agent`. Bootstrap tự cập nhật bằng cách chạy installer nền, nên có thể restart worker thay thế an toàn; `device` cài profile `devices.<device_type>` đã resolve. **`agent` là target ảo** — os-server tự phân giải sang CLI của runtime đang chạy (`codex`/`claudecode`/`opencode`/`picoclaw`) để trình duyệt không cần biết runtime nào; `hermes` trả 400 (không pin được nên bootstrap không bao giờ auto-apply). Giới hạn 1 lần / target / 30 giây |
+| `POST /api/system/reboot` | Request reboot cần admin auth. OS server trả `202` trước, rồi gọi action reboot có cue của HAL. |
+| `POST /api/system/shutdown` | Request shutdown cần admin auth. OS server trả `202` trước, rồi gọi action shutdown có cue và release servo của HAL. |
 
 > **Lưu ý format**: OS server API trả `{ status: 1, data: <payload>, message: null }` khi thành công.
 
@@ -341,6 +343,10 @@ không kéo giãn card Presence ngắn theo card Audio cao hơn.
 - Hiển thị danh sách scene preset (reading, focus, relax, movie, night, energize). Lấy từ `GET /hw/scene`.
 - Bấm nút để kích hoạt scene qua `POST /hw/scene` với `{"scene": "<tên>"}`.
 - Scene đang active được highlight màu amber.
+
+**Power**
+- Card gọn trên Overview có hai nút **Reboot** và **Shut down**, mỗi nút hỏi xác nhận; sau khi request được nhận, cả hai bị disable để trang không xếp thêm power operation thứ hai.
+- Nút gọi endpoint os-server cần admin auth, không gọi HAL trực tiếp. Server trả ACK trước và có single-flight guard, rồi HAL chạy cùng chuỗi action tường minh với physical control: reboot phát cue rồi restart; shutdown phát cue và release servo trước khi tắt nguồn.
 
 **Servo Pose**
 - Pose đang chạy (current)
