@@ -19,6 +19,15 @@
 | GET | `/api/system/network` | WiFi SSID, IP, signal, internet status |
 | GET | `/api/system/dashboard` | Aggregated snapshot (agent + config + HW) |
 | GET | `/api/system/ota-security` | OTA trust posture from the bootstrap worker: `legacy` vs `verified`, pinned key fingerprint, last metadata fetch (see `bootstrap-ota.md`) |
+| POST | `/api/system/reboot` | Admin-gated: acknowledge, then ask HAL to announce and reboot the OS |
+| POST | `/api/system/shutdown` | Admin-gated: acknowledge, then ask HAL to announce, release servos, and shut down the OS |
+
+The power endpoints return `202 Accepted` before scheduling their HAL call, so
+the browser can receive the acknowledgement before the device becomes
+unreachable. Only one reboot or shutdown can be pending at a time; a second
+request receives `409 Conflict`. HAL owns the physical sequence: reboot plays
+the reboot cue, while shutdown plays its cue and releases servos before issuing
+the OS power command.
 
 ### Device Setup
 
@@ -358,9 +367,95 @@ Piper into the image would reverse that; see `CREDITS.md`.
 | GET | `/api/voice/piper/status` | Engine installed, voices installed, the download catalogue, and any job in flight. Proxied to HAL and re-wrapped in the standard envelope — the web client rejects a bare payload. |
 | POST | `/api/voice/piper/install` | Install the engine. Idempotent: already-installed returns ok, so the UI can call it without checking first. |
 | POST | `/api/voice/piper/voice` | Download one catalogue voice. Body `{name}`; names outside the catalogue are refused, so a caller cannot turn this into an arbitrary fetch into `/opt/piper`. |
+| POST | `/api/voice/piper/voice/remove` | Delete a downloaded voice and free its ~63 MB. Body `{name}`, catalogue-only for the same reason — an arbitrary name here would delete an arbitrary file. Refuses to remove the last installed voice. |
 
-All three are admin-gated: they install software and write ~63 MB per voice.
-HAL serves the same three under `/voice/piper/*`; downloads run on a background
+All four are admin-gated: they install software and write 63–79 MB per voice.
+HAL serves the same four under `/voice/piper/*`; downloads run in a background
+
+`piperProxy` **retries a POST while HAL is not answering**, for up to 25 s. Every
+voice save restarts HAL (~8 s of downtime, occasionally doubled because two
+config paths each request a restart), and a Download or Remove landing in that
+window was simply lost — the page said nothing changed and the operator had to
+guess when to try again. Only a **failed dial** is retried, and the distinction
+carries the whole safety argument: a dial that never connected proves the
+request was not delivered, so replaying it cannot repeat an effect. A timeout
+proves nothing of the sort — the deadline covers reading the reply, so HAL may
+have done the work and answered slowly — and those surface as a plain failure.
+Any reply, including a refusal, is final and passed straight through. GET is
+deliberately
+excluded — the status poll's failure is what tells the page the device is
+restarting, and holding those open would stack requests and hide the state.
+Covered by `piper_test.go`, which restarts a listener under the call.
+
+**A download does not run inside HAL.** `hal/routes/piper_download.py` is
+launched by `systemd-run` as a transient unit, and the two sides agree through
+a job file at `/var/lib/autonomous/piper-job.json` instead of shared memory.
+This is not over-engineering: saving *any* voice setting makes os-server run
+`systemctl restart hal` (`device/config_update.go`), and hal.service is
+`KillMode=control-group`, so an in-process thread — or any ordinary child — was
+killed mid-transfer. The record of the job died with it, so the page reverted
+to `Download 63 MB` as though the click had never happened, with no error and
+nothing to retry from. The worker imports nothing from `hal`: the package pulls
+in hardware drivers on import, which a downloader has no business touching, and
+staying dependency-free means it keeps running even when HAL will not start.
+
+Each run gets its **own unit name** (`autonomous-piper-download-<ns>`). A fixed
+name collides with the run before it: a finished unit sits in `inactive` for a
+moment before `--collect` reaps it, and `systemd-run` refuses a name that still
+exists. That failure fell through to the in-process fallback, which then died
+with the next HAL restart and surfaced as *download stopped unexpectedly* for no
+visible reason. The fallback now logs systemd's own stderr, because falling back
+silently is how a download ends up inside HAL's control group unnoticed.
+
+Nothing restarts HAL for a download. Voices are listed from the filesystem per
+request and the model path is resolved per utterance, so a voice is listable and
+speakable the moment its file lands — measured: downloaded at 18:32:29 on a HAL
+that started at 18:31:59, listed and spoken at 18:33:11 with no restart between.
+Applying a voice does not restart HAL either. `POST /voice/tts/config` sets
+provider, voice, key and base URL on the running TTS service, which reads all of
+them per utterance, so the change takes effect on the next sentence.
+
+The realtime flag compares before and after rather than reacting to presence.
+The settings page puts a `realtime` block in *every* save, so treating it as a
+change restarted HAL on every save — which would have made the live TTS push
+above dead code.
+
+`device/config_update.go` splits what used to be one `voiceSnapshot` in two:
+`bootSnapshot` (LLM and STT keys and URLs — genuinely read at import, still
+worth a restart) and `ttsSnapshot` (provider, voice, TTS key and URL — pushed
+live). A voice change is the most common save an operator makes, and restarting
+for it took the microphone, speaker and wake word down for ten to fifteen
+seconds; any admin click landing in that window was lost, because HAL was not
+listening. If the live push fails, os-server falls back to the restart — a voice
+that was saved but never reached HAL is worse than the restart it avoided.
+
+A job is **claimed before the POST replies**, and the reply carries it. Leaving
+the claim to the worker loses a race the UI cannot recover from: the panel only
+polls while a job is active, so if its first read lands before the worker's
+first write it concludes nothing started and stops looking, and a
+several-minute download runs to completion invisibly. Claiming under the same
+lock that checks for a running job also makes a double-click one download.
+
+The reader treats an active job as real only while its pid exists, so a worker
+killed by anything other than its own error handler shows as stopped rather
+than as a download frozen forever. The start-up orphan sweep skips the files a
+running job owns — transfers now outlive HAL, so the sweep runs *during* one,
+and deleting its `.part` would break the exact case this design protects.
+
+The job reports `bytes_done`/`bytes_total` alongside `percent`, tracked for the
+model only — the sidecar is a few KB and would flicker the counter to a tiny
+total and back. A failed voice install deletes its own partial files, and HAL
+sweeps orphaned sidecars and `.part` files once at start: the listing keys off
+`.onnx`, so a sidecar whose model never arrived is invisible in the UI while
+still occupying space on a small card.
+
+Removal enforces one invariant: **never delete the last model.** HAL is not told
+which voice is configured — os-server sends it with each `/voice/speak` call —
+so it cannot refuse "the one in use", and it does not try. Removing any other
+voice is survivable because an unknown voice falls back to one that is
+installed; removing the last one is not, because the backend then has nothing
+to load and the device goes silent. The UI additionally hides Remove on the
+in-use row, so switching comes before deleting.
 thread and report progress through `job` in the status payload, because a 63 MB
 pull is far longer than an HTTP request should be held open for.
 
@@ -375,6 +470,27 @@ Voices are enumerated from the filesystem (`/opt/piper/voices/*.onnx`), not from
 a hardcoded list, so dropping a model in makes it selectable. Which models are
 *offered* for download is a licensing decision, recorded with each entry in
 `hal/drivers/voice/tts/piper_catalog.py`.
+
+The backend reports itself available when the binary and **any** voice are
+present, not the configured one specifically. A device can legitimately be set
+to a voice it does not yet have — the operator saves the choice while the 63 MB
+model is still downloading — and gating on the exact name would take TTS
+offline entirely. Instead an unknown voice falls back to the default, then to
+whatever is installed, and logs the substitution once per name. Speaking in the
+wrong voice is a fault that explains itself; a silent device reads as broken
+hardware.
+
+`GET /api/device/voices?provider=piper` **fails rather than answers empty** when
+HAL is unreachable. Voices are files under `/opt/piper`, so HAL is the only
+thing that can know what is installed; an empty success would be a claim
+os-server cannot make, and the web takes the reply as authoritative — the picker
+empties, and since it only refetches on a provider or language change, it never
+fills back in. Every voice save restarts HAL, so that window is hit routinely.
+An error leaves the client holding its last known-good list.
+
+For the same reason `domain.TTSVoicesByProvider` is **empty** for Piper: no image
+ships a voice, so any name offered as a fallback would be a name the device does
+not have — and the web UI would save it as the configured voice.
 
 
 ### System

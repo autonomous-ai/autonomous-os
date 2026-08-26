@@ -163,6 +163,80 @@ export function RestartAgentButton({ agentName }: { agentName?: string }) {
   );
 }
 
+// DevicePowerButtons uses os-server rather than HAL directly. The server owns
+// admin auth and gives the browser a response before it asks HAL to start the
+// cue-aware power action; a direct HAL call could disappear before the UI knows
+// whether the request was accepted.
+export function DevicePowerButtons() {
+  const [busy, setBusy] = useState<"reboot" | "shutdown" | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const trigger = async (action: "reboot" | "shutdown") => {
+    if (busy) return;
+    const isShutdown = action === "shutdown";
+    const prompt = isShutdown
+      ? "Shut down this device?\n\nIt will announce the shutdown, release its servos, and turn off. You must restore power to use it again."
+      : "Restart this device?\n\nIt will announce the reboot and be unavailable for about 30 seconds.";
+    if (!window.confirm(prompt)) return;
+
+    setBusy(action);
+    setMessage(null);
+    let accepted = false;
+    try {
+      const token = getApiToken();
+      const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
+      const response = await fetch(`${API}/system/${action}`, { method: "POST", headers });
+      if (response.ok) {
+        accepted = true;
+        setMessage(isShutdown ? "Shutting down…" : "Restarting…");
+        return;
+      }
+      let reason = "Failed";
+      try {
+        const body = await response.json();
+        if (typeof body?.message === "string" && body.message) reason = body.message;
+      } catch { /* Keep the generic error. */ }
+      setMessage(reason);
+    } catch {
+      setMessage("Unreachable");
+    } finally {
+      // Keep both buttons disabled after an accepted request: the device is
+      // deliberately about to leave the network, so a second request is never useful.
+      if (!accepted) {
+        setBusy(null);
+        setTimeout(() => setMessage(null), 5000);
+      }
+    }
+  };
+
+  const buttonStyle = (action: "reboot" | "shutdown"): React.CSSProperties => {
+    const isShutdown = action === "shutdown";
+    const active = busy === action;
+    return {
+      flex: 1,
+      padding: "6px 9px",
+      borderRadius: 6,
+      border: `1px solid ${isShutdown ? "rgba(248,113,113,0.55)" : "rgba(245,158,11,0.55)"}`,
+      background: isShutdown ? "rgba(248,113,113,0.10)" : "var(--lm-amber-dim)",
+      color: isShutdown ? "var(--lm-red)" : "var(--lm-amber)",
+      fontSize: 11,
+      fontWeight: 650,
+      cursor: busy ? "wait" : "pointer",
+      opacity: busy && !active ? 0.45 : 1,
+    };
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button onClick={() => trigger("reboot")} disabled={!!busy} style={buttonStyle("reboot")}>Reboot</button>
+        <button onClick={() => trigger("shutdown")} disabled={!!busy} style={buttonStyle("shutdown")}>Shut down</button>
+      </div>
+      {message && <div style={{ marginTop: 7, fontSize: 10.5, color: busy ? "var(--lm-text-dim)" : "var(--lm-red)" }}>{message}</div>}
+    </div>
+  );
+}
+
 export function SoftwareUpdateButtons() {
   return (
     <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 2 }}>

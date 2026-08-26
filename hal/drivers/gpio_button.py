@@ -41,9 +41,7 @@ from hal.drivers.button_actions import (
     LONG_PRESS_DURATION,
     SLEEP_HOLD_DURATION,
     announce_listening_cue,
-    factory_reset_action,
-    long_press_action,
-    sleep_action,
+    hold_release_action,
     single_click_action,
     triple_click_action,
 )
@@ -224,56 +222,34 @@ class GPIOButtonHandler:
             self._hold_watcher_stop = None
 
         held = time.monotonic() - self._press_start
-        if held >= FACTORY_RESET_DURATION:
-            logger.info("GPIO button hold %.1fs -- factory-reset", held)
+        if held >= SLEEP_HOLD_DURATION:
             self._click_count = 0  # destructive, terminal: scrub any pending clicks
             if self._click_timer:
                 self._click_timer.cancel()
                 self._click_timer = None
-            # Lock the LED at red solid until reboot kills us. Watcher already
-            # set it but reaffirm (idempotent at HIGH priority).
-            self._dispatch_led(_warn_color("factory_reset"))
-            # Off-thread: factory_reset_action blocks ~3s (TTS announce) +
-            # servo release + HTTP POST. lgpio callback must return promptly
-            # or subsequent edges queue up. Original `_on_long_press` ran in
-            # a Timer thread; we preserve that property here.
-            threading.Thread(
-                target=factory_reset_action,
-                kwargs={"source": "GPIO button"},
-                daemon=True,
-                name="gpio-button-factory-reset",
-            ).start()
-            return
-        if held >= LONG_PRESS_DURATION:
-            logger.info("GPIO button hold %.1fs -- shutdown", held)
-            self._click_count = 0
-            if self._click_timer:
-                self._click_timer.cancel()
-                self._click_timer = None
-            # Freeze LED at red solid (was blinking). Confirms the gesture
-            # committed to shutdown, stays on through the 5 s TTS announce.
-            self._dispatch_led(_warn_color("shutdown_warn"))
-            # Off-thread: same reasoning as factory-reset above (announce +
-            # 5s sleep + servo release + subprocess.Popen shutdown).
-            threading.Thread(
-                target=long_press_action,
-                kwargs={"source": "GPIO button"},
-                daemon=True,
-                name="gpio-button-long-press",
-            ).start()
-            return
+            if held >= FACTORY_RESET_DURATION:
+                logger.info("GPIO button hold %.1fs -- factory-reset", held)
+                # Lock the LED at red solid until reboot kills us. Watcher already
+                # set it but reaffirm (idempotent at HIGH priority).
+                self._dispatch_led(_warn_color("factory_reset"))
+            elif held >= LONG_PRESS_DURATION:
+                logger.info("GPIO button hold %.1fs -- shutdown", held)
+                # Freeze LED at red solid (was blinking). Confirms the gesture
+                # committed to shutdown, stays on through the 5 s TTS announce.
+                self._dispatch_led(_warn_color("shutdown_warn"))
+            else:
+                logger.info("GPIO button hold %.1fs -- sleepy", held)
 
-        if held >= SLEEP_HOLD_DURATION:
-            logger.info("GPIO button hold %.1fs -- sleepy", held)
-            self._click_count = 0
-            if self._click_timer:
-                self._click_timer.cancel()
-                self._click_timer = None
+            # Edge handling only supplies the released-duration signal. The
+            # action library owns which semantic action that duration selects.
+            # It may wait for a cue or release servos, so keep the GPIO callback
+            # short and never block subsequent hardware edges.
             threading.Thread(
-                target=sleep_action,
+                target=hold_release_action,
+                args=(held,),
                 kwargs={"source": "GPIO button"},
                 daemon=True,
-                name="gpio-button-sleep",
+                name="gpio-button-hold-action",
             ).start()
             return
 

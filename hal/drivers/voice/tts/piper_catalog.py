@@ -33,7 +33,10 @@ BINARY_URL = (
 )
 
 # name → metadata. `path` is the directory under VOICES_BASE holding
-# <name>.onnx and <name>.onnx.json.
+# <name>.onnx and <name>.onnx.json. `size_mb` is the model's actual
+# Content-Length in decimal MB, measured rather than assumed — the UI quotes it
+# on the button before the operator commits to the transfer, and the multi
+# speaker model is a quarter larger than the rest.
 CATALOG = {
     "en_US-ljspeech-medium": {
         "language": "English (US)",
@@ -41,7 +44,7 @@ CATALOG = {
         "path": "en/en_US/ljspeech/medium",
         "license": "public domain",
         "requires_attribution": False,
-        "size_mb": 63,
+        "size_mb": 64,
     },
     "en_US-kristin-medium": {
         "language": "English (US) — alt voice",
@@ -49,7 +52,7 @@ CATALOG = {
         "path": "en/en_US/kristin/medium",
         "license": "public domain",
         "requires_attribution": False,
-        "size_mb": 63,
+        "size_mb": 64,
     },
     "en_US-libritts_r-medium": {
         "language": "English (US) — multi-speaker",
@@ -57,7 +60,7 @@ CATALOG = {
         "path": "en/en_US/libritts_r/medium",
         "license": "CC BY 4.0",
         "requires_attribution": True,
-        "size_mb": 63,
+        "size_mb": 79,
     },
     "vi_VN-vais1000-medium": {
         "language": "Tiếng Việt",

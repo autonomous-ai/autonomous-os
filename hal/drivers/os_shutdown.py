@@ -95,7 +95,7 @@ def announce_os_shutdown():
     logger.info("lifespan announce: kind=%s text=%r", kind, text)
 
     # Park servo before systemd kills the process, otherwise the body
-    # slams down mid-pose. Same reasoning as long_press_action Step 2.
+    # slams down mid-pose. Same reasoning as shutdown_action's servo step.
     # Runs in parallel with the spoken cue below (park ~2.4s, cue ~1.5s —
     # sequential they were the two biggest shutdown costs); both must finish
     # before this function returns.

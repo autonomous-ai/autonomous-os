@@ -349,16 +349,33 @@ func (h *DeviceHandler) GetVoices(c *gin.Context) {
 	provider := c.DefaultQuery("provider", domain.TTSProviderOpenAI)
 	lang := c.Query("lang")
 
-	if voices, err := hal.ListVoices(provider, lang); err == nil && len(voices) > 0 {
+	voices, err := hal.ListVoices(provider, lang)
+	if err == nil && len(voices) > 0 {
+		c.JSON(http.StatusOK, serializers.ResponseSuccess(voices))
+		return
+	}
+	// Piper voices are files under /opt/piper, so HAL is the only thing that
+	// can know what is installed — there is no static list to fall back to.
+	// Answering an unreachable HAL with an empty success would be a claim this
+	// server cannot make ("no voices installed"), and the web takes it as the
+	// authoritative list: the picker empties and, since it only refetches on a
+	// provider or language change, never fills back in. An error instead leaves
+	// the client holding its last known-good list.
+	if provider == domain.TTSProviderPiper {
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable,
+				serializers.ResponseError("hal unreachable: "+err.Error()))
+			return
+		}
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(voices))
 		return
 	}
 	// Fallback to static list (no language filtering — static list is EN-only)
-	voices, ok := domain.TTSVoicesByProvider[provider]
+	staticVoices, ok := domain.TTSVoicesByProvider[provider]
 	if !ok {
-		voices = domain.TTSVoices
+		staticVoices = domain.TTSVoices
 	}
-	c.JSON(http.StatusOK, serializers.ResponseSuccess(voices))
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(staticVoices))
 }
 
 // GetTTSProviders returns the list of supported TTS providers.

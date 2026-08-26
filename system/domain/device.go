@@ -434,9 +434,11 @@ const (
 	AgentRuntimeClaudeCode = "claudecode"
 	AgentRuntimeOpenCode   = "opencode"
 
-	KindSystemInfo    = "system.info"    // aggregate: versions + network + host
-	KindSystemVersion = "system.version" // lamp + bootstrap + hal + openclaw versions
-	KindSystemNetwork = "system.network" // IP, MAC, SSID, gateway of the default-route interface
+	KindSystemInfo     = "system.info"     // aggregate: versions + network + host
+	KindSystemVersion  = "system.version"  // lamp + bootstrap + hal + openclaw versions
+	KindSystemNetwork  = "system.network"  // IP, MAC, SSID, gateway of the default-route interface
+	KindSystemReboot   = "system.reboot"   // cue-aware OS reboot via HAL
+	KindSystemShutdown = "system.shutdown" // cue- and servo-aware OS shutdown via HAL
 
 	// KindSkillsInstall installs a role's skill bundle. Data: {"role":"<role>"}.
 	KindSkillsInstall = "skills.install"
@@ -1471,9 +1473,12 @@ func DefaultElevenLabsVoiceForLang(lang string) string {
 var TTSVoicesByProvider = map[string][]string{
 	TTSProviderOpenAI: {"alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"},
 	// Piper voices are files on the device, so the live list comes from HAL
-	// (which enumerates the installed .onnx models). This is only the fallback
-	// used when HAL cannot be reached — the voice every image ships with.
-	TTSProviderPiper:      {"en_US-lessac-medium"},
+	// (which enumerates the installed .onnx models). Empty on purpose: no image
+	// ships a Piper voice — they are downloaded on request — so there is no
+	// name that is safe to offer when HAL is unreachable. Naming one anyway
+	// gets it saved as the configured voice, and the device is then set to a
+	// model it does not have. An empty list makes the UI say so instead.
+	TTSProviderPiper:      {},
 	TTSProviderElevenLabs: {"Rachel", "Sarah", "Grace", "Freya", "Matilda", "Emily", "Alice", "Lily", "Charlotte", "Nicole", "Glinda", "Serena", "Jessie", "Brian", "Adam", "Daniel", "George", "James", "Liam", "Callum", "Harry", "Charlie", "Chris", "Sam"},
 }
 

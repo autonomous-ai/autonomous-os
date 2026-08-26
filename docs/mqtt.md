@@ -344,6 +344,15 @@ optional `error`, and an optional `data` payload.
 | `system.info` | Aggregate snapshot: versions + network + host | _(none)_ |
 | `system.version` | Component versions only (cheaper than `system.info`) | _(none)_ |
 | `system.network` | network facts of the default-route interface only | _(none)_ |
+| `system.reboot` | Queue HAL's cue-aware OS reboot | _(none)_ |
+| `system.shutdown` | Queue HAL's cue- and servo-aware OS shutdown | _(none)_ |
+
+`system.reboot` and `system.shutdown` publish `status:"starting"` before the
+device schedules the action, so the backend receives an acknowledgement before
+the device drops off the network. They share the OS-server single-flight guard:
+when another power action is already pending, a terminal `status:"failure"`
+reply follows with the reason. The commands invoke HAL's full actions, not raw
+OS commands: reboot plays its cue; shutdown plays its cue and releases servos.
 
 **`system.info` response:** synchronous (no `starting` intermediate); each probe
 falls back to its zero value on failure.

@@ -116,3 +116,29 @@ def test_music_cancel_watermark_expires():
         assert state.music_cancel_active() is False
     finally:
         state._music_cancel_ms = 0.0
+
+
+def test_triple_click_only_maps_the_gesture_to_reboot_action():
+    with mock.patch.object(button_actions, "reboot_action") as reboot:
+        button_actions.triple_click_action("test button")
+
+    reboot.assert_called_once_with("test button")
+
+
+def test_hold_release_maps_each_duration_to_one_explicit_action():
+    with (
+        mock.patch.object(button_actions, "sleep_action") as sleep,
+        mock.patch.object(button_actions, "shutdown_action") as shutdown,
+        mock.patch.object(button_actions, "factory_reset_action") as factory_reset,
+    ):
+        button_actions.hold_release_action(button_actions.SLEEP_HOLD_DURATION, "test button")
+        sleep.assert_called_once_with("test button")
+        shutdown.assert_not_called()
+        factory_reset.assert_not_called()
+
+        button_actions.hold_release_action(button_actions.LONG_PRESS_DURATION, "test button")
+        shutdown.assert_called_once_with("test button")
+        factory_reset.assert_not_called()
+
+        button_actions.hold_release_action(button_actions.FACTORY_RESET_DURATION, "test button")
+        factory_reset.assert_called_once_with("test button")
