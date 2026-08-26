@@ -1134,15 +1134,31 @@ GAZE_EDGE_CONE_SCALE: float = float(
 # buffer has to hold both. 4.0 leaves margin over the 2 x 1.5 = 3.0 minimum.
 GAZE_BUFFER_S: float = float(os.environ.get("HAL_GAZE_BUFFER_S", "4.0"))
 # Require evidence that the user TURNED toward the lamp, rather than merely that
-# they were pointing at it while speaking.
+# they were pointing at it while speaking. OFF by default.
 #
-# The module docstring has always named the transition as the signal — "PRESENCE
-# IS NOT THE SIGNAL … a face turned to a monitor still detects" — but nothing
-# computed one, so a user sitting square to their desk passed on every utterance.
-# Device-measured in shadow 2026-08-24: nine of nine accepted gestures had flat
-# trails ([13,12,12,11,12,11,13,21] and similar). Not one was a turn.
+# It shipped on, and was turned off because it refused the ordinary case. A
+# baseline that is ALREADY facing can never look like a transition, so someone
+# sitting square to their desk — the usual way to talk to a desk lamp — was
+# refused on every single utterance: device log 2026-08-26, `facing=100%/60% of
+# 7 was=100%/7 -> no-turn`, taken while the user was looking straight at it.
+# Making a user perform a gesture the detector can read costs more than the
+# false accepts it prevents.
+#
+# The evidence behind it is real and is why the switch is kept rather than the
+# code deleted. The module docstring names the transition as the signal —
+# "PRESENCE IS NOT THE SIGNAL … a face turned to a monitor still detects" — and
+# device-measured in shadow 2026-08-24, nine of nine accepted gestures had flat
+# trails ([13,12,12,11,12,11,13,21] and similar), not one of them a turn. Off,
+# presence IS the signal again, with all that implies in a shared office.
+#
+# The replacement, when there is one, should key on how CLOSE and how CENTRED
+# the face is — a face filling the frame is talking to the lamp, a colleague
+# across the room is not — rather than on a gesture the user has to remember to
+# perform. Until then `facing_before()` keeps measuring the baseline and gaze
+# keeps logging it as `was=`, so the trade-off stays observable in the log while
+# nothing acts on it.
 GAZE_REQUIRE_TRANSITION: bool = (
-    os.environ.get("HAL_GAZE_REQUIRE_TRANSITION", "true").lower() in ("1", "true", "yes")
+    os.environ.get("HAL_GAZE_REQUIRE_TRANSITION", "false").lower() in ("1", "true", "yes")
 )
 # The baseline window must be BELOW this facing ratio for the present window to
 # count as a turn toward the lamp. Deliberately generous: a gesture only has to

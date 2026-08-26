@@ -1625,20 +1625,40 @@ def _turn_trail(values, now, span=None):
         gaze.record_sample(yaw, 90.0, 0.05, now=now - span + span * i / (n - 1))
 
 
-def test_a_user_already_facing_the_lamp_is_not_a_gesture(armed, voice):
+def test_a_user_already_facing_the_lamp_opens_the_gate_by_default(armed, voice):
+    """The trade-off, as it is configured TODAY: this flat trail is accepted.
+
+    Same trail as the shadow measurement below, and the transition test would
+    refuse it. GAZE_REQUIRE_TRANSITION defaults off because refusing it was
+    worse: a user sitting square to their desk, looking straight at the lamp,
+    was refused on every utterance (device log 2026-08-26). Presence is the
+    signal again, deliberately — this test is what will fail first if that
+    default is ever flipped back without the rest of the reasoning.
+    """
+    t = gaze.time.monotonic()
+    _turn_trail([13, 12, 12, 11, 12, 11, 13, 21], t)
+    assert gaze.on_speech_start() is True
+
+
+def test_a_user_already_facing_the_lamp_is_not_a_gesture(armed, voice, monkeypatch):
     """The device failure, reproduced (shadow, 2026-08-24).
 
     Nine of nine accepted gestures had flat trails like this one. Every one
     would have opened the gate for a user who simply sits square to their desk —
     presence as the signal, which the module docstring says must not happen.
+
+    Kept with the switch forced ON: the rule is off by default but still has to
+    WORK, so that turning it back on is a config change and not a code change.
     """
+    monkeypatch.setattr(config, "GAZE_REQUIRE_TRANSITION", True)
     t = gaze.time.monotonic()
     _turn_trail([13, 12, 12, 11, 12, 11, 13, 21], t)
     assert gaze.on_speech_start() is False
 
 
-def test_turning_toward_the_lamp_still_opens_the_gate(armed, voice):
+def test_turning_toward_the_lamp_still_opens_the_gate(armed, voice, monkeypatch):
     """Away for the baseline, facing for the decision window — a clean turn."""
+    monkeypatch.setattr(config, "GAZE_REQUIRE_TRANSITION", True)
     t = gaze.time.monotonic()
     _turn_trail([90, 88, 85, 90, 12, 10, 8, 9], t)
     assert gaze.on_speech_start() is True
@@ -1661,8 +1681,9 @@ def test_a_turn_caught_mid_buffer_is_marginal_by_construction():
     assert 0.4 <= before_ratio <= 0.7, before_ratio
 
 
-def test_the_transition_test_can_be_turned_off(armed, voice, monkeypatch):
-    monkeypatch.setattr(config, "GAZE_REQUIRE_TRANSITION", False)
+def test_the_transition_test_is_off_by_default(armed, voice):
+    """Pinned as a value, not just as behaviour: the default IS the decision."""
+    assert config.GAZE_REQUIRE_TRANSITION is False
     t = gaze.time.monotonic()
     _turn_trail([13, 12, 12, 11, 12, 11, 13, 21], t)
     assert gaze.on_speech_start() is True
