@@ -43,7 +43,7 @@ Khi wake word đang bật, cú click cũng **được tính như một wake even
 
 ### Presence enter và quay về phía đèn — trigger wake
 
-Wake gate có **bốn** cửa vào: wake phrase nói ra, single click, một người mới đã nhận diện, và quay về phía đèn trước khi nói. Một `presence.enter` có identity đã enrolled sẽ mở đúng cửa sổ follow-up focus qua `SensingService`, nên người đã nhận diện có thể nói “hello, Leo” mà không cần gọi wake phrase trước. Event chỉ có stranger vẫn được Agent nhìn thấy nhưng không mở voice focus; họ vẫn có thể dùng wake phrase, click hoặc gaze. Focus chỉ được grant sau khi event presence đã qua cooldown bình thường; nó không tự unmute hoặc tự khởi động mic đang không sẵn sàng.
+Wake gate có **bốn** cửa vào: wake phrase nói ra, single click, một người mới đã nhận diện, và quay về phía đèn trước khi nói. Một `presence.enter` có identity đã enrolled sẽ mở đúng cửa sổ follow-up focus qua `SensingService`, nên người đã nhận diện có thể nói “hello, Leo” mà không cần gọi wake phrase trước. Event chỉ có stranger vẫn được Agent nhìn thấy nhưng mặc định không mở voice focus; họ vẫn có thể dùng wake phrase, click hoặc gaze. Đặt `HAL_PRESENCE_WAKE_STRANGERS=true` cho deployment ưu tiên guest, nơi stranger xuất hiện trong khung có thể bắt đầu hội thoại. Focus chỉ được grant sau khi event presence đã qua cooldown bình thường; nó không tự unmute hoặc tự khởi động mic đang không sẵn sàng.
 
 **Quay mặt về phía đèn rồi nói** cũng mở cùng cửa sổ đó (`hal/drivers/tracking/gaze.py`), qua `voice_service.grant_wakeword_focus(source)` giống presence enter và cú click — mọi thứ phía sau gate không đổi.
 
@@ -65,6 +65,7 @@ Khi trong khung có nhiều mặt, mặt được tính là mặt **gần tâm k
 | Env var | Mặc định | Chỉnh cái gì |
 |---|---|---|
 | `HAL_GAZE_WAKE` | `false` | Công tắc tổng cho cửa gaze. Tắt vẫn giữ cửa wake phrase, click và presence enter. |
+| `HAL_PRESENCE_WAKE_STRANGERS` | `false` | Cho `presence.enter` chỉ có stranger mở voice focus. Để tắt nếu guest phải dùng tín hiệu nói ra, chạm hoặc gaze. |
 | `HAL_GAZE_SHADOW` | `true` | Chỉ log quyết định, không mở gate. Không tốn gì — không turn nào mở nên không tốn LLM hay TTS. |
 | `HAL_GAZE_MAX_YAW_DEG` | 25 | Nón chấp nhận ở giữa khung. |
 | `HAL_GAZE_EDGE_CONE_SCALE` | 1.8 | Nón nới rộng bao nhiêu ở rìa khung, nơi barrel distortion thổi phồng góc. |

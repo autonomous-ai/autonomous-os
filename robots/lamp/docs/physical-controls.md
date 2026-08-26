@@ -43,7 +43,7 @@ When wake word is enabled, the click also **counts as a wake event**: `single_cl
 
 ### Presence enter and turning toward the lamp as wake triggers
 
-The wake gate has four openers: a spoken wake phrase, a single click, a newly recognized person, and turning toward the lamp before speaking. A `presence.enter` that contains an enrolled identity opens the same follow-up focus window through `SensingService`, so a recognized person can say “hello, Leo” without first saying the wake phrase. A stranger-only enter remains visible to the agent but does not open voice focus; they can use a wake phrase, click, or gaze instead. Focus is granted only after the presence event has passed its normal cooldown; it does not unmute or start an unavailable microphone.
+The wake gate has four openers: a spoken wake phrase, a single click, a newly recognized person, and turning toward the lamp before speaking. A `presence.enter` that contains an enrolled identity opens the same follow-up focus window through `SensingService`, so a recognized person can say “hello, Leo” without first saying the wake phrase. A stranger-only enter remains visible to the agent but does not open voice focus by default; they can use a wake phrase, click, or gaze instead. Set `HAL_PRESENCE_WAKE_STRANGERS=true` for a guest-first deployment where a stranger entering view may start the conversation. Focus is granted only after the presence event has passed its normal cooldown; it does not unmute or start an unavailable microphone.
 
 **Turning toward the lamp and speaking** uses that same window (`hal/drivers/tracking/gaze.py`), through `voice_service.grant_wakeword_focus(source)` just like presence enter and the click — nothing downstream of the gate changes.
 
@@ -65,6 +65,7 @@ When several faces are in frame, the one whose head counts is the one **nearest 
 | Env var | Default | Tunes |
 |---|---|---|
 | `HAL_GAZE_WAKE` | `false` | Master switch for the gaze opener. Off leaves the spoken, click, and presence-enter openers available. |
+| `HAL_PRESENCE_WAKE_STRANGERS` | `false` | Let a stranger-only `presence.enter` open voice focus. Leave off to require a spoken, touch, or gaze signal from guests. |
 | `HAL_GAZE_SHADOW` | `true` | Log the decision without opening the gate. Costs nothing — no turn opens, so no LLM or TTS is spent. |
 | `HAL_GAZE_MAX_YAW_DEG` | 25 | Acceptance cone at frame centre. |
 | `HAL_GAZE_EDGE_CONE_SCALE` | 1.8 | How much wider the cone grows at the frame edge, where barrel distortion inflates the angle. |

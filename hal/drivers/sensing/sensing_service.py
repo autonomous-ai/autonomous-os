@@ -395,13 +395,13 @@ class SensingService:
         """Let a newly recognized person stand in for the wake phrase.
 
         Face perception marks enrolled identities in its stable event summary
-        as ``friend (<name>)``. Stranger-only events remain agent-visible, but
-        do not open the voice gate: seeing an unknown passer-by is not enough
-        evidence that their nearby speech is addressed to the lamp. The voice
-        service retains its normal no-op behavior when wake words are off,
-        follow-up focus is disabled, or the microphone pipeline is unavailable.
+        as ``friend (<name>)``. Stranger-only events remain agent-visible but
+        only open the voice gate when ``HAL_PRESENCE_WAKE_STRANGERS`` opts into
+        guest-first conversation. The voice service retains its normal no-op
+        behavior when wake words are off, follow-up focus is disabled, or the
+        microphone pipeline is unavailable.
         """
-        if "friend (" not in message.lower():
+        if "friend (" not in message.lower() and not config.PRESENCE_WAKE_STRANGERS:
             logger.info("[sensing] stranger-only presence.enter — wake focus not granted")
             return
         try:

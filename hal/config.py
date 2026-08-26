@@ -148,6 +148,13 @@ FACE_STRANGER_FORGET_S = float(os.environ.get("HAL_FACE_STRANGER_FORGET_S", "180
 # turn every FACE_COOLDOWN_S (10s). Friend enters are not affected.
 FACE_STRANGER_ENTER_FLOOR_S = float(os.environ.get("HAL_FACE_STRANGER_ENTER_FLOOR_S", "300.0"))
 FACE_STRANGER_FLUSH_S = float(os.environ.get("HAL_FACE_STRANGER_FLUSH_S", "10.0"))
+# An enrolled face can grant voice focus on presence.enter. Keep stranger-only
+# enters agent-visible without granting focus unless a deployment explicitly
+# opts into guest-first conversation.
+PRESENCE_WAKE_STRANGERS: bool = (
+    os.environ.get("HAL_PRESENCE_WAKE_STRANGERS", "false").lower()
+    in ("1", "true", "yes")
+)
 # Minimum face bbox HEIGHT as a fraction of frame height. Height, not area:
 # area falls off as 1/d^2 while a linear dimension falls off as 1/d, so the
 # area form made the knob twice as sensitive for the same change in reach.
