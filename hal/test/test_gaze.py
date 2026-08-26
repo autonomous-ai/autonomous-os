@@ -2060,7 +2060,7 @@ def test_the_lift_still_happens_when_the_elbow_is_dead(neck, height_store):
 @pytest.fixture
 def sweeper(monkeypatch):
     """Stand in for the search, and record whether it was asked to run."""
-    from hal.drivers.tracking import search
+    from hal.drivers.tracking import bearing_sampler, search, user_bearing
 
     calls = []
 
@@ -2071,7 +2071,13 @@ def sweeper(monkeypatch):
     monkeypatch.setattr(search, "search_for_subject", fake)
     monkeypatch.setattr(config, "GAZE_SWEEP_ENABLED", True, raising=False)
     monkeypatch.setattr(config, "GAZE_SWEEP_COOLDOWN_S", 900.0, raising=False)
+    monkeypatch.setattr(config, "GAZE_SWEEP_COOLDOWN_LOST_S", 120.0, raising=False)
+    # A bearing exists unless a test says otherwise — the cooldown depends on it,
+    # and "no bearing" is the exceptional case, not the default.
+    monkeypatch.setattr(user_bearing, "read_estimate", lambda: _Est())
+    monkeypatch.setattr(bearing_sampler, "sample_now", lambda: False)
     gaze._last_sweep_t = 0.0
+    gaze._last_face_t = gaze.time.monotonic() - config.GAZE_SWEEP_AFTER_S - 1.0
     return calls
 
 
@@ -2222,3 +2228,62 @@ def test_the_watcher_loop_looks_around_as_well_as_correcting():
         "a sweep owns the body for half a minute; it must not pre-empt a "
         "correction that could have framed someone already in view"
     )
+
+
+def test_with_no_bearing_it_may_look_again_much_sooner(sweeper, monkeypatch):
+    """Fifteen minutes is right for "I have a bearing and it missed".
+
+    It is wrong for "I have no idea where you are": the sweep is then the only
+    way to find out, and the lamp is forbidden from trying. Device-observed —
+    three failed repoints dropped the estimate, and the lamp sat unable to
+    repoint (nowhere to turn) and unable to sweep (11 minutes still to run)
+    while the user was talking to it.
+    """
+    from hal.drivers.tracking import user_bearing
+
+    monkeypatch.setattr(user_bearing, "read_estimate", lambda: None)
+    now = gaze.time.monotonic()
+    gaze._maybe_sweep(now)
+    gaze._maybe_sweep(now + config.GAZE_SWEEP_COOLDOWN_LOST_S + 1.0)
+
+    assert len(sweeper) == 2, "a lost lamp was made to wait out the full cooldown"
+
+
+def test_with_a_bearing_the_long_cooldown_still_holds(sweeper):
+    """The luxury case is unchanged: one sweep, then quiet."""
+    now = gaze.time.monotonic()
+    gaze._maybe_sweep(now)
+    gaze._maybe_sweep(now + config.GAZE_SWEEP_COOLDOWN_LOST_S + 1.0)
+
+    assert len(sweeper) == 1, "the short leash leaked into the normal case"
+
+
+def test_finding_someone_teaches_the_lamp_where_they_are(monkeypatch):
+    """Otherwise a lamp that had just FOUND the user still could not say where
+    they were — the sampler would not look again for another five minutes."""
+    from hal.drivers.tracking import bearing_sampler, search, user_bearing
+
+    monkeypatch.setattr(config, "GAZE_SWEEP_ENABLED", True, raising=False)
+    monkeypatch.setattr(user_bearing, "read_estimate", lambda: None)
+    monkeypatch.setattr(
+        search, "search_for_subject",
+        lambda *a, **kw: search.SearchResult(True, "found person", 2, 40.0))
+    asked = []
+    monkeypatch.setattr(bearing_sampler, "sample_now",
+                        lambda: asked.append(True) or True)
+    gaze._last_sweep_t = 0.0
+    gaze._last_face_t = gaze.time.monotonic() - config.GAZE_SWEEP_AFTER_S - 1.0
+
+    gaze._maybe_sweep(gaze.time.monotonic())
+    assert asked, "it found someone and learned nothing from it"
+
+
+def test_a_sweep_that_finds_nobody_teaches_nothing(sweeper, monkeypatch):
+    """There is no sighting to learn from, and asking would only cost a look."""
+    from hal.drivers.tracking import bearing_sampler
+
+    asked = []
+    monkeypatch.setattr(bearing_sampler, "sample_now",
+                        lambda: asked.append(True) or True)
+    gaze._maybe_sweep(gaze.time.monotonic())
+    assert sweeper and asked == []

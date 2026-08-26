@@ -234,6 +234,25 @@ def _loop() -> None:
             return
 
 
+def sample_now() -> bool:
+    """Take a sighting immediately, instead of waiting for the next tick.
+
+    For callers who have just made the arm point at somebody and would otherwise
+    throw that away — a search that stopped on a subject knows WHERE it stopped,
+    but not whether they are centred, and record_sighting cannot be given an
+    off-centre yaw without silently biasing the estimate. So the honest move is
+    to let the sampler look for itself: it already checks framing, privacy and
+    whether the body is free.
+
+    Returns whether a sighting was actually recorded.
+    """
+    try:
+        return _sample_once()
+    except Exception as e:
+        logger.debug("[bearing-sample] on-demand sample skipped: %s", e)
+        return False
+
+
 def start() -> None:
     """Begin passive sampling. Idempotent."""
     global _thread

@@ -1605,6 +1605,17 @@ GAZE_SWEEP_COOLDOWN_S: float = float(
 GAZE_SWEEP_AFTER_S: float = float(
     os.environ.get("HAL_GAZE_SWEEP_AFTER_S", "30")
 )
+# The cooldown when there is no bearing at all.
+#
+# Fifteen minutes is right for "I have a bearing, it missed, stop thrashing".
+# It is wrong for "I have no idea where you are", because then the sweep is the
+# ONLY way to find out and the lamp is forbidden from trying. Device-observed:
+# three failed repoints dropped the estimate, and the lamp then sat unable to
+# repoint (nothing to turn to) and unable to sweep (11 minutes left on the
+# cooldown) while the user was talking to it.
+GAZE_SWEEP_COOLDOWN_LOST_S: float = float(
+    os.environ.get("HAL_GAZE_SWEEP_COOLDOWN_LOST_S", "120")
+)
 
 # --- climbing to find a face ------------------------------------------------
 #

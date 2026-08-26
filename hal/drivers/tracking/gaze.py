@@ -780,6 +780,18 @@ def _pitch_quiet(reason: str, now: float, detail: str = "") -> None:
     logger.info("[gaze] no pitch correction: %s%s", reason, f" ({detail})" if detail else "")
 
 
+_sweep_quiet_logged: Dict[str, float] = {}
+
+
+def _sweep_quiet(reason: str, now: float, detail: str = "") -> None:
+    """Say why the watcher is not looking around. Throttled per reason."""
+    last = _sweep_quiet_logged.get(reason, 0.0)
+    if (now - last) < PITCH_QUIET_LOG_EVERY_S:
+        return
+    _sweep_quiet_logged[reason] = now
+    logger.info("[gaze] not looking around: %s%s", reason, f" ({detail})" if detail else "")
+
+
 _repoint_quiet_logged: Dict[str, float] = {}
 
 
@@ -1685,11 +1697,32 @@ def _maybe_sweep(now: float, *, confirmed_miss: bool = False) -> None:
     if not config.GAZE_SWEEP_ENABLED:
         return
     if not confirmed_miss and (now - _last_face_t) < config.GAZE_SWEEP_AFTER_S:
-        return  # someone was here recently; not worth a line every pass
-    if _last_sweep_t > 0.0 and (now - _last_sweep_t) < config.GAZE_SWEEP_COOLDOWN_S:
+        # Throttled, not silent. This was the last decline path in the watcher
+        # without a voice, and it became the one question the log could not
+        # answer: "it can see nobody, so why is it not looking around?"
+        _sweep_quiet(
+            "somebody was here recently", now,
+            f"{now - _last_face_t:.0f}s of {config.GAZE_SWEEP_AFTER_S:.0f}s",
+        )
+        return
+
+    # A shorter leash when there is nothing to fall back on. With a bearing, a
+    # sweep is a luxury and fifteen minutes between them is right. Without one,
+    # it is the only way to find anybody, and rate-limiting it that hard leaves
+    # the lamp unable to repoint (nowhere to turn) AND unable to look.
+    try:
+        from hal.drivers.tracking import user_bearing
+
+        lost = user_bearing.read_estimate() is None
+    except Exception:
+        lost = False
+    cooldown = (config.GAZE_SWEEP_COOLDOWN_LOST_S if lost
+                else config.GAZE_SWEEP_COOLDOWN_S)
+    if _last_sweep_t > 0.0 and (now - _last_sweep_t) < cooldown:
         logger.info(
-            "[gaze] not looking around — last sweep was %.0f min ago (waiting %.0f)",
-            (now - _last_sweep_t) / 60.0, config.GAZE_SWEEP_COOLDOWN_S / 60.0,
+            "[gaze] not looking around — last sweep was %.0f min ago (waiting %.0f%s)",
+            (now - _last_sweep_t) / 60.0, cooldown / 60.0,
+            ", no bearing" if lost else "",
         )
         return
     _last_sweep_t = now
@@ -1707,6 +1740,20 @@ def _maybe_sweep(now: float, *, confirmed_miss: bool = False) -> None:
         # before it describes a pose the camera has since left.
         discard_samples()
         discard_dx_samples()
+        # Learn from it. The arm is now pointed at somebody, and without this
+        # that is thrown away: the sampler would not look again for another five
+        # minutes, so a lamp that had just FOUND the user still could not say
+        # where they were. Asked rather than recorded directly — the sweep stops
+        # on the first subject seen, not a centred one, and record_sighting
+        # cannot be given an off-centre yaw without biasing the estimate. The
+        # sampler checks framing for itself.
+        try:
+            from hal.drivers.tracking import bearing_sampler
+
+            if bearing_sampler.sample_now():
+                logger.info("[gaze] learned a bearing from the look-around")
+        except Exception as e:
+            logger.debug("[gaze] could not sample after the look-around: %s", e)
 
 
 def _loop() -> None:
