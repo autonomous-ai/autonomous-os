@@ -80,12 +80,50 @@ class _WatchedStream:
 
     def write(self, data):
         self._owner._write_started_ts = time.monotonic()
-        # Echo reference, tapped at playback rate — the timing the mic sees.
+        # Echo reference, paced to PLAYBACK, not to synthesis.
+        #
         # Covers synthesized speech, the queue drain and realtime native audio,
         # since all three reach the device through this one stream.
-        aec.reference_write(data, self._owner._stream_rate)
+        #
+        # The reference goes in AFTER each slice has been handed to the device,
+        # one slice at a time, because `self._stream.write` blocks until the sink
+        # accepts the audio — so this loop advances at roughly the rate the
+        # speaker plays. Publishing the whole `data` up front instead (what this
+        # did until 26/08/2026) dumped a caller-sized block into a FIFO that only
+        # holds REF_MS of audio: TTS synthesises far faster than realtime, so the
+        # buffer overflowed and its overflow policy drops the OLDEST bytes —
+        # exactly the audio the microphone was about to hear. What remained was
+        # the reply's future, misaligned with the mic, and then nothing at all.
+        # Measured on lamp-0c89 that left 59% of echo-bearing mic frames with no
+        # reference, and the frames that had one cancelled just 5.4 dB. It also
+        # explains why raising REF_MS made things WORSE (3.6 dB at 1500 vs 23.2
+        # at 500): a bigger buffer lets the reference run further ahead of the
+        # speaker, so the misalignment grows instead of the coverage.
+        rate = self._owner._stream_rate
+        # Slice the caller's own object so an ndarray stays an ndarray (its
+        # dtype is what tells the device how to read the samples); len() is
+        # frames for an ndarray and bytes for a buffer, hence the two steps.
+        per_10ms = max(1, int(rate * 0.010))
+        step = per_10ms * 2 if isinstance(data, (bytes, bytearray, memoryview)) else per_10ms
         try:
-            return self._stream.write(data)
+            total = len(data)
+        except TypeError:
+            total = 0
+        if total == 0:
+            try:
+                return self._stream.write(data)
+            finally:
+                self._owner._write_started_ts = None
+        try:
+            result = None
+            for off in range(0, total, step):
+                chunk = data[off:off + step]
+                result = self._stream.write(chunk)
+                # Re-stamp per slice: the stall watchdog times ONE blocking
+                # write, and a long block is now many short ones.
+                self._owner._write_started_ts = time.monotonic()
+                aec.reference_write(chunk, rate)
+            return result
         finally:
             self._owner._write_started_ts = None
 

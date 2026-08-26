@@ -720,6 +720,18 @@ class VoiceService:
                     if overflowed:
                         consecutive = 0
                         continue
+                    # Same echo defence the warm path applies, for the same
+                    # reason: this loop reads the mic WHILE the speaker plays, so
+                    # without cancellation the level it measures is the device's
+                    # own voice. wrap_mic() above only attaches the canceller —
+                    # it does not promise the frame was cancelled (the binding
+                    # may be missing, the rate unsupported, the reference
+                    # underrun, or the stream bypassed on an idle tail). Deciding
+                    # on such a frame is deciding on echo, and the device
+                    # interrupts itself mid-sentence.
+                    if not aec.active() or aec.uncancelled():
+                        consecutive = 0
+                        continue
                     measured = float(np.sqrt(np.mean(data.astype(np.float32) ** 2)))
                     if measured > max_seen:
                         max_seen = measured
