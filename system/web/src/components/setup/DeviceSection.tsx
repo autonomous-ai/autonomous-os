@@ -281,7 +281,7 @@ export function DeviceSection({
         <div style={{ marginTop: 18, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
           <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, color: C.text }}>
             <input type="checkbox" checked={wakeWord ?? false} onChange={(e) => setWakeWord(e.target.checked)} />
-            Require a wake word before handling speech
+            Require an attention trigger before handling speech
           </label>
           <div style={{ marginTop: 5, marginLeft: 23, fontSize: 11.5, lineHeight: 1.45, color: C.textMuted }}>
             When off, your device keeps its existing always-listening behavior.
@@ -289,7 +289,7 @@ export function DeviceSection({
           {!!wakePhrases?.length && (
             <div style={{ marginTop: 10, marginLeft: 23, fontSize: 11.5, lineHeight: 1.45, color: C.textMuted }}>
               <div style={{ marginBottom: 6 }}>
-                Say one of these exact phrases first{agentName ? ` (current agent: ${agentName})` : ""}:
+                Spoken wake phrases (other attention triggers also work){agentName ? ` — current agent: ${agentName}` : ""}:
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {wakePhrases.map((phrase) => (
