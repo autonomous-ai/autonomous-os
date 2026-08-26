@@ -75,6 +75,23 @@ MOVE_DURATION_S: float = 0.3
 # and at P=32/I=10 alike, and every servo has Goal_Speed=0 (uncapped).
 ARRIVE_TIMEOUT_S: float = 7.0
 ARRIVE_STILL_DEG: float = 0.8
+
+# How fast the base may turn WHILE SWEEPING, in STS3215 Goal_Speed units.
+#
+# The register has to be written to take effect at all: it reads 0 ("no limit")
+# on every joint, yet base_yaw does 16 deg/s untouched and 115 deg/s straight
+# after writing that same 0 back. Unwritten, a 90 deg search turn took 4.8s and
+# the sweep spent most of its time waiting for the arm.
+#
+# Set here rather than at startup on purpose. Writing it for every joint when
+# the driver boots would change how the whole robot moves — idle, emotions,
+# every recorded animation — and none of that asked to be sped up. The sweep
+# needs a brisk base; nothing else does.
+#
+# Linear, measured on device: 400 -> 30 deg/s, 700 -> 52, 1000 -> 71, 1400 -> 92,
+# so about 0.062 deg/s per unit. 1200 gives roughly 80, which is quick enough to
+# stop the sweep dragging without the whole lamp whipping round beside someone.
+SWEEP_YAW_SPEED: int = 1200
 MAX_STOPS: int = 3
 
 # Where the head looks at each yaw stop, in order: left, straight on, right —
@@ -225,17 +242,24 @@ def _wait_until_still(svc: Any, target: dict) -> None:
     arm cannot quite reach is still a fine place to take a picture from, whereas
     waiting for an exact arrival that never comes would stall the whole sweep.
     """
-    deadline = time.monotonic() + ARRIVE_TIMEOUT_S
+    t0 = time.monotonic()
+    deadline = t0 + ARRIVE_TIMEOUT_S
+    polls = 0
     last: Optional[dict] = None
     while time.monotonic() < deadline:
         try:
+            poll_t = time.monotonic()
             now_pose = svc.get_positions()
+            read_s = time.monotonic() - poll_t
+            polls += 1
         except Exception:
             return
         if last is not None and all(
             abs(float(now_pose.get(j, 0.0)) - float(last.get(j, 0.0))) < ARRIVE_STILL_DEG
             for j in target
         ):
+            logger.info("[search] settled in %.2fs (%d polls, last read %.0fms)",
+                        time.monotonic() - t0, polls, read_s * 1000)
             return
         last = now_pose
         time.sleep(0.1)
@@ -442,7 +466,19 @@ def search_for_subject(target: str = "person", detector: Any = None,
         on_progress = _say_at_the_midpoint()
 
     with aim.servo_ownership():
-        return _sweep(svc, cap, detector, target, on_progress)
+        capped = svc.set_joint_speed("base_yaw", SWEEP_YAW_SPEED)
+        try:
+            return _sweep(svc, cap, detector, target, on_progress)
+        finally:
+            if capped:
+                # NOT 0 — that means "no limit" and would leave the base running
+                # at ~145 deg/s for everything afterwards, which is the opposite
+                # of scoping this to the sweep. Put back the pace the arm has
+                # always had outside a search.
+                svc.set_joint_speed(
+                    "base_yaw",
+                    getattr(svc, "UNWRITTEN_SPEED_EQUIVALENT", 175),
+                )
 
 
 def _sweep(svc: Any, cap: Any, detector: Any, target: str,
@@ -504,10 +540,17 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
                     # A talkative caller must never be able to sink the search.
                     logger.debug("[search] progress callback failed: %s", e)
 
+            _t_grab = time.monotonic()
             frame = _grab_frame(cap)
+            _grab_ms = (time.monotonic() - _t_grab) * 1000
             if frame is None:
                 continue
+            _t_det = time.monotonic()
             box, kind, _conf = _detect_subject(detector, frame)
+            logger.info("[search] look %d/%d: grab %.0fms detect %.0fms -> %s",
+                        visited, total_looks, _grab_ms,
+                        (time.monotonic() - _t_det) * 1000,
+                        kind or "nothing")
             if box is not None:
                 logger.info(
                     "[search] found %s at yaw %+.0f roll %+.0f after %d stop(s)",

@@ -222,6 +222,39 @@ class AnimationService:
         # running, which is what `_track_loop` clearing it used to do.
         self._tracking_flag = bool(value)
 
+    # Goal_Speed register on the STS3215. 0 means "no limit".
+    _GOAL_SPEED_REG = 46
+    # What the servos behave as WITHOUT this register ever being written. They
+    # read 0 (no limit) but move as if capped — device-measured, base_yaw does
+    # 16 deg/s untouched and 115 deg/s straight after writing that same 0 back.
+    # So "put it back how it was" cannot be done by writing 0; it needs the
+    # value that reproduces the original pace. 0.062 deg/s per unit measured,
+    # so ~175 is the ~16 deg/s the arm has always run at.
+    UNWRITTEN_SPEED_EQUIVALENT = 175
+
+    def set_joint_speed(self, motor_name: str, speed: int) -> bool:
+        """Cap one joint's velocity, or lift the cap with 0. Never raises.
+
+        Deliberately not applied at startup for every joint: writing it there
+        would change how the whole robot moves — idle, emotions, every recorded
+        animation — which is a far larger decision than any one caller should
+        make on its own. Callers that need a particular pace set it around their
+        own work and put it back.
+        """
+        try:
+            with self.bus_lock:
+                motor = self.robot.bus.motors.get(motor_name)
+                if motor is None:
+                    return False
+                self.robot.bus.packet_handler.write2ByteTxRx(
+                    self.robot.bus.port_handler, motor.id,
+                    self._GOAL_SPEED_REG, int(speed),
+                )
+            return True
+        except Exception as e:
+            logger.warning("could not set %s speed to %s: %s", motor_name, speed, e)
+            return False
+
     def acquire_body(self) -> None:
         """Claim the body for as long as the caller keeps writing to it.
 

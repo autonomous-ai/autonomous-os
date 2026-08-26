@@ -54,6 +54,9 @@ class _FakeSvc:
         # nudge() and the head via move_and_hold(), so neither call log alone
         # shows where the camera actually pointed at each step.
         self.trail = []
+        # (joint, speed) writes, in order — the sweep caps the base and puts it
+        # back, and both halves matter.
+        self.speeds = []
         self._idle_baseline = (
             dict(self.IDLE_BASELINE) if idle_baseline is None else idle_baseline
         )
@@ -73,6 +76,12 @@ class _FakeSvc:
     def get_joint_names(self):
         return ["base_yaw.pos", "base_pitch.pos", "elbow_pitch.pos",
                 "wrist_pitch.pos", "wrist_roll.pos"]
+
+    UNWRITTEN_SPEED_EQUIVALENT = 175
+
+    def set_joint_speed(self, motor_name, speed):
+        self.speeds.append((motor_name, speed))
+        return True
 
     def move_and_hold(self, target, duration=None):
         self.holds.append(dict(target))
@@ -595,3 +604,35 @@ def test_a_caller_can_take_over_the_narration():
 
     assert seen, "the caller's handler never ran"
     assert said == [], "the default narration fired as well as the caller's"
+
+
+def test_the_sweep_speeds_the_base_up_only_for_itself():
+    """The base has to be brisk during a sweep and unchanged outside it.
+
+    Goal_Speed has to be WRITTEN to take effect — it reads 0 on every joint yet
+    the arm behaves as if capped — so this cannot be done once at startup
+    without changing how the whole robot moves: idle, emotions, every recorded
+    animation. None of that asked to be sped up.
+    """
+    _res, svc = _run(bearing=None)
+
+    assert svc.speeds, "the sweep never touched the base speed"
+    assert svc.speeds[0] == ("base_yaw", search.SWEEP_YAW_SPEED)
+    assert svc.speeds[-1][0] == "base_yaw"
+    assert svc.speeds[-1][1] != 0, (
+        "0 means NO limit — that would leave the base fast for everything after"
+    )
+
+
+def test_the_base_speed_is_restored_even_when_the_sweep_raises():
+    """A search that dies part-way must not leave the arm retuned behind it."""
+    svc = _FakeSvc()
+    with mock.patch.object(search, "_sweep", side_effect=RuntimeError("boom")), \
+         mock.patch.object(state, "camera_capture", mock.Mock(), create=True), \
+         mock.patch.object(state, "animation_service", svc, create=True), \
+         mock.patch.object(state, "safety_policy", None, create=True):
+        with pytest.raises(RuntimeError):
+            search.search_for_subject(detector=mock.Mock())
+
+    assert len(svc.speeds) == 2, f"speed not restored: {svc.speeds}"
+    assert svc.speeds[-1][1] == _FakeSvc.UNWRITTEN_SPEED_EQUIVALENT
