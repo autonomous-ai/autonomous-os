@@ -1560,10 +1560,24 @@ GAZE_PITCH_COOLDOWN_S: float = float(
 # zone below, on a loop that fired every 4s from one sample.
 #
 # A median over a full idle cycle cancels a periodic disturbance while a real
-# framing error survives it. 12s, comfortably longer than the ~10s cycle, so the
-# window always spans a whole period rather than a biased arc of one.
+# framing error survives it.
+#
+# 6, down from 12. The window is also what paces the loop: `_dy_estimate`
+# refuses until the samples span WINDOW_S * 0.8, and the buffer is cleared after
+# every correction, so the span requirement — not GAZE_PITCH_COOLDOWN_S — is the
+# real gap between steps. At 12 that made a ~9.6s wait before the head would
+# move at all, which is a long time to sit visibly badly framed while the user
+# is right there. At 6 the same chain gives ~4.8s.
+#
+# The cost is real and worth stating: half an idle roll cycle, not a whole one.
+# Roll is a second aiming axis and idle sweeps it every ~10s, so a half-period
+# window carries some of that disturbance into the median instead of cancelling
+# it — measured at ~0.042 of frame height, about 28% of the dead zone. Expect
+# slightly noisier corrections that the next measurement walks back; the loop
+# re-measures after every move, so an over-correction costs an extra iteration
+# rather than accuracy. Put this back to 12 if the head starts hunting.
 GAZE_PITCH_WINDOW_S: float = float(
-    os.environ.get("HAL_GAZE_PITCH_WINDOW_S", "12")
+    os.environ.get("HAL_GAZE_PITCH_WINDOW_S", "6")
 )
 # ...and this many measurements inside it, or the median is one noisy frame
 # wearing a median's clothes. At GAZE_SAMPLE_FPS a full window holds far more;

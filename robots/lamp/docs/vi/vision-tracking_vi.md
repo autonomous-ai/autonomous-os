@@ -604,8 +604,17 @@ quét khớp đó ~32° mỗi chu kỳ ~10 s, mãi mãi. Nên độ lệch mà m
 hình **cộng** một nhiễu tuần hoàn đến từ chỗ roll của idle đang đứng. Đo trên ba khung hình với đối
 tượng không nhúc nhích: `dy` +0,101 ở roll −1,8° so với +0,143 ở roll +29,3° — 0,042 chiều cao khung
 hình chỉ do roll, khoảng 28% vùng chết, trên một vòng lặp trước đây bắn mỗi 4 s từ một mẫu duy nhất.
-Trung vị qua trọn một chu kỳ idle triệt tiêu nhiễu tuần hoàn trong khi sai số khung hình thật thì sống
+Trung vị qua một chu kỳ idle triệt tiêu nhiễu tuần hoàn trong khi sai số khung hình thật thì sống
 sót qua nó.
+
+**Cửa sổ cũng chính là nhịp tim của vòng lặp.** `_dy_estimate` từ chối trả về gì cho tới khi các mẫu
+phủ được `WINDOW_S × 0.8`, và buffer bị xoá sạch sau mỗi lần hiệu chỉnh — nên chính thời gian nạp lại,
+chứ không phải `HAL_GAZE_PITCH_COOLDOWN_S`, mới là khoảng cách thật giữa hai bước. Ở giá trị 12 s ban
+đầu, điều đó nghĩa là chờ ~9,6 s trước khi đầu nhúc nhích, quá lâu để ngồi lệch khung thấy rõ trong khi
+user đang ở ngay đó. Cửa sổ giờ là **6 s**, cho ra ~4,8 s. Cái đánh đổi thì nói thẳng: nửa chu kỳ roll
+thay vì trọn một chu kỳ, nên một phần nhiễu của idle sống sót vào trung vị. Vòng lặp đo lại sau mỗi lần
+di chuyển, nên cái giá là thêm một vòng lặp chứ không phải mất độ chính xác — nhưng nếu đầu bắt đầu
+săn đuổi qua lại, đây là con số cần chỉnh về lại.
 
 Phép hiệu chỉnh được chia cho cả ba khớp pitch bởi `distribute_pitch` (`servo_follow.py`), trọng số
 `base_pitch` 0,20 / `elbow_pitch` 0,60 / `wrist_pitch` 0,20 — trên một cánh tay lành lặn thì khuỷu gánh
@@ -631,7 +640,7 @@ user đã được nghe rồi; thứ phải đúng chỉ là pose *nghỉ* phả
 | Tham số | Mặc định | Ý nghĩa |
 |---|---|---|
 | `HAL_GAZE_PITCH` | `true` | Bật/tắt canh giữa theo chiều dọc. |
-| `HAL_GAZE_PITCH_WINDOW_S` | 12 | Cửa sổ trung vị. Dài hơn chu kỳ roll ~10 s của idle, nên luôn phủ trọn một chu kỳ thay vì một cung bị lệch. |
+| `HAL_GAZE_PITCH_WINDOW_S` | 6 | Cửa sổ trung vị, và cũng là nhịp thật của vòng lặp — một lần hiệu chỉnh phải chờ các mẫu phủ 80% cửa sổ (~4,8 s). Trước là 12, phủ trọn một chu kỳ roll của idle nhưng khiến mỗi bước phải chờ ~9,6 s. |
 | `HAL_GAZE_PITCH_MIN_SAMPLES` | 8 | Sàn để hành động trên một cửa sổ mới đầy một phần. |
 | `HAL_GAZE_PITCH_PROMPT_MIN_SAMPLES` | 2 | Sàn khi việc leo tìm được yêu cầu trực tiếp — nhánh thân người báo hằng số −0,5, nên thêm mẫu cũng không thêm thông tin. |
 | `HAL_GAZE_PITCH_DEAD_ZONE_FRAC` | 0.15 | Độ lệch (theo tỉ lệ chiều cao khung) được tính là đã đủ giữa. Mục tiêu là mặt *nằm trong* khung và có khoảng thở, không phải giữa hoàn hảo. |

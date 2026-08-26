@@ -607,7 +607,16 @@ varying only roll: the horizon stayed level while the view panned), and the idle
 periodic disturbance from wherever idle's roll happens to be. Measured on three frames with the
 subject unmoved: `dy` +0.101 at roll −1.8° against +0.143 at roll +29.3° — 0.042 of frame height from
 roll alone, about 28% of the dead zone, on a loop that used to fire every 4 s from one sample. A
-median over a full idle cycle cancels a periodic disturbance while a real framing error survives it.
+median over an idle cycle cancels that periodic disturbance while a real framing error survives it.
+
+**The window is also the loop's pacemaker.** `_dy_estimate` refuses to return anything until the
+samples span `WINDOW_S × 0.8`, and the buffer is cleared after every correction — so the refill, not
+`HAL_GAZE_PITCH_COOLDOWN_S`, is the real gap between steps. At the original 12 s that meant a ~9.6 s
+wait before the head moved at all, which is a long time to sit visibly badly framed with the user
+right there. The window is now **6 s**, giving ~4.8 s. The trade is explicit: half a roll period
+instead of a whole one, so some of idle's disturbance survives into the median. The loop re-measures
+after every move, so that costs an extra iteration rather than accuracy — but if the head starts
+hunting, this is the number to put back.
 
 The correction is spread across all three pitch joints by `distribute_pitch`
 (`servo_follow.py`), weighted `base_pitch` 0.20 / `elbow_pitch` 0.60 / `wrist_pitch` 0.20 — the elbow
@@ -633,7 +642,7 @@ whoever speaks next.
 | Knob | Default | Meaning |
 |---|---|---|
 | `HAL_GAZE_PITCH` | `true` | Vertical centring on/off. |
-| `HAL_GAZE_PITCH_WINDOW_S` | 12 | Median window. Longer than idle's ~10 s roll cycle, so it always spans a whole period rather than a biased arc. |
+| `HAL_GAZE_PITCH_WINDOW_S` | 6 | Median window, and the loop's real cadence — a correction waits for samples spanning 80% of it (~4.8 s). Was 12, which spanned a whole idle roll cycle but made every step wait ~9.6 s. |
 | `HAL_GAZE_PITCH_MIN_SAMPLES` | 8 | Floor for acting on a partly-filled window. |
 | `HAL_GAZE_PITCH_PROMPT_MIN_SAMPLES` | 2 | Floor when the climb was asked for directly — the torso path reports a constant −0.5, so more samples add no information. |
 | `HAL_GAZE_PITCH_DEAD_ZONE_FRAC` | 0.15 | Offset (fraction of frame height) that counts as centred enough. The aim is the face *inside* the frame with room around it, not perfectly centred. |
