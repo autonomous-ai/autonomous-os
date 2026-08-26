@@ -173,6 +173,82 @@ which do not exist until the first `connect()` succeeds. No HAL restart or new
 audio is required; voice turns keep using the main-agent fallback until the
 connection recovers.
 
+## Echo cancellation (AEC)
+
+`hal/drivers/voice/aec.py` runs the mic through WebRTC's APM (AEC3) with the
+audio being played as the reference. It is **provider-independent**: the
+reference is tapped in `_WatchedStream.write` (`tts/service.py`), the single
+point every playback path reaches the device through — synthesized speech, the
+`speak_queue` drain, and realtime **native audio**. Tapping there rather than at
+synthesis is deliberate: TTS renders a sentence far faster than real time, while
+the output stream writes at playback rate, which is the timing the mic sees.
+
+**On by default** (`HAL_AEC_ENABLED=true`). It needs the
+`aec-audio-processing` binding, which is **not** a hal dependency — PyPI ships
+no Linux wheels for it, so a device needs a locally built one. When the import
+fails, `configure()` logs once and every entry point becomes a no-op; the voice
+path behaves exactly as before, so the default is safe on a device without the
+binding. It does, however, also switch **barge-in** on (see below), and that is
+not a no-op.
+
+| Env | Default | Meaning |
+|-----|---------|---------|
+| `HAL_AEC_ENABLED` | `true` | Master switch. Also the default for `HAL_BARGE_IN_ENABLED` |
+| `HAL_AEC_DELAY_MS` | `205` | Speaker→mic delay hint. **Per-device** — measure it, don't inherit it |
+| `HAL_AEC_NS` | `true` | Also run APM noise suppression. Carries most of the cancellation on this hardware |
+| `HAL_AEC_TAIL_S` | `2.0` | Keep cancelling this long after the last speaker write, then bypass the APM |
+| `HAL_AEC_REF_MS` | `500` | Echo-reference FIFO depth |
+| `HAL_AEC_DUMP_DIR` | — | Write `aec_mic/ref/out.wav` for offline ERLE analysis |
+
+The main VAD loop is wrapped, and with `HAL_WARM_MIC=true` (now the default)
+the mic stays open through playback, so cancellation runs during the device's
+own speech rather than only in the legacy barge-in monitor. The reverb gate is
+deliberately left uncancelled so its timing is unchanged.
+
+**Measured on a lamp** (OrangePi sun60 / A523, USB mic + USB speaker — two
+independent clock domains). The delay hint is per-device because the two USB
+clocks free-run: on `lamp-ee17` the real lag is 204 ms median over one 93 s take
+and 192 ms over another, drifting 154→215 ms within a single take (~667 ppm).
+Correcting 150→205 raised achieved ERLE from 15.2 to 17.9 dB. An earlier
+80→150 correction on the same unit took it from 10.9 to 18.6 dB.
+
+Cost is ~3.9 % of one A523 core at realtime. The MacBook reference figure for
+the same canceller is ~42 dB; the gap is the hardware — two free-running USB
+clocks and a cheap analog path. Only ~1.6 dB of the echo here is *linearly*
+predictable (coherence 0.31), so nearly all cancellation is suppression, which
+is why turning `HAL_AEC_NS` off costs ~10 dB of ERLE and triples the residual.
+
+### Known limitation: the reference starves
+
+`EchoReference` is a FIFO tapped when ALSA **accepts** audio, but the mic hears
+that audio a full output buffer later, and TTS writes in network-paced bursts.
+When writes run further ahead than the FIFO is deep, the oldest bytes — exactly
+the ones the mic is about to hear — are dropped, and the reference then runs dry
+for the rest of the burst. Measured on `lamp-ee17`, the reference underran on
+**30–86 % of processed frames** during a reply, and ERLE per window swings from
+−25.1 dB to 23.2 dB accordingly. On the frames where a reference *is* present
+the canceller reaches 15–23 dB, so the deficit is starvation, not the APM.
+
+Deepening the FIFO does not fix it and makes it worse (`HAL_AEC_REF_MS=1500`
+measured 3.6 / 2.3 dB against 23.2 / 19.1 dB at 500) because the lead becomes
+variable and exceeds AEC3's alignment window. The real fix is to pace the
+reference to playback time rather than write time, plus a dedicated capture
+thread so the mic stops draining `arecord` in bursts. Neither is implemented.
+
+`aec.uncancelled()` reports whether the frame just read went through *without*
+real cancellation — reference underrun, bypassed stream, or mic overrun. Barge-in
+gates on it so it cannot decide on raw echo.
+
+`process()` buffers to the APM's fixed 10 ms frames and returns exactly as many
+samples as the caller asked for (priming once with up to 10 ms of silence), so
+hal's 64 ms framing is unaffected. ERLE is logged periodically while the
+speaker is active — **0 dB means the canceller is doing nothing**.
+
+> The image already loads PulseAudio's `module-echo-cancel` (`setup.sh`), but
+> nothing reaches it: a udev rule sets `PULSE_IGNORE=1` on the speaker codec so
+> hal can own it, and capture goes through `arecord -D plughw:` directly. That
+> module has no reference and no client; it is not what cancels echo here.
+
 ## Emotion expression (fire-and-forget)
 
 If the device declares the `expression` capability
@@ -898,3 +974,4 @@ is a top-level `config.json` flag:
 | `models/`, `enums/` | Input/output/event types, provider + gateway enums |
 | `resources/` | System prompts (shared + per-provider) |
 | `../voice/voice_service.py` | Integration: streams mic audio, consumes output, routes delegate/handled |
+| `../voice/aec.py` | WebRTC AEC3 on the mic path; reference tapped at the TTS output stream (all providers) |

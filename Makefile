@@ -189,7 +189,7 @@ autonomous-build-chat:
 OTA_SIGNING_KEY_DIR ?= $(HOME)/.config/autonomous/ota
 OTA_SIGNING_KEY_ID ?= ota-$(shell date +%Y%m%d)
 
-.PHONY: ota-keygen upload-os-server upload-bootstrap upload-hal upload-claude-desktop-buddy upload-autonomous-buddy upload-web upload-skills upload-hooks upload-setup upload-setup-ap upload-openclaw upload-codex upload-claudecode upload-opencode upload-hermes upload-picoclaw upload-device upload-twitch-irc upload-autonomous-chat upload-all promote-os-server promote-bootstrap promote-web promote-hal promote-claude-desktop-buddy promote-openclaw promote-codex promote-claudecode promote-opencode promote-hermes promote-picoclaw promote-device
+.PHONY: hal-deploy os-deploy device-deploy ota-keygen upload-os-server upload-bootstrap upload-hal upload-claude-desktop-buddy upload-autonomous-buddy upload-web upload-skills upload-hooks upload-setup upload-setup-ap upload-openclaw upload-codex upload-claudecode upload-opencode upload-hermes upload-picoclaw upload-device upload-twitch-irc upload-autonomous-chat upload-all promote-os-server promote-bootstrap promote-web promote-hal promote-claude-desktop-buddy promote-openclaw promote-codex promote-claudecode promote-opencode promote-hermes promote-picoclaw promote-device
 
 # Generate a deployment-owned Ed25519 keypair outside the repository. The
 # private PEM is for release writers only; the printed public key is provisioned
@@ -210,6 +210,26 @@ ota-keygen:
 	printf 'export OTA_SIGNING_PRIVATE_KEY=%s\n' "$$key_path"; \
 	printf 'export OTA_SIGNING_KEY_ID=%s\n' "$$key_id"; \
 	printf 'export OTA_SIGNING_PUBLIC_KEY=%s\n' "$$public_key"
+
+# ============================================================================
+# Dev deploy — push the working tree to ONE device by IP.
+# NOT the OTA path: upload-*/promote-* version and roll out to the whole fleet.
+#
+#   IP=172.168.20.255 make device-deploy   # hal + os-server
+#   IP=172.168.20.255 make hal-deploy      # hal only (no build step)
+#   IP=172.168.20.255 make os-deploy       # cross-compile + swap the binary
+#
+# Auth: PI_USER (default orangepi), PI_PASS (default orangepi; set PI_PASS=""
+# to use your SSH key). Never overwrites .env, .venv or calibration/.
+# ============================================================================
+hal-deploy:
+	bash scripts/deploy-device.sh --hal
+
+os-deploy:
+	bash scripts/deploy-device.sh --os-server
+
+device-deploy:
+	bash scripts/deploy-device.sh
 
 upload-os-server:
 	bash scripts/release/upload-os-server.sh

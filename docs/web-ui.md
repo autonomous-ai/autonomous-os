@@ -576,12 +576,24 @@ Reason it exists: HAL Python (`hal/`) ships GPL v3, baked into the board image. 
 # Build production
 make web-build        # tsc + vite build → system/web/dist/
 
-# Deploy to Pi
-make web-deploy       # web-build + rsync dist/ → /usr/share/nginx/html/setup/
-
-# Deploy HAL (when server.py changes)
-make hal-deploy       # rsync + pip install + systemctl restart hal.service
+# Deploy to one device by IP (dev push — NOT the OTA fleet path)
+IP=172.168.20.255 make device-deploy   # hal + os-server
+IP=172.168.20.255 make hal-deploy      # hal only, no build step
+IP=172.168.20.255 make os-deploy       # cross-compile + swap the binary
 ```
 
-> Deploy uses `PI_HOST=lamp.local` (mDNS). If it doesn't resolve, use IP directly:
-> `PI_USER=root PI_HOST=<DEVICE_IP> make web-deploy`
+Backed by `scripts/deploy-device.sh`. `PI_USER` defaults to `orangepi` and
+`PI_PASS` to `orangepi` (needs `sshpass`); set `PI_PASS=""` to use your SSH key
+and interactive sudo instead. `PI_HOST` works in place of `IP`.
+
+`.env`, `.venv` and `calibration/` on the device are never overwritten, and the
+swap runs without `--delete`, so device-local paths outside the repo survive.
+
+> **Run `--dry-run` first when your branch might be behind the device.** The
+> swap overwrites, so a stale checkout can silently revert work that only
+> exists on the device:
+> `IP=<DEVICE_IP> bash scripts/deploy-device.sh --hal --dry-run`
+
+These are for a single device on your LAN. To ship to the fleet, use the OTA
+path instead — `make upload-hal` then `make promote-hal`, which versions the
+artifact and rolls it out.

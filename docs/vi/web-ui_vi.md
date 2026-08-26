@@ -569,12 +569,25 @@ Lý do tồn tại: HAL Python (`hal/`) ship dưới GPL v3, bake sẵn vào ima
 # Build production
 make web-build        # tsc + vite build → system/web/dist/
 
-# Deploy lên Pi
-make web-deploy       # web-build + rsync dist/ → /usr/share/nginx/html/setup/
-
-# Deploy HAL (khi thay đổi server.py)
-make hal-deploy       # rsync + pip install + systemctl restart hal.service
+# Deploy lên MỘT thiết bị theo IP (dev push — KHÔNG phải đường OTA cho cả fleet)
+IP=172.168.20.255 make device-deploy   # hal + os-server
+IP=172.168.20.255 make hal-deploy      # chỉ hal, không cần build
+IP=172.168.20.255 make os-deploy       # cross-compile + thay binary
 ```
 
-> Deploy dùng `PI_HOST=lamp.local` (mDNS). Nếu không resolve được, dùng IP trực tiếp:
-> `PI_USER=root PI_HOST=<DEVICE_IP> make web-deploy`
+Chạy bằng `scripts/deploy-device.sh`. `PI_USER` mặc định `orangepi` và `PI_PASS`
+mặc định `orangepi` (cần `sshpass`); đặt `PI_PASS=""` để dùng SSH key của bạn và
+sudo tương tác. Có thể dùng `PI_HOST` thay cho `IP`.
+
+`.env`, `.venv` và `calibration/` trên thiết bị không bao giờ bị ghi đè, và bước
+swap chạy không có `--delete`, nên các đường dẫn riêng của thiết bị (ngoài repo)
+vẫn còn nguyên.
+
+> **Chạy `--dry-run` trước khi nhánh của bạn có thể cũ hơn thiết bị.** Bước swap
+> ghi đè, nên một checkout cũ có thể âm thầm hoàn tác phần việc chỉ tồn tại trên
+> thiết bị:
+> `IP=<DEVICE_IP> bash scripts/deploy-device.sh --hal --dry-run`
+
+Các target trên dành cho một thiết bị trong LAN. Để phát hành cho cả fleet, dùng
+đường OTA — `make upload-hal` rồi `make promote-hal`, vốn đánh version cho
+artifact và roll out.
