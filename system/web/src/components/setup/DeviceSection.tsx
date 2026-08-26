@@ -289,7 +289,7 @@ export function DeviceSection({
           {!!wakePhrases?.length && (
             <div style={{ marginTop: 10, marginLeft: 23, fontSize: 11.5, lineHeight: 1.45, color: C.textMuted }}>
               <div style={{ marginBottom: 6 }}>
-                Spoken wake phrases (other attention triggers also work){agentName ? ` — current agent: ${agentName}` : ""}:
+                Spoken wake phrases (other triggers: tap, gaze, or a recognized person){agentName ? ` — current agent: ${agentName}` : ""}:
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {wakePhrases.map((phrase) => (

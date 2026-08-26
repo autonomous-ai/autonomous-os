@@ -43,7 +43,7 @@ Khi wake word đang bật, cú click cũng **được tính như một wake even
 
 ### Presence enter và quay về phía đèn — trigger wake
 
-Wake gate có **bốn** cửa vào: wake phrase nói ra, single click, một người mới được phát hiện, và quay về phía đèn trước khi nói. Một `presence.enter` hợp lệ sẽ mở đúng cửa sổ follow-up focus qua `SensingService`, nên người đã nhận diện có thể nói “hello, Leo”, còn người lạ có thể nói “hello there” mà không cần gọi wake phrase trước. Focus chỉ được grant sau khi event presence đã qua cooldown bình thường; nó không tự unmute hoặc tự khởi động mic đang không sẵn sàng.
+Wake gate có **bốn** cửa vào: wake phrase nói ra, single click, một người mới đã nhận diện, và quay về phía đèn trước khi nói. Một `presence.enter` có identity đã enrolled sẽ mở đúng cửa sổ follow-up focus qua `SensingService`, nên người đã nhận diện có thể nói “hello, Leo” mà không cần gọi wake phrase trước. Event chỉ có stranger vẫn được Agent nhìn thấy nhưng không mở voice focus; họ vẫn có thể dùng wake phrase, click hoặc gaze. Focus chỉ được grant sau khi event presence đã qua cooldown bình thường; nó không tự unmute hoặc tự khởi động mic đang không sẵn sàng.
 
 **Quay mặt về phía đèn rồi nói** cũng mở cùng cửa sổ đó (`hal/drivers/tracking/gaze.py`), qua `voice_service.grant_wakeword_focus(source)` giống presence enter và cú click — mọi thứ phía sau gate không đổi.
 

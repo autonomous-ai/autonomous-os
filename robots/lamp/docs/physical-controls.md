@@ -43,7 +43,7 @@ When wake word is enabled, the click also **counts as a wake event**: `single_cl
 
 ### Presence enter and turning toward the lamp as wake triggers
 
-The wake gate has four openers: a spoken wake phrase, a single click, a newly detected person, and turning toward the lamp before speaking. A successful `presence.enter` opens the same follow-up focus window through `SensingService`, so a recognized person can say “hello, Leo” and an unknown person can say “hello there” without first saying the wake phrase. It grants focus only after the presence event has passed its normal cooldown; it does not unmute or start an unavailable microphone.
+The wake gate has four openers: a spoken wake phrase, a single click, a newly recognized person, and turning toward the lamp before speaking. A `presence.enter` that contains an enrolled identity opens the same follow-up focus window through `SensingService`, so a recognized person can say “hello, Leo” without first saying the wake phrase. A stranger-only enter remains visible to the agent but does not open voice focus; they can use a wake phrase, click, or gaze instead. Focus is granted only after the presence event has passed its normal cooldown; it does not unmute or start an unavailable microphone.
 
 **Turning toward the lamp and speaking** uses that same window (`hal/drivers/tracking/gaze.py`), through `voice_service.grant_wakeword_focus(source)` just like presence enter and the click — nothing downstream of the gate changes.
 

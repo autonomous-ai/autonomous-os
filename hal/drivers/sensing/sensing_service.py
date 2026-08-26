@@ -338,7 +338,7 @@ class SensingService:
                 return
 
         if event_type == "presence.enter":
-            self._grant_wakeword_focus_for_presence()
+            self._grant_wakeword_focus_for_presence(message)
 
         # Collect all images to save (single image or list)
         frames = images or []
@@ -391,16 +391,19 @@ class SensingService:
             logger.warning("[sensing] Failed to send event to the OS server: %s", e)
 
     @staticmethod
-    def _grant_wakeword_focus_for_presence() -> None:
-        """Let a newly detected person stand in for the wake phrase.
+    def _grant_wakeword_focus_for_presence(message: str) -> None:
+        """Let a newly recognized person stand in for the wake phrase.
 
-        Presence enter is the visual equivalent of someone arriving at the
-        conversation. The existing follow-up window lets either a recognized
-        person ("hello, Leo") or a stranger ("hello there") speak naturally
-        without changing the downstream voice gate. The voice service retains
-        its normal no-op behavior when wake words are off, follow-up focus is
-        disabled, or the microphone pipeline is unavailable.
+        Face perception marks enrolled identities in its stable event summary
+        as ``friend (<name>)``. Stranger-only events remain agent-visible, but
+        do not open the voice gate: seeing an unknown passer-by is not enough
+        evidence that their nearby speech is addressed to the lamp. The voice
+        service retains its normal no-op behavior when wake words are off,
+        follow-up focus is disabled, or the microphone pipeline is unavailable.
         """
+        if "friend (" not in message.lower():
+            logger.info("[sensing] stranger-only presence.enter — wake focus not granted")
+            return
         try:
             from hal import app_state as state
 
