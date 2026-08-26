@@ -62,6 +62,11 @@ _samples_lock = threading.Lock()
 _last_grant_t: float = 0.0
 # When a usable face was last seen, and when we last turned to look for one.
 _last_face_t: float = 0.0
+# When anything attributable to the user was last measured — a face OR a person
+# box. Deliberately separate from _last_face_t, which stays face-only because
+# the wake gate reads it and a torso says nothing about which way a head is
+# turned. This one answers "were they there", not "were they looking".
+_last_subject_t: float = 0.0
 _last_repoint_t: float = 0.0
 # Vertical offset of the last face seen, as a fraction of frame height: negative
 # means it sat above the centre. None when nothing measurable was in frame.
@@ -72,7 +77,7 @@ _last_pitch_t: float = 0.0
 # When a repoint moved the head, and what _last_face_t was at that moment.
 # Non-zero means a verdict is owed to the bearing — see _verify_repoint.
 _repoint_pending_t: float = 0.0
-_repoint_face_t_before: float = 0.0
+_repoint_subject_t_before: float = 0.0
 # Consecutive corrections driven by the fallback rather than by a face.
 _blind_pitch_steps: int = 0
 # True once a climb has spent its budget, so the give-up runs ONCE rather than
@@ -473,8 +478,15 @@ def facing_before(now: Optional[float] = None) -> Tuple[float, int]:
     return _ratio_between(snapshot(), t - 2.0 * window, t - window)
 
 
-def _headroom_from_person(frame: Any, detector: Any) -> Optional[float]:
-    """A vertical offset to correct by when no face could be measured.
+def _headroom_from_person(frame: Any, detector: Any) -> Tuple[Optional[float], bool]:
+    """``(vertical offset to correct by, whether a person was seen at all)``.
+
+    The second half exists because "no face" and "nobody there" are different
+    answers and were being collapsed into one. A person standing at the
+    remembered bearing IS the user; the camera is simply aimed too low to see
+    their face. Scoring that as "found nobody" punished a bearing for being
+    right — three of them dropped the estimate while the user sat in front of
+    the lamp the whole time.
 
     Returns a negative fraction (meaning "tilt up") when a person is visible
     with their head cut off by the top of the frame, else None. Deliberately
@@ -482,7 +494,7 @@ def _headroom_from_person(frame: Any, detector: Any) -> Optional[float]:
     face path takes over with a real measurement.
     """
     if frame is None or detector is None:
-        return None
+        return None, False
     try:
         box = detector.detect(frame, "person", strict=False,
                               min_conf=config.LOOK_AIM_MIN_CONFIDENCE)
@@ -490,19 +502,21 @@ def _headroom_from_person(frame: Any, detector: Any) -> Optional[float]:
         try:
             box = detector.detect(frame, "person", strict=False)
         except Exception:
-            return None
+            return None, False
     except Exception:
-        return None
+        return None, False
     if box is None:
-        return None
+        return None, False
     _, y, _, h = box
     frame_h = float(frame.shape[0]) or 1.0
     if float(h) / frame_h < config.LOOK_AIM_MIN_PERSON_HEIGHT_FRAC:
-        return None  # too far away to be the person at this desk
+        return None, False  # too far away to be the person at this desk
     # Touching the top edge means the body continues past it — the head is
     # outside the frame, above.
     if float(y) > 2.0:
-        return None
+        # A person, plainly there, just not clipped by the top edge — so their
+        # head is already in frame and climbing would aim at the ceiling.
+        return None, True
     # A torso filling the frame with no face above it does mean the camera is
     # pointing too low — heads sit above bodies, and this lamp sits below head
     # height on a desk. What made that inference dangerous was not the
@@ -511,7 +525,7 @@ def _headroom_from_person(frame: Any, detector: Any) -> Optional[float]:
     # correction (device-observed: wrist_pitch -89.7 -> -34.6 in eight steps,
     # still climbing). The bound lives in the caller, as a budget of blind
     # steps, which is where a "keep going until you can see" search belongs.
-    return -0.5
+    return -0.5, True
 
 
 # Every joint the pitch loop steers. All three are vertical, so all three are
@@ -915,7 +929,7 @@ def _sample_once() -> Optional[str]:  # noqa: C901
     finally:
         aim._detector_lock_use.release()
 
-    global _last_dy_frac, _last_dy_from_face, _last_frame, _last_box
+    global _last_dy_frac, _last_dy_from_face, _last_frame, _last_box, _last_subject_t
     if face is None:
         # No face — but that is exactly the state where the camera is most
         # likely pointing too low, and correcting it needs SOME vertical
@@ -928,14 +942,25 @@ def _sample_once() -> Optional[str]:  # noqa: C901
         # face out of view entirely — after which nothing is measurable and the
         # camera stays wrong forever. Device-observed: one correction fired
         # (-67.1 -> -59.1), then every later sample read `-`.
-        _last_dy_frac = _headroom_from_person(frame_or_small, detector)
+        _last_dy_frac, saw_person = _headroom_from_person(frame_or_small, detector)
         _last_dy_from_face = False
+        if saw_person:
+            # Found at this pose, even without a face. That is what a repoint
+            # asked, and answering it "nobody" cost the bearing three strikes.
+            _last_subject_t = time.monotonic()
         if _last_dy_frac is None:
             # No face AND no clipped torso — nothing vertical to measure. This
             # is the state a user who has stood right out of frame produces,
             # and it is why the buffer can stay empty while sampling looks fine.
-            _pitch_quiet("nothing measurable in frame", time.monotonic(),
-                         "no face, and no person box clipped by the top edge")
+            # Two different answers, and collapsing them hid the interesting
+            # one: a person standing there whose head is already in frame is
+            # not the same as an empty room.
+            _pitch_quiet(
+                "nothing measurable in frame", time.monotonic(),
+                "a person is visible but not clipped by the top edge, so their "
+                "head is already in frame" if saw_person
+                else "no face and no person at all",
+            )
         record_dy(_last_dy_frac, False)
         _last_frame, _last_box = frame_or_small, None
         record_sample(None, 0.0, 0.0)
@@ -966,7 +991,7 @@ def _sample_once() -> Optional[str]:  # noqa: C901
         # matter: background colleagues fail the size floor, and a user drifting
         # to the edge used to keep resetting this clock while sliding out of
         # view, so the lamp never turned to keep them.
-        _last_face_t = time.monotonic()
+        _last_face_t = _last_subject_t = time.monotonic()
     # A face whose eyes sit outside the frame is a face this camera is pointed
     # too low at, not a face turned away. Record it as unmeasured rather than
     # letting the clamp report it as a profile and vote against facing.
@@ -1628,9 +1653,9 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
         # a watcher whose whole design is never to make a live look wait. The
         # sampler is already looking at the new view several times a second, so
         # the honest answer arrives by itself a few seconds from now.
-        global _repoint_pending_t, _repoint_face_t_before
+        global _repoint_pending_t, _repoint_subject_t_before
         _repoint_pending_t = now
-        _repoint_face_t_before = _last_face_t
+        _repoint_subject_t_before = _last_subject_t
         if force:
             logger.info(
                 "[gaze] speech-start reacquire: turning %+.1f deg to remembered "
@@ -1654,10 +1679,16 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
 def _verify_repoint(now: float) -> None:
     """Tell the bearing whether turning to it actually found the user.
 
-    A hit is `_last_face_t` having advanced past the moment of the turn: that
-    clock only moves for a face big enough to measure AND inside
-    GAZE_WELL_FRAMED_EDGE, which is exactly the question "did turning here find
-    them", not the weaker "was anything visible".
+    A hit is `_last_subject_t` having advanced past the moment of the turn —
+    which moves for a face OR for a person box, because both answer the question
+    actually asked: "did turning here find them?"
+
+    It used to key on `_last_face_t`, which only moves for a face. So a repoint
+    that landed on the user's torso — them, plainly there, with the camera aimed
+    too low to see their face — scored as "found nobody" and counted against the
+    bearing. Three of those drop the estimate, and that is how a CORRECT bearing
+    got deleted while the user sat in front of the lamp. The climb was already
+    lifting the head to find the face at the time.
 
     Scored once per repoint. A miss is not conclusive on its own — the user may
     simply be out of the room — which is why user_bearing requires several
@@ -1669,7 +1700,7 @@ def _verify_repoint(now: float) -> None:
         return
     if (now - _repoint_pending_t) < config.GAZE_REPOINT_VERIFY_S:
         return
-    hit = _last_face_t > _repoint_face_t_before
+    hit = _last_subject_t > _repoint_subject_t_before
     _repoint_pending_t = 0.0
     try:
         from hal.drivers.tracking import user_bearing
@@ -1871,8 +1902,8 @@ def start() -> None:
         return
     if _thread is not None and _thread.is_alive():
         return
-    global _last_face_t, _last_repoint_t
-    _last_face_t = _last_repoint_t = time.monotonic()
+    global _last_face_t, _last_subject_t, _last_repoint_t
+    _last_face_t = _last_subject_t = _last_repoint_t = time.monotonic()
     _stop.clear()
     _thread = threading.Thread(target=_loop, daemon=True, name="gaze-watcher")
     _thread.start()
@@ -1902,7 +1933,7 @@ def reset_for_test() -> None:
     _last_face_t = 0.0
     _last_repoint_t = 0.0
     globals()["_repoint_pending_t"] = 0.0
-    globals()["_repoint_face_t_before"] = 0.0
+    globals()["_repoint_subject_t_before"] = 0.0
     _last_dy_frac = None
     globals()["_last_frame"] = None
     globals()["_last_box"] = None

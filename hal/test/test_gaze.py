@@ -1091,23 +1091,23 @@ def test_a_torso_cut_off_at_the_top_asks_the_camera_to_tilt_up():
     which point nothing is measurable and the camera stays wrong forever.
     """
     det = _Box((100, 0, 200, 300))       # top edge, tall
-    assert gaze._headroom_from_person(_Frame(), det) == pytest.approx(-0.5)
+    assert gaze._headroom_from_person(_Frame(), det)[0] == pytest.approx(-0.5)
 
 
 def test_a_whole_person_well_inside_the_frame_needs_no_correction():
     det = _Box((100, 40, 200, 250))      # top edge clear
-    assert gaze._headroom_from_person(_Frame(), det) is None
+    assert gaze._headroom_from_person(_Frame(), det)[0] is None
 
 
 def test_a_distant_person_is_not_this_desk_and_is_ignored():
     det = _Box((100, 0, 20, 20))         # touching the top, but tiny
-    assert gaze._headroom_from_person(_Frame(), det) is None
+    assert gaze._headroom_from_person(_Frame(), det)[0] is None
 
 
 def test_no_person_and_no_detector_yield_no_correction():
-    assert gaze._headroom_from_person(_Frame(), _Box(None)) is None
-    assert gaze._headroom_from_person(_Frame(), None) is None
-    assert gaze._headroom_from_person(None, _Box((0, 0, 100, 300))) is None
+    assert gaze._headroom_from_person(_Frame(), _Box(None))[0] is None
+    assert gaze._headroom_from_person(_Frame(), None)[0] is None
+    assert gaze._headroom_from_person(None, _Box((0, 0, 100, 300)))[0] is None
 
 
 def test_a_detector_that_raises_does_not_break_sampling():
@@ -1115,7 +1115,7 @@ def test_a_detector_that_raises_does_not_break_sampling():
         def detect(self, *a, **k):
             raise RuntimeError("model gone")
 
-    assert gaze._headroom_from_person(_Frame(), _Angry()) is None
+    assert gaze._headroom_from_person(_Frame(), _Angry())[0] is None
 
 
 def test_a_person_filling_the_frame_still_means_look_up():
@@ -1128,7 +1128,7 @@ def test_a_person_filling_the_frame_still_means_look_up():
     of blind steps in the caller is what makes acting on it terminate.
     """
     det = _Box((100, 0, 200, 360))       # clipped top AND bottom
-    assert gaze._headroom_from_person(_Frame(), det) == pytest.approx(-0.5)
+    assert gaze._headroom_from_person(_Frame(), det)[0] == pytest.approx(-0.5)
 
 
 @pytest.fixture
@@ -1555,7 +1555,7 @@ def test_a_repoint_that_finds_the_user_confirms_the_bearing(monkeypatch):
     calls = _repoint_scored(monkeypatch)
     t = gaze.time.monotonic()
     gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
-    gaze._repoint_face_t_before = t - 100.0
+    gaze._repoint_subject_t_before = t - 100.0
     gaze._last_face_t = t - 1.0          # a face was seen AFTER the turn
 
     gaze._verify_repoint(t)
@@ -1567,8 +1567,9 @@ def test_a_repoint_that_finds_nobody_counts_against_the_bearing(monkeypatch):
     calls = _repoint_scored(monkeypatch)
     t = gaze.time.monotonic()
     gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
-    gaze._repoint_face_t_before = t - 100.0
+    gaze._repoint_subject_t_before = t - 100.0
     gaze._last_face_t = t - 100.0        # nothing seen since the turn
+    gaze._last_subject_t = t - 100.0     # not even a torso
 
     gaze._verify_repoint(t)
     assert calls == [False]
@@ -1580,7 +1581,7 @@ def test_the_verdict_waits_for_the_settle_window(monkeypatch):
     calls = _repoint_scored(monkeypatch)
     t = gaze.time.monotonic()
     gaze._repoint_pending_t = t - 1.0    # only just turned
-    gaze._repoint_face_t_before = t - 100.0
+    gaze._repoint_subject_t_before = t - 100.0
     gaze._last_face_t = t - 100.0
 
     gaze._verify_repoint(t)
@@ -1591,8 +1592,8 @@ def test_each_repoint_is_scored_exactly_once(monkeypatch):
     calls = _repoint_scored(monkeypatch)
     t = gaze.time.monotonic()
     gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
-    gaze._repoint_face_t_before = t - 100.0
-    gaze._last_face_t = t - 1.0
+    gaze._repoint_subject_t_before = t - 100.0
+    gaze._last_subject_t = t - 1.0       # seen since the turn
 
     for _ in range(5):
         gaze._verify_repoint(t)
@@ -2343,4 +2344,41 @@ def test_the_automatic_repoint_still_waits_out_its_cooldown(body):
     gaze._last_face_t = now - config.GAZE_REPOINT_AFTER_S - 1
     assert not gaze._maybe_repoint(now + 5.0), (
         "the background repoint ignored its own cooldown"
+    )
+
+
+def test_a_repoint_that_lands_on_a_torso_found_the_user(monkeypatch):
+    """The bug that deleted a CORRECT bearing.
+
+    Turning to the bearing and seeing the user's torso — them, plainly there,
+    with the camera aimed too low to catch a face — used to score "found
+    nobody". Three of those drop the estimate, so the lamp punished a bearing
+    for being right while the user sat in front of it, and the climb was already
+    lifting the head to find the face at the time.
+    """
+    calls = _repoint_scored(monkeypatch)
+    t = gaze.time.monotonic()
+    gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
+    gaze._repoint_subject_t_before = t - 100.0
+    gaze._last_face_t = t - 100.0        # no FACE since the turn...
+    gaze._last_subject_t = t - 1.0       # ...but a person box, just now
+
+    gaze._verify_repoint(t)
+    assert calls == [True], "a torso at the bearing is the user, not nobody"
+
+
+def test_the_wake_gate_still_wants_a_real_face():
+    """A torso says nothing about which way a head is turned, so the face clock
+    stays face-only — the gate reads it to decide if someone TURNED TOWARD the
+    lamp, which a body cannot answer."""
+    import inspect
+
+    body = inspect.getsource(gaze._sample_frame) if hasattr(gaze, "_sample_frame") else ""
+    src = inspect.getsource(gaze)
+    # the person branch must never touch the face clock
+    person_branch = src[src.index("saw_person = "):src.index("record_dy(_last_dy_frac, False)")] \
+        if "saw_person = " in src else ""
+    assert "_last_face_t" not in person_branch, (
+        "a person box advanced the face clock; the wake gate would treat a "
+        "turned-away body as someone facing the lamp"
     )
