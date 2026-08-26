@@ -1544,81 +1544,18 @@ def _turn_trail(values, now, span=None):
         gaze.record_sample(yaw, 90.0, 0.05, now=now - span + span * i / (n - 1))
 
 
-def test_a_user_already_facing_the_lamp_opens_the_gate_by_default(armed, voice):
-    """The trade-off, as it is configured TODAY: this flat trail is accepted.
+def test_a_user_already_facing_the_lamp_opens_the_gate(armed, voice):
+    """A flat trail — already facing, no turn — is accepted, deliberately.
 
-    Same trail as the shadow measurement below, and the transition test would
-    refuse it. GAZE_REQUIRE_TRANSITION defaults off because refusing it was
-    worse: a user sitting square to their desk, looking straight at the lamp,
-    was refused on every utterance (device log 2026-08-26). Presence is the
-    signal again, deliberately — this test is what will fail first if that
-    default is ever flipped back without the rest of the reasoning.
+    A transition test used to refuse exactly this, and it was removed because
+    refusing it was worse: a user sitting square to their desk, looking straight
+    at the lamp, was refused on every utterance (device log 2026-08-26).
+    Orientation is the signal; a gesture the user must remember to perform is a
+    worse instruction than the wake phrase it replaces. This test is what fails
+    first if a gesture requirement is ever reintroduced.
     """
     t = gaze.time.monotonic()
     _turn_trail([13, 12, 12, 11, 12, 11, 13, 21], t)
-    assert gaze.on_speech_start() is True
-
-
-def test_a_user_already_facing_the_lamp_is_not_a_gesture(armed, voice, monkeypatch):
-    """The device failure, reproduced (shadow, 2026-08-24).
-
-    Nine of nine accepted gestures had flat trails like this one. Every one
-    would have opened the gate for a user who simply sits square to their desk —
-    presence as the signal, which the module docstring says must not happen.
-
-    Kept with the switch forced ON: the rule is off by default but still has to
-    WORK, so that turning it back on is a config change and not a code change.
-    """
-    monkeypatch.setattr(config, "GAZE_REQUIRE_TRANSITION", True)
-    t = gaze.time.monotonic()
-    _turn_trail([13, 12, 12, 11, 12, 11, 13, 21], t)
-    assert gaze.on_speech_start() is False
-
-
-def test_turning_toward_the_lamp_still_opens_the_gate(armed, voice, monkeypatch):
-    """Away for the baseline, facing for the decision window — a clean turn."""
-    monkeypatch.setattr(config, "GAZE_REQUIRE_TRANSITION", True)
-    t = gaze.time.monotonic()
-    _turn_trail([90, 88, 85, 90, 12, 10, 8, 9], t)
-    assert gaze.on_speech_start() is True
-
-
-def test_a_turn_caught_mid_buffer_is_marginal_by_construction():
-    """Recorded because it bit: the real device trail [90,61,24,15,20,14,7,15]
-    lands the turn in the MIDDLE of the buffer, so half the baseline window
-    already shows facing and the ratio sits exactly on the threshold.
-
-    That is inherent, not a tuning error — the buffer is only 2x the window, so
-    a slow turn spans both. It means GAZE_TRANSITION_MAX_BEFORE trades late
-    gestures against steady-facing false positives, and a gesture caught
-    half-way may legitimately fail.
-    """
-    t = 10_000.0
-    _turn_trail([90, 61, 24, 15, 20, 14, 7, 15], t)
-    before_ratio, before_n = gaze.facing_before(t)
-    assert before_n >= config.GAZE_MIN_SAMPLES
-    assert 0.4 <= before_ratio <= 0.7, before_ratio
-
-
-def test_the_transition_test_is_off_by_default(armed, voice):
-    """Pinned as a value, not just as behaviour: the default IS the decision."""
-    assert config.GAZE_REQUIRE_TRANSITION is False
-    t = gaze.time.monotonic()
-    _turn_trail([13, 12, 12, 11, 12, 11, 13, 21], t)
-    assert gaze.on_speech_start() is True
-
-
-def test_an_unmeasurable_baseline_does_not_veto(armed, voice):
-    """"We could not tell" is not evidence against a turn.
-
-    The baseline is often missing — the buffer is cleared whenever the camera
-    moves — and vetoing on that would make the feature fire almost never.
-    """
-    t = gaze.time.monotonic()
-    # samples only inside the decision window; nothing before it
-    for i in range(8):
-        gaze.record_sample(5.0, 90.0, 0.05,
-                           now=t - config.GAZE_WINDOW_S + i * 0.1)
     assert gaze.on_speech_start() is True
 
 

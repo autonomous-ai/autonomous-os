@@ -13,22 +13,23 @@ seam the button uses. Nothing downstream of the gate changes.
 Two design points worth keeping straight:
 
   * ORDER. People turn BEFORE they speak, never after. Waiting for the mic and
-    then looking would arrive after the gesture is over, and — worse — could
-    never see the TRANSITION from looking away to looking here, which is the
-    whole signal. So the camera samples continuously into a short ring buffer
-    and speech normally triggers a read BACKWARDS through it. This mirrors what
-    the mic already does with its own pre-roll: it records into a lookback and
-    recovers the ~640 ms before the trigger, or it would lose the start of every
-    sentence. If no usable face evidence exists at all, the watcher first
-    restores the remembered pose and the completed same utterance gets one
-    constrained recovery check.
+    then looking would arrive after the gesture is over. So the camera samples
+    continuously into a short ring buffer and speech triggers a read BACKWARDS
+    through it. This mirrors what the mic already does with its own pre-roll: it
+    records into a lookback and recovers the ~640 ms before the trigger, or it
+    would lose the start of every sentence. If no usable face evidence exists at
+    all, the watcher first restores the remembered pose and the completed same
+    utterance gets one constrained recovery check.
 
-  * PRESENCE IS NOT THE SIGNAL. The user sits beside this lamp all day, so "a
-    person is visible" is true almost always and gates nothing. "A face is
-    visible" is barely better — a face turned to a monitor still detects. The
-    signal is head ORIENTATION, and the acceptance cone has to be tight enough
-    to reject the common posture of talking to a colleague with the torso still
-    square to the desk.
+  * THE SIGNAL IS ORIENTATION, NOT A GESTURE. An earlier design required a
+    measured TRANSITION from looking away to looking here, on the grounds that
+    presence alone gates nothing. It was removed: demanding a deliberate turn
+    made the opener unusable, because a user sitting square to their desk and
+    already looking at the lamp was refused on every utterance — device log
+    2026-08-26 — and "turn your head first" is a worse instruction than the wake
+    phrase it replaces. So what is measured is head ORIENTATION during the
+    window before speech, with an acceptance cone tight enough to reject the
+    common posture of talking to a colleague with the torso square to the desk.
 
 Head yaw is estimated from the five landmarks YuNet already returns, so no
 second model is loaded and no extra inference is run.
@@ -472,25 +473,6 @@ def _ratio_between(samples: List[Tuple[float, float, float, float]],
         return 0.0, 0
     facing = sum(1 for _, yaw, px, edge in measured if facing_lamp(yaw, px, edge))
     return facing / float(len(measured)), len(measured)
-
-
-def facing_before(now: Optional[float] = None) -> Tuple[float, int]:
-    """The same ratio over the window IMMEDIATELY BEFORE the decision window.
-
-    This is the baseline the whole design rests on and never had. The module
-    docstring says the signal is "the TRANSITION from looking away to looking
-    here" — but facing_ratio only ever measured the present, so a user who sits
-    facing the lamp's direction all day passed on every utterance. Presence
-    became the signal, which is precisely what the design says must not happen.
-    Device-measured 2026-08-24 in shadow: nine of nine accepted gestures had
-    flat trails like [13,12,12,11,12,11,13,21] — already facing, no turn.
-
-    The samples were always there. GAZE_BUFFER_S retains more history than
-    GAZE_WINDOW_S reads, and the older half was simply never consulted.
-    """
-    t = time.monotonic() if now is None else now
-    window = max(0.0, config.GAZE_WINDOW_S)
-    return _ratio_between(snapshot(), t - 2.0 * window, t - window)
 
 
 def _headroom_from_person(frame: Any, detector: Any) -> Tuple[Optional[float], bool]:
@@ -1079,19 +1061,7 @@ def _check_speech(stage: str, *, request_repoint: bool) -> bool:
         measured_enough = considered >= config.GAZE_MIN_SAMPLES
         facing_now = ratio >= config.GAZE_MIN_FACING_RATIO
 
-        # Did they TURN, or were they already pointing this way? See
-        # facing_before. An unmeasurable baseline is not evidence against a
-        # turn, so it does not veto — but it is reported, because "we could not
-        # tell" and "they turned" must not read alike in the log.
-        before_ratio, before_n = facing_before()
-        baseline_known = before_n >= config.GAZE_MIN_SAMPLES
-        turned = (
-            not config.GAZE_REQUIRE_TRANSITION
-            or not baseline_known
-            or before_ratio <= config.GAZE_TRANSITION_MAX_BEFORE
-        )
-
-        would = measured_enough and facing_now and turned
+        would = measured_enough and facing_now
         # Observed, never acted on — see _who_is_in_frame and F21.
         who, who_age = _who_is_in_frame()
 
@@ -1116,10 +1086,9 @@ def _check_speech(stage: str, *, request_repoint: bool) -> bool:
         )
         logger.info(
             "[gaze] %s: yaw=%s face=%spx edge=%s facing=%.0f%%/%.0f%% of %d "
-            "was=%s who=%s trail=[%s] -> %s%s",
+            "who=%s trail=[%s] -> %s%s",
             stage, yaw_txt, px_txt, edge_txt, ratio * 100.0,
             config.GAZE_MIN_FACING_RATIO * 100.0, considered,
-            f"{before_ratio * 100:.0f}%/{before_n}" if baseline_known else "?",
             f"{who}({who_age:.0f}s)" if who else "?",
             trail, verdict,
             " (shadow)" if config.GAZE_WAKE_SHADOW else "",
