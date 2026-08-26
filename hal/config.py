@@ -1403,8 +1403,19 @@ GAZE_WELL_FRAMED_EDGE: float = float(
     os.environ.get("HAL_GAZE_WELL_FRAMED_EDGE", "0.6")
 )
 # Below this confidence the bearing is not worth moving for.
+#
+# 0.2, matching aim.MIN_BEARING_CONFIDENCE, so every consumer of the bearing
+# trusts it at the same point. At 0.5 the watcher refused to turn to a bearing
+# that look.aim and the search were both happily using — device-observed after a
+# calibration change dropped the estimate: rebuilt to 0.38, the search seeded
+# from it and the aim stepped toward it, while every reacquire logged
+# "unavailable" and, because the sweep hangs off a repoint that has actually
+# moved, the lamp never looked around either.
+#
+# A bearing good enough to aim a live conversational turn at is good enough to
+# turn the head toward between them.
 GAZE_REPOINT_MIN_CONFIDENCE: float = float(
-    os.environ.get("HAL_GAZE_REPOINT_MIN_CONFIDENCE", "0.5")
+    os.environ.get("HAL_GAZE_REPOINT_MIN_CONFIDENCE", "0.2")
 )
 # How long after turning to the remembered bearing to wait before deciding
 # whether anyone was actually there.

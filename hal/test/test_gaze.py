@@ -2135,3 +2135,37 @@ def test_finding_someone_drops_the_offsets_measured_before_the_sweep(monkeypatch
 
     assert gaze._dy_estimate() is None, "stale vertical offsets survived the sweep"
     assert gaze._dx_estimate() is None, "stale horizontal offsets survived the sweep"
+
+
+def test_everyone_trusts_the_bearing_at_the_same_point():
+    """Two bars for one number is how the lamp ended up refusing to turn toward
+    a bearing that look.aim and the search were both already using.
+
+    Device-observed after a calibration change dropped the estimate: rebuilt to
+    0.38, the search seeded from it and the aim stepped toward it, while every
+    reacquire logged "unavailable" — and because the sweep only runs after a
+    repoint that MOVED, the lamp never looked around either.
+    """
+    from hal.drivers.tracking import aim
+
+    assert config.GAZE_REPOINT_MIN_CONFIDENCE == aim.MIN_BEARING_CONFIDENCE, (
+        "the watcher and the aim disagree about when a bearing is worth using"
+    )
+
+
+def test_every_way_the_repoint_can_decline_says_so(neck, monkeypatch):
+    """"reacquire unavailable" had six indistinguishable causes.
+
+    The pitch and pan loops already log which guard fired; this one did not, and
+    diagnosing it meant reading the source and guessing.
+    """
+    import inspect
+
+    body = inspect.getsource(gaze._maybe_repoint)
+    declines = body.count("return False")
+    reported = body.count("_repoint_quiet(")
+    # Exactly one decline stays silent — "a face was seen recently", which is
+    # normal operation and would log on every pass of the watcher loop.
+    assert reported == declines - 1, (
+        f"{declines} ways to decline, only {reported} of them say why"
+    )

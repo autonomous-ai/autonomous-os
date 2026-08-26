@@ -780,6 +780,24 @@ def _pitch_quiet(reason: str, now: float, detail: str = "") -> None:
     logger.info("[gaze] no pitch correction: %s%s", reason, f" ({detail})" if detail else "")
 
 
+_repoint_quiet_logged: Dict[str, float] = {}
+
+
+def _repoint_quiet(reason: str, now: float, detail: str = "") -> None:
+    """Say why the lamp did not turn to the remembered bearing.
+
+    Every guard in _maybe_repoint returned False without a word, so
+    "reacquire unavailable" had six indistinguishable causes and telling them
+    apart meant reading the source and guessing which one fired. The pitch and
+    pan loops already learned this lesson; this one had not.
+    """
+    last = _repoint_quiet_logged.get(reason, 0.0)
+    if (now - last) < PITCH_QUIET_LOG_EVERY_S:
+        return
+    _repoint_quiet_logged[reason] = now
+    logger.info("[gaze] no repoint: %s%s", reason, f" ({detail})" if detail else "")
+
+
 _yaw_quiet_logged: Dict[str, float] = {}
 
 
@@ -1225,7 +1243,12 @@ def _consume_speech_repoint(now: float) -> None:
         return
     _speech_repoint_requested.clear()
     if not _maybe_repoint(now, force=True):
-        logger.info("[gaze] speech-start reacquire unavailable")
+        # The reason itself comes from _repoint_quiet, throttled per reason, so
+        # this line says only that a speech-driven request was the one refused —
+        # the automatic ones fail for the same reasons and say so themselves.
+        logger.info(
+            "[gaze] speech-start reacquire unavailable — see the [gaze] no repoint line for why"
+        )
 
 
 def _return_to_known_height(now: float) -> None:
@@ -1504,6 +1527,7 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
     global _last_repoint_t
 
     if not (config.GAZE_REPOINT_ENABLED and config.GAZE_WAKE_ENABLED):
+        _repoint_quiet("disabled", now)
         return False
     if not force and (now - _last_face_t) < config.GAZE_REPOINT_AFTER_S:
         return False
@@ -1511,6 +1535,10 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
     # cooldown. VAD intentionally admits some noise so it cannot make the lamp
     # repeatedly turn just because no face is visible.
     if (now - _last_repoint_t) < config.GAZE_REPOINT_COOLDOWN_S:
+        _repoint_quiet(
+            "cooling down", now,
+            f"{now - _last_repoint_t:.0f}s of {config.GAZE_REPOINT_COOLDOWN_S:.0f}s",
+        )
         return False
     import hal.app_state as state
 
@@ -1518,12 +1546,24 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
 
     svc = getattr(state, "animation_service", None)
     if svc is None or getattr(svc, "_tracking_active", False):
+        _repoint_quiet(
+            "no body, or something else owns it", now,
+            "no animation service" if svc is None else "tracking active",
+        )
         return False
     if getattr(svc, "_music_playing", False):
-        return False  # the groove owns the body
+        _repoint_quiet("music has the body", now)
+        return False
 
     est = user_bearing.read_estimate()
-    if est is None or est.confidence < config.GAZE_REPOINT_MIN_CONFIDENCE:
+    if est is None:
+        _repoint_quiet("no bearing remembered yet", now)
+        return False
+    if est.confidence < config.GAZE_REPOINT_MIN_CONFIDENCE:
+        _repoint_quiet(
+            "bearing not trusted enough", now,
+            f"confidence {est.confidence:.2f} < {config.GAZE_REPOINT_MIN_CONFIDENCE:.2f}",
+        )
         return False
 
     try:
@@ -1577,7 +1617,9 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
             )
         return True
     except Exception as e:
-        logger.debug("[gaze] repoint skipped: %s", e)
+        # At info, not debug: this is a repoint that did not happen, and the
+        # whole point of these lines is that "unavailable" always says why.
+        _repoint_quiet("it raised", now, str(e))
         return False
 
 
