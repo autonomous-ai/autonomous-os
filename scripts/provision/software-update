@@ -355,9 +355,11 @@ if [ "$APP" = "rollback" ]; then
         echo "WARN: could not record rollback version; lower min_version before the next OTA poll"
       fi
     fi
+    arm_service_restore restore_web_service_state
     systemctl stop nginx 2>/dev/null || true
     restore_web_backup
     restore_web_service_state
+    disarm_service_restore
     check_web || { echo "web rollback health check failed"; exit 1; }
     echo "web restored from $BACKUP"
     exit 0
@@ -374,10 +376,12 @@ if [ "$APP" = "rollback" ]; then
       CONFIG_TMP=$(mktemp)
       if jq --arg version "$BLOCKED_VERSION" '.rollback_versions = (.rollback_versions // {}) | .rollback_versions.device = $version' "$BOOTSTRAP_JSON" >"$CONFIG_TMP"; then mv "$CONFIG_TMP" "$BOOTSTRAP_JSON"; else rm -f "$CONFIG_TMP"; echo "WARN: could not record rollback version; lower min_version before the next OTA poll"; fi
     fi
+    arm_service_restore restore_device_service_state
     systemctl stop os-server 2>/dev/null || true
     systemctl stop hal 2>/dev/null || true
     restore_device_backup
     restore_device_service_state
+    disarm_service_restore
     check_device_profile || { echo "device rollback health check failed"; exit 1; }
     echo "device restored from $BACKUP"
     exit 0
@@ -391,9 +395,11 @@ if [ "$APP" = "rollback" ]; then
       CONFIG_TMP=$(mktemp)
       if jq --arg version "$BLOCKED_VERSION" '.rollback_versions = (.rollback_versions // {}) | .rollback_versions.hal = $version' "$BOOTSTRAP_JSON" >"$CONFIG_TMP"; then mv "$CONFIG_TMP" "$BOOTSTRAP_JSON"; else rm -f "$CONFIG_TMP"; echo "WARN: could not record rollback version; lower min_version before the next OTA poll"; fi
     fi
+    arm_service_restore restore_hal_service_state
     systemctl stop hal 2>/dev/null || true
     restore_hal_backup
     restore_hal_service_state
+    disarm_service_restore
     check_hal || { echo "HAL rollback health check failed"; exit 1; }
     echo "hal restored from $BACKUP"
     exit 0
