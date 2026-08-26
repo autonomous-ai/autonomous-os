@@ -1589,6 +1589,16 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
         return False
     if not force and (now - _last_face_t) < config.GAZE_REPOINT_AFTER_S:
         return False
+    # A face in frame RIGHT NOW means there is nothing to reacquire, and turning
+    # to the bearing would give up better framing than the bearing describes —
+    # the climb may have just lifted the head to find this face. Applies even to
+    # a forced request: "look for them" is answered by already looking at them.
+    if (now - _last_face_t) < config.GAZE_REPOINT_SKIP_IF_FACE_S:
+        _repoint_quiet(
+            "a face is already in frame", now,
+            f"seen {now - _last_face_t:.1f}s ago",
+        )
+        return False
     # Voice may bypass the long *absence* delay, but never the movement
     # cooldown. VAD intentionally admits some noise so it cannot make the lamp
     # repeatedly turn just because no face is visible.

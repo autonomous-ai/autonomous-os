@@ -1394,6 +1394,18 @@ GAZE_REPOINT_AFTER_S: float = float(
 GAZE_REPOINT_COOLDOWN_S: float = float(
     os.environ.get("HAL_GAZE_REPOINT_COOLDOWN_S", "60")
 )
+# Do not turn to the remembered bearing while a face is THIS recently visible,
+# however urgently the turn was asked for.
+#
+# The speech reacquire fires on "no usable face evidence", which means "I cannot
+# tell whether they were facing me" — not "I cannot see them". Device-observed:
+# `face=61px ... facing=0%/60% of 0 -> blind`, a face plainly in frame with the
+# head turned away, and the lamp turned back to a bearing lower than the face
+# the climb had just found. It threw away the framing it had, to go looking for
+# the person it was already looking at.
+GAZE_REPOINT_SKIP_IF_FACE_S: float = float(
+    os.environ.get("HAL_GAZE_REPOINT_SKIP_IF_FACE_S", "3")
+)
 # How far off frame centre a face may sit and still count as "somebody is here,
 # no need to turn". A face at the very edge is about to leave the frame, so
 # treating it as well framed is what let the absence timer reset forever while

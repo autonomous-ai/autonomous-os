@@ -531,7 +531,9 @@ def test_a_brief_absence_does_not_send_the_head_hunting(body):
 
 
 def test_a_speech_reacquire_bypasses_the_background_absence_delay(body):
-    _absent_for(0.0)
+    # Long enough that no face is in frame, far short of the 12s the background
+    # path insists on — which is the whole point of forcing.
+    _absent_for(config.GAZE_REPOINT_SKIP_IF_FACE_S + 1.0)
     assert gaze._maybe_repoint(gaze.time.monotonic(), force=True) is True
     assert body.moves and body.moves[0]["base_yaw.pos"] == pytest.approx(4.0)
 
@@ -2432,3 +2434,24 @@ def test_the_relaxed_window_only_applies_to_torso_evidence(neck):
     assert gaze._dy_estimate(t, prompt=True) is None, (
         "a face-driven correction skipped the window it needs"
     )
+
+
+def test_speech_does_not_turn_away_from_a_face_it_can_already_see(body):
+    """The reacquire fires on "no usable face evidence", which means "I cannot
+    tell whether they were FACING me" — not "I cannot see them".
+
+    Device-observed: `face=61px ... facing=0%/60% of 0 -> blind`, a face plainly
+    in frame with the head turned away, and the lamp turned back to a bearing
+    lower than the face the climb had just found. It gave up the framing it had
+    to go looking for the person it was already looking at.
+    """
+    _absent_for(0.0)                      # a face, right now
+    assert gaze._maybe_repoint(gaze.time.monotonic(), force=True) is False
+    assert body.moves == [], "it turned away from a face in frame"
+
+
+def test_it_still_reacquires_once_the_face_is_actually_gone(body):
+    """The guard is about a face being there NOW, not about refusing to move."""
+    _absent_for(config.GAZE_REPOINT_SKIP_IF_FACE_S + 1.0)
+    assert gaze._maybe_repoint(gaze.time.monotonic(), force=True) is True
+    assert body.moves
