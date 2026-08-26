@@ -77,7 +77,7 @@ class _FakeSvc:
         return ["base_yaw.pos", "base_pitch.pos", "elbow_pitch.pos",
                 "wrist_pitch.pos", "wrist_roll.pos"]
 
-    UNWRITTEN_SPEED_EQUIVALENT = 175
+    UNWRITTEN_SPEED_EQUIVALENT = 0
 
     def set_joint_speed(self, motor_name, speed):
         self.speeds.append((motor_name, speed))
@@ -619,8 +619,8 @@ def test_the_sweep_speeds_the_base_up_only_for_itself():
     assert svc.speeds, "the sweep never touched the base speed"
     assert svc.speeds[0] == ("base_yaw", search.SWEEP_YAW_SPEED)
     assert svc.speeds[-1][0] == "base_yaw"
-    assert svc.speeds[-1][1] != 0, (
-        "0 means NO limit — that would leave the base fast for everything after"
+    assert svc.speeds[-1][1] == _FakeSvc.UNWRITTEN_SPEED_EQUIVALENT, (
+        "the sweep left its own cap behind instead of the resting value"
     )
 
 

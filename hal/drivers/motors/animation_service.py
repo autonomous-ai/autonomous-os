@@ -232,8 +232,8 @@ class AnimationService:
     # so ~175 is the ~16 deg/s the arm has always run at.
     @property
     def UNWRITTEN_SPEED_EQUIVALENT(self) -> int:
-        """The pace base_yaw rests at — the same value startup writes."""
-        return self._SERVO_REST_SPEED.get(1, 175)
+        """What base_yaw rests at — the same value startup writes. 0 = no cap."""
+        return self._SERVO_REST_SPEED.get(1, 0)
 
     def set_joint_speed(self, motor_name: str, speed: int) -> bool:
         """Cap one joint's velocity, or lift the cap with 0. Never raises.
@@ -304,21 +304,29 @@ class AnimationService:
     # need it; the other joints are left alone rather than retuned on a guess.
     _SERVO_IGAIN = {3: 10, 5: 10}
 
-    # Resting Goal_Speed, written at startup purely so the value is KNOWN.
+    # Resting Goal_Speed, written at startup so a joint the search retunes always
+    # starts from a known value. 0 means NO velocity limit.
     #
-    # Not a speed change: 175 reproduces the pace base_yaw already runs at, so
-    # nothing moves differently for having it here. What it fixes is that the
-    # search raises this joint to sweep briskly and lowers it again in a
-    # `finally` — and a finally cannot survive the process being killed. HAL
-    # crashing, or being restarted, part-way through a sweep left base_yaw fast
-    # for idle, emotions and everything else, permanently, because nothing else
-    # ever wrote the register. Device-reproduced: killed mid-sweep it read 1200,
-    # and still read 1200 after a full restart.
+    # It has to be 0 rather than a number that looks like the old pace. Untouched,
+    # this register imposes no cap at all — base_yaw merely crossed a LARGE error
+    # slowly, because of its P gain, while still following small steps as fast as
+    # it liked. Animations are exactly small steps at 30fps, so any real cap
+    # throttles them. A first attempt used 175, chosen because it reproduced the
+    # ~20 deg/s seen on a point-to-point move, and that turned out to clamp idle
+    # and every emotion to a crawl — a global slowdown, from a value picked to be
+    # a no-op.
+    #
+    # There is no setting that reproduces "never written": writing the register
+    # at all clears whatever the servo powers up with (16 deg/s untouched, 115
+    # after writing the same 0 back). So the choice is cap-everything or
+    # cap-nothing, and animations need cap-nothing.
+    #
+    # The search still caps ITSELF to ~80 deg/s while sweeping, which against an
+    # uncapped base is a reduction rather than a licence.
     #
     # Only base_yaw, because only base_yaw is ever retuned. A joint nobody
-    # touches needs no backstop, and writing one for every joint is the global
-    # change this deliberately is not.
-    _SERVO_REST_SPEED = {1: 175}
+    # touches needs no backstop.
+    _SERVO_REST_SPEED = {1: 0}
 
     def _configure_servos_raw(self):
         """Configure servos directly via scservo_sdk, bypassing lerobot.

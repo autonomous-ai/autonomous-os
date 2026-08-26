@@ -471,13 +471,13 @@ def search_for_subject(target: str = "person", detector: Any = None,
             return _sweep(svc, cap, detector, target, on_progress)
         finally:
             if capped:
-                # NOT 0 — that means "no limit" and would leave the base running
-                # at ~145 deg/s for everything afterwards, which is the opposite
-                # of scoping this to the sweep. Put back the pace the arm has
-                # always had outside a search.
+                # Back to the resting value the driver writes at startup — 0, no
+                # cap. A cap here would follow the sweep out and throttle idle
+                # and every emotion, which move base_yaw in small 30fps steps and
+                # need no speed limit. The sweep is the only thing that wants one.
                 svc.set_joint_speed(
                     "base_yaw",
-                    getattr(svc, "UNWRITTEN_SPEED_EQUIVALENT", 175),
+                    getattr(svc, "UNWRITTEN_SPEED_EQUIVALENT", 0),
                 )
 
 
