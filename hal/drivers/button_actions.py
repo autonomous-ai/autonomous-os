@@ -2,8 +2,8 @@
 
 Reused by any input device that maps to the same three gestures:
 - single_click_action(): stop object tracking and speaker / unmute mic + speaker + announce listening
-- triple_click_action(): reboot OS
-- long_press_action():  shutdown OS
+- triple_click_action(): map a resolved click gesture to reboot_action()
+- hold_release_action(): map a resolved hold duration to sleep / shutdown / factory reset
 
 Callers (GPIO button, touchpad, future remotes) only need to detect the
 gesture and invoke the matching function — the destructive sequencing
@@ -353,19 +353,29 @@ def single_click_action(source: str = "button", announce: bool = True, chime: bo
         logger.info("[sca-trace] announce_listening_cue dispatched +%.0fms (total_sca=%.0fms)", (time.monotonic() - t) * 1000, (time.monotonic() - t_start) * 1000)
 
 
-def triple_click_action(source: str = "button"):
-    """Announce + reboot OS."""
-    logger.info("%s triple click -- rebooting OS", source)
-    logger.info("%s LED: amber pulse (reboot armed)", source)
+def reboot_os():
+    """Start the raw operating-system reboot command."""
+    subprocess.Popen(
+        ["sudo", "reboot"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+
+
+def reboot_action(source: str = "button"):
+    """Announce a reboot, then restart the operating system."""
+    logger.info("%s reboot action", source)
     if _tts_available():
         state.tts_service.speak_cached(_phrase(PHRASE_REBOOT))
         # speak_cached is async; reboot kicks the OS before audio plays
         # without this. ~5s covers the cached "Rebooting now" clip
-        # (matches long_press_action shutdown delay).
+        # (matches the shutdown-action delay).
         time.sleep(5)
-    subprocess.Popen(
-        ["sudo", "reboot"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    )
+    reboot_os()
+
+
+def triple_click_action(source: str = "button"):
+    """Map the resolved physical triple-click gesture to a reboot action."""
+    logger.info("%s triple click -- reboot armed", source)
+    reboot_action(source)
 
 
 def head_pat_action(source: str = "touch"):
@@ -413,10 +423,18 @@ def sleep_action(source: str = "button"):
         logger.warning("%s sleep hold failed: %s", source, e)
 
 
-def long_press_action(source: str = "button"):
-    """Announce, park servos, then shutdown OS."""
-    logger.info("%s long press -- shutting down OS", source)
-    logger.info("%s LED: red solid (shutdown armed)", source)
+def shutdown_os():
+    """Start the raw operating-system shutdown command."""
+    subprocess.Popen(
+        ["sudo", "shutdown", "-h", "now"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def shutdown_action(source: str = "button"):
+    """Announce, release servos, then shut down the operating system."""
+    logger.info("%s shutdown action", source)
 
     # Suppress the lifespan-shutdown re-announce — we're about to speak the
     # PHRASE_SHUTDOWN line, and systemd's SIGTERM will arrive a few seconds
@@ -434,17 +452,28 @@ def long_press_action(source: str = "button"):
     try:
         from hal.routes.servo import release_servos
 
-        logger.info("%s long press -- releasing servo before shutdown", source)
+        logger.info("%s shutdown action -- releasing servo before shutdown", source)
         release_servos()
     except Exception as e:
         logger.warning(f"Servo release before shutdown failed: {e}")
 
     # Step 3: shutdown OS.
-    subprocess.Popen(
-        ["sudo", "shutdown", "-h", "now"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    shutdown_os()
+
+
+def hold_release_action(held_s: float, source: str = "button"):
+    """Map a released hold duration to its explicit device action.
+
+    The GPIO driver owns edge handling and LED staging; this mapping owns the
+    semantic thresholds. A future input can provide the same duration signal
+    without duplicating the sleep/shutdown/factory-reset decision tree.
+    """
+    if held_s >= FACTORY_RESET_DURATION:
+        factory_reset_action(source)
+    elif held_s >= LONG_PRESS_DURATION:
+        shutdown_action(source)
+    elif held_s >= SLEEP_HOLD_DURATION:
+        sleep_action(source)
 
 
 def _factory_reset_phrase() -> str:
@@ -470,7 +499,7 @@ def factory_reset_action(source: str = "button"):
     logger.info("%s LED: red solid (factory-reset armed)", source)
 
     # Suppress the lifespan-shutdown re-announce — same reason as
-    # long_press_action: os-server's reboot ~5s later will SIGTERM hal
+    # shutdown_action: os-server's reboot ~5s later will SIGTERM hal
     # and the lifespan handler would otherwise speak PHRASE_SHUTDOWN on top
     # of the factory-reset clip still playing.
     state._shutdown_announced = True
@@ -482,7 +511,7 @@ def factory_reset_action(source: str = "button"):
         state.tts_service.speak_cached(_factory_reset_phrase())
         time.sleep(3)
 
-    # Step 2: park servo before reboot, same reasoning as long_press_action —
+    # Step 2: park servo before reboot, same reasoning as shutdown_action —
     # systemd will kill us mid-pose otherwise and the body slams.
     try:
         from hal.routes.servo import release_servos

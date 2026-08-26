@@ -133,10 +133,10 @@ To characterise a new deployment: park `HAL_BARGE_IN_RMS_THRESHOLD` at 30000, sa
 Edge-counting driver where **all destructive actions commit on the release edge based on hold duration** — no timer fires while the button is held. This is what lets the user cancel mid-hold (release before a threshold) or escalate (keep holding past 10 s).
 
 1. **Falling edge (press):** record `press_start` (monotonic clock) and spawn a hold-LED watcher thread (one per press, with its own stop `Event`). No action timer is armed.
-2. **Rising edge (release):** stop the LED watcher, then compute `held = now − press_start` and branch:
-   - `held >= 10 s` (`FACTORY_RESET_DURATION`) → scrub any pending clicks, lock LED solid red, run `factory_reset_action` off-thread.
-   - `held >= 5 s` (`LONG_PRESS_DURATION`) → scrub pending clicks, freeze LED red, run `long_press_action` (shutdown) off-thread.
-   - `held >= 2 s` (`SLEEP_HOLD_DURATION`) → scrub any pending clicks, run `sleep_action` off-thread; it invokes the standard `sleepy` emotion pipeline.
+2. **Rising edge (release):** stop the LED watcher, compute `held = now − press_start`, scrub pending clicks for any hold of at least 2 s, and stage its final LED feedback (solid red for shutdown/factory reset). It then passes the duration to `hold_release_action(held, source)` off-thread. That action mapping selects:
+   - `held >= 10 s` (`FACTORY_RESET_DURATION`) → `factory_reset_action`.
+   - `held >= 5 s` (`LONG_PRESS_DURATION`) → `shutdown_action`.
+   - `held >= 2 s` (`SLEEP_HOLD_DURATION`) → `sleep_action`, which invokes the standard `sleepy` emotion pipeline.
    - else (short tap) → increment `click_count` and (re)start a 0.4 s click-window timer. On the **first** tap of a burst, the silent part of `single_click_action` (`announce=False`) fires immediately off-thread — it's non-destructive ("give me the floor"), so it doesn't wait for the window. The audible cue is deferred so it never talks over a triple-click in progress.
 3. When the click window expires:
    - `count == 3` → `triple_click_action` (no listening cue — only the reboot announce)
@@ -199,9 +199,11 @@ The actions live in one place so the GPIO button, TTP223, and any future input (
 | Function | What it does | Interrupts in-flight TTS? |
 |---|---|---|
 | `single_click_action(source)` | Stop active object tracking. Then relax a user/scene speaker mute (skipped while `_enrolling`). If mic is muted: unmute. Else stop TTS + stop music. Then open the wake-word follow-up window (no-op when wake word is off) and speak the localized "Listening" cue with retry-on-busy. Tracking still stops when the hardware mic kill switch is on; the voice action remains suppressed. | Yes — calls `stop_tts()` and the cue itself preempts. |
-| `triple_click_action(source)` | Speak "Rebooting now" → wait 5 s for the cached clip → `sudo reboot`. | Yes |
+| `triple_click_action(source)` | Gesture mapping only: calls `reboot_action(source)`. | Yes |
+| `reboot_action(source)` | Speak "Rebooting now" → wait 5 s for the cached clip → `reboot_os()` (`sudo reboot`). | Yes |
 | `sleep_action(source)` | Speak the localized sleep announcement, then invoke `sleepy`: LED off, camera/mic/speaker off, then servo release after 1 s. | Yes — the sleepy pipeline stops active TTS/music after the announcement. |
-| `long_press_action(source)` | Speak "Shutting down now" → wait 5 s → `release_servos()` (so the lamp doesn't slam down mid-pose) → `sudo shutdown -h now`. | Yes |
+| `hold_release_action(held, source)` | Hold-signal mapping: chooses sleep, shutdown, or factory reset from the released duration. | Depends on selected action |
+| `shutdown_action(source)` | Speak "Shutting down now" → wait 5 s → `release_servos()` (so the lamp doesn't slam down mid-pose) → `shutdown_os()` (`sudo shutdown -h now`). | Yes |
 | `factory_reset_action(source)` | Speak "Factory reset starting. Rebooting now" → `release_servos()` → POST `/api/system/factory-reset` on the OS server (the server owns the wipe + reboot, see below). | Yes |
 | `head_pat_action(source)` | Pick a random localized pet phrase, speak it via `speak_cached` on a daemon thread. **Non-interrupting**: if TTS is still busy the phrase is dropped silently. In practice on TTP223 the first touch session already cut any in-flight speech (`_grab_floor_if_speaking`), so by pet time TTS is usually free and the giggle plays. | No |
 
