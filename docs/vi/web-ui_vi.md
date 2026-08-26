@@ -154,6 +154,14 @@ Trang `/edit` độc lập (cũ) đã bị gỡ bỏ; `SettingsPanel` của nó 
 
 #### Voice — panel Piper
 
+Mọi nút trong panel này đều đặt `type="button"`. Panel nằm trong `<form>` của
+trang settings, mà trong form thì `<button>` mặc định là `type="submit"` — nên
+Download, Use và Remove đều submit cả form settings, lưu config và restart HAL
+ngay dưới chân chính cái request chúng vừa gửi đi. Đó là thứ giết lượt tải giữa
+chừng, làm cú Remove ăn 502, và khiến máy nói *"Be right back"* cho một cú bấm
+lẽ ra chỉ đụng tới `/opt/piper`. Triệu chứng trông như ba lỗi rời rạc, hoá ra là
+một thuộc tính bị thiếu.
+
 `TTSSection` (`system/web/src/pages/settings/TTSSection.tsx`) có thêm provider
 thứ tư, **Piper (Local — free)**. Nó khác ba cái kia ở chỗ không có base URL và
 không có API key, nên chọn nó là hai ô đó ẩn đi — và bộ lọc ngôn ngữ cũng ẩn
@@ -171,6 +179,50 @@ nhất của trang có trạng thái tự đổi mà người dùng không đụ
 ra trên thiết bị, nên panel đọc trường `job` từ
 `GET /api/voice/piper/status` chứ không tự theo dõi gì.
 
+Lượt tải đang chạy có **dòng riêng** — tên giọng, thanh tiến trình, và
+`13.2 / 60.3 MB · 24%` — chứ không phải một con số nhét trên cái nút vừa bấm.
+Với đường truyền gia đình, 63 MB mất vài phút, và suốt từng ấy phút đây là thứ
+duy nhất đang diễn ra trên trang. Có bộ đếm byte vì phần trăm gần như đứng yên
+trên mạng chậm, còn byte thì nhích thấy rõ — đó là khác biệt giữa *đang tải* và
+*treo* trong mắt người ngồi nhìn. Dòng này cũng nói rõ việc tải chạy dưới máy và
+không mất khi rời trang hay F5, điều đúng sự thật mà nhìn vào không đoán ra.
+
+Panel lấy luôn job trong phản hồi của POST thay vì đợi lượt poll kế tiếp phát
+hiện ra. Đó chính là thứ làm cái nút phản ứng lại cú bấm.
+
+Giọng đã cài có hai nút **Use** và **Remove**; riêng giọng đang dùng thì không
+có nút nào, vì phải đổi giọng trước rồi mới xoá được. Remove cần bấm hai lần —
+lần đầu nút đổi thành *Confirm* — vì model 63 MB tải lại mất vài phút, và xác
+nhận ngay trong dòng thì gọn hơn là bật hộp thoại của trình duyệt. Lần bấm thứ
+hai cập nhật dòng đó **ngay lập tức** rồi mới đối chiếu lại với máy: một cái nút
+đứng yên sau cú xác nhận có chủ đích khiến người ta tưởng cú bấm không ăn, mà
+vòng đi-về thì dài vài giây mỗi khi HAL đang restart.
+
+Cách làm là **che** status poll cho riêng giọng đó, chứ không sửa nó. Poll vẫn
+chạy suốt lượt xoá, và mỗi lần poll đều báo giọng vẫn còn cho tới khi lệnh xoá
+xong — nên một bản đã sửa chỉ bị lần poll sau đó hai giây ghi đè lại, nút Remove
+hiện lại và cú xác nhận trông như bị bỏ qua. Lớp che chỉ được gỡ khi status mới
+đã về. Xoá giọng **không** làm HAL restart; chỉ lưu cấu hình voice mới làm.
+Nút Remove cũng bị ẩn ở giọng cuối cùng còn lại, vì HAL sẽ từ chối — ẩn đi vẫn
+hơn là một cái nút mười giây sau trả về một lời từ chối.
+
+Với Piper, dropdown Voice lấy dữ liệu từ **chính status của panel**, không phải
+lượt fetch giọng ở tầng trang. Panel poll thẳng HAL, nên danh sách bám theo một
+lượt tải hay một lượt xoá ngay khi nó xong, và một lần poll hỏng thì giữ nguyên
+câu trả lời trước đó chứ không làm rỗng dropdown.
+
+Khi một thao tác trong panel thất bại vì HAL đang restart — mỗi lần lưu voice là
+có một lần restart, và cú bấm rơi vào đúng cửa sổ đó thì mất trắng — panel nói
+rõ là máy đang khởi động lại và **không có gì thay đổi**, chứ không chỉ nói
+"đang kết nối lại". Chỉ báo kết nối lại khiến người dùng tin là giọng đã bị xoá
+trong khi không hề. Nút Download và Remove cũng bị khoá trong lúc mất kết nối,
+để cú bấm không rơi vào đó ngay từ đầu.
+
+Dòng trạng thái engine **chỉ hiện khi engine chưa có**. Cài xong rồi thì nó
+không nói thêm được gì mà danh sách giọng bên dưới chưa hàm ý sẵn, và một dấu
+tick xanh nằm vĩnh viễn trên một bước setup đã xong chỉ là thứ để mắt lướt qua
+mỗi lần.
+
 Hai chi tiết nên giữ nếu sau này refactor. Ngôn ngữ câu thử được suy ra từ **tên
 giọng** (`vi_VN-…` → `vi`) chứ không lấy từ bộ lọc ngôn ngữ vốn đã bị Piper ẩn —
 thiếu chỗ này thì nút Test Voice gửi ngôn ngữ STT của máy và đọc câu mẫu tiếng
@@ -178,6 +230,15 @@ Anh bằng model tiếng Việt, nghe ra như giọng hỏng chứ không phải
 ngôn ngữ. Và phần ghi công **cố tình không** hiện ở đây: nghĩa vụ đó thuộc về
 bên phân phối giọng, không phải người bật nó lên, và `CREDITS.md` mới là chỗ
 hoàn thành nghĩa vụ.
+
+**Nút Test Voice bị chặn — không phải báo lỗi — cho tới khi giọng đã có trên
+máy.** Bấm giữa lúc đang tải là chạm tới một backend không có model nào để nạp,
+và câu trả lời đúng sự thật (503) khi tới tay người dùng lại giống như API sập.
+Thay vào đó nút xám lại và nói rõ đang xảy ra chuyện gì (*That voice is still
+downloading*, hoặc *Download a voice first* khi chưa chọn gì). Việc chuyển
+provider sang Piper cũng không bao giờ tự bịa ra tên giọng: nó chọn một giọng
+trong danh sách đã cài, hoặc để trống — vì một cái tên được lưu mà máy không có
+sẽ cấu hình thiết bị trỏ tới model nó không nạp được.
 
 
 ## 4. Polling & Data Sources

@@ -14,6 +14,7 @@ import (
 
 	"go.autonomous.ai/os/system/beclient"
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/network"
 	"go.autonomous.ai/os/system/server/config"
 	"go.autonomous.ai/os/system/statusled"
@@ -59,6 +60,28 @@ func (s *Service) restartHAL(reason string) {
 			return
 		}
 		slog.Info("hal restarted", "component", "device", "reason", reason)
+		if err := config.SnapshotHALConfig(); err != nil {
+			slog.Warn("hal config snapshot failed", "component", "device", "error", err)
+		}
+	}()
+}
+
+// applyTTSConfig pushes a voice change into the running hal instead of
+// restarting it. Falls back to a restart on failure: a voice that was saved but
+// never reached hal is a worse outcome than the restart this avoids, because
+// the device would keep speaking in the old voice with nothing to show for it.
+func (s *Service) applyTTSConfig(c *config.Config) {
+	go func() {
+		if err := hal.ApplyTTSConfig(c.TTSProvider, c.TTSVoice, c.TTSAPIKey, c.TTSBaseURL); err != nil {
+			slog.Warn("hal tts config apply failed, restarting instead",
+				"component", "device", "error", err)
+			s.restartHAL("voice config change")
+			return
+		}
+		slog.Info("hal tts config applied live", "component", "device",
+			"provider", c.TTSProvider, "voice", c.TTSVoice)
+		// Keep the boot-time baseline in step, or the next os-server start
+		// would see drift and order a restart that is no longer needed.
 		if err := config.SnapshotHALConfig(); err != nil {
 			slog.Warn("hal config snapshot failed", "component", "device", "error", err)
 		}

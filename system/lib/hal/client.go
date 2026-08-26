@@ -151,6 +151,20 @@ func Speak(text string) error {
 	return post("/voice/speak", body)
 }
 
+// ApplyTTSConfig pushes voice settings into the running hal. The service reads
+// provider and voice per utterance, so this takes effect on the next sentence
+// — where the restart it replaces took the microphone, speaker and wake word
+// down with it for ten to fifteen seconds.
+func ApplyTTSConfig(provider, voice, apiKey, baseURL string) error {
+	body, _ := json.Marshal(map[string]string{
+		"provider": provider,
+		"voice":    voice,
+		"api_key":  apiKey,
+		"base_url": baseURL,
+	})
+	return post("/voice/tts/config", body)
+}
+
 // SpeakQueue sends text to /voice/speak-queue — same playback semantics as
 // Speak when the speaker is idle, but queues+pre-synthesizes the audio if
 // the speaker is currently playing another speak(). The queued audio
