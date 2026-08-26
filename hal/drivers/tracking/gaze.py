@@ -1552,7 +1552,17 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
     # Voice may bypass the long *absence* delay, but never the movement
     # cooldown. VAD intentionally admits some noise so it cannot make the lamp
     # repeatedly turn just because no face is visible.
-    if (now - _last_repoint_t) < config.GAZE_REPOINT_COOLDOWN_S:
+    # The cooldown guards the AUTOMATIC repoint, which runs every pass of the
+    # watcher loop and would otherwise swing to the bearing over and over
+    # whenever nobody is visible. A speech-triggered reacquire is not that: the
+    # user has spoken and the lamp cannot see them, which is a request, not
+    # thrashing. Rate-limiting it the same way meant talking twice inside a
+    # minute got you one look — device-observed, a reacquire refused with
+    # "cooling down (27s of 60s)" while someone was speaking to it.
+    #
+    # `force` already skipped the absence check; not skipping this one made the
+    # flag mean less than its name.
+    if not force and (now - _last_repoint_t) < config.GAZE_REPOINT_COOLDOWN_S:
         _repoint_quiet(
             "cooling down", now,
             f"{now - _last_repoint_t:.0f}s of {config.GAZE_REPOINT_COOLDOWN_S:.0f}s",

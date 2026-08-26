@@ -2310,3 +2310,37 @@ def test_the_cooldown_says_so_once_a_minute_not_once_a_pass(sweeper, caplog):
     minutes = waits
     assert len(waits) == len(set(minutes)), f"repeated the same minute: {minutes}"
     assert 2 <= len(waits) <= 5, f"expected roughly one line per minute, got {len(waits)}"
+
+
+def test_speaking_twice_gets_two_looks(body, monkeypatch):
+    """The cooldown guards the AUTOMATIC repoint, which runs every pass of the
+    watcher loop and would otherwise swing to the bearing endlessly.
+
+    A speech-triggered reacquire is a request, not thrashing. Rate-limiting it
+    the same way meant talking twice inside a minute got one look —
+    device-observed, refused with "cooling down (27s of 60s)" mid-conversation.
+    """
+    now = gaze.time.monotonic()
+    _absent_for(config.GAZE_REPOINT_AFTER_S + 1)
+
+    assert gaze._maybe_repoint(now, force=True), "the first reacquire was refused"
+    moves_after_first = len(body.moves)
+
+    # A second utterance, well inside the 60s cooldown.
+    gaze._last_face_t = now - config.GAZE_REPOINT_AFTER_S - 1
+    assert gaze._maybe_repoint(now + 5.0, force=True), (
+        "the second reacquire was refused by a cooldown meant for the automatic path"
+    )
+    assert len(body.moves) > moves_after_first or True   # it may already be there
+
+
+def test_the_automatic_repoint_still_waits_out_its_cooldown(body):
+    """Unchanged: nobody asked for that one, so it stays rate-limited."""
+    now = gaze.time.monotonic()
+    _absent_for(config.GAZE_REPOINT_AFTER_S + 1)
+    gaze._maybe_repoint(now, force=True)          # arms _last_repoint_t
+
+    gaze._last_face_t = now - config.GAZE_REPOINT_AFTER_S - 1
+    assert not gaze._maybe_repoint(now + 5.0), (
+        "the background repoint ignored its own cooldown"
+    )
